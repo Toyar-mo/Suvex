@@ -242,6 +242,8 @@ Set-Cookie: suvex_session=<opaque>; HttpOnly; SameSite=Strict; Path=/; Max-Age=4
 | 500  | `PROVIDER_KEY_UNREADABLE` | 密文解不开（`SUPEX_SECRET_KEY` 换了或丢了，见 §2.9）|
 | 409  | `SCAN_NOT_RESUMABLE`    | 续跑的前置条件不满足（见 §3.3.2）                    |
 | 409  | `WRITEUP_UNAVAILABLE`   | 没有可用的题解报告（见 §3.18）                       |
+| 409  | `SCAN_IS_CTF2_SHELL`    | 想续跑一条 CTF2 借的壳扫描（它从没跑过，见 §3.19.4） |
+| 409  | `SETUP_ALREADY_DONE`    | 已初始化过管理员，再调 `/auth/setup`（v0.21 补记）   |
 | 501  | `NOT_IMPLEMENTED`       | 端点已定义但尚未实现（后端分期交付，见 §9）           |
 
 > **405 与 501 是 v0.2 补的**，实现时才发现契约漏了这两种情况：
@@ -283,7 +285,8 @@ Set-Cookie: suvex_session=<opaque>; HttpOnly; SameSite=Strict; Path=/; Max-Age=4
 | `stalledAt`     | string \| null                                                  | 疑似卡死的判定时刻（v0.17 新增）。**非空 = 服务端判定「它很久没有新事件了」** |
 | `lastEventAt`   | string \| null                                                  | 最近一条活动事件的时刻（v0.17 新增）。没有事件时为 null                     |
 | `notice`        | string \| null                                                  | 目标可达性预检的一句人话（v0.17 新增）。**只有创建扫描的响应带它**          |
-| `flag`          | string \| null | **本次解出的 flag**；没解出为 `null`（见 §3.18.1）|
+
+| `flag`          | string \| null | **本次解出的 flag**；没解出为 `null`（见 §3.18.1）|
 
 > **为什么是 `archivedAt` / `deletedAt` 而不是布尔 `archived` / `deleted`（v0.13 定案）**：
 > 布尔少一个维度 —— **什么时候归档的**。"失败 30 天后自动归档"这条规则要能
@@ -722,6 +725,8 @@ type ReportOptions = {
 | `url`        | 去掉协议与路径，**保留端口**，不加尾斜杠（取 `URL.host`） | `https://api.example.com/` → `api.example.com` |
 | `repo`       | 保留原样（`.git` 后缀与结尾斜杠都可能有意义）             | `https://github.com/acme/backend.git`          |
 | `path`       | 保留原样（**大小写与结尾斜杠在 Windows 上有意义**）       | `D:\projects\acme`                             |
+| `service`    | **`host:port`**（裸 TCP 服务，端口必留）                  | `10.0.0.5:9999`                                |
+| `artifact`   | **保留原样** —— 它存的是**附件文件名**，不是地址（v0.21）  | `tryre.zip`                                    |
 
 > **为什么必须归一化**：`api.example.com`、`https://api.example.com`、
 > `https://api.example.com/` 是同一个目标的三种写法。原样存下来，列表里会出现
@@ -740,10 +745,33 @@ type ReportOptions = {
 | `url`  | 无法解析为 URL；主机名不含 `.` 且不是 `localhost` | 不带协议（自动补 `https://`） |
 | `repo` | 不是 `https://…/…` 或 `git@host:…` 形式           | 两种 git 地址形式都收         |
 | `path` | 不是绝对路径（POSIX `/` 开头 或 Windows 盘符）    | —                             |
+| `service` | 端口不在 1–65535；主机名不含 `.` 且不等于 `localhost` | 粘贴的连接命令会自动识别 |
+| `artifact` | **填了任何地址**（这类题目没有可连的目标）      | 附件在向导里单独上传          |
 
 > ⚠️ **刻意不做得太严**（前端注释）：这是安全测试工具，用户会填内网 IP、
 > 带端口主机、非标准 TLD、IP 段。过严的正则会拦掉合法输入，而用户**无法绕过**，
 > 只能改工具 —— 那比漏校验更烦人。所以只拦"明显不对"的，其余交给后端。
+
+#### 2.8.0 `service` 的粘贴识别（v0.21 补记）
+
+裸 TCP 题（Pwn / 网络 Misc / Crypto 预言机）的用户手上通常是一条
+**连接命令**，而不是 `host:port`。所以 `service` 支持直接粘贴：
+
+| 粘贴形式 | 归一化为 |
+| --- | --- |
+| `10.0.0.5:9999` | `10.0.0.5:9999` |
+| `nc 10.0.0.5 9999` / `ncat` / `netcat`（可带 `-v` 等选项） | `10.0.0.5:9999` |
+| `socat - TCP:10.0.0.5:9999` | `10.0.0.5:9999` |
+| `openssl s_client -connect 10.0.0.5:9999` | `10.0.0.5:9999` |
+
+> **为什么值得单独做**：这类题的题面给的就是一条命令。
+> 让用户自己从中抠出 host 和 port，是把他当解析器用 ——
+> 而抠错一个数字的代价是 agent 对着错误的端口跑十几分钟。
+
+> ⚠️ **`artifact` 不能填地址。** 它对应的题目形态是"只有附件、
+> 没有可连的东西"（逆向 / 纯文件 Misc / 密码学）。给它一个地址的话，
+> agent 会对着一个不存在的主机白跑 —— 而这正是它被发明出来要避免的事
+> （见 §3.16.2 与 §3.17）。
 
 #### 2.8.1 目标可达性预检（v0.17 新增）
 
@@ -770,6 +798,33 @@ type ReportOptions = {
 
 `probedTarget` 只影响**交给外部工具的那个地址**，`ScanOut.target`
 始终是归一化后的值。两者分开的理由见 §2.1 的 `notice` 说明。
+
+#### 2.8.2 ★ TCP 目标的预检**不写** `probedTarget`（v0.21 补记）
+
+`service` 形态的预检走的是**另一条路径**，与 §2.8.1 的 HTTP 预检刻意分开：
+
+| | HTTP 预检（`url`） | TCP 预检（`service`） |
+| --- | --- | --- |
+| 探测方式 | 发一个 HTTP 请求 | **只做三次握手**，连上后**一个字节都不发** |
+| 结论存哪 | 新列 `probedTarget` | **只借 `notice` 通道**，`probedTarget` 存 `NULL` |
+| 判定"通" | 有没有 HTTP 应答（404/403 都算通） | 握手成不成功 |
+
+> **★ 为什么 TCP 探测连上后不发数据**：CTF 靶机是**有状态**的 ——
+> 很多题在连接后就开始计时或计数（"三次答错即断"）。探测时发一个字节，
+> 可能就消耗掉一次机会、或者让靶机进入某个状态。
+> 而预检的目的是"告诉用户通不通"，不是"帮他探路"。
+> 所以它只做握手，代价是拿不到任何协议信息 —— 这是刻意的取舍。
+
+> **★ 为什么不给 TCP 补 `http://` 写进 `probedTarget`**：
+> `probedTarget` 的语义是"**探测后实际用的那个地址**"。对 HTTP 目标，
+> 补 `https://` 或 `http://` 是有意义的（两者可能是不同服务）。
+> 而对裸 TCP，**没有"协议前缀"这个概念** —— 硬补一个 `http://`
+> 等于编造一个不存在的层，而后端 `build_spec` 会拿它去发包。
+> 所以这里 `effective_target` 刻意留空，`build_spec` 回退用 `scan.target`
+> （也就是 `host:port` 本身）。
+
+> **共同点**：两条路径**都不阻断创建**，失败只写一句 `notice`。
+> 预检是提示，不是门禁 —— 拦错了的代价是用户从此忽略这个提示。
 
 ### 2.9 Settings 相关
 
@@ -866,6 +921,121 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
    服务端存哈希。
 3. **`sandbox.networkIsolated` 的默认值是 `false`（允许出网）** ——
    扫描经常需要出网打外部目标。这不是"更安全就一定更好"的开关。
+
+**执行三件套**（v0.21 补记，任务 13）—— `SandboxConfig` 上多出四个字段：
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `maxConcurrentScans` | 1–8 | 同时跑几次扫描 |
+| `scanMaxTurns` | 10–2000 | 单次扫描的回合上限 |
+| `scanMode` | `quick` \| `standard` \| `deep` | 扫描深度 |
+| `executionSource` | `{maxConcurrentScans, scanMaxTurns, scanMode}` 各为 `'user'` \| `'default'` | **只读**，标出每个值当前来自哪一侧 |
+
+> **★ `executionSource` 是这个设计里最容易被忽略、但最该有的一环。**
+>
+> 三个值都是"DB 覆盖 → env 兜底"，所以界面上显示的可能是**用户设的**，
+> 也可能是**环境变量给的默认值**。不区分这两者的话，用户会对着一个
+> 他从没设过的值发呆 —— 想改它，却不知道改了会不会生效（因为看起来
+> "它已经是我想要的值了"）。
+>
+> 所以每个值单独标 `user` / `default`，而不是整体一个开关。
+
+> **⚠️ 沙箱配额有四个字段，但只有三个真的生效**（v0.21 写清）：
+>
+> | 字段 | 生效 | 说明 |
+> | --- | --- | --- |
+> | `cpuLimit` / `memoryLimitMb` / `networkIsolated` | ✅ | 真下发给沙箱容器 |
+> | `timeoutMinutes` | ❌ | 执行后端**全包没有扫描级墙钟超时** |
+> | `allowVolumeWrite` | ❌ | 工作区挂载**恒为读写**，改不了 |
+>
+> 这条必须写在这里：界面上那两个开关是**能点、能存、但不生效**的。
+> 不写清楚的话，用户会以为"设了 30 分钟超时，它就会 30 分钟停" ——
+> 而实际不会。这类"看起来生效其实没有"的字段比缺失的字段更糟。
+
+> **⚠️ 配额只接了扫描这一条路**（v0.21 补记）：CTF2 解题路径的
+> CPU / 内存配额是**任务 21** 才接上的（见 §3.19）。在那之前，
+> CTF2 起的解题容器没有任何 CPU / 内存上限。
+
+### 2.10 CTF2 相关（`src/data/ctf2.ts`）
+
+> **v0.21 新增。** 这一节补的是**整个 CTF2 模块**（25 个端点、5 个枚举、
+> 24 个出入参），它此前在契约里零覆盖 —— 详见 §3.19 的说明。
+
+#### 五个枚举
+
+| 类型 | 取值 | 说明 |
+| --- | --- | --- |
+| `Ctf2ChallengeStatus` | `unsolved` \| `environment_ready` \| `solving` \| `candidate_ready` \| `submitting` \| `solved` \| `failed` | 一道题**在我们这边**的推进状态 |
+| `Ctf2SubmissionStatus` | `pending` \| `correct` \| `wrong` \| `rejected` \| `failed` | 一次 flag 提交的结果 |
+| `Ctf2EnvironmentStatus` | `stopped` \| `starting` \| `ready` \| `error` \| `expired` | 题目环境（容器）的生命周期 |
+| `Ctf2SubmitMode` | `safe` \| `auto` | 提交策略 |
+| `Ctf2SandboxProfile` | `ctf2-sandbox` \| `ctf2-sandbox-re` | 用哪个沙箱镜像 |
+
+> **★ `Ctf2ChallengeStatus` 为什么不直接抄 CTF2 的题目状态。**
+>
+> 平台侧的题目状态只回答「这个用户在**平台**上做没做出来」——
+> 它只有"未解出 / 已解出"两种，因为平台不关心你是自己在做还是在
+> 这个系统里做。而我们要回答的是「**我们的流水线**走到哪一步了」：
+> 环境起没起来、LLM 在不在解、候选 flag 有没有、提交成不成。
+>
+> 把两者合成一个字段，会出现「平台说未解出、而我们正在跑」这种
+> **无法表达**的状态 —— 而它恰恰是最需要显示的中间态。
+>
+> 其中 `candidate_ready`（"待确认"）是 `safe` 模式的核心：**它在等人**。
+> 措辞必须让人一眼看出该自己动手了，而不是"还在跑"。
+
+> **★ `rejected` 与 `wrong` 是两件事，必须分开。**
+>
+> | 取值 | 含义 | 外部后果 |
+> | --- | --- | --- |
+> | `wrong` | 请求**真的到了平台**，平台判定这个 flag 不对 | **消耗错误提交额度** |
+> | `rejected` | **我们自己在本地就拦下了**，请求根本没发出去 | 不消耗任何额度 |
+>
+> `rejected` 的四种成因：超出该题错误提交上限、flag 形状不符、
+> `safe` 模式下无人确认、以及 §3.19 里 `confirm` 的前置条件不满足。
+>
+> 合并的代价是实打实的：`rejected` 若记成 `wrong`，"这道题我还剩
+> 几次机会"会被本地拦截白白扣掉 —— 而用户看到的是数字自己变小了。
+
+> **`expired` 与 `error` 分开**：CTF2 侧的环境**有租期**，到期后
+> `accessUrl` 会变成连不上的死地址。那是**正常老化，不是故障** ——
+> 补救动作是"重新启动环境"，而 `error` 的补救动作是"看日志"。
+> 混成一档，界面就只能给一句含糊的"环境异常"，用户不知道该点重启
+> 还是该找人。
+
+#### 出参形状
+
+| 类型 | 关键字段 |
+| --- | --- |
+| `Ctf2Account` | `id` / `label` / `status` / `remoteUserId` / `remoteUsername` / `scopes` / **`tokenMask`** / **`hasToken`** / `lastSyncedAt` / `lastError` / `createdAt` / `updatedAt` |
+| `Ctf2Settings` | `submitMode` / `maxWrongSubmissions` / `defaultSandboxProfile` / `maxConcurrentSolves` / `solvePollSeconds` / `autoSyncSeconds` / `autoPriorityNew` / `autoStartNew` / `maxTurns` / `updatedAt` |
+| `Ctf2Competition` | `id` / `accountId` / `remoteId` / `kind`(`competition`\|`practice`) / `name` / `remoteStatus` / `startAt` / `endAt` / `challengeCount` / `syncedAt` |
+| `Ctf2Challenge` | `id` / `competitionId` / `remoteId` / `stageId` / `title` / `category` / `description` / `attachments` / `score` / `status` / **`candidateFlag`** / **`confirmedFlag`** / `remainingWrongSubmissions` / `wrongSubmissionCount` / `maxWrongSubmissions` / `candidateCount` / `sandboxProfile` / `scanId` / `solvedAt` / `lastError` / `environment` / `priority` / `createdAt` / `updatedAt` |
+| `Ctf2Environment` | `id` / `challengeId` / `status` / `sandboxProfile` / `accessUrl` / `accessUrls` / `containerId` / `pollCount` / `startedAt` / `readyAt` / `expiresAt` / `lastError` |
+| `Ctf2Platform` | `id` / `slug` / `displayName` / `baseUrl` / `driver` / `source`(`builtin`\|`generated`) / `status` / `lastError` / `attempts` / `isBuilding` / **`active`** / `lastRaw` / `createdAt` / `updatedAt` |
+| `Ctf2Snapshot` | `account` / `competition` / `challenges` —— 一次拿到三样，省掉三次请求 |
+| `Ctf2Queue` | `running` / `limit` / `queued` / `challenges`（题目 id 列表） |
+| `Ctf2SyncResult` | `competitions` / `challengesCreated` / `challengesUpdated` / `errors` / `attachmentsDownloaded` / `attachmentsSkipped` / `attachmentsFailed` / `message` |
+| `Ctf2SolveResult` | `challenge` / `environmentId` / `scanId` / `message` |
+| `Ctf2SubmitResult` | `status` / `message` / `challenge` |
+| `Ctf2PullResult` | `challenge` / `created` / `challengeId` / `competitionName` |
+| `Ctf2RemoteCompetition` | `remoteId` / `name` / `startAt` / `endAt` / `status` —— **平台侧**的赛事，不落库 |
+
+> **★ `Ctf2Account` 里没有 `token` 字段，只有 `tokenMask` + `hasToken`。**
+> 与 §2.9 的 `apiKey` / `apiKeyMask` 同一条理由（见 ADR-003）：
+> 掩码放进凭据字段会被前端原样回传、覆盖真凭据 —— 静默数据损坏。
+>
+> 这里的后果更重一层：CTF2 的 PAT 是一把**代表用户去操作外部平台**的
+> 钥匙（能提交 flag、能开靶机），毁掉它意味着要重新去平台申请。
+
+> **★ `candidateFlag` 与 `confirmedFlag` 是两列，不是一个字段。**
+> 前者是 agent 提出、**尚未提交**的候选；后者是平台**判定正确**的结果。
+> 合成一个字段就无法回答"这个 flag 到底提交过没有"——
+> 而它决定了要不要再发一次请求（以及会不会白扣一次额度）。
+
+> **`Ctf2Platform.active` 是"当前生效的那一个"**，不是"可用的"。
+> 多个平台可以同时 `verified`，但只有一个 `active`（见 §3.19 的
+> `POST /ctf2/platforms/{id}/activate`）。
 
 ---
 
@@ -1634,7 +1804,10 @@ Overview 纹丝不动，那次分诊就成了没有反馈的无效劳动。
 | 方法   | 路径                                   | 说明                                                           |
 | ------ | -------------------------------------- | -------------------------------------------------------------- |
 | GET    | `/settings`                            | 一次返回 `SettingsSnapshot`（accounts/sandbox/notices/tokens） |
+| GET    | `/settings/sandbox`                    | 读沙箱与执行环境配置（v0.21 补记，此前只记了 PUT）             |
 | PUT    | `/settings/sandbox`                    | 沙箱配置                                                       |
+| GET    | `/settings/finding-sla`                | 漏洞修复时限（v0.16 已有，此处补齐）                           |
+| PUT    | `/settings/finding-sla`                | 改漏洞修复时限（v0.16 已有，此处补齐）                         |
 | PUT    | `/settings/notices/rule`               | 通知规则                                                       |
 | POST   | `/settings/notices/channels`           | 新增渠道                                                       |
 | PATCH  | `/settings/notices/channels/{id}`      | 改渠道                                                         |
@@ -1826,6 +1999,35 @@ Overview 纹丝不动，那次分诊就成了没有反馈的无效劳动。
 | `member.create` / `member.update` / `member.delete` | 处理人名单的写操作（v0.15） |
 | `report.download`       | `GET /reports/{id}/download` 产出文件时       |
 | `report.delete`         | `DELETE /reports/{id}` 成功之后               |
+
+**其余动作**（v0.21 补记 —— 此前这张表只列了 8 个，而代码里有 **31 个**。
+下表补齐缺失的 23 个，分组说明它们各自的"事后要能回答什么"）：
+
+| 值 | 何时写 | 事后要能回答 |
+| --- | --- | --- |
+| `scan.resume` | `POST /scans/{id}/resume` 成功之后 | 谁把一次失败的扫描接着跑了（v0.20）|
+| `scan.archive` | 批量归档 / 取消归档之后 | 谁把它收进了归档（v0.13）|
+| `scan.purge` | `DELETE /scans/{id}/purge` 之后 | **谁永久删除了它**（不可恢复）|
+| `scan.attach` / `scan.attach_delete` | 题目附件上传 / 删除 | 谁把哪个文件交给了哪次扫描（v0.19）|
+| `finding.delete` / `finding.restore` | 软删除 / 恢复之后 | 谁把它扔进回收站又捞了回来（v0.18）|
+| `finding.purge` | 永久删除之后 | **谁销毁了这条证据**（不可恢复）|
+| `finding.attach` / `finding.attach_delete` | 漏洞附件上传 / 删除 | 谁放了证据、谁撤了它（v0.18）|
+| `member.update` / `member.delete` | 处理人名单的改 / 删 | 负责人名单变更（v0.15）|
+| `ctf2.account_bind` / `ctf2.account_unbind` | 绑定 / 解绑 CTF2 账号 | **谁把这把外部钥匙放进系统、谁撤掉了它**（v0.20）|
+| `ctf2.sync` | 同步赛事与题目之后 | 数据是什么时候从平台拉下来的 |
+| `ctf2.solve_start` / `ctf2.solve_cancel` | 开始 / 取消解题 | 谁让它开始跑、谁叫停了 |
+| `ctf2.submit` | 提交 flag 之后（**含本地拦下的**） | 谁往外提交了答案（有外部后果）|
+| `ctf2.settings_update` | 改解题策略之后 | **谁把 `submitMode` 改成了 `auto`**（v0.20）|
+| `ctf2.platform_draft` / `ctf2.platform_activate` / `ctf2.platform_use_builtin` / `ctf2.platform_delete` | 平台接入的四个动作 | 谁换掉了对外连接的平台（v0.25）|
+
+> **★ 为什么 `ctf2.settings_update` 特别重要**：它记的是
+> **"谁把 `submitMode` 从 `safe` 改成 `auto`"**。那个改动意味着
+> 机器从此可以**无人确认地对外提交 flag** —— 而错误提交消耗平台额度。
+> 这是本系统里少数几个"一次点击改变外部后果边界"的操作之一，
+> 所以它必须留痕，且要能追到具体是谁在什么时候点的。
+
+> **★ 留痕粒度的统一规则**（v0.15 定，适用于全部 31 个动作）：
+> **时间线逐条、审计每次操作一行**。见下面 v0.15 那段。
 
 > **v0.15 补记的粒度规则**（需求明确要求，值得写死）：
 >
@@ -2476,6 +2678,134 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 
 ---
 
+### 3.19 CTF2 平台对接（v0.21 补记）
+
+> **★ 这一节是一次事后补齐，不是新决策。**
+>
+> 整个 `app/ctf2/` 模块（25 个端点、5 个枚举、24 个出入参、8 个迁移）
+> 此前在契约里**零覆盖** —— 而契约是本项目的「唯一事实来源」，
+> 前端按它接入。这意味着有一大块对外接口从未被写下来过。
+>
+> 补记的原因是 2026-10-10 做交付评估时量出来的：`TargetKind 契约缺
+> artifact` 只是校验脚本恰好抓到的那一处，实际漂移远比它大。
+> 详细的漂移清单与量化见变更表 v0.21。
+
+**它解决什么**：CTF2 是一个 CTF 平台。这个模块让 Suvex 能**绑定平台
+账号 → 同步赛事与题目 → 起题目环境 → 派 agent 解题 → 把 flag 提交回平台**。
+与 §3.3 的扫描是两个并列的入口（见 §3.16.2 关于"判据"与"目标形态"的区分）。
+
+#### 端点总表
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/ctf2/accounts` | read | 账号绑定列表。**只返回掩码，没有 token** |
+| POST | `/ctf2/accounts` | **admin** | 绑定账号（`201`）|
+| DELETE | `/ctf2/accounts/{accountId}` | **admin** | 解绑（`204`）|
+| GET | `/ctf2/settings` | **admin** | 解题策略配置 |
+| PUT | `/ctf2/settings` | **admin** | 改配置 |
+| GET | `/ctf2/competitions/remote` | **scan** | **平台侧**的赛事列表（不落库）|
+| POST | `/ctf2/challenges/pull` | **scan** | 从平台拉一道题入库 |
+| POST | `/ctf2/sync` | **scan** | 全量同步赛事与题目 |
+| GET | `/ctf2/competitions` | read | 本地赛事列表 |
+| GET | `/ctf2/challenges` | read | 本地题目列表 |
+| GET | `/ctf2/challenges/{challengeId}` | read | 题目详情 |
+| GET | `/ctf2/snapshot` | read | 一次拿到账号 + 赛事 + 题目 |
+| GET | `/ctf2/queue` | read | 解题队列状态 |
+| POST | `/ctf2/challenges/{challengeId}/solve` | **scan** | 开始解一道题 |
+| PUT | `/ctf2/challenges/{challengeId}/priority` | **scan** | 改优先级 |
+| POST | `/ctf2/priorities/by-score` | **scan** | 按分值批量排优先级 |
+| POST | `/ctf2/challenges/{challengeId}/submit` | **scan** | 提交 flag |
+| POST | `/ctf2/challenges/{challengeId}/cancel` | **scan** | 取消解题 |
+| DELETE | `/ctf2/challenges/{challengeId}/environment` | **scan** | 销毁题目环境（`204`）|
+| GET | `/ctf2/platforms` | read | 已接入的平台 |
+| GET | `/ctf2/platforms/{platformId}` | read | 单个平台详情 |
+| POST | `/ctf2/platforms/draft` | **admin** | 提交一个平台接入草稿（`202`）|
+| POST | `/ctf2/platforms/{platformId}/activate` | **admin** | 启用某个平台 |
+| POST | `/ctf2/platforms/use-builtin` | **admin** | 切回内置的 CTF2（`204`）|
+| DELETE | `/ctf2/platforms/{platformId}` | **admin** | 删除平台（`204`）|
+
+> **鉴权分级的理由**：读操作是 `read`；**会对外发请求或消耗外部额度**的
+> 是 `scan`（同步、拉题、解题、提交）；**改系统级配置与凭据**的是 `admin`
+> （绑定账号、改提交策略、接入平台）。
+>
+> 这个分法与 §5 的思路一致：**判据是"这个操作会不会产生外部后果"**，
+> 而不是"它看起来危不危险"。
+
+#### 3.19.1 ★ `submitMode`：默认 `safe`，不是"更安全所以更好"
+
+`PUT /ctf2/settings` 的 `submitMode` 决定机器能否**无人确认**地对外提交 flag。
+
+| 取值 | 行为 |
+| --- | --- |
+| `safe`（**默认**） | agent 解出候选 flag 后停在 `candidate_ready`，**等人确认**才提交 |
+| `auto` | 自动提交，不等人 |
+
+> **为什么默认是 `safe`**：flag 提交有**不可撤销的外部后果** ——
+> 错误提交消耗平台额度，而额度是有限的（每道题几次），
+> 且一个 LLM 解出来的东西未必对。自动提交等于把"扣额度的动作"
+> 交给一个会犯错的东西去做。
+>
+> 所以 `safe` 是默认，`auto` 要用户**显式打开**，而且它也可以
+> 按题设置。这不是"保守"，是**承认自动化的边界**：
+> "自动"不等于"无需人工确认"，前者是效率，后者是安全边界。
+
+#### 3.19.2 ★ 提交前的前置校验
+
+`POST /ctf2/challenges/{challengeId}/submit` 在真正发包**之前**会拦下几类
+情况，命中时返回的 `status` 是 **`rejected`**（本地拦下，不消耗额度）：
+
+| 条件 | 为什么拦在本地 |
+| --- | --- |
+| 超出该题错误提交上限（`remainingWrongSubmissions <= 0`） | 再发就是白扣一次额度 |
+| 在 `safe` 模式下无人确认 | 见 §3.19.1 |
+| flag 形状明显不可能是答案 | 省一次外部请求 |
+
+> **⚠️ 它**不再**要求"答案长得像 flag"。** 这条在 v0.21 改过：
+> 判据从"像不像 flag"改成"**是不是明显不可能**"。理由是 CTF 里有大量
+> 非 `flag{...}` 形状的答案（一段口令、一个文件名、一串数字），
+> 而按形状拒绝会把正确答案挡在门外 —— 那是**假阴性**，
+> 而假阴性在这个场景里比假阳性贵得多（用户会以为 agent 没解出来）。
+>
+> 名字里的 `flag` 是历史遗留，它现在的处理对象是**任意答案**。
+
+#### 3.19.3 平台接入（`/ctf2/platforms/*`，v0.25）
+
+内置的 CTF2 排在 `GET /ctf2/platforms` 的**第一个** —— 它是默认的那个。
+用户也可以接入别的平台，流程是"提草稿 → 系统生成适配器 → 启用"：
+
+| 端点 | 语义 |
+| --- | --- |
+| `POST /platforms/draft` | 提交草稿（`202` —— 生成是异步的，见 `isBuilding`）|
+| `POST /platforms/{id}/activate` | 启用；**同一时刻只有一个 `active`** |
+| `POST /platforms/use-builtin` | 切回内置 CTF2（`204`）|
+| `DELETE /platforms/{id}` | 删除 |
+
+> **`202` 而不是 `201`**：草稿提交后系统要**生成**适配器（这是异步的，
+> 可能要几十秒）。`201` 的语义是"资源已创建"，而那一刻它还在建。
+> `202 Accepted` 才是诚实的：**受理了，还没做完**。
+> 前端据此显示 `isBuilding`，而不是假装已经好了。
+
+#### 3.19.4 与扫描模块的关系
+
+**每一道 CTF2 解题任务都建一条真实的 `Scan`**（`goal = captureFlag`）。
+
+> 为什么不是另一套表：`activity_events.scan_id` 是**非空外键** ——
+> 事件流必须挂在某次扫描上。所以 CTF2 借扫描的壳，这样：
+>
+> * 事件流（§4）直接可用，不必为 CTF2 再写一套实时通道；
+> * `scans.flag`（§3.18.1）直接可用，不必再存一遍；
+> * 活动页、报告、题解这些既有能力全部复用。
+>
+> **代价要说清**：扫描列表里会出现 CTF2 的任务，而它们的目标
+> 可能是一个平台内部的环境地址。`Ctf2Challenge.scanId` 是这条
+> 关联的入口 —— 反过来，从扫描找不到"它是哪道题"（这是单向的）。
+>
+> ⚠️ 这类"壳扫描"**不能续跑**：它的"上次会话"根本不存在
+> （strix 从没跑过它），续跑会走到一句与事实相反的"会话文件已不在"。
+> 所以 `resume_scan` 会先拦下它，返回 `409 SCAN_IS_CTF2_SHELL`。
+
+---
+
 ## 4. 实时事件流
 
 > **本节按 SSE 写**（见 §0.1）。若最终选 WebSocket，本节整体替换，
@@ -2928,3 +3258,5 @@ npm run verify:all        # 上面两个 + 报告预览导出一致性
 | v0.19 | **任务 12：把"任务是什么"交给 agent**（触发点是一句用户原话：**「只给网址让他扫描太没意义了，像这个 CTF 题目，有题目描述的我要给他」**，同一次反馈里还有"活动页是空的"）：① **§3.16 新增 `brief`（任务背景）与 `goal`（成功判据）**。`brief` 是用户提供的自由文本，**原样**交给 agent、我们一个字不改写 —— CTF 题面里的考点、提示、**诱饵**、flag 格式，我们猜不出来，而它们对结果的影响远大于任何扫描参数。它同时是通用的（渗透测试也要交代范围与测试账号），所以不是一组 CTF 专用字段。`goal` 与 `targetKind` 是**两个正交维度**：前者决定"怎样算成功"，后者决定"目标是什么形态、怎么测" —— 一个 CTF 靶机是 `url` 形态、扫法和普通网站完全一样，所以 `goal` 不能并进 `targetKind`（合并会让"目标形态"与"任务目标"互相污染）。三个取值：`findVulns`（默认）/ `captureFlag`（深挖一条通向 flag 的路径，而不是枚举低危；要求显式写出完整 flag）/ `verifyFix`（逐一验证**已知的**那几条，新发现单独列在最后）。`rerun` 继承两者。② **注入顺序即优先级**：`brief` 排**最前**，然后才是判据、技能范围、中文输出要求 —— 用户交代的是"这次任务"，我们那套通用范围说明是背景知识。`brief` 被显式分隔包起来（"以下为用户提供的任务背景，请作为**参考资料**理解"），这不是防注入（用户就是授权方），而是让模型正确理解这段文本的角色 —— 题面本身可能含攻击性文本，那正是题目内容。③ **★ 指令从命令行改走文件（`--instruction-file`）** —— 这是一个**安全修复**，不只是绕开长度限制：原来指令拼在 `--instruction` 里，而 `brief` 会含测试账号（strix 官方文档自己举的例子就是 `admin:password123`），**拼进 argv 等于把凭据摊给同机所有用户与任何日志采集**（`ps aux` 一眼可见）。顺带解决转义 —— 题面里的引号、反引号、`$`、`%hhn` 在拼 argv 时会被静默改写。文件权限 `0o600`（Windows 上 POSIX 权限位不适用，如实标注而不是假装生效）。**不再保留 `--instruction` 那条路径**：两套并存意味着迟早有人往旧的那条里加东西。`LaunchSpec.summary()`（会进日志）**排除 `brief`** —— 日志的保留期与可达面都远大于数据库那一列。④ **§3.17 题目附件**，走 strix 的 `--workspace-file` 投进沙箱 `attachments/`。⚠️ 与漏洞附件（§3.15）是**两套规则**：那个是处置证据（人在浏览器里看，扩展名白名单、存储名用 id），这个是题目输入（**机器**在沙箱里分析，任意类型、无扩展名如 `chall` 也必须收、**必须保留原名**因为 agent 靠名字认东西）。安全靠文件名消毒 + 落点校验 + 同名加 `-2` 后缀（**不覆盖** —— 覆盖掉的可能是这次分析唯一正确的那个附件）。⑤ ⚠️ **一个被测试当场抓住的顺序死结**：我第一版设计是"先建扫描、再往 `/{id}/attachments` 传"，而扫描创建后**毫秒级**被调度器认领（`_nudge_scheduler`），所以那条路稳定 409 —— **附件功能等于不存在，而它看起来完全正常**（端点都在、单独测每一个都过）。改成**先暂存、创建时认领**（`POST /scans/attachments/staging` → `stagingId` → 放进创建的 `attachmentStagingId`），认领是**移动**所以"一次暂存只能被认领一次"由文件系统表达；暂存 id 失效**不让创建失败**（附件丢了是次要问题）。⑥ ⚠️ **multipart 登记表踩了自己预告过的坑**：上传端点是 CSRF 防线的显式例外，那张表原本用**后缀匹配**（`endswith("/attachments")`），而新路径 `/scans/attachments/staging` **不以 `/attachments` 结尾** —— 于是它没被放行，上传被 400 挡掉，而错误消息（"写操作必须使用 Content-Type: application/json"）与"忘了登记"看起来毫无关系。已改成**精确匹配路由模板**，并记下一个反直觉细节：登记表**不带 `/api/v1` 前缀**（前缀是 `include_router` 挂载时加的，`request.scope["route"].path` 是子路由自己的模板）—— 我第一版按完整对外路径写，结果**一条都匹配不上**，症状是所有上传端点突然都 400。⑦ **顺带修正一条既有的错误说法**：我一度在注释里写"`sweep_retention` 会按保留期清 `scan_root/<scan_id>`"，实测**它根本不删任何目录**（只改数据库）—— 于是暂存清理是**新加**的（`sweep_staging`，2 小时 TTL，挂在 `sweep_retention` 里），并且它必须精确匹配 `_staging` 那一级（写错一个 `**` 就会删掉用户真正在用的附件，有测试盯着）。同时把那个**既有缺口**写下来：扫描产物目录只增不减，此前被那句错误注释"解释掉"了。⑧ 前端新增向导第 4 步「任务背景」（判据选择 + 题面文本框 + 附件选择），并如实提示"含口令也可以写：它不会出现在进程列表里" —— 不告诉他这一点，他会自己删掉最关键的那一行。⑨ 迁移 `d7beeb9712a9`。⚠️ autogenerate 生成的那句**在非空表上会直接失败**（`goal` 非空却无 `server_default`），是手工改的：先带 default 加列、再摘掉 default（保留 default 会让"忘记传 goal 的插入"静默变成默认值）；CHECK 约束也手工补（autogenerate 不比对约束内容，本项目已踩过一次）。⑩ 配置无新增；新增 `tests/test_scan_brief_and_goal.py`（31 条）。 |
 
 | v0.20 | **补记：把契约文档拉回代码现状**（触发点是 `npm run verify:contract` 报红：`TargetKind 契约缺: artifact`）。这一行同时记下一件更该被看见的事：**这份文档的变更表停在 v0.19（任务 12），而代码已经走到任务 20** —— 中间那批（CTF2 判题引擎、题目附件、夺旗目标、`service` 目标形态…）的实现都改了契约面，却没有回写这里。本次只补与当前改动直接相关的四项，其余待专项对账：① §2.1 `targetKind` 补 **`service`** 与 **`artifact`** —— `service` 其实早就实现了，只是因为校验脚本按**子串**在整个文档里找，而"service"这个词在别处出现过，于是它一直**没被报出来**（这也是该校验的已知弱点）；② §2.1 `skills` 补 **`protocol`**（唯一只适用 `service` 的技能，理由见 §2.1 表格上方那段）；③ §2.1 新增 **`Scan.flag`**，并新增 **§3.18.1** 写清它的来源与"占位符必须拒掉"这条判据；④ 新增 **§3.3.2 续跑** 与 **§3.18 题解报告** 两节 + 两个错误码（`SCAN_NOT_RESUMABLE` / `WRITEUP_UNAVAILABLE`）。四项都是**先改文档再改代码**的规矩在本轮的事后补齐，不是新决策 |
+
+| v0.21 | **专项对账：把契约文档拉回代码现状（第二批）** —— 这是本项目**规模最大的一次文档补齐**，也是一次**事后追认**，不是新决策。触发点是 v0.20 那行只补了四处，而实际漂移远大于此：交付评估时逐项量化，发现整个 CTF2 模块（25 个端点、5 个枚举、24 个出入参、8 个迁移）**在契约里零覆盖**，而契约是本项目声明的「唯一事实来源」—— 也就是说有一大块对外接口从未被写下来过，前端却已经按它接完了。**本轮量化出的缺口与补齐情况**：① **新增 §2.10**（CTF2 字段对照表：5 个枚举 + 14 个出参形状）与 **§3.19**（CTF2 端点总表 25 个 + 提交策略 + 提交前校验 + 平台接入 + 与扫描模块的关系）。其中三条是**非显然的设计意图**，必须写下来：`Ctf2ChallengeStatus` 为什么不抄平台侧状态（会无法表达"平台说未解出、而我们正在跑"）；`rejected` 与 `wrong` 为什么必须分开（前者本地拦下不消耗额度、后者真发了请求消耗额度，合并会让"还剩几次"被白白扣掉）；`submitMode` 为什么默认 `safe`（flag 提交有**不可撤销的外部后果**，"自动"不等于"无需人工确认"）。② **§2.8 补 `service` 与 `artifact` 两类归一化与校验**（此前只有 url/repo/path 三行），并新增 **§2.8.0 粘贴识别**（`nc 10.0.0.5 9999` / `openssl s_client -connect …` 等命令形式直接识别 —— 这类题的题面给的就是一条命令，让用户自己抠 host 和 port 是把他当解析器用）与 **§2.8.2 TCP 预检为什么不写 `probedTarget`**（TCP 探测**只握手、连上后一个字节都不发**：CTF 靶机有状态，探测时发包可能消耗掉一次答题机会；而"没有协议前缀"这个概念，硬补 `http://` 等于编造一个不存在的层）。③ **§2.9 补执行三件套**（`maxConcurrentScans` / `scanMaxTurns` / `scanMode` + 只读的 `executionSource`），并写清一件**界面上看不出来的事**：沙箱配额四个字段里 **只有三个真生效**，`timeoutMinutes` 与 `allowVolumeWrite` 是"能点、能存、但不生效"的（执行后端全包没有扫描级墙钟超时，工作区挂载恒为读写）—— 这类字段比缺失的字段更糟，用户会以为设了就有效。同时记下**配额只接了扫描一条路**，CTF2 那条是任务 21 才接的。④ **§3.7 补两个漏记的端点**（`GET /settings/sandbox` 此前只记了 PUT；`GET/PUT /settings/finding-sla` 是 v0.16 就有的，一直没进表）。⑤ **§3.9 审计动作表从 8 个补到 31 个** —— 此前只列了任务 8 那一轮的六个加两个报告动作，而代码里已经有 31 个。补记时按"事后要能回答什么问题"分组，其中 `ctf2.settings_update` 单独点出：它记的是**谁把 `submitMode` 从 `safe` 改成 `auto`**，那是本系统里少数几个"一次点击改变外部后果边界"的操作。⑥ **错误码表补两个**（`SCAN_IS_CTF2_SHELL`、`SETUP_ALREADY_DONE`）。**⚠️ 同时记下两个必须被看见的问题**：**其一，变更记录与代码的任务编号体系对不上** —— 代码里同时存在两套编号（`alembic/versions/20260927_1200_*.py` 写「任务 17 = artifact」，而 `app/core/vocab.py:469` 写「v0.20（任务 17）：CTF2 平台对接」），CTF2 实际是**独立的版本线 v0.20–v0.27**、与任务编号并行，那一行注释是笔误；本轮按迁移文件与测试表格的证据（三处一致）认定「任务 17 = artifact」，**但这是推断而非坐实** —— 项目只有一次基线提交、无历史可查，所以如实记在这里而不是悄悄改掉。**其二，`ScanMode` 不在自动对账清单里** —— `suvex-web/scripts/contract-parity.mjs` 的 `ENUM_CHECKS` 没有它，所以它即使与代码漂移也**不会报红**；这与 v0.20 那次发现的"校验脚本按子串匹配，导致 `TargetKind` 缺 `service` 一直没报出来"是同一类弱点：**对账脚本只覆盖它被喂过的枚举**。⑦ **本轮明确记为"不改契约面"的两项**（免得后来者以为漏记）：任务 13 的 `EXPLORATION_PROTOCOL` 与任务 15 的 `TCP_TARGET_CLAUSE` 都是**纯提示词注入**，不进任何字段、不进命令行，只改变 agent 的过程 —— 前者是为了治"一轮没产出新信息的空转"（实测一次 CTF 扫描 61.5 分钟、166 次 LLM 请求，时长几乎全是 LLM 等待，溯源到子 agent 对未知 slot 布局做无假设穷举），后者是因为执行后端对"含点且不含斜杠"的输入一律判成 web 应用并补 `https://`，而 `--target` 没有任何写法能表达裸 TCP |

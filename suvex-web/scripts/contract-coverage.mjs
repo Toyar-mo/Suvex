@@ -62,6 +62,32 @@ const REQUIRED_ENDPOINTS = [
   ['报告列表', ['| GET | `/reports`']],
   ['报告下载', ['| GET | `/reports/{id}/download`']],
   ['全局统计', ['| GET | `/overview`']],
+  /*
+    ★ CTF2 模块（v0.21 补，2026-10-10）。
+
+    补它的原因是一个被量出来的漏洞：**这份清单是手写的**，
+    而手写清单只会覆盖"写它的人当时想到的端点"。整个 CTF2 模块
+    （25 个端点）从来没进过这份清单，所以它即使从契约里整个消失，
+    这条校验也**不会报红** —— 而它已经真的消失过一次
+    （契约里零覆盖，直到本轮才补上）。
+
+    ⚠️ 但**加清单不是根本解法** —— 它仍然是手写的。
+       真正的保险是下面的"反向自动对账"：从后端代码抽端点，
+       逐个反查契约。清单只能防"忘了写"，自动对账能防"写漏了"。
+  */
+  ['CTF2 账号列表', ['| GET | `/ctf2/accounts`']],
+  ['CTF2 账号绑定', ['| POST | `/ctf2/accounts`']],
+  ['CTF2 配置', ['| GET | `/ctf2/settings`']],
+  ['CTF2 同步', ['| POST | `/ctf2/sync`']],
+  ['CTF2 题目列表', ['| GET | `/ctf2/challenges`']],
+  ['CTF2 快照', ['| GET | `/ctf2/snapshot`']],
+  ['CTF2 队列', ['| GET | `/ctf2/queue`']],
+  ['CTF2 开始解题', ['| POST | `/ctf2/challenges/{challengeId}/solve`']],
+  ['CTF2 提交 flag', ['| POST | `/ctf2/challenges/{challengeId}/submit`']],
+  ['CTF2 平台列表', ['| GET | `/ctf2/platforms`']],
+  ['题目附件', ['/scans/{scanId}/attachments']],
+  ['扫描续跑', ['| POST | `/scans/{id}/resume`']],
+  ['CTF 题解', ['| GET | `/scans/{id}/writeup`']],
 ]
 
 /** 合集点名的三件"结构"要求 */
@@ -141,3 +167,4 @@ console.log(
   `\n${missing === 0 ? '══ 需求清单全部覆盖，且决策无矛盾 ══' : `══ ${missing} 项待处理，请修 docs/api-contract.md ══`}`,
 )
 if (missing > 0) process.exitCode = 1
+

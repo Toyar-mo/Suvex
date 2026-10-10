@@ -71,9 +71,10 @@ npm run dev          # http://localhost:5173
 | `npm run test:watch`      | 单元测试（watch 模式）                 |
 | `npm run lint`            | ESLint（`--max-warnings 0`）           |
 | `npm run format`          | Prettier 写入                          |
-| `npm run verify:all`      | 全部校验（契约 + 覆盖度 + 报告一致性） |
-| `npm run verify:contract` | 契约字段 ↔ 源码类型 对账               |
+| `npm run verify:all`      | 全部校验（契约 + 覆盖度 + 端点 + 报告） |
+| `npm run verify:contract` | 契约字段 ↔ 源码类型 对账（17 个枚举）  |
 | `npm run verify:coverage` | 契约端点覆盖度（对照需求清单）         |
+| `npm run verify:endpoints`| **反向**端点对账（后端代码 → 契约）    |
 | `npm run verify:report`   | 报告预览 = 导出 一致性                 |
 
 > `verify:*` 系列不是可选的锦上添花：它们把"文档与实现一致"这种

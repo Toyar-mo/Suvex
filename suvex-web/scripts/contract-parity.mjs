@@ -70,7 +70,23 @@ function unionValues(code, typeName) {
         trimmed.startsWith('*') || trimmed.startsWith('/*') || trimmed.startsWith('//')
       if (trimmed !== '' && !trimmed.startsWith('|') && !isComment) break
     }
-    for (const m of lines[i].matchAll(/'([a-z_]+)'/g)) values.push(m[1])
+    /*
+      ★ 字符类里必须有 `-` 与 `0-9`（v0.21 修）。
+
+      原来写的是 `'([a-z_]+)'` —— 它**匹配不到带连字符或数字的值**，
+      而 `Ctf2SandboxProfile` 的取值正是 `ctf2-sandbox` /
+      `ctf2-sandbox-re`。后果不是"少抓到一个值"，而是
+      **整个枚举解析出 0 个值**，于是校验脚本报
+
+          ❌ Ctf2SandboxProfile 无法从 src/data/ctf2.ts 解析
+
+      那句提示把责任推给"解析器需要更新"，看起来像脚本的锅 ——
+      而真相是这个正则的能力边界。两者混在一起时，
+      真正的问题（契约缺值）会被这句误导性的提示盖住。
+
+      加 `-` 与 `0-9` 之后 `ctf2-sandbox` 能正确解析。
+    */
+    for (const m of lines[i].matchAll(/'([a-z0-9_-]+)'/g)) values.push(m[1])
   }
   return values
 }
@@ -98,6 +114,27 @@ const ENUM_CHECKS = [
   ['src/data/activity.ts', 'AgentStatus'],
   ['src/data/overview.ts', 'AgentPhase'],
   ['src/data/settings.ts', 'TokenScope'],
+  /*
+    ★ v0.21 补的七个（2026-10-10）。
+
+    加它们的原因是一个被量出来的漏洞：**这份清单只覆盖它被喂过的枚举**，
+    没列进来的即使与契约漂移也**不会报红**。而契约已经漂了整整一个
+    CTF2 模块（25 个端点、5 个枚举）都没人发现 —— 因为清单里没有它们。
+
+    · `ScanMode` —— 任务 13 新增的 `quick`/`standard`/`deep`，
+      此前不在清单里（调研时明确核出"不会报红"）；
+    · 五个 `Ctf2*` —— 整个 CTF2 模块的枚举，此前零覆盖。
+
+    ⚠️ 这份清单的维护规则：**新增一个枚举就要加一行**。
+       漏加的症状是"校验全绿而契约已经错了"—— 比没有校验更危险，
+       因为它会让人以为查过了。
+  */
+  ['src/data/settings.ts', 'ScanMode'],
+  ['src/data/ctf2.ts', 'Ctf2ChallengeStatus'],
+  ['src/data/ctf2.ts', 'Ctf2SubmissionStatus'],
+  ['src/data/ctf2.ts', 'Ctf2EnvironmentStatus'],
+  ['src/data/ctf2.ts', 'Ctf2SubmitMode'],
+  ['src/data/ctf2.ts', 'Ctf2SandboxProfile'],
 ]
 
 console.log('══ 枚举取值对账（源码 → 契约）══\n')
