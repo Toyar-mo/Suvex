@@ -1,0 +1,10 @@
+-r requirements.txt
+
+# 测试
+pytest>=8.3,<9.0
+pytest-asyncio>=0.24,<2.0
+httpx>=0.27,<1.0
+
+# 验收脚本用（scripts/verify_acceptance.py）
+# 它打真实的 HTTP 端点，不用 TestClient —— 目的是验证「进程真的起得来」，
+# 而不是「ASGI app 对象在进程内能响应」。这两件事不是一回事。

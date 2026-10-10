@@ -1,0 +1,100 @@
+# Suvex 本地栈：后端 + PostgreSQL。
+#
+# 一条命令起全部：`docker compose up --build`
+#
+# 起来之后：
+#   API      http://127.0.0.1:8000/api/v1/health
+#   API 文档 http://127.0.0.1:8000/api/v1/docs
+#   数据库   只在 compose 内部网络上（**没有**映射到宿主端口，见下）
+#
+# 前端（suvex-web）不在这里 —— 它是 Vite 开发服务器 / 静态产物，
+# 与后端是两个独立可部署物，共用 `docs/api-contract.md` 这一份接口约定。
+
+name: suvex
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: suvex
+      # 开发默认值。生产必须通过环境变量覆盖或在 .env 里设 POSTGRES_PASSWORD。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-suvex_dev_local}
+      POSTGRES_DB: suvex
+      # 中文数据（漏洞标题、证据片段）用 UTF8；排序规则用 C 而不是
+      # 跟随镜像 locale —— C 的排序是字节序，跨机器完全一致，
+      # 而 locale 排序会随 glibc 版本变化，导致"同一份数据在两台机器上
+      # 分页顺序不同"。
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    volumes:
+      - suvex-db:/var/lib/postgresql/data
+    # ⚠️ 刻意**不**做 `ports: 5432:5432`。
+    # 映射出去意味着局域网内任何机器都能连这个库，而本组合的定位是
+    # 单机自托管 —— 不需要从外面连。要在宿主上用 psql 调试时：
+    #     docker compose exec db psql -U suvex -d suvex
+    # 真需要端口就临时 `docker compose run --service-ports db`。
+    expose:
+      - "5432"
+    healthcheck:
+      # 用 pg_isready 而不是 `psql -c 'select 1'`：前者在服务器还在
+      # 初始化（initdb 完成但还没接受连接）时就返回非零，
+      # 正是我们要等的那个状态。
+      test: ["CMD-SHELL", "pg_isready -U suvex -d suvex"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SUPEX_ENV: ${SUPEX_ENV:-dev}
+      SUPEX_LOG_LEVEL: ${SUPEX_LOG_LEVEL:-info}
+      # ★ provider 凭据的加密密钥。**刻意不给默认值。**
+      #
+      # 给它一个写死的开发默认值会很方便，但那等于把一条加密密钥提交进仓库 ——
+      # 而这份 compose 文件是要进 git 的。数据库口令可以给示例默认值
+      # （它只保护本机的一套开发库），加密密钥不行：它会出现在生产部署里，
+      # 而任何人拿到它 + 拿到一份数据库快照，就能解开所有 provider 的 API key。
+      #
+      # 取值顺序（compose 会读同目录的 .env）：
+      #     python -m app.core.crypto   # 生成一条，写进 .env 的 SUPEX_SECRET_KEY
+      # 生产环境（SUPEX_ENV=prod）缺少它时应用**拒绝启动**（见 core/config.py）。
+      SUPEX_SECRET_KEY: ${SUPEX_SECRET_KEY:-}
+      # 容器内走服务名 `db` 与标准端口 5432 —— 与宿主上的 55432 不同，
+      # 这是刻意的：宿主端口是那台开发机上跑的本机实例，
+      # 容器里连它会在"换一台机器"时立刻失效。
+      SUPEX_DATABASE_URL: postgresql+psycopg://suvex:${POSTGRES_PASSWORD:-suvex_dev_local}@db:5432/suvex
+      SUPEX_SESSION_COOKIE_NAME: ${SUPEX_SESSION_COOKIE_NAME:-suvex_session}
+      SUPEX_SESSION_TTL_HOURS: ${SUPEX_SESSION_TTL_HOURS:-12}
+      # 容器里也是 http（本组合不带 TLS）。前面加 TLS 反代时改成 true。
+      SUPEX_COOKIE_SECURE: ${SUPEX_COOKIE_SECURE:-false}
+      # 前端开发服务器。带凭据的跨源请求不能用通配符，必须逐个列出。
+      SUPEX_CORS_ORIGINS: ${SUPEX_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      SUPEX_SCAN_AUTHORIZATION_STATEMENT: ${SUPEX_SCAN_AUTHORIZATION_STATEMENT:-我有权对此目标进行安全测试}
+      SUPEX_LOGIN_LIMIT_PER_MINUTE: ${SUPEX_LOGIN_LIMIT_PER_MINUTE:-5}
+      SUPEX_LOGIN_LIMIT_PER_HOUR: ${SUPEX_LOGIN_LIMIT_PER_HOUR:-15}
+      # ★ 沙箱网络（任务 8）。留空 = docker 默认 bridge。
+      # 生产建议建一个 internal 网络并在这里指定，理由见
+      # docs/security-checklist.md 的 F-02（沙箱带 host-gateway）。
+      SUPEX_SANDBOX_NETWORK: ${SUPEX_SANDBOX_NETWORK:-}
+      SUPEX_SSE_HEARTBEAT_SECONDS: ${SUPEX_SSE_HEARTBEAT_SECONDS:-20}
+      SUPEX_SSE_REPLAY_MAX_EVENTS: ${SUPEX_SSE_REPLAY_MAX_EVENTS:-1000}
+    ports:
+      # 只绑到回环：本组合是单机工具，不该对局域网开放 ——
+      # 它能对任意目标发包，暴露出去等于给别人一个现成的攻击跳板。
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        # 必须等数据库**健康**，不是"启动了"。只等启动的话，
+        # 容器里的 `alembic upgrade head` 会撞上还在 initdb 的数据库，
+        # 失败一次后整个容器退出 —— 而 restart 策略会让它反复重试，
+        # 现象是"启动慢"而不是"启动失败"，很难看出真正原因。
+        condition: service_healthy
+
+volumes:
+  suvex-db:
+    driver: local

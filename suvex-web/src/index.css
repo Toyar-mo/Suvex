@@ -1,0 +1,525 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * 全局底座。只做三件事：
+ *   1. 把 token 暴露成 CSS 变量（canvas 里的 WebGL/Canvas 动效要读它们）
+ *   2. 主题化「不是我们画的那部分」——选区、光标、滚动条、焦点环、下划线
+ *   3. 定一档 base 排版
+ * 组件级样式一律走 Tailwind，不在这里堆类。
+ */
+
+@layer base {
+  /*
+    ─────────────────────────────────────────────────────────────
+    主题 token —— **唯一事实来源**
+    ─────────────────────────────────────────────────────────────
+
+    ★ 为什么从 tailwind.config.js 挪到这里
+
+    原来颜色写死在 tailwind.config 里，而这个文件只是"同步一份给运行时用"。
+    结果是两份值**已经漂移了**：配置里 ink-faint 是 #8A909C，这里还停在旧的
+    #7A808C。两份值的下场一定是漂移，所以现在反过来 —— **值只在这里**，
+    tailwind 那边只引用变量名（见 tailwind.config.js 的说明）。
+
+    ★★ 值必须是 **RGB 通道三元组**（`20 23 30`），不是 hex
+
+    tailwind 那边要用 `<alpha-value>` 注入透明度，而
+    `rgb(var(--x) / <alpha-value>)` 只有拿到三元组才算得出来。
+    实测过：值写成 hex 的话 `bg-surface-raised/50` 这类类名会**整条不生成**，
+    且**没有任何警告** —— 全站 hover 与衬底静默失效，看起来像"设计就是这样"。
+
+    ★ 两套值：`:root` = 暗色，`[data-theme="light"]` = 亮色
+
+    `:root` 放暗色是**兜底方向**：脚本没跑起来时退化成今天的样子，
+    而不是先闪一屏白。`<html data-theme>` 由 `src/lib/theme.ts` 写入，
+    永远只有解析后的 `light` / `dark`，不会出现 `system`。
+
+    ★ 亮色那套**不是把暗色反过来**，其中三处是重新解的（全部按 WCAG 实算）：
+      · `--suvex-accent*` —— 暗色的 #8B7CF6 对白只有 3.33:1，当链接不够；
+      · `--suvex-ink-faint` —— 最差承载面在亮色下变成最**暗**的 sunken，
+        照搬 #6B7280 只有 4.23:1；
+      · `--suvex-syntax-*` —— 底色换了，九个色按同样两条约束重解了一遍。
+    其余（表面 / 描边 / ink 的其余三级）是镜像取值。
+  */
+  :root {
+    /* ── 表面：近黑，不是纯黑。带一点冷紫倾向，让 accent 落在同一色域 ── */
+    --suvex-canvas: 8 9 12; /* #08090C 画布底：页面最深处，动效背景落在它上面 */
+    --suvex-surface: 14 16 21; /* #0E1015 默认面板 */
+    --suvex-surface-raised: 20 23 30; /* #14171E 抬升（卡片、悬浮行） */
+    --suvex-surface-overlay: 26 30 38; /* #1A1E26 浮层（弹层、下拉） */
+    --suvex-surface-sunken: 10 11 15; /* #0A0B0F 下沉（代码块、日志井） */
+
+    /* ── 描边：界面层级靠 1px 线，不靠阴影（亮色下同样如此）── */
+    --suvex-line: 31 36 45; /* #1F242D 常规分隔 */
+    --suvex-line-strong: 44 50 61; /* #2C323D 需要读出来的边界 */
+    --suvex-line-accent: 76 58 158; /* #4C3A9E 强调态边界 */
+
+    /* ── 文字四级。对比度对 canvas/surface/raised/overlay = 15.7/15.3/… 全达标 ── */
+    --suvex-ink: 231 233 238; /* #E7E9EE 主文 */
+    --suvex-ink-muted: 162 169 182; /* #A2A9B6 次要 */
+    --suvex-ink-faint: 138 144 156; /* #8A909C 三级/占位，按最亮承载面定的，别再调暗 */
+    --suvex-ink-ghost: 69 75 87; /* #454B57 仅装饰/禁用，禁止承载任何信息 */
+
+    /* ── 主色 violet ── */
+    --suvex-accent: 139 124 246; /* #8B7CF6 */
+    --suvex-accent-strong: 169 155 255; /* #A99BFF hover / 强调 */
+    --suvex-accent-deep: 109 92 224; /* #6D5CE0 按下 / 实心按钮底 */
+    --suvex-accent-dim: 58 49 99; /* #3A3163 低饱和衬底 */
+    --suvex-accent-wash: 23 20 48; /* #171430 极低对比衬底（选中行、tag 底） */
+
+    /* ── 语义信号：只用于「结论」，不用于装饰 ── */
+    --suvex-signal-ok: 74 222 155; /* #4ADE9B 已确认 / 通过 */
+    --suvex-signal-warn: 232 180 84; /* #E8B454 待确认 / 中危 */
+    --suvex-signal-risk: 240 122 106; /* #F07A6A 高危 / 失败 */
+    --suvex-signal-info: 111 168 245; /* #6FA8F5 中性提示 */
+
+    /* ── 语法高亮（解出时的底色 = sunken #0A0B0F，每个 ≥4.9:1）── */
+    --suvex-syntax-plain: 231 233 238; /* #E7E9EE 16.2:1 */
+    --suvex-syntax-comment: 122 128 140; /* #7A808C  4.9:1 下限，注释也要能读 */
+    --suvex-syntax-keyword: 169 155 255; /* #A99BFF  8.3:1 */
+    --suvex-syntax-string: 74 222 155; /* #4ADE9B 11.4:1 */
+    --suvex-syntax-number: 201 139 58; /* #C98B3A  6.8:1 ← 与 string 拉开亮度 */
+    --suvex-syntax-function: 156 201 255; /* #9CC9FF 11.4:1 ← 与 property 分家 */
+    --suvex-syntax-property: 110 155 209; /* #6E9BD1  6.8:1 ← 压暗 */
+    --suvex-syntax-variable: 196 167 240; /* #C4A7F0  9.5:1 */
+    --suvex-syntax-operator: 154 161 174; /* #9AA1AE  7.6:1 */
+
+    color-scheme: dark;
+
+    font-synthesis: none;
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* 等宽字体里的连字会把 payload 读歪，日志区必须关掉 */
+    font-variant-ligatures: none;
+  }
+
+  /*
+    ── 亮色主题 ──────────────────────────────────────────────────
+
+    每个值都标了实测对比度（对**它的最差承载面**，不是对默认面板）：
+
+      文字   ink 16.6–18.1 / muted 7.0–8.0 / faint 4.98–5.68   （目标 ≥4.5）
+      主色   accent 6.46（对白）· accent-strong 8.29（更深 = 更强调）
+      信号   ok 5.37 / warn 5.43 / risk 6.57 / info 7.04       （≥4.5，够当文字）
+      描边   line 1.25 / line-strong 1.65                       （≥1.2 可辨）
+      语法   9 色全部 ≥4.9，number↔string 1.77、function↔property 1.73
+
+    ⚠️ 两个容易做错的地方，写在这里免得下一个人"顺手优化"掉：
+
+    1. **`surface-raised` 在亮色下比 `surface` 略暗**（#FAFBFC vs #FFFFFF）。
+       暗色是"越靠前越亮"，一行 hover 用 `bg-surface-raised/50` 就看得见；
+       亮色下卡片本来就是白的，`white/50` 等于没变，hover 会**静默消失**。
+       所以亮色的层级改成"白卡 + 极轻灰衬底"，方向与暗色相反。
+
+    2. **accent 在亮色下"更深"才更强调**。这不是矛盾，是 `strong` 这个名字
+       被选中（而不是 `bright`）的原因：它描述的是**作用**，不是明度。
+  */
+  [data-theme='light'] {
+    /* 页面底比面板略暗一档，白卡才立得起来 */
+    --suvex-canvas: 244 245 247; /* #F4F5F7 */
+    --suvex-surface: 255 255 255; /* #FFFFFF */
+    /*
+      ★ 这个值是按**实测的 hover 可见度**定下来的，不是随手取个浅灰。
+
+      行 hover 用的是 `bg-surface-raised/60`，所以"看不看得见"等于
+      「raised 与 surface 混过之后，跟底色差多少」。实测（对比度，1.00 = 没变）：
+
+        alpha         0.5     0.6
+        暗色          1.032   1.034   ← 基准
+        #FAFBFC       1.018   1.019   ← 弱四成，hover 读起来像"没反应"
+        #F6F7F9       1.036   1.043   ← 本值，与暗色打平
+
+      第一版取的就是 #FAFBFC（想的是"比 surface 略暗一点就行"），量出来才发现
+      亮色下 hover 比暗色弱四成 —— 方向对，幅度不够。再深（#F2F4F7 → 1.047）
+      又会让它当**卡片底色**用时显得重。
+    */
+    --suvex-surface-raised: 246 247 249; /* #F6F7F9 */
+    --suvex-surface-overlay: 255 255 255; /* #FFFFFF */
+    --suvex-surface-sunken: 238 240 243; /* #EEF0F3 代码块/日志井 */
+
+    --suvex-line: 227 230 235; /* #E3E6EB */
+    --suvex-line-strong: 195 202 212; /* #C3CAD4 */
+    --suvex-line-accent: 185 169 245; /* #B9A9F5 */
+
+    --suvex-ink: 20 22 28; /* #14161C 16.6–18.1:1 */
+    --suvex-ink-muted: 74 81 96; /* #4A5160  7.0–8.0:1 */
+    --suvex-ink-faint: 97 103 115; /* #616773  4.98–5.68:1 ← 重新解的，见文件头 */
+    --suvex-ink-ghost: 183 189 199; /* #B7BDC7 仅装饰/禁用 */
+
+    --suvex-accent: 91 75 196; /* #5B4BC4 对白 6.46:1，对 wash 5.66:1 */
+    --suvex-accent-strong: 75 61 168; /* #4B3DA8 对白 8.29:1 ← 更深 = 更强调 */
+    --suvex-accent-deep: 70 56 156; /* #46389C 按下 */
+    --suvex-accent-dim: 220 214 250; /* #DCD6FA 低饱和衬底 */
+    --suvex-accent-wash: 241 238 254; /* #F1EEFE 极低对比衬底 */
+
+    /* 这四个是按白底重选的，不是把暗色那套调亮 —— 暗底上"发光"的色放到白底会腰斩 */
+    --suvex-signal-ok: 18 122 75; /* #127A4B 5.37:1 */
+    --suvex-signal-warn: 154 91 0; /* #9A5B00 5.43:1 */
+    --suvex-signal-risk: 176 42 30; /* #B02A1E 6.57:1 */
+    --suvex-signal-info: 31 85 176; /* #1F55B0 7.04:1 */
+
+    /* 底色从 #0A0B0F 换成 #EEF0F3，九个色按同两条约束重解（易混对亮度比 1.77 / 1.73） */
+    --suvex-syntax-plain: 23 26 31; /* #171A1F 15.3:1 */
+    --suvex-syntax-comment: 96 102 113; /* #606671  5.1:1 */
+    --suvex-syntax-keyword: 86 58 198; /* #563AC6  6.5:1 */
+    --suvex-syntax-string: 12 76 44; /* #0C4C2C  8.8:1 ← 压暗，与 number 拉开 */
+    --suvex-syntax-number: 129 74 10; /* #814A0A  6.3:1 ← 提亮 */
+    --suvex-syntax-function: 38 104 162; /* #2668A2  5.1:1 ← 与 property 分家 */
+    --suvex-syntax-property: 24 80 128; /* #185080  7.4:1 */
+    --suvex-syntax-variable: 112 67 175; /* #7043AF  5.9:1 */
+    --suvex-syntax-operator: 81 89 107; /* #51596B  6.2:1 */
+
+    /* 让原生控件（滚动条、输入框、自动填充、日期选择器）跟着走 */
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background-color: rgb(var(--suvex-canvas));
+    color: rgb(var(--suvex-ink));
+    @apply font-sans text-base antialiased;
+    /* 中文正文不需要负字距；交给 font-size 的字阶控制 */
+    letter-spacing: normal;
+  }
+
+  /*
+    CJK 排版修正 —— 界面文案以中文为主后必须处理的两件事：
+
+    1. 标点是全角时，中文字体已经带了右侧空隙，Tailwind 的 tracking 会叠加；
+       正文统一 normal，只在小字号上给微量正字距（见 tailwind.config 字阶）。
+
+    2. 中英混排的间距：浏览器默认会在汉字与拉丁字母之间留一点空隙，
+       但不同平台差异很大。`text-spacing-trim` 是新一代 CSS，能压掉
+       全角标点多余的边距，目前按渐进增强处理，不支持就忽略。
+  */
+  :lang(zh) {
+    text-spacing-trim: space-first;
+  }
+
+  /* 汉字不能被截断成半截 —— 长标题/标签换行时按词换而不是按字塞 */
+  h1,
+  h2,
+  h3 {
+    line-break: strict;
+    overflow-wrap: break-word;
+  }
+
+  /* 数字与 ID 保持等宽，中英混排时不会左右跳动 */
+  [data-numeric],
+  time {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /*
+    中文小字修正 —— 这是 CJK 特有的问题，拉丁文没有：
+
+    汉字笔画密集且细，同样 400 字重下，12px 的汉字在近黑底上比同尺寸拉丁文
+    明显更"虚"。视觉评审实测反馈"12px 辅助文字略显吃力"，属实。
+
+    解决办法是把 ≤13px 的档位提到 450（可变字体支持非整百字重）。
+    14px（base）及以上保持 400 —— 到了那个尺寸汉字的笔画已经能撑开，
+    再加重反而显得闷。
+    用 :where() 让选择器权重为 0 —— 这样任何 font-medium / font-semibold
+    工具类都能正常覆盖它，不会和强调样式打架。
+  */
+  :where(.text-2xs, .text-xs, .text-sm) {
+    font-weight: 450;
+  }
+
+  /* 浏览器自带字体锁死成我们的等宽，不让 mermaid/代码块掉到 Courier 上 */
+  code,
+  kbd,
+  pre,
+  samp {
+    @apply font-mono;
+  }
+
+  /* ── 焦点：键盘用户要看得见，但不能是浏览器那条蓝框 ── */
+  :focus-visible {
+    outline: 2px solid rgb(var(--suvex-accent));
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  /* 鼠标点击不画焦点环，键盘才画 */
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* ── 选区：默认蓝在 violet 世界里是外来物 ── */
+  ::selection {
+    background-color: color-mix(in oklab, rgb(var(--suvex-accent)) 32%, transparent);
+    color: #fff;
+  }
+
+  /* ── 插入光标：细 violet，比浏览器默认的粗线安静 ── */
+  input,
+  textarea,
+  [contenteditable='true'] {
+    caret-color: rgb(var(--suvex-accent-strong));
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    /* 占位符也算正文，同样守住 4.5:1，别用浏览器默认的灰 */
+    color: rgb(var(--suvex-ink-faint));
+    opacity: 1; /* Firefox 默认会再乘一层透明度，把对比度打下去 */
+  }
+
+  /* ── 滚动条：默认那条灰白滚动条会把整个深色界面破掉 ── */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--suvex-line-strong)) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: rgb(var(--suvex-line-strong));
+    border: 3px solid transparent;
+    background-clip: content-box;
+    border-radius: 999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: #3b424f;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* 链接下划线拉开字距，深色下更易读 */
+  a {
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1px;
+  }
+
+  /* 数字对齐：时间戳、计数、端口号必须等宽，否则列表会抖 */
+  .tabular,
+  time,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 尊重系统的减少动效偏好：背景动效降为静态一帧 */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.001ms !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* 等宽字在深底上会显得偏粗，收一点字重更干净 */
+  .mono-ui {
+    @apply font-mono text-xs tracking-[0.01em];
+  }
+
+  /*
+    ═══════════════════════════════════════════════════════════
+      微反馈原子（任务 8）—— 见 design-system.md §5.1
+    ═══════════════════════════════════════════════════════════
+
+    三条规则，全站统一：
+      1. 按下必须**立刻**有反馈。所以时长是 `instant`(80ms)，
+         比"感知到点击"还快。慢一档就会读成"卡了一下"。
+      2. 位移/缩放**极小**（2–3%）。微反馈的作用是确认"收到了"，
+         不是表演。大缩放会让密集列表里的点击显得很吵。
+      3. 键盘触发不缩放（`active` 只在鼠标/触摸按下时成立，键盘 Enter
+         触发的是 `click` 而非 `active`）—— 这是原生行为，
+         不需要额外判断，但值得知道：键盘用户拿到的是其它反馈（焦点环）。
+
+    关于 `:not(:disabled)`：禁用按钮按下去不该有任何反应。
+    有反应但点不动，比完全没反应更让人困惑（WizardChrome 里记过同一条）。
+  */
+
+  /* 按压缩放。必须与 `transition-ui` 配对 —— 后者的属性集里含 transform。 */
+  .press:active:not(:disabled) {
+    transform: scale(0.97);
+  }
+
+  /* 更大的控件（主 CTA、大按钮）缩放要更小，否则视觉位移过大 */
+  .press-lg:active:not(:disabled) {
+    transform: scale(0.985);
+  }
+
+  /*
+    行/卡片被"选中"时的一次性高亮。
+    用于"这一条刚被你改过"—— 它衰减到透明，不留常驻色。
+    常驻选中态该用 accent-wash 底，不要用这个。
+  */
+  .flash-once {
+    animation: flash-accent 900ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+
+  /*
+    减少动效时**连缩放也去掉**。
+    index.css 顶部的全局兜底只把时长压到 0.001ms —— 那会让缩放变成
+    "瞬间跳变"，对前庭敏感的用户仍是一次位移。这里直接取消变换。
+  */
+  @media (prefers-reduced-motion: reduce) {
+    .press:active:not(:disabled),
+    .press-lg:active:not(:disabled) {
+      transform: none;
+    }
+  }
+}
+
+/**
+ * ═══════════════════════════════════════════════════════════
+ *  打印样式 —— 报告导出的地基
+ * ═══════════════════════════════════════════════════════════
+ *
+ * 这一节存在的唯一原因：**PDF 导出走的是浏览器打印引擎**。
+ * 没有后端，所以"导出 PDF"= 调 window.print() + 用户在对话框里选另存为 PDF。
+ * 见 lib/report-api.ts 对这条边界的完整说明。
+ *
+ * 由此得出一个好处：打印的是屏幕上那个 DOM 本身，
+ * 所以**预览和导出在版式上也天然一致**，不需要维护第二套 PDF 版式。
+ * 但如果打印时不把界面外壳清干净，PDF 里会带上侧栏、状态条和各种按钮 ——
+ * 那样交付物就没法看了。于是有了下面这条选择器。
+ */
+@media print {
+  /*
+    纸张。A4 + 14mm 边距。
+    不设 @page 的话浏览器默认边距约 10mm，页眉页脚还会带上 URL 和页码 ——
+    交付给客户的报告里出现 "file:///D:/..." 是很掉价的。
+  */
+  @page {
+    size: A4;
+    margin: 14mm 13mm;
+  }
+
+  /*
+    ★ 只保留"通往报告纸的那条链"。
+
+    这条选择器读起来绕，但一次解决了三个问题：
+       1. 界面外壳（侧栏、状态条、页头、配置面板、按钮）全部消失，
+          不会混进 PDF；
+       2. **祖先链保留** —— 报告纸还在原来的层级里，flex/宽度上下文不被打断，
+          版式与屏幕一致（这是"预览=导出"的前提）；
+       3. 不需要给每个组件挂 `print-hide` 类，也就不存在
+          "新加了个面板但忘了加打印隐藏"这种必然发生的遗漏。
+
+    逐段解释：
+       body *                     —— 从 body 的每个后代开始判断
+       :not(:has(.report-sheet))  —— 不含报告纸的，一律隐藏（外壳、页头…）
+       :not(.report-sheet)        —— 纸自己不含自己，必须单独放行
+       :not(.report-sheet *)      —— 纸**内部**的元素也不含纸，同样放行
+                                     （少了这段，报告正文会被整块隐藏）
+  */
+  body *:not(:has(.report-sheet)):not(.report-sheet):not(.report-sheet *) {
+    display: none !important;
+  }
+
+  /*
+    高度链放开。
+    AppShell 的 document 模式带 min-h-dvh，那个视口高度在纸上是错的：
+    它会把内容底部推出一屏，末尾多出空白页。
+  */
+  html,
+  body,
+  #root,
+  [data-shell-mode] {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  /* 内容遮罩（bg-canvas/80）会把纸压成灰色，打印时必须去掉 */
+  #root main {
+    background: #fff !important;
+    padding: 0 !important;
+  }
+
+  /*
+    背景动效层是 WebGL canvas，打印时会占一张空白页。
+    上面那条选择器已经把它 display:none 了，这里只是显式说明原因。
+  */
+
+  .report-sheet {
+    /*
+      打印时保留背景色。
+
+      浏览器默认**不打印背景色**（省墨），后果是严重度色块的衬底
+      全部消失，总览表格看起来像没排版的 txt。
+      这里强制保留 —— 报告里的色块承载的是信息（严重度分级），不是装饰。
+      「克制」指的是不用大面积彩色，不是把必要的信息也省掉。
+    */
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+
+    /* 打印时不要圆角与边框，那是屏幕上的"卡片"语言，纸上多余 */
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  /*
+    分页控制。
+
+    报告是长文档，分页位置直接决定可读性。三条规则：
+      1. 标题后不留孤行 —— 标题与其后内容是"一个整体"，不能分开；
+      2. 条目内部不做强制分页，但**换条目时尽量翻页**（大段数据里
+         把一条漏洞劈成两页会让读者以为看到了两条）；
+      3. 表格行、代码块、证据块不要被劈开。
+  */
+  .report-sheet h1,
+  .report-sheet h2,
+  .report-sheet h3,
+  .report-sheet h4 {
+    break-after: avoid-page;
+    page-break-after: avoid;
+  }
+
+  .report-sheet table,
+  .report-sheet pre,
+  .report-sheet blockquote {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .report-sheet tr {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 报告里的每个漏洞条目尽量整体落在同一页 */
+  .report-entry {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* 打印时不需要屏幕上的悬停提示与复制按钮 */
+  .report-sheet button {
+    display: none !important;
+  }
+}

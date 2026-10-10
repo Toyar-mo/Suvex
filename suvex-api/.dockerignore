@@ -1,0 +1,37 @@
+# 不进构建上下文的东西。
+#
+# ⚠️ `.env` 必须在里面。它是本仓库唯一持有真实凭据的文件，
+# 而 `COPY . .` 会把它打进镜像层 —— 那一层永远删不掉，
+# 即使后续 RUN rm 了，`docker history` 依然能捞出来。
+# 本项目的 Dockerfile 用的是逐个 COPY，所以这条是双保险。
+.env
+.env.*
+!.env.example
+
+.git/
+.gitignore
+
+# 虚拟环境与缓存（宿主的，容器里会重装）
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 测试与文档不进运行镜像
+tests/
+docs/
+scripts/
+README.md
+
+# 编辑器与系统垃圾
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+_tmp/
+*.log

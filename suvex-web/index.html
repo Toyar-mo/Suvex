@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      `theme-color` 写的是**暗色底**：它是"CSS 到达之前"的兜底，与 `:root`
+      的兜底方向一致。运行时会由 `lib/theme.ts` 的 `syncBrowserChrome()`
+      改成当前主题的画布色（值现读 CSS 变量，不在这里存第二份色值）。
+
+      `color-scheme` 声明 **dark light 两个都支持** —— 顺序有意义：
+      第一个是首选。只写 `dark` 的话，浏览器在首个样式表到达之前会按暗色
+      渲染默认背景与原生控件，亮色用户会闪一下深色。
+    -->
+    <meta name="theme-color" content="#08090C" />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="description" content="Suvex —— 自治 AI 渗透测试 agent 的实时行为可观测平台" />
+    <title>Suvex · 智能体行为流</title>
+    <!--
+      首帧前定主题。必须内联、必须在应用脚本之前。
+
+      ★ 为什么不交给 React 做：主题是「首帧就要对」的东西。放进 React 里，
+        用户会先看到一帧暗色再闪成亮色（FOUC）。这个项目在「初态不可见 / 闪烁」
+        这类问题上栽过好几次，所以这里单独走一条更早的路径。
+
+      ★ 与 src/lib/theme.ts 的关系：那份解析逻辑在这里有一份**手写副本**，
+        因为此时 bundle 还没加载，import 不了。两处必须保持一致 ——
+        改 lib/theme.ts 的解析规则时别忘了同步这一段（存储 key、
+        '(prefers-color-scheme: dark)' 这个查询串、以及"拿不到答案就按暗色"）。
+
+      ⚠️ 整段包在 try/catch 里，任何情况下都不抛：它跑在所有人前面，
+        它挂了就是白屏。宁可主题停在 CSS 的 `:root` 兜底色，也不能让页面炸掉。
+    -->
+    <script>
+      (function () {
+        try {
+          var preference = 'system'
+          try {
+            var stored = localStorage.getItem('suvex-theme')
+            if (stored === 'system' || stored === 'light' || stored === 'dark') {
+              preference = stored
+            }
+          } catch (error) {
+            /* 隐私模式 / 存储被禁用：当作「跟随系统」继续往下走 */
+          }
+
+          var resolved = preference
+          if (preference === 'system') {
+            /* 拿不到答案时按暗色 —— 与 CSS 里 `:root` 是暗色这个兜底方向一致 */
+            var dark = true
+            try {
+              dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+            } catch (error) {
+              dark = true
+            }
+            resolved = dark ? 'dark' : 'light'
+          }
+
+          /* 只写解析后的具体值，不写 'system'（CSS 侧只需要两个确定的状态） */
+          document.documentElement.setAttribute('data-theme', resolved)
+        } catch (error) {
+          /* 设不上就设不上：界面退回暗色，但绝不抛 */
+        }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

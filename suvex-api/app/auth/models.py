@@ -1,0 +1,121 @@
+"""认证领域的表。
+
+三张表，对应契约 §1.2 的**两条独立通道**（不要合并）：
+
+| 表              | 服务谁          | 凭证                        | 校验方式          |
+| --------------- | --------------- | --------------------------- | ----------------- |
+| `admin_accounts`| 管理员本人      | 口令（argon2id）            | 登录时比对        |
+| `auth_sessions` | 人在浏览器      | 会话 Cookie（不透明随机串） | 每次请求查摘要    |
+| `api_tokens`    | 机器 / CI       | `Authorization: Bearer svx_…`| 每次请求查摘要    |
+
+`auth_sessions` 而不是 `sessions`：`Session` 是 SQLAlchemy 的核心概念，
+表名也叫 sessions 会让「session」在代码里指两件事 —— 读代码时要靠上下文猜。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+
+from sqlalchemy import ForeignKey, Index, String, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.columns import JsonColumn, UtcDateTime
+from app.core.db import Base
+from app.core.timeutil import now_utc
+
+
+class AdminAccount(Base):
+    """单管理员账号。
+
+    契约 §0.3 明确「不做多用户、RBAC、用户管理界面」，所以这张表**永远只有一行**。
+    但仍然给它 id 与时间戳：将来真加第二个人时，改的是插入逻辑而不是表结构
+    （与契约 §5.4 里「`authorized_by` 恒定为什么还要存」是同一个判断）。
+    """
+
+    __tablename__ = "admin_accounts"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # argon2id 的完整编码串（含参数与盐），长度约 97 字符。用 Text 留余量：
+    # 将来调高 memory_cost 会让串变长，String(128) 会在那时变成生产事故。
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )
+
+    sessions: Mapped[list["AuthSession"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        # ⚠️ 绝不把 password_hash 放进 repr：repr 会进日志、进异常消息、进调试器面板。
+        return f"<AdminAccount id={self.id!r}>"
+
+
+class AuthSession(Base):
+    """浏览器会话。
+
+    **只存令牌摘要**（SHA-256）。理由不是「怕拖库」这么泛：
+    这个平台的危害是「替攻击者发包」，一个能读到会话表的攻击者
+    可以直接用会话调 `POST /scans`。存摘要让「读表」不等于「拿到会话」。
+
+    `revoked_at` 是软吊销而不是删行：契约 §1.2 要求「改密码后旧令牌立即失效」，
+    而删行会让「这条会话什么时候没的」无法回答 —— 安全事件复盘时需要它。
+    """
+
+    __tablename__ = "auth_sessions"
+    __table_args__ = (Index("ix_auth_sessions_user_id", "user_id"),)
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # 唯一索引同时承担「查找」与「防重」两个职责。
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    user_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("admin_accounts.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    # 滚动过期：每次使用都往后推（见 service.touch_session）。
+    # 绝对过期时间落在这一列上，不是「创建时刻 + TTL」现算 ——
+    # 现算的话续期就没有载体了。
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    # 来源信息。契约 §5.4 把「服务端时刻与来源」列为留痕的真正价值 ——
+    # 客户端可以伪造 confirmedAt，但伪造不了这两项。
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    user: Mapped[AdminAccount] = relationship(back_populates="sessions")
+
+
+class ApiToken(Base):
+    """机器令牌。
+
+    `prefix` 与 `token_hash` 是两件事，别合并：
+    prefix 是**明文的前 8 字符**，用于界面上辨认「这是哪一个令牌」；
+    hash 用于校验。契约 §2.9 明确「`ApiToken` 只有 `prefix`，永远没有 `value`」。
+
+    `expires_at` 可空 = 永不过期，且这是**显式选项**不是偷懒的默认值
+    （契约 §6）：强制过期会被绕过（用户写死一个永久 token 然后忘记它），
+    不如让它显式并标注风险。
+    """
+
+    __tablename__ = "api_tokens"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str] = mapped_column(String(120), nullable=False)
+    prefix: Mapped[str] = mapped_column(String(16), nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+    # scope 列表。用 JSONB 而不是关联表：它是个短小的无序集合，
+    # 从不单独查询「哪些令牌有 scan 权限」以外的用法，建表是过度设计。
+    scopes: Mapped[list[str]] = mapped_column(JsonColumn, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    last_used_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
+    def is_active(self, at: datetime | None = None) -> bool:
+        moment = at or now_utc()
+        if self.revoked_at is not None:
+            return False
+        return self.expires_at is None or self.expires_at > moment

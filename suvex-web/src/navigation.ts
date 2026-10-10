@@ -1,0 +1,135 @@
+import {
+  Activity,
+  FileText,
+  Flag,
+  Radar,
+  ScanSearch,
+  Settings2,
+  ShieldAlert,
+  type LucideIcon,
+} from 'lucide-react'
+
+/**
+ * 导航信息架构 —— 单一事实来源。
+ *
+ * 侧栏、移动端底栏、路由表、页面标题、aria 描述全部读这一份。
+ * 加一个入口只改这里一处，避免「加了导航但忘了加路由」这类漂移。
+ *
+ * 文案语言：中文（全站界面文案统一中文，见 design-system §3）。
+ * 路径与 id 保持英文 —— 它们是标识符，不是文案，改了会让 URL 变得不可读
+ * 也不便于和代码/日志对照。
+ */
+
+export interface NavItem {
+  /** 稳定 id，用作 React key 与测试钩子。标识符，不翻译 */
+  id: string
+  /** 路由路径。标识符，不翻译 */
+  path: string
+  /** 侧栏与底栏显示名 */
+  label: string
+  /** 超长时用的短名（窄屏底栏）。不传则用 label */
+  shortLabel?: string
+  /** lucide 图标。统一 18px / strokeWidth 1.75，见 SidebarNavItem */
+  icon: LucideIcon
+  /** 这个页面回答什么问题 —— 页面头部与占位说明共用同一句话，不重复写两遍 */
+  blurb: string
+  /** 是否常驻移动端底部 tab；false 的收进「更多」面板 */
+  inMobileTabBar: boolean
+  /**
+   * 这个页面是否**占满视口**（内部自己滚动），而不是让 document 滚动。
+   *
+   * 默认 false —— 全站都是文档滚动（理由见 AppShell 的滚动策略注释）。
+   * 只有「智能体活动」是 true：它是一块常驻工作台，事件流需要一个
+   * 自包含的滚动区，滚到顶/底不该带动整页，而且页面头会白占 80px。
+   *
+   * 放在这里而不是在组件里判断路由：导航信息架构是这一页的唯一事实来源，
+   * 加页面时它自己声明形态，布局层不需要维护一份"哪些路由特殊"的名单。
+   */
+  fillsViewport?: boolean
+}
+
+export const NAV_ITEMS: NavItem[] = [
+  {
+    id: 'overview',
+    path: '/overview',
+    label: '总览',
+    icon: Radar,
+    blurb: '全局态势：此刻在跑什么，已经发现了什么。',
+    inMobileTabBar: true,
+  },
+  {
+    id: 'scans',
+    path: '/scans',
+    label: '扫描任务',
+    icon: ScanSearch,
+    blurb: '对目标发起扫描，并跟踪每一次运行从排队到出报告的全程。',
+    inMobileTabBar: true,
+  },
+  {
+    id: 'activity',
+    path: '/activity',
+    label: '智能体活动',
+    shortLabel: '活动',
+    icon: Activity,
+    blurb: '每个运行中智能体的实时推理与工具调用流。',
+    inMobileTabBar: true,
+    fillsViewport: true,
+  },
+  {
+    id: 'findings',
+    path: '/findings',
+    label: '漏洞发现',
+    icon: ShieldAlert,
+    blurb: '每一条漏洞及其证据、验证脚本（PoC）与处置状态。',
+    inMobileTabBar: true,
+  },
+  {
+    id: 'ctf2',
+    path: '/ctf2',
+    label: 'CTF2 解题',
+    shortLabel: 'CTF2',
+    icon: Flag,
+    blurb: '从 ctf2.dasctf.com 拉取赛事与题目，在独立沙箱里由模型解题。',
+    // ★ 没有进移动端底栏：底栏只放最常用的那几个，而 CTF2 是
+    //   周期性使用的功能（比赛期间高频、平时不开）。它进「更多」面板。
+    inMobileTabBar: false,
+  },
+  {
+    id: 'reports',
+    path: '/reports',
+    label: '报告',
+    icon: FileText,
+    blurb: '把一次完成的扫描整理成可以直接交付给他人的报告。',
+    inMobileTabBar: false,
+  },
+  {
+    id: 'settings',
+    path: '/settings',
+    label: '设置',
+    icon: Settings2,
+    blurb: '模型供应商、沙箱与工具策略、通知。',
+    inMobileTabBar: false,
+  },
+]
+
+/** 默认落地页 —— 根路径与未知路径都回这里 */
+export const DEFAULT_PATH = '/overview'
+
+export const MOBILE_TAB_ITEMS = NAV_ITEMS.filter((item) => item.inMobileTabBar)
+
+/** 「更多」面板里列出的条目（移动端底栏放不下的那些） */
+export const MOBILE_MORE_ITEMS = NAV_ITEMS.filter((item) => !item.inMobileTabBar)
+
+/**
+ * 判断某个导航项是否处于激活态。
+ * 用前缀匹配而非全等：后续会有 /findings/:id、/scans/:id 这类子路由，
+ * 进到详情页时父级入口要保持高亮。
+ */
+export function isNavItemActive(item: NavItem, pathname: string): boolean {
+  return pathname === item.path || pathname.startsWith(`${item.path}/`)
+}
+
+/** 按 pathname 找当前导航项；未命中（未知路径）返回 undefined */
+export function findNavItem(pathname: string): NavItem | undefined {
+  return NAV_ITEMS.find((item) => isNavItemActive(item, pathname))
+}

@@ -1,0 +1,45 @@
+# 运行时依赖。版本用「下限 + 主版本上界」而不是精确锁定 ——
+# 这是脚手架，锁死小版本会让后面的任务在补丁升级上耗时间。
+# 真正的可复现构建靠镜像 tag，不靠这里。
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.32,<1.0
+
+# ORM 与迁移
+SQLAlchemy>=2.0.36,<2.1
+alembic>=1.14,<2.0
+
+# 驱动用 psycopg 3（不是 psycopg2）：
+# psycopg2 的 binary 轮子在 Python 3.13+ 上覆盖不全，而 psycopg3 有原生实现。
+psycopg[binary]>=3.2,<4.0
+
+# 配置
+pydantic>=2.9,<3.0
+pydantic-settings>=2.6,<3.0
+
+# 口令哈希。选 argon2id 而不是 bcrypt：
+#   · bcrypt 有 72 字节静默截断（长口令短语会被悄悄截掉，而用户不知道）；
+#   · bcrypt 需要额外处理 cost 与盐的编码；
+#   · argon2id 是当前密码哈希的推荐算法，内存硬度能挡 GPU 爆破。
+# 契约 §0.3 允许「bcrypt/argon2」两者，这里取后者。
+argon2-cffi>=23.1,<26.0
+
+# FastAPI 解析表单/多部分所需（登录端点用 JSON，但保留以支持将来的文件上传）
+python-multipart>=0.0.12
+
+# provider 的 API key 落库前用 Fernet（AES-128-CBC + HMAC-SHA256）加密。
+# 选库而不是自己拼 AES：自拼的加密代码里，IV 复用、MAC 校验顺序、
+# 填充预言这几类错误不会在正常使用中暴露，只在被攻击时暴露。
+cryptography>=43.0,<51.0
+
+# LLM 连通性探测（app/providers/llm.py 的 `import httpx`）。
+#
+# ★ 这是**运行时**依赖，不是测试依赖。
+#
+# 它原先只写在 requirements-dev.txt 里 —— 在开发机上永远不会暴露，
+# 因为跑测试就装了 dev 依赖。但任何"只装 requirements.txt"的部署
+# （Docker 镜像、新机器、CI 的运行时阶段）都会在**启动时**直接
+# ModuleNotFoundError: No module named 'httpx'，而且报错位置在
+# providers/llm.py 的 import 行，看起来像"某个 provider 出了问题"，
+# 而不是"少装了一个包"。
+httpx>=0.27,<1.0

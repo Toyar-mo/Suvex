@@ -1,0 +1,54 @@
+[project]
+name = "suvex-api"
+version = "0.1.0"
+description = "Suvex 后端 API —— 实现 docs/api-contract.md 定义的契约"
+requires-python = ">=3.12"
+
+# 依赖的事实来源是 requirements.txt（Docker 构建直接用它）。
+# 这里不重复列一遍 —— 两处列依赖必然漂移，而漂移的表现是
+# 「本地能跑、容器里 import 失败」。
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# -ra 让跳过的用例在结尾汇总里出现。跳过的测试必须被看见：
+# 一个静默跳过的鉴权测试，等于没有这个测试。
+addopts = "-q -ra"
+filterwarnings = ["error::DeprecationWarning:app.*"]
+
+# ★ v0.20：CTF2 的客户端是 async（httpx.AsyncClient），所以仓库里
+# 第一次出现 async 测试。
+#
+# ## 为什么开 `auto` 而不是给每个用例挂 marker
+#
+# pytest-asyncio 在 strict（默认）下要求显式 `@pytest.mark.asyncio`。
+# 那条路有两个坑，都是**静默**的：
+#
+#   1. 忘了挂 marker 的 async 测试会被**跳过并警告** ——
+#      报告是绿的，而代码根本没跑。这是这个仓库里最危险的一种失败。
+#   2. 在 conftest 的 `pytest_collection_modifyitems` 里补 marker
+#      （一个看起来更"局部"的做法）在 pytest-asyncio 1.x 上**不生效**：
+#      它报 "marked with '@pytest.mark.asyncio' but it is not an async
+#      function"。实测撞到过，症状是 30 多个 async 用例全红，
+#      而报错指向的是"这个函数不是 async"，与真实原因毫无关系。
+#
+# `auto` 模式让协程用例自动被处理，两种坑都不存在。
+#
+# ⚠️ 影响面：只有 `async def` 的用例受影响，**同步用例一行都不变**。
+#    全仓库目前只有 `tests/ctf2/` 有 async 测试，所以开启它是零副作用 ——
+#    将来新增的 async 测试则自动正确。
+asyncio_mode = "auto"
+# 显式写出来而不是靠默认值：不写会有 deprecation 警告，
+# 而"将来某次升级把默认值改了"会让事件循环的作用域悄悄变化 ——
+# 那种变化的症状（夹具之间共享/不共享 loop）极难排查。
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = [
+    # 中文注释里的全角标点会被误判为行尾空白等，交给编辑器处理
+    "E501",
+]
