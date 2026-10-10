@@ -1,0 +1,194 @@
+# ─────────────────────────────────────────────────────────────
+# Suvex CI
+#
+# 三件事，各自独立（任一失败不影响其余跑完，便于一次看全问题）：
+#
+#   1. backend    —— 903 个测试函数，对**真实 PostgreSQL** 跑
+#   2. frontend   —— 类型检查 + lint + 三个契约校验脚本
+#   3. hygiene    —— 仓库卫生：凭据/产物未入库、行尾统一为 LF
+#
+# ★ 为什么第 3 条也值得一个 job
+#
+# 这个仓库刚因为 CRLF 入库吃过一次亏（54 个文件 + 2 个 mixed）。
+# 那类问题**不会**让任何测试变红，只会在交付到 Linux 时以
+# `bad interpreter: /bin/sh^M` 的形式爆出来 —— 而那时错误信息
+# 指向解释器路径，排查方向会跑偏。所以把它做成 CI 里的一条硬检查。
+# ─────────────────────────────────────────────────────────────
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  # 允许手动触发（排查时不必空推一个提交）
+  workflow_dispatch:
+
+# 同一分支的新推送取消上一次未跑完的 —— 排队等旧结果没有意义
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ═══════════════════════════════════════════════════════════
+  # 后端：903 个测试函数
+  # ═══════════════════════════════════════════════════════════
+  backend:
+    name: 后端测试（Python 3.12 + PostgreSQL 16）
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: suvex
+          POSTGRES_PASSWORD: suvex_ci_password
+          POSTGRES_DB: suvex
+        ports:
+          - 5432:5432
+        # ★ 必须等 healthy，不能只等"容器起来了"。
+        #   postgres 镜像在 initdb 期间就会监听端口，此时连接会被拒。
+        #   只等 started 的后果是测试偶发失败，而且看起来像代码问题。
+        options: >-
+          --health-cmd "pg_isready -U suvex"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # conftest.py 读它，且**自己会建库**（见 `_ensure_database`）。
+      # 所以这里只指到 postgres 库即可，不用预先建 suvex_test。
+      SUPEX_TEST_DATABASE_URL: postgresql+psycopg://suvex:suvex_ci_password@127.0.0.1:5432/suvex_test
+      # 生产环境变量在测试里必须是开发态，否则启动自检会拒绝启动
+      SUPEX_ENV: dev
+      SUPEX_COOKIE_SECURE: "false"
+
+    defaults:
+      run:
+        working-directory: suvex-api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: suvex-api/requirements-dev.txt
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: 数据库迁移
+        run: alembic upgrade head
+
+      - name: 跑测试
+        # ★ 绝对不加 `-n auto` / pytest-xdist。
+        #
+        # 所有测试进程共用同一个 `suvex_test` 库，而每个用例开头会
+        # TRUNCATE 一遍。并发跑会让它们互相清掉对方的数据 ——
+        # 症状是随机的、看起来毫不相关的失败，而且**本地复现不出来**
+        # （本地是串行跑的）。这类失败比"测试慢 10 分钟"贵得多。
+        run: pytest -q
+
+  # ═══════════════════════════════════════════════════════════
+  # 前端：类型 + lint + 契约校验
+  # ═══════════════════════════════════════════════════════════
+  frontend:
+    name: 前端检查（Node 22）
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: suvex-web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: suvex-web/package-lock.json
+
+      # `npm ci` 而不是 `npm install`：前者严格按 lock 文件装，
+      # 后者会顺手更新 lock —— 那会让 CI 通过而本地锁定的版本其实不同。
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      # 这三个脚本把"文档与实现一致"变成可复跑的命令。
+      # 契约改了但类型没跟、或端点没覆盖，这里会红。
+      - name: 契约与报告一致性校验
+        run: npm run verify:all
+
+      - name: 生产构建
+        # 类型检查过了不代表构建能过（Vite 插件、资源引用等）。
+        run: npm run build
+
+  # ═══════════════════════════════════════════════════════════
+  # 仓库卫生
+  # ═══════════════════════════════════════════════════════════
+  hygiene:
+    name: 仓库卫生（凭据 / 产物 / 行尾）
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # 卫生检查要看**全部历史**，默认的浅克隆只取一个提交
+          fetch-depth: 0
+
+      - name: 凭据与产物不得入库
+        # ★ 这条是硬闸门。凭据一旦进了 git 历史，改密码也删不掉
+        #   （历史里的对象仍可被 clone），所以只能在入口拦住。
+        run: |
+          set -e
+          echo "── 检查是否有凭据/产物被跟踪 ──"
+          # .env.example 是模板，显式放行；其余 .env* 一律不许
+          bad=$(git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' || true)
+          bad="$bad$(git ls-files | grep -E '_scan_runs/|_uploads/|node_modules/|\.venv/|__pycache__/|\.pytest_cache/' || true)"
+          if [ -n "$bad" ]; then
+            echo "❌ 以下文件不该入库："
+            echo "$bad"
+            exit 1
+          fi
+          echo "✅ 无凭据与产物"
+
+      - name: 历史中不得出现凭据文件
+        run: |
+          set -e
+          echo "── 扫描全部历史 ──"
+          bad=$(git log --all --pretty=format: --name-only \
+                | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example$' | sort -u || true)
+          if [ -n "$bad" ]; then
+            echo "❌ 历史里出现过凭据文件："
+            echo "$bad"
+            exit 1
+          fi
+          echo "✅ 历史干净"
+
+      - name: 行尾必须统一为 LF
+        # 交付到 Linux 时 CRLF 会让 shell 脚本直接坏掉，
+        # 而报错信息（bad interpreter）指向解释器路径，误导性很强。
+        run: |
+          set -e
+          echo "── 检查行尾 ──"
+          # `git ls-files --eol` 的 i/ 是索引里的行尾（也就是仓库里的）
+          bad=$(git ls-files --eol | grep -E '^i/(crlf|mixed)' || true)
+          if [ -n "$bad" ]; then
+            echo "❌ 以下文件在仓库里不是纯 LF："
+            echo "$bad" | head -30
+            echo ""
+            echo "修法：git add --renormalize . 然后提交"
+            exit 1
+          fi
+          echo "✅ 全部为 LF"
