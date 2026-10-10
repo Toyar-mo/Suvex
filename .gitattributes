@@ -1,0 +1,78 @@
+# ─────────────────────────────────────────────────────────────
+# 换行符规范化
+#
+# ★ 为什么必须有这个文件（2026-10-10 补）
+#
+# 首次提交后有 54 个文件以 **CRLF** 入库、另有 2 个文件内部
+# **混用**了 CRLF 与 LF（`docs/verification-report.md`、
+# `tests/test_scans.py`）。这台机器是 Windows，所以本地看不出问题；
+# 但交付物要跑在 Linux 上（Docker 镜像、CI、Kali 部署），那时：
+#
+#   · shell 脚本会直接报 `bad interpreter: /bin/sh^M`；
+#   · `git diff` 会把"只改了换行符"显示成整个文件重写，
+#     真正的改动淹没在里面，review 时看不出来；
+#   · 同一个文件在不同机器上反复产生"无意义 diff"，直到有人
+#     关掉 autocrlf 或者干脆不管了 —— 而那时行尾已经一片混乱。
+#
+# 所以规则写在这里，让 git 自己保证：**仓库里永远是 LF**，
+# 检出到 Windows 时按需转成 CRLF。
+#
+# ⚠️ 与 `core.autocrlf` 的关系：那个是**每台机器的全局设置**，
+#    clone 的人不一定设对。`.gitattributes` 随仓库走，优先级更高，
+#    这是"不依赖使用者记得配置"的做法。
+# ─────────────────────────────────────────────────────────────
+
+# 默认：所有文本文件在仓库里统一为 LF
+* text=auto eol=lf
+
+# ── 明确指定为文本（避免 git 猜错）─────────────────────────────
+*.py      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.toml    text eol=lf
+*.ini     text eol=lf
+*.cfg     text eol=lf
+*.txt     text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+*.sh      text eol=lf
+Dockerfile text eol=lf
+
+# `.env.example` 没有扩展名，`* text=auto` 认不出来 —— 显式声明
+.env.example text eol=lf
+
+# ── shell 脚本必须 LF，且要可执行 ─────────────────────────────
+#
+# CRLF 的 .sh 在 Linux 上**一定**跑不起来，而错误信息
+# （`bad interpreter`）指向的是解释器路径，看起来像文件不存在。
+*.sh      text eol=lf
+*.bash    text eol=lf
+
+# ── 二进制：禁止任何换行符转换 ────────────────────────────────
+#
+# 对二进制做"文本规范化"会**损坏文件**，而且 git 不会报错。
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.pdf     binary
+*.pptx    binary
+*.zip     binary
+*.gz      binary
+*.whl     binary
+*.db      binary
+*.sqlite  binary
+
+# ── 语言统计：把生成物排除出 GitHub 的 languages 条 ───────────
+#
+# 不加这些，`uv.lock` 与 `package-lock.json` 会主导语言占比，
+# 让仓库看起来像个"配置文件集合"而不是一个 Python + TS 项目。
+uv.lock           linguist-generated=true
+package-lock.json linguist-generated=true
