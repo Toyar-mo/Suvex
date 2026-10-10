@@ -26,22 +26,33 @@ Suvex —— 一个自治 AI 安全测试 agent 的 Web 控制台。
 | 数据层 | 全部接真实 API，**0 个 mock 数据文件** |
 | 类型安全 | **0 个 `any`、0 个 `@ts-ignore`**（`tsc -b` 与 `eslint --max-warnings 0` 全绿） |
 | 契约校验 | `verify:all` 三项全绿（字段对账 / 端点覆盖度 / 报告一致性） |
-| 测试 | ⚠️ **0 个** —— 见下面「已知短板」 |
+| 单元测试 | **32 个**（vitest），覆盖 `useActivityStream` 与 `scans-store` |
 
-### ⚠️ 已知短板：前端没有自动化测试
+### 测试覆盖了什么
 
-这是这个仓库**最需要补的一块**。目前的行为保障只有三样：
+只覆盖**两个模块**，但都是"纯逻辑 + 真出过 bug"的地方：
 
-* `tsc -b` 类型检查；
-* `eslint --max-warnings 0`；
-* `verify:*` 三个契约脚本。
+| 模块 | 测试数 | 盯的是什么 |
+| --- | --- | --- |
+| `hooks/useActivityStream` | 22 | 批量合并、按 id 去重、上限截断、暂停缓冲、agent 派生、状态映射 |
+| `data/scans-store` | 10 | in-flight 去重的复用规则表（含两条"刻意不合"的格子） |
 
-**它们都验不了运行时行为。** 2026-10-10 实测的两个缺陷就是例子：
-题解正文在代码块中间被截断、SSE 响应头被代理攒住 22 秒导致状态标签卡在
-"连接中" —— 两者都是 `typecheck` + `lint` 全绿的情况下存在的。
+**没有覆盖的**：所有页面组件、表单校验、路由守卫、主题切换。
+也就是说，一个渲染期的崩溃仍然只有人工点开页面才能发现。
 
-优先该补的是 `src/data/` 下的 store 与 `src/hooks/useActivityStream.ts`：
-它们是纯逻辑、不依赖 DOM，**而且正是出过 bug 的地方**。
+```bash
+npm run test          # 跑一次
+npm run test:watch    # 开发时盯着
+npm run test:coverage # 带覆盖率
+```
+
+> **为什么先补这两个模块**：它们是纯逻辑、不依赖 DOM，而且**正是出过
+> bug 的地方**。2026-10-10 修的"批次内重复漏网"就在 `useActivityStream`
+> 里 —— 那处缺陷 `tsc` 与 `eslint` 全绿，`verify:*` 也全绿。
+>
+> 这套测试做过**突变验证**：把 8 处关键逻辑逐个破坏，确认对应测试
+> 确实变红（而不是"永远为真的空测试"）。`scans-store` 那边同样验了
+> 6 处。方法与结论都记在提交信息里。
 
 ## 跑起来
 
@@ -56,6 +67,8 @@ npm run dev          # http://localhost:5173
 | `npm run build`           | 类型检查 + 生产构建                    |
 | `npm run preview`         | 预览构建产物                           |
 | `npm run typecheck`       | 只跑 `tsc`                             |
+| `npm run test`            | 单元测试（vitest，单次跑）             |
+| `npm run test:watch`      | 单元测试（watch 模式）                 |
 | `npm run lint`            | ESLint（`--max-warnings 0`）           |
 | `npm run format`          | Prettier 写入                          |
 | `npm run verify:all`      | 全部校验（契约 + 覆盖度 + 报告一致性） |

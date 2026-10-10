@@ -95,6 +95,8 @@ cd suvex-api && docker compose up --build
 | 数据库迁移 | 30 个 Alembic 版本，从第一个迁移就版本化 |
 | API 端点 | 103 个 |
 | 前端代码 | 35,272 行，140 个文件，**0 个 `any` / 0 个 `@ts-ignore`** |
+| 前端测试 | 32 个 vitest 用例（覆盖 `useActivityStream` 与 `scans-store`） |
+| CI | GitHub Actions 三个 job：后端测试 / 前端检查 / 仓库卫生 |
 | 决策记录 | 8 篇 ADR，每篇写**为什么**而不是**是什么** |
 
 真机验证过的（一台有 Docker 的 Kali 上部署后）：
@@ -109,15 +111,16 @@ cd suvex-api && docker compose up --build
 
 | # | 缺口 | 影响 |
 | --- | --- | --- |
-| 1 | **前端零自动化测试** | 35k 行只有类型检查与 lint 兜底，运行时行为无人守 |
-| 2 | **两侧都没有 CI** | 903 个后端测试全靠人手跑，且必须串行（10–15 分钟） |
-| 3 | **6 个端点仍是 `501`** | 全部集中在通知与设置快照（`GET /settings` + 5 个通知端点） |
-| 4 | **`docker compose` 未在容器里实测** | Kali 上是 systemd + venv 部署的，不是 compose |
-| 5 | **契约文档有一段漂移** | 变更记录停在 v0.19，代码已到任务 20+ |
-| 6 | **无生产部署物** | 有 `Dockerfile`，但没有 k8s / nginx / systemd 模板 |
-| 7 | **无 LICENSE** | 默认"保留所有权利"，企业法务无法放行 |
-| 8 | **无可观测性** | 没有 metrics / tracing / 错误上报，线上问题只能翻日志 |
-| 9 | **单管理员模型** | `admin_accounts` 是单账号设计，没有多租户与角色体系 |
+| 1 | **前端测试只覆盖 2 个模块** | 32 个用例覆盖 `useActivityStream` 与 `scans-store`；页面组件、表单、路由守卫、主题切换都没有测试 |
+| 2 | **6 个端点仍是 `501`** | 全部集中在通知与设置快照（`GET /settings` + 5 个通知端点） |
+| 3 | **`docker compose` 未在容器里实测** | Kali 上是 systemd + venv 部署的，不是 compose |
+| 4 | **契约文档有一段漂移** | 变更记录停在 v0.19，代码已到任务 20+ |
+| 5 | **无生产部署物** | 有 `Dockerfile`，但没有 k8s / nginx / systemd 模板 |
+| 6 | **无可观测性** | 没有 metrics / tracing / 错误上报，线上问题只能翻日志 |
+| 7 | **单管理员模型** | `admin_accounts` 是单账号设计，没有多租户与角色体系 |
+
+> 已经补上的两项：**CI**（GitHub Actions 三个 job）与 **LICENSE**
+> （Apache 2.0，含专利授权条款）。
 
 ---
 

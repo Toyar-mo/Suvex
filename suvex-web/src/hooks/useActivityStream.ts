@@ -117,9 +117,28 @@ export function useActivityStream(
         批次是增量的（通常几条），而 `prev` 可能到 5000 条。
         建一个 Set 是 O(prev)，逐条 `some()` 是 O(batch × prev) ——
         在 5000 条 × 每 120ms 一次 flush 的量级上，这个差别是实打实的。
+
+        ## ★ 边过滤边登记（2026-10-10 修）
+
+        原来写的是：
+
+            const seen = new Set(prev.map((e) => e.id))
+            const fresh = batch.filter((e) => !seen.has(e.id))
+
+        这**只挡住了与 prev 重复的**，批次**内部**的重复会全部通过 ——
+        因为 `seen` 从头到尾没有被新接受的事件更新过。症状是同一个
+        批次里推两次同一条，列表里就出现两条（`key` 也跟着撞车）。
+
+        修法是接受一条就登记一条：`seen.add` 放进 filter 的回调里。
+        这不是"多写一行保险"，而是把判据补全 —— 去重的对象应该是
+        「prev ∪ 本批已接受的」，只算 prev 是不完整的。
       */
       const seen = new Set(prev.map((e) => e.id))
-      const fresh = batch.filter((e) => !seen.has(e.id))
+      const fresh = batch.filter((e) => {
+        if (seen.has(e.id)) return false
+        seen.add(e.id) // ★ 登记，让批次内部的重复也被挡住
+        return true
+      })
       if (fresh.length === 0) return prev // ★ 没有新东西就返回原引用，省一次渲染
 
       const merged = [...prev, ...fresh]

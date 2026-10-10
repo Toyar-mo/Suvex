@@ -122,6 +122,15 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
+      - name: 单元测试
+        # ★ 与 typecheck/lint 是**互补**的，不是重复：
+        #   那两个验不了运行时行为。2026-10-10 实测的两个缺陷
+        #   （题解正文被截断、SSE 响应头被代理攒住 22 秒）都是
+        #   typecheck + lint 全绿的情况下存在的。
+        #   而 useActivityStream 里那个"批次内重复漏网"更是只有
+        #   跑起来才看得见。
+        run: npm run test
+
       - name: Lint
         run: npm run lint
 
