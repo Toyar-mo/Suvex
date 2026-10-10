@@ -1,0 +1,24 @@
+Suvex
+Copyright 2026 Suvex
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+─────────────────────────────────────────────────────────────────────
+第三方组件
+─────────────────────────────────────────────────────────────────────
+
+前端 `suvex-web/src/components/effects/` 下有 ReactBits 组件的**源码拷贝**
+（MIT + Commons Clause），不是 npm 依赖。出处、许可证与本地改动逐条记录在
+`suvex-web/src/components/effects/README.md`。
+
+其余第三方依赖（Python 与 npm 包）各自的许可证见其发行包，不在本文件重复。

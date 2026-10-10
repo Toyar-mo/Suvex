@@ -3,6 +3,9 @@ name = "suvex-api"
 version = "0.1.0"
 description = "Suvex 后端 API —— 实现 docs/api-contract.md 定义的契约"
 requires-python = ">=3.12"
+# 与仓库根的 LICENSE 一致（Apache License 2.0）。
+# 写成 SPDX 标识符而不是文件路径 —— 打包工具与依赖扫描器都认这个写法。
+license = "Apache-2.0"
 
 # 依赖的事实来源是 requirements.txt（Docker 构建直接用它）。
 # 这里不重复列一遍 —— 两处列依赖必然漂移，而漂移的表现是
