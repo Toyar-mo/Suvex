@@ -57,8 +57,40 @@ jobs:
           --health-retries 10
 
     env:
+      # ★ 两个都要设，而且**都要指向 CI 的 postgres**。
+      #
+      # ## 这是 CI 全部 6 次失败的原因（2026-10-10 修）
+      #
+      # 第一版只设了 `SUPEX_TEST_DATABASE_URL`，然后跑了一步
+      # `alembic upgrade head` —— 而 **alembic 读的是
+      # `SUPEX_DATABASE_URL`**（见 `alembic/env.py` 的说明：
+      # URL 从 `Settings` 读，不从 `alembic.ini` 读）。
+      #
+      # 于是那一步拿的是 `config.py` 的**开发机默认值**：
+      #
+      #     postgresql+psycopg://suvex:suvex_dev_local@127.0.0.1:55432/suvex
+      #
+      # 而 GitHub runner 上 `:55432` 什么都没有 —— 连接被拒，job 红。
+      #
+      # ## 为什么本地看不出来
+      #
+      # 开发机上那个 `:55432` 是**真的在跑**的（便携版 PostgreSQL
+      # 服务），所以同一条命令本地成功、CI 失败。这类"本地全绿、
+      # CI 全红"的差异最难怀疑到环境变量上 —— 而它其实是
+      # **同一份配置在两台机器上指向不同东西**。
+      #
+      # ## 那一步其实是多余的
+      #
+      # `tests/conftest.py` 的 `_prepare_database` 会**自己建库并跑迁移**
+      # （`_ensure_database` + `_upgrade_to_head`）。所以 pytest 一开始
+      # 就会把库准备好。
+      #
+      # 但我**保留**那一步：它能在跑测试之前就暴露出"迁移链断了"
+      # 这类问题，而那种失败的报错比"某个测试莫名其妙挂了"清楚得多。
+      # 前提是它的 URL 正确 —— 见下面。
+      SUPEX_DATABASE_URL: postgresql+psycopg://suvex:suvex_ci_password@127.0.0.1:5432/suvex_test
       # conftest.py 读它，且**自己会建库**（见 `_ensure_database`）。
-      # 所以这里只指到 postgres 库即可，不用预先建 suvex_test。
+      # 所以这里只指到 suvex_test 即可，不用预先建。
       SUPEX_TEST_DATABASE_URL: postgresql+psycopg://suvex:suvex_ci_password@127.0.0.1:5432/suvex_test
       # 生产环境变量在测试里必须是开发态，否则启动自检会拒绝启动
       SUPEX_ENV: dev
@@ -82,8 +114,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
 
-      - name: 数据库迁移
-        run: alembic upgrade head
+      - name: 建测试库并跑迁移
+        # ## 为什么要显式建库（2026-10-10 修 CI 时补）
+        #
+        # `tests/conftest.py` 的 `_prepare_database` 会自己建库 + 迁移，
+        # 所以 pytest 一开始就能跑。而这一步是**提前**做同一件事 ——
+        # 目的是让"迁移链断了"这类问题在这里就暴露，
+        # 那种报错比"某个测试莫名其妙挂了"清楚得多。
+        #
+        # ⚠️ 但它必须**先建库**：这个 job 的 postgres service 只创建了
+        #    `suvex` 那个库（`POSTGRES_DB`），而迁移的目标是 `suvex_test`。
+        #    少了这一步会报 `database "suvex_test" does not exist` ——
+        #    而那条错误看起来像"迁移写错了"，其实只是库还没建。
+        #
+        # ⚠️ 用 psql 而不是 `createdb`：GitHub 的 postgres service
+        #    容器里两者都有，但 psql 的报错更清楚，而且能在同一条命令里
+        #    做"存在就跳过"（`createdb` 遇到已存在会报错退出）。
+        run: |
+          PGPASSWORD=suvex_ci_password psql -h 127.0.0.1 -U suvex -d suvex \
+            -tc "SELECT 1 FROM pg_database WHERE datname = 'suvex_test'" \
+            | grep -q 1 || PGPASSWORD=suvex_ci_password createdb -h 127.0.0.1 -U suvex suvex_test
+          alembic upgrade head
 
       - name: 跑测试
         # ★ 绝对不加 `-n auto` / pytest-xdist。
