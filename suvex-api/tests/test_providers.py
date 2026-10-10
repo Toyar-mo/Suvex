@@ -152,8 +152,27 @@ def test_cannot_set_server_owned_fields(ready_client: TestClient) -> None:
     assert response.json()["error"]["code"] == "VALIDATION_FAILED"
 
 
-def test_providers_require_admin_scope(ready_client: TestClient) -> None:
-    """provider 是 `admin` 级：一个只读令牌不能读掩码、也不能触发对外请求。"""
+def test_provider_writes_require_admin_scope(ready_client: TestClient) -> None:
+    """provider 的**写**操作是 `admin` 级：只读令牌不能新建、也不能触发对外请求。
+
+    ## v0.24：`GET /providers` 从 `admin` 放宽到 `read`
+
+    这条测试原先把**读**也断言成 403，v0.24 起那个断言不再成立 ——
+    放宽是**有意的**，理由写在 `app/providers/router.py` 的
+    `list_providers` docstring 里：前端状态条要显示"当前模型 XXX"，
+    而它读的就是这个端点；若要求 `admin`，一个 `viewer` 登录后
+    状态条会报错，而那个错误看起来像"系统坏了"，不像权限问题。
+
+    放宽的前提是该端点**不返回任何明文凭据**：`apiKey` 恒为空串，
+    只有掩码 `apiKeyMask`（见 ADR-003）。
+
+    ⚠️ 所以这里断言的是两件**不同**的事，别把它们合并成一句：
+      · 读 → 允许（归 `READ_ONLY`，见 `tests/test_authorization_matrix.py`）
+      · 写 → 仍然 `admin`（本测试盯的就是这条线）
+
+    把"读"也一并断言成 403，会让这条边界看起来比实际更严 ——
+    而那会掩盖"写权限真的被放松了"这种真正危险的变化。
+    """
     created = ready_client.post(
         "/api/v1/settings/tokens",
         json={"label": "报表脚本", "scopes": ["read"], "expiresAt": None},
@@ -161,7 +180,9 @@ def test_providers_require_admin_scope(ready_client: TestClient) -> None:
     ready_client.cookies.clear()
     headers = {"Authorization": f"Bearer {created['plaintext']}"}
 
-    assert ready_client.get("/api/v1/providers", headers=headers).status_code == 403
+    # 读：v0.24 起允许（只读角色要用它渲染状态条）
+    assert ready_client.get("/api/v1/providers", headers=headers).status_code == 200
+    # 写：仍然 admin —— 这条才是本测试要守的边界
     assert ready_client.post("/api/v1/providers", headers=headers).status_code == 403
 
 

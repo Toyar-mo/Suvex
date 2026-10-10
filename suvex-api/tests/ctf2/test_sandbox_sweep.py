@@ -53,7 +53,13 @@ def test_sweep_removes_every_container_with_the_prefix(monkeypatch) -> None:
     # ⚠️ 过滤条件必须用**常量**而不是手写的字面量：容器名的前缀同时
     #    被"创建"和"清理"两处依赖，写死两遍迟早会漂移 ——
     #    而漂移的症状是"容器建出来了、却永远清不掉"。
-    assert fake.calls[0][4] == f"name={runner.SANDBOX_NAME_PREFIX}"
+    #
+    # ⚠️ 常量之外**还必须带锚点 `^`**：Docker 的 `name` 过滤器是
+    #    子串/正则匹配而非前缀匹配，不锚定的话一个叫 `my-ctf2-helper`
+    #    的无关容器会被 `rm -f` 一起删掉。这两条要求是**并存**的 ——
+    #    常量防"两处漂移"，锚点防"误删无关容器"。
+    #    （同一条断言另见 `tests/test_ctf2_resource_guards.py`。）
+    assert fake.calls[0][4] == f"name=^{runner.SANDBOX_NAME_PREFIX}"
     assert fake.calls[1] == ["docker", "rm", "-f", "abc123", "def456"]
 
 

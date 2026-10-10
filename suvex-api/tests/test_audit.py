@@ -689,6 +689,15 @@ def test_record_failure_does_not_break_the_business_operation(
         target="scan_y",
     )
 
+    # ⚠️ 必须**在这里**就把 `commit` 还原，不能等 monkeypatch 的 teardown。
+    #
+    # 这个 patch 把 session 上最核心的方法换成了"一定炸"。而 pytest 的
+    # fixture teardown 顺序不保证 monkeypatch 先于 `_clean_state` 执行 ——
+    # 一旦 `_clean_state` 先跑（它要 TRUNCATE 所有表，那会用到 commit），
+    # 它就会踩到这个假的 Boom，测试本身明明通过了、却报一个
+    # "ERROR at teardown"，看起来像清理逻辑坏了。
+    monkeypatch.undo()
+
 
 def test_every_action_has_a_display_label() -> None:
     """★ 每个 `AuditAction` 都要有中文标签。

@@ -133,6 +133,53 @@ def _upgrade_to_head() -> None:
     command.upgrade(config, "head")
 
 
+# ══════════════════════════════════════════════════════════════════
+# ★ 加密密钥：给测试补一条**临时的** SUPEX_SECRET_KEY
+# ══════════════════════════════════════════════════════════════════
+#
+# ## 为什么需要它（2026-10-10 第 7 次 CI 暴露）
+#
+# 前 6 次 CI 全死在 alembic 那一步，`pytest` 从没真正跑起来过。
+# 修好那一步后第一次跑全量，立刻红了 7 个用例，原因全是同一个：
+#
+#     app.core.crypto.SecretKeyMissing:
+#     尚未配置 SUPEX_SECRET_KEY，无法加密或解密 provider 凭据。
+#
+# 而**本地一直是绿的** —— 因为开发机上有一份 `.env`，里面是真密钥。
+# CI 上没有 `.env`（它本就不该入库，见 hygiene job 的硬闸门），
+# 于是"跑测试"隐含了一个没人写下来的前提：**你得先自己配一把密钥**。
+#
+# ## 为什么用 fixture，而不是写进上面那段环境变量
+#
+# 上面那段（`SUPEX_TEST_DATABASE_URL` 等）是在**导入 app 模块之前**
+# 设死的。密钥不能那样设：pydantic-settings 的优先级是
+# **环境变量 > .env 文件**，所以在这里写
+# `os.environ["SUPEX_SECRET_KEY"] = <随机值>` 会把开发机 `.env` 里那把
+# **真密钥顶掉** —— 密钥一换，本地库里已加密的 provider 凭据就全解不开了。
+#
+# 所以用 fixture + `if is_configured(): return`：外部（CI 变量或本地
+# `.env`）**已经配了**就一个字都不动，只有真没配时才补一把临时密钥，
+# 且用例结束后自动还原。
+#
+# ## 为什么必须清 get_settings 的缓存
+#
+# `get_settings()` 是 lru_cache 单例，不清缓存的话改环境变量不生效，
+# 症状是"测试用的是上一个用例的配置"——看起来像配置没读对，
+# 其实是缓存没失效。这条在 `tests/ctf2/conftest.py` 里已经踩过一回。
+@pytest.fixture(autouse=True)
+def _secret_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """确保有 `SUPEX_SECRET_KEY`。已配（CI 变量或本地 `.env`）则不动它。"""
+    from app.core import crypto
+
+    if crypto.is_configured():
+        yield
+        return
+    monkeypatch.setenv("SUPEX_SECRET_KEY", crypto.generate_key())
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _prepare_database() -> Iterator[None]:
     """整个测试会话一次：建库 + 迁移。"""

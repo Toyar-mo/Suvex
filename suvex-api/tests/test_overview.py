@@ -197,12 +197,25 @@ def test_breakdown_includes_false_positives_but_metrics_exclude_them(
     前端注释原话：**「排除是可以的，悄悄排除不行。」**
     所以这条同时断言"排除了"和"说清了排除了几条"。
     """
+    from app.core.timeutil import now_utc
+
+    # ⚠️ `timestamp` 必须**显式**给"本周"的值。
+    #
+    # `vuln_record()` 的默认时间是写死的 `2026-09-24`（见 conftest：它要
+    # 复现 Strix 那个非 ISO 8601 的时间戳格式）。而本测试断言的是
+    # `newHighSeverityThisWeek` —— **近 7 天**。
+    #
+    # 用默认值的话，这个测试会随日期推移**自己变红**：它 2026-09-24
+    # 写出来时是绿的，一周之后那些数据就不再属于"本周"了。
+    # 这类"时间炸弹"不会在写的时候报错，只在某天突然失败 ——
+    # 而失败信息（`assert 0 == 1`）看起来像统计逻辑坏了。
+    this_week = now_utc().strftime("%Y-%m-%d %H:%M:%S UTC")
     import_vulns(
         db_session,
         completed_scan,
         [
-            vuln_record(id="v1", severity="critical"),
-            vuln_record(id="v2", severity="high"),
+            vuln_record(id="v1", severity="critical", timestamp=this_week),
+            vuln_record(id="v2", severity="high", timestamp=this_week),
         ],
     )
     findings = ready_client.get(f"{API}/findings").json()
@@ -230,7 +243,17 @@ def test_fixed_findings_still_count_as_new(
     "本周新增"变成一个随处置而回溯变化的数字 —— 那样它就没法用了。
     这个过滤器排除的是「**判断错误**」（误报），不是「已处理」。
     """
-    import_vulns(db_session, completed_scan, [vuln_record(id="v1", severity="high")])
+    from app.core.timeutil import now_utc
+
+    # ⚠️ 同 `test_breakdown_includes_false_positives_but_metrics_exclude_them`：
+    #    必须显式给"本周"时间，不能用 `vuln_record()` 那个写死的旧默认值，
+    #    否则这条断言会随日期推移自己变红。
+    this_week = now_utc().strftime("%Y-%m-%d %H:%M:%S UTC")
+    import_vulns(
+        db_session,
+        completed_scan,
+        [vuln_record(id="v1", severity="high", timestamp=this_week)],
+    )
     finding = ready_client.get(f"{API}/findings").json()[0]
     # 待确认 → 已确认 → 已修复（不能跳级，契约 §2.3 的流转表）
     ready_client.post(f"{API}/findings/status", json={"ids": [finding["id"]], "status": "confirmed"})

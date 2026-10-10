@@ -101,9 +101,23 @@ jobs:
         working-directory: suvex-api
 
     steps:
-      - uses: actions/checkout@v4
+      # ── action 运行时统一到 node24 ──────────────────────────────
+      #
+      # 第 7 次 CI（2026-10-10）的 Annotations 报了 2 条 warning：
+      # 这些 action 声明的是 `runs.using: node20`，而 runner 已经把它们
+      # **强制**跑在 Node 24 上。warning 不拦构建 —— 但 Node 20 退役后
+      # 它就是硬失败，而且会在"本来好好的"某次推送里突然变红，
+      # 那种红最难跟当次改动对上号。
+      #
+      # 版本号不是猜的：逐个读各 action 的 `action.yml` 拿 `runs.using`：
+      #   checkout@v4 = node20   →  @v5 = node24
+      #   setup-python@v5 = node20 →  @v6 = node24
+      #   setup-node@v4 = node20 →  @v5 = node24
+      # 三个**现用**版本全是 node20，三个**新版**全是 node24，
+      # 所以三个一起往上跳一个 major。
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
           cache: pip
@@ -157,9 +171,9 @@ jobs:
         working-directory: suvex-web
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
           cache: npm
@@ -202,7 +216,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # 卫生检查要看**全部历史**，默认的浅克隆只取一个提交
           fetch-depth: 0
