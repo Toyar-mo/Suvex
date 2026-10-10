@@ -261,29 +261,53 @@ access + refresh 的**语义**保留了：会话 12 小时有效，且每次使�
 
 ## 已知未验证项
 
-### 1. `docker compose up --build` 没有在本机执行过
+### 1. `docker compose` 已实测，但**镜像跑不了扫描**
 
-**原因**：这台开发机（Windows）上没有 Docker 引擎。Docker Desktop 依赖
-WSL2 或 Hyper-V，而两者当前都是关闭的：
+**2026-10-10 在真机上跑通了**（一台有 Docker 的 Kali，`docker-compose` 2.40.3）：
+
+| 项 | 结果 |
+| --- | --- |
+| 镜像构建 | ✅ 成功 |
+| 两个容器启动 | ✅ `db` 与 `api` 都 `healthy` |
+| `db` 健康检查时序 | ✅ `api` 正确等到 `db` 健康才启动 |
+| 容器内迁移 | ✅ `alembic upgrade head` 跑通（28 张表） |
+| `/health` | ✅ `{"status":"ok","version":"0.1.0"}` |
+| `/metrics` | ✅ `database_up 1`、请求计数正常 |
+| 数据库不映射宿主端口 | ✅ 只有 `5432/tcp`（容器内），无 `ports:` |
+
+**⚠️ 但实测暴露了一个之前没人知道的边界：这个镜像跑不了扫描。**
+
+容器里**既没有 `strix`，也没有 `docker` CLI**：
+
+```console
+$ docker exec suvextest-api-1 sh -c "which strix docker"
+（无输出）
+```
+
+于是 `POST /scans` 能受理，但扫描**立即失败**，日志里是：
 
 ```
-Microsoft-Windows-Subsystem-Linux   Disabled
-VirtualMachinePlatform              Disabled
+扫描执行后端不可用，新的扫描会立即失败：
+找不到 strix 可执行文件（SUPEX_STRIX_COMMAND='strix'）。
 ```
 
-**已经做了的**（`scripts/verify_acceptance.py` 里的静态校验，全部通过）：
+**这是刻意的取舍，不是缺陷**（理由写在 `Dockerfile` 头部）：
+装 strix 会带进 80 多个包（litellm、openai-agents、docker、boto3…），
+而大多数用这个镜像的场景不需要执行后端。要跑扫描，两条路：
 
-- `docker-compose.yml` 能被 YAML 解析，定义 `db` + `api` 两个服务
-- `api` 用 `condition: service_healthy` 等数据库**健康**（不是"已启动"）
-- `db` 用 `postgres:16-alpine`，口令可通过 `POSTGRES_PASSWORD` 覆盖
-- `api` 的 `SUPEX_DATABASE_URL` 指向 `db:5432`（不是宿主的 55432）
-- `db` **未**映射宿主端口；`api` 只绑 `127.0.0.1:8000`
-- `Dockerfile` 的启动命令含 `alembic upgrade head`（一步到位）
-- `Dockerfile` 以非 root 用户运行
-- `.dockerignore` 排除了 `.env`
+1. **宿主机部署**（推荐，也是当前 Kali 上在跑的方式）——
+   systemd + venv，见 [`deploy/README.md`](deploy/README.md)；
+2. 给镜像补执行后端（装 docker CLI + 挂宿主 socket + 装 strix）——
+   但挂 docker socket **等于给容器 root**，那是知情后的选择。
 
-**没验证到的**：镜像能不能构建成功、容器能不能真的起来、
-迁移在容器里能不能跑通、两个容器之间的网络与健康检查时序。
+**所以：`docker compose up` 现在是一个"控制面"部署**（看界面、
+管理历史、CTF2 平台同步都能用），**不是完整的执行环境**。
+
+> ⚠️ 另一处如实说明：上面那次实测用的是 `docker-compose`（连字符版，
+> Debian 的 apt 包），不是 `docker compose`（插件版）。
+> 两者读同一份 `docker-compose.yml`，但**在没装插件的机器上
+> `docker compose up` 会报 `unknown command: compose`** ——
+> 而那条错误信息看起来像"compose 文件有问题"。
 
 > ✅ **2026-10-10 更新：真扫描与 Docker 都已在另一台机器上验证过。**
 >

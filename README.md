@@ -112,15 +112,14 @@ cd suvex-api && docker compose up --build
 | # | 缺口 | 影响 |
 | --- | --- | --- |
 | 1 | **前端测试只覆盖 2 个模块** | 32 个用例覆盖 `useActivityStream` 与 `scans-store`；页面组件、表单、路由守卫、主题切换都没有测试 |
-| 2 | **6 个端点仍是 `501`** | 全部集中在通知与设置快照（`GET /settings` + 5 个通知端点） |
-| 3 | **`docker compose` 未在容器里实测** | Kali 上是 systemd + venv 部署的，不是 compose |
-| 4 | **无生产部署物** | 有 `Dockerfile`，但没有 k8s / nginx / systemd 模板 |
-| 5 | **无可观测性** | 没有 metrics / tracing / 错误上报，线上问题只能翻日志 |
-| 6 | **单管理员模型** | `admin_accounts` 是单账号设计，没有多租户与角色体系 |
+| 2 | **compose 镜像是"控制面"，跑不了扫描** | 实测确认容器里没有 `strix` 与 `docker` CLI；要跑扫描用 `deploy/` 的宿主机部署 |
+| 3 | **`/metrics` 不覆盖依赖注入抛出的 401/403** | 路由层返回的状态码都计数，但鉴权失败经异常处理器生成的不计（见 `test_metrics.py` 里那条钉住局限的用例） |
+| 4 | **单管理员模型** | `admin_accounts` 是单账号设计，没有多租户与角色体系 |
 
-> 已经补上的三项：**CI**（GitHub Actions 三个 job）、**LICENSE**
-> （Apache 2.0，含专利授权条款）、**契约漂移**（v0.21 专项对账，
-> 补上了整个 CTF2 模块等 8 处缺口，并新增反向端点对账脚本）。
+> 已经补上的五项：**CI**（GitHub Actions 三个 job）、**LICENSE**
+> （Apache 2.0，含专利授权条款）、**契约漂移**（v0.21/v0.22 两轮专项对账）、
+> **501 清零**（最后 6 个端点已实现）、**可观测性与生产部署物**
+> （`/metrics` + systemd/nginx/部署文档）。
 
 ---
 
