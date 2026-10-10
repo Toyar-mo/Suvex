@@ -42,6 +42,12 @@ dist-ssr/
 *.local
 .vite/
 
+# vitest 的覆盖率产物（`npm run test:coverage`）。
+# ★ 注意它与上面 Python 那条 `.coverage` 是**两个不同的东西**：
+#   前者是单个文件、后者是个目录，而 gitignore 里 `coverage/` 带斜杠
+#   只匹配目录 —— 少写这个斜杠会连带忽略掉名字叫 coverage 的文件。
+coverage/
+
 # ── 扫描产物与用户上传 ────────────────────────────────────────
 #
 # 两者都**不是源码**：
