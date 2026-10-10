@@ -9,12 +9,11 @@ import {
   type NotifyChannelKind,
 } from '@/data/settings'
 import {
-  BACKEND_PENDING_NOTE,
-  nextChannelId,
+  createNotifyChannel,
   removeNotifyChannel,
   saveNoticeRule,
-  saveNotifyChannel,
   sendTestNotification,
+  updateNotifyChannel,
 } from '@/data/settings-store'
 import { SEVERITY_META, SEVERITY_ORDER, type Severity } from '@/data/findings'
 import { formatRelativeTime } from '@/lib/datetime'
@@ -31,8 +30,15 @@ import { useMemo, useState } from 'react'
  *   见 data/settings.ts 里 NotifyChannel 与 NoticeRule 的说明。
  *
  * ★ 通知类配置最要命的问题不是"配得难"，而是**"出事时才发现没通"**。
- *   所以每个渠道都有"发送测试"按钮，把"通知是否真的能送达"
- *   从事故时才发现提前到配置时就知道。
+ *   每个渠道上那个"发送测试"按钮存在的全部理由，就是把这个问题
+ *   从**事故时**提前到**配置时**。
+ *
+ *   ⚠️ 这个目标目前只走到一半：v0.22 交付了测试端点，但它只做地址形状的
+ *      本地校验，**不真的往外发**（真实发送要 SMTP / Webhook / Slack 三套
+ *      协议实现）。所以按钮现在能回答的是"这条地址填对了吗"，
+ *      而不是"出事时我收得到吗"。界面上必须如实说明这一点
+ *      （见 `handleTest` 与按钮旁那句提示）—— 把"形状对"读成"通道通"，
+ *      正是这个面板最该防住的那种误解。
  */
 
 const CHANNEL_META: Record<
@@ -93,13 +99,22 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
     [draft, rule],
   )
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!dirty) {
       setSaveState({ kind: 'unchanged' })
       return
     }
+
+    /*
+      ★ `saving` 必须在 `await` **之前**落下，其余三态都在之后。
+
+      顺序反了的话，请求往返期间界面上没有任何"进行中"的痕迹：
+      按钮不禁用、文案还是"保存"，用户会以为点了没反应而反复点 ——
+      而这恰好与 `SaveBar` 把 saving 拿去禁用按钮的设计意图相反。
+    */
     setSaveState({ kind: 'saving' })
-    const result = saveNoticeRule(draft)
+
+    const result = await saveNoticeRule(draft)
     setSaveState(
       result.status === 'ok'
         ? { kind: 'saved', at: result.at }
@@ -180,7 +195,13 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
           setDraft(rule)
           setSaveState({ kind: 'idle' })
         }}
-        note={<span className="text-2xs text-ink-muted">{BACKEND_PENDING_NOTE}</span>}
+        /*
+          ⚠️ 这里原来挂着 `BACKEND_PENDING_NOTE`（"后端接口尚未交付，刷新回到初始值"）。
+          通知已在 v0.22 交付，规则真的写进 `PUT /settings/notices/rule` ——
+          再留着那句话就是**否认一个已经可靠的功能**，与吹嘘没有的能力
+          是同一种失真，只是方向相反（`BACKEND_PENDING` 那段注释里写过这条原则）。
+          所以整条 note 去掉，而不是换成一句别的什么。
+        */
       />
     </div>
   )
@@ -231,8 +252,19 @@ function ChannelSection({ channels }: { channels: NotifyChannel[] }) {
 
         {adding !== null && (
           <ChannelEditor
+            /*
+              ⚠️ 这个 `id` 只是个**占位**，不会被发给服务端。
+
+              新建走 `POST /settings/notices/channels`，主键由**服务端**分配
+              （`ntc_` 前缀）—— 让客户端指定主键等于让它决定"覆盖哪一条"。
+              所以这里不再有 `nextChannelId()` 那种前端编号。
+
+              但占位值不能是空串：`id` 被拿去拼 DOM 元素的 id
+              （`${channel.id}-label` 等，供 `htmlFor` 与输入框关联），
+              空串会得到 `-label` 这种合法但读不出所以然的 id。
+            */
             channel={{
-              id: nextChannelId(adding),
+              id: 'new-channel',
               kind: adding,
               label: '',
               target: '',
@@ -312,10 +344,13 @@ function ChannelEditor({
   const [touched, setTouched] = useState(false)
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
   /*
-    ⚠️ 这里**没有** `testing` 状态 —— 与"发送测试消息"按钮被禁用的是同一个原因
-    （后端未交付，见 settings-store 的 `sendTestNotification`）。
-    后端交付后要把它加回来：真实请求有往返时间，按钮需要"正在发送…"这一态，
-    否则用户会以为点了没反应而反复点。
+    ★ 测试状态复用 `SaveState` 的 `saving` 那一态来表示"正在发送"，
+    不另外加一个 `testing` 布尔 —— 那会变成两个 state 描述同一件事，
+    而它们迟早会有一次对不上（`handleTest` 里推着它走的本来就是
+    `setTestState`）。
+
+    ⚠️ 这一态必须真的有：按钮禁用期间它无关紧要，但按钮现在可点了，
+    请求有往返时间，缺了它用户会以为点了没反应而反复点。
   */
   const [testState, setTestState] = useState<SaveState>({ kind: 'idle' })
   /*
@@ -345,7 +380,48 @@ function ChannelEditor({
     draft.target !== channel.target ||
     draft.enabled !== channel.enabled
 
-  const handleSave = () => {
+  const testing = testState.kind === 'saving'
+
+  /**
+   * 把草稿落库。
+   *
+   * ★ 新建与改已有是**两个端点**，这里合并成一个函数，因为调用方
+   *   （保存、发送测试）要的是同一个问题："草稿现在存住了没有"。
+   *
+   * ⚠️ 两者的返回值都是 `{channel} | {error}`，**不是 `SaveResult`** ——
+   *    所以调用点判的是 `'error' in result`，不是 `result.status === 'failed'`。
+   *    这个形状差别的来源：创建/更新是**资源写入**，服务端要把归一后的
+   *    整条资源回传（改 `target` 会把 `verified` 打回 `false`，
+   *    所以响应里的 `verified` 可能与提交的不同 —— 一律以响应为准）。
+   *
+   * ⚠️ 新建时**不传 id**（类型上就 `Omit` 掉了），服务端分配 `ntc_` 前缀。
+   *    也**不传 `verified` / `verifyError`**：那是服务端的事实，不是用户的声明。
+   */
+  const persist = async (): Promise<{ channel: NotifyChannel } | { error: string }> => {
+    if (isNew) {
+      return createNotifyChannel({
+        kind: draft.kind,
+        label: draft.label,
+        target: draft.target,
+        enabled: draft.enabled,
+      })
+    }
+
+    /*
+      只提交**改动的那几项** —— 后端这个端点是 PATCH（唯一允许部分更新的
+      配置端点）。全量回传会把没动过的字段也写一遍，而 `target` 那一项
+      在后端有副作用：写它就等于声明"地址变了"，`verified` 会被打回 `false`。
+      也就是说，全量回传会让"只改了个名字"顺手把验证状态清掉。
+    */
+    const patch: Partial<Pick<NotifyChannel, 'label' | 'target' | 'enabled'>> = {}
+    if (draft.label !== channel.label) patch.label = draft.label
+    if (draft.target !== channel.target) patch.target = draft.target
+    if (draft.enabled !== channel.enabled) patch.enabled = draft.enabled
+
+    return updateNotifyChannel(channel.id, patch)
+  }
+
+  const handleSave = async () => {
     setTouched(true)
     if (hasError) {
       setSaveState({ kind: 'failed', error: '有字段未通过校验，请先修正' })
@@ -357,28 +433,42 @@ function ChannelEditor({
     }
 
     setSaveState({ kind: 'saving' })
-    const result = saveNotifyChannel(draft)
-    if (result.status === 'ok') {
-      setSaveState({ kind: 'saved', at: result.at })
-      setTouched(false)
-      if (isNew) onDone()
-    } else if (result.status === 'failed') {
+    const result = await persist()
+    if ('error' in result) {
       setSaveState({ kind: 'failed', error: result.error })
-    } else {
-      setSaveState({ kind: 'unchanged' })
+      return
     }
+
+    // 时刻在本地取：创建/更新的响应里没有 `at`（它回传的是整条渠道）
+    setSaveState({ kind: 'saved', at: new Date().toISOString() })
+    setTouched(false)
+
+    if (isNew) {
+      onDone()
+      return
+    }
+
+    /*
+      以服务端返回的为准，而不是"提交成功就当草稿等于基准"。
+      改 `target` 会把 `verified` 打回 `false`，服务端也可能对值做归一 ——
+      不同步的话草稿与基准就分叉了，界面上会一直亮着"有未保存的改动"，
+      而用户找不到自己还能改什么。
+    */
+    setDraft(result.channel)
   }
 
   /**
    * 发送测试消息。
    *
-   * ★ 按钮现在是**禁用**的（后端未交付，见 `sendTestNotification`），
-   *   所以这个函数暂时不会被调到。它保留下来是因为后端交付后
-   *   只需要去掉按钮上那个 `disabled` —— 先保存再测试、
-   *   失败态渲染这些逻辑都是现成的。
+   * ★ 先保存再测试 —— 否则测的是没保存的临时值，
+   *   用户会以为"测通了就是配好了"，实际 store 里还是旧的。
    *
-   * 先保存再测试 —— 否则测的是没保存的临时值，
-   * 用户会以为"测通了就是配好了"，实际 store 里还是旧的。
+   * ⚠️ **不要把结果包装成成功。** 后端 v0.22 交付了这个端点，但它
+   *    **只做地址形状的本地校验、不真的往外发**，所以它回的永远是
+   *    `verified: false` + 一句 `verifyError`（例如"地址形状正确，
+   *    但真实发送尚未接入"）。store 原样透传那句话，这里就如实渲染成
+   *    一条**说明**而不是绿勾 —— 用户得到的是"地址没问题，但真实发送
+   *    还没接"这个准确认知，而不是一个会撒谎的"已送达"。
    */
   const handleTest = async () => {
     setTouched(true)
@@ -387,15 +477,21 @@ function ChannelEditor({
       return
     }
 
-    const saved = saveNotifyChannel(draft)
-    if (saved.status === 'failed') {
+    setTestState({ kind: 'saving' })
+
+    /*
+      已有渠道且没改动时**不发那次 PATCH** —— 它是部分更新，空 patch
+      只会白跑一个往返。新建则必须发，否则没有 id 可测。
+    */
+    const saved = !isNew && !dirty ? { channel } : await persist()
+    if ('error' in saved) {
       setTestState({ kind: 'failed', error: saved.error })
       return
     }
+    if (!isNew) setDraft(saved.channel)
 
-    setTestState({ kind: 'saving' })
     try {
-      const result = await sendTestNotification(draft)
+      const result = await sendTestNotification(saved.channel)
       setTestState(
         result.status === 'ok'
           ? { kind: 'saved', at: result.at }
@@ -404,10 +500,22 @@ function ChannelEditor({
     } catch {
       setTestState({ kind: 'failed', error: '测试请求失败，请检查网络后重试' })
     }
+
+    /*
+      新建时渠道在 `persist` 那一步就**真的建好了**（服务端已分配 id，
+      列表里也多了一行）。此时还留着这个挂着"新增"身份的编辑器，
+      用户会以为没建成，再点一次"添加渠道"就多出一条重复渠道。
+      所以收起来 —— 这次测试的结论由列表行上的 `verified` / `verifyError` 展示。
+
+      ⚠️ 这一句**不能**放进 `finally`：`finally` 在 return 时也会跑，
+         于是"校验没过"和"创建失败"两条路径都会把用户填了一半的表单收掉。
+         收起只该发生在**真的建成之后**。
+    */
+    if (isNew) onDone()
   }
 
-  const handleDelete = () => {
-    const result = removeNotifyChannel(channel.id)
+  const handleDelete = async () => {
+    const result = await removeNotifyChannel(channel.id)
     if (result.status === 'failed') {
       setSaveState({ kind: 'failed', error: result.error })
       return
@@ -482,30 +590,39 @@ function ChannelEditor({
       <div className="flex flex-col gap-tight border-t border-line pt-panel">
         <div className="flex flex-wrap items-center gap-tight">
           {/*
-            ★ **按钮禁用，而不是让它假装发了一次。**
+            ★ 按钮从"禁用"改成**可点**，但结论仍然如实呈现。
 
             这里原来把结果渲染成绿色的「测试消息已送达 · 刚刚」，
-            而实际上一个字节都没发出去（见 settings-store 的
-            `sendTestNotification`）。通知是**告警通道** ——
+            而实际上一个字节都没发出去。通知是**告警通道** ——
             给用户一个假的「已送达」，等于让他带着一条从未验证过的通道上线，
             而且他会因为见过那句绿字而**更加确信它没问题**。
-            这比"没有这个功能"严重得多。
+            这比"没有这个功能"严重得多，所以当时的选择是禁用按钮。
 
-            后端交付 `POST /settings/notify/test` 之后：去掉 `disabled` 即可，
-            `handleTest` 与下面两段反馈都是现成的（保留着就是为了那一天）。
+            现在端点交付了，按钮可以点 —— 但它仍然**不会**给出绿字：
+            后端只做本地校验，把结论写进 `verifyError`，store 原样透传。
+            用户至少能确认"我这条地址形状是对的"，而不是对着一句
+            "暂时无法验证"猜自己是哪里填错了。
+
+            ⚠️ `testState.kind === 'saved'` 那个分支要等后端接入真实发送
+               才会第一次走到 —— 留着它就是为了那一天。
           */}
           <button
             type="button"
             onClick={handleTest}
-            disabled
-            title="后端接口尚未交付，当前无法真实发送测试消息"
-            className="inline-flex h-9 cursor-not-allowed items-center gap-1.5 rounded-sm border border-line/50 px-3 text-xs text-ink-faint"
+            disabled={testing}
+            title="当前只校验地址形状，不会真的发送"
+            className={cn(
+              'inline-flex h-9 items-center gap-1.5 rounded-sm border px-3 text-xs transition-ui duration-fast',
+              testing
+                ? 'cursor-wait border-line text-ink-faint'
+                : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
+            )}
           >
             <Send size={12} strokeWidth={2} aria-hidden="true" />
-            发送测试消息
+            {testing ? '正在发送…' : '发送测试消息'}
           </button>
 
-          <span className="text-2xs text-ink-faint">后端未交付，暂时无法验证它是否可达</span>
+          <span className="text-2xs text-ink-faint">接口只做本地校验 —— 点它不会真的发出通知</span>
 
           {testState.kind === 'saved' && (
             <span role="status" className="inline-flex items-center gap-1 text-2xs text-signal-ok">
@@ -532,15 +649,17 @@ function ChannelEditor({
           }}
           saveLabel={isNew ? '添加渠道' : '保存'}
           note={
-            <span className="flex flex-col gap-tight">
-              <span className="text-2xs text-ink-muted">{BACKEND_PENDING_NOTE}</span>
-              {!isNew && (
-                <span className="flex flex-wrap items-center gap-tight">
-                  <span>删除后不会再收到这个渠道的通知。</span>
-                  <DangerButton onClick={handleDelete}>删除渠道</DangerButton>
-                </span>
-              )}
-            </span>
+            /*
+              ⚠️ 这里原来第一行是 `BACKEND_PENDING_NOTE`（"后端未交付，
+              刷新回到初始值"）。通知已交付，那句话不再成立 ——
+              去掉，而不是"留着更保险"（见 `BACKEND_PENDING` 的说明）。
+            */
+            !isNew ? (
+              <span className="flex flex-wrap items-center gap-tight">
+                <span>删除后不会再收到这个渠道的通知。</span>
+                <DangerButton onClick={handleDelete}>删除渠道</DangerButton>
+              </span>
+            ) : null
           }
         />
       </div>

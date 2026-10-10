@@ -211,36 +211,49 @@ export type SettingsStatus = 'loading' | 'ready' | 'error'
 /**
  * ★ **后端还没交付的设置区块**。
  *
- * 目前只剩通知：`GET/PUT /settings/notices/*` 那几个端点仍未实现
- * （`/settings` 那个"四块快照"也仍然是 501 —— 它要等通知一起交付）。
+ * ## v0.22：通知也摘掉了，这个常量现在是空的
  *
- * 未交付的区块前端只能保持内存态，而界面**必须说出来** —— 让用户以为
- * "通知已经配好了"是最糟的：他会据此以为漏洞告警真的会发出去。
- * 所以这是一个显式常量，面板据此显示"后端未交付"而不是"已保存"。
+ * 它此前标着 `notices: true`，因为 `GET/PUT /settings/notices/*` 那几个
+ * 端点未实现。后端 v0.22 交付了全部五个（含 `GET /settings` 的四块快照），
+ * 所以通知也走真实接口了。
  *
- * ★ `sandbox` 在任务 13 改成 `false`：沙箱与执行配置现在走
- *   `GET/PUT /settings/sandbox`，真的持久化，而且改并发**不用重启服务**。
- *   再把它标成"未交付"就是在**否认一个已经可靠的功能** ——
- *   与吹嘘没有的能力是同一种失真，只是方向相反。
+ * ⚠️ **这个常量留着而不是删掉**，因为它表达的是一条**长期规矩**：
+ *    某个区块的后端还没交付时，前端只能保持内存态，而界面**必须说出来** ——
+ *    让用户以为"通知已经配好了"是最糟的，他会据此以为漏洞告警真的会发出去。
+ *
+ *    规矩的两个方向都要守（`sandbox` 那次是反向的例子）：
+ *      · 未交付却不说 → 用户以为配置生效了（虚假的安心）；
+ *      · 已交付却还标着未交付 → **否认一个已经可靠的功能**
+ *        （与吹嘘没有的能力是同一种失真，只是方向相反）。
+ *
+ *    所以摘掉 `notices` 与当初摘掉 `sandbox` 是同一条判断：
+ *    **提示必须与事实一致**，而不是"留着更保险"。
  */
 export const BACKEND_PENDING = {
   sandbox: false,
-  notices: true,
+  notices: false,
 } as const
+
+/** 是否还有未交付的区块 —— 有的话面板要显示提示条 */
+export const HAS_PENDING_BLOCK = Object.values(BACKEND_PENDING).some(Boolean)
 
 /**
  * 未交付区块的**保存提示**，直接挂在 `SaveBar` 的 `note` 上。
  *
  * ★ 为什么必须挂在保存按钮旁边，而不是只在页面底部说一次：
- *   用户改完沙箱、点"保存"、看到绿色的"已保存 15:30:42" ——
+ *   用户改完配置、点"保存"、看到绿色的"已保存 15:30:42" ——
  *   他会合理地认为**配置已经生效且会持久**。而实际上刷新就回到初始值。
  *   这个误解的后果不轻：他可能据此以为沙箱策略已经收紧。
  *
  *   放在页面底部说明是**不够的** —— 那要用户先滚到底、再把它和
  *   上面那个"已保存"联系起来。提示必须出现在产生误解的那一刻。
+ *
+ * ⚠️ v0.22 起**没有**未交付区块了，所以这句话暂时不会被显示。
+ *    留着它是给下一个新增区块用的 —— 届时改 `BACKEND_PENDING` 即可，
+ *    文案不用重写（那句话本身仍然准确）。
  */
 export const BACKEND_PENDING_NOTE =
-  '后端接口尚未交付（计划在后端任务 7）：这一块保存在内存里，刷新页面会回到初始值。'
+  '这一块的后端接口尚未交付：保存在内存里，刷新页面会回到初始值。'
 
 export interface SettingsSnapshot {
   accounts: ProviderAccount[]
@@ -318,19 +331,38 @@ async function loadAccounts(): Promise<ProviderAccount[]> {
 }
 
 /**
- * 拉取设置页的真实数据（任务 7）。
+ * 拉取设置页的真实数据。
  *
- * ⚠️ 这里**不能**用一个 `GET /settings` 拿全部 —— 那个端点的契约是
- * "一次返回四块快照"，而通知那两块还没实现，所以它仍然是 501。
- * 数据是**分源组装**的：
+ * ## 数据是**分源组装**的，而不是一次 `GET /settings`
  *
- *   · `tokens`   → `GET /settings/tokens`（后端任务 1 已交付）✅
- *   · `accounts` → `GET /providers`（后端任务 2 已交付）✅
- *   · `sandbox`  → `GET /settings/sandbox`（任务 13 已交付）✅
- *   · `notices`  → 仍未交付，保持内存态并显式标记（见 BACKEND_PENDING）
+ *   · `tokens`   → `GET /settings/tokens`
+ *   · `accounts` → `GET /providers`
+ *   · `sandbox`  → `GET /settings/sandbox`
+ *   · `notices`  → `GET /settings/notices/rule` + `GET /settings/notices/channels`（v0.22）
  *
  * 这个"分源"不是临时凑合：它比一次性快照**更抗演进** ——
- * 通知那块交付时只需要在这里多一行，不用推翻结构。
+ * 新增一块只需在这里多一行，不用推翻结构。
+ *
+ * ⚠️ `GET /settings`（四块快照）v0.22 起也实现了，但这里**仍然不用它**。
+ *    理由：那个端点要求四块全部成功才返回，任何一块出问题整页进错误态；
+ *    而分源拉可以只让**出问题的那一块**失败。当前两者行为其实一样
+ *    （下面的 `Promise.all` 就是"任一路失败整页错误"），但分源保留了
+ *    "将来某一块改成软失败"的余地，而聚合端点没有。
+ *
+ * ## ★ v0.22 修的一处真实缺口
+ *
+ * 这个函数原来只拉**三路**，`notices` 那一跳**根本没接** ——
+ * 而 `BACKEND_PENDING.notices` 在同一轮改动里已经被置成 `false`、
+ * 注释也宣称"通知走真实接口了"。
+ *
+ * 后果不是"少一个功能"，而是**显示假数据**：`notices` 永远停在
+ * 文件上方那份内存种子（`ch_email` 安全组邮件列表、`ch_slack` 研发值班群），
+ * 于是刷新设置页看到的是后端并不存在的两条渠道，而点它们的"删除"
+ * 会打 `DELETE /settings/notices/channels/ch_email` → 后端 404。
+ *
+ * 教训：**改"这一块已交付"的声明时，必须同时确认读取路径真的接上了。**
+ * 声明与实现不一致时，界面会以"看起来正常但内容是假的"方式坏掉 ——
+ * 比直接报错难查得多。
  */
 export async function loadSettings(): Promise<void> {
   loadStarted = true
@@ -339,17 +371,21 @@ export async function loadSettings(): Promise<void> {
   commit()
 
   try {
-    // 三个来源**并行**拉：它们互不依赖，串行会白等两个往返。
+    // 五路**并行**拉：它们互不依赖，串行会白等四个往返。
     // ⚠️ 用 Promise.all 而不是分别 try —— 任何一路失败都该让整页进错误态，
     //    因为半加载的设置页比明确的错误页更让人困惑。
-    const [remoteTokens, remoteAccounts, remoteSandbox] = await Promise.all([
-      api.get<ApiToken[]>('/settings/tokens'),
-      loadAccounts(),
-      api.get<SandboxConfig>('/settings/sandbox'),
-    ])
+    const [remoteTokens, remoteAccounts, remoteSandbox, remoteRule, remoteChannels] =
+      await Promise.all([
+        api.get<ApiToken[]>('/settings/tokens'),
+        loadAccounts(),
+        api.get<SandboxConfig>('/settings/sandbox'),
+        api.get<NoticeRule>('/settings/notices/rule'),
+        api.get<NotifyChannel[]>('/settings/notices/channels'),
+      ])
     tokens = remoteTokens
     accounts = remoteAccounts
     sandbox = remoteSandbox
+    notices = { rule: remoteRule, channels: remoteChannels }
     dataStatus = 'ready'
     loadError = null
   } catch (error) {
@@ -426,8 +462,24 @@ export type SaveResult =
  *   与其在调用点加一个永远走不到的兜底分支，不如让类型如实描述：
  *   非法状态在类型上就不可表达 —— 这与项目里 ReportScope 用
  *   discriminated union 而不是"三个可选字段"是同一个判断。
+ *
+ * ## ★ 成功分支上的 `message` 是可选的（v0.22 补）
+ *
+ * 有些动作成功了但**需要补一句话**才说得清。最典型的是测试通知：
+ *
+ *   · "地址形状没问题，但真实发送还没接入" —— 这是一个**成功执行、
+ *     但没有真的送达**的结果。只说 `ok` 会让界面显示一个绿勾，
+ *     而用户会据此以为告警链路通了；
+ *   · 而报 `failed` 也不对 —— 动作本身确实成功执行了。
+ *
+ * 所以 `message` 在 ok 分支上可选：**有话说时就说，没话说时不说**。
+ * 调用方（`NotifyPanel`）据此显示一句中性说明，而不是一个会撒谎的绿勾。
+ *
+ * ⚠️ 这个字段是**可选**的，所以既有调用方（`verifyProvider`）不受影响。
  */
-export type ActionResult = { status: 'ok'; at: string } | { status: 'failed'; error: string }
+export type ActionResult =
+  | { status: 'ok'; at: string; message?: string }
+  | { status: 'failed'; error: string }
 
 // ─────────────────────────────────────────────
 // Provider 变更
@@ -696,76 +748,153 @@ export async function saveSandbox(next: SandboxConfig): Promise<SaveResult> {
 }
 
 // ─────────────────────────────────────────────
-// 通知
+// 通知（v0.22 接真实接口）
 // ─────────────────────────────────────────────
+//
+// ★ 这四块此前是**内存态**：改完刷新就回到初始值，而界面上挂着
+//   "后端接口尚未交付"的提示。后端 v0.22 交付了这五个端点，
+//   所以这里必须真的走 API。
+//
+//   ⚠️ 提示也要跟着改 —— 继续显示"后端未交付"是**反向失真**：
+//      它在否认一个已经可靠的功能。与吹嘘没有的能力是同一种失真，
+//      只是方向相反（`BACKEND_PENDING` 那段注释里已经写过这条原则，
+//      当时是用它把 `sandbox` 摘出去的）。
 
-export function saveNoticeRule(rule: NoticeRule): SaveResult {
-  notices = { ...notices, rule: { ...rule } }
-  commit()
-  return { status: 'ok', at: new Date().toISOString() }
-}
-
-let channelSeq = 0
-export function nextChannelId(kind: string): string {
-  channelSeq += 1
-  return `ch_${kind}_${String(channelSeq).padStart(2, '0')}`
-}
-
-export function saveNotifyChannel(next: NotifyChannel): SaveResult {
-  const exists = notices.channels.some((c) => c.id === next.id)
-  const normalized: NotifyChannel = { ...next, target: next.target.trim() }
-
-  notices = {
-    ...notices,
-    channels: exists
-      ? notices.channels.map((c) => (c.id === normalized.id ? normalized : c))
-      : [...notices.channels, normalized],
+export async function saveNoticeRule(rule: NoticeRule): Promise<SaveResult> {
+  try {
+    const saved = await api.put<NoticeRule>('/settings/notices/rule', {
+      minSeverity: rule.minSeverity,
+      notifyOnScanComplete: rule.notifyOnScanComplete,
+      notifyOnCriticalImmediate: rule.notifyOnCriticalImmediate,
+    })
+    notices = { ...notices, rule: saved }
+    commit()
+    return { status: 'ok', at: new Date().toISOString() }
+  } catch (error) {
+    return { status: 'failed', error: messageOf(error) }
   }
-  commit()
-  return { status: 'ok', at: new Date().toISOString() }
-}
-
-export function removeNotifyChannel(id: string): SaveResult {
-  if (!notices.channels.some((c) => c.id === id)) {
-    return { status: 'failed', error: '这个通知渠道不存在' }
-  }
-  notices = { ...notices, channels: notices.channels.filter((c) => c.id !== id) }
-  commit()
-  return { status: 'ok', at: new Date().toISOString() }
 }
 
 /**
- * 发送测试通知 —— **后端未交付，所以什么都做不了，并如实说明**。
+ * 新建渠道 —— `POST /settings/notices/channels`。
  *
- * ★ 这里原来有一段"按地址形态编造结果"的 mock：占位地址报失败、
- *   看起来合法的地址报成功。它在界面上显示的是
- *   「测试消息已送达 · 刚刚」，而**实际上一个字节都没发出去**。
+ * ⚠️ **id 由服务端分配**，前端不再自己造 `ch_webhook_01` 这种编号。
+ *    让客户端指定主键等于让它决定"覆盖哪一条"。
+ */
+export async function createNotifyChannel(
+  draft: Omit<NotifyChannel, 'id' | 'verified' | 'verifyError'>,
+): Promise<{ channel: NotifyChannel } | { error: string }> {
+  try {
+    const channel = await api.post<NotifyChannel>('/settings/notices/channels', {
+      kind: draft.kind,
+      label: draft.label,
+      target: draft.target.trim(),
+      enabled: draft.enabled,
+    })
+    notices = { ...notices, channels: [...notices.channels, channel] }
+    commit()
+    return { channel }
+  } catch (error) {
+    return { error: messageOf(error) }
+  }
+}
+
+/**
+ * 改渠道 —— `PATCH /settings/notices/channels/{id}`。
  *
- *   这比"没有这个功能"严重得多。通知是**安全告警通道**，
- *   用户配置时唯一要问的问题就是"出事的时候我收得到吗" ——
- *   这个按钮存在的全部意义就是把"通知到底通不通"从**事故时**提前到**配置时**。
- *   给他一个假的「已送达」，等于让他带着一条从未验证过的告警通道上线，
- *   而且他会因为见过那句绿字而**更加确信它没问题**。
+ * ★ 只提交**改动的那几项**。后端对 `target` 的改动会把 `verified`
+ *   打回 `False`（因为"这个地址验证过"的事实不再成立），
+ *   所以响应里的 `verified` 可能与我们提交的不同 —— **以响应为准**。
+ */
+export async function updateNotifyChannel(
+  id: string,
+  patch: Partial<Pick<NotifyChannel, 'label' | 'target' | 'enabled'>>,
+): Promise<{ channel: NotifyChannel } | { error: string }> {
+  try {
+    const channel = await api.patch<NotifyChannel>(`/settings/notices/channels/${id}`, patch)
+    notices = {
+      ...notices,
+      channels: notices.channels.map((c) => (c.id === id ? channel : c)),
+    }
+    commit()
+    return { channel }
+  } catch (error) {
+    return { error: messageOf(error) }
+  }
+}
+
+export async function removeNotifyChannel(id: string): Promise<SaveResult> {
+  try {
+    // ⚠️ 方法名是 `del` 而不是 `delete` —— `delete` 是 JS 保留字，
+    //    写成对象字面量的属性名虽然合法，但读起来像语法错误。
+    await api.del(`/settings/notices/channels/${id}`)
+    notices = { ...notices, channels: notices.channels.filter((c) => c.id !== id) }
+    commit()
+    return { status: 'ok', at: new Date().toISOString() }
+  } catch (error) {
+    return { status: 'failed', error: messageOf(error) }
+  }
+}
+
+/**
+ * 发送测试通知 —— `POST /settings/notices/channels/{id}/test`。
  *
- *   契约 §9 里 `/settings` 仍未交付，所以现在没有任何方式真实验证。
- *   如实返回"未接入"，界面据此**禁用按钮并说明原因** ——
- *   与 `LaunchButton` 立下的同一条规矩：**禁用必须给原因**。
+ * ## 这里原来有一段"按地址形态编造结果"的 mock
  *
- * ⚠️ 后端交付 `POST /settings/notify/test` 之后，这个函数应当改成
- *    真实请求，并把失败原因（DNS 解析失败 / 4xx / 超时）原样透传 ——
- *    那句错误信息是用户唯一能拿到的线索。
+ * 占位地址报失败、看起来合法的地址报成功，界面上显示
+ * 「测试消息已送达 · 刚刚」，而**实际上一个字节都没发出去**。
+ *
+ * 那比"没有这个功能"严重得多。通知是**安全告警通道**，用户配置时
+ * 唯一要问的问题就是"出事的时候我收得到吗" —— 这个按钮存在的全部意义
+ * 就是把"通知到底通不通"从**事故时**提前到**配置时**。
+ * 给他一个假的「已送达」，等于让他带着一条从未验证过的告警通道上线，
+ * 而且他会因为见过那句绿字而**更加确信它没问题**。
+ *
+ * ## 现在的诚实做法
+ *
+ * 后端 v0.22 实现了这个端点，但它**只做本地校验、不真的往外发**
+ * （真实发送需要 SMTP / Webhook / Slack 三套协议实现）。
+ * 所以后端把结论如实写进 `verifyError`，这里**原样透传那句话** ——
+ * 包括"地址形状正确，但真实发送尚未接入"这种"没成功但也没错"的结论。
+ *
+ * ⚠️ **不要把它包装成成功**。返回 `status: 'failed'` 并带上后端那句原话，
+ *    用户看到的是"地址没问题，但真实发送还没接" —— 这是一个**准确的**
+ *    认知，而不是一个会撒谎的绿勾。
  */
 export async function sendTestNotification(channel: NotifyChannel): Promise<ActionResult> {
-  /*
-    参数在未接入的当下用不到，但**必须保留**：后端的测试端点需要它
-    （要用用户刚填的那份地址，而不是已保存的那份）。
-    这一行是给 lint 看的 —— 它不是"反正不用"，是**故意先留着接口形状**。
-  */
-  void channel
+  try {
+    const updated = await api.post<NotifyChannel>(
+      `/settings/notices/channels/${channel.id}/test`,
+    )
+    notices = {
+      ...notices,
+      channels: notices.channels.map((c) => (c.id === channel.id ? updated : c)),
+    }
+    commit()
 
-  return {
-    status: 'failed',
-    error: '测试发送需要后端接口，当前版本尚未交付 —— 无法验证这条通道是否可达。',
+    if (updated.verified) {
+      return { status: 'ok', at: new Date().toISOString(), message: '测试通知已送达。' }
+    }
+    /*
+      ⚠️ 走到这里**是当前唯一可能的结果** —— 后端 v0.22 的测试端点
+      只做本地校验、不真的往外发（真实发送需要 SMTP / Webhook / Slack
+      三套协议实现，是独立的一块工作）。所以 `verified` 恒为 `false`，
+      而 `verifyError` 里写着具体原因。
+
+      这不是"失败"，也不该报成功 —— 它是**"动作执行了，但结论是
+      还不能确认送达"**。所以如实透传后端那句话，让用户看到
+      "地址形状没问题，但真实发送还没接"，而不是一个绿勾。
+
+      ⚠️ 上面那个 `if (updated.verified)` 分支现在走不到，但**不能删** ——
+         后端接上真实发送之后它就会走到。留着它，并在注释里说明现状，
+         比删掉它、等那时再想起来补要可靠。
+    */
+    return {
+      status: 'failed',
+      error: updated.verifyError ?? '测试未通过，但服务端没有给出原因。',
+    }
+  } catch (error) {
+    return { status: 'failed', error: messageOf(error) }
   }
 }
 

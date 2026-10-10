@@ -2,14 +2,16 @@
 
 | 方法   | 路径                                   | 状态            |
 | ------ | -------------------------------------- | --------------- |
-| GET    | `/settings`                            | 501（任务 7）   |
+| GET    | `/settings`                            | **已实现**（v0.22）|
 | GET    | `/settings/sandbox`                    | **已实现**      |
 | PUT    | `/settings/sandbox`                    | **已实现**      |
-| PUT    | `/settings/notices/rule`               | 501（任务 7）   |
-| POST   | `/settings/notices/channels`           | 501（任务 7）   |
-| PATCH  | `/settings/notices/channels/{id}`      | 501（任务 7）   |
-| DELETE | `/settings/notices/channels/{id}`      | 501（任务 7）   |
-| POST   | `/settings/notices/channels/{id}/test` | 501（任务 7）   |
+| GET    | `/settings/notices/rule`               | **已实现**（v0.22）|
+| PUT    | `/settings/notices/rule`               | **已实现**（v0.22）|
+| GET    | `/settings/notices/channels`           | **已实现**（v0.22）|
+| POST   | `/settings/notices/channels`           | **已实现**（v0.22）|
+| PATCH  | `/settings/notices/channels/{id}`      | **已实现**（v0.22）|
+| DELETE | `/settings/notices/channels/{id}`      | **已实现**（v0.22）|
+| POST   | `/settings/notices/channels/{id}/test` | **已实现**（v0.22）|
 | GET    | `/settings/tokens`                     | **已实现**      |
 | POST   | `/settings/tokens`                     | **已实现**      |
 | DELETE | `/settings/tokens/{id}`                | **已实现**      |
@@ -17,7 +19,7 @@
 
 令牌管理与改口令属于**认证**，所以在任务 1 就实现（它们直接用
 `app/auth/service.py`，没有额外业务逻辑）。沙箱与通知是真正的
-settings 内容，属于任务 7。
+settings 内容。
 
 ⚠️ 实现沙箱配置时的两条约束（契约 §2.9 / §6）：
 
@@ -32,9 +34,15 @@ settings 内容，属于任务 7。
 `sandbox_config` 新增了三列（并发 / 回合上限 / 扫描深度），它们与沙箱配置
 一起在这个端点上读写 —— 因为它们回答的是同一类问题："扫描跑起来是什么样"。
 
-`GET /settings` 那个"四块快照"**仍然没实现**，这一点是刻意的：
-用一个只填了 sandbox 的半成品顶上，调用方会以为自己拿到了完整快照。
-要读沙箱请用 `/settings/sandbox`。
+## v0.22：最后六个 501 清零
+
+`GET /settings` 与五个通知端点是本模块**最后未实现**的部分。它们此前是
+501，理由是"四块快照缺三块却回 200 会让调用方以为拿全了" —— 那个理由
+当时成立，但它的代价是**设置页有一整块是死的**。
+
+现在四块（accounts / sandbox / notices / tokens）都能拼出来了，所以
+`GET /settings` 可以真的返回完整快照。**判断标准没有变**：
+只要有一块拼不出来，这个端点就该继续 501，而不是回一个半成品。
 """
 
 from __future__ import annotations
@@ -52,14 +60,22 @@ from app.core.db import get_db
 from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.core.results import SaveOk
-from app.core.stubs import pending
 from app.core.timeutil import now_utc
+from app.core.vocab import NotifyChannelKind, Severity, values
+from app.providers.schemas import ProviderOut
+from app.settings import service as settings_service
 from app.settings.schemas import (
     ChangePasswordRequest,
     CreateTokenRequest,
     ExecutionSourceOut,
     FindingSlaIn,
     FindingSlaOut,
+    NoticeRuleIn,
+    NoticeRuleOut,
+    NoticesOut,
+    NotifyChannelIn,
+    NotifyChannelOut,
+    NotifyChannelPatch,
     SandboxIn,
     SandboxOut,
     ScanRetentionIn,
@@ -67,6 +83,7 @@ from app.settings.schemas import (
     ScanViewOut,
     ScanViewsIn,
     ScanViewsOut,
+    SettingsSnapshotOut,
 )
 
 router = APIRouter(prefix="/settings", tags=["设置"])
@@ -364,12 +381,57 @@ def _view_out(view) -> ScanViewOut:  # noqa: ANN001
     )
 
 
-@router.get("", summary="一次返回 SettingsSnapshot（accounts/sandbox/notices/tokens）")
-def read_settings(_identity: Annotated[Identity, Depends(require_admin)]) -> None:
-    # ⚠️ 仍然没实现，而且**不打算**用一个只填了 sandbox 的半成品顶上：
-    # 这个端点的契约是"一次返回四块快照"，缺三块却返回 200，
-    # 调用方会以为自己拿到了完整快照。要读沙箱用下面那个专门的端点。
-    pending(_TASK, "设置快照")
+@router.get("", response_model=SettingsSnapshotOut, summary="一次返回 SettingsSnapshot（accounts/sandbox/notices/tokens）")
+def read_settings(
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SettingsSnapshotOut:
+    """设置页的**一次拉全**。
+
+    ## v0.22 实现 —— 而它此前是 501，那个决定是对的
+
+    这个端点长期是 501，理由写在当时的注释里：
+
+    > 用一个只填了 sandbox 的半成品顶上，调用方会以为自己拿到了完整快照。
+
+    那条判断**至今成立**，本轮也没有推翻它 —— 推翻的是它的前提：
+    现在四块（accounts / sandbox / notices / tokens）**都拼得出来**了，
+    所以可以真的返回完整快照。
+
+    ⚠️ 这条规矩要留着：**只要还有一块拼不出来，这个端点就该继续 501**。
+    回一个缺字段的 200 比 501 糟得多 —— 501 至少说的是实话。
+
+    ## 为什么 `status` / `error` 不在响应里
+
+    前端 `SettingsSnapshot` 上那两个字段是**本地加载状态**（`'loading'`
+    / `'ready'` / `'error'` 与一个 `ApiError`）。它们描述的是"这次请求
+    进行得怎么样"，而不是服务端的数据 —— 让服务端下发它们等于让
+    服务端替前端声明自己的状态机。契约 §3.7 也按这个口径写。
+    """
+    from app.providers import service as providers_service
+
+    sandbox = _sandbox_out(db)
+    rule = settings_service.get_notice_rule(db)
+    channels = settings_service.list_channels(db)
+    tokens = auth_service.list_tokens(db)
+
+    return SettingsSnapshotOut(
+        accounts=[
+            ProviderOut.from_model(account)
+            for account in providers_service.list_providers(db)
+        ],
+        sandbox=sandbox,
+        notices=NoticesOut(
+            rule=NoticeRuleOut(
+                minSeverity=rule.min_severity,
+                notifyOnScanComplete=rule.notify_on_scan_complete,
+                notifyOnCriticalImmediate=rule.notify_on_critical_immediate,
+                updatedAt=rule.updated_at,
+            ),
+            channels=[_channel_out(channel) for channel in channels],
+        ),
+        tokens=[ApiTokenOut.model_validate(token) for token in tokens],
+    )
 
 
 # ══════════════════════════════════════════════════════════
@@ -476,34 +538,223 @@ def update_sandbox(
     return _sandbox_out(db, config=config)
 
 
-@router.put("/notices/rule", summary="通知规则")
-def update_notice_rule(_identity: Annotated[Identity, Depends(require_admin)]) -> None:
-    pending(_TASK, "通知规则")
+# ══════════════════════════════════════════════════════════
+# 通知（v0.22 —— 本模块最后一块）
+# ══════════════════════════════════════════════════════════
+#
+# ## 规则与渠道是**两个端点、两个维度**
+#
+# `NoticeRule`（什么情况下发）是**单例**：它必须有值。
+# `NotifyChannel`（怎么发）是**列表**：空表是正常状态。
+#
+# 合成一个对象会让「邮件收全部、Slack 只收严重」无处表达 ——
+# 契约 §2.9 有完整论证。
 
 
-@router.post("/notices/channels", status_code=201, summary="新增通知渠道")
-def create_channel(_identity: Annotated[Identity, Depends(require_admin)]) -> None:
-    pending(_TASK, "通知渠道")
+def _channel_out(channel) -> NotifyChannelOut:  # noqa: ANN001
+    return NotifyChannelOut(
+        id=channel.id,
+        kind=channel.kind,
+        label=channel.label,
+        target=channel.target,
+        enabled=channel.enabled,
+        verified=channel.verified,
+        verifyError=channel.verify_error,
+        createdAt=channel.created_at,
+        updatedAt=channel.updated_at,
+    )
 
 
-@router.patch("/notices/channels/{channelId}", summary="修改通知渠道")
+def _rule_out(rule) -> NoticeRuleOut:  # noqa: ANN001
+    return NoticeRuleOut(
+        minSeverity=rule.min_severity,
+        notifyOnScanComplete=rule.notify_on_scan_complete,
+        notifyOnCriticalImmediate=rule.notify_on_critical_immediate,
+        updatedAt=rule.updated_at,
+    )
+
+
+@router.get("/notices/rule", response_model=NoticeRuleOut, summary="通知规则")
+def read_notice_rule(
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> NoticeRuleOut:
+    """读通知规则。**没有行就建一条默认的** —— 规则是单例，它必须有值。"""
+    return _rule_out(settings_service.get_notice_rule(db))
+
+
+@router.put("/notices/rule", response_model=NoticeRuleOut, summary="改通知规则")
+def update_notice_rule(
+    payload: NoticeRuleIn,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> NoticeRuleOut:
+    """改通知规则。
+
+    ⚠️ `minSeverity` 走**白名单校验**，不是自由字符串：
+    它是 `Severity` 的取值之一，而 DB 上还有一条 CHECK 约束
+    （`min_severity_valid`）兜底。这里先校验是为了给出**中文错误消息** ——
+    让用户看到"应为 critical、high、medium、low、info 之一"，
+    而不是一条 Postgres 的约束违反错误。
+    """
+    if payload.minSeverity not in set(values(Severity)):
+        raise ApiError.validation(
+            {"minSeverity": f"应为 {'、'.join(values(Severity))} 之一"}
+        )
+
+    rule = settings_service.get_notice_rule(db)
+    rule.min_severity = payload.minSeverity
+    rule.notify_on_scan_complete = payload.notifyOnScanComplete
+    rule.notify_on_critical_immediate = payload.notifyOnCriticalImmediate
+    db.commit()
+    db.refresh(rule)
+    return _rule_out(rule)
+
+
+@router.get(
+    "/notices/channels", response_model=list[NotifyChannelOut], summary="通知渠道列表"
+)
+def list_channels(
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[NotifyChannelOut]:
+    """**裸数组**，不是 `{channels: [...]}` —— 与 `GET /settings/tokens`
+    同形状，前端两处可以共用同一个渲染组件（契约 §3.7）。"""
+    return [_channel_out(channel) for channel in settings_service.list_channels(db)]
+
+
+@router.post(
+    "/notices/channels",
+    status_code=201,
+    response_model=NotifyChannelOut,
+    summary="新增通知渠道",
+)
+def create_channel(
+    payload: NotifyChannelIn,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> NotifyChannelOut:
+    """新建渠道。
+
+    ⚠️ `verified` **不接受客户端传**（schema 里就没有这个字段）——
+    "已验证"是服务端真的发过一次测试通知的**事实**，不是用户的声明。
+    让请求体能带它，界面上那个绿勾就变得毫无意义。
+    """
+    _validate_channel_kind(payload.kind)
+    channel = settings_service.create_channel(
+        db,
+        kind=payload.kind,
+        label=payload.label,
+        target=payload.target,
+        enabled=payload.enabled,
+    )
+    return _channel_out(channel)
+
+
+@router.patch(
+    "/notices/channels/{channelId}",
+    response_model=NotifyChannelOut,
+    summary="修改通知渠道",
+)
 def update_channel(
-    channelId: str, _identity: Annotated[Identity, Depends(require_admin)]
-) -> None:
-    pending(_TASK, "通知渠道")
+    channelId: str,
+    payload: NotifyChannelPatch,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> NotifyChannelOut:
+    """部分更新。改 `target` 会把 `verified` 打回 `False`（见 service 的说明）。"""
+    channel = settings_service.update_channel(
+        db,
+        channelId,
+        label=payload.label,
+        target=payload.target,
+        enabled=payload.enabled,
+    )
+    return _channel_out(channel)
 
 
 @router.delete(
     "/notices/channels/{channelId}", status_code=204, summary="删除通知渠道"
 )
 def delete_channel(
-    channelId: str, _identity: Annotated[Identity, Depends(require_admin)]
+    channelId: str,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
 ) -> None:
-    pending(_TASK, "通知渠道")
+    """**硬删除**。渠道是一次性配置，不像漏洞/扫描那样是证据。"""
+    settings_service.delete_channel(db, channelId)
 
 
-@router.post("/notices/channels/{channelId}/test", summary="发测试通知（动作型）")
+@router.post(
+    "/notices/channels/{channelId}/test",
+    response_model=NotifyChannelOut,
+    summary="发测试通知（动作型）",
+)
 def test_channel(
-    channelId: str, _identity: Annotated[Identity, Depends(require_admin)]
-) -> None:
-    pending(_TASK, "测试通知")
+    channelId: str,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> NotifyChannelOut:
+    """发一条测试通知，并把结果记进 `verified` / `verifyError`。
+
+    ## ⚠️ 本轮**只做本地校验**，不真的往外发
+
+    真实的发送需要一个 HTTP 客户端 + 每个渠道类型的协议实现
+    （SMTP / Webhook POST / Slack 的 payload 形状）。那是独立的一块工作，
+    而**假装发了**是本项目明确禁止的那类做法 —— 它会让界面显示
+    "已验证"，而真出事时一条通知都发不出去。
+
+    所以这里做的是**能诚实做到的那部分**：校验地址形状，把结论写回。
+    形状不对的地址会被标成未验证并给出原因（这本身就有用 ——
+    用户在保存时就能发现拼错的 URL）。
+
+    ⚠️ **这句话必须留在响应里**：`verifyError` 会写"尚未接入真实发送"，
+    而不是留一个空的成功态。用户看到的是"地址形状没问题，
+    但真实发送还没接" —— 而不是一个会撒谎的绿勾。
+    """
+    channel = settings_service.get_channel(db, channelId)
+    problem = _target_shape_problem(channel.kind, channel.target)
+
+    if problem is None:
+        channel = settings_service.mark_channel_verified(
+            db,
+            channelId,
+            ok=False,
+            error="地址形状正确，但真实发送尚未接入（本轮只做本地校验）。",
+        )
+    else:
+        channel = settings_service.mark_channel_verified(db, channelId, ok=False, error=problem)
+
+    return _channel_out(channel)
+
+
+def _validate_channel_kind(kind: str) -> None:
+    """渠道类型白名单。DB 上有 CHECK 兜底，这里先校验是为了中文消息。"""
+    if kind not in set(values(NotifyChannelKind)):
+        raise ApiError.validation(
+            {"kind": f"应为 {'、'.join(values(NotifyChannelKind))} 之一"}
+        )
+
+
+def _target_shape_problem(kind: str, target: str) -> str | None:
+    """按渠道类型校验地址形状。返回问题描述，没问题返回 `None`。
+
+    三类各自的判据**刻意宽松**：这是配置校验，不是安全边界。
+    过严会把合法地址挡在门外（内网 SMTP、带端口的 webhook、
+    非标准 TLD），而用户无法绕过 —— 与 `validate-target` 那条
+    "刻意不做得太严"是同一条理由（契约 §2.8）。
+    """
+    if kind == NotifyChannelKind.EMAIL.value:
+        # 只要求有个 @ 且两边都非空 —— 邮箱的完整正则是个无底洞，
+        # 而"发不出去"最终由真实发送来判定
+        local, _, domain = target.partition("@")
+        if not local or not domain:
+            return "邮箱地址缺少 @ 或 @ 两侧为空。"
+        return None
+
+    if kind in (NotifyChannelKind.WEBHOOK.value, NotifyChannelKind.SLACK.value):
+        if not target.startswith(("http://", "https://")):
+            return "Webhook 地址必须以 http:// 或 https:// 开头。"
+        return None
+
+    return f"未知的渠道类型：{kind}"

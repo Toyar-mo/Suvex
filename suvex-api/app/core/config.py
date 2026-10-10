@@ -269,6 +269,18 @@ class Settings(BaseSettings):
     sse_heartbeat_seconds: int = 20
     sse_replay_max_events: int = 1000
 
+    # ── 可观测性（v0.23）──────────────────────────────────
+    #
+    # ★ 默认**开**。理由：指标的价值在"出事时已经有数据了" ——
+    #   一个默认关闭的指标端点，在真正需要它的那一刻才开始收集，
+    #   而那时你已经错过了出事前后的那段曲线。
+    #
+    # 它的暴露面很小（只有数字，没有业务数据 —— 见 `core/metrics.py`），
+    # 而关掉的方式很明确（配 `SUPEX_METRICS_ENABLED=false`，
+    # 或在反代上把 `/metrics` 限到监控网段）。
+    # 这两点合起来让"默认开"是个安全的选择。
+    metrics_enabled: bool = True
+
     @field_validator("cors_origins")
     @classmethod
     def _strip_origins(cls, value: str) -> str:

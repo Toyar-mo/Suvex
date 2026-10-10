@@ -15,9 +15,11 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
+from app.auth.schemas import ApiTokenOut
 from app.core.schemas import CamelModel, StrictModel
 from app.core.timeutil import IsoDateTime
 from app.core.vocab import TokenScope
+from app.providers.schemas import ProviderOut
 from app.settings.models import (
     MIN_CPU_LIMIT,
     MIN_MEMORY_LIMIT_MB,
@@ -223,3 +225,113 @@ class SandboxIn(StrictModel):
     maxConcurrentScans: int = Field(ge=MIN_CONCURRENT_SCANS, le=MAX_CONCURRENT_SCANS)
     scanMaxTurns: int = Field(ge=MIN_SCAN_MAX_TURNS, le=MAX_SCAN_MAX_TURNS)
     scanMode: str
+
+
+# ══════════════════════════════════════════════════════════
+# 通知（v0.22，任务 7 的最后一块）
+# ══════════════════════════════════════════════════════════
+#
+# ## 这两个形状是**分离的**，不是"一个配置对象拆成两块"
+#
+# `NoticeRule`（什么情况下发）与 `NotifyChannel`（怎么发）是两个维度。
+# 把「Slack 地址」和「只通知严重漏洞」放进同一个对象，会导致
+# 「我想让邮件收到所有级别、Slack 只收严重」这种真实需求**无处表达**。
+#
+# 所以：规则里没有地址，渠道里没有阈值。契约 §2.9 有同样的说明。
+
+
+class NoticeRuleOut(CamelModel):
+    """`GET/PUT /settings/notices/rule`。"""
+
+    minSeverity: str
+    notifyOnScanComplete: bool
+    notifyOnCriticalImmediate: bool
+    updatedAt: IsoDateTime
+
+
+class NoticeRuleIn(StrictModel):
+    """`PUT /settings/notices/rule`。
+
+    ⚠️ 三个字段**全部必填**（与 `ScanRetentionIn` / `SandboxIn` 同一条理由）：
+    配置类端点漏传一项是调用方 bug，而给默认值会让它静默改回默认 ——
+    用户以为自己只改了一项，实际另一项被重置了。
+    """
+
+    minSeverity: str
+    notifyOnScanComplete: bool
+    notifyOnCriticalImmediate: bool
+
+
+class NotifyChannelOut(CamelModel):
+    """一个通知渠道。
+
+    ⚠️ **没有 `target` 之外的敏感字段** —— 但 `target` 本身是敏感的
+    （Slack Webhook URL 就是一把凭据：拿到它就能往那个群发消息）。
+    所以它只在 `admin` 级端点上出现（`require_admin`），
+    与 provider 的 `apiKeyMask` 同一条思路的**较弱版本**：
+    这里没做掩码，因为用户需要看到并编辑完整地址才能改它 ——
+    而掩码会让"我只想改个错别字"变成"必须重新粘贴整条 URL"。
+    """
+
+    id: str
+    kind: str
+    label: str
+    target: str
+    enabled: bool
+    verified: bool
+    verifyError: str | None
+    createdAt: IsoDateTime
+    updatedAt: IsoDateTime
+
+
+class NotifyChannelIn(StrictModel):
+    """`POST /settings/notices/channels`（新建）。
+
+    `id` 由**服务端**分配 —— 与 `POST /providers` 同一条规则：
+    让客户端指定主键等于让它决定"覆盖哪一条"。
+    """
+
+    kind: str
+    label: str = Field(min_length=1, max_length=120)
+    target: str = Field(min_length=1, max_length=2000)
+    enabled: bool = True
+
+
+class NotifyChannelPatch(StrictModel):
+    """`PATCH /settings/notices/channels/{id}`（部分更新）。
+
+    ⚠️ 这里是**唯一允许部分更新**的配置端点，与上面几个"全必填"的不同。
+    理由：渠道是**列表里的一条**，而前端改一行时只提交改动的那几个字段
+    是自然的；而规则是**单例**，改它就是"这份配置现在长这样"。
+    """
+
+    label: str | None = Field(default=None, min_length=1, max_length=120)
+    target: str | None = Field(default=None, min_length=1, max_length=2000)
+    enabled: bool | None = None
+
+
+class NoticesOut(CamelModel):
+    """通知的两块 —— 规则与渠道。
+
+    它们**打包在一起**返回（而不是两个端点各返回一块），因为
+    `GET /settings` 的契约是"一次返回四块快照"，而通知是其中一块。
+    单独读它们仍然走 `/settings/notices/rule` 与
+    `/settings/notices/channels`。
+    """
+
+    rule: NoticeRuleOut
+    channels: list[NotifyChannelOut]
+
+
+class SettingsSnapshotOut(CamelModel):
+    """`GET /settings` —— 设置页一次拉全。
+
+    ⚠️ **不含 `status` / `error`**：前端 `SettingsSnapshot` 上那两个字段
+    是**本地加载状态**，描述的是"这次请求进行得怎么样"，不是服务端数据。
+    服务端下发它们等于替前端声明它自己的状态机。
+    """
+
+    accounts: list[ProviderOut]
+    sandbox: SandboxOut
+    notices: NoticesOut
+    tokens: list[ApiTokenOut]

@@ -24,12 +24,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.errors import ApiError
+from app.core.ids import new_id
 from app.core.vocab import ScanMode, values
-from app.settings.models import SINGLETON_ID, Ctf2Config, SandboxConfig
+from app.settings.models import (
+    SINGLETON_ID,
+    Ctf2Config,
+    NoticeRule,
+    NotifyChannel,
+    SandboxConfig,
+)
 
 # ── 执行参数的合法区间 ────────────────────────────────────
 #
@@ -181,3 +189,148 @@ def read_ctf2_config(db: Session) -> Ctf2Config | None:
     没有行时调用方用代码常量兜底（见 `ctf2.service.effective_ctf2_settings`）。
     """
     return db.get(Ctf2Config, SINGLETON_ID)
+
+
+# ══════════════════════════════════════════════════════════
+# 通知（v0.22，任务 7 的最后一块）
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么 `NoticeRule` 用「没有就建」，而 `NotifyChannel` 不
+#
+# `NoticeRule` 是**单例**：它必须有值（"什么级别才发"不能是空的），
+# 所以 `get_notice_rule()` 没有就建一条默认的 —— 与 `get_sandbox_config`
+# 同一个模式。
+#
+# `NotifyChannel` 是**列表**：空表是完全正常的状态（"我还没配任何渠道"），
+# 所以它没有"建一条默认的"这回事 —— 凭空造一个渠道出来是荒谬的。
+
+
+def get_notice_rule(db: Session) -> NoticeRule:
+    """读通知规则，没有就建一条默认的。"""
+    rule = db.get(NoticeRule, SINGLETON_ID)
+    if rule is None:
+        rule = NoticeRule(id=SINGLETON_ID)
+        db.add(rule)
+        db.commit()
+        db.refresh(rule)
+    return rule
+
+
+def list_channels(db: Session) -> list[NotifyChannel]:
+    """全部通知渠道，按创建时间正序。
+
+    ★ **不隐藏 `enabled=False` 的渠道。** 停用是一个状态，不是删除 ——
+    用户需要看到"我配过这个、现在停着"，否则他会以为它丢了并重新配一个。
+    （与 `GET /settings/tokens` 的"已吊销不列出"不同：那里的令牌
+    已经彻底失效、留着只会造成"它还能用"的误解。）
+    """
+    return list(
+        db.scalars(select(NotifyChannel).order_by(NotifyChannel.created_at, NotifyChannel.id))
+    )
+
+
+def get_channel(db: Session, channel_id: str) -> NotifyChannel:
+    """按 id 取渠道，不存在就 404。
+
+    404 而不是 400：`/settings/notices/channels/{id}` 是**资源路径**，
+    路径里的 id 不存在就是"这个资源不存在" —— 与 `ApiError.not_found`
+    的语义一致。
+    """
+    channel = db.get(NotifyChannel, channel_id)
+    if channel is None:
+        raise ApiError.not_found("通知渠道")
+    return channel
+
+
+def create_channel(
+    db: Session,
+    *,
+    kind: str,
+    label: str,
+    target: str,
+    enabled: bool,
+) -> NotifyChannel:
+    """新建渠道。
+
+    ⚠️ `verified` 一律从 `False` 开始，**不接受客户端传**。
+    "已验证"是服务端真的发过一次测试通知的**事实**，不是用户的声明 ——
+    让请求体带这个字段等于让调用方撒谎，而界面上那个绿勾会变得毫无意义。
+    （与 `POST /providers` 不接受 `hasKey` 是同一条规矩。）
+    """
+    channel = NotifyChannel(
+        id=new_id("ntc"),
+        kind=kind,
+        label=label,
+        target=target,
+        enabled=enabled,
+        verified=False,
+        verify_error=None,
+    )
+    db.add(channel)
+    db.commit()
+    db.refresh(channel)
+    return channel
+
+
+def update_channel(
+    db: Session,
+    channel_id: str,
+    *,
+    label: str | None = None,
+    target: str | None = None,
+    enabled: bool | None = None,
+) -> NotifyChannel:
+    """部分更新。
+
+    ★ **改了 `target` 就要把 `verified` 打回 `False`。**
+
+    这是本函数里唯一不显然的一处：`verified` 的含义是"**这个地址**
+    发过一次测试并成功了"。地址变了，那个事实就不再成立 ——
+    留着绿勾会让用户以为新地址也验证过了，而它可能是个错的 URL。
+    症状是"配好了、显示已验证、但真出事时一条通知都没发出去"。
+
+    `label` 与 `enabled` 的改动**不影响**验证状态：换个名字、
+    临时停用再启用，地址没变，验证事实依然成立。
+    """
+    channel = get_channel(db, channel_id)
+
+    if label is not None:
+        channel.label = label
+    if enabled is not None:
+        channel.enabled = enabled
+    if target is not None and target != channel.target:
+        channel.target = target
+        channel.verified = False
+        channel.verify_error = None
+
+    db.commit()
+    db.refresh(channel)
+    return channel
+
+
+def delete_channel(db: Session, channel_id: str) -> None:
+    """删除渠道。**硬删除**，与令牌吊销同一条理由：
+
+    渠道是一次性配置，删掉就是不再需要它。软删除会留下"回收站里的渠道"
+    这个概念，而它对用户没有任何价值 —— 需要时重新配一个即可
+    （不像漏洞或扫描，那些是**证据**，删掉就没了）。
+    """
+    channel = get_channel(db, channel_id)
+    db.delete(channel)
+    db.commit()
+
+
+def mark_channel_verified(
+    db: Session, channel_id: str, *, ok: bool, error: str | None = None
+) -> NotifyChannel:
+    """记录一次测试通知的结果。**由测试端点调用**，不在路由里写库。
+
+    失败时把 `verify_error` 写下来而不是只留一个红点：
+    "为什么没通过"是用户唯一能据以修复的信息。
+    """
+    channel = get_channel(db, channel_id)
+    channel.verified = ok
+    channel.verify_error = None if ok else (error or "测试通知失败，未返回具体原因")
+    db.commit()
+    db.refresh(channel)
+    return channel

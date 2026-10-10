@@ -39,6 +39,7 @@ from app.auth.router import router as auth_router
 from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
+from app.core.metrics_middleware import MetricsMiddleware
 from app.ctf2.router import router as ctf2_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
@@ -304,6 +305,9 @@ def create_app() -> FastAPI:
         # 自定义响应头默认对 JS 不可见，必须显式放出来。
         expose_headers=["Retry-After"],
     )
+
+    if settings.metrics_enabled:
+        app.add_middleware(MetricsMiddleware)
 
     for router in (
         health_router,

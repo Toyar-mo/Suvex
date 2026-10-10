@@ -1,0 +1,110 @@
+[Unit]
+Description=Suvex API (FastAPI + uvicorn)
+Documentation=https://github.com/Toyar-mo/Suvex
+After=network-online.target docker.service
+Wants=network-online.target
+# ⚠️ `docker.service` 是**真的依赖**，不是顺手加的：
+#    扫描要起沙箱容器（strix 的运行时后端是 docker），
+#    而 CTF2 解题还要用 `suvex-ctf2` 这个网络（启动时由
+#    `ctf2_runner.ensure_ctf2_network()` 建）。docker 没起来的话
+#    服务能启动，但每一次扫描都会失败 —— 而那种失败看起来像
+#    "目标不可达"，排查方向会跑偏。
+Requires=docker.service
+
+[Service]
+Type=simple
+
+# ── 运行身份 ────────────────────────────────────────────────
+#
+# ★ **不要用 root**（Kali 上那套 dev 部署用的是 root，那是权宜）。
+#
+# 理由不是"权限最小化"这种泛泛的话，而是这个服务的具体行为：
+# 它会拉起子进程去执行**用户提供的目标**相关的操作，并把
+# 用户上传的附件解压到磁盘。以 root 跑意味着任何一处路径处理失误
+# 都是整机级的后果。
+#
+# ⚠️ 但注意一个真实约束：**沙箱要访问 docker socket**。
+#    `strix` 通过 `docker` CLI 起容器，所以这个用户必须在
+#    `docker` 组里（见下面的 SupplementaryGroups）。
+#    `docker` 组等价于 root（能挂载宿主根目录进容器），
+#    这一点必须知情 —— 它不是"稍微提权"，它就是 root。
+#    真正要隔离的话，做法是给 strix 配一个远程 docker 端点
+#    （`DOCKER_HOST=ssh://...` 或独立的 dockerd），而不是靠用户组。
+User=suvex
+Group=suvex
+SupplementaryGroups=docker
+
+WorkingDirectory=/opt/suvex/suvex-api
+
+# ── 配置 ────────────────────────────────────────────────────
+#
+# ★ 用 `EnvironmentFile` 而不是把变量写在 `Environment=` 里。
+#
+# 写在 unit 文件里的环境变量会被 `systemctl show` 打出来，
+# 而这份配置里有 `SUPEX_SECRET_KEY`（provider 凭据的加密密钥）——
+# 任何能跑 `systemctl show` 的人都能看到它。`EnvironmentFile`
+# 指向一个 0600 的文件，只有 root 与运行用户读得到。
+#
+# ⚠️ 那个文件里**不要**有引号（systemd 的 EnvironmentFile 语法
+#    与 shell 不同：`KEY="value"` 会把引号当成值的一部分）。
+EnvironmentFile=/etc/suvex/api.env
+
+# ── 启动命令 ────────────────────────────────────────────────
+#
+# ★ 迁移在启动命令里（`alembic upgrade head &&`），不在应用代码里。
+#   理由见 `app/core/bootstrap.py`：藏在启动流程里的迁移，
+#   运维看不到它发生了，失败了日志归属也错。
+#
+# ⚠️ 用 `&&` 而不是 `;` —— 迁移失败就不该起服务。半套表结构的服务
+#    会在第一个业务请求上以"代码 bug"的样子炸掉。
+#
+# ⚠️ `--host 127.0.0.1`（不是 0.0.0.0）：本 unit 假设前面有反向代理
+#    （见 `deploy/nginx.conf`）。直接对公网监听会让这个"能对任意目标
+#    发包"的服务变成一个现成的攻击跳板。
+#
+# ⚠️ `--proxy-headers` 与 `--forwarded-allow-ips` **必须成对出现**。
+#    只加 `--proxy-headers` 会让 uvicorn 信任任何来源的
+#    `X-Forwarded-For` —— 而来源 IP 同时用于**登录限流**与**授权留痕**，
+#    伪造它等于同时绕过这两者。
+ExecStart=/opt/suvex/suvex-api/.venv/bin/uvicorn app.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --proxy-headers \
+    --forwarded-allow-ips=127.0.0.1
+
+# ── 重启策略 ────────────────────────────────────────────────
+#
+# `on-failure` 而不是 `always`：正常退出（运维手动停、或一次
+# 干净的 SIGTERM）不该被自动拉起来 —— 那会让"我停了它"变成
+# "它自己又回来了"，而运维会以为停不掉。
+Restart=on-failure
+RestartSec=5
+
+# ⚠️ 给足停止时间：扫描在跑时应用要等子进程收尾
+#    （`scheduler.stop()` 会终止进程树并回收孤儿）。
+#    默认 90 秒在"一次跑了十几分钟的扫描"上不够，会被 SIGKILL ——
+#    而那会把扫描记录留在 `running` 状态，下次启动才由
+#    `recover_orphans()` 标成 aborted。
+TimeoutStopSec=120
+
+# ── 资源与日志 ──────────────────────────────────────────────
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=suvex-api
+
+# ── 加固 ────────────────────────────────────────────────────
+#
+# ⚠️ 这里只做**与功能不冲突**的那几项。
+#    像 `ProtectSystem=strict` / `PrivateTmp=true` 这类更强的加固
+#    **不能加** —— 服务要往 `_scan_runs/`、`_uploads/` 写文件，
+#    还要通过 docker socket 起容器。加了之后症状是"扫描全部失败"，
+#    而错误信息不会提到 systemd 的沙箱。
+#
+#    要收紧的话正确顺序是：先配 `DOCKER_HOST` 指向远程端点
+#    （那样就不需要 docker 组），再逐项加 `ReadWritePaths`。
+NoNewPrivileges=true
+PrivateDevices=true
+
+[Install]
+WantedBy=multi-user.target
