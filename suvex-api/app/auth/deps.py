@@ -35,9 +35,19 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import ApiError, ErrorCode
 from app.core.security import SCOPE_LABELS, scope_allows
+from app.core.vocab import UserRole, scopes_for_role
 
-# 会话给满三档（契约 §1.2：管理员会话隐含 admin）。
-SESSION_SCOPES: frozenset[str] = frozenset({"read", "scan", "admin"})
+# 会话的 scope **按角色算**（v0.24）。
+#
+# ★ 这里原来是一个写死的常量 `SESSION_SCOPES = {read, scan, admin}`，
+#   注释是"管理员会话隐含 admin（契约 §1.2）"。单管理员时代那是对的。
+#
+#   多用户之后它必须按角色算，而且**规则只能有一份** —— 那份在
+#   `vocab.scopes_for_role`（角色 → scope 的映射）。在这里再写一遍
+#   `if role == 'admin'` 会让"某个角色到底能做什么"要看两处代码，
+#   而两处漂移的症状是"这个人在 A 端点被拒、在 B 端点被放行"。
+#
+# ⚠️ 未知角色 → 空集（403），不是默认给 read。见 `scopes_for_role` 的说明。
 
 # 这些方法不改变状态，不触发 CSRF 检查。
 SAFE_METHODS: frozenset[str] = frozenset({"GET", "HEAD", "OPTIONS", "TRACE"})
@@ -158,12 +168,46 @@ class Identity:
     user_id: str | None = None
     session_id: str | None = None
     token_id: str | None = None
+    # ── 多用户（v0.24）──────────────────────────────────
+    #
+    # `username` 用于**审计留痕**：`AuditEntry.actorLabel` 原来对会话
+    # 一律写"管理员会话"（单账号时代那样写没错，因为只有一个管理员）。
+    # 多用户之后它必须是谁就是谁 —— 否则审计日志回答不了
+    # "上周是谁把 submitMode 改成 auto 的"。
+    username: str | None = None
+    # 会话通道下是账号角色；**令牌通道下是 None**（令牌没有角色，
+    # 它的权限来自自己的 scope）。两者不要混：把令牌的角色算成
+    # "签发者的角色"会让改一个人角色时顺手改掉他所有令牌的权限，
+    # 而那些令牌可能正被别的系统用着。
+    role: str | None = None
 
     def can(self, scope: str) -> bool:
         return scope_allows(sorted(self.scopes), scope)
 
+    def is_admin(self) -> bool:
+        """是不是管理员。
+
+        ⚠️ 判据是 `role`，**不是** `can('admin')`。
+        令牌通道下 `role` 是 None，而一个带 admin scope 的令牌
+        确实能调管理员端点 —— 但"他是不是管理员"这个问题对令牌
+        没有意义。所以这个方法只对会话通道有明确答案，
+        其余返回 False。
+
+        要判"能不能调这个端点"请用 `require_admin`（它看 scope）。
+        """
+        return self.role == UserRole.ADMIN.value
+
     def describe(self) -> str:
-        return "管理员会话" if self.kind == "session" else f"令牌「{self.label}」"
+        """给审计日志与文案用的一句话。
+
+        多用户之后这里要**带上用户名** —— "管理员会话"这句话在
+        多个管理员的系统里等于没说。
+        """
+        if self.kind == "token":
+            return f"令牌「{self.label}」"
+        if self.username:
+            return f"{self.username}（{'管理员' if self.is_admin() else '只读'}）"
+        return "管理员会话"
 
 
 def resolve_identity(request: Request, db: Session) -> Identity | None:
@@ -193,13 +237,29 @@ def resolve_identity(request: Request, db: Session) -> Identity | None:
     session = auth_service.resolve_session(db, raw_session)
     if session is None:
         return None
+
+    # ★ 每次请求都读一次账号，而不是把角色塞进会话行。
+    #
+    # 代价是一次主键查询（微秒级，且有索引）。换来的是：
+    # **管理员改了某人的角色，下一个请求立刻生效**。
+    #
+    # 把角色缓存在会话里（或 Cookie 里）会让降级延迟到该会话过期 ——
+    # 而"我刚把他降成只读，他还在发起扫描"是一个真实的权限漏洞。
+    account = auth_service.get_account_by_id(db, session.user_id)
+    if account is None:
+        # 账号被删了但会话还在（理论上 CASCADE 会带走会话，
+        # 但手工改库或迁移中途可能出现）。按未认证处理。
+        return None
+
     auth_service.touch_session(db, session, ttl_hours=get_settings().session_ttl_hours)
     return Identity(
         kind="session",
         label=f"session:{session.id}",
-        scopes=SESSION_SCOPES,
+        scopes=scopes_for_role(account.role),
         user_id=session.user_id,
         session_id=session.id,
+        username=account.username,
+        role=account.role,
     )
 
 
@@ -313,7 +373,46 @@ def require_scan(identity: Annotated[Identity, Depends(require_identity)]) -> Id
 
 
 def require_admin(identity: Annotated[Identity, Depends(require_identity)]) -> Identity:
-    """改设置、管 provider、管令牌、改密码。"""
+    """改设置、管 provider、管令牌、改密码。
+
+    ⚠️ 判据是 **scope**，不是角色。所以一个带 `admin` scope 的
+    **机器令牌**也能通过 —— 那是刻意的：CI 需要能改配置。
+    "这个人是不是管理员"与"这个凭据能不能做管理员的事"是两个问题，
+    这里回答的是后者。
+
+    要限制"只有真人管理员能做"（比如**管用户**），用
+    `require_admin_session`。
+    """
+    return _require_scope(identity, "admin")
+
+
+def require_admin_session(identity: Annotated[Identity, Depends(require_identity)]) -> Identity:
+    """**只有登录的管理员本人**能做 —— 机器令牌一律拒绝。
+
+    ## 为什么用户管理需要这一道
+
+    管用户（加人、改角色、删人）与其它管理员操作有一个本质区别：
+    它是**对权限本身的操作**。
+
+    一个 `admin` scope 的令牌能改设置、能发起扫描，那些都在
+    "这个令牌被授权做的事"范围内。但让它能**创建一个新的管理员**、
+    或者**把自己签发者的角色改掉**，意味着令牌的权限可以自我放大 ——
+    而令牌是长期有效的（可以设成永不过期），泄漏一个就等于
+    永久拿到用户管理权。
+
+    所以这条线画在"对权限的操作"上，而不是"危害大小"上。
+
+    ⚠️ 顺带它也挡掉了"令牌改自己的权限"这条更绕的路径：
+    令牌没有 `role`（见 `Identity.role` 的说明），所以它连
+    "我是管理员吗"都回答不了。
+    """
+    if identity.kind != "session":
+        raise ApiError(
+            403,
+            ErrorCode.INSUFFICIENT_SCOPE,
+            "用户管理只能用登录会话操作，机器令牌不能管理用户。"
+            "这是刻意的：令牌若能手改权限，它就能自我放大。",
+        )
     return _require_scope(identity, "admin")
 
 

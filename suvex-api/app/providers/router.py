@@ -32,7 +32,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
-from app.auth.deps import Identity, require_admin
+from app.auth.deps import Identity, require_admin, require_read
 from app.core.db import get_db
 from app.core.timeutil import now_utc
 from app.providers import service
@@ -51,11 +51,31 @@ from app.providers.schemas import (
 router = APIRouter(prefix="/providers", tags=["LLM Provider"])
 
 AdminDep = Annotated[Identity, Depends(require_admin)]
+ReadDep = Annotated[Identity, Depends(require_read)]
 DbDep = Annotated[Session, Depends(get_db)]
 
 
 @router.get("", response_model=list[ProviderOut], summary="provider 列表（不含明文凭据）")
-def list_providers(_identity: AdminDep, db: DbDep) -> list[ProviderOut]:
+def list_providers(_identity: ReadDep, db: DbDep) -> list[ProviderOut]:
+    """列出 provider。
+
+    ## ★ v0.24 把这一条的鉴权从 `admin` 放宽到 `read`
+
+    这不是"顺手放宽"，而是**只读角色能用的前提**：
+
+    前端顶部状态条要显示"当前模型 XXX"，而它读的就是这个端点
+    （`Layout` 的 `ensureSettingsLoaded()`）。若它要求 `admin`，
+    那么一个 `viewer` 登录后会看到状态条报错 ——
+    而那个错误看起来像"系统坏了"，不像是权限问题。
+
+    放宽是安全的，因为**这个端点不返回任何明文凭据**：
+    `apiKey` 恒为空串，只有 `apiKeyMask`（见 ADR-003）。
+    写操作（新建 / 改 / 删 / 验证 / 设默认）**仍然是 admin**。
+
+    这条判断可以推广成一句话：**"能不能看到"与"能不能改"是两件事**，
+    而角色模型的分界线主要画在后者上。例外是那些**内容本身就是秘密**
+    的东西（用户列表、审计日志），它们连看都要 admin。
+    """
     return [ProviderOut.from_model(provider) for provider in service.list_providers(db)]
 
 

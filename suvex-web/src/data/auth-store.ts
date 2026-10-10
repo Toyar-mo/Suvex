@@ -34,10 +34,43 @@ import { useSyncExternalStore } from 'react'
 // 类型
 // ─────────────────────────────────────────────
 
-/** 契约 §3.1 的 `UserOut`。**故意只有这两个字段** —— 后端也不返回别的 */
+/**
+ * 契约 §3.1 的 `UserOut`。
+ *
+ * ## v0.24：多了 `username` 与 `role`
+ *
+ * 单管理员时代这里只有 `id` 与 `createdAt`，注释是"故意只有这两个字段 ——
+ * 后端也不返回别的"。多用户之后那两个字段是**必需的**：
+ *
+ *   · `username` —— 界面要显示"当前登录的是谁"。
+ *     只有 id（`user_01M4K…`）的话，用户没法确认自己用的是哪个账号；
+ *   · `role` —— 前端据此决定**显不显示**管理入口。
+ *     少了它，一个 `viewer` 会看到"用户管理"按钮，点进去被 403 拦住 ——
+ *     而"我为什么看得到这个"本身就是个 bug（见后端 `read_me` 的注释）。
+ */
 export interface AuthUser {
   id: string
+  username: string
+  /** `'admin' | 'viewer'`。前端用它做**展示性**的权限判断，真正的拦截在后端 */
+  role: UserRole
   createdAt: string
+}
+
+/** 与后端 `core.vocab.UserRole` 逐字一致 */
+export type UserRole = 'admin' | 'viewer'
+
+/**
+ * 当前用户是不是管理员。
+ *
+ * ⚠️ 这个判断**只用来决定"显不显示"**，绝不用来"决定能不能做" ——
+ * 后者一律由后端拦（前端可以绕过，而且改了 DOM 就能绕过）。
+ *
+ * 用途举例：`viewer` 不该看到"用户管理"入口、"新建扫描"按钮、
+ * 设置页的保存按钮。**看到却点不动**比看不到更糟：
+ * 用户会以为系统坏了，而不是"我没有这个权限"。
+ */
+export function isAdmin(user: AuthUser | null): boolean {
+  return user?.role === 'admin'
 }
 
 export type AuthPhase =
@@ -157,13 +190,23 @@ export async function bootstrapAuth(): Promise<void> {
   }
 }
 
-/** 登录。成功返回 true（调用方据此决定是否跳转） */
-export async function login(password: string): Promise<boolean> {
+/**
+ * 登录。成功返回 true（调用方据此决定是否跳转）。
+ *
+ * ⚠️ v0.24 起要**用户名** —— 多用户之后登录必须能区分是谁，
+ * 否则审计日志里的"谁"只能记成会话 id。
+ *
+ * 用户名的大小写不敏感由**后端**归一化（`service.normalize_username`），
+ * 前端**不做** `toLowerCase()`：那样会让"用户以为输的是原样"
+ * 与"实际发出去的不同"，而排查登录问题时第一件要看的就是
+ * 到底发的是什么。归一化只有一处实现（后端），前端原样转发。
+ */
+export async function login(username: string, password: string): Promise<boolean> {
   setState({ pending: true, error: null })
   try {
     const result = await api.post<{ user: AuthUser }>(
       '/auth/login',
-      { password },
+      { username, password },
       // 口令错误就是 401 —— 跳登录页毫无意义（我们已经在登录页了）
       { skipAuthRedirect: true },
     )
@@ -175,13 +218,18 @@ export async function login(password: string): Promise<boolean> {
   }
 }
 
-/** 初始化。成功后后端会**自动登录**（契约 §3.1） */
-export async function setupAdmin(password: string): Promise<boolean> {
+/**
+ * 初始化：创建**第一个管理员**。成功后后端会**自动登录**（契约 §3.1）。
+ *
+ * v0.24 起要用户名。第一个账号**固定是管理员** ——
+ * 刚装好的系统必须有人能改设置，否则是个自锁。
+ */
+export async function setupAdmin(username: string, password: string): Promise<boolean> {
   setState({ pending: true, error: null })
   try {
     const result = await api.post<{ user: AuthUser }>(
       '/auth/setup',
-      { password },
+      { username, password },
       { skipAuthRedirect: true },
     )
     setState({ phase: 'ready', user: result.user, pending: false, error: null })

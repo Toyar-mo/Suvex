@@ -47,10 +47,15 @@ def test_orm_backed_response_uses_camel_case(ready_client: TestClient) -> None:
 
     这条覆盖的是整条链路：ORM 属性 `created_at` → alias 生成器读它 →
     序列化时用字段名 `createdAt`。中间任何一环写反，这里都会红。
+
+    ⚠️ v0.24 起多了 `username` 与 `role`（多用户）—— 它们是**单段词**，
+    所以 camelCase 与 snake_case 长得一样。这本身没问题，但要注意
+    这条测试**不再能证明**"多词字段会被转换"了 ——
+    好在 `createdAt` 还在，它继续承担那个证明。
     """
     body = ready_client.get("/api/v1/auth/me").json()
 
-    assert set(body) == {"id", "createdAt"}
+    assert set(body) == {"id", "username", "role", "createdAt"}
     assert body["createdAt"].endswith("Z"), body["createdAt"]
 
 
@@ -94,6 +99,11 @@ def test_validation_error_is_400_not_422(client: TestClient) -> None:
     # （`body.password` 对前端没有意义，用户看到的字段就是他自己填的那个框）。
     assert "password" in error["details"]
     assert error["details"]["password"] == "此项必填"
+    # ⚠️ v0.24 起 `username` 也是必填，所以空请求体会**两个字段都报**。
+    #    这正是我们要的：表单上两个框都该标红，而不是"报了一个、
+    #    用户改完再报另一个"。
+    assert "username" in error["details"]
+    assert error["details"]["username"] == "此项必填"
 
 
 def test_validation_message_is_displayable_chinese(client: TestClient) -> None:

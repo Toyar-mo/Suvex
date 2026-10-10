@@ -6,11 +6,14 @@ import NotifyPanel from '@/components/settings/NotifyPanel'
 import ProviderPanel from '@/components/settings/ProviderPanel'
 import SandboxPanel from '@/components/settings/SandboxPanel'
 import ScanRetentionPanel from '@/components/settings/ScanRetentionPanel'
+import UsersPanel from '@/components/settings/UsersPanel'
 import ErrorState from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { isAdmin, useAuth } from '@/data/auth-store'
 import { BACKEND_PENDING, loadSettings, useSettings } from '@/data/settings-store'
+import { loadUsers } from '@/data/users-store'
 import { Database, Lock, ShieldCheck } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 /**
  * Settings 设置页。
@@ -40,10 +43,20 @@ const SECTIONS = [
   { id: 'notify', label: '通知' },
   { id: 'scan-retention', label: '扫描保留' },
   { id: 'account', label: '账号与安全' },
+  // ★ v0.24：用户管理放在**最后**。
+  //
+  //   理由：它改的是"谁能进这个系统"，而上面那些改的是"系统怎么跑"。
+  //   把权限相关的放最后，符合"越靠后越少动"的阅读习惯 ——
+  //   而这一节确实是设置页里最不该随手点的一节。
+  //
+  //   ⚠️ 它对 viewer **不显示**（见下面的 `isAdmin(user)` 判断）。
+  //      导航里也据此过滤，否则会出现"点了导航但那一节不存在"。
+  { id: 'users', label: '用户' },
 ] as const
 
 export function SettingsPage() {
   const { accounts, sandbox, notices, tokens, status, error } = useSettings()
+  const { user } = useAuth()
 
   /*
     进页面拉一次真实设置（任务 7）。
@@ -52,10 +65,15 @@ export function SettingsPage() {
     `loadSettings`），初始快照里 `tokens` 是空的 —— 不拉的话界面上会显示
     "还没有令牌"，而用户明明创建过。把"加载中"和"确实是空的"分开，
     是这一页最容易搞错的地方。
+
+    ★ 用户列表**只对管理员拉**（v0.24）：`GET /auth/users` 对
+      viewer 返回 403，而为一个必然失败的请求制造一个错误状态
+      会让界面上出现一块莫名其妙的红字 —— 而他本来就不该看到这一节。
   */
   useEffect(() => {
     void loadSettings()
-  }, [])
+    if (isAdmin(user)) void loadUsers()
+  }, [user])
 
   return (
     <>
@@ -106,6 +124,20 @@ export function SettingsPage() {
               {/* 保留规则：属于「系统行为」这一类，与沙箱/通知同类 */}
               <ScanRetentionPanel />
               <AccountPanel tokens={tokens} />
+              {/*
+                ★ 用户管理**只对管理员显示**（v0.24）。
+
+                与上面那些面板不同，它读的是**自己的 store**
+                （`data/users-store.ts`），因为用户列表与设置快照是
+                两个来源、两个加载状态 —— 而且它有独立的失败原因
+                （viewer 调它必然 403）。
+
+                ⚠️ `isAdmin` 判断只是**展示性**的：真正的拦截在后端
+                （`require_admin_session`，机器令牌一律拒绝）。
+                前端藏起来是为了避免"看到却点不动" —— 那不是安全边界，
+                而且不能当安全边界用（改个 DOM 就绕过去了）。
+              */}
+              {isAdmin(user) && <UsersPanel />}
             </>
           )}
         </div>
@@ -197,7 +229,23 @@ function TrustNote() {
  * 而且它天然处理"一屏里出现多个区块"这种情况。
  */
 function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
+  const { user } = useAuth()
   const [active, setActive] = useState<string>(SECTIONS[0].id)
+
+  /*
+    ★ 导航要按角色过滤（v0.24）。
+
+    非管理员看不到「用户」这一项 —— 否则会出现"点了导航，
+    但滚到那儿什么都没有"（因为 `UsersPanel` 对他不渲染）。
+    而那种"导航项指向空气"的体验比没有这一项更让人困惑。
+
+    ⚠️ 用 `useMemo` 而不是每次渲染 `.filter()`：下面那个 effect 的
+       依赖里有 `sections`，每帧新建数组会让它反复重跑观察器。
+  */
+  const sections = useMemo(
+    () => SECTIONS.filter((s) => s.id !== 'users' || isAdmin(user)),
+    [user],
+  )
 
   useEffect(() => {
     /*
@@ -247,13 +295,13 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
       },
     )
 
-    for (const section of SECTIONS) {
+    for (const section of sections) {
       const el = document.getElementById(section.id)
       if (el) observer.observe(el)
     }
 
     return () => observer.disconnect()
-  }, [sectionsReady])
+  }, [sectionsReady, sections])
 
   return (
     <nav
@@ -261,7 +309,7 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
       className="sticky top-[52px] z-10 -mx-gutter border-y border-line bg-canvas/85 px-gutter backdrop-blur-sm"
     >
       <ul className="flex gap-1 overflow-x-auto py-1.5">
-        {SECTIONS.map((section) => {
+        {sections.map((section) => {
           const isActive = active === section.id
           return (
             <li key={section.id} className="shrink-0">

@@ -344,6 +344,65 @@ class TokenScope(StrEnum):
     ADMIN = "admin"
 
 
+class UserRole(StrEnum):
+    """登录用户的角色（v0.24 多用户）。
+
+    ## 为什么是"两档"而不是更细的 RBAC
+
+    这个平台的危害是**替攻击者发包**，所以权限的分界线只有一条真正重要：
+    **能不能让机器对外动手**。
+
+      · `ADMIN`  —— 能改设置、管 provider、管用户、改口令、发起扫描
+      · `VIEWER` —— 只能看：扫描记录、漏洞、报告、活动流
+
+    中间那些档（"能扫描但不能改设置"、"能看漏洞但不能看报告"）听起来
+    合理，但它们**没有对应的真实诉求**：这个系统的使用者是一个安全团队，
+    而团队里"能看但不能动"的人只有一类 —— 甲方、审计、或者旁观的同事。
+    给他们一个 `VIEWER` 就够了。
+
+    加更多档的代价是实打实的：每个端点都要标注所需角色，而**漏标一处
+    就是一个权限漏洞**。档位越少，标注越不容易错。
+
+    ## ⚠️ 与 `TokenScope` 的关系：它们是**两个维度**，不要合并
+
+    | | 管什么 | 谁有 |
+    | --- | --- | --- |
+    | `TokenScope` | **机器令牌**能做什么（CI 脚本） | 令牌，创建时选定 |
+    | `UserRole` | **登录用户**能做什么（人） | 账号，管理员分配 |
+
+    一个人的角色与他签发的令牌 scope 是独立的：`VIEWER` 也可以创建一个
+    `read` 令牌给监控用。把它们合成一个概念会导致"改用户角色顺手改了
+    他所有令牌的权限" —— 而那些令牌可能正被别的系统用着。
+    """
+
+    ADMIN = "admin"
+    VIEWER = "viewer"
+
+
+# 角色 → 该角色隐含的 scope 集合。
+#
+# ★ 这张表是**唯一的**映射处。`deps.SESSION_SCOPES` 那个常量曾经写死
+#   "会话给满三档"（单管理员时代是对的），现在必须按角色算 ——
+#   而算的规则只应该有一份，否则"某个角色到底能做什么"要看两处代码。
+ROLE_SCOPES: dict[str, frozenset[str]] = {
+    UserRole.ADMIN.value: frozenset({"read", "scan", "admin"}),
+    # ⚠️ `viewer` **只有 read**。它不能扫描（那是"让机器对外发包"），
+    #    不能改任何配置。这一行是权限模型的核心，改它等于改整个模型。
+    UserRole.VIEWER.value: frozenset({"read"}),
+}
+
+
+def scopes_for_role(role: str) -> frozenset[str]:
+    """角色 → scope 集合。
+
+    ⚠️ 未知角色返回**空集**而不是 `read` 或 `admin`：
+    数据里出现一个我们不认识的角色值（手工改库、将来加了新角色但忘了
+    更新这里），安全的方向是"什么都不给" —— 那会表现为 403，
+    而 403 会被立刻发现并排查。反过来给 `admin` 则是一个静默的提权。
+    """
+    return ROLE_SCOPES.get(role, frozenset())
+
+
 class NotifyChannelKind(StrEnum):
     EMAIL = "email"
     WEBHOOK = "webhook"
@@ -503,6 +562,15 @@ class AuditAction(StrEnum):
     CTF2_PLATFORM_ACTIVATE = "ctf2.platform_activate"
     CTF2_PLATFORM_USE_BUILTIN = "ctf2.platform_use_builtin"
     CTF2_PLATFORM_DELETE = "ctf2.platform_delete"
+    # ── 用户管理（v0.24）──────────────────────────────────
+    #
+    # ★ 这一组是**对权限本身的操作**，所以留痕比别处更要紧：
+    #   "谁在什么时候把谁变成了管理员"是安全事件复盘的第一问 ——
+    #   与 `ctf2.settings_update`（谁把 submitMode 改成 auto）
+    #   属于同一类"一次点击改变权限/后果边界"的动作。
+    USER_CREATE = "user.create"
+    USER_ROLE_CHANGE = "user.role_change"
+    USER_DELETE = "user.delete"
 
 
 # 动作 → 可直接展示的中文标签。由 `audit.service.action_label()` 使用
@@ -548,6 +616,14 @@ AUDIT_ACTION_LABELS: Final[dict[str, str]] = {
     AuditAction.CTF2_PLATFORM_ACTIVATE: "启用一个平台",
     AuditAction.CTF2_PLATFORM_USE_BUILTIN: "切回内置 CTF2",
     AuditAction.CTF2_PLATFORM_DELETE: "删除平台配置",
+    # ── 用户管理（v0.24）──────────────────────────────────
+    #
+    # ⚠️ 措辞刻意直白（"新建用户"而不是"创建账号"）：
+    #    审计日志是给**事后复盘的人**看的，而那个人在追责时
+    #    最需要一眼看懂的是"权限发生了什么变化"。
+    AuditAction.USER_CREATE: "新建用户",
+    AuditAction.USER_ROLE_CHANGE: "变更用户角色",
+    AuditAction.USER_DELETE: "删除用户",
 }
 
 

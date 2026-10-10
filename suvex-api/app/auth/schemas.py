@@ -35,19 +35,49 @@ class AuthState(CamelModel):
 
 
 class PasswordRequest(StrictModel):
-    """登录 / 初始化共用的请求体。
+    """**登录**的请求体（v0.24 起要用户名）。
 
-    单管理员系统里 `login` 只需要口令（契约 §3.1）——
-    一个账号的系统里要用户名词只是多一个必填框。
+    ## 为什么现在需要用户名
+
+    单管理员时代这里只有 `password`，注释写的是"一个账号的系统里要
+    用户名词只是多一个必填框"。多用户之后那句话不再成立 ——
+    登录必须能区分是谁，否则审计日志里的"谁"只能记成会话 id，
+    而那回答不了"上周是谁把 submitMode 改成 auto 的"。
+
+    ## 与 `/auth/setup` 的分工
+
+    `setup` 用 `SetupRequest`（含 username），因为它同时在**创建**账号；
+    这里只做校验，不创建任何东西。
     """
 
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1)
+
+
+class SetupRequest(StrictModel):
+    """**首次初始化**的请求体。
+
+    与登录分开定义，而不是共用 `PasswordRequest`：`setup` 的
+    `username` 是"你要创建的这个管理员叫什么"，而登录的 `username`
+    是"你是谁" —— 两者的语义不同，而共用一个类会让将来想给
+    其中一个加字段时误伤另一个（比如给 setup 加"确认口令"）。
+    """
+
+    username: str = Field(min_length=1, max_length=64)
     password: str = Field(min_length=1)
 
 
 class UserOut(CamelModel):
-    """用户投影。`createdAt` 由 alias 生成器映射到 ORM 的 `created_at`。"""
+    """用户投影。
+
+    ⚠️ **不含 `passwordHash`**（那是显然的），也**不含 `updatedAt`** ——
+    它没有任何消费方，而每一个多余字段都是一个信息面。
+    `role` 必须有：前端要据此决定显不显示"用户管理"入口。
+    """
 
     id: str
+    username: str
+    role: str
     createdAt: IsoDateTime
 
 
@@ -55,6 +85,36 @@ class UserEnvelope(CamelModel):
     """setup / login 的响应外壳。"""
 
     user: UserOut
+
+
+class CreateUserRequest(StrictModel):
+    """`POST /users` —— 管理员加人。
+
+    `role` **必填**（没有默认值）：给默认值会让"忘了传"静默地
+    造出一个管理员，而管理员能做的第一件事就是发起扫描（对外发包）。
+    """
+
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1)
+    role: str
+
+
+class UpdateUserRequest(StrictModel):
+    """`PATCH /users/{id}` —— 改角色。
+
+    目前**只能改角色**。改名与改口令是另外两件事：
+    改名会让审计日志里的历史记录与当前名字对不上（那是有损的），
+    改口令应当由本人走 `/settings/password`（管理员替别人改口令
+    意味着管理员知道别人的口令，那不是一个好模型）。
+    """
+
+    role: str
+
+
+class UserListOut(CamelModel):
+    """`GET /users`。**裸数组**，与 `GET /settings/tokens` 同形状。"""
+
+    users: list[UserOut]
 
 
 class ApiTokenOut(CamelModel):

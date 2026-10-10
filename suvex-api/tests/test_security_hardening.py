@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.crypto import redact
+from tests.conftest import GOOD_USERNAME
 
 AUTH_STATEMENT = "我有权对此目标进行安全测试"
 VALID_AUTH = {"confirmed": True, "statement": AUTH_STATEMENT}
@@ -214,7 +215,7 @@ def test_unhandled_exception_does_not_leak_internals(monkeypatch) -> None:
 
     with TestClient(app, raise_server_exceptions=False) as client:
         assert client.post(
-            "/api/v1/auth/setup", json={"password": "SuvexDevPass2026"}
+            "/api/v1/auth/setup", json={"username": GOOD_USERNAME, "password": "SuvexDevPass2026"}
         ).status_code == 201
         _assert_no_internals_leak(client, monkeypatch)
 
@@ -397,9 +398,9 @@ def test_login_rate_limit_still_works(client: TestClient) -> None:
     两条限流器各有自己的 `lru_cache`，容易在重构时漏掉一条 ——
     而漏掉登录限流就是允许在线爆破。
     """
-    client.post("/api/v1/auth/setup", json={"password": "SuvexDevPass2026"})
+    client.post("/api/v1/auth/setup", json={"username": GOOD_USERNAME, "password": "SuvexDevPass2026"})
     codes = [
-        client.post("/api/v1/auth/login", json={"password": "wrong-password"}).status_code
+        client.post("/api/v1/auth/login", json={"username": GOOD_USERNAME, "password": "wrong-password"}).status_code
         for _ in range(8)
     ]
     assert 429 in codes, f"登录没有被限流：{codes}"

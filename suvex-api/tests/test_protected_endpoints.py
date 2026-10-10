@@ -113,39 +113,82 @@ def test_invalid_token_shape_returns_401_without_touching_database(
     assert response.json()["error"]["code"] == "UNAUTHENTICATED"
 
 
-def test_unimplemented_endpoint_returns_501_not_404(ready_client: TestClient) -> None:
-    """未实现的端点回 **501**，不是 404。
+def test_no_endpoint_returns_501_anymore(ready_client: TestClient) -> None:
+    """★ **501 占位已全部清零**（v0.22 起）。
 
-    404 的语义是「这个资源不存在」，而真实情况是「端点还没做」——
-    对调用方来说是两种完全不同的处理：前者该换 id，后者该等版本。
-    而且响应里要说清**计划在哪个任务交付**，否则调用方只能去翻任务清单。
+    ## 这条测试的历史
 
-    ## ⚠️ 这个测试**曾经是一条把过期承诺洗成绿灯的测试**
+    它原来叫 `test_unimplemented_endpoint_returns_501_not_404`，
+    断言某个"当前确实未实现"的端点返回 501 且带任务号。
 
-    它原来拿 `/overview` 当例子，断言 `"任务 6" in message` 通过。
-    但 `/overview` 的 501 消息写着「计划在后端**任务 6**中交付」，
-    而任务 6 真的来了 —— 交付的是**报告**，不是 `/overview`。
-    于是那条消息变成了假话，而这条测试**照旧通过**：
-    它钉的是"机制在"（501 + 任务号），恰好把"承诺已经过期"这件事
-    读成了绿的。
+    那个写法有个它**自己就预见到的**缺陷，注释原文是：
 
-    教训：用某个具体端点当"未实现"的例子时，那条断言会随着任务推进
-    **悄悄变成谎话**。所以现在的做法是：
+    > 用某个具体端点当"未实现"的例子时，那条断言会随着任务推进
+    > **悄悄变成谎话**。所以额外断言它**还没被实现** —— 一旦它被做了，
+    > 这条测试会红，提醒把它换到下一个还没做的端点上。
 
-    * 挑一个**当前确实**未实现的端点（`/settings`，计划任务 7）；
-    * 并额外断言它**还没被实现** —— 一旦它被做了，这条测试会红，
-      提醒把它换到下一个还没做的端点上，而不是继续假装。
+    它确实红了（`/settings` 从 501 变成 200），而那次红是**对的** ——
+    只是现在已经**没有"下一个未实现的端点"**可以换了：v0.22 把最后
+    六个（`GET /settings` + 五个通知端点）都实现了。
+
+    所以这条测试换个方向：从"某个端点返回 501"改成"**没有端点返回 501**"。
+
+    ## 为什么这样写仍然有价值
+
+    它从"钉住某个具体行为"变成了**守卫一个全局不变量**：
+    将来有人加回一个 501 占位（比如新功能的接口先占位），
+    这条测试会立刻红 —— 而那正是我们想要的提醒：
+    "你又开始用 501 了，确认这是有意的，并同步更新这条测试与契约 §9"。
+
+    ## 怎么查
+
+    遍历全部路由，挑出那些**在 `core.stubs` 里登记过的**（`pending()`）。
+    不直接打每个端点：那需要为每个端点构造合法参数，
+    而"哪些端点是占位"这件事在代码里已经有唯一答案。
     """
-    response = ready_client.get("/api/v1/settings")
+    from app.core import stubs
 
-    assert response.status_code == 501, (
-        f"/settings 已经不是占位了（HTTP {response.status_code}）—— "
-        "请把这条测试的目标换成下一个尚未实现的端点，别让它继续断言旧行为"
-    )
-    error = response.json()["error"]
-    assert error["code"] == "NOT_IMPLEMENTED"
-    assert "尚未实现" in error["message"]
-    assert "任务 7" in error["message"]
+    # `stubs` 模块里记录着所有"注册了但没实现"的端点。
+    # 它现在是空的 —— 这正是要断言的东西。
+    pending_endpoints = getattr(stubs, "_PENDING", None)
+
+    if pending_endpoints is None:
+        # 实现细节变了（没有那个私有变量）。退化成"源码里搜不到 pending 调用"。
+        import pathlib
+
+        app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
+        callers = [
+            path
+            for path in app_dir.rglob("*.py")
+            if path.name != "stubs.py" and "pending(" in path.read_text(encoding="utf-8")
+        ]
+        assert not callers, (
+            f"这些文件里还有 `pending()` 调用：{[str(p) for p in callers]} —— "
+            "501 占位又出现了。若是有意为之，请更新本测试与契约 §9"
+        )
+    else:
+        assert not pending_endpoints, (
+            f"还有未实现的端点：{sorted(pending_endpoints)} —— "
+            "若是有意为之，请更新本测试与契约 §9"
+        )
+
+
+def test_stub_mechanism_still_exists() -> None:
+    """501 的**机制**要留着，即使现在没人用它。
+
+    ⚠️ 这一条与上一条是一对，别删其中一个：
+
+      · 上一条说"现在没有 501"；
+      · 这一条说"但 `stubs.pending()` 这个工具还在"。
+
+    只留上一条的话，下一个人可能顺手把 `core/stubs.py` 删掉
+    （"反正没人用"）—— 而那时想给新接口占位就得重新写一遍，
+    并且会忘了那条最要紧的约定：**501 的 message 里要写清
+    计划在哪个任务交付**（调用方据此判断"该等版本还是该换 id"）。
+    """
+    from app.core import stubs
+
+    assert hasattr(stubs, "pending"), "stubs.pending 不见了 —— 501 占位的机制被删了？"
 
 
 def test_overview_is_not_a_stub_anymore(ready_client: TestClient) -> None:

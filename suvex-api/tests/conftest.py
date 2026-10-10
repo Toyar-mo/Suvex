@@ -250,16 +250,75 @@ def db_session() -> Iterator[object]:
         yield session
 
 
+# 测试用的账号常量（v0.24 起登录要用户名）。
+#
+# 放在模块级而不是写死在 fixture 里：**很多测试需要"以管理员身份"
+# 或"以只读身份"发请求**，而它们要能引用同一个名字。
+GOOD_USERNAME = "admin"
+VIEWER_USERNAME = "reader"
+VIEWER_PASSWORD = "SuvexViewerPass2026"
+
+
 @pytest.fixture()
 def ready_client(client: TestClient) -> TestClient:
     """已完成初始化的客户端：管理员已建、且已登录。
 
     复用 setup 端点而不是直接插数据库 —— 这样 `ready_client` 依赖的
     那条路径（setup → 自动登录 → Cookie 下发）在每个用例里都被真实走过一遍。
+
+    ⚠️ v0.24 起 `setup` 要 `username` —— 多用户之后"第一个管理员"
+    也得有个名字。
     """
-    response = client.post("/api/v1/auth/setup", json={"password": GOOD_PASSWORD})
+    response = client.post(
+        "/api/v1/auth/setup",
+        json={"username": GOOD_USERNAME, "password": GOOD_PASSWORD},
+    )
     assert response.status_code == 201, response.text
     return client
+
+
+@pytest.fixture()
+def viewer_client(ready_client: TestClient, db_session) -> TestClient:
+    """**已登录的只读用户**客户端（v0.24）。
+
+    ## 怎么造
+
+    用管理员（`ready_client`）通过 `POST /users` 建一个 viewer，
+    然后**换一个干净的客户端**登录成它。
+
+    为什么不复用同一个 client：Cookie 是客户端级别的，同一个
+    TestClient 上重新登录会覆盖 Cookie —— 那样"管理员建的 viewer"
+    与"viewer 自己"是同一个连接，测出来的东西不说明问题。
+    （而且 `ready_client` 的 Cookie 一旦被覆盖，后续要用管理员的
+    测试就悄悄变成了 viewer 身份，失败信息会指向完全无关的地方。）
+
+    ## 它验的是什么
+
+    角色模型的**核心断言**：viewer 能读、不能写、不能发起扫描。
+    这一组如果漏了，"分两档角色"就只是一句声明 ——
+    而权限模型的漏判是最不该靠人工 review 的东西。
+    """
+    from fastapi.testclient import TestClient as _TestClient
+
+    from app.main import app
+
+    created = ready_client.post(
+        "/api/v1/auth/users",
+        json={
+            "username": VIEWER_USERNAME,
+            "password": VIEWER_PASSWORD,
+            "role": "viewer",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    with _TestClient(app) as viewer:
+        logged_in = viewer.post(
+            "/api/v1/auth/login",
+            json={"username": VIEWER_USERNAME, "password": VIEWER_PASSWORD},
+        )
+        assert logged_in.status_code == 200, logged_in.text
+        yield viewer
 
 
 @pytest.fixture()

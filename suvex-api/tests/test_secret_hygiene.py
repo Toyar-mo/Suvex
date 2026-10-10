@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from app.core import crypto
 from app.providers.models import ProviderAccount
+from tests.conftest import GOOD_USERNAME
 
 # 一个形态真实、足够长、不会被脱敏正则误伤的测试凭据。
 # 用常量而不是随手写一个：它要在多个断言里出现，拼错一次就会得到
@@ -170,8 +171,11 @@ def test_plaintext_password_never_reaches_the_logging_module(
     """
     secret_password = "VerySecret2026Pass"
 
-    client.post("/api/v1/auth/setup", json={"password": secret_password})
-    client.post("/api/v1/auth/login", json={"password": "wrong-one-here"})
+    client.post(
+        "/api/v1/auth/setup",
+        json={"username": GOOD_USERNAME, "password": secret_password},
+    )
+    client.post("/api/v1/auth/login", json={"username": GOOD_USERNAME, "password": "wrong-one-here"})
     client.get("/api/v1/auth/me")
 
     logging.getLogger("suvex.test").info("log-spy-selftest")

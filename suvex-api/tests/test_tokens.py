@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+from tests.conftest import GOOD_USERNAME
 
 
 def _create_token(client: TestClient, **overrides) -> dict:
@@ -115,7 +116,7 @@ def test_revoked_token_stops_working(ready_client: TestClient) -> None:
 
     # 用会话吊销令牌（先重新登录，因为上面把 Cookie 清掉了）。
     logged_in = ready_client.post(
-        "/api/v1/auth/login", json={"password": "SuvexDevPass2026"}
+        "/api/v1/auth/login", json={"username": GOOD_USERNAME, "password": "SuvexDevPass2026"}
     )
     assert logged_in.status_code == 200
     assert ready_client.delete(f"/api/v1/settings/tokens/{token_id}").status_code == 204

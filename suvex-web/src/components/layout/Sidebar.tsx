@@ -1,8 +1,8 @@
 import { StatusDot } from '@/components/ui/StatusDot'
 import { cn } from '@/lib/cn'
-import { logout } from '@/data/auth-store'
+import { isAdmin, logout, useAuth } from '@/data/auth-store'
 import { useFleetStatus } from '@/data/fleet'
-import { LogOut, PanelLeftClose, PanelLeftOpen } from 'lucide-react'
+import { LogOut, PanelLeftClose, PanelLeftOpen, ShieldCheck, UserRound } from 'lucide-react'
 import SidebarNav from './SidebarNav'
 
 /**
@@ -23,6 +23,9 @@ export interface SidebarProps {
 
 export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProps) {
   const { agents } = useFleetStatus()
+  const { user } = useAuth()
+  /** 角色徽标上的字。`admin` → 管理员，其余（含未登录）→ 只读。 */
+  const roleLabel = isAdmin(user) ? '管理员' : '只读'
 
   return (
     <aside
@@ -66,6 +69,58 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
 
       {/* 折叠开关 + 登出 + agent 数 */}
       <div className={cn('shrink-0 border-t border-line p-2', collapsed && 'px-0')}>
+        {/*
+          ★ 当前登录用户 + 角色徽标（v0.24）。
+
+          ## 为什么必须有这一块
+
+          多用户之前"是谁登录的"不需要显示 —— 只有一个管理员，
+          显示它等于重复一句已知的话。
+
+          多用户之后它变成一个**真实的需求**，而且有两个方向：
+
+            · **确认自己用的是哪个账号** —— 一个人可能有管理员号与
+              日常号，而它们看起来一样（只有用户名不同）；
+            · ★ **只读用户要能看出自己是只读**。否则他会发现
+              "新建扫描"按钮不见了、"设置"页保存不了，而**没有任何
+              线索告诉他为什么** —— 那看起来像系统坏了。
+
+          第二点是这一块存在的主要理由。角色徽标让"我没有这个权限"
+          变成一个**可解释的状态**，而不是一个 bug。
+
+          ⚠️ 折叠态下只显示一个图标（侧栏宽度不够放文字）——
+             徽标会退化成 title 提示，那是可接受的降级：
+             折叠是用户主动选的，而展开就能看到。
+        */}
+        <div
+          className={cn(
+            'flex items-center gap-tight py-1.5 text-xs',
+            collapsed ? 'justify-center px-0' : 'px-3',
+          )}
+          title={`${user?.username ?? '未登录'} · ${roleLabel}`}
+        >
+          {isAdmin(user) ? (
+            <ShieldCheck size={15} strokeWidth={1.75} className="shrink-0 text-accent" aria-hidden="true" />
+          ) : (
+            <UserRound size={15} strokeWidth={1.75} className="shrink-0 text-ink-muted" aria-hidden="true" />
+          )}
+          {!collapsed && (
+            <>
+              <span className="truncate text-ink-muted">{user?.username ?? '未登录'}</span>
+              <span
+                className={cn(
+                  'ml-auto shrink-0 rounded-pill px-1.5 py-0.5 text-2xs',
+                  isAdmin(user)
+                    ? 'bg-accent-wash text-accent'
+                    : 'bg-surface-sunken text-ink-faint',
+                )}
+              >
+                {roleLabel}
+              </span>
+            </>
+          )}
+        </div>
+
         {/*
           登出口（契约 §8：加在侧栏底部，与"收起导航"同区）。
 

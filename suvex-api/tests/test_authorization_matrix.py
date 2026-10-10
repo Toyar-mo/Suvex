@@ -45,6 +45,22 @@ PUBLIC: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/api/v1/health"),
         ("GET", "/api/v1/health/sandbox"),
+        # ★ v0.23：指标端点是 **public** 的。
+        #
+        #   与 `/health` 同一条理由：抓取方是 Prometheus，它**没有我们的
+        #   凭据**。给它加鉴权等于让监控系统必须先登录才能取指标 ——
+        #   而"监控取不到数据"这件事往往在出事时才发现。
+        #
+        #   代价是"任何人都能看到请求量"。那个代价是可接受的：
+        #   它**只回数字，不含任何业务数据内容**（见 `core/metrics.py`），
+        #   而且路由标签用的是**模板**（`/scans/{scanId}`）而不是实际路径，
+        #   所以它也泄露不了"有哪些扫描 id"。
+        #
+        #   不想公开的话，在反代上按网段限制，或配
+        #   `SUPEX_METRICS_ENABLED=false` 关掉 —— 两种做法都比
+        #   "给指标端点加个静态 token"好（那会被写进抓取配置，
+        #   而那份配置往往比指标本身更容易泄漏）。
+        ("GET", "/api/v1/metrics"),
         ("GET", "/api/v1/auth/state"),
         ("POST", "/api/v1/auth/login"),
         ("POST", "/api/v1/auth/setup"),
@@ -104,6 +120,17 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/reports/{reportId}/document"),
         ("GET", "/api/v1/reports/{reportId}/download"),
         ("GET", "/api/v1/overview"),
+        # ★ v0.24：provider **列表**从 admin 放宽到 read。
+        #
+        #   这不是顺手放宽，而是"只读角色能用的前提"：前端顶部状态条
+        #   要显示"当前模型 XXX"，读的就是这个端点（`Layout` 的
+        #   `ensureSettingsLoaded()`）。若它要求 admin，viewer 登录后
+        #   会看到状态条报错 —— 而那个错误看起来像"系统坏了"。
+        #
+        #   放宽是安全的：这个端点**不返回任何明文凭据**
+        #   （`apiKey` 恒为空串，只有 `apiKeyMask`，见 ADR-003）。
+        #   写操作（新建 / 改 / 删 / 验证 / 设默认）仍然是 admin。
+        ("GET", "/api/v1/providers"),
         # ★ v0.20：CTF2 的**只读**端点。
         #
         # 它们与扫描列表同级：看有哪些题、环境起来没有、队列排到哪了。
@@ -180,19 +207,64 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     ("DELETE", "/api/v1/scans/{scanId}/attachments/{name}"): "scan",
     ("DELETE", "/api/v1/findings/{findingId}/attachments/{attachmentId}"): "scan",
     # 改设置、管 provider、管令牌、改密码
-    # ⚠️ **`GET /providers` 也是 `admin`**，不是 `read`。
-    # 契约 §3.2 整节标的是 `admin`，依据是它返回的是**部署配置的形状**
-    # （有哪些供应商、用的哪个模型、baseUrl、密钥掩码的末四位）。
-    # 掩码本身不是机密，但"你用了哪家、哪个模型、key 末四位"对
-    # 一个已经能读扫描结果的人来说是额外的信息面，而对配置管理界面来说
-    # 它本来就属于 admin。前端的设置页与状态条都走会话，不受影响。
-    ("GET", "/api/v1/providers"): "admin",
+    #
+    # ⚠️ **`GET /providers` 在 v0.24 从 admin 移到了 `READ_ONLY`。**
+    #
+    #    它原来在这里，论证是"返回的是部署配置的形状（有哪些供应商、
+    #    哪个模型、baseUrl、密钥掩码末四位），对能读扫描结果的人来说
+    #    是额外的信息面"。那条论证在**单管理员**时代是无害的 ——
+    #    反正只有一个人。
+    #
+    #    而引入 `viewer` 之后它变成了一个真问题：前端顶部状态条
+    #    要显示"当前模型 XXX"，读的就是这个端点。若它要求 admin，
+    #    viewer 登录后会看到状态条报错 —— 而那个错误看起来像
+    #    "系统坏了"，不像权限问题。
+    #
+    #    重新权衡后的判断：**掩码与模型名不是机密**（它们不包含任何
+    #    可用凭据，`apiKey` 恒为空串），而"只读角色能正常使用界面"
+    #    是硬需求。所以放宽。
     ("POST", "/api/v1/providers"): "admin",
     ("PATCH", "/api/v1/providers/{providerId}"): "admin",
     ("DELETE", "/api/v1/providers/{providerId}"): "admin",
     ("POST", "/api/v1/providers/{providerId}/verify"): "admin",
     ("POST", "/api/v1/providers/{providerId}/default"): "admin",
+    # ★ v0.24：用户管理。这一组是**对权限本身的操作**。
+    #
+    #   ⚠️ 它们不仅要求 admin scope，还要求**必须是登录会话**
+    #   （`require_admin_session`）—— 机器令牌一律拒绝。
+    #   理由：令牌若能管用户，它就能自我放大（创建一个新管理员、
+    #   或改掉签发者的角色），而令牌是长期有效的，泄漏一个
+    #   就等于永久拿到用户管理权。
+    #
+    #   这一点**矩阵表达不了**（它只有"需要哪个 scope"这一维），
+    #   所以真正的守卫在 `tests/test_users_and_roles.py` 的
+    #   `test_machine_token_cannot_manage_users`。
+    ("GET", "/api/v1/auth/users"): "admin",
+    ("POST", "/api/v1/auth/users"): "admin",
+    ("PATCH", "/api/v1/auth/users/{userId}"): "admin",
+    ("DELETE", "/api/v1/auth/users/{userId}"): "admin",
     ("GET", "/api/v1/settings"): "admin",
+    # ★ v0.24：通知的**读**端点保持 `admin`（与 `GET /providers` 相反）。
+    #
+    #   我一度把它们标成 `read`，而矩阵立刻报红 —— 因为实现用的是
+    #   `require_admin`。**矩阵是对的，我的声明是错的。**
+    #
+    #   重新想清楚两者的差别：
+    #
+    #   | 端点 | 返回什么 | 能放宽吗 |
+    #   | --- | --- | --- |
+    #   | `GET /providers` | 模型名 + **掩码**（不可用的字符串） | 能 |
+    #   | `GET /settings/notices/channels` | 渠道地址 —— **webhook URL 本身就是凭据** | **不能** |
+    #
+    #   一个 Slack Webhook URL 拿到就能往那个群发消息，它是**可用的**凭据
+    #   （与 provider 的掩码不同 —— 掩码只是末四位）。所以渠道列表
+    #   连看都要 admin。
+    #
+    #   代价是 `viewer` 打开设置页时通知那块会 403。这是可接受的：
+    #   设置页对 viewer 本来就基本是只读展示，而通知配置属于
+    #   "管理动作"的一部分。**前端要据此隐藏那一块**（而不是显示一个错误）。
+    ("GET", "/api/v1/settings/notices/rule"): "admin",
+    ("GET", "/api/v1/settings/notices/channels"): "admin",
     # 沙箱与执行配置（任务 13）。并发上限决定"同时有几个进程在对真实目标
     # 发包"，回合上限与扫描深度决定费用 —— 都是 admin 级，不是 read。
     ("GET", "/api/v1/settings/sandbox"): "admin",

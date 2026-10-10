@@ -77,6 +77,15 @@ class ErrorCode:
     RATE_LIMITED = "RATE_LIMITED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     SETUP_ALREADY_DONE = "SETUP_ALREADY_DONE"
+    # ── 多用户与角色（v0.24）──────────────────────────────
+    #
+    # ★ 这三个描述的是"**通过界面走进去的死胡同**"，而不是"参数写错了"。
+    #   分开给码的理由：前端要据此给出**不同的补救动作**
+    #   （"先指定另一个管理员" vs "不能删自己"），而拿中文消息去
+    #   `includes('管理员')` 做判断会在文案一改就静默失效。
+    LAST_ADMIN = "LAST_ADMIN"
+    CANNOT_DELETE_SELF = "CANNOT_DELETE_SELF"
+    USERNAME_TAKEN = "USERNAME_TAKEN"
     NOT_IMPLEMENTED = "NOT_IMPLEMENTED"
 
 

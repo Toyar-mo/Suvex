@@ -86,7 +86,12 @@ def test_creating_a_scan_writes_an_audit_row(
 
     # 谁
     assert row.actor_kind == "session"
-    assert row.actor_label == "管理员会话"
+    # ★ v0.24 起 `actor_label` 带**用户名**，不再是那句固定的"管理员会话"。
+    #
+    #   多用户之后那句话等于没说 —— 审计日志要回答的是
+    #   "上周是谁把 submitMode 改成 auto 的"，而"管理员会话"
+    #   在有两个管理员的系统里指不出是谁。
+    assert row.actor_label == "admin（管理员）", row.actor_label
     assert row.actor_id, "会话通道必须记下账号 id"
     # 什么时候（服务端时刻）
     assert row.at is not None

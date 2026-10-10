@@ -25,19 +25,57 @@ from app.core.timeutil import now_utc
 
 
 class AdminAccount(Base):
-    """单管理员账号。
+    """一个登录账号（v0.24 起支持多个）。
 
-    契约 §0.3 明确「不做多用户、RBAC、用户管理界面」，所以这张表**永远只有一行**。
-    但仍然给它 id 与时间戳：将来真加第二个人时，改的是插入逻辑而不是表结构
-    （与契约 §5.4 里「`authorized_by` 恒定为什么还要存」是同一个判断）。
+    ## 从"单管理员"到"多用户"改了什么
+
+    表结构其实**早就为这一刻留了余地**（id、时间戳、sessions 关系都在），
+    当时注释写的是"将来真加第二个人时，改的是插入逻辑而不是表结构"。
+    那句话基本兑现了，但漏了两件事 —— 因为单账号时代**它们不需要存在**：
+
+      · `username` —— 登录要用它区分是谁。原来只输口令，因为"一个账号的
+        系统里要用户名词只是多一个必填框"；
+      · `role` —— 权限分档的依据。
+
+    两个都加了**唯一/非空约束**，而不是"可空 + 应用层保证"：
+    数据完整性交给数据库，因为它不会忘记。
+
+    ## ⚠️ 关于 `role` 的默认值
+
+    默认 `admin` 是为了**存量数据回填**（迁移时那唯一一行必须是管理员，
+    否则升级后没人能改设置了）。而新建账号时**必须显式给角色** ——
+    见 `service.create_user`，它没有默认参数。
+
+    这个区分很重要：给 `create_user` 一个 `role="admin"` 的默认值，
+    会让"忘了传角色"静默地造出一个管理员。而管理员能做的第一件事
+    就是发起扫描（对外发包）。
     """
 
     __tablename__ = "admin_accounts"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    # 登录名。**大小写不敏感**（见 `service.normalize_username`）：
+    # 用户不该因为记错大小写而登不进去，而"Alice"与"alice"是两个账号
+    # 只会带来困惑（谁是谁？）。
+    #
+    # 存的是**归一化后**的值（小写），原始大小写不保留 —— 与 `Scan.target`
+    # 存归一化值是同一条原则：让同一个东西只有一种表示。
+    username: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
+
     # argon2id 的完整编码串（含参数与盐），长度约 97 字符。用 Text 留余量：
     # 将来调高 memory_cost 会让串变长，String(128) 会在那时变成生产事故。
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # 角色。取值见 `core.vocab.UserRole`。
+    #
+    # ⚠️ 这里**不加 CHECK 约束**（与项目里其它枚举列的做法不同）。
+    #    理由是它的取值集合将来最可能变（加一档"能扫描但不能改设置"
+    #    是很自然的演进），而每加一档就要写一个迁移重建 CHECK ——
+    #    与 `TargetKind` 那条"加枚举值要手写迁移"的坑是同一个。
+    #    未知角色由 `scopes_for_role` 兜成空集（403），是安全的方向。
+    role: Mapped[str] = mapped_column(String(16), nullable=False, default="admin")
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
@@ -49,7 +87,7 @@ class AdminAccount(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         # ⚠️ 绝不把 password_hash 放进 repr：repr 会进日志、进异常消息、进调试器面板。
-        return f"<AdminAccount id={self.id!r}>"
+        return f"<AdminAccount id={self.id!r} username={self.username!r} role={self.role!r}>"
 
 
 class AuthSession(Base):
