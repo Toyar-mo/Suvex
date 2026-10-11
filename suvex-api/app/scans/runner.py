@@ -701,7 +701,41 @@ def is_alive(pid: int | None) -> bool:
         # 存在但不是我们的（同机其他用户）。仍然算"活着"，但杀不掉 ——
         # 那种情况下我们连启动它的资格都没有，不该走到这里。
         return True
-    return True
+    # ★ 存在 ≠ 活着：僵尸进程也会让 os.kill(pid, 0) 成功（见 _is_zombie）。
+    return not _is_zombie(pid)
+
+
+def _is_zombie(pid: int) -> bool:
+    """POSIX：这个 pid 是不是僵尸进程。
+
+    ## 为什么判活必须单独认它（2026-10-11 在 Linux CI 上抓到）
+
+    `os.kill(pid, 0)` 探的是"这个 pid 还在不在进程表里"，**不是**
+    "它还在不在跑"。进程被 SIGKILL 之后不会立刻消失：要等父进程
+    `wait()` 掉才被回收，在那之前它是僵尸（状态 `Z`），依然占着 pid、
+    依然让 `os.kill(pid, 0)` 成功。
+
+    于是"杀进程"这条路径会出现一个很反直觉的现象：**已经杀死了，
+    判定却说它还活着**。具体表现是 `_wait_gone` 白等到超时、日志打出
+    一句"没有退出，强杀"、最后返回失败 —— 而进程其实早就死了。
+
+    ⚠️ Windows 上不存在这个问题：那边走 `tasklist` 分支，进程一退出
+    就从任务列表里消失，没有僵尸这个中间态。所以这条只在 POSIX 上
+    才暴露 —— 也就是"本地（Windows）全绿、CI（Linux）红"的典型差异。
+
+    ⚠️ 没有 `/proc` 的系统（macOS）不适用，返回 False 即"按原逻辑判"。
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return False
+    # 格式：`pid (comm) state ...`。comm 里可能有空格甚至括号
+    # （进程名由别人控制），所以从**最后一个** `)` 之后切开取状态字段，
+    # 不能用 split() 直接按位置取 —— 那样进程名里带一个空格就会错位。
+    _, _, rest = data.rpartition(b")")
+    fields = rest.split()
+    return bool(fields) and fields[0] == b"Z"
 
 
 def _no_window() -> int:
