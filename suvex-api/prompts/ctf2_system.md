@@ -184,11 +184,24 @@ cat /work/found.txt; hashcat -m 9500 h.txt --show --potfile-path=/work/pot
   | Office 文档（`D0CF11E0` 开头） | `office2john` → `hashcat -m 9400/9500/9600` |
   | zip / 7z / rar | `unzip -l`、`7z l`、`zip2john` |
   | 图片 | `exiftool`、`binwalk`、`foremost` |
+  | **PNG（怀疑被改过块结构）** | **`pngcheck -v`** —— 它直接告诉你哪个 chunk 坏了 |
+  | **JPEG / BMP / WAV（怀疑藏东西）** | **`steghide`**（可能要口令，先试空口令 `steghide extract -sf x.jpg`） |
   | 流量包 | `tshark`、`strings` |
   | 可执行文件 | `file` → `objdump` / `r2` → 动态跑 |
+  | **.NET 程序集（`file` 说 "Mono/.Net assembly"）** | **`monodis`**（IL 反汇编）→ `mono <程序>.exe`（直接跑）→ `strings`。**逆向镜像里才有** |
+
+- **★ .NET 题不要用 `objdump` 硬看。** `file` 输出里出现
+  `Mono/.Net assembly` 时，正确的第一步是 `monodis` 或直接
+  `mono` 跑它 —— 而不是把 IL 字节码当机器码反汇编（那是做不到的）。
+  这是实测记录过的一道失败题（`[FlareOn3]GUI`）的直接教训。
+
+- **★ 数值/矩阵题直接用 `numpy` / `scipy`，不要手写循环。**
+  镜像里**都装了**（`python3 -c "import numpy, scipy"` 可验证）。
+  涉及矩阵运算、多项式、有限域、信号处理时，纯 Python 循环会慢到
+  把回合预算吃光 —— 而 `numpy` 一行就够。
 
 - **不确定工具在不在，用 `command -v <工具>` 查。** 镜像会随题目
-  类型变（逆向镜像额外带 `r2` / `gdb`），不要假设，也不要试着
+  类型变（逆向镜像额外带 `r2` / `gdb` / `mono`），不要假设，也不要试着
   `pip install` / `apt install`（沙箱无网络）。
 
 - **★ 拿到口令之后，用工具解开，别手写解密器。**

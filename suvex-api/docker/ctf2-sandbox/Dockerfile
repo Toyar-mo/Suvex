@@ -88,6 +88,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── 取证 / misc 题 ──
     binwalk foremost sleuthkit exiftool p7zip-full unzip \
     tcpdump tshark imagemagick \
+    # ── ★ 隐写题的两个常用工具（2026-10-11 实测补）──
+    #
+    # 这两个是**实测发现的缺口**：清点镜像时 `steghide` / `pngcheck`
+    # 都不在，而它们恰好是 Misc 隐写题最常用的两个：
+    #   · `steghide` —— JPEG/BMP/WAV 里藏数据的经典工具；
+    #   · `pngcheck` —— 看 PNG 块结构是否被改坏（图片隐写的前置步骤）。
+    #
+    # ⚠️ 讽刺的是 `steghide` 出现在**本文件第 32 行**的注释里，
+    #    被列为"选 Kali 源的理由"之一 —— 而它从来没被真的装进来。
+    #    这是"文档写了、实现没跟上"的又一例（与 CTF2 的 brief 同类）。
+    steghide pngcheck \
     # ── crypto 题（命令行侧）──
     #
     # ⚠️ `pocl-opencl-icd` 这一条是**实测**加进来的，不是预防性添加。
@@ -158,6 +169,24 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
         pwntools \
         # crypto：对称/非对称原语、数论、SMT 求解
         pycryptodome cryptography sympy z3-solver gmpy2 \
+        # ── ★ 数值计算（2026-10-11 实测补）──
+        #
+        # 这两个是**实测发现的缺口**：清点镜像时 numpy/scipy 都不在，
+        # 而 crypto 与 misc 里相当多的题要它们：
+        #   · 矩阵运算（线性代数题、格密码的 LLL 前置）；
+        #   · 大数/多项式（RSA 变种、CRC 反推、有限域）；
+        #   · 信号与图像（频谱图、音频隐写）。
+        #
+        # ⚠️ 没有它们时模型只能手写纯 Python 循环 —— 而 sympy 在
+        #    大矩阵上慢到会把回合预算吃光，症状看起来像"模型不会做"。
+        #
+        # ★ 加之前**实测过轮子可用性**（这个项目被同类问题坑过：
+        #   `ropper` 依赖的 `filebytes` 用了 Py3.12 移除的 `ast.Str`，
+        #   导致 re 镜像构建直接断掉）。实测结果：
+        #     numpy-2.5.4-cp314  manylinux_2_28_x86_64  ✅
+        #     scipy-1.18.1-cp314 manylinux_2_28_x86_64  ✅
+        #   两者在 Python 3.14 上都有预编译轮子，不会走源码构建。
+        numpy scipy \
         # 取证 / misc：图像、二维码、常见编码
         pillow pyzbar python-magic \
         # 数据与网络

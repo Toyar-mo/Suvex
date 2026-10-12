@@ -42,6 +42,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     qemu-user qemu-user-static \
     # ── 脱壳与打包格式 ──
     upx-ucl \
+    # ── ★ .NET 逆向（2026-10-11 实测补）──
+    #
+    # ## 为什么必须补：一道**已记录的失败题**正是 .NET
+    #
+    # `runner.py` 里那段"40 → 80 轮"的说明记着实测：
+    #
+    #     [FlareOn3]GUI（.NET 逆向）| 40 轮 | 37 条命令（全不相同）| 未解出
+    #
+    # 当时的结论是"这类题需要更多轮"。而清点镜像后发现了一个
+    # **更可能的解释**：两个镜像里**没有任何 .NET 工具** ——
+    # 没有 mono、没有 dotnet、没有 ILSpy。模型面对一个 .NET 程序集
+    # 只能用 objdump 硬看 IL 字节码，那几乎是不可能完成的任务。
+    #
+    # 也就是说：那道题可能不是"轮数不够"，而是**环境里根本没有能用的工具**。
+    # 这个区别很重要 —— 它决定了该加轮数还是该补镜像。
+    #
+    # ## 为什么是 mono 而不是 dotnet
+    #
+    # 实测（2026-10-11）：Kali 源里有 `mono-runtime 6.14.1+ds2-3`，
+    # 而 `dotnet-runtime-8.0` **源里没有**（要另配微软源，那会引入
+    # 一个额外的信任边界）。CTF 的 .NET 题绝大多数是老版本
+    # （FlareOn 系列是 .NET Framework），mono 覆盖得住。
+    #
+    # `mono-devel` 而不是只装 `mono-runtime`：它带 `monodis`
+    # （IL 反汇编器）—— 那是"没有 GUI 的 ILSpy"，正是容器里需要的。
+    #
+    # ⚠️ 体积代价：mono 家族约 200–300 MB。这个镜像是逆向专用的
+    #    （已经 4.25 GB），而 .NET 是逆向的常见题型，值得。
+    mono-runtime mono-devel \
     # ── 反编译辅助：Ghidra 刻意不装 ──
     #     ⚠️ 它要 JDK + 2GB，而 radare2 的 `r2 -A` / `pdc` 与 angr
     #     覆盖了大部分场景。真需要它时用 host-resources 挂一份只读的，
