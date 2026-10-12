@@ -71,6 +71,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ⚠️ 体积代价：mono 家族约 200–300 MB。这个镜像是逆向专用的
     #    （已经 4.25 GB），而 .NET 是逆向的常见题型，值得。
     mono-runtime mono-devel \
+    # ── ★ 虚拟 X Server（2026-10-12 实测补）──
+    #
+    # ## 为什么必须有：WinForms 题跑不起来
+    #
+    # 实测（2026-10-12，`[FlareOn3]GUI`）：装上 mono 之后 `mono GUI.exe`
+    # **直接崩在 `Application.EnableVisualStyles()`**：
+    #
+    #     System.TypeInitializationException: The type initializer for
+    #     'System.Windows.Forms.XplatUI' threw an exception.
+    #      ---> System.ArgumentNullException: Could not open display
+    #           (X-Server required. Check your DISPLAY environment variable)
+    #
+    # 这是一道 **WinForms** 题 —— 它的解题路径本来就是"跑起来、输入 flag、
+    # 看它怎么校验"，而**没有 X Server 就一步都走不了**。
+    #
+    # 装上 `xvfb` 之后同一个命令**正常启动**（只剩一句无关的 Gtk 主题警告）：
+    #
+    #     xvfb-run -a mono GUI.exe      # ✅ 能跑
+    #
+    # ## 为什么这比"引入 de4dot"更值得做
+    #
+    # 模型在 transcript 里说"module initializer throws NullReferenceException，
+    # 所以跑不起来" —— 而**很可能就是这个 X Server 问题**，不是混淆器的锅。
+    # 一个纯 apt 包（无许可问题、无第三方二进制风险）就能排除它，
+    # 比引入 GPLv3 的 de4dot 划算得多。
+    #
+    # ## 用法
+    #
+    # 模型侧要自己加 `xvfb-run -a` 前缀（提示词里已写）。不设成默认
+    # 环境变量的理由：`xvfb-run` 会为**每条命令**起一个 X Server 进程，
+    # 而绝大多数命令（objdump/strings/monodis）根本不需要它。
+    xvfb xauth x11-utils \
     # ── 反编译辅助：Ghidra 刻意不装 ──
     #     ⚠️ 它要 JDK + 2GB，而 radare2 的 `r2 -A` / `pdc` 与 angr
     #     覆盖了大部分场景。真需要它时用 host-resources 挂一份只读的，

@@ -195,6 +195,29 @@ cat /work/found.txt; hashcat -m 9500 h.txt --show --potfile-path=/work/pot
   `mono` 跑它 —— 而不是把 IL 字节码当机器码反汇编（那是做不到的）。
   这是实测记录过的一道失败题（`[FlareOn3]GUI`）的直接教训。
 
+- **★★ GUI 程序（WinForms / WPF / Gtk）必须套 `xvfb-run`。**
+  沙箱里没有物理显示器，而 GUI 程序启动时会去连 X Server，
+  连不上就**直接崩**，报错长这样：
+
+  ```
+  System.TypeInitializationException: The type initializer for
+  'System.Windows.Forms.XplatUI' threw an exception.
+   ---> System.ArgumentNullException: Could not open display
+        (X-Server required. Check your DISPLAY environment variable)
+  ```
+
+  ⚠️ **这个报错极具误导性**：它看起来像"程序有问题"或"mono 不兼容"，
+  实际只是**缺一个虚拟显示器**。正确做法是加前缀：
+
+  ```bash
+  xvfb-run -a mono GUI.exe          # 跑起来看行为
+  xvfb-run -a mono GUI.exe --help   # 有些题有命令行模式
+  ```
+
+  **这类题的解法通常就是"跑起来看它怎么校验输入"** —— 所以跑不起来
+  等于整道题无从下手。实测：`[FlareOn3]GUI` 不套 `xvfb-run` 必崩，
+  套上就正常启动。
+
 - **★ 数值/矩阵题直接用 `numpy` / `scipy`，不要手写循环。**
   镜像里**都装了**（`python3 -c "import numpy, scipy"` 可验证）。
   涉及矩阵运算、多项式、有限域、信号处理时，纯 Python 循环会慢到
