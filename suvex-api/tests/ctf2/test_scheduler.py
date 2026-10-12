@@ -160,7 +160,7 @@ def test_claim_prefers_higher_priority(db_session: Session, ctf2_competition, mo
     started: list[str] = []
     release = threading.Event()
 
-    def fake_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def fake_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         started.append(challenge_id)
         release.wait(timeout=10)
 
@@ -200,7 +200,7 @@ def test_claim_falls_back_to_fifo_when_priorities_are_equal(
     started: list[str] = []
     release = threading.Event()
 
-    def fake_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def fake_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         started.append(challenge_id)
         release.wait(timeout=10)
 
@@ -233,7 +233,7 @@ def test_setting_priority_does_not_touch_a_running_challenge(
     started: list[str] = []
     release = threading.Event()
 
-    def fake_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def fake_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         started.append(challenge_id)
         release.wait(timeout=10)
 
@@ -323,7 +323,7 @@ def test_tick_respects_the_concurrency_limit(
     started: list[str] = []
     release = threading.Event()
 
-    def fake_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def fake_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         started.append(challenge_id)
         # 卡在这里，模拟"解题要跑很久"。
         release.wait(timeout=10)
@@ -358,7 +358,7 @@ def test_finished_workers_free_up_slots(
     """
     started: list[str] = []
 
-    def quick_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def quick_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         started.append(challenge_id)
 
     monkeypatch.setattr("app.ctf2.runner.run_worker", quick_worker)
@@ -393,7 +393,7 @@ def test_queue_is_fifo(db_session: Session, ctf2_competition, monkeypatch) -> No
     """
     order: list[str] = []
 
-    def recording_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def recording_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         order.append(challenge_id)
         # ★ 模拟真实 worker 的最后一步：把状态推离 `solving`。
         #
@@ -430,7 +430,7 @@ def test_non_solving_challenges_are_never_claimed(
     """只有 `solving` 的题会被认领 —— 未解出/已解出的不动。"""
     started: list[str] = []
     monkeypatch.setattr(
-        "app.ctf2.runner.run_worker", lambda cid, *, resume=False: started.append(cid)
+        "app.ctf2.runner.run_worker", lambda cid, *, resume=False, attempt_id=None: started.append(cid)
     )
 
     _make_challenge(db_session, ctf2_competition, remote_id="1", status="unsolved")
@@ -553,7 +553,7 @@ def test_stop_waits_for_running_workers(
     """
     finished = threading.Event()
 
-    def slow_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def slow_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         time.sleep(0.3)
         finished.set()
 
@@ -580,7 +580,7 @@ def test_stop_warns_when_workers_outlive_the_timeout(
 
     block = threading.Event()
 
-    def stuck_worker(challenge_id: str, *, resume: bool = False) -> None:
+    def stuck_worker(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         block.wait(timeout=10)
 
     monkeypatch.setattr("app.ctf2.runner.run_worker", stuck_worker)
@@ -632,7 +632,7 @@ def test_stats_reports_running_and_limit(
     """`GET /ctf2/queue` 要能回答"为什么我点了却一直排队"。"""
     block = threading.Event()
     monkeypatch.setattr(
-        "app.ctf2.runner.run_worker", lambda cid, *, resume=False: block.wait(timeout=5)
+        "app.ctf2.runner.run_worker", lambda cid, *, resume=False, attempt_id=None: block.wait(timeout=5)
     )
     monkeypatch.setattr(scheduler_module, "max_concurrent", lambda db=None: 2)
 
@@ -660,7 +660,7 @@ def test_enqueue_sets_solving_and_triggers_a_tick(
     """
     started: list[str] = []
     monkeypatch.setattr(
-        "app.ctf2.runner.run_worker", lambda cid, *, resume=False: started.append(cid)
+        "app.ctf2.runner.run_worker", lambda cid, *, resume=False, attempt_id=None: started.append(cid)
     )
     monkeypatch.setattr(scheduler_module, "max_concurrent", lambda db=None: 2)
 

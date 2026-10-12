@@ -189,7 +189,22 @@ class Ctf2Scheduler:
         # 它的生命周期只有"受理 → 启动"这几秒，落库反而错 ——
         # 服务重启后的孤儿回收不该让一道题"接着上次跑"：那时上下文早凉了，
         # 而且用户看到的是一次全新的运行，不是一个被恢复的旧现场。
+        #
+        # ⚠️ v0.28 起它只是**兜底**：主路径是 `_attempts` 里的快照 id
+        #    （那个也带 `resume` 字段）。留着它是因为"没有快照的调用"
+        #    仍然存在（比如测试直接调 `enqueue(challenge_id)`）。
         self._resume: set[str] = set()
+        # ★ 策略快照 id（v0.28）：受理时定下的"这次按什么策略跑"。
+        #
+        # 为什么在这里中转一个 id 而不是把策略值一个个传下去：
+        # 调度器只是"排队与启动"的中转，不该理解策略语义。传 id 让
+        # worker 自己读快照，**将来加字段不用改这条链路** ——
+        # 而这条链路跨了 service → scheduler → runner 三层，
+        # 每加一个字段动三处是它最容易出错的地方。
+        #
+        # ⚠️ 与 `_resume` 不同，它**必须**在启动时取走并清掉：
+        #    留着会让下一次重排（用户点"再解一次"）误用上一次的快照。
+        self._attempts: dict[str, str] = {}
         self._lock = threading.Lock()
         # 让整个 tick 串行 —— 少了它，"数名额 + 认领"会与另一个
         # 触发点（比如接口里的 enqueue）交叉，于是并发上限失效。
@@ -423,7 +438,9 @@ class Ctf2Scheduler:
     # 认领与启动
     # ══════════════════════════════════════════════════════
 
-    def enqueue(self, challenge_id: str, *, resume: bool = False) -> None:
+    def enqueue(
+        self, challenge_id: str, *, resume: bool = False, attempt_id: str | None = None
+    ) -> None:
         """受理一道题：置为 `solving` 并捅一下调度器。
 
         ★ 状态先落库、再启动：进程在两者之间崩溃时，这道题会停在
@@ -432,12 +449,19 @@ class Ctf2Scheduler:
         跑着但数据库里显示 `unsolved` 的任务 —— 那是最糟的状态：
         它占着配额，而界面上看不出任何东西在跑。
 
-        `resume=True` 时，算这道题"接着上次的进度跑"（见
-        `runner.build_spec` 的 `resume` 参数）。标志必须在这里记下 ——
-        真正的启动发生在 `tick()` 里，那是另一个调用栈。
+        ## 两个参数的分工（v0.28 起）
+
+        * `attempt_id` —— **主路径**：受理时落下的策略快照
+          （`Ctf2SolveAttempt`）。worker 读它拿到 mode / brief /
+          回合预算 / 模型，于是**排队期间改全局设置不会影响这次解题**。
+        * `resume` —— **兜底**：没有快照的调用（测试、旧脚本）仍然
+          靠这个内存标志表达"接着上次跑"。有快照时以快照里的
+          `resume` 为准（它在受理时就被记下了，且不怕重启）。
         """
-        if resume:
-            with self._lock:
+        with self._lock:
+            if attempt_id is not None:
+                self._attempts[challenge_id] = attempt_id
+            if resume:
                 self._resume.add(challenge_id)
         with session_scope() as db:
             challenge = db.get(Ctf2Challenge, challenge_id)
@@ -451,16 +475,17 @@ class Ctf2Scheduler:
     def _start(self, challenge_id: str) -> None:
         from app.ctf2 import runner
 
-        # ★ 取一次就清掉：这个标志只对**这一次**启动有效。
-        #   不清的话，这道题以后每一次重排都会被当成续解 ——
-        #   而那时上次的过程可能已经是几十轮之前的事了。
+        # ★ 取一次就清掉：这两个标志都只对**这一次**启动有效。
+        #   不清的话，这道题以后每一次重排都会被当成续解（或误用上一次
+        #   的策略快照）—— 而那时上次的过程可能已经是几十轮之前的事了。
         with self._lock:
+            attempt_id = self._attempts.pop(challenge_id, None)
             resume = challenge_id in self._resume
             self._resume.discard(challenge_id)
 
         def target() -> None:
             try:
-                runner.run_worker(challenge_id, resume=resume)
+                runner.run_worker(challenge_id, resume=resume, attempt_id=attempt_id)
             except Exception:  # noqa: BLE001 - runner 自己已经兜住了，这是双保险
                 logger.exception("CTF2 worker 线程异常退出：%s", challenge_id)
 

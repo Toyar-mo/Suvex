@@ -117,8 +117,10 @@ from app.ctf2.models import (
     Ctf2Challenge,
     Ctf2Competition,
     Ctf2Environment,
+    Ctf2SolveAttempt,
 )
 from app.settings.models import SINGLETON_ID, Ctf2Config
+
 logger = logging.getLogger("suvex.ctf2")
 
 T = TypeVar("T")
@@ -1085,12 +1087,33 @@ def _upsert_competition(
 def _find_competition(
     db: Session, account_id: str, remote_id: str, kind: str
 ) -> Ctf2Competition | None:
+    """按 `(account_id, remote_id)` 找赛事/练习集。
+
+    ## ⚠️ 查询条件**必须与唯一键一致**（2026-10-11 修）
+
+    唯一键是 `(account_id, remote_id)`（见 `models.Ctf2Competition`
+    的 `uq_ctf2_competitions_account_remote`），而这里原来还多带了一个
+    `kind` 条件。两者的差别不是风格问题，它会**撞唯一约束**：
+
+      同账号下若 practice 与 competition 的 `remote_id` 相同，
+      带 `kind` 的查询会认为"没有记录"→ 走插入分支 → 数据库按
+      唯一键拒绝 → 整次同步失败（而报错是 IntegrityError，
+      看起来像"数据坏了"，不像"查询条件写窄了"）。
+
+    而 `kind` 是**我们这边的分类**（`competition` / `practice`），
+    不是平台的标识 —— 用分类去查一个按标识唯一的行，本身就说不通。
+
+    ## `kind` 参数保留的用途：**更新**而不是**查找**
+
+    找到之后由 `_upsert_competition` 用平台给的 kind 覆盖它：
+    平台把一个东西从 practice 改成 competition 时我们要跟上，
+    而不是因为"查不到"就去插一条新的（那会撞唯一键）。
+    """
     return (
         db.execute(
             select(Ctf2Competition).where(
                 Ctf2Competition.account_id == account_id,
                 Ctf2Competition.remote_id == remote_id,
-                Ctf2Competition.kind == kind,
             )
         )
         .scalars()
@@ -1689,9 +1712,10 @@ def start_solve(
     mode: str | None = None,
     sandbox_profile: str | None = None,
     max_wrong_submissions: int | None = None,
+    brief: str | None = None,
     resume: bool = False,
 ) -> Ctf2Challenge:
-    """受理一次解题：校验 → 落策略 → 入队。
+    """受理一次解题：校验 → **落策略快照** → 入队。
 
     ## ★ 校验三件事，每一件都挡掉一类真实的浪费
 
@@ -1708,6 +1732,26 @@ def start_solve(
     或从"重解一次"按钮进来的另一条路径）。真正要紧的是**两条路都不
     静默截断** —— 把用户填的 99 悄悄夹成 10 并返回成功，
     他下次会看到一个自己没设过的值。
+
+    ## ★★ 为什么策略必须在这里**快照**（2026-10-11 修）
+
+    这个函数原来是 `del mode` —— 收下策略参数后直接丢弃，理由是
+    "策略是一次解题的输入，不是题目的属性，worker 跑的时候现读设置"。
+    **前半个判断是对的，后半个是错的**：worker 现读的是**那时候**的
+    全局设置，而受理与真正开跑之间隔着一段排队时间（并发上限 3）。
+
+    后果不是"参数没生效"这么轻，它是一条**时序漏洞**：
+
+      · 用户点解题时选 `safe`（明确表示"我要人工确认"）；
+      · 题目排队等待；
+      · 这期间任何人把全局改成 `auto`；
+      · worker 启动时读到 `auto` —— **系统替用户做了一个他明确
+        拒绝过的对外提交**，消耗的是**不可再生**的错误次数额度。
+
+    同一个坑还吃掉了 `brief`（人工线索）与 `max_turns`（回合预算）。
+
+    所以现在把"这一次尝试的输入"落成一行 `Ctf2SolveAttempt`，
+    由 worker 读取。写进去就不再改 —— 要换策略就再受理一次。
     """
     settings_row = effective_ctf2_settings(db)
     _assert_resolvable(challenge)
@@ -1729,15 +1773,22 @@ def start_solve(
             raise ApiError.validation(
                 "未知的沙箱镜像。", {"sandboxProfile": "取值不在允许范围内"}
             )
-        challenge.sandbox_profile = sandbox_profile
-    elif not challenge.sandbox_profile:
-        challenge.sandbox_profile = settings_row.default_sandbox_profile
+        resolved_profile = sandbox_profile
+    else:
+        resolved_profile = challenge.sandbox_profile or settings_row.default_sandbox_profile
+    challenge.sandbox_profile = resolved_profile
 
-    # ★ 提交策略**不存进 challenge** —— 它是一次解题的输入，
-    #   不是题目的属性（见 `Ctf2Submission.mode` 的说明：
-    #   审计要看的是"这次提交是谁发的"）。
-    #   所以 worker 在跑的时候现读设置（`runner.build_spec` 里做）。
-    del mode
+    # ── 解析出本次尝试的策略（**受理时定下，之后不再变**）──────
+    #
+    # 三个值都遵循同一条规则：**显式给了就用给的，没给才取当下的全局值**。
+    # 关键在于"取全局值"这件事**只发生在这里**（受理时刻），
+    # 而不是在 worker 里 —— 那正是这条修复的全部意义。
+    resolved_mode = mode or settings_row.submit_mode
+    resolved_turns = int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS)
+    # brief 与 `scans.brief` 同一条口径：上限 8000，且不进命令行。
+    # 空串归一成 None：`""` 与"没填"在语义上是同一件事，
+    # 而存一个空串会让界面显示一个空白的"人工提示"区块。
+    cleaned_brief = (brief or "").strip() or None
 
     challenge.status = Ctf2ChallengeStatus.SOLVING.value
     # ★ 重新解题时**旧候选作废**。`candidate_ready` 是可以再解的（见
@@ -1746,13 +1797,68 @@ def start_solve(
     #   判定历史不会因此丢失：它在 `ctf2_submissions` 里。
     challenge.candidate_flag = None
     challenge.last_error = None
+
+    attempt = Ctf2SolveAttempt(
+        id=new_id("ctf2try"),
+        challenge_id=challenge.id,
+        mode=resolved_mode,
+        max_turns=resolved_turns,
+        sandbox_profile=resolved_profile,
+        brief=cleaned_brief,
+        # 模型也一起快照：provider 配置会被改（换模型、删掉再建），
+        # 而"这次尝试用的到底是哪个"必须与当时一致 —— 否则复盘时
+        # 看到的模型可能已经不是当时那个了。
+        provider_id=_snapshot_provider_id(db),
+        llm_model=_snapshot_provider_model(db),
+        resume=resume,
+    )
+    db.add(attempt)
     db.commit()
+    db.refresh(attempt)
 
     ctf2_events.emit_challenge_discovered(db, challenge)
     db.commit()
 
-    _enqueue(challenge.id, resume=resume)
+    _enqueue(challenge.id, attempt_id=attempt.id)
     return challenge
+
+
+def _snapshot_provider_id(db: Session) -> str | None:
+    """受理时记下这次会用哪个 provider。没有就返回 `None`。
+
+    ⚠️ 与 `runner.build_spec` 取 provider 的规则必须**一致**
+    （`is_default DESC, created_at ASC` 的第一条）—— 否则快照里记的
+    与实际用的会是两个。这条一致性由 `test_solve_attempt.py` 里那条
+    "快照的模型与 build_spec 选中的一致"钉住。
+    """
+    from app.providers.models import ProviderAccount
+
+    row = (
+        db.execute(
+            select(ProviderAccount).order_by(
+                ProviderAccount.is_default.desc(), ProviderAccount.created_at
+            )
+        )
+        .scalars()
+        .first()
+    )
+    return row.id if row is not None else None
+
+
+def _snapshot_provider_model(db: Session) -> str | None:
+    """同 `_snapshot_provider_id`，取的是模型名。"""
+    from app.providers.models import ProviderAccount
+
+    row = (
+        db.execute(
+            select(ProviderAccount).order_by(
+                ProviderAccount.is_default.desc(), ProviderAccount.created_at
+            )
+        )
+        .scalars()
+        .first()
+    )
+    return row.model if row is not None else None
 
 
 def _assert_resolvable(challenge: Ctf2Challenge) -> None:
@@ -1957,16 +2063,22 @@ def _assert_llm_ready(db: Session) -> None:
         )
 
 
-def _enqueue(challenge_id: str, *, resume: bool = False) -> None:
-    """把题丢进调度器。
+def _enqueue(challenge_id: str, *, attempt_id: str | None = None) -> None:
+    """把题丢进调度器，带上**这次尝试的快照 id**。
 
     ⚠️ 延迟 import：`scheduler` 依赖 `runner`，而 `runner` 依赖本模块 ——
     在模块顶层互相 import 会得到一次循环导入，而它的表现是
     "某个端点在第一次被调用时报 ImportError"，排查方向完全跑偏。
+
+    ★ 为什么传 `attempt_id` 而不是把策略值一个个传下去（2026-10-11）：
+    调度器只是个"排队与启动"的中转，它不需要理解策略语义。传一个 id
+    让 worker 自己去读快照，好处是**将来加字段不用改这条链路** ——
+    而这条链路跨了 service → scheduler → runner 三层，
+    每加一个字段就要动三处是它最容易出错的地方。
     """
     from app.ctf2.scheduler import get_scheduler
 
-    get_scheduler().enqueue(challenge_id, resume=resume)
+    get_scheduler().enqueue(challenge_id, attempt_id=attempt_id)
 
 
 def cancel_challenge(db: Session, challenge: Ctf2Challenge) -> Ctf2Challenge:

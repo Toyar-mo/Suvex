@@ -572,6 +572,12 @@ def solve_challenge(
         mode=payload.mode,
         sandbox_profile=payload.sandboxProfile,
         max_wrong_submissions=payload.maxWrongSubmissions,
+        # ★ v0.28：这个字段在 schema 里一直有，而**从来没被转交过** ——
+        #   `Ctf2SolveIn.brief` 的注释写着"传给 agent 的额外提示"，
+        #   实际上一路断在这里：router 不传 → service 没参数 →
+        #   prompt 里没有位置。用户填了它，什么都不会发生，
+        #   而且没有任何反馈告诉他这一点。
+        brief=payload.brief,
         resume=payload.resume,
     )
     db.refresh(challenge)

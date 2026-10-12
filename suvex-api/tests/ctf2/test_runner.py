@@ -938,6 +938,47 @@ def test_run_worker_passes_resume_to_the_async_body() -> None:
     )
 
 
+def test_run_worker_passes_attempt_id_to_the_async_body() -> None:
+    """★★ 同上一条的**同类风险**：`attempt_id` 必须一路透传到 `build_spec`。
+
+    ## 为什么它值得单独一条（v0.28）
+
+    策略快照（`Ctf2SolveAttempt`）跨了**四层**才到达真正用它的地方：
+
+        service.start_solve → _enqueue → scheduler._start
+        → run_worker → _run_worker → build_spec
+
+    而 `attempt_id` 在中间任何一层断掉，症状都是**静默的**：
+    `build_spec` 收不到它 → 退回读全局设置 → 那条时序漏洞原样回来
+    （用户选 safe、被 auto 提交）。不会报错、不会有日志 ——
+    与上面那条 `resume` 的 NameError 不同，这个**连报错都没有**。
+
+    ⚠️ 全量测试抓不到它：`_run_worker` 要真的起沙箱才会走到 `build_spec`。
+       所以这里用签名 + 调用点钉住 —— 与上一条同样的手法。
+    """
+    import inspect
+
+    # ① 三个函数都得收下它
+    assert "attempt_id" in inspect.signature(runner._run_worker).parameters, (
+        "_run_worker 必须接收 attempt_id"
+    )
+    assert "attempt_id" in inspect.signature(runner.build_spec).parameters, (
+        "build_spec 必须接收 attempt_id —— 它是真正读快照的那一层"
+    )
+    assert "attempt_id" in inspect.signature(runner.run_worker).parameters, (
+        "run_worker 必须接收 attempt_id（调度器传的就是它）"
+    )
+
+    # ② 每一层都要真的往下传，而不是收下就丢
+    run_worker_src = inspect.getsource(runner.run_worker)
+    assert "attempt_id=attempt_id" in run_worker_src, (
+        "run_worker 必须把 attempt_id 透传给 _run_worker"
+    )
+    assert "attempt_id=attempt_id" in inspect.getsource(runner._run_worker), (
+        "_run_worker 必须把它传给 build_spec —— 断在这里就退回读全局设置了"
+    )
+
+
 def test_solver_loop_refuses_out_of_scope_http_and_tells_the_model() -> None:
     """★ 越界的 HTTP 请求被拒，且**拒绝理由回到模型**——
     它必须知道为什么不行才能换路子，否则会反复试同一个地址。

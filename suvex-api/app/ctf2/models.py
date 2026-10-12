@@ -37,6 +37,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     ForeignKey,
     Index,
@@ -624,6 +625,125 @@ class Ctf2Environment(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return f"<Ctf2Environment id={self.id!r} status={self.status!r}>"
+
+
+class Ctf2SolveAttempt(Base):
+    """**一次解题尝试的不可变策略快照。**
+
+    ## ★ 为什么必须有这张表（2026-10-11 补）
+
+    在这之前，`POST /ctf2/challenges/{id}/solve` 的 `mode` 参数
+    **被静默丢弃** —— `service.start_solve` 收下它之后直接 `del mode`
+    （那里有注释解释"策略不存进 challenge"），而 worker 直到真正开跑
+    才现读**当时的全局设置**。
+
+    后果不是"参数没生效"这么轻。它是一条真实的时序漏洞：
+
+      · 用户点解题时选 `safe`（明确表示"我要人工确认"）；
+      · 题目排队等待（并发上限 3，前面有题在跑）；
+      · 这期间**任何人**把全局设置改成 `auto`；
+      · worker 启动时读到的就是 `auto` —— 于是**系统替用户做了一个
+        他明确拒绝过的对外提交**，消耗的是**不可再生**的错误次数额度。
+
+    同一个坑还吃掉了另外两个受理期输入：
+      · `brief`（人工补充的线索）—— schema 收了、router 没转交、
+        service 没字段、prompt 里没有位置，**一个字都进不去 solver**；
+      · `max_turns` —— 与 `mode` 在 `build_spec` 里是相邻两行、
+        共用同一个 `settings_row`，所以排队期间改预算同样会漂移。
+
+    ## 为什么是"快照"而不是"把字段加到 challenge 上"
+
+    这些值是**这一次尝试**的输入，不是题目的属性：
+      · 同一道题第二次解可能换 `mode`（上次 safe 没确认，这次想 auto）；
+      · 换 `brief`（补了新线索）；
+      · 换模型（上次那个模型没解出来）。
+
+    存到 challenge 上会让"上一次用什么策略"被下一次覆盖 ——
+    而事后复盘"它当时是按什么策略跑的"正是最需要能回答的问题。
+    与 `Ctf2Environment` 存"同一道题起过三次环境"是同一条理由。
+
+    ## ⚠️ 落库之后**不可变**
+
+    写进去就不再改。worker 读它、不再读全局设置 —— 这就是这个类
+    存在的全部意义。要换策略就再受理一次（新的一行）。
+
+    与 `Ctf2Submission` 的"只增不改"是同一条纪律，但方向相反：
+    提交记录记的是**对外动作**，本表记的是**内部输入**。
+    """
+
+    __tablename__ = "ctf2_solve_attempts"
+    __table_args__ = (
+        # 取值合法性。与 `Ctf2Submission.mode_valid` 同一个理由：
+        # 这两列会进审计与复盘，写进一个拼错的字符串会让
+        # "这次到底按什么策略跑的"变成读不出来的东西。
+        CheckConstraint(
+            f"mode IN ({', '.join(repr(v) for v in values(Ctf2SubmitMode))})",
+            name="solve_attempt_mode_valid",
+        ),
+        CheckConstraint(
+            f"sandbox_profile IN ({', '.join(repr(v) for v in values(Ctf2SandboxProfile))})",
+            name="solve_attempt_profile_valid",
+        ),
+        # 回合数必须有下界：0 或负数意味着"受理了但一轮都不跑"，
+        # 那是配置错误而不是预算选择（下界与 `MIN_CTF2_MAX_TURNS` 一致）。
+        CheckConstraint("max_turns >= 1", name="solve_attempt_turns_positive"),
+        # "这道题最近几次尝试"是最常见的查询（界面要显示上次用了什么策略）。
+        Index("ix_ctf2_solve_attempts_challenge_at", "challenge_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    challenge_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+    )
+
+    # ── 受理时定下的策略（worker 只读这里）──────────────────
+    #
+    # ⚠️ 默认值只用于"历史行/内部调用没给值"的兜底，**不是**运行时
+    #    默认 —— 真正的默认来自受理时的 `effective_ctf2_settings`。
+    #    这与 `models.Scan.goal` 那条"NOT NULL 但不给数据库默认"的
+    #    取舍不同：那里漏填会静默变成某个值，这里漏填会被下面
+    #    `service.start_solve` 的显式解析挡住。
+    mode: Mapped[str] = mapped_column(
+        String(16), nullable=False, default=Ctf2SubmitMode.SAFE.value
+    )
+    max_turns: Mapped[int] = mapped_column(Integer, nullable=False)
+    sandbox_profile: Mapped[str] = mapped_column(String(32), nullable=False)
+
+    # 用户补充的线索（"考点在反调试"）。上限与 `scans.brief` 一致（8000）。
+    #
+    # ⚠️ 它**可能含敏感信息**（用户会写"口令是 xxx"）。但与 flag 同理：
+    #    它本来就要进 prompt、被模型读到；加密它只会让"这次带了什么线索"
+    #    在复盘时读不出来。所以明文，且**不进活动流的 summary** ——
+    #    与 `events.emit_candidate_ready` 把 flag 放进 detail 而非 summary
+    #    是同一条纪律（summary 会显示在列表里）。
+    brief: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # ── 这次尝试用的是哪个模型 ────────────────────────────────
+    #
+    # ★ 存下来而不是"用时再查 provider"：provider 配置会被改
+    #   （换模型、删掉再建一个），而"这次尝试用的到底是哪个"必须与
+    #   当时一致 —— 否则复盘时"为什么这次没解出来"永远说不清，
+    #   因为看到的模型可能已经不是当时那个了。
+    #   与 `Ctf2Submission.sub_flag_id` 复制而非引用是同一条理由。
+    #
+    # 可空：受理时若还没配 provider，`build_spec` 会抛错并把题目置
+    # failed —— 那时这行仍然是"受理过的证据"，不该因为没模型就不落库。
+    provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    llm_model: Mapped[str | None] = mapped_column(String(160), nullable=True)
+
+    # 是不是续解（用户在界面上明确选的）。它同样是**这一次**的输入，
+    # 所以和策略放在一起 —— 与 `_resume` 那个内存集合不同，落库之后
+    # 重启也不会丢（见 `scheduler` 的说明：重启把孤儿置 unsolved 后，
+    # 那条"这次是续解"的信息原本会随进程一起消失）。
+    resume: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<Ctf2SolveAttempt id={self.id!r} challenge={self.challenge_id!r} "
+            f"mode={self.mode!r} turns={self.max_turns}>"
+        )
 
 
 class Ctf2Submission(Base):

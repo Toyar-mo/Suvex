@@ -93,7 +93,13 @@ from app.ctf2.client import (
     Ctf2ResponseError,
     assert_allowed_target,
 )
-from app.ctf2.models import CTF2_OFFICIAL_HOSTS, Ctf2Challenge, Ctf2Environment, Ctf2Submission
+from app.ctf2.models import (
+    CTF2_OFFICIAL_HOSTS,
+    Ctf2Challenge,
+    Ctf2Environment,
+    Ctf2SolveAttempt,
+    Ctf2Submission,
+)
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -1322,6 +1328,19 @@ class SolveSpec:
     # 所以这里给的不是"更多轮数"，而是**接着上次的起点**。
     resume_digest: tuple[str, ...] = ()
 
+    # ★ v0.28：用户补充的线索（"考点在反调试"、"libc 是 2.27"）。
+    #
+    # ## 为什么它必须进来（2026-10-11 修）
+    #
+    # `POST /solve` 的 schema 一直有这个字段（`schemas.Ctf2SolveIn.brief`），
+    # 注释写着"传给 agent 的额外提示"，而它**一个字都没到过模型那里**：
+    # router 没转交 → service 没字段 → 这里也没有位置。
+    #
+    # 后果是用户以为自己在帮 agent，实际什么都没发生 —— 而且**没有任何
+    # 反馈**告诉他这一点。这与 `scans.brief` 形成了刺眼的不一致：
+    # 那边是真的通的（进指令文件、进 prompt）。
+    brief: str = ""
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
         return (
@@ -1786,6 +1805,30 @@ def _initial_prompt(spec: SolveSpec) -> str:
         "先看清楚手上有什么（附件类型、服务响应），再决定方向。",
         f"你最多有 {spec.max_turns} 轮。每轮只做一件事，然后按协议输出。",
     ]
+    # ★ v0.28：人工补充的线索。
+    #
+    # ## 位置很讲究：放在"现在开始"**之后**、"续解提示"**之前**
+    #
+    # 因为它既不是题目的一部分（那是上面的题面），也不是"接着上次走"
+    # 的指令（那是下面的续解段）。它是一个**独立的输入源**：
+    # 出题人没写、但用户知道的信息。
+    #
+    # ⚠️ 措辞里明确它是"人工补充"而不是"题目要求"：不这么写的话，
+    #    模型会把它当成题面的一部分，而在冲突时（提示说"libc 是 2.27"
+    #    而实际探出来是别的版本）倾向于相信它 —— 那会把一个"线索"
+    #    变成一条"错误的先验"。所以下面那句"与实测冲突时以实测为准"
+    #    是这条提示的一部分，不是客套。
+    if spec.brief.strip():
+        lines += [
+            "",
+            "## 人工补充的线索（不是题面，是出题人之外的人给的提示）",
+            "",
+            spec.brief.strip(),
+            "",
+            "⚠️ 把它当作**方向性提示**，不是必须成立的事实。"
+            "如果你实测的结果与它冲突，**以实测为准**，"
+            "并在 `ruled_out` 里写清「提示说 X、实测是 Y」。",
+        ]
     if spec.resume_digest:
         lines += [
             "",
@@ -2452,7 +2495,12 @@ def _advance_challenge(
 
 
 def build_spec(
-    db: Session, challenge: Ctf2Challenge, *, mode: str | None = None, resume: bool = False
+    db: Session,
+    challenge: Ctf2Challenge,
+    *,
+    mode: str | None = None,
+    resume: bool = False,
+    attempt_id: str | None = None,
 ) -> SolveSpec:
     """从数据库行拼出 `SolveSpec`。**唯一**读凭据的地方。
 
@@ -2460,14 +2508,48 @@ def build_spec(
     "明文只在一处出现"那条纪律）；额度默认值来自 CTF2 自己的配置行
     （`service.effective_ctf2_settings`），而不是环境变量 ——
     见 `settings.models.Ctf2Config` 的说明。
+
+    ## ★★ `attempt_id`：策略以快照为准（v0.28 修）
+
+    这是那条时序漏洞的修复点。在这之前，`mode` / 回合预算都在**这里**
+    现读 `effective_ctf2_settings(db)` —— 也就是"worker 真正开跑的
+    那一刻"的全局设置，而它与"用户点解题的那一刻"之间隔着一段排队
+    时间。后果见 `service.start_solve` 的说明（用户选了 safe 却被
+    auto 提交）。
+
+    现在的优先级是**快照 > 全局**：
+
+      · 有 `attempt_id` → 读 `Ctf2SolveAttempt`，用它里面的 mode /
+        回合预算 / brief / 模型。**不再读全局设置**（那正是修复的意义）；
+      · 没有（测试直接调、或历史任务）→ 退回读全局，行为与修复前一致。
+
+    ⚠️ 保留全局兜底不是为了"两条路并存"，而是因为 `build_spec` 是个
+       公开函数（测试与脚本会直接调它）。让它在没有快照时直接报错，
+       会把"兼容旧调用"变成"所有旧调用都炸"。
     """
     from app.ctf2 import service as ctf2_service
     from app.providers.models import ProviderAccount
     from app.providers.service import decrypt_provider_key
+
     # 沙箱配额与 `scans` 侧读的是**同一行配置**（见下面 `sandbox_row` 的说明）。
     # 局部导入与上面几个一致：这个模块被 scheduler 的线程反复调用，
     # 而 settings 领域只在真正启动一次解题时才需要。
     from app.settings import service as settings_service
+
+    # ── 策略快照（有就用它，没有才读全局）────────────────────
+    attempt: Ctf2SolveAttempt | None = None
+    if attempt_id:
+        attempt = db.get(Ctf2SolveAttempt, attempt_id)
+        if attempt is None:
+            # 拿不到就退回旧行为，但**必须出声**：这意味着入队与启动
+            # 之间快照被删了（或者 id 传错了），而"静默退回读全局"
+            # 正是这次要消灭的那类问题。
+            logger.warning(
+                "找不到解题策略快照 %s（题目 %s），退回读全局设置 —— "
+                "这次解题的策略可能不是受理时定下的那个",
+                attempt_id,
+                challenge.id,
+            )
 
     provider = (
         db.execute(
@@ -2495,12 +2577,24 @@ def build_spec(
     )
     access_urls = tuple(environment.access_urls or []) if environment else ()
     settings_row = ctf2_service.effective_ctf2_settings(db)
-    resolved_mode = mode or settings_row.submit_mode
-    # ★ 回合预算来自配置（v0.26）。见 `vocab.DEFAULT_CTF2_MAX_TURNS`：
-    #   这个数没有全局最优，所以它必须是能改的。
-    resolved_turns = int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS)
 
-    # ★★ 沙箱配额（2026-10-10 补）。
+    if attempt is not None:
+        # ★ 快照优先。三个值全部来自它，**一个字都不读全局设置**。
+        resolved_mode = attempt.mode
+        resolved_turns = int(attempt.max_turns)
+        resolved_brief = attempt.brief
+        # 续解标志同样以快照为准：它也是"这一次尝试"的输入，
+        # 而落库之后不怕服务重启（内存里的 `_resume` 会丢）。
+        resume = attempt.resume
+        # 快照里有模型就用它（provider 配置可能已经被改过）。
+        if attempt.llm_model:
+            provider = _provider_from_snapshot(db, attempt, fallback=provider)
+    else:
+        resolved_mode = mode or settings_row.submit_mode
+        resolved_turns = int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS)
+        resolved_brief = None
+
+    # ★ 沙箱配额（2026-10-10 补）。
     #
     # ## 这里原来漏了，而后果不是"少个优化"
     #
@@ -2568,10 +2662,48 @@ def build_spec(
         network_isolated=not needs_raw_network(challenge.category),
         resume_digest=tuple(resume_digest),
         max_turns=resolved_turns,
+        # ★ v0.28：人工线索。`resolved_brief` 来自快照（有快照时）
+        #   或 None（没快照的旧路径）—— 后者与修复前的行为一致。
+        brief=resolved_brief or "",
         # 沙箱配额（见上面那段说明：这四个参数原来漏了，容器一直没有上限）
         cpus=sandbox_cpus,
         memory_mb=sandbox_memory_mb,
     )
+
+
+def _provider_from_snapshot(
+    db: Session, attempt: Ctf2SolveAttempt, *, fallback
+):  # noqa: ANN001, ANN201
+    """按快照里记的 `provider_id` 取回 provider；取不到就用 `fallback`。
+
+    ## 为什么按 id 取、而不是"按默认规则重新选一条"
+
+    `build_spec` 选 provider 的规则是 `is_default DESC, created_at ASC`
+    的第一条。如果快照只记了模型名而这里重新按规则选，那么"受理之后
+    有人把另一个 provider 设成默认"会让这次尝试用上**另一个** provider
+    —— 模型名可能相同、但 base_url 与 key 不同，于是行为与受理时不一致。
+
+    所以按 id 精确取回。
+
+    ⚠️ provider 被删掉时退回 `fallback`（并按默认规则重选一条）：
+        "受理时那个 provider 已经没了"是一个真实情况（用户会删掉再建），
+        而这时**让整道题失败**比"换一条能用的接着跑"更糟 —— 后者至少
+        还有机会解出来，而前者确定解不出来。这个取舍与
+        `_resolve_provider` 系列函数一致。
+    """
+    from app.providers.models import ProviderAccount
+
+    if not attempt.provider_id:
+        return fallback
+    row = db.get(ProviderAccount, attempt.provider_id)
+    if row is None:
+        logger.warning(
+            "快照 %s 记的 provider %s 已不存在，改用当前默认 provider",
+            attempt.id,
+            attempt.provider_id,
+        )
+        return fallback
+    return row
 
 
 def _host_resources_path() -> Path | None:
@@ -2706,7 +2838,9 @@ def _save_transcript(challenge_id: str, outcome: SolveOutcome) -> Path | None:
         return None
 
 
-def run_worker(challenge_id: str, *, resume: bool = False) -> None:
+def run_worker(
+    challenge_id: str, *, resume: bool = False, attempt_id: str | None = None
+) -> None:
     """**worker 线程的入口**（同步）。调度器调它。
 
     ## 三段式的分工（这是本模块最容易写错的地方）
@@ -2722,9 +2856,18 @@ def run_worker(challenge_id: str, *, resume: bool = False) -> None:
     循环是 worker **自己的**（`asyncio.run` 在它自己的线程里），
     所以短暂的同步 DB 操作没有其他人受害 —— 但那个边界必须写在
     明处，否则有人会把它搬到请求路径上（那里会卡住所有并发请求）。
+
+    ## `attempt_id`：这次按什么策略跑（v0.28）
+
+    受理时落下的策略快照 id。传进来之后，**mode / brief / 回合预算 /
+    模型全部以快照为准**，不再读当时的全局设置 —— 见
+    `service.start_solve` 里那段"为什么策略必须快照"的说明。
+
+    ⚠️ 它可以是 `None`（测试直接调、或历史任务）：那时退回读全局
+    设置的旧行为。这是**兼容性兜底**，不是推荐路径。
     """
     try:
-        asyncio.run(_run_worker(challenge_id, resume=resume))
+        asyncio.run(_run_worker(challenge_id, resume=resume, attempt_id=attempt_id))
     except Exception as exc:  # noqa: BLE001 - worker 绝不能把异常抛进调度线程
         logger.exception("CTF2 解题 worker 崩溃：%s", challenge_id)
         try:
@@ -2780,7 +2923,9 @@ def _has_correct_submission(db: Session, challenge_id: str) -> bool:
     )
 
 
-async def _run_worker(challenge_id: str, *, resume: bool = False) -> None:
+async def _run_worker(
+    challenge_id: str, *, resume: bool = False, attempt_id: str | None = None
+) -> None:
     """worker 的 async 主体。见 `run_worker` 的三段式说明。"""
     from app.ctf2 import service as ctf2_service
 
@@ -2811,7 +2956,7 @@ async def _run_worker(challenge_id: str, *, resume: bool = False) -> None:
             logger.info("这道题已经解出，跳过解题：%s", challenge_id)
             return
         try:
-            spec = build_spec(db, challenge, resume=resume)
+            spec = build_spec(db, challenge, resume=resume, attempt_id=attempt_id)
         except Ctf2Error as exc:
             challenge.status = Ctf2ChallengeStatus.FAILED.value
             challenge.last_error = _safe_text(exc.message)
