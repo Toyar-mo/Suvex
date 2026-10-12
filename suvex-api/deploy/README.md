@@ -41,14 +41,26 @@ sudo -u suvex cp -r src/suvex-web /opt/suvex/suvex-web
 
 cd /opt/suvex/suvex-api
 sudo -u suvex python3.12 -m venv .venv
-sudo -u suvex .venv/bin/pip install -r requirements.txt
+# ★ 装**锁文件**，不是 requirements.txt（2026-10-11 改）
+sudo -u suvex .venv/bin/pip install --require-hashes -r requirements.lock
 ```
 
-> **只装 `requirements.txt`，不装 `requirements-dev.txt`**。
+> **为什么装 `requirements.lock` 而不是 `requirements.txt`**：
+> 后者是**范围约束**（`fastapi>=0.115,<1.0`），同一个 commit 在不同
+> 时间装会得到不同版本 —— "三个月前部署能跑，今天重装就炸"是真实
+> 存在的失败模式。锁文件里是 35 个包的精确版本 + sha256 哈希，
+> `--require-hashes` 会逐个校验。
+>
+> ⚠️ 锁文件是**在 Linux 上生成的**。如果你在 Windows 上重新生成过它，
+> 它记的是 `win_amd64` 的 wheel，在这里会装不上 —— 而报错是
+> "找不到满足条件的版本"，看起来像依赖写错了。重新生成的命令见
+> `requirements.txt` 头部。
+
+> **只装运行时依赖，不装 `requirements-dev.txt`**。
 > 后者带 pytest 等测试依赖，生产不需要。
 >
 > ⚠️ 这里曾经有过一个真实的坑：`httpx` 一度只在 dev 依赖里，
-> 而运行时要 import 它 —— 结果任何"只装 requirements.txt"的部署
+> 而运行时要 import 它 —— 结果任何"只装运行时依赖"的部署
 > 都会在**启动时**直接 `ModuleNotFoundError`，报错位置还在
 > `providers/llm.py` 的 import 行，看起来像"某个 provider 出问题"。
 > 已修，但值得知道这类错误长什么样。
@@ -209,13 +221,188 @@ curl -sI https://suvex.example.com/ | head -1
 ```bash
 cd /opt/suvex/src && sudo -u suvex git pull
 sudo -u suvex cp -r suvex-api/app /opt/suvex/suvex-api/
-sudo -u suvex .venv/bin/pip install -r /opt/suvex/suvex-api/requirements.txt
+# 依赖有变动时（锁文件也一起更新了）：
+sudo -u suvex .venv/bin/pip install --require-hashes -r /opt/suvex/suvex-api/requirements.lock
 sudo systemctl restart suvex-api     # 迁移在启动命令里，会自动跑
 
 # 前端要重新构建（产物不是源码）
 cd /opt/suvex/suvex-web && sudo -u suvex npm ci && sudo -u suvex npm run build
 ```
 
+> ⚠️ **`git pull` 之后要确认锁文件是否也变了。** 只 `git pull` 而没重装
+> 依赖，会遇到"代码是新的、依赖是旧的"—— 症状是新代码 import 一个
+> 新包时 `ModuleNotFoundError`，或者更隐蔽地行为不一致。
+> 判断方式：`git diff HEAD@{1} --stat | grep requirements`。
+
 > ⚠️ **重启会终止正在跑的扫描。** `recover_orphans()` 会把它们标成
 > `aborted`，而子进程树会被终止。升级前先确认没有扫描在跑
 > （总览页或 `GET /api/v1/scans?status=running`）。
+
+---
+
+## 十、备份与恢复
+
+**要备份的是两样东西，少一样都会出事。**
+
+| 备份对象 | 丢了会怎样 |
+| --- | --- |
+| PostgreSQL 数据库 | 全部扫描、漏洞、报告、审计记录消失 |
+| `SUPEX_SECRET_KEY` | **provider 的 API key 全部解不开**（密文还在，但没有密钥就是一堆乱码） |
+
+> ⚠️ 第二样最容易被漏掉，而且漏了之后**症状具有欺骗性**：
+> 数据库完好、界面能开、列表也在，只是每个 provider 都报
+> "凭据无法解密"。如果这时以为"重新填一次 API key 就行"，
+> 那原来的 key 就真的没了 —— 得重新去各厂商申请。
+
+### 备份
+
+```bash
+# 1. 数据库（自定义格式，便于选择性恢复）
+sudo -u postgres pg_dump -Fc suvex > /var/backups/suvex-$(date +%F).dump
+
+# 2. 加密密钥（它就在 api.env 里，但单独存一份更稳妥）
+sudo cp /etc/suvex/api.env /var/backups/suvex-api.env-$(date +%F)
+sudo chmod 0600 /var/backups/suvex-api.env-$(date +%F)
+```
+
+> **`pg_dump -Fc` 而不是纯 SQL**：自定义格式支持 `pg_restore -t`
+> 只恢复某张表，而纯 SQL 只能整库灌。出事故时"只救回
+> `findings` 表"是真实需求。
+
+> ⚠️ **备份里含密钥文件，所以要按密钥的规格保护它**
+> （`chmod 0600`、不要进版本库、不要走聊天工具传输）。
+
+### 恢复
+
+```bash
+# 1. 建一个干净库（不要往现有的库上灌）
+sudo -u postgres createdb -O suvex suvex_restore
+
+# 2. 灌回去
+sudo -u postgres pg_restore -d suvex_restore /var/backups/suvex-2026-10-11.dump
+
+# 3. 恢复密钥：把备份的 api.env 放回去
+sudo cp /var/backups/suvex-api.env-2026-10-11 /etc/suvex/api.env
+sudo chown root:suvex /etc/suvex/api.env && sudo chmod 0640 /etc/suvex/api.env
+
+# 4. 让服务指向恢复出来的库（改 SUPEX_DATABASE_URL），重启
+sudo systemctl restart suvex-api
+```
+
+**恢复后必须验的一件事**：打开设置页，确认 provider 显示的是
+**掩码**（如 `sk-****abcd`）而不是"凭据无法解密"。
+前者说明密钥配对了，后者说明密钥不是当初那把。
+
+---
+
+## 十一、磁盘容量与清理
+
+> ★ **这一节是必需的，不是可选的。** 扫描产物目前**没有任何自动
+> 清理**，只增不减（代码里也这么写着：`app/scans/runner.py` 的
+> `scan_upload_dir` docstring）。真实部署下不清理会一直涨到磁盘满，
+> 而那时数据库也会跟着写不进去。
+
+### 会涨在哪里
+
+默认都落在**项目根**下（可用 `SUPEX_SCAN_ROOT` 改到别的盘）：
+
+| 路径 | 是什么 | 实测体积 |
+| --- | --- | --- |
+| `_scan_runs/scan_<id>/` | **扫描产物**（strix 的运行记录、日志、漏洞 JSON） | 5–7 MB / 次 |
+| `_scan_runs/_ctf2_attachments/<题目id>/` | CTF2 题目附件原件 | 单机实测 64 MB |
+| `_scan_runs/_uploads/<扫描id>/` | 用户上传的题目附件原件 | 视上传量 |
+| `_uploads/` | 漏洞附件（漏洞详情里贴的图/文件） | 视上传量 |
+
+> **量级感**：按每次扫描 6 MB、每天 20 次算，`scan_*` 一年约
+> **43 GB**。CTF2 附件是另一条线，取决于下多少题。
+
+### 可以删什么、绝不能删什么
+
+| 路径 | 能删吗 |
+| --- | --- |
+| `_scan_runs/scan_<id>/` | ✅ **这就是要清的**。报告正文已存进数据库，删了不影响历史报告 |
+| `_scan_runs/_uploads/` | ❌ 题目附件**原件**，同一道题重跑还要用 |
+| `_scan_runs/_ctf2_attachments/` | ❌ 跟题目走，重跑要复用 |
+| `_uploads/` | ❌ 漏洞附件，漏洞详情页还在引用 |
+| `_scan_runs/_uploads/_staging/` | ✅ 暂存区，服务启动时会自动清（`sweep_staging`） |
+
+> ⚠️ **为什么附件刻意放在 `_scan_runs/` 里面的子目录**：这样
+> "手工清一次扫描"（`rm -rf _scan_runs/scan_xxx`）不会顺手带走
+> 附件。**但反过来也意味着：如果你按"删 `_scan_runs` 下所有东西"
+> 的思路清，就会把附件一起删掉。** 所以下面的命令只匹配 `scan_*`。
+
+### 清理命令
+
+```bash
+cd /opt/suvex/suvex-api
+
+# 1. 先看现状（不要跳过这一步）
+du -sh _scan_runs
+ls -1 _scan_runs | wc -l
+
+# 2. 试运行：列出 30 天前、且已结束的扫描产物（只列不删）
+find _scan_runs -maxdepth 1 -type d -name 'scan_*' -mtime +30 -print | head -20
+find _scan_runs -maxdepth 1 -type d -name 'scan_*' -mtime +30 -print | wc -l
+
+# 3. 确认清单没问题后再真删
+find _scan_runs -maxdepth 1 -type d -name 'scan_*' -mtime +30 -exec rm -rf {} +
+```
+
+> ⚠️ **三处必须注意**：
+> 1. `-maxdepth 1` —— 少了它会把子目录也匹配上；
+> 2. `-name 'scan_*'` —— **绝不能写成 `-name '*'` 或省略**，否则
+>    `_uploads/`、`_ctf2_attachments/` 会被一起删掉，而那是不可恢复的
+>    （用户得重新上传/重新下题）；
+> 3. `-mtime +30` 是**按目录修改时间**算的。正在跑的扫描目录时间很新，
+>    不会被选中 —— 但为稳妥，清理前确认没有扫描在跑
+>    （`GET /api/v1/scans?status=running`）。
+
+### 建议挂个定时任务
+
+```bash
+# /etc/cron.weekly/suvex-clean（或 systemd timer）
+#!/bin/bash
+set -e
+cd /opt/suvex/suvex-api
+find _scan_runs -maxdepth 1 -type d -name 'scan_*' -mtime +30 -exec rm -rf {} +
+logger -t suvex-clean "已清理 30 天前的扫描产物，当前 $(du -sh _scan_runs | cut -f1)"
+```
+
+> **保留期取多少**：报告正文在数据库里，磁盘上留的是**证据与原始记录**。
+> 30 天是"还来得及回溯"与"不撑爆磁盘"之间的折中。要长期留档就把
+> 它归档到对象存储再删本地，而不是无限留着。
+
+### 数据库也会涨
+
+`activity_events` 是最大的表（单次扫描约 936 条事件，实测 10 MB）。
+它**有**保留策略：启动时按审计保留期清理（见 `app/main.py`）。
+若发现它异常大，先查：
+
+```bash
+sudo -u postgres psql suvex -c \
+  "SELECT relname, pg_size_pretty(pg_total_relation_size(relid)) AS size
+   FROM pg_statio_user_tables ORDER BY pg_total_relation_size(relid) DESC LIMIT 10;"
+```
+
+---
+
+## 十二、容量与并发参数
+
+`/etc/suvex/api.env` 里与容量相关的项（README 的变量表里也有）：
+
+| 变量 | 默认 | 说明 |
+| --- | --- | --- |
+| `SUPEX_DB_POOL_SIZE` | 5 | 每个进程的常驻连接数 |
+| `SUPEX_DB_MAX_OVERFLOW` | 10 | 峰值时可临时多开的连接 |
+| `SUPEX_MAX_CONCURRENT_SCANS` | 3 | 同时跑的扫描数（每个会起一个沙箱容器） |
+| `SUPEX_SCAN_ROOT` | 项目根 | 产物与附件落盘根，**建议单独挂一块盘** |
+
+> ⚠️ **连接数要算乘法**：如果 uvicorn 开了多个 worker
+> （`--workers 4`），那么 `4 × (5 + 10) = 60` 个连接。
+> PostgreSQL 默认 `max_connections = 100`，**再叠加别的客户端就会打满**。
+> 规则：`worker 数 × (POOL_SIZE + MAX_OVERFLOW) < max_connections`。
+
+> ⚠️ **并发扫描数与内存**：每个沙箱容器有 CPU / 内存上限
+> （设置页可改，默认 4 核 / 4096 MB）。`MAX_CONCURRENT_SCANS=3`
+> 意味着峰值约 12 GB 内存 —— 部署前按机器实际内存调这个数。
+

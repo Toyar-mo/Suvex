@@ -115,6 +115,8 @@ cd suvex-api && docker compose up --build
 | 2 | **compose 镜像是"控制面"，跑不了扫描** | 实测确认容器里没有 `strix` 与 `docker` CLI；要跑扫描用 `deploy/` 的宿主机部署 |
 | 3 | **`/metrics` 不覆盖依赖注入抛出的 401/403** | 路由层返回的状态码都计数，但鉴权失败经异常处理器生成的不计（见 `test_metrics.py` 里那条钉住局限的用例） |
 | 4 | **多用户是单租户的** | 多个账号共享全部数据；真多租户要每张业务表加 `tenant_id`（见下面的说明） |
+| 5 | **扫描产物目录只增不减** | 每次扫描在 `_scan_runs/<scan_id>/` 留下 5–7 MB（实测），**没有任何自动清理**。按每天 20 次扫描估约 43 GB/年。当前只能靠运维手工清（`deploy/README.md` 第十节给了命令与注意事项）。代码里早已承认这条缺口（`app/scans/runner.py` 的 `scan_upload_dir` docstring），但此前没进这份清单 |
+| 6 | **依赖没有锁定文件** | `requirements.txt` 用「下限 + 主版本上界」（0 行 `==`），也没有 `uv.lock` / `poetry.lock`。同一 commit 在不同时间构建会得到不同的依赖版本。这是刻意的取舍（见该文件头部注释），但对要求"可复现构建"的审计场景不够 |
 
 > 已经补上的六项：**CI**（GitHub Actions 三个 job）、**LICENSE**
 > （Apache 2.0，含专利授权条款）、**契约漂移**（v0.21/v0.22 两轮专项对账）、

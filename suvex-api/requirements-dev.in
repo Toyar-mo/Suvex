@@ -1,0 +1,34 @@
+# `requirements-dev.lock` 的**输入**文件（pip-compile 的源）。
+#
+# ## 为什么要有这个文件
+#
+# 锁文件是**生成物**，不该手改。而要重新生成它，就必须有一份
+# "输入是什么"的记录 —— 否则下次想更新依赖时，得靠猜当初写了什么约束。
+# 这个文件就是那份记录。
+#
+# ## 用法
+#
+# ```bash
+# docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c '
+#   pip install --quiet pip-tools
+#   pip-compile --generate-hashes --output-file=requirements-dev.lock requirements-dev.in'
+# ```
+#
+# ⚠️ **必须保留下面的范围约束**。第一次生成时我在这里写了无约束的
+#    `pytest`，解析出 `pytest==9.1.1`，而 `requirements-dev.txt` 原本
+#    写的是 `pytest>=8.3,<9.0` —— 那等于借"生成锁文件"偷偷升了主版本，
+#    而锁文件一旦提交，没人会再去看它是否违反了原约束。
+#
+# ⚠️ 运行时依赖通过 `-r requirements.lock` 引入，**不要**在这里重复列 ——
+#    两份锁文件必须解析出同一套运行时版本，否则 CI 装的与生产装的是
+#    两套东西，而"CI 全绿、生产炸"正是这么来的。
+
+-r requirements.lock
+
+# 测试。范围与 `requirements-dev.txt` 的说明保持一致。
+pytest>=8.3,<9.0
+pytest-asyncio>=0.24,<2.0
+
+# 验收脚本用（`scripts/verify_acceptance.py`）：它打真实 HTTP 端点，
+# 不用 TestClient —— 目的是验证"进程真的起得来"。
+httpx>=0.27,<1.0

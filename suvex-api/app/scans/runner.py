@@ -459,6 +459,110 @@ def challenge_dir(scan_id: str) -> Path:
     return get_settings().scan_root / scan_id / CHALLENGE_DIRNAME
 
 
+def remove_scan_artifacts(scan_id: str) -> bool:
+    """删掉一次扫描的产物目录。返回是否真的删了东西。
+
+    ## ★ 为什么必须有这个函数（2026-10-11 补）
+
+    在这之前，**永久删除一次扫描只删数据库行，磁盘上的产物永远留着** ——
+    `purge_scan` 走到 `db.delete(scan)` 就结束了。于是：
+
+      · 用户在回收站里点"永久删除"，以为清掉了，磁盘上还躺着 5–7 MB；
+      · 删得越多，孤儿目录越多，而且**再也没有任何东西引用它们** ——
+        数据库里已经查不到那个 id 了。
+
+    这正是"磁盘只增不减"那条缺口的**主要来源**（另一部分是有意的：
+    归档的扫描要留着产物，因为归档是"收起来"不是"删掉"）。
+
+    ## 只删 `scan_root/<scan_id>/`，不碰兄弟目录
+
+    `scan_root/` 下面住着五类东西，**只有第一类归这里管**：
+
+    | 路径 | 归谁管 |
+    | --- | --- |
+    | `<scan_id>/` | ★ 本函数（扫描产物） |
+    | `_uploads/<scan_id>/` | 附件原件，跟**任务**走，重跑还要用 |
+    | `_uploads/_staging/` | `uploads.sweep_staging` |
+    | `_ctf2_attachments/<题目id>/` | CTF2 附件，跟**题目**走 |
+    | `<transcript 目录>` | CTF2 对话记录 |
+
+    ⚠️ 所以这里**按 id 拼路径**，而不是"遍历 `scan_root` 删掉匹配
+    某些条件的目录" —— 后者一旦条件写错就会连附件一起删，而附件
+    **删了就回不来**（用户得重新上传 / 重新下题）。按 id 拼路径
+    从构造上就不可能碰到 `_uploads` 这些下划线开头的兄弟目录。
+
+    ⚠️ `scan_id` 来自数据库主键（`scan_<ULID>`），不是用户输入。
+    但仍然做一次形状校验：万一将来有人把 URL 参数传进来，
+    `../` 会让这个函数删掉任意目录。
+    """
+    # 形状校验：只允许 `scan_` + 字母数字。ULID 是大写 base32。
+    if not scan_id or not scan_id.startswith("scan_"):
+        return False
+    if not scan_id[5:].isalnum():
+        return False
+
+    root = get_settings().scan_root.resolve()
+    target = (root / scan_id).resolve()
+    # 双保险：解析之后必须仍在 scan_root 之下（挡 `..` 与符号链接）。
+    if not target.is_relative_to(root) or target == root:
+        return False
+    if not target.is_dir():
+        return False
+
+    shutil.rmtree(target, ignore_errors=True)
+    return not target.exists()
+
+
+def sweep_orphan_artifacts(db) -> int:  # noqa: ANN001
+    """删掉**数据库里已无记录**的扫描产物目录。返回删了几个。
+
+    ## 为什么按"孤儿"而不是按"时间"
+
+    按时间删（"30 天前的目录都删"）会误伤两种情况：
+
+      1. **正在跑的扫描** —— 它的目录很新，但一个跑了很久的扫描
+         （大目标、慢网络）目录也可能很旧，而它正在写；
+      2. **归档的扫描** —— 归档是"收起来"，用户随时可能要看产物。
+
+    而"数据库里已经没有这条记录了"是一个**确定的**判据：那条扫描
+    要么被 `purge_scan` 永久删除了，要么数据库被从别处恢复过。
+    无论哪种，磁盘上那份都已经是无人引用的孤儿 —— 删它是安全的。
+
+    ⚠️ 只扫 `scan_*` 形状的目录，跳过全部下划线开头的兄弟目录
+    （`_uploads` / `_ctf2_attachments` / 转录目录）。理由同
+    `remove_scan_artifacts`：那些的生命周期不跟扫描走。
+    """
+    from sqlalchemy import select
+
+    from app.scans.models import Scan
+
+    root = get_settings().scan_root
+    if not root.is_dir():
+        return 0
+
+    on_disk = [
+        p.name
+        for p in root.iterdir()
+        if p.is_dir() and p.name.startswith("scan_") and p.name[5:].isalnum()
+    ]
+    if not on_disk:
+        return 0
+
+    # 一次查完，不要每个目录查一次库。
+    known = set(
+        db.execute(select(Scan.id).where(Scan.id.in_(on_disk))).scalars()
+    )
+    removed = 0
+    for name in on_disk:
+        if name in known:
+            continue
+        if remove_scan_artifacts(name):
+            removed += 1
+    if removed:
+        logger.info("清掉了 %d 个已无数据库记录的扫描产物目录", removed)
+    return removed
+
+
 # ══════════════════════════════════════════════════════════
 # ★ 子进程的环境变量**白名单**
 # ══════════════════════════════════════════════════════════

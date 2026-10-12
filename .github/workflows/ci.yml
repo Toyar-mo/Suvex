@@ -157,7 +157,21 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: suvex-api/requirements-dev.txt
+          # ★ 缓存键要覆盖**锁文件**（2026-10-11 改）。
+          #
+          # 原先只列了 `requirements-dev.txt`，而那个文件现在是
+          # `-r requirements-dev.lock` —— 真正的版本在锁文件里。
+          # 只按 .txt 算缓存键的后果：升级了依赖、锁文件变了，
+          # 而 CI 仍然命中旧缓存，装的是**上一套**版本 ——
+          # 于是"本地装新的能过、CI 用旧的却红"，方向完全反了。
+          #
+          # 四个文件都列上：两个锁文件（真正决定装什么）+ 两个
+          # 声明文件（改了范围但还没重新生成锁文件时也能让缓存失效）。
+          cache-dependency-path: |
+            suvex-api/requirements.txt
+            suvex-api/requirements.lock
+            suvex-api/requirements-dev.txt
+            suvex-api/requirements-dev.lock
 
       - name: 安装依赖
         run: |

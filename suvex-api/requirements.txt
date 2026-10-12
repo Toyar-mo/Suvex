@@ -1,6 +1,38 @@
 # 运行时依赖。版本用「下限 + 主版本上界」而不是精确锁定 ——
 # 这是脚手架，锁死小版本会让后面的任务在补丁升级上耗时间。
-# 真正的可复现构建靠镜像 tag，不靠这里。
+#
+# ★ 可复现构建靠 `requirements.lock`（2026-10-11 补），不靠这个文件。
+#
+# 这个文件是**给人读的、给依赖解析器用的约束**：它说"我要 fastapi 0.115
+# 以上、1.0 以下"。而 `requirements.lock` 是**解析结果**：35 个包的精确
+# 版本 + sha256 哈希。`Dockerfile` 装的是锁文件。
+#
+# ## 什么时候要重新生成
+#
+# 改了这个文件之后（加包、改版本范围）就必须重新生成，否则
+# `Dockerfile` 装的还是旧的那份 —— 而症状是"我在 requirements.txt 里
+# 加了包，构建出来的镜像却没有它"，看起来像构建缓存出了问题。
+#
+# ## 怎么生成（**必须在 Linux 上**）
+#
+# ⚠️ 不要在 Windows 上生成：那边拿到的是 `win_amd64` 的 wheel，
+#    哈希与文件名都与 Linux 不同，生成出来的锁文件在 Linux 上装不上，
+#    而报错是"找不到满足条件的版本"，看起来像依赖写错了。
+#
+# ```bash
+# docker run --rm -v "$PWD:/w" -w /w python:3.12-slim sh -c '
+#   pip install --quiet pip-tools
+#   pip-compile --generate-hashes --output-file=requirements.lock requirements.txt'
+# ```
+#
+# 生成后**要验证它能装上**（锁文件装不上比没有锁文件更糟）：
+#
+# ```bash
+# docker run --rm -v "$PWD:/w:ro" python:3.12-slim sh -c '
+#   pip install --no-cache-dir --require-hashes -r /w/requirements.lock'
+# ```
+#
+# 然后推一次 CI —— `backend` job 会按这个文件装依赖，装不上就红。
 
 fastapi>=0.115,<1.0
 uvicorn[standard]>=0.32,<1.0

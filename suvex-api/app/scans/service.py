@@ -1680,6 +1680,28 @@ def purge_scan(db: Session, scan_id: str) -> None:
     db.delete(scan)
     db.commit()
 
+    # ★ 删数据库行之后，**也要删磁盘上的产物**（2026-10-11 补）。
+    #
+    # 在此之前这里就结束了 —— 于是"永久删除"只删了记录，磁盘上那份
+    # 5–7 MB 的产物永远留着，而且再没有任何东西引用它（数据库里已经
+    # 查不到这个 id）。删得越多，孤儿目录越多。
+    #
+    # ⚠️ 放在 `db.commit()` **之后**，不是之前：万一 commit 失败
+    #    （约束、连接断开），扫描记录还在，产物也不该先没了 ——
+    #    那会让一条"存在但读不出产物"的记录看起来像数据损坏。
+    #    先落库、再删文件，失败时最坏是留一个孤儿目录，
+    #    而那个由 `sweep_orphan_artifacts` 兜底。
+    #
+    # ⚠️ 删失败**不影响这次 purge 的成功**：数据库那边已经删干净了，
+    #    对用户来说这次操作就是成功的。磁盘清理失败只记日志 ——
+    #    抛异常会让用户以为"没删掉"，然后重复操作。
+    from app.scans import runner as runner_mod
+
+    if not runner_mod.remove_scan_artifacts(scan_id):
+        logger.warning(
+            "扫描 %s 已从数据库永久删除，但产物目录没能删掉（可能已被手工清理）", scan_id
+        )
+
 
 # ══════════════════════════════════════════════════════════
 # 保留期清理（自动归档 + 回收站到期）
@@ -1779,16 +1801,35 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
         older_than_seconds=uploads_mod.STAGING_TTL_SECONDS
     )
 
+    # ── 顺带清掉**孤儿产物目录**（2026-10-11 补）──────────────
+    #
+    # ★ 与上面那条同一个理由：`sweep_retention` 已经是"定期清理"的
+    #   唯一入口（启动时 + 改保留规则时都会调），孤儿产物属于同一类事。
+    #
+    # ⚠️ 它删的是"数据库里已经没有记录的 `scan_*` 目录"，**不是**
+    #   "超过 N 天的目录" —— 后者会误伤正在跑的扫描与已归档的扫描
+    #   （归档是"收起来"，产物要留着）。判据与理由见
+    #   `runner.sweep_orphan_artifacts` 的 docstring。
+    #
+    # ⚠️ 也**不会**碰 `_uploads/` / `_ctf2_attachments/` / 转录目录 ——
+    #   那些的生命周期不跟扫描走（附件跟任务、题目附件跟题目）。
+    from app.scans import runner as runner_mod
+
+    orphans_removed = runner_mod.sweep_orphan_artifacts(db)
+
     result = {
         "archived": archived_count,
         "purged": purged_count,
         "keptBecauseReferenced": kept_count,
         "stagingSwept": staging_removed,
+        "orphanArtifactsSwept": orphans_removed,
     }
     if any(result.values()):
         logger.info(
-            "扫描保留期清理：归档 %d 条、清除 %d 条、因被报告引用而保留 %d 条",
+            "扫描保留期清理：归档 %d 条、清除 %d 条、因被报告引用而保留 %d 条、"
+            "暂存 %d 批、孤儿产物 %d 个",
             archived_count, purged_count, kept_count,
+            staging_removed, orphans_removed,
         )
     return result
 

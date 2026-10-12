@@ -204,6 +204,27 @@ prompts/         agent 系统提示词
 | `SUPEX_SCAN_AUTHORIZATION_STATEMENT` | 服务端**逐字校验**前端送来的授权声明，前后端必须一致 |
 | `SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS` | 默认 `true`（本地模型要连 `127.0.0.1:11434`）。置 false 会让本地模型完全不可用；云厂商元数据地址无论此项如何都会被拦 |
 
+容量相关的几项（**生产部署前要算一遍**，详见 [`deploy/README.md`](deploy/README.md) 第十一、十二节）：
+
+| 变量 | 默认 | 注意 |
+| --- | --- | --- |
+| `SUPEX_DB_POOL_SIZE` | 5 | 每个进程的常驻连接数 |
+| `SUPEX_DB_MAX_OVERFLOW` | 10 | 峰值时可临时多开的连接 |
+| `SUPEX_MAX_CONCURRENT_SCANS` | 3 | 同时跑的扫描数，**每个会起一个沙箱容器** |
+| `SUPEX_SCAN_ROOT` | 项目根 | 扫描产物与附件的落盘根，**建议单独挂一块盘** |
+
+> ⚠️ **连接数是乘法，不是加法。** 若 uvicorn 开了多 worker
+> （`--workers 4`），占用是 `4 × (5 + 10) = 60` 个连接。PostgreSQL
+> 默认 `max_connections = 100`，再叠加别的客户端就会打满。
+> 规则：`worker 数 × (POOL_SIZE + MAX_OVERFLOW) < max_connections`。
+>
+> ⚠️ **并发扫描数与内存**：每个沙箱容器默认 4 核 / 4096 MB（设置页可改）。
+> `MAX_CONCURRENT_SCANS=3` 意味着峰值约 12 GB 内存 —— 按机器实际内存调。
+>
+> ⚠️ **`SUPEX_SCAN_ROOT` 只增不减**：扫描产物目前**没有自动清理**
+> （见根 README 的缺口清单第 5 条）。清理命令与"哪些目录绝不能删"
+> 写在 `deploy/README.md` 第十一节。
+
 生产环境（`SUPEX_ENV=prod`）会在启动时检查并**拒绝**以不安全的配置启动
 （未开 `SUPEX_COOKIE_SECURE`）；其余危险配置只打中文警告，不一上来就崩。
 
@@ -383,7 +404,7 @@ $ docker exec suvextest-api-1 sh -c "which strix docker"
 | 会话 Cookie | `HttpOnly` + `SameSite=Strict` + `Max-Age` + 生产加 `Secure` | 页面会渲染**不可信文本**（`detail.evidence`、`poc.code`），令牌放 localStorage 等于送给 XSS |
 | CSRF | `SameSite=Strict` + 服务端 Origin 校验 + 拒绝表单编码的写请求（附件上传走显式登记表） | 判定不能只依赖浏览器实现 |
 | 令牌存储 | 只存 SHA-256 摘要；明文只在创建响应出现一次 | 「能再看一次」等于「它以可逆形式存着」 |
-| 登录限流 | 滑动窗口 5 次/分钟 + 15 次/小时，与 `/auth/setup` 共用计数桶 | 口令是唯一凭据，不分桶则交替打两个端点能把尝试次数翻倍 |
+| 登录限流 | 滑动窗口 5 次/分钟 + 15 次/小时，**按来源 IP 计数**，与 `/auth/setup` 共用计数桶 | 口令是登录凭据里唯一的秘密（用户名不是）。按 IP 而不是按用户名计数，是因为多用户之后攻击者可以**喷洒不同用户名**来绕过"每个用户名 5 次"这类配额；共用一个桶则避免交替打两个端点把尝试次数翻倍 |
 | 时序攻击 | 账号不存在时也跑一次完整的 argon2 校验（用固定的假哈希） | 否则响应时间会泄露"这个系统初始化了没有" |
 | 来源 IP | **不读 `X-Forwarded-For`** | 它可被客户端伪造，而它同时用于限流 key 与授权留痕 |
 | 附件存储 | 路径完全由服务端从 id 生成，与上传文件名无关；扩展名白名单；下载强制 `Content-Disposition: attachment` | 用文件名拼路径会同时打开路径穿越与**互相覆写**两个洞；SVG 可内嵌 `<script>`，内联渲染等于让上传的文件在本站原点执行 |

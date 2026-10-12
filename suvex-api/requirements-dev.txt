@@ -1,10 +1,46 @@
--r requirements.txt
+# 开发/测试依赖。CI 与本地都装它。
+#
+# ══════════════════════════════════════════════════════════════
+# ★ 为什么是「两份锁文件」而不是一份（2026-10-11 实测后定）
+# ══════════════════════════════════════════════════════════════
+#
+# 运行时依赖走 `requirements.lock`（35 个包，带 sha256 哈希），
+# 开发依赖走 `requirements-dev.lock`（41 个包，同样带哈希）。
+#
+# ## 为什么不能像原来那样写 `-r requirements.txt`
+#
+# 原来第一行是 `-r requirements.txt`，那是**范围约束**（`fastapi>=0.115,<1.0`）。
+# 后果是 `requirements.lock` 成了没有任何地方验证的产物 ——
+# 它会慢慢腐烂（依赖发新版、哈希对不上，而没人发现），直到某次
+# 真的用 Dockerfile 构建时才炸。而那次构建可能是在交付现场。
+#
+# ## 为什么也不能只写 `-r requirements.lock` + dev 包（实测否掉了）
+#
+# 第一版改成这样，**实测直接报错**：
+#
+#     ERROR: In --require-hashes mode, all requirements must have their
+#     versions pinned with ==. These do not: pytest<9.0,>=8.3
+#
+# 原因：锁文件里每个包都带 `--hash`，那会让 pip 进入 **hash-checking
+# 模式**，而该模式要求**同一个安装计划里所有依赖**都钉死为 `==` 并带哈希。
+# dev 依赖是范围约束，两者无法共存。
+#
+# ⚠️ 试过把 dev 依赖放在锁文件**前面**，报同样的错 —— 所以这**不是
+#    顺序问题**，是模式冲突。顺序这个念头当时看着挺合理，实测推翻了它。
+#
+# 解法就是现在这样：dev 依赖也钉死成锁文件，于是全程 hash-checking
+# 模式，不冲突。
+#
+# ## 什么时候要重新生成（两份都要）
+#
+# 改了 `requirements.txt` → 重新生成 `requirements.lock`；
+# 改了本文件的范围 → 重新生成 `requirements-dev.lock`。
+# 命令见 `requirements.txt` 头部（dev 那份把输入文件换成
+# `requirements-dev.in`）。
+#
+# ⚠️ 生成时**必须保留原来的范围约束**。我第一次生成时在 `.in` 里写了
+#    无约束的 `pytest`，解析出 `pytest==9.1.1`，而原文件写的是
+#    `<9.0` —— 那等于借"生成锁文件"偷偷升级了主版本。
+# ══════════════════════════════════════════════════════════════
 
-# 测试
-pytest>=8.3,<9.0
-pytest-asyncio>=0.24,<2.0
-httpx>=0.27,<1.0
-
-# 验收脚本用（scripts/verify_acceptance.py）
-# 它打真实的 HTTP 端点，不用 TestClient —— 目的是验证「进程真的起得来」，
-# 而不是「ASGI app 对象在进程内能响应」。这两件事不是一回事。
+-r requirements-dev.lock

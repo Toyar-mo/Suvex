@@ -34,7 +34,19 @@
 # 而大多数用这个镜像的场景并不需要执行后端。
 # ══════════════════════════════════════════════════════════════
 
-FROM python:3.12-slim
+# ── 基础镜像钉到 digest，不用浮动 tag ────────────────────────
+#
+# `python:3.12-slim` 是一个**会移动**的 tag：同一个 Dockerfile 今天构建
+# 与三个月后构建，拿到的是不同的基础镜像（不同 glibc、不同系统库）。
+# 对企业审计要的"可复现构建"来说，那是一个真实的缺口 ——
+# 而 `requirements.lock` 只锁住了 Python 包，锁不住这一层。
+#
+# ⚠️ digest 对应 `linux/amd64`。要在别的架构上构建（如 arm64 服务器），
+#    得换成那个架构的 digest，否则 Docker 会报"找不到匹配的 manifest"。
+#    取值：`docker inspect python:3.12-slim --format '{{index .RepoDigests 0}}'`
+#    更新方式：定期执行上面那条命令，把新 digest 替换到这里，然后
+#    **推一次 CI 确认全绿** —— 不要手工改完就以为没事。
+FROM python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
 
 # PYTHONDONTWRITEBYTECODE：容器里不需要 .pyc，写了只是多一层可写层。
 # PYTHONUNBUFFERED：不加的话日志会被缓冲，`docker compose logs` 看不到
@@ -54,8 +66,23 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # 依赖层。改 app/ 里的代码不会让这一层失效。
-COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+#
+# ★ 用 `requirements.lock` 而不是 `requirements.txt`（2026-10-11 补）。
+#
+# `requirements.txt` 是**范围约束**（`fastapi>=0.115,<1.0`），所以同一个
+# commit 在不同时间构建会装到不同版本 —— 而"三个月前能跑，现在装出
+# 一个新版本就炸"是真实存在的失败模式。
+#
+# `requirements.lock` 由 `pip-compile --generate-hashes` 在**目标平台**
+# （linux/amd64 + Python 3.12，就是这个镜像）生成，含 35 个包的精确版本
+# 与 sha256 哈希；`--require-hashes` 会校验每一个下载物。
+#
+# ⚠️ **锁文件必须在 Linux 上生成**。Windows 拿到的是 `win_amd64` 的
+#    wheel，哈希与文件名都与 Linux 不同 —— 在 Windows 上生成的锁文件
+#    拿到这里会装不上，而报错是"找不到满足条件的版本"，看起来像
+#    依赖写错了。重新生成的命令见 requirements.txt 头部。
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # 应用层。alembic.ini 与 alembic/ 必须进镜像 ——
 # 容器的启动命令里有 `alembic upgrade head`（见 docker-compose.yml）。
