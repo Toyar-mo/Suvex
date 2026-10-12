@@ -201,16 +201,46 @@ PLATFORM_ALREADY_SOLVED_MESSAGE = (
 DEFAULT_LLM_TIMEOUT = 180.0
 # ── LLM 调用的**连接层**重试 ──────────────────────────────
 #
-# 只覆盖 `ConnectError` / `ConnectTimeout` / `ReadTimeout` 这三种"抖了一下"。
-# 4xx 与协议错误不重试：它们重试多少次都一样，只会把"key 配错了"
-# 拖成几十秒的等待。
+# 覆盖的是"抖了一下"这一类错误，4xx 与真正的协议错误不重试 ——
+# 后者重试多少次都一样，只会把"key 配错了"拖成几十秒的等待。
 #
 # ⚠️ 为什么值得单独重试：一次瞬时抖动就能让**整道题**作废 ——
 # 实测（2026-09-30）一个已跑到第 28 轮、正在跑 john 的解题过程，
 # 因为一次 `ConnectError` 全部丢掉，而当时链路是通的（401 / 0.14s）。
 # 重试成本是几百毫秒，不重试的代价是几十轮工具调用白跑。
+#
+# ## ★ `ReadError` 必须在这张表里（2026-10-12 实测补）
+#
+# 原先这里只有 `ConnectError` / `ConnectTimeout` / `ReadTimeout`，
+# 而 `ReadError` 落到下面的 `except httpx.HTTPError` 分支被**直接抛出**
+# —— 于是**一次读中断就结束整道题**。
+#
+# 实测（2026-10-12，`[FlareOn3]GUI`）：模型已经用 `monodis` 反汇编出
+# 完整 IL、识别出这是 ConfuserEx 混淆、正在逐段分析方法表 ——
+# 第 14 轮一次 `ReadError` 让这一切作废。日志原话：
+#
+#     CTF2 解题结束：turns=14 candidates=0 error=调用 LLM 失败（ReadError）：
+#
+# 而它**远没有跑满 80 轮预算**。对比上一次同一道题的失败
+# （"回合用尽（80 轮）"）—— 那是能力问题，这次是**基础设施问题**。
+#
+# 语义上 `ReadError` 比 `ConnectError` **更该重试**：
+#   · `ConnectError`   = 连不上 → 可能是地址/端口配错（重试无用）；
+#   · `ReadError`      = 连上了、读响应时断了 → 服务端抖动或本地模型
+#     过载（重试往往就好）。本地部署的模型（如 `10.39.16.9`）在长推理
+#     下过载尤其常见，而这类部署正是本项目的典型用法。
+#
+# 所以把 `ReadError` 一并纳入重试列表。
 _LLM_RETRY_ATTEMPTS = 4
 _LLM_RETRY_BACKOFF = 1.5  # 秒，线性退避：1.5s / 3.0s / 4.5s
+#: 值得重试的连接层异常。**加新成员时要问一句"重试是否可能成功"** ——
+#: 这个元组是唯一的判据，改它等于改"哪些失败会作废整道题"。
+_LLM_RETRYABLE = (
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    httpx.ReadError,  # ★ 2026-10-12 补，见上面那段实测
+)
 # 喂给模型的工具输出上限。**必须有**：一次 `cat` 一个 ELF
 # 会把上下文瞬间吃满，而后果是后续所有回合都在"遗忘"。
 MAX_TOOL_OUTPUT_CHARS = 8000
@@ -974,7 +1004,7 @@ class LlmGateway:
                         headers=self._headers(),
                     )
                 break
-            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout) as exc:
+            except _LLM_RETRYABLE as exc:
                 last_error = exc
                 logger.warning(
                     "调用 LLM 连接失败（%s，第 %d/%d 次）：%s",

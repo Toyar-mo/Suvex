@@ -1128,7 +1128,6 @@ def test_sandbox_env_has_no_credentials_by_default() -> None:
 
 def test_worker_only_sets_harmless_env() -> None:
     """★ 实现里实际传进沙箱的那一份**只有无害开关**。
-
     上一条测的是默认值（`extra_env` 为空）；这一条测的是
     `runner._run_worker` 里**真实构造**的那次调用 —— 默认值是空的
     不等于实现里没塞东西进去。
@@ -1439,8 +1438,8 @@ def test_has_correct_submission_separates_ours_from_a_teammates(
     判据必须是**提交记录**而不是题目行的 `status`：`status` 会被重置、
     会被取消打回，而一条 `correct` 提交一旦落库就永远算数。
     """
-    from app.ctf2.models import Ctf2Submission
     from app.core.ids import new_id
+    from app.ctf2.models import Ctf2Submission
 
     assert runner._has_correct_submission(db_session, ctf2_challenge.id) is False
 
@@ -1597,8 +1596,9 @@ def test_events_strip_nul_before_writing(
     )
     db_session.commit()
 
-    from app.events.models import ActivityEvent
     from sqlalchemy import select
+
+    from app.events.models import ActivityEvent
 
     rows = db_session.execute(select(ActivityEvent)).scalars().all()
     assert rows, "事件应该被写进去了，而不是抛出去"
@@ -1660,3 +1660,66 @@ def test_the_two_columns_cannot_both_hold_a_value(
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+# ══════════════════════════════════════════════════════════
+# LLM 连接层重试：**哪些失败会作废整道题**
+# ══════════════════════════════════════════════════════════
+
+
+def test_read_error_is_retryable() -> None:
+    """★★ `ReadError` 必须在重试列表里 —— 它是**最该重试**的那一类。
+
+    ## 这条守的是一个真实事故（2026-10-12，实测）
+
+    `[FlareOn3]GUI`（.NET 逆向）：模型已经用 `monodis` 反汇编出完整 IL、
+    识别出这是 ConfuserEx 混淆、正在逐段分析方法表 —— 第 14 轮一次
+    `ReadError` 让这一切作废。日志原话：
+
+        CTF2 解题结束：turns=14 candidates=0 error=调用 LLM 失败（ReadError）：
+
+    而它**远没有跑满 80 轮预算**。对比同一道题上一次的失败
+    （"回合用尽（80 轮）"）—— 那次是能力问题，这次是基础设施问题。
+
+    根因：`ReadError` 是 `httpx.HTTPError` 的子类但**不在重试元组里**，
+    于是落到 `except httpx.HTTPError` 分支被直接抛出。
+
+    ## 为什么它比 `ConnectError` 更该重试
+
+      · `ConnectError` = 连不上 → 可能是地址/端口配错（重试无用）；
+      · `ReadError`    = 连上了、读响应时断了 → 服务端抖动或本地模型
+        过载（重试往往就好）。
+
+    本地部署的模型在长推理下过载尤其常见，而那是本项目的典型用法。
+    """
+    import httpx
+
+    assert httpx.ReadError in runner._LLM_RETRYABLE, (
+        "★ ReadError 不在重试列表里 —— 一次读中断会作废整道题。"
+        "见本用例 docstring 里 2026-10-12 的实测事故。"
+    )
+
+
+def test_retryable_set_covers_the_transient_failures() -> None:
+    """★ 四个瞬时失败都在列表里；且**不含** 4xx 类（那些重试无用）。"""
+    import httpx
+
+    for exc_type in (
+        httpx.ConnectError,
+        httpx.ConnectTimeout,
+        httpx.ReadTimeout,
+        httpx.ReadError,
+    ):
+        assert exc_type in runner._LLM_RETRYABLE, f"{exc_type.__name__} 应当可重试"
+
+
+def test_retry_count_and_backoff_are_sane() -> None:
+    """★ 重试次数与退避是有限且合理的（防止有人改成无限重试）。
+
+    4 次、线性退避 1.5s：最坏 1.5+3.0+4.5 = 9 秒。这个量级的意义是
+    "值得为它等"—— 因为它换回的是可能已经跑了 14 轮的工作。
+    """
+    assert 2 <= runner._LLM_RETRY_ATTEMPTS <= 6, (
+        "重试次数太少会让瞬时抖动作废整道题；太多会把一次真实故障拖成长时间等待"
+    )
+    assert 0 < runner._LLM_RETRY_BACKOFF <= 5.0
