@@ -10,7 +10,7 @@ suvex-web/    前端：React 19 · TypeScript 6 · Vite 8 · 35,272 行
 ```
 
 > **契约是唯一事实来源**：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)
-> （2,379 行）。前后端只通过它耦合，规矩是「**发现遗漏先改文档再改代码**」。
+> （3,447 行）。前后端只通过它耦合，规矩是「**发现遗漏先改文档再改代码**」。
 > 两者放在同一个仓库，就是为了让契约与两侧实现的同步改动落在**同一个提交**里。
 
 ---
@@ -91,8 +91,8 @@ cd suvex-api && docker compose up --build
 | 项 | 数字 |
 | --- | --- |
 | 后端代码 | 32,483 行，11 个领域模块 |
-| 后端测试 | **55 个文件 / 903 个测试函数**，对**真实 PostgreSQL** 跑（不是 SQLite） |
-| 数据库迁移 | 30 个 Alembic 版本，从第一个迁移就版本化 |
+| 后端测试 | **60 个文件 / 1041 个测试函数 / 1995 个 pytest 用例**（参数化会展开），对**真实 PostgreSQL** 跑（不是 SQLite） |
+| 数据库迁移 | 32 个 Alembic 版本，从第一个迁移就版本化 |
 | API 端点 | 103 个 |
 | 前端代码 | 35,272 行，140 个文件，**0 个 `any` / 0 个 `@ts-ignore`** |
 | 前端测试 | **92 个 vitest 用例**，覆盖 5 个纯逻辑模块（`data/`、`hooks/`、`lib/`） |
@@ -104,6 +104,44 @@ cd suvex-api && docker compose up --build
 * 扫描编排 → 真 strix 子进程 → Docker 沙箱容器 → 事件导入，链路全通；
 * 单次扫描观测到 **936 条**事件，`agentCount` 从 0 涨上去；
 * CTF2 判题引擎实际解出过题目，flag 落库（如 `CTF2{e1775a04-…}`）。
+
+### CTF 解题能力：2026-10-12 的环境根因整改
+
+一次针对"难题为什么解不出"的实测，把三个**环境层缺口**找了出来并补上。
+它们的共同特征是：**看起来像模型能力问题，实际是环境缺东西**。
+
+| 缺口 | 怎么发现的 | 补法 |
+| --- | --- | --- |
+| **镜像里没有任何 .NET 工具** | 清点镜像：`mono`/`dotnet`/`ILSpy` 全无。而一道已记录的失败题 `[FlareOn3]GUI` 正是 .NET | `mono-runtime` + `mono-devel`（带 `monodis`） |
+| **没有 X Server** | 在真实附件上试 `mono GUI.exe`，**崩在 `Application.EnableVisualStyles()`**：`Could not open display` | `xvfb` + `xauth` + `x11-utils` |
+| **没有 `numpy`/`scipy`** | 清点：两者都不在，而 crypto/misc 的矩阵、多项式、信号处理都要它们 | pip 装（实测 cp314 有预编译轮子） |
+
+> **为什么 X Server 这条最要紧**：那道题是 WinForms 题，题面写着
+> "本题解出相应字符串后请用 flag{} 包裹" —— **解法本来就是"跑起来看它
+> 怎么校验"**，跑不起来等于整道题无从下手。而那个报错
+> （`TypeInitializationException`）**看起来像程序坏了或 mono 不兼容**，
+> 模型因此把它归因成"混淆器导致跑不起来"，转去手工 patch CLR 元数据。
+>
+> 实测对照：不套 `xvfb-run` 必崩；套上之后 `mono GUI.exe` 进程存活
+> （73 MB 内存）、`Xvfb :99` 正常、日志只剩一句无关的 Gtk 主题警告。
+
+同一轮还修了两个**真实缺陷**：
+
+* **`mode` 被静默丢弃**（时序漏洞）：受理时选的 `safe` 会被排队期间
+  变更的全局设置覆盖成 `auto` —— 系统替用户做了一个他明确拒绝过的
+  **对外提交**，而消耗的是不可再生额度。修法是受理时落**不可变策略快照**；
+* **`ReadError` 不在重试列表**：它是"连上了、读响应时断了"，比
+  `ConnectError` 更该重试（本地模型长推理下过载很常见）。实测一次
+  14 轮的深度分析因它全部作废。
+
+**已解出的题（2026-10-12 实测，`safe` 模式产出候选）**：`easyre` 9 轮、
+`RSA5` 9 轮、`reverse1` 32 轮、`[BJDCTF2020]这是base??` 16 轮。
+
+> ⚠️ **这些数字不能读成"成功率提升"**：这 4 道题**没有旧环境基线**
+> （改造前没跑过），所以只能说"能解出、且改造没破坏原有能力"。
+> 唯一有基线的是 `[FlareOn3]GUI`（改造前 40/80/80 轮均失败），
+> 而它**至今仍未解出** —— 改造让它从"没有工具"走到"能 patch 元数据"，
+> 但瓶颈变成了混淆器本身。真正的成功率对照实验**还没做**。
 
 ### 还没有做到的
 
@@ -117,6 +155,10 @@ cd suvex-api && docker compose up --build
 | 4 | **多用户是单租户的** | 多个账号共享全部数据；真多租户要每张业务表加 `tenant_id`（见下面的说明） |
 | 5 | **扫描产物目录只增不减** | 每次扫描在 `_scan_runs/<scan_id>/` 留下 5–7 MB（实测），**没有任何自动清理**。按每天 20 次扫描估约 43 GB/年。当前只能靠运维手工清（`deploy/README.md` 第十节给了命令与注意事项）。代码里早已承认这条缺口（`app/scans/runner.py` 的 `scan_upload_dir` docstring），但此前没进这份清单 |
 | 6 | **依赖没有锁定文件** | `requirements.txt` 用「下限 + 主版本上界」（0 行 `==`），也没有 `uv.lock` / `poetry.lock`。同一 commit 在不同时间构建会得到不同的依赖版本。这是刻意的取舍（见该文件头部注释），但对要求"可复现构建"的审计场景不够 |
+| 7 | **续解继承不到"工作现场"** | `/work` 是 tmpfs 512m 且容器 `finally` 必销毁（`runner.py:664`、`3034`），而"续解"只从 transcript 还原**命令 + 输出前 140 字**。解压产物、反编译结果、爆破出的口令、模型的分析假设**全部丢失** —— 第二次续解要重新做一遍 |
+| 8 | **CTF 无跨题知识复用** | 每次解题从零开始：没有方法卡索引、没有相似题召回。`resume` 只读**同一道题**的 transcript |
+| 9 | **附件只按大小判重** | `attachments.py:233` 的 `_already_there` **只比文件大小**（代码自己写了"同尺寸变更会漏掉"），没有内容指纹 |
+| 10 | **`auto` 模式提交前不校验证据** | `decide_submission`（`runner.py:2087`）只看去重/剩余额度/模式，**不看证据** —— 模型编一个 flag 加一段编造的 evidence，auto 下就会被提交出去 |
 
 > 已经补上的六项：**CI**（GitHub Actions 三个 job）、**LICENSE**
 > （Apache 2.0，含专利授权条款）、**契约漂移**（v0.21/v0.22 两轮专项对账）、
@@ -170,10 +212,10 @@ suvex-api/
   app/core/       跨领域公共件（依赖方向单向，不依赖任何领域包）
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,ctf2}/
                   按领域拆分，各自 模型/出入参/业务/路由
-  alembic/        30 个迁移
-  tests/          903 个测试函数，对真实 PostgreSQL 跑
+  alembic/        32 个迁移
+  tests/          60 个文件 / 1041 个测试函数，对真实 PostgreSQL 跑
   docs/           8 篇 ADR + 安全清单 + 验收记录
-  docker/         CTF2 沙箱镜像
+  docker/         CTF2 沙箱镜像（base / re 两个 profile）
 
 suvex-web/
   src/data/       数据模型与数据源（全部走真实 API）
