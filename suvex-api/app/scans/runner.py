@@ -563,6 +563,69 @@ def sweep_orphan_artifacts(db) -> int:  # noqa: ANN001
     return removed
 
 
+def sweep_orphan_ctf2_workspaces(db) -> int:  # noqa: ANN001
+    """清掉**题目已不存在**的 CTF2 持久工作区。返回清了几个。
+
+    ## 为什么必须有（v0.29）
+
+    持久工作区（`scan_root/_ctf2_workspaces/<challenge_id>/`）是这轮
+    新加的：它让"续解"能继承上次的产物。但它**天然是只增不减的** ——
+    而"只增不减"正是我刚在 README 缺口清单里列出的第 5 条。
+
+    加一个持久化目录却不给它清理策略，等于把那条缺口从扫描产物
+    复制到了 CTF2 —— 所以清理函数和它一起加。
+
+    ## 判据与附件同源：**题目还在不在**
+
+    | 情况 | 处置 |
+    | --- | --- |
+    | 题目还在库里（含已解出、已归档） | **留着** —— 用户可能还要看产物 |
+    | 题目被删了（`ctf2_challenges` 里查不到） | **删掉** —— 无人引用了 |
+
+    ⚠️ **不按时间删**：一道解出后放着不动的题，产物正是最该留的
+    （复盘、写 WP 都要它）。而"题目记录没了"是确定的判据 ——
+    与 `sweep_orphan_artifacts` 选"孤儿"而不是"时间"是同一条理由。
+
+    ⚠️ 只扫 `_ctf2_workspaces/<id>` 这一层，**不动** `_ctf2_attachments/`
+    （附件跟题目走，且题目没了时会被同一批删掉 —— 但那由各自的
+    清理负责，不要在这里顺手做，否则两个生命周期又被搅在一起）。
+    """
+    from sqlalchemy import select
+
+    from app.ctf2.models import Ctf2Challenge
+
+    root = get_settings().scan_root / "_ctf2_workspaces"
+    if not root.is_dir():
+        return 0
+
+    on_disk = [p.name for p in root.iterdir() if p.is_dir()]
+    if not on_disk:
+        return 0
+
+    # 一次查完，不要每个目录查一次库。
+    known = set(
+        db.execute(
+            select(Ctf2Challenge.id).where(Ctf2Challenge.id.in_(on_disk))
+        ).scalars()
+    )
+    removed = 0
+    for name in on_disk:
+        if name in known:
+            continue
+        target = root / name
+        # 双保险：解析之后必须仍在 root 之下（挡符号链接与 `..`）。
+        try:
+            if not target.resolve().is_relative_to(root.resolve()):
+                continue
+        except OSError:  # pragma: no cover - 并发删除
+            continue
+        shutil.rmtree(target, ignore_errors=True)
+        removed += 1
+    if removed:
+        logger.info("清掉了 %d 个题目已不存在的 CTF2 工作区", removed)
+    return removed
+
+
 # ══════════════════════════════════════════════════════════
 # ★ 子进程的环境变量**白名单**
 # ══════════════════════════════════════════════════════════

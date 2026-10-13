@@ -71,6 +71,15 @@ MAX_FILES_PER_CHALLENGE = 30
 # 单个文件的下载超时（秒）。
 DOWNLOAD_TIMEOUT = 60.0
 
+#: 附件指纹 sidecar 的后缀（2026-10-12 补）。
+#:
+#: ⚠️ 它有两个用途，**必须共用一个常量**：
+#:   1. `_fingerprint_path` 用它拼指纹文件名；
+#:   2. `runner._attachment_paths` 用它**排除**指纹文件 ——
+#:      否则 `<name>.sha256` 会出现在给模型的附件清单里，
+#:      而模型会去分析一个只有哈希值的文件（看起来像题目给的）。
+FINGERPRINT_SUFFIX = ".sha256"
+
 # 文件名里**允许**的字符集合。
 #
 # ★ 白名单而不是黑名单：黑名单（"去掉 `../`"）永远漏一种编码，
@@ -233,18 +242,91 @@ def plan_downloads(
 def _already_there(target: Path, *, expected_size: int | None) -> bool:
     """已经下过、且大小一致 —— 跳过。
 
-    为什么不比 mtime 或 hash：同步会反复跑，而"重下一次"的代价是
-    带宽与时间（几十 MB 的文件很常见）。大小一致已经能挡住绝大多数
-    "什么都没变"的情况，而它不需要我们把平台返回的 hash 也建模进来。
+    ## ⚠️ 这条判据是**不完整**的（如实记，2026-10-12）
 
-    ⚠️ 平台**改了附件但大小恰好一样**时我们会漏掉这次更新。
-    这是如实记下的代价，不是"已经考虑周全"。
+    只比大小会漏掉一类真实情况：**平台改了附件但大小恰好一样**。
+    那时我们会跳过下载，而容器里挂着的是**旧内容** —— 症状是
+    "模型分析的附件与题面对不上"，而排查方向会跑到模型身上。
+
+    为什么不在这里加哈希校验：**下载前我们没有基准哈希可比**。
+    平台只给 `content-length`，不给 checksum。所以"跳过"这个决定
+    只能在"大小一致"这个信息上做。
+
+    ## 指纹记在**下载之后**（见 `_write_fingerprint`）
+
+    大小一致时**不再重下**（省带宽），但会顺手核对一次已有文件的
+    指纹是否与记录一致 —— 若不一致说明本地那份被改过（或上次下载
+    没写完），那时**必须重下**。这一层是廉价的：算一个已存在文件的
+    SHA256 不需要网络。
+
+    ## 参数
+
+    `expected_size` 为 `None` 表示平台没给 `content-length`。那时
+    **只判"文件存在"** —— 这是最弱的一档，所以下面会明确区分。
     """
     if not target.is_file():
         return False
     if expected_size is None:
         return True
-    return target.stat().st_size == expected_size
+    if target.stat().st_size != expected_size:
+        return False
+    # ★ 大小一致 —— 再用指纹确认本地那份是完整的。
+    #
+    # 没有指纹记录时（老数据、或首次升级）**按"已存在"处理**：
+    # 不能因为缺一份 sidecar 就把所有附件重下一遍（那可能是几十 MB
+    # × 上百道题）。缺记录是"不知道"，而"不知道"不该导致大批量重下。
+    recorded = _read_fingerprint(target)
+    if recorded is None:
+        return True
+    return recorded == _sha256_of(target)
+
+
+def _fingerprint_path(target: Path) -> Path:
+    """指纹文件的路径。与附件同目录，名字加 `.sha256` 后缀。
+
+    ⚠️ 用**同名 + 后缀**而不是集中存一个索引文件：索引文件要处理
+    并发写与损坏恢复，而"每个附件旁边一个小文件"天然没有这些问题 ——
+    删附件时顺手删它，不需要任何同步逻辑。
+
+    ⚠️ 这个后缀同时被 `runner._attachment_paths` 用来**排除**指纹文件
+    （否则它会出现在给模型的附件清单里）。改后缀要同时改那边 ——
+    所以两处都引用同一个常量 `FINGERPRINT_SUFFIX`。
+    """
+    return target.with_name(target.name + FINGERPRINT_SUFFIX)
+
+
+def _sha256_of(path: Path) -> str:
+    """算文件的 SHA256（分块读，别把大文件一次读进内存）。"""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_fingerprint(target: Path) -> str | None:
+    """读已记录的指纹。没有或读不出来时返回 `None`。"""
+    path = _fingerprint_path(target)
+    try:
+        value = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    # 格式：`sha256:<hex>`。认不出就当作没有。
+    if not value.startswith("sha256:"):
+        return None
+    return value[len("sha256:") :] or None
+
+
+def _write_fingerprint(target: Path, digest: str) -> None:
+    """把指纹写到附件旁边。写失败**不影响下载结果**。
+
+    ⚠️ 指纹是**辅助信息**（用于判断"要不要重下"），它丢了只会让
+    下次多下一次，不会让解题出错。所以吞 `OSError` 并记一条 warning。
+    """
+    try:
+        _fingerprint_path(target).write_text(f"sha256:{digest}\n", encoding="utf-8")
+    except OSError as exc:
+        logger.warning("写附件指纹失败（不影响本次下载）：%s", exc)
 
 
 def _is_official(url: str) -> bool:
@@ -334,18 +416,30 @@ async def _download_one(
         written = 0
         # 流式写：一次性 `read()` 一个 200 MB 的附件会把内存打满，
         # 而那是**整个服务**的可见后果。
+        #
+        # ★ 顺手算 SHA256（2026-10-12 补）：字节已经在手上流过，
+        #   所以这一次哈希**不额外读盘**。它的用途是让下次同步能判断
+        #   "本地这份是否完整、是否还是平台给的那一份" —— 见
+        #   `_already_there` 里那段"只比大小是不完整的"说明。
+        digest = hashlib.sha256()
         try:
             with target.open("wb") as handle:
                 async for chunk in response.aiter_bytes(64 * 1024):
                     written += len(chunk)
                     if written > MAX_FILE_BYTES:
                         raise Ctf2Error("附件在下载过程中超过了单文件上限，已中止")
+                    digest.update(chunk)
                     handle.write(chunk)
         except Exception:
             # 半截文件比没有更坏：agent 会把它当成完整的附件去分析，
             # 而失败原因是"文件损坏"，方向完全错。所以删掉。
             target.unlink(missing_ok=True)
+            # 指纹也要一起删 —— 留着一个指向已删除文件的指纹，
+            # 下次会用它去比对一个不存在的文件（无害但没意义）。
+            _fingerprint_path(target).unlink(missing_ok=True)
             raise
+
+        _write_fingerprint(target, digest.hexdigest())
 
     result.downloaded += 1
     result.bytes_written += written

@@ -536,8 +536,42 @@ def _sync_locked(db: Session, *, competition_ids: list[str] | None = None) -> Sy
     #
     # ⚠️ 在 `_fetch` **之前**读：`_fetch` 是 async 且按设计不碰 DB
     #    （见它自己的 docstring），所以这里先查好、以闭包形式传进去。
+    #
+    # ★★ v0.30：收窄到**当前账号**作用域（2026-10-12 修）。
+    #
+    # ## 原来取全表，会误跳过
+    #
+    # 原来的写法是 `select(Ctf2Challenge.remote_id)` —— **不带任何
+    # 作用域**。而"已在库"这个判断的含义应当是"**本账号**已经有这道题了"，
+    # 不是"这个 remote_id 在这个数据库里出现过"。
+    #
+    # 后果：不同赛事/练习集里**恰好同名**的 remote_id 会让新题被跳过。
+    # 而平台侧的 id 是**按赛事分配**的（UUID 碰撞概率极低，但
+    # "练习集 A 的题目 1" 与 "练习集 B 的题目 1" 用同一个短 id 是
+    # 完全可能的）。症状是"同步说完成了，但题库里少了几道题"——
+    # 而它看起来像"平台没有这些题"。
+    #
+    # ## 为什么按账号而不是按赛事收窄
+    #
+    # 题目归属是 `challenge → competition → account`。按账号收窄既
+    # 足够（同一个账号下才有"这道题我有没有"的意义），又不会漏掉
+    # "同一道题出现在两个练习集里"这种情况 —— 那时它本来就该被认成
+    # 同一个 remote_id。
+    #
+    # ⚠️ 用 join 而不是先查赛事 id 再 `in_()`：后者在赛事很多时会生成
+    #    一个很长的 IN 列表，而 join 让数据库自己选执行计划。
     known_remote_ids = {
-        str(x) for x in db.execute(select(Ctf2Challenge.remote_id)).scalars().all()
+        str(x)
+        for x in db.execute(
+            select(Ctf2Challenge.remote_id)
+            .join(
+                Ctf2Competition,
+                Ctf2Competition.id == Ctf2Challenge.competition_id,
+            )
+            .where(Ctf2Competition.account_id == account.id)
+        )
+        .scalars()
+        .all()
     }
 
     async def _fetch() -> dict[str, Any]:
@@ -1939,6 +1973,77 @@ def _assert_submission_supported(db: Session, challenge: Ctf2Challenge) -> None:
         "CTF2 的开放接口没有提供赛事题目的提交与起环境接口"
         "（实测这些路径全部返回 404），目前只支持练习集下的题目解题与提交。"
         "赛事题目仍可同步与查看。",
+    )
+
+
+def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  # noqa: ANN001
+    """把一次解题提炼成**方法卡**（v0.32）。**失败只记日志，不抛。**
+
+    ## ★ 唯一硬约束：卡片里绝不能有 flag
+
+    卡片会被注入到**另一道题**的 prompt。带上旧 flag 就变成
+    "把 A 题的答案泄漏到 B 题的上下文里"，而 B 题的模型完全可能
+    把它当成 B 题的答案交上去。
+
+    所以提炼走 `notes.build_note_fields`，它对每个字段都做
+    **白名单式脱敏**（剔除 flag 形状、URL、长随机串）。
+
+    ## 为什么用 upsert 而不是 append
+
+    一道题一张卡（`uq_ctf2_solve_notes_challenge`）：重解时**更新**。
+    与 `ctf2_solve_attempts`（每次一行）相反 —— 它们回答的问题不同：
+      · attempt 回答"这一次按什么策略跑的"（历史，只增）；
+      · note    回答"这道题怎么解"（知识，取最新）。
+
+    ## 为什么失败不抛
+
+    它在解题**收尾**时被调用，而那时结果是既成事实。让"提炼知识"
+    的失败把一次成功的解题变成报错是本末倒置 —— 调用方（`_record_outcome`）
+    也再包了一层 try。
+    """
+    from app.core.ids import new_id
+    from app.ctf2 import notes as notes_mod
+    from app.ctf2.models import Ctf2SolveNote
+
+    # `solved` 取自**最终状态**（调用方刚定完）。
+    solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
+
+    fields = notes_mod.build_note_fields(
+        transcript=outcome.transcript or "",
+        error=outcome.error,
+        candidates=[c.flag for c in (outcome.candidates or [])],
+        solved=solved,
+    )
+
+    existing = (
+        db.execute(
+            select(Ctf2SolveNote).where(Ctf2SolveNote.challenge_id == challenge.id)
+        )
+        .scalars()
+        .first()
+    )
+    if existing is None:
+        db.add(
+            Ctf2SolveNote(
+                id=new_id("ctf2note"),
+                challenge_id=challenge.id,
+                category=(challenge.category or "")[:64],
+                solved=solved,
+                **fields,
+            )
+        )
+    else:
+        existing.category = (challenge.category or "")[:64]
+        existing.solved = solved
+        existing.approach = fields["approach"]
+        existing.tools = fields["tools"]
+        existing.dead_ends = fields["dead_ends"]
+    db.commit()
+    logger.info(
+        "已更新解题方法卡：%s（solved=%s tools=%s）",
+        challenge.id,
+        solved,
+        fields["tools"] or "无",
     )
 
 

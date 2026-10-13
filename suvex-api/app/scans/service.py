@@ -1817,19 +1817,30 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
 
     orphans_removed = runner_mod.sweep_orphan_artifacts(db)
 
+    # ── 顺带清掉"题目已不存在"的 CTF2 持久工作区（v0.29）──────
+    #
+    # ★ 加了持久化就必须加清理 —— 否则等于把 README 缺口清单第 5 条
+    #   （"只增不减"）从扫描产物复制到 CTF2。
+    #
+    # ⚠️ 判据是"题目记录还在不在"，不是时间：解出后放着不动的题，
+    #   产物正是最该留的（复盘、写 WP 都要）。理由与 `sweep_orphan_artifacts`
+    #   完全相同，见那个函数的 docstring。
+    ctf2_workspaces_removed = runner_mod.sweep_orphan_ctf2_workspaces(db)
+
     result = {
         "archived": archived_count,
         "purged": purged_count,
         "keptBecauseReferenced": kept_count,
         "stagingSwept": staging_removed,
         "orphanArtifactsSwept": orphans_removed,
+        "ctf2WorkspacesSwept": ctf2_workspaces_removed,
     }
     if any(result.values()):
         logger.info(
             "扫描保留期清理：归档 %d 条、清除 %d 条、因被报告引用而保留 %d 条、"
-            "暂存 %d 批、孤儿产物 %d 个",
+            "暂存 %d 批、孤儿产物 %d 个、CTF2 工作区 %d 个",
             archived_count, purged_count, kept_count,
-            staging_removed, orphans_removed,
+            staging_removed, orphans_removed, ctf2_workspaces_removed,
         )
     return result
 

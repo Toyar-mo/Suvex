@@ -374,15 +374,87 @@ def test_rejected_submissions_do_not_block_a_retry(
 
 
 def test_safe_mode_holds_instead_of_submitting() -> None:
-    """★ safe 模式**不提交**，只产出候选。这是默认路径。"""
+    """★ safe 模式**不提交**，只产出候选。这是默认路径。
+
+    ⚠️ 刻意**不传**证据信号：safe 模式不受证据门禁影响
+    （人工会看 evidence）。这条同时钉住"门禁只对 auto 生效"。
+    """
     decision = runner.decide_submission(mode="safe", already=False, remaining_wrong=3)
     assert decision.action == "hold"
     assert "人工确认" in decision.reason
 
 
 def test_auto_mode_submits_within_quota() -> None:
-    decision = runner.decide_submission(mode="auto", already=False, remaining_wrong=3)
+    """★ auto 模式 + 证据齐备 + 额度内 → 提交。
+
+    ⚠️ v0.31 起必须显式给证据信号（`evidence` + `saw_tool_output`）——
+    否则会命中证据门禁。那不是测试的权宜，而是**刻意的接口设计**：
+    让"忘了传信号"表现为"候选被 hold"（可见、可查），
+    而不是"门禁静默失效"（不可见）。
+    """
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=3,
+        evidence="cat /flag 的输出里就是它",
+        saw_tool_output=True,
+    )
     assert decision.action == "submit"
+
+
+def test_auto_mode_holds_when_no_tool_was_ever_run() -> None:
+    """★★ v0.31 证据门禁：**一次工具都没跑**就给答案 → 不提交。
+
+    这是门禁要挡的最坏情况：模型凭空编一个 flag（可能连附件都没看），
+    而 auto 模式原来只看"没交过 + 还有额度"就把它发出去 ——
+    代价是不可再生的错误提交额度。
+    """
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=3,
+        evidence="我推理出来的",
+        saw_tool_output=False,
+    )
+    assert decision.action == "hold", "★ 没跑过工具就提交了"
+    assert "没有跑过任何工具" in decision.reason
+
+
+def test_auto_mode_holds_when_evidence_is_empty() -> None:
+    """★★ 跑了工具、但候选**没给证据** → 不提交。
+
+    与上一条是两个独立信号：跑了工具不等于"这个答案是跑出来的"。
+    """
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=3,
+        evidence="   ",  # 只有空白
+        saw_tool_output=True,
+    )
+    assert decision.action == "hold", "★ 没有证据也提交了"
+    assert "evidence" in decision.reason
+
+
+def test_evidence_gate_does_not_affect_safe_mode() -> None:
+    """★★ 门禁**只对 auto 生效** —— safe 模式的去向必须与之前完全一致。
+
+    这条挡的是"顺手把门禁加到所有模式上"：safe 模式的候选本来就等
+    人工确认，而人会看 evidence —— 加闸只会让"候选落库"变复杂，
+    收益为零。
+    """
+    for evidence, saw in (("", False), ("有证据", True)):
+        decision = runner.decide_submission(
+            mode="safe",
+            already=False,
+            remaining_wrong=3,
+            evidence=evidence,
+            saw_tool_output=saw,
+        )
+        assert decision.action == "hold"
+        assert "人工确认" in decision.reason, (
+            "★ safe 模式的理由变成了证据门禁的理由 —— 说明门禁误伤了 safe"
+        )
 
 
 def test_wrong_submission_ceiling_blocks_even_auto_mode() -> None:
@@ -392,8 +464,17 @@ def test_wrong_submission_ceiling_blocks_even_auto_mode() -> None:
     这条是 auto 模式下最容易出的错：把"自动"理解成"无人干预"，
     于是额度用尽之后还在发 —— 而额度是不可再生的，
     每多发一次都在拿这道题"以后还能不能试"去换。
+
+    ⚠️ 证据给足，确保**是额度**挡下的（而不是证据门禁）——
+    否则这条会在门禁生效后变成假绿。
     """
-    decision = runner.decide_submission(mode="auto", already=False, remaining_wrong=0)
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=0,
+        evidence="有证据",
+        saw_tool_output=True,
+    )
     assert decision.action == "reject"
     assert "用尽" in decision.reason
 

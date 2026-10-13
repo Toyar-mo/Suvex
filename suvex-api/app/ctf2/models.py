@@ -837,6 +837,99 @@ class Ctf2Submission(Base):
         return f"<Ctf2Submission id={self.id!r} status={self.status!r} mode={self.mode!r}>"
 
 
+class Ctf2SolveNote(Base):
+    """一道题的**解题方法卡**（v0.32）—— 跨题复用的最小单位。
+
+    ## 为什么需要它
+
+    在这之前，每次解题都从零开始：
+
+      · `resume` 只读**同一道题**的 transcript；
+      · CTF2 的 `/writeups/` 端点只被用来提取 challenge_id 做同步，
+        解法内容本身**没有被用于解题**；
+      · 于是"同类题第二次遇到"仍然要重新摸索一遍。
+
+    ## ★ 它存什么、不存什么（这条比字段更重要）
+
+    **存方法，不存答案。**
+
+    | 存 | 不存 |
+    | --- | --- |
+    | 题型与关键工具（`tools`） | **flag / 答案原文** |
+    | 有效的步骤梗概（`approach`） | 完整的题面 |
+    | 试过但走不通的方向（`dead_ends`） | 未脱敏的原始 transcript |
+
+    ⚠️ **flag 绝不入库**。理由不是"flag 是秘密"（它本来就在
+    `ctf2_challenges.confirmed_flag` 里、也进报告），而是**注入路径的
+    安全性**：这些卡片会被拼进**另一道题**的 prompt。一旦带上旧 flag，
+    就变成"把 A 题的答案泄漏到 B 题的上下文里"—— 而 B 题的模型
+    完全可能把它当成 B 题的答案交上去。
+
+    所以写入时**逐字段脱敏**（见 `service.learn_from_solve`），
+    而不是"相信上游传进来的东西已经干净"。
+
+    ## 为什么用"方法卡"而不是直接塞 transcript
+
+    transcript 动辄 60–115 KB，绝大部分是工具原始输出（见
+    `digest_from_transcript` 的说明）。塞回去会把预算吃光，
+    然后模型又开始"忘记题目要求" —— 那把"复用"变成了"更糟的重来"。
+    """
+
+    __tablename__ = "ctf2_solve_notes"
+    __table_args__ = (
+        # 一道题一张卡。重解时**更新**而不是新增 —— 与
+        # `ctf2_solve_attempts`（每次尝试一行）是相反的设计，因为
+        # 它们回答的问题不同：
+        #   · attempt 回答"这一次按什么策略跑的"（历史，只增）；
+        #   · note    回答"这道题怎么解"（知识，取最新）。
+        UniqueConstraint("challenge_id", name="uq_ctf2_solve_notes_challenge"),
+        # 召回时按分类 + 解出状态筛，所以这两列要能走索引。
+        Index("ix_ctf2_solve_notes_category", "category"),
+        Index("ix_ctf2_solve_notes_solved", "solved"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    challenge_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: 题型（从 challenge 复制，便于跨题召回时不必 join）。
+    #:
+    #: ⚠️ 复制而不是引用：题目行会被删（同步会清理），而"这道题的方法"
+    #: 在它被删之后仍然有参考价值 —— 只是那时我们靠 challenge_id 的
+    #: CASCADE 一起删掉。复制一份让召回查询不必 join。
+    category: Mapped[str] = mapped_column(String(64), nullable=False, default="")
+
+    #: 这道题最后**有没有解出**。召回时优先给"解出过"的卡。
+    #:
+    #: ⚠️ 失败的卡也有价值（`dead_ends` 能让新题少走弯路），
+    #: 所以它们不删，只是排在后面。
+    solved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    #: 方法梗概（**已脱敏**）。几句话，不是全文。
+    approach: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    #: 用到的关键工具/命令名（逗号分隔）。给"这道题要什么工具"用。
+    tools: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    #: 试过但走不通的方向（**已脱敏**）。这是卡片里最省时间的部分 ——
+    #: 它让新题不必重走同一条死路。
+    dead_ends: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        # ⚠️ 不含 approach/dead_ends 正文：它们会进日志，
+        # 而卡片内容可能很长。id 与 category 足够定位。
+        return (
+            f"<Ctf2SolveNote challenge={self.challenge_id!r} "
+            f"category={self.category!r} solved={self.solved}>"
+        )
+
+
 __all__ = [
     "CTF2_API_PREFIX",
     "CTF2_OFFICIAL_HOSTS",
@@ -844,5 +937,7 @@ __all__ = [
     "Ctf2Challenge",
     "Ctf2Competition",
     "Ctf2Environment",
+    "Ctf2SolveAttempt",
+    "Ctf2SolveNote",
     "Ctf2Submission",
 ]

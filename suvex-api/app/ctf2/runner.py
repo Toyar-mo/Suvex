@@ -134,6 +134,14 @@ HOST_RESOURCES_ENV = "SUPEX_CTF2_HOST_RESOURCES"
 # 沙箱内的工作目录（Dockerfile 里已建好且 chown 给 solver）。
 WORK_DIR = "/work"
 ATTACHMENT_DIR = f"{WORK_DIR}/attachments"
+# ★ 跨容器存活的工作区在容器里的挂载点（v0.29）。
+#
+# 它是 `/work` 的**子目录**而不是 `/work` 本身 —— 理由见 `_argv` 里
+# 那段说明（直接替换 /work 会让 attachments 子挂载失效）。
+#
+# 放在 /work 之下的好处是模型**不需要知道它存在**：它在 /work 里
+# 正常工作，只是把值得留下的东西放到这个子目录。提示词里会说明。
+PERSIST_DIR = f"{WORK_DIR}/persist"
 
 # 单个 shell 命令的默认限时（秒）。300 秒是"足够跑一次爆破之外的
 # 任何分析"的量级；再长会让一次卡死的命令拖掉整道题的预算。
@@ -626,6 +634,7 @@ class SandboxContainer:
         memory_mb: int | None = None,
         host_resources: Path | None = None,
         attachments_dir: Path | None = None,
+        workspace_dir: Path | None = None,
         extra_env: dict[str, str] | None = None,
     ) -> None:
         self.name = name
@@ -642,6 +651,36 @@ class SandboxContainer:
         #
         # 挂载还顺带贴合语义：附件是只读材料。
         self.attachments_dir = attachments_dir
+        # ★★ 持久工作区（v0.29，2026-10-12 补）—— **读写**挂载的宿主目录。
+        #
+        # ## 它解决什么
+        #
+        # `/work` 是 tmpfs，容器一停内容全没（见 `_argv` 里那段说明）。
+        # 而"续解"（用户点"接着上次跑"）只从 transcript 还原
+        # **命令 + 输出前 140 字** —— 于是：
+        #
+        #   · 解压出来的题目文件没了；
+        #   · 反编译产物、解密结果、爆破出的口令没了；
+        #   · 模型自写的脚本（C# harness、Python 分析器）没了。
+        #
+        # 实测（2026-10-12，`[FlareOn3]GUI`）：模型跑满 78 轮，写了 12 个
+        # C# harness、patch 过 CLR 元数据、还原出内嵌程序集 —— 这些**全部
+        # 随容器消失**。续解时它得重新解压、重新反编译，只是不用重新
+        # "决定跑哪条命令"。
+        #
+        # ## 边界（这条比功能本身重要）
+        #
+        # 挂载点是**读写**的，而容器里跑的是题目给的不可信内容。
+        # 所以：
+        #   · 路径由**服务端**按 challenge_id 生成，不含任何题目可控的字符串；
+        #   · 目录在宿主上位于 `scan_root/_ctf2_workspaces/`（与产物同级，
+        #     便于按保留期一起清）；
+        #   · ⚠️ 它**不挂载宿主任何敏感路径** —— 就是一个空的临时目录。
+        #
+        # 代价如实记：容器内被攻下之后，它能往这个目录写东西，而那些
+        # 字节会留在宿主上。这是"保留现场"换来的必然代价，所以目录
+        # 里**只该有解题产物**，且要能整目录删掉（见 `sweep`）。
+        self.workspace_dir = workspace_dir
         # ⚠️ `extra_env` **绝不允许**承载凭据。它存在的唯一用途是
         # 传一些无害的开关（比如 `PWNLIB_NOTERM=1`）。
         # 类型上没法强制这一点，所以这条规矩写在这里 + 有测试盯着
@@ -745,6 +784,21 @@ class SandboxContainer:
         #    `mkdir -p /work/attachments` 在运行时失效的原因。
         if self.attachments_dir is not None and self.attachments_dir.is_dir():
             argv += ["-v", f"{self.attachments_dir}:{ATTACHMENT_DIR}:ro"]
+        # ★★ 持久工作区（读写）。见 `workspace_dir` 的说明。
+        #
+        # ⚠️ 挂到 `/work/persist`（**不是** `/work` 本身）：
+        #    `/work` 是 tmpfs，直接挂载会把它整个换掉 —— 而那会连带
+        #    让 `/work/attachments` 那个子挂载失效（Docker 按路径深度
+        #    挂载，父层被替换后子层的可见性不再可靠）。
+        #    挂一个**子目录**则两者互不干扰：tmpfs 提供可写的工作区，
+        #    这个子目录提供跨容器存活的那部分。
+        #
+        # ⚠️ 目录不存在时**不挂**（与 host_resources / attachments 同一条
+        #    理由）：挂一个不存在的宿主路径，Docker 会替我们建一个
+        #    空目录 —— 而"空目录"与"没挂上"在容器里长得一模一样。
+        #    这里由调用方先 mkdir（见 `_workspace_dir`）。
+        if self.workspace_dir is not None and self.workspace_dir.is_dir():
+            argv += ["-v", f"{self.workspace_dir}:{PERSIST_DIR}:rw"]
         for key, value in self.extra_env.items():
             argv += ["-e", f"{key}={value}"]
         argv += [self.image, "tail", "-f", "/dev/null"]
@@ -1371,6 +1425,21 @@ class SolveSpec:
     # 那边是真的通的（进指令文件、进 prompt）。
     brief: str = ""
 
+    # ★★ v0.32：同类题的方法卡（**已脱敏**，由调用方召回后传入）。
+    #
+    # ## 为什么是"传进来"而不是在这里查库
+    #
+    # `_initial_prompt` 是个**纯函数**（只读 spec），而查库要 session。
+    # 让它碰库会把"组装 prompt"与"访问数据库"耦合起来 —— 而
+    # `solve_in_sandbox` 那条路径**按设计不碰 DB**（见它的 docstring）。
+    #
+    # 所以召回发生在 `build_spec`（那里有 session），结果放进 spec。
+    #
+    # ⚠️ 这些内容**必须已经脱敏** —— 它们会被拼进 prompt，而卡片来自
+    #    别的题。脱敏在写入时做（`notes.sanitize_for_reuse`），
+    #    这里不再过滤一遍：两处都做会让"谁负责"变得含混。
+    notes_text: str = ""
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
         return (
@@ -1388,6 +1457,22 @@ class SolveOutcome:
     rejected: list[str] = field(default_factory=list)
     error: str | None = None
     transcript: str = ""
+
+    #: 这次解题**有没有真的跑过工具并拿到输出**（v0.31）。
+    #:
+    #: ## 为什么需要这个信号
+    #:
+    #: `auto` 模式原来只看"没交过"和"还有额度"就提交，**完全不看证据**。
+    #: 而 `evidence` 是模型自己写的字符串 —— 于是"凭空编一个 flag +
+    #: 编一段 evidence"是一条真实可达的路径，代价是不可再生的额度。
+    #:
+    #: 这个字段提供一道**廉价且不会误伤**的闸：如果整场解题一次工具都
+    #: 没跑（纯靠"想"给出答案），那它极可能是编的。而正常解题**必然**
+    #: 跑过工具（看附件、解压、分析），所以这道闸几乎不会挡住真候选。
+    #:
+    #: ⚠️ 它**不是**"证据校验"——真正的校验（evidence 与工具产物一致）
+    #:    需要自然语言匹配，而那本身不可靠。这里只做最粗的一层。
+    saw_tool_output: bool = False
 
 
 def needs_raw_network(category: str | None) -> bool:
@@ -1829,6 +1914,58 @@ def _initial_prompt(spec: SolveSpec) -> str:
         lines += [f"  - {p.name}（{p.stat().st_size} 字节）" for p in spec.attachments]
     else:
         lines.append("- 本题没有附件。")
+    # ★★ v0.29：持久工作区。
+    #
+    # ## 为什么必须显式告诉模型
+    #
+    # `/work` 是 tmpfs，容器一停内容全没。而"续解"只从 transcript 还原
+    # 命令与输出前 140 字 —— 所以解压产物、反编译结果、爆破出的口令、
+    # 以及它自己写的分析脚本**全部消失**。实测（2026-10-12，
+    # `[FlareOn3]GUI`）：模型跑满 78 轮、写了 12 个 C# harness、
+    # patch 过 CLR 元数据，而这些在下次续解时一个都不在。
+    #
+    # 光加挂载是不够的：**模型不知道有这个目录就不会用**。
+    # 所以这里明确说清"放什么、为什么放"。
+    lines += [
+        "",
+        f"## 持久区：`{PERSIST_DIR}`（★ 重要的东西放这里）",
+        "",
+        "`/work` 是**内存盘，容器一停就全没了**。而这个子目录是"
+        "**跨运行保留**的 —— 下次接着做这道题时它还在。",
+        "",
+        "**值得放进去的**（下次能省掉重做）：",
+        "- 解压出来的题目文件（省掉重新解压）；",
+        "- 反编译/反汇编产物（`objdump` / `monodis` / `r2` 的输出）；",
+        "- 你写的分析脚本与程序（C# harness、Python 脚本）；",
+        "- 已经解出的中间结果（爆破出的口令、解密出的密钥、提取的配置）。",
+        "",
+        "**不要放**：临时文件、跑一次就丢的中间物 —— 那只会让下次的"
+        "目录更难读。",
+    ]
+    # ⚠️ 这一段**只在续解时**加。
+    #
+    # 一开始写成无条件的，结果全新解题的 prompt 里也出现了"续解"二字
+    # —— 而 `test_the_initial_prompt_announces_a_resume` 正是断言
+    # "全新解题时不该出现'续解'"。那条断言是对的：对一次全新的解题说
+    # "如果这是续解"是纯噪音，还会让模型去找一个不存在的"上次"。
+    if spec.resume_digest:
+        lines += [
+            "",
+            f"⚠️ 先 `ls -la {PERSIST_DIR}` 看上次留了什么，"
+            "**不要重做已经做过的事**。",
+        ]
+    # ★ v0.32：同类题的方法卡。
+    #
+    # ## 位置：在"现在开始"**之前**、"持久区"**之后**
+    #
+    # 理由：它是**参考材料**（别的题的经验），而"现在开始"是行动指令。
+    # 放在指令之后会让模型先看指令再看到材料，顺序反了 —— 它会带着
+    # "开始动手"的心态读到一堆"别的题怎么做"，更容易照搬。
+    #
+    # ⚠️ 内容已经脱敏（写入时做的，见 `notes.sanitize_for_reuse`）。
+    #    这里只是拼接，**不再过滤** —— 两处都做会让"谁负责"含混。
+    if spec.notes_text.strip():
+        lines.append(spec.notes_text)
     lines += [
         "",
         "## 现在开始",
@@ -2074,6 +2211,10 @@ async def solve_in_sandbox(
             result = await dispatch_tool(name, args, spec=spec, sandbox=sandbox, http=http)
             log.append(f"[turn {turn}] result: {_clip(result, 2000)}")
             recent.append({"role": "user", "content": f"工具 `{name}` 的输出：\n{result}"})
+            # ★ 记录"这次解题真的跑过工具"（v0.31）—— 供 auto 模式的
+            #   证据门禁判断"答案是跑出来的还是想出来的"。
+            #   见 `SolveOutcome.saw_tool_output`。
+            outcome.saw_tool_output = True
 
             # ★ 把这一轮的过程送出去。
             #
@@ -2157,10 +2298,17 @@ class SubmitDecision:
     reason: str = ""
 
 
-def decide_submission(*, mode: str, already: bool, remaining_wrong: int) -> SubmitDecision:
-    """候选 flag 的三条去向。
+def decide_submission(
+    *,
+    mode: str,
+    already: bool,
+    remaining_wrong: int,
+    evidence: str = "",
+    saw_tool_output: bool = False,
+) -> SubmitDecision:
+    """候选 flag 的几条去向。
 
-    ## 顺序是有讲究的：先去重、再看额度、最后看模式
+    ## 顺序是有讲究的：先去重、再看额度、再看证据、最后看模式
 
     每一层都挡掉一类真实的浪费：
 
@@ -2169,11 +2317,39 @@ def decide_submission(*, mode: str, already: bool, remaining_wrong: int) -> Subm
     2. **额度用尽** → `reject`。额度是**不可再生**的，而"再试一次"
        的期望收益随剩余次数下降 —— 到 0 时必须停。这条**优先于模式**：
        即便 `auto` 模式也受它约束（已定设计决策 4 的原文）。
-    3. **safe 模式** → `hold`。产出的候选**落库但不提交**，
+    3. **★ 证据不足** → `hold`（v0.31 补）。只对 `auto` 生效，见下。
+    4. **safe 模式** → `hold`。产出的候选**落库但不提交**，
        等人在界面上点一下（`POST /ctf2/challenges/{id}/submit`）。
 
     ⚠️ `hold` 不是"失败"，它是 safe 模式的**正常终点**。把它做成
     错误会让界面上显示一片红，而实际上系统工作得完全正确。
+
+    ## ★★ 为什么需要"证据门禁"（2026-10-12 补）
+
+    在这之前，`auto` 模式的判据只有"没交过"和"还有额度"两条 ——
+    **完全不看证据**。而 `evidence` 字段是模型自己写的字符串
+    （`extract_candidates_with_reasons` 只是 `_clip` 一下原样收下），
+    `confidence` 更是明确"不参与任何判断"。
+
+    于是有一条真实可达的路径：**模型凭空编一个 flag、再编一段
+    evidence，auto 模式就把它提交出去** —— 而错误提交消耗的是
+    **不可再生**的额度，烧完这道题就没机会了。
+
+    这道闸要挡的正是它。判据是**两条独立的弱信号**（都满足才放行）：
+
+      · `evidence` 非空 —— 模型至少说了"怎么拿到的"；
+      · `saw_tool_output` —— 这次解题里**真的跑过工具并拿到输出**。
+
+    为什么是两条而不是更强的一致性校验（比如"evidence 里必须引用
+    某条真实工具输出"）：那种校验需要把 evidence 与工具产物做匹配，
+    而自然语言的匹配本身就不可靠 —— 误判的代价是"真候选被挡住"，
+    比"编造的候选被提交"更常见。**先做一道廉价且不会误伤的闸**，
+    把最坏情况（完全没跑工具、纯编造）挡掉。
+
+    ## 为什么只对 auto 生效
+
+    `safe` 模式的候选本来就等人工确认 —— 而人会看 evidence。
+    对 safe 加这道闸只会让"候选落库"这一步也变复杂，收益为零。
     """
     if already:
         return SubmitDecision("reject", "这个 flag 已经提交过（或正在提交中），不重复提交。")
@@ -2185,6 +2361,21 @@ def decide_submission(*, mode: str, already: bool, remaining_wrong: int) -> Subm
         )
     if mode != Ctf2SubmitMode.AUTO.value:
         return SubmitDecision("hold", "safe 模式：候选 flag 需要人工确认后才提交。")
+    # ── 以下是 auto 独有的门禁 ────────────────────────────
+    #
+    # ⚠️ 顺序在模式判断**之后**：safe 模式不受影响（见 docstring）。
+    if not saw_tool_output:
+        return SubmitDecision(
+            "hold",
+            "auto 模式下证据不足：这次解题**没有跑过任何工具**就给出了答案。"
+            "候选已保留，请人工核对后再决定是否提交。",
+        )
+    if not evidence.strip():
+        return SubmitDecision(
+            "hold",
+            "auto 模式下证据不足：候选没有给出 `evidence`（怎么拿到的）。"
+            "候选已保留，请人工核对后再决定是否提交。",
+        )
     return SubmitDecision("submit")
 
 
@@ -2695,10 +2886,55 @@ def build_spec(
         # ★ v0.28：人工线索。`resolved_brief` 来自快照（有快照时）
         #   或 None（没快照的旧路径）—— 后者与修复前的行为一致。
         brief=resolved_brief or "",
+        # ★★ v0.32：召回同类题的方法卡。
+        #
+        # ## 为什么召回放在这里（`build_spec`）而不是 `_initial_prompt`
+        #
+        # `_initial_prompt` 是纯函数（只读 spec），而查库要 session ——
+        # 让它碰库会把"组装 prompt"与"访问数据库"耦合起来。而
+        # `build_spec` 本来就有 session，且它正是"把库里的东西变成
+        # 一次解题输入"的那一层。
+        #
+        # ⚠️ 召回失败**不影响解题**：没有卡片只是少了参考，
+        #    而"因为查不到卡片就不解题"明显更糟。
+        notes_text=_recall_notes_text(db, challenge),
         # 沙箱配额（见上面那段说明：这四个参数原来漏了，容器一直没有上限）
         cpus=sandbox_cpus,
         memory_mb=sandbox_memory_mb,
     )
+
+
+def _recall_notes_text(db: Session, challenge: Ctf2Challenge) -> str:
+    """召回同类题的方法卡并渲染成 prompt 片段。查不到就返回空串。
+
+    ## 为什么吞异常
+
+    召回是**锦上添花**：没有卡片只是少了参考，而"因为查不到卡片就不
+    解题"明显更糟。所以任何失败（表不存在、查询出错）都退化成空串。
+
+    ## 为什么在这里打印一条 info
+
+    模型看到卡片与没看到卡片，解题路径会明显不同 —— 所以"这次到底
+    召回了没有"是排查时该能一眼看到的事。没有这条日志，复盘时只能
+    从 prompt 里翻。
+    """
+    try:
+        from app.ctf2 import notes as notes_mod
+
+        rows = notes_mod.notes_for_challenge(db, challenge)
+        if not rows:
+            return ""
+        text = notes_mod.render_notes_for_prompt(rows)
+        logger.info(
+            "为 %s 召回了 %d 张同类题方法卡（category=%s）",
+            challenge.id,
+            len(rows),
+            challenge.category or "未分类",
+        )
+        return text
+    except Exception:  # noqa: BLE001 - 召回失败不该拦住解题
+        logger.warning("召回同类题方法卡失败（本次不带参考）", exc_info=True)
+        return ""
 
 
 def _provider_from_snapshot(
@@ -2758,6 +2994,44 @@ def _attachment_dir(challenge_id: str) -> Path:
     return get_settings().scan_root / "_ctf2_attachments" / challenge_id
 
 
+def _workspace_dir(challenge_id: str, *, create: bool = False) -> Path | None:
+    """跨容器存活的持久工作区（宿主侧路径）。v0.29 补。
+
+    ## 它和 `_attachment_dir` 的区别
+
+    | | `_ctf2_attachments/` | `_ctf2_workspaces/` |
+    | --- | --- | --- |
+    | 谁写 | **服务端**（同步时下载） | **容器里的模型** |
+    | 挂载 | 只读（`:ro`） | **读写（`:rw`）** |
+    | 内容 | 题目给的原件 | 解题产物（解压/反编译/脚本） |
+    | 生命周期 | 跟着**题目** | 跟着**这道题的多次尝试** |
+
+    ## 为什么 `create` 是显式开关
+
+    读路径（比如列出已有产物）**不该**顺手建目录 —— 那会让"这道题从没
+    跑过"与"跑过但没留下东西"变成同一个状态。只有真正要起容器时才
+    `create=True`。
+
+    ## ⚠️ 路径安全
+
+    `challenge_id` 来自数据库主键（`ctf2chal_<ULID>`），不是用户输入。
+    但仍然做一次形状校验 —— 这个目录会被**读写挂载**进容器，
+    而路径拼接一旦能被影响就是"任意宿主目录暴露给不可信内容"。
+    """
+    if not challenge_id or "/" in challenge_id or "\\" in challenge_id or ".." in challenge_id:
+        logger.warning("拒绝为可疑的 challenge_id 建工作区：%r", challenge_id)
+        return None
+    path = get_settings().scan_root / "_ctf2_workspaces" / challenge_id
+    if create:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            # 建不出来**不影响解题**（只是没有持久区），所以不抛。
+            logger.warning("创建工作区失败（本次解题没有持久区）：%s", exc)
+            return None
+    return path if path.is_dir() else None
+
+
 def _attachment_paths(challenge: Ctf2Challenge) -> list[Path]:
     """题目附件的**本地已下载副本**。
 
@@ -2765,11 +3039,33 @@ def _attachment_paths(challenge: Ctf2Challenge) -> list[Path]:
     `service.pull_challenge` 都调 `attachments.download_all`），
     这里只读它落盘的结果。把下载放在解题路径上会让一次解题依赖网络，
     而下载失败时 agent 会对着一个空目录分析半天 —— 那是纯粹的浪费。
+
+    ## ★ 必须排除指纹 sidecar（2026-10-12）
+
+    附件下载完会在旁边写一个 `<name>.sha256`（见
+    `attachments._write_fingerprint`）。它是**给同步逻辑用的**，
+    不是题目材料 —— 不过滤的话：
+
+      · 它会出现在给模型的"附件清单"里（`- foo.zip.sha256（65 字节）`），
+        而模型会去 `cat` 它、试图从里面找线索；
+      · `read_attachment` 也会把它当附件读。
+
+    症状是"模型在分析一个只有哈希值的文件"，而它看起来像是题目给的。
     """
     directory = _attachment_dir(challenge.id)
     if not directory.is_dir():
         return []
-    return [p for p in sorted(directory.iterdir()) if p.is_file()]
+    # 后缀常量从 `attachments` 取（不在这里重写一份）—— 两处各写一份
+    # 就会漂移，而漂移的症状是"指纹文件又混进附件清单了"。
+    from app.ctf2.attachments import FINGERPRINT_SUFFIX
+
+    return [
+        p
+        for p in sorted(directory.iterdir())
+        # 只排除我们自己的 sidecar —— 用**精确后缀**而不是"含 .sha256"：
+        # 题目真给一个叫 `hashes.sha256.txt` 的文件时，那条规则会误伤它。
+        if p.is_file() and not p.name.endswith(FINGERPRINT_SUFFIX)
+    ]
 
 
 #: 过程文件的目录名。`_save_transcript` 写它、`latest_transcript` 读它 ——
@@ -3119,6 +3415,10 @@ async def _run_worker(
             # ★ 附件走**挂载**，不走 `docker cp` —— 见 `SandboxContainer`
             #   的 `attachments_dir` 与 `copy_in` 的说明。
             attachments_dir=_attachment_dir(challenge_id),
+            # ★★ 持久工作区（v0.29）：解压/反编译/脚本等产物写在这里，
+            #    容器销毁后仍然活着，下次续解能直接用。
+            #    `create=True` —— 这是唯一该建目录的地方（见 `_workspace_dir`）。
+            workspace_dir=_workspace_dir(challenge_id, create=True),
             # ⚠️ 这里只放**无害的开关**。凭据绝不进容器 —— 见模块 docstring。
             extra_env={"PWNLIB_NOTERM": "1"},
         )
@@ -3316,6 +3616,11 @@ async def _handle_candidates(
                 mode=spec.mode,
                 already=already,
                 remaining_wrong=challenge.remaining_wrong_submissions,
+                # ★ v0.31 证据门禁：只对 auto 生效。
+                #   两条独立的弱信号 —— 有证据文本、且真的跑过工具。
+                #   见 `decide_submission` 里那段"为什么需要证据门禁"。
+                evidence=candidate.evidence,
+                saw_tool_output=outcome.saw_tool_output,
             )
             challenge.candidate_count = int(challenge.candidate_count or 0) + 1
             if decision.action == "hold":
@@ -3496,6 +3801,30 @@ def _record_outcome(db: Session, challenge: Ctf2Challenge, outcome: SolveOutcome
         #    后者正是这次 bug 的成因。
         challenge.status = Ctf2ChallengeStatus.UNSOLVED.value
         challenge.last_error = "本次未产出候选 flag。"
+
+    # ★★ v0.32：把这次解题提炼成**方法卡**（供同类题复用）。
+    #
+    # ## 位置在最后：它要读"最终状态"
+    #
+    # 上面几个分支刚定完 `challenge.status`，而卡片里的 `solved`
+    # 就取自它 —— 放在前面会拿到过期的值（那时状态还是 `solving`）。
+    #
+    # ## 为什么它不影响解题结果
+    #
+    # 写卡失败**只记日志**（见 `learn_from_solve`）：解题已经结束，
+    # 结果是既成事实。让"提炼知识"的失败把一次成功的解题变成报错，
+    # 是本末倒置。
+    #
+    # ## ⚠️ 它写的是**脱敏后**的内容
+    #
+    # 见 `notes.build_note_fields` —— flag 绝不进卡片，因为卡片会被
+    # 注入到**另一道题**的 prompt 里。
+    try:
+        from app.ctf2 import service as ctf2_service
+
+        ctf2_service.learn_from_solve(db, challenge, outcome)
+    except Exception:  # noqa: BLE001 - 提炼知识失败不该影响解题结果
+        logger.warning("写解题方法卡失败（不影响解题结果）", exc_info=True)
 
 
 __all__ = [
