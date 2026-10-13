@@ -13,9 +13,31 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.core.ids import new_id
 from app.ctf2 import notes as notes_mod
 from app.ctf2.models import Ctf2SolveNote
-from app.core.ids import new_id
+
+
+def _note_for(db: Session, challenge_id: str, **overrides) -> Ctf2SolveNote:  # noqa: ANN003
+    """造一张方法卡。
+
+    ⚠️ `challenge_id` **必须指向一条真实存在的题目行** ——
+    `ctf2_solve_notes.challenge_id` 有外键，用假 id 会撞
+    `ForeignKeyViolation`（实测撞过：`Key (challenge_id)=(ctf2chal_XXX)
+    is not present in table "ctf2_challenges"`）。
+    所以调用方要么用现成夹具的 id，要么先用 `_make_challenge` 造一行。
+    """
+    fields = {
+        "id": new_id("ctf2note"),
+        "challenge_id": challenge_id,
+        "category": "REVERSE",
+        "solved": True,
+        "approach": "做法",
+        "tools": "",
+        "dead_ends": "",
+    }
+    fields.update(overrides)
+    return Ctf2SolveNote(**fields)
 
 
 # ══════════════════════════════════════════════════════════
@@ -59,6 +81,117 @@ def test_urls_are_stripped() -> None:
     assert "直接打它" in cleaned
 
 
+def test_url_path_is_kept_so_commands_survive() -> None:
+    """★★ 掩 host、**保留路径** —— 不能把命令掏成空壳。
+
+    ⚠️⚠️ 这条守的是一个实测缺陷（2026-10-13 dry-run）。第一版把 URL
+    整条删光，于是卡片里出现了：
+
+        curl -s -i --max-time 20        ← 看着像做法，实际打不了
+
+    它比"没有这条"更坏：模型会照着它去 curl 一个不存在的地址。
+    而"访问了 /robots.txt"恰恰是**可复用的方法知识** —— host 才是
+    这一道题特有的东西。
+    """
+    raw = (
+        "curl -s -i http://c436664650adb5d2f6aa1b64.http-ctf2.dasctf.com:80"
+        "/robots.txt --max-time 20"
+    )
+    cleaned = notes_mod.sanitize_for_reuse(raw)
+
+    # ① 靶机地址没有泄漏（host 与端口都要没了）
+    assert "dasctf.com" not in cleaned, f"★ 靶机 host 泄漏：{cleaned!r}"
+    assert "c436664650adb5d2f6aa1b64" not in cleaned
+    # ② 路径保留 —— 这才是可复用的部分
+    assert "/robots.txt" in cleaned, f"★ 路径被删，命令成了空壳：{cleaned!r}"
+    # ③ 命令形状仍然完整（curl 与它的参数都还在）
+    assert cleaned.startswith("curl -s -i")
+    assert "--max-time 20" in cleaned
+
+
+def test_url_only_argument_does_not_leave_a_hollow_command() -> None:
+    """★★ 只有 URL 的参数（`http_request` 那种）不该留下空壳。
+
+    这是上一条的另一面：`{"url": "http://..."}` 剥出来只有一个 URL，
+    掩成 `<target>` 之后整条命令就只剩一个占位符 —— 那种"做法"没有
+    任何指导意义，所以 `key_steps_from_transcript` 必须把它滤掉。
+    """
+    transcript = '[turn 1] tool http_request {"url": "http://10.0.0.5:8080/admin"}'
+    steps = notes_mod.key_steps_from_transcript(transcript)
+
+    assert steps == [], f"★ 只有 URL 的命令不该进卡片：{steps!r}"
+
+
+def test_key_steps_sanitize_before_judging() -> None:
+    """★★ 顺序契约：**先脱敏、再判断值不值得复用**（不能反）。
+
+    ⚠️⚠️ 这是那个残骸缺陷的根因（2026-10-13）。第一版的顺序是
+    "先判断 → 再脱敏"，于是：
+
+        curl -s -i http://xxx.dasctf.com/robots.txt --max-time 20
+          ↓ 判据：含 `curl` → 值得复用 ✅
+          ↓ 脱敏：URL 被删光
+        curl -s -i --max-time 20      ← 空壳进了卡片
+
+    判据必须作用在**最终会写进卡片的那个形态**上。这条用例直接断言
+    "产出的每一步都不是空壳"：命令不能以选项、管道符或连接符收尾 ——
+    那正是被掏空之后的形状。
+    """
+    transcript = "\n".join(
+        [
+            '[turn 1] tool run_shell {"command": "curl -s -i '
+            'http://c436664650adb5d2f6aa1b64.http-ctf2.dasctf.com:80/robots.txt"}',
+            '[turn 2] tool http_request {"url": "http://10.0.0.5:8080/admin"}',
+            '[turn 3] tool run_shell {"command": "curl -s http://10.0.0.5:8080/?id=1"}',
+            '[turn 4] tool run_shell {"command": "sqlmap -u http://10.0.0.5:8080/?id=1 --batch"}',
+        ]
+    )
+    steps = notes_mod.key_steps_from_transcript(transcript)
+
+    assert steps, "应该至少留下一条可复用的做法"
+    for step in steps:
+        # 空壳的形状：以选项/管道/连接符收尾，或短到只剩一个占位符。
+        assert not step.rstrip().endswith(("|", "&&", "||", "-", "--")), (
+            f"★ 出现被掏空的残骸命令：{step!r}"
+        )
+        assert step.strip() != "<target>", f"★ 只剩占位符：{step!r}"
+
+    # 路径保留下来（那才是可复用的部分），而靶机地址没有泄漏。
+    joined = "\n".join(steps)
+    assert "/robots.txt" in joined
+    assert "dasctf.com" not in joined
+
+
+def test_flag_inside_a_url_path_is_still_stripped() -> None:
+    """★★★ flag 藏在 **URL 路径/参数**里也必须被剔除。
+
+    ⚠️⚠️ 这条守的是"保留路径"那个改动**自己引入的**风险
+    （2026-10-13）。第一版把整条 URL 删掉，所以藏在 URL 里的 flag
+    会顺带被带走；改成保留路径之后，同一个 flag 就活下来了：
+
+        curl 'http://10.0.0.5/?x=DASCTF{secret}'
+          ↓ 掩 host、保留路径
+        curl '<target>/?x=DASCTF{secret}'      ← ★ 泄漏！
+
+    而按空白切词 + `FLAG_PATTERN.match`（整串匹配）那一步**挡不住**：
+    `'<target>/?x=DASCTF{secret}'` 作为一个词并不匹配 `^前缀{正文}$`。
+
+    所以脱敏里补了一遍子串级剔除。这条用例直接钉住它 ——
+    因为这是**注入路径的安全底线**，漏一次就是把 A 题的答案
+    送进 B 题的 prompt。
+    """
+    for raw in (
+        "curl -s 'http://10.0.0.5:8080/?x=DASCTF{secret_value}'",
+        "curl -s http://10.0.0.5:8080/flag{inner_path_leak}",
+        "wget http://10.0.0.5/CTF2{another_one}.txt",
+    ):
+        cleaned = notes_mod.sanitize_for_reuse(raw)
+        assert "{" not in cleaned, f"★★★ URL 里的 flag 泄漏了：{raw!r} → {cleaned!r}"
+        assert "secret_value" not in cleaned
+        assert "inner_path_leak" not in cleaned
+        assert "another_one" not in cleaned
+
+
 def test_long_random_strings_are_stripped() -> None:
     """★ 32 位以上的 hex/base64 要剔除（可能是凭据或爆破出的口令）。"""
     text = "爆出的口令是 f81ae6f5710cb1340f90cd80d9c33107a1469615bf299e6057dea7f4337f67a3"
@@ -66,6 +199,172 @@ def test_long_random_strings_are_stripped() -> None:
 
     assert "f81ae6f5710cb1340f90cd80d9c33107a1469615bf299e6057dea7f4337f67a3" not in cleaned
     assert "爆出的口令是" in cleaned
+
+
+def test_bare_hostname_is_masked() -> None:
+    """★★ **裸 hostname**（没有 `http://` 前缀）也要掩掉。
+
+    ⚠️⚠️ 这条守的是实测漏掉的一批（2026-10-13）：上面那条 URL 规则只认
+    `http://` 开头的地址，而靶机经常以裸 hostname 出现：
+
+        timeout 15 nslookup dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com 192.168.44.2
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 泄漏
+
+    实测 29 道真题里这样漏出去 5 处。
+    """
+    for raw in (
+        "nslookup dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com 192.168.44.2",
+        "getent hosts c436664650adb5d2f6aa1b64.http-ctf2.dasctf.com",
+        "dig +short cb146342b031bdefc50d5935.http-ctf2.dasctf.com",
+    ):
+        cleaned = notes_mod.sanitize_for_reuse(raw)
+        assert "dasctf.com" not in cleaned, f"★ 裸 hostname 泄漏：{cleaned!r}"
+        assert "<target>" in cleaned
+
+
+def test_bare_ipv4_is_masked() -> None:
+    """★ 裸 IPv4 也要掩 —— 那是这道题的环境地址。"""
+    cleaned = notes_mod.sanitize_for_reuse("nslookup x 192.168.44.2")
+    assert "192.168.44.2" not in cleaned
+    assert "<target>" in cleaned
+
+
+def test_hostname_rule_does_not_destroy_method_knowledge() -> None:
+    """★★★ 掩 hostname 的判据必须**窄** —— 不能误伤方法知识。
+
+    ⚠️⚠️ 这条是"量出来的"约束，不是想当然（2026-10-13）。我原本打算
+    按"含点 + 末尾是字母"来认 hostname，于是先量了一遍**会误伤什么**
+    （29 道真题），结果是 **34 种**，而且全是真正的方法知识：
+
+        Image.open    re.findall    urllib.parse    olefile.OleFileIO
+        gui.il（×8，是 .NET 的 IL 文件！）   easyre.exe   flag.txt
+        index.html    flag.php      bin.relocs.apply
+
+    照那个宽判据脱敏，等于把"掏空命令"那个缺陷换个方向再犯一次 ——
+    卡片会被削得读不懂。
+
+    所以判据收窄成"首标签 ≥16 位 hex 且后面还有域名部分"：
+    实测 **5 处命中、0 处误伤**。这条用例钉住"0 处误伤"那一面。
+    """
+    # 这些**必须原样保留** —— 它们不是 hostname，是方法/文件名/API。
+    for keep in (
+        "Image.open('gui.png')",
+        "re.findall(r'x', s)",
+        "urllib.parse.quote(s)",
+        "olefile.OleFileIO(f)",
+        "monodis gui.il > out.il",
+        "file easyre.exe",
+        "cat flag.txt",
+        "bin.relocs.apply=true",
+        "f.endswith('.py')",
+        "http.request.uri",
+    ):
+        cleaned = notes_mod.sanitize_for_reuse(keep)
+        assert "<target>" not in cleaned, (
+            f"★ 误伤了方法知识（判据太宽）：{keep!r} → {cleaned!r}"
+        )
+        # 内容本身也要还在（不能只是没被掩、却被别的规则删了）。
+        head = keep.split()[0].split("(")[0]
+        assert head in cleaned, f"★ 内容被削掉了：{keep!r} → {cleaned!r}"
+
+
+def test_short_hex_hostname_is_not_masked() -> None:
+    """★ 短 hex 标签的域名**不该**被掩（判据要求 ≥16 位）。
+
+    这是上一条的另一面：`abc.example.com` 可能是文档里的正常域名，
+    掩掉会误伤；而 16 位以上几乎只可能是平台自动生成的环境名。
+    """
+    cleaned = notes_mod.sanitize_for_reuse("参考 https://docs.example.com/guide")
+    assert "<target>" in cleaned  # host 部分仍然掩掉（它是 URL）
+    # 但裸的短标签域名不掩：
+    cleaned2 = notes_mod.sanitize_for_reuse("见 abc.example.com 的说明")
+    assert "abc.example.com" in cleaned2, f"★ 短标签域名被误掩：{cleaned2!r}"
+
+
+def test_attachment_filename_stem_becomes_a_placeholder() -> None:
+    """★★★ 长 hex 的**附件名**：词干换成 `<attachment>`，扩展名保留。
+
+    ⚠️⚠️ 这条守的是"掩裸 hostname"那个改动**自己引入的**误伤
+    （2026-10-13）。平台按内容 SHA256 生成附件名，于是它和靶机
+    hostname 的**形状完全一样**：
+
+        靶机：  dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com   ← 掩成 <target>
+        附件名：9f0ee5dc…adee.pcap                            ← 掩成 <attachment>.pcap
+
+    连踩三个坑，所以判据不是"留"也不是"删"，而是**换词干**：
+
+      ① 当成 hostname → `unzip -o /work/attachments/<target>`（照抄找不到文件）；
+      ② 被"32 位以上 hex 是凭据"删掉 → `tshark -r …/.pcap`（文件没了）；
+      ③ 留着不掩 → 占掉卡片 160 字预算的 60 字（37%），且对复用无价值
+         （换个题目那个文件根本不存在）。
+
+    ★ 保留扩展名是因为它**真的可复用**（"这道题给的是个 pcap"）；
+      而 `<target>` 与 `<attachment>` 分工不同：前者是要连的网络目标，
+      后者是要读的本地文件 —— 合成一个会让模型分不清。
+    """
+    raw = (
+        "unzip -o /work/attachments/"
+        "e06db57b2e9dea955fccb9679ba1c556de694cc1735c7eeb3ecfe0f5af871bae.zip"
+    )
+    cleaned = notes_mod.sanitize_for_reuse(raw)
+
+    assert "<attachment>.zip" in cleaned, f"★ 附件名没换占位符：{cleaned!r}"
+    assert "<target>" not in cleaned, f"★ 附件名被当成靶机：{cleaned!r}"
+    assert "e06db57b2e9dea955fccb9679ba1c556de694cc1735c7eeb3ecfe0f5af871bae" not in cleaned
+
+    # 而真正的靶机 hostname 仍然掩成 `<target>`（不能变成 <attachment>.tcp）。
+    cleaned2 = notes_mod.sanitize_for_reuse(
+        "nslookup dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com"
+    )
+    assert "<target>" in cleaned2
+    assert "dasctf.com" not in cleaned2
+    assert "<attachment>" not in cleaned2, (
+        f"★ 靶机被误判成附件（`.tcp` 看着像扩展名）：{cleaned2!r}"
+    )
+
+
+def test_truncated_commands_are_dropped() -> None:
+    """★★ 被截断的**半句命令**不能进卡片（照着抄会报错）。
+
+    ⚠️⚠️ 这是实测发现的（2026-10-13）：transcript 落盘时命令被
+    `_clip(..., 500)` 截过，而**全库 604 条 tool 行里有 111 条被截断**
+    （18%）。截断处的形状就是"断在半句"：
+
+        ... print('total:',repr(buf)) s.close() EOF python3
+        cd /work/gui && grep
+
+    它**看起来像一条做法**，但照着抄直接语法错误 —— 所以宁可丢掉。
+    """
+    for bad in (
+        "cd /work/gui && grep",
+        "python3 -c 'print(1)' &&",
+        "cat /work/x.txt |",
+        "cd /work && curl -s -i",  # 被掏空：只剩命令名 + 选项，没有目标
+    ):
+        assert not notes_mod._command_worth_reusing(bad), f"★ 残骸进了卡片：{bad!r}"
+
+
+def test_complete_piped_commands_are_kept() -> None:
+    """★★ 完整的**管道**命令要留下 —— 别把截断判据用过头。
+
+    这是上一条的反面。`cmd | head` / `| sort` / `| uniq` 是**完整**的
+    （它们从 stdin 读），实测里它们是卡片里最有价值的部分之一
+    （`tshark … | sort | uniq -c | sort -rn | tail -60`）。
+
+    ⚠️ 判据放宽的代价不对称：把完整命令误判成残骸会**白丢知识**，
+    而放过一条残骸代价小得多（模型看得出 `... python3` 不完整）。
+    """
+    for good in (
+        "tshark -r x.pcap -Y http -T fields -e http.request.uri | sort | uniq -c | sort -rn | tail -60",
+        "strings -n 6 easyre.exe | head -80",
+        "objdump -d x | grep -A3 call",
+        "xxd x.bin | head -20",
+        # ⚠️ 以选项收尾但**有位置参数**的命令是完整的（实测里真有）。
+        "hashcat -b -m 9500 --force",
+        # ⚠️ `\;` 是 find -exec 的终止符，不是续行符（实测里真有）。
+        "find . -type f -exec file {} \\;",
+    ):
+        assert notes_mod._command_worth_reusing(good), f"★ 完整命令被误丢：{good!r}"
 
 
 def test_short_hex_is_kept() -> None:
@@ -99,7 +398,12 @@ def test_sanitize_handles_empty_input() -> None:
 
 
 def test_tools_are_extracted_from_transcript() -> None:
-    """★ 从 transcript 里提取用过的工具名（去重、保序）。"""
+    """★ 从 transcript 里提取工具名（去重、保序）。
+
+    ⚠️ 这里提取的是**命令里真正用到的解题工具**（`strings`），
+    而不是包装层名字（`run_shell`）—— 理由见
+    `test_tools_prefer_real_tool_names_over_wrappers`。
+    """
     transcript = "\n".join(
         [
             "[turn 1] tool run_shell ls -la",
@@ -112,7 +416,76 @@ def test_tools_are_extracted_from_transcript() -> None:
     )
     tools = notes_mod.tools_from_transcript(transcript)
 
-    assert tools == "run_shell, read_attachment", f"实际：{tools!r}"
+    assert tools == "run_shell, read_attachment, strings", f"实际：{tools!r}"
+
+
+def test_tools_prefer_real_tool_names_over_wrappers() -> None:
+    """★★ `tools` 字段必须是**真工具名**，不能是包装层名字。
+
+    ⚠️⚠️ 这条守的是一个实测缺陷（2026-10-13 dry-run）：第一版直接取
+    `tool` 后面那个词，于是 29 张卡的 `tools` 几乎全是
+
+        用到的工具：run_shell
+        用到的工具：run_shell, http_request
+
+    **零信息量** —— 那是我们自己的沙箱包装层，模型看到它学不到东西。
+
+    现在从命令正文里认工具（按词边界）；认不出时（`http_request`
+    只带一个 URL）才退回包装层名 —— 那时"做过一次 HTTP 请求"仍是
+    个有用的事实。
+    """
+    transcript = "\n".join(
+        [
+            '[turn 1] tool run_shell {"command": "objdump -d easyre.exe | head"}',
+            '[turn 2] tool run_shell {"command": "r2 -q -c \'izz~flag\' easyre.exe"}',
+            '[turn 3] tool run_shell {"command": "python3 -c \'print(1)\'"}',
+        ]
+    )
+    tools = notes_mod.tools_from_transcript(transcript)
+
+    assert "run_shell" not in tools, f"★ 包装层名字进了卡片：{tools!r}"
+    assert "objdump" in tools
+    assert "r2" in tools
+    assert "python3" in tools
+
+
+def test_short_tool_names_do_not_match_as_substrings() -> None:
+    """★★ 短工具名（`nc` / `file` / `r2`）不能按**子串**匹配。
+
+    ⚠️⚠️ 第一版是 `any(tool in low for tool in _REUSABLE_TOOLS)`，而
+    表里有 `nc` / `file` / `r2` 这种两三个字母的词，子串匹配的误判率
+    高得离谱：
+
+      · `nc` 命中 `sync` / `func` / `encode`；
+      · `file` 命中 `profile` / `filename`；
+      · `r2` 命中 `var2` / `bar2`。
+
+    后果不是"多留几条"：它让**几乎任何命令**都被判成"值得复用"，
+    于是卡片塞满 `cd /work && ls -la` 这种每道题都跑的噪音 ——
+    实测 5 张卡的首步完全相同。
+
+    ⚠️ 下面这些用例是**精心挑的**：它们里除了那个子串之外，
+    **没有任何**真工具、也没有 `sed -n` / `grep -n` / 自写脚本 ——
+    所以一旦判成 True，只可能是子串匹配造成的。
+    （早先我用 `python3 -c '…sync()'` 当反例，那是**错的**：
+    它确实含真工具 `python3`，判 True 本来就对。）
+    """
+    for noise in (
+        "echo sync_done",       # 含 `nc` 子串（在 sync 里）
+        "echo profile_loaded",  # 含 `file` 子串（在 profile 里）
+        "echo var2_value",      # 含 `r2` 子串（在 var2 里）
+        "echo encode_result",   # 含 `nc` 子串（在 encode 里）
+    ):
+        assert not notes_mod._command_worth_reusing(noise), (
+            f"★ 子串误判为可复用：{noise!r}"
+        )
+
+    # 而真正的调用必须认出来（词边界不该把真工具也挡掉）。
+    assert notes_mod._command_worth_reusing("nc -lvnp 4444")
+    assert notes_mod._command_worth_reusing("file easyre.exe")
+    assert notes_mod._command_worth_reusing("r2 -q -c izz x")
+    # ⚠️ `python3.13` 这种带点的也要认（否定环视允许 `.`）。
+    assert notes_mod._command_worth_reusing("python3.13 solve.py")
 
 
 def test_tools_are_capped() -> None:
@@ -187,33 +560,34 @@ def test_dead_end_is_sanitized_too() -> None:
 
 
 def test_recall_only_returns_the_same_category(
-    db_session: Session, ctf2_challenge
+    db_session: Session, ctf2_challenge, ctf2_competition
 ) -> None:
     """★★ 只召回**同分类**的卡。
 
     不同分类的方法不能混用（逆向的经验对 crypto 题是噪音）。
     """
-    # 造一张同类卡 + 一张异类卡
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    # ⚠️ 卡片的 challenge_id 有外键 —— 必须造**真实题目行**。
+    same = _make_challenge(db_session, ctf2_competition, remote_id="same-cat")
+    diff = _make_challenge(db_session, ctf2_competition, remote_id="diff-cat")
+
     db_session.add(
-        Ctf2SolveNote(
-            id=new_id("ctf2note"),
-            challenge_id="ctf2chal_OTHER_SAME_CATEGORY",
+        _note_for(
+            db_session,
+            same.id,
             category=ctf2_challenge.category,
-            solved=True,
             approach="同类题的做法",
             tools="run_shell",
-            dead_ends="",
         )
     )
     db_session.add(
-        Ctf2SolveNote(
-            id=new_id("ctf2note"),
-            challenge_id="ctf2chal_OTHER_DIFF_CATEGORY",
+        _note_for(
+            db_session,
+            diff.id,
             category="完全不同的分类",
-            solved=True,
             approach="异类题的做法",
             tools="run_shell",
-            dead_ends="",
         )
     )
     db_session.commit()
@@ -234,14 +608,12 @@ def test_recall_excludes_the_challenge_itself(
     `resume` 该做的事。两者混淆会让模型分不清。
     """
     db_session.add(
-        Ctf2SolveNote(
-            id=new_id("ctf2note"),
-            challenge_id=ctf2_challenge.id,  # ← 自己
+        _note_for(
+            db_session,
+            ctf2_challenge.id,  # ← 自己
             category=ctf2_challenge.category,
             solved=False,
             approach="自己的上次记录",
-            tools="",
-            dead_ends="",
         )
     )
     db_session.commit()
@@ -250,18 +622,21 @@ def test_recall_excludes_the_challenge_itself(
     assert all(r.challenge_id != ctf2_challenge.id for r in rows), "★ 召回了自己"
 
 
-def test_recall_puts_solved_notes_first(db_session: Session, ctf2_challenge) -> None:
+def test_recall_puts_solved_notes_first(
+    db_session: Session, ctf2_challenge, ctf2_competition
+) -> None:
     """★ 已解出的卡排前面（成功的经验信息量更大）。"""
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
     for solved, approach in ((False, "失败的经验"), (True, "成功的经验")):
+        ch = _make_challenge(db_session, ctf2_competition, remote_id=f"order-{solved}")
         db_session.add(
-            Ctf2SolveNote(
-                id=new_id("ctf2note"),
-                challenge_id=f"ctf2chal_ORDER_{solved}",
+            _note_for(
+                db_session,
+                ch.id,
                 category=ctf2_challenge.category,
                 solved=solved,
                 approach=approach,
-                tools="",
-                dead_ends="",
             )
         )
     db_session.commit()
@@ -271,31 +646,57 @@ def test_recall_puts_solved_notes_first(db_session: Session, ctf2_challenge) -> 
     assert rows[0].solved is True, "★ 已解出的卡没排在前面"
 
 
-def test_recall_returns_empty_without_a_category(db_session: Session) -> None:
+def test_recall_returns_empty_without_a_category(
+    db_session: Session, ctf2_competition
+) -> None:
     """★★ 题目没有分类时**返回空**，而不是"给全部"。
 
     给全部的后果是把无关题的方法灌进 prompt —— 比不给更坏。
+
+    ## ⚠️ 这条测试的第一版是**假的**（变异验证抓到的）
+
+    第一版只造了一个"无分类的假题目"对象，**没有在库里放任何卡片** ——
+    于是即使把 `if not category: return []` 整条拆掉，查询也查不到东西、
+    照样返回空，断言**照样通过**。
+
+    它验证的是"恰好没有数据"，而不是"那条早退分支在起作用"。
+
+    所以现在**先造一张必然会被查到的卡**（分类为空串），再断言
+    "无分类的题目仍然返回空" —— 只有早退分支真的在，才会返回空。
     """
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    # 造一张**真实存在**的卡，分类故意设成空串 ——
+    # 这样"无分类"的题目如果没走早退分支，就会查到它。
+    ch = _make_challenge(db_session, ctf2_competition, remote_id="nocat-note")
+    db_session.add(_note_for(db_session, ch.id, category="", approach="空分类的做法"))
+    db_session.commit()
 
     class _NoCategory:
         id = "ctf2chal_NO_CATEGORY_AT_ALL"
         category = ""
 
-    assert notes_mod.notes_for_challenge(db_session, _NoCategory()) == []
+    rows = notes_mod.notes_for_challenge(db_session, _NoCategory())
+    assert rows == [], (
+        "★ 无分类时返回了卡片 —— 早退分支没生效，"
+        "而它挡的是「把无关题的方法灌进 prompt」"
+    )
 
 
-def test_recall_respects_the_limit(db_session: Session, ctf2_challenge) -> None:
+def test_recall_respects_the_limit(
+    db_session: Session, ctf2_challenge, ctf2_competition
+) -> None:
     """★ 召回数量有上限。"""
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
     for i in range(10):
+        ch = _make_challenge(db_session, ctf2_competition, remote_id=f"many-{i}")
         db_session.add(
-            Ctf2SolveNote(
-                id=new_id("ctf2note"),
-                challenge_id=f"ctf2chal_MANY_{i}",
+            _note_for(
+                db_session,
+                ch.id,
                 category=ctf2_challenge.category,
-                solved=True,
                 approach=f"做法 {i}",
-                tools="",
-                dead_ends="",
             )
         )
     db_session.commit()
@@ -369,6 +770,9 @@ def test_prompt_includes_notes_when_present() -> None:
         access_urls=(),
         attachments=(),
         llm_model="m",
+        # ⚠️ `llm_api_key` 是**必填**（无默认值）—— 它标了
+        #    `field(repr=False)` 但仍是必填。这里给一个明显的假值。
+        llm_api_key="test-key-not-real",
         notes_text="\n## 同类题的经验（★ 是**别的题**的）\n- 做法：用 monodis",
     )
     prompt = runner._initial_prompt(spec)
@@ -389,6 +793,7 @@ def test_prompt_has_no_notes_section_when_empty() -> None:
         access_urls=(),
         attachments=(),
         llm_model="m",
+        llm_api_key="test-key-not-real",
         notes_text="",
     )
     prompt = runner._initial_prompt(spec)

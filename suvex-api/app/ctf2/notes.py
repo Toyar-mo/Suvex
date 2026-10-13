@@ -19,8 +19,10 @@ transcript 动辄 60–115 KB，绝大部分是工具原始输出。塞回去会
 
 from __future__ import annotations
 
+import json
 import logging
 import re
+from functools import lru_cache
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -43,6 +45,139 @@ MAX_NOTES_IN_PROMPT = 3
 MAX_TOOLS = 12
 
 
+#: **文件扩展名**。用来把"长 hex 的附件名"从靶机 hostname 里区分开。
+#:
+#: ⚠️⚠️ 这是实测补的（2026-10-13）。`_TARGET_HOSTNAME` 的**形状**同时
+#:      匹配两种东西，而它们的处理方式**必须相反**：
+#:
+#:        靶机：  dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com   ← 要掩
+#:        附件名：9f0ee5dcb985a3ea70e474a8a0c6d3735ac879553a92af77771e4246c770adee.pcap
+#:                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ ← 不能掩
+#:
+#:      两者都是"一长串 hex 开头"，唯一可靠的差别是**末标签**：
+#:      靶机是域名后缀（`com` / `net`），附件是文件扩展名（`pcap` / `zip`）。
+#:
+#:      附件名是平台按内容 SHA256 生成的（见 `attachments.py`）。
+#:      误掩的后果是卡片里出现：
+#:
+#:        unzip -o /work/attachments/<target>      ← 照抄会找不到文件
+#:
+#:      而**"这道题给的是个 zip"本身是可复用的信息**。
+_FILE_EXTS = frozenset(
+    {
+        # 压缩/打包
+        "zip", "gz", "tgz", "bz2", "xz", "7z", "rar", "tar", "jar", "war",
+        # 可执行/二进制
+        "exe", "elf", "bin", "so", "dll", "out", "o", "a", "class", "pyc",
+        "wasm", "apk", "iso", "img", "dmp", "msi", "sys",
+        # 代码/文本
+        "py", "cs", "c", "cpp", "h", "hpp", "sh", "bat", "ps1", "pl", "rb",
+        "go", "rs", "java", "php", "jsp", "asp", "html", "htm", "xml",
+        "json", "yml", "yaml", "toml", "ini", "cfg", "conf", "log", "md",
+        "txt", "csv", "tsv", "sql", "db", "sqlite", "pem", "key", "crt",
+        "csr", "p12", "pfx", "asc", "gpg", "il",
+        # 文档
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "rtf",
+        # 媒体/取证
+        "png", "jpg", "jpeg", "gif", "bmp", "tif", "tiff", "webp", "ico",
+        "svg", "mp3", "mp4", "avi", "mov", "wav", "flac", "pcap", "pcapng",
+        "cap", "evtx", "raw", "vmem", "ttf", "woff", "woff2", "eot",
+    }
+)
+
+
+def _mask_target_host(match: re.Match[str]) -> str:
+    """把 hostname 掩成 `<target>`，**除非它是文件名**。
+
+    见 `_FILE_EXTS` 的说明：附件名与靶机 hostname 形状相同，
+    只有"末标签是不是扩展名"能区分。
+    """
+    host = match.group(0)
+    if host.rsplit(".", 1)[-1].lower() in _FILE_EXTS:
+        return host
+    return "<target>"
+
+
+#: 靶机**裸 hostname** 的判据：首标签是一长串 hex，后面还跟着域名。
+#:
+#: 平台给每道题分配的环境是 `<24位hex>.tcp-ctf2.<赛事域>` 这种形状
+#: （见 `sanitize_for_reuse` ②″ 里那份实测数据）。这里只认这个形状，
+#: 因为更宽的判据会把 `Image.open` / `gui.il` / `easyre.exe` 一起掩掉。
+#:
+#: ⚠️ 首标签要求 ≥16 位 hex：短 hex 标签（`abc.example.com`）可能是
+#:    正常的文档域名，掩掉会误伤；而 16 位以上几乎只可能是自动生成。
+_TARGET_HOSTNAME = re.compile(
+    r"\b[A-Fa-f0-9]{16,}(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,24}\b"
+)
+
+#: 长 hex 的**附件名词干**：`<64位hex>.pcap` → `<attachment>.pcap`。
+#:
+#: ⚠️⚠️ 这是实测踩出来的（2026-10-13）。平台按内容 SHA256 生成附件名
+#:      （见 `attachments.py`），于是命令里到处是 64 位 hex：
+#:
+#:        tshark -r /work/attachments/9f0ee5dc…adee.pcap -q -z io,phs
+#:
+#:      它与靶机 hostname 的形状几乎一样，处理时连踩三个坑：
+#:
+#:        ① 被 `_TARGET_HOSTNAME` 当成靶机 → `unzip -o …/<target>`
+#:           （照抄找不到文件）；
+#:        ② 被 ③ 那条"32 位以上 hex 是凭据"删掉 →
+#:           `tshark -r /work/attachments/.pcap`（文件没了）；
+#:        ③ 留着不掩 → 占掉卡片 160 字预算的 **60 字**（37%），
+#:           而且**它对复用毫无价值**：换个题目那个文件根本不存在。
+#:
+#: ★ 所以正确做法不是"留"也不是"删"，而是**把词干换成 `<attachment>`**：
+#:
+#:        tshark -r /work/attachments/<attachment>.pcap -q -z io,phs
+#:
+#:      一次解决三件事：命令完整可读、扩展名（"给的是 pcap"）这个
+#:      **真正可复用的信息**保住了、长度回到正常。
+#:
+#: ⚠️ 与 `<target>` 的分工：`<target>` 是**网络目标**（要去连的），
+#:    `<attachment>` 是**本地附件**（要去读的）。两者在解题里角色不同，
+#:    合成一个占位符会让模型分不清"这个地址要去打"还是"这个文件要去读"。
+#:
+#: ⚠️ 它必须在 `_TARGET_HOSTNAME` **之后**跑：真靶机那时已经变成
+#:    `<target>`，剩下的长 hex + 扩展名才确定是附件。反过来先跑的话，
+#:    `dfc05019…f583.tcp-ctf2.dasctf.com` 会被它匹配成
+#:    `<attachment>.tcp`（`.tcp` 看着像扩展名）—— 已推演过这个坑。
+_LONG_HEX_FILE = re.compile(r"\b[A-Fa-f0-9]{16,}(\.(?:[A-Za-z0-9]{1,8}))\b")
+
+#: 裸 IPv4。见 `sanitize_for_reuse` ②‴。
+_IPV4 = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b")
+
+
+@lru_cache(maxsize=1)
+def _inline_flag() -> re.Pattern[str]:
+    """`FLAG_PATTERN` 的**子串版**（去掉 `^` / `$` 锚点）。
+
+    ## 为什么需要它、为什么从 `FLAG_PATTERN` 推导
+
+    `FLAG_PATTERN` 是整串匹配（`^前缀{正文}$`），只能判断"**一个词**
+    是不是 flag"。但 flag 会藏在 URL 路径或参数里，那时它不是一个
+    独立的词：
+
+        <target>/?x=DASCTF{secret}
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^ 整串不匹配 → 逃过 ① 那一步
+
+    所以需要一个不限位置的版本。
+
+    ⚠️ **从 `FLAG_PATTERN.pattern` 推导而不是另写一条字面量**：
+    两条正则各写一份必然漂移（`runner` 改了前缀长度、这边忘了跟），
+    而漂移的后果是**泄漏**。去掉首尾锚点即可得到子串版 ——
+    因为原式的锚点就在两端。
+
+    ## 代价（明知而接受）
+
+    子串匹配会误伤 `file{1..5}` 这类 shell 花括号展开。判据是
+    "误伤的代价 vs 漏掉的代价"：误伤是少了一条可读性一般的内容，
+    漏掉是**把 A 题的 flag 注进 B 题**。所以宁可误伤。
+    """
+    from app.ctf2.runner import FLAG_PATTERN
+
+    return re.compile(FLAG_PATTERN.pattern.strip("^$"))
+
+
 def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
     """把一段文本处理成**可以安全注入到另一道题**的形状。
 
@@ -52,16 +187,21 @@ def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
 
       1. **剔除任何看起来像 flag 的片段**（`FLAG_PATTERN`）——
          这是最要紧的一条，理由见模块 docstring；
-      2. **剔除 URL 里的查询串与路径**（题面/回显里常带靶机地址，
-         而那是**这一道题**的地址，注入到别的题只会误导）；
+      2. **把靶机 URL 的 host 掩成 `<target>`**（题面/回显里常带靶机
+         地址，而那是**这一道题**的地址，注入到别的题只会误导）——
+         ⚠️ 注意是**只掩 host、保留路径**，不是整条删掉，理由见下面 ②；
       3. **剔除看起来像凭据的长随机串**（32 位以上的 hex / base64）；
       4. 折叠空白、截断到上限。
 
-    ## 为什么用"剔除"而不是"替换成占位符"
+    ## 为什么 flag 用"剔除"而不是"替换成占位符"
 
-    替换会留下 `flag{***}` 这样的痕迹，而模型看到它会试图"还原"，
-    或者把占位符当成格式提示。直接删掉更干净 —— 损失的信息是
-    "这里原本有个 flag"，而那本来就不该被复用。
+    flag 是直接删掉的：替换会留下 `flag{***}` 这样的痕迹，而模型看到
+    它会试图"还原"，或者把占位符当成格式提示。直接删掉更干净 ——
+    损失的信息是"这里原本有个 flag"，而那本来就不该被复用。
+
+    ⚠️ 但**靶机 URL 反过来**：那里替换（掩成 `<target>`）比删除好，
+    因为删掉会把命令掏成空壳（见 ②）。两者的取舍不同，判据是
+    "删掉之后这条信息还读不读得懂"。
     """
     if not text:
         return ""
@@ -75,36 +215,172 @@ def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
     # ① 剔除 flag 形状的片段。
     #
     # ⚠️ `FLAG_PATTERN` 是**整串匹配**（`^...$`），不能直接用来找子串。
-    #    所以这里按空白切开逐个词判断 —— 那正好也是 flag 在文本里的
+    #    所以按空白切开逐个词判断 —— 那正好也是 flag 在文本里的
     #    常见形态（一个独立的词）。
-    words = cleaned.split()
-    kept = [w for w in words if not FLAG_PATTERN.match(w.strip("`,.;:()[]'\""))]
-    cleaned = " ".join(kept)
+    #
+    # ⚠️⚠️ **必须逐行处理**（2026-10-13 修）：第一版是
+    #      `cleaned = " ".join(cleaned.split())` —— 那会把**所有换行
+    #      也压成空格**，于是 `approach` 里精心排的编号步骤挤成一行：
+    #
+    #        解出来了。关键步骤： 1. cd /work/ex && file ... 2. cd /work/ex && strings ...
+    #
+    #      而卡片的价值恰恰在"一条路径"的结构上 —— 挤成一行之后
+    #      模型读到的是一坨命令，而不是"先做什么、再做什么"。
+    #
+    #      这个 bug 是**实测发现的**：把真实 transcript 跑一遍提炼，
+    #      打印出来才看见 6 条步骤在一行里。
+    lines: list[str] = []
+    for line in cleaned.splitlines():
+        kept = [
+            w for w in line.split() if not FLAG_PATTERN.match(w.strip("`,.;:()[]'\""))
+        ]
+        lines.append(" ".join(kept))
+    cleaned = "\n".join(lines)
 
-    # ② 剔除 URL（含靶机地址）。保留"有个 URL"这个事实没意义，
-    #    因为那是**别的题**的地址。
-    cleaned = re.sub(r"https?://\S+", "", cleaned)
+    # ② 靶机 URL：**保留路径、掩掉 host**，而不是整条删掉。
+    #
+    # ⚠️⚠️ 第一版是 `re.sub(r"https?://\S+", "", cleaned)` —— 整条删光。
+    #      实测（2026-10-13 dry-run）暴露出它把命令**掏成空壳**：
+    #
+    #        原始：curl -s -i http://xxx.dasctf.com:80/robots.txt --max-time 20
+    #        结果：curl -s -i --max-time 20        ← 看着像做法，实际打不了
+    #
+    #      比"没有这条"更坏：模型会照着它去 curl 一个不存在的地址。
+    #
+    # ★ 而"访问了 /robots.txt"恰恰是**可复用的方法知识**，host 才是
+    #   这一道题特有的东西。所以这里只掩 host、留路径：
+    #
+    #        curl -s -i <target>/robots.txt --max-time 20
+    #
+    #   这样命令仍然可读、可照搬形状，而靶机地址没有泄漏。
+    #
+    # ⚠️ 端口一起掩掉：`10.0.0.5:8080` 的端口有时就是服务特征，
+    #    但保留它又会让人以为"端口是这个"。统一用 `<target>`。
+    cleaned = re.sub(
+        r"https?://[^\s/]+",
+        "<target>",
+        cleaned,
+    )
+
+    # ②′ ★ 补一刀：**URL 路径里的 flag**。
+    #
+    # ⚠️⚠️ 这是上面"保留路径"改动**自己引入的**风险（2026-10-13）：
+    #
+    #   第一版把整条 URL 删掉，所以 flag 藏在 URL 里也会被一起带走：
+    #       curl 'http://10.0.0.5/?x=DASCTF{secret}'   →   curl ''
+    #   （整条删光有别的毛病，见上；但"顺带删掉 flag"是它的副作用。）
+    #
+    #   现在保留路径之后，同一个 flag 就活下来了：
+    #       curl '<target>/?x=DASCTF{secret}'          ← ★ 泄漏！
+    #
+    #   而 ① 那一步**挡不住它**：那里是按空白切词后做 `FLAG_PATTERN.match`
+    #   整串匹配，而 `'<target>/?x=DASCTF{secret}'` 作为一个词并不匹配
+    #   `^前缀{正文}$`。
+    #
+    # 所以这里补一遍**子串级**的剔除 —— 位置不再限定于词首词尾。
+    #
+    # ⚠️ 调用 `_inline_flag()`（带 `lru_cache`）而不是在模块顶层编译：
+    #    它内部要 `from app.ctf2.runner import FLAG_PATTERN`，而
+    #    `runner` 也 import 本模块 —— 顶层调用会在 import 期撞环。
+    #    这与本文件其它地方用延迟 import 是同一条纪律。
+    cleaned = _inline_flag().sub("", cleaned)
+
+    # ②″ 靶机的**裸 hostname**（没有 `http://` 前缀的那些）。
+    #
+    # ⚠️⚠️ 上面那条只认 `http://` 开头的 URL，而实测（2026-10-13）里
+    #      靶机地址经常以裸 hostname 出现，**全都漏了过去**：
+    #
+    #         timeout 15 nslookup dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com 192.168.44.2
+    #                             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ 泄漏
+    #
+    # ## ★ 判据必须窄，否则会毁掉卡片（这是量出来的，不是猜的）
+    #
+    # 我原本想按"含点 + 末尾是字母"来认，于是先量了一遍**会误伤什么**
+    # （`_tmp/measure_hosts.py`，29 道真题）—— 结果是 34 种，而且全是
+    # **真正的方法知识**：
+    #
+    #     Image.open   re.findall   urllib.parse   olefile.OleFileIO
+    #     gui.il（×8，是 .NET 的 IL 文件！）  easyre.exe   flag.txt
+    #
+    # 照那个判据脱敏，等于把我刚修好的"掏空命令"缺陷换个方向再犯一次。
+    #
+    # 而真实泄漏只有 5 处，形状高度一致：**平台临时分配的靶机**，
+    # 首标签是一长串 hex（24 位）+ 赛事域名：
+    #
+    #     dfc05019f1fa0d78efe8f583.tcp-ctf2.dasctf.com
+    #     c436664650adb5d2f6aa1b64.http-ctf2.dasctf.com
+    #
+    # 按"首标签 ≥16 位 hex 且后面还有域名部分"来判：**5 处命中、
+    # 0 处误伤**。`Image.open` / `gui.il` / `easyre.exe` 全都活下来。
+    #
+    # ⚠️ 为什么不硬编码 `dasctf.com`：那是**一个平台**的域名，
+    #    换赛事就失效了。而"长 hex 标签"是平台自动分配环境的通用形状。
+    #
+    # ⚠️ 用 `_mask_target_host` 而不是直接替换：它会把"末标签是文件
+    #    扩展名"的那些**放过**（附件名与靶机形状相同，见 `_FILE_EXTS`），
+    #    留给下面 ②⁗ 处理。
+    cleaned = _TARGET_HOSTNAME.sub(_mask_target_host, cleaned)
+
+    # ②‴ 靶机 IP。
+    #
+    # 裸 IP 同样是"这道题的环境"（实测里出现的是 `192.168.44.2`，
+    # 本实验网的 DNS）。与 hostname 同理掩掉。
+    #
+    # ⚠️ `127.0.0.1` 也会被掩 —— 那是刻意的：本机回环在这个语境下
+    #    也只是"某次调试连过的地方"，而区分 loopback 会让规则多一层
+    #    判断却换不来更多可读性（`<target>` 同样读得懂）。
+    cleaned = _IPV4.sub("<target>", cleaned)
+
+    # ②⁗ 长 hex 的**附件名**：`<64位hex>.pcap` → `<attachment>.pcap`。
+    #
+    # ⚠️⚠️ 顺序：必须在 ②″ **之后**。上面用 `_mask_target_host` 已经把
+    #      真靶机掩成 `<target>`、并**放过了**扩展名结尾的那些；到这里
+    #      还在的长 hex + 扩展名就确定是附件名了。
+    #      反过来先跑会把 `…f583.tcp-ctf2.dasctf.com` 匹配成
+    #      `<attachment>.tcp`（`.tcp` 看着像扩展名）—— 已推演过。
+    #
+    # ★ 为什么是"换词干"而不是"保留"或"删掉"：见 `_LONG_HEX_FILE`
+    #   的说明 —— 保扩展名、去随机串，一次解决三个坑。
+    cleaned = _LONG_HEX_FILE.sub(r"<attachment>\1", cleaned)
 
     # ③ 剔除长随机串（可能是凭据、也可能是爆破出的口令）。
     #
     # 32 位是判据：短于它的随机串太多（哈希前缀、偏移量），
     # 剔除会误伤正常内容；而 32 位以上的连续 hex/base64
     # 在方法描述里几乎总是凭据或密钥。
+    #
+    # ⚠️ 到这一步附件名已经变成 `<attachment>.pcap`，不再是长 hex，
+    #    所以这里**不需要**再加否定环视 —— 上面 ②⁗ 已经把它们摘走了。
+    #    （早先试过用 `(?!\.[A-Za-z]{1,8}\b)` 在这里排除，但那只解决了
+    #    "别删"、没解决"太占长度"和"被当 hostname"，所以改成前置处理。）
     cleaned = re.sub(r"\b[A-Fa-f0-9]{32,}\b", "", cleaned)
     cleaned = re.sub(r"\b[A-Za-z0-9+/]{40,}={0,2}\b", "", cleaned)
 
     # ④ 折叠空白（上面剔除后会留下多余空格与空行）。
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    # ⚠️ 行尾空格也去掉：不然卡片里会出现看不见的尾随空白。
+    cleaned = "\n".join(line.rstrip() for line in cleaned.splitlines())
 
     return cleaned.strip()[:limit]
 
 
 def tools_from_transcript(transcript: str, *, limit: int = MAX_TOOLS) -> str:
-    """从 transcript 里提取**用过的工具名**（去重、保序）。
+    """从 transcript 里提取**真正用到的解题工具名**（去重、保序）。
 
-    只取名字，不取命令 —— 命令里常带目标地址与参数，而那些是
-    这一道题特有的（见 `sanitize_for_reuse` 第 ② 条）。
+    ## ★ 为什么不是直接取 `tool` 后面那个名字
+
+    transcript 的行是 `[turn N] tool run_shell {"command": "..."}` ——
+    而 `run_shell` / `http_request` / `read_attachment` 是**我们自己的
+    包装层**工具名，不是解题工具。
+
+    ⚠️ 实测（2026-10-13 dry-run）：第一版直接取那个名字，结果 29 张卡
+    的 `tools` 字段几乎全是 `run_shell` 或 `run_shell, http_request` ——
+    **零信息量**。模型看到"用到的工具：run_shell"学不到任何东西。
+
+    所以这里剥开参数、从**命令正文**里认工具（`_tools_in_command`，
+    按词边界）。认不出具体工具时（比如 `http_request` 只带一个 URL）
+    退回包装层名字 —— 那时"做过一次 HTTP 请求"仍是个有用的事实。
 
     ⚠️ 用 `_TRANSCRIPT_TOOL` 那个正则（与 `digest_from_transcript`
        共用）：它是**我们自己的日志格式**，不是猜别人的。
@@ -116,12 +392,339 @@ def tools_from_transcript(transcript: str, *, limit: int = MAX_TOOLS) -> str:
         match = _TRANSCRIPT_TOOL.match(line)
         if not match:
             continue
-        name = match.group(2).strip()
-        if name and name not in seen:
-            seen.append(name)
+        wrapper = match.group(2).strip()
+        # 从命令正文里认真工具；URL 先掩掉，免得 host 里的词被误认。
+        raw = sanitize_for_reuse(_unwrap_args(match.group(3)), limit=400)
+        found = _tools_in_command(raw) or ([wrapper] if wrapper else [])
+        for name in found:
+            if name not in seen:
+                seen.append(name)
         if len(seen) >= limit:
             break
-    return ", ".join(seen)
+    return ", ".join(seen[:limit])
+
+
+def key_steps_from_transcript(transcript: str, *, limit: int = 6) -> list[str]:
+    """从 transcript 里提取**成功路径上的关键命令**。
+
+    ## ★ 为什么必须真的提取，而不是写一句模板
+
+    第一版对"解出来了"的情况只输出一句固定文本：
+
+        "这道题解出来了。可复用的要点：先看清楚手上有什么…再按题型选工具"
+
+    而实测（2026-10-13，Kali 上回填 29 张卡）发现：**同类题召回出来的
+    三张卡内容一模一样** —— 因为那句话是模板，跟这道题实际做了什么无关。
+    三张一样的卡等于什么都没告诉模型。
+
+    所以这里真的读 transcript，挑出值得复用的命令。
+
+    ⚠️ 提取出来的是**命令模板**，仍然要过 `sanitize_for_reuse` ——
+       命令里常带这道题的路径与地址（见那个函数的说明）。
+
+    ## ★★ 顺序：**先脱敏、再判断**（不能反）
+
+    ⚠️⚠️ 这是实测踩出来的（2026-10-13）。第一版是先
+    `_command_worth_reusing(raw)` 再 `_clip_command` 之后统一脱敏，
+    于是留下了一批**残骸命令**：
+
+        curl -s -i http://xxx.dasctf.com/robots.txt --max-time 20
+          ↓ 判据："含 curl" → 值得复用 ✅
+          ↓ 脱敏：URL 被删光
+        curl -s -i --max-time 20          ← 看着像做法，实际打不了
+
+    模型会照着这条空壳去 curl 一个不存在的地址 —— 比"没这条"更坏。
+
+    所以这里**先脱敏**，让判据看到的就是最终会写进卡片的形态。
+    这也让 `_command_worth_reusing` 的注释里那条契约成立。
+    """
+    from app.ctf2.runner import _TRANSCRIPT_TOOL
+
+    steps: list[str] = []
+    for line in transcript.splitlines():
+        match = _TRANSCRIPT_TOOL.match(line)
+        if not match:
+            continue
+        raw = _unwrap_args(match.group(3))
+        # ★★ 顺序：脱敏 → 截断 → 判断。判据必须看**最终会写进卡片的
+        #    那个形态**。截断也算在内：`_clip_command` 会把长命令切在
+        #    中间，而"切一半的命令"和"被掏空的命令"一样照抄不了。
+        safe = sanitize_for_reuse(raw, limit=400).strip()
+        snippet = _clip_command(safe, 160)
+        if not _command_worth_reusing(snippet):
+            continue
+        if snippet not in steps:
+            steps.append(snippet)
+        if len(steps) >= limit:
+            break
+    return steps
+
+
+def _unwrap_args(raw: str) -> str:
+    """把 transcript 里那层参数 JSON 剥掉，只留命令本身。
+
+    ## 为什么需要它
+
+    `_TRANSCRIPT_TOOL` 捕获的是 `{"command": "ls -la /work"}` 这样的
+    **参数 JSON**（见 `solve_in_sandbox` 里 `log.append` 的写法）。
+
+    直接用的话卡片里会是一串带引号与花括号的 JSON：
+
+        {"command": "cd /work/ex && strings -n 6 easyre.exe | head -80"}
+
+    而它有两个坏处：
+      · **占长度**（每条约多 15 个字符，6 条就多 90）；
+      · **读起来像数据不像做法** —— 模型看到 JSON 会当结构化输入解析，
+        而这里要传达的是"有人这么做过"。
+
+    ## 剥不掉的怎么办
+
+    `read_attachment` 那类工具的 args 是 `{"path": "x.zip"}`，剥完就是
+    `x.zip` —— 那没什么指导意义，所以 `_command_worth_reusing` 会把它滤掉
+    （不含工具名、也不是脚本）。
+    """
+    text = raw.strip()
+    if not text.startswith("{"):
+        return text
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        # 截断过的 JSON（`_clip(..., 500)` 会切掉尾巴）解析不了 ——
+        # 那就手工把 `"command": "` 那一段剥掉，剩下的仍然可读。
+        match = re.match(r'\{\s*"command"\s*:\s*"(.*)$', text, re.DOTALL)
+        if match:
+            return match.group(1).rstrip('"}').replace("\\n", " ")
+        return text
+    if isinstance(parsed, dict):
+        # `command` 优先；没有就退回第一个字符串值（比如 path）。
+        for key in ("command", "path", "url"):
+            value = parsed.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return text
+
+
+#: 值得复用的命令里通常含这些工具名。
+#:
+#: ⚠️ 它是**提示**不是白名单：`_command_worth_reusing` 还看命令形状 ——
+#:    光靠关键词会漏掉自写脚本（`python3 - <<EOF`），光靠形状会捞进
+#:    一堆 `ls` / `cat`。
+_REUSABLE_TOOLS = (
+    "objdump", "readelf", "strings", "nm", "gdb", "r2", "radare2", "rizin",
+    "monodis", "ikdasm", "ilasm", "mcs", "mono", "de4dot",
+    "binwalk", "foremost", "exiftool", "steghide", "zsteg", "pngcheck",
+    "unzip", "7z", "tar", "file", "upx", "checksec",
+    "hashcat", "john", "office2john", "zip2john", "rar2john",
+    "openssl", "python3", "pycdc", "uncompyle6", "angr", "z3",
+    "sqlmap", "ffuf", "gobuster", "curl", "nc", "socat", "tshark", "tcpdump",
+    "xxd", "hexdump", "od",
+)
+
+
+def _command_worth_reusing(command: str) -> bool:
+    """这条命令值不值得写进方法卡。
+
+    ## ★ 这个函数接收的必须是**已脱敏**的命令
+
+    ⚠️⚠️ 这是实测踩出来的契约（2026-10-13）。第一版的调用顺序是
+    "先判断值不值得复用 → 再脱敏"，于是出现了一批**残骸命令**：
+
+        原始：curl -s -i http://xxx.dasctf.com:80/robots.txt --max-time 20
+        判据：含 `curl` → 值得复用 ✅
+        脱敏：URL 被删 → curl -s -i --max-time 20     ← 空壳
+
+    这条空壳**看起来像一条做法**，而模型会照着它去 curl 一个
+    不存在的地址 —— 比"没有这条"更坏。所以判据必须作用在
+    **最终会写进卡片的那个形态**上：先脱敏、再判断。
+
+    ## 判据是"它对下一步有没有指导意义"
+
+    **排除**（噪音，每道题都会跑）：
+      · 纯查看类：`ls` / `cat /` / `pwd`；
+      · 我们自己的探测：`command -v` / `which`；
+      · 极短的命令（< 8 字符，通常是 `cd` 或脱敏剩下的 `<target>`）。
+
+    **保留**：
+      · 含 `_REUSABLE_TOOLS` 里任一工具名的（**按词边界**，见 `_tools_in_command`）；
+      · 自写脚本（`<<'EOF'`、`<<PYEOF`、重定向到 .py/.cs）；
+      · `sed -n` / `grep -n` / `awk` 这类**定位**命令（说明"去哪找"）。
+    """
+    cmd = command.strip()
+    if len(cmd) < 8:
+        return False
+
+    # ★ 丢掉**语法不完整**的命令。
+    #
+    # ⚠️⚠️ 这是实测发现的（2026-10-13）：transcript 落盘时命令被
+    #      `_clip(..., 500)` 截过，而**全库 604 条 tool 行里有 111 条
+    #      被截断**（18%）。截断处的形状是"命令断在半句"：
+    #
+    #        ... print('total:',repr(buf)) s.close() EOF python3
+    #        cd /work/gui && grep
+    #
+    #      这种命令**照着抄会直接报错**，而它看起来像一条做法。
+    #      判据：以连接符收尾，或以一个"需要参数"的命令名裸着收尾。
+    #
+    #      ⚠️ 但 `| head` / `| sort` 是**完整**的（它们读 stdin），
+    #         所以那些不算残骸 —— 见 `_OK_BARE_TAIL`。
+    if _looks_truncated(cmd):
+        return False
+
+    low = cmd.lower()
+
+    if low.startswith(("command -v", "which ", "ls ", "ls -", "cat /", "pwd")):
+        return False
+
+    # 自写脚本：保留（"模型怎么解决问题"最直接的体现）
+    if "<<'EOF'" in cmd or "<<PYEOF" in cmd or "<<'PYEOF'" in cmd or "<<EOF" in cmd:
+        return True
+    if re.search(r">\s*\S+\.(py|cs|sh|c|cpp)\b", cmd):
+        return True
+
+    if _tools_in_command(cmd):
+        return True
+
+    return bool(re.search(r"\b(sed -n|grep -n|awk )", cmd))
+
+
+#: 裸着出现就说明**命令不完整**的词 —— 它们都需要参数。
+#:
+#: ⚠️ 与 `_OK_BARE_TAIL` 的区别是实测出来的：`head` / `sort` / `cat`
+#:    这类读 stdin，`cmd | head` 是完整命令；而 `grep` / `curl` /
+#:    `python3` 裸着就是被截断了。
+_NEEDS_ARG = frozenset(
+    {
+        "grep", "sed", "awk", "r2", "radare2", "rizin", "curl", "wget",
+        "python", "python3", "unzip", "7z", "tar", "file", "strings",
+        "objdump", "readelf", "nm", "monodis", "mcs", "mono", "hashcat",
+        "john", "openssl", "tshark", "tcpdump", "nc", "ncat", "socat",
+        "sqlmap", "ffuf", "gobuster", "binwalk", "foremost", "exiftool",
+        "steghide", "zsteg", "pngcheck", "checksec", "upx", "angr", "z3",
+        "pycdc", "uncompyle6", "ikdasm", "ilasm", "de4dot", "echo",
+        "ls", "cd", "mkdir", "cp", "mv", "rm", "chmod", "find", "timeout",
+    }
+)
+
+#: 裸着出现也**合法**的词 —— 它们从 stdin 读，`cmd | head` 是完整的。
+#:
+#: ⚠️ 这份名单是"宁可少判"的方向：把完整命令误判成残骸会白丢知识，
+#:    而放过去一条残骸的代价小得多（模型看得出 `... python3` 不完整）。
+#:
+#: ⚠️ 与 `_NEEDS_ARG` **不重叠**（`_looks_truncated` 先查这张表）。
+#:    分开写是为了让"哪些裸着合法"一眼可查，而不是靠两个集合的差集。
+_OK_BARE_TAIL = frozenset(
+    {"head", "tail", "sort", "uniq", "cat", "wc", "xxd", "tr", "cut"}
+)
+
+
+def _looks_truncated(command: str) -> bool:
+    """命令是不是**被截断的半句**（见 `_NEEDS_ARG` 的说明）。
+
+    两种残骸形状：
+      · 以连接符/管道符/续行符收尾：`... && cd /work/gui &&`；
+      · 以一个需要参数的命令名裸着收尾：`... EOF python3`。
+
+    ⚠️ 也挡 `grep` 这类**脱敏掏空**的尾巴（URL 被掩掉后剩下的
+       `curl -s -i`）—— 那种同样照抄不了。两个来源、同一个判据。
+
+    ⚠️ **`;` 与 `,` 不算残骸标记**：`cmd1; cmd2;` 是合法的 shell
+       （分号只是语句分隔符）。把它们当截断信号会误丢完整命令 ——
+       而"误丢"是这份判据里代价更高的那个方向（见 `_OK_BARE_TAIL`）。
+
+    ⚠️ **`\\;` 也不算**（实测踩到）：它是 `find … -exec … \\;` 的
+       终止符，而单独的 `\\` 才是续行符。两者都"以反斜杠收尾"，
+       差别在**前面有没有分号**：
+
+         find . -type f -exec file {} \\;      ← 完整命令
+         tshark -r x.pcap \\                    ← 被截断的续行
+
+       只按 `endswith("\\\\")` 判会把前者误丢（实测里真有这条）。
+    """
+    stripped = command.rstrip()
+    if stripped.endswith(("|", "&&", "||")):
+        return True
+    if stripped.endswith("\\") and not stripped.endswith("\\;"):
+        return True
+    words = stripped.split()
+    if not words:
+        return True
+    tail = words[-1].strip("`'\"").lstrip("-")
+    if not tail:
+        # 以纯选项收尾（`curl -s -i` 那种被掏空的形状）。
+        return True
+    if tail in _OK_BARE_TAIL:
+        return False
+    if tail in _NEEDS_ARG:
+        return True
+    # ★ 被掏空的另一种形状：整条命令**只剩命令名 + 选项**，一个位置
+    #   参数都没有。`curl -s -i`（URL 被掩掉后）就是这样 —— 它看着
+    #   像做法，但没有目标，照抄只会报错。
+    #
+    # ⚠️ 判据必须看"有没有位置参数"，不能只看"结尾是不是选项"：
+    #    `hashcat -b -m 9500 --force` 以选项收尾，但 `9500` 是位置参数，
+    #    它是**完整**的命令（实测里真有这条）。只看结尾会误丢它。
+    return _last_segment_has_no_positional(words)
+
+
+def _last_segment_has_no_positional(words: list[str]) -> bool:
+    """最后一段命令是不是"只有命令名 + 选项、没有位置参数"。
+
+    只取**最后一段**（按 `&&` / `||` / `;` / `|` 切）：前面的段是铺垫
+    （`cd /work && …`），要判断的是最后那个真正干活的命令。
+    """
+    segment: list[str] = []
+    for w in words:
+        if w in ("&&", "||", ";", "|"):
+            segment = []
+        else:
+            segment.append(w)
+    if len(segment) < 2:
+        return False
+    name = segment[0].strip("`'\"").rsplit("/", 1)[-1]
+    if name not in _NEEDS_ARG:
+        return False
+    # 位置参数 = 任何不以 `-` 开头的词（含 `key=value` 这种赋值形式 ——
+    # 它也是实打实的参数，所以算数）。
+    return not any(not w.startswith("-") for w in segment[1:])
+
+
+def _tools_in_command(command: str) -> list[str]:
+    """从一条命令里认出**真正解题的工具名**（按词边界，不是子串）。
+
+    ## ★ 为什么必须词边界
+
+    ⚠️ 第一版是 `any(tool in low for tool in _REUSABLE_TOOLS)` ——
+    **子串匹配**。而 `_REUSABLE_TOOLS` 里有 `nc`、`file`、`r2` 这种
+    极短的词，子串匹配的误判率高得离谱：
+
+      · `nc` 命中 `sync` / `func` / `encode`；
+      · `file` 命中 `profile` / `filename` / `defile`；
+      · `r2` 命中 `bar2` / `var2`。
+
+    后果不是"多留了几条"这么轻：它让**几乎任何命令**都被判成
+    "值得复用"，于是卡片里塞满 `cd /work && ls -la` 这种每道题都跑的
+    噪音 —— 实测 5 张卡的首步都是 `cd /work/attachments && ls -la && file *`。
+
+    ## 判据
+
+    工具名前后不能紧邻 `\\w` 或 `-`（后者挡 `python3-venv` 这类
+    连字符拼接），但**允许**后接 `.`（`python3.13`、`zsteg.py` 要能认出）。
+    """
+    low = command.lower()
+    found: list[str] = []
+    for tool in _REUSABLE_TOOLS:
+        if re.search(rf"(?<![\w-]){re.escape(tool)}(?![\w-])", low):
+            found.append(tool)
+    return found
+
+
+def _clip_command(command: str, limit: int) -> str:
+    """把命令压成一行、截断。
+
+    ⚠️ 换行会毁掉 prompt 里的列表结构（一条命令变成多行）。
+    """
+    one_line = " ".join(command.split())
+    return one_line[:limit] + ("…" if len(one_line) > limit else "")
 
 
 def build_note_fields(
@@ -133,32 +736,49 @@ def build_note_fields(
 
     | 输入 | 提炼出的 |
     | --- | --- |
-    | `transcript` | 用过的工具（`tools`）、方法梗概（`approach`） |
+    | `transcript` | 用过的工具（`tools`）、**关键步骤**（`approach`） |
     | `error` | 失败原因 → 进 `dead_ends` |
     | `candidates` | **只用来判断"有没有产出"，绝不写进卡片** |
 
     ⚠️ `candidates` 是 flag 原文，**一个字都不进卡片**。它出现在签名里
-    只是为了区分"解出来了"与"没解出来"两种梗概措辞。
+    只是为了区分"解出来了"与"没解出来"两种措辞。
+
+    ## ★ 为什么 `approach` 现在是"关键步骤"而不是一句结论
+
+    第一版写的是一句模板（"先看清楚手上有什么…再按题型选工具"），
+    而实测发现**同类题召回出来的卡内容一模一样** —— 那种卡毫无价值。
+
+    现在它由 `key_steps_from_transcript` 真的从 transcript 里提取，
+    所以每道题的卡是不同的。
     """
     tools = tools_from_transcript(transcript)
+    steps = key_steps_from_transcript(transcript)
 
     if solved:
-        approach = (
-            "这道题解出来了。可复用的要点：先看清楚手上有什么（附件类型、"
-            "服务响应），再按题型选工具；不要手工解析已知格式，先找现成工具。"
-        )
+        head = "解出来了。关键步骤（按时间序，前几步往往是识别与解包）："
+    else:
+        head = "**没解出来**。已试过的关键步骤："
+
+    if steps:
+        # 每条一行并编号 —— 模型读起来是"一条路径"而不是一坨文本。
+        approach = head + "\n" + "\n".join(f"  {i}. {s}" for i, s in enumerate(steps, 1))
+    else:
+        approach = head + "（transcript 里没有可复用的命令）"
+
+    if solved:
         dead_ends = ""
     else:
         # 失败时把错误原话（脱敏后）留下 —— 它往往是"卡在哪一步"的
         # 最精确描述。
         reason = sanitize_for_reuse(error or "", limit=300)
-        approach = "这道题**没解出来**。已做到的部分见工具清单；"
         dead_ends = reason or "未记录失败原因。"
         if not candidates:
-            approach += "全程没有产出候选答案。"
+            approach += "\n  全程没有产出候选答案。"
 
     return {
-        "approach": sanitize_for_reuse(approach),
+        # ⚠️ 上限放宽到两倍：`approach` 现在是多行步骤而不是一句话，
+        #    用原来的 600 会把后半截步骤截掉（而那正是有价值的部分）。
+        "approach": sanitize_for_reuse(approach, limit=MAX_NOTE_CHARS * 2),
         "tools": tools,
         "dead_ends": dead_ends,
     }
