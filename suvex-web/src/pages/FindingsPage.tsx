@@ -69,13 +69,13 @@ import { useNavigate } from 'react-router-dom'
  *
  * ## 任务 7：数据全部来自后端，而且**列表与详情是两个请求**
  *
- *   · 列表 + 角标 → `GET /findings` + `GET /findings/stats`（一次 Promise.all）
- *   · 详情        → `GET /findings/{id}`，**打开抽屉时才发**
+ *   · 列表 → `GET /findings`（含角标所需的全部条目）
+ *   · 详情 → `GET /findings/{id}`，**打开抽屉时才发**
  *
- * ★ 角标读 **stats 而不是本地数一遍**：契约 §3.4.2 把这个接口定为
- *   「Findings 页与 Overview 页共用的唯一数据源」。两页各自数一遍的话，
- *   并发编辑下会取到不同快照，而差值看起来像 bug —— 用户会以为
- *   其中一个是错的，那种不信任会扩散到整页数字。
+ * ★ 筛选 chip 的角标**从已加载的列表本地算**（`lib/finding-query.facetCounts`），
+ *   **不**读 `GET /findings/stats`。理由见 `findings-store.ts` 文件头与本文件
+ *   `facets` 处的注释：角标必须跟随筛选，而后端 `facets` 参数收单值、
+ *   表达不了这一页的多选。`/findings/stats` 仍然活着 —— Overview 页在服务端调它。
  *
  * ⚠️ 详情**必须**走 `useFindingDetail`，不能用列表项渲染抽屉：
  *    列表接口返回的是摘要，不含 `detail` 与 `timeline`。用列表项渲染
@@ -717,9 +717,9 @@ export function FindingsPage() {
           顺序很重要：loading 必须先于空状态。反过来的话，进页面会先闪一下
           「还没有发现任何漏洞」—— 那是**好消息**，而真相是数据还在路上。
 
-          筛选工具条也一起放进 ready 分支：它的角标全部来自 stats，
-          在数据到达前渲染出来会是一排 0，且每个 chip 都因 count===0 被禁用，
-          看起来像"这个筛选坏了"。
+          筛选工具条也一起放进 ready 分支：它的角标从已加载的列表算
+          （见 `facetCounts`），在数据到达前列表是空的，渲染出来会是一排 0，
+          且每个 chip 都因 count===0 被禁用，看起来像"这个筛选坏了"。
         */}
         {status === 'loading' ? (
           <div className="flex flex-col gap-panel">
