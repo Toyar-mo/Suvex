@@ -85,6 +85,97 @@ def test_workspace_is_created_when_asked() -> None:
     assert result is not None and result.is_dir()
 
 
+def test_workspace_is_chowned_to_the_solver_uid(monkeypatch) -> None:  # noqa: ANN001
+    """★★★ 建工作区时必须把属主改成容器里的 `solver`（uid 1000）。
+
+    ⚠️⚠️ 这条守的是一个**实测发现的真 bug**（2026-10-13）：容器以
+    `USER solver`（uid 1000）运行，而目录由服务进程（root）`mkdir`
+    出来 → `root:root 0755` → **uid 1000 只读**。
+
+    于是 v0.29 的"持久工作区"**从未真正生效过**。实测里模型在第 23 轮
+    写了 `/work/persist/harness.cs`，第 26 轮自己发现并放弃：
+
+        /work/persist is not writable. Let me use /work.
+
+    后果正是持久区要解决的那个问题本身（产物退回 tmpfs、容器一停全没），
+    外加白费 3 轮。
+
+    ⚠️ 测试在 Windows 上没有 `os.chown`，所以断言的是"**调用意图**"
+    （用 monkeypatch 抓调用参数），而不是真实属主 —— 真实属主由
+    Kali 上的实测覆盖。
+    """
+    from app.ctf2 import runner as ctf2_runner
+
+    calls: list[tuple[str, int, int]] = []
+
+    def _fake_chown(path, uid, gid):  # noqa: ANN001, ANN202
+        calls.append((str(path), uid, gid))
+
+    monkeypatch.setattr(ctf2_runner.os, "chown", _fake_chown, raising=False)
+
+    cid = "ctf2chal_CHOWNEDWORKSPACE1"
+    result = ctf2_runner._workspace_dir(cid, create=True)
+
+    assert result is not None
+    assert calls, "★★★ 建完工作区没有 chown —— 容器里将不可写（持久区失效）"
+    path, uid, gid = calls[-1]
+    assert path == str(result)
+    assert (uid, gid) == (ctf2_runner.SOLVER_UID, ctf2_runner.SOLVER_GID)
+    assert (uid, gid) == (1000, 1000), "必须与镜像里 useradd --uid 1000 一致"
+
+
+def test_chown_failure_does_not_break_the_workspace(monkeypatch) -> None:  # noqa: ANN001
+    """★★ chown 失败**不该**让解题跑不了。
+
+    服务可能不以 root 跑（开发机），那时 `os.chown` 抛 `PermissionError`。
+    最坏结果是"持久区不可写"（退回修复前的行为），而不该是"整道题解不了"。
+
+    ⚠️ 但要记 warning —— 静默退化成修复前的行为，正是这个 bug
+    藏了这么久的原因。
+    """
+    from app.ctf2 import runner as ctf2_runner
+
+    def _boom(path, uid, gid):  # noqa: ANN001, ANN202
+        raise PermissionError("not root")
+
+    monkeypatch.setattr(ctf2_runner.os, "chown", _boom, raising=False)
+
+    result = ctf2_runner._workspace_dir("ctf2chal_CHOWNFAILWORKSPACE", create=True)
+    assert result is not None and result.is_dir(), "chown 失败不该让工作区不可用"
+
+
+def test_solver_uid_matches_the_image() -> None:
+    """★★ `SOLVER_UID` 必须与镜像 Dockerfile 里的 `useradd --uid` 一致。
+
+    ⚠️ 两处各写一份会漂移，而漂移的症状**与那个 bug 一模一样**
+    （持久区又变只读）—— 很难再查一遍。所以这里直接读 Dockerfile 断言。
+    """
+    import re
+    from pathlib import Path
+
+    from app.ctf2 import runner as ctf2_runner
+
+    dockerfile = (
+        Path(__file__).resolve().parents[2] / "docker" / "ctf2-sandbox" / "Dockerfile"
+    )
+    if not dockerfile.is_file():
+        import pytest
+
+        pytest.skip(f"找不到 {dockerfile}")
+
+    text = dockerfile.read_text(encoding="utf-8")
+    m = re.search(r"useradd[^\n]*--uid\s+(\d+)", text)
+    assert m, "★ Dockerfile 里找不到 useradd --uid"
+    assert int(m.group(1)) == ctf2_runner.SOLVER_UID, (
+        f"★ 镜像里 solver 是 uid {m.group(1)}，而 runner 里写的是 "
+        f"{ctf2_runner.SOLVER_UID} —— 持久区会再次变成只读"
+    )
+    # gid 同理（`--gid` 或 `--user-group` 都行，这里只查显式的）。
+    m2 = re.search(r"useradd[^\n]*--gid\s+(\d+)", text)
+    if m2:
+        assert int(m2.group(1)) == ctf2_runner.SOLVER_GID
+
+
 def test_suspicious_challenge_id_is_refused() -> None:
     """★★ 路径穿越必须被拒 —— 这个目录是**读写挂载**进容器的。
 

@@ -3012,11 +3012,37 @@ def _workspace_dir(challenge_id: str, *, create: bool = False) -> Path | None:
     跑过"与"跑过但没留下东西"变成同一个状态。只有真正要起容器时才
     `create=True`。
 
-    ## ⚠️ 路径安全
+    ## ★★ 建完必须 `chown 1000:1000`（2026-10-13 修，实测发现）
 
-    `challenge_id` 来自数据库主键（`ctf2chal_<ULID>`），不是用户输入。
-    但仍然做一次形状校验 —— 这个目录会被**读写挂载**进容器，
-    而路径拼接一旦能被影响就是"任意宿主目录暴露给不可信内容"。
+    ⚠️⚠️ **这个目录此前一直是只读的，也就是说 v0.29 的持久区
+    从未真正生效过。**
+
+    根因是两个 uid 对不上：
+
+      · 容器以 `USER solver`（**uid 1000**）运行 —— 见 base 镜像
+        Dockerfile 的 `useradd --uid 1000`；
+      · 而这个目录由服务进程（**root**）`mkdir` 出来，属主是
+        `root:root`，权限 `0755`。
+
+    挂载进容器后，uid 1000 对它**只有读权限**。实测（2026-10-13，
+    `[FlareOn3]GUI` 的 A 组对照实验）模型在第 23 轮写了
+    `/work/persist/harness.cs`，第 26 轮自己发现了问题并放弃：
+
+        /work/persist is not writable. Let me use /work.
+
+    后果**正是持久区要解决的那个问题本身**：产物退回 `/work`（tmpfs），
+    容器一停全没。而且它还额外浪费了轮次 —— 模型花了 3 轮才绕开这个坑。
+
+    ⚠️ 为什么用 `chown` 而不是 `chmod 0777`：容器里跑的是**题目给的
+    不可信内容**（见 `workspace_dir` 的安全说明）。0777 会让宿主上
+    任何本地用户都能往这个目录写，而它是 `:rw` 挂载进容器的 ——
+    那等于开了一条"本地用户 → 容器内"的投毒路径。chown 到固定 uid
+    既够用（容器里就是 1000）又不扩大攻击面。
+
+    ⚠️ 为什么失败**不抛**：`chown` 需要特权，而服务在开发机上可能
+    不以 root 跑。那时最坏结果是"持久区不可写"（退回修复前的行为），
+    而不该是"整道题解不了"。但要**出声**记 warning —— 静默退化成
+    修复前的行为，正是这个 bug 藏了这么久的原因。
     """
     if not challenge_id or "/" in challenge_id or "\\" in challenge_id or ".." in challenge_id:
         logger.warning("拒绝为可疑的 challenge_id 建工作区：%r", challenge_id)
@@ -3029,7 +3055,42 @@ def _workspace_dir(challenge_id: str, *, create: bool = False) -> Path | None:
             # 建不出来**不影响解题**（只是没有持久区），所以不抛。
             logger.warning("创建工作区失败（本次解题没有持久区）：%s", exc)
             return None
+        _make_writable_by_solver(path)
     return path if path.is_dir() else None
+
+
+#: 容器内 `solver` 用户的 uid/gid。
+#:
+#: ⚠️ 与 base 镜像 Dockerfile 里的 `useradd --uid 1000 --gid 1000 solver`
+#:    **必须一致**。两处各写一份会漂移，而漂移的症状就是持久区又变只读
+#:    （而那时现象与这个 bug 一模一样，很难再查一遍）。
+#:    镜像那边也留了一条指回来的注释。
+SOLVER_UID = 1000
+SOLVER_GID = 1000
+
+
+def _make_writable_by_solver(path: Path) -> None:
+    """把持久工作区交给容器里的 `solver`（uid 1000）。
+
+    见 `_workspace_dir` 的 ★★ 那一段：不这么做，`:rw` 挂载对容器而言
+    实际是只读的。
+
+    ⚠️ 只 chown **目录本身**，不递归：里面的内容是上一次容器写的
+    （已经是 1000 了），而递归 chown 会在产物很多时变慢 ——
+    这个函数在每次起容器前都会被调用。
+    """
+    try:
+        os.chown(path, SOLVER_UID, SOLVER_GID)
+    except (OSError, AttributeError) as exc:
+        # AttributeError：Windows 上没有 os.chown（本机开发/跑测试时）。
+        # OSError：权限不足（服务不是以 root 跑）。
+        # 两种都只记 warning —— 见 docstring 里"为什么失败不抛"。
+        logger.warning(
+            "持久工作区无法改属主（容器内将不可写，产物退回 /work 会在容器停止后丢失）："
+            "%s → %s",
+            path,
+            exc,
+        )
 
 
 def _attachment_paths(challenge: Ctf2Challenge) -> list[Path]:
