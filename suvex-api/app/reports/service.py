@@ -252,7 +252,6 @@ def generate(
     # 而前端按 `format` 分发（browser-print vs file）。
     moment = now_utc()
     findings = findings_in_scope(db, scope)
-    scans = scans_for_document(db, findings)
 
     selected = ir.apply_options(findings, options)
     ordered = ir.sort_for_report(selected)

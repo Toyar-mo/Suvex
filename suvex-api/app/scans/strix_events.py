@@ -86,7 +86,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.vocab import AgentPhase, AgentRole, AgentStatus, ActivityEventType
+from app.core.vocab import ActivityEventType, AgentPhase, AgentRole, AgentStatus
 
 logger = logging.getLogger("suvex.strix")
 

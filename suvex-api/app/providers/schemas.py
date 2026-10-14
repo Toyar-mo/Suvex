@@ -68,7 +68,7 @@ class ProviderOut(CamelModel):
     note: str
 
     @classmethod
-    def from_model(cls, provider) -> "ProviderOut":  # noqa: ANN001 - 避免 core→providers 的循环导入
+    def from_model(cls, provider) -> ProviderOut:  # noqa: ANN001 - 避免 core→providers 的循环导入
         return cls(
             id=provider.id,
             label=provider.label,

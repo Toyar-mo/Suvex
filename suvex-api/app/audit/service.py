@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -216,7 +216,7 @@ def _parse_cursor(cursor: str) -> tuple[datetime | None, str]:
     if parsed.tzinfo is None:
         # 库里都是 tz-aware，naive 的游标按 UTC 解释而不是直接判坏 ——
         # 与 `to_iso` 对 naive 值的处理保持一致。
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed, id_part
 
 

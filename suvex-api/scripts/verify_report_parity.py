@@ -39,6 +39,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import re
 import sys
 from pathlib import Path
@@ -50,10 +51,8 @@ sys.path.insert(0, str(PROJECT_ROOT))
 FRONTEND = PROJECT_ROOT.parent / "suvex-web" / "src"
 
 for stream in (sys.stdout, sys.stderr):
-    try:
+    with contextlib.suppress(AttributeError, ValueError):  # pragma: no cover
         stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):  # pragma: no cover
-        pass
 
 from app.reports import document as ir  # noqa: E402
 
@@ -113,6 +112,7 @@ def main() -> int:
         zip(
             re.findall(r"^\s*(\w+):\s*\{", findings_ts, re.M),
             re.findall(r"label:\s*'([^']*)'", findings_ts),
+            strict=False,
         )
     )
     expected = {key: value for key, value in severity_labels.items() if key in ir.SEVERITY_ORDER}
@@ -126,6 +126,7 @@ def main() -> int:
         zip(
             re.findall(r"^\s*(\w+):\s*\{", findings_ts, re.M),
             re.findall(r"definition:\s*'([^']*)'", findings_ts),
+            strict=False,
         )
     )
     expected_defs = {key: value for key, value in definitions.items() if key in ir.SEVERITY_ORDER}

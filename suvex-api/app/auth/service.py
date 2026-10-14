@@ -34,7 +34,6 @@ from app.core.security import (
 from app.core.timeutil import now_utc
 from app.core.vocab import UserRole, values
 
-
 # ══════════════════════════════════════════════════════════
 # 账号
 # ══════════════════════════════════════════════════════════

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 # Crockford base32：无 I / L / O / U
 _CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -65,9 +65,9 @@ def report_code(created_at: datetime | None = None) -> str:
     后 4 位用 Crockford 字母表（大写、无歧义字符），保证是
     `[0-9A-HJKMNP-TV-Z]{4}` —— 前端 `reportCode()` 按这个形状解析。
     """
-    moment = created_at or datetime.now(timezone.utc)
+    moment = created_at or datetime.now(UTC)
     if moment.tzinfo is None:
-        moment = moment.replace(tzinfo=timezone.utc)
-    date_part = moment.astimezone(timezone.utc).strftime("%Y%m%d")
+        moment = moment.replace(tzinfo=UTC)
+    date_part = moment.astimezone(UTC).strftime("%Y%m%d")
     random_part = "".join(secrets.choice(_CROCKFORD) for _ in range(4))
     return f"RPT-{date_part}-{random_part}"

@@ -141,7 +141,6 @@ _CWE_TO_CATEGORY: dict[int, FindingCategory] = {
     288: FindingCategory.AUTH,
     290: FindingCategory.AUTH,
     294: FindingCategory.AUTH,
-    295: FindingCategory.AUTH,
     306: FindingCategory.AUTH,
     307: FindingCategory.AUTH,
     384: FindingCategory.AUTH,

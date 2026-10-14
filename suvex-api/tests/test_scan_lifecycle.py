@@ -20,14 +20,13 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.timeutil import now_utc
-from app.scans.models import Scan
 from app.scans import service as scans_service
+from app.scans.models import Scan
 from tests.factories import make_scan
 
 AUTH_STATEMENT = "我有权对此目标进行安全测试"

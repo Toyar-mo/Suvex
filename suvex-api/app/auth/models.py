@@ -81,7 +81,7 @@ class AdminAccount(Base):
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
     )
 
-    sessions: Mapped[list["AuthSession"]] = relationship(
+    sessions: Mapped[list[AuthSession]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
 

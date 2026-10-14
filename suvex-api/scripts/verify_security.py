@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import sys
@@ -126,10 +127,9 @@ def main() -> int:
     ]:
         code, payload, _ = anon.request(method, path, body)
         body_code = ""
-        try:
+        # 解析失败就用空串（下面按空串处理）—— 这里只关心"有没有 error.code"。
+        with contextlib.suppress(Exception):
             body_code = json.loads(payload)["error"]["code"]
-        except Exception:  # noqa: BLE001
-            pass
         record(
             code == 401 and body_code == "UNAUTHENTICATED",
             f"无凭据 {method} {path} → 401 UNAUTHENTICATED",

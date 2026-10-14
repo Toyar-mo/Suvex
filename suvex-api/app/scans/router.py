@@ -37,10 +37,9 @@ from app.core.ids import new_id
 from app.core.vocab import TERMINAL_SCAN_STATUSES, AuditAction, ScanGoal, ScanStatus, values
 from app.events import service as events_service
 from app.events.schemas import AgentOut
-from app.scans import artifacts, service, writeup
+from app.scans import artifacts, service, uploads, writeup
 from app.scans.runner import get_runner
 from app.scans.scheduler import get_scheduler
-from app.scans import uploads
 from app.scans.schemas import (
     BatchArchiveIn,
     BatchIdsIn,
@@ -49,8 +48,8 @@ from app.scans.schemas import (
     BatchRerunOut,
     BatchResultOut,
     CompareOut,
-    ScanCreate,
     ScanAttachmentOut,
+    ScanCreate,
     ScanOut,
     ScanRerun,
     ScanStatsOut,

@@ -32,8 +32,8 @@
 from __future__ import annotations
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func
-from sqlalchemy import select, update as sa_update
+from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.core.crypto import (

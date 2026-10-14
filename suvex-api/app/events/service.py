@@ -8,8 +8,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import Any, Sequence
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -17,7 +18,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.core.timeutil import now_utc
-from app.core.vocab import AgentPhase, ActivityEventType
+from app.core.vocab import ActivityEventType, AgentPhase
 from app.events.models import ActivityEvent, Agent
 
 

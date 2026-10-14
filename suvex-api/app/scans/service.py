@@ -60,15 +60,13 @@ from app.core.vocab import (
 from app.events.models import Agent
 from app.events.service import append_event
 from app.providers.models import ProviderAccount
-from app.scans import targets
-from app.scans import uploads
+from app.scans import targets, uploads
 from app.scans.models import Scan
 from app.scans.reachability import (
     Reachability,
     check_reachability,
     check_tcp_reachability,
 )
-from app.settings import service as settings_service
 from app.scans.runner import (
     EXIT_FINDINGS,
     EXIT_OK,
@@ -81,6 +79,7 @@ from app.scans.runner import (
     get_runner,
     terminate_tree,
 )
+from app.settings import service as settings_service
 
 logger = logging.getLogger("suvex.scans")
 
@@ -1715,7 +1714,7 @@ def get_retention_config(db: Session):  # noqa: ANN201
     的实例上也会存在，但它的 `updated_at` 会撒谎（显示成一个谁都没操作过的时刻）。
     读时建行则如实反映"这条是用默认值新建的"。
     """
-    from app.settings.models import ScanRetentionConfig, SINGLETON_ID
+    from app.settings.models import SINGLETON_ID, ScanRetentionConfig
 
     config = db.get(ScanRetentionConfig, SINGLETON_ID)
     if config is None:

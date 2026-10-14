@@ -26,13 +26,14 @@
 
 from __future__ import annotations
 
+import contextlib
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-import pytest
-
 from app.auth import service as auth_service
-from tests.conftest import GOOD_PASSWORD, GOOD_USERNAME, VIEWER_PASSWORD, VIEWER_USERNAME
+from tests.conftest import GOOD_PASSWORD, GOOD_USERNAME, VIEWER_USERNAME
 
 API = "/api/v1"
 
@@ -696,10 +697,9 @@ def test_login_timing_does_not_reveal_whether_a_username_exists(
         samples = []
         for _ in range(rounds):
             started = time.perf_counter()
-            try:
+            with contextlib.suppress(Exception):
                 auth_service.authenticate(db_session, username, "DefinitelyWrongPass1")
-            except Exception:
-                pass  # 预期就是 401，这里只关心耗时
+            # 预期就是认证失败（这里只关心耗时），所以吞掉异常。
             samples.append(time.perf_counter() - started)
         return statistics.median(samples)
 

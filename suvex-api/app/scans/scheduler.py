@@ -48,7 +48,6 @@ from pathlib import Path
 from sqlalchemy import func, select, text
 
 from app.core.config import get_settings
-from app.settings import service as settings_service
 from app.core.db import get_session_factory
 from app.core.timeutil import now_utc, seconds_between
 from app.core.vocab import SCAN_ORIGIN_CTF2, ScanGoal, ScanStatus
@@ -62,6 +61,7 @@ from app.scans.runner import (
     is_alive,
     terminate_tree,
 )
+from app.settings import service as settings_service
 
 logger = logging.getLogger("suvex.scheduler")
 

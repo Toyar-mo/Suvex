@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -33,17 +34,16 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
-import httpx  # noqa: E402
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer  # noqa: E402
+
+import httpx  # noqa: E402
 
 # 中文 Windows 的控制台默认是 GBK，直接 print 一个 '✓'/'✗' 就会
 # UnicodeEncodeError 把脚本打死 —— 而且是在**打印失败汇总**的时候崩，
 # 于是真正的失败原因被一个编码错误盖掉了。先把自己切到 UTF-8。
 for stream in (sys.stdout, sys.stderr):
-    try:
+    with contextlib.suppress(AttributeError, ValueError):  # pragma: no cover - 非重定向场景
         stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-    except (AttributeError, ValueError):  # pragma: no cover - 非重定向场景
-        pass
 
 STRONG_PASSWORD = "SuvexAcceptance2026"
 WEAK_PASSWORD = "weak"
@@ -116,8 +116,9 @@ def migrate(url: str) -> None:
     不清缓存的话迁移会**打在主库上** —— 症状是验收库建好了但一张表都没有，
     而日志里写着"迁移成功"（它确实成功了，只是在另一个库上）。
     """
-    from alembic import command
     from alembic.config import Config
+
+    from alembic import command
 
     os.environ["SUPEX_DATABASE_URL"] = url
     from app.core.config import get_settings

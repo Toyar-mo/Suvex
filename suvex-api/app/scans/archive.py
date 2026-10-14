@@ -235,7 +235,7 @@ def _unpack_zip(archive: Path, dest: Path) -> list[str]:
             if target is None:
                 continue
             with zf.open(info) as src:
-                size = _write_stream(src, target, budget, info.filename)
+                _write_stream(src, target, budget, info.filename)
             written.append(str(target.relative_to(dest)))
     return written
 
@@ -272,7 +272,7 @@ def _unpack_tar(archive: Path, dest: Path) -> list[str]:
             if src is None:  # pragma: no cover - isfile() 为真时不该发生
                 continue
             with src:
-                size = _write_stream(src, target, budget, member.name)
+                _write_stream(src, target, budget, member.name)
             written.append(str(target.relative_to(dest)))
     return written
 

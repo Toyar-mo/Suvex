@@ -48,6 +48,16 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.ruff]
 line-length = 110
 target-version = "py312"
+# ★ 排除**冻结的历史迁移**（2026-10-13 加）。
+#
+# `alembic/versions/` 下的 33 个文件是**已经执行过**的迁移。它们的 import
+# 顺序不影响任何行为，但用 `I001` 去"修"它们会产生 31 个与本次改动
+# 无关的文件 diff —— 而项目自己明确反对这种噪音（见 `交接文档.md`：
+# "别顺手格式化，会制造无关 diff"）。
+#
+# ⚠️ 仍然检查 `alembic/env.py` 与 `alembic/script.py.mako` —— 那是**活代码**，
+#    env.py 甚至被 CI 的"建测试库并跑迁移"这一步直接执行。
+exclude = ["alembic/versions"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from pydantic import PlainSerializer
@@ -24,7 +24,7 @@ from pydantic import PlainSerializer
 
 def now_utc() -> datetime:
     """当前时刻，tz-aware UTC。全后端唯一的「现在」。"""
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def to_iso(value: datetime) -> str:
@@ -35,8 +35,8 @@ def to_iso(value: datetime) -> str:
     换算成 UTC 至少是确定的行为。
     """
     if value.tzinfo is None:
-        value = value.replace(tzinfo=timezone.utc)
-    value = value.astimezone(timezone.utc)
+        value = value.replace(tzinfo=UTC)
+    value = value.astimezone(UTC)
     return f"{value.strftime('%Y-%m-%dT%H:%M:%S')}.{value.microsecond // 1000:03d}Z"
 
 
@@ -54,8 +54,8 @@ def parse_iso(value: str) -> datetime:
     except ValueError as exc:  # pragma: no cover - 由调用方转成 400
         raise ValueError(f"无法解析为 ISO 8601 时间：{value!r}") from exc
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def seconds_between(start: datetime, end: datetime) -> int:

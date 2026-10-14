@@ -23,6 +23,7 @@ from app.scans import importer
 from app.scans.models import Scan
 from tests.factories import make_scan
 
+
 # 与 test_strix_events 里同一套造库逻辑。单独写一份而不是共享：
 # 两个测试文件的关注点不同（一个测解析、一个测导入），
 # 共享一个 fixture 会让它们的演进互相牵扯。

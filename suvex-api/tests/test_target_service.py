@@ -32,7 +32,6 @@ import pytest
 from app.scans import targets
 from app.scans.runner import LaunchSpec, StrixRunner
 
-
 # ══════════════════════════════════════════════════════════
 # 粘贴即识别
 # ══════════════════════════════════════════════════════════

@@ -90,12 +90,12 @@ os.environ["SUPEX_SCAN_WORK_ROOT"] = SCAN_WORK_ROOT
 ATTACHMENT_ROOT = tempfile.mkdtemp(prefix="suvex-test-uploads-")
 os.environ["SUPEX_ATTACHMENT_ROOT"] = ATTACHMENT_ROOT
 
-from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine import make_url  # noqa: E402
 
+from alembic import command  # noqa: E402
 from app.core import db as db_module  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 

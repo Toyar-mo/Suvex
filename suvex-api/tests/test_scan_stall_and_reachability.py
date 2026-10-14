@@ -11,12 +11,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-import json
 from datetime import timedelta
+from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.timeutil import now_utc
@@ -375,8 +373,13 @@ def test_stall_action_rejects_unknown_value(scan_config) -> None:
     等到真有扫描卡死一整天才会发现。
     """
     import pytest
+    from pydantic import ValidationError
 
-    with pytest.raises(Exception):
+    # `scan_stall_action` 是 `Literal["flag", "abort"]`，拼错时由 pydantic
+    # 拒绝。⚠️ 断言**具体异常**而不是 `Exception`：写宽了的话，配置里
+    # 任何别的错误（甚至 `get_settings()` 自己炸）都会让这条测试通过，
+    # 而它声称守的是"拼错的值被拒绝"。
+    with pytest.raises(ValidationError):
         scan_config(SUPEX_SCAN_STALL_ACTION="abortt")
 
 

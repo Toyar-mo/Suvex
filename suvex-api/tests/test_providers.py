@@ -385,7 +385,7 @@ def test_creating_a_default_demotes_the_previous_one(ready_client: TestClient) -
 
 
 def test_patching_isDefault_true_switches(ready_client: TestClient) -> None:
-    first = _create(ready_client, label="A", isDefault=True)
+    _create(ready_client, label="A", isDefault=True)
     second = _create(ready_client, label="B")
 
     ready_client.patch(f"/api/v1/providers/{second['id']}", json={"isDefault": True})

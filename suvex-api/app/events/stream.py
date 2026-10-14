@@ -210,8 +210,7 @@ def stream_events(
             if events:
                 cursor = events[-1].seq
 
-        for frame in frames:
-            yield frame
+        yield from frames
 
         if frames:
             last_keepalive = time.monotonic()

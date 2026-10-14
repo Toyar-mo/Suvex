@@ -110,8 +110,8 @@ async def lifespan(_app: FastAPI):
     # ⚠️ 这里**不需要**担心"用户没进过设置页"：`get_retention_config()`
     #    读不到就按默认值建一条，所以首次启动就会用 30 天的默认规则。
     try:
-        from app.scans.service import sweep_retention
         from app.core.db import session_scope as scan_session_scope
+        from app.scans.service import sweep_retention
 
         with scan_session_scope() as session:
             sweep_retention(session)
@@ -129,8 +129,8 @@ async def lifespan(_app: FastAPI):
     # `refresh_sla` 的新代码路径都会被兜住。而它只补 NULL、走索引，
     # 补完之后每次启动都是空扫描。
     try:
-        from app.findings import service as findings_service
         from app.core.db import session_scope as sla_session_scope
+        from app.findings import service as findings_service
 
         with sla_session_scope() as session:
             findings_service.backfill_sla(session)

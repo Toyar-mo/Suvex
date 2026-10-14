@@ -21,7 +21,6 @@ from __future__ import annotations
 import ast
 import inspect
 import textwrap
-from pathlib import Path
 
 from app.core.vocab import Ctf2ChallengeStatus
 from app.ctf2 import runner, scheduler

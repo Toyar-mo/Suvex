@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+
 from tests.conftest import GOOD_USERNAME
 
 

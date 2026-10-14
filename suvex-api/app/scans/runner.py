@@ -1285,7 +1285,6 @@ class StrixRunner:
         return env
 
     def launch(self, spec: LaunchSpec) -> LaunchResult:
-        cfg = get_settings()
         spec.run_dir.mkdir(parents=True, exist_ok=True)
         log_handle = open(spec.log_path, "ab", buffering=0)  # noqa: SIM115 - 交给子进程持有
         try:

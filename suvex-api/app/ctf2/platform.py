@@ -47,7 +47,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
 # ⚠️ 复用 CTF2 那套错误类型（`Ctf2Error` 家族）而不是再造一组。
@@ -181,7 +181,7 @@ def parse_millis(value: Any) -> datetime | None:
     if not isinstance(value, (int, float)) or value <= 0:
         return None
     try:
-        return datetime.fromtimestamp(float(value) / 1000, tz=timezone.utc)
+        return datetime.fromtimestamp(float(value) / 1000, tz=UTC)
     except (OverflowError, OSError, ValueError):
         return None
 

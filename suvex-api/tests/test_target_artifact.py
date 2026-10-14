@@ -26,7 +26,6 @@ from app.scans import targets
 from app.scans.schemas import TargetKindLiteral
 from tests.factories import make_scan
 
-
 # ══════════════════════════════════════════════════════════
 # 一、artifact：空目标是**正确状态**
 # ══════════════════════════════════════════════════════════

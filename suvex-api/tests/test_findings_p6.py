@@ -28,7 +28,6 @@ from sqlalchemy.orm import Session
 from app.findings import attachments as attachments_mod
 from app.findings import service
 from app.findings.models import Finding, FindingAttachment
-
 from tests.conftest import vuln_record, write_vulns  # noqa: F401
 from tests.factories import make_scan
 

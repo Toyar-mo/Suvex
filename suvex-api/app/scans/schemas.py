@@ -241,7 +241,7 @@ class ScanOut(CamelModel):
     notice: str | None = None
 
     @classmethod
-    def from_model(cls, scan) -> "ScanOut":  # noqa: ANN001
+    def from_model(cls, scan) -> ScanOut:  # noqa: ANN001
         return cls(
             id=scan.id,
             name=scan.name,
@@ -381,7 +381,7 @@ class BatchRerunOut(CamelModel):
     """
 
     created: list[ScanOut]
-    failed: list["BatchRerunFailure"]
+    failed: list[BatchRerunFailure]
 
 
 class BatchRerunFailure(CamelModel):

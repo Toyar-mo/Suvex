@@ -18,8 +18,6 @@ PostgreSQL 的 `text` / `jsonb` **存不了 NUL 字节**（`\\u0000`），插进
 
 from __future__ import annotations
 
-import pytest
-
 from app.core.text import strip_nul, strip_nul_deep, strip_nul_opt
 
 

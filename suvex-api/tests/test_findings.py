@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -25,6 +24,13 @@ from sqlalchemy.orm import Session
 
 from app.findings import service
 from app.findings.models import Finding, FindingTimelineEntry
+from app.scans.models import Scan
+
+# `vuln_record` / `write_vulns` 已移到 `conftest.py`（任务 10 P2）——
+# `test_members` 的指派测试也要造同样形状的漏洞，而 pytest 不跨文件共享
+# 局部 fixture。定义两份的话，"3 条漏洞"在两个文件里会各自漂移成不同的东西。
+# 导入后未直接调用：它们是被本文件里的 fixture **引用**的，所以标记 F401。
+from tests.conftest import vuln_record, write_vulns  # noqa: F401
 from tests.factories import make_scan
 
 AUTH_STATEMENT = "我有权对此目标进行安全测试"
@@ -33,12 +39,6 @@ AUTH_STATEMENT = "我有权对此目标进行安全测试"
 # ══════════════════════════════════════════════════════════
 # 造数据
 # ══════════════════════════════════════════════════════════
-#
-# `vuln_record` / `write_vulns` / `scan` / `imported` 已移到 `conftest.py`
-# （任务 10 P2）—— `test_members` 的指派测试也要造同样形状的漏洞，
-# 而 pytest 不跨文件共享局部 fixture。定义两份的话，
-# "3 条漏洞"在两个文件里会各自漂移成不同的东西。
-from tests.conftest import vuln_record, write_vulns  # noqa: F401
 
 
 # ══════════════════════════════════════════════════════════

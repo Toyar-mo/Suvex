@@ -18,7 +18,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.core.columns import JsonColumn, UtcDateTime
 from app.core.db import Base
 from app.core.timeutil import now_utc
-from app.core.vocab import AgentPhase, AgentRole, AgentStatus, ActivityEventType, values
+from app.core.vocab import ActivityEventType, AgentPhase, AgentRole, AgentStatus, values
 
 
 class Agent(Base):

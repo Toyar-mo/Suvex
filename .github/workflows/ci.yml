@@ -3,7 +3,7 @@
 #
 # 三件事，各自独立（任一失败不影响其余跑完，便于一次看全问题）：
 #
-#   1. backend    —— 903 个测试函数，对**真实 PostgreSQL** 跑
+#   1. backend    —— 静态检查（ruff）+ 1116 个测试函数，对**真实 PostgreSQL** 跑
 #   2. frontend   —— 类型检查 + lint + 三个契约校验脚本
 #   3. hygiene    —— 仓库卫生：凭据/产物未入库、行尾统一为 LF
 #
@@ -68,7 +68,7 @@ concurrency:
 
 jobs:
   # ═══════════════════════════════════════════════════════════
-  # 后端：903 个测试函数
+  # 后端：静态检查（ruff）+ 1116 个测试函数
   # ═══════════════════════════════════════════════════════════
   backend:
     name: 后端测试（Python 3.12 + PostgreSQL 16）
@@ -177,6 +177,37 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt
+
+      - name: 静态检查（ruff）
+        # ★ 这一步是 2026-10-13 补的 —— 在此之前后端**零静态检查**。
+        #
+        # ## 为什么需要它
+        #
+        # `suvex-api/pyproject.toml` 的 `[tool.ruff]` 配了很久
+        # （`select = ["E","F","I","UP","B","SIM"]`），但 ruff **从未进入
+        # 任何依赖声明**，CI 里也没有任何一步跑它 —— 于是那份配置是
+        # 一份"声明"，不是一条"检查"，永远不会红。42,998 行 Python
+        # 实际上没有 lint 兜底：一个未使用的 import、一个 `is` 误写成
+        # `==`、一个重复的 dict 键，CI 全绿。
+        #
+        # 这正是本项目最警惕的那类东西：**看起来有防线、实际没有**。
+        #
+        # ## 为什么在这里 `pip install ruff`，而不是放进 requirements-dev
+        #
+        # 理想做法是让 ruff 走项目自己的锁文件（与其它依赖同一套纪律）。
+        # 但重新生成锁文件这条路**当前是断的**：`requirements.lock` 里
+        # 钉着 `greenlet==3.5.6`，而那个版本已从 PyPI 下架，
+        # `pip-compile` 会报 `No matching distribution found`（2026-10-13 实测）。
+        # 修锁文件是一次独立、且会波及依赖版本的改动，不该和"接一个 lint"
+        # 混在一起 —— 所以这里按最小改动手工钉版本。
+        #
+        # ⚠️ **版本钉死**，与项目"依赖要有上界"的纪律一致：ruff 的规则会随
+        #    版本增删，不钉的话"某次装到新版"会变成一次无预告的红。
+        #    升版本时改这一行，并跑一次 `ruff check .` 确认仍全绿。
+        #    （0.16.8 是当前开发机上验证过 `All checks passed` 的版本。）
+        run: |
+          pip install ruff==0.16.8
+          ruff check .
 
       - name: 建测试库并跑迁移
         # ## 为什么要显式建库（2026-10-10 修 CI 时补）

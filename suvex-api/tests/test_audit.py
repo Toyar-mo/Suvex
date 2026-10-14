@@ -12,15 +12,15 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.audit.models import AuditLog
 from app.audit import service as audit_service
+from app.audit.models import AuditLog
 from app.core.timeutil import now_utc
 
 AUTH_STATEMENT = "我有权对此目标进行安全测试"
@@ -225,9 +225,9 @@ def test_no_audit_row_when_nothing_actually_changed(
     但它不是一次操作。记进去会让审计被"改了 0 条"的噪音淹掉 ——
     而审计的价值恰恰在于每一条都对应一个真实动作。
     """
-    from tests.factories import make_scan
     from app.core.timeutil import now_utc as _now
     from app.findings.models import Finding
+    from tests.factories import make_scan
 
     scan = make_scan(db_session, status="completed")
     db_session.add(
@@ -265,9 +265,9 @@ def test_illegal_transition_writes_no_audit_row(
     都永久存进去等于给攻击者一个写满磁盘的入口。被拒的请求
     由 access log 覆盖。
     """
-    from tests.factories import make_scan
     from app.core.timeutil import now_utc as _now
     from app.findings.models import Finding
+    from tests.factories import make_scan
 
     scan = make_scan(db_session, status="completed")
     db_session.add(
@@ -302,9 +302,9 @@ def test_illegal_transition_writes_no_audit_row(
 
 def _make_report(client: TestClient, db_session: Session) -> dict:
     """造一份 markdown 报告（走真实 API）。"""
-    from tests.factories import make_scan
     from app.core.timeutil import now_utc as _now
     from app.findings.models import Finding
+    from tests.factories import make_scan
 
     scan = make_scan(db_session, status="completed")
     db_session.add(
@@ -371,9 +371,9 @@ def test_pdf_download_note_is_not_recorded(
 
     数据没有离开系统就没有后果，记进去只会稀释审计。
     """
-    from tests.factories import make_scan
     from app.core.timeutil import now_utc as _now
     from app.findings.models import Finding
+    from tests.factories import make_scan
 
     scan = make_scan(db_session, status="completed")
     db_session.add(
@@ -630,11 +630,10 @@ def test_audit_never_stores_credentials(
     这里断言的是"写进去的东西已经过脱敏"：调用方本来就不该放凭据，
     但 `record()` 里还是过了一遍 `redact()` —— 漏一次就永远漏着。
     """
-    from app.core.crypto import redact
 
     # 直接构造一条"调用方手滑把连接串放进 detail"的记录
-    from app.auth.deps import Identity
     from app.audit.service import AuditRequest
+    from app.auth.deps import Identity
 
     identity = Identity(
         kind="session", label="s", scopes=frozenset({"read", "scan", "admin"}), user_id="user_1"
@@ -666,8 +665,8 @@ def test_record_failure_does_not_break_the_business_operation(
 
     这条测试用一个"一定炸"的 `commit` 来验证吞异常那条路径。
     """
-    from app.auth.deps import Identity
     from app.audit.service import AuditRequest
+    from app.auth.deps import Identity
 
     class Boom(Exception):
         pass
