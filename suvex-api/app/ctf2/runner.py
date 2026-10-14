@@ -1458,6 +1458,22 @@ class SolveSpec:
     # 所以这里给的不是"更多轮数"，而是**接着上次的起点**。
     resume_digest: tuple[str, ...] = ()
 
+    # ★ v0.36：续解时，持久区里**已经有什么**（宿主侧列出来的清单）。
+    #
+    # ## 为什么不能只让模型自己去 `ls`
+    #
+    # 原来的做法是在提示词里写一句"⚠️ 先 `ls -la /work/persist` 看上次留了什么"。
+    # 实测（2026-10-12，`[FlareOn3]GUI` A 组）：模型**不一定照做** ——
+    # 它可能直接开始解题，把几十轮的产物晾在持久区里没用上。
+    #
+    # 而"上次留了什么"是**我们本来就知道的事实**（文件就在宿主上）。
+    # 让模型花一轮去 `ls` 才能知道，是把一次已知的信息变成一次探索 ——
+    # 而那一轮可能正是它缺的。所以由服务端列好、直接写进提示词。
+    #
+    # ⚠️ 只列**文件名与大小**，不读内容：内容可能很大，而且里面可能有
+    #    上一次的中间结果（模型自己会去读需要的那个）。
+    persist_listing: tuple[str, ...] = ()
+
     # ★ v0.28：用户补充的线索（"考点在反调试"、"libc 是 2.27"）。
     #
     # ## 为什么它必须进来（2026-10-11 修）
@@ -1999,6 +2015,20 @@ def _initial_prompt(spec: SolveSpec) -> str:
             "",
             f"⚠️ 先 `ls -la {PERSIST_DIR}` 看上次留了什么，"
             "**不要重做已经做过的事**。",
+        ]
+    # ★ v0.36：把持久区里**已经有什么**直接列出来（宿主侧读的，不用模型探索）。
+    #
+    # 见 `SolveSpec.persist_listing` 的说明：实测模型不一定照做那句 `ls`，
+    # 所以由服务端把已知的事实写进提示词。
+    if spec.persist_listing:
+        lines += [
+            "",
+            f"## 持久区里已经有这些东西（`{PERSIST_DIR}`，上次留下的）",
+            "",
+            "**直接用，不要重做**：",
+            *[f"- {item}" for item in spec.persist_listing],
+            "",
+            f"（需要看内容就 `cat` / `file` 它们，都在 `{PERSIST_DIR}` 下。）",
         ]
     # ★ v0.32：同类题的方法卡。
     #
@@ -2941,6 +2971,14 @@ def build_spec(
             else:
                 logger.info("续解：从上一次的过程里还原了 %d 步", len(resume_digest))
 
+    # ★ v0.36：续解时列出持久区里已有的产物（宿主侧读，不用模型探索）。
+    #   与 `resume_digest` 同一个门（只在续解时做）—— 全新解题时
+    #   持久区要么是空的、要么是更早留下的，把它写进提示词会让模型
+    #   以为"这些是这次的输入"。
+    persist_listing: list[str] = []
+    if resume:
+        persist_listing = _list_workspace_files(challenge.id)
+
     return SolveSpec(
         challenge_id=challenge.id,
         title=challenge.title,
@@ -2960,6 +2998,8 @@ def build_spec(
         ),
         network_isolated=not needs_raw_network(challenge.category),
         resume_digest=tuple(resume_digest),
+        # v0.36：持久区已有的产物清单（见 `persist_listing` 的说明）。
+        persist_listing=tuple(persist_listing),
         max_turns=resolved_turns,
         # ★ v0.28：人工线索。`resolved_brief` 来自快照（有快照时）
         #   或 None（没快照的旧路径）—— 后者与修复前的行为一致。
@@ -3191,6 +3231,49 @@ def _workspace_dir(challenge_id: str, *, create: bool = False) -> Path | None:
 #:    镜像那边也留了一条指回来的注释。
 SOLVER_UID = 1000
 SOLVER_GID = 1000
+
+
+#: 持久区清单最多列几项。防止一个塞了几百个文件的目录把提示词撑爆。
+_MAX_PERSIST_LISTING = 40
+
+
+def _list_workspace_files(challenge_id: str) -> list[str]:
+    """列出持久区里**已有的产物**（宿主侧，给续解的提示词用）。v0.36。
+
+    ## 为什么由服务端列，而不是让模型自己 `ls`
+
+    见 `SolveSpec.persist_listing` 的说明：实测模型不一定照做那句
+    "先 `ls -la /work/persist`"，而"上次留了什么"是我们**本来就知道**的
+    事实（文件就在宿主上）。把已知事实写进提示词，省掉一轮探索。
+
+    ⚠️ 只列**文件名与大小**，不读内容 —— 内容可能很大，而且模型自己
+    会去读它需要的那个。
+
+    ⚠️ 读目录失败返回空列表（不影响解题，只是少一段提示）。
+    """
+    workspace = _workspace_dir(challenge_id, create=False)
+    if workspace is None:
+        return []
+    try:
+        entries = sorted(workspace.iterdir(), key=lambda p: p.name)
+    except OSError as exc:
+        logger.warning("读取持久区清单失败（这次续解不列它）：%s", exc)
+        return []
+
+    items: list[str] = []
+    for path in entries:
+        if len(items) >= _MAX_PERSIST_LISTING:
+            items.append(f"…（还有更多，`ls {PERSIST_DIR}` 看全部）")
+            break
+        try:
+            if path.is_dir():
+                # 目录只标出来，不递归 —— 递归会让清单爆炸。
+                items.append(f"{path.name}/（目录）")
+            else:
+                items.append(f"{path.name}（{path.stat().st_size} 字节）")
+        except OSError:  # pragma: no cover - 并发删除
+            continue
+    return items
 
 
 def _make_writable_by_solver(path: Path) -> None:

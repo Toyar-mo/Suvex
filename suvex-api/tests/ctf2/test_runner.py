@@ -1940,3 +1940,57 @@ def test_fallback_llms_skips_a_missing_provider(db_session: Session, ctf2_challe
     settings_row = ctf2_service.effective_ctf2_settings(db_session)
     object.__setattr__(settings_row, "fallback_provider_id", "prov_does_not_exist")
     assert runner._fallback_llms(db_session, settings_row, primary=None) == ()
+
+
+# ══════════════════════════════════════════════════════════
+# 续解时列出持久区产物（v0.36）
+# ══════════════════════════════════════════════════════════
+
+
+def test_persist_listing_shows_up_in_the_prompt() -> None:
+    """★ 持久区清单要**真的出现在提示词里**，而且带"不要重做"的指令。"""
+    spec = _spec(persist_listing=("gui.il（1200 字节）", "res_layer1/（目录）"))
+    prompt = runner._initial_prompt(spec)
+    assert "gui.il" in prompt
+    assert "res_layer1/" in prompt
+    assert "不要重做" in prompt
+
+
+def test_persist_listing_absent_when_empty() -> None:
+    """★ 全新解题（没有清单）时不该出现那一节 —— 否则模型会去找不存在的东西。"""
+    prompt = runner._initial_prompt(_spec())
+    assert "持久区里已经有" not in prompt
+
+
+def test_list_workspace_files_reads_the_host_dir(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """★ 清单从**宿主上的持久区目录**读，列文件名与大小。"""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "gui.il").write_text("x" * 1234, encoding="utf-8")
+    (workspace / "res").mkdir()
+
+    monkeypatch.setattr(runner, "_workspace_dir", lambda cid, create=False: workspace)
+    items = runner._list_workspace_files("ctf2chal_x")
+
+    assert any("gui.il" in i and "1234" in i for i in items)
+    assert any("res" in i and "目录" in i for i in items)
+
+
+def test_list_workspace_files_returns_empty_without_a_dir(monkeypatch) -> None:  # noqa: ANN001
+    """★ 持久区不存在 → 空列表（不影响解题）。"""
+    monkeypatch.setattr(runner, "_workspace_dir", lambda cid, create=False: None)
+    assert runner._list_workspace_files("ctf2chal_x") == []
+
+
+def test_list_workspace_files_caps_the_listing(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """★ 清单有上限：一个塞了几百个文件的目录不能把提示词撑爆。"""
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    for i in range(runner._MAX_PERSIST_LISTING + 10):
+        (workspace / f"f{i:03}.bin").write_bytes(b"x")
+
+    monkeypatch.setattr(runner, "_workspace_dir", lambda cid, create=False: workspace)
+    items = runner._list_workspace_files("ctf2chal_x")
+
+    assert len(items) <= runner._MAX_PERSIST_LISTING + 1  # +1 是那句"还有更多"
+    assert any("还有更多" in i for i in items)
