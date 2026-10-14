@@ -21,12 +21,12 @@ Suvex —— 一个自治 AI 安全测试 agent 的 Web 控制台。
 
 | 项 | 实际数字 |
 | --- | --- |
-| 代码规模 | **41,204 行** TS/TSX，147 个文件 |
+| 代码规模 | **41,941 行** TS/TSX，151 个文件 |
 | 页面 | 总览 / 扫描任务 / 智能体活动 / 漏洞发现 / CTF2 解题 / 报告 / 设置 + 产品首页 |
 | 数据层 | 全部接真实 API，**0 个 mock 数据文件** |
 | 类型安全 | **0 个 `@ts-ignore`；3 处 `any`**（都在 `components/effects/DotGrid.tsx` 的节流函数，上游基线代码 —— 见根 README 的更正）（`tsc -b` 与 `eslint --max-warnings 0` 全绿） |
 | 契约校验 | `verify:all` 三项全绿（字段对账 / 端点覆盖度 / 报告一致性） |
-| 单元测试 | **92 个**（vitest），覆盖 5 个纯逻辑模块 |
+| 单元测试 | **148 个**（vitest，8 个文件），覆盖 5 个纯逻辑模块 + 路由守卫 + 401 拦截 + 错误态 |
 
 ### 测试覆盖了什么
 
@@ -35,10 +35,26 @@ Suvex —— 一个自治 AI 安全测试 agent 的 Web 控制台。
 | `hooks/useActivityStream` | 22 | 批量合并、按 id 去重、上限截断、暂停缓冲、agent 派生、状态映射 |
 | `lib/validate-target` | 26 | 目标校验与归一化（含 `service` 的粘贴识别、`artifact` 的空值语义） |
 | `lib/finding-query` | 22 | 筛选（维度内"或"、维度间"与"）、**facet 角标只忽略自己那一维**、导出映射不静默丢弃 |
+| `lib/route-guard` | 25 | **三个路由守卫的决策表**（5 个 phase × 3 个入口）+ 三条跨守卫约束（不能形成重定向死循环） |
+| `lib/unauthorized-flow` | 17 | **401 链路**：`apiRequest` 与 `apiText` **两条**路径都触发 handler、`skipAuthRedirect` 真的跳过、`handleUnauthorized` 幂等 |
+| `components/ui/ErrorState` | 14 | **"连不上"与"后端说不行"两条分支**（文案、错误码显示与否、重试按钮的有无） |
 | `data/users-store` | 12 | **防自锁判断**（不能删最后一个管理员 / 不能删自己 / 不能降级最后一个） |
 | `data/scans-store` | 10 | in-flight 去重的复用规则表（含两条"刻意不合"的格子） |
 
-**没有覆盖的**：所有页面组件、表单渲染、路由守卫、主题切换。
+**没有覆盖的**：所有页面组件本身、表单交互、主题切换。
+
+> ⚠️ **2026-10-14 补测时的两个坑**（后续写组件测试会再遇到）：
+>
+> 1. **必须手动 `cleanup()`** —— `@testing-library/react` 的自动清理挂在
+>    全局 `afterEach` 上，而它只在 `globals: true` 时注册；本项目刻意关了
+>    globals（见 `vitest.config.ts`），于是 DOM 会在用例间累积，
+>    报错是 `Found multiple elements`（看起来像组件渲染了多个，其实是上一个用例没清）。
+> 2. **没有 `toHaveTextContent`** —— 它来自 `@testing-library/jest-dom`，
+>    而本项目没装。用原生 `textContent` + `toContain` 断言。
+>
+> 另外：`lib/api.ts` 里有**两个** 401 处理点（`apiRequest` 与 `apiText`）。
+> 第一版测试只覆盖了前者 —— **变异验证当场抓到**（把后者的处理改成
+> `if (false)`，测试照样全绿）。所以现在两条路径都有用例。
 也就是说，一个渲染期的崩溃仍然只有人工点开页面才能发现。
 
 ```bash

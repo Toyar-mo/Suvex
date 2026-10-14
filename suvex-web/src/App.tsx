@@ -5,6 +5,12 @@ import ErrorBoundary from '@/components/ui/ErrorBoundary'
 import ToastHost from '@/components/ui/Toast'
 import { bootstrapAuth, handleUnauthorized, useAuth } from '@/data/auth-store'
 import { setUnauthorizedHandler } from '@/lib/api'
+import {
+  decideLoginRoute,
+  decideRequireAuth,
+  decideSetupRoute,
+  type RouteDecision,
+} from '@/lib/route-guard'
 import { DEFAULT_PATH, NAV_ITEMS } from '@/navigation'
 import {
   ActivityPage,
@@ -20,7 +26,7 @@ import LoginPage from '@/pages/LoginPage'
 import SetupPage from '@/pages/SetupPage'
 import { Suspense, useEffect } from 'react'
 import { BrowserRouter, Navigate, Outlet, Route, Routes, useLocation } from 'react-router-dom'
-import type { ComponentType } from 'react'
+import type { ComponentType, ReactNode } from 'react'
 
 /**
  * 路由表。6 个一级入口全部来自 navigation.ts，路径不在这里二次硬编码 ——
@@ -113,39 +119,43 @@ function BootingFallback() {
  *
  *   所以保护的是**六个 app 页面**（会读到真实数据、会发包的那些），
  *   首页作为公开入口放行。
+ *
+ * ★ 2026-10-14：判断抽到 `lib/route-guard.ts`（纯函数 + 表驱动测试）。
+ *   抽出的动机是这三段 `if` 决定"未登录的人能看见什么"却零测试 ——
+ *   判宽了是安全问题、判严了是功能不可用，而两种都不会让构建失败。
+ *   这里只剩"决策 → JSX"的映射，判断本身不在这份文件里了。
  */
+function decisionToElement(
+  decision: RouteDecision,
+  render: () => ReactNode,
+): ReactNode {
+  if (decision.kind === 'boot') return <BootingFallback />
+  if (decision.kind === 'redirect') {
+    // `to` 是**语义目标**，真实路径只在这里映射一次 ——
+    // 守卫模块因此不必 import navigation.ts（测试也就不必拉进图标库）。
+    const target =
+      decision.to === 'setup' ? '/setup' : decision.to === 'login' ? '/login' : DEFAULT_PATH
+    return <Navigate to={target} replace />
+  }
+  return render()
+}
+
 function RequireAuth() {
   const { phase } = useAuth()
-
-  if (phase === 'loading') return <BootingFallback />
-  if (phase === 'setup') return <Navigate to="/setup" replace />
-  if (phase === 'login' || phase === 'offline') return <Navigate to="/login" replace />
-
-  return <Outlet />
+  return decisionToElement(decideRequireAuth(phase), () => <Outlet />)
 }
 
 /** `/login` —— 已登录的人不该停在这里 */
 function LoginRoute() {
   const { phase } = useAuth()
-
-  if (phase === 'loading') return <BootingFallback />
-  // 还没初始化就不能登录（没有账号可对）—— 直接送去初始化页
-  if (phase === 'setup') return <Navigate to="/setup" replace />
-  if (phase === 'ready') return <Navigate to={DEFAULT_PATH} replace />
-
   // `login` 与 `offline` 都渲染 LoginPage，由它自己按 phase 决定显示表单还是错误
-  return <LoginPage />
+  return decisionToElement(decideLoginRoute(phase), () => <LoginPage />)
 }
 
 /** `/setup` —— 已初始化后这个入口就不该再可达 */
 function SetupRoute() {
   const { phase } = useAuth()
-
-  if (phase === 'loading') return <BootingFallback />
-  if (phase === 'ready') return <Navigate to={DEFAULT_PATH} replace />
-  if (phase === 'login' || phase === 'offline') return <Navigate to="/login" replace />
-
-  return <SetupPage />
+  return decisionToElement(decideSetupRoute(phase), () => <SetupPage />)
 }
 
 function AppRoutes() {
