@@ -2334,6 +2334,10 @@ class Ctf2Settings:
     #: 每题最多跑多少回合（v0.26）。见 `vocab.DEFAULT_CTF2_MAX_TURNS` ——
     #: 这个数没有全局最优（简单题 6 轮、硬题 200 轮），所以它是配置项。
     max_turns: int
+    #: 换模 fallback（v0.35）。默认 provider 调不动时改用哪个；
+    #: `None` = 不换（默认），行为与引入前一致。见 `settings/models.py`
+    #: 的 `Ctf2Config.fallback_provider_id`。
+    fallback_provider_id: str | None = None
 
 
 def effective_ctf2_settings(db: Session) -> Ctf2Settings:
@@ -2360,6 +2364,7 @@ def effective_ctf2_settings(db: Session) -> Ctf2Settings:
             auto_priority_new=True,
             auto_start_new=False,
             max_turns=DEFAULT_CTF2_MAX_TURNS,
+            fallback_provider_id=None,
         )
     return Ctf2Settings(
         submit_mode=row.submit_mode,
@@ -2371,6 +2376,7 @@ def effective_ctf2_settings(db: Session) -> Ctf2Settings:
         auto_priority_new=row.auto_priority_new,
         auto_start_new=row.auto_start_new,
         max_turns=row.max_turns,
+        fallback_provider_id=row.fallback_provider_id,
     )
 
 
@@ -2397,6 +2403,7 @@ def update_ctf2_settings(
     auto_priority_new: bool,
     auto_start_new: bool,
     max_turns: int,
+    fallback_provider_id: str | None = None,
 ) -> Ctf2Config:
     """保存配置。**逐项校验，不静默夹取。**
 
@@ -2414,6 +2421,18 @@ def update_ctf2_settings(
     _assert_solve_poll_seconds(solve_poll_seconds)
     _assert_auto_sync_seconds(auto_sync_seconds)
     _assert_max_turns(max_turns)
+    # ★ 换模 fallback：空串归一成 None（"不换"），给了一个 id 就必须
+    #   真的存在 —— 存一个不存在的 id 会让它在解题失败时才暴露，
+    #   而那时正是最不该再出一个"配置指错了"的时刻。
+    normalized_fallback = (fallback_provider_id or "").strip() or None
+    if normalized_fallback is not None:
+        from app.providers.models import ProviderAccount
+
+        if db.get(ProviderAccount, normalized_fallback) is None:
+            raise ApiError.validation(
+                "指定的备用 provider 不存在。",
+                {"fallbackProviderId": "请选择一个已配置的 provider，或留空表示不启用"},
+            )
 
     row = get_ctf2_config(db)
     row.submit_mode = submit_mode
@@ -2425,11 +2444,12 @@ def update_ctf2_settings(
     row.auto_priority_new = auto_priority_new
     row.auto_start_new = auto_start_new
     row.max_turns = max_turns
+    row.fallback_provider_id = normalized_fallback
     db.commit()
     db.refresh(row)
     logger.info(
         "CTF2 配置已更新：mode=%s maxWrong=%d profile=%s 解题并发=%d "
-        "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d",
+        "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 备用模型=%s",
         submit_mode,
         max_wrong_submissions,
         default_sandbox_profile,
@@ -2439,6 +2459,7 @@ def update_ctf2_settings(
         auto_priority_new,
         auto_start_new,
         max_turns,
+        normalized_fallback or "（不启用）",
     )
     return row
 

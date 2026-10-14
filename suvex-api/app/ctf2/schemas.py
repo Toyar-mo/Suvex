@@ -133,6 +133,9 @@ class Ctf2SettingsOut(CamelModel):
     #   实测同一批题里，简单题 6 轮出结果、.NET 逆向题跑满 40 轮
     #   发出 37 条各不相同的命令仍是"没做完"。所以它是配置项。
     maxTurns: int
+    # ★ v0.35：换模 fallback。默认 provider 调不动时改用哪个 provider；
+    #   空串 / null = 不启用（默认）。见 `settings/models.py` 的说明。
+    fallbackProviderId: str | None = None
     updatedAt: IsoDateTime
 
 
@@ -172,6 +175,10 @@ class Ctf2SettingsIn(StrictModel):
     # 上界 500 是"别手滑填 100000"的护栏，**不是**成本护栏 ——
     # 真正的成本该由人在现场按题权衡。
     maxTurns: int = Field(ge=5, le=500)
+    # ★ v0.35：换模 fallback。**可选**（有默认值）—— 与上面"全部必填"
+    #   不同，理由是它是一个**新增**字段：老的客户端不带它时应当按
+    #   "不启用"处理，而不是报 422。空串与 null 都表示"不启用"。
+    fallbackProviderId: str | None = Field(default=None, max_length=64)
 
 
 # ══════════════════════════════════════════════════════════

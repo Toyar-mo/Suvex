@@ -394,6 +394,15 @@ export interface Ctf2Settings {
    * 所以：简单题调小省额度，硬题调大 —— 那是现场判断，不该写死。
    */
   maxTurns: number
+  /**
+   * 换模 fallback（v0.35）。默认 provider 调不动时改用哪个 provider；
+   * `null` = 不启用（**默认**）。
+   *
+   * ★ 为什么默认关：自动挑一个备用意味着"默认 provider 挂了就悄悄换成
+   * 另一个（可能是云端、要花钱的）"，而那是一次用户没同意的成本决定。
+   * 换模要花谁的钱、换成谁，必须由人指定。
+   */
+  fallbackProviderId: string | null
   updatedAt: string
 }
 
@@ -684,6 +693,7 @@ export async function saveCtf2Settings(next: {
   autoPriorityNew: boolean
   autoStartNew: boolean
   maxTurns: number
+  fallbackProviderId: string | null
 }): Promise<Ctf2Settings> {
   const saved = await api.put<Ctf2Settings>('/ctf2/settings', next)
   settings = saved

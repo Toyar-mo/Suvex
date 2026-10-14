@@ -1804,3 +1804,139 @@ def test_retry_count_and_backoff_are_sane() -> None:
         "重试次数太少会让瞬时抖动作废整道题；太多会把一次真实故障拖成长时间等待"
     )
     assert 0 < runner._LLM_RETRY_BACKOFF <= 5.0
+
+
+# ══════════════════════════════════════════════════════════
+# 换模 fallback（v0.35）
+# ══════════════════════════════════════════════════════════
+
+
+class _FailThenSucceedGateway:
+    """第一次调用抛错，之后正常回话的假 LLM（模拟"主接入点挂了"）。
+
+    `failover()` 返回的就是**它自己** —— 这样换模之后继续用的是同一个
+    假对象，能直接断言"换模后确实又调了一次、并且拿到了结论"。
+    """
+
+    def __init__(self, *, fail_times: int = 1, then: str) -> None:
+        self.fail_times = fail_times
+        self.then = then
+        self.calls = 0
+        self.failovers: list[runner.FallbackLlm] = []
+
+    async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise runner.Ctf2Error("调用 LLM 失败（ConnectError）：连接被拒绝")
+        return runner.LlmReply(text=self.then, source="content")
+
+    def failover(self, other: runner.FallbackLlm) -> _FailThenSucceedGateway:
+        self.failovers.append(other)
+        return self
+
+
+def test_failover_switches_and_keeps_solving() -> None:
+    """★★ 主接入点失败 → 换备用 → **继续解题并拿到结论**。
+
+    这是这个功能存在的全部理由：一次 LLM 调用失败不该作废整道题 ——
+    那时可能已经跑了三十多轮、在沙箱里做完了大量分析。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FailThenSucceedGateway(
+        fail_times=1,
+        then='FINAL: {"candidates": [{"flag": "flag{ok}", "evidence": "跑出来了"}]}',
+    )
+    backup = runner.FallbackLlm(model="gpt-backup", api_key="sk-backup", label="备用")
+    spec = _spec(fallbacks=(backup,))
+
+    outcome = _run(
+        runner.solve_in_sandbox(spec, sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert gateway.failovers == [backup], "应当恰好换模一次到指定的备用接入点"
+    assert [c.flag for c in outcome.candidates] == ["flag{ok}"], "换模后应当能解出"
+    assert not outcome.error, "换模成功就不该留下 error"
+
+
+def test_without_fallback_a_failure_still_fails() -> None:
+    """★★ 没配备用 → 行为与引入这个功能**之前完全一致**（判失败）。
+
+    这条是"默认不改变行为"的守卫：少了它，一个"永远换模"的实现
+    也能让上面那条通过。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FailThenSucceedGateway(fail_times=99, then="FINAL: {}")
+    spec = _spec()  # 没有 fallbacks
+
+    outcome = _run(
+        runner.solve_in_sandbox(spec, sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert gateway.failovers == [], "没配备用就不该换模"
+    assert outcome.candidates == []
+    assert "调用 LLM 失败" in outcome.error
+
+
+def test_failover_happens_at_most_once() -> None:
+    """★ 换模**只发生一次**：备用也不行时，别把回合预算耗在反复重试上。
+
+    换模一次之后仍失败，应当直接判失败（而不是每轮再试一遍备用）。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FailThenSucceedGateway(fail_times=99, then="FINAL: {}")
+    backup = runner.FallbackLlm(model="gpt-backup", api_key="sk-backup")
+    spec = _spec(fallbacks=(backup,), max_turns=10)
+
+    outcome = _run(
+        runner.solve_in_sandbox(spec, sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert len(gateway.failovers) == 1, "备用只该被换上一次"
+    assert "调用 LLM 失败" in outcome.error
+
+
+def test_fallback_llm_repr_hides_the_key() -> None:
+    """★ 备用接入点的 `repr` **不含凭据**（与 `SolveSpec` 同一条纪律）。"""
+    fb = runner.FallbackLlm(model="m", api_key="sk-super-secret", label="L")
+    assert "sk-super-secret" not in repr(fb)
+    assert "sk-super-secret" not in str(fb)
+
+
+def test_gateway_failover_reuses_address_normalization() -> None:
+    """★ `failover()` 复用 `__init__` 的地址归一化（本地模型补 `/v1`）。
+
+    换模这条路径**不能**分叉出第二份"怎么拼 URL"的规则 —— 否则
+    "本地模型补 /v1" 这条既有规则会在换模后失效，症状是 404。
+    """
+    primary = runner.LlmGateway(
+        model="a", api_key="k", base_url="https://api.deepseek.com", label="主"
+    )
+    backup = runner.FallbackLlm(
+        model="b", api_key="k2", base_url="http://127.0.0.1:11434", label="本地", kind="local"
+    )
+    swapped = primary.failover(backup)
+    assert swapped.url.endswith("/v1/chat/completions"), swapped.url
+    assert swapped.model == "b"
+    # 换出的是新对象，原对象不受影响（便于"前 N 轮是谁跑的"可考）。
+    assert primary.model == "a"
+
+
+def test_fallback_llms_empty_when_not_configured(db_session: Session, ctf2_challenge) -> None:
+    """★ 没配 `fallback_provider_id` → 空元组（默认不换模）。"""
+    from app.ctf2 import service as ctf2_service
+
+    settings_row = ctf2_service.effective_ctf2_settings(db_session)
+    assert settings_row.fallback_provider_id is None
+    assert runner._fallback_llms(db_session, settings_row, primary=None) == ()
+
+
+def test_fallback_llms_skips_a_missing_provider(db_session: Session, ctf2_challenge) -> None:
+    """★ 配了一个**不存在**的 provider → 空元组（不换模），不是崩。
+
+    用户删掉一个 provider 之后，配置里可能还留着它的 id。
+    """
+    from app.ctf2 import service as ctf2_service
+
+    settings_row = ctf2_service.effective_ctf2_settings(db_session)
+    object.__setattr__(settings_row, "fallback_provider_id", "prov_does_not_exist")
+    assert runner._fallback_llms(db_session, settings_row, primary=None) == ()

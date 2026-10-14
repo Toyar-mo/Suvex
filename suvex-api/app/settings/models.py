@@ -516,6 +516,33 @@ class Ctf2Config(Base):
         String(32), nullable=False, default=Ctf2SandboxProfile.BASE.value
     )
 
+    # ── 换模 fallback（v0.35）──────────────────────────────
+    #
+    # ## 它解决什么：一次 LLM 调用失败会作废**整道题**
+    #
+    # 解题是一个串行循环，每一轮都要调一次 LLM。默认 provider 一旦
+    # 返回一个不可重试的错误（401 key 失效、429 限流、5xx、或推理模型
+    # 长时间过载），当前实现是**直接把整道题判失败** —— 而那时模型可能
+    # 已经跑了三十多轮、在沙箱里做完了大量真金白银的分析。
+    #
+    # 实测（交接文档 §4.3）：一次 `ReadError` 让一道跑到第 14 轮、
+    # 已经反汇编出完整 IL 的题全部作废。连接层抖动已经修了（重试），
+    # 但"这个 provider 就是不行了"仍然会毁掉整道题。
+    #
+    # ## ★ NULL = 关闭，这是默认
+    #
+    # 存的是**另一个 provider 的 id**；没配（NULL）就完全保持原行为
+    # —— 与"不替用户编一个他没设过的上限"是同一条纪律。
+    #
+    # ⚠️ 为什么它是**显式配置**而不是自动挑一个备用：自动挑意味着
+    #    "默认 provider 挂了就悄悄换成另一个（可能是**云端、要花钱**的）"，
+    #    而那是一次用户没同意的成本决定。换模要花谁的钱、换成谁，
+    #    必须由人指定。
+    #
+    # 不加外键：与 `ctf2_solve_attempts.provider_id` 同一条理由 ——
+    # 删掉一个 provider 不该被这里拦住，取不到时按"没配"处理。
+    fallback_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
     )

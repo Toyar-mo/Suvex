@@ -13,6 +13,7 @@ import {
 } from '@/data/ctf2'
 import { ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { useProviders } from '@/data/providers'
 
 /**
  * CTF2 解题策略面板（设置页的一块）。
@@ -107,6 +108,8 @@ export function Ctf2Panel() {
   const [draft, setDraft] = useState<Ctf2Settings | null>(settings)
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
   const [touched, setTouched] = useState(false)
+  // 备用模型的下拉选项来自已配置的 provider（v0.35）。
+  const providers = useProviders()
 
   /*
     配置是异步来的，所以第一份草稿要从"后来才到的 settings"里补。
@@ -131,7 +134,8 @@ export function Ctf2Panel() {
       draft.autoSyncSeconds !== settings.autoSyncSeconds ||
       draft.autoPriorityNew !== settings.autoPriorityNew ||
       draft.autoStartNew !== settings.autoStartNew ||
-      draft.maxTurns !== settings.maxTurns
+      draft.maxTurns !== settings.maxTurns ||
+      draft.fallbackProviderId !== settings.fallbackProviderId
     )
   }, [draft, settings])
 
@@ -220,6 +224,7 @@ export function Ctf2Panel() {
         autoPriorityNew: draft.autoPriorityNew,
         autoStartNew: draft.autoStartNew,
         maxTurns: draft.maxTurns,
+        fallbackProviderId: draft.fallbackProviderId,
       })
       setSaveState({ kind: 'saved', at: new Date().toISOString() })
       setTouched(false)
@@ -547,6 +552,41 @@ export function Ctf2Panel() {
           />
           <span className="shrink-0 text-2xs text-ink-faint">轮</span>
         </span>
+      </Field>
+
+      <Field
+        label="备用模型（换模兜底）"
+        htmlFor="ctf2-fallback-provider"
+        /*
+          ★ 这一段必须把"什么时候会换"讲清楚，否则用户会以为它是负载均衡。
+          它不是 —— 主接入点**调不动**时才换，正常情况下永远用主模型。
+        */
+        help={
+          '主 provider 调用失败（key 失效 / 限流 / 服务端错误 / 长时间过载）时，' +
+          '改用这里选定的 provider 继续解题，而不是让整道题作废 —— ' +
+          '那时可能已经跑了三十多轮、在沙箱里做完了大量分析。' +
+          '★ 它是**兜底**不是负载均衡：正常情况下永远用主模型。' +
+          '留空（默认）= 不启用，行为与之前完全一致。' +
+          '⚠️ 若备用的是云端 provider，换模会消耗**那个** provider 的额度。'
+        }
+      >
+        <select
+          id="ctf2-fallback-provider"
+          value={draft.fallbackProviderId ?? ''}
+          onChange={(e) => setDraft({ ...draft, fallbackProviderId: e.target.value || null })}
+          className={cn(
+            'h-9 w-full max-w-[20rem] rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink',
+            'transition-ui duration-fast hover:border-line-strong',
+            'focus:outline-none focus:ring-2 focus:ring-accent/40',
+          )}
+        >
+          <option value="">不启用</option>
+          {providers.map((p) => (
+            <option key={p.id} value={p.id}>
+              {p.label}
+            </option>
+          ))}
+        </select>
       </Field>
 
       {/* ── 自动作业的两个开关（v0.24）── */}

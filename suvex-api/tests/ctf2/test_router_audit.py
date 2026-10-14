@@ -58,6 +58,9 @@ def _settings_body(mode: str, source: dict) -> dict:
         # v0.26 新增。同一条理由 —— 这个 helper 的存在的意义就是
         # "只改想改的那一项"，而它依赖于把 source 里**其余全部**透传。
         "maxTurns": source["maxTurns"],
+        # v0.35 新增（换模 fallback）。它**可选**（有默认值 None），
+        # 但既然 source 里有，就一并透传，保持"只改想改的那一项"。
+        "fallbackProviderId": source.get("fallbackProviderId"),
     }
 
 

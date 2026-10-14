@@ -1011,7 +1011,7 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | 类型 | 关键字段 |
 | --- | --- |
 | `Ctf2Account` | `id` / `label` / `status` / `remoteUserId` / `remoteUsername` / `scopes` / **`tokenMask`** / **`hasToken`** / `lastSyncedAt` / `lastError` / `createdAt` / `updatedAt` |
-| `Ctf2Settings` | `submitMode` / `maxWrongSubmissions` / `defaultSandboxProfile` / `maxConcurrentSolves` / `solvePollSeconds` / `autoSyncSeconds` / `autoPriorityNew` / `autoStartNew` / `maxTurns` / `updatedAt` |
+| `Ctf2Settings` | `submitMode` / `maxWrongSubmissions` / `defaultSandboxProfile` / `maxConcurrentSolves` / `solvePollSeconds` / `autoSyncSeconds` / `autoPriorityNew` / `autoStartNew` / `maxTurns` / **`fallbackProviderId`**（v0.35，可空 = 不启用） / `updatedAt` |
 | `Ctf2Competition` | `id` / `accountId` / `remoteId` / `kind`(`competition`\|`practice`) / `name` / `remoteStatus` / `startAt` / `endAt` / `challengeCount` / `syncedAt` |
 | `Ctf2Challenge` | `id` / `competitionId` / `remoteId` / `stageId` / `title` / `category` / `description` / `attachments` / `score` / `status` / **`candidateFlag`** / **`confirmedFlag`** / `remainingWrongSubmissions` / `wrongSubmissionCount` / `maxWrongSubmissions` / `candidateCount` / `sandboxProfile` / `scanId` / `solvedAt` / `lastError` / `environment` / `priority` / `createdAt` / `updatedAt` |
 | `Ctf2Environment` | `id` / `challengeId` / `status` / `sandboxProfile` / `accessUrl` / `accessUrls` / `containerId` / `pollCount` / `startedAt` / `readyAt` / `expiresAt` / `lastError` |

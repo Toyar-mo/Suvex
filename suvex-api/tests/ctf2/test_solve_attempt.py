@@ -376,3 +376,58 @@ def test_zero_turns_is_rejected_by_the_database(
     with pytest.raises(IntegrityError):
         db_session.commit()
     db_session.rollback()
+
+
+# ══════════════════════════════════════════════════════════
+# 换模 fallback 的配置校验（v0.35）
+# ══════════════════════════════════════════════════════════
+
+
+def _update_settings(db: Session, *, fallback_provider_id):  # noqa: ANN001
+    """只改 fallback 一项，其余原样透传。"""
+    row = service.get_ctf2_config(db)
+    return service.update_ctf2_settings(
+        db,
+        submit_mode=row.submit_mode,
+        max_wrong_submissions=row.max_wrong_submissions,
+        default_sandbox_profile=row.default_sandbox_profile,
+        max_concurrent_solves=row.max_concurrent_solves,
+        solve_poll_seconds=row.solve_poll_seconds,
+        auto_sync_seconds=row.auto_sync_seconds,
+        auto_priority_new=row.auto_priority_new,
+        auto_start_new=row.auto_start_new,
+        max_turns=row.max_turns,
+        fallback_provider_id=fallback_provider_id,
+    )
+
+
+def test_fallback_provider_round_trips(db_session: Session, ctf2_provider: str) -> None:
+    """配一个真实存在的 provider → 存下来、读回来一致。"""
+    _update_settings(db_session, fallback_provider_id=ctf2_provider)
+    assert service.effective_ctf2_settings(db_session).fallback_provider_id == ctf2_provider
+
+
+def test_empty_string_clears_the_fallback(db_session: Session, ctf2_provider: str) -> None:
+    """★ 空串归一成 `None`（= 不启用）—— 与"删掉这一项"是同一件事。
+
+    前端下拉的"不启用"给的就是空串，它必须真的清掉，而不是存一个空串
+    id（那会让 `if fid:` 判真，然后去查一个空 id 的 provider）。
+    """
+    _update_settings(db_session, fallback_provider_id=ctf2_provider)
+    _update_settings(db_session, fallback_provider_id="")
+    assert service.effective_ctf2_settings(db_session).fallback_provider_id is None
+
+
+def test_unknown_fallback_provider_is_rejected(db_session: Session) -> None:
+    """★★ 配一个**不存在**的 provider → 保存时就拒绝（不静默存下）。
+
+    存一个不存在的 id 会让它到解题失败那一刻才暴露 —— 而那时正是
+    最不该再出一个"配置指错了"的时刻。
+    """
+    import pytest
+
+    from app.core.errors import ApiError
+
+    with pytest.raises(ApiError) as exc:
+        _update_settings(db_session, fallback_provider_id="prov_does_not_exist")
+    assert exc.value.status_code == 400

@@ -298,6 +298,7 @@ def _settings_out(row) -> Ctf2SettingsOut:  # noqa: ANN001
         autoPriorityNew=row.auto_priority_new,
         autoStartNew=row.auto_start_new,
         maxTurns=row.max_turns,
+        fallbackProviderId=row.fallback_provider_id,
         updatedAt=row.updated_at,
     )
 
@@ -334,6 +335,7 @@ def update_ctf2_settings(
         auto_priority_new=payload.autoPriorityNew,
         auto_start_new=payload.autoStartNew,
         max_turns=payload.maxTurns,
+        fallback_provider_id=payload.fallbackProviderId,
     )
     audit.record(
         db,

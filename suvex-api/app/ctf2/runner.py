@@ -1002,6 +1002,27 @@ class LlmGateway:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
+    def failover(self, other: FallbackLlm) -> LlmGateway:
+        """换到另一个接入点，返回**新的** gateway（v0.35）。
+
+        ⚠️ 返回新对象而不是就地改 `self`：`self` 是上一段成功历史对应的
+        gateway，就地改会让"前 30 轮是谁跑的"变得不可考。解题循环持的是
+        `gateway` 变量，换模就是重新赋值它 —— 语义清楚，也便于测试。
+
+        复用 `__init__` 的地址归一化（`build_endpoint` / `is_anthropic`），
+        所以"本地模型补 `/v1`""Anthropic 走 Messages API"这些既有规则
+        不会在换模这条路径上分叉出第二份。
+        """
+        return LlmGateway(
+            model=other.model,
+            api_key=other.api_key,
+            base_url=other.base_url,
+            label=other.label,
+            kind=other.kind,
+            timeout=self.timeout,
+            max_tokens=self.max_tokens,
+        )
+
     def _body(self, messages: list[dict[str, str]], *, system: str) -> dict[str, Any]:
         if self.anthropic:
             # Messages API 的 system 是**顶层字段**，不是一条 message。
@@ -1358,6 +1379,22 @@ class Candidate:
     confidence: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class FallbackLlm:
+    """一个**备用** LLM 接入点（v0.35）。
+
+    与 `SolveSpec` 的 `llm_*` 是同一组字段，只是它排在主接入点**之后**：
+    主接入点调不动时按顺序试。凭据在这一层同样是**明文**，所以纪律
+    与 `SolveSpec` 完全一致 —— 不 `repr`、不落库、不进日志。
+    """
+
+    model: str
+    api_key: str = field(repr=False)
+    base_url: str = ""
+    label: str = ""
+    kind: str = "cloud"
+
+
 @dataclass(slots=True)
 class SolveSpec:
     """一次解题的完整输入。
@@ -1380,6 +1417,15 @@ class SolveSpec:
     llm_api_base: str = ""
     llm_label: str = ""
     llm_kind: str = "cloud"
+    # ★ v0.35：备用接入点（主接入点调不动时按顺序试）。**空 = 不启用**。
+    #
+    # ## 为什么是"按顺序试"而不是"轮询/负载均衡"
+    #
+    # 主接入点是用户明确选定的（默认 provider），它的优先级最高。
+    # 备用只在主接入点**失败**时兜底 —— 不是"分摊流量"。
+    # 把它做成轮询会让"用哪个模型解题"变得不确定，而复盘时
+    # 看到的模型可能不是当时真正用的那个。
+    fallbacks: tuple[FallbackLlm, ...] = ()
     # ── 策略 ──
     mode: str = Ctf2SubmitMode.SAFE.value
     max_turns: int = DEFAULT_MAX_TURNS
@@ -2101,6 +2147,16 @@ async def solve_in_sandbox(
     过程是给人看的，结果才是要交的。
     """
     log = transcript if transcript is not None else []
+    # ★★ v0.35：备用接入点（换模 fallback）。
+    #
+    # 主接入点一旦调不动（401 key 失效 / 429 限流 / 5xx / 长时间过载），
+    # 在**判整道题失败之前**先试备用 —— 那时可能已经跑了三十多轮、
+    # 在沙箱里做完了大量真金白银的分析（实测一次 ReadError 让跑到第 14 轮、
+    # 已反汇编出完整 IL 的题全部作废）。
+    #
+    # ⚠️ 只换一次（不是每轮都重试全部备用）：一次换模失败就说明备用也不行，
+    #    继续试只会把回合预算耗在"连不上模型"上，而回合预算本该花在解题上。
+    pending_fallbacks: list[FallbackLlm] = list(spec.fallbacks)
     # ★ 上下文分成三段（v0.26）—— 见 `DEFAULT_MAX_TURNS` 那段说明：
     #
     #   base   —— 题目信息。**永不裁剪**（模型忘了题目就彻底跑偏）
@@ -2154,6 +2210,28 @@ async def solve_in_sandbox(
             try:
                 reply = await gateway.chat(_messages(), system=system_prompt)
             except Ctf2Error as exc:
+                # ★★ v0.35：判失败之前先试备用接入点。
+                #
+                # `LlmGateway.chat` 对**连接层**抖动（连不上 / 超时 / 读中断）
+                # 已经重试过 4 次，走到这里的是它重试完仍失败、或是一个
+                # 不该重试的错误（4xx / 5xx / 畸形响应）。两类都意味着
+                # "这个接入点现在不行"，而不是"这道题做不出来"。
+                if pending_fallbacks:
+                    nxt = pending_fallbacks.pop(0)
+                    logger.warning(
+                        "主接入点调用失败（%s），换备用模型 %s 继续解题：%s",
+                        exc.message[:120],
+                        nxt.label or nxt.model,
+                        spec.challenge_id,
+                    )
+                    log.append(f"[turn {turn}] LLM 失败，换备用接入点：{exc.message}")
+                    notify(
+                        "reasoning",
+                        f"主模型调用失败，已切换到备用模型 {nxt.label or nxt.model} 继续。",
+                        {"text": f"换模：{exc.message}"},
+                    )
+                    gateway = gateway.failover(nxt)
+                    continue  # ★ 不计入这一轮：换模本身不是一次解题尝试
                 # LLM 层面的失败不重试：这一层上面没有"退避"的语义
                 # （重复问同一个问题不会得到不同答案），而回合预算要
                 # 留给真正在做事的回合。
@@ -2901,6 +2979,52 @@ def build_spec(
         # 沙箱配额（见上面那段说明：这四个参数原来漏了，容器一直没有上限）
         cpus=sandbox_cpus,
         memory_mb=sandbox_memory_mb,
+        # ★ v0.35：备用接入点。见 `_fallback_llms` —— 配置关掉时是空元组，
+        #   与引入这个功能之前的行为完全一致。
+        fallbacks=_fallback_llms(db, settings_row, primary=provider),
+    )
+
+
+def _fallback_llms(db: Session, settings_row, *, primary) -> tuple[FallbackLlm, ...]:  # noqa: ANN001
+    """按配置解析出备用接入点。**没配就返回空元组**。
+
+    ## 规则
+
+    - `fallback_provider_id` 为空 → 空元组（不换模，默认）；
+    - 指向的 provider 不存在 → 空元组 + **一条 warning**（配置指向了一个
+      已被删掉的 provider，不能静默当作"没配" —— 那会让用户以为备用生效了）；
+    - 指向的就是主接入点本身 → 空元组（换成自己是无意义的空转）。
+
+    ## 为什么只有**一个**备用，而不是一串
+
+    配置里只存一个 id。串式的"备用链"（A→B→C）在单机自托管的场景里
+    没有实际需求，而每多一层就多一层"到底用的哪个模型"的歧义。
+    将来真要支持，把这个函数改成读一张表即可 —— 调用方拿到的仍是
+    `tuple[FallbackLlm, ...]`，形状不用变。
+    """
+    from app.providers.models import ProviderAccount
+    from app.providers.service import decrypt_provider_key
+
+    fid = getattr(settings_row, "fallback_provider_id", None)
+    if not fid:
+        return ()
+    if primary is not None and fid == primary.id:
+        logger.warning("CTF2 备用 provider 与主 provider 相同，忽略：%s", fid)
+        return ()
+    row = db.get(ProviderAccount, fid)
+    if row is None:
+        logger.warning(
+            "CTF2 配置里的备用 provider %s 不存在（可能已被删除），本次不换模", fid
+        )
+        return ()
+    return (
+        FallbackLlm(
+            model=row.model,
+            api_key=decrypt_provider_key(row),
+            base_url=row.base_url or "",
+            label=row.label,
+            kind=row.kind,
+        ),
     )
 
 
