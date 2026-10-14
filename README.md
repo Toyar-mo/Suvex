@@ -5,8 +5,8 @@
 或 CTF 题解。
 
 ```
-suvex-api/    后端：Python 3.12 · FastAPI · PostgreSQL 16 · 42,998 行（app/ 下 114 个文件）
-suvex-web/    前端：React 19 · TypeScript 6 · Vite 8 · 41,154 行（src/ 下 .ts/.tsx）
+suvex-api/    后端：Python 3.12 · FastAPI · PostgreSQL 16 · 43,256 行（app/ 下 114 个文件）
+suvex-web/    前端：React 19 · TypeScript 6 · Vite 8 · 41,204 行（src/ 下 .ts/.tsx）
 ```
 
 > **数字口径**：都是"文件总行数（含空行与注释）"，用 `find … | xargs wc -l`
@@ -94,11 +94,11 @@ cd suvex-api && docker compose up --build
 
 | 项 | 数字 |
 | --- | --- |
-| 后端代码 | 42,998 行（`app/` 下 114 个文件），13 个领域模块 |
-| 后端测试 | **64 个文件 / 1116 个测试函数**（参数化展开后更多），对**真实 PostgreSQL** 跑（不是 SQLite） |
-| 数据库迁移 | 33 个 Alembic 版本，从第一个迁移就版本化 |
+| 后端代码 | 43,256 行（`app/` 下 114 个文件），13 个领域模块 |
+| 后端测试 | **65 个文件 / 1134 个测试函数**（参数化展开后更多），对**真实 PostgreSQL** 跑（不是 SQLite） |
+| 数据库迁移 | 34 个 Alembic 版本，从第一个迁移就版本化 |
 | API 端点 | 112 个（按 `@router.*` 装饰器计） |
-| 前端代码 | 41,154 行（`src/` 下 147 个 .ts/.tsx），**0 个 `@ts-ignore`** |
+| 前端代码 | 41,204 行（`src/` 下 147 个 .ts/.tsx），**0 个 `@ts-ignore`** |
 | 前端测试 | **92 个 vitest 用例**，覆盖 5 个纯逻辑模块（`data/`、`hooks/`、`lib/`） |
 | CI | GitHub Actions 三个 job：后端（**ruff 静态检查** + 测试）/ 前端检查 / 仓库卫生 —— **2026-10-11 首次全绿**（run #9，`861f64a`，19m40s）；**2026-10-14 补上后端 ruff**（此前 pyproject 配了 ruff 却从不运行，等于零静态检查） |
 | 决策记录 | 8 篇 ADR，每篇写**为什么**而不是**是什么** |
@@ -257,8 +257,8 @@ suvex-api/
   app/core/       跨领域公共件（依赖方向单向，不依赖任何领域包）
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,ctf2}/
                   按领域拆分，各自 模型/出入参/业务/路由
-  alembic/        33 个迁移
-  tests/          64 个文件 / 1116 个测试函数，对真实 PostgreSQL 跑
+  alembic/        34 个迁移
+  tests/          65 个文件 / 1134 个测试函数，对真实 PostgreSQL 跑
   docs/           8 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
 
