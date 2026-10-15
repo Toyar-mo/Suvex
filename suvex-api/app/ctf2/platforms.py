@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session
 from app.core.db import session_scope
 from app.core.errors import ApiError
 from app.core.ids import new_id
+from app.ctf2 import hostguard
 from app.ctf2.adapters.builder import ChatFn, build_spec, verify_spec
 from app.ctf2.adapters.generic import GenericDriver
 from app.ctf2.adapters.spec import PlatformSpec, SpecError
@@ -130,21 +131,23 @@ def spec_of(platform: Ctf2Platform | None) -> PlatformSpec | None:
 #:
 #: 元数据服务不一样：一次 GET 就能换到云主机的临时凭据，而"让服务端
 #: 替你打一个 URL"正是这个功能的形状。所以那一个必须堵死。
-BLOCKED_HOSTS: frozenset[str] = frozenset(
-    {
-        "169.254.169.254",  # AWS / GCP / Azure / 阿里云共用的元数据地址
-        "metadata.google.internal",
-        "metadata.goog",
-        "100.100.100.200",  # 阿里云元数据
-    }
-)
+#:
+#: ⚠️ 判据**已经搬到 `app/ctf2/hostguard.py`** —— 因为 `transport.py` /
+#: `probe.py` 也要用它（跟随跳转时逐跳校验），而它们不能反向 import
+#: 这个模块（`platforms → builder → generic → transport` 已经成链，
+#: 反过来就成环）。这里保留别名是为了不破坏既有 import 点。
+BLOCKED_HOSTS = hostguard.BLOCKED_HOSTS
 
 
 def assert_safe_base_url(raw: str) -> str:
     """校验用户填的平台地址。返回原值（去掉首尾空白）。
 
     ⚠️ 两层：协议必须是 http(s)（`PlatformSpec` 也会再校验一次），
-    主机不能是元数据服务（见 `BLOCKED_HOSTS`）。
+    主机不能是元数据服务（见 `hostguard.is_blocked_host`）。
+
+    ★ 主机那一层**不是字符串比对**：`169.254.169.254` 有 `2852039166`、
+    `0xA9FEA9FE`、`[::ffff:169.254.169.254]` 这些 `getaddrinfo` 全认的
+    等价写法，只比字符串会一个都不命中 —— 见 `hostguard` 的说明。
     """
     url = (raw or "").strip()
     try:
@@ -157,7 +160,7 @@ def assert_safe_base_url(raw: str) -> str:
         )
     if not parsed.host:
         raise ApiError.validation("平台地址缺少主机名。", {"baseUrl": "缺少主机名"})
-    if parsed.host.lower() in BLOCKED_HOSTS:
+    if hostguard.is_blocked_host(parsed.host):
         raise ApiError.validation(
             "这个地址是云厂商的实例元数据服务，不能作为平台地址。",
             {"baseUrl": "该地址被拒绝"},
