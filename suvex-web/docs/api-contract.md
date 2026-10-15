@@ -1023,6 +1023,38 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | `Ctf2SubmitResult` | `status` / `message` / `challenge` |
 | `Ctf2PullResult` | `challenge` / `created` / `challengeId` / `competitionName` |
 | `Ctf2RemoteCompetition` | `remoteId` / `name` / `startAt` / `endAt` / `status` —— **平台侧**的赛事，不落库 |
+| `Ctf2Writeup` | `challengeId` / `title` / `category` / `solved` / `markdown` / `filename` / `attemptId` / `turns` / `elapsedSec` / `generatedAt` / `updatedAt`（v0.36）|
+| `Ctf2TokenUsage` | `calls` / **`recordedCalls`** / `promptTokens` / `completionTokens` / `totalTokens` / `byModel[]` / `byChallenge[]` / **`byAttempt[]`** / `since`（v0.36；`byAttempt` v0.37）|
+| `Ctf2UsageEntry` | `turn` / `model` / `providerLabel` / `promptTokens` / `completionTokens` / `totalTokens` / `reasoningTokens` / **`usageReported`** / `at`（v0.36）|
+| `Ctf2UsageByAttempt` | `attemptId` / `challengeId` / `title` / `mode` / `model` / `calls` / `totalTokens` / `startedAt`（v0.37）|
+
+> **★ `byAttempt` 是"细分到每个任务"那个需求落的字段（v0.37）。**
+> `byChallenge` 按**题**聚合，而一道题可以解很多次（实测
+> `[ACTF2020 新生赛]Upload` 解过 4 次）—— 只按题聚合会把
+> "哪一次跑得贵、哪一次在兜圈子"糊成一行。
+> `mode` / `model` / `startedAt` 来自 `ctf2_solve_attempts`（JOIN 取的），
+> 所以**不需要新表新列**；`byModel` / `byChallenge` 语义不变（纯增）。
+
+> **⚠️ 这三行曾经比实现短（2026-10-15 补齐）**：`Ctf2Writeup` 少了
+> `turns` / `elapsedSec` / `updatedAt`，`Ctf2TokenUsage` 少了 `since`
+> （`since` 在 §3.19.6 的正文里有说明，**只有这张表没跟上**），
+> `Ctf2UsageEntry` 少了 `reasoningTokens`。
+>
+> 这类"正文写了、表里没写"的漂移比整块缺失更难发现：审查的人
+> 只要读过 §3.19.6 就会以为契约已经覆盖了 `since`。而这张表是
+> 前端对字段的核对清单 —— 表短了就有人会按表去删字段。
+> 记录在此，因为它正是这份文档反复栽的那类跟头。
+
+> **★ `Ctf2TokenUsage` 里 `calls` 与 `recordedCalls` 必须分开（v0.36）。**
+>
+> `calls` 是**调用次数**（永远准确，我们从循环里数得出来）；
+> `recordedCalls` 是**接入点真的给了 `usage` 的次数**。
+>
+> 接入点可能不给 `usage`（第三方代理、某些本地模型），那时 token 记 0 ——
+> 而"真的是 0 token"与"没记录到"在界面上长得一模一样。
+> 合成一个字段的后果是用户看到"消耗 0"以为没跑过，或者反过来
+> 以为某次跑得特别省。这与 §2.9 的 `hasKey` / `apiKey` 分两列、
+> §3.19 的 `candidateFlag` / `confirmedFlag` 分两列是同一条纪律。
 
 > **★ `Ctf2Account` 里没有 `token` 字段，只有 `tokenMask` + `hasToken`。**
 > 与 §2.9 的 `apiKey` / `apiKeyMask` 同一条理由（见 ADR-003）：
@@ -1818,7 +1850,13 @@ msedge.exe --headless=new --disable-gpu --no-pdf-header-footer --print-to-pdf=ou
     "newHighSeverityDelta": null,       // null = 无同比数据（上周为 0）
     "verifiedPocCount": 6,
     "avgScanDurationSec": 840,          // null = 没有已完成扫描
-    "falsePositiveCount": 2
+    "falsePositiveCount": 2,
+    // ── CTF2 token 消耗（v0.36）───────────────────────────
+    // 细分（按题/按模型/逐轮）在 /ctf2/usage 与 /ctf2/challenges/{id}/usage
+    "ctf2LlmCalls": 318,                // 调用次数：**永远准确**
+    "ctf2RecordedCalls": 316,           // 其中接入点真给了用量的次数
+    "ctf2TotalTokens": 4821130,
+    "ctf2UsageSince": "2026-10-14T10:02:11Z"  // null = 一条记录都没有
   },
   "severityBreakdown": [ { "severity": "critical", "count": 2 }, ... ],
   "activity": [ /* 最近至多 8 条，**投影形状**，见 §2.5 与下方的例外说明 */ ],
@@ -1835,6 +1873,25 @@ msedge.exe --headless=new --disable-gpu --no-pdf-header-footer --print-to-pdf=ou
 3. `severityBreakdown` **包含全部发现**（与 Findings 页逐条对得上）；
    `metrics` 里只有"本周新增高危"和"已验证 PoC"排除误报。
    这个口径差异**必须在界面上说明**，所以 `falsePositiveCount` 要返回。
+
+**★ 第四个 null 语义（v0.36 新增）：token 统计的"没记录"**
+
+| 字段 | 怎么读 |
+| --- | --- |
+| `ctf2UsageSince: null` | **一条记录都没有** —— 界面说"还没有数据"，不说"0 token" |
+| `ctf2RecordedCalls < ctf2LlmCalls` | `ctf2TotalTokens` 是**下限**：有几次调用接入点没给用量 |
+| `ctf2LlmCalls == 0` | 从没跑过 CTF2 解题（与"跑过但没记"是两回事，后者看 `since`） |
+
+> ⚠️ **`ctf2LlmCalls` 与 `ctf2RecordedCalls` 不能合成一个。**
+> 前者从行数数得出来（永远准确），后者取决于接入点给不给 `usage`。
+> 合成之后，"消耗 0"与"没记录到"在界面上完全一样 ——
+> 而"某次解题消耗 0"会让用户以为它没跑过、或者以为那次特别省。
+> 与 §2.9 的 `hasKey`/`apiKey` 分两列、§3.19 的
+> `candidateFlag`/`confirmedFlag` 分两列是同一条纪律。
+>
+> **不做 token → 金额换算**：单价随模型、供应商、时段变化，
+> 写死在代码里会误导（详见 §3.19.6）。只给 token 数。
+
 
 > **派生而非写死**：`activeScans`、`avgScanDurationSec`、`severityBreakdown`
 > 都应该从集合算出来。前端 mock 就是这么做的，理由是"换真实 API 时派生逻辑
@@ -2124,6 +2181,44 @@ Overview 纹丝不动，那次分诊就成了没有反馈的无效劳动。
 另建议（非必需，但对"沙箱状态"有用）：
 `GET /health/sandbox` → `{ "status": "running"|"stopped"|"error", "image": "..." }`，
 对应 Settings 里 `SandboxConfig.status` 的展示。
+
+**★ v0.39 起，这三个 public 端点的暴露面按独立开关收敛**（公网审计 F3/F5/F6）：
+
+| 端点 | 默认 | 开关 | 为什么 |
+| --- | --- | --- | --- |
+| `/health` | 恒可读 | —— | 只回 `status` + 版本号，编排器探活要用 |
+| `/health/sandbox` | `status` 可读，**`image` 默认空** | `SUPEX_EXPOSE_SANDBOX_IMAGE`（默认 false） | 具体到版本号的镜像 tag 可定向已知 CVE |
+| `/metrics` | **关闭** | `SUPEX_EXPOSE_METRICS` **且** `SUPEX_METRICS_ENABLED` | 含各路由请求计数，等于公开"多少人在用、在用哪些功能" |
+| `/docs`、`/openapi.json` | **关闭** | `SUPEX_EXPOSE_DOCS`（默认 false） | 93 个 path 的完整清单 + 出入参 |
+
+> **★ 为什么这些开关**不**绑在 `SUPEX_ENV` 上（这是最容易写错的地方）**
+>
+> 直觉写法是"prod 就关文档"。但 `assert_bootable()` 要求 `env=prod` 时
+> 必须 `cookie_secure=true`，而线上是 **http** —— `Secure` cookie 在 http 下
+> 浏览器**不回传**，**登录会直接坏掉**（症状：登录接口 200，下一个请求仍 401）。
+>
+> 于是"想关文档"会逼出一个"必须上 HTTPS"的要求，两件事被错误地绑在一起。
+> 解耦后：`env` 管部署安全属性（cookie/密钥），这几个开关只管**挂不挂路由**。
+
+> **⚠️ 这些开关不是安全边界**：它们只决定"挂不挂路由"。真正的边界是
+> 反代（谁能连上来）与鉴权。公网部署**应当**在反代层再限一次 —— 见
+> `deploy/nginx/suvex-frontend.conf`。
+>
+> ⚠️ 反代层按 IP 限 `/metrics` 在本部署**无效**：走 frp 隧道时 nginx 看到的
+> `$remote_addr` **永远是 127.0.0.1**，`allow 127.0.0.1` 会放行所有人。
+> 所以本部署改用应用层默认关闭，而不是在那里假装限制。
+
+**★ v0.39 起 OpenAPI 里声明了认证方案**（审计 F4）：
+
+加固前 `/openapi.json` 的 `securitySchemes` 与顶层 `security` 都是 **null** ——
+一份自称"机器可读的接口说明"却从没说怎么鉴权。现在声明两套（见 §1.2）：
+
+| scheme | 类型 | 用于 |
+| --- | --- | --- |
+| `BearerAuth` | `http` / `bearer`（形如 `svx_…`） | 机器令牌（CI / 脚本） |
+| `SessionCookie` | `apiKey` / `in: cookie` | 浏览器会话 |
+
+顶层 `security` 是**两个项**（OpenAPI 里项之间是 OR）—— 表达"两者之一"。
 
 ### 3.9 审计日志（v0.10 新增，任务 8）
 
@@ -2904,6 +2999,9 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 | POST | `/ctf2/platforms/{platformId}/activate` | **admin** | 启用某个平台 |
 | POST | `/ctf2/platforms/use-builtin` | **admin** | 切回内置的 CTF2（`204`）|
 | DELETE | `/ctf2/platforms/{platformId}` | **admin** | 删除平台（`204`）|
+| GET | `/ctf2/challenges/{challengeId}/writeup` | read | **题解（Writeup）**（v0.36）|
+| GET | `/ctf2/usage` | read | **token 消耗统计**（v0.36，可按题/赛事/时间筛）|
+| GET | `/ctf2/challenges/{challengeId}/usage` | read | 单道题的逐次消耗明细（v0.36）|
 
 > **鉴权分级的理由**：读操作是 `read`；**会对外发请求或消耗外部额度**的
 > 是 `scan`（同步、拉题、解题、提交）；**改系统级配置与凭据**的是 `admin`
@@ -2984,6 +3082,178 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 > ⚠️ 这类"壳扫描"**不能续跑**：它的"上次会话"根本不存在
 > （strix 从没跑过它），续跑会走到一句与事实相反的"会话文件已不在"。
 > 所以 `resume_scan` 会先拦下它，返回 `409 SCAN_IS_CTF2_SHELL`。
+
+#### 3.19.5 ★ CTF2 的题解**不走** scans 的题解端点（v0.36 修）
+
+**背景是一个真实的误导**：CTF2 的壳扫描在扫描列表里长得像一次普通扫描，
+于是它也出现了「题解」按钮。点开得到：
+
+> 这次扫描没有留下报告文件（产物目录可能被手工清理过），拼不出题解。
+
+**那句话在误导用户。** 真相不是"文件被清理了"，而是
+**CTF2 解题根本不走 strix** —— 它由 `app/ctf2/runner.py` 自己的
+循环驱动，从不产生 `penetration_test_report.md`。所以 `scans/writeup.py`
+按设计找不到东西，**永远**找不到。
+
+修法：`GET /scans/{scanId}/writeup` 认出 `origin = "ctf2"` 的壳，
+返回一句**指向正确入口**的话，而不是让用户去翻产物目录：
+
+```
+409 WRITEUP_UNAVAILABLE
+"这是 CTF2 的解题任务，题解在题目卡片上（GET /ctf2/challenges/{id}/writeup），
+ 不走扫描报告。"
+```
+
+> **为什么返回 409 而不是内部转发**：转发会让"扫描的题解"这个端点
+> 有两种完全不同的数据来源，而调用方无法预知自己拿到的是哪一种。
+> 让错误信息指路更诚实 —— 与 §3.19.4 里 `SCAN_IS_CTF2_SHELL`
+> 处理"壳不能续跑"是同一个手法（认出特例、明说原因、指对入口）。
+
+**CTF2 自己的题解从哪来**：`SolveOutcome.transcript`（每轮的命令 + 输出摘要）
++ 题目信息 + flag + 轮数/耗时/token 统计，由 `ctf2/writeup.py` 拼装。
+
+> **★ 题解里的 flag 不脱敏 —— 与"方法卡"（`ctf2_solve_notes`）恰好相反。**
+>
+> 这个差别必须写下来，否则后来者会"顺手统一"而把其中一边改坏：
+>
+> | | 方法卡（`ctf2_solve_notes`） | 题解（`ctf2_writeups`） |
+> | --- | --- | --- |
+> | 去哪 | **另一道题**的 prompt | 赛后提交给平台 / 给人看 |
+> | 带 flag 的后果 | **泄漏**（B 题可能把 A 题的答案交上去） | 正确 —— flag 正是要展示的 |
+> | 所以 | 白名单式脱敏 | **原样保留** |
+>
+> 判据是**这份内容的去向**，不是"flag 是不是秘密"。
+
+**★ `GET /ctf2/challenges/{id}/writeup` 的 409 判据是"这道题跑过没有"**
+（2026-10-15 修正两次，见下面两段"为什么"）：
+
+| 成因 | 响应 | 话 |
+| --- | --- | --- |
+| 题不存在 | `404 NOT_FOUND` | —— |
+| **从没跑过** | `409 WRITEUP_UNAVAILABLE` | 「还没有解过……点「解题」跑一次」 |
+| **跑过但没留下题解行** | `409 WRITEUP_UNAVAILABLE` | 「这次解题没有生成题解（自 v0.36 起才产出）……重新解一次」 |
+
+**"跑过"的判据是两条证据任一成立**（`service.has_solve_attempt`）：
+
+1. `ctf2_solve_attempts` 里有没有这道题的行（v0.28 起的**受理快照**）；
+2. `Ctf2Challenge.scan_id` 是不是非空（**壳 scan**，从第一版就有）。
+
+> **为什么第一版（只看 `status == unsolved`）是错的**：`environment_ready` /
+> `solving` / `candidate_ready` / `submitting` / `failed` **都不是** `unsolved`，
+> 按状态二分会把它们全部归进第二档 —— 于是一道**正在跑**的题会被
+> 报成"解题记录早于题解功能上线（v0.36）"。用户刚点完「解题」
+> 却被告知"重新解一次"，这是本节开头那种误导的翻版。
+
+> **★ 为什么第二版（只看 `ctf2_solve_attempts`）也错 —— 少了一条时间线**
+> （2026-10-15 复核实测，Review 用全库 135 道逐题比出来的）：
+>
+> `ctf2_solve_attempts` 是迁移 `d5e8f1a37c92`（v0.28，10-11）才建的表。
+> 在那之前解的题**没有 attempt 行**，但**有壳 scan**。
+>
+> 实测：**22 道**题有 `scan_id`、无 attempt 行、无题解，其中
+> **20 道是 `solved` 且 `confirmed_flag` 非空**（`hashcat`、`Url编码`、
+> `流量！鲨鱼！`、`[ACTF2020 新生赛]Exec` …）。它们的 `solved_at` 落在
+> **09-30 ~ 10-08**，而有 attempt 的题最早是 **10-12** —— 时间上完全分界，
+> 就是"表还不存在"那段时间解的。
+>
+> 第一版判据对这 20 道**平台判过对的题**回的是「这道题还没有解过」——
+> **一句假话**。这与本节的立论（"别让错误信息误导用户"）直接冲突，
+> 所以判据必须补上 `scan_id` 这条更早的证据线。
+>
+> 两条判据的覆盖对比（实测）：只查 attempt 误判 **22** 道；
+> "attempt 或 scan_id" 误判 **0** 道。反向也安全：真没跑过的
+> **104** 道（两者皆空）在新判据下仍判"没跑过"，不会多给入口。
+> "跑过但没题解"的题从 **8** 道变成 **30** 道 —— 第二句话里
+> 「可能那一次没有留下解题过程」对这批老题正是准确的措辞。
+
+> **判据为什么不用状态**：状态会被后续流转改掉（`environment_ready`
+> 是解题过程的主状态，几十分钟里都不是 `unsolved`），而快照与壳 scan
+> 都是**落下来就不变**的事实。判"有没有发生过"，要用事实，不能用当前状态。
+
+**★ 题解正文的版式（v0.38 重做）**
+
+```
+# CTF Writeup · {title}
+> Flag / 结果 / 轮数 / 耗时          ← 一眼看到结论
+## 一、题目信息                       ← 表格 + 题面原样
+## 二、解题思路                       ← FINAL.summary（人话综述）
+## 三、解题过程                       ← 关键步骤，完整命令
+## 四、尝试与排除
+   ### 试过的方向                    ← FINAL.tried
+   ### 已排除的可能                  ← FINAL.ruled_out
+## 五、结论                           ← flag / 候选 / 卡在哪
+## 附录 A · 用到的工具
+## 附录 B · 资源消耗
+## 附录 C · 完整过程纪要             ← 原始流水挪到附录
+```
+
+> **★ v0.38 的根因不是排版，是内容被丢弃。**
+> `runner.parse_final` 一直能解出完整的结论文档，但收尾时**只取了
+> `candidates`**，`summary` / `tried` / `ruled_out` 解析完就丢掉了 ——
+> `SolveOutcome` 当时根本没有对应字段。
+>
+> 实测（`[ACTF2020 新生赛]Upload`）：题解 5873 字符，而模型在 FINAL 里
+> 写了「用响应长度做旁路：baseline=8628；上传 .php→8532…」这样的推理，
+> 在题解里 grep「响应长度」「旁路」「黑名单」**全部 0 次命中**。
+> 所以修的是**捕获**（`SolveOutcome` 加三字段 + `extract_final_analysis`），
+> 不只是渲染。
+
+> **★ `FINAL` 在 transcript 里有两种形态**（实测 61 份：裸行 35 /
+> 带 `[turn N] assistant(...)` 前缀 6 / 两种都有 1 / 都没有 19）：
+> 解析要**两路都覆盖**，只认一种会静默漏掉一批。
+> 实测 42 份能解析出分析（summary 42 / tried 33 / ruled_out 31）。
+
+> **★ 关键步骤里的 `|` 与标题层级是生成侧的契约**：
+> 表格单元格里的裸 `|` 会被 GFM 拆列（要转义成 `\|`），
+> 但**代码块里的 `|` 绝不能转义**（那是 shell 管道）；
+> 版式**最深到 h3**（前端原来未映射 h4，会整片隐形 —— 新版式不依赖它）。
+
+#### 3.19.6 ★ token 消耗统计（v0.36 新增）
+
+**记什么**：每次 LLM 调用一行（`ctf2_solve_usages`），字段是接入点给的
+`prompt_tokens` / `completion_tokens` / `total_tokens`。
+
+> **★ 为什么是"每次调用一行"而不是在尝试上加累计列。**
+>
+> 需求要的是"细分到每一次任务的消耗"，而"每一次任务"有两种读法：
+> 每次**解题尝试**、每次**LLM 调用**。独立表**同时满足两者**
+> （按 attempt 聚合即得前者）；反过来只存累计列，明细就**永久丢失**了。
+>
+> 具体能多回答的问题：哪一轮最贵、是不是在兜圈子烧钱、
+> 换模（v0.35 的 fallback）前后各花了多少 —— 这些都需要按行存。
+
+> **★ 实测：这个网关的 `usage` 同时给两套口径，而其中一套是坏的。**
+>
+> 2026-10-14 在 Kali 上实测（默认 provider `gzd` / `deepseek-v4.1-flash`）：
+>
+> | 字段 | 简单问答 | 推理型问答 | 能用吗 |
+> | --- | --- | --- | --- |
+> | `prompt_tokens` | 37 | 75 | ✅ |
+> | `completion_tokens` | 44 | 904 | ✅ |
+> | `total_tokens` | 81 | 979 | ✅ |
+> | `input_tokens` | 37 | 75 | ⚠️ 与 prompt 重复 |
+> | **`output_tokens`** | **0** | **0** | ★ **恒为 0，不可用** |
+> | `reasoning_tokens` | 0 | **0** | ⚠️ 实测不给，不可依赖 |
+>
+> 响应里同时有 `usage_semantic: "openai"` 与 `usage_source: "anthropic"`
+> —— 这是**自建网关转译**的特征。若照 Anthropic 那套读
+> `input_tokens` / `output_tokens`，会**静默少算全部输出**
+> （而界面上显示 0 看起来像"没跑过"，比不显示更坏）。
+>
+> 另：推理型那次 `completion_tokens = 904` 而 `content` 只有 280 字 ——
+> 说明**推理开销已计入 completion**，不必单加 `reasoning_tokens`。
+> 仍然留一列备查（别的接入点可能会给）。
+
+**`calls` 与 `recordedCalls` 分开**（见 §2.10 的说明）：前者永远准确，
+后者是"接入点真给了 usage"的次数。两者不等时界面要**明说**，
+不能让"没记录"伪装成"消耗 0"。
+
+**不做 token → 金额的换算**：单价随模型、供应商、时段变化，
+写死在代码里会误导。只给 token 数，换算由用户自己乘。
+
+> **历史数据如实标注**：本功能上线**之前**的解题没有 usage 记录。
+> 统计接口会带上 `since` 字段说明"从哪一刻开始有数据"，
+> **不伪造历史**（同 §3.18 的"宁可少说，不说错的"）。
 
 ---
 
@@ -3445,3 +3715,7 @@ npm run verify:all        # 上面两个 + 报告预览导出一致性
 | v0.22 | **最后六个 501 清零 —— 设置页不再有死块**（触发点：交付评估时量化出"6 个端点返回 501，全部集中在通知与设置快照"，而那是企业用户打开设置页就会撞上的东西）。**做法与边界**：① **`GET /settings` 真的返回完整四块**（accounts / sandbox / notices / tokens）。它此前长期 501，理由是"缺三块却回 200 会让调用方以为拿全了" —— **那条判断至今成立，本轮没有推翻它**，推翻的是它的前提（四块现在都拼得出来）。⚠️ 规矩留着：只要还有一块拼不出来，这个端点就该继续 501；回一个缺字段的 200 比 501 糟得多。响应里**没有** `status` / `error` —— 它们是前端 `SettingsSnapshot` 上的本地加载状态，服务端下发等于替前端声明它自己的状态机。② **新增 `GET /settings/notices/rule` 与 `GET /settings/notices/channels`** 两个读端点（此前只有写，读只能靠 501 的快照）；渠道列表返回**裸数组**，与 `GET /settings/tokens` 同形状，前端两处共用同一个渲染组件。③ **规则与渠道保持两个端点、两个维度**：合成一个对象会让「邮件收全部、Slack 只收严重」这种运维常态**无处表达**。④ **四条实现约束**（都写进了 §3.7 的通知小节）：`verified` **不接受客户端传**（schema 里就没有这个字段，`StrictModel` 会 400 并点名）；★ **改 `target` 必须把 `verified` 打回 `False`**（它的含义是"**这个地址**验证过"，地址变了事实就不成立 —— 漏掉的症状是"显示已验证、真出事时一条都没发出去"），而改 `label`/`enabled` 不影响验证状态；**停用的渠道仍然列出**（停用是状态不是删除，隐藏它会让用户以为配置丢了；这与 tokens 的"已吊销不列出"**不同**，因为已吊销的令牌留着会造成"它还能用"的误解）；**`POST .../test` 本轮只做本地校验、不真的往外发** —— 真实发送需要 SMTP / Webhook / Slack 三套协议实现，是独立的一块工作，而**假装发了是禁止的**（会让界面显示已验证而实际发不出去），所以它校验地址形状并把结论如实写回 `verifyError`，形状判据**刻意宽松**（配置校验不是安全边界）。⑤ **`minSeverity` 走白名单校验**：DB 上有 CHECK 兜底，但那条会抛 Postgres 的约束违反错误，用户看不懂，所以路由层先校验并给中文原因。⑥ 新增 `tests/test_settings_notices.py`（16 条），其中三条专门盯"最容易漏"的地方：`verified` 传不进去、改地址会重置验证、改名字**不会**重置。**顺带**：反向端点对账脚本（v0.21 加的）自动发现端点总数从 103 变成 **105** 并确认契约已覆盖 —— 这正是它存在的意义（人工清单不会注意到新增了两个端点） |
 
 | v0.24 | **多用户与两档角色**（触发点：交付评估时把"单管理员模型"列为缺口之一，用户选定方案 B —— 多用户单租户 + 管理员/只读两档）。**① 数据模型**：`admin_accounts` 加 `username`（NOT NULL + UNIQUE）与 `role`。表结构其实早就为这一刻留了余地（id、时间戳、sessions 关系都在，当时的注释就写着"将来真加第二个人时，改的是插入逻辑而不是表结构"）—— 但漏了两件事，因为单账号时代**它们不需要存在**：登录要用 `username` 区分是谁，权限分档要用 `role`。**② 迁移 `c1f5a83d2e07` 的关键是存量回填**：`username='admin'` + `role='admin'`。取值不是随意的 —— 回填成 `viewer` 会让升级后**没人能改设置**（一个自锁）。做法是先加可空列、回填、再设 NOT NULL（不能直接加 NOT NULL：Postgres 的检查发生在语句执行时，存量行会立刻违反）。**③ `role` 刻意不加 CHECK 约束**（与项目里其它枚举列不同）：它的取值集合将来最可能变（加一档"能扫描但不能改设置"很自然），而每加一档就要写一个迁移重建 CHECK。未知角色由 `scopes_for_role` 兜成**空集**（403）而不是默认给 `read` —— 安全的方向是"什么都不给"。**④ `require_admin_session`**：用户管理的四个端点不接受机器令牌。**这不是"更严一点"，而是一条明确的安全边界** —— 管用户是"对权限本身的操作"，令牌若能做这件事就能**自我放大**（创建一个新管理员、或改掉签发者的角色），而令牌是长期有效的（可设永不过期），泄漏一个就等于永久拿到用户管理权。**⑤ 角色变更立刻生效**：`resolve_identity` 每次请求都读一次账号（主键查询），而不是把角色缓存在会话里。这不是性能取舍，是安全要求 —— "我刚把他降成只读，他还在发起扫描"是一个真实的权限漏洞；缓存在会话里会让降级延迟到该会话过期（默认 12 小时）。**⑥ 三条防自锁规则**（删最后一个管理员 / 删自己 / 降级最后一个管理员），各带专门的错误码，因为前端要给出不同的补救动作。**⑦ 顺带修掉两处**：`read_me` 原来调 `get_account(db)` 取"库里第一个账号" —— 单管理员时代没问题，多用户之后会让**每个用户都看到同一个人的身份**（包括 `role`，而前端要据此决定显不显示管理入口）；`GET /providers` 从 `admin` 放宽到 `read` —— 它原来在矩阵里的论证（"返回部署配置的形状"）在单管理员时代无害，但引入 viewer 后变成真问题：前端顶部状态条读它显示"当前模型"，若要求 admin，viewer 登录后状态条会报错，而那个错误看起来像"系统坏了"。放宽是安全的：这个端点不返回任何明文凭据（`apiKey` 恒为空串，只有 `apiKeyMask`）。**⑧ 新增** `tests/test_users_and_roles.py`（23 条）与 `src/data/users-store.test.ts`（12 条），并做过**突变验证**：9 处关键防线逐个破坏、确认对应测试变红（其中 2 处第一轮**没变红**，暴露出"未知角色兜成 read"与"时序侧信道"两个测试盲区，已补）。**⑨ 契约**：新增 §2.11（用户与角色）+ 错误码 3 个 + 审计动作 3 个 + §3.1 端点表补 4 行 |
+| v0.36 | **CTF2 题解产出 + token 消耗统计**（触发点：CTF2 题目卡上的「题解」入口点开得到「这次扫描没有留下报告文件」，而那句提示在**误导用户**）。**① 题解不走 scans 那条路**（新增 §3.19.5）：CTF2 解题由 `ctf2/runner.py` 自己的循环驱动、**从不产生 `penetration_test_report.md`**，所以扫描的题解端点对它**永远**找不到东西。修法是 `GET /scans/{id}/writeup` 认出 `origin="ctf2"` 的壳并返回 409 指路，同时新增 `GET /ctf2/challenges/{id}/writeup`。**② flag 不脱敏**（与「方法卡」恰好相反）：方法卡会注入**另一道题**的 prompt（带 flag 就是泄漏），题解是赛后**提交给平台**的（flag 正是要展示的）。两者共用 `key_steps_from_transcript`，所以给它加了 `sanitize` 参数，默认 `True`（偏向危险的那一侧：忘了传只是题解少了地址，反过来是方法卡泄漏靶机地址）。**③ token 统计**（新增 §3.19.6）：每次 LLM 调用一行（`ctf2_solve_usages`），不是"在尝试上加累计列" —— 累计列**永久丢失**"哪一轮最贵 / 换模前后各花多少"这类明细。**④ 实测发现该网关的 `usage` 同时给两套口径，而其中一套是坏的**：`output_tokens` 恒为 0（照 Anthropic 那套读会**静默少算全部输出**），所以只认 `prompt_tokens`/`completion_tokens`/`total_tokens`。**⑤ `calls` 与 `recordedCalls` 必须分开**：接入点没给 usage 时 token 记 0，而"真的是 0"与"没记录到"在界面上长得一样（同 §2.10 的 `hasKey`/`apiKey`、`candidateFlag`/`confirmedFlag` 那条纪律）。另加 `usage_reported` 列区分二者。**⑥ 不做 token → 金额换算**：单价随模型/供应商/时段变，写死会误导。**⑦ 历史如实标注**：本功能上线**之前**的解题没有 usage 记录，统计接口带 `since` 说明从哪一刻开始，**不伪造历史**。**⑧ 2026-10-15 修正三处**（本轮实现 + 复核发现）：`GET /ctf2/challenges/{id}/writeup` 的 409 判据从 `status == unsolved` 改为**受理快照存不存在**（旧写法会让一道**正在跑**的题被报成"解题记录早于 v0.36"，是假话）；§2.10 的三行字段表比实现短（`Ctf2Writeup` 缺 `turns`/`elapsedSec`/`updatedAt`、`Ctf2TokenUsage` 缺 `since`、`Ctf2UsageEntry` 缺 `reasoningTokens`）已补齐。**⑨ 新增测试** `tests/ctf2/test_writeup.py`（纯拼装、含"flag 不被脱敏"的回归钉子）、`test_usage_and_writeup.py`（落库与聚合口径）、`test_usage_endpoints.py`（端点字段名逐字核对 + 五个中间态的回归钉子） |
+| v0.37 | **题解回填 + token 粒度**（触发点：用户截图那道 `[极客大挑战 2019]Havefun` 弹「这道题还没有题解」，而它 10-01 就已解出）。**① 回填 26 道**：`runner` 收尾时**无条件**调 `save_writeup`，但那一句是 v0.36 才加的 —— 所以之前解出的题**从来没有题解**（实测 `solved=26` 而 `writeups=1`）。修法是 `scripts/backfill_ctf2_writeups.py`：从 `_ctf2_solves/` 的 transcript 重建 outcome 并重跑 `build_writeup`。**26 道全部可回填**（transcript 26/26 都在），幂等。⚠️ **`turns` 不能靠"数 `[turn N]` 行"** —— 实测一个文件里那类行 210 行而真实轮数 76（一行能塞多轮），要取**最大 turn 号**。**② `byAttempt`**（见 §2.10）：`byChallenge` 按题聚合，而一道题可解多次（Upload 解过 4 次）。**③ 判据补 `scan_id`**：`has_solve_attempt` → `was_solve_started`，因为 `ctf2_solve_attempts` 是 v0.28 才建的表，只看它会让 **20 道平台判过对的题**被报"还没有解过"。 |
+| v0.38 | **题解质量重做**（触发点：用户原话「解题wp写的太过简陋，要求规范一点」）。**★ 根因不是排版，是内容被丢弃**：`runner.parse_final` 一直能解出完整结论文档，但收尾只取了 `candidates`，`summary` / `tried` / `ruled_out` **解析完就丢掉了**（`SolveOutcome` 当时没有对应字段）。实测 `[ACTF2020 新生赛]Upload`：题解 5873 字符，而模型写了「用响应长度做旁路：baseline=8628；上传 .php→8532…」，在题解里 grep 那些关键词**全部 0 次命中**。**① 捕获三字段**：`SolveOutcome` 加 `summary`/`tried`/`ruled_out` + 新函数 `extract_final_analysis`（容错：缺字段/单字符串/数组混非字符串都不抛）。**② 版式重做**（见 §3.19.5）：五节正文 + 三个附录，头部一眼看到结论。**③ 修 160 字符截断**：`key_steps_from_transcript` 加 `clip` 参数（题解 800、方法卡仍 160）；⚠️ **判据始终按 160 那版算**，所以放宽它**不改变方法卡行为**。**④ 重生成 28 份历史题解**：81814 → **115829 字符**（+34KB 被丢弃的内容回来了），覆盖 summary 28 / tried 22 / ruled_out 19。**⑤ 表格 `\|` 转义**（生成侧责任：GFM 下单元格里的裸 `\|` 会拆列），但**代码块里的 `\|` 绝不转义**（shell 管道）。**⑥ 版式最深 h3** —— 明确告知渲染侧不依赖 h4。**⑦ 一处实测踩到的坑**：重生成脚本第一版传 `now=row.updated_at` 做幂等锚点，而 `updated_at` 带 `onupdate`、每次写库都被刷新 → **永远差两秒、永不幂等**；改用 `generated_at`（只在 INSERT 写）后，重跑第 2/3 次均为"重生成 0 / 内容未变 28"。 |
+| v0.39 | **线上暴露面加固**（触发点：一份对 `http://suvex.asia` 的只读审计 F1–F8，全部实测复核属实）。**★ 根因是"开发服务器当生产用"**：隧道映射到 `127.0.0.1:5173`，而那是 `npx vite --host 0.0.0.0` —— 实测 `GET /@vite/client` 返回 **210,597 字节**、`/src/*.tsx` 直接返回 **TS 源码 + sourcemap**。**① 换生产构建**：`dist/`（6.0M / 149 assets / 无 .map）经 nginx 静态服务，`/api` 反代到 `127.0.0.1:8000`。⚠️ 静态根**不能**用 `/root/suvex/.../dist` —— nginx worker 以 `www-data` 跑而 `/root` 是 700，会**全部 403**（实测 `stat() failed (13: Permission denied)`）；正解是 bind mount 到 `/opt/suvex/suvex-web/dist`（**不能复制**，复制会在下次构建后静默变旧）。**② `Host` 必须 `$http_host`**（不是 `$host`/`$proxy_host`）：`enforce_csrf` 用 `request.url.netloc` 算 `own`，`$host` 会丢端口 → 所有写操作 403。**实测**：正确 Origin → 越过 CSRF 到达业务校验（400 字段校验）、恶意 Origin → **403 `CROSS_ORIGIN_BLOCKED`**。**③ SSE** `proxy_buffering off` + `gzip off`。**④ 三处暴露面收敛**（见 §3.8）：docs/openapi **默认关**、metrics **默认关**、sandbox 镜像名**默认空**。**⑤ F4**：OpenAPI 补 `securitySchemes`（原来 `null`）。**⑥ 显式 404 掉 dev server 路径**（`/@vite`、`/src/` 等）—— 否则会走 SPA 回退返回 200，让扫描器以为"这些路径存在"。**⑦ 一条"假防线"的发现**：通用模板里 `/metrics` 的 `allow 127.0.0.1` 在**隧道拓扑下无效**（frpc 从本机连入，`$remote_addr` 恒为 127.0.0.1）—— 那种"看起来有防线、实际没有"比不写更糟，所以本部署改用应用层默认关闭，并在配置里写明为什么。**⑧ 未做（等用户定）**：HTTPS（F2）、`_allowed_origins` 无条件信任 `X-Forwarded-Host`（反代侧已刻意不发该头以缩小伪造面）、SSRF 黑名单绕过、302 重定向绕过白名单。 |

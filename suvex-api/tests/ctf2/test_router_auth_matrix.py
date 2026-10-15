@@ -53,6 +53,18 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # 轮询它，所以它必须是 read 级（否则只读令牌看不了进度）。
         ("GET", "/api/v1/ctf2/platforms"),
         ("GET", "/api/v1/ctf2/platforms/{platformId}"),
+        # ── 题解与 token 统计（v0.36）──────────────────────
+        #
+        # 三个都是**纯读本地库**：题解是解题收尾时落库的 markdown，
+        # 统计是对 `ctf2_solve_usages` 求和。都不打平台、不含凭据。
+        #
+        # ⚠️ 题解里**有 flag 原文**（它是赛后提交给人看的）——
+        #    但这仍然够 read 级：flag 本来就在 `GET /ctf2/challenges`
+        #    的 `confirmedFlag` 里（同一份数据、同一个级别）。
+        #    需要拔高的是"提交"（对外动作 + 消耗不可再生额度），不是"看"。
+        ("GET", "/api/v1/ctf2/challenges/{challengeId}/writeup"),
+        ("GET", "/api/v1/ctf2/challenges/{challengeId}/usage"),
+        ("GET", "/api/v1/ctf2/usage"),
     }
 )
 

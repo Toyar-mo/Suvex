@@ -490,7 +490,14 @@ def test_overview_is_no_longer_a_stub(ready_client: TestClient) -> None:
 def test_response_shape_matches_frontend_type(ready_client: TestClient) -> None:
     """★ 响应形状与 `data/overview.ts` 的 `OverviewData` 逐字段一致。
 
-    前端接线时不该需要改任何类型 —— 包括 `metrics` 的六个字段名。
+    前端接线时不该需要改任何类型 —— 包括 `metrics` 的每个字段名。
+
+    ⚠️ 改这里必须**同时**改三处，否则形状会漂移：
+    ① `overview/schemas.py` 的 `OverviewMetricsOut`；
+    ② `suvex-web/src/data/overview.ts` 的 `OverviewMetrics`；
+    ③ 本断言。
+    这条测试就是那个"盯着三处一致"的东西 —— 它红过（v0.36 加 token
+    字段时先只改了两处）。
     """
     body = ready_client.get(f"{API}/overview").json()
 
@@ -502,6 +509,11 @@ def test_response_shape_matches_frontend_type(ready_client: TestClient) -> None:
         "verifiedPocCount",
         "avgScanDurationSec",
         "falsePositiveCount",
+        # v0.36：CTF2 token 消耗（见 schemas 里那一段的说明）
+        "ctf2LlmCalls",
+        "ctf2RecordedCalls",
+        "ctf2TotalTokens",
+        "ctf2UsageSince",
     }
 
 

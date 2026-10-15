@@ -149,6 +149,17 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #    （`test_the_two_matrices_agree` 会盯着）。
         ("GET", "/api/v1/ctf2/platforms"),
         ("GET", "/api/v1/ctf2/platforms/{platformId}"),
+        # ── 题解与 token 统计（v0.36）──────────────────────
+        #
+        # 三个都是**纯读本地库**：题解是解题收尾时落库的 markdown，
+        # 统计是对 `ctf2_solve_usages` 求和。都不打平台、不含凭据。
+        #
+        # ⚠️ 题解里有 flag 原文（赛后提交给人看的）—— 仍是 read 级：
+        #    flag 本来就在 `GET /ctf2/challenges` 的 `confirmedFlag` 里。
+        #    需要拔高的是"提交"（对外动作 + 消耗额度），不是"看"。
+        ("GET", "/api/v1/ctf2/challenges/{challengeId}/writeup"),
+        ("GET", "/api/v1/ctf2/challenges/{challengeId}/usage"),
+        ("GET", "/api/v1/ctf2/usage"),
         # ── 补一条**既有的漏项**（v0.20 顺手补，与 CTF2 无关）──
         #
         # `GET /scans/{scanId}/writeup` 是任务 19（题解）加的端点，

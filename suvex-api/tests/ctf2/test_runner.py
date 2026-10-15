@@ -519,6 +519,73 @@ def test_parse_final_reads_candidates() -> None:
     assert [c.flag for c in runner.extract_candidates(payload)] == ["flag{ok}"]
 
 
+# ══════════════════════════════════════════════════════════
+# ★★ v0.38：FINAL 的三块分析（summary / tried / ruled_out）
+# ══════════════════════════════════════════════════════════
+
+
+def test_extract_final_analysis_reads_all_three() -> None:
+    """★ 三块都要取出来 —— 它们以前被整段丢掉（题解"简陋"的根因）。"""
+    payload = {
+        "candidates": [],
+        "summary": "目标是 PHP 上传点，黑名单只挡 php。",
+        "tried": ["用响应长度做旁路：baseline=8628", "试过 .phtml"],
+        "ruled_out": ["上传目录 /upload/ 不存在"],
+    }
+
+    summary, tried, ruled_out = runner.extract_final_analysis(payload)
+
+    assert summary == "目标是 PHP 上传点，黑名单只挡 php。"
+    assert tried == ["用响应长度做旁路：baseline=8628", "试过 .phtml"]
+    assert ruled_out == ["上传目录 /upload/ 不存在"]
+
+
+def test_extract_final_analysis_tolerates_bad_shapes() -> None:
+    """形状不对就当没有，**不抛** —— 统计不该毁掉一次解题的结果。
+
+    实测模型会给的形状：缺字段 / 单个字符串 / 数组里混 null 与数字。
+    """
+    # 全缺
+    assert runner.extract_final_analysis({}) == ("", [], [])
+    assert runner.extract_final_analysis(None) == ("", [], [])
+
+    # 单个字符串包成一项（模型偶尔把数组写成一个长句）
+    summary, tried, _ = runner.extract_final_analysis({"tried": "只试了一件事"})
+    assert summary == ""
+    assert tried == ["只试了一件事"]
+
+    # 数组里混非字符串 → 逐项过滤，只留非空字符串
+    _, tried, ruled = runner.extract_final_analysis(
+        {"tried": ["好的", None, 123, "", "  ", {"step": "嵌套对象"}], "ruled_out": "不是数组但也不是列表"}
+    )
+    assert tried == ["好的"]
+    # `ruled_out` 给的是字符串 → 包成一项
+    assert ruled == ["不是数组但也不是列表"]
+
+    # 不是 dict
+    assert runner.extract_final_analysis("FINAL: {}") == ("", [], [])
+
+
+def test_extract_final_analysis_strips_whitespace() -> None:
+    """首尾空白要 strip —— 否则题解里会出现多余空行。"""
+    summary, tried, ruled = runner.extract_final_analysis(
+        {"summary": "  有内容  ", "tried": ["  项  "], "ruled_out": [" 项2 "]}
+    )
+
+    assert summary == "有内容"
+    assert tried == ["项"]
+    assert ruled == ["项2"]
+
+
+def test_solve_outcome_carries_the_analysis_fields() -> None:
+    """`SolveOutcome` 上真的有三个字段（默认空，不是没有）。"""
+    outcome = runner.SolveOutcome()
+
+    assert outcome.summary == ""
+    assert outcome.tried == []
+    assert outcome.ruled_out == []
+
+
 def test_extract_candidates_drops_bad_and_keeps_good() -> None:
     """★ 坏候选丢掉、好候选留下，**不因为一条坏的就全丢**。
 
@@ -640,16 +707,45 @@ def test_interpret_submit_understands_the_real_ctf2_field_names() -> None:
 
 
 class _FakeGateway:
-    """按剧本回话的假 LLM。**记录收到的消息**，让"喂回去什么"可断言。"""
+    """按剧本回话的假 LLM。**记录收到的消息**，让"喂回去什么"可断言。
 
-    def __init__(self, replies: list[str]) -> None:
+    ## ★ v0.36：必须带 `model` / `label` / `usage`
+
+    解题循环现在会把每次调用的 `(turn, gateway.model, gateway.label,
+    reply.usage)` 收进 `SolveOutcome.usages`（token 统计的数据来源）。
+    所以假 gateway 要**与真 `LlmGateway` 同形** —— 少了属性，
+    循环会在生产代码那一行抛 `AttributeError`。
+
+    ⚠️ 这个坑是实测踩到的：第一版假 gateway 只有 `chat()`，
+    加统计之后 `tests/ctf2/` 里 **8 个用例**同时报
+    `'_FakeGateway' object has no attribute 'model'`。
+
+    `usage` 默认给一个**有值**的用量：这样"统计链路通不通"这件事
+    在每个既有用例里都被顺带验证了，而不是只在专门的用例里。
+    需要测"接入点没给 usage"时传 `usage=TokenUsage()`（reported=False）。
+    """
+
+    def __init__(
+        self,
+        replies: list[str],
+        *,
+        model: str = "fake-model",
+        label: str = "fake-label",
+        usage: runner.TokenUsage | None = None,
+    ) -> None:
         self.replies = list(replies)
         self.seen: list[list[dict[str, str]]] = []
+        self.model = model
+        self.label = label
+        # 默认给一个非零用量 —— 见类 docstring 的说明。
+        self.usage = usage if usage is not None else runner.TokenUsage(
+            prompt_tokens=10, completion_tokens=20, total_tokens=30, reported=True
+        )
 
     async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
         self.seen.append(list(messages))
         text = self.replies.pop(0) if self.replies else 'FINAL: {"candidates": []}'
-        return runner.LlmReply(text=text, source="content")
+        return runner.LlmReply(text=text, source="content", usage=self.usage)
 
 
 class _FakeSandbox:
@@ -1816,6 +1912,11 @@ class _FailThenSucceedGateway:
 
     `failover()` 返回的就是**它自己** —— 这样换模之后继续用的是同一个
     假对象，能直接断言"换模后确实又调了一次、并且拿到了结论"。
+
+    ⚠️ v0.36：同样要带 `model` / `label`（见 `_FakeGateway` 的说明）。
+    `failover()` 里改 `model` 是为了让**换模后的轮次记到新模型名下** ——
+    那正是 `Ctf2SolveUsage.model` 这一列存在的理由（同一次尝试、
+    两个模型，要能算出"换模前后各花多少"）。
     """
 
     def __init__(self, *, fail_times: int = 1, then: str) -> None:
@@ -1823,15 +1924,26 @@ class _FailThenSucceedGateway:
         self.then = then
         self.calls = 0
         self.failovers: list[runner.FallbackLlm] = []
+        self.model = "primary-model"
+        self.label = "primary-label"
 
     async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
         self.calls += 1
         if self.calls <= self.fail_times:
             raise runner.Ctf2Error("调用 LLM 失败（ConnectError）：连接被拒绝")
-        return runner.LlmReply(text=self.then, source="content")
+        return runner.LlmReply(
+            text=self.then,
+            source="content",
+            usage=runner.TokenUsage(
+                prompt_tokens=10, completion_tokens=20, total_tokens=30, reported=True
+            ),
+        )
 
     def failover(self, other: runner.FallbackLlm) -> _FailThenSucceedGateway:
         self.failovers.append(other)
+        # 换模后按**新**接入点记账（与真 `LlmGateway.failover` 返回新对象同义）。
+        self.model = other.model
+        self.label = other.label
         return self
 
 
