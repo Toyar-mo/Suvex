@@ -38,6 +38,9 @@ from typing import Any
 
 import httpx
 
+from app.ctf2.adapters.redirect import request_same_host
+from app.ctf2.client import Ctf2Error
+
 logger = logging.getLogger("suvex.ctf2")
 
 # ── 认证方式的候选 ─────────────────────────────────────────
@@ -304,9 +307,14 @@ class Prober:
         #   账号短暂打进 429 —— 而比赛期间那是要用来提交答案的额度。
         self._min_interval = min_interval
         self._last = 0.0
+        # ★ `follow_redirects=False` —— 理由同 `transport.py`：跳转必须
+        #   逐跳过白名单，而 httpx 自己跟的话只在入口校验一次。
+        #   探测阶段打的端点最多，这条尤其要紧。
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=True, transport=transport
+            timeout=timeout, follow_redirects=False, transport=transport
         )
+        #: 用户填的那个主机（小写、已剥端口）—— 跳转的唯一合法目标。
+        self._base_host = (parsed.host or "").lower()
         self._findings: dict[str, Finding] = {}
         self._last_url = self.base_url
         self._requests = 0
@@ -354,10 +362,20 @@ class Prober:
             await self._throttle()
             self._requests += 1
             try:
-                response = await self._client.get(
-                    url, headers=headers if headers is not None else {}
+                response = await request_same_host(
+                    self._client,
+                    "GET",
+                    url,
+                    base_host=self._base_host,
+                    headers=headers if headers is not None else {},
                 )
             except httpx.HTTPError:
+                continue
+            except Ctf2Error:
+                # 跨 host 跳转 / 跳进被拒地址：这个端点不可用。
+                # ⚠️ 探测是**尽力而为**的（几十个候选端点里挑活的），
+                #    所以这里不往上抛 —— 抛出去会让一次探测整体失败，
+                #    而正确的语义是"这个候选端点不算数，换下一个"。
                 continue
             rank = self._rank(response)
             if rank > best_rank:

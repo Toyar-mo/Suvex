@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 
+from app.ctf2.adapters.redirect import request_same_host
 from app.ctf2.adapters.spec import AuthSpec, EnvelopeSpec, dig, dig_str
 from app.ctf2.client import (
     Ctf2AuthExpired,
@@ -76,9 +77,15 @@ class JsonPlatformTransport:
         #   把提交也拖下水。
         self._min_interval = min_interval
         self._last_request = 0.0
+        # ★ `follow_redirects=False` —— 跳转由 `redirect.request_same_host`
+        #   自己跟，因为**白名单必须逐跳生效**。开 `True` 的话 httpx 会自己
+        #   跟到任意主机上，而我们的校验只发生在用户填 URL 的那一刻：
+        #   实测能把内网服务的响应体读出来（见 `redirect.py` 的说明）。
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=True, transport=transport
+            timeout=timeout, follow_redirects=False, transport=transport
         )
+        #: 用户填的那个主机（小写、已剥端口）—— 跳转的唯一合法目标。
+        self._base_host = (httpx.URL(self._base).host or "").lower()
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -108,8 +115,14 @@ class JsonPlatformTransport:
         headers = {"Accept": "application/json", **self._auth.headers(self._key)}
 
         try:
-            response = await self._client.request(
-                method, f"{self._base}{path}", params=query, json=body, headers=headers
+            response = await request_same_host(
+                self._client,
+                method,
+                f"{self._base}{path}",
+                base_host=self._base_host,
+                params=query,
+                json=body,
+                headers=headers,
             )
         except httpx.HTTPError as exc:
             raise Ctf2Unavailable(f"平台请求失败：{exc}") from exc
