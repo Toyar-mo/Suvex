@@ -269,9 +269,24 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
         # 文档路径放在 API 前缀下，与端点同一个命名空间。
         # 放在根上会让「这个 /docs 是哪个服务的」在反代后面变得含糊。
-        docs_url=f"{settings.api_prefix}/docs",
+        #
+        # ★★ v0.39：文档可**独立关闭**（`SUPEX_EXPOSE_DOCS`，默认关）。
+        #
+        # ## 为什么不绑在 `SUPEX_ENV` 上（这是本处最容易写错的地方）
+        #
+        # 直觉写法是"prod 就关文档"。但 `assert_bootable()` 要求
+        # `env=prod` 时必须 `cookie_secure=true`，而线上是 **http** ——
+        # `Secure` cookie 在 http 下浏览器不回传，**登录会直接坏掉**。
+        # 于是"关文档"会逼出一个"必须上 HTTPS"的要求，两件事被错误地
+        # 绑在一起。解耦后：`env` 管部署安全属性，这个开关只管挂不挂文档。
+        #
+        # 关掉时传 `None` —— FastAPI 认这个值表示"不挂该路由"
+        # （而不是挂一个 404 的占位）。
+        docs_url=f"{settings.api_prefix}/docs" if settings.expose_docs else None,
         redoc_url=None,
-        openapi_url=f"{settings.api_prefix}/openapi.json",
+        openapi_url=(
+            f"{settings.api_prefix}/openapi.json" if settings.expose_docs else None
+        ),
         openapi_tags=[
             {"name": "认证", "description": "登录、初始化、会话"},
             {"name": "健康检查", "description": "无需鉴权的探活"},
@@ -293,6 +308,62 @@ def create_app() -> FastAPI:
     # 异常处理器必须在 include_router 之前注册吗？不必 —— 它们挂在 app 上，
     # 而路由是在请求时才查处理器。放在前面只是为了读起来有顺序。
     register_exception_handlers(app)
+
+    # ★★ v0.39（F4）：把**认证方案**写进 OpenAPI。
+    #
+    # ## 修的是什么
+    #
+    # 加固前实测：`/api/v1/openapi.json` 里 `securitySchemes` 与顶层
+    # `security` 都是 **null** —— 也就是说这份文档**从没说过自己怎么鉴权**。
+    # 而它自称是"机器可读的接口说明"，调用方照着它写客户端时会
+    # 完全不知道要带 `Authorization: Bearer` 或会话 Cookie。
+    #
+    # ## 为什么本平台有**两套**通道（这不是冗余）
+    #
+    # 见 `auth/deps.py` 的说明：
+    #   · `Authorization: Bearer svx_…` —— 机器令牌（CI / 脚本）；
+    #   · `Cookie: suvex_session=…`    —— 人在浏览器里。
+    # 两者同时存在时**以 Bearer 为准**。
+    #
+    # ⚠️ 用 `openapi_extra` 在**应用级**声明，而不是给每个路由挂
+    #    `Depends(HTTPBearer())`：那会真的改变依赖解析（多一层校验），
+    #    而本处的目标只是**如实描述**已有的鉴权，不改行为。
+    app.openapi_schema = None  # 清掉可能的缓存，确保下面生效
+    _original_openapi = app.openapi
+
+    def _openapi_with_security():  # noqa: ANN202
+        schema = _original_openapi()
+        components = schema.setdefault("components", {})
+        schemes = components.setdefault("securitySchemes", {})
+        schemes.setdefault(
+            "BearerAuth",
+            {
+                "type": "http",
+                "scheme": "bearer",
+                # 形状写进描述：`svx_` 前缀是 `resolve_token` 的第一道判据
+                # （见 `auth/service.looks_like_machine_token`）。
+                "description": "机器令牌，形如 `svx_…`。用于 CI / 脚本。",
+            },
+        )
+        schemes.setdefault(
+            "SessionCookie",
+            {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": settings.session_cookie_name,
+                "description": (
+                    "浏览器会话 Cookie。写操作还需通过 CSRF 同源校验"
+                    "（见契约 §1.2）。"
+                ),
+            },
+        )
+        # 顶层 `security`：说明"默认需要鉴权"。
+        # ⚠️ 用**两者之一**的语义（OpenAPI 里同一项内的多个 scheme 是 AND，
+        #    多项之间才是 OR）—— 所以这里放**两个项**。
+        schema.setdefault("security", [{"BearerAuth": []}, {"SessionCookie": []}])
+        return schema
+
+    app.openapi = _openapi_with_security
 
     app.add_middleware(
         CORSMiddleware,

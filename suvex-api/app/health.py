@@ -1,21 +1,39 @@
 """健康检查与指标（契约 §3.8）。
 
-| 方法 | 路径               | 鉴权   |
-| ---- | ------------------ | ------ |
-| GET  | `/health`          | public |
-| GET  | `/health/sandbox`  | public |
-| GET  | `/metrics`         | public |
+| 方法 | 路径               | 鉴权   | v0.39 起的暴露条件 |
+| ---- | ------------------ | ------ | ------------------ |
+| GET  | `/health`          | public | 恒可读（只有 status + 版本） |
+| GET  | `/health/sandbox`  | public | `status` 恒可读；**镜像名**需 `SUPEX_EXPOSE_SANDBOX_IMAGE` |
+| GET  | `/metrics`         | public | 需 `SUPEX_METRICS_ENABLED` **且** `SUPEX_EXPOSE_METRICS` |
 
 ⚠️ **都是 public**。这不是疏忽：调用方是容器编排器、监控与
 Prometheus 抓取器，它们没有凭据。所以它们**不能泄露内部信息** ——
 
 * `/health` 只回 `status` 与版本号。**不回数据库地址、不回延迟、不回表数量。**
-* `/health/sandbox` 回沙箱状态与镜像名。镜像名算不算敏感？
-  它只是本平台自己的镜像 tag（`suvex/sandbox:1.4`），不涉及用户资产 ——
-  而它正是 Settings 页面要显示的东西，且该页面本身要登录。
-  这里放行是因为容器的 healthcheck 需要在没有凭据的情况下判断沙箱是否可用。
+* `/health/sandbox` 回沙箱状态；**镜像名默认不回**（v0.39，见下）。
 * `/metrics` 只回**数字**（请求计数、耗时总和、扫描状态分布），
   不含任何业务数据内容 —— 见 `core/metrics.py` 的说明。
+
+## ★★ v0.39：三处公网暴露面的收敛（F3/F5/F6）
+
+公网实测（`http://suvex.asia`，匿名）：
+
+| 端点 | 加固前 | 加固后 |
+| --- | --- | --- |
+| `/api/v1/openapi.json` | 200，**93 个 path** | 404（除非 `SUPEX_EXPOSE_DOCS=true`）|
+| `/api/v1/docs` | 200 | 404（同上）|
+| `/api/v1/metrics` | 200，6111 字节含各路由计数 | 404（除非显式开启）|
+| `/api/v1/health/sandbox` | `{"status":"stopped","image":"suvex/sandbox:1.4"}` | `{"status":"stopped","image":""}` |
+
+**为什么镜像名算敏感**（本模块原来自己在问这个问题，现在有答案了）：
+一个**具体到版本号**的 tag 是**可定向的** —— 能据此找该版本已知 CVE。
+原先的论证是"Settings 页面要显示它，而那个页面要登录" —— 成立，
+但它推出的是"**登录后**才该看到"，不是"匿名可读"。
+
+**为什么这些开关不绑在 `SUPEX_ENV` 上**：`assert_bootable()` 要求
+`env=prod` 时必须 `cookie_secure=true`，而线上是 http ——
+`Secure` cookie 在 http 下不回传，**登录会坏掉**。两件事必须解耦，
+详见 `core/config.py` 里那两个开关的说明。
 
 `status` 的取值：`ok` | `degraded`。**用 `degraded` 而不是直接 503** ——
 编排器看到 503 会重启容器，而"数据库连不上"重启应用是没用的，
@@ -51,7 +69,9 @@ class HealthOut(BaseModel):
 
 class SandboxHealthOut(BaseModel):
     status: str
-    image: str
+    #: ★ v0.39：默认**不再返回镜像名**（见 `sandbox_health` 的说明）。
+    #: 保留字段本身（形状不变），只是默认为空串。
+    image: str = ""
 
 
 @router.get("/health", response_model=HealthOut, summary="健康检查")
@@ -75,13 +95,34 @@ def sandbox_health(db: Annotated[Session, Depends(get_db)]) -> SandboxHealthOut:
     那正是 `settings/models.py` 把初始值从 `running` 改成 `stopped` 的原因
     （状态语义不能撒谎）。等真正接上容器运行时，这个方法改成去问它即可，
     调用方不用动。
+
+    ## ★★ v0.39：镜像名默认**不再匿名返回**（F6）
+
+    本模块原来的 docstring 自己在问：「镜像名算不算敏感？它只是本平台
+    自己的镜像 tag，不涉及用户资产」。**公网实测之后有了答案**：
+
+        匿名 GET /api/v1/health/sandbox
+        → {"status":"stopped","image":"suvex/sandbox:1.4"}
+
+    一个**具体到版本号**的镜像 tag 是**可定向的** —— 攻击者能据此
+    去找该版本已知的 CVE，而这是一个会真的对任意目标发包的沙箱镜像。
+    原先的论证（"Settings 页面要显示它，而那个页面要登录"）成立，
+    但它推出的是"**登录后**才该看到"，而不是"匿名可读"。
+
+    所以：`status` 仍然匿名可回（容器 healthcheck 需要它，
+    且它本身不泄露什么），**镜像名按 `expose_sandbox_image` 决定**
+    （默认 False）。需要它的调用方（Settings 页面）走鉴权路径。
     """
+    settings = get_settings()
     config = db.get(SandboxConfig, SINGLETON_ID)
     if config is None:
         # 单例行还没建（迁移跑过但初始化没跑）。返回 stopped 而不是 404：
         # 容器 healthcheck 不该因为数据库里少一行种子数据就失败。
         return SandboxHealthOut(status="stopped", image="")
-    return SandboxHealthOut(status=config.status, image=config.image)
+    return SandboxHealthOut(
+        status=config.status,
+        image=config.image if settings.expose_sandbox_image else "",
+    )
 
 
 @router.get("/metrics", summary="Prometheus 指标")
@@ -107,7 +148,16 @@ def prometheus_metrics(db: Annotated[Session, Depends(get_db)]) -> Response:
     """
     settings = get_settings()
 
-    if not settings.metrics_enabled:
+    # ★ v0.39：**两个**开关都要开才暴露。
+    #
+    # `metrics_enabled` 决定"要不要采集"（见 `core/metrics.py`），
+    # `expose_metrics` 决定"要不要对外挂出这个端点"。采集关掉而暴露
+    # 开着是自相矛盾的，所以取**与**。
+    #
+    # ⚠️ 公网部署还应当**在反代层再限一次**（项目原本的注释就写了
+    #    "或在反代上把 /metrics 限到监控网段"）—— 应用层开关是
+    #    "别默认挂出去"，反代层才是"只有监控网段能连"。
+    if not (settings.metrics_enabled and settings.expose_metrics):
         # 关掉时返回 404 而不是空指标：空指标会让 Prometheus 以为
         # "服务在跑但没有任何请求"，而真相是"这个端点被关掉了"。
         from app.core.errors import ApiError

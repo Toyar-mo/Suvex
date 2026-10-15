@@ -281,6 +281,46 @@ class Settings(BaseSettings):
     # 这两点合起来让"默认开"是个安全的选择。
     metrics_enabled: bool = True
 
+    # ── ★★ 公网暴露面开关（v0.39）─────────────────────────
+    #
+    # ## 为什么必须是**独立开关**，不能绑在 `env` 上
+    #
+    # 直觉写法是"prod 就关掉文档"，但那样会**直接坏掉登录**：
+    #
+    #   · `assert_bootable()` 要求 `env=prod` 时 `cookie_secure=true`；
+    #   · 而线上是 **http**（还没有证书），`Secure` cookie 在 http 下
+    #     浏览器**根本不回传** → 登录接口 200，下一个请求仍然 401。
+    #
+    # 也就是说"想关文档"会逼出一个"必须开 Secure cookie"的要求，
+    # 而后者在 http 下是错的。两件事**必须解耦**：
+    # `env` 决定 cookie/密钥这类**部署安全属性**，
+    # 这两个开关只决定**要不要把文档/指标挂出去**。
+    #
+    # ## 默认值的方向
+    #
+    # * `expose_docs` 默认 **False**：文档描述的是**全部端点与出入参**，
+    #   匿名可读等于把攻击面清单送出去。开发时要看就显式打开。
+    # * `expose_metrics` 跟随既有的 `metrics_enabled`（默认 True）——
+    #   它的暴露面确实小（只有数字），且项目原本的注释就写了
+    #   "或在反代上把 /metrics 限到监控网段"。
+    #   ⚠️ 但公网部署**应当**在反代层限掉它（见 `deploy/`）。
+    #
+    # ⚠️ 这两个开关**不是**安全边界：它们只影响"挂不挂路由"。
+    #    真正的边界是反代（谁能连上来）与鉴权。
+    expose_docs: bool = False
+    #: `/metrics` 是否对外可读。**独立于** `metrics_enabled`：
+    #: 后者决定"要不要采集"，这个决定"要不要暴露"。
+    #: 采集关掉而暴露开着是自相矛盾的，所以有效值取两者的与。
+    expose_metrics: bool = True
+
+    #: `/health/sandbox` 是否返回**镜像名**（v0.39）。
+    #:
+    #: 默认 **False**：那个字段原本是为了让 Settings 页面显示，
+    #: 而该页面本身要登录 —— 公网匿名可读一个具体镜像 tag
+    #: 等于给出"可以定向哪个已知 CVE"的线索（见 `health.py` 的说明）。
+    #: 健康检查本身仍然可用（回 `status`），只是不再回镜像名。
+    expose_sandbox_image: bool = False
+
     @field_validator("cors_origins")
     @classmethod
     def _strip_origins(cls, value: str) -> str:

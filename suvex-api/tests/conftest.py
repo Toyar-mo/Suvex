@@ -78,6 +78,54 @@ os.environ.setdefault("SUPEX_FAKE_SCAN_GRANDCHILD", "true")
 # **不会**被后台线程悄悄认领并启动 —— 那些是给别的测试用的前置数据，
 # 不是要真的跑起来的东西。测试要跑调度就自己调 `get_scheduler().tick()`。
 os.environ.setdefault("SUPEX_SCAN_POLL_SECONDS", "3600")
+
+# ★★ v0.39：测试里**打开**文档端点。
+#
+# `SUPEX_EXPOSE_DOCS` 默认是 **False**（公网不该匿名可读全部端点清单），
+# 而 `test_health.py::test_openapi_schema_covers_every_contract_endpoint`
+# 正是靠读 `/openapi.json` 来对账"契约里定义的端点有没有被悄悄删掉"。
+#
+# 所以这里显式打开它 —— 那是**测试的诉求**，不是"生产默认值该改"。
+# ⚠️ 用 `setdefault` 而不是直接赋值：外部若显式设成 false，
+#    那条对账测试会**跳过**（见测试里的说明），而不是拿一个空 schema 崩掉。
+os.environ.setdefault("SUPEX_EXPOSE_DOCS", "true")
+
+# ══════════════════════════════════════════════════════════════════
+# ★★ 测试**绝不**读部署用的 `.env`（v0.39 补，2026-10-15）
+# ══════════════════════════════════════════════════════════════════
+#
+# `Settings` 的 `env_file` 指向**项目根 `.env`**（`config.py:33`），
+# 而那份文件按设计**只属于部署**：`.env` 在 CI 里根本不存在
+# （被 `.gitignore` 挡住，checkout 里没有），所以 CI 天然不受它影响。
+#
+# 问题出在**开发机 / 部署机**上：那里 `.env` 是真文件，于是测试进程
+# 会把它当成配置来源。2026-10-15 实测症状 —— Kali 上
+# `tests/test_metrics.py` **8 条全红**，而 CI 全绿，代码一字未改。
+# 差别只有一个：Kali 的 `.env` 里有
+#
+#     SUPEX_EXPOSE_METRICS=false        ← v0.39 加固时按公网要求设的
+#
+# 于是 `/metrics` 返回 404，而那 8 条测试的前提就是"端点可读"。
+#
+# ## 为什么修的是**测试**而不是把 `.env` 改回去
+#
+# 「把线上开关改回 true」能让测试变绿，但那等于**用削弱生产安全来
+# 换测试通过** —— 而 `/metrics` 匿名可读正是这次要关掉的东西。
+# 更根本的是：测试的绿灯**不该取决于部署机碰巧怎么配**。
+# 同一条测试在两台机器上得出的结论相反，那它就不是测试。
+#
+# ## 为什么是 `setdefault` 而不是直接赋值
+#
+# 与上面 `SUPEX_EXPOSE_DOCS` 同一个理由：外部（CI 变量、`-E` 一次性
+# 覆盖）显式设的值必须仍然生效。`setdefault` 只补**没被设过**的那些，
+# 所以"有人刻意要跑关掉指标的配置"这条路径没有被堵死。
+#
+# ⚠️ 三个开关都要写。写漏一个的表现就是"某个测试文件莫名其妙全红"，
+#    而错误信息（`assert None ...`）指向断言，不指向配置来源 ——
+#    我这次就是从断言一路查到 `.env` 才找到根的。
+os.environ.setdefault("SUPEX_EXPOSE_METRICS", "true")
+os.environ.setdefault("SUPEX_EXPOSE_SANDBOX_IMAGE", "false")
+
 # 扫描产物写进临时目录，别污染项目根（`_scan_runs/` 会积累几百 MB）。
 SCAN_WORK_ROOT = tempfile.mkdtemp(prefix="suvex-test-scans-")
 os.environ["SUPEX_SCAN_WORK_ROOT"] = SCAN_WORK_ROOT
