@@ -5,8 +5,8 @@
 或 CTF 题解。
 
 ```
-suvex-api/    后端：Python 3.12 · FastAPI · PostgreSQL 16 · 43,256 行（app/ 下 114 个文件）
-suvex-web/    前端：React 19 · TypeScript 6 · Vite 8 · 41,941 行（src/ 下 .ts/.tsx）
+suvex-api/    后端：Python 3.12 · FastAPI · PostgreSQL 16 · 45,376 行（app/ 下 115 个文件）
+suvex-web/    前端：React 19 · TypeScript 6 · Vite 8 · 44,730 行（src/ 下 161 个 .ts/.tsx）
 ```
 
 > **数字口径**：都是"文件总行数（含空行与注释）"，用 `find … | xargs wc -l`
@@ -14,7 +14,7 @@ suvex-web/    前端：React 19 · TypeScript 6 · Vite 8 · 41,941 行（src/ �
 > "看起来精确"却对不上的数字比"大约四万行"更有害。
 
 > **契约是唯一事实来源**：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)
-> （3,447 行）。前后端只通过它耦合，规矩是「**发现遗漏先改文档再改代码**」。
+> （3,721 行）。前后端只通过它耦合，规矩是「**发现遗漏先改文档再改代码**」。
 > 两者放在同一个仓库，就是为了让契约与两侧实现的同步改动落在**同一个提交**里。
 
 ---
@@ -94,12 +94,12 @@ cd suvex-api && docker compose up --build
 
 | 项 | 数字 |
 | --- | --- |
-| 后端代码 | 43,256 行（`app/` 下 114 个文件），13 个领域模块 |
-| 后端测试 | **65 个文件 / 1134 个测试函数**（参数化展开后更多），对**真实 PostgreSQL** 跑（不是 SQLite） |
-| 数据库迁移 | 34 个 Alembic 版本，从第一个迁移就版本化 |
-| API 端点 | 112 个（按 `@router.*` 装饰器计） |
-| 前端代码 | 41,941 行（`src/` 下 151 个 .ts/.tsx），**0 个 `@ts-ignore`** |
-| 前端测试 | **148 个 vitest 用例**，覆盖 5 个纯逻辑模块 + **路由守卫 / 401 拦截 / 错误态**（8 个文件） |
+| 后端代码 | 45,376 行（`app/` 下 115 个文件），13 个领域模块 |
+| 后端测试 | **73 个文件 / 1,164 个测试函数**（参数化展开后更多），对**真实 PostgreSQL** 跑（不是 SQLite） |
+| 数据库迁移 | 35 个 Alembic 版本，从第一个迁移就版本化 |
+| API 端点 | 115 个（按 `@router.*` 装饰器计） |
+| 前端代码 | 44,730 行（`src/` 下 161 个 `.ts`/`.tsx`），**0 个 `@ts-ignore`** |
+| 前端测试 | **203 个 vitest 用例**（13 个文件）：7 个纯逻辑模块（`data/` 3 + `lib/` 4，含**路由守卫 / 401 拦截**）+ 组件与 hook 测试（错误态 / TokenUsageCard / WriteupMarkdown / ChallengeCard / WriteupDialog / useActivityStream） |
 | CI | GitHub Actions 三个 job：后端（**ruff 静态检查** + 测试）/ 前端检查 / 仓库卫生 —— **2026-10-11 首次全绿**（run #9，`861f64a`，19m40s）；**2026-10-14 补上后端 ruff**（此前 pyproject 配了 ruff 却从不运行，等于零静态检查） |
 | 决策记录 | 8 篇 ADR，每篇写**为什么**而不是**是什么** |
 
@@ -163,7 +163,7 @@ cd suvex-api && docker compose up --build
 
 | # | 缺口 | 影响 |
 | --- | --- | --- |
-| 1 | **前端测试仍不覆盖页面渲染** | 148 个用例（8 个文件）。**2026-10-14 补上了路由守卫、401 拦截、错误态**（`route-guard` / `unauthorized-flow` / `ErrorState`），但**页面组件本身、表单交互、主题切换仍无测试** —— 渲染期崩溃只有人工点开页面才能发现 |
+| 1 | **前端测试仍不覆盖页面渲染** | 203 个用例（13 个文件）。**2026-10-14 补上了路由守卫、401 拦截、错误态**（`route-guard` / `unauthorized-flow` / `ErrorState`），但**页面组件本身、表单交互、主题切换仍无测试** —— 渲染期崩溃只有人工点开页面才能发现 |
 | 2 | **compose 镜像是"控制面"，跑不了扫描** | 实测确认容器里没有 `strix` 与 `docker` CLI；要跑扫描用 `deploy/` 的宿主机部署 |
 | 3 | **`/metrics` 不覆盖依赖注入抛出的 401/403** | 路由层返回的状态码都计数，但鉴权失败经异常处理器生成的不计（见 `test_metrics.py` 里那条钉住局限的用例） |
 | 4 | **多用户是单租户的** | 多个账号共享全部数据；真多租户要每张业务表加 `tenant_id`（见下面的说明） |
@@ -290,8 +290,8 @@ suvex-api/
   app/core/       跨领域公共件（依赖方向单向，不依赖任何领域包）
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,ctf2}/
                   按领域拆分，各自 模型/出入参/业务/路由
-  alembic/        34 个迁移
-  tests/          65 个文件 / 1134 个测试函数，对真实 PostgreSQL 跑
+  alembic/        35 个迁移
+  tests/          73 个文件 / 1,164 个测试函数，对真实 PostgreSQL 跑
   docs/           8 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
 
