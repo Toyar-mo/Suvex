@@ -6,11 +6,12 @@ import {
   CHALLENGE_STATUS_TONE,
   PRIORITY_MANUAL_BASE,
   SANDBOX_PROFILE_LABEL,
+  canHaveWriteup,
   type Ctf2Challenge,
 } from '@/data/ctf2'
 import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
-import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, Flag, Percent, Play, ShieldCheck, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, FileText, Flag, Percent, Play, ShieldCheck, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -74,6 +75,7 @@ export function ChallengeCard({
   onCancel,
   onRelease,
   onSetPriority,
+  onWriteup,
   busy = false,
 }: {
   challenge: Ctf2Challenge
@@ -99,6 +101,17 @@ export function ChallengeCard({
    *   "谁先被认领"，而没在队列里的题点了不会有任何效果。
    */
   onSetPriority: (challenge: Ctf2Challenge, priority: number) => void
+  /**
+   * 查看题解（v0.36）。
+   *
+   * ★ **只在跑完过的题上出现**（判据是 `canHaveWriteup`）—— 入口本身
+   *   就是一句承诺，而题解要到解题**收尾**时才生成。给一道从没跑过的
+   *   题摆这个按钮，等于让用户点一次才知道后端会回 409。
+   *
+   * 不传时整项不渲染 —— 与 `ScanList` 的 `onWriteup` 同一个约定
+   * （按需能力，而不是"必须实现"的接口）。
+   */
+  onWriteup?: (challenge: Ctf2Challenge) => void
   busy?: boolean
 }) {
   const [copied, setCopied] = useState(false)
@@ -298,6 +311,37 @@ export function ChallengeCard({
 
       {/* ── 动作 ── */}
       <footer className="mt-auto flex flex-wrap items-center gap-tight">
+        {/*
+          ── 题解（v0.36）──
+
+          ★ 放在动作区**最前**，与 `ScanList` 的菜单项同一个位置理由：
+            对一道跑完过的题，"它是怎么解出来的"是用户最想先看的东西，
+            而下面那些（再解、取消、调优先级）都是**过程性操作**。
+
+          ★ 只在 `canHaveWriteup` 为真时渲染 —— 见那个函数的说明。
+            判据是 **`scanId` 非空**（至少开始过一次解题），而**不是**
+            状态：真实数据里那道 `[ACTF2020 新生赛]Upload` 收尾是
+            `unsolved`，却**有**题解 —— 按状态判断会把它的入口藏掉。
+            这里也**不**用 `challenge.confirmedFlag` 之类的判据：题解对
+            **没解出**的题同样有价值（记的是"我们试过什么"）。
+        */}
+        {onWriteup && canHaveWriteup(challenge) && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onWriteup(challenge)}
+            title="查看这道题的题解（Markdown）：关键步骤、过程纪要、token 消耗"
+            className={cn(
+              'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
+              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
+              busy && 'cursor-not-allowed opacity-50',
+            )}
+          >
+            <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
+            题解
+          </button>
+        )}
+
         {canSolve && (
           <button
             type="button"

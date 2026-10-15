@@ -1,5 +1,5 @@
 import { PageHeader } from '@/components/layout/AppShell'
-import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect } from '@/components/ctf2'
+import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WriteupDialog } from '@/components/ctf2'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
@@ -182,6 +182,19 @@ export function Ctf2Page() {
    */
   const [pulling, setPulling] = useState(false)
   const [pullInput, setPullInput] = useState('')
+
+  /**
+   * 正在看题解的那道题（v0.36）。
+   *
+   * ★ 存的是**整个 challenge 对象**，不是 id —— 与 ScansPage 的
+   *   `writeupScan` 同一个理由，而且这里更明显：弹窗头部要显示题目名，
+   *   而这一页**每 3 秒轮询整体替换** `challenges`。只存 id 的话，
+   *   那道题在刷新后状态一变（比如刚跑完），标题就可能取不到 / 变化，
+   *   而用户按的是**当时看到的那一行**。
+   *
+   * ⚠️ 题解属于"那一轮运行的结果"，名字就该是打开那一刻的那个。
+   */
+  const [writeupChallenge, setWriteupChallenge] = useState<Ctf2Challenge | null>(null)
 
   useEffect(() => {
     void loadCtf2()
@@ -699,6 +712,7 @@ export function Ctf2Page() {
                   onCancel={setCanceling}
                   onRelease={runRelease}
                   onSetPriority={runSetPriority}
+                  onWriteup={setWriteupChallenge}
                 />
               ))}
             </div>
@@ -739,6 +753,20 @@ export function Ctf2Page() {
         onConfirm={runSubmit}
         onCancel={() => setPending(null)}
       />
+
+      {/*
+        ── 题解弹窗（v0.36）──
+
+        ★ **条件挂载**，而不是常驻 + `open` 开关 —— 与 ScansPage 完全一致：
+          每次打开都是全新实例，内部三态天然是干净的初值，不必在 effect 里
+          "重置"（重置一旦漏写，打开第二道题时会先闪一眼上一道的题解）。
+      */}
+      {writeupChallenge && (
+        <WriteupDialog
+          challenge={writeupChallenge}
+          onClose={() => setWriteupChallenge(null)}
+        />
+      )}
 
       {/* ── 按链接拉取单题 ── */}
       {pulling && (

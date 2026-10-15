@@ -2,6 +2,7 @@ import { PageHeader } from '@/components/layout/AppShell'
 import ActivityFeed from '@/components/overview/ActivityFeed'
 import SeverityChart from '@/components/overview/SeverityChart'
 import StatCard from '@/components/overview/StatCard'
+import TokenUsageCard from '@/components/overview/TokenUsageCard'
 import ErrorState from '@/components/ui/ErrorState'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
@@ -161,6 +162,25 @@ function OverviewContent({
 
         <SeverityChart data={severityBreakdown} className="self-start" />
       </div>
+
+      {/*
+        ── 4 · LLM 消耗（CTF2 解题，v0.36）─────────────
+
+        ★ 为什么单独一整块、而不是第五张指标卡：`StatCard` 的契约是
+          "一个标签 + 一个数值"，而 token 这张要说**三种不同的空**
+          （没有记录 / 接入点没给 / 只是下限），还要带按题细分。
+          塞进 `StatCard` 会让那个可复用件的接口长出一堆 token 专属字段。
+
+        ★ 位置在活动流之后：它是**成本回顾**，不是"现在在发生什么"。
+          首屏最上面那四张卡回答的是"现在怎么样"，这一块回答
+          "我们为此付出了多少"。
+      */}
+      <TokenUsageCard
+        calls={metrics.ctf2LlmCalls}
+        recordedCalls={metrics.ctf2RecordedCalls}
+        totalTokens={metrics.ctf2TotalTokens}
+        since={metrics.ctf2UsageSince}
+      />
     </div>
   )
 }

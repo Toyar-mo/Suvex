@@ -94,6 +94,55 @@ export interface OverviewMetrics {
    * 排除是可以的，**悄悄排除不行**。
    */
   falsePositiveCount: number
+
+  /*
+    ── CTF2 token 消耗（v0.36）────────────────────────────
+    
+    需求是"总览页要写一个统计 token 消耗，细分到每一次任务的消耗，
+    和总消耗"。这里给**总消耗**；细分（按题 / 按模型 / 逐轮）在
+    `GET /ctf2/usage` 与 `GET /ctf2/challenges/{id}/usage`。
+
+    ⚠️ 放在 overview 而不只留在 CTF2 页面：token 是**成本**，
+       而成本该与"扫了多少、发现了多少"同屏 —— 与
+       `avgScanDurationSec` 同一条理由，那张卡回答的是
+       "这套东西烧掉了多少资源"。
+  */
+
+  /**
+   * LLM 调用总次数。
+   *
+   * ★ 它**永远准确**（后端从行数数得出来），不依赖接入点给不给用量。
+   */
+  ctf2LlmCalls: number
+  /**
+   * 其中**接入点真的返回了用量**的次数。
+   *
+   * ★★ 与 `ctf2LlmCalls` 分开显示（后端也分开返回）：
+   *   两者不等时 `ctf2TotalTokens` 是**下限**。
+   *
+   * 合成一个的后果很具体：接入点没给 usage 时 token 记 0，而
+   * "消耗 0"与"没记录到"在界面上完全一样 —— 用户会以为某次解题
+   * 没跑过，或者以为那次特别省。两种都是错的。
+   *
+   * 这与 `hasKey`/`apiKey` 分两列、`candidateFlag`/`confirmedFlag`
+   * 分两列是同一条纪律：**两种语义不能共用一个"空"**。
+   */
+  ctf2RecordedCalls: number
+  /**
+   * 总 token 数（prompt + completion）。
+   *
+   * ⚠️ **不做金额换算**：单价随模型、供应商、时段变化，
+   *    写死在代码里会误导。只给 token 数，换算由用户自己乘。
+   */
+  ctf2TotalTokens: number
+  /**
+   * 统计从哪一刻开始。**null = 一条记录都没有**。
+   *
+   * ⚠️ v0.36 **之前**的解题没有 usage 记录。不给这个字段的话，
+   *    用户会以为"总共就花了这么点"，而实际是**没记**。
+   *    所以界面在它为 null 时要说"还没有数据"，而不是显示"0 token"。
+   */
+  ctf2UsageSince: string | null
 }
 
 export interface SeverityBreakdownEntry {

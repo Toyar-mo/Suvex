@@ -482,6 +482,225 @@ export interface Ctf2SubmitResult {
   challenge: Ctf2Challenge
 }
 
+// ══════════════════════════════════════════════════════════
+// 题解与 token 消耗（v0.36）
+// ══════════════════════════════════════════════════════════
+//
+// ## ★ 为什么 CTF2 不能复用扫描的题解端点
+//
+// 扫描的 `GET /scans/{id}/writeup` 拼的是 **strix 报告**的版式重排。
+// 而 CTF2 解题**不走 strix**（由 `runner.solve_in_sandbox` 自己的循环
+// 驱动），从不产生 `penetration_test_report.md` —— 所以那条路对它
+// **永远**报"没有留下报告文件"，而那句话会让用户去翻一个不该存在的文件。
+//
+// 契约 §3.19.5 记了这次修正：扫描那边认出 CTF2 的壳之后返回
+// "题解在题目卡片上"，而真正的题解由**下面这个端点**给出。
+//
+// ## ★★ flag 在这里**不脱敏** —— 与方法卡（`ctf2_solve_notes`）相反
+//
+// 方法卡会进**另一道题**的 prompt，带 flag 就是泄漏；而题解是
+// **赛后提交给人看**的，flag 正是要展示的东西。判据是这份内容的**去向**，
+// 不是"flag 是不是秘密"。所以下面的 `markdown` 里出现答案是对的，
+// 不要"顺手统一"去脱敏。
+
+/**
+ * 一道题的题解（`GET /ctf2/challenges/{id}/writeup`）。
+ *
+ * ⚠️ 它在**解题收尾时生成并落库**（`service.save_writeup`），端点只读库。
+ * 所以 v0.36 **之前**解过的题没有这份记录 —— 那时后端返
+ * `409 WRITEUP_UNAVAILABLE`，界面要**原样显示后端那句话**，因为它区分了
+ * "从没解过"与"解过但没有题解"两种处境（补救动作不同）。
+ */
+export interface Ctf2Writeup {
+  challengeId: string
+  title: string
+  category: string
+  /** 产出时这道题**解没解出**。未解出的题解同样保留（"试过什么"也是材料） */
+  solved: boolean
+  /** 题解正文。**含 flag 原文**（见上面那段说明） */
+  markdown: string
+  /** 下载用的文件名，后端拼好（`CTF-Writeup-{安全化的题目名}.md`） */
+  filename: string
+  /** 出自哪一次尝试。可空（尝试记录被清掉时后端置 NULL） */
+  attemptId: string | null
+  turns: number
+  /** 耗时。**null = 没测到**（收尾没跑、壳扫描被删），不是 0 秒 */
+  elapsedSec: number | null
+  generatedAt: string
+  updatedAt: string
+}
+
+/**
+ * **一次 LLM 调用**的用量（`GET /ctf2/challenges/{id}/usage` 的项）。
+ *
+ * 这是"细分到每一次任务的消耗"最直接的视图 —— 能看出哪一轮最贵、
+ * 是不是在兜圈子烧钱、换模前后各花了多少。
+ */
+export interface Ctf2UsageEntry {
+  /** 第几轮 */
+  turn: number
+  model: string
+  /** provider 的显示名 */
+  providerLabel: string
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  /** 推理开销。⚠️ 实测默认网关恒给 0，**只备查、不参与统计** */
+  reasoningTokens: number
+  /**
+   * ★★ 接入点**到底给没给**用量。
+   *
+   * `false` 时上面四个 token 值都是 0，而那个 0 **不代表没消耗** ——
+   * 所以界面必须把"0"与"未记录"分开显示。见 `Ctf2TokenUsage` 的说明。
+   */
+  usageReported: boolean
+  at: string
+}
+
+/** 按模型分组的用量。换模（v0.35 的 fallback）之后同一次解题会用多个模型。 */
+export interface Ctf2UsageByModel {
+  model: string
+  providerLabel: string
+  calls: number
+  totalTokens: number
+}
+
+/** 按题分组的用量（"哪道题最烧钱"）。 */
+export interface Ctf2UsageByChallenge {
+  challengeId: string
+  title: string
+  calls: number
+  totalTokens: number
+}
+
+/**
+ * token 消耗统计（`GET /ctf2/usage`）。
+ *
+ * ## ★★ `calls` 与 `recordedCalls` 是**两个**字段，不是冗余
+ *
+ * · `calls` —— 调用次数。**永远准确**（后端从行数数得出来）；
+ * · `recordedCalls` —— 其中**接入点真的返回了用量**的次数。
+ *
+ * 两者不等时 `totalTokens` 是**下限**（有几次没算进去）。合成一个字段的
+ * 后果很具体：接入点不给 `usage` 时 token 记 0，而"消耗 0"与"没记录到"
+ * 在界面上完全一样 —— 用户会以为某次解题没跑过，或者以为那次特别省。
+ *
+ * 这与 `hasKey`/`apiKey` 分两列、`candidateFlag`/`confirmedFlag` 分两列
+ * 是同一条纪律：**两种语义不能共用一个"空"**。
+ *
+ * ## ⚠️ 不做 token → 金额的换算
+ *
+ * 单价随模型、供应商、时段变化，写死在代码里会误导。只给 token 数。
+ */
+export interface Ctf2TokenUsage {
+  calls: number
+  recordedCalls: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  byModel: Ctf2UsageByModel[]
+  byChallenge: Ctf2UsageByChallenge[]
+  /**
+   * 统计从哪一刻开始。**null = 一条记录都没有**。
+   *
+   * ⚠️ v0.36 **之前**的解题没有 usage 记录。不给这个字段的话，用户会
+   * 以为"总共就花了这么点"，而实际是**没记**。所以界面在它为 null 时
+   * 要说"还没有数据"，**而不是**显示"0 token"。
+   */
+  since: string | null
+}
+
+/**
+ * 读一道题的题解。
+ *
+ * ⚠️ **失败在这里不兜底**：`ApiError` 原样抛给调用方。后端那句中文区分了
+ * 三种处境（题不存在 / 从没解过 / 解过但早于 v0.36），而它们的下一步动作
+ * 完全不同 —— 前端换一个说法只会把可行动的信息换成泛泛的失败。
+ * 与 `loadWriteup`（扫描侧）同一条纪律。
+ */
+export async function loadCtf2Writeup(challengeId: string): Promise<Ctf2Writeup> {
+  return api.get<Ctf2Writeup>(`/ctf2/challenges/${encodeURIComponent(challengeId)}/writeup`)
+}
+
+/**
+ * 读 token 统计。
+ *
+ * `filter` 里没给的维度就**真的不传**（`buildUrl` 会丢掉 null）——
+ * 这一点很重要：后端把 query 参数当成筛选条件，传一个空串会筛出空集，
+ * 而那看起来像"总共就花了 0"。
+ */
+export async function loadCtf2Usage(
+  filter: { challengeId?: string | null; competitionId?: string | null } = {},
+): Promise<Ctf2TokenUsage> {
+  return api.get<Ctf2TokenUsage>('/ctf2/usage', {
+    query: {
+      challengeId: filter.challengeId ?? null,
+      competitionId: filter.competitionId ?? null,
+    },
+  })
+}
+
+/** 读单道题的**逐次**消耗明细（按轮次升序）。 */
+export async function loadCtf2ChallengeUsage(challengeId: string): Promise<Ctf2UsageEntry[]> {
+  return api.get<Ctf2UsageEntry[]>(
+    `/ctf2/challenges/${encodeURIComponent(challengeId)}/usage`,
+  )
+}
+
+/**
+ * 这道题**有没有可能已经有题解** —— 决定要不要露出「题解」入口。
+ *
+ * ## ★★ 判据是 `scanId`，不是 `status`（2026-10-15 用真实数据修）
+ *
+ * 第一版这里用的是状态白名单（`solved | failed | candidate_ready`）。
+ * 那是个**真 bug**，被真实数据当场打出来：
+ *
+ *   `[ACTF2020 新生赛]Upload` 跑满 78 轮、51 分钟、**未解出**，
+ *   后端收尾时把它回到 `unsolved` —— 而它**有题解**（`solved=False`
+ *   照样产出，见 `writeup.py` 的"未解出也产出"）。按状态判断会把
+ *   这道题的入口**藏起来**，用户永远看不到那份题解。
+ *
+ * 而且这类题不是个例：库里 `unsolved` 且有壳 scan 的题有 3 道，
+ * 有题解的这 1 道正好是 `unsolved`。
+ *
+ * ## 正确的判据：有没有**借过壳 scan**
+ *
+ * `Ctf2Challenge.scanId` 在**第一次开始解题**时被写上（CTF2 借一条
+ * scan 复用活动流，见 `ctf2/events.ensure_solve_scan`），之后**不再清空**。
+ * 所以"`scanId` 非空" ⟺ "这道题至少被解过一次"。
+ *
+ * 这与后端 `service.has_solve_attempt`（查 `ctf2_solve_attempts` 受理快照）
+ * **想表达同一件事**：都是"有没有真的跑过"，而不是"现在停在哪个状态"。
+ * 但两者**在真实数据上并不等价**（全库 135 道逐题比过）：
+ *
+ *   · `scanId` 非空 ⟺ 至少开始过一次解题（这个列不会被清空）；
+ *   · `has_solve_attempt` 只覆盖 **v0.28 之后**的解题 ——
+ *     `ctf2_solve_attempts` 是迁移 `20261011_2330` 才建的表，
+ *     所以 9/30–10/8 那批解出的题（20 道 `solved`，都有
+ *     `confirmedFlag`）**没有 attempt 行**。
+ *
+ * ⚠️ 因此前端用 `scanId`、后端用 attempts 时，对那些老题会出现
+ *    **不一致**：界面给入口（对，它有题解价值），而后端回
+ *    「这道题还没有解过」—— 对一道已解出的题是**假话**。
+ *    这是**后端判据**的问题，已单独报给 Dev（建议改成
+ *    "attempt 存在 **或** scanId 非空"）。前端这边选 `scanId` 是对的：
+ *    它是唯一能覆盖全量历史的证据。
+ *
+ * ## 什么情况仍然不显示
+ *
+ * `scanId` 为空 = 从没开始过解题 → 后端 409「点「解题」跑一次」，
+ * 入口摆出来就是让人点一次才知道没有（"入口本身就是一句承诺"，
+ * 与 `ScanList` 只给夺旗任务显示题解同一条）。
+ *
+ * 正在跑的题（`solving` / `environment_ready` / `submitting`）：
+ * 此刻 `scanId` 已经非空，所以入口会显示 —— 这是**对的**：
+ * 后端对"跑过但没生成题解"的那句话是准确的，且跑完一轮才有题解。
+ * 用户点开看到"这次没有生成题解，重新解一次会生成"也是有用的信息。
+ */
+export function canHaveWriteup(challenge: Ctf2Challenge): boolean {
+  return Boolean(challenge.scanId)
+}
+
 // ─────────────────────────────────────────────
 // store
 // ─────────────────────────────────────────────
