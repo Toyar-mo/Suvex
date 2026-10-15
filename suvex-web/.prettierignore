@@ -2,7 +2,6 @@
 # 它们要能直接跟上游做 diff（升级时对 commit 同步），本项目的本地改动
 # 都写在各自文件头的注释里。用 Prettier 洗一遍就再也 diff 不动了。
 src/components/effects/Threads.tsx
-src/components/effects/DotGrid.tsx
 src/components/effects/LetterGlitch.tsx
 
 # 构建产物与锁文件

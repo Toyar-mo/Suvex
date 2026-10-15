@@ -65,8 +65,8 @@ import { cn } from '@/lib/cn'
  *
  *   顺带的收益：SplitText（3.3 kB gzip）整块从产物里消失，
  *   首页不再引用 gsap。（gsap 这一整条依赖后来也彻底移除了 —— 它最后一个
- *   使用者 DotGrid 已删，理由是 GreenSock 自有许可非 OSI 开源，见
- *   `effects/README.md` 的「已移除」节。）
+ *   使用者是背景里的点阵层，已连同那个组件一起删掉，理由是 GreenSock 自有
+ *   许可非 OSI 开源，见 `effects/README.md` 的「已移除」节。）
  *
  * ── 按"词"而不是按"字符" ───────────────────────────────────────
  * 逐字符是 ReactTitle 类动效的常见做法，但它对**中文是错的**：

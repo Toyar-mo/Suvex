@@ -21,12 +21,12 @@ Suvex —— 一个自治 AI 安全测试 agent 的 Web 控制台。
 
 | 项 | 实际数字 |
 | --- | --- |
-| 代码规模 | **41,941 行** TS/TSX，151 个文件 |
+| 代码规模 | **44,279 行** TS/TSX，160 个文件 |
 | 页面 | 总览 / 扫描任务 / 智能体活动 / 漏洞发现 / CTF2 解题 / 报告 / 设置 + 产品首页 |
 | 数据层 | 全部接真实 API，**0 个 mock 数据文件** |
-| 类型安全 | **0 个 `@ts-ignore`；3 处 `any`**（都在 `components/effects/DotGrid.tsx` 的节流函数，上游基线代码 —— 见根 README 的更正）（`tsc -b` 与 `eslint --max-warnings 0` 全绿） |
+| 类型安全 | **0 个 `@ts-ignore`；0 个 `any`**（原先唯一的 3 处 `any` 在 `components/effects/DotGrid.tsx` 的节流函数里，该组件已随 `gsap` 一起移除 —— 见根 README 的更正）（`tsc -b` 与 `eslint --max-warnings 0` 全绿） |
 | 契约校验 | `verify:all` 三项全绿（字段对账 / 端点覆盖度 / 报告一致性） |
-| 单元测试 | **148 个**（vitest，8 个文件），覆盖 5 个纯逻辑模块 + 路由守卫 + 401 拦截 + 错误态 |
+| 单元测试 | **215 个**（vitest，13 个文件），覆盖 7 个纯逻辑模块 + 路由守卫 + 401 拦截 + 错误态 + 若干组件与 hook |
 
 ### 测试覆盖了什么
 
@@ -193,4 +193,6 @@ src/
 它们是拷贝件而非依赖，升级时对着上游 commit 做 diff。
 
 > 任务 8 移除了 `AnimatedContent.tsx`（原因是它"先隐藏、等 JS 放行"的失败模式，
-> 以及会把 gsap 钉进主 chunk）。恢复方式见该 README。
+> 以及会把 gsap 钉进主 chunk）；后来 `DotGrid.tsx` 也移除了（它是全仓唯一依赖
+> `gsap` 的地方，而 `gsap` 用的是 GreenSock 自有许可、非 OSI 开源，且该组件是纯装饰）。
+> 恢复方式见该 README。

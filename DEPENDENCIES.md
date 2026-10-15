@@ -13,12 +13,12 @@
 | 本项目自身许可证 | **Apache-2.0**（仓库根 `LICENSE`，11.1 KB） |
 | 版权归属 | `NOTICE`：`Suvex / Copyright 2026 Suvex` |
 | 后端第三方依赖 | **44 个**（含 dev 工具）；全部为宽松许可证 |
-| 前端第三方依赖 | **527 个**（含传递依赖）；宽松为主，**2 处需留意**（见 §4） |
+| 前端第三方依赖 | **553 个**（含传递依赖，实测自 `package-lock.json`）；宽松为主，**1 处需留意**（见 §4） |
 | 外部工具依赖 | **1 个**：`strix-agent` 1.6.2（**Apache-2.0**） |
-| 源码拷贝的第三方代码 | **1 处**：ReactBits 4 个组件（**MIT + Commons Clause**，已在 `NOTICE` 披露） |
-| 自研代码量 | 后端 `app/` **45,376 行** / 前端 `src/` **44,730 行**（README 口径，见 §5） |
+| 源码拷贝的第三方代码 | **1 处**：ReactBits 3 个组件（**MIT + Commons Clause**，已在 `NOTICE` 披露） |
+| 自研代码量 | 后端 `app/` **45,376 行** / 前端 `src/` **44,279 行**（README 口径，见 §5） |
 
-**一句话**：本项目**没有抄任何第三方源码**（唯一的源码拷贝是 4 个前端动效组件，已披露）；`strix` 是**作为外部 CLI 集成的可替换执行后端**，不是被复制的代码。
+**一句话**：本项目**没有抄任何第三方源码**（唯一的源码拷贝是 3 个前端动效组件，已披露）；`strix` 是**作为外部 CLI 集成的可替换执行后端**，不是被复制的代码。
 
 ---
 
@@ -106,9 +106,9 @@
 
 ---
 
-## 四、前端依赖（527 个，实测自 node_modules）
+## 四、前端依赖（553 个，实测自 `package-lock.json`）
 
-**取证方式**：遍历 `suvex-web/node_modules/**/package.json` 读 `version` / `license`。
+**取证方式**：读 `suvex-web/package-lock.json` 的 `packages` 字段（不含根条目），逐条取 `version` / `license`。选锁文件而不是 `node_modules` 目录，是因为**依赖图与平台无关、且随仓库提交**，任何人 checkout 后都能复现同一个数字；而 `node_modules` 的实际内容随操作系统变化（平台专属的 optional 包只装匹配的那一个）。
 
 ### 4.1 直接依赖
 
@@ -124,7 +124,6 @@
 | clsx | 2.1.1 | MIT |
 | tailwind-merge | 3.7.0 | MIT |
 | ogl | 1.0.11 | Unlicense |
-| **gsap** | 3.15.0 | ⚠️ **Standard "no charge" license**（非 OSI 开源，见 4.3） |
 | @fontsource-variable/geist | 5.3.0 | OFL-1.1 |
 | @fontsource-variable/jetbrains-mono | 5.3.0 | OFL-1.1 |
 | @fontsource-variable/noto-sans-sc | 5.3.0 | OFL-1.1 |
@@ -138,17 +137,17 @@
 | `@csstools/color-helpers` | MIT-0 | 等同 MIT，无需署名 |
 | 字体（3 个 fontsource 包） | OFL-1.1 | 字体许可证，**随应用分发需保留 OFL 声明** |
 
-其余 500+ 个传递依赖为 MIT / ISC / BSD / Apache-2.0 等宽松许可证。
+其余 500 余个传递依赖为 MIT / ISC / BSD / Apache-2.0 等宽松许可证。
 
-### 4.3 ⚠️ 两处需你决策的风险
+### 4.3 ⚠️ 一处需你决策的风险
 
-**① GSAP —— 不是开源许可证**
+**① GSAP —— 已移除（原先唯一的非 OSI 许可）**
 
-`gsap@3.15.0` 的 `package.json` 写着 `Standard "no charge" license: https://gsap.com/standard-license`。这是 **GreenSock 自有许可证**，不是 OSI 认可的开源许可。
+`gsap@3.15.0` 的 `package.json` 写着 `Standard "no charge" license: https://gsap.com/standard-license`。这是 **GreenSock 自有许可证**（允许免费商用，但**不满足"开源"的定义**），不是 OSI 认可的开源许可。
 
-- **事实**：它的标准许可**允许免费商用**（大部分场景），但**不满足"开源"的定义**；
-- **影响**：如果比赛材料里声称"全部依赖均为开源许可证"，**这句会是假的**。建议措辞改为"依赖许可证见清单"；
-- **实际使用**：`gsap` 在本项目**只被 `DotGrid.tsx`**（ReactBits 拷贝件）依赖，而 `DotGrid` 经 `AgentField` / `HeroBackdrop` **懒加载**，不进首屏关键路径（`suvex-web/src/components/effects/DotGrid.tsx:23-26`）。**如果不想带这个风险，移除 `DotGrid` + `gsap` 即可**——它是纯装饰，不影响任何功能。
+- **它原先的用处**：`gsap` 在本项目**只被 `DotGrid.tsx`**（ReactBits 拷贝件）依赖，而 `DotGrid` 经 `AgentField` / `HeroBackdrop` 懒加载，不进首屏关键路径 —— 是纯装饰。
+- **处置**：**已移除**（`chore(web): 移除 gsap 依赖与 DotGrid 组件`）。删掉 `DotGrid.tsx` 与两处调用点后，`gsap` 整条依赖出树（`package.json`、`package-lock.json` 均无残留）。
+- **留下的结论**：前端依赖现在**没有非 OSI 许可的包**。但**仍不要写"全部依赖均为开源许可证"** —— 见下方 ②，以及 §4.2 里 MPL/CC-BY/OFL 这几类需要留意的许可；建议措辞始终是"依赖许可证见清单"。
 
 **② psycopg 是 LGPL-3.0-only**
 
@@ -163,18 +162,21 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 | 目录 | 文件数 | 行数 |
 | --- | --- | --- |
 | 后端 `suvex-api/app/`（`.py`） | 115 | **45,376** |
-| 前端 `suvex-web/src/`（`.ts`/`.tsx`） | 161 | **44,730** |
+| 前端 `suvex-web/src/`（`.ts`/`.tsx`） | 160 | **44,279** |
 | 后端 `suvex-api/tests/`（`.py`） | 73 | **31,625** |
-| **合计（含测试）** | 349 | **121,731** |
+| **合计（含测试）** | 348 | **121,280** |
 
-前端细分：`.ts` 63 文件 15,566 行 · `.tsx` 98 文件 29,164 行。
+前端细分：`.ts` 63 文件 15,566 行 · `.tsx` 97 文件 28,713 行。
+
+> 前端数字的最近一次变化：删掉 `src/components/effects/DotGrid.tsx`（401 行）与 `gsap`，
+> 并同步精简了各处注释里对它的说明 —— **161 → 160 文件 / 44,730 → 44,279 行**。
 
 **⚠️ 口径警告**：另有两种算法会得到不同数字，**不要混用**：
 
 | 算法 | 后端 `app/` | 前端 `src/` | 差异原因 |
 | --- | --- | --- | --- |
-| `wc -l`（数 `\n`）**← README 口径** | 45,376 | 44,730 | — |
-| Python `splitlines()`（数逻辑行） | 45,378 | 44,732 | 各有 **2 个文件末行无换行符**，`wc -l` 各少算 1 行 |
+| `wc -l`（数 `\n`）**← README 口径** | 45,376 | 44,279 | — |
+| Python `splitlines()`（数逻辑行） | 45,378 | 44,281 | 各有 **2 个文件末行无换行符**，`wc -l` 各少算 1 行 |
 
 `README.md` 里写的 `43,256` / `41,941` 是**更早的实测快照**，代码演进后已漂移 —— 这正是 README 自己警告的坑（`README.md:263-264` 记着"曾写 32,483 而实际 39,163"）。
 
@@ -186,12 +188,12 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 | 组件 | 数量 | 许可证 | 位置 | 处置 |
 | --- | --- | --- | --- | --- |
-| ReactBits 动效组件 | 4 个 | **MIT + Commons Clause v1.0** | `suvex-web/src/components/effects/` | 已披露，逐文件记录了上游路径与本地改动 |
+| ReactBits 动效组件 | 3 个 | **MIT + Commons Clause v1.0** | `suvex-web/src/components/effects/` | 已披露，逐文件记录了上游路径与本地改动 |
 
 **取证方式**：读 `suvex-web/src/components/effects/README.md`（该文件本身即完整披露：来源、取用日期、上游路径、本地改动、已知坑）。
 
 - 上游：<https://github.com/DavidHDev/react-bits>，取用日期 2026-02-26；
-- 4 个文件：`Threads.tsx`、`DotGrid.tsx`、`LetterGlitch.tsx`、`CountUp.tsx`；
+- 3 个文件：`Threads.tsx`、`LetterGlitch.tsx`、`CountUp.tsx`（原第 4 个 `DotGrid.tsx` 已因 `gsap` 的非 OSI 许可移除）；
 - Commons Clause 限制"把组件本身单独作为产品售卖"，**本项目是应用内使用，符合条件**；
 - 分发时需保留版权声明（`Copyright (c) 2026 David Haz`）。
 
@@ -205,7 +207,7 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 1. **自研**：平台本体（后端 / 前端 / 契约体系 / 测试）、**CTF2 自主解题循环**、strix 适配层（2,752 行）均为本项目自行设计与实现；
 2. **集成**：扫描执行内核集成开源项目 `strix-agent`（Apache-2.0），**作为可替换的外部 CLI 后端调用，未复制、未修改其源码**；平台通过 `scan_runner` 配置支持 `strix | fake` 两种后端，不绑定任何单一实现；
-3. **披露**：前端 `effects/` 下有 4 个 ReactBits 组件源码拷贝（MIT + Commons Clause），出处与本地改动见 `NOTICE` 与 `effects/README.md`；其余第三方依赖及其许可证见本清单。
+3. **披露**：前端 `effects/` 下有 3 个 ReactBits 组件源码拷贝（MIT + Commons Clause），出处与本地改动见 `NOTICE` 与 `effects/README.md`；其余第三方依赖及其许可证见本清单。
 
 **不要写"全部自研"或"未使用任何第三方代码"** —— 那与事实不符，且 `NOTICE`、`LICENSE`、依赖清单、`node_modules` 都能反证。如实分层披露**不扣分**（工程规范是加分项），虚假声明才是致命风险。
 
@@ -218,7 +220,7 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 | 数据 | 命令 |
 | --- | --- |
 | 后端依赖许可证 | 遍历 `.venv/lib/python3.13/site-packages/*.dist-info/METADATA` |
-| 前端依赖许可证 | 遍历 `suvex-web/node_modules/**/package.json` 的 `license` 字段 |
+| 前端依赖许可证 | 读 `suvex-web/package-lock.json` 的 `packages`（`npm ls --all` 只列已落盘的树，含平台差异） |
 | strix 版本与许可证 | 读 `strix_agent-1.6.2.dist-info/METADATA` 的 `License-Expression` |
 | 行数 | `find suvex-api/app -name "*.py" \| xargs wc -l`（同 README 口径） |
 | 源码拷贝清单 | `suvex-web/src/components/effects/README.md` |
