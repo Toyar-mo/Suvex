@@ -930,6 +930,202 @@ class Ctf2SolveNote(Base):
         )
 
 
+class Ctf2SolveUsage(Base):
+    """**一次 LLM 调用的 token 用量**（v0.36）。
+
+    ## ★ 为什么是"每次调用一行"而不是在尝试上加累计列
+
+    需求要的是"细分到每一次任务的消耗"，而"每一次任务"有两种读法：
+    每次**解题尝试**、每次**LLM 调用**。
+
+    独立表**同时满足两者** —— 按 `attempt_id` 聚合即得前者。
+    反过来，只存累计列就**永久丢失了明细**，而明细能回答的问题
+    累计值一个都答不了：
+
+      · 哪一轮最贵（是不是在某一轮烧掉了一半预算）；
+      · 是不是在**兜圈子烧钱**（连续多轮 token 高但没进展）；
+      · 换模前后各花了多少（v0.35 的 fallback 会让同一道题用两个模型）。
+
+    代价是每轮多一次 INSERT。相对一次几百毫秒的 LLM 调用可以忽略。
+
+    ## ★★ `usage_reported` 这一列是必须的（别删）
+
+    接入点**可能不给 `usage`**（第三方代理、某些本地模型）。那时
+    token 记 0 —— 而"真的是 0 token"与"没记录到"在界面上长得一模一样。
+
+    所以单开一列布尔值区分。这与 `providers` 的 `hasKey` / `apiKey`
+    分两列、`Ctf2Submission` 的 `candidateFlag` / `confirmedFlag`
+    分两列是同一条纪律：**两种语义不能共用一个"空"**。
+
+    不这么做的后果很具体：用户看到"某次解题消耗 0"，要么以为它没跑过，
+    要么以为那次特别省 —— 两种都是错的。
+
+    ## 实测的字段口径（2026-10-14，写在这里免得再测一遍）
+
+    | 字段 | 简单问答 | 推理型 | 能用吗 |
+    | --- | --- | --- | --- |
+    | `prompt_tokens` | 37 | 75 | ✅ |
+    | `completion_tokens` | 44 | 904 | ✅ |
+    | `total_tokens` | 81 | 979 | ✅ |
+    | `input_tokens` | 37 | 75 | ⚠️ 与 prompt 重复 |
+    | **`output_tokens`** | **0** | **0** | ★ **恒为 0，不可用** |
+    | `reasoning_tokens` | 0 | **0** | ⚠️ 实测不给，不可依赖 |
+
+    ⚠️ 那个网关同时给 `usage_semantic: "openai"` 与
+    `usage_source: "anthropic"`（自建网关转译的特征）。照 Anthropic
+    那套读 `input_tokens`/`output_tokens` 会**静默少算全部输出**。
+
+    ⚠️ 推理型那次 `completion_tokens=904` 而 `content` 只有 280 字
+    —— 说明**推理开销已计入 completion**，不必单加 `reasoning_tokens`。
+    仍然留一列备查（别的接入点可能会给）。
+    """
+
+    __tablename__ = "ctf2_solve_usages"
+    __table_args__ = (
+        # 轮数从 1 起。0 轮意味着"一次不存在的调用"。
+        CheckConstraint("turn >= 1", name="solve_usage_turn_positive"),
+        # 负数只可能是解析错误（或上游给了脏数据）。
+        # 与其让它污染统计，不如让写库直接失败。
+        CheckConstraint(
+            "prompt_tokens >= 0 AND completion_tokens >= 0 AND total_tokens >= 0",
+            name="solve_usage_tokens_non_negative",
+        ),
+        # "这次尝试的逐轮明细"是最热的查询（详情页展开）。
+        Index("ix_ctf2_solve_usages_attempt_turn", "attempt_id", "turn"),
+        # 按题聚合（题解里要写"这道题一共花了多少"）。
+        Index("ix_ctf2_solve_usages_challenge_at", "challenge_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    attempt_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ctf2_solve_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    # ⚠️ 冗余存 challenge_id（attempt 已经能关联到题）：题解与总览页
+    #    都要"按题聚合 token"，而只走 attempt 需要多一次 JOIN。
+    #    与 `Ctf2SolveNote.category` 复制而非引用是同一条取舍。
+    challenge_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+    )
+
+    turn: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    # ── 这次调用是谁 ────────────────────────────────────────
+    #
+    # ⚠️ 存 model 而不是只存 provider_id：v0.35 的换模 fallback 会让
+    #    **同一次尝试**用两个模型，而"换模前后各花多少"必须能算出来。
+    model: Mapped[str] = mapped_column(String(160), nullable=False, default="")
+    provider_label: Mapped[str] = mapped_column(String(120), nullable=False, default="")
+
+    # ── token 数（接入点给的，见类 docstring 的口径表）────────
+    prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    total_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 推理 token。**实测该接入点恒为 0**，留列备查。
+    reasoning_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    #: ★ 接入点**到底给没给** usage。见类 docstring 的说明。
+    #:
+    #: False 时上面四个 token 列全是 0，而那个 0 **不代表没消耗**。
+    usage_reported: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<Ctf2SolveUsage attempt={self.attempt_id!r} turn={self.turn} "
+            f"total={self.total_tokens} reported={self.usage_reported}>"
+        )
+
+
+class Ctf2Writeup(Base):
+    """一道题的**题解（Writeup）**（v0.36）—— 赛后提交的依据。
+
+    ## 为什么 CTF2 需要自己一份（而不是复用 scans 的）
+
+    `scans/writeup.py` 拼的是**strix 报告**的重排版。而 CTF2 解题
+    **根本不走 strix** —— 它由 `app/ctf2/runner.py` 自己的循环驱动，
+    从不产生 `penetration_test_report.md`。
+
+    所以扫描的题解端点对 CTF2 的题**永远**找不到东西，而它给出的
+    错误信息（"产物目录可能被手工清理过"）在误导用户去找一个
+    根本不该存在的文件。详见契约 §3.19.5。
+
+    ## 内容从哪来
+
+    `SolveOutcome.transcript`（每轮的命令 + 输出摘要）+ 题目信息
+    + flag + 轮数/耗时/token 统计。拼装逻辑在 `ctf2/writeup.py`。
+
+    ## ★ 一题一份（`UNIQUE`），不是每次尝试一份
+
+    题解是**给赛后提交用的**，一份就够。多次尝试产多份会让"提交哪一份"
+    变成新问题。重解时**更新**（与 `Ctf2SolveNote` 的 upsert 同理）。
+
+    ## ★ 未解出也产出
+
+    需求原话是"这是赛后需要提交的依据"。未解出的题同样需要一份记录
+    ——"我们试过什么、卡在哪"本身就是可提交的材料，也是复盘依据。
+    所以 `solved` 是一个**字段**而不是"要不要建这一行"的判据。
+
+    ## ★★ flag **不脱敏** —— 与 `Ctf2SolveNote` 恰好相反
+
+    这个差别必须写下来，否则后来者会"顺手统一"而把其中一边改坏：
+
+    | | `Ctf2SolveNote`（方法卡） | `Ctf2Writeup`（题解） |
+    | --- | --- | --- |
+    | 去哪 | **另一道题**的 prompt | 赛后提交 / 给人看 |
+    | 带 flag 的后果 | **泄漏**（B 题可能把 A 题的答案交上去） | 正确 —— flag 正是要展示的 |
+    | 所以 | 白名单式脱敏 | **原样保留** |
+
+    判据是**这份内容的去向**，不是"flag 是不是秘密"。
+    """
+
+    __tablename__ = "ctf2_writeups"
+    __table_args__ = (
+        # 一道题一份。重解时**更新**而不是新增。
+        UniqueConstraint("challenge_id", name="uq_ctf2_writeups_challenge"),
+        Index("ix_ctf2_writeups_generated_at", "generated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    challenge_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+    )
+
+    #: 这份题解出自哪一次尝试。
+    #:
+    #: ⚠️ `SET NULL` 而不是 CASCADE：尝试记录被清掉时，题解**仍然有价值**
+    #:    （它是给人看的成品），不该跟着消失。而"出自哪次尝试"丢了大不了。
+    attempt_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("ctf2_solve_attempts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    #: 题解全文（markdown）。**含 flag 原文**，理由见类 docstring。
+    markdown: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    #: 产出时的状态。未解出的题解同样保留（见类 docstring）。
+    solved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    #: 产出时的轮数与耗时 —— 题解头部要写"跑了多少轮、花了多久"。
+    #:
+    #: ⚠️ 冗余存（attempt 与 scan 都有类似信息）：题解是**一份独立成品**，
+    #:    它应当自带这些数字，而不是渲染时再去别处查 —— 否则那些行
+    #:    一旦被清理，题解头部就出现空白。
+    turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    elapsed_sec: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    generated_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        # ⚠️ 不含 markdown 正文：它会进日志，而题解可能有几千行。
+        return (
+            f"<Ctf2Writeup challenge={self.challenge_id!r} solved={self.solved} "
+            f"len={len(self.markdown or '')}>"
+        )
+
+
 __all__ = [
     "CTF2_API_PREFIX",
     "CTF2_OFFICIAL_HOSTS",
@@ -939,5 +1135,7 @@ __all__ = [
     "Ctf2Environment",
     "Ctf2SolveAttempt",
     "Ctf2SolveNote",
+    "Ctf2SolveUsage",
     "Ctf2Submission",
+    "Ctf2Writeup",
 ]

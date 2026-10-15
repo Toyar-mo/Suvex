@@ -948,12 +948,143 @@ class SandboxContainer:
 
 
 @dataclass(frozen=True, slots=True)
+class TokenUsage:
+    """一次 LLM 调用的 token 用量（v0.36）。
+
+    ## ★ 为什么单独一个类型，而不是把四个 int 塞进 `LlmReply`
+
+    它要**跨模块传递**（runner → service → 数据库），而一个具名类型
+    让"这四个数字是一组、要么都有要么都没有"这件事在类型上就成立。
+    四个裸 int 会让调用方很容易只传其中两个。
+
+    ## ★★ `reported` 这一位是必须的（别删）
+
+    接入点**可能不给 `usage`**（第三方代理、某些本地模型）。那时
+    token 全是 0 —— 而"真的是 0 token"与"没记录到"在界面上长得一样。
+
+    所以 `reported=False` 明确表示"这四个 0 不代表没消耗"。
+    与 `providers` 的 `hasKey`/`apiKey` 分两列是同一条纪律。
+
+    ## 实测的字段口径（2026-10-14）
+
+    | 字段 | 简单问答 | 推理型 | 取吗 |
+    | --- | --- | --- | --- |
+    | `prompt_tokens` | 37 | 75 | ✅ |
+    | `completion_tokens` | 44 | 904 | ✅ |
+    | `total_tokens` | 81 | 979 | ✅ |
+    | `input_tokens` | 37 | 75 | ❌ 与 prompt 重复 |
+    | **`output_tokens`** | **0** | **0** | ★ **恒为 0** |
+    | `reasoning_tokens` | 0 | **0** | ⚠️ 实测不给 |
+
+    ⚠️ 照 Anthropic 那套读 `input_tokens`/`output_tokens` 会
+    **静默少算全部输出**（响应里两套口径同时存在，是自建网关转译的特征）。
+    """
+
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    reasoning_tokens: int = 0
+    #: 接入点到底给没给 usage。False 时上面四个 0 **不代表没消耗**。
+    reported: bool = False
+
+    @property
+    def billable_total(self) -> int:
+        """用于聚合的总量。
+
+        ⚠️ 优先用接入点给的 `total_tokens`；它缺失（= 0）而分项有值时
+        退回 `prompt + completion`。这样"只给分项不给总量"的接入点
+        也能统计对，而不是显示 0。
+        """
+        if self.total_tokens:
+            return self.total_tokens
+        return self.prompt_tokens + self.completion_tokens
+
+
+def parse_usage(body: object) -> TokenUsage:
+    """从 LLM 响应体里解出 token 用量（v0.36）。
+
+    ## ★ 只认 `prompt_tokens` / `completion_tokens` / `total_tokens`
+
+    实测（2026-10-14，Kali 上的默认 provider）发现那个网关**同时给两套口径**：
+
+        prompt_tokens=75  completion_tokens=904  total_tokens=979
+        input_tokens=75   output_tokens=0        ← ★ 恒为 0
+
+    响应里带 `usage_semantic: "openai"` 与 `usage_source: "anthropic"`
+    —— 这是自建网关转译的特征。若照 Anthropic 那套读
+    `input_tokens`/`output_tokens`，会**静默少算全部输出**
+    （而界面上显示 0 看起来像"没跑过"，比不显示更坏）。
+
+    所以这里**只认 OpenAI 口径**，且**不做兼容猜测** ——
+    猜错的代价是数字悄悄变错，而那比"显示未记录"糟得多。
+
+    ## 缺失时返回 `reported=False`，而不是抛
+
+    调用方（解题循环）不该因为"接入点没给 usage"而中断一道跑了
+    三十轮的题。所以这里退化成 `TokenUsage(reported=False)`，
+    由上层如实落库（见 `Ctf2SolveUsage.usage_reported`）。
+
+    ## 防御性取值
+
+    `usage` 可能是 `None`、不是 dict、或值是字符串/负数 —— 都当作
+    "没给"。**不抛异常**：这是统计，不是解题的必经之路。
+    """
+
+    def _int(value: object) -> int:
+        """取一个非负整数。取不到（None/非数字/负数）就当 0。"""
+        if isinstance(value, bool):  # bool 是 int 的子类，必须先挡掉
+            return 0
+        if isinstance(value, int):
+            return value if value >= 0 else 0
+        if isinstance(value, float) and value >= 0:
+            return int(value)
+        return 0
+
+    if not isinstance(body, dict):
+        return TokenUsage()
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return TokenUsage()
+
+    prompt = _int(usage.get("prompt_tokens"))
+    completion = _int(usage.get("completion_tokens"))
+    total = _int(usage.get("total_tokens"))
+
+    # 三个都是 0 时视为"没给" —— 真实调用不可能三个都为 0
+    # （哪怕空回复也至少有几个 prompt token）。
+    #
+    # ⚠️ 这个判据是刻意的：`reported=True` 而全是 0 会让界面显示
+    #    "消耗 0"，那与"没记录"混淆 —— 正是这一列要消除的歧义。
+    if prompt == 0 and completion == 0 and total == 0:
+        return TokenUsage()
+
+    # reasoning_tokens 藏在 completion_tokens_details 里。
+    # ⚠️ 实测该接入点恒给 0，所以它**只备查、不参与统计**。
+    details = usage.get("completion_tokens_details")
+    reasoning = 0
+    if isinstance(details, dict):
+        reasoning = _int(details.get("reasoning_tokens"))
+
+    return TokenUsage(
+        prompt_tokens=prompt,
+        completion_tokens=completion,
+        total_tokens=total,
+        reasoning_tokens=reasoning,
+        reported=True,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class LlmReply:
     text: str
     # 推理型模型会把产出分成 reasoning + content；两个都可能是我们
     # 需要的那段（见 providers/llm.py 里那段实测表）。
     source: str
     raw: dict[str, Any] = field(default_factory=dict)
+    # ★ v0.36：这次调用的 token 用量。**默认是"未记录"**（`reported=False`），
+    #   所以老的构造点（测试里手写的 `LlmReply(...)`）不会因此报错，
+    #   而它们会如实落成"没记录到 usage"。
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 class LlmGateway:
@@ -982,6 +1113,13 @@ class LlmGateway:
         self.anthropic = is_anthropic(endpoint)
         self.url = build_endpoint(endpoint, anthropic=self.anthropic, local=kind == "local")
         self.model = model
+        # ★ v0.36 补：`label` 此前只用来推断地址（`resolve_base_url`），
+        #   **没有存下来**。而 token 统计要按接入点聚合
+        #   （"换模前后各花多少"），所以必须留住它。
+        #
+        #   ⚠️ 存的是**标签**（用户起的显示名，如 "gzd"），不是 id ——
+        #      与 `Ctf2SolveUsage.provider_label` 一致。
+        self.label = label
         # ⚠️ 这个类**故意没有 `__repr__`**：默认的 object repr 只给地址，
         # 而任何自定义 repr 都有把 `_api_key` 带进去的风险。
         # 需要打日志时请用 `self.url` 与 `self.model`。
@@ -1112,7 +1250,15 @@ class LlmGateway:
             )
 
         text, source = _extract_reply(self.anthropic, parsed)
-        return LlmReply(text=text, source=source, raw=parsed if isinstance(parsed, dict) else {})
+        # ★ v0.36：顺手把 token 用量解出来带上。**不在这里落库** ——
+        #   本函数按设计不碰 DB（见 `solve_in_sandbox` 的说明），
+        #   由解题循环收进 `SolveOutcome`，收尾时统一写。
+        return LlmReply(
+            text=text,
+            source=source,
+            raw=parsed if isinstance(parsed, dict) else {},
+            usage=parse_usage(parsed),
+        )
 
 
 # ══════════════════════════════════════════════════════════
@@ -1536,6 +1682,59 @@ class SolveOutcome:
     #:    需要自然语言匹配，而那本身不可靠。这里只做最粗的一层。
     saw_tool_output: bool = False
 
+    #: ★ v0.36：每一次 LLM 调用的 token 用量（按轮次顺序）。
+    #:
+    #: ## 为什么是列表而不是累计值
+    #:
+    #: 需求要的是"细分到每一次任务的消耗"。累计值答不了：
+    #:   · 哪一轮最贵；
+    #:   · 是不是在兜圈子烧钱；
+    #:   · 换模前后各花多少（v0.35 的 fallback 会让同一道题用两个模型）。
+    #:
+    #: 每项形如 `(turn, model, provider_label, TokenUsage)` ——
+    #: 带上 model/label 是因为**换模后同一道题的调用可能来自不同模型**，
+    #: 而那正是"换模值不值"这个问题的答案所在。
+    usages: list[tuple[int, str, str, TokenUsage]] = field(default_factory=list)
+
+    #: 这次解题**一共成功调用了几次 LLM**。
+    #:
+    #: ⚠️ 数的是**成功返回的调用**（抛异常的那些没有 usage 可记）。
+    #:    所以它与 `len(usages)` **恒等**；两者与"真实 token 数"的区别
+    #:    只在于接入点给没给 usage —— 那由 `TokenUsage.reported` 表达。
+    #:
+    #: 为什么仍单独留一个计数而不直接用 `len(usages)`：
+    #: 调用次数是**免费且永远准确**的指标（我们从循环里数得出来），
+    #: 而 token 数依赖外部。分开记让"跑了多少轮"这件事不受
+    #: "接入点给不给 usage"影响。
+    llm_calls: int = 0
+
+    # ── ★ v0.38：`FINAL` 结论文档里的三块分析 ─────────────────
+    #
+    # ## 为什么必须把它们带出来（这是"题解简陋"的真正根因）
+    #
+    # `parse_final` 一直能解出完整的结论文档，但收尾时**只取了
+    # `candidates`**（`extract_candidates_with_reasons`），
+    # `summary` / `tried` / `ruled_out` 解析完就丢掉了 ——
+    # 于是模型写的那份最有价值的分析**从来没进过题解**。
+    #
+    # 实测（2026-10-15，`[ACTF2020 新生赛]Upload`）：题解 5873 字符，
+    # 而模型在 FINAL 里写了「用响应长度做旁路：baseline=8628；
+    # 上传 .php→8532…」这样的推理，在题解里 grep「响应长度」「旁路」
+    # 「黑名单」**全部 0 次命中**。那不是排版问题，是**内容被丢弃**。
+    #
+    # ## 三个字段的语义（照 FINAL 协议，见 `_final_stretch_note`）
+    #
+    # · `summary` —— 人话综述：这道题是什么、做了什么、结论如何；
+    # · `tried` —— **试过的方向**逐条（含"为什么这么试"）；
+    # · `ruled_out` —— **已排除的可能**逐条（附反例，不是"感觉不行"）。
+    #
+    # ⚠️ 它们是**自由文本列表**，形状由模型决定，所以这里只做
+    #    "取出来 + 过滤掉非字符串项"，不做结构化解析 ——
+    #    猜错结构会把整块内容丢掉，那正是这次要修的毛病。
+    summary: str = ""
+    tried: list[str] = field(default_factory=list)
+    ruled_out: list[str] = field(default_factory=list)
+
 
 def needs_raw_network(category: str | None) -> bool:
     """这道题是否需要**容器内**的原始网络。
@@ -1833,6 +2032,50 @@ def parse_action(text: str) -> tuple[str, dict[str, Any]] | None:
 def parse_final(text: str) -> dict[str, Any] | None:
     """`FINAL: {...}` → 结论文档。认不出返回 None。"""
     return _parse_json_block(text, "FINAL")
+
+
+def extract_final_analysis(payload: dict[str, Any] | None) -> tuple[str, list[str], list[str]]:
+    """从结论文档里取 `(summary, tried, ruled_out)`（v0.38）。
+
+    ## 为什么单独一个函数，而不是在收尾那处内联取
+
+    历史题解**重生成**要走同一条提取逻辑（`scripts/regenerate_ctf2_writeups.py`
+    从 transcript 重跑）。内联一份的话，两处口径迟早漂移 ——
+    而症状是"重生成的题解少了 `tried`"，看起来像模型没写。
+
+    ## 容错：形状不对就当没有，**不抛**
+
+    `tried` / `ruled_out` 在协议里是字符串数组，但模型实测会给：
+      · 缺字段 → 空列表；
+      · 给成单个字符串 → 包成一项（别丢内容）；
+      · 给成含 `null` / 数字 / 嵌套对象的数组 → **逐项过滤**，
+        只留非空字符串（与 `extract_candidates_with_reasons`
+        "坏的就丢并记下"同一条思路）。
+
+    ⚠️ **不做"猜结构"**：如果它给的是 `[{"step": "...", "why": "..."}]`，
+       这里会**丢掉**那一条（因为不是字符串）。这是刻意的取舍 ——
+       猜错结构会把整块内容按错误的形状渲染出来，而"少一条"至少
+       不会误导。真遇到那种形状时应该改协议，不是在这里猜。
+    """
+    if not isinstance(payload, dict):
+        return "", [], []
+
+    raw_summary = payload.get("summary")
+    summary = raw_summary.strip() if isinstance(raw_summary, str) else ""
+
+    def _strings(value: object) -> list[str]:
+        if isinstance(value, str):
+            # 单个字符串包成一项：模型偶尔把数组写成一个长句。
+            return [value.strip()] if value.strip() else []
+        if not isinstance(value, list):
+            return []
+        out: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item.strip():
+                out.append(item.strip())
+        return out
+
+    return summary, _strings(payload.get("tried")), _strings(payload.get("ruled_out"))
 
 
 def extract_candidates(payload: dict[str, Any] | None) -> list[Candidate]:
@@ -2270,6 +2513,19 @@ async def solve_in_sandbox(
                 outcome.transcript = "\n\n".join(log)
                 return outcome
 
+            # ★ v0.36：记下这次调用的 token 用量。
+            #
+            # ⚠️ 位置在**成功之后** —— 抛异常的调用没有 usage 可记，
+            #    所以 `llm_calls` 数的是**成功返回的调用**，
+            #    与 `usages` 的长度恒等。两者不等的情况只出现在
+            #    "接入点没给 usage"（那时 `TokenUsage.reported=False`）。
+            #
+            # ⚠️ 带上 `gateway.model` / `gateway.label`：v0.35 换模之后
+            #    `gateway` 已经指向新接入点，所以同一次解题的不同轮次
+            #    可能落在不同模型上 —— 而那正是"换模值不值"要回答的。
+            outcome.llm_calls += 1
+            outcome.usages.append((turn, gateway.model, gateway.label, reply.usage))
+
             text = reply.text or ""
             log.append(f"[turn {turn}] assistant({reply.source}): {_clip(text, 4000)}")
             recent.append({"role": "assistant", "content": text})
@@ -2278,6 +2534,17 @@ async def solve_in_sandbox(
             final = parse_final(text)
             if final is not None:
                 outcome.candidates, rejected = extract_candidates_with_reasons(final)
+                # ★ v0.38：把结论文档里的三块分析也带出来。
+                #
+                # ⚠️ 位置在**这个 return 之前**，且与 `candidates` 同一层 ——
+                #    放晚了（比如放到 `if not outcome.candidates` 里面）
+                #    会让"解出了"的那些题丢掉 summary/tried/ruled_out，
+                #    而它们同样是题解正文的来源。
+                (
+                    outcome.summary,
+                    outcome.tried,
+                    outcome.ruled_out,
+                ) = extract_final_analysis(final)
                 outcome.transcript = "\n\n".join(log)
                 if not outcome.candidates:
                     if rejected:
@@ -3815,13 +4082,25 @@ async def _run_worker(
         challenge = db.get(Ctf2Challenge, challenge_id)
         if challenge is not None:
             _record_outcome(db, challenge, outcome)
-            # ★ 再把解题 scan 收尾，且**必须用 `_record_outcome` 之后的
-            #   最终状态**来映射（解出 → completed，其余 → failed）。
-            #   顺序反了会把一道刚解出的题记成一条 failed 的扫描。
+            # ★ v0.36：token 用量与题解。
             #
-            #   少了这一步的症状（用户截图实测）：题早解完了，扫描列表
-            #   却一直显示"运行中 · 0 个智能体 · ⚠ 疑似卡死"——
-            #   见 `events.finalize_solve_scan` 的说明。
+            # ⚠️ 顺序在 `_record_outcome` **之后** —— 题解要写
+            #    "这道题解没解出"，而那个状态正是 `_record_outcome`
+            #    刚刚定下的。放前面会把一道刚解出的题写成"未解出"。
+            #
+            # ⚠️ 两者都**自己吞异常**（内部 try/except + warning）：
+            #    统计与题解是**附加产物**，失败不该把一次成功的解题
+            #    变成报错 —— 与 `learn_from_solve` 同一条纪律。
+            # ⚠️ 耗时从**借的壳 scan** 上取（`Scan.duration_sec`）——
+            #    `Ctf2Challenge` 自己没有耗时列。
+            #
+            # ⚠️⚠️ **必须在 `finalize_solve_scan` 之后读**：`duration_sec`
+            #     正是那个函数在收尾时算出来写上去的（见它的实现）。
+            #     放在它之前读，永远拿到 `None`，而题解会写"未记录"——
+            #     看起来像"没测到"，实际是**读的时机错了**。
+            ctf2_service.record_solve_usages(
+                db, attempt_id=attempt_id, challenge_id=challenge_id, outcome=outcome
+            )
             try:
                 ctf2_events.finalize_solve_scan(db, challenge)
             except Exception:  # noqa: BLE001 - 收尾失败不该盖住解题结果
@@ -3830,6 +4109,15 @@ async def _run_worker(
                     challenge_id,
                     exc_info=True,
                 )
+            # ★ 题解放在最后：它要读 `duration_sec`（上一句刚写的），
+            #   而那个值只有收尾之后才存在。
+            ctf2_service.save_writeup(
+                db,
+                challenge=challenge,
+                outcome=outcome,
+                attempt_id=attempt_id,
+                elapsed_sec=_solve_elapsed_seconds(db, challenge),
+            )
         db.commit()
     logger.info(
         "CTF2 解题结束：%s turns=%d candidates=%d error=%s",
@@ -3981,6 +4269,33 @@ def _remote_ids(challenge_id: str) -> dict[str, Any]:
         }
 
 
+def _solve_elapsed_seconds(db: Session, challenge: Ctf2Challenge) -> int | None:
+    """这次解题跑了多久（秒）。取不到返回 `None`。
+
+    ## 为什么从**借的壳 scan** 上取
+
+    `Ctf2Challenge` 没有耗时列；而 CTF2 借的那条 scan
+    （`events.ensure_solve_scan` 建的）有 `duration_sec`，
+    由 `finalize_solve_scan` 在收尾时算出。
+
+    ## ★ 为什么返回 `None` 而不是 0
+
+    两者语义不同：`None` = **没测到**（收尾没跑、scan 被删），
+    0 = 真的 0 秒。题解里前者写"未记录"、后者写"0 秒" ——
+    编一个 0 会让"未记录"伪装成一个具体读数。
+
+    ⚠️ 调用点必须在 `finalize_solve_scan` **之后** —— 那个值由它写入。
+    """
+    from app.scans.models import Scan
+
+    if not challenge.scan_id:
+        return None
+    scan = db.get(Scan, challenge.scan_id)
+    if scan is None or scan.duration_sec is None:
+        return None
+    return int(scan.duration_sec)
+
+
 def _record_outcome(db: Session, challenge: Ctf2Challenge, outcome: SolveOutcome) -> None:
     """把解题结果写回题目行。**不覆盖已经成功的状态。**
 
@@ -4119,6 +4434,8 @@ __all__ = [
     "SolveSpec",
     "SubmitDecision",
     "TOOL_NAMES",
+    "TokenUsage",
+    "parse_usage",
     "already_submitted",
     "allowed_hosts",
     "build_spec",
@@ -4130,6 +4447,7 @@ __all__ = [
     "guard_tool_url",
     "image_for_profile",
     "interpret_submit",
+    "extract_final_analysis",
     "load_system_prompt",
     "needs_raw_network",
     "normalize_flag",

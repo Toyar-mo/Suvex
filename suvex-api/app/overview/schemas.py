@@ -37,6 +37,33 @@ class OverviewMetricsOut(CamelModel):
     # 被判误报、**未计入上面两个指标**的条数。
     falsePositiveCount: int
 
+    # ── CTF2 token 消耗（v0.36）────────────────────────────
+    #
+    # 需求原话是"总览页要写一个统计 token 消耗，细分到每一次任务
+    # 的消耗，和总消耗"。这里给**总量**；细分（按题、按模型、逐轮）
+    # 在 `GET /ctf2/usage` 与 `GET /ctf2/challenges/{id}/usage`。
+    #
+    # ⚠️ 放在 overview 而不是只留在 CTF2 页面：token 是**成本**，
+    #    而成本该和"扫了多少、发现了多少"放在同一屏上看。
+    #    （与 `avgScanDurationSec` 同一条理由：那张卡片回答的是
+    #    "这套东西烧掉了多少资源"。）
+
+    #: LLM 调用总次数（**永远准确**，从行数数得出来）。
+    ctf2LlmCalls: int = 0
+    #: 其中**接入点真的返回了用量**的次数。
+    #:
+    #: ★★ 与 `ctf2LlmCalls` 必须分开显示：两者不等时 `ctf2TotalTokens`
+    #: 是**下限**（有几次没算进去）。把"没记录"显示成"消耗 0"
+    #: 会与"没跑过"混淆 —— 见 `Ctf2TokenUsageOut` 的说明。
+    ctf2RecordedCalls: int = 0
+    #: 总 token（prompt + completion）。**未做金额换算**（单价易变）。
+    ctf2TotalTokens: int = 0
+    #: 统计从哪一刻开始。为空 = 一条记录都没有。
+    #:
+    #: ⚠️ v0.36 **之前**的解题没有 usage 记录。不给这个字段的话，
+    #:    用户会以为"总共就花了这么点"，而实际是**没记**。
+    ctf2UsageSince: IsoDateTime | None = None
+
 
 class SeverityBreakdownOut(CamelModel):
     """`OverviewData.severityBreakdown` 的一项。

@@ -594,6 +594,151 @@ class Ctf2QueueOut(CamelModel):
     challenges: list[str]
 
 
+class Ctf2WriteupOut(CamelModel):
+    """`GET /ctf2/challenges/{id}/writeup` —— 一道题的题解（v0.36）。
+
+    ## ★ 为什么 CTF2 要自己的题解端点
+
+    CTF2 解题**不走 strix**（由 `runner.solve_in_sandbox` 自己的循环驱动），
+    所以 `GET /scans/{id}/writeup` 对它**永远**找不到报告文件 ——
+    而它报的"产物目录可能被手工清理过"在误导用户。详见契约 §3.19.5。
+
+    ## ⚠️ `markdown` **含 flag 原文**
+
+    与 `Ctf2SolveNote`（方法卡）相反：卡片进**另一道题**的 prompt，
+    必须白名单式脱敏；而题解是**赛后提交给人看**的，flag 正是要展示的。
+    判据是这份内容的**去向**，不是"flag 是不是秘密"。
+    """
+
+    challengeId: str
+    title: str
+    category: str
+    #: 产出时这道题解没解出。未解出的题解同样保留（"试过什么"也是材料）。
+    solved: bool
+    markdown: str
+    #: 下载用的文件名（前端 `downloadMarkdown` 直接拿去用）。
+    filename: str
+    #: 出自哪一次尝试。可空（尝试记录被清掉时 `SET NULL`）。
+    attemptId: str | None = None
+    turns: int
+    elapsedSec: int | None = None
+    generatedAt: IsoDateTime
+    updatedAt: IsoDateTime
+
+
+class Ctf2UsageEntryOut(CamelModel):
+    """**一次 LLM 调用**的用量（"细分到每一次任务"最直接的视图）。"""
+
+    turn: int
+    model: str
+    providerLabel: str
+    promptTokens: int
+    completionTokens: int
+    totalTokens: int
+    reasoningTokens: int
+    #: ★ 接入点**到底给没给**用量。
+    #:
+    #: False 时上面四个 token 值都是 0，而那个 0 **不代表没消耗** ——
+    #: 所以前端必须分开显示"0"与"未记录"。
+    usageReported: bool
+    at: IsoDateTime
+
+
+class Ctf2UsageByModelOut(CamelModel):
+    """按模型分组的用量。
+
+    换模（v0.35 的 fallback）之后**同一次解题**会用两个模型，
+    而"换模前后各花多少、值不值"是这里最有价值的读数。
+    """
+
+    model: str
+    providerLabel: str
+    calls: int
+    totalTokens: int
+
+
+class Ctf2UsageByChallengeOut(CamelModel):
+    """按题分组的用量（总览页看"哪道题最烧钱"）。"""
+
+    challengeId: str
+    title: str
+    calls: int
+    totalTokens: int
+
+
+class Ctf2UsageByAttemptOut(CamelModel):
+    """★ 按**每次解题**分组的用量（v0.37）。
+
+    ## 为什么在 `byChallenge` 之外还要这个
+
+    需求原话是"细分到**每个任务**的消耗"。而"任务"在 CTF2 里指的是
+    **一次解题**，不是"一道题" —— 一道题可以解很多次。
+
+    实测（2026-10-15）：`[ACTF2020 新生赛]Upload` 有 **4 次** attempt。
+    只按题聚合会把"哪一次跑得贵、哪一次在兜圈子"糊成一行，
+    而那正是复盘时最想知道的东西。
+
+    ## 为什么不需要新表
+
+    `ctf2_solve_attempts` 从 v0.28 起就带 `mode` / `created_at` /
+    `llm_model` / `max_turns`，所以这只是**多一个聚合维度**，
+    不是新数据。本字段纯增，`byModel` / `byChallenge` 保持不变
+    （前端已有的渲染不受影响）。
+
+    ## ⚠️ `attemptId` 可能是空串
+
+    v0.36 之前的解题**没有 usage 记录**，所以不会出现在这里；
+    但 usage 行的 `attempt_id` 是 NOT NULL 外键，理论上不会空。
+    留 `attemptId` 而非只给 `challengeId`：前端要靠它跳回那一次解题。
+    """
+
+    attemptId: str
+    challengeId: str
+    title: str
+    #: 这次解题用的提交策略（`safe` / `auto`）—— 与"花了多少"同屏才看得出代价。
+    mode: str
+    #: 这次解题用的模型快照。换模后同一道题的不同 attempt 会不同。
+    model: str
+    calls: int
+    totalTokens: int
+    #: 这次解题的受理时刻（= 这次"任务"的起点）。
+    startedAt: IsoDateTime
+
+
+class Ctf2TokenUsageOut(CamelModel):
+    """`GET /ctf2/usage` —— token 消耗统计（v0.36）。
+
+    ## ★★ `calls` 与 `recordedCalls` 必须分开看
+
+    · `calls` = 调用次数（**永远准确**，从行数数得出来）；
+    · `recordedCalls` = 其中**接入点真的返回了用量**的次数。
+
+    两者不等时 `totalTokens` 是**下限**（有几次没算进去）。
+    把"没记录"显示成"消耗 0"会与"没跑过"混淆，那正是这一对字段
+    要消除的歧义 —— 与 `hasKey`/`apiKey` 分两列是同一条纪律。
+
+    ## `since`：统计从哪一刻开始
+
+    v0.36 **之前**的解题没有 usage 记录。不给这个字段的话，用户会
+    以为"总共就花了这么点"，而实际是**没记**。所以界面要显示它。
+    """
+
+    calls: int
+    recordedCalls: int
+    promptTokens: int
+    completionTokens: int
+    #: ★ 它是 `total_tokens` 与 `prompt+completion` 里较大者之和
+    #: （有的接入点只给分项），所以与逐题相加能对上。
+    totalTokens: int
+    byModel: list[Ctf2UsageByModelOut]
+    byChallenge: list[Ctf2UsageByChallengeOut]
+    #: ★ v0.37：按**每次解题**分组 —— 需求要的"细分到每个任务"。
+    #: 纯增字段，`byModel` / `byChallenge` 语义不变。
+    byAttempt: list[Ctf2UsageByAttemptOut] = Field(default_factory=list)
+    #: 最早一条记录的时间。为空表示一条都没有。
+    since: IsoDateTime | None = None
+
+
 __all__ = [
     "ChallengeStatusLiteral",
     "Ctf2AccountBindIn",
@@ -614,6 +759,11 @@ __all__ = [
     "Ctf2SubmitOut",
     "Ctf2SyncIn",
     "Ctf2SyncOut",
+    "Ctf2TokenUsageOut",
+    "Ctf2UsageByChallengeOut",
+    "Ctf2UsageByModelOut",
+    "Ctf2UsageEntryOut",
+    "Ctf2WriteupOut",
     "EnvironmentStatusLiteral",
     "PlatformDriverLiteral",
     "PlatformStatusLiteral",

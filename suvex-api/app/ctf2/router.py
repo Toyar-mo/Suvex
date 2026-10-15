@@ -19,6 +19,9 @@
 | POST | `/ctf2/challenges/{id}/submit` | **scan** | **对外提交 flag，消耗不可再生额度** |
 | POST | `/ctf2/challenges/{id}/cancel` | **scan** | 改状态 |
 | DELETE | `/ctf2/challenges/{id}/environment` | **scan** | 释放平台资源 |
+| GET | `/ctf2/challenges/{id}/writeup` | read | 题解（v0.36）。只读拼装好的 markdown |
+| GET | `/ctf2/challenges/{id}/usage` | read | 该题的**逐次** token 明细（v0.36）|
+| GET | `/ctf2/usage` | read | 全局 token 统计（v0.36）|
 
 ### 三条「为什么」
 
@@ -54,8 +57,10 @@ from sqlalchemy.orm import Session
 from app.audit import service as audit
 from app.auth.deps import Identity, require_admin, require_read, require_scan
 from app.core.db import get_db
+from app.core.errors import ApiError, ErrorCode
 from app.core.vocab import AuditAction
 from app.ctf2 import platforms, service
+from app.ctf2 import writeup as writeup_mod
 from app.ctf2.models import Ctf2Challenge, Ctf2Competition, Ctf2Environment
 from app.ctf2.schemas import (
     Ctf2AccountBindIn,
@@ -82,6 +87,12 @@ from app.ctf2.schemas import (
     Ctf2SubmitOut,
     Ctf2SyncIn,
     Ctf2SyncOut,
+    Ctf2TokenUsageOut,
+    Ctf2UsageByAttemptOut,
+    Ctf2UsageByChallengeOut,
+    Ctf2UsageByModelOut,
+    Ctf2UsageEntryOut,
+    Ctf2WriteupOut,
 )
 
 router = APIRouter(prefix="/ctf2", tags=["CTF2"])
@@ -783,6 +794,163 @@ def release_environment(challengeId: str, _identity: ScanDep, db: DbDep) -> None
     """
     service.get_challenge_or_404(db, challengeId)  # 不存在就 404
     service.release_environment_sync(db, challengeId)
+
+
+# ══════════════════════════════════════════════════════════
+# 题解与 token 统计（v0.36）
+# ══════════════════════════════════════════════════════════
+
+
+@router.get(
+    "/challenges/{challengeId}/writeup",
+    response_model=Ctf2WriteupOut,
+    summary="CTF 题解（Writeup）",
+)
+def read_writeup(challengeId: str, _identity: ReadDep, db: DbDep) -> Ctf2WriteupOut:
+    """读这道题的题解（赛后提交的依据）。
+
+    ## ★ 为什么不复用 `GET /scans/{id}/writeup`
+
+    那条路拼的是 **strix 报告**的版式重排。而 CTF2 解题**不走 strix**
+    （由 `runner.solve_in_sandbox` 自己的循环驱动），从不产生
+    `penetration_test_report.md`。
+
+    所以扫描的题解端点对 CTF2 的题**永远**报"没有留下报告文件"，
+    而那句话在误导用户去找一个不该存在的文件 —— 详见契约 §3.19.5。
+
+    ## 三种成因走同一个 409，但**话不一样**
+
+    判据是"这道题**发起过**解题没有"（`service.was_solve_started`），
+    **不是** `status == unsolved`、**也不是**只看受理快照：
+
+      · 题不存在 → 404（由 `get_challenge_or_404` 抛）；
+      · 从没发起过 → "点「解题」跑一次，结束后会自动生成"；
+      · 发起过但没留下题解行 → "这次没有生成题解"，并给出下一步。
+
+    ⚠️ 判据**不能**用状态。`environment_ready` / `solving` /
+    `submitting` / `candidate_ready` / `failed` 都不是 `unsolved`，
+    按状态二分会把它们全部归进第二档 —— 于是**一道正在跑的题**
+    会得到"解题记录早于题解功能上线（v0.36）"这句**假话**。
+    用户刚点完「解题」，却被告知"重解一次" —— 那是最不该发生的误导。
+
+    ⚠️ 判据**也不能**只看 `ctf2_solve_attempts`。那张表是 v0.28 才建的，
+    之前解的题没有 attempt 行 —— 实测有 **20 道平台判过对的题**
+    （`hashcat` 等）会因此得到"还没有解过"这句假话。所以判据加上了
+    壳 scan（`scan_id` 非空）这条更早的证据线，详见
+    `service.was_solve_started` 的说明。
+
+    分开三个码只会让前端写三段其实一样的分支 —— 补救动作都不是
+    在界面上能做的。而 `message` 本来就是写给用户看的中文原话。
+    """
+    challenge = service.get_challenge_or_404(db, challengeId)
+
+    row = service.get_writeup(db, challengeId)
+    if row is None:
+        # ⚠️ 区分"从没发起过"与"发起过但没留下题解" —— 两者下一步不同。
+        if not service.was_solve_started(db, challengeId):
+            raise ApiError(
+                409,
+                ErrorCode.WRITEUP_UNAVAILABLE,
+                "这道题还没有解过，所以没有题解。点「解题」跑一次，"
+                "结束后会自动生成。",
+            )
+        raise ApiError(
+            409,
+            ErrorCode.WRITEUP_UNAVAILABLE,
+            "这次解题没有生成题解（题解功能自 v0.36 起才产出，"
+            "也可能那一次没有留下解题过程）。重新解一次就会生成。",
+        )
+
+    return Ctf2WriteupOut(
+        challengeId=challenge.id,
+        title=challenge.title,
+        category=challenge.category or "",
+        solved=row.solved,
+        markdown=row.markdown,
+        filename=writeup_mod.filename_for(challenge),
+        attemptId=row.attempt_id,
+        turns=row.turns,
+        elapsedSec=row.elapsed_sec,
+        generatedAt=row.generated_at,
+        updatedAt=row.updated_at,
+    )
+
+
+@router.get(
+    "/challenges/{challengeId}/usage",
+    response_model=list[Ctf2UsageEntryOut],
+    summary="单题的逐次 token 消耗",
+)
+def read_challenge_usage(
+    challengeId: str, _identity: ReadDep, db: DbDep
+) -> list[Ctf2UsageEntryOut]:
+    """这道题的**每一次 LLM 调用**花了多少（按时间与轮次升序）。
+
+    这是"细分到每一次任务的消耗"最直接的视图 —— 能看出
+    哪一轮最贵、是不是在兜圈子烧钱。
+
+    ⚠️ 返回的每一项都带 `usageReported`：接入点没给用量时 token 是 0，
+    而那个 0 **不代表没消耗**。前端必须分开显示"0"与"未记录"。
+    """
+    service.get_challenge_or_404(db, challengeId)  # 不存在就 404
+    rows = service.challenge_usage_entries(db, challengeId)
+    return [
+        Ctf2UsageEntryOut(
+            turn=r.turn,
+            model=r.model,
+            providerLabel=r.provider_label,
+            promptTokens=r.prompt_tokens,
+            completionTokens=r.completion_tokens,
+            totalTokens=r.total_tokens,
+            reasoningTokens=r.reasoning_tokens,
+            usageReported=r.usage_reported,
+            at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.get("/usage", response_model=Ctf2TokenUsageOut, summary="token 消耗统计")
+def read_usage(
+    _identity: ReadDep,
+    db: DbDep,
+    challengeId: Annotated[str | None, Query(alias="challengeId")] = None,
+    competitionId: Annotated[str | None, Query(alias="competitionId")] = None,
+) -> Ctf2TokenUsageOut:
+    """token 消耗统计（总览页与题目详情共用）。
+
+    ## ★★ `calls` 与 `recordedCalls` 分开看
+
+    `calls` 是调用次数（永远准确）；`recordedCalls` 是其中**接入点
+    真的返回了用量**的次数。两者不等时 `totalTokens` 是**下限**。
+
+    把"没记录"显示成"消耗 0"会与"没跑过"混淆 —— 见
+    `schemas.Ctf2TokenUsageOut` 的说明。
+
+    ## ⚠️ 不做 token → 金额换算
+
+    单价随模型、供应商、时段变化，写死在代码里会误导。只给 token 数。
+
+    ## ⚠️ `since` 说明统计从哪一刻开始
+
+    v0.36 之前的解题没有 usage 记录。前端应显示它，否则用户会以为
+    "总共就花了这么点"，而实际是**没记**。
+    """
+    data = service.token_usage_summary(
+        db, challenge_id=challengeId, competition_id=competitionId
+    )
+    return Ctf2TokenUsageOut(
+        calls=data["calls"],
+        recordedCalls=data["recordedCalls"],
+        promptTokens=data["promptTokens"],
+        completionTokens=data["completionTokens"],
+        totalTokens=data["totalTokens"],
+        byModel=[Ctf2UsageByModelOut(**m) for m in data["byModel"]],
+        byChallenge=[Ctf2UsageByChallengeOut(**c) for c in data["byChallenge"]],
+        # ★ v0.37：按每次解题分组（需求要的"细分到每个任务"）。
+        byAttempt=[Ctf2UsageByAttemptOut(**a) for a in data["byAttempt"]],
+        since=data["since"],
+    )
 
 
 # ══════════════════════════════════════════════════════════

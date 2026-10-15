@@ -61,10 +61,18 @@ import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
+
+#: 仅用于类型注解的导入（运行时**不**导入）。
+#:
+#: `Ctf2Writeup` 在 `get_writeup` 的签名里出现，而那个模块与本模块
+#: 有循环导入关系 —— 所以运行时只在函数体内 import。
+#: 这个块让静态检查（ruff 的 F821）认得那个名字。
+if TYPE_CHECKING:
+    from app.ctf2.models import Ctf2Writeup
 
 from app.core.crypto import SecretDecryptError, decrypt_secret, encrypt_secret, mask_secret
 from app.core.db import session_scope
@@ -2044,6 +2052,447 @@ def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  #
         challenge.id,
         solved,
         fields["tools"] or "无",
+    )
+
+
+def record_solve_usages(
+    db: Session, *, attempt_id: str | None, challenge_id: str, outcome
+) -> int:  # noqa: ANN001
+    """把一次解题的逐轮 token 用量落库（v0.36）。**失败只记日志，不抛。**
+
+    ## 为什么失败不抛
+
+    它在解题**收尾**时被调用，而那时结果是既成事实。让"记统计"的失败
+    把一次成功的解题变成报错是本末倒置 —— 与 `learn_from_solve`
+    同一条理由。
+
+    ## ★ `attempt_id` 为 None 时**整批跳过**
+
+    `ctf2_solve_usages.attempt_id` 是 NOT NULL 外键。拿不到 attempt
+    （历史任务、测试直接调 `run_worker` 而没有快照）时无法落库。
+
+    这时**跳过而不是抛**：统计缺失是可以接受的，而"因为没快照就
+    让解题失败"不行。但要**出声**记 warning —— 静默跳过会让
+    "为什么这道题没有 token 记录"变成一个查不出来的谜。
+
+    ## 为什么按行 INSERT 而不是批量
+
+    轮数通常 20–80，一次 `add_all` 就够。真正的量级问题不在这里
+    （一次解题只写一次），所以不做分批。
+    """
+    from app.core.ids import new_id
+    from app.ctf2.models import Ctf2SolveUsage
+
+    usages = list(getattr(outcome, "usages", None) or [])
+    if not usages:
+        # 没有调用记录是**正常**的（比如沙箱起不来，一轮都没跑）。
+        # 不记 warning —— 那会把正常情况刷成噪音。
+        return 0
+
+    if not attempt_id:
+        logger.warning(
+            "这次解题没有策略快照，%d 条 token 用量无处可挂（统计会缺这一段）：%s",
+            len(usages),
+            challenge_id,
+        )
+        return 0
+
+    rows = [
+        Ctf2SolveUsage(
+            id=new_id("ctf2use"),
+            attempt_id=attempt_id,
+            challenge_id=challenge_id,
+            turn=turn,
+            # ⚠️ 列宽 160，超长截断而不是让写库失败（模型名可能很长）。
+            model=(model or "")[:160],
+            provider_label=(label or "")[:120],
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            total_tokens=usage.total_tokens,
+            reasoning_tokens=usage.reasoning_tokens,
+            usage_reported=usage.reported,
+        )
+        for turn, model, label, usage in usages
+    ]
+    try:
+        db.add_all(rows)
+        db.commit()
+    except Exception:  # noqa: BLE001 - 统计失败不该毁掉解题结果
+        db.rollback()
+        logger.warning(
+            "token 用量落库失败（不影响解题结果）：%s", challenge_id, exc_info=True
+        )
+        return 0
+
+    reported = sum(1 for r in rows if r.usage_reported)
+    logger.info(
+        "已记录 token 用量：%s（%d 次调用，其中 %d 次接入点返回了用量，共 %d token）",
+        challenge_id,
+        len(rows),
+        reported,
+        sum(r.total_tokens or (r.prompt_tokens + r.completion_tokens) for r in rows),
+    )
+    return len(rows)
+
+
+def save_writeup(
+    db: Session,
+    *,
+    challenge: Ctf2Challenge,
+    outcome,  # noqa: ANN001
+    attempt_id: str | None,
+    elapsed_sec: int | None,
+) -> None:
+    """生成并保存这道题的题解（v0.36）。**失败只记日志，不抛。**
+
+    ## 为什么在这里生成而不是让端点现拼
+
+    题解要用 `outcome.transcript`，而那份内容**只在收尾那一刻在内存里**
+    （之后只留在磁盘上的 transcript 文件里）。端点现拼就得去读文件、
+    再解析一遍 —— 而"读文件失败"会让一个已经成功的解题显示不出题解。
+
+    所以收尾时生成一次、落库，端点只读库。
+
+    ## ★ 一题一份：重解时**更新**（与 `learn_from_solve` 同理）
+
+    题解是给赛后提交用的，一份就够。多次尝试产多份会让"提交哪一份"
+    变成新问题。
+
+    ## ⚠️ 题解里**保留 flag 原文**（与 `learn_from_solve` 相反）
+
+    见 `models.Ctf2Writeup` 的类 docstring：判据是这份内容的**去向**
+    （赛后提交 vs 注入另一道题的 prompt），不是"flag 是不是秘密"。
+    """
+    from app.core.ids import new_id
+    from app.ctf2 import writeup as writeup_mod
+    from app.ctf2.models import Ctf2Writeup
+
+    solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
+
+    try:
+        markdown = writeup_mod.build_writeup(
+            challenge=challenge,
+            outcome=outcome,
+            solved=solved,
+            elapsed_sec=elapsed_sec,
+        )
+    except Exception:  # noqa: BLE001 - 题解生成失败不该毁掉解题结果
+        logger.warning("生成题解失败（不影响解题结果）：%s", challenge.id, exc_info=True)
+        return
+
+    try:
+        existing = (
+            db.execute(select(Ctf2Writeup).where(Ctf2Writeup.challenge_id == challenge.id))
+            .scalars()
+            .first()
+        )
+        if existing is None:
+            db.add(
+                Ctf2Writeup(
+                    id=new_id("ctf2wp"),
+                    challenge_id=challenge.id,
+                    attempt_id=attempt_id,
+                    markdown=markdown,
+                    solved=solved,
+                    turns=int(getattr(outcome, "turns", 0) or 0),
+                    elapsed_sec=elapsed_sec,
+                )
+            )
+        else:
+            existing.attempt_id = attempt_id
+            existing.markdown = markdown
+            existing.solved = solved
+            existing.turns = int(getattr(outcome, "turns", 0) or 0)
+            existing.elapsed_sec = elapsed_sec
+        db.commit()
+    except Exception:  # noqa: BLE001 - 同上
+        db.rollback()
+        logger.warning("题解落库失败（不影响解题结果）：%s", challenge.id, exc_info=True)
+        return
+
+    logger.info("已生成题解：%s（%d 字符，solved=%s）", challenge.id, len(markdown), solved)
+
+
+def get_writeup(db: Session, challenge_id: str) -> Ctf2Writeup | None:
+    """读一道题的题解。没有就返回 `None`（由路由决定报什么错）。
+
+    ⚠️ `Ctf2Writeup` 只在函数体内 import（避免模块级循环），
+    而注解这里能直接写名字是因为文件头有
+    `from __future__ import annotations`（注解不求值）。
+    另有一个 `TYPE_CHECKING` 块让静态检查认得它。
+    """
+    from app.ctf2.models import Ctf2Writeup
+
+    return (
+        db.execute(select(Ctf2Writeup).where(Ctf2Writeup.challenge_id == challenge_id))
+        .scalars()
+        .first()
+    )
+
+
+def was_solve_started(db: Session, challenge_id: str) -> bool:
+    """这道题**发起过**解题吗（v0.36）。
+
+    ⚠️ 读作"解题有没有开始过"—— **不是**"有没有解出"。
+       它与 `status == solved` 无关：未解出的题同样算"发起过"
+       （题解对未解出的题也产出，见 `writeup.build_writeup`）。
+
+    ## ★ 判据是两条证据任一成立
+
+    1. `ctf2_solve_attempts` 里有没有这道题的行（v0.28 起的**受理快照**）；
+    2. `Ctf2Challenge.scan_id` 是不是非空（**壳 scan**，从第一版就有）。
+
+    ## ★★ 为什么必须两条 —— 少一条就会对一批老题说假话
+
+    `ctf2_solve_attempts` 是迁移 `d5e8f1a37c92`（v0.28，10-11）才建的表。
+    **在那之前解的题没有 attempt 行，但都有壳 scan。**
+
+    实测（2026-10-15，全库 135 道逐题核）：**22 道**题有 `scan_id`、
+    无 attempt 行、无题解 —— 其中 **20 道是 `solved` 且 `confirmed_flag`
+    非空**（`hashcat`、`Url编码`、`流量！鲨鱼！`…），`solved_at` 落在
+    09-30 ~ 10-08，而有 attempt 的题最早是 10-12，**时间上完全分界**。
+
+    只看 attempt 的话，这 20 道**平台判过对的题**会得到
+    「这道题还没有解过，点「解题」跑一次」—— 一句假话。
+    这与它服务的那个修正（见 `router.read_writeup` 的说明：
+    别让错误信息误导用户）是同一个毛病，只是换了个边。
+
+    两条判据的覆盖（实测）：只查 attempt 误判 **22** 道；
+    两条任一 误判 **0** 道。反向同样安全：真没跑过的 **104** 道
+    （两者皆空）仍判 False，不会多给入口。
+
+    ## 为什么不用 `status` 判
+
+    状态会被后续流转改掉 —— `environment_ready` 是解题过程的**主状态**
+    （几十分钟里都不是 `unsolved`），按状态二分会把正在跑的题归错档。
+    判"有没有发生过"要用**落下来就不变的事实**，不能用当前状态。
+    """
+    from app.ctf2.models import Ctf2Challenge, Ctf2SolveAttempt
+
+    # 证据 1：受理快照（v0.28+）。比状态可靠 —— 状态会被改写，快照不会。
+    if (
+        db.execute(
+            select(Ctf2SolveAttempt.id)
+            .where(Ctf2SolveAttempt.challenge_id == challenge_id)
+            .limit(1)
+        ).first()
+        is not None
+    ):
+        return True
+
+    # 证据 2：壳 scan（v0.28 之前唯一的痕迹）。
+    #
+    # ⚠️ 分开两次查询而不是合成一个 OR：两条证据的**成本差很大**
+    #    （attempt 走 (challenge_id, created_at) 索引，scan_id 是主键列），
+    #    而 v0.28 之后的题命中第一条就返回了。合成一条 JOIN 会让每题都多读一次。
+    return (
+        db.execute(
+            select(Ctf2Challenge.scan_id)
+            .where(Ctf2Challenge.id == challenge_id)
+            .limit(1)
+        ).scalar()
+        is not None
+    )
+
+
+def token_usage_summary(
+    db: Session, *, challenge_id: str | None = None, competition_id: str | None = None
+) -> dict:
+    """聚合 token 消耗（v0.36）。给总览页与题目详情用。
+
+    ## ★★ 返回里的 `calls` 与 `recordedCalls` 必须分开
+
+    · `calls` = 调用次数（**永远准确**，从行数数得出来）；
+    · `recordedCalls` = 其中**接入点真的返回了用量**的次数。
+
+    两者不等时，`totalTokens` 是**下限**（有几次没算进去）。
+    界面上必须让用户看得出这一点 —— 把"没记录"显示成"消耗 0"
+    与"没跑过"混淆，那正是这一对字段要消除的歧义。
+
+    ## 为什么不做 token → 金额换算
+
+    单价随模型、供应商、时段变化，写死在代码里会误导
+    （契约 §3.19.6 记了这条取舍）。只给 token 数。
+
+    ## 分组维度
+
+    · `byModel` —— 换模（v0.35）之后同一道题会用多个模型，
+      "换模前后各花多少"是这里最有价值的读数；
+    · `byChallenge` —— 总览页要看"哪道题最烧钱"。
+
+    ⚠️ 两个维度都**只在有数据时**才查，避免无谓的 JOIN。
+    """
+    from sqlalchemy import func
+
+    from app.ctf2.models import Ctf2SolveAttempt, Ctf2SolveUsage
+
+    def _q(*entities, where=()):  # noqa: ANN001, ANN202
+        stmt = select(*entities)
+        for cond in where:
+            stmt = stmt.where(cond)
+        return stmt
+
+    conds = []
+    if challenge_id:
+        conds.append(Ctf2SolveUsage.challenge_id == challenge_id)
+    if competition_id:
+        # 走 challenge 关联（usage 表没有 competition_id 列）
+        conds.append(
+            Ctf2SolveUsage.challenge_id.in_(
+                select(Ctf2Challenge.id).where(Ctf2Challenge.competition_id == competition_id)
+            )
+        )
+
+    # ① 总量。`func.coalesce` 让"一行都没有"时得到 0 而不是 None。
+    #
+    # ⚠️ `total_tokens` 可能为 0 而分项有值（接入点只给分项）。
+    #    所以求和用 `GREATEST(total, prompt+completion)` 的口径 ——
+    #    与 `TokenUsage.billable_total` 保持一致，否则界面上的
+    #    "总计"与逐题相加对不上。
+    billable = func.greatest(
+        Ctf2SolveUsage.total_tokens,
+        Ctf2SolveUsage.prompt_tokens + Ctf2SolveUsage.completion_tokens,
+    )
+    row = db.execute(
+        _q(
+            func.count(Ctf2SolveUsage.id),
+            func.coalesce(func.sum(Ctf2SolveUsage.prompt_tokens), 0),
+            func.coalesce(func.sum(Ctf2SolveUsage.completion_tokens), 0),
+            func.coalesce(func.sum(billable), 0),
+            func.coalesce(
+                func.sum(case((Ctf2SolveUsage.usage_reported.is_(True), 1), else_=0)), 0
+            ),
+            where=conds,
+        )
+    ).one()
+    calls, prompt, completion, total, recorded = (int(x) for x in row)
+
+    # ② 按模型
+    by_model = []
+    for model, label, n, t in db.execute(
+        _q(
+            Ctf2SolveUsage.model,
+            Ctf2SolveUsage.provider_label,
+            func.count(Ctf2SolveUsage.id),
+            func.coalesce(func.sum(billable), 0),
+            where=conds,
+        )
+        .group_by(Ctf2SolveUsage.model, Ctf2SolveUsage.provider_label)
+        .order_by(func.coalesce(func.sum(billable), 0).desc())
+    ).all():
+        by_model.append(
+            {"model": model or "", "providerLabel": label or "", "calls": int(n), "totalTokens": int(t)}
+        )
+
+    # ③ 按题（总览页"哪道题最烧钱"）
+    by_challenge = []
+    for cid, title, n, t in db.execute(
+        _q(
+            Ctf2SolveUsage.challenge_id,
+            Ctf2Challenge.title,
+            func.count(Ctf2SolveUsage.id),
+            func.coalesce(func.sum(billable), 0),
+            where=conds,
+        )
+        .join(Ctf2Challenge, Ctf2Challenge.id == Ctf2SolveUsage.challenge_id)
+        .group_by(Ctf2SolveUsage.challenge_id, Ctf2Challenge.title)
+        .order_by(func.coalesce(func.sum(billable), 0).desc())
+        .limit(50)
+    ).all():
+        by_challenge.append(
+            {"challengeId": cid, "title": title or "", "calls": int(n), "totalTokens": int(t)}
+        )
+
+    # ④ ★ v0.37：按**每次解题**分组 —— 需求要的"细分到每个任务"。
+    #
+    # ## 为什么必须 JOIN attempt 表
+    #
+    # usage 行只有 `attempt_id`（一个 id），而用户要看的"这次任务"
+    # 得带上 **mode / model / 受理时刻** —— 那三样都在
+    # `ctf2_solve_attempts` 上（v0.28 起的策略快照）。
+    # 只给一个 id 的列表是没法读的：用户看不出哪次是 safe、哪次是 auto。
+    #
+    # ⚠️ `attempt_id` 是 NOT NULL 外键，所以这里用 **INNER JOIN** 是安全的
+    #    （不会因为 NULL 丢行）。若哪天它变成可空，这个 JOIN 会静默丢数据 ——
+    #    所以下面有一条测试盯着"逐次之和 == 总量"。
+    #
+    # ## 为什么加 limit
+    #
+    # 与 `byChallenge` 同一条理由：这是总览页的读数，不是导出。
+    # 一次比赛可能跑几百次解题，全量返回会把响应撑大而没有更多信息。
+    by_attempt = []
+    for aid, cid, title, mode, model, started, n, t in db.execute(
+        _q(
+            Ctf2SolveUsage.attempt_id,
+            Ctf2SolveUsage.challenge_id,
+            Ctf2Challenge.title,
+            Ctf2SolveAttempt.mode,
+            Ctf2SolveAttempt.llm_model,
+            Ctf2SolveAttempt.created_at,
+            func.count(Ctf2SolveUsage.id),
+            func.coalesce(func.sum(billable), 0),
+            where=conds,
+        )
+        .join(Ctf2Challenge, Ctf2Challenge.id == Ctf2SolveUsage.challenge_id)
+        .join(Ctf2SolveAttempt, Ctf2SolveAttempt.id == Ctf2SolveUsage.attempt_id)
+        .group_by(
+            Ctf2SolveUsage.attempt_id,
+            Ctf2SolveUsage.challenge_id,
+            Ctf2Challenge.title,
+            Ctf2SolveAttempt.mode,
+            Ctf2SolveAttempt.llm_model,
+            Ctf2SolveAttempt.created_at,
+        )
+        .order_by(func.coalesce(func.sum(billable), 0).desc())
+        .limit(100)
+    ).all():
+        by_attempt.append(
+            {
+                "attemptId": aid,
+                "challengeId": cid,
+                "title": title or "",
+                "mode": mode or "",
+                "model": model or "",
+                "calls": int(n),
+                "totalTokens": int(t),
+                "startedAt": started,
+            }
+        )
+
+    # ⑤ 最早一条记录的时间 —— 界面上要说明"统计从哪一刻开始"。
+    #
+    # ★ 为什么必须给这个：v0.36 之前的解题没有 usage 记录。不给这个
+    #   字段的话，用户会以为"总共就花了这么点"，而实际是**没记**。
+    since = db.execute(_q(func.min(Ctf2SolveUsage.created_at), where=conds)).scalar()
+
+    return {
+        "calls": calls,
+        "recordedCalls": recorded,
+        "promptTokens": prompt,
+        "completionTokens": completion,
+        "totalTokens": total,
+        "byModel": by_model,
+        "byChallenge": by_challenge,
+        "byAttempt": by_attempt,
+        "since": since,
+    }
+
+
+def challenge_usage_entries(db: Session, challenge_id: str) -> list:
+    """一道题的**逐次**消耗明细（按轮次升序）。
+
+    这是"细分到每一次任务"最直接的那个视图 —— 每一轮花了多少。
+    """
+    from app.ctf2.models import Ctf2SolveUsage
+
+    return list(
+        db.execute(
+            select(Ctf2SolveUsage)
+            .where(Ctf2SolveUsage.challenge_id == challenge_id)
+            .order_by(Ctf2SolveUsage.created_at, Ctf2SolveUsage.turn)
+        )
+        .scalars()
+        .all()
     )
 
 

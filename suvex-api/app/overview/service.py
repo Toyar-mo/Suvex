@@ -65,6 +65,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 from sqlalchemy import func, select
@@ -220,6 +221,21 @@ def build_overview(db: Session, *, scan_id: str | None = None) -> OverviewOut:
     projected.sort(key=lambda item: item.at, reverse=True)
     activity = projected[:ACTIVITY_LIMIT]
 
+    # ★ v0.36：CTF2 的 token 消耗。
+    #
+    # ⚠️ 用 `contextlib.suppress` 而不是让它裸奔：总览页是**首页**，
+    #    它挂掉等于整个界面白屏。而 token 统计是**锦上添花** ——
+    #    表不存在（迁移没跑）、查询出错，都不该让首页打不开。
+    #    这与 `runner._recall_notes_text` 吞异常是同一条理由。
+    #
+    # ⚠️ 只在真有 CTF2 数据时才有值；一条都没有时 `since=None`，
+    #    前端据此显示"还没有数据"而不是"0 token"。
+    usage: dict = {}
+    with contextlib.suppress(Exception):
+        from app.ctf2 import service as ctf2_service
+
+        usage = ctf2_service.token_usage_summary(db)
+
     return OverviewOut(
         metrics=OverviewMetricsOut(
             activeScans=active_scans,
@@ -228,6 +244,10 @@ def build_overview(db: Session, *, scan_id: str | None = None) -> OverviewOut:
             verifiedPocCount=metrics["verifiedPocCount"],
             avgScanDurationSec=avg_duration,
             falsePositiveCount=metrics["falsePositiveCount"],
+            ctf2LlmCalls=int(usage.get("calls") or 0),
+            ctf2RecordedCalls=int(usage.get("recordedCalls") or 0),
+            ctf2TotalTokens=int(usage.get("totalTokens") or 0),
+            ctf2UsageSince=usage.get("since"),
         ),
         activity=activity,
         # ⚠️ 固定按严重度顺序、**保留 0 值**（与 findings 的 Partial 相反）。
@@ -255,6 +275,12 @@ def empty_overview() -> OverviewOut:
             verifiedPocCount=0,
             avgScanDurationSec=None,
             falsePositiveCount=0,
+            # token 全 0 且 `since=None` —— 前端据此显示"还没有数据"，
+            # 而不是"消耗 0 token"。`since=None` 是那个判据。
+            ctf2LlmCalls=0,
+            ctf2RecordedCalls=0,
+            ctf2TotalTokens=0,
+            ctf2UsageSince=None,
         ),
         activity=[],
         severityBreakdown=[

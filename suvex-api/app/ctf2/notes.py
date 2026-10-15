@@ -404,7 +404,9 @@ def tools_from_transcript(transcript: str, *, limit: int = MAX_TOOLS) -> str:
     return ", ".join(seen[:limit])
 
 
-def key_steps_from_transcript(transcript: str, *, limit: int = 6) -> list[str]:
+def key_steps_from_transcript(
+    transcript: str, *, limit: int = 6, sanitize: bool = True, clip: int = 160
+) -> list[str]:
     """从 transcript 里提取**成功路径上的关键命令**。
 
     ## ★ 为什么必须真的提取，而不是写一句模板
@@ -419,8 +421,20 @@ def key_steps_from_transcript(transcript: str, *, limit: int = 6) -> list[str]:
 
     所以这里真的读 transcript，挑出值得复用的命令。
 
-    ⚠️ 提取出来的是**命令模板**，仍然要过 `sanitize_for_reuse` ——
-       命令里常带这道题的路径与地址（见那个函数的说明）。
+    ## ★★ `sanitize` 参数：同一个"挑哪几条"逻辑，两种去向（v0.36）
+
+    判据（`_command_worth_reusing`）两边共用，但**正文要不要脱敏**
+    取决于产物去哪：
+
+    | 去向 | `sanitize` | 理由 |
+    | --- | --- | --- |
+    | 方法卡（`ctf2_solve_notes`） | `True`（默认） | 卡片进**另一道题**的 prompt，带靶机地址会误导 |
+    | 题解（`ctf2_writeups`） | `False` | 题解是赛后提交/给人看的，靶机地址与 flag 正是**该有的内容** |
+
+    ⚠️ **默认 `True`** 是刻意的：方法卡是更早、更广的用法。而"忘了传
+    `sanitize=False`"的后果只是题解里少了地址（可读性下降）；
+    反过来（默认 False）会让方法卡**泄漏靶机地址**，那是安全问题。
+    默认值要偏向危险的那一侧。
 
     ## ★★ 顺序：**先脱敏、再判断**（不能反）
 
@@ -437,6 +451,25 @@ def key_steps_from_transcript(transcript: str, *, limit: int = 6) -> list[str]:
 
     所以这里**先脱敏**，让判据看到的就是最终会写进卡片的形态。
     这也让 `_command_worth_reusing` 的注释里那条契约成立。
+
+    ⚠️ `sanitize=False` 时**判据仍用脱敏版**，只是返回未脱敏的正文 ——
+    否则那条空壳规则在题解这条路径上就失效了。
+
+    ## ★★ `clip`：正文长度上限，**判据始终用 160**（v0.38 新增）
+
+    题解要的是**完整命令**（人照着能重跑），而方法卡要的是**短**（进
+    prompt，越长越挤）。所以正文上限可配：
+
+    | 去向 | `sanitize` | `clip` |
+    | --- | --- | --- |
+    | 方法卡 | `True`（默认） | 160（默认） |
+    | 题解 | `False` | 更大（见 `writeup.STEP_CLIP`） |
+
+    ⚠️ **判据（`_command_worth_reusing`）永远看 160 那版**，与 `clip`
+       无关。理由：判据要回答的是"这条命令值不值得复用"，而它的
+       实测调参（词边界、空壳过滤）是在 160 的形态上做的。让判据
+       随 `clip` 变会**同时改变方法卡的行为** —— 那正是这次要避开的
+       （题解与卡片是两条去向，不能互相带偏）。
     """
     from app.ctf2.runner import _TRANSCRIPT_TOOL
 
@@ -450,9 +483,11 @@ def key_steps_from_transcript(transcript: str, *, limit: int = 6) -> list[str]:
         #    那个形态**。截断也算在内：`_clip_command` 会把长命令切在
         #    中间，而"切一半的命令"和"被掏空的命令"一样照抄不了。
         safe = sanitize_for_reuse(raw, limit=400).strip()
-        snippet = _clip_command(safe, 160)
-        if not _command_worth_reusing(snippet):
+        probe = _clip_command(safe, 160)
+        if not _command_worth_reusing(probe):
             continue
+        # ★ 判据用 160 那版（上面），**返回的正文按去向选**。
+        snippet = probe if sanitize else _clip_command(raw, clip)
         if snippet not in steps:
             steps.append(snippet)
         if len(steps) >= limit:

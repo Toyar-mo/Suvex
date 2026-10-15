@@ -34,7 +34,14 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import ApiError, ErrorCode
 from app.core.ids import new_id
-from app.core.vocab import TERMINAL_SCAN_STATUSES, AuditAction, ScanGoal, ScanStatus, values
+from app.core.vocab import (
+    SCAN_ORIGIN_CTF2,
+    TERMINAL_SCAN_STATUSES,
+    AuditAction,
+    ScanGoal,
+    ScanStatus,
+    values,
+)
 from app.events import service as events_service
 from app.events.schemas import AgentOut
 from app.scans import artifacts, service, uploads, writeup
@@ -325,6 +332,38 @@ def read_writeup(scanId: str, _identity: ReadDep, db: DbDep) -> WriteupOut:
     分开三个码只会让前端写三段其实一样的分支。
     """
     scan = service.get_scan(db, scanId)
+
+    # ★★ v0.36：CTF2 借的壳扫描**不走这条路径** —— 必须早于下面所有检查。
+    #
+    # ## 为什么（这是一个真实的误导，2026-10-14 由用户截图发现）
+    #
+    # CTF2 的每道题都会建一条真实的 `Scan`（`ctf2/events.ensure_solve_scan`），
+    # 目的是复用活动流。于是它在扫描列表里长得像一次普通扫描，
+    # 也带上了「题解」按钮 —— 而那个按钮打的是**这个**端点。
+    #
+    # 但 CTF2 解题**根本不走 strix**（它由 `ctf2/runner.solve_in_sandbox`
+    # 自己的循环驱动），从不产生 `penetration_test_report.md`。所以
+    # 它必然走到下面那句"没有留下报告文件"，而那句话在说：
+    #
+    #     「产物目录可能被手工清理过」
+    #
+    # **那是假的。** 没有任何东西被清理 —— 那份文件从来就不存在，
+    # 因为这条路径不产生它。用户会去翻 `_scan_runs/` 找一个不该有的文件。
+    #
+    # ## 为什么"指路"而不是"内部转发到 CTF2 的题解"
+    #
+    # 转发会让这个端点有两种完全不同的数据来源，而调用方无法预知
+    # 自己拿到的是哪一种（版式、字段含义都不同）。让错误信息指路更诚实
+    # —— 与 `SCAN_IS_CTF2_SHELL`（壳不能续跑）是同一个手法：
+    # **认出特例、明说原因、指对入口**。
+    if getattr(scan, "origin", None) == SCAN_ORIGIN_CTF2:
+        raise ApiError(
+            409,
+            ErrorCode.WRITEUP_UNAVAILABLE,
+            "这是 CTF2 的解题任务，题解不在扫描这边 —— 它由 CTF2 自己的"
+            "解题循环产出（不走 strix，所以没有扫描报告文件）。"
+            "请在 CTF2 题目卡片上看题解。",
+        )
 
     if scan.goal != ScanGoal.CAPTURE_FLAG.value:
         raise ApiError(
