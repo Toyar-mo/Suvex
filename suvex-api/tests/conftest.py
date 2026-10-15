@@ -30,13 +30,19 @@ SQLite 上这些要么没有、要么语义不同 —— 用 SQLite 跑测试会
 
 from __future__ import annotations
 
+import ipaddress
+import logging
 import os
 import shutil
+import socket
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
+
+logger = logging.getLogger("suvex.tests")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -137,6 +143,140 @@ os.environ["SUPEX_SCAN_WORK_ROOT"] = SCAN_WORK_ROOT
 # 而"忘了设"的表现不是测试失败，是仓库里多出东西。
 ATTACHMENT_ROOT = tempfile.mkdtemp(prefix="suvex-test-uploads-")
 os.environ["SUPEX_ATTACHMENT_ROOT"] = ATTACHMENT_ROOT
+
+# ══════════════════════════════════════════════════════════════════
+# ★★ 外呼护栏：测试**一个包都不许发到本机之外**
+# ══════════════════════════════════════════════════════════════════
+#
+# ## 为什么需要它（2026-10-15 全量跑实测抓到）
+#
+# 一次全量基线跑里，日志出现：
+#
+#     ctf2chal_01M4ZT73ZPZPM4MWQQVF3E4GB4 → CTF2 拒绝了这次请求（400）
+#     ... 平台标记：INVALID_ID（errors.validation.invalid_id）
+#
+# 这条**不是** mock 编出来的 —— 它是测试进程真的向
+# `https://ctf2.dasctf.com` 发了请求，只因夹具的 PAT 是假的
+# （`pat_ctf2_TEST-…`）才被平台以 400 挡回来。
+#
+# 它为什么违反了红线：**"绝不消耗 CTF2 平台真实额度"是团队的硬约束**，
+# 而"这次只是 400、没提交成功"是运气 —— 同样的路径在别的用例里
+# 可能真的打到提交端点。测试不该有任何真实外呼，一次都不该有。
+#
+# ## 根因
+#
+# `client` fixture 用 `with TestClient(app)`，于是 lifespan 真的跑：
+# 它 `ctf2_scheduler.start()` + `get_autosync().start()`，两个后台线程
+# 就此起来。而扫描那条路早就有对策（`SUPEX_SCAN_POLL_SECONDS=3600`
+# 让调度线程睡死），**CTF2 没有对应处理** —— 它的认领间隔来自库里
+# 的设置，默认 1 秒。
+#
+# 于是某个用例把一道题置成 `solving` 之后，后台线程**真的**去认领、
+# 真的启动 worker、真的连平台。
+#
+# ## 为什么护栏做在 socket 层，而不是"记得给每个用例打桩"
+#
+# 打桩要靠人记得。漏掉一处就是一个静默的真实外呼 —— 而它的表现
+# 是"某个用例偶尔慢几秒"，没人会去查。做在 socket 层则是**默认安全**：
+# 新写的用例天然被罩住，忘了打桩也不会打出去。
+#
+# ## 判据：只放行回环
+#
+# 放行 `127.0.0.0/8` / `::1` / `localhost`，其余一律拒。
+# 本项目的测试只需要连本机的 PostgreSQL（`127.0.0.1:55432` 或 CI 的
+# `127.0.0.1:5432`）—— 那是回环，不受影响。
+#
+# ⚠️ 打的是**模块里的** `socket.getaddrinfo` 与 `socket.socket.connect`：
+#    `httpx` → `httpcore` → `anyio` 最终都落到这两个符号上（实测确认
+#    anyio 走的是 `socket.getaddrinfo` 而不是自己缓存一份）。
+#
+# ⚠️ 拦截**不是**静默跳过：抛的是明确的 `OSError`，调用方要么把这次
+#    请求当成失败（正是我们要的：测试里不该有成功的外呼），要么自己
+#    打桩。绝不吞掉。
+
+
+class EgressBlocked(OSError):
+    """测试里试图向本机之外发请求。见上面那段说明。"""
+
+
+_ALLOWED_HOSTS = {"localhost", "localhost.localdomain", "ip6-localhost"}
+# ⚠️ **不按端口白名单**放行整个回环是刻意的：回环上的其它端口是
+#    "测试自己起的本地 server"（比如验证 302 跟随的靶子），那些**应该**
+#    被允许。所以判据只有一条：**非回环地址一律拒**，端口不加限制。
+
+
+def _is_loopback(host: Any) -> bool:
+    """这个主机是不是本机。`host` 可能是域名、IP 字面量或 bytes。
+
+    ⚠️ `None` 与空串**算本机**：`getaddrinfo(None, port)` 的语义是
+       "给我一个可用于**本机绑定**的通配地址"（`AI_PASSIVE`），它不指向
+       任何外部主机 —— 拦它只会误伤"测试自己起一个本地 server"。
+       真正的出站风险由 `connect()` 那一道守（那里没有 None 的可能）。
+    """
+    if host is None:
+        return True
+    text = host.decode() if isinstance(host, bytes) else str(host)
+    if not text:
+        return True
+    if text in _ALLOWED_HOSTS:
+        return True
+    try:
+        return ipaddress.ip_address(text.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _block_egress() -> Iterator[None]:
+    """整个会话：把"本机之外"的网络访问掐掉。
+
+    ⚠️ session 级 + autouse：它必须在**任何**测试之前生效，
+       而且不能有用例跑在护栏之外。
+    """
+    real_getaddrinfo = socket.getaddrinfo
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+
+    def guarded_getaddrinfo(host: Any, *args: Any, **kwargs: Any):  # noqa: ANN202
+        if not _is_loopback(host):
+            raise EgressBlocked(
+                f"测试试图解析非本机地址 {host!r} —— 测试不该有任何真实外呼。"
+                "要测网络行为请打桩（见 tests/conftest.py 的说明）。"
+            )
+        return real_getaddrinfo(host, *args, **kwargs)
+
+    def _check(address: Any) -> None:
+        # AF_UNIX 的地址是路径字符串，不是 (host, port) —— 放行。
+        if isinstance(address, (str, bytes)):
+            return
+        # ⚠️ 这里**不**复用 `_is_loopback` 对 None/空串的宽松（那是给
+        #    `getaddrinfo` 的通配绑定语义留的）：连接一个说不清的目标
+        #    应当**拒绝**，而不是放行。fail-closed。
+        host = address[0] if isinstance(address, tuple) and address else None
+        if not host or not _is_loopback(host):
+            raise EgressBlocked(
+                f"测试试图连接非本机地址 {address!r} —— 测试不该有任何真实外呼。"
+                "要测网络行为请打桩（见 tests/conftest.py 的说明）。"
+            )
+
+    def guarded_connect(self: socket.socket, address: Any):  # noqa: ANN202
+        _check(address)
+        return real_connect(self, address)
+
+    def guarded_connect_ex(self: socket.socket, address: Any):  # noqa: ANN202
+        _check(address)
+        return real_connect_ex(self, address)
+
+    socket.getaddrinfo = guarded_getaddrinfo
+    socket.socket.connect = guarded_connect
+    socket.socket.connect_ex = guarded_connect_ex
+    try:
+        yield
+    finally:
+        socket.getaddrinfo = real_getaddrinfo
+        socket.socket.connect = real_connect
+        socket.socket.connect_ex = real_connect_ex
+
 
 from alembic.config import Config  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -247,6 +387,146 @@ def _prepare_database() -> Iterator[None]:
     shutil.rmtree(ATTACHMENT_ROOT, ignore_errors=True)
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _ctf2_background_threads_stay_idle() -> Iterator[None]:
+    """★ lifespan 起的那两个 CTF2 后台循环**不许在测试里自己动**（2026-10-15 补）。
+
+    ## 为什么需要它（全量跑实测抓到的一条 ERROR）
+
+    全量基线跑挂在：
+
+        ERROR tests/ctf2/test_solve_attempt.py::test_v5_without_an_attempt_it_falls_back_to_global
+        E  psycopg.errors.DeadlockDetected: deadlock detected
+        E  Process 7036 waits for AccessExclusiveLock on relation 24693
+        E  ...  [SQL: TRUNCATE "provider_accounts", ..., "ctf2_writeups" ...]
+
+    与 conftest 里那条"扫描版偶发"是**同一类**：`_clean_state` 要拿
+    全表排它锁，而某个后台线程正持着行锁写库。区别只在于这次的写入方
+    是 CTF2 的解题 worker。
+
+    ## 链条（每一环都实测过）
+
+    1. `client` fixture 用 `with TestClient(app)` → lifespan 真的跑；
+    2. lifespan 里 `ctf2_scheduler.start()`（`main.py:214`）与
+       `get_autosync().start()`（`main.py:228`）把两个循环拉起来；
+    3. 扫描那条路早有对策 —— `SUPEX_SCAN_POLL_SECONDS=3600` 让扫描
+       调度循环一轮之后睡死。**CTF2 没有对应处理**；
+    4. CTF2 的认领间隔来自库里的设置，默认
+       `DEFAULT_CTF2_SOLVE_POLL_SECONDS = 1.0`（**每秒**一次）；
+    5. 于是某个用例把一道题置成 `solving` 之后，后台循环**真的**认领、
+       **真的**启动 worker（`service.start_solve` → `_enqueue` →
+       `tick()` 这条路径在测试里被真实走到）；
+    6. worker 持行锁写库，撞上下一个用例 setup 的 `TRUNCATE` → 死锁。
+
+    ## 三层防护，各挡一件事
+
+    | 防护 | 挡什么 |
+    | --- | --- |
+    | `_ctf2_solver_never_runs_for_real`（替身 worker） | **真正的写入方**：不跑解题就没有持锁写库的线程 |
+    | `_block_egress`（socket 护栏） | **真实外呼**：即便有漏网的路径也发不出去 |
+    | `stop_ctf2_background_loops()`（在 `client` 里调） | 后台循环的**空转认领**：不必反复查库、反复认领 |
+
+    ⚠️ 第三层为什么是"启动后立刻停"而不是"根本不启动"：lifespan 的接线
+       **必须**被真实走过（`start()` 被调用、日志照打、`recover_orphans`
+       与 `ensure_ctf2_network` 照跑）。停掉的是**行为**，不是接线。
+       这与扫描那条"让循环睡死"是同一个效果的两种表达 —— 差别只在于
+       CTF2 的间隔是**库里的设置**（没有环境变量可拉长），所以用 `stop()`
+       表达更直接，且**不需要往库里写一行配置**（写配置会改变
+       "没有配置行时用代码默认值"这个被文档化的语义）。
+
+    ⚠️ 停的时机是安全的：两个循环的第一步都是 `self._stop.wait(interval)`
+       （`scheduler._loop` / `autosync._loop`），而 `interval ≥ 0.5` 秒 ——
+       所以"进入 TestClient 之后立刻 stop"必然发生在**第一次 tick 之前**。
+    """
+    try:
+        yield
+    finally:
+        # 单例是**全局**状态，留着会让后续阶段继承一个残留的循环。
+        #
+        # ⚠️ 必须先 `stop()` 再 `reset_*()`：`reset_autosync()` 的 docstring
+        #    写明它"**不**负责停线程，调用方自己 stop" —— 只 reset 会把一个
+        #    还在跑的线程丢掉引用（再也没人能停它）。
+        try:
+            from app.ctf2.autosync import get_autosync, reset_autosync
+            from app.ctf2.scheduler import get_scheduler, reset_scheduler
+
+            get_scheduler().stop(timeout=5.0)
+            get_autosync().stop(timeout=5.0)
+            reset_scheduler()
+            reset_autosync()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def stop_ctf2_background_loops() -> None:
+    """停掉 CTF2 的两个后台循环（由 `client` / `viewer_client` 在 lifespan 之后调用）。
+
+    见 `_ctf2_background_threads_stay_idle` 的说明：停的是**行为**，
+    lifespan 的接线照旧被走过。
+
+    ⚠️ 用 `get_*()` 拿**单例**（就是 lifespan 启动的那两个），
+       而不是新建实例 —— 新建的实例本来就没在跑，停了等于没停。
+    """
+    try:
+        from app.ctf2.autosync import get_autosync
+        from app.ctf2.scheduler import get_scheduler
+
+        get_scheduler().stop(timeout=5.0)
+        get_autosync().stop(timeout=5.0)
+    except Exception:  # noqa: BLE001 - 没有单例（未导入）时跳过
+        pass
+
+
+@pytest.fixture(autouse=True)
+def _ctf2_solver_never_runs_for_real() -> Iterator[None]:
+    """★ 测试里**绝不真的解题**（2026-10-15 补）。
+
+    与 `SUPEX_SCAN_RUNNER=fake` 是同一条纪律的另一半：扫描有替身后端，
+    而 CTF2 的解题 worker 没有 —— 它是"起沙箱容器 → 连平台 → 跑 LLM
+    循环 → 提交 flag"的真家伙。测试里让它跑起来，后果是：
+
+    * 向 `ctf2.dasctf.com` 发真实请求（实测抓到过，见
+      `_block_egress` 的说明）；
+    * 可能真的 `docker run` 起解题沙箱；
+    * 持行锁写库，与 `_clean_state` 的 `TRUNCATE` 撞成死锁。
+
+    ★ 注意它**不能**只靠"把后台循环停掉"来替代：`service.start_solve`
+    → `_enqueue` → `tick()` 会**同步**启动 worker，那条路径不经过后台
+    循环 —— 测试里它被真实走到，所以必须在这里把 worker 本身换掉。
+
+    替身只记账、不干活：不碰网络、不碰 Docker、不写库。
+
+    ⚠️ 用 `monkeypatch`（function 级）而不是直接改模块属性：用例自己的
+       `monkeypatch.setattr("app.ctf2.runner.run_worker", …)` 会**覆盖**
+       它，跑完自动还原回这一份 —— 两边不会打架。
+
+    ⚠️ 替身**不改数据库状态**。生产语义里 worker 结束时会把题目状态
+       写回（solved / failed / …），测试里保持 `solving` 即可 ——
+       没有任何用例依赖"后台把状态改走"（实测确认；状态机由
+       `test_runner.py` 直接调 `_advance_challenge` 覆盖）。
+
+    ⚠️★ 替身必须用 `functools.wraps` 包住**真实的那份**：
+       `test_runner.py` 有一批 `inspect.getsource(runner.run_worker)` 的
+       **源码级**断言（比如"必须把 `attempt_id` 透传给 `_run_worker`"）。
+       裸替身会让 `getsource` 读到替身自己 → 那批断言全红，而红的理由
+       与它们要守的东西毫无关系。`wraps` 让 `signature` / `getsource`
+       / `getsourcefile` 全部穿透到真实实现（已实测确认），只有**调用**
+       落到替身上。
+    """
+    import functools
+
+    from app.ctf2 import runner as ctf2_runner
+
+    def _noop(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
+        logger.debug("测试替身：跳过真实解题 %s", challenge_id)
+
+    stub = functools.wraps(ctf2_runner.run_worker)(_noop)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(ctf2_runner, "run_worker", stub)
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _clean_state() -> Iterator[None]:
     """每个用例前清空所有表 + 重置限流器。
@@ -265,6 +545,15 @@ def _clean_state() -> Iterator[None]:
     这个偶发在本项目真实发生过两次（同一处、同一姿势），所以不是
     "重跑一下就算了"的那类。修法是把它缺的前提做实：**先等没有在跑的
     扫描，再清表**，而不是放松断言或者把错误吞掉。
+
+    ## ★ 2026-10-15：CTF2 那一半也补上了
+
+    同一条 ERROR 后来又在 **CTF2 的用例**上出现（全量跑，
+    `test_solve_attempt.py` 的 setup 阶段）—— 写入方换成了解题 worker。
+    三层防护见 `_ctf2_background_threads_stay_idle` 的表格。
+
+    这里只做一件事：清表之后把 CTF2 的两个后台间隔重新写成静音
+    （TRUNCATE 会把 `ctf2_config` 那行一起清掉，所以不能只在会话开始时写一次）。
     """
     import time
 
@@ -274,6 +563,17 @@ def _clean_state() -> Iterator[None]:
     from app.scans.models import Scan
 
     engine = get_engine()
+
+    # ★ CTF2 的两个后台循环：**抢锁之前**先让它们停手（2026-10-15 补）。
+    #
+    # ⚠️ 位置必须在 `TRUNCATE` **之前** —— 放到后面等于没做：死锁就是
+    #    "TRUNCATE 拿排它锁"与"后台写手持行锁"互相等，先清表再停已经撞上了。
+    #
+    # 为什么放在这里而不是只在 `client` 里停：lifespan 的入口不止一个
+    # （`client` / `viewer_client` / `test_users_and_roles` 里两处自建的
+    # `TestClient`），每个都记得调一次是**靠人记得**的约定 —— 漏一个就是
+    # 一个静默的后台写手。放在 autouse 里则是默认安全。
+    stop_ctf2_background_loops()
 
     # 等在途的扫描落地（最多 ~10 秒）。超时也继续 ——
     # 一个卡死的扫描不该让整个测试会话挂住，而清表失败会有它自己的报错。
@@ -322,6 +622,7 @@ def _clean_state() -> Iterator[None]:
 
     auth_router.reset_limiters()
     scans_service.reset_limiters()
+
     yield
 
 
@@ -331,10 +632,18 @@ def client() -> Iterator[TestClient]:
 
     必须用 `with` —— 不用的话 lifespan 不跑，`verify_database()` 也不会执行，
     于是"启动自检"这条逻辑在测试里完全没被覆盖。
+
+    ★ 进入之后**立刻停掉 CTF2 的两个后台循环**（2026-10-15 补）：
+    lifespan 会把它们启动（`main.py:214` / `:228`），而它们的认领间隔
+    默认 1 秒 —— 在测试里那就是"后台真的去认领并解题"，后果既包括
+    真实外呼，也包括与 `_clean_state` 的 `TRUNCATE` 抢锁（全量跑实测
+    抓到过死锁）。接线必须照跑，行为必须静音 —— 见
+    `_ctf2_background_threads_stay_idle` 的说明。
     """
     from app.main import app
 
     with TestClient(app) as test_client:
+        stop_ctf2_background_loops()
         yield test_client
 
 
