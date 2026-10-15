@@ -1,7 +1,6 @@
 import { useMediaQuery } from '@/hooks/useMediaQuery'
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
 import { useEffect, useState } from 'react'
-import DotGrid from './DotGrid'
 import Threads from './Threads'
 
 /**
@@ -10,8 +9,11 @@ import Threads from './Threads'
  * 三层，各自负责一件事，顺序不能换：
  *   1. 底色      近黑画布
  *   2. Threads   缓慢流过的线 = 数据正在通过，是背景里唯一的持续动效
- *   3. DotGrid   跟随光标的点阵 = 这是可交互的现场，不是一张图
- *   4. vignette  把中心留亮、四角压暗，让内容层（后面加上来的）有地方站
+ *   3. vignette  把中心留亮、四角压暗，让内容层（后面加上来的）有地方站
+ *
+ * ★ 原第 3 层 DotGrid（光标跟随点阵）已移除 —— 它的唯一依赖 `gsap` 是
+ *   GreenSock 自有许可（非 OSI 开源），而这一层是纯装饰，去掉不影响功能。
+ *   移除记录见 `effects/README.md` 的「已移除」节与 `DEPENDENCIES.md` §4.3。
  *
  * ── 关于 Threads 的色值（踩过一次）─────────────────────────────
  * Threads 的 uColor 是 ogl 的 Color，而 ogl **不做色彩空间转换**
@@ -78,37 +80,7 @@ export function AgentField() {
         />
       </div>
 
-      {/* 3 · 点阵：只在大屏挂载，移动端省电省内存。
-          baseColor 比 line token 高一档、点也放大到 1.5px —— 2px 的点在
-          近黑底上会被抗锯齿抹掉，扫不出这是网格。
-
-          ★ shockStrength={0}（任务 8 改）：上游的点击冲击波监听挂在 `window` 上，
-            意味着页面上每一次真实交互（点按钮、勾选、展开行）都会在背景里炸一次。
-            用户点「启动扫描」时背景震一下，这不是反馈而是噪音 ——
-            而且每次点击都要遍历全部点阵（约 2000 个点）算距离。
-            关掉之后**连监听都不注册**（见 DotGrid 内的改动），光晕跟随保留：
-            那才是"这是可交互的现场"的有效信号，而且它节流到 50ms。 */}
-      {isDesktop && (
-        <div
-          className="absolute inset-0 transition-opacity duration-slow ease-enter"
-          style={{ opacity: threadsReady ? 1 : 0 }}
-        >
-          <DotGrid
-            dotSize={3}
-            gap={30}
-            baseColor="#333B48"
-            activeColor="#A99BFF"
-            proximity={150}
-            speedTrigger={80}
-            shockRadius={220}
-            shockStrength={0}
-            resistance={900}
-            returnDuration={1.6}
-          />
-        </div>
-      )}
-
-      {/* 4 · 压角：让中心成为内容可以落上去的区。
+      {/* 3 · 压角：让中心成为内容可以落上去的区。
           中心也压了一点（0 → 0.15）—— 完全透明的中场会让波浪从标题底下穿过，
           文字压在流线上就读不清了。 */}
       <div

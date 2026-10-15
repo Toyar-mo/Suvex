@@ -64,7 +64,9 @@ import { cn } from '@/lib/cn'
  *   只要避开这个组合（默认可见 + 只动 transform），用什么技术都安全。
  *
  *   顺带的收益：SplitText（3.3 kB gzip）整块从产物里消失，
- *   gsap 不再被首页引用（只留在懒加载的 AgentField / DotGrid 里）。
+ *   首页不再引用 gsap。（gsap 这一整条依赖后来也彻底移除了 —— 它最后一个
+ *   使用者 DotGrid 已删，理由是 GreenSock 自有许可非 OSI 开源，见
+ *   `effects/README.md` 的「已移除」节。）
  *
  * ── 按"词"而不是按"字符" ───────────────────────────────────────
  * 逐字符是 ReactTitle 类动效的常见做法，但它对**中文是错的**：
