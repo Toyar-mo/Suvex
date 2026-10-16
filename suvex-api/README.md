@@ -415,10 +415,14 @@ $ docker exec suvextest-api-1 sh -c "which strix docker"
 `subject` / `evidence` / `severity` 三个字段按"名字最可能对得上"取值；
 取不到 `severity` 时**不放这个键**而不是编一个默认值。
 
-另外，契约的 8 种事件类型里有 **4 种在 strix 侧没有对应来源**
-（`poc_generated` / `verified` / `blocked` / `completed`）。
-其中 `completed` 由扫描生命周期发出，另三种外部工具根本没有对应的
-结构化信号 —— 如实记在这里，免得后来者以为是漏了。
+另外，契约的 8 种事件类型现在**都有来源**：`completed` 由扫描生命周期
+发出（ADR-004）；`poc_generated` / `verified` / `blocked` 三种曾长期
+被记为"strix 侧没有对应信号"，后来在 strix 源码里找到了 ——
+分别是 `update_vulnerability_report` 带 `poc_script_code`、
+`update_vulnerability_report` 带 `confidence: high`、以及 `wait_for_user`
+（它的 docstring 写明是"唯一把控制权交还给用户的方式"）。
+映射依据与"为什么 `verified` 挂在 `update_` 而不是 `create_` 上"
+记在 `strix_events.py` 的模块 docstring 里。
 
 ### 3. 契约文档与代码之间有一段**已知漂移**
 

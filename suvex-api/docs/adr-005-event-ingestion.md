@@ -71,15 +71,27 @@ WebSocket 相对 SSE 的两个实质优势是**双向**与**二进制帧** —�
 
 * ✅ **确证**：`tool_call`（直接对应）、`failed`（`result.success is False`）、
   `reasoning` ← `think` 工具（该工具签名就是 `think(thought: str)`，
-  docstring 写明是内心推理）；
+  docstring 写明是内心推理）、`blocked` ← `wait_for_user`（docstring：
+  "Hand control to the user and wait for their reply. This is the ONLY way
+  to yield to the user."）；
 * ⚠️ **语义近似**：`reasoning` ← assistant 发言（契约的 8 种里没有"对外发言"
   这一类，用 `detail.intent` 区分 `plan` / `narration`）；
 * ⚠️ **载荷启发式**：`discovery` 的三个字段按"名字最可能对得上"取，
   **需要一次真实扫描对着 `vulnerabilities.json` 核对之后才算坐实**。
 
-**8 种里有 4 种在 strix 侧没有对应来源**，如实记：`poc_generated` /
-`verified` / `blocked` / `completed`。其中 `completed` 由扫描生命周期发出
-（ADR-004），另三种外部工具根本没有对应的结构化信号。
+**8 种事件类型现在都有来源。** `completed` 由扫描生命周期发出（ADR-004）。
+`poc_generated` / `verified` / `blocked` 三种曾在这里被记为"外部工具根本
+没有对应的结构化信号" —— **那条结论后来被推翻了**，来源是
+`update_vulnerability_report`（带 `poc_script_code` 的 `fields` ⇒ 产出 PoC；
+`fields.confidence == "high"` ⇒ 已验证）与 `wait_for_user`（⇒ 卡住等人）。
+`verified` 挂在 `update_` 而不是 `create_` 上的理由（一次调用只产一条事件，
+`create_` 已经映射成 `discovery`，改成 `verified` 会丢掉发现）记在
+`app/scans/strix_events.py` 的模块 docstring 里。
+
+⚠️ 这次更正本身留个教训：那三种"没有来源"是在**只看了 `strix/tools/` 的
+目录名**之后下的结论 —— 目录名里没有 `report_update` 之类的名字，
+就当成没有信号。实际信号一直在 `reporting/tool.py` 的 `fields` 参数里。
+**"没找到"与"不存在"不是一回事**，前者只能说"以当时的查法没找到"。
 
 ### 4. 幂等靠数据库索引，不靠"先查后写"
 

@@ -54,7 +54,7 @@
 
 | 自研内容 | 位置 |
 | --- | --- |
-| strix 的 2 种结构化事件 → 本项目契约的 8 种事件 | `strix_events.py:45-60`（并如实标注其中 4 种在 strix 侧无对应来源） |
+| strix 的结构化事件 → 本项目契约的 8 种事件 | `strix_events.py:45-60`（8 种在 strix 侧都有来源；其中 `verified` 用的是本项目自己的置信度口径，映射表已如实标注） |
 | strix severity/confidence → 本项目 5 档 + CVSS 语义轴 | `strix_vulns.py:90-105` |
 | agent 名 → 5 种角色的启发式、运行状态映射 | `strix_events.py:122-137` |
 | 稳定 agent id 生成（≤64 字符，sha1 兜底） | `strix_events.py:538-548` |
