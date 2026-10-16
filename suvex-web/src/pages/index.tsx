@@ -36,6 +36,8 @@ export const SettingsPage = lazy(() => import('./SettingsPage'))
  *   才能开始渲染，等于**为了省首屏的字节而推迟首屏**，因果完全颠倒。
  *
  *   首页自身的体积也刻意压得很小：不含 WebGL（HeroBackdrop 内部再懒加载
- *   Threads/ogl），不含任何动画库。所以它进主包的净增量是几 kB 的 JSX + 图标。
+ *   Threads/ogl），**也不含 DotGrid**（同样懒加载，而且它已改成零依赖的
+ *   自研物理，见 `effects/DotGrid.tsx`），不含任何动画库。
+ *   所以它进主包的净增量是几 kB 的 JSX + 图标。
  */
 export { LandingPage } from './LandingPage'

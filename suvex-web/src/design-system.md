@@ -373,20 +373,26 @@ Noto Sans SC 包体 4.4MB，但按 `unicode-range` 分成 101 个分片，浏览
 
 ### 背景动效（`components/effects`）
 
-首屏背景是三层叠的「场」，见 `AgentField.tsx` 的注释。选型理由：
+首屏背景是四层叠的「场」，见 `AgentField.tsx` 的注释。选型理由：
 
 - **Threads**（WebGL 线场）：缓慢流过的线 = 数据正在通过。它是页面里**唯一**
   的持续运动，负责"活着"这个感受。
+- **DotGrid**（Canvas 点阵，跟随光标）：只在大屏挂。快速划过时光标附近的点被
+  **推出去再弹回** —— 它表达的是"这是可交互的现场，不是一张图"。
 - **压角径向渐变**：把中心留亮、四角压暗，给后面的内容层留出可以落上去的地方。
 
-> 原第 3 层 **DotGrid**（Canvas 点阵，跟随光标）**已移除** —— 它是全仓唯一
-> 依赖 `gsap` 的地方，而 `gsap` 用的是 GreenSock 自有许可（非 OSI 开源），
-> 而这一层是纯装饰。理由与记录见 `DEPENDENCIES.md` §4.3、`effects/README.md`。
+> DotGrid 曾在 2026-10-15 因许可证原因移除（它是全仓唯一依赖 `gsap` 的地方，
+> 而 gsap 用的是 GreenSock 自有许可、非 OSI 开源）。
+> **2026-10-16 恢复 —— 物理改成自研、不引入 gsap**，所以许可仍然干净。
+> 推导与数值保障在 `DotGrid.tsx` 的「本地改动 7」；许可口径见
+> `effects/README.md` 与 `DEPENDENCIES.md` §4.3 ①。
 
 两个约束（踩过）：
 
 1. **同一个视口里不要挂第二个 WebGL 背景。** Threads 是逐像素 Perlin 噪声，
    纯 GPU 成本；再叠一个（Aurora/Silk 之类）会在集显上掉帧。
+   （DotGrid 是 **Canvas 2D**，不是 WebGL，所以它与 Threads 叠置不受这条约束 ——
+   三层同挂时的帧率实测见下。）
 2. **色值传 sRGB，不传线性。** `ogl` 不做色彩空间转换（`Renderer` 里没有
    `outputColorSpace`），着色器输出直接进 sRGB 后备缓冲。按 three.js 的习惯
    传线性值会让线场暗到看不见——这正是第一版的问题。
@@ -408,8 +414,9 @@ Threads 的片元着色器每像素跑 40 次 `Perlin2D`，成本 = 像素数 ×
 
 > 当时的记录：叠加 DotGrid（仅画点、只在光标附近改色）几乎不花钱，三层同时
 > 挂载在三个视口（1600×900 / 1280×800@2x / 390×844@2x）实测 180 fps、零控制台报错。
-> **该层后来已移除**（许可证原因，见 §5 与 `DEPENDENCIES.md` §4.3），上面这组
-> 实测数字保留为历史依据 —— 它证明了"背景层数不是当时的瓶颈"。
+> 这组数字 2026-10-16 恢复 DotGrid 后**重新成立**（同样的层数、同样的配置），
+> 它证明了"背景层数不是当时的瓶颈"。新物理的积分跑在**已有的那个 rAF 循环**里，
+> 没有新增循环。
 
 ### 强度：线场是氛围，不是主角
 
@@ -955,7 +962,8 @@ src/design-system.md        本文（决策与理由，§5.1 是动效规范，�
 src/navigation.ts           导航信息架构单一事实来源（含 fillsViewport 布局模式声明）
 src/App.tsx                 路由表（根路径 = 产品首页）+ 滚动复位
 src/components/effects/     动效（ReactBits 拷贝件 + 组合层 AgentField）
-                            AgentField 由 AppShell 懒加载（点阵层 DotGrid 已移除）
+                            AgentField 由 AppShell 懒加载（四层：底色/Threads/DotGrid/压角）
+                            DotGrid 的物理是自研的（无 gsap），单测在 DotGrid.test.ts
 src/components/landing/     产品首页专用：HeroTitle（纯 CSS 逐词落定）
                             HeroBackdrop（懒加载 WebGL 背景，首帧后挂载）
 src/components/layout/      布局壳：AppShell / Layout / Sidebar / MobileNav / TopStatusBar / PageTransition
@@ -1481,11 +1489,12 @@ store 保持内存态并**在面板上显式标注**（`BACKEND_PENDING` / `BACK
 | ------- | --------------------------- | -------------------------------- |
 | 底色    | `canvas` 近黑               | 最深处                           |
 | Threads | WebGL 线场，`opacity: 0.70` | "数据正在通过"。唯一持续运动     |
+| DotGrid | Canvas 点阵（仅大屏）       | 跟随光标 = 这是可交互的现场      |
 | 压角    | 径向渐变                    | 中心留亮给标题，四角压暗         |
 | 文案层  | 状态行 / 标题 / 说明 / CTA  | 信息                             |
 
-（原「DotGrid 光标跟随点阵（仅大屏）」一层已移除，原因见 §5 与
-`DEPENDENCIES.md` §4.3。）
+（DotGrid 这一层 2026-10-15 因 `gsap` 许可移除、2026-10-16 以自研物理恢复，
+见 §5 与 `DEPENDENCIES.md` §4.3 ①。）
 
 比站内的 `AgentField` 强度高一档（0.70 vs 0.55）：站内它只是氛围，
 首屏要它承担"一眼记住"。但仍不给满 —— 满强度的紫罗兰波浪读起来是
@@ -1531,7 +1540,7 @@ store 保持内存态并**在面板上显式标注**（`BACKEND_PENDING` / `BACK
 
 | #   | 发现                                                      | 判定                                                                                                 | 处理                                                           |
 | --- | --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| B1  | **DotGrid 的点击冲击波挂在 `window` 上**（该组件后已移除，见 §5）      | 真问题。页面上每次真实交互（点按钮、勾选、展开行）都会在背景炸一次；且每次点击遍历约 2000 个点算距离 | `shockStrength: 4 → 0`，并给 DotGrid 加短路：为 0 时不注册监听 |
+| B1  | **DotGrid 的点击冲击波挂在 `window` 上**（该组件曾移除、2026-10-16 已恢复，见 §5）      | 真问题。页面上每次真实交互（点按钮、勾选、展开行）都会在背景炸一次；且每次点击遍历约 2000 个点算距离 | `shockStrength: 4 → 0`，并给 DotGrid 加短路：为 0 时不注册监听 |
 | B2  | **`ScrollToTop` 用 `behavior: 'smooth'`**                 | 真问题。§12 已记过它会在某些环境静默 no-op，用户点导航后停在中段                                     | 改 `'auto'`（瞬时）                                            |
 | B3  | **路由过渡用 `AnimatedContent`（先 `invisible` 等 JS）**  | 真问题。gsap 不跑 = **整页白屏且不报错**                                                             | 换纯 CSS `animate-page-in`（140ms 纯透明度）                   |
 | B4  | **向导步骤切换用同一个 `AnimatedContent`**                | 真问题。同一失败模式，但这里挡住的是**要填的表单和启动按钮**                                         | 换纯 CSS，见 `NewScanWizard`                                   |
@@ -1554,10 +1563,24 @@ store 保持内存态并**在面板上显式标注**（`BACKEND_PENDING` / `BACK
 拆分后产物（任务 8 时的快照）：`gsap 70kB` / `Threads 51kB` / `DotGrid 10.4kB` / `AgentField 1.5kB`
 全部落在独立 chunk，首屏不请求。
 
-> 上表与这一行是**任务 8 的实测快照**，保留作对比基线。其中 `gsap 70kB` 与
-> `DotGrid 10.4kB` 两个 chunk **已随 DotGrid 的移除消失**（许可证原因，见 §5 与
-> `DEPENDENCIES.md` §4.3）；移除后重建实测：主 chunk **308.67 kB（gzip 98.94 kB）**、
-> `Threads 51.03 kB`（gzip 15.45 kB），产物里已无 gsap 与 DotGrid。
+> 上表与这一行是**任务 8 的实测快照**，保留作对比基线。其中 `gsap 70kB` 的 chunk
+> **已随 `gsap` 的移除永久消失**（许可证原因，见 §5 与 `DEPENDENCIES.md` §4.3 ①）。
+
+**2026-10-16 恢复 DotGrid 后的重新实测**（同样是生产构建，取
+`npm run build` 的输出）：
+
+| 产物                       | 大小              |
+| -------------------------- | ----------------- |
+| 主 chunk `index-*.js`      | **309.14 kB**（gzip 99.16 kB） |
+| `Threads-*.js`（WebGL 线场）| 51.03 kB（gzip 15.45 kB） |
+| `DotGrid-*.js`（点阵）      | **5.16 kB**（gzip 2.29 kB） |
+
+三个都在独立 chunk、首屏不请求。主 chunk 相对"移除后"的 308.67 kB 只涨了
+**0.47 kB** —— 恢复 DotGrid 没有把任何东西塞回主包（它是 lazy 的）。
+
+> ⚠️ `DotGrid` 从任务 8 快照的 **10.4 kB 降到 5.16 kB**，因为自研物理替掉了
+> `gsap` 那段调用（原来那个 chunk 里还带着 gsap 的引用），而现在它**零额外依赖**。
+> 这组数字连同主 chunk 数值都是**实测**（`npm run build` 输出），不是估的。
 
 ### D. 实测抓出的缺陷（本轮最有价值的部分）
 
@@ -1755,7 +1778,7 @@ store 保持内存态并**在面板上显式标注**（`BACKEND_PENDING` / `BACK
 | `src/components/layout/PageTransition.tsx`   | **重写**：gsap+ScrollTrigger → 纯 CSS                                                                             |
 | `src/components/scans/NewScanWizard.tsx`     | 同上（步骤切换）                                                                                                  |
 | `src/components/effects/AnimatedContent.tsx` | **删除**（已无引用，且会把 gsap 钉进主包）                                                                        |
-| `src/components/effects/DotGrid.tsx`         | `shockStrength === 0` 时不注册 click 监听（**该文件后续已整体移除**，见 §5）                                      |
+| `src/components/effects/DotGrid.tsx`         | `shockStrength === 0` 时不注册 click 监听（**该文件 2026-10-15 曾整体移除、2026-10-16 以自研物理恢复**，见 §5） |
 | `src/components/effects/AgentField.tsx`      | `shockStrength: 4 → 0`                                                                                            |
 | `src/components/layout/AppShell.tsx`         | `AgentField` 改懒加载（主 chunk 445 → 312 kB）                                                                    |
 | `src/App.tsx`                                | 根路径改为首页；`ScrollToTop` 改 `behavior: 'auto'`                                                               |

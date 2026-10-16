@@ -11,6 +11,7 @@ import { Suspense, lazy, useMemo } from 'react'
  * `AgentField` 是全站氛围底：压在 80% 遮罩下面，负责"这个系统一直在跑"。
  * Hero 需要的是**一眼记住的画面**，所以它单独用一套更强的配置：
  *   · 线场占比更高（100% 而不是 78% 配 0.55 透明度）；
+ *   · 点阵保留（跟随光标 = 这是可交互的现场）；
  *   · 压角更轻，让线场真的看得见。
  *
  * 代价是 Hero 上**不能同时**出现站内背景 —— 首页独立于 AppShell 渲染，
@@ -23,7 +24,7 @@ import { Suspense, lazy, useMemo } from 'react'
  *   1. **用 `useAfterPaint` 推迟挂载**（双重 rAF）。WebGL 初始化 +
  *      着色器编译是几百毫秒级的同步开销，若和首帧挤在一起，
  *      LCP 会被拖长。等首帧真的落屏之后再挂，标题就永远不会等它。
- *   2. **`lazy()` 让 ogl / Threads 落在独立 chunk**。
+ *   2. **`lazy()` 让 ogl / Threads / DotGrid 落在独立 chunk**。
  *      首屏 HTML+CSS 里根本不含这些代码 —— 实测背景 chunk 约 20 kB(gzip)，
  *      而主包因此**变小**（这些依赖原本在主包里）。
  *   3. 内容先出现、背景后淡入。顺序是对的：文字是信息，线场是氛围。
@@ -34,6 +35,7 @@ import { Suspense, lazy, useMemo } from 'react'
 
 // 拆成独立 chunk。这些是 ReactBits 拷贝件 + ogl，都不进首屏关键路径。
 const Threads = lazy(() => import('@/components/effects/Threads'))
+const DotGrid = lazy(() => import('@/components/effects/DotGrid'))
 
 /**
  * 从 CSS 变量里读主题色。
@@ -73,7 +75,7 @@ export function HeroBackdrop() {
 
   /*
     配色随主题重算。依赖 `resolved` 是**必须**的：
-    WebGL 侧（Threads）拿的是 props，主题一换就得把新值传下去，
+    WebGL 侧（Threads / DotGrid）拿的是 props，主题一换就得把新值传下去，
     靠 CSS 是传不进去的。
   */
   const palette = useMemo(() => {
@@ -83,6 +85,9 @@ export function HeroBackdrop() {
       accentSrgb: tripleToSrgb(accent),
       accentSoft: `rgb(${accent} / 0.16)`,
       accentClear: `rgb(${accent} / 0)`,
+      // 底色点阵用描边色、高亮点用强调色 —— 这两个映射在两个主题下都成立
+      dotBase: `rgb(${readTriple('--suvex-line-strong', '44 50 61')})`,
+      dotActive: `rgb(${readTriple('--suvex-accent-strong', '169 155 255')})`,
       // 压角用画布色：暗色下压暗、亮色下压回页面底色，语义一致
       vignette: canvas,
     }
@@ -139,6 +144,24 @@ export function HeroBackdrop() {
               />
             </div>
 
+            {/* 点阵：只在大屏挂。shockStrength=0 —— 见 AgentField 里的长注释：
+                冲击波监听挂在 window 上，会让每次点按钮都在背景里炸一次。 */}
+            {isDesktop && (
+              <div className="absolute inset-0">
+                <DotGrid
+                  dotSize={3}
+                  gap={34}
+                  baseColor={palette.dotBase}
+                  activeColor={palette.dotActive}
+                  proximity={170}
+                  speedTrigger={80}
+                  shockRadius={220}
+                  shockStrength={0}
+                  resistance={900}
+                  returnDuration={1.6}
+                />
+              </div>
+            )}
           </Suspense>
         </div>
       )}

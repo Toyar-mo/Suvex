@@ -15,10 +15,10 @@
 | 后端第三方依赖 | **44 个**（含 dev 工具）；全部为宽松许可证 |
 | 前端第三方依赖 | **553 个**（含传递依赖，实测自 `package-lock.json`）；宽松为主，**1 处需留意**（见 §4） |
 | 外部工具依赖 | **1 个**：`strix-agent` 1.6.2（**Apache-2.0**） |
-| 源码拷贝的第三方代码 | **1 处**：ReactBits 3 个组件（**MIT + Commons Clause**，已在 `NOTICE` 披露） |
-| 自研代码量 | 后端 `app/` **45,376 行** / 前端 `src/` **44,279 行**（README 口径，见 §5） |
+| 源码拷贝的第三方代码 | **1 处**：ReactBits 4 个组件（**MIT + Commons Clause**，已在 `NOTICE` 披露） |
+| 自研代码量 | 后端 `app/` **45,376 行** / 前端 `src/` **44,659 行**（README 口径，见 §5） |
 
-**一句话**：本项目**没有抄任何第三方源码**（唯一的源码拷贝是 3 个前端动效组件，已披露）；`strix` 是**作为外部 CLI 集成的可替换执行后端**，不是被复制的代码。
+**一句话**：本项目**没有抄任何第三方源码**（唯一的源码拷贝是 4 个前端动效组件，已披露）；`strix` 是**作为外部 CLI 集成的可替换执行后端**，不是被复制的代码。
 
 ---
 
@@ -146,7 +146,8 @@
 `gsap@3.15.0` 的 `package.json` 写着 `Standard "no charge" license: https://gsap.com/standard-license`。这是 **GreenSock 自有许可证**（允许免费商用，但**不满足"开源"的定义**），不是 OSI 认可的开源许可。
 
 - **它原先的用处**：`gsap` 在本项目**只被 `DotGrid.tsx`**（ReactBits 拷贝件）依赖，而 `DotGrid` 经 `AgentField` / `HeroBackdrop` 懒加载，不进首屏关键路径 —— 是纯装饰。
-- **处置**：**已移除**（`chore(web): 移除 gsap 依赖与 DotGrid 组件`）。删掉 `DotGrid.tsx` 与两处调用点后，`gsap` 整条依赖出树（`package.json`、`package-lock.json` 均无残留）。
+- **处置**：**已移除**（`chore(web): 移除 gsap 依赖与 DotGrid 组件`）。删除 `gsap` 依赖项与两处调用后，`gsap` 整条依赖出树（`package.json`、`package-lock.json` 均无残留）。
+- **★ 2026-10-16 复核：`DotGrid.tsx` 已恢复，但 `gsap` 仍然是移除状态。** 用户要求把点阵加回来（那处鼠标交互是首页的一处体验），并明确选了"加回来但不依赖 gsap" —— 要的是**效果**，gsap 只是它顺手用的工具。于是 `DotGrid` 的物理改成**自研**（惯性滑出用指数逼近的闭式解、弹性回位用欠阻尼弹簧，积分放进该文件已有的那个 rAF 循环），`gsap` 的依赖项**没有回来**：`package.json` / `package-lock.json` 里仍然没有它，`src/` 下也没有任何 `import ... from 'gsap'`。详见 `src/components/effects/README.md` 与 `DEPENDENCIES.md` §六。
 - **留下的结论**：前端依赖现在**没有非 OSI 许可的包**。但**仍不要写"全部依赖均为开源许可证"** —— 见下方 ②，以及 §4.2 里 MPL/CC-BY/OFL 这几类需要留意的许可；建议措辞始终是"依赖许可证见清单"。
 
 **② psycopg 是 LGPL-3.0-only**
@@ -162,21 +163,31 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 | 目录 | 文件数 | 行数 |
 | --- | --- | --- |
 | 后端 `suvex-api/app/`（`.py`） | 115 | **45,376** |
-| 前端 `suvex-web/src/`（`.ts`/`.tsx`） | 160 | **44,279** |
+| 前端 `suvex-web/src/`（`.ts`/`.tsx`） | 162 | **45,522** |
 | 后端 `suvex-api/tests/`（`.py`） | 73 | **31,625** |
-| **合计（含测试）** | 348 | **121,280** |
+| **合计（含测试）** | 350 | **122,523** |
 
-前端细分：`.ts` 63 文件 15,566 行 · `.tsx` 97 文件 28,713 行。
+前端细分：`.ts` 64 文件 15,888 行 · `.tsx` 98 文件 29,693 行（本机工作区口径，含未提交改动；见下方警告）。
 
-> 前端数字的最近一次变化：删掉 `src/components/effects/DotGrid.tsx`（401 行）与 `gsap`，
-> 并同步精简了各处注释里对它的说明 —— **161 → 160 文件 / 44,730 → 44,279 行**。
+> ⚠️ **这组数字的取数口径要说清楚**：上表的行数是**在 Kali 工作副本上量的**
+> （`find src -type f \( -name '*.ts' -o -name '*.tsx' \) | xargs wc -l`，
+> 即 `wc -l` 数 `\n`）。同一时刻本机工作区量出来是 **45,581 行 / `.ts` 15,888 /
+> `.tsx` 29,693** —— 差 59 行。差的原因是**两个工作副本不同步**：
+> 后端有 2 个在途文件（`ScanRetentionPanel.tsx` / `scan-retention.ts`）本机是新版、
+> Kali 是旧版。其余 160 个文件逐文件 sha256 完全一致（实测）。
+> 这说明"行数"这类指标**必须连同取数位置一起说**，否则两边对不上账。
+
+> 前端数字的最近一次变化（2026-10-16）：恢复 `DotGrid.tsx`（708 行）
+> 并新增它的物理单测 `DotGrid.test.ts`（309 行）。
+> 该组件 2026-10-15 曾因 `gsap` 的非 OSI 许可被移除（当时 −401 行），
+> 这次以**自研物理**恢复，所以 `gsap` 的移除状态不变。
 
 **⚠️ 口径警告**：另有两种算法会得到不同数字，**不要混用**：
 
 | 算法 | 后端 `app/` | 前端 `src/` | 差异原因 |
 | --- | --- | --- | --- |
-| `wc -l`（数 `\n`）**← README 口径** | 45,376 | 44,279 | — |
-| Python `splitlines()`（数逻辑行） | 45,378 | 44,281 | 各有 **2 个文件末行无换行符**，`wc -l` 各少算 1 行 |
+| `wc -l`（数 `\n`）**← README 口径** | 45,376 | **45,522** | — |
+| Python `splitlines()`（数逻辑行） | 45,378 | **45,524** | 前端有 **2 个文件末行无换行符**，`wc -l` 少算 2 行 |
 
 `README.md` 里写的 `43,256` / `41,941` 是**更早的实测快照**，代码演进后已漂移 —— 这正是 README 自己警告的坑（`README.md:263-264` 记着"曾写 32,483 而实际 39,163"）。
 
@@ -188,12 +199,13 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 | 组件 | 数量 | 许可证 | 位置 | 处置 |
 | --- | --- | --- | --- | --- |
-| ReactBits 动效组件 | 3 个 | **MIT + Commons Clause v1.0** | `suvex-web/src/components/effects/` | 已披露，逐文件记录了上游路径与本地改动 |
+| ReactBits 动效组件 | 4 个 | **MIT + Commons Clause v1.0** | `suvex-web/src/components/effects/` | 已披露，逐文件记录了上游路径与本地改动 |
 
 **取证方式**：读 `suvex-web/src/components/effects/README.md`（该文件本身即完整披露：来源、取用日期、上游路径、本地改动、已知坑）。
 
 - 上游：<https://github.com/DavidHDev/react-bits>，取用日期 2026-02-26；
-- 3 个文件：`Threads.tsx`、`LetterGlitch.tsx`、`CountUp.tsx`（原第 4 个 `DotGrid.tsx` 已因 `gsap` 的非 OSI 许可移除）；
+- 4 个文件：`Threads.tsx`、`LetterGlitch.tsx`、`CountUp.tsx`、`DotGrid.tsx`；
+- ⚠️ **`DotGrid.tsx` 的依赖不同**：上游它依赖 `gsap`（GreenSock 自有许可，非 OSI），本项目 2026-10-16 把它的物理改成**自研**，于是它与其他三个一样**零额外依赖**。这条也意味着：`gsap` 的移除状态没有被这次恢复推翻（见 §4.3 ①）；
 - Commons Clause 限制"把组件本身单独作为产品售卖"，**本项目是应用内使用，符合条件**；
 - 分发时需保留版权声明（`Copyright (c) 2026 David Haz`）。
 
@@ -207,7 +219,7 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 1. **自研**：平台本体（后端 / 前端 / 契约体系 / 测试）、**CTF2 自主解题循环**、strix 适配层（2,752 行）均为本项目自行设计与实现；
 2. **集成**：扫描执行内核集成开源项目 `strix-agent`（Apache-2.0），**作为可替换的外部 CLI 后端调用，未复制、未修改其源码**；平台通过 `scan_runner` 配置支持 `strix | fake` 两种后端，不绑定任何单一实现；
-3. **披露**：前端 `effects/` 下有 3 个 ReactBits 组件源码拷贝（MIT + Commons Clause），出处与本地改动见 `NOTICE` 与 `effects/README.md`；其余第三方依赖及其许可证见本清单。
+3. **披露**：前端 `effects/` 下有 4 个 ReactBits 组件源码拷贝（MIT + Commons Clause），出处与本地改动见 `NOTICE` 与 `effects/README.md`；其余第三方依赖及其许可证见本清单。
 
 **不要写"全部自研"或"未使用任何第三方代码"** —— 那与事实不符，且 `NOTICE`、`LICENSE`、依赖清单、`node_modules` 都能反证。如实分层披露**不扣分**（工程规范是加分项），虚假声明才是致命风险。
 
