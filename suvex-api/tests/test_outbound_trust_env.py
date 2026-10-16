@@ -65,7 +65,35 @@ OUTBOUND_CALLS = frozenset(
 
 
 def _outbound_constructions() -> list[tuple[str, int, str, bool]]:
-    """扫 `app/` 下每一处 `httpx.X(...)`，返回 (相对路径, 行, 调用名, 有没有 trust_env)。"""
+    """扫 `app/` 下每一处 `httpx.X(...)`，返回 (相对路径, 行, 调用名, 有没有 trust_env)。
+
+    ## ★★ 已知边界：只认 `httpx.X(...)` 这一种写法（R-2，**有意不解别名**）
+
+    判据要求"调用是 `httpx` 这个模块名上的属性访问"（见下面那个
+    `isinstance(fn.value, ast.Name) and fn.value.id == "httpx"`），
+    所以下面三类**等价写法扫不到**：
+
+        from httpx import AsyncClient;  AsyncClient(...)      # 直接 import 名字
+        import httpx as h;              h.AsyncClient(...)    # 模块别名
+        C = httpx.AsyncClient;          C(...)                # 先赋给变量
+
+    这是**有意保留的取舍**，不是漏做。理由三条：
+
+    1. **要支持别名就得做作用域分析**：`h` 到底是 `httpx` 还是别的模块、
+       `C` 在哪一层被赋成什么，都要跟着 import 与赋值语句走 ——
+       那是一个简化版的名字解析器，而它自己会有一批新的漏报方式。
+       为一条"当前命中 0 处"的缺口引入那层复杂度，代价大于收益。
+    2. **它防的是"下一个人写第 10 个 client 时漏写"**，而这类人写的是
+       `httpx.AsyncClient(...)` —— 与仓里现存 9 处**同一个写法**。
+       真正要防的场景被覆盖了。
+    3. **改了会被看见**：真要引入别名写法，`git diff` 里那一行本身很显眼；
+       而这条测试的价值主要是"在 review 时提供一个检查点"，不是
+       "穷举所有可能的语法形态"。
+
+    ⚠️ 所以**别把这条测试当成语法层面的保证**。它的准确表述是：
+    "在 `app/` 都用 `httpx.X(...)` 的前提下，每一处都显式写了 `trust_env`"。
+    （实测确认：当前 `app/` 下这三类写法**各 0 处**。）
+    """
     found: list[tuple[str, int, str, bool]] = []
     for path in sorted(APP_ROOT.rglob("*.py")):
         if "__pycache__" in path.parts:

@@ -616,8 +616,42 @@ Review 报的是：`http://127.0.0.1:99999/x` 抛 `ExceptionGroup[OverflowError]
 
 | 族 | 触发写法 | 逃逸的异常 |
 | --- | --- | --- |
-| 端口越界 | `http://127.0.0.1:99999`、`:65536`、`:70000`、`:100000`、`:4294967296`、`https://…:99999`、`http://:99999` | `ExceptionGroup[OverflowError]` |
+| 端口越界 | `http://127.0.0.1:99999`、`:65536`、`:70000`、`:100000`、`:4294967296`、`https://…:99999` | `ExceptionGroup[OverflowError]` |
 | 协议异常 | `javascript:alert(1)`、`data:text/html,x` | **`httpx.InvalidURL`**（继承 `Exception`，不是 `HTTPError`） |
+
+⚠️ **上表被修正过（R-3）**：原文把 `http://:99999` 也列进
+「端口越界 → `ExceptionGroup[OverflowError]`」那一行，**但实测它不是那一类**。
+
+实测（2026-10-16，Kali，护栏全关以看原始异常）：
+
+| 写法 | 当**入口 URL**（`base_url + path`）时 | 当 **`Location`** 时 |
+| --- | --- | --- |
+| `http://:99999/x` | **`UnsupportedProtocol`**（`HTTPError` 子类 → **接得住**） | 不抛（走 `_check_port` 判定） |
+| `http://127.0.0.1:99999/x` | `ExceptionGroup[OverflowError]` ★ 真逃逸 | 不抛（走 `_check_port`） |
+| `ftp://127.0.0.1/x` | `UnsupportedProtocol` | `InvalidURL`（httpx 内部解析抛） |
+
+所以准确的说法是：`http://:99999`（**无主机**形态）逃出来的是
+`UnsupportedProtocol`，而它是 `HTTPError` 子类、**调用点接得住** ——
+不是原文写的 `ExceptionGroup[OverflowError]`。发逃逸的是**有主机**的
+越界端口（`http://127.0.0.1:99999`）。
+
+**★ 另一个必须分开说的语义差别：`:0` 不是溢出**
+
+`http://127.0.0.1:0/x` 与 `:99999` **在连接层的行为完全不同**（裸
+`anyio.connect_tcp` 实测）：
+
+```
+127.0.0.1:0        -> OSError                      ← 不抛 OverflowError
+127.0.0.1:99999    -> ExceptionGroup[OverflowError]
+127.0.0.1:70000    -> ExceptionGroup[OverflowError]
+127.0.0.1:65536    -> ExceptionGroup[OverflowError]
+```
+
+`:0` 是**合法整数**、只是没有可用的端口语义，所以连接层不抛
+`OverflowError` —— 它**只能**由 `_check_port` 的显式区间比较
+（`MIN_PORT..MAX_PORT`）拦住。把它与溢出端口混为一谈，会让下一层
+误以为 `OverflowError` 是通用兜底。**R-1 收窄正是从这里发现
+"两层必须分开说"的**（逐层实测见下）。
 
 **★ 修法（我选了"在 `request_same_host` 里拦成 `Ctf2Error`"那条路，理由见下）**：
 
@@ -629,9 +663,10 @@ Review 报的是：`http://127.0.0.1:99999/x` 抛 `ExceptionGroup[OverflowError]
    `if follow_redirects:` **之前**，所以 `javascript:` 那类在
    `client.request()` 内部就炸，我们的 `_next_url` 根本轮不到执行。
    包装里把 `InvalidURL` / `ExceptionGroup` 转成 `Ctf2Error`，
-   **但只转"地址/网络层面"的叶子异常**（`OSError` / `ArithmeticError` /
-   `ValueError` / httpx 的 URL 与传输异常）—— 编程错误照旧上抛，
+   **但只转"地址/网络层面"的叶子异常** —— 编程错误照旧上抛，
    否则就是用"平台的问题"盖住一个真 bug。
+   ⚠️ 这份叶子清单**在 R-1 里收窄过**（原文是
+   `OSError` / `ArithmeticError` / `ValueError`），见下面 R-1 一节。
 3. 协议判据写成 `scheme and scheme not in (http, https)`（**相对地址的
    `scheme` 是空串，合法**）。⚠️ 第一版漏了 `scheme and`，把相对跳转
    全拒了 —— 实测 6 个既有用例挂掉。
@@ -655,8 +690,90 @@ Review 报的是：`http://127.0.0.1:99999/x` 抛 `ExceptionGroup[OverflowError]
 **逐层反向验证**：把上面两层护栏**都**去掉 → 9 条逃逸路径全部重现
 （`ExceptionGroup` ×7 + `InvalidURL` ×2）；装回去 → **0 逃逸**，
 30 条 redirect 用例全绿。
-⚠️ 只去掉 `_check_port` 一层时仍是 0 逃逸 —— 两层互为备份，
-所以反向验证必须**同时**去掉两层才是有意义的对照。
+
+⚠️ **下面这句原文是错的，R-1 期间推翻了**。原文写：
+
+> 只去掉 `_check_port` 一层时仍是 0 逃逸 —— 两层互为备份，
+> 所以反向验证必须**同时**去掉两层才是有意义的对照。
+
+**"0 逃逸"这个观察是对的，但原因写错了**：那轮测的是
+`MockTransport`，而 mock **永远不会真的连接** —— 所以 `OverflowError`
+那条兜底**根本没机会触发**，越界端口在 mock 下只是"返回 200"（连异常
+都不抛，自然不算逃逸）。这**不是**"两层互为备份"的证据，
+而是"这层在 mock 下不可测"的证据。
+
+用**真实 transport** 重做同一对照（实测）：
+
+| 输入 | `_check_port` 在位 | 只留 `OverflowError` 兜底 |
+| --- | --- | --- |
+| `:99999` / `:65536` / `:70000` | `Ctf2Error` | `Ctf2Error`（`ExceptionGroup` 被兜住）✓ |
+| **`:0`** | `Ctf2Error` | **放行** ★ 漏 |
+
+所以两层**不是**"互为备份"，它们管的是**不同的东西**：
+`_check_port` 管"语义上不合法的端口"（含 `:0`、负数），
+`OverflowError` 只管"连接层真的炸了"。**`_check_port` 是第一道**，
+`OverflowError` 是兜底 —— 这才是准确的分工。
+
+---
+
+### R-1：`_is_transport_level` 的叶子判据收窄（2026-10-16）
+
+Review 第二轮对抗审查指出：原判据
+`(OSError, ArithmeticError, ValueError, httpx.HTTPError, *…)` 里的
+前三个**同时是编程错误的常见类型**，而整段 `client.request(...)` 都在
+这一层包装里 —— 于是我们自己抛的 `ValueError`（解包失败、`int()` 失败）
+会被报成「平台给的跳转地址无法使用」，正是该函数 docstring 要防的
+"用平台的问题盖住真 bug"。
+
+**收窄依据（Kali 实测，不是推断）**：
+
+| 实测项 | 结果 |
+| --- | --- |
+| 21 种畸形 `Location` 里裸 `ValueError` 出现次数 | **0**（无正当用途） |
+| 真实连接失败（拒绝连接 / DNS / 不可路由）的外层类型 | `ConnectError`、`ConnectTimeout`（**都是 `HTTPError` 子类**） |
+| 裸 `OSError` 是否曾不经包装地冒出来 | **否** —— 连接层永远包成 httpx 自己的类型 |
+| `anyio.connect_tcp` DNS 失败 | `gaierror` —— 是**真的**传输错误，且**不是** `ConnectionError` 子类 |
+| `httpx.InvalidURL` / `UnsupportedProtocol` 是否 `ValueError` | **都不是**（MRO 实测） |
+| `issubclass(OverflowError, ArithmeticError)` | True（收窄不丢覆盖） |
+
+**收窄结果**：
+
+| 原成员 | 现在 | 理由 |
+| --- | --- | --- |
+| `ValueError` | **删除** | 0 次真实出现；且两个必须拦的类型都不是 `ValueError` |
+| `OSError` | → `ConnectionError` + `socket.gaierror` | 丢掉的只有 `FileNotFoundError` / `PermissionError` 这类**文件系统**错误（此上下文里只可能是我们的 bug）；`gaierror` 必须显式保留，否则 `ExceptionGroup[gaierror]` 会逃逸 |
+| `ArithmeticError` | → `OverflowError` | 端口越界真身；同时把 `ZeroDivisionError` 放回上抛 |
+| `httpx.HTTPError` / `_LIBRARY_URL_ERRORS` | 不变 | `UnsupportedProtocol` 等在其下；`InvalidURL` 单独列（它不是 `HTTPError`） |
+
+**硬判据（收窄后重跑）**：9 条 F-08 逃逸路径 + Review 的 8 条
+= **17/17 全部以 `Ctf2Error` / `HTTPError` 收场，0 逃逸**（真实 transport）。
+
+**反向验证**：把宽判据改回去 → 新用例**变红**（`ValueError` /
+`ZeroDivisionError` / `FileNotFoundError` / `PermissionError` 四条参数化
++ 一条直接构造的 `ValueError`）；而"畸形 `Location`"那组在宽窄两种判据下
+**都是绿** —— 如实说明它守的是 `_check_port` 与 `InvalidURL`，
+**不是**本次收窄的判据（不做恒真断言）。
+
+**新增测试**（`tests/ctf2/test_redirect_guard.py`，30 → 49 条）：
+编程错误必须上抛（参数化 8 条 + 1 条构造）、真传输错误仍须被吞
+（参数化 8 条）、`ExceptionGroup[gaierror]` 必须被吞、
+以及 `test_the_overflow_fallback_is_the_second_line`（真实 transport
+上验"兜底是第二道"，并把 `MockTransport` 下不可测这件事写进用例）。
+
+### R-2：`test_outbound_trust_env.py` 的别名写法边界（**有意不解**）
+
+该 AST 扫描只认 `httpx.X(...)`，扫不到三类等价写法
+（`from httpx import AsyncClient`、`import httpx as h`、
+`C = httpx.AsyncClient`）。**当前 `app/` 下三类各 0 处**（实测：
+13 个文件全是 `import httpx`）。
+
+**决定：只加注释说明边界，不实现别名解析。** 理由：支持别名要做作用域
+分析（`h` / `C` 到底指什么，要跟着 import 与赋值走），那是一个简化版名字
+解析器、自己会有一批新的漏报方式；而它防的场景是"下一个人写第 10 个
+client 时漏写"，那种人写的是 `httpx.AsyncClient(...)`，与现存 9 处同形。
+⚠️ 所以这条测试的准确表述是"**在 `app/` 都用 `httpx.X(...)` 的前提下**，
+每一处都显式写了 `trust_env`"，不是语法层面的保证。取舍已写进
+`_outbound_constructions` 的 docstring。
 
 ---
 
