@@ -18,7 +18,7 @@ PostgreSQL 的 `text` / `jsonb` **存不了 NUL 字节**（`\\u0000`），插进
 
 from __future__ import annotations
 
-from app.core.text import strip_nul, strip_nul_deep, strip_nul_opt
+from app.core.text import split_fenced_code, strip_nul, strip_nul_deep, strip_nul_opt
 
 
 def test_strips_nul_from_plain_string() -> None:
@@ -108,3 +108,61 @@ def test_vulnerability_parse_strips_nul_from_every_text_field() -> None:
     # 内容没被整体丢掉，只是那个字符没了
     assert item.title == "标题带NUL"
     assert "PNG" in item.evidence
+
+
+# ── 代码围栏（`split_fenced_code`）────────────────────────────
+#
+# strix 把 agent 生成的脚本**包在带语言标签的 markdown 围栏里**存
+# （`report/writer.py` 的 docstring 原话：agent-generated code fields
+# are stored wrapped in a markdown fence carrying the language）。
+# 它自己的每个消费者都先拆围栏：TUI 用 `ParseFencedCode`、
+# viewer 用 `parseFencedCode`、PDF 用 `_strip_code_fence`。
+# 我们以前不拆 —— 围栏行连同 ```python 一起进了 `poc_code`。
+
+
+def test_splits_a_fenced_code_block() -> None:
+    language, code = split_fenced_code("```python\nimport requests\nprint(1)\n```")
+    assert language == "python"
+    assert code == "import requests\nprint(1)"
+
+
+def test_a_fence_without_a_language_gives_none_not_text() -> None:
+    """★ 没有语言标签 ≠ 语言是 `text`。
+
+    `None` 表示"围栏没说语言"（调用方该退回启发式判断），
+    而 `"text"` 表示"上游说了语言，就是纯文本"。把两者混成一个值，
+    调用方就没法决定该不该再猜一次了。
+    """
+    language, code = split_fenced_code("```\nplain\n```")
+    assert language is None
+    assert code == "plain"
+
+
+def test_unfenced_code_comes_back_untouched() -> None:
+    """没有围栏时**原样返回**，连首尾空白都不动。
+
+    调用方要靠"有没有围栏"来分流，所以这一侧不能顺手 `strip()` ——
+    那会把一份本来就合法的裸代码改掉。
+    """
+    language, code = split_fenced_code("import requests\nprint(1)")
+    assert language is None
+    assert code == "import requests\nprint(1)"
+
+
+def test_only_a_surrounding_fence_is_stripped() -> None:
+    """围栏必须**整段包住**才算。
+
+    代码体里自己带 ``` （比如一份讲 markdown 的 PoC）不该被腰斩 ——
+    正则锚在 `^…$`，所以这种输入会走"没有围栏"那一支。
+    """
+    raw = "```python\nprint('```')\nprint('x')\n```"
+    language, code = split_fenced_code(raw)
+    assert language == "python"
+    assert code == "print('```')\nprint('x')"
+
+
+def test_crlf_fences_are_handled() -> None:
+    """strix 在 Windows 上写出来的围栏是 CRLF 的（正则里 `\\r?\\n` 就是为它）。"""
+    language, code = split_fenced_code("```python\r\nprint(1)\r\n```")
+    assert language == "python"
+    assert code == "print(1)"

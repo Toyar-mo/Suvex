@@ -1,4 +1,4 @@
-"""文本清洗：把 PostgreSQL 存不下的字符挡在写库之前。
+"""文本清洗：把存不进库的字符挡在写库之前，并拆开 strix 的代码围栏。
 
 ## 为什么需要它
 
@@ -21,14 +21,29 @@ PostgreSQL 的 `text` / `jsonb` **存不了 NUL 字节**（`\\u0000`）。
 
 PostgreSQL 只拒绝这一个控制字符。Tab、换行、CR 都是正文的一部分，
 删了会改变证据的原貌 —— 而证据的完整性正是这个产品要保证的东西。
+
+## 为什么围栏也在这里
+
+`split_fenced_code` 处理的是**同一个形状**的两个消费者：活动流
+（`scans/strix_events.py` 的 `poc_generated` 载荷）与漏洞落库
+（`findings/strix_vulns.py` 的 `poc_code` / `poc_language`）。
+形状由 strix 的 `report/writer.py` 单方面定义，两处各写一份正则
+必然会漂移 —— 而漂移的那一侧只在真实扫描里才暴露。
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # PostgreSQL 拒绝的唯一控制字符。
 _NUL = "\x00"
+
+# strix 存 agent 生成的脚本时把它包在 markdown 围栏里，围栏**带语言标签**
+# （`report/writer.py` 的 docstring：`poc_script_code` 之类的字段是
+# ```` ```python\n…\n``` ```` 这样存的）。这个正则是**照抄它自己的**
+# `_FENCE_RE` —— 同一个形状由上游定义，自己写一个近似的就会对不上。
+_FENCE_RE = re.compile(r"^```([^\n`]*)\r?\n(.*?)\r?\n?```$", re.DOTALL)
 
 
 def strip_nul(value: str) -> str:
@@ -39,6 +54,22 @@ def strip_nul(value: str) -> str:
 def strip_nul_opt(value: str | None) -> str | None:
     """可空版本 —— `poc_code`、`remediation` 这类字段本来就允许是 None。"""
     return None if value is None else strip_nul(value)
+
+
+def split_fenced_code(raw: str) -> tuple[str | None, str]:
+    """把 strix 存的代码拆成 `(语言, 代码)`；没有围栏时语言是 `None`。
+
+    ⚠️ **`None` 与 `"text"` 不是一回事**：`None` 表示"本来就没有围栏"
+    （调用方该退回启发式判断），而围栏里写着 `text` 表示 strix 自己
+    就不知道语言。把两者混成一个值，调用方就没法区分了。
+
+    返回 `None` 而不是编一个 `python`：语言标签会被前端拿去做语法高亮，
+    猜错会让整段代码变成一片红。
+    """
+    match = _FENCE_RE.match(raw.strip())
+    if match is None:
+        return None, raw
+    return match.group(1).strip() or None, match.group(2)
 
 
 def strip_nul_deep(value: Any) -> Any:

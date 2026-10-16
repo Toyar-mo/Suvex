@@ -82,7 +82,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.text import strip_nul, strip_nul_deep
+from app.core.text import split_fenced_code, strip_nul, strip_nul_deep
 from app.core.vocab import FindingCategory, Severity, Verification
 
 logger = logging.getLogger("suvex.findings")
@@ -292,6 +292,12 @@ def _parse_one(record: dict[str, Any], *, index: int, default_target: str) -> Pa
     affected = [strip_nul_deep(item) for item in affected]
 
     poc_code = _text(record.get("poc_script_code")) or None
+    # strix 把 agent 生成的脚本**包在带语言标签的 markdown 围栏里**存
+    # （`report/writer.py`）。它自己的每个消费者都会先拆围栏 ——
+    # TUI 用 `ParseFencedCode`、viewer 用 `parseFencedCode`、
+    # PDF 用 `_strip_code_fence`。我们以前不拆，于是围栏行连同
+    # ```python 一起进了 `poc_code`，前端的代码块里会多出两行脏东西。
+    fenced_language, poc_code = split_fenced_code(poc_code) if poc_code else (None, poc_code)
     remediation = _text(record.get("remediation_steps")) or None
 
     return ParsedFinding(
@@ -309,7 +315,7 @@ def _parse_one(record: dict[str, Any], *, index: int, default_target: str) -> Pa
         affected=affected,
         reasoning=_reasoning(record),
         evidence=_text(record.get("evidence")),
-        poc_language=_poc_language(poc_code),
+        poc_language=fenced_language or _poc_language(poc_code),
         poc_code=poc_code,
         remediation=remediation,
         cwe=_text(record.get("cwe")) or None,
@@ -441,12 +447,16 @@ def _affected_positions(record: dict[str, Any], code_locations: Any) -> list[str
 
 
 def _poc_language(code: str | None) -> str | None:
-    """PoC 代码的语言。
+    """PoC 代码的语言 —— 只用在**围栏没给语言**的时候。
 
     ⚠️ **strix 不存语言**，它只有一个 `poc_script_code` 字符串。
-    所以这里靠 shebang 与常见语法特征做一次**启发式**判断，
-    认不出来就写 `text`（而不是编一个 `python` ——
-    前端会据此显示语法高亮，猜错会让代码变成一片红）。
+    但那个字符串**通常带围栏且围栏上有语言标签**（`report/writer.py`），
+    所以调用方要先过 `split_fenced_code`：围栏说了语言就用围栏的，
+    只有围栏没说（或根本没有围栏）才轮到这里的启发式。
+
+    启发式靠 shebang 与常见语法特征，认不出来就写 `text`
+    （而不是编一个 `python` —— 前端会据此显示语法高亮，
+    猜错会让代码变成一片红）。
 
     真实做法应该是让 strix 记下语言，那是上游的事；
     这里如实标注这是启发式。
