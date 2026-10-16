@@ -65,8 +65,12 @@ python -m venv .venv && . .venv/bin/activate
 pip install -r requirements-dev.txt
 cp .env.example .env                 # 生成 SUPEX_SECRET_KEY：python -m app.core.crypto
 alembic upgrade head
-uvicorn app.main:app --reload        # http://127.0.0.1:8000/api/v1/docs
+uvicorn app.main:app --reload        # 服务在 http://127.0.0.1:8000
 ```
+
+> [!NOTE]
+> **API 文档页默认是关的。** `SUPEX_EXPOSE_DOCS` 默认 `false`，于是 `/api/v1/docs` 返回 **404** —— 这是刻意的，不是故障：那份文档描述**全部端点与出入参**，默认不该暴露。要在本机看，把它设成 `true` 再重启。
+> 契约本身始终可读：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)。
 
 ### 前端
 
