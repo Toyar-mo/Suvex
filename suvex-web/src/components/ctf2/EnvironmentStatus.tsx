@@ -118,10 +118,23 @@ function StatusBadge({ status }: { status: Ctf2EnvironmentStatus }) {
     <span
       className={cn(
         'inline-flex items-center gap-1 rounded-pill px-1.5 py-0.5 text-2xs',
-        status === 'ready' && 'bg-signal-ok/15 text-signal-ok',
+        /*
+          ★ 2026-10-16：`ready` 与 `expired` 两档的文字色从 tone 色改成 `text-ink`。
+
+          与 `ChallengeCard` 的徽标是**同一个问题、同一条修法**（那边有完整说明）。
+          实测（亮色主题，对三种承载面取最差）：
+            · ready   原 `text-signal-ok`   = 3.86:1
+            · expired 原 `text-signal-warn` = 3.90:1
+          亮色的 `signal-ok` / `signal-warn` 本身余量就不够，叠同色 wash 必然不达 AA。
+          改 `text-ink` 后最差 9.92:1（暗）/ 12.84:1（亮）。
+
+          ⚠️ 只换文字色，**底色与其余三档一律没动** ——
+          `starting` / `error` / `stopped` 实测都 ≥4.5:1，不去动通过的分支。
+        */
+        status === 'ready' && 'bg-signal-ok/15 text-ink',
         status === 'starting' && 'bg-accent-wash text-accent-strong',
         status === 'error' && 'bg-signal-risk/15 text-signal-risk',
-        status === 'expired' && 'bg-signal-warn/15 text-signal-warn',
+        status === 'expired' && 'bg-signal-warn/15 text-ink',
         status === 'stopped' && 'bg-ink-ghost/20 text-ink-faint',
       )}
     >

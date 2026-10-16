@@ -222,9 +222,30 @@ export function ChallengeCard({
         <span
           className={cn(
             'shrink-0 rounded-pill px-2 py-0.5 text-2xs',
-            tone === 'ok' && 'bg-signal-ok/15 text-signal-ok',
+            /*
+              ★ 2026-10-16：`ok` 与 `warn` 两档的文字色从 tone 色改成 `text-ink`。
+
+              这两档在**亮色主题**下不达 AA 4.5:1（实测，对三种承载面取最差）：
+                · ok   原 `text-signal-ok`   = 3.86:1（sunken 承载面）
+                · warn 原 `text-signal-warn` = 3.90:1
+              原因是亮色的 `signal-ok #127A4B` / `signal-warn #9A5B00` 本身
+              就只有 5.37 / 5.43:1（见 `tailwind.config.js` 里 signal 那段），
+              再叠一层同色 wash 就把余量吃光了 —— 这是**结构性**的，
+              不是取值没调好：把 wash 调到 `ok/6` 也才 4.48:1。
+
+              所以文字改用 `text-ink`（最差 9.92:1 暗 / 12.84:1 亮）。
+              **底色一律没动** —— 语义仍由底色、状态点、文字标签三者共同承载
+              （design-system §7「颜色是冗余编码，不是唯一载体」）。
+
+              ⚠️ 另外三档（risk / info / accent）与 idle 保持原样：它们实测
+              全部 ≥4.5:1，而「signal 色出现在徽标上」正是 §2 认可的用法，
+              没必要为了一致性去动通过的分支。
+              `EnvironmentStatus` 的徽标做了**完全相同**的两处改动，
+              于是全站两个带文字的状态徽标共用同一条规则。
+            */
+            tone === 'ok' && 'bg-signal-ok/15 text-ink',
             tone === 'risk' && 'bg-signal-risk/15 text-signal-risk',
-            tone === 'warn' && 'bg-signal-warn/15 text-signal-warn',
+            tone === 'warn' && 'bg-signal-warn/15 text-ink',
             tone === 'accent' && 'bg-accent-wash text-accent-strong',
             tone === 'info' && 'bg-signal-info/15 text-signal-info',
             tone === 'idle' && 'bg-ink-ghost/20 text-ink-faint',

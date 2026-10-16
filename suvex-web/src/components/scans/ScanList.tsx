@@ -132,11 +132,16 @@ function terminatedByLabel(value: Scan['terminatedBy']): string | null {
   底色一律用 **tone 色 + 低透明度**（wash），不是实色铺底 ——
   实色底 + 文字在 §7 有实测记录：深紫底配浅字 4.06:1、hover 掉到 2.74:1，不达 AA。
 
-  ⚠️ **这里没有沿用 `ChallengeCard` / `EnvironmentStatus` 的 `bg-*-ok/15`**。
-  按那两个组件照抄，实测在**亮色主题**下 `text-signal-ok` 落在 `ok/15` 上只有
-  **3.97:1**（`ok/12` 是 4.13:1，连 `ok/6` 都只有 4.48:1）—— 都不达 AA 4.5。
+  ⚠️ **这里当初没有沿用 `ChallengeCard` / `EnvironmentStatus` 的
+  `bg-*-ok/15 text-signal-ok`**。按那两个组件照抄，实测在**亮色主题**下
+  `text-signal-ok` 落在 `ok/15` 上只有 **4.36:1**（本文件的承载面组合下是
+  3.97:1；`ok/12` 4.13:1，连 `ok/6` 都只有 4.48:1）—— 都不达 AA 4.5。
   原因是亮色的 `signal-ok #127A4B` 本身就只有 5.37:1（见 tailwind.config.js
   里那段的说明），再叠一层绿底就把余量吃光了。
+
+  ★ 2026-10-16：那两个组件随后**按同一条结论改掉了**（文字改 `text-ink`，
+  底色不动）。所以现在全站三处带文字的状态徽标是同一条规则，
+  不再是"这里和别人不一样"。
 
   ## 所以文字**不跟着 tone 换色**，一律 `text-ink`
 
@@ -158,7 +163,6 @@ function terminatedByLabel(value: Scan['terminatedBy']): string | null {
   第一版写的 `/12` 就是这么挂的（浏览器实测读到 `rgba(0,0,0,0)` 才发现）。
   刻度（v3）是 5 的倍数：… 10 / 15 / 20 / 25 …。
   本文件与 `ChallengeCard` / `EnvironmentStatus` 用的都是刻度内的值。
-
   ## 那"不同结果不同颜色"靠什么区分？靠底色 + 状态点，文字保持中性
 
   这正是 design-system §7「颜色是冗余编码，不是唯一载体」的用法：
