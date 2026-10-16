@@ -1133,3 +1133,246 @@ async def test_data_wrapper_is_unwrapped_for_object_responses(
     async with _client(fake_clock) as client:
         result = await client.get_practice_challenge("1", "7")
     assert result == {"id": "7", "title": "签到题"}
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ 夹具不许污染全局 httpx（2026-10-16 那 51 条回归的闸）
+# ══════════════════════════════════════════════════════════
+#
+# 背景：`app.ctf2.client.httpx` 与 `app.providers.llm.httpx` **都是全局
+# 那一个 httpx 模块对象**（实测 `app.ctf2.client.httpx is httpx` → True）。
+# 所以 `monkeypatch.setattr("…httpx.AsyncClient", factory)` 改的是
+# **httpx 模块自己的属性**，于是任何在测试期间读 `httpx.AsyncClient`
+# 的代码都会拿到工厂函数 —— `netguard.ensure_guarded` 里那句
+# `isinstance(client, httpx.AsyncClient)` 直接
+# `TypeError: arg 2 must be a type`，**51 条用例全倒**。
+#
+# 修法是把补丁打在**模块绑定**上（换 shim），真模块一个属性都不动。
+# 下面几条把这个性质钉住。
+
+
+def test_the_fixture_does_not_pollute_the_global_httpx_module(
+    monkeypatch,
+) -> None:
+    """★★ 夹具生效期间，全局 `httpx.AsyncClient` **必须仍是真类**。
+
+    ## 这条是那个 51 条回归的回归闸
+
+    判据很直接：`isinstance(真类, type)` 为 `True`。被替换成工厂函数时
+    它是 `False`（工厂是 function，不是 type），于是
+    `isinstance(client, httpx.AsyncClient)` 会抛 `TypeError`。
+
+    ⚠️ **这条在污染版下必须是红的**（实测过），否则它证明不了任何事。
+
+    ⚠️ 同时断言"夹具**确实生效了**"：只验"没污染"的话，一个
+    "什么都不替换"的夹具也能过 —— 而它会让所有走 mock 的用例真的发请求。
+    """
+    patch_ctf2_transport(monkeypatch, json_response(200, {}))
+
+    # ① 污染判据：全局 httpx 模块里的名字必须仍是类
+    assert isinstance(httpx.AsyncClient, type), (
+        "夹具把全局 `httpx.AsyncClient` 替换成了非类型对象 —— "
+        "任何在测试期间读这个名字的代码（如 netguard 的 isinstance）都会炸"
+    )
+    assert httpx.AsyncClient.__name__ == "AsyncClient"
+    # 同一族的其它名字也不该被动
+    assert isinstance(httpx.Client, type)
+    assert isinstance(httpx.HTTPError, type)
+
+    # ② 夹具确实生效：目标模块里的绑定**已经**是工厂
+    from app.ctf2 import client as client_mod
+
+    assert client_mod.httpx.AsyncClient is not httpx.AsyncClient, (
+        "夹具没生效 —— 它应当替换 `app.ctf2.client` 里的那个绑定"
+    )
+    # 而它转发的名字仍是真的（漏转发会引入新的假失败）
+    assert client_mod.httpx.HTTPError is httpx.HTTPError
+    assert client_mod.httpx.Response is httpx.Response
+    assert client_mod.httpx.Timeout is httpx.Timeout
+
+
+def test_the_fixture_shim_forwards_every_other_httpx_name(
+    monkeypatch,
+) -> None:
+    """★ shim 必须**全量转发**，只有显式覆盖的名字是假的。
+
+    漏转发一个名字的症状是 `AttributeError: module 'httpx_shim' has no
+    attribute …` —— 那看着像"库换了 API"，而不是"夹具漏转发了"，
+    排查方向会跑偏。
+
+    ⚠️ `app/ctf2/client.py` 实测用到 **4** 个名字
+    （`AsyncClient` / `HTTPError` / `Response` / `Timeout`）——
+    这里逐个断言它们都能从 shim 上取到。
+    """
+    patch_ctf2_transport(monkeypatch, json_response(200, {}))
+    from app.ctf2 import client as client_mod
+
+    for name in ("AsyncClient", "HTTPError", "Response", "Timeout"):
+        assert getattr(client_mod.httpx, name) is not None, f"shim 没转发 {name}"
+    # 只覆盖了一个名字，其余都该是真模块里的东西
+    assert client_mod.httpx.Timeout is httpx.Timeout
+    assert client_mod.httpx.Response is httpx.Response
+    assert client_mod.httpx.HTTPError is httpx.HTTPError
+
+
+def test_a_missing_name_on_the_shim_raises_instead_of_returning_none(
+    monkeypatch,
+) -> None:
+    """★★ 漏转发的症状必须是**响亮的 `AttributeError`**，不能是静默的 `None`。
+
+    ## 这条守的是"假失败被吞掉"
+
+    上面那条只做了**正向**断言（用到的名字都能取到）。正向断言挡不住
+    一种更坏的实现：给 `__getattr__` 兜一个默认值
+
+        shim.__dict__["__getattr__"] = lambda name: getattr(httpx, name, None)
+
+    那样漏转发不再抛错，而是**静默返回 `None`** —— 症状会变成后面某处
+    `None.AsyncClient` 之类的 `AttributeError`，位置离真正的原因很远。
+
+    实测的实现（`tests/ctf2/conftest.py:237`）是
+
+        shim.__dict__["__getattr__"] = lambda name: getattr(httpx, name)
+
+    **没给默认值**，所以这里钉住"取一个真 httpx 也没有的名字必须抛
+    `AttributeError`"，把兜默认值这条路堵死。
+    """
+    patch_ctf2_transport(monkeypatch, json_response(200, {}))
+    from app.ctf2 import client as client_mod
+
+    missing = "no_such_name_in_httpx_at_all"
+    assert not hasattr(httpx, missing), "httpx 真的长出了这个名字，换一个"
+    with pytest.raises(AttributeError):
+        getattr(client_mod.httpx, missing)
+
+
+def test_every_module_that_builds_a_client_is_covered(
+    monkeypatch,
+) -> None:
+    """★★ 每个**自己构造平台** `httpx.AsyncClient` 的 `app/ctf2/` 模块都必须被覆盖。
+
+    ## 这条守的是一类"改了夹具才露出来"的失效
+
+    夹具原来打的是 httpx **模块的属性**，所以它**顺带**盖住了所有模块。
+    改成"换模块绑定"之后那个顺带覆盖没了 —— 实测只换 `client.py` 时，
+    `attachments.py` 拿真 `httpx` 建 client、请求真的发出去，
+    5 条 `test_attachments` 用例以"测试试图解析非本机地址"失败。
+    那个症状看起来像**网络问题**，而不是"夹具漏覆盖一个模块"。
+
+    所以这条用**源码扫描**把两者的对应关系钉住：`app/ctf2/` 下凡是
+    会构造 `httpx.AsyncClient(` 的模块，要么在 `CTF2_CLIENT_MODULES` 里，
+    要么在下面那张**写明理由**的豁免表里。
+
+    ⚠️ 用源码扫描而不是逐个 import 检查：新模块可能还没被任何人 import，
+    而"没被 import"正是它最容易被漏掉的时候。
+    """
+    import ast
+    import pathlib
+
+    from tests.ctf2.conftest import CTF2_CLIENT_MODULES
+
+    #: 会构造 client、但**不需要**被本夹具覆盖的模块（附理由）。
+    #:
+    #: ⚠️ 豁免必须有理由：这张表的作用是"让例外可见"，不是"让扫描闭嘴"。
+    NOT_NEEDED = {
+        # `runner.py` 的两处都是**非平台**的出站：
+        #   · `LlmGateway.chat`（llm 网关）—— `test_runner.py` 用 `_FakeGateway`
+        #     整体替掉，走不到真的 client；
+        #   · `http_request` 工具那条路 —— 测试里用 `_FakeSandbox` 打桩。
+        # 本夹具的语义是"把**平台**的传输换成 MockTransport"，套到 LLM 网关
+        # 上语义就不对了（那个 handler 是平台形状的）。实测：只覆盖那 4 个
+        # 平台模块时 `test_runner.py` 全绿。
+        "app.ctf2.runner",
+    }
+
+    covered = set(CTF2_CLIENT_MODULES) | NOT_NEEDED
+    app_root = pathlib.Path(__file__).resolve().parents[2] / "app"
+    ctf2_root = app_root / "ctf2"
+
+    builders: set[str] = set()
+    for path in ctf2_root.rglob("*.py"):
+        if "__pycache__" in path.parts:
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            if (
+                isinstance(fn, ast.Attribute)
+                and fn.attr == "AsyncClient"
+                and isinstance(fn.value, ast.Name)
+                and fn.value.id == "httpx"
+            ):
+                rel = path.relative_to(app_root.parent)
+                # ⚠️ 用 `as_posix()` 再换 `.`：直接用 `str(path)` 在 Windows 上
+                #    得到反斜杠，而 `.replace("/", ".")` 对它无效 ——
+                #    结果是"扫描出来的名字"与表里的名字永远对不上，
+                #    两个断言同时变红（实测在本机踩到过）。
+                builders.add(rel.with_suffix("").as_posix().replace("/", "."))
+                break
+
+    missing = builders - covered
+    assert not missing, (
+        "这些模块自己构造 `httpx.AsyncClient`，但既不在 `CTF2_CLIENT_MODULES` 里、"
+        "也不在 `NOT_NEEDED` 里 —— 它们的用例会拿真 httpx 建 client 而"
+        "**真的发外呼**（症状是「测试试图解析非本机地址」，看起来像网络问题）："
+        f"{sorted(missing)}"
+    )
+    # 另一侧：表里不该有已经不再自己建 client 的模块（那是漂移的开始）
+    stale = covered - builders
+    assert not stale, (
+        f"夹具覆盖表里有不再自己建 client 的模块：{sorted(stale)} —— "
+        "表与代码漂移了，请同步"
+    )
+
+
+async def test_the_production_guard_survives_the_fixture(monkeypatch) -> None:
+    """★★★ 端到端：夹具生效时 `netguard.ensure_guarded` 仍能正常工作。
+
+    ## 这条是那个 51 条回归的**直接**回归闸
+
+    它复现的就是失败现场：夹具已经替换了 `app.ctf2.client.httpx`，
+    此时构造一个真 client 并调 `ensure_guarded`。
+
+    * 修复前：`TypeError: isinstance() arg 2 must be a type`（51 条就死在这）；
+    * 修复后：按**池**的类型判异步，不读任何可被替换的名字 → 正常返回。
+
+    ⚠️ 本文件是 `async def` 用例（`pyproject.toml` 的 `asyncio_mode = "auto"`
+    让它们直接跑，见 `tests/ctf2/conftest.py` 顶部那段说明）——
+    所以这里直接 `await`，不用 `asyncio.run`。
+    """
+    patch_ctf2_transport(monkeypatch, json_response(200, {}))
+
+    from app.core import netguard
+
+    # 异步 client：走 async 分支
+    client = httpx.AsyncClient(trust_env=False)
+    try:
+        netguard.ensure_guarded(client)  # 修复前这里抛 TypeError
+        assert isinstance(
+            client._transport._pool._network_backend, netguard.GuardedAsyncBackend
+        )
+    finally:
+        await client.aclose()
+
+
+def test_the_production_guard_also_works_for_a_sync_client(monkeypatch) -> None:
+    """★ 同步 client 走 sync 分支 —— 按池判之后这条路同样成立。
+
+    ⚠️ 单独一条（而不是并进上面那条）：上面是 async 用例，而这条是同步的
+    ——`httpx.Client` 在异步用例里关不掉（`aclose` 是协程），
+    混在一起会让"关了没"变得含糊。
+    """
+    patch_ctf2_transport(monkeypatch, json_response(200, {}))
+
+    from app.core import netguard
+
+    client = httpx.Client(trust_env=False)
+    try:
+        netguard.ensure_guarded(client)
+        assert isinstance(
+            client._transport._pool._network_backend, netguard.GuardedSyncBackend
+        )
+    finally:
+        client.close()

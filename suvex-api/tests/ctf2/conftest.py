@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+import types
 from collections.abc import Iterator
 from typing import Any
 
@@ -171,14 +172,91 @@ class RecordedRequests:
         return [r.headers.get("authorization") for r in self.items]
 
 
+#: 会**自己构造** `httpx.AsyncClient` 的模块 —— 夹具必须逐个换掉它们的绑定。
+#:
+#: ## ★★ 为什么是一张表而不是只换 `client.py`
+#:
+#: 原来（全局污染那版）只写了 `app.ctf2.client.httpx.AsyncClient`，
+#: 而它**恰好**把别的模块也盖住了 —— 因为那样改的是 **httpx 模块自己的
+#: 属性**，谁都看得见。改成"换模块绑定"之后，这个"顺带覆盖"消失了：
+#: 只换 `client.py` 的话，`attachments.py` 仍然拿真 `httpx` 去建 client，
+#: 于是它的请求**真的**打出去 —— 实测被 `_block_egress` 拦住，
+#: 5 条 `test_attachments` 用例以"测试试图解析非本机地址"失败。
+#: 所以这张表**必须**列全：漏一个模块 = 那个模块的用例真的发外呼。
+#:
+#: ⚠️ 实测（`grep -rn "httpx.AsyncClient(" app/`）当前是这四处。
+#: 将来在 `app/ctf2/` 下新增会自己建 client 的模块时，**要把它加进来**，
+#: 否则那个模块的用例会开始真的发外呼（而症状是"连不上/被护栏拦住"，
+#: 看起来像网络问题而不是夹具漏覆盖）。
+CTF2_CLIENT_MODULES: tuple[str, ...] = (
+    "app.ctf2.client",
+    "app.ctf2.attachments",
+    "app.ctf2.adapters.transport",
+    "app.ctf2.adapters.probe",
+)
+
+
+def _httpx_shim(**overrides: Any) -> Any:
+    """造一个"只在指定名字上偏离真 httpx"的**模块替身**。
+
+    ## ★★ 为什么需要它（2026-10-16 修的那个 51 条回归）
+
+    夹具原来打的是 `app.ctf2.client.httpx.AsyncClient` —— 而
+    `app.ctf2.client.httpx` **就是全局那一个 httpx 模块对象**
+    （实测 `app.ctf2.client.httpx is httpx` → `True`）。所以那一步改的是
+    **httpx 模块自己的属性**：任何在测试运行期间去读 `httpx.AsyncClient`
+    的代码都会拿到夹具那个工厂函数。
+
+    后果实测：`app/core/netguard.py` 的 `ensure_guarded` 里
+    `isinstance(client, httpx.AsyncClient)` 抛
+    `TypeError: arg 2 must be a type` —— **51 条用例全倒在这一行**。
+
+    ## 修法是"换绑定"，不是"换属性"
+
+    `monkeypatch.setattr("app.ctf2.client.httpx", shim)` 只换掉**那个模块里
+    的名字**指向谁，真 httpx 模块**一个属性都没动**。于是：
+
+    * 夹具照常生效（`client_mod.httpx.AsyncClient` 是工厂）；
+    * `netguard` 里的 `httpx` 仍是真模块，`httpx.AsyncClient` 仍是真类。
+
+    ## ⚠️ 转发必须**全覆盖**目标模块用到的名字
+
+    漏一个就会引入一批**新的**假失败，而且症状是
+    `AttributeError: module 'httpx_shim' has no attribute …`，
+    看着像"库换了 API"而不是"夹具漏转发了"。
+
+    所以这里不留一份手写的名字清单（那会漂移），而是用 `__getattr__`
+    **全量转发**给真模块，只有显式 `overrides` 那几个名字是假的。
+    实测过：`HTTPError` / `Response` / `Timeout` / `MockTransport` /
+    `Request` 都正常转发。
+    """
+    shim = types.ModuleType("httpx_shim")
+    shim.__dict__.update(overrides)
+    # ★ `__getattr__` 在模块上的语义：**找不到的属性**才走它。
+    #   所以 overrides 里的名字由 `__dict__` 命中，其余全部转发给真模块。
+    shim.__dict__["__getattr__"] = lambda name: getattr(httpx, name)
+    return shim
+
+
 def patch_ctf2_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> RecordedRequests:
-    """把 `httpx.AsyncClient` 换成走 `MockTransport` 的版本。
+    """把 CTF2 各模块里的 `httpx.AsyncClient` 换成走 `MockTransport` 的版本。
 
     ## 打的是**模块里那个真实的** `AsyncClient` 类
 
     与 `factories.patch_llm_transport` 完全同一条思路：所以
     `Ctf2Client` 里的 URL 构造、请求头拼装、状态码解释、重试与退避
     **全都真的跑一遍**，只有网络那一层是假的。
+
+    ## ★★ 但换的是**每个模块的绑定**，不是 httpx 模块的属性
+
+    * 见 `_httpx_shim` 的说明 —— 原来的写法会污染**全局 httpx 模块**，
+      而那是 2026-10-16 那 51 条失败的根因；
+    * 见 `CTF2_CLIENT_MODULES` 的说明 —— 只换 `client.py` **不够**，
+      `attachments.py` 会拿真 httpx 去建 client 而真的发外呼。
+
+    ⚠️ `real_client = httpx.AsyncClient` 必须在造 shim **之前**取：
+    在工厂里再去引用"刚被替换的名字"，拿到的是工厂自己 → `RecursionError`。
+    （实测过。真夹具原来就是对的顺序，这里保持。）
 
     ⚠️ `httpx.MockTransport` 的 handler 是**同步可调用**的，
     而它被 AsyncClient 用（httpx 内部会调 `handle_async_request`）。
@@ -194,7 +272,11 @@ def patch_ctf2_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> Recor
         kwargs["transport"] = httpx.MockTransport(recording_handler)
         return real_client(*args, **kwargs)
 
-    monkeypatch.setattr("app.ctf2.client.httpx.AsyncClient", factory)
+    # ⚠️ 对**模块绑定**打补丁（不是 `…httpx.AsyncClient` 那种属性路径）：
+    #    后者会落到全局 httpx 模块上，正是要避免的那个污染。
+    shim = _httpx_shim(AsyncClient=factory)
+    for module in CTF2_CLIENT_MODULES:
+        monkeypatch.setattr(f"{module}.httpx", shim)
     return recorded
 
 

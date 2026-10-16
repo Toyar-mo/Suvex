@@ -28,6 +28,7 @@ from typing import Any
 
 import httpx
 
+from app.core import netguard
 from app.ctf2.adapters.redirect import request_same_host
 from app.ctf2.adapters.spec import AuthSpec, EnvelopeSpec, dig, dig_str
 from app.ctf2.client import (
@@ -89,9 +90,25 @@ class JsonPlatformTransport:
         #   服务器上的环境变量不该成为"能把出站流量改道"的地方。
         #   ⚠️ 同时关掉读 `.netrc`（同样是外部输入）。真的需要代理时
         #   要显式传 `proxy=`，而不是靠环境变量。
+        #
+        # ★★ `GuardedAsyncTransport` —— **连接层**判据（2026-10-16 补）。
+        #   判据层（`hostguard`）只能看字符串，而
+        #   `169.254.169.254.nip.io` / 任何把域名解析到 link-local 的
+        #   DNS 在字符串层面看不出问题。所以要在**解析之后、连接之前**
+        #   再判一次 —— 见 `app/core/netguard.py`。
+        #
+        #   ⚠️ 只在调用方**没传** transport 时用默认值：测试会传
+        #   `httpx.MockTransport`，那没有连接层、也就没有"解析到哪"的问题。
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, transport=transport, trust_env=False
+            timeout=timeout,
+            follow_redirects=False,
+            transport=transport if transport is not None else netguard.GuardedAsyncTransport(),
+            trust_env=False,
         )
+        # ★ 再确认一次"guard 真的装在所有池上"（含 `_mounts` 里的代理池）。
+        #   代理路径下连接层看不见目标主机 → 防护结构性失效，所以这里
+        #   是 fail-closed：装不上就 raise，绝不静默放行。
+        netguard.ensure_guarded(self._client)
         #: 用户填的那个主机（小写、已剥端口）—— 跳转的唯一合法目标。
         self._base_host = (httpx.URL(self._base).host or "").lower()
 

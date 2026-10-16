@@ -59,6 +59,16 @@ BLOCKED_HOSTS = [
     # 域名形态（必须靠字符串那条判据，见模块 docstring）
     "metadata.google.internal",
     "metadata.goog",
+    # ★★ IPv6 link-local（`fe80::/10`，2026-10-16 补）。
+    #    补之前这几条**全部放行** —— 而 `netguard` 的连接层判据也取自
+    #    本模块，所以那是**两层同时漏**的一条。
+    "fe80::1",
+    "fe80::1%eth0",  # 带 scope id（接口名）的写法
+    "[fe80::1]",  # URL 里的方括号形态
+    "fe80::",  # 网段起点
+    "febf::1",  # 网段上边界（`fec0::1` 已出界，见下面的放行组）
+    # ★ AWS 的 **IPv6** 元数据地址（与 100.100.100.200 同一个形状）
+    "fd00:ec2::254",
 ]
 
 
@@ -95,6 +105,127 @@ def test_ipv4_mapped_ipv6_is_mapped_back_before_judging() -> None:
 
 
 # ══════════════════════════════════════════════════════════
+# ★★ IPv6 link-local（`fe80::/10`）—— 2026-10-16 补的那条
+# ══════════════════════════════════════════════════════════
+
+
+def test_ipv6_link_local_is_blocked() -> None:
+    """★★ IPv6 的 link-local（`fe80::/10`）必须与 IPv4 的那段**同等对待**。
+
+    ## 这条补的是什么
+
+    补之前 `BLOCKED_NETS` **只有 IPv4** 的 `169.254.0.0/16`，
+    而 IPv6 的 link-local 也是同一类地址 —— 实测 `fe80::1` **被放行**。
+
+    ⚠️ 影响面是**两层**：`is_blocked_host` 同时被
+    ① 判据层（`platforms.py` / `llm.py`）与
+    ② 连接层（`netguard`）取用 —— 所以漏一处等于两层都漏。
+    而且 `netguard._normalize_address` 专门剥了 scope id
+    （`fe80::1%eth0`），说明那条路已经预期会见到 IPv6 link-local 形态。
+    """
+    for host in ("fe80::1", "fe80::", "febf::1", "fe80::1%eth0", "[fe80::1]"):
+        assert hostguard.is_blocked_host(host), (
+            f"{host!r} 是 IPv6 link-local，必须被拦下 —— "
+            "它与 IPv4 的 169.254.0.0/16 是同类地址"
+        )
+
+
+def test_the_fe80_net_boundary_is_exact() -> None:
+    """★★ 判据的边界必须**恰好**是 `fe80::/10`，不能宽也不能窄。
+
+    把网段写宽（比如 `/9`）会连坐拦掉 `fec0::1`（已废弃的 site-local）；
+    写窄（`/11`）会漏掉 `febf::1`（`fe80::/10` 的上边界）。
+    两个方向都实测钉住 —— 只测"拦得住 fe80::1"是分辨不出来的。
+    """
+    import ipaddress
+
+    net = ipaddress.ip_network("fe80::/10")
+    # 上边界之内
+    assert ipaddress.ip_address("febf:ffff::1") in net
+    # 刚好出界
+    assert ipaddress.ip_address("fec0::1") not in net
+
+    assert hostguard.is_blocked_host("febf:ffff::1"), "上边界之内应当被拦"
+    assert not hostguard.is_blocked_host("fec0::1"), (
+        "`fec0::1` 在 fe80::/10 **之外**，不该被拦 —— 网段写宽了"
+    )
+
+
+def test_the_scope_id_does_not_create_a_bypass() -> None:
+    """★ 带 scope id（接口名）的写法不能绕过判据。
+
+    `fe80::1%eth0` 是**真实可达**的写法（`getaddrinfo` 认，实测它返回的
+    sockaddr 带 scope id）。而它是"字符串比对认不出、`ipaddress` 也未必
+    认"的形态 —— 正是绕过最喜欢的样子。
+
+    实测结论：`ipaddress` 对带 scope 的地址**在网段判断上仍然正确**
+    （`IPv6Address('fe80::1%eth0') in fe80::/10` 为 True），所以这一条
+    不需要额外处理 —— 但**必须钉住**，因为它是实现细节、换 Python 版本
+    或换写法都可能变。
+    """
+    assert hostguard.is_blocked_host("fe80::1%eth0")
+    assert hostguard.is_blocked_host("fe80::1%lo")
+    # 对照：带 scope 的**内网**地址仍放行（scope 不能变成"一律拒绝"）
+    assert not hostguard.is_blocked_host("fd00::1%eth0")
+
+
+def test_aws_ipv6_metadata_address_is_blocked() -> None:
+    """★ AWS 的 IPv6 元数据地址（`fd00:ec2::254`）要拦。
+
+    它与 `100.100.100.200` 是同一个形状：**一个具体的元数据地址**，
+    而不是一整段内网。所以判据用 `/128` —— 不能顺手把 `fd00::/8`
+    （ULA 整段）拦掉，那会误伤内网部署。
+    """
+    assert hostguard.is_blocked_host("fd00:ec2::254")
+    # ★ 关键对照：ULA 里的**普通**地址必须放行
+    assert not hostguard.is_blocked_host("fd00::1")
+    assert not hostguard.is_blocked_host("fd12:3456::1")
+
+
+def test_ipv4_and_ipv6_nets_do_not_interfere() -> None:
+    """★★ 加了 IPv6 判据之后，IPv4 的判定**不受影响**（双向对照）。
+
+    `is_blocked_host` 里按 `addr.version == net.version` 过滤，
+    所以两个版本互不干扰。但这是"实现正确"才成立的 —— 这里用**同一批
+    地址**在加判据前后应当给出的结果钉住它：
+
+    * IPv4 的元数据地址仍被拦（不能因为加了 IPv6 判据就漏了）；
+    * IPv4 的内网/回环仍放行（不能因为加了 IPv6 判据就误拦）。
+    """
+    for blocked in ("169.254.169.254", "169.254.0.1", "100.100.100.200"):
+        assert hostguard.is_blocked_host(blocked), f"{blocked} 是 IPv4 元数据地址"
+    for allowed in ("127.0.0.1", "192.168.1.10", "10.0.0.5", "172.18.0.1", "1.2.3.4"):
+        assert not hostguard.is_blocked_host(allowed), (
+            f"{allowed!r} 被误拦了 —— 加 IPv6 判据不该影响 IPv4 的放行组"
+        )
+
+
+def test_ipv4_mapped_still_works_after_adding_ipv6_nets() -> None:
+    """★★ IPv4-mapped 的映射逻辑与**新增的 IPv6 判据**不打架。
+
+    这是主管点名要核的一条：`::ffff:169.254.169.254` 会被映射回 IPv4、
+    再判 IPv4 网段。加了 `fe80::/10` 之后要确认：
+
+    * 映射**仍然发生**（它不能因为 IPv6 网段变多而改走 IPv6 分支）；
+    * 映射后的结果仍然正确（元数据拦、内网放行）；
+    * 而 `::ffff:` 的形态**不会**被误当成 IPv6 link-local
+      （实测 `::ffff:169.254.169.254 in fe80::/10` 为 False）。
+    """
+    # 元数据：拦（走的是映射回 IPv4 那条路）
+    assert hostguard.is_blocked_host("::ffff:169.254.169.254")
+    # 内网：放行（映射之后是 192.168.x，不在任何被拦网段里）
+    assert not hostguard.is_blocked_host("::ffff:192.168.1.10")
+    assert not hostguard.is_blocked_host("::ffff:127.0.0.1")
+    # IPv4-mapped 形态不属于 IPv6 link-local（不能靠 fe80::/10 误拦）
+    import ipaddress
+
+    mapped = ipaddress.ip_address("::ffff:169.254.169.254")
+    assert mapped not in ipaddress.ip_network("fe80::/10")
+    # ★ 而它**也不**因为"是 IPv6"而被 fe80::/10 放跑 —— 它由 IPv4 那条拦
+    assert hostguard.normalize_host("::ffff:169.254.169.254") is not None
+
+
+# ══════════════════════════════════════════════════════════
 # 放行：内网必须继续可用（这是"修法不能做成禁止内网"的闸）
 # ══════════════════════════════════════════════════════════
 
@@ -116,6 +247,19 @@ ALLOWED_HOSTS = [
     "example.com",
     # IPv6 回环
     "::1",
+    # ★★ IPv6 的**内网**段必须继续放行（2026-10-16 补）。
+    #    加 `fe80::/10` 时最容易连坐的就是这几类 —— 它们是内网/本机，
+    #    按本项目口径（见模块 docstring"不做内网限制是刻意的"）该放行。
+    "fc00::1",  # ULA（唯一本地地址，内网）
+    "fd00::1",  # ULA 的另一半
+    "fd12:3456::1",  # ULA 里的普通地址（★ 不是 AWS 元数据那个）
+    "::ffff:127.0.0.1",  # IPv4-mapped 的回环
+    "::ffff:192.168.1.10",  # IPv4-mapped 的内网
+    "2001:db8::1",  # 文档用地址（公网性质）
+    # ⚠️ `fec0::1` 是**已废弃**的 site-local（`fe80::/10` 之外）。
+    #    加判据时若把网段写宽成 `/9` 之类，它会连坐被拦 —— 这里钉住
+    #    "判据的边界就是 fe80::/10"，不多不少。
+    "fec0::1",
 ]
 
 

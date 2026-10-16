@@ -38,6 +38,7 @@ from typing import Any
 
 import httpx
 
+from app.core import netguard
 from app.ctf2.adapters.redirect import request_same_host
 from app.ctf2.client import Ctf2Error
 
@@ -313,9 +314,19 @@ class Prober:
         # ★ `trust_env=False` —— 理由同 `transport.py`：目标是管理员填的
         #   平台地址，而 `trust_env` 默认为 `True` 会让请求走环境变量里的
         #   代理。探测打的端点最多，这条更要紧。
+        #
+        # ★★ `GuardedAsyncTransport` —— 连接层判据，理由同 `transport.py`：
+        #   判据层只能看字符串，`169.254.169.254.nip.io` 这类域名写法要
+        #   在解析之后才拦得住（见 `app/core/netguard.py`）。
+        #   ⚠️ 只在调用方没传 transport 时用默认值（测试会传 MockTransport）。
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, transport=transport, trust_env=False
+            timeout=timeout,
+            follow_redirects=False,
+            transport=transport if transport is not None else netguard.GuardedAsyncTransport(),
+            trust_env=False,
         )
+        # fail-closed：确认 guard 装在了所有池上（含代理池）。
+        netguard.ensure_guarded(self._client)
         #: 用户填的那个主机（小写、已剥端口）—— 跳转的唯一合法目标。
         self._base_host = (parsed.host or "").lower()
         self._findings: dict[str, Finding] = {}

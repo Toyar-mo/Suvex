@@ -113,14 +113,55 @@ def make_scan(
     return scan
 
 
+def _httpx_shim(**overrides):  # noqa: ANN003, ANN202
+    """造一个"只在指定名字上偏离真 httpx"的**模块替身**。
+
+    ## ★★ 为什么需要它（与 `tests/ctf2/conftest.py` 那个是同一族问题）
+
+    `app.providers.llm.httpx` 与 `app.ctf2.client.httpx` 一样，**都是全局
+    那一个 httpx 模块对象**。所以原来那种
+    `monkeypatch.setattr("app.providers.llm.httpx.Client", factory)`
+    改的是**httpx 模块自己的属性** —— 任何在测试期间读 `httpx.Client`
+    的代码都会拿到工厂函数。
+
+    ⚠️ 这条**目前是潜伏的**：`netguard.ensure_guarded` 之前判的是
+    `httpx.AsyncClient`，而这里替换的是 `Client`，所以还没人踩到。
+    但只要哪天有人去读 `httpx.Client`（判类型、做 isinstance），
+    就会得到同一种 `TypeError`。所以一并修掉，不留同一族的第二个坑。
+
+    ## 转发是**全量**的，不留手写清单
+
+    用 `__getattr__` 把没覆盖的名字全部转发给真模块 —— 手写清单会漂移，
+    而漂移的症状是 `AttributeError`，看着像"库换了 API"。
+    （`llm.py` 用到 `Client` / `ConnectError` / `HTTPError` / `Timeout` /
+    `TimeoutException`，真 httpx 模块里这些名字都在，转发覆盖得到。）
+    """
+    import types
+
+    import httpx
+
+    shim = types.ModuleType("httpx_shim")
+    shim.__dict__.update(overrides)
+    shim.__dict__["__getattr__"] = lambda name: getattr(httpx, name)
+    return shim
+
+
 def patch_llm_transport(monkeypatch, handler) -> None:  # noqa: ANN001
-    """把 `httpx.Client` 换成走 `MockTransport` 的版本。
+    """把 `app.providers.llm` **这个模块里**的 `httpx.Client` 换成走
+    `MockTransport` 的版本。
 
     打的是模块里那个真实的 `httpx.Client` 类，所以 `llm.probe` 里的
     URL 构造、请求头组装、状态码与响应解析**全都真的跑一遍** ——
     只有网络那一层是假的。这比直接 mock 掉 `probe()` 有价值得多：
     后者会把最值得测的那部分（"我们到底发了什么请求、怎么理解对方的回应"）
     一起跳过。
+
+    ## ★★ 换的是**模块绑定**，不是 httpx 模块的属性
+
+    见 `_httpx_shim` 的说明：原来的写法会污染全局 httpx 模块。
+
+    ⚠️ `real_client = httpx.Client` 必须在造 shim **之前**取 ——
+    在工厂里引用"刚被替换的名字"会拿到工厂自己 → `RecursionError`。
     """
     import httpx
 
@@ -130,7 +171,8 @@ def patch_llm_transport(monkeypatch, handler) -> None:  # noqa: ANN001
         kwargs["transport"] = httpx.MockTransport(handler)
         return real_client(*args, **kwargs)
 
-    monkeypatch.setattr("app.providers.llm.httpx.Client", factory)
+    # ⚠️ 对**模块绑定**打补丁（不是 `…httpx.Client` 那种属性路径）。
+    monkeypatch.setattr("app.providers.llm.httpx", _httpx_shim(Client=factory))
 
 
 def llm_ok(content: str = "pong"):  # noqa: ANN201

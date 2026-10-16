@@ -52,6 +52,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from app.core import netguard
 from app.core.crypto import mask_secret, redact
 from app.ctf2.models import CTF2_API_PREFIX, CTF2_OFFICIAL_HOSTS
 
@@ -543,7 +544,21 @@ class Ctf2Client:
             #   走环境变量里的 `HTTP_PROXY`，那等于**把 PAT 交给那个代理**。
             #   同一个理由也适用于它顺带关掉的 `.netrc`。
             trust_env=False,
+            # ★ `GuardedAsyncTransport` —— 连接层判据（2026-10-16 补）。
+            #   ⚠️ 这一处的收益**比另外三处小**：`base_url` 在构造时就被
+            #   `assert_allowed_target` 钉死在官方域名上，所以"管理员填了
+            #   一个会解析到 link-local 的域名"这条路径本来就不成立。
+            #   加它是为了堵另一种情形：**官方域名的 DNS 被劫持/投毒**到
+            #   link-local。那条路 `assert_allowed_target` 看不见
+            #   （它比的是字符串）。代价是零 —— 与另外三处同一个形状。
+            transport=netguard.GuardedAsyncTransport(),
         )
+        if self._owns_client:
+            # fail-closed：确认 guard 装在所有池上（含代理池）。
+            # ⚠️ **只对自己建的 client 做**：注入进来的那个属于调用方，
+            #    去改它的连接池是"改别人的对象"，会让调用方莫名其妙地
+            #    被 raise（比如它自己带了一个代理池）。
+            netguard.ensure_guarded(self._client)
 
     # ── 生命周期 ──────────────────────────────────────────
 

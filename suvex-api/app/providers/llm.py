@@ -41,7 +41,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from app.core import hostguard
+from app.core import hostguard, netguard
 from app.core.config import get_settings
 
 # ── 官方默认接入点 ────────────────────────────────────────
@@ -389,9 +389,19 @@ def probe(*, base_url: str, label: str, model: str, api_key: str, kind: str) -> 
         #    我们选了"不接受来自环境变量的改道"，代价是这类部署要显式配代理。
         #    要支持那种场景，应在配置里加一个显式的 proxy 项传给 `proxy=`，
         #    而不是把 `trust_env` 打开（那等于把"谁来收这次请求"交给环境）。
+        #
+        # ★★ `GuardedHTTPTransport` —— **连接层**判据（2026-10-16 补）。
+        #    `_local_address_guard` 那两层都只能看字符串，而
+        #    `169.254.169.254.nip.io` 这类**域名写法**要解析之后才知道指向哪
+        #    —— 那正是上面那段"主机名是否解析到内网要靠 DNS 才知道"所记的
+        #    边界。连接层把它堵上，见 `app/core/netguard.py`。
         with httpx.Client(
-            timeout=httpx.Timeout(settings.llm_probe_timeout_seconds), trust_env=False
+            timeout=httpx.Timeout(settings.llm_probe_timeout_seconds),
+            trust_env=False,
+            transport=netguard.GuardedHTTPTransport(),
         ) as client:
+            # fail-closed：确认 guard 装在了所有池上（含代理池）。
+            netguard.ensure_guarded(client)
             response = client.post(url, json=body, headers=_headers(anthropic=anthropic, api_key=api_key))
             duration_ms = int((time.perf_counter() - started) * 1000)
 
