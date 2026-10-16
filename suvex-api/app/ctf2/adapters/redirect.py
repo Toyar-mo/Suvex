@@ -88,8 +88,111 @@ def _next_method(status_code: int, method: str) -> str:
     return upper
 
 
+#: TCP 端口的合法区间。
+MIN_PORT = 1
+MAX_PORT = 65535
+
+
+def _check_port(target: httpx.URL, *, what: str) -> None:
+    """`Location` 里的端口越界时**提前**抛 `Ctf2Error`。
+
+    ## ★ 为什么必须在这里拦，而不是指望调用点的 `except`
+
+    `httpx.URL("http://127.0.0.1:99999/x")` **解析不报错**（`.port` 就是
+    `99999`），错误发生在**连接阶段**：`socket.connect` 抛 `OverflowError`。
+    而异步 httpx 走 anyio 的 task group，这个 `OverflowError` 会被包成
+    **`ExceptionGroup`**（`unhandled errors in a TaskGroup`）——
+    它**不是** `httpx.HTTPError` 的子类，所以生产调用点的
+    `except httpx.HTTPError` 接不住，请求会变成 500。
+
+    ⚠️ 这一条**实测过两次、结论必须按环境区分**（我第一版在本机 Windows 测，
+    得到的是"httpx 返回 502、接得住"，**那个结论是 Windows 特有的、错的**）：
+    在 Kali（生产同款 Linux，httpx 0.28.1 / anyio 4.15.1）上，
+    `_probe()` 的靶子返回 `302 Location: http://127.0.0.1:99999/x` 时，
+    跨 host 检查放行（同 host），真去连，冒出
+    `ExceptionGroup[OverflowError]`，**两个调用点都接不住**。
+    逐层对照见 `docs/security-checklist.md` 的 F-08。
+
+    所以端口在校验层就当"平台给了一个不可用的地址"处理 —— 这与本模块
+    "逐跳校验、不合格就抛 `Ctf2Error`"的形状一致。
+    """
+    port = target.port
+    if port is None:
+        return
+    if not (MIN_PORT <= port <= MAX_PORT):
+        raise Ctf2Error(
+            f"{what}里的端口越界（{port}，合法区间 {MIN_PORT}-{MAX_PORT}）。"
+            "平台给的地址不可用。"
+        )
+
+
+#: 我们自己实现跳转循环，但**httpx 仍然会解析一次 `Location`** ——
+#: `client.request(..., follow_redirects=False)` 内部走的是
+#: `_send_handling_redirects`，它**先**调 `_build_redirect_request`
+#: （`_client.py` 里那两行的顺序是：先 build，再判 `follow_redirects`），
+#: 所以一个畸形 `Location` 会在 `client.request()` 里面就抛出来 ——
+#: 我们的 `_next_url` 根本轮不到执行。
+#:
+#: 实测（Kali）会从这里逃出来的两类：
+#:
+#: * `httpx.InvalidURL` —— `javascript:alert(1)` / `data:text/html,x` 这种
+#:   "有 scheme、无 host、path 不以 `/` 开头"的写法，httpx 在
+#:   `_redirect_url` 里 `copy_with(host=…)` 时抛。⚠️ `InvalidURL`
+#:   **不是** `HTTPError` 的子类（它直接继承 `Exception`）。
+#: * `ExceptionGroup` —— anyio 的 task group 把连接期的 `OverflowError`
+#:   （端口越界）包起来。同样不是 `HTTPError`。
+#:
+#: 这两类在调用点（`transport.py` / `probe.py` 的 `except httpx.HTTPError`）
+#: 都接不住 → 请求变成 500。所以在这里统一转成 `Ctf2Error`。
+_LIBRARY_URL_ERRORS: tuple[type[BaseException], ...] = (httpx.InvalidURL,)
+
+
+def _leaf_exceptions(exc: BaseException) -> list[BaseException]:
+    """把（可能嵌套的）异常组摊平成叶子异常。"""
+    if isinstance(exc, BaseExceptionGroup):
+        leaves: list[BaseException] = []
+        for sub in exc.exceptions:
+            leaves.extend(_leaf_exceptions(sub))
+        return leaves
+    return [exc]
+
+
+def _is_transport_level(exc: BaseException) -> bool:
+    """这个异常是不是"网络/地址本身不可用"那一类。
+
+    ★ 只把这一类转成 `Ctf2Error`。**不要把 `ExceptionGroup` 无条件吞掉** ——
+    它还可能是我们自己代码里的编程错误（那会被 task group 一起包起来），
+    吞掉它等于用一个"平台的问题"盖住一个真 bug。判据是"每一条叶子都是
+    连接/地址层面的错误"：
+    `OSError`（连接失败）、`ArithmeticError`（端口越界 = `OverflowError`）、
+    `ValueError`、`httpx` 自己的 URL 异常（`_LIBRARY_URL_ERRORS`）、
+    以及 `HTTPError` 全族。
+    """
+    if isinstance(exc, BaseExceptionGroup):
+        leaves = _leaf_exceptions(exc)
+        return bool(leaves) and all(_is_transport_level(leaf) for leaf in leaves)
+    return isinstance(
+        exc, (OSError, ArithmeticError, ValueError, httpx.HTTPError, *_LIBRARY_URL_ERRORS)
+    )
+
+
 def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
-    """解析 `Location`。相对地址按 RFC 7231 用当前 URL 解析。"""
+    """解析 `Location`。相对地址按 RFC 7231 用当前 URL 解析。
+
+    ⚠️ 校验的**顺序**在这里是有意义的，不能随便调换：
+
+    1. 先解析（解析失败 → `Ctf2Error`）；
+    2. **先判协议**，再补 host —— 这样 `copy_with(host=…)` 只会作用在
+       http(s) 上（相对地址另说，见 docstring 末尾那条）。
+    3. 判端口越界（见 `_check_port`）。
+
+    ⚠️ **这里判不到所有畸形 Location**：`javascript:alert(1)` /
+    `data:text/html,x` 那类会让 `client.request()` **自己先抛**
+    （httpx 内部的 `_build_redirect_request` 在我们的循环之前跑），
+    所以本函数根本轮不到执行 —— 那两类由 `request_same_host` 里
+    `client.request` 外面的包装兜住。这里判协议管的是会走到本函数的那些
+    非 http(s) 写法（`ftp://`、`file://` 等）。
+    """
     location = response.headers.get("location")
     if not location:
         raise Ctf2Error("平台返回了跳转，但没有给出 Location 头。")
@@ -97,10 +200,28 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
         target = httpx.URL(location)
     except Exception as exc:  # noqa: BLE001 - httpx 对畸形 URL 抛的异常类型不固定
         raise Ctf2Error(f"平台给的跳转地址不是一个合法 URL：{exc}") from exc
+
+    # ★ ② 先判协议：后面补 host、连接都只对 http(s) 有意义。
+    #   ⚠️ 判据是"**有 scheme 且不是 http(s)**"：相对地址（`/final`）的
+    #      scheme 是空串，那是合法的（RFC 7231 允许），要留给下面的 join。
+    #      第一版写成 `scheme not in ("http","https")`，把相对跳转全拒了 ——
+    #      实测让 6 个既有用例挂掉（"同 host 规范化跳转"等）。
+    if target.scheme and target.scheme not in ("http", "https"):
+        raise Ctf2Error(f"平台把请求重定向到了不支持的协议（{target.scheme}）。")
+
     # 只有 scheme 没有 host 的畸形 Location（`http:///path`）—— 补上当前 host，
     # 与 httpx 的处理一致，否则它会被当成"跨 host"而误拒。
+    # ⚠️ 判据里的 `target.scheme and` **不能省**：相对地址（`/final`）的
+    #    `host` 同样是空串，但它是**合法**的相对引用，要留给下面的 `join`
+    #    去补全。省掉这个条件就会对相对地址调 `copy_with(host=…)`，
+    #    把 `/final` 拗成一个没有端口的新绝对地址 → 请求打错地方
+    #    （实测让"同 host 规范化跳转"和"绕圈中止"两个既有用例挂掉）。
     if target.scheme and not target.host:
         target = target.copy_with(host=current.host)
+
+    # ★ ③ 端口越界要在这里拦掉（它是 `ExceptionGroup[OverflowError]` 的来源）。
+    _check_port(target, what="平台给的跳转地址")
+
     if target.is_relative_url:
         target = current.join(target)
     return target
@@ -122,9 +243,13 @@ async def request_same_host(
     ⚠️ 但 `params` **只在第一跳**生效 —— 后续每跳的 query 来自 `Location`
     自己带的（与 httpx 的 `_build_redirect_request` 一致，见模块 docstring）。
 
-    抛 `Ctf2Error` 的两种情况：
+    抛 `Ctf2Error` 的情况（都表示"平台给的东西不可用"）：
     1. 跳转目标换了主机 —— 那是在打一个用户没填过的地址；
-    2. 跳转目标不是 http/https。
+    2. 跳转目标不是 http/https；
+    3. 跳转没给 `Location`，或 `Location` 不是合法 URL；
+    4. **端口越界**（`http://host:99999/`）—— 见 `_check_port`：
+       不拦的话异步 httpx 会冒出 `ExceptionGroup[OverflowError]`，
+       而它**不是** `httpx.HTTPError` 的子类，调用点接不住 → 500。
 
     ⚠️ 每一跳都过 `hostguard.is_blocked_host`。这一条**不是**主要防线
     （主要防线是上面那条"禁跨 host"），但它保证：即便用户自己填了一个
@@ -140,15 +265,39 @@ async def request_same_host(
         if hostguard.is_blocked_host(current.host):
             raise Ctf2Error(f"平台把请求指向了被拒绝的地址（{current.host}）。")
 
+        # ★ 端口越界也在这里拦。第一跳的 URL 是调用方给的
+        #   （`transport` 拼的是 `base_url + path`），所以**入口**同样可能带着
+        #   越界端口 —— 实测把 base_url 配成 `http://127.0.0.1:99999` 时，
+        #   第一跳就会冒出 `ExceptionGroup[OverflowError]`。
+        #   `_check_port` 在 `_next_url` 里也调了一次：那一次管的是
+        #   "Location 指过来的端口"，这一次管的是"当前这个 URL"。
+        _check_port(current, what="要请求的地址")
+
         # ★★ 只有第一跳用调用方的 `params`；之后 query 由 `Location` 决定。
         #    （httpx 的 `_build_redirect_request` 不带 params 到下一跳。）
         hop_kwargs = dict(send_kwargs)
         if hop > 0:
             hop_kwargs.pop("params", None)
 
-        response = await client.request(
-            current_method, current, follow_redirects=False, **hop_kwargs
-        )
+        try:
+            response = await client.request(
+                current_method, current, follow_redirects=False, **hop_kwargs
+            )
+        except (httpx.HTTPError, Ctf2Error):
+            # 这两类是调用点认识的，原样上抛（`HTTPError` 由 `transport`
+            # 转成 `Ctf2Unavailable`，`probe` 则直接跳过这个候选端点）。
+            raise
+        except BaseException as exc:  # noqa: BLE001
+            # ★ 这里是 httpx **内部**解析 Location 时抛出来的那两类
+            #   （见 `_LIBRARY_URL_ERRORS` 上的说明）：畸形 Location 会在
+            #   `client.request()` 里就炸，我们的 `_next_url` 还没机会执行。
+            #   只有"确实是地址/网络层面"的才转成 `Ctf2Error`；其它的
+            #   （我们自己的编程错误）原样上抛，别用一个"平台的问题"盖住它。
+            if _is_transport_level(exc):
+                raise Ctf2Error(
+                    f"平台给的跳转地址无法使用（{type(exc).__name__}）：{exc}"
+                ) from exc
+            raise
         if response.status_code not in REDIRECT_CODES:
             return response
 

@@ -65,13 +65,27 @@ def _run(coro: Any) -> Any:
     return asyncio.run(coro)
 
 
-async def _request(base: str, mapping: dict[str, httpx.Response], method: str = "GET") -> httpx.Response:
+async def _request(
+    base: str,
+    mapping: dict[str, httpx.Response],
+    method: str = "GET",
+    base_host: str | None = None,
+) -> httpx.Response:
+    """发一次请求。`base_host` 缺省取 `base` 的 host。
+
+    ⚠️ 显式传 `base_host` 的场合：`base` 自己带着越界端口时，
+    `httpx.URL(base).host` 仍能取到 host（端口越界不影响 `.host`），
+    但为了让用例的意图清楚（"用户填的主机是这个"），允许调用方指定。
+    """
     client = httpx.AsyncClient(
         transport=httpx.MockTransport(_routes(mapping)), follow_redirects=False
     )
     try:
         return await request_same_host(
-            client, method, base, base_host=httpx.URL(base).host.lower()
+            client,
+            method,
+            base,
+            base_host=base_host if base_host is not None else (httpx.URL(base).host or "").lower(),
         )
     finally:
         await client.aclose()
@@ -378,3 +392,141 @@ def test_a_redirect_without_query_does_not_get_params_replayed() -> None:
     assert response.status_code == 200
     assert seen[0] == "http://example.com/start?page=1&key=SECRET"
     assert seen[1] == "http://example.com/after", "Location 没有 query 就不该有 query"
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ 畸形 Location 不许逃逸成非领域异常（F-08）
+# ══════════════════════════════════════════════════════════
+
+
+#: 畸形 `Location` → 都必须在**调用点接得住**的范围内收场
+#: （`Ctf2Error` 或 `httpx.HTTPError` 的子类），不允许冒出别的东西。
+#:
+#: ⚠️ 这一组是**在 Kali（生产同款 Linux）上定出来的**。第一版我在本机
+#: Windows 测，得到"httpx 返回 502、接得住"——**那个结论是错的**：
+#: 越界端口在 Linux 上走 anyio 的 task group，冒出
+#: `ExceptionGroup[OverflowError]`，而它**不是** `HTTPError` 的子类，
+#: 生产调用点（`transport.py` / `probe.py` 的 `except httpx.HTTPError`）接不住。
+MALFORMED_LOCATIONS = [
+    # ★ 端口越界：ExceptionGroup[OverflowError] 的来源
+    "http://127.0.0.1:99999/x",
+    "http://127.0.0.1:65536/x",
+    "http://127.0.0.1:70000/x",
+    "http://127.0.0.1:100000/x",
+    "http://127.0.0.1:4294967296/x",
+    "https://127.0.0.1:99999/x",
+    "http://:99999/x",
+    "http://[::1]:99999/x",
+    # ★ 协议异常：httpx 内部解析时会抛 InvalidURL（不是 HTTPError）
+    "javascript:alert(1)",
+    "data:text/html,x",
+    # 其它畸形形态
+    "http://[::1/x",
+    "http://:80/x",
+    "ftp://127.0.0.1/x",
+    "file:///etc/passwd",
+    "   ",
+]
+
+
+@pytest.mark.parametrize("location", MALFORMED_LOCATIONS)
+def test_a_malformed_location_never_escapes_as_a_non_domain_error(location: str) -> None:
+    """★★ 畸形 `Location` 必须以领域异常收场，**不许冒出 `ExceptionGroup` / `InvalidURL`**。
+
+    这是 F-08 的回归闸。那两类都不是 `httpx.HTTPError` 的子类：
+
+    * `ExceptionGroup`（anyio task group 包住连接期的 `OverflowError`）
+      —— 端口越界时出现；
+    * `httpx.InvalidURL`（直接继承 `Exception`）—— `javascript:` / `data:`
+      那类"有 scheme、无 host、path 不以 `/` 开头"的写法，httpx 在
+      `_redirect_url` 里 `copy_with(host=…)` 时抛。
+
+    两者的后果一样：`transport.py` 与 `probe.py` 的
+    `except httpx.HTTPError` 接不住 → 用户看到 500。
+
+    ⚠️ `probe.py` 那处**也**接 `Ctf2Error`（它把不合格的候选端点跳过），
+       所以这组用例对两条调用点都成立。
+    """
+    mapping = {
+        "http://127.0.0.1:18080/start": httpx.Response(
+            302, headers={"location": location}
+        ),
+    }
+
+    try:
+        response = _run(_request("http://127.0.0.1:18080/start", mapping))
+    except (Ctf2Error, httpx.HTTPError):
+        # Ctf2Error：probe 会换下一个候选端点；HTTPError：transport 转成
+        # Ctf2Unavailable。两者都是**调用点接得住**的，过关。
+        return
+    except BaseException as exc:  # noqa: BLE001
+        raise AssertionError(
+            f"Location={location!r} 冒出了领域异常之外的 "
+            f"{type(exc).__name__}，调用点的 except 接不住 → 会变成 500"
+        ) from exc
+
+    # 未抛也算过关：说明这一次被当成正常响应处理了。本用例只守
+    # "不许有非领域异常逃逸"这一件事。
+    assert response.status_code >= 0
+
+
+def test_a_relative_location_is_still_followed() -> None:
+    """★ 反向闸：**相对** `Location`（`/final`）必须仍然被跟随。
+
+    这条钉住一个我实测踩到的坑：给"畸形 Location"加校验时，判据若写成
+    `scheme not in ("http","https")`，相对地址（`scheme` 是**空串**）
+    会被当成"不支持的协议"全部拒掉 —— 实测让 6 个既有用例挂掉。
+    相对地址是 RFC 7231 允许的，真实平台也常用。
+
+    ⚠️ 与上面那组是一对：只测"畸形都被拦"的话，一个"把什么都拒掉"的
+       实现也能通过。
+    """
+    mapping = {
+        "http://127.0.0.1:18080/": httpx.Response(302, headers={"location": "/final"}),
+        "http://127.0.0.1:18080/final": httpx.Response(200, json={"ok": True}),
+    }
+
+    response = _run(_request("http://127.0.0.1:18080/", mapping))
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_an_out_of_range_port_is_refused_with_a_domain_error() -> None:
+    """★ 端口越界要以**可读的领域异常**收场，而不是被连接层炸掉。
+
+    它同时证明 `_check_port` 在起作用：错误信息里带得出那个越界端口，
+    而不是 `ExceptionGroup` 那串 `unhandled errors in a TaskGroup`。
+    """
+    mapping = {
+        "http://127.0.0.1:18080/start": httpx.Response(
+            302, headers={"location": "http://127.0.0.1:99999/x"}
+        ),
+    }
+
+    with pytest.raises(Ctf2Error) as excinfo:
+        _run(_request("http://127.0.0.1:18080/start", mapping))
+
+    assert "端口" in excinfo.value.message
+    assert "99999" in excinfo.value.message
+
+
+def test_an_out_of_range_port_in_the_base_url_is_refused() -> None:
+    """★ 入口（`base_url`）带越界端口也要拦 —— 不只 `Location` 这一处。
+
+    `transport` 拼的是 `base_url + path`，所以第一跳的 URL 直接带着
+    管理员填的端口。实测把 base_url 配成 `http://127.0.0.1:99999` 时，
+    第一跳就冒出 `ExceptionGroup[OverflowError]`。
+    """
+    mapping = {"http://127.0.0.1:18080/x": httpx.Response(200, json={"ok": True})}
+
+    with pytest.raises(Ctf2Error) as excinfo:
+        _run(
+            _request(
+                "http://127.0.0.1:99999/x",
+                mapping,
+                base_host="127.0.0.1",
+            )
+        )
+
+    assert "端口" in excinfo.value.message
