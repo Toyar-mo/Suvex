@@ -10,6 +10,7 @@ import {
   stallInfo,
   totalFindings,
   type Scan,
+  type ScanStatus,
 } from '@/data/scan'
 import { formatDuration, formatRelativeTime } from '@/lib/datetime'
 import {
@@ -105,6 +106,88 @@ function terminatedByLabel(value: Scan['terminatedBy']): string | null {
     default:
       return null
   }
+}
+
+/*
+  ─────────────────────────────────────────────────────────────
+  状态胶囊的取色（2026-10-16）
+  ─────────────────────────────────────────────────────────────
+
+  ## 为什么是「胶囊」而不是「整行铺底」
+
+  用户的原话是「运行中跟已完成跟失败都可以弄一个底色，好分别一点」，
+  主管把范围收窄成**只有状态这一格**。这个收窄是对的，两个理由：
+
+  1. **整行铺底会和行自身的两种底色打架**：选中态是 `bg-accent/[0.07]`，
+     hover 是 `bg-surface-raised/50`（不透明）。整行铺底时，"选中 running 的行"
+     要在同一个元素上放 `accent/[0.05]` 与 `accent/[0.07]` 两个背景色 ——
+     只会互相覆盖；而 hover 的不透明底会把状态色整段盖掉。
+     收窄到状态格之后，这三个问题**都不存在了**。
+  2. **design-system §2 的允许范围**：signal 色「只出现在徽标、状态点、
+     行头小图标上——不允许做背景填充或大色块」。**状态胶囊正好落在
+     "徽标"这一项里**，而整行铺底不是。
+
+  ## 取色不是挑的，是算出来的
+
+  底色一律用 **tone 色 + 低透明度**（wash），不是实色铺底 ——
+  实色底 + 文字在 §7 有实测记录：深紫底配浅字 4.06:1、hover 掉到 2.74:1，不达 AA。
+
+  ⚠️ **这里没有沿用 `ChallengeCard` / `EnvironmentStatus` 的 `bg-*-ok/15`**。
+  按那两个组件照抄，实测在**亮色主题**下 `text-signal-ok` 落在 `ok/15` 上只有
+  **3.97:1**（`ok/12` 是 4.13:1，连 `ok/6` 都只有 4.48:1）—— 都不达 AA 4.5。
+  原因是亮色的 `signal-ok #127A4B` 本身就只有 5.37:1（见 tailwind.config.js
+  里那段的说明），再叠一层绿底就把余量吃光了。
+
+  ## 所以文字**不跟着 tone 换色**，一律 `text-ink`
+
+  这是这套 token 里唯一两个主题都能达标的组合。实测（对三种行背景 ——
+  surface / 选中 accent.07 / hover raised.50 —— 取**最差**值）：
+
+    tone      暗色(底色 alpha)          亮色(底色 alpha)
+    accent    a=0.15  文字 11.84:1      a=0.15  文字 13.54:1
+    ok        a=0.15  文字 10.63:1      a=0.15  文字 13.73:1
+    risk      a=0.15  文字 11.63:1      a=0.15  文字 13.22:1
+    idle      a=0.20  文字 13.40:1      a=0.20  文字 15.64:1
+
+  「文字跟着底色换成 tone 色」听起来更讲究，但它把**颜色的对比度余量**
+  和**语义色**绑在一起，于是 `ok` 在亮色下必然挂 —— 上面那组数字就是证据。
+
+  ⚠️ 透明度只写**档位**（`/15`、`/20`），不要写 `/12` 这类不在刻度上的值：
+  Tailwind 的 opacity 修饰符按刻度解析，**不在刻度上的数字不会报错，
+  而是整个类不生成** —— 胶囊底色会静默变成透明。
+  第一版写的 `/12` 就是这么挂的（浏览器实测读到 `rgba(0,0,0,0)` 才发现）。
+  刻度（v3）是 5 的倍数：… 10 / 15 / 20 / 25 …。
+  本文件与 `ChallengeCard` / `EnvironmentStatus` 用的都是刻度内的值。
+
+  ## 那"不同结果不同颜色"靠什么区分？靠底色 + 状态点，文字保持中性
+
+  这正是 design-system §7「颜色是冗余编码，不是唯一载体」的用法：
+  颜色的任务是**加速扫视**（一眼分出哪几行在跑、哪几行挂了），
+  而"这条到底是什么状态"由**文字标签**回答，两者都在，没有谁替代谁。
+  所以文字标签（`SCAN_STATUS_LABEL`）和状态点（`StatusDot`）**都必须保留** ——
+  色觉障碍用户靠前者读，不靠颜色猜。
+
+  ## 为什么 idle（排队中 / 已终止）用 ink-ghost 而不是不加底色
+
+  不加底色的胶囊会变成"只有文字飘在那里"，与其他四行**形状不一致** ——
+  列表里一眼扫过去会以为这一格是空的。用 `ink-ghost/20` 给一个几乎中性的
+  灰底，形状齐了、又不会抢注意力。
+
+  ⚠️ `ink-ghost` 是「仅装饰、禁止承载信息」的色（design-system §2）——
+  这里它只做**底色**，承载信息的文字是 `text-ink`，没有违反那一条。
+
+  ## aborted 为什么不跟 failed 同色
+
+  `SCAN_STATUS_TONE` 里两者就不同（failed=`risk`、aborted=`idle`），
+  这里跟随它、不另立一套。语义上也对：「失败」是结论（出事了），
+  「已终止」是人主动停的，不是问题 —— 给它一个红底会让用户以为出了故障。
+*/
+const STATUS_PILL: Record<ScanStatus, string> = {
+  queued: 'bg-ink-ghost/20 text-ink',
+  running: 'bg-accent/15 text-ink',
+  completed: 'bg-signal-ok/15 text-ink',
+  failed: 'bg-signal-risk/15 text-ink',
+  aborted: 'bg-ink-ghost/20 text-ink',
 }
 
 export interface ScanListProps {
@@ -373,10 +456,37 @@ function ScanRow({
           />
         </span>
 
-        {/* 状态 */}
-        <span className="flex shrink-0 items-center gap-tight lg:w-24">
-          <StatusDot tone={tone} pulse={scan.status === 'running'} />
-          <span className="text-xs text-ink-muted">{SCAN_STATUS_LABEL[scan.status]}</span>
+        {/*
+          状态格 = 状态点 + 文字标签 + 胶囊底色。
+
+          ⚠️ 三者**都要保留**，这是 design-system §7「颜色是冗余编码，
+             不是唯一载体」的硬要求：
+               · 文字标签（SCAN_STATUS_LABEL）—— 色觉障碍用户靠它读；
+               · 状态点（StatusDot）—— 第二层冗余，且 running 靠它呼吸；
+               · 胶囊底色 —— 加速扫视，让"哪几行在跑、哪几行挂了"一眼分开。
+             把文字去掉只留颜色是**倒退**，不是简化。
+
+          ⚠️ 这里刻意**不**用 `<StatusDot>` 的 tone 去驱动文字颜色：
+             取色理由与实测数字见文件上方 STATUS_PILL 那段。
+        */}
+        <span className="flex shrink-0 items-center lg:w-24">
+          <span
+            className={cn(
+              /*
+                `rounded-xs` 而不是 `rounded-pill`：design-system §4 明确写
+                「`pill` 只留给状态点，不给按钮用」—— 工具型界面要的是精确感。
+                内距取 `gap-1 / px-1.5 / py-0.5`，与同类的状态徽标一致
+                （SlaBadge.tsx:74 的 `gap-1 rounded-xs px-1`、
+                 FlagChip.tsx:88 的 `gap-1 rounded-xs px-1.5`、
+                 EnvironmentStatus.tsx:120 的状态徽标）。
+              */
+              'inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5',
+              STATUS_PILL[scan.status],
+            )}
+          >
+            <StatusDot tone={tone} pulse={scan.status === 'running'} />
+            <span className="text-xs">{SCAN_STATUS_LABEL[scan.status]}</span>
+          </span>
         </span>
 
         {/* 名称 + 目标 —— 主信息，宽屏占剩余宽度 */}

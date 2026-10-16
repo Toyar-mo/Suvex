@@ -411,12 +411,34 @@ export function NewScanWizard({ onDone, onCancel }: NewScanWizardProps) {
         </button>
 
         {stepIndex < STEPS.length - 1 ? (
+          /*
+            ★ 改成实心主按钮，并加宽内距。
+
+            1. **底色用全站统一的实心主按钮范式** `bg-accent text-canvas
+               hover:bg-accent-strong`（出处：WizardChrome.tsx:71 的 LaunchButton、
+               NoScansYet.tsx:84、ConfirmDialog.tsx:103 等）。不是自己挑的紫色 ——
+               design-system §7 有实测记录：这套 token 里只有
+               「accent 底 + canvas 字」能同时满足「主色醒目」与「文字可读」
+               （5.98:1，hover 提亮到 accent-strong 是 8.36:1）；
+               另一条被试过的写法「accent-deep 底 + ink 字」只有 4.06:1，
+               hover 掉到 2.74:1，不达 AA。
+            2. **去掉描边**：实心按钮再描边是两套视觉语言叠加，而且
+               `border-line-strong` 在紫色底上会显出一条脏边。
+            3. **"调宽"用加大内距 `px-3` → `px-5`，不用 `min-w`** ——
+               这个向导里按钮宽度由内容决定是既有做法，
+               `WizardChrome.tsx:56-62` 专门解释过为什么不让宽度自己动。
+            4. `press` + `font-medium` 跟随既有主按钮写法：这是"推进流程"的
+               关键操作，按下要有即时反馈（design-system §5.1）。
+
+            ⚠️ 主次仍然分明：它是 `h-10` + `px-5`，而最后一步的 `LaunchButton`
+            是 `h-11` + `press-lg` + 更重的分量 —— 「下一步」不该抢过「启动扫描」。
+          */
           <button
             type="button"
             onClick={goNext}
             className={cn(
-              'inline-flex h-10 items-center gap-1.5 rounded-sm border border-line-strong px-3 text-sm text-ink',
-              'transition-ui duration-fast hover:border-accent/50 hover:bg-accent-wash',
+              'press inline-flex h-10 items-center gap-1.5 rounded-sm px-5 text-sm font-medium',
+              'bg-accent text-canvas transition-ui duration-fast hover:bg-accent-strong',
             )}
           >
             下一步
