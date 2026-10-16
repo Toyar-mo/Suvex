@@ -122,10 +122,88 @@ IMAGE_REVERSE = Ctf2SandboxProfile.REVERSE.value
 #   · 容器名必须**永远**以它开头，否则泄漏的容器会攒下来没人清。
 SANDBOX_NAME_PREFIX = "ctf2-"
 
-# 沙箱所在的 Docker 网络。**独立网络而不是默认 bridge**：
-# 默认 bridge 上的容器能互相看见，而"同时跑两道题"意味着
-# A 题的样本能扫到 B 题的环境 —— 那是题目之间的越界。
+# 沙箱所在的 Docker 网络。
+#
+# ## ★★ "独立网络"解决了什么、**没有**解决什么（2026-10-16 实测改正）
+#
+# 这里原来的说法是**错的**，原文是：
+#
+#     默认 bridge 上的容器能互相看见，而"同时跑两道题"意味着
+#     A 题的样本能扫到 B 题的环境 —— 那是题目之间的越界。
+#
+# 实测证伪：**用户自定义 bridge 同样允许同网络容器互通**
+# （`enable_icc` 默认 true），而且比默认 bridge **更宽松** ——
+# 它还额外给容器做**按名字的 DNS 解析**。实测在真实的
+# `suvex-ctf2` 上起两个容器，A 直接读到了 B 的响应：
+#
+#     A→B 按名字:  DNS 解析成功
+#     A→B 按 IP 打: GOT:SECRET-FROM-B      ★ 越界
+#
+# 所以「换成自定义网络」本身**没有**解决它声称要解决的问题。
+# 题目之间的隔离**另有一层机制**：见 `NETWORK_ICC_OPTION`。
+#
+# ## 自定义网络真正买到的那个东西（别删）
+#
+# 是**把沙箱与平台自己的容器隔开**。实测：
+#
+#     `suvex-db`（postgres:16）在**默认 bridge** 172.17.0.0/16 上，
+#     沙箱在 `suvex-ctf2` 172.18.0.0/16 上。
+#
+#     从默认 bridge 上的容器连 `172.17.0.2:5432` → **CONNECTED**
+#     从 `suvex-ctf2` 上的容器连同一个地址     → **REFUSED**
+#
+# 也就是说：沙箱里跑的是出题人给的东西，而它**够不到数据库**。
+# 这一条价值是真的 —— 改动这里要连它一起考虑。
 CTF2_NETWORK = "suvex-ctf2"
+
+#: 关掉"同网络容器互通"的那个 Docker 网络选项。
+#:
+#: ## ★★ 为什么用这个，而不是"每道题一个网络"
+#:
+#: 发现 3 要的结果是"题目之间互不可见"。最直觉的修法是给每道题建一个
+#: 独立网络，而**实测下来那条路不能走**：
+#:
+#: · Docker 的地址池**有硬上限**。本机（Docker 28.5.2，`daemon.json`
+#:   未配 `default-address-pools`）实测连续创建第 **29** 个网络就失败：
+#:
+#:       Error response from daemon: all predefined address pools
+#:       have been fully subnetted
+#:
+#:   （`bridge` 与 `suvex-ctf2` 已各占一个 /16，所以新增预算只有 **28** 个。）
+#: · 而"每道题一个网络"意味着**网络会累积** —— `--rm` 只管容器、不管网络。
+#:   进程被杀时（`sweep_orphan_sandboxes` 存在的**全部理由**就是这个）
+#:   网络会留下来，而 28 个的预算一旦占满，**后面每一道题都建不出网络**、
+#:   直接起不了沙箱。那是"用一个可用性事故换一个隔离收益"。
+#: · 磁盘也紧张（Kali 实测只剩 2.8G / 97%）。
+#:
+#: 而 ICC 关掉之后，**同一个网络**上的容器之间**内核级**互不可达，
+#: 且**不产生任何需要清理的新对象**。实测两者对照（同一镜像、
+#: 同一台机器、只有一个变量）：
+#:
+#: | 判据 | ICC 默认 | ICC=false |
+#: | --- | --- | --- |
+#: | A→B 容器 IP 直连 | **读到 B 的响应** ★越界 | **BLOCKED** ✓ |
+#: | 出站 8.8.8.8:53 | OPEN | **OPEN** ✓（NAT 走网关，不受影响） |
+#: | 出站 ctf2.dasctf.com:443 | OPEN | **OPEN** ✓ |
+#: | 到宿主网关 8000/8080 | OPEN | OPEN |
+#: | 到 `suvex-db` 5432 | CLOSED | CLOSED |
+#: | 名字能否解析 | 能 | 能（但连不上） |
+#:
+#: 机制（`iptables -S` 实测，两个网络只差这一条规则）：
+#:
+#:     -A DOCKER-FORWARD -i br-<icc=false 的桥> -o <同一个桥> -j DROP
+#:
+#: 所以它是**内核层的 DROP**，不是"我们少给了一个域名"那种表面文章。
+#:
+#: ## 如实记录的残余差异（ICC=false 比不上"每题一网"的地方）
+#:
+#: 1. **名字仍然能解析**：另一个容器的名字（存在性）是个能被探测的
+#:    信号，只是连不上。容器名带 8 位随机十六进制，猜中要靠穷举。
+#: 2. **发布到宿主的端口仍能从网关 hairpin 进**：实测 A 经网关连
+#:    同网络邻居 `-p` 发布的端口是 **OPEN**。**当前不构成风险** ——
+#:    沙箱的 `_argv()` 里**没有任何 `-p`**（见那张参数表），
+#:    所以没有可 hairpin 的目标。将来若给沙箱加端口发布，这条要重看。
+NETWORK_ICC_OPTION = "com.docker.network.bridge.enable_icc"
 
 # 宿主只读资源的容器内路径。与 Dockerfile 的 VOLUME 一致。
 HOST_RESOURCES_PATH = "/opt/host-resources"
@@ -509,8 +587,9 @@ def sweep_orphan_sandboxes() -> int:
     # 但那条论证目前不成立，而"论证与实现不符"正是最该修的一类 ——
     # 下一个读到 docstring 的人会以为这里已经防住了。
     #
-    # 同一个文件里的 `ensure_ctf2_network` 用的就是 `name=^{...}$` ——
-    # 作者显然知道可以锚定，只是这里漏了。
+    # 同一条纪律在别处也有：`_network_icc_disabled` 判"网络配置对不对"
+    # 时按**名字**查（`docker network inspect suvex-ctf2`），
+    # 而 `docker network create` 也是名字精确匹配 —— 都不经过子串匹配。
     listed = _run(
         ["docker", "ps", "-aq", "--filter", f"name=^{SANDBOX_NAME_PREFIX}"],
         timeout=30,
@@ -534,8 +613,41 @@ def sweep_orphan_sandboxes() -> int:
     return len(ids)
 
 
+def _network_icc_disabled() -> bool | None:
+    """`CTF2_NETWORK` 当前有没有关掉容器互通。网络不在时返回 `None`。
+
+    ## ★ 为什么不能用 `docker network ls` 判断
+
+    网络**存在**与网络**配置对**是两件事。原来的实现只查"在不在"，
+    于是"网络在、但 `enable_icc` 是默认的 true"会被当成准备好了 ——
+    而那种状态下题目之间**是互通的**（见 `NETWORK_ICC_OPTION` 的实测表）。
+    只查存在性等于把这个安全属性交给"网络当初是谁建的"决定。
+
+    判据取 `{{index .Options "…"}}`：
+      · 网络存在且选项是 `false` → `False`
+      · 网络存在但没有这个选项（默认 true）→ `True`
+      · 网络不存在 → `None`（`inspect` 退出码 1）
+    """
+    result = _run(
+        [
+            "docker",
+            "network",
+            "inspect",
+            CTF2_NETWORK,
+            "--format",
+            f'{{{{index .Options "{NETWORK_ICC_OPTION}"}}}}',
+        ],
+        timeout=30,
+    )
+    if not result.ok:
+        return None
+    value = result.stdout.strip()
+    # 选项缺席时模板渲染成空串 —— 那正是 Docker 默认的 `true`。
+    return value != "false"
+
+
 def ensure_ctf2_network() -> bool:
-    """保证 `CTF2_NETWORK` 存在。已存在就什么都不做。返回是否可用。
+    """保证 `CTF2_NETWORK` 存在**且题目之间互不可见**。返回是否可用。
 
     ## ★★ 为什么必须有这个函数（2026-10-01 实测）
 
@@ -548,12 +660,34 @@ def ensure_ctf2_network() -> bool:
     而真正的原因（一个本该由我们建的网络不存在）完全没出现在界面上。
     实测：整道题两次轮询全部倒在这一句上，`未解出`。
 
-    ## 为什么不是"退回默认 bridge"就完事
+    ## ★★ 2026-10-16（发现 3）：光"建出来"不够，还要**关掉容器互通**
 
-    独立网络是**安全设计**，不是命名习惯（见 `CTF2_NETWORK` 的说明）：
-    默认 bridge 上的容器能互相看见，而"同时跑两道题"意味着 A 题的样本
-    能扫到 B 题的环境 —— 那是题目之间的越界。所以这里要的是**把网络建出来**，
-    不是把隔离降级掉。
+    原来这个函数的 docstring 说"独立网络 = 容器互不可见"，**那是错的**：
+    用户自定义 bridge 与默认 bridge 一样允许同网络容器互通，还多一层
+    按名字的 DNS。实测在真实的 `suvex-ctf2` 上，A 题容器读到了 B 题
+    容器的响应体。理由与实测表见 `NETWORK_ICC_OPTION`。
+
+    所以这里做两件事：**建的时候带上 ICC=false**，以及
+    **已经存在的网络若没关 ICC，就地迁移**（否则"网络早就建好了"
+    这个最常见的情况会一直是通的，而函数返回 True 像是没问题）。
+
+    ## 迁移为什么是"删了重建"，以及它安全在哪
+
+    Docker 的 `enable_icc` 是网络**创建时**的属性，没有"改现有网络"的
+    API。所以迁移 = 删掉 + 用新选项重建。
+
+    安全前提是**这一刻网络上没有容器**。这在本函数被调用的两个时机
+    都成立：
+
+      · `main.lifespan` 启动时 —— 紧接在 `sweep_orphan_sandboxes()`
+        **之后**（见 `main.py`）。那一步已经把上一次运行遗留的
+        `ctf2-*` 容器全删了，所以这一刻网络上没有我们的容器；
+      · `SandboxContainer.start()` 起容器前 —— 此时**本容器还没起**。
+
+    真出现"网络上有容器"时 `docker network rm` 会失败
+    （`network … has active endpoints`），这时**不重建、只告警**：
+    宁可这一轮先退回"互通"（并留下一条明确的 warning），
+    也不能为了改配置去删一个还有容器的网络。
 
     ## 为什么幂等（先查再建）
 
@@ -569,19 +703,56 @@ def ensure_ctf2_network() -> bool:
     服务起不来。返回 `False` 只记 warning，真正的失败会在起容器时
     以原来的方式暴露出来（那时报错至少有了上下文）。
     """
-    listed = _run(["docker", "network", "ls", "--filter", f"name=^{CTF2_NETWORK}$", "--format", "{{.Name}}"], timeout=30)
-    if listed.ok and CTF2_NETWORK in listed.stdout.split():
+    icc_disabled = _network_icc_disabled()
+
+    if icc_disabled is False:
+        # 已经是对的形状 —— 最常见的情况，一次 inspect 就结束。
         return True
 
-    created = _run(["docker", "network", "create", CTF2_NETWORK], timeout=60)
+    if icc_disabled is True:
+        # ★ 网络在，但题目之间是**互通**的 —— 迁移它。
+        removed = _run(["docker", "network", "rm", CTF2_NETWORK], timeout=60)
+        if not removed.ok:
+            # 有容器挂着（或别的删除失败）：**不硬删**，如实告警后返回 True。
+            # 返回 True 而不是 False：网络确实可用、沙箱起得来，
+            # 这轮的问题是"隔离没生效"，那不是"起不来"。
+            logger.warning(
+                "CTF2 沙箱网络 %s 的容器互通没关掉，而它上面还有容器，"
+                "本轮无法迁移 —— **同时跑的两道题之间此刻是互通的**。"
+                "下一次服务重启（此时容器已被 sweep 清空）会自动修好。原因：%s",
+                CTF2_NETWORK,
+                removed.stderr.strip() or "未知原因",
+            )
+            return True
+        logger.warning(
+            "已删除并重建 CTF2 沙箱网络 %s：原来没关容器互通，"
+            "同网络的两道题能互相扫到（发现 3）",
+            CTF2_NETWORK,
+        )
+
+    created = _run(
+        [
+            "docker",
+            "network",
+            "create",
+            "-o",
+            f"{NETWORK_ICC_OPTION}=false",
+            CTF2_NETWORK,
+        ],
+        timeout=60,
+    )
     if created.ok:
-        logger.info("已创建 CTF2 沙箱网络 %s（解题容器靠它与其他题目隔离）", CTF2_NETWORK)
+        logger.info(
+            "已创建 CTF2 沙箱网络 %s（容器互通已关：题目之间互不可见）",
+            CTF2_NETWORK,
+        )
         return True
 
     # ★ 竞态复查：`create` 失败未必是坏事 —— 可能是另一个进程刚建好。
     #   不复查的话，这里会为一件**已经成立**的事记一条 warning。
-    again = _run(["docker", "network", "ls", "--filter", f"name=^{CTF2_NETWORK}$", "--format", "{{.Name}}"], timeout=30)
-    if again.ok and CTF2_NETWORK in again.stdout.split():
+    #   ⚠️ 复查的是**配置**而不只是存在性：另一个进程刚建的那个
+    #      未必是带 ICC=false 的。
+    if _network_icc_disabled() is False:
         return True
 
     logger.warning(
@@ -806,12 +977,17 @@ class SandboxContainer:
 
     def start(self) -> None:
         ensure_docker_available()
-        # ★ 起容器前再保证一次网络（幂等，已存在时是一次 `docker network ls`）。
+        # ★ 起容器前再保证一次网络（幂等）。
         #
         # 光靠"服务启动时建一次"挡不住这件事：网络是外部状态，
         # 服务跑着的时候它可能被 `docker network prune` 或人手删掉 ——
         # 而那时解题会退回同一个看不懂的
         # `network suvex-ctf2 not found`。代价是一次查询，换掉一整类误报。
+        #
+        # ⚠️ 这一步**不只是查存在性**：它会连带把"网络在、
+        #    但容器互通没关"就地迁移掉（见 `ensure_ctf2_network`）。
+        #    迁移要求这一刻网络上没有容器 —— 而这里**本容器还没起**，
+        #    所以在起容器前调用是安全的时机。**别把它挪到 `_run` 之后。**
         #
         # 只在**要联网**时查：`network_isolated` 的容器走 `--network none`，
         # 与这个网络无关，没必要为它付这次查询。
