@@ -74,11 +74,30 @@ def _probe(url: str, timeout: float) -> bool:
     这次的目标根路径就是 404（`Target not found`），而它明明活着。
     按 2xx 判会把一个正常可打的目标标成"不可达"，然后用户就会去
     排查一个根本不存在的问题。
+
+    ## ★ 为什么必须 `trust_env=False`（出站 SSRF 面）
+
+    `url` 是**用户填的扫描目标**（`POST /scans` 的 `target`，经
+    `service.check_reachability` 传进来），鉴权只要 `scan` scope ——
+    也就是"会对真实目标发包，这正是 scan scope 的语义"。
+
+    而 `httpx` 的 `trust_env` **默认是 `True`**，意思是它会去读环境里的
+    `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`，把请求**发到那个代理**。
+    于是"服务器上的环境变量"就成了一个能把出站流量改道的地方：
+    实测（本机起真转发代理，判据是代理收到的请求行）默认配置下
+    请求真的路由到了代理；`trust_env=False` 则不经过它。
+
+    这里的目标是用户可控的，所以这一行是**防 SSRF**，与本文件
+    "内网地址故意不拦"那一条（见 `check_reachability` 的说明）不冲突：
+    那说的是"允许打内网"，这说的是"不要把请求交给一个我们没选过的代理"。
+
+    ⚠️ `trust_env=False` 同时会关掉读 `.netrc`（同样是外部输入来源）。
+       部署在需要代理才能出网的环境时，代理要显式配（而不是靠环境变量）。
     """
     try:
         import httpx
 
-        response = httpx.get(url, timeout=timeout, follow_redirects=False)
+        response = httpx.get(url, timeout=timeout, follow_redirects=False, trust_env=False)
         # 有状态码 = 服务应答了
         return response.status_code > 0
     except Exception:  # noqa: BLE001

@@ -354,7 +354,13 @@ async def download_all(
         return result
 
     owns_client = client is None
-    http = client or httpx.AsyncClient(timeout=httpx.Timeout(DOWNLOAD_TIMEOUT))
+    # ★ `trust_env=False` —— 这里**不是** SSRF 面（每条 URL 先过
+    #   `_is_official()`，目标是官方域名），但请求带
+    #   `Authorization: <token>`：`trust_env` 默认 `True` 会让下载走
+    #   环境变量里的 `HTTP_PROXY`，那等于**把这个 token 交给那个代理**。
+    http = client or httpx.AsyncClient(
+        timeout=httpx.Timeout(DOWNLOAD_TIMEOUT), trust_env=False
+    )
     try:
         for item in pending:
             if result.bytes_written >= MAX_TOTAL_BYTES:

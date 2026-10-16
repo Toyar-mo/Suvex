@@ -1208,8 +1208,15 @@ class LlmGateway:
             if attempt:
                 await asyncio.sleep(_LLM_RETRY_BACKOFF * attempt)
             try:
+                # ★ `trust_env=False` —— 出站 SSRF 面。这个网关连着管理员填的
+                #   provider `baseUrl`（`LlmGateway` 由 `build_endpoint` 推出
+                #   URL），而 httpx 的 `trust_env` 默认 `True`：它会读环境里的
+                #   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 把请求发给那个
+                #   代理（实测默认配置下请求真的路由到了代理，`False` 不经过）。
+                #   这里同时带 `Authorization` 凭据，所以走代理还多一层
+                #   "把 LLM key 交给代理"的风险。
                 async with httpx.AsyncClient(
-                    timeout=httpx.Timeout(self.timeout)
+                    timeout=httpx.Timeout(self.timeout), trust_env=False
                 ) as client:
                     response = await client.post(
                         self.url,
@@ -2468,7 +2475,13 @@ async def solve_in_sandbox(
         except Exception:  # noqa: BLE001 - 过程不该影响解题结果
             logger.warning("CTF2 过程事件发送失败（不影响解题）", exc_info=True)
 
-    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as http:
+    # ★ `trust_env=False` —— 这个 client 只喂 `_tool_http_request`，而那条
+    #   路径**已有白名单**（`guard_tool_url` + `assert_allowed_target`），
+    #   所以目标本身是校验过的。加这一条的理由与那层不同：
+    #   httpx 的 `trust_env` 默认 `True`，会读环境里的 `HTTP_PROXY` /
+    #   `HTTPS_PROXY` / `ALL_PROXY` 把请求交给那个代理 —— 白名单校验的是
+    #   URL，管不了"谁在实际收这个请求"。所以这里补上，关掉那条改道。
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), trust_env=False) as http:
         for turn in range(1, spec.max_turns + 1):
             outcome.turns = turn
             # ★ 收尾提醒：只剩 `FINAL_STRETCH_TURNS` 轮时提醒一次。

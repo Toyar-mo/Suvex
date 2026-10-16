@@ -205,7 +205,16 @@ class ArenaClient:
         if not self._base.endswith(API_PREFIX):
             self._base = self._base + API_PREFIX
         self._key = access_key
-        self._client = client or httpx.AsyncClient(timeout=httpx.Timeout(timeout))
+        # ★ `trust_env=False` —— 这一处**优先级最低**，但加一行无妨。
+        #   理由（B 档）：请求带 `X-Agent-AccessKey` 凭据，而
+        #   `trust_env` 默认 `True` 会让请求走环境变量里的 `HTTP_PROXY`，
+        #   等于把凭据交给那个代理。
+        #   ⚠️ 且 `app/arena` 在**生产路径上没有调用者**（只有
+        #   `scripts/arena_e2e.py` 用它）—— 也就是说这段是死代码。
+        #   留着它的理由是"哪天接回来时不该带着这个洞"。
+        self._client = client or httpx.AsyncClient(
+            timeout=httpx.Timeout(timeout), trust_env=False
+        )
 
     async def __aenter__(self) -> ArenaClient:
         return self

@@ -377,7 +377,21 @@ def probe(*, base_url: str, label: str, model: str, api_key: str, kind: str) -> 
     )
 
     try:
-        with httpx.Client(timeout=httpx.Timeout(settings.llm_probe_timeout_seconds)) as client:
+        # ★ `trust_env=False` —— 出站 SSRF 面。`url` 由管理员填的 `baseUrl`
+        #   推出，而 httpx 的 `trust_env` 默认 `True`：它会读环境里的
+        #   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`，把这次请求发给那个
+        #   代理（实测默认配置下请求真的路由到了代理，`False` 则不经过）。
+        #
+        # ⚠️ **一处取舍（有意为之，不是漏了）**：如果用户确实在**公司代理
+        #    后面**跑本地 Ollama（`http://127.0.0.1:11434`），
+        #    `trust_env=False` 会让那次探测**连不上** —— 因为探测不再走
+        #    `HTTP_PROXY`。这与 `allow_private_llm_endpoints` 是同一类取舍：
+        #    我们选了"不接受来自环境变量的改道"，代价是这类部署要显式配代理。
+        #    要支持那种场景，应在配置里加一个显式的 proxy 项传给 `proxy=`，
+        #    而不是把 `trust_env` 打开（那等于把"谁来收这次请求"交给环境）。
+        with httpx.Client(
+            timeout=httpx.Timeout(settings.llm_probe_timeout_seconds), trust_env=False
+        ) as client:
             response = client.post(url, json=body, headers=_headers(anthropic=anthropic, api_key=api_key))
             duration_ms = int((time.perf_counter() - started) * 1000)
 

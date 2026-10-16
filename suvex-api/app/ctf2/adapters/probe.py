@@ -310,8 +310,11 @@ class Prober:
         # ★ `follow_redirects=False` —— 理由同 `transport.py`：跳转必须
         #   逐跳过白名单，而 httpx 自己跟的话只在入口校验一次。
         #   探测阶段打的端点最多，这条尤其要紧。
+        # ★ `trust_env=False` —— 理由同 `transport.py`：目标是管理员填的
+        #   平台地址，而 `trust_env` 默认为 `True` 会让请求走环境变量里的
+        #   代理。探测打的端点最多，这条更要紧。
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, transport=transport
+            timeout=timeout, follow_redirects=False, transport=transport, trust_env=False
         )
         #: 用户填的那个主机（小写、已剥端口）—— 跳转的唯一合法目标。
         self._base_host = (parsed.host or "").lower()

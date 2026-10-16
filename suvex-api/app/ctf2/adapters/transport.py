@@ -81,8 +81,16 @@ class JsonPlatformTransport:
         #   自己跟，因为**白名单必须逐跳生效**。开 `True` 的话 httpx 会自己
         #   跟到任意主机上，而我们的校验只发生在用户填 URL 的那一刻：
         #   实测能把内网服务的响应体读出来（见 `redirect.py` 的说明）。
+        #
+        # ★ `trust_env=False` —— 出站 SSRF 面。`self._base` 是**管理员填的**
+        #   平台地址，而 httpx 的 `trust_env` 默认 `True`：它会读环境里的
+        #   `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 把请求发给那个代理
+        #   （实测默认配置下请求真的路由到了代理，`False` 则不经过）。
+        #   服务器上的环境变量不该成为"能把出站流量改道"的地方。
+        #   ⚠️ 同时关掉读 `.netrc`（同样是外部输入）。真的需要代理时
+        #   要显式传 `proxy=`，而不是靠环境变量。
         self._client = httpx.AsyncClient(
-            timeout=timeout, follow_redirects=False, transport=transport
+            timeout=timeout, follow_redirects=False, transport=transport, trust_env=False
         )
         #: 用户填的那个主机（小写、已剥端口）—— 跳转的唯一合法目标。
         self._base_host = (httpx.URL(self._base).host or "").lower()

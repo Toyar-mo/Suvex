@@ -78,19 +78,35 @@ def test_probe_accepts_any_http_status(monkeypatch) -> None:
     那次的目标根路径就是 404（`Target not found`），而它明明活着。
     按 2xx 判会把一个正常可打的目标标成"不可达"，
     然后用户会去排查一个不存在的问题。
+
+    ⚠️ 替身 `get` 的签名要**跟着真实调用点走**：生产代码传的是
+    `httpx.get(url, timeout=…, follow_redirects=False, trust_env=False)`
+    （`trust_env=False` 是 v0.42 加的，见那一批的说明）。
+    替身少接一个关键字参数就会 TypeError，而 `_probe` 会把任何异常
+    吞成 `False` —— 于是这条用例失败的信息是"判成不可达"，
+    看起来像 404 判据坏了，实际是替身签名过时了。
+    所以这里收 `**kwargs` 并同时断言把 `trust_env=False` 传了进来。
     """
+    seen: dict[str, object] = {}
+
     class FakeResponse:
         status_code = 404
 
     class FakeHttpx:
         @staticmethod
-        def get(url, timeout, follow_redirects):  # noqa: ANN001
+        def get(url, timeout, follow_redirects, trust_env):  # noqa: ANN001
+            seen.update(
+                url=url, timeout=timeout, follow_redirects=follow_redirects, trust_env=trust_env
+            )
             return FakeResponse()
 
     import sys
 
     monkeypatch.setitem(sys.modules, "httpx", FakeHttpx)
     assert reachability._probe("http://x", 1.0) is True
+    # 顺带钉住那个出站护栏：目标可达与否的探测也必须 trust_env=False
+    assert seen["trust_env"] is False, "探测打的是用户填的目标，必须不读环境变量代理"
+    assert seen["follow_redirects"] is False
 
 
 def test_unreachable_target_is_reported_but_not_blocking(monkeypatch) -> None:

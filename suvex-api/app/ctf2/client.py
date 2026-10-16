@@ -537,6 +537,12 @@ class Ctf2Client:
             # httpx 默认只在同源时保留凭据头，但那是一条依赖库行为的保证；
             # 这里是凭据，不赌。
             follow_redirects=False,
+            # ★ `trust_env=False` —— 这里**不是** SSRF 面（`base_url` 是官方
+            #   域名，且构造时 `assert_allowed_target` 就钉死了），但这条
+            #   client **专门用来发 PAT**：`trust_env` 默认 `True` 会让请求
+            #   走环境变量里的 `HTTP_PROXY`，那等于**把 PAT 交给那个代理**。
+            #   同一个理由也适用于它顺带关掉的 `.netrc`。
+            trust_env=False,
         )
 
     # ── 生命周期 ──────────────────────────────────────────
