@@ -12,7 +12,16 @@ import { useEffect, useState } from 'react'
 /**
  * 扫描保留规则（任务 9）。
  *
- * 一条规则：「失败 / 已终止的任务，N 天后自动归档」，外加回收站保留期。
+ * 一条规则：「失败 / 已终止的任务，N 天后自动归档」，外加回收站保留期，
+ * 以及**归档产物的清理期**（README 缺口 5）。
+ *
+ * ## 三个数字是一条生命周期，所以放在同一个面板里
+ *
+ *     0 天            30 天                60 天            90 天
+ *     │ 扫描结束      │ 失败/终止的自动归档 │ 回收站到期删除  │ 产物目录清理
+ *
+ * 分开两个面板的话，用户调完"归档"不会想到磁盘上还有一份产物在占地方。
+ * 放一起才能看出它们是同一件事的三段。
  *
  * ## 为什么 `lastSweepAt` 要显示出来
  *
@@ -21,7 +30,7 @@ import { useEffect, useState } from 'react'
  * **规则没生效**，还是**时间没到**？两种猜测导致的下一步动作完全不同。
  * 把上次清理时刻写出来，那个问题就变成了"上次清理是 3 分钟前，还没到"。
  *
- * ## 为什么两个输入框的 help 要说清"0 是什么意思"
+ * ## 为什么每个输入框的 help 都要说清"0 是什么意思"
  *
  * "0 = 关闭"是一个**约定**，不是常识 —— 有人会以为 0 表示"立刻归档"。
  * 猜错的后果是记录被意外归档或规则形同虚设，两种都值得用一行字防住。
@@ -39,7 +48,11 @@ export function ScanRetentionPanel() {
     派生写法没有这个问题：config 一变，没被用户碰过的输入框自然跟着变；
     用户一改，`draft` 就接管。清空 `draft` 即"回到服务端的值"。
   */
-  const [draft, setDraft] = useState<{ archive?: string; trash?: string }>({})
+  const [draft, setDraft] = useState<{
+    archive?: string
+    trash?: string
+    artifact?: string
+  }>({})
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
 
   useEffect(() => {
@@ -48,8 +61,11 @@ export function ScanRetentionPanel() {
 
   const archiveDays = draft.archive ?? (config ? String(config.archiveAfterDays) : '')
   const trashDays = draft.trash ?? (config ? String(config.trashRetentionDays) : '')
+  const artifactDays =
+    draft.artifact ?? (config ? String(config.artifactRetentionDays) : '')
   const setArchiveDays = (v: string) => setDraft((d) => ({ ...d, archive: v }))
   const setTrashDays = (v: string) => setDraft((d) => ({ ...d, trash: v }))
+  const setArtifactDays = (v: string) => setDraft((d) => ({ ...d, artifact: v }))
 
   const parse = (raw: string): number | null => {
     const trimmed = raw.trim()
@@ -61,17 +77,25 @@ export function ScanRetentionPanel() {
 
   const archiveValue = parse(archiveDays)
   const trashValue = parse(trashDays)
+  const artifactValue = parse(artifactDays)
   const invalid =
-    archiveValue === null || trashValue === null
+    archiveValue === null || trashValue === null || artifactValue === null
       ? '请填写 0 或正整数（0 表示关闭）'
       : null
 
   const dirty =
     config !== null &&
-    (archiveValue !== config.archiveAfterDays || trashValue !== config.trashRetentionDays)
+    (archiveValue !== config.archiveAfterDays ||
+      trashValue !== config.trashRetentionDays ||
+      artifactValue !== config.artifactRetentionDays)
 
   const handleSave = async () => {
-    if (invalid || archiveValue === null || trashValue === null) {
+    if (
+      invalid ||
+      archiveValue === null ||
+      trashValue === null ||
+      artifactValue === null
+    ) {
       setSaveState({ kind: 'failed', error: invalid ?? '取值不合法' })
       return
     }
@@ -84,6 +108,7 @@ export function ScanRetentionPanel() {
       await saveScanRetention({
         archiveAfterDays: archiveValue,
         trashRetentionDays: trashValue,
+        artifactRetentionDays: artifactValue,
       })
       setDraft({})  // 清空草稿 → 显示值回到服务端刚返回的那份
       setSaveState({ kind: 'saved', at: new Date().toISOString() })
@@ -96,7 +121,7 @@ export function ScanRetentionPanel() {
     <SettingsPanel
       id="scan-retention"
       title="扫描保留"
-      description="让扫描列表自己保持清爽：到期的记录自动归档，回收站里的按保留期清除。"
+      description="让扫描列表自己保持清爽：到期的记录自动归档，回收站里的按保留期清除，归档的产物到点清理磁盘。"
     >
       {status === 'loading' || status === 'idle' ? (
         <p className="text-2xs text-ink-faint">正在读取…</p>
@@ -142,6 +167,25 @@ export function ScanRetentionPanel() {
                 onChange={setTrashDays}
                 mono
                 placeholder="30"
+              />
+            </Field>
+
+            {/*
+              ★ 第三个数字（README 缺口 5）：产物清理是这条生命周期里
+              **唯一不可逆**的一步，所以它的 help 要把"删什么、留什么"
+              说清楚 —— 否则用户会以为它连附件一起删，从而不敢开启。
+            */}
+            <Field
+              label="归档产物保留期"
+              htmlFor="retention-artifact-days"
+              help="已归档的扫描，产物目录（扫描日志、报告素材）再留这么多天就清理掉，释放磁盘。附件原件与 challenge 目录不受影响。填 0 表示不自动清理。"
+            >
+              <TextInput
+                id="retention-artifact-days"
+                value={artifactDays}
+                onChange={setArtifactDays}
+                mono
+                placeholder="90"
               />
             </Field>
           </div>

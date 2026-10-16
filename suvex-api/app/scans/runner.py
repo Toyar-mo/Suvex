@@ -570,7 +570,7 @@ def sweep_orphan_ctf2_workspaces(db) -> int:  # noqa: ANN001
 
     持久工作区（`scan_root/_ctf2_workspaces/<challenge_id>/`）是这轮
     新加的：它让"续解"能继承上次的产物。但它**天然是只增不减的** ——
-    而"只增不减"正是我刚在 README 缺口清单里列出的第 5 条。
+    而"只增不减"正是我刚在 README 缺口清单里列出的那一条。
 
     加一个持久化目录却不给它清理策略，等于把那条缺口从扫描产物
     复制到了 CTF2 —— 所以清理函数和它一起加。
@@ -623,6 +623,108 @@ def sweep_orphan_ctf2_workspaces(db) -> int:  # noqa: ANN001
         removed += 1
     if removed:
         logger.info("清掉了 %d 个题目已不存在的 CTF2 工作区", removed)
+    return removed
+
+
+def sweep_retired_artifacts(db, *, retention_days: int) -> int:  # noqa: ANN001
+    """清掉**已归档且过了产物保留期**的扫描产物目录。返回删了几个。
+
+    ## ★★ 这条补的是 README 缺口清单「扫描产物目录只增不减」的**后半段**（2026-10-16）
+
+    磁盘只增不减那件事有**两个**来源，而 2026-10-11 那次只修了前一个：
+
+    | 来源 | 谁负责 | 状态 |
+    | --- | --- | --- |
+    | 数据库里**已无记录**的孤儿目录 | `sweep_orphan_artifacts` | ✅ 已修 |
+    | 记录还在、但**早已归档**的目录 | ★ **本函数** | 本次补 |
+
+    第二个来源才是主因：`purge_scan` 要用户手动去回收站点"永久删除"，
+    而**归档是自动的**（`sweep_retention` 到点就打 `archived_at`）。
+    于是真实部署下"归档的扫描越来越多、产物永远留着" ——
+    按每天 20 次扫描估，README 里那个 43 GB/年 的量级就是这么来的。
+
+    ## 为什么判据是"已归档 + 超期"，而不是别的
+
+    三种写法都试过想过，只有这一种同时安全且有效：
+
+    | 判据 | 问题 |
+    | --- | --- |
+    | 只按时间（"90 天前的目录都删"） | **误伤正在跑的扫描** —— 一个跑了很久的扫描目录也会很旧，而它正在写 |
+    | 只按"记录在不在" | 那是 `sweep_orphan_artifacts` 干的事，对"记录还在"的目录无效 |
+    | **已归档 + 超期** | ✅ 归档是用户/规则明确表达的"收起来"，再过保留期才删 |
+
+    ## ★ 为什么**不看** `deleted_at`（回收站里的那些）
+
+    回收站里的扫描由 `trash_retention_days` 管，到点 `sweep_retention` 会
+    **物理删除整条记录**、`purge_scan` 那条路径会顺带删产物。所以回收站
+    那条路已经闭环了，这里再管一次只会让"两个保留期谁说了算"变成一个
+    没人能回答的问题。**本函数只管归档那一条。**
+
+    ## ★★ 为什么不碰兄弟目录
+
+    只按 `<scan_id>` 拼路径（复用 `remove_scan_artifacts` 的形状校验与
+    "解析后仍在 scan_root 之下"的双保险），**不遍历** `scan_root`。
+    后者一旦条件写错就会连 `_uploads/` 一起删 —— 而附件**删了就回不来**
+    （用户得重新上传）。
+
+    ⚠️ 特别注意 `challenge/` 目录（`artifact` 模式的派生物）：它住在
+    `<scan_id>/challenge/`，**跟着产物一起删是对的**（它是派生物，
+    从 `_uploads/` 的原件还能再生成）。而 `_uploads/<scan_id>/` 是
+    **另一个路径**，按 id 拼路径从构造上就碰不到它。
+
+    ## `retention_days <= 0` 表示关闭
+
+    与那套配置里 `0 = 关闭该规则` 的约定一致。返回 0、什么都不做。
+    """
+    if retention_days <= 0:
+        # 显式关闭。**不做**"0 当作立刻清理"那种解释 —— 那会让一个
+        # 想关掉清理的人反而把所有归档产物一次删光。
+        return 0
+
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.core.timeutil import now_utc
+    from app.scans.models import Scan
+
+    root = get_settings().scan_root
+    if not root.is_dir():
+        return 0
+
+    cutoff = now_utc() - timedelta(days=retention_days)
+
+    # ★ 判据全在数据库这一侧：已归档 + 未进回收站 + 归档时刻早于截止。
+    #
+    # ⚠️ 用 `archived_at`（什么时候归档的）而不是 `finished_at`（什么时候
+    #    跑完的）：保留期问的是"它被收起来多久了"。用 `finished_at` 的话，
+    #    一条跑完很久、刚被手工归档的扫描会被**立刻**删掉产物 ——
+    #    而用户刚点了"归档"，期待的是"收起来"，不是"删掉"。
+    #
+    # ⚠️ `deleted_at.is_(None)`：进了回收站的交给回收站那条路（见 docstring）。
+    candidates = list(
+        db.execute(
+            select(Scan.id)
+            .where(Scan.archived_at.is_not(None))
+            .where(Scan.archived_at < cutoff)
+            .where(Scan.deleted_at.is_(None))
+        ).scalars()
+    )
+    if not candidates:
+        return 0
+
+    removed = 0
+    for scan_id in candidates:
+        # 复用 `remove_scan_artifacts`：它自带形状校验（必须是 `scan_` +
+        # 字母数字）与"解析后仍在 scan_root 之下"的双保险。
+        # 自己再写一遍路径拼装只会多一处可能漂移的实现。
+        if remove_scan_artifacts(scan_id):
+            removed += 1
+
+    if removed:
+        logger.info(
+            "清掉了 %d 个已归档超过 %d 天的扫描产物目录", removed, retention_days
+        )
     return removed
 
 

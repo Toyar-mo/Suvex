@@ -206,6 +206,7 @@ def read_scan_retention(
     return ScanRetentionOut(
         archiveAfterDays=config.archive_after_days,
         trashRetentionDays=config.trash_retention_days,
+        artifactRetentionDays=config.artifact_retention_days,
         lastSweepAt=config.last_sweep_at,
     )
 
@@ -221,12 +222,19 @@ def update_scan_retention(
     不跑的话用户会盯着"30 天"这个数字等下一次启动，
     而"我改了规则但什么都没发生"看起来就是没生效。
     清理本身是幂等的，多跑一次没有副作用。
+
+    ⚠️ `artifactRetentionDays` 为 `None` 时**保持现值**（不是改回默认）——
+    理由见 `ScanRetentionIn` 的说明：它是为了消掉"旧前端 + 新后端"
+    那个部署窗口，而"不传 = 保持"比"不传 = 用默认值"更安全
+    （后者会把用户改过的值悄悄改回去）。
     """
     from app.scans import service as scans_service
 
     config = scans_service.get_retention_config(db)
     config.archive_after_days = payload.archiveAfterDays
     config.trash_retention_days = payload.trashRetentionDays
+    if payload.artifactRetentionDays is not None:
+        config.artifact_retention_days = payload.artifactRetentionDays
     db.commit()
 
     scans_service.sweep_retention(db)
@@ -234,6 +242,7 @@ def update_scan_retention(
     return ScanRetentionOut(
         archiveAfterDays=config.archive_after_days,
         trashRetentionDays=config.trash_retention_days,
+        artifactRetentionDays=config.artifact_retention_days,
         lastSweepAt=config.last_sweep_at,
     )
 

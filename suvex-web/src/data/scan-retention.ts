@@ -25,6 +25,18 @@ export interface ScanRetention {
   /** 失败/已终止 N 天后自动归档。**0 = 关闭该规则** */
   archiveAfterDays: number
   trashRetentionDays: number
+  /**
+   * 已归档的扫描，产物目录再留 N 天后清理。**0 = 不自动清理**。
+   *
+   * ★ 它与上面两个串成一条生命周期（README 缺口 5）：
+   *
+   *     0 天            30 天                60 天            90 天
+   *     │ 扫描结束      │ 失败/终止的自动归档 │ 回收站到期删除  │ 产物目录清理
+   *
+   * 产物清理排在最后，因为它是**唯一不可逆**的一步 —— 数据库记录删了
+   * 还能从备份恢复，磁盘上的产物删了就没了。所以默认 90 天比前两个大。
+   */
+  artifactRetentionDays: number
   /** 上次清理时刻。没有它，"我设了 30 天为什么没生效"无法回答 */
   lastSweepAt: string | null
 }
@@ -81,6 +93,7 @@ export async function loadScanRetention(): Promise<void> {
 export async function saveScanRetention(next: {
   archiveAfterDays: number
   trashRetentionDays: number
+  artifactRetentionDays: number
 }): Promise<void> {
   const saved = await api.put<ScanRetention>('/settings/scan-retention', next)
   config = saved

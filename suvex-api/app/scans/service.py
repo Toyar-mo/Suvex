@@ -1816,9 +1816,26 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
 
     orphans_removed = runner_mod.sweep_orphan_artifacts(db)
 
+    # ── 顺带清掉**已归档且过了产物保留期**的产物目录（2026-10-16 补）──
+    #
+    # ★★ 这条补的是 README 缺口清单「扫描产物目录只增不减」那一条的**后半段**。上面那个 `sweep_orphan_artifacts`
+    #   只清"数据库里已无记录"的目录，而磁盘涨起来的主因是**记录还在、
+    #   但早已归档**的那批（归档是自动的，产物却永远留着）。
+    #   完整论证见 `runner.sweep_retired_artifacts` 的 docstring。
+    #
+    # ⚠️ 顺序：放在孤儿清理**之后**。两者判据不相交（一个"记录没了"、
+    #   一个"记录还在且已归档"），所以顺序不影响结果 —— 但放在后面
+    #   可以让日志里"孤儿 N 个"这个数字不被本轮新删的目录干扰。
+    #
+    # ⚠️ 保留期从配置读，**不硬编码**：它与上面两个天数同属"扫描保留规则"
+    #   那个面板，用户能改。`0` = 关闭这一条。
+    retired_removed = runner_mod.sweep_retired_artifacts(
+        db, retention_days=config.artifact_retention_days
+    )
+
     # ── 顺带清掉"题目已不存在"的 CTF2 持久工作区（v0.29）──────
     #
-    # ★ 加了持久化就必须加清理 —— 否则等于把 README 缺口清单第 5 条
+    # ★ 加了持久化就必须加清理 —— 否则等于把 README 缺口清单「扫描产物目录只增不减」那一条
     #   （"只增不减"）从扫描产物复制到 CTF2。
     #
     # ⚠️ 判据是"题目记录还在不在"，不是时间：解出后放着不动的题，
@@ -1832,14 +1849,16 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
         "keptBecauseReferenced": kept_count,
         "stagingSwept": staging_removed,
         "orphanArtifactsSwept": orphans_removed,
+        "retiredArtifactsSwept": retired_removed,
         "ctf2WorkspacesSwept": ctf2_workspaces_removed,
     }
     if any(result.values()):
         logger.info(
             "扫描保留期清理：归档 %d 条、清除 %d 条、因被报告引用而保留 %d 条、"
-            "暂存 %d 批、孤儿产物 %d 个、CTF2 工作区 %d 个",
+            "暂存 %d 批、孤儿产物 %d 个、归档产物 %d 个、CTF2 工作区 %d 个",
             archived_count, purged_count, kept_count,
-            staging_removed, orphans_removed, ctf2_workspaces_removed,
+            staging_removed, orphans_removed, retired_removed,
+            ctf2_workspaces_removed,
         )
     return result
 

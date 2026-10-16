@@ -174,6 +174,26 @@ class NoticeRule(Base):
 DEFAULT_ARCHIVE_AFTER_DAYS = 30
 DEFAULT_TRASH_RETENTION_DAYS = 30
 
+#: 归档扫描的**产物目录**保留期（2026-10-16 补，README 缺口清单「扫描产物目录只增不减」那一条）。
+#:
+#: ## 为什么它比上面两个数字大
+#:
+#: 三个数字串成一条生命周期，各管一段：
+#:
+#:     0 天            30 天（archive）        60 天           90 天
+#:     │ 扫描结束      │ 失败/终止的自动归档    │ 回收站到期删除 │ 产物目录清理
+#:
+#: 产物清理排在**最后**，因为它是唯一不可逆的一步（数据库记录删了还能从备份
+#: 恢复，磁盘上的产物删了就没了）。给归档留出 90 天，用户仍有整整三个月
+#: 可以回看、下载、写报告 —— 而磁盘不会无限涨。
+#:
+#: ## 默认**开启**（不是 0）
+#:
+#: `0` 在这套配置里的约定是"关闭该规则"。这一条刻意**不用 0 作默认**：
+#: 它修的正是一条"默认状态下磁盘无限增长"的运维缺陷，默认关闭等于没修。
+#: 要保留全部产物的人可以显式填 0。
+DEFAULT_ARTIFACT_RETENTION_DAYS = 90
+
 # ── SLA 修复时限（任务 10 P3）──────────────────────────────
 #
 # 按**严重度**给天数。默认值取自业界常见的处置窗口（高危一周内、
@@ -215,6 +235,9 @@ class ScanRetentionConfig(Base):
     __table_args__ = (
         CheckConstraint("archive_after_days >= 0", name="archive_days_non_negative"),
         CheckConstraint("trash_retention_days >= 0", name="trash_days_non_negative"),
+        CheckConstraint(
+            "artifact_retention_days >= 0", name="artifact_days_non_negative"
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=SINGLETON_ID)
@@ -223,6 +246,10 @@ class ScanRetentionConfig(Base):
     )
     trash_retention_days: Mapped[int] = mapped_column(
         Integer, nullable=False, default=DEFAULT_TRASH_RETENTION_DAYS
+    )
+    #: 归档扫描的产物目录保留期（天）。`0` = 不自动清理（见常量说明）。
+    artifact_retention_days: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=DEFAULT_ARTIFACT_RETENTION_DAYS
     )
     # 上次清理时刻。**必须暴露给前端** —— 否则"我设了 30 天，
     # 为什么这条还没被归档"是一个无法回答的问题（规则没生效？还是没到时间？）。
