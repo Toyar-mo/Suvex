@@ -119,3 +119,157 @@ def test_read_requests_are_not_csrf_checked(ready_client: TestClient) -> None:
     response = ready_client.get("/api/v1/auth/me", headers={"Origin": FOREIGN_ORIGIN})
 
     assert response.status_code == 200
+
+
+# ══════════════════════════════════════════════════════════
+# 伪造 X-Forwarded-Host 不能把自己变成"同源"（v0.44，发现 4）
+# ══════════════════════════════════════════════════════════
+#
+# 原实现把 `X-Forwarded-Host` 的值**无条件**加进允许集合，于是任何客户端
+# 都能用它把自己的源变成"自己的源"—— 而 CSRF 这道防线的全部价值就是
+# 「攻击者的源**不在**集合里」。实战复现（2026-10-16，真实 `_allowed_origins`，
+# 不打桩）：开 `--proxy-headers --forwarded-allow-ips=127.0.0.1` 时，
+# 带 `Host: suvex.asia` + `X-Forwarded-Proto: https` + `X-Forwarded-Host:
+# evil.example`，`allowed` 集合里真的出现了 `https://evil.example`。
+#
+# 修法是**直接删掉那一段**（论证见 `_allowed_origins` 的 docstring）：
+# 两个部署里的 nginx 都刻意不发这个头，所以正常流量下它恒空、
+# **只有攻击者能让它有值**。
+
+
+def test_spoofed_forwarded_host_cannot_whitelist_the_attacker(ready_client: TestClient) -> None:
+    """★★ 伪造 `X-Forwarded-Host` 不再能把攻击者的源加进允许集合。
+
+    ## 这条是发现 4 的直接回归
+
+    攻击者要的三个头如下 —— 它们**全都是请求头**，也就是说
+    任何能发请求的东西都能带（不需要控制任何反代）：
+
+        Host: suvex.asia
+        X-Forwarded-Proto: https
+        X-Forwarded-Host: evil.example
+
+    修复前 `_allowed_origins` 会算出 `https://evil.example` 并放行后面
+    那个 `Origin: https://evil.example` 的写请求。修复后这必须仍然是 403。
+
+    ⚠️ 断言的是**403 本身**而不是"集合里没有那个值"：这条测试走的是
+    真实 HTTP 栈（`ready_client`），验的是"攻击最终不成立"，
+    而不是某个内部函数返回了什么。
+    """
+    response = ready_client.post(
+        "/api/v1/settings/password",
+        json=PASSWORD_BODY,
+        headers={
+            "Origin": FOREIGN_ORIGIN,
+            "X-Forwarded-Host": "evil.example",
+            "X-Forwarded-Proto": "https",
+        },
+    )
+
+    assert response.status_code == 403, (
+        "伪造 `X-Forwarded-Host` 把自己变成'同源'了 —— `_allowed_origins` "
+        "又去读那个可伪造的头了。任何客户端都能带这个头，"
+        "而 CSRF 的价值就是'攻击者的源不在集合里'。\n"
+        f"响应：{response.text}"
+    )
+    assert response.json()["error"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
+def test_spoofed_forwarded_host_cannot_forge_the_scheme_either(
+    ready_client: TestClient,
+) -> None:
+    """★★ 伪造的那个头**碰巧等于真实 `Host`** 时，也不许改变 scheme 判定。
+
+    ## 为什么单独钉这一条
+
+    它是"读这个头"与"不读这个头"**唯一会分出胜负**的场景，
+    而那条分界线正是修复的关键：
+
+    本轮请求真实的 own origin 是 `http://testserver`（测试用的 http）。
+    下面这个 `Origin: https://testserver` 与它**不同源**（scheme 不同），
+    所以必须 403。而原实现会把 `X-Forwarded-Host: testserver` 采信、
+    按 `X-Forwarded-Proto: https` 拼出 `https://testserver`
+    **加进允许集合**，于是这个请求被放行。
+
+    也就是说：只要这个头参与判据，攻击者就能用它**自己决定
+    允许集合里出现什么**（换成 `evil.example` 就是第一条测试那个场景，
+    换成与 `Host` 相同的值就是这一条）。两种用法都要堵。
+
+    ⚠️ 这条同时防住一种"打补丁式"的回归：把无条件读改成
+    "读，但只在与 `Host` 一致时采用"。那样看着安全，实则这第二种用法
+    仍然成立 —— 而它有实际影响（scheme 被攻击者决定）。
+    """
+    response = ready_client.post(
+        "/api/v1/settings/password",
+        json=PASSWORD_BODY,
+        headers={
+            "Origin": "https://testserver",
+            "X-Forwarded-Host": "testserver",
+            "X-Forwarded-Proto": "https",
+        },
+    )
+
+    assert response.status_code == 403, (
+        "伪造 `X-Forwarded-Host` 把 own origin 的 scheme 改成了 https —— "
+        "说明这个头仍然参与判据。它是请求头，任何客户端都能带，"
+        "所以它参与判据就等于攻击者能自己决定允许集合的内容。\n"
+        f"响应：{response.text}"
+    )
+    assert response.json()["error"]["code"] == "CROSS_ORIGIN_BLOCKED"
+
+
+def test_forwarded_proto_alone_cannot_widen_the_allowed_set(ready_client: TestClient) -> None:
+    """只带 `X-Forwarded-Proto`（不带 `X-Forwarded-Host`）同样无效。
+
+    ## 如实说明这条测试的能力边界
+
+    修复前的判据是"`X-Forwarded-Host` **有值才**采用 `X-Forwarded-Proto`"
+    （原代码里 proto 的读取在 `if forwarded:` 里面），所以**单独**一个
+    proto 在旧实现下也是无效的 —— 也就是说这条测试**不是**修复的
+    反向验证（实测：把旧实现加回去，它仍然绿）。
+
+    那它钉什么？钉**修完之后也不能有第二个头参与进来**。理由是修复后
+    最容易被想到的"改进"就是接一个 `X-Forwarded-Proto` 进来"支持 https 反代"
+    （比如用它决定 own origin 的 scheme）—— 而那是同一个错误：
+    它同样是请求头、同样可伪造。真实的 https 判定由 ASGI 层做
+    （`--proxy-headers` 按对端是否可信改写 scheme），业务代码不碰。
+
+    ⚠️ `Forwarded`（RFC 7239 那个标准头）也一起带上：它是"看起来更正规"
+    的同一个头，若将来有人换成解析它，这条会同时变红。
+    """
+    response = ready_client.post(
+        "/api/v1/settings/password",
+        json=PASSWORD_BODY,
+        headers={
+            "Origin": FOREIGN_ORIGIN,
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-Port": "443",
+            "Forwarded": "host=evil.example;proto=https",
+        },
+    )
+
+    assert response.status_code == 403, (
+        "`X-Forwarded-Proto` / `X-Forwarded-Port` / `Forwarded` 里的某一个"
+        "把攻击者的源放行了 —— 这些**全都是请求头**，全部可伪造。"
+    )
+
+
+def test_configured_origin_still_passes_after_the_removal(ready_client: TestClient) -> None:
+    """★ 反向验证：删掉那段之后，**正当**放行路径必须还在。
+
+    只断言"攻击被挡住"是不够的 —— 一个恒返回 403 的实现也能过那几条。
+    所以这里同时确认两条正当路径仍然通：
+
+      · 配置里登记的源（`SUPEX_CORS_ORIGINS`，开发态跨源）；
+      · 本请求自己的源（生产环境前后端同域时的 `Origin`）。
+
+    （同源那条另有 `test_cookie_write_from_same_origin_passes` 单独守着。）
+    """
+    configured = ready_client.post(
+        "/api/v1/settings/password",
+        json=PASSWORD_BODY,
+        headers={"Origin": ALLOWED_ORIGIN},
+    )
+    assert configured.status_code == 200, (
+        "配置里登记的源被挡住了 —— 删 `X-Forwarded-Host` 那段时误伤了正当路径"
+    )

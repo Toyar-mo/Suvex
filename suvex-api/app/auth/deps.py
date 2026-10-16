@@ -269,15 +269,46 @@ def _allowed_origins(request: Request) -> set[str]:
     加上自身的源是必需的：生产环境常把前端与 API 放在同一个域名下，
     此时 `Origin` 就等于 API 自己的地址，而它不会出现在 `SUPEX_CORS_ORIGINS`
     （那是给开发态跨源用的）。同源请求按定义不是 CSRF，必须放行。
+
+    ## ★★ v0.44：删掉了"无条件读 `X-Forwarded-Host`"那一段
+
+    原实现在这里读 `X-Forwarded-Host` 并把它**加进允许集合**：
+
+        forwarded = request.headers.get("x-forwarded-host")
+        if forwarded:
+            proto = request.headers.get("x-forwarded-proto", "https")
+            origins.add(f"{proto}://{forwarded}".rstrip("/"))
+
+    **问题不是"读了它"，而是"无条件读"**：任何客户端都能带这个头，
+    于是它等于给攻击者开了一个 API ——「把自己的源加进允许集合」，
+    而 CSRF 这道防线的全部价值就是"攻击者的源**不在**集合里"。
+
+    ### 为什么可以直接删，而不是"加个前置条件"
+
+    ① **它在两个部署里都是死代码**：`deploy/nginx.conf`（通用模板）与
+       Kali 那套 `suvex-frontend.conf` 都**不发**这个头 —— 后者甚至
+       专门写了「刻意**不**设置 `X-Forwarded-Host`」。也就是说，
+       正常流量下它永远是空，**只有攻击者能让它有值**。
+    ② **https 反代那个正当用途由 ASGI 层正确处理**：scheme 由 uvicorn 的
+       `--proxy-headers --forwarded-allow-ips=<反代地址>` 按"对端是否可信"
+       改写，而 `request.url.netloc` 来自 `Host` 头（nginx 用
+       `proxy_set_header Host` 设的那个）。两者合起来就是正确的 own origin。
+       工程模板里 `deploy/suvex-api.service` 本来就带着这两个参数。
+    ③ 这与同文件的 `client_ip()` 是**同一条纪律**（那边也刻意不读
+       `X-Forwarded-For`）：**信任边界放在 ASGI 层，业务代码不读可伪造的头**。
+
+    ### 为什么不改成"先判断对端可信，再读这个头"
+
+    因为实测下来那样**不可靠**，两条路会互相打架：一旦按 ② 打开
+    `--proxy-headers`，uvicorn 就会用 `X-Forwarded-For` 改写
+    `request.client`（实测 `request.client.host` 从 `127.0.0.1` 变成了
+    `XFF` 里那个值）—— 于是"拿 `request.client.host` 去比可信代理列表"
+    这个判据在真实反代流量下**不成立**（它看到的是终端用户 IP，
+    不是直接对端）。所以只留 ASGI 层那一条路。
     """
     origins = {o.rstrip("/") for o in get_settings().cors_origin_list}
     own = f"{request.url.scheme}://{request.url.netloc}"
     origins.add(own)
-    # 反代场景：外部看到的是 https://host，而应用看到的 scheme 可能是 http。
-    forwarded = request.headers.get("x-forwarded-host")
-    if forwarded:
-        proto = request.headers.get("x-forwarded-proto", "https")
-        origins.add(f"{proto}://{forwarded}".rstrip("/"))
     return origins
 
 
