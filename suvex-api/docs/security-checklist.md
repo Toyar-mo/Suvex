@@ -418,16 +418,40 @@ OpenTelemetry exporter）。所以这一条目前**没有可泄漏的面**。
 
 ### SSRF：挡的是"直接写内网地址"，不是完整防御
 
-**位置**：`app/providers/llm.py`（`_assert_url_allowed`）、`app/ctf2/platforms.py`
-（判据实现在 `app/ctf2/hostguard.py`）
+**位置**：`app/providers/llm.py`（`_local_address_guard`）、`app/ctf2/platforms.py`
+（`assert_safe_base_url`）
+—— **两处判据都来自同一份实现**：`app/core/hostguard.py`
 
 | 项 | 状态 |
 | --- | --- |
 | 云元数据地址（`metadata.google.internal`、`metadata.goog`） | ✅ 已挡（字符串判据） |
-| 元数据地址的**等价写法**（`2852039166` / `0xA9FEA9FE` / `0251.0376.0251.0376` / `[::ffff:169.254.169.254]`） | ✅ 已挡（归一化后判网段，见下） |
-| 直接写内网 / 回环 IP 作为 `baseUrl` | ✅ 已挡（受 `SUPEX_ALLOW_PRIVATE_PROVIDER_URL` 控制） |
-| **主机名解析后再判内网**（DNS rebinding） | ❌ **不做** |
+| 元数据地址的**等价写法**（`2852039166` / `0xA9FEA9FE` / `0251.0376.0251.0376` / `[::ffff:169.254.169.254]`） | ✅ 已挡（归一化后判网段，见下）—— **两条路径都挡**：CTF2 平台地址（`assert_safe_base_url`）与 provider 的 `baseUrl`（`_local_address_guard`） |
+| 直接写内网 / 回环 IP 作为 `baseUrl` | ✅ 已挡（受 `SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS` 控制） |
+| **主机名解析后再判内网**（DNS rebinding） | ❌ **不做** —— 见 F-06 ① |
+| **通配 DNS 服务把内网 IP 编进域名**（`nip.io` / `sslip.io` / `traefik.me`） | ❌ **不做** —— 见 F-06 ② |
 | 平台请求跟随重定向后的二次校验 | ✅ **已做**（逐跳校验 + 禁跨 host，见下） |
+
+> **2026-10-16 又修了一条（Review 对抗审查 F-1）：判据只有一份，两条路径都接上了**
+>
+> 上一轮把 CTF2 那条路径的等价写法修掉了，但 **provider 那条路径原样还在** ——
+> `app/providers/llm.py` 用的仍是 `host in BLOCKED_HOSTS` 字符串比对，实测
+> `2852039166` / `0xA9FEA9FE` / `0251.0376.0251.0376` / `[::ffff:169.254.169.254]` /
+> `169.254.169.254.` **五种写法全部放行**，另有 `100.100.100.200`（阿里云元数据）
+> 因为**清单本身就没有**而放行 —— 共 6 条。
+>
+> 根因不是"忘了改一处调用点"，而是**判据有两份**：`llm.py` 里那份比 CTF2 那份
+> 多一个 `169.254.170.2`（AWS ECS 任务元数据）、少一个 `100.100.100.200`，
+> 也就是同一类地址在一条路径上被拦、在另一条上放行。**清单一旦分叉就会继续分叉。**
+>
+> 现在判据只有一份，落在 **`app/core/hostguard.py`**（`app/core/` 是叶子层：
+> 它只 import 标准库，`app/ctf2/` 与 `app/providers/` 都能 import 它，
+> 而这两个领域**互不认识**，让其中一方去 import 另一方是错的方向）。
+> `llm.py` 自己那份清单已删除，`platforms.BLOCKED_HOSTS` 保留为别名。
+>
+> ⚠️ **`llm.py` 的第二层逻辑刻意没动**：它判的是"直接写内网 / 回环 IP"，
+> 受 `SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS` 控制（默认 `True`，因为本地 Ollama
+> 就是这个形状），与"元数据地址的等价写法"是**两件事**。合并会出事：
+> 开关默认是开的，合并等于默认配置下元数据地址就能打。
 
 > **2026-10-15 修了两条（RedTeam 发现的 1、2）**：
 >
@@ -448,12 +472,79 @@ OpenTelemetry exporter）。所以这一条目前**没有可泄漏的面**。
 > `192.168.*` / `10.*` / `172.18.0.1` / `127.0.0.1` **必须继续放行**。
 > 上面两条修的都是"元数据地址的变形"，不是把范围扩大成内网全禁。
 
+> **2026-10-16：出站客户端一律不读环境变量代理（`trust_env=False`，9 处）**
+>
+> 触发点：RedTeam 抓出原清单**漏了一处**。漏的原因值得记下来 ——
+> 原来那份清单是搜 `httpx.AsyncClient(` 得到的，而
+> **`app/scans/reachability.py:81` 是模块级 `httpx.get(...)`**，
+> 按形态搜的方法在设计上就看不见它。**而且漏的这处目标是最典型的
+> 用户可控输入**：`POST /scans` 的 `target`（`scan` scope 即可触发）。
+>
+> **问题本身**：`httpx` 的 `trust_env` **默认是 `True`** ——
+> 每个客户端都会去读环境里的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`
+> （以及 `.netrc`），并把请求交给那个代理。实测（本机起真转发代理，
+> 判据是**代理收到的请求行**）：默认配置下代理收到
+> `GET http://rt-meta.test:8099/ HTTP/1.1`（真的改道了）；
+> `trust_env=False` 则不经过代理。
+>
+> **分两档（理由不同，只按"是不是 SSRF 面"筛会漏掉 B 档）**：
+>
+> | 档 | 处 | 位置 | 为什么 |
+> | --- | --- | --- | --- |
+> | A | 1 | `ctf2/adapters/transport.py` | 管理员填的平台 `base_url` → 防 SSRF |
+> | A | 2 | `ctf2/adapters/probe.py` | 同上（探测打的端点最多） |
+> | A | 3 | `providers/llm.py` `probe()` | 管理员填的 provider `baseUrl` → 防 SSRF |
+> | A | 4 | `ctf2/runner.py` `LlmGateway.chat` | provider `baseUrl`（且带 LLM key） |
+> | A | 5 | `ctf2/runner.py` `solve()` 里的 `http` | 只喂 `_tool_http_request`，已有白名单；补它是为了"谁在实际收这个请求"也不受环境影响 |
+> | A | 6 | **`scans/reachability.py` `_probe()`** ★ 原清单漏的 | **用户填的扫描目标**，`scan` scope → 防 SSRF |
+> | B | 7 | `ctf2/client.py` | 目标固定官方域名，**但这是发 PAT 的客户端** → 防凭据经代理泄漏 |
+> | B | 8 | `ctf2/attachments.py` | 每条 URL 先过 `_is_official()`，**但带 `Authorization` token** → 同上 |
+> | B | 9 | `arena/client.py` | 发 `X-Agent-AccessKey`；⚠️ `app/arena` 生产路径**无调用者**（死代码），优先级最低 |
+>
+> ⚠️ **A 档 6 处 = RedTeam 的"8 处"**（它把我原清单的 7 处 + 漏的 1 处 = 8，
+> 再加它自己找的 `providers/llm.py` 那处 sync 的，才是这张表的 9 处；
+> 两处口径不一致是没对齐编号方式，**以本表为准**）。
+>
+> ⚠️ **一处有意保留的取舍**：`providers/llm.py` 那处（A-3）如果在**公司代理
+> 后面**跑本地 Ollama，`trust_env=False` 会让探测连不上（不再走 `HTTP_PROXY`）。
+> 这与 `ALLOW_PRIVATE_LLM_ENDPOINTS` 是同一类取舍，**已在代码注释里写明**，
+> 并指出正解是"加一个显式 proxy 配置项传给 `proxy=`"，而不是把
+> `trust_env` 打开（那等于把"谁来收这次请求"交给环境）。
+>
+> **防回归**：新增 `tests/test_outbound_trust_env.py`（11 例）——
+> 一条 **AST 扫全 `app/`**（要求每个出站客户端都显式写 `trust_env`，
+> 所以将来新增第 10 个客户端漏写会直接失败），一条**逐档逐文件**取值断言，
+> 一条**行为验证**（`trust_env=True` 会为环境代理建 transport、
+> `False` 不会），一条按调用参数钉住 `_probe()`。
+> ⚠️ 取值走 AST 而非"源码里有这几个字"：**第一版字符串断言被注释骗过了**
+> （这些客户端上方都有一段解释 `trust_env=False` 的注释，把参数删掉
+> 之后字符串断言仍然通过）—— 反向验证时实测踩到，已改成
+> `ast.literal_eval` 取真实实参值。反向验证结果：删掉 A-6 或 B-7 的
+> `trust_env=False`，对应的逐文件用例都会 FAILED。
+
+> ## ⚠️⚠️ 一条方法论硬规矩（本轮用两个教训换来的）
+>
+> **凡涉及网络栈 / 异常类型 / 平台行为的验证，一律在 Kali（生产同款环境）上做。
+> 本机 Windows 的结论不可采信。**
+>
+> 依据有两个，都是这一轮真实踩到的：
+>
+> 1. **F-08**：同一份脚本，Windows 上 `httpx.AsyncClient` 对越界端口返回
+>    **502**（连异常都不抛），Kali 上冒出 **`ExceptionGroup[OverflowError]`**。
+>    我据 Windows 的结果判"不成立"、去纠正 Review —— **是我错**。
+>    （两边 httpx 都是 0.28.1，差在平台/事件循环实现。）
+> 2. 上面 `trust_env` 那条**代理改道**也是同理：代理行为、`getaddrinfo`
+>    的收敛方式都属于平台相关，本机测出来的"不经过代理"不能代表生产。
+>
+> 所以：**这类结论的取证记录里必须写明跑在哪个环境**。本文档里凡是标注
+> "本机"的实测，只当**对照**用，不作生产结论。
+
 > **为什么不做 DNS 解析后校验**：那需要真正解析一次，而**解析本身
 > 就可能被指向内网**（TOCTOU）—— 解析出公网 IP、请求时却解析到
 > 内网，这个窗口关不掉。要真正解决得靠网络层（出口代理 / egress
 > 策略），而不是应用层。
-> ⚠️ 已知残余：`http://169.254.169.254.nip.io/` 这类**域名**写法仍可绕过
-> （校验时它只是个字符串域名）—— 见 F-06。
+> ⚠️ 已知残余有**两类**，见 F-06 ① 与 ② —— 后者（通配 DNS 服务）
+> 范围比前者大得多：不止元数据地址，**任意内网地址**都能这样藏。
 >
 > **风险为什么可接受**：能改 provider 配置的是**管理员**，而管理员
 > 本来就有权让服务器访问内网 —— 那正是这个平台的用途。所以这条
@@ -494,7 +585,78 @@ CTF2 沙箱**不放行**宿主机内网、不放行 `host.docker.internal` —�
 | F-03 | 审计日志防篡改（外部只增收集） | 单机自托管下"防管理员"不是应用层能解决的；需要外部 sink | 审计同时推到只增不改的远端，且本地被改后能对账出来 |
 | F-04 | 限流跨进程共享 | 单机单进程形态下不需要；引 Redis 会让 compose 从 2 个服务变 3 个 | 多 worker 部署前换成 Redis 或网关限流（调用点只有 `Limiter.check`） |
 | F-05 | 失败的鉴权尝试是否也进审计 | 会变成"攻击者可写满磁盘"的入口，需先加写入限流 | 加来源维度写入限流后再决定 |
-| F-06 | SSRF 的 DNS-rebinding 窗口（见 §2.5）。**含** `169.254.169.254.nip.io` 这类"域名指向元数据地址"的写法 —— 2026-10-15 修了等价 IP 写法与重定向绕过，但**域名这一条仍然放行** | 应用层关不掉这个窗口（校验时它只是个字符串域名），要靠出口代理 / egress 策略，或在**连接层**校验解析后的 IP（httpx 的 transport 钩子 / 自定义 resolver） | 部署时加出口白名单，或确认"管理员可信"这一前提成立；彻底堵住需在连接层校验解析结果 |
+| F-06 | **SSRF 残余 ①：DNS rebinding** —— 校验时只看到主机名，解析发生在校验之后，所以"解析出公网 IP、请求时解析到内网"这个窗口关不掉 | 应用层关不掉（TOCTOU）；要靠出口代理 / egress 策略，或在**连接层**校验解析后的 IP（httpx 的 transport 钩子 / 自定义 resolver） | 部署时加出口白名单，或确认"管理员可信"这一前提成立；彻底堵住需在连接层校验解析结果 |
+| F-07 | **SSRF 残余 ②：通配 DNS 服务把内网 IP 编进域名** —— `nip.io` / `sslip.io` / `traefik.me` 这类服务会把域名里的 IP 字面量解析出来，所以 `169.254.169.254.nip.io`、`a9fea9fe.nip.io`（十六进制）、`169.254.170.2.nip.io`（AWS ECS）、甚至 `<任意内网 IP>.nip.io` **都能解析到对应的内网地址**，而校验时它只是个字符串域名。⚠️ 注意范围：**任意内网地址**都能这样藏（不止元数据）；公网地址没有额外风险，因为本来就能访问。⚠️ 且 `sslip.io` / `traefik.me` 是**独立服务**，不是 `nip.io` 的变体 —— 只挡一个域名没用 | 同 F-06 ①：应用层看到的是域名，解析在连接层才发生 | 同 F-06 ①（出口白名单 / 连接层校验解析结果） |
+| F-08 | **畸形 `Location` 的异常类型边界 —— 已修（2026-10-16）**。异步 httpx 的异常可能是 **`ExceptionGroup`**（anyio task group 包住连接期的 `OverflowError`）或 **`httpx.InvalidURL`**（它直接继承 `Exception`，**不是** `HTTPError` 子类），而生产调用点（`app/ctf2/adapters/transport.py`、`probe.py`）原先只 `except httpx.HTTPError` → **接不住 → 500**。★ **这条最初被误判为"不成立"**：第一版在**本机 Windows** 测到的是"httpx 转成 502 / `OSError`、接得住"，而**那个结论是 Windows 特有的**；在 **Kali（生产同款 Linux）** 上一测就复现。修法见下方实测记录与 `redirect.py` 的 `_check_port` / `_request` 包装 | 已修：端口越界在**校验层**拦成 `Ctf2Error`；httpx 内部抛的 `InvalidURL` / `ExceptionGroup` 在 `client.request` 外统一转成 `Ctf2Error`（只转"地址/网络层面"的，编程错误照旧上抛） | ✅ 已做：`tests/ctf2/test_redirect_guard.py` 的 15 条畸形 `Location` 参数化用例 + 相对地址反向闸 + 端口越界两条 |
+
+### F-08 的实测记录（**必须在 Kali 上测**；两个环境结论不同）
+
+Review 报的是：`http://127.0.0.1:99999/x` 抛 `ExceptionGroup[OverflowError]`，
+而调用点的 `except httpx.HTTPError` 接不住 → 请求变成 500。
+
+**⚠️ 我第一次测出来的结论是错的，错因是测试环境**：同一份脚本在
+**本机 Windows** 上跑得到"接得住"，我就据此判它不成立、去纠正 Review；
+后来在 **Kali（生产同款环境）** 上一跑就复现 —— **是我错，Review 是对的**。
+两边的 httpx 都是 0.28.1，差异在平台/事件循环实现。
+
+| 层 | 输入 | 本机 Windows（**非生产**） | **Kali（生产同款 Linux）** |
+| --- | --- | --- | --- |
+| 裸 `socket.connect` | `("127.0.0.1", 99999)` | `OverflowError` | `OverflowError`（一致） |
+| `anyio.connect_tcp` | `127.0.0.1:99999` | `OSError("All connection attempts failed")` | **`ExceptionGroup[OverflowError]`** ★ |
+| **`httpx.AsyncClient`** | `http://127.0.0.1:99999/x` | **`status=502`**（连异常都不抛） | **`ExceptionGroup[OverflowError]`** ★ |
+| **生产路径 `request_same_host`** | 越界端口 `Location` | 未复现（接得住） | **★ 逃逸，两个调用点都接不住** |
+
+**Windows 的结果不删，保留在这里** —— 它本身是有价值的对照：说明
+"httpx 返回 502" 是**平台特有行为**，不能当成生产结论。
+（Windows 上 `getaddrinfo` 把 `:99999` 这类值收敛掉了，连接失败被折成
+`ConnectError`/502；Linux 上异步路径以 `ExceptionGroup` 冒出 `OverflowError`。）
+
+**在 Kali 上铺开测（28 个畸形 `Location` 变体），找出**9 条逃逸路径，
+分两个异常族**（第一版只测 10 个变体就下结论，漏了后一族）：
+
+| 族 | 触发写法 | 逃逸的异常 |
+| --- | --- | --- |
+| 端口越界 | `http://127.0.0.1:99999`、`:65536`、`:70000`、`:100000`、`:4294967296`、`https://…:99999`、`http://:99999` | `ExceptionGroup[OverflowError]` |
+| 协议异常 | `javascript:alert(1)`、`data:text/html,x` | **`httpx.InvalidURL`**（继承 `Exception`，不是 `HTTPError`） |
+
+**★ 修法（我选了"在 `request_same_host` 里拦成 `Ctf2Error`"那条路，理由见下）**：
+
+1. `_check_port()`：`Location` / 入口 URL 的端口越界时**提前**抛 `Ctf2Error`。
+   两处调用：`_next_url()` 里（Location 指过来的）与循环体里（第一跳的
+   URL 由 `base_url + path` 拼成，实测把 base_url 配成 `:99999` 同样逃逸）。
+2. `client.request` 外面的包装：httpx **自己**也会解析一次 `Location`
+   —— `_send_handling_redirects` 里 `_build_redirect_request` 排在
+   `if follow_redirects:` **之前**，所以 `javascript:` 那类在
+   `client.request()` 内部就炸，我们的 `_next_url` 根本轮不到执行。
+   包装里把 `InvalidURL` / `ExceptionGroup` 转成 `Ctf2Error`，
+   **但只转"地址/网络层面"的叶子异常**（`OSError` / `ArithmeticError` /
+   `ValueError` / httpx 的 URL 与传输异常）—— 编程错误照旧上抛，
+   否则就是用"平台的问题"盖住一个真 bug。
+3. 协议判据写成 `scheme and scheme not in (http, https)`（**相对地址的
+   `scheme` 是空串，合法**）。⚠️ 第一版漏了 `scheme and`，把相对跳转
+   全拒了 —— 实测 6 个既有用例挂掉。
+
+**为什么选"拦成 `Ctf2Error`"而不是"把 `except` 放宽到 `BaseExceptionGroup`"**：
+
+* 它更贴合本模块原有的形状 —— `request_same_host` 的设计就是
+  "逐跳校验，不合格就抛 `Ctf2Error`"，调用点已经都在处理 `Ctf2Error`
+  （`probe.py` 会优雅地换下一个候选端点）。
+* 放宽 `except` 是**在更外层**打补丁：每个调用点都要各改一次，而
+  "忘了改某一处"正是这个缺陷本身的性质（这次就漏了 `_probe()` 那处）。
+  在源头拦住，调用点不需要知道 httpx 内部会抛什么。
+* 放宽到 `BaseExceptionGroup` 会连带吞掉**编程错误**（task group 会把
+  我们自己的 bug 一起包起来），那是用"看起来更安全"换"真的更难排查"。
+
+**防回归**：`tests/ctf2/test_redirect_guard.py` 加 15 条畸形 `Location`
+参数化用例（现在全部以 `Ctf2Error` / `HTTPError` 收场），加 1 条
+**反向闸**（相对地址必须仍被跟随 —— 防"把什么都拒掉"的实现），
+加 2 条端口越界断言（`Location` 与 `base_url` 各一）。
+
+**逐层反向验证**：把上面两层护栏**都**去掉 → 9 条逃逸路径全部重现
+（`ExceptionGroup` ×7 + `InvalidURL` ×2）；装回去 → **0 逃逸**，
+30 条 redirect 用例全绿。
+⚠️ 只去掉 `_check_port` 一层时仍是 0 逃逸 —— 两层互为备份，
+所以反向验证必须**同时**去掉两层才是有意义的对照。
 
 ---
 
