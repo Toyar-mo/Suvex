@@ -279,3 +279,102 @@ def test_a_307_keeps_the_method_and_body() -> None:
     # ⚠️ httpx 序列化 JSON 时**不带空格**（`separators=(",", ":")`），
     #    所以这里比对的是紧凑形式 —— 不是 `{"flag": "flag{x}"}`。
     assert seen[1][1] == b'{"flag":"flag{x}"}', "307 应当保留请求体"
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ 跳转后的 query 必须来自 Location，而不是重放第一跳的 params
+# ══════════════════════════════════════════════════════════
+
+
+def test_a_redirect_query_comes_from_the_location_not_from_params() -> None:
+    """★★ 回归：跳转之后 `Location` 自带的 query **不能被 `params` 顶掉**。
+
+    这是 Review 对抗审查找到的一处真回归（F-3）。原来的实现把
+    `send_kwargs`（含 `params`）原样透传到每一跳，于是每跳都重新套一遍
+    第一跳的 query —— 实测把 `Location` 的 query 整个顶掉了：
+
+        原始请求 params={page:1}，Location=/after?cursor=FROM_LOCATION&sig=abc
+        修复前  第 2 跳 http://example.com/after?page=1                      ← 丢了
+        httpx   第 2 跳 http://example.com/after?cursor=FROM_LOCATION&sig=abc
+
+    ⚠️ **触发面比看上去大**：`transport.request` 每次都传
+       `query = params + auth.query(key)`，而 query-style 认证的
+       `auth.query()` **恒非空**（`spec.py`：`{name: prefix+key}`）——
+       所以对 query-style 平台，**每一次跳转都会丢 query**。症状是
+       "某个平台跳转之后同步不了"，看起来像平台的问题。
+    """
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path == "/start":
+            return httpx.Response(
+                302,
+                headers={"location": "/after?cursor=FROM_LOCATION&sig=abc"},
+                request=request,
+            )
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    async def go() -> httpx.Response:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=False
+        )
+        try:
+            return await request_same_host(
+                client,
+                "GET",
+                "http://example.com/start",
+                base_host="example.com",
+                params={"page": "1", "key": "SECRET"},
+            )
+        finally:
+            await client.aclose()
+
+    response = _run(go())
+
+    assert response.status_code == 200
+    # 第一跳：params 照旧生效（修法不能把第一跳也改坏）
+    assert seen[0] == "http://example.com/start?page=1&key=SECRET"
+    # ★ 第二跳：query 完全来自 Location，第一跳的 params 不再参与
+    assert seen[1] == "http://example.com/after?cursor=FROM_LOCATION&sig=abc"
+
+
+def test_a_redirect_without_query_does_not_get_params_replayed() -> None:
+    """★ 边界：`Location` **不带** query 时，也不能把第一跳的 params 补回去。
+
+    这一条是与 httpx 对齐的关键：httpx 的 `_build_redirect_request`
+    构造下一跳时**根本没有 `params` 这个参数** —— 所以 Location 没有
+    query 就是没有，不会"继承"第一跳的。
+
+    ⚠️ 与上一条是一对：只测"Location 有 query"的话，一个
+       "把 Location 的 query 和 params 合并"的实现也能通过 ——
+       而那个实现同样是错的（httpx 不合并）。
+    """
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.path == "/start":
+            return httpx.Response(302, headers={"location": "/after"}, request=request)
+        return httpx.Response(200, json={"ok": True}, request=request)
+
+    async def go() -> httpx.Response:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=False
+        )
+        try:
+            return await request_same_host(
+                client,
+                "GET",
+                "http://example.com/start",
+                base_host="example.com",
+                params={"page": "1", "key": "SECRET"},
+            )
+        finally:
+            await client.aclose()
+
+    response = _run(go())
+
+    assert response.status_code == 200
+    assert seen[0] == "http://example.com/start?page=1&key=SECRET"
+    assert seen[1] == "http://example.com/after", "Location 没有 query 就不该有 query"

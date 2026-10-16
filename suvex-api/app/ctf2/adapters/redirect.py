@@ -23,7 +23,7 @@ URL** —— 后续每一跳都不过校验。实测过的后果：用户填的�
 ## 与 httpx 自身语义保持一致
 
 自己实现循环就必须复刻 httpx 的规则，否则会**悄悄改变行为**（表现为
-"某个平台忽然提交失败"）。这里照抄的是 httpx `_client.py` 的三条：
+"某个平台忽然提交失败"）。这里照抄的是 httpx `_client.py` 的四条：
 
 * `303` → 改用 `GET`（`HEAD` 除外）；
 * `302` → 改用 `GET`（`HEAD` 除外）—— 浏览器行为，标准之外；
@@ -32,6 +32,28 @@ URL** —— 后续每一跳都不过校验。实测过的后果：用户填的�
 
 `Location` 可以是相对地址（RFC 7231 允许），用 `URL.join` 解析 ——
 httpx 的 `_redirect_url` 也是这么做的。
+
+## ★★ 为什么 `params` 只在第一跳生效（这一条曾经写错）
+
+httpx 的 `_build_redirect_request` 构造下一跳时**只带 method / url /
+headers / stream**，**没有 `params`** —— 也就是说：**下一跳的 query 完全
+来自 `Location` 自己带的那些**，第一跳的 `params` 不参与。
+
+我们原来把 `send_kwargs`（含 `params`）原样透传到每一跳，于是每跳都
+重新套一遍第一跳的 query，把 `Location` 自带的 query **顶掉**。实测：
+
+    原始请求 params={page:1}，Location=/after?cursor=FROM_LOCATION&sig=abc
+    我们（错）  第 2 跳 http://example.com/after?page=1
+    httpx 原生  第 2 跳 http://example.com/after?cursor=FROM_LOCATION&sig=abc
+
+**触发面比看上去大**：`transport._request` 每次都传
+`query = params + auth.query(key)`，而 **query-style 认证的
+`auth.query()` 恒非空**（`spec.py` 里是 `{name: prefix+key}`）——
+所以对 query-style 平台，**每一次跳转都会丢 query**。症状是"某个平台
+跳转之后同步不了"，看起来像平台的问题，实际是我们自己改的。
+
+修法就是与 httpx 对齐：第一跳用调用方的 `params`，**之后每跳不再带
+`params`**，query 由 `Location` 决定。
 """
 
 from __future__ import annotations
@@ -96,7 +118,9 @@ async def request_same_host(
     """发一次请求，**只在 `base_host` 范围内**跟随跳转。
 
     `base_host` 是用户填的那个地址的主机（小写、已剥端口）。
-    `kwargs` 原样透传给 `client.request`（headers / params / json 等）。
+    `kwargs` 原样透传给 `client.request`（headers / params / json 等），
+    ⚠️ 但 `params` **只在第一跳**生效 —— 后续每跳的 query 来自 `Location`
+    自己带的（与 httpx 的 `_build_redirect_request` 一致，见模块 docstring）。
 
     抛 `Ctf2Error` 的两种情况：
     1. 跳转目标换了主机 —— 那是在打一个用户没填过的地址；
@@ -111,13 +135,19 @@ async def request_same_host(
     current_method = method.upper()
     send_kwargs = dict(kwargs)
 
-    for _ in range(max_hops + 1):
+    for hop in range(max_hops + 1):
         # ① 每一跳都过一遍"明确拒绝的地址"判据（与入口同一份实现）。
         if hostguard.is_blocked_host(current.host):
             raise Ctf2Error(f"平台把请求指向了被拒绝的地址（{current.host}）。")
 
+        # ★★ 只有第一跳用调用方的 `params`；之后 query 由 `Location` 决定。
+        #    （httpx 的 `_build_redirect_request` 不带 params 到下一跳。）
+        hop_kwargs = dict(send_kwargs)
+        if hop > 0:
+            hop_kwargs.pop("params", None)
+
         response = await client.request(
-            current_method, current, follow_redirects=False, **send_kwargs
+            current_method, current, follow_redirects=False, **hop_kwargs
         )
         if response.status_code not in REDIRECT_CODES:
             return response
