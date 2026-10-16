@@ -14,7 +14,7 @@ URL** —— 后续每一跳都不过校验。实测过的后果：用户填的�
 > **禁止跳转到用户没填过的主机。**
 
 用户填的 host 就是唯一合法的目标。再查一次黑名单仍然是黑名单思路 ——
-而黑名单正是"等价 IP 写法"那个漏洞栽的地方（见 `app/ctf2/hostguard.py`）。
+而黑名单正是"等价 IP 写法"那个漏洞栽的地方（见 `app/core/hostguard.py`）。
 
 同 host 的**协议升级**（`http→https`）刻意放行：它不扩大攻击面
 （还是同一个主机、同一个端口策略由目标决定），而真实平台常用 302 做
@@ -40,7 +40,7 @@ from typing import Any
 
 import httpx
 
-from app.ctf2 import hostguard
+from app.core import hostguard
 from app.ctf2.client import Ctf2Error
 
 #: 跳转状态码。

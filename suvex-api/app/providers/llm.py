@@ -41,6 +41,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from app.core import hostguard
 from app.core.config import get_settings
 
 # ── 官方默认接入点 ────────────────────────────────────────
@@ -61,14 +62,17 @@ DEFAULT_BASE_URLS: dict[str, str] = {
 # 打这些地址的唯一用途就是取实例凭据，而本平台没有任何理由去取。
 # 这是一道便宜的护栏，不是完整的 SSRF 防御：本平台的管理员本来就
 # 有权让服务器去访问内网（那正是它的用途），所以这里只挡"明显不该碰的"。
-BLOCKED_HOSTS = frozenset(
-    {
-        "169.254.169.254",  # AWS / Azure / GCP / 阿里云 元数据
-        "169.254.170.2",  # AWS ECS 任务元数据
-        "metadata.google.internal",
-        "metadata.goog",
-    }
-)
+#
+# ★ 判据本身在 `app/core/hostguard.py`，**不再在这里维护一份清单**。
+#   原先这里有一份自己的 `BLOCKED_HOSTS`（比 CTF2 那份多一个
+#   `169.254.170.2`），两份清单已经开始漂移 —— 同一类地址在一条路径上
+#   被拦、在另一条上放行。现在只有一份，两边都从那里取。
+#
+# ⚠️ 关键是它**不是字符串比对**：`169.254.169.254` 有 `2852039166`、
+#   `0xA9FEA9FE`、`0251.0376.0251.0376`、`[::ffff:169.254.169.254]`
+#   这些 `getaddrinfo` 全认、字符串一个都不等的写法。原判据是
+#   `host in BLOCKED_HOSTS`，实测这五种写法**全部放行**（见
+#   `hostguard` 的模块说明与 `tests/ctf2/test_hostguard.py`）。
 
 # provider 品牌 → LiteLLM 的模型前缀（任务 3：要把模型名交给 strix）。
 #
@@ -158,9 +162,24 @@ def build_endpoint(base_url: str, *, anthropic: bool, local: bool) -> str:
 
 
 def _local_address_guard(base_url: str) -> str | None:
-    """返回拒绝原因，或 None 表示放行。"""
+    """返回拒绝原因，或 None 表示放行。
+
+    两层，**互相独立、都要在**：
+
+    1. **云元数据地址一律拦**（与 `allow_private_llm_endpoints` 无关）——
+       判据是 `app/core/hostguard.is_blocked_host`，与 CTF2 那条路径
+       **同一份实现**。它不是字符串比对：等价写法（十进制 / 十六进制 /
+       八进制点分 / IPv4-mapped / 尾点）会先归一化成 IP 再判网段。
+    2. `allow_private_llm_endpoints` 关时，拦**字面量**内网 / 回环 / link-local。
+
+    ⚠️ 第 2 层与第 1 层是**两件事**，别合并：第 1 层挡的是"地址的等价
+       写法绕过"（任何开关下都拦），第 2 层挡的是"直接写内网 IP"
+       （受开关控制，因为本地 Ollama 就是这个形状）。把等价写法
+       归一化之后**不要**顺手把它接到第 2 层 —— 那会变成"关闭开关就
+       连元数据地址也能打"，把第 1 层整个废掉。
+    """
     host = (urlsplit(base_url).hostname or "").lower()
-    if host in BLOCKED_HOSTS:
+    if hostguard.is_blocked_host(host):
         return (
             "该地址是云厂商的实例元数据服务，本平台不会向它发起请求。"
             "请填写真正的模型接入点。"
@@ -170,14 +189,21 @@ def _local_address_guard(base_url: str) -> str | None:
     if settings.allow_private_llm_endpoints:
         return None
 
-    try:
-        address = ipaddress.ip_address(host)
-    except ValueError:
+    # 第 2 层判"是不是内网"，也要用归一化后的地址 —— 否则
+    # `http://2130706433/`（= 127.0.0.1）这种写法会绕过这一层。
+    # `hostguard.normalize_host` 对域名返回 None，此时按原语义放行
+    # （主机名是否解析到内网要靠 DNS 才知道，见下面的说明）。
+    address = hostguard.normalize_host(host)
+    if address is None:
         # 不是字面 IP（可能是主机名）。allow_private 关闭时只放行公网主机名，
         # 而主机名是否解析到内网要靠 DNS 才能知道 —— 那一步这里不做，
         # 因为它需要真正的解析，而解析本身就可能被指向内网。
         # 记下这个边界：这个开关挡的是"直接写内网 IP"，不是完整的 SSRF 防御。
         return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        # IPv4-mapped（`::ffff:127.0.0.1`）先映射回 IPv4，否则
+        # `is_private` / `is_loopback` 判的是 IPv6 那一侧，结论会不对。
+        address = address.ipv4_mapped
     if address.is_private or address.is_loopback or address.is_link_local:
         return (
             "当前配置不允许把 baseUrl 指向内网或回环地址"

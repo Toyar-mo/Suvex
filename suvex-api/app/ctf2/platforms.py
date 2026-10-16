@@ -39,10 +39,10 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import hostguard
 from app.core.db import session_scope
 from app.core.errors import ApiError
 from app.core.ids import new_id
-from app.ctf2 import hostguard
 from app.ctf2.adapters.builder import ChatFn, build_spec, verify_spec
 from app.ctf2.adapters.generic import GenericDriver
 from app.ctf2.adapters.spec import PlatformSpec, SpecError
@@ -132,10 +132,11 @@ def spec_of(platform: Ctf2Platform | None) -> PlatformSpec | None:
 #: 元数据服务不一样：一次 GET 就能换到云主机的临时凭据，而"让服务端
 #: 替你打一个 URL"正是这个功能的形状。所以那一个必须堵死。
 #:
-#: ⚠️ 判据**已经搬到 `app/ctf2/hostguard.py`** —— 因为 `transport.py` /
+#: ⚠️ 判据**在 `app/core/hostguard.py`** —— 因为 `transport.py` /
 #: `probe.py` 也要用它（跟随跳转时逐跳校验），而它们不能反向 import
 #: 这个模块（`platforms → builder → generic → transport` 已经成链，
-#: 反过来就成环）。这里保留别名是为了不破坏既有 import 点。
+#: 反过来就成环）；`app/providers/llm.py` 与 CTF2 互不认识，也不该
+#: 互相 import。这里保留别名是为了不破坏既有 import 点。
 BLOCKED_HOSTS = hostguard.BLOCKED_HOSTS
 
 

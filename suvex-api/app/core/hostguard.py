@@ -1,13 +1,32 @@
 """主机判据：**一处定义"哪些地址不能打"，所有出站校验都从这里取**。
 
-## 为什么单独一个模块，而不是塞进 `platforms.py`
+## 为什么单独一个模块
 
-因为**依赖方向**。`platforms.py` 在最上游（它 import `adapters.builder`，
-后者 import `adapters.generic`，再 import `adapters.transport`）。
-如果 `transport.py` / `probe.py` 反过来 import `platforms`，就成环了 ——
-而环在 import 期炸，症状是"某个不相关的模块 import 失败"。
+因为**依赖方向**。两个调用方在依赖链的两头：
 
-这个模块只依赖标准库（`httpx` 之外无项目内部依赖），所以谁都能 import 它。
+* `app/ctf2/platforms.py` 在最上游（它 import `adapters.builder`，
+  后者 import `adapters.generic`，再 import `adapters.transport`）——
+  如果 `transport.py` / `probe.py` 反过来 import `platforms`，就成环了，
+  而环在 import 期炸，症状是"某个不相关的模块 import 失败"。
+* `app/providers/llm.py` 与 `app/ctf2/` **互相不认识**，让 provider 那条
+  去 import `app.ctf2` 会把两个领域绑在一起。
+
+所以判据落在 `app/core/`（**叶子层**：它只 import 标准库，谁都能 import 它）。
+
+## ★ 为什么是"一份清单"而不是各写各的
+
+这个模块的前身是 `app/ctf2/hostguard.py`，而 `app/providers/llm.py` 里有
+**自己一份** `BLOCKED_HOSTS`。两份清单已经漂移了：provider 那份有
+`169.254.170.2`（AWS ECS 任务元数据），ctf2 那份没有 —— 也就是**同一类
+地址，在一条路径上被拦、在另一条上放行**。清单一旦分叉就一定会继续分叉，
+所以现在只有这一份，两边都从这里取。
+
+## ★ 为什么"等价写法"必须归一化（这是本模块存在的主要原因）
+
+判据如果写成 `host in {"169.254.169.254"}` 这样的**字符串比对**，
+那么 `2852039166`、`0xA9FEA9FE`、`[::ffff:169.254.169.254]` 这些
+**`getaddrinfo` 全都认**的等价写法会一个都不命中 —— 全部放行。
+所以先把主机名归一化成一个 `ipaddress` 对象，再判**网段**。
 
 ## 判据的形状：**白名单式**，不是往黑名单里加条目
 
@@ -48,6 +67,7 @@ import socket
 BLOCKED_HOSTS: frozenset[str] = frozenset(
     {
         "169.254.169.254",  # AWS / GCP / Azure / 阿里云共用的元数据地址
+        "169.254.170.2",  # AWS ECS 任务元数据（原先只在 provider 那份清单里）
         "metadata.google.internal",
         "metadata.goog",
         "100.100.100.200",  # 阿里云元数据

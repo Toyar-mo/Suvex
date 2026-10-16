@@ -672,6 +672,133 @@ def test_verify_rejects_metadata_endpoints(ready_client: TestClient, monkeypatch
     assert called is False, "请求不该真的发出去"
 
 
+# ══════════════════════════════════════════════════════════
+# ★★ 元数据地址的**等价写法**（Review 对抗审查 F-1）
+# ══════════════════════════════════════════════════════════
+
+#: 每一条都是 `getaddrinfo` 认、而**字符串比对认不出**的写法。
+#: 修复前它们**全部放行**（判据是 `host in BLOCKED_HOSTS`）。
+METADATA_EQUIVALENTS = [
+    "http://2852039166",  # 十进制整数
+    "http://0xA9FEA9FE",  # 十六进制
+    "http://0251.0376.0251.0376",  # 八进制点分
+    "http://[::ffff:169.254.169.254]",  # IPv4-mapped IPv6
+    "http://169.254.169.254.",  # 尾点
+    "http://169.254.170.2",  # AWS ECS 任务元数据
+    "http://100.100.100.200",  # 阿里云元数据
+]
+
+
+@pytest.mark.parametrize("base_url", METADATA_EQUIVALENTS)
+def test_verify_rejects_metadata_equivalents(
+    ready_client: TestClient, monkeypatch, base_url: str
+) -> None:
+    """★★ 回归：provider 这条路径也必须走**同一份** hostguard 判据。
+
+    原来 `app/providers/llm.py` 用的是 `host in BLOCKED_HOSTS` 字符串比对 ——
+    正是 CTF2 那边修掉的形状，而 `hostguard` 就在同一个仓库里却没被复用。
+    实测这几种写法**全部放行**（见 `tests/ctf2/test_hostguard.py` 的对照）。
+
+    ⚠️ 这条与 CTF2 那组是**两条不同的路径**：修了 CTF2 不等于修了 provider。
+       只测 CTF2 的话，"provider 那条没接上"这个错误完全测不出来。
+    """
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:  # pragma: no cover - 不该被执行
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={}, request=request)
+
+    patch_llm_transport(monkeypatch, handler)
+    provider = _create(ready_client, baseUrl=base_url)
+
+    body = ready_client.post(f"/api/v1/providers/{provider['id']}/verify").json()
+
+    assert body["status"] == "failed", f"{base_url} 是元数据地址的等价写法，必须被拦下"
+    assert "元数据" in body["error"]
+    assert called is False, "请求不该真的发出去"
+
+
+def test_provider_and_ctf2_share_one_blocklist() -> None:
+    """★ 两份清单必须**是同一份** —— 分叉本身就是缺陷。
+
+    provider 原先那份有自己的 `BLOCKED_HOSTS`（多一个 `169.254.170.2`），
+    CTF2 那份没有 —— 同一类地址在一条路径上被拦、在另一条上放行。
+    现在两边都从 `app.core.hostguard` 取，这条钉住"不许再各写一份"。
+    """
+    from app.core import hostguard
+    from app.ctf2 import platforms
+
+    assert platforms.BLOCKED_HOSTS is hostguard.BLOCKED_HOSTS
+    # 原先只在 provider 那份里的条目，现在两边都拦得住
+    assert hostguard.is_blocked_host("169.254.170.2")
+    assert hostguard.is_blocked_host("100.100.100.200")
+
+
+def test_verify_still_allows_internal_endpoints(ready_client: TestClient, monkeypatch) -> None:
+    """★ 对照：内网 / 回环的**字面量**地址仍按原语义放行。
+
+    本地 Ollama（`http://127.0.0.1:11434`）就是这个形状，而它是预设之一。
+    只测"这些都拦住了"的话，一个"把什么都拒掉"的实现也能通过。
+    """
+    called = False
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal called
+        called = True
+        return httpx.Response(200, json={"choices": [{"message": {"content": "pong"}}]})
+
+    patch_llm_transport(monkeypatch, handler)
+    provider = _create(
+        ready_client, label="本地模型（Ollama）", kind="local", baseUrl="http://127.0.0.1:11434"
+    )
+
+    body = ready_client.post(f"/api/v1/providers/{provider['id']}/verify").json()
+
+    assert body["status"] == "ok", body["error"]
+    assert called is True
+
+
+def test_the_two_guard_layers_stay_independent(monkeypatch) -> None:
+    """★★ 第 1 层（元数据，任何开关下都拦）与第 2 层（内网，受开关控制）**不许合并**。
+
+    这是修 F-1 时最容易做错的一步：把等价写法归一化之后顺手接到
+    "内网判断"那一层，看起来更"统一"，实际会把第 1 层整个废掉 ——
+    因为第 2 层受 `SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS` 控制，而它默认是
+    **True**（本地 Ollama 要用）。合并之后，默认配置下元数据地址就能打了。
+
+    所以这条钉住：**开关打开时，元数据地址仍然拦**。
+    """
+    from app.core.config import get_settings
+    from app.providers.llm import _local_address_guard
+
+    monkeypatch.setenv("SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS", "true")
+    get_settings.cache_clear()
+    try:
+        # 第 1 层：开关打开也拦（等价写法一并拦）
+        for base_url in ("http://169.254.169.254", "http://2852039166", "http://[::ffff:169.254.169.254]"):
+            assert _local_address_guard(base_url) is not None, (
+                f"{base_url} 是元数据地址，开关打开时也必须拦 —— 第 1 层不受开关控制"
+            )
+        # 第 2 层：开关打开时不拦内网/回环
+        assert _local_address_guard("http://127.0.0.1:11434") is None
+        assert _local_address_guard("http://192.168.44.128:11434") is None
+    finally:
+        get_settings.cache_clear()
+
+    monkeypatch.setenv("SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS", "false")
+    get_settings.cache_clear()
+    try:
+        # 开关关闭：第 2 层开始拦，且等价写法（十进制回环）也拦得住
+        assert _local_address_guard("http://127.0.0.1:11434") is not None
+        assert _local_address_guard("http://2130706433") is not None, "十进制回环不该绕过第 2 层"
+        assert _local_address_guard("http://[::ffff:127.0.0.1]") is not None
+        # 第 1 层照旧
+        assert _local_address_guard("http://169.254.169.254") is not None
+    finally:
+        get_settings.cache_clear()
+
+
 def test_verify_treats_200_with_unparsable_body_as_failure(
     ready_client: TestClient, monkeypatch
 ) -> None:

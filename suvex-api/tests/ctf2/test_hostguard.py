@@ -1,4 +1,4 @@
-"""`ctf2.hostguard`：**平台地址的等价写法**都要被拦下。
+"""`core.hostguard`：**平台地址的等价写法**都要被拦下。
 
 ## 这组用例守的是什么（RedTeam 发现 1）
 
@@ -34,7 +34,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.ctf2 import hostguard
+from app.core import hostguard
 
 # ══════════════════════════════════════════════════════════
 # 拒绝：等价写法（这是发现 1 的正面）
