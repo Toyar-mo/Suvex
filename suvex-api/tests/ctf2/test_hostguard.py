@@ -325,6 +325,39 @@ def test_assert_safe_base_url_rejects_the_bypasses(url: str) -> None:
     assert "元数据" in excinfo.value.message
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://xn--.invalid/x",
+        "http://xn--0.invalid/x",
+        "http://xn--a.invalid/x",
+    ],
+)
+def test_assert_safe_base_url_rejects_malformed_idna_labels(url: str) -> None:
+    """★★ R-4 回归：畸形 A-label 必须以 400 拒绝，不能逃逸成 500。
+
+    这一条守的是 `.host` 的**访问位置**：`httpx.URL(...)` 的构造是惰性的、
+    不抛，畸形 A-label 要到第一次访问 `.host` 时才抛 `idna.IDNAError`。
+    本函数里 `parsed.host` 出现多次，**只要有一处落在 `try` 之外**，
+    异常就会穿过本函数 → `create_building` → `POST /ctf2/platforms/draft`
+    → 全局 `@app.exception_handler(Exception)` → 500。
+
+    反向验证（把 `host = parsed.host` 从 try 里挪出去）必须让这一条变红。
+
+    ⚠️ 为什么不用 `hostguard` 那批绕过写法代替：那批是**字符串比对**漏的
+    （`2852039166` 这类等价写法），与本条是**完全不同的机制**，
+    两边互不覆盖 —— 那批全绿时本条照样能红。
+    """
+    from app.core.errors import ApiError
+    from app.ctf2.platforms import assert_safe_base_url
+
+    with pytest.raises(ApiError) as excinfo:
+        assert_safe_base_url(url)
+
+    assert excinfo.value.status_code == 400
+    assert "不是一个合法的 URL" in excinfo.value.message
+
+
 def test_assert_safe_base_url_keeps_allowing_internal_platforms() -> None:
     """★ 端到端：内网平台地址照旧通过（不误伤最可能的用法）。"""
     from app.ctf2.platforms import assert_safe_base_url

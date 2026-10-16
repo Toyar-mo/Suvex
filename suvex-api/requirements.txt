@@ -75,3 +75,17 @@ cryptography>=43.0,<51.0
 # providers/llm.py 的 import 行，看起来像"某个 provider 出了问题"，
 # 而不是"少装了一个包"。
 httpx>=0.27,<1.0
+
+# IDNA 校验（app/ctf2/adapters/redirect.py 的 `import idna`）。
+#
+# ★ 它本来就是 httpx 的**必需**依赖，所以声明它不增加任何安装负担；
+#   但既然代码里出现了 `import idna` 与 `except idna.IDNAError`，
+#   就必须显式声明 —— 否则哪天 httpx 换了 URL 解析实现（不再依赖 idna），
+#   我们会得到一个 ImportError，而报错位置在 redirect.py 的 import 行，
+#   看起来像"跳转判据坏了"，而不是"少装了一个包"。
+#
+# 为什么判据层要认得它：`httpx.URL(...)` 的构造是**惰性**的，畸形
+# A-label（`http://xn--.invalid/x`）要到第一次访问 `.host` 时才抛
+# `idna.IDNAError`；它不是 `httpx.InvalidURL` 的子类，也不是
+# `httpx.HTTPError` 的子类，所以传输层的判据必须自己收它。
+idna>=3.6,<4.0

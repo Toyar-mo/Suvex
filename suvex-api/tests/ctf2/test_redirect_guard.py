@@ -426,6 +426,29 @@ MALFORMED_LOCATIONS = [
     "ftp://127.0.0.1/x",
     "file:///etc/passwd",
     "   ",
+    # ★★ R-4：IDNA 惰性解析这一族（`idna.IDNAError` / `InvalidCodepoint`）。
+    #
+    # 它们与上面那些**机制完全不同**：`httpx.URL(loc)` 的构造**不抛**
+    # （惰性），要到第一次访问 `.host` 时才抛（`httpx/_urls.py:191`
+    # `host = idna.decode(host)`）。而 `idna.IDNAError` 既不是
+    # `httpx.InvalidURL` 也不是 `httpx.HTTPError` 的子类 —— 它只是
+    # `ValueError` 的子类，所以 R-1 删掉裸 `ValueError` 之后没人接它。
+    #
+    # ⚠️ 这一族是**唯一**能证明 `_LIBRARY_URL_ERRORS` 必须含
+    # `idna.IDNAError` 的输入；上面那些由 `InvalidURL` / `OverflowError`
+    # 覆盖，删掉 `idna.IDNAError` 它们照样绿。
+    #
+    # 两条不同的可达路径都放进来（Kali 实测各自都真的抛）：
+    # * 绝对地址 —— httpx 的 `_redirect_url` 走到
+    #   `if url.scheme and not url.host` 时碰 `.host`；
+    # * 协议相对地址（`//host/x`）—— `scheme` 是空串，上面那句短路掉，
+    #   但紧接着的 `request.url.join(url)` 仍会碰 `.host`。
+    "http://xn--.invalid/x",
+    "http://xn--0.invalid/x",
+    "http://xn--a.invalid/x",
+    "//xn--.invalid/x",
+    "//xn--a.invalid/x",
+    "ftp://xn--.invalid/x",
 ]
 
 
@@ -548,8 +571,16 @@ def test_a_plain_value_error_is_not_swallowed() -> None:
     会被报成「平台给的跳转地址无法使用」。那正是该函数 docstring 里
     "别用平台的问题盖住真 bug"要防的事。
 
-    实测依据：21 种畸形 `Location` 里裸 `ValueError` 出现 **0** 次，
-    所以这一档没有任何正当用途。
+    实测依据：当初那 21 种畸形 `Location` 里裸 `ValueError` 出现 **0** 次，
+    所以这一档看起来没有任何正当用途。
+
+    ⚠️ **R-4 更正**：那句"0 次"是**错的** —— 它漏了 **IDNA 惰性解析**
+    那一族（`idna.IDNAError` / `InvalidCodepoint` 都是 `ValueError` 的子类，
+    只是既不是 `InvalidURL` 也不是 `HTTPError`）。所以裸 `ValueError`
+    **不能加回来**（`UnicodeDecodeError` 那一类解码 bug 会被一起吞掉），
+    正确做法是精确收 `idna.IDNAError` —— 见 `redirect.py` 的
+    `_LIBRARY_URL_ERRORS`。本条用例守的判据本身没变：**我们自己抛的
+    `ValueError` 仍必须原样上抛**。
 
     ## 怎么构造出"我们自己的 `ValueError`"
 
@@ -686,7 +717,7 @@ def test_the_overflow_fallback_is_the_second_line() -> None:
 
     ## ★ 一个必须说清的事实：既有用例证明不了这一层
 
-    `test_redirect_guard.py` 的 15 条畸形 `Location` 用例走的是
+    `test_redirect_guard.py` 的畸形 `Location` 用例（R-4 后 21 条）走的是
     `httpx.MockTransport`，而 mock **永远不会真的连接** ——
     所以 `OverflowError` 兜底在那些用例里**根本不可测**。
     实测：在 MockTransport 下把 `_check_port` 去掉，越界端口

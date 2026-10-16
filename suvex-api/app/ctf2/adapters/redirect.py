@@ -62,6 +62,7 @@ import socket
 from typing import Any
 
 import httpx
+import idna
 
 from app.core import hostguard
 from app.ctf2.client import Ctf2Error
@@ -145,7 +146,13 @@ def _check_port(target: httpx.URL, *, what: str) -> None:
 #:
 #: 这两类在调用点（`transport.py` / `probe.py` 的 `except httpx.HTTPError`）
 #: 都接不住 → 请求变成 500。所以在这里统一转成 `Ctf2Error`。
-_LIBRARY_URL_ERRORS: tuple[type[BaseException], ...] = (httpx.InvalidURL,)
+#:
+#: ★ R-4 补上 `idna.IDNAError`：畸形 A-label（`http://xn--.invalid/x`）
+#:   在 `httpx.URL` 构造时**不抛**，要到第一次访问 `.host` 时才抛
+#:   （`httpx/_urls.py:191` `idna.decode`）。它既不是 `InvalidURL`
+#:   也不是 `HTTPError` 的子类 —— 只是 `ValueError` 的子类，所以 R-1
+#:   删掉裸 `ValueError` 之后它就没人接了。详见 `_is_transport_level`。
+_LIBRARY_URL_ERRORS: tuple[type[BaseException], ...] = (httpx.InvalidURL, idna.IDNAError)
 
 
 def _leaf_exceptions(exc: BaseException) -> list[BaseException]:
@@ -223,14 +230,80 @@ def _is_transport_level(exc: BaseException) -> bool:
     任何异常）。这也是 `_check_port` 必须在连接之前跑的理由：
     它管的是"语义上不合法"，而 `OverflowError` 管不了这一类。
 
-    ⚠️ **既有测试证明不了兜底那一层**：`test_redirect_guard.py` 的 15 条
-    畸形 `Location` 用例走的是 `httpx.MockTransport`，而 mock
+    ⚠️ **既有测试证明不了兜底那一层**：`test_redirect_guard.py` 的畸形
+    `Location` 用例（R-4 后 21 条）走的是 `httpx.MockTransport`，而 mock
     **永远不会真的连接**，所以 `OverflowError` 兜底在那些用例里
     **根本不可测**（实测：在 MockTransport 下把 `_check_port` 去掉，
     越界端口一律"返回 200"，一条都不会被兜底拦住）。
     那些用例实际守住的是 `_check_port` 与 `_LIBRARY_URL_ERRORS` 两条路径。
     要测兜底必须用真实 transport（见 `tests/ctf2/test_redirect_guard.py`
     里 `test_the_overflow_fallback_is_the_second_line`）。
+
+    ## ★★ 2026-10-16（R-4）：上面那段收窄依据**漏了一族**，已补回
+
+    R-1 的收窄里有一句声称："21 种畸形 `Location` 里裸 `ValueError`
+    出现 0 次"。**那句是错的** —— 它漏了 **IDNA 惰性解析**这一族，而这一族
+    抛的异常恰恰是 `ValueError` 的子类。
+
+    机制（Kali 实测，httpx 0.28.1 / idna 3.20）：
+
+    * `httpx.URL(...)` 的构造是**惰性的、不抛** —— 畸形 A-label
+      （`http://xn--.invalid/x`）构造时不报错；
+    * 校验发生在**第一次访问 `.host`** 时（`httpx/_urls.py:191`
+      `host = idna.decode(host)`），此时抛 `idna.IDNAError`；
+    * `issubclass(idna.IDNAError, httpx.InvalidURL)` = **False**、
+      `issubclass(idna.IDNAError, httpx.HTTPError)` = **False**，
+      而 `issubclass(idna.IDNAError, ValueError)` = **True**。
+      `InvalidCodepoint` 的 MRO 实测是
+      `(InvalidCodepoint, IDNAError, UnicodeError, ValueError, Exception, ...)`。
+
+    所以 R-1 之前它是被**裸 `ValueError`** 兜住的，删掉裸 `ValueError`
+    之后**没有任何成员覆盖它** → 上抛成 500。实测三例
+    （`xn--.` / `xn--0.` / `xn--a.`）在旧判据下 `_is_transport_level` = True、
+    新判据下 = False，端到端 `request_same_host` 抛出调用点接不住的
+    `IDNAError` / `InvalidCodepoint`。
+
+    ⚠️ **为什么不干脆加回裸 `UnicodeError`**：`UnicodeError` 之下还有
+    `UnicodeDecodeError` / `UnicodeEncodeError`，那两个在"解析
+    HTTP 响应体"时也会出现 —— 那是**我们自己的解码 bug**，正是 R-1
+    要放回上抛的那一类。所以这里**精确加 `idna.IDNAError`**：
+    它是"地址里的主机名不是合法 IDNA"的确切类型，与
+    `httpx.InvalidURL` 同一性质（"平台给的地址不可用"）。
+
+    ⚠️ `idna` 必须在 `requirements.txt` 里**显式声明**：它现在是 httpx 的
+    **间接依赖**，直接 `import idna` 而不声明就是引入未声明的直接依赖。
+    它是 httpx 的必需依赖，声明它不新增任何安装负担。
+
+    ## ★ 两条可达路径，别只测一条（Kali 实测）
+
+    `.host` 在 httpx 里被碰两次，对应两类 `Location`：
+
+    | 形态 | httpx 里碰 `.host` 的那一句 | 实测 |
+    | --- | --- | --- |
+    | 绝对地址 `http://xn--.invalid/x` | `_redirect_url` 的 `if url.scheme and not url.host` | 抛 `IDNAError` |
+    | 协议相对 `//xn--.invalid/x` | 上面那句被 `scheme` 短路，但 `request.url.join(url)` 仍碰 | 抛 `IDNAError` |
+
+    ⚠️ 两类都要有用例（见 `test_redirect_guard.py` 的 `MALFORMED_LOCATIONS`）。
+    只放绝对地址的话，"`join` 那条路"没有覆盖。
+
+    ## ★ 一处**没有**改的地方，以及为什么（实测否决）
+
+    `_next_url`（本文件 `:317`）里的 `target.host` 访问**没有**加 try 包装。
+    理由是实测：把那句挪进 try（或解析后先取一次 `.host`）与不改，
+    **端到端输出逐字节一致**（对 15 条输入做了 (类型, message) 全量 diff，
+    零差异）。
+
+    机制：`_next_url` **从来不是**第一个碰 `.host` 的地方 ——
+    它在 `request_same_host` 里被调用（`:453`），而那次
+    `client.request()` 内部已经跑过 `_build_redirect_request` →
+    `_redirect_url`，`.host` 早在那里就抛了。所以那处的包装
+    **没有任何真实路径能守**，按本项目纪律（不可验证的改动不做）不加。
+
+    ⚠️ 但**别因此以为 `_next_url` 里那个 `target.host` 分支是死的**：
+    直调 `_next_url` 时它**进得去**（实测 Location = `http://xn--.invalid/x`
+    就在那一行抛 `IDNAError`）。「分支进得去」与「真实路径走得到」是两件事，
+    别把前者当成后者的证据 —— 详细依据见
+    `docs/security-checklist.md` 的 R-4 节。
     """
     if isinstance(exc, BaseExceptionGroup):
         leaves = _leaf_exceptions(exc)
@@ -242,7 +315,7 @@ def _is_transport_level(exc: BaseException) -> bool:
             socket.gaierror,  # DNS 解析失败（唯一不在 ConnectionError 之下的网络类 OSError）
             OverflowError,  # 端口越界（>65535）—— 收窄前的 ArithmeticError
             httpx.HTTPError,  # httpx 的传输/协议/超时全族
-            *_LIBRARY_URL_ERRORS,  # httpx.InvalidURL
+            *_LIBRARY_URL_ERRORS,  # httpx.InvalidURL + idna.IDNAError
         ),
     )
 
@@ -287,6 +360,17 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
     #    去补全。省掉这个条件就会对相对地址调 `copy_with(host=…)`，
     #    把 `/final` 拗成一个没有端口的新绝对地址 → 请求打错地方
     #    （实测让"同 host 规范化跳转"和"绕圈中止"两个既有用例挂掉）。
+    # ⚠️ 这里的 `target.host` **刻意不加 R-4 的 try/预取**（实测否决）：
+    #    本函数**从来不是**第一个碰 `.host` 的地方 —— 它在
+    #    `request_same_host` 里被调用，而那次 `client.request()` 内部
+    #    已经跑过 `_build_redirect_request` → `_redirect_url`，畸形 A-label
+    #    早在那一层就抛了（`request_same_host` 的 `except BaseException`
+    #    接住 → `Ctf2Error`），根本轮不到这里。实测：加不加包装，
+    #    端到端 15 条输入的 (类型, message) 逐字节一致。
+    # ⚠️ 但**别因此以为下面这个分支是死的**：直调本函数时它**进得去**，
+    #    `.host` 就是在这一行被求值的（实测 Location=`http://xn--.invalid/x`
+    #    在此抛 `IDNAError`）。「分支进得去」与「真实路径走得到」是两件事 ——
+    #    依据见 `docs/security-checklist.md` 的 R-4 节。
     if target.scheme and not target.host:
         target = target.copy_with(host=current.host)
 

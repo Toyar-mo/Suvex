@@ -149,19 +149,30 @@ def assert_safe_base_url(raw: str) -> str:
     ★ 主机那一层**不是字符串比对**：`169.254.169.254` 有 `2852039166`、
     `0xA9FEA9FE`、`[::ffff:169.254.169.254]` 这些 `getaddrinfo` 全认的
     等价写法，只比字符串会一个都不命中 —— 见 `hostguard` 的说明。
+
+    ★★ R-4：`.host` 的访问**必须在 `try` 里**。`httpx.URL(...)` 的构造是
+    惰性的、不抛 —— 畸形 A-label（`http://xn--.invalid/x`）要到第一次访问
+    `.host` 时才抛 `idna.IDNAError`（`httpx/_urls.py:191`）。它既不是
+    `httpx.InvalidURL` 也不是 `HTTPError` 的子类，会直接穿过本函数 →
+    `create_building` → `POST /ctf2/platforms/draft` →
+    全局 `@app.exception_handler(Exception)` → **500**。
+    实测（Kali）：直调本函数传 5 条 A-label 全部逃逸。
     """
     url = (raw or "").strip()
     try:
         parsed = httpx.URL(url)
+        # ★★ 先访问一次 `.host`：IDNA 校验发生在这里，不是构造时。
+        #    下面 `parsed.host` 的几处访问都在 try 之外，拦不住。
+        host = parsed.host
     except Exception as exc:  # noqa: BLE001 - httpx 对畸形 URL 抛的异常类型不固定
         raise ApiError.validation("平台地址不是一个合法的 URL。", {"baseUrl": str(exc)}) from exc
     if parsed.scheme not in ("http", "https"):
         raise ApiError.validation(
             "平台地址必须以 http:// 或 https:// 开头。", {"baseUrl": f"协议是 {parsed.scheme!r}"}
         )
-    if not parsed.host:
+    if not host:
         raise ApiError.validation("平台地址缺少主机名。", {"baseUrl": "缺少主机名"})
-    if hostguard.is_blocked_host(parsed.host):
+    if hostguard.is_blocked_host(host):
         raise ApiError.validation(
             "这个地址是云厂商的实例元数据服务，不能作为平台地址。",
             {"baseUrl": "该地址被拒绝"},
