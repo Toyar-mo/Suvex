@@ -1442,7 +1442,7 @@ class StrixRunner:
 
 # 替身脚本。
 #
-# 它做两件事，分别验证两条不同的链路：
+# 它做三件事，分别验证三条不同的链路：
 #
 #   1. **故意起一个孙进程**持续写心跳文件 —— 那是"杀进程树"唯一能被
 #      机器验证的方式：只杀直接子进程的实现会让孙进程活下来继续写心跳，
@@ -1453,10 +1453,22 @@ class StrixRunner:
 #      于是"把 strix 事件导进本地库"这条链路可以端到端验证，
 #      而不是只能对着伪造的库手工调解析函数。
 #
+#   3. **把契约 §2.5 的 8 种事件类型尽量都跑出来** —— 三层 agent 树
+#      （root → recon / exploit / verify）、一个**真的失败了的** agent
+#      （`errors` 里有值 ⇒ 我们这边强制落 `FAILED`）、以及 5 档 severity
+#      各一条。一个"只有成功路径"的替身测不出失败路径：那些分支会一直
+#      躺在代码里没人走，直到线上第一次真失败。
+#
 # ⚠️ 这里**曾经**写的是 `strix_runs/<run>/events.jsonl` ——
 # 那是照着 strix 官方文档写的，而文档是错的：`strix-agent` 1.6.2 的源码里
 # 全包搜索 `events.jsonl` 零命中。真正的结构化事件流在 `agents.db` 里。
 # 这个改动就是"先查源码再写代码"的结果。
+#
+# ⚠️ 产物里的每个字段都要**照着 strix 源码**写，不能照着"看起来合理"写。
+# 这里踩过两次：`create_vulnerability_report` 的参数里根本没有 `severity`
+# （它由 `cvss_breakdown` 算出来），而 `poc_script_code` 是**包在 markdown
+# 围栏里**存的（`report/writer.py`）。两处都曾按印象写错，而错的产物会让
+# 解析层的测试"通过"，因为测试与替身用的是同一个错误假设。
 _FAKE_SCRIPT = r'''
 import json, os, sqlite3, subprocess, sys, time
 from pathlib import Path
@@ -1501,12 +1513,40 @@ if make_run:
     }), encoding="utf-8")
 
     # 2) agents.json —— 照 live_view.hydrate_from_run_dir 读的四个字典。
-    (state / "agents.json").write_text(json.dumps({
-        "statuses": {"agent-root": "running", "agent-recon": "completed"},
-        "names": {"agent-root": "root", "agent-recon": "recon"},
-        "parent_of": {"agent-recon": "agent-root"},
-        "errors": {},
-    }), encoding="utf-8")
+    #
+    #    ★ 三层 agent 树：root 是编排者，它下面挂 recon / exploit / verify
+    #    三个各司其职的子 agent（角色靠 `strix_events._ROLE_BY_NAME` 按名字
+    #    子串推断），另有一个**真的失败了的** agent —— 它是 `agent-recon`
+    #    的下级，用来走"名册里 `errors` 有值 ⇒ 我们这边强制落 FAILED"
+    #    那条分支。没有失败 agent 的替身测不出那条分支：它会一直躺在代码里
+    #    没人走，直到线上第一次真失败。
+    #
+    #    ★ 名册写**两遍**：先按"刚开跑"写一次，跑完再按"收尾"覆盖一次。
+    #    导入器每一轮都重读名册刷新 agent 状态（`importer._ensure_agent`），
+    #    只写一遍的话那条刷新路径永远只看到同一个值 —— 等于没测。
+    agent_names = {
+        "agent-root": "root",
+        "agent-recon": "recon",
+        "agent-exploit": "exploit",
+        "agent-verify": "verify",
+        "agent-failed": "recon-crawler",
+    }
+    agent_parent_of = {
+        "agent-recon": "agent-root",
+        "agent-exploit": "agent-root",
+        "agent-verify": "agent-root",
+        "agent-failed": "agent-recon",
+    }
+
+    def write_roster(statuses, errors):
+        (state / "agents.json").write_text(json.dumps({
+            "statuses": statuses,
+            "names": agent_names,
+            "parent_of": agent_parent_of,
+            "errors": errors,
+        }, ensure_ascii=False), encoding="utf-8")
+
+    write_roster({agent_id: "running" for agent_id in agent_names}, {})
 
     # 3) agents.db —— **建表语句逐字照抄** openai-agents SDK 的
     #    sqlite_session.py，因为那是 strix 实际会用到的结构。
@@ -1539,39 +1579,113 @@ if make_run:
                 (session, json.dumps(payload, ensure_ascii=False)),
             )
 
-        # 第一行：agent 的任务（会被当成"内部轮"丢掉，照 live_view 的规则）
+        def call(agent, call_id, name, args):
+            put(agent, {"type": "function_call", "call_id": call_id, "name": name,
+                        "arguments": json.dumps(args, ensure_ascii=False)})
+
+        def result(agent, call_id, payload):
+            put(agent, {"type": "function_call_output", "call_id": call_id,
+                        "output": payload if isinstance(payload, str)
+                        else json.dumps(payload, ensure_ascii=False)})
+
+        # ── agent-root：编排者。第一个 user 轮是"它的任务"，会被丢掉 ──
         put("agent-root", {"role": "user", "content": "对 api.example.com 做一次安全测试"})
         # think 工具 → 应翻成 reasoning(intent=plan)
-        put("agent-root", {"type": "function_call", "call_id": "c1", "name": "think",
-                           "arguments": json.dumps({"thought": "先做端口与服务识别，再决定打哪里。"})})
-        put("agent-root", {"type": "function_call_output", "call_id": "c1",
-                           "output": json.dumps({"success": True, "message": "Thought recorded"})})
+        call("agent-root", "c1", "think", {"thought": "先做端口与服务识别，再决定打哪里。"})
+        result("agent-root", "c1", {"success": True, "message": "Thought recorded"})
         # 一次成功的工具调用 → tool_call
-        put("agent-root", {"type": "function_call", "call_id": "c2", "name": "web_search",
-                           "arguments": json.dumps({"query": "api.example.com 已知漏洞"})})
-        put("agent-root", {"type": "function_call_output", "call_id": "c2",
-                           "output": json.dumps({"success": True, "results": [{"title": "X"}]})})
-        # 一次失败的工具调用 → failed
-        put("agent-root", {"type": "function_call", "call_id": "c3", "name": "repeat_request",
-                           "arguments": json.dumps({"request_id": "r1"})})
-        put("agent-root", {"type": "function_call_output", "call_id": "c3",
-                           "output": json.dumps({"success": False, "error": "请求重放被目标拒绝"})})
-        # 产出漏洞报告 → discovery
-        put("agent-root", {"type": "function_call", "call_id": "c4", "name": "create_vulnerability_report",
-                           "arguments": json.dumps({"title": "调试接口未授权可读环境变量",
-                                                    "severity": "high",
-                                                    "evidence": "HTTP/1.1 200 OK\\nAWS_KEY=***"},
-                                                   ensure_ascii=False)})
-        put("agent-root", {"type": "function_call_output", "call_id": "c4",
-                           "output": json.dumps({"success": True, "report_id": "vuln-001"})})
+        call("agent-root", "c2", "web_search", {"query": "api.example.com 已知漏洞"})
+        result("agent-root", "c2", {"success": True, "results": [{"title": "X"}]})
         # 一条 assistant 发言 → reasoning(intent=narration)
         put("agent-root", {"role": "assistant", "content": "已完成初步侦察，进入利用阶段。"})
+
+        # ── agent-recon：子 agent。它的消息行证明"名册里有两个以上 agent"
+        #    这条路径真的被走过（旧替身只有 root 有消息行，子 agent 是摆设）──
+        put("agent-recon", {"role": "user", "content": "侦察子任务：枚举端点与版本。"})
+        call("agent-recon", "c5", "web_get_contents", {"url": "https://api.example.com/"})
+        result("agent-recon", "c5", {"success": True, "content": "<html>…</html>"})
+
+        # ── agent-exploit：利用阶段 ──
+        put("agent-exploit", {"role": "user", "content": "利用子任务：验证未授权读取。"})
+        # 一次失败的工具调用 → failed
+        call("agent-exploit", "c3", "repeat_request", {"request_id": "r1"})
+        result("agent-exploit", "c3", {"success": False, "error": "请求重放被目标拒绝"})
+        # 产出漏洞报告 → discovery
+        #
+        # ⚠️ 参数里**没有** `severity`：真实工具的签名里没有这个参数
+        # （严重度由 `cvss_breakdown` 经 CVSS3 算出来），结果里才有。
+        # 旧替身在这里写了一个 `severity: "high"`，于是解析层那个
+        # "读 args['severity']" 的错误分支看起来是通的 —— 替身与解析层
+        # 共享同一个错误假设，测试就永远发现不了它。
+        call("agent-exploit", "c4", "create_vulnerability_report", {
+            "title": "调试接口未授权可读环境变量",
+            "description": "GET /debug/env 未做鉴权即可读取进程环境变量。",
+            "evidence": "HTTP/1.1 200 OK\nAWS_KEY=***",
+            "confidence": "high",
+            "cwe": "CWE-200",
+        })
+        result("agent-exploit", "c4", {"success": True, "report_id": "vuln-0001",
+                                       "severity": "high", "cvss_score": 7.5})
+
+        # ── agent-verify：复核阶段。这两条让 `poc_generated` 与 `verified`
+        #    第一次有了真实来源（契约的 8 种事件类型里，它们此前
+        #    "在 strix 侧没有对应来源"，只能靠扫描生命周期兜）──
+        put("agent-verify", {"role": "user", "content": "复核子任务：为已确认的发现补 PoC。"})
+        # 给已有发现补上验证脚本 → poc_generated
+        # （脚本**包在 markdown 围栏里**，照 `report/writer.py` 的存法）
+        call("agent-verify", "c6", "update_vulnerability_report", {
+            "report_id": "vuln-0001",
+            "update_reason": "补上可复现的验证脚本，证据从「疑似」升级为「可复现」。",
+            "fields": {
+                "poc_script_code": "```python\nimport requests\n\nr = requests.get('https://api.example.com/debug/env', timeout=10)\nprint(r.status_code, len(r.text))\n```",
+                "target": "api.example.com",
+            },
+        })
+        result("agent-verify", "c6", {"success": True, "action": "updated",
+                                      "message": "Report 'vuln-0001' now carries your revision. Do not file it again.",
+                                      "report_id": "vuln-0001",
+                                      "updated_fields": ["poc_script_code", "target"],
+                                      "severity": "high", "cvss_score": 7.5})
+        # 复核后把置信度提到 high → verified
+        call("agent-verify", "c7", "update_vulnerability_report", {
+            "report_id": "vuln-0002",
+            "update_reason": "在预发环境复现了同一问题，置信度提到高。",
+            "fields": {"confidence": "high"},
+        })
+        result("agent-verify", "c7", {"success": True, "action": "updated",
+                                      "report_id": "vuln-0002",
+                                      "updated_fields": ["confidence"],
+                                      "severity": "medium", "cvss_score": 4.3})
+        # 交还控制权等人 → blocked
+        # （真实工具 `wait_for_user` 成功时返回的是**字符串**而不是 dict）
+        call("agent-verify", "c8", "wait_for_user", {})
+        result("agent-verify", "c8", "需要人工确认后才能继续：目标上还挂着测试账号，是否清理？")
+
+        # ── agent-failed：真的失败了的子 agent。它的失败在名册的 `errors`
+        #    里，而"名册里 errors 有值 ⇒ 我们这边强制落 FAILED"那条分支
+        #    此前**没有任何测试走过** ──
+        put("agent-failed", {"role": "user", "content": "爬取子任务：抓取站点地图。"})
+        call("agent-failed", "c9", "view_sitemap_entry", {"url": "https://api.example.com/sitemap.xml"})
+        result("agent-failed", "c9", {"success": False, "error": "目标在 8443 端口重置了连接"})
+
         conn.commit()
         conn.close()
 
     # 4) vulnerabilities.json —— 字段名与"有才写"的规则都照
     #    `report/state.py` 的 `add_vulnerability_report`，
     #    写入点照 `report/writer.py`（它在 run 目录根下）。
+    #
+    #    ★ **5 档 severity 各一条**。旧替身只有 high / high / medium，
+    #    于是 `low` 与 `info` 这两档在整条链路上从没被真实数据走过 ——
+    #    汇总列的 `bySeverity` 是 Partial（为 0 的档键不存在），
+    #    少两档就永远看不出"键该不该出现"这件事到底对不对。
+    #
+    #    ★ `poc_script_code` **包在 markdown 围栏里**（照 `report/writer.py`
+    #    的存法：agent 生成的代码字段带语言标签的围栏）。旧替身存的是裸代码，
+    #    形状与真实产物不符 —— 而落库那侧要靠围栏取语言。
+    #
+    #    ★ `vuln-0005` 故意**没有** `severity` 字段：真实产物里也可能缺，
+    #    而落库侧对"认不出的严重度"有明确口径（落 `info` 并记 warning）。
     if emit_events:
         (run_root / "vulnerabilities.json").write_text(json.dumps([
             {
@@ -1582,8 +1696,8 @@ if make_run:
                 "description": "GET /debug/env 未做鉴权即可读取进程环境变量。",
                 "target": os.environ.get("FAKE_STRIX_TARGET", ""),
                 "technical_analysis": "路由注册在鉴权中间件之前。",
-                "evidence": "HTTP/1.1 200 OK\\nAWS_SECRET_ACCESS_KEY=***",
-                "poc_script_code": "import requests\\nprint(requests.get('https://x/debug/env').text)",
+                "evidence": "HTTP/1.1 200 OK\nAWS_SECRET_ACCESS_KEY=***",
+                "poc_script_code": "```python\nimport requests\n\nr = requests.get('https://x/debug/env', timeout=10)\nprint(r.status_code, len(r.text))\n```",
                 "remediation_steps": "把该路由挂到鉴权中间件之后。",
                 "confidence": "high",
                 "cwe": "CWE-200",
@@ -1601,8 +1715,58 @@ if make_run:
                 "counterevidence": "预发环境返回的头部带了 SameSite=Lax",
                 "cwe": "CWE-1275",
             },
+            {
+                "id": "vuln-0003",
+                "title": "管理后台使用出厂默认口令",
+                "severity": "critical",
+                "timestamp": "2026-09-24 10:00:10 UTC",
+                "description": "管理后台仍可用 admin/admin 登录。",
+                "technical_analysis": "初始化脚本在首次启动时写入固定口令且不强制修改。",
+                "evidence": "POST /admin/login\\nHTTP/1.1 302 Found\\nLocation: /admin/dashboard",
+                "remediation_steps": "首次登录强制改密，并移除初始化脚本里的固定口令。",
+                "confidence": "high",
+                "cwe": "CWE-798",
+                "cvss": 9.8,
+            },
+            {
+                "id": "vuln-0004",
+                "title": "响应头缺少 Content-Security-Policy",
+                "severity": "low",
+                "timestamp": "2026-09-24 10:00:15 UTC",
+                "description": "所有页面响应都没有 CSP 头。",
+                "technical_analysis": "反向代理层未注入 CSP。",
+                "confidence": "medium",
+                "cwe": "CWE-693",
+                "cvss": 3.1,
+            },
+            {
+                "id": "vuln-0005",
+                "title": "错误页回显了内部路径",
+                "severity": "info",
+                "timestamp": "2026-09-24 10:00:20 UTC",
+                "description": "404 页面回显了容器内的绝对路径。",
+                "technical_analysis": "默认错误页未定制。",
+                "confidence": "low",
+                "cwe": "CWE-209",
+            },
         ], ensure_ascii=False), encoding="utf-8")
-        print("[fake-strix] 写入了 2 条 vulnerabilities.json", flush=True)
+        print("[fake-strix] 写入了 5 条 vulnerabilities.json（5 档 severity 各一条）", flush=True)
+
+    # 5) 收尾时再写一遍名册：状态从 running 变成终态，并且
+    #    `agent-failed` 在 `errors` 里留下一句话。
+    #    导入器每一轮都重读名册刷新 agent 状态，所以第二遍才让
+    #    "状态会变"与"失败 agent 落 FAILED"这两条路径真的被走到。
+    if emit_events:
+        write_roster(
+            {
+                "agent-root": "completed",
+                "agent-recon": "completed",
+                "agent-exploit": "completed",
+                "agent-verify": "blocked",
+                "agent-failed": "failed",
+            },
+            {"agent-failed": "目标在 8443 端口重置了连接"},
+        )
 
     print(f"[fake-strix] run={make_run}", flush=True)
 

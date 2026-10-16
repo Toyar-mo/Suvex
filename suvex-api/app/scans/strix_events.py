@@ -52,12 +52,20 @@ CREATE TABLE agent_messages (
 | `failed` | `tool` 调用**失败**结束 | ✅ 直接对应（`result.success is False`） |
 | `reasoning` | `tool_name == "think"` | ✅ **确证**：`tools/thinking/tool.py` 的签名就是 `think(thought: str)`，docstring 写明 "private chain-of-thought note" |
 | `reasoning` | `chat` 里 `role == "assistant"` | ⚠️ 语义近似：strix 把"内心推理"与"对外发言"分开，而契约的 8 种里没有"发言"这一类。用 `intent` 字段区分两者（`plan` / `narration`） |
-| `discovery` | `tool_name == "create_vulnerability_report"` 成功 | ✅ 确证是"产出了一条漏洞"，⚠️ 但**载荷字段是启发式的**（见下） |
+| `discovery` | `tool_name == "create_vulnerability_report"` 成功 | ✅ 确证是"产出了一条漏洞" |
+| `poc_generated` | `update_vulnerability_report` 成功且 `fields` 里有 `poc_script_code` | ✅ `fields` 是真实参数（`tools/reporting/tool.py`），成功返回里带 `updated_fields`。语义：给**已有**发现补上验证脚本 —— 那正是"产出了 PoC"这个动作 |
+| `verified` | `update_vulnerability_report` 成功且 `fields["confidence"] == "high"` | ⚠️ 语义近似：strix **没有**"复现"这个独立信号。用的是**本项目自己的**口径 `_CONFIDENCE_TO_VERIFICATION`（`app/findings/strix_vulns.py`：`high` → `verified`），不另立一套 |
+| `blocked` | `tool_name == "wait_for_user"` | ✅ **确证**：`tools/wait_for_user/tool.py` 的 docstring 是 "Hand control to the user and wait for their reply. This is the ONLY way to yield to the user." —— 扫描卡住等人 |
 
-**这 8 种里，有 4 种在 strix 侧没有对应来源**，如实记在这里，
-免得后来者以为是漏了：`poc_generated` / `verified` / `blocked` / `completed`。
-其中 `completed` 由**扫描生命周期**发出（见 `scans/service.py`），不需要 strix 提供；
-另三种 strix 根本没有对应的结构化信号。
+`completed` 仍由**扫描生命周期**发出（见 `scans/service.py`），不需要 strix 提供。
+于是 8 种里 **7 种**在 strix 侧有来源，第 8 种有生命周期来源 —— 没有"漏了"的了。
+
+⚠️ **`verified` 为什么挂在 `update_` 上而不是 `create_` 上**：
+`create_vulnerability_report` 是"**第一次登记**一条发现"，它的映射是 `discovery`（见上表）。
+而一次工具调用**只能产出一条事件**（`source_row_id` 同时是幂等键，见 `_tool_event`），
+所以把带 `confidence: high` 的 `create_` 改成 `verified` 会**丢掉 discovery** ——
+那是拿一个已有映射去换一个新映射，净亏。而 `update_vulnerability_report`
+是 agent **回去复核**已有发现的地方，"确认"这个动作本来就发生在那里。
 
 ### ⚠️ 启发式的部分（需要一次真实运行才能确认）
 
@@ -66,9 +74,12 @@ CREATE TABLE agent_messages (
 
 * `subject` ← `args["title"]`；
 * `evidence` ← `args["evidence"]` 或 `args["description"]`，取到哪个用哪个，都没有就留空；
-* `severity` ← `args["severity"]`；**取不到就不放这个键**，而不是编一个。
-  （权威来源其实是 `vulnerabilities.json` 里的 `severity`，
-  但那要等工具把报告写完才能读到，不适合实时路径。）
+* `severity` ← **`result["severity"]`**（`create_vulnerability_report` 的成功返回里带它，
+  见 `tools/reporting/tool.py`）。**取不到就不放这个键**，而不是编一个。
+
+  ⚠️ 这里曾经写的是 `args["severity"]` —— 那是**错的**，真实工具的签名里
+  根本没有 `severity` 这个参数（它由 `cvss_breakdown` 经 CVSS3 算出来），
+  所以那个分支从来没命中过。以参数名为依据的推断，必须回到签名去核。
 
 这三条**必须**在有 Docker 的机器上跑一次真实扫描、对着
 `vulnerabilities.json` 核对之后才算坐实。在核对之前，
@@ -86,6 +97,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.core.text import split_fenced_code
 from app.core.vocab import ActivityEventType, AgentPhase, AgentRole, AgentStatus
 
 logger = logging.getLogger("suvex.strix")
@@ -383,7 +395,8 @@ def _tool_event(
     output: dict | None,
     timestamp: str,
 ) -> StrixEvent:
-    """一次工具调用 → `tool_call` / `failed` / `discovery` / `reasoning`。
+    """一次工具调用 → `tool_call` / `failed` / `discovery` / `reasoning` /
+    `poc_generated` / `verified` / `blocked`。
 
     一次调用**只产出一条事件**，在它结束时。理由：
 
@@ -402,12 +415,39 @@ def _tool_event(
     ok = not (isinstance(result, dict) and result.get("success") is False)
     text = _clip(_render(result))
     phase = _phase_for(tool_name)
+    # `update_vulnerability_report` 的必填参数之一。只在结果里也带时优先用结果里的
+    # （那是 strix 自己确认过的 id），否则用参数里的。
+    report_id = str(args.get("report_id") or (result.get("report_id") if isinstance(result, dict) else "") or "该发现")
 
     # ★ `think` 是**确证**的推理来源：`tools/thinking/tool.py` 的签名就是
     # `think(thought: str)`，docstring 写明 "private chain-of-thought note"。
     if tool_name == "think":
         thought = str(args.get("thought") or text or "")
         return _reasoning(row_id, agent_id, thought, timestamp, intent="plan")
+
+    # ★ `wait_for_user` 是**确证**的"卡住等人"信号：`tools/wait_for_user/tool.py`
+    # 的 docstring 写着 "Hand control to the user and wait for their reply.
+    # This is the ONLY way to yield to the user." —— 那正是契约里的 `blocked`
+    # （扫描停下来等人），而不是 `failed`（工具坏了）。
+    #
+    # ⚠️ 它必须排在所有其他分支**之前**：它成功时返回的是**字符串**而不是
+    # dict，于是 `ok` 为 True，会一路掉到最后那个 `tool_call` 兜底里去。
+    if tool_name == "wait_for_user" and ok:
+        yielded = result if isinstance(result, str) else _render(result)
+        return StrixEvent(
+            source_row_id=row_id,
+            agent_ref=agent_id,
+            type=ActivityEventType.BLOCKED.value,
+            summary=_clip("扫描暂停，等待人工输入", MAX_SUMMARY),
+            detail={
+                "kind": ActivityEventType.BLOCKED.value,
+                "attempted": _clip("继续自动扫描", MAX_SUMMARY),
+                "policy": "需要人工输入",
+                "reason": _clip(yielded or "agent 交还了控制权但没有说明原因", MAX_TEXT),
+            },
+            at=_parse_at(timestamp),
+            agent_phase=phase,
+        )
 
     # 产出漏洞报告：这是"一次发现"的唯一可靠信号。
     if tool_name in {"create_vulnerability_report", "create_dependency_report"} and ok:
@@ -438,6 +478,58 @@ def _tool_event(
             at=_parse_at(timestamp),
             agent_phase=phase,
         )
+
+    # ★ `update_vulnerability_report` 是 agent **回去复核已有发现**的地方。
+    # 它的参数是 `report_id` + `update_reason` + `fields`（可编辑字段的补丁），
+    # 而"改了哪些字段"只在**结果**里（`updated_fields`）—— 所以这里读 args 的
+    # `fields`，那是"agent 想改什么"，正是要翻译成事件的那个意图。
+    #
+    # ⚠️ **一次调用只能产出一条事件**（`source_row_id` 同时是幂等键，
+    # `(scan_id, source_row_id)` 上有部分唯一索引）—— 所以下面两个判据
+    # 是 `if / elif`，不是两个独立的 `if`。同时带脚本又带高置信度时
+    # `poc_generated` 胜出：脚本是用户能直接拿去复现的东西，
+    # 而置信度在 finding 上本来就有一列，活动流里少报它损失更小。
+    if tool_name == "update_vulnerability_report" and ok:
+        fields = _parse_json_object(args.get("fields"))
+        poc_code = fields.get("poc_script_code")
+        if isinstance(poc_code, str) and poc_code.strip():
+            language, code = _split_fenced_code(poc_code)
+            return StrixEvent(
+                source_row_id=row_id,
+                agent_ref=agent_id,
+                type=ActivityEventType.POC_GENERATED.value,
+                summary=_clip(f"为 {report_id} 补上了验证脚本", MAX_SUMMARY),
+                detail={
+                    "kind": ActivityEventType.POC_GENERATED.value,
+                    "language": language,
+                    "code": _clip(code, MAX_TEXT),
+                    # `fields` 里可能有 agent 顺手改的 `target`；没有就退回
+                    # 报告 id —— 那至少能让人知道这段脚本属于哪条发现。
+                    "target": _clip(str(fields.get("target") or report_id), MAX_SUMMARY),
+                },
+                at=_parse_at(timestamp),
+                agent_phase=phase,
+            )
+        if str(fields.get("confidence") or "").strip().lower() == "high":
+            return StrixEvent(
+                source_row_id=row_id,
+                agent_ref=agent_id,
+                type=ActivityEventType.VERIFIED.value,
+                summary=_clip(f"{report_id} 被标注为高置信度", MAX_SUMMARY),
+                detail={
+                    "kind": ActivityEventType.VERIFIED.value,
+                    # strix **没有**"复现方式"这个字段。用 `update_reason`
+                    # （必填参数，就是 agent 说明"我为什么改它"）——
+                    # 它是这里唯一能解释"凭什么说已验证"的文本。
+                    "method": _clip(str(args.get("update_reason") or "agent 复核后标注为高置信度"), MAX_TEXT),
+                    "evidence": _clip(
+                        _render(fields.get("evidence") or fields.get("technical_analysis") or result),
+                        MAX_TEXT,
+                    ),
+                },
+                at=_parse_at(timestamp),
+                agent_phase=phase,
+            )
 
     return StrixEvent(
         source_row_id=row_id,
@@ -550,6 +642,25 @@ def stable_agent_id(strix_agent_id: str) -> str:
 
 
 # ── 小工具 ────────────────────────────────────────────────
+
+
+def _split_fenced_code(raw: str) -> tuple[str, str]:
+    """拆开 strix 存的代码：它把 agent 生成的脚本**包在 markdown 围栏里**。
+
+    契约的 `poc_generated.language` / `.code` 是**分开的两个字段**，
+    而 strix 只给一个带围栏的字符串 —— 所以这里拆一次。
+
+    形状的解析在 `app.core.text.split_fenced_code`（与
+    `findings/strix_vulns.py` 共用同一份正则：同一个形状由上游的
+    `report/writer.py` 单方面定义，两处各写一份必然会漂移，
+    而漂移的那一侧只在真实扫描里才暴露）。
+
+    这里把 `None`（没有围栏）折成 `text`：载荷的 `language` 是必填字符串，
+    而"没有围栏"在这条链路上就等于"上游没说语言"。
+    **不编 `python`** —— 前端会据此做语法高亮，猜错会让代码变成一片红。
+    """
+    language, code = split_fenced_code(raw)
+    return language or "text", code
 
 
 def _phase_for(tool_name: str) -> str:
