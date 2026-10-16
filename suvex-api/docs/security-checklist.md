@@ -730,7 +730,7 @@ Review 第二轮对抗审查指出：原判据
 
 | 实测项 | 结果 |
 | --- | --- |
-| 21 种畸形 `Location` 里裸 `ValueError` 出现次数 | **0**（无正当用途） |
+| 15 种畸形 `Location` 里裸 `ValueError` 出现次数 | **0**（无正当用途）⚠️ 见下 |
 | 真实连接失败（拒绝连接 / DNS / 不可路由）的外层类型 | `ConnectError`、`ConnectTimeout`（**都是 `HTTPError` 子类**） |
 | 裸 `OSError` 是否曾不经包装地冒出来 | **否** —— 连接层永远包成 httpx 自己的类型 |
 | `anyio.connect_tcp` DNS 失败 | `gaierror` —— 是**真的**传输错误，且**不是** `ConnectionError` 子类 |
@@ -745,6 +745,14 @@ Review 第二轮对抗审查指出：原判据
 | `OSError` | → `ConnectionError` + `socket.gaierror` | 丢掉的只有 `FileNotFoundError` / `PermissionError` 这类**文件系统**错误（此上下文里只可能是我们的 bug）；`gaierror` 必须显式保留，否则 `ExceptionGroup[gaierror]` 会逃逸 |
 | `ArithmeticError` | → `OverflowError` | 端口越界真身；同时把 `ZeroDivisionError` 放回上抛 |
 | `httpx.HTTPError` / `_LIBRARY_URL_ERRORS` | 不变 | `UnsupportedProtocol` 等在其下；`InvalidURL` 单独列（它不是 `HTTPError`） |
+
+⚠️ **上表第一行那句「0 次」是有保质期的**：它做在 R-1 当时那 **15** 条畸形
+样本上，而那份样本里**一条 A-label（`xn--` 族）都没有** —— 而 A-label 恰好是
+唯一会抛 `idna.IDNAError` 的一族（R-4 补了 6 条，样本 15 → 21）。所以那句话
+**不是**「21 条里 0 次」，它早于 IDNA 一族，从未在那 6 条上重跑过。IDNA 一族
+的正确处置是**显式收进 `_LIBRARY_URL_ERRORS`**（见下文 R-4 段），而不是拿
+它当「裸 `ValueError` 出现 0 次」的佐证 —— 后者会让下一个人以为这一族已被
+那句观察覆盖了。
 
 **硬判据（收窄后重跑）**：9 条 F-08 逃逸路径 + Review 的 8 条
 = **17/17 全部以 `Ctf2Error` / `HTTPError` 收场，0 逃逸**（真实 transport）。
@@ -838,14 +846,14 @@ httpx.InvalidURL)` = **False**，`issubclass(..., httpx.HTTPError)` = **False**�
 | 打坏什么 | 结果 |
 | --- | --- |
 | 判据层去掉 `idna.IDNAError` | 新加的 6 条 `xn--` 参数化**变红** |
-| `assert_safe_base_url` 的 `host` 移出 `try` | 对应的 2 条 hostguard 用例**变红** |
+| `assert_safe_base_url` 的 `host` 移出 `try` | 对应的 3 条 hostguard 用例**变红** |
 
 两组恢复后逐字节核对一致（sha256 比对）。
 
 **新增测试**：`tests/ctf2/test_redirect_guard.py` 的 `MALFORMED_LOCATIONS`
 15 → **21 条**（补 6 条 IDNA 族）；`tests/ctf2/test_hostguard.py` 加
-`test_assert_safe_base_url_rejects_a_malformed_a_label`（断言 400 且
-**不是** 500，错误文案含"不是一个合法的 URL"）。
+`test_assert_safe_base_url_rejects_malformed_idna_labels`（3 条 A-label
+参数化；断言 400 且**不是** 500，错误文案含"不是一个合法的 URL"）。
 
 **⚠️ 与 Review 判断相反的一条**：Review 说这条"必须真实 transport
 才测得到（MockTransport 下 `.host` 的路子不同）"。**实测是错的** ——

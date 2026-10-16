@@ -185,10 +185,19 @@ def _is_transport_level(exc: BaseException) -> bool:
 
     | 实测项 | 结果 |
     | --- | --- |
-    | 21 种畸形 `Location` 里裸 `ValueError` 出现次数 | **0** |
+    | 15 种畸形 `Location` 里裸 `ValueError` 出现次数 | **0** ⚠️ 见下 |
     | 真实连接失败（拒绝连接 / DNS 失败 / 不可路由）的外层类型 | `ConnectError`、`ConnectTimeout`（**都是 `HTTPError` 子类**） |
     | 裸 `OSError` 是否曾不经包装地冒出来 | **否** —— 连接层永远把它包成 httpx 自己的类型 |
     | `ExceptionGroup[gaierror]`（anyio 直连 DNS 失败的原始类型） | 是**真的**传输错误，且 `gaierror` **不是** `ConnectionError` 子类 |
+
+    ⚠️ **上表第一行那句「0 次」是有保质期的**：它做在 R-1 当时那 **15** 条
+    畸形样本上，而那份样本里**一条 A-label（`xn--` 族）都没有** ——
+    而 A-label 恰好是唯一会抛 `idna.IDNAError` 的一族（R-4 补了 6 条，
+    样本 15 → 21）。所以那句话**不是**"21 条里 0 次"，它早于 IDNA 一族，
+    从未在那 6 条上重跑过。IDNA 一族的正确处置是**显式收进
+    `_LIBRARY_URL_ERRORS`**（见 `_is_transport_level` 末尾的 R-4 段），
+    而不是把它算作"裸 `ValueError` 出现 0 次"的佐证 —— 后者会让下一个人
+    以为这一族已经被那句观察覆盖了。
 
     于是三个成员这样处理：
 
