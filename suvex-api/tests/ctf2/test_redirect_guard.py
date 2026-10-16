@@ -530,3 +530,234 @@ def test_an_out_of_range_port_in_the_base_url_is_refused() -> None:
         )
 
     assert "端口" in excinfo.value.message
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ R-1：判据收窄（只吞"真的传输层"，编程错误必须上抛）
+# ══════════════════════════════════════════════════════════
+
+
+def test_a_plain_value_error_is_not_swallowed() -> None:
+    """★★ 我们自己抛的 `ValueError` 必须**原样上抛**，不许变成 `Ctf2Error`。
+
+    ## 这条钉的是判据收窄（R-1）
+
+    原判据里有裸 `ValueError` / `OSError` / `ArithmeticError`，而这三个
+    **同时是编程错误的常见类型**（解包失败、`int()` 失败、除零）——
+    整段 `client.request(...)` 都在那层包装里，于是我们自己的 bug
+    会被报成「平台给的跳转地址无法使用」。那正是该函数 docstring 里
+    "别用平台的问题盖住真 bug"要防的事。
+
+    实测依据：21 种畸形 `Location` 里裸 `ValueError` 出现 **0** 次，
+    所以这一档没有任何正当用途。
+
+    ## 怎么构造出"我们自己的 `ValueError`"
+
+    在 `client.request` 的路径上插一个**会在请求里抛 `ValueError`** 的
+    transport —— 它模拟的正是"我们这边的代码坏了"。
+    真实场景举例：某个 helper 在拼 URL 时 `int()` 一个非数字字符串。
+    """
+    def broken_handler(request: httpx.Request) -> httpx.Response:
+        raise ValueError("解包失败——这是我们自己的 bug，不是平台的问题")
+
+    async def go() -> Any:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(broken_handler), follow_redirects=False
+        )
+        try:
+            return await request_same_host(
+                client, "GET", "http://example.com/x", base_host="example.com"
+            )
+        finally:
+            await client.aclose()
+
+    with pytest.raises(ValueError) as excinfo:
+        _run(go())
+
+    assert not isinstance(excinfo.value, Ctf2Error), (
+        "我们自己抛的 `ValueError` 被吞成了 `Ctf2Error` —— 判据又把裸 "
+        "`ValueError` 收进去了。那会用一个'平台的问题'盖住一个真 bug。"
+    )
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ValueError("解包失败"),
+        KeyError("配置项缺失"),
+        TypeError("参数类型不对"),
+        ZeroDivisionError("除零"),
+        AttributeError("没有那个属性"),
+        RuntimeError("不该到这里"),
+        FileNotFoundError("/etc/不存在"),
+        PermissionError("没权限"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_programming_errors_are_never_reported_as_platform_problems(exc) -> None:
+    """★★ 一类编程错误整体不得被吞成 `Ctf2Error`（R-1 的判据表）。
+
+    ⚠️ 这里**直接打 `_is_transport_level`** 而不是绕一圈构造请求：
+    这一组要穷举的是**判据本身**，而"怎么把某个异常从 httpx 里引出来"
+    与判据无关。绕一圈只会让用例更长、更难读，且覆盖的还是同一批判断。
+
+    ⚠️ 其中 `FileNotFoundError` / `PermissionError` 是**收窄的关键项**：
+    它们都是 `OSError` 子类，原判据（裸 `OSError`）会吞掉它们 ——
+    而在这个上下文里它们只可能是我们自己的 bug（去读一个不存在的
+    路径），连接层的失败永远被 httpx 包成 `ConnectError`，不会以裸
+    `OSError` 冒出来。
+    """
+    from app.ctf2.adapters.redirect import _is_transport_level
+
+    assert _is_transport_level(exc) is False, (
+        f"{type(exc).__name__} 被判成「传输层错误」了 —— 它会被转成 "
+        "`Ctf2Error`，于是我们自己的 bug 变成「平台给的地址不可用」。"
+    )
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionError("连接失败"),
+        ConnectionRefusedError("拒绝连接"),
+        OverflowError("端口越界"),
+        httpx.ConnectError("连不上"),
+        httpx.ConnectTimeout("超时"),
+        httpx.UnsupportedProtocol("ftp://"),
+        httpx.RemoteProtocolError("协议错"),
+        httpx.InvalidURL("畸形 URL"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_real_transport_failures_are_still_swallowed(exc) -> None:
+    """★ 反向闸：**真的**传输层错误必须仍然被转成 `Ctf2Error`。
+
+    ⚠️ 与上面那组是一对。只测"编程错误上抛"的话，一个
+    `return False` 的实现也能全过 —— 而那样 F-08 的 9 条逃逸路径
+    会全部重现（调用点接不住 → 500）。
+
+    这几个类型都是实测出现的：`ConnectionError` 是连接层面的确切类型；
+    `OverflowError` 是端口越界的真身（`socket.connect` 对 >65535 抛它）；
+    `InvalidURL` / 其余 `HTTPError` 族在 Kali 上各有对应的触发写法。
+    """
+    from app.ctf2.adapters.redirect import _is_transport_level
+
+    assert _is_transport_level(exc) is True, (
+        f"{type(exc).__name__} 被判成「不是传输层错误」了 —— 它会原样逃逸，"
+        "而调用点的 `except httpx.HTTPError` 接不住 → 用户看到 500。"
+    )
+
+
+def test_a_group_of_gaierror_leaves_is_swallowed() -> None:
+    """★ `ExceptionGroup[gaierror]` 必须被吞 —— 这是收窄时唯一的"险"项。
+
+    ## 为什么单独钉它
+
+    `socket.gaierror`（DNS 解析失败）是**唯一**不在 `ConnectionError`
+    之下的网络类 `OSError`：
+
+        issubclass(gaierror, OSError)        = True
+        issubclass(gaierror, ConnectionError) = False   ★
+
+    所以把裸 `OSError` 收窄成 `ConnectionError` 时，**必须**显式把
+    `gaierror` 一起留着 —— 否则 anyio 直连 DNS 失败时抛的
+    `ExceptionGroup[gaierror]` 会逃逸成 500（实测 `anyio.connect_tcp`
+    对不存在的域名抛的就是 `gaierror`）。
+    """
+    import socket
+
+    from app.ctf2.adapters.redirect import _is_transport_level
+
+    group = ExceptionGroup("unhandled errors in a TaskGroup", [socket.gaierror("名字解析失败")])
+
+    assert _is_transport_level(group) is True, (
+        "`ExceptionGroup[gaierror]` 没被吞 —— `gaierror` 不是 "
+        "`ConnectionError` 子类，收窄时必须显式留着它，否则 DNS 失败会 500。"
+    )
+
+
+def test_the_overflow_fallback_is_the_second_line() -> None:
+    """★★ `OverflowError` 兜底是**第二道**，且它只在真实连接时才起作用。
+
+    ## 为什么必须有这条（主管点名要的）
+
+    否则会出现"靠 `OverflowError` 兜底"的**隐式依赖** —— 那种依赖在
+    换成同步 client、或 httpx/anyio 改版时会静默失效。
+
+    ## ★ 一个必须说清的事实：既有用例证明不了这一层
+
+    `test_redirect_guard.py` 的 15 条畸形 `Location` 用例走的是
+    `httpx.MockTransport`，而 mock **永远不会真的连接** ——
+    所以 `OverflowError` 兜底在那些用例里**根本不可测**。
+    实测：在 MockTransport 下把 `_check_port` 去掉，越界端口
+    一律"返回 200"，一条都不会被兜底拦住。
+
+    那些用例实际守住的是 `_check_port`（和 `InvalidURL` 那一档）。
+
+    ## 这条用真实 transport
+
+    打 `127.0.0.1` 上一个越界端口：连接层抛 `OverflowError`，
+    anyio 包成 `ExceptionGroup`。**把 `_check_port` 去掉**之后，
+    它必须仍然以 `Ctf2Error` 收场 —— 那才说明兜底真的在工作。
+
+    ⚠️ 反过来也测一次：`:0` 是**非溢出语义**的越界端口
+    （合法整数、连接层不抛 `OverflowError`），`_check_port` 一去掉
+    它就**拦不住**了。这个对照划清两层各自管什么：
+    `_check_port` 管"语义上不合法"，`OverflowError` 只管"连接层真的炸了"。
+    """
+    from app.ctf2.adapters import redirect as redirect_mod
+
+    async def go(url: str) -> Any:
+        client = httpx.AsyncClient(follow_redirects=False, timeout=4.0, trust_env=False)
+        try:
+            return await request_same_host(
+                client, "GET", url, base_host=httpx.URL(url).host or ""
+            )
+        finally:
+            await client.aclose()
+
+    def without_check_port() -> Any:
+        """临时把 `_check_port` 改成空实现，返回一个恢复函数。"""
+        real = redirect_mod._check_port
+
+        def _noop(target: Any, *, what: str) -> None:
+            return None
+
+        redirect_mod._check_port = _noop
+        return lambda: setattr(redirect_mod, "_check_port", real)
+
+    # ── ① 只靠兜底：越界端口仍须是 Ctf2Error ────────────────
+    restore = without_check_port()
+    try:
+        with pytest.raises(Ctf2Error) as excinfo:
+            _run(go("http://127.0.0.1:99999/x"))
+        assert "无法使用" in excinfo.value.message, (
+            "越界端口在去掉 `_check_port` 后没有由 `OverflowError` 兜底拦住 —— "
+            "第二道防线失效了（调用点的 except 接不住 ExceptionGroup → 500）"
+        )
+    finally:
+        restore()
+
+    # ── ② 对照：`:0` 兜底管不了，只能靠 `_check_port` ────────
+    restore = without_check_port()
+    try:
+        try:
+            _run(go("http://127.0.0.1:0/x"))
+        except Ctf2Error as exc:
+            raise AssertionError(
+                "`:0` 在去掉 `_check_port` 后就被拦住了？那说明它走的不是 "
+                "兜底路径 —— 这个对照的前提不成立，请重看两层分工。"
+                f"（实际报错：{exc.message}）"
+            ) from exc
+        except BaseException:  # noqa: BLE001
+            pass  # 连接层报什么都行，重点是**没有**被 `_check_port` 拦
+    finally:
+        restore()
+
+    with pytest.raises(Ctf2Error) as excinfo:
+        _run(go("http://127.0.0.1:0/x"))
+    assert "端口越界" in excinfo.value.message, (
+        "`:0` 必须由 `_check_port` 的区间比较拦住（它是非溢出语义的越界，"
+        "连接层不会抛 `OverflowError`）—— 这正是 `_check_port` 必须在"
+        "连接之前跑的理由"
+    )

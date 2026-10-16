@@ -58,6 +58,7 @@ headers / stream**，**没有 `params`** —— 也就是说：**下一跳的 qu
 
 from __future__ import annotations
 
+import socket
 from typing import Any
 
 import httpx
@@ -163,16 +164,86 @@ def _is_transport_level(exc: BaseException) -> bool:
     ★ 只把这一类转成 `Ctf2Error`。**不要把 `ExceptionGroup` 无条件吞掉** ——
     它还可能是我们自己代码里的编程错误（那会被 task group 一起包起来），
     吞掉它等于用一个"平台的问题"盖住一个真 bug。判据是"每一条叶子都是
-    连接/地址层面的错误"：
-    `OSError`（连接失败）、`ArithmeticError`（端口越界 = `OverflowError`）、
-    `ValueError`、`httpx` 自己的 URL 异常（`_LIBRARY_URL_ERRORS`）、
-    以及 `HTTPError` 全族。
+    连接/地址层面的错误"。
+
+    ## ★★ 2026-10-16（R-1）：判据收窄过一轮，每个成员都要有正当用途
+
+    原来这里还有裸 `ValueError` / `OSError` / `ArithmeticError`。那三个
+    **同时是编程错误的常见类型**（解包失败、`int()` 失败、除零），而整段
+    `client.request(...)` 都在这一层包装里 —— 于是我们自己抛的
+    `ValueError` 会被报成「平台给的跳转地址无法使用」，
+    正是本函数开头那句"别用平台的问题盖住真 bug"要防的事。
+
+    收窄的依据是**实测**（Kali，httpx 0.28.1 / anyio 4.15.1），不是推断：
+
+    | 实测项 | 结果 |
+    | --- | --- |
+    | 21 种畸形 `Location` 里裸 `ValueError` 出现次数 | **0** |
+    | 真实连接失败（拒绝连接 / DNS 失败 / 不可路由）的外层类型 | `ConnectError`、`ConnectTimeout`（**都是 `HTTPError` 子类**） |
+    | 裸 `OSError` 是否曾不经包装地冒出来 | **否** —— 连接层永远把它包成 httpx 自己的类型 |
+    | `ExceptionGroup[gaierror]`（anyio 直连 DNS 失败的原始类型） | 是**真的**传输错误，且 `gaierror` **不是** `ConnectionError` 子类 |
+
+    于是三个成员这样处理：
+
+    * **删掉裸 `ValueError`** —— 0 次真实出现。而且实测
+      `httpx.InvalidURL` 的 MRO 是 `(InvalidURL, Exception)`，
+      `UnsupportedProtocol` 是 `(UnsupportedProtocol, TransportError,
+      RequestError, HTTPError, …)` —— **两者都不是 `ValueError`**，
+      所以删掉它不会让 F-08 那两族漏网（它们分别由
+      `_LIBRARY_URL_ERRORS` 与 `HTTPError` 覆盖）。
+    * **`OSError` → `ConnectionError` + `socket.gaierror`** ——
+      `ConnectionError` 是"连接层面失败"的确切类型（`ConnectionRefusedError`
+      等都在其下），而 `gaierror` 是唯一**不在** `ConnectionError` 之下、
+      却真的属于"网络不可用"的 `OSError`；不显式留着它，
+      `ExceptionGroup[gaierror]` 就会逃逸成 500。
+      丢掉的只有 `FileNotFoundError` / `PermissionError` 这类
+      **文件系统**错误 —— 它们在这个上下文里只可能是我们自己的 bug。
+    * **`ArithmeticError` → `OverflowError`** —— 端口越界的真身就是
+      `OverflowError`（`socket.connect` 对 >65535 的端口抛它），
+      而 `issubclass(OverflowError, ArithmeticError)` 为真，
+      所以收窄**不丢任何覆盖**；同时把 `ZeroDivisionError`
+      （`ArithmeticError` 的另一半，显然是编程错误）放回上抛。
+
+    ## ★ `_check_port` 仍然是第一道，`OverflowError` 只是兜底（实测）
+
+    这两层的分工必须说清，否则会出现"靠 `OverflowError` 兜底"的隐式依赖 ——
+    那种依赖在换成同步 client、或 httpx/anyio 改版时会**静默失效**。
+
+    实测（真实 transport，逐个去掉一层）：
+
+    | 输入 | `_check_port` 在位 | 只有 `OverflowError` 兜底 |
+    | --- | --- | --- |
+    | `:99999` / `:65536` / `:70000` | `Ctf2Error`（`_check_port`） | `Ctf2Error`（`ExceptionGroup[OverflowError]`） |
+    | **`:0`** | `Ctf2Error`（`_check_port`） | **放行（返回 404）** ★ |
+
+    `:0` 是**非溢出语义**的越界端口：它是个合法整数，连接层不会抛
+    `OverflowError`，只是"连上了一个没人监听的端口"。
+    所以它**只能**由 `_check_port` 的显式区间比较（`MIN_PORT..MAX_PORT`）
+    拦住 —— 收窄前后都**不依赖** `ArithmeticError`（那个比较根本没走到
+    任何异常）。这也是 `_check_port` 必须在连接之前跑的理由：
+    它管的是"语义上不合法"，而 `OverflowError` 管不了这一类。
+
+    ⚠️ **既有测试证明不了兜底那一层**：`test_redirect_guard.py` 的 15 条
+    畸形 `Location` 用例走的是 `httpx.MockTransport`，而 mock
+    **永远不会真的连接**，所以 `OverflowError` 兜底在那些用例里
+    **根本不可测**（实测：在 MockTransport 下把 `_check_port` 去掉，
+    越界端口一律"返回 200"，一条都不会被兜底拦住）。
+    那些用例实际守住的是 `_check_port` 与 `_LIBRARY_URL_ERRORS` 两条路径。
+    要测兜底必须用真实 transport（见 `tests/ctf2/test_redirect_guard.py`
+    里 `test_the_overflow_fallback_is_the_second_line`）。
     """
     if isinstance(exc, BaseExceptionGroup):
         leaves = _leaf_exceptions(exc)
         return bool(leaves) and all(_is_transport_level(leaf) for leaf in leaves)
     return isinstance(
-        exc, (OSError, ArithmeticError, ValueError, httpx.HTTPError, *_LIBRARY_URL_ERRORS)
+        exc,
+        (
+            ConnectionError,  # 连接层面失败（含 ConnectionRefusedError 等）
+            socket.gaierror,  # DNS 解析失败（唯一不在 ConnectionError 之下的网络类 OSError）
+            OverflowError,  # 端口越界（>65535）—— 收窄前的 ArithmeticError
+            httpx.HTTPError,  # httpx 的传输/协议/超时全族
+            *_LIBRARY_URL_ERRORS,  # httpx.InvalidURL
+        ),
     )
 
 
