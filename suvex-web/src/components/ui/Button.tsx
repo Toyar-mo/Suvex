@@ -43,12 +43,9 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type Ref } from 'react'
  *
  * 所以这里额外持一个 `pendingRef`：**在 click handler 的第一行同步置位**，
  * 第二次点击进到 handler 立刻被 `preventDefault` 掉，不等任何渲染。
- * `loading` 回到 `false` 时清位 —— 这条走 `useEffect`，因为那时已经渲染完了，
- * 早一点晚一点都无所谓。
- *
- * ⚠️ 契约：传了 `loading` 就必须真的把它翻成 `true`（哪怕晚一点）。
- *    永远传死值 `loading={false}` 会让按钮在第一次点击后自我锁定 ——
- *    守卫置位后再没有东西来清它。这是刻意的取舍：宁可锁定，也不要重复提交。
+ * 松位不靠「`loading` 变回 false」那一条（那样传死值 `loading={false}` 的调用方
+ * 点一次就永久点不动了，实测隔 50ms 再点计数仍停在 1），而是**这一趟 handler
+ * 结束后**：返回 Promise 就等它落定，只返回值就等同步栈清空。
  *
  * ## ★ 两类禁用语义：`disabled` 与 `busy`
  *
@@ -71,8 +68,10 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type Ref } from 'react'
  * `busy` 管"光标怎么说"。只希望光标是 wait、但不想要转圈时（比如图标自己已经在转），
  * 单给 `busy` 就够。
  *
- * 与 `ToggleChip` 的禁用态又是第三条规矩：chip 的禁用常常是"这一项**永远**不能选"，
- * 要长期可读，所以它连 `opacity` 都不用 —— 见 `ToggleChip.tsx` 文件头。
+ * 与 `ToggleChip` 的禁用态是**两条不同的规矩**，不是不一致：chip 的禁用常常是
+ * "这一项**永远**不能选"，边框和内距要长期可读，所以它只减淡边框、文字留在
+ * `ink-faint`；按钮的禁用是"**这一刻**不能点"，还带着一个本该醒目的底色（紫底 /
+ * 红底），所以要把底色一起换掉。见下面 `VARIANT_DISABLED`。
  *
  * ## 焦点环为什么不在这个文件里
  *
@@ -87,15 +86,72 @@ export type ButtonSize = 'xs' | 'sm' | 'md' | 'lg'
 
 const VARIANT: Record<ButtonVariant, string> = {
   primary:
-    'press inline-flex items-center justify-center gap-1.5 rounded-sm bg-accent font-medium text-canvas transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50',
+    'press inline-flex items-center justify-center gap-1.5 rounded-sm bg-accent font-medium text-canvas transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed',
   secondary:
-    'press inline-flex items-center gap-1.5 rounded-sm border border-line text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink disabled:cursor-not-allowed disabled:opacity-50',
+    'press inline-flex items-center gap-1.5 rounded-sm border border-line text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink disabled:cursor-not-allowed',
   ghost:
-    'press inline-flex items-center gap-1.5 rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-50',
+    'press inline-flex items-center gap-1.5 rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed',
   danger:
-    'press inline-flex items-center justify-center gap-1.5 rounded-sm bg-signal-risk/90 font-medium text-canvas transition-ui duration-fast hover:bg-signal-risk disabled:cursor-not-allowed disabled:opacity-50',
-  link: 'text-accent-strong underline transition-ui duration-fast hover:text-accent',
-  'link-muted': 'text-ink-muted underline transition-ui duration-fast hover:text-ink',
+    'press inline-flex items-center justify-center gap-1.5 rounded-sm bg-signal-risk/90 font-medium text-canvas transition-ui duration-fast hover:bg-signal-risk disabled:cursor-not-allowed',
+  link: 'text-accent-strong underline transition-ui duration-fast hover:text-accent disabled:cursor-not-allowed',
+  'link-muted':
+    'text-ink-muted underline transition-ui duration-fast hover:text-ink disabled:cursor-not-allowed',
+}
+
+/**
+ * ★ 禁用态是**逐层换色**，不是 `opacity-50`。
+ *
+ * 一整条 `opacity-50` 会乘在整棵子树上、不认识层级：一个 15.7:1 的标签压一半就
+ * 掉到 3.93:1，子元素里的描述掉到 2.13:1（`src/design-system.md` §4 记着这次事故）。
+ * 而且压暗的主色按钮实测只有 2.26:1 —— 文字自己没过 AA，读屏器读得出来、人眼读不出来。
+ *
+ * 所以每一档单独解一个**在底色上真能读**的禁用配色，取值经过实测（见下），
+ * 且都按最差承载面验过：`secondary`/`ghost` 是透明底，用最亮的 `surface-overlay`
+ * （暗）与最暗的 `surface-sunken`（亮）当底。
+ *
+ * | 变体 | 禁用配色 | 暗 | 亮 |
+ * |---|---|---|---|
+ * | primary | `bg-accent-dim` + `ink-muted` | 4.94:1 | 5.70:1 |
+ * | secondary | `ink-faint` + `line/50` | 5.21:1 | 4.98:1 |
+ * | ghost | `ink-faint` | 5.21:1 | 4.98:1 |
+ * | danger | `bg-signal-risk/15` + `ink-muted` | 5.61:1 | 5.50:1 |
+ * | link 族 | `ink-faint` + 去下划线 | 5.21:1 | 4.98:1 |
+ *
+ * 每档都要**自己带 hover 覆写**，而且必须用 `disabled:hover:` 而不是 `hover:`。
+ *
+ * `disabled` 的 `<button>` 在 Chrome 里仍然匹配 `:hover`（`pointer-events` 没被改），
+ * 不覆写就会出现「灰色文字压在正常态的亮紫底上」。但只写 `hover:` 不行 ——
+ * `hover:` 是**同一个特异性**，胜负由 Tailwind 生成 CSS 的先后决定，不由 HTML 里
+ * 类名的先后决定。实测构建产物（`index-pErvQUZM.css`）：
+ *
+ * ```
+ * .hover\:bg-accent-dim         156943   ← 想让它赢
+ * .hover\:bg-accent-strong      157060   ← 实际在后面，它赢
+ * .hover\:text-ink              158727 / 158825  ← 同样在 ink-faint 之后
+ * .hover\:text-ink-faint        158825
+ * .disabled\:hover\:bg-accent-dim  160686  ← 加 disabled: 后落到最后
+ * ```
+ *
+ * 即「`hover:bg-accent-dim` 会被 `hover:bg-accent-strong` 吃掉」。加一个
+ * `disabled:` 前缀后特异性从 (0,2,0) 抬到 (0,3,0)，顺序就无关了。
+ *
+ * 这套类名**只在按钮真的处于禁用态时才被拼进去**（见 `inactive` 那行）；
+ * 加 `disabled:` 前缀是为了特异性，不是为了选择器匹配。
+ *
+ * ⚠️ 下限是 `ink-faint`，不能再用 `ink-ghost`（1.91–2.05:1）。`index.css` 对
+ * `ink-ghost` 的约定是「仅装饰，禁止承载任何信息」，禁用按钮上的文字仍然是文字。
+ */
+const VARIANT_DISABLED: Record<ButtonVariant, string> = {
+  primary: 'disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
+  secondary:
+    'disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
+  ghost:
+    'disabled:text-ink-faint disabled:hover:bg-transparent disabled:hover:text-ink-faint',
+  danger:
+    'disabled:bg-signal-risk/15 disabled:text-ink-muted disabled:hover:bg-signal-risk/15',
+  link: 'disabled:text-ink-faint disabled:no-underline disabled:hover:text-ink-faint',
+  'link-muted':
+    'disabled:text-ink-faint disabled:no-underline disabled:hover:text-ink-faint',
 }
 
 /**
@@ -135,8 +191,8 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loadingLabel?: string
   /**
    * "等一等"而不是"不许点"。真时同样不可点，但光标是 `cursor-wait`、
-   * **不做 `opacity` 压暗** —— 等待态不是错误态，文案（"正在生成…"）已经说明了
-   * 该做什么，再把它灰掉只会让人以为出问题了。与 `loading` 可以同时给。
+   * **不换成禁用配色** —— 等待态不是错误态，文案（"正在生成…"）已经说明了
+   * 该做什么，再把底色抽掉只会让人以为出问题了。与 `loading` 可以同时给。
    */
   busy?: boolean
 }
@@ -190,6 +246,11 @@ export function Button({
   const isLink = variant === 'link' || variant === 'link-muted'
   const isPending = loading === true
   const isBusy = busy === true
+  /*
+    `busy` 走的是正常态配色 + `cursor-wait` —— 它表达的是「等一等，什么都没坏」，
+    不是「这次不许点」。所以只有真的禁用/在飞时才换成禁用配色。
+  */
+  const inactive = (disabled === true || isPending) && !isBusy
 
   return (
     <button
@@ -240,12 +301,12 @@ export function Button({
         VARIANT[variant],
         isLink ? LINK_SIZE[size] : SIZE[size],
         /*
-          busy 覆盖 disabled 的两条：光标换成 wait，并撤掉 50% 压暗。
-          用 `disabled:` 前缀写而不是靠 className 的层叠顺序，是因为变体里那条
-          也是 `disabled:` 前缀 —— twMerge 会把同前缀同组的后写者留下，但依赖
-          "谁后写"太脆，显式同前缀更稳。
+          禁用态换成显式配色（见 VARIANT_DISABLED）。放在变体之后，靠 twMerge
+          的同组后写者取胜 —— 这是确定性的（同组取最后一条），不是靠 CSS 层叠顺序。
         */
-        isBusy && 'disabled:cursor-wait disabled:opacity-100',
+        inactive && VARIANT_DISABLED[variant],
+        // busy 只换光标：它说的是「等一等」，不是「不许点」
+        isBusy && 'disabled:cursor-wait',
         className,
       )}
     >
@@ -269,9 +330,16 @@ export type IconButtonVariant = 'ghost' | 'secondary'
 
 const ICON_VARIANT: Record<IconButtonVariant, string> = {
   ghost:
-    'press inline-flex items-center justify-center rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed disabled:opacity-50',
+    'press inline-flex items-center justify-center rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink disabled:cursor-not-allowed',
   secondary:
-    'press inline-flex items-center justify-center rounded-sm border border-line text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink disabled:cursor-not-allowed disabled:opacity-50',
+    'press inline-flex items-center justify-center rounded-sm border border-line text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink disabled:cursor-not-allowed',
+}
+
+/** 见 `VARIANT_DISABLED` 那段：禁用靠逐层换色，不靠 `opacity`；`disabled:` 前缀是为了盖住同特异性的 `hover:`。 */
+const ICON_VARIANT_DISABLED: Record<IconButtonVariant, string> = {
+  ghost: 'disabled:text-ink-faint disabled:hover:bg-transparent disabled:hover:text-ink-faint',
+  secondary:
+    'disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
 }
 
 const ICON_SIZE: Record<IconButtonSize, string> = {
@@ -296,6 +364,7 @@ export function IconButton({
   type = 'button',
   className,
   children,
+  disabled,
   ...rest
 }: IconButtonProps) {
   return (
@@ -303,8 +372,14 @@ export function IconButton({
       {...rest}
       ref={ref}
       type={type}
+      disabled={disabled}
       aria-label={label}
-      className={cn(ICON_VARIANT[variant], ICON_SIZE[size], className)}
+      className={cn(
+        ICON_VARIANT[variant],
+        disabled === true && ICON_VARIANT_DISABLED[variant],
+        ICON_SIZE[size],
+        className,
+      )}
     >
       {children}
     </button>

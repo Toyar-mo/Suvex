@@ -29,9 +29,11 @@ import type { ButtonHTMLAttributes, Ref } from 'react'
  *
  * `FindingsPage.tsx:1509` 原注释写得很清楚：「不叠加 opacity，会把文字一起压暗」。
  * 这里沿用：禁用走 `text-ink-faint` + 半淡边框，每一层都还在 AA 之上。
- * 这与 `Button` 的 `disabled:opacity-50` 是**两条不同的规矩**，不是不一致：
- * `Button` 的禁用态是"这一刻不能点"，而 chip 的禁用态常常是"这一项**永远**
- * 不能选"（比如没有对应数据的筛选项），后者要长期可读。
+ * 这与 `Button` 的禁用配色是**两条不同的规矩**，不是不一致：
+ * `Button` 的禁用是"这一刻不能点"，按钮身上还带着一个本该醒目的实心底色（紫底 /
+ * 红底），所以它要连底色一起换掉；而 chip 的禁用态常常是"这一项**永远**
+ * 不能选"（比如没有对应数据的筛选项），边框和内距要长期可读，只减淡边框就够。
+ * 两条规矩的**共同点**是都不动用 `opacity`。
  */
 
 export type ToggleChipSize = 'xs' | 'sm'

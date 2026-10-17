@@ -151,7 +151,7 @@ describe('Button：★ busy 档（"等一等"不是"不许点"）', () => {
     expect(onClick).not.toHaveBeenCalled()
   })
 
-  it('★★ busy 用 cursor-wait 且**不**压暗（压暗是在说"出问题了"）', () => {
+  it('★★ busy 用 cursor-wait 且**不**换成禁用配色（压暗是在说"出问题了"）', () => {
     render(<Button busy>重新下载</Button>)
 
     // ⚠️ 按整词断言，不用 `toContain` —— `disabled:cursor-not-allowed`
@@ -159,18 +159,132 @@ describe('Button：★ busy 档（"等一等"不是"不许点"）', () => {
     const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
     expect(tokens).toContain('disabled:cursor-wait')
     expect(tokens).not.toContain('disabled:cursor-not-allowed')
-    // twMerge 让后写的 disabled:opacity-100 顶掉变体自带的 disabled:opacity-50
-    expect(tokens).toContain('disabled:opacity-100')
-    expect(tokens).not.toContain('disabled:opacity-50')
+    // busy 保持正常态配色：紫底仍在，没有换成禁用底
+    expect(tokens).toContain('bg-accent')
+    expect(tokens).not.toContain('disabled:bg-accent-dim')
   })
 
-  it('★★ 对照：普通 disabled 仍然是 not-allowed + 压暗（两档真的不同）', () => {
+  it('★★ 对照：普通 disabled 换成显式禁用配色，不再靠 opacity（两档真的不同）', () => {
     render(<Button disabled>重新下载</Button>)
 
     const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
     expect(tokens).toContain('disabled:cursor-not-allowed')
-    expect(tokens).toContain('disabled:opacity-50')
+    expect(tokens).toContain('disabled:bg-accent-dim')
+    expect(tokens).toContain('disabled:text-ink-muted')
     expect(tokens).not.toContain('disabled:cursor-wait')
+  })
+
+  it('★ 禁用配色里没有任何 opacity（一经 opacity 就乘在整棵子树上）', () => {
+    // 全变体扫一遍：这是 design-system §4「不要用 opacity 表达禁用」的钉子。
+    // 少了这条，把 VARIANT_DISABLED 整个删掉、改回 opacity-50 也不会有检查变红。
+    const variants = ['primary', 'secondary', 'ghost', 'danger', 'link', 'link-muted'] as const
+    for (const variant of variants) {
+      const { unmount } = render(
+        <Button variant={variant} disabled>
+          文字
+        </Button>,
+      )
+      const cls = screen.getByRole('button').className ?? ''
+      expect(cls, `${variant} 变体不该用 opacity 表达禁用`).not.toMatch(/\bopacity-\d/)
+      unmount()
+    }
+  })
+
+  it('★★ busy 盖过 disabled：两个都传时仍保留正常态底色', () => {
+    // `inactive` 是 `(disabled || loading) && !busy`。少了 `!busy`，
+    // 「请求中重新下载」这种 disabled+busy 的组合会被抽掉紫底 —— 而它恰恰是
+    // 最需要看起来"还在正常工作"的那一个。
+    render(
+      <Button busy disabled>
+        重新下载
+      </Button>,
+    )
+
+    const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
+    expect(tokens).toContain('bg-accent')
+    expect(tokens).not.toContain('disabled:bg-accent-dim')
+    expect(tokens).toContain('disabled:cursor-wait')
+  })
+
+  it('★ loading 在飞时也换成禁用配色（转圈期间底色不能还是亮紫）', () => {
+    render(
+      <Button loading loadingLabel="正在登录…">
+        登录
+      </Button>,
+    )
+
+    const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
+    expect(tokens).toContain('disabled:bg-accent-dim')
+    expect(tokens).toContain('disabled:text-ink-muted')
+  })
+
+  it('★★ 静态色和 hover 色各自都要有 disabled: 覆写（两层分开配对）', () => {
+    /*
+      不覆写的话：鼠标悬停时变体自带的 `hover:bg-accent-strong` 会赢，出现
+      「灰字压在亮紫底上」—— 禁用态里最难看的一种。`disabled` 只拦点击，
+      不拦 `:hover` 匹配（`pointer-events` 没被改）。
+
+      ⚠️ 只写 `hover:` 不够：两者特异性相同，胜负由 Tailwind 生成 CSS 的先后
+      决定（实测构建产物 `hover:bg-accent-dim` 在 156943、`hover:bg-accent-strong`
+      在 157060，后者赢）。覆写必须带 `disabled:`，把特异性从 (0,2,0) 抬到 (0,3,0)。
+
+      ⚠️ 而且**两层要分开配对**。头一版只做了一层，被反向验证抓出假绿：
+      把 `link` 的 `disabled:text-ink-faint` 删掉后测试仍是 35 passed —— 因为
+      `disabled:hover:text-ink-faint` 还在，配对表以为 text 组已有覆写。可那一行
+      只在悬停时生效，不悬停时文字仍是正常态的 `text-accent-strong`。
+    */
+    const GROUP = /^(disabled:hover:|disabled:|hover:)?(bg|text|border)-/
+    const variants = ['primary', 'secondary', 'ghost', 'danger', 'link', 'link-muted'] as const
+    for (const variant of variants) {
+      const { unmount } = render(
+        <Button variant={variant} disabled>
+          文字
+        </Button>,
+      )
+      const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
+
+      const groups = { normal: new Set<string>(), normalHover: new Set<string>() }
+      const covered = { normal: new Set<string>(), hover: new Set<string>() }
+      for (const t of tokens) {
+        const m = t.match(GROUP)
+        if (!m) continue
+        const prop = m[2]
+        const prefix = m[1] ?? ''
+        if (prefix === 'disabled:hover:') covered.hover.add(prop)
+        else if (prefix === 'disabled:') covered.normal.add(prop)
+        else if (prefix === 'hover:') groups.normalHover.add(prop)
+        else groups.normal.add(prop)
+      }
+
+      const missingStatic = [...groups.normal].filter((p) => !covered.normal.has(p))
+      const missingHover = [...groups.normalHover].filter((p) => !covered.hover.has(p))
+      expect(missingStatic, `${variant} 的静态 ${missingStatic.join('/')} 没有 disabled: 覆写`).toEqual(
+        [],
+      )
+      expect(missingHover, `${variant} 的 hover ${missingHover.join('/')} 没有 disabled:hover: 覆写`).toEqual(
+        [],
+      )
+      unmount()
+    }
+  })
+
+  it('★★ 每个变体的颜色类都带 disabled: 前缀（无色值只活在裸 hover: 上）', () => {
+    // 这是上一条的结构性判据：禁用态的每一处改色都必须能盖住同组正常态，
+    // 否则「靠 CSS 顺序取胜」这种静默失效会回来。
+    const variants = ['primary', 'secondary', 'ghost', 'danger', 'link', 'link-muted'] as const
+    for (const variant of variants) {
+      const { unmount } = render(
+        <Button variant={variant} disabled>
+          文字
+        </Button>,
+      )
+      const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
+      const disabledColors = tokens.filter(
+        (t) => t.startsWith('disabled:') && /(bg-|text-|border-)/.test(t),
+      )
+      expect(disabledColors.length, `${variant} 禁用态没有任何一个改色类`).toBeGreaterThan(0)
+      unmount()
+    }
   })
 
   it('busy 与 loading 可以同时给（转圈由 loading 管，光标由 busy 管）', () => {
@@ -465,5 +579,33 @@ describe('IconButton', () => {
     screen.getByRole('button').click()
 
     expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('★★ 禁用时换成显式禁用配色，不用 opacity', () => {
+    // IconButton 是另一个组件、另一套类名表（ICON_VARIANT_DISABLED），
+    // 只测 Button 的话，把这一整条删掉不会有任何检查变红。
+    const { unmount } = render(
+      <IconButton label="关闭" disabled>
+        ×
+      </IconButton>,
+    )
+    const ghostCls = screen.getByRole('button').className ?? ''
+    expect(ghostCls).not.toMatch(/\bopacity-\d/)
+    expect(ghostCls.split(/\s+/)).toContain('disabled:text-ink-faint')
+    unmount()
+
+    render(
+      <IconButton label="关闭" variant="secondary" disabled>
+        ×
+      </IconButton>,
+    )
+    const secCls = screen.getByRole('button').className ?? ''
+    const secTokens = secCls.split(/\s+/)
+    expect(secCls).not.toMatch(/\bopacity-\d/)
+    expect(secTokens).toContain('disabled:border-line/50')
+    expect(secTokens).toContain('disabled:text-ink-faint')
+    // hover 覆写必须带 disabled: 前缀，否则同特异性、会被 CSS 顺序吃掉
+    expect(secTokens).toContain('disabled:hover:border-line/50')
+    expect(secTokens).toContain('disabled:hover:text-ink-faint')
   })
 })
