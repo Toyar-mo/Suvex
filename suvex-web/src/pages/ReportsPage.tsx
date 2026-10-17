@@ -838,20 +838,23 @@ export function ReportsPage() {
                   excludedCount={inScope.length - selectedCount}
                 />
 
+                {/*
+                  ★ 用 `loading` 而不是手写文案分支。
+
+                  这样一次拿到三样东西：转圈图标、`aria-busy`、以及那个 `pendingRef`
+                  同步守卫（挡住"提交生效之前"的第二次点击）。手写
+                  `{busy === 'generate' ? '正在生成…' : …}` 只有文字，后两样都拿不到。
+                */}
                 <Button
                   variant="primary"
                   size="md"
                   onClick={handleGenerate}
-                  disabled={busy !== null || selectedCount === 0}
+                  disabled={selectedCount === 0 || busy === 'download'}
+                  loading={busy === 'generate'}
+                  loadingLabel="正在生成…"
                 >
-                  {busy === 'generate' ? (
-                    '正在生成…'
-                  ) : (
-                    <>
-                      <Download size={14} strokeWidth={2} aria-hidden="true" />
-                      生成并导出
-                    </>
-                  )}
+                  <Download size={14} strokeWidth={2} aria-hidden="true" />
+                  生成并导出
                 </Button>
 
                 {format === 'pdf' && (
@@ -1096,11 +1099,20 @@ function ReportMetaCard({
         <MetaRow label="条目筛选" value={o.onlyConfirmed ? '仅已确认' : '全部状态'} />
       </dl>
 
+      {/*
+        ★ 这里必须是 `busy` 而不是普通 `disabled`。
+
+        请求中的文案是「正在生成…」，那是在说**等一等**；而 `disabled` 的默认
+        光标是 `cursor-not-allowed`（不许点）。两个信号互相打脸 ——
+        用户看到"等"，指针却告诉他"不行"。`busy` 把光标换成 `cursor-wait`
+        且不压暗，与文案一致。依据见 `components/ui/Button.tsx` 文件头
+        「两类禁用语义」。
+      */}
       <Button
         variant="secondary"
         size="sm"
         onClick={() => onDownload(report)}
-        disabled={downloadingId === report.id}
+        busy={downloadingId === report.id}
         className="mt-1"
       >
         <Download size={12} strokeWidth={2} aria-hidden="true" />

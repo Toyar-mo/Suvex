@@ -126,6 +126,67 @@ describe('Button：loading 契约', () => {
   })
 })
 
+/*
+  ═══════════════════════════════════════════════════════════════════════
+  busy 档：2026-10-17 补。
+  起因是 Review 指出 `ReportsPage` 的「重新下载」被压平了 —— 文案说
+  「正在生成…」（等一等），光标却说 `cursor-not-allowed`（不许点）。
+  这一组用例把两档的差异钉死在类名上，以后谁想再压平会先红一次。
+  ═══════════════════════════════════════════════════════════════════════
+*/
+describe('Button：★ busy 档（"等一等"不是"不许点"）', () => {
+  it('★★ busy 时不可点 + aria-busy（和 loading 一样挡住重复提交）', () => {
+    const onClick = vi.fn()
+    render(
+      <Button busy onClick={onClick}>
+        重新下载
+      </Button>,
+    )
+
+    const el = screen.getByRole('button')
+    expect(el.hasAttribute('disabled')).toBe(true)
+    expect(el.getAttribute('aria-busy')).toBe('true')
+
+    el.click()
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('★★ busy 用 cursor-wait 且**不**压暗（压暗是在说"出问题了"）', () => {
+    render(<Button busy>重新下载</Button>)
+
+    // ⚠️ 按整词断言，不用 `toContain` —— `disabled:cursor-not-allowed`
+    //    里也含 "cursor" 字样，子串匹配会给出假绿灯。
+    const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
+    expect(tokens).toContain('disabled:cursor-wait')
+    expect(tokens).not.toContain('disabled:cursor-not-allowed')
+    // twMerge 让后写的 disabled:opacity-100 顶掉变体自带的 disabled:opacity-50
+    expect(tokens).toContain('disabled:opacity-100')
+    expect(tokens).not.toContain('disabled:opacity-50')
+  })
+
+  it('★★ 对照：普通 disabled 仍然是 not-allowed + 压暗（两档真的不同）', () => {
+    render(<Button disabled>重新下载</Button>)
+
+    const tokens = (screen.getByRole('button').className ?? '').split(/\s+/)
+    expect(tokens).toContain('disabled:cursor-not-allowed')
+    expect(tokens).toContain('disabled:opacity-50')
+    expect(tokens).not.toContain('disabled:cursor-wait')
+  })
+
+  it('busy 与 loading 可以同时给（转圈由 loading 管，光标由 busy 管）', () => {
+    render(
+      <Button loading busy loadingLabel="正在生成…">
+        生成并导出
+      </Button>,
+    )
+
+    const el = screen.getByRole('button')
+    expect(el.querySelector('svg[aria-hidden="true"]')).toBeTruthy()
+    expect(el.getAttribute('aria-busy')).toBe('true')
+    expect((el.className ?? '').split(/\s+/)).toContain('disabled:cursor-wait')
+  })
+})
+
 describe('Button：★ 同步防重复提交（pendingRef 守卫）', () => {
   it('★★ 传了 loading 的按钮，同一帧内连点两次只触发一次', () => {
     const onClick = vi.fn()

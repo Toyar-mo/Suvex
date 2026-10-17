@@ -50,6 +50,30 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type Ref } from 'react'
  *    永远传死值 `loading={false}` 会让按钮在第一次点击后自我锁定 ——
  *    守卫置位后再没有东西来清它。这是刻意的取舍：宁可锁定，也不要重复提交。
  *
+ * ## ★ 两类禁用语义：`disabled` 与 `busy`
+ *
+ * 这两种灰不是一回事，压成一个会丢信息：
+ *
+ * | | 鼠标 | 语义 | 用户该做什么 |
+ * | --- | --- | --- | --- |
+ * | `disabled` | `cursor-not-allowed` | 这次**不许**点 | 先改别的东西 |
+ * | `busy` | `cursor-wait` | 这次**等一等** | 什么都不用做，等它 |
+ *
+ * 具体压平会怎样：`ReportsPage` 的「重新下载」在请求中显示「正在生成…」，
+ * 那正是 `wait` —— 用户要做的唯一一件事就是等。改成 `not-allowed` 之后，
+ * 文案说"等"，光标说"不行"，两个信号互相打脸。
+ *
+ * 全站刻意保留 `cursor-wait` 的地方（本次都是未收编的老代码，口径一致）：
+ * `components/reports/ReportHistory.tsx:190`、`components/scans/WizardChrome.tsx:73`、
+ * `components/settings/NotifyPanel.tsx:617`、`components/settings/ProviderPanel.tsx:734`。
+ *
+ * `busy` 与 `loading` 是**两个维度**，可以同时给：`loading` 管"转圈 + 防重复提交"，
+ * `busy` 管"光标怎么说"。只希望光标是 wait、但不想要转圈时（比如图标自己已经在转），
+ * 单给 `busy` 就够。
+ *
+ * 与 `ToggleChip` 的禁用态又是第三条规矩：chip 的禁用常常是"这一项**永远**不能选"，
+ * 要长期可读，所以它连 `opacity` 都不用 —— 见 `ToggleChip.tsx` 文件头。
+ *
  * ## 焦点环为什么不在这个文件里
  *
  * 全站只有一套焦点环，在 `src/index.css:247` 的 `:focus-visible`。
@@ -109,6 +133,12 @@ export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   loading?: boolean
   /** 加载时的文字。不传就沿用 children */
   loadingLabel?: string
+  /**
+   * "等一等"而不是"不许点"。真时同样不可点，但光标是 `cursor-wait`、
+   * **不做 `opacity` 压暗** —— 等待态不是错误态，文案（"正在生成…"）已经说明了
+   * 该做什么，再把它灰掉只会让人以为出问题了。与 `loading` 可以同时给。
+   */
+  busy?: boolean
 }
 
 export function Button({
@@ -117,6 +147,7 @@ export function Button({
   size = 'md',
   loading,
   loadingLabel,
+  busy,
   disabled,
   type = 'button',
   className,
@@ -144,6 +175,7 @@ export function Button({
 
   const isLink = variant === 'link' || variant === 'link-muted'
   const isPending = loading === true
+  const isBusy = busy === true
 
   return (
     <button
@@ -152,8 +184,8 @@ export function Button({
       // 全站只有 2 处需要 submit（登录、初始化），其余都不该触发表单提交。
       // 默认 `button` 而不是 HTML 的默认值 `submit`，是这里最容易踩的坑。
       type={type}
-      disabled={disabled || isPending}
-      aria-busy={isPending || undefined}
+      disabled={disabled || isPending || isBusy}
+      aria-busy={isPending || isBusy || undefined}
       onClick={(event) => {
         // ★ 同步守卫：必须是 handler 的第一件事，早于 onClick 调用方
         if (pendingRef.current) {
@@ -165,7 +197,18 @@ export function Button({
         if (loading !== undefined) pendingRef.current = true
         onClick?.(event)
       }}
-      className={cn(VARIANT[variant], isLink ? LINK_SIZE[size] : SIZE[size], className)}
+      className={cn(
+        VARIANT[variant],
+        isLink ? LINK_SIZE[size] : SIZE[size],
+        /*
+          busy 覆盖 disabled 的两条：光标换成 wait，并撤掉 50% 压暗。
+          用 `disabled:` 前缀写而不是靠 className 的层叠顺序，是因为变体里那条
+          也是 `disabled:` 前缀 —— twMerge 会把同前缀同组的后写者留下，但依赖
+          "谁后写"太脆，显式同前缀更稳。
+        */
+        isBusy && 'disabled:cursor-wait disabled:opacity-100',
+        className,
+      )}
     >
       {isPending && (
         <Loader2 size={14} strokeWidth={2} className="animate-spin" aria-hidden="true" />

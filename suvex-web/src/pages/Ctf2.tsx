@@ -475,8 +475,12 @@ export function Ctf2Page() {
               /*
                 `link` 族刻意不带禁用样式（行内链接没有高度与内距，
                 给它做"灰掉"的框反而会让它看起来像个按钮）。
-                但这一处 busy 时确实不可点，所以禁用可见性由调用方补 ——
-                见 `Button.tsx` 文件头对两类禁用语义的说明。
+                但这一处 busy 时确实不可点，所以禁用可见性由调用方补。
+
+                这里要的是 `cursor-not-allowed`（「先别动，平台正忙」）而不是
+                `busy` 那档 `cursor-wait`（「等它一下就好」）—— 用户此刻的
+                正确动作是等平台空闲，不是等这个按钮。两档的区别见
+                `components/ui/Button.tsx` 文件头「两类禁用语义」那一节。
               */
               className={busy ? 'cursor-not-allowed opacity-50' : undefined}
               onClick={() => setUnbinding(true)}
