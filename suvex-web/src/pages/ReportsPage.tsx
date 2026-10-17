@@ -4,6 +4,7 @@ import ReportSheet from '@/components/reports/ReportSheet'
 import ReportHistory from '@/components/reports/ReportHistory'
 import { ContentOptions, ScopePicker, ScopePreview } from '@/components/reports/ReportConfigPanel'
 import ErrorState from '@/components/ui/ErrorState'
+import { Button } from '@/components/ui/Button'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { loadFindings, useFindingsState } from '@/data/findings-store'
@@ -803,23 +804,31 @@ export function ReportsPage() {
                 <div className="flex flex-col gap-1.5">
                   <span className="text-2xs text-ink-faint">导出格式</span>
                   <div role="radiogroup" aria-label="导出格式" className="flex gap-1">
-                    {(['pdf', 'markdown'] as ReportFormat[]).map((key) => (
-                      <button
-                        key={key}
-                        type="button"
-                        role="radio"
-                        aria-checked={format === key}
-                        onClick={() => setFormat(key)}
-                        className={cn(
-                          'h-8 flex-1 rounded-sm border text-xs transition-ui duration-fast',
-                          format === key
-                            ? 'border-accent/50 bg-accent-wash text-ink'
-                            : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
-                        )}
-                      >
-                        {key === 'pdf' ? 'PDF' : 'Markdown'}
-                      </button>
-                    ))}
+                    {(['pdf', 'markdown'] as ReportFormat[]).map((key) => {
+                      const checked = format === key
+                      return (
+                        <Button
+                          key={key}
+                          variant="secondary"
+                          size="sm"
+                          role="radio"
+                          aria-checked={checked}
+                          onClick={() => setFormat(key)}
+                          /*
+                            `role="radio"` 的选中态不是按钮的禁用/启用二态，所以
+                            基元不给它：`secondary` 的边框与文字色在这里被
+                            tailwind-merge 覆盖成「选中泛紫」，未选中沿用基元的
+                            灰底描边。`flex-1` 让两项平分列宽。
+                          */
+                          className={cn(
+                            'flex-1',
+                            checked && 'border-accent/50 bg-accent-wash text-ink',
+                          )}
+                        >
+                          {key === 'pdf' ? 'PDF' : 'Markdown'}
+                        </Button>
+                      )
+                    })}
                   </div>
                 </div>
 
@@ -829,16 +838,11 @@ export function ReportsPage() {
                   excludedCount={inScope.length - selectedCount}
                 />
 
-                <button
-                  type="button"
+                <Button
+                  variant="primary"
+                  size="md"
                   onClick={handleGenerate}
                   disabled={busy !== null || selectedCount === 0}
-                  className={cn(
-                    'inline-flex h-9 items-center justify-center gap-1.5 rounded-sm text-sm transition-ui duration-fast',
-                    busy !== null || selectedCount === 0
-                      ? 'cursor-not-allowed bg-surface-raised text-ink-faint'
-                      : 'bg-accent-deep text-white hover:bg-accent',
-                  )}
                 >
                   {busy === 'generate' ? (
                     '正在生成…'
@@ -848,7 +852,7 @@ export function ReportsPage() {
                       生成并导出
                     </>
                   )}
-                </button>
+                </Button>
 
                 {format === 'pdf' && (
                   <p className="text-2xs text-ink-faint">
@@ -1039,21 +1043,22 @@ function ViewTab({
   label: string
 }) {
   return (
-    <button
-      type="button"
+    <Button
+      variant="ghost"
+      size="sm"
       role="tab"
       aria-selected={active}
       onClick={onClick}
-      className={cn(
-        'inline-flex h-8 items-center gap-1.5 rounded-sm px-3 text-xs transition-ui duration-fast',
-        active
-          ? 'bg-surface-raised text-ink'
-          : 'text-ink-muted hover:bg-surface-raised/60 hover:text-ink',
-      )}
+      /*
+        `role="tab"` 的选中态用「浮起底色」表达（与右侧预览区同一层级）。
+        基元 `ghost` 的默认文字色是 `ink-faint`（更淡），而这一排 tab 原来用的是
+        `ink-muted` —— 不改回去会整体变淡一档，所以用 className 覆盖回来。
+      */
+      className={cn('text-ink-muted', active && 'bg-surface-raised text-ink')}
     >
       {icon}
       {label}
-    </button>
+    </Button>
   )
 }
 
@@ -1091,20 +1096,16 @@ function ReportMetaCard({
         <MetaRow label="条目筛选" value={o.onlyConfirmed ? '仅已确认' : '全部状态'} />
       </dl>
 
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="sm"
         onClick={() => onDownload(report)}
         disabled={downloadingId === report.id}
-        className={cn(
-          'mt-1 inline-flex h-8 items-center justify-center gap-1.5 rounded-sm border text-xs transition-ui duration-fast',
-          downloadingId === report.id
-            ? 'cursor-wait border-line text-ink-faint'
-            : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
-        )}
+        className="mt-1"
       >
         <Download size={12} strokeWidth={2} aria-hidden="true" />
         {downloadingId === report.id ? '正在生成…' : '重新下载'}
-      </button>
+      </Button>
     </div>
   )
 }

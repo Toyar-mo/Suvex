@@ -2,6 +2,8 @@ import { PageHeader } from '@/components/layout/AppShell'
 import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WriteupDialog } from '@/components/ctf2'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
+import { Button, IconButton } from '@/components/ui/Button'
+import ToggleChip from '@/components/ui/ToggleChip'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   CHALLENGE_STATUS_LABEL,
@@ -466,17 +468,21 @@ export function Ctf2Page() {
             >
               提交策略设置
             </Link>
-            <button
-              type="button"
+            <Button
+              variant="link-muted"
+              size="xs"
               disabled={busy}
+              /*
+                `link` 族刻意不带禁用样式（行内链接没有高度与内距，
+                给它做"灰掉"的框反而会让它看起来像个按钮）。
+                但这一处 busy 时确实不可点，所以禁用可见性由调用方补 ——
+                见 `Button.tsx` 文件头对两类禁用语义的说明。
+              */
+              className={busy ? 'cursor-not-allowed opacity-50' : undefined}
               onClick={() => setUnbinding(true)}
-              className={cn(
-                'text-2xs text-ink-muted underline transition-ui duration-fast hover:text-ink',
-                busy && 'cursor-not-allowed opacity-50',
-              )}
             >
               解绑 / 换绑
-            </button>
+            </Button>
           </div>
         )}
 
@@ -510,18 +516,10 @@ export function Ctf2Page() {
               const count = challenges.filter((c) => item.match.includes(c.status)).length
               const isActive = filter === item.value
               return (
-                <button
+                <ToggleChip
                   key={item.value}
-                  type="button"
-                  onClick={() => setFilter(item.value)}
-                  aria-pressed={isActive}
-                  className={cn(
-                    'inline-flex h-8 items-center gap-1.5 rounded-pill border px-2.5 text-xs',
-                    'transition-ui duration-fast',
-                    isActive
-                      ? 'border-accent/50 bg-accent-wash text-ink'
-                      : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
-                  )}
+                  active={isActive}
+                  onToggle={() => setFilter(item.value)}
                 >
                   {item.label}
                   <span
@@ -533,7 +531,7 @@ export function Ctf2Page() {
                   >
                     {count}
                   </span>
-                </button>
+                </ToggleChip>
               )
             })}
           </div>
@@ -561,26 +559,23 @@ export function Ctf2Page() {
             />
           </div>
 
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={busy}
             onClick={() => {
               setPullInput('')
               setPulling(true)
             }}
             title="把平台上的题目链接粘进来，按 id 精确拉取这一道题"
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
-              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
-            )}
           >
             <Link2 size={12} strokeWidth={2} aria-hidden="true" />
             拉取单题
-          </button>
+          </Button>
 
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={busy || queue?.queued === 0}
             onClick={runPrioritizeByScore}
             /*
@@ -596,45 +591,23 @@ export function Ctf2Page() {
                   '它不会自动执行 —— 先做高分题还是先做容易题是战术选择，' +
                   '取决于当前比分与剩余时间，由你决定。'
             }
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
-              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              (busy || queue?.queued === 0) && 'cursor-not-allowed opacity-50',
-            )}
           >
             <ListOrdered size={12} strokeWidth={2} aria-hidden="true" />
             按分值排队
-          </button>
+          </Button>
 
-          <button
-            type="button"
+          <Button
+            variant="secondary"
+            size="sm"
             disabled={busy}
             onClick={() => setPicking(true)}
             title="同步指定赛事的阶段与题目（赛事题目只能查看，不能在这里解题）"
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
-              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
-            )}
           >
-            <Trophy
-              size={12}
-              strokeWidth={2}
-              aria-hidden="true"
-            />
+            <Trophy size={12} strokeWidth={2} aria-hidden="true" />
             同步赛事题目
-          </button>
+          </Button>
 
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => runSync()}
-            className={cn(
-              'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
-              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
-            )}
-          >
+          <Button variant="secondary" size="sm" disabled={busy} onClick={() => runSync()}>
             <RefreshCw
               size={12}
               strokeWidth={2}
@@ -642,7 +615,7 @@ export function Ctf2Page() {
               aria-hidden="true"
             />
             同步题目
-          </button>
+          </Button>
         </div>
 
         {/* ── 结果提示 ── */}
@@ -657,14 +630,9 @@ export function Ctf2Page() {
               />
               {notice}
             </p>
-            <button
-              type="button"
-              onClick={clearCtf2Notice}
-              aria-label="关闭提示"
-              className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
-            >
+            <IconButton label="关闭提示" onClick={clearCtf2Notice}>
               <X size={13} strokeWidth={2} aria-hidden="true" />
-            </button>
+            </IconButton>
           </div>
         )}
 
@@ -817,30 +785,17 @@ export function Ctf2Page() {
             </p>
 
             <footer className="flex items-center justify-end gap-2">
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => setPulling(false)}
-                className={cn(
-                  'inline-flex h-8 items-center rounded-sm border border-line px-3 text-xs text-ink-muted',
-                  'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-                  busy && 'cursor-not-allowed opacity-50',
-                )}
-              >
+              <Button variant="secondary" size="sm" disabled={busy} onClick={() => setPulling(false)}>
                 取消
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 disabled={busy || !pullInput.trim()}
                 onClick={() => void runPull()}
-                className={cn(
-                  'press inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs font-medium text-canvas',
-                  'transition-ui duration-fast hover:bg-accent-strong',
-                  (busy || !pullInput.trim()) && 'cursor-not-allowed opacity-50',
-                )}
               >
                 拉取
-              </button>
+              </Button>
             </footer>
           </div>
         </div>
@@ -975,18 +930,16 @@ function BindPrompt() {
         />
       </div>
 
-      <button
-        type="button"
+      <Button
+        variant="primary"
+        size="md"
         disabled={busy || !token.trim()}
+        loading={busy}
+        loadingLabel="验证中…"
         onClick={submit}
-        className={cn(
-          'press inline-flex h-9 items-center justify-center rounded-sm bg-accent px-3 text-sm font-medium text-canvas',
-          'transition-ui duration-fast hover:bg-accent-strong',
-          (busy || !token.trim()) && 'cursor-not-allowed opacity-50',
-        )}
       >
-        {busy ? '验证中…' : '绑定并验证'}
-      </button>
+        绑定并验证
+      </Button>
 
       <p className="text-2xs text-ink-faint">
         绑定时会真的调一次 CTF2 验证这个令牌 —— 验证不通过就不会保存，
@@ -1030,24 +983,11 @@ function Ctf2EmptyState({
         点「同步题目」把平台上的练习集与赛事拉下来。同步是一次外部请求， 会真的访问 CTF2 ——
         所以它需要扫描级权限。
       </p>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={onSync}
-        className={cn(
-          'press inline-flex h-9 items-center gap-2 rounded-sm bg-accent px-3 text-sm font-medium text-canvas',
-          'transition-ui duration-fast hover:bg-accent-strong',
-          busy && 'cursor-not-allowed opacity-50',
-        )}
-      >
-        <RefreshCw
-          size={14}
-          strokeWidth={2.5}
-          className={busy ? 'animate-spin' : undefined}
-          aria-hidden="true"
-        />
+      <Button variant="primary" size="md" disabled={busy} loading={busy} onClick={onSync}>
+        {/* busy 时由 `loading` 自己渲染转圈，这里再画一个就有两个圈了 */}
+        {!busy && <RefreshCw size={14} strokeWidth={2.5} aria-hidden="true" />}
         同步题目
-      </button>
+      </Button>
     </div>
   )
 }

@@ -9,6 +9,8 @@ import { SeverityBadge, StatusBadge, VerificationBadge } from '@/components/find
 import Drawer from '@/components/ui/Drawer'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
+import { Button, IconButton } from '@/components/ui/Button'
+import ToggleChip from '@/components/ui/ToggleChip'
 import NoScansYet from '@/components/ui/NoScansYet'
 import ReasonDialog from '@/components/ui/ReasonDialog'
 import { Skeleton, SkeletonRows, SkeletonText } from '@/components/ui/Skeleton'
@@ -746,11 +748,12 @@ export function FindingsPage() {
                   const count = bySeverity[severity] ?? 0
                   const active = filter.severities.has(severity)
                   return (
-                    <Chip
+                    <ToggleChip
                       key={severity}
+                      size="xs"
                       active={active}
                       disabled={count === 0}
-                      onClick={() =>
+                      onToggle={() =>
                         setFilter((prev) => ({
                           ...prev,
                           severities: toggled(prev.severities, severity),
@@ -764,7 +767,7 @@ export function FindingsPage() {
                       <span className="tabular text-ink-faint" data-numeric>
                         {count}
                       </span>
-                    </Chip>
+                    </ToggleChip>
                   )
                 })}
               </FilterGroup>
@@ -774,11 +777,12 @@ export function FindingsPage() {
                   const count = byStatus[status_] ?? 0
                   const active = filter.statuses.has(status_)
                   return (
-                    <Chip
+                    <ToggleChip
                       key={status_}
+                      size="xs"
                       active={active}
                       disabled={count === 0}
-                      onClick={() =>
+                      onToggle={() =>
                         setFilter((prev) => ({ ...prev, statuses: toggled(prev.statuses, status_) }))
                       }
                     >
@@ -786,7 +790,7 @@ export function FindingsPage() {
                       <span className="tabular text-ink-faint" data-numeric>
                         {count}
                       </span>
-                    </Chip>
+                    </ToggleChip>
                   )
                 })}
               </FilterGroup>
@@ -939,16 +943,13 @@ export function FindingsPage() {
                       </option>
                     ))}
                   </select>
-                  <button
-                    type="button"
+                  <IconButton
+                    label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
+                    className="ml-0.5"
                     onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
-                    aria-label={
-                      sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'
-                    }
-                    className="ml-0.5 inline-flex h-6 w-6 items-center justify-center rounded-xs text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
                   >
                     {sortDir === 'desc' ? '↓' : '↑'}
-                  </button>
+                  </IconButton>
                 </div>
               </FilterField>
 
@@ -981,21 +982,14 @@ export function FindingsPage() {
                       { key: 'groups' as const, label: '分组' },
                     ]
                   ).map((option) => (
-                    <button
+                    <ToggleChip
                       key={option.key}
-                      type="button"
-                      onClick={() => setView(option.key)}
-                      aria-pressed={view === option.key}
-                      className={cn(
-                        'inline-flex h-full items-center rounded-xs px-2.5 text-xs',
-                        'transition-ui duration-fast',
-                        view === option.key
-                          ? 'bg-accent-wash text-ink'
-                          : 'text-ink-muted hover:text-ink',
-                      )}
+                      variant="segment"
+                      active={view === option.key}
+                      onToggle={() => setView(option.key)}
                     >
                       {option.label}
-                    </button>
+                    </ToggleChip>
                   ))}
                 </div>
               </div>
@@ -1003,14 +997,17 @@ export function FindingsPage() {
               {/* 清除筛选：只在真的有筛选时出现。
                   它没有标签，所以底部对齐到控件那一行，不跟标签行。 */}
               {filterActive && (
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={clearFilter}
-                  className="inline-flex h-8 items-center gap-1 self-end rounded-sm px-2 text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
+                  /* 底部对齐到控件那一行（它没有标签行）；`px-2` 沿用原间距，
+                     与相邻的「导出 CSV」按钮保持同宽节奏 */
+                  className="self-end px-2"
                 >
                   <X size={12} strokeWidth={2} aria-hidden="true" />
                   清除筛选
-                </button>
+                </Button>
               )}
 
               {/*
@@ -1041,10 +1038,11 @@ export function FindingsPage() {
                       { key: 'trash' as const, label: '回收站' },
                     ]
                   ).map((option) => (
-                    <button
+                    <ToggleChip
                       key={option.key}
-                      type="button"
-                      onClick={() => {
+                      variant="segment"
+                      active={scope === option.key}
+                      onToggle={() => {
                         // 换范围时清掉选择：上一个范围里选中的 id 在新范围里
                         // 多半不存在，留着它们会让批量栏显示"已选 3 条"而
                         // 列表里一条都没选中。
@@ -1052,17 +1050,9 @@ export function FindingsPage() {
                         setOpenId(null)
                         void loadFindings({ scope: option.key })
                       }}
-                      aria-pressed={scope === option.key}
-                      className={cn(
-                        'inline-flex h-full items-center rounded-xs px-2.5 text-xs',
-                        'transition-ui duration-fast',
-                        scope === option.key
-                          ? 'bg-accent-wash text-ink'
-                          : 'text-ink-muted hover:text-ink',
-                      )}
                     >
                       {option.label}
-                    </button>
+                    </ToggleChip>
                   ))}
                 </div>
               </div>
@@ -1074,25 +1064,17 @@ export function FindingsPage() {
                   这一点在按钮上就写清楚（"导出筛选结果"），
                   而不是只写"导出"让用户自己猜范围。
               */}
-              <button
-                type="button"
+              <Button
+                variant="secondary"
+                size="sm"
                 onClick={() => void handleExport()}
                 disabled={exporting}
-                title={
-                  filterActive
-                    ? '导出当前筛选结果（与列表一致）'
-                    : '导出全部漏洞'
-                }
-                className={cn(
-                  'inline-flex h-8 items-center gap-1 self-end rounded-sm border border-line px-2 text-xs',
-                  'text-ink-muted transition-ui duration-fast',
-                  'hover:border-line-strong hover:text-ink',
-                  'disabled:cursor-not-allowed disabled:opacity-50',
-                )}
+                title={filterActive ? '导出当前筛选结果（与列表一致）' : '导出全部漏洞'}
+                className="self-end px-2"
               >
                 <Download size={12} strokeWidth={2} aria-hidden="true" />
                 {exporting ? '导出中…' : filterActive ? '导出筛选结果' : '导出全部'}
-              </button>
+              </Button>
             </div>
 
             {/* ── 操作失败 ──
@@ -1151,13 +1133,9 @@ export function FindingsPage() {
                       或者它们还没被归类。
                     </p>
                     {filterActive && (
-                      <button
-                        type="button"
-                        onClick={clearFilter}
-                        className="text-xs text-accent-strong underline hover:text-accent"
-                      >
+                      <Button variant="link" size="sm" onClick={clearFilter}>
                         清除筛选条件
-                      </button>
+                      </Button>
                     )}
                   </div>
                 ) : (
@@ -1184,13 +1162,9 @@ export function FindingsPage() {
                     // 筛选后为空 —— 和"一条都没有"是两回事，提示必须不同
                     <div className="flex flex-col items-center gap-tight text-center">
                       <p className="text-sm text-ink-muted">没有符合条件的漏洞</p>
-                      <button
-                        type="button"
-                        onClick={clearFilter}
-                        className="text-xs text-accent-strong underline hover:text-accent"
-                      >
+                      <Button variant="link" size="sm" onClick={clearFilter}>
                         清除筛选条件
-                      </button>
+                      </Button>
                     </div>
                   ) : scansState.status === 'ready' && scansState.scans.length === 0 ? (
                     /*
@@ -1494,39 +1468,12 @@ function FilterField({
   )
 }
 
-function Chip({
-  active,
-  disabled,
-  onClick,
-  children,
-}: {
-  active: boolean
-  disabled?: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={active}
-      className={cn(
-        'press inline-flex h-7 items-center gap-1.5 rounded-pill border px-2 text-2xs',
-        'transition-ui duration-fast',
-        disabled
-          ? // 禁用靠「边框减淡 + 禁止光标」表达；不叠加 opacity，
-            //   opacity 会把文字一起压暗，回到读不出来的老问题。
-            'cursor-not-allowed border-line/50 text-ink-faint'
-          : active
-            ? 'border-accent/50 bg-accent-wash text-ink'
-            : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
-      )}
-    >
-      {children}
-    </button>
-  )
-}
+/*
+  ── 原来的本地 `Chip` 已收编进 `components/ui/ToggleChip`（`variant="pill" size="xs"`）──
 
+  它被两处筛选组共用（严重度、状态），形态与 `Ctf2.tsx` / `ScansPage.tsx`
+  的状态筛选是同一个 —— 放在页面里时三个地方各写一遍，改一次就得记着改三处。
+  收编后 `disabled` 那条「不叠加 opacity」的规矩成了基元的固定行为，不会再被抄漏。
+*/
 export type { Finding }
 export default FindingsPage

@@ -7,6 +7,8 @@ import CompareDialog from '@/components/scans/CompareDialog'
 import WriteupDialog from '@/components/scans/WriteupDialog'
 import ScanViewsMenu from '@/components/scans/ScanViewsMenu'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
+import { Button, IconButton } from '@/components/ui/Button'
+import ToggleChip from '@/components/ui/ToggleChip'
 import { SORT_LABEL, filterScans, sortScans, type SortDir, type SortKey } from '@/lib/scan-query'
 import { encodeViewQuery, type ScanViewParams } from '@/lib/scan-view-query'
 import ErrorState from '@/components/ui/ErrorState'
@@ -594,21 +596,13 @@ export function ScansPage() {
               const activeChip = view === 'default' && statusFilter === filter.value
 
               return (
-                <button
+                <ToggleChip
                   key={filter.value}
-                  type="button"
-                  onClick={() => {
+                  active={activeChip}
+                  onToggle={() => {
                     setView('default')
                     setStatusFilter(filter.value)
                   }}
-                  aria-pressed={activeChip}
-                  className={cn(
-                    'inline-flex h-8 items-center gap-1.5 rounded-pill border px-2.5 text-xs',
-                    'transition-ui duration-fast',
-                    activeChip
-                      ? 'border-accent/50 bg-accent-wash text-ink'
-                      : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
-                  )}
                 >
                   {filter.label}
                   <span
@@ -620,7 +614,7 @@ export function ScansPage() {
                   >
                     {count}
                   </span>
-                </button>
+                </ToggleChip>
               )
             })}
 
@@ -631,22 +625,14 @@ export function ScansPage() {
               const Icon = tab.icon
               const activeTab = view === tab.value
               return (
-                <button
+                <ToggleChip
                   key={tab.value}
-                  type="button"
-                  onClick={() => switchView(tab.value)}
-                  aria-pressed={activeTab}
-                  className={cn(
-                    'inline-flex h-8 items-center gap-1.5 rounded-pill border px-2.5 text-xs',
-                    'transition-ui duration-fast',
-                    activeTab
-                      ? 'border-accent/50 bg-accent-wash text-ink'
-                      : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
-                  )}
+                  active={activeTab}
+                  onToggle={() => switchView(tab.value)}
                 >
                   <Icon size={12} strokeWidth={1.75} aria-hidden="true" />
                   {tab.label}
-                </button>
+                </ToggleChip>
               )
             })}
           </div>
@@ -690,32 +676,24 @@ export function ScansPage() {
                 </option>
               ))}
             </select>
-            <button
-              type="button"
-              onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
-              aria-label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
+            <IconButton
+              label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
               /* 触摸目标：箭头字形只有 8px 宽，撑到 24px 见方。
                  它是工具条里唯一的纯图标按钮，太小会误触。 */
-              className="ml-0.5 inline-flex h-6 w-6 items-center justify-center rounded-xs text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
+              className="ml-0.5"
+              onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
             >
               {sortDir === 'desc' ? '↓' : '↑'}
-            </button>
+            </IconButton>
           </label>
 
           {/* 我的视图 —— 放在排序右边、新建扫描左边：它存的就是"这一排筛选控件"的状态 */}
           <ScanViewsMenu currentQuery={currentViewQuery} onApply={handleApplyView} />
 
-          <button
-            type="button"
-            onClick={() => setWizardOpen(true)}
-            className={cn(
-              'press inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs font-medium text-canvas',
-              'transition-ui duration-fast hover:bg-accent-strong',
-            )}
-          >
+          <Button variant="primary" size="sm" onClick={() => setWizardOpen(true)}>
             <Plus size={14} strokeWidth={2.5} aria-hidden="true" />
             新建扫描
-          </button>
+          </Button>
         </div>
 
         {/* ── 批量操作栏（选中 ≥1 项时出现，sticky 跟随滚动） ── */}
@@ -808,14 +786,9 @@ export function ScansPage() {
               >
                 查看活动
               </Link>
-              <button
-                type="button"
-                onClick={() => setSearchParams({}, { replace: true })}
-                aria-label="关闭提示"
-                className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
-              >
+              <IconButton label="关闭提示" onClick={() => setSearchParams({}, { replace: true })}>
                 <X size={13} strokeWidth={2} aria-hidden="true" />
-              </button>
+              </IconButton>
             </div>
           </div>
         )}
@@ -932,16 +905,16 @@ export function ScansPage() {
                   // 筛选后为空 —— 与"从来没跑过"是两回事，提示必须不同
                   <div className="flex flex-col items-center gap-tight text-center">
                     <p className="text-sm text-ink-muted">没有符合条件的扫描</p>
-                    <button
-                      type="button"
+                    <Button
+                      variant="link"
+                      size="sm"
                       onClick={() => {
                         setStatusFilter('all')
                         setTargetQuery('')
                       }}
-                      className="text-xs text-accent-strong underline hover:text-accent"
                     >
                       清除筛选条件
-                    </button>
+                    </Button>
                   </div>
                 ) : !hasAnyScan ? (
                   <div className="flex flex-col items-center gap-tight text-center">
@@ -955,25 +928,17 @@ export function ScansPage() {
                     <p className="max-w-[46ch] text-xs text-ink-faint">
                       给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。
                     </p>
-                    <button
-                      type="button"
-                      onClick={() => setWizardOpen(true)}
-                      className="press inline-flex h-10 items-center gap-2 rounded-sm bg-accent px-3 text-sm font-medium text-canvas transition-ui duration-fast hover:bg-accent-strong"
-                    >
+                    <Button variant="primary" size="lg" onClick={() => setWizardOpen(true)}>
                       <Plus size={15} strokeWidth={2.5} aria-hidden="true" />
                       发起第一次扫描
-                    </button>
+                    </Button>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-tight text-center">
                     <p className="text-sm text-ink-muted">这个状态下没有扫描</p>
-                    <button
-                      type="button"
-                      onClick={() => setStatusFilter('all')}
-                      className="text-xs text-accent-strong underline hover:text-accent"
-                    >
+                    <Button variant="link" size="sm" onClick={() => setStatusFilter('all')}>
                       查看全部
-                    </button>
+                    </Button>
                   </div>
                 )
               }

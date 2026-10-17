@@ -1,9 +1,10 @@
 import AuthShell from '@/components/layout/AuthShell'
 import { Field, TextInput } from '@/components/settings/Field'
 import ErrorState from '@/components/ui/ErrorState'
+import { Button } from '@/components/ui/Button'
 import { bootstrapAuth, clearAuthError, login, useAuth } from '@/data/auth-store'
 import { ApiError } from '@/lib/api'
-import { Loader2, LogIn } from 'lucide-react'
+import { LogIn } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
@@ -126,24 +127,17 @@ export function LoginPage() {
             </p>
           )}
 
-          <button
+          <Button
             type="submit"
+            variant="primary"
+            size="md"
             disabled={!canSubmit}
-            aria-busy={pending}
-            className="press inline-flex h-9 items-center justify-center gap-tight rounded-sm bg-accent px-3 text-sm font-medium text-canvas transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
+            loading={pending}
+            loadingLabel="正在登录…"
           >
-            {pending ? (
-              <>
-                <Loader2 size={14} strokeWidth={2} className="animate-spin" aria-hidden="true" />
-                正在登录…
-              </>
-            ) : (
-              <>
-                <LogIn size={14} strokeWidth={2} aria-hidden="true" />
-                登录
-              </>
-            )}
-          </button>
+            <LogIn size={14} strokeWidth={2} aria-hidden="true" />
+            登录
+          </Button>
         </form>
       </div>
 

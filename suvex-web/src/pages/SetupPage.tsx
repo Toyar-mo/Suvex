@@ -1,9 +1,10 @@
 import AuthShell from '@/components/layout/AuthShell'
 import { Field, TextInput } from '@/components/settings/Field'
 import PasswordStrength from '@/components/ui/PasswordStrength'
+import { Button } from '@/components/ui/Button'
 import { checkPassword } from '@/data/settings'
 import { clearAuthError, setupAdmin, useAuth } from '@/data/auth-store'
-import { Loader2, ShieldCheck } from 'lucide-react'
+import { ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 
@@ -147,25 +148,18 @@ export function SetupPage() {
           )}
 
           <div className="flex flex-col gap-tight">
-            <button
+            <Button
               type="submit"
+              variant="primary"
+              size="md"
               disabled={!canSubmit}
-              aria-busy={pending}
+              loading={pending}
+              loadingLabel="正在设置…"
               title={disabledReason ?? undefined}
-              className="press inline-flex h-9 items-center justify-center gap-tight rounded-sm bg-accent px-3 text-sm font-medium text-canvas transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {pending ? (
-                <>
-                  <Loader2 size={14} strokeWidth={2} className="animate-spin" aria-hidden="true" />
-                  正在设置…
-                </>
-              ) : (
-                <>
-                  <ShieldCheck size={14} strokeWidth={2} aria-hidden="true" />
-                  设置并进入
-                </>
-              )}
-            </button>
+              <ShieldCheck size={14} strokeWidth={2} aria-hidden="true" />
+              设置并进入
+            </Button>
 
             {/* 禁用必须给原因：`title` 在触屏上读不到，所以另有一行文字 */}
             {disabledReason && !pending && (
