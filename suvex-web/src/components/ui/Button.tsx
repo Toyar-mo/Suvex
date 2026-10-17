@@ -156,20 +156,34 @@ export function Button({
   ...rest
 }: ButtonProps) {
   const pendingRef = useRef(false)
+  /*
+    释锁回调要读「此刻的 loading」，而它发生在 handler 落定之后，晚于任何一次
+    渲染 —— 所以从 ref 读。**只能在 effect 里写**：渲染期写 ref 会被
+    `react-hooks/refs` 拦下（它是对的：渲染可能被打断重来，留半截状态比慢一拍坏）。
+  */
+  const loadingRef = useRef(loading)
 
   /*
     锁的两端各在一个地方：
 
       · **上锁**在 click handler 第一行（同步），因为要挡的正是「提交生效之前」
         的那次点击 —— 等渲染再上锁就已经晚了。
-      · **解锁**在这里，跟随 `loading` 变 false。
+      · **解锁**在 handler 这一趟结束之后：它返回了 Promise 就等它落定，只返回
+        一个值就等当前同步栈清空。两种情况都只在 `loading` 仍不是 true 时才松手。
 
-    ⚠️ 契约：传了 `loading` 就必须让它真的翻成 `true` 再翻回 `false`。
-       永远传死值 `loading={false}` 会让按钮在第一次点击后自我锁定
-       （锁上了，但再没有东西来清它）。这是刻意的取舍：宁可锁死，
-       也不要重复提交 —— 重复提交会真的发出第二条请求。
+    ⚠️ 为什么必须有这条解锁路：原来只在 `loading === true` 时置位、`false` 时
+       清除，于是任何传死值 `loading={false}` 的调用方，点一次就再也解锁不了 ——
+       按钮从此点不动，而且没有任何检查能发现（实测：隔 50ms 再点，
+       `onClick` 计数停在 1）。在 docstring 里写「必须传受控值」不算保障。
+
+    ⚠️ 为什么是「本趟结束」而不是 setTimeout(0)：宏任务会跑到 await 之后，
+       「handler 里先 await、之后才 setState」那种调用方会在请求还在飞的时候被
+       松锁，等于把守卫删了。而 Promise 落定 / 同步栈清空这两个时机精确覆盖了
+       守卫真正要管的窗口（点击 → 状态生效），同一同步块里的第二次点击之间
+       两者都不会发生，所以仍然被挡 —— 那才是重复提交真正发生的地方。
   */
   useEffect(() => {
+    loadingRef.current = loading
     pendingRef.current = loading === true
   }, [loading])
 
@@ -192,10 +206,35 @@ export function Button({
           event.preventDefault()
           return
         }
-        // 只有「受控加载」的按钮才上锁 —— 纯按钮传死 loading={false} 也不至于被锁，
-        // 因为受控判据是 loading !== undefined
-        if (loading !== undefined) pendingRef.current = true
-        onClick?.(event)
+        /*
+          不传 `loading` 的纯按钮完全不上锁 —— 它没有"在飞"的概念，
+          拦它只会让按钮莫名其妙点不动。
+        */
+        if (loading === undefined) {
+          onClick?.(event)
+          return
+        }
+
+        pendingRef.current = true
+        const releaseLock = () => {
+          // 状态已经翻起来了：按钮自己 disabled，锁交给上面那个 effect 管
+          if (loadingRef.current !== true) pendingRef.current = false
+        }
+        let returned: unknown
+        try {
+          returned = onClick?.(event)
+        } catch (error) {
+          // handler 自己炸了就不会有状态变化，锁必须当场松开，否则永久卡住
+          pendingRef.current = false
+          throw error
+        }
+        if (returned && typeof (returned as { then?: unknown }).then === 'function') {
+          // 异步 handler：请求落定之后再判。注意只挂 then，不吞异常
+          void (returned as Promise<unknown>).then(releaseLock, releaseLock)
+        } else {
+          // 同步 handler：等当前同步栈清空（微任务），此时那次 setState 的渲染已排队
+          queueMicrotask(releaseLock)
+        }
       }}
       className={cn(
         VARIANT[variant],

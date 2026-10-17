@@ -190,8 +190,8 @@ describe('Button：★ busy 档（"等一等"不是"不许点"）', () => {
 describe('Button：★ 同步防重复提交（pendingRef 守卫）', () => {
   it('★★ 传了 loading 的按钮，同一帧内连点两次只触发一次', () => {
     const onClick = vi.fn()
-    // loading 传常量 false 复现真实场景：handler 里 `await` 之后才 setPending，
-    // 而这中间按钮还没被 disabled —— 守卫要挡的正是这一帧。
+    // loading 传常量 false：handler 里 `await` 之后才 setPending，那一帧按钮还没
+    // disabled。守卫要挡的正是这一帧。
     render(
       <Button loading={false} onClick={onClick}>
         提交
@@ -237,6 +237,121 @@ describe('Button：★ 同步防重复提交（pendingRef 守卫）', () => {
 
     screen.getByRole('button').click()
     expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  /*
+    ★★ 这条是补漏的回归用例，前三条都抓不到它。
+
+    旧实现只在 `loading === true` 时置位、`false` 时清除，所以「传死值
+    loading={false}」的按钮点一次之后 pendingRef 永远是 true —— 同一帧那条
+    用例照样绿（它要的就是 1 次），但用户从此再也点不动，而且隔多久都不行。
+    实测过：隔 50ms 再点，计数停在 1。
+
+    判据只能靠"重新渲染后再点一次"来分辨。少了这条，把解锁逻辑整个删掉
+    也不会有任何检查变红。
+  */
+  it('★★ loading 传死值 false 时，锁只在那一帧有效，之后还点得动（不得永久锁死）', async () => {
+    const onClick = vi.fn()
+    render(
+      <Button loading={false} onClick={onClick}>
+        提交
+      </Button>,
+    )
+
+    const el = screen.getByRole('button')
+
+    // 第一帧：两次点击只应触发一次
+    el.click()
+    el.click()
+    expect(onClick).toHaveBeenCalledTimes(1)
+
+    // 让微任务队列清空 —— 也就是"这一帧过去了"
+    await Promise.resolve()
+
+    // 再点：必须还能触发，否则就是永久锁死
+    el.click()
+    expect(onClick).toHaveBeenCalledTimes(2)
+  })
+
+  /*
+    ★★ 异步 handler：锁在请求在飞期间必须一直有效。
+
+    这是和上一条相反的方向，两条一起才把"该锁多久"钉死 ——
+    只测上面那条，把解锁改成 setTimeout(0) 也能绿，而那会让
+    "handler 里先 await、之后才 setState" 的调用方在请求在飞时被松锁。
+  */
+  it('★★ 异步 handler 在飞期间连点被挡，落定后才能再点', async () => {
+    let resolveIt: (() => void) | undefined
+    const onClick = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveIt = resolve
+        }),
+    )
+    render(
+      <Button loading={false} onClick={onClick}>
+        提交
+      </Button>,
+    )
+
+    const el = screen.getByRole('button')
+
+    el.click()
+    expect(onClick).toHaveBeenCalledTimes(1)
+
+    // 请求还在飞：这期间点多少次都该被挡
+    el.click()
+    el.click()
+    expect(onClick).toHaveBeenCalledTimes(1)
+
+    // 请求结束（loading 仍是不受控的 false）
+    resolveIt?.()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    el.click()
+    expect(onClick).toHaveBeenCalledTimes(2)
+  })
+
+  /*
+    ★★ handler 自己抛异常时，锁必须当场松开。
+
+    抛异常意味着后面那行 setState 根本不会执行 —— 状态永远不会翻起来，
+    也就没有任何东西会来解锁。如果不在 catch 里重置，一次偶发报错就把按钮
+    永久焊死，而它看起来跟「被 disabled 挡住」一模一样，查起来极难。
+
+    这条是反向验证抓出来的缺口：把 catch 里的重置删掉，其余 27 条全绿。
+  */
+  it('★★ handler 抛异常后锁松开，按钮还能再点', async () => {
+    const onClick = vi.fn(() => {
+      throw new Error('boom')
+    })
+    render(
+      <Button loading={false} onClick={onClick}>
+        提交
+      </Button>,
+    )
+
+    const el = screen.getByRole('button')
+
+    /*
+      异常从 React 的事件分发里出来，最终会以 window 的 error 事件冒到 jsdom，
+      vitest 把它记成 Uncaught Exception，整份文件即使 29 条全绿也会退出 1。
+      这里只拦这一个，要断言的是"锁有没有松开"，不是"异常怎么冒出来"。
+    */
+    const swallowBoom = (event: ErrorEvent) => event.preventDefault()
+    window.addEventListener('error', swallowBoom)
+    try {
+      el.click()
+      await Promise.resolve()
+      expect(onClick).toHaveBeenCalledTimes(1)
+
+      // 再点：必须还能进 handler（还会再炸一次，这没关系）
+      el.click()
+      expect(onClick).toHaveBeenCalledTimes(2)
+    } finally {
+      window.removeEventListener('error', swallowBoom)
+    }
   })
 })
 
