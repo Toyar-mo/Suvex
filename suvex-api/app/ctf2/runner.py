@@ -2755,6 +2755,10 @@ async def solve_in_sandbox(
 
     outcome = SolveOutcome()
 
+    # ★ 上一轮工具输出的前 400 字符（v0.41）—— 用于识别"空转"（说明见主循环里
+    #   那段）。`None` 表示还没有上一轮可比。
+    last_output_head: str | None = None
+
     def notify(kind: str, summary: str, payload: dict[str, str]) -> None:
         """把一条过程送给回调（有回调时）。**吞掉回调的异常。**"""
         if on_progress is None:
@@ -2926,10 +2930,31 @@ async def solve_in_sandbox(
                     f"\n\n（提醒：你这一轮写了 {extra_actions} 个 ACTION，"
                     "系统只执行了第 1 个。需要其余的执行请一条一条来。）"
                 )
+            # ★ 重复输出要变成**可见信号**（v0.41）。
+            #
+            # 实测：66 份解题过程里 1717 次工具调用，**完全相同的命令只有 62 次
+            # （3.6%）**，但**输出前 400 字符相同的占 523 次（30.5%）** ——
+            # 空转的主体是"跑不同命令拿回同样的东西"，而不是复读命令。
+            # 提示词里已经写了「连续 3 次尝试没有新信息就换方向」
+            # （`prompts/ctf2_system.md:149-158`），但代码里没有任何判据
+            # （grep `新信息|consecutive|streak|same_output|stagnat` 零命中）——
+            # 这条规矩完全靠模型自觉。这里把它接上执行。
+            #
+            # ⚠️ 这一行**只进给模型看的那条 `recent`**：不进 `log`（落盘
+            #    transcript，题解正文靠它）、不进 `digest`（动作纪要）、
+            #    也不发事件 —— 否则题解里会混进一堆系统提示。
+            output_head = result[:400]
+            repeated_note = ""
+            if last_output_head is not None and output_head == last_output_head:
+                repeated_note = (
+                    "⚠️ 这次输出与你上一轮拿到的前 400 字符完全相同 —— "
+                    "换方向，别重复同一条路。\n\n"
+                )
+            last_output_head = output_head
             recent.append(
                 {
                     "role": "user",
-                    "content": f"工具 `{name}` 的输出：\n{result}{reminder_note}",
+                    "content": f"{repeated_note}工具 `{name}` 的输出：\n{result}{reminder_note}",
                 }
             )
             # ★ 记录"这次解题真的跑过工具"（v0.31）—— 供 auto 模式的

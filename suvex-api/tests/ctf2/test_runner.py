@@ -1115,6 +1115,90 @@ def test_a_turn_with_one_action_gets_no_such_reminder() -> None:
     assert "只执行了第 1 个" not in fed_back
 
 
+# ══════════════════════════════════════════════════════════
+# ★★ v0.41：重复输出做成可见信号
+# ══════════════════════════════════════════════════════════
+#
+# 实测：1717 次工具调用里完全相同的命令只有 62 次（3.6%），但**输出前 400
+# 字符相同的占 523 次（30.5%）** —— 空转的主体是"跑不同命令拿回同样的东西"。
+# 提示词写了「连续 3 次没新信息就换方向」，但代码里没有任何判据。
+
+
+def test_identical_output_tells_the_model_to_change_direction() -> None:
+    """连续两轮输出前 400 字符相同 → 第二轮给模型的文本带「换方向」。"""
+    sandbox = _FakeSandbox(outputs={"cmd": "完全一样的输出" * 100})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-1"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-2"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    # 第 2 轮开头（此时只塞了第 1 轮的工具输出）不该有提醒；
+    # 第 3 轮开头才该有 —— 因为那时才拿到两条一样的输出。
+    assert "换方向" not in gateway.seen[1][-1]["content"]
+    assert "换方向" in gateway.seen[2][-1]["content"]
+    assert "前 400 字符完全相同" in gateway.seen[2][-1]["content"]
+
+
+def test_different_outputs_get_no_change_direction_reminder() -> None:
+    """★ 反向断言：两轮输出不同 → 不出现那句提醒。"""
+    sandbox = _FakeSandbox(outputs={"cmd-1": "第一个输出", "cmd-2": "第二个输出"})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-1"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-2"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+    outcome = _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    for seen in gateway.seen:
+        assert "换方向" not in seen[-1]["content"]
+    assert "换方向" not in (outcome.transcript or "")
+
+
+def test_the_change_direction_signal_never_reaches_the_transcript() -> None:
+    """★ 反向断言：那句提醒**只**进给模型看的 `recent`。
+
+    它不能进 `log`（落盘 transcript，题解正文的原料）、不能进纪要、不发事件。
+    漏了这一条，题解里会混进一堆系统提示 —— 而那正是用户会读到的正文。
+    """
+    sandbox = _FakeSandbox(outputs={"cmd": "一模一样的输出" * 100})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-1"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-2"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+    events: list[tuple[str, str, dict]] = []
+    outcome = _run(
+        runner.solve_in_sandbox(
+            _spec(),
+            sandbox=sandbox,
+            gateway=gateway,
+            system_prompt="sys",
+            on_progress=lambda k, s, p: events.append((k, s, p)),
+        )
+    )
+
+    # 信号确实送到了模型
+    assert "换方向" in gateway.seen[2][-1]["content"]
+    # 但没进落盘的题解
+    assert "换方向" not in (outcome.transcript or "")
+    # 也没进事件流
+    assert all("换方向" not in s and "换方向" not in json.dumps(p, ensure_ascii=False)
+               for _k, s, p in events)
+
+
 def test_the_digest_keeps_early_actions_after_they_leave_the_window() -> None:
     """★★ 被裁掉的回合**不能凭空消失** —— 它们要以纪要的形式留下。
 
