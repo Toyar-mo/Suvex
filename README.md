@@ -269,8 +269,8 @@ suvex-api/
   app/core/       跨领域公共件（依赖方向单向，不依赖任何领域包）
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,ctf2}/
                   按领域拆分，各自 模型/出入参/业务/路由
-  alembic/        35 个迁移
-  tests/          77 个文件 / 2,215 个实际执行用例，对真实 PostgreSQL 跑
+  alembic/        36 个迁移
+  tests/          80 个文件 / 1,352 个 `def test_`，对真实 PostgreSQL 跑
   docs/           8 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
 
