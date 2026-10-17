@@ -1070,6 +1070,115 @@ def test_a_successful_exec_does_not_mark_the_sandbox_dead(monkeypatch) -> None:
 
 
 # ══════════════════════════════════════════════════════════
+# ★★ v0.41：`start()` 之后必须验活
+# ══════════════════════════════════════════════════════════
+#
+# 实测（Kali，用 `_argv()` 的原参数、只把入口换成 `/bin/true`）：
+# `docker run -d --rm` 在容器**秒退**时仍返回退出码 0 + 完整 64 位 ID，
+# 2 秒后 `docker ps` 已经查不到它。所以 `result.ok` 只证明"Docker 接受
+# 了请求"，不证明"这个容器在跑"。
+#
+# 代价：真实解题过程里四份"容器不见了"的现场有**三份是 turn 1 就死**，
+# 那种情况下 `died` 检测一次都救不回来（它要到下一次工具调用才置位）。
+
+_FAKE_ID = "bcff6db03babb2d1cef6074d5b8497bca107d86dc1315590c18e7db8a8fb3b56"
+
+
+def _start_with(monkeypatch, inspect_result: runner.CommandResult) -> runner.SandboxContainer:
+    """让 `docker run` 返回成功 + 64 位 ID，`docker inspect` 返回给定结果。"""
+
+    def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
+        if argv[:2] == ["docker", "inspect"]:
+            return inspect_result
+        if argv[:2] == ["docker", "version"]:
+            return runner.CommandResult(0, "28.0.0", "")
+        return runner.CommandResult(0, _FAKE_ID + "\n", "")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox.start()
+    return sandbox
+
+
+def test_start_fails_when_the_container_vanished_right_after_run(monkeypatch) -> None:
+    """★ `docker run` 报告成功，但容器随即消失 → `start()` 必须抛错。
+
+    这是实测出来的形状：`--rm` 让秒退的容器在下一瞬间被删掉，于是
+    `docker inspect` 直接查不到它。不拦的话，模型会拿十几轮去撞
+    `No such container`。
+    """
+    import pytest
+
+    inspect = runner.CommandResult(
+        1, "", "Error: No such object: bcff6db03babb"
+    )
+    with pytest.raises(runner.Ctf2SandboxError) as exc:
+        _start_with(monkeypatch, inspect)
+
+    message = str(exc.value)
+    assert "docker run 报告成功" in message
+    # 排查靠这两样：run 给的 ID（对照用）+ inspect 的原始报错。
+    assert _FAKE_ID[:12] in message
+    assert "No such object" in message
+
+
+def test_start_fails_when_the_container_exists_but_is_not_running(monkeypatch) -> None:
+    """★ 容器在、但 `Running=false` → 抛错，且消息带上 `.State` 四个字段。
+
+    秒退的容器在 `--rm` 之前那一瞬就是这个形态。`Status`/`ExitCode`/
+    `OOMKilled`/`Error` 这四个字段是排查"为什么秒退"的全部线索 ——
+    少了任何一个，"被 OOM 杀"和"入口自己崩了"在外部看起来一模一样。
+    """
+    import pytest
+
+    inspect = runner.CommandResult(0, "false|exited|137|true|something broke\n", "")
+    with pytest.raises(runner.Ctf2SandboxError) as exc:
+        _start_with(monkeypatch, inspect)
+
+    message = str(exc.value)
+    assert "没在跑" in message
+    for field in ("status=exited", "exit=137", "oom=true", "error=something broke"):
+        assert field in message, f"错误消息里缺 {field}，排查时就没有线索了"
+
+
+def test_start_succeeds_when_the_container_really_is_running(monkeypatch) -> None:
+    """★ 反向断言：`Running=true` 时正常返回，且 `container_id` 被记下。
+
+    防的是"验活写死成永远失败" —— 那种改法所有用例都绿，但一道题也解不出来。
+    """
+    sandbox = _start_with(monkeypatch, runner.CommandResult(0, "true|running|0|false|\n", ""))
+
+    assert sandbox.container_id == _FAKE_ID
+    assert sandbox._started is True
+
+
+def test_the_liveness_probe_asks_by_container_id_not_by_name(monkeypatch) -> None:
+    """★ 验活必须按**容器 ID** 查，不能按名字。
+
+    名字是外部可占用的资源：9-29 那次
+    `Conflict. The container name "/ctf2-Q14RPF0NEVT2-1603" is already in use`
+    就是实例 —— 按名字查有可能查到**另一个**容器，于是把死容器判成活。
+    """
+    seen: list[list[str]] = []
+
+    def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
+        seen.append(list(argv))
+        if argv[:2] == ["docker", "inspect"]:
+            return runner.CommandResult(0, "true|running|0|false|\n", "")
+        if argv[:2] == ["docker", "version"]:
+            return runner.CommandResult(0, "28.0.0", "")
+        return runner.CommandResult(0, _FAKE_ID + "\n", "")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox.start()
+
+    probe = next(call for call in seen if call[:2] == ["docker", "inspect"])
+    assert probe[2] == _FAKE_ID, "存活校验必须用容器 ID，不能用 name"
+    assert "ctf2-test-abc" not in probe
+
+
+# ══════════════════════════════════════════════════════════
 # ★★ v0.41：多 ACTION 回告
 # ══════════════════════════════════════════════════════════
 #

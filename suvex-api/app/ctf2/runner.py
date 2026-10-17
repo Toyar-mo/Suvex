@@ -1045,12 +1045,85 @@ class SandboxContainer:
                 f"启动解题沙箱失败：{result.stderr.strip() or result.stdout.strip() or '未知原因'}"
             )
         self.container_id = result.stdout.strip()[:64] or None
+        # ★★ `docker run` 成功**不等于**容器还活着（v0.41）。
+        #
+        # ## 为什么必须再验一次：实测 `docker run -d --rm` 会撒谎
+        #
+        # 容器**秒退**时（镜像入口一跑就结束、或起来立刻被什么带走），
+        # `docker run -d` 仍然返回**退出码 0**，stdout 仍然是**完整的 64 位
+        # 容器 ID**。Kali 上用 `_argv()` 的原参数、只把入口换成 `/bin/true`
+        # 实测：
+        #
+        #     docker run 退出码 = 0
+        #     stdout = bcff6db0...8fb3b56（长度 64）
+        #     2 秒后 docker ps --filter name=…  →  空
+        #     docker exec …  →  Error response from daemon: No such container
+        #
+        # 所以"`result.ok` 为真就认为起好了"是错的 —— 那只是"Docker 接受了
+        # 这个请求"，不是"这个容器在跑"。
+        #
+        # ## 代价对比：这条为什么要加
+        #
+        # 真实解题过程里，四份"容器不见了"的现场有**三份是 turn 1 就死**
+        # （`ctf2chal_01M516FTQ64CBZ1W44TDWPBC0M-20261016-041138.txt` 12 轮、
+        # `-050638.txt` 22 轮、`ctf2chal_01M3PYYJVPR6SGQ14RPF0NEVT2-20260929-130842.txt`
+        # 27 轮）。那种情况下 `self.died` 那条检测**一次都救不回来**：它要等到
+        # 下一次工具调用才置位，而那时模型已经拿 12~27 轮去撞同一堵墙。
+        # 一次 `docker inspect`（~50ms）换掉这一类全废。
+        #
+        # ⚠️ 验活**按容器 ID 做**，不按名字：名字是外部可占用的资源，
+        #    9-29 那次 `Conflict. The container name "/ctf2-Q14RPF0NEVT2-1603"
+        #    is already in use` 就是实例 —— 按名字查有可能查到**另一个**容器。
+        self._verify_running()
         self._started = True
         logger.info(
-            "CTF2 沙箱已启动 name=%s image=%s network=%s",
+            "CTF2 沙箱已启动 name=%s image=%s network=%s id=%s",
             self.name,
             self.image,
             "none" if self.network_isolated else CTF2_NETWORK,
+            self.container_id,
+        )
+
+    def _verify_running(self) -> None:
+        """`docker run` 之后确认容器**真的在跑**；不在就把现场信息带出来。
+
+        失败时抛 `Ctf2SandboxError`，消息里带上 `docker inspect` 的
+        `.State.Status` / `.ExitCode` / `.OOMKilled` / `.Error` —— 排查
+        "容器为什么秒退"时，这四个字段就是全部线索（OOM 与入口崩掉
+        在外部看起来完全一样）。
+        """
+        target = self.container_id or self.name
+        probe = _run(
+            [
+                "docker",
+                "inspect",
+                target,
+                "--format",
+                "{{.State.Running}}|{{.State.Status}}|{{.State.ExitCode}}"
+                "|{{.State.OOMKilled}}|{{.State.Error}}",
+            ],
+            timeout=20,
+        )
+        if not probe.ok:
+            # 容器已经不存在了 —— 正是 `docker run -d --rm` 秒退的形态：
+            # run 给了 ID，容器却在下一瞬间被删掉（`--rm` 生效）。
+            raise Ctf2SandboxError(
+                "启动解题沙箱失败：docker run 报告成功"
+                f"（ID {self.container_id or '(无)'}），但容器随即消失，"
+                "docker inspect 取不到它。"
+                f"（{probe.stderr.strip() or probe.stdout.strip() or '未知原因'}）"
+            )
+        parts = (probe.stdout or "").strip().split("|", 4)
+        while len(parts) < 5:
+            parts.append("")
+        running, status, exit_code, oom_killed, state_error = (p.strip() for p in parts)
+        if running.lower() == "true":
+            return
+        raise Ctf2SandboxError(
+            "启动解题沙箱失败：容器起来了但没在跑（可能秒退）。"
+            f"name={self.name} id={self.container_id or '(无)'} "
+            f"status={status or '(空)'} exit={exit_code or '(空)'} "
+            f"oom={oom_killed or '(空)'} error={state_error or '(空)'}"
         )
 
     # ── 在容器里做事 ──────────────────────────────────────
@@ -1065,12 +1138,12 @@ class SandboxContainer:
         ⚠️ 覆盖范围**只有 `exec` 与 `shell` 两条路径**（`shell` 是
         `run_shell` 工具的实现，也是解题的主路径）。
 
-        `copy_in` 的 `docker cp`（本文件 `:1139`）**仍直连 `_run`，绕开这里** ——
-        所以容器没了时那条 `docker cp` 的 `No such container` 不会置 `died`。
-        这一处**故意不补**：`copy_in` 在全仓**零生产调用点**（只有本文件的
-        定义与 `_run_worker` 里一句引用它的注释），为它加一条检测等于给
-        未来的读者一个"这里很重要"的假信号。真要它覆盖，主循环下一轮开头
-        那次 `shell` / 工具调用会兜住。
+        `copy_in` 的 `docker cp`（见本类的 `copy_in`）**仍直连 `_run`，绕开
+        这里** —— 所以容器没了时那条 `docker cp` 的 `No such container`
+        不会置 `died`。这一处**故意不补**：`copy_in` 在全仓**零生产调用点**
+        （只有本文件的定义与 `_run_worker` 里一句引用它的注释），为它加一条
+        检测等于给未来的读者一个"这里很重要"的假信号。真要它覆盖，主循环
+        下一轮开头那次 `shell` / 工具调用会兜住。
         """
         result = _run(["docker", "exec", "-i", self.name, *argv], timeout=timeout)
         if not result.ok and _CONTAINER_GONE_MARKER in (result.stderr or ""):
