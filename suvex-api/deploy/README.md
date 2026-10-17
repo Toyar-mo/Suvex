@@ -3,6 +3,21 @@
 这份文档面向**运维**，不是开发者。目标：拿到一台干净的 Linux 机器，
 按这里做完就能跑起来，并且知道出问题时看哪里。
 
+> **想省事就用脚本**：`deploy/install.sh` 把下面一～六节写成了幂等脚本，
+> 先 `sudo bash install.sh --dry-run` 看清单，确认后再去掉 `--dry-run` 真装。
+> 第七节验收它替不了，装完照样要手工跑一次真扫描。
+>
+> ```bash
+> sudo bash deploy/install.sh \
+>   --repo https://github.com/Toyar-mo/Suvex \
+>   --domain your.domain
+> ```
+>
+> 脚本会**自己生成**加密密钥、写 `api.env`、建库、装 systemd 单元、构建前端、
+> 配 nginx。它只做"先查后做"，重复跑结果一致。
+> ⚠️ 两处它不替你决定：`api.env` 里的数据库口令占位符（`<强口令>`）与
+> 数据库用户的 `CHANGE_ME` 口令，装完必须手工改掉且两边保持一致。
+
 > **前提**：Docker 必须装好并运行。扫描要起沙箱容器，CTF2 解题还要
 > 一个 `suvex-ctf2` 网络（服务启动时自动创建）。没有 Docker 的话
 > 服务能启动，但**每一次扫描都会失败** —— 而那种失败看起来像
