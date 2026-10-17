@@ -1,4 +1,4 @@
-import { cn } from '@/lib/cn'
+import Button from '@/components/ui/Button'
 import { useEffect, useRef } from 'react'
 
 /**
@@ -78,33 +78,24 @@ export function ConfirmDialog({
         <p className="mt-1.5 text-xs text-ink-muted">{description}</p>
 
         <div className="mt-panel flex justify-end gap-tight">
-          <button
-            ref={cancelRef}
-            type="button"
-            onClick={onCancel}
-            className={cn(
-              'inline-flex h-8 items-center rounded-sm border border-line px-3 text-xs text-ink-muted',
-              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              'focus:outline-none focus:ring-2 focus:ring-accent/40',
-            )}
-          >
+          {/*
+            焦点环全站统一由 `src/index.css` 的 `:focus-visible` 给，这里不再单独画。
+            原来那两个 `focus:ring-2 focus:ring-accent/40` 有两个问题：
+              ① 用的是 `focus:` 而不是 `focus-visible:` —— 鼠标点一下也亮环，
+                 和 index.css 里 `:focus:not(:focus-visible)` 的"鼠标不画环"是打架的；
+              ② `accent/40` 是 40% 透明，对白底的实际对比度远低于 UI 组件的 3:1 下限。
+          */}
+          <Button ref={cancelRef} variant="secondary" size="sm" onClick={onCancel}>
             取消
-          </button>
-          <button
-            type="button"
+          </Button>
+          <Button
+            variant={danger ? 'danger' : 'primary'}
+            size="sm"
             onClick={onConfirm}
             disabled={busy}
-            className={cn(
-              'inline-flex h-8 items-center rounded-sm px-3 text-xs font-medium',
-              'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
-              busy && 'cursor-not-allowed opacity-50',
-              danger
-                ? 'bg-signal-risk/90 text-canvas hover:bg-signal-risk'
-                : 'bg-accent text-canvas hover:bg-accent-strong',
-            )}
           >
             {confirmLabel}
-          </button>
+          </Button>
         </div>
       </div>
     </div>
