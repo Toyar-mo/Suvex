@@ -71,27 +71,49 @@ WebSocket 相对 SSE 的两个实质优势是**双向**与**二进制帧** —�
 
 * ✅ **确证**：`tool_call`（直接对应）、`failed`（`result.success is False`）、
   `reasoning` ← `think` 工具（该工具签名就是 `think(thought: str)`，
-  docstring 写明是内心推理）、`blocked` ← `wait_for_user`（docstring：
-  "Hand control to the user and wait for their reply. This is the ONLY way
-  to yield to the user."）；
+  docstring 写明是内心推理）；
 * ⚠️ **语义近似**：`reasoning` ← assistant 发言（契约的 8 种里没有"对外发言"
   这一类，用 `detail.intent` 区分 `plan` / `narration`）；
 * ⚠️ **载荷启发式**：`discovery` 的三个字段按"名字最可能对得上"取，
   **需要一次真实扫描对着 `vulnerabilities.json` 核对之后才算坐实**。
 
-**8 种事件类型现在都有来源。** `completed` 由扫描生命周期发出（ADR-004）。
-`poc_generated` / `verified` / `blocked` 三种曾在这里被记为"外部工具根本
-没有对应的结构化信号" —— **那条结论后来被推翻了**，来源是
-`update_vulnerability_report`（带 `poc_script_code` 的 `fields` ⇒ 产出 PoC；
-`fields.confidence == "high"` ⇒ 已验证）与 `wait_for_user`（⇒ 卡住等人）。
+**strix 流能提供 8 种里的 6 种，`completed` 由扫描生命周期发出（ADR-004），
+`blocked` 在 strix 流里没有来源。** `poc_generated` / `verified` 两种曾在这里被记为
+"外部工具根本没有对应的结构化信号" —— **那条结论后来被推翻了**，来源是
+`update_vulnerability_report` 的**顶层参数**（`poc_script_code` ⇒ 产出 PoC；
+`confidence == "high"` ⇒ 已验证）。
 `verified` 挂在 `update_` 而不是 `create_` 上的理由（一次调用只产一条事件，
 `create_` 已经映射成 `discovery`，改成 `verified` 会丢掉发现）记在
 `app/scans/strix_events.py` 的模块 docstring 里。
 
-⚠️ 这次更正本身留个教训：那三种"没有来源"是在**只看了 `strix/tools/` 的
-目录名**之后下的结论 —— 目录名里没有 `report_update` 之类的名字，
-就当成没有信号。实际信号一直在 `reporting/tool.py` 的 `fields` 参数里。
-**"没找到"与"不存在"不是一回事**，前者只能说"以当时的查法没找到"。
+`blocked` 则相反 —— **它在 strix 流里的来源是假的，2026-10-16 已撤掉**。这一条曾被写成
+`blocked` ← `wait_for_user`，依据是那个工具的 docstring（"Hand control to the
+user and wait for their reply. This is the ONLY way to yield to the user."）。
+docstring 确实存在，**但那个工具在 `strix-agent` 1.6.2 里不存在**：全包 `*.py`
+搜 `wait_for_user` 零命中，`strix/tools/` 下是 `respond`，真名 `respond_to_user`，
+且它在 `strix/agents/factory.py:688-690` 受 `if interactive:` 门控，而本项目
+传的是 `--non-interactive` —— **双重不可达**。所以 `blocked` 如实退回
+"**strix 流里无来源**"：不编一个永远命不中的判据。要真支持它，得先有一个运行级的
+"暂停等人"信号。
+
+> ⚠️ **"strix 流里无来源" ≠ "这个事件类型没人发"** —— 别把它读成 `blocked` 是空的。
+> 契约的 `blocked` 由**本项目自己的生命周期**发出，有三个真实发出点，都不依赖 strix：
+> `app/scans/service.py:1387`（用户主动终止扫描）、
+> `app/scans/scheduler.py:809`（服务重启回收上一个进程：活着 → `blocked`，已死 → `failed`）、
+> `app/ctf2/events.py:431`（CTF2 平台判 flag 错 —— 受阻但可继续，故意不用 `failed`，
+> 否则"猜错 flag"这个常态会让每题都闪一次红）。
+> 撤掉的只是"从 strix 事件流里**推导**出 `blocked`"这条路，不是这个类型本身。
+
+⚠️ 这里留两条教训，都跟"查证方式"有关：
+
+1. **"没找到"与"不存在"不是一回事**，前者只能说"以当时的查法没找到"。
+   那三种"没有来源"是在**只看了 `strix/tools/` 的目录名**之后下的结论 ——
+   目录名里没有 `report_update` 之类的名字，就当成没有信号。
+2. **"名字看起来对得上"也不等于"参数真的存在"。** 上面那条更正本身又踩了
+   同一个坑的镜像：`reporting/tool.py` 里确实有个 `fields` 形参，
+   于是被当成了工具参数 —— 而 `params_json_schema` 里根本没有它
+   （那是内部 `_do_update` 的形参）。**参数名必须以 `params_json_schema`
+   为准，不能只读源码签名里的内部形参。**
 
 ### 4. 幂等靠数据库索引，不靠"先查后写"
 

@@ -415,14 +415,41 @@ $ docker exec suvextest-api-1 sh -c "which strix docker"
 `subject` / `evidence` / `severity` 三个字段按"名字最可能对得上"取值；
 取不到 `severity` 时**不放这个键**而不是编一个默认值。
 
-另外，契约的 8 种事件类型现在**都有来源**：`completed` 由扫描生命周期
-发出（ADR-004）；`poc_generated` / `verified` / `blocked` 三种曾长期
-被记为"strix 侧没有对应信号"，后来在 strix 源码里找到了 ——
-分别是 `update_vulnerability_report` 带 `poc_script_code`、
-`update_vulnerability_report` 带 `confidence: high`、以及 `wait_for_user`
-（它的 docstring 写明是"唯一把控制权交还给用户的方式"）。
+另外，契约的 8 种事件类型里，**strix 流能提供 6 种**，`completed` 由生命周期发，
+`blocked` 在 strix 流里**没有来源**：
+
+| 类型 | 来源 |
+| --- | --- |
+| `tool_call` / `failed` | 工具调用成功 / 失败结束，直接对应 |
+| `reasoning` | `think` 工具（确证）+ assistant 发言（近似，用 `detail.intent` 区分） |
+| `discovery` | `create_vulnerability_report` / `create_dependency_report` 成功 |
+| `poc_generated` | `update_vulnerability_report` 成功且**顶层**参数 `poc_script_code` 有值 |
+| `verified` | 同上，且**顶层**参数 `confidence == "high"` |
+| `completed` | 扫描生命周期发出（ADR-004），不需要 strix 提供 |
+| `blocked` | ❌ **strix 流里无来源**（但本项目生命周期会发它，见下） |
+
+`poc_generated` / `verified` 两种曾长期被记为"strix 侧没有对应信号"，
+后来在 strix 源码里找到了；但**此前把它们记在 `fields` 参数上是错的**
+（那个参数不存在，见下）。`blocked` 一度被记为挂在 `wait_for_user` 上，
+而**那个工具在 1.6.2 里根本不存在**，现已如实退回"strix 流里无来源"。
 映射依据与"为什么 `verified` 挂在 `update_` 而不是 `create_` 上"
 记在 `strix_events.py` 的模块 docstring 里。
+
+> ⚠️ **"strix 流里无来源" ≠ "这个事件类型没人发"。** 契约的 `blocked`
+> 由**本项目自己的生命周期**发出，有三个真实发出点，都不依赖 strix：
+> `app/scans/service.py:1387`（用户终止扫描）、
+> `app/scans/scheduler.py:809`（服务重启回收，活着 → `blocked` / 已死 → `failed`）、
+> `app/ctf2/events.py:431`（CTF2 平台判 flag 错 —— 受阻但可继续，故意不用
+> `failed`，否则"猜错 flag"这个常态会让每题都闪一次红）。
+> 所以"strix 没给这个信号"与"这个类型是空的"是两件事，别混成一句。
+
+> ⚠️ **参数名必须以 `params_json_schema` 为准。** 2026-10-16 在
+> `strix-agent` 1.6.2 上核对：`update_vulnerability_report` 的
+> `required = ['report_id','update_reason']`，顶层 26 个 properties 里
+> `poc_script_code` / `confidence` 都在顶层，**没有 `fields`**
+> （那是内部 `_do_update` 的形参）。读错参数名的代价是**静默的**：
+> 分支永远命不中，事件一路掉进 `tool_call` 兜底，而测试因为替身
+> 也按同一个错误假设造数据而一直是绿的。
 
 ### 3. 契约文档与代码之间有一段**已知漂移**
 
