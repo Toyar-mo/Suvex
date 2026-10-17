@@ -21,7 +21,7 @@ Suvex —— 一个自治 AI 安全测试 agent 的 Web 控制台。
 
 | 项 | 实际数字 |
 | --- | --- |
-| 代码规模 | **45,584 行** TS/TSX，162 个文件（`.ts` 64 文件 15,889 行 · `.tsx` 98 文件 29,695 行；`wc -l` 口径，与根 [`DEPENDENCIES.md`](../DEPENDENCIES.md) §5 同一次取数，2026-10-17） |
+| 代码规模 | **45,624 行** TS/TSX，162 个文件（`.ts` 64 文件 15,944 行 · `.tsx` 98 文件 29,680 行；`wc -l` 口径，与根 [`DEPENDENCIES.md`](../DEPENDENCIES.md) §5 同一次取数，2026-10-17） |
 | 页面 | 总览 / 扫描任务 / 智能体活动 / 漏洞发现 / CTF2 解题 / 报告 / 设置 + 产品首页 |
 | 数据层 | 全部接真实 API，**0 个 mock 数据文件** |
 | 类型安全 | **0 个 `@ts-ignore`；0 个 `any`**（`components/effects/DotGrid.tsx` 的节流函数签名本来是 3 处 `any`，改成了泛型版；该组件曾随 `gsap` 一起移除、2026-10-16 以**自研物理**恢复，`any` 仍是 0 —— 见根 README 的更正）（`tsc -b` 与 `eslint --max-warnings 0` 全绿） |

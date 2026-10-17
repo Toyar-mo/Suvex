@@ -10,7 +10,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Backend](https://img.shields.io/badge/backend-Python%203.12%20%C2%B7%20FastAPI-009688.svg)](suvex-api/)
 [![Frontend](https://img.shields.io/badge/frontend-React%2019%20%C2%B7%20TypeScript%206-61dafb.svg)](suvex-web/)
-[![Contract](https://img.shields.io/badge/contract-3%2C725%20lines-8B7CF6.svg)](suvex-web/docs/api-contract.md)
+[![Contract](https://img.shields.io/badge/contract-3%2C741%20lines-8B7CF6.svg)](suvex-web/docs/api-contract.md)
 
 </div>
 
@@ -106,9 +106,9 @@ cd suvex-api && docker compose up --build
 
 | 项 | 数字（2026-10-17 实测，换行符口径） |
 | --- | --- |
-| 后端代码 | **47,612 行** / 118 个文件（`suvex-api/app/`，不含 `__pycache__`），13 个领域模块 |
-| 后端测试 | **75 个测试文件 / 1,352 个测试函数**（`@pytest.mark.parametrize` 展开后实际执行数更多），对**真实 PostgreSQL** 跑（不是 SQLite），全量约 45 分钟 |
-| 前端代码 | **45,584 行** / 162 个 `.ts`/`.tsx`（`suvex-web/src/`），**0 个 `@ts-ignore`、0 个 `any`**（本机工作区口径，与 [`DEPENDENCIES.md`](DEPENDENCIES.md) §5 同一次取数） |
+| 后端代码 | **47,622 行** / 118 个文件（`suvex-api/app/`，不含 `__pycache__`），13 个领域模块 |
+| 后端测试 | **75 个测试文件 / 1,352 个测试函数**，`parametrize` 展开后**实际执行 2,432 passed / 3 skipped / 0 failed**，对**真实 PostgreSQL** 跑（不是 SQLite），实测 42 分 35 秒 |
+| 前端代码 | **45,624 行** / 162 个 `.ts`/`.tsx`（`suvex-web/src/`），**0 个 `@ts-ignore`、0 个 `any`**（本机工作区口径，与 [`DEPENDENCIES.md`](DEPENDENCIES.md) §5 同一次取数） |
 | 前端测试 | **228 个 vitest 实际执行用例** / 14 个文件（静态 `it(` 是 216，差额来自写在 `for` 循环里的用例） |
 | 数据库迁移 | 36 个 Alembic 版本，从第一个迁移就版本化 |
 | API 端点 | 115 个（按 `@router.*` 装饰器计） |
@@ -117,7 +117,7 @@ cd suvex-api && docker compose up --build
 | CI | GitHub Actions 三个 job：后端（ruff + 测试）/ 前端检查 / 仓库卫生 —— 2026-10-11 首次全绿（run #9，`861f64a`，19m40s） |
 
 > [!WARNING]
-> **关于测试数字的口径**：这里用的是**实际执行数**，不是静态声明数。后端静态数 `def test_` 只有 1,211，但 `parametrize` 会把一条函数展开成多组参数各跑一遍；前端静态数 `it(` 是 203，但 `route-guard.test.ts` 有 3 处把 `it()` 写在 `for (const phase of phases)` 里。**README 早先写的就是静态数，是错的**。
+> **关于测试数字的口径**：表里同时给了静态数与实际执行数，两者**都要标清楚**。后端静态 `def test_` 是 **1,352**（75 个文件），`parametrize` 展开后实际执行 **2,432**；前端静态 `it(` 是 **216**（14 个文件），实际执行 **228** —— 差额来自 `route-guard.test.ts` 里 **6 处**把 `it()` 写在 `for` 循环内（`:62` `:90` `:117` `:135` `:150` `:159`）。**只写其中一个数都是错的**：只写静态数是 README 早先犯过的错，只写执行数则无法复核。
 >
 > 同样，"文件总行数"也写清口径：按换行符计数（与 `wc -l` 等价），含空行与注释。同一份代码在不同口径下能差一万行 —— 而一份"看起来精确"却对不上的数字比"大约四万行"更有害。
 >
@@ -150,7 +150,7 @@ cd suvex-api && docker compose up --build
 
 | # | 缺口 | 影响 |
 | --- | --- | --- |
-| 1 | **前端测试仍不覆盖页面渲染** | 228 个用例覆盖了路由守卫、401 拦截、错误态和背景点阵的物理，但**页面组件本身、表单交互、主题切换仍无测试** —— 渲染期崩溃只有人工点开页面才能发现 |
+| 1 | **前端测试仍不覆盖页面渲染** | 228 个用例覆盖了路由守卫（13）、401 拦截（17）、7 个纯逻辑模块、DotGrid 物理（13）和 5 个卡片/对话框组件（ChallengeCard 8 / WriteupDialog 6 / TokenUsageCard 21 / ErrorState 14 / WriteupMarkdown 22），但**页面组件本身（`src/pages/` 零测试文件）、表单交互、主题切换仍无测试** —— 渲染期崩溃只有人工点开页面才能发现 |
 | 2 | **`/metrics` 不覆盖依赖注入抛出的 401/403** | 路由层返回的状态码都计数，但鉴权失败经异常处理器生成的不计（见 `test_metrics.py` 里那条钉住局限的用例） |
 | 3 | **多用户是单租户的** | 多个账号共享全部数据。真多租户要每张业务表加 `tenant_id` 并把过滤条件写进所有查询 —— 而且 Suvex 会对任意目标发包，做 SaaS 意味着要为**别人**的扫描目标负责，那是合规问题，不只是技术问题 |
 | 4 | ~~**扫描产物目录只增不减**~~ | ✅ **已修**（2026-10-16）：每次扫描在 `_scan_runs/<scan_id>/` 留下 5–7 MB（实测），按每天 20 次扫描估约 43 GB/年。它有**两个**来源，这次都堵上了 —— ① 数据库里已无记录的孤儿目录 → `sweep_orphan_artifacts`（2026-10-11 修的）；② ★ **记录还在、但早已归档**的目录 → `sweep_retired_artifacts`（判据是"已归档 + 归档时刻早于保留期"，**不用** `finished_at`，否则刚手工归档的会被立刻删；`retention_days = 0` 表示关闭）。保留期是设置页「扫描保留规则」的**第三个数字**（默认 90 天，与"归档 30 天 → 回收站删除 30 天"串成一条生命周期，产物清理排在最后因为它是唯一不可逆的一步） |
