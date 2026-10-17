@@ -303,13 +303,13 @@ def _is_transport_level(exc: BaseException) -> bool:
 
     ## ★ 一处**没有**改的地方，以及为什么（实测否决）
 
-    `_next_url`（本文件 `:383`）里的 `target.host` 访问**没有**加 try 包装。
+    `_next_url`（本文件 `:393`）里的 `target.host` 访问**没有**加 try 包装。
     理由是实测：把那句挪进 try（或解析后先取一次 `.host`）与不改，
     **端到端输出逐字节一致**（对 21 条输入做了 (类型, message) 全量 diff，
     零差异）。
 
     机制：`_next_url` **从来不是**第一个碰 `.host` 的地方 ——
-    它在 `request_same_host` 里被调用（`:453`），而那次
+    它在 `request_same_host` 里被调用（`:478`），而那次
     `client.request()` 内部已经跑过 `_build_redirect_request`
     （`_redirect_url` → `_redirect_headers`，两者都会碰 `.host`），
     `.host` 早在那里就抛了。所以那处的包装

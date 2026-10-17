@@ -820,7 +820,7 @@ httpx.InvalidURL)` = **False**，`issubclass(..., httpx.HTTPError)` = **False**�
 
 | 问法 | 实测 |
 | --- | --- |
-| 直调 `_next_url(current, response)`，Location = `http://xn--.invalid/x` | **抛 `IDNAError`**，`.host` 求值 1 次（`redirect.py:383`）→ 那句 `if target.scheme and not target.host:` **进得去** |
+| 直调 `_next_url(current, response)`，Location = `http://xn--.invalid/x` | **抛 `IDNAError`**，`.host` 求值 1 次（`redirect.py:393`）→ 那句 `if target.scheme and not target.host:` **进得去** |
 | 直调 `_next_url`，Location = `//xn--.invalid/x` | **返回 OK，`.host` 求值 0 次** —— `scheme` 是空串，`if target.scheme and …` **短路**，`.host` 根本不被求值 |
 | 真跑 `request_same_host`（MockTransport），两种 Location | **`_next_url` 被调用 0 次** —— `client.request()` 内部先抛了 |
 
