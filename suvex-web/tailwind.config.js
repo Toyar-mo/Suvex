@@ -12,7 +12,22 @@ import defaultTheme from 'tailwindcss/defaultTheme'
 
 /** @type {import('tailwindcss').Config} */
 export default {
-  content: ['./index.html', './src/**/*.{ts,tsx}'],
+  /*
+    content 的第三项是排除规则（2026-10-17 新增）：把测试文件踢出扫描范围。
+
+    Tailwind 是**按字面量**扫文件的，测试文件里出现的类名也会被当成"用过"，
+    于是产物 CSS 会随测试内容变化。实测：新增 `src/lib/design-tokens.test.ts`
+    后产物 CSS 从 164874 字节涨到 164948 字节，多出来的都是没人渲染的
+    utility；把测试排除后，产物与加测试之前**逐字节相同**。
+
+    测试里的类名从不被渲染（顶多出现在 `expect(...).not.toContain('...')`
+    这种断言字符串里），排除它不影响任何实际样式。
+
+    ⚠️ 注意：块注释里**不能**直接写带星号的 glob（星号加斜杠会提前闭合
+    注释，Sucrase 解析配置时直接报 "Unexpected token, expected ("）。
+    要用 glob 就写在下面的字符串里。
+  */
+  content: ['./index.html', './src/**/*.{ts,tsx}', '!./src/**/*.test.{ts,tsx}'],
   theme: {
     extend: {
       /*
