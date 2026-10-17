@@ -377,7 +377,12 @@ function TokenRow({ token, now }: { token: ApiToken; now: number }) {
                   setRevoking(false)
                   if (result.status === 'failed') setError(result.error)
                 }}
-                className="inline-flex h-7 items-center rounded-sm bg-signal-risk/15 px-2 text-2xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/25 disabled:cursor-not-allowed disabled:opacity-50"
+                /*
+                  禁用改逐层换色：撤掉风险底 + 文字降到 `ink-faint`
+                  （暗 5.94:1 / 亮 5.68:1）。按钮里实时写着「吊销中…」，
+                  信息在文字里，不需要靠一块压暗的红底来提示状态。
+                */
+                className="inline-flex h-7 items-center rounded-sm bg-signal-risk/15 px-2 text-2xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/25 disabled:cursor-not-allowed disabled:bg-transparent disabled:text-ink-faint disabled:hover:bg-transparent"
               >
                 {revoking ? '吊销中…' : '确认吊销'}
               </button>
@@ -553,7 +558,13 @@ function TokenCreator({
           onClick={handleCreate}
           disabled={creating}
           aria-busy={creating}
-          className="press inline-flex h-9 items-center rounded-sm bg-accent-deep px-3.5 text-sm text-white transition-ui duration-fast hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+          /*
+            禁用配色与 `Button` 的 primary 一致（`bg-accent-dim` + `ink-muted`，
+            暗 4.94:1 / 亮 5.70:1）。这里不用基元是因为它自带 `text-white` +
+            `h-9`、而设置页这一排的其它按钮也是 h-9 手写的 —— 换基元会连正常态
+            颜色一起变（`accent-deep` → `accent`），那是另一件事。
+          */
+          className="press inline-flex h-9 items-center rounded-sm bg-accent-deep px-3.5 text-sm text-white transition-ui duration-fast hover:bg-accent disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim"
         >
           {creating ? '正在创建…' : '创建令牌'}
         </button>

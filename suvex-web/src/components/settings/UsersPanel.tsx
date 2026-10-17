@@ -245,7 +245,12 @@ const actionClass = cn(
   'inline-flex h-7 items-center gap-1 rounded-control border border-line px-2 text-2xs',
   'text-ink-muted transition-ui duration-fast',
   'hover:border-line-strong hover:text-ink',
-  'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line disabled:hover:text-ink-muted',
+  /*
+    禁用：降文字色 + 减淡边框，不压 opacity（后者会把文字压到 2.2:1）。
+    `disabled:hover:` 是必需品 —— 禁用的 <button> 仍然匹配 `:hover`，
+    不带 `disabled:` 前缀的话会被上面两条 `hover:` 抢走。
+  */
+  'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
 )
 
 function RoleBadge({ role }: { role: UserRole }) {
@@ -374,7 +379,12 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
           onClick={() => void submit()}
           className={cn(
             'inline-flex h-8 items-center rounded-control bg-accent px-3 text-xs text-white',
-            'transition-ui duration-fast hover:bg-accent-strong disabled:opacity-50',
+            /*
+              禁用配色与 `Button` 的 primary 一致（`bg-accent-dim` + `ink-muted`），
+              不压 opacity。这里没换基元是因为它自带 `h-9`，而这个面板是 h-8 的
+              紧凑排布 —— 换就会把这一排撑高。
+            */
+            'transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
           )}
         >
           {busy ? '正在创建…' : '创建'}

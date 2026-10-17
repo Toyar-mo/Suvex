@@ -319,7 +319,8 @@ function FlagConfirmBody({
                 'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs font-medium text-canvas',
                 'transition-ui duration-fast hover:bg-accent-strong',
                 'focus:outline-none focus:ring-2 focus:ring-accent/40',
-                (Boolean(formatError) || cleaned.length === 0) && 'cursor-not-allowed opacity-50',
+                // 禁用换色（accent-dim + ink-muted，暗 4.94:1 / 亮 5.70:1），不压 opacity
+                'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
               )}
             >
               下一步
@@ -341,10 +342,19 @@ function FlagConfirmBody({
                 className={cn(
                   'inline-flex h-8 items-center gap-1.5 rounded-sm px-3 text-xs font-medium',
                   'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                  /*
+                    两档不可用状态要分开说：
+                    - `outOfQuota`：永久不能提交（额度用尽），底色一直留着，好让按钮的
+                      形状和位置仍然可辨。文字从 `ink-faint` 提到 `ink-muted` ——
+                      原来的 `ink-faint` 在 `ink-ghost/30` 底上只有 4.37:1（暗），差一点。
+                    - `busy`：只是这一刻在飞，撤掉红底降到 `risk/15` + `ink-muted`
+                      （暗 5.61:1 / 亮 6.22:1），不用 `opacity`。
+                  */
                   outOfQuota
-                    ? 'bg-ink-ghost/30 text-ink-faint'
+                    ? 'bg-ink-ghost/30 text-ink-muted'
                     : 'bg-signal-risk/90 text-canvas hover:bg-signal-risk',
-                  busy && 'cursor-not-allowed opacity-50',
+                  busy &&
+                    'disabled:cursor-not-allowed disabled:bg-signal-risk/15 disabled:text-ink-muted disabled:hover:bg-signal-risk/15',
                 )}
               >
                 <ShieldCheck size={12} strokeWidth={2} aria-hidden="true" />

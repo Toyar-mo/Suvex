@@ -190,7 +190,8 @@ export function PlatformPanel() {
                     className={cn(
                       'h-7 rounded-sm border border-line px-2 text-2xs text-ink-muted',
                       'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-                      (busy || item.active) && 'cursor-not-allowed opacity-40',
+                      // 禁用降文字色 + 减淡边框，不压 opacity（见 Button.tsx 的 VARIANT_DISABLED）
+                      'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
                     )}
                   >
                     {item.active ? '当前使用' : '切回这个'}
@@ -205,7 +206,7 @@ export function PlatformPanel() {
                     className={cn(
                       'h-7 rounded-sm border border-accent/40 px-2 text-2xs text-accent-strong',
                       'transition-ui duration-fast hover:border-accent',
-                      busy && 'cursor-not-allowed opacity-40',
+                      'disabled:cursor-not-allowed disabled:border-accent/20 disabled:text-ink-faint disabled:hover:border-accent/20 disabled:hover:text-ink-faint',
                     )}
                   >
                     启用
@@ -223,7 +224,8 @@ export function PlatformPanel() {
                     className={cn(
                       'inline-flex h-7 items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-faint',
                       'transition-ui duration-fast hover:border-signal-risk hover:text-signal-risk',
-                      busy && 'cursor-not-allowed opacity-40',
+                      // 本来就在 faint 档，禁用只需不吃 hover
+                      'disabled:cursor-not-allowed disabled:hover:border-line disabled:hover:text-ink-faint',
                     )}
                   >
                     <Trash2 size={11} aria-hidden="true" />
@@ -372,9 +374,9 @@ function PlatformDialog({
               }}
               className={cn(
                 'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-white',
-                'transition-ui duration-fast hover:opacity-90',
-                (busy || !baseUrl.trim() || !accessKey.trim()) &&
-                  'cursor-not-allowed opacity-40',
+                'transition-ui duration-fast hover:bg-accent-strong',
+                // 禁用换 accent-dim 底 + ink-muted 字（暗 4.94:1 / 亮 5.70:1），与 Button primary 一致
+                'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
               )}
             >
               {busy ? (
@@ -394,8 +396,8 @@ function PlatformDialog({
               }}
               className={cn(
                 'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-white',
-                'transition-ui duration-fast hover:opacity-90',
-                (busy || !canActivate || !accessKey.trim()) && 'cursor-not-allowed opacity-40',
+                'transition-ui duration-fast hover:bg-accent-strong',
+                'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
               )}
             >
               {busy && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}

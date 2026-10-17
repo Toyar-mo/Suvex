@@ -152,7 +152,18 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
                 disabled={!hasFilter}
                 className={cn(
                   'h-7 min-w-0 flex-1 rounded-sm border border-line bg-surface px-2 text-xs text-ink',
-                  'placeholder:text-ink-ghost disabled:opacity-50',
+                  'transition-ui duration-fast placeholder:text-ink-faint',
+                  /*
+                    禁用时降文字色而不是压整框：压 `opacity` 会把输入框里的文字一起打到
+                    2.2:1。顺带把占位符从 `ink-ghost` 改回 `ink-faint` —— `index.css:271`
+                    的全局约定就是 faint，`ink-ghost` 是「仅装饰」。
+
+                    ⚠️ 这条注释**故意不写出那个旧类名**（`disabled` 配 `opacity-50`）：
+                    Tailwind 的 content 是一个 ts/tsx 通配（见 `tailwind.config.js`），
+                    它按**文本**扫描，注释里写出的类名照样会被生成进 CSS。实测旧注释
+                    让构建产物里多出一条永不被使用的规则。要提旧写法就描述，别照抄。
+                  */
+                  'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint',
                 )}
               />
               <button
@@ -261,7 +272,8 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
                         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm',
                         'text-ink-ghost transition-ui duration-fast',
                         'hover:bg-signal-risk/10 hover:text-signal-risk',
-                        'disabled:cursor-not-allowed disabled:opacity-40',
+                        // 纯图标：禁用就一直留在 ghost 档，不压 opacity（压了看不出形状）
+                        'disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-ghost',
                       )}
                     >
                       <Trash2 size={11} strokeWidth={1.75} aria-hidden="true" />

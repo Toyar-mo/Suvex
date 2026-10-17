@@ -16,6 +16,27 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
 /**
+ * 卡片里一排动作按钮的**禁用态**共用这一份。
+ *
+ * 为什么不用 `busy && 'cursor-not-allowed opacity-50'`：`opacity` 会乘在整棵子树上，
+ * 一个 `text-ink-muted`（暗 7.07:1）压一半只剩 2.2:1 —— 远低于 AA。而这一排里
+ * 好几个按钮在禁用时**仍然要读**（"题解""确认提交…""提前"都是靠文字说明用途的）。
+ *
+ * 改法沿用 `Button` 的规矩：降文字色 + 减淡边框。`ink-faint` 在卡片承载面
+ * （`bg-surface`）上暗 5.94:1 / 亮 5.68:1。
+ *
+ * ★ 必须写成 `disabled:` 前缀而不是条件 className：这排按钮都带 `disabled={busy}`，
+ *   用伪类能少一个分支，也不会出现"忘了把条件加进 disabled"的错配。
+ * ★ `disabled:hover:` 是必需品 —— 禁用的 `<button>` 仍然匹配 `:hover`，
+ *   不带它的话 `hover:text-ink` 会赢，出现"灰字突然变亮"。
+ */
+const DISABLED_OUTLINE =
+  'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint'
+
+/** 无边框的那几个（取消 / 主按钮）用这一份。 */
+const DISABLED_PLAIN = 'disabled:cursor-not-allowed disabled:text-ink-faint disabled:hover:text-ink-faint'
+
+/**
  * 一道题的卡片。
  *
  * ## ★ 为什么是**卡片网格**，而扫描列表是**行**（而这一页仿的是 Scans 页）
@@ -355,7 +376,7 @@ export function ChallengeCard({
             className={cn(
               'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
               'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
+              DISABLED_OUTLINE,
             )}
           >
             <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -376,7 +397,9 @@ export function ChallengeCard({
             className={cn(
               'press inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs font-medium text-canvas',
               'transition-ui duration-fast hover:bg-accent-strong',
-              busy && 'cursor-not-allowed opacity-50',
+              // 主按钮禁用换成 accent-dim 底 + ink-muted 字（暗 4.94:1 / 亮 5.70:1），
+              // 与 Button 基元的 primary 完全一致
+              'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
             )}
           >
             <Play size={12} strokeWidth={2.5} aria-hidden="true" />
@@ -397,7 +420,7 @@ export function ChallengeCard({
             className={cn(
               'inline-flex h-8 items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-muted',
               'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
+              DISABLED_OUTLINE,
             )}
           >
             重新开始
@@ -414,7 +437,7 @@ export function ChallengeCard({
             className={cn(
               'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
               'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              (busy || outOfQuota) && 'cursor-not-allowed opacity-50',
+              DISABLED_OUTLINE,
             )}
           >
             <ShieldCheck size={12} strokeWidth={2} aria-hidden="true" />
@@ -430,7 +453,7 @@ export function ChallengeCard({
             className={cn(
               'inline-flex h-8 items-center gap-1.5 rounded-sm px-2.5 text-xs text-ink-muted',
               'transition-ui duration-fast hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
+              DISABLED_PLAIN,
             )}
           >
             <X size={12} strokeWidth={2} aria-hidden="true" />
@@ -463,7 +486,7 @@ export function ChallengeCard({
               className={cn(
                 'inline-flex h-8 items-center gap-1 rounded-sm border border-line px-2 text-xs text-ink-muted',
                 'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-                busy && 'cursor-not-allowed opacity-50',
+                DISABLED_OUTLINE,
               )}
             >
               <ChevronUp size={12} strokeWidth={2.2} aria-hidden="true" />
@@ -479,7 +502,7 @@ export function ChallengeCard({
                   className={cn(
                     'inline-flex h-8 items-center gap-1 rounded-sm border border-line px-2 text-xs text-ink-muted',
                     'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-                    busy && 'cursor-not-allowed opacity-50',
+                    DISABLED_OUTLINE,
                   )}
                 >
                   <ChevronDown size={12} strokeWidth={2.2} aria-hidden="true" />

@@ -120,7 +120,12 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
                     type="button"
                     onClick={() => void handleDelete(item.id)}
                     disabled={busy}
-                    className="shrink-0 rounded-xs px-1.5 py-0.5 text-2xs text-signal-risk hover:bg-signal-risk/10 disabled:opacity-50"
+                    /*
+                      禁用不用 `opacity-50`（那会把文字压到 2.2:1），而是撤掉风险色
+                      底 + 把文字降到 `ink-faint`：暗 5.94:1 / 亮 5.68:1。
+                      取消按钮一直在旁边，用户不需要靠这个按钮的形状来判断该做什么。
+                    */
+                    className="shrink-0 rounded-xs px-1.5 py-0.5 text-2xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/10 disabled:cursor-not-allowed disabled:bg-transparent disabled:text-ink-faint disabled:hover:bg-transparent"
                   >
                     确认
                   </button>
@@ -154,7 +159,12 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
                     onClick={() => setConfirmingId(item.id)}
                     disabled={busy}
                     title={`删除 ${item.filename}`}
-                    className="shrink-0 rounded-xs p-1 text-ink-faint transition-ui duration-fast hover:text-signal-risk disabled:opacity-50"
+                    /*
+                      图标按钮：禁用降到 `ink-ghost`。token 注释写明它「仅装饰 / 禁用，
+                      禁止承载信息」—— 这里是唯一符合该约定的用法（纯图标，无文字）。
+                      压 opacity 会把 12px 的图标擦成一块噪点。
+                    */
+                    className="shrink-0 rounded-xs p-1 text-ink-faint transition-ui duration-fast hover:text-signal-risk disabled:cursor-not-allowed disabled:text-ink-ghost disabled:hover:text-ink-ghost"
                   >
                     <Trash2 size={12} strokeWidth={2} aria-hidden="true" />
                   </button>
@@ -182,9 +192,17 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
         <label
           htmlFor={`finding-attachments-${findingId}`}
           className={cn(
-            'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-sm border border-line px-2.5 text-xs',
-            'text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink',
-            busy && 'pointer-events-none opacity-50',
+            'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-sm border px-2.5 text-xs',
+            'transition-ui duration-fast',
+            /*
+              不压 opacity（「处理中…」要读得清，那是用户确认"它真的在动"的唯一证据）。
+              `<label>` 没有 disabled 属性，用不了 `disabled:` 伪类；而条件拼
+              `hover:border-line/50` 去覆盖正常态 `hover:border-line-strong` 是静默失效
+              （同特异性，胜负看生成顺序）。所以用互斥三元。
+            */
+            busy
+              ? 'pointer-events-none border-line/50 text-ink-muted'
+              : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
           )}
         >
           {busy ? (

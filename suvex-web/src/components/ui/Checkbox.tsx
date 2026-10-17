@@ -57,7 +57,16 @@ export function Checkbox({
         // 原本这里写的是裸 hex `accent-[#8B7CF6]`：那是**暗色主题**的值，
         // 亮色主题下主色是 `#5B4BC4`，勾选框会和整个界面不是一个紫。
         'h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken accent-accent',
-        disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+        /*
+          禁用态不用 `opacity-40`（`design-system.md` 的条款：opacity 乘在整棵子树上、
+          不认识层级）。改成三处显式降级：选中色 `accent-accent-dim`、边框 `line/50`、
+          底色退到 `surface`。
+          ⚠️ 与文字不同，这里的判据不是对比度而是**可辨**：禁用勾选框必须与"能勾但没勾"
+          看得出差别，所以三处一起改，而不是只改选中色。
+        */
+        disabled
+          ? 'cursor-not-allowed accent-accent-dim border-line/50 bg-surface'
+          : 'cursor-pointer',
       )}
     />
   )

@@ -313,11 +313,17 @@ function SkillRow({
         checked={checked}
         onChange={onToggle}
         disabled={disabled}
-        // 复选框本身在禁用时压暗 —— 这里用 opacity 是**安全的**：
-        //   它是控件不是文字，不受对比度规则约束；而且它必须和"还没勾选"
-        //   明确区分开，否则用户分不清"不可选"和"我没选"。
-        //   （上一版把 opacity 加在整行 label 上才是错的，那会连文字一起压。）
-        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent disabled:opacity-35"
+        /*
+          原本这里压 `opacity-35`，理由是"控件不是文字、不受对比度规则约束"。
+          但 design-system.md 的条款是不分控件与文字的：`opacity` 乘在整棵子树上、
+          不认识层级，一旦将来这个 input 有了自定义外观（现在就有 `accent-accent`
+          接管选中色），压暗会连着把选中态一起糊掉。
+
+          改成换色：选中色从 `accent` 降到 `accent-dim`。"不可选"与"我没选"的区分
+          由整行负责 —— 边框已经是 `border-line/50`、文字是 `ink-muted`、
+          光标是 `cursor-not-allowed`，比让一个 14px 的方框变淡更说得清。
+        */
+        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent disabled:cursor-not-allowed disabled:accent-accent-dim"
       />
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="flex flex-wrap items-center gap-1.5">

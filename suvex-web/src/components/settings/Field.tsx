@@ -148,8 +148,11 @@ export function Toggle({
         disabled={disabled}
         onChange={(e) => onChange(e.target.checked)}
         className={cn(
-          'mt-0.5 h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken accent-[#8B7CF6]',
-          disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+          'mt-0.5 h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken accent-accent',
+          // 禁用不压 opacity（会把这一格的边框和选中色一起糊掉），改成三处显式降级
+          disabled
+            ? 'cursor-not-allowed accent-accent-dim border-line/50 bg-surface'
+            : 'cursor-pointer',
         )}
       />
       <label

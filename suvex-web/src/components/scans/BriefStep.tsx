@@ -200,7 +200,11 @@ export function BriefStep({
                   onClick={() => onRemoveAttachment(file.name)}
                   disabled={staging.busy}
                   aria-label={`移除 ${file.name}`}
-                  className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-signal-risk disabled:opacity-50"
+                  /*
+                    纯图标：禁用降到 `ink-ghost`（token 的约定用途就是「仅装饰 / 禁用」）。
+                    不用 `opacity-50` —— 12px 的图标压一半会糊成一团，看不出形状。
+                  */
+                  className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-signal-risk disabled:cursor-not-allowed disabled:text-ink-ghost disabled:hover:text-ink-ghost"
                 >
                   <X size={12} strokeWidth={2} aria-hidden="true" />
                 </button>
@@ -226,9 +230,20 @@ export function BriefStep({
           <label
             htmlFor="scan-attachments"
             className={cn(
-              'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-sm border border-line px-2.5 text-xs',
-              'text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink',
-              staging.busy && 'pointer-events-none opacity-50',
+              'inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-sm border px-2.5 text-xs',
+              'transition-ui duration-fast',
+              /*
+                上传在飞时不能压 `opacity-50` —— 那会把「上传中…」这几个字打到 2.2:1，
+                而这几个字正是用户此刻唯一能确认"它真的在动"的证据。
+
+                `<label>` 没有 `disabled` 属性，用不了 `disabled:` 伪类，所以不能写
+                `busy && 'hover:border-line/50'` 去"覆盖"正常态的 `hover:border-line-strong`
+                —— 两者特异性相同，谁赢看 Tailwind 生成顺序，是静默失效。
+                改成互斥三元：两种状态不同时存在，就不会有覆盖问题。
+              */
+              staging.busy
+                ? 'pointer-events-none border-line/50 text-ink-muted'
+                : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
             )}
           >
             {staging.busy ? (

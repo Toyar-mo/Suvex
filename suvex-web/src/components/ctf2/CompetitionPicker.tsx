@@ -188,8 +188,17 @@ export function CompetitionPicker({
                 key={item.remoteId}
                 className={cn(
                   'flex cursor-pointer items-start gap-2.5 border-b border-line/60 px-3 py-2.5 last:border-b-0',
-                  'transition-ui duration-fast hover:bg-surface',
-                  busy && 'cursor-not-allowed opacity-60',
+                  'transition-ui duration-fast',
+                  /*
+                    原来这里压 `opacity-60`，会把下面两行的题名与时间一起打薄 ——
+                    它们正是用户点选时要读的东西。
+
+                    `<label>` 没有 `disabled` 属性，用不了 `disabled:` 伪类，
+                    所以**不能**写 `busy && 'hover:bg-transparent'` 去"覆盖"：
+                    它与 `hover:bg-surface` 特异性相同，谁赢看 Tailwind 生成顺序。
+                    正确写法是让两者不同时存在 —— 互斥三元。
+                  */
+                  busy ? 'cursor-not-allowed' : 'hover:bg-surface',
                 )}
               >
                 <input
@@ -231,7 +240,7 @@ export function CompetitionPicker({
             }
             className={cn(
               'text-2xs text-ink-muted underline transition-ui duration-fast hover:text-ink',
-              (busy || loading || (items ?? []).length === 0) && 'cursor-not-allowed opacity-50',
+              'disabled:cursor-not-allowed disabled:text-ink-faint disabled:no-underline disabled:hover:text-ink-faint',
             )}
           >
             {selected.size === (items ?? []).length && selected.size > 0 ? '取消全选' : '全选'}
@@ -246,7 +255,7 @@ export function CompetitionPicker({
               className={cn(
                 'inline-flex h-8 items-center rounded-sm border border-line px-3 text-xs text-ink-muted',
                 'transition-ui duration-fast hover:border-line-strong hover:text-ink',
-                busy && 'cursor-not-allowed opacity-50',
+                'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
               )}
             >
               取消
@@ -258,7 +267,8 @@ export function CompetitionPicker({
               className={cn(
                 'press inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs font-medium text-canvas',
                 'transition-ui duration-fast hover:bg-accent-strong',
-                (busy || selected.size === 0) && 'cursor-not-allowed opacity-50',
+                // 主按钮禁用换成 accent-dim 底 + ink-muted 字，与 Button 基元 primary 一致
+                'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
               )}
             >
               {busy && <Loader2 size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />}

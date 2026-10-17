@@ -71,8 +71,17 @@ export function SandboxProfileSelect({
               className={cn(
                 'flex items-start gap-2 rounded-sm border px-2.5 py-2 text-left',
                 'transition-ui duration-fast',
-                disabled && 'cursor-not-allowed opacity-50',
                 active ? 'border-accent/60 bg-accent/10' : 'border-line hover:border-line-strong',
+                /*
+                  禁用不压 opacity（那会把两行说明文字一起打薄，而"三个档位有什么区别"
+                  恰恰要在这时候读）。只把边框压回常态 + 禁掉悬停反馈。
+
+                  ★ 必须用 `disabled:` 前缀。写成条件拼的 `hover:border-line` 是无效覆写：
+                    它与 `hover:border-line-strong` 特异性相同，胜负由 Tailwind 生成 CSS 的
+                    先后决定（见 `Button.tsx` 的 `VARIANT_DISABLED` 注释）。加 prefix 后
+                    特异性 (0,2,0) → (0,3,0)，顺序就无关了。
+                */
+                'disabled:cursor-not-allowed disabled:border-line disabled:hover:border-line',
               )}
             >
               <Icon

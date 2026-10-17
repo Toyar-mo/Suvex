@@ -352,7 +352,11 @@ function Toggle({
         className={cn(
           'mt-0.5 h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken',
           'accent-accent',
-          disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
+          // 与 `components/ui/Checkbox.tsx` 同一条规矩：禁用不压 opacity，
+          // 改成三处显式降级（选中色 dim / 边框半淡 / 底色退一档）
+          disabled
+            ? 'cursor-not-allowed accent-accent-dim border-line/50 bg-surface'
+            : 'cursor-pointer',
         )}
       />
 

@@ -194,7 +194,8 @@ function AssignDialogInner({
             className={cn(
               'inline-flex h-8 items-center rounded-sm px-2 text-2xs text-ink-faint',
               'transition-ui duration-fast hover:text-ink',
-              busy && 'cursor-not-allowed opacity-50',
+              // 禁用就一直留在 faint 档（本来就是 faint），只是不吃 hover —— 不压 opacity
+              'disabled:cursor-not-allowed disabled:hover:text-ink-faint',
             )}
           >
             取消指派
