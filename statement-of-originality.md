@@ -20,7 +20,7 @@
 | 平台前端 | `suvex-web/src/` | React 19 + TypeScript 6 |
 | 接口契约 | `suvex-web/docs/api-contract.md` | 前后端唯一耦合点，唯一事实来源 |
 | **CTF2 自主解题循环** | `suvex-api/app/ctf2/runner.py` | **完全不依赖 strix**，自研的 agent 循环 |
-| strix 适配层 | `suvex-api/app/scans/`、`suvex-api/app/findings/` | 共 2,752 行，含事件语义映射、agent 角色映射等自研设计 |
+| strix 适配层 | `suvex-api/app/scans/strix_events.py`、`runner.py`、`suvex-api/app/findings/strix_vulns.py` | 共 3,245 行（`wc -l` 口径，含空行与注释），含事件语义映射、agent 角色映射等自研设计 |
 | 测试 | `suvex-api/tests/`、`suvex-web/src/**/*.test.ts` | 对真实 PostgreSQL 跑的后端测试 + 前端 vitest |
 
 ### 1.2 集成的外部组件（**集成，非复制**）
@@ -49,7 +49,7 @@
 
 ### 1.5 代码规模（含口径）
 
-按 `DEPENDENCIES.md` §五 的口径（**文件总行数，含空行与注释，按换行符计数**），本方案当前**约 12 万行（含测试）**。该数字为 2026-10-15 的快照，**会随代码演进而漂移**；精确到个位的最新值见 [`DEPENDENCIES.md`](DEPENDENCIES.md) §五 及其取数命令，本声明函不另列精确数（避免与附件口径不一致）。
+按 `DEPENDENCIES.md` §五 的口径（**文件总行数，含空行与注释，按换行符计数**），本方案当前**约 13 万行（含测试）**。该数字为 2026-10-17 的快照（HEAD `1a213d1`），**会随代码演进而漂移**；精确到个位的最新值见 [`DEPENDENCIES.md`](DEPENDENCIES.md) §五 及其取数命令，本声明函不另列精确数（避免与附件口径不一致）。
 
 ---
 

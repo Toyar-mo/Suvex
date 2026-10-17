@@ -16,7 +16,7 @@
 | 前端第三方依赖 | **553 个**（含传递依赖，实测自 `package-lock.json`）；宽松为主，**1 处需留意**（见 §4） |
 | 外部工具依赖 | **1 个**：`strix-agent` 1.6.2（**Apache-2.0**） |
 | 源码拷贝的第三方代码 | **1 处**：ReactBits 4 个组件（**MIT + Commons Clause**，已在 `NOTICE` 披露） |
-| 自研代码量 | 后端 `app/` **45,376 行** / 前端 `src/` **44,659 行**（README 口径，见 §5） |
+| 自研代码量 | 后端 `app/` **47,612 行** / 前端 `src/` **45,584 行** / 后端 `tests/` **36,674 行**（`wc -l` 口径，见 §5） |
 
 **一句话**：本项目**没有抄任何第三方源码**（唯一的源码拷贝是 4 个前端动效组件，已披露）；`strix` 是**作为外部 CLI 集成的可替换执行后端**，不是被复制的代码。
 
@@ -32,8 +32,8 @@
 | 平台前端 | `suvex-web/src/` | React 19 + TS 6 |
 | 接口契约 | `suvex-web/docs/api-contract.md` | 唯一事实来源，前后端唯一耦合点 |
 | **CTF2 自主解题循环** | `app/ctf2/runner.py` | ★ **完全不依赖 strix**，自研的 agent 循环 |
-| strix 适配层 | `app/scans/strix_events.py`、`runner.py`、`app/findings/strix_vulns.py` | 共 **2,752 行**，自研（详见 2.3） |
-| 测试 | `suvex-api/tests/`（31,625 行） | 后端 **1,164 个测试函数 / 68 个文件**（参数化展开后更多） |
+| strix 适配层 | `app/scans/strix_events.py`、`runner.py`、`app/findings/strix_vulns.py` | 共 **3,245 行**（`wc -l` 口径，含空行与注释；纯代码 2,084 行），自研（详见 2.3） |
+| 测试 | `suvex-api/tests/`（36,674 行） | 后端 **1,352 个测试函数 / 80 个文件**（参数化展开后实际执行数更多，见 §五） |
 
 ### 2.2 外部工具（集成，非复制）
 
@@ -54,7 +54,7 @@
 
 | 自研内容 | 位置 |
 | --- | --- |
-| strix 的结构化事件 → 本项目契约的 8 种事件 | `strix_events.py:45-60`（8 种在 strix 侧都有来源；其中 `verified` 用的是本项目自己的置信度口径，映射表已如实标注） |
+| strix 的结构化事件 → 本项目契约的 8 种事件 | `strix_events.py:45-73`（strix 侧 **6 种**有来源；`completed` 由扫描生命周期发；`blocked` 在 strix 流里**无来源**、由本项目生命周期的三个发出点发；`verified` 用的是本项目自己的置信度口径 —— 映射表逐行标注了依据强度） |
 | strix severity/confidence → 本项目 5 档 + CVSS 语义轴 | `strix_vulns.py:90-105` |
 | agent 名 → 5 种角色的启发式、运行状态映射 | `strix_events.py:122-137` |
 | 稳定 agent id 生成（≤64 字符，sha1 兜底） | `strix_events.py:538-548` |
@@ -70,6 +70,8 @@
 ## 三、后端依赖（44 个，实测自 venv）
 
 **取证方式**：遍历 `/root/suvex/suvex-api/.venv/lib/python3.13/site-packages/*.dist-info/METADATA`，读 `Name` / `Version` / `License-Expression`。
+
+**44 = 运行时 13 + 传递 25 + 开发/测试 5 + `pip` 1**。`pip` 不是本方案的依赖，它随 venv 创建而来，列在这里只是因为遍历目录会数到它；把它算进来是为了让"44"这个数与取证命令的输出**逐一对得上**。
 
 ### 3.1 运行时依赖（`requirements.txt` 声明）
 
@@ -87,10 +89,15 @@
 | cryptography | 50.0.1 | Apache-2.0 OR BSD-3-Clause |
 | httpx | 0.28.1 | BSD-3-Clause |
 | python-multipart | 0.0.32 | Apache-2.0 |
+| idna | 3.20 | BSD-3-Clause |
+
+> `idna` 原先只是 httpx 的传递依赖。2026-10-16 修 IDNA 逃逸回归时，适配层要
+> `import idna` 才能精确接住 `idna.IDNAError`，于是在 `requirements.txt` 里
+> **显式声明**（`idna>=3.6,<4.0`）—— 直接 import 的包不能靠别人的传递依赖兜着。
 
 ### 3.2 传递依赖（全部宽松）
 
-`annotated-doc`(MIT) · `annotated-types`(MIT) · `anyio`(MIT) · `argon2-cffi-bindings`(MIT) · `certifi`(MPL-2.0) · `cffi`(MIT-0) · `click`(BSD-3-Clause) · `greenlet`(MIT AND PSF-2.0) · `h11`(MIT) · `httpcore`(BSD-3-Clause) · `httptools`(MIT) · `idna`(BSD-3-Clause) · `Mako`(MIT) · `MarkupSafe`(BSD-3-Clause) · `packaging`(Apache-2.0 OR BSD-2-Clause) · `pycparser`(BSD-3-Clause) · `pydantic_core`(MIT) · `Pygments`(BSD-2-Clause) · `python-dotenv`(BSD-3-Clause) · `PyYAML`(MIT) · `starlette`(BSD-3-Clause) · `typing_extensions`(PSF-2.0) · `typing-inspection`(MIT) · `uvloop`(MIT) · `watchfiles`(MIT) · `websockets`(BSD-3-Clause)
+`annotated-doc`(MIT) · `annotated-types`(MIT) · `anyio`(MIT) · `argon2-cffi-bindings`(MIT) · `certifi`(MPL-2.0) · `cffi`(MIT-0) · `click`(BSD-3-Clause) · `greenlet`(MIT AND PSF-2.0) · `h11`(MIT) · `httpcore`(BSD-3-Clause) · `httptools`(MIT) · `Mako`(MIT) · `MarkupSafe`(BSD-3-Clause) · `packaging`(Apache-2.0 OR BSD-2-Clause) · `pycparser`(BSD-3-Clause) · `pydantic_core`(MIT) · `Pygments`(BSD-2-Clause) · `python-dotenv`(BSD-3-Clause) · `PyYAML`(MIT) · `starlette`(BSD-3-Clause) · `typing_extensions`(PSF-2.0) · `typing-inspection`(MIT) · `uvloop`(MIT) · `watchfiles`(MIT) · `websockets`(BSD-3-Clause)
 
 ### 3.3 开发/测试依赖
 
@@ -162,20 +169,22 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 | 目录 | 文件数 | 行数 |
 | --- | --- | --- |
-| 后端 `suvex-api/app/`（`.py`） | 115 | **45,376** |
-| 前端 `suvex-web/src/`（`.ts`/`.tsx`） | 162 | **45,522** |
-| 后端 `suvex-api/tests/`（`.py`） | 73 | **31,625** |
-| **合计（含测试）** | 350 | **122,523** |
+| 后端 `suvex-api/app/`（`.py`） | 118 | **47,612** |
+| 前端 `suvex-web/src/`（`.ts`/`.tsx`） | 162 | **45,584** |
+| 后端 `suvex-api/tests/`（`.py`） | 80 | **36,674** |
+| **合计（含测试）** | 360 | **129,870** |
 
-前端细分：`.ts` 64 文件 15,888 行 · `.tsx` 98 文件 29,693 行（本机工作区口径，含未提交改动；见下方警告）。
+前端细分：`.ts` 64 文件 15,889 行 · `.tsx` 98 文件 29,695 行（本机工作区口径）。
 
-> ⚠️ **这组数字的取数口径要说清楚**：上表的行数是**在 Kali 工作副本上量的**
-> （`find src -type f \( -name '*.ts' -o -name '*.tsx' \) | xargs wc -l`，
-> 即 `wc -l` 数 `\n`）。同一时刻本机工作区量出来是 **45,581 行 / `.ts` 15,888 /
-> `.tsx` 29,693** —— 差 59 行。差的原因是**两个工作副本不同步**：
-> 后端有 2 个在途文件（`ScanRetentionPanel.tsx` / `scan-retention.ts`）本机是新版、
-> Kali 是旧版。其余 160 个文件逐文件 sha256 完全一致（实测）。
-> 这说明"行数"这类指标**必须连同取数位置一起说**，否则两边对不上账。
+> **本表为 2026-10-17 快照**（本机工作区，HEAD `1a213d1`）。上一版是 2026-10-15 的
+> 45,376 / 45,522 / 31,625 = 122,523。两次之间涨了 7,347 行，主要来自
+> strix 参数名修正批（`d77b76f`，适配层 +270/−114）、替身后端重写（`a1f8d36`）、
+> 以及新增的 `suvex-api/tests/test_fake_backend.py`（720 行）。
+
+> ⚠️ **这组数字的取数口径要说清楚**：上表的行数是在**本机工作副本**上量的
+> （`find … | xargs wc -l`，即数换行符 `\n`）。Kali 上的工作副本可能落后若干提交，
+> 量之前先确认两边的 HEAD 一致。**"行数"这类指标必须连同取数位置与提交号一起说**，
+> 否则两边对不上账。
 
 > 前端数字的最近一次变化（2026-10-16）：恢复 `DotGrid.tsx`（708 行）
 > 并新增它的物理单测 `DotGrid.test.ts`（309 行）。
@@ -186,12 +195,12 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 | 算法 | 后端 `app/` | 前端 `src/` | 差异原因 |
 | --- | --- | --- | --- |
-| `wc -l`（数 `\n`）**← README 口径** | 45,376 | **45,522** | — |
-| Python `splitlines()`（数逻辑行） | 45,378 | **45,524** | 前端有 **2 个文件末行无换行符**，`wc -l` 少算 2 行 |
+| `wc -l`（数 `\n`）**← README 口径** | 47,612 | **45,584** | — |
+| Python `splitlines()`（数逻辑行） | 47,614 | **45,586** | 前端有 **2 个文件末行无换行符**，`wc -l` 少算 2 行 |
 
 `README.md` 里写的 `43,256` / `41,941` 是**更早的实测快照**，代码演进后已漂移 —— 这正是 README 自己警告的坑（`README.md:263-264` 记着"曾写 32,483 而实际 39,163"）。
 
-**给参赛材料的建议**：写「**约 12 万行（含测试，含空行与注释）**」，或按上表精确写并注明口径。**不要写一个没有口径的精确数**。
+**给参赛材料的建议**：写「**约 13 万行（含测试，含空行与注释）**」，或按上表精确写并注明口径。**不要写一个没有口径的精确数**。
 
 ---
 
@@ -217,7 +226,7 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 
 基于以上事实，建议声明函采用如下口径（**分三层，如实、不含糊**）：
 
-1. **自研**：平台本体（后端 / 前端 / 契约体系 / 测试）、**CTF2 自主解题循环**、strix 适配层（2,752 行）均为本项目自行设计与实现；
+1. **自研**：平台本体（后端 / 前端 / 契约体系 / 测试）、**CTF2 自主解题循环**、strix 适配层（3,245 行）均为本项目自行设计与实现；
 2. **集成**：扫描执行内核集成开源项目 `strix-agent`（Apache-2.0），**作为可替换的外部 CLI 后端调用，未复制、未修改其源码**；平台通过 `scan_runner` 配置支持 `strix | fake` 两种后端，不绑定任何单一实现；
 3. **披露**：前端 `effects/` 下有 4 个 ReactBits 组件源码拷贝（MIT + Commons Clause），出处与本地改动见 `NOTICE` 与 `effects/README.md`；其余第三方依赖及其许可证见本清单。
 
