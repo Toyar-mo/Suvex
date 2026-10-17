@@ -520,6 +520,114 @@ def test_parse_final_reads_candidates() -> None:
 
 
 # ══════════════════════════════════════════════════════════
+# ★★ v0.41：工具输出截断改为「头 + 尾」
+# ══════════════════════════════════════════════════════════
+#
+# 只留头的直接代价实测在 `ctf2chal_01M4QRAT254DE91N89338Z7P4M`
+# （[ACTF2020 新生赛]Upload，78 轮、5,536,545 token）：模型 FINAL 原话是
+# 「上传结果信息位于响应体的末尾，而返回页面长达 8530~8640 字符
+# （内嵌一个巨大的 SVG），始终看不到上传后的提示/路径」。
+#
+# 拆成两个函数而不是改 `_clip`：纪要那一行（`digest.append`）是索引，
+# 首尾拼接会把一行可读的纪要毁掉 —— 见 `runner._clip` 的说明。
+
+
+def test_both_ends_keeps_the_head_and_the_tail() -> None:
+    """超长输出 → 开头与结尾都在，中间有省略说明。"""
+    text = "HEAD" + "x" * 5000 + "TAIL"
+    clipped = runner._clip_both_ends(text, 200)
+
+    assert clipped.startswith("HEAD")
+    assert clipped.endswith("TAIL")
+    assert "中间省略" in clipped
+    assert "x" * 5000 not in clipped
+
+
+def test_both_ends_is_a_noop_when_it_fits() -> None:
+    """不超长时**逐字符不变** —— 别给所有输出都塞一句提示。"""
+    text = "短输出"
+    assert runner._clip_both_ends(text, 200) == text
+    assert runner._clip_both_ends("", 200) == ""
+
+
+def test_both_ends_takes_exactly_the_limit_with_an_odd_budget() -> None:
+    """★ 奇数 limit 时截取总量必须精确 —— 不多切一个字符。
+
+    左边取 `limit // 2`、右边取 `limit - limit // 2`，两者之和恒等于 limit。
+    写成 `limit // 2` 两边各一次的话，奇数 limit 会少切一个字符。
+    """
+    text = "A" * 1000 + "B" * 1000
+    limit = 201
+    clipped = runner._clip_both_ends(text, limit)
+    head, _, tail = clipped.partition("\n…（中间省略")
+
+    assert len(head) == limit // 2
+    assert len(tail.rsplit("\n", 1)[-1]) == limit - limit // 2
+    assert len(head) + len(tail.rsplit("\n", 1)[-1]) == limit
+    # 省略的字符数与 message 里写的数字一致
+    assert f"省略 {len(text) - limit} 字符" in clipped
+
+
+def test_the_old_clip_still_only_keeps_the_head() -> None:
+    """★ 反向断言：`_clip` **只留头** —— 纪要路径没被连带改掉。
+
+    ⚠️ 断言写成 `"TAIL" not in clipped` 而不是 `not clipped.endswith("TAIL")`：
+    后者漏得住"照抄 `_clip_both_ends`"的破坏版 —— 那种版本把尾部片段接在
+    中间、提示语留在最后，`endswith` 仍是 False。反向验证抓到了这个弱点
+    （第一版就是这么写的，破坏后仍然绿）。
+    """
+    text = "HEAD" + "x" * 5000 + "TAIL"
+    clipped = runner._clip(text, 200)
+
+    assert clipped.startswith("HEAD")
+    assert "TAIL" not in clipped
+    assert "已截断" in clipped
+
+
+def test_combined_uses_the_both_ends_clip() -> None:
+    """`CommandResult.combined()` 走的是头尾双段（工具原始输出那条路径）。"""
+    result = runner.CommandResult(0, "HEAD" + "x" * 5000 + "TAIL", "")
+    combined = result.combined(limit=200)
+
+    assert combined.startswith("HEAD")
+    assert combined.endswith("TAIL")
+    assert "中间省略" in combined
+
+
+def test_the_truncated_http_hint_does_not_point_at_curl() -> None:
+    """★ 截断提示**不能**教模型去容器里 curl。
+
+    沙箱默认 `--network none`（`_argv` 里那个最重要的安全参数），容器内
+    出不去网 —— 实测 transcript 里 `curl` 直接 `exit=6`（Could not
+    resolve host）。原文案正是这么写的，等于给了一条走不通的路：
+    模型照着试、失败、再回来，白烧轮次。
+
+    这条钉的是"给的办法必须是这个工具自己能做到的"。
+    """
+    big = b"HEAD" + b"x" * 40000 + b"TAIL"
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(200, content=big)
+
+    async def call() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await runner._tool_http_request(
+                {"url": "http://1.2.3.4:8080/"}, spec=_spec(), http=http
+            )
+
+    out = _run(call())
+
+    assert "只读了前" in out
+    # ★ 核心断言：不能再出现那条走不通的指引。
+    assert "curl" not in out
+    # 给的办法必须是 http_request 自己能做的。
+    assert "http_request" in out or "Range" in out
+    # 头尾都在（大响应体的关键信息常出现在尾部）。
+    assert out.startswith("HTTP 200")
+    assert "TAIL" in out
+
+
+# ══════════════════════════════════════════════════════════
 # ★★ v0.38：FINAL 的三块分析（summary / tried / ruled_out）
 # ══════════════════════════════════════════════════════════
 

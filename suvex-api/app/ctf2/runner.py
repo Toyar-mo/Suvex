@@ -501,7 +501,7 @@ class CommandResult:
         if self.stderr.strip():
             parts.append("[stderr]\n" + self.stderr)
         text = "\n".join(parts) if parts else "(无输出)"
-        return _clip(text, limit)
+        return _clip_both_ends(text, limit)
 
 
 def _base_env() -> dict[str, str]:
@@ -2116,11 +2116,21 @@ async def _tool_http_request(
     text = b"".join(chunks).decode("utf-8", errors="replace")
     head = f"HTTP {status_code}\n"
     if truncated:
+        # ⚠️ 这段提示**不能教模型去容器里 curl**：沙箱默认是
+        #    `--network none`（`_argv` 里那个最重要的安全参数），容器内
+        #    出不去网（实测 transcript 里 `curl` 直接 `exit=6`，Could not
+        #    resolve host）。原来的文案正是这么写的，等于给了一条走不通的路
+        #    —— 模型照着试、失败、再回来，白烧轮次。
+        #    给的办法必须是**这个工具自己能做到的**：换更精确的 URL/参数，
+        #    或用 `Range` 头分次取。
         head += (
             f"（响应体超过 {_READ_CAP // 1024} KB，只读了前 {_READ_CAP // 1024} KB —— "
-            "需要更多内容请用 run_shell 里的 curl/head 分段取，或缩小请求范围）\n"
+            "要看后面的内容，用 http_request 换更精确的 URL 或参数，"
+            "或者带 Range 头分次取（如 Range: bytes=-4000））\n"
         )
-    return head + _clip(text, MAX_TOOL_OUTPUT_CHARS)
+    # ★ 头尾双段：这条路径送的是**工具原始输出**，关键信息经常在末尾
+    #   （见 `_clip_both_ends` 的说明）。
+    return head + _clip_both_ends(text, MAX_TOOL_OUTPUT_CHARS)
 
 
 async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) -> str:
@@ -2614,12 +2624,59 @@ def _clip(text: str, limit: int) -> str:
 
     静默截断是本项目吃过亏的一类：模型看到的是"命令输出就这些"，
     于是它基于不完整的信息下结论。一句话的提示就能避免。
+
+    ⚠️ **这个函数只留头**，它的调用点里有一处（动作纪要，`digest.append`）
+       正是要"短而全"的一行索引 —— 那里首尾拼接会把一行可读的纪要毁成
+       `ls -la /work`…（中间省略 120 字符）…`total 0`。要首尾双段的是
+       **工具原始输出**那条路径，用 `_clip_both_ends`，别改这里。
     """
     if text is None:
         return ""
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n…（已截断，原长 {len(text)} 字符；用更精确的命令缩小范围）"
+
+
+def _clip_both_ends(text: str, limit: int) -> str:
+    """截断长文本，**保留头尾两段**，中间写省略说明。
+
+    ## 为什么工具原始输出必须留尾（v0.41）
+
+    关键信息经常在**末尾**：HTTP 响应体的最后才是上传结果、命令输出的
+    最后几行才是结论。只留头的直接后果实测在
+    `ctf2chal_01M4QRAT254DE91N89338Z7P4M`（[ACTF2020 新生赛]Upload，
+    78 轮、5,536,545 token）—— 模型 FINAL 的原话是：
+
+        上传结果信息位于响应体的末尾，而返回页面长达 8530~8640 字符
+        （内嵌一个巨大的 SVG），始终看不到上传后的提示/路径
+
+    全库 66 份解题过程里，截断标记出现 **772 次**（占 1905 个
+    assistant 轮的 40.5%），其中原长超过 `MAX_TOOL_OUTPUT_CHARS` 的
+    有 228 次。这些轮次里模型看到的都是"只有开头"。
+
+    ## 为什么只给这两条路径用，不给纪要
+
+    见 `_clip` 的说明：纪要是**索引**，索引要短要全；首尾拼接会把
+    一行索引变成三段碎片的拼贴，既更难读也更占位置。
+
+    ## 边界：两边加起来正好等于 `limit`
+
+    `limit` 可能是奇数（比如 8001），所以左边取 `limit // 2`、右边取
+    `limit - limit // 2` —— 两者的和恒为 `limit`，不多切一个字符。
+    省略掉的字符数写 `len(text) - limit`，与两段之和严格互补。
+    """
+    if text is None:
+        return ""
+    if len(text) <= limit:
+        return text
+    head_len = limit // 2
+    tail_len = limit - head_len
+    omitted = len(text) - limit
+    return (
+        text[:head_len]
+        + f"\n…（中间省略 {omitted} 字符；要看被省略的部分，用更精确的命令缩小范围）\n"
+        + text[-tail_len:]
+    )
 
 
 async def solve_in_sandbox(
