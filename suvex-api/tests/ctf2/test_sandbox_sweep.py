@@ -122,3 +122,27 @@ def test_container_name_uses_the_prefix_constant() -> None:
     assert 'f"ctf2-' not in source, (
         "建容器时别手写 'ctf2-' 前缀 —— 用常量，否则和清理函数会对不上"
     )
+
+
+def test_the_test_client_never_sweeps_real_containers(client) -> None:  # noqa: ANN001
+    """★★ `client` fixture 必须把 `sweep_orphan_sandboxes` 换成替身。
+
+    这是 2026-10-17 那场真事故的守卫（见 `tests/conftest.py` 里 `client`
+    的说明）。`main.py:194` 在 lifespan 里调这个函数，它做的是
+    `docker rm -f` 掉**所有** `ctf2-` 前缀的容器 —— 在生产进程里成立，
+    但在测试进程里，那台机器上可能正有别的进程在解题。
+
+    事故形态：三道题在 40 秒内接连失败，每题起容器后 1–2 秒沙箱消失，
+    `run_shell` 报 `No such container: ctf2-…`，而 `docker run` 返回码是 0。
+    用户看到"轮数 2、耗时 8 秒、未解出"。
+
+    这条用例守的是"替身还装着"：把 conftest 里那行 `monkeypatch.setattr`
+    删掉、或把它挪到 `with TestClient(app)` 内部（lifespan 已经跑完，
+    等于没 patch），这里就会红。
+    """
+    assert getattr(runner.sweep_orphan_sandboxes, "_is_test_stub", False) is True, (
+        "client fixture 没有把 sweep_orphan_sandboxes 换成替身 —— "
+        "跑一次 pytest 就会 docker rm -f 掉生产环境正在解题的沙箱"
+    )
+    # 替身不碰 Docker，也不假装扫到了东西。
+    assert runner.sweep_orphan_sandboxes() == 0

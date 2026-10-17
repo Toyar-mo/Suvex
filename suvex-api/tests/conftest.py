@@ -626,8 +626,22 @@ def _clean_state() -> Iterator[None]:
     yield
 
 
+def _no_sweep_orphan_sandboxes() -> int:
+    """`runner.sweep_orphan_sandboxes` 的测试替身：不碰 Docker。
+
+    见 `client` fixture 的说明 —— lifespan 里那次 sweep 会 `docker rm -f`
+    掉**所有** `ctf2-` 前缀的容器，包括生产服务正在解题的那一个。
+    """
+    logger.debug("测试替身：跳过 sweep_orphan_sandboxes（不碰 Docker）")
+    return 0
+
+
+#: 给用例一个能验证"替身确实装上了"的标记（见 `test_lifespan_never_sweeps_docker`）。
+_no_sweep_orphan_sandboxes._is_test_stub = True  # type: ignore[attr-defined]
+
+
 @pytest.fixture()
-def client() -> Iterator[TestClient]:
+def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """带 lifespan 的测试客户端。
 
     必须用 `with` —— 不用的话 lifespan 不跑，`verify_database()` 也不会执行，
@@ -639,8 +653,36 @@ def client() -> Iterator[TestClient]:
     真实外呼，也包括与 `_clean_state` 的 `TRUNCATE` 抢锁（全量跑实测
     抓到过死锁）。接线必须照跑，行为必须静音 —— 见
     `_ctf2_background_threads_stay_idle` 的说明。
+
+    ★★ 进 lifespan 之前**先把 `sweep_orphan_sandboxes` 换成替身**（2026-10-17 补，
+    真事故）。这一条比上面那条严重得多，因为它删的不是测试自己的东西：
+
+        `main.py:194` 在 lifespan 里调 `sweep_orphan_sandboxes()`，而它做的是
+        `docker ps -aq --filter name=^ctf2-` → `docker rm -f <全部 id>`。
+        在**生产进程**里这个动作是对的（注释里那句"新进程里不可能有属于它的
+        合法容器"在生产进程内成立）。但测试进程启动时，**这台机器上可能正有
+        一道题的解题沙箱在跑** —— 于是跑一次 pytest 就把人家 `docker rm -f`
+        掉了。
+
+    事故现场（2026-10-17 12:28，EDT）：三道题在 40 秒内接连失败，每题都是
+    起容器后 1–2 秒沙箱消失、`run_shell` 直接报
+    `Error response from daemon: No such container: ctf2-…`，
+    `docker run -d --rm` 返回码还是 0。docker daemon 日志那三条
+    `removal of container … is already in progress` 就是"AutoRemove 与
+    另一路删除撞车"。用户看到的结果是：轮数 2、耗时 8 秒、未解出。
+
+    ⚠️ **必须 patch 在 `with TestClient(app)` 外面**：lifespan 在 `__enter__`
+       里就跑完了，进了 `with` 再 patch 已经晚了。
+    ⚠️ **只 patch 在这一个 fixture 上**，不要做成 autouse：
+       `tests/ctf2/test_sandbox_sweep.py` 要测的就是这个函数的真实逻辑
+       （它自己 patch `_run` 来伪造 Docker），全局替换会让那批用例失去意义。
+    ⚠️ 用 `monkeypatch` 而非直接赋值：用例自己的 `monkeypatch.setattr`
+       可以覆盖它，跑完自动还原，两边不打架。
     """
+    from app.ctf2 import runner as ctf2_runner
     from app.main import app
+
+    monkeypatch.setattr(ctf2_runner, "sweep_orphan_sandboxes", _no_sweep_orphan_sandboxes)
 
     with TestClient(app) as test_client:
         stop_ctf2_background_loops()
