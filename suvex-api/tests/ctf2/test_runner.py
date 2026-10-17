@@ -749,12 +749,21 @@ class _FakeGateway:
 
 
 class _FakeSandbox:
-    """假沙箱。记录执行的命令，可按命令返回预设输出。"""
+    """假沙箱。记录执行的命令，可按命令返回预设输出。
+
+    ## ★ v0.41：必须带 `died`
+
+    解题循环每轮开头会读 `sandbox.died`（容器被外部移除后立刻中止，
+    判据见 `runner.SandboxContainer.died` 的说明）。假沙箱要**与真
+    `SandboxContainer` 同形** —— 少了这个属性，循环会在生产代码那一行
+    抛 `AttributeError`。这个坑与 `_FakeGateway` 少了 `model` 那次同形。
+    """
 
     def __init__(self, outputs: dict[str, str] | None = None) -> None:
         self.commands: list[str] = []
         self.destroyed = False
         self.outputs = outputs or {}
+        self.died = False
 
     def shell(self, command: str, *, timeout: int = 300):  # noqa: ANN001, ANN201
         self.commands.append(command)
@@ -850,6 +859,95 @@ def test_solver_loop_gives_up_when_turns_run_out() -> None:
     )
     assert outcome.candidates == []
     assert outcome.error and "回合用尽" in outcome.error
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ v0.41：沙箱容器已消失 → 立刻中止
+# ══════════════════════════════════════════════════════════
+#
+# 实测出处（2026-10-16「被偷走的文件」，MISC）：容器在第 24 轮的工具调用后
+# 被 Docker 侧带走（`--rm` 生效，服务没重启、没有 sweep 记录），此后每条命令
+# 都返回 `No such container`，而循环里**零处检测** —— 模型用 `echo hello` /
+# `echo x1` / `echo probe_final` 一路探到第 63 轮才收尾，39 轮、约 62 万 token
+# 换回一句 "The container has been persistently unavailable"。
+#
+# 下面三条钉住：① 死了就在下一轮开头停；② 判据认那个精确子串；
+# ③ 反向 —— "Docker 没装"不算容器死。
+
+
+def test_the_loop_stops_at_the_next_turn_when_the_sandbox_is_gone() -> None:
+    """容器已死 → **下一轮开头**就返回，不再调 LLM。
+
+    断言的核心不是"报了个错"，而是 `gateway.seen` 的长度：容器死了之后
+    一次都不该再调模型 —— 放了的话，每次调用都是白花的 token。
+    """
+    sandbox = _FakeSandbox()
+    sandbox.died = True
+    gateway = _FakeGateway(['FINAL: {"candidates": []}'])
+
+    outcome = _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert outcome.error and "沙箱已消失" in outcome.error
+    # ★ 一次 LLM 调用都没有 —— 这是这条改动的全部价值所在。
+    assert gateway.seen == []
+    assert sandbox.commands == []
+    # 中止也要留下一个可读的轮次记录（题解与排查都靠它）。
+    assert outcome.transcript and "沙箱已消失" in outcome.transcript
+
+
+def test_the_sandbox_marks_itself_dead_when_the_container_is_gone(monkeypatch) -> None:
+    """`exec()` 见到 `No such container` → `died = True`。"""
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    assert sandbox.died is False
+
+    def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
+        return runner.CommandResult(
+            1, "", "Error response from daemon: No such container: ctf2-test-abc"
+        )
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    result = sandbox.exec(["ls"])
+
+    assert result.exit_code == 1
+    assert sandbox.died is True
+
+
+def test_docker_being_unavailable_does_not_look_like_a_dead_container(monkeypatch) -> None:
+    """★ 反向断言：`找不到可执行文件：docker` **不是**容器死了。
+
+    这两件事必须分开：前者是宿主环境坏了（Docker 没装/不在 PATH 上），
+    后者是这一个容器没了。混在一起的话，"Docker 没装"会伪装成
+    "容器死了"，于是排查方向直接跑偏 —— 那正是 `died` 只认一个精确
+    子串的理由。
+    """
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+
+    def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
+        return runner.CommandResult(127, "", f"找不到可执行文件：{argv[0]}")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    sandbox.exec(["ls"])
+
+    assert sandbox.died is False
+
+
+def test_a_successful_exec_does_not_mark_the_sandbox_dead(monkeypatch) -> None:
+    """★ 反向断言：成功的命令不该误标死。
+
+    防止有人把判据写成 `if not result.ok:`（漏掉子串判断）—— 那样任何一条
+    返回非零的普通命令（`grep` 没匹配到就是 exit 1）都会终止整次解题。
+    """
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+
+    def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
+        return runner.CommandResult(1, "", "grep: /work/x: No such file or directory")
+
+    monkeypatch.setattr(runner, "_run", fake_run)
+    sandbox.exec(["grep"])
+
+    assert sandbox.died is False
 
 
 def test_the_digest_keeps_early_actions_after_they_leave_the_window() -> None:

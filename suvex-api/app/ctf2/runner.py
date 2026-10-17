@@ -467,6 +467,18 @@ def guard_tool_url(url: str, *, access_urls: Sequence[str]) -> None:
 _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 
+# Docker 在**容器已经不存在**时给的固定说法（`docker exec` / `docker cp`
+# 都这么报）。拼写照抄 daemon 的原话，不要"整理"成更像英文的句子 ——
+# 我们靠子串匹配它，改一个字母就永远匹配不上。
+#
+# ⚠️ 用它的是 `SandboxContainer.exec` 的 `died` 标记。`destroy()` 里
+#    也有一处同样的匹配，但**故意不复用这个常量**：那里的语义是
+#    "容器已经没了，销毁算成功"，与这里有独立演化的可能（比如哪天
+#    daemon 改文案，两处要分别判断要不要放宽）。复制一个字符串的
+#    漂移风险，小于把两个判据耦合起来的风险。
+_CONTAINER_GONE_MARKER = "No such container"
+
+
 class Ctf2SandboxError(Ctf2Error):
     """沙箱（Docker）层面的失败。"""
 
@@ -859,6 +871,27 @@ class SandboxContainer:
         self.extra_env = extra_env or {}
         self._started = False
         self.container_id: str | None = None
+        # ★★ 容器是否已被外部移除（v0.41）。
+        #
+        # ## 为什么需要这个标志：实测白烧了 39 轮
+        #
+        # 2026-10-16「被偷走的文件」（MISC）那次，第 24 轮的工具调用返回
+        # `Error response from daemon: No such container: ctf2-DQDE6CBNWR1T-e30ff750`
+        # —— 容器被 Docker 侧带走了（`--rm` 生效，服务没有重启、也没有任何
+        # sweep 记录）。此后每一条命令都返回同一个错，而模型没有任何判据
+        # 知道"这不是暂时的"，于是它用 `echo hello` / `echo x1` /
+        # `echo probe_final` 一路探测到第 63 轮才收尾 —— 39 轮、约 62 万
+        # token 换来的信息量是零。
+        #
+        # ⚠️ 判据**只认 `No such container` 这个精确子串**。不要顺手把
+        #    `_run` 的 127 分支（"找不到可执行文件：docker"）也算进来：
+        #    那是"Docker 没装/没在 PATH 上"，是宿主环境坏了，与"这个容器
+        #    死了"是两件事，混在一起会让前者伪装成后者。
+        #
+        # ⚠️ 这里**只标记，不重建**。死因未知（见 `_run_worker` 的清理路径），
+        #    而 `--tmpfs /work` 意味着重建后容器内工作区全丢 —— 模型从零
+        #    开始很可能再撞同一堵墙，等于把一次白烧换成两次。
+        self.died = False
 
     def _argv(self) -> list[str]:
         """构造 `docker run` 的参数。
@@ -1010,8 +1043,31 @@ class SandboxContainer:
     # ── 在容器里做事 ──────────────────────────────────────
 
     def exec(self, argv: list[str], *, timeout: float = 120) -> CommandResult:
-        """在容器里跑一条命令（不经 shell）。"""
-        return _run(["docker", "exec", "-i", self.name, *argv], timeout=timeout)
+        """在容器里跑一条命令（不经 shell）。
+
+        ## ★ 顺带记下"容器没了"（v0.41）
+
+        判据只看 stderr 里那个精确子串 —— 见 `self.died` 的说明。
+
+        ⚠️ 覆盖范围**只有 `exec` 与 `shell` 两条路径**（`shell` 是
+        `run_shell` 工具的实现，也是解题的主路径）。
+
+        `copy_in` 的 `docker cp`（本文件 `:1139`）**仍直连 `_run`，绕开这里** ——
+        所以容器没了时那条 `docker cp` 的 `No such container` 不会置 `died`。
+        这一处**故意不补**：`copy_in` 在全仓**零生产调用点**（只有本文件的
+        定义与 `_run_worker` 里一句引用它的注释），为它加一条检测等于给
+        未来的读者一个"这里很重要"的假信号。真要它覆盖，主循环下一轮开头
+        那次 `shell` / 工具调用会兜住。
+        """
+        result = _run(["docker", "exec", "-i", self.name, *argv], timeout=timeout)
+        if not result.ok and _CONTAINER_GONE_MARKER in (result.stderr or ""):
+            if not self.died:
+                logger.warning(
+                    "CTF2 沙箱容器已不存在（被外部移除）name=%s —— 本轮之后会中止解题",
+                    self.name,
+                )
+            self.died = True
+        return result
 
     def shell(self, command: str, *, timeout: float = DEFAULT_SHELL_TIMEOUT) -> CommandResult:
         """在容器里跑一条 shell 命令。**这是 `run_shell` 工具的实现。**
@@ -2660,6 +2716,25 @@ async def solve_in_sandbox(
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), trust_env=False) as http:
         for turn in range(1, spec.max_turns + 1):
             outcome.turns = turn
+            # ★★ 沙箱已经没了 → 立刻中止（v0.41）。
+            #
+            # ⚠️ **位置必须在 `await gateway.chat()` 之前**：放在工具执行之后
+            #    的话，这一轮已经花掉一次 LLM 调用才被发现，而那一次调用
+            #    必然白花（容器都没了，它说什么都做不成）。放在之前，容器
+            #    一死就省下后续**所有**轮。
+            #
+            # 实测代价（2026-10-16「被偷走的文件」）：容器在第 24 轮的工具
+            # 调用后死掉，没人报，模型用 `echo x1` 探到第 63 轮 —— 39 轮、
+            # 约 62 万 token，换回的是一句 "The container has been
+            # persistently unavailable"。
+            if sandbox.died:
+                outcome.error = (
+                    "解题沙箱已消失（容器被外部移除），本次解题中止。"
+                    "已完成的轮次见解题过程。"
+                )
+                log.append(f"[turn {turn}] {outcome.error}")
+                outcome.transcript = "\n\n".join(log)
+                return outcome
             # ★ 收尾提醒：只剩 `FINAL_STRETCH_TURNS` 轮时提醒一次。
             #
             # 动机来自实测：没有它的时候，模型会一路探索到最后一轮，
