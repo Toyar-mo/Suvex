@@ -1058,6 +1058,63 @@ def test_a_successful_exec_does_not_mark_the_sandbox_dead(monkeypatch) -> None:
     assert sandbox.died is False
 
 
+# ══════════════════════════════════════════════════════════
+# ★★ v0.41：多 ACTION 回告
+# ══════════════════════════════════════════════════════════
+#
+# 实测：66 份解题过程里 **268 轮（14.1%）** 一轮写了 ≥2 个 ACTION（极端一轮
+# 23 个），而 `parse_action` 只解析第一个，其余**静默丢弃** ——
+# 模型以为三条都执行了，按三条的结果推理下一步，而它手里只有第一条的输出。
+
+
+def test_a_turn_with_several_actions_tells_the_model_only_one_ran() -> None:
+    """一轮写 3 个 ACTION → 回告里带 N=3，且明说只执行了第 1 个。"""
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        [
+            (
+                'ACTION: {"tool": "run_shell", "args": {"command": "cmd-a"}}\n'
+                'ACTION: {"tool": "run_shell", "args": {"command": "cmd-b"}}\n'
+                'ACTION: {"tool": "run_shell", "args": {"command": "cmd-c"}}'
+            ),
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    # ★ 只执行了第一条 —— 执行逻辑没变。
+    assert sandbox.commands == ["cmd-a"]
+    # 而模型收到了"你写了 3 个、只执行了 1 个"的明确回告。
+    fed_back = gateway.seen[1][-1]["content"]
+    assert "你这一轮写了 3 个 ACTION" in fed_back
+    assert "只执行了第 1 个" in fed_back
+
+
+def test_a_turn_with_one_action_gets_no_such_reminder() -> None:
+    """★ 反向断言：只写 1 个 ACTION 时**不能**出现那句提醒。
+
+    否则每轮都多一句噪音，而噪音会挤占上下文 —— 那正是这条改动想治的病。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-a"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    fed_back = gateway.seen[1][-1]["content"]
+    assert "个 ACTION" not in fed_back
+    assert "只执行了第 1 个" not in fed_back
+
+
 def test_the_digest_keeps_early_actions_after_they_leave_the_window() -> None:
     """★★ 被裁掉的回合**不能凭空消失** —— 它们要以纪要的形式留下。
 

@@ -2906,7 +2906,32 @@ async def solve_in_sandbox(
             )
             result = await dispatch_tool(name, args, spec=spec, sandbox=sandbox, http=http)
             log.append(f"[turn {turn}] result: {_clip(result, 2000)}")
-            recent.append({"role": "user", "content": f"工具 `{name}` 的输出：\n{result}"})
+            # ★ 多写的 ACTION 要**明说**只执行了第一条（v0.41）。
+            #
+            # 实测：66 份解题过程里 **268 轮（14.1%）** 一轮写了 ≥2 个 ACTION
+            # （极端一轮 23 个）。而 `parse_action` → `_parse_json_block`
+            # 只要第一个合法 JSON 就 return —— 其余的**静默丢弃**。
+            # 模型以为都执行了，于是按"三条命令的结果"推理下一步，
+            # 而它手里只有第一条的输出。
+            #
+            # ⚠️ 只补一句话，**不改执行逻辑**：一次工具调用一次结果，是本循环
+            #    的基本契约（`outcome` / 事件 / 纪要三条链都按"一轮一工具"
+            #    成立）。改成批量执行是另一件事，不在本条范围内。
+            extra_actions = sum(
+                1 for match in _MARKER.finditer(text) if match.group(1) == "ACTION"
+            )
+            reminder_note = ""
+            if extra_actions > 1:
+                reminder_note = (
+                    f"\n\n（提醒：你这一轮写了 {extra_actions} 个 ACTION，"
+                    "系统只执行了第 1 个。需要其余的执行请一条一条来。）"
+                )
+            recent.append(
+                {
+                    "role": "user",
+                    "content": f"工具 `{name}` 的输出：\n{result}{reminder_note}",
+                }
+            )
             # ★ 记录"这次解题真的跑过工具"（v0.31）—— 供 auto 模式的
             #   证据门禁判断"答案是跑出来的还是想出来的"。
             #   见 `SolveOutcome.saw_tool_output`。
