@@ -107,7 +107,7 @@ cd suvex-api && docker compose up --build
 | 项 | 数字（2026-10-17 实测，换行符口径） |
 | --- | --- |
 | 后端代码 | **47,612 行** / 118 个文件（`suvex-api/app/`，不含 `__pycache__`），13 个领域模块 |
-| 后端测试 | **80 个文件 / 1,352 个 `def test_`**（`@pytest.mark.parametrize` 展开后实际执行数更多），对**真实 PostgreSQL** 跑（不是 SQLite），全量约 45 分钟 |
+| 后端测试 | **75 个测试文件 / 1,352 个测试函数**（`@pytest.mark.parametrize` 展开后实际执行数更多），对**真实 PostgreSQL** 跑（不是 SQLite），全量约 45 分钟 |
 | 前端代码 | **45,584 行** / 162 个 `.ts`/`.tsx`（`suvex-web/src/`），**0 个 `@ts-ignore`、0 个 `any`**（本机工作区口径，与 [`DEPENDENCIES.md`](DEPENDENCIES.md) §5 同一次取数） |
 | 前端测试 | **228 个 vitest 实际执行用例** / 14 个文件（静态 `it(` 是 216，差额来自写在 `for` 循环里的用例） |
 | 数据库迁移 | 36 个 Alembic 版本，从第一个迁移就版本化 |
@@ -270,7 +270,7 @@ suvex-api/
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,ctf2}/
                   按领域拆分，各自 模型/出入参/业务/路由
   alembic/        36 个迁移
-  tests/          80 个文件 / 1,352 个 `def test_`，对真实 PostgreSQL 跑
+  tests/          75 个测试文件 / 1,352 个测试函数，对真实 PostgreSQL 跑
   docs/           8 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
 

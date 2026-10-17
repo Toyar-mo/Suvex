@@ -16,7 +16,7 @@ Suvex 平台的后端。契约（**唯一事实来源**）在
 | 代码规模 | **47,612 行** Python（`app/` 下 118 个文件，13 个领域模块） |
 | 路由 | **115 个端点**（按 `@router.*` 装饰器计） |
 | 数据库迁移 | **36 个** Alembic 版本，从第一个迁移就版本化 |
-| 测试 | **80 个文件 / 1,352 个 `def test_`**（参数化展开后更多），对**真实 PostgreSQL** 跑 |
+| 测试 | **75 个测试文件 / 1,352 个测试函数**（参数化展开后更多），对**真实 PostgreSQL** 跑 |
 | 契约文档 | **3,741 行**，含变更记录与 8 篇 ADR |
 | 仍未实现 | **0 个端点返回 `501`** —— 最后六个已在 v0.22 清零 |
 
@@ -225,7 +225,7 @@ app/
   health.py      探活
   main.py        应用装配
 alembic/         迁移（env.py 从 Settings 读 URL，[详见 README](alembic/README.md)）
-tests/           80 个文件 / 1,352 个 `def test_`，**对真实 PostgreSQL 跑**（不是 SQLite）
+tests/           75 个测试文件 / 1,352 个测试函数，**对真实 PostgreSQL 跑**（不是 SQLite）
 scripts/         端到端验收与对账脚本
 docs/            决策记录（8 篇 ADR）+ 安全清单 + 验收记录
 docker/          CTF2 沙箱镜像的 Dockerfile

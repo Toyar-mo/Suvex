@@ -33,7 +33,7 @@
 | 接口契约 | `suvex-web/docs/api-contract.md` | 唯一事实来源，前后端唯一耦合点 |
 | **CTF2 自主解题循环** | `app/ctf2/runner.py` | ★ **完全不依赖 strix**，自研的 agent 循环 |
 | strix 适配层 | `app/scans/strix_events.py`、`runner.py`、`app/findings/strix_vulns.py` | 共 **3,245 行**（`wc -l` 口径，含空行与注释；纯代码 2,084 行），自研（详见 2.3） |
-| 测试 | `suvex-api/tests/`（36,674 行） | 后端 **1,352 个测试函数 / 80 个文件**（参数化展开后实际执行数更多，见 §五） |
+| 测试 | `suvex-api/tests/`（36,674 行） | 后端 **1,352 个测试函数 / 75 个测试文件**（参数化展开后实际执行数更多，见 §五） |
 
 ### 2.2 外部工具（集成，非复制）
 
