@@ -56,13 +56,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import html
 import json
 import logging
 import os
 import re
 import subprocess
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -332,6 +333,33 @@ _LLM_RETRYABLE = (
 MAX_TOOL_OUTPUT_CHARS = 8000
 # 对话历史里保留的最近回合数（更早的做摘要/裁剪）。
 MAX_HISTORY_TURNS = 24
+
+#: ★ v0.42：一轮回复里最多执行几个 `ACTION`。
+#:
+#: ## 为什么要有批量
+#:
+#: 实测：66 份解题过程里 **271 轮（14.2%）** 一轮写了 ≥2 个 `ACTION`
+#: （极端一轮 23 个）。而旧版 `parse_action` 只解第一个、其余**静默丢弃**
+#: —— 模型以为三条命令都跑了，实际只跑了一条，然后基于"三条的结果"
+#: 推理下一步。于是同一件事既是**吞吐浪费**（80 轮 = 最多 80 条命令），
+#: 又是**错误的认知前提**（它会以为自己已经看到过某些输出）。
+#:
+#: 改成批量执行是**顺着模型已经在做的事**，不是逼它换习惯。
+#:
+#: ## 为什么封顶 5
+#:
+#: 一轮里的动作是**串行**执行的（沙箱有状态，`cd` / 写文件 / 起后台进程
+#: 都要求顺序），而 `run_shell` 单条最长 300 秒。不封顶的话，一句
+#: "我来把这几件事都做了"可以把整道题的墙钟时间吃光。
+MAX_ACTIONS_PER_TURN = 5
+
+#: ★ v0.42：一轮批量动作喂回模型的**输出总预算**（字符）。
+#:
+#: 单条仍是 `MAX_TOOL_OUTPUT_CHARS`（8000），但 5 条 × 8000 = 40000 字符
+#: 进上下文，比一整个 `MAX_HISTORY_TURNS` 的历史还大 —— 那就从"省轮次"
+#: 变成了"撑爆上下文"，得不偿失。批量时按条数平分这个预算，
+#: 见 `_per_action_budget`。
+MAX_TURN_OUTPUT_CHARS = 16000
 
 
 # ══════════════════════════════════════════════════════════
@@ -2069,6 +2097,27 @@ class SolveOutcome:
     #:    需要自然语言匹配，而那本身不可靠。这里只做最粗的一层。
     saw_tool_output: bool = False
 
+    #: ★ v0.42：这一场里**每一次工具调用的完整输出**（按调用顺序，未截断）。
+    #:
+    #: ## 为什么不能复用 `transcript`
+    #:
+    #: `transcript` 里的 result 是 `_clip(…, 2000)` 之后的 —— 拿来给人看够了，
+    #: 拿来**判据**不够：flag 正好在 2000 字符之后就被切掉了，于是"答案确实
+    #: 来自工具输出"这件事会被判成"没出现过"，白白 hold 掉一个真候选。
+    #:
+    #: ## 为什么值得留
+    #:
+    #: 见 `decide_submission` 的 `tool_outputs` 参数。auto 模式原来只要求
+    #: "跑过工具 + evidence 非空"，而 evidence 是模型自己写的 —— 它完全可以
+    #: 编一个 flag、再编一段"我看到了它"的说明。把**原始输出**留下来，
+    #: 就能做一层便宜且几乎不误伤的校验：声称的答案必须在某次真实输出里
+    #: 出现过（归一化后子串匹配，见 `answer_is_grounded`）。
+    #:
+    #: ⚠️ 内存：上限由轮次决定（`spec.max_turns` × 每条 `MAX_TOOL_OUTPUT_CHARS`
+    #:    的量级）。80 轮 × 8000 字符 ≈ 640KB，一次性、随 `SolveOutcome` 一起
+    #:    释放 —— 这个代价换掉"凭编造消耗不可再生额度"是划算的。
+    tool_outputs: list[str] = field(default_factory=list)
+
     #: ★ v0.36：每一次 LLM 调用的 token 用量（按轮次顺序）。
     #:
     #: ## 为什么是列表而不是累计值
@@ -2381,16 +2430,20 @@ def _extract_json_object(text: str, start: int) -> str | None:
     return None
 
 
-def _parse_json_block(text: str, marker: str) -> dict[str, Any] | None:
-    """从 `marker`（`ACTION` / `FINAL`）那一行之后取出 JSON 对象。
+def _iter_json_blocks(text: str, marker: str) -> Iterator[dict[str, Any]]:
+    """按出现顺序产出 `marker` 之后**所有的**合法 JSON 对象。
 
-    **认不出就返回 None**，不猜。容错两条（都是实测会遇到的模型习惯）：
+    v0.42 从 `_parse_json_block` 里抽出来的：批量执行要"全部"，
+    而收尾协议（`FINAL`）只要"第一个"。两处共用同一套切分 ——
+    否则容错规则会漂移（"ACTION 认代码围栏、FINAL 不认"这种）。
+
+    **认不出就跳过**，不猜。容错两条（都是实测会遇到的模型习惯）：
 
     · 外面裹了 ```json 代码围栏（先找 `{`，围栏自然被跳过）；
     · JSON 后面跟着解释文字（靠 `_extract_json_object` 配对切出第一段）。
     """
     if not text:
-        return None
+        return
     for match in _MARKER.finditer(text):
         if match.group(1) != marker:
             continue
@@ -2410,20 +2463,59 @@ def _parse_json_block(text: str, marker: str) -> dict[str, Any] | None:
             # 再给真正的那一条。
             continue
         if isinstance(parsed, dict):
-            return parsed
+            yield parsed
+
+
+def _parse_json_block(text: str, marker: str) -> dict[str, Any] | None:
+    """从 `marker`（`ACTION` / `FINAL`）那一行之后取出**第一个** JSON 对象。
+
+    认不出返回 None。容错见 `_iter_json_blocks`。
+    """
+    for parsed in _iter_json_blocks(text, marker):
+        return parsed
     return None
 
 
 def parse_action(text: str) -> tuple[str, dict[str, Any]] | None:
-    """`ACTION: {...}` → `(工具名, 参数)`。认不出返回 None。"""
-    payload = _parse_json_block(text, "ACTION")
-    if not payload:
-        return None
-    name = str(payload.get("tool") or "").strip()
-    args = payload.get("args")
-    if not name:
-        return None
-    return name, (args if isinstance(args, dict) else {})
+    """`ACTION: {...}` → `(工具名, 参数)`。认不出返回 None。
+
+    ⚠️ v0.42 起它只返回**第一个** —— 完整的批量语义见 `parse_actions`。
+    保留它是因为"这条回复里有没有动作"这个判断到处都是，
+    而那些调用方 genuinely 只需要一个。
+    """
+    actions = parse_actions(text)
+    return actions[0] if actions else None
+
+
+def parse_actions(text: str) -> list[tuple[str, dict[str, Any]]]:
+    """把一条回复里**所有** `ACTION` 按出现顺序解析出来（v0.42）。
+
+    ## 为什么是全部而不是第一个
+
+    见 `MAX_ACTIONS_PER_TURN`：实测 271 轮（14.2%）一轮写了多个
+    ACTION，旧版只执行第一个、其余静默丢弃 —— 模型据此以为自己
+    已经看过那些输出。执行全部才是**与模型认知对齐**的做法。
+
+    ## 容错
+
+    · 某一条不是合法 JSON → **跳过它，继续后面的**（不是整轮作废）：
+      模型常先写一个"形状示意"再写真的那个；
+    · 没有 `tool` 字段 / `args` 不是对象 → 跳过那一条；
+    · 一条都没有 → 空列表，调用方据此走"纯思考回合"分支。
+
+    ⚠️ **不在这里封顶**：封顶要在执行处做，因为只有那里知道
+    一共写了几条、丢了几条，也才能把"丢了"告诉模型
+    （见循环里的 `_batch_header`）。解析层悄悄截断会让
+    "为什么最后两条没跑"变成不可解释的现象。
+    """
+    actions: list[tuple[str, dict[str, Any]]] = []
+    for payload in _iter_json_blocks(text, "ACTION"):
+        name = str(payload.get("tool") or "").strip()
+        if not name:
+            continue
+        args = payload.get("args")
+        actions.append((name, args if isinstance(args, dict) else {}))
+    return actions
 
 
 def parse_final(text: str) -> dict[str, Any] | None:
@@ -2813,6 +2905,59 @@ def _final_stretch_note(remaining: int) -> str:
     )
 
 
+def _per_action_budget(count: int) -> int:
+    """一轮批量动作里，**每条**输出能占多少字符（v0.42）。
+
+    单条时就是 `MAX_TOOL_OUTPUT_CHARS`（行为与批量之前完全一致）；
+    多条时把 `MAX_TURN_OUTPUT_CHARS` 平分，且**不低于 2000** ——
+    低于这个数的输出基本没有分析价值，不如让模型自己缩小命令范围。
+
+    ⚠️ 下限是 `max(2000, …)` 而不是 `MAX_TURN_OUTPUT_CHARS // count`：
+       5 条时平分为 3200 尚可，但如果哪天把上限调大、这个函数被
+       用在更多条数上，纯平分会算出几百字符的预算 —— 那样的回灌
+       等于把输出截成一句没用的开头。
+    """
+    if count <= 1:
+        return MAX_TOOL_OUTPUT_CHARS
+    return max(2000, MAX_TURN_OUTPUT_CHARS // count)
+
+
+def _format_action_results(
+    completed: Sequence[tuple[str, str, str, str]], dropped: int
+) -> str:
+    """把一轮里所有动作的输出拼成**一条** user 消息（v0.42）。
+
+    ## 单条时输出与批量之前**逐字符相同**
+
+    这是刻意的：既有行为（含提示词里教给模型的「工具 `x` 的输出：」这种
+    形状）不因为批量能力而变。只有真的写了多条时才多出抬头。
+
+    ## 多条时为什么要把条数写在抬头里
+
+    模型必须知道"我写的 7 个里只跑了 5 个"。不说的话它会按 7 份输出
+    继续推理 —— 那正是 v0.41 想治而没治到的病（旧版只提醒"只跑了 1 个"
+    却还是只跑 1 个）。现在两件事一致了：跑了哪些、没跑哪些，都写清楚。
+    """
+    if len(completed) == 1 and not dropped:
+        name, _command, shown, repeated_note = completed[0]
+        return f"{repeated_note}工具 `{name}` 的输出：\n{shown}"
+
+    total = len(completed) + dropped
+    header = (
+        f"（这一轮你写了 {total} 个 ACTION，系统按顺序执行了 {len(completed)} 个。）\n\n"
+    )
+    if dropped:
+        header += (
+            f"⚠️ 一轮最多执行 {MAX_ACTIONS_PER_TURN} 个 —— 最后 {dropped} 个**没有执行**。"
+            f"需要的话下一轮再写（一次别超过 {MAX_ACTIONS_PER_TURN} 个）。\n\n"
+        )
+    blocks = [
+        f"{repeated_note}### {name}：{_clip(command, 120)}\n{shown}"
+        for name, command, shown, repeated_note in completed
+    ]
+    return header + "\n\n".join(blocks)
+
+
 def _clip(text: str, limit: int) -> str:
     """截断长文本，并在末尾**明确说明被截断了**。
 
@@ -3126,9 +3271,9 @@ async def solve_in_sandbox(
                     logger.info("CTF2 解题结束但无有效候选：%s", spec.challenge_id)
                 return outcome
 
-            # ② 动作？
-            action = parse_action(text)
-            if action is None:
+            # ② 动作？（v0.42：可能一次好几个）
+            actions = parse_actions(text)
+            if not actions:
                 # 没有动作也没有结论：这一轮是纯思考/追问，把它当推理发出去。
                 # ⚠️ 只发**有实义**的文本（空串或极短的寒暄不值得进活动流，
                 #    而那些行会把真正有信息量的推理淹掉）。
@@ -3141,130 +3286,36 @@ async def solve_in_sandbox(
                 recent.append({"role": "user", "content": reminder})
                 continue
 
-            name, args = action
-            command = str(args.get("command") or json.dumps(args, ensure_ascii=False))
-            log.append(
-                f"[turn {turn}] tool {name} {_clip(json.dumps(args, ensure_ascii=False), 500)}"
-            )
-            result = await dispatch_tool(name, args, spec=spec, sandbox=sandbox, http=http)
-            log.append(f"[turn {turn}] result: {_clip(result, 2000)}")
-            # ★ 多写的 ACTION 要**明说**只执行了第一条（v0.41）。
+            # ★ v0.42：**批量执行**这一轮写的所有 ACTION。
             #
-            # 实测：66 份解题过程里 **271 轮（14.2%）** 一轮写了 ≥2 个
-            # `ACTION`/`FINAL` 标记（极端一轮 23 个）。而 `parse_action` →
-            # `_parse_json_block` 只要第一个合法 JSON 就 return —— 其余的
-            # **静默丢弃**。模型以为都执行了，于是按"三条命令的结果"推理
-            # 下一步，而它手里只有第一条的输出。
+            # ## 为什么从"只回告"改成"真的执行"
             #
-            # ⚠️ 只补一句话，**不改执行逻辑**：一次工具调用一次结果，是本循环
-            #    的基本契约（`outcome` / 事件 / 纪要三条链都按"一轮一工具"
-            #    成立）。改成批量执行是另一件事，不在本条范围内。
-            extra_actions = sum(
-                1 for match in _MARKER.finditer(text) if match.group(1) == "ACTION"
-            )
-            reminder_note = ""
-            if extra_actions > 1:
-                reminder_note = (
-                    f"\n\n（提醒：你这一轮写了 {extra_actions} 个 ACTION，"
-                    "系统只执行了第 1 个。需要其余的执行请一条一条来。）"
-                )
-            # ★ 重复执行要变成**可见信号**（v0.41，v0.41.1 换判据）。
+            # v0.41 对多写 ACTION 的处理是**只补一句提醒**（"只执行了第 1 个"），
+            # 执行逻辑不动 —— 理由是"一次工具调用一次结果"是本循环的基本契约。
+            # 但 v0.41 同时记下了一个数字：**271 轮（14.2%）** 写了 ≥2 个
+            # ACTION，极端一轮 23 个。模型**一直在试图批量**，而提醒它
+            # "一条一条来"并没有让它少写 —— 只是让它继续以为自己写过的都跑了。
             #
-            # 判据 = **命令指纹 + 整段输出指纹**两个都相同，且比对范围是
-            # **本次解题全程**（不是只比上一轮）。
+            # 顺着模型的行为做才是对的：同一轮里的多个动作**串行执行**，
+            # 轮次仍算 1 轮。于是 LLM 调用次数不变、有效动作数 ×N，
+            # 而"它以为自己看过某些输出"这个错误认知也一并消失。
             #
-            # ## 为什么不用"输出前 400 字符"
+            # ## 为什么串行而不是并发
             #
-            # 那个方案两头都错，数据可核（66 份解题过程、1717 次工具调用）：
+            # 沙箱是有状态的：`cd`、写文件、起后台进程都要求顺序。
+            # 并发会让"第二步读到第一步的产物"变成运气问题。
             #
-            # - **偏高**：前 400 字符相同但后面不同的情形很多，最典型的是
-            #   同一页面的两次提交 ——
-            #   `ctf2chal_01M3SF0MAZPNSARD7CWECXYWPC-20261001-020127.txt`
-            #   turn 9 与 turn 10 都 POST 到 `/charge`，前 400 是同一份
-            #   `<div class="container">` 模板，**差异在 700 字符之后**：
-            #   turn9 是 `alert-danger`「操作失败」，turn10 是
-            #   `alert-success`「操作成功」。模型拿到了新信息，那时提示它
-            #   "一样，换方向"会把一次成功的探测说成重复。
-            #   （顺带：这两次请求的 `body` 其实是 `id=1&price=9` 与
-            #   `id=4&price=万` —— 命令本来就不同，所以带命令指纹的判据
-            #   天然不会把它们判成重复。）
-            # - **偏低（更严重）**：命令与整段输出**完全一致**的对子里，绝大
-            #   多数**不相邻**（同一题 t3→t12、t3→t17、t5→t30 反复打同一
-            #   payload，2032 字节一模一样）。只比上一轮，这些一次都抓不到。
+            # ## 为什么封顶、并把丢弃数说出来
             #
-            # ## 实测口径（我自己复算，Kali，66 份 / 1717 个结果块）
-            #
-            # | 口径 | 命中 |
-            # | --- | --- |
-            # | 同命令 + 整段输出**原始字节**相同（本题内任意早前） | 54 对 |
-            # | 同命令 + 整段输出**折叠空白后**相同（本题内任意早前） | **56 对（3.3%）** |
-            # | 同命令 + 前 400 字符相同（本题内任意早前） | 55 对 |
-            # | 不看命令 + 前 400 相同 + **只取结果首行**（任意早前） | 523 |
-            # | 不看命令 + 前 400 相同 + 完整结果（任意早前） | 370 |
-            # | 不看命令 + 前 400 相同 + 完整结果（只跟相邻轮比） | 222 |
-            #
-            # ⚠️ 54 / 55 / 56 三个数**只差口径，不是笔误**，引用时必须写明是
-            #    哪一种（本判据用的是**折叠空白**那一档，即 56）：
-            #
-            #    - 54 = 原始字节：判据最严，纯空白差异（行尾空格、连续空行）
-            #      不算重复。代价是同一份输出换个缩进就漏判。
-            #    - 56 = 折叠空白（`_output_fingerprint` 用的就是这个）：
-            #      判据按"信息量"算，纯空白差异不算新信息。
-            #    - 55 = 只取前 400 字符：比 56 少 1 对 —— 那一对的差异在
-            #      400 字符之后，前 400 之内只差空白，所以它被算成重复；
-            #      而按整段折叠空白看，两段只在空白处不同，也该算重复，
-            #      于是它**同时**落在 55 与 56 里。差的那 1 对不是判据冲突，
-            #      是"前 400 看不到整段"的边界效应。
-            #
-            #    ★ 做判据验证**必须用归一化指纹而不是原始字节**：否则 54 与
-            #      56 这种差会反复出现，而且每次都要重新查一遍才发现是口径。
-            #
-            # 前 400 那一档与整段折叠空白只差 1 对，说明"命令一样时前 400
-            # 相同"基本等价于"整段相同"；反过来说，只要命令不同，前 400
-            # 相同就毫无意义 —— 上面那个 HTML 模板的例子里两次的 `body` 是
-            # `id=1&price=9` 与 `id=4&price=万`，本来就是两条不同的命令。
-            # 这就是为什么判据必须**带上命令指纹**。
-            #
-            # ⚠️ 523 那个数（旧版注释引用过）是**另一个口径**：它把每个
-            #    `[turn N] result:` 块**只取首行**、丢掉续行。多行输出的首行
-            #    常常是同一种页头（`HTTP 200`、hashcat banner、HTML 模板），
-            #    于是判出一大批"重复"，实际后文完全不同。把续行算上就掉到
-            #    370，"只跟相邻轮比"再掉到 222 —— **222 与别的复核者得到的
-            #    221 是同一族**（差 1 对是空输出的计法）。三个数各自对应一种
-            #    语义，引用时必须写明是哪种，否则会被当成同一件事。
-            #
-            # ⚠️ **已知限制**：两端都被截断的重复（差异被切在 8000 字符之后
-            #    看不见）本判据判不了 —— 那类约占前 400 方案命中的三成。
-            #    这条限制没被解决，只是不再假装"前 400 相同就是重复"。
-            #
-            # ⚠️ 比对范围是**本次解题**（`seen_calls` 随这次 `solve_in_sandbox`
-            #    存活），**不是跨 attempt 的历史**。跨 attempt 才是真"重复
-            #    尝试"，但那需要持久化台账，本版没做。
-            #
-            # ## 为什么要有这条
-            #
-            # 提示词里写了「连续 3 次尝试没有新信息就换方向」
-            # （`prompts/ctf2_system.md:149-158`），但代码里没有任何判据
-            # （grep `新信息|consecutive|streak|same_output|stagnat` 零命中）——
-            # 完全靠模型自觉。这里把它接上执行。
-            #
-            # ⚠️ 这一行**只进给模型看的那条 `recent`**：不进 `log`（落盘
-            #    transcript，题解正文靠它）、不进 `digest`（动作纪要）、
-            #    也不发事件 —— 否则题解里会混进一堆系统提示。
-            call_key = (
-                name,
-                json.dumps(args, ensure_ascii=False, sort_keys=True),
-                _output_fingerprint(result),
-            )
-            repeated_note = ""
-            first_turn = seen_calls.get(call_key)
-            if first_turn is not None:
-                repeated_note = (
-                    f"⚠️ 这条命令你在第 {first_turn} 轮跑过，输出与那次完全一样 —— "
-                    "它不会再给你新信息，换一条路。\n\n"
-                )
-            else:
-                seen_calls[call_key] = turn
+            # 模型写 23 个时若只跑 5 个又不告诉它，它仍会以为自己看到了
+            # 23 份输出 —— 同一个病在另一头复发。所以 `_format_action_results`
+            # 会把"写了几个 / 执行了几个 / 丢了几个"一次说清。
+            batch = actions[:MAX_ACTIONS_PER_TURN]
+            dropped = len(actions) - len(batch)
+            per_action_budget = _per_action_budget(len(batch))
+            #: 每条一个 `(工具名, 命令, 已截断输出, 重复提醒)`，循环外组装消息。
+            completed: list[tuple[str, str, str, str]] = []
+
             # ★ v0.41.2：这一轮虽然动作完整、跑成功了，但**回复本身被切过**。
             #
             # 切在动作之后 → JSON 完好，动作照常执行；可后面那段推理（往往
@@ -3274,52 +3325,177 @@ async def solve_in_sandbox(
                 if truncated
                 else ""
             )
+
+            # ★ 把这一轮的理由先送出去（"先说后做"）。
+            #
+            # 模型在 `ACTION:` 之前写的那段话（"The shell is failing, let me retry"
+            # / "Cracked! Password = 9919"）是**为什么这么做的解释**，
+            # 先于那几条命令出现才读得通。批量时它只发一次 ——
+            # 一段理由对应这一整轮的动作。
+            narration = _narration_before_action(text)
+            if narration:
+                notify("reasoning", _clip(narration, 200), {"text": narration})
+
+            for name, args in batch:
+                command = str(args.get("command") or json.dumps(args, ensure_ascii=False))
+                log.append(
+                    f"[turn {turn}] tool {name} "
+                    f"{_clip(json.dumps(args, ensure_ascii=False), 500)}"
+                )
+                result = await dispatch_tool(
+                    name, args, spec=spec, sandbox=sandbox, http=http
+                )
+                log.append(f"[turn {turn}] result: {_clip(result, 2000)}")
+                # ★ 完整输出进证据池（v0.42）—— 提交闸门要逐字符核对
+                #   "这个答案到底有没有在工具输出里出现过"。用 `transcript`
+                #   做不了这件事：它里面的 result 被 `_clip(…, 2000)` 截过。
+                outcome.tool_outputs.append(result)
+                # ★ 重复执行要变成**可见信号**（v0.41，v0.41.1 换判据）。
+                #
+                # ⚠️ v0.42：判据本身没变，但它现在**逐条**应用 ——
+                # 同一轮里的第 3 条与第 1 条一样会被认出来（`seen_calls`
+                # 在循环内即时更新，所以"这一轮里写了两遍同一条命令"
+                # 也抓得到，而那正是批量执行最容易产生的浪费）。
+                #
+                # 判据 = **命令指纹 + 整段输出指纹**两个都相同，且比对范围是
+                # **本次解题全程**（不是只比上一轮）。
+                #
+                # ## 为什么不用"输出前 400 字符"
+                #
+                # 那个方案两头都错，数据可核（66 份解题过程、1717 次工具调用）：
+                #
+                # - **偏高**：前 400 字符相同但后面不同的情形很多，最典型的是
+                #   同一页面的两次提交 ——
+                #   `ctf2chal_01M3SF0MAZPNSARD7CWECXYWPC-20261001-020127.txt`
+                #   turn 9 与 turn 10 都 POST 到 `/charge`，前 400 是同一份
+                #   `<div class="container">` 模板，**差异在 700 字符之后**：
+                #   turn9 是 `alert-danger`「操作失败」，turn10 是
+                #   `alert-success`「操作成功」。模型拿到了新信息，那时提示它
+                #   "一样，换方向"会把一次成功的探测说成重复。
+                #   （顺带：这两次请求的 `body` 其实是 `id=1&price=9` 与
+                #   `id=4&price=万` —— 命令本来就不同，所以带命令指纹的判据
+                #   天然不会把它们判成重复。）
+                # - **偏低（更严重）**：命令与整段输出**完全一致**的对子里，绝大
+                #   多数**不相邻**（同一题 t3→t12、t3→t17、t5→t30 反复打同一
+                #   payload，2032 字节一模一样）。只比上一轮，这些一次都抓不到。
+                #
+                # ## 实测口径（我自己复算，Kali，66 份 / 1717 个结果块）
+                #
+                # | 口径 | 命中 |
+                # | --- | --- |
+                # | 同命令 + 整段输出**原始字节**相同（本题内任意早前） | 54 对 |
+                # | 同命令 + 整段输出**折叠空白后**相同（本题内任意早前） | **56 对（3.3%）** |
+                # | 同命令 + 前 400 字符相同（本题内任意早前） | 55 对 |
+                # | 不看命令 + 前 400 相同 + **只取结果首行**（任意早前） | 523 |
+                # | 不看命令 + 前 400 相同 + 完整结果（任意早前） | 370 |
+                # | 不看命令 + 前 400 相同 + 完整结果（只跟相邻轮比） | 222 |
+                #
+                # ⚠️ 54 / 55 / 56 三个数**只差口径，不是笔误**，引用时必须写明是
+                #    哪一种（本判据用的是**折叠空白**那一档，即 56）：
+                #
+                #    - 54 = 原始字节：判据最严，纯空白差异（行尾空格、连续空行）
+                #      不算重复。代价是同一份输出换个缩进就漏判。
+                #    - 56 = 折叠空白（`_output_fingerprint` 用的就是这个）：
+                #      判据按"信息量"算，纯空白差异不算新信息。
+                #    - 55 = 只取前 400 字符：比 56 少 1 对 —— 那一对的差异在
+                #      400 字符之后，前 400 之内只差空白，所以它被算成重复；
+                #      而按整段折叠空白看，两段只在空白处不同，也该算重复，
+                #      于是它**同时**落在 55 与 56 里。差的那 1 对不是判据冲突，
+                #      是"前 400 看不到整段"的边界效应。
+                #
+                #    ★ 做判据验证**必须用归一化指纹而不是原始字节**：否则 54 与
+                #      56 这种差会反复出现，而且每次都要重新查一遍才发现是口径。
+                #
+                # 前 400 那一档与整段折叠空白只差 1 对，说明"命令一样时前 400
+                # 相同"基本等价于"整段相同"；反过来说，只要命令不同，前 400
+                # 相同就毫无意义 —— 上面那个 HTML 模板的例子里两次的 `body` 是
+                # `id=1&price=9` 与 `id=4&price=万`，本来就是两条不同的命令。
+                # 这就是为什么判据必须**带上命令指纹**。
+                #
+                # ⚠️ 523 那个数（旧版注释引用过）是**另一个口径**：它把每个
+                #    `[turn N] result:` 块**只取首行**、丢掉续行。多行输出的首行
+                #    常常是同一种页头（`HTTP 200`、hashcat banner、HTML 模板），
+                #    于是判出一大批"重复"，实际后文完全不同。把续行算上就掉到
+                #    370，"只跟相邻轮比"再掉到 222 —— **222 与别的复核者得到的
+                #    221 是同一族**（差 1 对是空输出的计法）。三个数各自对应一种
+                #    语义，引用时必须写明是哪种，否则会被当成同一件事。
+                #
+                # ⚠️ **已知限制**：两端都被截断的重复（差异被切在 8000 字符之后
+                #    看不见）本判据判不了 —— 那类约占前 400 方案命中的三成。
+                #    这条限制没被解决，只是不再假装"前 400 相同就是重复"。
+                #
+                # ⚠️ 比对范围是**本次解题**（`seen_calls` 随这次 `solve_in_sandbox`
+                #    存活），**不是跨 attempt 的历史**。跨 attempt 才是真"重复
+                #    尝试"，但那需要持久化台账，本版没做。
+                #
+                # ## 为什么要有这条
+                #
+                # 提示词里写了「连续 3 次尝试没有新信息就换方向」
+                # （`prompts/ctf2_system.md:149-158`），但代码里没有任何判据
+                # （grep `新信息|consecutive|streak|same_output|stagnat` 零命中）——
+                # 完全靠模型自觉。这里把它接上执行。
+                #
+                # ⚠️ 这一行**只进给模型看的那条 `recent`**：不进 `log`（落盘
+                #    transcript，题解正文靠它）、不进 `digest`（动作纪要）、
+                #    也不发事件 —— 否则题解里会混进一堆系统提示。
+                call_key = (
+                    name,
+                    json.dumps(args, ensure_ascii=False, sort_keys=True),
+                    _output_fingerprint(result),
+                )
+                repeated_note = ""
+                first_turn = seen_calls.get(call_key)
+                if first_turn is not None:
+                    repeated_note = (
+                        f"⚠️ 这条命令你在第 {first_turn} 轮跑过，输出与那次完全一样 —— "
+                        "它不会再给你新信息，换一条路。\n\n"
+                    )
+                else:
+                    seen_calls[call_key] = turn
+
+                # ── 动作纪要：这一轮做过什么 ────────────────────
+                #
+                # ★ 见 `DEFAULT_MAX_TURNS` 那段说明。这一行是**永久保留**的
+                # （直到超过 `MAX_DIGEST_LINES`），而完整的对话内容会被裁掉。
+                #
+                # 一行里放三样东西：轮次、命令、输出开头 —— 足够让模型认出
+                # "这件事我做过了"，又不至于把上下文撑爆。
+                # ★ v0.41.2：被切断的那几轮，纪要里要看得出来。
+                #
+                # 纪要现在是"这一轮做过什么"的唯一长期记录（完整对话会被裁掉）。
+                # 不标记的话，一个话说到一半的回合与一个完整回合在纪要里长得
+                # 一模一样 —— 模型回头看会以为自己那轮已经想清楚了。
+                #
+                # ★ v0.42：批量时每个动作各占一行（turn 号相同）——
+                # "这一轮干了三件事"在纪要里就该是三行，压成一行会让
+                # 模型回头看不到其中两件做过什么。
+                digest.append(
+                    f"[t{turn}] {name}: {_clip(command, 110)} → {_clip(result, 140)}"
+                    + (" ⚠️输出被截断" if truncated else "")
+                )
+                if len(digest) > MAX_DIGEST_LINES:
+                    del digest[: len(digest) - MAX_DIGEST_LINES]
+
+                completed.append(
+                    (name, command, _clip(result, per_action_budget), repeated_note)
+                )
+
+                notify(
+                    "tool_call",
+                    _clip(f"{name} {command}", 200),
+                    {"tool": name, "command": command, "output": result},
+                )
+
             recent.append(
                 {
                     "role": "user",
-                    "content": (
-                        f"{repeated_note}工具 `{name}` 的输出：\n{result}"
-                        f"{reminder_note}{truncation_note}"
-                    ),
+                    "content": _format_action_results(completed, dropped) + truncation_note,
                 }
             )
             # ★ 记录"这次解题真的跑过工具"（v0.31）—— 供 auto 模式的
             #   证据门禁判断"答案是跑出来的还是想出来的"。
             #   见 `SolveOutcome.saw_tool_output`。
             outcome.saw_tool_output = True
-
-            # ★ 把这一轮的过程送出去。
-            #
-            # 顺序刻意是"先说后做"：模型在 `ACTION:` 之前写的那段话
-            # （"The shell is failing, let me retry" / "Cracked! Password = 9919"）
-            # 是**为什么这么做的解释**，先于那条命令出现才读得通。
-            narration = _narration_before_action(text)
-            if narration:
-                notify("reasoning", _clip(narration, 200), {"text": narration})
-            notify(
-                "tool_call",
-                _clip(f"{name} {command}", 200),
-                {"tool": name, "command": command, "output": result},
-            )
-
-            # ── 动作纪要：这一轮做过什么 ────────────────────
-            #
-            # ★ 见 `DEFAULT_MAX_TURNS` 那段说明。这一行是**永久保留**的
-            # （直到超过 `MAX_DIGEST_LINES`），而完整的对话内容会被裁掉。
-            #
-            # 一行里放三样东西：轮次、命令、输出开头 —— 足够让模型认出
-            # "这件事我做过了"，又不至于把上下文撑爆。
-            # ★ v0.41.2：被切断的那几轮，纪要里要看得出来。
-            #
-            # 纪要现在是"这一轮做过什么"的唯一长期记录（完整对话会被裁掉）。
-            # 不标记的话，一个话说到一半的回合与一个完整回合在纪要里长得
-            # 一模一样 —— 模型回头看会以为自己那轮已经想清楚了。
-            digest.append(
-                f"[t{turn}] {name}: {_clip(command, 110)} → {_clip(result, 140)}"
-                + (" ⚠️输出被截断" if truncated else "")
-            )
-            if len(digest) > MAX_DIGEST_LINES:
-                del digest[: len(digest) - MAX_DIGEST_LINES]
 
             # 完整内容只留最近 N 条。
             #
@@ -3368,6 +3544,53 @@ def _narration_before_action(text: str) -> str:
 # ══════════════════════════════════════════════════════════
 
 
+#: 归一化时用来折叠空白（含换行）。
+#:
+#: ⚠️ 不能只 `replace(" ", "")`：工具输出里 flag 经常被折行
+#:    （`flag{abc\ndef}`）、或被表格/JSON 缩进隔开，只去空格会漏判。
+_WS_RE = re.compile(r"\s+")
+
+
+def _normalize_for_match(text: str) -> str:
+    """把文本归一化成"只比内容、不比排版"的形式（v0.42）。
+
+    三步，顺序固定：
+
+      1. `html.unescape` —— 工具输出里的 `flag&#123;xxx&#125;` 是**同一个 flag**
+         的另一种写法（HTTP 响应体、HTML 源码里极常见）。不先解码就会漏判，
+         而那会白白 hold 掉一个真候选。
+      2. 折叠所有空白 —— 换行/制表/连续空格都不影响"这个字符串出没过"。
+      3. `casefold` —— flag 大小写敏感是老传统，但**我们这里比的是"出没出现过"，
+         不是"是不是标准答案"**。平台那边才是判大小写的地方；这层闸只问
+         "模型说的这串东西是不是从工具输出里来的"。放宽到 casefold 能把
+         "模型把 `Flag{...}` 写成 `flag{...}`"这类无害差异放过去。
+    """
+    return _WS_RE.sub("", html.unescape(text)).casefold()
+
+
+def answer_is_grounded(answer: str, outputs: Sequence[str]) -> bool:
+    """声称的答案**是否真的在某次工具输出里出现过**（v0.42）。
+
+    ## 这道闸问的和不问的
+
+    问：答案的来源是不是真实工具输出（挡"凭空编一个 flag"）。
+    不问：这个答案对不对（那是平台的判据，我们付不起误判）。
+
+    所以判据刻意宽松 —— 归一化后子串匹配。宁可放过一个错的，
+    不可误杀一个对的：`hold` 不消耗额度，而"真候选被 hold"会让人
+    多看一眼，代价远小于"编造的答案烧掉不可再生的提交额度"。
+
+    ## 空答案
+
+    `answer` 为空时返回 `False` —— 空串是任何字符串的子串，不特判的话
+    这道闸对空答案完全失效。
+    """
+    needle = _normalize_for_match(answer)
+    if not needle:
+        return False
+    return any(needle in _normalize_for_match(text) for text in outputs)
+
+
 @dataclass(frozen=True, slots=True)
 class SubmitDecision:
     """一次候选 flag 该怎么处理。**纯函数算出来的**，便于测试。"""
@@ -3383,6 +3606,8 @@ def decide_submission(
     remaining_wrong: int,
     evidence: str = "",
     saw_tool_output: bool = False,
+    flag: str = "",
+    tool_outputs: Sequence[str] = (),
 ) -> SubmitDecision:
     """候选 flag 的几条去向。
 
@@ -3424,6 +3649,20 @@ def decide_submission(
     比"编造的候选被提交"更常见。**先做一道廉价且不会误伤的闸**，
     把最坏情况（完全没跑工具、纯编造）挡掉。
 
+    ## ★★ v0.42：第三道闸 —— 答案必须落在真实输出里
+
+    上面两道闸有一个共同的弱点：**它们只读模型自己写的东西**。
+    `saw_tool_output` 是一个布尔位（跑过工具吗），`evidence` 是模型的
+    自述。于是"跑过几条无害命令 + 编一段 evidence + 编一个 flag"
+    仍然能走到 `submit`。
+
+    补的这道闸把**原始工具输出**（`tool_outputs`）拉进判据：声称的
+    答案必须在某次输出里出现过。归一化后子串匹配 —— 换行、HTML 实体、
+    大小写都不影响判定（见 `answer_is_grounded`）。
+
+    仍然**不是**"答案正确性校验"：它只回答"这串字符从哪来"。
+    正确与否是平台的事，我们付不起误判成本。
+
     ## 为什么只对 auto 生效
 
     `safe` 模式的候选本来就等人工确认 —— 而人会看 evidence。
@@ -3453,6 +3692,26 @@ def decide_submission(
             "hold",
             "auto 模式下证据不足：候选没有给出 `evidence`（怎么拿到的）。"
             "候选已保留，请人工核对后再决定是否提交。",
+        )
+    # ★ v0.42：答案必须在**真实工具输出**里出现过。
+    #
+    # 上面两道闸都只用了模型自己写的东西（`saw_tool_output` 也只是一个
+    # 布尔位）。一个"跑了工具、也给了一段 evidence"的模型，完全可以
+    # 在这两者之上编出一个 flag —— 而错误提交烧的是不可再生额度。
+    #
+    # 这道闸第一次把**原始输出**拉进判据：`tool_outputs` 是这一场里每次
+    # 工具调用的完整结果（见 `SolveOutcome.tool_outputs`）。判据宽松
+    # （归一化后子串匹配，见 `answer_is_grounded`），所以它挡住的是
+    # "凭空编"而不是"格式不对"。
+    #
+    # ⚠️ `tool_outputs` 为空时**不拦截**：调用方没提供证据池（旧调用点、
+    #    单测、人工确认路径）时，这道闸无从判断，拦下来只会误伤。
+    #    "有没有跑过工具"由上一道闸负责，两者职责不重叠。
+    if tool_outputs and not answer_is_grounded(flag, tool_outputs):
+        return SubmitDecision(
+            "hold",
+            "auto 模式下证据不足：这个候选 flag **没有在任何一次工具输出里出现过** —— "
+            "它可能是推出来的，也可能是编出来的。候选已保留，请人工核对后再决定是否提交。",
         )
     return SubmitDecision("submit")
 
@@ -4880,6 +5139,12 @@ async def _handle_candidates(
                 #   见 `decide_submission` 里那段"为什么需要证据门禁"。
                 evidence=candidate.evidence,
                 saw_tool_output=outcome.saw_tool_output,
+                # ★ v0.42：第三道闸 —— 答案必须落在真实工具输出里。
+                #   传的是**完整**输出（`outcome.tool_outputs`），不是
+                #   `transcript` 里被 `_clip` 过的版本。
+                #   见 `answer_is_grounded` 与 `SolveOutcome.tool_outputs`。
+                flag=candidate.flag,
+                tool_outputs=outcome.tool_outputs,
             )
             challenge.candidate_count = int(challenge.candidate_count or 0) + 1
             if decision.action == "hold":
@@ -5154,7 +5419,9 @@ __all__ = [
     "load_system_prompt",
     "needs_raw_network",
     "normalize_flag",
+    "answer_is_grounded",
     "parse_action",
+    "parse_actions",
     "parse_final",
     "profile_for_category",
     "run_worker",

@@ -492,6 +492,90 @@ def test_duplicate_beats_everything() -> None:
 
 
 # ══════════════════════════════════════════════════════════
+# ★★ v0.42：第三道闸 —— 答案必须落在**真实工具输出**里
+# ══════════════════════════════════════════════════════════
+#
+# 前两道闸（`saw_tool_output` / `evidence`）有一个共同弱点：**它们只读模型
+# 自己写的东西**。一个"跑过几条无害命令 + 编一段 evidence + 编一个 flag"的
+# 模型仍然能走到 `submit` —— 而错误提交烧的是不可再生额度。
+#
+# 这道闸第一次把原始工具输出拉进判据。判据刻意宽松（归一化后子串匹配）：
+# 挡的是"凭空编"，不是"格式不对"。
+
+
+def test_auto_mode_holds_when_the_answer_never_appeared_in_any_output() -> None:
+    """★★ 答案没有在任何一次工具输出里出现过 → hold（不消耗额度）。"""
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=3,
+        evidence="cat /flag 的输出里就是它",
+        saw_tool_output=True,
+        flag="flag{invented}",
+        tool_outputs=["total 0\ndrwxr-xr-x 2 root root 4096 .", "admin/admin"],
+    )
+    assert decision.action == "hold", "★ 凭空编的答案被提交了"
+    assert "没有在任何一次工具输出里出现过" in decision.reason
+
+
+def test_auto_mode_submits_when_the_answer_is_in_a_tool_output() -> None:
+    """★ 反向断言：真在输出里出现过 → 照常提交（这道闸几乎不误伤）。"""
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=3,
+        evidence="cat /flag 的输出里就是它",
+        saw_tool_output=True,
+        flag="flag{real}",
+        tool_outputs=["$ cat /flag\nwell done, flag{real}\n"],
+    )
+    assert decision.action == "submit"
+
+
+def test_the_grounding_gate_is_skipped_when_no_outputs_were_passed() -> None:
+    """★★ `tool_outputs` 为空时**不得拦截**。
+
+    证据池是可选参数：旧调用点、单测、人工确认路径都不会传它。
+    这时这道闸无从判断 —— 拦下来只会误伤。"有没有跑过工具"
+    由上一道闸负责，两者职责不重叠。
+    """
+    decision = runner.decide_submission(
+        mode="auto",
+        already=False,
+        remaining_wrong=3,
+        evidence="有证据",
+        saw_tool_output=True,
+        flag="flag{whatever}",
+    )
+    assert decision.action == "submit"
+
+
+def test_answer_is_grounded_ignores_whitespace_case_and_html_entities() -> None:
+    """★ 归一化三件套：折行、大小写、HTML 实体。
+
+    这三条都不是理论情况：flag 会被折行、会被写成 `Flag{...}`、
+    在 HTTP 响应体/HTML 源码里会变成 `flag&#123;...&#125;`。
+    漏掉任何一条，这道闸就会**误杀真候选** —— 而误杀的代价
+    是人工要去复核一个本来可以直接提交的答案。
+    """
+    # 折行：输出里 flag 被换行拆开。
+    assert runner.answer_is_grounded("flag{abc}", ["flag{ab\nc}"])
+    # 大小写：模型把小写写成了大写（大小写由平台判，这层不管）。
+    assert runner.answer_is_grounded("flag{ABC}", ["...Flag{abc}..."])
+    # HTML 实体：HTTP 响应体里的写法。
+    assert runner.answer_is_grounded("flag{abc}", ["<div>flag&#123;abc&#125;</div>"])
+    # 反证：真不在输出里就是不在。
+    assert not runner.answer_is_grounded("flag{zzz}", ["flag{abc}"])
+
+
+def test_answer_is_grounded_rejects_an_empty_answer() -> None:
+    """★ 空串是**任何**字符串的子串 —— 不特判的话这道闸对空答案完全失效。"""
+    assert not runner.answer_is_grounded("", ["随便什么输出"])
+    assert not runner.answer_is_grounded("   ", ["随便什么输出"])
+    assert not runner.answer_is_grounded("flag{x}", [])
+
+
+# ══════════════════════════════════════════════════════════
 # 输出解析
 # ══════════════════════════════════════════════════════════
 
@@ -1179,16 +1263,18 @@ def test_the_liveness_probe_asks_by_container_id_not_by_name(monkeypatch) -> Non
 
 
 # ══════════════════════════════════════════════════════════
-# ★★ v0.41：多 ACTION 回告
+# ★★ v0.42：一轮多个 ACTION 全部执行（v0.41 的"只跑第一个"被推翻）
 # ══════════════════════════════════════════════════════════
 #
 # 实测：66 份解题过程里 **271 轮（14.2%）** 一轮写了 ≥2 个 ACTION（极端一轮
-# 23 个），而 `parse_action` 只解析第一个，其余**静默丢弃** ——
-# 模型以为三条都执行了，按三条的结果推理下一步，而它手里只有第一条的输出。
+# 23 个）。v0.41 的做法是"只解析第一个 + 提醒模型"，但没有用 ——
+# 模型下一轮照样批量写（它想批量，是我们按住了它），而那一句提醒
+# 每轮都要占上下文。v0.42 改成**串行执行**：轮次仍算 1 轮，
+# 有效动作 ×N。
 
 
-def test_a_turn_with_several_actions_tells_the_model_only_one_ran() -> None:
-    """一轮写 3 个 ACTION → 回告里带 N=3，且明说只执行了第 1 个。"""
+def test_a_turn_with_several_actions_runs_them_all() -> None:
+    """★ v0.42：一轮写 3 个 ACTION → **三个都执行**，而这一轮仍算 1 轮。"""
     sandbox = _FakeSandbox()
     gateway = _FakeGateway(
         [
@@ -1205,18 +1291,25 @@ def test_a_turn_with_several_actions_tells_the_model_only_one_ran() -> None:
         runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
     )
 
-    # ★ 只执行了第一条 —— 执行逻辑没变。
-    assert sandbox.commands == ["cmd-a"]
-    # 而模型收到了"你写了 3 个、只执行了 1 个"的明确回告。
+    # ★ 三条**都执行了**，且顺序与模型写的顺序一致。
+    assert sandbox.commands == ["cmd-a", "cmd-b", "cmd-c"]
+
     fed_back = gateway.seen[1][-1]["content"]
-    assert "你这一轮写了 3 个 ACTION" in fed_back
-    assert "只执行了第 1 个" in fed_back
+    # 抬头要说清"写了几个、跑了几个" —— 两个数字必须对得上。
+    assert "你写了 3 个 ACTION" in fed_back
+    assert "执行了 3 个" in fed_back
+    # 每条输出各占一块，否则模型分不清哪段是哪个命令的结果。
+    assert fed_back.count("### run_shell：") == 3
+
+    # ★ 轮次没有因为批量而增加：第 2 次调用就是收尾轮。
+    assert len(gateway.seen) == 2
 
 
 def test_a_turn_with_one_action_gets_no_such_reminder() -> None:
-    """★ 反向断言：只写 1 个 ACTION 时**不能**出现那句提醒。
+    """★ 反向断言：只写 1 个 ACTION 时，回灌内容与批量之前**逐字符相同**。
 
-    否则每轮都多一句噪音，而噪音会挤占上下文 —— 那正是这条改动想治的病。
+    否则每轮都多一句抬头，而噪音会挤占上下文 —— 那正是这条改动想治的病。
+    这条断言同时钉住了"单条路径没有被批量改动影响"。
     """
     sandbox = _FakeSandbox()
     gateway = _FakeGateway(
@@ -1232,7 +1325,116 @@ def test_a_turn_with_one_action_gets_no_such_reminder() -> None:
 
     fed_back = gateway.seen[1][-1]["content"]
     assert "个 ACTION" not in fed_back
-    assert "只执行了第 1 个" not in fed_back
+    assert "###" not in fed_back
+    # 老的形状原样保留（提示词里就是这么教它的）。
+    assert fed_back.startswith("工具 `run_shell` 的输出：")
+
+
+def test_parse_actions_keeps_every_action_in_order() -> None:
+    """`parse_actions` 按出现顺序返回**全部** ACTION，不封顶。"""
+    text = (
+        '先看看目录。\n'
+        'ACTION: {"tool": "run_shell", "args": {"command": "ls /work"}}\n'
+        '再读一眼附件。\n'
+        'ACTION: {"tool": "read_attachment", "args": {"path": "a.txt"}}'
+    )
+
+    assert runner.parse_actions(text) == [
+        ("run_shell", {"command": "ls /work"}),
+        ("read_attachment", {"path": "a.txt"}),
+    ]
+
+
+def test_parse_actions_skips_a_broken_block_but_keeps_the_rest() -> None:
+    """★ 中间一个坏 JSON 不能带走后面的 —— 旧解析器会整段放弃。"""
+    text = (
+        'ACTION: {"tool": "run_shell", "args": {"command": "cmd-a"}}\n'
+        'ACTION: {"tool": "run_shell", "args": {broken json\n'
+        'ACTION: {"tool": "run_shell", "args": {"command": "cmd-c"}}'
+    )
+
+    assert runner.parse_actions(text) == [
+        ("run_shell", {"command": "cmd-a"}),
+        ("run_shell", {"command": "cmd-c"}),
+    ]
+
+
+def test_parse_action_still_returns_the_first_one() -> None:
+    """`parse_action` 是 `parse_actions` 的兼容包装：内容不变。"""
+    text = (
+        'ACTION: {"tool": "run_shell", "args": {"command": "cmd-a"}}\n'
+        'ACTION: {"tool": "run_shell", "args": {"command": "cmd-b"}}'
+    )
+
+    assert runner.parse_action(text) == ("run_shell", {"command": "cmd-a"})
+    assert runner.parse_actions("") == []
+
+
+def test_a_turn_with_too_many_actions_stops_at_the_cap_and_says_so() -> None:
+    """★ 一轮超过 5 个 ACTION → 只跑前 5 个，且**明说**最后几个没执行。
+
+    不说的话模型会按 7 份输出继续推理，而它手里只有 5 份 —— 这正是
+    v0.41 想治而没治到的病。
+    """
+    # ★ 写死 5 而不是读 `runner.MAX_ACTIONS_PER_TURN`：动态参照被测常量
+    #   会让"有人把上限改成 1"这种破坏**测不出来**（反证验证时实测踩到）。
+    #   常量本身有设计理由（串行执行 + `run_shell` 单条 300 秒超时），
+    #   要改就得连着这里一起改，那就应该有人想一想。
+    cap = 5
+    assert cap == runner.MAX_ACTIONS_PER_TURN, "上限被改了 —— 请同步这个测试的期望"
+    total = 7
+    actions = "\n".join(
+        f'ACTION: {{"tool": "run_shell", "args": {{"command": "cmd-{index}"}}}}'
+        for index in range(total)
+    )
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway([actions, 'FINAL: {"candidates": []}'])
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert sandbox.commands == [f"cmd-{index}" for index in range(cap)]
+
+    fed_back = gateway.seen[1][-1]["content"]
+    assert f"你写了 {total} 个 ACTION" in fed_back
+    assert f"执行了 {cap} 个" in fed_back
+    assert "没有执行" in fed_back
+    assert "最后 2 个" in fed_back
+
+
+def test_the_evidence_pool_keeps_what_the_transcript_drops() -> None:
+    """★ `SolveOutcome.tool_outputs` 保留的比 `transcript` 多。
+
+    这是第三道闸（`answer_is_grounded`）的数据来源。`transcript` 里的
+    result 是 `_clip(…, 2000)` 之后的（**只留头**），所以"flag 落在
+    2000 字符之后"的题会被误判成"没出现过" —— 白白 hold 掉真候选。
+
+    实测这条链上有两层剪：`dispatch_tool` 自己先剪到 8000 左右
+    （用 `_clip_both_ends`，**保尾**，所以末尾的 flag 还在），
+    `transcript` 再剪到 2000（只留头，flag 就没了）。
+    """
+    long_output = "A" * 9000 + " flag{deep}"
+    sandbox = _FakeSandbox(outputs={"cat": long_output})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "cat /flag"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    outcome = _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert outcome.tool_outputs, "★ 跑过工具却没有留下原始输出"
+    recorded = "\n".join(outcome.tool_outputs)
+    # ★ 核心断言：证据池里有那个 flag，transcript 里没有。
+    assert "flag{deep}" in recorded
+    assert "flag{deep}" not in outcome.transcript, "★ transcript 居然保住了尾部（判据该换）"
+    # 回灌给模型的版本也被剪（否则上下文撑爆）—— 与证据池是两件事。
+    fed_back = gateway.seen[1][-1]["content"]
+    assert "已截断" in fed_back
 
 
 # ══════════════════════════════════════════════════════════
