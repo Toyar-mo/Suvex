@@ -1,8 +1,7 @@
 import { ThemeToggle } from './ThemeToggle'
 import { StatusDot } from '@/components/ui/StatusDot'
 import { useFleetStatus } from '@/data/fleet'
-import { formatCompact, formatPercent } from '@/lib/format'
-import { cn } from '@/lib/cn'
+import { formatCompact } from '@/lib/format'
 
 /**
  * 顶部全局状态条：几个任务在跑 / 连的哪个 provider / token 用量。
@@ -11,33 +10,34 @@ import { cn } from '@/lib/cn'
  *   - agent 状态放最左，它是这个产品最该被瞟到的数字。
  *   - provider 只显示短名 + model，不显示 endpoint、key 之类的配置细节 ——
  *     那些属于 Settings。
- *   - token 用量显示"用了多少 / 预算"，不显示"还剩多少"：
- *     需要判断的是"还能不能再开一个扫描"，除法比减法直观。
+ *   - token 用量显示"花了多少"，**不显示"还剩多少"**：
+ *     平台不替用户管配额，单价随模型/供应商/时段变，没有分母就不摆除法。
  *
  * 窄屏策略：**逐级减字，而不是横向滚动。**
  *   第一版把整条做成 overflow-x-auto，320px 下确实不溢出了，但滚动条被我
  *   隐藏了 —— 信息还在 DOM 里，用户却不知道要往右划。等于把信息藏起来，
  *   比直接省略更糟。现在按断点做渐进的省略：
  *     base(<640)  ● 3 运行中 · DeepSeek · —
- *     sm(≥640)    补上 queued、token 百分比、统计窗口
+ *     sm(≥640)    补上 queued、用量数字、统计口径
  *     lg(≥1024)   补上 model 名
  *   每个断点下这一条都**恰好放得下**，不需要滚动。
- *   省略规则：先去掉修饰词（"个"），再去掉派生量（百分比），
+ *   省略规则：先去掉修饰词（"个"），再去掉派生量（占比），
  *   最后才动 provider —— 因为 provider 决定了"能不能跑"，比用量更重要。
  *
- * ## 任务 7：三段数据的确定性不同，所以显示方式也不同
+ * ## 三段数据的确定性不同，所以显示方式也不同
  *
  *   · 任务数、provider —— **真实数据**（见 `data/fleet.ts` 的来源表）。
- *   · token 用量 —— 契约里没有这个端点，`tokens` 恒为 null。
- *     这里如实写「用量未接入」，而不是留一个看着像真的数字。
- *     原来那一栏写的是 `184.3k / 1M · 18%`，**是编的** ——
- *     而它会被当成"这个月还能跑多少"的依据。
+ *   · token 用量 —— **也是真实数据**（`GET /overview` 的 `ctf2TotalTokens`，
+ *     与总览页 LLM 消耗卡同源）。
+ *
+ *     ⚠️ 这里曾经写「用量统计未接入」并恒显这行字，理由是"契约里没有
+ *     用量端点" —— 那句话在 10-10 写下时是对的，但 10-15 的 `GET /overview`
+ *     已经带上了用量字段。于是那一栏成了一**句假话**：数据就在同一个端点里。
+ *     2026-10-17 接上真实值，`null` 的含义从"没有这个能力"改成"还没数"。
  */
 export function TopStatusBar() {
   const { agents, provider, tokens } = useFleetStatus()
   const busy = agents.running > 0
-
-  const tokenRatio = tokens?.budget ? tokens.used / tokens.budget : null
 
   return (
     <div
@@ -109,36 +109,16 @@ export function TopStatusBar() {
               <span className="mono-ui tabular text-ink" data-numeric>
                 {formatCompact(tokens.used)}
               </span>
-              {tokens.budget ? (
-                <>
-                  <span className="mono-ui tabular hidden text-ink-faint sm:inline" data-numeric>
-                    / {formatCompact(tokens.budget)}
-                  </span>
-                  {/*
-                    百分比前必须有分隔符。实测发现 "184.3k / 1M 18%" 会被连读成
-                    "1M 18%" 一个整体 —— 三段数字挤在一起时，等宽字体反而让边界更模糊。
-                    用圆点：这里表达的是"用量 / 预算 · 占比"三者的并列，
-                    和左侧 "3 个运行中 · 1 排队" 是同一种关系，所以用同一个符号。
-                  */}
-                  <span aria-hidden="true" className="hidden text-xs text-ink-ghost sm:inline">
-                    ·
-                  </span>
-                  <span
-                    className={cn(
-                      'tabular hidden text-xs sm:inline',
-                      // 超过 80% 才提醒。平时不动用颜色，否则这一条永远在喊
-                      tokenRatio && tokenRatio >= 0.8 ? 'text-signal-warn' : 'text-ink-faint',
-                    )}
-                    data-numeric
-                  >
-                    {formatPercent(tokenRatio ?? 0)}
-                  </span>
-                </>
-              ) : (
-                <span className="hidden text-xs text-ink-faint sm:inline">token</span>
-              )}
               {/*
-                窗口说明前加分隔符。视觉评审实测发现 "18% 近 24 小时" 里
+                ★ 这里**没有** `预算` 与 `占比` 了（v0.36 起）。
+                  旧版显示 `184.3k / 1M · 18%`，其中 `1M` 是编的 ——
+                  平台不替用户管配额，单价又随模型/供应商/时段变，
+                  写死一个额度会让人误判"还能跑多少"。
+                  没有分母，就不摆除法：只报"花了多少"。
+              */}
+              <span className="hidden text-xs text-ink-faint sm:inline">token</span>
+              {/*
+                窗口说明前加分隔符。视觉评审实测发现 "3.7M token 近 24 小时" 里
                 两个不同语义的量被连读成了一个。用竖线而不是圆点：
                 圆点在这个状态条里已经被当作并列项的连接符用了（"3 个运行中 · 1 排队"），
                 这里表达的是"上面那组数的统计口径"，是不同的关系。
@@ -153,14 +133,15 @@ export function TopStatusBar() {
             </>
           ) : (
             /*
-              ★ 契约里没有 token 用量端点（见 data/fleet.ts 的说明）。
-                如实写"未接入"，而不是留一个看起来像真的数字 ——
-                这一栏原来显示 `184.3k / 1M · 18%`，那是编的，
-                而它会被用户当成"这个月还能跑多少"的依据。
+              `null` 现在表达的是**还没有数**（未加载完，或库里一条 usage 都没有），
+              不表达"平台没有这个能力" —— 数据就在 `GET /overview` 里。
+
+              所以写"暂无"而不是"未接入"：后者会让看过代码的人以为端点还没做，
+              而它其实从 10-15 就在了。
             */
             <span className="text-xs text-ink-faint">
-              <span className="hidden sm:inline">用量统计未接入</span>
-              <span className="sm:hidden">用量未接入</span>
+              <span className="hidden sm:inline">用量暂无数据</span>
+              <span className="sm:hidden">用量 —</span>
             </span>
           )}
         </div>

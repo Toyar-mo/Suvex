@@ -121,10 +121,35 @@ export function useOverviewState(): OverviewSnapshot {
   )
 }
 
+/**
+ * 幂等地拉一次总览 —— 给**布局层**用，不返回值。
+ *
+ * ## 为什么状态条需要它
+ *
+ * 状态条上的 token 用量读的是 `GET /overview` 的 `ctf2TotalTokens`
+ * （见 `fleet.ts`）。而总览数据原本**只有总览页**会拉 ——
+ * 于是停在其它页面时，状态条会一直显示"还没加载到"，
+ * 而那句在用户眼里与"没有这个数据"没有区别。
+ *
+ * 这与 `Layout` 里 `ensureScansLoaded()` / `ensureSettingsLoaded()`
+ * 是同一条理由：**全局常驻的那一条不能依赖某个页面碰巧拉过。**
+ *
+ * ⚠️ 必须在登录后调用（`GET /overview` 401 会把用户踢到登录页），
+ *    所以调用点在 `Layout` 而不是状态条自己。
+ */
+let loadStarted = false
+
+export function ensureOverviewLoaded(): void {
+  if (loadStarted) return
+  loadStarted = true
+  void loadOverview()
+}
+
 /** 仅供测试与开发：清空 store（**不再复位到 mock**） */
 export function resetOverview(): void {
   data = null
   dataStatus = 'loading'
   loadError = null
+  loadStarted = false
   commit()
 }

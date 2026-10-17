@@ -4,6 +4,7 @@ import TopStatusBar from './TopStatusBar'
 import AppShell from './AppShell'
 import MobileNav from './MobileNav'
 import { isNavItemActive, NAV_ITEMS } from '@/navigation'
+import { ensureOverviewLoaded } from '@/data/overview-store'
 import { ensureScansLoaded } from '@/data/scans-store'
 import { ensureSettingsLoaded } from '@/data/settings-store'
 import { useEffect } from 'react'
@@ -21,19 +22,21 @@ import { Outlet, useLocation } from 'react-router-dom'
  * ## 为什么"全局数据"的首次加载放在这里
  *
  * 侧栏的"N 个运行中"与状态条的"模型 XXX"要读 `scans-store` 与
- * `settings-store`，而**不是每个页面都会拉它们** ——
- * 总览页读 `/overview` 一个端点，根本不经过这两个 store。
+ * `settings-store`，状态条的"token 用量"要读 `overview-store`，
+ * 而**不是每个页面都会拉它们** ——
+ * 总览页读 `/overview` 一个端点，根本不经过前两个 store；
+ * 反过来，停在其它页面时没有任何人会去拉 `/overview`。
  * 于是直接落在总览时，侧栏会显示"0 运行中"、状态条会显示"未配置"，
  * 而系统里可能真有几个扫描在跑、provider 也早就配好了。
  * 两句都是**说反了的话**，比不显示更糟 —— 前者让人以为系统闲置，
- * 后者会让人跑去「设置」重配一遍。
+ * 后者会让人跑去「设置」重配一遍。用量那一栏同理：它恒显"暂无"。
  *
  * ⚠️ 放在 `Layout` 而不是 `TopStatusBar` 里，是因为加载必须发生在
  *    **登录之后**：未登录时 `GET /providers` 会 401，而 `lib/api.ts`
  *    的 401 处理会把人踢到登录页 —— 触发点若在状态条，
  *    公开的落地页（不走 Layout）就会变得不可访问。
  *
- * 两个 `ensure*` 都是**幂等**的：已经发起过就什么都不做，
+ * 三个 `ensure*` 都是**幂等**的：已经发起过就什么都不做，
  * 所以各页面自己的 effect 照常调用，不会变成重复请求。
  */
 export function Layout() {
@@ -43,6 +46,7 @@ export function Layout() {
   useEffect(() => {
     ensureScansLoaded()
     ensureSettingsLoaded()
+    ensureOverviewLoaded()
   }, [])
 
   // 用导航项自己的声明判断，而不是在这里列一份"特殊路由"名单

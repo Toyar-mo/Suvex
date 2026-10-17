@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { useOverviewState } from './overview-store'
 import { useScansState } from './scans-store'
 import { useSettings } from './settings-store'
 
@@ -15,7 +16,18 @@ import { useSettings } from './settings-store'
  * | --- | --- | --- |
  * | `agents` | `scans-store` | **真实**。有扫描处于 running/queued 时计数 |
  * | `provider` | `settings-store` | **真实**。取默认 provider 的短名与 model |
- * | `tokens` | 无 | 契约里**没有** token 用量端点，如实返回 `null` |
+ * | `tokens` | `overview-store` | **真实**（v0.36 起）。取 `ctf2TotalTokens` |
+ *
+ * ## ★ `tokens` 曾经恒为 `null`，2026-10-17 改成真实值
+ *
+ * 这里原来写着"契约里没有 token 用量端点"，那句话在写下的当天（10-10）
+ * 是对的，但 10-15 加的 `GET /overview` 已经带 `ctf2TotalTokens` /
+ * `ctf2LlmCalls` / `ctf2UsageSince` 三个字段了 —— 于是状态条上那句
+ * 「用量统计未接入」变成了一句**假话**：数据就在同一个端点里，
+ * 总览页的 LLM 消耗卡也一直在用。
+ *
+ * 顺手保留了 `null` 这一支：它现在表达的是**"还没加载到"**，
+ * 而不是"没有这个数据"。两者的区别见下面 `tokens` 字段的注释。
  *
  * ## `agents` 的语义要写清楚：它是**扫描数**，不是 agent 实例数
  *
@@ -54,14 +66,15 @@ export interface FleetStatus {
   /** 默认 provider。一个都没配时为 null */
   provider: ProviderInfo | null
   /**
-   * token 用量。
+   * token 用量。`null` = **还没加载到**（不是"没有这个数据"）。
    *
-   * ⚠️ **恒为 null** —— 契约里没有任何 token 用量端点（§9 的端点表里没有，
-   *    `ProviderOut` 也不带用量字段）。这里如实标注"没有这个数据"，
-   *    而不是编一个看起来很像的（原来的 `184.3k / 1M · 18%` 就是编的，
-   *    而它会被当成"这个月还能跑多少"的依据）。
+   * 数据来自 `GET /overview` 的 `ctf2TotalTokens`，与总览页的
+   * LLM 消耗卡是**同一个数**（同一个端点、同一个事务），两处不会打架。
    *
-   * 端点交付后把这一支改成真实数据即可，消费方按 null 分支已经写好了。
+   * `budget` **恒为 null**，这是设计而非缺口：契约里没有"预算 / 配额"
+   * 这个概念 —— 平台不替用户管账户余额，单价又随模型、供应商、时段变，
+   * 写死一个额度会误导。所以状态条只显示"花了多少"，不显示"还剩多少"。
+   * 原来的 `184.3k / 1M · 18%` 里那个 `1M` 是编的，随它一起删掉了。
    */
   tokens: { used: number; budget: number | null; windowLabel: string } | null
 }
@@ -70,6 +83,7 @@ export function useFleetStatus(): FleetStatus {
   // 只订阅，不加载 —— 理由见文件头那段（它会 401 掉落地页）
   const { scans } = useScansState()
   const { accounts } = useSettings()
+  const overview = useOverviewState()
 
   /*
     useMemo 是必须的：这个对象会成为消费方的渲染依赖。
@@ -78,6 +92,14 @@ export function useFleetStatus(): FleetStatus {
   */
   return useMemo<FleetStatus>(() => {
     const defaultAccount = accounts.find((account) => account.isDefault) ?? accounts[0] ?? null
+    const metrics = overview.data?.metrics ?? null
+
+    /*
+      `ctf2UsageSince === null` 表示**一条 usage 记录都没有**
+      （v0.36 之前的解题不写 usage）。这时显示 `0 token` 是错的 ——
+      "消耗 0"与"没记录到"在界面上必须能分开，所以整段不显示。
+    */
+    const hasUsage = metrics !== null && metrics.ctf2UsageSince !== null
 
     return {
       agents: {
@@ -87,7 +109,15 @@ export function useFleetStatus(): FleetStatus {
       provider: defaultAccount
         ? { id: defaultAccount.id, label: defaultAccount.label, model: defaultAccount.model }
         : null,
-      tokens: null,
+      tokens: hasUsage
+        ? {
+            used: metrics.ctf2TotalTokens,
+            budget: null,
+            // §口径写进标签：这个数是 CTF2 解题的累计消耗，
+            // 不是"整个平台的 LLM 花费"—— 后者目前没有独立记账
+            windowLabel: 'CTF2 解题累计',
+          }
+        : null,
     }
-  }, [scans, accounts])
+  }, [scans, accounts, overview.data])
 }
