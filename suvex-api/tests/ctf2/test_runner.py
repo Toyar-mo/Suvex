@@ -962,11 +962,22 @@ class _FakeSandbox:
     抛 `AttributeError`。这个坑与 `_FakeGateway` 少了 `model` 那次同形。
     """
 
-    def __init__(self, outputs: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        outputs: dict[str, str] | None = None,
+        *,
+        start_error: Exception | None = None,
+    ) -> None:
         self.commands: list[str] = []
         self.destroyed = False
         self.outputs = outputs or {}
         self.died = False
+        #: v0.43：重建（`start()`）被调用了几次。
+        self.restarts = 0
+        #: v0.43：给一个异常就表示"重建必定失败"。
+        self.start_error = start_error
+        #: 真 `SandboxContainer` 有这个属性，而重建成功的日志里会读它。
+        self.name = "ctf2-fake-sandbox"
 
     def shell(self, command: str, *, timeout: int = 300):  # noqa: ANN001, ANN201
         self.commands.append(command)
@@ -977,6 +988,19 @@ class _FakeSandbox:
 
     def copy_in(self, host_path, container_path):  # noqa: ANN001, ANN201
         return runner.CommandResult(0, "", "")
+
+    def start(self) -> None:
+        """重建容器（v0.43）。与真类的**唯一契约**：成功就清掉 `died`。
+
+        ⚠️ 必须清：真 `SandboxContainer.start()` 在 `_verify_running()` 之后
+        会置 `self.died = False`（新容器 = 新的生命）。假沙箱不清的话，
+        解题循环下一轮开头仍读到 `died=True`，会把"重建成功"当成失败，
+        于是这条路径在测试里永远走不到"继续解题"那一支。
+        """
+        self.restarts += 1
+        if self.start_error is not None:
+            raise self.start_error
+        self.died = False
 
     def destroy(self) -> None:
         self.destroyed = True
@@ -1078,13 +1102,17 @@ def test_solver_loop_gives_up_when_turns_run_out() -> None:
 # ③ 反向 —— "Docker 没装"不算容器死。
 
 
-def test_the_loop_stops_at_the_next_turn_when_the_sandbox_is_gone() -> None:
-    """容器已死 → **下一轮开头**就返回，不再调 LLM。
+def test_the_loop_gives_up_when_the_sandbox_cannot_be_revived() -> None:
+    """容器已死 **且重建也失败** → 下一轮开头就返回，不再调 LLM。
 
-    断言的核心不是"报了个错"，而是 `gateway.seen` 的长度：容器死了之后
-    一次都不该再调模型 —— 放了的话，每次调用都是白花的 token。
+    断言的核心不是"报了个错"，而是 `gateway.seen` 的长度：容器救不回来
+    之后一次都不该再调模型 —— 放了的话，每次调用都是白花的 token。
+
+    ⚠️ v0.43 起"容器死了"**不再**等于"立刻中止"：会先试着重建一个
+    （见 `MAX_SANDBOX_REVIVALS`）。所以这个用例必须让 `start()` 抛异常，
+    否则重建会成功、循环会接着跑 —— 那时它测的就不是"放弃"了。
     """
-    sandbox = _FakeSandbox()
+    sandbox = _FakeSandbox(start_error=runner.Ctf2SandboxError("docker 起不来"))
     sandbox.died = True
     gateway = _FakeGateway(['FINAL: {"candidates": []}'])
 
@@ -1096,8 +1124,97 @@ def test_the_loop_stops_at_the_next_turn_when_the_sandbox_is_gone() -> None:
     # ★ 一次 LLM 调用都没有 —— 这是这条改动的全部价值所在。
     assert gateway.seen == []
     assert sandbox.commands == []
+    # 试过**一次**重建才放弃：不能退化成"根本不试"，也不能变成每轮重试。
+    assert sandbox.restarts == 1
     # 中止也要留下一个可读的轮次记录（题解与排查都靠它）。
     assert outcome.transcript and "沙箱已消失" in outcome.transcript
+
+
+def test_a_lost_container_is_revived_and_the_solve_carries_on() -> None:
+    """容器被外部移除 → 重建一个、告诉模型"这是新容器"、接着解题。
+
+    ★ 这是 v0.43 的正题。2026-10-17「粗心的开发人员」跑到 turn 42、
+    40 分钟，容器被外部清掉后整轮作废 —— 而模型当时的判断、已探明的
+    目标结构、写在 `/work/persist` 里的笔记**全都还在上下文里**。
+    一个新容器 + 一句"什么还在、什么没了"就能接着跑。
+
+    ⚠️ 这条用例同时钉住三件事，少一件这个能力就是假的：
+    （1）真的重建了；（2）重建后命令真的在新容器里跑了；
+    （3）模型**被告知**了这件事 —— 不然它会去找一个已经不存在的文件，
+        并把"不见了"当成自己记错，那种弯路比重新开始更贵。
+    """
+    sandbox = _FakeSandbox({"ls -la": "notes.txt 还在"})
+    sandbox.died = True
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work/persist"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    outcome = _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert not outcome.error
+    assert sandbox.restarts == 1
+    assert sandbox.commands == ["ls -la /work/persist"]
+    # 重建之后模型被接着问了（而不是默默中止）。
+    assert len(gateway.seen) == 2
+
+    first_call = "\n".join(str(m.get("content", "")) for m in gateway.seen[0])
+    assert "沙箱" in first_call
+    assert runner.PERSIST_DIR in first_call
+
+
+def test_the_revival_budget_is_capped() -> None:
+    """重建次数用完还是死的 → 中止，且**不会**无限重试。
+
+    上限存在的理由与 `MAX_SANDBOX_REVIVALS` 的注释同一条：无限重建
+    会让每一轮都撞在同一个已经救不回来的容器上、白烧 token —— 那正是
+    v0.41 那条"一死就停"要防的浪费，只是换了个形式。
+
+    模拟方式：每跑一条命令就把 `died` 重新置上，等价于"重建了但立刻又没了"。
+    """
+    sandbox = _FakeSandbox()
+    sandbox.died = True
+    original_shell = sandbox.shell
+
+    def shell_then_die(command, *, timeout=300):  # noqa: ANN001, ANN202
+        result = original_shell(command, timeout=timeout)
+        sandbox.died = True
+        return result
+
+    sandbox.shell = shell_then_die  # type: ignore[method-assign]
+    gateway = _FakeGateway(['ACTION: {"tool": "run_shell", "args": {"command": "ls"}}'] * 5)
+
+    outcome = _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert outcome.error and "沙箱已消失" in outcome.error
+    # ★ 钉字面量 2，而**不是** `== runner.MAX_SANDBOX_REVIVALS`。
+    #   写后者的话，把常量改成 0（= 退化成"一死就停"）这条用例照样绿 ——
+    #   它守的会变成"用尽就停"这个逻辑，而不是"真的试满了一次预算"。
+    #   实测确认：这一行写成 `== MAX_SANDBOX_REVIVALS` 时，反向验证只红了
+    #   一条用例，这条没红。改这个预算必须同时改这里，那是对的。
+    assert sandbox.restarts == 2
+    # ★ 每个"还活着的"轮次只调一次模型：预算用完之后不再空转。
+    assert len(gateway.seen) == sandbox.restarts
+
+
+def test_the_revival_note_says_what_survived_and_what_did_not() -> None:
+    """说明必须同时讲清"没了"与"还在"，并给出先 `ls` 的下一步。
+
+    只讲"重建好了"是不够的 —— 那等于把"环境变了"这件事瞒下来，
+    让模型拿旧记忆去操作新容器。
+    """
+    note = runner._sandbox_revived_note(2)
+
+    assert "2" in note  # 第几次重建
+    assert runner.PERSIST_DIR in note  # 读写挂载：还在
+    assert "没了" in note or "消失" in note
+    assert "ls" in note
 
 
 def test_the_sandbox_marks_itself_dead_when_the_container_is_gone(monkeypatch) -> None:

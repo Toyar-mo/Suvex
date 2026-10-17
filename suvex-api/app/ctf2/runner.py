@@ -361,6 +361,27 @@ MAX_ACTIONS_PER_TURN = 5
 #: 见 `_per_action_budget`。
 MAX_TURN_OUTPUT_CHARS = 16000
 
+#: ★ v0.43：一次解题里最多**重建**几次沙箱容器。
+#:
+#: ## 为什么要有重建这件事
+#:
+#: 容器会因为**与解题无关的原因**消失：服务重启时 `main.lifespan` 里的
+#: `sweep_orphan_sandboxes()`、人手 `docker rm`、宿主清理脚本。原来的处置
+#: 是"立刻中止，本题算失败"（`sandbox.died` 那条）—— 但那时模型可能已经
+#: 跑了几十轮、把题目的结构摸清了，全部作废。
+#:
+#: 实测代价（2026-10-17「粗心的开发人员」）：跑到 turn 42、40 分钟，下一
+#: 条命令报 `No such container` 就直接放弃。而这道题的工作区里真正值钱的
+#: 东西（笔记、脚本、已解出的中间结果）按系统提示的要求放在 `/work/persist`
+#: —— 那是**宿主目录的读写挂载**，重建容器后还在。
+#:
+#: ## 为什么是 2 次而不是无限
+#:
+#: 重建是"外部故障"的兜底，不是常态。真出问题时（Docker 挂了、磁盘满了）
+#: 无限重建会变成每轮都撞一次墙、白烧 token —— 与 v0.41 那条"容器一死就
+#: 停"要防的浪费是同一种。2 次给的是"偶发一次 + 一次重试"的余量。
+MAX_SANDBOX_REVIVALS = 2
+
 
 # ══════════════════════════════════════════════════════════
 # 镜像选择
@@ -1104,6 +1125,16 @@ class SandboxContainer:
         #    is already in use` 就是实例 —— 按名字查有可能查到**另一个**容器。
         self._verify_running()
         self._started = True
+        # ★ v0.43：新容器 = 新的生命。
+        #
+        # `died` 是**上一个**容器留下的结论，重建成功后必须清掉 —— 否则
+        # 解题循环下一轮开头读到 `died=True`，会立刻判定"沙箱又没了"，
+        # 把刚刚重建好的这次机会白白丢掉（而且会连按 `MAX_SANDBOX_REVIVALS`
+        # 次，每次都在容器还活着的情况下报"重建失败"）。
+        #
+        # ⚠️ 位置：放在 `_verify_running()` **之后**。验活失败会抛异常，
+        #    此时重建并没有成功，`died` 必须保持 True。
+        self.died = False
         logger.info(
             "CTF2 沙箱已启动 name=%s image=%s network=%s id=%s",
             self.name,
@@ -2905,6 +2936,38 @@ def _final_stretch_note(remaining: int) -> str:
     )
 
 
+def _sandbox_revived_note(round_no: int) -> str:
+    """沙箱被重建之后，告诉模型"这是新容器、旧东西没了"（v0.43）。
+
+    ★ 这条消息的**唯一目的**是阻止模型拿旧假设继续：它会接着上一轮的思路
+    往下走（"刚才那个文件里的内容……"），而那个文件已经不存在了。不说清楚，
+    它会把"文件不见了"当成自己记错，然后花好几轮去找一个本来就没了的东西。
+
+    ⚠️ "还在"那三项必须逐条点明，否则模型的恢复成本比重新开始还高：
+      附件目录与宿主资源是**只读挂载**、`/work/persist` 是**读写挂载** ——
+      三者都不属于容器的生命周期。而 `/work` 其余部分是 tmpfs，容器一停就没。
+    """
+    return (
+        f"⚠️ 系统通知：你的解题沙箱在上一轮之后**被外部移除**了（不是你的操作导致）。"
+        f"系统已经重建了一个新容器（第 {round_no} 次），你可以继续解题。\n"
+        "\n"
+        "**重建意味着这些没了**：\n"
+        "- `/work` 下你自己下载、解压、编译、写出来的文件**全部消失**"
+        "（它是内存盘，容器一停就没了）；\n"
+        "- 你之前起的后台进程（`nc` 监听、`http.server`、编译任务等）**都没了**；\n"
+        "\n"
+        "**这些还在**：\n"
+        f"- `{PERSIST_DIR}`（持久区，宿主目录挂载）—— 笔记、脚本、中间结果"
+        "如果放在这里就还在；\n"
+        f"- `{ATTACHMENT_DIR}`（题目附件）与 `{HOST_RESOURCES_PATH}`（宿主资源）"
+        "都是**只读挂载**，也还在；\n"
+        "\n"
+        "请**先花一条命令**确认现状（比如 `ls -la "
+        f"{PERSIST_DIR}`），再决定从哪一步接着做。"
+        "不要假设之前的文件或进程还在。"
+    )
+
+
 def _per_action_budget(count: int) -> int:
     """一轮批量动作里，**每条**输出能占多少字符（v0.42）。
 
@@ -3145,6 +3208,8 @@ async def solve_in_sandbox(
     #   `HTTPS_PROXY` / `ALL_PROXY` 把请求交给那个代理 —— 白名单校验的是
     #   URL，管不了"谁在实际收这个请求"。所以这里补上，关掉那条改道。
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), trust_env=False) as http:
+        # ★ v0.43：本次解题已经重建过几次沙箱（上限见 `MAX_SANDBOX_REVIVALS`）。
+        revivals = 0
         for turn in range(1, spec.max_turns + 1):
             outcome.turns = turn
             # ★★ 沙箱已经没了 → 立刻中止（v0.41）。
@@ -3159,13 +3224,60 @@ async def solve_in_sandbox(
             # 约 62 万 token，换回的是一句 "The container has been
             # persistently unavailable"。
             if sandbox.died:
-                outcome.error = (
-                    "解题沙箱已消失（容器被外部移除），本次解题中止。"
-                    "已完成的轮次见解题过程。"
-                )
-                log.append(f"[turn {turn}] {outcome.error}")
-                outcome.transcript = "\n\n".join(log)
-                return outcome
+                # ★★ v0.43：先试着**重建**，而不是立刻放弃。
+                #
+                # ## 为什么值得重建
+                #
+                # v0.41 那条"一死就停"解决的是**白烧 token**（模型对着没了
+                # 的容器敲几十轮），但它把"外部误伤"也一并判成了死刑。实测
+                # 2026-10-17「粗心的开发人员」：跑到 turn 42、40 分钟，容器
+                # 被外部清掉，下一轮直接中止 —— 而模型当时的判断、已探明的
+                # 目标结构、写在 `/work/persist` 里的笔记全都还在上下文里。
+                # 一个新容器 + 一句"这些东西还在、那些东西没了"就能接着跑。
+                #
+                # ## 为什么重建能救回来
+                #
+                # 沙箱里真正值钱的东西都不属于容器生命周期：`/work/persist`
+                # 是宿主目录的读写挂载，附件与 `HOST_RESOURCES_PATH` 是只读
+                # 挂载。丢的只有 tmpfs 上的临时产物和后台进程 —— 代价明确，
+                # 而且是可以用一条 `ls` 重新确认的。
+                #
+                # ⚠️ 顺序：先 `destroy()` 再 `start()`。`destroy()` 是幂等的
+                #    （见它的 docstring），而 `start()` 里的 `docker run --name`
+                #    遇到**同名残留容器**会直接 `Conflict`。`died` 的判据
+                #    （`No such container`）说明容器已经不在了，但"不在了"和
+                #    "名字没被占用"是两件事，这一步不省。
+                if revivals < MAX_SANDBOX_REVIVALS:
+                    revivals += 1
+                    log.append(f"[turn {turn}] 沙箱容器已消失，第 {revivals} 次重建")
+                    notify(
+                        "reasoning",
+                        f"解题沙箱被外部移除，正在重建容器（第 {revivals} 次）",
+                        {"text": f"沙箱容器已消失，第 {revivals} 次重建"},
+                    )
+                    try:
+                        sandbox.destroy()
+                        sandbox.start()
+                    except Exception as exc:  # noqa: BLE001 - 起不来的原因很多，都要落到中止
+                        log.append(f"[turn {turn}] 重建沙箱失败：{exc}")
+                    else:
+                        log.append(f"[turn {turn}] 沙箱已重建：{sandbox.name}")
+                        # ★ 必须告诉模型"这是新容器"：否则它会接着上一轮的
+                        #   思路去找一个已经不存在的文件，并把"不见了"当成
+                        #   自己记错 —— 那种弯路比重新开始更贵。
+                        recent.append({"role": "user", "content": _sandbox_revived_note(revivals)})
+                # 重建过 `MAX_SANDBOX_REVIVALS` 次还是死的，或者重建失败 → 中止。
+                # ⚠️ 判据是 `sandbox.died` 而不是上面那个 `try` 的结果：
+                #    `start()` 成功但容器起完就死（`_verify_running` 会抛）
+                #    这条路径也必须在下一轮之前被拦住。
+                if sandbox.died:
+                    outcome.error = (
+                        "解题沙箱已消失（容器被外部移除），重建也没成功，本次解题中止。"
+                        "已完成的轮次见解题过程。"
+                    )
+                    log.append(f"[turn {turn}] {outcome.error}")
+                    outcome.transcript = "\n\n".join(log)
+                    return outcome
             # ★ 收尾提醒：只剩 `FINAL_STRETCH_TURNS` 轮时提醒一次。
             #
             # 动机来自实测：没有它的时候，模型会一路探索到最后一轮，
