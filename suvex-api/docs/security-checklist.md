@@ -836,6 +836,22 @@ httpx.InvalidURL)` = **False**，`issubclass(..., httpx.HTTPError)` = **False**�
 **根本轮不到 `_next_url`**。所以在那处加 try/预取**没有任何真实路径能守**。
 **没有真实路径能守的改动就是不可验证的改动**，所以不加。
 
+**★ 上面那句"httpx 一定会先碰 `.host`"本身要能被核，不能只当断言**
+（Review 复审时正是从这条前提入手：若两边的跳转判据不一致，就存在
+"我们认为跳转、httpx 不认为"的状态码，那 `_next_url` 里的 `.host`
+就是第一个碰它的地方，Site B 立刻可达）。两条可核事实：
+
+| 核什么 | 实测（Kali，httpx 0.28.1） |
+| --- | --- |
+| httpx 的跳转判据是哪些码 | `Response.has_redirect_location` 的源码是**硬编码的 5 个常量**：`MOVED_PERMANENTLY / FOUND / SEE_OTHER / TEMPORARY_REDIRECT / PERMANENT_REDIRECT` = **{301,302,303,307,308}** |
+| 与我们的 `REDIRECT_CODES` 是否一致 | **完全一致**（逐码实测 300/304/305/306/309/399 两边都不是跳转）。所以不存在"我们认为跳转而 httpx 不认为"的码 |
+| `follow_redirects=False` 时还碰 `.host` 吗 | **碰** —— `_send_handling_redirects` 里 `request = self._build_redirect_request(request, response)` 在 `if follow_redirects:` **之前**，无条件执行；False 只是把结果塞进 `response.next_request` 就返回 |
+| 端到端 A/B：把 `.host` 挪进 try | 21 条畸形 `Location` 全量跑，`(类型, message)` **逐字节相同**（`diff` 退出码 0） |
+
+所以"不可达"不是推理出来的，是**两边判据一致 + A/B 无差异**这两条一起坐实的。
+哪天 httpx 改了跳转码集合或把 `_build_redirect_request` 挪进 `if`，上表第一、
+三行会先失效 —— 那时这条结论要重验，别照抄。
+
 **★ 两条可达路径，别只测一条**：判据层收 `IDNAError` 只覆盖
 `client.request()` **内部**抛出的那些（httpx 自己解析 `Location` 时）；
 `assert_safe_base_url` 那条走的是**我们自己的** `try`，与判据层无关 ——
