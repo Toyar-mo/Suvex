@@ -60,7 +60,7 @@ import re
 import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar
 
 from sqlalchemy import case, func, select
@@ -158,6 +158,22 @@ MAX_SYNC_CHALLENGES = 500
 # 并补一条迁移 —— 那条 CHECK 是字面量固化的，不会跟着这里变。
 MIN_WRONG_SUBMISSIONS = 0
 MAX_WRONG_SUBMISSIONS_CEILING = 10
+
+# 没有租期信息的环境，多久之后算陈旧。
+#
+# ★ 为什么要有这一条：平台给的环境**带租期**（实测默认 1 小时，见
+#   `start_environment_for` 里 `_parse_time(access.expires_at)` 那句），
+#   但 `expires_at` 可空 —— 早先那几批环境就是 NULL（写回租期是后来才
+#   补的）。这些行永远不会"到期"，因为库里没有它们的到期时刻。
+#
+#   真库里实测有 2 条 `status='ready' and expires_at is null`，其中一条
+#   已经停了十几天。它们在前端会渲染成一个标着"就绪"的死链接
+#   （`EnvironmentStatus.tsx` 的规则是 `accessUrl` 只在 ready 时渲染）。
+#
+# ⚠️ 24 小时是"明显陈旧"而不是"过期"：默认租期 1 小时，给 24 倍余量，
+#   长租期环境不会被误杀。判据是 `ready_at`（环境**就绪**的时刻），
+#   不是 `created_at` —— 行是启动前就建的，创建到就绪之间可能隔很久。
+STALE_ENVIRONMENT_WITHOUT_TTL_HOURS = 24
 
 
 # ══════════════════════════════════════════════════════════
@@ -1723,6 +1739,86 @@ def release_environment_sync(
         raise _translate(exc) from exc
 
 
+def expire_stale_environments(db: Session) -> int:
+    """把**已经过期或明显陈旧**的 ready 环境标成 `expired`，返回改了几条。
+
+    ## 为什么必须有（v0.40）
+
+    `Ctf2EnvironmentStatus.EXPIRED` 从定义那天起就**没有任何一处设置它**
+    —— 全仓 `app/` 零处。于是 `expires_at` 过去之后，行还停在 `ready`，
+    而 `access_url` 也还留着。
+
+    前端 `EnvironmentStatus.tsx` 的规则是"`accessUrl` 只在 `status ===
+    'ready'` 时渲染"，于是界面上出现一个标着「就绪」的链接，点进去是
+    连接断开 —— 用户以为是我们把环境弄坏了，实际是它按租期正常到期了。
+
+    真库里实测有 2 条 `status='ready' and expires_at < now()`，其中
+    一条已过期 15 天。
+
+    ## 两条判据，与它们各自能证明的东西
+
+    | 判据 | 情况 | 能证明 |
+    | --- | --- | --- |
+    | ① `expires_at` 已过 | 平台明确给了租期，且租期到了 | **确实过期** |
+    | ② `expires_at` 为空、`ready_at` 早于 24 小时 | 我们不知道租期，但它明显陈旧 | **只是陈旧**，不是过期 |
+
+    ② 是必要的：`expires_at` 可空（写回租期是后来才补的），那批早先的
+    环境**永远不会**满足判据 ①。真库里这种行有 2 条，`container_id`
+    全 NULL。阈值 24 小时的取法与理由见
+    `STALE_ENVIRONMENT_WITHOUT_TTL_HOURS`。
+
+    ## ★ 状态与本函数**不**碰的东西
+
+    - `status` 改成 `expired` 与 `access_url`（连同 `access_urls`）清空
+      **必须在同一个事务里**：`access_url_only_when_ready` 约束要求
+      非 ready 不许有 url，中间那一下会直接撞约束。
+    - ⚠️ **不动 `challenge.status`**：这道题解没解出、是不是还在排队，
+      与环境到期是两件事。真库里卡在 `environment_ready`/`solving`
+      的题是 0 条，没有"顺手修一下"的理由 —— 而顺手改一个状态机字段
+      是没有测试守得住的改动。
+    - ⚠️ 也**不动 `container_id`**：那是排查残留容器的线索。要清容器
+      归 `sweep_orphan_sandboxes` 管，两件事别搅在一起。
+
+    ## 边界（说清楚它证不了什么）
+
+    能证：库里的过期行会转成 `expired`，界面上那个死链接会消失。
+    **不能证**平台真的会遵守它给的 `expires_at` —— 我们只是按**自己的
+    记录**判断，平台提前回收或延长租期，这里都不知道。
+    """
+    moment = now_utc()
+    stale_before = moment - timedelta(hours=STALE_ENVIRONMENT_WITHOUT_TTL_HOURS)
+
+    targets = (
+        db.execute(
+            select(Ctf2Environment).where(
+                Ctf2Environment.status == Ctf2EnvironmentStatus.READY.value,
+                # ① 明确了租期且已过
+                (Ctf2Environment.expires_at < moment)
+                # ② 没有租期信息，但就绪时刻已明显陈旧
+                | (
+                    Ctf2Environment.expires_at.is_(None)
+                    & Ctf2Environment.ready_at.is_not(None)
+                    & (Ctf2Environment.ready_at < stale_before)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for environment in targets:
+        environment.status = Ctf2EnvironmentStatus.EXPIRED.value
+        # ★ 与改状态同一个事务、同一个循环体：约束要求非 ready 不得有地址。
+        environment.access_url = None
+        # ⚠️ `access_urls` 也要清。`release_environment` 只清了单数那个，
+        #    那是历史遗留；这里两处都清，否则"全部入口"里还留着死地址，
+        #    而列表接口读的正是复数那一列。
+        environment.access_urls = None
+    if targets:
+        db.commit()
+        logger.info("把 %d 个过期/陈旧的 CTF2 环境标成了 expired", len(targets))
+    return len(targets)
+
+
 def _fail_environment(
     environment_id: str, challenge_id: str, reason: str, *, polls: int
 ) -> None:
@@ -3070,6 +3166,7 @@ __all__ = [
     "confirm_submit",
     "decrypt_account_token",
     "effective_ctf2_settings",
+    "expire_stale_environments",
     "get_account",
     "get_account_or_404",
     "get_challenge_or_404",

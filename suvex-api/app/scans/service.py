@@ -1833,6 +1833,23 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
         db, retention_days=config.artifact_retention_days
     )
 
+    # ── 顺带把过期/陈旧的 CTF2 环境标成 expired（v0.40 补）──
+    #
+    # ★ 与上面几条同一个理由：`sweep_retention` 是"定期清理"的唯一入口。
+    #
+    # ⚠️ 这条清的不是磁盘、是**状态**：`Ctf2EnvironmentStatus.EXPIRED` 从
+    #   定义那天起没有任何一处设置它，于是租期到了行还停在 ready，
+    #   界面照旧渲染出一个标着「就绪」的死链接。判据与边界见
+    #   `ctf2.service.expire_stale_environments` 的 docstring。
+    #
+    # ⚠️ 顺序：放在工作区清理**之前**。两者判据不相交（一个看库里
+    #   的时间列、一个看磁盘），顺序不影响结果 —— 放前面是因为
+    #   "先纠正库内状态、再动磁盘"这条读起来更顺，出问题时日志里
+    #   状态那条也排在磁盘那条前面。
+    from app.ctf2 import service as ctf2_service
+
+    ctf2_environments_expired = ctf2_service.expire_stale_environments(db)
+
     # ── 顺带清掉"题目已不存在"的 CTF2 持久工作区（v0.29）──────
     #
     # ★ 加了持久化就必须加清理 —— 否则等于把 README 缺口清单「扫描产物目录只增不减」那一条
@@ -1851,14 +1868,16 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
         "orphanArtifactsSwept": orphans_removed,
         "retiredArtifactsSwept": retired_removed,
         "ctf2WorkspacesSwept": ctf2_workspaces_removed,
+        "ctf2EnvironmentsExpired": ctf2_environments_expired,
     }
     if any(result.values()):
         logger.info(
             "扫描保留期清理：归档 %d 条、清除 %d 条、因被报告引用而保留 %d 条、"
-            "暂存 %d 批、孤儿产物 %d 个、归档产物 %d 个、CTF2 工作区 %d 个",
+            "暂存 %d 批、孤儿产物 %d 个、归档产物 %d 个、CTF2 工作区 %d 个、"
+            "CTF2 环境过期 %d 个",
             archived_count, purged_count, kept_count,
             staging_removed, orphans_removed, retired_removed,
-            ctf2_workspaces_removed,
+            ctf2_workspaces_removed, ctf2_environments_expired,
         )
     return result
 
