@@ -75,7 +75,7 @@ export function SaveBar({
             saving || disabled
               ? 'cursor-not-allowed bg-surface-raised text-ink-faint'
               : dirty
-                ? 'bg-accent-deep text-white hover:bg-accent'
+                ? 'bg-accent text-canvas hover:bg-accent-strong'
                 : 'border border-line text-ink-muted hover:border-line-strong hover:text-ink',
           )}
         >

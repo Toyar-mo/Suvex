@@ -373,7 +373,7 @@ function PlatformDialog({
                 void handleStart()
               }}
               className={cn(
-                'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-white',
+                'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-canvas',
                 'transition-ui duration-fast hover:bg-accent-strong',
                 // 禁用换 accent-dim 底 + ink-muted 字（暗 4.94:1 / 亮 5.70:1），与 Button primary 一致
                 'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
@@ -395,7 +395,7 @@ function PlatformDialog({
                 void handleActivate()
               }}
               className={cn(
-                'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-white',
+                'inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-canvas',
                 'transition-ui duration-fast hover:bg-accent-strong',
                 'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
               )}

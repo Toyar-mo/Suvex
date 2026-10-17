@@ -378,11 +378,12 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
           disabled={busy}
           onClick={() => void submit()}
           className={cn(
-            'inline-flex h-8 items-center rounded-control bg-accent px-3 text-xs text-white',
+            'inline-flex h-8 items-center rounded-control bg-accent px-3 text-xs text-canvas',
             /*
               禁用配色与 `Button` 的 primary 一致（`bg-accent-dim` + `ink-muted`），
               不压 opacity。这里没换基元是因为它自带 `h-9`，而这个面板是 h-8 的
-              紧凑排布 —— 换就会把这一排撑高。
+              紧凑排布 —— 换就会把这一排撑高。正常态用 `text-canvas` 而不是裸
+              `text-white`：白字压 `accent` 在暗色下只有 3.33:1，不达 AA。
             */
             'transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
           )}

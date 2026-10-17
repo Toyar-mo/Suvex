@@ -559,12 +559,17 @@ function TokenCreator({
           disabled={creating}
           aria-busy={creating}
           /*
-            禁用配色与 `Button` 的 primary 一致（`bg-accent-dim` + `ink-muted`，
-            暗 4.94:1 / 亮 5.70:1）。这里不用基元是因为它自带 `text-white` +
-            `h-9`、而设置页这一排的其它按钮也是 h-9 手写的 —— 换基元会连正常态
-            颜色一起变（`accent-deep` → `accent`），那是另一件事。
+            配色与 `Button` 的 primary **逐字相同**：正常态 `bg-accent` + `text-canvas`
+            （暗 5.98:1 / 亮 6.46:1）、hover 到 `accent-strong`（暗 8.36:1）、
+            禁用换 `bg-accent-dim` + `ink-muted`（暗 4.94:1 / 亮 5.70:1）。
+
+            原先这里写的是 `bg-accent-deep` + `text-white`，暗色下原本只有：
+            正常 4.93:1（勉强过）、**hover 掉到 3.33:1**（不达 AA）——
+            白字压在亮紫上，越强调越读不清。裸 `text-white` 也会绕过 token，
+            亮色主题下换的是另一组颜色。`text-canvas` 才是「画布底的反色」，
+            两种主题各自取对。
           */
-          className="press inline-flex h-9 items-center rounded-sm bg-accent-deep px-3.5 text-sm text-white transition-ui duration-fast hover:bg-accent disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim"
+          className="press inline-flex h-9 items-center rounded-sm bg-accent px-3.5 text-sm text-canvas transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim"
         >
           {creating ? '正在创建…' : '创建令牌'}
         </button>
@@ -673,7 +678,7 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
               <button
                 type="button"
                 onClick={() => setConfirmingClose(false)}
-                className="press inline-flex h-8 items-center rounded-sm bg-accent-deep px-3 text-xs text-white transition-ui duration-fast hover:bg-accent"
+                className="press inline-flex h-8 items-center rounded-sm bg-accent px-3 text-xs text-canvas transition-ui duration-fast hover:bg-accent-strong"
               >
                 返回，我先复制
               </button>
@@ -691,7 +696,7 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
             <button
               type="button"
               onClick={handleCopy}
-              className="press inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent-deep px-3 text-xs text-white transition-ui duration-fast hover:bg-accent"
+              className="press inline-flex h-8 items-center gap-1.5 rounded-sm bg-accent px-3 text-xs text-canvas transition-ui duration-fast hover:bg-accent-strong"
             >
               {copied ? (
                 <>
