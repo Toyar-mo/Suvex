@@ -1630,16 +1630,22 @@ if make_run:
         # ── agent-verify：复核阶段。这两条让 `poc_generated` 与 `verified`
         #    第一次有了真实来源（契约的 8 种事件类型里，它们此前
         #    "在 strix 侧没有对应来源"，只能靠扫描生命周期兜）──
+        #
+        #    ⚠️ **参数必须按真 schema 造，是扁平的**：`update_vulnerability_report`
+        #    的 `params_json_schema` 里 `required = ['report_id','update_reason']`，
+        #    顶层 26 个 properties，`poc_script_code` / `confidence` / `target`
+        #    都在顶层，**没有 `fields`**（那是 `_do_update` 的内部形参）。
+        #    旧替身包了一层 `fields` —— 而解析层那时也读 `fields`，两边
+        #    **共享同一个错误假设**，于是那两个分支在真实扫描里从没命中过，
+        #    测试却一直是绿的。这正是"替身与解析层同源"最危险的地方。
         put("agent-verify", {"role": "user", "content": "复核子任务：为已确认的发现补 PoC。"})
         # 给已有发现补上验证脚本 → poc_generated
         # （脚本**包在 markdown 围栏里**，照 `report/writer.py` 的存法）
         call("agent-verify", "c6", "update_vulnerability_report", {
             "report_id": "vuln-0001",
             "update_reason": "补上可复现的验证脚本，证据从「疑似」升级为「可复现」。",
-            "fields": {
-                "poc_script_code": "```python\nimport requests\n\nr = requests.get('https://api.example.com/debug/env', timeout=10)\nprint(r.status_code, len(r.text))\n```",
-                "target": "api.example.com",
-            },
+            "poc_script_code": "```python\nimport requests\n\nr = requests.get('https://api.example.com/debug/env', timeout=10)\nprint(r.status_code, len(r.text))\n```",
+            "target": "api.example.com",
         })
         result("agent-verify", "c6", {"success": True, "action": "updated",
                                       "message": "Report 'vuln-0001' now carries your revision. Do not file it again.",
@@ -1650,16 +1656,39 @@ if make_run:
         call("agent-verify", "c7", "update_vulnerability_report", {
             "report_id": "vuln-0002",
             "update_reason": "在预发环境复现了同一问题，置信度提到高。",
-            "fields": {"confidence": "high"},
+            "confidence": "high",
         })
         result("agent-verify", "c7", {"success": True, "action": "updated",
                                       "report_id": "vuln-0002",
                                       "updated_fields": ["confidence"],
                                       "severity": "medium", "cvss_score": 4.3})
-        # 交还控制权等人 → blocked
-        # （真实工具 `wait_for_user` 成功时返回的是**字符串**而不是 dict）
-        call("agent-verify", "c8", "wait_for_user", {})
-        result("agent-verify", "c8", "需要人工确认后才能继续：目标上还挂着测试账号，是否清理？")
+        # 一次"只改措辞"的 update → 走 `tool_call` 兜底（**不是** poc_generated）。
+        # 留它是为了钉住兜底那条路：`update_` 不等于"产出了 PoC"或"已验证"，
+        # 把它翻成那两种是编造，而编造的事件在活动流里看起来和真的一样。
+        call("agent-verify", "c8", "update_vulnerability_report", {
+            "report_id": "vuln-0003",
+            "update_reason": "只调整措辞，不改结论。",
+            "remediation_steps": "换一种说法。",
+        })
+        result("agent-verify", "c8", {"success": True, "action": "updated",
+                                      "report_id": "vuln-0003",
+                                      "updated_fields": ["remediation_steps"],
+                                      "severity": "low", "cvss_score": 3.1})
+        # 交还控制权等人 → ⛔ **不再是 `blocked`**。
+        # 旧替身调的是 `wait_for_user`，而 1.6.2 里**没有这个工具**：
+        # 真名是 `respond_to_user`（`strix/tools/respond/tool.py:17`），
+        # 且它在 `agents/factory.py:688-690` 受 `if interactive:` 门控，
+        # 而本项目传 `--non-interactive` —— 双重不可达。所以契约的 `blocked`
+        # 在 strix 侧**没有来源**，这里只喂一个真形状的调用（成功返回是
+        # JSON 字符串），它会走 `tool_call` 兜底。
+        call("agent-verify", "c9", "respond_to_user", {
+            "message": "需要人工确认后才能继续：目标上还挂着测试账号，是否清理？",
+        })
+        result("agent-verify", "c9", json.dumps({
+            "success": False,
+            "error": ("No user is attached to an autonomous run. Keep working, and call "
+                      "finish_scan (root) or agent_finish (subagent) when the task is done."),
+        }, ensure_ascii=False))
 
         # ── agent-failed：真的失败了的子 agent。它的失败在名册的 `errors`
         #    里，而"名册里 errors 有值 ⇒ 我们这边强制落 FAILED"那条分支
@@ -1762,7 +1791,17 @@ if make_run:
                 "agent-root": "completed",
                 "agent-recon": "completed",
                 "agent-exploit": "completed",
-                "agent-verify": "blocked",
+                # ⚠️ 真值只能是 `core/agents.py` 的
+                # `Status = Literal["running","waiting","completed","stopped",
+                #                    "crashed","failed","budget_paused"]` 里那几个。
+                # 旧替身在这里写 `blocked` —— 那个状态在 1.6.2 里**不存在**
+                # （全包搜 `"blocked"` 零命中），于是 `_STATUS_MAP` 里那条
+                # `blocked` 分支只有替身能走到，真实扫描永远走不到：
+                # 又一处"替身与解析层共享同一个错误假设"。
+                # `waiting` 是真值（`park_waiting` 写的那个），且与
+                # `completed` / `failed` 都不同 —— 它把"非终态非失败 → IDLE"
+                # 这条映射真的验到了。
+                "agent-verify": "waiting",
                 "agent-failed": "failed",
             },
             {"agent-failed": "目标在 8443 端口重置了连接"},

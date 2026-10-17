@@ -53,12 +53,53 @@ CREATE TABLE agent_messages (
 | `reasoning` | `tool_name == "think"` | ✅ **确证**：`tools/thinking/tool.py` 的签名就是 `think(thought: str)`，docstring 写明 "private chain-of-thought note" |
 | `reasoning` | `chat` 里 `role == "assistant"` | ⚠️ 语义近似：strix 把"内心推理"与"对外发言"分开，而契约的 8 种里没有"发言"这一类。用 `intent` 字段区分两者（`plan` / `narration`） |
 | `discovery` | `tool_name == "create_vulnerability_report"` 成功 | ✅ 确证是"产出了一条漏洞" |
-| `poc_generated` | `update_vulnerability_report` 成功且 `fields` 里有 `poc_script_code` | ✅ `fields` 是真实参数（`tools/reporting/tool.py`），成功返回里带 `updated_fields`。语义：给**已有**发现补上验证脚本 —— 那正是"产出了 PoC"这个动作 |
-| `verified` | `update_vulnerability_report` 成功且 `fields["confidence"] == "high"` | ⚠️ 语义近似：strix **没有**"复现"这个独立信号。用的是**本项目自己的**口径 `_CONFIDENCE_TO_VERIFICATION`（`app/findings/strix_vulns.py`：`high` → `verified`），不另立一套 |
-| `blocked` | `tool_name == "wait_for_user"` | ✅ **确证**：`tools/wait_for_user/tool.py` 的 docstring 是 "Hand control to the user and wait for their reply. This is the ONLY way to yield to the user." —— 扫描卡住等人 |
+| `poc_generated` | `update_vulnerability_report` 成功且**扁平参数** `poc_script_code` 有值 | ✅ 参数名确证（`tools/reporting/tool.py` 的 `params_json_schema`：`poc_script_code` 在**顶层** properties 里），成功返回里带 `updated_fields`。语义：给**已有**发现补上验证脚本 —— 那正是"产出了 PoC"这个动作 |
+| `verified` | `update_vulnerability_report` 成功且**扁平参数** `confidence == "high"` | ⚠️ 语义近似：strix **没有**"复现"这个独立信号。用的是**本项目自己的**口径 `_CONFIDENCE_TO_VERIFICATION`（`app/findings/strix_vulns.py`：`high` → `verified`），不另立一套 |
+| `blocked` | **strix 流里无来源** | ❌ 见下。⚠️ 但契约的 `blocked` **并非**没有来源：本项目自己在**扫描生命周期**里发它（见下节） |
 
 `completed` 仍由**扫描生命周期**发出（见 `scans/service.py`），不需要 strix 提供。
-于是 8 种里 **7 种**在 strix 侧有来源，第 8 种有生命周期来源 —— 没有"漏了"的了。
+于是 strix 侧 **6 种**有来源，`completed` 有生命周期来源。
+
+⚠️ **`blocked` 要分开说，别混成一句"没有来源"**：在 **strix 的结构化流里**它确实
+没有来源（下面详述）；但契约的 `blocked` 在**本项目**里有三个真实发出点，
+都是生命周期而不是 strix：
+
+* `suvex-api/app/scans/service.py:1387` —— 用户主动终止扫描；
+* `suvex-api/app/scans/scheduler.py:809` —— 服务重启回收上一个进程（活着 → `blocked`，
+  已死 → `failed`）；
+* `suvex-api/app/ctf2/events.py:431` —— CTF2 平台判定 flag 错误（受阻但可继续，
+  故意不用 `failed`，否则每题都会闪一次红）。
+
+所以"strix 流里无来源"与"这个事件类型没人发"是两件事。
+
+### ⚠️ 两个参数名必须回到 `params_json_schema` 去核（2026-10-16 修正）
+
+这张表此前把 `poc_generated` / `verified` 的依据写成 `update_vulnerability_report`
+的 **`fields`** 参数，把 `blocked` 的依据写成 `wait_for_user`。三条**全部不成立**，
+而它们曾经都标着"✅ 确证"：
+
+* **`fields` 不是这个工具的形参。** 实测 `strix-agent` 1.6.2 的
+  `update_vulnerability_report.params_json_schema`：`required` 只有
+  `['report_id', 'update_reason']`，顶层 **26 个** properties 里
+  **没有 `fields`**，而 `poc_script_code` / `confidence` 都在顶层。
+  （`fields` 只是 `tools/reporting/tool.py` 内部 `_do_update` 的形参。）
+  于是这两个分支**从来没命中过** —— 一次真实扫描的 update 调用会一路掉进
+  末尾的 `tool_call` 兜底。现在改读扁平参数，**同时保留嵌套 `fields` 作兜底**。
+* **`wait_for_user` 在 1.6.2 里不存在。** `strix/tools/` 下是 `respond`；
+  全包 `*.py` 搜 `wait_for_user` 零命中。真名是 `respond_to_user`
+  （`strix/tools/respond/tool.py:17`），且它在
+  `strix/agents/factory.py:688-690` 受 `if interactive:` 门控 ——
+  而 `app/scans/runner.py:1205` 传的是 `--non-interactive`。
+  双重不可达，所以 **strix 流里的 `blocked` 如实退回"无来源"**。
+  ⚠️ 这只说 strix 流 —— 契约的 `blocked` 由本项目生命周期发（见上节）。
+  ⚠️ 别拿 `agents.json` 的 `status: waiting` 顶替：`strix/core/agents.py` 的
+  `Status = Literal["running","waiting","completed","stopped","crashed","failed","budget_paused"]`
+  里 `waiting` 的三种写点（`:143` 预算暂停恢复、`:334` 等子 agent 回来、
+  `park_waiting`）**没有一种是"扫描停下等人"**，而 `:160` 已把它正确映射为 `IDLE`。
+
+教训与 ADR-005 里那条同源：**"没找到"不等于"不存在"，而"名字看起来对得上"
+也不等于"参数真的存在"** —— 参数名必须以 `params_json_schema` 为准，
+不能只读源码签名里的内部形参。
 
 ⚠️ **`verified` 为什么挂在 `update_` 上而不是 `create_` 上**：
 `create_vulnerability_report` 是"**第一次登记**一条发现"，它的映射是 `discovery`（见上表）。
@@ -149,6 +190,9 @@ _ROLE_BY_NAME = (
 # strix 的运行状态 → 我们的 agent 状态。
 # `completed`/`stopped`/`interrupted` 来自 `interface/viewer/transcript.py`
 # 的 `_TERMINAL_STATUSES`（那是权威的终态集合）。
+# ⚠️ `blocked` **不在** strix 的 `core/agents.py` 的 `Status` Literal 里
+# （`running|waiting|completed|stopped|crashed|failed|budget_paused`），
+# 真实名册不会写它 —— 留着这一条只为将来上游真加了同名状态时有个着落。
 _STATUS_MAP = {
     "running": AgentStatus.RUNNING,
     "completed": AgentStatus.DONE,
@@ -425,29 +469,20 @@ def _tool_event(
         thought = str(args.get("thought") or text or "")
         return _reasoning(row_id, agent_id, thought, timestamp, intent="plan")
 
-    # ★ `wait_for_user` 是**确证**的"卡住等人"信号：`tools/wait_for_user/tool.py`
-    # 的 docstring 写着 "Hand control to the user and wait for their reply.
-    # This is the ONLY way to yield to the user." —— 那正是契约里的 `blocked`
-    # （扫描停下来等人），而不是 `failed`（工具坏了）。
+    # ⛔ 这里**曾经**有一条 `tool_name == "wait_for_user"` → `blocked` 的分支，
+    # 依据是 `tools/wait_for_user/tool.py` 的 docstring。2026-10-16 在
+    # `strix-agent` 1.6.2 上核掉了：**那个工具不存在**，全包 `*.py` 搜
+    # `wait_for_user` 零命中。真名是 `respond_to_user`
+    # （`strix/tools/respond/tool.py:17`），而它在
+    # `strix/agents/factory.py:688-690` 受 `if interactive:` 门控 ——
+    # 本项目 `runner.py` 传的是 `--non-interactive`，**双重不可达**。
     #
-    # ⚠️ 它必须排在所有其他分支**之前**：它成功时返回的是**字符串**而不是
-    # dict，于是 `ok` 为 True，会一路掉到最后那个 `tool_call` 兜底里去。
-    if tool_name == "wait_for_user" and ok:
-        yielded = result if isinstance(result, str) else _render(result)
-        return StrixEvent(
-            source_row_id=row_id,
-            agent_ref=agent_id,
-            type=ActivityEventType.BLOCKED.value,
-            summary=_clip("扫描暂停，等待人工输入", MAX_SUMMARY),
-            detail={
-                "kind": ActivityEventType.BLOCKED.value,
-                "attempted": _clip("继续自动扫描", MAX_SUMMARY),
-                "policy": "需要人工输入",
-                "reason": _clip(yielded or "agent 交还了控制权但没有说明原因", MAX_TEXT),
-            },
-            at=_parse_at(timestamp),
-            agent_phase=phase,
-        )
+    # 所以 `blocked` 如实退回"无来源"：不在这里编一个永远命不中的判据。
+    # ⚠️ 也**不要**拿 `agents.json` 的 `status: waiting` 顶替 ——
+    # `core/agents.py` 的 `Status` Literal 里 `waiting` 的三种写点
+    # （预算暂停恢复 / 等子 agent 回来 / `park_waiting`）都不是"扫描停下等人"，
+    # 而 `_STATUS_MAP` 已把它正确映射成 `IDLE`。
+    # 要真支持 `blocked`，得先有一个运行级的"暂停等人"信号。
 
     # 产出漏洞报告：这是"一次发现"的唯一可靠信号。
     if tool_name in {"create_vulnerability_report", "create_dependency_report"} and ok:
@@ -480,9 +515,18 @@ def _tool_event(
         )
 
     # ★ `update_vulnerability_report` 是 agent **回去复核已有发现**的地方。
-    # 它的参数是 `report_id` + `update_reason` + `fields`（可编辑字段的补丁），
-    # 而"改了哪些字段"只在**结果**里（`updated_fields`）—— 所以这里读 args 的
-    # `fields`，那是"agent 想改什么"，正是要翻译成事件的那个意图。
+    # 它的参数是**扁平的**：`report_id` + `update_reason` + 26 个可替换字段
+    # （`poc_script_code` / `confidence` / `target` / `evidence` … 全在顶层）。
+    # 依据是 `strix/tools/reporting/tool.py` 的 `params_json_schema`：
+    # `required = ['report_id', 'update_reason']`，顶层 26 个 properties 里
+    # **没有 `fields`** —— 那是 `_do_update` 的内部形参，不是工具参数。
+    #
+    # ⚠️ **这条曾经写错，代价是分支从来命不中**：旧代码读 `args["fields"]`，
+    # 而真实调用传的是顶层字段，于是每次 update 都掉进 `tool_call` 兜底，
+    # `poc_generated` / `verified` 在真实扫描里一次都没出现过。
+    # 现在**先读扁平**（正确来源），**再兜嵌套 `fields`**（防 strix 后续版本
+    # 改回嵌套形状）—— 顺序不能反：反了就会让"扁平有值但嵌套也有值"的
+    # 情形读到旧的那份。
     #
     # ⚠️ **一次调用只能产出一条事件**（`source_row_id` 同时是幂等键，
     # `(scan_id, source_row_id)` 上有部分唯一索引）—— 所以下面两个判据
@@ -490,8 +534,7 @@ def _tool_event(
     # `poc_generated` 胜出：脚本是用户能直接拿去复现的东西，
     # 而置信度在 finding 上本来就有一列，活动流里少报它损失更小。
     if tool_name == "update_vulnerability_report" and ok:
-        fields = _parse_json_object(args.get("fields"))
-        poc_code = fields.get("poc_script_code")
+        poc_code = _update_field(args, "poc_script_code")
         if isinstance(poc_code, str) and poc_code.strip():
             language, code = _split_fenced_code(poc_code)
             return StrixEvent(
@@ -503,14 +546,14 @@ def _tool_event(
                     "kind": ActivityEventType.POC_GENERATED.value,
                     "language": language,
                     "code": _clip(code, MAX_TEXT),
-                    # `fields` 里可能有 agent 顺手改的 `target`；没有就退回
+                    # 参数里可能有 agent 顺手改的 `target`；没有就退回
                     # 报告 id —— 那至少能让人知道这段脚本属于哪条发现。
-                    "target": _clip(str(fields.get("target") or report_id), MAX_SUMMARY),
+                    "target": _clip(str(_update_field(args, "target") or report_id), MAX_SUMMARY),
                 },
                 at=_parse_at(timestamp),
                 agent_phase=phase,
             )
-        if str(fields.get("confidence") or "").strip().lower() == "high":
+        if str(_update_field(args, "confidence") or "").strip().lower() == "high":
             return StrixEvent(
                 source_row_id=row_id,
                 agent_ref=agent_id,
@@ -523,7 +566,11 @@ def _tool_event(
                     # 它是这里唯一能解释"凭什么说已验证"的文本。
                     "method": _clip(str(args.get("update_reason") or "agent 复核后标注为高置信度"), MAX_TEXT),
                     "evidence": _clip(
-                        _render(fields.get("evidence") or fields.get("technical_analysis") or result),
+                        _render(
+                            _update_field(args, "evidence")
+                            or _update_field(args, "technical_analysis")
+                            or result
+                        ),
                         MAX_TEXT,
                     ),
                 },
@@ -689,6 +736,26 @@ def _content_text(content: Any) -> str:
 def _parse_json_object(value: Any) -> dict:
     parsed = _parse_json_value(value)
     return parsed if isinstance(parsed, dict) else {}
+
+
+def _update_field(args: dict, name: str) -> Any:
+    """读 `update_vulnerability_report` 的一个可替换字段。
+
+    **扁平优先**：`params_json_schema` 里 `poc_script_code` / `confidence` /
+    `target` / `evidence` 都是**顶层**参数（26 个 properties，没有 `fields`）。
+    所以正常形状是 `args["confidence"]`。
+
+    **嵌套兜底**：再查一层 `args["fields"][name]`。真实 1.6.2 不这么传，
+    留着是为了 strix 将来若改回"补丁字典"的形状时，这条链不会**静默**
+    退化成 `tool_call` —— 那种退化在活动流里看起来和"这次没改什么"一样。
+
+    ⚠️ 只在**顶层没有这个键**时才看嵌套，而不是"顶层取到假值就往下找"：
+    `confidence: None` 是 agent 明确传了空值，往下找会读到另一个字段的值，
+    那是把两个来源混成一个。
+    """
+    if name in args:
+        return args[name]
+    return _parse_json_object(args.get("fields")).get(name)
 
 
 def _parse_json_value(value: Any) -> Any:

@@ -47,16 +47,21 @@ from app.findings.models import Finding
 from app.scans import importer, strix_events
 from app.scans.runner import FakeRunner, LaunchSpec
 
-# 契约 §2.5 的 8 种事件类型里，**strix 侧**能提供来源的 7 种。
+# 契约 §2.5 的 8 种事件类型里，**strix 侧**能提供来源的那几种。
 # 第 8 种 `completed` 由扫描生命周期发出（`scans/service.py`），
 # 替身不负责它 —— 所以它不在这张表里，而不是"漏了"。
+#
+# ⚠️ `blocked` 也**不在**这里（2026-10-16 修正）：它此前挂在本不存在的
+# `wait_for_user` 上，而在 `strix-agent` 1.6.2 上全包搜 `wait_for_user`
+# 零命中，真名 `respond_to_user` 又受 `if interactive:` 门控、本项目跑的是
+# `--non-interactive` —— 双重不可达。所以它在 strix 侧**无来源**，
+# 替身也喂不出来（见 `test_respond_to_user_does_not_become_blocked`）。
 STRIX_SOURCED_TYPES = {
     "tool_call",
     "reasoning",
     "discovery",
     "poc_generated",
     "verified",
-    "blocked",
     "failed",
 }
 
@@ -252,11 +257,17 @@ def test_the_fake_script_writes_messages_for_every_agent(fake_run: Path) -> None
 
 
 def test_the_fake_run_yields_every_strix_sourced_event_type(fake_run: Path) -> None:
-    """★★ 这是本文件的核心断言：8 种事件类型里，替身能喂出 strix 侧那 7 种。
+    """★★ 这是本文件的核心断言：替身能喂出 strix 侧**全部**有来源的类型。
 
     它把三件事一起钉住：解析层认得这些工具名、替身真的调了它们、
     以及**每条调用只产一条事件**（否则 `poc_generated` 与 `verified`
     会撞 `(scan_id, source_row_id)` 的唯一索引，被静默丢掉）。
+
+    ⚠️ 判据是"替身产出的类型集合**恰好等于** `STRIX_SOURCED_TYPES`"，
+    不是"包含它"。差集只在漏的时候会红，而**多出来的**类型同样要红：
+    `blocked` 就是这么冒出来的 —— 它挂在一条真实扫描永远走不到的分支上
+    （`wait_for_user` 在 1.6.2 里不存在），替身却因为调了那个不存在的工具名
+    而产出了它，于是"8 种全有来源"这个假象一直没人戳破。
     """
     rows = strix_events.read_events(fake_run)[0]
     events = strix_events.translate(rows)
@@ -264,8 +275,10 @@ def test_the_fake_run_yields_every_strix_sourced_event_type(fake_run: Path) -> N
 
     missing = STRIX_SOURCED_TYPES - types
     assert not missing, f"替身没喂出这些事件类型：{sorted(missing)}；实际有 {sorted(types)}"
-    # 反面：不许冒出契约外的类型
-    assert types <= STRIX_SOURCED_TYPES | {"completed"}
+    # 反面：不许冒出契约外的类型，也不许冒出**没有来源**的类型（`blocked`）。
+    assert types <= STRIX_SOURCED_TYPES | {"completed"}, (
+        f"替身产出了不该有的类型：{sorted(types - STRIX_SOURCED_TYPES - {'completed'})}"
+    )
 
     # 每条事件的 detail.kind 必须与 type 同名（契约 §2.5 的判别式）
     for event in events:
@@ -277,14 +290,20 @@ def test_the_fake_run_yields_every_strix_sourced_event_type(fake_run: Path) -> N
     assert len(row_ids) == len(set(row_ids)), "有两条事件共用了同一个 source_row_id"
 
 
-def test_the_fake_run_shows_the_blocked_and_poc_events_have_real_payloads(fake_run: Path) -> None:
-    """新出现的三种事件要有**能渲染的载荷**，不能只是类型对了。
+def test_the_fake_run_shows_the_new_events_have_real_payloads(fake_run: Path) -> None:
+    """新出现的两种事件要有**能渲染的载荷**，不能只是类型对了。
 
     前端 `EventRow.tsx` 对未知形状是静默的（`default: return null`），
     所以"类型对了但字段名不对"的表现是**一片空白且不报错**。
+
+    ⚠️ 这里**不再**断言 `blocked` 的载荷：`blocked` 在 strix 侧无来源，
+    替身也不该产出它（见 `test_respond_to_user_does_not_become_blocked`）。
+    留一条断言去验一个不该存在的事件，等于替那条假声明站台。
     """
     events = strix_events.translate(strix_events.read_events(fake_run)[0])
     by_type = {event.type: event for event in events}
+
+    assert "blocked" not in by_type, "blocked 在 strix 侧没有来源，替身不该产出它"
 
     poc = by_type["poc_generated"].detail
     assert poc["language"] == "python", "围栏里的语言标签要被拆出来"
@@ -295,14 +314,6 @@ def test_the_fake_run_shows_the_blocked_and_poc_events_have_real_payloads(fake_r
     verified = by_type["verified"].detail
     assert verified["method"], "verified 的展开要显示复现方式"
     assert verified["evidence"], "verified 的展开要显示证据"
-
-    blocked = by_type["blocked"].detail
-    assert blocked["policy"], "blocked 的折叠行要显示触发策略"
-    assert blocked["attempted"]
-    assert blocked["reason"], "blocked 的展开要说明为什么停下"
-    # `wait_for_user` 返回的是**字符串**，它必须原样进 reason，
-    # 而不是被 `_render` 包成 JSON 字符串字面量。
-    assert blocked["reason"].startswith("需要人工确认")
 
 
 # ══════════════════════════════════════════════════════════
@@ -362,11 +373,17 @@ def _one_event(run_dir: Path, name: str, args: dict, output: object) -> strix_ev
 
 
 def test_update_with_a_poc_script_becomes_poc_generated(tmp_path: Path) -> None:
-    """`update_vulnerability_report` 带 `fields.poc_script_code` → `poc_generated`。
+    """`update_vulnerability_report` 带**扁平** `poc_script_code` → `poc_generated`。
 
-    依据：`fields` 是**真实参数**（`tools/reporting/tool.py` 的
-    `update_vulnerability_report(report_id, update_reason, fields=...)`），
-    成功返回里还带 `updated_fields`（strix 自己确认改了什么）。
+    依据（2026-10-16 在 `strix-agent` 1.6.2 上核对）：该工具的
+    `params_json_schema` 里 `required = ['report_id','update_reason']`，
+    顶层 26 个 properties，`poc_script_code` 就在顶层，**没有 `fields`**。
+
+    ⚠️ 这条用例以前喂的是 `fields: {poc_script_code: ...}`，而解析层那时
+    也读 `fields` —— 两边**共享同一个错误假设**，于是用例一直绿，而真实
+    扫描里这个分支从来没命中过（真调用传的是扁平字段，会掉进 `tool_call`
+    兜底）。所以这条现在必须喂**真形状**：替身与用例都按
+    `params_json_schema` 写，而不是按"看起来合理"写。
 
     语义：给**已有**发现补上验证脚本 —— 那正是"产出了 PoC"这个动作。
     而 `create_vulnerability_report` 是"第一次登记发现"，它的映射是
@@ -378,10 +395,8 @@ def test_update_with_a_poc_script_becomes_poc_generated(tmp_path: Path) -> None:
         {
             "report_id": "vuln-7",
             "update_reason": "补上可复现的验证脚本。",
-            "fields": {
-                "poc_script_code": "```python\nimport requests\nprint(requests.get('https://x').status_code)\n```",
-                "target": "api.example.com",
-            },
+            "poc_script_code": "```python\nimport requests\nprint(requests.get('https://x').status_code)\n```",
+            "target": "api.example.com",
         },
         {"success": True, "action": "updated", "report_id": "vuln-7",
          "updated_fields": ["poc_script_code", "target"]},
@@ -395,8 +410,46 @@ def test_update_with_a_poc_script_becomes_poc_generated(tmp_path: Path) -> None:
     assert event.agent_phase == "verify"
 
 
+def test_a_nested_fields_payload_still_works_as_a_fallback(tmp_path: Path) -> None:
+    """嵌套 `fields` 作为**兜底**仍然能命中 —— 扁平优先，但别把旧形状丢掉。
+
+    ⚠️ 兜底不是"历史包袱"，是**防静默退化**：如果 strix 将来把可替换字段
+    收进一个 `fields` 字典（1.6.2 不是这样，但形状由上游单方面决定），
+    读扁平的代码会读不到值，一路掉进 `tool_call` 兜底 —— 而那个退化在
+    活动流里看起来和"这次确实没改什么"一模一样，没人会发现。
+    留这条兜底，退化就只是"少了一条语义"，不是"事件凭空消失"。
+
+    优先级也要钉住：**扁平优先**。两边都有值时读扁平的，因为那是真 schema。
+    """
+    nested_only = _one_event(
+        tmp_path / "nested-only",
+        "update_vulnerability_report",
+        {"report_id": "vuln-14", "update_reason": "补脚本。",
+         "fields": {"poc_script_code": "```bash\ncurl -s https://x/debug/env\n```"}},
+        {"success": True, "report_id": "vuln-14", "updated_fields": ["poc_script_code"]},
+    )
+    assert nested_only.type == "poc_generated"
+    assert nested_only.detail["language"] == "bash"
+
+    # 两边都有：扁平那份胜出。
+    # ⚠️ 必须换一个目录：`_make_agents_db` 是往同一个 agents.db 里追加行，
+    # 而 `read_events` 读的是**全部**行 —— 共用 tmp_path 会把上一次调用
+    # 也翻出来，`len(events) == 1` 当场变 2。
+    both = _one_event(
+        tmp_path / "both-shapes",
+        "update_vulnerability_report",
+        {"report_id": "vuln-15", "update_reason": "补脚本。",
+         "poc_script_code": "```python\nprint('flat')\n```",
+         "fields": {"poc_script_code": "```bash\ncurl -s https://x/\n```"}},
+        {"success": True, "report_id": "vuln-15", "updated_fields": ["poc_script_code"]},
+    )
+    assert both.type == "poc_generated"
+    assert both.detail["language"] == "python", "扁平（真 schema）优先于嵌套兜底"
+    assert "flat" in both.detail["code"]
+
+
 def test_update_without_a_target_falls_back_to_the_report_id(tmp_path: Path) -> None:
-    """`fields` 里没有 `target` 时退回报告 id —— 而不是编一个目标名。
+    """参数里没有 `target` 时退回报告 id —— 而不是编一个目标名。
 
     前端 `poc_generated` 的折叠行显示 `detail.target`；空串会让那一行
     看起来像渲染坏了，而编一个目标名是**编造**。报告 id 至少能让人知道
@@ -406,7 +459,7 @@ def test_update_without_a_target_falls_back_to_the_report_id(tmp_path: Path) -> 
         tmp_path,
         "update_vulnerability_report",
         {"report_id": "vuln-8", "update_reason": "补脚本。",
-         "fields": {"poc_script_code": "```bash\ncurl -s https://x/debug/env\n```"}},
+         "poc_script_code": "```bash\ncurl -s https://x/debug/env\n```"},
         {"success": True, "report_id": "vuln-8", "updated_fields": ["poc_script_code"]},
     )
 
@@ -416,19 +469,22 @@ def test_update_without_a_target_falls_back_to_the_report_id(tmp_path: Path) -> 
 
 
 def test_update_with_high_confidence_becomes_verified(tmp_path: Path) -> None:
-    """`fields.confidence == "high"` → `verified`。
+    """**扁平** `confidence == "high"` → `verified`。
 
     ⚠️ 语义近似，如实记：strix **没有**"复现"这个独立信号。
     这里用的是**本项目自己的**口径 `_CONFIDENCE_TO_VERIFICATION`
     （`app/findings/strix_vulns.py`：`high` → `verified`），不另立一套。
     strix 自己的 `skills/analysis/counterevidence.md` 也写 `high` 要求
     "可执行复现"，所以这个近似不是我们编的。
+
+    ⚠️ 与上面那条同因：旧用例喂 `fields.confidence`，解析层也读 `fields`，
+    两边一起错。`confidence` 在真 schema 里是**顶层**参数。
     """
     event = _one_event(
         tmp_path,
         "update_vulnerability_report",
         {"report_id": "vuln-9", "update_reason": "在预发环境复现了同一问题。",
-         "fields": {"confidence": "high", "evidence": "HTTP/1.1 200 OK"}},
+         "confidence": "high", "evidence": "HTTP/1.1 200 OK"},
         {"success": True, "report_id": "vuln-9", "updated_fields": ["confidence"]},
     )
 
@@ -449,7 +505,7 @@ def test_update_without_script_or_high_confidence_stays_a_tool_call(tmp_path: Pa
         tmp_path,
         "update_vulnerability_report",
         {"report_id": "vuln-10", "update_reason": "措辞调整。",
-         "fields": {"remediation_steps": "换一种说法。"}},
+         "remediation_steps": "换一种说法。"},
         {"success": True, "report_id": "vuln-10", "updated_fields": ["remediation_steps"]},
     )
 
@@ -467,7 +523,7 @@ def test_update_with_medium_confidence_stays_a_tool_call(tmp_path: Path) -> None
         tmp_path,
         "update_vulnerability_report",
         {"report_id": "vuln-11", "update_reason": "只在测试环境复现过。",
-         "fields": {"confidence": "medium"}},
+         "confidence": "medium"},
         {"success": True, "report_id": "vuln-11", "updated_fields": ["confidence"]},
     )
 
@@ -490,7 +546,7 @@ def test_a_poc_script_wins_over_high_confidence(tmp_path: Path) -> None:
         tmp_path,
         "update_vulnerability_report",
         {"report_id": "vuln-12", "update_reason": "补脚本并把置信度提到高。",
-         "fields": {"poc_script_code": "```python\nprint('x')\n```", "confidence": "high"}},
+         "poc_script_code": "```python\nprint('x')\n```", "confidence": "high"},
         {"success": True, "report_id": "vuln-12",
          "updated_fields": ["confidence", "poc_script_code"]},
     )
@@ -498,47 +554,37 @@ def test_a_poc_script_wins_over_high_confidence(tmp_path: Path) -> None:
     assert event.type == "poc_generated"
 
 
-def test_wait_for_user_becomes_blocked_and_not_a_tool_call(tmp_path: Path) -> None:
-    """★ `wait_for_user` → `blocked`，而且**不能**掉进 `tool_call` 兜底。
+def test_respond_to_user_does_not_become_blocked(tmp_path: Path) -> None:
+    """★★ 回归钉子：`respond_to_user` **不**映射成 `blocked`，而是 `failed`。
 
-    依据（确证）：`tools/wait_for_user/tool.py` 的 docstring 是
-    "Hand control to the user and wait for their reply. This is the ONLY
-    way to yield to the user." —— 那正是契约里的 `blocked`（扫描停下来等人），
-    而不是 `failed`（工具坏了）。
+    这里守的是 2026-10-16 撤掉的一条**假声明**。旧代码把
+    `tool_name == "wait_for_user"` 映射成 `blocked`，依据是
+    "`tools/wait_for_user/tool.py` 的 docstring" —— 而那个工具
+    **在 `strix-agent` 1.6.2 里不存在**：全包 `*.py` 搜 `wait_for_user`
+    零命中，`strix/tools/` 下是 `respond`，真名 `respond_to_user`
+    （`strix/tools/respond/tool.py:17`）。它还在
+    `strix/agents/factory.py:688-690` 受 `if interactive:` 门控，
+    而 `app/scans/runner.py` 传的是 `--non-interactive` —— **双重不可达**。
 
-    ⚠️ 这条最容易写错的地方是**分支顺序**：它成功时返回的是**字符串**
-    而不是 dict，于是 `ok` 为 True，会一路掉到最后那个 `tool_call`
-    兜底里去。所以它必须排在所有其他分支之前。
+    所以 `blocked` 在 strix 侧**没有来源**，本项目也不该假装有。
+    非交互模式下 `respond_to_user` 的真实返回是
+    `{"success": False, "error": "No user is attached to an autonomous run. …"}`
+    （`tools/respond/tool.py` 里那条 `if not interactive` 分支），
+    所以它落到 `failed` 是对的 —— **扫描并没有"停下来等人"，而是这个动作
+    在当前模式下不被允许**。把这两件事混起来，会让一次真实的模式错误
+    看起来像"扫描在正常地等人"。
     """
     event = _one_event(
         tmp_path,
-        "wait_for_user",
-        {},
-        "需要人工确认后才能继续：目标上还挂着测试账号，是否清理？",
+        "respond_to_user",
+        {"message": "需要人工确认后才能继续。"},
+        {"success": False,
+         "error": ("No user is attached to an autonomous run. Keep working, and call "
+                   "finish_scan (root) or agent_finish (subagent) when the task is done.")},
     )
 
-    assert event.type == "blocked"
-    assert event.detail["kind"] == "blocked"
-    assert event.detail["reason"].startswith("需要人工确认")
-    assert event.detail["policy"]
-    assert event.detail["attempted"]
-
-
-def test_a_failed_wait_for_user_is_still_a_failure(tmp_path: Path) -> None:
-    """反面：`wait_for_user` **失败**时是 `failed`，不是 `blocked`。
-
-    "等人"与"工具坏了"是两件事。把失败也记成 blocked 会让一次真实的
-    工具故障看起来像"扫描在正常地等人"。
-    """
-    event = _one_event(
-        tmp_path,
-        "wait_for_user",
-        {},
-        {"success": False, "error": "当前模式下不允许交还控制权"},
-    )
-
-    assert event.type == "failed"
-    assert "不允许交还控制权" in event.detail["error"]
+    assert event.type == "failed", "respond_to_user 在非交互模式下是失败，不是 blocked"
+    assert "No user is attached" in event.detail["error"]
 
 
 def test_a_high_confidence_create_is_still_a_discovery(tmp_path: Path) -> None:
@@ -591,7 +637,7 @@ def scan_at(db_session, tmp_path: Path):
 def test_the_whole_fake_run_imports_and_lands_in_the_database(
     db_session, scan_at, fake_run: Path
 ) -> None:
-    """★ 端到端：替身的产物 → 解析 → 落库，7 种类型都进得了库。
+    """★ 端到端：替身的产物 → 解析 → 落库，strix 侧 6 种类型都进得了库。
 
     这条是"替身能不能代表一次真扫描"这个问题的**最直接回答**：
     它走的是 `importer.import_events` 这条生产路径。
@@ -639,7 +685,7 @@ def test_the_failed_agent_lands_as_failed_in_our_database(db_session, scan_at, f
     assert agent.role == "recon", "名字里有 recon ⇒ 角色该判成信息收集"
 
     # 反面：别的 agent 不该被一起标成失败。
-    # 名册里 `agent-verify` 的状态是 `blocked`（不是 failed），
+    # 名册里 `agent-verify` 的状态是 `waiting`（不是 failed），
     # 而 `agent-root` / `agent-recon` / `agent-exploit` 是 `completed` ——
     # 这条断言守住"`errors` 的覆盖只作用于那一个 agent"。
     others = list(
@@ -648,7 +694,11 @@ def test_the_failed_agent_lands_as_failed_in_our_database(db_session, scan_at, f
     failed = [a for a in others if a.status == AgentStatus.FAILED.value]
     assert [a.id for a in failed] == [agent.id], "只有名册里 errors 有值的那个才是失败"
     verify = db_session.get(Agent, strix_events.stable_agent_id("agent-verify"))
-    assert verify is not None and verify.status == AgentStatus.BLOCKED.value
+    assert verify is not None and verify.status == AgentStatus.IDLE.value, (
+        "名册里 `waiting` ⇒ 我们这边 IDLE：`waiting` 在 strix 里是"
+        "「等子 agent 回来 / 预算暂停恢复」，不是「扫描停下等人」，"
+        "所以它既不是 DONE 也不是 BLOCKED"
+    )
 
 
 def test_the_fake_vulnerabilities_land_in_every_severity_bucket(
