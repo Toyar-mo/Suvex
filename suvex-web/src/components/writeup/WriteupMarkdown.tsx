@@ -227,7 +227,7 @@ const WRITEUP_MARKDOWN_COMPONENTS: Components = {
         checked={Boolean(checked)}
         readOnly
         disabled
-        className="mr-1.5 h-3.5 w-3.5 shrink-0 translate-y-[2px] rounded-xs border-line bg-surface-sunken accent-[#8B7CF6]"
+        className="mr-1.5 h-3.5 w-3.5 shrink-0 translate-y-[2px] rounded-xs border-line bg-surface-sunken accent-accent"
       />
     ) : null,
 

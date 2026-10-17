@@ -351,7 +351,7 @@ function Toggle({
         onChange={(e) => onChange(e.target.checked)}
         className={cn(
           'mt-0.5 h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken',
-          'accent-[#8B7CF6]',
+          'accent-accent',
           disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
         )}
       />

@@ -274,7 +274,7 @@ function Checkbox({
         }}
         onChange={onChange}
         aria-label={label}
-        className="h-4 w-4 shrink-0 cursor-pointer accent-[#8B7CF6]"
+        className="h-4 w-4 shrink-0 cursor-pointer accent-accent"
       />
     </label>
   )

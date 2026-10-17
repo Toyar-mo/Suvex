@@ -197,7 +197,13 @@ export function CompetitionPicker({
                   checked={selected.has(item.remoteId)}
                   disabled={busy}
                   onChange={() => toggle(item.remoteId)}
-                  className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[var(--accent)]"
+                  /*
+                    原来写的是 `accent-[var(--accent)]`，但全站只定义
+                    `--suvex-accent`（`src/index.css:46` 起），`--accent` 从未定义
+                    → 解析成无效值，浏览器回落成默认蓝，两套主题下都不是主色。
+                    统一走 `accent-accent`（= `rgb(var(--suvex-accent))`）。
+                  */
+                  className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent"
                 />
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="truncate text-xs text-ink">{item.name}</span>

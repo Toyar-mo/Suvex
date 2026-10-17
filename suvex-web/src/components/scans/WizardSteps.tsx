@@ -98,7 +98,7 @@ export function TargetStep({
                 value={k}
                 checked={kind === k}
                 onChange={() => onKindChange(k)}
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#8B7CF6]"
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent"
               />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="text-sm text-ink">{TARGET_KIND_LABEL[k]}</span>
@@ -317,7 +317,7 @@ function SkillRow({
         //   它是控件不是文字，不受对比度规则约束；而且它必须和"还没勾选"
         //   明确区分开，否则用户分不清"不可选"和"我没选"。
         //   （上一版把 opacity 加在整行 label 上才是错的，那会连文字一起压。）
-        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#8B7CF6] disabled:opacity-35"
+        className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent disabled:opacity-35"
       />
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="flex flex-wrap items-center gap-1.5">
@@ -396,7 +396,7 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
                 name="provider"
                 checked={selectedId === provider.id}
                 onChange={() => onSelect(provider.id)}
-                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-[#8B7CF6]"
+                className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent"
               />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className="flex flex-wrap items-center gap-1.5">
