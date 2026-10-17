@@ -1182,7 +1182,7 @@ def test_the_liveness_probe_asks_by_container_id_not_by_name(monkeypatch) -> Non
 # ★★ v0.41：多 ACTION 回告
 # ══════════════════════════════════════════════════════════
 #
-# 实测：66 份解题过程里 **268 轮（14.1%）** 一轮写了 ≥2 个 ACTION（极端一轮
+# 实测：66 份解题过程里 **271 轮（14.2%）** 一轮写了 ≥2 个 ACTION（极端一轮
 # 23 个），而 `parse_action` 只解析第一个，其余**静默丢弃** ——
 # 模型以为三条都执行了，按三条的结果推理下一步，而它手里只有第一条的输出。
 
@@ -1460,9 +1460,13 @@ def test_the_repeat_signal_never_reaches_the_transcript() -> None:
 # ══════════════════════════════════════════════════════════
 #
 # 实测：`ctf2try_01M4Z94FND98QAC7T513ZTPM89`（78 轮 unsolved）里有 22 轮
-# `completion_tokens >= 4096`。推理吃满额度 → ACTION 被切在中间 →
+# `completion_tokens >= 4096`。输出到顶 → ACTION 被切在中间 →
 # `parse_action` 返回 None → 喂 `_format_reminder()`（"请严格用下面两种
 # 格式之一"）。它照做、再被切、再照做，22 次。
+#
+# ⚠️ 别把"输出到顶"写成"推理吃满额度"：`reasoning_tokens` 恒为 0 是网关
+# 不上报这个字段，不是模型没推理（同一响应里 `reasoning_content` 有 6412
+# 字符）。`completion_tokens` 包含推理部分，但分不出来。
 #
 # 关键是"格式错"与"被切断"的解决办法相反：前者要重写，后者重写没用。
 
