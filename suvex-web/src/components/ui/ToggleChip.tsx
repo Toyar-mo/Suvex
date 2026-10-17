@@ -53,11 +53,19 @@ const ACTIVE = 'border-accent/50 bg-accent-wash text-ink'
 const IDLE = 'border-line text-ink-muted hover:border-line-strong hover:text-ink'
 
 export interface ToggleChipProps
-  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-pressed'> {
+  extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'aria-pressed' | 'onClick'> {
   ref?: Ref<HTMLButtonElement>
   /** 是否处于按下状态。落到 `aria-pressed`，颜色只是冗余编码 */
   active: boolean
-  /** 切换回调。写成 `onToggle` 而不是 `onClick`，因为它不执行动作，只改状态 */
+  /**
+   * 切换回调。写成 `onToggle` 而不是 `onClick`，因为它不执行动作，只改状态。
+   *
+   * ⚠️ `onClick` 被显式 `Omit` 掉了（2026-10-17 补）。原来它还在类型里，
+   * 但 `{...rest}` 在 `onClick={onToggle}` **之前**展开 —— 调用方写
+   * `<ToggleChip onClick={fn}>` 类型检查过得去、运行时被静默吞掉，
+   * 症状是"按钮点了没反应"。这种 bug 不会报错，只会被当成"没实现"。
+   * 宁可在编译期拦住，也不要留一个专等人踩的坑。
+   */
   onToggle: () => void
   variant?: ToggleChipVariant
   size?: ToggleChipSize

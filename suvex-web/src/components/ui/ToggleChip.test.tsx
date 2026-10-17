@@ -78,6 +78,37 @@ describe('ToggleChip：语义', () => {
 
     expect(onToggle).toHaveBeenCalledTimes(1)
   })
+
+  /*
+    ═══════════════════════════════════════════════════════════════════════
+    `onClick` 被 Omit 掉这件事只能靠类型系统挡，运行时测不出来 —— 这里能测的
+    是"没有第二个人在抢事件"：点击只触发 onToggle，不会被别的 handler 多吃一次。
+    真正的防线在 `ToggleChipProps` 的 `Omit<..., 'aria-pressed' | 'onClick'>`。
+
+    ⚠️ 第一版这里写的是 `expect(el.onclick).toBeNull()`，实测**必红**：
+    React 用事件委托，`onclick` 上挂的是它自己的桩函数（开发环境叫 `noop$1`），
+    不是 null。那是在断言 React 的内部实现，不是在断言本组件的行为。
+    ═══════════════════════════════════════════════════════════════════════
+  */
+  it('★ 点击只走 onToggle 一条路，不多不少（onClick 已在类型层 Omit）', () => {
+    const onToggle = vi.fn()
+    const { container } = render(
+      <ToggleChip active={false} onToggle={onToggle}>
+        失败
+      </ToggleChip>,
+    )
+
+    const el = screen.getByRole('button')
+    el.click()
+    el.click()
+
+    // 两次点击 → 正好两次回调：少了说明被吞，多了说明有第二个 handler 在偷跑
+    expect(onToggle).toHaveBeenCalledTimes(2)
+    // 每次点击只收到一次调用（不是一次点击触发两遍）
+    expect(onToggle.mock.calls.length).toBe(2)
+    // 只有一个按钮节点，没有嵌套的第二个可点元素
+    expect(container.querySelectorAll('button').length).toBe(1)
+  })
 })
 
 describe('ToggleChip：两种形态', () => {
