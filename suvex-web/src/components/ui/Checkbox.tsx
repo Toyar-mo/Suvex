@@ -51,7 +51,12 @@ export function Checkbox({
       aria-label={label}
       onChange={(e) => onChange(e.target.checked)}
       className={cn(
-        'h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken accent-[#8B7CF6]',
+        // `accent-accent`：Tailwind 的 `accent-*` 工具类取 `theme.accentColor`，
+        // 而 config 里没显式配 `accentColor`（只有 `colors`），所以它是从
+        // `colors.accent.DEFAULT` 解析出来的 —— 复用的就是主色 token 本身。
+        // 原本这里写的是裸 hex `accent-[#8B7CF6]`：那是**暗色主题**的值，
+        // 亮色主题下主色是 `#5B4BC4`，勾选框会和整个界面不是一个紫。
+        'h-3.5 w-3.5 shrink-0 rounded-xs border-line bg-surface-sunken accent-accent',
         disabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer',
       )}
     />
