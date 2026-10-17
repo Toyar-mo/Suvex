@@ -104,15 +104,15 @@ cd suvex-api && docker compose up --build
 
 ### 规模
 
-| 项 | 数字（2026-10-16 实测，换行符口径） |
+| 项 | 数字（2026-10-17 实测，换行符口径） |
 | --- | --- |
-| 后端代码 | **46,783 行** / 118 个文件（`suvex-api/app/`，不含 `__pycache__`），13 个领域模块 |
-| 后端测试 | **77 个文件 / 2,215 个实际执行用例**（静态 `def test_` 是 1,211，差额来自 `@pytest.mark.parametrize` 展开），对**真实 PostgreSQL** 跑（不是 SQLite），全量约 41 分钟 |
-| 前端代码 | **45,522 行** / 162 个 `.ts`/`.tsx`（`suvex-web/src/`），**0 个 `@ts-ignore`、0 个 `any`**（在 Kali 工作副本上量；本机工作区是 45,581 行，差 59 行来自 2 个未提交的在途文件 —— 口径见 [`DEPENDENCIES.md`](DEPENDENCIES.md) §5） |
-| 前端测试 | **228 个 vitest 实际执行用例** / 14 个文件（静态 `it(` 是 217，差额来自写在 `for` 循环里的用例） |
-| 数据库迁移 | 35 个 Alembic 版本，从第一个迁移就版本化 |
+| 后端代码 | **47,612 行** / 118 个文件（`suvex-api/app/`，不含 `__pycache__`），13 个领域模块 |
+| 后端测试 | **80 个文件 / 1,352 个 `def test_`**（`@pytest.mark.parametrize` 展开后实际执行数更多），对**真实 PostgreSQL** 跑（不是 SQLite），全量约 45 分钟 |
+| 前端代码 | **45,584 行** / 162 个 `.ts`/`.tsx`（`suvex-web/src/`），**0 个 `@ts-ignore`、0 个 `any`**（本机工作区口径，与 [`DEPENDENCIES.md`](DEPENDENCIES.md) §5 同一次取数） |
+| 前端测试 | **228 个 vitest 实际执行用例** / 14 个文件（静态 `it(` 是 216，差额来自写在 `for` 循环里的用例） |
+| 数据库迁移 | 36 个 Alembic 版本，从第一个迁移就版本化 |
 | API 端点 | 115 个（按 `@router.*` 装饰器计） |
-| API 契约 | [`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)，3,725 行，**唯一事实来源** |
+| API 契约 | [`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)，3,741 行，**唯一事实来源** |
 | 决策记录 | 8 篇 ADR，每篇写**为什么**而不是**是什么** |
 | CI | GitHub Actions 三个 job：后端（ruff + 测试）/ 前端检查 / 仓库卫生 —— 2026-10-11 首次全绿（run #9，`861f64a`，19m40s） |
 
