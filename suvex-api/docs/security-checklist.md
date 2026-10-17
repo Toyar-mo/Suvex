@@ -820,18 +820,39 @@ httpx.InvalidURL)` = **False**，`issubclass(..., httpx.HTTPError)` = **False**�
 
 | 问法 | 实测 |
 | --- | --- |
-| 直调 `_next_url(current, response)`，Location = `http://xn--.invalid/x` | **抛 `IDNAError`** → 那句 `if target.scheme and not target.host:` **进得去**，`.host` 就在那里被求值 |
-| 真跑 `request_same_host`（MockTransport），同一条 Location | **`_next_url` 被调用 0 次** —— `client.request()` 内部先抛了 |
+| 直调 `_next_url(current, response)`，Location = `http://xn--.invalid/x` | **抛 `IDNAError`**，`.host` 求值 1 次（`redirect.py:383`）→ 那句 `if target.scheme and not target.host:` **进得去** |
+| 直调 `_next_url`，Location = `//xn--.invalid/x` | **返回 OK，`.host` 求值 0 次** —— `scheme` 是空串，`if target.scheme and …` **短路**，`.host` 根本不被求值 |
+| 真跑 `request_same_host`（MockTransport），两种 Location | **`_next_url` 被调用 0 次** —— `client.request()` 内部先抛了 |
 
-所以**不能说"那个分支进不去"**：`httpx.URL(location)` 无 base 时
-`http://xn--.invalid/x` 的 scheme 是 `'http'`、`//xn--.invalid/x` 与
-`/final` 的是 `''`，两种写法都能进那个分支（实测）。
+所以那个分支**只有绝对地址进得去**。⚠️ 这里我原来写错了一处（Review 实测
+指出，我复验确认）：**`scheme` 为空的协议相对地址进不去**，`and` 左边就是
+假值。原文档写"两种写法都能进那个分支"是错的 —— 短路意味着 `.host` 连
+求值都不会发生。
+
+**协议相对那条为什么照样被拦住**：抛点在
+`_build_redirect_request` → `_redirect_url` **返回之后**的
+`_redirect_headers:552` → `_same_origin:89`（`_redirect_url` 里
+`u.scheme == ''` 短路了 `:532`，所以它自己不抛）。
+⚠️ 原文档把两种形态的抛点都归给 `_redirect_url`、并说协议相对那条是
+`request.url.join(url)` 碰 `.host` —— **两处都错**，实测
+`base.join(URL("//xn--.invalid/x"))` 对 `.host` 求值 **0 次**（`join` 只做
+字符串拼装，不解析主机）。这条错误出现在 4 个地方，已一并更正。
+
+**`_build_redirect_request` 的调用顺序**（决定谁先碰 `.host`）：
+`_redirect_method` → **`_redirect_url`** → **`_redirect_headers`** → `_redirect_stream`。
+两种形态的实测求值序列：
+
+| Location | `.host` 求值序列 |
+| --- | --- |
+| `http://xn--.invalid/x` | `_models.py:455` → `_client.py:532`（`_redirect_url` 内）→ 抛 |
+| `//xn--.invalid/x` | `_models.py:455` → `_client.py:89`（`_same_origin`，在 `_redirect_headers` 内）→ 抛 |
 
 真正的理由是**它在真实路径上走不到**：`_next_url` 由
 `request_same_host` 在 `client.request()` **之后**调用，而 httpx 自己的
-`_build_redirect_request` → `_redirect_url` 在那次 `client.request()` 内部
-**已经碰过 `.host`**（`if url.scheme and not url.host`，它在 httpx 自己的
-`try` 之外、只 `except InvalidURL`），异常在更里层就抛出来了 ——
+`_build_redirect_request` 在那次 `client.request()` 内部
+**已经碰过 `.host`**（`_redirect_url` 的 `if url.scheme and not url.host`，
+它在 httpx 自己的 `try` 之外、只 `except InvalidURL`；协议相对那条则由紧随
+其后的 `_redirect_headers` 碰），异常在更里层就抛出来了 ——
 由 `request_same_host` 里 `client.request` 外那层包装收成 `Ctf2Error`，
 **根本轮不到 `_next_url`**。所以在那处加 try/预取**没有任何真实路径能守**。
 **没有真实路径能守的改动就是不可验证的改动**，所以不加。

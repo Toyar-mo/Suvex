@@ -285,27 +285,34 @@ def _is_transport_level(exc: BaseException) -> bool:
 
     ## ★ 两条可达路径，别只测一条（Kali 实测）
 
-    `.host` 在 httpx 里被碰两次，对应两类 `Location`：
+    `.host` 在 httpx 里被碰两次，对应两类 `Location`，**抛点不一样**：
 
     | 形态 | httpx 里碰 `.host` 的那一句 | 实测 |
     | --- | --- | --- |
-    | 绝对地址 `http://xn--.invalid/x` | `_redirect_url` 的 `if url.scheme and not url.host` | 抛 `IDNAError` |
-    | 协议相对 `//xn--.invalid/x` | 上面那句被 `scheme` 短路，但 `request.url.join(url)` 仍碰 | 抛 `IDNAError` |
+    | 绝对地址 `http://xn--.invalid/x` | `_redirect_url` 的 `if url.scheme and not url.host`（`_client.py:532`） | 抛 `IDNAError` |
+    | 协议相对 `//xn--.invalid/x` | `_redirect_url` 里 `u.scheme == ''` **短路了那句**，它自己不抛；抛点在紧随其后的 `_redirect_headers:552` → `_same_origin:89` | 抛 `IDNAError` |
+
+    ⚠️ **`request.url.join(url)` 不碰 `.host`** —— 实测
+    `base.join(URL("//xn--.invalid/x"))` 对 `.host` 求值 **0 次**（`join`
+    只做字符串拼装，不解析主机）。我第一版把协议相对那条的抛点写成
+    "join 仍碰"，是错的（Review 实测指出，已复验）。
 
     ⚠️ 两类都要有用例（见 `test_redirect_guard.py` 的 `MALFORMED_LOCATIONS`）。
-    只放绝对地址的话，"`join` 那条路"没有覆盖。
+    只放绝对地址的话，`_redirect_headers` 那条路没有覆盖 —— 它是**另一个
+    函数**，改坏 `_redirect_url` 的覆盖不会让这条变红。
 
     ## ★ 一处**没有**改的地方，以及为什么（实测否决）
 
-    `_next_url`（本文件 `:317`）里的 `target.host` 访问**没有**加 try 包装。
+    `_next_url`（本文件 `:383`）里的 `target.host` 访问**没有**加 try 包装。
     理由是实测：把那句挪进 try（或解析后先取一次 `.host`）与不改，
-    **端到端输出逐字节一致**（对 15 条输入做了 (类型, message) 全量 diff，
+    **端到端输出逐字节一致**（对 21 条输入做了 (类型, message) 全量 diff，
     零差异）。
 
     机制：`_next_url` **从来不是**第一个碰 `.host` 的地方 ——
     它在 `request_same_host` 里被调用（`:453`），而那次
-    `client.request()` 内部已经跑过 `_build_redirect_request` →
-    `_redirect_url`，`.host` 早在那里就抛了。所以那处的包装
+    `client.request()` 内部已经跑过 `_build_redirect_request`
+    （`_redirect_url` → `_redirect_headers`，两者都会碰 `.host`），
+    `.host` 早在那里就抛了。所以那处的包装
     **没有任何真实路径能守**，按本项目纪律（不可验证的改动不做）不加。
 
     ⚠️ 但**别因此以为 `_next_url` 里那个 `target.host` 分支是死的**：
@@ -372,14 +379,17 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
     # ⚠️ 这里的 `target.host` **刻意不加 R-4 的 try/预取**（实测否决）：
     #    本函数**从来不是**第一个碰 `.host` 的地方 —— 它在
     #    `request_same_host` 里被调用，而那次 `client.request()` 内部
-    #    已经跑过 `_build_redirect_request` → `_redirect_url`，畸形 A-label
-    #    早在那一层就抛了（`request_same_host` 的 `except BaseException`
-    #    接住 → `Ctf2Error`），根本轮不到这里。实测：加不加包装，
-    #    端到端 15 条输入的 (类型, message) 逐字节一致。
+    #    已经跑过 `_build_redirect_request`（`_redirect_url` 碰绝对地址那条、
+    #    `_redirect_headers` 碰协议相对那条），畸形 A-label 早在那一层就抛了
+    #    （`request_same_host` 的 `except BaseException` 接住 → `Ctf2Error`），
+    #    根本轮不到这里。实测：加不加包装，端到端 21 条输入的
+    #    (类型, message) 逐字节一致。
     # ⚠️ 但**别因此以为下面这个分支是死的**：直调本函数时它**进得去**，
     #    `.host` 就是在这一行被求值的（实测 Location=`http://xn--.invalid/x`
-    #    在此抛 `IDNAError`）。「分支进得去」与「真实路径走得到」是两件事 ——
-    #    依据见 `docs/security-checklist.md` 的 R-4 节。
+    #    在此抛 `IDNAError`，`.host` 求值 1 次）。「分支进得去」与「真实路径
+    #    走得到」是两件事 —— 依据见 `docs/security-checklist.md` 的 R-4 节。
+    # ⚠️ 只有**绝对地址**进得来：协议相对（`//host/x`）的 `scheme` 是空串，
+    #    `if target.scheme and …` 短路，`.host` 连求值都不会发生（实测 0 次）。
     if target.scheme and not target.host:
         target = target.copy_with(host=current.host)
 

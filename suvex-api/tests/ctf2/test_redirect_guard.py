@@ -438,11 +438,14 @@ MALFORMED_LOCATIONS = [
     # `idna.IDNAError` 的输入；上面那些由 `InvalidURL` / `OverflowError`
     # 覆盖，删掉 `idna.IDNAError` 它们照样绿。
     #
-    # 两条不同的可达路径都放进来（Kali 实测各自都真的抛）：
+    # 两条不同的可达路径都放进来（Kali 实测各自都真的抛，但**抛点不同**）：
     # * 绝对地址 —— httpx 的 `_redirect_url` 走到
-    #   `if url.scheme and not url.host` 时碰 `.host`；
-    # * 协议相对地址（`//host/x`）—— `scheme` 是空串，上面那句短路掉，
-    #   但紧接着的 `request.url.join(url)` 仍会碰 `.host`。
+    #   `if url.scheme and not url.host` 时碰 `.host`（`_client.py:532`）；
+    # * 协议相对地址（`//host/x`）—— `scheme` 是空串，上面那句**短路**，
+    #   `_redirect_url` 自己不抛；抛点在紧随其后的
+    #   `_redirect_headers:552` → `_same_origin:89`。
+    #   ⚠️ 不是 `request.url.join(url)` —— 实测 `join` 对 `.host` 求值 0 次
+    #   （它只做字符串拼装）。两者是**不同函数**，所以两类都要有用例。
     "http://xn--.invalid/x",
     "http://xn--0.invalid/x",
     "http://xn--a.invalid/x",
