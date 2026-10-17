@@ -1116,21 +1116,53 @@ def test_a_turn_with_one_action_gets_no_such_reminder() -> None:
 
 
 # ══════════════════════════════════════════════════════════
-# ★★ v0.41：重复输出做成可见信号
+# ★★ v0.41.1：重复执行做成可见信号（判据是"命令 + 整段输出"双指纹）
 # ══════════════════════════════════════════════════════════
 #
-# 实测：1717 次工具调用里完全相同的命令只有 62 次（3.6%），但**输出前 400
-# 字符相同的占 523 次（30.5%）** —— 空转的主体是"跑不同命令拿回同样的东西"。
-# 提示词写了「连续 3 次没新信息就换方向」，但代码里没有任何判据。
+# 判据 = 工具名 + 参数序列化 + **整段输出**指纹，三者都相同才算重复；比对
+# 范围是**本次解题全程**，不是只比上一轮。
+#
+# 旧方案（只看输出前 400 字符、只比相邻轮）两头都错，数据见
+# `solve_in_sandbox` 里那段注释：偏高（HTML 模板前 400 相同、真正结果在
+# 第 705 字符）与偏低（同命令同输出跨多轮，全都不相邻）。下面这几条分别
+# 钉住两个方向。
 
 
-def test_identical_output_tells_the_model_to_change_direction() -> None:
-    """连续两轮输出前 400 字符相同 → 第二轮给模型的文本带「换方向」。"""
-    sandbox = _FakeSandbox(outputs={"cmd": "完全一样的输出" * 100})
+class _ShiftySandbox(_FakeSandbox):
+    """同一命令每次返回**不同**输出 —— 用来确认"拿到新信息不算空转"。"""
+
+    def shell(self, command: str, *, timeout: int = 300):  # noqa: ANN001, ANN201
+        self.commands.append(command)
+        nth = sum(1 for existing in self.commands if existing == command)
+        return runner.CommandResult(0, f"第 {nth} 次执行的结果", "")
+
+
+class _HtmlPageSandbox(_FakeSandbox):
+    """同一命令：前 400 字符是同一份页面模板，**真正结果在末尾**。
+
+    照抄实测里的那个形状：`ctf2chal_01M3SF0MAZPNSARD7CWECXYWPC
+    -20261001-020127.txt` turn 9→10，同一 URL 同一 POST，前 400 字符是
+    同一份 `<div class="container">`，真正的结论在第 705 字符。
+    """
+
+    def shell(self, command: str, *, timeout: int = 300):  # noqa: ANN001, ANN201
+        self.commands.append(command)
+        nth = sum(1 for existing in self.commands if existing == command)
+        template = '<div class="container"><div class="row"><p>提交结果：' * 20
+        return runner.CommandResult(0, template + ("操作失败。" if nth == 1 else "操作成功。"), "")
+
+
+def test_the_same_command_with_the_same_output_is_reported_with_its_turn() -> None:
+    """同命令同输出 → 提示语里带上**第一次**跑它的轮次号。
+
+    "你在第 N 轮跑过"比"换方向"有用：模型能回去看那一轮的上下文，
+    而不是笼统地知道"重复了"。
+    """
+    sandbox = _FakeSandbox(outputs={"probe": "一模一样的输出" * 100})
     gateway = _FakeGateway(
         [
-            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-1"}}',
-            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-2"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-1"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-1"}}',
             'FINAL: {"candidates": []}',
         ]
     )
@@ -1139,43 +1171,147 @@ def test_identical_output_tells_the_model_to_change_direction() -> None:
         runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
     )
 
-    # 第 2 轮开头（此时只塞了第 1 轮的工具输出）不该有提醒；
-    # 第 3 轮开头才该有 —— 因为那时才拿到两条一样的输出。
-    assert "换方向" not in gateway.seen[1][-1]["content"]
-    assert "换方向" in gateway.seen[2][-1]["content"]
-    assert "前 400 字符完全相同" in gateway.seen[2][-1]["content"]
+    # 第 1 轮那次不该有提醒；第 2 轮把第 1 轮的结果喂回去时才有。
+    assert "跑过" not in gateway.seen[1][-1]["content"]
+    assert "第 1 轮跑过" in gateway.seen[2][-1]["content"]
 
 
-def test_different_outputs_get_no_change_direction_reminder() -> None:
-    """★ 反向断言：两轮输出不同 → 不出现那句提醒。"""
-    sandbox = _FakeSandbox(outputs={"cmd-1": "第一个输出", "cmd-2": "第二个输出"})
+def test_a_repeat_is_caught_even_when_it_is_not_adjacent() -> None:
+    """★ 中间隔了一轮也要抓到 —— 旧实现只比上一轮，这里必然漏。
+
+    实测出处：`ctf2chal_01M3SF0MAH4V6RKMS4BJ74ZSEK-20261002-101250.txt`
+    turn 3→12、3→17、5→30 反复打同一 POP 链 payload，2032 字节完全一致，
+    相邻一次都没挨着。
+    """
+    sandbox = _FakeSandbox(outputs={"probe-a": "同样的输出" * 80})
     gateway = _FakeGateway(
         [
-            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-1"}}',
-            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-2"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-a"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-b"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-a"}}',
             'FINAL: {"candidates": []}',
         ]
     )
-    outcome = _run(
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert "第 1 轮跑过" in gateway.seen[3][-1]["content"]
+
+
+def test_the_same_command_with_a_different_output_is_not_a_repeat() -> None:
+    """★ 反向断言：同命令但输出变了 → **不**警示（那有信息量）。
+
+    这条守的是"偏高"那一侧：同一条 `curl` 打两次，第二次页面变了，
+    那正是模型要的反馈。提示它"重复了，换方向"会把它从正确的路上赶走。
+    """
+    sandbox = _ShiftySandbox()
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
         runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
     )
 
     for seen in gateway.seen:
-        assert "换方向" not in seen[-1]["content"]
-    assert "换方向" not in (outcome.transcript or "")
+        assert "跑过" not in seen[-1]["content"]
 
 
-def test_the_change_direction_signal_never_reaches_the_transcript() -> None:
+def test_a_different_command_with_the_same_output_is_not_a_repeat() -> None:
+    """★ 反向断言：命令不同、输出恰好一样 → **不**警示。
+
+    旧实现只比输出，于是 `ls` 与 `find .` 拿到同一份清单会被判成重复。
+    命令本身变了就说明模型在换角度，不该拦。
+    """
+    sandbox = _FakeSandbox(outputs={"probe": "一模一样的输出" * 100})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-1"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe-2"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    for seen in gateway.seen:
+        assert "跑过" not in seen[-1]["content"]
+
+
+def test_a_repeat_with_the_same_first_400_chars_but_a_different_tail_is_not_a_repeat() -> None:
+    """★★ 反向断言：前 400 字符相同、后面不同 → **不**警示。
+
+    这条钉的是旧方案"偏高"那一侧，也是上一版反向验证漏掉的洞：把判据
+    换成"只看前 400 字符"时，如果语料里没有"前 400 相同而整段不同"的
+    形状，那个破坏版照样能跑绿 —— 用例就守不住它本要守的东西。
+
+    实测出处：`ctf2chal_01M3SF0MAZPNSARD7CWECXYWPC-20261001-020127.txt`
+    turn 9→10，同一 URL 同一 POST，前 400 是同一份 `<div class="container">`
+    模板，真正结果在第 705 字符：turn9「操作失败。」turn10「操作成功。」
+    模型拿到了新信息 —— 那时提示"重复了、换方向"会把一次成功的探测说成
+    白跑，把它从正确的路上赶走。
+    """
+    sandbox = _HtmlPageSandbox()
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "post"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "post"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    for seen in gateway.seen:
+        assert "跑过" not in seen[-1]["content"]
+
+
+def test_the_first_tool_call_never_carries_a_repeat_note() -> None:
+    """反向断言：首轮没有历史可查，别凭空说"你重复了"。"""
+    sandbox = _FakeSandbox(outputs={"probe": "随便什么输出"})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe"}}',
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert "跑过" not in gateway.seen[1][-1]["content"]
+
+
+def test_the_output_fingerprint_ignores_whitespace_differences() -> None:
+    """指纹要吃掉空白差异：同一份输出换行/缩进变了还是同一条。"""
+    assert runner._output_fingerprint("a  b\n\nc\t d") == runner._output_fingerprint("a b c d")
+    assert runner._output_fingerprint("a b") != runner._output_fingerprint("a b c")
+    # `None` 不该炸（`result` 理论上是 str，但假沙箱与某些分支会给 None）
+    assert runner._output_fingerprint(None) == runner._output_fingerprint("")
+
+
+def test_the_repeat_signal_never_reaches_the_transcript() -> None:
     """★ 反向断言：那句提醒**只**进给模型看的 `recent`。
 
     它不能进 `log`（落盘 transcript，题解正文的原料）、不能进纪要、不发事件。
     漏了这一条，题解里会混进一堆系统提示 —— 而那正是用户会读到的正文。
     """
-    sandbox = _FakeSandbox(outputs={"cmd": "一模一样的输出" * 100})
+    sandbox = _FakeSandbox(outputs={"probe": "一模一样的输出" * 100})
     gateway = _FakeGateway(
         [
-            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-1"}}',
-            'ACTION: {"tool": "run_shell", "args": {"command": "cmd-2"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "probe"}}',
             'FINAL: {"candidates": []}',
         ]
     )
@@ -1191,11 +1327,11 @@ def test_the_change_direction_signal_never_reaches_the_transcript() -> None:
     )
 
     # 信号确实送到了模型
-    assert "换方向" in gateway.seen[2][-1]["content"]
+    assert "第 1 轮跑过" in gateway.seen[2][-1]["content"]
     # 但没进落盘的题解
-    assert "换方向" not in (outcome.transcript or "")
+    assert "跑过" not in (outcome.transcript or "")
     # 也没进事件流
-    assert all("换方向" not in s and "换方向" not in json.dumps(p, ensure_ascii=False)
+    assert all("跑过" not in s and "跑过" not in json.dumps(p, ensure_ascii=False)
                for _k, s, p in events)
 
 
