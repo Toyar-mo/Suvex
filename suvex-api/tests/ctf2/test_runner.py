@@ -831,6 +831,12 @@ class _FakeGateway:
     `usage` 默认给一个**有值**的用量：这样"统计链路通不通"这件事
     在每个既有用例里都被顺带验证了，而不是只在专门的用例里。
     需要测"接入点没给 usage"时传 `usage=TokenUsage()`（reported=False）。
+
+    ## ★ v0.41.2：可以逐条指定 `finish_reasons`
+
+    解题循环现在读 `reply.finish_reason` 判断"这次输出是不是被切断了"。
+    默认全是 `""`（未知 → 当作没被切断），既有用例的行为因此不变；
+    要测截断时传 `finish_reasons=["length", ...]`，**与 `replies` 一一对应**。
     """
 
     def __init__(
@@ -840,6 +846,7 @@ class _FakeGateway:
         model: str = "fake-model",
         label: str = "fake-label",
         usage: runner.TokenUsage | None = None,
+        finish_reasons: list[str] | None = None,
     ) -> None:
         self.replies = list(replies)
         self.seen: list[list[dict[str, str]]] = []
@@ -849,11 +856,15 @@ class _FakeGateway:
         self.usage = usage if usage is not None else runner.TokenUsage(
             prompt_tokens=10, completion_tokens=20, total_tokens=30, reported=True
         )
+        self.finish_reasons = list(finish_reasons) if finish_reasons else []
 
     async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
         self.seen.append(list(messages))
         text = self.replies.pop(0) if self.replies else 'FINAL: {"candidates": []}'
-        return runner.LlmReply(text=text, source="content", usage=self.usage)
+        reason = self.finish_reasons.pop(0) if self.finish_reasons else ""
+        return runner.LlmReply(
+            text=text, source="content", usage=self.usage, finish_reason=reason
+        )
 
 
 class _FakeSandbox:
@@ -1333,6 +1344,292 @@ def test_the_repeat_signal_never_reaches_the_transcript() -> None:
     # 也没进事件流
     assert all("跑过" not in s and "跑过" not in json.dumps(p, ensure_ascii=False)
                for _k, s, p in events)
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ v0.41.2：输出被长度上限切断时，不能当成"格式写错了"
+# ══════════════════════════════════════════════════════════
+#
+# 实测：`ctf2try_01M4Z94FND98QAC7T513ZTPM89`（78 轮 unsolved）里有 22 轮
+# `completion_tokens >= 4096`。推理吃满额度 → ACTION 被切在中间 →
+# `parse_action` 返回 None → 喂 `_format_reminder()`（"请严格用下面两种
+# 格式之一"）。它照做、再被切、再照做，22 次。
+#
+# 关键是"格式错"与"被切断"的解决办法相反：前者要重写，后者重写没用。
+
+
+def test_a_truncated_reply_gets_the_truncation_reminder_not_the_format_one() -> None:
+    """★ 被切断且没有动作 → 喂 `_truncation_reminder`，不是 `_format_reminder`。
+
+    反向断言（不含格式模板那两句）是关键：只证"含被切断"不够 ——
+    两个都喂（比如先格式、再补一句）也能满足它，而那样模型的注意力
+    还是在格式上。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        [
+            "我正在仔细分析这个上传点……（话说到一半）",
+            'FINAL: {"candidates": []}',
+        ],
+        finish_reasons=["length", "stop"],
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    fed_back = gateway.seen[1][-1]["content"]
+    assert "达到输出长度上限被切断" in fed_back
+    assert "先只写 ACTION 那一行" in fed_back
+    # 反向：**不是**格式提醒
+    assert "请**严格**用下面两种格式之一" not in fed_back
+
+
+def test_a_normal_badly_formatted_reply_still_gets_the_format_reminder() -> None:
+    """★ 反向断言：没被切断的格式错误 → 仍然走原来那句，不含"被切断"。"""
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        [
+            "这一轮我随便说点什么都不做。",
+            'FINAL: {"candidates": []}',
+        ],
+        finish_reasons=["stop", "stop"],
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    fed_back = gateway.seen[1][-1]["content"]
+    assert "请**严格**用下面两种格式之一" in fed_back
+    assert "被切断" not in fed_back
+
+
+def test_an_unknown_finish_reason_is_treated_as_not_truncated() -> None:
+    """★ 反向断言：接入点没给 `finish_reason`（空串）→ 当作没被切断。
+
+    宁可漏报：在一条正常回复上说"你被切断了"会让模型无缘无故压缩推理，
+    把它本该想清楚的事想浅。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        [
+            "这一轮我随便说点什么都不做。",
+            'FINAL: {"candidates": []}',
+        ]
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert "被切断" not in gateway.seen[1][-1]["content"]
+
+
+def test_a_truncated_reply_whose_action_survived_tells_the_model_the_tail_was_lost() -> None:
+    """切断点在动作**之后**：JSON 完好、动作照跑，但末尾那段推理丢了。
+
+    不告诉它，它会以为自己那轮已经想完了（而"下一步该干什么"恰好
+    就丢在被切掉的那段里）。
+    """
+    sandbox = _FakeSandbox(outputs={"ls": "hint.txt"})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}\n'
+            "接下来我打算……（被切了）",
+            'FINAL: {"candidates": []}',
+        ],
+        finish_reasons=["length", "stop"],
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    # 动作照常执行了
+    assert sandbox.commands == ["ls -la /work"]
+    fed_back = gateway.seen[1][-1]["content"]
+    assert "hint.txt" in fed_back
+    assert "末尾内容丢失" in fed_back
+    # 这一条**不该**出现"先只写 ACTION"——动作已经完整了，那句是给
+    # "连动作都没写完"的情形用的。
+    assert "先只写 ACTION 那一行" not in fed_back
+
+
+def test_the_anthropic_stop_reason_max_tokens_is_also_recognised() -> None:
+    """Anthropic 口径叫 `max_tokens`，OpenAI 叫 `length` —— 两个都得认。
+
+    只认一个的后果：换到另一家接入点时这条提醒**静默失效**，而那正是
+    这个功能最需要生效的场景（换模往往就是因为原接入点不顺手）。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        [
+            "我正在仔细分析……（话说到一半）",
+            'FINAL: {"candidates": []}',
+        ],
+        finish_reasons=["max_tokens", "stop"],
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    assert "达到输出长度上限被切断" in gateway.seen[1][-1]["content"]
+
+
+def test_the_digest_marks_a_truncated_turn() -> None:
+    """被切断的轮次在纪要里带 `⚠️输出被截断` 标记。
+
+    纪要是"这一轮做过什么"的唯一长期记录（完整对话会被裁掉）。不标记的话，
+    一个话说到一半的回合与一个完整回合在纪要里长得一模一样。
+    """
+    sandbox = _FakeSandbox(outputs={"ls": "hint.txt"})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}',
+            'ACTION: {"tool": "run_shell", "args": {"command": "cat /work/hint.txt"}}',
+            'FINAL: {"candidates": []}',
+        ],
+        finish_reasons=["length", "stop", "stop"],
+    )
+
+    _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    # 最后一轮发给模型的消息里带着纪要：第 1 轮被标记、第 2 轮没有。
+    final_view = gateway.seen[-1]
+    digest_text = "\n".join(
+        msg["content"] for msg in final_view if msg["role"] == "user"
+    )
+    assert "⚠️输出被截断" in digest_text
+    # 只有一行带标记 —— 第 2 轮的 `finish_reason` 是 stop。
+    assert digest_text.count("⚠️输出被截断") == 1
+
+
+def test_the_digest_carries_no_truncation_mark_on_normal_turns() -> None:
+    """★ 反向断言：没被切断的轮次，纪要里一个标记都不该有。"""
+    sandbox = _FakeSandbox(outputs={"ls": "hint.txt"})
+    gateway = _FakeGateway(
+        [
+            'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}',
+            'FINAL: {"candidates": []}',
+        ],
+        finish_reasons=["stop", "stop"],
+    )
+
+    outcome = _run(
+        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
+    )
+
+    digest_text = "\n".join(
+        msg["content"] for msg in gateway.seen[-1] if msg["role"] == "user"
+    )
+    assert "⚠️输出被截断" not in digest_text
+    assert "被切断" not in digest_text
+    assert "被切断" not in (outcome.transcript or "")
+
+
+def test_the_gateway_actually_carries_finish_reason_into_the_reply(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★★ 端到端：`LlmGateway.chat()` 真的把 `finish_reason` 填进 `LlmReply`。
+
+    ## 为什么必须有这一条
+
+    只测 `_finish_reason(parsed)` 那个纯函数**不够** —— 反向验证抓到过：
+    把 `chat()` 里那句 `finish_reason=_finish_reason(parsed)` 删掉（改成
+    永远传 `""`），七条 D-6 用例**全绿**。因为它们全都手工构造
+    `LlmReply(finish_reason=...)`，那条"从响应体读出来"的线一次都没被走。
+
+    这正是这个项目里反复踩到的形状：**用手造的对象验证一条真实路径**。
+    这条用例走真 `LlmGateway`，只把网络层换成 `MockTransport`。
+    """
+    from app.ctf2 import runner as r
+
+    body = {
+        "choices": [
+            {
+                "finish_reason": "length",
+                "message": {"content": "ACTION: {\"tool\": \"run_shell\""},
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 4096, "total_tokens": 4106},
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(200, json=body)
+
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):  # noqa: ANN001, ANN202
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(r.httpx, "AsyncClient", factory)
+
+    gateway = r.LlmGateway(
+        model="m", api_key="sk-test-not-real", base_url="https://api.example.com"
+    )
+    reply = _run(gateway.chat([{"role": "user", "content": "go"}], system="sys"))
+
+    assert reply.finish_reason == "length"
+    # 顺带确认这条路径上 usage 也照旧被读出来（同一批"从响应体取值"的活）。
+    assert reply.usage.completion_tokens == 4096
+
+
+def test_the_gateway_reads_the_anthropic_stop_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    """同上，Anthropic 口径：`stop_reason` 而不是 `choices[].finish_reason`。"""
+    from app.ctf2 import runner as r
+
+    body = {
+        "content": [{"type": "text", "text": "ACTION: {\"tool\": \"run_shell\""}],
+        "stop_reason": "max_tokens",
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(200, json=body)
+
+    real_client = httpx.AsyncClient
+
+    def factory(*args, **kwargs):  # noqa: ANN001, ANN202
+        kwargs["transport"] = httpx.MockTransport(handler)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(r.httpx, "AsyncClient", factory)
+
+    gateway = r.LlmGateway(
+        model="claude", api_key="sk-test-not-real", base_url="https://api.anthropic.com"
+    )
+    # `anthropic` 不是构造参数 —— 它由地址推出来（`is_anthropic(endpoint)`）。
+    # 先确认这条用例真的走到了 Anthropic 那条线上，否则下面的断言在
+    # OpenAI 分支上也成立，等于没测。
+    assert gateway.anthropic is True
+    reply = _run(gateway.chat([{"role": "user", "content": "go"}], system="sys"))
+
+    assert reply.finish_reason == "max_tokens"
+
+
+def test_finish_reason_is_read_from_both_wire_formats() -> None:
+    """`_finish_reason` 两套口径都要认，取不到就返回空串（不抛）。"""
+    # OpenAI 口径
+    assert runner._finish_reason(
+        {"choices": [{"finish_reason": "length", "message": {"content": "x"}}]}
+    ) == "length"
+    # Anthropic 口径
+    assert runner._finish_reason({"stop_reason": "max_tokens"}) == "max_tokens"
+    # 正常结束
+    assert runner._finish_reason({"choices": [{"finish_reason": "stop"}]}) == "stop"
+    # 缺字段 / 形状不对 → 空串，一律当作没被切断
+    assert runner._finish_reason({}) == ""
+    assert runner._finish_reason(None) == ""
+    assert runner._finish_reason("not-a-dict") == ""
+    assert runner._finish_reason({"choices": []}) == ""
+    assert runner._finish_reason({"choices": "nope"}) == ""
+    assert runner._finish_reason({"choices": [{}]}) == ""
+    assert runner._finish_reason({"choices": [{"finish_reason": None}]}) == ""
+    assert runner._finish_reason({"stop_reason": 42}) == ""
 
 
 def test_the_digest_keeps_early_actions_after_they_leave_the_window() -> None:

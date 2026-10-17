@@ -1319,6 +1319,51 @@ def parse_usage(body: object) -> TokenUsage:
     )
 
 
+def _finish_reason(body: object) -> str:
+    """从 LLM 响应体里解出「接入点为什么停下来」（v0.41.2）。
+
+    ## 为什么这里就地取，而不复用 `providers/llm.py`
+
+    那个模块是**探测用**的：它关心的是 content / reasoning 的形状（见
+    `_extract_reply` 那几段实测表），入口与字段口径都不同。把解题侧的
+    "是不是被截断了"塞进去，会让它多背一层语义，而那一层与它自己的
+    职责无关。所以 token 用量（`parse_usage`）之后，这里再就地取一次。
+
+    ## 两套口径都要认
+
+    - OpenAI：`{"choices": [{"finish_reason": "length" | "stop" | ...}]}`
+    - Anthropic：`{"stop_reason": "max_tokens" | "end_turn" | ...}`
+
+    ⚠️ 两者的"被截断"值**名字不同**（`length` / `max_tokens`），只认一个
+    就会漏掉另一家 —— 而这个函数存在的全部意义就是"别漏"。
+
+    ## 取不到就返回空串
+
+    `body` 可能是 `None`、不是 dict、`choices` 不是列表、元素不是 dict ——
+    都当作"接入点没给"。**不抛**：这是旁路信息，不该让一道已经跑了
+    几十轮的题因为解不出一个标记而中断。
+    """
+
+    def _get(mapping: object, key: str) -> str:
+        if not isinstance(mapping, dict):
+            return ""
+        value = mapping.get(key)
+        return value if isinstance(value, str) else ""
+
+    if not isinstance(body, dict):
+        return ""
+
+    choices = body.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            reason = _get(first, "finish_reason")
+            if reason:
+                return reason
+
+    return _get(body, "stop_reason")
+
+
 @dataclass(frozen=True, slots=True)
 class LlmReply:
     text: str
@@ -1330,6 +1375,15 @@ class LlmReply:
     #   所以老的构造点（测试里手写的 `LlmReply(...)`）不会因此报错，
     #   而它们会如实落成"没记录到 usage"。
     usage: TokenUsage = field(default_factory=TokenUsage)
+    # ★ v0.41.2：接入点为什么停下来 —— 只关心一件事：**输出是不是被切了**。
+    #
+    # OpenAI 口径给 `choices[0].finish_reason`，截断时是 `"length"`；
+    # Anthropic 口径给 `stop_reason`，截断时是 `"max_tokens"`。两个都要认。
+    #
+    # ⚠️ 默认 `""`（未知）：老的构造点、以及"接入点没给这个字段"的响应
+    #    都落到这里。**未知一律当作没被截断** —— 宁可漏报，也不要在正常
+    #    回复上说"你被切断了"（那会让模型无缘无故去压缩它的推理）。
+    finish_reason: str = ""
 
 
 class LlmGateway:
@@ -1510,6 +1564,7 @@ class LlmGateway:
             source=source,
             raw=parsed if isinstance(parsed, dict) else {},
             usage=parse_usage(parsed),
+            finish_reason=_finish_reason(parsed),
         )
 
 
@@ -2441,6 +2496,46 @@ def _format_reminder() -> str:
     )
 
 
+def _truncation_reminder(reply_chars: int) -> str:
+    """输出**被长度上限切断**时喂回去的那句话（v0.41.2）。
+
+    ## 为什么必须与 `_format_reminder()` 分开
+
+    这两件事以前在代码里是同一件事：`parse_action` 返回 None 就喂
+    `_format_reminder()`，于是「格式写错了」和「话说一半被物理切断」收到
+    同一句「请严格用下面两种格式之一」。
+
+    而它们的**解决办法相反**：
+
+    - 格式错 → 重写一遍，照着模板来。
+    - 被切断 → 再写一遍照样会被切（推理又吃满额度）。模型必须先
+      **压缩自己的推理**，把动作提前，才有可能写完。
+
+    实测出处：`ctf2try_01M4Z94FND98QAC7T513ZTPM89`（78 轮 unsolved）
+    里有 **22 轮** `completion_tokens >= 4096`，散在 turn 11/17/21/24/29/
+    30/38/41/42/50/53/55/56/58/60/62/64/67/68/69/72/73。它看到的是自己
+    的话说到一半就没了，但**不知道自己是被切的** —— 因为提醒语说的是格式。
+
+    ## 参数
+
+    `reply_chars` 是这次回复的字符数，写进提示里让模型有个量感（它自己
+    不知道 4096 token 是多长）。传 0 或负数也照样出提示，只是不带数字。
+
+    ⚠️ 不提"4096 token"这个具体额度：那是 `LlmGateway.max_tokens`，
+    哪天调了它，这句话就会开始说谎。说"达到输出长度上限"永远是对的。
+    """
+
+    size = f"（这次回复 {reply_chars} 字符）" if reply_chars > 0 else ""
+    return (
+        f"你上一次回复**达到输出长度上限被切断了**{size}，后面的内容没发出来 —— "
+        "这不是格式问题，重写一遍还会被切。\n"
+        "这次请**先只写 ACTION 那一行**，把推理压到一两句（动作执行完再想下一步）。\n"
+        'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}\n'
+        f"（可用工具只有 {' / '.join(TOOL_NAMES)}）\n"
+        "如果确实已经拿到答案，就直接写 FINAL 那一行，不要先写长篇分析。"
+    )
+
+
 # ══════════════════════════════════════════════════════════
 # 解题循环
 # ══════════════════════════════════════════════════════════
@@ -2894,6 +2989,15 @@ async def solve_in_sandbox(
             log.append(f"[turn {turn}] assistant({reply.source}): {_clip(text, 4000)}")
             recent.append({"role": "assistant", "content": text})
 
+            # ★ v0.41.2：这次回复是不是被输出长度上限切断了。
+            #
+            # 见 `_truncation_reminder` 的说明：以前"格式错"与"被切断"收到
+            # 同一句提醒，而它们的解决办法相反 —— 前者要重写，后者重写没用
+            # （推理又吃满额度），必须**压缩推理、把动作提前**。
+            #
+            # ⚠️ 两个都要认：OpenAI 说 `length`，Anthropic 说 `max_tokens`。
+            truncated = reply.finish_reason in ("length", "max_tokens")
+
             # ① 结论？
             final = parse_final(text)
             if final is not None:
@@ -2939,7 +3043,11 @@ async def solve_in_sandbox(
                 #    而那些行会把真正有信息量的推理淹掉）。
                 if len(text.strip()) >= 20:
                     notify("reasoning", _clip(text.strip(), 200), {"text": text.strip()})
-                recent.append({"role": "user", "content": _format_reminder()})
+                # ★ v0.41.2：被切断时喂**另一句** —— 见 `_truncation_reminder`。
+                reminder = (
+                    _truncation_reminder(len(text)) if truncated else _format_reminder()
+                )
+                recent.append({"role": "user", "content": reminder})
                 continue
 
             name, args = action
@@ -3031,10 +3139,22 @@ async def solve_in_sandbox(
                 )
             else:
                 seen_calls[call_key] = turn
+            # ★ v0.41.2：这一轮虽然动作完整、跑成功了，但**回复本身被切过**。
+            #
+            # 切在动作之后 → JSON 完好，动作照常执行；可后面那段推理（往往
+            # 是"下一步该干什么"）丢了。不告诉它，它会以为自己那轮想完了。
+            truncation_note = (
+                "\n\n（提醒：你上一次回复达到长度上限被切断，末尾内容丢失。）"
+                if truncated
+                else ""
+            )
             recent.append(
                 {
                     "role": "user",
-                    "content": f"{repeated_note}工具 `{name}` 的输出：\n{result}{reminder_note}",
+                    "content": (
+                        f"{repeated_note}工具 `{name}` 的输出：\n{result}"
+                        f"{reminder_note}{truncation_note}"
+                    ),
                 }
             )
             # ★ 记录"这次解题真的跑过工具"（v0.31）—— 供 auto 模式的
@@ -3063,8 +3183,14 @@ async def solve_in_sandbox(
             #
             # 一行里放三样东西：轮次、命令、输出开头 —— 足够让模型认出
             # "这件事我做过了"，又不至于把上下文撑爆。
+            # ★ v0.41.2：被切断的那几轮，纪要里要看得出来。
+            #
+            # 纪要现在是"这一轮做过什么"的唯一长期记录（完整对话会被裁掉）。
+            # 不标记的话，一个话说到一半的回合与一个完整回合在纪要里长得
+            # 一模一样 —— 模型回头看会以为自己那轮已经想清楚了。
             digest.append(
                 f"[t{turn}] {name}: {_clip(command, 110)} → {_clip(result, 140)}"
+                + (" ⚠️输出被截断" if truncated else "")
             )
             if len(digest) > MAX_DIGEST_LINES:
                 del digest[: len(digest) - MAX_DIGEST_LINES]
