@@ -354,7 +354,15 @@ def build_attachment(name: str, flag: str) -> bytes:
             "}\n"
         ).encode()
 
-    if name == "crackme":
+    # ⚠️ `dump.bin` 必须留在这个元组里。`78e003f` 把假的 pwn 附件
+    #    （`baby` / `fmt`）换成真靶机时，顺手把 `dump.bin` 一起删了 ——
+    #    它跟 pwn 毫无关系，只是**恰好共用**这段"混在二进制噪声里"的造法。
+    #    后果是 `#1010 misc-dump` 的附件退化成兜底那句
+    #    `mock attachment: dump.bin`（25 字节），**里面根本没有 flag**，
+    #    那题从此不可能解出来；而报告上只会写"未通过"，看起来像能力问题。
+    #    回归是这样发现的：`#1010` 跑到 300s 超时、14 回合反复
+    #    strings/binwalk 一个 25 字节的文件。改这里时请只动真正要删的名字。
+    if name in ("crackme", "dump.bin"):
         # 第 8 层：混在二进制噪声里 → strings 能捞出来
         noise = b"\x7fELF" + bytes(range(256)) * 2
         return noise + f"\n...strings 结果里有一行: {flag}\n".encode() + noise
@@ -535,11 +543,26 @@ def build_app(access_key: str) -> FastAPI:
                     "expireTime": int(time.time() * 1000) + 3600_000,
                 },
                 # 代理靶机：★ 优先用代理（proxyIps + portMappings）
+                #
+                # ⚠️ `proxy` 端口**必须指向一个没人监听的端口**，不能图省事
+                #    复用 31001 —— 那是 `PWN_TARGETS` 里 `pwn_baby` 的真实
+                #    监听端口。踩过：改完之后 `http_request` 打
+                #    `127.0.0.1:31001` 会**连上但永远等不到 HTTP 响应**，
+                #    因为 `_tool_http_request`（app/ctf2/runner.py:2412）是在
+                #    **宿主进程**里发请求的，而 pwn 靶机绑的是宿主
+                #    `0.0.0.0`。于是每探一次就吃满
+                #    `httpx.Timeout(60.0)`；`#1010` 三次 ReadTimeout = 180s
+                #    直接撞上一题的时间上限。
+                #    改之前 31001 无人监听 → `ConnectError` 立刻返回，所以
+                #    "多一条代理 endpoint" 本来是无害的装饰；一旦那个端口
+                #    变成真的 TCP 服务，它就变成**每回合静默烧 60 秒**的陷阱。
+                #    指向 31099（永远不开）保住 `isProxy` 这条分支的字段形状，
+                #    同时把失败方式还原成"立刻连接被拒"。
                 {
                     "exposeIps": ["10.20.30.41"],
                     "ports": ["9999"],
                     "users": [],
-                    "portMappings": [{"type": "tcp", "port": "9999", "proxy": "31001"}],
+                    "portMappings": [{"type": "tcp", "port": "9999", "proxy": "31099"}],
                     "proxyIps": ["127.0.0.1"],
                     "isProxy": True,
                     "expireTime": int(time.time() * 1000) + 3600_000,

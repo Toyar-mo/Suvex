@@ -193,6 +193,26 @@ class RunReport:
 # ══════════════════════════════════════════════════════════
 
 
+def _turns_from_transcript(transcript: list[str]) -> int:
+    """从 transcript 里数出跑了多少回合（超时路径专用）。
+
+    判据与 `app/ctf2/runner.py:4777` 的 `_TRANSCRIPT_TOOL` 同源：行首
+    `[turn N] `。取**最大** turn 而不是行数 —— 一回合里可能有多条工具调用，
+    数行会把"一回合发五条命令"算成五回合。
+
+    数不出来就返回 0（调用方据此保留原值）。宁可不显示，也不猜一个数：
+    这个字段是"模型到底动没动"的唯一证据，编一个比留空更坏。
+    """
+    best = 0
+    for line in transcript:
+        if not line.startswith("[turn "):
+            continue
+        head = line[6:].split("]", 1)[0]
+        if head.isdigit():
+            best = max(best, int(head))
+    return best
+
+
 async def run_one(
     client: ArenaClient,
     exercise_id: int,
@@ -284,6 +304,20 @@ async def run_one(
         # ★ 超时和"没解出来"是两件事，必须分开记 —— 混在一起会把
         #   环境问题误读成能力问题。
         result.error = f"超时（{timeout_s:.0f}s）"
+        # ⚠️ 回合数必须从 transcript 捞回来，不能留在默认值上。
+        #
+        #   `result.turns` 在上面被设成 -1（"进了解题但没拿到 outcome"），
+        #   `finally` 又把它归 0 —— 于是**超时的题一律显示"回合 0"**，
+        #   读起来像"模型一回合都没动"。实测 `#1010` 超时那次
+        #   transcript 里有完整 6 个回合，报告上却是 0。
+        #
+        #   这种错法特别毒：它把"环境把时间烧光了"显示成"模型没反应"，
+        #   而这两种情况的修法完全相反（前者修靶机/网络，后者修提示词）。
+        #   transcript 是**边跑边 append 的同一个 list**（`arena_e2e.solve`
+        #   里 `log = transcript`，原地 append），所以超时点时它已经有内容。
+        turns_seen = _turns_from_transcript(transcript)
+        if turns_seen:
+            result.turns = turns_seen
     except Exception as exc:  # noqa: BLE001 - 基线要跑完全部题目，不能因一道崩掉
         result.error = f"{exc.__class__.__name__}: {exc}"
     finally:
