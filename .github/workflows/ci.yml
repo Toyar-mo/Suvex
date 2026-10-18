@@ -345,6 +345,20 @@ jobs:
           fi
           echo "✅ 历史干净"
 
+      - name: 入库文件里不得有形似凭据的字符串
+        # ★ 上面两道只看**文件名**（`.env` 有没有入库）。而真正会发生的
+        #   泄漏往往不在 `.env` 里：key 被写成代码里的默认值、贴进 README、
+        #   或者塞进一个测试夹具 —— 文件名完全正常，那两道一无所见。
+        #
+        #   这一道看**内容的形状**：`sk-` / `AKIA` / `ghp_` / 私钥头这类
+        #   有固定前缀的凭据，以及"赋值给 *key*/*token* 的长串"。
+        #   已知的测试假值（含 test/example/FIRSTKEY/递增序列…）在白名单里，
+        #   否则这条检查会在第一次推送时就被关掉 —— 那时它还没拦下任何真东西。
+        run: |
+          set -e
+          cd suvex-api
+          python3 scripts/verify_no_secrets.py
+
       - name: 行尾必须统一为 LF
         # 交付到 Linux 时 CRLF 会让 shell 脚本直接坏掉，
         # 而报错信息（bad interpreter）指向解释器路径，误导性很强。
