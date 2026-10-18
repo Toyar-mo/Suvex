@@ -118,6 +118,50 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # 后端跑 Office 2010（100000 轮迭代）**1503 p/s** —— 六位数字要十几
     # 分钟，40 个回合根本跑不完，而看起来像"模型不会爆破"。
     hashcat john pocl-opencl-icd ocl-icd-libopencl1 \
+    # ── ★ pwn 题 ──
+    #
+    # 先澄清一件事：pwn 常用的 `checksec` / `ROPgadget` / `cyclic` /
+    # `fmtstr_payload` **不需要在这里装** —— 它们都随 `pwntools` 来
+    # （见下面 pip 那一段）。实测 `/opt/venv/bin/{ROPgadget,checksec,cyclic}`
+    # 都在，`from pwn import ROP, fmtstr_payload` 也正常。在 apt 里另装
+    # 一份反而会造出两个不同版本的 `ROPgadget`，报错时不知道该信哪个。
+    #
+    # 真正缺的是 `patchelf`，而它**没有纯 Python 替代**：
+    #   · pwn 题经常附一个**特定版本的 libc**，要求用它本地跑通再打远程。
+    #     二进制默认指向镜像里的 ld.so，直接跑会加载错版本 —— 而症状是
+    #     "本地打通、远程打不通"（或反过来），比报错难查得多：你看到的
+    #     是"exploit 不 work"，而不是"libc 不对"。
+    #   · 正确做法是
+    #     `patchelf --set-interpreter <题目给的 ld-linux> \
+    #               --set-rpath <题目给的 libc 目录> ./chall`
+    #     改完再跑，加载的就是题目那套。
+    #   · 只用 `LD_PRELOAD` 不行：那是**运行期**替换，改不了 interpreter
+    #     本身，对"ld.so 也要换"的场景无效。
+    #
+    # ⚠️ 2026-10-12 实测：base 和 re 两个镜像里 `command -v patchelf`
+    #    都是 MISSING，而 kali 源里有 `0.18.0-1.4`。这是"清点镜像才
+    #    发现"的又一例 —— 与 `steghide` 那条同类。
+    #
+    # ## `gdb`：pwn 题的第二件必需品
+    #
+    # `gdb.attach(io)` 是 pwntools 调 exploit 的主要入口 —— 没有 gdb 时
+    # 它直接抛错，而模型会把这当成"题目有问题"继续换方法硬试，从日志上
+    # **看不出根因**（它不会报"缺 gdb"，只是每次调试都失败）。
+    #
+    # 实测（2026-10-12）：
+    #   ctf2-sandbox:latest     gdb → MISSING     ← 修的就是这个
+    #   ctf2-sandbox-re:latest  gdb → /usr/bin/gdb
+    #
+    # **为什么装在 base 而不是"让 pwn 题走逆向镜像"**：逆向镜像比 base
+    # 大 1.35 GB（`radare2` + `mono` + `angr`），而 gdb 本身装完约
+    # 12 MB、连依赖撑死几十 MB（`libpython3.14*` 这些 base 里本来就有）。
+    # 为了一个 12 MB 的工具把每道 pwn 题都推到 4 GB 镜像上，是拿
+    # 下载与启动时间换一点磁盘 —— 不划算。
+    #
+    # 也**不是**"pwn 也算逆向所以归到 re"：那是把"分类名字"当判据，
+    # 而真正该看的是"这套题需要哪些工具"。`_REVERSE_CATEGORIES` 里
+    # 没有 `pwn`，见 `app/ctf2/runner.py` 的注释。
+    patchelf gdb \
     # ── 编译工具：**必须在**，不是可选项 ──
     #
     # ⚠️ 这一条是**实测**加进来的，不是预防性添加。

