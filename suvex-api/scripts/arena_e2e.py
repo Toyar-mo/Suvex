@@ -101,6 +101,15 @@ def download_attachments(exercise: Exercise) -> tuple[Path, ...]:
         return ()
     target_dir = ATTACH_DIR / str(exercise.exercise_id)
     target_dir.mkdir(parents=True, exist_ok=True)
+    # 先清掉上一次的残留：这个目录是跨运行复用的（_tmp 不随 git 走，也不自动清理），
+    # 而它随后被整个只读挂进容器供模型浏览。题目改过附件名之后（mock 的 baby →
+    # pwn_baby 就是这样），旧文件会和新文件一起出现在 /work/attachments 里 ——
+    # 模型会花回合去分析一个题目根本没给的陈旧文件，而报告上不会留下任何痕迹。
+    stale = [p for p in target_dir.iterdir() if p.is_file()]
+    for path in stale:
+        path.unlink(missing_ok=True)
+    if stale:
+        log(f"③ 清掉 {len(stale)} 个上次残留的附件：{'、'.join(p.name for p in stale)}")
 
     saved: list[Path] = []
     with httpx.Client(timeout=30, trust_env=False, follow_redirects=True) as http:
