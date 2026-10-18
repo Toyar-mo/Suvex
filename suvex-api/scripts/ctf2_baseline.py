@@ -47,6 +47,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -117,6 +118,14 @@ class RunResult:
     #: 解题过程的落盘路径（空 = 没留）。失败时先看这个，再谈"能力"。
     transcript: str = ""
 
+    #: 这一题注入的方法卡**字符数**（0 = 没有注入）。
+    #:
+    #: ⚠️ 必须记下来，不能只看"我传了 --notes-cards"。注入链路断掉时
+    #: （渲染出空串、分类对不上、文件读取失败）两个臂跑出来一模一样，
+    #: 而报告上会写着"方法卡无效" —— 那是把"没接上"测成了"没用"。
+    #: 有这一列，"0 字符"就是当场能看见的证据。
+    notes_chars: int = 0
+
 
 @dataclass
 class RunReport:
@@ -136,6 +145,20 @@ class RunReport:
     # 记进 JSON 里，而不是只在控制台喊一嗓子 —— 看报告的人不该依赖
     # 谁有没有盯着终端看。
     pre_solved: list[int] = field(default_factory=list)
+
+    #: 这次用的是哪一份方法卡文件（空 = 这一臂不注入方法卡）。
+    #:
+    #: ⚠️ 记的是**路径**而不是"有没有开开关"：A/B 的两个 JSON 摆在一起时，
+    #: 光看 `passed` 无法判断两臂到底差在哪。有了这一列，`compare`
+    #: 能直接指出"这两次跑的不是同一个配置"—— 那是比通过数更先要知道的事。
+    notes_cards: str = ""
+
+    #: 这一臂一共注入了几道题（`notes_chars > 0` 的题数）。
+    #:
+    #: 与 `notes_cards` 配合读：给了文件却 0 题注入 → 召回规则没命中
+    #: （分类对不上 / 卡全是自己的 / 文件是空的），这时两臂等价，
+    #: 跑出来的差异全是噪声。
+    notes_injected: int = 0
 
     # ── 汇总 ──────────────────────────────────────────────
     def summary(self) -> dict[str, object]:
@@ -179,6 +202,7 @@ async def run_one(
     max_turns: int,
     timeout_s: float,
     transcript_dir: Path | None = None,
+    cards: list | None = None,
 ) -> RunResult:
     """跑一道题：拉题 → 起环境 → 解题 → 提交，全程计时。
 
@@ -192,6 +216,10 @@ async def run_one(
     `transcript-<id>.log`。**失败的时候没有比这更值钱的东西**：
     "8 回合用尽"可以是模型不会，也可以是靶机连不上、工具没装、
     提示词没说清楚 —— 这三种的修法完全不同，而只有过程能分辨。
+
+    `cards` 给定时才有方法卡（`notes_cards.NoteCard` 列表），否则与
+    改动前完全一致。召回规则在 `notes_cards.cards_for` 里，与生产
+    `notes.notes_for_challenge` 逐条对齐。
     """
     started = time.monotonic()
     result = RunResult(exercise_id=exercise_id, category=category, name=f"#{exercise_id}")
@@ -218,6 +246,22 @@ async def run_one(
         exercise.raw["_base_url"] = base_url
 
         result.turns = -1  # 标记"已进入解题，但还没拿到 outcome"
+
+        # ★ 方法卡：没有 cards 就是空串（= 与改动前逐字一致的那一臂）。
+        #
+        #   `exclude_challenge_id` 传 `arena-<id>`，与 `SolveSpec.challenge_id`
+        #   同一个形状 —— 生产里"排除自己"靠的也是这个键。写成
+        #   `#<id>` 之类的话排除会失效，那题会读到自己上次的卡，
+        #   而那不是"同类题的经验"（那是 resume 该做的事）。
+        notes_text = ""
+        if cards:
+            import notes_cards
+
+            notes_text = notes_cards.render_for(
+                cards, category, exclude_challenge_id=f"arena-{exercise_id}"
+            )
+        result.notes_chars = len(notes_text)
+
         outcome = await asyncio.wait_for(
             arena_e2e.solve(
                 exercise,
@@ -225,6 +269,7 @@ async def run_one(
                 allow_network=False,
                 max_turns=max_turns,
                 transcript=transcript,
+                notes_text=notes_text,
             ),
             timeout=timeout_s,
         )
@@ -284,13 +329,31 @@ async def cmd_run(args: argparse.Namespace) -> int:
         model_name=model_name,
         max_turns=args.max_turns,
         base_url=args.base_url,
+        notes_cards=str(getattr(args, "notes_cards", "") or ""),
     )
+
+    # ★ 方法卡：读一次，全程复用（每道题只是换 category 去召回）。
+    #
+    #   ⚠️ 读失败**直接退出**，而不是"退化成不带卡继续跑"。
+    #      后者跑出来的是一份"没开方法卡"的基线，而文件名和命令行
+    #      都写着开了 —— 那种报告比没有报告更坏。
+    cards: list = []
+    if report.notes_cards:
+        import notes_cards as notes_cards_mod
+
+        cards_path = Path(report.notes_cards)
+        if not cards_path.is_file():
+            log(f"❌ 方法卡文件不存在：{cards_path}")
+            return 2
+        cards = notes_cards_mod.load_cards(cards_path)
+        log(f"方法卡：{cards_path} → {notes_cards_mod.describe(cards)}")
 
     log("=" * 72)
     log(
         f"CTF2 基线 · commit {report.git_commit}"
         f" · {model_label or '?'}/{model_name or '?'}"
         f" · 最多 {args.max_turns} 回合/题"
+        + (f" · 方法卡 {'开' if cards else '关'}" if report.notes_cards or cards else "")
     )
     log("=" * 72)
 
@@ -346,12 +409,16 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 max_turns=args.max_turns,
                 timeout_s=args.timeout,
                 transcript_dir=transcript_dir,
+                cards=cards,
             )
             report.runs.append(result)
+            if result.notes_chars:
+                report.notes_injected += 1
             verdict = "✓ 通过" if result.ok else "✗ 未通过"
             log(
                 f"→ {verdict} | 回合 {result.turns} | 候选 {result.candidates} | "
                 f"{result.elapsed_s}s"
+                + (f" | 方法卡 {result.notes_chars} 字符" if cards else "")
                 + (f" | 错误 {result.error}" if result.error else "")
             )
             log("")
@@ -373,6 +440,14 @@ async def cmd_run(args: argparse.Namespace) -> int:
         f"平均回合 {summary['avg_turns_all']}（通过的题 {summary['avg_turns_passed']}）"
         f" · 平均耗时 {summary['avg_elapsed_s']}s"
     )
+
+    # ★ 方法卡到底注进去了没有 —— 不给这一行的话，"两臂一样"会被
+    #   读成"方法卡没用"，而真相可能是 0 题召回（分类对不上）。
+    if report.notes_cards:
+        log(
+            f"方法卡：{report.notes_injected}/{len(report.runs)} 道题注入了内容"
+            + ("" if report.notes_injected else "  ⚠️ 一道都没注入 → 这一臂等于没开，别拿它当对照组")
+        )
 
     if args.out:
         path = _write(report, Path(args.out))
@@ -399,6 +474,132 @@ def _load(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+# ══════════════════════════════════════════════════════════
+# 子命令：learn（把 transcript 变成方法卡）
+# ══════════════════════════════════════════════════════════
+
+#: transcript 里的 NUL 字节。
+#:
+#: 工具输出（`xxd`、`strings`、二进制 hexdump）会把这些直接写进日志，
+#: 于是 `grep` 报 "binary file matches"、`read_text` 在某些编码下抛
+#: 一半截断。落盘时它们毫无信息量，读的时候先剔掉。
+_NUL = "\x00"
+
+#: 落盘前的最后一道闸：卡里出现这些形状就拒绝写。
+#:
+#: ⚠️ `build_note_fields` 已经在逐字段脱敏了，这里再查一遍不是重复劳动 ——
+#: 它是**独立的一道**，因为我改不动生产那份脱敏的效果，而这张卡会被拼进
+#: **另一道题**的 prompt。漏一次就是"A 题的答案进了 B 题的上下文"。
+#: 而且这一步很便宜（就是几个正则），便宜到没有理由不做。
+_FLAG_SHAPES = (
+    re.compile(r"\bflag\{", re.IGNORECASE),
+    re.compile(r"\b(?:ctf|dasctf|sctf|nssctf)\{", re.IGNORECASE),
+    # 长串 base32/hex/base64ish —— 真 flag 常被切碎了嵌在这些里
+    re.compile(r"\b[A-Za-z0-9+/]{32,}={0,2}\b"),
+)
+
+
+def _card_leaks(card) -> list[str]:
+    """返回这张卡里**不该出现**的片段（空 = 干净）。"""
+    blob = f"{card.approach}\n{card.tools}\n{card.dead_ends}"
+    hits: list[str] = []
+    for pattern in _FLAG_SHAPES:
+        for match in pattern.finditer(blob):
+            hits.append(match.group(0)[:40])
+    return hits
+
+
+def cmd_learn(args: argparse.Namespace) -> int:
+    import notes_cards
+
+    result_path = Path(args.result)
+    if not result_path.is_file():
+        log(f"❌ 基线 JSON 不存在：{result_path}")
+        return 2
+    payload = _load(result_path)
+
+    transcript_dir = Path(args.transcripts)
+    if not transcript_dir.is_dir():
+        log(f"❌ transcript 目录不存在：{transcript_dir}")
+        return 2
+
+    cards: list = []
+    skipped: list[str] = []
+    for run in payload.get("runs", []):
+        exercise_id = run.get("exercise_id")
+        log_path = transcript_dir / f"transcript-{exercise_id}.log"
+        if not log_path.is_file():
+            # 没留过程 → 学不出东西。**不编造一张空卡**：空卡进池子以后
+            # 只会占掉 MAX_NOTES_IN_PROMPT 的位置，把有内容的卡挤出去。
+            skipped.append(f"#{exercise_id} 没有 transcript")
+            continue
+        transcript = log_path.read_text(encoding="utf-8", errors="replace").replace(_NUL, "")
+        card = notes_cards.learn_card(
+            challenge_id=f"arena-{exercise_id}",
+            category=run.get("category") or "",
+            title=run.get("name") or "",
+            transcript=transcript,
+            error=run.get("error"),
+            candidates=list(run.get("tried") or []),
+            solved=bool(run.get("ok")),
+        )
+        leaks = _card_leaks(card)
+        if leaks:
+            # ⚠️ 丢弃**整张卡**，不是"把那一段删掉再写"：脱敏漏掉一个
+            #    flag 形状，说明我对这条链路的判断已经不成立了，
+            #    "只删掉匹配到的那几个字节"是最没有根据的补法。
+            log(f"  ✗ #{exercise_id} 的卡含疑似答案，整张丢弃：{leaks[:3]}")
+            continue
+        cards.append(card)
+        # ★ 学习顺序必须真的递增。
+        #
+        #   生产里次级排序键是 `updated_at.desc()`；文件形态没有时间戳，
+        #   只能自己排。**留全 0 不是"无害的缺省"**：`cards_for` 的
+        #   `(solved, seq)` 会全部并列，于是"最近学的优先"退化成一个
+        #   不稳定的顺序 —— 池子小的时候看不出来，一过 3 张就开始
+        #   随机丢掉新学的卡。
+        card.seq = len(cards)
+        log(
+            f"  #{exercise_id} {run.get('name', '')} → "
+            f"做法 {len(card.approach)} 字 / 工具 {len(card.tools)} 字 / "
+            f"死胡同 {len(card.dead_ends)} 字"
+        )
+
+    if not cards:
+        log("❌ 一道题都没学成（一条 transcript 都没有？）")
+        for reason in skipped:
+            log(f"   · {reason}")
+        return 2
+
+    out = notes_cards.save_cards(cards, Path(args.out))
+    log(f"\n方法卡 {len(cards)} 张 → {out}（{notes_cards.describe(cards)}）")
+    for reason in skipped:
+        log(f"   ⚠️ 跳过 {reason}")
+    return 0
+
+
+def _warn_if_incomparable(before: dict, after: dict) -> None:
+    """两臂配置不同时先喊出来 —— 比通过数更先要知道的事。
+
+    ⚠️ 只警告不拦：有时候就是要比"带卡 vs 不带卡"，那本来就不一样。
+    但**悄悄放过去不行**：一份"pass 9 → 10"的对比，如果读者不知道
+    后一臂还换了模型或回合上限，那个 +1 会被当成方法卡的功劳。
+    """
+    notes_before = before.get("notes_cards") or ""
+    notes_after = after.get("notes_cards") or ""
+    if notes_before != notes_after:
+        log(
+            f"\n⚠️ 方法卡配置不同：前 {'开（' + notes_before + '）' if notes_before else '关'}"
+            f" / 后 {'开（' + notes_after + '）' if notes_after else '关'}"
+        )
+        injected = after.get("notes_injected")
+        if notes_after and not injected:
+            log("   ⚠️ 后一臂给了卡文件，但 0 道题注入了内容 → 召回没命中，两臂其实等价。")
+    for key, name in (("max_turns", "回合上限"), ("model_name", "模型")):
+        if before.get(key) != after.get(key):
+            log(f"⚠️ {name}不同：{before.get(key, '?')} → {after.get(key, '?')}")
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     before = _load(Path(args.before))
     after = _load(Path(args.after))
@@ -416,6 +617,8 @@ def cmd_compare(args: argparse.Namespace) -> int:
         f"最多 {after.get('max_turns', '?')} 回合"
     )
     log("=" * 80)
+
+    _warn_if_incomparable(before, after)
 
     rows_before = {run["exercise_id"]: run for run in before.get("runs", [])}
     rows_after = {run["exercise_id"]: run for run in after.get("runs", [])}
@@ -486,12 +689,26 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--max-turns", type=int, default=20)
     run.add_argument("--timeout", type=float, default=600.0, help="单题超时（秒）")
     run.add_argument("--out", default=str(DEFAULT_OUT), help="结果 JSON 落盘路径")
+    run.add_argument(
+        "--notes-cards",
+        default="",
+        help="同类题方法卡 JSON（scripts/notes_cards.py 生成）；不给 = 不注入，与改动前一致",
+    )
     run.set_defaults(func=lambda args: asyncio.run(cmd_run(args)))
 
     compare = sub.add_parser("compare", help="对比两次基线")
     compare.add_argument("before")
     compare.add_argument("after")
     compare.set_defaults(func=cmd_compare)
+
+    # 学卡：把已有的 transcript 变成方法卡。
+    # 单独一个子命令而不是塞进 run，是因为"跑题"和"造卡"是两件事：
+    # 造卡只要 transcript 就够，不必再烧一遍 LLM 的钱。
+    learn = sub.add_parser("learn", help="从 transcript 生成方法卡 JSON")
+    learn.add_argument("transcripts", help="transcript 目录（含 transcript-<id>.log）")
+    learn.add_argument("--result", required=True, help="同一次跑出来的基线 JSON（取分类/通过与否）")
+    learn.add_argument("--out", default="_tmp/notes-cards.json", help="方法卡落盘路径")
+    learn.set_defaults(func=cmd_learn)
 
     args = parser.parse_args(argv)
     return args.func(args)

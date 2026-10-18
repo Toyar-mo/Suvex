@@ -204,6 +204,7 @@ async def solve(
     max_turns: int,
     llm: LlmCredentials | None = None,
     transcript: list[str] | None = None,
+    notes_text: str = "",
 ):
     """在沙箱里让模型解这道题（复用与平台无关的那套引擎）。
 
@@ -214,6 +215,22 @@ async def solve(
     了也没法回答"是模型不会，还是工具装错了、提示词写歪了、靶机连不上" ——
     而那三个问题的修法完全不同。代价是可能很大（20 轮的 shell 输出），
     所以由调用方决定落不落盘、落到哪。
+
+    `notes_text` 是**同类题方法卡**渲染好的片段，原样进 prompt。
+
+    ## ⚠️ 为什么这个参数必须存在（2026-10-23 补）
+
+    在这之前，这条链路**一次都没注入过方法卡**：`SolveSpec` 由本函数
+    构造，而构造处没有 `notes_text=`，于是它一直是默认空串 ——
+    生产 worker（`runner.py:4447`）走的是另一条路，那里才有召回。
+
+    后果不是"少了个功能"，而是**没法做 A/B**：想测"方法卡有没有用"，
+    两个臂必须能被区分开。链路没有口子的时候，两边跑出来是同一件事，
+    而差异全被归进采样噪声 —— 那比不做实验更坏，因为它给了个数字。
+
+    ⚠️ 传进来的内容**必须已经脱敏**（`notes.sanitize_for_reuse`，
+    在 `build_note_fields` 里做的）。这里不再过滤：两处都做会让
+    "谁负责"含混，而这条链路上漏一次就是跨题泄漏 flag。
     """
     creds = llm or load_provider(provider)
     model, api_key, base_url = creds.model, creds.api_key, creds.base_url
@@ -257,6 +274,11 @@ async def solve(
         network_isolated=not raw_network,
         cpus=None,
         memory_mb=None,
+        # ★ 方法卡（已脱敏）。空串 = 这一臂不注入，与改动前完全一致。
+        #
+        #   放在这里而不是在 `solve_in_sandbox` 里查库：那条路径按设计
+        #   不碰 DB（它要能在没有数据库的机器上跑，见提交 55016f4）。
+        notes_text=notes_text,
     )
 
     image = solver.image_for_profile(profile)
