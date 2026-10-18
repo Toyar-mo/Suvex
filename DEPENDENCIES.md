@@ -109,7 +109,7 @@
 | iniconfig | 2.3.0 | MIT |
 | pluggy | 1.6.0 | MIT |
 
-> **锁文件**：`requirements.lock`（35 包，带 sha256）与 `requirements-dev.lock`（41 包，带 sha256）提供可复现构建。两份锁文件的分工与理由见 `requirements-dev.txt` 头部。
+> **锁文件**：`requirements.lock`（37 包，带 sha256）与 `requirements-dev.lock`（43 包，带 sha256）提供可复现构建。两份锁文件的分工与理由见 `requirements-dev.txt` 头部；它们是否与声明同步，由 `suvex-api/scripts/verify_lockfiles.py` 校验（CI 里也跑）。
 
 ---
 
@@ -245,3 +245,4 @@ LGPL 是弱 copyleft。**作为未修改的库依赖使用**（本项目就是�
 | strix 版本与许可证 | 读 `strix_agent-1.6.2.dist-info/METADATA` 的 `License-Expression` |
 | 行数 | `find suvex-api/app -name "*.py" \| xargs wc -l`（同 README 口径） |
 | 源码拷贝清单 | `suvex-web/src/components/effects/README.md` |
+| 锁文件是否与声明同步 | `cd suvex-api && python3 scripts/verify_lockfiles.py`（CI 的 `hygiene` job 也跑它） |

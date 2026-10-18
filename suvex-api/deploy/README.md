@@ -63,7 +63,7 @@ sudo -u suvex .venv/bin/pip install --require-hashes -r requirements.lock
 > **为什么装 `requirements.lock` 而不是 `requirements.txt`**：
 > 后者是**范围约束**（`fastapi>=0.115,<1.0`），同一个 commit 在不同
 > 时间装会得到不同版本 —— "三个月前部署能跑，今天重装就炸"是真实
-> 存在的失败模式。锁文件里是 35 个包的精确版本 + sha256 哈希，
+> 存在的失败模式。锁文件里是 37 个包的精确版本 + sha256 哈希，
 > `--require-hashes` 会逐个校验。
 >
 > ⚠️ 锁文件是**在 Linux 上生成的**。如果你在 Windows 上重新生成过它，
