@@ -229,6 +229,7 @@ tests/           75 个测试文件 / 1,352 个测试函数，**对真实 Postgr
 scripts/         端到端验收与对账脚本
 docs/            决策记录（8 篇 ADR）+ 安全清单 + 验收记录
 docker/          CTF2 沙箱镜像的 Dockerfile
+deploy/          systemd unit 与 CTF2 沙箱出站白名单脚本
 prompts/         agent 系统提示词
 ```
 
@@ -397,6 +398,50 @@ $ docker exec suvextest-api-1 sh -c "which strix docker"
 > **但 `docker compose` 这条路仍未在容器里实测过** —— Kali 上是
 > systemd + 本机 venv 部署的，不是 compose。上面那条"没验证到的"
 > 依旧成立。
+
+> ✅ **2026-10-18 更新：CTF2 解题沙箱对 web 类题放开了网络。**
+>
+> 起因是一道题（`[BJDCTF 2nd]文件探测`）在 `--network none` 的沙箱里跑了
+> **76 轮 / 1857 秒**，手工试了 40 多个路径全落空，模型
+> 最后一句写的是"沙箱无外网，无法用 shell 侧做字典爆破，只能靠
+> `http_request` 逐个 URL 请求"。
+>
+> 但查过镜像才发现：`gobuster` / `ffuf` / `wfuzz` / `nmap` / `sqlmap` /
+> `curl` 全都在 `ctf2-sandbox` 里，连字典都有
+> （`/usr/share/dirb/wordlists/`，`common.txt` 4600 词、`big.txt` 2 万词）。
+> **工具齐全，是网络被关掉了** —— 原设计只给 pwn/网络类开 raw network，
+> `needs_raw_network()` 的分类集合里没有 `web`。
+>
+> 改动见提交 `289b37b`：分类集合加上 `web`、首轮提示补上"沙箱有网 + 怎么
+> 用 gobuster"、系统提示词把"目录探测"从"远端爆破"里摘出来
+> （**找文件名可以，找口令不行**）。
+>
+> 效果（同一道题、同一个模型的对比）：
+>
+> | | 放开前 | 放开后 |
+> | --- | --- | --- |
+> | 轮数 | 76 | **55** |
+> | token | 3,642,761 | **2,003,706** |
+> | 结果 | 未解出 | **解出（平台 verified）** |
+>
+> token 降了 45%，而且解出来了。工具调用也从"每回合逐条
+> `http_request` 盲试"变成"一回合跑几十个变体
+> （`for f in ...; do curl ...; done`）"。
+>
+> ⚠️ 安全边界不在代码里，在 `DOCKER-USER` 链上一组 iptables 规则
+> （已做成 systemd unit 开机自启，见 `deploy/ctf2-egress-rules.sh` 与
+> `deploy/ctf2-egress.service`）。放行**两条**网段，缺一不可：
+>
+> - `117.21.200.0/24` —— 靶机真实 IP，容器内从 `/etc/hosts` 解析到它；
+> - `198.18.0.0/15` —— dasctf 代理网段，宿主 DNS 把靶站域名解析到这里。
+>
+> 只放后者时容器里仍然超时（这个坑踩过一次，模型会以为是"没网"然后去
+> 扫网关找代理，白烧十几个回合）。
+>
+> 已知局限：**挡不住"出公网"** —— Kali 的 DNS 把 `www.baidu.com` 也解析
+> 到 `198.18.0.36`，与靶站同网段，IP 层面分不开。内网与宿主主机是真挡住
+> 的部分。要收紧成"只准连本题靶站"，就把上面前一条换成运行时从
+> `/etc/hosts` 读本次靶站 IP。
 
 ### 2. strix 事件格式：语义映射里有**启发式**取值
 
