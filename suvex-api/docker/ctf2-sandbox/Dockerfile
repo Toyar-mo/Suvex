@@ -200,6 +200,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #    给 shell 工具限时。只靠宿主侧的 subprocess timeout 不够 ——
     #    那杀的是 docker 客户端，容器里的进程会继续跑（见 runner 的说明）。
     coreutils \
+    # ── ★ 可选增强：one_gadget / seccomp-tools 的运行时（2026-10-19 补）──
+    #
+    # 这两个是 **Ruby gem**（不是 pip 包），apt 里只装解释器，
+    # gem 本身在下面的 `RUN gem install` 里装。
+    #
+    # ## 为什么值得占一层
+    #
+    # pwn 题的两种常见形态直接对应它们：
+    #
+    # · **seccomp 沙箱**：题目放行 read/write 而禁掉 execve，要先
+    #   `seccomp-tools dump ./chall` 看清哪些 syscall 能过，才能决定
+    #   写 ORW 链而不是 getshell。没有这个工具，模型只能靠 `objdump`
+    #   反汇编 `prctl` / `bpf` 的调用点去**猜**规则 —— 而猜错规则的
+    #   症状是"ROP 链跑通了但没拿到 shell"，看起来像利用写错了。
+    #
+    # · **one_gadget**：栈溢出只够跳一次时，从 libc 里找一个
+    #   "直接 execve('/bin/sh')" 的地址。手算要找 __malloc_hook 附近的
+    #   固定约束（`rsp+0x40` 为 NULL、`rdx` 为 NULL 等），一个条件
+    #   不满足就白写一次利用。
+    #
+    # ## 为什么用 ruby 而不是找 Python 替代
+    #
+    # 两者都**没有**可用的 Python 替代：`seccomp-tools` 的核心是
+    # BPF 反汇编 + ptrace 注入，`one_gadget` 要扫 libc 里的
+    # lea/mov 指令序列去反推约束。它们都是 Ruby 生态里唯一的实现。
+    #
+    # ⚠️ 实测（2026-10-19）：kali-rolling 的 ruby 是 **3.3.8**，
+    #    `gem install one_gadget seccomp-tools` 两个都能装成
+    #    （one_gadget-2.1.1 / seccomp-tools-1.7.1）。它们落在
+    #    `/usr/local/bin`，而 `USER solver` 的默认 PATH 含那个目录 ——
+    #    已实测 `su solver -s /bin/sh -c 'command -v one_gadget'` 命中。
+    #
+    # ⚠️ seccomp-tools 带 **native extension**，所以 `make` 必须在
+    #    装它之前就位（本文件上面的 `build-essential` 提供）。
+    ruby ruby-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Python 解题环境（venv，独立于系统 python）──────────────
@@ -295,6 +330,33 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
 # 排在前面就没有别的脚本能在它之后把它覆盖掉。
 RUN printf 'export PATH="/opt/venv/bin:$PATH"\n' > /etc/profile.d/00-venv.sh \
     && chmod 0644 /etc/profile.d/00-venv.sh
+
+# ── ★ Ruby 生态的两个 pwn 工具（2026-10-19 补）─────────────
+#
+# `seccomp-tools` 与 `one_gadget` 各自解决什么、以及为什么没有 Python
+# 替代，写在上面 apt 那一段 `ruby ruby-dev` 的注释里。这里只记**取舍**。
+#
+# ## 为什么明知道提示词没点名也要装
+#
+# 提示词第四节承诺的 pwn 工具是 `checksec / cyclic / ROP / gdb / patchelf`
+# —— 那是"能开工"的下限。这两个补的是下限之上、但**很常见**的场景
+# （seccomp 题、只能跳一次的溢出题）。
+#
+# 反过来，`ropper` 是**明确不加**的：它的依赖 `filebytes` 用了
+# Python 3.12 已移除的 `ast.Str`，会让整个构建断掉；而功能上
+# `ROPgadget`（pwntools 自带，已在）已经覆盖。区别在于
+# **能不能装成**，而不在于想不想要 —— 这条边界在 re 镜像的
+# Dockerfile 里也记了一遍。
+#
+# ## 为什么要 `--no-document`
+#
+# 不生成 ri/rdoc。那是给"在本机查 gem 文档"的人用的，而容器里没有
+# 这种使用场景，白占几十 MB。
+#
+# ⚠️ 这一层会**访问 rubygems.org**（apt 那层访问的是镜像源）。
+#    两者都不通时构建会失败 —— 这是刻意的：宁可构建报错，
+#    也不要镜像起来了而工具是空的。
+RUN gem install --no-document one_gadget seccomp-tools
 
 # ── 宿主只读资源挂载点（已定设计决策 2）────────────────────
 #

@@ -21,7 +21,7 @@
 症状因此总是"运行时模型默默卡住、日志看不出原因" —— 它不会报
 "缺 gdb"，它只是每次调试都失败，然后换个方法再试一次。
 
-## 这个脚本做什么（纯静态，不需要 Docker）
+## 这个脚本做什么（默认纯静态，不需要 Docker）
 
   1. 解析两个 Dockerfile 的 `apt-get install` / `pip install` 列表，
      得到「每个镜像实际会装哪些包」；
@@ -51,12 +51,16 @@
 
     python3 scripts/verify_sandbox_tools.py            # 检查，失败退出 1
     python3 scripts/verify_sandbox_tools.py --verbose  # 顺手列出每个镜像有什么
+    python3 scripts/verify_sandbox_tools.py --probe    # ★ 再对真实镜像跑 command -v
 
 ## 局限（写在明处）
 
-  1. **纯静态**：它证明的是"apt/pip 命令里写了这个包"，不是"包真的装
-     成功了、命令真的在 PATH 里"。后者要在镜像构建时 `command -v` 才算
-     数 —— 那一步需要 Docker，放不进这个仓库的 CI（见文件末尾的说明）。
+  1. **默认纯静态**：它证明的是"apt/pip 命令里写了这个包"，不是"包真的
+     装成功了、命令真的在 PATH 里"。
+     `--probe` 补上这一维（需要 Docker），并且能抓到静态解析**天生
+     看不见**的第三种情况：**Dockerfile 改了、镜像没重建**。
+     那一次实测就是这样的 —— `patchelf gdb` 写在 `2de97ce`（2026-10-18），
+     而镜像是 2026-10-12 的，两个命令都不在里面，而静态检查报「pwn ✅」。
   2. **包名 → 命令名**靠 `PACKAGE_COMMANDS` 这张显式表。表里没有的包
      默认「包名 == 命令名」，这个默认对 apt 的大多数工具成立，但
      `netcat-traditional` 这种不成立 —— 所以**新增包时若它提供的命令
@@ -71,8 +75,11 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+import shutil
+import subprocess
 import sys
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 
 # ══════════════════════════════════════════════════════════
@@ -542,15 +549,138 @@ def load_router() -> Router:
 # ══════════════════════════════════════════════════════════
 
 
+# ══════════════════════════════════════════════════════════
+# 镜像实测（可选；需要 Docker，缺失时整段跳过）
+# ══════════════════════════════════════════════════════════
+
+#: 单个镜像实测的默认超时（秒）。`docker run` 冷启通常 1–3 秒，
+#: 给到 60 秒是留给"磁盘很慢"与"本地正好没有这个 tag、要回退"的余量。
+PROBE_TIMEOUT_SEC = 60.0
+
+
+def probe_image(
+    image: str,
+    commands: list[str],
+    *,
+    timeout: float = PROBE_TIMEOUT_SEC,
+) -> dict[str, bool] | None:
+    """在**真实镜像**里对每个命令跑 `command -v`，返回「存在与否」。
+
+    ## 为什么需要这一步（静态解析证明不了的事）
+
+    上面那套解析证明的是「Dockerfile 的 apt/pip 命令里写了这个包」。
+    而下面这两种情况它一个字都看不出：
+
+      1. **包没装成**（依赖断了、源里没有、pip 轮子编译失败）——
+         `ropper` 就是这样：`filebytes` 用了 Py3.12 移除的 `ast.Str`，
+         构建直接断在一行 error 上；
+      2. ★ **Dockerfile 改了、镜像没重建** —— 这一种最阴：仓库里
+         `patchelf gdb \\` 明明写着（`2de97ce`，2026-10-18），而镜像
+         是 2026-10-12 的，两个命令都不在。静态检查报「✅ pwn 全绿」，
+         真实镜像里 `command -v gdb` 是 MISSING，模型每次
+         `gdb.attach()` 都失败而日志上不出现"缺 gdb"。
+
+    这两种都只能靠"对产物本身提问"才能发现，所以这个函数去问镜像。
+
+    ## 返回值的三态是刻意的
+
+      · `dict`  —— 镜像跑起来了，这是每个命令的真结果；
+      · `None`  —— **验不了**（本机没 docker / 镜像还没构建 / 超时）。
+
+    `None` 不许当成"全过"。它的语义是"这一维没有证据"，调用方要把它
+    和"验过且通过"分开报 —— 否则又会回到"看起来在守、其实守不住"。
+
+    ## 为什么一次 `docker run` 跑完所有命令
+
+    每个命令单起一个容器，在 2.8 GB 的镜像上就是 40 次容器创建；
+    而 `command -v` 本身是微秒级的。拼成一条 `sh -c` 只用付一次
+    启动成本。
+
+    ## 为什么用镜像自带的 USER（不 `-u root`）
+
+    `USER solver` 的 PATH 与解题时**完全一致**，而这正是要验的东西：
+    包装在 `/usr/local/bin`、而 solver 的 PATH 不含它是完全可能的
+    （`one_gadget` / `seccomp-tools` 就装在 `/usr/local/bin`）。
+    用 root 验会得出"有"，而解题时是"没有"。
+    """
+    if not commands:
+        return {}
+
+    docker = shutil.which("docker")
+    if docker is None:
+        return None
+
+    # ★ 先确认镜像在**本地**。不做这一步的话，`docker run` 遇到不存在的
+    #   tag 会去 registry 拉 —— 镜像 2.8 GB，网络慢就直接卡到超时，
+    #   而报出来的是"实测超时"，把「还没构建」伪装成「测得慢」。
+    #   这两件事的修法完全不同，必须分开。
+    try:
+        inspect = subprocess.run(  # noqa: S603  —— argv 本地构造
+            [docker, "image", "inspect", f"{image}:latest"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=False,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if inspect.returncode != 0:
+        print(f"   ⚠️ 本地没有镜像 {image}:latest（还没构建？），这一维跳过。")
+        return None
+
+    script = " ; ".join(
+        f'command -v {name} >/dev/null 2>&1 && echo "OK:{name}" || echo "NO:{name}"'
+        for name in commands
+    )
+    argv = [docker, "run", "--rm", "--entrypoint", "sh", f"{image}:latest", "-c", script]
+
+    try:
+        done = subprocess.run(  # noqa: S603  —— argv 是本地构造的，无 shell 介入
+            argv, capture_output=True, text=True, timeout=timeout, check=False
+        )
+    except subprocess.TimeoutExpired:
+        print(f"   ⚠️ 实测 {image} 超时（{timeout:.0f}s），这一维跳过。")
+        return None
+    except OSError as exc:
+        print(f"   ⚠️ 实测 {image} 起不来（{exc}），这一维跳过。")
+        return None
+
+    if done.returncode != 0:
+        # 最常见的原因是"镜像还没构建" —— 那不是工具缺失，是没产物可验。
+        tail = (done.stderr or done.stdout).strip().splitlines()
+        hint = tail[-1] if tail else f"exit {done.returncode}"
+        print(f"   ⚠️ 镜像 {image}:latest 跑不起来（{hint}），这一维跳过。")
+        return None
+
+    result: dict[str, bool] = {}
+    for raw in done.stdout.splitlines():
+        line = raw.strip()
+        if line.startswith("OK:"):
+            result[line[3:]] = True
+        elif line.startswith("NO:"):
+            result[line[3:]] = False
+    if not result:
+        print(f"   ⚠️ 实测 {image} 没有任何输出，这一维跳过。")
+        return None
+    return result
+
+
 @dataclass
 class Finding:
     category: str
     image: str
     missing: list[str]
+    #: 声明里有、但实测镜像里 `command -v` 跑不到 —— 这两类要分开报，
+    #: 因为修法完全不同（前者改 Dockerfile，后者**重建镜像**）。
+    missing_in_image: list[str] = field(default_factory=list)
 
 
-def check(verbose: bool = False) -> list[Finding]:
-    """主体检查。返回所有"缺工具"的发现。"""
+def check(verbose: bool = False, probe: bool = False) -> list[Finding]:
+    """主体检查。返回所有"缺工具"的发现。
+
+    `probe=True` 时额外对**真实镜像**跑一遍 `command -v`
+    （需要 Docker；跑不起来就退化成纯静态，不会因此判失败）。
+    """
 
     router = load_router()
     base_path = router.profiles[router.base_profile]
@@ -594,6 +724,31 @@ def check(verbose: bool = False) -> list[Finding]:
             for i in range(0, len(cmds), 6):
                 print("     " + "  ".join(f"{c:<18}" for c in cmds[i : i + 6]))
 
+    # ── 可选：对真实镜像实测 ──────────────────────────────
+    #
+    # 每个 profile 只起**一次**容器，把所有它需要的命令一次问完。
+    # 结果按 profile 存起来，下面逐分类查表。
+    probes: dict[str, dict[str, bool]] = {}
+    if probe:
+        needed: dict[str, list[str]] = {}
+        for category, required in CATEGORY_REQUIREMENTS.items():
+            bucket = needed.setdefault(router.profile_for(category), [])
+            for name in required:
+                if name not in bucket:
+                    bucket.append(name)
+
+        print("\n── 镜像实测（command -v，需要 Docker）──\n")
+        for profile, names in sorted(needed.items()):
+            started = time.monotonic()
+            result = probe_image(profile, names)
+            elapsed = time.monotonic() - started
+            if result is None:
+                print(f"   {profile:<20} 无证据（旧静态口径，见上面的告警）")
+                continue
+            probes[profile] = result
+            hit = sum(1 for ok in result.values() if ok)
+            print(f"   {profile:<20} {hit}/{len(result)} 个命令命中（{elapsed:.1f}s）")
+
     findings: list[Finding] = []
     print("\n── 能力契约 ──\n")
     header = f"{'分类':<12} {'镜像':<20} {'需要':<6} {'结果':<8} 缺什么"
@@ -609,10 +764,33 @@ def check(verbose: bool = False) -> list[Finding]:
             )
         available = images[profile].commands()
         missing = [c for c in required if c not in available]
-        status = "✅" if not missing else "❌"
-        print(f"{category:<12} {profile:<20} {len(required):<6} {status:<8} {', '.join(missing) or '—'}")
+
+        # ★ 静态说"有"、实测说"没有" —— 这一类静态检查**永远**看不见，
+        #   而它恰恰是实际踩到的那个（Dockerfile 改了、镜像没重建）。
+        #   只有 probe 真的跑起来了才谈得上"没有"，否则这一栏是"未知"。
+        probed = probes.get(profile)
+        vanished = (
+            [c for c in required if c not in missing and probed.get(c) is False]
+            if probed is not None
+            else []
+        )
+
+        notes: list[str] = []
         if missing:
-            findings.append(Finding(category=category, image=profile, missing=missing))
+            notes.append("未声明：" + ", ".join(missing))
+        if vanished:
+            notes.append("声明有、镜像里没有：" + ", ".join(vanished))
+        status = "✅" if not notes else "❌"
+        print(f"{category:<12} {profile:<20} {len(required):<6} {status:<8} {'; '.join(notes) or '—'}")
+        if notes:
+            findings.append(
+                Finding(
+                    category=category,
+                    image=profile,
+                    missing=missing,
+                    missing_in_image=vanished,
+                )
+            )
 
     return findings
 
@@ -624,33 +802,66 @@ def main() -> int:
         action="store_true",
         help="列出每个镜像实际提供的命令（排查误报时用）",
     )
+    parser.add_argument(
+        "--probe",
+        action="store_true",
+        help=(
+            "额外对真实镜像跑 command -v（需要 Docker）。"
+            "能抓到静态检查看不见的一类：Dockerfile 声明了、镜像里没有。"
+        ),
+    )
     args = parser.parse_args()
 
-    findings = check(verbose=args.verbose)
+    findings = check(verbose=args.verbose, probe=args.probe)
 
     print()
     if findings:
+        declared_gap = [f for f in findings if f.missing]
+        image_gap = [f for f in findings if f.missing_in_image]
         print(f"❌ {len(findings)} 个分类缺工具：\n")
-        for f in findings:
-            print(f"  · {f.category}（{f.image}）缺：{', '.join(f.missing)}")
-        print(
-            "\n   两种修法（按情况选）：\n"
-            "     1. 镜像里该有的 → 加到对应 Dockerfile 的 apt/pip 列表；\n"
-            "     2. 提示词里写错了/不该承诺的 → 改 prompts/ctf2_system.md，\n"
-            "        并同步 CATEGORY_REQUIREMENTS。\n"
-        )
+        for f in declared_gap:
+            print(f"  · {f.category}（{f.image}）Dockerfile 里就没声明：{', '.join(f.missing)}")
+        for f in image_gap:
+            print(
+                f"  · {f.category}（{f.image}）Dockerfile 声明了、"
+                f"**镜像里没有**：{', '.join(f.missing_in_image)}"
+            )
+        print("\n   对应的修法：\n")
+        if declared_gap:
+            print(
+                "     1. 镜像里该有的 → 加到对应 Dockerfile 的 apt/pip 列表；\n"
+                "     2. 提示词里写错了/不该承诺的 → 改 prompts/ctf2_system.md，\n"
+                "        并同步 CATEGORY_REQUIREMENTS。"
+            )
+        if image_gap:
+            print(
+                "     3. ★ 「声明有、镜像里没有」只有一种修法：**重建镜像**。\n"
+                "        仓库里的 Dockerfile 已经不是镜像的来源了 ——\n"
+                "            docker build -f docker/<镜像>/Dockerfile -t <镜像>:latest .\n"
+                "        静态检查永远看不见这一类，先跑 --probe 再谈「通过」。"
+            )
+        print()
         return 1
 
     print(
         "✅ 每个分类需要的工具，在它被路由到的镜像里都有声明"
         f"（{len(CATEGORY_REQUIREMENTS)} 个分类）。\n"
     )
-    print(
-        "⚠️ 这个脚本证明的是「Dockerfile 的 apt/pip 命令里写了这个包」，\n"
-        "   **不**证明「包真的装成功了、命令真的在 PATH 里」。后者要在\n"
-        "   镜像构建时 `command -v` 才算数 —— 那一步需要 Docker，不在\n"
-        "   CI 里跑（镜像构建本来就会暴露安装失败）。"
-    )
+    if args.probe:
+        print(
+            "✅ 并且 `--probe` 在真实镜像里逐个 `command -v` 过 —— 声明与产物一致。\n"
+        )
+    else:
+        print(
+            "⚠️ 这个脚本证明的是「Dockerfile 的 apt/pip 命令里写了这个包」，\n"
+            "   **不**证明「包真的装成功了、命令真的在 PATH 里」。有两种情况\n"
+            "   静态解析天生看不见：\n"
+            "     · 包没装成（依赖断掉 / 源里没有 / 轮子编译失败）；\n"
+            "     · ★ Dockerfile 改了、**镜像没重建** —— 仓库里写着 `patchelf gdb`\n"
+            "       的那次提交是 2026-10-18，而镜像是 2026-10-12 的，两个命令都\n"
+            "       不在里面，而这次检查报的是「pwn ✅」。\n"
+            "   加 `--probe` 就会去问镜像本身（需要 Docker）。\n"
+        )
     return 0
 
 
