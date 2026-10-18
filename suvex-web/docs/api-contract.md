@@ -970,6 +970,7 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | --- | --- | --- |
 | `Ctf2ChallengeStatus` | `unsolved` \| `environment_ready` \| `solving` \| `candidate_ready` \| `submitting` \| `solved` \| `failed` | 一道题**在我们这边**的推进状态 |
 | `Ctf2SubmissionStatus` | `pending` \| `correct` \| `wrong` \| `rejected` \| `failed` | 一次 flag 提交的结果 |
+| ↳ ⚠️ `rejected` | **定义了，但运行时不会产生** | 见下方 §2.10 的说明与 §3.19.2 |
 | `Ctf2EnvironmentStatus` | `stopped` \| `starting` \| `ready` \| `error` \| `expired` | 题目环境（容器）的生命周期 |
 | `Ctf2SubmitMode` | `safe` \| `auto` | 提交策略 |
 | `Ctf2SandboxProfile` | `ctf2-sandbox` \| `ctf2-sandbox-re` | 用哪个沙箱镜像 |
@@ -994,11 +995,23 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 > | `wrong` | 请求**真的到了平台**，平台判定这个 flag 不对 | **消耗错误提交额度** |
 > | `rejected` | **我们自己在本地就拦下了**，请求根本没发出去 | 不消耗任何额度 |
 >
-> `rejected` 的四种成因：超出该题错误提交上限、flag 形状不符、
-> `safe` 模式下无人确认、以及 §3.19 里 `confirm` 的前置条件不满足。
->
 > 合并的代价是实打实的：`rejected` 若记成 `wrong`，"这道题我还剩
 > 几次机会"会被本地拦截白白扣掉 —— 而用户看到的是数字自己变小了。
+> 这条**设计意图不变**，且代码里已经靠"只有 `wrong` 进
+> `CTF2_CREDITED_WRONG_STATUSES`"（`app/core/vocab.py:742`）钉住了。
+>
+> **⚠️ v0.45 更正：`rejected` 这个取值在运行时从来不会出现。**
+>
+> 本地拦截**确实存在**，但它不写一条 `rejected` 的提交行，而是
+> **直接抛 HTTP 异常**，响应体是错误信封 `{"error": {...}}`，
+> 压根不是 `Ctf2SubmitOut`。所以前端不会、也不该去等一个
+> `status === 'rejected'`（详见 §3.19.2）。
+>
+> 为什么保留这个枚举值而不是删掉：数据库层的 CHECK 约束与迁移
+> （`alembic/versions/20260928_1010_e4a7b2c9d135_ctf2_module.py:260`
+> 允许 `rejected`）已经假定它可能存在，且 `already_submitted` 的
+> 语义（"本地拦下的不算已提交"）也依赖这个概念存在。删枚举要改
+> 迁移，而这一轮只做文档对齐 —— 记为待办，不在这里动。
 
 > **`expired` 与 `error` 分开**：CTF2 侧的环境**有租期**，到期后
 > `accessUrl` 会变成连不上的死地址。那是**正常老化，不是故障** ——
@@ -3031,19 +3044,76 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 #### 3.19.2 ★ 提交前的前置校验
 
 `POST /ctf2/challenges/{challengeId}/submit` 在真正发包**之前**会拦下几类
-情况，命中时返回的 `status` 是 **`rejected`**（本地拦下，不消耗额度）：
+情况。**⚠️ 拦住时不是返回 `status: rejected`，而是抛 HTTP 异常** ——
+响应体是错误信封 `{"error": {"code", "message", "details"?}}`，
+不是 `Ctf2SubmitOut`。前端要按 `catch` 分支处理，不能按 `status` 分支。
 
-| 条件 | 为什么拦在本地 |
+拦截面在 `service.confirm_submit`（`app/ctf2/service.py:2772`），
+**顺序是有讲究的**，四条断言按下面的次第执行，命中即抛、不再往下：
+
+| # | 条件 | 抛什么 | 为什么拦在本地 |
+| --- | --- | --- | --- |
+| 1 | 平台没有这条提交路由（赛事题，实测全 404） | `409` `CTF2_COMPETITION_SUBMIT_UNSUPPORTED` | 发出去也注定 404，不如直说 |
+| 2 | 题已解出 / 正在处理 / 状态不允许 | `409` `CTF2_ALREADY_SOLVED` / `CTF2_ALREADY_RUNNING` / `CTF2_NOT_RESOLVABLE` | 再发一次会**实打实扣额度** |
+| 3 | 答案形状明显不可能是答案 | `400` `VALIDATION_FAILED`，`details.flag = "格式不正确"` | 我们本地就能回答，省一次外部请求 |
+| 4 | 已提交过 / 错误提交额度用尽 | `409` `CTF2_SUBMIT_REFUSED` | 见 §3.19.1 的额度说明 |
+
+> **为什么前三条的顺序不能换**（逐条都是踩过的坑，代码里有原话）：
+>
+> · **路由存在性放最前**（`_assert_submission_supported`）：先做格式校验
+> 再去拒绝，会让用户以为"改一下 flag 就能交"，而真正的问题是
+> "这个接口在平台上根本不存在" —— 两句里只有后一句可行动。
+> · **状态断言放第二**（`_assert_resolvable`，2026-10-10 才补上）：这条
+> 之前是**漏的**，而 `runner` 那边的兜底只是"不写坏状态"（避免撞 CHECK
+> 约束得到 500），**并没有阻止请求发出去**。所以对一道已解出的题再提交
+> 错误 flag，平台会回 `WRONG`，`wrong_submission_count += 1` 实打实生效。
+> · **能力先于状态**：先回答"这条路存不存在"（与状态无关），再回答
+> "现在能不能做"。反过来会让一道赛事题先被报"状态不对"。
+>
+> 用 `409` 而不是 `400` 也是刻意的：这不是"参数写错了"，是"当前状态
+> 或当前能力下不允许"。前端对两者的处理不同 —— 400 提示改输入，
+> 409 提示等状态变化或去换路子。
+
+> **★ 这里不检查 `safe` 模式的"无人确认"** —— 因为**这个端点本身就是
+> 那个人工确认点**（`router.submit_flag` 的 docstring：「这个端点是
+> safe 模式的全部意义所在」）。`decide_submission` 返回 `hold` 时
+> `confirm_submit` 直接放行；`hold` 只对 **auto 路径**（`_handle_candidates`）
+> 有意义 —— 那里 `hold` 会把题推进到 `candidate_ready` 并 emit
+> `candidate_ready` 事件，而不是报错。
+>
+> 所以 `submit` 端点的返回**永远是 2xx + `Ctf2SubmitOut`**，其 `status`
+> 只可能是 `pending` / `correct` / `wrong` / `failed` 四者之一：
+
+| 返回值 | 何时出现 |
 | --- | --- |
-| 超出该题错误提交上限（`remainingWrongSubmissions <= 0`） | 再发就是白扣一次额度 |
-| 在 `safe` 模式下无人确认 | 见 §3.19.1 |
-| flag 形状明显不可能是答案 | 省一次外部请求 |
+| `correct` | 平台判定正确且给了回执 id |
+| `wrong` | 平台判定错误（**消耗额度**） |
+| `pending` | 平台表示正确但没给回执 id / 平台响应无法解析 / 未给明确判定 |
+| `failed` | 传输层失败（超时、5xx 用尽重试），我们确定请求没有生效 |
+
+> **⚠️ `failed` 里有一档不是"失败"**：平台回 `400 ALREADY_SOLVED`
+> （这题本队早就解出过）时，`status` 仍是 `failed`，但
+> `_advance_challenge` 会把它**翻译成"没得做"而不是"我们失败了"** ——
+> 题目状态回到 `unsolved`（若本来就 `solved` 则保持），
+> `last_error` 写平台已解出的原话，而**不动 `candidate_flag`**
+> （那个候选还没被判定过，它不是错的）。见
+> `submit_candidate`（`app/ctf2/runner.py:3919`）里 2026-10-01 的实测记录。
+
+> **⚠️ `pending` 那一档值得单说**：平台回"正确"但**没给提交回执 id**
+> 时，代码记 `pending` 而不是 `correct`，理由写在
+> `interpret_submit`（`app/ctf2/runner.py:4098`）里 —— "无法确认这次
+> 提交真的入账"。宁可留一条待确认的记录让人去看，也不要猜成成功
+> （猜成成功会让用户以为这题结了，而实际上没结）。
 
 > **⚠️ 它**不再**要求"答案长得像 flag"。** 这条在 v0.21 改过：
 > 判据从"像不像 flag"改成"**是不是明显不可能**"。理由是 CTF 里有大量
 > 非 `flag{...}` 形状的答案（一段口令、一个文件名、一串数字），
 > 而按形状拒绝会把正确答案挡在门外 —— 那是**假阴性**，
 > 而假阴性在这个场景里比假阳性贵得多（用户会以为 agent 没解出来）。
+>
+> `validate_answer`（`app/ctf2/runner.py:1910`，旧名 `validate_flag`）
+> 实际只拦三件事：**空/纯空白**、**超长**、**像 flag 但正文是占位符**
+> （`flag{...}` 这种字面省略号）。方向是"宁可放过，不可错杀"。
 >
 > 名字里的 `flag` 是历史遗留，它现在的处理对象是**任意答案**。
 
@@ -3739,3 +3809,4 @@ npm run verify:all        # 上面两个 + 报告预览导出一致性
 | v0.42 | **出站客户端一律不读环境变量代理**（触发点：RedTeam 抓出原清单漏了一处 —— 清单是搜 `httpx.AsyncClient(` 得到的，而 **`app/scans/reachability.py` 用的是模块级 `httpx.get(...)`**，按形态搜的方法在设计上就看不见它；**而漏的这处目标恰是最典型的用户可控输入**：`POST /scans` 的 `target`，`scan` scope 即可触发）。**问题**：`httpx` 的 `trust_env` **默认 `True`** —— 每个客户端都会读环境里的 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`（以及 `.netrc`）并把请求交给那个代理。实测（本机起真转发代理，判据是**代理收到的请求行**）：默认配置下代理收到 `GET http://rt-meta.test:8099/ HTTP/1.1`（真的改道），`trust_env=False` 则不经过。**修法**：9 处全部显式 `trust_env=False`，**但理由分两档**（只按"是不是 SSRF 面"筛会漏掉后三处）—— **A 档 6 处防 SSRF**：`ctf2/adapters/transport.py`、`ctf2/adapters/probe.py`、`providers/llm.py` 的 `probe()`、`ctf2/runner.py` 的 `LlmGateway.chat`、`ctf2/runner.py` `solve()` 里那个 `http`（只喂 `_tool_http_request`，已有 `guard_tool_url` + `assert_allowed_target` 白名单）、**`scans/reachability.py` 的 `_probe()`**；**B 档 3 处防凭据经代理泄漏**：`ctf2/client.py`（发 PAT）、`ctf2/attachments.py`（带 `Authorization` token）、`arena/client.py`（发 `X-Agent-AccessKey`；⚠️ `app/arena` 生产路径无调用者=死代码，优先级最低）。⚠️ **A 档 6 处 = RedTeam 说的"8 处"**（它把原清单 7 处 + 漏的 1 处 = 8，再加它自己找的 `providers/llm.py` 那处 sync 的才是本表 9 处；口径不一致是没对齐编号，以本表为准）。⚠️ **一处有意保留的取舍**：`providers/llm.py` 那处若用户在**公司代理后面**跑本地 Ollama，`trust_env=False` 会让探测连不上（不再走 `HTTP_PROXY`）—— 与 `SUPEX_ALLOW_PRIVATE_LLM_ENDPOINTS` 同类取舍，**已在代码注释写明**，正解是加显式 proxy 配置项传给 `proxy=`，而不是打开 `trust_env`（那等于把"谁来收这次请求"交给环境）。**防回归**：新增 `tests/test_outbound_trust_env.py`（11 例）—— 一条 **AST 扫全 `app/`**（要求每处出站客户端显式写 `trust_env`，将来新增第 10 个漏写会直接失败）、一条逐档逐文件取值断言、一条行为验证、一条按调用参数钉住 `_probe()`。⚠️ 取值走 AST 而非字符串：**第一版字符串断言被注释骗过了**（客户端上方都有解释 `trust_env=False` 的注释，删掉参数后字符串断言仍通过），反向验证时实测踩到，已改 `ast.literal_eval`。 |
 | v0.43 | **畸形 `Location` 的异常逃逸修复（F-08），并撤回上一轮的错误判断**。Review 最初报"越界端口 `Location` 抛 `ExceptionGroup[OverflowError]`，调用点接不住 → 500"，我在 v0.41 里判它**不成立** —— **那个判断是错的，错因是我在错误的测试环境上取证**：同一份脚本、同一个 httpx 0.28.1，**本机 Windows** 上 `httpx.AsyncClient` 对 `http://127.0.0.1:99999/x` 返回 **502**（连异常都不抛）、`anyio.connect_tcp` 抛 `OSError`，而 **Kali（生产同款 Linux）** 上冒出 **`ExceptionGroup[OverflowError]`**。⚠️ 这个坑主管也踩过一次（他先据 Windows 结果否掉 Review，后在 Kali 上认错）—— **硬规矩：网络栈 / 异常类型 / 平台行为的验证一律在 Kali 做，本机 Windows 结论不可采信**。在 Kali 上铺开测 28 个畸形 `Location`，共找出 **9 条逃逸路径、两个异常族**：① **端口越界**（`:99999` / `:65536` / `:70000` / `:100000` / `:4294967296` / `https://…:99999` / `http://:99999`）→ `ExceptionGroup[OverflowError]`（anyio task group 包住 `socket.connect` 的 `OverflowError`）；② **协议异常**（`javascript:alert(1)` / `data:text/html,x`）→ **`httpx.InvalidURL`**（直接继承 `Exception`，**不是** `HTTPError` 子类）。两者调用点（`ctf2/adapters/transport.py`、`probe.py` 的 `except httpx.HTTPError`）都接不住 → 用户看到 500。**修法（选"在 `request_same_host` 里拦成 `Ctf2Error`"，不选"放宽 `except`"）**：`app/ctf2/adapters/redirect.py` 新增 `_check_port()`，在 `_next_url()`（Location 指过来的）与循环体（第一跳 URL 由 `base_url + path` 拼成，实测把 base_url 配成 `:99999` 同样逃逸）两处拦端口越界；并在 `client.request` 外包一层 —— ⚠️ **httpx 自己也会解析一次 `Location`**：`_send_handling_redirects` 里 `_build_redirect_request` 排在 `if follow_redirects:` **之前**，所以 `javascript:` 那类在 `client.request()` 内部就炸、我们的 `_next_url` 根本轮不到执行；包装里把 `InvalidURL` / `ExceptionGroup` 转成 `Ctf2Error`，**但只转"地址/网络层面"的叶子异常**（`OSError` / `ArithmeticError` / `ValueError` / httpx 的 URL 与传输异常），编程错误照旧上抛。**为什么这样选**：① 贴合本模块原有形状（"逐跳校验、不合格抛 `Ctf2Error`"），`probe.py` 已经会优雅跳过不合格端点；② 放宽 `except` 要在**每个**调用点各改一次，而"漏改某一处"正是这个缺陷的性质（本轮就漏了 `_probe()` 那处）；③ 放宽到 `BaseExceptionGroup` 会连带吞掉编程错误（task group 会把我们自己的 bug 一起包起来）。⚠️ **我在这批里犯的两个错，都记下来**：① 第一版协议判据写成 `scheme not in ("http","https")`，而**相对地址**（`/final`）的 `scheme` 是**空串**、那是合法的 → 实测 **6 个既有用例挂掉**；改成 `scheme and scheme not in (…)`。② 同样地，`if target.scheme and not target.host` 里的 `target.scheme and` 不能省（相对地址的 `host` 也是空串，要留给 `join` 补全），省掉会把 `/final` 拗成错误地址。**防回归**：`tests/ctf2/test_redirect_guard.py` 加 15 条畸形 `Location` 参数化用例 + 1 条**反向闸**（相对地址必须仍被跟随，防"把什么都拒掉"的实现）+ 2 条端口越界断言（`Location` 与 `base_url` 各一）。**逐层反向验证**：把两层护栏**都**去掉 → 9 条逃逸全部重现（`ExceptionGroup` ×7 + `InvalidURL` ×2）；装回 → **0 逃逸**、30 条 redirect 用例全绿。⚠️ 只去掉 `_check_port` 一层时仍是 0 逃逸（两层互为备份），所以反向验证必须**同时**去掉两层才有意义。 |
 | v0.44 | **事件来源补齐：8 种事件类型第一次全都有来源**（触发点：替身后端只覆盖了成功路径，契约 §2.5 的 8 种里 strix 侧只有 2 种有来源，另外几种的分支一直躺在代码里没人走）。**① 推翻 v0.5 记下的一条结论**：那里写"8 种里有 4 种在 strix 侧没有对应来源"（`poc_generated` / `verified` / `blocked` / `completed`），并说"外部工具根本没有对应的结构化信号"。**这条是错的**，来源一直都在：`poc_generated` ← `update_vulnerability_report` 成功且 `fields` 带 `poc_script_code`；`verified` ← 同一工具 `fields.confidence == "high"`；`blocked` ← `wait_for_user`（docstring 原话 "Hand control to the user and wait for their reply. This is the ONLY way to yield to the user."）。★ **错因值得单独记**：当时是**只看了 `strix/tools/` 的目录名**就下的结论 —— 目录名里没有 `report_update` 之类的名字，于是判成"没有信号"。而信号在 `reporting/tool.py` 的 `fields` 参数里（`fields` 是自由字典，目录名看不出来）。**"没找到"与"不存在"不是一回事**，前者只能说"以当时的查法没找到"。**② `verified` 为什么挂在 `update_` 而不是 `create_` 上**：一次工具调用**只能产出一条事件**（`source_row_id` 同时是幂等键，`(scan_id, source_row_id)` 上有部分唯一索引），而 `create_vulnerability_report` 已经映射成 `discovery` —— 把它改成 `verified` 会**丢掉发现本身**，是拿一个已有映射去换一个新映射，净亏。而 `update_vulnerability_report` 正是 agent **回去复核已有发现**的地方，"确认"这个动作本来就发生在那里。**③ `poc_script_code` 是带 markdown 围栏存的**（`report/writer.py` 的 docstring 原话：agent-generated code fields are stored wrapped in a markdown fence carrying the language），它自己的每个消费者都先拆围栏（TUI 的 `ParseFencedCode`、viewer 的 `parseFencedCode`、PDF 的 `_strip_code_fence`）—— **落库侧此前不拆**，于是围栏行连同 ```python 一起进了 `poc_code`。新增 `app/core/text.split_fenced_code`（正则照抄 strix 自己那份，不另写一个近似的），`strix_vulns` 与 `strix_events` **共用同一份**：同一个形状由上游单方面定义，两处各写一份必然会漂移，而漂移的那一侧只在真实扫描里才暴露。围栏给了语言就用围栏的，围栏没说才退回 `_poc_language` 的启发式。**④ 替身后端补齐**（`app/scans/runner.py` 的 `_FAKE_SCRIPT`）：三层 agent 树（root → recon / exploit / verify）、一个**真的失败了的** agent（名册 `errors` 里有值 ⇒ 强制落 `FAILED`，这条分支此前**没有任何测试走过**）、5 档 severity 各一条、上述三条真实工具调用。★ 替身**不是 mock**：它同样是真的子进程带真的孙进程，所以队列、进程监督、杀进程树、退出码解释这些逻辑全都在真跑。**⑤ 产物形状必须照着源码写，不能照着"看起来合理"写** —— 这里踩过两次：`create_vulnerability_report` 的参数里**根本没有 `severity`**（由 `cvss_breakdown` 算出来），而 `poc_script_code` 是带围栏的。两处都曾按印象写错，**而错的产物会让解析层的测试"通过"**，因为测试与替身用的是同一个错误假设。**⑥ 新增** `tests/test_fake_backend.py`（22 条）+ `tests/test_text_sanitize.py` 补 5 条围栏用例；反向验证打坏三处（`wait_for_user` 分支、名册 `errors`、围栏拆分），对应 6 条用例变红，恢复后逐字节一致。 |
+| v0.45 | **§3.19.2 与代码对齐：`rejected` 这个 status 运行时不产生**（触发点：做 CTF2 解题能力基线时顺手对账，发现契约把"本地拦下"描述成 `status: rejected`，而代码里是**抛 HTTP 异常**）。**穷举证据**：全仓 `Ctf2Submission.status` 的写入点只有 **3 处** —— `runner.py:3961` 落库初始值 `pending`、`runner.py:4035` 建客户端失败改写 `failed`、`runner.py:4085` 回写 `interpret_submit()` 的返回值；而 `interpret_submit`（`runner.py:4098`）的**全部 5 个 return 只产出** `pending` / `correct` / `wrong` / `pending` / `pending`；`_advance_challenge`（`runner.py:4178`）只分 `correct` / `wrong` / `failed` 三支；`grep -rn "Ctf2SubmissionStatus.REJECTED" app/` **零命中**。★ 但**概念**是对的、也确实用着：`CTF2_CREDITED_WRONG_STATUSES`（`app/core/vocab.py:742`）只有 `wrong` 一个成员，"本地拦下的不算额度、也不算已提交"这条语义由 `already_submitted()` 实现，并有 `tests/ctf2/test_runner.py:356` 钉住 —— **设计意图成立，只是它不通过 `rejected` 这个取值表达**。**改了三处**：① §2.10 枚举表加一行标注"定义了但运行时不产生"；② §2.10 那段 `rejected` vs `wrong` 的说明保留设计意图，补一段更正（并说明**为什么这轮不删**这个枚举值：删要改迁移 `alembic/versions/20260928_1010_e4a7b2c9d135_ctf2_module.py:260` 的 CHECK 约束，记为待办而非顺手做）；③ **§3.19.2 整节重写** —— 原文写"命中时返回的 `status` 是 `rejected`"，实际是**四条断言按序抛 4xx**（`409 CTF2_COMPETITION_SUBMIT_UNSUPPORTED` → `409 CTF2_ALREADY_SOLVED`/`CTF2_ALREADY_RUNNING`/`CTF2_NOT_RESOLVABLE` → `400 VALIDATION_FAILED` → `409 CTF2_SUBMIT_REFUSED`），响应体是错误信封 `{"error": {...}}` 而**不是** `Ctf2SubmitOut`。★ 重写时挖出两条原文没写对的事实：**其一，"`safe` 模式下无人确认"根本不由这个端点拦** —— `submit` 端点**本身就是那个人工确认点**（`router.submit_flag` 的 docstring 原话「这个端点是 safe 模式的全部意义所在」），`decide_submission` 返回 `hold` 时 `confirm_submit` 直接放行；`hold` 只对 **auto 路径**（`runner.py:5333` 的 `_handle_candidates`）有意义，那里 `hold` 是推进到 `candidate_ready` + emit 事件，**不是报错**。**其二，`submit` 端点的返回值只可能是 `pending`/`correct`/`wrong`/`failed` 四者之一** —— 已补进表格，并单列 `pending` 里最反直觉的一档：平台回"正确"但**没给回执 id** 时记 `pending` 而非 `correct`（`interpret_submit` 原话"无法确认这次提交真的入账"）。**⚠️ 连带发现、本轮不动**：① `suvex-web/src/data/ctf2.ts:92` 的 `rejected: '本地未提交'` 标签与 `Ctf2SubmissionStatus` 类型仍带着这个取值，且 `SUBMISSION_STATUS_LABEL` **全仓无使用点**（`grep` 只命中定义处）—— 是死代码，但删它属于代码改动、不在"只补文档"范围内；② `ScansPage.tsx:403` 那个 `r.status === 'rejected'` 是 `Promise.allSettled` 的 **PromiseStatus**（`fulfilled`/`rejected`），与 CTF2 提交状态**恰好同名但无关**，别把两者当同一件事。 |
