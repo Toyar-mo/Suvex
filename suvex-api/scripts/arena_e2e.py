@@ -203,10 +203,17 @@ async def solve(
     allow_network: bool,
     max_turns: int,
     llm: LlmCredentials | None = None,
+    transcript: list[str] | None = None,
 ):
     """在沙箱里让模型解这道题（复用与平台无关的那套引擎）。
 
     `llm` 给定时直接用这份凭据，否则按 load_provider() 的顺序去找（环境变量 → providers 表）。
+
+    `transcript` 给定时，解题过程的每一轮都会被追加进去（原文，含工具的
+    完整输出）。**基线必须留下它**：只记"几回合、过没过"的话，一道题失败
+    了也没法回答"是模型不会，还是工具装错了、提示词写歪了、靶机连不上" ——
+    而那三个问题的修法完全不同。代价是可能很大（20 轮的 shell 输出），
+    所以由调用方决定落不落盘、落到哪。
     """
     creds = llm or load_provider(provider)
     model, api_key, base_url = creds.model, creds.api_key, creds.base_url
@@ -214,6 +221,21 @@ async def solve(
     log(f"④ 用模型 {label}（{model}）")
 
     profile = solver.profile_for_category(exercise.category)
+
+    # ★ 网络策略必须和正式 worker 一致（`runner.py:4406` 就是这么写的），
+    #   不能一律 `--network none`。
+    #
+    #   pwn 要直连靶机、web 要做目录探测（镜像里本来就装着 gobuster / ffuf /
+    #   nmap 和 4600 词的 dirb 字典）。隔离网络下这些工具**一次都用不上** ——
+    #   实测过一道需要爆破隐藏入口的题跑了 76 轮、手工猜了 40 个路径全是 404，
+    #   模型的复盘第一句是「沙箱无外网…只能靠 http_request 逐个 URL 请求」。
+    #   那是配置问题，不是能力问题；拿这种数据当基线，会把"装错了"测成"不会"。
+    #
+    #   `allow_network` 保留为**额外**强制放开（比如将来某类题需要出公网）。
+    raw_network = allow_network or solver.needs_raw_network(exercise.category)
+
+    attachments = download_attachments(exercise)
+
     spec = solver.SolveSpec(
         challenge_id=f"arena-{exercise.exercise_id}",
         title=exercise.name,
@@ -223,7 +245,7 @@ async def solve(
         access_urls=tuple(
             f"{e.connect_host()}:{e.connect_port(p)}" for e in exercise.endpoints for p in e.ports
         ),
-        attachments=download_attachments(exercise),
+        attachments=attachments,
         llm_model=model,
         llm_api_key=api_key,
         llm_api_base=base_url,
@@ -232,7 +254,7 @@ async def solve(
         mode="auto",
         max_turns=max_turns,
         max_wrong_submissions=3,
-        network_isolated=not allow_network,
+        network_isolated=not raw_network,
         cpus=None,
         memory_mb=None,
     )
@@ -241,12 +263,38 @@ async def solve(
     sandbox = solver.SandboxContainer(
         name=f"arena-e2e-{exercise.exercise_id}",
         image=image,
-        network_isolated=not allow_network,
+        network_isolated=not raw_network,
         extra_env={"PWNLIB_NOTERM": "1"},
+        # ★★ 附件必须**同时挂进容器**，不能只下载到宿主。
+        #
+        #   `download_attachments()` 只负责把文件落到宿主目录；容器里能看见
+        #   它们，靠的是 `docker run -v <dir>:/work/attachments:ro`，而这个挂载
+        #   由 `SandboxContainer(attachments_dir=...)` 决定（`runner.py:1084`，
+        #   且要求目录 `is_dir()` 才挂）。正式 worker 是这么传的
+        #   （`runner.py:5092`），这里漏了整整一次基线。
+        #
+        #   漏传的现场（2026-10-22 transcript-1001，54470 字节）：
+        #     [turn 1] 模型第一步就 `ls -la /work/attachments` + `unzip` →
+        #              `No such file or directory`
+        #     [turn 2] `find / -name 'source.zip'` → 空
+        #     [turn 3] `ls -la /opt/host-resources` → 空目录
+        #     之后 20 轮全在找一个不存在的文件，候选 0。
+        #
+        #   那不是"模型不会解"，是"题目说给附件、容器里没有"。拿这种数据当
+        #   基线，等于用一次配置事故去否定模型能力。
+        #
+        #   目录取 `attachments[0].parent` 而不是自己拼 `ATTACH_DIR / id`：
+        #   下载逻辑哪天换了布局（比如按名字分桶），这里不用跟着改。
+        #   没有附件时传 None —— 别挂一个空目录，那会让模型以为题目有附件。
+        attachments_dir=attachments[0].parent if attachments else None,
     )
     gateway = solver.LlmGateway(model=model, api_key=api_key, base_url=base_url, label=label, kind=kind)
 
-    log(f"④ 启动沙箱（镜像 {image}，网络 {'放开' if allow_network else '隔离'}）")
+    log(
+        f"④ 启动沙箱（镜像 {image}，"
+        f"网络 {'放开' if raw_network else '隔离'}"
+        f"{' [该分类默认放开]' if not allow_network and raw_network else ''}）"
+    )
     sandbox.start()
     try:
         outcome = await solver.solve_in_sandbox(
@@ -254,6 +302,7 @@ async def solve(
             sandbox=sandbox,
             gateway=gateway,
             system_prompt=PROMPT.read_text(encoding="utf-8"),
+            transcript=transcript,
         )
     finally:
         sandbox.destroy()
