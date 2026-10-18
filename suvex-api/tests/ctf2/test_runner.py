@@ -3089,8 +3089,41 @@ def test_read_error_is_retryable() -> None:
     )
 
 
+def test_remote_protocol_error_is_retryable() -> None:
+    """★★ `RemoteProtocolError` 必须在重试列表里 —— 同 `ReadError`，一次断连作废整道题。
+
+    ## 这条守的是一个真实事故（2026-10-17，实测）
+
+    `[BJDCTF 2nd]文件探测`（WEB，静态目录探测）：模型已经跑到第 39 轮、
+    花了 **1611 秒（27 分钟）** 在逐个试站点的静态路径 —— 一次
+    `RemoteProtocolError` 让这一切作废。日志原话：
+
+        CTF2 解题结束：turns=39 candidates=0
+        error=调用 LLM 失败（RemoteProtocolError）：Server disconnected without sending a response
+
+    根因与 `ReadError` 那条一模一样：它是 `httpx.HTTPError` 的子类，
+    但**不在重试元组里**，于是落到 `except httpx.HTTPError` 分支被直接抛出。
+
+    ## 为什么它该重试
+
+    `Server disconnected without sending a response` 的语义是：连接建立了、
+    请求发出去了，服务端在回应写完之前关掉了连接。典型原因是服务端
+    过载，或 keep-alive 空闲连接被对端先关。两种情况**换一条连接重试
+    大概率就好**，而代价只是几百毫秒到几秒。
+
+    反例（不该重试、也不该被这条用例逼进来）：`httpx.UnsupportedProtocol`
+    是 URL 写错、`httpx.LocalProtocolError` 是请求体有问题 —— 重试无用。
+    """
+    import httpx
+
+    assert httpx.RemoteProtocolError in runner._LLM_RETRYABLE, (
+        "★ RemoteProtocolError 不在重试列表里 —— 一次断连会作废整道题。"
+        "见本用例 docstring 里 2026-10-17 的实测事故。"
+    )
+
+
 def test_retryable_set_covers_the_transient_failures() -> None:
-    """★ 四个瞬时失败都在列表里；且**不含** 4xx 类（那些重试无用）。"""
+    """★ 五个瞬时失败都在列表里；且**不含** 4xx 类（那些重试无用）。"""
     import httpx
 
     for exc_type in (
@@ -3098,6 +3131,7 @@ def test_retryable_set_covers_the_transient_failures() -> None:
         httpx.ConnectTimeout,
         httpx.ReadTimeout,
         httpx.ReadError,
+        httpx.RemoteProtocolError,
     ):
         assert exc_type in runner._LLM_RETRYABLE, f"{exc_type.__name__} 应当可重试"
 

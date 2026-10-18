@@ -318,6 +318,26 @@ DEFAULT_LLM_TIMEOUT = 180.0
 #     下过载尤其常见，而这类部署正是本项目的典型用法。
 #
 # 所以把 `ReadError` 一并纳入重试列表。
+#
+# ## ★ `RemoteProtocolError` 同样必须在这张表里（2026-10-17 实测补）
+#
+# 症状：`Server disconnected without sending a response`。
+#
+# 实测（2026-10-17，`[BJDCTF 2nd]文件探测`）：模型已经跑到第 39 轮、
+# 花了 1611 秒（27 分钟）在逐个探测站点的静态目录 —— 一次
+# `RemoteProtocolError` 让这一切作废。日志原话：
+#
+#     CTF2 解题结束：turns=39 candidates=0
+#     error=调用 LLM 失败（RemoteProtocolError）：Server disconnected without sending a response
+#
+# 它和 `ReadError` 属于同一类：连接建立了、请求也发出去了，服务端在
+# 把回应写完之前把连接关了。区别只在"断在哪一步"——`ReadError` 是读
+# 响应体时断，`RemoteProtocolError` 是连状态行都没读全。两者都是
+# 服务端抖动/过载，**重试大概率成功**。
+#
+# 反例也记一下，免得以后有人把"协议错误一律重试"当教条：
+# `httpx.UnsupportedProtocol`（URL 写错）、`httpx.LocalProtocolError`
+# （我们自己的请求体有问题）重试多少次都一样，**不该**进来。
 _LLM_RETRY_ATTEMPTS = 4
 _LLM_RETRY_BACKOFF = 1.5  # 秒，线性退避：1.5s / 3.0s / 4.5s
 #: 值得重试的连接层异常。**加新成员时要问一句"重试是否可能成功"** ——
@@ -327,6 +347,7 @@ _LLM_RETRYABLE = (
     httpx.ConnectTimeout,
     httpx.ReadTimeout,
     httpx.ReadError,  # ★ 2026-10-12 补，见上面那段实测
+    httpx.RemoteProtocolError,  # ★ 2026-10-17 补，见上面那段实测
 )
 # 喂给模型的工具输出上限。**必须有**：一次 `cat` 一个 ELF
 # 会把上下文瞬间吃满，而后果是后续所有回合都在"遗忘"。
