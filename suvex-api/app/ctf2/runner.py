@@ -47,8 +47,11 @@
 把 HTTP 请求收到宿主来，白名单（`guard_tool_url`）才是**能生效的**。
 
 ⚠️ 但这只是第一层。容器内的 `run_shell` 仍然可以发起任意连接 ——
-所以第二层是 Docker 网络：默认 `--network none`（题目环境通过
-宿主侧的 HTTP 工具访问），需要原始 TCP 的题型才放开。
+所以第二层是 Docker 网络，按题型分配：pwn / 网络类直接放开（要连 TCP）；
+crypto / 取证 / 逆向用最严的 `--network none`；
+**web 自 2026-10-18 起也放开** —— 容器里的 `gobuster` / `ffuf` 才能做目录
+探测，光靠 `http_request` 一次一个 URL 扫不出没人告诉你的路径。放开之后
+的边界由 iptables 白名单收窄到 dasctf 靶站网段（判据见 `needs_raw_network`）。
 两层的关系写在 `guard_tool_url` 与 `SandboxContainer._argv` 的注释里。
 """
 
@@ -985,7 +988,7 @@ class SandboxContainer:
         | --- | --- |
         | `--rm` | 容器退出即删。配合 `destroy()` 是双保险（进程崩了也不会留残骸） |
         | `--name` | 固定名字，让 `docker rm -f` 在拿不到 id 时仍然可用 |
-        | `--network none` | ★ 默认**完全无网络**。题目环境走宿主侧 HTTP 工具 |
+        | `--network none` | ★ crypto/取证/逆向**完全无网络**；web 与 pwn 走 `suvex-ctf2`，边界靠 iptables 白名单 |
         | `--read-only` | 根文件系统只读 → 被攻下的进程无法持久化 |
         | `--tmpfs /work` | /work 可写但在内存里，容器一停就消失 |
         | `--cap-drop ALL` | 丢掉全部 Linux capabilities |
@@ -2228,8 +2231,28 @@ def needs_raw_network(category: str | None) -> bool:
     """这道题是否需要**容器内**的原始网络。
 
     pwn / 网络类题要直连 TCP 服务，所以不能把容器关进 `none`。
-    其余题型（web 走 HTTP 工具、crypto/取证/逆向全在本地文件上）
-    一律用最严的隔离。
+    crypto / 取证 / 逆向全在本地文件上，一律用最严的隔离。
+
+    ## ★ 2026-10-18：web 也放开，理由是**目录探测做不了**
+
+    原来 web 走 `--network none` + 宿主侧 `http_request`。那个设计对
+    "读一个页面的内容"够用，对"扫出一个没人告诉你的路径"则是死路：
+    `http_request` 一次只发一个 URL，模型只能手工猜路径名。实测一道
+    需要爆破隐藏入口文件的题跑了 **76 轮、手工猜了 40 个路径**全部 404，
+    最后模型自己写的复盘第一句就是「沙箱无外网…无法用 shell 侧对靶站做
+    字典爆破，只能靠 http_request 逐个 URL 请求」。
+
+    而镜像里本来就装着 `gobuster` / `ffuf` / `nmap` / `nikto` / `sqlmap`
+    和 `/usr/share/dirb/wordlists/`（`common.txt` 4600 词、`big.txt` 2 万词），
+    只因为没网，一次都用不上 —— 工具齐全却用不了，那是配置问题，
+    不是模型能力问题。
+
+    ## 放开之后，边界靠什么收窄
+
+    不靠这个函数，靠 **iptables 的 `DOCKER-USER` 白名单**：只放行
+    `suvex-ctf2` 网段到 dasctf 靶站网段（`198.18.0.0/15`）的流量，
+    其余一律 DROP。所以容器即使被 LLM 指挥去扫内网或出公网，包也出不去。
+    规则见交接包 `05-网络与沙箱边界.md`。
 
     ⚠️ 认不出来时返回 False（= 隔离）。这是安全方向：猜错的代价是
     "某个 TCP 题连不上"（可见的失败，agent 会报告连接被拒），
@@ -2244,6 +2267,7 @@ def needs_raw_network(category: str | None) -> bool:
         "net",
         "misc-net",
         "pwnable",
+        "web",  # ★ 2026-10-18：目录探测要靠容器内的 gobuster/ffuf
     }
 
 
@@ -2797,6 +2821,18 @@ def _initial_prompt(spec: SolveSpec) -> str:
                 "用 `run_shell` 里的 `nc <host> <port>` 或 "
                 '`python3 -c "import socket; …"` 直连它。'
                 "沙箱网络**已为这道题放开**，不要只试 `http_request`。"
+            )
+        elif not spec.network_isolated:
+            # ★ 2026-10-18：WEB 题的沙箱也有网了（为了让容器里的
+            #   `gobuster` 能用）。**必须显式写进首轮提示**，否则模型
+            #   照旧只会 `http_request` 一个个猜路径 —— 实测那种猜法
+            #   76 轮 40 个路径全 404，而字典里一次能扫 4600 个。
+            lines.append(
+                "- 沙箱**有网络**，可以直连上面的地址。镜像里装着 `gobuster` / "
+                "`ffuf` / `curl` / `nmap`，字典在 `/usr/share/dirb/wordlists/`。"
+                "要找没人告诉你的路径时，用 `run_shell` 跑 `gobuster dir "
+                "-u <靶站> -w /usr/share/dirb/wordlists/common.txt -t 10 "
+                "--timeout 8s -q` —— 比用 `http_request` 一个个猜快几个数量级。"
             )
     else:
         lines.append("- 本题**没有**可访问的网络地址，全部信息在附件里。")

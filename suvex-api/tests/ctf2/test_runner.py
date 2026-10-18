@@ -83,10 +83,18 @@ def test_unknown_profile_falls_back_to_base() -> None:
 
 
 def test_raw_network_is_opt_in() -> None:
-    """只有 pwn / 网络类才放开容器网络，认不出来一律隔离。"""
+    """pwn / 网络类 / web 放开容器网络，认不出来一律隔离。
+
+    web 自 2026-10-18 放开：目录探测只能靠容器里的 `gobuster` / `ffuf`，
+    而 `http_request` 一次一个 URL、手工猜路径的命中率是实测过的零
+    （76 轮猜 40 个路径全 404）。放开后的边界由 iptables 白名单收窄到
+    靶站网段，**不由这个函数负责** —— 这里只回答"要不要给网卡"。
+    平台给的是 `"WEB"`（大写），归一化必须吃掉大小写。
+    """
     assert runner.needs_raw_network("pwn") is True
     assert runner.needs_raw_network("network") is True
-    assert runner.needs_raw_network("web") is False
+    assert runner.needs_raw_network("web") is True
+    assert runner.needs_raw_network("WEB") is True
     assert runner.needs_raw_network(None) is False
     assert runner.needs_raw_network("未知分类") is False
 
