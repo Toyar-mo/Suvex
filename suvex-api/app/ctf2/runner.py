@@ -115,8 +115,19 @@ logger = logging.getLogger("suvex.ctf2")
 # 这里不再做一层"逻辑名 → 镜像名"的映射，因为两层映射会让
 # "这个字段到底存的是什么"变成一个每次都要查的问题
 # （与 vocab 里那条注释同一条理由）。
-IMAGE_BASE = Ctf2SandboxProfile.BASE.value
-IMAGE_REVERSE = Ctf2SandboxProfile.REVERSE.value
+# ## 为什么这两个可以被环境变量覆盖
+#
+# 镜像名是**部署事实**，不是代码常量：`docker/README.md` 里写着重建后
+# 老 tag 会被覆盖，而"某个提交对应哪个镜像"在压测/对照里必须能钉住。
+# 没有这个入口时，想拿 `ctf2-sandbox:pre-gems` 跑一遍"补强前"基线，
+# 只能改代码再改回来 —— 那是**一次改动两处**，中间任何一次忘改都会
+# 让对照变成自己跟自己比。
+#
+# ⚠️ 只在**进程启动时**读一次（`import` 时）。不改 `image_for_profile`
+#   的语义：它仍然只是 profile → 镜像名，覆盖发生在更早的一层。
+#   默认值就是枚举值，所以不设这两个变量时行为与以前**逐字节一致**。
+IMAGE_BASE = os.environ.get("CTF2_IMAGE_BASE") or Ctf2SandboxProfile.BASE.value
+IMAGE_REVERSE = os.environ.get("CTF2_IMAGE_REVERSE") or Ctf2SandboxProfile.REVERSE.value
 
 # CTF2 解题沙箱容器名的前缀。
 #
