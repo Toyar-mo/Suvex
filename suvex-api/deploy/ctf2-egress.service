@@ -1,0 +1,16 @@
+[Unit]
+Description=CTF2 solve sandbox egress whitelist (only reach the target site)
+Documentation=https://github.com/
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ctf2-egress-rules.sh
+RemainAfterExit=yes
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
