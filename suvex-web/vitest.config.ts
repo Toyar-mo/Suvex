@@ -41,6 +41,14 @@ export default defineConfig({
     // 理由：改动某个模块时，它的测试就在旁边，不容易忘记同步。
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
     /*
+      全局前置：补 jsdom 没实现的浏览器 API（目前只有 `matchMedia`）。
+
+      少了它，任何真的渲染到 `StatCard` / 侧栏 / 主题逻辑的测试都会炸在
+      `window.matchMedia is not a function` —— 那个报错看起来像被测组件的
+      bug，其实是环境缺件。详见 `src/test/setup.ts` 的文件头。
+    */
+    setupFiles: ['./src/test/setup.ts'],
+    /*
       ★ 不开 `globals: true`。
 
       那会把 `describe` / `it` / `expect` 注入全局，于是测试文件里
