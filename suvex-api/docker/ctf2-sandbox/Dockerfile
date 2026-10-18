@@ -82,6 +82,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git jq file xxd less vim-tiny \
     python3 python3-venv python3-pip python3-dev \
     build-essential pkg-config libssl-dev libffi-dev \
+    # ⚠️ `binutils` 必须有：`strings` / `objdump` / `readelf` / `nm` 在
+    #    misc 与取证题里是第一步（`strings` 找线索、`objdump` 看汇编）。
+    #
+    #    它们**经 gcc / gdb 的依赖链其实已经装上了** —— 实测
+    #    `ctf2-sandbox:latest` 里 `/usr/bin/strings`、`/usr/bin/objdump`
+    #    都在。但"没写进 Dockerfile"意味着**没人知道这是一条依赖而
+    #    不是巧合**：`scripts/verify_sandbox_tools.py` 静态解析 apt
+    #    列表时，就把 `strings` 判成了"提示词要让模型用、镜像里没有"。
+    #
+    #    显式写出来的成本是 0（apt 看到已装会跳过，不增加下载量），
+    #    收益是这条依赖从此是**承诺**而不是运气 —— 哪天 gcc 换了依赖
+    #    链、或者有个镜像不再装 gcc，这里会立刻在检查里露馅。
+    binutils \
     # ── 网络 / web 题 ──
     netcat-traditional socat openssl dnsutils iputils-ping \
     nmap whatweb ffuf gobuster dirb sqlmap nikto \

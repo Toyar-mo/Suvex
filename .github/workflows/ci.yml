@@ -392,3 +392,37 @@ jobs:
           set -e
           cd suvex-api
           python3 scripts/verify_lockfiles.py
+
+      - name: 提示词承诺的工具必须在镜像里
+        # ★ 这道闸门堵的是同一个失败模式的第 6 次复发。
+        #
+        #   清点下来："写了但没装"已经发生过六次 ——
+        #     · `steghide` 一直躺在 Dockerfile 的注释里，被列为"选 Kali 源的
+        #       理由"，从来没被真的装进来；`pngcheck` 同理；
+        #     · `hashcat` 装了，但没有 OpenCL 运行时，于是它罢工、agent 退回
+        #       慢 100 倍的 john，看起来像"模型不会爆破"；
+        #     · 两个镜像里没有任何 .NET 工具，一道 .NET 题烧掉 40 回合；
+        #     · `msoffcrypto-tool` 缺失 —— 口令已经爆出来了，模型却手写
+        #       Office 加密的解密器，连着写 13 个回合全错；
+        #     · pwn 题走 base 镜像，而 base 里没有 `gdb` / `patchelf`；
+        #     · `binutils` 没写进 Dockerfile（虽然经 gcc 的依赖链碰巧在）——
+        #       这是本检查第一次跑起来就抓到的。
+        #
+        #   这六个不是六个独立 bug，是同一个结构性缺口：**没有任何机制
+        #   校验"提示词说可以用的工具"和"镜像里真的有的工具"是同一个
+        #   集合**。症状因此总是"运行时模型默默卡住、日志看不出原因" ——
+        #   它不会报"缺 gdb"，它只是每次调试都失败，然后换个方法再试一次。
+        #
+        #   这道闸门把那种失败模式变成构建时直接报错。它守的是
+        #   `scripts/verify_sandbox_tools.py` 里的 `CATEGORY_REQUIREMENTS`
+        #   （每类题至少要有的命令）与两个 Dockerfile 的 apt/pip 列表之间
+        #   的一致性；分类 → 镜像的路由**从 `app/ctf2/runner.py` 源码现读**
+        #   （ast 提取 `_REVERSE_CATEGORIES`），不抄第二份。
+        #
+        #   ⚠️ 它是**纯静态**的：证明"Dockerfile 里写了这个包"，不证明
+        #   "包真装成功、命令真在 PATH 里"。后者要构建镜像时 `command -v`
+        #   才算数 —— 但安装失败本来就会让镜像构建直接红，所以这里不重复。
+        run: |
+          set -e
+          cd suvex-api
+          python3 scripts/verify_sandbox_tools.py
