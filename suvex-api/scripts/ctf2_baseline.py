@@ -46,10 +46,11 @@ import argparse
 import asyncio
 import contextlib
 import json
+import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -70,7 +71,16 @@ def log(line: str = "") -> None:
 
 
 def git_commit() -> str:
-    """记下这份基线是哪个 commit 跑出来的（否则"改进"无法归因）。"""
+    """记下这份基线是哪个 commit 跑出来的（否则"改进"无法归因）。
+
+    允许用 `CTF2_GIT_COMMIT` 覆盖：基线是在**有 Docker 的那台机器**上跑的
+    （目前是 Kali），而那边往往只是 `tar` 过去的一堆文件、不是 git 仓库，
+    `git rev-parse` 会失败。这时候由发起方在环境变量里把 commit 传进来，
+    比事后对着 "unknown" 猜"这到底是哪版"要可靠。
+    """
+    override = os.environ.get("CTF2_GIT_COMMIT", "").strip()
+    if override:
+        return override
     try:
         out = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
@@ -174,7 +184,6 @@ async def run_one(
 
     try:
         exercise = await arena_e2e.ensure_environment(client, exercise_id, no_env=False)
-        exercise.raw["_base_url"] = base_url
         result.name = exercise.name
 
         # ★★ 详情接口不带 `category`，但它是两个东西的输入：
@@ -184,7 +193,14 @@ async def run_one(
         #    ② 提示词里的分类工具表。
         #    所以必须把列表里的分类补回详情对象，否则失败原因
         #    会指向"模型 reverse 不行"，而实际是"镜像装错了"。
-        exercise.category = category
+        #
+        # ⚠️ 只能 replace()，不能赋值：`Exercise` 是
+        #    `@dataclass(frozen=True, slots=True)`（app/arena/client.py:145），
+        #    `exercise.category = ...` 会抛 FrozenInstanceError 并被下面的
+        #    `except Exception` 吞成一条错误记录 —— 第一次在 Kali 上跑基线
+        #    就是这么"跑完了但 0 回合"的。
+        exercise = replace(exercise, category=category)
+        exercise.raw["_base_url"] = base_url
 
         result.turns = -1  # 标记"已进入解题，但还没拿到 outcome"
         outcome = await asyncio.wait_for(
@@ -225,15 +241,29 @@ async def run_one(
 async def cmd_run(args: argparse.Namespace) -> int:
     from datetime import datetime
 
+    # 记下用的是哪个模型 —— compare 的表头要靠它判断"两次跑的是不是同一个模型"。
+    # 拿不到不该让基线跑不起来，所以失败就留空（表头会显示 "?"）。
+    try:
+        creds = arena_e2e.load_provider(args.provider)
+        model_label, model_name = creds.label, creds.model
+    except Exception:  # noqa: BLE001 - 元数据缺失不该拦住度量本身
+        model_label, model_name = "", ""
+
     report = RunReport(
         started_at=datetime.now().isoformat(timespec="seconds"),
         git_commit=git_commit(),
+        model_label=model_label,
+        model_name=model_name,
         max_turns=args.max_turns,
         base_url=args.base_url,
     )
 
     log("=" * 72)
-    log(f"CTF2 基线 · commit {report.git_commit} · 最多 {args.max_turns} 回合/题")
+    log(
+        f"CTF2 基线 · commit {report.git_commit}"
+        f" · {model_label or '?'}/{model_name or '?'}"
+        f" · 最多 {args.max_turns} 回合/题"
+    )
     log("=" * 72)
 
     async with ArenaClient(base_url=args.base_url, access_key=args.key) as client:

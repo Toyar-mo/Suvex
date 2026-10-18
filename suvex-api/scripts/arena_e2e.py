@@ -31,8 +31,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -124,11 +126,52 @@ def download_attachments(exercise: Exercise) -> tuple[Path, ...]:
     return tuple(saved)
 
 
-def load_provider(preferred: str | None) -> tuple[str, str, str, str, str]:
-    """从 providers 表取一个可用的 LLM（返回 model/key/base/label/kind）。
+@dataclass(frozen=True, slots=True)
+class LlmCredentials:
+    """一次解题要用的 LLM 凭据。
+
+    单独成型而不是散装五个变量，是为了让「凭据从哪来」这一层可以替换 ——
+    见 credentials_from_env()。
+    """
+
+    model: str
+    api_key: str
+    base_url: str
+    label: str
+    kind: str
+
+
+def credentials_from_env() -> LlmCredentials | None:
+    """从环境变量取凭据；没配就返回 None。
+
+    为什么要这条路：基线必须跑在**有 Docker 的机器**上（镜像在那儿），
+    而那台机器未必有数据库。把「拿凭据」和「用凭据」分开，就不必为了
+    读 providers 表里的一行记录，把整个后端连同数据库一起搬过去。
+
+    变量名沿用 CTF2_LLM_* 前缀，与 runner 里的同名约定保持一致。
+    """
+    model = os.environ.get("CTF2_LLM_MODEL", "").strip()
+    key = os.environ.get("CTF2_LLM_KEY", "").strip()
+    if not model or not key:
+        return None
+    return LlmCredentials(
+        model=model,
+        api_key=key,
+        base_url=os.environ.get("CTF2_LLM_BASE_URL", "").strip(),
+        label=os.environ.get("CTF2_LLM_LABEL", "env").strip() or "env",
+        kind=os.environ.get("CTF2_LLM_KIND", "cloud").strip() or "cloud",
+    )
+
+
+def load_provider(preferred: str | None) -> LlmCredentials:
+    """取一个可用的 LLM。优先环境变量，其次 providers 表。
 
     ⚠️ 明文 key 只在这一层出现一次，用完即随 SolveSpec 交给 LLM（与 ctf2 那边同一条纪律）。
     """
+    from_env = credentials_from_env()
+    if from_env is not None:
+        return from_env
+
     from sqlalchemy import select
 
     from app.providers.models import ProviderAccount
@@ -140,15 +183,34 @@ def load_provider(preferred: str | None) -> tuple[str, str, str, str, str]:
         )
         rows = list(db.execute(stmt).scalars())
         if not rows:
-            raise SystemExit("库里没有配置任何 LLM provider")
+            raise SystemExit(
+                "库里没有配置任何 LLM provider，也没有设 CTF2_LLM_MODEL / CTF2_LLM_KEY"
+            )
         row = next((r for r in rows if preferred and preferred in (r.label or "")), None) or rows[0]
-        key = decrypt_provider_key(row)
-        return row.model, key, row.base_url or "", row.label or "", row.kind or "cloud"
+        return LlmCredentials(
+            model=row.model,
+            api_key=decrypt_provider_key(row),
+            base_url=row.base_url or "",
+            label=row.label or "",
+            kind=row.kind or "cloud",
+        )
 
 
-async def solve(exercise: Exercise, *, provider: str | None, allow_network: bool, max_turns: int):
-    """在沙箱里让模型解这道题（复用与平台无关的那套引擎）。"""
-    model, api_key, base_url, label, kind = load_provider(provider)
+async def solve(
+    exercise: Exercise,
+    *,
+    provider: str | None,
+    allow_network: bool,
+    max_turns: int,
+    llm: LlmCredentials | None = None,
+):
+    """在沙箱里让模型解这道题（复用与平台无关的那套引擎）。
+
+    `llm` 给定时直接用这份凭据，否则按 load_provider() 的顺序去找（环境变量 → providers 表）。
+    """
+    creds = llm or load_provider(provider)
+    model, api_key, base_url = creds.model, creds.api_key, creds.base_url
+    label, kind = creds.label, creds.kind
     log(f"④ 用模型 {label}（{model}）")
 
     profile = solver.profile_for_category(exercise.category)
