@@ -7,6 +7,7 @@
 给它一个目标 —— 网站、代码仓库、TCP 服务、CTF 题目附件 ——
 它自己规划、调用工具、验证结论，最后交付一份可直接给人看的报告或题解。
 
+[![CI](https://github.com/Toyar-mo/Suvex/actions/workflows/ci.yml/badge.svg)](https://github.com/Toyar-mo/Suvex/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Backend](https://img.shields.io/badge/backend-Python%203.12%20%C2%B7%20FastAPI-009688.svg)](suvex-api/)
 [![Frontend](https://img.shields.io/badge/frontend-React%2019%20%C2%B7%20TypeScript%206-61dafb.svg)](suvex-web/)
@@ -42,13 +43,16 @@ Suvex 的取舍是：**让 agent 像人一样去验证，然后只交付它真�
 
 ## 两个入口
 
-### 渗透评估
+同一个 agent 内核，两种判据，两种产物。
 
-给一个目标 + 任务背景（测试范围、测试账号、注意事项），产出漏洞报告。漏洞有完整的处置工作流：状态流转（`new` → `confirmed` → `fixed` → `closed`）、指派负责人、SLA 修复时限、按类型分组、附件存证、误报标记。
+| | 渗透评估 | CTF 夺旗 |
+| --- | --- | --- |
+| **输入** | 目标（已部署应用 / Git 仓库 / 本地代码 / TCP 服务）+ 任务背景（测试范围、测试账号、注意事项） | 题目附件 + 题面 |
+| **成功判据** | `findVulns` —— 确认可复现的漏洞 | `captureFlag` —— 拿到 flag |
+| **产物** | 漏洞报告，每条结论都能追到过程 | **题解（Writeup）** —— 一次夺旗的产物是"怎么想出来的"，不是"哪里有洞" |
+| **之后发生什么** | 处置工作流：`new` → `confirmed` → `fixed` → `closed`，指派负责人、SLA 修复时限、按类型分组、附件存证、误报标记 | 候选 flag 交平台校验，解出后回填题解 |
 
-### CTF 夺旗
-
-给题目附件与题面，agent 去解题。解出后交付的是**题解（Writeup）**而不是漏洞报告 —— 因为一次夺旗任务的产物是"怎么想出来的"，不是"哪里有洞"。
+第三档判据 `verifyFix` 用于**复测已修** —— 同一套流水线，把"怎样算成功"换成"漏洞是否还在"。
 
 > [!NOTE]
 > 判据是 `captureFlag` 时，服务端会把 agent 写的报告**重新分节**成题解版式，并把 flag 提到最前面。执行后端的报告标题与分节标题都是写死的渗透口径，所以这一步只能由我们做（详见 `suvex-api/app/scans/writeup.py` 的模块说明）。
@@ -89,7 +93,19 @@ cd suvex-api && docker compose up --build
 ```
 
 > [!WARNING]
-> compose 镜像是**控制面**，跑不了扫描。实测确认容器里没有 `strix` 与 `docker` CLI；要跑扫描用 [`deploy/`](deploy/) 的宿主机部署。这是刻意的取舍 —— 控制面与执行面分离，跑扫描的那台需要 Docker 与目标网络。
+> compose 镜像是**控制面**，跑不了扫描。实测确认容器里没有 `strix` 与 `docker` CLI；要跑扫描用 [`suvex-api/deploy/`](suvex-api/deploy/) 的宿主机部署。这是刻意的取舍 —— 控制面与执行面分离，跑扫描的那台需要 Docker 与目标网络。
+
+### 真机部署（要真跑扫描，只有这一条路）
+
+上面几条是开发路径 —— 跑测试、看界面。**要真的执行扫描**则只能走这条：一台装了 Docker 的 Linux 宿主机，按 [`suvex-api/deploy/`](suvex-api/deploy/) 部署，systemd + 宿主 venv，不用容器：
+
+```bash
+# 先在目标机上跑一遍 --dry-run：打印全部命令与将写入的内容，但不执行
+sudo bash suvex-api/deploy/install.sh --dry-run
+sudo bash suvex-api/deploy/install.sh
+```
+
+那套文档覆盖了：专用用户（不用 root）、**加 docker 组**（权限等价于 root，知情后再加；要真隔离得给 strix 配远程 docker 端点）、装锁文件而非 `requirements.txt`、生产必开的 `SUPEX_COOKIE_SECURE`（否则启动自检拒绝启动）、nginx 反代、日志与备份。装完按第七节验收。
 
 <div align="center">
 <img src="docs/screenshots/settings.png" alt="设置 · 模型 / 沙箱 / 执行策略" width="800">
@@ -122,6 +138,8 @@ cd suvex-api && docker compose up --build
 > 同样，"文件总行数"也写清口径：按换行符计数（与 `wc -l` 等价），含空行与注释。同一份代码在不同口径下能差一万行 —— 而一份"看起来精确"却对不上的数字比"大约四万行"更有害。
 >
 > 这些数字**会漂**。本 README 每次更正都会重测，但代码在动，文档跟不上是常态。你读到的数字如果与实测对不上，**以实测为准**。
+>
+> **复核命令不在这里重复写** —— 后端那几项的逐条量法在 [`suvex-api/README.md`](suvex-api/README.md) 的「这个后端现在是什么状态」表下面，依赖与代码行数的在 [`DEPENDENCIES.md`](DEPENDENCIES.md) 第三～五节。这是「设计原则」第 3 条在文档上的应用：同一件事实只留一个出处，抄两份迟早漂移。
 
 ### 真机验证过的
 
@@ -289,6 +307,6 @@ suvex-web/
 
 ## 关于这份 README
 
-* 数字都是 2026-10-16 实测，口径在「当前状态」一节写明。代码在动，数字会漂，**以实测为准**。
+* 数字都是 2026-10-17 实测，口径在「当前状态」一节写明。代码在动，数字会漂，**以实测为准**。
 * 「设计原则」「还没有做到的」两节是这个项目的真实记录，不是模板。改过之后请**如实更新**，不要把已修的留在缺口清单里，也不要把没修的粉饰掉。
 * 仓库根下不该有过程性文档（交接文档 / 审查报告 / 工作单）。它们已被 `.gitignore` 忽略且从历史中移除（见「设计原则」第 6 条）。如果你在本机看到这类文件，那是**未跟踪的本地副本** —— 可以留着自己看，但不要 `git add`。
