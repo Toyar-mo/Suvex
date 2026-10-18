@@ -324,7 +324,7 @@ def _keeps_search_needle(text: str, start: int, end: int, length: int) -> bool:
     """`text[start:end]` 这一处 flag 形状该**保住**（都是搜索针）还是删掉？
 
     这是整条脱敏链路上唯一一处"位置判据"，`_strip_inline_flags` 与
-    `looks_like_flag_search_needle` 共用它 —— 两处若各写一份，改一处忘
+    `contains_unescaped_flag` 共用它 —— 两处若各写一份，改一处忘
     另一处就会退化成"脱敏保住了、闸门却仍判泄漏"（`#1004`/`#1010` 两张
     卡正是这么被误杀的）。
 
@@ -352,40 +352,94 @@ def _keeps_search_needle(text: str, start: int, end: int, length: int) -> bool:
     return bool(_FLAG_BODY_META & set(body))
 
 
-def looks_like_flag_search_needle(text: str) -> bool:
-    """`text` 里出现的 flag 形状，是不是**命令的搜索针**而不是答案？
+#: `flag{` 开头但**没有闭合花括号**的形状（`grep -abo 'flag{'`）。
+#:
+#: ⚠️ 必须单独一份，不能用 `_inline_flag()` 代替：那个要求闭合 `}`，
+#:    对 `grep -abo 'flag{'` 一处都匹配不到。踩过 —— 闸门用 `\bflag\{`
+#:    触发、却用 `_inline_flag()` 裁定，于是"触发看得见、裁定看不见"，
+#:    `#1010` 那张卡被整张丢弃（实测 r4 轮）。
+#:
+#: 前缀只认 `flag`，**不跟** `_inline_flag()` 的 `[A-Za-z][A-Za-z0-9_]*`：
+#: 放宽会把 `sed 's/a{2}/b/'` 这类正常代码当成残缺 flag（`a` + `{`），
+#: 那会误杀整张卡。宁可漏掉 `CTF{` 开头的残缺形状（完整形状仍由 ① 覆盖）。
+_FLAG_OPEN = re.compile(r"\bflag\{", re.IGNORECASE)
+
+
+def _is_flag_prefixed(text: str, start: int, end: int) -> bool:
+    """这个 `PREFIX{...}` 形状的前缀是不是就是 `flag` 这个词。
+
+    `_inline_flag()` 是脱敏用的**广义**形状（任何 `[A-Za-z][A-Za-z0-9_]*`
+    开头），对脱敏正合适：多删几个字只是卡里少点内容，代价低。但
+    `contains_unescaped_flag` 的调用方是**判整张卡要不要丢**，用广义形状
+    就会误杀 —— 实测 `sed 's/a{2}/b/' file.txt` 里的 `a{2}` 命中广义
+    形状，被判泄漏、整张卡丢弃。所以这里再收一道前缀。
+    """
+    brace = text.find("{", start, end)
+    if brace < 0:
+        return False
+    return text[start:brace].strip().lower() == "flag"
+
+
+def contains_unescaped_flag(text: str) -> bool:
+    """`text` 里有没有**会被当成答案的** flag 形状（有 = 不能落盘/不能注入）。
 
     这是给**外部调用方**（`scripts/ctf2_baseline.py` 的落盘闸门）用的
-    公开判据。存在的理由：那道闸门原来写的是"见到 `flag{` 就拒收整张
-    卡"，脱敏修好之后它会**把刚保住的搜索针当成泄漏**——
-    `#1004` 和 `#1010` 两张卡就是这么被误杀的（实测）。
+    公开判据。名字说的是它真正回答的问题 —— 早先叫
+    `looks_like_flag_search_needle`，语义是反的（"没有 flag 形状"和
+    "有 flag 形状但都是搜索针"都返回 `False`），调用方把 `False` 读成
+    "拒收"，于是**纯搜索针的卡也被拒**，`grep -abo 'flag{'` 就是这么
+    把 `#1010` 的卡整张干掉的。
 
-    ## 判据
+    ## 判据（两段，顺序不能换）
 
-    把 `text` 里每一处 flag 形状都过一遍 `_strip_inline_flags` 的那套
-    "位置"判断：**保住 = 搜索针，删掉 = 答案**。全是搜索针才返回真。
+      ① **有闭合花括号的完整 flag 形状**（`flag{[^}]*}`、`flag{abc}`）：
+         交给与脱敏共用的 `_keeps_search_needle` —— 保住 = 搜索针，
+         删掉 = 答案。
+      ② **没有闭合花括号的残缺形状**（`grep -abo 'flag{'`）：脱敏根本
+         不碰它（`_inline_flag()` 匹配不到），所以只能在这里单独判。
+         判据用同一套位置判断的 ① 步：紧前一个字符是未转义引号 →
+         它在引号里，是命令的搜索针；否则是叙述正文里裸着的 flag 开头。
 
-    ⚠️ **必须在原文上下文里判**，不能把匹配片段切出来单独喂给
-    `_strip_inline_flags` —— 切出来的片段开头没有前一个字符，位置判据
-    恒不成立，于是每一处都会被判成"删除"，这个函数就恒返回假。
+    ⚠️ 两段都**只认 `flag` 前缀**，不用 `_inline_flag()` 的广义
+       `[A-Za-z][A-Za-z0-9_]*`。那个广义是给脱敏用的（多删几个字代价低），
+       而这里的调用方是**判整张卡要不要丢**，误判一次就少一张卡。实测
+       踩过：`sed 's/a{2}/b/' file.txt` 里的 `a{2}` 命中广义形状，
+       被判成泄漏、整卡丢弃。
 
-    ⚠️ 空内容返回**假**（不是真）：没有 flag 形状时"是不是搜索针"这个
-    问题无从谈起，而调用方的语义是"要不要拒收"，空内容不该被拒。
+    ⚠️ 与脱敏的关系只对**完整形状**成立（双向一致：脱敏保住 ⇔ 本函数
+       放行）。对**残缺形状**（`found flag{ partially`）脱敏根本不碰它
+       —— `_inline_flag()` 匹配不到 —— 本函数却必须判泄漏，否则正文里
+       裸着的半个 flag 就漏过去了。所以不能说"本函数为真 ⇒ 脱敏删掉了"，
+       只能说完整形状那一段两边是同一份判据。写错这个方向会得出
+       `found flag{ partially` 该放行的结论（实测踩过）。
 
-    ⚠️ 与 `_card_leaks` 的分工：那个还查长串 hex/base64（`build_note_fields`
-    之外的独立一道），这里只管 flag 形状，因为只有它才和脱敏规则重叠。
+    ⚠️ 必须在**原文上下文**里判，不能把匹配片段切出来单独喂进来 ——
+       切出来之后开头没有前一个字符，位置判据恒不成立，每处都会被判
+       成"删除"。
+
+    ⚠️ 空内容返回**假**：没有 flag 形状就谈不上泄漏，调用方的语义是
+       "要不要拒收"，空内容不该被拒。
+
+    ⚠️ 与落盘闸门里长串 hex/base64 那条正则分工不同：那个查的是
+       `build_note_fields` 之外的独立一类（真 flag 常被切碎嵌进去），
+       这里只管 flag 形状，因为只有它才和脱敏规则重叠。
     """
     if not text:
         return False
-    pattern = _inline_flag()
     length = len(text)
-    found = False
-    for match in pattern.finditer(text):
-        found = True
+    # ① 完整形状：位置判据复用脱敏那一份，但前缀只认 flag。
+    for match in _inline_flag().finditer(text):
+        if not _is_flag_prefixed(text, match.start(), match.end()):
+            continue
         if not _keeps_search_needle(text, match.start(), match.end(), length):
-            # 这处会被脱敏删掉 → 它是答案，不是搜索针。
-            return False
-    return found
+            return True
+    # ② 残缺形状：脱敏不匹配它，所以单独用"前面是不是引号"判。
+    for match in _FLAG_OPEN.finditer(text):
+        if match.end() < length and text[match.end()] == "}":
+            continue  # 完整的，① 已经判过
+        if match.start() == 0 or not _is_unescaped_quote(text, match.start() - 1):
+            return True
+    return False
 
 
 def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:

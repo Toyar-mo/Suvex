@@ -543,19 +543,24 @@ def _card_leaks(card) -> list[str]:
     `grep -ao ']*}'`"之后，这条闸门**反过来把刚保住的搜索针当成泄漏**，
     `#1004` 和 `#1010` 两张卡被整张丢弃（实测：脱敏修好了、卡却学不到）。
 
-    所以这一条改用 `notes.looks_like_flag_search_needle()` —— 与脱敏
-    共用同一份"位置判据"：保住的是搜索针，删掉的才是答案。两处各写一份
-    就会重演这次的分叉。
+    所以这一条改用 `notes.contains_unescaped_flag()` —— 与脱敏共用同一份
+    "位置判据"：保住的是搜索针，删掉的才是答案。两处各写一份就会重演
+    这次的分叉。
+
+    ## ⚠️ 触发与裁定必须是**同一个**判据（踩过两次）
+
+    早先这里是"用 `\\bflag\\{` 触发、用 `_inline_flag()` 裁定"：后者要求
+    闭合 `}`，对 `grep -abo 'flag{'` 一处都匹配不到 ⇒ 触发看得见、裁定
+    看不见 ⇒ 纯搜索针的卡被判泄漏整张丢弃（`#1010` 的 r4 轮）。
+    现在**只有一次调用**，看见什么就由它一并裁定，结构上不可能再分叉。
     """
     blob = f"{card.approach}\n{card.tools}\n{card.dead_ends}"
     hits: list[str] = []
     for pattern in _FLAG_SHAPES:
         for match in pattern.finditer(blob):
             hits.append(match.group(0)[:40])
-    # `flag{...}` 形状单独判：只算"脱敏会删掉的那些"，搜索针放过。
-    if re.search(r"\bflag\{", blob, re.IGNORECASE) and not (
-        notes.looks_like_flag_search_needle(blob)
-    ):
+    # `flag{...}` 形状：交给与脱敏共用的判据全权处理（搜索针放过）。
+    if notes.contains_unescaped_flag(blob):
         hits.append("flag{")
     return hits
 

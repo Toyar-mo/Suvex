@@ -872,39 +872,78 @@ def test_escaped_quote_is_not_a_literal_opener() -> None:
     assert "patch_me_if_you_can" not in cleaned
 
 
-def test_search_needle_predicate_matches_sanitizer() -> None:
+def test_flag_leak_predicate_matches_sanitizer() -> None:
     """★★ 落盘闸门与脱敏必须用**同一份**判据。
 
     `scripts/ctf2_baseline.py` 的 `_card_leaks` 原来见 `flag{` 就拒收整
     张卡；脱敏修好之后它反过来把刚保住的搜索针当泄漏，`#1004` 和
     `#1010` 两张卡被整张丢弃（实测）。两个判据分叉就会重演。
+
+    ⚠️ 这道判据**改过名**：原来叫 `looks_like_flag_search_needle`，语义
+       是反的（"没有 flag 形状"与"都是搜索针"都返回 False），而调用方把
+       False 读成"拒收" ⇒ 纯搜索针的卡也被拒。名字换成它真正回答的问题。
     """
-    # 搜索针：不算泄漏
-    assert notes_mod.looks_like_flag_search_needle(
+    # 搜索针（有闭合花括号）：不算泄漏
+    assert not notes_mod.contains_unescaped_flag(
         "grep -ao 'flag{[^}]*}' /work/dump.bin"
     )
+    # ★ 搜索针（**没有**闭合花括号）：`_inline_flag()` 匹配不到它，
+    #   靠第二条判据放行。实测 `#1010` 的 r4 轮就是死在这一条上：
+    #   触发用 `\bflag\{` 看得见、裁定用 `_inline_flag()` 看不见，
+    #   于是整张卡被判泄漏丢弃。
+    assert not notes_mod.contains_unescaped_flag(
+        "grep -abo 'flag{' /work/attachments/dump.bin"
+    )
     # 真答案：算泄漏
-    assert not notes_mod.looks_like_flag_search_needle("echo 'flag{abc_def}'")
+    assert notes_mod.contains_unescaped_flag("echo 'flag{abc_def}'")
+    # 裸在正文里的：算泄漏
+    assert notes_mod.contains_unescaped_flag("答案是 flag{th1s_1s_th3_4nsw3r}")
+    # 残缺形状裸在正文里（不在引号内）：也算泄漏
+    assert notes_mod.contains_unescaped_flag("found flag{ partially")
     # 空内容：不算泄漏（调用方语义是"要不要拒收"）
-    assert not notes_mod.looks_like_flag_search_needle("")
+    assert not notes_mod.contains_unescaped_flag("")
+    # 正常代码别误伤：`a{2}` 这类不是 flag
+    assert not notes_mod.contains_unescaped_flag("sed 's/a{2}/b/' file.txt")
 
 
-def test_sanitizer_and_needle_predicate_agree() -> None:
-    """★★ 交叉一致性：脱敏**保住**的片段，闸门就必须判成搜索针。
+def test_sanitizer_and_flag_leak_predicate_agree() -> None:
+    """★★ 交叉一致性：**完整形状**上两边必须是同一份判据。
 
-    这条把两处判据绑在一起 —— 谁单独改都会红。
+    为什么只说"完整形状"：`found flag{ partially` 这种**残缺**形状脱敏
+    根本不碰（`_inline_flag()` 匹配不到它），而闸门必须判泄漏 —— 否则
+    正文里裸着的半个 flag 就漏过去了。所以不存在"闸门判泄漏 ⇒ 脱敏删了"
+    这种单向蕴含，写成那样这条测试就会要求 `found flag{ partially` 放行
+    （实测踩过，方向写错比不写更坏）。
+
+    真正要钉死的是：**flag 家族里脱敏保住的，闸门必须放行** —— 否则就是
+    `#1010` 那次"脱敏修好了、卡却学不到"的重演。
     """
-    samples = [
+    # 搜索针：脱敏保住 ⇔ 闸门放行（两边同一份判据）
+    needles = [
         "grep -ao 'flag{[^}]*}' /work/dump.bin",
         "grep -ao 'flag{[a-z]*}' /work/dump.bin",
+        "grep -abo 'flag{' /work/attachments/dump.bin",
+    ]
+    for raw in needles:
+        assert "flag{" in notes_mod.sanitize_for_reuse(raw), (
+            f"★ 该保住的搜索针被脱敏删了：{raw!r}"
+        )
+        assert not notes_mod.contains_unescaped_flag(raw), (
+            f"★ 脱敏保住、闸门仍判泄漏：{raw!r}"
+        )
+
+    # 真答案：脱敏必删、闸门必判泄漏（两边同一份判据）
+    answers = [
         "echo 'flag{abc_def}'",
         "答案是 flag{th1s_1s_th3_4nsw3r}",
     ]
-    for raw in samples:
-        cleaned = notes_mod.sanitize_for_reuse(raw)
-        survived = "flag{" in cleaned
-        needle = notes_mod.looks_like_flag_search_needle(raw)
-        assert survived == needle, (
-            f"★ 判据分叉：{raw!r} → 脱敏{'保住' if survived else '删掉'}"
-            f"，闸门却判{'搜索针' if needle else '泄漏'}"
+    for raw in answers:
+        assert "flag{" not in notes_mod.sanitize_for_reuse(raw), (
+            f"★ 答案没被脱敏删掉：{raw!r}"
         )
+        assert notes_mod.contains_unescaped_flag(raw), (
+            f"★ 脱敏删了、闸门却不判泄漏：{raw!r}"
+        )
+
+    # 残缺形状裸在正文：脱敏不管它，闸门必须拦下（这一档只有一个方向）
+    assert notes_mod.contains_unescaped_flag("found flag{ partially")
