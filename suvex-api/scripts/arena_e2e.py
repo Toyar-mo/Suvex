@@ -272,6 +272,10 @@ async def solve(
         max_turns=max_turns,
         max_wrong_submissions=3,
         network_isolated=not raw_network,
+        # ★ 靶机类型。服务器说 `nc` 时，`runner._initial_prompt` 才会提示
+        #   "用 nc 直连，别只试 http_request"；不给的话 TCP 靶机在模型眼里
+        #   跟 HTTP 靶机没区别，而 `#1003`/`#1006` 现在是真靶机了。
+        access_type=exercise.access_type,
         cpus=None,
         memory_mb=None,
         # ★ 方法卡（已脱敏）。空串 = 这一臂不注入，与改动前完全一致。

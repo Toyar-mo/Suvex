@@ -158,6 +158,16 @@ class Exercise:
     is_need_init: bool = False
     is_need_check: bool = False
     endpoint_type: str = ""
+    access_type: str = ""
+    """靶机是什么类型 —— `http`（默认）还是 `nc`/`tcp` 这种裸协议。
+
+    ★ 它决定两件事：① 沙箱要不要放开裸网络（`runner.run_worker` 拿它覆盖
+    `network_isolated`）；② 提示词里要不要说"别只试 http_request，用 nc 直连"
+    （`runner._initial_prompt`）。取不到就当空串 = 按 HTTP 处理，这是安全方向。
+
+    ⚠️ 平台的字段名不止一种写法（`accessType` / `access_type`），
+    生产侧是 `app/ctf2/client.py:1195` 的 `_first_str` 在兜；这里同理。
+    """
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -392,6 +402,7 @@ class ArenaClient:
             is_need_init=bool(data.get("isNeedInit")),
             is_need_check=bool(data.get("isNeedCheck")),
             endpoint_type=str(data.get("endpointType") or ""),
+            access_type=str(data.get("accessType") or data.get("access_type") or ""),
             raw=data,
         )
 
