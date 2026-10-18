@@ -131,6 +131,12 @@ class RunReport:
     base_url: str = ""
     runs: list[RunResult] = field(default_factory=list)
 
+    # 开跑之前就已经解过的题。非空 → 这次基线的数字**不可信**：
+    # 那些题再跑一遍会被平台的"重复提交"挡住，判出来的 ✗ 是假失败。
+    # 记进 JSON 里，而不是只在控制台喊一嗓子 —— 看报告的人不该依赖
+    # 谁有没有盯着终端看。
+    pre_solved: list[int] = field(default_factory=list)
+
     # ── 汇总 ──────────────────────────────────────────────
     def summary(self) -> dict[str, object]:
         by_category: dict[str, dict[str, int]] = {}
@@ -301,6 +307,22 @@ async def cmd_run(args: argparse.Namespace) -> int:
             if missing:
                 log(f"❌ 这些题不在列表里：{sorted(missing)}")
                 return 2
+
+        # ★ 脏基线检测：开跑之前已经解过的题，这次再跑必然被平台的
+        # "重复提交"挡住（A0409），判出来的 ✗ 是假失败。
+        #
+        # 这条检查是**用一整个 9/10 换来的**：#1001 在单题验证时已经解过，
+        # 接着跑全量基线，它交了正确答案却得到"重复提交"，基线因此少了一题。
+        # 当时差一点就去调模型能力了 —— 真正的毛病在测试夹具没重置。
+        report.pre_solved = sorted(e.exercise_id for e in targets if e.has_solved)
+        if report.pre_solved:
+            log("⚠️ 这些题在本次跑之前就已经解过：")
+            for exercise in targets:
+                if exercise.has_solved:
+                    log(f"   · #{exercise.exercise_id} {exercise.name}")
+            log("   它们这次必然以「重复提交」告终，通过数会偏低。")
+            log("   想让数字可信 → 先重启 mock（它把 hasSolved 存在进程内存里）。")
+            log("")
 
         log(f"共 {len(targets)} 道题要跑：")
         for exercise in targets:

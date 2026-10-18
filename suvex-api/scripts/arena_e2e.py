@@ -326,9 +326,29 @@ async def submit_all(client: ArenaClient, exercise_id: int, outcome) -> bool:
         if result.is_correct:
             log(f"   ★ {candidate.flag} → 正确！")
             return True
+        if result.already_submitted:
+            # ★ A0409「重复提交」不等于答错。
+            #
+            # 它只说明这个 flag 在本轮里交过 —— 而基线**被重复跑**时必然
+            # 出现：上一次已经把题解了，这一次再交同一个答案就被挡住。
+            # 直接判 ✗ 会让基线数字凭空掉一题：#1001 就是这么被误判成
+            # "未通过"的，它的 FINAL 答案其实完全正确，日志里那行
+            # `flag{welcome_to_the_arena} → 重复提交` 就是全部证据。
+            #
+            # 所以要回查题目的已解状态：平台说这题已经解了，那这次交的
+            # 就是正确答案，只是"交过"了而已。没解 → 说明先前交的是错
+            # 答案，这个候选仍然不算数。
+            try:
+                refreshed = await client.exercise(exercise_id)
+            except ArenaError:
+                refreshed = None
+            if refreshed is not None and refreshed.has_solved:
+                log(f"   ★ {candidate.flag} → 重复提交，但该题已解 → 算通过")
+                return True
+            log(f"   · {candidate.flag} → 重复提交（该题仍未解，先前交的是错答案）")
+            continue
         reason = (
             "答案错误" if result.wrong_answer
-            else "重复提交" if result.already_submitted
             else f"code={result.code} {result.message}"
         )
         log(f"   · {candidate.flag} → {reason}")
