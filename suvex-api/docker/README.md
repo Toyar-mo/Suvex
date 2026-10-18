@@ -89,8 +89,8 @@ docker run --rm ctf2-sandbox:latest sh -c \
 docker run --rm ctf2-sandbox-re:latest sh -c \
   'command -v r2 radare2 rabin2 monodis ildasm'
 
-# 4) 端到端：跑一遍基线
-python3 scripts/ctf2_baseline.py run --limit 10 --out /tmp/baseline.json
+# 4) 端到端：跑一遍基线（默认就是全部 10 道题）
+python3 scripts/ctf2_baseline.py run --out /tmp/baseline.json
 ```
 
 第 4 步才是真正的验收 —— 前三步证明"工具在"，它证明"题能做"。
