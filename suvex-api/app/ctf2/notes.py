@@ -172,10 +172,217 @@ def _inline_flag() -> re.Pattern[str]:
     子串匹配会误伤 `file{1..5}` 这类 shell 花括号展开。判据是
     "误伤的代价 vs 漏掉的代价"：误伤是少了一条可读性一般的内容，
     漏掉是**把 A 题的 flag 注进 B 题**。所以宁可误伤。
+
+    ## ⚠️ 一个例外：**嵌在引号正则里的那一段不删**（2026-10-18 实测）
+
+    唯一的例外在 `_strip_inline_flags` 里，不在本条正则上 —— 这里只是
+    指个路，因为"为什么不删"的理由属于那条**调用**规则。
     """
     from app.ctf2.runner import FLAG_PATTERN
 
     return re.compile(FLAG_PATTERN.pattern.strip("^$"))
+
+
+#: 引号类字符 —— 出现它们说明"这一段是**字面量**，不是叙述正文"。
+_QUOTE_CHARS = frozenset("'\"`")
+
+#: 真 flag 正文里**基本不会**出现的字符（量出来的，见 `_strip_inline_flags`）。
+#:
+#: ⚠️ **故意不含** `.` `-` `\` `,` `_` `:` 这些：它们会出现在真 flag 正文
+#:    或"被拼成真 flag 的片段"里（实测样本里就有 `flag{format_` 这种），
+#:    把它们算成元字符会让判据宽松到**漏掉真 flag**。
+_FLAG_BODY_META = frozenset("[]()|^$*+?")
+
+
+def _is_unescaped_quote(text: str, index: int) -> bool:
+    """`text[index]` 是不是一个**未被反斜杠转义**的引号。
+
+    ⚠️ 这不是吹毛求疵，是实测撞出来的：`#1008` 的 flag 出现在
+    `checker.c 中 a=\\"flag{...}` 里，那个 `"` 前面有反斜杠，是 JSON
+    转义而不是"引号字面量的开头"。把它当成引号 → 整段被放过 → 泄漏。
+
+    反斜杠必须**成对**消：`\\\\"`（两个真反斜杠）后面那个 `"` 是
+    未转义的真引号，而 `\\"`（一个）后面的是转义引号。所以看奇偶。
+    """
+    if index < 0 or index >= len(text):
+        return False
+    if text[index] not in _QUOTE_CHARS:
+        return False
+    backslashes = 0
+    cursor = index - 1
+    while cursor >= 0 and text[cursor] == "\\":
+        backslashes += 1
+        cursor -= 1
+    return backslashes % 2 == 0
+
+
+def _body_looks_like_regex(matched: str) -> bool:
+    """一个**整串匹配上** `FLAG_PATTERN` 的片段，其实是不是正则/命令？
+
+    ## 为什么需要这个判断
+
+    `FLAG_PATTERN` 只约束"前缀 + `{...}`"这个外形，正文里什么都收
+    （除 `{}`）。所以下面这些**全都整串匹配**，但它们不是 flag：
+
+        flag{[a-z]*}      ← grep 的正则
+        flag{[^}]*}       ← 同上
+        flag{(.+?)}       ← 同上
+        flag{a|b}         ← 同上
+
+    判据：正文里含正则元字符 `[ ] ( ) | ^ $ * + ?` 就不算真 flag。
+
+    ## ⚠️ 这个判据是量出来的，且只在"整串匹配"语境用
+
+    `_tmp/measure_flag_charset.py` 扫臂 A/B 全部 transcript 的 28 个
+    去重形态：**17 个真 flag 无一含这些字符**，11 个含这些字符的
+    **全是正则/代码片段**。所以在这条判据上零误伤。
+
+    ⚠️ 但**不能推广到子串匹配**（`_strip_inline_flags` 那里）：
+    那里的样本里就有"正文含 `[` 但拼起来是真 flag"的形状
+    （`#1006` 的 `flag{format_'…b'[debug] token_part2 = …}`）。
+    两个语境看到的证据不同，判据也就不同 —— 这是刻意的，不是不一致。
+    """
+    body = matched
+    if "{" in body and "}" in body:
+        body = body[body.index("{") + 1 : body.rindex("}")]
+    return bool(_FLAG_BODY_META & set(body))
+
+
+def _strip_inline_flags(text: str) -> str:
+    """`_inline_flag()` 的**子串级**剔除，但放过"命令里当搜索针的 flag 形状"。
+
+    ## 为什么需要这个例外（真 bug，不是假想）
+
+    方法卡里最典型的 Web/取证做法，恰恰是**教人用正则去找 flag**：
+
+        grep -ao 'flag{[^}]*}' /work/attachments/dump.bin
+
+    而 `_inline_flag()` 的子串版会在这里匹配到 `flag{[^}`（正则是
+    `[^{}]{1,200}`，`[^` 就是它眼里的"正文"）—— 它不要求那个 `}` 是
+    真的右花括号。删掉之后命令变成：
+
+        grep -ao ']*}' /work/attachments/dump.bin
+                  ^^^^^ 照抄必然报错
+
+    实测扫十张 A/B 方法卡，**两张被打成这样**（`arena-1004`、`arena-1010`），
+    而那几条命令正是"这道题怎么做"的核心。所以这不是"少一条可读性
+    一般的内容"，是**把卡片的主要知识删成了语法残骸**。
+
+    同一类还有**代码里的搜索针** —— 删掉一样毁命令：
+
+        python3 -c "... i=d.find(b'flag{'); print(d[i-60:i+40]) ..."
+
+    ## 判据（位置，不是内容）
+
+    只有"**紧前一个字符是未转义引号**"时才有机会保住，再看两条：
+
+      · **紧后一个字符不是同一个引号** —— 说明我们不在 `echo 'flag{abc}'`
+        那种"引号包住整段、后面就该收尾"的形状里，而是字符串/正则
+        **还没写完**；
+      · 否则（后面就是收尾引号）再看**正文里有没有正则元字符** ——
+        覆盖 `grep 'flag{[a-z]*}'` 这种整条正则恰好被吃干净的情况。
+
+    ## ⚠️ 为什么不能只看"正文含元字符"
+
+    我最初就是这么写的，被实测否掉了（`_tmp/measure_flag_charset.py`
+    扫臂 A/B 全部 transcript，28 个去重样本）。反例是 `#1006` 的两段：
+
+        flag{format_'，偏移 1069 -> b'[debug] token_part2 = string_leak}
+        flag{format_`，偏移 0x42d `[debug] token_part2 = string_leak}
+
+    正文里有 `[` `]`（元字符），但它们**拼起来就是 `#1006` 的答案**
+    `flag{format_string_leak}` —— 放过 = 把这题的 flag 注进别的题。
+    它们前面是空格（不是引号），所以"位置"判据删得掉，"内容"判据删不掉。
+
+    ## ⚠️ 为什么不能只看"前面是引号"
+
+    因为 `echo 'flag{abc}'`、`"answer": "flag{abc}"` 这些**正常写法**
+    前面也是引号。它们后面紧跟同一个引号 → 走第二条分支 → 照删。
+
+    ## 代价（明知而接受）
+
+    hexdump 输出里恰好有反引号时会拼出 `abcdefghijklmnopqrstuvwxyz{|}`
+    这种噪声，被判据当成"引号字面量"而保住。方向是对的：保住一串
+    噪声只是卡片难看，删掉一段命令则是卡片失效 —— 不对称的错误代价
+    决定了判据该往哪边偏。
+    """
+    pattern = _inline_flag()
+    length = len(text)
+
+    def _replace(match: re.Match[str]) -> str:
+        if _keeps_search_needle(text, match.start(), match.end(), length):
+            return match.group(0)
+        return ""
+
+    return pattern.sub(_replace, text)
+
+
+def _keeps_search_needle(text: str, start: int, end: int, length: int) -> bool:
+    """`text[start:end]` 这一处 flag 形状该**保住**（都是搜索针）还是删掉？
+
+    这是整条脱敏链路上唯一一处"位置判据"，`_strip_inline_flags` 与
+    `looks_like_flag_search_needle` 共用它 —— 两处若各写一份，改一处忘
+    另一处就会退化成"脱敏保住了、闸门却仍判泄漏"（`#1004`/`#1010` 两张
+    卡正是这么被误杀的）。
+
+    ## 判据
+
+      1. **紧前一个字符必须是未转义引号** —— 否则这就是叙述正文里裸着的
+         flag（`#1008` 的 `a=\\"flag{...}` 里那个 `"` 有反斜杠，是 JSON
+         转义而非引号字面量开头，`_is_unescaped_quote` 看奇偶挡掉）；
+      2. 紧后一个字符**不是同一个引号** → 保住（正则/字符串还没写完）；
+      3. 否则是 `echo 'flag{abc}'` 那种"引号包住整段"的形状 → 看正文
+         有没有 `_FLAG_BODY_META`，含则保住、不含则删。
+
+    ⚠️ `start - 1` 在 `start == 0` 时是 -1，会绕到字符串末尾（Python 的
+       负索引），把末字符当成"前一个字符" —— 必须先挡 `start == 0`。
+    """
+    # ⚠️ `start - 1` 在 start==0 时是 -1，会绕到字符串末尾（Python
+    #    的负索引），把末字符当成"前一个字符"—— 必须先挡住。
+    if start == 0 or not _is_unescaped_quote(text, start - 1):
+        return False
+    after = text[end] if end < length else ""
+    if after != text[start - 1]:
+        return True
+    body = text[start:end]
+    body = body[body.index("{") + 1 : -1]
+    return bool(_FLAG_BODY_META & set(body))
+
+
+def looks_like_flag_search_needle(text: str) -> bool:
+    """`text` 里出现的 flag 形状，是不是**命令的搜索针**而不是答案？
+
+    这是给**外部调用方**（`scripts/ctf2_baseline.py` 的落盘闸门）用的
+    公开判据。存在的理由：那道闸门原来写的是"见到 `flag{` 就拒收整张
+    卡"，脱敏修好之后它会**把刚保住的搜索针当成泄漏**——
+    `#1004` 和 `#1010` 两张卡就是这么被误杀的（实测）。
+
+    ## 判据
+
+    把 `text` 里每一处 flag 形状都过一遍 `_strip_inline_flags` 的那套
+    "位置"判断：**保住 = 搜索针，删掉 = 答案**。全是搜索针才返回真。
+
+    ⚠️ **必须在原文上下文里判**，不能把匹配片段切出来单独喂给
+    `_strip_inline_flags` —— 切出来的片段开头没有前一个字符，位置判据
+    恒不成立，于是每一处都会被判成"删除"，这个函数就恒返回假。
+
+    ⚠️ 空内容返回**假**（不是真）：没有 flag 形状时"是不是搜索针"这个
+    问题无从谈起，而调用方的语义是"要不要拒收"，空内容不该被拒。
+
+    ⚠️ 与 `_card_leaks` 的分工：那个还查长串 hex/base64（`build_note_fields`
+    之外的独立一道），这里只管 flag 形状，因为只有它才和脱敏规则重叠。
+    """
+    if not text:
+        return False
+    pattern = _inline_flag()
+    length = len(text)
+    found = False
+    for match in pattern.finditer(text):
+        found = True
+        if not _keeps_search_needle(text, match.start(), match.end(), length):
+            # 这处会被脱敏删掉 → 它是答案，不是搜索针。
+            return False
+    return found
 
 
 def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
@@ -231,9 +438,15 @@ def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
     #      打印出来才看见 6 条步骤在一行里。
     lines: list[str] = []
     for line in cleaned.splitlines():
-        kept = [
-            w for w in line.split() if not FLAG_PATTERN.match(w.strip("`,.;:()[]'\""))
-        ]
+        kept = []
+        for word in line.split():
+            candidate = word.strip("`,.;:()[]'\"")
+            # ⚠️ 整串匹配之外还要挡一次"其实是正则"：`flag{[a-z]*}`
+            #    外形完全符合 `FLAG_PATTERN`，但它是 grep 的搜索针。
+            #    删掉它 → 命令断成 `grep -ao /work/dump.bin`（实测）。
+            if FLAG_PATTERN.match(candidate) and not _body_looks_like_regex(candidate):
+                continue
+            kept.append(word)
         lines.append(" ".join(kept))
     cleaned = "\n".join(lines)
 
@@ -279,11 +492,16 @@ def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
     #
     # 所以这里补一遍**子串级**的剔除 —— 位置不再限定于词首词尾。
     #
-    # ⚠️ 调用 `_inline_flag()`（带 `lru_cache`）而不是在模块顶层编译：
+    # ⚠️ 走 `_strip_inline_flags`（带"放过搜索针"的例外）而**不是**直接
+    #    `_inline_flag().sub("", …)`：裸的 `.sub` 会把方法卡里
+    #    `grep 'flag{[^}]*}'` 这类**教人找 flag 的命令**吃成语法残骸
+    #    （2026-10-18 实测十张卡里两张中招）。判据与实测见该函数。
+    #
+    # ⚠️ 两者都走 `_inline_flag()`（带 `lru_cache`）而不是在模块顶层编译：
     #    它内部要 `from app.ctf2.runner import FLAG_PATTERN`，而
     #    `runner` 也 import 本模块 —— 顶层调用会在 import 期撞环。
     #    这与本文件其它地方用延迟 import 是同一条纪律。
-    cleaned = _inline_flag().sub("", cleaned)
+    cleaned = _strip_inline_flags(cleaned)
 
     # ②″ 靶机的**裸 hostname**（没有 `http://` 前缀的那些）。
     #

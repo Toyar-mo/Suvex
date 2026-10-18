@@ -63,6 +63,7 @@ sys.path.insert(0, str(SCRIPTS))
 import arena_e2e  # noqa: E402
 
 from app.arena.client import ArenaClient  # noqa: E402
+from app.ctf2 import notes  # noqa: E402
 
 DEFAULT_OUT = PROJECT_ROOT / "_tmp" / "ctf2-baseline.json"
 
@@ -492,7 +493,6 @@ _NUL = "\x00"
 #: **另一道题**的 prompt。漏一次就是"A 题的答案进了 B 题的上下文"。
 #: 而且这一步很便宜（就是几个正则），便宜到没有理由不做。
 _FLAG_SHAPES = (
-    re.compile(r"\bflag\{", re.IGNORECASE),
     re.compile(r"\b(?:ctf|dasctf|sctf|nssctf)\{", re.IGNORECASE),
     # 长串 base32/hex/base64ish —— 真 flag 常被切碎了嵌在这些里
     re.compile(r"\b[A-Za-z0-9+/]{32,}={0,2}\b"),
@@ -500,12 +500,29 @@ _FLAG_SHAPES = (
 
 
 def _card_leaks(card) -> list[str]:
-    """返回这张卡里**不该出现**的片段（空 = 干净）。"""
+    """返回这张卡里**不该出现**的片段（空 = 干净）。
+
+    ## ⚠️ `flag{` 这一条为什么不在 `_FLAG_SHAPES` 里
+
+    它原来是第一条 `re.compile(r"\\bflag\\{", re.IGNORECASE)` —— 见到
+    `flag{` 就拒收。脱敏侧修好"别把 `grep -ao 'flag{[^}]*}'` 吃成
+    `grep -ao ']*}'`"之后，这条闸门**反过来把刚保住的搜索针当成泄漏**，
+    `#1004` 和 `#1010` 两张卡被整张丢弃（实测：脱敏修好了、卡却学不到）。
+
+    所以这一条改用 `notes.looks_like_flag_search_needle()` —— 与脱敏
+    共用同一份"位置判据"：保住的是搜索针，删掉的才是答案。两处各写一份
+    就会重演这次的分叉。
+    """
     blob = f"{card.approach}\n{card.tools}\n{card.dead_ends}"
     hits: list[str] = []
     for pattern in _FLAG_SHAPES:
         for match in pattern.finditer(blob):
             hits.append(match.group(0)[:40])
+    # `flag{...}` 形状单独判：只算"脱敏会删掉的那些"，搜索针放过。
+    if re.search(r"\bflag\{", blob, re.IGNORECASE) and not (
+        notes.looks_like_flag_search_needle(blob)
+    ):
+        hits.append("flag{")
     return hits
 
 

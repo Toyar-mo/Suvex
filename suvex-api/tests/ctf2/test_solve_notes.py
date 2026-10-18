@@ -798,3 +798,113 @@ def test_prompt_has_no_notes_section_when_empty() -> None:
     )
     prompt = runner._initial_prompt(spec)
     assert "同类题的经验" not in prompt
+
+# ══════════════════════════════════════════════════════════
+# ★★ 脱敏与"教人找 flag 的命令"的冲突（实测回归）
+#
+#   十道 mock 题跑方法卡 A/B 时发现：两张卡里的核心命令被脱敏
+#   吃成了语法残骸 ——
+#
+#       grep -ao 'flag{[^}]*}' dump.bin
+#     → grep -ao ']*}' dump.bin          ← 照抄必然报错
+#
+#   根因是 `_inline_flag()` 的子串版不要求那个 `}` 是真右花括号，
+#   于是把 `flag{[^}` 当成 flag 删掉了。下面两条是对这个 bug 的
+#   **双向**钉住：既不能因此漏掉真 flag，也不能再把命令砍断。
+# ══════════════════════════════════════════════════════════
+
+
+def test_grep_regex_for_flag_survives_sanitizing() -> None:
+    """★★ 教人用正则找 flag 的命令必须活下来。
+
+    这是"脱敏规则与方法卡内容重叠互相吃字符"的直接回归 —— 实测
+    `arena-1004`/`arena-1010` 两张卡都被砍成这样。
+    """
+    for raw in (
+        "1. grep -ao 'flag{[^}]*}' /work/attachments/dump.bin",
+        "grep -ao 'flag{[a-z]*}' /work/dump.bin",
+        'python3 -c "i=d.find(b\'flag{\'); print(d[i-60:i+40])"',
+    ):
+        cleaned = notes_mod.sanitize_for_reuse(raw)
+        # 关掉空白差异：脱敏会折叠空白
+        flat = " ".join(cleaned.split())
+        flat_raw = " ".join(raw.split())
+        assert flat == flat_raw, f"★ 命令被砍断了：{raw!r} → {cleaned!r}"
+
+
+def test_real_flag_inside_quotes_is_still_stripped() -> None:
+    """★ 引号里的**真 flag** 仍然要删 —— 别为了保命令把答案放出去。
+
+    `echo 'flag{abc_def}'` 是"引号包住整段"的形状，正文没有正则元
+    字符，所以判据走"删"这一支。
+    """
+    for raw in (
+        "echo 'flag{abc_def}'",
+        'curl -s "<target>/?x=DASCTF{secret}"',
+    ):
+        cleaned = notes_mod.sanitize_for_reuse(raw)
+        assert "flag{abc_def}" not in cleaned
+        assert "DASCTF{secret}" not in cleaned
+
+
+def test_flag_assembled_from_two_chunked_pieces_is_stripped() -> None:
+    """★★ 被切成两段、正文含 `[ ]` 的 flag 也不能漏。
+
+    实测 `#1006`：`flag{format_'，偏移 1069 -> b'[debug] token_part2 =
+    string_leak}` —— 正文里有 `[` 和 `]`。如果判据只看"正文有没有元
+    字符"，这条会**被当成正则放过**，而那正是答案。
+    """
+    raw = (
+        "flag{format_'，偏移 1069 -> b'[debug] token_part2 = string_leak}"
+    )
+    cleaned = notes_mod.sanitize_for_reuse(raw)
+    assert "token_part2" not in cleaned or "flag{" not in cleaned
+
+
+def test_escaped_quote_is_not_a_literal_opener() -> None:
+    """★ JSON 转义出来的 `\"` 不是"引号字面量的开头"。
+
+    实测 `#1008`：`checker.c 中 a=\"flag{...}` —— 那个 `"` 前面有反斜
+    杠。把它当成引号开头 → 整段被放过 → 泄漏。
+    """
+    raw = 'checker.c 中 a=\"flag{patch_me_if_you_can}'
+    cleaned = notes_mod.sanitize_for_reuse(raw)
+    assert "patch_me_if_you_can" not in cleaned
+
+
+def test_search_needle_predicate_matches_sanitizer() -> None:
+    """★★ 落盘闸门与脱敏必须用**同一份**判据。
+
+    `scripts/ctf2_baseline.py` 的 `_card_leaks` 原来见 `flag{` 就拒收整
+    张卡；脱敏修好之后它反过来把刚保住的搜索针当泄漏，`#1004` 和
+    `#1010` 两张卡被整张丢弃（实测）。两个判据分叉就会重演。
+    """
+    # 搜索针：不算泄漏
+    assert notes_mod.looks_like_flag_search_needle(
+        "grep -ao 'flag{[^}]*}' /work/dump.bin"
+    )
+    # 真答案：算泄漏
+    assert not notes_mod.looks_like_flag_search_needle("echo 'flag{abc_def}'")
+    # 空内容：不算泄漏（调用方语义是"要不要拒收"）
+    assert not notes_mod.looks_like_flag_search_needle("")
+
+
+def test_sanitizer_and_needle_predicate_agree() -> None:
+    """★★ 交叉一致性：脱敏**保住**的片段，闸门就必须判成搜索针。
+
+    这条把两处判据绑在一起 —— 谁单独改都会红。
+    """
+    samples = [
+        "grep -ao 'flag{[^}]*}' /work/dump.bin",
+        "grep -ao 'flag{[a-z]*}' /work/dump.bin",
+        "echo 'flag{abc_def}'",
+        "答案是 flag{th1s_1s_th3_4nsw3r}",
+    ]
+    for raw in samples:
+        cleaned = notes_mod.sanitize_for_reuse(raw)
+        survived = "flag{" in cleaned
+        needle = notes_mod.looks_like_flag_search_needle(raw)
+        assert survived == needle, (
+            f"★ 判据分叉：{raw!r} → 脱敏{'保住' if survived else '删掉'}"
+            f"，闸门却判{'搜索针' if needle else '泄漏'}"
+        )
