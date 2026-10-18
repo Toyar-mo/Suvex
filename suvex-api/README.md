@@ -560,7 +560,7 @@ transcript** 提炼出 10 张卡（含 1 张"没解出来"的），臂 B 把这�
   `file && checksec && strings -a`、`ls -la; file; command -v; ls -l`、
   `strings -a | head -60`、`file && strings -a`），臂 B **2 遍就往下走了**
   ——因为卡里写着这一类题的关键步骤就是 `file` + `checksec` + `strings`。
-  `#1003 pwn-baby` 同理（33 → 17 次）。
+  `#1003 pwn-ret2win` 同理（33 → 17 次）。
   这正是方法卡**应该**起的作用：**不是让模型解出原本解不出的题，
   而是让它少兜圈子。**
 
@@ -586,10 +586,10 @@ transcript** 提炼出 10 张卡（含 1 张"没解出来"的），臂 B 把这�
 | --- | --- | --- | --- | --- |
 | `#1001 easy-web` | Web | 25 ✗ | 26 ✗ | +1 |
 | `#1002 crypto-warmup` | Crypto | 3 | 3 | 0 |
-| `#1003 pwn-baby` | Pwn | 9 | 9 | 0 |
+| `#1003 pwn-ret2win` | Pwn | 9 | 9 | 0 |
 | `#1004 web-lfi` | Web | 5 | 4 | −1 |
 | `#1005 crypto-rsa` | Crypto | 3 | 3 | 0 |
-| `#1006 pwn-fmt` | Pwn | 5 | 7 | +2 |
+| `#1006 pwn-rop` | Pwn | 5 | 7 | +2 |
 | `#1007 rev-crackme` | Reverse | 6 | 4 | −2 |
 | `#1008 rev-patchme` | Reverse | 3 | 4 | +1 |
 | `#1009 misc-hex` | Misc | 3 | 4 | +1 |

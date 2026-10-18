@@ -285,14 +285,17 @@ def _strip_inline_flags(text: str) -> str:
     ## ⚠️ 为什么不能只看"正文含元字符"
 
     我最初就是这么写的，被实测否掉了（`_tmp/measure_flag_charset.py`
-    扫臂 A/B 全部 transcript，28 个去重样本）。反例是 `#1006` 的两段：
+    扫臂 A/B 全部 transcript，28 个去重样本）。反例形如：
 
-        flag{format_'，偏移 1069 -> b'[debug] token_part2 = string_leak}
-        flag{format_`，偏移 0x42d `[debug] token_part2 = string_leak}
+        flag{token_a'，偏移 1069 -> b'[debug] token_part2 = _b}
 
-    正文里有 `[` `]`（元字符），但它们**拼起来就是 `#1006` 的答案**
-    `flag{format_string_leak}` —— 放过 = 把这题的 flag 注进别的题。
-    它们前面是空格（不是引号），所以"位置"判据删得掉，"内容"判据删不掉。
+    正文里有 `[` `]`（元字符），但它**拼起来就是答案**
+    `flag{token_a_b}` —— 放过 = 把这题的 flag 注进别的题。
+    它前面是空格（不是引号），所以"位置"判据删得掉，"内容"判据删不掉。
+
+    ⚠️ 这里刻意用**编造的** `flag{token_a_b}` 而不是某道真题的 flag：
+    这段 docstring 会被打进日志和文档，写真题的 flag 等于把答案
+    抄进了一个"教人怎么不泄露 flag"的函数里。
 
     ## ⚠️ 为什么不能只看"前面是引号"
 
