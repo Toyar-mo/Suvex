@@ -114,6 +114,8 @@ class RunResult:
     error: str | None = None
     #: 模型给出的候选 flag（便于人工核对"它到底错在哪"）
     tried: list[str] = field(default_factory=list)
+    #: 解题过程的落盘路径（空 = 没留）。失败时先看这个，再谈"能力"。
+    transcript: str = ""
 
 
 @dataclass
@@ -170,6 +172,7 @@ async def run_one(
     provider: str | None,
     max_turns: int,
     timeout_s: float,
+    transcript_dir: Path | None = None,
 ) -> RunResult:
     """跑一道题：拉题 → 起环境 → 解题 → 提交，全程计时。
 
@@ -178,9 +181,15 @@ async def run_one(
     `category` 字段（分类只出现在列表接口的父节点上）。写基线的时候
     踩过这个：从详情取，10 道题全被记成空分类，`by_category` 汇总
     直接失效，而结果是"看起来跑完了"。
+
+    `transcript_dir` 给定时，每道题的解题过程会落成
+    `transcript-<id>.log`。**失败的时候没有比这更值钱的东西**：
+    "8 回合用尽"可以是模型不会，也可以是靶机连不上、工具没装、
+    提示词没说清楚 —— 这三种的修法完全不同，而只有过程能分辨。
     """
     started = time.monotonic()
     result = RunResult(exercise_id=exercise_id, category=category, name=f"#{exercise_id}")
+    transcript: list[str] = []
 
     try:
         exercise = await arena_e2e.ensure_environment(client, exercise_id, no_env=False)
@@ -205,7 +214,11 @@ async def run_one(
         result.turns = -1  # 标记"已进入解题，但还没拿到 outcome"
         outcome = await asyncio.wait_for(
             arena_e2e.solve(
-                exercise, provider=provider, allow_network=False, max_turns=max_turns
+                exercise,
+                provider=provider,
+                allow_network=False,
+                max_turns=max_turns,
+                transcript=transcript,
             ),
             timeout=timeout_s,
         )
@@ -225,6 +238,15 @@ async def run_one(
         result.elapsed_s = round(time.monotonic() - started, 1)
         if result.turns < 0:
             result.turns = 0
+
+        # 过程落盘。放在 finally 里、且自己吞掉异常 —— 写日志失败
+        # 不该把这道题已经拿到的结果一起丢掉。
+        if transcript_dir is not None and transcript:
+            path = transcript_dir / f"transcript-{exercise_id}.log"
+            with contextlib.suppress(OSError):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("\n".join(transcript), encoding="utf-8")
+                result.transcript = str(path)
         # 回收失败不该影响基线结果 —— 真出问题的话，上面已经把原因
         # 记进 result.error 了，这里再抛一次只会把前面所有题的结果一起丢掉。
         with contextlib.suppress(Exception):
@@ -285,6 +307,10 @@ async def cmd_run(args: argparse.Namespace) -> int:
             log(f"   · [{exercise.category}] #{exercise.exercise_id} {exercise.name}")
         log("")
 
+        # 解题过程落在 --out 旁边的 transcripts/ 下。没有 --out 就不留
+        # （过程可能几十 MB，不该在"只看一眼通过数"的时候占盘）。
+        transcript_dir = Path(args.out).parent / "transcripts" if args.out else None
+
         for index, exercise in enumerate(targets, start=1):
             log("-" * 72)
             log(f"[{index}/{len(targets)}] #{exercise.exercise_id} {exercise.name}")
@@ -297,6 +323,7 @@ async def cmd_run(args: argparse.Namespace) -> int:
                 provider=args.provider,
                 max_turns=args.max_turns,
                 timeout_s=args.timeout,
+                transcript_dir=transcript_dir,
             )
             report.runs.append(result)
             verdict = "✓ 通过" if result.ok else "✗ 未通过"
