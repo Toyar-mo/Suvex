@@ -1236,8 +1236,30 @@ class SandboxContainer:
         （只有本文件的定义与 `_run_worker` 里一句引用它的注释），为它加一条
         检测等于给未来的读者一个"这里很重要"的假信号。真要它覆盖，主循环
         下一轮开头那次 `shell` / 工具调用会兜住。
+
+        ## `-e TERM=dumb`：为了不往 observation 里塞两行噪音
+
+        容器里没有 `TERM`，于是 pwntools 一 import 就让 `curses.setupterm()`
+        去找 terminfo，找不到就往 **stderr** 打：
+
+            Warning: _curses.error: setupterm: could not find terminfo database
+            Terminal features will not be available.  Consider setting TERM ...
+
+        而 `CommandResult.combined()` 把 stderr 以 `[stderr]` 附在 observation
+        后面给模型看 —— 结果是一道 pwn 题里，模型每跑一次
+        `python3 -c "from pwn import *"` 就多读两行与解题无关的话。
+        实测（2026-10-19，重建后的 base 镜像）确认设 `TERM` 即消失。
+
+        设 `dumb` 而不是 `xterm`：容器本来就没有终端能力，`dumb` 是 POSIX
+        表达这件事的标准值，也不会诱导子进程去发 ANSI 控制序列。
+
+        **为什么在调用侧设、不在镜像里 `ENV`**：镜像里设会连带影响
+        `docker run -it` 的手动调试（`dumb` 下 vim / less 都没法用），
+        而"以非交互方式调用"是**调用方**的事实，不是镜像的属性。
         """
-        result = _run(["docker", "exec", "-i", self.name, *argv], timeout=timeout)
+        result = _run(
+            ["docker", "exec", "-i", "-e", "TERM=dumb", self.name, *argv], timeout=timeout
+        )
         if not result.ok and _CONTAINER_GONE_MARKER in (result.stderr or ""):
             if not self.died:
                 logger.warning(
