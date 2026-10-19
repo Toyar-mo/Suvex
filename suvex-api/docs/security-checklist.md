@@ -769,6 +769,50 @@ Review 第二轮对抗审查指出：原判据
 以及 `test_the_overflow_fallback_is_the_second_line`（真实 transport
 上验"兜底是第二道"，并把 `MockTransport` 下不可测这件事写进用例）。
 
+### R-5（2026-10-20）：越界端口兜底用例在 Windows 上是**假绿**
+
+**现象**：全量回归里 `test_the_overflow_fallback_is_the_second_line`
+在 Windows 上 FAILED。先做反证：`git stash` 摘掉同批其它改动后重跑，
+照样失败 —— 与本批改动无关。
+
+**根因（探针实测）**：
+
+    getaddrinfo("127.0.0.1", 99999)  ->  ('127.0.0.1', 34463)   # Windows
+    getaddrinfo("127.0.0.1", 99999)  ->  OverflowError          # Linux
+
+Windows 把越界端口**静默截断**成 `99999 % 65536`，抛的是
+`httpx.ConnectError` 而不是 `OverflowError`。
+
+**两种后果，第二种更严重**：
+
+1. 用例在 Windows 上红 —— 假红，代码没问题；
+2. 这个用例原本要守"`_check_port` 拿掉后 `OverflowError` 兜底仍能拦住"，
+   而 Windows 上 `_check_port` 拿掉后**没有任何东西会抛 `OverflowError`**，
+   于是它**实际测的是另一条路径，还测过了**。这比假红更糟 ——
+   一道防线看起来有人在守，其实没人。
+
+**处置（照仓库既有做法：如实 skip，不假装它生效了）**：
+把一条用例拆成四条独立测试，因为 `pytest.skip()` 在函数中途调用会跳过
+**整个函数剩余部分** —— skip 放在中间会让后面的对照段在 Windows 上
+永远不执行，覆盖静默丢失。
+
+- `test_the_overflow_fallback_is_the_second_line` —— 用 `MockTransport`
+  主动抛 `OverflowError`，验兜底逻辑本身（**与 OS 无关**）。
+- `test_overflow_is_recognised_bare_and_wrapped_in_an_exception_group` ——
+  `_is_transport_level` 对裸异常与 anyio 的 `ExceptionGroup` 两种形态。
+- `test_the_real_transport_really_raises_overflow_on_out_of_range_port` ——
+  真实连接层确实抛 `OverflowError`；`os.name != "posix"` 时 `pytest.skip`
+  并写明原因。
+- `test_zero_port_is_caught_by_check_port_not_by_the_overflow_fallback` ——
+  `:0` 是非溢出语义的越界，兜底管不了，只能靠 `_check_port`。
+
+**验证**：`tests/ctf2/test_redirect_guard.py` 58 passed / 1 skipped；
+`tests/ctf2/` 整目录 835 tests / 0 failures / 0 errors / 4 skipped。
+
+**反向验证**：抽掉 `_is_transport_level` 里 `OverflowError` 那一行，
+上述第 1、2 条与 `test_real_transport_failures_are_still_swallowed[OverflowError]`
+**三条变红**；还原后全绿。
+
 ### R-2：`test_outbound_trust_env.py` 的别名写法边界（**有意不解**）
 
 该 AST 扫描只认 `httpx.X(...)`，扫不到三类等价写法

@@ -710,8 +710,67 @@ def test_a_group_of_gaierror_leaves_is_swallowed() -> None:
     )
 
 
+def _redirect_go(url: str) -> Any:
+    """走**真实** transport 请求一次（`follow_redirects=False`，只看这一跳）。"""
+
+    async def run() -> Any:
+        client = httpx.AsyncClient(follow_redirects=False, timeout=4.0, trust_env=False)
+        try:
+            return await request_same_host(
+                client, "GET", url, base_host=httpx.URL(url).host or ""
+            )
+        finally:
+            await client.aclose()
+
+    return _run(run())
+
+
+def _redirect_go_raising_overflow(url: str) -> Any:
+    """走 `MockTransport`，**主动**抛 `OverflowError`。
+
+    为什么不能靠"打一个越界端口、等连接层自己炸"：那依赖 `getaddrinfo`
+    对越界端口抛 `OverflowError`，而那是 **Linux 的行为**。Windows 上是
+    **静默截断**（实测 `getaddrinfo("127.0.0.1", 99999)` 返回
+    `('127.0.0.1', 34463)`，端口 `99999 % 65536`），于是抛的是
+    `httpx.ConnectError` 而不是 `OverflowError` —— 靠它测兜底，
+    在 Windows 上测的其实是别的路径，还测过了。
+    """
+
+    def raise_overflow(request: httpx.Request) -> httpx.Response:
+        raise OverflowError("port must be 0-65535")
+
+    async def run() -> Any:
+        client = httpx.AsyncClient(
+            transport=httpx.MockTransport(raise_overflow),
+            follow_redirects=False,
+            timeout=4.0,
+            trust_env=False,
+        )
+        try:
+            return await request_same_host(
+                client, "GET", url, base_host=httpx.URL(url).host or ""
+            )
+        finally:
+            await client.aclose()
+
+    return _run(run())
+
+
+def _without_check_port() -> Any:
+    """临时把 `_check_port` 改成空实现，返回一个恢复函数。"""
+    from app.ctf2.adapters import redirect as redirect_mod
+
+    real = redirect_mod._check_port
+
+    def _noop(target: Any, *, what: str) -> None:
+        return None
+
+    redirect_mod._check_port = _noop
+    return lambda: setattr(redirect_mod, "_check_port", real)
+
+
 def test_the_overflow_fallback_is_the_second_line() -> None:
-    """★★ `OverflowError` 兜底是**第二道**，且它只在真实连接时才起作用。
+    """★★ `OverflowError` 兜底是**第二道**防线，它必须独立生效。
 
     ## 为什么必须有这条（主管点名要的）
 
@@ -724,47 +783,67 @@ def test_the_overflow_fallback_is_the_second_line() -> None:
     `httpx.MockTransport`，而 mock **永远不会真的连接** ——
     所以 `OverflowError` 兜底在那些用例里**根本不可测**。
     实测：在 MockTransport 下把 `_check_port` 去掉，越界端口
-    一律"返回 200"，一条都不会被兜底拦住。
+    一律"返回 200"，一条都不会被兜底拦住。那些用例实际守住的是
+    `_check_port`（和 `InvalidURL` 那一档）。
 
-    那些用例实际守住的是 `_check_port`（和 `InvalidURL` 那一档）。
+    ## 这条只测**兜底逻辑本身**，与 OS 无关
 
-    ## 这条用真实 transport
-
-    打 `127.0.0.1` 上一个越界端口：连接层抛 `OverflowError`，
-    anyio 包成 `ExceptionGroup`。**把 `_check_port` 去掉**之后，
-    它必须仍然以 `Ctf2Error` 收场 —— 那才说明兜底真的在工作。
-
-    ⚠️ 反过来也测一次：`:0` 是**非溢出语义**的越界端口
-    （合法整数、连接层不抛 `OverflowError`），`_check_port` 一去掉
-    它就**拦不住**了。这个对照划清两层各自管什么：
-    `_check_port` 管"语义上不合法"，`OverflowError` 只管"连接层真的炸了"。
+    用 `MockTransport` 主动抛 `OverflowError`，把 `_check_port` 去掉后
+    它必须仍然以 `Ctf2Error` 收场。"真实连接层是不是真的抛
+    `OverflowError`"是另一件事，见
+    `test_the_real_transport_really_raises_overflow_on_out_of_range_port`。
     """
-    from app.ctf2.adapters import redirect as redirect_mod
-
-    async def go(url: str) -> Any:
-        client = httpx.AsyncClient(follow_redirects=False, timeout=4.0, trust_env=False)
-        try:
-            return await request_same_host(
-                client, "GET", url, base_host=httpx.URL(url).host or ""
-            )
-        finally:
-            await client.aclose()
-
-    def without_check_port() -> Any:
-        """临时把 `_check_port` 改成空实现，返回一个恢复函数。"""
-        real = redirect_mod._check_port
-
-        def _noop(target: Any, *, what: str) -> None:
-            return None
-
-        redirect_mod._check_port = _noop
-        return lambda: setattr(redirect_mod, "_check_port", real)
-
-    # ── ① 只靠兜底：越界端口仍须是 Ctf2Error ────────────────
-    restore = without_check_port()
+    restore = _without_check_port()
     try:
         with pytest.raises(Ctf2Error) as excinfo:
-            _run(go("http://127.0.0.1:99999/x"))
+            _redirect_go_raising_overflow("http://127.0.0.1:99999/x")
+        assert "无法使用" in excinfo.value.message, (
+            "连接层抛 `OverflowError` 后没有转成 `Ctf2Error` —— "
+            "第二道防线失效了（调用点的 except 接不住 ExceptionGroup → 500）"
+        )
+    finally:
+        restore()
+
+
+def test_overflow_is_recognised_bare_and_wrapped_in_an_exception_group() -> None:
+    """分类函数本身要对：裸的与 anyio 包过的两种形态都要认得。
+
+    anyio 的 task group 会把连接的 `OverflowError` 包成
+    `ExceptionGroup`，只判裸异常会让它逃逸成 500。
+    """
+    from app.ctf2.adapters.redirect import _is_transport_level
+
+    assert _is_transport_level(OverflowError()), (
+        "裸 `OverflowError` 没被归类成传输层错误 —— 兜底第一道判断就失效了"
+    )
+    assert _is_transport_level(
+        BaseExceptionGroup("unhandled errors in a TaskGroup", [OverflowError()])
+    ), "anyio 的 task group 会把连接的 OverflowError 包成 ExceptionGroup，必须认得"
+
+
+def test_the_real_transport_really_raises_overflow_on_out_of_range_port() -> None:
+    """越界端口在**真实连接层**上确实抛 `OverflowError`（只在 Linux 成立）。
+
+    这条与前一条分工：前一条测"就算抛了 `OverflowError`，兜底能不能接住"
+    （逻辑，OS 无关）；这条测"真实连接层到底抛不抛"（OS 行为）。
+
+    在 Windows 上 `getaddrinfo("127.0.0.1", 99999)` 不抛，而是**静默截断**
+    成 `('127.0.0.1', 34463)`，于是抛 `ConnectError` —— 在这里断言
+    等于测了别的东西，所以如实 skip，而不是假装它生效了。
+    """
+    import os
+
+    if os.name != "posix":
+        pytest.skip(
+            "真实连接层的越界端口行为只在 Linux 上可验 —— Windows 的 "
+            "getaddrinfo 会把 99999 静默截断成 34463，抛的是 ConnectError "
+            "而不是 OverflowError，在这里断言等于测别的东西"
+        )
+
+    restore = _without_check_port()
+    try:
+        with pytest.raises(Ctf2Error) as excinfo:
+            _redirect_go("http://127.0.0.1:99999/x")
         assert "无法使用" in excinfo.value.message, (
             "越界端口在去掉 `_check_port` 后没有由 `OverflowError` 兜底拦住 —— "
             "第二道防线失效了（调用点的 except 接不住 ExceptionGroup → 500）"
@@ -772,11 +851,17 @@ def test_the_overflow_fallback_is_the_second_line() -> None:
     finally:
         restore()
 
-    # ── ② 对照：`:0` 兜底管不了，只能靠 `_check_port` ────────
-    restore = without_check_port()
+
+def test_zero_port_is_caught_by_check_port_not_by_the_overflow_fallback() -> None:
+    """★ 对照：`:0` 是**非溢出语义**的越界，兜底管不了，只能靠 `_check_port`。
+
+    这个对照划清两层各自管什么：
+    `_check_port` 管"语义上不合法"，`OverflowError` 只管"连接层真的炸了"。
+    """
+    restore = _without_check_port()
     try:
         try:
-            _run(go("http://127.0.0.1:0/x"))
+            _redirect_go("http://127.0.0.1:0/x")
         except Ctf2Error as exc:
             raise AssertionError(
                 "`:0` 在去掉 `_check_port` 后就被拦住了？那说明它走的不是 "
@@ -789,7 +874,7 @@ def test_the_overflow_fallback_is_the_second_line() -> None:
         restore()
 
     with pytest.raises(Ctf2Error) as excinfo:
-        _run(go("http://127.0.0.1:0/x"))
+        _redirect_go("http://127.0.0.1:0/x")
     assert "端口越界" in excinfo.value.message, (
         "`:0` 必须由 `_check_port` 的区间比较拦住（它是非溢出语义的越界，"
         "连接层不会抛 `OverflowError`）—— 这正是 `_check_port` 必须在"

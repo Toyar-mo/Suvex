@@ -245,8 +245,12 @@ def _is_transport_level(exc: BaseException) -> bool:
     **根本不可测**（实测：在 MockTransport 下把 `_check_port` 去掉，
     越界端口一律"返回 200"，一条都不会被兜底拦住）。
     那些用例实际守住的是 `_check_port` 与 `_LIBRARY_URL_ERRORS` 两条路径。
-    要测兜底必须用真实 transport（见 `tests/ctf2/test_redirect_guard.py`
-    里 `test_the_overflow_fallback_is_the_second_line`）。
+    要测兜底必须让连接层真的抛 `OverflowError` —— 见
+    `tests/ctf2/test_redirect_guard.py` 里
+    `test_the_overflow_fallback_is_the_second_line`（用 MockTransport
+    主动抛，与 OS 无关）与
+    `test_the_real_transport_really_raises_overflow_on_out_of_range_port`
+    （真实连接层，只在 Linux 上成立）。
 
     ## ★★ 2026-10-16（R-4）：上面那段收窄依据**漏了一族**，已补回
 
