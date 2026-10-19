@@ -226,7 +226,7 @@ def build_overview(db: Session, *, scan_id: str | None = None) -> OverviewOut:
     # ⚠️ 用 `contextlib.suppress` 而不是让它裸奔：总览页是**首页**，
     #    它挂掉等于整个界面白屏。而 token 统计是**锦上添花** ——
     #    表不存在（迁移没跑）、查询出错，都不该让首页打不开。
-    #    这与 `runner._recall_notes_text` 吞异常是同一条理由。
+    #    这与 `runner._recall_notes` 吞异常是同一条理由。
     #
     # ⚠️ 只在真有 CTF2 数据时才有值；一条都没有时 `since=None`，
     #    前端据此显示"还没有数据"而不是"0 token"。

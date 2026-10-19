@@ -866,8 +866,22 @@ def test_escaped_quote_is_not_a_literal_opener() -> None:
 
     实测 `#1008`：`checker.c 中 a=\"flag{...}` —— 那个 `"` 前面有反斜
     杠。把它当成引号开头 → 整段被放过 → 泄漏。
+
+    ## ⚠️ 这条用例原先**测的不是这件事**（2026-10-19 修）
+
+    原来写的是单引号字符串 `'...a=\"flag{...}'` —— 单引号里 `\"` 就是
+    `"`，**反斜杠根本不存在**。于是它测的是"引号前没有反斜杠"这个相反
+    的情形，断言恒失败：`_is_unescaped_quote` 看到干净的 `"`，判据正确
+    地把它当搜索针放过了，而用例要它删掉。
+
+    ⇒ 守着脱敏核心判据的用例，自己构造的输入是另一回事。这类错误比
+    断言写错更隐蔽：它永远红，而红的原因看起来像是"判据坏了"。
+    改成真正的反斜杠（双引号字符串里写 `\\"`），并把**前提**先断言出来，
+    免得哪天又被某一层转义吃掉一次。
     """
-    raw = 'checker.c 中 a=\"flag{patch_me_if_you_can}'
+    raw = "checker.c 中 a=\\\"flag{patch_me_if_you_can}"
+    # 前提：这串里必须真的有一个反斜杠，否则测的就不是"转义引号"这件事。
+    assert "\\" in raw
     cleaned = notes_mod.sanitize_for_reuse(raw)
     assert "patch_me_if_you_can" not in cleaned
 

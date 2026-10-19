@@ -601,3 +601,361 @@ def test_writeups_are_cascaded_with_their_challenge(db_session: Session, ctf2_ch
     db_session.commit()
 
     assert db_session.execute(select(func.count(Ctf2Writeup.id))).scalar() == 0
+
+
+# ══════════════════════════════════════════════════════════
+# 四、生产遥测：一次解题一行（v0.45）
+# ══════════════════════════════════════════════════════════
+#
+# ## 这组用例守的是什么
+#
+# 这张表存在的唯一目的，是回答"跨题方法卡到底有没有用"—— 而那个问题
+# 用人工造的基准题**测不出效应**（九道 mock 题干净基线平均 4.3 回合 /
+# 5.3 次工具调用，本来就没有重复探索可省；n=1 时看到的"工具调用 −21%"
+# 在 n=5 下被推翻，差异 100% 来自一道结构上两臂恒为 0 张卡的题）。
+#
+# 于是改从真实比赛里收样本。样本要成立，下面每一条都得对：
+#   · **一次解题一行**（upsert 会把样本数永久压成 1）；
+#   · `attempt_id` 为空也照写（否则遥测只覆盖"走产品路径的那部分"）；
+#   · `solved` 取自 `challenge.status`（写早了会把成功记成失败）；
+#   · `category` 冗余存（否则同步改分类会让历史统计漂移）。
+#
+# ⚠️ 这些失败模式**全都是安静的**：行数少一行、某个数是 0、分类跟着变了，
+#    都不会让任何既有用例变红，而统计结论会整个错掉。
+
+
+def _telemetry_outcome(*, turns: int = 3, tool_calls: int = 9, notes_count: int = 2):
+    """最小的 outcome 形状（遥测只读这三个数，别的一概不碰）。"""
+    from types import SimpleNamespace
+
+    return SimpleNamespace(turns=turns, tool_calls=tool_calls, notes_count=notes_count)
+
+
+def test_telemetry_writes_one_row_per_attempt(db_session: Session, ctf2_challenge) -> None:
+    """★★ **一次解题一行** —— 这是与 `ctf2_writeups`（一题一份）的根本分野。
+
+    同一道题解两次就该有两行。upsert 会让第二次覆盖第一次，
+    于是"后来那次为什么更快"这个唯一想回答的问题永远没有数据。
+
+    ⚠️ 这条是整个 v0.45 的存在理由，不是细节。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    first = _attempt(db_session, ctf2_challenge.id)
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=first.id,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(turns=7, tool_calls=19, notes_count=3),
+    )
+
+    second = _attempt(db_session, ctf2_challenge.id)
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=second.id,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(turns=4, tool_calls=5, notes_count=0),
+    )
+
+    rows = (
+        db_session.execute(
+            select(Ctf2SolveTelemetry).order_by(Ctf2SolveTelemetry.created_at)
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 2, "两次解题必须两行 —— 覆盖就丢掉了一半样本"
+    assert [(r.turns, r.tool_calls, r.notes_count) for r in rows] == [
+        (7, 19, 3),
+        (4, 5, 0),
+    ]
+    assert [r.attempt_id for r in rows] == [first.id, second.id]
+
+
+def test_telemetry_is_written_even_without_an_attempt(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ `attempt_id` 为空时**照写**，而不是像 usage 那样整批跳过。
+
+    历史任务与脚本直调 `run_worker` 都没有快照，它们的回合数一样是有效
+    样本。为了外键好看把它们丢掉，等于让遥测只覆盖"走产品路径的那部分"
+    ——而那恰好是最不需要被诊断的部分。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    ok = service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(),
+    )
+
+    assert ok is True
+    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    assert row.attempt_id is None
+    assert row.turns == 3
+
+
+def test_telemetry_tolerates_an_outcome_without_the_new_fields(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ 老 outcome 没有 `tool_calls` / `notes_count` 属性 —— 记 0，不抛。
+
+    这是升级兼容：某个还在跑的长任务，它的 `SolveOutcome` 是**升级前**
+    构造的类实例。让"新字段不存在"使遥测失败，会让那段升级期整段没数据。
+    """
+    from types import SimpleNamespace
+
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    ok = service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=SimpleNamespace(turns=5),
+    )
+
+    assert ok is True
+    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    assert (row.turns, row.tool_calls, row.notes_count) == (5, 0, 0)
+
+
+def test_telemetry_records_solved_from_the_challenge_status(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """`solved` 取自 `challenge.status` —— 所以调用点必须在 `_record_outcome` 之后。
+
+    ⚠️ 这条同时钉住了那条**顺序**约束：写早了 `status` 还是旧的，
+    于是一次成功的解题被记成 `solved=False`，"解出率"从此偏低，
+    而偏低不会被任何人发现。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    ctf2_challenge.status = "solved"
+    ctf2_challenge.confirmed_flag = "flag{ours}"
+    ctf2_challenge.candidate_flag = None
+    db_session.commit()
+
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(),
+    )
+
+    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    assert row.solved is True
+
+
+def test_telemetry_freezes_the_category_at_write_time(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ `category` 是**当时的快照** —— 之后改分类不该改写历史行。
+
+    方法卡是**同分类**召回的，统计必须先按分类切开。而
+    `challenges.category` 会在同步时被平台侧改写；不冗余一份的话，
+    "Web 题不需要卡"和"Crypto 题有卡也没用"会随着一次改名搅成一团。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    assert ctf2_challenge.category == "web"
+
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(),
+    )
+
+    ctf2_challenge.category = "web-lfi"
+    db_session.commit()
+
+    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    assert row.category == "web", "历史行必须记得当时的分类，而不是现在的"
+
+
+def test_telemetry_rejects_negative_numbers_without_raising(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """负数被数据库 CHECK 拦下 → `rollback` + `False`，**不抛**。
+
+    判据是"宁可这一行写不进去，也别污染统计"，但**不能**让记账失败
+    把一次成功的解题变成报错 —— 所以每条写入路径都要留住那个 False。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    ok = service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(turns=-1),
+    )
+
+    assert ok is False
+    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+    # ★ 会话必须还能用 —— 回滚之后继续查是"不抛"的实际含义
+    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+
+
+def test_telemetry_failure_does_not_roll_back_the_solve_result(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """☆☆ **本表最重要的一条**：遥测写失败绝不能让解题结果一起回滚。
+
+    调用点 `_run_worker` 的 ③ 同步段只有**最后一次** `db.commit()`：
+
+        _record_outcome(db, challenge, outcome)   # 只改内存，不 commit
+        record_solve_telemetry(...)               # ← 这里
+        record_solve_usages(...)
+        save_writeup(...)
+        db.commit()                               # ← 全段唯一的一次
+
+    所以本函数内部一句朴素的 `db.rollback()` 会把 `_record_outcome`
+    **还没提交**的 `status` / `confirmed_flag` 一并抹掉。实测（真库）：
+
+        改内存后 status = solved
+        record_solve_telemetry -> False
+        失败后（同一对象）status = unsolved      ← 内存里的改动没了
+        ★★ 重新从库里读 status = unsolved | flag = None
+
+    ⇒ 一次**成功的解题**被记成未解出，而它是安静的：解题照常返回成功，
+    日志里只有一条 warning，只有事后翻题目状态才会发现。
+    这与本函数的整个承诺（"失败不影响解题结果"）正好相反。
+
+    修法是 `db.begin_nested()`（SAVEPOINT）：失败只退到保存点，调用方
+    未提交的改动原样保留。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    # 模拟 `_record_outcome`：改内存 + flush，**不 commit**。
+    ctf2_challenge.status = "solved"
+    ctf2_challenge.confirmed_flag = "flag{ours}"
+    db_session.flush()
+
+    ok = service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(turns=-1),  # 撞 CHECK ⇒ 必然失败
+    )
+
+    assert ok is False
+    # ★ 内存里刚改的解出状态必须还在（不能已被 rollback 抹掉）
+    assert ctf2_challenge.status == "solved"
+    assert ctf2_challenge.confirmed_flag == "flag{ours}"
+
+    # ★★ 而且必须真的提交得进去 —— 前面那句才是"没被回滚"的证明
+    db_session.commit()
+    db_session.expire_all()
+    fresh = db_session.get(type(ctf2_challenge), ctf2_challenge.id)
+    assert fresh is not None
+    assert fresh.status == "solved", "★ 遥测失败把一次成功的解题回滚掉了"
+    assert fresh.confirmed_flag == "flag{ours}"
+    # 遥测确实没写成（这是"失败"该有的结果）
+    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+
+
+def test_telemetry_survives_attempt_deletion(db_session: Session, ctf2_challenge) -> None:
+    """attempt 外键是 SET NULL —— 快照被清掉后观测仍然算数。
+
+    ⚠️ 与 usage 表的 CASCADE **刻意不同**：用量是那一次尝试的附属明细
+    （尝试没了就没有意义），而观测说的是"这题解了几次、各花多少轮"。
+    """
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    attempt = _attempt(db_session, ctf2_challenge.id)
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=attempt.id,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(),
+    )
+
+    db_session.delete(attempt)
+    db_session.commit()
+
+    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    assert row.attempt_id is None
+    assert row.turns == 3, "观测本身不该跟着快照一起消失"
+
+
+def test_telemetry_is_cascaded_with_its_challenge(db_session: Session, ctf2_challenge) -> None:
+    """题被删掉 → 它的观测跟着消失（不留孤儿）。
+
+    与上一条方向相反，这是刻意的：challenge 是观测的**归属**，
+    尝试只是它的**出处**。
+    """
+    from app.ctf2.models import Ctf2Challenge, Ctf2SolveTelemetry
+
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=_telemetry_outcome(),
+    )
+
+    db_session.delete(db_session.get(Ctf2Challenge, ctf2_challenge.id))
+    db_session.commit()
+
+    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+
+
+def test_recall_notes_returns_both_text_and_count(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ `_recall_notes` 返回 `(片段, 张数)` —— 张数是统计的分母。
+
+    只看文本空不空会把"1 张"和"3 张"抹平，而这两者对"方法卡值不值"
+    的意义完全不同。
+
+    ⚠️ 这里同时钉住另一件事：**分类为空时返回 `("", 0)`**。给全部的
+    后果是把无关题的方法灌进 prompt，比不给更坏。
+    """
+    from app.core.vocab import Ctf2ChallengeStatus, Ctf2SandboxProfile
+    from app.ctf2.models import Ctf2Challenge, Ctf2SolveNote
+
+    # 两张卡必须挂在**别道题**上：召回规则排除当前题（同一道题再解时
+    # 该读的是自己的 transcript，而不是自己那张卡）。
+    for index in range(2):
+        other = Ctf2Challenge(
+            id=new_id("ctf2chal"),
+            competition_id=ctf2_challenge.competition_id,
+            remote_id=f"other-{index}",
+            stage_id=None,
+            title=f"同类题{index}",
+            category=ctf2_challenge.category,
+            description="",
+            attachments=[],
+            score=100,
+            status=Ctf2ChallengeStatus.UNSOLVED.value,
+            candidate_flag=None,
+            confirmed_flag=None,
+            wrong_submission_count=0,
+            max_wrong_submissions=3,
+            candidate_count=0,
+            sandbox_profile=Ctf2SandboxProfile.BASE.value,
+        )
+        db_session.add(other)
+        db_session.flush()
+        db_session.add(
+            Ctf2SolveNote(
+                id=new_id("ctf2note"),
+                challenge_id=other.id,
+                category=other.category,
+                solved=True,
+                approach="先看入口参数",
+                tools="curl",
+                dead_ends="",
+            )
+        )
+    db_session.commit()
+
+    text, count = runner._recall_notes(db_session, ctf2_challenge)
+    assert count == 2
+    assert text, "有卡就该有片段"
+
+    ctf2_challenge.category = ""
+    db_session.commit()
+
+    text, count = runner._recall_notes(db_session, ctf2_challenge)
+    assert (text, count) == ("", 0), "分类为空必须一张都不给"

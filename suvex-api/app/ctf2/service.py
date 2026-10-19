@@ -2231,6 +2231,113 @@ def record_solve_usages(
     return len(rows)
 
 
+def record_solve_telemetry(
+    db: Session, *, attempt_id: str | None, challenge: Ctf2Challenge, outcome
+) -> bool:  # noqa: ANN001
+    """把一次解题的横向指标落库（v0.45 生产遥测）。**失败只记日志，不抛。**
+
+    写的是三个数：`turns` / `tool_calls` / `notes_count`。为什么是这三个、
+    为什么独立成表而不并进 `ctf2_writeups`，见
+    `models.Ctf2SolveTelemetry` 的类 docstring（那一节是这张表的全部理由）。
+
+    ## 为什么失败不抛
+
+    与 `record_solve_usages` / `learn_from_solve` 同一条纪律：它在解题
+    **收尾**时被调用，而那时结果是既成事实。让"记观测"的失败把一次
+    成功的解题变成报错是本末倒置。
+
+    ## ⚠️ `attempt_id` 为空时**照写**，这是与 `record_solve_usages` 的区别
+
+    `ctf2_solve_usages.attempt_id` 是 NOT NULL，所以拿不到快照时那边
+    **整批跳过**。本表的 `attempt_id` 是 `nullable` + `SET NULL` ——
+    观测本身不依赖快照存在，所以这里照写，只把链接留空。
+
+    这不是宽容，是**样本完整性**：历史任务、脚本直调 `run_worker`
+    都没有快照，而它们的回合数/工具数一样是有效样本。为了外键好看
+    把它们丢掉，等于让遥测只覆盖"走产品路径的那部分解题" ——
+    而那恰好是最不需要被诊断的部分。
+
+    ## 为什么每次都**新增一行**，而不是 upsert
+
+    要的就是**样本**。同一道题解 5 次就该有 5 行，那 5 行之间的差异
+    才是"这次为什么更快"的证据。upsert 会把样本数永久压成 1
+    —— 那正是 `ctf2_writeups`（一题一份）不能兼任本表职责的原因。
+
+    ## ★ 为什么必须用 SAVEPOINT，而不是直接 `db.add` + `db.commit`
+
+    这里踩过一次实测：调用点 `_run_worker` 的 ③ 同步段是
+
+        _record_outcome(db, challenge, outcome)      # 只改内存，不 commit
+        record_solve_telemetry(...)                  # ← 本函数
+        record_solve_usages(...)
+        finalize_solve_scan(...)
+        save_writeup(...)
+        db.commit()                                  # ← 全段只有这一次
+
+    `_record_outcome` **不提交**，它只把 `challenge.status` /
+    `confirmed_flag` 改在内存里。所以本函数里一句朴素 `db.rollback()`
+    会把**那些还没提交的解题结果一起回滚掉**：
+
+        改内存后 status = solved
+        record_solve_telemetry -> False
+        失败后（同一对象）status = unsolved     ← 内存里的改动没了
+        ★★ 重新从库里读 status = unsolved | flag = None
+        遥测行数 = 0
+
+    也就是"遥测写失败"会把一次**成功的解题**变成未解出 —— 而这正是
+    本函数的全部承诺（"失败不影响解题结果"）的反面。它还是安静的：
+    解题照常返回、日志只有一条 warning，只有事后看题目状态才会发现。
+
+    `db.begin_nested()` 发一条 SAVEPOINT，`rollback` 只退到那里，
+    调用方的未提交改动原样保留。
+
+    ⚠️ 回滚后还要把 `row` 从 session 里摘掉：它已被 flush 进
+       SAVEPOINT、又被回滚，留在 session 里的实例是"已持久化过"的
+       幽灵状态，下一次 flush 可能把它当脏数据再插一次。
+    """
+    from app.core.ids import new_id
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    turns = int(getattr(outcome, "turns", 0) or 0)
+    tool_calls = int(getattr(outcome, "tool_calls", 0) or 0)
+    notes_count = int(getattr(outcome, "notes_count", 0) or 0)
+
+    row = Ctf2SolveTelemetry(
+        id=new_id("ctf2tel"),
+        challenge_id=challenge.id,
+        attempt_id=attempt_id or None,
+        # 冗余存当时的分类：见类 docstring（防止同步改分类让统计漂移）。
+        category=(challenge.category or "")[:32],
+        solved=challenge.status == Ctf2ChallengeStatus.SOLVED.value,
+        turns=turns,
+        tool_calls=tool_calls,
+        notes_count=notes_count,
+    )
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except Exception:  # noqa: BLE001 - 遥测失败不该毁掉解题结果
+        # ⚠️ SAVEPOINT 已回滚，**这里绝不能再 `db.rollback()`** ——
+        #    那会连带回滚调用方还没提交的解题结果（见 docstring 的实测）。
+        with contextlib.suppress(Exception):
+            db.expunge(row)
+        logger.warning(
+            "解题遥测落库失败（不影响解题结果）：%s", challenge.id, exc_info=True
+        )
+        return False
+
+    logger.info(
+        "已记录解题遥测：%s solved=%s turns=%d tools=%d notes=%d",
+        challenge.id,
+        row.solved,
+        turns,
+        tool_calls,
+        notes_count,
+    )
+    return True
+
+
 def save_writeup(
     db: Session,
     *,

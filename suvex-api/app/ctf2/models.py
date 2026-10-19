@@ -1126,6 +1126,107 @@ class Ctf2Writeup(Base):
         )
 
 
+class Ctf2SolveTelemetry(Base):
+    """**一次解题的横向指标快照**（v0.45）—— 生产遥测。
+
+    ## 为什么需要这张表（这是它存在的唯一理由）
+
+    `ctf2_writeups` 已经有了 `turns` 与 `elapsed_sec`，`ctf2_solve_usages`
+    已经有了逐轮 token。缺的是**回答"这次补强有没有用"所必需的那三个数**：
+
+      · 回合数（`turns`）—— 对话轮了几次；
+      · **工具调用数**（`tool_calls`）—— 一回合可以下发多条命令，
+        所以回合数只反映了一半的"兜圈子"；
+      · **方法卡张数**（`notes_count`）—— 这次到底参考到了几张别题的解法。
+
+    后两个数原先**哪里都没有**：`SolveOutcome` 里有 `tool_outputs`
+    （完整输出原文，为了做答案锚定）却没人数个数，`_recall_notes` 只把
+    张数打进一行 `logger.info` 就扔了。于是"方法卡值不值"这个问题
+    永远只能靠**人工造基准题**去答 —— 而实测那样做测不出效应
+    （见 README「跨题方法卡」那一节）。
+
+    真实比赛里这三个数本来就会自然产生。落下来之后，"模型明显在兜圈子"
+    的题会自己浮出来，不必等到有人手工去翻 transcript。
+
+    ## ★ 为什么是独立表，而不是往 `ctf2_writeups` 加列
+
+    | | `Ctf2Writeup` | 本表 |
+    | --- | --- | --- |
+    | 行数/题 | **一题一行**（`UNIQUE`，重解时更新） | **一次解题一行** |
+    | 是谁的产物 | 赛后提交的**成品** | 运行的**观测样本** |
+
+    关键在行数：统计要的是**样本**。"这道题解了 5 次"在题解表里永远只有
+    1 行，5 次尝试的 4 次被覆盖掉 —— 而那 4 次恰恰是"后来者为什么更快"
+    的证据。写进题解表等于把样本数永久压成 1。
+
+    ## ★ 为什么 `attempt_id` 是 `SET NULL` 而 `challenge_id` 是 `CASCADE`
+
+    与 `Ctf2Writeup` 的同名取舍是**同一个理由**但结论相反，值得写清：
+
+    - attempt 快照被清理时，这条观测**仍然有价值**（它说的是"这道题解了
+      几次、各花多少轮"），所以 `SET NULL` 让它活下来；
+    - 题被删掉时，它的观测也跟着没意义了，所以 `CASCADE`。
+
+    ## ★ `category` 为什么冗余存一份
+
+    统计要按分类切 —— 方法卡本来就是**同分类**召回的，混着算会把
+    "Web 题不需要卡"和"Crypto 题有卡也没用"搅成一团。而
+    `challenge.category` 是同步时会改的字段（平台侧改名/改分类），
+    一旦被改，历史观测的分类就跟着漂了。冗余一份，让"当时的分类"
+    和"当时的张数"来自同一个快照。
+
+    ## 不存什么
+
+    不存 `elapsed_sec`：它的来源是**借壳的 `Scan.duration_sec`**
+    （`Ctf2Challenge` 自己没有耗时列），而那个值在 `finalize_solve_scan`
+    之后才存在 —— 本表在 `_record_outcome` 里写，那时它还是 `None`。
+    耗时列在 `ctf2_writeups` 里已有，且实测没有分辨力
+    （宿主负载能把它放大三倍），不为它在这里再造一处不一致的读数。
+    """
+
+    __tablename__ = "ctf2_solve_telemetry"
+    __table_args__ = (
+        CheckConstraint(
+            "turns >= 0 AND tool_calls >= 0 AND notes_count >= 0",
+            name="solve_telemetry_non_negative",
+        ),
+        # "这道题的历次观测"（详情页/复盘按题看）。
+        Index("ix_ctf2_solve_telemetry_challenge_at", "challenge_id", "created_at"),
+        # "按分类算均值"（回答"方法卡在哪类题上才有用"）。
+        Index("ix_ctf2_solve_telemetry_category_at", "category", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    challenge_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+    )
+    #: 出自哪一次尝试。`SET NULL`：快照被清理后观测仍然算数。
+    attempt_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("ctf2_solve_attempts.id", ondelete="SET NULL"), nullable=True
+    )
+
+    #: 当时的分类（见类 docstring：防止同步改分类让历史统计漂移）。
+    category: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+
+    #: 这次解出没解出 —— 所有统计都要能按它分组。
+    solved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 真正执行过的工具调用次数（不含被 `MAX_ACTIONS_PER_TURN` 丢掉的动作）。
+    tool_calls: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 注入的同类题方法卡张数。0 表示"没有召回"（分类为空/库里没有/召回失败）。
+    notes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return (
+            f"<Ctf2SolveTelemetry challenge={self.challenge_id!r} "
+            f"solved={self.solved} turns={self.turns} "
+            f"tools={self.tool_calls} notes={self.notes_count}>"
+        )
+
+
 __all__ = [
     "CTF2_API_PREFIX",
     "CTF2_OFFICIAL_HOSTS",
@@ -1135,6 +1236,7 @@ __all__ = [
     "Ctf2Environment",
     "Ctf2SolveAttempt",
     "Ctf2SolveNote",
+    "Ctf2SolveTelemetry",
     "Ctf2SolveUsage",
     "Ctf2Submission",
     "Ctf2Writeup",

@@ -2160,6 +2160,19 @@ class SolveSpec:
     #    这里不再过滤一遍：两处都做会让"谁负责"变得含混。
     notes_text: str = ""
 
+    #: ★ 这次解题**拿到了几张**同类题方法卡（v0.45，生产遥测）。
+    #:
+    #: ## 为什么要有这个数（而不是只看 `notes_text` 空不空）
+    #:
+    #: "注入了卡片"与"注入了 3 张卡片"是两件事，而后者才是
+    #: "方法卡到底有没有帮上忙"这个问题的分母。只看文本非空的话，
+    #: 一次注入 1 张和一次注入 3 张在统计里长得一模一样。
+    #:
+    #: ⚠️ 它由 `build_spec` 从 `_recall_notes` 的返回值填进来 ——
+    #:    召回发生在那里（有 session），这里只是携带。默认 0 表示
+    #:    "没有召回"（分类为空、库里没有同类题、或召回失败）。
+    notes_count: int = 0
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
         return (
@@ -2240,6 +2253,34 @@ class SolveOutcome:
     #: 而 token 数依赖外部。分开记让"跑了多少轮"这件事不受
     #: "接入点给不给 usage"影响。
     llm_calls: int = 0
+
+    #: ★ v0.45：这次解题**一共执行了几次工具调用**（生产遥测）。
+    #:
+    #: ## 为什么不能用 `len(tool_outputs)` 代替
+    #:
+    #: `tool_outputs` 存的是**完整输出原文**，用来做答案锚定
+    #: （`answer_is_grounded`）。拿它数个数当然算得出来，但那意味着
+    #: "想知道跑了几次工具"要先留住全部输出 —— 而这是一个**纯计数**，
+    #: 不该为了它多背一份内存，也不该在将来有人给 `tool_outputs` 加
+    #: 采样/截断策略时让它变成错的数。
+    #:
+    #: ## 为什么它比回合数更能说明问题
+    #:
+    #: 回合数由对话轮次决定，而一回合可以下发多条命令
+    #: （`MAX_ACTIONS_PER_TURN`）。所以"模型有没有在兜圈子"这件事，
+    #: 回合数只看得出一半 —— 另一半藏在"每回合跑了几条"里。
+    #: 实测依据见 README「跨题方法卡」那一节：同一题的回合数可以是 4，
+    #: 工具调用数却相差一倍以上。
+    #:
+    #: ⚠️ 数的是**真正执行了**的调用（`dispatch_tool` 返回之后自增），
+    #:    不包含"模型写了但被 `MAX_ACTIONS_PER_TURN` 丢掉"的那些。
+    tool_calls: int = 0
+
+    #: ★ v0.45：这次解题**注入了几张**同类题方法卡（生产遥测）。
+    #:
+    #: 与 `spec.notes_count` 同源，收尾时拷过来 —— 遥测落库发生在
+    #: `_record_outcome`，而那里只拿得到 `outcome`，拿不到 `spec`。
+    notes_count: int = 0
 
     # ── ★ v0.38：`FINAL` 结论文档里的三块分析 ─────────────────
     #
@@ -3283,6 +3324,16 @@ async def solve_in_sandbox(
 
     outcome = SolveOutcome()
 
+    # ★ v0.45：把"这次带了几张方法卡"从 spec 拷到 outcome。
+    #
+    # 为什么不在收尾时直接读 `spec.notes_count`：遥测落库在
+    # `_record_outcome(db, challenge, outcome)`（见 `_run_worker` 的
+    # ③ 同步段），那里**只拿得到 outcome** —— spec 是 `solve_in_sandbox`
+    # 的入参，早就出了作用域。而要为此改 `_record_outcome` 的签名，
+    # 就得动它在 `tests/` 里的十几处调用，把一处纯记账变得比它值得的
+    # 更重。
+    outcome.notes_count = spec.notes_count
+
     # ★ 本次解题内"跑过的命令"台账（v0.41 修订）—— 用于识别空转。
     #
     #   键是 `(工具名, 参数序列化, 整段输出的指纹)`，值是**第一次**跑它的轮次。
@@ -3561,6 +3612,12 @@ async def solve_in_sandbox(
                 #   "这个答案到底有没有在工具输出里出现过"。用 `transcript`
                 #   做不了这件事：它里面的 result 被 `_clip(…, 2000)` 截过。
                 outcome.tool_outputs.append(result)
+                # ★ v0.45：工具调用数（生产遥测）。
+                #
+                # ⚠️ 数的是**执行之后**的这一次，与上面的 `log.append`
+                #    一进一出 —— 被 `MAX_ACTIONS_PER_TURN` 丢掉的那些
+                #    根本没走到这里，所以不会被数进来。
+                outcome.tool_calls += 1
                 # ★ 重复执行要变成**可见信号**（v0.41，v0.41.1 换判据）。
                 #
                 # ⚠️ v0.42：判据本身没变，但它现在**逐条**应用 ——
@@ -4419,6 +4476,12 @@ def build_spec(
     if resume:
         persist_listing = _list_workspace_files(challenge.id)
 
+    # ★★ v0.32 / v0.45：召回同类题的方法卡，并记下**张数**。
+    #
+    # `_recall_notes` 一次查询同时给出片段与张数 —— 张数进 `SolveSpec`
+    # 只是为了被 `solve_in_sandbox` 拷进 `outcome`，最终落到遥测表。
+    notes_text, notes_count = _recall_notes(db, challenge)
+
     return SolveSpec(
         challenge_id=challenge.id,
         title=challenge.title,
@@ -4455,7 +4518,10 @@ def build_spec(
         #
         # ⚠️ 召回失败**不影响解题**：没有卡片只是少了参考，
         #    而"因为查不到卡片就不解题"明显更糟。
-        notes_text=_recall_notes_text(db, challenge),
+        notes_text=notes_text,
+        # ★ v0.45：同一棵树的果实 —— 张数走另一条路（spec → outcome →
+        #   遥测表），片段走 prompt。见 `_recall_notes` 的说明。
+        notes_count=notes_count,
         # 沙箱配额（见上面那段说明：这四个参数原来漏了，容器一直没有上限）
         cpus=sandbox_cpus,
         memory_mb=sandbox_memory_mb,
@@ -4508,8 +4574,20 @@ def _fallback_llms(db: Session, settings_row, *, primary) -> tuple[FallbackLlm, 
     )
 
 
-def _recall_notes_text(db: Session, challenge: Ctf2Challenge) -> str:
-    """召回同类题的方法卡并渲染成 prompt 片段。查不到就返回空串。
+def _recall_notes(db: Session, challenge: Ctf2Challenge) -> tuple[str, int]:
+    """召回同类题的方法卡并渲染成 prompt 片段。返回 `(片段, 张数)`。
+
+    查不到就返回 `("", 0)`。
+
+    ## 为什么返回张数而不只是文本
+
+    v0.45 起要落生产遥测："这道题解题时到底有没有参考到别题的解法"。
+    只看文本空不空会把"1 张"和"3 张"抹平，而这两者对"方法卡值不值"
+    的意义完全不同 —— 张数是那条统计的分母。
+
+    ⚠️ 之所以不用"稍后自己再查一次库"，是因为**这里就是唯一一次
+    真实查询**：拿它的结果直接返回，比事后再查一遍既省一次往返，
+    也不会在两次查询之间被并发写卡改变答案。
 
     ## 为什么吞异常
 
@@ -4527,7 +4605,7 @@ def _recall_notes_text(db: Session, challenge: Ctf2Challenge) -> str:
 
         rows = notes_mod.notes_for_challenge(db, challenge)
         if not rows:
-            return ""
+            return "", 0
         text = notes_mod.render_notes_for_prompt(rows)
         logger.info(
             "为 %s 召回了 %d 张同类题方法卡（category=%s）",
@@ -4535,10 +4613,10 @@ def _recall_notes_text(db: Session, challenge: Ctf2Challenge) -> str:
             len(rows),
             challenge.category or "未分类",
         )
-        return text
+        return text, len(rows)
     except Exception:  # noqa: BLE001 - 召回失败不该拦住解题
         logger.warning("召回同类题方法卡失败（本次不带参考）", exc_info=True)
-        return ""
+        return "", 0
 
 
 def _provider_from_snapshot(
@@ -5255,6 +5333,19 @@ async def _run_worker(
         challenge = db.get(Ctf2Challenge, challenge_id)
         if challenge is not None:
             _record_outcome(db, challenge, outcome)
+            # ★ v0.45：生产遥测（回合数 / 工具调用数 / 方法卡张数）。
+            #
+            # ⚠️ 位置在 `_record_outcome` **之后**：它要写 `solved`，而那个
+            #    值来自 `challenge.status` —— 上面那句刚定完。放前面会让
+            #    一次成功的解题被记成 `solved=False`，于是"解出率"这项
+            #    统计从此偏低，而偏低不会被任何人发现。
+            #
+            # ⚠️ 它自己吞异常（内部 try/except + warning）：遥测是**附加
+            #    产物**，失败不该把一次成功的解题变成报错 —— 与
+            #    `record_solve_usages` / `learn_from_solve` 同一条纪律。
+            ctf2_service.record_solve_telemetry(
+                db, attempt_id=attempt_id, challenge=challenge, outcome=outcome
+            )
             # ★ v0.36：token 用量与题解。
             #
             # ⚠️ 顺序在 `_record_outcome` **之后** —— 题解要写
