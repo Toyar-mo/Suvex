@@ -1194,6 +1194,8 @@ class Ctf2SolveTelemetry(Base):
         Index("ix_ctf2_solve_telemetry_challenge_at", "challenge_id", "created_at"),
         # "按分类算均值"（回答"方法卡在哪类题上才有用"）。
         Index("ix_ctf2_solve_telemetry_category_at", "category", "created_at"),
+        # "按细分类型算均值"（回答"带 heap 题的遥测只占多少"）。
+        Index("ix_ctf2_solve_telemetry_subcategory_at", "subcategory", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -1217,13 +1219,46 @@ class Ctf2SolveTelemetry(Base):
     #: 注入的同类题方法卡张数。0 表示"没有召回"（分类为空/库里没有/召回失败）。
     notes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    #: ★ v0.46：这次解题**真正用到的工具名**（去重、保序、逗号分隔）。
+    #:
+    #: ## 为什么要存工具名，而不只存 `subcategory`
+    #:
+    #: 回答"要不要上 heap 向工具"需要的是"真实比赛里 heap 题多不多、
+    #: 模型在上面卡不卡"。而 `subcategory` 是**我们自己推导**
+    #: 出来的结论 —— 推导规则一定会改。只存结论的话，规则改了就得
+    #: 重跑生产才能重算；而存了工具名，新规则可以直接在历史数据上
+    #: 重新跑一遍。这正是 `turns`/`tool_calls` 当初没记、后来无法回填
+    #: 的同一个坑。
+    #:
+    #: ## 只记**工具名**，不记命令与参数
+    #:
+    #: 命令里有 flag、有目标 URL、有完整路径。遥测不是事故记录；
+    #: 而"用了 gdb/cyclic 还是用了 objdump/nc"已经足够区分技术路线。
+    #: 反向从 transcript 提取时走的是生产判据
+    #: `notes.tools_from_transcript`（按词边界从命令正文里认）。
+    tool_kinds: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+
+    #: ★ v0.46：从 `tool_kinds` **推导**出的细分题型（`pwn-stack` / `pwn-heap` / `pwn-fmt` / ``）。
+    #:
+    #: ## 为什么平台给不出这个值
+    #:
+    #: 实测（`app/ctf2/service.py` 同步段）：`_pick(payload, "category", "type")` 是
+    #: **唯一**分类来源，平台 payload 里没有 `subcategory`/`subtype` 之类的键。
+    #: 所以细分只能从"模型实际做了什么"反推 —— 也只有那个能回答
+    #: "要不要投 heap 工具"。
+    #:
+    #: 空串 = 推不出来（不是"普通 pwn"）。这一区分很重要：
+    #: 把"没证据"当成"一小类"会让分类统计里多出一个不存在的类。
+    subcategory: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
             f"<Ctf2SolveTelemetry challenge={self.challenge_id!r} "
             f"solved={self.solved} turns={self.turns} "
-            f"tools={self.tool_calls} notes={self.notes_count}>"
+            f"tools={self.tool_calls} notes={self.notes_count} "
+            f"sub={self.subcategory!r}>"
         )
 
 

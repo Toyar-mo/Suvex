@@ -886,6 +886,68 @@ def test_escaped_quote_is_not_a_literal_opener() -> None:
     assert "patch_me_if_you_can" not in cleaned
 
 
+# ── 从工具清单反推细分题型（v0.46）─────────────────────────
+#
+# 为什么要测：这两个函数是「平台只给大类、想回看 heap 题多不多」的唯一依据。
+# 一旦它们静默地返回空字符串，统计里就会多出一个叫「推不出来」的假类，
+# 而不是报错。
+
+
+def test_derive_subcategory_picks_the_specific_branch() -> None:
+    """工具清单能推出就必须推出，不能漏成空串。"""
+    cases = {
+        "cyclic,ropgadget,objdump": "pwn-stack",
+        "gdb,cyclic": "pwn-stack",
+        "one_gadget,python3": "pwn-heap",
+        "pwninit,libc-database": "pwn-heap",
+        "fmtstr_payload": "pwn-fmt",
+    }
+    for raw, want in cases.items():
+        assert notes_mod.derive_subcategory(raw) == want, raw
+
+
+def test_derive_subcategory_returns_empty_when_no_evidence() -> None:
+    """没证据就是空串，**不能**归成一个叫「普通 pwn」的类。"""
+    for raw in ("", "objdump,file", "gdb,patchelf,seccomp-tools", "checksec"):
+        assert notes_mod.derive_subcategory(raw) == "", raw
+
+
+def test_tools_from_transcript_recognises_the_p0_pwn_tools() -> None:
+    """P0 补进镜像的那批工具必须被认出来。
+
+    反向验证：`_REUSABLE_TOOLS` 里写成大写 `ROPgadget` 会永远命中不到
+    且不报错（`_tools_in_command` 先 `lower()` 再原样匹配），
+    所以这里专门用真实大小写。
+    """
+    transcript = (
+        "[turn 1] tool run_shell {\"command\": \"ROPgadget --binary ./pwn_baby\"}\n"
+        "[turn 2] tool run_shell {\"command\": \"one_gadget /lib/x86_64-linux-gnu/libc.so.6\"}\n"
+        "[turn 3] tool run_shell {\"command\": \"cyclic 200\"}\n"
+        "[turn 4] tool run_shell {\"command\": \"seccomp-tools dump ./pwn_baby\"}\n"
+        "[turn 5] tool run_shell {\"command\": \"patchelf --print-interpreter ./pwn_baby\"}\n"
+    )
+    kinds = notes_mod.tools_from_transcript(transcript)
+    for want in ("ropgadget", "one_gadget", "cyclic", "seccomp-tools", "patchelf"):
+        assert want in kinds, f"{want} 没被认出来：{kinds!r}"
+
+
+def test_tools_from_transcript_ignores_plain_commands() -> None:
+    """普通命令不能凭空冒出具体工具名。
+
+    这里的预期是退回包装层名字 —— `tools_from_transcript` docstring
+    明写「认不出具体工具时退回包装层名字」，那时「做过一次命令行调用」
+    仍是个有用的事实。写成 `== ""` 是把一个故意的设计当成 bug。
+    """
+    transcript = (
+        "[turn 1] tool run_shell {\"command\": \"echo hello\"}\n"
+        "[turn 2] tool run_shell {\"command\": \"sync\"}\n"
+        "[turn 3] tool run_shell {\"command\": \"cargo build\"}\n"
+    )
+    assert notes_mod.tools_from_transcript(transcript) == "run_shell"
+    # 关键是：不能把子串当成工具（"sync" 里有 "nc"，"cargo build" 里什么都没有）。
+    assert notes_mod.derive_subcategory("run_shell") == ""
+
+
 def test_flag_leak_predicate_matches_sanitizer() -> None:
     """★★ 落盘闸门与脱敏必须用**同一份**判据。
 

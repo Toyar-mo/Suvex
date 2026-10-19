@@ -2316,6 +2316,26 @@ def record_solve_telemetry(
     tool_calls = int(getattr(outcome, "tool_calls", 0) or 0)
     notes_count = int(getattr(outcome, "notes_count", 0) or 0)
 
+    # ★ v0.46：从 transcript 提取**真正用到的工具**，再从工具推出细分题型。
+    #
+    # ⚠️ 不能拿 token 用量或回合数去推 —— 它们不含"做了什么"。
+    # 也不能拿 `TOOL_NAMES` 去数（只有三个包装层名字，零信息量）。
+    # 判据走生产的 `notes.tools_from_transcript`（按词边界从命令正文里认）。
+    #
+    # 失败不能让遥测整体失败：transcript 是上下文里的字符串，
+    # 而这两列是**附加信息** —— 拿不到它们不应该连 turns/tool_calls 一起丢。
+    tool_kinds = ""
+    subcategory = ""
+    try:
+        from app.ctf2 import notes as notes_mod
+
+        tool_kinds = notes_mod.tools_from_transcript(
+            getattr(outcome, "transcript", "") or ""
+        )[:200]
+        subcategory = notes_mod.derive_subcategory(tool_kinds)[:32]
+    except Exception:  # noqa: BLE001 - 附加信息，算不出来就留空
+        logger.warning("从 transcript 推工具种类失败：%s", challenge.id, exc_info=True)
+
     row = Ctf2SolveTelemetry(
         id=new_id("ctf2tel"),
         challenge_id=challenge.id,
@@ -2326,6 +2346,8 @@ def record_solve_telemetry(
         turns=turns,
         tool_calls=tool_calls,
         notes_count=notes_count,
+        tool_kinds=tool_kinds,
+        subcategory=subcategory,
     )
     try:
         with db.begin_nested():
@@ -2342,12 +2364,13 @@ def record_solve_telemetry(
         return False
 
     logger.info(
-        "已记录解题遥测：%s solved=%s turns=%d tools=%d notes=%d",
+        "已记录解题遥测：%s solved=%s turns=%d tools=%d notes=%d sub=%s",
         challenge.id,
         row.solved,
         turns,
         tool_calls,
         notes_count,
+        subcategory or "-",
     )
     return True
 

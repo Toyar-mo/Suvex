@@ -828,6 +828,25 @@ _REUSABLE_TOOLS = (
     "openssl", "python3", "pycdc", "uncompyle6", "angr", "z3",
     "sqlmap", "ffuf", "gobuster", "curl", "nc", "socat", "tshark", "tcpdump",
     "xxd", "hexdump", "od",
+    # ★ v0.46：P0 补进镜像的那批 pwn 工具，之前**一个都没在这里**。
+    #
+    # ⚠️ 后果不是"少认出几个工具名"：`_tools_in_command` 既是方法卡
+    #    的 `tools` 字段来源，也是 `_command_worth_reusing` 的判据。
+    #    它们不在名单里 ⇒ 一条**只含** `one_gadget libc.so.6` 的命令
+    #    认不出任何工具 ⇒ 被当成"不值得复用"丢弃。
+    #    于是那些真正需要补强才能用的技巧，恰好写不进任何一张卡。
+    #    这与"镜像里装了工具但提示词没提"是同一类失配（见 v0.42 那次）。
+    #
+    # 另外 `gdb` 原本已在名单里，但 `_REUSABLE_TOOLS` 是**元组且逐项
+    # `re.search`**，长名不会互相遮挡；`seccomp-tools` 带连字符，
+    # 而词边界判据已经把 `-` 当分隔符（`(?<![\w-])…(?![\w-])`）——
+    # 所以这个名字需要**写成完整形式**才能被认出（实测：
+    # `seccomp-tools` 能命中，而单写一个 `tools` 会归到别的词）。
+    # ⚠️ **必须小写**。`_tools_in_command` 先 `command.lower()` 再用
+    #    `re.escape(tool)` 原样匹配 —— 写成 `ROPgadget` 就**永远命中不到**，
+    #    而它不报错，只是静默地不认。实测踩过（第一版写的就是大写）。
+    "ropgadget", "ropper", "cyclic", "one_gadget", "seccomp-tools",
+    "patchelf", "pwninit", "libc-database",
 )
 
 
@@ -1092,6 +1111,71 @@ def build_note_fields(
         "tools": tools,
         "dead_ends": dead_ends,
     }
+
+
+# ── ★ v0.46：从工具清单反推细分题型 ──────────────────────────────
+#
+# 为什么是"从工具反推"而不是"从题目正文猜"：
+#
+# 实测过两条路径。题目正文的路径存在一个静默失败：平台
+# `description` 经常为空、很多题只给一个附件名。那时"没认出来"与
+# "不是那类题"长得一模一样 —— 而这个区分正是判断"要不要投 heap
+# 工具"的全部依据。模型**真的跑了哪些命令**则是硬事实：它
+# 不会因为题目没描述而变得模糊。
+#
+# ⚠️ 不能拿 `TOOL_NAMES`（只有 `run_shell`/`http_request`/
+#    `read_attachment` 三个**包装层**名字）去数—— 这个坑
+#    `tools_from_transcript` 的 docstring 里已经记过一次：
+#    得到的清单几乎全是 `run_shell`，零信息量。
+#    必须从命令正文里认工具（`_tools_in_command`）。
+
+#: 每个细分题型的判定特征。
+#:
+#: 顺序即优先级：同一次解题可能同时命中多组（实测中
+#: `pwn_baby` 那类题会同时出现 `checksec` 与 `cyclic`）。
+#: 把更具体的放前面：用了 `cyclic`/`one_gadget` 说明已经
+#: 走到了每一个堆溢出题都会走的 `checksec` 之外。
+_SUBCATEGORY_RULES: tuple[tuple[str, frozenset[str]], ...] = (
+    # heap 向：这一组的工具只在真要挖堆时才会被拿起来。
+    # `malloc`/`free` 是模型写利用脚本时的典型特征词。
+    ("pwn-heap", frozenset({"one_gadget", "libc-database", "pwninit", "malloc", "tcache"})),
+    # 格式串向：`%p`/`%s` 这类泄漏探针难以归入工具名，
+    # 但 `pwntools` 的 `fmtstr_payload` 是专属的。
+    ("pwn-fmt", frozenset({"fmtstr_payload"})),
+    # 栈溢出 / ROP 向：`cyclic` 与 `ROPgadget` 基本只在这类题里出现。
+    ("pwn-stack", frozenset({"cyclic", "ropgadget", "ropper", "ropstar"})),
+)
+
+#: 可能出现在 `tool_kinds` 里、但说明不了题型的工具。
+#: 它们不参与判定，列出来是为了将来加规则时不要忘了
+#: 这些已经在记录里的名字。
+_TOOLS_NOT_DIAGNOSTIC = frozenset(
+    {
+        "file", "ls", "cat", "strings", "xxd", "hexdump", "od", "python3",
+        "curl", "nc", "socat", "unzip", "tar", "7z", "checksec", "objdump",
+        "readelf", "nm", "gdb", "r2", "radare2", "rizin", "binwalk",
+        "exiftool", "steghide", "zsteg", "openssl", "z3", "angr", "sqlmap",
+        "ffuf", "gobuster", "hashcat", "john", "patchelf", "seccomp-tools",
+    }
+)
+
+
+def derive_subcategory(tool_kinds: str) -> str:
+    """从 `tool_kinds`（逗号分隔的工具名）推出细分题型。
+
+    返回空字符串表示**推不出来**，不是"普通 pwn"。这一区分是故意的：
+    把"没证据"归成一个类会让分类统计里凭空多出一个不存在的类，
+    而那正是要用这列数据回答问题时最怕的事。
+    """
+    if not tool_kinds:
+        return ""
+    lowered = {name.strip().lower() for name in tool_kinds.split(",") if name.strip()}
+    if not lowered:
+        return ""
+    for label, needles in _SUBCATEGORY_RULES:
+        if lowered & needles:
+            return label
+    return ""
 
 
 def render_notes_for_prompt(notes: list[object], *, limit: int = MAX_NOTES_IN_PROMPT) -> str:
