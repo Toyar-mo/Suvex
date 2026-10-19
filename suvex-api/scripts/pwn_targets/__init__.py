@@ -18,16 +18,38 @@
 于是要用上 `checksec`（看保护）、`cyclic` + `gdb`（算偏移）、
 `ROPgadget`（找 gadget）、`p64`（拼 payload）—— 正好是这次补强装的那些。
 
-## 两道题覆盖的能力
+## 四道题覆盖的能力
 
-| 题 | 二进制 | 需要的东西 |
-|---|---|---|
-| `#1003` ret2win | `pwn_baby.c` | `checksec` → `cyclic` → `gdb` 反查偏移 → `p64` |
-| `#1006` 带参 ROP | `pwn_rop.c` | 上面全部 **+** `ROPgadget` 找 `pop rdi; ret` **+** 找字符串地址 |
+| 题 | 二进制 | 需要的东西 | 有远程靶机 |
+|---|---|---|---|
+| `#1003` ret2win | `pwn_baby.c` | `checksec` → `cyclic` → `gdb` 反查偏移 → `p64` | 有 |
+| `#1006` 带参 ROP | `pwn_rop.c` | 上面全部 **+** `ROPgadget` 找 `pop rdi; ret` **+** 找字符串地址 | 有 |
+| `#1011` 改解释器 | `pwn_patch.c` | **`patchelf --set-interpreter`** —— 不改就一步都走不下去 | 无（纯附件） |
+| `#1012` 看运行时 | `pwn_debug.c` | **`gdb` 断在进程里读运行时随机数** —— 静态读不到 | 无（纯附件） |
 
 `#1006` 比 `#1003` 多两个真难点（见 `pwn_rop.c` 顶部注释）：链里必须有
 `ret` 垫片（否则 `movaps` 栈未对齐直接 SIGSEGV），以及 `win()` 要一个
 指向 `"unlock"` 的参数。
+
+### 后两道是为什么加的（与「heap 题不主动造」相反的判断）
+
+`#1003`/`#1006` 里，`patchelf` 和 `gdb` **都不是唯一路径**：偏移能从
+`objdump main` 的栈帧直接算，符号能从 `nm` 拿，gadget 能从 `ROPgadget`
+搜 —— 一个只肯读反汇编的模型两道都能做。所以在它们上面跑「装 patchelf
+和 gdb 之前 / 之后」，两臂必然一样。**那不是补强没用，是题目里没有那一环。**
+
+「这道题需不需要 patchelf」是设计题目时自己说了算的，二元可控；不像
+「题目要多难才能测出省了多少探索」那样难校准。所以这里值得主动造：
+
+* `pwn_patch`：`PT_INTERP` 指向不存在的 `/pwn64/ld-linux-x86-64.so.2`，
+  直接执行报 `No such file or directory`，只有 `patchelf --set-interpreter`
+  能救。用不用得上 patchelf 从运气变成了确定条件。
+* `pwn_debug`：正确输入是每次运行才由 `getrandom()` 生成的 8 字节，
+  一个字节都不落进二进制、也不发给客户端，只在进程内存里。
+  `strings`、`objdump`、静态分析全断，只能 gdb 断在那个进程里读。
+
+两道都是**纯附件**（没有远程靶机）：真 CTF 里这两类题目通常也是本地
+附件题，模型在自己的沙箱里 `patchelf` / `gdb`，那正是要测的地方。
 
 ## 为什么靶机跑在**宿主**上，而不是自己起一个容器
 
@@ -67,6 +89,21 @@ from pathlib import Path
 SOURCES: dict[str, str] = {
     "pwn_baby": "pwn_baby.c",
     "pwn_rop": "pwn_rop.c",
+    "pwn_patch": "pwn_patch.c",
+    "pwn_debug": "pwn_debug.c",
+}
+
+#: 这道题的 `PT_INTERP` 要指到哪。
+#:
+#: ★ 这个路径**故意不存在** —— 那是 `pwn_patch` 的全部内容：直接执行会
+#:   报 `No such file or directory`（一个 `ls` 看得见的文件"不存在"），
+#:   唯一出路是 `patchelf --set-interpreter /lib64/ld-linux-x86-64.so.2`。
+#:   不改这道题这一步，就一步都走不下去。
+BROKEN_INTERP = "/pwn64/ld-linux-x86-64.so.2"
+
+#: 每道题**额外**的编译参数（叠在 `CFLAGS` 上）。不在表里的题就用纯 `CFLAGS`。
+EXTRA_FLAGS: dict[str, tuple[str, ...]] = {
+    "pwn_patch": (f"-Wl,--dynamic-linker={BROKEN_INTERP}",),
 }
 
 #: 编译产物与 flag 文件的落点。**必须在 `_tmp/` 下** ——
@@ -123,7 +160,7 @@ def build(name: str, *, force: bool = False) -> Path:
         )
 
     completed = subprocess.run(  # noqa: S603 - 参数是常量 + 本地路径，无 shell
-        [compiler, *CFLAGS, "-o", str(target), str(source)],
+        [compiler, *CFLAGS, *EXTRA_FLAGS.get(name, ()), "-o", str(target), str(source)],
         capture_output=True,
         text=True,
         check=False,
