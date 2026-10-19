@@ -905,7 +905,7 @@ transcript** 提炼出 10 张卡（含 1 张"没解出来"的），臂 B 把这�
 | 臂 | 探测回显里出现 `/usr/bin/gdb` | 之后启动 gdb |
 | --- | --- | --- |
 | PRE（`pre-gems`） | **0 / 10 份** | 0 次 |
-| POST（`latest`） | **7 / 10 份** | **0 次** |
+| POST（`latest`） | **8 / 10 份** | **0 次** |
 
 POST 臂 turn 1 的原样回显：
 
@@ -922,7 +922,7 @@ $ command -v checksec r2 objdump gdb nc python3 one_gadget ROPgadget
 
 模型看见 `/usr/bin/gdb` 与 `/usr/local/bin/one_gadget` 都在，下一句就是
 「Let me check the protections and disassemble the binary.」——
-**5 轮 10 次全都没有启动过 gdb**。这个分叉把"工具没装上"和
+**5 轮 10 次里一次都没有启动过 gdb**。这个分叉把"工具没装上"和
 "装上了但不需要"彻底分开了：PRE 臂是**没得用**，POST 臂是**有不用**。
 
 补强前后都在被真正使用的工具（两臂难度没变的旁证）：
