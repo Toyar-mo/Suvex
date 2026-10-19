@@ -8,6 +8,59 @@ SQLAlchemy 默认不给 CHECK / UNIQUE / FK 起名字，PostgreSQL 会自己编�
 
 引擎按需创建（`configure()` / `get_engine()`），不做模块级常量：
 测试要能指向另一个库，`lru_cache` 的 settings 换掉之后引擎必须跟着换。
+
+## ★ 附带写入（统计 / 审计 / 遥测 / 题解）不许 `db.rollback()`
+
+`Session.rollback()` 是**会话级**的：它不知道、也不区分哪部分改动是调用方
+的、哪部分是本函数自己的。所以只要一个函数
+
+  · 被调用时会话里可能还压着调用方**未提交**的业务改动，且
+  · 自己失败时调了 `db.rollback()`，
+
+那它就会把调用方那笔业务改动一起吞掉 —— 而它的 docstring 通常写着
+"失败不影响主流程"，**正好相反，且安静**：主流程照常返回成功，日志只有
+一条 warning，只有事后翻数据才会发现状态被降级了。
+
+实测（v0.45）：`ctf2.record_solve_telemetry` 就是这么写的，一次"遥测写不进去"
+把一次**成功的解题**记成了未解出。修法是 `db.begin_nested()`（SAVEPOINT）：
+失败只退到保存点，调用方未提交的改动原样保留。
+
+    try:
+        with db.begin_nested():
+            db.add(row)
+            db.flush()
+    except Exception:
+        with contextlib.suppress(Exception):
+            db.expunge(row)      # 详见 ctf2.service 里的说明
+        logger.warning(...)
+        return False
+
+**并且不要自己 `db.commit()`**：提交是外层事务边界的事。自己 commit 会让
+"这次成功了但后面某步失败"变成"一半落了盘一半没有"，也让失败时的
+`rollback` 变成上面那个 bug。
+
+### 已经排查过的调用点（2026-10-18，用 `grep` 扫 `app/` 下所有 `.rollback()`）
+
+真实调用点 12 处，逐个判定：
+
+| 位置 | 判定 |
+| --- | --- |
+| `get_db`（本文件） | 安全 —— 回滚后 `raise`，会话本就是请求边界 |
+| `session_scope`（本文件） | 安全 —— 同上 |
+| `findings/attachments.py`（写附件失败） | 安全 —— 回滚后 `raise`，调用方拿到异常 |
+| `members/service.py`（IntegrityError） | 安全 —— 回滚后 `raise ApiError`，无未提交业务改动 |
+| `audit/service.py` `record()` | 安全 —— 36 个调用点都在 service 已 commit 之后 |
+| `scans/service.py` `emit_lifecycle_event` | 安全 —— 3 个调用点都先 commit 过 |
+| `findings/service.py` `_refresh_scan_rollups` | 安全 —— 唯一调用点在 `db.commit()` 之后 |
+| `scans/scheduler.py` 11 处 | 安全 —— 每处都在自己的 try 段里，段前已 commit 或本段就是全部改动 |
+| `ctf2/service.py` `record_solve_telemetry` | **已修**（SAVEPOINT，v0.45） |
+| `ctf2/service.py` `record_solve_usages` | **已修**（v0.46，同一段同模式） |
+| `ctf2/service.py` `save_writeup` | **已修**（v0.46，同一段同模式） |
+
+⚠️ `scans/service.py` 的 `refresh_scan_rollup` 会自己 `db.commit()`，而它是被
+`ctf2.events.finalize_solve_scan` 在**别人的事务中间**调用的 —— 那会提前提交
+调用方未提交的改动。目前 4 个调用点都无害（甚至帮了倒忙式的忙），所以不改；
+但它是同一类反模式（内层函数替外层定事务边界），将来若被新路径复用要先想清楚。
 """
 
 from __future__ import annotations

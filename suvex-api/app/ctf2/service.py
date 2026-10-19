@@ -2211,10 +2211,24 @@ def record_solve_usages(
         for turn, model, label, usage in usages
     ]
     try:
-        db.add_all(rows)
-        db.commit()
+        # ⚠️ SAVEPOINT，**不是** `db.commit()` + `db.rollback()`。
+        #
+        # 调用点 `_run_worker` 的 ③ 同步段里，`_record_outcome` 已经改过
+        # `challenge.status` / `confirmed_flag` 却**没提交**（全段只有末尾
+        # 一次 `db.commit()`，见 `record_solve_telemetry` docstring 里那段
+        # 实测）。旧写法在这里 `db.rollback()` 会把那笔解题结果一起吞掉，
+        # 于是"记 token 失败"变成"一次成功的解题被记成未解出"。
+        #
+        # 与 `record_solve_telemetry` 同一处、同一模式、同一个修法。
+        with db.begin_nested():
+            db.add_all(rows)
+            db.flush()
     except Exception:  # noqa: BLE001 - 统计失败不该毁掉解题结果
-        db.rollback()
+        # ⚠️ SAVEPOINT 已回滚，**绝不能再 `db.rollback()`**（会把调用方
+        #    未提交的业务改动一并回滚）。把刚 add 的行摘掉即可。
+        for row in rows:
+            with contextlib.suppress(Exception):
+                db.expunge(row)
         logger.warning(
             "token 用量落库失败（不影响解题结果）：%s", challenge_id, exc_info=True
         )
@@ -2383,15 +2397,25 @@ def save_writeup(
         logger.warning("生成题解失败（不影响解题结果）：%s", challenge.id, exc_info=True)
         return
 
+    # ★ 显式初始化：`db.execute()` 自己也可能抛（那时连 `row` 都还没赋值），
+    #   而下面的 `expunge` 要能安全跳过。靠 `contextlib.suppress` 吞
+    #   `UnboundLocalError` 也能跑，但那是拿异常控制流程，读的人看不出来。
+    row = None
     try:
-        existing = (
-            db.execute(select(Ctf2Writeup).where(Ctf2Writeup.challenge_id == challenge.id))
-            .scalars()
-            .first()
-        )
-        if existing is None:
-            db.add(
-                Ctf2Writeup(
+        # ⚠️ SAVEPOINT，**不是** `db.commit()` + `db.rollback()` ——
+        #    与 `record_solve_telemetry` / `record_solve_usages` 同一个理由：
+        #    调用方 `_run_worker` 的 ③ 同步段里 `_record_outcome` 的改动
+        #    还没提交，一句 `db.rollback()` 会把一次成功的解题一起吞掉。
+        with db.begin_nested():
+            existing = (
+                db.execute(
+                    select(Ctf2Writeup).where(Ctf2Writeup.challenge_id == challenge.id)
+                )
+                .scalars()
+                .first()
+            )
+            if existing is None:
+                row = Ctf2Writeup(
                     id=new_id("ctf2wp"),
                     challenge_id=challenge.id,
                     attempt_id=attempt_id,
@@ -2400,16 +2424,23 @@ def save_writeup(
                     turns=int(getattr(outcome, "turns", 0) or 0),
                     elapsed_sec=elapsed_sec,
                 )
-            )
-        else:
-            existing.attempt_id = attempt_id
-            existing.markdown = markdown
-            existing.solved = solved
-            existing.turns = int(getattr(outcome, "turns", 0) or 0)
-            existing.elapsed_sec = elapsed_sec
-        db.commit()
+                db.add(row)
+            else:
+                row = existing
+                existing.attempt_id = attempt_id
+                existing.markdown = markdown
+                existing.solved = solved
+                existing.turns = int(getattr(outcome, "turns", 0) or 0)
+                existing.elapsed_sec = elapsed_sec
+            db.flush()
     except Exception:  # noqa: BLE001 - 同上
-        db.rollback()
+        # ⚠️ SAVEPOINT 已回滚，**绝不能再 `db.rollback()`**。
+        #    新实例要摘掉（它已被 flush 过、又被回滚，留在 session 里是
+        #    "已持久化过"的幽灵状态）；已存在的实例只需 expunge，
+        #    下次 flush 会重新从库里读。
+        if row is not None:
+            with contextlib.suppress(Exception):
+                db.expunge(row)
         logger.warning("题解落库失败（不影响解题结果）：%s", challenge.id, exc_info=True)
         return
 

@@ -198,6 +198,7 @@ def test_writeup_returns_the_contract_shape(
         attempt_id=attempt.id,
         elapsed_sec=61,
     )
+    db_session.commit()
 
     resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
 
@@ -229,6 +230,7 @@ def test_writeup_filename_is_usable_for_download(
         attempt_id=attempt.id,
         elapsed_sec=None,
     )
+    db_session.commit()
 
     resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
 
@@ -272,6 +274,7 @@ def test_challenge_usage_lists_each_call_with_reported_flag(
             ]
         ),
     )
+    db_session.commit()
 
     resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/usage")
 
@@ -328,6 +331,7 @@ def test_global_usage_exposes_the_attempt_breakdown(
             ]
         ),
     )
+    db_session.commit()
 
     body = ready_client.get(f"{API}/ctf2/usage").json()
 
@@ -363,6 +367,7 @@ def test_global_usage_exposes_calls_and_recorded_calls_separately(
             ]
         ),
     )
+    db_session.commit()
 
     body = ready_client.get(f"{API}/ctf2/usage").json()
 
@@ -385,6 +390,7 @@ def test_global_usage_filters_really_filter(
             usages=[(1, "m", "l", runner.TokenUsage(prompt_tokens=10, completion_tokens=20, total_tokens=30, reported=True))]
         ),
     )
+    db_session.commit()
 
     by_challenge = ready_client.get(
         f"{API}/ctf2/usage?challengeId={ctf2_challenge.id}"

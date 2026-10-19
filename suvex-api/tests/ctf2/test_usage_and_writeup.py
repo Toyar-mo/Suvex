@@ -855,6 +855,79 @@ def test_telemetry_failure_does_not_roll_back_the_solve_result(
     assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
 
 
+def test_usage_failure_does_not_roll_back_the_solve_result(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ 与 `test_telemetry_failure_does_not_roll_back_the_solve_result` 对称。
+
+    `record_solve_usages` 原先写的是 `db.commit()` + `except: db.rollback()`。
+    它在 `_run_worker` 的 ③ 同步段里被调用，而那一段里 `_record_outcome`
+    刚改过 `challenge.status` / `confirmed_flag` 却**没提交**（全段只有
+    末尾一次 `db.commit()`）—— 所以那次 `rollback()` 会把解题结果一起吞掉。
+
+    ⚠️ 判据必须是"**真的提交得进去**"，不能只断言内存里的属性还在：
+    内存属性在 `rollback()` 之后由 SQLAlchemy 按需重读，看起来可能还是对的。
+    """
+    attempt = _attempt(db_session, ctf2_challenge.id)
+    # 模拟 `_record_outcome`：改内存 + flush，**不 commit**。
+    ctf2_challenge.status = "solved"
+    ctf2_challenge.confirmed_flag = "flag{ours}"
+    db_session.flush()
+
+    # turn 从 1 起（CHECK 约束）⇒ turn=0 必然写库失败
+    n = service.record_solve_usages(
+        db_session,
+        attempt_id=attempt.id,
+        challenge_id=ctf2_challenge.id,
+        outcome=_outcome(usages=[(0, "m1", "label-a", _usage())]),
+    )
+
+    assert n == 0
+    assert ctf2_challenge.status == "solved"
+
+    db_session.commit()
+    db_session.expire_all()
+    fresh = db_session.get(type(ctf2_challenge), ctf2_challenge.id)
+    assert fresh is not None
+    assert fresh.status == "solved", "★ token 统计失败把一次成功的解题回滚掉了"
+    assert fresh.confirmed_flag == "flag{ours}"
+    # 统计确实没写成（这是"失败"该有的结果）
+    assert db_session.execute(select(func.count(Ctf2SolveUsage.id))).scalar() == 0
+
+
+def test_writeup_failure_does_not_roll_back_the_solve_result(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ 同一条纪律，第三处：题解落库失败也不能连累解题结果。
+
+    原来同样是 `db.commit()` + `except: db.rollback()`。题解是**附加产物**
+    （赛后提交用的材料），它写不进去只是少份文件，绝不能把"这题解出了"
+    这条事实一起抹掉 —— 那会让界面显示未解出，而实际已经解出了。
+    """
+    assert ctf2_challenge.status != "solved"
+    ctf2_challenge.status = "solved"
+    ctf2_challenge.confirmed_flag = "flag{ours}"
+    db_session.flush()
+
+    # 外键指向一条不存在的 attempt ⇒ INSERT 必然违约
+    service.save_writeup(
+        db_session,
+        challenge=ctf2_challenge,
+        outcome=_outcome(transcript="[turn 1] result: hi", turns=1),
+        attempt_id="ctf2try_does_not_exist",
+        elapsed_sec=5,
+    )
+
+    assert ctf2_challenge.status == "solved"
+
+    db_session.commit()
+    db_session.expire_all()
+    fresh = db_session.get(type(ctf2_challenge), ctf2_challenge.id)
+    assert fresh is not None
+    assert fresh.status == "solved", "★ 题解落库失败把一次成功的解题回滚掉了"
+    assert db_session.execute(select(func.count(Ctf2Writeup.id))).scalar() == 0
+
+
 def test_telemetry_survives_attempt_deletion(db_session: Session, ctf2_challenge) -> None:
     """attempt 外键是 SET NULL —— 快照被清掉后观测仍然算数。
 
