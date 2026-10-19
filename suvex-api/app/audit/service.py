@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -30,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.audit.models import AuditLog
 from app.auth.deps import Identity
 from app.core.crypto import redact
+from app.core.db import warn_if_pending_changes
 from app.core.ids import new_id
 from app.core.timeutil import now_utc
 from app.core.vocab import AUDIT_ACTION_LABELS, AuditAction
@@ -93,7 +95,21 @@ def record(
     `summary` 由调用方给：只有它知道"这次操作具体做了什么"
     （"对 api.example.com 发起了扫描" vs "把 2 条漏洞标为已确认"）。
     通用文案在这里拼不出来，硬拼会得到一串没有信息量的记录。
+
+    ⚠️ **调用方必须先 commit 过。** 本函数自己 `db.commit()` 才能保证
+    "审计可缺条"（模块 docstring 那条代价），而 `Session.rollback()` 是
+    **会话级**的 —— 失败时它会把调用方**未提交**的业务改动一起吞掉，
+    于是"审计写不进去"变成"业务操作被撤销且返回成功"。
+
+    36 个调用点目前全都形如 `changed, skipped = service.xxx(...)` →
+    `if changed: audit.record(...)`，而 service 层已经 commit 过。
+    这个约定以前只写在文档里，现在 `warn_if_pending_changes` 会让
+    违约**留下 ERROR 日志**，而不是安静地降级。
+
+    ★ 违约时的行为**真的不同**，不只是打条日志：见下面两条分支。
     """
+    # ★ 先问一句"你有没有把活干完"。0 表示没有未提交的业务改动 —— 正常路径。
+    pending = warn_if_pending_changes(db, where=f"audit.record(action={action})")
     try:
         row = AuditLog(
             id=new_id("aud"),
@@ -110,10 +126,26 @@ def record(
             user_agent=(request.user_agent or "")[:1000] or None,
             detail=_redact_detail(detail),
         )
-        db.add(row)
-        db.commit()
+        if pending:
+            # ⚠️ 契约被违反了：会话里还压着调用方未提交的业务改动。
+            # 这时**绝不能** `db.commit()`（会把别人半截的工作一起落盘），
+            # 也**绝不能** `db.rollback()`（失败时会把它吞掉）。
+            # 只退到保存点：审计行等调用方自己的 commit 一起落盘，
+            # 失败了也只撤销这一行。**代价如实记**：调用方若不 commit，
+            # 这条审计就跟着丢了 —— 但那是它违约在先。
+            with db.begin_nested():
+                db.add(row)
+                db.flush()
+        else:
+            db.add(row)
+            db.commit()
     except Exception:  # noqa: BLE001 - 见模块 docstring
-        db.rollback()
+        if pending:
+            # SAVEPOINT 已回滚，session 仍然可用；摘掉这个幽灵实例即可。
+            with contextlib.suppress(Exception):
+                db.expunge(row)
+        else:
+            db.rollback()
         logger.exception(
             "写审计记录失败（业务操作本身已成功）：action=%s target=%s", action, target
         )

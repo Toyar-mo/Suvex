@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 from app.auth.deps import Identity
 from app.core.config import get_settings
 from app.core.crypto import SecretDecryptError, decrypt_secret
+from app.core.db import warn_if_pending_changes
 from app.core.errors import ApiError, ErrorCode
 from app.core.ids import new_id
 from app.core.ratelimit import Limiter
@@ -1451,7 +1452,16 @@ def emit_lifecycle_event(
     ⚠️ **事件本身失败不能让扫描失败。** 它是可观测性，不是业务。
     所以这里吞掉异常并记录，而不是让它冒泡到状态机里 ——
     一个"因为写不进事件所以扫描起不来"的系统，比少一条事件糟得多。
+
+    ⚠️ **调用方必须先 commit 过。** 与 `audit.record()` 同一条契约：
+    本函数自己 `db.commit()`，而 `Session.rollback()` 是**会话级**的，
+    失败时会把调用方**未提交**的业务改动一起吞掉。
+    3 个调用点（`scans/service.py` 两处 + `scans/scheduler.py:805`）都先 commit 过；
+    这个约定以前只写在文档里，现在 `warn_if_pending_changes` 会让违约留下 ERROR 日志。
     """
+    pending = warn_if_pending_changes(
+        db, where=f"emit_lifecycle_event(scan={scan.id}, type={event_type})"
+    )
     try:
         agent = ensure_runner_agent(db, scan)
         append_event(
@@ -1471,9 +1481,16 @@ def emit_lifecycle_event(
             agent.status = AgentStatus.FAILED.value
         else:
             agent.status = AgentStatus.RUNNING.value
-        db.commit()
+        if pending:
+            # ⚠️ 契约被违反：既不 commit（会替别人定事务边界）
+            # 也不 rollback（失败时会吞掉别人的改动）—— 只退到保存点。
+            with db.begin_nested():
+                db.flush()
+        else:
+            db.commit()
     except Exception:  # noqa: BLE001 - 见 docstring
-        db.rollback()
+        if not pending:
+            db.rollback()
         logger.exception("为扫描 %s 写事件失败（已忽略）", scan.id)
 
 
