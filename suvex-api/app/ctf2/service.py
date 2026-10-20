@@ -2398,6 +2398,32 @@ def record_solve_telemetry(
     tool_calls = int(getattr(outcome, "tool_calls", 0) or 0)
     notes_count = int(getattr(outcome, "notes_count", 0) or 0)
 
+    # ★ v0.47：这次解题有没有带越权与注入手法块。
+    #
+    # 这是回答"那个开关到底有没有用"唯一能按条件切分的依据 —— 见
+    # `models.Ctf2SolveTelemetry.offensive` 的注释。
+    #
+    # ⚠️ `outcome.offensive` 报上来的是"**开关当时开着**"（`SolveSpec.offensive`
+    #    的语义，见它的注释），而这一列要记的是"**块真的进了提示词**" ——
+    #    两者在七个场景分类上不同：`agentsec-*` / `ir-*` 即使开关开着也
+    #    按前缀排除（`runner.build_system_prompt`）。不在这里再排除一次，
+    #    那几个分类就会被错分进实验组，而它们与对照组的提示词**完全一样**
+    #    —— 那正好是这一列要防的污染。
+    #
+    # 用 `getattr` + 默认 `False` 而不是直接 `outcome.offensive`：这个函数在
+    # 测试里常拿替身 outcome 调用，硬取属性会让"只想测 turns 落库"的用例
+    # 因为一个无关的新字段而挂 —— 与上面三行同一个理由。
+    offensive = bool(getattr(outcome, "offensive", False))
+    if offensive:
+        # 排除判据复用 `notes` 的两个前缀判定，**不在这里另写一份**。
+        from app.ctf2 import notes as notes_mod_for_category
+
+        _category = challenge.category or ""
+        if notes_mod_for_category.is_agentsec_category(
+            _category
+        ) or notes_mod_for_category.is_ir_category(_category):
+            offensive = False
+
     # ★ v0.46：从 transcript 提取**真正用到的工具**，再从工具推出细分题型。
     #
     # ⚠️ 不能拿 token 用量或回合数去推 —— 它们不含"做了什么"。
@@ -2428,6 +2454,7 @@ def record_solve_telemetry(
         turns=turns,
         tool_calls=tool_calls,
         notes_count=notes_count,
+        offensive=offensive,
         tool_kinds=tool_kinds,
         subcategory=subcategory,
     )
@@ -2446,13 +2473,14 @@ def record_solve_telemetry(
         return False
 
     logger.info(
-        "已记录解题遥测：%s solved=%s turns=%d tools=%d notes=%d sub=%s",
+        "已记录解题遥测：%s solved=%s turns=%d tools=%d notes=%d sub=%s offensive=%s",
         challenge.id,
         row.solved,
         turns,
         tool_calls,
         notes_count,
         subcategory or "-",
+        offensive,
     )
     return True
 

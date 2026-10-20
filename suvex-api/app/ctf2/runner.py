@@ -2586,6 +2586,17 @@ class SolveOutcome:
     #: `_record_outcome`，而那里只拿得到 `outcome`，拿不到 `spec`。
     notes_count: int = 0
 
+    #: ★ v0.47：这次解题**开关有没有开着**（生产遥测的原料）。
+    #:
+    #: 与 `spec.offensive` 同源，收尾时拷过来 —— 理由与 `notes_count` 完全
+    #: 相同（遥测落库在 `_record_outcome`，那里只拿得到 `outcome`）。
+    #:
+    #: ⚠️ 它的语义与 `spec.offensive` 一样是"**开关值**"，不是"块真的进去了"：
+    #:    七类场景题按前缀排除（见 `build_system_prompt`），而那条判断需要
+    #:    分类。真正的"带没带"由 `service.record_solve_telemetry` 落库前
+    #:    再按分类排除一次 —— 那一列记的才是会被拿去切分统计的事实。
+    offensive: bool = False
+
     # ── ★ v0.38：`FINAL` 结论文档里的三块分析 ─────────────────
     #
     # ## 为什么必须把它们带出来（这是"题解简陋"的真正根因）
@@ -3673,6 +3684,12 @@ async def solve_in_sandbox(
     # 更重。
     outcome.notes_count = spec.notes_count
 
+    # ★ v0.47：同理，把"这次带没带手法块"拷进 outcome，给遥测落库用。
+    #
+    # 直接读 `spec.offensive` 而不在这里重算"开关 ∧ 分类" —— 那正是
+    # `build_spec` 算它的理由（见 `SolveSpec.offensive` 的注释）。
+    outcome.offensive = spec.offensive
+
     # ★ 本次解题内"跑过的命令"台账（v0.41 修订）—— 用于识别空转。
     #
     #   键是 `(工具名, 参数序列化, 整段输出的指纹)`，值是**第一次**跑它的轮次。
@@ -4503,6 +4520,27 @@ async def submit_candidate(
         challenge = db.get(Ctf2Challenge, challenge_id)
         if challenge is not None:
             _advance_challenge(challenge, status_value, flag, already_solved=already_solved)
+            # ★★ v0.48：判对了就把这题那条解题 scan 的状态跟着翻过来。
+            #
+            # ## 修的是什么（实测，2026-10-20，Kali 生产库 SimpleRev）
+            #
+            # `finalize_solve_scan` 只在 **worker 收尾那一刻**看题目状态，
+            # 而 safe 模式下那一刻题目还是 `candidate_ready`（候选在等人
+            # 确认）→ scan 被记成 `failed`。用户随后确认成功、题目变
+            # `solved`，却**没有任何代码回头改那行 scan** —— 界面上它
+            # 永远显示失败。实测「失败」比确认早了 41 秒。
+            #
+            # ## 为什么放在这里而不是 `confirm_submit` 里
+            #
+            # 这是**两条提交路径唯一的汇合处**（auto 与人工都调本函数），
+            # 而"平台判对了但 scan 状态没跟上"与"谁提交的"无关。
+            # 只修人工那条会让 auto 路径留着同一个洞。
+            #
+            # ⚠️ 该函数内部自己判了"只在 scan 已终态时才翻"：auto 模式在
+            #    worker 还跑着的时候就提交候选，那时 scan 是 `running`，
+            #    提前标成 completed 会让界面显示完成而进程还在干活。
+            if status_value == Ctf2SubmissionStatus.CORRECT.value:
+                ctf2_events.promote_solve_scan_to_solved(db, challenge)
         db.commit()
 
     return status_value, message

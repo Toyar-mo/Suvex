@@ -1282,6 +1282,23 @@ class Ctf2SolveTelemetry(Base):
     #: 把"没证据"当成"一小类"会让分类统计里多出一个不存在的类。
     subcategory: Mapped[str] = mapped_column(String(32), nullable=False, default="")
 
+    #: ★ v0.47：这次解题**有没有带**越权与注入手法块（生产遥测）。
+    #:
+    #: ## 为什么必须单独记一列
+    #:
+    #: 回答"那个开关到底有没有用"要靠**按开关切分**历史遥测，而
+    #: `solved` / `turns` / `tool_calls` 只说"结果"，不说"当时是什么条件"。
+    #: 开关是全局设置、随时可能被改，所以事后无法按时间窗倒推 ——
+    #: 一旦中途改过，倒推出来的两组就会互相污染，且没有任何信号提示污染。
+    #:
+    #: ## 记的是"块真的进了提示词"，不是"开关当时是开的"
+    #:
+    #: 两者不等：`agentsec-*` / `ir-*` 七类即使开关开着也**按前缀排除**，
+    #: 提示词里没有这个块。真正决定"带不带"的是 `SolveSpec.offensive`
+    #: （开关 ∧ 非场景题，见 `runner.build_system_prompt`），所以这里记的就是
+    #: 它 —— 只有这样切出来的两组才互斥、没有歧义。
+    offensive: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
 
     def __repr__(self) -> str:  # pragma: no cover

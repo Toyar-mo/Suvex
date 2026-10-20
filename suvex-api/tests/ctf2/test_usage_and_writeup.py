@@ -618,7 +618,8 @@ def test_writeups_are_cascaded_with_their_challenge(db_session: Session, ctf2_ch
 #   · **一次解题一行**（upsert 会把样本数永久压成 1）；
 #   · `attempt_id` 为空也照写（否则遥测只覆盖"走产品路径的那部分"）；
 #   · `solved` 取自 `challenge.status`（写早了会把成功记成失败）；
-#   · `category` 冗余存（否则同步改分类会让历史统计漂移）。
+#   · `category` 冗余存（否则同步改分类会让历史统计漂移）；
+#   · 带没带手法块当场记（v0.47：开关是全局的、随时会改，事后倒推会被污染）。
 #
 # ⚠️ 这些失败模式**全都是安静的**：行数少一行、某个数是 0、分类跟着变了，
 #    都不会让任何既有用例变红，而统计结论会整个错掉。
@@ -718,6 +719,134 @@ def test_telemetry_tolerates_an_outcome_without_the_new_fields(
     assert ok is True
     row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
     assert (row.turns, row.tool_calls, row.notes_count) == (5, 0, 0)
+
+
+def test_telemetry_records_whether_the_playbook_was_attached(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ v0.47：`offensive` 记的是「块真的进了提示词」，不是「开关当时开着」。
+
+    ## 为什么这一列非得落库不可
+
+    v0.42 的 `sandbox_config.enable_offensive_prompt` 是**全局开关**，随时
+    可能被改。要回答"打开它到底有没有用"，只能把历史解题按"当时带没带"
+    切成两组比。而 `solved` / `turns` / `tool_calls` 只说结果、不说条件 ——
+    事后按开关的修改时间去倒推会被中途改动污染，而且污染是**安静**的：
+    两组混在一起，没有任何信号提示这件事发生过。
+
+    所以"带没带"必须在**当时**记下来，一行一个事实。
+
+    ## 为什么两个方向都要断言
+
+    两条轨迹各写一行再看整体：只断言 `True` 会放过"恒记 `True`"，
+    只断言 `False` 会放过"恒记 `False`"。这两种错都长得像"数据正常"，
+    而它们会让按开关切分的对比**永远差 0**（于是结论是"开关没用"）。
+    """
+    from types import SimpleNamespace
+
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=SimpleNamespace(turns=7, offensive=True),
+    )
+    service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=SimpleNamespace(turns=4, offensive=False),
+    )
+
+    rows = (
+        db_session.execute(
+            select(Ctf2SolveTelemetry).order_by(Ctf2SolveTelemetry.created_at)
+        )
+        .scalars()
+        .all()
+    )
+    assert [(r.turns, r.offensive) for r in rows] == [(7, True), (4, False)]
+
+
+def test_telemetry_offensive_defaults_to_false_for_old_outcomes(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """老 outcome 没有 `offensive` 属性 → 记 `False`，不抛。
+
+    与 `test_telemetry_tolerates_an_outcome_without_the_new_fields` 同一条
+    兼容纪律：升级期还在跑的长任务，它的 `SolveOutcome` 是**升级前**构造的
+    类实例。让"新字段不存在"使整条遥测失败，那段升级期就整段没数据 ——
+    而那恰是最需要看的时候。
+
+    ⚠️ 默认值必须是 `False`：v0.42 之前不存在那个开关，那些历史行本来就该
+       算"没带手法块"。默认 `True` 会把它们全部错分进实验组。
+    """
+    from types import SimpleNamespace
+
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    ok = service.record_solve_telemetry(
+        db_session,
+        attempt_id=None,
+        challenge=ctf2_challenge,
+        outcome=SimpleNamespace(turns=5),
+    )
+
+    assert ok is True
+    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    assert row.offensive is False
+
+
+def test_telemetry_does_not_count_scenario_tasks_as_attached(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """★ v0.47：开关开着，但这七类题**提示词里并没有**手法块 → 记 `False`。
+
+    `outcome.offensive` 报上来的是"开关当时开着"（`SolveSpec.offensive` 的
+    语义），而这一列要记的是"块真的进了提示词"。两者的差别全部落在这里：
+
+      · `agentsec-*` 四类 —— 要的是"判定某个考察点是否成立"，与手法块
+        "怎么把系统打穿"是**互相矛盾的两套指令**；
+      · `ir-*` 三类 —— 第一节就写"不是攻破系统""除 `/work` 外一律只读"。
+
+    所以 `build_system_prompt` 对这两族按前缀排除。
+
+    ⚠️ 不排除的话，这几类会被错分进**实验组**，而它们的提示词与对照组
+       逐字节相同 —— 两组差别被稀释，结论偏向"开关没用"。这种污染是
+       安静的：行数、各列取值看上去全都正常。
+    """
+    from types import SimpleNamespace
+
+    from app.ctf2.models import Ctf2SolveTelemetry
+
+    for index, category in enumerate(
+        ["agentsec-prompt-injection", "ir-timeline", "ir-scope"]
+    ):
+        ctf2_challenge.category = category
+        db_session.flush()
+        service.record_solve_telemetry(
+            db_session,
+            attempt_id=None,
+            challenge=ctf2_challenge,
+            outcome=SimpleNamespace(turns=index + 2, offensive=True),
+        )
+
+    rows = (
+        db_session.execute(
+            select(Ctf2SolveTelemetry).order_by(Ctf2SolveTelemetry.created_at)
+        )
+        .scalars()
+        .all()
+    )
+    assert [r.category for r in rows] == [
+        "agentsec-prompt-injection",
+        "ir-timeline",
+        "ir-scope",
+    ]
+    assert [r.offensive for r in rows] == [False, False, False], (
+        "★★ 场景题被算成'带了手法块' —— 它们的提示词里其实没有这个块"
+    )
 
 
 def test_telemetry_records_solved_from_the_challenge_status(

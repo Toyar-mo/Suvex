@@ -65,6 +65,7 @@ from app.core.text import strip_nul, strip_nul_deep
 from app.core.timeutil import now_utc
 from app.core.vocab import (
     SCAN_ORIGIN_CTF2,
+    TERMINAL_SCAN_STATUSES,
     ActivityEventType,
     AgentPhase,
     AgentRole,
@@ -680,6 +681,75 @@ def finalize_solve_scan(db: Session, challenge) -> None:  # noqa: ANN001
     refresh_scan_rollup(db, scan)
 
 
+def promote_solve_scan_to_solved(db: Session, challenge) -> None:  # noqa: ANN001
+    """解题**事后**被确认为已解出时，把那条 scan 的状态翻成 `completed`。
+
+    ## ★ 修的是什么（实测，2026-10-20，Kali 生产库）
+
+    `finalize_solve_scan` 只在 **worker 收尾那一刻**看一眼题目状态：
+
+        solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
+        scan.status = COMPLETED if solved else FAILED
+
+    而 safe 模式下那一刻题目还是 `candidate_ready` —— 候选在**等人确认**。
+    于是 scan 被记成 `failed`，用户随后手动确认成功、题目变 `solved`，
+    **没有任何代码回头改那行 scan**。
+
+    实测时间线（SimpleRev，`remote_id=d79788be-…`）：
+
+        16:53:09  worker 收尾，challenge=candidate_ready → scan=failed (582s)
+        16:53:50  人工提交 flag{KLDQCUDFZO} → correct → challenge=solved
+
+    「失败」比确认早了 41 秒，而界面上它**永远**停在那里。用户看到的是
+    "suvex 把这题搞失败了"，事实是这题已经解出。
+
+    ## ★★ 只翻 `status`（和 solver agent 的终态），**不动** 时间与耗时
+
+    `finished_at` / `duration_sec` 记的是 **worker 实际跑了多久**。把它们
+    按"确认时刻"重算，会把用户**等待确认**的那段时间算进解题耗时 ——
+    那是另一个错数，而且更难发现（它看上去只是一个偏大的数字）。
+    收尾那一刻算出来的 582 秒是**对**的，该保留。
+
+    同理不动 `refresh_scan_rollup`：`agent_count` / `findings` 与题目状态
+    无关，重刷只会多一次 commit（它自己会 commit，见 `app/core/db.py` 里
+    那条"内层函数替外层定事务边界"的告诫）。
+
+    ## 幂等
+
+    已经 `completed` 就什么都不做。这条会被人工确认路径反复调用
+    （同一个 flag 可以再交一次），重复翻状态没有意义，但重复 commit 有代价。
+
+    ## ★ 只在 scan **已经收尾**之后才翻
+
+    这条同时覆盖自动提交那条路径：auto 模式在 worker **跑着的时候**就提交
+    候选，那时 scan 还是 `running` —— 把它翻成 `completed` 会让界面显示
+    "已完成"而进程还在干活。而正常收尾时 `finalize_solve_scan` 自己会
+    按题目状态算出 `completed`，不需要这里帮忙。
+
+    所以判据是"scan 已终态 **且** 不是 `completed`" —— 那恰好就是
+    「worker 收尾时记成 failed，之后人工确认成功」这一个形状。
+    """
+    from app.scans.models import Scan
+
+    scan_id = getattr(challenge, "scan_id", None)
+    if not scan_id:
+        return
+    scan = db.get(Scan, scan_id)
+    if scan is None:
+        return
+    if scan.status not in {s.value for s in TERMINAL_SCAN_STATUSES}:
+        return
+    if scan.status == ScanStatus.COMPLETED.value:
+        return
+    scan.status = ScanStatus.COMPLETED.value
+
+    # solver agent 与 scan 同源（同 `finalize_solve_scan` 的映射）：
+    # 它当时也被记成了 `failed`，两处不一致会在智能体页上继续显示失败。
+    agent = db.get(Agent, f"{scan.id}:{SOLVER_AGENT_ID}"[:64])
+    if agent is not None:
+        agent.status = AgentStatus.DONE.value
+
+
 __all__ = [
     "SOLVER_AGENT_ID",
     "emit_abandoned",
@@ -694,4 +764,5 @@ __all__ = [
     "ensure_solve_scan",
     "ensure_solver_agent",
     "finalize_solve_scan",
+    "promote_solve_scan_to_solved",
 ]
