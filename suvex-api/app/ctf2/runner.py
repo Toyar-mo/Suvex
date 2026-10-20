@@ -1779,6 +1779,29 @@ class LlmGateway:
 
 PROMPT_PATH = PROJECT_ROOT / "prompts" / "ctf2_system.md"
 
+#: 智能体安全评测块（v0.40）。**只在开关打开且本题属于 `agentsec-*` 时追加。**
+#:
+#: ## ⚠️ 注意不要和 `adapters/builder.py` 的 `load_system_prompt` 搞混
+#:
+#: 那边有一个同名函数，但它读的是 `prompts/platform_spec.md` ——
+#: **平台接入**（给人看的接入方案）用的，与解题无关。
+#: 两者的"system prompt"只是撞名，不是同一份东西，不该同步。
+#:
+#: ## ★ 为什么是独立文件而不是拼在本模块的字符串常量里
+#:
+#: 与 `ctf2_system.md` 同一条理由：提示词是**要改的东西**，改它的人可能
+#: 不写 Python。放进 `.md` 之后，措辞调整就是一次纯文本改动，
+#: 不需要碰代码、也不会误碰旁边的逻辑。
+#:
+#: ## ★ 为什么它是**追加**而不是另一份完整的系统提示词
+#:
+#: 因为 `ctf2_system.md` 里的纪律（不越界、不爆破、不编造、输出协议、
+#: 回合预算）**对智能体安全题一样适用** —— 那四类题更容易越界，不是更容易。
+#: 换成另一份提示词等于把那批纪律丢掉，而丢掉的恰好是最该在的时候。
+#:
+#: 所以注入方式是：原提示词**一个字不动**，块追加在**末尾**。
+PROMPT_AGENTSEC_PATH = PROJECT_ROOT / "prompts" / "ctf2_agentsec.md"
+
 
 def load_system_prompt() -> str:
     """读 solver 的系统提示词。
@@ -1797,6 +1820,83 @@ def load_system_prompt() -> str:
             f"读不到解题提示词 {PROMPT_PATH}。它必须随部署一起分发 —— "
             "缺了它 agent 的行为纪律（不越界、不爆破、不编造）就没了约束。"
         ) from exc
+
+
+def load_agentsec_prompt() -> str:
+    """读智能体安全评测块（v0.40）。
+
+    ⚠️ 与 `load_system_prompt` 同一条纪律：**文件不在就抛错**。
+
+    这个文件只在开关打开且本题属于 `agentsec-*` 时才被读。所以
+    "缺文件"这件事不会在普通比赛里暴露 —— 它会在**第一次真的跑智能体
+    安全题**时暴露。而那已经是最坏的时机：用户明明打开了开关、
+    期待追加那段评测纪律，结果拿到的是原提示词 —— 模型会照攻击模式
+    去"拿 flag"，而那四类题里没有 flag。
+
+    若不抛错而是回退成空串，失效完全无声（题目照跑、结论全错）。
+    所以抛错。
+    """
+    try:
+        return PROMPT_AGENTSEC_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise Ctf2Error(
+            f"读不到智能体安全评测提示词 {PROMPT_AGENTSEC_PATH}。"
+            "它必须随部署一起分发 —— 缺了它这四类任务会按攻击模式跑，"
+            "而它们要的是「判定考察点是否成立」。"
+        ) from exc
+
+
+def build_system_prompt(category: str, *, agentsec_enabled: bool) -> str:
+    """拼出本题要用的 system prompt（v0.40）。
+
+    ## 规则只有两条
+
+    1. 本题**不属于** `agentsec-*`，或开关**没开** → 返回原提示词，
+       一个字节都不改；
+    2. 否则 → 原提示词 + 空行 + 评测块，**追加在末尾**。
+
+    ## ★ 为什么是追加，不是替换
+
+    见 `PROMPT_AGENTSEC_PATH` 的说明：`ctf2_system.md` 里的纪律对这几类题
+    **一样适用**（它们更容易越界，不是更容易）。替换等于在最需要那批
+    纪律的时候把它们丢掉。
+
+    ## ★ 为什么开关没开时**连读都不读**那个文件
+
+    两个理由：
+      · 关着的部署里那个文件可能根本不存在（不该因此让普通解题报错）；
+      · "关着 = 完全没有影响"要能在行为上成立，而不只是看上去成立。
+        读取本身不改变输出，但"关着也去读"意味着有一天有人把读取挪到
+        别的分支上就会静默改变行为 —— 不读，这个可能性就不存在。
+    """
+    base = load_system_prompt()
+    if not agentsec_enabled:
+        return base
+    # 延迟 import：`notes` 在模块顶层 import 本模块（要 `FLAG_PATTERN`），
+    # 顶层反向 import 会撞环。这与本文件其它地方是同一条纪律。
+    from app.ctf2 import notes as notes_mod
+
+    if not notes_mod.is_agentsec_category(category):
+        return base
+    block = load_agentsec_prompt()
+    # 空行分隔：评测块自己以 `## ` 起头，紧贴上一行会让 Markdown 标题
+    # 并进上一个小节。原提示词**不做任何 strip** —— 它的结尾空白也是
+    # 原样的一部分，"关闭时逐字节相同"这条验收标准要靠这个保证。
+    return f"{base}\n{block}"
+
+
+def build_system_prompt_by_spec(spec: SolveSpec) -> str:
+    """按 `SolveSpec.agentsec` 拼 system prompt（v0.40，给解题循环用）。
+
+    为什么单独一个函数而不是在调用点写 `build_system_prompt(spec.category,
+    agentsec_enabled=spec.agentsec)`：那样调用点就得同时知道"分类"和
+    "开关"两件事该从哪里取，而 `spec.agentsec` **已经把两者合成一个
+    布尔值了**（见 `SolveSpec.agentsec`）。在这里再拆回去，
+    等于把"合成"和"拆分"都留在代码里，将来改判据要改两处。
+
+    参数化成 `SolveSpec` 之后，判据只有**一个**来源。
+    """
+    return build_system_prompt(spec.category, agentsec_enabled=spec.agentsec)
 
 
 # ══════════════════════════════════════════════════════════
@@ -2172,6 +2272,17 @@ class SolveSpec:
     #:    召回发生在那里（有 session），这里只是携带。默认 0 表示
     #:    "没有召回"（分类为空、库里没有同类题、或召回失败）。
     notes_count: int = 0
+
+    #: 本题要不要追加智能体安全评测块（v0.40）。
+    #:
+    #: ⚠️ 它在 `build_spec` 里**一次算好**（那里有 session 能读配置），
+    #:    而不是在跑解题的时候现读。理由与 `notes_text` 相同：解题循环
+    #:    是 async 且**不碰数据库**（见 `solve_in_sandbox` 的说明）。
+    #:
+    #: ★ 算的是**两者之与**：开关开着 **且** 本题分类属于 `agentsec-*`。
+    #:   拆成两个字段会让"什么时候该追加"这条判断散到两个地方，
+    #:   而那正是最容易出现"开关开了但没生效"的地方。
+    agentsec: bool = False
 
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
@@ -4482,6 +4593,16 @@ def build_spec(
     # 只是为了被 `solve_in_sandbox` 拷进 `outcome`，最终落到遥测表。
     notes_text, notes_count = _recall_notes(db, challenge)
 
+    # ★ v0.40：本题要不要追加智能体安全评测块。
+    #
+    # 两个条件**必须同时**成立：配置开关开着 **且** 本题分类属于那四类。
+    # 少任何一个都返回 False（普通题、或开关关着时行为完全不变）。
+    #
+    # ⚠️ 放在这里算而不是解题循环里：那里是 async 且约定不碰数据库。
+    # ⚠️ 召回失败不能连累这个判断 —— 所以它不是从 `_recall_notes` 里
+    #    借返回值，而是独立算。
+    agentsec_on = _agentsec_enabled(db, challenge)
+
     return SolveSpec(
         challenge_id=challenge.id,
         title=challenge.title,
@@ -4522,6 +4643,8 @@ def build_spec(
         # ★ v0.45：同一棵树的果实 —— 张数走另一条路（spec → outcome →
         #   遥测表），片段走 prompt。见 `_recall_notes` 的说明。
         notes_count=notes_count,
+        # ★ v0.40：是否追加智能体安全评测块（见 `SolveSpec.agentsec`）。
+        agentsec=agentsec_on,
         # 沙箱配额（见上面那段说明：这四个参数原来漏了，容器一直没有上限）
         cpus=sandbox_cpus,
         memory_mb=sandbox_memory_mb,
@@ -4572,6 +4695,40 @@ def _fallback_llms(db: Session, settings_row, *, primary) -> tuple[FallbackLlm, 
             kind=row.kind,
         ),
     )
+
+
+def _agentsec_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
+    """这道题要不要追加智能体安全评测块（v0.40）。
+
+    两个条件**同时**成立才返回 True：
+
+    1. CTF2 配置里 `enable_agentsec_scenarios` 打开了；
+    2. 本题分类属于 `agentsec-*` 那四类。
+
+    ## ★ 为什么第二个条件不是"开关开着就注入"
+
+    开关是"这个功能可用"，不是"所有题都按它跑"。把评测块注入到一道
+    `pwn` 题里，会让模型读到"你的工作不是攻破系统拿 flag" ——
+    而它当时确实该去攻破系统。那不是多给一段提示，是给出**互相矛盾
+    的两套指令**，模型的行为会变得不可预测。
+
+    ## 为什么读配置失败时**返回 False**
+
+    失败时返回 False 是安全方向：不注入 = 行为与引入这个功能之前
+    完全一致。返回 True 则意味着"配置读不到，于是我按最激进的那条
+    假设走"，而那会给普通题注入错误的纪律。
+    """
+    from app.ctf2 import notes as notes_mod
+
+    if not notes_mod.is_agentsec_category(challenge.category or ""):
+        return False
+    try:
+        from app.ctf2.service import effective_ctf2_settings
+
+        return bool(effective_ctf2_settings(db).enable_agentsec_scenarios)
+    except Exception:  # noqa: BLE001 - 读配置失败不该拦住解题
+        logger.warning("读 CTF2 配置失败，本次不追加智能体安全评测块", exc_info=True)
+        return False
 
 
 def _recall_notes(db: Session, challenge: Ctf2Challenge) -> tuple[str, int]:
@@ -5252,7 +5409,11 @@ async def _run_worker(
             spec,
             sandbox=sandbox,
             gateway=gateway,
-            system_prompt=load_system_prompt(),
+            # ★ v0.40：这里不能用 `load_system_prompt()` 了 —— 是否追加
+            #   智能体安全评测块取决于"开关 + 本题分类"，而那个判断
+            #   在 `build_spec` 时已经算好、存在 `spec.agentsec` 上
+            #   （这里没有 db session，也读不到配置）。
+            system_prompt=build_system_prompt_by_spec(spec),
             on_progress=_on_progress,
         )
 
@@ -5719,6 +5880,10 @@ __all__ = [
     "interpret_submit",
     "extract_final_analysis",
     "load_system_prompt",
+    "load_agentsec_prompt",
+    "build_system_prompt",
+    "build_system_prompt_by_spec",
+    "PROMPT_AGENTSEC_PATH",
     "needs_raw_network",
     "normalize_flag",
     "answer_is_grounded",

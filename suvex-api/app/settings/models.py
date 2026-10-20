@@ -570,6 +570,39 @@ class Ctf2Config(Base):
     # 删掉一个 provider 不该被这里拦住，取不到时按"没配"处理。
     fallback_provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    # ── 智能体安全场景扩展包（v0.40）──────────────────────
+    #
+    # ## 它控制什么：一件事，且只有一件事
+    #
+    # 打开时，`Ctf2SolveNote.category` 才允许取 `agentsec-*` 那四个值
+    # （见 `vocab.AgentsecCategory`），并且命中其中之一的任务会在 system
+    # prompt 末尾追加"判定考察点是否成立"的评测块。
+    #
+    # 关着时，那四个值在校验层被**拒绝**，prompt 一个字节都不变。
+    #
+    # ## ★ 为什么默认关闭，以及为什么这不算"保守"
+    #
+    # 这四个题型改变的是 agent 的**工作性质**：从"攻破系统拿 flag"变成
+    # "判定某个安全考察点是否成立"（证据分三级、排除必须附反证、
+    # 多智能体结论只能标疑似、密钥类证据必须脱敏）。
+    #
+    # 那是一套**不同的纪律**。默认打开意味着任何一次普通比赛里，
+    # 模型都可能读到一段"你的工作不是攻破系统"的指令 —— 而它当时
+    # 确实该去攻破系统。这不是体验取舍，是把两种互相冲突的行为准则
+    # 同时放进上下文。
+    #
+    # 所以：**默认关，且由人显式打开**。与 `submit_mode` 默认 `safe`
+    # 是同一条纪律 —— 冲突时站在"错不起"的那一侧。
+    #
+    # ## 为什么不放环境变量
+    #
+    # 与 `submit_mode` 同一条理由（见本文件 `Ctf2Config` 的说明）：
+    # 行为开关不该由一个部署参数静默决定。没有第二个来源，
+    # 就没有"来源"要标。
+    enable_agentsec_scenarios: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
     )

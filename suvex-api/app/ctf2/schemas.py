@@ -136,6 +136,12 @@ class Ctf2SettingsOut(CamelModel):
     # ★ v0.35：换模 fallback。默认 provider 调不动时改用哪个 provider；
     #   空串 / null = 不启用（默认）。见 `settings/models.py` 的说明。
     fallbackProviderId: str | None = None
+    # ★ v0.40：铸网-2026 智能体安全场景包开关。默认 **false**。
+    #   打开后 `agentsec-*` 那四类题型才被校验层放行、且命中时会在
+    #   system prompt 末尾追加"判定考察点是否成立"的评测块。
+    #   ⚠️ 它不是"多几种题型"，是**换一套行为纪律** —— 见
+    #   `settings/models.py` 的 `Ctf2Config.enable_agentsec_scenarios`。
+    enableAgentsecScenarios: bool = False
     updatedAt: IsoDateTime
 
 
@@ -179,6 +185,12 @@ class Ctf2SettingsIn(StrictModel):
     #   不同，理由是它是一个**新增**字段：老的客户端不带它时应当按
     #   "不启用"处理，而不是报 422。空串与 null 都表示"不启用"。
     fallbackProviderId: str | None = Field(default=None, max_length=64)
+    # ★ v0.40：智能体安全场景包开关。同样**可选、默认 false** ——
+    #   新增字段，老客户端不带它时按"关闭"处理（正是我们要的安全默认）。
+    #   ⚠️ 这里给默认值**不违反**上面"全部必填"那条纪律的理由：
+    #   那条纪律防的是"静默改回默认"，而 false 是**唯一安全的那一侧**
+    #   （不打开 = 行为完全不变），改回 false 不会造成任何不可逆后果。
+    enableAgentsecScenarios: bool = False
 
 
 # ══════════════════════════════════════════════════════════

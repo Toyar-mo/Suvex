@@ -53,6 +53,7 @@ from app.core.columns import JsonColumn, UtcDateTime
 from app.core.db import Base
 from app.core.timeutil import now_utc
 from app.core.vocab import (
+    DEFAULT_AGENTSEC_VERDICT,
     Ctf2ChallengeStatus,
     Ctf2EnvironmentStatus,
     Ctf2SandboxProfile,
@@ -904,7 +905,37 @@ class Ctf2SolveNote(Base):
     #:
     #: ⚠️ 失败的卡也有价值（`dead_ends` 能让新题少走弯路），
     #: 所以它们不删，只是排在后面。
+    #:
+    #: ## ★ v0.40：它的含义**变宽**了，但仍然是"值不值得优先召回"
+    #:
+    #: 原来它等于 `challenge.status == SOLVED`。在智能体安全评测里，
+    #: "跑完全套测试手法后确认不存在"（`ruled_out`）的获取成本与
+    #: "命中"（`confirmed`）相当 —— 见 `verdict` 列的说明。
+    #: 所以现在两者都算 `solved=True`（都值得优先召回）。
+    #:
+    #: ⚠️ 判**性质**请读 `verdict`，不要从这个布尔值倒推 —— 它已经被
+    #:    故意合并了两种情况。
     solved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    #: 这张卡是**怎么解决的**（v0.40）。取值见 `vocab.AgentsecVerdict`。
+    #:
+    #: ## ★ 为什么不能只靠 `solved: bool`
+    #:
+    #: `solved` 回答"值不值得优先召回"（排序用），而这一列回答
+    #: "是哪一种解决"。两者**不能互相推导**：
+    #:
+    #:   · `confirmed`    —— 命中。卡教人"怎么打中"；
+    #:   · `ruled_out`    —— 排除。卡教人"这条路是死的"，附具体反证；
+    #:   · `needs_follow_up` —— 待跟进（默认档）。
+    #:
+    #: 前两者都是 `solved=True`，但复用方式完全相反：一张讲"怎么命中"
+    #: 的卡拿去当"已经排除"用，会让模型跳过本该做的试探 —— 那正是
+    #: 场景包 5.3 节列的"分级禁区"里最严重的一种。
+    #:
+    #: ⚠️ 默认 `needs_follow_up` 而不是 `confirmed`：拿不准就说拿不准。
+    verdict: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=DEFAULT_AGENTSEC_VERDICT
+    )
 
     #: 方法梗概（**已脱敏**）。几句话，不是全文。
     approach: Mapped[str] = mapped_column(Text, nullable=False, default="")

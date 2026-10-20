@@ -801,6 +801,86 @@ class Ctf2SandboxProfile(StrEnum):
     REVERSE = "ctf2-sandbox-re"
 
 
+class AgentsecCategory(StrEnum):
+    """**智能体安全评测**（铸网-2026）的四个题型（v0.40）。
+
+    ## ★ 为什么单独一个枚举，而不是往 `Ctf2SolveNote.category` 里塞自由字符串
+
+    `category` 是 `String(64)` 且**没有约束** —— 原来它直接抄平台 payload
+    的分类名（`Pwn` / `Web` / …），爱是什么是什么。这在那时是对的：
+    我们不定义题型，平台定义。
+
+    但这四个是**我们自己定义**的，而且它们改变的不只是分类，还有
+    **agent 的工作性质**：从"攻破系统拿 flag"变成"判定某个安全考察点
+    是否成立"（证据分三级、排除必须附反证、多智能体结论只能标疑似）。
+    这么一个转向如果靠字符串约定去传，那么拼错一个字母就会静默退回
+    攻击模式 —— 而模型不会报错，它只会照着原来的纪律去"拿 flag"。
+
+    所以它们是**枚举**：拼错就是 `ValueError`。
+
+    ## 为什么前缀统一是 `agentsec-`
+
+    因为它同时也是**开关的判据**：`Ctf2Settings.enable_agentsec_scenarios`
+    关着时，校验层拒绝任何以它开头的取值。前缀让"这批题型"成为一个
+    可判定的集合，而不是一张要跟着改的名单。
+    """
+
+    PROMPT_INJECTION = "agentsec-prompt-injection"
+    TOOL_ESCALATION = "agentsec-tool-escalation"
+    DATA_LEAK = "agentsec-data-leak"
+    MULTI_AGENT = "agentsec-multi-agent"
+
+
+#: 四个题型的前缀。**开关判据与校验判据共用它** —— 两处各写一份的话，
+#: 将来加第五个题型时必然有一处漏改，而漏的那处表现为"放行了但没注入
+#: 提示词"（或反过来），都属于静默失效。
+AGENTSEC_CATEGORY_PREFIX: Final[str] = "agentsec-"
+
+#: 四个合法取值（`frozenset` 便于 O(1) 判定与 `assert` 比对）。
+AGENTSEC_CATEGORIES: Final[frozenset[str]] = frozenset(c.value for c in AgentsecCategory)
+
+
+class AgentsecVerdict(StrEnum):
+    """一条方法的**判定性质**（v0.40）。
+
+    ## ★ 为什么不能只用一个 `solved: bool`
+
+    `solved` 原来只回答"这道题解出来了吗"，而它现在被用来决定
+    **召回顺序**（`notes_for_challenge` 按 `solved DESC` 排）。
+
+    在智能体安全评测里，"解出来"有两种完全不同的形态，而它们
+    **获取成本相当**：
+
+      · `confirmed` —— 命中了该考察点（等价于"解出"）；
+      · `ruled_out` —— **跑完全套测试手法之后**确认不存在。
+        对抗类判据（越狱、提示词提取）明确要求"必须跑完全部测试手法
+        才能判排除"（见场景包 5.2 节），所以一张 `ruled_out` 卡背后
+        是一次完整的排除流程，不比 `confirmed` 便宜。
+
+    把 `ruled_out` 当"未解决"排到后面，会让下次同类任务**重跑一遍
+    完整排除流程** —— 那正是方法卡要消除的浪费。
+
+    但反过来把两者压成 `solved=True` 也不行：它们的**复用方式不同**。
+    `confirmed` 的卡教人"怎么打中"，`ruled_out` 的卡教人"这条路是死的"，
+    后者恰恰是场景包 6.3 节点名的"high 价值知识"（哪些话术被拒了）。
+    压成一个布尔值，卡片就再也说不清自己是哪一种。
+
+    所以：**`solved` 管召回排序，`verdict` 管性质**，两个字段各司其职。
+    """
+
+    #: 命中（有至少一条 confirmed 证据）。
+    CONFIRMED = "confirmed"
+    #: 排除（跑完全套手法后确认不存在，附反证）。
+    RULED_OUT = "ruled_out"
+    #: 待跟进（拿不准就归这里，**默认档**）。
+    NEEDS_FOLLOW_UP = "needs_follow_up"
+
+
+#: 每张方法卡都必须有一个 verdict。默认 `needs_follow_up` —— 与场景包
+#: 通用规则一致："拿不准一律归 needs_follow_up，不要为了给结论而硬判"。
+DEFAULT_AGENTSEC_VERDICT: Final[str] = AgentsecVerdict.NEEDS_FOLLOW_UP.value
+
+
 # 每题默认的错误提交次数上限（已定设计决策 4）。
 #
 # 默认 3 而不是"不限"：错误次数是**不可再生资源**，

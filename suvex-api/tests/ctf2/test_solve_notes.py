@@ -14,6 +14,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
+from app.core.vocab import Ctf2ChallengeStatus
 from app.ctf2 import notes as notes_mod
 from app.ctf2.models import Ctf2SolveNote
 
@@ -1023,3 +1024,212 @@ def test_sanitizer_and_flag_leak_predicate_agree() -> None:
 
     # 残缺形状裸在正文：脱敏不管它，闸门必须拦下（这一档只有一个方向）
     assert notes_mod.contains_unescaped_flag("found flag{ partially")
+
+
+# ══════════════════════════════════════════════════════════
+# ★ v0.40：`learn_from_solve` 的 verdict 落库
+# ══════════════════════════════════════════════════════════
+
+
+class _FakeOutcome:
+    """`learn_from_solve` 读的就是这三个属性。
+
+    ⚠️ `ruled_out` 是**必须**有的（v0.40）：`learn_from_solve` 用
+    模型写在 FINAL 里的排除清单去补齐那四项证据链，缺了这个属性
+    会 `AttributeError`。真实类型是 `runner.SolveOutcome`，那里的
+    默认值也是空列表。
+    """
+
+    def __init__(
+        self,
+        transcript: str = "",
+        error: str | None = None,
+        ruled_out: list[str] | None = None,
+    ) -> None:
+        self.transcript = transcript
+        self.error = error
+        self.ruled_out: list[str] = list(ruled_out or [])
+        self.candidates: list[object] = []
+
+
+def _learn(db: Session, challenge, outcome) -> Ctf2SolveNote:  # noqa: ANN001
+    """跑一次 `learn_from_solve` 并把落库的卡读回来。"""
+    from app.ctf2.service import learn_from_solve
+
+    learn_from_solve(db, challenge, outcome)
+    db.expire_all()
+    return (
+        db.query(Ctf2SolveNote)
+        .filter(Ctf2SolveNote.challenge_id == challenge.id)
+        .one()
+    )
+
+
+def test_learn_writes_confirmed_verdict_on_solve(
+    db_session: Session, ctf2_competition
+) -> None:
+    """解出来了 → `verdict=confirmed`、`solved=True`。"""
+    from app.core.vocab import AgentsecVerdict
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="v-confirmed",
+        status=Ctf2ChallengeStatus.SOLVED.value,
+        confirmed_flag="flag{ok}",
+    )
+    row = _learn(db_session, ch, _FakeOutcome(transcript="run_shell: ls -la"))
+
+    assert row.verdict == AgentsecVerdict.CONFIRMED.value
+    assert row.solved is True
+
+
+def test_learn_writes_needs_follow_up_on_bare_failure(
+    db_session: Session, ctf2_competition
+) -> None:
+    """★ 没解出来、且没有完整证据链 → `needs_follow_up`、`solved=False`。
+
+    这一条守的是"**别**把随手的失败升级成已排除"：
+    自动补的四项前缀不能冒充完整证据链（见
+    `notes.RULED_OUT_EVIDENCE_MARKERS` 的说明）。
+    """
+    from app.core.vocab import AgentsecVerdict
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    ch = _make_challenge(db_session, ctf2_competition, remote_id="v-followup")
+    row = _learn(db_session, ch, _FakeOutcome(error="timeout"))
+
+    assert row.verdict == AgentsecVerdict.NEEDS_FOLLOW_UP.value
+    assert row.solved is False, "★ 草率的失败被当成了已解决"
+
+
+def test_learn_accepts_agentsec_category_when_switch_on(
+    db_session: Session, ctf2_competition
+) -> None:
+    """开关打开 + agentsec 分类 → 卡能写成那个分类。"""
+    from app.ctf2.service import update_ctf2_settings
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    _turn_agentsec_on(db_session)
+    ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="v-sec-on",
+        category="agentsec-data-leak",
+        status=Ctf2ChallengeStatus.SOLVED.value,
+        confirmed_flag="flag{ok}",
+    )
+    row = _learn(db_session, ch, _FakeOutcome(transcript="run_shell: ls"))
+
+    assert row.category == "agentsec-data-leak"
+
+
+def test_learn_degrades_to_blank_category_when_switch_off(
+    db_session: Session, ctf2_competition
+) -> None:
+    """★ 开关关着 + agentsec 分类 → **写卡但不带分类**，不整条丢。
+
+    ## 这条用例造的是一个"正常流程走不到"的状态
+
+    正常同步时，开关关着就不会有 `agentsec-*` 的题被写进来
+    （`validate_note_category` 在写入侧会拦）。但这里刻意造出那个
+    状态，因为要守的是**兜底行为**：
+
+    历史数据、手工改库、或者开关被关掉而题目早已入库 —— 这几种情况下
+    库里确实会有 `agentsec-*` 的题。此时如果 `learn_from_solve` 因为
+    分类不合法就整体失败，那道题的解题知识就永久丢了，而知识本身
+    与开关无关。
+
+    所以兜底是：**降级成无分类写卡**，不是丢卡。
+
+    ⚠️ 这个取舍与"写入侧拒绝非法分类"不矛盾：那一条守的是
+    新写入不产生脏数据，这一条守的是已有脏数据不会连带毁掉知识。
+    两处判据不同是因为**风险方向不同**。
+    """
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    _turn_agentsec_off(db_session)
+    ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="v-sec-off",
+        category="agentsec-prompt-injection",
+        status=Ctf2ChallengeStatus.SOLVED.value,
+        confirmed_flag="flag{ok}",
+    )
+    row = _learn(db_session, ch, _FakeOutcome(transcript="run_shell: ls"))
+
+    assert row.category == "", "开关关着时不该把 agentsec 分类写进卡"
+    assert row.approach, "★ 分类不合法不该连知识一起丢掉"
+
+
+def _set_agentsec_switch(db: Session, *, on: bool) -> None:
+    """把配置行的开关设成指定值（走正常保存路径，不直接改列）。"""
+    from app.ctf2.service import get_ctf2_config, update_ctf2_settings
+
+    row = get_ctf2_config(db)
+    update_ctf2_settings(
+        db,
+        submit_mode=row.submit_mode,
+        max_wrong_submissions=row.max_wrong_submissions,
+        default_sandbox_profile=row.default_sandbox_profile,
+        max_concurrent_solves=row.max_concurrent_solves,
+        solve_poll_seconds=row.solve_poll_seconds,
+        auto_sync_seconds=row.auto_sync_seconds,
+        auto_priority_new=row.auto_priority_new,
+        auto_start_new=row.auto_start_new,
+        max_turns=row.max_turns,
+        fallback_provider_id=row.fallback_provider_id,
+        enable_agentsec_scenarios=on,
+    )
+
+
+def _turn_agentsec_on(db: Session) -> None:
+    _set_agentsec_switch(db, on=True)
+
+
+def _turn_agentsec_off(db: Session) -> None:
+    """确保开关是关的（默认就是关，但别的用例可能改过）。"""
+    _set_agentsec_switch(db, on=False)
+
+
+def test_learn_marks_ruled_out_as_solved(
+    db_session: Session, ctf2_competition
+) -> None:
+    """★★ 本次修复的**核心路径**：跑完全套判据后确认排除，算已解决。
+
+    ## 为什么要端到端测而不是只测 `resolve_verdict`
+
+    `resolve_verdict` 是个纯函数，测它只证明"判据写得对"。而缺陷 1
+    的实际表现是：**卡片落库时 `solved` 被写成 False**，于是召回时
+    排在后面、甚至被整轮排除后重跑。那条路径要经过
+    `learn_from_solve` → `build_note_fields` → `resolve_verdict`
+    → 落库，任何一环断了症状都一样（卡还是未解决）。
+
+    所以这里造一次"真的跑完了三种话术、模型写了排除理由"的解题，
+    然后读**数据库里的那一行**断言。
+    """
+    from app.core.vocab import AgentsecVerdict
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    _turn_agentsec_on(db_session)
+    ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="v-ruled-out",
+        category="agentsec-prompt-injection",
+    )
+    transcript = "\n".join(
+        [
+            '[turn 1] tool run_shell {"command": "file /work/a.bin"}',
+            '[turn 2] tool run_shell {"command": "strings /work/a.bin | head -50"}',
+        ]
+    )
+    outcome = _FakeOutcome(
+        transcript=transcript,
+        error="",
+        ruled_out=[
+            "排除了 PI-03 越狱 —— 三种话术全部被拒绝，无越界输出",
+        ],
+    )
+    row = _learn(db_session, ch, outcome)
+
+    assert row.verdict == AgentsecVerdict.RULED_OUT.value, (
+        f"证据链应当齐全，实际 verdict={row.verdict}\n{row.dead_ends}"
+    )
+    assert row.solved is True, (
+        "★ 跑完全套测试后确认排除，仍被记成未解决（缺陷 1 未修复）"
+    )

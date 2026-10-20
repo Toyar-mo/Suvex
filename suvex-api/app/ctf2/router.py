@@ -310,6 +310,7 @@ def _settings_out(row) -> Ctf2SettingsOut:  # noqa: ANN001
         autoStartNew=row.auto_start_new,
         maxTurns=row.max_turns,
         fallbackProviderId=row.fallback_provider_id,
+        enableAgentsecScenarios=row.enable_agentsec_scenarios,
         updatedAt=row.updated_at,
     )
 
@@ -347,6 +348,7 @@ def update_ctf2_settings(
         auto_start_new=payload.autoStartNew,
         max_turns=payload.maxTurns,
         fallback_provider_id=payload.fallbackProviderId,
+        enable_agentsec_scenarios=payload.enableAgentsecScenarios,
     )
     audit.record(
         db,
@@ -371,6 +373,12 @@ def update_ctf2_settings(
             # ★ 回合预算也留痕：它决定"一道题最多烧多少次 LLM 调用"，
             #   属于会改变机器对外行为的配置（与并发、提交模式同一类）。
             "maxTurns": row.max_turns,
+            # ★ v0.40：场景包开关也留痕，且理由比上面几项更硬 ——
+            #   打开它会把 agent 的行为纪律从"攻破系统拿 flag"换成
+            #   "判定安全考察点是否成立"（证据分三级、多智能体结论只能
+            #   标疑似）。事后复盘"当时模型为什么不去拿 flag"时，
+            #   这一项是唯一能回答的线索。
+            "enableAgentsecScenarios": row.enable_agentsec_scenarios,
         },
     )
     return _settings_out(row)

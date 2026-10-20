@@ -2109,6 +2109,39 @@ def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  #
     from app.ctf2 import notes as notes_mod
     from app.ctf2.models import Ctf2SolveNote
 
+    # ★ v0.40：写入前过一遍分类校验。
+    #
+    # 为什么写入侧也要校验（不只是"同步时校验一次"）：`category` 是
+    # `String(64)` 且**没有数据库约束**，任何一条写路径都可能塞进
+    # 一个不该存在的 `agentsec-*` 取值。而那样一张卡会在开关关着的
+    # 部署里被正常召回、正常注入，只是它的 verdict 语义没人认 ——
+    # 属于"看不出来的错"。
+    #
+    # ⚠️ 校验失败**不拦解题**（本函数失败只记日志）：把 category
+    #    退回空串写卡，卡片仍可用（只是召回时不再靠分类匹配）。
+    #    这比"因为分类不合法就把整次解题的知识丢掉"更划算。
+    #
+    # ⚠️ 配置**只读一次**：下面 `agentsec` 与这里共用同一个值。
+    #    读两次不仅多一次查询，更糟的是万一两次之间配置被改了，
+    #    会出现"分类校验按开着过、证据格式按关着写"这种自相矛盾的卡。
+    try:
+        agentsec_on = bool(effective_ctf2_settings(db).enable_agentsec_scenarios)
+    except Exception:  # noqa: BLE001 - 读配置失败不该拦住写卡
+        logger.warning("读 CTF2 配置失败，本次按未启用处理", exc_info=True)
+        agentsec_on = False
+
+    try:
+        category = notes_mod.validate_note_category(
+            challenge.category or "", agentsec_enabled=agentsec_on
+        )
+    except ValueError:
+        logger.warning(
+            "解题方法卡的分类不合法，本次按未分类写卡：%s（%s）",
+            challenge.id,
+            challenge.category,
+        )
+        category = ""
+
     # `solved` 取自**最终状态**（调用方刚定完）。
     solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
 
@@ -2117,7 +2150,36 @@ def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  #
         error=outcome.error,
         candidates=[c.flag for c in (outcome.candidates or [])],
         solved=solved,
+        # 只有 agentsec 类才按四项证据格式写 `dead_ends` ——
+        # 五个现有分类的卡片内容必须一个字不变（见该函数的说明）。
+        agentsec=agentsec_on,
+        # ★ v0.40：模型在 FINAL 里写的**真实**排除清单。
+        #
+        # 为什么不只靠自动生成的那四项前缀：那四项里只有"观察到什么"
+        # 是真拿得到的（错误原话），另三项是如实写的"未记录"。而模型
+        # 在 FINAL 的 `ruled_out` 里逐条写了「排除了什么、凭什么」——
+        # 那是**唯一**能让证据链真正齐全的信息源。
+        #
+        # ⚠️ 它仍然要过 `sanitize_for_reuse`（在 `build_note_fields`
+        #    内部做），因为模型的自由文本完全可能把目标地址、甚至
+        #    密钥原文写进去，而卡片会进另一道题的 prompt。
+        ruled_out=list(outcome.ruled_out or []),
     )
+
+    # ★ v0.40：判定这张卡是"命中"还是"排除"还是"待跟进"。
+    #
+    # ## 为什么 `solved` 要在 `fields` 之后**重新算一次**
+    #
+    # 原来 `solved` 直接等于 `challenge.status == SOLVED`，也就是只认
+    # "解出来了"。而一次"跑完全套测试手法、确认这个考察点不存在"的
+    # 解题同样花了全部成本，却会被记成未解决 —— 下次同类任务排在后面、
+    # 甚至不被召回，于是同一套排除流程要再跑一遍。
+    #
+    # 现在：`ruled_out`（且证据链齐全）也算 solved。
+    # 判据住在 `notes` 里（`resolve_verdict` / `counts_as_solved`），
+    # **不在这里再写一遍** —— 两处各写一份必然漂移。
+    verdict = notes_mod.resolve_verdict(solved=solved, dead_ends=fields["dead_ends"])
+    solved_effective = notes_mod.counts_as_solved(verdict)
 
     existing = (
         db.execute(
@@ -2131,22 +2193,25 @@ def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  #
             Ctf2SolveNote(
                 id=new_id("ctf2note"),
                 challenge_id=challenge.id,
-                category=(challenge.category or "")[:64],
-                solved=solved,
+                category=category,
+                solved=solved_effective,
+                verdict=verdict,
                 **fields,
             )
         )
     else:
-        existing.category = (challenge.category or "")[:64]
-        existing.solved = solved
+        existing.category = category
+        existing.solved = solved_effective
+        existing.verdict = verdict
         existing.approach = fields["approach"]
         existing.tools = fields["tools"]
         existing.dead_ends = fields["dead_ends"]
     db.commit()
     logger.info(
-        "已更新解题方法卡：%s（solved=%s tools=%s）",
+        "已更新解题方法卡：%s（solved=%s verdict=%s tools=%s）",
         challenge.id,
-        solved,
+        solved_effective,
+        verdict,
         fields["tools"] or "无",
     )
 
@@ -3044,6 +3109,14 @@ class Ctf2Settings:
     #: `None` = 不换（默认），行为与引入前一致。见 `settings/models.py`
     #: 的 `Ctf2Config.fallback_provider_id`。
     fallback_provider_id: str | None = None
+    #: 是否启用铸网-2026 智能体安全场景包（v0.40）。默认 **False**。
+    #:
+    #: ⚠️ 它不是一个"多给几种题型"的开关，它**改变 agent 的工作纪律**：
+    #: 打开后 `agentsec-*` 那四类任务不再是"攻破系统拿 flag"，而是
+    #: "判定某个安全考察点是否成立"（证据分三级、排除必须附反证、
+    #: 多智能体结论只能标疑似）。理由见 `settings/models.py` 的
+    #: `Ctf2Config.enable_agentsec_scenarios`。
+    enable_agentsec_scenarios: bool = False
 
 
 def effective_ctf2_settings(db: Session) -> Ctf2Settings:
@@ -3071,6 +3144,7 @@ def effective_ctf2_settings(db: Session) -> Ctf2Settings:
             auto_start_new=False,
             max_turns=DEFAULT_CTF2_MAX_TURNS,
             fallback_provider_id=None,
+            enable_agentsec_scenarios=False,
         )
     return Ctf2Settings(
         submit_mode=row.submit_mode,
@@ -3083,6 +3157,7 @@ def effective_ctf2_settings(db: Session) -> Ctf2Settings:
         auto_start_new=row.auto_start_new,
         max_turns=row.max_turns,
         fallback_provider_id=row.fallback_provider_id,
+        enable_agentsec_scenarios=row.enable_agentsec_scenarios,
     )
 
 
@@ -3110,6 +3185,7 @@ def update_ctf2_settings(
     auto_start_new: bool,
     max_turns: int,
     fallback_provider_id: str | None = None,
+    enable_agentsec_scenarios: bool = False,
 ) -> Ctf2Config:
     """保存配置。**逐项校验，不静默夹取。**
 
@@ -3151,11 +3227,13 @@ def update_ctf2_settings(
     row.auto_start_new = auto_start_new
     row.max_turns = max_turns
     row.fallback_provider_id = normalized_fallback
+    row.enable_agentsec_scenarios = bool(enable_agentsec_scenarios)
     db.commit()
     db.refresh(row)
     logger.info(
         "CTF2 配置已更新：mode=%s maxWrong=%d profile=%s 解题并发=%d "
-        "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 备用模型=%s",
+        "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 备用模型=%s "
+        "智能体安全场景=%s",
         submit_mode,
         max_wrong_submissions,
         default_sandbox_profile,
@@ -3166,6 +3244,10 @@ def update_ctf2_settings(
         auto_start_new,
         max_turns,
         normalized_fallback or "（不启用）",
+        # 这一项会**改变模型的行为纪律**（从"攻破系统"变成"判定考察点"），
+        # 所以它的开/关必须能在日志里查得到 —— 复盘时"当时到底开没开"
+        # 是一个只能用日志回答的问题。
+        "开" if enable_agentsec_scenarios else "关",
     )
     return row
 

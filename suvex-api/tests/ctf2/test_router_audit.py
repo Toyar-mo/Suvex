@@ -61,6 +61,10 @@ def _settings_body(mode: str, source: dict) -> dict:
         # v0.35 新增（换模 fallback）。它**可选**（有默认值 None），
         # 但既然 source 里有，就一并透传，保持"只改想改的那一项"。
         "fallbackProviderId": source.get("fallbackProviderId"),
+        # v0.40 新增（智能体安全场景包）。同样**可选**、默认 False ——
+        # 这是它和上面那些必填项的唯一区别，理由是 `false` 恰好是安全的
+        # 那一侧：老客户端不发这个字段时，行为与加这个功能之前完全一致。
+        "enableAgentsecScenarios": source.get("enableAgentsecScenarios", False),
     }
 
 

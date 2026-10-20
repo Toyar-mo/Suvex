@@ -442,6 +442,82 @@ def contains_unescaped_flag(text: str) -> bool:
     return False
 
 
+#: 方括号占位符：`[canary_token]`、`[secret_patterns]`、`[match_threshold=50]`……
+#:
+#: ## ★ 为什么这类东西必须**原样保留**（v0.40）
+#:
+#: 场景包里的判据是靠占位符写成的，例如 DL-01「植入 canary
+#: `[canary_token]`」、DL-02「定义 `[secret_patterns]`（`sk-` 前缀、
+#: AKIA 开头…）」。
+#:
+#: 这些占位符本身**不是秘密**，它们是"部署时会被替换成真值的位置名"。
+#: 而 `sanitize_for_reuse` 的 ③ 步会删掉 32 位以上的连续 hex / 40 位以上
+#: 的 base64 —— 如果占位符里恰好塞了一个用作示例的长串，那条判据就会被
+#: 掏空成一句读不懂的话，而**空掉的正好是"该看什么"那一半**。
+#:
+#: ## 判据为什么用"方括号包裹"而不是"长度短一点"
+#:
+#: 不可以放宽 `{32,}` / `{40,}` 那两个阈值 —— 它们挡的是**真凭据**，
+#: 放宽等于为真泄漏开一道后门（见那两行的说明）。
+#:
+#: 所以判据落在**形式上**：`[...]` 包裹的短标识符是**文档约定**，
+#: 真凭据不会长成 `[canary_token]` 这样。这条边界很清楚：
+#:   · `[canary_token]`          → 保留（形状名）
+#:   · `7f3e9b2d1c84f60a5e8d…`   → 仍然删除（裸长 hex，可能是真值）
+#:
+#: 长度上限 64 是"这是个标识符不是内容"的护栏：`[` 后面跟一大段
+#: base64 不算占位符，那反而更像真东西。
+_PLACEHOLDER = re.compile(r"\[[A-Za-z0-9_][A-Za-z0-9_\-=./: ]{0,63}\]")
+
+
+def _protect_placeholders(text: str) -> tuple[str, list[str]]:
+    """把占位符换成哨兵，返回 `(换过的文本, 哨兵表)`。
+
+    ## 为什么需要这一步（而不是给那两条正则加否定环视）
+
+    两条剔除正则是 `\b[A-Fa-f0-9]{32,}\b` 与 `\b[A-Za-z0-9+/]{40,}={0,2}\b`。
+    给它们加"别删方括号里的"环视是可行的，但那要改**脱敏主路径**的正则 ——
+    而那两条是这个模块最不能出错的地方（它们挡的是真凭据）。
+
+    换成"先把要保的摘出来、跑完再放回"之后：
+      · 剔除正则一个字没改，挡真凭据的强度完全不变；
+      · 保护范围一目了然，就是 `_PLACEHOLDER` 匹配到的那些。
+
+    ## 哨兵为什么用 `\\x00` 包裹
+
+    它不可能出现在正常文本里（JSON/命令/SQL 都不会带裸 NUL），
+    所以不会和真实内容撞名，也就不需要处理"内容里本来就有哨兵"这种情况。
+    """
+    if not text:
+        return text, []
+    saved: list[str] = []
+
+    def _swap(match: re.Match[str]) -> str:
+        saved.append(match.group(0))
+        return f"\x00{len(saved) - 1}\x00"
+
+    return _PLACEHOLDER.sub(_swap, text), saved
+
+
+def _restore_placeholders(text: str, saved: list[str]) -> str:
+    """把哨兵换回原来的占位符（`_protect_placeholders` 的逆操作）。
+
+    ⚠️ 用 `re.sub` + 回调而不是 `str.replace` 循环：哨兵是纯数字，
+    逐个 `replace` 在占位符数量多时会把 `\x001\x00` 里的 `1` 撞进
+    `\x0011\x00` 之类的编号里。一次扫描按编号取值没有这个歧义。
+    """
+    if not saved:
+        return text
+
+    def _swap(match: re.Match[str]) -> str:
+        idx = int(match.group(1))
+        # 越界不该发生（哨兵只由 `_protect_placeholders` 生成），
+        # 但真发生了也不该让整张卡报错 —— 退回空串即可。
+        return saved[idx] if 0 <= idx < len(saved) else ""
+
+    return re.sub(r"\x00(\d+)\x00", _swap, text)
+
+
 def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
     """把一段文本处理成**可以安全注入到另一道题**的形状。
 
@@ -628,8 +704,13 @@ def sanitize_for_reuse(text: str, *, limit: int = MAX_NOTE_CHARS) -> str:
     #    所以这里**不需要**再加否定环视 —— 上面 ②⁗ 已经把它们摘走了。
     #    （早先试过用 `(?!\.[A-Za-z]{1,8}\b)` 在这里排除，但那只解决了
     #    "别删"、没解决"太占长度"和"被当 hostname"，所以改成前置处理。）
+    # ★★ v0.40：占位符与"形状说明"必须先被保护起来再剔除。
+    #    见 `_protect_placeholders` 的说明 —— 这不是放宽阈值，
+    #    而是先认出"这些长串是**判据在描述形状**，不是真凭据"。
+    cleaned, _placeholders = _protect_placeholders(cleaned)
     cleaned = re.sub(r"\b[A-Fa-f0-9]{32,}\b", "", cleaned)
     cleaned = re.sub(r"\b[A-Za-z0-9+/]{40,}={0,2}\b", "", cleaned)
+    cleaned = _restore_placeholders(cleaned, _placeholders)
 
     # ④ 折叠空白（上面剔除后会留下多余空格与空行）。
     cleaned = re.sub(r"[ \t]+", " ", cleaned)
@@ -1056,8 +1137,114 @@ def _clip_command(command: str, limit: int) -> str:
     return one_line[:limit] + ("…" if len(one_line) > limit else "")
 
 
+def _coverage_note(steps: list[str]) -> str:
+    """把"跑到哪一轮、试了几条路径"写成一句覆盖范围说明（v0.40）。
+
+    ## 为什么这一项**必须自动生成**而不能留空
+
+    它是 §5.2 四项里唯一能区分"测遍了都没有"与"试了一下没反应"的
+    那一项（见 `ruled_out_chain_complete` 的说明）。留空的话，
+    所有失败的卡都会停在 `needs_follow_up` —— 那在效果上等于
+    本次修复没有生效。
+
+    ## ⚠️ 它描述的是**我们的观察**，不是"覆盖是充分的"
+
+    写成"跑了 N 条命令"而不是"已覆盖全部变体"：后者是结论，
+    而证明结论需要人复核。这里只如实记下规模，让读卡的人自己判断
+    这个量够不够。
+    """
+    count = len(steps or [])
+    if count <= 0:
+        return "未记录（transcript 里没有可复用的命令）。"
+    return f"本次共 {count} 条可复用命令，覆盖程度按此判断。"
+
+
+def _agentsec_dead_ends(*, ruled_out: list[str], reason: str, covered: str) -> str:
+    """把模型的排除清单与自动生成的观察拼成 §5.2 的四项格式（v0.40）。
+
+    ## 数据来源的分工
+
+    | 项 | 来源 | 拿不到时 |
+    | --- | --- | --- |
+    | ① 判据 | 模型 `ruled_out` 的条目 | `未指定` |
+    | ② 测了什么 | 模型 `ruled_out` 的条目 | `未记录` |
+    | ③ 观察到什么 | `error` 原话（脱敏后） | `未记录` |
+    | ④ 覆盖范围 | `_coverage_note(steps)` | `未记录` |
+
+    ## ★ 为什么模型写的东西能填前两项，但不能填第三项
+
+    `ruled_out` 里每条大致是「排除了 X —— 因为试了 Y 得到 Z」。
+    它天然覆盖了"针对哪个判据"与"做了什么测试"，也就是 ① 和 ②；
+    而 ③ 要的是**观察到什么具体现象**，那与"错误原话"是同一件事，
+    所以用 `reason` 更准确。
+
+    ⚠️ 如果模型什么都没写（`ruled_out` 为空），前两项就写"未记录"，
+    整条链路不齐全、verdict 落到 `needs_follow_up` —— **这是对的**。
+    一次没有排除任何东西的解题，本来就不该被记成"已排除"。
+    """
+    items = [s for s in (ruled_out or []) if isinstance(s, str) and s.strip()]
+    # 每一条都在这里过一遍脱敏：模型完全可能把目标地址甚至密钥原文
+    # 写进 FINAL，而卡片会进另一道题的 prompt。
+    cleaned = [sanitize_for_reuse(s, limit=200) for s in items]
+    cleaned = [s for s in cleaned if s]
+
+    if cleaned:
+        # ② 用完整条目（"试了 Y 得到 Z"就在里面）。
+        tested = "；".join(cleaned)
+        # ① 取每条里"判据/考察点"那半句。模型写的形状不固定，所以
+        # 只做**保守**切分：认得出分隔符就取前半，认不出就整条留下。
+        # 拼错形状的代价只是这一项啰嗦，而丢掉内容的代价是判据缺失。
+        heads = [_judge_head(s) for s in cleaned]
+        judges = "；".join(h for h in heads if h) or tested
+        # ③ 优先用 `error` 原话（那是"卡在哪一步"最精确的描述）；
+        #    没有 error 但它确实写了排除清单时，**不能**写"未记录"——
+        #    那等于把模型已经写下的观察抹掉，还会让整条链判不齐。
+        observed = reason or "见「测了什么」里的逐条说明。"
+    else:
+        tested = "未记录"
+        judges = "未指定"
+        observed = reason or "未记录"
+
+    return "\n".join(
+        [
+            f"判据：{judges}",
+            f"测了什么：{tested}",
+            f"观察到什么：{observed}",
+            f"覆盖范围：{covered}",
+        ]
+    )
+
+
+def _judge_head(item: str) -> str:
+    """从一条排除记录里取出"针对什么判据"那半句（v0.40）。
+
+    ## 为什么只做保守切分
+
+    模型写 `ruled_out` 的形状不固定（实测有「排除了 X —— 因为 Y」
+    「X：试了 Y」「X（原因：Y）」等多种）。这里只认几种明确的分隔符，
+    认不出就**整条返回** —— 拼错形状的代价只是这一项啰嗦，
+    而把内容切丢的代价是一条判据消失。
+    """
+    # 分隔符按"信息量"排：破折号通常分的是"结论——理由"，
+    # 冒号分的是"标题：内容"。冒号放后面，避免把「X——因为 Y：Z」
+    # 切成「X——因为 Y」。
+    for sep in ("——", "：", ":"):
+        if sep in item:
+            head = item.split(sep, 1)[0].strip()
+            # head 太短（比如只有"排除了"）就退回整条，避免切出无意义的碎片。
+            if len(head) >= 4:
+                return head
+    return item
+
+
 def build_note_fields(
-    *, transcript: str, error: str | None, candidates: list[str], solved: bool
+    *,
+    transcript: str,
+    error: str | None,
+    candidates: list[str],
+    solved: bool,
+    agentsec: bool = False,
+    ruled_out: list[str] | None = None,
 ) -> dict[str, str]:
     """从一次解题的产物里提炼出卡片的三个字段（**全部已脱敏**）。
 
@@ -1079,6 +1266,21 @@ def build_note_fields(
 
     现在它由 `key_steps_from_transcript` 真的从 transcript 里提取，
     所以每道题的卡是不同的。
+
+    ## ★ `agentsec` 只影响 `dead_ends` 的**格式**，且默认关闭
+
+    打开时 `dead_ends` 按场景包 §5.2 写成四项（判据/测了什么/观察到
+    什么/覆盖范围），否则写一句失败原因。
+
+    ⚠️ 默认必须是 `False`：`dead_ends` 会进**用户回合正文**，
+    给五个现有分类换格式等于改掉它们每一次解题所见。
+
+    Args:
+        transcript: 本次解题的工具调用记录。
+        error: 收尾时的错误（没有就 None）。
+        candidates: 候选答案原文（**只用于判断"有没有产出"**）。
+        solved: 是否解出来了（`verdict == confirmed`）。
+        agentsec: 本题是否属于智能体安全场景包。
     """
     tools = tools_from_transcript(transcript)
     steps = key_steps_from_transcript(transcript)
@@ -1096,13 +1298,53 @@ def build_note_fields(
 
     if solved:
         dead_ends = ""
+    elif agentsec:
+        # ★ v0.40：按场景包 §5.2 的**四项证据格式**写。
+        #
+        # 为什么 agentsec 类要改格式：`ruled_out`（排除）必须四项齐全
+        # 才算数（见 `ruled_out_chain_complete`）。
+        #
+        # ## 四项的**真实**来源是模型的 FINAL 结论文档
+        #
+        # `SolveOutcome.ruled_out` 是模型逐条写的「排除了什么、凭什么」
+        # （v0.38 起就有，见 `runner.SolveOutcome.ruled_out`）。那是
+        # 唯一能让证据链真正齐全的信息源 —— 自动生成的四项里只有
+        # 第 ③ 项（错误原话）是拿得到的。
+        #
+        # ## 拿不到的项写"未记录"，不省略、不编造
+        #
+        # 省略会让卡看起来像"四项都在、只是没内容"；"未记录"明确
+        # 说明它残缺，`resolve_verdict` 会正确归到 `needs_follow_up`。
+        #
+        # ⚠️ 编造另三项 = "为了让 verdict 好看而伪造证据"，
+        #    而证据链造假比没有证据链危险得多。
+        reason = sanitize_for_reuse(error or "", limit=300)
+        covered = _coverage_note(steps)
+        dead_ends = _agentsec_dead_ends(
+            ruled_out=ruled_out or [],
+            reason=reason,
+            covered=covered,
+        )
     else:
-        # 失败时把错误原话（脱敏后）留下 —— 它往往是"卡在哪一步"的
-        # 最精确描述。
+        # ## ★ 为什么五个现有分类走这条老路，一个字都不改
+        #
+        # `dead_ends` 会被渲染进「走不通的方向：」并进入**用户回合正文**。
+        # 把它换成四项格式，即便只是多了几个前缀，也改变了那五类题的
+        # 每一次解题所见 —— 而那是本次改动的主要回归判据（"五类逐字节
+        # 不变"）。
+        #
+        # 所以四项格式**只给 agentsec 四类**。副作用是那五类永远不会有
+        # 四项齐全的 `dead_ends`，于是 `ruled_out` 对它们永不成立、
+        # `solved` 语义与改动前完全一致 —— 这正是想要的。
         reason = sanitize_for_reuse(error or "", limit=300)
         dead_ends = reason or "未记录失败原因。"
-        if not candidates:
-            approach += "\n  全程没有产出候选答案。"
+
+    # ⚠️ 这一句必须留在**两个分支之外**：它只与 `candidates` 有关，
+    #    与 `agentsec` 无关。曾经把它连同缩进一起放进了 else 分支，
+    #    结果 agentsec 类的失败卡不再标注「全程没有产出候选答案」——
+    #    而那句话是判断"这次到底有没有接近答案"的唯一线索。
+    if not solved and not candidates:
+        approach += "\n  全程没有产出候选答案。"
 
     return {
         # ⚠️ 上限放宽到两倍：`approach` 现在是多行步骤而不是一句话，
@@ -1160,6 +1402,196 @@ _TOOLS_NOT_DIAGNOSTIC = frozenset(
 )
 
 
+def validate_note_category(category: str, *, agentsec_enabled: bool) -> str:
+    """校验方法卡的 `category` 取值，返回**归一化后**的字符串（v0.40）。
+
+    ## 它守的是什么
+
+    `Ctf2SolveNote.category` 是 `String(64)`、**没有数据库约束** ——
+    原来它直接抄平台 payload 的分类名（`Pwn` / `Web` / …），
+    爱是什么是什么。那在只有平台定义题型时是对的。
+
+    但 `agentsec-*` 那四类是**我们自己定义**的，而且它们不只是分类：
+    它们决定 agent 拿到哪一套行为纪律（见 `vocab.AgentsecCategory`）。
+    让这种取值靠"调用方记得传对字符串"来保证，拼错一个字母就会
+    静默退回攻击模式 —— 而模型不会报错，它只会照着原来的纪律
+    去"拿 flag"。
+
+    ## 开关关着时**拒绝**，而不是静默降级成空字符串
+
+    静默降级会让"以为开了其实没开"变成一次没有信号的失效：卡片
+    写进去了，但它不再影响 prompt、也不再有 verdict 语义，而写入方
+    拿到的是成功。宁可抛错。
+
+    ## ⚠️ 不校验现有五类
+
+    那五类（以及平台将来可能加的任何分类）**原样放行** —— 它们来自
+    平台 payload，我们不定义、也无权拒绝。这个函数的守备范围只有
+    "以 `AGENTSEC_CATEGORY_PREFIX` 开头的取值"，其余一律原样返回。
+
+    这条边界很重要：如果这里改成白名单，平台哪天新增一个题型，
+    同步流程就会因为"分类不认识"而失败 —— 那是把我们的纪律
+    强加给平台的接口，代价是丢题。
+
+    Args:
+        category: 待校验的分类名（可以是空串 —— 空串永远合法）。
+        agentsec_enabled: `Ctf2Settings.enable_agentsec_scenarios`。
+
+    Raises:
+        ValueError: 取值以 `agentsec-` 开头但不合法、或开关没打开。
+    """
+    from app.core.vocab import AGENTSEC_CATEGORIES, AGENTSEC_CATEGORY_PREFIX
+
+    normalized = (category or "").strip()
+    if not normalized:
+        return ""
+    if not normalized.startswith(AGENTSEC_CATEGORY_PREFIX):
+        # 平台定义的分类（pwn/web/reverse/crypto/misc 以及将来新增的）：
+        # 一律放行，理由见 docstring 末尾那条边界。
+        return normalized[:64]
+    if not agentsec_enabled:
+        raise ValueError(
+            f"分类「{normalized}」属于智能体安全场景包，但该功能当前未启用。"
+            "请在 CTF2 配置里打开 enableAgentsecScenarios 后再写入。"
+        )
+    if normalized not in AGENTSEC_CATEGORIES:
+        raise ValueError(
+            f"未知的智能体安全分类「{normalized}」。"
+            f"合法取值：{' / '.join(sorted(AGENTSEC_CATEGORIES))}。"
+        )
+    return normalized
+
+
+def is_agentsec_category(category: str) -> bool:
+    """这个分类是否属于智能体安全场景包（**只看前缀，不看开关**）。
+
+    ⚠️ 它不回答"该不该放行"，只回答"它是不是这类"。要不要放行由
+    `validate_note_category` 结合开关判断 —— 拆成两个函数是因为
+    调用点不同：prompt 注入那边只关心"是不是这类"，而写入路径那边
+    还要再确认开关。
+    """
+    from app.core.vocab import AGENTSEC_CATEGORY_PREFIX
+
+    return (category or "").strip().startswith(AGENTSEC_CATEGORY_PREFIX)
+
+
+#: `ruled_out` 的四项证据要求（场景包 §5.2），以及**每项的残缺标记**。
+#:
+#: 形式是 `(标记词, 残缺标记)`：出现标记词只说明"写了这一项"，
+#: 出现残缺标记说明"这一项其实是空的"。
+#:
+#: ## ★ 为什么必须有残缺标记这一层
+
+#: 第一版只查"四项标记在不在"，而 `build_note_fields` 会自动写四个
+#: 固定前缀 —— 于是**任何**失败卡都四项齐全，`ruled_out` 变成恒真，
+#: 所有"试了一下没反应"都升级成"已排除"。那正是 §5.3 明令禁止的
+#: 「禁止将『未发现异常』记为 `ruled_out`」。
+#:
+#: 实测发现的：一次 `error='timeout'`、`transcript` 里零条可复用命令的
+#: 失败卡被判成了 `ruled_out`。所以判据必须落到**内容**上，不是前缀。
+RULED_OUT_EVIDENCE_MARKERS: tuple[tuple[str, str], ...] = (
+    ("判据：", "未指定"),      # ① 针对的具体判据编号
+    ("测了什么：", "未记录"),  # ② 做过什么测试
+    ("观察到什么：", "未记录"),  # ③ 观察到什么（为什么排除）
+    ("覆盖范围：", "未记录"),  # ④ 测试覆盖范围（跑了哪些变体）
+)
+
+
+def ruled_out_chain_complete(dead_ends: str) -> bool:
+    """`dead_ends` 里是否四项证据齐全（`ruled_out` 的**前提**）。
+
+    ## 为什么 `ruled_out` 要有这个门槛
+
+    场景包 §5.3 明令：「禁止将『未发现异常』记为 `ruled_out` ——
+    排除需要**主动证伪**，不是『没测出来』」。
+
+    而"没测出来"和"测遍了都没有"在文本上几乎长得一样：
+    `dead_ends` 里都可能是"试了 X，没反应"。区别全在**有没有第四项
+    （覆盖范围）** —— 它是一次排除与一次疏忽之间唯一的分界线。
+
+    所以这条判据不是为了挑剔格式，是因为**没有它，`ruled_out` 就会
+    被当成"我也没辙了"的垃圾桶**。而一旦那样，`solved=True` 就会
+    覆盖一批其实没做完的卡，下次同类任务照着它跳过 —— 那比没有卡更糟。
+
+    ## ★ 判的是"每项都有实质内容"，不是"四个前缀都在"
+
+    见 `RULED_OUT_EVIDENCE_MARKERS` 的说明：只查前缀的话，
+    `build_note_fields` 自动补的四项会让这个函数恒真。
+    所以每一项都要求「标记词在」**且**「残缺标记不在那一行」。
+
+    ## ⚠️ 它仍然只判"四项写了实质内容"，不判"内容说得对"
+
+    判断内容质量需要人。但"每项都不是空的"至少能挡掉
+    "试了一下没反应"这种，而那是最常见的一种。
+    """
+    text = dead_ends or ""
+    if not text.strip():
+        return False
+    lines = text.splitlines()
+    for marker, missing in RULED_OUT_EVIDENCE_MARKERS:
+        # 找到写了这一项的那一行（标记词可能在行首）
+        hit = next((ln for ln in lines if ln.startswith(marker)), None)
+        if hit is None:
+            return False
+        # 该项必须不是"未指定/未记录"—— 那等于没写
+        if missing in hit:
+            return False
+    return True
+
+
+def resolve_verdict(*, solved: bool, dead_ends: str) -> str:
+    """决定一张方法卡的 `verdict`（v0.40）。
+
+    ## 三个取值，判据只有两条
+
+    | 情况 | verdict | `solved` |
+    | --- | --- | --- |
+    | 解出来了 | `confirmed` | `True` |
+    | 没解出，但 `dead_ends` 四项证据齐全 | `ruled_out` | `True` |
+    | 其余 | `needs_follow_up` | `False` |
+
+    ## ★ 中间那一行就是本次要修的那个缺陷
+
+    原来 `solved` 只认"解出来了"。于是"跑完全套测试手法、确认这个
+    考察点不存在"的卡被记成**未解决** —— 它在召回里排在后面，还可能
+    因为"只给解出过的"而根本不被取到。
+
+    而那张卡的获取成本与"命中"相当：对抗类判据要求跑完整个话术/技术
+    全集才能判排除（§5.3）。把它当未解决，等于让下次同类任务**再跑
+    一遍同样的全套排除** —— 那正是方法卡要消除的浪费。
+
+    ## ★ 为什么不干脆 `ruled_out` 一律算 solved
+
+    因为"排除"有真假之分。一次草率的"试了没反应"如果也算 solved，
+    卡片就会以一个**错误的前提**被优先召回，下次任务照着它跳过 ——
+    那比"没有这张卡"更糟：没有卡时模型会自己去测，有错卡时它不会。
+
+    所以门槛落在"四项证据齐全"上（见 `ruled_out_chain_complete`）。
+
+    Args:
+        solved: 传统意义上的"解出来了"（有 confirmed 证据）。
+        dead_ends: 提炼后的死路清单（`build_note_fields` 的产物）。
+    """
+    from app.core.vocab import AgentsecVerdict
+
+    if solved:
+        return AgentsecVerdict.CONFIRMED.value
+    if ruled_out_chain_complete(dead_ends):
+        return AgentsecVerdict.RULED_OUT.value
+    return AgentsecVerdict.NEEDS_FOLLOW_UP.value
+
+
+def counts_as_solved(verdict: str) -> bool:
+    """这个 verdict 算不算"已解决"（用于 `Ctf2SolveNote.solved`）。
+
+    `confirmed` 与 `ruled_out` 都算 —— 理由见 `resolve_verdict`。
+    `needs_follow_up` 不算（它就是"还没定"）。
+    """
+    from app.core.vocab import AgentsecVerdict
+
+    return verdict in (AgentsecVerdict.CONFIRMED.value, AgentsecVerdict.RULED_OUT.value)
+
+
 def derive_subcategory(tool_kinds: str) -> str:
     """从 `tool_kinds`（逗号分隔的工具名）推出细分题型。
 
@@ -1176,6 +1608,38 @@ def derive_subcategory(tool_kinds: str) -> str:
         if lowered & needles:
             return label
     return ""
+
+
+#: `verdict` → 渲染时的标签（v0.40）。
+#:
+#: ## ⚠️ 只对 `agentsec-*` 那四类生效 —— 这是刻意的
+#:
+#: 普通 CTF 题的 `verdict` 只有两种取值（解出 → `confirmed`、
+#: 没解出 → `needs_follow_up`），而"没解出"这件事已经在 `approach`
+#: 正文里写了「**没解出来**」。再挂一个标签就是同一句话说两遍。
+#:
+#: 更重要的是：**普通题那五类的 prompt 必须逐字节不变** ——
+#: 那是本次改动的主要回归判据。所以标签只在 `agentsec-*` 卡上出现，
+#: 见 `_verdict_tag_for`。
+_VERDICT_TAGS: dict[str, str] = {
+    "confirmed": "【已命中】",
+    "ruled_out": "【已排除】",
+    "needs_follow_up": "【待跟进】",
+}
+
+
+def _verdict_tag_for(note: object) -> str:
+    """这张卡该不该带 verdict 标签，带哪个。
+
+    只有 `agentsec-*` 分类才带 —— 理由见 `_VERDICT_TAGS`。
+
+    ⚠️ 判据用 `is_agentsec_category`（前缀），不用"verdict 是否非空"：
+    `verdict` 列对**所有**卡都有值（默认 `needs_follow_up`），
+    用它判断会让普通题也挂上标签。
+    """
+    if not is_agentsec_category(getattr(note, "category", "") or ""):
+        return ""
+    return _VERDICT_TAGS.get(getattr(note, "verdict", "") or "", "")
 
 
 def render_notes_for_prompt(notes: list[object], *, limit: int = MAX_NOTES_IN_PROMPT) -> str:
@@ -1207,7 +1671,27 @@ def render_notes_for_prompt(notes: list[object], *, limit: int = MAX_NOTES_IN_PR
     for note in notes[:limit]:
         title = getattr(note, "_title", None) or getattr(note, "category", "") or "同类题"
         lines.append("")
-        lines.append(f"- **{title}**（{getattr(note, 'category', '') or '未分类'}）")
+        # ★ v0.40：把 verdict 写进渲染结果。
+        #
+        # ## 为什么模型**必须**知道这张卡是命中还是排除
+        #
+        # `solved=True` 现在覆盖两种卡，而它们的复用方式**相反**：
+        #   · 命中（confirmed）的卡教"怎么打中"，照着它试是对的；
+        #   · 排除（ruled_out）的卡教"这条路是死的"，照着它试是浪费。
+        #
+        # 不标出来的话，模型看到"做法：…"就当成可复制的成功路径 ——
+        # 而那张卡可能是一张**失败**记录。那正是场景包 §6.3 说的
+        # "dead_ends 是 high 价值知识"能不能真的被用上的前提。
+        #
+        # ⚠️ 只有 agentsec-* 那四类才有这三档语义。普通题的 verdict 是
+        #    `confirmed`（解出）或 `needs_follow_up`（没解出），渲染出来
+        #    与原来的"**没解出来**"措辞重复，所以空白以外不加标记 ——
+        #    保持普通题那五类的 prompt **逐字节不变**。
+        verdict_tag = _verdict_tag_for(note)
+        lines.append(
+            f"- **{title}**（{getattr(note, 'category', '') or '未分类'}）"
+            + (f"　{verdict_tag}" if verdict_tag else "")
+        )
         approach = getattr(note, "approach", "") or ""
         if approach:
             lines.append(f"  - 做法：{approach}")
