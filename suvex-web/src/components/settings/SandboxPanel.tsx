@@ -10,7 +10,7 @@ import {
   type ScanMode,
 } from '@/data/settings'
 import { saveSandbox } from '@/data/settings-store'
-import { Boxes, Cpu, Gauge, HardDrive, ShieldOff, Timer, TriangleAlert } from 'lucide-react'
+import { Boxes, Cpu, Gauge, HardDrive, ShieldAlert, ShieldOff, Timer, TriangleAlert } from 'lucide-react'
 import { useMemo, useState } from 'react'
 
 /**
@@ -61,7 +61,8 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
       draft.allowVolumeWrite !== config.allowVolumeWrite ||
       draft.maxConcurrentScans !== config.maxConcurrentScans ||
       draft.scanMaxTurns !== config.scanMaxTurns ||
-      draft.scanMode !== config.scanMode,
+      draft.scanMode !== config.scanMode ||
+      draft.enableOffensivePrompt !== config.enableOffensivePrompt,
     [draft, config],
   )
 
@@ -381,6 +382,51 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         </Field>
 
         <ExecutionSourceNote source={config.executionSource} />
+      </div>
+
+      {/* ── 越权与注入手法块（v0.42）──────────────────────── */}
+      {/*
+        ★ 为什么单独立一块，不并进上面那个「执行」组：
+
+        那个组回答的是「扫描跑起来是什么样」（并发、回合、深度）——
+        都是**资源**。这一条回答的是「agent 用什么强度去试探目标」——
+        是**行为**。混在一起会让人以为它只是又一个性能参数。
+
+        ★ 为什么它不按题目分类设置：
+        它改的是同一件事做得全不全，与题目叫什么无关。做成逐题开关
+        等于把同一件事说两遍，而两处取值不一致时的表现是"打开了但没生效"。
+      */}
+      <div className="flex flex-col gap-panel">
+        <div className="flex flex-col gap-0.5">
+          <span className="text-xs font-medium text-ink">评测强度</span>
+          <span className="text-2xs text-ink-faint">
+            下面这一项会改变 agent 的<strong className="font-medium text-ink-muted">行为</strong>，
+            不是资源配额。全局生效，不按题目分类设置。
+          </span>
+        </div>
+
+        <Toggle
+          id="sandbox-offensive"
+          label="启用越权与注入强化手法"
+          hint="打开后，解题与渗透扫描的提示词末尾都会追加一份手法矩阵（注入、越权、文件读取、SSRF、竞态的具体换形写法）。它只扩大试探的覆盖面，不放松任何判定纪律 —— 「不越界访问」「禁止口令爆破与压力测试」照旧成立。"
+          checked={draft.enableOffensivePrompt}
+          onChange={(v) => setDraft({ ...draft, enableOffensivePrompt: v })}
+        />
+
+        {draft.enableOffensivePrompt && (
+          <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
+            <ShieldAlert
+              size={12}
+              strokeWidth={2}
+              className="mt-0.5 shrink-0 text-signal-warn"
+              aria-hidden="true"
+            />
+            <span className="text-2xs text-ink-muted">
+              已启用。agent 会更系统地尝试注入与越权路径，耗时与回合消耗也会相应上升。
+              它不影响判定标准：拿不到证据的结论仍然是「待跟进」，不会因为「打过一遍」就变成「已命中」。
+            </span>
+          </div>
+        )}
       </div>
 
       <SaveBar

@@ -112,14 +112,65 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     "netcat-traditional": ("nc",),
     "p7zip-full": ("7z", "7za", "7zr"),
     "imagemagick": ("convert", "identify", "mogrify", "montage"),
-    "sleuthkit": ("fls", "icat", "mmls", "blkls", "fsstat"),
+    "sleuthkit": ("fls", "icat", "mmls", "blkls", "fsstat", "mactime"),
+    "libewf-utils": ("ewfinfo", "ewfexport", "ewfverify", "ewfacquire"),
+    # ★ v0.41：Debian/Kali 的**真实包名**是 `ewf-tools`，不是 `libewf-utils`。
+    #
+    # 这一条是拿一次真实的构建失败换来的（2026-10-20，Kali rolling）：
+    #   E: Unable to locate package libewf-utils
+    # `libewf-utils` 这个包名在 Debian/Ubuntu 系根本不存在 —— 存在的三个是
+    # `libewf2`（运行库，没有 CLI）、`libewf-dev`（头文件）、`ewf-tools`
+    # （真正提供 ewfinfo/ewfacquire 的那个，`apt-file search bin/ewfinfo`
+    # 直接指到它）。
+    #
+    # ⚠️ 保留上面那行 `libewf-utils` 是有意的：上游 `ctf2-sandbox` 的
+    #    Dockerfile 里写的就是它（那份是从别的发行版基础上抄来的），
+    #    静态解析必须认得那个名字，否则会对 base 报"未知包"。两行并存
+    #    等于把「历史写法」与「这台机器上真能装的那个」都记下来。
+    "ewf-tools": ("ewfinfo", "ewfexport", "ewfverify", "ewfacquire"),
     "dnsutils": ("dig", "nslookup", "host"),
     "iputils-ping": ("ping",),
     "vim-tiny": ("vim", "vi"),
     "build-essential": ("gcc", "g++", "make"),
     "binutils": ("objdump", "nm", "readelf", "objcopy", "strings", "addr2line"),
     "binutils-multiarch": ("objdump", "nm", "readelf"),
-    "coreutils": ("timeout", "ls", "cat", "head", "tail", "wc", "sort", "base64"),
+    # ★ v0.41：`grep` / `sed` / `awk` 是**三个独立的包**，不是 coreutils 的一部分。
+    #
+    # 这条以前没人写下来，因为 base 里它们"反正都在"——但那是 **gcc /
+    # build-essential 的依赖链**带来的，不是谁声明过的承诺。IR 提示词
+    # 恰恰把它们当成主要工具（§三 决策表整段都在讲 grep/awk/sed），
+    # 于是"提示词要求用、Dockerfile 里查不到"这个缺口第一次显了形。
+    #
+    # 修法沿用 `binutils` 那条先例：**写进 Dockerfile**（apt 见到已装会
+    # 跳过，成本 0），让这条依赖从此是承诺而不是运气。
+    "grep": ("grep", "egrep", "fgrep"),
+    "sed": ("sed",),
+    # Debian 的 `awk` 由 `mawk` 提供（`gawk` 是另一个可选实现）。
+    # 两者装哪个都能跑 `awk`，这里登记 mawk 是因为 base 实际装的是它 ——
+    # 登记错包名会让检查永远报"awk 未声明"，而那是假报错。
+    "mawk": ("awk",),
+    "coreutils": (
+        "timeout",
+        "ls",
+        "cat",
+        "head",
+        "tail",
+        "wc",
+        "sort",
+        "base64",
+        "uniq",
+        "cut",
+        "tr",
+        "date",
+        "mkdir",
+        "chmod",
+        "mv",
+        "cp",
+        "rm",
+        "tee",
+        "du",
+        "stat",
+    ),
     "radare2": ("r2", "radare2", "rasm2", "rahash2"),
     "mono-runtime": ("mono",),
     "mono-devel": ("monodis", "mcs", "mono-csc", "csc"),
@@ -244,6 +295,67 @@ CATEGORY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "icat",
         "file",
         "strings",
+    ),
+    # ★ v0.41：应急响应 / 根因复盘，走 `ctf2-sandbox-ir` 镜像。
+    #
+    # ## 这张表是从 `prompts/ctf2_ir.md` 推导出来的
+    #
+    # 提示词 §三 决策表第一条要求"先 `ls -la` + 看文件大小 + 抽头尾各 20 行"
+    # → `ls` / `wc` / `head` / `tail`；
+    # 第二条要求"各抽 1 条样本对齐时间格式与时区" → `date` / `sort` / `uniq`；
+    # "跨源关联"要按实体过滤 → `grep` / `awk` / `sed`；
+    # "时间线重建"要按时刻排序 → `sort`（`mactime` 是 sleuthkit 的专用版本）；
+    # §五 脱敏要求"只记形状" → `cut` / `tr`；
+    # §六 处置建议要求"**不要**输出可直接粘贴执行的命令" → **不需要任何攻击工具**。
+    #
+    # ## ★ 为什么这里故意不含 curl / nmap / sqlmap / hashcat / 爆破类
+    #
+    # 这不是漏项，是设计。IR 镜像是**只读复盘**环境：要能读日志，不要能打。
+    # 放攻击工具进来会做两件坏事：
+    #   ① 让"复盘任务顺手打一下目标"在技术上变得可行 —— 而提示词明令禁止；
+    #   ② IR 恰好是唯一会解析**攻击者构造的恶意文件**的场景（日志里能塞
+    #      反序列化 payload、畸形 pcap、伪造的内存/磁盘镜像），多余工具
+    #      纯属多出来的攻击面。
+    #
+    # ⚠️ 这条"故意不含"要和 `Ctf2SandboxProfile.IR` 的 docstring 一起读 ——
+    #    那里写了为什么它必须独立成像，而不是 base 的超集。
+    #
+    # ## ★ 键用具体分类名 `ir-root-cause`，不用裸的 `ir`
+    #
+    # 这是踩过一次的：路由判据是**前缀** `ir-`（见 `profile_for_category`），
+    # 所以裸 `ir` 不以 `ir-` 开头 → 路由算出来是 base → 脚本去 base
+    # 镜像里找 `mactime`，报一个"未声明"的假缺失。假报错比没有检查更糟。
+    #
+    # 用具体分类名当键，顺带把这个校验也做掉了：如果哪天 `profile_for_category`
+    # 的前缀判定写错，这一行会立刻路由到错误的镜像并露馅。
+    # 三个 `ir-*` 分类共用同一个镜像，只列一个即可（契约按镜像算，不按分类算）。
+    "ir-root-cause": (
+        # 文本/日志基础盘（base 里都有，重复声明是有意的：
+        # 这一栏是**契约**，不是"新增了什么"的清单）
+        "grep",
+        "awk",
+        "sed",
+        "sort",
+        "uniq",
+        "head",
+        "tail",
+        "wc",
+        "cut",
+        "tr",
+        "date",
+        "jq",
+        "file",
+        "strings",
+        "xxd",
+        "python3",
+        # 证据解析（IR 镜像相对 base 真正多的那一批）
+        "tshark",  # pcap 复盘
+        "fls",  # sleuthkit：镜像里的文件列表
+        "icat",  # sleuthkit：按 inode 取文件内容
+        "mactime",  # sleuthkit：bodyfile → 时间线
+        "binwalk",  # 固件 / 复合文件展开
+        "unzip",
+        "7z",
     ),
 }
 
@@ -471,32 +583,51 @@ class Router:
     base_profile: str
     reverse_profile: str
     profiles: dict[str, Path]
+    #: ★ v0.41：`ir-*` 分类族的路由。默认值让 v0.41 之前的调用方
+    #: （以及只关心两个镜像的用法）不需要改。
+    #:
+    #: 存三个字段而不是"把 ir 也塞进 reverse_categories"：两者的判据
+    #: 不同 —— reverse 是**枚举集合**，ir 是**字符串前缀**。混在一起
+    #: 会让 `profile_for` 的分支写成"先看集合再看前缀"，而顺序本身
+    #: 在 `runner.profile_for_category` 里是有意义的（见那里的说明）。
+    ir_profile: str = ""
+    ir_prefix: str = ""
 
     def profile_for(self, category: str) -> str:
         """分类 → profile 取值。
 
-        ## ★ 这 3 行是从 `runner.py:437 profile_for_category` 抄的
+        ## ★ 这段是从 `runner.py` 的 `profile_for_category` 抄的
 
         抄的是**逻辑**，不抄**数据** —— 数据（`_REVERSE_CATEGORIES`、
-        `Ctf2SandboxProfile` 的两个取值）每次运行都从源码现读。抄过来的
-        只有"规范化 → 查集合 → 二选一"这个形状，短到没有漂移空间。
+        `Ctf2SandboxProfile` 的三个取值、IR 前缀）每次运行都从源码现读。
+        抄过来的只有"规范化 → 判前缀 → 查集合 → 三选一"这个形状，
+        短到没有漂移空间。
 
         `runner.py` 里那条"必须精确匹配、不能子串匹配"的警告在这份复刻里
         同样成立：`"re"` 是 `_REVERSE_CATEGORIES` 的成员，但题目分类里有
         `"reverse"` 也有 `"web"`，用子串匹配会把 `"interface"` 判成逆向。
+
+        ★ v0.41：**顺序与真实现一致 —— ir 先判**。真实现里那条注释
+        解释了为什么：`ir-*` 是我们自己定义、名字可控的集合；而
+        `_REVERSE_CATEGORIES` 混着平台可能传过来的别名。先判我们
+        自己那批，将来平台传了个含 `re` 的别名时不会把 IR 题推进
+        逆向镜像。这里抄顺序，是为了让"路由算错"能够显形 —— 顺序抄反
+        的话，本脚本会去逆向镜像里找 `mactime`，然后报一个假缺失。
 
         如果哪天 `profile_for_category` 的逻辑真的变复杂了（比如按关键词
         模糊匹配），这里要跟着改 —— 而它会**立刻显形**：路由算错会导致
         下面冒出一堆莫名其妙的"缺工具"。
         """
         normalized = (category or "").strip().lower()
+        if self.ir_prefix and normalized.startswith(self.ir_prefix):
+            return self.ir_profile
         if normalized in self.reverse_categories:
             return self.reverse_profile
         return self.base_profile
 
 
 def load_router() -> Router:
-    """把「逆向分类集合 + 两个 profile 取值 + 各自的 Dockerfile」一次凑齐。
+    """把「逆向分类集合 + 三个 profile 取值 + 各自的 Dockerfile」一次凑齐。
 
     ## 关键约束：**不 import `app.ctf2.runner`**
 
@@ -507,8 +638,13 @@ def load_router() -> Router:
 
     真正要避开的另一半是"抄一份可能过时的副本"：抄了的话 `runner.py` 改
     路由这边不会跟着改，这个检查守的就成了副本而不是真实行为。所以数据
-    （`_REVERSE_CATEGORIES`、`Ctf2SandboxProfile` 两个取值）全部从源码现读，
-    只有 3 行控制流是复刻的。
+    （`_REVERSE_CATEGORIES`、`Ctf2SandboxProfile` 三个取值、`IR_CATEGORY_PREFIX`）
+    全部从源码现读，只有那 4 行控制流是复刻的。
+
+    ★ v0.41：`ir` 的 Dockerfile 是**必须存在**的，不是可选的。
+    理由：`CATEGORY_REQUIREMENTS["ir"]` 一旦在表里，能力契约就必须
+    能算出它路由到哪个镜像，否则这个分类的检查会静默跳过 ——
+    而"检查静默跳过"与"检查通过"在输出里长得一样。
     """
     if str(API_ROOT) not in sys.path:
         sys.path.insert(0, str(API_ROOT))
@@ -522,12 +658,13 @@ def load_router() -> Router:
 
     base_profile = vocab.Ctf2SandboxProfile.BASE.value
     reverse_profile = vocab.Ctf2SandboxProfile.REVERSE.value
+    ir_profile = vocab.Ctf2SandboxProfile.IR.value
 
     profiles: dict[str, Path] = {}
-    for name in (base_profile, reverse_profile):
+    for name in (base_profile, reverse_profile, ir_profile):
         # profile 取值 == 镜像短名 == docker/ 下的目录名。
-        # vocab 的注释（app/core/vocab.py:796）明确说这是刻意的：
-        # 不做"逻辑名 → 镜像名"的第二层映射，所以这里可以对上。
+        # vocab 的注释明确说这是刻意的：不做"逻辑名 → 镜像名"的第二层映射，
+        # 所以这里可以对上。
         path = API_ROOT / "docker" / name / "Dockerfile"
         if not path.is_file():
             raise SystemExit(
@@ -541,6 +678,8 @@ def load_router() -> Router:
         base_profile=base_profile,
         reverse_profile=reverse_profile,
         profiles=profiles,
+        ir_profile=ir_profile,
+        ir_prefix=vocab.IR_CATEGORY_PREFIX,
     )
 
 
@@ -675,6 +814,45 @@ class Finding:
     missing_in_image: list[str] = field(default_factory=list)
 
 
+def _resolve_image(
+    router: "Router", profile: str, base: "ImagePackages"
+) -> tuple["ImagePackages", bool]:
+    """解析一个派生镜像，返回 `(合并后的包清单, 是否继承 base)`。
+
+    ## 为什么抽成函数（v0.41）
+
+    在只有 reverse 一个派生镜像时，这段逻辑内联在 `check()` 里挺好读。
+    加上 ir 之后就有两段近乎相同的代码，而**第三段很快也会来**
+    （这是本项目第三次加场景包）。三段并列时，加第四个镜像的那次改动
+    几乎必然漏掉其中一段，而漏掉的两个症状都是假报错：
+
+      · 没做继承合并 → "这个镜像缺 curl / python3"（其实 base 里有）；
+      · 没去重 → 同一批包算两遍，能力表里看不出问题但输出重复。
+
+    假报错比没有检查更糟 —— 它会让真报错被淹没，然后大家开始无视
+    这个脚本的输出。这是这个脚本存在的唯一意义所在。
+
+    ## 为什么"是否继承"要真去 FROM 行查，而不是当前提
+
+    `inherits_from` 读的是 Dockerfile 的 FROM 行。写死"派生镜像一定
+    FROM base"会让"哪天有人把 ir 改成独立基础镜像"这种情况被悄悄
+    掩盖 —— 那时 ir 里真的缺 curl，而脚本说它有。
+    """
+    path = router.profiles[profile]
+    own = parse_image(path, profile)
+    inherits = inherits_from(path, router.base_profile)
+    if not inherits:
+        # 不是继承关系 —— 那它自己的列表就是全集，缺什么会被如实
+        # 报出来，而不是被 base 的包悄悄填上。
+        return own, False
+    merged = ImagePackages(
+        name=own.name,
+        apt=base.apt + [p for p in own.apt if p not in base.apt],
+        pip=base.pip + [p for p in own.pip if p not in base.pip],
+    )
+    return merged, True
+
+
 def check(verbose: bool = False, probe: bool = False) -> list[Finding]:
     """主体检查。返回所有"缺工具"的发现。
 
@@ -684,38 +862,38 @@ def check(verbose: bool = False, probe: bool = False) -> list[Finding]:
 
     router = load_router()
     base_path = router.profiles[router.base_profile]
-    reverse_path = router.profiles[router.reverse_profile]
-
     base = parse_image(base_path, router.base_profile)
-    reverse_own = parse_image(reverse_path, router.reverse_profile)
 
-    # ★ reverse 镜像通常 `FROM <base>`，于是**继承** base 的全部包。
-    #   只算它自己那几段会得出"reverse 缺 curl / python3"这种假报错 ——
-    #   而假报错比没有检查更糟：它会让真报错被淹没，然后大家开始无视这个
-    #   脚本的输出。
+    # ## ★ 每个派生镜像都单独判一次"是否 FROM base"
     #
-    #   但"通常"不能当前提，所以真去 FROM 行查一遍（见 inherits_from）。
-    inherits = inherits_from(reverse_path, router.base_profile)
-    if inherits:
-        reverse = ImagePackages(
-            name=reverse_own.name,
-            apt=base.apt + [p for p in reverse_own.apt if p not in base.apt],
-            pip=base.pip + [p for p in reverse_own.pip if p not in base.pip],
-        )
-    else:
-        # 不再是继承关系 —— 那 reverse 自己的列表就是全集，缺什么会被
-        # 如实报出来，而不是被 base 的包悄悄填上。
-        reverse = reverse_own
+    # v0.41 起有三个镜像，未来还会有第四个。这里不把 reverse / ir 各自
+    # 写死一段，而是走同一个 `_resolve_image` —— 三段近乎相同的代码
+    # 摆在一起时，加第四个镜像的那次改动**一定**会漏掉其中一段，
+    # 而漏掉的样子是"那个镜像的工具全部报缺失"（因为没继承 base），
+    # 或者更糟："明明不缺也报缺"（因为没做去重）。两种都是假报错，
+    # 而假报错会让这个脚本被彻底无视。
+    reverse, reverse_inherits = _resolve_image(
+        router, router.reverse_profile, base
+    )
+    ir, ir_inherits = _resolve_image(router, router.ir_profile, base)
 
     images = {
         router.base_profile: base,
         router.reverse_profile: reverse,
     }
+    # ir 只在真的配了 Dockerfile 时进表 —— `load_router` 已经保证它在，
+    # 但这里多一道判空是为了让"把 IR 摘掉"这件事在测试里可行
+    # （见 `tests/test_verify_sandbox_tools.py` 里那条"缺 Dockerfile 时报错"）。
+    if router.ir_profile:
+        images[router.ir_profile] = ir
 
     if verbose:
         print(f"\n   逆向分类（{len(router.reverse_categories)} 个）：")
         print("     " + ", ".join(sorted(router.reverse_categories)))
-        print(f"   reverse 镜像继承 base：{'是' if inherits else '否（独立基础镜像）'}")
+        print(f"   reverse 镜像继承 base：{'是' if reverse_inherits else '否（独立基础镜像）'}")
+        if router.ir_profile:
+            print(f"   {router.ir_profile} 镜像继承 base：{'是' if ir_inherits else '否（独立基础镜像）'}")
+            print(f"   应急响应分类前缀：{router.ir_prefix!r}")
         for name, image in images.items():
             cmds = sorted(image.commands())
             print(f"\n── {name} ──")

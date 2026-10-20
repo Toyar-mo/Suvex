@@ -924,6 +924,9 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         sandbox_cpus=sandbox.cpu_limit if sandbox else None,
         sandbox_mem_limit_mb=sandbox.memory_limit_mb if sandbox else None,
         sandbox_network_isolated=bool(sandbox.network_isolated) if sandbox else False,
+        # ★ v0.42：越权与注入手法块。与上面三项同源（都来自那张单例行），
+        # 但这一项**没有 env 兜底** —— 它是行为开关，没配置行时就是"关"。
+        enable_offensive_prompt=bool(sandbox.enable_offensive_prompt) if sandbox else False,
         # 续跑（任务 16）。非空时 `command()` 会改传 `--resume` 而不传
         # `--target` —— 两者互斥，见 runner 的说明。
         resume_run_id=resume_run_id,

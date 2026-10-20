@@ -6,12 +6,13 @@ import {
   CHALLENGE_STATUS_TONE,
   PRIORITY_MANUAL_BASE,
   SANDBOX_PROFILE_LABEL,
+  canHaveWorkOrder,
   canHaveWriteup,
   type Ctf2Challenge,
 } from '@/data/ctf2'
 import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
-import { Check, ChevronDown, ChevronUp, Copy, ExternalLink, FileText, Flag, Percent, Play, ShieldCheck, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileText, Flag, Percent, Play, ShieldCheck, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -97,6 +98,7 @@ export function ChallengeCard({
   onRelease,
   onSetPriority,
   onWriteup,
+  onWorkOrder,
   busy = false,
 }: {
   challenge: Ctf2Challenge
@@ -133,6 +135,16 @@ export function ChallengeCard({
    * （按需能力，而不是"必须实现"的接口）。
    */
   onWriteup?: (challenge: Ctf2Challenge) => void
+  /**
+   * 查看处置建议工单（v0.41，应急响应复盘产物）。
+   *
+   * ★ 判据与题解**不同**：这里是 `canHaveWorkOrder`（看分类是不是
+   *   `ir-*`），而题解看 `scanId`。理由见那个函数的说明 ——
+   *   工单不是"跑过就有"，是"这类任务才有"。
+   *
+   * 不传时整项不渲染，与 `onWriteup` 同一个约定。
+   */
+  onWorkOrder?: (challenge: Ctf2Challenge) => void
   busy?: boolean
 }) {
   const [copied, setCopied] = useState(false)
@@ -381,6 +393,36 @@ export function ChallengeCard({
           >
             <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
             题解
+          </button>
+        )}
+
+        {/*
+          ── 处置工单（v0.41，应急响应复盘）──
+
+          ★ 紧挨着题解放，因为它们是**同一批产物**（都在解题收尾时生成），
+            用户看题解之后紧接着想看的就是"那要做什么"。
+
+          ★ 判据是分类（`canHaveWorkOrder`），与题解的 `scanId` 判据
+            **不同** —— 见那个函数的说明。拿 `scanId` 来判会让每道跑过的
+            pwn 题都露出一个点开就 409 的按钮。
+
+          ★ 文案用「处置工单」而不是「工单」：单独一个词在这屏里
+            没有上下文（这一屏全是"解题"相关动作，工单听起来像别的东西）。
+        */}
+        {onWorkOrder && canHaveWorkOrder(challenge) && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => onWorkOrder(challenge)}
+            title="查看这次复盘产出的处置建议工单：动作、依据、风险、需要的权限"
+            className={cn(
+              'inline-flex h-8 items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted',
+              'transition-ui duration-fast hover:border-line-strong hover:text-ink',
+              DISABLED_OUTLINE,
+            )}
+          >
+            <ClipboardList size={12} strokeWidth={1.75} aria-hidden="true" />
+            处置工单
           </button>
         )}
 

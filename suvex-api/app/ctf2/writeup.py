@@ -319,21 +319,63 @@ def build_writeup(
     candidates = list(getattr(outcome, "candidates", None) or [])
     error = getattr(outcome, "error", None)
 
+    # ── ★ v0.41：报告口径按场景包切换 ────────────────────────
+    #
+    # 题解本来就是「CTF 题的解」这一种文档。应急响应复盘跑完之后
+    # 拿到的却是同一个函数生成的东西 —— 于是标题写着 `CTF Writeup`、
+    # 头部第一行是 `> **Flag**：未确认（这道题没有解出）`。
+    # 对一次复盘来说那两句都是**错的描述**：它没有 flag，也不是「没解出」。
+    #
+    # 判别依据用**分类前缀**（`notes.is_ir_category`），不新增参数：
+    # 多一个 `kind=` 形参意味着每个调用点都要记得传，而漏传的那处
+    # 会静默退回 CTF 口径 —— 那正是要修的症状本身。
+    from app.ctf2 import notes as notes_mod
+    from app.ctf2 import workorder as workorder_mod
+
+    is_ir = notes_mod.is_ir_category(category)
+    # ★ 词表：一次定义，后面所有"兜底文案"都用它。
+    #   `CTF 题解`里"解题/题目/Flag"是对的；`应急响应复盘`里它们都是错的 ——
+    #   一份复盘报告正文写着"本次解题没有可提取的关键步骤"，
+    #   读到的人第一反应是"这系统没分清自己在干什么"。
+    #   与其在每个兜底句里写三目，不如把三个名词收成一处。
+    _word = "复盘" if is_ir else "解题"
+    _subject = "复盘对象" if is_ir else "题目"
+    orders = workorder_mod.parse_workorders(
+        {"workorders": getattr(outcome, "workorders", None)}
+    )
+
     # ── 头部：一眼看到结论 ──────────────────────────────────
-    lines.append(f"# CTF Writeup · {title}")
+    lines.append(
+        f"# 应急响应复盘报告 · {title}" if is_ir else f"# CTF Writeup · {title}"
+    )
     lines.append("")
-    if solved and flag:
+    if is_ir:
+        # 复盘没有 flag。头部要回答的是「这次复盘产出了什么」，
+        # 而不是「flag 拿到了没」—— 后者在一次复盘里根本不存在。
+        graded = sum(1 for o in orders if o.approved_grade == "confirmed")
+        pending = len(orders) - graded
+        lines.append(
+            f"> **结论**：本次复盘产出 {len(orders)} 条处置建议"
+            f"（证据充分 {graded} 条 / 需先补验证 {pending} 条）；"
+            "本系统**未对目标执行任何操作**。"
+        )
+        lines.append(
+            f"> **轮数**：{turns} · **耗时**：{_fmt_duration(elapsed_sec)}"
+        )
+        lines.append("")
+    elif solved and flag:
         lines.append(f"> **Flag**：`{flag}`")
     elif candidates:
         lines.append(f"> **Flag**：未确认（产出 {len(candidates)} 个候选，平台未判对）")
     else:
         lines.append("> **Flag**：未确认（这道题没有解出）")
-    lines.append(f"> **结果**：{'已解出' if solved else '未解出'} · "
-                 f"**轮数**：{turns} · **耗时**：{_fmt_duration(elapsed_sec)}")
-    lines.append("")
+    if not is_ir:
+        lines.append(f"> **结果**：{'已解出' if solved else '未解出'} · "
+                     f"**轮数**：{turns} · **耗时**：{_fmt_duration(elapsed_sec)}")
+        lines.append("")
 
     # ── 一、题目信息 ────────────────────────────────────────
-    lines.append("## 一、题目信息")
+    lines.append("## 一、复盘对象" if is_ir else "## 一、题目信息")
     lines.append("")
     lines.append("| 项 | 值 |")
     lines.append("| --- | --- |")
@@ -343,14 +385,15 @@ def build_writeup(
     lines.append(f"| 分类 | {_cell(category)} |")
     if remote_id:
         lines.append(f"| 平台题目 id | `{_cell(remote_id)}` |")
-    lines.append(f"| 结果 | {'已解出' if solved else '未解出'} |")
+    if not is_ir:
+        lines.append(f"| 结果 | {'已解出' if solved else '未解出'} |")
     lines.append(f"| 轮数 | {turns} |")
     lines.append(f"| 耗时 | {_cell(_fmt_duration(elapsed_sec))} |")
     lines.append(f"| 生成时间 | {moment.strftime('%Y-%m-%d %H:%M:%S')} UTC |")
     lines.append("")
 
     if description:
-        lines.append("### 题面")
+        lines.append("### 证据包" if is_ir else "### 题面")
         lines.append("")
         # ⚠️ 题面原样贴（**不脱敏**）—— 它是题目给的，正是题解该有的部分。
         lines.append(description)
@@ -373,12 +416,12 @@ def build_writeup(
     #    "这道题是什么、怎么想、结论如何"从来没进过题解。
     #    题解"简陋"的根因在这里，不在排版。
     summary = (getattr(outcome, "summary", "") or "").strip()
-    lines.append("## 二、解题思路")
+    lines.append("## 二、复盘思路" if is_ir else "## 二、解题思路")
     lines.append("")
     if summary:
         lines.append(summary)
     else:
-        lines.append("（模型没有留下综述。这通常是本次解题未走到结论阶段，"
+        lines.append(f"（模型没有留下综述。这通常是本次{_word}未走到结论阶段，"
                      "或结论里没有 `summary` 字段。）")
     lines.append("")
 
@@ -401,7 +444,7 @@ def build_writeup(
         transcript, limit=MAX_STEPS, sanitize=False, clip=STEP_CLIP
     )
 
-    lines.append("## 三、解题过程")
+    lines.append("## 三、取证过程" if is_ir else "## 三、解题过程")
     lines.append("")
     if steps:
         lines.append("按时间序。前几步通常是识别题目与解包，最后几步最接近结论。")
@@ -423,14 +466,14 @@ def build_writeup(
             lines.append("   ```")
         lines.append("")
     else:
-        lines.append("（本次解题没有可提取的关键步骤）")
+        lines.append(f"（本次{_word}没有可提取的关键步骤）")
         lines.append("")
 
     # ── 四、尝试与排除（★ v0.38 新增：FINAL.tried / ruled_out）──
     tried = list(getattr(outcome, "tried", None) or [])
     ruled_out = list(getattr(outcome, "ruled_out", None) or [])
 
-    lines.append("## 四、尝试与排除")
+    lines.append("## 四、排查与排除" if is_ir else "## 四、尝试与排除")
     lines.append("")
 
     lines.append("### 试过的方向")
@@ -454,9 +497,24 @@ def build_writeup(
     lines.append("")
 
     # ── 五、结论 ────────────────────────────────────────────
-    lines.append("## 五、结论")
+    lines.append("## 五、根因结论" if is_ir else "## 五、结论")
     lines.append("")
-    if solved and flag:
+    if is_ir:
+        # 复盘的「结论」不是 flag，而是「处置建议有几条、级别如何」。
+        # 真正的根因链在第二节（`summary`）与工单里，这里只做索引。
+        if orders:
+            lines.append(
+                f"本次复盘给出 {len(orders)} 条处置建议，逐条见第六节与工单文件。"
+            )
+            lines.append("")
+            lines.append("| 证据级别 | 条数 |")
+            lines.append("| --- | --- |")
+            for grade in ("confirmed", "needs_follow_up"):
+                n = sum(1 for o in orders if o.approved_grade == grade)
+                lines.append(f"| `{grade}` | {n} |")
+        else:
+            lines.append("本次复盘没有产出处置建议。")
+    elif solved and flag:
         lines.append(f"平台判定 flag 正确：`{flag}`")
     else:
         if candidates:
@@ -480,6 +538,40 @@ def build_writeup(
             lines.append("")
             lines.append(f"**卡在哪**：{error}")
     lines.append("")
+
+    # ── 六、处置建议（★ v0.41，只有应急响应任务会有内容）─────
+    #
+    # ⚠️ 这里**只做索引，不做正文** —— 工单的完整内容在
+    #    `workorder.render_workorders()` 产出的**独立文件**里。
+    #    两处都写全文会让"改了工单该改哪一份"变成新问题，而人的
+    #    实际动作是拿那份文件去逐条批。题解里只需要让人知道
+    #    "这次有 N 条建议"以及去哪找。
+    #
+    # ⚠️ 非 IR 任务这里**一个字都不加**（`parse_workorders` 拿到
+    #    `None` 就返回空列表），所以 CTF 题解版式逐字节不变。
+    if orders:
+        lines.append("## 六、处置建议")
+        lines.append("")
+        lines.append(
+            f"本次复盘产出 **{len(orders)} 条**处置建议，"
+            "另附独立工单文件（`IR-WorkOrders-*.md`），请以那份为准逐条确认。"
+        )
+        lines.append("")
+        lines.append("| # | 动作 | 证据级别 |")
+        lines.append("| --- | --- | --- |")
+        for index, order in enumerate(orders, start=1):
+            grade = order.approved_grade
+            # ⚠️ 缺段的工单在题解索引里也要标出来 —— 只在这里显示
+            #    `needs_follow_up` 而不说原因，读者会以为证据不足，
+            #    而实际是"模型没写风险提示"。
+            note = "" if order.complete else "（字段不全）"
+            lines.append(f"| {index} | {_cell(order.action)} | `{grade}`{note} |")
+        lines.append("")
+        lines.append(
+            "> ⛔ 这些是**建议**，系统没有执行任何处置动作。"
+            "详见附带工单文件的人工确认清单。"
+        )
+        lines.append("")
 
     # ── 附录 A · 用到的工具 ─────────────────────────────────
     tools = notes_mod.tools_from_transcript(transcript)
@@ -516,13 +608,15 @@ def build_writeup(
         lines.extend(_humanize_digest(digest))
         lines.append("```")
     else:
-        lines.append("（本次解题没有留下动作纪要）")
+        lines.append(f"（本次{_word}没有留下动作纪要）")
     lines.append("")
 
     # ── 页脚 ────────────────────────────────────────────────
     lines.append("---")
     lines.append("")
-    lines.append(f"*由 Suvex 自动生成 · 题目 `{getattr(challenge, 'id', '')}`*")
+    lines.append(
+        f"*由 Suvex 自动生成 · {_subject} `{getattr(challenge, 'id', '')}`*"
+    )
 
     return "\n".join(lines)
 

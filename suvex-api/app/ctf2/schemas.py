@@ -45,7 +45,7 @@ EnvironmentStatusLiteral = Literal["stopped", "starting", "ready", "error", "exp
 
 SubmitModeLiteral = Literal["safe", "auto"]
 
-SandboxProfileLiteral = Literal["ctf2-sandbox", "ctf2-sandbox-re"]
+SandboxProfileLiteral = Literal["ctf2-sandbox", "ctf2-sandbox-re", "ctf2-sandbox-ir"]
 
 # ★ 平台接入（v0.25）。与 `models.Ctf2Platform` 的 CHECK 约束是**同一对** ——
 #   加一个新的驱动或状态时两处都要改。CHECK 表达式建好就固化在数据库里，
@@ -142,6 +142,15 @@ class Ctf2SettingsOut(CamelModel):
     #   ⚠️ 它不是"多几种题型"，是**换一套行为纪律** —— 见
     #   `settings/models.py` 的 `Ctf2Config.enable_agentsec_scenarios`。
     enableAgentsecScenarios: bool = False
+    # ★ v0.41：应急响应场景包开关。同样**可选、默认 false**。
+    #   打开后 `ir-*` 那三类题型才被校验层放行、且命中时会在 system
+    #   prompt 末尾追加"复盘过去发生了什么"的场景块。
+    #
+    #   ⚠️ 与 `enableAgentsecScenarios` **各自独立**：共用开关会让
+    #   一族的分类在另一族开着时通过校验，而对应 prompt 块不注入 ——
+    #   分类合法、纪律没注入。理由见 `settings/models.py` 的
+    #   `Ctf2Config.enable_ir_scenarios`。
+    enableIrScenarios: bool = False
     updatedAt: IsoDateTime
 
 
@@ -191,6 +200,9 @@ class Ctf2SettingsIn(StrictModel):
     #   那条纪律防的是"静默改回默认"，而 false 是**唯一安全的那一侧**
     #   （不打开 = 行为完全不变），改回 false 不会造成任何不可逆后果。
     enableAgentsecScenarios: bool = False
+    # ★ v0.41：应急响应场景包开关。同样**可选、默认 false** ——
+    #   理由同上（false 是唯一安全的那一侧：不打开 = 行为完全不变）。
+    enableIrScenarios: bool = False
 
 
 # ══════════════════════════════════════════════════════════
@@ -636,6 +648,32 @@ class Ctf2WriteupOut(CamelModel):
     elapsedSec: int | None = None
     generatedAt: IsoDateTime
     updatedAt: IsoDateTime
+
+
+class Ctf2WorkOrderOut(CamelModel):
+    """`GET /ctf2/challenges/{id}/workorder` —— 处置建议工单（v0.41，会话 C）。
+
+    ## ★ 这是一个**独立端点**，不塞进题解里
+
+    题解是一份叙事文档（人会通读），工单是**待办清单**（人要逐条批）。
+    两者的用法不同：工单会被复制进工单系统、打印出来批、作为附件发出去。
+    所以它得能被**单独下载**，而不是让人从一篇 markdown 里手工摘。
+
+    ## ⚠️ `markdown` 里没有任何「已执行」的动作
+
+    这是设计约束不是文案选择：本系统**没有**执行通道，工单只到"建议"
+    为止。文件头第一句就是否定句（见 `workorder.render_workorders`）。
+    """
+
+    challengeId: str
+    title: str
+    #: 工单全文（markdown）。四段齐全的在前、缺段的标注缺什么。
+    markdown: str
+    #: 下载用的文件名。
+    filename: str
+    #: 工单条数。0 是**正常结果**（本次复盘没有需要处置的事项），
+    #: 与"取不到工单"是两件事 —— 后者是 409。
+    count: int
 
 
 class Ctf2UsageEntryOut(CamelModel):

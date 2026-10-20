@@ -230,6 +230,10 @@ class SandboxOut(CamelModel):
     scanMaxTurns: int
     scanMode: str
     executionSource: ExecutionSourceOut
+    # ── 越权与注入手法块（v0.42）────────────────────────
+    # 打开后解题与渗透扫描两条路径的提示词末尾都追加手法矩阵，
+    # 关着时两条路径的提示词逐字节不变。
+    enableOffensivePrompt: bool
     updatedAt: IsoDateTime
 
 
@@ -254,6 +258,16 @@ class SandboxIn(StrictModel):
     maxConcurrentScans: int = Field(ge=MIN_CONCURRENT_SCANS, le=MAX_CONCURRENT_SCANS)
     scanMaxTurns: int = Field(ge=MIN_SCAN_MAX_TURNS, le=MAX_SCAN_MAX_TURNS)
     scanMode: str
+    # ★ v0.42：这一项**也必填**，理由与上面几条一样 —— 但这里更硬。
+    #
+    # 它是行为开关（打开后 agent 的手法矩阵会变宽）。如果给它默认值
+    # `false`，那么任何还在用旧版请求体的调用方（比如没跟着升级的
+    # 自动化脚本）每保存一次设置，就会把用户已经打开的开关**静默关掉**，
+    # 而设置页上只是"显示成关闭"。给默认 `true` 更糟：等于谁保存谁开。
+    #
+    # 前端 `suvex-web/src/data/settings.ts` 的 `SandboxConfig` 同样必填，
+    # 这条纪律两侧一致（同 `enableAgentsecScenarios` 的处理）。
+    enableOffensivePrompt: bool
 
 
 # ══════════════════════════════════════════════════════════

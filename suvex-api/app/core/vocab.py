@@ -795,10 +795,45 @@ class Ctf2SandboxProfile(StrEnum):
 
     取值就是**镜像名本身**，不做"逻辑名 → 镜像名"的第二层映射 ——
     两层映射会让"这个字段到底存的是什么"变成一个每次都要查的问题。
+
+    ## ⚠️ 加取值时必须同时做四件事
+
+    与 `TargetKind` 完全同一类坑（见 `TargetKind` 的 docstring），
+    实测已经踩过一次（2026-10-20，Kali 真跑）：
+
+    1. 在这里加取值 —— 三处模型的 `CheckConstraint` 是**从这里生成**的
+       （`values(Ctf2SandboxProfile)`），所以模型侧会自动带上；
+    2. **手写一条 alembic 迁移**重建三条 CHECK
+       （`ctf2_challenges` / `ctf2_environments` / `ctf2_config` 各一条）。
+       `--autogenerate` **不比对 CHECK 的表达式**，这一步永远不会被自动发现；
+    3. 改 `app/ctf2/schemas.py` 的 `SandboxProfileLiteral`（有对账测试盯着）；
+    4. 改 `app/ctf2/runner.py` 的 `image_for_profile()` 与
+       `scripts/verify_sandbox_tools.py` 的镜像解析。
+
+    漏掉第 2 步的症状不是"新镜像不生效"，而是一条看起来完全无关的
+    `IntegrityError: CheckViolation ... Failing row contains (... 新镜像名 ...)`
+    —— 代码、提示词、镜像全对，唯一错的是数据库里那行字面量。
     """
 
     BASE = "ctf2-sandbox"
     REVERSE = "ctf2-sandbox-re"
+    # ★ v0.41：应急响应 / 取证复盘专用镜像。
+    #
+    # ## 为什么它也必须单独一个镜像
+    #
+    # 与 reverse 同一个理由，但方向不同：反向是「会执行目标给的代码」，
+    # 应急响应是「会解析**目标给的攻击产物**」—— 日志、内存镜像、
+    # 磁盘镜像、流量包、邮件原文。这些格式的解析器（sleuthkit /
+    # binwalk / tshark / plaso 类）历史上是漏洞高发区，而 base 镜像里
+    # 为 web/crypto 装的浏览器、代理、爆破工具在这一类任务里
+    # **一次都用不上**，纯属多余攻击面。
+    #
+    # 换句话说：三类任务的工具集**几乎不相交**，而交集小正是分镜像的
+    # 理由。反过来，如果三个镜像 90% 内容相同，分镜像就只是三倍维护
+    # 成本 —— 这一点在 `docker/README.md` 里如实记过。
+    #
+    # ⚠️ 本镜像**不含**反向工程工具与攻击工具。它要能读 log，不要能打。
+    IR = "ctf2-sandbox-ir"
 
 
 class AgentsecCategory(StrEnum):
@@ -879,6 +914,60 @@ class AgentsecVerdict(StrEnum):
 #: 每张方法卡都必须有一个 verdict。默认 `needs_follow_up` —— 与场景包
 #: 通用规则一致："拿不准一律归 needs_follow_up，不要为了给结论而硬判"。
 DEFAULT_AGENTSEC_VERDICT: Final[str] = AgentsecVerdict.NEEDS_FOLLOW_UP.value
+
+
+class IrCategory(StrEnum):
+    """**应急响应 / 根因复盘**的三个考察点（v0.41）。
+
+    ## 与 `agentsec-*` 同构，但回答的问题不同
+
+    `agentsec-*` 判的是「某个安全考察点成不成立」（对抗类）；
+    `ir-*` 判的是「这批证据能不能支撑一条**关于过去发生了什么**的结论」。
+
+    两者**共用同一套证据分级**（`confirmed` / `needs_follow_up` /
+    `ruled_out`，见 `EVIDENCE_GRADES`），因为那套分级本来就不是
+    对抗场景专用的 —— 它回答的是"这条结论有多少证据"，任何需要
+    给结论的场景都适用。
+
+    ## 为什么是三个而不是一个 `ir-`
+
+    一个 `ir-` 分类会让「我做了复盘」变成不可细分的结论。而复盘
+    报告里最该被追问的三件事恰好各自独立：
+
+      · 根因是什么（`ir-root-cause`）—— 结论是**因果链**；
+      · 什么时候发生了什么（`ir-timeline`）—— 结论是**时序**；
+      · 影响范围到哪里（`ir-scope`）—— 结论是**边界**。
+
+    三者可以分开成立：时间线能重建得很干净而根因仍是 `needs_follow_up`
+    （缺一条关键日志），影响范围能界定而根因存疑。合成一个分类，
+    就只能给一个笼统的"完成度"，而那正是本次要修的那个毛病。
+
+    ## 为什么前缀统一是 `ir-`
+
+    与 `agentsec-` 同一条理由：前缀同时是**开关判据**与**校验判据**。
+    两处各写一份的话，加第四个分类时必有一处漏改，表现为"放行了
+    但没注入提示词"—— 静默失效。
+    """
+
+    ROOT_CAUSE = "ir-root-cause"
+    TIMELINE = "ir-timeline"
+    SCOPE = "ir-scope"
+
+
+#: 三个考察点的前缀。用法与 `AGENTSEC_CATEGORY_PREFIX` 完全一致。
+IR_CATEGORY_PREFIX: Final[str] = "ir-"
+
+#: 三个合法取值。
+IR_CATEGORIES: Final[frozenset[str]] = frozenset(c.value for c in IrCategory)
+
+#: 证据分级的**全部合法取值** —— 域无关，`agentsec-*` 与 `ir-*` 共用。
+#:
+#: ⚠️ 名字里的 `agentsec` 是历史包袱（那套分级先在铸网场景包里落地）。
+#:    不新建一个同值枚举，理由是**同一组取值在数据库里只有一个 CHECK
+#:    约束**（`ctf2_solve_notes.verdict_valid`）；再造一份枚举，改一处
+#:    漏一处的那天，症状是"应用层放行、数据库拒绝"，且迁移里写的是
+#:    字面量所以 `--autogenerate` 不会提醒。
+EVIDENCE_GRADES: Final[frozenset[str]] = frozenset(v.value for v in AgentsecVerdict)
 
 
 # 每题默认的错误提交次数上限（已定设计决策 4）。

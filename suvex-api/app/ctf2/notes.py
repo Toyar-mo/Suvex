@@ -1245,6 +1245,7 @@ def build_note_fields(
     solved: bool,
     agentsec: bool = False,
     ruled_out: list[str] | None = None,
+    ir: bool = False,
 ) -> dict[str, str]:
     """从一次解题的产物里提炼出卡片的三个字段（**全部已脱敏**）。
 
@@ -1275,12 +1276,16 @@ def build_note_fields(
     ⚠️ 默认必须是 `False`：`dead_ends` 会进**用户回合正文**，
     给五个现有分类换格式等于改掉它们每一次解题所见。
 
+    ★ v0.41：`ir` 与 `agentsec` 走**同一条分支**（同一个四项格式）。
+    见下面那段说明。默认同样 `False`。
+
     Args:
         transcript: 本次解题的工具调用记录。
         error: 收尾时的错误（没有就 None）。
         candidates: 候选答案原文（**只用于判断"有没有产出"**）。
         solved: 是否解出来了（`verdict == confirmed`）。
         agentsec: 本题是否属于智能体安全场景包。
+        ir: 本题是否属于应急响应场景包（v0.41）。
     """
     tools = tools_from_transcript(transcript)
     steps = key_steps_from_transcript(transcript)
@@ -1298,11 +1303,22 @@ def build_note_fields(
 
     if solved:
         dead_ends = ""
-    elif agentsec:
-        # ★ v0.40：按场景包 §5.2 的**四项证据格式**写。
+    elif agentsec or ir:
+        # ★ v0.40 / v0.41：按场景包 §5.2 的**四项证据格式**写。
         #
-        # 为什么 agentsec 类要改格式：`ruled_out`（排除）必须四项齐全
+        # 为什么这两族要改格式：`ruled_out`（排除）必须四项齐全
         # 才算数（见 `ruled_out_chain_complete`）。
+        #
+        # ## ★ v0.41：为什么 IR 也走这条路，而不是另写一套
+        #
+        # 应急响应里"查了这条线索但没找到"和"确认发生了"是两种都要
+        # 被复用的结论，判据结构与对抗评测**逐条对应**：判据（要查
+        # 什么）／测了什么（查了哪些日志）／观察到什么（结果）／
+        # 覆盖范围（时间窗与日志源覆盖到哪）。四项缺任一项，那条
+        # "排除"就是不可信的 —— 而不可信的排除比没有结论更危险。
+        #
+        # 所以共用同一个格式化函数。差异化留给提示词（那里说的是
+        # "日志缺口"这类 IR 专有概念），格式层不重复实现。
         #
         # ## 四项的**真实**来源是模型的 FINAL 结论文档
         #
@@ -1402,8 +1418,13 @@ _TOOLS_NOT_DIAGNOSTIC = frozenset(
 )
 
 
-def validate_note_category(category: str, *, agentsec_enabled: bool) -> str:
-    """校验方法卡的 `category` 取值，返回**归一化后**的字符串（v0.40）。
+def validate_note_category(
+    category: str,
+    *,
+    agentsec_enabled: bool,
+    ir_enabled: bool = False,
+) -> str:
+    """校验方法卡的 `category` 取值，返回**归一化后**的字符串（v0.40，v0.41）。
 
     ## 它守的是什么
 
@@ -1411,11 +1432,11 @@ def validate_note_category(category: str, *, agentsec_enabled: bool) -> str:
     原来它直接抄平台 payload 的分类名（`Pwn` / `Web` / …），
     爱是什么是什么。那在只有平台定义题型时是对的。
 
-    但 `agentsec-*` 那四类是**我们自己定义**的，而且它们不只是分类：
-    它们决定 agent 拿到哪一套行为纪律（见 `vocab.AgentsecCategory`）。
-    让这种取值靠"调用方记得传对字符串"来保证，拼错一个字母就会
-    静默退回攻击模式 —— 而模型不会报错，它只会照着原来的纪律
-    去"拿 flag"。
+    但 `agentsec-*` 与 `ir-*` 这两族是**我们自己定义**的，而且它们不只是
+    分类：它们决定 agent 拿到哪一套行为纪律（见 `vocab.AgentsecCategory`
+    与 `vocab.IrCategory`）。让这种取值靠"调用方记得传对字符串"来保证，
+    拼错一个字母就会静默退回攻击模式 —— 而模型不会报错，它只会照着
+    原来的纪律去"拿 flag"。
 
     ## 开关关着时**拒绝**，而不是静默降级成空字符串
 
@@ -1427,37 +1448,71 @@ def validate_note_category(category: str, *, agentsec_enabled: bool) -> str:
 
     那五类（以及平台将来可能加的任何分类）**原样放行** —— 它们来自
     平台 payload，我们不定义、也无权拒绝。这个函数的守备范围只有
-    "以 `AGENTSEC_CATEGORY_PREFIX` 开头的取值"，其余一律原样返回。
+    "以 `AGENTSEC_CATEGORY_PREFIX` 或 `IR_CATEGORY_PREFIX` 开头的取值"，
+    其余一律原样返回。
 
     这条边界很重要：如果这里改成白名单，平台哪天新增一个题型，
     同步流程就会因为"分类不认识"而失败 —— 那是把我们的纪律
     强加给平台的接口，代价是丢题。
 
+    ## ★ v0.41：为什么 `ir_enabled` 是**带默认值**的新参数
+
+    与 `build_system_prompt` 同一条理由：不带默认值会让现有每个调用点
+    都必须改，而它们的语义是"我不关心应急响应"。带默认值 `False` 之后，
+    本函数在 v0.41 之前的调用行为**逐字节不变**。
+
+    ⚠️ 但"`ir-*` 分类 + 开关默认关"会**抛错**，这是刻意的：一道 IR 题在
+    开关关着时不该被静默降级成"未分类卡片"，那会让它的 verdict 语义
+    无声消失（见上面第二段）。
+
     Args:
         category: 待校验的分类名（可以是空串 —— 空串永远合法）。
         agentsec_enabled: `Ctf2Settings.enable_agentsec_scenarios`。
+        ir_enabled: `Ctf2Settings.enable_ir_scenarios`。
 
     Raises:
-        ValueError: 取值以 `agentsec-` 开头但不合法、或开关没打开。
+        ValueError: 取值属于某族但不合法、或该族的开关没打开。
     """
-    from app.core.vocab import AGENTSEC_CATEGORIES, AGENTSEC_CATEGORY_PREFIX
+    from app.core.vocab import (
+        AGENTSEC_CATEGORIES,
+        AGENTSEC_CATEGORY_PREFIX,
+        IR_CATEGORIES,
+        IR_CATEGORY_PREFIX,
+    )
 
     normalized = (category or "").strip()
     if not normalized:
         return ""
-    if not normalized.startswith(AGENTSEC_CATEGORY_PREFIX):
+    if not normalized.startswith((AGENTSEC_CATEGORY_PREFIX, IR_CATEGORY_PREFIX)):
         # 平台定义的分类（pwn/web/reverse/crypto/misc 以及将来新增的）：
         # 一律放行，理由见 docstring 末尾那条边界。
         return normalized[:64]
-    if not agentsec_enabled:
+
+    # ★ 两族各判各的开关与白名单。写成一对 if 而不是"判前缀 → 拼变量名"
+    # 那种取巧写法：后者在加第三族时会把"开关名"变成一次字符串拼接，
+    # 而拼错的名字不会报错，只会让 `getattr` 拿到一个不存在的属性。
+    if normalized.startswith(AGENTSEC_CATEGORY_PREFIX):
+        if not agentsec_enabled:
+            raise ValueError(
+                f"分类「{normalized}」属于智能体安全场景包，但该功能当前未启用。"
+                "请在 CTF2 配置里打开 enableAgentsecScenarios 后再写入。"
+            )
+        if normalized not in AGENTSEC_CATEGORIES:
+            raise ValueError(
+                f"未知的智能体安全分类「{normalized}」。"
+                f"合法取值：{' / '.join(sorted(AGENTSEC_CATEGORIES))}。"
+            )
+        return normalized
+
+    if not ir_enabled:
         raise ValueError(
-            f"分类「{normalized}」属于智能体安全场景包，但该功能当前未启用。"
-            "请在 CTF2 配置里打开 enableAgentsecScenarios 后再写入。"
+            f"分类「{normalized}」属于应急响应场景包，但该功能当前未启用。"
+            "请在 CTF2 配置里打开 enableIrScenarios 后再写入。"
         )
-    if normalized not in AGENTSEC_CATEGORIES:
+    if normalized not in IR_CATEGORIES:
         raise ValueError(
-            f"未知的智能体安全分类「{normalized}」。"
-            f"合法取值：{' / '.join(sorted(AGENTSEC_CATEGORIES))}。"
+            f"未知的应急响应分类「{normalized}」。"
+            f"合法取值：{' / '.join(sorted(IR_CATEGORIES))}。"
         )
     return normalized
 
@@ -1473,6 +1528,19 @@ def is_agentsec_category(category: str) -> bool:
     from app.core.vocab import AGENTSEC_CATEGORY_PREFIX
 
     return (category or "").strip().startswith(AGENTSEC_CATEGORY_PREFIX)
+
+
+def is_ir_category(category: str) -> bool:
+    """这个分类是否属于应急响应场景包（**只看前缀，不看开关**）（v0.41）。
+
+    与 `is_agentsec_category` **完全同构**，包括"它不回答该不该放行"
+    这条边界。两者分成两个函数而不是一个 `is_scenario_category`
+    返回枚举，理由是调用点只关心"是不是我这一类"，而合并之后每个
+    调用点都得再判一次返回值是哪一个 —— 那等于把前缀判断抄第二遍。
+    """
+    from app.core.vocab import IR_CATEGORY_PREFIX
+
+    return (category or "").strip().startswith(IR_CATEGORY_PREFIX)
 
 
 #: `ruled_out` 的四项证据要求（场景包 §5.2），以及**每项的残缺标记**。
@@ -1612,14 +1680,14 @@ def derive_subcategory(tool_kinds: str) -> str:
 
 #: `verdict` → 渲染时的标签（v0.40）。
 #:
-#: ## ⚠️ 只对 `agentsec-*` 那四类生效 —— 这是刻意的
+#: ## ⚠️ 只对**场景包分类**（`agentsec-*` / `ir-*`）生效 —— 这是刻意的
 #:
 #: 普通 CTF 题的 `verdict` 只有两种取值（解出 → `confirmed`、
 #: 没解出 → `needs_follow_up`），而"没解出"这件事已经在 `approach`
 #: 正文里写了「**没解出来**」。再挂一个标签就是同一句话说两遍。
 #:
 #: 更重要的是：**普通题那五类的 prompt 必须逐字节不变** ——
-#: 那是本次改动的主要回归判据。所以标签只在 `agentsec-*` 卡上出现，
+#: 那是本次改动的主要回归判据。所以标签只在场景包卡上出现，
 #: 见 `_verdict_tag_for`。
 _VERDICT_TAGS: dict[str, str] = {
     "confirmed": "【已命中】",
@@ -1631,13 +1699,23 @@ _VERDICT_TAGS: dict[str, str] = {
 def _verdict_tag_for(note: object) -> str:
     """这张卡该不该带 verdict 标签，带哪个。
 
-    只有 `agentsec-*` 分类才带 —— 理由见 `_VERDICT_TAGS`。
+    只有场景包分类（`agentsec-*` / `ir-*`）才带 —— 理由见 `_VERDICT_TAGS`。
 
-    ⚠️ 判据用 `is_agentsec_category`（前缀），不用"verdict 是否非空"：
-    `verdict` 列对**所有**卡都有值（默认 `needs_follow_up`），
-    用它判断会让普通题也挂上标签。
+    ⚠️ 判据用前缀函数，不用"verdict 是否非空"：`verdict` 列对**所有**
+    卡都有值（默认 `needs_follow_up`），用它判断会让普通题也挂上标签。
+
+    ## ★ v0.41：为什么 `ir-*` 也要带
+
+    应急响应复盘卡片的价值分布与对抗评测**恰好一样**：「这条时间线查了
+    但没找到」和「这条时间线确认了」是**两种都要被复用的知识**。
+    不给 IR 卡挂标签，下次同类复盘会把一张"已排除"的卡当成待验证线索
+    重新查一遍 —— 而那正是方法卡要消除的浪费（见 `AgentsecVerdict`
+    的 docstring，那段推理对 IR 逐字适用）。
+
+    ⚠️ 但普通题五类仍然不挂 —— 它们没有第三档语义，理由见 `_VERDICT_TAGS`。
     """
-    if not is_agentsec_category(getattr(note, "category", "") or ""):
+    category = getattr(note, "category", "") or ""
+    if not (is_agentsec_category(category) or is_ir_category(category)):
         return ""
     return _VERDICT_TAGS.get(getattr(note, "verdict", "") or "", "")
 

@@ -160,6 +160,9 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/ctf2/challenges/{challengeId}/writeup"),
         ("GET", "/api/v1/ctf2/challenges/{challengeId}/usage"),
         ("GET", "/api/v1/ctf2/usage"),
+        # 处置建议工单（v0.41）：与题解同级 —— 纯读本地落盘的 markdown，
+        # 不打平台、不含凭据；且比题解更不敏感（无 flag、无载荷原文）。
+        ("GET", "/api/v1/ctf2/challenges/{challengeId}/workorder"),
         # ── 补一条**既有的漏项**（v0.20 顺手补，与 CTF2 无关）──
         #
         # `GET /scans/{scanId}/writeup` 是任务 19（题解）加的端点，

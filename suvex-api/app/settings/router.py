@@ -479,6 +479,10 @@ def _sandbox_out(db: Session, *, config=None) -> SandboxOut:  # noqa: ANN001
             scanMaxTurns="user" if config.scan_max_turns is not None else "default",
             scanMode="user" if config.scan_mode else "default",
         ),
+        # ★ v0.42：原样回读。它没有 env 兜底，所以不经过 `effective`、
+        # 也不出现在 `executionSource` 里 —— 那一组只标"DB 覆盖还是 env 兜底"，
+        # 而这一列只有 DB 一个来源，标它反而会暗示存在另一个。
+        enableOffensivePrompt=config.enable_offensive_prompt,
         updatedAt=config.updated_at,
     )
 
@@ -542,6 +546,9 @@ def update_sandbox(
     config.max_concurrent_scans = payload.maxConcurrentScans
     config.scan_max_turns = payload.scanMaxTurns
     config.scan_mode = payload.scanMode
+    # ★ v0.42：手法块开关。同样**写具体值**，且它与上面三件套不同的是
+    # 它根本没有 NULL 这一档 —— 列非空、默认 false。
+    config.enable_offensive_prompt = payload.enableOffensivePrompt
     db.commit()
     db.refresh(config)
     return _sandbox_out(db, config=config)

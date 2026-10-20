@@ -94,6 +94,11 @@ def test_viewer_cannot_change_settings(viewer_client: TestClient) -> None:
             "maxConcurrentScans": 1,
             "scanMaxTurns": 100,
             "scanMode": "quick",
+            # ★ v0.42：`SandboxIn` 的字段**全部必填**（配置类端点的纪律）。
+            # 少发这一项会让下面的断言变成 422 而不是 403 —— 而 422 也是
+            # "非管理员"，但**理由完全不同**（字段缺失 vs 权限不足）。
+            # 这条用例要验的是后者，所以必须把字段补齐。
+            "enableOffensivePrompt": False,
         },
     ).status_code == 403
     assert viewer_client.put(

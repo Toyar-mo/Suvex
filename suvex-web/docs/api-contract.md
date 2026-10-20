@@ -959,6 +959,50 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 > CPU / 内存配额是**任务 21** 才接上的（见 §3.19）。在那之前，
 > CTF2 起的解题容器没有任何 CPU / 内存上限。
 
+**评测强度**（v0.42 补记）—— `SandboxConfig` 上再多出一个字段：
+
+| 字段 | 取值 | 说明 |
+| --- | --- | --- |
+| `enableOffensivePrompt` | `true` \| `false`，默认 `false` | 是否给 agent 追加「越权与注入强化手法」那一块 |
+
+> **★ 它不是"多几种漏洞类型"，是把试探强度调高一档。**
+>
+> 打开后，**解题**（`app/ctf2/runner.py`）与**渗透扫描**
+> （`app/scans/runner.py`）两侧的提示词末尾都会追加
+> `prompts/offensive_playbook.md` 那一份手法矩阵（注入、越权、
+> 文件读取、SSRF、竞态的具体换形写法）。关着时两侧的提示词
+> **逐字节不变**——连那个文件都不读。
+
+> **★ 它落在 `SandboxConfig` 而不是 `Ctf2Config`，因为要两边共用。**
+>
+> `ctf2_config` 只有 CTF2 侧读（`app/scans/` 对 `ctf2` 的引用全是
+> 注释性的）；而 `sandbox_config` 是**唯一被两条路径共同读取**的
+> 单例行。放进 `ctf2_config` 等于宣布它只管解题。
+
+> **★ 它是非空 `bool`，与上面三件套的可空 `int`/`str` 不同。**
+>
+> 那三项是**容量类**配置（部署方按机器规格定默认，用户不表态就
+> 跟 env 走，`NULL` 即未覆盖）。这一项是**行为开关** ——
+> 它决定 agent 用什么强度去试探目标，不能由部署环境静默决定，
+> 否则同一个镜像换个 `SUPEX_*` 变量行为就变了，而设置页上什么都
+> 看不出来。所以它**没有 env 兜底**，也不出现在 `executionSource` 里。
+
+> **⚠️ 它对 `agentsec-*` / `ir-*` 那七类**不生效**（按前缀排除）。**
+>
+> 手法块整篇在教"怎么把系统打穿"，而那七类题要的是"判定考察点
+> 是否成立"（agentsec）与"复盘过去发生了什么"（IR）。两段放在
+> 一起是**互相矛盾的两套指令**。排除用前缀而不是白名单：
+> 将来平台加新分类时它应当默认就享受到，不会因为没人同步而
+> 静默少一截。
+
+> **⚠️ `SandboxIn` 里它是必填的，不给默认值。**
+>
+> 给 `false` 会让旧版请求体每保存一次就静默关掉用户已经打开的开关
+> （前端 payload 里没这个字段 → 后端按默认值落库 → 界面上看不出
+> 发生过什么）；给 `true` 更糟，等于谁保存谁开。
+> 这正是 §3.19.7 那条"前端必填、后端有默认值"纪律的反面场景：
+> 那是**新增可选**，这是**行为开关**。
+
 ### 2.10 CTF2 相关（`src/data/ctf2.ts`）
 
 > **v0.21 新增。** 这一节补的是**整个 CTF2 模块**（25 个端点、5 个枚举、
@@ -973,7 +1017,7 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | ↳ ⚠️ `rejected` | **定义了，但运行时不会产生** | 见下方 §2.10 的说明与 §3.19.2 |
 | `Ctf2EnvironmentStatus` | `stopped` \| `starting` \| `ready` \| `error` \| `expired` | 题目环境（容器）的生命周期 |
 | `Ctf2SubmitMode` | `safe` \| `auto` | 提交策略 |
-| `Ctf2SandboxProfile` | `ctf2-sandbox` \| `ctf2-sandbox-re` | 用哪个沙箱镜像 |
+| `Ctf2SandboxProfile` | `ctf2-sandbox` \| `ctf2-sandbox-re` \| `ctf2-sandbox-ir` | 用哪个沙箱镜像 |
 
 > **★ `Ctf2ChallengeStatus` 为什么不直接抄 CTF2 的题目状态。**
 >
@@ -1024,7 +1068,7 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | 类型 | 关键字段 |
 | --- | --- |
 | `Ctf2Account` | `id` / `label` / `status` / `remoteUserId` / `remoteUsername` / `scopes` / **`tokenMask`** / **`hasToken`** / `lastSyncedAt` / `lastError` / `createdAt` / `updatedAt` |
-| `Ctf2Settings` | `submitMode` / `maxWrongSubmissions` / `defaultSandboxProfile` / `maxConcurrentSolves` / `solvePollSeconds` / `autoSyncSeconds` / `autoPriorityNew` / `autoStartNew` / `maxTurns` / **`fallbackProviderId`**（v0.35，可空 = 不启用） / `updatedAt` |
+| `Ctf2Settings` | `submitMode` / `maxWrongSubmissions` / `defaultSandboxProfile` / `maxConcurrentSolves` / `solvePollSeconds` / `autoSyncSeconds` / `autoPriorityNew` / `autoStartNew` / `maxTurns` / **`fallbackProviderId`**（v0.35，可空 = 不启用） / **`enableAgentsecScenarios`**（v0.40，默认 `false`） / **`enableIrScenarios`**（v0.41，默认 `false`） / `updatedAt` |
 | `Ctf2Competition` | `id` / `accountId` / `remoteId` / `kind`(`competition`\|`practice`) / `name` / `remoteStatus` / `startAt` / `endAt` / `challengeCount` / `syncedAt` |
 | `Ctf2Challenge` | `id` / `competitionId` / `remoteId` / `stageId` / `title` / `category` / `description` / `attachments` / `score` / `status` / **`candidateFlag`** / **`confirmedFlag`** / `remainingWrongSubmissions` / `wrongSubmissionCount` / `maxWrongSubmissions` / `candidateCount` / `sandboxProfile` / `scanId` / `solvedAt` / `lastError` / `environment` / `priority` / `createdAt` / `updatedAt` |
 | `Ctf2Environment` | `id` / `challengeId` / `status` / `sandboxProfile` / `accessUrl` / `accessUrls` / `containerId` / `pollCount` / `startedAt` / `readyAt` / `expiresAt` / `lastError` |
@@ -3015,6 +3059,7 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 | GET | `/ctf2/challenges/{challengeId}/writeup` | read | **题解（Writeup）**（v0.36）|
 | GET | `/ctf2/usage` | read | **token 消耗统计**（v0.36，可按题/赛事/时间筛）|
 | GET | `/ctf2/challenges/{challengeId}/usage` | read | 单道题的逐次消耗明细（v0.36）|
+| GET | `/ctf2/challenges/{challengeId}/workorder` | read | **处置建议工单**（v0.41，只有应急响应任务才有）|
 
 > **鉴权分级的理由**：读操作是 `read`；**会对外发请求或消耗外部额度**的
 > 是 `scan`（同步、拉题、解题、提交）；**改系统级配置与凭据**的是 `admin`
@@ -3324,6 +3369,45 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 > **历史数据如实标注**：本功能上线**之前**的解题没有 usage 记录。
 > 统计接口会带上 `since` 字段说明"从哪一刻开始有数据"，
 > **不伪造历史**（同 §3.18 的"宁可少说，不说错的"）。
+
+#### 3.19.7 ★ 两个场景包开关：`enableAgentsecScenarios` / `enableIrScenarios`
+
+`PUT /ctf2/settings` 上还有两个布尔开关，**默认都是 `false`**。它们不放宽
+任何东西，而是**换一套判定纪律**：打开后，分类属于对应族的题会在 system
+prompt 末尾追加一段场景块，产出从"flag"变成"带三级标注的结论"。
+
+| 开关 | 覆盖的分类 | 场景块（system prompt 末尾追加） |
+| --- | --- | --- |
+| `enableAgentsecScenarios`（v0.40） | `agentsec-prompt-injection` / `agentsec-tool-escalation` / `agentsec-data-leak` / `agentsec-multi-agent` | `## 智能体安全评测(铸网-2026)` |
+| `enableIrScenarios`（v0.41） | `ir-root-cause` / `ir-timeline` / `ir-scope` | `## 应急响应与根因复盘` |
+
+> **★ 关闭时是"逐字节不变"，不是"大致不变"。**
+>
+> 开关关闭时 `build_system_prompt` 连那个 `.md` 文件都**不读**，直接返回
+> 原来那份提示词原文（不做任何 `strip`）。所以 `pwn` / `web` / `reverse` /
+> `crypto` / `misc` 五类题在开关开→关之后，拿到的 system prompt 与
+> 加这个功能之前**完全相同**（sha256 相同）。这是这两个开关能默认关掉的
+> 前提 —— 它们不该让没在用它们的人承担任何风险。
+>
+> 打开时是**追加**不是替换：原提示词整体作为前缀保留，场景块接在末尾。
+
+> **★ 为什么是两个开关，不是一个。**
+>
+> 两个族的前缀互斥（`agentsec-` 与 `ir-`），合用一个开关的后果不是"少配一项"，
+> 而是**分类校验与提示词注入的判据分叉**：`agentsec-*` 会在 IR 开关打开时
+> 通过校验，而对应的场景块却不注入 —— 分类合法、纪律没注入，静默失效，
+> 而且从界面上完全看不出来。
+
+> **★ 这两个字段在前端 `saveCtf2Settings` 里是必填的，不给默认值。**
+>
+> 与 `Ctf2SettingsIn` 的 `bool = False` 看似矛盾，其实是同一件事的两侧：
+> 后端那个默认值是为了**兼容不带这两个字段的老客户端**（不传 = 关闭，
+> 安全的那一侧）；而前端这个必填是**防止自己的调用点漏传** ——
+> `PUT /ctf2/settings` 是**全量提交**，逐字段赋值，漏传一项就会被
+> 按后端默认值写回去。对一个已经被用户打开的开关，那等于**静默关掉它**。
+>
+> 所以设置页必须真的渲染这两个开关（`Ctf2Panel.tsx` 里 `id="ctf2-agentsec"`
+> 与 `id="ctf2-ir"`），否则用 API 打开的值会在下一次任何人点"保存"时丢失。
 
 ---
 

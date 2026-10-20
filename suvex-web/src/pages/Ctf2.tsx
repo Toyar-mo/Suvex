@@ -1,5 +1,5 @@
 import { PageHeader } from '@/components/layout/AppShell'
-import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WriteupDialog } from '@/components/ctf2'
+import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/ctf2'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button, IconButton } from '@/components/ui/Button'
@@ -197,6 +197,16 @@ export function Ctf2Page() {
    * ⚠️ 题解属于"那一轮运行的结果"，名字就该是打开那一刻的那个。
    */
   const [writeupChallenge, setWriteupChallenge] = useState<Ctf2Challenge | null>(null)
+
+  /*
+    要展示**处置工单**的那道题（v0.41）。
+
+    ★ 与 `writeupChallenge` 分开两个 state，不合并成一个
+    `{challenge, kind}`：两者可以同时打开吗？技术上不会（都是模态），
+    但合并会让"关闭时清哪一个"变成需要判断的事，而判断错的表现是
+    "关了工单，题解还开着"。两个独立 state 各自清各自的，不需要想。
+  */
+  const [workOrderChallenge, setWorkOrderChallenge] = useState<Ctf2Challenge | null>(null)
 
   useEffect(() => {
     void loadCtf2()
@@ -682,6 +692,7 @@ export function Ctf2Page() {
                   onRelease={runRelease}
                   onSetPriority={runSetPriority}
                   onWriteup={setWriteupChallenge}
+                  onWorkOrder={setWorkOrderChallenge}
                 />
               ))}
             </div>
@@ -734,6 +745,20 @@ export function Ctf2Page() {
         <WriteupDialog
           challenge={writeupChallenge}
           onClose={() => setWriteupChallenge(null)}
+        />
+      )}
+
+      {/*
+        处置工单（v0.41）。与题解同样**条件挂载** —— 理由相同。
+
+        ⚠️ 入口的显示判据在卡片那侧（`canHaveWorkOrder`，看分类前缀），
+           这里**不再判一次**。判两遍的后果是两处规则漂移，而症状是
+           "按钮露出来了但弹窗不渲染"（点了没反应）。
+      */}
+      {workOrderChallenge && (
+        <WorkOrderDialog
+          challenge={workOrderChallenge}
+          onClose={() => setWorkOrderChallenge(null)}
         />
       )}
 

@@ -23,3 +23,10 @@ export { default as SandboxProfileSelect } from './SandboxProfileSelect'
  * 不是这个文件。
  */
 export { default as WriteupDialog } from './WriteupDialog'
+/**
+ * 处置建议工单弹窗（v0.41，应急响应复盘）。
+ *
+ * 与题解**共用外壳** `WriteupDialogShell`（三态、下载按钮、失败说明都一样），
+ * 只有取数端点与两句文案不同 —— 见文件头那张对比表。
+ */
+export { default as WorkOrderDialog } from './WorkOrderDialog'

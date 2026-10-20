@@ -82,6 +82,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git jq file xxd less vim-tiny \
     python3 python3-venv python3-pip python3-dev \
     build-essential pkg-config libssl-dev libffi-dev \
+    # ⚠️ `grep` / `sed` / `mawk`（提供 `awk`）**必须显式写出来**，理由和
+    #    下面 `binutils` 那段一样：它们经由 build-essential 的依赖链其实
+    #    早就装上了，实测 `ctf2-sandbox:latest` 里 `/usr/bin/grep` 等都在。
+    #    但"没写进 Dockerfile"= 没人知道这是承诺而不是巧合。
+    #
+    #    v0.41 加 IR 场景包时这个缺口第一次显形：`prompts/ctf2_ir.md`
+    #    §三 决策表整段都靠 grep / awk / sed 过滤日志，而
+    #    `scripts/verify_sandbox_tools.py` 静态解析 apt 列表时把这三个
+    #    判成"提示词要让模型用、镜像里没有"——**检查是对的，缺口是真的**。
+    #
+    #    成本 0（apt 见到已装会跳过），收益是这条依赖从此可见。
+    #    注意 Debian 的 `awk` 由 `mawk` 提供，不是叫 `awk` 的包。
+    grep sed mawk \
     # ⚠️ `binutils` 必须有：`strings` / `objdump` / `readelf` / `nm` 在
     #    misc 与取证题里是第一步（`strings` 找线索、`objdump` 看汇编）。
     #

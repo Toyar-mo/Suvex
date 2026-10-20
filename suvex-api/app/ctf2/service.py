@@ -2121,18 +2121,28 @@ def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  #
     #    退回空串写卡，卡片仍可用（只是召回时不再靠分类匹配）。
     #    这比"因为分类不合法就把整次解题的知识丢掉"更划算。
     #
-    # ⚠️ 配置**只读一次**：下面 `agentsec` 与这里共用同一个值。
+    # ⚠️ 配置**只读一次**：下面 `agentsec` / `ir` 与这里共用同一个值。
     #    读两次不仅多一次查询，更糟的是万一两次之间配置被改了，
     #    会出现"分类校验按开着过、证据格式按关着写"这种自相矛盾的卡。
+    #
+    # ★ v0.41：两个开关在**同一次**配置读取里取出。不是为了省一次查询
+    #   （`effective_ctf2_settings` 本身有缓存），而是为了让"本次写卡
+    #   用的是哪一份配置"只有一个答案 —— 分两次读，两次之间配置被改
+    #   就会出现"按 ir 开着过了校验、按 agentsec 关着写了格式"。
     try:
-        agentsec_on = bool(effective_ctf2_settings(db).enable_agentsec_scenarios)
+        ctf2_settings = effective_ctf2_settings(db)
+        agentsec_on = bool(ctf2_settings.enable_agentsec_scenarios)
+        ir_on = bool(ctf2_settings.enable_ir_scenarios)
     except Exception:  # noqa: BLE001 - 读配置失败不该拦住写卡
         logger.warning("读 CTF2 配置失败，本次按未启用处理", exc_info=True)
         agentsec_on = False
+        ir_on = False
 
     try:
         category = notes_mod.validate_note_category(
-            challenge.category or "", agentsec_enabled=agentsec_on
+            challenge.category or "",
+            agentsec_enabled=agentsec_on,
+            ir_enabled=ir_on,
         )
     except ValueError:
         logger.warning(
@@ -2150,9 +2160,16 @@ def learn_from_solve(db: Session, challenge: Ctf2Challenge, outcome) -> None:  #
         error=outcome.error,
         candidates=[c.flag for c in (outcome.candidates or [])],
         solved=solved,
-        # 只有 agentsec 类才按四项证据格式写 `dead_ends` ——
+        # 只有场景包分类才按四项证据格式写 `dead_ends` ——
         # 五个现有分类的卡片内容必须一个字不变（见该函数的说明）。
+        #
+        # ★ v0.41：`ir` 与 `agentsec` 走同一条格式分支（理由见
+        # `build_note_fields`：应急响应里"查了但没找到"同样是
+        # 要被复用的结论，四项判据结构与对抗评测逐条对应）。
+        # 两者**分别传各自的开关**，不合并成一个布尔值 —— 合并会
+        # 让"只开了 IR 没开 agentsec"的部署把普通题也套上四项格式。
         agentsec=agentsec_on,
+        ir=ir_on,
         # ★ v0.40：模型在 FINAL 里写的**真实**排除清单。
         #
         # 为什么不只靠自动生成的那四项前缀：那四项里只有"观察到什么"
@@ -2470,6 +2487,7 @@ def save_writeup(
     """
     from app.core.ids import new_id
     from app.ctf2 import writeup as writeup_mod
+    from app.ctf2 import workorder as workorder_mod
     from app.ctf2.models import Ctf2Writeup
 
     solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
@@ -2484,6 +2502,40 @@ def save_writeup(
     except Exception:  # noqa: BLE001 - 题解生成失败不该毁掉解题结果
         logger.warning("生成题解失败（不影响解题结果）：%s", challenge.id, exc_info=True)
         return
+
+    # ★ v0.41（会话 C）：处置建议单独落一份工单文件。
+    #
+    # ## 为什么在生成题解这一处顺手做
+    #
+    # 两个理由：① 这是唯一一处"`outcome` 还在内存里"的地方（工单要用
+    # `outcome.workorders`，与题解要用 `outcome.transcript` 同理）；
+    # ② 工单的内容与题解第六节**必须同源**，分成两处生成迟早会一边
+    # 有、一边没有。
+    #
+    # ## ⚠️ 失败不影响题解，也不影响解题结果
+    #
+    # `write_order_file` 自己吞异常并返回 `None`（见它的 docstring）。
+    # **非 IR 任务这里什么都不做** —— `parse_workorders` 拿到 `None`
+    # 返回空列表，于是连目录都不会建。
+    orders = workorder_mod.parse_workorders(
+        {"workorders": getattr(outcome, "workorders", None)}
+    )
+    if orders:
+        workorder_mod.write_order_file(
+            challenge.id,
+            workorder_mod.render_workorders(
+                orders,
+                challenge_title=getattr(challenge, "title", "") or "",
+                # ⚠️ 这里**不能**传 `challenge.category`（曾经的写法）。
+                #    分类是「ir-root-cause」这种场景名，不是资产标识；
+                #    传进去之后工单头部会render出「资产标识：`ir-root-cause`」，
+                #    而读工单的人会以为那台机器就叫这个名字。
+                #    `Ctf2Challenge` 上没有资产列（资产来自证据包本身），
+                #    所以这里留空 —— 留空时 `render_workorders` 不渲染该行，
+                #    这比渲染一个错的标识诚实。
+                asset="",
+            ),
+        )
 
     # ★ 显式初始化：`db.execute()` 自己也可能抛（那时连 `row` 都还没赋值），
     #   而下面的 `expunge` 要能安全跳过。靠 `contextlib.suppress` 吞
@@ -3117,6 +3169,13 @@ class Ctf2Settings:
     #: 多智能体结论只能标疑似）。理由见 `settings/models.py` 的
     #: `Ctf2Config.enable_agentsec_scenarios`。
     enable_agentsec_scenarios: bool = False
+    #: 是否启用应急响应场景包（v0.41）。默认 **False**。
+    #:
+    #: ⚠️ 与 `enable_agentsec_scenarios` **各自独立**，理由见
+    #: `settings/models.py` 的 `Ctf2Config.enable_ir_scenarios`：
+    #: 共用开关会让一族的分类在另一族开关打开时通过校验，
+    #: 而对应的 prompt 块不注入 —— 分类合法、纪律没注入。
+    enable_ir_scenarios: bool = False
 
 
 def effective_ctf2_settings(db: Session) -> Ctf2Settings:
@@ -3145,6 +3204,7 @@ def effective_ctf2_settings(db: Session) -> Ctf2Settings:
             max_turns=DEFAULT_CTF2_MAX_TURNS,
             fallback_provider_id=None,
             enable_agentsec_scenarios=False,
+            enable_ir_scenarios=False,
         )
     return Ctf2Settings(
         submit_mode=row.submit_mode,
@@ -3158,6 +3218,7 @@ def effective_ctf2_settings(db: Session) -> Ctf2Settings:
         max_turns=row.max_turns,
         fallback_provider_id=row.fallback_provider_id,
         enable_agentsec_scenarios=row.enable_agentsec_scenarios,
+        enable_ir_scenarios=row.enable_ir_scenarios,
     )
 
 
@@ -3186,6 +3247,7 @@ def update_ctf2_settings(
     max_turns: int,
     fallback_provider_id: str | None = None,
     enable_agentsec_scenarios: bool = False,
+    enable_ir_scenarios: bool = False,
 ) -> Ctf2Config:
     """保存配置。**逐项校验，不静默夹取。**
 
@@ -3228,12 +3290,13 @@ def update_ctf2_settings(
     row.max_turns = max_turns
     row.fallback_provider_id = normalized_fallback
     row.enable_agentsec_scenarios = bool(enable_agentsec_scenarios)
+    row.enable_ir_scenarios = bool(enable_ir_scenarios)
     db.commit()
     db.refresh(row)
     logger.info(
         "CTF2 配置已更新：mode=%s maxWrong=%d profile=%s 解题并发=%d "
         "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 备用模型=%s "
-        "智能体安全场景=%s",
+        "智能体安全场景=%s 应急响应场景=%s",
         submit_mode,
         max_wrong_submissions,
         default_sandbox_profile,
@@ -3248,6 +3311,9 @@ def update_ctf2_settings(
         # 所以它的开/关必须能在日志里查得到 —— 复盘时"当时到底开没开"
         # 是一个只能用日志回答的问题。
         "开" if enable_agentsec_scenarios else "关",
+        # ★ v0.41：同上，独立一项。两个开关分开记，因为"当时到底开了
+        # 哪一个"在复盘时是两个独立问题 —— 记成一项就再也分不出来了。
+        "开" if enable_ir_scenarios else "关",
     )
     return row
 

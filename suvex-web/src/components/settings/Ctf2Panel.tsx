@@ -135,7 +135,9 @@ export function Ctf2Panel() {
       draft.autoPriorityNew !== settings.autoPriorityNew ||
       draft.autoStartNew !== settings.autoStartNew ||
       draft.maxTurns !== settings.maxTurns ||
-      draft.fallbackProviderId !== settings.fallbackProviderId
+      draft.fallbackProviderId !== settings.fallbackProviderId ||
+      draft.enableAgentsecScenarios !== settings.enableAgentsecScenarios ||
+      draft.enableIrScenarios !== settings.enableIrScenarios
     )
   }, [draft, settings])
 
@@ -225,6 +227,8 @@ export function Ctf2Panel() {
         autoStartNew: draft.autoStartNew,
         maxTurns: draft.maxTurns,
         fallbackProviderId: draft.fallbackProviderId,
+        enableAgentsecScenarios: draft.enableAgentsecScenarios,
+        enableIrScenarios: draft.enableIrScenarios,
       })
       setSaveState({ kind: 'saved', at: new Date().toISOString() })
       setTouched(false)
@@ -611,6 +615,56 @@ export function Ctf2Panel() {
           }
           checked={draft.autoStartNew}
           onChange={(value) => setDraft({ ...draft, autoStartNew: value })}
+        />
+      </div>
+
+      {/* ── 两个场景包开关（v0.40 / v0.41）── */}
+      {/*
+        ★ 单独一组而不是并进上面那两个自动作业开关。
+        那两个管的是"什么时候开跑"，这两个管的是"跑的时候按哪套纪律判定" ——
+        混在一起会让人以为它们也是"省事"类的开关，而它们恰好相反：
+        打开之后那几类题的产出是**结论**，不是 flag。
+
+        ⚠️ 都是**全局**开关（存在 CTF2 配置里），不按题设置。理由与
+        `defaultSandboxProfile` 之外的各项一致：这道题的分类决定它属于
+        哪一族，所以逐题再给一个开关等于把同一件事说两遍，
+        而两处取值不一致时的表现是"打开了但没生效"。
+
+        ⚠️ 两个开关**互相独立**，不要合并：共用一个的话，一族的分类会在
+        另一族开着时通过校验，而对应的提示词块却不注入 —— 分类合法、
+        纪律没注入，是静默失效。
+      */}
+      <div className="space-y-2">
+        <Toggle
+          id="ctf2-agentsec"
+          label="启用智能体安全评测场景包"
+          hint={
+            '打开后，分类属于「提示词注入 / 越权工具调用 / 敏感信息泄露 / ' +
+            '多智能体协作」这四类的题，会额外拿到一段评测纪律：它的任务是' +
+            '判定某个安全考察点成不成立，并按「已命中 / 待跟进 / 已排除」' +
+            '三级给结论。' +
+            '★ 那四类题里**没有 flag** —— 打开它是换一套判定方式，' +
+            '不是多几种题型。其余五类题（pwn/web/reverse/crypto/misc）' +
+            '拿到的提示词与结论格式**完全不受影响**，逐字节相同。'
+          }
+          checked={draft.enableAgentsecScenarios}
+          onChange={(value) => setDraft({ ...draft, enableAgentsecScenarios: value })}
+        />
+        <Toggle
+          id="ctf2-ir"
+          label="启用应急响应场景包"
+          hint={
+            '打开后，分类属于「根因定位 / 时间线重建 / 影响范围」这' +
+            '三类的题，会额外拿到一段复盘纪律：它的产出是时间线、根因链、' +
+            '影响范围，每条结论按「已命中 / 待跟进 / 已排除」三级标注。' +
+            '★ 与上面那个开关**互相独立** —— 两个都打开时，一道题也只会' +
+            '命中其中一族（`agentsec-*` 与 `ir-*` 是互斥的两组前缀）。' +
+            '为什么不做成一个开关：共用一个的话，一族的分类会在另一族' +
+            '开着时通过校验，而对应的提示词块却不注入 —— 分类合法、' +
+            '纪律没注入，是静默失效。'
+          }
+          checked={draft.enableIrScenarios}
+          onChange={(value) => setDraft({ ...draft, enableIrScenarios: value })}
         />
       </div>
 

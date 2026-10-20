@@ -226,6 +226,22 @@ export interface SandboxConfig {
   scanMode: ScanMode
   /** 上面三项当前来自哪里（用户设过 / 环境默认） */
   executionSource: ExecutionSource
+
+  /**
+   * 是否给 agent 追加「越权与注入强化手法」那一块（v0.42）。
+   *
+   * ⚠️ 它**不是**"多几种漏洞类型"，而是把 agent 的**试探强度**调高一档：
+   *    打开后解题与渗透扫描两侧的提示词末尾都会追加 `prompts/offensive_playbook.md`
+   *    那一份手法矩阵（注入、越权、文件读取、SSRF、竞态的具体换形写法）。
+   *
+   * ⚠️ 它**不放松任何判定纪律** —— `prompts/ctf2_system.md` 里
+   *    「不越界访问」「禁止口令爆破与压力测试」照旧成立。
+   *
+   * ⚠️ 与上面三项不同，它**没有 env 兜底**，也不在 `executionSource` 里：
+   *    那三项是容量类配置（部署方定默认），这是**行为开关**
+   *    （不能由部署环境静默决定用户 agent 的强度）。
+   */
+  enableOffensivePrompt: boolean
 }
 
 // ─────────────────────────────────────────────

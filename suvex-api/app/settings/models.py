@@ -128,6 +128,42 @@ class SandboxConfig(Base):
     scan_max_turns: Mapped[int | None] = mapped_column(Integer, nullable=True)
     scan_mode: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
+    # ── 越权与注入手法块的开关（v0.42）────────────────────────
+    #
+    # 打开后，**解题**（`app/ctf2/runner.py`）与**渗透扫描**
+    # （`app/scans/runner.py`）两条路径的提示词末尾都会追加
+    # `prompts/offensive_playbook.md` 那一块手法矩阵。关着时两条路径
+    # 的提示词**逐字节不变**（连那个文件都不读）。
+    #
+    # ## ★ 为什么它在这一行，而不是在 `Ctf2Config` 里
+    #
+    # 因为它要**被两条路径同时读到**。`ctf2_config` 只有 CTF2 侧读
+    # （`app/scans/` 下对 `ctf2` 的引用全是注释性的）；而 `sandbox_config`
+    # 是**唯一被两边共同读的单例行** —— 扫描侧走
+    # `app/scans/service.py` 的 `read_sandbox_config`，解题侧走
+    # `app/ctf2/runner.py` 的同名函数。把它放进 `ctf2_config` 就等于
+    # 宣布它只管解题，而那与「共用一套手法」的要求相反。
+    #
+    # ## ★ 为什么是**非空 bool**，而不是像上面三列那样可空、NULL 跟 env 走
+    #
+    # 上面三列是**容量类**配置：部署方按机器规格定一个合理默认，用户不表态
+    # 就该跟着那个默认。而这一列是**行为开关** —— 它决定 agent 用什么强度
+    # 去试探目标。行为开关不能由部署环境静默决定，否则同一个镜像换个
+    # `SUPEX_*` 环境变量，agent 的行为就变了，而设置页上什么都看不出来。
+    # 这与 `enable_agentsec_scenarios` / `enable_ir_scenarios` 是同一条纪律。
+    #
+    # ## 为什么默认关
+    #
+    # 关的时候两条路径的行为**一个字都不变**，所以默认关不会让任何人
+    # 意外发现自己的 agent 变凶了。想用的人自己去打开。
+    #
+    # ⚠️ 它只扩大**手法覆盖面**，不放松任何判定纪律：
+    # `prompts/ctf2_system.md` 里「不越界访问」「禁止口令爆破与压力测试」
+    # 那几条照旧成立，手法块自己的开头也复述了一遍。
+    enable_offensive_prompt: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
     )
@@ -600,6 +636,45 @@ class Ctf2Config(Base):
     # 行为开关不该由一个部署参数静默决定。没有第二个来源，
     # 就没有"来源"要标。
     enable_agentsec_scenarios: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    # ── 应急响应场景扩展包（v0.41）────────────────────────
+    #
+    # ## 它控制什么：一件事，且只有一件事
+    #
+    # 打开时，`Ctf2SolveNote.category` 才允许取 `ir-*` 那三个值
+    # （见 `vocab.IrCategory`），并且命中其中之一的任务会在 system
+    # prompt 末尾追加"复盘过去发生了什么"的场景块。
+    #
+    # 关着时，那三个值在校验层被**拒绝**，prompt 一个字节都不变。
+    #
+    # ## ★ 为什么与 `enable_agentsec_scenarios` 是两个开关，不是共用一个
+    #
+    # 两者的场景块讲的是**互相冲突**的行为准则，而且冲突方向不同：
+    #
+    #   · `agentsec-*`：目标是"判定一个安全考察点是否成立"——**对抗**，
+    #     行为是主动构造测试手法去攻；纪律的落点是"排除必须附反证"。
+    #   · `ir-*`：目标是"复盘一批证据能支撑什么结论"——**只读**，
+    #     行为是翻日志建时间线，纪律的落点是"绝不执行处置动作"。
+    #
+    # 如果共用一个开关，打开任意一个都会让另一族的分类通过校验 ——
+    # 而它们对应的 prompt 块却不会注入（因为分类不匹配）。结果是
+    # "分类合法、纪律没注入"：一道 IR 任务按攻击模式跑，去"拿 flag"。
+    # 那是静默失效，正是本次要消除的那一类。
+    #
+    # ## 为什么默认关闭
+    #
+    # 与 `enable_agentsec_scenarios` 同一条理由，且这里更强：IR 场景块
+    # 里有"**只读**、绝不写目标、处置只出建议不执行"这类硬约束。
+    # 默认打开意味着任何一次普通比赛里模型都可能读到"你是只读的"——
+    # 而它当时确实该去攻破系统。两套互相冲突的行为准则不能同时进上下文。
+    #
+    # ## 为什么不放环境变量
+    #
+    # 与 `enable_agentsec_scenarios` 同一条：行为开关不该由一个部署
+    # 参数静默决定。没有第二个来源，就没有"来源"要标。
+    enable_ir_scenarios: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
 

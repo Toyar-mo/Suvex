@@ -129,11 +129,12 @@ export const SUBMIT_MODE_HINT: Record<Ctf2SubmitMode, string> = {
 }
 
 /** 沙箱镜像 */
-export type Ctf2SandboxProfile = 'ctf2-sandbox' | 'ctf2-sandbox-re'
+export type Ctf2SandboxProfile = 'ctf2-sandbox' | 'ctf2-sandbox-re' | 'ctf2-sandbox-ir'
 
 export const SANDBOX_PROFILE_LABEL: Record<Ctf2SandboxProfile, string> = {
   'ctf2-sandbox': '通用（web / crypto / misc / 取证）',
   'ctf2-sandbox-re': '逆向专用',
+  'ctf2-sandbox-ir': '应急响应专用',
 }
 
 export const SANDBOX_PROFILE_HINT: Record<Ctf2SandboxProfile, string> = {
@@ -143,6 +144,12 @@ export const SANDBOX_PROFILE_HINT: Record<Ctf2SandboxProfile, string> = {
   'ctf2-sandbox-re':
     '在通用镜像之上加逆向工具（radare2 / gdb / angr）。' +
     '逆向是唯一一类会主动执行题目给的代码的题型，所以单独收窄。',
+  // ★ 同理：IR 单独一个镜像的理由不是"工具更多"，而是**方向相反** ——
+  //   它要能读时间线（`mactime` / `log2timeline` 那一路），
+  //   但**不该装攻击工具**：复盘题里给 agent 一把刀，它就会去砍。
+  'ctf2-sandbox-ir':
+    '在通用镜像之上加时间线重建工具（mactime / log2timeline），' +
+    '但不含攻击工具 —— 复盘要读过去发生了什么，不是再打一遍。',
 }
 
 /**
@@ -403,6 +410,32 @@ export interface Ctf2Settings {
    * 换模要花谁的钱、换成谁，必须由人指定。
    */
   fallbackProviderId: string | null
+  /**
+   * 智能体安全评测场景包（v0.40）。**默认关闭。**
+   *
+   * ★ 它换的不是"题型数量"，是 agent 的**行为纪律**：分类属于
+   * `agentsec-*` 那四类的题，多拿到一段「判定某个安全考察点是否成立」
+   * 的提示词，结论按 `confirmed` / `needs_follow_up` / `ruled_out` 三级给。
+   * 其余五类题拿到的提示词**逐字节不变**（后端 `build_system_prompt`
+   * 在开关关闭时连那个 `.md` 文件都不读）。
+   *
+   * ⚠️ 那四类题**没有 flag**。开着它去跑普通题，模型的取舍会与题目要求
+   * 无关 —— 它在判定"有没有问题"，而题目要的是答案。
+   */
+  enableAgentsecScenarios: boolean
+  /**
+   * 应急响应场景包（v0.41）。**默认关闭。**
+   *
+   * 打开后分类属于 `ir-root-cause` / `ir-timeline` / `ir-scope` 这三类的题，
+   * 会额外拿到一段「复盘过去发生了什么」的场景块：它的产出是时间线、
+   * 根因链、影响范围，按 `confirmed` / `needs_follow_up` / `ruled_out`
+   * 三级给结论 —— 与上面那个开关**共用同一套分级**。
+   *
+   * ⚠️ 与 `enableAgentsecScenarios` **是两个独立开关，不是一个**。
+   * 共用一个的话，`agentsec-*` 那族题会在 IR 开关打开时通过校验，
+   * 而对应的提示词块却不注入 —— 分类合法、纪律没注入，静默失效。
+   */
+  enableIrScenarios: boolean
   updatedAt: string
 }
 
@@ -623,6 +656,59 @@ export async function loadCtf2Writeup(challengeId: string): Promise<Ctf2Writeup>
 }
 
 /**
+ * 一份处置建议工单（`GET /ctf2/challenges/{id}/workorder`，v0.41）。
+ *
+ * ## 它与题解是**两份**产物，不是一节
+ *
+ * 题解是叙事文档（人会通读）；工单是**待办清单**（人要逐条批）。
+ * 工单会被复制进工单系统、打印出来批、当附件发出去 —— 所以它
+ * 能单独下载，而不是让人从一篇 markdown 里手工摘。
+ *
+ * ## ⚠️ `markdown` 里没有任何"已执行"的动作
+ *
+ * 这是后端的硬约束不是文案选择：系统**没有**执行通道，工单只到
+ * 「建议」为止。文件头第一句就是否定句（`workorder.render_workorders`）。
+ * 所以前端**不要**额外加"已应用 / 已同步"之类的措辞 —— 那会把
+ * 一份建议清单变成执行记录，而系统根本没有那个能力。
+ *
+ * ## 只有应急响应任务有工单
+ *
+ * 普通 CTF 题的提示词没让模型写 `workorders`，所以后端对它们返回
+ * `409`。**这不是失败**，是这类任务不产出工单 —— 界面要把
+ * 这种情况和"真的出错了"分开（与题解那三种 409 同理，
+ * 靠后端那句中文原样显示来区分）。
+ */
+export interface Ctf2WorkOrder {
+  challengeId: string
+  title: string
+  /** 工单全文（markdown）。四段齐全的在前、缺段的标注缺什么 */
+  markdown: string
+  /** 下载用的文件名（`IR-WorkOrders-{安全化的题目名}.md`） */
+  filename: string
+  /**
+   * 工单条数。
+   *
+   * ★ `0` 是**正常结果**（本次复盘没有需要处置的事项，后端会产出
+   * 一份带解释的说明），与"取不到工单"（409）是两件事。
+   * 判据是数 `### ` 标题而不是 `## ` —— 后者会把空结果说明也算进去。
+   */
+  count: number
+}
+
+/**
+ * 读一道题的处置建议工单。
+ *
+ * ⚠️ 与 `loadCtf2Writeup` 同一条纪律：**失败不在这里兜底**，
+ * `ApiError` 原样抛给调用方 —— 后端那句中文说明了"这不是应急响应任务"
+ * 还是"还没跑完"，两者的下一步动作完全不同。
+ */
+export async function loadCtf2WorkOrder(challengeId: string): Promise<Ctf2WorkOrder> {
+  return api.get<Ctf2WorkOrder>(
+    `/ctf2/challenges/${encodeURIComponent(challengeId)}/workorder`,
+  )
+}
+
+/**
  * 读 token 统计。
  *
  * `filter` 里没给的维度就**真的不传**（`buildUrl` 会丢掉 null）——
@@ -699,6 +785,38 @@ export async function loadCtf2ChallengeUsage(challengeId: string): Promise<Ctf2U
  */
 export function canHaveWriteup(challenge: Ctf2Challenge): boolean {
   return Boolean(challenge.scanId)
+}
+
+/**
+ * 这道题的卡片上要不要露「处置工单」入口（v0.41）。
+ *
+ * ## ★ 判据是**分类**，不是 `scanId` —— 与 `canHaveWriteup` 刚好相反
+ *
+ * 题解对**每道解过的题**都有（任何分类都可能产出）；工单只有
+ * **应急响应任务**才有 —— 普通 CTF 题的提示词里根本没让模型写
+ * `workorders`，后端返回 409。
+ *
+ * 所以：
+ * - `canHaveWriteup` 判 `scanId`（跑过就有）；
+ * - 本函数判 `category` 前缀（是不是 `ir-*`）。
+ *
+ * 拿 `scanId` 来判工单会怎样：每一道跑过的 pwn 题都露出一个点开
+ * 就报错的按钮。那正是「入口本身就是一句承诺」被违反的样子。
+ *
+ * ## 为什么不写成"分类属于某个白名单"
+ *
+ * 前缀判定与后端 `notes.is_ir_category` **逐字对应**。写成三条硬编码
+ * （`ir-root-cause` / `ir-timeline` / `ir-scope`）会让两处各维护一份
+ * 清单，而新增第四个 `ir-*` 分类时必然漏改前端这一份 —— 症状是
+ * "后端能跑、界面上没入口"，且没有任何报错。
+ *
+ * ⚠️ 大小写与前缀空白：后端 `is_ir_category` 做了 `strip()`，
+ * 这里也要 `trim()`。平台的分类名理论上不会带空白，但"理论上"不是
+ * 一个能写进代码的依据 —— 两侧归一化规则不一致时，错的那一侧
+ * 永远不会有报错。
+ */
+export function canHaveWorkOrder(challenge: Ctf2Challenge): boolean {
+  return (challenge.category || '').trim().toLowerCase().startsWith('ir-')
 }
 
 // ─────────────────────────────────────────────
@@ -913,6 +1031,20 @@ export async function saveCtf2Settings(next: {
   autoStartNew: boolean
   maxTurns: number
   fallbackProviderId: string | null
+  /**
+   * 智能体安全评测开关（v0.40）。
+   *
+   * ★ **必填，不给默认值** —— 与设置页其他字段同一条纪律。这里不是
+   * "可选的额外参数"，而是"这次保存要写进去的那个值"。给默认 `false`
+   * 会让"调用方忘了传"变成"静默关掉一个用户已经打开的开关"。
+   *
+   * ⚠️ `PUT /ctf2/settings` 是**全量提交**：后端逐字段赋值，没传的
+   * 字段按后端形参默认值落库。所以这个字段一旦漏传，开关会被静默关掉，
+   * 而界面上看不出发生过这件事 —— 那正是它这么写的原因。
+   */
+  enableAgentsecScenarios: boolean
+  /** 应急响应场景包开关（v0.41）。必填，同上 —— 漏传会被静默关掉。 */
+  enableIrScenarios: boolean
 }): Promise<Ctf2Settings> {
   const saved = await api.put<Ctf2Settings>('/ctf2/settings', next)
   settings = saved

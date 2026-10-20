@@ -79,17 +79,24 @@ from sqlalchemy.orm import Session
 from app.core.config import PROJECT_ROOT, get_settings
 from app.core.db import session_scope
 from app.core.ids import new_id
+from app.core.prompts import load_offensive_playbook
 from app.core.text import strip_nul
 from app.core.timeutil import now_utc
 from app.core.vocab import (
     DEFAULT_CTF2_MAX_TURNS,
     DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS,
+    IR_CATEGORY_PREFIX,
     Ctf2ChallengeStatus,
     Ctf2SandboxProfile,
     Ctf2SubmissionStatus,
     Ctf2SubmitMode,
 )
 from app.ctf2 import events as ctf2_events
+
+# ★ v0.41：攻防知识互查。顶层 import 是安全的 —— 那个模块顶层只依赖
+# 标准库，`findings` 的 import 发生在**函数内**（见 `recall_for_asset`），
+# 所以不会与本文件撞环。
+from app.ctf2.history import recall_for_challenge
 from app.ctf2.client import (
     CTF2_ERROR_ALREADY_SOLVED,
     Ctf2EnvironmentTimeout,
@@ -128,6 +135,14 @@ logger = logging.getLogger("suvex.ctf2")
 #   默认值就是枚举值，所以不设这两个变量时行为与以前**逐字节一致**。
 IMAGE_BASE = os.environ.get("CTF2_IMAGE_BASE") or Ctf2SandboxProfile.BASE.value
 IMAGE_REVERSE = os.environ.get("CTF2_IMAGE_REVERSE") or Ctf2SandboxProfile.REVERSE.value
+# ★ v0.41：应急响应镜像。与上面两个**完全同构**，包括"不设变量时
+# 行为逐字节一致"这条 —— 默认值就是枚举值。
+#
+# ⚠️ 本机没有 docker，这个镜像从未被构建过。所以它在这里的存在只为
+#    一件事：让 `profile_for_category` 有东西可返回、让镜像名可注入。
+#    "镜像里到底有没有那些命令"由 `scripts/verify_sandbox_tools.py`
+#    的能力契约回答（静态），**不是**由这一行回答。
+IMAGE_IR = os.environ.get("CTF2_IMAGE_IR") or Ctf2SandboxProfile.IR.value
 
 # CTF2 解题沙箱容器名的前缀。
 #
@@ -456,14 +471,28 @@ def profile_for_category(category: str | None) -> str:
     而症状不是报错，是"取证题也能跑"（因为 re 镜像是 base 的超集），
     于是**没人会发现**，直到某天有人为了缩小镜像把 re 里的东西删了。
 
+    ## ★ v0.41 起有三个镜像，判定顺序本身有意义
+
+    `ir-*` 判在 `_REVERSE_CATEGORIES` **之前**：两者今天没有交集，
+    但 `ir-*` 是**我们自己定义**的、名字可控的集合；而
+    `_REVERSE_CATEGORIES` 里混着平台可能传过来的别名（`rev` / `re` /
+    `逆向`）。先判我们自己那批，意味着"将来平台恰好传了个含 `re`
+    的别名"时，不会把一道 IR 题推进逆向镜像 —— 那正是上面那段
+    警告的同一种事故。
+
     ## 认不出来时返回 base
 
-    这是安全的方向：base 是超集里较小的那个，而**两个镜像都能跑
-    非逆向题**（re 只是多了工具）。所以"猜错成 base"的代价是
-    "某个逆向工具不在"，而那是**可见的失败**（命令 not found），
-    比"猜错成 re"带来的一堆无用攻击面要好。
+    这是安全的方向：base 是超集里较小的那个，而**三个镜像都能跑
+    非专属题**（re / ir 只是多了工具）。所以"猜错成 base"的代价是
+    "某个专属工具不在"，而那是**可见的失败**（命令 not found），
+    比"猜错成 re/ir"带来的一堆无用攻击面要好。
     """
     normalized = (category or "").strip().lower()
+    # ★ 用前缀判，不用"在 IR_CATEGORIES 里"判：与 agentsec-* 同一条
+    # 纪律（见 `vocab.IR_CATEGORY_PREFIX` 的说明）—— 前缀让"这批分类"
+    # 成为一个可判定的集合，而不是一张要跟着改的名单。
+    if normalized.startswith(IR_CATEGORY_PREFIX):
+        return Ctf2SandboxProfile.IR.value
     if normalized in _REVERSE_CATEGORIES:
         return Ctf2SandboxProfile.REVERSE.value
     return Ctf2SandboxProfile.BASE.value
@@ -479,6 +508,8 @@ def image_for_profile(profile: str) -> str:
     """
     if profile == Ctf2SandboxProfile.REVERSE.value:
         return IMAGE_REVERSE
+    if profile == Ctf2SandboxProfile.IR.value:
+        return IMAGE_IR
     if profile != Ctf2SandboxProfile.BASE.value:
         logger.warning("未知的沙箱 profile %r，按 base 处理", profile)
     return IMAGE_BASE
@@ -1802,6 +1833,32 @@ PROMPT_PATH = PROJECT_ROOT / "prompts" / "ctf2_system.md"
 #: 所以注入方式是：原提示词**一个字不动**，块追加在**末尾**。
 PROMPT_AGENTSEC_PATH = PROJECT_ROOT / "prompts" / "ctf2_agentsec.md"
 
+#: 应急响应 / 根因复盘块（v0.41）。**只在开关打开且本题属于 `ir-*` 时追加。**
+#:
+#: 注入方式与 `PROMPT_AGENTSEC_PATH` **完全同构**（追加不替换、关着不读、
+#: 关闭时逐字节相同），理由见上面那段说明 —— 那三条不是 agentsec 专属的
+#: 取舍，是"往系统提示词里加东西"这件事本身的三条纪律。
+#:
+#: ## ★ 它和 agentsec 块可能**同时**出现在一道题里吗
+#:
+#: 不会。`is_agentsec_category` 与 `is_ir_category` 判的是两个互斥的
+#: 前缀（`agentsec-` / `ir-`），而 `category` 只有一个值。真出现了
+#: 两个前缀都匹配的取值，那意味着有人在分类名里拼了两段 ——
+#: 校验层（`validate_note_category`）会先拒掉，轮不到这里。
+PROMPT_IR_PATH = PROJECT_ROOT / "prompts" / "ctf2_ir.md"
+
+#: 越权与注入手法块（v0.42）。**解题与渗透扫描共用同一份**，
+#: 所以路径常量不在这里定义 —— 见 `app/core/prompts.py` 的说明
+#: （那份 docstring 记的正是"为什么这一个不做成两个模块各自的常量"）。
+#:
+#: ## 与上面三个块的区别：它**不按分类**判
+#:
+#: `ctf2_agentsec.md` / `ctf2_ir.md` 是"某一类题该按另一套纪律做"，
+#: 所以要先判分类。这一份是"同一件事做得更全"—— 打 Web 的手法是
+#: 打 Web 的手法，与这道题是 `web` 还是 `misc` 无关。所以它的门槛
+#: 只有开关本身，**外加一条排除**：`agentsec-*` 与 `ir-*` 那七类不吃它
+#: （见 `build_system_prompt` 里那段说明）。
+
 
 def load_system_prompt() -> str:
     """读 solver 的系统提示词。
@@ -1846,14 +1903,43 @@ def load_agentsec_prompt() -> str:
         ) from exc
 
 
-def build_system_prompt(category: str, *, agentsec_enabled: bool) -> str:
-    """拼出本题要用的 system prompt（v0.40）。
+def load_ir_prompt() -> str:
+    """读应急响应块（v0.41）。
+
+    ⚠️ 与 `load_system_prompt` 同一条纪律：**文件不在就抛错**。
+
+    这个文件只在开关打开且本题属于 `ir-*` 时才被读。所以"缺文件"
+    不会在普通比赛里暴露 —— 它会在**第一次真的跑应急响应任务**时暴露，
+    而那已经是最坏的时机：用户以为在做取证复盘，模型拿到的却是
+    "怎么攻破系统"的攻击纪律，于是它会去扫端口、去爆破，而证据
+    摆在那儿一条没看。
+
+    若不抛错而是回退成空串，失效完全无声（任务照跑、结论全错）。
+    """
+    try:
+        return PROMPT_IR_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise Ctf2Error(
+            f"读不到应急响应提示词 {PROMPT_IR_PATH}。"
+            "它必须随部署一起分发 —— 缺了它这类任务会按攻击模式跑，"
+            "而它们要的是「复盘过去发生了什么」。"
+        ) from exc
+
+
+def build_system_prompt(
+    category: str,
+    *,
+    agentsec_enabled: bool,
+    ir_enabled: bool = False,
+    offensive_enabled: bool = False,
+) -> str:
+    """拼出本题要用的 system prompt（v0.40 / v0.41 / v0.42）。
 
     ## 规则只有两条
 
-    1. 本题**不属于** `agentsec-*`，或开关**没开** → 返回原提示词，
-       一个字节都不改；
-    2. 否则 → 原提示词 + 空行 + 评测块，**追加在末尾**。
+    1. 本题**不属于**任何已启用场景包，或对应开关**没开** → 返回原
+       提示词，一个字节都不改；
+    2. 否则 → 原提示词 + 空行 + 场景块，**追加在末尾**。
 
     ## ★ 为什么是追加，不是替换
 
@@ -1868,35 +1954,79 @@ def build_system_prompt(category: str, *, agentsec_enabled: bool) -> str:
       · "关着 = 完全没有影响"要能在行为上成立，而不只是看上去成立。
         读取本身不改变输出，但"关着也去读"意味着有一天有人把读取挪到
         别的分支上就会静默改变行为 —— 不读，这个可能性就不存在。
+
+    ## ★ v0.41 / v0.42：为什么新开关都是**带默认值**的参数
+
+    不带默认值会让现有每一个调用点都必须改 —— 而它们的语义是
+    "我不关心那个场景包"，改成显式传 `False` 只是把同一个
+    事实抄一遍，抄漏一处就是静默失效。带默认值 `False` 之后，
+    **本函数在加参数之前的所有调用行为逐字节不变**。
+
+    ## ★★ v0.42：为什么手法块**不按分类**判，而是按分类**排除**
+
+    另外两个块是"某一类题该按另一套纪律做"，所以要先判分类
+    （`agentsec-*` / `ir-*`）。手法块不是那个意思：它说的是
+    "同一件事做得更全"——打 Web 的手法是打 Web 的手法，
+    与这道题叫 `web` 还是叫 `misc` 无关。所以它**对五个既有分类
+    一律生效**（这是它唯一有用的形态），只排除那两个场景包：
+
+      · `agentsec-*` —— 那四类题要的是"判定某个考察点是否成立"，
+        而手法块整篇在教"怎么把系统打穿"。两段放在一起是
+        **互相矛盾的两套指令**，模型会左右摇摆，而那正是
+        `_agentsec_enabled` 的 docstring 里记过的那类后果。
+      · `ir-*` —— 那三类题第一节就写"你的工作不是攻破系统""除 `/work`
+        外一律只读"。给一份越权手法矩阵进去，最坏的情况是它真的
+        照着打了一遍被复盘的那台机器。
+
+    ⚠️ 排除是**按前缀**而不是白名单：将来平台加新分类时，
+    它应当默认就享受到更全的手法，而不是因为没人记得同步而静默少一截。
     """
     base = load_system_prompt()
-    if not agentsec_enabled:
+    # ⚠️ 三个开关都关时**提前返回**，连 notes 都不 import —— 见上面
+    # 第二条理由。这也是"关闭时逐字节相同"这条验收标准的实现方式。
+    if not agentsec_enabled and not ir_enabled and not offensive_enabled:
         return base
     # 延迟 import：`notes` 在模块顶层 import 本模块（要 `FLAG_PATTERN`），
     # 顶层反向 import 会撞环。这与本文件其它地方是同一条纪律。
     from app.ctf2 import notes as notes_mod
 
-    if not notes_mod.is_agentsec_category(category):
+    is_scenario_task = notes_mod.is_agentsec_category(category) or notes_mod.is_ir_category(
+        category
+    )
+
+    blocks: list[str] = []
+    if agentsec_enabled and notes_mod.is_agentsec_category(category):
+        blocks.append(load_agentsec_prompt())
+    if ir_enabled and notes_mod.is_ir_category(category):
+        blocks.append(load_ir_prompt())
+    # ★ v0.42：手法块对五个既有分类一律生效，只排除两个场景包（见 docstring）。
+    if offensive_enabled and not is_scenario_task:
+        blocks.append(load_offensive_playbook())
+    if not blocks:
         return base
-    block = load_agentsec_prompt()
-    # 空行分隔：评测块自己以 `## ` 起头，紧贴上一行会让 Markdown 标题
+    # 空行分隔：块自己以 `## ` 起头，紧贴上一行会让 Markdown 标题
     # 并进上一个小节。原提示词**不做任何 strip** —— 它的结尾空白也是
     # 原样的一部分，"关闭时逐字节相同"这条验收标准要靠这个保证。
-    return f"{base}\n{block}"
+    return base + "".join(f"\n{block}" for block in blocks)
 
 
 def build_system_prompt_by_spec(spec: SolveSpec) -> str:
-    """按 `SolveSpec.agentsec` 拼 system prompt（v0.40，给解题循环用）。
+    """按 `SolveSpec` 上那三个预计算开关拼 system prompt（v0.40 / .41 / .42）。
 
     为什么单独一个函数而不是在调用点写 `build_system_prompt(spec.category,
-    agentsec_enabled=spec.agentsec)`：那样调用点就得同时知道"分类"和
-    "开关"两件事该从哪里取，而 `spec.agentsec` **已经把两者合成一个
-    布尔值了**（见 `SolveSpec.agentsec`）。在这里再拆回去，
+    agentsec_enabled=..., ir_enabled=..., offensive_enabled=...)`：那样调用点
+    就得同时知道"分类"和三个开关该从哪里取，而 `spec.agentsec` / `spec.ir` /
+    `spec.offensive` **已经把每个都合成一个布尔值了**。在这里再拆回去，
     等于把"合成"和"拆分"都留在代码里，将来改判据要改两处。
 
     参数化成 `SolveSpec` 之后，判据只有**一个**来源。
     """
-    return build_system_prompt(spec.category, agentsec_enabled=spec.agentsec)
+    return build_system_prompt(
+        spec.category,
+        agentsec_enabled=spec.agentsec,
+        ir_enabled=spec.ir,
+        offensive_enabled=spec.offensive,
+    )
 
 
 # ══════════════════════════════════════════════════════════
@@ -2273,6 +2403,35 @@ class SolveSpec:
     #:    "没有召回"（分类为空、库里没有同类题、或召回失败）。
     notes_count: int = 0
 
+    #: ★ v0.41：攻防知识互查的结果（**已渲染成段落**，由调用方传入）。
+    #:
+    #: 与 `notes_text` 的区别在于"知识的方向"：`notes_text` 是**本次任务
+    #: 同类题**的方法卡（横向，同题型别人怎么解），这一段是**同一个资产**
+    #: 的历史发现（纵向，这个资产被我们自己打过什么）。
+    #:
+    #: ## 为什么是已渲染的字符串而不是结构化的 list
+    #:
+    #: 渲染逻辑（`history.render_history_block`）里带着一段必须原样
+    #: 出现的"这不是结论"声明。把结构传进来再在这里渲染，等于把那段
+    #: 声明的摆放位置交给两个地方决定 —— 而它一旦被放到模型看不见的
+    #: 位置（比如段首而不是段尾），"历史不得自动判 confirmed"这条约束
+    #: 就退化成一句建议。
+    #:
+    #: ## ★ 空串与"查不到"是两种情况
+    #:
+    #: 查不到时 `history` 模块返回的**不是空串**，而是写着「本次没有历史
+    #: 记录可参考」的一段。空串只表示"这道题不是 IR 题、压根没查"。
+    #: 两者在模型眼里必须可区分 —— 见 `history` 模块 docstring 约束 2。
+    #:
+    #: ⚠️ 默认空串保证 v0.41 之前构造 `SolveSpec` 的地方行为逐字节不变。
+    history_text: str = ""
+
+    #: ★ v0.41：召回到几条历史发现（0 表示"查了但没命中"或"没查"）。
+    #:
+    #: 与 `notes_count` 同一条纪律：只靠 `history_text` 非空分不清
+    #: "一条都没查到"与"没查"，而这两者在遥测里是不同的分母。
+    history_count: int = 0
+
     #: 本题要不要追加智能体安全评测块（v0.40）。
     #:
     #: ⚠️ 它在 `build_spec` 里**一次算好**（那里有 session 能读配置），
@@ -2283,6 +2442,40 @@ class SolveSpec:
     #:   拆成两个字段会让"什么时候该追加"这条判断散到两个地方，
     #:   而那正是最容易出现"开关开了但没生效"的地方。
     agentsec: bool = False
+
+    #: 本题要不要追加应急响应块（v0.41）。
+    #:
+    #: 与 `agentsec` **完全同构**：在 `build_spec` 里一次算好（那里有
+    #: session 能读配置），算的是"开关开着 **且** 本题分类属于 `ir-*`"。
+    #:
+    #: ## 为什么是两个独立字段而不是一个 `scenario: str | None`
+    #:
+    #: 因为两者**可能同时关着也可能只有一个开着**，而"哪个场景包生效"
+    #: 不是互斥的运行时状态 —— 它是由分类名决定的。压成一个字段会让
+    #: `build_system_prompt` 里出现"先看 scenario 是不是 ir、不是的话
+    #: 再看 agentsec"，而那两个判断本来就已经各自在 `is_*_category`
+    #: 里了，等于抄第二遍。
+    #:
+    #: 默认 `False` 保证 v0.41 之前构造 `SolveSpec` 的地方行为不变。
+    ir: bool = False
+
+    #: 本题要不要追加越权与注入手法块（v0.42）。
+    #:
+    #: ## ★ 与上面两个**不同构**：它在 `build_spec` 里**只读开关，不判分类**
+    #:
+    #: 上面两个算的是"开关开着 **且** 分类属于那一族"—— 因为
+    #: `ctf2_agentsec.md` / `ctf2_ir.md` 只对特定分类成立。
+    #:
+    #: 而手法块对**五个既有分类一律生效**（它的内容与题目叫什么无关），
+    #: 只排除那两个场景包。那条排除判断需要 `category` 与两个开关三者
+    #: 一起看，放在 `build_system_prompt` 里做（那里三者都在手上），
+    #: 这里存的是**纯粹的"用户打开了这个开关吗"**。
+    #:
+    #: 所以这个字段的语义是"开关值"，不是"本题该不该注入"。听上去
+    #: 它与上面两个不一致，但把它也预计算成"该不该"会让
+    #: `build_system_prompt` 里那段排除逻辑**只能**读 spec，
+    #: 而它就再也无法被单独测试了（得先造一个能算出 exclusion 的 spec）。
+    offensive: bool = False
 
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
@@ -2419,6 +2612,26 @@ class SolveOutcome:
     summary: str = ""
     tried: list[str] = field(default_factory=list)
     ruled_out: list[str] = field(default_factory=list)
+
+    #: ★ v0.41：`FINAL.workorders` 的**原始值**（应急响应任务的处置建议）。
+    #:
+    #: ## 为什么存原始值而不是解析好的 `WorkOrder` 列表
+    #:
+    #: `runner` 是执行层，`workorder` 是展示层 —— 让执行层 import 展示层
+    #: 会把"解析容错"与"运行循环"绑在一起，而那正是本文件一直在避免的
+    #: 耦合（见 `_initial_prompt` 为什么是纯函数）。
+    #:
+    #: 所以这里原样带出去，解析发生在 `writeup.build_writeup` 里 ——
+    #: 那里本来就是"把 outcome 变成给人看的文档"的那一层。
+    #:
+    #: ## 为什么类型是 `object` 而不是 `list[dict]`
+    #:
+    #: 因为模型给什么都可能（字符串、对象、含 null 的数组）。
+    #: 声明成 `list[dict]` 会让读者以为它已经过了校验，而它没有 ——
+    #: 校验在 `workorder.parse_workorders` 里。
+    #:
+    #: ⚠️ 非 IR 任务它恒为 `None`（提示词里没让它们写这个字段）。
+    workorders: object | None = None
 
 
 def needs_raw_network(category: str | None) -> bool:
@@ -3090,6 +3303,21 @@ def _initial_prompt(spec: SolveSpec) -> str:
             "",
             f"（需要看内容就 `cat` / `file` 它们，都在 `{PERSIST_DIR}` 下。）",
         ]
+    # ★ v0.41：攻防知识互查 —— 这个资产在既往评估里留下过什么。
+    #
+    # ## 位置：在方法卡**之前**
+    #
+    # 理由：这一段讲的是**这个资产自己**（纵向），而方法卡讲的是**同类题
+    # 别人怎么解**（横向）。离题目更近的那个该排前面 —— 模型对越靠前的
+    # 参考材料权重越高，而"这台机器三个月前有过未授权访问"显然比
+    # "另一道题用过 gobuster"更该被先考虑。
+    #
+    # ⚠️ 内容不含攻击载荷（只取 title/severity/category/verification），
+    #    见 `history` 模块 docstring 的约束 3。
+    # ⚠️ 查不到时这里**不是空串**，是一段"没有历史记录"的说明 ——
+    #    见 `SolveSpec.history_text` 的说明。
+    if spec.history_text.strip():
+        lines.append(spec.history_text)
     # ★ v0.32：同类题的方法卡。
     #
     # ## 位置：在"现在开始"**之前**、"持久区"**之后**
@@ -3622,6 +3850,12 @@ async def solve_in_sandbox(
                     outcome.tried,
                     outcome.ruled_out,
                 ) = extract_final_analysis(final)
+                # ★ v0.41：处置建议（只有 IR 任务的提示词里让模型写这个字段）。
+                #
+                # ⚠️ 原样带走**不做校验** —— 见 `SolveOutcome.workorders`
+                #    的说明：校验发生在展示层。这里若也校验一遍，两处
+                #    容错策略迟早漂移，而症状是"界面上少了某条工单"。
+                outcome.workorders = final.get("workorders")
                 outcome.transcript = "\n\n".join(log)
                 if not outcome.candidates:
                     if rejected:
@@ -4603,6 +4837,49 @@ def build_spec(
     #    借返回值，而是独立算。
     agentsec_on = _agentsec_enabled(db, challenge)
 
+    # ★ v0.41：本题要不要追加应急响应块。与上面那条**完全同构**，
+    # 包括"两个条件同时成立"与"读配置失败返回 False"两条。
+    #
+    # ⚠️ 与 `agentsec_on` 分两次读配置，看起来是多余的查询。不合并的理由：
+    #    合并要么改 `_agentsec_enabled` 的返回类型（那会让它的语义从
+    #    "这道题要不要 agentsec 块"变成"这道题要哪几个块"，而调用点
+    #    只关心前者），要么在 build_spec 里手写一遍"读配置 + 判前缀"，
+    #    而那就有了第二份判据实现。两次查询的代价是一次主键命中，
+    #    判据分叉的代价是静默失效 —— 取前者。
+    ir_on = _ir_enabled(db, challenge)
+
+    # ★ v0.42：本题要不要追加越权与注入手法块。
+    #
+    # ⚠️ 与上面两个**不同**：这里只读开关，不判分类（见 `SolveSpec.offensive`）。"排除两个场景包"那条判断在
+    # `build_system_prompt` 里做，因为那里同时有 category 与两个场景开关。
+    #
+    # ⚠️ 复用上面已经读过的 `sandbox_row`，**不新增一次查询** —— 这一列
+    # 就在 `sandbox_config` 那张单例表上，而 `sandbox_row` 在函数稍早处
+    # 已经为主机配额读过一次了（见 `read_sandbox_config` 那段说明）。
+    # 没配置行时按 False 走：与"关着"同义，不替用户编一个他设过的值。
+    offensive_on = bool(sandbox_row.enable_offensive_prompt) if sandbox_row else False
+
+    # ★ v0.41：攻防知识互查。只在**本题确实是 IR 题且开关开着**时才查 ——
+    # 理由与 `_ir_enabled` 两条件同构：
+    #
+    #   · 不是 IR 题却注入"历史发现"，等于给一道 pwn 题塞一段"这台机器
+    #     有过未授权访问"，而它当时该做的是打二进制。多给的信息会变成
+    #     错误的方向引导，比不给更糟。
+    #   · 开关关着时不查，保证"关着 = 完全没有影响"在行为上成立
+    #     （一条 SQL 都不发）。
+    #
+    # ⚠️ 查库失败**不影响解题**（`history` 模块内部已吞掉异常并退回
+    #    "无历史记录"）。"因为查不到历史就不复盘"明显更糟。
+    if ir_on:
+        history_text, history_asset, history_count = recall_for_challenge(
+            db,
+            title=challenge.title or "",
+            description=challenge.description or "",
+            brief=resolved_brief or "",
+        )
+    else:
+        history_text, history_asset, history_count = "", "", 0
+
     return SolveSpec(
         challenge_id=challenge.id,
         title=challenge.title,
@@ -4643,8 +4920,19 @@ def build_spec(
         # ★ v0.45：同一棵树的果实 —— 张数走另一条路（spec → outcome →
         #   遥测表），片段走 prompt。见 `_recall_notes` 的说明。
         notes_count=notes_count,
+        # ★ v0.41：攻防知识互查的结果（见 `history_text` 的说明）。
+        #   段落进 prompt（与 `notes_text` 同一条路），条数与资产标识只
+        #   用于日志与遥测 —— 资产标识不进 prompt 是因为它已经写在
+        #   段落里了，再放一份没有信息量。
+        history_text=history_text,
+        history_count=history_count,
         # ★ v0.40：是否追加智能体安全评测块（见 `SolveSpec.agentsec`）。
         agentsec=agentsec_on,
+        # ★ v0.41：是否追加应急响应块（见 `SolveSpec.ir`）。
+        ir=ir_on,
+        # ★ v0.42：手法块开关值（见 `SolveSpec.offensive` —— 它存的是
+        #   开关本身，"该不该注入"要等 `build_system_prompt` 排掉场景包才定）。
+        offensive=offensive_on,
         # 沙箱配额（见上面那段说明：这四个参数原来漏了，容器一直没有上限）
         cpus=sandbox_cpus,
         memory_mb=sandbox_memory_mb,
@@ -4728,6 +5016,41 @@ def _agentsec_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
         return bool(effective_ctf2_settings(db).enable_agentsec_scenarios)
     except Exception:  # noqa: BLE001 - 读配置失败不该拦住解题
         logger.warning("读 CTF2 配置失败，本次不追加智能体安全评测块", exc_info=True)
+        return False
+
+
+def _ir_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
+    """这道题要不要追加应急响应块（v0.41）。
+
+    两个条件**同时**成立才返回 True：
+
+    1. CTF2 配置里 `enable_ir_scenarios` 打开了；
+    2. 本题分类属于 `ir-*` 那三类。
+
+    ## 为什么第二个条件不是"开关开着就注入"
+
+    与 `_agentsec_enabled` 完全同一条理由，但后果更重一点：应急响应块
+    第一节写的是"你的工作不是攻破系统""除 `/work` 外一律只读"。
+    把这段注入到一道 `pwn` 题里，模型会拒绝执行任何攻击工具 ——
+    那不是"多给一段提示"，是把这道题直接废掉，而且失败的样子是
+    "模型不肯干活"，不是报错。
+
+    ## 为什么读配置失败时**返回 False**
+
+    失败时返回 False 是安全方向：不注入 = 行为与引入这个功能之前
+    完全一致。返回 True 则意味着"配置读不到，于是我按最激进的那条
+    假设走"，而那会给普通题注入"你是只读的"这条错误纪律。
+    """
+    from app.ctf2 import notes as notes_mod
+
+    if not notes_mod.is_ir_category(challenge.category or ""):
+        return False
+    try:
+        from app.ctf2.service import effective_ctf2_settings
+
+        return bool(effective_ctf2_settings(db).enable_ir_scenarios)
+    except Exception:  # noqa: BLE001 - 读配置失败不该拦住解题
+        logger.warning("读 CTF2 配置失败，本次不追加应急响应块", exc_info=True)
         return False
 
 
@@ -5855,6 +6178,7 @@ __all__ = [
     "FlagFormatError",
     "IMAGE_BASE",
     "IMAGE_REVERSE",
+    "IMAGE_IR",
     "SANDBOX_NAME_PREFIX",
     "sweep_orphan_sandboxes",
     "ensure_ctf2_network",
@@ -5881,6 +6205,8 @@ __all__ = [
     "extract_final_analysis",
     "load_system_prompt",
     "load_agentsec_prompt",
+    "load_ir_prompt",
+    "load_offensive_playbook",
     "build_system_prompt",
     "build_system_prompt_by_spec",
     "PROMPT_AGENTSEC_PATH",

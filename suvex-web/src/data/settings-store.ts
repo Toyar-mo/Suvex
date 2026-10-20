@@ -149,6 +149,9 @@ let sandbox: SandboxConfig = {
     scanMaxTurns: 'default',
     scanMode: 'default',
   },
+  // ⚠️ 占位值取 `false`：它是**唯一安全的初值** —— 加载完成前
+  //   界面不该显示"更强的手法已打开"。加载后被真实值覆盖。
+  enableOffensivePrompt: false,
 }
 
 let notices: { rule: NoticeRule; channels: NotifyChannel[] } = {
@@ -734,6 +737,10 @@ export async function saveSandbox(next: SandboxConfig): Promise<SaveResult> {
       maxConcurrentScans: next.maxConcurrentScans,
       scanMaxTurns: next.scanMaxTurns,
       scanMode: next.scanMode,
+      // ★ v0.42：手法块开关。它**必须**在这里 —— `SandboxIn` 是全必填的，
+      //   而漏传的后果不是 422（后端会拦），是**用户在设置页改任何别的项
+      //   都会把这个开关关掉**（前端拿不到它，payload 里就没有）。
+      enableOffensivePrompt: next.enableOffensivePrompt,
     })
     // ★ 用**服务端回传的**对象整体替换，而不是把本地 draft 存下来：
     //   服务端可能做了归一（例如把并发夹到区间内），

@@ -95,6 +95,7 @@ from pathlib import Path
 from typing import Protocol
 
 from app.core.config import get_settings
+from app.core.prompts import load_offensive_playbook
 from app.core.vocab import SkillId
 
 logger = logging.getLogger("suvex.scans")
@@ -882,6 +883,25 @@ class LaunchSpec:
     #   对一次跑了十几分钟才倒下的扫描，这比从头再来省得多。
     resume_run_id: str | None = None
 
+    # ── 越权与注入手法块（v0.42）──────────────────────────
+    #
+    # 打开时 `_instruction()` 会在末尾追加 `prompts/offensive_playbook.md`
+    # 那一块手法矩阵。关着时**连那个文件都不读** —— 指令字符串与
+    # 引入该开关之前逐字节相同。
+    #
+    # ⚠️ 那个文件不叫 `ctf2_*.md`，尽管它最早是给 CTF2 写的：现在
+    #   解题与扫描**共用同一份**，路径常量在 `app/core/prompts.py`。
+    #
+    # ★ 为什么由 spec 携带而不是在 `_instruction()` 里直接读配置：
+    #   `_instruction()` 是 `@staticmethod`，拿不到数据库会话。硬塞一个
+    #   进去会让"拼指令"这个动作依赖数据库 —— 与 `scan_mode` /
+    #   `scan_max_turns` 由 spec 携带是同一条理由（见上面那段的说明）。
+    #
+    # ★ 为什么默认 `False`：这是**行为开关**。默认开会让所有既有部署在
+    #   升级后立刻拿到一套更激进的手法，而设置页上在此之前根本没有
+    #   这个选项 —— 那等于替用户做了一个他没做过的决定。
+    enable_offensive_prompt: bool = False
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据，也不含 `brief`**。
 
@@ -1308,6 +1328,24 @@ class StrixRunner:
         # 而不是当必须遵守的纠正。
         if spec.target_kind == "service":
             parts.append(TCP_TARGET_CLAUSE)
+
+        # ★ 越权与注入手法矩阵（v0.42）。
+        #
+        # ## 为什么放在这里（而不是跟着 `EXPLORATION_PROTOCOL`）
+        #
+        # 协议那一段讲的是**过程**：什么时候继续深挖、什么时候承认线索死了。
+        # 这一段讲的是**具体手法**：手上有回显就先打什么、过滤器在挡的时候
+        # 怎么换形。它是"怎么走"的下一层，所以排在协议的后面。
+        #
+        # 而它又排在"要求中文输出"**之前** —— 那句话是对**输出形式**的要求，
+        # 应当是全篇最后一句话（离生成最近），不该被一大段 payload 隔开。
+        #
+        # ## 为什么关着时连文件都不读
+        #
+        # 与 `ctf2` 侧同一条纪律：关着的部署里那个文件可能根本不存在，
+        # 而"关着 = 完全没有影响"要能在行为上成立，不只是看上去成立。
+        if spec.enable_offensive_prompt:
+            parts.append(load_offensive_playbook())
 
         # ★ 要求中文输出（任务 11）。
         #

@@ -65,6 +65,15 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/ctf2/challenges/{challengeId}/writeup"),
         ("GET", "/api/v1/ctf2/challenges/{challengeId}/usage"),
         ("GET", "/api/v1/ctf2/usage"),
+        # ── 处置建议工单（v0.41）──────────────────────────
+        #
+        # 与题解同一级别、同一理由：它是解题收尾时落盘的 markdown，
+        # **纯读本地文件**，不打平台、不含凭据。
+        #
+        # ⚠️ 它比题解**更不敏感**：工单是"要去做什么"的清单，
+        #    不含 flag、不含攻击载荷原文（`workorder.py` 只收四个
+        #    文本字段，`detail_evidence`/`poc_code` 一概不碰）。
+        ("GET", "/api/v1/ctf2/challenges/{challengeId}/workorder"),
     }
 )
 

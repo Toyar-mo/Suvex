@@ -60,6 +60,7 @@ from app.core.db import get_db
 from app.core.errors import ApiError, ErrorCode
 from app.core.vocab import AuditAction
 from app.ctf2 import platforms, service
+from app.ctf2 import workorder as workorder_mod
 from app.ctf2 import writeup as writeup_mod
 from app.ctf2.models import Ctf2Challenge, Ctf2Competition, Ctf2Environment
 from app.ctf2.schemas import (
@@ -92,6 +93,7 @@ from app.ctf2.schemas import (
     Ctf2UsageByChallengeOut,
     Ctf2UsageByModelOut,
     Ctf2UsageEntryOut,
+    Ctf2WorkOrderOut,
     Ctf2WriteupOut,
 )
 
@@ -311,6 +313,7 @@ def _settings_out(row) -> Ctf2SettingsOut:  # noqa: ANN001
         maxTurns=row.max_turns,
         fallbackProviderId=row.fallback_provider_id,
         enableAgentsecScenarios=row.enable_agentsec_scenarios,
+        enableIrScenarios=row.enable_ir_scenarios,
         updatedAt=row.updated_at,
     )
 
@@ -349,6 +352,7 @@ def update_ctf2_settings(
         max_turns=payload.maxTurns,
         fallback_provider_id=payload.fallbackProviderId,
         enable_agentsec_scenarios=payload.enableAgentsecScenarios,
+        enable_ir_scenarios=payload.enableIrScenarios,
     )
     audit.record(
         db,
@@ -379,6 +383,12 @@ def update_ctf2_settings(
             #   标疑似）。事后复盘"当时模型为什么不去拿 flag"时，
             #   这一项是唯一能回答的线索。
             "enableAgentsecScenarios": row.enable_agentsec_scenarios,
+            # ★ v0.41：应急响应场景包开关。理由同上且更强：
+            #   打开它会把 agent 的行为纪律换成「**只读**复盘、处置只出
+            #   建议不执行」。事后复盘"当时模型为什么不去改目标"时，
+            #   这一项是唯一能回答的线索 —— 它与 agentsec 是两个独立问题，
+            #   所以分开记，不合并成"场景包状态"一项。
+            "enableIrScenarios": row.enable_ir_scenarios,
         },
     )
     return _settings_out(row)
@@ -881,6 +891,60 @@ def read_writeup(challengeId: str, _identity: ReadDep, db: DbDep) -> Ctf2Writeup
         elapsedSec=row.elapsed_sec,
         generatedAt=row.generated_at,
         updatedAt=row.updated_at,
+    )
+
+
+@router.get(
+    "/challenges/{challengeId}/workorder",
+    response_model=Ctf2WorkOrderOut,
+    summary="处置建议工单（应急响应复盘产物，v0.41）",
+)
+def read_workorder(
+    challengeId: str, _identity: ReadDep, db: DbDep
+) -> Ctf2WorkOrderOut:
+    """读这道题的**处置建议工单**（会话 C 工单的产物）。
+
+    ## 这为什么是一个独立端点（而不是题解里的一节）
+
+    题解是叙事文档，工单是**待办清单**。工单会被复制进工单系统、
+    打印出来批、当附件发出去 —— 它得能**单独下载**。题解里只放索引
+    （第几条、什么级别、去哪找），正文不重复写（见 `writeup.build_writeup`
+    第六节）。
+
+    ## ★ 409 的判据是"有没有产出过工单"，与题解那三个成因**不同**
+
+    题解对每道解过的题都有；工单**只有应急响应任务**才有 ——
+    普通 CTF 题的提示词里没让模型写 `workorders`，所以它恒为空。
+    这不是失败，是这类任务根本不产出工单。
+
+    所以这里**不**复用 `WRITEUP_UNAVAILABLE`：它对应的补救动作是
+    "重解一次"，而一条 CTF 题重解一百次也不会有工单 —— 那会让用户
+    在一个永远做不到的动作上反复尝试。
+
+    ## ⚠️ 空工单是一份**文件**，不是 404
+
+    「本次复盘没有需要处置的事项」本身是个结论（见
+    `workorder.render_workorders` 的空列表分支），它会被渲染成一份
+    带说明的 markdown。只有**压根没产出过文件**才是 409。
+    """
+    challenge = service.get_challenge_or_404(db, challengeId)
+
+    markdown = workorder_mod.read_order_file(challenge.id)
+    if markdown is None:
+        raise ApiError(
+            409,
+            ErrorCode.WRITEUP_UNAVAILABLE,
+            "这道题还没有处置建议工单。工单是应急响应复盘任务的产物 —— "
+            "普通解题任务不产出工单。如果这是一道应急响应题，"
+            "等本次复盘跑完再看。",
+        )
+
+    return Ctf2WorkOrderOut(
+        challengeId=challenge.id,
+        title=challenge.title,
+        markdown=markdown,
+        filename=workorder_mod.filename_for_order(challenge.title),
+        count=workorder_mod.count_orders(markdown),
     )
 
 
