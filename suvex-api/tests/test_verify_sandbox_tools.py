@@ -56,12 +56,16 @@ def fake_probe(
     missing_cmds: Iterable[str] = (),
     uninstalled: Iterable[tuple[str, str]] = (),
     absent_images: Iterable[str] = (),
+    status: "vst.ProbeStatus | None" = None,
 ):
     """构造一个假的 `probe_image_full`。
 
     · `missing_cmds`  —— 这些命令报"镜像里没有"（其余全报有）；
     · `uninstalled`   —— 这些包报"没装"（其余全报装了）；
-    · `absent_images` —— 这些镜像报"拿不到证据"（返回 `None`）。
+    · `absent_images` —— 这些镜像报"拿不到证据"（返回 `ProbeStatus.NO_EVIDENCE`）；
+    · `status`        —— 给 `absent_images` 里的镜像指定**具体**的没证据原因
+      （`NO_DOCKER` / `IMAGE_MISSING` / `TIMEOUT` …）。不指定时用
+      `NO_EVIDENCE`，即"原因不明"那条兼容路径。
 
     默认「命令都在、包都装了」，即一个健康镜像 —— 这样每个测试只需要
     声明它关心的那一个变量，其余全是已知的好状态。
@@ -69,15 +73,18 @@ def fake_probe(
     missing = set(missing_cmds)
     not_installed = set(uninstalled)
     no_evidence = set(absent_images)
+    failure = status or vst.ProbeStatus.NO_EVIDENCE
     calls: list[str] = []
 
     def _probe(image, commands, packages):
         calls.append(image)
         if image in no_evidence:
-            return None
+            return vst.ProbeResult(status=failure, image=image)
         cmd_result = {cmd: (cmd not in missing) for cmd in commands}
         pkg_result = {(pkg, kind): ((pkg, kind) not in not_installed) for pkg, kind in packages}
-        return cmd_result, pkg_result
+        return vst.ProbeResult(
+            status=vst.ProbeStatus.OK, image=image, commands=cmd_result, packages=pkg_result
+        )
 
     _probe.calls = calls  # type: ignore[attr-defined]
     return _probe

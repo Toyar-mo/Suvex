@@ -81,6 +81,7 @@ import sys
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 
 # ══════════════════════════════════════════════════════════
@@ -862,11 +863,145 @@ def load_router() -> Router:
 #: 给到 60 秒是留给"磁盘很慢"与"本地正好没有这个 tag、要回退"的余量。
 PROBE_TIMEOUT_SEC = 60.0
 
-#: 第二道探测函数的形状：`(镜像名, 要问的命令, 要问的包) -> (命令结果, 包结果)`。
-#: 返回 `None` 一律表示**没证据**。`check(probe_fn=...)` 允许测试替换它。
+
+class ProbeStatus(StrEnum):
+    """第二道「为什么没拿到证据」的**枚举**，不再是笼统的 `None`。
+
+    ## 为什么 `None` 不够（这次补的）
+
+    原先 `probe_image_full` 没证据时统统一律 `return None`，而 `None` 其实
+    混了**五种**完全不同的情况：本机没装 docker / 镜像没构建 / 容器起不来 /
+    超时 / 容器跑完但没输出。
+
+    它们的共同点只有"没证据"，**下一步该做什么却完全相反**：
+
+      · 没 docker      → 换一台装了 Docker 的机器（本机改不了）
+      · 镜像没构建      → `docker build`（本机改得了）
+      · 超时 / 起不来   → 加超时或去看镜像本身（可能是它真坏了）
+
+    压成一句「这次没有证据」之后，读的人**没法从输出里知道下一步**，只能
+    回来翻代码 —— 而这正是这次要修的那类问题：一个专门用来抓"镜像没跟上"
+    的脚本，不该让人靠读它的源码才能判断自己该做什么。
+
+    ## 每个成员都带"下一步"
+
+    `hint` 给出可执行的下一步，`reason` 给出发生了什么。两者一起由
+    `ProbeResult.reason_line()` 渲染，输出本身就把"该做什么"说完。
+    """
+
+    #: 真的问到了 —— 唯一可以据此下结论的状态。
+    OK = "ok"
+    #: 这台机器上没有 `docker` 命令。
+    NO_DOCKER = "no_docker"
+    #: 有 docker，但本地没有 `<image>:latest`（还没构建 / tag 不是 latest）。
+    IMAGE_MISSING = "image_missing"
+    #: 镜像在，但容器起不来（退出非 0、entrypoint 不对、Dockerfile 坏了）。
+    START_FAILED = "start_failed"
+    #: 容器在超时内没跑完。
+    TIMEOUT = "timeout"
+    #: 容器跑完了，但一条命令结果都没有 —— 探针脚本大概没被执行。
+    NO_OUTPUT = "no_output"
+    #: 注入的探测函数只回了裸 `None`，原因不明（测试/旧调用方的兼容路径）。
+    NO_EVIDENCE = "no_evidence"
+
+    @property
+    def is_evidence(self) -> bool:
+        """这个状态算不算"拿到了证据"。
+
+        只有 `OK` 算。别的**一律不是通过** —— 把它们渲染成 ✅ 就是
+        重复本项目历史上那个 6 天漂移窗口的错误。
+        """
+        return self is ProbeStatus.OK
+
+    @property
+    def reason(self) -> str:
+        """发生了什么（一句话，不带修法）。"""
+        return _PROBE_REASON.get(self, "没有拿到证据")
+
+    @property
+    def hint(self) -> str:
+        """**下一步该做什么** —— 让输出自己把行动说清楚。"""
+        return _PROBE_HINT.get(self, "去看上面的告警")
+
+
+#: 每个没证据状态对应的一句话说明。与枚举分开写是为了让 `ProbeStatus`
+#: 保持成一个纯枚举（可比较、可序列化），文案集中在一处便于对齐。
+_PROBE_REASON: dict[ProbeStatus, str] = {
+    ProbeStatus.OK: "探测成功",
+    ProbeStatus.NO_DOCKER: "本机无 docker",
+    ProbeStatus.IMAGE_MISSING: "本地没有这个镜像（还没构建？）",
+    ProbeStatus.START_FAILED: "镜像在，但容器起不来",
+    ProbeStatus.TIMEOUT: "容器在超时内没跑完",
+    ProbeStatus.NO_OUTPUT: "容器跑完了但没有任何命令输出",
+    ProbeStatus.NO_EVIDENCE: "没拿到证据（原因未记录）",
+}
+
+#: 每个没证据状态对应的**下一步动作**。这一段是这次拆枚举的主要收益：
+#: 「该重建镜像」和「该换台机器」是两件完全不同的事，不该共用一句话。
+_PROBE_HINT: dict[ProbeStatus, str] = {
+    ProbeStatus.OK: "—",
+    ProbeStatus.NO_DOCKER: "换一台装了 Docker 的机器跑；本机只信第一道（文本层）",
+    ProbeStatus.IMAGE_MISSING: "先 docker build -f docker/<镜像>/Dockerfile -t <镜像>:latest .",
+    ProbeStatus.START_FAILED: "看上面的 stderr；镜像本身可能已经坏了",
+    ProbeStatus.TIMEOUT: "加大超时或先确认镜像没卡住",
+    ProbeStatus.NO_OUTPUT: "探针脚本大概没被执行；检查镜像的 ENTRYPOINT/权限",
+    ProbeStatus.NO_EVIDENCE: "这是注入路径，检查探测函数为什么没给结果",
+}
+
+
+@dataclass
+class ProbeResult:
+    """一次镜像实测的**全部**结果，含"为什么没拿到"。
+
+    取代原先的 `tuple | None`：`None` 丢失了原因，而原因决定下一步。
+    `status.is_evidence` 为真时 `commands` / `packages` 才有意义。
+    """
+
+    status: ProbeStatus
+    image: str = ""
+    #: 命令 → 镜像里在不在。仅 `status.is_evidence` 时有意义。
+    commands: dict[str, bool] = field(default_factory=dict)
+    #: (包名, "apt"|"pip") → 装没装。仅 `status.is_evidence` 时有意义。
+    packages: dict[tuple[str, str], bool] = field(default_factory=dict)
+    #: 附加细节（超时秒数、stderr 末行等），拼进输出用。
+    detail: str = ""
+
+    @property
+    def ok(self) -> bool:
+        """拿到证据了没有。**别名**，读起来比 `.status.is_evidence` 顺。"""
+        return self.status.is_evidence
+
+    def reason_line(self) -> str:
+        """渲染成一行：发生了什么 + 下一步做什么。"""
+        head = f"{self.image}：{self.status.reason}" if self.image else self.status.reason
+        if self.detail:
+            head = f"{head}（{self.detail}）"
+        return f"{head} → {self.status.hint}"
+
+
+def _as_probe_result(got: ProbeResult | tuple[dict[str, bool], dict[tuple[str, str], bool]] | None,
+                     image: str) -> ProbeResult:
+    """把注入函数可能返回的三种形状归一成 `ProbeResult`。
+
+    `check(probe_fn=...)` 是测试注入点，允许它返回：
+      · `ProbeResult` —— 新写法，带原因；
+      · `(命令结果, 包结果)` 元组 —— 旧写法，等价于"探测成功"；
+      · `None` —— 旧写法，等价于"没证据但说不出为什么"。
+    """
+    if isinstance(got, ProbeResult):
+        return got
+    if got is None:
+        return ProbeResult(status=ProbeStatus.NO_EVIDENCE, image=image)
+    cmd_result, pkg_result = got
+    return ProbeResult(status=ProbeStatus.OK, image=image, commands=cmd_result, packages=pkg_result)
+
+
+#: 第二道探测函数的形状：`(镜像名, 要问的命令, 要问的包) -> ProbeResult`。
+#: 也接受旧的 `tuple | None` 写法（`_as_probe_result` 会归一）。
+#: `check(probe_fn=...)` 允许测试替换它。
 ProbeFn = Callable[
     [str, Sequence[str], Sequence[tuple[str, str]]],
-    "tuple[dict[str, bool], dict[tuple[str, str], bool]] | None",
+    "ProbeResult | tuple[dict[str, bool], dict[tuple[str, str], bool]] | None",
 ]
 
 
@@ -875,7 +1010,7 @@ def probe_image(
     commands: Sequence[str],
     *,
     timeout: float = PROBE_TIMEOUT_SEC,
-) -> dict[str, bool] | None:
+) -> ProbeResult:
     """在**真实镜像**里对每个命令跑 `command -v`，返回「存在与否」。
 
     ## 为什么需要这一步（静态解析证明不了的事）
@@ -896,11 +1031,16 @@ def probe_image(
 
     ## 返回值的三态是刻意的
 
-      · `dict`  —— 镜像跑起来了，这是每个命令的真结果；
-      · `None`  —— **验不了**（本机没 docker / 镜像还没构建 / 超时）。
+      · `ProbeStatus.OK`  —— 镜像跑起来了，这是每个命令的真结果；
+      · 其它任何状态      —— **验不了**，且 `status.reason` / `status.hint`
+        会说明**是哪一种**验不了、下一步该做什么。
 
-    `None` 不许当成"全过"。它的语义是"这一维没有证据"，调用方要把它
+    第二种**不许**当成"全过"。它的语义是"这一维没有证据"，调用方要把它
     和"验过且通过"分开报 —— 否则又会回到"看起来在守、其实守不住"。
+
+    ⚠️ 这里刻意不用 `None`（改前用的是 `None`）：`None` 把"没装 docker"和
+    "镜像没建"压成同一个值，而这两件事的下一步完全相反（换机器 vs 重建
+    镜像）。用一个带原因的枚举，读输出的人就不用回来读代码。
 
     ## 为什么一次 `docker run` 跑完所有命令
 
@@ -917,16 +1057,17 @@ def probe_image(
     """
     docker = shutil.which("docker")
     if docker is None:
-        return None
+        return ProbeResult(status=ProbeStatus.NO_DOCKER, image=image)
 
     # 委托给 `probe_image_full`：只问命令、不问包。
     # ⚠️ 这里**不要**再抄一份 `docker run` 拼装逻辑 —— 两份实现一定
     # 会漂移，而漂移的样子是"同一个镜像，一个函数说 OK、另一个说 NO"。
     got = probe_image_full(image, commands, (), timeout=timeout)
-    if got is None:
-        return None
-    cmd_result, _ = got
-    return cmd_result
+    if not got.ok:
+        return got
+    return ProbeResult(
+        status=ProbeStatus.OK, image=image, commands=got.commands, packages=got.packages, detail=got.detail
+    )
 
 
 #: 在镜像里问「这些包装了没有」时用的探针。
@@ -964,7 +1105,7 @@ def probe_image_full(
     packages: Sequence[tuple[str, str]],
     *,
     timeout: float = PROBE_TIMEOUT_SEC,
-) -> tuple[dict[str, bool], dict[tuple[str, str], bool]] | None:
+) -> ProbeResult:
     """一次容器里同时问两个问题：命令在不在、包装没装。
 
     ## 为什么两问必须同一次 `docker run`
@@ -974,16 +1115,18 @@ def probe_image_full(
     分开问会得出"命令缺失 + 包已装"这种自相矛盾的组合，而它恰好
     会被归类成"名单写错"，指向一个错误的修法。
 
-    ## 返回 `(命令结果, 包结果)`
+    ## 返回 `ProbeResult`
 
-      · `None` —— 和 `probe_image` 一样是**没证据**，不许当"全过"。
+      · `status=OK`     —— 两问都拿到了，`commands` / `packages` 可用；
+      · 其它任何 status —— **没证据**，不许当"全过"；`status.hint` 说明
+        下一步该做什么（换机器 / 重建镜像 / 加超时）。
 
     包结果的键是 `(包名, "apt"|"pip")`，因为两个生态的"装没装"
     是两套独立事实。
     """
     docker = shutil.which("docker")
     if docker is None:
-        return None
+        return ProbeResult(status=ProbeStatus.NO_DOCKER, image=image)
 
     try:
         inspect = subprocess.run(  # noqa: S603  —— argv 本地构造
@@ -993,11 +1136,14 @@ def probe_image_full(
             timeout=15,
             check=False,
         )
-    except (subprocess.TimeoutExpired, OSError):
-        return None
+    except subprocess.TimeoutExpired:
+        return ProbeResult(
+            status=ProbeStatus.TIMEOUT, image=image, detail="docker image inspect 超过 15s"
+        )
+    except OSError as exc:
+        return ProbeResult(status=ProbeStatus.START_FAILED, image=image, detail=f"docker 调不起来：{exc}")
     if inspect.returncode != 0:
-        print(f"   ⚠️ 本地没有镜像 {image}:latest（还没构建？），这一维跳过。")
-        return None
+        return ProbeResult(status=ProbeStatus.IMAGE_MISSING, image=image)
 
     lines: list[str] = []
     probed_cmds: list[str] = []
@@ -1017,17 +1163,14 @@ def probe_image_full(
             argv, capture_output=True, text=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:
-        print(f"   ⚠️ 实测 {image} 超时（{timeout:.0f}s），这一维跳过。")
-        return None
+        return ProbeResult(status=ProbeStatus.TIMEOUT, image=image, detail=f"{timeout:.0f}s")
     except OSError as exc:
-        print(f"   ⚠️ 实测 {image} 起不来（{exc}），这一维跳过。")
-        return None
+        return ProbeResult(status=ProbeStatus.START_FAILED, image=image, detail=str(exc))
 
     if done.returncode != 0:
         tail = (done.stderr or done.stdout).strip().splitlines()
         hint = tail[-1] if tail else f"exit {done.returncode}"
-        print(f"   ⚠️ 镜像 {image}:latest 跑不起来（{hint}），这一维跳过。")
-        return None
+        return ProbeResult(status=ProbeStatus.START_FAILED, image=image, detail=hint)
 
     cmd_result: dict[str, bool] = {}
     installed_pkgs: set[str] = set()
@@ -1065,8 +1208,7 @@ def probe_image_full(
                 pip_names.add(_norm_pip(line.split("==", 1)[0]))
 
     if not cmd_result:
-        print(f"   ⚠️ 实测 {image} 没有任何命令输出，这一维跳过。")
-        return None
+        return ProbeResult(status=ProbeStatus.NO_OUTPUT, image=image)
 
     pkg_result: dict[tuple[str, str], bool] = {}
     for pkg, kind in packages:
@@ -1074,7 +1216,7 @@ def probe_image_full(
             pkg_result[(pkg, kind)] = pkg in installed_pkgs
         else:
             pkg_result[(pkg, kind)] = _norm_pip(pkg) in pip_names
-    return cmd_result, pkg_result
+    return ProbeResult(status=ProbeStatus.OK, image=image, commands=cmd_result, packages=pkg_result)
 
 
 @dataclass
@@ -1180,6 +1322,12 @@ class CheckOutcome(list):
         super().__init__(findings or [])
         #: 每个镜像的第二道结果。**只有真的探测过的镜像才会在这里**。
         self.drifts: dict[str, ImageDrift] = {}
+        #: 每个**没探成**的镜像及其原因（`ProbeStatus`）。键是镜像/profile 名。
+        #:
+        #: 与 `probe_not_run_reason`（一句话总结）并存：这句总结是给人读的，
+        #: 而这个字典是给程序按状态分支用的（"镜像没建"就值得非零退出码，
+        #: "本机没 docker"则不该怪这条流水线）。
+        self.probe_failures: dict[str, ProbeResult] = {}
         #: 是否请求了 `--probe`（不代表跑成功）。
         self.probe_attempted: bool = False
         #: 第二道没跑的原因（空串 = 跑了）。
@@ -1192,6 +1340,10 @@ class CheckOutcome(list):
         """第二道到底有没有拿到证据。"""
         return bool(self.drifts)
 
+    def probe_skipped_for(self, status: ProbeStatus) -> list[str]:
+        """因为某个具体原因没探成的镜像。按状态分支时用。"""
+        return sorted(name for name, r in self.probe_failures.items() if r.status is status)
+
     @property
     def drift_confirmed(self) -> list[ImageDrift]:
         """拿到证据、且**确实有问题**的那些镜像。"""
@@ -1203,7 +1355,11 @@ class CheckOutcome(list):
         return [d for d in self.drifts.values() if d.unknown]
 
 
-def print_second_screen(drifts: dict[str, ImageDrift], not_run_reason: str) -> None:
+def print_second_screen(
+    drifts: dict[str, ImageDrift],
+    not_run_reason: str,
+    failures: dict[str, ProbeResult] | None = None,
+) -> None:
     """打印第二道的独立报表面。
 
     ## 为什么必须是**独立的一面**，而不是往第一道表里加一列
@@ -1236,8 +1392,15 @@ def print_second_screen(drifts: dict[str, ImageDrift], not_run_reason: str) -> N
         #   `✅ … 声明与产物一致`。于是"没验"被读成了"验过了、没问题"。
         #   一个专门用来抓"镜像没跟上"的脚本，自己在没有 docker 的机器上
         #   谎报通过 —— 这是同一个错误的第二次发生。
-        reason = not_run_reason or "没有拿到任何镜像证据"
-        print(f"   ⚠️ 第二道未跑：{reason}。")
+        #
+        #   ★ 并**按原因分开报**： "本机无 docker"(换机器) 与 "镜像没建"
+        #     (去 build) 的下一步相反，压成一句就把下一步丢了。
+        if failures:
+            print("   ⚠️ 第二道未跑 —— 逐镜像原因和下一步：")
+            for image in sorted(failures):
+                print(f"     · {failures[image].reason_line()}")
+        else:
+            print(f"   ⚠️ 第二道未跑：{not_run_reason or '没有拿到任何镜像证据'}。")
         print("   ⚠️ 这不是「通过」，是「没验」—— 上面只有第一道（文本层）的结论，")
         print("      镜像里到底有没有这些命令，这次**没有任何证据**。\n")
         return
@@ -1322,6 +1485,29 @@ def _resolve_image(
     return merged, True
 
 
+def _summarize_probe_failures(failures: dict[str, ProbeResult]) -> str:
+    """把"哪些镜像因为什么没跑成"压成一句**带原因**的总结。
+
+    ## 为什么不是一句"三个镜像都没跑起来"
+
+    改前所有失败共用一句「本机无 docker / 镜像没跑起来」，读输出的人
+    无法区分这两种。而它们要做的**下一件事完全相反**：
+
+      · 本机没 docker → 这台机器上做什么都没用，得换机器；
+      · 镜像没建      → 就在这台机器上 `docker build` 即可。
+
+    所以这里按状态分组，状态名 + 下一步都写进同一句。
+    """
+    by_status: dict[ProbeStatus, list[str]] = {}
+    for image, result in failures.items():
+        by_status.setdefault(result.status, []).append(image)
+
+    parts: list[str] = []
+    for status, names in by_status.items():
+        parts.append(f"{status.reason}（{', '.join(sorted(names))}）→ {status.hint}")
+    return "；".join(parts)
+
+
 def check(
     verbose: bool = False,
     probe: bool = False,
@@ -1400,44 +1586,39 @@ def check(
     probes: dict[str, dict[str, bool]] = {}
     drifts: dict[str, ImageDrift] = {}
     no_probe_reason = ""
+    #: 每个镜像**为什么**没拿到证据。这一条是这次拆枚举的主要收益：
+    #: 输出里能直接读到"没装 docker"还是"镜像没建"，下一步动作随之不同。
+    probe_failures: dict[str, ProbeResult] = {}
     if probe:
-        docker_missing = shutil.which("docker") is None
         do_probe = probe_fn if probe_fn is not None else probe_image_full
         print("\n── 第二道：镜像实测（command -v + 包安装状态，需要 Docker）──\n")
         for profile, image in sorted(images.items()):
             commands = image.declared()
             packages = image.packages()
             started = time.monotonic()
-            got = do_probe(profile, commands, packages)
+            got = _as_probe_result(do_probe(profile, commands, packages), profile)
             elapsed = time.monotonic() - started
-            if got is None:
-                # ★ 这里必须**明说没跑**，不能说"通过"。
+            if not got.ok:
+                # ★ 这里必须**明说没跑、且说清是哪一种没跑**，不能说"通过"。
                 #   旧版本在这条路径上什么都不打印，而 `main()` 末尾
                 #   照样打 ✅ —— 于是"没验"被读成"验过了、没问题"。
                 #   那正是这个脚本要防的事，却发生在脚本自己身上。
+                probe_failures[profile] = got
+                print(f"   ⚠️ {got.reason_line()}")
                 continue
-            cmd_result, pkg_result = got
-            probes[profile] = cmd_result
-            hit = sum(1 for ok in cmd_result.values() if ok)
+            probes[profile] = got.commands
+            hit = sum(1 for ok in got.commands.values() if ok)
             print(
-                f"   {profile:<20} 命令 {hit}/{len(cmd_result)} 命中"
-                f"，包 {sum(1 for v in pkg_result.values() if v)}/{len(pkg_result)} 已装"
+                f"   {profile:<20} 命令 {hit}/{len(got.commands)} 命中"
+                f"，包 {sum(1 for v in got.packages.values() if v)}/{len(got.packages)} 已装"
                 f"（{elapsed:.1f}s）"
             )
-            drifts[profile] = classify_drift(profile, image, cmd_result, pkg_result)
+            drifts[profile] = classify_drift(profile, image, got.commands, got.packages)
 
-        if docker_missing:
-            no_probe_reason = "本机无 docker"
-            print(
-                "   ⚠️ 本机无 docker，第二道未跑 —— 下面的结论**只有第一道**"
-                "（文本层），镜像里到底有没有这些命令，这次没有证据。\n"
-            )
-        elif not drifts:
-            no_probe_reason = "三个镜像都没跑起来"
-            print(
-                "   ⚠️ 第二道未跑（镜像没构建 / 跑不起来，见上面的告警）—— "
-                "下面的结论**只有第一道**。\n"
-            )
+        # 汇总"没跑"的原因。**按状态分别说**，不再压成一句话 ——
+        # "本机无 docker"(换机器) 与 "镜像没建"(去 build) 的下一步相反。
+        if probe_failures:
+            no_probe_reason = _summarize_probe_failures(probe_failures)
 
     findings: list[Finding] = []
     print("\n── 能力契约 ──\n")
@@ -1492,12 +1673,13 @@ def check(
     #   但 `--probe` 发现真漂移时**必须影响退出码**，否则 CI 加不加它
     #   都一样绿，等于没接上。这一向由 `CheckOutcome` 携带。
     if probe:
-        print_second_screen(drifts, no_probe_reason)
+        print_second_screen(drifts, no_probe_reason, probe_failures)
 
     outcome = CheckOutcome(findings)
     outcome.drifts = drifts
     outcome.probe_attempted = probe
     outcome.probe_not_run_reason = no_probe_reason
+    outcome.probe_failures = probe_failures
     outcome.images = images
     return outcome
 
@@ -1589,10 +1771,18 @@ def main() -> int:
         # ⚠️ 这里的措辞刻意**不含**那句结论原文（"声明与产物"…"一致"）。
         #    含了的话，`grep` 这类检查会把"没有证据"的告警当成"通过"的
         #    凭据 —— 这正是这个脚本要防的误读，不能在告警里自己制造一次。
+        print("⚠️ 第二道未跑 —— 这不是「通过」，是「没验」。")
+        if findings.probe_failures:
+            # ★ 逐镜像给出「为什么没跑」+「下一步做什么」。
+            #   改前这里只有一句笼统的"本机无 docker / 镜像没跑起来"，
+            #   而"换一台机器"和"在这台机器上 build"是相反的行动。
+            for image in sorted(findings.probe_failures):
+                print(f"   · {findings.probe_failures[image].reason_line()}")
+        else:
+            print(f"   · {findings.probe_not_run_reason or '没拿到任何镜像证据'}")
         print(
-            f"⚠️ 第二道未跑：{findings.probe_not_run_reason or '没拿到任何镜像证据'}，"
-            "所以「文本层与产物层对得上」这个结论**这次没有证据**。\n"
-            "   上面的 ✅ 只覆盖第一道（文本层）。要真的验镜像请在有 Docker 的机器上跑。\n"
+            "   所以「文本层与产物层对得上」这个结论**这次没有证据**；"
+            "上面的 ✅ 只覆盖第一道（文本层）。\n"
         )
         return 0
 
