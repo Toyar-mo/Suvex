@@ -411,15 +411,24 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
         return EXIT_ERROR
 
     try:
-        outcome = asyncio.run(
-            _solve_with_stop(
-                solve_spec,
-                sandbox=sandbox,
-                gateway=gateway,
-                system_prompt=system_prompt,
-                stop_event=stop_event,
-                on_progress=on_progress,
-            )
+        # ⚠️ `await`，不是 `asyncio.run`。
+        #
+        # `_run_engine` 本身是 `async def`，它的调用方
+        # （`launch` 里的 `body()`）已经用 `asyncio.run(_run_engine(...))`
+        # 把它放进一个事件循环里了。这里再套一层 `asyncio.run` 会抛
+        # `RuntimeError: asyncio.run() cannot be called from a running event loop`。
+        #
+        # ★ 这个 bug 真实存在过：单测只覆盖了纯函数（spec 翻译 / 写文件），
+        # 从没真执行过 `_run_engine`，所以全绿；直到第一次真跑
+        # （对 Kali 本机 nginx）才炸出来。教训同那条「一份声明不是一条检查」——
+        # **纯函数测试通过不等于这条路径跑得通**。
+        outcome = await _solve_with_stop(
+            solve_spec,
+            sandbox=sandbox,
+            gateway=gateway,
+            system_prompt=system_prompt,
+            stop_event=stop_event,
+            on_progress=on_progress,
         )
     finally:
         # ★ 唯一的容器清理路径（见模块 docstring「线程杀不掉」一节）。
@@ -503,6 +512,11 @@ def _write_run_json(spec: LaunchSpec, solve_spec: object, outcome: object) -> No
     }
     path = spec.run_dir / "agent_run" / "run.json"
     try:
+        # 目录可能不存在（`run_dir/agent_run/` 由谁创建不归这里管），
+        # 先建再写 —— 否则真跑时 FileNotFoundError 被 `except OSError` 吞成
+        # 一句 warning，run.json 静默缺失，下游靠它判断「引擎真的跑了」的
+        # 逻辑就全落空。
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         logger.warning("写运行标识失败：%s", path, exc_info=True)
