@@ -71,10 +71,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import threading
 import time
 from dataclasses import dataclass, field
+from datetime import UTC
 from pathlib import Path
 
 from app.scans.runner import (
@@ -105,6 +107,22 @@ RUNNER_NAME = "agent"
 #: 判成 failed。这个 bug 会**静默地**把所有成功说成失败。
 EXIT_OK = 0
 EXIT_ERROR = 1
+
+#: 引擎过程的**结构化**事件流，随跑随写，一行一个 JSON。
+#:
+#: 与 `scan.log`（给人 `tail -f` 看的纯文本）分开：那个是日志，这个是
+#: **可回放的审计事件**，导入器按 `seq` 去重后灌进 `activity_events`。
+#:
+#: ★ 为什么需要它：strix 后端会自己写 sqlite（`agents.db`），导入器
+#:   （`importer.read_events`）读那个库，所以 strix 扫描的活动流、智能体
+#:   名册、实时 SSE 全都活着。自研引擎不写 sqlite —— 如果只写 scan.log，
+#:   那么每次 agent 扫描在界面上都是「0 个智能体 · 活动流空白」，而这正好
+#:   抹掉 Suvex 最核心的差异点（可解释审计 + 实时过程）。实测撞到过：
+#:   引擎在跑、scan.log 里 tool_call 一条条出，界面却一直是「0 个智能体」。
+#:
+#: 格式（每行）：`{"seq": int, "kind": str, "summary": str, "payload": {...}, "at": iso8601}`
+#: `seq` 是**幂等键**（对应 `ActivityEvent.source_row_id`），只增不减。
+EVENTS_FILENAME = "events.jsonl"
 
 
 @dataclass
@@ -345,6 +363,17 @@ class AgentRunner:
 _KNOWN_ROUTE_PREFIXES: tuple[str, ...] = ("openai", "deepseek", "anthropic", "ollama")
 
 
+def _now_iso() -> str:
+    """当前时刻的 ISO 8601（UTC，带时区）—— 事件 `at` 字段用。
+
+    与 `strix_events` 产出的事件同一口径（都是 `at` = 事件**发生**时刻，
+    不是导入时刻），否则活动流按时间排序时两种后端的事件会错位。
+    """
+    from datetime import datetime
+
+    return datetime.now(UTC).isoformat()
+
+
 def _bare_model_name(model: str) -> str:
     """把 LiteLLM 路由前缀去掉，得到接入点真正认的裸 model 名。
 
@@ -424,12 +453,42 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
 
     log_lines: list[str] = []
 
+    # 结构化事件流的旁路状态：`seq` 只增不减（幂等键），文件句柄开一次。
+    events_path = spec.run_dir / "agent_run" / EVENTS_FILENAME
+    event_seq = 0
+
     def on_progress(kind: str, summary: str, payload: dict[str, str]) -> None:
-        """过程落盘（日志文件）。**不碰 DB** —— 见函数 docstring。"""
+        """过程落盘。
+
+        **不碰 DB** —— 见函数 docstring（引擎跑在线程里、没有可控的 db 会话）。
+        但除了给人看的 `scan.log`，**还要**写一行结构化事件到
+        `agent_run/events.jsonl`：导入器按 `seq` 去重后灌进 `activity_events`，
+        活动流 / 智能体名册 / 实时 SSE 才活得起来（详见 `EVENTS_FILENAME`）。
+
+        ⚠️ 这里**只追加、不查重**：去重交给导入器靠 `source_row_id` 唯一索引做，
+        同 `importer._persist` 的理由 —— 先查后写在并发下是有洞的。
+        """
+        nonlocal event_seq
         log_lines.append(f"[{kind}] {summary}")
         # 边跑边写，便于 `tail -f` 看进度。
         with contextlib.suppress(OSError):
             spec.log_path.write_text("\n".join(log_lines), encoding="utf-8")
+
+        # ★ 结构化事件（写失败不影响引擎跑，但记 warning 而不是静默）。
+        event_seq += 1
+        record = {
+            "seq": event_seq,
+            "kind": kind,
+            "summary": summary,
+            "payload": payload,
+            "at": _now_iso(),
+        }
+        try:
+            events_path.parent.mkdir(parents=True, exist_ok=True)
+            with events_path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except OSError:
+            logger.warning("扫描 %s：写结构化事件失败（不影响引擎继续跑）", spec.scan_id, exc_info=True)
 
     gateway = ctf2_runner.LlmGateway(
         model=_bare_model_name(solve_spec.llm_model),

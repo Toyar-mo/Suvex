@@ -679,7 +679,7 @@ def test_the_failed_agent_lands_as_failed_in_our_database(db_session, scan_at, f
     db_session.commit()
     importer.import_events(db_session, scan_at)
 
-    agent = db_session.get(Agent, strix_events.stable_agent_id("agent-failed"))
+    agent = db_session.get(Agent, strix_events.stable_agent_id("agent-failed", scope=scan_at.id))
     assert agent is not None, "失败 agent 没进名册"
     assert agent.status == AgentStatus.FAILED.value
     assert agent.role == "recon", "名字里有 recon ⇒ 角色该判成信息收集"
@@ -693,7 +693,7 @@ def test_the_failed_agent_lands_as_failed_in_our_database(db_session, scan_at, f
     )
     failed = [a for a in others if a.status == AgentStatus.FAILED.value]
     assert [a.id for a in failed] == [agent.id], "只有名册里 errors 有值的那个才是失败"
-    verify = db_session.get(Agent, strix_events.stable_agent_id("agent-verify"))
+    verify = db_session.get(Agent, strix_events.stable_agent_id("agent-verify", scope=scan_at.id))
     assert verify is not None and verify.status == AgentStatus.IDLE.value, (
         "名册里 `waiting` ⇒ 我们这边 IDLE：`waiting` 在 strix 里是"
         "「等子 agent 回来 / 预算暂停恢复」，不是「扫描停下等人」，"
@@ -748,6 +748,64 @@ def test_the_fenced_poc_language_survives_the_import(db_session, scan_at, fake_r
     for finding in with_poc:
         assert finding.poc_language == "python", f"{finding.source_ref} 的语言判错了"
         assert not finding.poc_code.startswith("```"), "围栏行不该进 poc_code"
+
+
+def test_two_scans_never_share_one_agent_row(db_session, fake_run: Path) -> None:
+    """★ 回归：同库两次扫描导入同一批事件，绝不能共用一条 agent 行。
+
+    这是一次真实事故（v0.47 自研引擎承接渗透之后）：我们自研引擎的
+    agent_ref 是**固定**的（`agent-engine` / `agent-root`），而 strix 的
+    agent id 是全局会话 id、天然不重。`stable_agent_id` 只哈希 ref，
+    于是 `sa_agent-engine` 在**所有扫描**里都是同一个字符串
+    → 第二次扫描的 `_ensure_agent` 先 `db.get(Agent, ...)` 命中**上一次**
+    那一行、把事件挂过去，自己的 `scan_id` 却没变。症状是：名册里某条
+    历史扫描的 agent 事件数一路涨，而**当前扫描永远是 0 个智能体**。
+    单条扫描的单测覆盖不到它 —— 必须两条扫描同库才暴露。
+    """
+    from tests.factories import make_scan
+
+    scans = []
+    for _ in range(2):
+        s = make_scan(db_session, status="completed")
+        s.run_dir = str(fake_run)
+        s.runner = "fake"
+        db_session.commit()
+        scans.append(s)
+
+        importer.import_events(db_session, s)
+
+    first, second = scans
+    agents_by_scan = {
+        s.id: list(
+            db_session.execute(
+                select(Agent).where(Agent.scan_id == s.id)
+            ).scalars()
+        )
+        for s in scans
+    }
+    assert agents_by_scan[first.id], "第一条扫描一个 agent 都没有"
+    assert agents_by_scan[second.id], (
+        "第二条扫描一个 agent 都没有 —— 它的 agent 被并进了上一条扫描"
+    )
+    # 最硬的一条：两条扫描的 agent id 集合必须**不相交**。
+    first_ids = {a.id for a in agents_by_scan[first.id]}
+    second_ids = {a.id for a in agents_by_scan[second.id]}
+    assert not (first_ids & second_ids), (
+        f"两条扫描共用了 agent 行：{sorted(first_ids & second_ids)}"
+    )
+    # 每条事件都要挂在本扫描自己的 agent 名下（不能跨扫描串）。owner 指每条
+    # 事件所属 agent 的 scan_id,必须等于事件自己的 scan_id。
+    for s in scans:
+        owned = {a.id for a in agents_by_scan[s.id]}
+        event_agent_ids = {
+            e.agent_id
+            for e in db_session.execute(
+                select(ActivityEvent).where(ActivityEvent.scan_id == s.id)
+            ).scalars()
+        }
+        assert event_agent_ids <= owned, (
+            f"扫描 {s.id} 里有事件挂在了别的扫描的 agent 名下：{event_agent_ids - owned}"
+        )
 
 
 def test_the_fake_run_stays_fast_enough_to_be_the_default_backend(fake_run: Path) -> None:

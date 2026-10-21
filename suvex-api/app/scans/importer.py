@@ -50,6 +50,29 @@ logger = logging.getLogger("suvex.strix")
 # 而扫描还在写、下一轮马上就能读到剩下的。
 BATCH_LIMIT = 500
 
+#: 自研引擎在 `Scan.runner` 里的注册名（与 `agent_runner.RUNNER_NAME` 同值）。
+#:
+#: 这里写一份字面量而不是 import `agent_runner` —— `agent_runner` 在 import
+#: 时会拉 `ctf2.runner`（重），而 importer 被调度器每轮调用，轻量很要紧；
+#: 且这是个**只增不减**的枚举式取值，两份字面量漂移的风险很低
+#: （有测试断言两者相等，见 `test_agent_events_import.py`）。
+AGENT_RUNNER_NAME = "agent"
+
+#: 自研引擎写结构化事件的文件名（与 `agent_runner.EVENTS_FILENAME` 同值）。
+#: 同样写一份字面量而不是 import（理由同上），有测试断言两者相等。
+AGENT_EVENTS_FILENAME = "events.jsonl"
+
+#: 自研引擎所有事件归到这一个智能体名下（它内部按需自己分派子任务，
+#: 但对审计而言"一个引擎"就够了，不编造并不存在的多智能体分工）。
+_AGENT_SELF_REF = "agent-engine"
+
+#: 自研引擎的 `kind` → 契约事件类型。认不出的按 `reasoning`（保守，
+#: 不把它硬塞成 `discovery` 之类会误导的强结论）。
+_AGENT_KIND_TO_TYPE = {
+    "tool_call": "tool_call",
+    "reasoning": "reasoning",
+}
+
 
 def import_events(db: Session, scan: Scan, *, limit: int = BATCH_LIMIT) -> int:
     """把这次扫描的外部事件导入本地库。返回新写入的条数。
@@ -62,6 +85,16 @@ def import_events(db: Session, scan: Scan, *, limit: int = BATCH_LIMIT) -> int:
     run_dir = Path(scan.run_dir)
     if not run_dir.is_dir():
         return 0
+
+    # ★ 按后端分派：两个后端的事件来源完全不同。
+    #
+    #   strix 后端自己写 sqlite（`agents.db`），读那个库；
+    #   自研引擎（agent 后端）不写 sqlite，它写 `agent_run/events.jsonl`
+    #   （见 `agent_runner.EVENTS_FILENAME`）。不分支的后果是 agent 扫描的
+    #   活动流**永远是空的**、智能体数永远是 0 —— 实测在界面上表现为
+    #   「运行中 · 0 个智能体」，而引擎其实在 scan.log 里一条条打 tool_call。
+    if scan.runner == AGENT_RUNNER_NAME:
+        return _import_agent_events(db, scan, run_dir, limit=limit)
 
     cursor = db.execute(
         select(func.coalesce(func.max(ActivityEvent.source_row_id), 0)).where(
@@ -88,6 +121,118 @@ def import_events(db: Session, scan: Scan, *, limit: int = BATCH_LIMIT) -> int:
         db.commit()
         logger.info("扫描 %s 导入了 %d 条外部事件", scan.id, written)
     return written
+
+
+def _import_agent_events(db: Session, scan: Scan, run_dir: Path, *, limit: int) -> int:
+    """自研引擎的事件导入 —— 读 `agent_run/events.jsonl`。
+
+    与 strix 路径**共用**同一张 `activity_events` 表、同一个 `source_row_id`
+    幂等键、同一个 `_persist` 落库（含 NUL 清洗、SAVEPOINT 隔离坏行）。
+    差别只在"事件从哪来"：strix 读它自己的 sqlite，这里读引擎写的 JSONL。
+
+    读不到文件 = 现在还没有事件（刚启动），不是失败 —— 与 strix 侧
+    `read_events` 读不到 `agents.db` 时的语义一致。
+    """
+    import json as _json
+
+    from app.core.vocab import AgentPhase
+
+    events_path = run_dir / "agent_run" / AGENT_EVENTS_FILENAME
+    if not events_path.is_file():
+        return 0
+
+    cursor = db.execute(
+        select(func.coalesce(func.max(ActivityEvent.source_row_id), 0)).where(
+            ActivityEvent.scan_id == scan.id
+        )
+    ).scalar_one()
+
+    records: list[dict] = []
+    try:
+        with events_path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rec = _json.loads(line)
+                except _json.JSONDecodeError:
+                    # 半行（正写着）或坏行 —— 跳过，下一轮读全的。
+                    continue
+                if not isinstance(rec, dict):
+                    continue
+                try:
+                    seq = int(rec.get("seq", 0))
+                except (TypeError, ValueError):
+                    continue
+                if seq <= int(cursor):
+                    continue
+                records.append(rec)
+                if len(records) >= limit:
+                    break
+    except OSError:
+        logger.warning("读取 %s 失败（将在下一轮重试）", events_path, exc_info=True)
+        return 0
+
+    if not records:
+        return 0
+
+    written = 0
+    for rec in records:
+        try:
+            seq = int(rec["seq"])
+        except (TypeError, ValueError):
+            continue
+        kind = str(rec.get("kind") or "")
+        event_type = _AGENT_KIND_TO_TYPE.get(kind, "reasoning")
+        payload = rec.get("payload")
+        detail = (
+            {"kind": event_type, **payload}
+            if isinstance(payload, dict)
+            else {"kind": event_type}
+        )
+        # 阶段：tool_call 按工具名推断（用 strix 侧现成的启发式），
+        # reasoning 中性归 recon。**不假装知道它此刻真在做什么阶段**。
+        if event_type == "tool_call":
+            phase = strix_events._phase_for(str((payload or {}).get("tool", "")))
+        else:
+            phase = AgentPhase.RECON.value
+        event = _AgentEvent(
+            source_row_id=seq,
+            agent_ref=_AGENT_SELF_REF,
+            type=event_type,
+            summary=str(rec.get("summary") or ""),
+            detail=detail,
+            at=_parse_at(rec.get("at")),
+            agent_phase=phase,
+            agent_name="自研引擎",
+        )
+        if _persist(db, scan, event, {_AGENT_SELF_REF: {"name": "自研引擎", "status": "running"}}):
+            written += 1
+
+    if written:
+        db.commit()
+        logger.info("扫描 %s 导入了 %d 条自研引擎事件", scan.id, written)
+    return written
+
+
+def _parse_at(value: object):
+    """ISO 8601 → tz-aware datetime。解析不了就退回 now（不让一条事件拖垮导入）。"""
+    from datetime import datetime
+
+    if isinstance(value, str) and value:
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    return now_utc()
+
+
+# `StrixEvent` 的字段形状（source_row_id/agent_ref/type/summary/detail/at/
+# agent_phase/agent_name）。`_persist` 只按属性名访问，不检查类型，
+# 所以自研引擎直接复用这个 dataclass，避免再建一个几乎相同的类型。
+_AgentEvent = strix_events.StrixEvent
+
 
 
 def _persist(db: Session, scan: Scan, event: strix_events.StrixEvent, roster: dict) -> bool:
@@ -150,7 +295,7 @@ def _ensure_agent(db: Session, scan: Scan, event: strix_events.StrixEvent, roste
     所以映射是**稳定哈希**：`stable_agent_id()`。同一次扫描里反复导入
     必须命中同一行，否则名册会被拆成好几份。
     """
-    local_id = strix_events.stable_agent_id(event.agent_ref)
+    local_id = strix_events.stable_agent_id(event.agent_ref, scope=scan.id)
     agent = db.get(Agent, local_id)
     if agent is not None:
         # 状态会变（running → done），所以每轮都跟着外部名册刷新。

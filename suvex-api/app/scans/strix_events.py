@@ -674,17 +674,29 @@ def status_for(status: str) -> str:
     return _STATUS_MAP.get((status or "").lower(), AgentStatus.IDLE).value
 
 
-def stable_agent_id(strix_agent_id: str) -> str:
+def stable_agent_id(strix_agent_id: str, *, scope: str = "") -> str:
     """把 strix 的 agent id 映成我们的 `Agent.id`（≤64 字符）。
 
     strix 的 id 是它的 session id，长度不保证。我们的列是 `String(64)`，
     超长会直接写库失败。所以超长时用稳定的 sha1 截断 ——
     **稳定很重要**：同一次扫描反复导入必须命中同一行。
+
+    ★ `scope` 必须传扫描 id。原因是一次真实事故（v0.47 后）：
+    strix 的 agent id 是全局会话 id，天然不重；但我们自研引擎用的是
+    **固定** 的 agent_ref（`agent-engine` / `agent-root`），于是
+    `sa_agent-engine` 在**所有扫描**里是同一个字符串。`_ensure_agent`
+    先 `db.get(Agent, local_id)` → 命中**上一次扫描**的那一行，之后
+    这条事件挂到那条 agent 下、它自己的 `scan_id` 却没变。症状：
+    名册里某条历史扫描的 agent 事件数一路涨，而**当前扫描 0 个智能体**。
+    把 scope 折进哈希材料后，id 天然按扫描隔离（strix 的全局 id 加
+    上 scope 也不冲突，行为只是变长，旧的 `sa_<ref>` 前缀语义保留）。
+    不传 scope 时行为与旧版逐字节相同（纯映射函数的既有测试依赖这一点）。
     """
-    candidate = f"sa_{strix_agent_id}"
+    material = f"{scope}:{strix_agent_id}" if scope else strix_agent_id
+    candidate = f"sa_{material}"
     if len(candidate) <= 64:
         return candidate
-    digest = hashlib.sha1(strix_agent_id.encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(material.encode("utf-8")).hexdigest()
     return f"sa_{digest[:32]}"
 
 
