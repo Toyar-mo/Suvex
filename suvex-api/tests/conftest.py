@@ -36,6 +36,7 @@ import os
 import shutil
 import socket
 import tempfile
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -49,10 +50,63 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 # ⚠️ 必须在导入任何 app 模块**之前**设置。
 # `get_settings()` 是 lru_cache 的单例，一旦被别处调用过就固定了 ——
 # 那之后改环境变量不会生效，而症状是"测试跑在了开发库上"。
-TEST_DATABASE_URL = os.environ.setdefault(
-    "SUPEX_TEST_DATABASE_URL",
-    "postgresql+psycopg://suvex:suvex_dev_local@127.0.0.1:55432/suvex_test",
-)
+#
+# ══════════════════════════════════════════════════════════════════
+# ★★ 没显式指定测试库时，库名**每次运行唯一**（2026-10-21 补）
+# ══════════════════════════════════════════════════════════════════
+#
+# ## 默认值为什么不能是写死的 `suvex_test`
+#
+# 这台机器上**两个开发会话同时跑全量**是常态（用户明确说过"还有另外
+# 一个任务也在跑开发"）。而 `SUPEX_TEST_DATABASE_URL` 在 `/etc/environment`、
+# `~/.bashrc`、`~/.profile`、`suvex-api/.env`、systemd unit 里**都没有**
+# —— 所以"两个会话都没设它"是最常见的情况，不是例外。
+#
+# 那种情况下两边都落到同一个 `suvex_test`，而 `_clean_state` 每个用例都要
+# `TRUNCATE ... CASCADE`（拿全表排它锁）→ 撞上就是 `DeadlockDetected`。
+# 2026-10-21 真的排查过一轮：症状是**大量** errors（Windows 上实测 367 条），
+# 报错指向的表与真正的写入方毫无关系，只能靠数据目录 mtime、pytest temp
+# root 编号连续性、各脚本里写死的库名三者互相印证才定得下来。
+#
+# 与其靠人记得"跑全量前先建个独立库"，不如让**结构上撞不上**：
+# 没显式设变量时，库名带一个本次运行唯一的后缀。
+#
+# ## 显式设了就不动
+#
+# 那条路径本来就是安全的（谁设谁负责），而且 CI 需要一个**可预测**的
+# 库名来复用/清理，所以显式值原样使用，一个字都不改。
+#
+# ## 后缀选什么
+#
+# `os.getpid()` + `time.time_ns()` 的十六进制。PID 单独不够（容器里
+# 两个会话可能拿到同名 PID），时间戳单独也不够（两个进程可能落在同一
+# 纳秒），两个拼起来就能区分。
+#
+# ⚠️ **不要截断**。第一版写了 `[-12:]`，而 `time_ns()` 的十六进制是
+#    16 位 —— 截掉后正好把 PID 那段全丢了，剩下纯时间戳，于是"同一纳秒
+#    的两个不同 PID"会拼出同一个名字。实测：200000 次采样只剩 78 个
+#    唯一值。这种"看起来唯一、其实不是"的标识比不唯一更危险。
+#
+# ⚠️ 名字必须以 `suvex_test` 结尾 —— `_prepare_database` 里那条
+#    "测试引擎指向了非测试库"的断言就是按这个后缀认的。它挡的是
+#    "跑错库把开发数据清空"，不能为了让名字好看而放松它。
+_DEFAULT_TEST_DB_PREFIX = "suvex_autotest"
+_AUTOTEST_DB_TAG = f"{os.getpid():x}_{time.time_ns():x}"
+_EXPLICIT_TEST_DATABASE_URL = os.environ.get("SUPEX_TEST_DATABASE_URL")
+#: 本次运行是否用的是**自动生成**的库名（teardown 时据此决定要不要删库）。
+AUTOTEST_DATABASE_GENERATED = not _EXPLICIT_TEST_DATABASE_URL
+
+if _EXPLICIT_TEST_DATABASE_URL:
+    TEST_DATABASE_URL = _EXPLICIT_TEST_DATABASE_URL
+else:
+    TEST_DATABASE_URL = (
+        "postgresql+psycopg://suvex:suvex_dev_local@127.0.0.1:55432"
+        f"/{_DEFAULT_TEST_DB_PREFIX}_{_AUTOTEST_DB_TAG}_suvex_test"
+    )
+    # 把生成值写回环境变量：并发的**子进程**（真起容器的集成测试会 reload
+    # 配置）必须看到同一个库，否则它们会各自再生成一个。
+    os.environ["SUPEX_TEST_DATABASE_URL"] = TEST_DATABASE_URL
+
 os.environ["SUPEX_DATABASE_URL"] = TEST_DATABASE_URL
 # 开发态默认值，但显式写出来：测试不该受开发机 .env 的影响。
 os.environ.setdefault("SUPEX_ENV", "dev")
@@ -314,6 +368,53 @@ def _ensure_database(url: str) -> None:
         engine.dispose()
 
 
+def _drop_database(url: str) -> None:
+    """删掉本次运行自动建的测试库（`_ensure_database` 的逆操作）。
+
+    ## 为什么需要这一步
+
+    自动生成的库名每跑一次都是新的，不删的话会一直积在
+    `pg_database` 里 —— 那是把一个"偶发死锁"换成"磁盘慢慢被占满"，
+    只是换了个更难察觉的麻烦。
+
+    ## 为什么要先断连接
+
+    PostgreSQL **不允许删除还有活动连接的库**：会得到
+    `database "xxx" is being used by other users`。所以先
+    `pg_terminate_backend` 把所有后端踢掉 —— 测试进程自己也可能还挂着
+    一个连接（`db_module.reset()` 之后不一定立刻归还）。
+
+    ## 为什么失败只警告不抛
+
+    teardown 抛异常会让整轮测试的结果变成 ERROR，而"库没删掉"只是一件
+    需要人顺手清理的小事，不该盖住真正的测试结论。
+
+    ⚠️ 只有**自动生成**的库才走这里。显式设了 `SUPEX_TEST_DATABASE_URL`
+       的人自己负责那台库 —— 悄悄删掉别人指定要复用的库是灾难。
+    """
+    parsed = make_url(url)
+    name = parsed.database
+    if not name:
+        return
+    admin_url = parsed.set(database="postgres")
+    try:
+        engine = create_engine(admin_url, isolation_level="AUTOCOMMIT")
+        try:
+            with engine.connect() as conn:
+                conn.execute(
+                    text(
+                        "SELECT pg_terminate_backend(pid) FROM pg_stat_activity"
+                        " WHERE datname = :name AND pid <> pg_backend_pid()"
+                    ),
+                    {"name": name},
+                )
+                conn.execute(text(f'DROP DATABASE IF EXISTS "{name}"'))
+        finally:
+            engine.dispose()
+    except Exception:  # noqa: BLE001 - 删不掉不该盖住测试结论
+        logger.warning("自动测试库 %s 没删掉，请手动清理", name, exc_info=True)
+
+
 def _upgrade_to_head() -> None:
     """对着测试库跑迁移。**不是 `create_all()`** —— 见模块 docstring。"""
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
@@ -385,6 +486,12 @@ def _prepare_database() -> Iterator[None]:
     db_module.reset()
     shutil.rmtree(SCAN_WORK_ROOT, ignore_errors=True)
     shutil.rmtree(ATTACHMENT_ROOT, ignore_errors=True)
+    # ★ 自动生成的库名每次运行都是新的，用完必须删 —— 否则每跑一次就在
+    #   `pg_database` 里多留一个，把"偶发死锁"换成"磁盘慢慢被占满"。
+    #   ⚠️ 必须放在 `db_module.reset()` **之后**：那一步才归还连接，
+    #   而 PostgreSQL 不允许删除还有活动连接的库。
+    if AUTOTEST_DATABASE_GENERATED:
+        _drop_database(TEST_DATABASE_URL)
 
 
 @pytest.fixture(scope="session", autouse=True)
