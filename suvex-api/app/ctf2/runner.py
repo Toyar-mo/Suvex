@@ -87,6 +87,7 @@ from app.core.vocab import (
     DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS,
     IR_CATEGORY_PREFIX,
     Ctf2ChallengeStatus,
+    Ctf2CompetitionKind,
     Ctf2SandboxProfile,
     Ctf2SubmissionStatus,
     Ctf2SubmitMode,
@@ -107,6 +108,7 @@ from app.ctf2.client import (
 from app.ctf2.models import (
     CTF2_OFFICIAL_HOSTS,
     Ctf2Challenge,
+    Ctf2Competition,
     Ctf2Environment,
     Ctf2SolveAttempt,
     Ctf2Submission,
@@ -5593,6 +5595,26 @@ async def _run_worker(
             ctf2_events.emit_abandoned(db, challenge, reason=exc.message)
             db.commit()
             return
+        # ★★ 这道题背后有没有一个 CTF2 平台（v0.43）。
+        #
+        # 平台镜像的题（`competition` / `practice`）在下面要打三次平台：
+        # 查"队友是不是已经解出了"、起靶机环境、收尾释放环境。而
+        # **本地复盘案例**（`kind='local'`）三次都必然失败 —— 它没有远端、
+        # 没有靶机，平台的开放接口里压根不存在这道题。
+        #
+        # 在同步段就把这个判断算好带出去，而不是在三个调用点各查一次库：
+        # 三个地方分别判等于三次机会漏掉一处，而漏掉的那一处表现是
+        # "应急响应任务跑了两秒就失败，错误说同步可能没完成"——
+        # 一句与真实原因毫无关系的提示。
+        #
+        # ⚠️ 判据是 `kind != 'local'`，即**默认走平台**。认不出的 kind
+        #    因此仍然会去碰平台并如实报错，这与
+        #    `service._assert_submission_supported` 的 fail-closed 同向。
+        _competition = db.get(Ctf2Competition, challenge.competition_id)
+        platform_backed = (
+            _competition is not None
+            and _competition.kind != Ctf2CompetitionKind.LOCAL
+        )
 
     # ── ★★ 开跑前先问平台一句：这题本队伍是不是**已经被别人**解出了 ──
     #
@@ -5619,13 +5641,19 @@ async def _run_worker(
     #    做成硬门槛的话，一次网络抖动就会让所有题都点不动 —— 那比
     #    "偶尔白跑一轮"糟得多。真正的兜底在提交那一步（见
     #    `submit_candidate` 对 `ALREADY_SOLVED` 的处理）。
-    try:
-        reports_solved = await ctf2_service.platform_reports_solved(challenge_id)
-    except Ctf2Error as exc:
-        logger.warning(
-            "开跑前的平台状态探测失败（不阻断解题）：%s → %s", challenge_id, exc
-        )
-        reports_solved = False
+    # ★ 本地复盘案例跳过这一步（v0.43）：没有远端 id，`platform_reports_solved`
+    #   会直接返回 False（它内部判 remote_id 缺失即早退），也就是说这里原本
+    #   不会出错 —— 但那是**依赖一个下游函数的实现细节**来保证正确性。
+    #   显式跳过让"本地题不打平台"成为本函数自己的一条事实。
+    reports_solved = False
+    if platform_backed:
+        try:
+            reports_solved = await ctf2_service.platform_reports_solved(challenge_id)
+        except Ctf2Error as exc:
+            logger.warning(
+                "开跑前的平台状态探测失败（不阻断解题）：%s → %s", challenge_id, exc
+            )
+            reports_solved = False
 
     if reports_solved:
         with session_scope() as db:
@@ -5646,7 +5674,17 @@ async def _run_worker(
                 )
                 return
 
-    client = ctf2_service.build_client_sync()
+    # ★ 本地复盘案例不建 client（v0.43）。
+    #
+    # `build_client_sync()` 在没有绑定的 CTF2 账号时抛
+    # `ApiError(409, "CTF2_NOT_BOUND")`，而本地复盘案例**根本不需要账号**
+    # —— 它要的证据包是本机上传的，整个流程一次都不碰 CTF2 域名。这里
+    # 若照旧无条件建 client，用户会看到「尚未绑定 CTF2 账号。请先绑定
+    # 一个 PAT。」而他要做的是传一批日志做复盘，那句话把他指向了完全
+    # 无关的方向。
+    #
+    # `client = None` 之后，下面三处平台调用各自按 `platform_backed` 跳过。
+    client = ctf2_service.build_client_sync() if platform_backed else None
     # ⚠️ 这个 client 的生命周期**只归本函数管**（下面的 `finally` 里
     #    `release_environment` 要用它发 DELETE）。
     #
@@ -5666,10 +5704,22 @@ async def _run_worker(
     outcome = SolveOutcome()
 
     try:
-        started = await ctf2_service.start_environment_for(client, challenge_id)
+        started = (
+            await ctf2_service.start_environment_for(client, challenge_id)
+            if platform_backed and client is not None
+            else None
+        )
         # access_urls 是环境才拿到的东西，spec 里那份是空的 ——
         # 补上它，否则 http_request 的白名单里一个地址都没有。
-        spec.access_urls = tuple(started.access_urls) or spec.access_urls
+        #
+        # ⚠️ `started` 为 None 表示**这道题没有靶机**（本地复盘案例）。
+        #    此时 `spec.access_urls` 保持 `build_spec` 给的值：IR 场景是
+        #    纯附件复盘，容器本来就该 `--network none`，一个可访问地址都
+        #    不该有。不做任何"补一个空地址"的动作 —— 空地址进白名单会
+        #    让 `http_request` 的守卫判出"没有允许的目标"，而它本该
+        #    压根不会被调用。
+        if started is not None:
+            spec.access_urls = tuple(started.access_urls) or spec.access_urls
 
         # ★★ 用**平台给的接入类型**纠正网络隔离。
         #
@@ -5688,17 +5738,24 @@ async def _run_worker(
         #    （老版本/字段缺失）时保持原判 —— 那是安全方向：
         #   猜错的代价是"某道 TCP 题连不上"（可见的失败），
         #   而反向猜错的代价是"一个本可完全断网的容器被放开了网络"。
-        if started.access_type and started.access_type.lower() != "http":
-            if spec.network_isolated:
-                logger.info(
-                    "CTF2 靶机接入类型是 %s（非 http），放开沙箱网络：%s",
-                    started.access_type,
-                    challenge_id,
-                )
-            spec.network_isolated = False
-        # 转达给模型（提示词里要说明"别只试 http_request"）——
-        # 见 `_initial_prompt` 的"## 环境"那一段。
-        spec.access_type = started.access_type
+        #
+        # ★ v0.43：`started is None`（本地复盘案例）时整段跳过，于是
+        #   `spec.network_isolated` 保持 `build_spec` 算出的值。对 `ir-*`
+        #   分类那是 True（`needs_raw_network` 只放开 pwn/network/web 一类），
+        #   也就是 `--network none` —— 复盘一个已被入侵的现场时，容器
+        #   能出网只会让"证据"变得不可信（谁都能去网上拉一份别人的日志）。
+        if started is not None:
+            if started.access_type and started.access_type.lower() != "http":
+                if spec.network_isolated:
+                    logger.info(
+                        "CTF2 靶机接入类型是 %s（非 http），放开沙箱网络：%s",
+                        started.access_type,
+                        challenge_id,
+                    )
+                spec.network_isolated = False
+            # 转达给模型（提示词里要说明"别只试 http_request"）——
+            # 见 `_initial_prompt` 的"## 环境"那一段。
+            spec.access_type = started.access_type
 
         sandbox = SandboxContainer(
             # ★ 后缀必须是**随机的**，不能用时间戳取模。
@@ -5778,7 +5835,20 @@ async def _run_worker(
             on_progress=_on_progress,
         )
 
-        await _handle_candidates(challenge_id, spec, outcome)
+        # ★ 本地复盘案例不处理候选 flag（v0.43）。
+        #
+        # 那段逻辑的全部意义是"要不要把 flag 提交到平台"，而本地复盘
+        # **没有平台也没有 flag**。照旧走一遍的话有两个坏结果：
+        # ① safe 模式会把这道题写成 `candidate_ready` —— 那是"等人工
+        #    确认要不要提交"的意思，而这里根本没有可提交的东西；
+        # ② auto 模式会真的调 `submit_candidate`，拿着空的远端 id 去
+        #    请求一个不存在的路径。
+        #
+        # 跳过之后，`_record_outcome` 会按"没有 correct 提交且没有 error"
+        # 把它退回 `unsolved` —— 这正是应急响应复盘该有的终态：复盘做完了，
+        # 产出在题解与工单文件里，而这道题本身没有"解出"这回事。
+        if platform_backed:
+            await _handle_candidates(challenge_id, spec, outcome)
     except Ctf2EnvironmentTimeout as exc:
         outcome.error = exc.message
         with session_scope() as db:
@@ -5823,7 +5893,16 @@ async def _run_worker(
         #    `failed` + "环境已释放。"，而那句话什么也没解释 ——
         #    真实原因（比如"候选被本地格式校验丢弃"）就此丢失。
         #    实测事故见 `service.release_environment` 的 docstring。
-        await ctf2_service.release_environment(client, challenge_id, mark_failed=False)
+        #
+        # ★ v0.43：本地复盘案例没有平台环境可释放，`client` 也是 None。
+        #   不跳过的话这一行会把 `None` 传进 `release_environment`，
+        #   而它内部是 `client.stop_environment(...)` —— 那是一个
+        #   `AttributeError`，且发生在 `finally` 里，会**盖住上面刚记下的
+        #   真实失败原因**。所以这个判断不是优化，是必须的。
+        if platform_backed and client is not None:
+            await ctf2_service.release_environment(
+                client, challenge_id, mark_failed=False
+            )
 
         # ★ 关掉共享 client（2026-10-10 补）。
         #
@@ -5845,16 +5924,18 @@ async def _run_worker(
         # ⚠️ 顺序不能反：`release_environment` 还要用它发 DELETE 请求。
         #    放在它之前会把那次请求变成"客户端已关闭"的错误。
         # ⚠️ 用 try 包住：关连接失败不该盖住上面刚做完的收尾。
-        try:
-            await client.aclose()
-        except Exception:  # noqa: BLE001 - 见上：收尾绝不抛
-            logger.debug("关闭 CTF2 共享 client 时出错（忽略）", exc_info=True)
+        # ★ v0.43：本地复盘案例没有 client（见上面 `client = None` 的说明）。
+        if client is not None:
+            try:
+                await client.aclose()
+            except Exception:  # noqa: BLE001 - 见上：收尾绝不抛
+                logger.debug("关闭 CTF2 共享 client 时出错（忽略）", exc_info=True)
 
     # ── ③ 同步段：落库 ────────────────────────────────────
     with session_scope() as db:
         challenge = db.get(Ctf2Challenge, challenge_id)
         if challenge is not None:
-            _record_outcome(db, challenge, outcome)
+            _record_outcome(db, challenge, outcome, platform_backed=platform_backed)
             # ★ v0.45：生产遥测（回合数 / 工具调用数 / 方法卡张数）。
             #
             # ⚠️ 位置在 `_record_outcome` **之后**：它要写 `solved`，而那个
@@ -6088,7 +6169,13 @@ def _solve_elapsed_seconds(db: Session, challenge: Ctf2Challenge) -> int | None:
     return int(scan.duration_sec)
 
 
-def _record_outcome(db: Session, challenge: Ctf2Challenge, outcome: SolveOutcome) -> None:
+def _record_outcome(
+    db: Session,
+    challenge: Ctf2Challenge,
+    outcome: SolveOutcome,
+    *,
+    platform_backed: bool = True,
+) -> None:
     """把解题结果写回题目行。**不覆盖已经成功的状态。**
 
     ## ★ 收尾前先确认一次"这题是不是已经解出了"
@@ -6105,6 +6192,16 @@ def _record_outcome(db: Session, challenge: Ctf2Challenge, outcome: SolveOutcome
     所以这里必须回头查一次库：只要存在一条 `correct` 的提交，题目就是
     已解出 —— 与"这一轮有没有新提交"无关。一轮重复解出恰恰是最该
     被当成好消息的情形，不该反而把状态打下去。
+
+    ## ★ `platform_backed=False`：本地复盘案例的收尾口径（v0.43）
+
+    应急响应复盘**没有 flag**，所以"本次未产出候选 flag。"那句话对它
+    是错的 —— 它会出现在一道刚刚正常完成复盘的题的 `lastError` 上，
+    而复盘的全部价值在题解与工单文件里。用户看到那句话会以为复盘失败了。
+
+    这个标志位不改变状态机的走向（仍然是"没解出、可重跑"），只换
+    `last_error` 的措辞。分叉刻意做得**这么小**：状态机的语义对两种任务
+    是一样的（这是同一套流水线），错的只是"失败原因"该说什么。
     """
     solved = (
         db.execute(
@@ -6175,7 +6272,19 @@ def _record_outcome(db: Session, challenge: Ctf2Challenge, outcome: SolveOutcome
         #    排除法默认把它算作"需要收尾"，而穷举法默认漏掉它 ——
         #    后者正是这次 bug 的成因。
         challenge.status = Ctf2ChallengeStatus.UNSOLVED.value
-        challenge.last_error = "本次未产出候选 flag。"
+        # ★ v0.43：措辞按任务类型分叉。
+        #
+        # 本地复盘案例没有 flag，所以"未产出候选 flag"是一句**错话** ——
+        # 它会挂在一道刚刚正常跑完的复盘题上，让人以为复盘失败了。而
+        # 复盘有没有价值，看的是题解与工单文件，不是 flag。
+        #
+        # 状态仍然回到 `unsolved`（可重跑），这一点两种任务一致 ——
+        # 改的只是那句话该说什么。
+        challenge.last_error = (
+            "本次未产出候选 flag。"
+            if platform_backed
+            else "本次复盘未完成，未产出结论。"
+        )
 
     # ★★ v0.32：把这次解题提炼成**方法卡**（供同类题复用）。
     #

@@ -61,7 +61,7 @@ import threading
 from collections.abc import Awaitable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, TypeVar
+from typing import TYPE_CHECKING, Any, Final, TypeVar
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
@@ -99,9 +99,11 @@ from app.core.vocab import (
     MIN_CTF2_SOLVE_POLL_SECONDS,
     RESOLVABLE_CTF2_CHALLENGE_STATUSES,
     Ctf2ChallengeStatus,
+    Ctf2CompetitionKind,
     Ctf2EnvironmentStatus,
     Ctf2SandboxProfile,
     Ctf2SubmitMode,
+    IrCategory,
 )
 from app.ctf2 import events as ctf2_events
 from app.ctf2.attachments import (
@@ -1898,7 +1900,7 @@ def start_solve(
     #   会得到"平台不支持"的提示，而那不是他该关心的问题。
     _assert_submission_supported(db, challenge)
 
-    if get_account(db) is None:
+    if _requires_platform(db, challenge) and get_account(db) is None:
         raise ApiError(409, "CTF2_NOT_BOUND", "尚未绑定 CTF2 账号。请先绑定一个 PAT。")
     _assert_llm_ready(db)
 
@@ -1999,6 +2001,74 @@ def _snapshot_provider_model(db: Session) -> str | None:
     return row.model if row is not None else None
 
 
+#: 哪些 competition kind 的题目**允许**走"解题/提交"这条路。
+#:
+#: ## ★ 这个集合与 `_NO_PLATFORM_KINDS` 是**两个问题**，不能合并
+#:
+#: | 问题 | 判据 | 集合 |
+#: | --- | --- | --- |
+#: | 这题要不要绑 CTF2 账号？ | 会不会拿凭据去打平台 | `_NO_PLATFORM_KINDS` |
+#: | 平台给不给这题提交/起环境的接口？ | 平台的端点表长什么样 | 本集合 |
+#:
+#: `practice` 是**两者都为"是"**：它有平台账号（拉题用），也有提交端点。
+#: `local` 是**两者都为"否"**：没账号、也没端点。
+#: `competition`（赛事）是"要账号、**没有**端点"—— 它卡在本集合上。
+#:
+#: ★ 把本集合写成 `_NO_PLATFORM_KINDS` 是一个**真实发生过的回归**：
+#:   那次改动让 `practice` 从"放行"变成"拒绝"，于是**所有练习集题目
+#:   都无法解题**，报错说"平台没开放赛事题目的提交接口"。而它被
+#:   `test_platform_challenge_still_needs_account` 抓住 —— 那条测试
+#:   本来要守的是"平台题照旧要求绑账号"，结果撞在一个更严重的问题上。
+#:   两个概念共用一个名字时，"改了 A 也改了 B"这件事不会报错。
+_ALLOWED_SOLVE_KINDS: Final[frozenset[str]] = frozenset(
+    {Ctf2CompetitionKind.PRACTICE, Ctf2CompetitionKind.LOCAL}
+)
+
+#: 哪些 competition kind **不需要** CTF2 平台账号。
+#:
+#: 目前只有 `local`：本地复盘案例（v0.43）的题目与附件都在本机，没有远端、
+#: 不用凭据、也不从平台拉取。`practice` 与 `competition` 都是平台镜像，
+#: 必须有账号 —— 那是拉取时用的凭据，不是可选的装饰。
+#:
+#: ⚠️ 认不出的 kind **不在**这个集合里，于是它仍然走"必须有账号"那条路，
+#:    并在 `_assert_submission_supported` 那里被 fail-closed 拒绝。也就是说
+#:    新加一个平台类 kind 却忘了改这里时，症状是"要求绑账号"（烦但安全），
+#:    而不是"绕过账号检查"。
+_NO_PLATFORM_KINDS: Final[frozenset[str]] = frozenset({Ctf2CompetitionKind.LOCAL})
+
+
+def _requires_platform(db: Session, challenge: Ctf2Challenge) -> bool:
+    """解这道题是否必须先绑一个 CTF2 账号。
+
+    ## 为什么要有这个函数
+
+    `start_solve` 里原来是一句无条件的 `get_account(db) is None → 409`。
+    对平台镜像的题那是对的（要拉题、要起环境、要提交 flag），但对
+    **本地复盘案例**（`kind='local'`）它是纯粹的阻碍：那批证据包是本机
+    上传的，整个流程一次都不会碰到 CTF2 的域名。
+
+    用户此时看到的是「尚未绑定 CTF2 账号。请先绑定一个 PAT。」——
+    而他要做的是传一批日志让智能体复盘，跟 CTF2 账号毫无关系。
+    这类错误信息最坏的地方不是拦住了操作，是**指错了方向**。
+
+    ## 查不到赛事行时返回 True
+
+    外键（`ondelete=CASCADE`）保证赛事行平时一定在，真查不到说明数据坏了。
+    这时按"需要平台"处理是安全方向：多要一个账号不会造成错的后果，
+    而放过一个本该有账号的题会让 worker 在后面某个位置拼出一个空凭据
+    去打平台，报错与真实原因相距很远。
+
+    ⚠️ 与 `_assert_submission_supported` 的"查不到就放行"方向**相反**，
+       两处的理由也不同：那边的放行是为了不让一道练习集的题突然解不了
+       （它的失败会在真正调用平台时如实报出来），这边的收紧是因为
+       接下来要拿凭据去拼 client，而拼不出来时报错会更难懂。
+    """
+    competition = db.get(Ctf2Competition, challenge.competition_id)
+    if competition is None:
+        return True
+    return competition.kind not in _NO_PLATFORM_KINDS
+
+
 def _assert_resolvable(challenge: Ctf2Challenge) -> None:
     """这道题现在能不能解。不能就抛**说清原因**的 409。
 
@@ -2060,11 +2130,16 @@ def _assert_submission_supported(db: Session, challenge: Ctf2Challenge) -> None:
     一个永久的架构假设。
     """
     competition = db.get(Ctf2Competition, challenge.competition_id)
-    if competition is None or competition.kind == "practice":
+    if competition is None or competition.kind in _ALLOWED_SOLVE_KINDS:
         # ⚠️ 查不到赛事行时**放行**：外键保证它平时一定在
         #    （`ondelete=CASCADE` 会连带删题），所以这个分支真出现时
         #    说明数据坏了 —— 而"因为数据坏了就拒绝"会让一道练习集的题
         #    突然解不了。真正的失败会在下面调用平台时如实报出来。
+        #
+        # ★ `local` 也在这里（v0.43）：本地复盘案例**根本没有远端**，
+        #    "平台有没有开放提交接口"这个问题对它不成立。放行它不是
+        #    把检查放松了 —— 下面那条 fail-closed 分支的判据一字未变，
+        #    它仍然拒绝所有认不出的 kind。
         #
         # ★ 反过来，**认不出的 kind 一律拒绝**（fail-closed）：
         #    未知 kind 意味着我们不知道它有没有提交端点，而猜一条路径
@@ -3019,9 +3094,135 @@ def _assert_llm_ready(db: Session) -> None:
         )
 
 
+# ══════════════════════════════════════════════════════════
+# 本地复盘任务（v0.43，应急响应）
+# ══════════════════════════════════════════════════════════
+#
+# 这一节的函数让"从界面发起一次应急响应复盘"成为可能。在此之前，
+# 本地复盘案例只能由 `scripts/run_ir_closed_loop.py` 直接写库创建 ——
+# 也就是说侧栏那个「应急响应」入口后面**没有任何可点的功能**。
+
+#: 隐藏的本地批次名。所有本地复盘任务都挂在这个批次下 ——
+#: 它出现在界面的赛事列表里，但用户不需要理解"批次"这个概念。
+LOCAL_REVIEW_BATCH_NAME: Final[str] = "本地复盘"
+
+#: 建任务时固定的分类。见 `schemas.IrTaskIn` 的说明：
+#: 让用户在还不知道结论时先选"根因 / 时间线 / 范围"等于让他在猜，
+#: 而选错会让提示词从第一轮就偏。
+_LOCAL_REVIEW_CATEGORY: Final[str] = IrCategory.ROOT_CAUSE
+
+
+def ensure_local_batch(db: Session) -> Ctf2Competition:
+    """拿到（或创建）那个装本地复盘任务的隐藏批次。
+
+    ## 为什么不复用用户的某个 practice 批次
+
+    `practice` 的语义是"平台上某个练习集"，`_remote_ids()` 会拿它的
+    `remote_id` 当 `practice_id` 去打平台。把本地任务塞进去，worker
+    就会拿一个自造 id 去请求不存在的路径，404 → 题失败，而错误信息
+    说的是"同步可能没完成"。
+
+    ## `remote_id` 为什么要现造
+
+    `uq_ctf2_competitions_account_remote` 是 `(account_id, remote_id)`
+    上的唯一约束，而本地批次的 `account_id` 是 NULL —— PostgreSQL 里
+    NULL 不等于 NULL，所以这条约束对它形同虚设。也就是说唯一性得靠
+    `remote_id` 自己：这里用固定字面量 `local-reviews`，而查询也是按
+    `(kind, remote_id)` 找的，所以重复调用只会返回同一行。
+
+    ⚠️ 不用 `new_id()` 现造：那会让每次调用都建出一个新批次，
+       界面上的"本地复盘"会越堆越多，而每个里面只有一道题。
+    """
+    existing = (
+        db.execute(
+            select(Ctf2Competition).where(
+                Ctf2Competition.kind == Ctf2CompetitionKind.LOCAL,
+                Ctf2Competition.remote_id == "local-reviews",
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return existing
+
+    batch = Ctf2Competition(
+        id=new_id("ctf2comp"),
+        # ★ NULL：本地批次不属于任何平台账号。这正是 v0.43 把这一列
+        #   改成可空的原因 —— 见 `models.Ctf2Competition.account_id`。
+        account_id=None,
+        remote_id="local-reviews",
+        kind=Ctf2CompetitionKind.LOCAL,
+        name=LOCAL_REVIEW_BATCH_NAME,
+        remote_status="",
+    )
+    db.add(batch)
+    db.flush()
+    return batch
+
+
+def create_local_review(
+    db: Session,
+    *,
+    title: str,
+    brief: str = "",
+    attachments: list[dict[str, Any]] | None = None,
+) -> Ctf2Challenge:
+    """建一个本地复盘任务（一道 `kind='local'` 批次下的 `ir-*` 题）。
+
+    ## 做三件事，顺序不能变
+
+    1. 拿到本地批次（`ensure_local_batch`）；
+    2. 建题，`category` 固定 `ir-root-cause`、`sandbox_profile` 由
+       `runner.profile_for_category()` 推出来；
+    3. **不在这里入队** —— 入队由调用方（router）在附件认领完之后做。
+
+    第 3 条是刻意的：附件要先落到 `attachments.attachment_root(challenge.id)`
+    才能被 `_attachment_paths` 读到，而那个路径需要 challenge.id。先入队
+    再铺附件会有一个"worker 已经开始读附件目录、而文件还没到位"的窗口，
+    表现是**模型说没有证据可看**，而文件明明在磁盘上。
+
+    ## `sandbox_profile` 为什么调 `profile_for_category`
+
+    `Ctf2Challenge.sandbox_profile` 的列默认值是 `ctf2-sandbox`（基础镜像），
+    而 IR 分类需要 `ctf2-sandbox-ir`（带日志/取证工具的镜像）。不显式写
+    就落默认值，于是容器里没有 `tshark`/`fls` 一类命令 —— 而模型的反应
+    是"我没有工具"，不是"镜像选错了"。
+
+    这条教训来自 2026-10-21 的真跑：`run_ir_closed_loop.py` 最初也没写，
+    是那次跑失败后补上的（现在它里面有同样一行）。
+    """
+    from app.ctf2 import runner as runner_mod
+
+    batch = ensure_local_batch(db)
+    category = _LOCAL_REVIEW_CATEGORY
+    challenge = Ctf2Challenge(
+        id=new_id("ctf2chal"),
+        competition_id=batch.id,
+        # 本地任务没有远端 id。这里现造一个，是为了满足列上的 NOT NULL
+        # 与"同一批次内唯一"（`uq_ctf2_challenges_competition_remote`）。
+        # 它**不会被**发给任何平台 —— `_requires_platform` 对 local 返回 False。
+        remote_id=new_id("local"),
+        title=title.strip(),
+        category=category,
+        description=(brief or "").strip(),
+        attachments=[
+            {"name": str(item.get("name") or ""), "url": None}
+            for item in (attachments or [])
+        ]
+        or None,
+        status=Ctf2ChallengeStatus.UNSOLVED.value,
+        # ★ 见 docstring：不显式写会落列默认值 `ctf2-sandbox`。
+        sandbox_profile=runner_mod.profile_for_category(category),
+    )
+    db.add(challenge)
+    batch.challenge_count = int(batch.challenge_count or 0) + 1
+    db.flush()
+    return challenge
+
+
 def _enqueue(challenge_id: str, *, attempt_id: str | None = None) -> None:
     """把题丢进调度器，带上**这次尝试的快照 id**。
-
     ⚠️ 延迟 import：`scheduler` 依赖 `runner`，而 `runner` 依赖本模块 ——
     在模块顶层互相 import 会得到一次循环导入，而它的表现是
     "某个端点在第一次被调用时报 ImportError"，排查方向完全跑偏。

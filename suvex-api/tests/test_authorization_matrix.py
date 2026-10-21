@@ -330,6 +330,10 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # 同步会改数据（写库）且发出去一串外部请求 —— 给 read 级的话，
     # 一个只读令牌就能反复触发同步，那是一条"用我们的凭据刷平台接口"的路。
     ("POST", "/api/v1/ctf2/sync"): "scan",
+    # ★ v0.43 应急响应：建一个本地复盘任务。与 `POST /scans` 同级 ——
+    # 它会消耗 LLM 额度、会起沙箱容器，所以不能给 read。
+    # 同一判据在 `tests/ctf2/test_router_auth_matrix.py` 里也有一份。
+    ("POST", "/api/v1/ctf2/ir/tasks"): "scan",
     # 按链接拉单题：写库 + 打平台接口，与 sync 同级。
     ("POST", "/api/v1/ctf2/challenges/pull"): "scan",
     # ★ 这个端点**只读**，但仍然定 scan 级 —— 因为它每次都真的打一次

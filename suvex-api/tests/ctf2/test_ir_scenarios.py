@@ -377,3 +377,31 @@ def test_ir_prompt_no_false_execution_claim() -> None:
     """提示词不能教模型写"已阻断/已隔离"这类假执行声明。"""
     block = load_ir_prompt()
     assert "已阻断" in block and "不要" in block
+
+
+def test_ir_prompt_documents_read_attachment_single_file_limit() -> None:
+    """★ `read_attachment` 一次只收**一个**文件名 —— 必须写进提示词。
+
+    ## 为什么这条值得单独一条用例
+
+    这个限制来自包装层（`ctf2/notes.py:730` 附近说明的三个原子工具
+    `run_shell`/`http_request`/`read_attachment` 是我们自己的包装，实际
+    执行在 strix 容器里），所以它**不是模型能自己发现的**：模型按常识写
+    `read_attachment("*.log")`，拿回一句"文件不存在"。
+
+    而"文件不存在"在应急响应语境里有一个**看起来非常合理**的解读：
+    「这条日志根本没采」。实测踩过这一步 —— 结论从"我没读到"变成
+    "日志缺口"，再变成 `ruled_out`，而真实原因只是通配符不支持。
+
+    提示词里那一段必须同时做到三件事：说清限制、给出替代动作（先 `ls`）、
+    把这个坑的**后果**写出来（否则它读起来只是一条无关紧要的备注）。
+    """
+    block = load_ir_prompt()
+
+    assert "read_attachment" in block
+    # 限制本身
+    assert "一次只收一个文件名" in block
+    # 替代动作
+    assert "ls" in block
+    # 后果 —— 少了这句，读者不会当回事
+    assert "日志没采" in block or "没有采" in block

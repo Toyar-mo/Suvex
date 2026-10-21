@@ -300,16 +300,39 @@ class Ctf2Competition(Base):
 
     __tablename__ = "ctf2_competitions"
     __table_args__ = (
+        # ⚠️ 这条唯一约束在 `account_id` 改成可空之后**仍然有效但不覆盖
+        #    `local`**：PostgreSQL 里 NULL 不等于 NULL，所以两行
+        #    (NULL, 'ir-case-001') 不会撞上它。本地案例的唯一性由
+        #    `remote_id` 自己保证（建题时用 `new_id()` 现造，见
+        #    `service.create_local_competition`）。
+        #
+        #    这不是"漏了个约束"，而是刻意的：把 `remote_id` 的全局唯一
+        #    写进数据库会让"两个账号同步到同一个 remote_id"这件事从
+        #    "合法但奇怪"变成"数据库拒绝"，而平台侧的 remote_id 只在
+        #    单个账号内有意义。
         UniqueConstraint(
             "account_id", "remote_id", name="uq_ctf2_competitions_account_remote"
         ),
-        CheckConstraint("kind IN ('competition', 'practice')", name="kind_valid"),
+        CheckConstraint(
+            "kind IN ('competition', 'practice', 'local')", name="kind_valid"
+        ),
         Index("ix_ctf2_competitions_account_kind", "account_id", "kind"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    account_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_accounts.id", ondelete="CASCADE"), nullable=False
+    # ★ v0.43：改可空。`kind == 'local'` 的批次（本地复盘案例）不属于
+    # 任何平台账号 —— 它没有远端、没有凭据、也不是拉下来的。
+    #
+    # 为什么不用"挂一个占位的 account 行"绕开 NOT NULL：
+    # `uq_ctf2_accounts_active` 是**部分唯一索引**（`WHERE status='active'`），
+    # 造占位账号要么占掉"唯一的活跃绑定"，要么造一个 status 不是 active
+    # 的假行 —— 两种都是让数据为了满足约束而撒谎。
+    #
+    # ⚠️ `ondelete="CASCADE"` 保留：解绑账号时，那个账号同步下来的
+    #    赛事与题目确实该跟着消失。NULL 的行不受外键影响，本地案例
+    #    因此天然免疫解绑操作 —— 这是想要的行为。
+    account_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("ctf2_accounts.id", ondelete="CASCADE"), nullable=True
     )
     # CTF2 侧的 id。存字符串而不是整数：平台不同端点的 id 形态不一致
     # （赛事是整数、stage 是字符串），统一成字符串省掉每次调用的转换。

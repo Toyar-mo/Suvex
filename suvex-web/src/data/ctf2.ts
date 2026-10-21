@@ -709,6 +709,71 @@ export async function loadCtf2WorkOrder(challengeId: string): Promise<Ctf2WorkOr
 }
 
 /**
+ * 建任务的结果：一道可以立刻开跑的题 + 它认领到的证据包。
+ *
+ * ## 为什么返回整道题而不只返回 id
+ *
+ * 建完之后界面要立刻显示"建了什么"（标题、镜像、状态、带了几份证据）。
+ * 只给 id 的话前端要为了一行字再发一次 `GET /ctf2/challenges/{id}`，
+ * 而那次请求与这次是同一个事务刚写下的数据 —— 多一次往返、多一个
+ * "刚建完却读到旧数据"的机会。
+ */
+export interface IrTask {
+  challenge: Ctf2Challenge
+  /**
+   * 认领到的证据文件（名字 + 字节数）。
+   *
+   * ⚠️ 空数组有两种意思：**没传附件**、或**暂存批次过期了**。
+   * 后者在 `notice` 里有说明 —— 所以不要只看这个数组就下结论。
+   */
+  attachments: Array<{ name: string; sizeBytes?: number }>
+  /** 后端的一句提示（比如"暂存批次已过期，本次没有证据包"）。没话要说时为 null。 */
+  notice: string | null
+}
+
+/**
+ * 建一个**本地应急响应复盘任务**。
+ *
+ * ## 为什么这件事需要前端发一个请求
+ *
+ * v0.41 时应急响应只是 CTF2 里的一个题分类，案例靠
+ * `scripts/run_ir_closed_loop.py` 直接写库造出来 —— 也就是说
+ * **没有任何办法从界面上发起一次复盘**。侧栏那个「应急响应」入口
+ * 如果只能看不能建，它就只是一块提示牌。
+ *
+ * ## 附件为什么不在这个请求里
+ *
+ * 任务一创建就会被调度器毫秒级认领，"建完再传附件"的窗口不存在
+ * （扫描附件那边已经被实测抓过一次）。所以顺序是：
+ *
+ *     ① `stageAttachments(files)`  → stagingId
+ *     ② `createIrTask({ ..., attachmentStagingId })` → 后端认领附件
+ *     ③ `solveChallenge(id)`       → 真正开跑
+ *
+ * 第 ② 步之后**不等于已经开跑**：建任务只是把证据包摆好。这个拆分
+ * 是刻意的 —— 用户应该有机会在建完之后、开跑之前看一眼"证据包里有
+ * 哪几份文件"，因为传错包是最常见的一种错误，而它一旦开跑就会消耗
+ * 一整轮 LLM 额度。
+ *
+ * ## `notice` 必须显示
+ *
+ * 附件批次过期（暂存只留 2 小时）时后端**照建不误**，只在 `notice`
+ * 里说明。不显示它，用户会得到一次"跑了半天说我没给证据"的复盘，
+ * 而磁盘上明明有一批文件 —— 那是我们静默丢掉了他的输入。
+ */
+export async function createIrTask(payload: {
+  title: string
+  brief?: string
+  attachmentStagingId?: string | null
+}): Promise<IrTask> {
+  return api.post<IrTask>('/ctf2/ir/tasks', {
+    title: payload.title,
+    brief: payload.brief ?? '',
+    attachmentStagingId: payload.attachmentStagingId ?? null,
+  })
+}
+
+/**
  * 读 token 统计。
  *
  * `filter` 里没给的维度就**真的不传**（`buildUrl` 会丢掉 null）——

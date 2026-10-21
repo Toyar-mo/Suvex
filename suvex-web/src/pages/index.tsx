@@ -25,6 +25,7 @@ export const ScansPage = lazy(() => import('./ScansPage'))
 export const FindingsPage = lazy(() => import('./FindingsPage'))
 export const ReportsPage = lazy(() => import('./ReportsPage'))
 export const Ctf2Page = lazy(() => import('./Ctf2'))
+export const IrPage = lazy(() => import('./IrPage'))
 export const SettingsPage = lazy(() => import('./SettingsPage'))
 
 /**

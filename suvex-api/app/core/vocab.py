@@ -554,6 +554,15 @@ class AuditAction(StrEnum):
     CTF2_SOLVE_CANCEL = "ctf2.solve_cancel"
     CTF2_SUBMIT = "ctf2.submit"
     CTF2_SETTINGS_UPDATE = "ctf2.settings_update"
+    # ── 应急响应（v0.43）──────────────────────────────────
+    #: 建一个本地复盘任务。
+    #:
+    #: ★ 为什么不复用 `CTF2_SOLVE_START`：那条的标签是「发起 CTF2 解题」。
+    #:   审计日志是给**事后复盘的人**看的，而"这次应急响应复盘是谁建的"
+    #:   与"这道 CTF 题是谁点了解题"在追责时是两个不同的问题 ——
+    #:   前者问的是"谁把一批生产日志交给了智能体"，后者问的是"谁在打靶"。
+    #:   混成一条动作，就只能在 detail 里区分，而 detail 不会被列表页显示。
+    IR_TASK_CREATE = "ir.task_create"
     # ── 平台接入（v0.25）────────────────────────────────────
     #
     # ★ 四个动作全部留痕，因为它们的共同后果是"**服务端以后要去打哪个
@@ -612,6 +621,7 @@ AUDIT_ACTION_LABELS: Final[dict[str, str]] = {
     AuditAction.CTF2_SOLVE_CANCEL: "取消 CTF2 解题",
     AuditAction.CTF2_SUBMIT: "提交 CTF2 flag",
     AuditAction.CTF2_SETTINGS_UPDATE: "更新 CTF2 配置",
+    AuditAction.IR_TASK_CREATE: "发起应急响应复盘",
     AuditAction.CTF2_PLATFORM_DRAFT: "发起平台自动识别",
     AuditAction.CTF2_PLATFORM_ACTIVATE: "启用一个平台",
     AuditAction.CTF2_PLATFORM_USE_BUILTIN: "切回内置 CTF2",
@@ -648,6 +658,56 @@ def values(enum_cls: type[StrEnum]) -> tuple[str, ...]:
 # ★ 另外还有第五处，是 CTF2 特有的：**前端 `src/data/ctf2.ts`**。
 #   那边的标签表键集合必须与这里逐字一致，否则状态在界面上显示成空白。
 #   对账由 `scripts/verify_ctf2_parity.py` 做（机器比对，不靠人眼）。
+
+
+class Ctf2CompetitionKind(StrEnum):
+    """`ctf2_competitions.kind` 的取值 —— 这一"批题"是从哪来的。
+
+    ## ★ v0.43 新增 `local`：本地复盘案例
+
+    前两个取值都是**平台镜像**：`competition` 是赛事、`practice` 是练习集，
+    两者都由 `service.sync()` 从 CTF2 平台拉下来，因此必然挂在一个
+    `Ctf2Account` 上（那是拉取用的凭据）。
+
+    而应急响应复盘是**纯附件任务**：一批日志与证据包交给智能体，
+    没有靶机、没有 flag、平台那边根本不存在这道题。它要复用 CTF2
+    的解题流水线（ReAct 循环 / 三类事件 / 沙箱 / 三级证据分级 /
+    工单产出），但**不该被迫先绑一个 CTF2 账号**。
+
+    `local` 就是那个"不属于任何平台"的取值。它带来三处分叉：
+
+    1. `account_id` 为 NULL（见 `models.Ctf2Competition.account_id`）；
+    2. `_assert_submission_supported` 显式放行 —— 不放行的话它会落进
+       那个 fail-closed 分支，被当成"赛事题"拒绝；
+    3. worker 跳过全部平台交互（起环境 / 查是否已解出 / 释放环境），
+       因为那三处对 `local` 必然打到一个不存在的远端 id。
+
+    ## 为什么不是复用 `practice`
+
+    `practice` 的语义是"平台上某个练习集"，`_remote_ids()` 会拿它的
+    `remote_id` 当 `practice_id` 去打 `practice/{id}/...`。把本地案例
+    塞进 `practice` 的后果是：worker 拿一个自造的 `ir-lab` 去请求平台，
+    404 → 抛 `Ctf2Error` → 题目失败，而错误信息说的是"同步可能没完成"。
+    那是把配置错误伪装成同步问题。
+
+    ## ⚠️ 加取值时的必做清单
+
+    与 `Ctf2SandboxProfile` 同构，**四件事一件都不能少**：
+
+    1. 这里加值；
+    2. `ctf2/schemas.py` 的 `CompetitionKindLiteral`（有对账测试盯着）；
+    3. **手写一条 alembic 迁移**重建 `ck_ctf2_competitions_kind_valid`
+       —— `--autogenerate` 不比对 CHECK 的**内容**；
+    4. 前端 `src/data/ctf2.ts` 的 `Ctf2CompetitionKind` 联合类型。
+
+    漏第 3 步的症状与 `sandbox_profile` 那次一模一样：
+    `IntegrityError: CheckViolation ... Failing row contains (... 'local' ...)`，
+    代码、接口、界面全对，唯一错的是数据库里那行字面量。
+    """
+
+    COMPETITION = "competition"
+    PRACTICE = "practice"
+    LOCAL = "local"
 
 
 class Ctf2ChallengeStatus(StrEnum):

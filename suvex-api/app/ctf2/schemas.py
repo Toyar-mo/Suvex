@@ -47,6 +47,17 @@ SubmitModeLiteral = Literal["safe", "auto"]
 
 SandboxProfileLiteral = Literal["ctf2-sandbox", "ctf2-sandbox-re", "ctf2-sandbox-ir"]
 
+# ⚠️ 与 `core.vocab.Ctf2CompetitionKind` 的**全部**取值一致。
+#
+# `local`（v0.43）= 本地复盘案例，不属于任何平台账号。加它的时候漏改
+# 这里的症状是：`GET /ctf2/competitions` 直接 500，报
+# `Input should be 'competition' or 'practice'` —— 而数据库、worker、
+# 界面全都对，唯一错的是这一个联合类型。
+#
+# 对账测试在 `tests/ctf2/test_schemas.py`（与 `ChallengeStatusLiteral`
+# 的那条同族）。
+CompetitionKindLiteral = Literal["competition", "practice", "local"]
+
 # ★ 平台接入（v0.25）。与 `models.Ctf2Platform` 的 CHECK 约束是**同一对** ——
 #   加一个新的驱动或状态时两处都要改。CHECK 表达式建好就固化在数据库里，
 #   而这两个 Literal 能改：只改这里会让"应用层放行、数据库拒绝"，
@@ -272,9 +283,10 @@ class Ctf2PlatformActivateIn(StrictModel):
 
 class Ctf2CompetitionOut(CamelModel):
     id: str
-    accountId: str
+    # ★ v0.43：可空 —— `kind == 'local'` 的本地复盘案例不属于任何平台账号。
+    accountId: str | None
     remoteId: str
-    kind: Literal["competition", "practice"]
+    kind: CompetitionKindLiteral
     name: str
     # 平台侧状态原文。**不枚举**（那是别人家的取值空间，见 models 的说明）。
     remoteStatus: str
@@ -399,6 +411,67 @@ class Ctf2PullIn(StrictModel):
 
     #: 任意文本：整条链接、或一段 UUID 都行（服务端自己抠 id）。
     input: str = Field(min_length=1, max_length=2000)
+
+
+# ══════════════════════════════════════════════════════════
+# 本地复盘任务（v0.43，应急响应）
+# ══════════════════════════════════════════════════════════
+
+
+class IrTaskIn(StrictModel):
+    """`POST /ctf2/ir/tasks` —— 从界面建一个**本地复盘任务**。
+
+    ## 为什么这个入口必须存在
+
+    在这之前，本地复盘案例只能由 `scripts/run_ir_closed_loop.py` 直接
+    写库创建 —— 也就是说**用户无法从界面上发起一次应急响应复盘**。
+    侧栏放一个入口却建不出任务，那个入口就只是个"这里本该有功能"的
+    提示牌。
+
+    ## 字段为什么这么少
+
+    只有"叫什么"和"想查什么"。其余全部由服务端定：
+
+    · `category` 固定 `ir-root-cause` —— 建任务时用户还不知道这次
+      复盘会走到哪（是根因、时间线还是范围），让他先选一个等于让
+      他猜。分类可以在跑完之后按实际结论调整，而**建任务时选错**
+      会让提示词从第一轮就偏。
+    · `sandbox_profile` 由 `profile_for_category` 从分类推出来，
+      不由用户挑 —— 挑错的表现是"命令找不到"，而不是一句看得懂的错。
+    · `competition` 由服务端找（或建）那个隐藏的本地批次。
+
+    ## 附件不在这里
+
+    附件走**先暂存、后认领**（与扫描附件同一条路子，见
+    `scans/uploads.py` 的 `store_staged` / `claim`）。原因是同一个：
+    任务一创建就会被调度器毫秒级认领，"建完再传"的窗口不存在。
+    所以流程是 `POST /scans/attachments/staging` → 拿到 stagingId
+    → 连同本结构的字段一起 `POST /ctf2/ir/tasks` → 认领。
+    """
+
+    #: 任务名。会显示在列表与报告标题里，也参与工单文件名。
+    title: str = Field(min_length=1, max_length=200)
+    #: 想查什么 —— 会原样进提示词的"本次复盘目标"那一段。
+    #: 可空：空的时候提示词用"还原这次入侵的完整过程并给出处置建议"。
+    brief: str = Field(default="", max_length=2000)
+    #: 附件暂存批次 id（`POST /scans/attachments/staging` 的返回值）。
+    #: 可空 —— 但空的时候这次复盘没有证据可看，服务端会照建不误
+    #: 并在回执里说明，而不是拒绝（"先想起来再补附件"是常见流程）。
+    attachmentStagingId: str | None = None
+
+
+class IrTaskOut(CamelModel):
+    """建任务的结果：直接给出可以立刻开跑的那道题。"""
+
+    challenge: Ctf2ChallengeOut
+    #: 认领到的附件（名字与字节数）。为空说明这次没传附件。
+    #:
+    #: ⚠️ 形状与 `Ctf2ChallengeOut.attachments` 用同一个
+    #:   （`list[dict[str, Any]]`）而不是另立一个类型：它们描述的是
+    #:   同一件事（这道题有哪些附件），两处各定一个类只会分叉。
+    attachments: list[dict[str, Any]] = Field(default_factory=list)
+    #: 人类可读的提示，比如"附件暂存批次已过期，本次没有证据包"。
+    notice: str | None = None
 
 
 class Ctf2PullOut(CamelModel):
@@ -791,6 +864,7 @@ class Ctf2TokenUsageOut(CamelModel):
 
 __all__ = [
     "ChallengeStatusLiteral",
+    "CompetitionKindLiteral",
     "Ctf2AccountBindIn",
     "Ctf2AccountOut",
     "Ctf2ChallengeOut",
@@ -815,6 +889,8 @@ __all__ = [
     "Ctf2UsageEntryOut",
     "Ctf2WriteupOut",
     "EnvironmentStatusLiteral",
+    "IrTaskIn",
+    "IrTaskOut",
     "PlatformDriverLiteral",
     "PlatformStatusLiteral",
     "SandboxProfileLiteral",

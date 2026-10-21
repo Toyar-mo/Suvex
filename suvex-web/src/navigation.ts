@@ -6,6 +6,7 @@ import {
   ScanSearch,
   Settings2,
   ShieldAlert,
+  Siren,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -82,6 +83,26 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldAlert,
     blurb: '每一条漏洞及其证据、验证脚本（PoC）与处置状态。',
     inMobileTabBar: true,
+  },
+  {
+    id: 'ir',
+    path: '/ir',
+    label: '应急响应',
+    icon: Siren,
+    blurb: '把一批日志与证据包交给智能体，还原入侵时间线并给出处置建议。',
+    /*
+      ★ 与 CTF2 同一条理由没有进移动端底栏：它是**按事件触发**的功能
+        （出事时才开），不是日常盯的那些。它进「更多」面板。
+
+      ★ 但它**必须**是侧栏一级入口，不能像 v0.41 那样藏在 CTF2 页里。
+        判据不是"重不重要"，而是**它是不是另一件事**：
+        侧栏是"系统有哪几件事可做"的清单，而「应急响应」回答的问题是
+        「昨天那台机器到底发生了什么」，与「CTF2 上有哪些题」既不同源
+        也不同期。把它挂在 CTF2 页里，等于告诉用户这是一道特殊的题 ——
+        而它恰恰**不是**题（没有 flag、没有靶机、没有平台）。
+        藏在二级页里的功能项，用户找不到就等于没有。
+    */
+    inMobileTabBar: false,
   },
   {
     id: 'ctf2',

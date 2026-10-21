@@ -1,19 +1,40 @@
-# CTF 沙箱镜像
+# 沙箱镜像
 
-两个镜像，**后者依赖前者**：
+三个镜像，**后两个都依赖第一个**：
 
 ```
 ctf2-sandbox:latest          ← 基础镜像，服务 pwn / web / crypto / misc / forensics
-    └── ctf2-sandbox-re:latest   ← 逆向镜像，`FROM ctf2-sandbox:latest`
+    ├── ctf2-sandbox-re:latest   ← 逆向镜像，`FROM ctf2-sandbox:latest`
+    └── ctf2-sandbox-ir:latest   ← 应急响应镜像，`FROM ctf2-sandbox:latest`
 ```
 
 逆向镜像是**加层**而不是并列：它在 base 之上多装 `radare2` / `mono` /
 `angr` / `.NET` 那套（体积从 2.8 GB 涨到 4.2 GB）。所以
 
-> **base 变了，re 也得重建。**
+> **base 变了，re 与 ir 也都要重建。**
 
-`app/ctf2/runner.py` 的 `profile_for_category()` 决定一道题走哪个镜像
-（`_REVERSE_CATEGORIES` 里的走 re，其余走 base）。
+`app/ctf2/runner.py` 的 `profile_for_category()` 决定一道题走哪个镜像：
+`ir-` 前缀的先判（走 ir），`_REVERSE_CATEGORIES` 里的走 re，其余走 base。
+
+## `ctf2-sandbox-ir`：应急响应镜像
+
+与 re 的关键差别：**它装的是"读"工具，不是"打"工具**。
+
+| 类 | 工具 |
+| --- | --- |
+| 时间线 / 取证 | `sleuthkit`（含 `fls` `icat` `mactime` `blkls`）、`libewf-utils`、`foremost`、`binwalk`、`exiftool` |
+| 日志 / 文本 | `grep` `sed` `mawk`、`jq`、`xxd`、`p7zip-full`、`unzip`、`file` |
+| 流量 / 协议 | `tshark`、`tcpdump` |
+| 哈希 / 校验 | `hashdeep`、`sha256sum`（coreutils） |
+
+**刻意不装**（`prompts/ctf2_ir.md` 与提示词层共同保证）：`sqlmap`、`nmap`、
+`nikto`、`gobuster`、`ffuf`、`hashcat`、`john`、`metasploit` 之类 —— 复盘场景
+里它们没有用，而它们在场会诱导模型去"打一下看看"。
+
+⚠️ 校验器 `scripts/verify_sandbox_tools.py` 的 `CATEGORY_REQUIREMENTS["ir-root-cause"]`
+声明了 23 项契约，改 Dockerfile 后**必须**重建镜像再跑一次校验 —— 校验器读的是
+Dockerfile 名单，**镜像没重建它照样全 ✅**（这个坑真踩过，见 `docker/README.md`
+下面的"改完 Dockerfile 之后必须重建"）。
 
 ## 构建
 
@@ -25,6 +46,9 @@ docker build -f docker/ctf2-sandbox/Dockerfile -t ctf2-sandbox:latest .
 
 # 2) 逆向镜像（后；它 FROM ctf2-sandbox:latest）
 docker build -f docker/ctf2-sandbox-re/Dockerfile -t ctf2-sandbox-re:latest .
+
+# 3) 应急响应镜像（后；也 FROM ctf2-sandbox:latest）
+docker build -f docker/ctf2-sandbox-ir/Dockerfile -t ctf2-sandbox-ir:latest .
 ```
 
 首次构建约 10–20 分钟（apt 全量 + `unicorn` 要本地编译 —— Python 3.14

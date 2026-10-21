@@ -95,6 +95,8 @@ from app.ctf2.schemas import (
     Ctf2UsageEntryOut,
     Ctf2WorkOrderOut,
     Ctf2WriteupOut,
+    IrTaskIn,
+    IrTaskOut,
 )
 
 router = APIRouter(prefix="/ctf2", tags=["CTF2"])
@@ -500,6 +502,160 @@ def sync_ctf2(payload: Ctf2SyncIn, request: Request, identity: ScanDep, db: DbDe
         attachmentsFailed=len(result.attachments.failed),
         message=result.message(),
     )
+
+
+@router.post(
+    "/ir/tasks",
+    response_model=IrTaskOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="建一个本地应急响应复盘任务（v0.43）",
+)
+def create_ir_task(
+    payload: IrTaskIn, request: Request, identity: ScanDep, db: DbDep
+) -> IrTaskOut:
+    """把一个**本机证据包**变成一个可开跑的复盘任务。
+
+    ## ★ 这个端点是「应急响应」入口能不能用的关键
+
+    在此之前，本地复盘案例只能由 `scripts/run_ir_closed_loop.py` 直接
+    写库创建 —— 侧栏放一个「应急响应」入口，点进去却建不出任务，
+    那个入口就只是一句"这里本该有功能"。
+
+    它复用 CTF2 的整条流水线（ReAct 循环 / 三类事件 / 沙箱 /
+    三级证据分级 / 处置工单），但**不需要**绑 CTF2 账号 —— 证据包是
+    本机上传的，整个流程一次都不碰平台的域名。
+
+    ## scope 为什么是 scan 而不是 admin
+
+    它不写凭据、不改安全策略（`/ctf2/settings` 那种才是 admin）。
+    它做的事与"起一次扫描"同类：创建一个会消耗 LLM 额度、会起沙箱
+    容器的任务。按 `POST /scans` 的同级处理。
+
+    ## ⚠️ 附件走暂存，不在这里传
+
+    任务一创建就会被调度器毫秒级认领，"建完再传附件"的窗口不存在
+    （这条在扫描附件上已经被实测抓过一次）。所以调用顺序是：
+
+        ① POST /scans/attachments/staging    → stagingId
+        ② POST /ctf2/ir/tasks                → challengeId + 认领附件
+        ③ POST /ctf2/challenges/{id}/solve   → 真正开跑
+
+    第 ② 步内部把暂存批次里的文件搬到 `attachments.attachment_root()`,
+    这是 worker 唯一会读的目录。批次过期或没传时照建不误，回执里
+    `notice` 会说明 —— 拒绝创建会让"先想起来再补附件"这条常见流程
+    走不通，而附件丢了是次要问题。
+    """
+    challenge = service.create_local_review(
+        db, title=payload.title, brief=payload.brief
+    )
+
+    # 把暂存批次里的附件认领到这道题名下。
+    #
+    # ⚠️ 认领（`claim`）是**移动**：源目录会被清掉，所以它必须发生在
+    #    题建好之后（那时 challenge.id 才存在），并且**只调一次**。
+    #    幂等语义在 `uploads.claim` 里：批次不存在就返回空列表，不报错。
+    claimed: list[dict] = []
+    notice: str | None = None
+    if payload.attachmentStagingId:
+        claimed = _claim_ir_attachments(payload.attachmentStagingId, challenge.id)
+        if not claimed:
+            notice = "附件暂存批次不存在或已过期（暂存保留 2 小时），本次任务没有证据包。"
+
+    # 回写附件元数据，让界面能显示"这次带了几份证据"。
+    if claimed:
+        challenge.attachments = [
+            {"name": str(item.get("name") or ""), "url": None} for item in claimed
+        ]
+
+    # ★★ 必须先 commit，再写审计 —— 顺序反了会**静默丢掉整个任务**。
+    #
+    # `audit.record()` 自己会 `db.commit()`，而它的异常兜底里有一条
+    # `db.rollback()`（会话级的）。这里 `create_local_review()` 只做了
+    # `flush()`，也就是说此刻这道题还**没落盘**。于是：
+    #
+    #   audit.record() 内部抛异常（任何原因）
+    #     → except 分支 rollback()
+    #     → 把这道题一起回滚掉
+    #     → 审计丢了（那是它的设计：审计可缺条）
+    #     → 但任务也没了，而端点继续往下走，返回一个已脱离会话的对象
+    #     → 最终用户在界面上得到 500，或（更糟）一个"看起来建成了"
+    #       但库里不存在的 id
+    #
+    # 这个组合不是理论推演：第一次跑 `test_ir_task_router.py` 时它是红的，
+    # 报的错是 `Instance <Ctf2Challenge> is not persistent within this Session`
+    # 加一句 `AttributeError: 'Request' object has no attribute 'identity'`
+    # —— 后者才是第一现场（见下面那行的说明），前者是它的后果。
+    db.commit()
+    db.refresh(challenge)
+
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        # ★ 专用动作而不是复用 `CTF2_SOLVE_START`：它的标签是
+        #   「发起 CTF2 解题」，而这次动作是"把一批生产日志交给智能体"。
+        #   审计日志给事后追责的人看，两者是两个不同的问题。
+        action=AuditAction.IR_TASK_CREATE,
+        summary=f"建了一个本地复盘任务：{challenge.title}",
+        target=challenge.id,
+        detail={
+            "kind": "local",
+            "category": challenge.category,
+            "sandboxProfile": challenge.sandbox_profile,
+            "attachments": [str(item.get("name") or "") for item in claimed],
+        },
+    )
+    db.refresh(challenge)
+
+    return IrTaskOut(
+        challenge=_challenge_out(challenge, None),
+        attachments=claimed,
+        notice=notice,
+    )
+
+
+def _claim_ir_attachments(staging_id: str, challenge_id: str) -> list[dict]:
+    """把暂存的证据包搬到这道题自己的附件目录。返回认得的那几个。
+
+    ## 为什么要单独搬一次，不能用 `uploads.claim`
+
+    `uploads.claim` 搬进的是**扫描**的附件目录（`scan_upload_dir(scan_id)`），
+    而 worker 读的是 `attachments.attachment_root(challenge_id)`
+    （`_scan_runs/_ctf2_attachments/<challenge_id>/`）。两个路径属于
+    两个不同的领域，复用前者的函数会得到"文件搬到了，但 worker 看不见"。
+
+    ## ⚠️ 必须排除指纹文件
+
+    `attachments.FINGERPRINT_SUFFIX`（`.sha256`）是同步逻辑写下的旁挂
+    文件。不排除的话 `_attachment_paths` 会把它当成一份证据交给模型 ——
+    而模型会去读一个只含一行哈希的文件，然后报告"这份证据是空的"。
+    这条坑在 `runner._attachment_paths` 里有同样的说明。
+    """
+    from app.ctf2 import attachments as attachments_mod
+    from app.scans import uploads as uploads_mod
+
+    source = uploads_mod.staging_dir(staging_id)
+    if not source.is_dir():
+        return []
+
+    target = attachments_mod.attachment_root(challenge_id)
+    target.mkdir(parents=True, exist_ok=True)
+
+    claimed: list[dict] = []
+    for path in sorted(source.iterdir()):
+        if not path.is_file() or path.name.startswith("."):
+            continue
+        if path.name.endswith(attachments_mod.FINGERPRINT_SUFFIX):
+            continue
+        name = uploads_mod.unique_name(target, path.name)
+        (target / name).write_bytes(path.read_bytes())
+        claimed.append({"name": name, "sizeBytes": (target / name).stat().st_size})
+
+    # 认领 = 移动。清掉暂存目录，让"已认领"由文件系统本身表达
+    # （与 `uploads.claim` 同一纪律）。
+    import shutil
+
+    shutil.rmtree(source, ignore_errors=True)
+    return claimed
 
 
 @router.get("/competitions", response_model=list[Ctf2CompetitionOut], summary="赛事列表")
