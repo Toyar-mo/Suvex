@@ -141,6 +141,27 @@ def test_pentest_prompt_block_actually_injected() -> None:
     assert "发现" in prompt or "证据" in prompt
 
 
+def test_pentest_prompt_keeps_methodology_sections() -> None:
+    """渗透提示词的「方法论」段不能在未来重构里被悄悄删掉。
+
+    这几段是照着成熟项目的做法补的（分阶段推进 / 一次只打一类 / 认证绕过
+    清单 / 读→写提权 / 工具选择纪律）。删掉它们，模型会退化成「随机猜 URL」
+    —— 这正是那次 80 轮任务 96% 动作是 http_request 的成因。用关键短语
+    钉死，坏掉时测试直接红，而不是等到真跑才发现。
+    """
+    from app.ctf2 import runner as ctf2_runner
+
+    p = ctf2_runner.load_pentest_prompt()
+    # 五个方法论小节必须都在
+    for heading in ("6.2.1", "6.2.2", "6.2.3", "6.3.1"):
+        assert heading in p, f"方法论小节 {heading} 丢了"
+    # 关键纪律短语
+    for phrase in ("一次只专注", "读→写", "http_request", "dirb/wordlists"):
+        assert phrase in p, f"关键短语「{phrase}」丢了"
+    # 反面：不该推荐镜像里不存在的工具当常规手段（nuclei 只能出现在「没有」的告诫里）
+    assert "镜像里没有 `nuclei`" in p or "镜像里**没有** `nuclei`" in p
+
+
 # ══════════════════════════════════════════════════════════
 # 2. findings → vulnerabilities.json
 # ══════════════════════════════════════════════════════════
