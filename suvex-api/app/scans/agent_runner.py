@@ -446,6 +446,12 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
         name=sandbox_name,
         image=ctf2_runner.image_for_profile(solve_spec.profile),
         network_isolated=solve_spec.network_isolated,
+        # 渗透评估走专用网桥（全 NAT 出站、与平台库/CTF 靶站隔离），
+        # **不走** `suvex-ctf2` 的靶站白名单 —— 那个会把任意授权目标挡在
+        # 外面。判据与实测见 `PENTEST_NETWORK` 与 `SandboxContainer.network_name`。
+        # 注意：`network_isolated=True`（本地 repo/path 目标）时这一项被
+        # `_network_arg()` 忽略，容器仍走 `--network none`。
+        network_name=ctf2_runner.PENTEST_NETWORK,
         cpus=solve_spec.cpus,
         memory_mb=solve_spec.memory_mb,
         workspace_dir=spec.run_dir / "agent_run" / "workspace",

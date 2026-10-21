@@ -2450,6 +2450,29 @@ def test_sandbox_uses_its_own_network_only_when_opted_in() -> None:
     assert "host" not in argv
 
 
+def test_sandbox_pentest_uses_dedicated_bridge_not_ctf2_whitelist() -> None:
+    """★ 渗透评估走 `suvex-pentest`，不走 `suvex-ctf2` 白名单。
+
+    `suvex-ctf2` 的 iptables 白名单只放行几个 CTF 靶站网段 —— 拿它跑
+    任意授权目标，忘加白名单的症状是容器内 98 个工具全超时（真踩过，
+    打 192.168.1.121 curl 000/5s）。所以渗透传 `network_name`，
+    `_network_arg` 必须优先用它。
+    """
+    argv = _argv_of(network_isolated=False, network_name=runner.PENTEST_NETWORK)
+    assert argv[argv.index("--network") + 1] == runner.PENTEST_NETWORK
+    assert argv[argv.index("--network") + 1] != runner.CTF2_NETWORK
+
+
+def test_sandbox_isolation_beats_pentest_bridge_name() -> None:
+    """`network_isolated=True` 时，即便传了网桥名也走 `none`。
+
+    本地 repo/path 目标不需要联网，隔离是更安全的那一档，不该被
+    "我传了个网桥名"覆盖 —— 这是三态网络里优先级最高的分支。
+    """
+    argv = _argv_of(network_isolated=True, network_name=runner.PENTEST_NETWORK)
+    assert argv[argv.index("--network") + 1] == "none"
+
+
 def test_sandbox_argv_never_grants_extra_privileges() -> None:
     """★ 三个"一票否决"的参数永远不出现：`--privileged`、
     docker socket 挂载、`--network host`。

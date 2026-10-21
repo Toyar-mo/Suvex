@@ -188,6 +188,20 @@ SANDBOX_NAME_PREFIX = "ctf2-"
 # 这一条价值是真的 —— 改动这里要连它一起考虑。
 CTF2_NETWORK = "suvex-ctf2"
 
+#: 渗透评估专用网桥（2026-10-22）。
+#:
+#: 与 `CTF2_NETWORK`（`suvex-ctf2`，靠 iptables 白名单收窄到 CTF 靶站）
+#: 和默认 bridge（`172.17.0.0/16`，上面躺着平台数据库 `suvex-db`）**都隔离**。
+#:
+#: 它有默认 bridge 那套 NAT 出站规则 → 容器内 nmap/ffuf/gobuster/sqlmap
+#: 能连任意授权目标与公网；但连不到 `suvex-db`（实测 `172.17.0.2:5432`
+#: 返回 000），也连不到 ctf2 靶站。判据与实测见
+#: `SandboxContainer.__init__` 里 `network_name` 的注释。
+#:
+#: 由 `ensure_pentest_network()` 惰性创建（`docker network create`），
+#: 幂等。手动等价命令：`docker network create suvex-pentest`。
+PENTEST_NETWORK = "suvex-pentest"
+
 #: 关掉"同网络容器互通"的那个 Docker 网络选项。
 #:
 #: ## ★★ 为什么用这个，而不是"每道题一个网络"
@@ -901,6 +915,65 @@ def ensure_ctf2_network() -> bool:
     return False
 
 
+def ensure_pentest_network() -> bool:
+    """确保渗透评估专用网桥 `suvex-pentest` 存在（幂等）。
+
+    ## 与 `ensure_ctf2_network` 的关系
+
+    两份、不共用一个网桥。理由在 `PENTEST_NETWORK` 与
+    `SandboxContainer.network_name` 的注释里：CTF 靶站白名单和任意
+    授权目标是两种出站策略，混在一个网桥上要么把 CTF 靶站暴露给
+    渗透容器、要么把渗透目标挡在白名单外。
+
+    ## 为什么也要 ICC=false
+
+    同一次运行可能并发多个渗透任务，彼此不该互通（A 目标里读到的
+    凭证不该流向 B 目标）。与 CTF 侧同一理由。
+
+    ## 为什么不迁移（不像 `ensure_ctf2_network` 那样删了重建）
+
+    `suvex-pentest` 是本轮新引入的网络，历史部署上不存在"没关 ICC 的
+    旧版本"。所以这里只做"查不到就建"，不做迁移 —— 少一条删网络的
+    代码路径就少一个误删在跑容器的机会。真遇到 ICC 没关（人为建的），
+    后果是并发渗透任务互通，属于可接受的残余风险，记在注释里。
+
+    失败不阻断：返回 False 只记 warning，真正失败会在起容器时暴露。
+    """
+    inspected = _run(
+        ["docker", "network", "inspect", PENTEST_NETWORK],
+        timeout=30,
+    )
+    if inspected.ok:
+        return True
+
+    created = _run(
+        [
+            "docker",
+            "network",
+            "create",
+            "-o",
+            f"{NETWORK_ICC_OPTION}=false",
+            PENTEST_NETWORK,
+        ],
+        timeout=60,
+    )
+    if created.ok:
+        logger.info("已创建渗透评估网桥 %s（出站 NAT 正常，与平台库/CTF 靶站隔离）", PENTEST_NETWORK)
+        return True
+
+    # 竞态复查：create 失败可能因为另一个进程刚建好。
+    if _run(["docker", "network", "inspect", PENTEST_NETWORK], timeout=30).ok:
+        return True
+
+    logger.warning(
+        "无法创建渗透评估网桥 %s，渗透沙箱将起不来：%s",
+        PENTEST_NETWORK,
+        (created.stderr.strip() or "未知原因"),
+    )
+    return False
+
+
+
 def ensure_docker_available() -> None:
     """起容器前的自检。
 
@@ -939,6 +1012,7 @@ class SandboxContainer:
         name: str,
         image: str,
         network_isolated: bool = True,
+        network_name: str | None = None,
         cpus: int | None = None,
         memory_mb: int | None = None,
         host_resources: Path | None = None,
@@ -949,6 +1023,36 @@ class SandboxContainer:
         self.name = name
         self.image = image
         self.network_isolated = network_isolated
+        # ★★ 渗透评估专用网桥（2026-10-22 加）。
+        #
+        # ## 为什么 CTF 那套 egress 白名单不能拿来跑渗透
+        #
+        # CTF 解题是打**固定靶站**，所以 `suvex-ctf2` 的 iptables
+        # `DOCKER-USER` 白名单收窄到几个已知靶站网段是合理的（见
+        # `deploy/ctf2-egress-rules.sh`）。
+        #
+        # 但**渗透评估的目标是任意授权目标**。把渗透也塞进 `suvex-ctf2`，
+        # 就变成"每换一个目标就要人工加一条 iptables"，而且忘加的症状是
+        # 容器内 98 个工具全部超时、96% 的动作退化成宿主侧 http_request
+        # 逐个猜 URL —— 这个坑真踩过（打 192.168.1.121，curl 000/5s）。
+        #
+        # ## 那能不能直接用默认 bridge？
+        #
+        # **不能。** 实测：平台数据库 `suvex-db`(postgres:16) 就在默认
+        # bridge `172.17.0.0/16` 上，从默认 bridge 的容器连
+        # `172.17.0.2:5432` 是 **CONNECTED**（见上文 156 行注释的实测）。
+        # 渗透目标往往就是内网 IP，一旦容器在默认 bridge 上、LLM 又被
+        # 指挥去"顺手扫一下同网段"，它能直接摸到平台库。
+        #
+        # ## 结论：专用网桥 `suvex-pentest`
+        #
+        # 它与 `suvex-ctf2`、默认 bridge 都隔离，默认 bridge 那套 NAT
+        # 出站规则让它能连任意目标与公网，但连不到 db、连不到 ctf2 靶站。
+        # 实测：目标 200 / db 000 / 公网 200。
+        #
+        # `network_name` 为 None 时退回老行为（CTF2_NETWORK / none），
+        # 所以 ctf2 侧零改动。
+        self.network_name = network_name
         self.cpus = cpus
         self.memory_mb = memory_mb
         self.host_resources = host_resources
@@ -1032,6 +1136,23 @@ class SandboxContainer:
         #    要不要换参数），而不是先写重建再指望它活。
         self.died = False
 
+    def _network_arg(self) -> str:
+        """决定 `docker run --network` 取什么值。
+
+        三态，优先级从高到低：
+
+        1. `network_isolated=True` → `"none"`（最严，本地题/运维强制隔离）；
+        2. `network_name` 非空 → 用那个网桥（渗透评估传 `suvex-pentest`）；
+        3. 否则 → `CTF2_NETWORK`（`suvex-ctf2`，CTF 靶站，靠 iptables 白名单收窄）。
+
+        第 1 条排在 `network_name` 前面是**故意的**：即使渗透场景传了网桥名，
+        只要上层判定要隔离（本地 repo/path 目标），就仍走 `none`。隔离永远是
+        更安全的那一档，不该被"我传了个网桥名"覆盖。
+        """
+        if self.network_isolated:
+            return "none"
+        return self.network_name or CTF2_NETWORK
+
     def _argv(self) -> list[str]:
         """构造 `docker run` 的参数。
 
@@ -1074,7 +1195,7 @@ class SandboxContainer:
             # 白名单就只剩**应用层**那一层，这是如实记录的残余风险，
             # 见 `guard_tool_url` 的说明。
             "--network",
-            CTF2_NETWORK if not self.network_isolated else "none",
+            self._network_arg(),
             "--read-only",
             # /work 可写但在内存里：容器一停，题目样本与产出全部消失。
             # `uid/gid` 必须给：tmpfs 默认属主是 root，而容器里是非 root
@@ -1163,8 +1284,16 @@ class SandboxContainer:
         #
         # 只在**要联网**时查：`network_isolated` 的容器走 `--network none`，
         # 与这个网络无关，没必要为它付这次查询。
+        #
+        # 渗透评估走的是**另一个**网桥（`PENTEST_NETWORK`），它的准备也
+        # 是"起来之前先确保存在"。按 `network_name` 分派，别混着查
+        # `ensure_ctf2_network`（那个会去建 `suvex-ctf2` 靶站网络，
+        # 渗透根本不用它）。
         if not self.network_isolated:
-            ensure_ctf2_network()
+            if self.network_name:
+                ensure_pentest_network()
+            else:
+                ensure_ctf2_network()
         result = _run(self._argv(), timeout=120)
         if not result.ok:
             raise Ctf2SandboxError(
