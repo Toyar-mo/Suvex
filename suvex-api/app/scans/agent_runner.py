@@ -1,0 +1,698 @@
+"""自研引擎后端：用 `ctf2` 那套内核跑渗透扫描。
+
+## 这是什么，为什么要有它
+
+`scans/runner.py` 的 `StrixRunner` 把一次扫描交给**外部 strix CLI**。
+而这个模块把同一件事交给**我们自己的引擎**（`app/ctf2/runner.py` 的
+`SandboxContainer` + `LlmGateway` + `solve_in_sandbox`）。
+
+两者是**同一个内核的两个抽屉**，不是两套系统：
+
+| 能力 | ctf2 | 本模块 |
+| --- | --- | --- |
+| LLM 调用（含换模 fallback） | `LlmGateway` | ✅ 直接用 |
+| 沙箱容器生命周期 | `SandboxContainer` | ✅ 直接用 |
+| 三个原子工具 | `dispatch_tool` | ✅ 直接用 |
+| ReAct 主循环 + 三段式上下文 | `solve_in_sandbox` | ✅ 直接用 |
+| 空转台账 / 截断提醒 / 收尾提醒 | 主循环内置 | ✅ 直接用 |
+| 判据 | 「拿到 flag」 | ❌ 换成「已验证的发现」 |
+| 产出 | 候选 flag | ❌ 换成结构化发现 |
+
+所以它**不是**一份复制粘贴 —— 循环、工具、沙箱、LLM 全部复用，
+真正新写的只有"判据与产出"这两件事。
+
+## ★ 为什么它比 strix 那条路更值（不是"造个轮子"）
+
+`scans/strix_events.py` 那一整层（约 700 行）之所以存在，是因为
+**strix 的事件格式要翻译成我们的契约**，而且那个翻译是猜的：
+
+* `discovery` 的三个载荷字段靠"名字最可能对得上"取
+  （见那个模块 docstring 的「启发式的部分」一节）；
+* `poc_generated` / `verified` / `blocked` 的依据参数名**曾经全部猜错**，
+  三条都标着"✅ 确证"，其中两条的真实分支从来没命中过；
+* `blocked` 在 strix 流里根本没有来源。
+
+而自研引擎**自己知道它做了什么**：它知道这一轮是在侦察还是在校验、
+它知道那条命令的原始输出、它知道某个结论有没有证据撑。
+所以事件不再需要翻译 —— 可以直接写成契约形状，
+`discovery` / `verified` / `blocked` 从"猜参数名"变成"引擎自报"。
+
+## 进程模型：线程 + 事件循环，不是子进程
+
+`LaunchResult.process` 在 strix 那条路上是一个 `subprocess.Popen`，
+调度器靠 `poll()` 判存活。而本模块的工作单元是一个**线程里跑的
+asyncio 事件循环**（与 `app/ctf2/scheduler.py` 完全同构 —— 那里的
+`_Running.thread` + `thread.is_alive()` 就是这个形状）。
+
+所以 `launch()` 返回的不是 `Popen`，而是一个满足
+`ProcessLike` 协议的轻量对象（见 `_TaskHandle`）：
+
+* `poll()` → `None`（还在跑）或退出码（跑完了）；
+* `pid` → 线程 id（仅用于日志，**不可**用于 `terminate_tree`）；
+* `terminable` → `False`（线程杀不掉，见下）。
+
+### ⚠️ 线程杀不掉 —— 这个限制必须写在明处
+
+Python **没有**安全的杀线程手段（`PyThreadState_SetAsyncExc` 是未定义
+行为，且对正在 `await` 的协程无效）。这条限制与 `ctf2/scheduler.py`
+docstring 里那段完全一样，处理方式也一样：
+
+* `terminate` 的语义是"**设置停止标志，让它在下一个检查点自己退出**"，
+  不是"立刻全停"；
+* 超时之后留下的线程是 daemon，随进程消失；
+* 但**沙箱容器不会随线程消失**，所以主循环的 `finally` 里那个
+  `sandbox.destroy()` 是唯一的清理路径。
+
+所以 `_TaskHandle.terminable` 为 `False` 时，调度器那边**必须**跳过
+`terminate_tree(pid)` —— 拿一个线程 id 去 `kill` 会打到不相干的进程上。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import logging
+import threading
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from app.scans.runner import (
+    LaunchResult,
+    LaunchSpec,
+    RunnerUnavailable,
+)
+
+logger = logging.getLogger("suvex.scans.agent")
+
+#: 本后端在 `scans.runner._RUNNERS` 里的注册名，也是落进 `Scan.runner` 的值。
+RUNNER_NAME = "agent"
+
+#: 退出码。**刻意只用 0 与非 0**，不复用 strix 的 `EXIT_FINDINGS = 2`。
+#:
+#: ## 为什么不用 2
+#:
+#: strix 的 `2` 表示"发现了漏洞"，而 argparse 的用法错误**也是 2** ——
+#: 这正是 `service.finalize` 要拿 `strix_runs/` 目录存在性去消歧的那件事
+#: （见 `runner.did_strix_run` 与模块 docstring）。
+#:
+#: 自研引擎**没有这个二义性**：它要么正常跑完（有发现或没发现都是 0），
+#: 要么抛异常。所以它不需要一个"发现了东西"的特殊退出码 ——
+#: 发现本身走的是**结构化产出**（`vulnerabilities.json`），不是退出码。
+#:
+#: 而如果这里也返回 2，`finalize` 会去问 `did_strix_run()`，那个函数
+#: 找的是 `strix_runs/` 目录 —— 自研引擎永远不建它，于是每条扫描都被
+#: 判成 failed。这个 bug 会**静默地**把所有成功说成失败。
+EXIT_OK = 0
+EXIT_ERROR = 1
+
+
+@dataclass
+class _TaskHandle:
+    """一个在跑的引擎任务。满足调度器需要的 `ProcessLike` 形状。
+
+    ⚠️ 它**不是** `subprocess.Popen`。任何拿它当 Popen 用的地方
+    （`terminate_tree(handle.pid)`、`handle.wait(timeout=…)`）都是错的，
+    见模块 docstring 的「线程杀不掉」一节。
+    """
+
+    thread: threading.Thread
+    #: 线程标识，仅用于日志与去重。**不是** OS pid，绝不能传给 `kill`。
+    pid: int
+    started_at: float
+    #: 让线程自己退出的标志。主循环在检查点上看它。
+    stop_event: threading.Event = field(default_factory=threading.Event)
+    #: 线程结束后的退出码，`poll()` 读它。
+    exit_code: int | None = None
+
+    @property
+    def terminable(self) -> bool:
+        """能不能用 `terminate_tree(pid)` 杀掉。**恒为 `False`**。
+
+        调度器与 `service` 的所有终止路径都必须先问这个 —— 见模块
+        docstring 的「线程杀不掉」一节。做成属性而不是常量，是为了让
+        调用点写成 `if handle.terminable:` 而不是 `if isinstance(...)`：
+        将来若有第三种后端（比如真的回到子进程），它不必改调用点。
+        """
+        return False
+
+    def poll(self) -> int | None:
+        """`None` = 还在跑；非 `None` = 已结束（值即退出码）。
+
+        语义与 `subprocess.Popen.poll()` 一致 —— 调度器 `_reap_finished`
+        正是按这个语义写的，所以它不必改。
+        """
+        if self.thread.is_alive():
+            return None
+        # 线程已经结束。退出码由线程体在 finally 里写；如果它连写都没来得及
+        # （进程被杀、解释器退出），那就是异常终止 —— 报非 0 而不是 0。
+        return self.exit_code if self.exit_code is not None else EXIT_ERROR
+
+    def request_stop(self) -> None:
+        """请它自己退出。**不是**立刻生效，见模块 docstring。"""
+        self.stop_event.set()
+
+
+class AgentRunner:
+    """用自研引擎跑一次扫描。
+
+    ## 它做不到什么（如实写在这里，不在别处再声明一遍）
+
+    strix 有四样本模块**目前没有**的能力，切换默认后端意味着暂时失去它们：
+
+    1. **多智能体分工**（侦察 / 利用 / 验证各一个 agent）——
+       这里是单 agent 单循环；
+    2. **断点续跑**（完整 LLM 历史与 agent 拓扑）—— 这里只有
+       `resume_digest` 的动作纪要，上下文是重新拼的；
+    3. **攻击面自动扩展**（strix 的 `--scope-mode diff`）—— 没有；
+    4. **沙箱内交互式长驻 shell** —— 这里每条命令独立起进程
+       （`SandboxContainer.exec`），没有可保持的 shell 会话。
+
+    这四项在 `LaunchSpec` 上的表现是：`resume_run_id` 被**忽略**。
+    刻意不静默忽略 —— `launch()` 会打一条 warning 说明"这个后端不支持续跑"，
+    因为用户点了「续跑」却得到一次全新的扫描，是必须被告知的事。
+    """
+
+    name = RUNNER_NAME
+
+    def ensure_ready(self) -> None:
+        """启动前自检。
+
+        ## 检查什么、不检查什么
+
+        **检查**：引擎关心的三条硬前置 ——
+          1. LLM 接入点配好了没有（`LlmGateway` 需要在构造时就有 key 与 base）；
+          2. 沙箱镜像在不在本地（`ctf2-sandbox` 那一族，见 `image_for_profile`）；
+          3. docker 能不能用（`SandboxContainer.start` 会起容器）。
+
+        第 2 条尤其重要：strix 那条路上实测踩过"等 197 秒才发现镜像拉不下来"
+        （`ghcr.io/usestrix/strix-sandbox:1.3.0`，11 层全卡在 `Pulling fs layer`）。
+        本模块的镜像是**本地构建**的（`docker/ctf2-sandbox/Dockerfile`），
+        不走网络，所以这一条只是"在不在"，不是"拉得到吗"。
+
+        **不检查**：目标可达性。那是 `scans/reachability.py` 的事，
+        而且它**刻意不阻断建任务**（见那个模块的说明）。
+        """
+        problems: list[str] = []
+
+        # ① 引擎能否 import（这条最容易在系统升级后静默失效）
+        try:
+            from app.ctf2 import runner as ctf2_runner  # noqa: F401
+        except Exception as exc:  # noqa: BLE001
+            # ⚠️ 用 `except Exception` 而不是 `ImportError`：一个坏掉的
+            # 依赖可能在 import 期抛任何东西（`KeyError`、`RuntimeError`、
+            # 甚至 `SystemExit`）。这里要的是"能不能用"这个答案，
+            # 不是"是不是 ImportError"这个分类。
+            problems.append(f"自研引擎无法导入：{type(exc).__name__}: {exc}")
+
+        # ② docker 可用（`ensure_docker_available` 内部会抛 Ctf2Error）
+        if not problems:
+            try:
+                ctf2_runner.ensure_docker_available()
+            except Exception as exc:  # noqa: BLE001
+                problems.append(str(exc))
+
+        if problems:
+            raise RunnerUnavailable(
+                "自研引擎不可用：\n" + "\n".join(f"  · {p}" for p in problems)
+            )
+
+    def command(self, spec: LaunchSpec) -> list[str]:
+        """**永远返回空列表。**
+
+        ## 为什么这个协议方法在这里是空的
+
+        `ScanRunner` 协议里 `command()` 的存在理由是 strix 那条路需要
+        拼一个 argv 交给子进程，而"拼出来的东西"要能被展示与审计。
+        本模块没有子进程、没有 argv —— 它是进程内的一线程。
+
+        刻意**返回空列表而不是抛 NotImplementedError**：`service.launch_scan`
+        会把 `runner.command(spec)` 的结果记进 `LaunchResult.command`，
+        而那里只是拿来记日志；抛异常会让整条启动路径失败，
+        为了一个诊断字段而让功能不可用是错的。
+
+        ⚠️ 但也**不要**拿它当成"这个后端没有配置"的证据 ——
+        配置在 `env()` 与引擎自己的 settings 里。
+        """
+        return []
+
+    def env(self, spec: LaunchSpec) -> dict[str, str]:
+        """**永远返回空字典。** 理由与 `command()` 完全一样。
+
+        本模块不向任何子进程传环境变量，因为不启子进程。
+        引擎自己的配置（模型、超时）走 `SolveSpec` 与 `app.core.config`。
+        """
+        return {}
+
+    def detect_run_id(self, run_dir: Path) -> str | None:
+        """引擎自己写的运行标识。
+
+        ## 为什么要有一个
+
+        `Scan.run_id` 是契约 §2.1 的对外字段（前端「运行 ID」那一栏），
+        而 `service.launch_scan` 拿的是 `LaunchResult`，里面没有 run_id ——
+        它是 `scheduler._reap_finished` 与 `recover_orphans` 调
+        `detect_run_id()` 补上的。
+
+        所以这里必须真的返回点什么，否则界面上那一栏对自研引擎永远是空的。
+
+        实现：本模块在 `run_dir/agent_run/` 下写一个 `run.json`，
+        取它的 `run_id` 字段。文件不存在 → 返回 `None`（还没开始跑）。
+        """
+        meta = run_dir / "agent_run" / "run.json"
+        if not meta.is_file():
+            return None
+        try:
+            import json
+
+            data = json.loads(meta.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            # 读不到或格式坏了都不是致命错误 —— run_id 是诊断字段，
+            # 为它让整条回收路径失败是本末倒置。
+            logger.warning("读取运行标识失败：%s", meta, exc_info=True)
+            return None
+        value = data.get("run_id")
+        return str(value) if value else None
+
+    def launch(self, spec: LaunchSpec) -> LaunchResult:
+        """起一个线程跑引擎，立刻返回句柄。"""
+        spec.run_dir.mkdir(parents=True, exist_ok=True)
+        (spec.run_dir / "agent_run").mkdir(exist_ok=True)
+        spec.log_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 续跑：本后端没有这个能力（见类 docstring 的第 2 条）。
+        # **明说而不是静默忽略** —— 用户点了「续跑」却得到全新扫描，
+        # 那是必须被告知的事。
+        if spec.resume_run_id:
+            logger.warning(
+                "扫描 %s 请求续跑（run_id=%s），但自研引擎后端不支持续跑，"
+                "本次将从头开始",
+                spec.scan_id,
+                spec.resume_run_id,
+            )
+
+        handle = _TaskHandle(
+            thread=threading.Thread(target=lambda: None),  # 占位，下面重建
+            pid=0,
+            started_at=time.time(),
+        )
+
+        def body() -> None:
+            exit_code = EXIT_ERROR
+            try:
+                exit_code = asyncio.run(_run_engine(spec, handle.stop_event))
+            except BaseException:  # noqa: BLE001 - 包括 CancelledError
+                logger.exception("扫描 %s 的引擎线程异常退出", spec.scan_id)
+                exit_code = EXIT_ERROR
+            finally:
+                handle.exit_code = exit_code
+
+        thread = threading.Thread(
+            target=body,
+            name=f"suvex-agent-scan-{spec.scan_id[-8:]}",
+            daemon=True,
+        )
+        handle.thread = thread
+        handle.pid = thread.ident or 0  # start() 之后才有 ident，先占位
+        thread.start()
+        handle.pid = thread.ident or 0
+
+        return LaunchResult(
+            # ⚠️ `pid=0`，**不是** handle.pid。
+            #
+            # `LaunchResult.pid` 会被 `service.launch_scan` 存进 `Scan.pid`，
+            # 而 `Scan.pid` 在 `recover_orphans` 里会被喂给 `is_alive()` /
+            # `terminate_tree()`。线程标识不是 OS pid —— 拿它去 `os.kill`
+            # 可能探到、甚至杀掉不相干的进程（线程 id 往往是个小整数，
+            # 与真实 pid 撞车的概率不低）。
+            #
+            # 传 0 之后：`is_alive(0)` 恒 False（见那里的 `pid <= 0` 守卫），
+            # 于是孤儿回收会把它判成"进程已不在"，走 failed 分支而不是
+            # 去杀一个不存在的 pid —— 这正是我们要的安全行为。
+            # 线程的真实 ident 留在 `handle.pid` 里，只用于日志。
+            pid=0,
+            run_dir=spec.run_dir,
+            log_path=spec.log_path,
+            command=(),
+            process=handle,  # type: ignore[arg-type]
+        )
+
+
+async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
+    """一次扫描的引擎主流程。返回退出码。
+
+    ⚠️ 这个函数在**独立线程的事件循环**里跑，不碰数据库 ——
+    与 `ctf2.runner.solve_in_sandbox` 同一条纪律（那边按设计不碰 DB，
+    因为它是 async 而 Session 是同步的）。事件的落库由调度器
+    `_import_for` 那条路负责。
+
+    ## 它做什么（就四步）
+
+    1. `build_solve_spec_from_scan` 把 `LaunchSpec` 翻成引擎的 `SolveSpec`；
+    2. 起沙箱容器（`SandboxContainer`），`finally` 里必定 destroy；
+    3. 跑 `solve_in_sandbox`，用一个**旁路线程轮询 `stop_event`** 的方式
+       实现"请求停止"（`notify` 吞异常，所以不能靠回调抛异常来停）；
+    4. 把 `outcome.findings` 翻成 `vulnerabilities.json`（strix 记录形状），
+       落在 `run_dir` 根 —— 这样既有的 `findings.importer` 一行不用改就能读。
+
+    ## 为什么 findings 要落成 strix 的形状
+
+    `findings/service.import_from_run` 读的是 `run_dir/vulnerabilities.json`
+    （或 `run_dir/strix_runs/*/vulnerabilities.json`）。只要我们把引擎的
+    `findings` 写成那个形状，**整条发现入库链路（含 SLA、时间线、CWE 映射）
+    都复用现成代码**。这是"只加场景包、不动核心"在产出侧的具体体现。
+    """
+    # 延迟 import：`app.ctf2.runner` 会拉起 openai/httpx 一大坨依赖，
+    # 而本模块在 `scans.runner` 的模块级 `_RUNNERS` 里被引用 ——
+    # 顶层 import 会让"只是想看看有哪些后端"变成"必须装好整条 LLM 栈"。
+    from app.ctf2 import runner as ctf2_runner
+
+    logger.info("自研引擎开跑：%s", spec.summary())
+
+    try:
+        solve_spec = build_solve_spec_from_scan(spec)
+    except Exception:  # noqa: BLE001
+        logger.exception("扫描 %s：构造 SolveSpec 失败", spec.scan_id)
+        return EXIT_ERROR
+
+    # 沙箱名：与 ctf2 的命名规则区分（`ctf2-` 前缀），避免混淆清理逻辑。
+    sandbox_name = f"suvex-scan-{spec.scan_id[-12:]}"
+    sandbox = ctf2_runner.SandboxContainer(
+        name=sandbox_name,
+        image=ctf2_runner.image_for_profile(solve_spec.profile),
+        network_isolated=solve_spec.network_isolated,
+        cpus=solve_spec.cpus,
+        memory_mb=solve_spec.memory_mb,
+        workspace_dir=spec.run_dir / "agent_run" / "workspace",
+    )
+
+    log_lines: list[str] = []
+
+    def on_progress(kind: str, summary: str, payload: dict[str, str]) -> None:
+        """过程落盘（日志文件）。**不碰 DB** —— 见函数 docstring。"""
+        log_lines.append(f"[{kind}] {summary}")
+        # 边跑边写，便于 `tail -f` 看进度。
+        with contextlib.suppress(OSError):
+            spec.log_path.write_text("\n".join(log_lines), encoding="utf-8")
+
+    gateway = ctf2_runner.LlmGateway(
+        model=solve_spec.llm_model,
+        api_key=solve_spec.llm_api_key,
+        base_url=solve_spec.llm_api_base,
+        label=solve_spec.llm_label,
+        kind=solve_spec.llm_kind,
+    )
+    system_prompt = ctf2_runner.build_system_prompt_by_spec(solve_spec)
+
+    try:
+        sandbox.start()
+    except Exception:  # noqa: BLE001
+        logger.exception("扫描 %s：沙箱启动失败", spec.scan_id)
+        return EXIT_ERROR
+
+    try:
+        outcome = asyncio.run(
+            _solve_with_stop(
+                solve_spec,
+                sandbox=sandbox,
+                gateway=gateway,
+                system_prompt=system_prompt,
+                stop_event=stop_event,
+                on_progress=on_progress,
+            )
+        )
+    finally:
+        # ★ 唯一的容器清理路径（见模块 docstring「线程杀不掉」一节）。
+        try:
+            sandbox.destroy()
+        except Exception:  # noqa: BLE001
+            logger.warning("扫描 %s：沙箱销毁失败", spec.scan_id, exc_info=True)
+
+    # 写运行标识（`detect_run_id` 读它）。
+    _write_run_json(spec, solve_spec, outcome)
+
+    # 写发现（strix 记录形状）—— 既有 importer 直接能读。
+    _write_vulnerabilities(spec, outcome)
+
+    if outcome.error and not outcome.findings:
+        # 有错误、且一条发现都没有 → 报错退出。注意：跑了但真的没发现
+        # **不是**错误（那是一次干净的评估），所以只在 error 非空时才算。
+        logger.warning("扫描 %s：引擎无产出（%s）", spec.scan_id, outcome.error)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+async def _solve_with_stop(
+    solve_spec: object,
+    *,
+    sandbox: object,
+    gateway: object,
+    system_prompt: str,
+    stop_event: threading.Event,
+    on_progress,
+) -> object:
+    """跑 `solve_in_sandbox`，并在 `stop_event` 被设置时取消它。
+
+    ## 为什么不能只在回调里检查 stop_event
+
+    `solve_in_sandbox` 里的 `notify()` **吞掉回调抛的异常**（见那里
+    `except Exception: logger.warning`），所以从 `on_progress` 抛异常
+    停不下来。把协程包成一个 task，用旁路 `while` 轮询 `stop_event`，
+    一旦置位就 `task.cancel()` —— 这是 Python 里对 async 循环唯一
+    可靠的"请求停止"手段（线程本身杀不掉，见模块 docstring）。
+    """
+    from app.ctf2 import runner as ctf2_runner
+
+    task = asyncio.ensure_future(
+        ctf2_runner.solve_in_sandbox(
+            solve_spec,  # type: ignore[arg-type]
+            sandbox=sandbox,  # type: ignore[arg-type]
+            gateway=gateway,  # type: ignore[arg-type]
+            system_prompt=system_prompt,
+            on_progress=on_progress,
+        )
+    )
+    while not task.done():
+        # 每 0.5s 查一次停止标志，顺便把控制权交还给事件循环。
+        await asyncio.sleep(0.5)
+        if stop_event.is_set() and not task.done():
+            logger.info("收到停止请求，取消引擎循环")
+            task.cancel()
+            break
+    try:
+        return await task
+    except asyncio.CancelledError:
+        logger.info("引擎循环已被取消")
+        raise
+    except Exception:
+        # 引擎内部异常：如实上抛，由 `_run_engine` 的调用方记日志。
+        raise
+
+
+def _write_run_json(spec: LaunchSpec, solve_spec: object, outcome: object) -> None:
+    """写 `run_dir/agent_run/run.json`（`detect_run_id` 读它）。"""
+    import json
+
+    meta = {
+        "run_id": f"agent-{spec.scan_id}",
+        "model": getattr(solve_spec, "llm_model", ""),
+        "turns": getattr(outcome, "turns", 0),
+        "tool_calls": getattr(outcome, "tool_calls", 0),
+        "llm_calls": getattr(outcome, "llm_calls", 0),
+        "error": getattr(outcome, "error", None),
+    }
+    path = spec.run_dir / "agent_run" / "run.json"
+    try:
+        path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        logger.warning("写运行标识失败：%s", path, exc_info=True)
+
+
+#: 严重度归一：模型可能给中文或大小写混用，统一到 strix 用的英文小写词。
+_SEVERITY_ALIASES: dict[str, str] = {
+    "critical": "critical",
+    "严重": "critical",
+    "致命": "critical",
+    "high": "high",
+    "高": "high",
+    "高危": "high",
+    "medium": "medium",
+    "中": "medium",
+    "中危": "medium",
+    "low": "low",
+    "低": "low",
+    "低危": "low",
+    "info": "info",
+    "信息": "info",
+    "提示": "info",
+}
+
+
+def _normalize_severity(value: object) -> str:
+    """把 `severity` 归一到 strix 认的六档。认不出 → `info`（宁低不高）。"""
+    text = str(value or "").strip().lower()
+    return _SEVERITY_ALIASES.get(text, "info")
+
+
+def _normalize_verification(value: object) -> str:
+    """把 `verification` 归一到三档证据分级。认不出 → `needs_follow_up`。
+
+    与场景包通用规则一致：拿不准就归待跟进，不为了给结论而硬判。
+    """
+    text = str(value or "").strip().lower()
+    if text in ("confirmed", "ruled_out", "needs_follow_up"):
+        return text
+    if text in ("确认", "已确认", "成立"):
+        return "confirmed"
+    if text in ("排除", "已排除", "不成立"):
+        return "ruled_out"
+    return "needs_follow_up"
+
+
+def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
+    """把引擎的 `findings` 写成 `run_dir/vulnerabilities.json`（strix 记录形状）。
+
+    ## 形状来源
+
+    只写 `findings.importer` 真正会读的那些字段（见那个模块的解析）：
+    `title` / `severity` / `confidence` / `cwe` / `cvss` / `target` /
+    `description` / `technical_analysis` / `evidence` / `poc_script_code` /
+    `remediation_steps` / `code_locations` / `verification`。
+
+    多写的字段 importer 会忽略，所以不追求"一个字节不差"；但**一条
+    发现一个对象**、`severity` 与 `verification` 用对词，是必须的 ——
+    否则它们会被默认值吞掉（`info` / `needs_follow_up`），而"我的高危
+    怎么变成 info 了"是很难回查的。
+
+    ## 只写 `findings`，不写 `candidates`
+
+    `candidates` 是 flag（CTF 判据用的），渗透评估里没有它。
+    """
+    import json
+
+    raw = getattr(outcome, "findings", None)
+    records: list[dict[str, object]] = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            target = str(item.get("target") or "").strip()
+            if not title and not target:
+                # 一条既没标题又没位置的"发现"不是发现 —— 丢掉它比
+                # 造一条空壳更诚实（空壳会让统计里多一条无意义记录）。
+                continue
+            verification = _normalize_verification(item.get("verification"))
+            records.append(
+                {
+                    "title": title,
+                    "severity": _normalize_severity(item.get("severity")),
+                    # ⚠️ `confidence` 的合法取值是 high|medium|low（见
+                    # `findings/strix_vulns.py` 的 `_CONFIDENCE_TO_VERIFICATION`），
+                    # 它会被翻成证据强度轴 `verification`：
+                    #   confirmed → high（verified）
+                    #   其余（ruled_out / needs_follow_up）→ medium（partial）
+                    # 不从 needs_follow_up 直接落 low：我们确实跑过验证，
+                    # 只是没跑出结论，不是"没验证过"。
+                    "confidence": "high" if verification == "confirmed" else "medium",
+                    "cwe": str(item.get("cwe") or ""),
+                    "cvss": None,
+                    "target": target,
+                    "description": str(item.get("reasoning") or ""),
+                    "technical_analysis": str(item.get("evidence") or ""),
+                    "evidence": str(item.get("evidence") or ""),
+                    "poc_script_code": "",
+                    "remediation_steps": str(item.get("remediation") or ""),
+                    "code_locations": "",
+                    # 自带一份归一后的分级，便于日志/对账（importer 不读它）。
+                    "verification": verification,
+                    # 记录一条来源标记，便于将来对账"这条来自哪个后端"。
+                    "discovered_by": "agent",
+                }
+            )
+    path = spec.run_dir / "vulnerabilities.json"
+    try:
+        path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        logger.warning("写发现文件失败：%s", path, exc_info=True)
+
+
+def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
+    """把 `LaunchSpec` 翻译成引擎的 `SolveSpec`。
+
+    ## 为什么不直接让引擎吃 `LaunchSpec`
+
+    两者形状相近但语义不同：
+
+    | 概念 | `LaunchSpec`（scans） | `SolveSpec`（引擎） |
+    | --- | --- | --- |
+    | 目标 | `target` + `target_kind`（5 种形态） | `access_urls`（只认 URL） |
+    | 判据 | `goal`（3 种） | 隐含"拿到 flag" |
+    | 附件 | 无（走 `--workspace-file`） | `attachments: tuple[Path, ...]` |
+    | 场景开关 | `enable_offensive_prompt` | `agentsec` / `ir` / `offensive` / `pentest` |
+
+    强行合并会让引擎那一侧长出五个扫描专属字段，而它还有两道自己的
+    入口（CTF2 平台题、IR 本地复盘）。所以这里是**翻译**，不是合并。
+
+    ⚠️ 这个函数是纯函数（只读 `LaunchSpec`），不碰数据库 ——
+    调用点在 `_run_engine` 里，那里同样没有 session。
+    """
+    from app.core.vocab import PentestCategory
+    from app.ctf2 import runner as ctf2_runner
+
+    # ── 目标 → access_urls ────────────────────────────────
+    #
+    # 引擎的 `http_request` 工具靠 `access_urls` 做白名单（`guard_tool_url`
+    # → `allowed_hosts`）。同时 `allowed_hosts` 会把 target 加进"允许访问
+    # 的主机"里，所以只要 target 是 URL 形态，http_request 就能打它。
+    #
+    # ⚠️ 非 URL 形态（repo / path / artifact）目前**不进 access_urls** ——
+    #    repo/path 是本地代码，artifact 是附件，它们靠 `run_shell` 在容器
+    #    里处理，不需要 http_request 白名单。service（TCP）形态也先不加：
+    #    裸 host:port 的白名单校验依赖 `_with_scheme` 补 http://，而
+    #    `nc`/`nmap` 走 run_shell 不受这条限制 —— 加进去反而可能误挡。
+    access_urls: tuple[str, ...] = ()
+    if spec.target_kind in ("url", "service") and spec.target:
+        access_urls = (spec.target,)
+
+    # ── 是否隔离网络 ──────────────────────────────────────
+    #
+    # 渗透评估**必须**能连到目标。扫描侧 `sandbox_network_isolated` 语义是
+    # "关进 --network none"，而渗透默认 False（要联网）。这里直接沿用它的值。
+    network_isolated = bool(spec.sandbox_network_isolated)
+
+    # ── 判据/场景开关 ─────────────────────────────────────
+    #
+    # 分类固定 `pentest-evaluation`（前缀 `pentest-`）——这样
+    # `build_system_prompt_by_spec` 会走 `is_pentest_category` 分支，
+    # 追加 `ctf2_pentest.md`，而不是 CTF 解题块。
+    #
+    # `offensive` 也打开：渗透评估要的不是"排除"手法，而是"用全手法
+    # 打一遍再判"。手法块对 pentest 分类**照常生效**（它不是被排除的
+    # 场景包 —— 见 `build_system_prompt` 的排除只针对 agentsec/ir）。
+    max_turns = spec.scan_max_turns or 80
+    # 与 ctf2 的默认档对齐；扫描侧给的可能很大（500），但单次评估
+    # 80 轮已经足够，太多轮会把墙钟拖到不可控。上限夹到 80。
+    max_turns = min(int(max_turns), 80)
+
+    return ctf2_runner.SolveSpec(
+        challenge_id=spec.scan_id,
+        title=f"对 {spec.target} 做安全评估",
+        category=PentestCategory.EVALUATION.value,
+        description=spec.brief or f"对目标 {spec.target}（{spec.target_kind}）执行一次授权安全评估。",
+        profile=ctf2_runner.image_for_profile(ctf2_runner.Ctf2SandboxProfile.BASE.value),
+        access_urls=access_urls,
+        attachments=(),
+        llm_model=spec.llm_model,
+        llm_api_key=spec.llm_api_key,
+        llm_api_base=spec.llm_api_base,
+        llm_kind="cloud",
+        mode="safe",
+        max_turns=max_turns,
+        network_isolated=network_isolated,
+        cpus=spec.sandbox_cpus,
+        memory_mb=spec.sandbox_mem_limit_mb,
+        brief=spec.brief or "",
+        pentest=True,
+        offensive=bool(spec.enable_offensive_prompt),
+    )

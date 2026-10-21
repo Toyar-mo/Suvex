@@ -1849,6 +1849,20 @@ PROMPT_AGENTSEC_PATH = PROJECT_ROOT / "prompts" / "ctf2_agentsec.md"
 #: 校验层（`validate_note_category`）会先拒掉，轮不到这里。
 PROMPT_IR_PATH = PROJECT_ROOT / "prompts" / "ctf2_ir.md"
 
+#: 渗透评估块（v0.47）。**只在开关打开且本题属于 `pentest-*` 时追加。**
+#:
+#: 注入方式与 `PROMPT_AGENTSEC_PATH` / `PROMPT_IR_PATH` **完全同构**
+#: （追加不替换、关着不读、关闭时逐字节相同）。
+#:
+#: ## ★ 它与前两个块的区别：判据不同，输出字段也不同
+#:
+#: `ctf2_agentsec.md` 判"某个考察点成不成立"，`ctf2_ir.md` 判"入侵时间线"，
+#: 而这一份判"我亲眼验证过哪些安全发现"。三者共用 `confirmed` /
+#: `ruled_out` / `needs_follow_up` 三档纪律，但**交付物形状不同**：
+#: 前两个走 `candidates`（flag 形态），这一份走 `findings`（结构化发现）。
+#: 所以 `SolveOutcome` 上多了一个 `findings` 字段（原样来自 `FINAL.findings`）。
+PROMPT_PENTEST_PATH = PROJECT_ROOT / "prompts" / "ctf2_pentest.md"
+
 #: 越权与注入手法块（v0.42）。**解题与渗透扫描共用同一份**，
 #: 所以路径常量不在这里定义 —— 见 `app/core/prompts.py` 的说明
 #: （那份 docstring 记的正是"为什么这一个不做成两个模块各自的常量"）。
@@ -1928,12 +1942,37 @@ def load_ir_prompt() -> str:
         ) from exc
 
 
+def load_pentest_prompt() -> str:
+    """读渗透评估块（v0.47）。
+
+    ⚠️ 与 `load_system_prompt` / `load_ir_prompt` 同一条纪律：**文件不在就抛错**。
+
+    这个文件只在开关打开且本题属于 `pentest-*` 时才被读。回退成空串会让
+    模型拿到的是"解题"纪律（判 flag、给 candidates），于是在一次真实客户
+    评估里它会去追一个不存在的 flag，而不是去核实一个真实存在的漏洞 ——
+    而结论看起来还"跑通了"。
+
+    另一个理由与 IR 块相同：它要求模型**只读优先**、**写操作要有理由**。
+    缺了它，模型会按"打穿副本"的默认策略行动，而这里的目标是客户的
+    生产系统。
+    """
+    try:
+        return PROMPT_PENTEST_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise Ctf2Error(
+            f"读不到渗透评估提示词 {PROMPT_PENTEST_PATH}。"
+            "它必须随部署一起分发 —— 缺了它这类任务会按 CTF 解题模式跑，"
+            "而它们要的是「核实真实目标上有哪些问题」。"
+        ) from exc
+
+
 def build_system_prompt(
     category: str,
     *,
     agentsec_enabled: bool,
     ir_enabled: bool = False,
     offensive_enabled: bool = False,
+    pentest_enabled: bool = False,
 ) -> str:
     """拼出本题要用的 system prompt（v0.40 / v0.41 / v0.42）。
 
@@ -1986,14 +2025,16 @@ def build_system_prompt(
     base = load_system_prompt()
     # ⚠️ 三个开关都关时**提前返回**，连 notes 都不 import —— 见上面
     # 第二条理由。这也是"关闭时逐字节相同"这条验收标准的实现方式。
-    if not agentsec_enabled and not ir_enabled and not offensive_enabled:
+    if not agentsec_enabled and not ir_enabled and not offensive_enabled and not pentest_enabled:
         return base
     # 延迟 import：`notes` 在模块顶层 import 本模块（要 `FLAG_PATTERN`），
     # 顶层反向 import 会撞环。这与本文件其它地方是同一条纪律。
     from app.ctf2 import notes as notes_mod
 
-    is_scenario_task = notes_mod.is_agentsec_category(category) or notes_mod.is_ir_category(
-        category
+    is_scenario_task = (
+        notes_mod.is_agentsec_category(category)
+        or notes_mod.is_ir_category(category)
+        or notes_mod.is_pentest_category(category)
     )
 
     blocks: list[str] = []
@@ -2001,6 +2042,8 @@ def build_system_prompt(
         blocks.append(load_agentsec_prompt())
     if ir_enabled and notes_mod.is_ir_category(category):
         blocks.append(load_ir_prompt())
+    if pentest_enabled and notes_mod.is_pentest_category(category):
+        blocks.append(load_pentest_prompt())
     # ★ v0.42：手法块对五个既有分类一律生效，只排除两个场景包（见 docstring）。
     if offensive_enabled and not is_scenario_task:
         blocks.append(load_offensive_playbook())
@@ -2028,6 +2071,7 @@ def build_system_prompt_by_spec(spec: SolveSpec) -> str:
         agentsec_enabled=spec.agentsec,
         ir_enabled=spec.ir,
         offensive_enabled=spec.offensive,
+        pentest_enabled=spec.pentest,
     )
 
 
@@ -2461,6 +2505,15 @@ class SolveSpec:
     #: 默认 `False` 保证 v0.41 之前构造 `SolveSpec` 的地方行为不变。
     ir: bool = False
 
+    #: 本题要不要追加渗透评估块（v0.47）。
+    #:
+    #: 与 `ir` **完全同构**：在构造 spec 时一次算好，算的是"开关开着
+    #: **且** 本题分类属于 `pentest-*`"。不在这里重复判断的理由与上面
+    #: 两个字段相同 —— 判据只留一个来源。
+    #:
+    #: 默认 `False` 保证 v0.47 之前构造 `SolveSpec` 的地方行为不变。
+    pentest: bool = False
+
     #: 本题要不要追加越权与注入手法块（v0.42）。
     #:
     #: ## ★ 与上面两个**不同构**：它在 `build_spec` 里**只读开关，不判分类**
@@ -2645,6 +2698,24 @@ class SolveOutcome:
     #:
     #: ⚠️ 非 IR 任务它恒为 `None`（提示词里没让它们写这个字段）。
     workorders: object | None = None
+
+    #: ★ v0.47：`FINAL.findings` 的**原始值**（渗透评估任务的安全发现）。
+    #:
+    #: ## 为什么与 `candidates` 并存而不是复用
+    #:
+    #: `candidates` 是"flag 形态"：`extract_candidates_with_reasons` 会按
+    #: flag 的形态去校验、去重、判 grounding，而一条安全发现（标题 + 严重度 +
+    #: 证据 + 位置）**不是** flag，硬塞进去会被那道校验拦掉。
+    #:
+    #: ## 为什么存原始值
+    #:
+    #: 与 `workorders` 同一条理由：`runner` 是执行层，校验与转换在收尾
+    #: （`scans/agent_runner` 把它们翻成 `vulnerabilities.json`）。
+    #: 声明成 `list[dict]` 会让读者以为它已校验，而它没有 —— 模型给什么
+    #: 都可能（字符串、对象、含 null 的数组）。
+    #:
+    #: ⚠️ 非渗透任务它恒为 `None`（提示词里没让它们写这个字段）。
+    findings: object | None = None
 
 
 def needs_raw_network(category: str | None) -> bool:
@@ -3875,6 +3946,10 @@ async def solve_in_sandbox(
                 #    的说明：校验发生在展示层。这里若也校验一遍，两处
                 #    容错策略迟早漂移，而症状是"界面上少了某条工单"。
                 outcome.workorders = final.get("workorders")
+                # ★ v0.47：渗透评估的安全发现（只有 `pentest-*` 的提示词让模型写）。
+                # 与 workorders 完全同构：原样带走、不在这里校验 ——
+                # 转换与容错发生在 `scans/agent_runner` 那一刻。
+                outcome.findings = final.get("findings")
                 outcome.transcript = "\n\n".join(log)
                 if not outcome.candidates:
                     if rejected:

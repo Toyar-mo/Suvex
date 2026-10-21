@@ -78,6 +78,7 @@ from app.scans.runner import (
     # `artifact` 模式的目标目录（任务 17）
     challenge_dir,
     get_runner,
+    is_terminable,
     terminate_tree,
 )
 from app.settings import service as settings_service
@@ -983,7 +984,14 @@ def launch_scan(db: Session, scan: Scan) -> LaunchResult | None:
     db.refresh(scan)
     if scan.status != ScanStatus.RUNNING.value:
         logger.warning("扫描 %s 在启动过程中已被置为 %s，立即终止其进程", scan.id, scan.status)
-        terminate_tree(result.pid, grace_seconds=5.0, log=logger.warning)
+        # ⚠️ 自研引擎的句柄是线程（`terminable=False`，`pid` 恒为 0）——
+        # 只能请求停止，不能拿线程去 terminate_tree。
+        if is_terminable(result.process):
+            terminate_tree(result.pid, grace_seconds=5.0, log=logger.warning)
+        else:
+            stopper = getattr(result.process, "request_stop", None)
+            if callable(stopper):
+                stopper()
         return None
 
     return result
@@ -1152,8 +1160,19 @@ def _failure_reason(scan: Scan, exit_code: int | None, *, strix_ran: bool = True
         # 这里不猜具体是哪一种用法错误（target 非法 / 缺参数 / 未知选项），
         # 而是把那行**原文**提到最前 —— 它本来就是 strix 写给用户看的。
         detail = _find_argparse_error(scan.log_path)
+        # ⚠️ 这里**不能用 Markdown 的加粗语法**（两个字面星号包住一段话）。
+        #
+        # `failure_reason` 是一条**纯文本通道**，它有四个消费方，四个都不渲染 Markdown：
+        #   ① 扫描列表 `ScanList.tsx:866` —— `<p>{scan.failureReason}</p>` 原样出字
+        #   ② 事件流失败事件的「错误」字段 —— `EventRow.tsx:391` 用 `CodeBlock`（`<pre>`）
+        #   ③ CSV 导出 `scan-export.ts:47` —— `scan.failureReason ?? ''` 直接进单元格
+        #   ④ `GET /scans/{id}` 的响应体 —— 任何外部调用方
+        #
+        # 之前这里写的是字面星号版本，用户看到的是：
+        # 「这次扫描**没有对目标做任何事**。」—— 强调没起到作用，反而像排版事故。
+        # 想强调就换措辞（「完全没有」），不要借排版语法表达强调。
         head = (
-            "strix 没能启动（命令行用法错误），这次扫描**没有对目标做任何事**。"
+            "strix 没能启动（命令行用法错误），这次扫描完全没有对目标做任何事。"
             + (f"\n\n{detail}" if detail else "")
         )
         return head[:FAILURE_REASON_MAX]
@@ -1382,6 +1401,19 @@ def abort_scan(db: Session, scan_id: str, *, reason: str = "已由用户终止")
         if not gone:
             # 杀不掉要如实说。谎报"已终止"会让用户以为目标不再被打了。
             logger.error("扫描 %s 的进程 %s 未能终止", scan.id, pid)
+    elif was_running:
+        # ⚠️ 没有 pid，但可能有一个**进程内的线程**在跑（自研引擎后端：
+        # `Scan.pid` 恒为 0，因为线程标识不能存成 pid —— 见
+        # `agent_runner.launch` 的说明）。这种情况下 `terminate_tree`
+        # 无从下手，唯一的办法是让调度器向那个线程的句柄请求停止。
+        # 拿不到句柄（服务重启过、或后端是 strix 而句柄丢失）就只能
+        # 靠调度器下一轮的 `poll()` 发现它已经不在。
+        try:
+            from app.scans.scheduler import get_scheduler
+
+            get_scheduler().request_stop(scan.id)
+        except Exception:  # noqa: BLE001
+            logger.warning("扫描 %s 无法请求停止（句柄不可得）", scan.id, exc_info=True)
     scan.pid = None
     db.commit()
 

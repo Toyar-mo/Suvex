@@ -1020,6 +1020,38 @@ IR_CATEGORY_PREFIX: Final[str] = "ir-"
 #: 三个合法取值。
 IR_CATEGORIES: Final[frozenset[str]] = frozenset(c.value for c in IrCategory)
 
+
+class PentestCategory(StrEnum):
+    """**渗透评估**（v0.47）—— 自研引擎承接渗透场景时用的分类。
+
+    ## 与前两个场景包的区别：这里只有一个分类
+
+    `agentsec-*` 有四个（四个考察点各自独立），`ir-*` 有三个（根因 /
+    时间线 / 范围各自独立）。渗透评估**不需要细分**：一次评估的交付物
+    就是一组发现，不存在"按某个子问题拆开结论"的需求 —— 拆开只会
+    让报告多分一节、内容更稀。
+
+    ## 为什么仍要一个前缀 `pentest-`
+
+    因为它要复用同一条管线：前缀同时是**开关判据**（`is_pentest_category`）
+    与**提示词注入判据**（`build_system_prompt`）。写成一个裸字符串
+    `"pentest"` 也能跑，但那样就没有"给这个场景包一个命名空间"这件事，
+    将来真要加第二个子分类时无从下手。
+
+    ⚠️ 与 `ir-*` / `agentsec-*` 一样，这个分类**不写进平台同步的题型**
+    （它由服务端在构造 spec 时给定），所以 `validate_note_category`
+    那边要单独放行 —— 见那里的说明。
+    """
+
+    EVALUATION = "pentest-evaluation"
+
+
+#: 前缀。用法与 `IR_CATEGORY_PREFIX` 完全一致。
+PENTEST_CATEGORY_PREFIX: Final[str] = "pentest-"
+
+#: 合法取值。
+PENTEST_CATEGORIES: Final[frozenset[str]] = frozenset(c.value for c in PentestCategory)
+
 #: 证据分级的**全部合法取值** —— 域无关，`agentsec-*` 与 `ir-*` 共用。
 #:
 #: ⚠️ 名字里的 `agentsec` 是历史包袱（那套分级先在铸网场景包里落地）。

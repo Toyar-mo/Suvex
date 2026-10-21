@@ -29,6 +29,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -39,6 +40,10 @@ from app.core.timeutil import now_utc
 from app.core.vocab import SCAN_ORIGIN_CTF2
 from app.scans import runner, scheduler, service
 from app.scans.models import Scan
+
+# Markdown 加粗语法：`**某段话**`。中间不许跨行，也不许吞掉空字符串
+# （`****` 不是加粗，是四个星号）。
+_MARKDOWN_BOLD = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*")
 
 
 def _shell(db: Session, *, tmp_path: Path, sname: str = "scan_shell") -> Scan:
@@ -265,6 +270,46 @@ def test_exit_code_2_without_run_is_failed(db_session: Session, tmp_path: Path) 
     assert scan.failure_reason is not None
     assert "没能启动" in scan.failure_reason
     assert "没有对目标做任何事" in scan.failure_reason
+
+
+def test_failure_reason_has_no_markdown_emphasis(db_session: Session, tmp_path: Path) -> None:
+    """★ 纯文本通道里不能出现 Markdown 加粗语法。
+
+    ## 为什么需要这条
+
+    `failure_reason` 有四个消费方，**四个都不渲染 Markdown**：
+      ① 扫描列表 `ScanList.tsx:866` —— `<p>{scan.failureReason}</p>`
+      ② 事件流失败事件的「错误」字段 —— `EventRow.tsx:391` 用 `CodeBlock`（`<pre>`）
+      ③ CSV 导出 `scan-export.ts:47` —— 直接进单元格
+      ④ `GET /scans/{id}` 响应体 —— 任何外部调用方
+
+    曾经这里写的是两个字面星号包住「没有对目标做任何事」，用户看到的是：
+    「这次扫描**没有对目标做任何事**。」—— 强调没起作用，反而像排版事故。
+
+    ## 为什么这条容易复发
+
+    写这段文案的人（和读这段代码的人）看的是**源码**，源码里星号确实起到了
+    强调作用 —— 因为编辑器注释和 IDE 提示会渲染它。而**用户看的是渲染结果**，
+    那条链路上没有任何一层做 Markdown 解析。
+
+    也就是说：**写的时候有效果，跑起来没有** —— 这正是最难自查的一类缺陷。
+    同类风险：`**` `__` `` ` `` `#` 开头的行（会被当成标题）、`- ` 开头（列表）。
+
+    断言范围刻意只要「不存在未被解释的 `**` 成对出现」，避免误伤
+    日志正文里本来就有的星号（比如 glob 模式 `**/*.py`）。
+    """
+    scan = _running_scan(db_session, tmp_path)
+    _finalize(db_session, scan, exit_code=2, strix_ran=False)
+    reason = scan.failure_reason
+    assert reason is not None
+
+    # 形如 `**某段话**` 的成对星号 = Markdown 加粗语法，纯文本通道里不该出现。
+    unexpected = _MARKDOWN_BOLD.findall(reason)
+    assert not unexpected, (
+        f"失败原因里出现了 Markdown 加粗语法 {unexpected!r}，"
+        f"但 failure_reason 的四个消费方都不渲染 Markdown —— "
+        f"用户会看到字面星号。要强调请换措辞，别借排版语法。"
+    )
 
 
 def test_exit_code_2_with_run_is_completed(db_session: Session, tmp_path: Path) -> None:

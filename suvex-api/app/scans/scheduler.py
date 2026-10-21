@@ -59,6 +59,7 @@ from app.scans.runner import (
     did_strix_run,
     get_runner,
     is_alive,
+    is_terminable,
     terminate_tree,
 )
 from app.settings import service as settings_service
@@ -223,6 +224,34 @@ class ScanScheduler:
     def forget(self, scan_id: str) -> None:
         with self._lock:
             self._procs.pop(scan_id, None)
+
+    def request_stop(self, scan_id: str) -> bool:
+        """请一个在跑的任务自己退出。返回"有没有找到可请求的句柄"。
+
+        ## 什么时候需要它
+
+        自研引擎后端的句柄是**线程**（`terminable=False`，`Scan.pid` 恒为 0）。
+        用户点「终止扫描」时 `service.abort_scan` 那边拿不到 pid，也就
+        `terminate_tree` 不了 —— 唯一能做的就是到这里问一句"你手上那个
+        线程还在吗，让它停"。线程本身杀不掉（见 `agent_runner` 的说明），
+        所以这是"请求"不是"命令"：它会在下一个检查点退出，期间可能还跑
+        几秒。
+
+        ## 为什么找不到句柄不报错
+
+        服务重启过、或这个扫描根本不是本进程启动的 —— 这两种情况下我们
+        确实无从下手，而 `abort_scan` 已经把记录置成 aborted 了。返回值是
+        `False` 让调用方能决定要不要打日志，但**不是**失败（记录状态是对的）。
+        """
+        with self._lock:
+            process = self._procs.get(scan_id)
+        if process is None:
+            return False
+        stopper = getattr(process, "request_stop", None)
+        if not callable(stopper):
+            return False
+        stopper()
+        return True
 
     def runner_status(self) -> tuple[bool, str | None]:
         """执行后端自检。给 `GET /scans/queue` 用。"""
@@ -540,11 +569,17 @@ class ScanScheduler:
 
         killed = False
         if process is not None and process.poll() is None:
-            terminate_tree(
-                process.pid,
-                grace_seconds=get_settings().scan_abort_grace_seconds,
-                log=logger.warning,
-            )
+            if is_terminable(process):
+                terminate_tree(
+                    process.pid,
+                    grace_seconds=get_settings().scan_abort_grace_seconds,
+                    log=logger.warning,
+                )
+            else:
+                # 自研引擎：线程杀不掉，只能请求它在下一个检查点自己退出。
+                stopper = getattr(process, "request_stop", None)
+                if callable(stopper):
+                    stopper()
             self.forget(scan.id)
             killed = True
 
@@ -661,6 +696,14 @@ class ScanScheduler:
             items = list(self._procs.items())
         for scan_id, process in items:
             if process.poll() is not None:
+                self.forget(scan_id)
+                continue
+            # ⚠️ 自研引擎的句柄是线程（`terminable=False`）—— 拿它的 pid
+            # （线程标识）去杀会打到不相干的进程。对这类句柄只能请求停止。
+            if not is_terminable(process):
+                stopper = getattr(process, "request_stop", None)
+                if callable(stopper):
+                    stopper()
                 self.forget(scan_id)
                 continue
             terminate_tree(

@@ -1543,6 +1543,16 @@ def is_ir_category(category: str) -> bool:
     return (category or "").strip().startswith(IR_CATEGORY_PREFIX)
 
 
+def is_pentest_category(category: str) -> bool:
+    """这个分类是否属于渗透评估场景包（**只看前缀，不看开关**）（v0.47）。
+
+    与 `is_ir_category` **完全同构**，包括"它不回答该不该放行"这条边界。
+    """
+    from app.core.vocab import PENTEST_CATEGORY_PREFIX
+
+    return (category or "").strip().startswith(PENTEST_CATEGORY_PREFIX)
+
+
 #: `ruled_out` 的四项证据要求（场景包 §5.2），以及**每项的残缺标记**。
 #:
 #: 形式是 `(标记词, 残缺标记)`：出现标记词只说明"写了这一项"，

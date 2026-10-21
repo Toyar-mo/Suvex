@@ -1027,6 +1027,29 @@ def _is_zombie(pid: int) -> bool:
     return bool(fields) and fields[0] == b"Z"
 
 
+def is_terminable(process: object | None) -> bool:
+    """这个执行句柄能不能用 `terminate_tree(process.pid)` 杀。
+
+    ## 为什么需要这一层
+
+    `LaunchResult.process` 对 strix 后端是一个 `subprocess.Popen`（有真实
+    的 OS pid），对自研引擎后端是一个 `_TaskHandle`（`pid` 是**线程标识**，
+    不是 OS pid）。
+
+    拿线程标识去 `os.kill(pid, 0)` / `killpg` 会探到**不相干的进程**，
+    极端情况下会把别人的进程杀掉 —— 这是本后端引入的一个真实危险，
+    必须在这里一次性挡住，而不是指望每个调用点自己记得判断。
+
+    判据：`Popen` 没有 `terminable` 属性 → 默认 `True`（它是真的进程）；
+    `_TaskHandle.terminable` 是属性且为 `False` → 返回 `False`。
+    """
+    if process is None:
+        return False
+    # `getattr(..., True)` 的 True 是给 Popen 用的：它没有这个属性，
+    # 而 Popen 显然可终止。只有显式声明 `terminable = False` 的才挡。
+    return bool(getattr(process, "terminable", True))
+
+
 def _no_window() -> int:
     """Windows 上不给子进程弹控制台窗口。其他平台返回 0（无效果）。"""
     if os.name == "nt":
@@ -1928,6 +1951,34 @@ class FakeRunner:
 _RUNNERS: dict[str, type] = {"strix": StrixRunner, "fake": FakeRunner}
 
 
+def _register_optional_runners() -> None:
+    """把**可选后端**登记进 `_RUNNERS`，惰性且只做一次。
+
+    ## 为什么不能写在模块级那两个字典字面量里
+
+    `agent_runner` 在模块顶层 `from app.scans.runner import LaunchResult,
+    LaunchSpec, RunnerUnavailable` —— 而本模块如果在顶层反过来 import 它，
+    就成环了（`scans.runner` → `scans.agent_runner` → `scans.runner`）。
+    所以只能在这里延迟 import。
+
+    ## 为什么失败不能抛（重要）
+
+    `agent_runner` 会 import `app.ctf2.runner`，那一串依赖（openai /
+    httpx / …）在**只想用 strix 后端的部署**里可能压根没装全。那种部署
+    照样要能跑 —— 所以这里**吞掉 import 异常**，只记一条 debug。
+    真到用户选了 `agent` 后端而它没登记时，`get_runner` 会抛
+    `RunnerUnavailable` 并列出可用项，那时才是有意义的报错时机。
+    """
+    if "agent" in _RUNNERS:
+        return
+    try:
+        from app.scans.agent_runner import RUNNER_NAME, AgentRunner
+    except Exception:  # noqa: BLE001 - 见上面「为什么失败不能抛」
+        logger.debug("自研引擎后端不可用（import 失败），仅 strix/fake 可选", exc_info=True)
+        return
+    _RUNNERS[RUNNER_NAME] = AgentRunner
+
+
 def get_runner() -> ScanRunner:
     """按配置返回执行后端。
 
@@ -1935,6 +1986,7 @@ def get_runner() -> ScanRunner:
     而模块级常量一旦导入就固定了 —— 那种测试会永远跑在 strix 后端上，
     也就是**真的去发起攻击**。
     """
+    _register_optional_runners()
     cfg = get_settings()
     runner_cls = _RUNNERS.get(cfg.scan_runner)
     if runner_cls is None:
