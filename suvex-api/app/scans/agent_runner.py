@@ -338,6 +338,42 @@ class AgentRunner:
         )
 
 
+#: LiteLLM 认的 provider 前缀（`deepseek/`、`openai/`、`anthropic/`、`ollama/`）。
+#: 只在**剥前缀**时用；真前缀表在 `app.providers.llm.LITELLM_PREFIXES`，
+#: 这里刻意写一份字面量而不是 import 那张表 —— 这张表只增不减的风险很低，
+#: 而且剥前缀是"尽力而为"，认不出就原样用（见 `_bare_model_name`）。
+_KNOWN_ROUTE_PREFIXES: tuple[str, ...] = ("openai", "deepseek", "anthropic", "ollama")
+
+
+def _bare_model_name(model: str) -> str:
+    """把 LiteLLM 路由前缀去掉，得到接入点真正认的裸 model 名。
+
+    ## 为什么需要这一步（这是真跑踩出来的）
+
+    `scans/service.build_spec` 给 `LaunchSpec.llm_model` 填的是 **LiteLLM 格式**
+    （`openai/deepseek-v4.1-flash`），因为 strix 后端要把这个值原样塞进
+    环境变量 `STRIX_LLM`，litellm 靠前缀路由。
+
+    但自研引擎的 `LlmGateway` **不走 litellm**：它把 model 原样 POST 到
+    接入点的 `/chat/completions`。带前缀就相当于对一个 OpenAI 兼容网关
+    说"我要一个叫 `openai/deepseek-v4.1-flash` 的模型"，网关回
+    `model_not_found`（HTTP 503）。实测原话：
+    `No available channel for model openai/deepseek-v4.1-flash under group default`。
+
+    ## 只剥一层，且只剥已知前缀
+
+    `openai/gpt` → `gpt`；但一个本身带斜杠的模型名（某些自建网关的
+    `org/model`）不能乱剥 —— 所以只认 `_KNOWN_ROUTE_PREFIXES` 里那几个，
+    认不出就原样返回。这样对 `anthropic/claude-…` 也安全：LlmGateway 判断
+    Anthropic 用的是 `is_anthropic(endpoint)`（看地址），不看 model 前缀，
+    所以剥掉前缀不影响它走 Messages API。
+    """
+    head, sep, tail = model.partition("/")
+    if sep and tail and head.strip().lower() in _KNOWN_ROUTE_PREFIXES:
+        return tail
+    return model
+
+
 async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
     """一次扫描的引擎主流程。返回退出码。
 
@@ -396,7 +432,7 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
             spec.log_path.write_text("\n".join(log_lines), encoding="utf-8")
 
     gateway = ctf2_runner.LlmGateway(
-        model=solve_spec.llm_model,
+        model=_bare_model_name(solve_spec.llm_model),
         api_key=solve_spec.llm_api_key,
         base_url=solve_spec.llm_api_base,
         label=solve_spec.llm_label,

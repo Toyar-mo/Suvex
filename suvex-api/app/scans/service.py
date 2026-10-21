@@ -1061,7 +1061,9 @@ def finalize(
             )
 
     if status == ScanStatus.FAILED.value and not reason:
-        reason = _failure_reason(scan, exit_code, strix_ran=strix_ran)
+        reason = _failure_reason(
+            scan, exit_code, strix_ran=strix_ran, runner_name=scan.runner
+        )
 
     # ── CTF 夺旗的结果（任务 18）──────────────────────────
     #
@@ -1127,7 +1129,13 @@ def _terminal_summary(scan: Scan, status: str, reason: str | None) -> str:
     return f"扫描失败：{(reason or '未知原因')[:120]}"
 
 
-def _failure_reason(scan: Scan, exit_code: int | None, *, strix_ran: bool = True) -> str:
+def _failure_reason(
+    scan: Scan,
+    exit_code: int | None,
+    *,
+    strix_ran: bool = True,
+    runner_name: str | None = None,
+) -> str:
     """失败原因：**先把真正解释失败的那句话放在最前**，再附日志尾部。
 
     ## 为什么不能只给日志尾部（原来的做法）
@@ -1158,7 +1166,13 @@ def _failure_reason(scan: Scan, exit_code: int | None, *, strix_ran: bool = True
     if not strix_ran:
         # 已知失败的一种，而且成因在**日志里那行 error** 已经写清了。
         # 这里不猜具体是哪一种用法错误（target 非法 / 缺参数 / 未知选项），
-        # 而是把那行**原文**提到最前 —— 它本来就是 strix 写给用户看的。
+        # 而是把那行**原文**提到最前 —— 它本来就是执行后端写给用户看的。
+        #
+        # ⚠️ 2026-10-21：这段文案此前**写死了 "strix"**，于是自研引擎
+        #    （agent 后端）失败时也显示"strix 没能启动（命令行用法错误）"——
+        #    用户看到的是一个他根本没在用的工具的名字。现在按
+        #    `runner_name` 选主语：agent 后端说"自研引擎"，其余仍说 strix。
+        backend_label = "自研引擎" if (runner_name or scan.runner) == "agent" else "strix"
         detail = _find_argparse_error(scan.log_path)
         # ⚠️ 这里**不能用 Markdown 的加粗语法**（两个字面星号包住一段话）。
         #
@@ -1172,7 +1186,7 @@ def _failure_reason(scan: Scan, exit_code: int | None, *, strix_ran: bool = True
         # 「这次扫描**没有对目标做任何事**。」—— 强调没起到作用，反而像排版事故。
         # 想强调就换措辞（「完全没有」），不要借排版语法表达强调。
         head = (
-            "strix 没能启动（命令行用法错误），这次扫描完全没有对目标做任何事。"
+            f"{backend_label} 没能启动，这次扫描完全没有对目标做任何事。"
             + (f"\n\n{detail}" if detail else "")
         )
         return head[:FAILURE_REASON_MAX]

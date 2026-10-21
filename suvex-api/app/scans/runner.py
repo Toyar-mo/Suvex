@@ -136,6 +136,50 @@ def did_strix_run(run_dir: str | None) -> bool:
         logger.warning("检查 strix_runs 失败，按未启动处理：%s", run_dir, exc_info=True)
         return False
 
+
+def did_agent_run(run_dir: str | None) -> bool:
+    """自研引擎**真的启动过**吗 —— 靠 `agent_run/run.json` 判断。
+
+    与 `did_strix_run` 同构、同一个目的（消解退出码的二义性），只是
+    判据换成自研引擎自己写的运行标识：
+
+    - `agent_run/run.json` 由 `agent_runner._write_run_json` 在引擎
+      **跑完一轮之后**写（无论成功失败都写，含 `tool_calls` / `turns`）。
+    - 所以"文件在" = 引擎确实进了 solve 循环；"文件不在" = 它压根没起来
+      （构造 SolveSpec 就失败、或容器没起来）。
+
+    ## 为什么用 `run.json` 而不是"日志有没有错误字样"
+
+    同 `did_strix_run`：文本启发式会随文案变化误判，而 `run.json` 是
+    结构性事实。⚠️ 判 `False` 同样**只说明没跑起来，不说明原因**。
+    """
+    if not run_dir:
+        return False
+    try:
+        return (Path(run_dir) / "agent_run" / "run.json").is_file()
+    except OSError:
+        logger.warning("检查 agent_run/run.json 失败，按未启动处理：%s", run_dir, exc_info=True)
+        return False
+
+
+def did_backend_run(run_dir: str | None, *, runner_name: str | None) -> bool:
+    """按后端分派"真的启动过吗"。
+
+    两个后端的判据不同（`strix_runs/` vs `agent_run/run.json`），
+    调用方（`scheduler`）手上只有 `scan.runner`（启动时写入的后端名），
+    所以在这里按名字分派，而不是让调度器自己 switch。
+
+    认不出的后端名（`None` / `fake` / 未来新增）一律**按 True** 处理 ——
+    这不是"放行"，而是"不拿一个我不认识的判据去否定一次记录"：
+    `strix_ran` 这个参数本来的作用是**纠一条具体的谎报**（argparse 用法
+    错误被当成发现了漏洞），对未知后端没有那个二义性，默认信任退出码。
+    """
+    if runner_name == "strix":
+        return did_strix_run(run_dir)
+    if runner_name == "agent":
+        return did_agent_run(run_dir)
+    return True
+
 # 退出码的语义常量。**不要**在别处硬编码 2。
 EXIT_OK = 0
 EXIT_FATAL = 1

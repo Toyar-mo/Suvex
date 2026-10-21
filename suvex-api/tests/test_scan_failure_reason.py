@@ -102,3 +102,47 @@ def test_missing_log_is_not_an_error(scan: Scan) -> None:
 
     assert "退出码" in reason
     assert reason  # 不能是空串 —— 空的原因等于没有原因
+
+
+def test_did_not_start_names_strix_for_strix_backend(scan: Scan) -> None:
+    """未启动的文案：strix 后端就说 strix。"""
+    scan.log_path = str(Path(scan.run_dir) / "scan.log")
+    _log_path(scan).write_text(
+        "usage: strix [-h] --target TARGET\n"
+        "strix: error: unrecognized arguments: --bogus\n",
+        encoding="utf-8",
+    )
+
+    reason = service._failure_reason(scan, 2, strix_ran=False, runner_name=None)
+
+    assert "strix 没能启动" in reason
+    assert "完全没有对目标做任何事" in reason
+
+
+def test_did_not_start_names_own_engine_for_agent_backend(scan: Scan) -> None:
+    """★★ 自研引擎失败时**不能**说成 strix。
+
+    2026-10-21 真跑撞到的形态：用户从「新建扫描」建的任务走 agent 后端，
+    引擎没起来，界面上却显示「strix 没能启动」—— 一个他根本没在用的工具名。
+    这里锁死：`runner_name="agent"` 时主语是「自研引擎」，且全文不出现 strix。
+    """
+    scan.log_path = str(Path(scan.run_dir) / "scan.log")
+    _log_path(scan).write_text("Traceback (most recent call last):\n", encoding="utf-8")
+
+    reason = service._failure_reason(scan, 2, strix_ran=False, runner_name="agent")
+
+    assert "自研引擎 没能启动" in reason
+    assert "完全没有对目标做任何事" in reason
+    assert "strix" not in reason
+
+
+def test_did_not_start_reads_runner_from_scan_when_not_passed(scan: Scan) -> None:
+    """不显式传 runner_name 时退回 `scan.runner` —— finalize 传的就是它。"""
+    scan.runner = "agent"
+    scan.log_path = str(Path(scan.run_dir) / "scan.log")
+    _log_path(scan).write_text("", encoding="utf-8")
+
+    reason = service._failure_reason(scan, 2, strix_ran=False)
+
+    assert "自研引擎 没能启动" in reason
+    assert "strix" not in reason

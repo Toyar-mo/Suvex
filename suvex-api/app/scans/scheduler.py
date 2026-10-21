@@ -56,7 +56,7 @@ from app.scans.flag import extract_flag
 from app.scans.models import Scan
 from app.scans.runner import (
     RunnerUnavailable,
-    did_strix_run,
+    did_backend_run,
     get_runner,
     is_alive,
     is_terminable,
@@ -95,8 +95,8 @@ def _flag_of(scan_id: str) -> str | None:
     return extract_flag(run_dir) if run_dir else None
 
 
-def _run_dir_of(scan_id: str) -> str | None:
-    """这次扫描的工作目录 —— **只碰数据库，且用一个独立的短会话**。
+def _run_dir_and_runner(scan_id: str) -> tuple[str | None, str | None]:
+    """这次扫描的工作目录 + 执行后端名 —— **只碰数据库，且用一个独立的短会话**。
 
     与 `_flag_of` 完全同构（同一个理由，见那里的长说明）：调用方紧接着
     要开写事务，所以这里读完就 `close()`，锁在读文件**之前**已经放掉。
@@ -104,11 +104,17 @@ def _run_dir_of(scan_id: str) -> str | None:
     ★ 为什么不让调用方用自己那个 `session` 顺手读一下：
     那段代码里 `session.get()` 就是**开事务**的动作，读 `run_dir`
     必须发生在它之前 —— 而"之前"只能靠一个已经关掉的会话。
+
+    ★ 为什么要一起读 `runner`：`did_backend_run` 要按后端分派判据
+    （strix 看 `strix_runs/`、agent 看 `agent_run/run.json`），而那个
+    判断也必须在开事务之前做完。一次查询顺手取两列，比开两个短会话便宜。
     """
     session = get_session_factory()()
     try:
         scan = session.get(Scan, scan_id)
-        return scan.run_dir if scan is not None else None
+        if scan is None:
+            return None, None
+        return scan.run_dir, scan.runner
     finally:
         session.close()
 
@@ -323,10 +329,12 @@ class ScanScheduler:
             # CTF2 的壳点重跑，strix 拒收 `ctf2:…` 这个 target 后退 2，
             # 而那条什么都没干的记录被 `finalize` 记成「已完成」。
             #
-            # 判据是 `strix_runs/` 目录在不在（见 `runner.did_strix_run`
-            # 的完整说明与实测分离数据）。与 `_flag_of` 同一个理由放在这里：
-            # 它碰文件系统，而 `session.get()` 一开事务就会让持锁窗口跨 I/O。
-            ran = did_strix_run(_run_dir_of(scan_id))
+            # 判据按后端分派（`did_backend_run`）：strix 看 `strix_runs/`
+            # 目录在不在，自研引擎看 `agent_run/run.json` 在不在。与
+            # `_flag_of` 同一个理由放在这里：它碰文件系统，而
+            # `session.get()` 一开事务就会让持锁窗口跨 I/O。
+            run_dir, runner_name = _run_dir_and_runner(scan_id)
+            ran = did_backend_run(run_dir, runner_name=runner_name)
 
             session = get_session_factory()()
             try:
