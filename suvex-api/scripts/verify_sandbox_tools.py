@@ -79,6 +79,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -130,7 +131,15 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     "ewf-tools": ("ewfinfo", "ewfexport", "ewfverify", "ewfacquire"),
     "dnsutils": ("dig", "nslookup", "host"),
     "iputils-ping": ("ping",),
-    "vim-tiny": ("vim", "vi"),
+    # ★ 2026-10-20 实测修正：原来写的是 `("vim", "vi")`，其中 `vim` 是错的。
+    #
+    #   `vim-tiny` 只装 `/usr/bin/vim.tiny`，再加一条 `/usr/bin/vi` ——
+    #   后者是 `/etc/alternatives/vi` 的软链（`dpkg -L vim-tiny` 实测）。
+    #   `/usr/bin/vim` 在这三个镜像里**都不存在**（三镜像 `command -v vim`
+    #   全 NO，`command -v vi` / `vim.tiny` 全 OK）。
+    #   把 `vim` 留在这张表里，等于宣称"装了 vim-tiny 就有 vim 命令"，
+    #   而这个宣称对解题是误导：提示词让模型用 `vim` 时会 command not found。
+    "vim-tiny": ("vi", "vim.tiny"),
     "build-essential": ("gcc", "g++", "make"),
     "binutils": ("objdump", "nm", "readelf", "objcopy", "strings", "addr2line"),
     "binutils-multiarch": ("objdump", "nm", "readelf"),
@@ -173,13 +182,49 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     ),
     "radare2": ("r2", "radare2", "rasm2", "rahash2"),
     "mono-runtime": ("mono",),
-    "mono-devel": ("monodis", "mcs", "mono-csc", "csc"),
+    # ★ 2026-10-20 实测修正：原来还登记了 `csc`，删掉了。
+    #   Kali rolling 的 `mono-devel` 只装 `/usr/bin/mcs`、`/usr/bin/mono-csc`、
+    #   `/usr/bin/monodis`（`dpkg -L mono-devel | grep bin/` 实测），
+    #   没有叫 `csc` 的入口 —— 上游 Mono 的 `csc` 是 .NET SDK 风格的名字。
+    #   实测：re 镜像 `command -v mcs` / `mono-csc` / `monodis` 全 OK，
+    #   `command -v csc` 是 NO。
+    "mono-devel": ("monodis", "mcs", "mono-csc"),
     "upx-ucl": ("upx",),
     "ninja-build": ("ninja",),
     "qemu-user": ("qemu-arm", "qemu-x86_64", "qemu-mips"),
-    "qemu-user-static": ("qemu-arm-static", "qemu-x86_64-static"),
+    # ★ 2026-10-20 实测修正：原来登记 `("qemu-arm-static", "qemu-x86_64-static")`，
+    #   而这两个命令在**任何镜像里都不存在**，原因不是"镜像没跟上"，是这条
+    #   登记本身反映了对 Kali 的误解。实测证据（缺一不可，逐条都要能复现）：
+    #
+    #     · `apt-cache showpkg qemu-user-static` → `Versions:` 空，
+    #       `Reverse Provides: qemu-user-binfmt 1:11.1.0+ds-2 (= )`
+    #       —— 它在 Kali rolling 里是**虚拟包**；
+    #     · `apt-get install --dry-run qemu-user-static` → `0 newly installed`
+    #       且 exit 0 —— 所以 Dockerfile 声明它**不会**让构建失败；
+    #     · `dpkg-query -W -f='${Status}|${Provides}' qemu-user-binfmt`
+    #       → `install ok installed|qemu-user-static|` —— 已被满足；
+    #     · `find /usr /opt -name 'qemu*static*'` → **无结果**。
+    #
+    #   新版 qemu 走 binfmt 注册（`/usr/lib/binfmt.d/qemu-*.conf`），不再
+    #   往 PATH 里放 `*-static` 后缀的二进制；真正能被 `command -v` 找到的
+    #   是 `qemu-user` 提供的 `qemu-arm` / `qemu-x86_64` / …（已在上一行）。
+    #   所以这里登记空元组：**"我查过了，这个包不提供自己的命令"** ——
+    #   与 `ca-certificates` 那批同类，而不是"忘了翻译"。
+    "qemu-user-static": (),
     "xvfb": ("xvfb-run", "Xvfb"),
     "gdb-multiarch": ("gdb-multiarch",),
+    # ★ 2026-10-20 实测新增：`x11-utils` 只出现在 re 镜像的 Dockerfile 里，
+    #   而它是个"包名 ≠ 命令名"的典型 —— 装的是 X 客户端工具集。
+    #   实测（re 镜像全部 OK，base/ir 不声明这个包）：
+    #     xdpyinfo xprop xwininfo xev xdriinfo
+    "x11-utils": ("xdpyinfo", "xprop", "xwininfo", "xev", "xdriinfo"),
+    # ★ 2026-10-20 实测修正：`python3-pip` 不装叫 `python3-pip` 的命令。
+    #   `dpkg -L python3-pip` 给的是 `/usr/bin/pip` 与 `/usr/bin/pip3`；
+    #   三个镜像 `command -v pip` / `pip3` 全 OK。
+    #   ⚠️ 注意在**产品镜像内**这两个名字解析到 `/opt/venv/bin/pip*`
+    #   （venv 在 PATH 前面），但那仍是"pip 命令存在"这件事的成立，
+    #   与这里要表达的承诺一致。
+    "python3-pip": ("pip", "pip3"),
     # 纯开发库 / 运行库 / 证书：不提供命令。
     "ca-certificates": (),
     "libssl-dev": (),
@@ -188,13 +233,49 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     "python3-dev": (),
     "python3-venv": (),
     "libzbar0": (),
+    # ★ 2026-10-20 实测新增：以下四个是"装了、但**纯运行库**"的包。
+    #   它们原先没登记，于是走默认"包名 == 命令名"，被当成声明了一个
+    #   同名命令 —— 全量实测时必然报"缺失"，而那是假缺口。
+    #   实测 `dpkg-query -W -f='${Status}'` 三个镜像都是
+    #   `install ok installed`（ocl/pocl/ruby-dev 在 base，re/ir 继承）。
+    "ocl-icd-libopencl1": (),
+    "pocl-opencl-icd": (),
+    "ruby-dev": (),
     # ── pip：包名 ≠ 命令名 ──
     # pwntools 装完之后 `/opt/venv/bin` 下会多出这几个 —— 它们是
     # pwn/逆向题的主力，而"pwntools 装了"不等于"checksec 能跑"
     # （虽然实际上是这样，但把这个事实写下来比假设可靠）。
     "pwntools": ("checksec", "ROPgadget", "cyclic", "pwn", "asm", "disasm"),
     "msoffcrypto-tool": ("msoffcrypto-tool",),
-    "oletools": ("olevba", "oledump.py", "rtfobj", "oleobj"),
+    # ★ 2026-10-20 实测修正：原来还登记了 `oledump.py`，删掉了。
+    #
+    #   oletools 0.60.2 装完之后 `/opt/venv/bin` 里是：
+    #     olebrowse oledir olefile oleid olemap olemeta oleobj oletimes
+    #     olevba rtfobj
+    #   没有 `oledump.py` —— 上游早已把那个脚本从 entry_points 里移除
+    #   （`oledump.py` 现在是独立仓库）。三个镜像实测 `command -v oledump.py`
+    #   全 NO，而 `olevba` / `rtfobj` / `oleobj` 全 OK。
+    #   这正是"事故史里那条 steghide/pngcheck 只写在注释里"的同类：
+    #   名字看着眼熟、实际不存在。
+    "oletools": ("olevba", "rtfobj", "oleobj"),
+    # ★ 2026-10-20 实测新增：以下是"装了、但纯 Python 库、不装命令"的包。
+    #   原先没登记 → 走默认「包名 == 命令名」→ 全量实测必然报缺失（假缺口）。
+    #   实测证据（镜像内 `/opt/venv/bin/pip list` 全部在册）：
+    #     re 镜像：keystone-engine 0.9.2 / lief 1.0.0 / pyelftools 0.33 /
+    #              unicorn 2.1.2
+    #     ir 镜像：pandas 3.0.6 / openpyxl 3.1.5 / PyYAML 6.0.3 /
+    #              python-dateutil 2.9.0.post0
+    #   ⚠️ `lief` / `pyelftools` 确实在 venv/bin 里留了 `elfdiff` / `elfpatch` /
+    #   `readelf.py`，但那是**附带脚本**、名字与包名无关；登记它们只会制造
+    #   一条没人承诺过的断言。这里要表达的是"这些包装了、但不提供同名命令"。
+    "keystone-engine": (),
+    "lief": (),
+    "pyelftools": (),
+    "unicorn": (),
+    "pandas": (),
+    "openpyxl": (),
+    "pyyaml": (),
+    "python-dateutil": (),
     # 纯 Python 库，不装命令。
     "pycryptodome": (),
     "cryptography": (),
@@ -434,22 +515,107 @@ class ImagePackages:
     apt: list[str]
     pip: list[str]
 
+    def _translate(self, pkg: str, kind: str = "apt") -> tuple[str, tuple[str, ...]]:
+        """把一个包名翻成 `(归一化包名, 它提供的命令)`。
+
+        `kind` 只影响**查表**，不影响命令名本身：pip 包名大小写不敏感
+        （`pip list` 打的是 `PyYAML`，Dockerfile 里可能写 `pyyaml`），
+        而 apt 包名本来就是全小写。命令名一律保持表里写的样子 ——
+        Linux 的命令名区分大小写，`Xvfb` 和 `xvfb` 是两个不同的东西。
+        """
+        # 包名可能带版本约束或 extras：`foo>=1.0` / `foo[bar]`
+        base = re.split(r"[<>=!\[;]", pkg, maxsplit=1)[0].strip()
+        if not base:
+            return "", ()
+        # 先按原样查（含 extras 的整串也可能是表里的键），再按 pip 的
+        # 大小写不敏感查一次。
+        candidates = [base]
+        if kind == "pip":
+            candidates.append(base.lower())
+        for key in candidates:
+            if key in PACKAGE_COMMANDS:
+                return base, PACKAGE_COMMANDS[key]
+        if pkg in PACKAGE_COMMANDS:
+            return base, PACKAGE_COMMANDS[pkg]
+        # 默认：包名 == 命令名
+        return base, (base,)
+
     def commands(self) -> set[str]:
         """翻译成命令集合。"""
         cmds: set[str] = set()
-        for pkg in self.apt + self.pip:
-            # 包名可能带版本约束或 extras：`foo>=1.0` / `foo[bar]`
-            base = re.split(r"[<>=!\[;]", pkg, maxsplit=1)[0].strip()
-            if not base:
-                continue
-            if base in PACKAGE_COMMANDS:
-                cmds.update(PACKAGE_COMMANDS[base])
-            elif pkg in PACKAGE_COMMANDS:
-                cmds.update(PACKAGE_COMMANDS[pkg])
-            else:
-                # 默认：包名 == 命令名
-                cmds.add(base)
+        for kind, group in (("apt", self.apt), ("pip", self.pip)):
+            for pkg in group:
+                _, provided = self._translate(pkg, kind)
+                cmds.update(provided)
         return cmds
+
+    def owners(self) -> dict[str, list[tuple[str, str]]]:
+        """反查表：命令 → [(声明它的包, 包来自 apt 还是 pip)]。
+
+        ## 为什么需要反查（第二道筛子的一半）
+
+        第一道只回答"名单里有没有写这个命令"。第二道问镜像之后会多出
+        一个集合：**名单写了、`command -v` 却跑不到**。这个集合里混着
+        两种完全不同的事，而它们的修法相反：
+
+          · **名单写错** —— 包明明装好了，只是它不提供这个命令名
+            （`vim-tiny` 只给 `vi`/`vim.tiny`；`oletools` 上游删了
+            `oledump.py`）。修法是改 `PACKAGE_COMMANDS`，**不用碰镜像**。
+          · **镜像没跟上** —— 包根本没装上（Dockerfile 改了、或者包里
+            本来就没有这个包）。修法是改 Dockerfile 并**重建镜像**。
+
+        要把两者分开，就必须能回答"这个命令是谁承诺的"，然后去问
+        "那个包到底装没装"。没有反查表时只能猜，而猜错的代价是把
+        「文本层的笔误」报成「镜像该重建了」—— 那会让人白重建一次。
+
+        ## 为什么带 apt/pip 标记
+
+        两个生态的"装没装"要用**完全不同的命令**问：apt 走 `dpkg-query`
+        （还要处理虚拟包 Provides），pip 走 `pip show`。丢掉这个标记就得
+        在探测时猜，而猜错的表现是"库包一律报缺失"。
+
+        ## 为什么是 list 而不是单个包名
+
+        同一个命令常被多个包提供（`python3` 在 `python3` / `python3-dev`
+        等包里都能找到）。只要**其中任何一个**装好了，"包已装"就成立，
+        所以这里保留全部候选，判定时取"任一已装"。
+        """
+        table: dict[str, list[tuple[str, str]]] = {}
+        for kind, group in (("apt", self.apt), ("pip", self.pip)):
+            for pkg in group:
+                base, provided = self._translate(pkg, kind)
+                if not base:
+                    continue
+                for cmd in provided:
+                    bucket = table.setdefault(cmd, [])
+                    if (base, kind) not in bucket:
+                        bucket.append((base, kind))
+        return table
+
+    def declared(self) -> list[str]:
+        """名单里声明的全部命令，按首次出现顺序（报告顺序要稳定）。"""
+        seen: dict[str, None] = {}
+        for kind, group in (("apt", self.apt), ("pip", self.pip)):
+            for pkg in group:
+                _, provided = self._translate(pkg, kind)
+                for cmd in provided:
+                    seen.setdefault(cmd, None)
+        return list(seen)
+
+    def packages(self) -> list[tuple[str, str]]:
+        """名单里的包：`[(包名, "apt"|"pip")]`，已剥版本、保序去重。
+
+        这是第二道筛子要问到镜像里的第二组问题：**这些包装了没有**。
+        问它的理由是「命令缺失」有两种成因，而只有这一组答案能把它们
+        分开（见 `owners()` 的说明）。
+        """
+        seen: dict[tuple[str, str], None] = {}
+        for kind, group in (("apt", self.apt), ("pip", self.pip)):
+            for pkg in group:
+                base, _ = self._translate(pkg, kind)
+                if base:
+                    seen.setdefault((base, kind), None)
+        return list(seen)
 
 
 #: `FROM <image>`（只取第一个 —— 多阶段构建里第一个才是最终镜像的底座）。
@@ -696,10 +862,17 @@ def load_router() -> Router:
 #: 给到 60 秒是留给"磁盘很慢"与"本地正好没有这个 tag、要回退"的余量。
 PROBE_TIMEOUT_SEC = 60.0
 
+#: 第二道探测函数的形状：`(镜像名, 要问的命令, 要问的包) -> (命令结果, 包结果)`。
+#: 返回 `None` 一律表示**没证据**。`check(probe_fn=...)` 允许测试替换它。
+ProbeFn = Callable[
+    [str, Sequence[str], Sequence[tuple[str, str]]],
+    "tuple[dict[str, bool], dict[tuple[str, str], bool]] | None",
+]
+
 
 def probe_image(
     image: str,
-    commands: list[str],
+    commands: Sequence[str],
     *,
     timeout: float = PROBE_TIMEOUT_SEC,
 ) -> dict[str, bool] | None:
@@ -742,17 +915,76 @@ def probe_image(
     （`one_gadget` / `seccomp-tools` 就装在 `/usr/local/bin`）。
     用 root 验会得出"有"，而解题时是"没有"。
     """
-    if not commands:
-        return {}
-
     docker = shutil.which("docker")
     if docker is None:
         return None
 
-    # ★ 先确认镜像在**本地**。不做这一步的话，`docker run` 遇到不存在的
-    #   tag 会去 registry 拉 —— 镜像 2.8 GB，网络慢就直接卡到超时，
-    #   而报出来的是"实测超时"，把「还没构建」伪装成「测得慢」。
-    #   这两件事的修法完全不同，必须分开。
+    # 委托给 `probe_image_full`：只问命令、不问包。
+    # ⚠️ 这里**不要**再抄一份 `docker run` 拼装逻辑 —— 两份实现一定
+    # 会漂移，而漂移的样子是"同一个镜像，一个函数说 OK、另一个说 NO"。
+    got = probe_image_full(image, commands, (), timeout=timeout)
+    if got is None:
+        return None
+    cmd_result, _ = got
+    return cmd_result
+
+
+#: 在镜像里问「这些包装了没有」时用的探针。
+#:
+#: ## 为什么不是"每个包一次 `dpkg -s`"
+#:
+#: 一是慢（100+ 个包就是 100+ 次进程启动），二是**会误判虚拟包**：
+#: `p7zip-full` / `dnsutils` / `exiftool` 在 Kali rolling 里都是被别的
+#: 实包 Provides 的虚拟名，`dpkg-query -W p7zip-full` 直接返回
+#: "no packages found"，而 `7z` 明明能跑。实测就踩到了：
+#: `p7zip-full` 报"没装"、同时 `7z` 是 OK —— 两个结论互相打架。
+#:
+#: 所以整份快照只取一次，再在本地对 `Provides` 反查。
+_PKG_PROBE = r"""
+echo "===DPKG==="
+dpkg-query -W -f='${Package}\t${Status}\t${Provides}\n' 2>/dev/null
+echo "===PIP==="
+/opt/venv/bin/pip list --format=freeze 2>/dev/null || pip list --format=freeze 2>/dev/null || true
+"""
+
+#: 命令名里允许出现的字符。超出范围的一律不塞进 `sh -c` 脚本 ——
+#: 这个脚本是拼给容器里的 `sh` 执行的，命令名来自 Dockerfile 文本，
+#: 不能假设它一定干净。
+_SAFE_CMD_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]*$")
+
+
+def _norm_pip(name: str) -> str:
+    """PEP 503 归一化：`PyYAML` / `python-dateutil` / `pyyaml` 视为同一个。"""
+    return re.sub(r"[-_.]+", "_", name.strip().lower())
+
+
+def probe_image_full(
+    image: str,
+    commands: Sequence[str],
+    packages: Sequence[tuple[str, str]],
+    *,
+    timeout: float = PROBE_TIMEOUT_SEC,
+) -> tuple[dict[str, bool], dict[tuple[str, str], bool]] | None:
+    """一次容器里同时问两个问题：命令在不在、包装没装。
+
+    ## 为什么两问必须同一次 `docker run`
+
+    分开跑就是两次冷启动（2.8 GB 镜像上各 1–3 秒），更要紧的是
+    **两问必须看到同一个镜像状态** —— 中间如果有人重建了镜像，
+    分开问会得出"命令缺失 + 包已装"这种自相矛盾的组合，而它恰好
+    会被归类成"名单写错"，指向一个错误的修法。
+
+    ## 返回 `(命令结果, 包结果)`
+
+      · `None` —— 和 `probe_image` 一样是**没证据**，不许当"全过"。
+
+    包结果的键是 `(包名, "apt"|"pip")`，因为两个生态的"装没装"
+    是两套独立事实。
+    """
+    docker = shutil.which("docker")
+    if docker is None:
+        return None
+
     try:
         inspect = subprocess.run(  # noqa: S603  —— argv 本地构造
             [docker, "image", "inspect", f"{image}:latest"],
@@ -767,12 +999,19 @@ def probe_image(
         print(f"   ⚠️ 本地没有镜像 {image}:latest（还没构建？），这一维跳过。")
         return None
 
-    script = " ; ".join(
-        f'command -v {name} >/dev/null 2>&1 && echo "OK:{name}" || echo "NO:{name}"'
-        for name in commands
-    )
-    argv = [docker, "run", "--rm", "--entrypoint", "sh", f"{image}:latest", "-c", script]
+    lines: list[str] = []
+    probed_cmds: list[str] = []
+    for name in commands:
+        if not _SAFE_CMD_RE.match(name):
+            continue
+        probed_cmds.append(name)
+        lines.append(
+            f'command -v {name} >/dev/null 2>&1 && echo "C_OK:{name}" || echo "C_NO:{name}"'
+        )
+    lines.append(_PKG_PROBE)
+    script = "\n".join(lines)
 
+    argv = [docker, "run", "--rm", "--entrypoint", "sh", f"{image}:latest", "-c", script]
     try:
         done = subprocess.run(  # noqa: S603  —— argv 是本地构造的，无 shell 介入
             argv, capture_output=True, text=True, timeout=timeout, check=False
@@ -785,23 +1024,126 @@ def probe_image(
         return None
 
     if done.returncode != 0:
-        # 最常见的原因是"镜像还没构建" —— 那不是工具缺失，是没产物可验。
         tail = (done.stderr or done.stdout).strip().splitlines()
         hint = tail[-1] if tail else f"exit {done.returncode}"
         print(f"   ⚠️ 镜像 {image}:latest 跑不起来（{hint}），这一维跳过。")
         return None
 
-    result: dict[str, bool] = {}
+    cmd_result: dict[str, bool] = {}
+    installed_pkgs: set[str] = set()
+    pip_names: set[str] = set()
+    section = "cmd"
     for raw in done.stdout.splitlines():
-        line = raw.strip()
-        if line.startswith("OK:"):
-            result[line[3:]] = True
-        elif line.startswith("NO:"):
-            result[line[3:]] = False
-    if not result:
-        print(f"   ⚠️ 实测 {image} 没有任何输出，这一维跳过。")
+        line = raw.rstrip()
+        if line.strip() == "===DPKG===":
+            section = "dpkg"
+            continue
+        if line.strip() == "===PIP===":
+            section = "pip"
+            continue
+        if section == "cmd":
+            if line.startswith("C_OK:"):
+                cmd_result[line[5:]] = True
+            elif line.startswith("C_NO:"):
+                cmd_result[line[5:]] = False
+        elif section == "dpkg":
+            parts = line.split("\t")
+            if len(parts) < 2:
+                continue
+            pkg, status = parts[0].strip(), parts[1].strip()
+            if not pkg or "install ok installed" not in status:
+                continue
+            installed_pkgs.add(pkg)
+            if len(parts) >= 3:
+                # `Provides` 是逗号分隔的虚拟名列表，每项可能带版本
+                for virtual in parts[2].split(","):
+                    name = virtual.strip().split("(")[0].strip()
+                    if name:
+                        installed_pkgs.add(name)
+        else:
+            if "==" in line:
+                pip_names.add(_norm_pip(line.split("==", 1)[0]))
+
+    if not cmd_result:
+        print(f"   ⚠️ 实测 {image} 没有任何命令输出，这一维跳过。")
         return None
-    return result
+
+    pkg_result: dict[tuple[str, str], bool] = {}
+    for pkg, kind in packages:
+        if kind == "apt":
+            pkg_result[(pkg, kind)] = pkg in installed_pkgs
+        else:
+            pkg_result[(pkg, kind)] = _norm_pip(pkg) in pip_names
+    return cmd_result, pkg_result
+
+
+@dataclass
+class ImageDrift:
+    """一个镜像的第二道结果：**名单写错** 与 **镜像没跟上** 分开放。
+
+    这两栏永远不合并成一句"有缺失"。原因是修法相反、责任人也不同：
+
+      · `naming_errors` —— 包装好了，只是它不提供这个命令名。
+        改 `PACKAGE_COMMANDS`，**不用重建镜像**。审代码就能改完。
+      · `image_lagging` —— 包根本没装上。改 Dockerfile 并**重建镜像**，
+        要等几分钟构建、还可能要改 CI 的构建流程。
+
+    合成一句"镜像有问题"会让人默认去重建镜像 —— 而实测中 30 项里
+    有 28 项是前者，重建多少次都不会好。
+    """
+
+    image: str
+    #: (命令, 已装的包) —— 名单写错
+    naming_errors: list[tuple[str, str]] = field(default_factory=list)
+    #: (命令, 一个都没装的候选包) —— 镜像没跟上
+    image_lagging: list[tuple[str, str]] = field(default_factory=list)
+    #: 判不了（包状态没问到）。**不许**当成通过，也不许猜成上面两类。
+    unknown: list[str] = field(default_factory=list)
+
+    @property
+    def clean(self) -> bool:
+        return not (self.naming_errors or self.image_lagging or self.unknown)
+
+
+def classify_drift(
+    image: str,
+    image_pkgs: ImagePackages,
+    cmd_probe: dict[str, bool],
+    pkg_probe: dict[tuple[str, str], bool],
+) -> ImageDrift:
+    """把「命令跑不到」按成因二分。**纯函数**，不碰 docker。
+
+    判据只有一条，而它需要先知道"这个命令是谁承诺的"：
+
+        命令 `command -v` 失败
+          ├─ 承诺它的包**至少一个装了**   → 名单写错（包在，命令名不对）
+          ├─ 承诺它的包**一个都没装**      → 镜像没跟上（该重建）
+          └─ 包状态问不到                  → unknown（不下结论）
+
+    历史教训支撑这条判据：`patchelf`/`gdb` 那次是"包没装"（镜像停在
+    6 天前），`steghide`/`pngcheck` 那次是"名字写在注释里"（包根本没声明），
+    `oledump.py` 那次是"包装了、上游删了那个脚本"。三种的修法各不相同，
+    而只有第一种需要重建镜像。
+    """
+    drift = ImageDrift(image=image)
+    owners = image_pkgs.owners()
+    for cmd in image_pkgs.declared():
+        if cmd_probe.get(cmd) is not False:
+            continue
+        candidates = owners.get(cmd, [])
+        if not candidates:
+            drift.unknown.append(cmd)
+            continue
+        states = [(pkg, kind, pkg_probe.get((pkg, kind))) for pkg, kind in candidates]
+        installed = [(pkg, kind) for pkg, kind, ok in states if ok is True]
+        if installed:
+            drift.naming_errors.append((cmd, installed[0][0]))
+            continue
+        if any(ok is None for _, _, ok in states):
+            drift.unknown.append(cmd)
+            continue
+        drift.image_lagging.append((cmd, candidates[0][0]))
+    return drift
 
 
 @dataclass
@@ -814,9 +1156,136 @@ class Finding:
     missing_in_image: list[str] = field(default_factory=list)
 
 
+class CheckOutcome(list):
+    """`check()` 的返回值：**是** `list[Finding]`，另外挂第二道的结果。
+
+    ## 为什么继承 list 而不是换成 dataclass
+
+    第一道的返回类型被 `main()` 和未来的测试直接当列表用（`if findings:`
+    / 列表推导 / `len()`）。改成 dataclass 就得同步改所有调用点，而其中
+    任何一处漏改都会变成"检查永远报绿"——静默失败，最坏的一种。
+
+    继承 `list` 之后，所有列表用法原样成立，第二道的结果只是多挂几个
+    属性。**第一道的语义一个字都没动**，这是兼容性的最低风险走法。
+
+    ## 为什么第二道的结果不并进列表本身
+
+    `Finding` 的粒度是「某个**分类**需要的工具凑不齐」；第二道回答的是
+    「名单里声明的某个**命令**在镜像里存不存在」。粒度、主体、修法全都
+    不同。塞进同一个列表之后就再也分不开了，而"能分开"正是这次改动的
+    全部意义。
+    """
+
+    def __init__(self, findings: list[Finding] | None = None) -> None:
+        super().__init__(findings or [])
+        #: 每个镜像的第二道结果。**只有真的探测过的镜像才会在这里**。
+        self.drifts: dict[str, ImageDrift] = {}
+        #: 是否请求了 `--probe`（不代表跑成功）。
+        self.probe_attempted: bool = False
+        #: 第二道没跑的原因（空串 = 跑了）。
+        self.probe_not_run_reason: str = ""
+        #: 解析出来的镜像表，报告"某命令属于哪个包"时要用。
+        self.images: dict[str, ImagePackages] = {}
+
+    @property
+    def probe_checked(self) -> bool:
+        """第二道到底有没有拿到证据。"""
+        return bool(self.drifts)
+
+    @property
+    def drift_confirmed(self) -> list[ImageDrift]:
+        """拿到证据、且**确实有问题**的那些镜像。"""
+        return [d for d in self.drifts.values() if d.naming_errors or d.image_lagging]
+
+    @property
+    def drift_unknown(self) -> list[ImageDrift]:
+        """拿到了命令结果，但包的安装状态问不到 —— 不下结论。"""
+        return [d for d in self.drifts.values() if d.unknown]
+
+
+def print_second_screen(drifts: dict[str, ImageDrift], not_run_reason: str) -> None:
+    """打印第二道的独立报表面。
+
+    ## 为什么必须是**独立的一面**，而不是往第一道表里加一列
+
+    两张表回答两个不同的问题，而且它们**可以互相矛盾**：
+
+      · 第一道说"名单里声明了 checksec"（文本层成立）；
+      · 第二道说"镜像里 `command -v checksec` 跑不到"（产物层不成立）。
+
+    合成一格 ✅/❌ 时，这个矛盾会被压成一个字，读的人无法判断该改文本
+    还是该重建镜像。历史上 5 次事故里，28 项是文本层笔误（改文本即可）、
+    2 项是产物层滞后（必须重建镜像），把它们都写成一个 ❌ 的结果，就是
+    每次都先浪费一轮重建。
+
+    ## 三栏是刻意分开的
+
+      A 名单写错（包已装、命令名不对）→ 改 `PACKAGE_COMMANDS`，**不重建**
+      B 镜像没跟上（包没装）          → 改 Dockerfile 并**重建镜像**
+      C 判不了（包状态没问到）        → 不下结论，去查
+
+    C 单独一栏是因为"不知道"和"没问题"必须分开 —— 把它并进 A 或 B 就是
+    编造结论；把它藏起来就是回到"看起来在守、其实守不住"。
+    """
+    print("\n── 第二道：镜像实测结论 ──\n")
+
+    if not drifts:
+        # ★ 这一段是这次改动要堵的核心漏洞。
+        #
+        #   旧版本在没有 docker 时**什么都不打印**，然后 `main()` 照样打
+        #   `✅ … 声明与产物一致`。于是"没验"被读成了"验过了、没问题"。
+        #   一个专门用来抓"镜像没跟上"的脚本，自己在没有 docker 的机器上
+        #   谎报通过 —— 这是同一个错误的第二次发生。
+        reason = not_run_reason or "没有拿到任何镜像证据"
+        print(f"   ⚠️ 第二道未跑：{reason}。")
+        print("   ⚠️ 这不是「通过」，是「没验」—— 上面只有第一道（文本层）的结论，")
+        print("      镜像里到底有没有这些命令，这次**没有任何证据**。\n")
+        return
+
+    okay = [d for d in drifts.values() if d.clean]
+    naming = [d for d in drifts.values() if d.naming_errors]
+    lagging = [d for d in drifts.values() if d.image_lagging]
+    unknown = [d for d in drifts.values() if d.unknown]
+
+    print("   ★ 下面两栏是**两件不同的事**，修法相反，不要合起来看：")
+    print("     A 名单写错   → 包装好了，只是它不提供这个命令名 → 改 PACKAGE_COMMANDS，")
+    print("                    **不用重建镜像**，改完提交即可。")
+    print("     B 镜像没跟上 → 包根本没装上 → 改 Dockerfile 并**重建镜像**。")
+    print()
+
+    if naming:
+        total = sum(len(d.naming_errors) for d in naming)
+        print(f"   A 名单写错（{total} 项，改文本即可，无需重建）")
+        for drift in naming:
+            for cmd, pkg in drift.naming_errors:
+                print(f"     · {drift.image:<20} {cmd:<20} 包 {pkg} 已装，但它不提供该命令")
+        print()
+
+    if lagging:
+        total = sum(len(d.image_lagging) for d in lagging)
+        print(f"   B 镜像没跟上（{total} 项，必须重建镜像）")
+        for drift in lagging:
+            for cmd, pkg in drift.image_lagging:
+                print(f"     · {drift.image:<20} {cmd:<20} 包 {pkg} 根本没装")
+        print("     修法：docker build -f docker/<镜像>/Dockerfile -t <镜像>:latest .")
+        print()
+
+    if unknown:
+        total = sum(len(d.unknown) for d in unknown)
+        print(f"   C 判不了（{total} 项：命令跑不到，但包的安装状态没问到）")
+        for drift in unknown:
+            print(f"     · {drift.image:<20} {', '.join(drift.unknown)}")
+        print("     ↑ 这一栏**不是通过**，是证据不足。别猜成 A 或 B。\n")
+
+    if not (naming or lagging or unknown):
+        for drift in okay:
+            print(f"   ✅ {drift.image:<20} 声明的每个命令在镜像里都能 `command -v` 到")
+        print()
+
+
 def _resolve_image(
-    router: "Router", profile: str, base: "ImagePackages"
-) -> tuple["ImagePackages", bool]:
+    router: Router, profile: str, base: ImagePackages
+) -> tuple[ImagePackages, bool]:
     """解析一个派生镜像，返回 `(合并后的包清单, 是否继承 base)`。
 
     ## 为什么抽成函数（v0.41）
@@ -853,11 +1322,29 @@ def _resolve_image(
     return merged, True
 
 
-def check(verbose: bool = False, probe: bool = False) -> list[Finding]:
+def check(
+    verbose: bool = False,
+    probe: bool = False,
+    *,
+    probe_fn: ProbeFn | None = None,
+) -> list[Finding]:
     """主体检查。返回所有"缺工具"的发现。
 
     `probe=True` 时额外对**真实镜像**跑一遍 `command -v`
     （需要 Docker；跑不起来就退化成纯静态，不会因此判失败）。
+
+    ## `probe_fn` 是**测试注入点**，生产调用一律不传
+
+    第二道的判据（"这个命令跑不到，是因为包没装、还是因为名字写错了"）是
+    整个改动里最容易写错的一处，而它只有在"命令缺失"时才被触发 ——
+    真实镜像要制造一次缺失就得重建镜像，不可能放进单元测试。
+
+    所以这里留一个可替换的探测函数：测试传一个假的进去，就能精确构造
+    "命令缺失 + 包已装"（→ 名单写错）和"命令缺失 + 包没装"（→ 镜像没跟上）
+    两种现场，验证两栏**不会**被合并。
+
+    默认 `None` 表示用真的 `probe_image_full`。**没有环境变量开关、没有
+    命令行参数**指向它 —— 免得有人拿它去"跑出一个绿的 CI"。
     """
 
     router = load_router()
@@ -902,30 +1389,55 @@ def check(verbose: bool = False, probe: bool = False) -> list[Finding]:
             for i in range(0, len(cmds), 6):
                 print("     " + "  ".join(f"{c:<18}" for c in cmds[i : i + 6]))
 
-    # ── 可选：对真实镜像实测 ──────────────────────────────
+    # ── 可选：对真实镜像实测（第二道筛子）──────────────────
     #
-    # 每个 profile 只起**一次**容器，把所有它需要的命令一次问完。
-    # 结果按 profile 存起来，下面逐分类查表。
+    # 每个 profile 只起**一次**容器，一次问完两件事：
+    #   ① 名单里声明的**每一个**命令在不在（不只是必需命令）；
+    #   ② 声明里涉及的**每一个包**装了没有。
+    #
+    # ② 是这次新增的：没有它就只能说"某命令不存在"，说不出**为什么**，
+    # 于是"名单写错"和"镜像没跟上"被迫混成一条，而这两者的修法相反。
     probes: dict[str, dict[str, bool]] = {}
+    drifts: dict[str, ImageDrift] = {}
+    no_probe_reason = ""
     if probe:
-        needed: dict[str, list[str]] = {}
-        for category, required in CATEGORY_REQUIREMENTS.items():
-            bucket = needed.setdefault(router.profile_for(category), [])
-            for name in required:
-                if name not in bucket:
-                    bucket.append(name)
-
-        print("\n── 镜像实测（command -v，需要 Docker）──\n")
-        for profile, names in sorted(needed.items()):
+        docker_missing = shutil.which("docker") is None
+        do_probe = probe_fn if probe_fn is not None else probe_image_full
+        print("\n── 第二道：镜像实测（command -v + 包安装状态，需要 Docker）──\n")
+        for profile, image in sorted(images.items()):
+            commands = image.declared()
+            packages = image.packages()
             started = time.monotonic()
-            result = probe_image(profile, names)
+            got = do_probe(profile, commands, packages)
             elapsed = time.monotonic() - started
-            if result is None:
-                print(f"   {profile:<20} 无证据（旧静态口径，见上面的告警）")
+            if got is None:
+                # ★ 这里必须**明说没跑**，不能说"通过"。
+                #   旧版本在这条路径上什么都不打印，而 `main()` 末尾
+                #   照样打 ✅ —— 于是"没验"被读成"验过了、没问题"。
+                #   那正是这个脚本要防的事，却发生在脚本自己身上。
                 continue
-            probes[profile] = result
-            hit = sum(1 for ok in result.values() if ok)
-            print(f"   {profile:<20} {hit}/{len(result)} 个命令命中（{elapsed:.1f}s）")
+            cmd_result, pkg_result = got
+            probes[profile] = cmd_result
+            hit = sum(1 for ok in cmd_result.values() if ok)
+            print(
+                f"   {profile:<20} 命令 {hit}/{len(cmd_result)} 命中"
+                f"，包 {sum(1 for v in pkg_result.values() if v)}/{len(pkg_result)} 已装"
+                f"（{elapsed:.1f}s）"
+            )
+            drifts[profile] = classify_drift(profile, image, cmd_result, pkg_result)
+
+        if docker_missing:
+            no_probe_reason = "本机无 docker"
+            print(
+                "   ⚠️ 本机无 docker，第二道未跑 —— 下面的结论**只有第一道**"
+                "（文本层），镜像里到底有没有这些命令，这次没有证据。\n"
+            )
+        elif not drifts:
+            no_probe_reason = "三个镜像都没跑起来"
+            print(
+                "   ⚠️ 第二道未跑（镜像没构建 / 跑不起来，见上面的告警）—— "
+                "下面的结论**只有第一道**。\n"
+            )
 
     findings: list[Finding] = []
     print("\n── 能力契约 ──\n")
@@ -970,7 +1482,24 @@ def check(verbose: bool = False, probe: bool = False) -> list[Finding]:
                 )
             )
 
-    return findings
+    # ★ 第二道的结论**不塞进 `findings`**。
+    #
+    #   `findings` 的语义是「某个分类需要的工具凑不齐」，而第二道回答的是
+    #   另一个问题：「Dockerfile 里声明的命令，在镜像里到底存不存在」。
+    #   两者的粒度都不同（分类 vs 命令），塞在一起就再也分不开 ——
+    #   而"能分开"正是这个改动的全部意义。
+    #
+    #   但 `--probe` 发现真漂移时**必须影响退出码**，否则 CI 加不加它
+    #   都一样绿，等于没接上。这一向由 `CheckOutcome` 携带。
+    if probe:
+        print_second_screen(drifts, no_probe_reason)
+
+    outcome = CheckOutcome(findings)
+    outcome.drifts = drifts
+    outcome.probe_attempted = probe
+    outcome.probe_not_run_reason = no_probe_reason
+    outcome.images = images
+    return outcome
 
 
 def main() -> int:
@@ -1018,6 +1547,8 @@ def main() -> int:
                 "            docker build -f docker/<镜像>/Dockerfile -t <镜像>:latest .\n"
                 "        静态检查永远看不见这一类，先跑 --probe 再谈「通过」。"
             )
+        if args.probe and findings.drift_confirmed:
+            print_second_repair(drift=findings.drift_confirmed)
         print()
         return 1
 
@@ -1025,11 +1556,7 @@ def main() -> int:
         "✅ 每个分类需要的工具，在它被路由到的镜像里都有声明"
         f"（{len(CATEGORY_REQUIREMENTS)} 个分类）。\n"
     )
-    if args.probe:
-        print(
-            "✅ 并且 `--probe` 在真实镜像里逐个 `command -v` 过 —— 声明与产物一致。\n"
-        )
-    else:
+    if not args.probe:
         print(
             "⚠️ 这个脚本证明的是「Dockerfile 的 apt/pip 命令里写了这个包」，\n"
             "   **不**证明「包真的装成功了、命令真的在 PATH 里」。有两种情况\n"
@@ -1040,7 +1567,77 @@ def main() -> int:
             "       不在里面，而这次检查报的是「pwn ✅」。\n"
             "   加 `--probe` 就会去问镜像本身（需要 Docker）。\n"
         )
+        return 0
+
+    # ── 到这里：第一道全绿 + 请求了 --probe ──────────────────
+    #
+    # ★ 这一段是整个改动要堵的洞。
+    #
+    #   旧代码在这里无条件打印「✅ 并且 --probe 在真实镜像里逐个 command -v
+    #   过 —— 声明与产物一致」。可是 `--probe` 在三种情况下**跑都没跑**：
+    #   本机没有 docker、镜像还没构建、容器超时。那三种情况下它打印的仍然是
+    #   ✅，于是"没验"被读成"验过了、没问题"。
+    #
+    #   一个专门用来抓"镜像没跟上"的脚本，自己在没有 docker 的机器上谎报
+    #   通过 —— 这是同一个错误在脚本自己身上又发生了一次。
+    #
+    #   现在只有**真的拿到证据、且证据干净**时才说一致。
+    if not findings.probe_checked:
+        # 可跳过、且**不返回失败退出码**（CI 上没有 docker 是常态）。
+        # 但必须明说"没验" —— 不能静默，也不能说成通过。
+        #
+        # ⚠️ 这里的措辞刻意**不含**那句结论原文（"声明与产物"…"一致"）。
+        #    含了的话，`grep` 这类检查会把"没有证据"的告警当成"通过"的
+        #    凭据 —— 这正是这个脚本要防的误读，不能在告警里自己制造一次。
+        print(
+            f"⚠️ 第二道未跑：{findings.probe_not_run_reason or '没拿到任何镜像证据'}，"
+            "所以「文本层与产物层对得上」这个结论**这次没有证据**。\n"
+            "   上面的 ✅ 只覆盖第一道（文本层）。要真的验镜像请在有 Docker 的机器上跑。\n"
+        )
+        return 0
+
+    if findings.drift_confirmed:
+        print_second_repair(drift=findings.drift_confirmed)
+        return 1
+
+    if findings.drift_unknown:
+        print(
+            "⚠️ 第二道跑到了，但有命令既 `command -v` 不到、又查不清它所属包装没装 ——"
+            "这一维**不下结论**（见上面的 C 栏）。\n"
+            "   上面第一道全绿；第二道对这部分是「证据不足」，不是「通过」。\n"
+        )
+        return 0
+
+    print(
+        "✅ 并且 `--probe` 在真实镜像里逐个 `command -v` 过 —— 声明与产物一致。\n"
+    )
     return 0
+
+
+def print_second_repair(*, drift: list[ImageDrift]) -> None:
+    """第二道查出真问题时的修法说明（与第一道的修法分开列）。
+
+    这里要把**具体哪个命令、在哪个镜像里**再说一遍 —— 上面那两栏是分区
+    报告的，但结论区只有一段，读者可能直接从结论开始看。少写这一遍，
+    结论区就只剩一个数字，还得往上翻才能知道缺的是什么。
+    """
+    naming: list[tuple[str, str, str]] = [
+        (d.image, cmd, pkg) for d in drift for cmd, pkg in d.naming_errors
+    ]
+    lagging: list[tuple[str, str, str]] = [
+        (d.image, cmd, pkg) for d in drift for cmd, pkg in d.image_lagging
+    ]
+    print("\n   第二道（镜像实测）另外发现了漂移：\n")
+    if naming:
+        print(f"     A 名单写错 {len(naming)} 项 —— 包装好了但命令名不对，**不用重建镜像**：")
+        for image, cmd, pkg in naming:
+            print(f"        · {image:<20} {cmd:<20}（包 {pkg} 已装）")
+        print("        修法：改 scripts/verify_sandbox_tools.py 的 PACKAGE_COMMANDS。")
+    if lagging:
+        print(f"     B 镜像没跟上 {len(lagging)} 项 —— 包根本没装上，**必须重建镜像**：")
+        for image, cmd, pkg in lagging:
+            print(f"        · {image:<20} {cmd:<20}（包 {pkg} 没装）")
+        print("        修法：docker build -f docker/<镜像>/Dockerfile -t <镜像>:latest .")
 
 
 if __name__ == "__main__":
