@@ -217,7 +217,34 @@ def ensure_solve_scan(db: Session, challenge) -> Scan:  # noqa: ANN001
 
 
 def ensure_solver_agent(db: Session, scan_id: str) -> Agent:
-    """拿到（或建出）这条 scan 的解题 agent。"""
+    """拿到（或建出）这条 scan 的解题 agent。
+
+    ## ★ v0.49：新建 agent 时把 `scans.agent_count` 一起刷对
+
+    修的是用户实测的那个界面错报：「明明在跑，列表说 0 个智能体」。
+
+    根因：`ensure_solve_scan` 建 scan 行时 `agent_count` 走模型默认值 0，
+    而 `refresh_scan_rollup`（唯一刷这个数的地方）**只在收尾时**被调用
+    —— 于是整个解题过程中它一直是 0，尽管 `ctf2-solver` 已经在活动流里
+    干活。用户看到「解题中 · 0 个智能体」，会以为根本没启动。
+
+    实测（2026-10-20，Kali 生产库）：`agents` 表里 `role=exploiter`、
+    `status=running`、`event_count=11` 的行好端端地在那里，而列表读的是
+    `scans.agent_count` = 0。更迷惑的是**重跑复用旧 scan 行**时那个数
+    会留着上一轮收尾时刷出的 1 —— 于是同一个界面上的数字忽对忽错。
+
+    ## 为什么只在**新建**分支算，不在复用分支算
+
+    复用分支是本函数的热路径：`_emit` 每发一条事件都会调到这里，而一次
+    解题能发几百条。为了一个"创建时就该对"的数，每条事件都跑一次
+    `COUNT(*)` 是拿得到的收益换不划算的代价。
+
+    新建分支一次解题只走一遍，那次 `COUNT(*)` 是必须的 —— 它同时覆盖
+    「这条 scan 上除了 solver 还挂着扫描侧建的报告 agent」那种情形
+    （见 `finalize_solve_scan` 里关于 `ensure_runner_agent` 的说明）。
+    """
+    from app.scans.service import count_scan_agents
+
     agent_id = f"{scan_id}:{SOLVER_AGENT_ID}"[:64]
     agent = db.get(Agent, agent_id)
     if agent is not None:
@@ -238,6 +265,15 @@ def ensure_solver_agent(db: Session, scan_id: str) -> Agent:
     )
     db.add(agent)
     db.flush()
+
+    # ★ 口径复用 `count_scan_agents`，不在这里自己写一遍 COUNT ——
+    #   两处各算一遍必然漂移，那正是它被抽出来的理由。
+    #
+    # ⚠️ 只写列、不 commit：本函数在 `_emit` 的事务中间被调用，提交边界
+    #    归调用方（与 `refresh_scan_rollup` 的区别正在这里，它自己会 commit）。
+    scan = db.get(Scan, scan_id)
+    if scan is not None:
+        scan.agent_count = count_scan_agents(db, scan_id)
     return agent
 
 

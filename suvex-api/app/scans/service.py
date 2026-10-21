@@ -1513,6 +1513,31 @@ def findings_counts(db: Session, scan_id: str) -> dict[str, int]:
     return {severity: count for severity, count in rows}
 
 
+def count_scan_agents(db: Session, scan_id: str) -> int:
+    """数这条 scan 上挂着几个 agent。
+
+    ## ★ 抽出来是因为有两个调用方，而这个数不能有两个口径
+
+    `refresh_scan_rollup`（收尾/漏洞变动时刷整行）和
+    `ctf2.events.ensure_solver_agent`（**解题进行中**新建 solver 时）都
+    需要它。抄一份的后果是"扫描列表里的智能体数"与"智能体页能看到的"
+    在某个时刻对不上 —— 而那个数正是用户判断"它到底动没动"的依据。
+
+    ## 为什么不做成 `refresh_scan_rollup` 的一部分
+
+    那个函数会 `db.commit()`（见它自己的说明与 `app/core/db.py` 里那条
+    "内层函数替外层定事务边界"的告诫）。解题进行中的调用点在 `_emit` 里，
+    正处于"写题目状态、写事件"的同一个事务中间 —— 在那里 commit 会把
+    调用方未提交的半截工作提前落地。所以这里只算数、不写库、不提交，
+    由调用方决定放进哪个事务。
+    """
+    return int(
+        db.execute(
+            select(func.count()).select_from(Agent).where(Agent.scan_id == scan_id)
+        ).scalar_one()
+    )
+
+
 def refresh_scan_rollup(db: Session, scan: Scan) -> None:
     """把 findings 计数与 agent 数刷进扫描行。
 
@@ -1520,11 +1545,7 @@ def refresh_scan_rollup(db: Session, scan: Scan) -> None:
     每次漏洞变动都要重新刷这两个数 —— 口径只有一处才不会有第二个版本。
     """
     scan.findings = findings_counts(db, scan.id)
-    scan.agent_count = int(
-        db.execute(
-            select(func.count()).select_from(Agent).where(Agent.scan_id == scan.id)
-        ).scalar_one()
-    )
+    scan.agent_count = count_scan_agents(db, scan.id)
     db.commit()
 
 
@@ -1975,6 +1996,7 @@ __all__ = [
     "launch_scan",
     "list_scans",
     "read_log_tail",
+    "count_scan_agents",
     "refresh_scan_rollup",
     "rerun_scan",
 ]
