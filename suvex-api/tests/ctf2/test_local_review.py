@@ -28,10 +28,9 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session
 
+from app.core.vocab import Ctf2CompetitionKind
 from app.ctf2 import service
 from app.ctf2.models import Ctf2Challenge, Ctf2Competition
-from app.core.vocab import Ctf2CompetitionKind
-
 
 # ══════════════════════════════════════════════════════════
 # 一、批次：本地复盘有自己的批次，且只有一个
@@ -317,8 +316,8 @@ def test_competition_kind_literal_covers_enum() -> None:
     """
     from typing import get_args
 
-    from app.ctf2.schemas import CompetitionKindLiteral
     from app.core.vocab import Ctf2CompetitionKind
+    from app.ctf2.schemas import CompetitionKindLiteral
 
     literal_values = set(get_args(CompetitionKindLiteral))
     enum_values = {member.value for member in Ctf2CompetitionKind}

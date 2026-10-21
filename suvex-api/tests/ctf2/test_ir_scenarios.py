@@ -47,7 +47,6 @@ from app.ctf2 import notes
 from app.ctf2.runner import (
     build_system_prompt,
     image_for_profile,
-    load_agentsec_prompt,
     load_ir_prompt,
     load_system_prompt,
     profile_for_category,
@@ -61,7 +60,7 @@ from app.ctf2.runner import (
 def test_three_ir_categories() -> None:
     """恰好三类，且全部带统一前缀。"""
     assert len(IrCategory) == 3
-    assert IR_CATEGORIES == {"ir-root-cause", "ir-timeline", "ir-scope"}
+    assert {"ir-root-cause", "ir-timeline", "ir-scope"} == IR_CATEGORIES
     assert all(c.value.startswith(IR_CATEGORY_PREFIX) for c in IrCategory)
 
 

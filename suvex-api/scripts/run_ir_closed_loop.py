@@ -162,7 +162,9 @@ IR_DESCRIPTION = (
 
 async def _main(args: argparse.Namespace) -> int:
     from app.core.db import get_session_factory
-    from app.ctf2 import runner, service as ctf2_service, writeup as writeup_mod
+    from app.ctf2 import runner
+    from app.ctf2 import service as ctf2_service
+    from app.ctf2 import writeup as writeup_mod
 
     evidence = Path(args.evidence).resolve()
     if not evidence.is_file():

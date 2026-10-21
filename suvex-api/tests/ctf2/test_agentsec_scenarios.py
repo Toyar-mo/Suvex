@@ -47,12 +47,12 @@ from app.ctf2.runner import build_system_prompt, load_agentsec_prompt, load_syst
 def test_four_agentsec_categories() -> None:
     """恰好四类，且全部带统一前缀。"""
     assert len(AgentsecCategory) == 4
-    assert AGENTSEC_CATEGORIES == {
+    assert {
         "agentsec-prompt-injection",
         "agentsec-tool-escalation",
         "agentsec-data-leak",
         "agentsec-multi-agent",
-    }
+    } == AGENTSEC_CATEGORIES
     # 前缀是**开关判据与校验判据的唯一来源**，不能有成员不守它。
     assert all(c.value.startswith(AGENTSEC_CATEGORY_PREFIX) for c in AgentsecCategory)
 
@@ -66,7 +66,7 @@ def test_five_existing_categories_are_not_agentsec() -> None:
 
 def test_default_verdict_is_needs_follow_up() -> None:
     """拿不准就说拿不准 —— 默认档不能是 `confirmed`。"""
-    assert DEFAULT_AGENTSEC_VERDICT == AgentsecVerdict.NEEDS_FOLLOW_UP.value
+    assert AgentsecVerdict.NEEDS_FOLLOW_UP.value == DEFAULT_AGENTSEC_VERDICT
 
 
 # ══════════════════════════════════════════════════════════

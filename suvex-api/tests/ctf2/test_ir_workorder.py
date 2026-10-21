@@ -490,9 +490,11 @@ def _module_imports(tree: ast.Module) -> set[str]:
         if isinstance(node, ast.Import):
             for alias in node.names:
                 names.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom):
-            if node.module:
-                names.add(node.module.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            # 相对 import（`from . import x`）的 `module` 是 None —— 直接取
+            # 会 AttributeError。合成一个条件而不是嵌套 if：两者是**同一个**
+            # 判断（"这是一个能取到模块名的 import"），不是两层语义。
+            names.add(node.module.split(".")[0])
     return names
 
 

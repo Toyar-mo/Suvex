@@ -36,8 +36,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from app.core.config import PROJECT_ROOT
 
 PROMPTS_DIR = PROJECT_ROOT / "prompts"

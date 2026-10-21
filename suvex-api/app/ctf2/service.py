@@ -2589,8 +2589,8 @@ def save_writeup(
     （赛后提交 vs 注入另一道题的 prompt），不是"flag 是不是秘密"。
     """
     from app.core.ids import new_id
-    from app.ctf2 import writeup as writeup_mod
     from app.ctf2 import workorder as workorder_mod
+    from app.ctf2 import writeup as writeup_mod
     from app.ctf2.models import Ctf2Writeup
 
     solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value

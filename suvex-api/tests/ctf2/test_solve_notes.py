@@ -1203,7 +1203,6 @@ def test_learn_accepts_agentsec_category_when_switch_on(
     db_session: Session, ctf2_competition
 ) -> None:
     """开关打开 + agentsec 分类 → 卡能写成那个分类。"""
-    from app.ctf2.service import update_ctf2_settings
     from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
 
     _turn_agentsec_on(db_session)

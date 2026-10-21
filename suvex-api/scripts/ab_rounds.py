@@ -265,7 +265,12 @@ def resolve_arena_key(cli_value: str | None) -> str:
     所以这里把顺序写死：命令行 > 环境变量 > 明确报错退出。
     缺什么就说什么，不猜。
     """
-    for source, value in (("--key", cli_value), ("CTF2_ARENA_KEY", os.environ.get("CTF2_ARENA_KEY"))):
+    # `source` 只用于下面那句报错文案里的"从哪来的"，循环体不读它 ——
+    # 用 `_` 前缀明说"这里不打算用"，而不是删掉元组里的那一列。
+    for _source, value in (
+        ("--key", cli_value),
+        ("CTF2_ARENA_KEY", os.environ.get("CTF2_ARENA_KEY")),
+    ):
         text = (value or "").strip()
         if text:
             return text

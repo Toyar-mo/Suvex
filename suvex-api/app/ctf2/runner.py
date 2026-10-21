@@ -93,11 +93,6 @@ from app.core.vocab import (
     Ctf2SubmitMode,
 )
 from app.ctf2 import events as ctf2_events
-
-# ★ v0.41：攻防知识互查。顶层 import 是安全的 —— 那个模块顶层只依赖
-# 标准库，`findings` 的 import 发生在**函数内**（见 `recall_for_asset`），
-# 所以不会与本文件撞环。
-from app.ctf2.history import recall_for_challenge
 from app.ctf2.client import (
     CTF2_ERROR_ALREADY_SOLVED,
     Ctf2EnvironmentTimeout,
@@ -105,6 +100,11 @@ from app.ctf2.client import (
     Ctf2ResponseError,
     assert_allowed_target,
 )
+
+# ★ v0.41：攻防知识互查。顶层 import 是安全的 —— 那个模块顶层只依赖
+# 标准库，`findings` 的 import 发生在**函数内**（见 `recall_for_asset`），
+# 所以不会与本文件撞环。
+from app.ctf2.history import recall_for_challenge
 from app.ctf2.models import (
     CTF2_OFFICIAL_HOSTS,
     Ctf2Challenge,
@@ -4911,14 +4911,18 @@ def build_spec(
     # ⚠️ 查库失败**不影响解题**（`history` 模块内部已吞掉异常并退回
     #    "无历史记录"）。"因为查不到历史就不复盘"明显更糟。
     if ir_on:
-        history_text, history_asset, history_count = recall_for_challenge(
+        # ⚠️ 第二个返回值（资产标识）这里**丢弃**：`recall_for_challenge`
+        #    内部已经把它写进日志（"为资产 %s 召回了 %d 条"），
+        #    而 `SolveSpec` 没有对应字段 —— 解题目录里不需要它。
+        #    接住再不用会让静态检查报 F841，而下一个人会猜"是不是漏传了"。
+        history_text, _history_asset, history_count = recall_for_challenge(
             db,
             title=challenge.title or "",
             description=challenge.description or "",
             brief=resolved_brief or "",
         )
     else:
-        history_text, history_asset, history_count = "", "", 0
+        history_text, _history_asset, history_count = "", "", 0
 
     return SolveSpec(
         challenge_id=challenge.id,
