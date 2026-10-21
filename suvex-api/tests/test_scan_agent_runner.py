@@ -94,12 +94,36 @@ def test_pentest_spec_turns_clamped_to_eighty() -> None:
     assert agent_runner.build_solve_spec_from_scan(_spec(scan_max_turns=40)).max_turns == 40
 
 
-def test_pentest_spec_network_isolation_follows_scan() -> None:
-    # 渗透评估默认要联网（False），配置显式隔离时跟随配置。
-    assert (
-        agent_runner.build_solve_spec_from_scan(_spec(sandbox_network_isolated=False))).network_isolated is False
-    assert (
-        agent_runner.build_solve_spec_from_scan(_spec(sandbox_network_isolated=True))).network_isolated is True
+def test_pentest_spec_network_isolation_for_network_targets_is_forced_open() -> None:
+    """网络目标（url/service）的渗透必须开网，即便 settings 说要隔离。
+
+    这是一条**修过的 bug 的回归锁**。原实现是
+    `network_isolated = bool(spec.sandbox_network_isolated)`，纯跟随 settings。
+    真跑实测：Kali 上 egress 白名单写死了 CTF 靶站网段，目标 192.168.1.121
+    被 DROP，而 setup 又是一次 web 渗透 —— 容器被关进 `--network none`，
+    镜像里 98 个工具（nmap/ffuf/gobuster/sqlmap…）全部连不上目标，
+    96% 的动作退化成宿主侧 http_request 逐个猜 URL。
+
+    判据：url/service 是"要去连别人"的形态，联网是前提不是选项。
+    """
+    for kind in ("url", "service"):
+        solve = agent_runner.build_solve_spec_from_scan(
+            _spec(target="http://t:80", target_kind=kind, sandbox_network_isolated=True)
+        )
+        assert solve.network_isolated is False, f"{kind} 目标被隔离了 —— 工具会全废"
+
+
+def test_pentest_spec_network_isolation_follows_settings_for_local_targets() -> None:
+    """本地形态（repo/path/artifact）不需要联网，此时跟随 settings。
+
+    这些形态的证据在磁盘上，放不放开出站网络不影响能不能干成活，
+    所以尊重运维的隔离意愿（最小权限）。
+    """
+    for kind in ("repo", "path", "artifact"):
+        solve = agent_runner.build_solve_spec_from_scan(
+            _spec(target="/some/path", target_kind=kind, sandbox_network_isolated=True)
+        )
+        assert solve.network_isolated is True, f"{kind} 是本地目标，应尊重隔离设置"
 
 
 def test_pentest_prompt_block_actually_injected() -> None:

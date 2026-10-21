@@ -766,9 +766,33 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
 
     # ── 是否隔离网络 ──────────────────────────────────────
     #
-    # 渗透评估**必须**能连到目标。扫描侧 `sandbox_network_isolated` 语义是
-    # "关进 --network none"，而渗透默认 False（要联网）。这里直接沿用它的值。
-    network_isolated = bool(spec.sandbox_network_isolated)
+    # 渗透评估**必须**能连到目标 —— 这不是可选项，是前提。但这里有两个
+    # 独立的问题，原来混成了一个：
+    #
+    #   ① settings 里 `sandbox.network_isolated` 说要不要隔离；
+    #   ② 这条路径的**场景**本身能不能在没有网的情况下完成。
+    #
+    # 原实现只看了 ①（`network_isolated = bool(spec.sandbox_network_isolated)`），
+    # 于是和 ctf2 侧不一致：ctf2 的 `build_spec` 用的是
+    # `network_isolated = not needs_raw_network(category)` —— **按场景判**，
+    # web/pwn 一律开网。扫描侧漏了这道判断（真 bug）。
+    #
+    # 后果（实测）：settings 一旦配了隔离，或环境像 Kali 那样被 egress
+    # 白名单卡住，一次 web 渗透就被关进 `--network none`，镜像里 98 个
+    # 工具（nmap/ffuf/gobuster/sqlmap…）全连不上目标，96% 的动作只能退化
+    # 成宿主侧 http_request 逐个猜 URL。工具宽度被物理废掉。
+    #
+    # 修法：**渗透评估一律要联网**（`pentest-evaluation` 不在
+    # `needs_raw_network` 的 CTF 题型白名单里，但它的语义比任何 CTF 题都
+    # 更依赖真实网络）。所以这里取"settings 想隔离也不能隔离"——
+    # 只有当目标根本不是网络目标（repo/path/artifact 这些本地形态）时才
+    # 允许隔离。url/service 形态强制开网。
+    #
+    # ⚠️ 安全性不靠这一行：容器放开网络后，出站边界仍由 iptables 的
+    #    `DOCKER-USER` 白名单收窄（见 `deploy/ctf2-egress-rules.sh`）。
+    #    这一行的作用是"别把已经配好的网络又关回去"。
+    is_network_target = spec.target_kind in ("url", "service")
+    network_isolated = bool(spec.sandbox_network_isolated) and not is_network_target
 
     # ── 判据/场景开关 ─────────────────────────────────────
     #
