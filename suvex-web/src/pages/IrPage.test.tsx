@@ -30,6 +30,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { toApiError } from '@/lib/api'
 import IrPage from '@/pages/IrPage'
 
 // ── 被 mock 的外部依赖 ──────────────────────────────────
@@ -420,7 +421,11 @@ describe('IrPage：开跑与产物', () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: '开始复盘' }))
 
-    await waitFor(() => expect(mockedSolveChallenge).toHaveBeenCalledWith('chal_1'))
+    // 第二个参数是必传的选项对象，这里传 `{}` = 全部走后端默认（默认不续解）。
+    // 断言里带上它，是为了让"某天有人偷偷改成 resume: true"这件事可见 ——
+    // 对复盘来说"接着上次跑"是危险的：上次的结论可能是基于一份**不同的**
+    // 证据包得出的，而复盘的第一原则是"推理链和证据必须对得上"。
+    await waitFor(() => expect(mockedSolveChallenge).toHaveBeenCalledWith('chal_1', {}))
   })
 
   it('正在跑的条目按钮禁用', () => {
@@ -487,7 +492,9 @@ describe('IrPage：空态与错误', () => {
   })
 
   it('加载失败给 role=alert 的提示与重试', () => {
-    setStore({ status: 'error', error: new Error('网络断了'), challenges: [] })
+    // ★ snapshot.error 的类型是 `ApiError | null`，不是 `Error` —— 直接塞
+    //    `new Error(...)` 会让 `tsc -b` 报「缺少 code/status/fields/isNetworkError」。
+    setStore({ status: 'error', error: toApiError(new Error('网络断了')), challenges: [] })
 
     renderPage()
 

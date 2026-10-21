@@ -52,7 +52,7 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
-import { useToast } from '@/components/ui/Toast'
+import { showToast } from '@/data/toast-store'
 import {
   canHaveWorkOrder,
   canHaveWriteup,
@@ -62,7 +62,7 @@ import {
   useCtf2,
   type Ctf2Challenge,
 } from '@/data/ctf2'
-import { stageScanAttachments, type ScanAttachment } from '@/data/scans-store'
+import { stageScanAttachments } from '@/data/scans-store'
 import { errorMessage } from '@/lib/api'
 
 /** 应急响应的分类前缀（与后端 `IR_CATEGORY_PREFIX` 逐字一致）。 */
@@ -118,7 +118,6 @@ export function IrPage() {
   // 两个页面各自缓存一份同一批数据，症状是"在 CTF2 页跑完，切到
   // 应急响应页还显示待复盘"。
   const snapshot = useCtf2()
-  const toast = useToast()
 
   const [title, setTitle] = useState('')
   const [brief, setBrief] = useState('')
@@ -229,15 +228,15 @@ export function IrPage() {
     async (challenge: Ctf2Challenge) => {
       setStarting(challenge.id)
       try {
-        await solveChallenge(challenge.id)
-        toast.success('已开跑，进度在下方条目的日志里。')
+        await solveChallenge(challenge.id, {})
+        showToast({ message: '已开跑，进度在下方条目的日志里。' })
       } catch (error) {
-        toast.error(errorMessage(error) || '启动失败，请稍后重试。')
+        showToast({ message: errorMessage(error) || '启动失败，请稍后重试。', tone: 'risk' })
       } finally {
         setStarting(null)
       }
     },
-    [toast],
+    [],
   )
 
   return (
