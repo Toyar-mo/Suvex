@@ -6,7 +6,7 @@ import { SEVERITY_META, SEVERITY_ORDER } from '@/data/findings'
 import {
   SCAN_STATUS_LABEL,
   SCAN_STATUS_TONE,
-  TARGET_KIND_LABEL,
+  scanDisplay,
   stallInfo,
   totalFindings,
   type Scan,
@@ -418,6 +418,21 @@ function ScanRow({
   */
   const named = Boolean(scan.name) && scan.name !== scan.target
 
+  /*
+    v0.44：这一行该怎么称呼自己。
+
+    ★ 判据收在 `scanDisplay()` 里（`data/scan.ts`），不在这里写
+      `startsWith('ir-')` —— 同一行数据在写操作回执和详情页也会渲染，
+      三处各写一遍的必然结果是漏一处，而漏掉的那处会把一次日志复盘
+      说成「TCP 服务 · 夺旗」。
+
+    ⚠️ 布局判定仍用原始的 `named`（见下），不换成展示名：这里只决定
+      "名称当主行还是目标当主行"，而 IR 的名字（`[IR] <标题>`）与
+      原始名（`[CTF2] <标题>`）都必然不等于 `scan.target`（`ctf2:<id>`），
+      两种判据结论相同 —— 换过来只会多一处需要同步的地方。
+  */
+  const display = scanDisplay(scan)
+
   // 主行与副行是同一个去处。抽出来，免得改一处漏一处。
   const activityHref = `/activity?scan=${encodeURIComponent(scan.id)}`
 
@@ -500,9 +515,9 @@ function ScanRow({
             <Link
               to={activityHref}
               className="block truncate text-ink transition-ui duration-fast hover:text-accent-strong"
-              title={`查看 ${scan.name} 的智能体活动`}
+              title={`查看 ${display.name} 的智能体活动`}
             >
-              {scan.name}
+              {display.name}
             </Link>
           )}
 
@@ -519,7 +534,7 @@ function ScanRow({
             )}
             // 没起名时目标就是主行，悬停提示给"去处"；
             // 起名时目标可能被截断，提示改成它的全文，更实用。
-            title={named ? scan.target : `查看 ${scan.name} 的智能体活动`}
+            title={named ? scan.target : `查看 ${display.name} 的智能体活动`}
           >
             {scan.target}
           </Link>
@@ -539,7 +554,7 @@ function ScanRow({
                 <span aria-hidden="true">·</span>
               </>
             )}
-            <span>{TARGET_KIND_LABEL[scan.targetKind]}</span>
+            <span>{display.kindLabel}</span>
             <span aria-hidden="true">·</span>
             <span>{scan.agentCount} 个智能体</span>
             {scan.skills.length > 0 && (
@@ -616,18 +631,24 @@ function ScanRow({
               title={
                 scan.status !== 'completed'
                   ? undefined
-                  : scan.goal === 'captureFlag'
-                    ? '这次扫描没有产出漏洞条目。夺旗任务的成败看是否拿到 flag，不以漏洞条数衡量。'
-                    : scan.goal === 'verifyFix'
-                      ? '这次复测没有产出新的漏洞条目。复测的结论看已知问题是否已修复，不以漏洞条数衡量。'
-                      : undefined
+                  : display.isIr
+                    ? /* v0.44：复盘不产出漏洞条目，产出的是处置建议 ——
+                         说成"无漏洞条目"会让用户以为这次跑空了。 */
+                      '这次复盘没有产出漏洞条目。它的产物是入侵时间线与处置建议，不以漏洞条数衡量。'
+                    : scan.goal === 'captureFlag'
+                      ? '这次扫描没有产出漏洞条目。夺旗任务的成败看是否拿到 flag，不以漏洞条数衡量。'
+                      : scan.goal === 'verifyFix'
+                        ? '这次复测没有产出新的漏洞条目。复测的结论看已知问题是否已修复，不以漏洞条数衡量。'
+                        : undefined
               }
             >
               {scan.status !== 'completed'
                 ? '—'
-                : scan.goal === 'captureFlag' || scan.goal === 'verifyFix'
-                  ? '无漏洞条目'
-                  : '未发现漏洞'}
+                : display.isIr
+                  ? '结论见复盘报告'
+                  : scan.goal === 'captureFlag' || scan.goal === 'verifyFix'
+                    ? '无漏洞条目'
+                    : '未发现漏洞'}
             </span>
           ) : (
             <>
@@ -733,7 +754,11 @@ function ScanRow({
                   是用户回到列表最想做的事，而下面三项（重跑 / 续跑 / 终止）
                   都是过程性操作。
                 */}
-                {onWriteup && scan.goal === 'captureFlag' && (
+                {/* v0.44：IR 行的 `goal` 也是 `captureFlag`（建壳时写死的），
+                    但扫描侧的这个端点对一切 ctf2 壳都回 409 ——
+                    摆一个点了必然失败的项，正是上面那段注释要避免的事。
+                    复盘的产物在「应急响应」页那张卡片上。 */}
+                {onWriteup && scan.goal === 'captureFlag' && !display.isIr && (
                   <button
                     role="menuitem"
                     type="button"

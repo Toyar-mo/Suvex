@@ -240,8 +240,44 @@ class ScanOut(CamelModel):
     # 毫无产出的扫描猜半天。
     notice: str | None = None
 
+    # ── v0.44：这条记录对应的 CTF2 题分类（只读派生，不落库）──────────
+    #
+    # ★ 它存在的原因只有一个：**列表里的一行怎么称呼自己**。
+    #
+    #   `origin` 只能说明"这条 scan 是 ctf2 借的壳"，它区分不出
+    #   一道 CTF 题和一次应急响应复盘 —— 而这两者在那张表里长得一样：
+    #   `target_kind="service"`（所以显示成「TCP 服务」）、
+    #   `goal="captureFlag"`（所以零条目时的措辞在说"夺旗"）、
+    #   名字带 `[CTF2] ` 前缀。一次日志复盘被渲染成"TCP 服务 · 夺旗"
+    #   不是措辞不好看，是**说错了**：那次任务压根没有对任何地址发过包。
+    #
+    # ★ 为什么下发原始分类值、而不是直接下发一句中文标签：
+    #   中文标签属于展示层（`suvex-web/src/data/scan.ts` 的
+    #   `SCAN_GOAL_LABEL` / `TARGET_KIND_LABEL` 都在那边），把它搬到
+    #   后端等于让"同一件事实有两个出处"—— 而这条正是本项目的
+    #   三条设计原则之一。后端只说事实（分类是什么），前端的表里查词。
+    #
+    # ⚠️ **不要**用它的有无来判断"是不是 IR"：判前缀要用
+    #   `vocab.IR_CATEGORY_PREFIX`（`ir-`），不是相等比较。将来加
+    #   `ir-timeline` / `ir-scope` 时这里不需要改，这也正是下发分类
+    #   而不是下发布尔值的原因。
+    #
+    # ⚠️ 只有 `origin == "ctf2"` 时可能有值；普通扫描恒为 `None`。
+    #   历史记录里这条壳与题目的关联可能缺失（题目被删、scan_id 为
+    #   NULL），那时也是 `None` —— 前端必须按"就当它是普通 CTF2 题"
+    #   降级，不能因为拿不到分类就不渲染这一行。
+    ctf2Category: str | None = None
+
     @classmethod
-    def from_model(cls, scan) -> ScanOut:  # noqa: ANN001
+    def from_model(cls, scan, *, ctf2Category: str | None = None) -> ScanOut:  # noqa: ANN001
+        """把 ORM 行转成响应。
+
+        `ctf2Category` 由调用方**预取后传入**，不从 `scan` 上取：
+        `Scan` 表里没有这一列（分类在 `ctf2_challenges` 上），而
+        `from_model` 是个纯函数、没有 session。列表端点一次要序列化
+        几十条，逐条去查库会变成 N+1 —— 所以取数是调用方的事，
+        批量查一次再按 id 分派（见 `router._ctf2_categories`）。
+        """
         return cls(
             id=scan.id,
             name=scan.name,
@@ -273,6 +309,7 @@ class ScanOut(CamelModel):
             brief=scan.brief,
             goal=scan.goal,
             flag=scan.flag,
+            ctf2Category=ctf2Category,
         )
 
 

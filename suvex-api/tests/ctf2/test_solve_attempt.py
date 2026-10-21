@@ -41,6 +41,10 @@ def _set_global(db: Session, *, mode: str | None = None, turns: int | None = Non
     ⚠️ 必须走 `update_ctf2_settings`，不能直接改 ORM 行：
     `effective_ctf2_settings` 返回的是 **frozen dataclass**（`Ctf2Settings`），
     赋值会抛 `FrozenInstanceError` —— 那是刻意的（设置快照不该被就地改）。
+
+    ⚠️ 两个场景包开关是**必填关键字参数**（v0.44），所以这里必须
+    显式透传当前值。这看起来啰嗦，但那正是那条改动的目的：漏传
+    会被 Python 当场拒绝，而不是把开关静默关掉。
     """
     row = service.get_ctf2_config(db)
     service.update_ctf2_settings(
@@ -54,6 +58,8 @@ def _set_global(db: Session, *, mode: str | None = None, turns: int | None = Non
         auto_priority_new=row.auto_priority_new,
         auto_start_new=row.auto_start_new,
         max_turns=turns or row.max_turns,
+        enable_agentsec_scenarios=row.enable_agentsec_scenarios,
+        enable_ir_scenarios=row.enable_ir_scenarios,
     )
 
 
@@ -398,6 +404,9 @@ def _update_settings(db: Session, *, fallback_provider_id):  # noqa: ANN001
         auto_start_new=row.auto_start_new,
         max_turns=row.max_turns,
         fallback_provider_id=fallback_provider_id,
+        # 两个场景包开关是必填关键字参数（v0.44）—— 原样透传。
+        enable_agentsec_scenarios=row.enable_agentsec_scenarios,
+        enable_ir_scenarios=row.enable_ir_scenarios,
     )
 
 

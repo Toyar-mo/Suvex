@@ -3475,13 +3475,28 @@ def update_ctf2_settings(
     auto_start_new: bool,
     max_turns: int,
     fallback_provider_id: str | None = None,
-    enable_agentsec_scenarios: bool = False,
-    enable_ir_scenarios: bool = False,
+    enable_agentsec_scenarios: bool,
+    enable_ir_scenarios: bool,
 ) -> Ctf2Config:
     """保存配置。**逐项校验，不静默夹取。**
 
     静默夹取的后果在"错误提交次数上限"上尤其严重：用户填 99、
     保存成功、界面显示 10 —— 他会以为这是我们的 bug，然后试图再改一次。
+
+    ## ★ 两个场景包开关为什么没有默认值（v0.44）
+
+    它们是**关键字参数、无默认值**，所以漏传会立刻 `TypeError`
+    （Python 在调用时就拒绝，不是运行到一半才发现）。
+
+    ⚠️ 这**不是**风格问题。这个函数是"逐字段赋值"（见下面的
+    `row.enable_agentsec_scenarios = ...`），给形参默认值等于说
+    "调用方没提这一项 = 把它设成 false"。而调用方没提这一项，最常见
+    的原因恰恰是**它不知道有这一项**（新加的功能，旧的调用点还在）——
+    于是每一次别的配置保存都会顺手把场景包关掉，且没有任何痕迹。
+
+    `PUT /ctf2/settings` 那侧靠 `Ctf2SettingsIn` 的必填字段拦住了 HTTP
+    入口，但那是**另一个入口**：`tests/` 与运维脚本都直接调这个函数。
+    两处都要拦，否则"静默关掉"只是换了个入口复现。
     """
     if submit_mode not in {m.value for m in Ctf2SubmitMode}:
         raise ApiError.validation("未知的提交模式。", {"submitMode": "取值不在允许范围内"})

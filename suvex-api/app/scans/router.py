@@ -26,6 +26,7 @@ import threading
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit import service as audit
@@ -73,9 +74,61 @@ ScanDep = Annotated[Identity, Depends(require_scan)]
 DbDep = Annotated[Session, Depends(get_db)]
 
 
+def _ctf2_categories(db: Session, scans: list) -> dict[str, str]:
+    """批量取这批 scan 各自对应的 CTF2 题分类（`scan_id -> category`）。
+
+    一次查询解决，不逐条查 —— 列表端点一次要序列化几十条，逐条查是
+    典型的 N+1（现在扫描数少看不出来，几百条时会变成一次慢查询，
+    而那时"为什么列表变慢了"很难归因到这里）。
+
+    ⚠️ **只在有 `origin == "ctf2"` 的行时才查**：绝大多数列表页里一条
+    CTF2 壳都没有，而那时这条 SQL 完全是白跑的。判据用 `any()` 而不是
+    先无条件查再过滤，理由就是这个 —— 普通扫描列表页是常态。
+
+    ⚠️ 题被删掉、`scan_id` 为 NULL、或分类是空串时都**不出现在返回值里**。
+    调用方 `.get(scan.id)` 得到 `None`，前端按"当作普通 CTF2 题"降级。
+    不要在这里补一个 `""` 之类的占位值 —— 那会让前端以为它拿到了分类。
+    """
+    if not any(getattr(scan, "origin", None) == SCAN_ORIGIN_CTF2 for scan in scans):
+        return {}
+
+    # 局部 import：`scans` 不该在模块加载期依赖 `ctf2`（依赖方向是
+    # ctf2 → scans，反过来只能按需取）。与 `service.cleanup` 里
+    # `from app.ctf2 import service as ctf2_service` 是同一个手法。
+    from app.ctf2.models import Ctf2Challenge
+
+    ids = [scan.id for scan in scans if getattr(scan, "origin", None) == SCAN_ORIGIN_CTF2]
+    if not ids:
+        return {}
+
+    rows = db.execute(
+        select(Ctf2Challenge.scan_id, Ctf2Challenge.category).where(
+            Ctf2Challenge.scan_id.in_(ids)
+        )
+    ).all()
+    # 空分类当"没有分类"处理：`category` 的列默认值就是 `""`，
+    # 而 `""` 命中不了任何前缀 —— 传下去只会让前端多一个假判据。
+    return {scan_id: category for scan_id, category in rows if category}
+
+
+def _category_of(db: Session, scan) -> str | None:  # noqa: ANN001
+    """单条版本的 `_ctf2_categories`（详情页、写操作回执、对比用）。
+
+    单条走单查是对的：这些端点一次只碰一两条，而"省下一次查询"换来的是
+    一个只为它们存在的批量接口。列表端点用批量那版，两者共用同一份
+    判据（都先看 `origin` 再看分类），不要就地各写一遍。
+
+    ⚠️ 非 CTF2 壳直接返回 `None` **且不查库** —— 写操作回执（终止、续跑、
+    重跑）绝大多数打在普通扫描上，而那时这条 SQL 是纯浪费。更重要的
+    是：`origin` 不是 `"ctf2"` 的行**根本不可能**有对应题目，查了也是空集。
+    """
+    if getattr(scan, "origin", None) != SCAN_ORIGIN_CTF2:
+        return None
+    return _ctf2_categories(db, [scan]).get(scan.id)
+
+
 def _nudge_scheduler() -> None:
     """新建之后立刻捅一下调度器。
-
     不捅的话要等下一次轮询（默认 2 秒）才会启动 —— 用户点完
     "开始扫描"会看到状态卡在"排队中"两秒，然后才跳成"运行中"。
     那两秒没有传递任何信息，只是让人怀疑是不是没生效。
@@ -136,7 +189,10 @@ def list_scans(
         archived=archived,
         deleted=deleted,
     )
-    return [ScanOut.from_model(scan) for scan in scans]
+    categories = _ctf2_categories(db, scans)
+    return [
+        ScanOut.from_model(scan, ctf2Category=categories.get(scan.id)) for scan in scans
+    ]
 
 
 @router.get(
@@ -178,11 +234,14 @@ def queue_status(_identity: ReadDep, db: DbDep) -> ScanStatsOut:
 # `/reports/{reportId}` 之前是同一条规矩。
 
 
-def _batch_out(changed, skipped: int) -> BatchResultOut:  # noqa: ANN001
+def _batch_out(db: Session, changed, skipped: int) -> BatchResultOut:  # noqa: ANN001
+    categories = _ctf2_categories(db, changed)
     return BatchResultOut(
         changed=len(changed),
         skipped=skipped,
-        scans=[ScanOut.from_model(scan) for scan in changed],
+        scans=[
+            ScanOut.from_model(scan, ctf2Category=categories.get(scan.id)) for scan in changed
+        ],
     )
 
 
@@ -212,7 +271,7 @@ def batch_archive(
             target=",".join(scan.id for scan in changed)[:512],
             detail={"archived": payload.archived, "ids": [s.id for s in changed]},
         )
-    return _batch_out(changed, skipped)
+    return _batch_out(db, changed, skipped)
 
 
 @router.post("/batch/delete", response_model=BatchResultOut, summary="批量删除（进回收站）")
@@ -223,13 +282,13 @@ def batch_delete(payload: BatchIdsIn, _identity: ScanDep, db: DbDep) -> BatchRes
     回收站里。真正的物理删除只在两处：`purge` 与保留期到期。
     """
     changed, skipped = service.batch_set_deleted(db, ids=payload.ids)
-    return _batch_out(changed, skipped)
+    return _batch_out(db, changed, skipped)
 
 
 @router.post("/batch/restore", response_model=BatchResultOut, summary="批量恢复")
 def batch_restore(payload: BatchIdsIn, _identity: ScanDep, db: DbDep) -> BatchResultOut:
     changed, skipped = service.batch_restore(db, ids=payload.ids)
-    return _batch_out(changed, skipped)
+    return _batch_out(db, changed, skipped)
 
 
 @router.post("/batch/rerun", response_model=BatchRerunOut, summary="批量重跑")
@@ -262,7 +321,9 @@ def batch_rerun(
         except ApiError as exc:
             failed.append(BatchRerunFailure(scanId=scan_id, error=exc.message))
             continue
-        created.append(ScanOut.from_model(scan))
+        created.append(
+            ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
+        )
         # ★ 每一条都留痕，不是"批量一条"。审计要能回答
         #   "哪个目标被重新发包了"，而 N 条合成一条会把目标信息抹掉。
         audit.record(
@@ -289,8 +350,8 @@ def compare_scans(
     """对比。按**漏洞标题**比，不按 id —— 理由见 `service.compare_scans`。"""
     result = service.compare_scans(db, a_id=a, b_id=b)
     return CompareOut(
-        a=ScanOut.from_model(result["a"]),
-        b=ScanOut.from_model(result["b"]),
+        a=ScanOut.from_model(result["a"], ctf2Category=_category_of(db, result["a"])),
+        b=ScanOut.from_model(result["b"], ctf2Category=_category_of(db, result["b"])),
         onlyInA=result["onlyInA"],
         onlyInB=result["onlyInB"],
         common=result["common"],
@@ -300,7 +361,8 @@ def compare_scans(
 
 @router.get("/{scanId}", response_model=ScanOut, summary="扫描详情")
 def read_scan(scanId: str, _identity: ReadDep, db: DbDep) -> ScanOut:
-    return ScanOut.from_model(service.get_scan(db, scanId))
+    scan = service.get_scan(db, scanId)
+    return ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
 
 
 @router.get("/{scanId}/agents", response_model=list[AgentOut], summary="该扫描的 agent 名册")
@@ -453,7 +515,7 @@ def create_scan(
     # ★ 把预检结论带回去（任务 11）。用 `model_copy` 而不是给
     # `from_model` 加参数：那个方法被七八处调用，为一个只在创建时
     # 有值的字段去改它，会让其余调用点都要多传一个 None。
-    out = ScanOut.from_model(scan)
+    out = ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
     if reach.notice:
         out = out.model_copy(update={"notice": reach.notice})
     return out
@@ -484,7 +546,7 @@ def abort_scan(  # noqa: N803
         target=scan.id,
         detail={"target": scan.target},
     )
-    return ScanOut.from_model(scan)
+    return ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
 
 
 @router.delete("/{scanId}/purge", status_code=status.HTTP_204_NO_CONTENT, summary="永久删除")
@@ -554,7 +616,7 @@ def resume_scan(
         detail={"scanId": scanId, "runId": scan.run_id, "target": scan.target},
     )
     _nudge_scheduler()
-    return ScanOut.from_model(scan)
+    return ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
 
 
 @router.post(
@@ -598,7 +660,7 @@ def rerun_scan(
         detail={"sourceScanId": scanId, "target": scan.target},
     )
     _nudge_scheduler()
-    return ScanOut.from_model(scan)
+    return ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
 
 
 # ══════════════════════════════════════════════════════════

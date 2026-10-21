@@ -453,11 +453,92 @@ export interface Scan {
       第三种是"我们不确定"，不是"没有"。所以措辞要留余地。
   */
   flag: string | null
+
+  /*
+    ── v0.44：这条记录对应的 CTF2 题分类 ──
+
+    ★ 它只解决一件事：**列表里的一行怎么称呼自己**。
+
+      `origin` 能说明"这是 ctf2 借的壳"，但区分不出「一道 CTF 题」与
+      「一次应急响应复盘」—— 而这两者在那张表里长得一模一样：
+      `targetKind` 是 `service`（显示成「TCP 服务」）、`goal` 是
+      `captureFlag`（零条目时的措辞在说"夺旗"）、名字带 `[CTF2] `。
+      一次日志复盘被渲染成「TCP 服务 · 夺旗」不是说错了一点，是
+      **整行都在说一件没发生过的事**：那次任务没有对任何地址发过包。
+
+    ⚠️ 只有 `origin === 'ctf2'` 时可能有值，普通扫描恒为 `null`。
+    ⚠️ 历史记录里可能拿不到（题目被删、`scanId` 为 NULL）—— 那时
+      要按"当作普通 CTF2 题"降级，不能因为缺这个字段就不渲染行。
+
+    ★ 三个判据收在 `scanDisplay()` 里，不要在各调用点自己 `.startsWith()`：
+      调用点已经有列表、写操作回执、详情三处，漏掉任意一处就是
+      "同一行数据在不同页面上说法不同"。
+  */
+  ctf2Category?: string | null
 }
 
 /** 一次扫描里所有严重度的总数 */
 export function totalFindings(counts: SeverityCounts): number {
   return Object.values(counts).reduce((sum, n) => sum + (n ?? 0), 0)
+}
+
+/*
+  ── v0.44：一行扫描记录该怎么称呼自己 ──
+
+  ★ 为什么要有这个函数，而不是在 `ScanList` 里就地 `if`：
+
+    同一行数据会被三个地方渲染 —— 扫描列表（`ScanList`）、
+    写操作回执（续跑/重跑成功后那一条）、扫描详情。
+    三处各写一遍 `startsWith('ir-')` 的必然结果是漏一处，
+    而漏掉的那处会把一次日志复盘说成「TCP 服务 · 夺旗」。
+
+  ★ 为什么不复用 `SCAN_GOAL_LABEL` / `TARGET_KIND_LABEL` 里的词：
+    那两个表是**用户新建任务时的选项名**（"CTF 夺旗（拿到 flag）」），
+    它们回答的是"我要它做什么"。而这里要回答的是"这条记录是什么"，
+    两者在 IR 上恰好必须不同 —— 一次复盘既不是夺旗、也不以 TCP 服务
+    为目标。共用一套词会让其中一个场景永远说错话。
+
+  ★ 为什么判前缀而不是判等：`ir-root-cause` / `ir-timeline` /
+    `ir-scope` 是三个分类，将来还会加。判等的话每加一个就要改这里，
+    而漏改的表现是新分类静默退回「TCP 服务」—— 看起来完全正常。
+    这与后端 `ctf2/notes.py::is_ir_category` 用 `IR_CATEGORY_PREFIX`
+    是同一个判据（两边各自实现是因为跨语言，值必须一致：
+    `app/core/vocab.py:1018` 的 `ir-`）。
+*/
+const IR_CATEGORY_PREFIX = 'ir-'
+
+/** 一次应急响应复盘在界面上的称呼 */
+export interface ScanDisplay {
+  /** 展示用的名字（IR 已经去掉 `[CTF2] ` 前缀并换成 `[IR] `） */
+  name: string
+  /** 「目标形态」那一格：IR 固定为「应急响应复盘」，其余走 `TARGET_KIND_LABEL` */
+  kindLabel: string
+  /** 这一次是不是应急响应复盘 —— 零条目措辞、报告入口都靠它分叉 */
+  isIr: boolean
+}
+
+/**
+ * 把一条扫描记录翻译成界面上那几个字。
+ *
+ * `ctf2Category` 缺失（老数据、题目被删）时按普通记录处理：
+ * 宁可把一次 IR 显示成「TCP 服务」（难看但不错），
+ * 也不要把一次普通 CTF 显示成「应急响应复盘」（那是说错话）。
+ */
+export function scanDisplay(scan: Scan): ScanDisplay {
+  const isIr = (scan.ctf2Category ?? '').startsWith(IR_CATEGORY_PREFIX)
+  if (!isIr) {
+    return {
+      name: scan.name,
+      kindLabel: TARGET_KIND_LABEL[scan.targetKind] ?? scan.targetKind,
+      isIr: false,
+    }
+  }
+  // `[CTF2] ` 是建壳时写死的前缀（`ctf2/events.py:179`）。它说的是
+  // "这条记录来自 CTF2"，而一次应急响应复盘与 CTF2 平台无关 ——
+  // 留着它等于把两件事混成一件。换 `[IR] ` 而不是直接删：
+  // 列表里同名的复盘会有好几条，前缀是唯一能一眼分辨的那一点信息。
+  const bare = scan.name.replace(/^\[CTF2\]\s*/, '')
+  return { name: `[IR] ${bare}`, kindLabel: '应急响应复盘', isIr: true }
 }
 
 /**
