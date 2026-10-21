@@ -3060,6 +3060,7 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 | GET | `/ctf2/usage` | read | **token 消耗统计**（v0.36，可按题/赛事/时间筛）|
 | GET | `/ctf2/challenges/{challengeId}/usage` | read | 单道题的逐次消耗明细（v0.36）|
 | GET | `/ctf2/challenges/{challengeId}/workorder` | read | **处置建议工单**（v0.41，只有应急响应任务才有）|
+| POST | `/ctf2/ir/tasks` | **scan** | 建一个**本地应急响应复盘任务**（v0.43，`201`，不绑 CTF2 账号）|
 
 > **鉴权分级的理由**：读操作是 `read`；**会对外发请求或消耗外部额度**的
 > 是 `scan`（同步、拉题、解题、提交）；**改系统级配置与凭据**的是 `admin`
