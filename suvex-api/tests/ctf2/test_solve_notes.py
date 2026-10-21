@@ -647,6 +647,103 @@ def test_recall_puts_solved_notes_first(
     assert rows[0].solved is True, "★ 已解出的卡没排在前面"
 
 
+def test_recall_puts_ruled_out_notes_with_the_solved_ones(
+    db_session: Session, ctf2_competition
+) -> None:
+    """★★ `ruled_out` 的卡现在与已解出的卡一起排在 `needs_follow_up` 前面。
+
+    ## 为什么这条值得单独守
+
+    召回排序是 `solved.desc(), updated_at.desc()`（见
+    `notes_for_challenge`）。v0.40 放宽了 `solved` 的语义 —— 一张
+    「跑完全套手法、确认此路不通」的卡现在也 `solved=True`，于是
+    **它开始进入前排**，而在此之前它根本挤不进 `limit=3` 的那三个位置。
+
+    这是**有意**的二阶效应：一张写着「这条路不通，我试过 X/Y/Z」的卡，
+    对下一道同类题的价值不低于一张「成功经验」—— 前者省掉的是整轮
+    白跑。但如果没人把这条排序钉住，将来某次改动把 `solved` 的语义
+    收紧回 `confirmed`，症状是"排除经验又悄悄不出现了"，而那时候
+    没有任何测试会红。
+
+    ## ★ 为什么必须端到端（走 `learn_from_solve`）而不是直接造行
+
+    第一版直接 `_note_for(solved=True, verdict="ruled_out")` —— 那是把
+    **结论**当输入写进去。于是把 `counts_as_solved` 里的 `RULED_OUT`
+    摘掉，这条测试照样绿：它验证的是"我自己把 solved 填成了 True"。
+
+    现在两张卡都由 `learn_from_solve` 生成，`solved` 由
+    `counts_as_solved(resolve_verdict(...))` 自己算出来落库 ——
+    摘掉那一个常量，`ruled_out` 那张就 `solved=False`，它会被
+    `updated_at` 更晚的 `needs_follow_up` 挤到后面，断言随即变红。
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import update
+
+    from app.core.vocab import AgentsecVerdict
+    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+
+    _turn_agentsec_on(db_session)
+    cat = "agentsec-prompt-injection"
+    # 三道题行：两道用来产生卡片，一道用来召回（召回会排除自己）。
+    recall_ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="order-recall", category=cat
+    )
+    ruled = _make_challenge(
+        db_session, ctf2_competition, remote_id="order-ruled", category=cat
+    )
+    pending = _make_challenge(
+        db_session, ctf2_competition, remote_id="order-pending", category=cat
+    )
+
+    transcript = "\n".join(
+        [
+            '[turn 1] tool run_shell {"command": "curl -s -i http://h/"}',
+            '[turn 2] tool run_shell {"command": "ls -la /work"}',
+        ]
+    )
+    # ① 跑完全套话术、模型写了排除理由 → 证据链齐全 → ruled_out。
+    ruled_note = _learn(
+        db_session,
+        ruled,
+        _FakeOutcome(
+            transcript=transcript,
+            error="",
+            ruled_out=["排除了 PI-03 越狱 —— 三种话术全部被拒绝，无越界输出"],
+        ),
+    )
+    assert ruled_note.verdict == AgentsecVerdict.RULED_OUT.value, (
+        f"证据链应当齐全，实际 verdict={ruled_note.verdict}\n{ruled_note.dead_ends}"
+    )
+    assert ruled_note.solved is True, "★ produced 的卡没被算成已解决"
+
+    # ② 只报了个错误、什么都没排除 → needs_follow_up。
+    pending_note = _learn(
+        db_session,
+        pending,
+        _FakeOutcome(transcript=transcript, error="命令超时，未得出结论"),
+    )
+    assert pending_note.verdict == AgentsecVerdict.NEEDS_FOLLOW_UP.value
+    assert pending_note.solved is False
+
+    # 把「还在跟进」那张的时间明确推后：否则两条只差几百微秒，
+    # 库的精度一不够就成了同秒，`updated_at.desc()` 的次序不确定，
+    # 这条测试会偶发飘红 —— 而偶发飘红的测试等于没有。
+    db_session.execute(
+        update(Ctf2SolveNote)
+        .where(Ctf2SolveNote.challenge_id == pending.id)
+        .values(updated_at=ruled_note.updated_at + timedelta(seconds=60))
+    )
+    db_session.commit()
+    db_session.expire_all()
+
+    rows = notes_mod.notes_for_challenge(db_session, recall_ch)
+    assert [r.challenge_id for r in rows] == [ruled.id, pending.id], (
+        "★ 已排除的卡没排在还在跟进的卡前面 —— "
+        "「跑完全套确认不通」的经验被当作未解决挤出了召回"
+    )
+
+
 def test_recall_returns_empty_without_a_category(
     db_session: Session, ctf2_competition
 ) -> None:
