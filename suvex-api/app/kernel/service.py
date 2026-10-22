@@ -2518,7 +2518,7 @@ def record_solve_telemetry(
     # ★ v0.46：从 transcript 提取**真正用到的工具**，再从工具推出细分题型。
     #
     # ⚠️ 不能拿 token 用量或回合数去推 —— 它们不含"做了什么"。
-    # 也不能拿 `TOOL_NAMES` 去数（只有三个包装层名字，零信息量）。
+    # 也不能拿 `TOOL_NAMES` 去数（只有几个包装层名字，零信息量）。
     # 判据走生产的 `notes.tools_from_transcript`（按词边界从命令正文里认）。
     #
     # 失败不能让遥测整体失败：transcript 是上下文里的字符串，

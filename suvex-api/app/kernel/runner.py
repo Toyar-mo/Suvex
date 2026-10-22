@@ -32,15 +32,16 @@
 代价是解析脆弱 → 所以格式错误会**显式喂回给模型**让它重试
 （见 `_format_reminder`），而不是静默地当成一次空回合。
 
-### 3. 工具集**严格三个**：读附件、发 HTTP、沙箱内执行命令
+### 3. 工具集**严格四个**：读附件、发 HTTP、沙箱内执行命令、拉技能速查
 
-这不是"暂时只有三个"，而是**能力边界**：
+这不是"暂时只有几个"，而是**能力边界**：
 
 | 工具 | 在哪执行 | 为什么 |
 | --- | --- | --- |
 | `read_attachment` | 宿主（读已投进沙箱的那份） | 给 agent 一个**不用起 shell** 就能看题面的路径 |
 | `http_request` | **宿主** | 见下 |
 | `run_shell` | **沙箱容器内** | 真正的分析工作 |
+| `load_skill` | 宿主（读随代码分发的 markdown） | 把「某类漏洞怎么验 / 某工具怎么安全调」按需查出来，不塞满提示词 |
 
 `http_request` 在宿主执行是刻意的：**容器内的网络请求我们拦不住**
 （agent 可以 `python -c 'import socket...'` 绕过任何包装）。
@@ -93,6 +94,7 @@ from app.core.vocab import (
     KernelSubmitMode,
 )
 from app.kernel import events as ctf2_events
+from app.kernel import skills as skills_mod
 from app.kernel.client import (
     CTF2_ERROR_ALREADY_SOLVED,
     KernelEnvironmentTimeout,
@@ -2040,12 +2042,19 @@ def load_system_prompt() -> str:
     抛错会让部署当场发现。
     """
     try:
-        return PROMPT_PATH.read_text(encoding="utf-8")
+        raw = PROMPT_PATH.read_text(encoding="utf-8")
     except OSError as exc:
         raise KernelError(
             f"读不到解题提示词 {PROMPT_PATH}。它必须随部署一起分发 —— "
             "缺了它 agent 的行为纪律（不越界、不爆破、不编造）就没了约束。"
         ) from exc
+    # 把技能包清单注入占位符。清单只列 name + 一句话描述（全文靠 load_skill
+    # 按需拉）。技能目录缺失时清单为空串 —— 这时提示词里那段 `load_skill`
+    # 说明仍保留（工具照样可用，只是无内容可拉），不会因缺目录而崩。
+    if "{{SKILL_INDEX}}" in raw:
+        index = skills_mod.render_index() or "（本次部署没有附带技能包。）"
+        raw = raw.replace("{{SKILL_INDEX}}", index)
+    return raw
 
 
 def load_agentsec_prompt() -> str:
@@ -2986,10 +2995,14 @@ def needs_raw_network(category: str | None) -> bool:
 
 
 # ══════════════════════════════════════════════════════════
-# 三个工具
+# 四个工具
 # ══════════════════════════════════════════════════════════
 
-TOOL_NAMES = ("read_attachment", "http_request", "run_shell")
+TOOL_NAMES = ("read_attachment", "http_request", "run_shell", "load_skill")
+#: 技能包按需加载（学 strix 的 load_skill）。它**不碰沙箱、不碰网络** ——
+#: 只是把一篇随代码分发的 markdown 读出来给模型看，是纯查表操作，
+#: 所以它比另外三个工具都安全（没有命令执行、没有出网）。
+#: 单独放这个元组是因为 dispatch_tool 要知道哪些工具不走沙箱/网络分支。
 
 
 async def _tool_read_attachment(args: dict[str, Any], *, spec: SolveSpec) -> str:
@@ -3155,6 +3168,11 @@ async def dispatch_tool(
             return await _tool_http_request(args, spec=spec, http=http)
         if name == "run_shell":
             return await _tool_run_shell(args, sandbox=sandbox)
+        if name == "load_skill":
+            # 纯查表：读一篇随代码分发的 markdown。不碰沙箱、不碰网络。
+            # 名字取自参数 `name`（与 strix 的 load_skill 同名参数，方便
+            # 模型迁移既有习惯）。拼错时 load_skill_text 会回可用清单。
+            return skills_mod.load_skill_text(str(args.get("name") or ""))
     except KernelError as exc:
         # 白名单拒绝走这里 —— 消息**必须回到模型**，它才知道换路子。
         return f"拒绝执行：{exc.message}"

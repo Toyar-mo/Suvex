@@ -1387,8 +1387,8 @@ def build_note_fields(
 # 工具"的全部依据。模型**真的跑了哪些命令**则是硬事实：它
 # 不会因为题目没描述而变得模糊。
 #
-# ⚠️ 不能拿 `TOOL_NAMES`（只有 `run_shell`/`http_request`/
-#    `read_attachment` 三个**包装层**名字）去数—— 这个坑
+# ⚠️ 不能拿 `TOOL_NAMES`（`run_shell`/`http_request`/
+#    `read_attachment`/`load_skill` 这几个**包装层**名字）去数—— 这个坑
 #    `tools_from_transcript` 的 docstring 里已经记过一次：
 #    得到的清单几乎全是 `run_shell`，零信息量。
 #    必须从命令正文里认工具（`_tools_in_command`）。
