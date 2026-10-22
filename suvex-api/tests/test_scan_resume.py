@@ -261,6 +261,28 @@ def test_resume_refuses_a_running_scan(
     assert response.json()["error"]["code"] == "SCAN_NOT_RESUMABLE"
 
 
+def test_agent_backend_resume_says_no_checkpoint_not_missing_session(
+    ready_client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    """★★ v0.69：自研引擎（agent 后端）没有断点续跑，文案不能骗人说"会话文件已不在"。
+
+    2026-10-22 真跑撞到：一条 agent 后端的扫描被超时截断，用户点「续跑」，
+    界面弹「这次扫描的 strix 会话文件已不在（可能被清理过）」—— 而事实是
+    **压根没跑过 strix**（自研引擎从不建 `strix_runs/`）。与 v0.27 修「CTF2 壳」
+    是同一类"与事实相反"的措辞，当时漏了 agent 后端这条路。
+    """
+    scan = _make_failed(db_session, tmp_path, run_id="agent-scan_x")
+    scan.runner = "agent"
+    db_session.commit()
+
+    response = ready_client.post(f"{API}/scans/{scan.id}/resume", json={"authorization": AUTH})
+    assert response.status_code == 409, response.text
+    message = response.json()["error"]["message"]
+    assert "自研引擎" in message, f"要点名真正的引擎：{message!r}"
+    assert "重跑" in message, "要给出替代动作"
+    assert "会话文件" not in message, f"不能说『会话文件已不在』——那是与事实相反的措辞：{message!r}"
+
+
 def test_missing_session_files_offer_the_alternative(
     ready_client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:

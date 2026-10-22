@@ -672,6 +672,21 @@ def resume_scan(
     if source.deleted_at is not None:
         raise ApiError(409, ErrorCode.SCAN_NOT_RESUMABLE, "这条扫描在回收站里，请先恢复再续跑。")
 
+    # ★ v0.69：自研引擎（agent 后端）**没有断点续跑能力** —— 直接说清，别让它
+    #   往下走到 `can_resume`，那会报「strix 会话文件已不在（可能被清理过）」，
+    #   而事实是**压根没跑过 strix**（这条扫描从头到尾是自研引擎，从不建
+    #   `strix_runs/`）。与 v0.27 修「CTF2 壳」是同一类"与事实相反"的措辞，
+    #   当时只覆盖了 CTF2 壳，漏了 agent 后端这条路径（2026-10-22 真跑撞到）。
+    #   自研引擎的 `resume_run_id` 是被显式忽略的（见 agent_runner 的说明），
+    #   进程一旦结束上下文就没了，所以「重跑」才是正确动作。
+    if (source.runner or "") == "agent":
+        raise ApiError(
+            409,
+            ErrorCode.SCAN_NOT_RESUMABLE,
+            "自研引擎不支持断点续跑 —— 进程结束后上下文不会保留。"
+            "请改用「重跑」，它会带着原来的任务背景从头开始。",
+        )
+
     if source.status not in (ScanStatus.FAILED.value, ScanStatus.ABORTED.value):
         raise ApiError(
             409,
