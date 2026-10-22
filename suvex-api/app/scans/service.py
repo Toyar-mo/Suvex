@@ -1274,6 +1274,14 @@ _ERROR_LINE = re.compile(
 # 也不要错判成一个"看起来很懂"的类别 —— 那会让用户去修一个不存在的问题。
 _KNOWN_FAILURES: tuple[tuple[re.Pattern[str], str], ...] = (
     (
+        # 轮次预算用尽 —— 这不是"坏掉了"，是"跑到上限还没收敛"。说清是什么、
+        # 以及唯一的下一步动作（调大回合上限 / 缩小目标范围）。多智能体尤其
+        # 容易撞上（总预算被多个子 agent 分），见 multiagent.TOTAL_TURN_RATIO。
+        re.compile(r"总轮次预算已用尽|回合用尽（\d+ 轮）"),
+        "智能体跑满回合预算仍未收敛出结论（不是执行失败，是探查深度不够）。"
+        "可在设置里调大「每题最多跑多少回合」，或把目标范围收窄后重跑。",
+    ),
+    (
         re.compile(r"insufficient_user_quota|预扣费额度|剩余额度"),
         "模型服务额度不足（供应商返回 insufficient_user_quota）。"
         "扫描在被拒的请求上重试若干次后退出 —— **这不是目标或沙箱的问题**。"
@@ -1284,7 +1292,21 @@ _KNOWN_FAILURES: tuple[tuple[re.Pattern[str], str], ...] = (
         "模型服务鉴权失败。请检查该供应商的 API key 是否有效、是否已被吊销。",
     ),
     (
-        re.compile(r"rate.?limit|\b429\b", re.IGNORECASE),
+        # ★ 判据必须**只在真正的供应商错误行**上命中，不能是宽泛的
+        #   `\b429\b`。踩过的坑（v0.66 真跑暴露）：`_find_failure_line` 扫的是
+        #   整个 scan.log 尾部 256KB，而里面**混着 agent 自己的工具输出与推理** ——
+        #   目标平台的 `/auth/forgot-password` 对存在用户返回 429（这正是模型
+        #   发现的用户枚举信号），那句 "forgot-password returned 429" 落在日志里，
+        #   于是被误判成「模型服务限流」，把一个跑了 88 次真实工具的扫描
+        #   报成"限流失败"。**低报方向还恰好让人去查一个不存在的模型问题。**
+        #   供应商的限流长这样：`Error code: 429` / `rate_limit_exceeded` /
+        #   `rate limit reached` / `429 Too Many Requests`，都带这些上下文短语。
+        re.compile(
+            r"error code:\s*429"
+            r"|rate[_ ]?limit(?:[_ ]exceeded| reached| error)?"
+            r"|429 too many requests",
+            re.IGNORECASE,
+        ),
         "模型服务限流（429）。稍后重试，或把设置里的「同时运行的扫描数」调小。",
     ),
 )

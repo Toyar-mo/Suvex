@@ -107,6 +107,27 @@ def test_spawn_blocked_when_budget_exhausted() -> None:
     assert coord.can_spawn("root") is False
 
 
+def test_total_budget_scales_with_max_turns_for_parallel_agents() -> None:
+    """★ 多智能体的总预算必须**大于**单循环的 max_turns。
+
+    回归线（2026-10-22）：原来 `TOTAL_TURN_RATIO = 1.0` —— 总预算 == max_turns。
+    但那是给**一条**循环的数；多智能体是 root + 最多 6 个子 agent 共 7 条循环
+    来分这 80，实测一次真实渗透 6 个 agent **恰好跑满 80 轮就断**，4 个专职
+    子 agent 每条只分到十几二十轮，全卡在侦察阶段、一条 confirmed 都没收敛到。
+    开 4 个子 agent 本为并行覆盖更多面，结果总预算没跟着涨，比单循环还浅。
+
+    这里钉死：同样 max_turns 下，多智能体总预算 = max_turns * TOTAL_TURN_RATIO，
+    且严格大于 max_turns（否则并行等于白开）。
+    """
+    # 复刻 run_multi_agent 里的算法 `total_budget=max(12, int(max_turns * RATIO))`，
+    # 不构造 SolveSpec（它有 9 个必填位置参数，为一条算式去拼它不划算）。
+    ratio = multiagent.TOTAL_TURN_RATIO
+    assert ratio > 1.0, "总预算必须比单循环大，否则并行无意义"
+    for max_turns in (80, 150):
+        total = max(12, int(max_turns * ratio))
+        assert total > max_turns, f"多智能体总预算 {total} 不该 <= max_turns {max_turns}"
+
+
 def test_shared_notes_overwrite_by_title() -> None:
     """同名标题**覆盖**写（去重靠标题）—— 这是"别写重复笔记"的实现。"""
     shared = multiagent.SharedState()

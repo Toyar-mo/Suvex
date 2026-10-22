@@ -104,6 +104,66 @@ def test_missing_log_is_not_an_error(scan: Scan) -> None:
     assert reason  # 不能是空串 —— 空的原因等于没有原因
 
 
+def test_agent_tool_output_429_is_not_read_as_rate_limit(scan: Scan) -> None:
+    """★★ 目标自己回 429，不能被当成「模型服务限流」。
+
+    2026-10-22 真跑撞到的形态：一次渗透里 agent 探测目标平台的
+    `/auth/forgot-password`，对**存在**的用户它回 429（这是模型发现的
+    "用户枚举"信号）。这行工具输出落在 scan.log 里，而 `_find_failure_line`
+    扫的是日志尾部 256KB —— 其中混着 agent 自己的工具输出与推理，于是被
+    `\\b429\\b` 这个宽正则一口咬住，把一个跑了 88 次真实工具的扫描报成
+    「模型服务限流」。
+    低报方向还恰好让人去查一个根本不存在的模型问题 —— 比不报更坏。
+    """
+    _log_path(scan).write_text(
+        "POST /auth/forgot-password returned 429 for existing user\n"
+        "目标对存在用户返回 429，可用于用户枚举。\n",
+        encoding="utf-8",
+    )
+    scan.log_path = str(_log_path(scan))
+
+    reason = service._failure_reason(scan, 1)
+
+    # 不能是「模型服务限流」那句
+    assert "模型服务限流" not in reason
+    # 认不出已知失败 → 退回日志末尾，如实把工具输出给用户看
+    assert "forgot-password" in reason
+
+
+def test_real_vendor_429_is_still_explained_as_rate_limit(scan: Scan) -> None:
+    """反过来：**真**的供应商 429 仍要说成限流（不能一刀切掉这颗子弹）。
+
+    供应商的限流都带上下文短语（`Error code: 429` / `rate_limit_exceeded`
+    / `429 Too Many Requests`），与 agent 的工具输出可区分。
+    """
+    for line in (
+        "openai.RateLimitError: Error code: 429 - rate_limit_exceeded\n",
+        "HTTP 429 Too Many Requests\n",
+    ):
+        _log_path(scan).write_text(line, encoding="utf-8")
+        scan.log_path = str(_log_path(scan))
+        reason = service._failure_reason(scan, 1)
+        assert reason.startswith("模型服务限流"), f"应识别为限流：{line!r} -> {reason!r}"
+
+
+def test_budget_exhaustion_is_explained_not_dumped(scan: Scan) -> None:
+    """★ 轮次预算用尽是「没跑到收敛」，不是「坏了」—— 要说清下一步动作。
+
+    多智能体尤其容易撞上（总预算被多个子 agent 分）。
+    """
+    _log_path(scan).write_text(
+        "error: 总轮次预算已用尽（240 轮）。\n", encoding="utf-8"
+    )
+    scan.log_path = str(_log_path(scan))
+
+    reason = service._failure_reason(scan, 1)
+
+    assert "回合预算" in reason
+    assert "不是执行失败" in reason
+    # 给出唯一能做的事：调大回合上限或收窄目标
+    assert "调大" in reason or "收窄" in reason
+
+
 def test_did_not_start_names_strix_for_strix_backend(scan: Scan) -> None:
     """未启动的文案：strix 后端就说 strix。"""
     scan.log_path = str(Path(scan.run_dir) / "scan.log")
