@@ -3,7 +3,7 @@
 ## 这是什么，为什么要有它
 
 `scans/runner.py` 的 `StrixRunner` 把一次扫描交给**外部 strix CLI**。
-而这个模块把同一件事交给**我们自己的引擎**（`app/ctf2/runner.py` 的
+而这个模块把同一件事交给**我们自己的引擎**（`app/kernel/runner.py` 的
 `SandboxContainer` + `LlmGateway` + `solve_in_sandbox`）。
 
 两者是**同一个内核的两个抽屉**，不是两套系统：
@@ -41,7 +41,7 @@
 
 `LaunchResult.process` 在 strix 那条路上是一个 `subprocess.Popen`，
 调度器靠 `poll()` 判存活。而本模块的工作单元是一个**线程里跑的
-asyncio 事件循环**（与 `app/ctf2/scheduler.py` 完全同构 —— 那里的
+asyncio 事件循环**（与 `app/kernel/scheduler.py` 完全同构 —— 那里的
 `_Running.thread` + `thread.is_alive()` 就是这个形状）。
 
 所以 `launch()` 返回的不是 `Popen`，而是一个满足
@@ -215,7 +215,7 @@ class AgentRunner:
 
         # ① 引擎能否 import（这条最容易在系统升级后静默失效）
         try:
-            from app.ctf2 import runner as ctf2_runner  # noqa: F401
+            from app.kernel import runner as ctf2_runner  # noqa: F401
         except Exception as exc:  # noqa: BLE001
             # ⚠️ 用 `except Exception` 而不是 `ImportError`：一个坏掉的
             # 依赖可能在 import 期抛任何东西（`KeyError`、`RuntimeError`、
@@ -427,10 +427,10 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
     `findings` 写成那个形状，**整条发现入库链路（含 SLA、时间线、CWE 映射）
     都复用现成代码**。这是"只加场景包、不动核心"在产出侧的具体体现。
     """
-    # 延迟 import：`app.ctf2.runner` 会拉起 openai/httpx 一大坨依赖，
+    # 延迟 import：`app.kernel.runner` 会拉起 openai/httpx 一大坨依赖，
     # 而本模块在 `scans.runner` 的模块级 `_RUNNERS` 里被引用 ——
     # 顶层 import 会让"只是想看看有哪些后端"变成"必须装好整条 LLM 栈"。
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     logger.info("自研引擎开跑：%s", spec.summary())
 
@@ -571,7 +571,7 @@ async def _solve_with_stop(
     一旦置位就 `task.cancel()` —— 这是 Python 里对 async 循环唯一
     可靠的"请求停止"手段（线程本身杀不掉，见模块 docstring）。
     """
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     task = asyncio.ensure_future(
         ctf2_runner.solve_in_sandbox(
@@ -753,7 +753,7 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
     调用点在 `_run_engine` 里，那里同样没有 session。
     """
     from app.core.vocab import PentestCategory
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     # ── 目标 → access_urls ────────────────────────────────
     #

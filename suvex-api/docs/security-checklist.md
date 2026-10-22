@@ -418,7 +418,7 @@ OpenTelemetry exporter）。所以这一条目前**没有可泄漏的面**。
 
 ### SSRF：挡的是"直接写内网地址"，不是完整防御
 
-**位置**：`app/providers/llm.py`（`_local_address_guard`）、`app/ctf2/platforms.py`
+**位置**：`app/providers/llm.py`（`_local_address_guard`）、`app/kernel/platforms.py`
 （`assert_safe_base_url`）
 —— **两处判据都来自同一份实现**：`app/core/hostguard.py`
 
@@ -444,7 +444,7 @@ OpenTelemetry exporter）。所以这一条目前**没有可泄漏的面**。
 > 也就是同一类地址在一条路径上被拦、在另一条上放行。**清单一旦分叉就会继续分叉。**
 >
 > 现在判据只有一份，落在 **`app/core/hostguard.py`**（`app/core/` 是叶子层：
-> 它只 import 标准库，`app/ctf2/` 与 `app/providers/` 都能 import 它，
+> 它只 import 标准库，`app/kernel/` 与 `app/providers/` 都能 import 它，
 > 而这两个领域**互不认识**，让其中一方去 import 另一方是错的方向）。
 > `llm.py` 自己那份清单已删除，`platforms.BLOCKED_HOSTS` 保留为别名。
 >
@@ -553,7 +553,7 @@ OpenTelemetry exporter）。所以这一条目前**没有可泄漏的面**。
 
 ### 扫描目标：内网地址**故意不拦**
 
-**位置**：`app/scans/targets.py`、`app/ctf2/router.py`
+**位置**：`app/scans/targets.py`、`app/kernel/router.py`
 
 扫描目标允许内网 IP、非标准端口、`localhost`。这是**刻意的**：
 安全测试工具的使用场景就是内网资产，比赛平台也常常部署在内网
@@ -565,7 +565,7 @@ OpenTelemetry exporter）。所以这一条目前**没有可泄漏的面**。
 
 ### 沙箱网络：不回连宿主机
 
-**位置**：`app/ctf2/runner.py`
+**位置**：`app/kernel/runner.py`
 
 CTF2 沙箱**不放行**宿主机内网、不放行 `host.docker.internal` ——
 与"扫描目标允许内网"相反。理由：沙箱里跑的是**题目附件里的
@@ -587,7 +587,7 @@ CTF2 沙箱**不放行**宿主机内网、不放行 `host.docker.internal` —�
 | F-05 | 失败的鉴权尝试是否也进审计 | 会变成"攻击者可写满磁盘"的入口，需先加写入限流 | 加来源维度写入限流后再决定 |
 | F-06 | **SSRF 残余 ①：DNS rebinding** —— 校验时只看到主机名，解析发生在校验之后，所以"解析出公网 IP、请求时解析到内网"这个窗口关不掉 | 应用层关不掉（TOCTOU）；要靠出口代理 / egress 策略，或在**连接层**校验解析后的 IP（httpx 的 transport 钩子 / 自定义 resolver） | 部署时加出口白名单，或确认"管理员可信"这一前提成立；彻底堵住需在连接层校验解析结果 |
 | F-07 | **SSRF 残余 ②：通配 DNS 服务把内网 IP 编进域名** —— `nip.io` / `sslip.io` / `traefik.me` 这类服务会把域名里的 IP 字面量解析出来，所以 `169.254.169.254.nip.io`、`a9fea9fe.nip.io`（十六进制）、`169.254.170.2.nip.io`（AWS ECS）、甚至 `<任意内网 IP>.nip.io` **都能解析到对应的内网地址**，而校验时它只是个字符串域名。⚠️ 注意范围：**任意内网地址**都能这样藏（不止元数据）；公网地址没有额外风险，因为本来就能访问。⚠️ 且 `sslip.io` / `traefik.me` 是**独立服务**，不是 `nip.io` 的变体 —— 只挡一个域名没用 | 同 F-06 ①：应用层看到的是域名，解析在连接层才发生 | 同 F-06 ①（出口白名单 / 连接层校验解析结果） |
-| F-08 | **畸形 `Location` 的异常类型边界 —— 已修（2026-10-16）**。异步 httpx 的异常可能是 **`ExceptionGroup`**（anyio task group 包住连接期的 `OverflowError`）或 **`httpx.InvalidURL`**（它直接继承 `Exception`，**不是** `HTTPError` 子类），而生产调用点（`app/ctf2/adapters/transport.py`、`probe.py`）原先只 `except httpx.HTTPError` → **接不住 → 500**。★ **这条最初被误判为"不成立"**：第一版在**本机 Windows** 测到的是"httpx 转成 502 / `OSError`、接得住"，而**那个结论是 Windows 特有的**；在 **Kali（生产同款 Linux）** 上一测就复现。修法见下方实测记录与 `redirect.py` 的 `_check_port` / `_request` 包装 | 已修：端口越界在**校验层**拦成 `Ctf2Error`；httpx 内部抛的 `InvalidURL` / `ExceptionGroup` 在 `client.request` 外统一转成 `Ctf2Error`（只转"地址/网络层面"的，编程错误照旧上抛） | ✅ 已做：`tests/ctf2/test_redirect_guard.py` 的 21 条畸形 `Location` 参数化用例 + 相对地址反向闸 + 端口越界两条（★ 21 条里 6 条是 R-4 补的 IDNA 族） |
+| F-08 | **畸形 `Location` 的异常类型边界 —— 已修（2026-10-16）**。异步 httpx 的异常可能是 **`ExceptionGroup`**（anyio task group 包住连接期的 `OverflowError`）或 **`httpx.InvalidURL`**（它直接继承 `Exception`，**不是** `HTTPError` 子类），而生产调用点（`app/kernel/adapters/transport.py`、`probe.py`）原先只 `except httpx.HTTPError` → **接不住 → 500**。★ **这条最初被误判为"不成立"**：第一版在**本机 Windows** 测到的是"httpx 转成 502 / `OSError`、接得住"，而**那个结论是 Windows 特有的**；在 **Kali（生产同款 Linux）** 上一测就复现。修法见下方实测记录与 `redirect.py` 的 `_check_port` / `_request` 包装 | 已修：端口越界在**校验层**拦成 `Ctf2Error`；httpx 内部抛的 `InvalidURL` / `ExceptionGroup` 在 `client.request` 外统一转成 `Ctf2Error`（只转"地址/网络层面"的，编程错误照旧上抛） | ✅ 已做：`tests/kernel/test_redirect_guard.py` 的 21 条畸形 `Location` 参数化用例 + 相对地址反向闸 + 端口越界两条（★ 21 条里 6 条是 R-4 补的 IDNA 族） |
 
 ### F-08 的实测记录（**必须在 Kali 上测**；两个环境结论不同）
 
@@ -682,7 +682,7 @@ Review 报的是：`http://127.0.0.1:99999/x` 抛 `ExceptionGroup[OverflowError]
 * 放宽到 `BaseExceptionGroup` 会连带吞掉**编程错误**（task group 会把
   我们自己的 bug 一起包起来），那是用"看起来更安全"换"真的更难排查"。
 
-**防回归**：`tests/ctf2/test_redirect_guard.py` 加 15 条畸形 `Location`
+**防回归**：`tests/kernel/test_redirect_guard.py` 加 15 条畸形 `Location`
 参数化用例（现在全部以 `Ctf2Error` / `HTTPError` 收场；★ **R-4 后是 21 条**
 —— 补了 IDNA 一族），加 1 条
 **反向闸**（相对地址必须仍被跟随 —— 防"把什么都拒掉"的实现），
@@ -763,7 +763,7 @@ Review 第二轮对抗审查指出：原判据
 **都是绿** —— 如实说明它守的是 `_check_port` 与 `InvalidURL`，
 **不是**本次收窄的判据（不做恒真断言）。
 
-**新增测试**（`tests/ctf2/test_redirect_guard.py`，30 → 49 条）：
+**新增测试**（`tests/kernel/test_redirect_guard.py`，30 → 49 条）：
 编程错误必须上抛（参数化 8 条 + 1 条构造）、真传输错误仍须被吞
 （参数化 8 条）、`ExceptionGroup[gaierror]` 必须被吞、
 以及 `test_the_overflow_fallback_is_the_second_line`（真实 transport
@@ -806,8 +806,8 @@ Windows 把越界端口**静默截断**成 `99999 % 65536`，抛的是
 - `test_zero_port_is_caught_by_check_port_not_by_the_overflow_fallback` ——
   `:0` 是非溢出语义的越界，兜底管不了，只能靠 `_check_port`。
 
-**验证**：`tests/ctf2/test_redirect_guard.py` 58 passed / 1 skipped；
-`tests/ctf2/` 整目录 835 tests / 0 failures / 0 errors / 4 skipped。
+**验证**：`tests/kernel/test_redirect_guard.py` 58 passed / 1 skipped；
+`tests/kernel/` 整目录 835 tests / 0 failures / 0 errors / 4 skipped。
 
 **反向验证**：抽掉 `_is_transport_level` 里 `OverflowError` 那一行，
 上述第 1、2 条与 `test_real_transport_failures_are_still_swallowed[OverflowError]`
@@ -854,8 +854,8 @@ httpx.InvalidURL)` = **False**，`issubclass(..., httpx.HTTPError)` = **False**�
 
 | 处 | 文件 | 改动 |
 | --- | --- | --- |
-| 判据层 | `app/ctf2/adapters/redirect.py` | `_LIBRARY_URL_ERRORS` 加 `idna.IDNAError`（**不加裸 `UnicodeError`** —— `UnicodeDecodeError` 那类是解析响应体时我们自己的解码 bug，正是 R-1 要放回上抛的） |
-| 入口校验 | `app/ctf2/platforms.py` `assert_safe_base_url` | `host = parsed.host` 移进 `try`，后续判据用局部变量 |
+| 判据层 | `app/kernel/adapters/redirect.py` | `_LIBRARY_URL_ERRORS` 加 `idna.IDNAError`（**不加裸 `UnicodeError`** —— `UnicodeDecodeError` 那类是解析响应体时我们自己的解码 bug，正是 R-1 要放回上抛的） |
+| 入口校验 | `app/kernel/platforms.py` `assert_safe_base_url` | `host = parsed.host` 移进 `try`，后续判据用局部变量 |
 | 依赖声明 | `requirements.txt` | 显式加 `idna>=3.6,<4.0` —— 代码里出现 `import idna` 就必须声明；它本来就是 httpx 的必需依赖，不增负担（`requirements.lock` 里已锁 `idna==3.20`） |
 
 **★ 主管派的第二处（`redirect.py` 的 `_next_url`）实测是死代码，已撤回**。
@@ -931,8 +931,8 @@ httpx.InvalidURL)` = **False**，`issubclass(..., httpx.HTTPError)` = **False**�
 
 两组恢复后逐字节核对一致（sha256 比对）。
 
-**新增测试**：`tests/ctf2/test_redirect_guard.py` 的 `MALFORMED_LOCATIONS`
-15 → **21 条**（补 6 条 IDNA 族）；`tests/ctf2/test_hostguard.py` 加
+**新增测试**：`tests/kernel/test_redirect_guard.py` 的 `MALFORMED_LOCATIONS`
+15 → **21 条**（补 6 条 IDNA 族）；`tests/kernel/test_hostguard.py` 加
 `test_assert_safe_base_url_rejects_malformed_idna_labels`（3 条 A-label
 参数化；断言 400 且**不是** 500，错误文案含"不是一个合法的 URL"）。
 

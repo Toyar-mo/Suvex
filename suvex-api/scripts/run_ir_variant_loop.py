@@ -58,8 +58,8 @@ def _description(evidence_name: str) -> str:
 def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
     from app.core.ids import new_id
     from app.core.vocab import Ctf2ChallengeStatus
-    from app.ctf2.models import Ctf2Challenge, Ctf2Competition
-    from app.ctf2.service import get_account
+    from app.kernel.models import Ctf2Challenge, Ctf2Competition
+    from app.kernel.service import get_account
 
     comp = db.query(Ctf2Competition).filter(Ctf2Competition.name == "IR-Lab").one_or_none()
     if comp is None:
@@ -94,7 +94,7 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
             attachments=[{"name": evidence.name, "url": "http://ctf2.dasctf.com/ir/local"}],
             status=Ctf2ChallengeStatus.UNSOLVED.value,
         )
-        from app.ctf2 import runner as _runner
+        from app.kernel import runner as _runner
 
         chal.sandbox_profile = _runner.profile_for_category(chal.category)
         db.add(chal)
@@ -102,7 +102,7 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
         db.refresh(chal)
 
     # 每跑一次都要对账（旧的 profile / 状态都可能是上一轮留下的）
-    from app.ctf2 import runner as _runner
+    from app.kernel import runner as _runner
 
     want_profile = _runner.profile_for_category(chal.category)
     dirty = False
@@ -125,7 +125,7 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
         db.commit()
         db.refresh(chal)
 
-    from app.ctf2.attachments import attachment_root
+    from app.kernel.attachments import attachment_root
 
     dest = attachment_root(chal.id)
     dest.mkdir(parents=True, exist_ok=True)
@@ -140,7 +140,7 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
 
 
 def _enable_ir(db) -> None:  # noqa: ANN001
-    from app.ctf2.service import effective_ctf2_settings
+    from app.kernel.service import effective_ctf2_settings
     from app.settings.models import Ctf2Config
 
     row = db.get(Ctf2Config, "default")
@@ -193,10 +193,10 @@ def _usage_summary(outcome) -> dict:  # noqa: ANN001
 
 async def _main(args: argparse.Namespace) -> int:
     from app.core.db import get_session_factory
-    from app.ctf2 import runner
-    from app.ctf2 import service as ctf2_service
-    from app.ctf2 import workorder as wo
-    from app.ctf2 import writeup as writeup_mod
+    from app.kernel import runner
+    from app.kernel import service as ctf2_service
+    from app.kernel import workorder as wo
+    from app.kernel import writeup as writeup_mod
 
     evidence = Path(args.evidence).resolve()
     if not evidence.is_file():

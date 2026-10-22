@@ -2,7 +2,7 @@
 
 ## 为什么需要它
 
-`app/ctf2/client.py` 里的每个端点路径、以及每个响应的**字段名**
+`app/kernel/client.py` 里的每个端点路径、以及每个响应的**字段名**
 （`_first_str(payload, ("id", "practice_id"))` 那种），都是照着
 别人的接口写的。照抄的东西会漂移，而且漂移的方式很安静：
 

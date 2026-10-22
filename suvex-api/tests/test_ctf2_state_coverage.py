@@ -23,7 +23,7 @@ import inspect
 import textwrap
 
 from app.core.vocab import Ctf2ChallengeStatus
-from app.ctf2 import runner, scheduler
+from app.kernel import runner, scheduler
 
 
 def _code_of(func) -> str:  # noqa: ANN001

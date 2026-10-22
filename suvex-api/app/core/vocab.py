@@ -643,7 +643,7 @@ def values(enum_cls: type[StrEnum]) -> tuple[str, ...]:
 
 
 # ══════════════════════════════════════════════════════════
-# CTF2 平台对接（app/ctf2/，v0.20）
+# CTF2 平台对接（app/kernel/，v0.20）
 # ══════════════════════════════════════════════════════════
 #
 # ⚠️ 这一段里的每个枚举**都有一处必须同步改的地方**，与 `TargetKind`
@@ -866,8 +866,8 @@ class Ctf2SandboxProfile(StrEnum):
     2. **手写一条 alembic 迁移**重建三条 CHECK
        （`ctf2_challenges` / `ctf2_environments` / `ctf2_config` 各一条）。
        `--autogenerate` **不比对 CHECK 的表达式**，这一步永远不会被自动发现；
-    3. 改 `app/ctf2/schemas.py` 的 `SandboxProfileLiteral`（有对账测试盯着）；
-    4. 改 `app/ctf2/runner.py` 的 `image_for_profile()` 与
+    3. 改 `app/kernel/schemas.py` 的 `SandboxProfileLiteral`（有对账测试盯着）；
+    4. 改 `app/kernel/runner.py` 的 `image_for_profile()` 与
        `scripts/verify_sandbox_tools.py` 的镜像解析。
 
     漏掉第 2 步的症状不是"新镜像不生效"，而是一条看起来完全无关的

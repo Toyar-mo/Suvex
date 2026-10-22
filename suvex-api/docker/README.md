@@ -13,7 +13,7 @@ ctf2-sandbox:latest          ← 基础镜像，服务 pwn / web / crypto / misc
 
 > **base 变了，re 与 ir 也都要重建。**
 
-`app/ctf2/runner.py` 的 `profile_for_category()` 决定一道题走哪个镜像：
+`app/kernel/runner.py` 的 `profile_for_category()` 决定一道题走哪个镜像：
 `ir-` 前缀的先判（走 ir），`_REVERSE_CATEGORIES` 里的走 re，其余走 base。
 
 ## `ctf2-sandbox-ir`：应急响应镜像

@@ -454,7 +454,7 @@ def _upgrade_to_head() -> None:
 #
 # `get_settings()` 是 lru_cache 单例，不清缓存的话改环境变量不生效，
 # 症状是"测试用的是上一个用例的配置"——看起来像配置没读对，
-# 其实是缓存没失效。这条在 `tests/ctf2/conftest.py` 里已经踩过一回。
+# 其实是缓存没失效。这条在 `tests/kernel/conftest.py` 里已经踩过一回。
 @pytest.fixture(autouse=True)
 def _secret_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """确保有 `SUPEX_SECRET_KEY`。已配（CI 变量或本地 `.env`）则不动它。"""
@@ -502,7 +502,7 @@ def _ctf2_background_threads_stay_idle() -> Iterator[None]:
 
     全量基线跑挂在：
 
-        ERROR tests/ctf2/test_solve_attempt.py::test_v5_without_an_attempt_it_falls_back_to_global
+        ERROR tests/kernel/test_solve_attempt.py::test_v5_without_an_attempt_it_falls_back_to_global
         E  psycopg.errors.DeadlockDetected: deadlock detected
         E  Process 7036 waits for AccessExclusiveLock on relation 24693
         E  ...  [SQL: TRUNCATE "provider_accounts", ..., "ctf2_writeups" ...]
@@ -554,8 +554,8 @@ def _ctf2_background_threads_stay_idle() -> Iterator[None]:
         #    写明它"**不**负责停线程，调用方自己 stop" —— 只 reset 会把一个
         #    还在跑的线程丢掉引用（再也没人能停它）。
         try:
-            from app.ctf2.autosync import get_autosync, reset_autosync
-            from app.ctf2.scheduler import get_scheduler, reset_scheduler
+            from app.kernel.autosync import get_autosync, reset_autosync
+            from app.kernel.scheduler import get_scheduler, reset_scheduler
 
             get_scheduler().stop(timeout=5.0)
             get_autosync().stop(timeout=5.0)
@@ -575,8 +575,8 @@ def stop_ctf2_background_loops() -> None:
        而不是新建实例 —— 新建的实例本来就没在跑，停了等于没停。
     """
     try:
-        from app.ctf2.autosync import get_autosync
-        from app.ctf2.scheduler import get_scheduler
+        from app.kernel.autosync import get_autosync
+        from app.kernel.scheduler import get_scheduler
 
         get_scheduler().stop(timeout=5.0)
         get_autosync().stop(timeout=5.0)
@@ -604,7 +604,7 @@ def _ctf2_solver_never_runs_for_real() -> Iterator[None]:
     替身只记账、不干活：不碰网络、不碰 Docker、不写库。
 
     ⚠️ 用 `monkeypatch`（function 级）而不是直接改模块属性：用例自己的
-       `monkeypatch.setattr("app.ctf2.runner.run_worker", …)` 会**覆盖**
+       `monkeypatch.setattr("app.kernel.runner.run_worker", …)` 会**覆盖**
        它，跑完自动还原回这一份 —— 两边不会打架。
 
     ⚠️ 替身**不改数据库状态**。生产语义里 worker 结束时会把题目状态
@@ -622,7 +622,7 @@ def _ctf2_solver_never_runs_for_real() -> Iterator[None]:
     """
     import functools
 
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     def _noop(challenge_id: str, *, resume: bool = False, attempt_id: str | None = None) -> None:
         logger.debug("测试替身：跳过真实解题 %s", challenge_id)
@@ -781,12 +781,12 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     ⚠️ **必须 patch 在 `with TestClient(app)` 外面**：lifespan 在 `__enter__`
        里就跑完了，进了 `with` 再 patch 已经晚了。
     ⚠️ **只 patch 在这一个 fixture 上**，不要做成 autouse：
-       `tests/ctf2/test_sandbox_sweep.py` 要测的就是这个函数的真实逻辑
+       `tests/kernel/test_sandbox_sweep.py` 要测的就是这个函数的真实逻辑
        （它自己 patch `_run` 来伪造 Docker），全局替换会让那批用例失去意义。
     ⚠️ 用 `monkeypatch` 而非直接赋值：用例自己的 `monkeypatch.setattr`
        可以覆盖它，跑完自动还原，两边不打架。
     """
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
     from app.main import app
 
     monkeypatch.setattr(ctf2_runner, "sweep_orphan_sandboxes", _no_sweep_orphan_sandboxes)

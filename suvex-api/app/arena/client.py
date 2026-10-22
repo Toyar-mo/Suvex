@@ -1,8 +1,8 @@
 """比赛平台（AI Agent API）的客户端。照着 `api_doc.md` 逐条实现。
 
-## 这个模块与 `app/ctf2/` 的关系
+## 这个模块与 `app/kernel/` 的关系
 
-`app/ctf2/` 对接的是 **ctf2.dasdctf.com** 的开放 API（`Authorization: Bearer <PAT>`、
+`app/kernel/` 对接的是 **ctf2.dasdctf.com** 的开放 API（`Authorization: Bearer <PAT>`、
 `{data, success}` 信封、UUID 题目 id）。而这里对接的是**赛事方下发的**
 AI Agent API（`X-Agent-AccessKey`、`{code, message, data}` 信封、整数题目 id）。
 
@@ -166,7 +166,7 @@ class Exercise:
     （`runner._initial_prompt`）。取不到就当空串 = 按 HTTP 处理，这是安全方向。
 
     ⚠️ 平台的字段名不止一种写法（`accessType` / `access_type`），
-    生产侧是 `app/ctf2/client.py:1195` 的 `_first_str` 在兜；这里同理。
+    生产侧是 `app/kernel/client.py:1195` 的 `_first_str` 在兜；这里同理。
     """
     raw: dict[str, Any] = field(default_factory=dict)
 

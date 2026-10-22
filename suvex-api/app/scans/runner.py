@@ -637,7 +637,7 @@ def sweep_orphan_ctf2_workspaces(db) -> int:  # noqa: ANN001
     """
     from sqlalchemy import select
 
-    from app.ctf2.models import Ctf2Challenge
+    from app.kernel.models import Ctf2Challenge
 
     root = get_settings().scan_root / "_ctf2_workspaces"
     if not root.is_dir():
@@ -2007,7 +2007,7 @@ def _register_optional_runners() -> None:
 
     ## 为什么失败不能抛（重要）
 
-    `agent_runner` 会 import `app.ctf2.runner`，那一串依赖（openai /
+    `agent_runner` 会 import `app.kernel.runner`，那一串依赖（openai /
     httpx / …）在**只想用 strix 后端的部署**里可能压根没装全。那种部署
     照样要能跑 —— 所以这里**吞掉 import 异常**，只记一条 debug。
     真到用户选了 `agent` 后端而它没登记时，`get_runner` 会抛

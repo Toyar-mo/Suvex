@@ -116,9 +116,9 @@ def make_scan(
 def _httpx_shim(**overrides):  # noqa: ANN003, ANN202
     """造一个"只在指定名字上偏离真 httpx"的**模块替身**。
 
-    ## ★★ 为什么需要它（与 `tests/ctf2/conftest.py` 那个是同一族问题）
+    ## ★★ 为什么需要它（与 `tests/kernel/conftest.py` 那个是同一族问题）
 
-    `app.providers.llm.httpx` 与 `app.ctf2.client.httpx` 一样，**都是全局
+    `app.providers.llm.httpx` 与 `app.kernel.client.httpx` 一样，**都是全局
     那一个 httpx 模块对象**。所以原来那种
     `monkeypatch.setattr("app.providers.llm.httpx.Client", factory)`
     改的是**httpx 模块自己的属性** —— 任何在测试期间读 `httpx.Client`

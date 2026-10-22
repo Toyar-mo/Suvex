@@ -21,7 +21,7 @@ Create Date: 2026-09-28 14:00:00.000000+00:00
 "有没有这条约束"，不比对里面的表达式**。
 
 ⚠️ `max_wrong_submissions <= 10` 里的 10 与
-`app/ctf2/service.py` 的 `MAX_WRONG_SUBMISSIONS_CEILING` 是**同一个数**，
+`app/kernel/service.py` 的 `MAX_WRONG_SUBMISSIONS_CEILING` 是**同一个数**，
 但这里刻意写字面量：CHECK 表达式建好就固化在库里，而常量可以改 ——
 写常量会让"改了常量但没写迁移"表现为"应用层通过、数据库拒绝"。
 **改任一处必须同时改另一处**，这条注释就是那个提醒。

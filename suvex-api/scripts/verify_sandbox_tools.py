@@ -705,9 +705,9 @@ def _literal_set(node: ast.expr) -> frozenset[str] | None:
 def load_reverse_categories(path: Path = RUNNER_PY) -> frozenset[str]:
     """从 `runner.py` 源码里取出 `_REVERSE_CATEGORIES` 这个集合。
 
-    ## 为什么不 `from app.ctf2.runner import ...`
+    ## 为什么不 `from app.kernel.runner import ...`
 
-    `app/ctf2/runner.py` 顶层就 `from sqlalchemy import select`，往下还有
+    `app/kernel/runner.py` 顶层就 `from sqlalchemy import select`，往下还有
     SQLAlchemy / pydantic 一大串。CI 里装着这些，但**本地改完 Dockerfile
     想立刻验证时未必装着** —— 而"本地跑不起来"的实际后果是开发者跳过
     验证直接提交，这个脚本就等于白写。
@@ -796,7 +796,7 @@ class Router:
 def load_router() -> Router:
     """把「逆向分类集合 + 三个 profile 取值 + 各自的 Dockerfile」一次凑齐。
 
-    ## 关键约束：**不 import `app.ctf2.runner`**
+    ## 关键约束：**不 import `app.kernel.runner`**
 
     它顶层 `from sqlalchemy import select`，往下还有 SQLAlchemy / pydantic
     一大串。CI 里装着，但**本地改完 Dockerfile 想立刻验证时未必装着** ——

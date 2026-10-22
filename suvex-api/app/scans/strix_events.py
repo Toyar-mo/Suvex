@@ -67,7 +67,7 @@ CREATE TABLE agent_messages (
 * `suvex-api/app/scans/service.py:1387` —— 用户主动终止扫描；
 * `suvex-api/app/scans/scheduler.py:809` —— 服务重启回收上一个进程（活着 → `blocked`，
   已死 → `failed`）；
-* `suvex-api/app/ctf2/events.py:431` —— CTF2 平台判定 flag 错误（受阻但可继续，
+* `suvex-api/app/kernel/events.py:431` —— CTF2 平台判定 flag 错误（受阻但可继续，
   故意不用 `failed`，否则每题都会闪一次红）。
 
 所以"strix 流里无来源"与"这个事件类型没人发"是两件事。

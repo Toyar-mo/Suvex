@@ -34,7 +34,7 @@ CTF2 的状态枚举漂移**看不见**，因为它失败的方式是：
 ## 它证明什么、不证明什么（如实说）
 
 它证明「前端源码里的取值集合与后端 vocab 一致」。
-它**不**证明「运行时行为一致」—— 那要靠 `tests/ctf2/` 里的测试。
+它**不**证明「运行时行为一致」—— 那要靠 `tests/kernel/` 里的测试。
 
 用法：
 
@@ -273,7 +273,7 @@ def main() -> int:
     # ══════════════════════════════════════════════════════
     print("\n── 答案格式 ──", flush=True)
 
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     backend_pattern = ctf2_runner.FLAG_PATTERN.pattern
     match = re.search(r"FLAG_PATTERN\s*=\s*/(.+)/\s*$", ctf2_ts, re.M)
@@ -376,7 +376,7 @@ def main() -> int:
     # ══════════════════════════════════════════════════════
     print("\n── 接口字段 ──", flush=True)
 
-    from app.ctf2.schemas import Ctf2ChallengeOut, Ctf2SettingsIn, Ctf2SettingsOut, Ctf2SyncOut
+    from app.kernel.schemas import Ctf2ChallengeOut, Ctf2SettingsIn, Ctf2SettingsOut, Ctf2SyncOut
 
     field_pairs = [
         (Ctf2ChallengeOut, "Ctf2Challenge", "题目出参"),
@@ -448,7 +448,7 @@ def main() -> int:
     if not failed:
         print(
             "\n⚠️ 这个脚本证明的是「前端的取值集合与后端 vocab 一致」。\n"
-            "   它**不**证明「运行时行为一致」—— 那要靠 tests/ctf2/ 里的测试。\n"
+            "   它**不**证明「运行时行为一致」—— 那要靠 tests/kernel/ 里的测试。\n"
             "   也**不**比标签文案：标签的权威在前端，改措辞不该让对账红。",
             flush=True,
         )

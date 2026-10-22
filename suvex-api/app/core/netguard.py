@@ -129,9 +129,9 @@ _PROXY_POOLS_SYNC: tuple[type[Any], ...] = (
 #: 原实现是 `is_async = isinstance(client, httpx.AsyncClient)`，而它
 #: **在测试里会炸**，原因是一整条污染链：
 #:
-#: 1. 夹具打的是 `app.ctf2.client.httpx.AsyncClient`，而
-#:    `app.ctf2.client.httpx` **就是全局那一个 httpx 模块对象**
-#:    （实测 `app.ctf2.client.httpx is httpx` → `True`）；
+#: 1. 夹具打的是 `app.kernel.client.httpx.AsyncClient`，而
+#:    `app.kernel.client.httpx` **就是全局那一个 httpx 模块对象**
+#:    （实测 `app.kernel.client.httpx is httpx` → `True`）；
 #: 2. 于是那一步改的是 **httpx 模块自己的属性** —— 全局污染；
 #: 3. 本模块里的 `httpx` 也是同一个模块对象，所以这里读到的
 #:    `httpx.AsyncClient` 变成了夹具的**工厂函数**；
@@ -507,7 +507,7 @@ def ensure_guarded(client: httpx.AsyncClient | httpx.Client) -> None:
     ## ★★ 异步/同步按**池**判，不按 client 的类判（2026-10-16 修）
 
     原实现第一行是 `is_async = isinstance(client, httpx.AsyncClient)`，
-    它**在测试里会炸** —— 夹具替换 `app.ctf2.client.httpx.AsyncClient`
+    它**在测试里会炸** —— 夹具替换 `app.kernel.client.httpx.AsyncClient`
     时污染的是全局 httpx 模块（实测两者是同一个模块对象），
     于是 51 条用例全倒在 `TypeError: arg 2 must be a type`。
     现在改成按每个池自己的类型判，见 `_pool_is_async` 与

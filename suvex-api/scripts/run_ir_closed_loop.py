@@ -46,8 +46,8 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
     """建一份练习集 + 一道 IR 题，附件指到本地证据包。"""
     from app.core.ids import new_id
     from app.core.vocab import Ctf2ChallengeStatus
-    from app.ctf2.models import Ctf2Challenge, Ctf2Competition
-    from app.ctf2.service import get_account
+    from app.kernel.models import Ctf2Challenge, Ctf2Competition
+    from app.kernel.service import get_account
 
     comp = (
         db.query(Ctf2Competition)
@@ -91,7 +91,7 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
         # 不补这一句的话会用列默认值 `ctf2-sandbox`，而症状是
         # 「IR 任务跑在 base 镜像里」：不报错、提示词也对，只是少了
         # sleuthkit 那批工具 —— 那正是 `_profile_for` 存在的理由。
-        from app.ctf2 import runner as _runner
+        from app.kernel import runner as _runner
 
         chal.sandbox_profile = _runner.profile_for_category(chal.category)
         db.add(chal)
@@ -102,7 +102,7 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
     #   沿用上一轮留下的 `ctf2-sandbox`：镜像换了、代码修了，而
     #   这一道题仍然跑在 base 里，输出看起来完全正常。
     #   这种事只能靠"每次跑都把该对齐的对齐"来防。
-    from app.ctf2 import runner as _runner
+    from app.kernel import runner as _runner
 
     want_profile = _runner.profile_for_category(chal.category)
     dirty = False
@@ -120,7 +120,7 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
         db.refresh(chal)
 
     # 附件按"已下载"的状态放好（下载只在同步时发生，解题只看落盘结果）
-    from app.ctf2.attachments import attachment_root
+    from app.kernel.attachments import attachment_root
 
     dest = attachment_root(chal.id)
     dest.mkdir(parents=True, exist_ok=True)
@@ -132,7 +132,7 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
 
 
 def _enable_ir(db) -> None:  # noqa: ANN001
-    from app.ctf2.service import effective_ctf2_settings
+    from app.kernel.service import effective_ctf2_settings
     from app.settings.models import Ctf2Config
 
     row = db.get(Ctf2Config, "default")
@@ -162,9 +162,9 @@ IR_DESCRIPTION = (
 
 async def _main(args: argparse.Namespace) -> int:
     from app.core.db import get_session_factory
-    from app.ctf2 import runner
-    from app.ctf2 import service as ctf2_service
-    from app.ctf2 import writeup as writeup_mod
+    from app.kernel import runner
+    from app.kernel import service as ctf2_service
+    from app.kernel import writeup as writeup_mod
 
     evidence = Path(args.evidence).resolve()
     if not evidence.is_file():
@@ -248,7 +248,7 @@ async def _main(args: argparse.Namespace) -> int:
         ctf2_service.save_writeup(db, challenge=chal, outcome=outcome, attempt_id=None, elapsed_sec=elapsed)
         print(f"[writeup] markdown_len={len(markdown)}")
 
-        from app.ctf2 import workorder as wo
+        from app.kernel import workorder as wo
 
         path = wo.order_path(challenge_id)
         print(f"[workorder] path={path} exists={path.is_file()}")

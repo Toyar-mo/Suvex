@@ -70,7 +70,7 @@
 `executor: Callable | None = None` 的钩子，半年后某次"顺手接一下 EDR"就会传
 一个真的进来，而那时没人会回头读那段解释。
 
-这条约束由 AST 扫描守着（`tests/ctf2/test_ir_workorder.py::test_no_execution_path_in_module`
+这条约束由 AST 扫描守着（`tests/kernel/test_ir_workorder.py::test_no_execution_path_in_module`
 参数化 26 个禁止标识符：`subprocess`/`Popen`/`socket`/`paramiko`/`iptables`…）。
 ★ 为什么用 AST 而不是"跑一次看看"：跑一次只能证明**那条分支**不执行，而这里
 要证明的是**不存在**执行路径 —— 一个今天走不到的分支，明天可能因为一次无关

@@ -40,10 +40,10 @@ from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.metrics_middleware import MetricsMiddleware
-from app.ctf2.router import router as ctf2_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
 from app.health import router as health_router
+from app.kernel.router import router as ctf2_router
 from app.members.router import router as members_router
 from app.overview.router import router as overview_router
 from app.providers.router import router as providers_router
@@ -166,7 +166,7 @@ async def lifespan(_app: FastAPI):
     # ⚠️ 回收会**中断**上一次运行留下的解题（沙箱容器可能是孤儿，
     #    但本函数只改数据库状态）。这与扫描调度器的取舍一致：
     #    宁可重跑，也不要留一个看不见的进程。
-    from app.ctf2.scheduler import get_scheduler as get_ctf2_scheduler
+    from app.kernel.scheduler import get_scheduler as get_ctf2_scheduler
 
     ctf2_scheduler = get_ctf2_scheduler()
     ctf2_recovered = ctf2_scheduler.recover_orphans()
@@ -189,7 +189,7 @@ async def lifespan(_app: FastAPI):
     #
     # ⚠️ 清理失败**不阻断启动**（函数内部只记 warning）—— 一次清理
     #    失败不该升级成服务起不来。
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     ctf2_runner.sweep_orphan_sandboxes()
 
@@ -230,7 +230,7 @@ async def lifespan(_app: FastAPI):
     # ⚠️ 它在设置页里可关（`auto_sync_seconds = 0`），而那个值**每轮
     #    重读** —— 所以这里无条件启动线程是对的：关闭状态由间隔值表达，
     #    不由"线程在不在"表达（否则关掉再打开就得重启服务）。
-    from app.ctf2.autosync import get_autosync
+    from app.kernel.autosync import get_autosync
 
     get_autosync().start()
 
@@ -253,13 +253,13 @@ async def lifespan(_app: FastAPI):
         #    等一会儿"。超时后残留的沙箱容器是**已知且无法在这里解决**的
         #    （见 ctf2/scheduler 的 docstring），所以它会在超时时打一行
         #    warning 提醒去看 `docker ps`。
-        from app.ctf2.scheduler import get_scheduler as get_ctf2_scheduler
+        from app.kernel.scheduler import get_scheduler as get_ctf2_scheduler
 
         get_ctf2_scheduler().stop()
 
         # 自动同步线程：它可能在一次网络往返里，**不等它跑完** ——
         # 一次同步最多几十秒，而停机不该被一个后台作业拖住。
-        from app.ctf2.autosync import get_autosync
+        from app.kernel.autosync import get_autosync
 
         get_autosync().stop()
 

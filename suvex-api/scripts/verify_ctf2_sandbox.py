@@ -2,7 +2,7 @@
 
 ## 为什么单测不够
 
-`tests/ctf2/test_runner.py` 断言的是 `SandboxContainer._argv()` 拼出来的
+`tests/kernel/test_runner.py` 断言的是 `SandboxContainer._argv()` 拼出来的
 **字符串**：里面有 `--tmpfs /work:rw,exec,size=512m,uid=1000,gid=1000`、
 `--cap-drop ALL`、`--network none`、`--read-only`。但"字符串里有"不等于
 "Docker 收下了它、并且真的那样运行"。这几条只有真跑一次才知道：
@@ -43,7 +43,7 @@ for stream in (sys.stdout, sys.stderr):
     with contextlib.suppress(AttributeError, ValueError):  # pragma: no cover
         stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
-from app.ctf2 import runner  # noqa: E402
+from app.kernel import runner  # noqa: E402
 
 # 宿主侧那个"只读资源目录"（验证 `-v …:ro` 真的只读）。
 # 放在**项目外面**：它模拟的是"宿主上的字典目录"，不该混进仓库。

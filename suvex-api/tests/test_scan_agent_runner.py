@@ -132,7 +132,7 @@ def test_pentest_prompt_block_actually_injected() -> None:
     这是"接缝"上最容易悄悄坏掉的一环 —— 分类改了名字、前缀对不上，
     提示词就静默退回解题纪律，而 spec 本身看起来完全正常。
     """
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     solve = agent_runner.build_solve_spec_from_scan(_spec(enable_offensive_prompt=True))
     prompt = ctf2_runner.build_system_prompt_by_spec(solve)
@@ -149,7 +149,7 @@ def test_pentest_prompt_keeps_methodology_sections() -> None:
     —— 这正是那次 80 轮任务 96% 动作是 http_request 的成因。用关键短语
     钉死，坏掉时测试直接红，而不是等到真跑才发现。
     """
-    from app.ctf2 import runner as ctf2_runner
+    from app.kernel import runner as ctf2_runner
 
     p = ctf2_runner.load_pentest_prompt()
     # 五个方法论小节必须都在

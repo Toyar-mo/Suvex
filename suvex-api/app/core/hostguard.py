@@ -4,18 +4,18 @@
 
 因为**依赖方向**。两个调用方在依赖链的两头：
 
-* `app/ctf2/platforms.py` 在最上游（它 import `adapters.builder`，
+* `app/kernel/platforms.py` 在最上游（它 import `adapters.builder`，
   后者 import `adapters.generic`，再 import `adapters.transport`）——
   如果 `transport.py` / `probe.py` 反过来 import `platforms`，就成环了，
   而环在 import 期炸，症状是"某个不相关的模块 import 失败"。
-* `app/providers/llm.py` 与 `app/ctf2/` **互相不认识**，让 provider 那条
-  去 import `app.ctf2` 会把两个领域绑在一起。
+* `app/providers/llm.py` 与 `app/kernel/` **互相不认识**，让 provider 那条
+  去 import `app.kernel` 会把两个领域绑在一起。
 
 所以判据落在 `app/core/`（**叶子层**：它只 import 标准库，谁都能 import 它）。
 
 ## ★ 为什么是"一份清单"而不是各写各的
 
-这个模块的前身是 `app/ctf2/hostguard.py`，而 `app/providers/llm.py` 里有
+这个模块的前身是 `app/kernel/hostguard.py`，而 `app/providers/llm.py` 里有
 **自己一份** `BLOCKED_HOSTS`。两份清单已经漂移了：provider 那份有
 `169.254.170.2`（AWS ECS 任务元数据），ctf2 那份没有 —— 也就是**同一类
 地址，在一条路径上被拦、在另一条上放行**。清单一旦分叉就一定会继续分叉，

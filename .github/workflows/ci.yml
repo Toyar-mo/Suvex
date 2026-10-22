@@ -416,7 +416,7 @@ jobs:
         #   这道闸门把那种失败模式变成构建时直接报错。它守的是
         #   `scripts/verify_sandbox_tools.py` 里的 `CATEGORY_REQUIREMENTS`
         #   （每类题至少要有的命令）与两个 Dockerfile 的 apt/pip 列表之间
-        #   的一致性；分类 → 镜像的路由**从 `app/ctf2/runner.py` 源码现读**
+        #   的一致性；分类 → 镜像的路由**从 `app/kernel/runner.py` 源码现读**
         #   （ast 提取 `_REVERSE_CATEGORIES`），不抄第二份。
         #
         #   ⚠️ 它是**纯静态**的：证明"Dockerfile 里写了这个包"，不证明

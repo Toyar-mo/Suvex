@@ -173,7 +173,7 @@ def validate_execution_settings(
 # CTF2 解题策略（v0.20）
 # ══════════════════════════════════════════════════════════
 #
-# ⚠️ 这里**只放读取**。写入（`update_ctf2_settings`）在 `app/ctf2/service.py` ——
+# ⚠️ 这里**只放读取**。写入（`update_ctf2_settings`）在 `app/kernel/service.py` ——
 #    因为校验规则（"什么算合法的提交策略"）是 CTF2 的领域知识，
 #    放进 settings 会让这个模块开始理解 CTF2 的语义。
 #

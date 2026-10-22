@@ -7,7 +7,7 @@
 | 拉题目列表 | `GET /ctf/exercise-list` |
 | 取题目详情（附件 + 靶机） | `GET /ctf/exercise?exerciseId=` |
 | 起环境 | `POST /ctf/build-exercise-env` + 轮询详情到 `isNeedCheck=false` |
-| **解题** | 本地沙箱 + LLM（复用 `app/ctf2/runner.py`，与平台无关） |
+| **解题** | 本地沙箱 + LLM（复用 `app/kernel/runner.py`，与平台无关） |
 | 提交 | `POST /answer-panel/answer` |
 | 回收环境 | `POST /ctf/recover-exercise-env` |
 
@@ -44,7 +44,7 @@ import httpx  # noqa: E402
 
 from app.arena.client import ArenaClient, ArenaError, Exercise  # noqa: E402
 from app.core.db import session_scope  # noqa: E402
-from app.ctf2 import runner as solver  # noqa: E402
+from app.kernel import runner as solver  # noqa: E402
 
 PROMPT = PROJECT_ROOT / "prompts" / "ctf2_system.md"
 ATTACH_DIR = PROJECT_ROOT / "_tmp" / "arena-attachments"

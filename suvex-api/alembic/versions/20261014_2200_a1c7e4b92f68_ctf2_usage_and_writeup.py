@@ -25,7 +25,7 @@ Create Date: 2026-10-14 22:00:00.000000+00:00
 ## ★ 表二：`ctf2_writeups`（一题一份）
 
 `scans/writeup.py` 拼的是 **strix 报告**的重排版，而 CTF2 解题
-**根本不走 strix** —— 它由 `app/ctf2/runner.py` 自己的循环驱动，
+**根本不走 strix** —— 它由 `app/kernel/runner.py` 自己的循环驱动，
 从不产生 `penetration_test_report.md`。
 
 所以 CTF2 的题借扫描的题解端点**永远**拿不到东西，而它报的

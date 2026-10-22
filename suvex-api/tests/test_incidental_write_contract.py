@@ -19,7 +19,7 @@ v0.47 起 `core.db.warn_if_pending_changes` 让违约**留下 ERROR 日志**，
 ## 判据必须是"库里到底有没有那行"
 
 内存里的属性在 `rollback()` 之后由 SQLAlchemy 按需重读，看起来可能还是对的
-（与 `tests/ctf2/test_usage_and_writeup.py` 里那两条同一个理由）。
+（与 `tests/kernel/test_usage_and_writeup.py` 里那两条同一个理由）。
 所以每一条都在 `commit()` + `expire_all()` + 重新 `get()` 之后才断言。
 """
 

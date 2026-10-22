@@ -63,7 +63,7 @@ sys.path.insert(0, str(SCRIPTS))
 import arena_e2e  # noqa: E402
 
 from app.arena.client import ArenaClient  # noqa: E402
-from app.ctf2 import notes  # noqa: E402
+from app.kernel import notes  # noqa: E402
 
 DEFAULT_OUT = PROJECT_ROOT / "_tmp" / "ctf2-baseline.json"
 
@@ -196,7 +196,7 @@ class RunReport:
 def _turns_from_transcript(transcript: list[str]) -> int:
     """从 transcript 里数出跑了多少回合（超时路径专用）。
 
-    判据与 `app/ctf2/runner.py:4777` 的 `_TRANSCRIPT_TOOL` 同源：行首
+    判据与 `app/kernel/runner.py:4777` 的 `_TRANSCRIPT_TOOL` 同源：行首
     `[turn N] `。取**最大** turn 而不是行数 —— 一回合里可能有多条工具调用，
     数行会把"一回合发五条命令"算成五回合。
 

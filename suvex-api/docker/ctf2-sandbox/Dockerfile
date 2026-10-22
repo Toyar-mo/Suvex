@@ -186,7 +186,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #
     # 也**不是**"pwn 也算逆向所以归到 re"：那是把"分类名字"当判据，
     # 而真正该看的是"这套题需要哪些工具"。`_REVERSE_CATEGORIES` 里
-    # 没有 `pwn`，见 `app/ctf2/runner.py` 的注释。
+    # 没有 `pwn`，见 `app/kernel/runner.py` 的注释。
     patchelf gdb \
     # ── 编译工具：**必须在**，不是可选项 ──
     #

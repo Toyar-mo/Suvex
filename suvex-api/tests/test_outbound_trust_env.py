@@ -166,10 +166,10 @@ def _trust_env_values(path: str) -> list[object]:
 @pytest.mark.parametrize(
     "path",
     [
-        "app/ctf2/adapters/transport.py",
-        "app/ctf2/adapters/probe.py",
+        "app/kernel/adapters/transport.py",
+        "app/kernel/adapters/probe.py",
         "app/providers/llm.py",
-        "app/ctf2/runner.py",
+        "app/kernel/runner.py",
         "app/scans/reachability.py",
     ],
 )
@@ -192,8 +192,8 @@ def test_ssrf_surface_clients_are_disabled(path: str) -> None:
 @pytest.mark.parametrize(
     "path",
     [
-        "app/ctf2/client.py",
-        "app/ctf2/attachments.py",
+        "app/kernel/client.py",
+        "app/kernel/attachments.py",
         "app/arena/client.py",
     ],
 )

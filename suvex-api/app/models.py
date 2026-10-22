@@ -20,15 +20,15 @@ from app.audit.models import AuditLog  # noqa: F401
 # noqa: F401 是必要的：这些名字只为了副作用（注册到 Base.metadata）而导入，
 # 静态检查会认为它们是未使用。
 from app.auth.models import AdminAccount, ApiToken, AuthSession  # noqa: F401
-from app.ctf2.models import (  # noqa: F401
+from app.events.models import ActivityEvent, Agent  # noqa: F401
+from app.findings.models import Finding, FindingTimelineEntry  # noqa: F401
+from app.kernel.models import (  # noqa: F401
     Ctf2Account,
     Ctf2Challenge,
     Ctf2Competition,
     Ctf2Environment,
     Ctf2Submission,
 )
-from app.events.models import ActivityEvent, Agent  # noqa: F401
-from app.findings.models import Finding, FindingTimelineEntry  # noqa: F401
 from app.members.models import Member  # noqa: F401
 from app.providers.models import ProviderAccount  # noqa: F401
 from app.reports.models import Report, ReportFinding  # noqa: F401

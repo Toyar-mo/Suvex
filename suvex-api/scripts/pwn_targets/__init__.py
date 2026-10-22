@@ -54,7 +54,7 @@
 ## 为什么靶机跑在**宿主**上，而不是自己起一个容器
 
 `suvex-ctf2` 这个 docker 网络建的时候带 `ICC=false`（见
-`app/ctf2/runner.py` 的 `ensure_ctf2_network`），容器之间**打不通**。
+`app/kernel/runner.py` 的 `ensure_ctf2_network`），容器之间**打不通**。
 实测过：沙箱容器连 `172.18.0.1:31001` 通（那是 bridge 网关），连
 `127.0.0.1:31001` 是 `ConnectionRefusedError`（那是容器自己的回环）。
 

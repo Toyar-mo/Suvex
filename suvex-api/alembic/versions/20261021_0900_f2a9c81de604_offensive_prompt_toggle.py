@@ -22,7 +22,7 @@ Create Date: 2026-10-21 09:00:00.000000+00:00
 
 而 `sandbox_config` 是唯一**被两边共同读取**的单例行：扫描侧走
 `app/scans/service.py` 的 `read_sandbox_config`，解题侧走
-`app/ctf2/runner.py` 的同名函数。开关放在这里，"两边看到的是同一个
+`app/kernel/runner.py` 的同名函数。开关放在这里，"两边看到的是同一个
 值"由结构保证，而不是靠两处各读一次再祈祷它们同步。
 
 ## 为什么 server_default='false'

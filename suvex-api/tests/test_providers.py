@@ -697,7 +697,7 @@ def test_verify_rejects_metadata_equivalents(
 
     原来 `app/providers/llm.py` 用的是 `host in BLOCKED_HOSTS` 字符串比对 ——
     正是 CTF2 那边修掉的形状，而 `hostguard` 就在同一个仓库里却没被复用。
-    实测这几种写法**全部放行**（见 `tests/ctf2/test_hostguard.py` 的对照）。
+    实测这几种写法**全部放行**（见 `tests/kernel/test_hostguard.py` 的对照）。
 
     ⚠️ 这条与 CTF2 那组是**两条不同的路径**：修了 CTF2 不等于修了 provider。
        只测 CTF2 的话，"provider 那条没接上"这个错误完全测不出来。
@@ -727,7 +727,7 @@ def test_provider_and_ctf2_share_one_blocklist() -> None:
     现在两边都从 `app.core.hostguard` 取，这条钉住"不许再各写一份"。
     """
     from app.core import hostguard
-    from app.ctf2 import platforms
+    from app.kernel import platforms
 
     assert platforms.BLOCKED_HOSTS is hostguard.BLOCKED_HOSTS
     # 原先只在 provider 那份里的条目，现在两边都拦得住

@@ -255,7 +255,7 @@ EXERCISES: dict[int, dict[str, Any]] = {
 
 #: 分类树（`/ctf/exercise-list` 的形状：分类在前，题目挂在 corpus 下）
 #:
-#: ★ 五个分类要和 `app/ctf2/runner.py` 里 `CATEGORY_REQUIREMENTS` 对得上 ——
+#: ★ 五个分类要和 `app/kernel/runner.py` 里 `CATEGORY_REQUIREMENTS` 对得上 ——
 #:   Web / Crypto / Pwn / Reverse / Misc。Reverse 是唯一路由到另一个镜像的。
 CATEGORIES = [
     {"id": 10, "name": "Web", "order": 1, "corpus": [1001, 1004]},
@@ -420,7 +420,7 @@ def sandbox_gateway() -> str:
 
     ## 为什么不能是 127.0.0.1
 
-    `app/ctf2/runner.py` 建的 `suvex-ctf2` 网络带 `ICC=false`，容器之间
+    `app/kernel/runner.py` 建的 `suvex-ctf2` 网络带 `ICC=false`，容器之间
     打不通，但**能过网关**。实测（2026-10-18）沙箱里：
 
         172.18.0.1:31001  → 通（banner 拿到）
@@ -592,7 +592,7 @@ def build_app(access_key: str) -> FastAPI:
                 #    复用 31001 —— 那是 `PWN_TARGETS` 里 `pwn_baby` 的真实
                 #    监听端口。踩过：改完之后 `http_request` 打
                 #    `127.0.0.1:31001` 会**连上但永远等不到 HTTP 响应**，
-                #    因为 `_tool_http_request`（app/ctf2/runner.py:2412）是在
+                #    因为 `_tool_http_request`（app/kernel/runner.py:2412）是在
                 #    **宿主进程**里发请求的，而 pwn 靶机绑的是宿主
                 #    `0.0.0.0`。于是每探一次就吃满
                 #    `httpx.Timeout(60.0)`；`#1010` 三次 ReadTimeout = 180s

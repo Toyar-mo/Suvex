@@ -20,7 +20,7 @@ import ast
 import inspect
 import textwrap
 
-from app.ctf2 import runner, scheduler, service
+from app.kernel import runner, scheduler, service
 
 
 def _code_of(func) -> str:  # noqa: ANN001
@@ -295,7 +295,7 @@ def test_autosync_records_its_last_error() -> None:
     source = _code_of(scheduler.Ctf2Scheduler._claim)  # 占位，真正看的是 autosync
     del source
 
-    from app.ctf2 import autosync
+    from app.kernel import autosync
 
     tree = ast.parse(textwrap.dedent(inspect.getsource(autosync)))
     assigns = [

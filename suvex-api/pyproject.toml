@@ -37,7 +37,7 @@ filterwarnings = ["error::DeprecationWarning:app.*"]
 # `auto` 模式让协程用例自动被处理，两种坑都不存在。
 #
 # ⚠️ 影响面：只有 `async def` 的用例受影响，**同步用例一行都不变**。
-#    全仓库目前只有 `tests/ctf2/` 有 async 测试，所以开启它是零副作用 ——
+#    全仓库目前只有 `tests/kernel/` 有 async 测试，所以开启它是零副作用 ——
 #    将来新增的 async 测试则自动正确。
 asyncio_mode = "auto"
 # 显式写出来而不是靠默认值：不写会有 deprecation 警告，

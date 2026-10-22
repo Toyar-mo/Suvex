@@ -232,7 +232,7 @@ def build_overview(db: Session, *, scan_id: str | None = None) -> OverviewOut:
     #    前端据此显示"还没有数据"而不是"0 token"。
     usage: dict = {}
     with contextlib.suppress(Exception):
-        from app.ctf2 import service as ctf2_service
+        from app.kernel import service as ctf2_service
 
         usage = ctf2_service.token_usage_summary(db)
 

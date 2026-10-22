@@ -6,18 +6,18 @@
 
 | 文件 | 唯一的读者 |
 | ---- | ---------- |
-| `ctf2_system.md` | `app/ctf2/runner.py` |
-| `ctf2_agentsec.md` | `app/ctf2/runner.py` |
-| `ctf2_ir.md` | `app/ctf2/runner.py` |
-| `platform_spec.md` | `app/ctf2/adapters/builder.py` |
+| `ctf2_system.md` | `app/kernel/runner.py` |
+| `ctf2_agentsec.md` | `app/kernel/runner.py` |
+| `ctf2_ir.md` | `app/kernel/runner.py` |
+| `platform_spec.md` | `app/kernel/adapters/builder.py` |
 
 所以它们的路径常量就写在各读者自己文件里，没必要集中。
 
-`offensive_playbook.md` 是**第一个例外**：解题（`app/ctf2/runner.py`）
+`offensive_playbook.md` 是**第一个例外**：解题（`app/kernel/runner.py`）
 与渗透扫描（`app/scans/runner.py`）两条路径都要追加它。而这两个模块
 **互相不能顶层 import** —— 它们已经在多个地方用函数内 import 互相引用
-（`app/ctf2/runner.py` 用 `app.scans.runner._base_env`，
-`app/scans/runner.py` 用 `app.ctf2.models.Ctf2Challenge`），
+（`app/kernel/runner.py` 用 `app.scans.runner._base_env`，
+`app/scans/runner.py` 用 `app.kernel.models.Ctf2Challenge`），
 再加一条顶层边就会撞成环。
 
 ## 所以路径常量放这里，而不是复制两份

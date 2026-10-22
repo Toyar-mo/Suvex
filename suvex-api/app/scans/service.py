@@ -1933,7 +1933,7 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
     #   的时间列、一个看磁盘），顺序不影响结果 —— 放前面是因为
     #   "先纠正库内状态、再动磁盘"这条读起来更顺，出问题时日志里
     #   状态那条也排在磁盘那条前面。
-    from app.ctf2 import service as ctf2_service
+    from app.kernel import service as ctf2_service
 
     ctf2_environments_expired = ctf2_service.expire_stale_environments(db)
 

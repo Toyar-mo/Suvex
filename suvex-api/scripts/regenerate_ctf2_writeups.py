@@ -85,9 +85,9 @@ for _stream in (sys.stdout, sys.stderr):
 from sqlalchemy import select  # noqa: E402
 
 from app.core.db import session_scope  # noqa: E402
-from app.ctf2 import runner, service  # noqa: E402
-from app.ctf2 import writeup as writeup_mod  # noqa: E402
-from app.ctf2.models import Ctf2Writeup  # noqa: E402
+from app.kernel import runner, service  # noqa: E402
+from app.kernel import writeup as writeup_mod  # noqa: E402
+from app.kernel.models import Ctf2Writeup  # noqa: E402
 
 #: 与 `runner._save_transcript` 的落点一致。
 SOLVES_DIR = PROJECT_ROOT / "_scan_runs" / "_ctf2_solves"

@@ -94,8 +94,8 @@ def _ctf2_categories(db: Session, scans: list) -> dict[str, str]:
 
     # 局部 import：`scans` 不该在模块加载期依赖 `ctf2`（依赖方向是
     # ctf2 → scans，反过来只能按需取）。与 `service.cleanup` 里
-    # `from app.ctf2 import service as ctf2_service` 是同一个手法。
-    from app.ctf2.models import Ctf2Challenge
+    # `from app.kernel import service as ctf2_service` 是同一个手法。
+    from app.kernel.models import Ctf2Challenge
 
     ids = [scan.id for scan in scans if getattr(scan, "origin", None) == SCAN_ORIGIN_CTF2]
     if not ids:

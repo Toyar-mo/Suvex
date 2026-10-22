@@ -137,7 +137,7 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # `GET /ctf2/accounts` 也在 read 里 —— 它只返回掩码
         # （`tokenMask`），没有凭据本身。
         #
-        # ⚠️ 这几行必须与 `tests/ctf2/test_router_auth_matrix.py` 的
+        # ⚠️ 这几行必须与 `tests/kernel/test_router_auth_matrix.py` 的
         # `READ_ONLY` 逐条一致，那条对账测试会盯着。
         ("GET", "/api/v1/ctf2/accounts"),
         ("GET", "/api/v1/ctf2/competitions"),
@@ -145,7 +145,7 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/ctf2/challenges/{challengeId}"),
         ("GET", "/api/v1/ctf2/snapshot"),
         ("GET", "/api/v1/ctf2/queue"),
-        # ⚠️ 与 `tests/ctf2/test_router_auth_matrix.py` 的同一段必须一致
+        # ⚠️ 与 `tests/kernel/test_router_auth_matrix.py` 的同一段必须一致
         #    （`test_the_two_matrices_agree` 会盯着）。
         ("GET", "/api/v1/ctf2/platforms"),
         ("GET", "/api/v1/ctf2/platforms/{platformId}"),
@@ -332,7 +332,7 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/ctf2/sync"): "scan",
     # ★ v0.43 应急响应：建一个本地复盘任务。与 `POST /scans` 同级 ——
     # 它会消耗 LLM 额度、会起沙箱容器，所以不能给 read。
-    # 同一判据在 `tests/ctf2/test_router_auth_matrix.py` 里也有一份。
+    # 同一判据在 `tests/kernel/test_router_auth_matrix.py` 里也有一份。
     ("POST", "/api/v1/ctf2/ir/tasks"): "scan",
     # 按链接拉单题：写库 + 打平台接口，与 sync 同级。
     ("POST", "/api/v1/ctf2/challenges/pull"): "scan",
@@ -352,11 +352,11 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # ── v0.23 调度优先级 ───────────────────────────────
     # 改的是**队列顺序**：不改安全策略、不对外发动作、可撤销。
     # 与 `cancel`（改状态、不发包）同类，所以是 scan 而不是 admin。
-    # 详见 `tests/ctf2/test_router_auth_matrix.py` 里那段判据。
+    # 详见 `tests/kernel/test_router_auth_matrix.py` 里那段判据。
     ("PUT", "/api/v1/ctf2/challenges/{challengeId}/priority"): "scan",
     ("POST", "/api/v1/ctf2/priorities/by-score"): "scan",
     # ── 平台接入：admin（v0.25）────────────────────────
-    # 判据详见 `tests/ctf2/test_router_auth_matrix.py` 的同名段落：
+    # 判据详见 `tests/kernel/test_router_auth_matrix.py` 的同名段落：
     # 这几个端点让服务端去打**用户给的地址**、并把凭据写进账号表。
     ("POST", "/api/v1/ctf2/platforms/draft"): "admin",
     ("POST", "/api/v1/ctf2/platforms/{platformId}/activate"): "admin",

@@ -94,9 +94,9 @@ from sqlalchemy import select  # noqa: E402
 
 from app.core.db import session_scope  # noqa: E402
 from app.core.vocab import Ctf2ChallengeStatus  # noqa: E402
-from app.ctf2 import runner, service  # noqa: E402
-from app.ctf2 import writeup as writeup_mod  # noqa: E402
-from app.ctf2.models import Ctf2Challenge  # noqa: E402
+from app.kernel import runner, service  # noqa: E402
+from app.kernel import writeup as writeup_mod  # noqa: E402
+from app.kernel.models import Ctf2Challenge  # noqa: E402
 from app.scans.models import Scan  # noqa: E402
 
 #: transcript 存放处。与 `runner._save_transcript` 的落点必须一致。

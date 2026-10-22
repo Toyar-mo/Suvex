@@ -100,7 +100,7 @@ wc -l suvex-web/docs/api-contract.md
 
 
 > ⚠️ 写这段时我自己就先踩了一次：第一版把测试函数数写成 **650**、
-> 契约行数写成 **2,930** —— 前者漏数了 `tests/ctf2/` 子目录，
+> 契约行数写成 **2,930** —— 前者漏数了 `tests/kernel/` 子目录，
 > 后者是把字节数当成了行数。**两个数字都是"看起来很像"的那种错**，
 > 所以上面那几条命令必须真的跑一遍，不能凭印象填。
 
@@ -484,7 +484,7 @@ $ docker exec suvextest-api-1 sh -c "which strix docker"
 > 由**本项目自己的生命周期**发出，有三个真实发出点，都不依赖 strix：
 > `app/scans/service.py:1387`（用户终止扫描）、
 > `app/scans/scheduler.py:809`（服务重启回收，活着 → `blocked` / 已死 → `failed`）、
-> `app/ctf2/events.py:431`（CTF2 平台判 flag 错 —— 受阻但可继续，故意不用
+> `app/kernel/events.py:431`（CTF2 平台判 flag 错 —— 受阻但可继续，故意不用
 > `failed`，否则"猜错 flag"这个常态会让每题都闪一次红）。
 > 所以"strix 没给这个信号"与"这个类型是空的"是两件事，别混成一句。
 
@@ -512,7 +512,7 @@ $ docker exec suvextest-api-1 sh -c "which strix docker"
 
 ### 4. 跨题方法卡：**机制已实现；五轮重复后，「少兜圈子」这个效应没能站住（n=1 的正向信号被推翻）**
 
-CTF2 现在会把每次解题提炼成一张**方法卡**（`app/ctf2/notes.py`），
+CTF2 现在会把每次解题提炼成一张**方法卡**（`app/kernel/notes.py`），
 下次遇到同类题时召回进 prompt —— 目标是"同类题第二次遇到不必从零摸索"。
 
 | 项 | 状态 |
@@ -537,7 +537,7 @@ CTF2 现在会把每次解题提炼成一张**方法卡**（`app/ctf2/notes.py`�
 **为什么必须重跑**：n=1 那次用的 commit 是 `4cb0339`，而当时 mock 给每道
 非 pwn 题都广告了一条 `isProxy` 的代理靶机（把 `9999` 映射到 `31001`）。
 `31001` 在真 pwn 靶机启用（`78e003f`）后变成"接受连接但永不回 HTTP 响应"，
-而 `_tool_http_request` 的超时是 **60 秒**（`app/ctf2/runner.py:3309`），
+而 `_tool_http_request` 的超时是 **60 秒**（`app/kernel/runner.py:3309`），
 模型每用 `http_request` 探一次就烧满一分钟。`#1003` 那次 33 次工具调用
 是干净基线（9.6 次）的 **3.4 倍** —— 那批数字混着环境摩擦，不是方法卡。
 

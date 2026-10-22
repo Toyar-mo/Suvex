@@ -36,7 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.prompts import OFFENSIVE_PLAYBOOK_PATH, load_offensive_playbook
-from app.ctf2.runner import build_system_prompt, load_system_prompt
+from app.kernel.runner import build_system_prompt, load_system_prompt
 from app.scans.runner import LaunchSpec, StrixRunner
 
 API = "/api/v1"

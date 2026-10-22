@@ -32,7 +32,7 @@ from sqlalchemy import event, select
 
 from app.core.ids import new_id
 from app.core.vocab import SCAN_ORIGIN_CTF2, ScanGoal, ScanStatus
-from app.ctf2.models import Ctf2Challenge, Ctf2Competition
+from app.kernel.models import Ctf2Challenge, Ctf2Competition
 from app.scans import router as scans_router
 from app.scans.models import Scan
 from app.scans.schemas import ScanOut

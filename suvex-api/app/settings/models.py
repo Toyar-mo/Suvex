@@ -130,7 +130,7 @@ class SandboxConfig(Base):
 
     # ── 越权与注入手法块的开关（v0.42）────────────────────────
     #
-    # 打开后，**解题**（`app/ctf2/runner.py`）与**渗透扫描**
+    # 打开后，**解题**（`app/kernel/runner.py`）与**渗透扫描**
     # （`app/scans/runner.py`）两条路径的提示词末尾都会追加
     # `prompts/offensive_playbook.md` 那一块手法矩阵。关着时两条路径
     # 的提示词**逐字节不变**（连那个文件都不读）。
@@ -141,7 +141,7 @@ class SandboxConfig(Base):
     # （`app/scans/` 下对 `ctf2` 的引用全是注释性的）；而 `sandbox_config`
     # 是**唯一被两边共同读的单例行** —— 扫描侧走
     # `app/scans/service.py` 的 `read_sandbox_config`，解题侧走
-    # `app/ctf2/runner.py` 的同名函数。把它放进 `ctf2_config` 就等于
+    # `app/kernel/runner.py` 的同名函数。把它放进 `ctf2_config` 就等于
     # 宣布它只管解题，而那与「共用一套手法」的要求相反。
     #
     # ## ★ 为什么是**非空 bool**，而不是像上面三列那样可空、NULL 跟 env 走

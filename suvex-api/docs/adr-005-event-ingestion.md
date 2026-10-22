@@ -100,7 +100,7 @@ docstring 确实存在，**但那个工具在 `strix-agent` 1.6.2 里不存在**
 > 契约的 `blocked` 由**本项目自己的生命周期**发出，有三个真实发出点，都不依赖 strix：
 > `app/scans/service.py:1387`（用户主动终止扫描）、
 > `app/scans/scheduler.py:809`（服务重启回收上一个进程：活着 → `blocked`，已死 → `failed`）、
-> `app/ctf2/events.py:431`（CTF2 平台判 flag 错 —— 受阻但可继续，故意不用 `failed`，
+> `app/kernel/events.py:431`（CTF2 平台判 flag 错 —— 受阻但可继续，故意不用 `failed`，
 > 否则"猜错 flag"这个常态会让每题都闪一次红）。
 > 撤掉的只是"从 strix 事件流里**推导**出 `blocked`"这条路，不是这个类型本身。
 

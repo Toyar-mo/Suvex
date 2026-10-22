@@ -1,10 +1,10 @@
 """`app.arena` —— 对接**赛事方下发的 AI Agent API**（`api_doc.md`）。
 
-## 为什么不复用 `app/ctf2/`
+## 为什么不复用 `app/kernel/`
 
 因为契约不同，而且是**结构性的不同**：
 
-| | `app/ctf2/`（ctf2.dasdctf.com） | `app/arena/`（赛事方 Agent API） |
+| | `app/kernel/`（ctf2.dasdctf.com） | `app/arena/`（赛事方 Agent API） |
 | --- | --- | --- |
 | 认证 | `Authorization: Bearer <PAT>` | `X-Agent-AccessKey` |
 | 信封 | `{data, success}` | **`{code, message, data}`**，失败也是 HTTP 200 |
@@ -19,7 +19,7 @@
 ## 但解题那一侧要复用
 
 "在沙箱里让模型解题、产出 flag、提交"这一段与平台无关 ——
-沙箱容器、工具循环、flag 提取都在 `app/ctf2/runner.py` 里，已经过验证。
+沙箱容器、工具循环、flag 提取都在 `app/kernel/runner.py` 里，已经过验证。
 `arena` 只负责"取题 / 起环境 / 提交"这三件平台相关的事。
 
 ## 契约里最容易被误读的三点

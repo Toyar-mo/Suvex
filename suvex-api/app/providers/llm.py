@@ -72,7 +72,7 @@ DEFAULT_BASE_URLS: dict[str, str] = {
 #   `0xA9FEA9FE`、`0251.0376.0251.0376`、`[::ffff:169.254.169.254]`
 #   这些 `getaddrinfo` 全认、字符串一个都不等的写法。原判据是
 #   `host in BLOCKED_HOSTS`，实测这五种写法**全部放行**（见
-#   `hostguard` 的模块说明与 `tests/ctf2/test_hostguard.py`）。
+#   `hostguard` 的模块说明与 `tests/kernel/test_hostguard.py`）。
 
 # provider 品牌 → LiteLLM 的模型前缀（任务 3：要把模型名交给 strix）。
 #

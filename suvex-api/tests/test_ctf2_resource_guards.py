@@ -20,7 +20,7 @@ import inspect
 import textwrap
 from pathlib import Path
 
-from app.ctf2 import runner
+from app.kernel import runner
 
 _WEB_SRC = Path(__file__).resolve().parents[2] / "suvex-web" / "src"
 

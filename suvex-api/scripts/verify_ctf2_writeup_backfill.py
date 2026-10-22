@@ -39,7 +39,7 @@ from sqlalchemy import select  # noqa: E402
 
 from app.core.db import session_scope  # noqa: E402
 from app.core.vocab import Ctf2ChallengeStatus  # noqa: E402
-from app.ctf2.models import Ctf2Challenge  # noqa: E402
+from app.kernel.models import Ctf2Challenge  # noqa: E402
 
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from backfill_ctf2_writeups import (  # noqa: E402
@@ -48,7 +48,7 @@ from backfill_ctf2_writeups import (  # noqa: E402
     _transcript_for,
 )
 
-from app.ctf2 import writeup as writeup_mod  # noqa: E402
+from app.kernel import writeup as writeup_mod  # noqa: E402
 
 #: 从 transcript 里抓一个真实 host（脱敏版会把它掩掉）。
 _HOST = re.compile(r"https?://([a-zA-Z0-9][a-zA-Z0-9.\-]{6,})")

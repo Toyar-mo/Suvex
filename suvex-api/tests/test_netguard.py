@@ -654,8 +654,8 @@ def test_the_async_decision_comes_from_the_pool_not_the_client_class(
 
     ## 这条是那 51 条回归的回归闸（2026-10-16）
 
-    失败现场是：夹具打的是 `app.ctf2.client.httpx.AsyncClient`，而
-    `app.ctf2.client.httpx` **就是全局那个 httpx 模块对象** ——
+    失败现场是：夹具打的是 `app.kernel.client.httpx.AsyncClient`，而
+    `app.kernel.client.httpx` **就是全局那个 httpx 模块对象** ——
     于是那一步污染的是 **httpx 模块自己的属性**，本模块读到的
     `httpx.AsyncClient` 变成了工厂函数，
     `isinstance(client, httpx.AsyncClient)` 抛
@@ -666,7 +666,7 @@ def test_the_async_decision_comes_from_the_pool_not_the_client_class(
     因为它按**池**的类型判，根本不读那个名字。
 
     ⚠️ 这条在旧实现下必红（实测过）。测试侧那个污染也已修掉
-    （`tests/ctf2/conftest.py` 改成换模块绑定），但**生产侧的加固
+    （`tests/kernel/conftest.py` 改成换模块绑定），但**生产侧的加固
     必须独立成立** —— 否则生产代码仍然依赖一个"运行时可被替换的名字"，
     而那是这次事故的根因，不是它的表象。
     """
