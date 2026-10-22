@@ -6,7 +6,6 @@ import {
   SCAN_MODE_LABEL,
   type ExecutionSource,
   type SandboxConfig,
-  type SandboxStatus,
   type ScanMode,
 } from '@/data/settings'
 import { saveSandbox } from '@/data/settings-store'
@@ -23,25 +22,18 @@ import { useMemo, useState } from 'react'
  *
  * ## 任务 13 之后这一页不再有"未交付"的占位
  *
- * 状态（运行中/已停止/异常）现在来自 `GET /settings/sandbox`，
- * 即数据库里那一行 —— 而它由 `health.py` 按 Docker 的真实情况维护。
  * 保存走 `PUT /settings/sandbox`，**不需要重启服务**。
  *
- * ⚠️ 沙箱容器配额里**只有三项能真下发**（任务 14 已接上，走 strix 的环境变量）：
- *   CPU、内存、禁止出网。另外两项 —— **单次超时**与**允许写入挂载卷** ——
- *   执行后端没有对应开关（strix 全包没有扫描级墙钟超时；工作区挂载恒为读写），
- *   它们会被保存但不会改变行为。界面必须把这五个字段**分开标注**，
- *   否则用户会以为"我把内存调到 512MB 就限制了扫描"而实际什么也没发生。
+ * ⚠️ 自研引擎下各字段的真实生效情况（2026-10 实测，`scans/agent_runner.py`）：
+ *   · CPU、内存 —— ✅ 真下发（`SolveSpec.cpus/memory_mb` → 临时容器）；
+ *   · 禁止出网 —— ⚠️ 只对本地形态（repo/path/artifact）生效；url/service
+ *     这类"要去连别人"的目标**强制开网**（否则工具全连不上，渗透必然失败）；
+ *   · 扫描深度 —— ✅ 决定回合天花板（快速 40 / 标准 80 / 深度 150）；
+ *   · 回合上限 —— ✅ 与深度天花板取较小值（不再是旧版"永远夹 80"的死值）；
+ *   · 单次超时、允许写入挂载卷 —— ❌ 自研引擎仍无对应开关，保存但不改行为。
+ * 界面必须把这些分开标注，否则用户会以为"我把内存调到 512MB 就限制了扫描"
+ * 而实际什么也没发生。
  */
-
-const STATUS_META: Record<
-  SandboxStatus,
-  { label: string; tone: 'ok' | 'idle' | 'risk'; note: string }
-> = {
-  running: { label: '运行中', tone: 'ok', note: '沙箱容器已就绪，可以接受扫描任务。' },
-  stopped: { label: '已停止', tone: 'idle', note: '沙箱未运行，发起的扫描会排队等待。' },
-  error: { label: '异常', tone: 'risk', note: '沙箱启动失败，请检查 Docker 服务与镜像。' },
-}
 
 export interface SandboxPanelProps {
   config: SandboxConfig
@@ -129,30 +121,30 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
     setSaveState({ kind: 'idle' })
   }
 
-  /*
-    ★ 状态现在来自后端（`GET /settings/sandbox`），可以照实渲染了 ——
-    不再是内存里那份写着 `running` 的假初值。
-
-    ⚠️ 但仍要克制：`health.py` 当前的实现是"如实返回配置里**记录**的状态"，
-    并不去问 Docker 守护进程（本后端还不管理容器）。所以这里能说的是
-    "配置认为它在跑"，而不是"我确认过容器在跑"。后者是 `health.py` 的待办。
-  */
-  const statusMeta = STATUS_META[config.status]
-
   return (
     <SettingsPanel
       id="sandbox"
       title="沙箱与执行环境"
       description="扫描时的代码执行、PoC 验证都在隔离容器内完成，不会直接作用于你的机器。"
     >
-      {/* ── 运行状态（只读） ── */}
+      {/* ── 运行方式（说明性，不是实时容器状态） ── */}
+      {/*
+        ★ 这里原来把后端配置里的一列 `status` 当成「Docker 容器现在在不在跑」
+        渲染出「Docker 沙箱 · 已停止 / 沙箱未运行，发起的扫描会排队等待」。
+        那是**错的两层**：
+          ① 后端根本不管理常驻容器，`status` 是配置里记的一个值（默认
+             `stopped`），从没被改成 `running` —— 它不是实时状态；
+          ② 更关键：自研引擎的沙箱是**按每次任务临时起容器**（`ctf2-sandbox`
+             那一族镜像，本地构建），跑完即销毁，压根没有「一个常驻沙箱」。
+             所以「已停止 ⇒ 扫描排队等待」是假话 —— 扫描照跑。
+        改成如实描述「每次扫描按需起一个隔离容器」，不再假装有常驻状态。
+        `config.status` 仍保留在类型里（后端契约未变），只是不再当实时灯用。
+      */}
       <div className="flex flex-wrap items-center gap-x-tight gap-y-2 rounded-sm border border-line bg-surface-sunken p-3">
         <span
           className={cn(
             'flex h-7 w-7 shrink-0 items-center justify-center rounded-pill',
-            statusMeta.tone === 'ok' && 'bg-signal-ok/15 text-signal-ok',
-            statusMeta.tone === 'idle' && 'bg-ink-ghost/20 text-ink-faint',
-            statusMeta.tone === 'risk' && 'bg-signal-risk/15 text-signal-risk',
+            'bg-signal-ok/15 text-signal-ok',
           )}
         >
           <Boxes size={14} strokeWidth={1.75} aria-hidden="true" />
@@ -160,10 +152,13 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
 
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex flex-wrap items-center gap-1.5">
-            <span className="text-sm text-ink">Docker 沙箱 · {statusMeta.label}</span>
-            <span className="mono-ui text-ink-faint">{config.image}</span>
+            <span className="text-sm text-ink">沙箱与执行环境 · 每次扫描按需启动</span>
+            <span className="mono-ui text-ink-faint">内核镜像 ctf2-sandbox 系列</span>
           </span>
-          <span className="text-2xs text-ink-faint">{statusMeta.note}</span>
+          <span className="text-2xs text-ink-faint">
+            每条扫描任务开跑时起一个隔离容器（本地镜像），跑完即销毁，不在宿主机上长期驻留。
+            下面的 CPU / 内存上限作用于这个临时容器。
+          </span>
         </div>
       </div>
 
@@ -310,8 +305,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <div className="flex flex-col gap-0.5">
           <span className="text-xs font-medium text-ink">执行</span>
           <span className="text-2xs text-ink-faint">
-            与容器配额不同，这三项是<strong className="font-medium text-ink-muted">真的生效</strong>的：
-            并发几秒内生效，回合上限与扫描深度对之后新发起的扫描生效。都不需要重启服务。
+            这三项<strong className="font-medium text-ink-muted">真的生效</strong>：
+            并发几秒内生效；「扫描深度」决定回合的天花板（快速 40 / 标准 80 / 深度 150 轮），
+            「回合上限」在其下再收细 —— 两者取较小值；对之后新发起的扫描生效。都不需要重启服务。
           </span>
         </div>
 
@@ -344,7 +340,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
           <Field
             label="单个 agent 回合上限"
             htmlFor="sandbox-turns"
-            help="strix 的 --max-turns。调小能明显缩短单次扫描，代价是复杂题目可能没跑完就被截断。"
+            help="一次扫描最多跑多少轮。实际值取它与你选的「扫描深度」天花板中较小的那个（快速 40 / 标准 80 / 深度 150）。调小能缩短单次扫描，代价是复杂目标可能没跑完就被截断。"
             error={touched ? errors.turns : null}
           >
             <NumberInput

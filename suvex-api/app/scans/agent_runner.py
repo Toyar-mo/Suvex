@@ -781,7 +781,7 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
     ⚠️ 这个函数是纯函数（只读 `LaunchSpec`），不碰数据库 ——
     调用点在 `_run_engine` 里，那里同样没有 session。
     """
-    from app.core.vocab import PentestCategory
+    from app.core.vocab import PentestCategory, ScanMode
     from app.kernel import runner as ctf2_runner
 
     # ── 目标 → access_urls ────────────────────────────────
@@ -838,10 +838,31 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
     # `offensive` 也打开：渗透评估要的不是"排除"手法，而是"用全手法
     # 打一遍再判"。手法块对 pentest 分类**照常生效**（它不是被排除的
     # 场景包 —— 见 `build_system_prompt` 的排除只针对 agentsec/ir）。
-    max_turns = spec.scan_max_turns or 80
-    # 与 ctf2 的默认档对齐；扫描侧给的可能很大（500），但单次评估
-    # 80 轮已经足够，太多轮会把墙钟拖到不可控。上限夹到 80。
-    max_turns = min(int(max_turns), 80)
+    # ── 回合预算：由「扫描深度」与「回合上限」两个设置共同决定 ──────
+    #
+    # 原来这里写死 `min(scan_max_turns, 80)`，于是：
+    #   ① 用户在设置页把「回合上限」调到 200/500，实际永远只有 80 ——
+    #      界面说了算的是个假数（填了不生效，是静默截断）；
+    #   ② 「扫描深度」（quick/standard/deep）对自研引擎**完全没被读取**，
+    #      是个死配置（只在 strix 的 argv 里用过）。
+    #
+    # 现按「深度定档、上限定细」两条分工：
+    #   · 扫描深度给出**档位天花板**（quick 40 / standard 80 / deep 150）——
+    #     这是"这次要挖多深"的粗粒度语义，也是成本护栏；
+    #   · 回合上限是用户更细的旋钮，取二者较小值 —— 用户可以说"标准深度
+    #     但只给我 50 轮"，但不能靠填 500 突破 deep 也才 150 的天花板。
+    # 这样两个旋钮都真有行为，界面上写的与实际一致（不再需要免责声明）。
+    _DEPTH_CEILING = {
+        ScanMode.QUICK.value: 40,
+        ScanMode.STANDARD.value: 80,
+        ScanMode.DEEP.value: 150,
+    }
+    # 认不出的深度取值退回 standard 的天花板（不静默当成 deep 烧钱）。
+    depth = (spec.scan_mode or ScanMode.STANDARD.value).strip().lower()
+    ceiling = _DEPTH_CEILING.get(depth, _DEPTH_CEILING[ScanMode.STANDARD.value])
+    requested = int(spec.scan_max_turns or ceiling)
+    # 下限 10 轮（少于它基本做不完任何评估），上限取档位天花板。
+    max_turns = max(10, min(requested, ceiling))
 
     return ctf2_runner.SolveSpec(
         challenge_id=spec.scan_id,

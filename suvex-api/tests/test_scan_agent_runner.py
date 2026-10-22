@@ -88,10 +88,59 @@ def test_pentest_spec_non_url_kinds_have_no_access_url(kind: str) -> None:
     assert solve.access_urls == ()
 
 
-def test_pentest_spec_turns_clamped_to_eighty() -> None:
-    # 扫描侧可能给 500 轮，但单次评估 80 轮足够；不夹的话墙钟会失控。
-    assert agent_runner.build_solve_spec_from_scan(_spec(scan_max_turns=500)).max_turns == 80
-    assert agent_runner.build_solve_spec_from_scan(_spec(scan_max_turns=40)).max_turns == 40
+def test_pentest_spec_turns_follow_scan_mode_ceiling() -> None:
+    """回合上限由「扫描深度」定档、「回合上限」定细，二者取较小值。
+
+    回归锁：旧实现写死 `min(scan_max_turns, 80)`，导致
+      ① 用户把「回合上限」调到 200/500 永远只有 80（界面填了不生效）；
+      ② 「扫描深度」对自研引擎完全没被读，是死配置。
+    现 quick/standard/deep 各自给天花板 40/80/150，用户填入的值取较小值。
+    """
+    # deep 才能跑到 150（旧实现永远 80）
+    assert (
+        agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=500, scan_mode="deep")
+        ).max_turns
+        == 150
+    )
+    # standard 天花板 80（与旧默认一致）
+    assert (
+        agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=500, scan_mode="standard")
+        ).max_turns
+        == 80
+    )
+    # quick 天花板 40
+    assert (
+        agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=500, scan_mode="quick")
+        ).max_turns
+        == 40
+    )
+    # 用户填得比天花板小 → 尊重用户值（细旋钮有效）
+    assert (
+        agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=40, scan_mode="deep")
+        ).max_turns
+        == 40
+    )
+    # 下限 10：填 1 也不会真的只跑 1 轮
+    assert (
+        agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=1, scan_mode="standard")
+        ).max_turns
+        == 10
+    )
+
+
+def test_pentest_spec_unknown_scan_mode_falls_back_to_standard_ceiling() -> None:
+    # 认不出的深度退回 standard 天花板，不静默当成 deep 烧钱。
+    assert (
+        agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=500, scan_mode="banana")
+        ).max_turns
+        == 80
+    )
 
 
 def test_pentest_spec_network_isolation_for_network_targets_is_forced_open() -> None:

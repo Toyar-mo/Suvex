@@ -220,9 +220,9 @@ export interface SandboxConfig {
   // 并发是秒级生效，另外两项在**下一次发起扫描**时生效。
   /** 同时运行的扫描数上限。超出的排队（不是拒绝） */
   maxConcurrentScans: number
-  /** 单个 agent 的回合上限（strix 的 --max-turns） */
+  /** 单个 agent 的回合上限（实际值取它与「扫描深度」天花板中较小者） */
   scanMaxTurns: number
-  /** 扫描深度（strix 的 --scan-mode） */
+  /** 扫描深度（决定回合预算的天花板：快速 40 / 标准 80 / 深度 150） */
   scanMode: ScanMode
   /** 上面三项当前来自哪里（用户设过 / 环境默认） */
   executionSource: ExecutionSource
