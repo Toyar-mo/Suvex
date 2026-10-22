@@ -62,7 +62,7 @@ from app.events.models import Agent
 from app.events.service import append_event
 from app.providers.models import ProviderAccount
 from app.scans import targets, uploads
-from app.scans.models import Scan
+from app.scans.models import Scan, ScanHint
 from app.scans.reachability import (
     Reachability,
     check_reachability,
@@ -2020,8 +2020,103 @@ def compare_scans(db: Session, *, a_id: str, b_id: str) -> dict:
     }
 
 
+# ══════════════════════════════════════════════════════════
+# 运行中的人机协同：人类给智能体补线索（P2，v0.57）
+# ══════════════════════════════════════════════════════════
+
+#: 单条线索的长度上限。定 500 而不是几千的理由：
+#: 线索是**提示**不是「重写任务书」—— 太长会挤占上下文里本轮真实工具输出
+#: 的位置，反而让模型偏离。想给大段背景应写进建任务时的 `brief`。
+MAX_HINT_CHARS: int = 500
+
+
+def add_hint(db: Session, scan_id: str, text: str, *, author: str | None = None) -> ScanHint:
+    """给一条**正在跑**的扫描补一条线索。
+
+    ## 为什么只允许给 running 的扫描补
+
+    排队（queued）的扫描还没开跑，用户的意图应该体现在 `brief` 里（任务书），
+    而不是一条「跑起来才看得到」的线索；已结束的扫描补线索没有任何作用点。
+    允许这两类会制造「我补了但没反应」的困惑 —— 与 `_CTF2_SHELL_REFUSAL`
+    同一条纪律：不能做的事要明说，并给出替代动作。
+
+    ## 为什么不在这里唤醒调度器
+
+    线索由引擎**自己每轮来取**（见 `agent_runner` 的 `hint_provider`），
+    不需要调度器推送。多一条唤醒路径只会多一处不一致的可能。
+    """
+    scan = get_scan(db, scan_id)
+    clean = (text or "").strip()
+    if not clean:
+        raise ApiError.validation("线索内容不能为空。")
+    if len(clean) > MAX_HINT_CHARS:
+        raise ApiError.validation(
+            f"线索最多 {MAX_HINT_CHARS} 字，当前 {len(clean)} 字。"
+            "想给大段背景请写进建任务时的「任务说明」。"
+        )
+    if scan.status != "running":
+        raise ApiError.conflict(
+            ErrorCode.SCAN_NOT_ABORTABLE,
+            "只能给正在运行的扫描补充线索。"
+            "这条扫描当前不在运行中 —— 若还没开始请把线索写进任务说明，"
+            "若已结束请发起一次新的扫描。",
+        )
+    hint = ScanHint(id=new_id("hint"), scan_id=scan_id, text=clean, author=author)
+    db.add(hint)
+    db.flush()
+    return hint
+
+
+def pending_hint(db: Session, scan_id: str, *, turn: int | None = None) -> ScanHint | None:
+    """取下一条**尚未注入**的线索并**立刻标记为已注入**（幂等消费）。
+
+    ## 为什么取与标记在同一个函数里
+
+    如果分开两步（先查、后由调用方标记），调用方忘了标记就会每轮重复注入
+    同一条线索 —— 历史被它塞满。合在一起，单次调用就是一次「原子取走」。
+
+    ## `turn` 记「被注入进第几轮」
+
+    诊断用：某条线索在第 3 轮补、第 5 轮才进去，中间两轮模型在忙别的 ——
+    这解释了「为什么我给的线索像是没生效」。
+
+    ## ⚠️ 它跑在引擎线程自己的同步 Session 里
+
+    引擎主循环是 async 且**刻意不碰 DB**（见 `agent_runner._run_engine` 的
+    docstring）。所以这个函数由 `agent_runner` 在**引擎线程的同步段**调用，
+    用一条**单独开的短会话**，不共享请求的 Session。
+    """
+    hint = db.scalars(
+        select(ScanHint)
+        .where(ScanHint.scan_id == scan_id, ScanHint.consumed_at.is_(None))
+        .order_by(ScanHint.created_at, ScanHint.id)
+        .limit(1)
+    ).first()
+    if hint is None:
+        return None
+    if turn is not None:
+        hint.consumed_turn = turn
+    hint.consumed_at = now_utc()
+    db.flush()
+    return hint
+
+
+def list_hints(db: Session, scan_id: str, *, limit: int = 100) -> list[ScanHint]:
+    """列出一条扫描的全部线索（按时间正序）—— 界面回显用。"""
+    return list(
+        db.scalars(
+            select(ScanHint)
+            .where(ScanHint.scan_id == scan_id)
+            .order_by(ScanHint.created_at, ScanHint.id)
+            .limit(limit)
+        )
+    )
+
+
 __all__ = [
+    "MAX_HINT_CHARS",
     "abort_scan",
+    "add_hint",
     "batch_restore",
     "batch_set_archived",
     "batch_set_deleted",
@@ -2041,6 +2136,8 @@ __all__ = [
     "get_scan",
     "launch_scan",
     "list_scans",
+    "list_hints",
+    "pending_hint",
     "read_log_tail",
     "count_scan_agents",
     "refresh_scan_rollup",

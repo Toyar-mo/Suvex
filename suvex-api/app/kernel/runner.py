@@ -3628,6 +3628,31 @@ def _final_stretch_note(remaining: int) -> str:
     )
 
 
+def _human_hint_note(hint: str) -> str:
+    """把人运行中补充的线索包成一条注入消息（v0.57，P2）。
+
+    ## 为什么要包一层，而不是把原文直接 append
+
+    裸文本会被模型当成"又一段上下文"扫过就忘。包一层明确标注
+    「这是人在你运行过程中补充的线索」，模型才知道它**优先级高于**
+    它自己的探索方向 —— 这正是"人机协同"要的那个效果：人看过程看到
+    卡点，直接给方向，模型下一轮就转向。
+
+    ## ⚠️ 措辞纪律
+
+    「请把它并入你当前的判断，但不要因此放弃已有证据」—— 防止模型
+    因为一条人类线索就丢掉前面几十轮已经确认的事实（那是比"不听人"
+    更糟的失败：把已验证的证据作废）。人给的是**增量**，不是**重置**。
+    """
+    return (
+        "📌 人在你运行过程中补充了一条线索（不是系统指令，是一位工程师看着你的"
+        "过程后给的提示）。请把它并入你当前的判断：\\n"
+        f"\\n{hint}\\n\\n"
+        "⚠️ 但不要因为这条线索就放弃你**已经验证过**的证据 —— 它是对你当前方向的"
+        "增量补充，不是让你推倒重来。如果这条线索与你已确认的事实冲突，以证据为准。"
+    )
+
+
 def _sandbox_revived_note(round_no: int) -> str:
     """沙箱被重建之后，告诉模型"这是新容器、旧东西没了"（v0.43）。
 
@@ -3808,6 +3833,7 @@ async def solve_in_sandbox(
     system_prompt: str,
     transcript: list[str] | None = None,
     on_progress: Callable[[str, str, dict[str, str]], None] | None = None,
+    hint_provider: Callable[[], str | None] | None = None,
 ) -> SolveOutcome:
     """在已启动的沙箱里跑解题循环，直到产出候选或回合用尽。
 
@@ -3835,6 +3861,32 @@ async def solve_in_sandbox(
     ⚠️ 回调**不允许抛异常**：它由 worker 包成"写不进就记 warning"。
     一次事件写失败不该让已经跑了 30 轮的解题循环停下 ——
     过程是给人看的，结果才是要交的。
+
+    ## ★ v0.57 `hint_provider`：运行中的人机协同（P2）
+
+    `hint_provider` 是一个**无参回调**，每轮开始前被调用一次，返回
+    一条人类在运行中补充的线索（或 `None` 表示没有）。返回非 `None`
+    时它被追加进 `recent`（`role="user"`），下一轮模型就能看到。
+
+    ### 为什么用回调而不是直接传一个队列
+
+    本函数按设计**不碰数据库**（见上面的 ⚠️）。队列住在 DB，而读 DB
+    需要同步 Session —— 在 async 里同步查库会阻塞事件循环。所以由
+    **调用方**（worker 的同步段）持有 Session 并实现这个回调：
+    每轮开始前 worker 已经把"有没有新线索"查好，回调只是把那条字符串
+    交出来。这样本函数仍然对 DB 一无所知。
+
+    ### 为什么追加成 `role="user"` 而不是 system
+
+    模型对"用户刚说的"遵从度高于"系统一直说的" —— 系统提示词在
+    `_messages()` 里每轮都在，模型会逐渐当背景；而一条新鲜的 user
+    消息是"新信息"。这与 `_final_stretch_note` / `_sandbox_revived_note`
+    的做法一致（那些也是 `role="user"`）。
+
+    ### ⚠️ 回调也要"不抛"
+
+    与 `on_progress` 同一条纪律：取线索失败（DB 抖一下）不该让一次
+    跑了三十轮的解题停摆。所以下面用 try 包住，异常只记 warning。
     """
     log = transcript if transcript is not None else []
     # ★★ v0.35：备用接入点（换模 fallback）。
@@ -3995,6 +4047,33 @@ async def solve_in_sandbox(
             remaining = spec.max_turns - turn
             if remaining == FINAL_STRETCH_TURNS:
                 recent.append({"role": "user", "content": _final_stretch_note(remaining)})
+            # ★ v0.57：每轮开始前问一次"人有没有补线索"（P2 人机协同）。
+            #
+            # 放在 final_stretch 之后、chat 之前：这样这一轮模型一定能看到
+            # 最新的线索。`hint_provider` 是调用方（worker 同步段）给的
+            # 无参回调 —— 本函数不碰 DB，只把它返回的字符串追加进 recent。
+            #
+            # ⚠️ 回调失败只记 warning，不中断解题（理由见函数 docstring：
+            #    取线索失败不该让已经跑了三十轮的解题停摆）。
+            if hint_provider is not None:
+                try:
+                    hint = hint_provider()
+                except Exception:  # noqa: BLE001 - 见 docstring 的"回调也要不抛"
+                    logger.warning("读取人给线索失败，本轮跳过", exc_info=True)
+                    hint = None
+                if hint:
+                    recent.append({"role": "user", "content": _human_hint_note(hint)})
+                    log.append(f"[turn {turn}] 已注入人给线索：{hint[:80]}")
+                    # 注入也是一条过程事件 —— 人要知道"我给的线索进去了"，
+                    # 否则他会怀疑输入框没生效而反复输入。
+                    try:
+                        notify(
+                            "reasoning",
+                            f"已把人工线索并入本轮推理：{hint[:60]}",
+                            {"text": hint[:200]},
+                        )
+                    except Exception:  # noqa: BLE001 - notify 内部已吞，这里再兜一层
+                        logger.warning("推送人工线索事件失败", exc_info=True)
             try:
                 reply = await gateway.chat(_messages(), system=system_prompt)
             except KernelError as exc:

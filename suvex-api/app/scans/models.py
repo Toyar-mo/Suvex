@@ -315,3 +315,53 @@ class Scan(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return f"<Scan id={self.id!r} status={self.status!r} target={self.target!r}>"
+
+
+class ScanHint(Base):
+    """运行中人类给智能体补的一条线索（P2 人机协同）。
+
+    ## 为什么线索要做成**排队**而不是「一条就覆盖」
+
+    智能体一轮可能要跑几十秒。人在这期间可能连着补两条（先「去试试
+    /admin」再「记得看 .env」）。如果只用一条可变字段，后来的会覆盖
+    先来的，而先来那条模型还没读到 —— 等于人白打字。所以按行排队。
+
+    ## `consumed_at` 记录「这条被哪一轮注入了」
+
+    它是**幂等键的另一半**：引擎每轮开始前取「最早一条 `consumed_at IS NULL`
+    的行」并立刻置位。这样一条线索只会注入一次，而不是每轮重复灌进
+    `recent`。没有它，模型会连续几轮看到同一条线索，且历史被它塞满。
+
+    ## 为什么 `author` 存字符串而不是外键
+
+    与 `Scan.authorized_by` 同一口径：留痕要的是「谁写的」这个事实，
+    而不是一个可能被删的账号行。删了成员也解释得清当时是谁给的线索。
+    """
+
+    __tablename__ = "scan_hints"
+    __table_args__ = (
+        # 列表查询走 (scan_id, consumed_at)：找「该扫描下还没被读的线索」。
+        Index("ix_scan_hints_scan_consumed", "scan_id", "consumed_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    scan_id: Mapped[str] = mapped_column(String(40), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    # 谁给的线索（用户名或 「system」）。留痕用，不做外键。
+    author: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 非空 = 已被某一轮注入过（只注入一次，见类 docstring）。
+    consumed_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    # 被注入进第几轮（诊断用：人在第 3 轮补的线索，第 5 轮才进去，
+    # 中间 2 轮模型在忙别的 —— 这解释了「为什么我的线索像是没生效」）。
+    consumed_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+
+    @property
+    def is_consumed(self) -> bool:
+        return self.consumed_at is not None
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<ScanHint id={self.id!r} scan_id={self.scan_id!r} consumed={self.is_consumed}>"
+
+
+__all__ = ["Scan", "ScanHint"]

@@ -2256,6 +2256,16 @@ def learn_from_solve(db: Session, challenge: KernelChallenge, outcome) -> None: 
         #    内部做），因为模型的自由文本完全可能把目标地址、甚至
         #    密钥原文写进去，而卡片会进另一道题的 prompt。
         ruled_out=list(outcome.ruled_out or []),
+        # ★ v0.56：从分类推导"这张卡属于哪一侧"（offensive/defensive/None）。
+        # 只标侧，不猜 generic —— 跨场景通用是人工判断，前缀推不出来。
+        #
+        # ⚠️ 用 `challenge.category`（题目**原始**分类）而不是上面
+        # 校验后的 `category`：场景包开关关着时 `validate_note_category`
+        # 会把 `ir-*` / `agentsec-*` 退回空串（那是"不许这类卡参与召回"
+        # 的合规处理），但**这张卡属于哪一侧**是事实，与开关无关。
+        # 用空串去推会丢掉侧标，让同一道题在开关开/关两种部署里写出
+        # 侧标不同的卡 —— 而 side 只是排序/可读性辅助，不该随开关漂移。
+        domain=notes_mod.domain_for_category(challenge.category or ""),
     )
 
     # ★ v0.40：判定这张卡是"命中"还是"排除"还是"待跟进"。
@@ -2288,13 +2298,15 @@ def learn_from_solve(db: Session, challenge: KernelChallenge, outcome) -> None: 
                 category=category,
                 solved=solved_effective,
                 verdict=verdict,
-                **fields,
+                domain=fields.get("domain"),
+                **{k: v for k, v in fields.items() if k != "domain"},
             )
         )
     else:
         existing.category = category
         existing.solved = solved_effective
         existing.verdict = verdict
+        existing.domain = fields.get("domain")
         existing.approach = fields["approach"]
         existing.tools = fields["tools"]
         existing.dead_ends = fields["dead_ends"]

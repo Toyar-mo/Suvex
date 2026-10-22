@@ -326,6 +326,31 @@ class ScanAttachmentOut(CamelModel):
     sizeBytes: int
 
 
+class HintIn(StrictModel):
+    """人在运行中给智能体补的一条线索（P2 人机协同）。
+
+    只收 `text` 一个字段。**不给客户端传 `author`** —— 那是留痕字段，
+    由服务端从当前身份取（客户端能传就能伪造"是别人给的"）。
+    """
+
+    text: str = Field(min_length=1, max_length=500)
+
+
+class HintOut(CamelModel):
+    """一条线索的回执。
+
+    `consumed` / `consumedTurn` 让界面能区分「已送达模型」与「还在排队」——
+    否则用户看到自己刚输入的线索挂着，会以为没生效而反复输入。
+    """
+
+    id: str
+    text: str
+    author: str | None
+    consumed: bool
+    consumedTurn: int | None
+    createdAt: IsoDateTime
+
+
 class StagedAttachmentsOut(CamelModel):
     """暂存结果（任务 12）。
 
@@ -475,6 +500,8 @@ __all__ = [
     "BatchRerunOut",
     "BatchResultOut",
     "CompareOut",
+    "HintIn",
+    "HintOut",
     "ScanCreate",
     "ScanOut",
     "ScanRerun",

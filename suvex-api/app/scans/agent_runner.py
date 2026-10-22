@@ -505,6 +505,32 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
     )
     system_prompt = ctf2_runner.build_system_prompt_by_spec(solve_spec)
 
+    # ★ v0.57 P2 人机协同：每轮开始时问一次「人有没有补线索」。
+    #
+    # 引擎主循环不碰 DB（见本函数 docstring），而 `hint_provider` 是个
+    # 同步无参回调 —— 它在本线程里被 `solve_in_sandbox` await 期间同步调用。
+    # 这个线程**独占**自己的事件循环（不是服务的那个），所以在这里同步查库
+    # 不会阻塞任何人；但会话必须**每次新开、用完即关**：跨轮复用一个
+    # 长会话会把连接钉住一整次扫描（可能几十分钟），把连接池耗干。
+    def _hint_provider() -> str | None:
+        from app.core.db import get_session_factory
+        from app.scans import service as scans_service
+
+        factory = get_session_factory()
+        session = factory()
+        try:
+            hint = scans_service.pending_hint(session, spec.scan_id)
+            if hint is None:
+                return None
+            session.commit()
+            return hint.text
+        except Exception:  # noqa: BLE001 - 取线索失败不该让跑了三十轮的扫描停摆
+            session.rollback()
+            logger.warning("扫描 %s：读取人工线索失败，本轮跳过", spec.scan_id, exc_info=True)
+            return None
+        finally:
+            session.close()
+
     try:
         sandbox.start()
     except Exception:  # noqa: BLE001
@@ -530,6 +556,7 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
             system_prompt=system_prompt,
             stop_event=stop_event,
             on_progress=on_progress,
+            hint_provider=_hint_provider,
         )
     finally:
         # ★ 唯一的容器清理路径（见模块 docstring「线程杀不掉」一节）。
@@ -560,6 +587,7 @@ async def _solve_with_stop(
     system_prompt: str,
     stop_event: threading.Event,
     on_progress,
+    hint_provider=None,
 ) -> object:
     """跑 `solve_in_sandbox`，并在 `stop_event` 被设置时取消它。
 
@@ -580,6 +608,7 @@ async def _solve_with_stop(
             gateway=gateway,  # type: ignore[arg-type]
             system_prompt=system_prompt,
             on_progress=on_progress,
+            hint_provider=hint_provider,
         )
     )
     while not task.done():

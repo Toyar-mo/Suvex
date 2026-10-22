@@ -56,6 +56,8 @@ from app.scans.schemas import (
     BatchRerunOut,
     BatchResultOut,
     CompareOut,
+    HintIn,
+    HintOut,
     ScanAttachmentOut,
     ScanCreate,
     ScanOut,
@@ -549,7 +551,74 @@ def abort_scan(  # noqa: N803
     return ScanOut.from_model(scan, ctf2Category=_category_of(db, scan))
 
 
-@router.delete("/{scanId}/purge", status_code=status.HTTP_204_NO_CONTENT, summary="永久删除")
+def _hint_out(hint) -> HintOut:
+    return HintOut(
+        id=hint.id,
+        text=hint.text,
+        author=hint.author,
+        consumed=hint.is_consumed,
+        consumedTurn=hint.consumed_turn,
+        createdAt=hint.created_at,
+    )
+
+
+@router.post(
+    "/{scanId}/hints",
+    response_model=HintOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="给运行中的扫描补一条线索（人机协同）",
+)
+def add_hint(  # noqa: N803
+    scanId: str, payload: HintIn, request: Request, identity: ScanDep, db: DbDep
+) -> HintOut:
+    """人在运行中给智能体补线索。
+
+    ## 为什么需要它
+
+    智能体正在跑的时候，人看到活动流里它走错了方向（比如在无用路径上
+    反复撞 404），却没有办法把它拉回来 —— 只能等它跑完再重跑，浪费一轮
+    LLM 额度。这个端点让人能把一句话送进**下一轮**的上下文。
+
+    ## 只允许 `running`
+
+    见 `service.add_hint`：`queued` 该写进任务说明，终态没有作用点。
+
+    ## 线索最终怎么到模型手里
+
+    引擎每轮开始前调 `hint_provider` 取一条未读线索并标成已读
+    （见 `agent_runner` 与 `kernel.runner.solve_in_sandbox`）。
+    """
+    hint = service.add_hint(db, scanId, payload.text, author=identity.username)
+    # ★ upgrade 为 `scan` 级（与 abort 同级）：它改变智能体接下来会做什么。
+    # 只读令牌不该能改一次正在跑的扫描的行为。
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.SCAN_HINT,
+        summary=f"给运行中的扫描补充了一条线索：{payload.text[:60]}",
+        target=scanId,
+        detail={"text": payload.text[:500]},
+    )
+    return _hint_out(hint)
+
+
+@router.get(
+    "/{scanId}/hints",
+    response_model=list[HintOut],
+    summary="列出这条扫描的全部线索（含已送达/待送达）",
+)
+def list_hints(  # noqa: N803
+    scanId: str, _identity: ReadDep, db: DbDep
+) -> list[HintOut]:
+    """回显用：让用户在活动流里看到自己给过的线索，以及哪条已送达。"""
+    return [_hint_out(h) for h in service.list_hints(db, scanId)]
+
+
+@router.delete(
+    "/{scanId}/purge",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="永久删除一条扫描记录",
+)
 def purge_scan(  # noqa: N803
     scanId: str, request: Request, identity: ScanDep, db: DbDep
 ) -> None:

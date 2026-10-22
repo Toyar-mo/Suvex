@@ -93,6 +93,9 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/scans/{scanId}/agents"),
         ("GET", "/api/v1/scans/{scanId}/events"),
         ("GET", "/api/v1/scans/{scanId}/events/recent"),
+        # ★ v0.57：线索回显是**只读** —— 只是把"我给过哪些线索"读回来。
+        #   写入那条（POST /hints）在 SCOPE_GATED 里，因为它改变智能体的行为。
+        ("GET", "/api/v1/scans/{scanId}/hints"),
         ("GET", "/api/v1/events"),
         ("GET", "/api/v1/findings"),
         ("GET", "/api/v1/findings/stats"),
@@ -183,6 +186,10 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/scans/{scanId}/rerun"): "scan",
     # 续跑（任务 16）：与重跑同级 —— 它同样会继续对真实目标发包。
     ("POST", "/api/v1/scans/{scanId}/resume"): "scan",
+    # ★ v0.57：运行中补线索。`scan` 级而不是 read —— 它改变智能体接下来
+    #   会做什么（把一句话送进下一轮上下文，可能扭转整个方向）。
+    #   给 read 的话，只读令牌就能操纵一次正在跑的扫描的决策。
+    ("POST", "/api/v1/scans/{scanId}/hints"): "scan",
     # ★ v0.13：批量归档 / 软删除 / 恢复 / 重跑 / 永久删除。
     # 它们**改变数据**，而 `read` 的定义是"只读" ——
     # 给更低级别的话，一个只读令牌就能把整页扫描归档或删进回收站，

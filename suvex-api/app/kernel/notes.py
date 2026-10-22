@@ -1246,7 +1246,8 @@ def build_note_fields(
     agentsec: bool = False,
     ruled_out: list[str] | None = None,
     ir: bool = False,
-) -> dict[str, str]:
+    domain: str | None = None,
+) -> dict[str, str | None]:
     """从一次解题的产物里提炼出卡片的三个字段（**全部已脱敏**）。
 
     ## 输入是什么、能提炼出什么
@@ -1286,10 +1287,13 @@ def build_note_fields(
         solved: 是否解出来了（`verdict == confirmed`）。
         agentsec: 本题是否属于智能体安全场景包。
         ir: 本题是否属于应急响应场景包（v0.41）。
+        domain: 领域标签（v0.56，见 `vocab.NoteDomain`）；`generic` 会
+            被**所有**分类召回，另两档只在本侧可见，`None` = 不标注。
     """
     tools = tools_from_transcript(transcript)
     steps = key_steps_from_transcript(transcript)
 
+    from app.core.vocab import normalize_domain
     if solved:
         head = "解出来了。关键步骤（按时间序，前几步往往是识别与解包）："
     else:
@@ -1368,6 +1372,8 @@ def build_note_fields(
         "approach": sanitize_for_reuse(approach, limit=MAX_NOTE_CHARS * 2),
         "tools": tools,
         "dead_ends": dead_ends,
+        # ★ v0.56：领域标签，收敛到合法取值（认不出 → None，不猜成 generic）。
+        "domain": normalize_domain(domain),
     }
 
 
@@ -1551,6 +1557,32 @@ def is_pentest_category(category: str) -> bool:
     from app.core.vocab import PENTEST_CATEGORY_PREFIX
 
     return (category or "").strip().startswith(PENTEST_CATEGORY_PREFIX)
+
+
+def domain_for_category(category: str) -> str | None:
+    """从一个分类推导它的**侧**（`offensive` / `defensive`），推不出返回 `None`。
+
+    ## ★ v0.56：这是"默认侧"，不是"跨场景通用"
+
+    这里按题型前缀推的是**这张卡天然属于哪一侧**：
+
+      · `pentest-*` → `offensive`（攻击评估侧的方法）；
+      · `ir-*`      → `defensive`（应急响应/取证侧的方法）；
+      · 其余（五个 CTF 题型、`agentsec-*`）→ `None`（不标侧）。
+
+    ⚠️ **它绝不返回 `generic`**。`generic`（跨场景通用）是"这张卡的
+    方法在攻防两侧都成立"的**人工判断**，靠前缀推不出来 —— 用前缀
+    猜成 generic 会让一张只属于攻击侧的卡泄漏到应急响应上下文里，
+    而模型会把它当成"防守经验"用。所以自动标注只敢标"属于哪一侧"，
+    跨场景那一档留给显式的写入路径（见 `learn_from_solve` 的说明）。
+    """
+    from app.core.vocab import NoteDomain
+
+    if is_pentest_category(category):
+        return NoteDomain.OFFENSIVE.value
+    if is_ir_category(category):
+        return NoteDomain.DEFENSIVE.value
+    return None
 
 
 #: `ruled_out` 的四项证据要求（场景包 §5.2），以及**每项的残缺标记**。
@@ -1795,11 +1827,14 @@ def render_notes_for_prompt(notes: list[object], *, limit: int = MAX_NOTES_IN_PR
 def notes_for_challenge(db, challenge, *, limit: int = MAX_NOTES_IN_PROMPT) -> list:  # noqa: ANN001
     """找出与这道题**同类**的方法卡（召回）。
 
-    ## 判据：同分类，优先已解出的，排除自己
+    ## 判据：同分类**或跨场景通用**，优先已解出的，排除自己
 
     1. **同 `category`** —— 这是当前唯一可靠的相似度信号。
        附件指纹相似度更准，但那需要先下载完附件（同步阶段），
        而召回发生在解题开始前 —— 那时附件可能还没下完。
+       ★ v0.56 起再加一条 `OR domain == 'generic'`：跨场景通用卡
+       （见 `vocab.NoteDomain`）对**任何**分类都可见。这正是「一个内核
+       多场景」—— 在渗透侧学到的方法，应急响应侧也能召回。
     2. **排除自己** —— 注入自己的卡等于把"上次做到哪"当成"别的题的经验"，
        而那是 `resume` 该做的事，两者混淆会让模型分不清。
     3. **已解出的排前面** —— 成功的卡信息量更大；失败的卡（`dead_ends`）
@@ -1810,9 +1845,14 @@ def notes_for_challenge(db, challenge, *, limit: int = MAX_NOTES_IN_PROMPT) -> l
     标题相似度会误召回：`[FlareOn3]GUI` 与 `[FlareOn4]GUI` 标题极像，
     但可能一道是 .NET、一道是 Go。而**误召回比不召回更坏** ——
     它会让模型按错误的思路走，而它还以为是"经验"。
-    """
-    from sqlalchemy import select
 
+    ⚠️ `generic` 这条 `OR` 就是"主动扩大召回面"，与上一条纪律看似矛盾 ——
+    所以 `domain` 只在**写入侧被判为跨场景通用**时才置 `generic`（见
+    `learn_from_solve` + `normalize_domain`），不是随便哪张卡都能进。
+    """
+    from sqlalchemy import or_, select
+
+    from app.core.vocab import GENERIC_NOTE_DOMAIN
     from app.kernel.models import KernelSolveNote
 
     category = (getattr(challenge, "category", "") or "").strip()
@@ -1824,7 +1864,12 @@ def notes_for_challenge(db, challenge, *, limit: int = MAX_NOTES_IN_PROMPT) -> l
     rows = (
         db.execute(
             select(KernelSolveNote)
-            .where(KernelSolveNote.category == category)
+            .where(
+                or_(
+                    KernelSolveNote.category == category,
+                    KernelSolveNote.domain == GENERIC_NOTE_DOMAIN,
+                )
+            )
             .where(KernelSolveNote.challenge_id != challenge.id)
             # 已解出的排前面（`solved` 是 bool，降序即 True 优先）。
             .order_by(KernelSolveNote.solved.desc(), KernelSolveNote.updated_at.desc())

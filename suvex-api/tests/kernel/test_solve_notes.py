@@ -509,7 +509,7 @@ def test_build_note_fields_never_includes_the_flag() -> None:
         solved=True,
     )
 
-    blob = " ".join(fields.values())
+    blob = " ".join(str(v) for v in fields.values() if v is not None)
     assert "secret_value" not in blob, "★ flag 原文进了卡片"
     assert "flag{" not in blob
 
@@ -1331,4 +1331,183 @@ def test_learn_marks_ruled_out_as_solved(
     )
     assert row.solved is True, (
         "★ 跑完全套测试后确认排除，仍被记成未解决（缺陷 1 未修复）"
+    )
+
+
+# ══════════════════════════════════════════════════════════
+# 七、★★ v0.56：domain 字段与跨场景召回
+#
+# 「通用智能体」的标志：在一个场景学到的方法，换个场景还能用。
+# 这一节验证 domain 的三档语义与「generic 卡跨分类可见」这条召回规则。
+# ══════════════════════════════════════════════════════════
+
+
+def test_normalize_domain_accepts_known_values() -> None:
+    """三个合法取值都能原样通过（大小写/空白归一）。"""
+    from app.core.vocab import normalize_domain
+
+    assert normalize_domain("offensive") == "offensive"
+    assert normalize_domain("DEFENSIVE") == "defensive"
+    assert normalize_domain("  generic  ") == "generic"
+
+
+def test_normalize_domain_unknown_returns_none_never_generic() -> None:
+    """★★ 认不出的取值返回 None，**绝不返回 generic**。
+
+    降级方向必须更保守：把一张只属于某一侧的卡猜成 generic，会让它
+    泄漏到所有场景 —— 模型会把攻击经验当防守经验用。
+    """
+    from app.core.vocab import normalize_domain
+
+    assert normalize_domain("forensic") is None
+    assert normalize_domain("") is None
+    assert normalize_domain(None) is None
+    assert normalize_domain("agentsec-prompt-injection") is None
+
+
+def test_domain_for_category_maps_sides_but_never_generic() -> None:
+    """pentest→offensive、ir→defensive、其余→None，**没有一个返回 generic**。"""
+    from app.kernel.notes import domain_for_category
+
+    assert domain_for_category("pentest-evaluation") == "offensive"
+    assert domain_for_category("ir-root-cause") == "defensive"
+    assert domain_for_category("web") is None
+    assert domain_for_category("agentsec-tool-escalation") is None
+    assert domain_for_category("") is None
+    # 前缀判定的核心：不因为"看起来通用"就猜 generic。
+    assert domain_for_category("pentest-evaluation") != "generic"
+
+
+def test_build_note_fields_passes_domain_through() -> None:
+    """build_note_fields 把 domain 归一后放进返回字典。"""
+    fields = notes_mod.build_note_fields(
+        transcript="", error="", candidates=[], solved=True, domain="offensive"
+    )
+    assert fields["domain"] == "offensive"
+    # 没传 → None（旧卡行为，不猜侧）。
+    fields2 = notes_mod.build_note_fields(
+        transcript="", error="", candidates=[], solved=True
+    )
+    assert fields2["domain"] is None
+
+
+def test_learn_stamps_domain_from_category(
+    db_session: Session, ctf2_competition
+) -> None:
+    """写卡时 domain 按分类自动标侧（pentest→offensive）。"""
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
+
+    ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="dom-pentest",
+        category="pentest-evaluation",
+    )
+    row = _learn(db_session, ch, _FakeOutcome(transcript="", error=""))
+    assert row.domain == "offensive"
+
+
+def test_learn_stamps_defensive_for_ir_category(
+    db_session: Session, ctf2_competition
+) -> None:
+    """IR 分类 → defensive。"""
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
+
+    ch = _make_challenge(
+        db_session, ctf2_competition, remote_id="dom-ir",
+        category="ir-root-cause",
+    )
+    row = _learn(db_session, ch, _FakeOutcome(transcript="", error=""))
+    assert row.domain == "defensive"
+
+
+def test_generic_note_is_recalled_across_categories(
+    db_session: Session, ctf2_challenge, ctf2_competition
+) -> None:
+    """★★ 核心：`domain='generic'` 的卡能被**不同分类**的题召回。
+
+    这是「一个内核多场景」的硬证据 —— 造一张 generic 卡挂在某个
+    完全不同的分类下，验证当前分类的题仍然召回它。
+    """
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
+
+    other = _make_challenge(
+        db_session, ctf2_competition, remote_id="generic-src",
+        category="完全不同的分类-xx",
+    )
+    db_session.add(
+        _note_for(
+            db_session,
+            other.id,
+            category="完全不同的分类-xx",
+            approach="端口不通时先怀疑协议没猜对，而不是目标挂了",
+            domain="generic",
+        )
+    )
+    db_session.commit()
+
+    rows = notes_mod.notes_for_challenge(db_session, ctf2_challenge)
+    approaches = [r.approach for r in rows]
+    assert "端口不通时先怀疑协议没猜对，而不是目标挂了" in approaches, (
+        "★ generic 卡没有被跨分类召回 —— 跨场景复用失效"
+    )
+
+
+def test_non_generic_domain_stays_within_category(
+    db_session: Session, ctf2_challenge, ctf2_competition
+) -> None:
+    """★★ 反向对照：`domain='offensive'`（非 generic）的卡**不会**跨分类召回。
+
+    否则就是"所有卡都跨场景可见"，等于取消了分类隔离。
+    """
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
+
+    other = _make_challenge(
+        db_session, ctf2_competition, remote_id="offensive-src",
+        category="另一个不同分类-yy",
+    )
+    db_session.add(
+        _note_for(
+            db_session,
+            other.id,
+            category="另一个不同分类-yy",
+            approach="只属于攻击侧的专属做法",
+            domain="offensive",
+        )
+    )
+    db_session.commit()
+
+    rows = notes_mod.notes_for_challenge(db_session, ctf2_challenge)
+    approaches = [r.approach for r in rows]
+    assert "只属于攻击侧的专属做法" not in approaches, (
+        "★ 非 generic 卡跨分类泄漏了 —— 分类隔离失效"
+    )
+
+
+def test_null_domain_keeps_old_category_only_behavior(
+    db_session: Session, ctf2_challenge, ctf2_competition
+) -> None:
+    """★★ 旧卡（domain=NULL）行为与改动前逐字节相同：只按分类召回。
+
+    这是"纯增量迁移"的验收 —— 加 domain 列不能改变任何既有卡的召回面。
+    """
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
+
+    other = _make_challenge(
+        db_session, ctf2_competition, remote_id="null-domain-src",
+        category="又一个不同分类-zz",
+    )
+    db_session.add(
+        _note_for(
+            db_session,
+            other.id,
+            category="又一个不同分类-zz",
+            approach="旧卡的旧做法（无 domain）",
+            domain=None,
+        )
+    )
+    db_session.commit()
+
+    rows = notes_mod.notes_for_challenge(db_session, ctf2_challenge)
+    approaches = [r.approach for r in rows]
+    assert "旧卡的旧做法（无 domain）" not in approaches, (
+        "★ NULL domain 的旧卡跨分类泄漏了 —— 增量迁移破坏了既有行为"
     )

@@ -525,6 +525,11 @@ class AuditAction(StrEnum):
     # "谁在什么时候把哪个文件交给了哪次扫描"必须可回答。
     SCAN_ATTACH = "scan.attach"
     SCAN_ATTACH_DELETE = "scan.attach_delete"
+    # v0.57（P2 人机协同）：给正在跑的扫描补线索。
+    # 单列一条而不是并进 SCAN_ATTACH 的理由：留痕要能回答
+    # 「这次扫描里人到底插了多少次话」，那是评估"人在环里"是否真的
+    # 起了作用的第一手数据，与"传了几个附件"是两个不同的问题。
+    SCAN_HINT = "scan.hint"
     # ── v0.20（任务 17）：CTF2 平台对接 ──
     #
     # ★ 这一组里**每一条都能对应一个"事后必须能回答的问题"**，
@@ -614,6 +619,7 @@ AUDIT_ACTION_LABELS: Final[dict[str, str]] = {
     AuditAction.FINDING_ATTACH_DELETE: "删除附件",
     AuditAction.SCAN_ATTACH: "上传任务附件",
     AuditAction.SCAN_ATTACH_DELETE: "删除任务附件",
+    AuditAction.SCAN_HINT: "给运行中的扫描补充线索",
     AuditAction.CTF2_ACCOUNT_BIND: "绑定 CTF2 账号",
     AuditAction.CTF2_ACCOUNT_UNBIND: "解绑 CTF2 账号",
     AuditAction.CTF2_SYNC: "同步 CTF2 赛事与题目",
@@ -1051,6 +1057,55 @@ PENTEST_CATEGORY_PREFIX: Final[str] = "pentest-"
 
 #: 合法取值。
 PENTEST_CATEGORIES: Final[frozenset[str]] = frozenset(c.value for c in PentestCategory)
+
+
+# ── 方法卡的领域标签（v0.56，跨场景能力复用）──────────────────
+#
+# ## 它解决什么问题
+#
+# 方法卡（`suvex_solve_notes`）原来只按 `category` 精确召回：IR 复盘
+# 拿不到任何渗透的卡，反之亦然。而「通用智能体」的标志恰恰是
+# **在一个场景学到的方法，换个场景还能用**（见《通用智能体能力审计》§3.1）。
+#
+# ## 三档语义
+#
+#   · `offensive` —— 只在攻击侧有意义（如「wpscan 扫 WordPress 前先看版本」）；
+#   · `defensive` —— 只在防守侧有意义（如「查 /var/log/secure 找爆破痕迹」）；
+#   · `generic`   —— **跨场景通用**（如「端口不通时先怀疑协议没猜对，而不是
+#                    目标挂了」）。这一档的卡会被**所有分类**召回。
+#
+# ## ⚠️ 可空列而不是必填枚举
+#
+# 列 `NULL` = 旧卡（加这列之前写的），按 `category` 精确召回处理，
+# 行为与加这列之前**逐字节相同**。所以这是一次纯增量改动，不迁移
+# 任何既有数据，也不需要 CHECK 约束（取值不受数据库限制，靠写入侧
+# 的 `normalize_domain` 收敛）。
+class NoteDomain(StrEnum):
+    """方法卡的领域标签。`generic` 跨场景可见，另两档只在本侧可见。"""
+
+    OFFENSIVE = "offensive"
+    DEFENSIVE = "defensive"
+    GENERIC = "generic"
+
+
+#: 合法取值。
+NOTE_DOMAINS: Final[frozenset[str]] = frozenset(d.value for d in NoteDomain)
+
+#: 跨场景召回的判据值。`notes_for_challenge` 用它把 generic 卡捞进任何分类。
+GENERIC_NOTE_DOMAIN: Final[str] = NoteDomain.GENERIC.value
+
+
+def normalize_domain(value: str | None) -> str | None:
+    """把外部传进来的 domain 收敛到合法取值，认不出返回 `None`。
+
+    ⚠️ 认不出返回 `None`（= 未标注、按 category 精确召回），**不返回
+    `generic`** —— 后者会让一张本该只在本侧可见的卡泄漏到所有场景。
+    降级方向必须是"更保守"，不是"更开放"。
+    """
+    if not value:
+        return None
+    v = value.strip().lower()
+    return v if v in NOTE_DOMAINS else None
 
 #: 证据分级的**全部合法取值** —— 域无关，`agentsec-*` 与 `ir-*` 共用。
 #:

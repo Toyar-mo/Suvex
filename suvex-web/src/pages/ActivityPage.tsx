@@ -1,9 +1,11 @@
 import EventStream, { StreamToolbar } from '@/components/activity/EventStream'
 import AgentRoster from '@/components/activity/AgentRoster'
+import { HintComposer } from '@/components/activity/HintComposer'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { FlagChip } from '@/components/ui/FlagChip'
 import type { Agent } from '@/data/activity'
 import { createSseEventSource } from '@/data/activity-stream'
+import { loadScanHints, type ScanHint } from '@/data/scan-hints'
 import { stallInfo, type Scan } from '@/data/scan'
 import { loadScans, useScansState } from '@/data/scans-store'
 import { useActivityStream } from '@/hooks/useActivityStream'
@@ -109,6 +111,50 @@ export function ActivityPage() {
   useEffect(() => {
     void loadScans()
   }, [])
+
+  /**
+   * 人给智能体补的线索（P2 人机协同，v0.57）。
+   *
+   * ## 为什么要在这里也存一份
+   *
+   * 线索不是事件流的一部分（它不进 `activity_events`），所以不能从 SSE
+   * 派生。这里单独维护一个列表，用途有二：
+   *   1. 让用户在事件流里看到「我给过哪些线索」，而不是输入完就消失；
+   *   2. 显示每条线索是**待送达**还是**已送达**（`consumed`）——
+   *      只有能区分这两者，用户才不会因为"没看到它在动"而反复输入。
+   *
+   * ## 只在指定扫描时加载 / 显示
+   *
+   * 全局流（没有 `?scan=`）下没有"这一次"的概念，补线索也无从谈起。
+   *
+   * 轮询而不是只拉一次：线索被引擎取走后 `consumed` 会从 false 变 true，
+   * 只拉一次就永远停在"待送达"，反而是误导。
+   */
+  const [hints, setHints] = useState<ScanHint[]>([])
+  useEffect(() => {
+    if (!scanFilter) {
+      setHints([])
+      return
+    }
+    let cancelled = false
+    const refresh = () => {
+      loadScanHints(scanFilter)
+        .then((list) => {
+          if (!cancelled) setHints(list)
+        })
+        .catch(() => {
+          /* 线索回显失败不影响事件流 —— 它是次要部分，不弹错页 */
+        })
+    }
+    refresh()
+    const timer = window.setInterval(refresh, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(timer)
+    }
+  }, [scanFilter])
+
+  const isRunning = filteredScan?.status === 'running'
 
   /**
    * agent 名册 —— `GET /scans/{id}/agents`。
@@ -288,6 +334,46 @@ export function ActivityPage() {
             </span>
           )}
         </StreamToolbar>
+
+        {/*
+          ★ 运行中补线索（P2 人机协同）。只在「这次扫描是 running」时出现 ——
+          排队中该写任务说明、已结束没有作用点（与后端 add_hint 的 409 判断一致）。
+        */}
+        {scanFilter && isRunning && (
+          <HintComposer
+            scanId={scanFilter}
+            onAdded={(hint) => setHints((prev) => [...prev, hint])}
+          />
+        )}
+
+        {/*
+          已补的线索回显。贴在事件流上方，让用户看见「我给的线索还在不在、
+          送没送到模型」。没有它，输入完就消失的框会让人怀疑是否真的生效。
+          `consumed` 区分「排队中」与「已送达当前轮」。
+        */}
+        {scanFilter && hints.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1 border-b border-line px-panel py-1">
+            <span className="text-2xs text-ink-faint">已补线索 {hints.length} 条：</span>
+            {hints.slice(-4).map((h) => (
+              <span
+                key={h.id}
+                className={cn(
+                  'inline-flex max-w-[28ch] items-center gap-1 truncate rounded-xs border px-1.5 py-0.5 text-2xs',
+                  h.consumed
+                    ? 'border-line text-ink-muted'
+                    : 'border-signal-warn/40 text-signal-warn',
+                )}
+                title={
+                  h.consumed
+                    ? `已送达模型（第 ${h.consumedTurn ?? '?'} 轮）`
+                    : '还在排队，等智能体下一轮开始时会看到'
+                }
+              >
+                {h.consumed ? '已送达' : '排队中'} · {h.text}
+              </span>
+            ))}
+          </div>
+        )}
 
         <EventStream
           events={visibleEvents}

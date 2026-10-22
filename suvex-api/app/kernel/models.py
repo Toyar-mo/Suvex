@@ -970,6 +970,20 @@ class KernelSolveNote(Base):
     #: 它让新题不必重走同一条死路。
     dead_ends: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
+    #: 领域标签（v0.56，见 `vocab.NoteDomain`）：`offensive` / `defensive` /
+    #: `generic`，或 `None`（未标注，旧卡）。
+    #:
+    #: ## ★ 它让"一个场景学到的方法"能跨到另一个场景
+    #:
+    #: `notes_for_challenge` 的召回 = `category 精确 OR domain == 'generic'`。
+    #: 于是「端口不通先怀疑协议」这种与攻防两侧都有关的方法，写一次
+    #: 就能被渗透扫描和应急响应同时召回 —— 这是「通用智能体」最直接
+    #: 的证据，也是可证伪的实验（造一张 generic 卡，看另一侧是否用到）。
+    #:
+    #: ⚠️ 可空：`NULL` = 加这列之前的旧卡，召回行为与改动前逐字节相同。
+    #:    所以这是一次纯增量迁移，不需要回填、不需要 CHECK。
+    domain: Mapped[str | None] = mapped_column(String(16), nullable=True, default=None)
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
