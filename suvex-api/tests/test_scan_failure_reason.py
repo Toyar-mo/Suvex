@@ -206,3 +206,62 @@ def test_did_not_start_reads_runner_from_scan_when_not_passed(scan: Scan) -> Non
 
     assert "自研引擎 没能启动" in reason
     assert "strix" not in reason
+
+
+def test_reasoning_that_mentions_rate_limiting_is_not_a_429(scan: Scan) -> None:
+    """★★★ v0.69：模型在推理里**否定**限流（"No lockout or rate limiting confirmed"），
+    不能被读成「模型服务限流」。
+
+    2026-10-22 P0 重跑真跑暴露：旧的宽正则 `rate[_ ]?limit(?:...)?` 里后缀是**可选**的，
+    于是裸的 `rate limiting` 也命中。一次跑了 351 条事件、1802 秒、6 个智能体的真实
+    评估，日志尾部只有这一句推理带 "rate limiting"，整条扫描就被报成「模型服务限流」。
+    """
+    _log_path(scan).write_text(
+        "[reasoning] No lockout or rate limiting confirmed. Let me test the login.\n"
+        "[tool_call] run_shell curl -sS http://target/api/v1/users/\n",
+        encoding="utf-8",
+    )
+    scan.log_path = str(_log_path(scan))
+
+    reason = service._failure_reason(scan, 1)
+
+    assert "模型服务限流" not in reason, f"推理里的 rate limiting 不能被当限流：{reason!r}"
+
+
+def test_engine_terminal_error_line_wins_over_earlier_keyword_hits(scan: Scan) -> None:
+    """★★★ v0.69：引擎写在**最后一行**的 `error: <真实原因>` 必须压过更靠前的
+    关键词命中（工具输出/推理里命中已知错误短语的行）。
+
+    真跑形态：日志中部有一行命中已知错误短语（例如某次请求真的撞到
+    `rate_limit_exceeded`，或任何已知失败关键词），而末尾引擎写的是
+    `error: 扫描超过设置页指定的单次超时，已被引擎停止。`。
+    旧实现**从头往尾扫、命中即返回**，于是更早的命中盖掉真正的超时原因。
+    这里的更早命中用**严格版仍会命中**的供应商短语，确保测试锁的是
+    「顺序」而不是「正则宽严」。
+    """
+    _log_path(scan).write_text(
+        "[tool_call] run_shell curl -sS http://target/api/v1/users/\n"
+        "HTTP 429 Too Many Requests\n"  # 更早的、严格正则仍命中的一行
+        "[tool_call] run_shell curl -sS http://target/api/v1/system/health\n"
+        "error: 扫描超过设置页指定的单次超时，已被引擎停止。\n",
+        encoding="utf-8",
+    )
+    scan.log_path = str(_log_path(scan))
+
+    reason = service._failure_reason(scan, 1)
+
+    assert "超时" in reason, f"应取引擎的终止行（超时），而不是更早的假命中：{reason!r}"
+    assert "模型服务限流" not in reason
+
+
+def test_engine_terminal_error_line_still_maps_known_failure(scan: Scan) -> None:
+    """引擎终止行本身若命中已知错误（如额度不足），仍要给出那句更可操作的话 ——
+    不能让「先取终止行」的优先级把已知失败的映射短路掉。"""
+    _log_path(scan).write_text(
+        "error: insufficient_user_quota: 剩余额度不足\n", encoding="utf-8"
+    )
+    scan.log_path = str(_log_path(scan))
+
+    reason = service._failure_reason(scan, 1)
+
+    assert "额度" in reason

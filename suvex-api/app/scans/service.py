@@ -1263,6 +1263,12 @@ _ERROR_LINE = re.compile(
     re.MULTILINE,
 )
 
+# 自研引擎（agent 后端）收尾时写在 **scan.log 最后一行** 的终止原因：
+#   `error: 扫描超过设置页指定的单次超时，已被引擎停止。`
+# 小写 `error:`，不是 Python 异常，所以 `_ERROR_LINE` 认不出来 —— 单独一条。
+# 它是**权威的**失败原因（引擎自己写的），必须压过日志里散落的工具输出关键词。
+_ENGINE_ERROR_LINE = re.compile(r"^error:\s*(?P<msg>\S.*)$", re.MULTILINE)
+
 # 已知的、用户**有明确下一步动作**的错误 → 人话说明。
 #
 # ★ 这不是"美化错误信息"。面对一个 403 的 Python 堆栈，用户唯一能得出的
@@ -1301,9 +1307,16 @@ _KNOWN_FAILURES: tuple[tuple[re.Pattern[str], str], ...] = (
         #   报成"限流失败"。**低报方向还恰好让人去查一个不存在的模型问题。**
         #   供应商的限流长这样：`Error code: 429` / `rate_limit_exceeded` /
         #   `rate limit reached` / `429 Too Many Requests`，都带这些上下文短语。
+        #
+        # ★★ v0.69 第二次踩同一个坑（P0 重跑真跑暴露）：后缀组原本是**可选**的
+        #   `(?:[_ ]exceeded| reached| error)?`，于是裸的 `rate limiting` 也能命中 ——
+        #   而模型在推理里写了一句 "No lockout or **rate limiting** confirmed"
+        #   （它在**否定**限流），就被读成了「模型服务限流」，把一次跑了 351 条
+        #   事件、1802 秒的真实评估整条报成失败。现在后缀**必填**：供应商的
+        #   限流句一定带 exceeded/reached/error 之一，裸 "rate limit(ing)" 不带。
         re.compile(
             r"error code:\s*429"
-            r"|rate[_ ]?limit(?:[_ ]exceeded| reached| error)?"
+            r"|rate[_ ]?limit(?:[_ ]exceeded| reached| error)"
             r"|429 too many requests",
             re.IGNORECASE,
         ),
@@ -1344,16 +1357,42 @@ def _find_failure_line(log_path: str | None) -> str | None:
     if block < size and "\n" in text:
         text = text.split("\n", 1)[1]
 
+    # ★★ v0.69：**先认引擎自己写下的终止行**，再做已知错误扫描。
+    #
+    #   自研引擎（agent 后端）在收尾时把真正的失败原因写成最后一行
+    #   `error: <人话>`（见 agent_runner 收尾分支）。这一行是**权威的**，
+    #   必须压过日志里散落的任何关键词命中。
+    #
+    #   踩过的坑（P0 重跑真跑暴露）：一次跑了 351 事件、1802 秒的真实评估，
+    #   引擎收尾写的是 `error: 扫描超过设置页指定的单次超时，已被引擎停止。`，
+    #   但更靠前的推理里有一句 "No lockout or rate limiting confirmed"
+    #   被旧的宽 429 正则命中 —— 而下面的 for 循环是**从头往尾扫、命中即返回**，
+    #   于是那句更早的假命中把真正的超时原因盖掉了，界面显示「模型服务限流」。
+    #   结论：引擎的终止行在**文件最后**、在**语义上**都更权威，先取它。
+    engine_lines = _ENGINE_ERROR_LINE.findall(text)
+    if engine_lines:
+        msg = redact(engine_lines[-1]).strip()
+        for pattern, message in _KNOWN_FAILURES:
+            if pattern.search(msg):
+                return message
+        return msg
+
+    terminal = _ERROR_LINE.findall(text)
+    if terminal:
+        exc, msg = terminal[-1]
+        msg = redact(msg).strip()
+        # 允许终止行本身命中已知错误映射（如 "EngineError: rate_limit_exceeded"），
+        # 让那句更可操作的话直接生效；否则原样返回引擎写的原因。
+        for pattern, message in _KNOWN_FAILURES:
+            if pattern.search(f"{exc}: {msg}"):
+                return message
+        return f"{exc}: {msg}"
+
     for pattern, message in _KNOWN_FAILURES:
         if pattern.search(text):
             return message
 
-    found = _ERROR_LINE.findall(text)
-    if not found:
-        return None
-    # 取**最后一条**：同一次失败会被重试重复打印，最后一条是真正终止它的那个。
-    exc, msg = found[-1]
-    return f"{exc}: {redact(msg).strip()}"
+    return None
 
 
 def read_log_tail(log_path: str | None, *, lines: int = LOG_TAIL_LINES) -> str:
