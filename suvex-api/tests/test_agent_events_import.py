@@ -178,3 +178,61 @@ def test_strix_scan_still_uses_strix_path(db_session, tmp_path) -> None:
     written = importer.import_events(db_session, scan)
 
     assert written == 0  # strix 路径读 sqlite，不看 events.jsonl
+
+
+def test_multi_agent_events_get_separate_roster_rows(db_session, tmp_path) -> None:
+    """多智能体：root 与各子 agent 的事件必须分到不同的名册行。
+
+    这是「可解释审计」在多智能体下的底线 —— 如果所有 agent 的事件都挂在
+    同一行，复盘时无法分辨某条命令是谁下的。引擎在 payload 里写
+    `agent`/`agentName`（见 `multiagent.notify`），导入器据此建不同 Agent。
+    """
+    scan = _agent_scan(db_session, tmp_path)
+    _write_events(
+        Path(scan.run_dir),
+        [
+            {"seq": 1, "kind": "reasoning", "summary": "root 先侦察",
+             "payload": {"text": "root 先侦察", "agent": "root", "agentName": "root", "turn": "1"},
+             "at": "2026-10-22T12:00:00+00:00"},
+            {"seq": 2, "kind": "tool_call", "summary": "root nmap",
+             "payload": {"tool": "run_shell", "command": "nmap", "output": "", "agent": "root", "agentName": "root", "turn": "2"},
+             "at": "2026-10-22T12:00:05+00:00"},
+            {"seq": 3, "kind": "tool_call", "summary": "子 agent 枚举",
+             "payload": {"tool": "run_shell", "command": "gobuster", "output": "", "agent": "child-1", "agentName": "API端点枚举", "turn": "1"},
+             "at": "2026-10-22T12:00:10+00:00"},
+        ],
+    )
+
+    written = importer.import_events(db_session, scan)
+
+    assert written == 3
+    agents = db_session.execute(select(Agent).where(Agent.scan_id == scan.id)).scalars().all()
+    assert len(agents) == 2, "root 与子 agent 必须是两个名册行（否则审计时分不清谁做的）"
+    # 每个 agent 的事件计数加起来等于总事件数
+    assert sum(a.event_count for a in agents) == 3
+    # 事件必须各归各的 agent，不能全挂一行
+    rows = db_session.execute(
+        select(ActivityEvent).where(ActivityEvent.scan_id == scan.id)
+    ).scalars().all()
+    by_agent: dict[str, int] = {}
+    for r in rows:
+        by_agent[r.agent_id] = by_agent.get(r.agent_id, 0) + 1
+    assert sorted(by_agent.values()) == [1, 2], "root 两条、子 agent 一条"
+
+
+def test_events_without_agent_key_fall_back_to_self(db_session, tmp_path) -> None:
+    """老数据（无 agent/agentName 键）退回单一「自研引擎」，不建多个行。"""
+    scan = _agent_scan(db_session, tmp_path)
+    _write_events(
+        Path(scan.run_dir),
+        [
+            {"seq": 1, "kind": "reasoning", "summary": "a", "payload": {"text": "a"}, "at": "2026-10-22T12:00:00+00:00"},
+            {"seq": 2, "kind": "tool_call", "summary": "b", "payload": {"tool": "run_shell"}, "at": "2026-10-22T12:00:01+00:00"},
+        ],
+    )
+
+    importer.import_events(db_session, scan)
+
+    agents = db_session.execute(select(Agent).where(Agent.scan_id == scan.id)).scalars().all()
+    assert len(agents) == 1
+    assert agents[0].event_count == 2

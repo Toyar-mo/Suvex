@@ -186,28 +186,29 @@ def _import_agent_events(db: Session, scan: Scan, run_dir: Path, *, limit: int) 
         kind = str(rec.get("kind") or "")
         event_type = _AGENT_KIND_TO_TYPE.get(kind, "reasoning")
         payload = rec.get("payload")
-        detail = (
-            {"kind": event_type, **payload}
-            if isinstance(payload, dict)
-            else {"kind": event_type}
-        )
+        # 归属：引擎在每条事件里都写了 agent/agentName（见 multiagent.notify）。
+        # 老数据（v0.58 之前）没有这两个键 → 退回单一 "自研引擎"，行为不变。
+        raw_payload = payload if isinstance(payload, dict) else {}
+        agent_ref = str(raw_payload.get("agent") or "").strip() or _AGENT_SELF_REF
+        agent_name = str(raw_payload.get("agentName") or "").strip() or "自研引擎"
+        detail = {"kind": event_type, **payload} if isinstance(payload, dict) else {"kind": event_type}
         # 阶段：tool_call 按工具名推断（用 strix 侧现成的启发式），
         # reasoning 中性归 recon。**不假装知道它此刻真在做什么阶段**。
         if event_type == "tool_call":
-            phase = strix_events._phase_for(str((payload or {}).get("tool", "")))
+            phase = strix_events._phase_for(str(raw_payload.get("tool", "")))
         else:
             phase = AgentPhase.RECON.value
         event = _AgentEvent(
             source_row_id=seq,
-            agent_ref=_AGENT_SELF_REF,
+            agent_ref=agent_ref,
             type=event_type,
             summary=str(rec.get("summary") or ""),
             detail=detail,
             at=_parse_at(rec.get("at")),
             agent_phase=phase,
-            agent_name="自研引擎",
+            agent_name=agent_name,
         )
-        if _persist(db, scan, event, {_AGENT_SELF_REF: {"name": "自研引擎", "status": "running"}}):
+        if _persist(db, scan, event, {agent_ref: {"name": agent_name, "status": "running"}}):
             written += 1
 
     if written:

@@ -188,6 +188,11 @@ SANDBOX_NAME_PREFIX = "ctf2-"
 # 这一条价值是真的 —— 改动这里要连它一起考虑。
 CTF2_NETWORK = "suvex-ctf2"
 
+#: 单循环（非多智能体）时事件归属用的固定 agent 标识。
+#: 与 `app/scans/importer.py` 的 `_AGENT_SELF_REF` 同值 —— 那边是兜底默认值，
+#: 这里是主动写进 payload；两处一致，导入器就不必按引擎分叉。
+_AGENT_SELF_REF = "agent-engine"
+
 #: 渗透评估专用网桥（2026-10-22）。
 #:
 #: 与 `CTF2_NETWORK`（`suvex-ctf2`，靠 iptables 白名单收窄到 CTF 靶站）
@@ -4052,8 +4057,14 @@ async def solve_in_sandbox(
         """把一条过程送给回调（有回调时）。**吞掉回调的异常。**"""
         if on_progress is None:
             return
+        # 单循环也带归属：与多智能体（multiagent.notify）用同一组键，
+        # 导入器就不用按"跑的是哪个引擎"分叉。单循环里只有一个 agent，
+        # 用固定的自身标识，行为与旧版逐字节一致（旧版靠 importer 的默认值）。
+        enriched = dict(payload)
+        enriched.setdefault("agent", _AGENT_SELF_REF)
+        enriched.setdefault("agentName", "自研引擎")
         try:
-            on_progress(kind, summary, payload)
+            on_progress(kind, summary, enriched)
         except Exception:  # noqa: BLE001 - 过程不该影响解题结果
             logger.warning("CTF2 过程事件发送失败（不影响解题）", exc_info=True)
 

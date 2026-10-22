@@ -555,8 +555,17 @@ async def run_agent_loop(
     def notify(kind: str, summary: str, payload: dict[str, str]) -> None:
         if on_progress is None:
             return
+        # ★ 每条过程事件都打上"谁做的" —— 否则多智能体跑起来后，事件流里
+        #   root 与各子 agent 的 tool_call/reasoning 混成一条河，复盘时无法
+        #   分辨这条命令是 root 下的还是哪个子 agent 下的。`log` 里本来就带
+        #   `[{node.agent_id} tN]`，这里把同一份归属也放进结构化 payload，
+        #   导入器据此按 agent 分名册（见 `app/scans/importer.py`）。
+        enriched = dict(payload)
+        enriched["agent"] = node.agent_id
+        enriched["agentName"] = node.name
+        enriched["turn"] = str(turn)
         try:
-            on_progress(kind, summary, payload)
+            on_progress(kind, summary, enriched)
         except Exception:  # noqa: BLE001 - 过程不该影响结果
             logger.warning("多智能体过程事件发送失败（不影响编排）", exc_info=True)
 
