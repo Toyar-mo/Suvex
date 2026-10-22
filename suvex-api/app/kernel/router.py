@@ -99,7 +99,7 @@ from app.kernel.schemas import (
     KernelWriteupOut,
 )
 
-router = APIRouter(prefix="/ctf2", tags=["CTF2"])
+router = APIRouter(prefix="/kernel", tags=["Kernel"])
 
 ReadDep = Annotated[Identity, Depends(require_read)]
 ScanDep = Annotated[Identity, Depends(require_scan)]

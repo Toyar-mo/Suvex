@@ -173,7 +173,7 @@ describe('处置工单弹窗：用真实 200 响应渲染', () => {
 
     await waitFor(() => expect(dialogText()).toContain('待处置事项'))
     expect(calls[0]).toContain(
-      '/api/v1/ctf2/challenges/ctf2chal_IR0000000000000000000001/workorder',
+      '/api/v1/kernel/challenges/ctf2chal_IR0000000000000000000001/workorder',
     )
     expect(calls[0]).not.toContain('/writeup')
     expect(calls[0]).not.toContain('/scans/')

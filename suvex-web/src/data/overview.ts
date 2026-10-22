@@ -100,7 +100,7 @@ export interface OverviewMetrics {
     
     需求是"总览页要写一个统计 token 消耗，细分到每一次任务的消耗，
     和总消耗"。这里给**总消耗**；细分（按题 / 按模型 / 逐轮）在
-    `GET /ctf2/usage` 与 `GET /ctf2/challenges/{id}/usage`。
+    `GET /kernel/usage` 与 `GET /kernel/challenges/{id}/usage`。
 
     ⚠️ 放在 overview 而不只留在 CTF2 页面：token 是**成本**，
        而成本该与"扫了多少、发现了多少"同屏 —— 与

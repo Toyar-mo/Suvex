@@ -41,18 +41,18 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
     {
         # 账号列表 —— 只有掩码（`tokenMask`），没有 token。
         # 它不需要 admin 的理由与 `GET /scans` 一样：看列表是日常动作。
-        ("GET", "/api/v1/ctf2/accounts"),
-        ("GET", "/api/v1/ctf2/competitions"),
-        ("GET", "/api/v1/ctf2/challenges"),
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}"),
-        ("GET", "/api/v1/ctf2/snapshot"),
+        ("GET", "/api/v1/kernel/accounts"),
+        ("GET", "/api/v1/kernel/competitions"),
+        ("GET", "/api/v1/kernel/challenges"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}"),
+        ("GET", "/api/v1/kernel/snapshot"),
         # 队列状态：与 `GET /scans/queue` 同级（它回答"为什么排在队列里"）
-        ("GET", "/api/v1/ctf2/queue"),
+        ("GET", "/api/v1/kernel/queue"),
         # 平台列表与详情：只读**本地数据库**（不打平台）—— 与
         # `GET /ctf2/accounts` 同级。生成过程的状态也在详情里，前端
         # 轮询它，所以它必须是 read 级（否则只读令牌看不了进度）。
-        ("GET", "/api/v1/ctf2/platforms"),
-        ("GET", "/api/v1/ctf2/platforms/{platformId}"),
+        ("GET", "/api/v1/kernel/platforms"),
+        ("GET", "/api/v1/kernel/platforms/{platformId}"),
         # ── 题解与 token 统计（v0.36）──────────────────────
         #
         # 三个都是**纯读本地库**：题解是解题收尾时落库的 markdown，
@@ -62,9 +62,9 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #    但这仍然够 read 级：flag 本来就在 `GET /ctf2/challenges`
         #    的 `confirmedFlag` 里（同一份数据、同一个级别）。
         #    需要拔高的是"提交"（对外动作 + 消耗不可再生额度），不是"看"。
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}/writeup"),
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}/usage"),
-        ("GET", "/api/v1/ctf2/usage"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}/writeup"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}/usage"),
+        ("GET", "/api/v1/kernel/usage"),
         # ── 处置建议工单（v0.41）──────────────────────────
         #
         # 与题解同一级别、同一理由：它是解题收尾时落盘的 markdown，
@@ -73,7 +73,7 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # ⚠️ 它比题解**更不敏感**：工单是"要去做什么"的清单，
         #    不含 flag、不含攻击载荷原文（`workorder.py` 只收四个
         #    文本字段，`detail_evidence`/`poc_code` 一概不碰）。
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}/workorder"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}/workorder"),
     }
 )
 
@@ -84,44 +84,44 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # 写凭据 = 与 `POST /providers` 同级。给更低级别的话，
     # 一个能发起扫描的机器令牌就能**替换平台的 PAT** ——
     # 那等于让它能拿别人的账号去提交 flag。
-    ("POST", "/api/v1/ctf2/accounts"): "admin",
+    ("POST", "/api/v1/kernel/accounts"): "admin",
     # 销毁凭据。
-    ("DELETE", "/api/v1/ctf2/accounts/{accountId}"): "admin",
+    ("DELETE", "/api/v1/kernel/accounts/{accountId}"): "admin",
     # ★ 提交策略是**安全策略**，不是界面偏好。
     #
     # `submitMode=auto` 意味着机器会在**无人确认**的情况下对外提交 flag，
     # 而每次错误提交都消耗一个不可再生的额度。改它的人必须是有权改配置的人。
-    ("GET", "/api/v1/ctf2/settings"): "admin",
-    ("PUT", "/api/v1/ctf2/settings"): "admin",
+    ("GET", "/api/v1/kernel/settings"): "admin",
+    ("PUT", "/api/v1/kernel/settings"): "admin",
     # ── scan：对外动作 / 改数据 ─────────────────────────
     #
     # 同步会改数据（写库）且发出去一串外部请求。给 read 级的话，
     # 一个只读令牌就能反复触发同步 —— 那是一条"用我们的凭据刷平台接口"的路。
-    ("POST", "/api/v1/ctf2/sync"): "scan",
+    ("POST", "/api/v1/kernel/sync"): "scan",
     # ★ v0.43 应急响应：建一个本地复盘任务。
     #
     # 为什么是 scan 而不是 admin：它不写凭据、不改安全策略
-    # （`/ctf2/settings` 那种才是 admin）。它做的事与"起一次扫描"
+    # （`/kernel/settings` 那种才是 admin）。它做的事与"起一次扫描"
     # 同类 —— 创建一个会消耗 LLM 额度、会起沙箱容器的任务。
     # 按 `POST /scans` 的同级处理。
     #
     # 为什么不是 read：它不是只读。建完之后这道题就在队列里可以被
     # 反复开跑，一个只读令牌能靠反复调用把 LLM 额度刷光。
-    ("POST", "/api/v1/ctf2/ir/tasks"): "scan",
+    ("POST", "/api/v1/kernel/ir/tasks"): "scan",
     # 按链接拉单题：写库 + 打平台接口。
-    ("POST", "/api/v1/ctf2/challenges/pull"): "scan",
+    ("POST", "/api/v1/kernel/challenges/pull"): "scan",
     # ★ 列平台赛事**只读**，但仍然 scan 级 —— 它每次都真的打一次平台接口。
-    ("GET", "/api/v1/ctf2/competitions/remote"): "scan",
+    ("GET", "/api/v1/kernel/competitions/remote"): "scan",
     # 起环境 + 调度 LLM 解题：**对外发包**（这正是 scan scope 存在的理由）。
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/solve"): "scan",
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/solve"): "scan",
     # ★★ 提交 flag：**对外发出一个不可撤销的动作**，且有配额后果。
     #     `read` 的定义是只读 —— 一个只读令牌能替用户扣掉答题机会，
     #     显然不成立。
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/submit"): "scan",
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/cancel"): "scan",
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/submit"): "scan",
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/cancel"): "scan",
     # 释放平台环境：改状态 + 调平台接口。给 read 级的话，
     # 只读令牌就能把别人正在解题的环境停掉 —— 那会让解题在半路失败。
-    ("DELETE", "/api/v1/ctf2/challenges/{challengeId}/environment"): "scan",
+    ("DELETE", "/api/v1/kernel/challenges/{challengeId}/environment"): "scan",
     # ── v0.23 调度优先级 ───────────────────────────────
     #
     # ★ 归 `scan` 而不归 `admin`：它改的是**队列顺序**，不改任何安全策略，
@@ -132,8 +132,8 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     #    而且中断不了任何已经在跑的题（见 `service.set_challenge_priority`
     #    的说明）。把它算成高风险会让"比赛现场快速调优先级"这个
     #    被规则明确允许的动作变得碍手碍脚。
-    ("PUT", "/api/v1/ctf2/challenges/{challengeId}/priority"): "scan",
-    ("POST", "/api/v1/ctf2/priorities/by-score"): "scan",
+    ("PUT", "/api/v1/kernel/challenges/{challengeId}/priority"): "scan",
+    ("POST", "/api/v1/kernel/priorities/by-score"): "scan",
     # ── 平台接入：**admin**（v0.25）─────────────────────
     #
     # ★ 归 admin 而不是 scan，理由与「绑定账号」「改提交策略」同一类：
@@ -145,32 +145,32 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     #
     #   这与"开始解题"（scan 级）不是一回事 —— 那个是把**已有的题**
     #   丢给沙箱，这个是让服务端发起一次到任意主机的请求。
-    ("POST", "/api/v1/ctf2/platforms/draft"): "admin",
-    ("POST", "/api/v1/ctf2/platforms/{platformId}/activate"): "admin",
-    ("POST", "/api/v1/ctf2/platforms/use-builtin"): "admin",
-    ("DELETE", "/api/v1/ctf2/platforms/{platformId}"): "admin",
+    ("POST", "/api/v1/kernel/platforms/draft"): "admin",
+    ("POST", "/api/v1/kernel/platforms/{platformId}/activate"): "admin",
+    ("POST", "/api/v1/kernel/platforms/use-builtin"): "admin",
+    ("DELETE", "/api/v1/kernel/platforms/{platformId}"): "admin",
 }
 
 # 高风险操作单独点名。
 #
 # 判据与全站那份一致：**不可撤销 / 对外发动作 / 销毁凭据**。
 HIGH_RISK: list[tuple[str, str]] = [
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/submit"),
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/submit"),
     # 让服务端去请求一个**用户给的地址**（对外发动作），以及把凭据写进
     # 账号表并把数据来源整个换掉。
-    ("POST", "/api/v1/ctf2/platforms/draft"),
-    ("POST", "/api/v1/ctf2/platforms/{platformId}/activate"),
+    ("POST", "/api/v1/kernel/platforms/draft"),
+    ("POST", "/api/v1/kernel/platforms/{platformId}/activate"),
     # 删掉一份配置是不可撤销的（要重新生成得再花几分钟和几次模型调用）。
-    ("DELETE", "/api/v1/ctf2/platforms/{platformId}"),
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/solve"),
-    ("DELETE", "/api/v1/ctf2/accounts/{accountId}"),
-    ("PUT", "/api/v1/ctf2/settings"),
+    ("DELETE", "/api/v1/kernel/platforms/{platformId}"),
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/solve"),
+    ("DELETE", "/api/v1/kernel/accounts/{accountId}"),
+    ("PUT", "/api/v1/kernel/settings"),
 ]
 
 FAKE = {"challengeId": "ctf2chal_nonexistent", "accountId": "ctf2acc_nonexistent"}
 
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
-_PREFIX = "/api/v1/ctf2"
+_PREFIX = "/api/v1/kernel"
 
 
 def _fill(path: str) -> str:
@@ -283,9 +283,9 @@ def test_binding_and_policy_are_admin_not_scan() -> None:
     这两件事都不是"发起一次扫描"的延伸。
     """
     for item in (
-        ("POST", "/api/v1/ctf2/accounts"),
-        ("DELETE", "/api/v1/ctf2/accounts/{accountId}"),
-        ("PUT", "/api/v1/ctf2/settings"),
+        ("POST", "/api/v1/kernel/accounts"),
+        ("DELETE", "/api/v1/kernel/accounts/{accountId}"),
+        ("PUT", "/api/v1/kernel/settings"),
     ):
         assert SCOPE_GATED.get(item) == "admin", f"{item} 必须是 admin 级"
 
@@ -408,7 +408,7 @@ def test_snapshot_never_leaks_the_token(ready_client: TestClient) -> None:
     "结构上成立"值得有一条断言盯着：有人为了"方便调试"加一个
     `token` 字段，不会有任何别的东西报错。
     """
-    response = ready_client.get("/api/v1/ctf2/snapshot")
+    response = ready_client.get("/api/v1/kernel/snapshot")
     assert response.status_code == 200, response.text
     body = response.json()
 

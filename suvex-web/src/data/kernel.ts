@@ -21,7 +21,7 @@ import { useSyncExternalStore } from 'react'
  * ## ★ 所有请求都走 `/api` 同源相对路径
  *
  * `lib/api.ts` 的 `API_BASE_URL` 默认是**当前页面的 origin**，
- * 所以这里只写 `/ctf2/...`，**不出现任何后端主机名或端口** ——
+ * 所以这里只写 `/kernel/...`，**不出现任何后端主机名或端口** ——
  * 换台机器、换个端口打开前端都不用改代码。见 `lib/api.ts` 文件头那段。
  */
 
@@ -158,7 +158,7 @@ export const SANDBOX_PROFILE_HINT: Record<KernelSandboxProfile, string> = {
  * ⚠️ v0.21：这**不再是**"能不能提交"的判据 —— 见下面 `validateFlag`
  * 的说明。它现在只用来做展示与分类。
  *
- * **必须与后端 `app/ctf2/runner.py` 的 `FLAG_PATTERN` 逐字一致**
+ * **必须与后端 `app/kernel/runner.py` 的 `FLAG_PATTERN` 逐字一致**
  * （对账脚本会比这一个）。
  *
  * ★ 正文里**允许空格**（`[^{}]` 而不是 `[^{}\s]`）。
@@ -452,7 +452,7 @@ export interface KernelSnapshot {
   challenges: KernelChallenge[]
 }
 
-/** `POST /ctf2/challenges/pull` 的结果。 */
+/** `POST /kernel/challenges/pull` 的结果。 */
 export interface KernelPullResult {
   challenge: KernelChallenge
   /** 这次是新建还是更新已有（重复拉同一道题时是更新）。 */
@@ -484,7 +484,7 @@ export interface KernelSyncResult {
 }
 
 /**
- * **平台上**的一场赛事（`GET /ctf2/competitions/remote` 的返回项）。
+ * **平台上**的一场赛事（`GET /kernel/competitions/remote` 的返回项）。
  *
  * ⚠️ 与本地那份 `KernelCompetition` 是两件事，**不要混用**：
  *   · 这一份的 `remoteId` 是**平台 id**，它被原样回传给
@@ -537,7 +537,7 @@ export interface KernelSubmitResult {
 // 不要"顺手统一"去脱敏。
 
 /**
- * 一道题的题解（`GET /ctf2/challenges/{id}/writeup`）。
+ * 一道题的题解（`GET /kernel/challenges/{id}/writeup`）。
  *
  * ⚠️ 它在**解题收尾时生成并落库**（`service.save_writeup`），端点只读库。
  * 所以 v0.36 **之前**解过的题没有这份记录 —— 那时后端返
@@ -564,7 +564,7 @@ export interface KernelWriteup {
 }
 
 /**
- * **一次 LLM 调用**的用量（`GET /ctf2/challenges/{id}/usage` 的项）。
+ * **一次 LLM 调用**的用量（`GET /kernel/challenges/{id}/usage` 的项）。
  *
  * 这是"细分到每一次任务的消耗"最直接的视图 —— 能看出哪一轮最贵、
  * 是不是在兜圈子烧钱、换模前后各花了多少。
@@ -607,7 +607,7 @@ export interface KernelUsageByChallenge {
 }
 
 /**
- * token 消耗统计（`GET /ctf2/usage`）。
+ * token 消耗统计（`GET /kernel/usage`）。
  *
  * ## ★★ `calls` 与 `recordedCalls` 是**两个**字段，不是冗余
  *
@@ -652,11 +652,11 @@ export interface KernelTokenUsage {
  * 与 `loadWriteup`（扫描侧）同一条纪律。
  */
 export async function loadKernelWriteup(challengeId: string): Promise<KernelWriteup> {
-  return api.get<KernelWriteup>(`/ctf2/challenges/${encodeURIComponent(challengeId)}/writeup`)
+  return api.get<KernelWriteup>(`/kernel/challenges/${encodeURIComponent(challengeId)}/writeup`)
 }
 
 /**
- * 一份处置建议工单（`GET /ctf2/challenges/{id}/workorder`，v0.41）。
+ * 一份处置建议工单（`GET /kernel/challenges/{id}/workorder`，v0.41）。
  *
  * ## 它与题解是**两份**产物，不是一节
  *
@@ -704,7 +704,7 @@ export interface KernelWorkOrder {
  */
 export async function loadKernelWorkOrder(challengeId: string): Promise<KernelWorkOrder> {
   return api.get<KernelWorkOrder>(
-    `/ctf2/challenges/${encodeURIComponent(challengeId)}/workorder`,
+    `/kernel/challenges/${encodeURIComponent(challengeId)}/workorder`,
   )
 }
 
@@ -714,7 +714,7 @@ export async function loadKernelWorkOrder(challengeId: string): Promise<KernelWo
  * ## 为什么返回整道题而不只返回 id
  *
  * 建完之后界面要立刻显示"建了什么"（标题、镜像、状态、带了几份证据）。
- * 只给 id 的话前端要为了一行字再发一次 `GET /ctf2/challenges/{id}`，
+ * 只给 id 的话前端要为了一行字再发一次 `GET /kernel/challenges/{id}`，
  * 而那次请求与这次是同一个事务刚写下的数据 —— 多一次往返、多一个
  * "刚建完却读到旧数据"的机会。
  */
@@ -766,7 +766,7 @@ export async function createIrTask(payload: {
   brief?: string
   attachmentStagingId?: string | null
 }): Promise<IrTask> {
-  return api.post<IrTask>('/ctf2/ir/tasks', {
+  return api.post<IrTask>('/kernel/ir/tasks', {
     title: payload.title,
     brief: payload.brief ?? '',
     attachmentStagingId: payload.attachmentStagingId ?? null,
@@ -783,7 +783,7 @@ export async function createIrTask(payload: {
 export async function loadKernelUsage(
   filter: { challengeId?: string | null; competitionId?: string | null } = {},
 ): Promise<KernelTokenUsage> {
-  return api.get<KernelTokenUsage>('/ctf2/usage', {
+  return api.get<KernelTokenUsage>('/kernel/usage', {
     query: {
       challengeId: filter.challengeId ?? null,
       competitionId: filter.competitionId ?? null,
@@ -794,7 +794,7 @@ export async function loadKernelUsage(
 /** 读单道题的**逐次**消耗明细（按轮次升序）。 */
 export async function loadKernelChallengeUsage(challengeId: string): Promise<KernelUsageEntry[]> {
   return api.get<KernelUsageEntry[]>(
-    `/ctf2/challenges/${encodeURIComponent(challengeId)}/usage`,
+    `/kernel/challenges/${encodeURIComponent(challengeId)}/usage`,
   )
 }
 
@@ -906,7 +906,7 @@ export interface KernelSnapshotState {
   /**
    * 设置读不到的原因（可空）。
    *
-   * ★ 为什么要单独存它：`/ctf2/settings` 是 admin 级，而只有 read 的
+   * ★ 为什么要单独存它：`/kernel/settings` 是 admin 级，而只有 read 的
    *   会话会拿到 403。那时界面回落到 `safe` 是**对的**，但
    *   "设置为什么不见了"必须有答案 —— 只把失败吞掉会让它变成一个
    *   无法解释的现象（某人为了策略改了设置，刷新后看到的是默认值）。
@@ -979,16 +979,16 @@ export async function loadKernel(options: { silent?: boolean } = {}): Promise<vo
 
   try {
     const [snapshotData, settingsOutcome, queueOutcome] = await Promise.all([
-      api.get<KernelSnapshot>('/ctf2/snapshot'),
+      api.get<KernelSnapshot>('/kernel/snapshot'),
       // 设置是 admin 级 —— 一个只有 read 的会话会拿到 403。
       // 那种情况下**不该让整页失败**（题目列表本来就能看），
       // 所以它自己 catch。但失败原因要留下来（见 settingsError）。
       api
-        .get<KernelSettings>('/ctf2/settings')
+        .get<KernelSettings>('/kernel/settings')
         .then((value) => ({ ok: true as const, value }))
         .catch((err: unknown) => ({ ok: false as const, error: toApiError(err) })),
       api
-        .get<KernelQueue>('/ctf2/queue')
+        .get<KernelQueue>('/kernel/queue')
         .then((value) => ({ ok: true as const, value }))
         .catch(() => ({ ok: false as const, error: null })),
     ])
@@ -1033,7 +1033,7 @@ export async function loadKernel(options: { silent?: boolean } = {}): Promise<vo
  */
 export async function syncKernel(competitionIds: string[] = []): Promise<KernelSyncResult> {
   const result = await api.post<KernelSyncResult>(
-    '/ctf2/sync',
+    '/kernel/sync',
     { competitionIds },
     { timeoutMs: 120_000 },
   )
@@ -1049,11 +1049,11 @@ export async function syncKernel(competitionIds: string[] = []): Promise<KernelS
  *   的结果** —— 第一次用的时候它是空的，而"要选赛事才能同步赛事"就成了
  *   一个死结。所以这一份必须直接问平台。
  *
- * 它走 `GET /ctf2/competitions/remote`，需要 **scan** 权限：虽然只读，
+ * 它走 `GET /kernel/competitions/remote`，需要 **scan** 权限：虽然只读，
  * 但它每次都真的打一次平台接口。
  */
 export async function listRemoteCompetitions(): Promise<KernelRemoteCompetition[]> {
-  return api.get<KernelRemoteCompetition[]>('/ctf2/competitions/remote')
+  return api.get<KernelRemoteCompetition[]>('/kernel/competitions/remote')
 }
 
 /**
@@ -1066,20 +1066,20 @@ export async function listRemoteCompetitions(): Promise<KernelRemoteCompetition[
  * 服务端会自己在已知练习集里试出这道题属于哪个，所以只需要一条链接。
  */
 export async function pullKernelChallenge(input: string): Promise<KernelPullResult> {
-  const result = await api.post<KernelPullResult>('/ctf2/challenges/pull', { input })
+  const result = await api.post<KernelPullResult>('/kernel/challenges/pull', { input })
   await loadKernel({ silent: true })
   return result
 }
 
 export async function bindKernelAccount(token: string, label: string): Promise<KernelAccount> {
-  const created = await api.post<KernelAccount>('/ctf2/accounts', { token, label })
+  const created = await api.post<KernelAccount>('/kernel/accounts', { token, label })
   account = created
   await loadKernel({ silent: true })
   return created
 }
 
 export async function unbindKernelAccount(accountId: string): Promise<void> {
-  await api.del<void>(`/ctf2/accounts/${encodeURIComponent(accountId)}`)
+  await api.del<void>(`/kernel/accounts/${encodeURIComponent(accountId)}`)
   account = null
   commit()
   await loadKernel({ silent: true })
@@ -1103,7 +1103,7 @@ export async function saveKernelSettings(next: {
    * "可选的额外参数"，而是"这次保存要写进去的那个值"。给默认 `false`
    * 会让"调用方忘了传"变成"静默关掉一个用户已经打开的开关"。
    *
-   * ⚠️ `PUT /ctf2/settings` 是**全量提交**：后端逐字段赋值，没传的
+   * ⚠️ `PUT /kernel/settings` 是**全量提交**：后端逐字段赋值，没传的
    * 字段按后端形参默认值落库。所以这个字段一旦漏传，开关会被静默关掉，
    * 而界面上看不出发生过这件事 —— 那正是它这么写的原因。
    */
@@ -1111,7 +1111,7 @@ export async function saveKernelSettings(next: {
   /** 应急响应场景包开关（v0.41）。必填，同上 —— 漏传会被静默关掉。 */
   enableIrScenarios: boolean
 }): Promise<KernelSettings> {
-  const saved = await api.put<KernelSettings>('/ctf2/settings', next)
+  const saved = await api.put<KernelSettings>('/kernel/settings', next)
   settings = saved
   settingsError = null
   commit()
@@ -1145,7 +1145,7 @@ export async function solveChallenge(
   },
 ): Promise<KernelSolveResult> {
   const result = await api.post<KernelSolveResult>(
-    `/ctf2/challenges/${encodeURIComponent(challengeId)}/solve`,
+    `/kernel/challenges/${encodeURIComponent(challengeId)}/solve`,
     body,
   )
   notice = result.message
@@ -1159,7 +1159,7 @@ export async function submitFlag(
   mode?: KernelSubmitMode,
 ): Promise<KernelSubmitResult> {
   const result = await api.post<KernelSubmitResult>(
-    `/ctf2/challenges/${encodeURIComponent(challengeId)}/submit`,
+    `/kernel/challenges/${encodeURIComponent(challengeId)}/submit`,
     { flag, mode },
   )
   notice = result.message
@@ -1169,7 +1169,7 @@ export async function submitFlag(
 
 export async function cancelChallenge(challengeId: string): Promise<KernelChallenge> {
   const updated = await api.post<KernelChallenge>(
-    `/ctf2/challenges/${encodeURIComponent(challengeId)}/cancel`,
+    `/kernel/challenges/${encodeURIComponent(challengeId)}/cancel`,
   )
   notice = '已取消。若它已经在跑，那一轮会跑完但不会产出候选。'
   await loadKernel({ silent: true })
@@ -1177,7 +1177,7 @@ export async function cancelChallenge(challengeId: string): Promise<KernelChalle
 }
 
 export async function releaseEnvironment(challengeId: string): Promise<void> {
-  await api.del<void>(`/ctf2/challenges/${encodeURIComponent(challengeId)}/environment`)
+  await api.del<void>(`/kernel/challenges/${encodeURIComponent(challengeId)}/environment`)
   notice = '已释放题目环境。'
   await loadKernel({ silent: true })
 }
@@ -1200,7 +1200,7 @@ export async function setChallengePriority(
   priority: number,
 ): Promise<KernelChallenge> {
   const updated = await api.put<KernelChallenge>(
-    `/ctf2/challenges/${encodeURIComponent(challengeId)}/priority`,
+    `/kernel/challenges/${encodeURIComponent(challengeId)}/priority`,
     { priority },
   )
   await loadKernel({ silent: true })
@@ -1217,7 +1217,7 @@ export async function setChallengePriority(
 export async function prioritizeByScore(
   competitionId?: string | null,
 ): Promise<number> {
-  const result = await api.post<{ changed: number }>('/ctf2/priorities/by-score', {
+  const result = await api.post<{ changed: number }>('/kernel/priorities/by-score', {
     competitionId: competitionId ?? null,
     limit: 50,
   })
@@ -1246,7 +1246,7 @@ export async function prioritizeByScore(
 // 重试一次却"成功"，看起来像个偶发 bug。
 //
 // 所以 `POST .../draft` 只负责受理（返回 202），真正的进度从
-// `GET /ctf2/platforms/{id}` 轮询 —— 那里的 `isBuilding` 就是"还要不要
+// `GET /kernel/platforms/{id}` 轮询 —— 那里的 `isBuilding` 就是"还要不要
 // 继续轮"的判据。
 
 export type KernelPlatformDriver = 'ctf2' | 'generic'
@@ -1292,7 +1292,7 @@ export const PLATFORM_STATUS_TONE: Record<KernelPlatformStatus, 'ok' | 'warn' | 
 }
 
 export async function listKernelPlatforms(): Promise<KernelPlatform[]> {
-  return api.get<KernelPlatform[]>('/ctf2/platforms')
+  return api.get<KernelPlatform[]>('/kernel/platforms')
 }
 
 /**
@@ -1306,7 +1306,7 @@ export async function draftKernelPlatform(body: {
   accessKey: string
   document: string
 }): Promise<KernelPlatform> {
-  return api.post<KernelPlatform>('/ctf2/platforms/draft', {
+  return api.post<KernelPlatform>('/kernel/platforms/draft', {
     baseUrl: body.baseUrl.trim(),
     accessKey: body.accessKey.trim(),
     document: body.document,
@@ -1314,7 +1314,7 @@ export async function draftKernelPlatform(body: {
 }
 
 export async function readKernelPlatform(id: string): Promise<KernelPlatform> {
-  return api.get<KernelPlatform>(`/ctf2/platforms/${encodeURIComponent(id)}`)
+  return api.get<KernelPlatform>(`/kernel/platforms/${encodeURIComponent(id)}`)
 }
 
 /** 启用：后端会**再验一次**凭据（中间隔着一段不确定的窗口），然后写进账号表。 */
@@ -1322,7 +1322,7 @@ export async function activateKernelPlatform(
   id: string,
   body: { accessKey: string; label?: string },
 ): Promise<KernelPlatform> {
-  return api.post<KernelPlatform>(`/ctf2/platforms/${encodeURIComponent(id)}/activate`, {
+  return api.post<KernelPlatform>(`/kernel/platforms/${encodeURIComponent(id)}/activate`, {
     accessKey: body.accessKey.trim(),
     label: (body.label ?? '').trim(),
   })
@@ -1336,11 +1336,11 @@ export async function activateKernelPlatform(
  * "Hook 不能在普通函数里调用"。这是一个纯 API 函数，与 React 无关。
  */
 export async function switchToBuiltinPlatform(): Promise<void> {
-  await api.post<void>('/ctf2/platforms/use-builtin', {})
+  await api.post<void>('/kernel/platforms/use-builtin', {})
 }
 
 export async function deleteKernelPlatform(id: string): Promise<void> {
-  await api.del<void>(`/ctf2/platforms/${encodeURIComponent(id)}`)
+  await api.del<void>(`/kernel/platforms/${encodeURIComponent(id)}`)
 }
 
 /**

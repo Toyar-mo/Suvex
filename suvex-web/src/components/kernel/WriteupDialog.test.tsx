@@ -174,7 +174,7 @@ describe('CTF2 题解弹窗：用真实 200 响应渲染', () => {
 
     await waitFor(() => expect(dialogText()).toContain('题目信息'))
     expect(calls[0]).toContain(
-      '/api/v1/ctf2/challenges/ctf2chal_01M4QRAT254DE91N89338Z7P4M/writeup',
+      '/api/v1/kernel/challenges/ctf2chal_01M4QRAT254DE91N89338Z7P4M/writeup',
     )
     expect(calls[0]).not.toContain('/scans/')
   })

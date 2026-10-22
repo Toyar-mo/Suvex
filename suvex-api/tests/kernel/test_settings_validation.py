@@ -91,7 +91,7 @@ def _settings_body(**overrides: object) -> dict[str, object]:
 
 def _restore(ready_client: TestClient) -> None:
     """把配置还原成"两个开关都关"，免得污染同一会话里后面的用例。"""
-    ready_client.put(f"{API}/ctf2/settings", json=_settings_body())
+    ready_client.put(f"{API}/kernel/settings", json=_settings_body())
 
 
 # ══════════════════════════════════════════════════════════
@@ -114,7 +114,7 @@ def test_missing_switch_is_rejected_not_silently_defaulted(
     """
     body = _settings_body()
     body.pop(missing)
-    response = ready_client.put(f"{API}/ctf2/settings", json=body)
+    response = ready_client.put(f"{API}/kernel/settings", json=body)
     assert response.status_code == 400, response.text
     assert response.json()["error"]["code"] == "VALIDATION_FAILED"
     # ⚠️ 蛇形名 —— 见模块 docstring 最后一段。
@@ -127,7 +127,7 @@ def test_both_switches_missing_is_also_rejected(ready_client: TestClient) -> Non
     body = _settings_body()
     for name in SCENARIO_SWITCHES:
         body.pop(name)
-    response = ready_client.put(f"{API}/ctf2/settings", json=body)
+    response = ready_client.put(f"{API}/kernel/settings", json=body)
     assert response.status_code == 400, response.text
 
 
@@ -143,7 +143,7 @@ def test_explicit_value_still_round_trips(
     """
     try:
         saved = ready_client.put(
-            f"{API}/ctf2/settings",
+            f"{API}/kernel/settings",
             json=_settings_body(
                 enableAgentsecScenarios=value, enableIrScenarios=value
             ),
@@ -152,7 +152,7 @@ def test_explicit_value_still_round_trips(
         assert saved.json()["enableAgentsecScenarios"] is value
         assert saved.json()["enableIrScenarios"] is value
 
-        reread = ready_client.get(f"{API}/ctf2/settings")
+        reread = ready_client.get(f"{API}/kernel/settings")
         assert reread.status_code == 200
         assert reread.json()["enableAgentsecScenarios"] is value, "读回来的值必须与写进去的一致"
     finally:
@@ -170,7 +170,7 @@ def test_the_two_switches_do_not_flip_each_other(ready_client: TestClient) -> No
     """
     try:
         first = ready_client.put(
-            f"{API}/ctf2/settings",
+            f"{API}/kernel/settings",
             json=_settings_body(enableAgentsecScenarios=True, enableIrScenarios=False),
         )
         assert first.status_code == 200, first.text
@@ -178,7 +178,7 @@ def test_the_two_switches_do_not_flip_each_other(ready_client: TestClient) -> No
         assert first.json()["enableIrScenarios"] is False, "打开 agentsec 不该带翻 ir"
 
         second = ready_client.put(
-            f"{API}/ctf2/settings",
+            f"{API}/kernel/settings",
             json=_settings_body(enableAgentsecScenarios=True, enableIrScenarios=True),
         )
         assert second.status_code == 200, second.text

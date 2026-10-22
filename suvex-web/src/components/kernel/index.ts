@@ -7,7 +7,7 @@
  *
  * ⚠️ `EnvironmentStatus` 与 `SandboxProfileSelect` 也被
  * `settings/KernelPanel.tsx` 用到（默认镜像选择器），所以这里是
- * 它们唯一的出口，不要在页面里直接深引 `./ctf2/Xxx`。
+ * 它们唯一的出口，不要在页面里直接深引 `./kernel/Xxx`。
  */
 export { default as ChallengeCard } from './ChallengeCard'
 export { default as CompetitionPicker } from './CompetitionPicker'

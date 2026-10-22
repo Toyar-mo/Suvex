@@ -74,7 +74,7 @@ def _outcome(*, usages=None, transcript="", turns=3):
 
 
 def test_writeup_is_404_for_an_unknown_challenge(ready_client: TestClient) -> None:
-    resp = ready_client.get(f"{API}/ctf2/challenges/chal_nope/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/chal_nope/writeup")
 
     assert resp.status_code == 404
 
@@ -90,7 +90,7 @@ def test_writeup_is_409_with_a_next_step_when_never_solved(
     v0.36 那句"的实现、以及一个"凡 `environment_ready` 就拒绝"的实现，
     都会在这里或 `test_a_challenge_in_flight_...` 那条变红。
     """
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/writeup")
 
     assert resp.status_code == 409, resp.text
     error = resp.json()["error"]
@@ -111,7 +111,7 @@ def test_writeup_is_409_and_blames_the_old_version_when_missing_but_solved(
     """
     _attempt(db_session, ctf2_challenge.id)
 
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/writeup")
 
     assert resp.status_code == 409, resp.text
     message = resp.json()["error"]["message"]
@@ -148,7 +148,7 @@ def test_shell_scan_alone_counts_as_already_solved(
     ctf2_challenge.confirmed_flag = "flag{old_solve}"
     db_session.commit()
 
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/writeup")
 
     assert resp.status_code == 409, resp.text
     message = resp.json()["error"]["message"]
@@ -177,7 +177,7 @@ def test_a_challenge_in_flight_never_gets_the_wrong_explanation(
     ctf2_challenge.status = status
     db_session.commit()
 
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/writeup")
 
     assert resp.status_code == 409, resp.text
     message = resp.json()["error"]["message"]
@@ -200,7 +200,7 @@ def test_writeup_returns_the_contract_shape(
     )
     db_session.commit()
 
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/writeup")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -232,7 +232,7 @@ def test_writeup_filename_is_usable_for_download(
     )
     db_session.commit()
 
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/writeup")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/writeup")
 
     assert "/" not in resp.json()["filename"]
 
@@ -246,14 +246,14 @@ def test_challenge_usage_is_empty_for_a_fresh_challenge(
     ready_client: TestClient, ctf2_challenge
 ) -> None:
     """还没跑过 → 空数组（不是 404）—— 界面要显示"还没有数据"。"""
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/usage")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/usage")
 
     assert resp.status_code == 200
     assert resp.json() == []
 
 
 def test_challenge_usage_is_404_for_an_unknown_challenge(ready_client: TestClient) -> None:
-    resp = ready_client.get(f"{API}/ctf2/challenges/chal_nope/usage")
+    resp = ready_client.get(f"{API}/kernel/challenges/chal_nope/usage")
 
     assert resp.status_code == 404
 
@@ -276,7 +276,7 @@ def test_challenge_usage_lists_each_call_with_reported_flag(
     )
     db_session.commit()
 
-    resp = ready_client.get(f"{API}/ctf2/challenges/{ctf2_challenge.id}/usage")
+    resp = ready_client.get(f"{API}/kernel/challenges/{ctf2_challenge.id}/usage")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -297,7 +297,7 @@ def test_challenge_usage_lists_each_call_with_reported_flag(
 
 def test_global_usage_on_an_empty_database(ready_client: TestClient) -> None:
     """一条记录都没有时也返回 200 + 零值 —— 总览页要能渲染空状态。"""
-    resp = ready_client.get(f"{API}/ctf2/usage")
+    resp = ready_client.get(f"{API}/kernel/usage")
 
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -333,7 +333,7 @@ def test_global_usage_exposes_the_attempt_breakdown(
     )
     db_session.commit()
 
-    body = ready_client.get(f"{API}/ctf2/usage").json()
+    body = ready_client.get(f"{API}/kernel/usage").json()
 
     assert len(body["byAttempt"]) == 1
     row = body["byAttempt"][0]
@@ -369,7 +369,7 @@ def test_global_usage_exposes_calls_and_recorded_calls_separately(
     )
     db_session.commit()
 
-    body = ready_client.get(f"{API}/ctf2/usage").json()
+    body = ready_client.get(f"{API}/kernel/usage").json()
 
     assert body["calls"] == 2
     assert body["recordedCalls"] == 1
@@ -393,12 +393,12 @@ def test_global_usage_filters_really_filter(
     db_session.commit()
 
     by_challenge = ready_client.get(
-        f"{API}/ctf2/usage?challengeId={ctf2_challenge.id}"
+        f"{API}/kernel/usage?challengeId={ctf2_challenge.id}"
     ).json()
     by_competition = ready_client.get(
-        f"{API}/ctf2/usage?competitionId={ctf2_competition.id}"
+        f"{API}/kernel/usage?competitionId={ctf2_competition.id}"
     ).json()
-    by_other = ready_client.get(f"{API}/ctf2/usage?challengeId=chal_nope").json()
+    by_other = ready_client.get(f"{API}/kernel/usage?challengeId=chal_nope").json()
 
     assert by_challenge["calls"] == 1
     assert by_competition["calls"] == 1

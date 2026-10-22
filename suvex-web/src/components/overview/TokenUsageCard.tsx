@@ -29,8 +29,8 @@ import { Link } from 'react-router-dom'
  * | 层 | 数据 | 交互 |
  * | --- | --- | --- |
  * | 总消耗 | `/overview` 的四个字段 | — |
- * | 按模型 / 按题 | `GET /ctf2/usage` 的 `byModel` / `byChallenge` | 并列两组条 |
- * | 逐轮明细 | `GET /ctf2/challenges/{id}/usage` | 点某道题就地展开 |
+ * | 按模型 / 按题 | `GET /kernel/usage` 的 `byModel` / `byChallenge` | 并列两组条 |
+ * | 逐轮明细 | `GET /kernel/challenges/{id}/usage` | 点某道题就地展开 |
  *
  * ★ 为什么"按模型"这一维值得单列：v0.35 的换模 fallback 会让**同一次
  *   解题用多个模型**，而"换模前后各花多少、值不值"是这张卡能给出的
@@ -68,7 +68,7 @@ import { Link } from 'react-router-dom'
  * ## 细分是**另一次请求**，失败不影响这张卡
  *
  * 总消耗来自 `/overview`（与其它指标同一个事务，口径一致）；细分来自
- * `GET /ctf2/usage`，**单独发**。理由有两条：
+ * `GET /kernel/usage`，**单独发**。理由有两条：
  *
  *   1. `/overview` 是首屏端点，往里塞"前 50 道题的明细"会让它变重；
  *   2. 细分失败时用户仍然该看到总消耗 —— 而把两者绑在一个请求上，
@@ -99,7 +99,7 @@ export interface TokenUsageCardProps {
 }
 
 /**
- * 细分（`GET /ctf2/usage`）的取数状态。
+ * 细分（`GET /kernel/usage`）的取数状态。
  *
  * ⚠️ 三个值而不是一个 `data | null`：要区分"还没取回来"与"取失败"，
  * 否则失败会显示成"没有数据"—— 那正是这个卡片要消灭的那类混淆。
@@ -499,7 +499,7 @@ function UsageBreakdown({
 }
 
 /**
- * 某道题的**逐轮**消耗（`GET /ctf2/challenges/{id}/usage`）。
+ * 某道题的**逐轮**消耗（`GET /kernel/challenges/{id}/usage`）。
  *
  * ## ★★ 逐轮的"未记录"必须显示成「未记录」，不是 `0`
  *

@@ -22,7 +22,7 @@ import {
 
     · 章 id 里可能有 `/` 或空格 → 不 `encodeURIComponent` 就会打到
       一个不存在的路径，而症状是 404，看起来像"这道题不存在"；
-    · `/ctf2/usage` 的两个筛选参数如果传了**空串**，`buildUrl` 会把它
+    · `/kernel/usage` 的两个筛选参数如果传了**空串**，`buildUrl` 会把它
       拼成 `?challengeId=`，后端把它当筛选条件 → **静默返回空集**，
       界面上显示"总共就花了 0 token"。
 
@@ -63,7 +63,7 @@ describe('loadKernelWriteup', () => {
     expect(requested).toHaveLength(1)
     // 这是本次改动的**核心**：CTF2 的题解不在 /scans/{id}/writeup
     // （那条永远找不到 strix 报告，见契约 §3.19.5）。
-    expect(requested[0]).toContain('/api/v1/ctf2/challenges/chal_1/writeup')
+    expect(requested[0]).toContain('/api/v1/kernel/challenges/chal_1/writeup')
     expect(requested[0]).not.toContain('/scans/')
   })
 
@@ -72,7 +72,7 @@ describe('loadKernelWriteup', () => {
 
     await loadKernelWriteup('a/b c')
 
-    expect(requested[0]).toContain('/ctf2/challenges/a%2Fb%20c/writeup')
+    expect(requested[0]).toContain('/kernel/challenges/a%2Fb%20c/writeup')
   })
 })
 
@@ -82,7 +82,7 @@ describe('loadKernelUsage', () => {
 
     await loadKernelUsage()
 
-    expect(requested[0]).toContain('/api/v1/ctf2/usage')
+    expect(requested[0]).toContain('/api/v1/kernel/usage')
     /*
       这一条是"静默返回空集"的防线：`?challengeId=`（空串）会被后端
       当成一个真的筛选条件，于是总数变成 0 —— 而界面会把它显示成
@@ -118,7 +118,7 @@ describe('loadKernelChallengeUsage', () => {
 
     await loadKernelChallengeUsage('chal 2')
 
-    expect(requested[0]).toContain('/api/v1/ctf2/challenges/chal%202/usage')
+    expect(requested[0]).toContain('/api/v1/kernel/challenges/chal%202/usage')
   })
 })
 
@@ -278,7 +278,7 @@ describe('canHaveWorkOrder', () => {
 
   ## 为什么这条值得单独立一组
 
-  `PUT /ctf2/settings` 是**全量提交**：后端 `update_ctf2_settings`
+  `PUT /kernel/settings` 是**全量提交**：后端 `update_ctf2_settings`
   逐字段赋值，没传的字段按后端形参默认值落库。而两个场景包开关的
   后端默认值是 `False`。
 

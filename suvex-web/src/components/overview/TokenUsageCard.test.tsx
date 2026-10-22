@@ -33,7 +33,7 @@ import type { KernelTokenUsage } from '@/data/kernel'
 
   ## 细分是**第二次请求**，所以 fetch 要按 URL 分流
 
-  组件在 `calls > 0` 时会额外打 `GET /ctf2/usage` 取按题细分。这里用
+  组件在 `calls > 0` 时会额外打 `GET /kernel/usage` 取按题细分。这里用
   一个按 URL 分流的 stub：让明细那条**可控地失败**，用来验"细分失败
   不影响总消耗"这条降级。
 */
@@ -57,8 +57,8 @@ const EMPTY_USAGE: KernelTokenUsage = {
  * 装一个 fetch stub。
  *
  * 按 URL **分流**（v0.37 起卡片会打两个端点）：
- *   · `/ctf2/usage`            → 细分（`byModel` + `byChallenge`）
- *   · `/ctf2/challenges/{id}/usage` → 逐轮明细（点开某道题时才发）
+ *   · `/kernel/usage`            → 细分（`byModel` + `byChallenge`）
+ *   · `/kernel/challenges/{id}/usage` → 逐轮明细（点开某道题时才发）
  *
  * `detail`：
  *   · `'ok'`    细分返回一组真实形状的数据；
@@ -78,7 +78,7 @@ function installFetchStub(
   vi.stubGlobal('fetch', (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString()
 
-    // 逐轮明细：路径更长，必须先判它（否则会被 /ctf2/usage 的 includes 吃掉）
+    // 逐轮明细：路径更长，必须先判它（否则会被 /kernel/usage 的 includes 吃掉）
     if (url.includes('/challenges/')) {
       if (turns === 'never') return new Promise<Response>(() => {})
       if (turns === 'fail') {
@@ -132,7 +132,7 @@ function installFetchStub(
       )
     }
 
-    if (!url.includes('/ctf2/usage')) {
+    if (!url.includes('/kernel/usage')) {
       return Promise.reject(new Error(`不该请求这个地址：${url}`))
     }
     if (detail === 'never') {

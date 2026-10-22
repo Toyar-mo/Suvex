@@ -499,7 +499,7 @@ export function KernelPage() {
 
         {/*
           ★ 设置读不到时必须出声。
-          `/ctf2/settings` 是 admin 级，只有 read 的会话会拿到 403 ——
+          `/kernel/settings` 是 admin 级，只有 read 的会话会拿到 403 ——
           那时界面回落到 `safe` 是**对的**，但"我改过的策略怎么不见了"
           必须有答案，否则它会变成一个无法解释的现象。
         */}

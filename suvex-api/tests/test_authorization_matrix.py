@@ -139,16 +139,16 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #
         # ⚠️ 这几行必须与 `tests/kernel/test_router_auth_matrix.py` 的
         # `READ_ONLY` 逐条一致，那条对账测试会盯着。
-        ("GET", "/api/v1/ctf2/accounts"),
-        ("GET", "/api/v1/ctf2/competitions"),
-        ("GET", "/api/v1/ctf2/challenges"),
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}"),
-        ("GET", "/api/v1/ctf2/snapshot"),
-        ("GET", "/api/v1/ctf2/queue"),
+        ("GET", "/api/v1/kernel/accounts"),
+        ("GET", "/api/v1/kernel/competitions"),
+        ("GET", "/api/v1/kernel/challenges"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}"),
+        ("GET", "/api/v1/kernel/snapshot"),
+        ("GET", "/api/v1/kernel/queue"),
         # ⚠️ 与 `tests/kernel/test_router_auth_matrix.py` 的同一段必须一致
         #    （`test_the_two_matrices_agree` 会盯着）。
-        ("GET", "/api/v1/ctf2/platforms"),
-        ("GET", "/api/v1/ctf2/platforms/{platformId}"),
+        ("GET", "/api/v1/kernel/platforms"),
+        ("GET", "/api/v1/kernel/platforms/{platformId}"),
         # ── 题解与 token 统计（v0.36）──────────────────────
         #
         # 三个都是**纯读本地库**：题解是解题收尾时落库的 markdown，
@@ -157,12 +157,12 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # ⚠️ 题解里有 flag 原文（赛后提交给人看的）—— 仍是 read 级：
         #    flag 本来就在 `GET /ctf2/challenges` 的 `confirmedFlag` 里。
         #    需要拔高的是"提交"（对外动作 + 消耗额度），不是"看"。
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}/writeup"),
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}/usage"),
-        ("GET", "/api/v1/ctf2/usage"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}/writeup"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}/usage"),
+        ("GET", "/api/v1/kernel/usage"),
         # 处置建议工单（v0.41）：与题解同级 —— 纯读本地落盘的 markdown，
         # 不打平台、不含凭据；且比题解更不敏感（无 flag、无载荷原文）。
-        ("GET", "/api/v1/ctf2/challenges/{challengeId}/workorder"),
+        ("GET", "/api/v1/kernel/challenges/{challengeId}/workorder"),
         # ── 补一条**既有的漏项**（v0.20 顺手补，与 CTF2 无关）──
         #
         # `GET /scans/{scanId}/writeup` 是任务 19（题解）加的端点，
@@ -320,48 +320,48 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # 绑定/解绑写的是**凭据**，与 `POST /providers` 同级：给更低级别的话，
     # 一个能发起扫描的机器令牌就能替换平台的 PAT —— 那等于让它能拿
     # 别人的账号去提交 flag。
-    ("POST", "/api/v1/ctf2/accounts"): "admin",
-    ("DELETE", "/api/v1/ctf2/accounts/{accountId}"): "admin",
+    ("POST", "/api/v1/kernel/accounts"): "admin",
+    ("DELETE", "/api/v1/kernel/accounts/{accountId}"): "admin",
     # `submitMode=auto` 意味着机器会在**无人确认**的情况下对外提交 flag，
     # 而每次错误提交都消耗一个不可再生的额度。这是安全策略，不是界面偏好。
-    ("GET", "/api/v1/ctf2/settings"): "admin",
-    ("PUT", "/api/v1/ctf2/settings"): "admin",
+    ("GET", "/api/v1/kernel/settings"): "admin",
+    ("PUT", "/api/v1/kernel/settings"): "admin",
     # ── scan：对外动作 / 改数据 ──
     # 同步会改数据（写库）且发出去一串外部请求 —— 给 read 级的话，
     # 一个只读令牌就能反复触发同步，那是一条"用我们的凭据刷平台接口"的路。
-    ("POST", "/api/v1/ctf2/sync"): "scan",
+    ("POST", "/api/v1/kernel/sync"): "scan",
     # ★ v0.43 应急响应：建一个本地复盘任务。与 `POST /scans` 同级 ——
     # 它会消耗 LLM 额度、会起沙箱容器，所以不能给 read。
     # 同一判据在 `tests/kernel/test_router_auth_matrix.py` 里也有一份。
-    ("POST", "/api/v1/ctf2/ir/tasks"): "scan",
+    ("POST", "/api/v1/kernel/ir/tasks"): "scan",
     # 按链接拉单题：写库 + 打平台接口，与 sync 同级。
-    ("POST", "/api/v1/ctf2/challenges/pull"): "scan",
+    ("POST", "/api/v1/kernel/challenges/pull"): "scan",
     # ★ 这个端点**只读**，但仍然定 scan 级 —— 因为它每次都真的打一次
     # 平台接口（列赛事）。给 read 级的话，一个只读令牌就能反复触发
-    # 外部请求，与 `/ctf2/sync` 是同一条理由。
-    ("GET", "/api/v1/ctf2/competitions/remote"): "scan",
+    # 外部请求，与 `/kernel/sync` 是同一条理由。
+    ("GET", "/api/v1/kernel/competitions/remote"): "scan",
     # 起环境 + 调度解题：**对外发包**（`scan` scope 存在的理由）。
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/solve"): "scan",
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/solve"): "scan",
     # ★★ 提交 flag：**对外发出一个不可撤销的动作**，且有配额后果。
     # `read` 的定义是只读 —— 一个只读令牌能替用户扣掉答题机会，显然不成立。
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/submit"): "scan",
-    ("POST", "/api/v1/ctf2/challenges/{challengeId}/cancel"): "scan",
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/submit"): "scan",
+    ("POST", "/api/v1/kernel/challenges/{challengeId}/cancel"): "scan",
     # 释放平台环境：改状态 + 调平台接口。给 read 级的话，只读令牌就能把
     # 别人正在解题的环境停掉 —— 那会让解题在半路失败。
-    ("DELETE", "/api/v1/ctf2/challenges/{challengeId}/environment"): "scan",
+    ("DELETE", "/api/v1/kernel/challenges/{challengeId}/environment"): "scan",
     # ── v0.23 调度优先级 ───────────────────────────────
     # 改的是**队列顺序**：不改安全策略、不对外发动作、可撤销。
     # 与 `cancel`（改状态、不发包）同类，所以是 scan 而不是 admin。
     # 详见 `tests/kernel/test_router_auth_matrix.py` 里那段判据。
-    ("PUT", "/api/v1/ctf2/challenges/{challengeId}/priority"): "scan",
-    ("POST", "/api/v1/ctf2/priorities/by-score"): "scan",
+    ("PUT", "/api/v1/kernel/challenges/{challengeId}/priority"): "scan",
+    ("POST", "/api/v1/kernel/priorities/by-score"): "scan",
     # ── 平台接入：admin（v0.25）────────────────────────
     # 判据详见 `tests/kernel/test_router_auth_matrix.py` 的同名段落：
     # 这几个端点让服务端去打**用户给的地址**、并把凭据写进账号表。
-    ("POST", "/api/v1/ctf2/platforms/draft"): "admin",
-    ("POST", "/api/v1/ctf2/platforms/{platformId}/activate"): "admin",
-    ("POST", "/api/v1/ctf2/platforms/use-builtin"): "admin",
-    ("DELETE", "/api/v1/ctf2/platforms/{platformId}"): "admin",
+    ("POST", "/api/v1/kernel/platforms/draft"): "admin",
+    ("POST", "/api/v1/kernel/platforms/{platformId}/activate"): "admin",
+    ("POST", "/api/v1/kernel/platforms/use-builtin"): "admin",
+    ("DELETE", "/api/v1/kernel/platforms/{platformId}"): "admin",
 }
 
 # 高风险操作单独点名（任务 8 要求 1 的原话）。

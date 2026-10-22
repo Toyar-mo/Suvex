@@ -34,14 +34,14 @@ from app.kernel import attachments as attachments_mod
 from app.kernel.models import KernelChallenge, KernelCompetition
 
 API = "/api/v1"
-IR = f"{API}/ctf2/ir/tasks"
+IR = f"{API}/kernel/ir/tasks"
 
 
 def _stage(client: TestClient, files: list[tuple[str, bytes]]) -> str:
     """把文件暂存起来，返回 stagingId。
 
     ⚠️ 走的是 `POST /scans/attachments/staging` —— 不是另开一个
-    `/ctf2/ir/attachments`。附件暂存是**跨域**能力（扫描与复盘都要），
+    `/kernel/ir/attachments`。附件暂存是**跨域**能力（扫描与复盘都要），
     复制一份的话两条路的 TTL、上限、文件名净化迟早漂移。
     """
     response = client.post(
@@ -346,7 +346,7 @@ def test_audit_records_the_resolved_profile(
 def test_local_batch_is_not_listed_as_platform_batch(
     ready_client: TestClient, ctf2_competition: KernelCompetition
 ) -> None:
-    """本地批次会出现在 `/ctf2/competitions` 里，但 `accountId` 是 null。
+    """本地批次会出现在 `/kernel/competitions` 里，但 `accountId` 是 null。
 
     这条测的是"界面能不能正确处理 null"：`KernelCompetitionOut.accountId`
     若坚持 `str`，序列化会抛 `ValidationError`，表现是整个端点 500、
@@ -354,7 +354,7 @@ def test_local_batch_is_not_listed_as_platform_batch(
     """
     _create(ready_client, title="本地批次可见")
 
-    response = ready_client.get(f"{API}/ctf2/competitions")
+    response = ready_client.get(f"{API}/kernel/competitions")
     assert response.status_code == 200, response.text
 
     rows = response.json()
@@ -364,10 +364,10 @@ def test_local_batch_is_not_listed_as_platform_batch(
 
 
 def test_challenges_endpoint_shows_ir_task(ready_client: TestClient) -> None:
-    """建出来的任务在 `/ctf2/challenges` 里可见（前端页面靠它列表）。"""
+    """建出来的任务在 `/kernel/challenges` 里可见（前端页面靠它列表）。"""
     body = _create(ready_client, title="列表可见")
 
-    response = ready_client.get(f"{API}/ctf2/challenges")
+    response = ready_client.get(f"{API}/kernel/challenges")
     assert response.status_code == 200, response.text
     ids = {row["id"] for row in response.json()}
     assert body["challenge"]["id"] in ids
@@ -388,7 +388,7 @@ def test_solve_on_local_task_does_not_need_platform(
     body = _create(ready_client, title="能开跑")
     challenge_id = body["challenge"]["id"]
 
-    response = ready_client.post(f"{API}/ctf2/challenges/{challenge_id}/solve", json={})
+    response = ready_client.post(f"{API}/kernel/challenges/{challenge_id}/solve", json={})
 
     assert response.status_code in (200, 202), response.text
     assert [c[0] for c in _never_enqueue] == [challenge_id]
@@ -428,7 +428,7 @@ def test_platform_challenge_still_needs_account(
     db_session.commit()
 
     response = ready_client.post(
-        f"{API}/ctf2/challenges/{ctf2_challenge.id}/solve", json={}
+        f"{API}/kernel/challenges/{ctf2_challenge.id}/solve", json={}
     )
 
     assert response.status_code == 409
@@ -460,7 +460,7 @@ def test_local_task_runs_without_any_usable_account(
 
     body = _create(ready_client, title="账号过期也能复盘")
     response = ready_client.post(
-        f"{API}/ctf2/challenges/{body['challenge']['id']}/solve", json={}
+        f"{API}/kernel/challenges/{body['challenge']['id']}/solve", json={}
     )
 
     assert response.status_code in (200, 202), response.text

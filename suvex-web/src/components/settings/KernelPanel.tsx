@@ -41,7 +41,7 @@ import { useProviders } from '@/data/providers'
  * 而不是"更省事"。用户在改它的时候必须明白自己在换什么。
  */
 
-/** ⚠️ 与 `app/ctf2/service.py` 的 `MAX_WRONG_SUBMISSIONS_CEILING` 逐字一致 */
+/** ⚠️ 与 `app/kernel/service.py` 的 `MAX_WRONG_SUBMISSIONS_CEILING` 逐字一致 */
 const MAX_WRONG_SUBMISSIONS_CEILING = 10
 const MIN_WRONG_SUBMISSIONS = 0
 
@@ -251,7 +251,7 @@ export function KernelPanel() {
 
     ★ 空表单比"读不到"更坏 —— 用户会以为所有项都是关闭的，
       然后保存一次把它们真的写成关闭。
-      （`/ctf2/settings` 是 admin 级，只有 read 的会话会拿到 403。）
+      （`/kernel/settings` 是 admin 级，只有 read 的会话会拿到 403。）
   */
   if (!draft) {
     return (

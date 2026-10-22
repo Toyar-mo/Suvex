@@ -17,7 +17,7 @@ import {
  *
  * | | 扫描入口 | 本入口 |
  * | --- | --- | --- |
- * | 端点 | `GET /scans/{id}/writeup` | `GET /ctf2/challenges/{id}/writeup` |
+ * | 端点 | `GET /scans/{id}/writeup` | `GET /kernel/challenges/{id}/writeup` |
  * | 正文从哪来 | strix 报告的版式重排 | `runner` 的 transcript + 结论 |
  * | 失败语义 | 不是夺旗 / 报告被清理 | 从没解过 / 解过但早于 v0.36 |
  *

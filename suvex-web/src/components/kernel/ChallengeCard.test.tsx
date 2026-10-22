@@ -129,7 +129,7 @@ describe('ChallengeCard：题解入口的可见性', () => {
       却被判成"没有题解" —— 于是入口不显示，用户永远看不到那份题解。
 
       字段照真实 payload 抄（status/scanId/candidateFlag/confirmedFlag/
-      lastError 全部来自 `/ctf2/snapshot` 的实际响应）。
+      lastError 全部来自 `/kernel/snapshot` 的实际响应）。
     */
     renderCard(
       makeChallenge({

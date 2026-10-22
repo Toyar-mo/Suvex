@@ -79,12 +79,12 @@ def test_changing_the_submit_policy_is_audited(
     只写一句"更新了 CTF2 配置"是没有意义的：事后真正要回答的是
     "从什么时候起机器可以自己提交了"。所以 detail 里必须有那个值。
     """
-    before = ready_client.get("/api/v1/ctf2/settings")
+    before = ready_client.get("/api/v1/kernel/settings")
     assert before.status_code == 200, before.text
     current = before.json()
     flipped = "auto" if current["submitMode"] == "safe" else "safe"
 
-    changed = ready_client.put("/api/v1/ctf2/settings", json=_settings_body(flipped, current))
+    changed = ready_client.put("/api/v1/kernel/settings", json=_settings_body(flipped, current))
     assert changed.status_code == 200, changed.text
 
     rows = _rows(db_session, "ctf2.settings_update")
@@ -107,7 +107,7 @@ def test_cancelling_a_run_is_audited(
     它的审计价值在于"这道题怎么突然没结果了" —— 那是用户会来问的问题，
     而答案（他/别人点了取消）只有审计里才有。
     """
-    response = ready_client.post(f"/api/v1/ctf2/challenges/{ctf2_challenge.id}/cancel")
+    response = ready_client.post(f"/api/v1/kernel/challenges/{ctf2_challenge.id}/cancel")
     assert response.status_code == 200, response.text
 
     rows = _rows(db_session, "ctf2.solve_cancel")
@@ -129,7 +129,7 @@ def test_releasing_an_environment_is_not_audited(
     这条用例是**反向**的：它保证将来有人"顺手补一个埋点"时，
     会先看到这里已经说过为什么不做。
     """
-    response = ready_client.delete(f"/api/v1/ctf2/challenges/{ctf2_challenge.id}/environment")
+    response = ready_client.delete(f"/api/v1/kernel/challenges/{ctf2_challenge.id}/environment")
     assert response.status_code == 204, response.text
 
     leftovers = list(
@@ -156,12 +156,12 @@ def test_audit_never_contains_the_token(
     """
     from tests.kernel.conftest import TEST_PAT
 
-    current = ready_client.get("/api/v1/ctf2/settings").json()
+    current = ready_client.get("/api/v1/kernel/settings").json()
     ready_client.put(
-        "/api/v1/ctf2/settings",
+        "/api/v1/kernel/settings",
         json=_settings_body("safe" if current["submitMode"] == "auto" else "auto", current),
     )
-    ready_client.post(f"/api/v1/ctf2/challenges/{ctf2_challenge.id}/cancel")
+    ready_client.post(f"/api/v1/kernel/challenges/{ctf2_challenge.id}/cancel")
 
     blob = " ".join(
         f"{row.summary} {row.detail} {row.target or ''}"

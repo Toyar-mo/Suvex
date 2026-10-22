@@ -16,7 +16,7 @@ import { cn } from '@/lib/cn'
   的端点，练习集那部分同步回来只有元信息）。赛事那条链路是完整的
   （stages → challenges 都在），但它要求**逐场指定** —— 而"可选赛事"
   不能来自本地库：本地库里的赛事正是上一次同步的结果，第一次用的时候
-  它是空的。所以这个弹窗直接问平台要列表（`GET /ctf2/competitions/remote`）。
+  它是空的。所以这个弹窗直接问平台要列表（`GET /kernel/competitions/remote`）。
 
   ⛔ 一条必须写在界面上的事实
 
