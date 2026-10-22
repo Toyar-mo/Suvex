@@ -946,6 +946,12 @@ class LaunchSpec:
     #   这个选项 —— 那等于替用户做了一个他没做过的决定。
     enable_offensive_prompt: bool = False
 
+    # ★ v0.58：多智能体编排开关。由 `scans.service` 从 KernelConfig 读出并
+    # 写进本字段（引擎侧独立线程、不碰库，只能读这份快照）。只对自研引擎
+    # （agent 后端）有意义 —— `StrixRunner` 不读它。默认 `False`：默认关，
+    # 由人显式打开（成本按子 agent 数量放大，见 KernelConfig 的说明）。
+    multi_agent: bool = False
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据，也不含 `brief`**。
 

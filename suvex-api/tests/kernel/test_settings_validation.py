@@ -84,6 +84,7 @@ def _settings_body(**overrides: object) -> dict[str, object]:
         "fallbackProviderId": None,
         "enableAgentsecScenarios": False,
         "enableIrScenarios": False,
+        "enableMultiAgent": False,
     }
     body.update(overrides)
     return body

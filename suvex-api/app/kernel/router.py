@@ -316,6 +316,7 @@ def _settings_out(row) -> KernelSettingsOut:  # noqa: ANN001
         fallbackProviderId=row.fallback_provider_id,
         enableAgentsecScenarios=row.enable_agentsec_scenarios,
         enableIrScenarios=row.enable_ir_scenarios,
+        enableMultiAgent=row.enable_multi_agent,
         updatedAt=row.updated_at,
     )
 
@@ -355,6 +356,7 @@ def update_ctf2_settings(
         fallback_provider_id=payload.fallbackProviderId,
         enable_agentsec_scenarios=payload.enableAgentsecScenarios,
         enable_ir_scenarios=payload.enableIrScenarios,
+        enable_multi_agent=payload.enableMultiAgent,
     )
     audit.record(
         db,
@@ -391,6 +393,10 @@ def update_ctf2_settings(
             #   这一项是唯一能回答的线索 —— 它与 agentsec 是两个独立问题，
             #   所以分开记，不合并成"场景包状态"一项。
             "enableIrScenarios": row.enable_ir_scenarios,
+            # ★ v0.58：多智能体编排开关。它改变执行拓扑（单循环 vs
+            #   root+子 agent），会把一次任务的 LLM 调用量放大约 N 倍 ——
+            #   事后"这次为什么花了这么多 token"要看这一项。
+            "enableMultiAgent": row.enable_multi_agent,
         },
     )
     return _settings_out(row)

@@ -3417,6 +3417,13 @@ class KernelSettings:
     #: 共用开关会让一族的分类在另一族开关打开时通过校验，
     #: 而对应的 prompt 块不注入 —— 分类合法、纪律没注入。
     enable_ir_scenarios: bool = False
+    #: 是否启用多智能体编排（v0.58）。默认 **False**。
+    #:
+    #: 打开时 `SolveSpec.multi_agent=True`，解题走 root 调度 + 子 agent
+    #: 并行执行；关着时单循环逐字节不变。它改变**执行拓扑**、
+    #: 不改变行为纪律（与两个场景包开关不同维），但会把一次任务的
+    #: LLM 调用量放大约 N 倍 —— 所以默认关、由人显式打开。
+    enable_multi_agent: bool = False
 
 
 def effective_ctf2_settings(db: Session) -> KernelSettings:
@@ -3446,6 +3453,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
             fallback_provider_id=None,
             enable_agentsec_scenarios=False,
             enable_ir_scenarios=False,
+            enable_multi_agent=False,
         )
     return KernelSettings(
         submit_mode=row.submit_mode,
@@ -3460,6 +3468,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
         fallback_provider_id=row.fallback_provider_id,
         enable_agentsec_scenarios=row.enable_agentsec_scenarios,
         enable_ir_scenarios=row.enable_ir_scenarios,
+        enable_multi_agent=row.enable_multi_agent,
     )
 
 
@@ -3489,6 +3498,7 @@ def update_ctf2_settings(
     fallback_provider_id: str | None = None,
     enable_agentsec_scenarios: bool,
     enable_ir_scenarios: bool,
+    enable_multi_agent: bool,
 ) -> KernelConfig:
     """保存配置。**逐项校验，不静默夹取。**
 
@@ -3547,12 +3557,13 @@ def update_ctf2_settings(
     row.fallback_provider_id = normalized_fallback
     row.enable_agentsec_scenarios = bool(enable_agentsec_scenarios)
     row.enable_ir_scenarios = bool(enable_ir_scenarios)
+    row.enable_multi_agent = bool(enable_multi_agent)
     db.commit()
     db.refresh(row)
     logger.info(
         "CTF2 配置已更新：mode=%s maxWrong=%d profile=%s 解题并发=%d "
         "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 备用模型=%s "
-        "智能体安全场景=%s 应急响应场景=%s",
+        "智能体安全场景=%s 应急响应场景=%s 多智能体=%s",
         submit_mode,
         max_wrong_submissions,
         default_sandbox_profile,
@@ -3570,6 +3581,10 @@ def update_ctf2_settings(
         # ★ v0.41：同上，独立一项。两个开关分开记，因为"当时到底开了
         # 哪一个"在复盘时是两个独立问题 —— 记成一项就再也分不出来了。
         "开" if enable_ir_scenarios else "关",
+        # ★ v0.58：多智能体编排开关。它改变的是**执行拓扑**（单循环 vs
+        # root+子 agent），与两个场景包开关（行为纪律）不同维。事后
+        # "这次为什么花了 N 倍 token / 为什么有并行子任务"要看这一项。
+        "开" if enable_multi_agent else "关",
     )
     return row
 

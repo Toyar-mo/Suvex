@@ -5278,6 +5278,9 @@ def build_spec(
     # 没配置行时按 False 走：与"关着"同义，不替用户编一个他设过的值。
     offensive_on = bool(sandbox_row.enable_offensive_prompt) if sandbox_row else False
 
+    # ★ v0.58：是否走多智能体编排。与题型无关（执行拓扑是一个独立维度）。
+    multi_agent_on = _multi_agent_enabled(db)
+
     # ★ v0.41：攻防知识互查。只在**本题确实是 IR 题且开关开着**时才查 ——
     # 理由与 `_ir_enabled` 两条件同构：
     #
@@ -5353,6 +5356,8 @@ def build_spec(
         agentsec=agentsec_on,
         # ★ v0.41：是否追加应急响应块（见 `SolveSpec.ir`）。
         ir=ir_on,
+        # ★ v0.58：是否走多智能体编排（见 `SolveSpec.multi_agent`）。
+        multi_agent=multi_agent_on,
         # ★ v0.42：手法块开关值（见 `SolveSpec.offensive` —— 它存的是
         #   开关本身，"该不该注入"要等 `build_system_prompt` 排掉场景包才定）。
         offensive=offensive_on,
@@ -5474,6 +5479,24 @@ def _ir_enabled(db: Session, challenge: KernelChallenge) -> bool:
         return bool(effective_ctf2_settings(db).enable_ir_scenarios)
     except Exception:  # noqa: BLE001 - 读配置失败不该拦住解题
         logger.warning("读 CTF2 配置失败，本次不追加应急响应块", exc_info=True)
+        return False
+
+
+def _multi_agent_enabled(db: Session) -> bool:
+    """这次解题要不要走多智能体编排（v0.58）。
+
+    只有一个条件：CTF2 配置里 `enable_multi_agent` 打开了。它**不看
+    分类** —— 与两个场景包开关不同，多智能体是执行拓扑，任何题型都可
+    跑单循环或编排。
+
+    读配置失败时返回 False（安全方向：不编排 = 行为与引入前一致）。
+    """
+    try:
+        from app.kernel.service import effective_ctf2_settings
+
+        return bool(effective_ctf2_settings(db).enable_multi_agent)
+    except Exception:  # noqa: BLE001 - 读配置失败不该拦住解题
+        logger.warning("读 CTF2 配置失败，本次走单循环", exc_info=True)
         return False
 
 

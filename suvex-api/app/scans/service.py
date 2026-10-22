@@ -844,6 +844,17 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
     execution = settings_service.effective_execution_settings(db)
     # 沙箱配额走只读读取 —— 启动一次扫描不该凭空建出一行配置。
     sandbox = settings_service.read_sandbox_config(db)
+    # ★ v0.58：多智能体编排开关。它属于 KernelConfig（与两个场景包开关
+    #   同源），不是 sandbox 配置 —— 但含义是"执行拓扑"，与扫描/解题
+    #   通用。这里读一次值写进 LaunchSpec，引擎侧（独立线程、不碰库）
+    #   就只读这一份快照。读配置失败按"关"处理（与引擎侧同一条安全方向）。
+    try:
+        from app.kernel.service import effective_ctf2_settings
+
+        multi_agent_on = bool(effective_ctf2_settings(db).enable_multi_agent)
+    except Exception:  # noqa: BLE001 - 读配置失败不该拦住启动扫描
+        logger.warning("读多智能体开关失败，本次扫描走单循环", exc_info=True)
+        multi_agent_on = False
 
     # ★ 续跑判定（任务 16）：**同一个扫描记录再次启动**就是续跑。
     #
@@ -928,6 +939,9 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         # ★ v0.42：越权与注入手法块。与上面三项同源（都来自那张单例行），
         # 但这一项**没有 env 兜底** —— 它是行为开关，没配置行时就是"关"。
         enable_offensive_prompt=bool(sandbox.enable_offensive_prompt) if sandbox else False,
+        # ★ v0.58：多智能体编排开关（见上面读取处）。只对自研引擎（agent
+        #   后端）有意义；strix 后端不读这个字段。
+        multi_agent=multi_agent_on,
         # 续跑（任务 16）。非空时 `command()` 会改传 `--resume` 而不传
         # `--target` —— 两者互斥，见 runner 的说明。
         resume_run_id=resume_run_id,

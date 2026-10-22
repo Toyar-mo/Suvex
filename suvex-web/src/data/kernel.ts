@@ -436,6 +436,18 @@ export interface KernelSettings {
    * 而对应的提示词块却不注入 —— 分类合法、纪律没注入，静默失效。
    */
   enableIrScenarios: boolean
+  /**
+   * 多智能体编排（v0.58）。**默认关闭。**
+   *
+   * 打开后一次解题（CTF 题 / 渗透评估 / 应急响应复盘）走 root 调度 +
+   * 子 agent 并行执行的完整编排，而不是单条 ReAct 循环。关着时单循环
+   * 逐字节不变。
+   *
+   * ⚠️ 它改变的是**执行拓扑**，与上面两个开关（改变行为纪律）不同维 ——
+   * 任何题型都能跑单循环或编排。但会把一次任务的 LLM 调用量按子 agent
+   * 数量放大约 N 倍，所以默认关、由人显式打开。
+   */
+  enableMultiAgent: boolean
   updatedAt: string
 }
 
@@ -1110,6 +1122,8 @@ export async function saveKernelSettings(next: {
   enableAgentsecScenarios: boolean
   /** 应急响应场景包开关（v0.41）。必填，同上 —— 漏传会被静默关掉。 */
   enableIrScenarios: boolean
+  /** 多智能体编排开关（v0.58）。必填，同上 —— 漏传会被静默关掉。 */
+  enableMultiAgent: boolean
 }): Promise<KernelSettings> {
   const saved = await api.put<KernelSettings>('/kernel/settings', next)
   settings = saved

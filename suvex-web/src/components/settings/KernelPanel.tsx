@@ -137,7 +137,8 @@ export function KernelPanel() {
       draft.maxTurns !== settings.maxTurns ||
       draft.fallbackProviderId !== settings.fallbackProviderId ||
       draft.enableAgentsecScenarios !== settings.enableAgentsecScenarios ||
-      draft.enableIrScenarios !== settings.enableIrScenarios
+      draft.enableIrScenarios !== settings.enableIrScenarios ||
+      draft.enableMultiAgent !== settings.enableMultiAgent
     )
   }, [draft, settings])
 
@@ -229,6 +230,7 @@ export function KernelPanel() {
         fallbackProviderId: draft.fallbackProviderId,
         enableAgentsecScenarios: draft.enableAgentsecScenarios,
         enableIrScenarios: draft.enableIrScenarios,
+        enableMultiAgent: draft.enableMultiAgent,
       })
       setSaveState({ kind: 'saved', at: new Date().toISOString() })
       setTouched(false)
@@ -665,6 +667,21 @@ export function KernelPanel() {
           }
           checked={draft.enableIrScenarios}
           onChange={(value) => setDraft({ ...draft, enableIrScenarios: value })}
+        />
+        <Toggle
+          id="ctf2-multi-agent"
+          label="启用多智能体编排"
+          hint={
+            '打开后，一次解题（CTF 题 / 渗透评估 / 应急响应复盘）走' +
+            '「主控智能体调度 + 多个子智能体并行执行」的完整编排，' +
+            '而不是单条循环。关着时单条循环逐字节不变。' +
+            '★ 它改变的是**执行方式**，与上面两个开关（改变判定纪律）' +
+            '互相独立 —— 任何题型都能跑单条循环或编排。' +
+            '⚠️ 打开后一次任务的模型调用量会按子智能体数量放大约数倍，' +
+            '成本更高、耗时更难预估，所以默认关闭。'
+          }
+          checked={draft.enableMultiAgent}
+          onChange={(value) => setDraft({ ...draft, enableMultiAgent: value })}
         />
       </div>
 

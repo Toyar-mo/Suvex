@@ -332,6 +332,7 @@ describe('saveKernelSettings 的场景包开关', () => {
       fallbackProviderId: null,
       enableAgentsecScenarios: true,
       enableIrScenarios: true,
+      enableMultiAgent: true,
     })
 
     expect(putBodies).toHaveLength(1)
@@ -340,6 +341,7 @@ describe('saveKernelSettings 的场景包开关', () => {
     //    "字段根本不存在"正是这条要防的那个 bug，它必须红。
     expect(body.enableAgentsecScenarios).toBe(true)
     expect(body.enableIrScenarios).toBe(true)
+    expect(body.enableMultiAgent).toBe(true)
   })
 
   it('★ 关掉时发的是 `false`，不是"不传"', async () => {
@@ -365,6 +367,7 @@ describe('saveKernelSettings 的场景包开关', () => {
       fallbackProviderId: null,
       enableAgentsecScenarios: false,
       enableIrScenarios: false,
+      enableMultiAgent: false,
     })
 
     const body = putBodies[0] as Record<string, unknown>
@@ -372,6 +375,7 @@ describe('saveKernelSettings 的场景包开关', () => {
     expect('enableIrScenarios' in body).toBe(true)
     expect(body.enableAgentsecScenarios).toBe(false)
     expect(body.enableIrScenarios).toBe(false)
+    expect(body.enableMultiAgent).toBe(false)
   })
 
   it('★★ 两个开关**各自独立**，不会互相带翻', async () => {
@@ -404,6 +408,7 @@ describe('saveKernelSettings 的场景包开关', () => {
         fallbackProviderId: null,
         enableAgentsecScenarios: agentsec,
         enableIrScenarios: ir,
+        enableMultiAgent: ir,
       })
 
       const body = putBodies[0] as Record<string, unknown>

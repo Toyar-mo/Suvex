@@ -678,6 +678,42 @@ class KernelConfig(Base):
         Boolean, nullable=False, default=False
     )
 
+    # ── 多智能体编排（v0.58）────────────────────────────
+    #
+    # ## 它控制什么：一条路径，且只有一条
+    #
+    # 打开时，`SolveSpec.multi_agent=True` —— 一次解题（CTF 题 / 渗透评估 /
+    # 应急响应复盘）走 **root 调度 + N 个子 agent 并行执行** 的完整编排，
+    # 而不是单条 ReAct 循环。关着时 `solve_in_sandbox` 对 `multi_agent=False`
+    # 的分支**逐字节不变**（这是 v0.58 最硬的回归验收）。
+    #
+    # ## 与两个场景包开关的区别
+    #
+    # `enable_agentsec_scenarios` / `enable_ir_scenarios` 换的是**行为纪律**
+    # （攻 vs 只读复盘）；这个开关换的是**执行拓扑**（单循环 vs 编排），
+    # 与分类无关 —— 任何题型都可以跑在单循环或编排上。所以它是独立一维。
+    #
+    # ## 为什么默认关闭
+    #
+    # 多智能体不是"多给几种工具"，它改变了**成本结构**与**可预测性**：
+    #
+    #   · 成本：root + N 个子 agent 各跑一条循环，一次任务的 LLM 调用
+    #     量按子 agent 数量放大约 N 倍。默认打开意味着"用户点一次开始
+    #     解题就默认花 N 倍的钱"，那是一次没人同意的成本决定。
+    #   · 可预测性：并行编排下"第几轮出结论"不再线性可推，墙钟与
+    #     token 都更难预估。默认打开会让所有既有对"单任务预算"的
+    #     直觉失效。
+    #
+    # 所以与两个场景包开关同一条纪律：**默认关，由人显式打开**。
+    # 冲突时站在"错不起"的那一侧。
+    #
+    # ## 为什么不放环境变量
+    #
+    # 同前两项：行为开关不该由一个部署参数静默决定。
+    enable_multi_agent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
     )

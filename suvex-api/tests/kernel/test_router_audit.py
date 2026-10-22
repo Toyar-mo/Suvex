@@ -68,6 +68,8 @@ def _settings_body(mode: str, source: dict) -> dict:
         # 那种写法恰好复现了要修的那个缺陷：读不到就当成 false 发出去。
         "enableAgentsecScenarios": source["enableAgentsecScenarios"],
         "enableIrScenarios": source["enableIrScenarios"],
+        # v0.58 新增（多智能体编排开关）。同样必填、同样透传当前值。
+        "enableMultiAgent": source["enableMultiAgent"],
     }
 
 

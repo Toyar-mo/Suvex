@@ -1275,6 +1275,7 @@ def _set_agentsec_switch(db: Session, *, on: bool) -> None:
         # IR 那个开关原样透传 —— 它是必填关键字参数（v0.44），且
         # 这条 helper 只关心 agentsec 一个，不该顺手改另一个。
         enable_ir_scenarios=row.enable_ir_scenarios,
+        enable_multi_agent=row.enable_multi_agent,
     )
 
 

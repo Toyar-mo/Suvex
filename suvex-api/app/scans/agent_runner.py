@@ -863,4 +863,8 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
         brief=spec.brief or "",
         pentest=True,
         offensive=bool(spec.enable_offensive_prompt),
+        # ★ v0.58：多智能体编排开关（与 CTF 侧同一个配置项）。这个函数是
+        # 纯函数（不碰库），所以值来自 `LaunchSpec.multi_agent`，由调用方
+        # `_run_engine` 在建 spec 前从配置读出并写进 LaunchSpec。
+        multi_agent=bool(getattr(spec, "multi_agent", False)),
     )

@@ -60,6 +60,7 @@ def _set_global(db: Session, *, mode: str | None = None, turns: int | None = Non
         max_turns=turns or row.max_turns,
         enable_agentsec_scenarios=row.enable_agentsec_scenarios,
         enable_ir_scenarios=row.enable_ir_scenarios,
+        enable_multi_agent=row.enable_multi_agent,
     )
 
 
@@ -407,6 +408,7 @@ def _update_settings(db: Session, *, fallback_provider_id):  # noqa: ANN001
         # 两个场景包开关是必填关键字参数（v0.44）—— 原样透传。
         enable_agentsec_scenarios=row.enable_agentsec_scenarios,
         enable_ir_scenarios=row.enable_ir_scenarios,
+        enable_multi_agent=row.enable_multi_agent,
     )
 
 
