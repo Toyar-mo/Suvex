@@ -881,8 +881,22 @@ class KernelSandboxProfile(StrEnum):
     —— 代码、提示词、镜像全对，唯一错的是数据库里那行字面量。
     """
 
-    BASE = "ctf2-sandbox"
-    REVERSE = "ctf2-sandbox-re"
+    BASE = "suvex-sandbox"
+    REVERSE = "suvex-sandbox-re"
+    IR = "suvex-sandbox-ir"
+
+    # ── 旧名（v0.65 改名前的镜像 tag）────────────────────
+    #
+    # ⚠️ 这三个**只用于向后兼容**，不要在新建数据里写它们：
+    #   · 数据库里在 v0.65 之前建的题/环境，「沙箱档案」列存的还是旧名；
+    #   · 迁移 `20261022_..._rename_sandbox_images` 会把它们改成新名，
+    #     但**保留在枚举里**是为了 CHECK 约束同时接受新旧两值 —— 这样
+    #     在"迁移已跑、但某台部署机的镜像还没打新 tag"或"回滚代码"的
+    #     过渡窗口里，不会因为一行旧字面量抛 CheckViolation 把整页搞 500。
+    #   · 取用户可见选项时要过滤掉它们（见 `USER_SANDBOX_PROFILES`）。
+    LEGACY_BASE = "ctf2-sandbox"
+    LEGACY_REVERSE = "ctf2-sandbox-re"
+    LEGACY_IR = "ctf2-sandbox-ir"
     # ★ v0.41：应急响应 / 取证复盘专用镜像。
     #
     # ## 为什么它也必须单独一个镜像
@@ -899,7 +913,37 @@ class KernelSandboxProfile(StrEnum):
     # 成本 —— 这一点在 `docker/README.md` 里如实记过。
     #
     # ⚠️ 本镜像**不含**反向工程工具与攻击工具。它要能读 log，不要能打。
-    IR = "ctf2-sandbox-ir"
+    #    （`IR` 取值在上方 `BASE`/`REVERSE` 那一组里声明，此处只保留说明。）
+
+
+#: 旧镜像名 → 新镜像名的映射（v0.65 改名）。
+#:
+#: 用在所有"读旧值、写新值"的入口：`image_for_profile`、`service` 的取值校验、
+#: 前后端 label 查表。**只在读取侧用，不在写入侧用** —— 新建数据一律写新名。
+LEGACY_SANDBOX_PROFILE_MAP: dict[str, str] = {
+    KernelSandboxProfile.LEGACY_BASE.value: KernelSandboxProfile.BASE.value,
+    KernelSandboxProfile.LEGACY_REVERSE.value: KernelSandboxProfile.REVERSE.value,
+    KernelSandboxProfile.LEGACY_IR.value: KernelSandboxProfile.IR.value,
+}
+
+#: 用户在界面上**能选**的沙箱档案（过滤掉旧名）。
+#:
+#: 界面选项与后端校验都用它，避免"下拉里冒出 ctf2-sandbox 这种历史名"。
+USER_SANDBOX_PROFILES: tuple[str, ...] = (
+    KernelSandboxProfile.BASE.value,
+    KernelSandboxProfile.REVERSE.value,
+    KernelSandboxProfile.IR.value,
+)
+
+
+def normalize_sandbox_profile(value: str) -> str:
+    """把可能的历史镜像名映射成当前镜像名；认不出的原样返回。
+
+    认不出的原样返回（而不是抛错或退回 base）：调用方（`image_for_profile`
+    / 校验）自己决定"未知值"怎么办 —— 有的地方该退回 base 并出声，
+    有的地方该拒绝。这里只负责"旧名 → 新名"这一步纯映射。
+    """
+    return LEGACY_SANDBOX_PROFILE_MAP.get(value, value)
 
 
 class AgentsecCategory(StrEnum):

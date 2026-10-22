@@ -7,6 +7,7 @@ import {
   PRIORITY_MANUAL_BASE,
   SANDBOX_PROFILE_LABEL,
   canHaveWorkOrder,
+  normalizeSandboxProfile,
   canHaveWriteup,
   type KernelChallenge,
 } from '@/data/kernel'
@@ -248,7 +249,11 @@ export function ChallengeCard({
               </>
             )}
             <span aria-hidden="true">·</span>
-            <span className="mono-ui">{SANDBOX_PROFILE_LABEL[challenge.sandboxProfile]}</span>
+            <span className="mono-ui">
+              {SANDBOX_PROFILE_LABEL[
+                normalizeSandboxProfile(challenge.sandboxProfile) as keyof typeof SANDBOX_PROFILE_LABEL
+              ] ?? challenge.sandboxProfile}
+            </span>
           </div>
         </div>
 

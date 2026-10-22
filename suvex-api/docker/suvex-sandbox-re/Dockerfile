@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════
-# ctf2-sandbox-re —— **逆向专用**沙箱（已定设计决策 1）
+# suvex-sandbox-re —— **逆向专用**沙箱（已定设计决策 1）
 # ══════════════════════════════════════════════════════════
 #
 # ## ★ 为什么逆向要单独一个镜像，而不是把工具加进 base
@@ -22,12 +22,12 @@
 # 多一个 binwalk 带来的额外风险，远小于"题做不了"的确定性损失。
 # ══════════════════════════════════════════════════════════
 
-# 用**带日期**的具体 tag 而不是裸 `ctf2-sandbox`：
+# 用**带日期**的具体 tag 而不是裸 `suvex-sandbox`：
 # 裸 tag 意味着 `docker build` re 镜像时拿到的是"当前 latest"，
 # 而两次构建之间 base 变了的话，re 里嵌的是一份**没人记得版本**的底。
-# 构建流程：先构建 base 并打 `ctf2-sandbox:<date>`，
+# 构建流程：先构建 base 并打 `suvex-sandbox:<date>`，
 # 再把下面这行改成同一个 date。
-ARG BASE_IMAGE=ctf2-sandbox:latest
+ARG BASE_IMAGE=suvex-sandbox:latest
 FROM ${BASE_IMAGE}
 
 USER root

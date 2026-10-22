@@ -118,9 +118,9 @@ def test_naming_error_and_image_lag_stay_in_separate_buckets(monkeypatch):
     """
     # 现场 A：包装好了，但命令名不对
     monkeypatch.setitem(vst.PACKAGE_COMMANDS, "demo-pkg", ("demo-cmd", "demo-real"))
-    image = vst.ImagePackages(name="ctf2-sandbox", apt=["demo-pkg"], pip=[])
+    image = vst.ImagePackages(name="suvex-sandbox", apt=["demo-pkg"], pip=[])
     drift = vst.classify_drift(
-        "ctf2-sandbox",
+        "suvex-sandbox",
         image,
         {"demo-cmd": False, "demo-real": True},
         {("demo-pkg", "apt"): True},
@@ -130,9 +130,9 @@ def test_naming_error_and_image_lag_stay_in_separate_buckets(monkeypatch):
     assert not drift.clean
 
     # 现场 B：包根本没装（历史上的 `patchelf` / `gdb`）
-    image_b = vst.ImagePackages(name="ctf2-sandbox", apt=["gdb"], pip=[])
+    image_b = vst.ImagePackages(name="suvex-sandbox", apt=["gdb"], pip=[])
     drift_b = vst.classify_drift(
-        "ctf2-sandbox",
+        "suvex-sandbox",
         image_b,
         {"gdb": False},
         {("gdb", "apt"): False},
@@ -144,19 +144,19 @@ def test_naming_error_and_image_lag_stay_in_separate_buckets(monkeypatch):
 def test_second_screen_prints_two_labelled_sections(capsys):
     """报告面上 A / B 必须各占一段，带各自的修法。"""
     naming = vst.ImageDrift(
-        image="ctf2-sandbox-re",
+        image="suvex-sandbox-re",
         naming_errors=[("csc", "mono-devel")],
     )
     lagging = vst.ImageDrift(
-        image="ctf2-sandbox",
+        image="suvex-sandbox",
         image_lagging=[("gdb", "gdb")],
     )
-    vst.print_second_screen({"ctf2-sandbox": lagging, "ctf2-sandbox-re": naming}, "")
+    vst.print_second_screen({"suvex-sandbox": lagging, "suvex-sandbox-re": naming}, "")
     out = capsys.readouterr().out
 
     # 两个具体条目都要出现，且各自带镜像名
-    assert "csc" in out and "ctf2-sandbox-re" in out
-    assert "gdb" in out and "ctf2-sandbox" in out
+    assert "csc" in out and "suvex-sandbox-re" in out
+    assert "gdb" in out and "suvex-sandbox" in out
     # 两栏标题分开
     assert "A 名单写错" in out
     assert "B 镜像没跟上" in out
@@ -170,9 +170,9 @@ def test_second_screen_prints_two_labelled_sections(capsys):
 
 def test_unknown_is_its_own_bucket_not_a_pass():
     """包状态问不到时 → `unknown`，既不是通过，也不许猜成 A 或 B。"""
-    image = vst.ImagePackages(name="ctf2-sandbox", apt=["gdb"], pip=[])
+    image = vst.ImagePackages(name="suvex-sandbox", apt=["gdb"], pip=[])
     drift = vst.classify_drift(
-        "ctf2-sandbox",
+        "suvex-sandbox",
         image,
         {"gdb": False},
         {},  # 没有任何包状态 —— 探测那一半失败了
@@ -185,9 +185,9 @@ def test_unknown_is_its_own_bucket_not_a_pass():
 
 def test_commands_that_exist_are_not_reported():
     """命令都在 → 两栏都空。宁可漏报也不能天天假报（假报会让脚本被无视）。"""
-    image = vst.ImagePackages(name="ctf2-sandbox", apt=["gdb", "vim-tiny"], pip=[])
+    image = vst.ImagePackages(name="suvex-sandbox", apt=["gdb", "vim-tiny"], pip=[])
     drift = vst.classify_drift(
-        "ctf2-sandbox",
+        "suvex-sandbox",
         image,
         {"gdb": True, "vi": True, "vim.tiny": True},
         {("gdb", "apt"): True, ("vim-tiny", "apt"): True},
@@ -236,7 +236,7 @@ def test_missing_image_is_also_not_a_pass(monkeypatch, capsys):
     这一条防的是：有人把"拿不到结果"当成"结果是好的"。
     """
     monkeypatch.setattr(vst.shutil, "which", lambda _name: "/usr/bin/docker")
-    probe = fake_probe(absent_images=["ctf2-sandbox", "ctf2-sandbox-re", "ctf2-sandbox-ir"])
+    probe = fake_probe(absent_images=["suvex-sandbox", "suvex-sandbox-re", "suvex-sandbox-ir"])
     outcome = vst.check(probe=True, probe_fn=probe)
     out = capsys.readouterr().out
 
@@ -272,7 +272,7 @@ def test_drift_is_detected_and_attributed(monkeypatch, capsys):
     reported = [(d.image, cmd) for d in confirmed for cmd, _pkg in d.image_lagging]
     assert reported, f"没有指名道姓地报出缺失，实际输出：\n{out}"
     assert any(cmd == "gdb" for _image, cmd in reported)
-    assert all(image.startswith("ctf2-sandbox") for image, _cmd in reported)
+    assert all(image.startswith("suvex-sandbox") for image, _cmd in reported)
     assert "gdb" in out
 
 
@@ -285,7 +285,7 @@ def test_drift_changes_exit_code(monkeypatch, capsys):
     monkeypatch.setattr(
         vst,
         "check",
-        lambda **kwargs: _outcome_with_lag("ctf2-sandbox", "gdb", "gdb"),
+        lambda **kwargs: _outcome_with_lag("suvex-sandbox", "gdb", "gdb"),
     )
     monkeypatch.setattr(sys, "argv", ["verify_sandbox_tools.py", "--probe"])
     assert vst.main() == 1
@@ -312,7 +312,7 @@ def _outcome_with_lag(image: str | None, cmd: str | None, pkg: str | None):
     outcome = vst.CheckOutcome([])
     outcome.probe_attempted = True
     if image is None:
-        outcome.drifts = {"ctf2-sandbox": vst.ImageDrift(image="ctf2-sandbox")}
+        outcome.drifts = {"suvex-sandbox": vst.ImageDrift(image="suvex-sandbox")}
     else:
         outcome.drifts = {
             image: vst.ImageDrift(image=image, image_lagging=[(cmd or "", pkg or "")])
@@ -387,7 +387,7 @@ def test_translation_table_has_no_package_names_as_commands():
     "镜像里没有 python3-pip"，把真漂移淹掉。
     """
     declared = vst.ImagePackages(
-        name="ctf2-sandbox",
+        name="suvex-sandbox",
         apt=["python3-pip", "ruby-dev", "ocl-icd-libopencl1"],
         pip=[],
     ).declared()

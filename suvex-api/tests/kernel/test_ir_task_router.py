@@ -103,7 +103,7 @@ def test_create_task_with_only_a_title(ready_client: TestClient) -> None:
     challenge = body["challenge"]
     assert challenge["title"] == "web-01 入侵复盘"
     assert challenge["category"] == "ir-root-cause"
-    assert challenge["sandboxProfile"] == "ctf2-sandbox-ir"
+    assert challenge["sandboxProfile"] == "suvex-sandbox-ir"
     assert challenge["status"] == "unsolved"
 
 
@@ -168,7 +168,7 @@ def test_unknown_field_is_rejected(ready_client: TestClient) -> None:
     这条不是洁癖：如果调用方能传 `sandboxProfile`，就会出现"界面挑了
     一个不含 tshark 的镜像"，而症状是模型说"我没有工具"，不是"镜像选错了"。
     """
-    response = ready_client.post(IR, json={"title": "x", "sandboxProfile": "ctf2-sandbox"})
+    response = ready_client.post(IR, json={"title": "x", "sandboxProfile": "suvex-sandbox"})
 
     # 400 而非 422，理由同上。
     assert response.status_code == 400
@@ -335,7 +335,7 @@ def test_audit_records_the_resolved_profile(
         select(AuditLog).where(AuditLog.action == "ir.task_create")
     ).scalars().first()
     assert row is not None
-    assert (row.detail or {}).get("sandboxProfile") == "ctf2-sandbox-ir"
+    assert (row.detail or {}).get("sandboxProfile") == "suvex-sandbox-ir"
 
 
 # ══════════════════════════════════════════════════════════

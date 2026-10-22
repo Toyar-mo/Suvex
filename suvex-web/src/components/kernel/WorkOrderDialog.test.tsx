@@ -105,7 +105,7 @@ function realChallenge(): KernelChallenge {
     wrongSubmissionCount: 0,
     maxWrongSubmissions: 3,
     candidateCount: 0,
-    sandboxProfile: 'ctf2-sandbox-ir',
+    sandboxProfile: 'suvex-sandbox-ir',
     scanId: 'scan_01M4RD51TJSMXS4ZQF97QK636N',
     solvedAt: '2026-10-21T04:10:00.000Z',
     lastError: null,

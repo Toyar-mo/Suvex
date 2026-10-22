@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════
-# ctf2-sandbox —— 通用解题沙箱（web / crypto / misc / 取证）
+# suvex-sandbox —— 通用解题沙箱（web / crypto / misc / 取证）
 # ══════════════════════════════════════════════════════════
 #
 # ## 为什么**不**复用 strix-sandbox（已定设计决策 1）
@@ -7,7 +7,7 @@
 # strix 的沙箱是为「对客户目标做渗透测试」调的：它按需装工具、
 # 允许出网、以 root 跑、可写工作区。而 CTF2 的场景在三处都不同：
 #
-# | | strix-sandbox | ctf2-sandbox |
+# | | strix-sandbox | suvex-sandbox |
 # | --- | --- | --- |
 # | 跑什么 | 目标上抓回来的东西 | **题目给的**任意附件（含恶意样本） |
 # | 出网 | 必须（要打目标） | 默认**不出**（见 runner 的 `--network`） |
@@ -84,7 +84,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config libssl-dev libffi-dev \
     # ⚠️ `grep` / `sed` / `mawk`（提供 `awk`）**必须显式写出来**，理由和
     #    下面 `binutils` 那段一样：它们经由 build-essential 的依赖链其实
-    #    早就装上了，实测 `ctf2-sandbox:latest` 里 `/usr/bin/grep` 等都在。
+    #    早就装上了，实测 `suvex-sandbox:latest` 里 `/usr/bin/grep` 等都在。
     #    但"没写进 Dockerfile"= 没人知道这是承诺而不是巧合。
     #
     #    v0.41 加 IR 场景包时这个缺口第一次显形：`prompts/ctf2_ir.md`
@@ -99,7 +99,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #    misc 与取证题里是第一步（`strings` 找线索、`objdump` 看汇编）。
     #
     #    它们**经 gcc / gdb 的依赖链其实已经装上了** —— 实测
-    #    `ctf2-sandbox:latest` 里 `/usr/bin/strings`、`/usr/bin/objdump`
+    #    `suvex-sandbox:latest` 里 `/usr/bin/strings`、`/usr/bin/objdump`
     #    都在。但"没写进 Dockerfile"意味着**没人知道这是一条依赖而
     #    不是巧合**：`scripts/verify_sandbox_tools.py` 静态解析 apt
     #    列表时，就把 `strings` 判成了"提示词要让模型用、镜像里没有"。
@@ -175,8 +175,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # **看不出根因**（它不会报"缺 gdb"，只是每次调试都失败）。
     #
     # 实测（2026-10-12）：
-    #   ctf2-sandbox:latest     gdb → MISSING     ← 修的就是这个
-    #   ctf2-sandbox-re:latest  gdb → /usr/bin/gdb
+    #   suvex-sandbox:latest     gdb → MISSING     ← 修的就是这个
+    #   suvex-sandbox-re:latest  gdb → /usr/bin/gdb
     #
     # **为什么装在 base 而不是"让 pwn 题走逆向镜像"**：逆向镜像比 base
     # 大 1.35 GB（`radare2` + `mono` + `angr`），而 gdb 本身装完约

@@ -21,6 +21,7 @@ import {
   submitFlag,
   syncKernel,
   useKernel,
+  normalizeSandboxProfile,
   type KernelChallenge,
   type KernelChallengeStatus,
   type KernelSandboxProfile,
@@ -718,7 +719,7 @@ export function KernelPage() {
         */}
         <div className="mt-bay max-w-md">
           <SandboxProfileSelect
-            value={profile ?? settings?.defaultSandboxProfile ?? 'ctf2-sandbox'}
+            value={profile ?? normalizeSandboxProfile(settings?.defaultSandboxProfile ?? 'suvex-sandbox') as KernelSandboxProfile}
             onChange={(next) => setProfile(next)}
           />
         </div>

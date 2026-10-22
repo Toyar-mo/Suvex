@@ -95,7 +95,7 @@ def _make_challenge(db_session, scan, *, category: str, remote_id: str | None = 
         description="证据包",
         attachments=[],
         status="unsolved",
-        sandbox_profile="ctf2-sandbox-ir",
+        sandbox_profile="suvex-sandbox-ir",
         scan_id=scan.id if scan is not None else None,
     )
     db_session.add(challenge)

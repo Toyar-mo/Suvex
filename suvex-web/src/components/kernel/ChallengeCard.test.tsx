@@ -60,7 +60,7 @@ function makeChallenge(over: Partial<KernelChallenge> = {}): KernelChallenge {
     wrongSubmissionCount: 0,
     maxWrongSubmissions: 3,
     candidateCount: 0,
-    sandboxProfile: 'ctf2-sandbox',
+    sandboxProfile: 'suvex-sandbox',
     scanId: null,
     solvedAt: null,
     lastError: null,

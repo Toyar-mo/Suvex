@@ -29,7 +29,7 @@ export function SandboxProfileSelect({
   disabled = false,
   /** 紧凑模式：卡片上用，不带标题与底部说明 */
   compact = false,
-  id = 'ctf2-sandbox-profile',
+  id = 'suvex-sandbox-profile',
 }: {
   value: KernelSandboxProfile
   onChange: (next: KernelSandboxProfile) => void
@@ -38,8 +38,8 @@ export function SandboxProfileSelect({
   id?: string
 }) {
   const options: { value: KernelSandboxProfile; icon: typeof Boxes }[] = [
-    { value: 'ctf2-sandbox', icon: Boxes },
-    { value: 'ctf2-sandbox-re', icon: Wrench },
+    { value: 'suvex-sandbox', icon: Boxes },
+    { value: 'suvex-sandbox-re', icon: Wrench },
   ]
 
   return (

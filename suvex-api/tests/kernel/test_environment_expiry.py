@@ -55,7 +55,7 @@ def _make_environment(
         id=new_id("ctf2env"),
         challenge_id=challenge_id,
         status=status,
-        sandbox_profile="ctf2-sandbox",
+        sandbox_profile="suvex-sandbox",
         access_url="http://1.2.3.4:8080" if ready else None,
         access_urls=["http://1.2.3.4:8080", "1.2.3.4:9999"] if ready else None,
         poll_count=3,

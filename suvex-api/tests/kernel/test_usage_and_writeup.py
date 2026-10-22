@@ -55,7 +55,7 @@ def _attempt(db: Session, challenge_id: str, *, llm_model: str = "test-model"):
         challenge_id=challenge_id,
         mode=KernelSubmitMode.SAFE.value,
         max_turns=40,
-        sandbox_profile="ctf2-sandbox",
+        sandbox_profile="suvex-sandbox",
         llm_model=llm_model,
     )
     db.add(row)

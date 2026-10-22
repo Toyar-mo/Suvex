@@ -356,7 +356,7 @@ def test_illegal_mode_is_rejected_by_the_database(
             challenge_id=ctf2_challenge.id,
             mode="safee",  # 拼错
             max_turns=80,
-            sandbox_profile="ctf2-sandbox",
+            sandbox_profile="suvex-sandbox",
         )
     )
     with pytest.raises(IntegrityError):
@@ -377,7 +377,7 @@ def test_zero_turns_is_rejected_by_the_database(
             challenge_id=ctf2_challenge.id,
             mode=KernelSubmitMode.SAFE.value,
             max_turns=0,
-            sandbox_profile="ctf2-sandbox",
+            sandbox_profile="suvex-sandbox",
         )
     )
     with pytest.raises(IntegrityError):

@@ -45,7 +45,20 @@ EnvironmentStatusLiteral = Literal["stopped", "starting", "ready", "error", "exp
 
 SubmitModeLiteral = Literal["safe", "auto"]
 
-SandboxProfileLiteral = Literal["ctf2-sandbox", "ctf2-sandbox-re", "ctf2-sandbox-ir"]
+#: 沙箱档案取值（v0.65 起新名为 `suvex-sandbox*`）。
+#:
+#: ★ 同时保留旧名 `ctf2-sandbox*`：数据库里 v0.65 之前建的行可能还是旧名，
+#:   响应体若只接受新名，会在一批历史题上抛 ValidationError（表现为整个
+#:   列表 500、页面全白）。校验/展示侧再各自 `normalize_sandbox_profile`
+#:   映射到新名，不会把旧名漏给用户做选项。
+SandboxProfileLiteral = Literal[
+    "suvex-sandbox",
+    "suvex-sandbox-re",
+    "suvex-sandbox-ir",
+    "ctf2-sandbox",
+    "ctf2-sandbox-re",
+    "ctf2-sandbox-ir",
+]
 
 # ⚠️ 与 `core.vocab.KernelCompetitionKind` 的**全部**取值一致。
 #

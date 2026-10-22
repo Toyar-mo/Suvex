@@ -14,7 +14,7 @@ v0.29 声称加了 `/work/persist` 持久区，代码、挂载参数、文档都
 
 ## 为什么默认跳过
 
-真起容器要 Docker、要一个已构建的镜像（`ctf2-sandbox` 2.8 GB）、
+真起容器要 Docker、要一个已构建的镜像（`suvex-sandbox` 2.8 GB）、
 要 Linux（容器里的 uid/chown 语义 Windows 上验不了）。这些都不是
 每次跑测试都该付出的代价 —— 尤其 CI 的 runner 里没有那个镜像。
 
@@ -29,7 +29,7 @@ SUPEX_CTF2_INTEGRATION=1 .venv/bin/python -m pytest \
     tests/kernel/test_sandbox_integration.py -v -p no:cacheprovider
 ```
 
-（镜像名默认 `ctf2-sandbox:latest`，可用 `SUPEX_CTF2_TEST_IMAGE` 覆盖。）
+（镜像名默认 `suvex-sandbox:latest`，可用 `SUPEX_CTF2_TEST_IMAGE` 覆盖。）
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ from app.kernel import runner
 _ENABLE_ENV = "SUPEX_CTF2_INTEGRATION"
 #: 用哪个镜像。默认是 base profile。
 _IMAGE_ENV = "SUPEX_CTF2_TEST_IMAGE"
-_DEFAULT_IMAGE = "ctf2-sandbox:latest"
+_DEFAULT_IMAGE = "suvex-sandbox:latest"
 
 
 def _integration_enabled() -> bool:
@@ -81,7 +81,7 @@ def _require_linux_and_docker() -> str:
         text=True,
     )
     if image not in (listed.stdout or "").splitlines():
-        pytest.skip(f"镜像 {image} 不存在（先构建：见 docker/ctf2-sandbox/Dockerfile）")
+        pytest.skip(f"镜像 {image} 不存在（先构建：见 docker/suvex-sandbox/Dockerfile）")
     return image
 
 

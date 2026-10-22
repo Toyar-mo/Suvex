@@ -104,6 +104,7 @@ from app.core.vocab import (
     KernelEnvironmentStatus,
     KernelSandboxProfile,
     KernelSubmitMode,
+    normalize_sandbox_profile,
 )
 from app.kernel import events as ctf2_events
 from app.kernel.attachments import (
@@ -1913,7 +1914,10 @@ def start_solve(
             raise ApiError.validation(
                 "未知的沙箱镜像。", {"sandboxProfile": "取值不在允许范围内"}
             )
-        resolved_profile = sandbox_profile
+        # ★ v0.65：把历史镜像名（`ctf2-sandbox*`）规范成新名后再存 —— 写入侧
+        #   只写新名，旧名只作为读取侧的兼容。校验放行旧名（否则一批老客户端
+        #   传旧值会被拒），但落库的是新名。
+        resolved_profile = normalize_sandbox_profile(sandbox_profile)
     else:
         resolved_profile = challenge.sandbox_profile or settings_row.default_sandbox_profile
     challenge.sandbox_profile = resolved_profile
@@ -3196,8 +3200,8 @@ def create_local_review(
 
     ## `sandbox_profile` 为什么调 `profile_for_category`
 
-    `KernelChallenge.sandbox_profile` 的列默认值是 `ctf2-sandbox`（基础镜像），
-    而 IR 分类需要 `ctf2-sandbox-ir`（带日志/取证工具的镜像）。不显式写
+    `KernelChallenge.sandbox_profile` 的列默认值是 `suvex-sandbox`（基础镜像），
+    而 IR 分类需要 `suvex-sandbox-ir`（带日志/取证工具的镜像）。不显式写
     就落默认值，于是容器里没有 `tshark`/`fls` 一类命令 —— 而模型的反应
     是"我没有工具"，不是"镜像选错了"。
 
@@ -3224,7 +3228,7 @@ def create_local_review(
         ]
         or None,
         status=KernelChallengeStatus.UNSOLVED.value,
-        # ★ 见 docstring：不显式写会落列默认值 `ctf2-sandbox`。
+        # ★ 见 docstring：不显式写会落列默认值 `suvex-sandbox`。
         sandbox_profile=runner_mod.profile_for_category(category),
     )
     db.add(challenge)
@@ -3547,7 +3551,7 @@ def update_ctf2_settings(
     row = get_ctf2_config(db)
     row.submit_mode = submit_mode
     row.max_wrong_submissions = max_wrong_submissions
-    row.default_sandbox_profile = default_sandbox_profile
+    row.default_sandbox_profile = normalize_sandbox_profile(default_sandbox_profile)
     row.max_concurrent_solves = max_concurrent_solves
     row.solve_poll_seconds = solve_poll_seconds
     row.auto_sync_seconds = auto_sync_seconds

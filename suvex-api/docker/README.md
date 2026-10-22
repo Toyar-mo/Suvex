@@ -3,9 +3,9 @@
 三个镜像，**后两个都依赖第一个**：
 
 ```
-ctf2-sandbox:latest          ← 基础镜像，服务 pwn / web / crypto / misc / forensics
-    ├── ctf2-sandbox-re:latest   ← 逆向镜像，`FROM ctf2-sandbox:latest`
-    └── ctf2-sandbox-ir:latest   ← 应急响应镜像，`FROM ctf2-sandbox:latest`
+suvex-sandbox:latest          ← 基础镜像，服务 pwn / web / crypto / misc / forensics
+    ├── suvex-sandbox-re:latest   ← 逆向镜像，`FROM suvex-sandbox:latest`
+    └── suvex-sandbox-ir:latest   ← 应急响应镜像，`FROM suvex-sandbox:latest`
 ```
 
 逆向镜像是**加层**而不是并列：它在 base 之上多装 `radare2` / `mono` /
@@ -16,7 +16,7 @@ ctf2-sandbox:latest          ← 基础镜像，服务 pwn / web / crypto / misc
 `app/kernel/runner.py` 的 `profile_for_category()` 决定一道题走哪个镜像：
 `ir-` 前缀的先判（走 ir），`_REVERSE_CATEGORIES` 里的走 re，其余走 base。
 
-## `ctf2-sandbox-ir`：应急响应镜像
+## `suvex-sandbox-ir`：应急响应镜像
 
 与 re 的关键差别：**它装的是"读"工具，不是"打"工具**。
 
@@ -42,13 +42,13 @@ Dockerfile 名单，**镜像没重建它照样全 ✅**（这个坑真踩过，�
 
 ```bash
 # 1) 基础镜像（先）
-docker build -f docker/ctf2-sandbox/Dockerfile -t ctf2-sandbox:latest . 
+docker build -f docker/suvex-sandbox/Dockerfile -t suvex-sandbox:latest . 
 
-# 2) 逆向镜像（后；它 FROM ctf2-sandbox:latest）
-docker build -f docker/ctf2-sandbox-re/Dockerfile -t ctf2-sandbox-re:latest .
+# 2) 逆向镜像（后；它 FROM suvex-sandbox:latest）
+docker build -f docker/suvex-sandbox-re/Dockerfile -t suvex-sandbox-re:latest .
 
-# 3) 应急响应镜像（后；也 FROM ctf2-sandbox:latest）
-docker build -f docker/ctf2-sandbox-ir/Dockerfile -t ctf2-sandbox-ir:latest .
+# 3) 应急响应镜像（后；也 FROM suvex-sandbox:latest）
+docker build -f docker/suvex-sandbox-ir/Dockerfile -t suvex-sandbox-ir:latest .
 ```
 
 首次构建约 10–20 分钟（apt 全量 + `unicorn` 要本地编译 —— Python 3.14
@@ -87,7 +87,7 @@ python3 scripts/verify_sandbox_tools.py --probe    # ★ 查「名单和产物�
 ## 清理镜像时不要用 `-a`
 
 `docker system prune -af` 会删掉**所有**没有运行中容器引用的镜像，
-包括带 tag 的。这个仓库因此丢过一次 `ctf2-sandbox-re:latest`（4.2 GB、
+包括带 tag 的。这个仓库因此丢过一次 `suvex-sandbox-re:latest`（4.2 GB、
 重建 20 分钟）。
 
 要回收空间就只删悬空层：
@@ -106,11 +106,11 @@ docker builder prune        # 只删构建缓存
 python3 scripts/verify_sandbox_tools.py --probe
 
 # 2) base 里那几个"装了但容易装不全"的
-docker run --rm ctf2-sandbox:latest sh -c \
+docker run --rm suvex-sandbox:latest sh -c \
   'command -v patchelf gdb one_gadget seccomp-tools'
 
 # 3) re 镜像（它的工具集 = base ∪ 自己）
-docker run --rm ctf2-sandbox-re:latest sh -c \
+docker run --rm suvex-sandbox-re:latest sh -c \
   'command -v r2 radare2 rabin2 monodis ildasm'
 
 # 4) 端到端：跑一遍基线（默认就是全部 10 道题）

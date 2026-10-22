@@ -138,7 +138,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         那是**错的两层**：
           ① 后端根本不管理常驻容器，`status` 是配置里记的一个值（默认
              `stopped`），从没被改成 `running` —— 它不是实时状态；
-          ② 更关键：自研引擎的沙箱是**按每次任务临时起容器**（`ctf2-sandbox`
+          ② 更关键：自研引擎的沙箱是**按每次任务临时起容器**（`suvex-sandbox`
              那一族镜像，本地构建），跑完即销毁，压根没有「一个常驻沙箱」。
              所以「已停止 ⇒ 扫描排队等待」是假话 —— 扫描照跑。
         改成如实描述「每次扫描按需起一个隔离容器」，不再假装有常驻状态。
@@ -157,7 +157,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex flex-wrap items-center gap-1.5">
             <span className="text-sm text-ink">沙箱与执行环境 · 每次扫描按需启动</span>
-            <span className="mono-ui text-ink-faint">内核镜像 ctf2-sandbox 系列</span>
+            <span className="mono-ui text-ink-faint">内核镜像 suvex-sandbox 系列</span>
           </span>
           <span className="text-2xs text-ink-faint">
             每条扫描任务开跑时起一个隔离容器（本地镜像），跑完即销毁，不在宿主机上长期驻留。

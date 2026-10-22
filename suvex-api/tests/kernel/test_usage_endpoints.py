@@ -51,7 +51,7 @@ def _attempt(db: Session, challenge_id: str):
         challenge_id=challenge_id,
         mode=KernelSubmitMode.SAFE.value,
         max_turns=40,
-        sandbox_profile="ctf2-sandbox",
+        sandbox_profile="suvex-sandbox",
     )
     db.add(row)
     db.commit()

@@ -74,7 +74,7 @@ def _settings_body(**overrides: object) -> dict[str, object]:
     body: dict[str, object] = {
         "submitMode": "safe",
         "maxWrongSubmissions": 3,
-        "defaultSandboxProfile": "ctf2-sandbox",
+        "defaultSandboxProfile": "suvex-sandbox",
         "maxConcurrentSolves": 3,
         "solvePollSeconds": 5.0,
         "autoSyncSeconds": 300,

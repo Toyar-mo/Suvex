@@ -43,7 +43,7 @@
 
 ## re 镜像的工具集是 base ∪ 自己
 
-`docker/ctf2-sandbox-re/Dockerfile` 是 `FROM ctf2-sandbox:latest`，
+`docker/suvex-sandbox-re/Dockerfile` 是 `FROM suvex-sandbox:latest`，
 所以它继承 base 的全部包。只解析它自己那几段会得出"re 镜像缺 curl"
 这种假报错。
 
@@ -125,7 +125,7 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     # （真正提供 ewfinfo/ewfacquire 的那个，`apt-file search bin/ewfinfo`
     # 直接指到它）。
     #
-    # ⚠️ 保留上面那行 `libewf-utils` 是有意的：上游 `ctf2-sandbox` 的
+    # ⚠️ 保留上面那行 `libewf-utils` 是有意的：上游 `suvex-sandbox` 的
     #    Dockerfile 里写的就是它（那份是从别的发行版基础上抄来的），
     #    静态解析必须认得那个名字，否则会对 base 报"未知包"。两行并存
     #    等于把「历史写法」与「这台机器上真能装的那个」都记下来。
@@ -378,9 +378,9 @@ CATEGORY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "file",
         "strings",
     ),
-    # ★ v0.41：应急响应 / 根因复盘，走 `ctf2-sandbox-ir` 镜像。
+    # ★ v0.41：应急响应 / 根因复盘，走 `suvex-sandbox-ir` 镜像。
     #
-    # ## 这张表是从 `prompts/ctf2_ir.md` 推导出来的
+    # ## 这张表是从 `prompts/kernel_ir.md` 推导出来的
     #
     # 提示词 §三 决策表第一条要求"先 `ls -la` + 看文件大小 + 抽头尾各 20 行"
     # → `ls` / `wc` / `head` / `tail`；
@@ -622,7 +622,7 @@ class ImagePackages:
 #: `FROM <image>`（只取第一个 —— 多阶段构建里第一个才是最终镜像的底座）。
 _FROM_RE = re.compile(r"^\s*FROM\s+(?P<image>\S+)", re.IGNORECASE | re.MULTILINE)
 
-#: `ARG BASE_IMAGE=ctf2-sandbox:latest` —— `FROM ${BASE_IMAGE}` 的默认值。
+#: `ARG BASE_IMAGE=suvex-sandbox:latest` —— `FROM ${BASE_IMAGE}` 的默认值。
 _ARG_BASE_RE = re.compile(r"^\s*ARG\s+BASE_IMAGE=(?P<default>\S+)", re.IGNORECASE | re.MULTILINE)
 
 
@@ -632,9 +632,9 @@ def inherits_from(path: Path, parent: str) -> bool:
     ## 为什么要真的查一遍，而不是直接假设"反过来肯定继承 base"
 
     下面按"reverse 镜像 = base 的全部工具 + 自己那几段"来算，这个假设
-    成立的前提是 `docker/ctf2-sandbox-re/Dockerfile` 真的
-    `FROM ctf2-sandbox:latest`。现在它是 —— 写成
-    `ARG BASE_IMAGE=ctf2-sandbox:latest` + `FROM ${BASE_IMAGE}`。
+    成立的前提是 `docker/suvex-sandbox-re/Dockerfile` 真的
+    `FROM suvex-sandbox:latest`。现在它是 —— 写成
+    `ARG BASE_IMAGE=suvex-sandbox:latest` + `FROM ${BASE_IMAGE}`。
 
     但如果哪天有人把 reverse 改成独立的基础镜像（比如真的需要不同发行版），
     这个假设就破了，而破的方式是**脚本继续按"继承"算、于是漏报
@@ -653,7 +653,7 @@ def inherits_from(path: Path, parent: str) -> bool:
             # ARG 默认值查不到 = 构建时由外面传入 = 父镜像未知
             return False
         image = arg.group("default").strip().strip("'\"")
-    # 比较短名：`ctf2-sandbox` 是 `ctf2-sandbox:latest` 的子串
+    # 比较短名：`suvex-sandbox` 是 `suvex-sandbox:latest` 的子串
     return parent in image
 
 
@@ -679,7 +679,7 @@ def parse_image(path: Path, name: str) -> ImagePackages:
 # 分类 → 镜像：数据取真实源码，逻辑不抄
 # ══════════════════════════════════════════════════════════
 
-RUNNER_PY = API_ROOT / "app" / "ctf2" / "runner.py"
+RUNNER_PY = API_ROOT / "app" / "kernel" / "runner.py"
 
 
 def _literal_set(node: ast.expr) -> frozenset[str] | None:

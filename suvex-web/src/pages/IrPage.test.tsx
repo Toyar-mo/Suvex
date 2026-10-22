@@ -86,7 +86,7 @@ function makeChallenge(overrides: Partial<Challenge> = {}): Challenge {
     wrongSubmissionCount: 0,
     maxWrongSubmissions: 0,
     candidateCount: 0,
-    sandboxProfile: 'ctf2-sandbox-ir',
+    sandboxProfile: 'suvex-sandbox-ir',
     scanId: null,
     solvedAt: null,
     lastError: null,

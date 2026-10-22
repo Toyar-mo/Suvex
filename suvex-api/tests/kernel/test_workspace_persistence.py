@@ -156,7 +156,7 @@ def test_solver_uid_matches_the_image() -> None:
     from app.kernel import runner as ctf2_runner
 
     dockerfile = (
-        Path(__file__).resolve().parents[2] / "docker" / "ctf2-sandbox" / "Dockerfile"
+        Path(__file__).resolve().parents[2] / "docker" / "suvex-sandbox" / "Dockerfile"
     )
     if not dockerfile.is_file():
         import pytest

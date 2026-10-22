@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 1 | 开关关着时，三个 `ir-*` 分类**不合法** | IR 题悄悄入库，行为按解题模式跑 |
 | 2 | 开关关着时，普通五类 + `agentsec-*` 的 prompt **逐字节不变** | 加一个场景包把前面所有场景的提示词都改了 |
-| 3 | `ir-*` 分类路由到 `ctf2-sandbox-ir` 而不是 base | 复盘题跑在没有 `mactime` 的镜像里 → command not found |
+| 3 | `ir-*` 分类路由到 `suvex-sandbox-ir` 而不是 base | 复盘题跑在没有 `mactime` 的镜像里 → command not found |
 | 4 | IR 提示词里**不能出现**攻击工具名 | 提示词自己教模型去打，纪律靠模型自觉 |
 | 5 | IR 报告/处置建议**不出现**"已执行"类措辞 | 从"建议"越界成"处置"，这是安全边界 |
 
@@ -78,7 +78,7 @@ def test_ir_prefix_does_not_collide_with_agentsec() -> None:
 
 def test_ir_profile_value_is_the_image_name() -> None:
     """profile 取值 == 镜像短名，不做第二层映射（`vocab` 的既有约定）。"""
-    assert KernelSandboxProfile.IR.value == "ctf2-sandbox-ir"
+    assert KernelSandboxProfile.IR.value == "suvex-sandbox-ir"
 
 
 def test_five_existing_categories_are_not_ir() -> None:
@@ -279,7 +279,7 @@ def test_ir_block_states_the_three_verdicts() -> None:
 
 @pytest.mark.parametrize("category", sorted(IR_CATEGORIES))
 def test_ir_category_routes_to_ir_image(category: str) -> None:
-    """承诺 3：三个 IR 分类都路由到 `ctf2-sandbox-ir`。"""
+    """承诺 3：三个 IR 分类都路由到 `suvex-sandbox-ir`。"""
     assert profile_for_category(category) == KernelSandboxProfile.IR.value
 
 

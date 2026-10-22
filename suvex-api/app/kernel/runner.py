@@ -526,7 +526,15 @@ def image_for_profile(profile: str) -> str:
     挡住了非法取值，走到默认分支只可能是**数据库里有更旧/更新的枚举值**
     （迁移期间）。那时用 base 比让整道题起不来合理 —— 与
     `scans.runner._goal_clause` 的取舍完全一致。
+
+    ★ v0.65：先 `normalize_sandbox_profile` 把历史镜像名（`ctf2-sandbox*`）
+      映射成新名再判。这样迁移还没跑到的旧行、或回滚期间的旧值，也能
+      起对镜像，而不是掉进"未知 → base"分支（那会让 IR 题起个没有 tshark
+      的 base 镜像，模型看到的是"我没有工具"而不是"镜像选错了"）。
     """
+    from app.core.vocab import normalize_sandbox_profile
+
+    profile = normalize_sandbox_profile(profile)
     if profile == KernelSandboxProfile.REVERSE.value:
         return IMAGE_REVERSE
     if profile == KernelSandboxProfile.IR.value:

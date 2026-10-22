@@ -98,7 +98,7 @@ def test_create_local_review_uses_ir_category(db_session: Session) -> None:
 
 
 def test_create_local_review_picks_ir_image(db_session: Session) -> None:
-    """★★ 镜像必须是 `ctf2-sandbox-ir`，不能落列默认值 `ctf2-sandbox`。
+    """★★ 镜像必须是 `suvex-sandbox-ir`，不能落列默认值 `suvex-sandbox`。
 
     这条是 2026-10-21 真跑踩出来的：`run_ir_closed_loop.py` 最初没显式
     写 `sandbox_profile`，于是落了列默认值（基础镜像），容器里没有
@@ -107,7 +107,7 @@ def test_create_local_review_picks_ir_image(db_session: Session) -> None:
     """
     challenge = service.create_local_review(db_session, title="镜像要对")
 
-    assert challenge.sandbox_profile == "ctf2-sandbox-ir"
+    assert challenge.sandbox_profile == "suvex-sandbox-ir"
 
 
 def test_create_local_review_status_is_unsolved(db_session: Session) -> None:
@@ -198,7 +198,7 @@ def test_competition_challenge_requires_platform(
         title="赛事题",
         category="web",
         status="unsolved",
-        sandbox_profile="ctf2-sandbox",
+        sandbox_profile="suvex-sandbox",
     )
     db_session.add(challenge)
     db_session.flush()
@@ -228,7 +228,7 @@ def test_unknown_competition_defaults_to_requiring_platform(
         title="孤儿题",
         category="web",
         status="unsolved",
-        sandbox_profile="ctf2-sandbox",
+        sandbox_profile="suvex-sandbox",
     )
 
     assert service._requires_platform(db_session, orphan) is True

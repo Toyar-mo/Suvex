@@ -113,7 +113,7 @@ function realChallenge(): KernelChallenge {
     wrongSubmissionCount: 0,
     maxWrongSubmissions: 3,
     candidateCount: 0,
-    sandboxProfile: 'ctf2-sandbox',
+    sandboxProfile: 'suvex-sandbox',
     scanId: 'scan_01M4RD51TJSMXS4ZQF97QK636N',
     solvedAt: null,
     lastError: '本次未产出候选 flag。',

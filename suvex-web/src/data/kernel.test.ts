@@ -322,7 +322,7 @@ describe('saveKernelSettings 的场景包开关', () => {
     await saveKernelSettings({
       submitMode: 'safe',
       maxWrongSubmissions: 3,
-      defaultSandboxProfile: 'ctf2-sandbox',
+      defaultSandboxProfile: 'suvex-sandbox',
       maxConcurrentSolves: 2,
       solvePollSeconds: 1,
       autoSyncSeconds: 60,
@@ -357,7 +357,7 @@ describe('saveKernelSettings 的场景包开关', () => {
     await saveKernelSettings({
       submitMode: 'safe',
       maxWrongSubmissions: 3,
-      defaultSandboxProfile: 'ctf2-sandbox',
+      defaultSandboxProfile: 'suvex-sandbox',
       maxConcurrentSolves: 2,
       solvePollSeconds: 1,
       autoSyncSeconds: 60,
@@ -398,7 +398,7 @@ describe('saveKernelSettings 的场景包开关', () => {
       await saveKernelSettings({
         submitMode: 'safe',
         maxWrongSubmissions: 3,
-        defaultSandboxProfile: 'ctf2-sandbox',
+        defaultSandboxProfile: 'suvex-sandbox',
         maxConcurrentSolves: 2,
         solvePollSeconds: 1,
         autoSyncSeconds: 60,

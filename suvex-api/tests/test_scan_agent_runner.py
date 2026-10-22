@@ -395,7 +395,7 @@ def test_volume_write_true_mounts_workspace_rw(tmp_path: Path) -> None:
     ws.mkdir()
     box = kernel_runner.SandboxContainer(
         name="suvex-scan-test",
-        image="ctf2-sandbox-ir",
+        image="suvex-sandbox-ir",
         network_isolated=True,
         workspace_dir=ws,
         volume_write=True,
@@ -417,7 +417,7 @@ def test_volume_write_false_mounts_workspace_ro(tmp_path: Path) -> None:
     ws.mkdir()
     box = kernel_runner.SandboxContainer(
         name="suvex-scan-test",
-        image="ctf2-sandbox-ir",
+        image="suvex-sandbox-ir",
         network_isolated=True,
         workspace_dir=ws,
         volume_write=False,

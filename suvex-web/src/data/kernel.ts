@@ -129,27 +129,51 @@ export const SUBMIT_MODE_HINT: Record<KernelSubmitMode, string> = {
 }
 
 /** 沙箱镜像 */
-export type KernelSandboxProfile = 'ctf2-sandbox' | 'ctf2-sandbox-re' | 'ctf2-sandbox-ir'
+// ★ v0.65：镜像名从 `ctf2-sandbox*` 改到 `suvex-sandbox*`（去掉「ctf2」字样，
+//   因为 CTF 只是这个内核的一个场景，镜像却是全场景共用的）。
+//
+//   **前端只产出新名**（下拉、保存都发 suvex-*）。后端能同时认新旧两值
+//   （`normalize_sandbox_profile` 把旧名映射成新名），但前端不做兼容 ——
+//   旧名只可能出现在「v0.65 之前建的历史题」的响应体里，那种行由
+//   `challengeProfile()` 归一后再映射到新名字面，不给用户做选项。
+export type KernelSandboxProfile = 'suvex-sandbox' | 'suvex-sandbox-re' | 'suvex-sandbox-ir'
 
 export const SANDBOX_PROFILE_LABEL: Record<KernelSandboxProfile, string> = {
-  'ctf2-sandbox': '通用（web / crypto / misc / 取证）',
-  'ctf2-sandbox-re': '逆向专用',
-  'ctf2-sandbox-ir': '应急响应专用',
+  'suvex-sandbox': '通用（web / crypto / misc / 取证）',
+  'suvex-sandbox-re': '逆向专用',
+  'suvex-sandbox-ir': '应急响应专用',
 }
 
 export const SANDBOX_PROFILE_HINT: Record<KernelSandboxProfile, string> = {
-  'ctf2-sandbox': '预装 web、密码学、取证与 Misc 常用工具。',
+  'suvex-sandbox': '预装 web、密码学、取证与 Misc 常用工具。',
   // ★ 这里要写清"为什么逆向要单独一个镜像"，否则用户会问
   //   "多一个镜像是不是多余"。
-  'ctf2-sandbox-re':
+  'suvex-sandbox-re':
     '在通用镜像之上加逆向工具（radare2 / gdb / angr）。' +
     '逆向是唯一一类会主动执行题目给的代码的题型，所以单独收窄。',
   // ★ 同理：IR 单独一个镜像的理由不是"工具更多"，而是**方向相反** ——
   //   它要能读时间线（`mactime` / `log2timeline` 那一路），
   //   但**不该装攻击工具**：复盘题里给 agent 一把刀，它就会去砍。
-  'ctf2-sandbox-ir':
+  'suvex-sandbox-ir':
     '在通用镜像之上加时间线重建工具（mactime / log2timeline），' +
     '但不含攻击工具 —— 复盘要读过去发生了什么，不是再打一遍。',
+}
+
+/** 旧镜像名 → 新镜像名。只用于把历史响应体里的旧名归一，不对外暴露。 */
+const LEGACY_SANDBOX_PROFILE: Record<string, KernelSandboxProfile> = {
+  'ctf2-sandbox': 'suvex-sandbox',
+  'ctf2-sandbox-re': 'suvex-sandbox-re',
+  'ctf2-sandbox-ir': 'suvex-sandbox-ir',
+}
+
+/**
+ * 把任意沙箱镜像名（可能是 v0.65 之前的旧名）归一到当前名字。
+ *
+ * 认不出的原样返回 —— 后端新加一个镜像时，前端不该把它的名字抹成
+ * 默认值（那会让「这个题用的是什么镜像」显示成谎话）。
+ */
+export function normalizeSandboxProfile(value: string): string {
+  return LEGACY_SANDBOX_PROFILE[value] ?? value
 }
 
 /**

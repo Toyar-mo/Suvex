@@ -1227,7 +1227,7 @@ def test_the_revival_note_says_what_survived_and_what_did_not() -> None:
 
 def test_the_sandbox_marks_itself_dead_when_the_container_is_gone(monkeypatch) -> None:
     """`exec()` 见到 `No such container` → `died = True`。"""
-    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/suvex-sandbox:test")
     assert sandbox.died is False
 
     def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
@@ -1250,7 +1250,7 @@ def test_docker_being_unavailable_does_not_look_like_a_dead_container(monkeypatc
     "容器死了"，于是排查方向直接跑偏 —— 那正是 `died` 只认一个精确
     子串的理由。
     """
-    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/suvex-sandbox:test")
 
     def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
         return runner.CommandResult(127, "", f"找不到可执行文件：{argv[0]}")
@@ -1267,7 +1267,7 @@ def test_a_successful_exec_does_not_mark_the_sandbox_dead(monkeypatch) -> None:
     防止有人把判据写成 `if not result.ok:`（漏掉子串判断）—— 那样任何一条
     返回非零的普通命令（`grep` 没匹配到就是 exit 1）都会终止整次解题。
     """
-    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/suvex-sandbox:test")
 
     def fake_run(argv, *, timeout):  # noqa: ANN001, ANN202
         return runner.CommandResult(1, "", "grep: /work/x: No such file or directory")
@@ -1304,7 +1304,7 @@ def _start_with(monkeypatch, inspect_result: runner.CommandResult) -> runner.San
         return runner.CommandResult(0, _FAKE_ID + "\n", "")
 
     monkeypatch.setattr(runner, "_run", fake_run)
-    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/suvex-sandbox:test")
     sandbox.start()
     return sandbox
 
@@ -1379,7 +1379,7 @@ def test_the_liveness_probe_asks_by_container_id_not_by_name(monkeypatch) -> Non
         return runner.CommandResult(0, _FAKE_ID + "\n", "")
 
     monkeypatch.setattr(runner, "_run", fake_run)
-    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/ctf2-sandbox:test")
+    sandbox = runner.SandboxContainer(name="ctf2-test-abc", image="suvex/suvex-sandbox:test")
     sandbox.start()
 
     probe = next(call for call in seen if call[:2] == ["docker", "inspect"])
@@ -2602,16 +2602,16 @@ def test_sandbox_images_export_the_venv_to_login_shells() -> None:
     只有真去 `bash -lc 'python3 -c "import pwn"'` 才看得见。所以这里在
     源码层钉住那个 `/etc/profile.d/*.sh`：删掉它，这条断言变红。
     """
-    base = _dockerfile("ctf2-sandbox")
+    base = _dockerfile("suvex-sandbox")
     assert "/etc/profile.d/" in base, "base 镜像没有给 login shell 写 PATH"
     assert "/opt/venv/bin" in base, "base 镜像没把 venv 的路径写进 PATH"
 
-    # ★ re 镜像**不重复写一遍**，它靠 `FROM ctf2-sandbox` 继承那一层。
+    # ★ re 镜像**不重复写一遍**，它靠 `FROM suvex-sandbox` 继承那一层。
     #   所以这里断言的是**继承关系**，而不是在 re 里再找一遍那段文本 ——
     #   让两处各写一遍，迟早只有一处被改（而那时症状是"re 镜像里
     #   import 不到 pwntools"，与 base 无关）。
-    reverse = _dockerfile("ctf2-sandbox-re")
-    assert "ARG BASE_IMAGE=ctf2-sandbox" in reverse, (
+    reverse = _dockerfile("suvex-sandbox-re")
+    assert "ARG BASE_IMAGE=suvex-sandbox" in reverse, (
         "re 镜像必须从 base 继承（否则它的 venv 与 profile.d 都不是 base 那一份）"
     )
 
@@ -2631,7 +2631,7 @@ def test_sandbox_base_image_does_not_hardcode_the_apt_mirror() -> None:
     用 `ARG` 而不是写死镜像站：换机器时 `--build-arg APT_MIRROR=...`
     即可，不必改文件。
     """
-    text = _dockerfile("ctf2-sandbox")
+    text = _dockerfile("suvex-sandbox")
     assert "ARG APT_MIRROR" in text, "apt 源写死了 —— 换机器就得改 Dockerfile"
     assert "http://%s/kali" in text or "http://${APT_MIRROR}" in text, (
         "apt 源应当是 http —— https 会因为缺 ca-certificates 而失败"
@@ -2651,7 +2651,7 @@ def test_dockerfile_installs_the_build_tools_pip_needs() -> None:
     ⚠️ 与"镜像里有没有 cmake 可用"是两件事：这条只保证声明了，
     真能不能装上是构建验证的事（见 `_tmp/kali_sandbox_smoke` 那一类脚本）。
     """
-    text = _dockerfile("ctf2-sandbox")
+    text = _dockerfile("suvex-sandbox")
     for tool in ("cmake", "ninja-build", "libzbar0"):
         assert tool in text, f"apt 层缺 {tool}（实测缺它会失败）"
 

@@ -231,7 +231,7 @@ def test_exercise_list_is_flattened_with_its_category() -> None:
     """★ 列表是**两级**的（分类 → corpus），而本地要的是扁平题目。
 
     分类名必须被带上（`category`）—— 它决定选哪个沙箱镜像
-    （逆向题用 `ctf2-sandbox-re`，见 `_profile_for`）。丢掉它会让所有
+    （逆向题用 `suvex-sandbox-re`，见 `_profile_for`）。丢掉它会让所有
     题都落到基础镜像上，而症状是"逆向题里跑不动 gdb"，很难归因。
     """
 

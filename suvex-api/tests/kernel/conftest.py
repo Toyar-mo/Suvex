@@ -437,7 +437,7 @@ def ctf2_ready_environment(db_session: Session, ctf2_challenge):
         id=new_id("ctf2env"),
         challenge_id=ctf2_challenge.id,
         status="ready",
-        sandbox_profile="ctf2-sandbox",
+        sandbox_profile="suvex-sandbox",
         access_url="http://1.2.3.4:8080",
         access_urls=["http://1.2.3.4:8080", "1.2.3.4:9999"],
         poll_count=3,
