@@ -456,7 +456,7 @@ class KernelConfig(Base):
     读代码的人不必记两个不同的字面量。
     """
 
-    __tablename__ = "ctf2_config"
+    __tablename__ = "suvex_config"
     __table_args__ = (
         CheckConstraint(
             f"submit_mode IN ({', '.join(repr(v) for v in values(KernelSubmitMode))})",

@@ -112,7 +112,7 @@ class KernelAccount(Base):
     `service.bind_account` 一个函数里被写入。
     """
 
-    __tablename__ = "ctf2_accounts"
+    __tablename__ = "suvex_accounts"
     __table_args__ = (
         # 一个实例只允许一个**活跃**绑定。用部分唯一索引在数据库层强制 ——
         # 与 `uq_provider_accounts_default` 同一条理由：只在 service 里判
@@ -123,7 +123,7 @@ class KernelAccount(Base):
         # 解绑后的历史记录要留着（审计需要"这个号什么时候绑过"），
         # 而全表唯一会让"解绑再重绑"直接撞约束。
         Index(
-            "uq_ctf2_accounts_active",
+            "uq_suvex_accounts_active",
             "status",
             unique=True,
             postgresql_where=text("status = 'active'"),
@@ -227,7 +227,7 @@ class KernelPlatform(Base):
     字段是密码"这个问题一旦有了第二个答案，以后每次审计都要重新答一遍。
     """
 
-    __tablename__ = "ctf2_platforms"
+    __tablename__ = "suvex_platforms"
     __table_args__ = (
         CheckConstraint("source IN ('builtin', 'generated')", name="source_valid"),
         CheckConstraint(
@@ -298,7 +298,7 @@ class KernelCompetition(Base):
     题目目前提交会 404。见 `service._load_challenge_brief` 的说明。
     """
 
-    __tablename__ = "ctf2_competitions"
+    __tablename__ = "suvex_competitions"
     __table_args__ = (
         # ⚠️ 这条唯一约束在 `account_id` 改成可空之后**仍然有效但不覆盖
         #    `local`**：PostgreSQL 里 NULL 不等于 NULL，所以两行
@@ -311,12 +311,12 @@ class KernelCompetition(Base):
         #    "合法但奇怪"变成"数据库拒绝"，而平台侧的 remote_id 只在
         #    单个账号内有意义。
         UniqueConstraint(
-            "account_id", "remote_id", name="uq_ctf2_competitions_account_remote"
+            "account_id", "remote_id", name="uq_suvex_competitions_account_remote"
         ),
         CheckConstraint(
             "kind IN ('competition', 'practice', 'local')", name="kind_valid"
         ),
-        Index("ix_ctf2_competitions_account_kind", "account_id", "kind"),
+        Index("ix_suvex_competitions_account_kind", "account_id", "kind"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -332,7 +332,7 @@ class KernelCompetition(Base):
     #    赛事与题目确实该跟着消失。NULL 的行不受外键影响，本地案例
     #    因此天然免疫解绑操作 —— 这是想要的行为。
     account_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("ctf2_accounts.id", ondelete="CASCADE"), nullable=True
+        String(64), ForeignKey("suvex_accounts.id", ondelete="CASCADE"), nullable=True
     )
     # CTF2 侧的 id。存字符串而不是整数：平台不同端点的 id 形态不一致
     # （赛事是整数、stage 是字符串），统一成字符串省掉每次调用的转换。
@@ -381,10 +381,10 @@ class KernelChallenge(Base):
     不会让刹车片失效 —— 那是一处会静默导致超额提交的设计缺陷。
     """
 
-    __tablename__ = "ctf2_challenges"
+    __tablename__ = "suvex_challenges"
     __table_args__ = (
         UniqueConstraint(
-            "competition_id", "remote_id", name="uq_ctf2_challenges_competition_remote"
+            "competition_id", "remote_id", name="uq_suvex_challenges_competition_remote"
         ),
         CheckConstraint(
             f"status IN ({', '.join(repr(v) for v in values(KernelChallengeStatus))})",
@@ -422,14 +422,14 @@ class KernelChallenge(Base):
             "confirmed_flag IS NULL OR status = 'solved'", name="confirmed_only_when_solved"
         ),
         # 同步列表与"按状态筛"是主要查询形状。
-        Index("ix_ctf2_challenges_competition_status", "competition_id", "status"),
+        Index("ix_suvex_challenges_competition_status", "competition_id", "status"),
         # 阶段查询（赛事的题目按 stage 分组）。
-        Index("ix_ctf2_challenges_stage", "stage_id"),
+        Index("ix_suvex_challenges_stage", "stage_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     competition_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_competitions.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_competitions.id", ondelete="CASCADE"), nullable=False
     )
     remote_id: Mapped[str] = mapped_column(String(64), nullable=False)
 
@@ -585,7 +585,7 @@ class KernelEnvironment(Base):
     真正的洞在另一个端口"的题。
     """
 
-    __tablename__ = "ctf2_environments"
+    __tablename__ = "suvex_environments"
     __table_args__ = (
         CheckConstraint(
             f"status IN ({', '.join(repr(v) for v in values(KernelEnvironmentStatus))})",
@@ -606,12 +606,12 @@ class KernelEnvironment(Base):
         ),
         CheckConstraint("poll_count >= 0", name="poll_count_non_negative"),
         # 查"这道题当前有没有活着环境"是最热的查询（每次启动前都要判）。
-        Index("ix_ctf2_environments_challenge_status", "challenge_id", "status"),
+        Index("ix_suvex_environments_challenge_status", "challenge_id", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
 
     status: Mapped[str] = mapped_column(
@@ -695,7 +695,7 @@ class KernelSolveAttempt(Base):
     提交记录记的是**对外动作**，本表记的是**内部输入**。
     """
 
-    __tablename__ = "ctf2_solve_attempts"
+    __tablename__ = "suvex_solve_attempts"
     __table_args__ = (
         # 取值合法性。与 `KernelSubmission.mode_valid` 同一个理由：
         # 这两列会进审计与复盘，写进一个拼错的字符串会让
@@ -712,12 +712,12 @@ class KernelSolveAttempt(Base):
         # 那是配置错误而不是预算选择（下界与 `MIN_CTF2_MAX_TURNS` 一致）。
         CheckConstraint("max_turns >= 1", name="solve_attempt_turns_positive"),
         # "这道题最近几次尝试"是最常见的查询（界面要显示上次用了什么策略）。
-        Index("ix_ctf2_solve_attempts_challenge_at", "challenge_id", "created_at"),
+        Index("ix_suvex_solve_attempts_challenge_at", "challenge_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
 
     # ── 受理时定下的策略（worker 只读这里）──────────────────
@@ -792,7 +792,7 @@ class KernelSubmission(Base):
     在有争议时是关键事实。
     """
 
-    __tablename__ = "ctf2_submissions"
+    __tablename__ = "suvex_submissions"
     __table_args__ = (
         CheckConstraint(
             f"status IN ({', '.join(repr(v) for v in values(KernelSubmissionStatus))})",
@@ -813,14 +813,14 @@ class KernelSubmission(Base):
             name="correct_implies_receipt",
         ),
         # "这道题提交过什么"是最常见的查询。
-        Index("ix_ctf2_submissions_challenge_at", "challenge_id", "submitted_at"),
+        Index("ix_suvex_submissions_challenge_at", "challenge_id", "submitted_at"),
         # 查待确认的（`pending`）—— 重试逻辑与对账都要用它。
-        Index("ix_ctf2_submissions_status", "status"),
+        Index("ix_suvex_submissions_status", "status"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
 
     # ⚠️ **明文 flag 落库**，这是刻意的，且与凭据是**相反**的取舍。
@@ -899,22 +899,22 @@ class KernelSolveNote(Base):
     然后模型又开始"忘记题目要求" —— 那把"复用"变成了"更糟的重来"。
     """
 
-    __tablename__ = "ctf2_solve_notes"
+    __tablename__ = "suvex_solve_notes"
     __table_args__ = (
         # 一道题一张卡。重解时**更新**而不是新增 —— 与
         # `ctf2_solve_attempts`（每次尝试一行）是相反的设计，因为
         # 它们回答的问题不同：
         #   · attempt 回答"这一次按什么策略跑的"（历史，只增）；
         #   · note    回答"这道题怎么解"（知识，取最新）。
-        UniqueConstraint("challenge_id", name="uq_ctf2_solve_notes_challenge"),
+        UniqueConstraint("challenge_id", name="uq_suvex_solve_notes_challenge"),
         # 召回时按分类 + 解出状态筛，所以这两列要能走索引。
-        Index("ix_ctf2_solve_notes_category", "category"),
-        Index("ix_ctf2_solve_notes_solved", "solved"),
+        Index("ix_suvex_solve_notes_category", "category"),
+        Index("ix_suvex_solve_notes_solved", "solved"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
 
     #: 题型（从 challenge 复制，便于跨题召回时不必 join）。
@@ -1034,7 +1034,7 @@ class KernelSolveUsage(Base):
     仍然留一列备查（别的接入点可能会给）。
     """
 
-    __tablename__ = "ctf2_solve_usages"
+    __tablename__ = "suvex_solve_usages"
     __table_args__ = (
         # 轮数从 1 起。0 轮意味着"一次不存在的调用"。
         CheckConstraint("turn >= 1", name="solve_usage_turn_positive"),
@@ -1045,20 +1045,20 @@ class KernelSolveUsage(Base):
             name="solve_usage_tokens_non_negative",
         ),
         # "这次尝试的逐轮明细"是最热的查询（详情页展开）。
-        Index("ix_ctf2_solve_usages_attempt_turn", "attempt_id", "turn"),
+        Index("ix_suvex_solve_usages_attempt_turn", "attempt_id", "turn"),
         # 按题聚合（题解里要写"这道题一共花了多少"）。
-        Index("ix_ctf2_solve_usages_challenge_at", "challenge_id", "created_at"),
+        Index("ix_suvex_solve_usages_challenge_at", "challenge_id", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     attempt_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_solve_attempts.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_solve_attempts.id", ondelete="CASCADE"), nullable=False
     )
     # ⚠️ 冗余存 challenge_id（attempt 已经能关联到题）：题解与总览页
     #    都要"按题聚合 token"，而只走 attempt 需要多一次 JOIN。
     #    与 `KernelSolveNote.category` 复制而非引用是同一条取舍。
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
 
     turn: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1133,16 +1133,16 @@ class KernelWriteup(Base):
     判据是**这份内容的去向**，不是"flag 是不是秘密"。
     """
 
-    __tablename__ = "ctf2_writeups"
+    __tablename__ = "suvex_writeups"
     __table_args__ = (
         # 一道题一份。重解时**更新**而不是新增。
-        UniqueConstraint("challenge_id", name="uq_ctf2_writeups_challenge"),
-        Index("ix_ctf2_writeups_generated_at", "generated_at"),
+        UniqueConstraint("challenge_id", name="uq_suvex_writeups_challenge"),
+        Index("ix_suvex_writeups_generated_at", "generated_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
 
     #: 这份题解出自哪一次尝试。
@@ -1150,7 +1150,7 @@ class KernelWriteup(Base):
     #: ⚠️ `SET NULL` 而不是 CASCADE：尝试记录被清掉时，题解**仍然有价值**
     #:    （它是给人看的成品），不该跟着消失。而"出自哪次尝试"丢了大不了。
     attempt_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("ctf2_solve_attempts.id", ondelete="SET NULL"), nullable=True
+        String(64), ForeignKey("suvex_solve_attempts.id", ondelete="SET NULL"), nullable=True
     )
 
     #: 题解全文（markdown）。**含 flag 原文**，理由见类 docstring。
@@ -1238,27 +1238,27 @@ class KernelSolveTelemetry(Base):
     （宿主负载能把它放大三倍），不为它在这里再造一处不一致的读数。
     """
 
-    __tablename__ = "ctf2_solve_telemetry"
+    __tablename__ = "suvex_solve_telemetry"
     __table_args__ = (
         CheckConstraint(
             "turns >= 0 AND tool_calls >= 0 AND notes_count >= 0",
             name="solve_telemetry_non_negative",
         ),
         # "这道题的历次观测"（详情页/复盘按题看）。
-        Index("ix_ctf2_solve_telemetry_challenge_at", "challenge_id", "created_at"),
+        Index("ix_suvex_solve_telemetry_challenge_at", "challenge_id", "created_at"),
         # "按分类算均值"（回答"方法卡在哪类题上才有用"）。
-        Index("ix_ctf2_solve_telemetry_category_at", "category", "created_at"),
+        Index("ix_suvex_solve_telemetry_category_at", "category", "created_at"),
         # "按细分类型算均值"（回答"带 heap 题的遥测只占多少"）。
-        Index("ix_ctf2_solve_telemetry_subcategory_at", "subcategory", "created_at"),
+        Index("ix_suvex_solve_telemetry_subcategory_at", "subcategory", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     challenge_id: Mapped[str] = mapped_column(
-        String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
+        String(64), ForeignKey("suvex_challenges.id", ondelete="CASCADE"), nullable=False
     )
     #: 出自哪一次尝试。`SET NULL`：快照被清理后观测仍然算数。
     attempt_id: Mapped[str | None] = mapped_column(
-        String(64), ForeignKey("ctf2_solve_attempts.id", ondelete="SET NULL"), nullable=True
+        String(64), ForeignKey("suvex_solve_attempts.id", ondelete="SET NULL"), nullable=True
     )
 
     #: 当时的分类（见类 docstring：防止同步改分类让历史统计漂移）。
