@@ -107,8 +107,12 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'kernel',
     path: '/kernel',
-    label: 'Suvex 内核',
-    shortLabel: '内核',
+    // ★ 侧栏显示名用「CTF」而不是「Suvex 内核」：这一项对用户来说就是
+    //   「去 ctf2.dasctf.com 拉题、解题」，用域名叫得明白。但内部跑的是
+    //   自研的 Suvex 内核（id/path 仍是 kernel），只是对外不把这层名字
+    //   露在导航上 —— 内核是实现，不是这个入口要回答的问题。
+    label: 'CTF',
+    shortLabel: 'CTF',
     icon: Flag,
     blurb: '从 ctf2.dasctf.com 拉取赛事与题目，在独立沙箱里由模型解题。',
     // ★ 没有进移动端底栏：底栏只放最常用的那几个，而解题内核是
