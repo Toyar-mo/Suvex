@@ -1,0 +1,957 @@
+"""完整多智能体编排 —— root 调度、子 agent 并行执行（v0.58）。
+
+## 为什么要有这个文件
+
+v0.57 之前，`solve_in_sandbox` 是**一条** ReAct 循环：一个模型、一份上下文、
+一条 `recent` 列表从头跑到尾。这在"一道题只需要一条思路"时够用，但有两类
+结构性失败它修不了：
+
+1. **上下文被一件事撑满**。侦察阶段抓回来的 HTML、扫出的一堆路径、跑失败的
+   几屏输出，全堆在同一条 `recent` 里。到真正要深挖某个漏洞时，前面几十轮
+   的噪声已经把窗口占满（`MAX_HISTORY_TURNS` 不停往前删 —— 删掉的就是它
+   自己的记忆）。实测原话：「沙箱无外网…只能靠 http_request 逐个 URL 请求」，
+   那种探索会吃满上下文。
+2. **一次只能想一件事**。侦察、验证 A、验证 B 是**天然可并行**的，但一条循环
+   只能串行。总轮次是 `spec.max_turns`，串行意味着每次切方向都在消耗同一份预算。
+
+这不是"多加几个工具"能解决的 —— 要的是**多个独立的上下文、能并发、能互相
+传结论**。这正是 strix（`strix/agents/factory.py`）做的事，也是它比我们强的地方。
+
+## 与 strix 的关系（学它什么、不学它什么）
+
+**学**：root agent 只调度不亲自动手（`root_agent_directive`）；每个漏洞类型/
+资产开一个专职子 agent；子 agent 完成后用 `agent_finish` 交一份结构化报告；
+共享 `notes`（跨 agent 草稿纸）与 `coverage`（谁测过什么，包括"干净"的也记）。
+
+**不学**：它把整套 LangGraph + 35KB YAML 塞进一个运行时。我们用**自己的文本
+协议**（`ACTION:` / `FINAL:`，见 `runner.py` 模块 docstring 第 2 条），因为它
+已经被证明能跑通所有 provider，换成原生 tools 等于把测过的路径丢掉重来。
+
+## 结构
+
+```
+run_multi_agent(spec, sandbox, gateway, system_prompt, ...)
+  └─ AgentCoordinator            # 图 + 状态 + 信箱 + 共享状态，全在内存
+       ├─ AgentNode(root)        # 只调度；工具集含 create_agent / wait / finish_scan
+       │    └─ _agent_loop(...)  # 一条独立的 ReAct 循环（复用 host_tools 那套）
+       ├─ AgentNode(child A)     # 每轮各自 gateway.chat()
+       └─ AgentNode(child B)
+```
+
+## 三条纪律（与 runner.py 一致）
+
+1. **不碰数据库**。这个模块是 async，而项目的 Session 是同步的。所有落库在
+   `_run_worker` 的同步段做 —— 这里只通过 `on_progress` 回调把过程送出去。
+2. **回调不许抛**。事件写失败不该让一场已经跑了二十轮的编排停摆。
+3. **沙箱是共享的**。所有 agent 复用**同一个** `SandboxContainer` —— 它们并发
+   执行命令，靠 shell 会话隔离（每条命令一个独立 `docker exec`）+ 各自的
+   `/work/agents/<agent_id>` 工作目录避免踩踏。
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Any
+
+from app.kernel.client import KernelError
+from app.kernel.runner import (
+    TOOL_NAMES,
+    LlmGateway,
+    SandboxContainer,
+    SolveOutcome,
+    SolveSpec,
+    _final_stretch_note,
+    _format_action_results,
+    _format_reminder,
+    _human_hint_note,
+    _initial_prompt,
+    _narration_before_action,
+    _output_fingerprint,
+    _truncation_reminder,
+    dispatch_tool,
+    extract_candidates_with_reasons,
+    extract_final_analysis,
+    parse_actions,
+    parse_final,
+)
+
+logger = logging.getLogger(__name__)
+
+# ══════════════════════════════════════════════════════════
+# 常量
+# ══════════════════════════════════════════════════════════
+
+#: root 一次最多能开多少个子 agent。**这是硬上限，不是建议**。
+#:
+#: ## 为什么要封顶
+#:
+#: 每个子 agent 都是一条独立循环，都各自消耗 token。不开顶的话，一个"帮我看看
+#: 有哪些漏洞"的 instruction 就能让模型开出二十个 agent，而每一次 `gateway.chat`
+#: 都是真金白银。20 个已经远超"一道渗透题值得并行"的量级。
+#:
+#: ⚠️ 触顶时 `create_agent` **返回错误信息**而不是静默拒绝 —— 模型得知道
+#:    "我开不动了"，否则它会以为 spawn 成功、然后空等一个永远不启动的子 agent。
+MAX_CHILDREN = 6
+
+#: 整场编排的**总轮次预算**（所有 agent 加起来的 LLM 调用上限）。
+#:
+#: ## 为什么是总量而不是每 agent
+#:
+#: `spec.max_turns` 是给**一条**循环的数（默认 80）。这里开多条循环，但用户的
+#: 成本预期是"一道题花这么多"。所以编排的总预算是 `max_turns`，各 agent 分。
+#: 一个子 agent 跑满 40 轮就把大半个预算吃了 —— 这正是我们要让它**省着开**的
+#: 理由（也是 `create_agent` 提示词里强调"只在大/可并行时才开"的动机）。
+TOTAL_TURN_RATIO = 1.0  # 总预算 = int(spec.max_turns * TOTAL_TURN_RATIO)
+
+#: 一个子 agent 最多跑多少轮（单 agent 上限）。
+#:
+#: 开太多会导致"一个子 agent 吃光预算"，开太少则子 agent 还没摸到东西就没了。
+#: 取 `max(12, total // (MAX_CHILDREN // 2))` —— 让 3 个典型子 agent 各能跑
+#: 十几到二十轮，够做完一次聚焦的验证。
+def child_turn_budget(spec: SolveSpec) -> int:
+    total = max(12, int(spec.max_turns * TOTAL_TURN_RATIO))
+    return max(12, total // max(2, MAX_CHILDREN // 2))
+
+
+#: 编排工具名。**不要**加进 `TOOL_NAMES` —— 那个元组是"所有 agent 都能调的基础
+#: 工具"，而编排工具只有 root（部分只有子 agent）能调，见 `_root_tools` /
+#: `_child_tools`。
+CREATE_AGENT = "create_agent"
+SEND_MESSAGE = "send_message_to_agent"
+WAIT_FOR_AGENTS = "wait_for_agents"
+VIEW_GRAPH = "view_agent_graph"
+AGENT_FINISH = "agent_finish"
+FINISH_SCAN = "finish_scan"
+#: 共享草稿纸（root 与子 agent 都能读写）。
+NOTE_WRITE = "write_note"
+NOTE_LIST = "list_notes"
+#: 覆盖度账本（"谁测过什么"，含"干净"的也记）。
+COVERAGE_RECORD = "record_coverage"
+COVERAGE_LIST = "list_coverage"
+
+_ROOT_ONLY = frozenset({CREATE_AGENT, SEND_MESSAGE, WAIT_FOR_AGENTS, VIEW_GRAPH, FINISH_SCAN})
+_CHILD_ONLY = frozenset({AGENT_FINISH})
+_SHARED = frozenset({NOTE_WRITE, NOTE_LIST, COVERAGE_RECORD, COVERAGE_LIST})
+
+
+def root_tool_names() -> tuple[str, ...]:
+    return (*TOOL_NAMES, *_ROOT_ONLY, *_SHARED)
+
+
+def child_tool_names() -> tuple[str, ...]:
+    return (*TOOL_NAMES, *_CHILD_ONLY, *_SHARED)
+
+
+# ══════════════════════════════════════════════════════════
+# 状态：图 / 信箱 / 共享状态
+# ══════════════════════════════════════════════════════════
+
+#: agent 的四种状态。与 strix 的 `Status` 同名子集。
+#:
+#: ⚠️ **没有** "waiting/parked" —— 我们的子 agent 不是可被消息唤醒的常驻任务，
+#: 而是"跑完就结束"的一次性协程。root 用 `wait_for_agents` 等它们全部结束，
+#: 而不是等一条消息。这个差异很重要：它让"死锁"不可能发生（没有互相等待）。
+STATUS_RUNNING = "running"
+STATUS_COMPLETED = "completed"
+STATUS_FAILED = "failed"
+STATUS_STOPPED = "stopped"
+
+
+@dataclass
+class AgentNode:
+    """多智能体图上的一个节点。"""
+
+    agent_id: str
+    name: str
+    task: str
+    parent_id: str | None
+    #: 这个 agent 自己那条循环的 outcome（子 agent 的候选/发现汇到 root 之前先放这）。
+    outcome: SolveOutcome = field(default_factory=SolveOutcome)
+    status: str = STATUS_RUNNING
+    #: 子 agent 交回来的完成报告（纯文本，进 root 的下一轮上下文）。
+    completion_report: str = ""
+
+    def is_terminal(self) -> bool:
+        return self.status in (STATUS_COMPLETED, STATUS_FAILED, STATUS_STOPPED)
+
+
+@dataclass
+class SharedState:
+    """跨 agent 的共享草稿纸与覆盖度账本。
+
+    ## 为什么是内存而不是 DB
+
+    它们只在这场编排里活着 —— 编排结束，结论已经汇进 `SolveOutcome`。
+    落库的是**结论**（findings / candidates / summary），不是中间草稿。
+    把草稿也落库会让"这条笔记是谁在哪个扫描里写的"变成一个需要清理的
+    历史包袱，而它没有复盘价值（过程已经在 events.jsonl 里）。
+    """
+
+    #: 共享草稿：标题 → 正文。**去重靠标题**（同一标题覆盖写）。
+    notes: dict[str, str] = field(default_factory=dict)
+    #: 覆盖度：surface → {"risk": str, "outcome": str, "by": str}。
+    coverage: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def write_note(self, title: str, body: str, *, by: str) -> None:
+        self.notes[title.strip()[:120]] = f"{body.strip()}\n\n— by {by}"
+
+    def record_coverage(self, surface: str, risk: str, outcome: str, *, by: str) -> None:
+        key = surface.strip()[:200]
+        prev = self.coverage.get(key)
+        # 后写的覆盖前写的，但把"谁先测过"记在 outcome 里 —— 一个 surface
+        # 被两个 agent 都测过，第二个的结论更可信（它可能带着第一个的笔记）。
+        self.coverage[key] = {"risk": risk.strip(), "outcome": outcome.strip(), "by": by}
+        if prev and prev.get("by") != by:
+            self.coverage[key]["by"] = f"{prev.get('by')} → {by}"
+
+    def render_notes(self) -> str:
+        if not self.notes:
+            return "（还没有任何笔记）"
+        lines: list[str] = []
+        for title, body in self.notes.items():
+            lines.append(f"### {title}\n{body}")
+        return "\n\n".join(lines)
+
+    def render_coverage(self) -> str:
+        if not self.coverage:
+            return "（还没有任何覆盖记录）"
+        lines: list[str] = []
+        for surface, info in self.coverage.items():
+            lines.append(
+                f"- {surface} ｜风险：{info.get('risk', '?')}｜结论：{info.get('outcome', '?')}"
+                f"（{info.get('by', '?')}）"
+            )
+        return "\n".join(lines)
+
+
+@dataclass
+class AgentCoordinator:
+    """整场多智能体的图、状态、共享状态。**内存态，不碰 DB。**"""
+
+    shared: SharedState = field(default_factory=SharedState)
+    nodes: dict[str, AgentNode] = field(default_factory=dict)
+    #: 本场总共已经花掉的 LLM 轮次（所有 agent 累计），受 `total_budget` 约束。
+    turns_used: int = 0
+    total_budget: int = 80
+    #: 每个子 agent 的单场上限。
+    child_budget: int = 20
+    #: 整场编排是否被外部要求停止（用户终止 / 超时）。
+    stop_requested: bool = False
+    _id_seq: int = 0
+
+    def new_agent_id(self) -> str:
+        """生成本场唯一的短 id（`a1`、`a2`…）。短是刻意的 —— 它会出现在
+        提示词与工具返回里，长 id 纯粹浪费 token。"""
+        self._id_seq += 1
+        return f"a{self._id_seq}"
+
+    def add_root(self, name: str = "root") -> AgentNode:
+        node = AgentNode(agent_id="root", name=name, task="", parent_id=None)
+        self.nodes["root"] = node
+        return node
+
+    def add_child(self, *, name: str, task: str, parent_id: str) -> AgentNode:
+        node = AgentNode(
+            agent_id=self.new_agent_id(),
+            name=name,
+            task=task,
+            parent_id=parent_id,
+        )
+        self.nodes[node.agent_id] = node
+        return node
+
+    def children_of(self, agent_id: str) -> list[AgentNode]:
+        return [n for n in self.nodes.values() if n.parent_id == agent_id]
+
+    def running_children(self, agent_id: str) -> list[AgentNode]:
+        return [n for n in self.children_of(agent_id) if n.status == STATUS_RUNNING]
+
+    def remaining_budget(self) -> int:
+        return max(0, self.total_budget - self.turns_used)
+
+    def can_spawn(self, parent_id: str) -> bool:
+        return (
+            len(self.children_of(parent_id)) < MAX_CHILDREN
+            and self.remaining_budget() > 0
+            and not self.stop_requested
+        )
+
+    def render_graph(self, *, me: str) -> str:
+        """把图渲染成缩进列表，`← you` 标出调用者。"""
+        lines: list[str] = []
+
+        def render(aid: str, depth: int) -> None:
+            node = self.nodes.get(aid)
+            if node is None:
+                return
+            marker = "  ← you" if aid == me else ""
+            lines.append(f"{'  ' * depth}- {node.name} ({aid}) [{node.status}]{marker}")
+            for child in self.children_of(aid):
+                render(child.agent_id, depth + 1)
+
+        roots = [n for n in self.nodes.values() if n.parent_id is None]
+        for root in roots:
+            render(root.agent_id, 0)
+        counts: dict[str, int] = {STATUS_RUNNING: 0, STATUS_COMPLETED: 0, STATUS_FAILED: 0, STATUS_STOPPED: 0}
+        for node in self.nodes.values():
+            counts[node.status] = counts.get(node.status, 0) + 1
+        summary = " ".join(f"{k}={v}" for k, v in counts.items() if v)
+        return "\n".join(lines) + f"\n（{summary}；总预算 {self.turns_used}/{self.total_budget} 轮）"
+
+
+# ══════════════════════════════════════════════════════════
+# 编排工具的调用（root / child 各自的工具集）
+# ══════════════════════════════════════════════════════════
+
+
+def _json_ok(**kwargs: Any) -> str:
+    return json.dumps({"success": True, **kwargs}, ensure_ascii=False)
+
+
+def _json_err(error: str, **kwargs: Any) -> str:
+    return json.dumps({"success": False, "error": error, **kwargs}, ensure_ascii=False)
+
+
+async def dispatch_orchestration_tool(
+    name: str,
+    args: dict[str, Any],
+    *,
+    coord: AgentCoordinator,
+    me: AgentNode,
+    is_root: bool,
+    spawner: Callable[..., Any] | None,
+    sandbox: SandboxContainer,
+    http: Any,
+    spec: SolveSpec,
+) -> str:
+    """编排工具分发。**未知/越权工具返回一句话，不抛。**
+
+    ⚠️ 与 `dispatch_tool` 同一纪律：不抛。模型用错工具名不该终止整场编排。
+    """
+    # 越权拦截：root 调 agent_finish、子 agent 调 finish_scan 都算错用。
+    if name in _ROOT_ONLY and not is_root:
+        return _json_err(f"`{name}` 只有 root 主智能体能调用；子智能体请用 `agent_finish` 结束。")
+    if name in _CHILD_ONLY and is_root:
+        return _json_err(f"`{name}` 只有子智能体能调用；root 主智能体请用 `finish_scan` 结束。")
+
+    if name == CREATE_AGENT:
+        return await _do_create_agent(args, coord=coord, me=me, spawner=spawner)
+    if name == SEND_MESSAGE:
+        return _do_send_message(args, coord=coord, me=me)
+    if name == WAIT_FOR_AGENTS:
+        return await _do_wait_for_agents(args, coord=coord, me=me)
+    if name == VIEW_GRAPH:
+        return _json_ok(graph_structure=coord.render_graph(me=me.agent_id))
+    if name == NOTE_WRITE:
+        return _do_write_note(args, coord=coord, me=me)
+    if name == NOTE_LIST:
+        return _json_ok(notes=coord.shared.render_notes())
+    if name == COVERAGE_RECORD:
+        return _do_record_coverage(args, coord=coord, me=me)
+    if name == COVERAGE_LIST:
+        return _json_ok(coverage=coord.shared.render_coverage())
+    if name == AGENT_FINISH:
+        return _do_agent_finish(args, coord=coord, me=me)
+    if name == FINISH_SCAN:
+        # finish_scan 的实际"终止"由循环在解析到 FINAL 时处理；这里只回一句确认，
+        # 让模型知道它该用 FINAL 交结论（我们的文本协议里，"结束"就是写 FINAL）。
+        return _json_ok(
+            note="好，请用 `FINAL: {...}` 给出总结论（summary / tried / ruled_out / findings），"
+            "然后本次编排结束。"
+        )
+    return _json_err(
+        f"未知编排工具 `{name}`。可用：{', '.join(sorted(set(_ROOT_ONLY | _CHILD_ONLY | _SHARED)))}。"
+    )
+
+
+async def _do_create_agent(
+    args: dict[str, Any],
+    *,
+    coord: AgentCoordinator,
+    me: AgentNode,
+    spawner: Callable[..., Any] | None,
+) -> str:
+    name = str(args.get("name") or "").strip()
+    task = str(args.get("task") or "").strip()
+    if not name:
+        return _json_err("需要 `name`（给子智能体起个能看出职责的名字，如「SQLi 验证」）。")
+    if not task:
+        return _json_err("需要 `task`（具体要它做什么，越具体越好）。")
+    if not coord.can_spawn(me.agent_id):
+        if coord.remaining_budget() <= 0:
+            return _json_err("总轮次预算已用尽，不能再开子智能体。请收口。")
+        return _json_err(
+            f"子智能体数量已达上限（{MAX_CHILDREN} 个）。请先等现有子智能体回报，"
+            "或用 `send_message_to_agent` 给它们补充指令。"
+        )
+    if spawner is None:
+        return _json_err("运行器没有提供子智能体启动器（spawner）。")
+    try:
+        child = await spawner(name=name, task=task, parent_id=me.agent_id)
+    except Exception as exc:  # noqa: BLE001 - spawn 失败要变成模型能读的一句话
+        logger.exception("create_agent: 启动子智能体失败")
+        return _json_err(f"子智能体启动失败：{exc}")
+    return _json_ok(
+        agent_id=child.agent_id,
+        name=child.name,
+        note="子智能体已在后台并行运行。你可以继续自己的分析，"
+        "稍后用 `wait_for_agents` 收它的报告，或用 `view_agent_graph` 看进度。"
+        "**不要在它跑完前重复它的工作。**",
+    )
+
+
+def _do_send_message(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    target = str(args.get("target_agent_id") or "").strip()
+    if not target:
+        return _json_err("需要 `target_agent_id`。")
+    if target == me.agent_id:
+        return _json_err("不能给自己发消息；用 `write_note` 记私人笔记。")
+    node = coord.nodes.get(target)
+    if node is None:
+        return _json_err(f"找不到子智能体 `{target}`。")
+    if node.status != STATUS_RUNNING:
+        return _json_err(
+            f"`{target}` 已经是 {node.status}，收不到消息。"
+            "（我们的子智能体跑完就结束，不能唤醒。要它继续做，开一个新的。）"
+        )
+    return _json_err(
+        "当前编排是一次性协程模型：子智能体之间不通过消息互相打断（那样会引入死锁）。"
+        "请用共享笔记 `write_note` 传递中间结论，或用 `wait_for_agents` 等它跑完读报告。"
+    )
+
+
+async def _do_wait_for_agents(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    """等自己所有仍在跑的子 agent 结束，汇总它们的完成报告。"""
+    running = coord.running_children(me.agent_id)
+    if not running:
+        # 已经没有在跑的子 agent —— 把已结束的报告汇总给它（避免它空等）。
+        done = [n for n in coord.children_of(me.agent_id) if n.completion_report]
+        if not done:
+            return _json_ok(
+                wait_outcome="no_active_agents",
+                note="没有在跑的子智能体，也没有已完成的报告。继续自己的工作或收口。",
+            )
+        return _json_ok(
+            wait_outcome="all_done",
+            reports=[{"name": n.name, "agent_id": n.agent_id, "report": n.completion_report} for n in done],
+            note="所有子智能体都已结束，报告见上。",
+        )
+    # 真的等：asyncio 里每个子 agent 的任务在 `_spawn` 里被登记到 coord，
+    # 这里 await 它们的 task 直到 gather 完成。用超时防止无限等。
+    timeout = float(args.get("timeout_seconds") or 600)
+    tasks = [n for n in running]
+    # 每个 node 上的 future 由 spawner 放在 node.completion_report 里，等它非空。
+    deadline = asyncio.get_running_loop().time() + min(timeout, 1800)
+    while any(n.status == STATUS_RUNNING for n in tasks):
+        if asyncio.get_running_loop().time() > deadline:
+            break
+        if coord.stop_requested:
+            break
+        await asyncio.sleep(0.5)
+    reports = [
+        {"name": n.name, "agent_id": n.agent_id, "status": n.status, "report": n.completion_report}
+        for n in coord.children_of(me.agent_id)
+        if n.completion_report
+    ]
+    return _json_ok(
+        wait_outcome="all_done" if reports else "timeout",
+        reports=reports,
+        note=(
+            "子智能体已完成，报告见上。请据此决定下一步（继续深挖 / 开新子 agent / 收口）。"
+            if reports
+            else "等待超时，子智能体仍在跑。你可以继续自己的工作，稍后再等一次。"
+        ),
+    )
+
+
+def _do_write_note(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    title = str(args.get("title") or "").strip()
+    body = str(args.get("body") or "").strip()
+    if not title or not body:
+        return _json_err("需要 `title` 与 `body`。")
+    coord.shared.write_note(title, body, by=me.name)
+    return _json_ok(note=f"已记录笔记「{title}」。其他智能体用 `list_notes` 能看到它。")
+
+
+def _do_record_coverage(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    surface = str(args.get("surface") or "").strip()
+    risk = str(args.get("risk") or "").strip()
+    outcome = str(args.get("outcome") or "").strip()
+    if not surface:
+        return _json_err("需要 `surface`（测了什么：URL / 参数 / 端点）。")
+    coord.shared.record_coverage(surface, risk or "未标", outcome or "未标", by=me.name)
+    return _json_ok(note=f"已记录覆盖：{surface}。含「干净」的结果也要记 —— 那是别人不再重测的依据。")
+
+
+def _do_agent_finish(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    """子 agent 收尾：把完成报告写进 node，由 spawner 的 task 结束时读走。"""
+    summary = str(args.get("result_summary") or "").strip()
+    findings = args.get("findings") if isinstance(args.get("findings"), list) else []
+    open_items = args.get("open_items") if isinstance(args.get("open_items"), list) else []
+    coord.shared.write_note(
+        f"完成报告 · {me.name}",
+        "\n".join(
+            [summary or "(无摘要)"]
+            + (["", "发现："] + [f"- {f}" for f in findings] if findings else [])
+            + (["", "未决："] + [f"- {o}" for o in open_items] if open_items else [])
+        ),
+        by=me.name,
+    )
+    return _json_ok(
+        note="完成报告已记录。请用 `FINAL: {...}` 给出你的结论（子智能体的 findings 会在 FINAL 里被父级收集）。"
+    )
+
+
+# ══════════════════════════════════════════════════════════
+# 单条 agent 循环（root 与 child 共用）
+# ══════════════════════════════════════════════════════════
+
+
+@dataclass
+class AgentLoopResult:
+    """一条 agent 循环跑完的结果。"""
+
+    outcome: SolveOutcome
+    finished: bool  # 是否主动用 FINAL 收了尾（vs 轮次用尽/停止）
+    final_payload: dict[str, Any] | None = None
+
+
+async def run_agent_loop(
+    *,
+    node: AgentNode,
+    coord: AgentCoordinator,
+    spec: SolveSpec,
+    sandbox: SandboxContainer,
+    gateway: LlmGateway,
+    system_prompt: str,
+    base_message: dict[str, str],
+    is_root: bool,
+    max_turns: int,
+    on_progress: Callable[[str, str, dict[str, str]], None] | None,
+    spawner: Callable[..., Any] | None,
+    http: Any,
+    hint_provider: Callable[[], str | None] | None = None,
+) -> AgentLoopResult:
+    """跑一条独立的 ReAct 循环，直到 FINAL / 轮次用尽 / 外部停止。
+
+    这是 `solve_in_sandbox` 单循环逻辑的**多 agent 版**：同样的文本协议
+    （`ACTION:` / `FINAL:`）、同样的消息分段（base/recent）、同样的重复检测，
+    区别只有两点：
+      1. 工具集按 `is_root` 分（root 有编排工具，child 有 agent_finish）；
+      2. 轮次预算是**从总量里扣**（`coord.turns_used`），不是各自的固定数。
+    """
+    from app.kernel.runner import MAX_ACTIONS_PER_TURN, MAX_HISTORY_TURNS
+
+    log: list[str] = []
+    recent: list[dict[str, str]] = []
+
+    def _messages() -> list[dict[str, str]]:
+        return [base_message, *recent]
+
+    def notify(kind: str, summary: str, payload: dict[str, str]) -> None:
+        if on_progress is None:
+            return
+        try:
+            on_progress(kind, summary, payload)
+        except Exception:  # noqa: BLE001 - 过程不该影响结果
+            logger.warning("多智能体过程事件发送失败（不影响编排）", exc_info=True)
+
+    outcome = SolveOutcome()
+    seen_calls: dict[tuple[str, str, str], int] = {}
+
+    for turn in range(1, max_turns + 1):
+        if coord.stop_requested:
+            outcome.error = "编排被外部要求停止。"
+            break
+        if coord.remaining_budget() <= 0:
+            outcome.error = f"总轮次预算已用尽（{coord.total_budget} 轮）。"
+            break
+        outcome.turns = turn
+        coord.turns_used += 1
+
+        # 收尾提醒（只剩最后一轮时）
+        if max_turns - turn == 0:
+            recent.append({"role": "user", "content": _final_stretch_note(0)})
+
+        # 人给的线索（只在 root 上生效 —— 子 agent 有明确 task，不掺人类线索）
+        if is_root and hint_provider is not None:
+            try:
+                hint = hint_provider()
+            except Exception:  # noqa: BLE001
+                logger.warning("读取人给线索失败", exc_info=True)
+                hint = None
+            if hint:
+                recent.append({"role": "user", "content": _human_hint_note(hint)})
+
+        try:
+            reply = await gateway.chat(_messages(), system=system_prompt)
+        except KernelError as exc:
+            outcome.error = exc.message
+            log.append(f"[{node.agent_id} t{turn}] LLM 失败：{exc.message}")
+            break
+
+        outcome.llm_calls += 1
+        outcome.usages.append((turn, gateway.model, gateway.label, reply.usage))
+        text = reply.text or ""
+        log.append(f"[{node.agent_id} t{turn}] {text[:2000]}")
+        recent.append({"role": "assistant", "content": text})
+        truncated = reply.finish_reason in ("length", "max_tokens")
+
+        # ① 结论？
+        final = parse_final(text)
+        if final is not None:
+            outcome.candidates, rejected = extract_candidates_with_reasons(final)
+            outcome.summary, outcome.tried, outcome.ruled_out = extract_final_analysis(final)
+            outcome.workorders = final.get("workorders")
+            outcome.findings = final.get("findings")
+            outcome.transcript = "\n\n".join(log)
+            if not outcome.candidates and rejected and is_root:
+                outcome.error = (
+                    "模型给出了结论，但候选 flag 被本地格式校验拒绝：" + "；".join(rejected[:3])
+                )
+            return AgentLoopResult(outcome=outcome, finished=True, final_payload=final)
+
+        # ② 动作？
+        actions = parse_actions(text)
+        if not actions:
+            if len(text.strip()) >= 20:
+                notify("reasoning", text.strip()[:200], {"text": text.strip()})
+            reminder = _truncation_reminder(len(text)) if truncated else _format_reminder()
+            recent.append({"role": "user", "content": reminder})
+            continue
+
+        batch = actions[:MAX_ACTIONS_PER_TURN]
+        dropped = len(actions) - len(batch)
+        completed: list[tuple[str, str, str, str]] = []
+        narration = _narration_before_action(text)
+        if narration:
+            notify("reasoning", narration[:200], {"text": narration})
+
+        for tool_name, tool_args in batch:
+            command = str(tool_args.get("command") or json.dumps(tool_args, ensure_ascii=False))
+            log.append(f"[{node.agent_id} t{turn}] tool {tool_name} {json.dumps(tool_args, ensure_ascii=False)[:400]}")
+
+            # 编排工具 vs 基础工具，分派到不同入口。
+            orchestr_tools = _ROOT_ONLY | _CHILD_ONLY | _SHARED
+            if tool_name in orchestr_tools:
+                result = await dispatch_orchestration_tool(
+                    tool_name,
+                    tool_args,
+                    coord=coord,
+                    me=node,
+                    is_root=is_root,
+                    spawner=spawner,
+                    sandbox=sandbox,
+                    http=http,
+                    spec=spec,
+                )
+            else:
+                result = await dispatch_tool(tool_name, tool_args, spec=spec, sandbox=sandbox, http=http)
+
+            log.append(f"[{node.agent_id} t{turn}] result: {result[:1500]}")
+            outcome.tool_outputs.append(result)
+            outcome.tool_calls += 1
+
+            call_key = (
+                tool_name,
+                json.dumps(tool_args, ensure_ascii=False, sort_keys=True),
+                _output_fingerprint(result),
+            )
+            repeated_note = ""
+            first_turn = seen_calls.get(call_key)
+            if first_turn is not None:
+                repeated_note = (
+                    f"⚠️ 这条命令你在第 {first_turn} 轮跑过，输出完全一样 —— 换一条路。\n\n"
+                )
+            else:
+                seen_calls[call_key] = turn
+
+            completed.append((tool_name, command, result[:3000], repeated_note))
+            notify(
+                "tool_call",
+                f"{tool_name} {command}"[:200],
+                {"tool": tool_name, "command": command, "output": result},
+            )
+
+        recent.append({"role": "user", "content": _format_action_results(completed, dropped) + (
+            "\n\n（提醒：你上一次回复被长度上限切断。）" if truncated else ""
+        )})
+        outcome.saw_tool_output = True
+        if len(recent) > MAX_HISTORY_TURNS * 2:
+            del recent[: len(recent) - MAX_HISTORY_TURNS * 2]
+
+    outcome.transcript = "\n\n".join(log)
+    if not outcome.error:
+        outcome.error = f"回合用尽（{max_turns} 轮）仍未给出结论。"
+    return AgentLoopResult(outcome=outcome, finished=False)
+
+
+# ══════════════════════════════════════════════════════════
+# 顶层入口：驱动 root + 子 agent
+# ══════════════════════════════════════════════════════════
+
+
+async def run_multi_agent(
+    spec: SolveSpec,
+    *,
+    sandbox: SandboxContainer,
+    gateway: LlmGateway,
+    root_system_prompt: str,
+    child_system_prompt: str,
+    on_progress: Callable[[str, str, dict[str, str]], None] | None = None,
+    hint_provider: Callable[[], str | None] | None = None,
+) -> SolveOutcome:
+    """完整多智能体编排：root 调度、子 agent 并行、结论汇总。
+
+    ## 汇总语义（这是与单循环最大的不同）
+
+    单循环只有一个 `outcome`。多智能体里 root 也可能直接产出候选（它自己也
+    用基础工具），子 agent 也可能产出候选/发现。**汇总规则**：
+
+      - **候选 flag**：root 的优先；root 没有则取第一个子 agent 有的。
+        （一道题只有一个 flag，多个 agent 报不同候选时以 root 的收口为准。）
+      - **findings / workorders**：**合并**所有 agent 的（去重靠标题）——
+        渗透评估允许多条发现，合并才对。
+      - **transcript**：拼接（每段带 agent 名），因为复盘要看全过程。
+
+    `run_multi_agent` 是"root + N 个 child 各跑一条循环"，它的控制流与单循环
+    **结构不同**（多协程、有 spawner、有汇总） —— 见 `runner.solve_in_sandbox`
+    里分流的说明。
+    """
+    import httpx
+
+    coord = AgentCoordinator(
+        total_budget=max(12, int(spec.max_turns * TOTAL_TURN_RATIO)),
+        child_budget=child_turn_budget(spec),
+    )
+    root = coord.add_root()
+    root_outcome = SolveOutcome()
+
+    # 子 agent 的 task 句柄，用于 wait_for_agents 收敛。
+    child_tasks: dict[str, asyncio.Task[AgentLoopResult]] = {}
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), trust_env=False) as http:
+
+        async def spawner(*, name: str, task: str, parent_id: str) -> AgentNode:
+            """root 调 create_agent 时由 dispatch 调进来：建 node + 起协程。"""
+            child = coord.add_child(name=name, task=task, parent_id=parent_id)
+            child_base = {
+                "role": "user",
+                "content": _child_task_prompt(spec, child=child, coord=coord),
+            }
+            task_obj = asyncio.create_task(
+                run_agent_loop(
+                    node=child,
+                    coord=coord,
+                    spec=spec,
+                    sandbox=sandbox,
+                    gateway=gateway,
+                    system_prompt=child_system_prompt,
+                    base_message=child_base,
+                    is_root=False,
+                    max_turns=coord.child_budget,
+                    on_progress=on_progress,
+                    spawner=None,  # 子 agent 不能再开子 agent（单层，防爆）
+                    http=http,
+                    hint_provider=None,
+                )
+            )
+            child_tasks[child.agent_id] = task_obj
+
+            async def _finalize(cid: str = child.agent_id, t=task_obj) -> None:
+                try:
+                    res = await t
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("子智能体 %s 崩溃", cid)
+                    node = coord.nodes.get(cid)
+                    if node:
+                        node.status = STATUS_FAILED
+                        node.outcome.error = f"子智能体崩溃：{exc}"
+                    return
+                node = coord.nodes.get(cid)
+                if node is None:
+                    return
+                node.outcome = res.outcome
+                node.status = STATUS_COMPLETED if (res.finished or not res.outcome.error) else STATUS_FAILED
+                node.completion_report = _render_completion_text(node, res)
+
+            asyncio.create_task(_finalize())
+            return child
+
+        root_loop = await run_agent_loop(
+            node=root,
+            coord=coord,
+            spec=spec,
+            sandbox=sandbox,
+            gateway=gateway,
+            system_prompt=root_system_prompt,
+            base_message={"role": "user", "content": _initial_prompt(spec)},
+            is_root=True,
+            max_turns=spec.max_turns,
+            on_progress=on_progress,
+            spawner=spawner,
+            http=http,
+            hint_provider=hint_provider,
+        )
+        root_outcome = root_loop.outcome
+        root.outcome = root_outcome
+        root.status = STATUS_COMPLETED if root_loop.finished else STATUS_FAILED
+
+        # root 收尾后，等所有还在跑的子 agent 结束（避免协程泄漏 / 丢结果）。
+        coord.stop_requested = False
+        pending = [t for t in child_tasks.values() if not t.done()]
+        if pending:
+            # 给它们一个宽限窗口把手上这轮跑完；超时则标记停止。
+            done, not_done = await asyncio.wait(pending, timeout=float(coord.child_budget) * 90)
+            for t in not_done:
+                t.cancel()
+            # 让 _finalize 跑完
+            await asyncio.sleep(0)
+
+    # ── 汇总 ──────────────────────────────────────────────
+    merged = _merge_outcomes(root_outcome, coord, child_tasks)
+    return merged
+
+
+def _child_task_prompt(spec: SolveSpec, *, child: AgentNode, coord: AgentCoordinator) -> str:
+    """给子 agent 的首轮用户消息：题目信息 + 它的具体任务 + 已有共享状态。"""
+    parts = [_initial_prompt(spec), "", "## 你的具体任务", child.task]
+    notes = coord.shared.render_notes()
+    if notes and notes != "（还没有任何笔记）":
+        parts += ["", "## 其他智能体已记录的共享笔记（先读，别重复别人的工作）", notes]
+    coverage = coord.shared.render_coverage()
+    if coverage and coverage != "（还没有任何覆盖记录）":
+        parts += ["", "## 已经有人测过的范围（这些别重测）", coverage]
+    parts += [
+        "",
+        "## 交付方式",
+        "完成后用 `FINAL: {...}` 给出你的结论（summary / tried / ruled_out / findings）。",
+        "如果你的任务是验证某个具体问题，用 `agent_finish` 把发现与未决项记下来，再用 FINAL 收口。",
+        "**只做分给你的这一件事**，不要重复其他智能体已经覆盖的范围。",
+    ]
+    return "\n".join(parts)
+
+
+def _render_completion_text(node: AgentNode, res: AgentLoopResult) -> str:
+    """把子 agent 的结果渲染成一段给 root 读的完成报告。"""
+    o = res.outcome
+    lines = [f"== 子智能体「{node.name}」({node.agent_id}) 完成报告 =="]
+    lines.append(f"状态：{'成功' if node.status == STATUS_COMPLETED else '失败'}")
+    if node.task:
+        lines.append(f"任务：{node.task}")
+    lines.append("")
+    lines.append("摘要：" + (o.summary or "(无)"))
+    if o.candidates:
+        lines.append("候选 flag：" + ", ".join(c.value for c in o.candidates))
+    if isinstance(o.findings, list) and o.findings:
+        lines.append("发现：")
+        lines += [f"- {_finding_title(f)}" for f in o.findings]
+    if o.tried:
+        lines.append("试过：" + "；".join(o.tried[:6]))
+    if o.ruled_out:
+        lines.append("已排除：" + "；".join(o.ruled_out[:6]))
+    if o.error:
+        lines.append(f"问题：{o.error}")
+    return "\n".join(lines)
+
+
+def _finding_title(finding: Any) -> str:
+    if isinstance(finding, dict):
+        return str(finding.get("title") or finding.get("name") or json.dumps(finding, ensure_ascii=False)[:120])
+    return str(finding)[:120]
+
+
+def _merge_outcomes(
+    root_outcome: SolveOutcome,
+    coord: AgentCoordinator,
+    child_tasks: dict[str, asyncio.Task[AgentLoopResult]],
+) -> SolveOutcome:
+    """把 root 与所有子 agent 的 outcome 合并成一个。见 `run_multi_agent` docstring。"""
+    merged = root_outcome
+
+    # 候选 flag：root 优先；没有则用第一个有候选的子 agent。
+    if not merged.candidates:
+        for node in coord.nodes.values():
+            if node.agent_id == "root":
+                continue
+            if node.outcome and node.outcome.candidates:
+                merged.candidates = list(node.outcome.candidates)
+                break
+
+    # findings / workorders：合并去重（按标题）。
+    seen_finding: set[str] = set()
+    merged_findings: list[Any] = []
+    merged_workorders: list[Any] = []
+    seen_wo: set[str] = set()
+    all_outcomes = [root_outcome] + [n.outcome for n in coord.nodes.values() if n.agent_id != "root"]
+
+    def _add_findings(src: object) -> None:
+        if not isinstance(src, list):
+            return
+        for f in src:
+            key = _finding_title(f)
+            if key not in seen_finding:
+                seen_finding.add(key)
+                merged_findings.append(f)
+
+    def _add_workorders(src: object) -> None:
+        if not isinstance(src, list):
+            return
+        for w in src:
+            key = (
+                str(w.get("title") or w.get("action") or "")
+                if isinstance(w, dict)
+                else str(w)
+            )[:120]
+            if key and key not in seen_wo:
+                seen_wo.add(key)
+                merged_workorders.append(w)
+
+    for o in all_outcomes:
+        if o is None:
+            continue
+        _add_findings(o.findings)
+        _add_workorders(o.workorders)
+
+    if merged_findings:
+        merged.findings = merged_findings
+    if merged_workorders:
+        merged.workorders = merged_workorders
+
+    # 汇总统计
+    merged.turns = coord.turns_used
+    merged.llm_calls = sum(o.llm_calls for o in all_outcomes if o)
+    merged.tool_calls = sum(o.tool_calls for o in all_outcomes if o)
+    merged.usages = [u for o in all_outcomes if o for u in o.usages]
+    merged.tool_outputs = [t for o in all_outcomes if o for t in o.tool_outputs]
+    merged.saw_tool_output = any(o.saw_tool_output for o in all_outcomes if o)
+
+    # transcript：拼接（带 agent 名）
+    parts: list[str] = []
+    if root_outcome.transcript:
+        parts.append("【root】\n" + root_outcome.transcript)
+    for node in coord.nodes.values():
+        if node.agent_id != "root" and node.outcome and node.outcome.transcript:
+            parts.append(f"【{node.name}】\n" + node.outcome.transcript)
+    merged.transcript = "\n\n".join(parts)
+
+    return merged
+
+
+__all__ = [
+    "AgentCoordinator",
+    "AgentNode",
+    "AgentLoopResult",
+    "SharedState",
+    "MAX_CHILDREN",
+    "child_turn_budget",
+    "dispatch_orchestration_tool",
+    "root_tool_names",
+    "child_tool_names",
+    "run_agent_loop",
+    "run_multi_agent",
+]

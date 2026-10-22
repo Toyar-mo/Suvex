@@ -2095,6 +2095,61 @@ def load_pentest_prompt() -> str:
         ) from exc
 
 
+#: ★ v0.58：多智能体编排的 root / child 提示词。
+#:
+#: ## 为什么是两份而不是一份
+#:
+#: root 的职责是**调度**（拆解目标、派子 agent、聚合报告），而子 agent 的职责
+#: 是**动手**（在分到的范围里深挖）。把两份合成一份等于让每个 agent 都
+#: "既能调度又能干活"，而实测那种形态下 root 会自己跑去敲命令、忘了它还有
+#: 子 agent 在等它派活 —— 这正是 strix `root_agent_directive` 反复强调
+#: "root 绝不动手"的理由。
+#:
+#: ⚠️ 它们**不是**替换 `kernel_system.md`，而是在其**之上**再叠一层角色说明
+#:    （与 `build_system_prompt` 的追加纪律一致）。
+PROMPT_ROOT_PATH = PROJECT_ROOT / "prompts" / "kernel_root.md"
+PROMPT_CHILD_PATH = PROJECT_ROOT / "prompts" / "kernel_child.md"
+
+
+def load_root_prompt() -> str:
+    """读多智能体 root（调度者）提示词（v0.58）。**文件不在就抛错。**"""
+    try:
+        return PROMPT_ROOT_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise KernelError(
+            f"读不到多智能体 root 提示词 {PROMPT_ROOT_PATH}。"
+            "它必须随部署一起分发 —— 缺了它 root 会退化成"
+            "「自己动手的单 agent」，多智能体编排形同虚设。"
+        ) from exc
+
+
+def load_child_prompt() -> str:
+    """读多智能体 child（执行者）提示词（v0.58）。**文件不在就抛错。**"""
+    try:
+        return PROMPT_CHILD_PATH.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise KernelError(
+            f"读不到多智能体 child 提示词 {PROMPT_CHILD_PATH}。"
+            "它必须随部署一起分发 —— 缺了它子 agent 会去抢别人"
+            "的活、或重复已经覆盖的范围。"
+        ) from exc
+
+
+def build_multi_agent_prompts(spec: SolveSpec) -> tuple[str, str]:
+    """拼出多智能体的 `(root_system_prompt, child_system_prompt)`（v0.58）。
+
+    两份都是「本题基础提示词（含场景块）+ 角色说明」，只差最后那一层角色。
+
+    ⚠️ 基础部分走 `build_system_prompt_by_spec(spec)` —— 与单循环**同一份**，
+       这样场景纪律（IR 的只读不变量、渗透的只读优先、三级证据）在两种模式
+       下逐字节相同，不会因为走多智能体就漏掉。
+    """
+    base = build_system_prompt_by_spec(spec)
+    root = base + "\n" + load_root_prompt()
+    child = base + "\n" + load_child_prompt()
+    return root, child
+
+
 def build_system_prompt(
     category: str,
     *,
@@ -2642,6 +2697,21 @@ class SolveSpec:
     #:
     #: 默认 `False` 保证 v0.47 之前构造 `SolveSpec` 的地方行为不变。
     pentest: bool = False
+
+    #: ★ v0.58：要不要走**多智能体编排**（root 调度 + 专职子 agent 并行）。
+    #:
+    #: ## 为什么是 spec 上的开关，而不是一个全局配置
+    #:
+    #: "这一道题值不值得多智能体"是逐题的判断：一道简单的 CTF 单点题开多智能体
+    #: 是纯浪费（一个 root 加一个 child 才勉强够），而一次真实渗透/应急响应任务
+    #: 天然要并行侦察。做成全局开关会让"简单题也背上一整套编排开销"，也会让
+    #: "这道题到底走没走多智能体"变得不可考。
+    #:
+    #: ## 默认 `False`
+    #:
+    #: 保证 v0.58 之前构造 `SolveSpec` 的所有路径行为**逐字节不变**——
+    #: 走的是原来那条单循环（`solve_in_sandbox` 里 `if spec.multi_agent` 早退）。
+    multi_agent: bool = False
 
     #: 本题要不要追加越权与注入手法块（v0.42）。
     #:
@@ -3888,6 +3958,32 @@ async def solve_in_sandbox(
     与 `on_progress` 同一条纪律：取线索失败（DB 抖一下）不该让一次
     跑了三十轮的解题停摆。所以下面用 try 包住，异常只记 warning。
     """
+    # ★★ v0.58：多智能体编排在这里**分流**，而不是在循环体里加分支。
+    #
+    # ## 为什么在入口分流
+    #
+    # `run_multi_agent` 是"root + N 个 child 各跑一条循环"，它的控制流与下面
+    # 这条单循环**结构不同**（多协程、有 spawner、有汇总）。硬塞进同一个
+    # `for turn` 循环会让两边互相污染 —— 单循环的读者永远要同时想着
+    # "这里多 agent 时走不走"。分流之后，单循环对 `multi_agent=False`
+    # **逐字节不变**（这正是本版最硬的验收标准），多智能体是一条独立的、
+    # 可单独测的路径。
+    #
+    # ⚠️ `hint_provider` / `on_progress` 原样透传：人给线索只喂给 root
+    #    （子 agent 有明确 task，不掺人类线索，见 `run_agent_loop`）。
+    if spec.multi_agent:
+        from app.kernel.multiagent import run_multi_agent
+
+        root_prompt, child_prompt = build_multi_agent_prompts(spec)
+        return await run_multi_agent(
+            spec,
+            sandbox=sandbox,
+            gateway=gateway,
+            root_system_prompt=root_prompt,
+            child_system_prompt=child_prompt,
+            on_progress=on_progress,
+            hint_provider=hint_provider,
+        )
     log = transcript if transcript is not None else []
     # ★★ v0.35：备用接入点（换模 fallback）。
     #
@@ -6640,6 +6736,9 @@ __all__ = [
     "load_system_prompt",
     "load_agentsec_prompt",
     "load_ir_prompt",
+    "load_root_prompt",
+    "load_child_prompt",
+    "build_multi_agent_prompts",
     "load_offensive_playbook",
     "build_system_prompt",
     "build_system_prompt_by_spec",
