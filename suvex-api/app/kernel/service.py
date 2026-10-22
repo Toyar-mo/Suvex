@@ -3428,6 +3428,12 @@ class KernelSettings:
     #: 不改变行为纪律（与两个场景包开关不同维），但会把一次任务的
     #: LLM 调用量放大约 N 倍 —— 所以默认关、由人显式打开。
     enable_multi_agent: bool = False
+    #: ★ v0.72：可用的 MCP server 配置（学 strix 的 list_mcps 三件套）。
+    #:
+    #: 形状是"原样的 JSON 列表"（`None`/`[]` = 没配），解析成
+    #: `McpServerConfig` 元组发生在 `build_spec` —— 让"读配置"与"解析协议
+    #: 配置"分开，配置层不必知道 MCP 的形状。
+    mcp_servers: list | None = None
 
 
 def effective_ctf2_settings(db: Session) -> KernelSettings:
@@ -3458,6 +3464,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
             enable_agentsec_scenarios=False,
             enable_ir_scenarios=False,
             enable_multi_agent=False,
+            mcp_servers=None,
         )
     return KernelSettings(
         submit_mode=row.submit_mode,
@@ -3473,6 +3480,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
         enable_agentsec_scenarios=row.enable_agentsec_scenarios,
         enable_ir_scenarios=row.enable_ir_scenarios,
         enable_multi_agent=row.enable_multi_agent,
+        mcp_servers=row.mcp_servers,
     )
 
 

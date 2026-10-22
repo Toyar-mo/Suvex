@@ -24,7 +24,7 @@ from typing import Final
 from sqlalchemy import Boolean, CheckConstraint, Float, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
-from app.core.columns import UtcDateTime
+from app.core.columns import JsonColumn, UtcDateTime
 from app.core.db import Base
 from app.core.timeutil import now_utc
 from app.core.vocab import (
@@ -713,6 +713,27 @@ class KernelConfig(Base):
     enable_multi_agent: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
     )
+
+    #: ★ v0.72：可用的 MCP server 列表（学 strix 的 list_mcps/describe_mcp/call_mcp）。
+    #:
+    #: 形状：`[{"name":..., "command":..., "args":[...], "env":{...},
+    #: "notes":..., "allowed_tools":[...]}, ...]`。解析在
+    #: `app/kernel/mcp.py::parse_server_configs`（坏条目跳过并记 warning）。
+    #:
+    #: ## 为什么是 DB 配置列，不是环境变量
+    #:
+    #: 同 `enable_agentsec_scenarios` 等三处：**这决定智能体能调到哪些外部
+    #: 能力**，不该由一个部署参数静默决定。而且它通常带凭据（`env` 里的
+    #: token），写在 `.env` 里会被 `ps aux` / 日志更容易带出来。
+    #:
+    #: ## 为什么默认空
+    #:
+    #: 让智能体连外部 MCP server 是**扩大攻击面**：server 本身能做任何事，
+    #: 我们的隔离只到"只连部署者配过的"。所以默认不连，由人显式加。
+    #:
+    #: ⚠️ `env` 里的值只进子进程环境，**不进事件流、不进日志**（
+    #: `McpServerConfig.public_dict` 去掉它；审计只记 name/command/args）。
+    mcp_servers: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
 
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc

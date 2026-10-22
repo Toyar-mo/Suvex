@@ -150,10 +150,47 @@ NOTE_LIST = "list_notes"
 #: 覆盖度账本（"谁测过什么"，含"干净"的也记）。
 COVERAGE_RECORD = "record_coverage"
 COVERAGE_LIST = "list_coverage"
+#: ★ v0.70 从 strix 学来的三个小工具。
+#:
+#: - `STOP_AGENT`：root 主动叫停某个跑偏/已无用的子 agent —— 没有它，一个方向
+#:   错的子 agent 会一直烧预算到自己的上限（strix 有 stop_agent，我们之前只能等）。
+#: - `THINK`：给模型一个**不调工具、只写推理**的出口。strix 有 think；我们的协议
+#:   里纯文本回合被视为浪费（要求几乎每轮一次工具调用），但"动手前先把话说清"
+#:   恰恰是减少瞎试的关键。THINK 让它记一段推理进上下文，不算白板轮。
+#: - `TODO_*`：私有待办清单。root 用它把大目标拆成可跟踪的步骤，避免"走一步看一步"。
+STOP_AGENT = "stop_agent"
+THINK = "think"
+TODO_CREATE = "create_todo"
+TODO_LIST = "list_todos"
+TODO_UPDATE = "update_todo"
+#: ★ 共享威胁模型（学 strix）。root 建全局攻击面，子 agent 可读可补充。
+THREAT_GET = "get_threat_model"
+THREAT_AMEND = "amend_threat_model"
 
-_ROOT_ONLY = frozenset({CREATE_AGENT, SEND_MESSAGE, WAIT_FOR_AGENTS, VIEW_GRAPH, FINISH_SCAN})
+_ROOT_ONLY = frozenset({
+    CREATE_AGENT,
+    SEND_MESSAGE,
+    WAIT_FOR_AGENTS,
+    VIEW_GRAPH,
+    FINISH_SCAN,
+    STOP_AGENT,
+    TODO_CREATE,
+    TODO_LIST,
+    TODO_UPDATE,
+})
 _CHILD_ONLY = frozenset({AGENT_FINISH})
-_SHARED = frozenset({NOTE_WRITE, NOTE_LIST, COVERAGE_RECORD, COVERAGE_LIST})
+#: 威胁模型**双方都能读**（子 agent 要知道全局假设才知道自己那块的意义）；
+#: 但 `amend` 的**写**权限 root 与子 agent 都开 —— 子 agent 在一线，最可能
+#: 补充真实边界（"这个 /admin 其实不鉴权"），只让 root 写会丢信息。
+_SHARED = frozenset({
+    NOTE_WRITE,
+    NOTE_LIST,
+    COVERAGE_RECORD,
+    COVERAGE_LIST,
+    THINK,
+    THREAT_GET,
+    THREAT_AMEND,
+})
 
 
 def root_tool_names() -> tuple[str, ...]:
@@ -192,6 +229,9 @@ class AgentNode:
     status: str = STATUS_RUNNING
     #: 子 agent 交回来的完成报告（纯文本，进 root 的下一轮上下文）。
     completion_report: str = ""
+    #: ★ v0.70：root 用 `stop_agent` 叫停本节点时置 True。子 agent 循环每轮开头
+    #: 检查它，看到就体面收尾（协作式，不 cancel task —— 见 `_do_stop_agent`）。
+    stop_requested: bool = False
 
     def is_terminal(self) -> bool:
         return self.status in (STATUS_COMPLETED, STATUS_FAILED, STATUS_STOPPED)
@@ -213,6 +253,54 @@ class SharedState:
     notes: dict[str, str] = field(default_factory=dict)
     #: 覆盖度：surface → {"risk": str, "outcome": str, "by": str}。
     coverage: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: ★ v0.70：共享威胁模型（学 strix 的 get_threat_model / amend_threat_model）。
+    #:
+    #: 与 `notes` 的区别：notes 是**平铺的事实**（"发现 X 路径没鉴权"），
+    #: threat_model 是**结构化的攻击假设**：资产 → 信任边界 → 可能的弱点 →
+    #: 优先级。它回答"我们**打算**怎么打、为什么这样排"，notes 回答"我们**看到**了什么"。
+    #: 混淆两者会让 root 在派活时没有全局的攻击面视图 —— 子 agent 各打各的，
+    #: 重复覆盖同一块、漏掉整片死角。
+    #:
+    #: 结构：assets / trust_boundaries / hypotheses / priorities（全部是字符串列表）。
+    threat_model: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "assets": [],
+            "trust_boundaries": [],
+            "hypotheses": [],
+            "priorities": [],
+        }
+    )
+
+    def amend_threat_model(self, field_name: str, items: list[str], *, by: str) -> list[str]:
+        """往威胁模型的某一栏追加条目（去重），返回该栏当前全量。
+
+        `field_name` 必须是四栏之一；认不出就抛 ValueError（调用方转成
+        `_json_err`，不让一个错拼的栏名悄悄写进一个没人读的键）。
+        """
+        if field_name not in self.threat_model:
+            raise ValueError(f"未知的威胁模型栏位 `{field_name}`")
+        bucket = self.threat_model[field_name]
+        seen = {s.strip().lower() for s in bucket}
+        for raw in items:
+            text = str(raw).strip()
+            if text and text.lower() not in seen:
+                bucket.append(f"{text}（by {by}）")
+                seen.add(text.lower())
+        return list(bucket)
+
+    def render_threat_model(self) -> str:
+        labels = {
+            "assets": "资产",
+            "trust_boundaries": "信任边界",
+            "hypotheses": "攻击假设",
+            "priorities": "优先级",
+        }
+        parts = []
+        for key, label in labels.items():
+            items = self.threat_model.get(key) or []
+            body = "\n".join(f"  - {s}" for s in items) if items else "  （空）"
+            parts.append(f"### {label}\n{body}")
+        return "\n".join(parts)
 
     def write_note(self, title: str, body: str, *, by: str) -> None:
         self.notes[title.strip()[:120]] = f"{body.strip()}\n\n— by {by}"
@@ -259,6 +347,11 @@ class AgentCoordinator:
     child_budget: int = 20
     #: 整场编排是否被外部要求停止（用户终止 / 超时）。
     stop_requested: bool = False
+    #: 私有待办清单（root 用它拆步骤）。key=id, value={text, status}。
+    #: status: pending / doing / done。**不复用 coverage** —— 那个记"测过什么"，
+    #: 这个记"打算做什么"，混淆会让两者都失真。
+    todos: dict[str, dict[str, str]] = field(default_factory=dict)
+    _todo_seq: int = 0
     _id_seq: int = 0
 
     def new_agent_id(self) -> str:
@@ -296,6 +389,23 @@ class AgentCoordinator:
             len(self.children_of(parent_id)) < MAX_CHILDREN
             and self.remaining_budget() > 0
             and not self.stop_requested
+        )
+
+    # ── 私有待办清单 ──────────────────────────────────────
+    def add_todo(self, text: str) -> dict[str, str]:
+        text = text.strip()
+        self._todo_seq += 1
+        todo_id = f"t{self._todo_seq}"
+        self.todos[todo_id] = {"text": text, "status": "pending"}
+        return {"id": todo_id, **self.todos[todo_id]}
+
+    def render_todos(self) -> str:
+        if not self.todos:
+            return "（还没有待办。用 `create_todo` 把大目标拆成可跟踪的步骤。）"
+        mark = {"pending": "[ ]", "doing": "[~]", "done": "[x]"}
+        return "\n".join(
+            f"{mark.get(v['status'], '[?]')} {tid} {v['text']}"
+            for tid, v in self.todos.items()
         )
 
     def render_graph(self, *, me: str) -> str:
@@ -374,6 +484,20 @@ async def dispatch_orchestration_tool(
         return _json_ok(coverage=coord.shared.render_coverage())
     if name == AGENT_FINISH:
         return _do_agent_finish(args, coord=coord, me=me)
+    if name == STOP_AGENT:
+        return _do_stop_agent(args, coord=coord, me=me)
+    if name == THINK:
+        return _do_think(args, me=me)
+    if name == TODO_CREATE:
+        return _do_create_todo(args, coord=coord)
+    if name == TODO_LIST:
+        return _json_ok(todos=coord.render_todos())
+    if name == TODO_UPDATE:
+        return _do_update_todo(args, coord=coord)
+    if name == THREAT_GET:
+        return _json_ok(threat_model=coord.shared.render_threat_model())
+    if name == THREAT_AMEND:
+        return _do_amend_threat_model(args, coord=coord, me=me)
     if name == FINISH_SCAN:
         # finish_scan 的实际"终止"由循环在解析到 FINAL 时处理；这里只回一句确认，
         # 让模型知道它该用 FINAL 交结论（我们的文本协议里，"结束"就是写 FINAL）。
@@ -524,6 +648,117 @@ def _do_agent_finish(args: dict[str, Any], *, coord: AgentCoordinator, me: Agent
     )
 
 
+def _do_stop_agent(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    """root 主动叫停一个子 agent。
+
+    实现是**协作式**的：把一个 `stop=True` 标在节点上，子 agent 的循环每轮
+    开头检查（`node.stop_requested`），看到就收尾。**不直接 cancel 那个 task** ——
+    cancel 会让它来不及把已拿到的中间结论写成笔记/覆盖记录，那些是后面收口
+    要用的。让它在下一轮自己"体面退出"，比强杀有价值。
+    """
+    target = str(args.get("target_agent_id") or "").strip()
+    reason = str(args.get("reason") or "").strip()
+    if not target:
+        return _json_err("需要 `target_agent_id`（要叫停哪个子智能体，用 view_agent_graph 看 id）。")
+    node = coord.nodes.get(target)
+    if node is None:
+        return _json_err(f"找不到子智能体 `{target}`。")
+    if node.agent_id == me.agent_id:
+        return _json_err("不能叫停自己；你自己用 FINAL 收尾。")
+    if not node.is_terminal():
+        node.stop_requested = True
+        if reason:
+            # 把原因写进共享笔记，让被停的子 agent 与复盘的人都能看到"为什么停"。
+            coord.shared.write_note(
+                f"叫停 · {node.name}",
+                reason,
+                by=me.name,
+            )
+    return _json_ok(
+        agent_id=target,
+        note=(
+            f"已请求 `{node.name}`({target}) 在**下一轮开始时**收尾退出。"
+            "它会把自己已拿到的东西写成笔记再结束。"
+            "你可以继续推进主线，之后用 `wait_for_agents` 收它留下的报告。"
+        ),
+    )
+
+
+def _do_think(args: dict[str, Any], *, me: AgentNode) -> str:
+    """给模型一个"只推理不动手"的出口。
+
+    strix 的 think 工具 = 让模型把当前判断写下来、进上下文、然后继续。我们
+    的协议里**纯文本回合**被视为空转（要求几乎每轮一次工具调用），但"动手前
+    先把话说清"恰恰能减少瞎试。这个工具让推理**成为一次合法行动** ——
+    模型写的话会原样回到下一轮上下文里（经由 tool 结果）。
+    """
+    thought = str(args.get("thought") or args.get("text") or "").strip()
+    if not thought:
+        return _json_err("需要 `thought`（你想理清什么：当前证据、下一步假设、为什么选它）。")
+    # 把推理本身作为工具结果返回 —— 于是它进了 transcript，下一轮能读到。
+    return _json_ok(thought=thought[:2000], note="已记录。基于这段推理继续行动。")
+
+
+def _do_create_todo(args: dict[str, Any], *, coord: AgentCoordinator) -> str:
+    text = str(args.get("text") or args.get("task") or "").strip()
+    if not text:
+        return _json_err("需要 `text`（要做的这一步，写成一句可判完成的话）。")
+    item = coord.add_todo(text)
+    return _json_ok(**item, note=f"已加入待办。当前清单：\n{coord.render_todos()}")
+
+
+def _do_update_todo(args: dict[str, Any], *, coord: AgentCoordinator) -> str:
+    todo_id = str(args.get("id") or "").strip()
+    status = str(args.get("status") or "").strip().lower()
+    if not todo_id:
+        return _json_err("需要 `id`（用 `list_todos` 看有哪些）。")
+    if todo_id not in coord.todos:
+        return _json_err(f"找不到待办 `{todo_id}`。")
+    if status:
+        if status not in ("pending", "doing", "done"):
+            return _json_err("`status` 只能是 pending / doing / done。")
+        coord.todos[todo_id]["status"] = status
+    return _json_ok(
+        id=todo_id,
+        status=coord.todos[todo_id]["status"],
+        note=f"已更新。当前清单：\n{coord.render_todos()}",
+    )
+
+
+def _do_amend_threat_model(
+    args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode
+) -> str:
+    """往共享威胁模型的某一栏追加条目。
+
+    四栏：`assets`（有哪些资产）/ `trust_boundaries`（信任边界在哪）/
+    `hypotheses`（可能的攻击假设）/ `priorities`（先打哪、为什么）。
+    接受 `field` + `items`（列表）或 `item`（单条）。
+    """
+    field_name = str(args.get("field") or "").strip()
+    if not field_name:
+        return _json_err(
+            "需要 `field`：assets / trust_boundaries / hypotheses / priorities 之一。"
+        )
+    raw_items = args.get("items")
+    if isinstance(raw_items, str):
+        items = [raw_items]
+    elif isinstance(raw_items, list):
+        items = [str(x) for x in raw_items]
+    elif args.get("item"):
+        items = [str(args["item"])]
+    else:
+        return _json_err("需要 `items`（要补充的条目，列表）或 `item`（单条）。")
+    try:
+        bucket = coord.shared.amend_threat_model(field_name, items, by=me.name)
+    except ValueError as exc:
+        return _json_err(str(exc))
+    return _json_ok(
+        field=field_name,
+        items=bucket,
+        note=f"已更新威胁模型。全量：\n{coord.shared.render_threat_model()}",
+    )
+
+
 # ══════════════════════════════════════════════════════════
 # 单条 agent 循环（root 与 child 共用）
 # ══════════════════════════════════════════════════════════
@@ -594,6 +829,11 @@ async def run_agent_loop(
         if coord.stop_requested:
             outcome.error = "编排被外部要求停止。"
             break
+        if node.stop_requested:
+            # root 用 stop_agent 叫停了我 —— 体面收尾，不是崩。
+            outcome.error = "已被主智能体叫停（stop_agent），提前收尾。"
+            log.append(f"[{node.agent_id} t{turn}] 收到 stop_agent 叫停，退出循环")
+            break
         if coord.remaining_budget() <= 0:
             outcome.error = f"总轮次预算已用尽（{coord.total_budget} 轮）。"
             break
@@ -613,6 +853,20 @@ async def run_agent_loop(
                 hint = None
             if hint:
                 recent.append({"role": "user", "content": _human_hint_note(hint)})
+                log.append(f"[{node.agent_id} t{turn}] 已注入人给线索：{hint[:80]}")
+                # ★ v0.69：发一条过程事件 —— 单循环路径（runner.py:4214）早就发了，
+                #   但多智能体这里以前**只塞 recent、不发事件**：人给了线索，活动流
+                #   里却看不到"已接收"，只能干等、怀疑输入框没生效（2026-10-22 真跑
+                #   暴露：用户发了「扫描端口…把 8080 关了」，约 87 秒后 root 确实把
+                #   它并入推理了，但界面上没有任何回执）。
+                #   注意口径：线索是**方向性建议**，不覆盖只读/写操作纪律 —— root 有权
+                #   把它判为"不该执行"（那次它就正确拒绝了"关服务"这个破坏性动作）。
+                #   所以文案不写"已执行"，只写"已并入推理"。
+                notify(
+                    "reasoning",
+                    f"已把人工线索并入本轮推理：{hint[:60]}",
+                    {"text": hint[:200], "hint": "1"},
+                )
 
         try:
             reply = await gateway.chat(_messages(), system=system_prompt)

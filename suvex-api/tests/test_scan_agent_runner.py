@@ -511,3 +511,101 @@ def test_solve_with_stop_does_not_time_out_when_none(monkeypatch) -> None:
     assert outcome.error is None
 
 
+
+
+# ══════════════════════════════════════════════════════════
+# 4. 续跑：从 events.jsonl 还原动作纪要（v0.70）
+# ══════════════════════════════════════════════════════════
+
+
+def _write_events(run_dir: Path, records: list[dict]) -> None:
+    events = run_dir / "agent_run" / "events.jsonl"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    events.write_text(
+        "\n".join(json.dumps(r, ensure_ascii=False) for r in records) + "\n",
+        encoding="utf-8",
+    )
+
+
+def test_resume_digest_reads_tool_calls_only(tmp_path: Path) -> None:
+    """纪要只收 tool_call，**不收 reasoning** —— 纪要是"我做过什么"，
+    不是"我想过什么"，把推理混进去会让模型以为那些结论已验证过。"""
+    _write_events(
+        tmp_path,
+        [
+            {"seq": 1, "kind": "reasoning", "summary": "我在想该先探什么", "payload": {}},
+            {"seq": 2, "kind": "tool_call", "summary": "run_shell nmap -sV 1.2.3.4", "payload": {}},
+            {"seq": 3, "kind": "tool_call", "summary": "run_shell gobuster dir -u http://x", "payload": {}},
+            {"seq": 4, "kind": "reasoning", "summary": "又想了想", "payload": {}},
+        ],
+    )
+    digest = agent_runner._digest_from_events(tmp_path)
+    assert isinstance(digest, tuple)
+    assert len(digest) == 2
+    assert "nmap" in digest[0]
+    assert "gobuster" in digest[1]
+    # 推理绝不出现。
+    assert all("我在想" not in line for line in digest)
+
+
+def test_resume_digest_skips_malformed_lines(tmp_path: Path) -> None:
+    """引擎可能在两次写之间被杀，最后一行常是断的 —— 坏行要跳过不抛。"""
+    events = tmp_path / "agent_run" / "events.jsonl"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    events.write_text(
+        json.dumps({"kind": "tool_call", "summary": "run_shell curl http://a", "seq": 1})
+        + "\n{this is a broken half line\n"
+        + json.dumps({"kind": "tool_call", "summary": "run_shell curl http://b", "seq": 3})
+        + "\n",
+        encoding="utf-8",
+    )
+    digest = agent_runner._digest_from_events(tmp_path)
+    assert len(digest) == 2
+    assert "http://a" in digest[0]
+    assert "http://b" in digest[1]
+
+
+def test_resume_digest_missing_file_is_empty_tuple(tmp_path: Path) -> None:
+    """没有 events.jsonl → 空 tuple（当成全新扫描），**不抛**。"""
+    digest = agent_runner._digest_from_events(tmp_path)
+    assert digest == ()
+
+
+def test_resume_digest_keeps_only_the_last_n() -> None:
+    """纪要是索引不是正文：太多会吃预算。只留最后 `limit` 条。"""
+    records = [
+        {"kind": "tool_call", "summary": f"run_shell cmd-{i}", "seq": i} for i in range(100)
+    ]
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d)
+        _write_events(root, records)
+        digest = agent_runner._digest_from_events(root, limit=10)
+    assert len(digest) == 10
+    # 保留的是**最后** 10 条（最关心"刚跑到哪"）。
+    assert "cmd-99" in digest[-1]
+    assert "cmd-0 " not in " ".join(digest)
+
+
+def test_spec_resume_off_has_empty_digest(tmp_path: Path) -> None:
+    """`resume=False`（默认）时 digest 恒空 —— 全新扫描行为逐字节不变。"""
+    _write_events(tmp_path, [{"kind": "tool_call", "summary": "run_shell x", "seq": 1}])
+    spec = _spec(run_dir=tmp_path)  # 未传 resume
+    solve = agent_runner.build_solve_spec_from_scan(spec)
+    assert solve.resume_digest == ()
+
+
+def test_spec_resume_on_pulls_digest(tmp_path: Path) -> None:
+    """`resume=True` 时把 events.jsonl 的动作抽成 digest 塞进 SolveSpec。"""
+    _write_events(
+        tmp_path,
+        [
+            {"kind": "tool_call", "summary": "run_shell nmap -sV", "seq": 1},
+            {"kind": "tool_call", "summary": "run_shell whatweb http://x", "seq": 2},
+        ],
+    )
+    spec = _spec(run_dir=tmp_path, resume=True)
+    solve = agent_runner.build_solve_spec_from_scan(spec)
+    assert len(solve.resume_digest) == 2
+    assert "nmap" in solve.resume_digest[0]

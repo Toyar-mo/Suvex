@@ -94,6 +94,7 @@ from app.core.vocab import (
     KernelSubmitMode,
 )
 from app.kernel import events as ctf2_events
+from app.kernel import mcp as mcp_mod
 from app.kernel import skills as skills_mod
 from app.kernel.client import (
     CTF2_ERROR_ALREADY_SOLVED,
@@ -311,7 +312,37 @@ DEFAULT_MAX_TURNS = DEFAULT_CTF2_MAX_TURNS
 MAX_DIGEST_LINES = 120
 
 #: 还剩几轮时开始催收尾。
+#:
+#: ⚠️ 保留这个常量只为向后兼容（旧测试引用它）。v0.70 起真正的收尾提醒由
+#: `_warn_bands()` 按**梯度**触发，见 `TURN_WARN_BANDS`。它的值（5）恰好等于
+#: 旧行为"只剩 5 轮提醒一次"的起点，所以语义没有突变。
 FINAL_STRETCH_TURNS = 5
+
+#: 收尾催促的**梯度**（学 strix `core/hooks.py` 的 `_TURN_WARN_BANDS`）。
+#:
+#: ## 为什么从"单档"改成"三档"
+#:
+#: 旧实现只在"剩 5 轮"时提醒一次。实测问题（2026-10-22 一次渗透扫描被 60 分钟
+#: 墙钟截断）：模型在**还有一半预算**时就开始大举铺开新方向，等触发那唯一一次
+#: 提醒，它已经开了三条没跑完的线 —— 收尾提醒来得太晚、太突然，模型只能硬停。
+#:
+#: strix 的做法是**分三档、越接近越急**：70% 时"开始规划收尾，别再开大线"，
+#: 85% 时"优先收口，只关必要的"，95% 时"立刻停止一切、马上交结论"。同样一句
+#: 话分三档说，模型有足够轮次把已在手上的证据整理成结论，而不是被一刀切。
+#:
+#: ## 判据是"已用比例"，不是"剩几轮"
+#:
+#: 用比例而不是绝对轮数，是为了让 quick(40)/standard(80)/deep(150) 三种深度
+#: 天花板统一适用 —— 80 轮的 70% 是 56 轮，150 轮的 70% 是 105 轮，各自相称。
+TURN_WARN_BANDS: tuple[float, ...] = (0.70, 0.85, 0.95)
+
+#: 成本梯度（学 strix 的 cost budget）。**默认关**（`None`）。
+#:
+#: 为什么默认关：我们是自建接入点、按 token 计费，没有可靠统一的美元定价表
+#: （不同 provider 价格差异大，且会漂移）。填错价格会把"省钱"变成"提前瞎收工"，
+#: 那比不设更糟。开启时由调用方给 **token 总量上限**（不是美元），避免引入定价表。
+#: 判据与 `TURN_WARN_BANDS` 同一套比例语义（已用 token / 上限）。
+COST_WARN_BANDS: tuple[float, ...] = (0.70, 0.85, 0.95)
 
 # 「平台说这题已经被本队伍解出了」时给用户看的那句话。
 #
@@ -2546,6 +2577,94 @@ class FallbackLlm:
     kind: str = "cloud"
 
 
+# ══════════════════════════════════════════════════════════
+# HTTP 请求历史（学 strix 的 proxy/Caido，但只做**记录 + 重放**）
+# ══════════════════════════════════════════════════════════
+
+#: 最多保留多少条历史。超出后丢最旧的（FIFO）。
+#:
+#: 定 200 的理由：一次渗透/应急响应的 http_request 次数通常在几十到一百多；
+#: 200 条足够覆盖"刚才那个请求我想再看一眼 / 再打一次"这个真实需求，
+#: 又不会把一次长扫描的所有请求都囤在内存里（每条带响应体，最多几十 KB）。
+_MAX_HTTP_HISTORY = 200
+
+
+@dataclass(slots=True)
+class HttpRecord:
+    """一次 http_request 的记录。id 是稳定短标识（`req-N`），供模型回引。"""
+
+    id: str
+    method: str
+    url: str
+    request_headers: dict[str, str]
+    request_body: str
+    status_code: int | None
+    response_snippet: str
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class HttpHistory:
+    """本次解题内所有 `http_request` 的**共享**记录（多智能体同用一份）。
+
+    ## 为什么要有它（学 strix 的 proxy/Caido）
+
+    strix 挂一个 MITM 代理，把每个请求记进 sitemap，agent 可以
+    `list_requests` / `view_request` / `repeat_request`。我们没有 MITM 代理
+    （那要额外一套基础设施，且我们的请求走宿主侧 `http_request`、
+    容器内请求本就拦不住），但**那个能力的实用价值**是两条：
+      ① "我刚打过的请求是什么" → 不用凭记忆；
+      ② "把它改一个参数再打一次" → 不用从零拼一条。
+
+    所以这里不做代理，只做**记录 + 重放**：每发一次 `http_request` 就追加
+    一条 `HttpRecord`，再给模型 `list_requests` / `get_request` /
+    `repeat_request` 三个工具。
+
+    ## 为什么是可变对象而不是 spec 上的 tuple
+
+    它是随跑随长的，而 `SolveSpec` 是不可变入参。把它放成 spec 上的一个
+    可变容器（`default_factory=HttpHistory`），多智能体各子 agent 拿到的是
+    **同一份**（spec 在编排里被共享），于是 A 打的请求 B 也看得到 ——
+    这正是"共享 sitemap"的语义。单循环路径同理，天然就一份。
+    """
+
+    records: list[HttpRecord] = field(default_factory=list)
+    _seq: int = 0
+
+    def next_id(self) -> str:
+        self._seq += 1
+        return f"req-{self._seq}"
+
+    def add(self, record: HttpRecord) -> None:
+        self.records.append(record)
+        if len(self.records) > _MAX_HTTP_HISTORY:
+            # 丢最旧的，保持 FIFO。⚠️ 不要改 seq 计数器，否则新 id 会与
+            # 被丢掉的旧 id 撞车（req-5 出现两次，模型回引必乱）。
+            overflow = len(self.records) - _MAX_HTTP_HISTORY
+            del self.records[:overflow]
+
+    def get(self, record_id: str) -> HttpRecord | None:
+        for rec in self.records:
+            if rec.id == record_id:
+                return rec
+        return None
+
+    def render_list(self, *, limit: int = 50) -> str:
+        """给模型看的紧凑清单（只列 id/method/url/status，不带响应体）。"""
+        if not self.records:
+            return "还没有发过任何 http_request。"
+        shown = self.records[-limit:]
+        lines = [f"共 {len(self.records)} 条请求（显示最近 {len(shown)} 条）："]
+        for rec in shown:
+            status = rec.status_code if rec.status_code is not None else "ERR"
+            lines.append(f"- {rec.id}  {rec.method} {rec.url}  → {status}")
+        lines.append(
+            "要看某条的完整请求与响应：get_request(record_id)。"
+            "要改参数重放：repeat_request(record_id, ...)。"
+        )
+        return "\n".join(lines)
+
+
 @dataclass(slots=True)
 class SolveSpec:
     """一次解题的完整输入。
@@ -2608,6 +2727,17 @@ class SolveSpec:
     #
     # 所以这里给的不是"更多轮数"，而是**接着上次的起点**。
     resume_digest: tuple[str, ...] = ()
+
+    # ★ v0.70：token 预算上限（学 strix 的 cost budget，但用 token 不用美元）。
+    #
+    # `None`（默认）= 不设成本维度，只按回合梯度催收尾。
+    # 非空时主循环每轮算 `spent / max_total_tokens`，跨过 COST_WARN_BANDS
+    # （70/85/95%）也催收尾 —— 用于"轮数还很宽裕但钱已经花很多"的场景
+    # （例如换个贵模型、或工具输出异常肥大把 prompt token 顶上去了）。
+    #
+    # 为什么是 token 不是美元：我们没有可靠统一的定价表（各 provider 价差大、
+    # 会漂移），填错价格会把"省钱"变成"提前瞎收工"，比不设更糟。
+    max_total_tokens: int | None = None
 
     # ★ v0.36：续解时，持久区里**已经有什么**（宿主侧列出来的清单）。
     #
@@ -2764,6 +2894,28 @@ class SolveSpec:
     #: 而它就再也无法被单独测试了（得先造一个能算出 exclusion 的 spec）。
     offensive: bool = False
 
+    #: ★ v0.71：本次解题的 HTTP 请求历史（学 strix proxy/Caido 的记录+重放）。
+    #:
+    #: 用 `default_factory` 造一份**可变**容器，多智能体各子 agent 共享同一
+    #: 对象（spec 在编排里被共享）→ A 打的请求 B 也看得到。单循环路径本就一份。
+    #: 详见 `HttpHistory` 的 docstring。
+    http_history: HttpHistory = field(default_factory=HttpHistory)
+
+    #: ★ v0.72：本次解题可用的 MCP server 配置（学 strix 的 list_mcps 三件套）。
+    #:
+    #: 这是一个**配置元组**（来自 `KernelConfig.mcp_servers`），不是活连接 ——
+    #: 活连接由 `mcp_registry` 按调用临时起（见 `app/kernel/mcp.py`）。
+    #: 默认为空元组：没配 MCP 时 `list_mcps` 会说"没有可用的连接"，
+    #: 其余工具与提示词逐字节不变（与场景包开关同一条纪律：默认关）。
+    mcp_servers: tuple[Any, ...] = ()
+    #: ★ v0.72：惰性建的 MCP 注册表（缓存工具清单、串起三条 MCP 工具）。
+    #:
+    #: 不用 `field(default_factory=...)` 主动建：多数解题没配 MCP，提前建一个
+    #: 空注册表是浪费；而 `registry_from_spec` 会在第一次用到时建。
+    #: 用 `Any` 标注是为了避免 runner↔mcp 的强耦合 import；运行时它就是
+    #: `app.kernel.mcp.McpRegistry | None`。
+    mcp_registry: Any = None
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
         return (
@@ -2844,6 +2996,20 @@ class SolveOutcome:
     #: 而 token 数依赖外部。分开记让"跑了多少轮"这件事不受
     #: "接入点给不给 usage"影响。
     llm_calls: int = 0
+
+    def total_tokens_spent(self) -> int:
+        """到目前为止累计消耗的 token 数（v0.70，成本维度催促用）。
+
+        累加 `usages` 里每次调用 `TokenUsage.billable_total`。接入点没给
+        usage 的那些调用贡献 0 —— 所以这个数**只会低估、不会高估**：低估的
+        后果是"该催时没催"，比"没花钱却说花超了、逼模型提前收工"要好。
+
+        每次调用 O(n) 重算而不是维护一个增量计数器：`usages` 每条才几十字节，
+        一题跑 80 轮也就 80 条，每轮算一次是免费的量级；而增量计数器一旦
+        在某条记账路径上漏加（例如换模、失败重试），就会静默偏低且无人发现。
+        拿这几十次加法换"永远等于 usages 之和"的确定性，值得。
+        """
+        return sum(usage.billable_total for _, _, _, usage in self.usages)
 
     #: ★ v0.45：这次解题**一共执行了几次工具调用**（生产遥测）。
     #:
@@ -2998,7 +3164,18 @@ def needs_raw_network(category: str | None) -> bool:
 # 四个工具
 # ══════════════════════════════════════════════════════════
 
-TOOL_NAMES = ("read_attachment", "http_request", "run_shell", "load_skill")
+TOOL_NAMES = (
+    "read_attachment",
+    "http_request",
+    "run_shell",
+    "load_skill",
+    "list_requests",
+    "get_request",
+    "repeat_request",
+    "list_mcps",
+    "describe_mcp",
+    "call_mcp",
+)
 #: 技能包按需加载（学 strix 的 load_skill）。它**不碰沙箱、不碰网络** ——
 #: 只是把一篇随代码分发的 markdown 读出来给模型看，是纯查表操作，
 #: 所以它比另外三个工具都安全（没有命令执行、没有出网）。
@@ -3050,30 +3227,20 @@ async def _tool_read_attachment(args: dict[str, Any], *, spec: SolveSpec) -> str
     return _clip(chunk.decode("utf-8", errors="replace"), limit)
 
 
-async def _tool_http_request(
-    args: dict[str, Any], *, spec: SolveSpec, http: httpx.AsyncClient
-) -> str:
-    """发一次 HTTP 请求（**宿主侧**，所以白名单拦得住）。
+async def _do_http(
+    *,
+    method: str,
+    url: str,
+    headers: dict[str, str] | None,
+    body: Any,
+    http: httpx.AsyncClient,
+) -> tuple[int | None, str, str | None]:
+    """真正发一次请求，返回 `(status_code, response_text, error)`。
 
-    见模块 docstring 第 3 条：容器内的请求拦不住，所以这个能力
-    必须由宿主提供。
+    ★ v0.71：把"发请求"从"记录到历史"里抽出来，好让
+    `http_request`（首打）与 `repeat_request`（重放）走同一条发送逻辑，
+    只在**记录**这一点上不同（重放不再产生第二条记录，而是更新原记录的状态）。
     """
-    url = str(args.get("url") or "").strip()
-    if not url:
-        return "参数错误：需要 `url`。"
-    if "://" not in url:
-        url = "http://" + url
-
-    # ★ 唯一校验点。见 `guard_tool_url` 的说明。
-    guard_tool_url(url, access_urls=spec.access_urls)
-
-    method = str(args.get("method") or "GET").upper()
-    if method not in ("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"):
-        return f"不支持的 HTTP 方法：{method}"
-
-    headers = args.get("headers") if isinstance(args.get("headers"), dict) else None
-    body = args.get("body")
-
     # ★ 流式读 + 上限（2026-10-10 修）。
     #
     # ## 原来用 `response.text` 的问题
@@ -3111,10 +3278,9 @@ async def _tool_http_request(
                     break
             status_code = response.status_code
     except httpx.HTTPError as exc:
-        return f"请求失败（{type(exc).__name__}）：{exc}"
+        return None, "", f"请求失败（{type(exc).__name__}）：{exc}"
 
     text = b"".join(chunks).decode("utf-8", errors="replace")
-    head = f"HTTP {status_code}\n"
     if truncated:
         # ⚠️ 这段提示**不能教模型去容器里 curl**：沙箱默认是
         #    `--network none`（`_argv` 里那个最重要的安全参数），容器内
@@ -3123,14 +3289,201 @@ async def _tool_http_request(
         #    —— 模型照着试、失败、再回来，白烧轮次。
         #    给的办法必须是**这个工具自己能做到的**：换更精确的 URL/参数，
         #    或用 `Range` 头分次取。
-        head += (
-            f"（响应体超过 {_READ_CAP // 1024} KB，只读了前 {_READ_CAP // 1024} KB —— "
+        text = (
+            f"⚠️ 响应体超过 {_READ_CAP // 1024} KB，只读了前 {_READ_CAP // 1024} KB —— "
             "要看后面的内容，用 http_request 换更精确的 URL 或参数，"
-            "或者带 Range 头分次取（如 Range: bytes=-4000））\n"
-        )
+            "或者带 Range 头分次取（如 Range: bytes=-4000）\n\n"
+        ) + text
     # ★ 头尾双段：这条路径送的是**工具原始输出**，关键信息经常在末尾
     #   （见 `_clip_both_ends` 的说明）。
-    return head + _clip_both_ends(text, MAX_TOOL_OUTPUT_CHARS)
+    return status_code, text, None
+
+
+async def _tool_http_request(
+    args: dict[str, Any], *, spec: SolveSpec, http: httpx.AsyncClient
+) -> str:
+    """发一次 HTTP 请求（**宿主侧**，所以白名单拦得住）。
+
+    见模块 docstring 第 3 条：容器内的请求拦不住，所以这个能力
+    必须由宿主提供。
+
+    ★ v0.71：发完把这条请求记进 `spec.http_history`（学 strix proxy/Caido），
+    返回的回执里带上 `req-N` 号，模型可据此 `get_request` / `repeat_request`。
+    """
+    url = str(args.get("url") or "").strip()
+    if not url:
+        return "参数错误：需要 `url`。"
+    if "://" not in url:
+        url = "http://" + url
+
+    # ★ 唯一校验点。见 `guard_tool_url` 的说明。
+    guard_tool_url(url, access_urls=spec.access_urls)
+
+    method = str(args.get("method") or "GET").upper()
+    if method not in ("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"):
+        return f"不支持的 HTTP 方法：{method}"
+
+    headers = args.get("headers") if isinstance(args.get("headers"), dict) else None
+    body = args.get("body")
+
+    status_code, text, error = await _do_http(
+        method=method, url=url, headers=headers, body=body, http=http
+    )
+
+    # 记进历史（成功与失败都记 —— 失败的请求也是"我试过什么"的证据）。
+    record_id = spec.http_history.next_id()
+    spec.http_history.add(
+        HttpRecord(
+            id=record_id,
+            method=method,
+            url=url,
+            request_headers={str(k): str(v) for k, v in (headers or {}).items()},
+            request_body=str(body)[:2000] if body else "",
+            status_code=status_code,
+            response_snippet=text[:2000],
+            error=error,
+        )
+    )
+
+    if error is not None:
+        return f"{error}（已记入历史：{record_id}）"
+
+    head = f"HTTP {status_code}\n"
+    return (
+        f"{head}{_clip_both_ends(text, MAX_TOOL_OUTPUT_CHARS)}"
+        f"\n\n（已记入请求历史：{record_id}。可 get_request / repeat_request 回引。）"
+    )
+
+
+async def _tool_list_requests(args: dict[str, Any], *, spec: SolveSpec) -> str:
+    """列出本次解题发过的 HTTP 请求（学 strix list_requests）。"""
+    limit = int(args.get("limit") or 50)
+    return spec.http_history.render_list(limit=max(1, min(limit, _MAX_HTTP_HISTORY)))
+
+
+async def _tool_get_request(args: dict[str, Any], *, spec: SolveSpec) -> str:
+    """看某条请求的完整内容（学 strix view_request）。"""
+    record_id = str(args.get("record_id") or "").strip()
+    if not record_id:
+        return "参数错误：需要 `record_id`（形如 req-3，可用 list_requests 查）。"
+    rec = spec.http_history.get(record_id)
+    if rec is None:
+        return f"找不到请求 `{record_id}`。先用 list_requests 看看有哪些。"
+    lines = [
+        f"{rec.id}  {rec.method} {rec.url}",
+        f"状态：{rec.status_code if rec.status_code is not None else 'ERR'}",
+    ]
+    if rec.request_headers:
+        lines.append("请求头：")
+        lines.extend(f"  {k}: {v}" for k, v in rec.request_headers.items())
+    if rec.request_body:
+        lines.append(f"请求体：\n{rec.request_body}")
+    if rec.error:
+        lines.append(f"错误：{rec.error}")
+    lines.append(f"响应（前 2000 字）：\n{rec.response_snippet}")
+    return "\n".join(lines)
+
+
+async def _tool_repeat_request(
+    args: dict[str, Any], *, spec: SolveSpec, http: httpx.AsyncClient
+) -> str:
+    """重放某条请求，可改 method/url/headers/body（学 strix repeat_request）。
+
+    ★ 重放**不再产生新记录**，而是更新原记录的状态与响应 —— 否则
+    "重放三次"会让历史里冒出三条几乎一样的条目，淹掉真正的探索轨迹。
+    """
+    record_id = str(args.get("record_id") or "").strip()
+    if not record_id:
+        return "参数错误：需要 `record_id`（形如 req-3，可用 list_requests 查）。"
+    rec = spec.http_history.get(record_id)
+    if rec is None:
+        return f"找不到请求 `{record_id}`。先用 list_requests 看看有哪些。"
+
+    method = str(args.get("method") or rec.method).upper()
+    if method not in ("GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH"):
+        return f"不支持的 HTTP 方法：{method}"
+    url = str(args.get("url") or rec.url).strip()
+    if "://" not in url:
+        url = "http://" + url
+    # ★ 重放同样过白名单 —— 换个 url 不能绕过。
+    guard_tool_url(url, access_urls=spec.access_urls)
+    headers = args.get("headers") if isinstance(args.get("headers"), dict) else rec.request_headers
+    body = args.get("body") if args.get("body") is not None else (rec.request_body or None)
+
+    status_code, text, error = await _do_http(
+        method=method, url=url, headers=headers, body=body, http=http
+    )
+    # 更新原记录（不新增）。
+    rec.method = method
+    rec.url = url
+    rec.request_headers = {str(k): str(v) for k, v in (headers or {}).items()}
+    rec.request_body = str(body)[:2000] if body else ""
+    rec.status_code = status_code
+    rec.response_snippet = text[:2000]
+    rec.error = error
+
+    if error is not None:
+        return f"重放失败：{error}（已更新记录 {record_id}）"
+    return (
+        f"已重放 {record_id}：{method} {url} → HTTP {status_code}\n"
+        f"{_clip_both_ends(text, MAX_TOOL_OUTPUT_CHARS)}"
+    )
+
+
+async def _tool_list_mcps(args: dict[str, Any], *, spec: SolveSpec) -> str:  # noqa: ARG001
+    """列出本次解题可用的 MCP 连接（学 strix list_mcps）。"""
+    reg = mcp_mod.registry_from_spec(spec)
+    if not reg:
+        return "本次解题没有配置任何 MCP 连接。"
+    import json as _json
+
+    return _json.dumps({"connections": reg.summaries()}, ensure_ascii=False, indent=2)
+
+
+async def _tool_describe_mcp(args: dict[str, Any], *, spec: SolveSpec) -> str:
+    """看某个 MCP 连接提供哪些工具（学 strix describe_mcp）。"""
+    connection = str(args.get("connection") or "").strip()
+    if not connection:
+        return "参数错误：需要 `connection`（用 list_mcps 查可用的连接名）。"
+    reg = mcp_mod.registry_from_spec(spec)
+    if not reg:
+        return "本次解题没有配置任何 MCP 连接。"
+    return await reg.describe(connection)
+
+
+async def _tool_call_mcp(args: dict[str, Any], *, spec: SolveSpec) -> str:
+    """调一个 MCP 工具（学 strix call_mcp）。"""
+    connection = str(args.get("connection") or "").strip()
+    tool = str(args.get("tool") or "").strip()
+    if not connection or not tool:
+        return "参数错误：需要 `connection` 和 `tool`（先用 list_mcps / describe_mcp 查）。"
+    reg = mcp_mod.registry_from_spec(spec)
+    if not reg:
+        return "本次解题没有配置任何 MCP 连接。"
+    raw_args = args.get("arguments")
+    # 与 strix 一致：arguments 可能是对象，也可能被序列化成 JSON 字符串。
+    if isinstance(raw_args, str):
+        stripped = raw_args.strip()
+        if not stripped:
+            arguments: dict[str, Any] = {}
+        else:
+            try:
+                parsed = json.loads(stripped)
+            except json.JSONDecodeError:
+                return (
+                    f"参数错误：`arguments` 应该是 JSON 对象，或省略。"
+                    f"可先用 describe_mcp 看连接 `{connection}` 的输入 schema。"
+                )
+            if not isinstance(parsed, dict):
+                return "参数错误：`arguments` 必须是 JSON 对象。"
+            arguments = parsed
+    elif isinstance(raw_args, dict):
+        arguments = raw_args
+    elif raw_args is None:
+        arguments = {}
+    else:
+        return "参数错误：`arguments` 必须是 JSON 对象，或省略。"
+    return await reg.call(connection, tool, arguments)
 
 
 async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) -> str:
@@ -3173,6 +3526,18 @@ async def dispatch_tool(
             # 名字取自参数 `name`（与 strix 的 load_skill 同名参数，方便
             # 模型迁移既有习惯）。拼错时 load_skill_text 会回可用清单。
             return skills_mod.load_skill_text(str(args.get("name") or ""))
+        if name == "list_requests":
+            return await _tool_list_requests(args, spec=spec)
+        if name == "get_request":
+            return await _tool_get_request(args, spec=spec)
+        if name == "repeat_request":
+            return await _tool_repeat_request(args, spec=spec, http=http)
+        if name == "list_mcps":
+            return await _tool_list_mcps(args, spec=spec)
+        if name == "describe_mcp":
+            return await _tool_describe_mcp(args, spec=spec)
+        if name == "call_mcp":
+            return await _tool_call_mcp(args, spec=spec)
     except KernelError as exc:
         # 白名单拒绝走这里 —— 消息**必须回到模型**，它才知道换路子。
         return f"拒绝执行：{exc.message}"
@@ -3721,21 +4086,80 @@ def _digest_message(lines: list[str]) -> dict[str, str]:
     }
 
 
-def _final_stretch_note(remaining: int) -> str:
-    """只剩几轮时的收尾提醒。
+def _band_of(fraction: float, bands: tuple[float, ...]) -> int | None:
+    """返回 `fraction` 越过的最深梯度下标（0 起），没越过任何一个返回 None。
 
-    ★ 措辞刻意**不鼓励猜**：在「自动提交」模式下，一个猜出来的 flag 会被
-    直接提交并**消耗一次错误机会** —— 那是不可再生资源（见
-    `DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS`）。所以这里要的是
-    "给出有依据的候选，或者把卡点说清楚"，而不是"随便交一个"。
+    学 strix `core/hooks.py::_crossed_stage`：`fraction` 是"已用比例"。
+    只返回**最深**那档，调用方据此保证"每档只提示一次、越接近越急"
+    （若每档都返回，模型会同时收到三条互相矛盾的催促）。
     """
+    crossed: int | None = None
+    for i, edge in enumerate(bands):
+        if fraction >= edge:
+            crossed = i
+    return crossed
+
+
+#: 三档收尾指令（学 strix `_ROOT_DIRECTIVES`）。
+#:
+#: ★ 措辞刻意**不鼓励猜**：在「自动提交」模式下，一个猜出来的 flag 会被直接
+#: 提交并**消耗一次错误机会** —— 那是不可再生资源（见
+#: `DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS`）。所以三档的共同底线都是
+#: "给出有依据的候选，或者把卡点说清楚"，而不是"随便交一个"。
+#:
+#: 三档的**唯一区别是紧迫度**：第 0 档还允许"收尾性验证"，第 1 档只许关必要的
+#: 线，第 2 档明令"停止一切新动作、立刻交结论"。
+_WRAPUP_DIRECTIVES: tuple[str, ...] = (
+    (
+        "⏳ 预算已用约 70%。**开始规划收尾**：不要再开大的新方向，"
+        "把正在验证的线收一收，确保核心目标能按时结出结论。"
+    ),
+    (
+        "⏳ 预算已用约 85%。**优先收口**：停止开启新方向，只把必要的几条线关掉。"
+        "开始整理「已经确认了什么」，准备按协议交出结论。"
+    ),
+    (
+        "🛑 预算已用约 95%。**立即停止一切新动作**：不要再跑新命令、不要再探新路径。"
+        "现在就把已有证据整理成结论 —— 此刻还没收尾的部分，到上限时会**全部作废**。"
+    ),
+)
+
+
+def _final_stretch_note(remaining: int) -> str:
+    """只剩几轮时的收尾提醒（第 2 档，向后兼容的旧入口）。
+
+    ⚠️ v0.70 起主循环走 `_wrapup_note(stage, remaining)` 的三档梯度版本；
+    这个函数只为兼容旧调用/测试保留，行为等价于"第 2 档 + 具体剩余轮数"。
+    """
+    return _wrapup_note(2, remaining)
+
+
+def _wrapup_note(stage: int, remaining: int | None = None) -> str:
+    """按梯度档位生成收尾提醒（v0.70，学 strix 三档 urgency）。
+
+    ## 为什么三档的措辞不能只是"催得更急"这一维度
+
+    模型在预算尾声最容易犯的错不是"不着急"，而是"开着三条没跑完的线不肯放"。
+    所以每一档除了催，都要给出**这一档该做什么、不该做什么**：
+      · 第 0 档：允许把正在验证的线收尾，禁止开新的；
+      · 第 1 档：只关必要的，开始整理结论；
+      · 第 2 档：一切新动作停止，立刻交。
+    只喊"快点"而不说"停什么、留什么"，模型只会把手头命令跑完再停，等于没催。
+
+    `remaining` 可空（成本维度触发时没有"剩余轮数"概念），非空时补一句
+    精确剩余量，让模型对"还有多少空间"有具体感。
+    """
+    stage = max(0, min(stage, len(_WRAPUP_DIRECTIVES) - 1))
+    head = _WRAPUP_DIRECTIVES[stage]
+    if remaining is not None:
+        head = f"{head}\n（本轮结束后只剩 {remaining} 轮。）"
     return (
-        f"⚠️ 只剩 {remaining} 轮了，请开始收口：\n"
-        "- 已经有依据充分的答案 → 用 FINAL 给出候选；\n"
+        f"{head}\n"
+        "- 已经有依据充分的答案 → 用 FINAL 给出候选，并写清证据来自哪几次工具输出；\n"
         "- 还没拿到答案 → 用 FINAL 说清：试过什么、结果如何、卡在哪一步、"
         "还差什么信息。**这比再开一个新方向有用得多** —— 那份说明会留在"
-        "解题过程里，人和下一轮都能接着用；\n"
-        "- 不要在最后几轮开新的探索方向：它大概率跑不完，"
+        "过程里，人和下一轮都能接着用；\n"
+        "- 不要在收尾阶段开新的探索方向：它大概率跑不完，"
         "而你会因此连「目前已经知道什么」都没说清。"
     )
 
@@ -4066,6 +4490,11 @@ async def solve_in_sandbox(
 
     outcome = SolveOutcome()
 
+    # ★ v0.70：收尾催促已提示到第几档（-1 = 还没提示过任何一档）。
+    # 回合维度与成本维度各记一份 —— 各自只喊一次，取更深那档注入（见主循环）。
+    _warn_stage: int = -1
+    _cost_warn_stage: int = -1
+
     # ★ v0.45：把"这次带了几张方法卡"从 spec 拷到 outcome。
     #
     # 为什么不在收尾时直接读 `spec.notes_count`：遥测落库在
@@ -4182,15 +4611,48 @@ async def solve_in_sandbox(
                     log.append(f"[turn {turn}] {outcome.error}")
                     outcome.transcript = "\n\n".join(log)
                     return outcome
-            # ★ 收尾提醒：只剩 `FINAL_STRETCH_TURNS` 轮时提醒一次。
+            # ★ 收尾提醒（v0.70：单档 → 三档梯度，学 strix `core/hooks.py`）。
             #
-            # 动机来自实测：没有它的时候，模型会一路探索到最后一轮，
-            # 然后得到"回合用尽" —— 而它其实**早就掌握足够信息**了，
-            # 只是一直在找"更确定"的证据。用 `==` 保证只加一次，
-            # 否则最后五轮每轮都在重复同一句话，反而挤掉有用的内容。
+            # 动机来自实测：旧实现只在"剩 5 轮"时提醒一次，太晚太突然 ——
+            # 模型早已开了三条没跑完的线，只能硬停（2026-10-22 一次渗透扫描
+            # 被 60 分钟墙钟截断，就是这种死法）。改成按**已用比例**分 70/85/95
+            # 三档，越接近越急，模型有足够轮次把手上证据整理成结论。
+            #
+            # ⚠️ `_warn_stage` 记录"已提示到第几档"，只在**跨到更深一档**时才注入，
+            #   避免每轮重复同一句话（那会挤掉有用内容）。用 `>` 而不是 `>=`
+            #   正是"每档只喊一次"。
             remaining = spec.max_turns - turn
-            if remaining == FINAL_STRETCH_TURNS:
-                recent.append({"role": "user", "content": _final_stretch_note(remaining)})
+            used_fraction = turn / spec.max_turns if spec.max_turns else 0.0
+            turn_stage = _band_of(used_fraction, TURN_WARN_BANDS)
+            if turn_stage is not None and turn_stage > _warn_stage:
+                _warn_stage = turn_stage
+                note = _wrapup_note(turn_stage, remaining)
+                recent.append({"role": "user", "content": note})
+                log.append(f"[turn {turn}] 预算催促（第 {turn_stage + 1} 档）：{used_fraction:.0%}")
+
+            # ★ 成本/预算维度（v0.70）：若调用方给了 token 上限，按同一套梯度判。
+            #   `_cost_warn_stage` 与 `_warn_stage` 分开记 —— 两个维度各自只喊一次，
+            #   且取**更深**那档注入，避免同轮收到两条互相打架的催促。
+            if spec.max_total_tokens:
+                spent = outcome.total_tokens_spent()
+                cost_fraction = spent / spec.max_total_tokens
+                cost_stage = _band_of(cost_fraction, COST_WARN_BANDS)
+                if cost_stage is not None and cost_stage > _cost_warn_stage:
+                    _cost_warn_stage = cost_stage
+                    if cost_stage > _warn_stage:
+                        # 成本维度比回合维度更急 → 用它覆盖本次注入
+                        recent.append(
+                            {
+                                "role": "user",
+                                "content": _wrapup_note(cost_stage, remaining)
+                                + f"\n（token 预算已用 {cost_fraction:.0%}。）",
+                            }
+                        )
+                        log.append(
+                            f"[turn {turn}] 预算催促（成本维度，第 {cost_stage + 1} 档）："
+                            f"{cost_fraction:.0%}"
+                        )
+                        _warn_stage = cost_stage
             # ★ v0.57：每轮开始前问一次"人有没有补线索"（P2 人机协同）。
             #
             # 放在 final_stretch 之后、chat 之前：这样这一轮模型一定能看到
@@ -5329,6 +5791,19 @@ def build_spec(
     # ★ v0.58：是否走多智能体编排。与题型无关（执行拓扑是一个独立维度）。
     multi_agent_on = _multi_agent_enabled(db)
 
+    # ★ v0.72：本次解题可用的 MCP server 配置（学 strix 的 list_mcps 三件套）。
+    #
+    # ## 为什么解析在**这里**而不在 mcp 模块里惰性做
+    #
+    # `settings_row` 已经是本函数读过的配置（见上面那段说明），再单独去
+    # 读一次配置既多余、又会让"配置改了但这次没生效"的时序问题多一个来源。
+    # 而且解析**必须容错**（坏条目跳过）：把它放在配置读取的同一步，部署者
+    # 改完配置后的第一条日志里就能看到 warning。
+    #
+    # ⚠️ 解析失败**不影响解题**：`parse_server_configs` 内部吞掉形状错误
+    #    只记 warning，最坏情况是"没有可用 MCP"——那正是默认状态。
+    mcp_server_cfgs = mcp_mod.parse_server_configs(getattr(settings_row, "mcp_servers", None))
+
     # ★ v0.41：攻防知识互查。只在**本题确实是 IR 题且开关开着**时才查 ——
     # 理由与 `_ir_enabled` 两条件同构：
     #
@@ -5406,6 +5881,9 @@ def build_spec(
         ir=ir_on,
         # ★ v0.58：是否走多智能体编排（见 `SolveSpec.multi_agent`）。
         multi_agent=multi_agent_on,
+        # ★ v0.72：MCP server 配置（见 `SolveSpec.mcp_servers`）。空元组 =
+        #   没配，三个 MCP 工具会如实说"没有可用的连接"。
+        mcp_servers=mcp_server_cfgs,
         # ★ v0.42：手法块开关值（见 `SolveSpec.offensive` —— 它存的是
         #   开关本身，"该不该注入"要等 `build_system_prompt` 排掉场景包才定）。
         offensive=offensive_on,
@@ -6788,6 +7266,8 @@ __all__ = [
     "SandboxContainer",
     "SolveOutcome",
     "SolveSpec",
+    "HttpHistory",
+    "HttpRecord",
     "SubmitDecision",
     "TOOL_NAMES",
     "TokenUsage",

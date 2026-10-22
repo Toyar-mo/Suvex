@@ -941,6 +941,22 @@ class LaunchSpec:
     #   对一次跑了十几分钟才倒下的扫描，这比从头再来省得多。
     resume_run_id: str | None = None
 
+    # ★ v0.70：自研引擎的"续跑" —— 语义与 strix 的 `resume_run_id` **不同**。
+    #
+    #   `resume_run_id` 是 strix 的语言：把上一次的**内存态图**（每个 agent 的
+    #   LLM 历史 + notes/threat_model/todo/coverage 文件）整个接回来，等价"进程
+    #   从没死过"。自研引擎做不到这件事（进程一结束协程上下文就没了），所以它
+    #   一直是显式忽略的。
+    #
+    #   `resume` 是另一条路，学的是 ctf2 kernel 的 `resume_digest`：**不接内存**，
+    #   而是从上一次的 `events.jsonl` 还原一份"动作纪要"（跑过哪些命令、输出开头
+    #   是什么），作为初始上下文的一部分重新拼，然后从头继续。代价是丢掉了
+    #   "精确的对话历史"，换来的是**真的能从磁盘上的留痕接着做** —— 而那正是
+    #   用户点「续跑」时要的：别把已经跑了半小时的结论白扔。
+    #
+    # 两者可同时为真（strix 读 resume_run_id，agent 读 resume），互不影响。
+    resume: bool = False
+
     # ── 越权与注入手法块（v0.42）──────────────────────────
     #
     # 打开时 `_instruction()` 会在末尾追加 `prompts/offensive_playbook.md`

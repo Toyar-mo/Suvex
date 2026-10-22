@@ -1644,7 +1644,9 @@ def test_a_repeat_is_caught_even_when_it_is_not_adjacent() -> None:
         runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
     )
 
-    assert "第 1 轮跑过" in gateway.seen[3][-1]["content"]
+    # ⚠️ 不能断言 `[-1]`：v0.70 起同一轮里可能还追加了预算催促，重复提示不再是
+    #    最后一条。改为"这一轮上下文里**出现过**重复提示"。
+    assert any("第 1 轮跑过" in m["content"] for m in gateway.seen[3])
 
 
 def test_the_same_command_with_a_different_output_is_not_a_repeat() -> None:
@@ -2133,7 +2135,7 @@ def test_the_recent_window_is_still_bounded() -> None:
 
 
 def test_the_final_stretch_note_arrives_before_the_budget_runs_out() -> None:
-    """★ 只剩几轮时提醒模型收口。
+    """★ 预算尾声时提醒模型收口（v0.70：三档梯度，不再是"只剩 5 轮"一句）。
 
     没有它的时候，模型会一路探索到最后一轮然后"回合用尽" —— 而它其实
     **早就掌握足够信息**了，只是一直在找"更确定"的证据。
@@ -2151,30 +2153,71 @@ def test_the_final_stretch_note_arrives_before_the_budget_runs_out() -> None:
         )
     )
 
-    # `max_turns=8` → 第 3 轮的 remaining 正好是 5。
-    third = "\n".join(m["content"] for m in gateway.seen[2])
-    assert "只剩 5 轮" in third
-    assert "不要在最后几轮开新的探索方向" in third
+    # max_turns=8 → 70% 落在第 6 轮、85% 在第 7 轮、95% 在第 8 轮（用 round 后的 use 比）。
+    # 第 6 轮（turn=6, 6/8=75%）跨过第一档（70%）。
+    sixth = "\n".join(m["content"] for m in gateway.seen[5])
+    assert "开始规划收尾" in sixth, f"第 6 轮应收到第一档催促：{sixth[-200:]}"
     # 措辞里要有"说清卡点"这条出路，否则模型只剩"硬猜"一个选择。
-    assert "卡在哪一步" in third
+    assert "卡在哪一步" in sixth
 
     # 第一轮不该有它 —— 否则模型从一开始就不敢深入探索。
     first = "\n".join(m["content"] for m in gateway.seen[0])
-    assert "只剩" not in first
+    assert "收尾" not in first and "预算" not in first
+
+
+def test_wrapup_warnings_escalate_and_never_repeat_a_band() -> None:
+    """★★ v0.70：三档催促 —— 越接近越急，且**同一档只注入一次**。
+
+    旧实现只在"剩 5 轮"喊一次，太晚太突然。新实现按 70/85/95% 分三档：
+    每一档只在**首次跨过**时注入一条，绝不重复（重复会挤掉有用内容、
+    且模型对重复会迅速失去注意力）。
+    """
+    sandbox = _FakeSandbox()
+    gateway = _FakeGateway(
+        ['ACTION: {"tool": "run_shell", "args": {"command": "true"}}'] * 20
+    )
+    _run(
+        runner.solve_in_sandbox(
+            _spec(max_turns=20), sandbox=sandbox, gateway=gateway, system_prompt="sys"
+        )
+    )
+
+    # 收集每一轮上下文里出现的催促消息（三种档位措辞各不同）。
+    def _bands_in(messages: list[dict[str, str]]) -> list[str]:
+        text = "\n".join(m["content"] for m in messages)
+        found = []
+        if "开始规划收尾" in text:
+            found.append("70")
+        if "优先收口" in text:
+            found.append("85")
+        if "立即停止一切" in text:
+            found.append("95")
+        return found
+
+    per_turn = [_bands_in(m) for m in gateway.seen]
+    # 70% 档（turn 14, 14/20=70%）之后，这条催促消息应留在历史里且只一份；
+    # 断言"每轮上下文里每个档位最多出现一次"（不是"只出现一轮"）。
+    for i, bands in enumerate(per_turn):
+        for band in ("70", "85", "95"):
+            assert bands.count(band) <= 1, f"第 {i + 1} 轮里档位 {band} 出现了多次：{bands}"
+
+    # 三档必须真的**依次**出现（不是只有第一档）。
+    assert "70" in per_turn[-1], "最后几轮应至少出现过第一档"
+    assert "95" in per_turn[-1], "跑到满轮时最后一档必须出现过"
 
 
 def test_the_final_stretch_note_is_inserted_only_once() -> None:
-    """收尾提醒只**插入**一次 —— 但它会一直留在上下文里直到结束。
+    """收尾提醒每档只**插入**一次 —— 但它会一直留在上下文里直到结束。
 
     ★ 这两件事看起来矛盾，其实是同一个设计的两个面：
 
-    * 只插入一次（`remaining == FINAL_STRETCH_TURNS` 那个判断）——
+    * 每档只插入一次（`_warn_stage` 记录已提示到第几档，`>` 才注入）——
       否则每一轮都塞一条新的，上下文里会堆六份同样的话，
       而模型对重复内容会迅速失去注意力；
     * 插入后**留在历史里** —— 收口是最后几轮**持续**要做的事，
       只在那一轮说一次，模型下一轮就忘了。
 
-    所以这里断言的是"上下文里**只有一条**这样的消息"，
+    所以这里断言的是"上下文里**每个档位只有一条**这样的消息"，
     而不是"只有一轮带着它"（后者会把正确行为判成 bug）。
     """
     sandbox = _FakeSandbox()
@@ -2188,8 +2231,9 @@ def test_the_final_stretch_note_is_inserted_only_once() -> None:
     )
 
     for index, messages in enumerate(gateway.seen):
-        notes = [m for m in messages if "只剩" in m["content"]]
-        if index < 4:
+        # 第一档（70%）的措辞唯一标识、"开始规划收尾"只在第 >=8 轮（8/10=80%）出现。
+        notes = [m for m in messages if "开始规划收尾" in m["content"]]
+        if index < 6:
             assert not notes, f"第 {index + 1} 轮不该有收尾提醒"
         else:
             assert len(notes) == 1, (
@@ -3383,3 +3427,145 @@ def test_list_workspace_files_caps_the_listing(tmp_path, monkeypatch) -> None:  
 
     assert len(items) <= runner._MAX_PERSIST_LISTING + 1  # +1 是那句"还有更多"
     assert any("还有更多" in i for i in items)
+
+
+# ══════════════════════════════════════════════════════════
+# v0.71：HTTP 请求历史（学 strix proxy/Caido，记录 + 重放）
+# ══════════════════════════════════════════════════════════
+
+
+def test_http_request_is_recorded_into_shared_history() -> None:
+    """每发一次 http_request 就进历史，回执带 req-N 号，list 能看到。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"pong")
+
+    spec = _spec()
+
+    async def call() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await runner._tool_http_request(
+                {"url": "http://1.2.3.4:8080/ping"}, spec=spec, http=http
+            )
+
+    out = _run(call())
+    assert "已记入请求历史" in out
+    assert "req-1" in out
+    # 历史里真有一条。
+    assert len(spec.http_history.records) == 1
+    rec = spec.http_history.records[0]
+    assert rec.method == "GET" and rec.status_code == 200 and "pong" in rec.response_snippet
+
+    # list_requests 看得到。
+    listed = _run(
+        runner._tool_list_requests({}, spec=spec)
+    )
+    assert "req-1" in listed and "/ping" in listed
+
+
+def test_list_requests_says_none_when_no_history() -> None:
+    out = _run(runner._tool_list_requests({}, spec=_spec()))
+    assert "还没有发过任何 http_request" in out
+
+
+def test_get_request_returns_full_record_and_handles_missing() -> None:
+    spec = _spec()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(201, content=b"created")
+
+    async def call() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            await runner._tool_http_request(
+                {"url": "http://1.2.3.4:8080/a", "method": "POST", "body": "x=1"},
+                spec=spec,
+                http=http,
+            )
+        return "done"
+
+    _run(call())
+    rec_id = spec.http_history.records[0].id
+    detail = _run(runner._tool_get_request({"record_id": rec_id}, spec=spec))
+    assert "POST" in detail and "201" in detail and "x=1" in detail
+    # 找不到的 id 要明说怎么查。
+    miss = _run(runner._tool_get_request({"record_id": "req-999"}, spec=spec))
+    assert "找不到请求" in miss and "list_requests" in miss
+
+
+def test_repeat_request_overrides_params_and_updates_in_place() -> None:
+    """重放可改方法/URL/body，且**不新增**记录（原地更新）。"""
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(f"{request.method} {request.url}")
+        return httpx.Response(200, content=b"ok")
+
+    spec = _spec()
+
+    async def call() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            await runner._tool_http_request(
+                {"url": "http://1.2.3.4:8080/a"}, spec=spec, http=http
+            )
+            rec_id = spec.http_history.records[0].id
+            return await runner._tool_repeat_request(
+                {"record_id": rec_id, "method": "POST", "url": "http://1.2.3.4:8080/b",
+                 "body": "y=2"},
+                spec=spec,
+                http=http,
+            )
+
+    out = _run(call())
+    assert "已重放" in out
+    # 没有新增记录（还是 1 条），但被原地更新成 POST /b。
+    assert len(spec.http_history.records) == 1
+    rec = spec.http_history.records[0]
+    assert rec.method == "POST" and rec.url == "http://1.2.3.4:8080/b"
+    assert rec.request_body == "y=2"
+
+
+def test_repeat_request_still_enforces_allowlist() -> None:
+    """重放换个越界 URL 不能绕过白名单（经 dispatch_tool 走真实入口）。"""
+    spec = _spec()
+
+    def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
+        return httpx.Response(200, content=b"ok")
+
+    async def call() -> str:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            await runner.dispatch_tool(
+                "http_request", {"url": "http://1.2.3.4:8080/a"},
+                spec=spec, sandbox=_FakeSandbox(), http=http,
+            )
+            rec_id = spec.http_history.records[0].id
+            return await runner.dispatch_tool(
+                "repeat_request", {"record_id": rec_id, "url": "http://10.9.9.9/evil"},
+                spec=spec, sandbox=_FakeSandbox(), http=http,
+            )
+
+    out = _run(call())
+    assert "拒绝" in out
+
+
+def test_http_history_is_fifo_and_ids_never_collide() -> None:
+    """超过上限丢最旧的；seq 计数器不回收，id 不撞车。"""
+    hist = runner.HttpHistory()
+    cap = runner._MAX_HTTP_HISTORY
+    for i in range(cap + 10):
+        rid = hist.next_id()
+        hist.add(
+            runner.HttpRecord(
+                id=rid, method="GET", url=f"http://x/{i}",
+                request_headers={}, request_body="", status_code=200,
+                response_snippet="",
+            )
+        )
+    assert len(hist.records) == cap
+    ids = [r.id for r in hist.records]
+    assert len(set(ids)) == len(ids)  # 无重复
+    assert hist.records[-1].url == f"http://x/{cap + 9}"
+
+
+def test_new_tools_are_dispatched_and_in_tool_names() -> None:
+    for name in ("list_requests", "get_request", "repeat_request"):
+        assert name in runner.TOOL_NAMES

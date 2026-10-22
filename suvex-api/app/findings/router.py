@@ -30,6 +30,7 @@ from app.core.errors import ApiError
 from app.core.timeutil import now_utc
 from app.core.vocab import AuditAction, FindingCategory, FindingStatus, Severity, values
 from app.findings import attachments as attachments_mod
+from app.findings import sarif as sarif_mod
 from app.findings import service
 from app.findings.schemas import (
     AssignRequest,
@@ -412,6 +413,60 @@ def export_findings(
             # 这里不值得为文件名引入编码复杂度 —— 日期已经够区分。
             "Content-Disposition": f'attachment; filename="{filename}"'
         },
+    )
+
+
+@router.get("/export/sarif", summary="导出漏洞为 SARIF 2.1.0（v0.70，对齐 strix）")
+def export_findings_sarif(
+    _identity: ReadDep,
+    db: DbDep,
+    severity: Annotated[str | None, Query()] = None,
+    status: Annotated[str | None, Query()] = None,
+    category: Annotated[str | None, Query()] = None,
+    q: Annotated[str | None, Query()] = None,
+    scanId: Annotated[str | None, Query()] = None,  # noqa: N803
+    assigneeId: Annotated[str | None, Query()] = None,  # noqa: N803
+    unassigned: Annotated[bool, Query()] = False,
+    slaState: Annotated[str | None, Query()] = None,  # noqa: N803
+    deleted: Annotated[bool, Query()] = False,
+) -> Response:
+    """导出**当前筛选结果**为 SARIF 2.1.0（CI / 代码扫描平台的通用输入）。
+
+    ## 为什么和 CSV 对齐同一套筛选参数
+
+    与 `/findings/export` 同一条纪律：导出若忽略筛选，用户筛出 3 条高危、
+    点导出却拿到全部 200 条，而他会把那份发进 CI —— **错误的数据比没有
+    数据更糟**。所以走同一个 `list_findings`，参数逐个对齐。
+
+    ## 为什么这条路由要在 `/findings/{findingId}` 之前
+
+    同 `/findings/stats`：`export/sarif` 里的 `export` 会被当成 finding id
+    匹配掉 —— 因此它必须声明在 `{findingId}` 之前（本文件末尾的那些动态
+    路由之前）。`/findings/export`（CSV）已在前面，SARIF 紧跟其后。
+    """
+    rows = service.list_findings(
+        db,
+        severity=severity,
+        status=status,
+        category=category,
+        q=q,
+        scan_id=scanId,
+        assignee_id=assigneeId,
+        unassigned=unassigned,
+        sla_state=slaState,
+        deleted=deleted,
+        sort="severity",
+        direction="desc",
+    )
+    body = sarif_mod.build_sarif(rows)
+    stamp = now_utc().strftime("%Y%m%d")
+    filename = f"suvex-findings-{stamp}.sarif"
+    return Response(
+        content=body.encode("utf-8"),
+        # SARIF 的正式 MIME 是 application/sarif+json；很多接收方也认
+        # application/json，但发规范的那个更稳。
+        media_type="application/sarif+json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

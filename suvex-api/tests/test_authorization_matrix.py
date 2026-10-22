@@ -108,6 +108,8 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #   但 `read` 的语义就是"能读到就能导出"：能看见那份列表的人
         #   本来也能一条条抄走，拦住导出只是增加麻烦，不增加安全。
         ("GET", "/api/v1/findings/export"),
+        # v0.70：SARIF 导出与 CSV 导出同为**只读**、同级 read。
+        ("GET", "/api/v1/findings/export/sarif"),
         # ★ 任务 12：任务附件是**只读**的列表查询
         ("GET", "/api/v1/scans/{scanId}/attachments"),
         ("GET", "/api/v1/findings/{findingId}/attachments"),

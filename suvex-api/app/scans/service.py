@@ -672,20 +672,16 @@ def resume_scan(
     if source.deleted_at is not None:
         raise ApiError(409, ErrorCode.SCAN_NOT_RESUMABLE, "这条扫描在回收站里，请先恢复再续跑。")
 
-    # ★ v0.69：自研引擎（agent 后端）**没有断点续跑能力** —— 直接说清，别让它
-    #   往下走到 `can_resume`，那会报「strix 会话文件已不在（可能被清理过）」，
-    #   而事实是**压根没跑过 strix**（这条扫描从头到尾是自研引擎，从不建
-    #   `strix_runs/`）。与 v0.27 修「CTF2 壳」是同一类"与事实相反"的措辞，
-    #   当时只覆盖了 CTF2 壳，漏了 agent 后端这条路径（2026-10-22 真跑撞到）。
-    #   自研引擎的 `resume_run_id` 是被显式忽略的（见 agent_runner 的说明），
-    #   进程一旦结束上下文就没了，所以「重跑」才是正确动作。
-    if (source.runner or "") == "agent":
-        raise ApiError(
-            409,
-            ErrorCode.SCAN_NOT_RESUMABLE,
-            "自研引擎不支持断点续跑 —— 进程结束后上下文不会保留。"
-            "请改用「重跑」，它会带着原来的任务背景从头开始。",
-        )
+    # ★ v0.70：自研引擎现在**支持续跑**了 —— 走 `agent_runner._digest_from_events`
+    #   从上次的 `agent_run/events.jsonl` 还原动作纪要，作为 `resume_digest` 注入
+    #   初始上下文（学 ctf2 kernel 的做法，不接内存态）。所以这里不再对 agent
+    #   后端 409。是否真有东西可续由 `build_spec` 判定（没有 events.jsonl 就退回
+    #   全新扫描，不报错）。
+    #
+    #   ⚠️ 下面的 `can_resume` 只对 **strix** 有意义（它查 `strix_runs/` 里的状态
+    #   文件）。agent 后端从不建那个目录，所以这一段要跳过 —— 否则会对一次
+    #   完全可续的 agent 扫描报「strix 会话文件已不在」，那是**与事实相反**的
+    #   措辞（v0.69 曾因此直接 409，现在改为放行）。
 
     if source.status not in (ScanStatus.FAILED.value, ScanStatus.ABORTED.value):
         raise ApiError(
@@ -713,7 +709,10 @@ def resume_scan(
             db.commit()
             logger.info("扫描 %s 的 run 标识从磁盘补回：%s", source.id, recovered)
 
-    if not can_resume(source.run_dir, source.run_id):
+    # ★ v0.70：`can_resume` 只对 strix 有意义；agent 后端跳过（判据改为
+    #   "有没有 events.jsonl"，由 `build_spec` 判定并降级）。
+    backend_is_strix = (source.runner or "strix") != "agent"
+    if backend_is_strix and not can_resume(source.run_dir, source.run_id):
         # 这一句必须给出**替代动作**：用户要的是一个结果，
         # 而"不能续"本身不解决问题，"可以重跑"才解决。
         raise ApiError(
@@ -893,6 +892,26 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
                 scan.run_id,
             )
 
+    # ★ v0.70：自研引擎的续跑走**另一条路**（`resume` 标志，不接 strix 内存态）。
+    #
+    # 判据：`run_id` 有值 + 本后端是 agent。为什么用 `run_id` 而不是"有新标志列"
+    # 来判断是不是续跑：`run_id` 只在跑过一次之后才被写上，而 `resume_scan()`
+    # 是**唯一**让"failed/aborted → queued"同时保留 `run_id` 的入口（`rerun_scan`
+    # 建新记录、`run_id` 为空）。所以"queued 且有 run_id 且后端是 agent"只可能是续跑。
+    #
+    # strix 的 `can_resume` 对 agent 后端恒为 False（agent 从不建 `strix_runs/`），
+    # 所以上面那段不会给 agent 后端设 `resume_run_id` —— 两条路天然不打架。
+    resume_agent = False
+    if scan.runner == "agent" and scan.run_id:
+        # 有 `agent_run/events.jsonl` 才有东西可续；没有就退回全新（不报错，
+        # 与 strix 那条"状态文件不在就照跑"的处理一致）。
+        events_file = Path(scan.run_dir or "") / "agent_run" / "events.jsonl"
+        resume_agent = events_file.is_file()
+        if not resume_agent:
+            logger.info(
+                "扫描 %s 本应续跑但找不到 events.jsonl，改为全新扫描", scan.id
+            )
+
     # ── 目标：`artifact` 换成解压出来的目录（任务 17）──────
     #
     # ★ 这一段就是「附件变成目标」的**全部**实现 —— 也是执行层零改动的原因。
@@ -966,6 +985,9 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         # 续跑（任务 16）。非空时 `command()` 会改传 `--resume` 而不传
         # `--target` —— 两者互斥，见 runner 的说明。
         resume_run_id=resume_run_id,
+        # ★ v0.70：自研引擎的续跑标志（见上面 resume_agent 的说明）。与
+        #   `resume_run_id` 是两条独立的路：strix 读前者、agent 读后者。
+        resume=resume_agent,
         run_dir=run_dir,
         log_path=run_dir / "scan.log",
         # LiteLLM 格式的模型名。前缀按 provider 品牌推断，默认走 openai 兼容

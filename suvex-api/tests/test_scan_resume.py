@@ -261,26 +261,51 @@ def test_resume_refuses_a_running_scan(
     assert response.json()["error"]["code"] == "SCAN_NOT_RESUMABLE"
 
 
-def test_agent_backend_resume_says_no_checkpoint_not_missing_session(
+def test_agent_backend_resume_now_succeeds_when_events_exist(
     ready_client: TestClient, db_session: Session, tmp_path: Path
 ) -> None:
-    """★★ v0.69：自研引擎（agent 后端）没有断点续跑，文案不能骗人说"会话文件已不在"。
+    """★★ v0.70：自研引擎现在**支持续跑** —— 不再一律 409。
 
-    2026-10-22 真跑撞到：一条 agent 后端的扫描被超时截断，用户点「续跑」，
-    界面弹「这次扫描的 strix 会话文件已不在（可能被清理过）」—— 而事实是
-    **压根没跑过 strix**（自研引擎从不建 `strix_runs/`）。与 v0.27 修「CTF2 壳」
-    是同一类"与事实相反"的措辞，当时漏了 agent 后端这条路。
+    旧行为（v0.69）：agent 后端点续跑直接 409「自研引擎不支持断点续跑」，
+    因为当时它确实做不到（进程结束上下文就没了）。
+
+    新能力：从上次的 `agent_run/events.jsonl` 还原"动作纪要"，作为
+    `resume_digest` 注入初始上下文 —— 学的是 ctf2 kernel 的做法（不接内存态，
+    重建一份"做过什么"的索引）。所以只要上次跑过、留了 events.jsonl，
+    就应该放行，而不是拒。
     """
     scan = _make_failed(db_session, tmp_path, run_id="agent-scan_x")
     scan.runner = "agent"
+    # 造一份上次的留痕（续跑的凭据）。
+    events = Path(scan.run_dir) / "agent_run" / "events.jsonl"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    events.write_text(
+        json.dumps({"kind": "tool_call", "summary": "run_shell nmap -sV", "seq": 1}) + "\n",
+        encoding="utf-8",
+    )
     db_session.commit()
 
     response = ready_client.post(f"{API}/scans/{scan.id}/resume", json={"authorization": AUTH})
-    assert response.status_code == 409, response.text
-    message = response.json()["error"]["message"]
-    assert "自研引擎" in message, f"要点名真正的引擎：{message!r}"
-    assert "重跑" in message, "要给出替代动作"
-    assert "会话文件" not in message, f"不能说『会话文件已不在』——那是与事实相反的措辞：{message!r}"
+    assert response.status_code == 201, response.text
+    # 回到排队态待调度器认领，且 run_id / run_dir 保留（续跑凭据）。
+    assert response.json()["status"] == "queued"
+
+
+def test_agent_backend_resume_without_events_falls_back_to_fresh(
+    ready_client: TestClient, db_session: Session, tmp_path: Path
+) -> None:
+    """★ agent 后端续跑但**没有 events.jsonl** → 不报错，退回全新扫描。
+
+    与 strix 那条「状态文件不在就照跑」的处理一致：用户的意图是"把这次跑完"，
+    读不到留痕是"降级为从头开始"，不是"这次扫描失败"。
+    """
+    scan = _make_failed(db_session, tmp_path, run_id="agent-scan_y")
+    scan.runner = "agent"
+    db_session.commit()  # 故意不写 events.jsonl
+
+    response = ready_client.post(f"{API}/scans/{scan.id}/resume", json={"authorization": AUTH})
+    assert response.status_code == 201, response.text
+    assert response.json()["status"] == "queued"
 
 
 def test_missing_session_files_offer_the_alternative(

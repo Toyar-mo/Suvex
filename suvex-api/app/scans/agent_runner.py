@@ -931,6 +931,17 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
     # 下限 10 轮（少于它基本做不完任何评估），上限取档位天花板。
     max_turns = max(10, min(requested, ceiling))
 
+    # ── 续跑：从磁盘上的留痕还原"做过什么" ────────────────
+    #
+    # 与 strix 的 run_id 断点续跑不同：这里**不接内存态**，而是读上一次跑
+    # 留下的 `agent_run/events.jsonl`，把 tool_call 事件的 summary（形如
+    # `run_shell curl ...`）抽成一份"动作纪要"，作为 `resume_digest` 注入初始
+    # 上下文（`solve_in_sandbox` 会把它拼成一条"这是续解，不是从头开始"的
+    # 消息）。代价：丢了精确对话史；收益：真的能从留痕接着做，而不是白扔半小时。
+    resume_digest: tuple[str, ...] = ()
+    if getattr(spec, "resume", False):
+        resume_digest = _digest_from_events(spec.run_dir)
+
     return ctf2_runner.SolveSpec(
         challenge_id=spec.scan_id,
         title=f"对 {spec.target} 做安全评估",
@@ -951,8 +962,54 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
         brief=spec.brief or "",
         pentest=True,
         offensive=bool(spec.enable_offensive_prompt),
+        # ★ v0.70：续跑的动作纪要（空 = 全新开始，行为逐字节不变）。
+        resume_digest=resume_digest,
         # ★ v0.58：多智能体编排开关（与 CTF 侧同一个配置项）。这个函数是
         # 纯函数（不碰库），所以值来自 `LaunchSpec.multi_agent`，由调用方
         # `_run_engine` 在建 spec 前从配置读出并写进 LaunchSpec。
         multi_agent=bool(getattr(spec, "multi_agent", False)),
     )
+
+
+#: 续跑纪要最多取多少条工具动作。与 kernel 的 `MAX_DIGEST_LINES` 同量级 ——
+#: 纪要是**索引**不是正文，太多会把预算吃掉、反而让模型"忘记题目要求"。
+MAX_RESUME_DIGEST_LINES = 60
+
+
+def _digest_from_events(run_dir: Path, *, limit: int = MAX_RESUME_DIGEST_LINES) -> tuple[str, ...]:
+    """从 `agent_run/events.jsonl` 还原动作纪要（跑过哪些工具 + 参数开头）。
+
+    ⚠️ 只读 tool_call 事件。reasoning 不进纪要 —— 纪要是"我做过什么"，
+    不是"我想过什么"；把推理混进去会让模型以为那些结论已被验证过。
+
+    读失败/文件不在 → 返回空 tuple（= 当成全新扫描，**不抛**）。这与
+    `latest_transcript` 的容错一致：续跑读不到留痕是"降级为从头开始"，
+    不是"这次扫描失败"。
+    """
+    path = run_dir / "agent_run" / "events.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        logger.info("续跑：读不到 %s，本次按全新扫描处理", path)
+        return ()
+
+    actions: list[str] = []
+    for raw in lines:
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except (ValueError, TypeError):
+            # 半行/坏行跳过 —— 引擎可能在两次写之间被杀，最后一行常常是断的。
+            continue
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") != "tool_call":
+            continue
+        summary = str(record.get("summary") or "").strip()
+        if summary:
+            actions.append(" ".join(summary.split())[:140])
+
+    # 取**最后** `limit` 条：续跑最关心"刚跑到哪"，早期动作价值已沉淀进证据包。
+    return tuple(actions[-limit:])
