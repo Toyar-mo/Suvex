@@ -259,7 +259,7 @@ export function KernelPanel() {
     return (
       <SettingsPanel
         id="kernel"
-        title="Suvex 内核"
+        title="CTF"
         description="对接 ctf2.dasctf.com，把题目交给沙箱里的模型去解。"
       >
         <p className="text-xs text-ink-muted">
@@ -272,11 +272,12 @@ export function KernelPanel() {
   }
 
   return (
-    <SettingsPanel
-      id="kernel"
-      title="Suvex 内核"
-      description="控制解题产出候选答案之后的提交行为。这些设置只影响 CTF2，不影响渗透扫描。"
-    >
+    <>
+      <SettingsPanel
+        id="ctf"
+        title="CTF 解题"
+        description="对接 ctf2.dasctf.com，控制题目怎么排队、怎么提交、什么时候自动开跑。这里的设置只影响 CTF 解题。"
+      >
       {/* ── 提交策略 ── */}
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-medium text-ink">提交策略</span>
@@ -378,13 +379,6 @@ export function KernelPanel() {
           <span className="shrink-0 text-2xs text-ink-faint">次</span>
         </span>
       </Field>
-
-      {/* ── 默认沙箱镜像 ── */}
-      <SandboxProfileSelect
-        id="ctf2-default-profile"
-        value={draft.defaultSandboxProfile}
-        onChange={(next) => setDraft({ ...draft, defaultSandboxProfile: next })}
-      />
 
       {/* ── 解题并发配额（v0.22）── */}
       <Field
@@ -518,83 +512,6 @@ export function KernelPanel() {
         </span>
       </Field>
 
-      {/* ── 回合预算（v0.26）── */}
-      <Field
-        label="每题最多跑多少回合"
-        htmlFor="ctf2-max-turns"
-        /*
-          ★ 这段说明给的是**怎么填**的判据，不是一句"越大越好"。
-          判据来自实测数据 —— 用户看到"6 轮 vs 37 条命令"这两组数，
-          自己就知道该往哪调。
-        */
-        help={
-          '一次解题最多让模型跑多少轮。同一批实测里：一道命令注入题 6 轮就出结果，' +
-          '而一道 .NET 逆向题跑满 40 轮、发出 37 条**各不相同**的命令仍未做完 —— ' +
-          '它不是卡住了，是真的需要更多轮。' +
-          '调大只花模型额度（每轮一次调用），不占解题并发；调小省钱但可能中途放弃。'
-        }
-        error={touched ? maxTurnsError : null}
-      >
-        <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
-          <input
-            id="ctf2-max-turns"
-            type="number"
-            step={10}
-            value={draft.maxTurns}
-            min={MIN_MAX_TURNS}
-            max={MAX_MAX_TURNS}
-            onChange={(e) => {
-              const parsed = Number(e.target.value)
-              setDraft({ ...draft, maxTurns: Number.isFinite(parsed) ? parsed : 0 })
-            }}
-            aria-invalid={maxTurnsError && touched ? true : undefined}
-            className={cn(
-              'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
-              'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
-              maxTurnsError && touched
-                ? 'border-signal-risk'
-                : 'border-line hover:border-line-strong',
-            )}
-          />
-          <span className="shrink-0 text-2xs text-ink-faint">轮</span>
-        </span>
-      </Field>
-
-      <Field
-        label="备用模型（换模兜底）"
-        htmlFor="ctf2-fallback-provider"
-        /*
-          ★ 这一段必须把"什么时候会换"讲清楚，否则用户会以为它是负载均衡。
-          它不是 —— 主接入点**调不动**时才换，正常情况下永远用主模型。
-        */
-        help={
-          '主 provider 调用失败（key 失效 / 限流 / 服务端错误 / 长时间过载）时，' +
-          '改用这里选定的 provider 继续解题，而不是让整道题作废 —— ' +
-          '那时可能已经跑了三十多轮、在沙箱里做完了大量分析。' +
-          '★ 它是**兜底**不是负载均衡：正常情况下永远用主模型。' +
-          '留空（默认）= 不启用，行为与之前完全一致。' +
-          '⚠️ 若备用的是云端 provider，换模会消耗**那个** provider 的额度。'
-        }
-      >
-        <select
-          id="ctf2-fallback-provider"
-          value={draft.fallbackProviderId ?? ''}
-          onChange={(e) => setDraft({ ...draft, fallbackProviderId: e.target.value || null })}
-          className={cn(
-            'h-9 w-full max-w-[20rem] rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink',
-            'transition-ui duration-fast hover:border-line-strong',
-            'focus:outline-none focus:ring-2 focus:ring-accent/40',
-          )}
-        >
-          <option value="">不启用</option>
-          {providers.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label}
-            </option>
-          ))}
-        </select>
-      </Field>
-
       {/* ── 自动作业的两个开关（v0.24）── */}
       <div className="space-y-2">
         <Toggle
@@ -652,37 +569,6 @@ export function KernelPanel() {
           checked={draft.enableAgentsecScenarios}
           onChange={(value) => setDraft({ ...draft, enableAgentsecScenarios: value })}
         />
-        <Toggle
-          id="ctf2-ir"
-          label="启用应急响应场景包"
-          hint={
-            '打开后，分类属于「根因定位 / 时间线重建 / 影响范围」这' +
-            '三类的题，会额外拿到一段复盘纪律：它的产出是时间线、根因链、' +
-            '影响范围，每条结论按「已命中 / 待跟进 / 已排除」三级标注。' +
-            '★ 与上面那个开关**互相独立** —— 两个都打开时，一道题也只会' +
-            '命中其中一族（`agentsec-*` 与 `ir-*` 是互斥的两组前缀）。' +
-            '为什么不做成一个开关：共用一个的话，一族的分类会在另一族' +
-            '开着时通过校验，而对应的提示词块却不注入 —— 分类合法、' +
-            '纪律没注入，是静默失效。'
-          }
-          checked={draft.enableIrScenarios}
-          onChange={(value) => setDraft({ ...draft, enableIrScenarios: value })}
-        />
-        <Toggle
-          id="ctf2-multi-agent"
-          label="启用多智能体编排"
-          hint={
-            '打开后，一次解题（CTF 题 / 渗透评估 / 应急响应复盘）走' +
-            '「主控智能体调度 + 多个子智能体并行执行」的完整编排，' +
-            '而不是单条循环。关着时单条循环逐字节不变。' +
-            '★ 它改变的是**执行方式**，与上面两个开关（改变判定纪律）' +
-            '互相独立 —— 任何题型都能跑单条循环或编排。' +
-            '⚠️ 打开后一次任务的模型调用量会按子智能体数量放大约数倍，' +
-            '成本更高、耗时更难预估，所以默认关闭。'
-          }
-          checked={draft.enableMultiAgent}
-          onChange={(value) => setDraft({ ...draft, enableMultiAgent: value })}
-        />
       </div>
 
       <SaveBar
@@ -697,10 +583,163 @@ export function KernelPanel() {
             保存后**立刻生效**（解题与调度每次都读生效值），不需要重启服务。
             从「自动提交」切回「先确认再提交」也是即时的 —— 正在跑的那一轮
             会在下一个提交决策点读到新值。
+            ★ 这条保存与「内核通用能力」那块是**同一次保存** —— 两块共用一个草稿，
+            在这里点保存等于把两块一起存下。
           </span>
         }
       />
-    </SettingsPanel>
+      </SettingsPanel>
+
+      <SettingsPanel
+        id="kernel-core"
+        title="内核通用能力"
+        description="这些设置对所有场景（CTF 解题 / 渗透评估 / 应急响应复盘）共用，不单属于 CTF。改动后同样点上一块底部的保存。"
+      >
+        {/* ── 默认沙箱镜像 ── */}
+        <SandboxProfileSelect
+          id="ctf2-default-profile"
+          value={draft.defaultSandboxProfile}
+          onChange={(next) => setDraft({ ...draft, defaultSandboxProfile: next })}
+        />
+
+        {/* ── 回合预算（v0.26）── */}
+        <Field
+          label="每题最多跑多少回合"
+          htmlFor="ctf2-max-turns"
+          /*
+            ★ 这段说明给的是**怎么填**的判据，不是一句"越大越好"。
+            判据来自实测数据 —— 用户看到"6 轮 vs 37 条命令"这两组数，
+            自己就知道该往哪调。
+          */
+          help={
+            '一次解题最多让模型跑多少轮。同一批实测里：一道命令注入题 6 轮就出结果，' +
+            '而一道 .NET 逆向题跑满 40 轮、发出 37 条**各不相同**的命令仍未做完 —— ' +
+            '它不是卡住了，是真的需要更多轮。' +
+            '调大只花模型额度（每轮一次调用），不占解题并发；调小省钱但可能中途放弃。'
+          }
+          error={touched ? maxTurnsError : null}
+        >
+          <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
+            <input
+              id="ctf2-max-turns"
+              type="number"
+              step={10}
+              value={draft.maxTurns}
+              min={MIN_MAX_TURNS}
+              max={MAX_MAX_TURNS}
+              onChange={(e) => {
+                const parsed = Number(e.target.value)
+                setDraft({ ...draft, maxTurns: Number.isFinite(parsed) ? parsed : 0 })
+              }}
+              aria-invalid={maxTurnsError && touched ? true : undefined}
+              className={cn(
+                'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
+                'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                maxTurnsError && touched
+                  ? 'border-signal-risk'
+                  : 'border-line hover:border-line-strong',
+              )}
+            />
+            <span className="shrink-0 text-2xs text-ink-faint">轮</span>
+          </span>
+        </Field>
+
+        <Field
+          label="备用模型（换模兜底）"
+          htmlFor="ctf2-fallback-provider"
+          /*
+            ★ 这一段必须把"什么时候会换"讲清楚，否则用户会以为它是负载均衡。
+            它不是 —— 主接入点**调不动**时才换，正常情况下永远用主模型。
+          */
+          help={
+            '主 provider 调用失败（key 失效 / 限流 / 服务端错误 / 长时间过载）时，' +
+            '改用这里选定的 provider 继续解题，而不是让整道题作废 —— ' +
+            '那时可能已经跑了三十多轮、在沙箱里做完了大量分析。' +
+            '★ 它是**兜底**不是负载均衡：正常情况下永远用主模型。' +
+            '留空（默认）= 不启用，行为与之前完全一致。' +
+            '⚠️ 若备用的是云端 provider，换模会消耗**那个** provider 的额度。'
+          }
+        >
+          <select
+            id="ctf2-fallback-provider"
+            value={draft.fallbackProviderId ?? ''}
+            onChange={(e) => setDraft({ ...draft, fallbackProviderId: e.target.value || null })}
+            className={cn(
+              'h-9 w-full max-w-[20rem] rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink',
+              'transition-ui duration-fast hover:border-line-strong',
+              'focus:outline-none focus:ring-2 focus:ring-accent/40',
+            )}
+          >
+            <option value="">不启用</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        {/* ── 跨场景开关（v0.41 / v0.58）── */}
+        {/*
+          ★ 这两个开关与 CTF 解题无关：应急响应场景包面向 ir-* 分类，
+          多智能体编排改变的是**执行方式**，对任何题型都成立。
+          所以它们属于「内核通用能力」而不是「CTF 解题」。
+        */}
+        <div className="space-y-2">
+          <Toggle
+            id="ctf2-ir"
+            label="启用应急响应场景包"
+            hint={
+              '打开后，分类属于「根因定位 / 时间线重建 / 影响范围」这' +
+              '三类的题，会额外拿到一段复盘纪律：它的产出是时间线、根因链、' +
+              '影响范围，每条结论按「已命中 / 待跟进 / 已排除」三级标注。' +
+              '★ 与「智能体安全评测」开关**互相独立** —— 两个都打开时，' +
+              '一道题也只会命中其中一族（`agentsec-*` 与 `ir-*` 是互斥的两组前缀）。'
+            }
+            checked={draft.enableIrScenarios}
+            onChange={(value) => setDraft({ ...draft, enableIrScenarios: value })}
+          />
+          <Toggle
+            id="ctf2-multi-agent"
+            label="启用多智能体编排"
+            hint={
+              '打开后，一次解题（CTF 题 / 渗透评估 / 应急响应复盘）走' +
+              '「主控智能体调度 + 多个子智能体并行执行」的完整编排，' +
+              '而不是单条循环。关着时单条循环逐字节不变。' +
+              '★ 它改变的是**执行方式**，与上面那些开关（改变判定纪律）' +
+              '互相独立 —— 任何题型都能跑单条循环或编排。' +
+              '⚠️ 打开后一次任务的模型调用量会按子智能体数量放大约数倍，' +
+              '成本更高、耗时更难预估，所以默认关闭。'
+            }
+            checked={draft.enableMultiAgent}
+            onChange={(value) => setDraft({ ...draft, enableMultiAgent: value })}
+          />
+        </div>
+
+        {/*
+          ★ 这一块也有自己的保存条 —— 遵守「每个面板自带保存条」的约定。
+          两块共用同一个 draft 与同一套 handleSave/handleReset，
+          所以在这里点保存与在上面点保存**效果完全相同**
+          （保存的是整份内核配置，不分块提交），这样用户在哪一块改完
+          都能就地保存，不用滚回上一块。
+        */}
+        <SaveBar
+          state={saveState}
+          dirty={dirty}
+          onSave={() => {
+            void handleSave()
+          }}
+          onReset={handleReset}
+          note={
+            <span className="text-2xs text-ink-muted">
+              保存后**立刻生效**，不需要重启服务。
+              ★ 这条保存与「CTF 解题」那块是**同一次保存** —— 两块共用一个草稿，
+              在这里点保存等于把两块一起存下。
+            </span>
+          }
+        />
+      </SettingsPanel>
+    </>
   )
 }
 

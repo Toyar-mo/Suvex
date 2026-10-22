@@ -36,9 +36,12 @@ import { useEffect, useMemo, useState } from 'react'
 const SECTIONS = [
   { id: 'providers', label: '模型服务' },
   { id: 'sandbox', label: '沙箱' },
-  // ★ CTF2 紧挨沙箱：两者都在回答"解题跑起来是什么样"，
-  //   而它与沙箱共享同一个并发上限（见后端 ctf2/scheduler 的说明）。
-  { id: 'kernel', label: 'Suvex 内核' },
+  // ★ v0.60：原来的一节「CTF」拆成两节 —— 「CTF 解题」只放只影响解题的设置，
+  //   「内核通用能力」放对所有场景共用的设置（默认镜像 / 回合预算 / 备用模型 /
+  //   应急响应场景包 / 多智能体编排）。拆的理由：后一半改的是**内核行为**，
+  //   跟 CTF 无关 —— 混在一节里会让人以为关掉它们就是"不跑 CTF 了"。
+  { id: 'ctf', label: 'CTF 解题' },
+  { id: 'kernel-core', label: '内核通用能力' },
   { id: 'platform', label: '平台接入' },
   { id: 'notify', label: '通知' },
   { id: 'scan-retention', label: '扫描保留' },
