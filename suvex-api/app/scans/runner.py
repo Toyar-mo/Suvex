@@ -902,19 +902,33 @@ class LaunchSpec:
 
     # ── 沙箱容器配额（任务 14）────────────────────────────
     #
-    # ★ 这三个值**真的会被 strix 用上**（走环境变量，见 `env()`）：
+    # ★ 前三项**真的会被 strix 用上**（走环境变量，见 `env()`）：
     #   `STRIX_SANDBOX_CPUS` / `STRIX_SANDBOX_MEM_LIMIT` /
     #   `STRIX_DOCKER_SANDBOX_NETWORK`。
     #
-    # ⚠️ 与设置页里另外两项的区别要记清楚：
-    #   · `timeoutMinutes` —— strix **全包没有扫描级墙钟超时**
-    #     （只有登录过期那种 deadline），所以我们传不下去，它目前不生效。
-    #   · `allowVolumeWrite` —— strix 的工作区挂载**恒为读写**
-    #     （`session_manager` 里 `read_only: False`），没有开关可传。
-    #   这两项在界面上必须标注为"尚未生效"，不能跟着一起说"已生效"。
+    # ★ 后两项（v0.64 起）在**自研引擎（agent 后端）**里是真生效的：
+    #   · `timeout_seconds` —— 墙钟超时。自研引擎自己在 `_solve_with_stop`
+    #     的轮询循环里按它设 deadline，超时取消引擎循环（strix 后端没有
+    #     扫描级墙钟超时，那一侧不读这个值 —— 见下）。
+    #   · `allow_volume_write` —— 持久工作区挂载读写开关。为真时
+    #     `<run_dir>/agent_run/workspace` 以 `:rw` 挂进 `/work/persist`，
+    #     为假时以 `:ro` 挂。关掉后 agent 仍可用 `/work` 这个 tmpfs，
+    #     只是产出出不了容器、跨重启不保留（这不影响发现收集：发现是
+    #     引擎在内存里 `outcome.findings` 交给 `_write_vulnerabilities` 写的，
+    #     不经这个卷）。
+    #
+    # ⚠️ 残余口径：strix 后端**不读**这两项（strix 全包没有扫描级墙钟超时，
+    #    工作区挂载恒为 `read_only: False`）。界面上这两项按「自研引擎生效」
+    #    标注即可，别写成 strix 也吃。
     sandbox_cpus: int | None = None
     sandbox_mem_limit_mb: int | None = None
     sandbox_network_isolated: bool = False
+    # ★ v0.64：墙钟超时（秒）。None = 不设上限（沿用引擎自己的回合上限）。
+    #   自研引擎在 `_solve_with_stop` 轮询里按它设 deadline；strix 不读。
+    timeout_seconds: int | None = None
+    # ★ v0.64：持久工作区挂载读写开关。默认 True（保持历史行为：
+    #   工作区以 `:rw` 挂载）。False 时以 `:ro` 挂 —— 见上方注释。
+    allow_volume_write: bool = True
 
     # ── 续跑（任务 16）──────────────────────────────────
     #

@@ -363,3 +363,151 @@ def test_scheduler_request_stop_calls_handle_stopper() -> None:
     sched.register("scan_x", _H())  # type: ignore[arg-type]
     assert sched.request_stop("scan_x") is True
     assert called["n"] == 1
+
+
+# ══════════════════════════════════════════════════════════
+# v0.64：设置页两项「单次超时」「允许写入挂载卷」从死配置变成真功能
+# ══════════════════════════════════════════════════════════
+
+
+def test_launch_spec_defaults_keep_history_behavior() -> None:
+    """不传 timeout/volume_write 时：不设超时、允许写挂载（=历史行为）。
+
+    这条锁的是"没配过就行为突变"这个失败形态 —— 老扫描不该因为加了
+    开关就突然变成只读挂载或不带超时。
+    """
+    spec = _spec()
+    assert spec.timeout_seconds is None
+    assert spec.allow_volume_write is True
+
+
+def test_launch_spec_accepts_timeout_and_volume_write() -> None:
+    spec = _spec(timeout_seconds=1800, allow_volume_write=False)
+    assert spec.timeout_seconds == 1800
+    assert spec.allow_volume_write is False
+
+
+def test_volume_write_true_mounts_workspace_rw(tmp_path: Path) -> None:
+    """`allow_volume_write=True` → 持久工作区以 `:rw` 挂进 /work/persist。"""
+    from app.kernel import runner as kernel_runner
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    box = kernel_runner.SandboxContainer(
+        name="suvex-scan-test",
+        image="ctf2-sandbox-ir",
+        network_isolated=True,
+        workspace_dir=ws,
+        volume_write=True,
+    )
+    argv = box._argv()
+    mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+    persist = [m for m in mounts if m.endswith(f":{kernel_runner.PERSIST_DIR}:rw")]
+    assert persist, f"没找到 /work/persist 的读写挂载：{mounts}"
+
+
+def test_volume_write_false_mounts_workspace_ro(tmp_path: Path) -> None:
+    """`allow_volume_write=False` → 同一工作区改以 `:ro` 挂。
+
+    这条是真功能的**反面对照**：只测 rw 会漏掉"开关其实没接线"。
+    """
+    from app.kernel import runner as kernel_runner
+
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    box = kernel_runner.SandboxContainer(
+        name="suvex-scan-test",
+        image="ctf2-sandbox-ir",
+        network_isolated=True,
+        workspace_dir=ws,
+        volume_write=False,
+    )
+    argv = box._argv()
+    mounts = [argv[i + 1] for i, a in enumerate(argv) if a == "-v"]
+    ro = [m for m in mounts if m.endswith(f":{kernel_runner.PERSIST_DIR}:ro")]
+    rw = [m for m in mounts if m.endswith(f":{kernel_runner.PERSIST_DIR}:rw")]
+    assert ro, f"关掉写入后应挂 :ro，实际挂载：{mounts}"
+    assert not rw, "关掉写入后不应再有 :rw 的 /work/persist"
+
+
+def test_timeout_outcome_carries_human_reason() -> None:
+    """超时收尾的 outcome 带一句人话原因，且没有假造发现。"""
+
+    class _Spec:
+        timeout_reason = "扫描超过设置页指定的单次超时（30 分钟），已被引擎停止。"
+
+    outcome = agent_runner._timeout_outcome(_Spec())
+    assert outcome.error and "超时" in outcome.error
+    assert not outcome.findings
+
+
+def test_solve_with_stop_cancels_on_wall_clock_timeout(monkeypatch) -> None:
+    """墙钟超时真的会取消引擎循环，并交回一个"超时收尾"的 outcome。
+
+    ## 为什么这条要用 monkeypatch
+
+    `_solve_with_stop` 会去拉真正的 `solve_in_sandbox`（要 docker、要 LLM）。
+    这里把内核那个协程换成一个"永不结束"的假协程，验证的是**超时轮询逻辑**
+    本身：到点取消、不把 CancelledError 抛给上层、返回带人话原因的 outcome。
+
+    ## 反面对照（变异会红）
+
+    把 deadline 判断去掉 / 不设 `timed_out`，这条会因为拿不到 outcome
+    （或 CancelledError 上抛）而失败。
+    """
+    import asyncio
+    import threading
+
+    from app.kernel import runner as kernel_runner
+
+    async def _forever(*args, **kwargs):  # noqa: ANN002, ANN003
+        # 真实引擎一旦开跑就不会自己返回；用 sleep 模拟。
+        await asyncio.sleep(3600)
+        raise AssertionError("不应跑到这里")  # pragma: no cover
+
+    monkeypatch.setattr(kernel_runner, "solve_in_sandbox", _forever)
+
+    class _Spec:
+        timeout_reason = ""  # 允许被 `_solve_with_stop` 覆盖
+
+    stop_event = threading.Event()
+    outcome = asyncio.run(
+        agent_runner._solve_with_stop(
+            _Spec(),
+            sandbox=object(),
+            gateway=object(),
+            system_prompt="x",
+            stop_event=stop_event,
+            on_progress=lambda *a, **k: None,
+            timeout_seconds=1,  # 1 秒就超时（轮询间隔 0.5s，约 1~1.5s 收尾）
+        )
+    )
+    assert outcome.error and "超时" in outcome.error
+
+
+def test_solve_with_stop_does_not_time_out_when_none(monkeypatch) -> None:
+    """`timeout_seconds=None` 时不设 deadline，快返回的引擎正常收尾。"""
+    import asyncio
+    import threading
+
+    from app.kernel import runner as kernel_runner
+
+    async def _quick(*args, **kwargs):  # noqa: ANN002, ANN003
+        return kernel_runner.SolveOutcome(error=None)
+
+    monkeypatch.setattr(kernel_runner, "solve_in_sandbox", _quick)
+
+    outcome = asyncio.run(
+        agent_runner._solve_with_stop(
+            object(),
+            sandbox=object(),
+            gateway=object(),
+            system_prompt="x",
+            stop_event=threading.Event(),
+            on_progress=lambda *a, **k: None,
+            timeout_seconds=None,
+        )
+    )
+    assert outcome.error is None
+
+

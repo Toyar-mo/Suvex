@@ -1024,6 +1024,7 @@ class SandboxContainer:
         attachments_dir: Path | None = None,
         workspace_dir: Path | None = None,
         extra_env: dict[str, str] | None = None,
+        volume_write: bool = True,
     ) -> None:
         self.name = name
         self.image = image
@@ -1099,6 +1100,11 @@ class SandboxContainer:
         # 字节会留在宿主上。这是"保留现场"换来的必然代价，所以目录
         # 里**只该有解题产物**，且要能整目录删掉（见 `sweep`）。
         self.workspace_dir = workspace_dir
+        # ★ v0.64：持久工作区挂载读写开关（设置页「允许写入挂载卷」）。
+        #   True（默认，历史行为）→ 工作区以 `:rw` 挂进 `/work/persist`；
+        #   False → 以 `:ro` 挂。关掉后 agent 仍可用 `/work` 这个 tmpfs
+        #   干活，只是产出出不了容器、跨重启不保留。见 `_argv` 里的挂载行。
+        self.volume_write = volume_write
         # ⚠️ `extra_env` **绝不允许**承载凭据。它存在的唯一用途是
         # 传一些无害的开关（比如 `PWNLIB_NOTERM=1`）。
         # 类型上没法强制这一点，所以这条规矩写在这里 + 有测试盯着
@@ -1267,7 +1273,12 @@ class SandboxContainer:
         #    空目录 —— 而"空目录"与"没挂上"在容器里长得一模一样。
         #    这里由调用方先 mkdir（见 `_workspace_dir`）。
         if self.workspace_dir is not None and self.workspace_dir.is_dir():
-            argv += ["-v", f"{self.workspace_dir}:{PERSIST_DIR}:rw"]
+            # ★ v0.64：读写开关。`allowVolumeWrite=False` 时挂 `:ro` ——
+            #   设置页那一项从"写了不生效"变成真有行为。禁用时容器内
+            #   `/work/persist` 只读，agent 的写只能落在 `/work` 这个
+            #   tmpfs（容器停即消失），不影响内存里的发现收集。
+            _mode = "rw" if self.volume_write else "ro"
+            argv += ["-v", f"{self.workspace_dir}:{PERSIST_DIR}:{_mode}"]
         for key, value in self.extra_env.items():
             argv += ["-e", f"{key}={value}"]
         argv += [self.image, "tail", "-f", "/dev/null"]

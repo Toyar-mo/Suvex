@@ -455,6 +455,9 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
         cpus=solve_spec.cpus,
         memory_mb=solve_spec.memory_mb,
         workspace_dir=spec.run_dir / "agent_run" / "workspace",
+        # ★ v0.64：设置页「允许写入挂载卷」。透传到 SandboxContainer，
+        #   由它决定 /work/persist 挂 :rw 还是 :ro。
+        volume_write=bool(getattr(spec, "allow_volume_write", True)),
     )
 
     log_lines: list[str] = []
@@ -557,6 +560,7 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
             stop_event=stop_event,
             on_progress=on_progress,
             hint_provider=_hint_provider,
+            timeout_seconds=getattr(spec, "timeout_seconds", None),
         )
     finally:
         # ★ 唯一的容器清理路径（见模块 docstring「线程杀不掉」一节）。
@@ -574,6 +578,15 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
     if outcome.error and not outcome.findings:
         # 有错误、且一条发现都没有 → 报错退出。注意：跑了但真的没发现
         # **不是**错误（那是一次干净的评估），所以只在 error 非空时才算。
+        #
+        # ★ v0.64：把这句话**写进 scan.log**。`_failure_reason` 是从日志里
+        #   取可行动的那一行的（见它的 docstring），如果只 `logger.warning`
+        #   到服务日志，用户界面上就只剩一句空泛的"没有产出"——超时/引擎
+        #   报错这些真正的原因反而看不到。写成 `error: <人话>` 形状，
+        #   正好能被 `_ERROR_LINE` 认出来提到最前。
+        with contextlib.suppress(OSError):
+            log_lines.append(f"error: {outcome.error}")
+            spec.log_path.write_text("\n".join(log_lines), encoding="utf-8")
         logger.warning("扫描 %s：引擎无产出（%s）", spec.scan_id, outcome.error)
         return EXIT_ERROR
     return EXIT_OK
@@ -588,8 +601,9 @@ async def _solve_with_stop(
     stop_event: threading.Event,
     on_progress,
     hint_provider=None,
+    timeout_seconds: int | None = None,
 ) -> object:
-    """跑 `solve_in_sandbox`，并在 `stop_event` 被设置时取消它。
+    """跑 `solve_in_sandbox`，并在 `stop_event` 被设置或墙钟超时时取消它。
 
     ## 为什么不能只在回调里检查 stop_event
 
@@ -598,8 +612,19 @@ async def _solve_with_stop(
     停不下来。把协程包成一个 task，用旁路 `while` 轮询 `stop_event`，
     一旦置位就 `task.cancel()` —— 这是 Python 里对 async 循环唯一
     可靠的"请求停止"手段（线程本身杀不掉，见模块 docstring）。
+
+    ## 墙钟超时（v0.64）
+
+    `timeout_seconds` 非空时按单调时钟设一个 deadline。到点就取消引擎
+    循环，并把 `solve_spec.timeout_reason` 置成一句人话（供上层写进
+    运行结果）。用 `time.monotonic()` 而不是 wall-clock：设备改时间 /
+    校时不该影响"给了它半小时"这个承诺。
     """
+    import time as _time
+
     from app.kernel import runner as ctf2_runner
+
+    deadline = (_time.monotonic() + timeout_seconds) if timeout_seconds else None
 
     task = asyncio.ensure_future(
         ctf2_runner.solve_in_sandbox(
@@ -611,21 +636,55 @@ async def _solve_with_stop(
             hint_provider=hint_provider,
         )
     )
+    timed_out = False
     while not task.done():
-        # 每 0.5s 查一次停止标志，顺便把控制权交还给事件循环。
+        # 每 0.5s 查一次停止标志/超时，顺便把控制权交还给事件循环。
         await asyncio.sleep(0.5)
         if stop_event.is_set() and not task.done():
             logger.info("收到停止请求，取消引擎循环")
             task.cancel()
             break
+        if deadline is not None and _time.monotonic() >= deadline and not task.done():
+            logger.info("扫描超时（%ss），取消引擎循环", timeout_seconds)
+            timed_out = True
+            # 记一句人话到 spec 上，供 `_run_engine` 写进运行结果。
+            with contextlib.suppress(Exception):  # 记账失败不该影响停止动作
+                solve_spec.timeout_reason = (  # type: ignore[attr-defined]
+                    f"扫描超过设置页指定的单次超时（{timeout_seconds // 60} 分钟），已被引擎停止。"
+                )
+            task.cancel()
+            break
     try:
         return await task
     except asyncio.CancelledError:
+        # 超时导致的取消是"预期内的干净收尾"：不把 CancelledError 上抛
+        # （否则 `_run_engine` 会走异常分支、拿不到已产出的部分发现），
+        # 而是交回一个最小 outcome，让上层按"超时但可能有部分产出"处理。
+        if timed_out:
+            logger.info("引擎循环因墙钟超时被取消，按超时收尾")
+            return _timeout_outcome(solve_spec)
         logger.info("引擎循环已被取消")
         raise
     except Exception:
         # 引擎内部异常：如实上抛，由 `_run_engine` 的调用方记日志。
         raise
+
+
+def _timeout_outcome(solve_spec: object) -> object:
+    """超时被取消时返回的最小 outcome。
+
+    只带 `error`（人话原因）与空的发现集合 —— 已经跑出来的部分发现
+    在取消前的 `solve_in_sandbox` 内部尚未归拢到返回值里，这里如实
+    不假装有。上层据此把扫描判成"超时收尾"而非"失败"。
+    """
+    from app.kernel import runner as ctf2_runner
+
+    reason = getattr(
+        solve_spec,
+        "timeout_reason",
+        "扫描超过设置页指定的单次超时，已被引擎停止。",
+    )
+    return ctf2_runner.SolveOutcome(error=reason)
 
 
 def _write_run_json(spec: LaunchSpec, solve_spec: object, outcome: object) -> None:

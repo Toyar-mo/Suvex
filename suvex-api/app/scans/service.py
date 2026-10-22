@@ -936,6 +936,12 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         sandbox_cpus=sandbox.cpu_limit if sandbox else None,
         sandbox_mem_limit_mb=sandbox.memory_limit_mb if sandbox else None,
         sandbox_network_isolated=bool(sandbox.network_isolated) if sandbox else False,
+        # ★ v0.64：设置页里「单次超时」「允许写入挂载卷」现在都是真生效的
+        #   （自研引擎侧）。timeout_minutes 存的是分钟，这里折算成秒；
+        #   没有配置行时不下发超时（None=沿用引擎回合上限）与沿用历史
+        #   的读写挂载（True=现状），避免"没配过就行为突变"。
+        timeout_seconds=(sandbox.timeout_minutes * 60) if sandbox else None,
+        allow_volume_write=bool(sandbox.allow_volume_write) if sandbox else True,
         # ★ v0.42：越权与注入手法块。与上面三项同源（都来自那张单例行），
         # 但这一项**没有 env 兜底** —— 它是行为开关，没配置行时就是"关"。
         enable_offensive_prompt=bool(sandbox.enable_offensive_prompt) if sandbox else False,
