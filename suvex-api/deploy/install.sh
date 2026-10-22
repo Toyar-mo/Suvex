@@ -367,6 +367,12 @@ SUPEX_COOKIE_SECURE=true
 # 前端与 API 同源（nginx 一个 server 块托管两者）
 SUPEX_CORS_ORIGINS=https://$SUPEX_DOMAIN
 
+# ★ 扫描执行后端：agent = 自研 Suvex 内核（进程内，不依赖外部可执行文件）。
+#   **这里必须显式钉死**，不能指望环境里刚好有一份带这个值的 .env 被搬过来 ——
+#   干净部署时若落到旧默认 strix，而 strix 的独立 venv 又没装好，现场就会
+#   "扫描一条都起不来"。要回退 strix 就把这里手动改成 strix。
+SUPEX_SCAN_RUNNER=agent
+
 SUPEX_SCAN_AUTHORIZATION_STATEMENT=我有权对此目标进行安全测试
 "
 

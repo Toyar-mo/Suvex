@@ -128,7 +128,7 @@ logger = logging.getLogger("suvex.ctf2")
 #
 # 镜像名是**部署事实**，不是代码常量：`docker/README.md` 里写着重建后
 # 老 tag 会被覆盖，而"某个提交对应哪个镜像"在压测/对照里必须能钉住。
-# 没有这个入口时，想拿 `ctf2-sandbox:pre-gems` 跑一遍"补强前"基线，
+# 没有这个入口时，想拿 `suvex-sandbox:pre-gems` 跑一遍"补强前"基线，
 # 只能改代码再改回来 —— 那是**一次改动两处**，中间任何一次忘改都会
 # 让对照变成自己跟自己比。
 #
@@ -467,7 +467,7 @@ MAX_SANDBOX_REVIVALS = 2
 # 但 pwn **确实**需要 `gdb`（`gdb.attach(io)` 是调 exploit 的主要入口），
 # 而 base 原本没有 —— 所以补的是 base 的 Dockerfile（加 `gdb`，几 MB），
 # 而不是把 pwn 整类推到 4.18 GB 的逆向镜像去。实测见
-# `docker/ctf2-sandbox/Dockerfile` 里 `gdb` 那一条的注释。
+# `docker/suvex-sandbox/Dockerfile` 里 `gdb` 那一条的注释。
 _REVERSE_CATEGORIES = frozenset(
     {
         "reverse",

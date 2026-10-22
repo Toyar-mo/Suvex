@@ -110,15 +110,30 @@ class Settings(BaseSettings):
     max_concurrent_scans: int = 1
 
     # 用哪个 runner 实现：
-    #   `strix` —— 真的拉起 strix 子进程（默认）
+    #   `agent` —— 自研 Suvex 内核引擎（进程内跑，**当前默认**）
+    #   `strix` —— 真跑外部 strix CLI 子进程（**手动回退用，不再是默认**）
     #   `fake`  —— 一个替身，按脚本化的时间线改状态，**不执行任何真实攻击**
     #
+    # ★ v0.66：默认从 `strix` 翻成 `agent`。理由不是"自研引擎更好用"，
+    #   而是**部署安全网**：终审实战是在赛方受控环境里现场部署，
+    #   如果走一次干净部署（不带开发机上那份现成 .env），默认落到
+    #   `strix` 就等于现场起不来 —— 实测 strix 的独立 venv 已损坏
+    #   （`import strix` 报 ModuleNotFoundError）。`agent` 是进程内实现，
+    #   不依赖任何外部可执行文件与 venv，干净部署必然能起。
+    #
+    #   `strix` 那条路**保留不删**：需要时用 `SUPEX_SCAN_RUNNER=strix`
+    #   显式切回去（`_RUNNERS` 里仍登记着它）。这是"留手动回退"而不是
+    #   "彻底移除"，与 m07335 的最终目标（超越后移除）不冲突 —— 移除是
+    #   另一件事，得等自研引擎先证明自己不输。
+    #
     # 有 `fake` 不是"为了方便"：测试与 CI **绝不能**跑真实渗透测试
-    # （它们会向真实目标发包，那是违法的）。所以必须有一个可替换的执行后端，
-    # 而"可替换"这件事本身也让 strix 的升级不会绑死整个 API。
-    scan_runner: str = "strix"
+    # （它们会向真实目标发包，那是违法的）。所以必须有一个可替换的执行后端。
+    scan_runner: str = "agent"
 
     # strix 可执行文件。
+    #
+    # ⚠️ 只有在 `scan_runner == "strix"`（手动回退）时才会用到。默认后端
+    #   是 `agent`，它不读这个值。保留它是因为回退路径仍需要它。
     #
     # ⚠️ 本机把它指向**独立 venv** 里的 strix.exe（见 README「strix 环境」）——
     # strix 依赖 litellm 等一大坨包，装进 API 的 venv 里，

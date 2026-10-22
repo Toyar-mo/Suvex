@@ -174,19 +174,27 @@ class _TaskHandle:
 class AgentRunner:
     """用自研引擎跑一次扫描。
 
-    ## 它做不到什么（如实写在这里，不在别处再声明一遍）
+    ## 能力现状（v0.66 复核，别再写旧话）
 
-    strix 有四样本模块**目前没有**的能力，切换默认后端意味着暂时失去它们：
+    ★ 历史包袱提醒：本段曾写「多智能体分工：这里是单 agent 单循环」——
+      那是 v0.58 之前的真话，v0.58 落了完整多智能体编排之后**已经过时**。
+      凡是看到「做不到多智能体」的说法，以本段为准。
 
-    1. **多智能体分工**（侦察 / 利用 / 验证各一个 agent）——
-       这里是单 agent 单循环；
-    2. **断点续跑**（完整 LLM 历史与 agent 拓扑）—— 这里只有
+    已具备：
+    1. **多智能体分工** —— 由 `enable_multi_agent` 开关控制（与 CTF 侧同一个
+       配置项）。开启后 `solve_in_sandbox` 走 `app.kernel.multiagent.run_multi_agent`
+       （root 只拆不亲自动手、子 agent 并行），关闭时才走单循环。开关经
+       `service.launch_scan` 读配置写进 `LaunchSpec.multi_agent` → `SolveSpec.multi_agent`。
+       ⚠️ 默认**关**（那是一套不同纪律，见开关注释），开不开是配置问题，不是能力有无。
+
+    仍**没有**（如实写在这里，不在别处再声明一遍）：
+    1. **断点续跑**（完整 LLM 历史与 agent 拓扑）—— 这里只有
        `resume_digest` 的动作纪要，上下文是重新拼的；
-    3. **攻击面自动扩展**（strix 的 `--scope-mode diff`）—— 没有；
-    4. **沙箱内交互式长驻 shell** —— 这里每条命令独立起进程
+    2. **攻击面自动扩展**（strix 的 `--scope-mode diff`）—— 没有；
+    3. **沙箱内交互式长驻 shell** —— 这里每条命令独立起进程
        （`SandboxContainer.exec`），没有可保持的 shell 会话。
 
-    这四项在 `LaunchSpec` 上的表现是：`resume_run_id` 被**忽略**。
+    续跑在 `LaunchSpec` 上的表现是：`resume_run_id` 被**忽略**。
     刻意不静默忽略 —— `launch()` 会打一条 warning 说明"这个后端不支持续跑"，
     因为用户点了「续跑」却得到一次全新的扫描，是必须被告知的事。
     """
@@ -200,12 +208,12 @@ class AgentRunner:
 
         **检查**：引擎关心的三条硬前置 ——
           1. LLM 接入点配好了没有（`LlmGateway` 需要在构造时就有 key 与 base）；
-          2. 沙箱镜像在不在本地（`ctf2-sandbox` 那一族，见 `image_for_profile`）；
+          2. 沙箱镜像在不在本地（`suvex-sandbox` 那一族，见 `image_for_profile`）；
           3. docker 能不能用（`SandboxContainer.start` 会起容器）。
 
         第 2 条尤其重要：strix 那条路上实测踩过"等 197 秒才发现镜像拉不下来"
         （`ghcr.io/usestrix/strix-sandbox:1.3.0`，11 层全卡在 `Pulling fs layer`）。
-        本模块的镜像是**本地构建**的（`docker/ctf2-sandbox/Dockerfile`），
+        本模块的镜像是**本地构建**的（`docker/suvex-sandbox/Dockerfile`），
         不走网络，所以这一条只是"在不在"，不是"拉得到吗"。
 
         **不检查**：目标可达性。那是 `scans/reachability.py` 的事，

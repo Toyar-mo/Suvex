@@ -857,7 +857,7 @@ class KernelSandboxProfile(StrEnum):
 
     按题型收窄镜像 = 收窄"题目利用解题者工具链"这条路径。
     代价是两个镜像要各自维护，这一点如实记在
-    `docker/ctf2-sandbox-re/Dockerfile` 的注释里。
+    `docker/suvex-sandbox-re/Dockerfile` 的注释里。
 
     取值就是**镜像名本身**，不做"逻辑名 → 镜像名"的第二层映射 ——
     两层映射会让"这个字段到底存的是什么"变成一个每次都要查的问题。

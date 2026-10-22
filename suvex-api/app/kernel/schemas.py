@@ -137,7 +137,7 @@ class KernelAccountOut(CamelModel):
 
 
 class KernelSettingsOut(CamelModel):
-    """`GET /ctf2/settings` —— 也是 `PUT` 的响应。"""
+    """`GET /kernel/settings` —— 也是 `PUT` 的响应。"""
 
     submitMode: SubmitModeLiteral
     maxWrongSubmissions: int
@@ -185,7 +185,7 @@ class KernelSettingsOut(CamelModel):
 
 
 class KernelSettingsIn(StrictModel):
-    """`PUT /ctf2/settings`。
+    """`PUT /kernel/settings`。
 
     ⚠️ 字段**全部必填**（与 `SandboxIn` / `ScanRetentionIn` 同一条理由）：
     配置类端点漏传一项是调用方 bug，而给默认值会让它**静默改回默认** ——
@@ -237,7 +237,7 @@ class KernelSettingsIn(StrictModel):
     # 老客户端不带它时行为与加这个功能之前完全一致"。**那个理由只在
     # 「这个功能还没被打开过」时成立**，打开之后就反过来了：
     #
-    #   `PUT /ctf2/settings` 是**全量提交**语义 —— `update_ctf2_settings`
+    #   `PUT /kernel/settings` 是**全量提交**语义 —— `update_ctf2_settings`
     #   逐字段赋值，没传的字段按形参默认值落库。所以用户把开关打开
     #   之后，只要有任何一次保存**没有**带上这个字段，它就会被静默
     #   改回 `false`。而界面上看不出发生过什么：那一次保存改的是别的

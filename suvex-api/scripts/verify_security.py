@@ -198,31 +198,37 @@ def main() -> int:
     #   · 提交 flag 会消耗平台侧**不可再生**的错误提交额度。
     #   而 `safe → auto` 恰好是 CTF2 这一组动作里后果最重的一步：
     #   它决定机器能不能在无人确认的情况下对外提交 flag。
-    print("\n── 2b. CTF2 审计留痕（真实请求 → GET /audit）──")
-    code, raw, _ = cli.request("GET", "/ctf2/settings")
+    print("\n── 2b. CTF 审计留痕（真实请求 → GET /audit）──")
+    code, raw, _ = cli.request("GET", "/kernel/settings")
     if code == 200:
         before = json.loads(raw)
         flipped = "auto" if before["submitMode"] == "safe" else "safe"
-        body = {
-            "submitMode": flipped,
-            "maxWrongSubmissions": before["maxWrongSubmissions"],
-            "defaultSandboxProfile": before["defaultSandboxProfile"],
+        # ★ `KernelSettingsIn` 的字段**全部必填**（配置类端点漏传一项会让它
+        #   静默改回默认，见 schema 注释）。所以不能只挑三项发 —— 必须把
+        #   GET 回来的整份配置改掉 submitMode 后原样 PUT 回去，否则：
+        #     ① 缺字段 → 400（StrictModel 校验失败，实测就是这一步之前红的）；
+        #     ② 就算不报错，也会把没传的项静默重置成默认值。
+        #   只读回执里多出来的运行时字段（id/时间戳）不在入参里，剔掉。
+        put_body = {
+            k: v
+            for k, v in before.items()
+            if k not in ("updatedAt", "createdAt", "id")
         }
-        code, _, _ = cli.request("PUT", "/ctf2/settings", body)
+        put_body["submitMode"] = flipped
+        code, _, _ = cli.request("PUT", "/kernel/settings", put_body)
         record(
             code == 200,
-            "改 CTF2 提交策略（真实请求）",
+            "改 CTF 提交策略（真实请求）",
             f"HTTP {code} {before['submitMode']} → {flipped}",
         )
         # ★ 改回去。验证脚本**不该留下副作用** —— 它会把用户的提交策略
         #   留在 auto 上，而那意味着"机器可以无人确认地对外提交 flag"。
         #   一次验证把安全策略放宽了，比不验证更糟。
-        code_back, _, _ = cli.request(
-            "PUT", "/ctf2/settings", {**body, "submitMode": before["submitMode"]}
-        )
-        record(code_back == 200, "把 CTF2 提交策略改回原值", f"HTTP {code_back}")
+        restore_body = {**put_body, "submitMode": before["submitMode"]}
+        code_back, _, _ = cli.request("PUT", "/kernel/settings", restore_body)
+        record(code_back == 200, "把 CTF 提交策略改回原值", f"HTTP {code_back}")
     else:
-        record(False, "改 CTF2 提交策略（真实请求）", f"GET /ctf2/settings → HTTP {code}")
+        record(False, "改 CTF 提交策略（真实请求）", f"GET /kernel/settings → HTTP {code}")
 
     # ── 3. 读回审计 ────────────────────────────────────────
     code, raw, _ = cli.request("GET", "/audit?limit=50")

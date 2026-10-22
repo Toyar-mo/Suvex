@@ -153,23 +153,27 @@ def normalize_path(path: str) -> str:
 
 
 def endpoint_paths(source: str) -> set[str]:
-    """从 TS 里抠出**调用的** CTF2 端点路径（已归一化）。
+    """从 TS 里抠出**调用的** CTF/Kernel 端点路径（已归一化）。
 
-    只认 `/ctf2/...` 字面量。这样不必理解 `api.get(...)` 的调用形状 ——
+    只认 `/kernel/...` 字面量。这样不必理解 `api.get(...)` 的调用形状 ——
     而那个形状会变（有人包一层就失效）。
+
+    ⚠️ v0.67 更正：路由前缀已从 `/ctf2` 改名为 `/kernel`（后端 router
+    `prefix="/kernel"`、前端 `data/kernel.ts`），本函数与
+    `backend_endpoints()` 都按新前缀取，否则一条都对不上。
 
     ⚠️ 允许出现 `$` 与 `{}`：模板串里的路径参数正是那个形状，
     而把它们排除掉会让"前端确实调用了 solve"这件事看不见
-    （提取到的是 `/ctf2/challenges/` 这种半截路径）。
+    （提取到的是 `/kernel/challenges/` 这种半截路径）。
     """
     found = set()
-    for raw in re.findall(r"['\"`]/(ctf2/[^'\"`\n]*)", source):
+    for raw in re.findall(r"['\"`]/(kernel/[^'\"`\n]*)", source):
         found.add(normalize_path("/" + raw))
     return found
 
 
 def backend_endpoints() -> set[str]:
-    """后端声明了哪些 CTF2 端点（从 OpenAPI 取，**不手抄**，已归一化）。
+    """后端声明了哪些 CTF/Kernel 端点（从 OpenAPI 取，**不手抄**，已归一化）。
 
     ⚠️ 从 OpenAPI 取而不是从 router 源码正则：源码里路径可能拆成
     几段拼（`prefix + "/accounts"`），正则会漏。而 OpenAPI 是
@@ -179,7 +183,7 @@ def backend_endpoints() -> set[str]:
 
     found = set()
     for path in create_app().openapi()["paths"]:
-        if path.startswith("/api/v1/ctf2"):
+        if path.startswith("/api/v1/kernel"):
             # 去掉 `/api/v1` 前缀，与前端那份对齐
             found.add(normalize_path(path[len("/api/v1") :]))
     return found
@@ -194,9 +198,9 @@ def main() -> int:
         print("\n⚠️ 找不到前端源码目录，无法对账。", flush=True)
         return 1
 
-    ctf2_ts = read(FRONTEND / "data" / "ctf2.ts")
+    ctf2_ts = read(FRONTEND / "data" / "kernel.ts")
     if not ctf2_ts:
-        print("\n⚠️ 读不到 src/data/ctf2.ts，无法对账。", flush=True)
+        print("\n⚠️ 读不到 src/data/kernel.ts，无法对账。", flush=True)
         return 1
     # 抠端点路径之前先剥注释 —— 见 `strip_comments` 的说明（假警报）。
     code_only = strip_comments(ctf2_ts)
@@ -211,7 +215,6 @@ def main() -> int:
         ("KernelSubmissionStatus", "SUBMISSION_STATUS_LABEL", "提交结果"),
         ("KernelEnvironmentStatus", "ENVIRONMENT_STATUS_LABEL", "环境状态"),
         ("KernelSubmitMode", "SUBMIT_MODE_LABEL", "提交策略"),
-        ("KernelSandboxProfile", "SANDBOX_PROFILE_LABEL", "沙箱镜像"),
     ]
 
     for enum_name, ts_table, label in enum_pairs:
@@ -233,6 +236,24 @@ def main() -> int:
             ),
         )
 
+    # ★ 沙箱镜像单独处理：`KernelSandboxProfile` 里含 LEGACY_*（旧名，只给
+    #   旧数据库行/回滚窗口用），前端标签表**只该有用户可选的新名**。
+    #   所以这里与 `USER_SANDBOX_PROFILES` 比，不与整个枚举比 —— 否则会
+    #   报"前端缺 ctf2-sandbox"这种误导性的失败。
+    backend_sandbox = set(vocab.USER_SANDBOX_PROFILES)
+    frontend_sandbox = parse_ts_record_keys(ctf2_ts, "SANDBOX_PROFILE_LABEL")
+    sandbox_missing = backend_sandbox - frontend_sandbox
+    sandbox_extra = frontend_sandbox - backend_sandbox
+    check(
+        not sandbox_missing and not sandbox_extra,
+        "沙箱镜像取值一致（USER_SANDBOX_PROFILES ↔ SANDBOX_PROFILE_LABEL）",
+        (
+            f"前端缺：{sorted(sandbox_missing)}；前端多：{sorted(sandbox_extra)}"
+            if (sandbox_missing or sandbox_extra)
+            else f"{len(backend_sandbox)} 个用户可选镜像"
+        ),
+    )
+
     # ══════════════════════════════════════════════════════
     # ② 端点
     # ══════════════════════════════════════════════════════
@@ -249,7 +270,7 @@ def main() -> int:
     check(
         bool(used),
         "前端调用了 CTF2 端点",
-        f"找到 {len(used)} 条" if used else "一条都没有 —— ctf2.ts 里没有 /ctf2 路径？",
+        f"找到 {len(used)} 条" if used else "一条都没有 —— kernel.ts 里没有 /kernel 路径？",
     )
 
     # ★ 前端用到的**必须**都存在。这是硬失败：不存在的端点会 404，
@@ -282,7 +303,7 @@ def main() -> int:
     check(
         bool(frontend_pattern),
         "前端声明了 FLAG_PATTERN",
-        "没找到 —— ctf2.ts 里的即时校验会失效" if not frontend_pattern else "",
+        "没找到 —— kernel.ts 里的即时校验会失效" if not frontend_pattern else "",
     )
     # ★ 逐字比。**前端不能比后端严**：被前端拦下的真答案
     #   用户完全没有补救路径（连试都没试），而反向（前端更松）
@@ -342,16 +363,26 @@ def main() -> int:
     # ══════════════════════════════════════════════════════
     print("\n── 沙箱镜像 ──", flush=True)
 
-    profile_values = {member.value for member in vocab.KernelSandboxProfile}
+    # ⚠️ v0.65：镜像名从 `ctf2-sandbox*` 改名为 `suvex-sandbox*`。枚举里
+    #   **同时**保留旧名（LEGACY_*）只为向后兼容旧数据库行与回滚窗口。
+    #   所以这里要区分两件事：
+    #     · `USER_SANDBOX_PROFILES` = 用户能选的**新名**，每个都必须有 Dockerfile；
+    #     · 旧名**不应**有 Dockerfile 目录（它们本就不该出现在新建数据里）。
+    user_profiles = set(vocab.USER_SANDBOX_PROFILES)
+    expected_user = {
+        vocab.KernelSandboxProfile.BASE.value,      # suvex-sandbox
+        vocab.KernelSandboxProfile.REVERSE.value,   # suvex-sandbox-re
+        vocab.KernelSandboxProfile.IR.value,        # suvex-sandbox-ir
+    }
     check(
-        profile_values == {"ctf2-sandbox", "ctf2-sandbox-re"},
-        "镜像名与 Dockerfile 目录一致",
-        f"vocab 里的取值：{sorted(profile_values)}",
+        user_profiles == expected_user,
+        "用户可选镜像 = suvex-sandbox 系列（新名）",
+        f"USER_SANDBOX_PROFILES={sorted(user_profiles)}",
     )
-    # 镜像名同时是 vocab 的取值与前端标签表的键 —— 上面 ① 已经比过一次。
+    # 镜像名同时是前端标签表的键 —— 上面 ① 已经比过一次。
     # 这里再与 Dockerfile 的目录名比一次：它们必须能被一一找到，
     # 否则 `docker run` 会在运行时才报 "Unable to find image"。
-    for name in sorted(profile_values):
+    for name in sorted(user_profiles):
         dockerfile = PROJECT_ROOT / "docker" / name / "Dockerfile"
         check(
             dockerfile.is_file(),
