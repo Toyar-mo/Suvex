@@ -38,8 +38,8 @@ for _stream in (sys.stdout, sys.stderr):
 from sqlalchemy import select  # noqa: E402
 
 from app.core.db import session_scope  # noqa: E402
-from app.core.vocab import Ctf2ChallengeStatus  # noqa: E402
-from app.kernel.models import Ctf2Challenge  # noqa: E402
+from app.core.vocab import KernelChallengeStatus  # noqa: E402
+from app.kernel.models import KernelChallenge  # noqa: E402
 
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from backfill_ctf2_writeups import (  # noqa: E402
@@ -66,9 +66,9 @@ def main() -> int:
     with session_scope() as db:
         challenges = list(
             db.execute(
-                select(Ctf2Challenge)
-                .where(Ctf2Challenge.status == Ctf2ChallengeStatus.SOLVED.value)
-                .order_by(Ctf2Challenge.solved_at)
+                select(KernelChallenge)
+                .where(KernelChallenge.status == KernelChallengeStatus.SOLVED.value)
+                .order_by(KernelChallenge.solved_at)
             )
             .scalars()
             .all()

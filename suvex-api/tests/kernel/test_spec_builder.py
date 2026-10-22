@@ -28,7 +28,7 @@ from app.kernel.adapters.builder import (
 )
 from app.kernel.adapters.probe import ProbeReport
 from app.kernel.adapters.spec import PlatformSpec, SpecError
-from tests.ctf2.test_generic_driver import LIST_PAYLOAD, SLABMATCH_SPEC
+from tests.kernel.test_generic_driver import LIST_PAYLOAD, SLABMATCH_SPEC
 
 BASE = "https://example.com/slab-match/api/v1/agent"
 

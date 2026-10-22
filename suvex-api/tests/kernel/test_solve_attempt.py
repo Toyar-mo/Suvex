@@ -30,16 +30,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
-from app.core.vocab import Ctf2SubmitMode
+from app.core.vocab import KernelSubmitMode
 from app.kernel import runner, service
-from app.kernel.models import Ctf2SolveAttempt
+from app.kernel.models import KernelSolveAttempt
 
 
 def _set_global(db: Session, *, mode: str | None = None, turns: int | None = None) -> None:
     """改全局 CTF2 设置（模拟"排队期间有人动了设置"）。
 
     ⚠️ 必须走 `update_ctf2_settings`，不能直接改 ORM 行：
-    `effective_ctf2_settings` 返回的是 **frozen dataclass**（`Ctf2Settings`），
+    `effective_ctf2_settings` 返回的是 **frozen dataclass**（`KernelSettings`），
     赋值会抛 `FrozenInstanceError` —— 那是刻意的（设置快照不该被就地改）。
 
     ⚠️ 两个场景包开关是**必填关键字参数**（v0.44），所以这里必须
@@ -70,18 +70,18 @@ def _reset_to_unsolved(db: Session, challenge) -> None:  # noqa: ANN001
     （"这道题正在处理中"）—— 所以连续受理两次之前必须复位。
     这不是绕过校验，而是模拟真实时序：第一次跑完之后用户又点了一次。
     """
-    from app.core.vocab import Ctf2ChallengeStatus
+    from app.core.vocab import KernelChallengeStatus
 
-    challenge.status = Ctf2ChallengeStatus.UNSOLVED.value
+    challenge.status = KernelChallengeStatus.UNSOLVED.value
     db.commit()
 
 
-def _attempt_for(db: Session, challenge_id: str) -> Ctf2SolveAttempt:
+def _attempt_for(db: Session, challenge_id: str) -> KernelSolveAttempt:
     row = (
         db.execute(
-            select(Ctf2SolveAttempt)
-            .where(Ctf2SolveAttempt.challenge_id == challenge_id)
-            .order_by(Ctf2SolveAttempt.created_at.desc())
+            select(KernelSolveAttempt)
+            .where(KernelSolveAttempt.challenge_id == challenge_id)
+            .order_by(KernelSolveAttempt.created_at.desc())
         )
         .scalars()
         .first()
@@ -102,12 +102,12 @@ def test_start_solve_writes_an_attempt_snapshot(
     service.start_solve(
         db_session,
         ctf2_challenge,
-        mode=Ctf2SubmitMode.SAFE.value,
+        mode=KernelSubmitMode.SAFE.value,
         brief="考点在反调试",
     )
 
     attempt = _attempt_for(db_session, ctf2_challenge.id)
-    assert attempt.mode == Ctf2SubmitMode.SAFE.value
+    assert attempt.mode == KernelSubmitMode.SAFE.value
     assert attempt.brief == "考点在反调试"
     assert attempt.max_turns > 0
     assert attempt.sandbox_profile
@@ -163,15 +163,15 @@ def test_v1_safe_survives_a_global_switch_to_auto(
     这是那条时序漏洞的直接回归闸：修复前 `build_spec` 会读到改后的
     全局值（auto），于是**替用户做了一个他明确拒绝过的对外提交**。
     """
-    service.start_solve(db_session, ctf2_challenge, mode=Ctf2SubmitMode.SAFE.value)
+    service.start_solve(db_session, ctf2_challenge, mode=KernelSubmitMode.SAFE.value)
 
     # 排队期间有人把全局改成 auto
-    _set_global(db_session, mode=Ctf2SubmitMode.AUTO.value)
+    _set_global(db_session, mode=KernelSubmitMode.AUTO.value)
 
     attempt = _attempt_for(db_session, ctf2_challenge.id)
     spec = runner.build_spec(db_session, ctf2_challenge, attempt_id=attempt.id)
 
-    assert spec.mode == Ctf2SubmitMode.SAFE.value, (
+    assert spec.mode == KernelSubmitMode.SAFE.value, (
         "★ 受理时选的 safe 被全局设置覆盖了 —— 这正是那条时序漏洞"
     )
 
@@ -187,14 +187,14 @@ def test_v2_auto_survives_a_global_switch_to_safe(
     同样是错的（用户在 auto 模式下期待自动提交，却被静默降级）。
     两条一起才证明"用的是**受理时那个值**"，而不是"总取更保守的"。
     """
-    service.start_solve(db_session, ctf2_challenge, mode=Ctf2SubmitMode.AUTO.value)
+    service.start_solve(db_session, ctf2_challenge, mode=KernelSubmitMode.AUTO.value)
 
-    _set_global(db_session, mode=Ctf2SubmitMode.SAFE.value)
+    _set_global(db_session, mode=KernelSubmitMode.SAFE.value)
 
     attempt = _attempt_for(db_session, ctf2_challenge.id)
     spec = runner.build_spec(db_session, ctf2_challenge, attempt_id=attempt.id)
 
-    assert spec.mode == Ctf2SubmitMode.AUTO.value, (
+    assert spec.mode == KernelSubmitMode.AUTO.value, (
         "★ 受理时选的 auto 被全局设置覆盖了（或实现退化成了'永远 safe'）"
     )
 
@@ -266,11 +266,11 @@ def test_v5_without_an_attempt_it_falls_back_to_global(
     `build_spec` 是公开函数，测试与脚本会直接调它。让它在没有快照时
     报错，会把"兼容旧调用"变成"所有旧调用都炸"。
     """
-    _set_global(db_session, mode=Ctf2SubmitMode.AUTO.value, turns=33)
+    _set_global(db_session, mode=KernelSubmitMode.AUTO.value, turns=33)
 
     spec = runner.build_spec(db_session, ctf2_challenge)
 
-    assert spec.mode == Ctf2SubmitMode.AUTO.value
+    assert spec.mode == KernelSubmitMode.AUTO.value
     assert spec.max_turns == 33
     assert spec.brief == ""
 
@@ -310,17 +310,17 @@ def test_re_solving_appends_a_new_attempt(
     "上一次用什么策略"被下一次覆盖 —— 而事后复盘"它当时是按什么
     策略跑的"正是最需要能回答的问题。
     """
-    service.start_solve(db_session, ctf2_challenge, mode=Ctf2SubmitMode.SAFE.value)
+    service.start_solve(db_session, ctf2_challenge, mode=KernelSubmitMode.SAFE.value)
     first = _attempt_for(db_session, ctf2_challenge.id)
 
     # 第一次跑完（或用户取消）之后，题目回到可解状态
     _reset_to_unsolved(db_session, ctf2_challenge)
-    service.start_solve(db_session, ctf2_challenge, mode=Ctf2SubmitMode.AUTO.value)
+    service.start_solve(db_session, ctf2_challenge, mode=KernelSubmitMode.AUTO.value)
     rows = (
         db_session.execute(
-            select(Ctf2SolveAttempt)
-            .where(Ctf2SolveAttempt.challenge_id == ctf2_challenge.id)
-            .order_by(Ctf2SolveAttempt.created_at)
+            select(KernelSolveAttempt)
+            .where(KernelSolveAttempt.challenge_id == ctf2_challenge.id)
+            .order_by(KernelSolveAttempt.created_at)
         )
         .scalars()
         .all()
@@ -329,8 +329,8 @@ def test_re_solving_appends_a_new_attempt(
     assert len(rows) == 2, "重解应当新增一行快照"
     # 第一次那行**没有被改写**
     assert rows[0].id == first.id
-    assert rows[0].mode == Ctf2SubmitMode.SAFE.value
-    assert rows[1].mode == Ctf2SubmitMode.AUTO.value
+    assert rows[0].mode == KernelSubmitMode.SAFE.value
+    assert rows[1].mode == KernelSubmitMode.AUTO.value
 
 
 # ══════════════════════════════════════════════════════════
@@ -350,7 +350,7 @@ def test_illegal_mode_is_rejected_by_the_database(
     from sqlalchemy.exc import IntegrityError
 
     db_session.add(
-        Ctf2SolveAttempt(
+        KernelSolveAttempt(
             id=new_id("ctf2try"),
             challenge_id=ctf2_challenge.id,
             mode="safee",  # 拼错
@@ -371,10 +371,10 @@ def test_zero_turns_is_rejected_by_the_database(
     from sqlalchemy.exc import IntegrityError
 
     db_session.add(
-        Ctf2SolveAttempt(
+        KernelSolveAttempt(
             id=new_id("ctf2try"),
             challenge_id=ctf2_challenge.id,
-            mode=Ctf2SubmitMode.SAFE.value,
+            mode=KernelSubmitMode.SAFE.value,
             max_turns=0,
             sandbox_profile="ctf2-sandbox",
         )

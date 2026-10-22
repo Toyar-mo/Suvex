@@ -39,7 +39,7 @@
 
 ## 为什么 `handle` 是 dict 而不是泛型/联合类型
 
-它要跨进程边界存进数据库（`Ctf2Challenge` 已经有一列存远端 id）。
+它要跨进程边界存进数据库（`KernelChallenge` 已经有一列存远端 id）。
 `dict[str, Any]` 是唯一**不需要为每个平台改数据库**的形状。类型安全的
 代价在这里不值得付：真正的安全来自"上层从不解引用它"这条纪律。
 """
@@ -50,13 +50,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, runtime_checkable
 
-# ⚠️ 复用 CTF2 那套错误类型（`Ctf2Error` 家族）而不是再造一组。
+# ⚠️ 复用 CTF2 那套错误类型（`KernelError` 家族）而不是再造一组。
 #
-# 理由：`service._translate` 已经把 `Ctf2RateLimited` / `Ctf2ResponseError`
+# 理由：`service._translate` 已经把 `KernelRateLimited` / `KernelResponseError`
 # 映射成了正确的 HTTP 状态码，而那套映射**与平台无关**（429 就是 429）。
 # 再造一组只会让 translate 里多一个分支，而分支正是漏掉的地方。
 #
-# 名字里的 Ctf2 是历史包袱 —— 读到这里请把它当成"平台"。
+# 名字里的 Kernel 是历史包袱 —— 读到这里请把它当成"平台"。
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +73,7 @@ class RemoteChallenge:
     """一道题的**平台侧快照**。
 
     这是 driver 交给上层的唯一题目形状。上层拿它去 upsert 本地
-    `Ctf2Challenge`，两边字段一一对应。
+    `KernelChallenge`，两边字段一一对应。
     """
 
     remote_id: str
@@ -240,7 +240,7 @@ class PlatformDriver(Protocol):
     docstring 里反复警告的那条边界。
     """
 
-    #: 稳定标识，存进数据库（`Ctf2Account.platform`）。**不要改它的值。**
+    #: 稳定标识，存进数据库（`KernelAccount.platform`）。**不要改它的值。**
     slug: str
     #: 给人看的名字（设置页里的选项文案）。
     display_name: str

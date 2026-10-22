@@ -36,7 +36,7 @@ from app.kernel.adapters.spec import (
     dig_str,
 )
 from app.kernel.adapters.transport import JsonPlatformTransport
-from app.kernel.client import Ctf2ResponseError
+from app.kernel.client import KernelResponseError
 from app.kernel.platform import (
     RemoteAttachment,
     RemoteChallenge,
@@ -238,10 +238,10 @@ class GenericDriver:
         """
         item_id = self._item_id(handle)
         if item_id is None:
-            raise Ctf2ResponseError("提交时 handle 里没有 id —— 寻址信息丢了。")
+            raise KernelResponseError("提交时 handle 里没有 id —— 寻址信息丢了。")
         try:
             data = await self._call(self.spec.submit, item_id=item_id, answer=answer)
-        except Ctf2ResponseError as exc:
+        except KernelResponseError as exc:
             if exc.code and exc.code in NOT_ACCEPTED_CODES:
                 return SubmitOutcome(accepted=False, is_solved=False, message=str(exc))
             logger.info(

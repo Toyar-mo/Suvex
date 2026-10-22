@@ -6,7 +6,7 @@
 * `CamelModel` —— **响应体**。多返回一个字段不该让前端解析失败。
 
 ⚠️ **本模块的任何 `*Out` 里都没有 token 字段，也永远不会有。**
-`Ctf2AccountOut` 只有 `tokenMask`（形如 `pat_****9f2a`）——
+`KernelAccountOut` 只有 `tokenMask`（形如 `pat_****9f2a`）——
 这不是靠自觉：模型上根本没有那个字段，想漏也漏不出去。
 
 ## ★ 这里有一组必须与 `core/vocab.py` 逐字一致的字面量
@@ -27,7 +27,7 @@ from pydantic import Field
 from app.core.schemas import CamelModel, StrictModel
 from app.core.timeutil import IsoDateTime
 
-# ⚠️ 与 `core.vocab.Ctf2ChallengeStatus` 的**全部**取值一致。
+# ⚠️ 与 `core.vocab.KernelChallengeStatus` 的**全部**取值一致。
 # 改 vocab 必须改这里，而 `tests/kernel/test_schemas.py` 有一条对账测试盯着。
 ChallengeStatusLiteral = Literal[
     "unsolved",
@@ -47,7 +47,7 @@ SubmitModeLiteral = Literal["safe", "auto"]
 
 SandboxProfileLiteral = Literal["ctf2-sandbox", "ctf2-sandbox-re", "ctf2-sandbox-ir"]
 
-# ⚠️ 与 `core.vocab.Ctf2CompetitionKind` 的**全部**取值一致。
+# ⚠️ 与 `core.vocab.KernelCompetitionKind` 的**全部**取值一致。
 #
 # `local`（v0.43）= 本地复盘案例，不属于任何平台账号。加它的时候漏改
 # 这里的症状是：`GET /ctf2/competitions` 直接 500，报
@@ -58,7 +58,7 @@ SandboxProfileLiteral = Literal["ctf2-sandbox", "ctf2-sandbox-re", "ctf2-sandbox
 # 的那条同族）。
 CompetitionKindLiteral = Literal["competition", "practice", "local"]
 
-# ★ 平台接入（v0.25）。与 `models.Ctf2Platform` 的 CHECK 约束是**同一对** ——
+# ★ 平台接入（v0.25）。与 `models.KernelPlatform` 的 CHECK 约束是**同一对** ——
 #   加一个新的驱动或状态时两处都要改。CHECK 表达式建好就固化在数据库里，
 #   而这两个 Literal 能改：只改这里会让"应用层放行、数据库拒绝"，
 #   表现为一个看起来毫无道理的 500。
@@ -71,7 +71,7 @@ PlatformStatusLiteral = Literal["building", "draft", "verified", "failed"]
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2AccountBindIn(StrictModel):
+class KernelAccountBindIn(StrictModel):
     """`POST /ctf2/accounts` —— 绑定一个 CTF2 账号。
 
     ## ★ 为什么 `label` 有默认值而 `token` 没有
@@ -95,7 +95,7 @@ class Ctf2AccountBindIn(StrictModel):
     label: str = Field(default="", max_length=120)
 
 
-class Ctf2AccountOut(CamelModel):
+class KernelAccountOut(CamelModel):
     """一个绑定账号的投影。
 
     ⚠️ **没有 `token` 字段，也永远不会有。** 只有 `tokenMask` ——
@@ -123,7 +123,7 @@ class Ctf2AccountOut(CamelModel):
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2SettingsOut(CamelModel):
+class KernelSettingsOut(CamelModel):
     """`GET /ctf2/settings` —— 也是 `PUT` 的响应。"""
 
     submitMode: SubmitModeLiteral
@@ -131,10 +131,10 @@ class Ctf2SettingsOut(CamelModel):
     defaultSandboxProfile: SandboxProfileLiteral
     # ★ v0.22：解题并发配额。它**不再借用**扫描那个上限 ——
     #   借用会让两个调度器各自拿到同一个上限，实际跑出 2 倍
-    #   （见 `settings/models.py` 的 `Ctf2Config.max_concurrent_solves`）。
+    #   （见 `settings/models.py` 的 `KernelConfig.max_concurrent_solves`）。
     maxConcurrentSolves: int
     # ★ v0.24：自动作业（抢首杀）。四者的取舍见
-    #   `settings/models.py` 的 `Ctf2Config`（自动开解单独默认关，
+    #   `settings/models.py` 的 `KernelConfig`（自动开解单独默认关，
     #   判据是可逆性）。
     solvePollSeconds: float
     autoSyncSeconds: int
@@ -151,7 +151,7 @@ class Ctf2SettingsOut(CamelModel):
     #   打开后 `agentsec-*` 那四类题型才被校验层放行、且命中时会在
     #   system prompt 末尾追加"判定考察点是否成立"的评测块。
     #   ⚠️ 它不是"多几种题型"，是**换一套行为纪律** —— 见
-    #   `settings/models.py` 的 `Ctf2Config.enable_agentsec_scenarios`。
+    #   `settings/models.py` 的 `KernelConfig.enable_agentsec_scenarios`。
     enableAgentsecScenarios: bool = False
     # ★ v0.41：应急响应场景包开关。同样**可选、默认 false**。
     #   打开后 `ir-*` 那三类题型才被校验层放行、且命中时会在 system
@@ -160,12 +160,12 @@ class Ctf2SettingsOut(CamelModel):
     #   ⚠️ 与 `enableAgentsecScenarios` **各自独立**：共用开关会让
     #   一族的分类在另一族开着时通过校验，而对应 prompt 块不注入 ——
     #   分类合法、纪律没注入。理由见 `settings/models.py` 的
-    #   `Ctf2Config.enable_ir_scenarios`。
+    #   `KernelConfig.enable_ir_scenarios`。
     enableIrScenarios: bool = False
     updatedAt: IsoDateTime
 
 
-class Ctf2SettingsIn(StrictModel):
+class KernelSettingsIn(StrictModel):
     """`PUT /ctf2/settings`。
 
     ⚠️ 字段**全部必填**（与 `SandboxIn` / `ScanRetentionIn` 同一条理由）：
@@ -181,7 +181,7 @@ class Ctf2SettingsIn(StrictModel):
 
     `SandboxOut` 有一个 `executionSource`（标出哪几项来自环境变量默认值）。
     这里**刻意没有**：CTF2 的这几项配置**不读环境变量** ——
-    见 `app/settings/models.py` 里 `Ctf2Config` 的说明
+    见 `app/settings/models.py` 里 `KernelConfig` 的说明
     （提交策略是安全取向的选择，不该由一个部署参数静默决定）。
     没有第二个来源，就没有来源可标。
     """
@@ -246,11 +246,11 @@ class Ctf2SettingsIn(StrictModel):
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2PlatformOut(CamelModel):
+class KernelPlatformOut(CamelModel):
     """一个已接入的平台。
 
     ⚠️ `id` **可空**，而且 `None` 有确切含义：内置的 CTF2 **不是数据库里
-    的一行**（见 `models.Ctf2Platform` 那段"为什么不插初始数据"）。
+    的一行**（见 `models.KernelPlatform` 那段"为什么不插初始数据"）。
     列表接口会合成一个 `id=None, source='builtin'` 的条目给界面展示 ——
     那是展示层的事，不该沉淀成一行需要维护的数据。
     """
@@ -279,11 +279,11 @@ class Ctf2PlatformOut(CamelModel):
     updatedAt: IsoDateTime | None = None
 
 
-class Ctf2PlatformDraftIn(StrictModel):
+class KernelPlatformDraftIn(StrictModel):
     """`POST /ctf2/platforms/draft` —— 让 agent 去识别一个平台。
 
     ⚠️ 这里**收明文 key**。它只在内存里过一遍（后台线程用完即弃），
-    **不落库** —— 见 `models.Ctf2Platform` 的说明。要真正启用这个平台，
+    **不落库** —— 见 `models.KernelPlatform` 的说明。要真正启用这个平台，
     用户还得再点一次"启用"，那时才写进账号表的密文列。
     """
 
@@ -294,7 +294,7 @@ class Ctf2PlatformDraftIn(StrictModel):
     document: str = Field(default="", max_length=200_000)
 
 
-class Ctf2PlatformActivateIn(StrictModel):
+class KernelPlatformActivateIn(StrictModel):
     """`POST /ctf2/platforms/{id}/activate`。"""
 
     accessKey: str = Field(min_length=1, max_length=500)
@@ -306,7 +306,7 @@ class Ctf2PlatformActivateIn(StrictModel):
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2CompetitionOut(CamelModel):
+class KernelCompetitionOut(CamelModel):
     id: str
     # ★ v0.43：可空 —— `kind == 'local'` 的本地复盘案例不属于任何平台账号。
     accountId: str | None
@@ -321,7 +321,7 @@ class Ctf2CompetitionOut(CamelModel):
     syncedAt: IsoDateTime
 
 
-class Ctf2EnvironmentOut(CamelModel):
+class KernelEnvironmentOut(CamelModel):
     """题目环境。
 
     ⚠️ `accessUrl` 只在 `status == 'ready'` 时非空 —— 数据库层有一条
@@ -344,14 +344,14 @@ class Ctf2EnvironmentOut(CamelModel):
     lastError: str | None
 
 
-class Ctf2ChallengeOut(CamelModel):
+class KernelChallengeOut(CamelModel):
     """一道题。
 
     ## 三个"由服务端算好"的字段
 
     `remainingWrongSubmissions` / `wrongSubmissionCount` / `maxWrongSubmissions`
     三个都给，而不是只给前两个让前端做减法。理由见
-    `Ctf2Challenge.remaining_wrong_submissions` 的 docstring：
+    `KernelChallenge.remaining_wrong_submissions` 的 docstring：
     `max - count` 这条规则有两份实现迟早会分叉，而分叉的症状是
     "界面显示还剩 2 次、实际提交时被拒"。
 
@@ -359,7 +359,7 @@ class Ctf2ChallengeOut(CamelModel):
 
     一个 `flag` 字段装不下"它猜的"与"平台认的"这两种意思 ——
     `candidate_ready` 状态下它出现，`solved` 之后它还在，
-    而界面无法据此判断该不该让人确认。见 `Ctf2Challenge` 里
+    而界面无法据此判断该不该让人确认。见 `KernelChallenge` 里
     那两列的说明：分开之后这个字段组合本身就能回答
     「现在有没有东西等着我确认」。
     """
@@ -390,7 +390,7 @@ class Ctf2ChallengeOut(CamelModel):
     lastError: str | None
     # 最新的那一条环境（可空：还没起过）。列表页会**批量**填充它，
     # 避免前端为每道题单独请求一次（那是 N+1）。
-    environment: Ctf2EnvironmentOut | None
+    environment: KernelEnvironmentOut | None
     # 调度优先级。**越大越先做**，默认 0。
     #
     # ⚠️ 队列里同级按 FIFO（`updated_at`），所以**全 0 时的行为与
@@ -400,10 +400,10 @@ class Ctf2ChallengeOut(CamelModel):
     updatedAt: IsoDateTime
 
 
-class Ctf2RemoteCompetitionOut(CamelModel):
+class KernelRemoteCompetitionOut(CamelModel):
     """`GET /ctf2/competitions/remote` —— **平台侧**的赛事列表（不落库）。
 
-    ## 为什么它不是 `Ctf2CompetitionOut`
+    ## 为什么它不是 `KernelCompetitionOut`
 
     那个是**本地**行（有 id、kind、challenge_count、同步时间…），
     而这个是"平台说它有哪些赛事"的即时快照 —— 它可能包含我们
@@ -425,7 +425,7 @@ class Ctf2RemoteCompetitionOut(CamelModel):
     status: str
 
 
-class Ctf2PullIn(StrictModel):
+class KernelPullIn(StrictModel):
     """`POST /ctf2/challenges/pull` —— 按链接/ID 拉**一道**题。
 
     ★ 为什么要有这条路：CTF2 的开放 API **没有**"列出练习集题目"的接口
@@ -488,10 +488,10 @@ class IrTaskIn(StrictModel):
 class IrTaskOut(CamelModel):
     """建任务的结果：直接给出可以立刻开跑的那道题。"""
 
-    challenge: Ctf2ChallengeOut
+    challenge: KernelChallengeOut
     #: 认领到的附件（名字与字节数）。为空说明这次没传附件。
     #:
-    #: ⚠️ 形状与 `Ctf2ChallengeOut.attachments` 用同一个
+    #: ⚠️ 形状与 `KernelChallengeOut.attachments` 用同一个
     #:   （`list[dict[str, Any]]`）而不是另立一个类型：它们描述的是
     #:   同一件事（这道题有哪些附件），两处各定一个类只会分叉。
     attachments: list[dict[str, Any]] = Field(default_factory=list)
@@ -499,10 +499,10 @@ class IrTaskOut(CamelModel):
     notice: str | None = None
 
 
-class Ctf2PullOut(CamelModel):
+class KernelPullOut(CamelModel):
     """拉取结果。"""
 
-    challenge: Ctf2ChallengeOut
+    challenge: KernelChallengeOut
     #: 这次是新建还是更新已有的（重复拉同一道题时是更新）。
     created: bool
     #: 认出来的题目 id（回显给用户，便于核对是不是他想要的那道）。
@@ -511,7 +511,7 @@ class Ctf2PullOut(CamelModel):
     competitionName: str
 
 
-class Ctf2SnapshotOut(CamelModel):
+class KernelSnapshotOut(CamelModel):
     """`GET /ctf2/snapshot` —— 一次拿到账号 + 赛事 + 题目。
 
     为什么不拆成三个请求：这三层在任何一次有意义的展示里都会**同时**
@@ -519,9 +519,9 @@ class Ctf2SnapshotOut(CamelModel):
     中间闪烁 —— 那个闪烁看起来就像 bug。
     """
 
-    account: Ctf2AccountOut | None
-    competition: Ctf2CompetitionOut | None
-    challenges: list[Ctf2ChallengeOut]
+    account: KernelAccountOut | None
+    competition: KernelCompetitionOut | None
+    challenges: list[KernelChallengeOut]
 
 
 # ══════════════════════════════════════════════════════════
@@ -529,7 +529,7 @@ class Ctf2SnapshotOut(CamelModel):
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2SyncIn(StrictModel):
+class KernelSyncIn(StrictModel):
     """`POST /ctf2/sync` —— 同步赛事/题目。
 
     `competitionIds` 为空 = 同步练习集（平台没有"列出全部赛事"的端点，
@@ -543,7 +543,7 @@ class Ctf2SyncIn(StrictModel):
     competitionIds: list[str] = Field(default_factory=list, max_length=50)
 
 
-class Ctf2SyncOut(CamelModel):
+class KernelSyncOut(CamelModel):
     """同步的账。
 
     ★ 三个计数**必须分开**：`challengesCreated` / `challengesUpdated`。
@@ -571,7 +571,7 @@ class Ctf2SyncOut(CamelModel):
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2SolveIn(StrictModel):
+class KernelSolveIn(StrictModel):
     """`POST /ctf2/challenges/{id}/solve` —— 起环境 + 调度 LLM 解题。"""
 
     # 提交策略。不填就是设置里的值。
@@ -603,7 +603,7 @@ class Ctf2SolveIn(StrictModel):
     resume: bool = False
 
 
-class Ctf2PriorityIn(StrictModel):
+class KernelPriorityIn(StrictModel):
     """`PUT /ctf2/challenges/{id}/priority`。
 
     只有一个字段，但仍然用 `StrictModel`：多余字段会被拒，
@@ -613,7 +613,7 @@ class Ctf2PriorityIn(StrictModel):
     priority: int
 
 
-class Ctf2PrioritiesByScoreIn(StrictModel):
+class KernelPrioritiesByScoreIn(StrictModel):
     """`POST /ctf2/priorities/by-score` —— 按分值批量设优先级。
 
     ⚠️ `competitionId` 可空表示"全部排队中的题"。做成可选而不是必填：
@@ -627,7 +627,7 @@ class Ctf2PrioritiesByScoreIn(StrictModel):
     limit: int = Field(default=50, ge=1, le=500)
 
 
-class Ctf2PriorityBatchOut(CamelModel):
+class KernelPriorityBatchOut(CamelModel):
     """`POST /ctf2/priorities/by-score` 的响应。
 
     只回"改了几道"，不回被改的题目列表：调用方紧接着就会重新拉
@@ -642,7 +642,7 @@ class Ctf2PriorityBatchOut(CamelModel):
     changed: int
 
 
-class Ctf2SolveOut(CamelModel):
+class KernelSolveOut(CamelModel):
     """`POST /ctf2/challenges/{id}/solve` 的响应。
 
     ## ★ 它**不同步等解题结束**
@@ -658,14 +658,14 @@ class Ctf2SolveOut(CamelModel):
     ⚠️ 因此它**不会**返回 flag。它返回的是"受理凭据"。
     """
 
-    challenge: Ctf2ChallengeOut
+    challenge: KernelChallengeOut
     environmentId: str | None
     scanId: str | None
     # 一句话说明当前状态，可直接展示。与报告 verdict 同一个套路。
     message: str
 
 
-class Ctf2SubmitIn(StrictModel):
+class KernelSubmitIn(StrictModel):
     """`POST /ctf2/challenges/{id}/submit` —— **人工确认**提交候选 flag。
 
     ## ★ 这个端点是 safe 模式的落点
@@ -682,7 +682,7 @@ class Ctf2SubmitIn(StrictModel):
     mode: SubmitModeLiteral | None = None
 
 
-class Ctf2SubmitOut(CamelModel):
+class KernelSubmitOut(CamelModel):
     """提交的即时结果。
 
     ⚠️ `message` 是**后端写的**中文原话（平台回显或本地拦截原因），
@@ -692,7 +692,7 @@ class Ctf2SubmitOut(CamelModel):
 
     status: SubmissionStatusLiteral
     message: str
-    challenge: Ctf2ChallengeOut
+    challenge: KernelChallengeOut
 
 
 # ══════════════════════════════════════════════════════════
@@ -700,7 +700,7 @@ class Ctf2SubmitOut(CamelModel):
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2QueueOut(CamelModel):
+class KernelQueueOut(CamelModel):
     """`GET /ctf2/queue` —— 调度器状态。
 
     与 `GET /scans/queue` 同一条思路：它回答一个前端**必须**能回答的
@@ -716,7 +716,7 @@ class Ctf2QueueOut(CamelModel):
     challenges: list[str]
 
 
-class Ctf2WriteupOut(CamelModel):
+class KernelWriteupOut(CamelModel):
     """`GET /ctf2/challenges/{id}/writeup` —— 一道题的题解（v0.36）。
 
     ## ★ 为什么 CTF2 要自己的题解端点
@@ -727,7 +727,7 @@ class Ctf2WriteupOut(CamelModel):
 
     ## ⚠️ `markdown` **含 flag 原文**
 
-    与 `Ctf2SolveNote`（方法卡）相反：卡片进**另一道题**的 prompt，
+    与 `KernelSolveNote`（方法卡）相反：卡片进**另一道题**的 prompt，
     必须白名单式脱敏；而题解是**赛后提交给人看**的，flag 正是要展示的。
     判据是这份内容的**去向**，不是"flag 是不是秘密"。
     """
@@ -748,7 +748,7 @@ class Ctf2WriteupOut(CamelModel):
     updatedAt: IsoDateTime
 
 
-class Ctf2WorkOrderOut(CamelModel):
+class KernelWorkOrderOut(CamelModel):
     """`GET /ctf2/challenges/{id}/workorder` —— 处置建议工单（v0.41，会话 C）。
 
     ## ★ 这是一个**独立端点**，不塞进题解里
@@ -774,7 +774,7 @@ class Ctf2WorkOrderOut(CamelModel):
     count: int
 
 
-class Ctf2UsageEntryOut(CamelModel):
+class KernelUsageEntryOut(CamelModel):
     """**一次 LLM 调用**的用量（"细分到每一次任务"最直接的视图）。"""
 
     turn: int
@@ -792,7 +792,7 @@ class Ctf2UsageEntryOut(CamelModel):
     at: IsoDateTime
 
 
-class Ctf2UsageByModelOut(CamelModel):
+class KernelUsageByModelOut(CamelModel):
     """按模型分组的用量。
 
     换模（v0.35 的 fallback）之后**同一次解题**会用两个模型，
@@ -805,7 +805,7 @@ class Ctf2UsageByModelOut(CamelModel):
     totalTokens: int
 
 
-class Ctf2UsageByChallengeOut(CamelModel):
+class KernelUsageByChallengeOut(CamelModel):
     """按题分组的用量（总览页看"哪道题最烧钱"）。"""
 
     challengeId: str
@@ -814,7 +814,7 @@ class Ctf2UsageByChallengeOut(CamelModel):
     totalTokens: int
 
 
-class Ctf2UsageByAttemptOut(CamelModel):
+class KernelUsageByAttemptOut(CamelModel):
     """★ 按**每次解题**分组的用量（v0.37）。
 
     ## 为什么在 `byChallenge` 之外还要这个
@@ -853,7 +853,7 @@ class Ctf2UsageByAttemptOut(CamelModel):
     startedAt: IsoDateTime
 
 
-class Ctf2TokenUsageOut(CamelModel):
+class KernelTokenUsageOut(CamelModel):
     """`GET /ctf2/usage` —— token 消耗统计（v0.36）。
 
     ## ★★ `calls` 与 `recordedCalls` 必须分开看
@@ -878,11 +878,11 @@ class Ctf2TokenUsageOut(CamelModel):
     #: ★ 它是 `total_tokens` 与 `prompt+completion` 里较大者之和
     #: （有的接入点只给分项），所以与逐题相加能对上。
     totalTokens: int
-    byModel: list[Ctf2UsageByModelOut]
-    byChallenge: list[Ctf2UsageByChallengeOut]
+    byModel: list[KernelUsageByModelOut]
+    byChallenge: list[KernelUsageByChallengeOut]
     #: ★ v0.37：按**每次解题**分组 —— 需求要的"细分到每个任务"。
     #: 纯增字段，`byModel` / `byChallenge` 语义不变。
-    byAttempt: list[Ctf2UsageByAttemptOut] = Field(default_factory=list)
+    byAttempt: list[KernelUsageByAttemptOut] = Field(default_factory=list)
     #: 最早一条记录的时间。为空表示一条都没有。
     since: IsoDateTime | None = None
 
@@ -890,29 +890,29 @@ class Ctf2TokenUsageOut(CamelModel):
 __all__ = [
     "ChallengeStatusLiteral",
     "CompetitionKindLiteral",
-    "Ctf2AccountBindIn",
-    "Ctf2AccountOut",
-    "Ctf2ChallengeOut",
-    "Ctf2CompetitionOut",
-    "Ctf2EnvironmentOut",
-    "Ctf2QueueOut",
-    "Ctf2PullIn",
-    "Ctf2PullOut",
-    "Ctf2RemoteCompetitionOut",
-    "Ctf2SettingsIn",
-    "Ctf2SettingsOut",
-    "Ctf2SnapshotOut",
-    "Ctf2SolveIn",
-    "Ctf2SolveOut",
-    "Ctf2SubmitIn",
-    "Ctf2SubmitOut",
-    "Ctf2SyncIn",
-    "Ctf2SyncOut",
-    "Ctf2TokenUsageOut",
-    "Ctf2UsageByChallengeOut",
-    "Ctf2UsageByModelOut",
-    "Ctf2UsageEntryOut",
-    "Ctf2WriteupOut",
+    "KernelAccountBindIn",
+    "KernelAccountOut",
+    "KernelChallengeOut",
+    "KernelCompetitionOut",
+    "KernelEnvironmentOut",
+    "KernelQueueOut",
+    "KernelPullIn",
+    "KernelPullOut",
+    "KernelRemoteCompetitionOut",
+    "KernelSettingsIn",
+    "KernelSettingsOut",
+    "KernelSnapshotOut",
+    "KernelSolveIn",
+    "KernelSolveOut",
+    "KernelSubmitIn",
+    "KernelSubmitOut",
+    "KernelSyncIn",
+    "KernelSyncOut",
+    "KernelTokenUsageOut",
+    "KernelUsageByChallengeOut",
+    "KernelUsageByModelOut",
+    "KernelUsageEntryOut",
+    "KernelWriteupOut",
     "EnvironmentStatusLiteral",
     "IrTaskIn",
     "IrTaskOut",

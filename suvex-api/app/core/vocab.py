@@ -660,14 +660,14 @@ def values(enum_cls: type[StrEnum]) -> tuple[str, ...]:
 #   对账由 `scripts/verify_ctf2_parity.py` 做（机器比对，不靠人眼）。
 
 
-class Ctf2CompetitionKind(StrEnum):
+class KernelCompetitionKind(StrEnum):
     """`ctf2_competitions.kind` 的取值 —— 这一"批题"是从哪来的。
 
     ## ★ v0.43 新增 `local`：本地复盘案例
 
     前两个取值都是**平台镜像**：`competition` 是赛事、`practice` 是练习集，
     两者都由 `service.sync()` 从 CTF2 平台拉下来，因此必然挂在一个
-    `Ctf2Account` 上（那是拉取用的凭据）。
+    `KernelAccount` 上（那是拉取用的凭据）。
 
     而应急响应复盘是**纯附件任务**：一批日志与证据包交给智能体，
     没有靶机、没有 flag、平台那边根本不存在这道题。它要复用 CTF2
@@ -676,7 +676,7 @@ class Ctf2CompetitionKind(StrEnum):
 
     `local` 就是那个"不属于任何平台"的取值。它带来三处分叉：
 
-    1. `account_id` 为 NULL（见 `models.Ctf2Competition.account_id`）；
+    1. `account_id` 为 NULL（见 `models.KernelCompetition.account_id`）；
     2. `_assert_submission_supported` 显式放行 —— 不放行的话它会落进
        那个 fail-closed 分支，被当成"赛事题"拒绝；
     3. worker 跳过全部平台交互（起环境 / 查是否已解出 / 释放环境），
@@ -687,18 +687,18 @@ class Ctf2CompetitionKind(StrEnum):
     `practice` 的语义是"平台上某个练习集"，`_remote_ids()` 会拿它的
     `remote_id` 当 `practice_id` 去打 `practice/{id}/...`。把本地案例
     塞进 `practice` 的后果是：worker 拿一个自造的 `ir-lab` 去请求平台，
-    404 → 抛 `Ctf2Error` → 题目失败，而错误信息说的是"同步可能没完成"。
+    404 → 抛 `KernelError` → 题目失败，而错误信息说的是"同步可能没完成"。
     那是把配置错误伪装成同步问题。
 
     ## ⚠️ 加取值时的必做清单
 
-    与 `Ctf2SandboxProfile` 同构，**四件事一件都不能少**：
+    与 `KernelSandboxProfile` 同构，**四件事一件都不能少**：
 
     1. 这里加值；
     2. `ctf2/schemas.py` 的 `CompetitionKindLiteral`（有对账测试盯着）；
     3. **手写一条 alembic 迁移**重建 `ck_ctf2_competitions_kind_valid`
        —— `--autogenerate` 不比对 CHECK 的**内容**；
-    4. 前端 `src/data/ctf2.ts` 的 `Ctf2CompetitionKind` 联合类型。
+    4. 前端 `src/data/ctf2.ts` 的 `KernelCompetitionKind` 联合类型。
 
     漏第 3 步的症状与 `sandbox_profile` 那次一模一样：
     `IntegrityError: CheckViolation ... Failing row contains (... 'local' ...)`，
@@ -710,7 +710,7 @@ class Ctf2CompetitionKind(StrEnum):
     LOCAL = "local"
 
 
-class Ctf2ChallengeStatus(StrEnum):
+class KernelChallengeStatus(StrEnum):
     """一道 CTF2 题目在**我们这边**的推进状态。
 
     ## ★ 为什么不直接抄 CTF2 的题目状态
@@ -755,20 +755,20 @@ class Ctf2ChallengeStatus(StrEnum):
 # 重复提交要计入错误次数的（有些平台直接判违规），那是在拿用户账号冒险。
 RESOLVABLE_CTF2_CHALLENGE_STATUSES: Final[frozenset[str]] = frozenset(
     {
-        Ctf2ChallengeStatus.UNSOLVED,
-        Ctf2ChallengeStatus.ENVIRONMENT_READY,
-        Ctf2ChallengeStatus.CANDIDATE_READY,
-        Ctf2ChallengeStatus.FAILED,
+        KernelChallengeStatus.UNSOLVED,
+        KernelChallengeStatus.ENVIRONMENT_READY,
+        KernelChallengeStatus.CANDIDATE_READY,
+        KernelChallengeStatus.FAILED,
     }
 )
 
 # 终态。`solved` 是成功终态，`failed` 是失败终态（可由人工重置回 `unsolved`）。
 TERMINAL_CTF2_CHALLENGE_STATUSES: Final[frozenset[str]] = frozenset(
-    {Ctf2ChallengeStatus.SOLVED, Ctf2ChallengeStatus.FAILED}
+    {KernelChallengeStatus.SOLVED, KernelChallengeStatus.FAILED}
 )
 
 
-class Ctf2SubmissionStatus(StrEnum):
+class KernelSubmissionStatus(StrEnum):
     """一次 flag 提交的结果。
 
     ## ★ `rejected` 与 `wrong` 是两件事，必须分开
@@ -800,11 +800,11 @@ class Ctf2SubmissionStatus(StrEnum):
 # 会**消耗平台错误提交额度**的状态。计数上限只该盯这几个 ——
 # 见上面 `rejected` 的说明。
 CTF2_CREDITED_WRONG_STATUSES: Final[frozenset[str]] = frozenset(
-    {Ctf2SubmissionStatus.WRONG}
+    {KernelSubmissionStatus.WRONG}
 )
 
 
-class Ctf2EnvironmentStatus(StrEnum):
+class KernelEnvironmentStatus(StrEnum):
     """题目环境（容器）的生命周期。
 
     ⚠️ `expired` 与 `error` 分开：CTF2 侧的环境**有租期**，
@@ -821,7 +821,7 @@ class Ctf2EnvironmentStatus(StrEnum):
     EXPIRED = "expired"
 
 
-class Ctf2SubmitMode(StrEnum):
+class KernelSubmitMode(StrEnum):
     """提交策略（已定设计决策 4）。
 
     ## ★ 默认必须是 `safe`，且这是安全取向不是体验取向
@@ -839,7 +839,7 @@ class Ctf2SubmitMode(StrEnum):
     AUTO = "auto"
 
 
-class Ctf2SandboxProfile(StrEnum):
+class KernelSandboxProfile(StrEnum):
     """用哪个沙箱镜像（已定设计决策 1）。
 
     ## 为什么 reverse 要**单独一个镜像**
@@ -862,7 +862,7 @@ class Ctf2SandboxProfile(StrEnum):
     实测已经踩过一次（2026-10-20，Kali 真跑）：
 
     1. 在这里加取值 —— 三处模型的 `CheckConstraint` 是**从这里生成**的
-       （`values(Ctf2SandboxProfile)`），所以模型侧会自动带上；
+       （`values(KernelSandboxProfile)`），所以模型侧会自动带上；
     2. **手写一条 alembic 迁移**重建三条 CHECK
        （`ctf2_challenges` / `ctf2_environments` / `ctf2_config` 各一条）。
        `--autogenerate` **不比对 CHECK 的表达式**，这一步永远不会被自动发现；
@@ -899,7 +899,7 @@ class Ctf2SandboxProfile(StrEnum):
 class AgentsecCategory(StrEnum):
     """**智能体安全评测**（铸网-2026）的四个题型（v0.40）。
 
-    ## ★ 为什么单独一个枚举，而不是往 `Ctf2SolveNote.category` 里塞自由字符串
+    ## ★ 为什么单独一个枚举，而不是往 `KernelSolveNote.category` 里塞自由字符串
 
     `category` 是 `String(64)` 且**没有约束** —— 原来它直接抄平台 payload
     的分类名（`Pwn` / `Web` / …），爱是什么是什么。这在那时是对的：
@@ -915,7 +915,7 @@ class AgentsecCategory(StrEnum):
 
     ## 为什么前缀统一是 `agentsec-`
 
-    因为它同时也是**开关的判据**：`Ctf2Settings.enable_agentsec_scenarios`
+    因为它同时也是**开关的判据**：`KernelSettings.enable_agentsec_scenarios`
     关着时，校验层拒绝任何以它开头的取值。前缀让"这批题型"成为一个
     可判定的集合，而不是一张要跟着改的名单。
     """
@@ -1078,7 +1078,7 @@ DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS: Final[int] = 3
 #   就会炸成循环导入。`vocab` 是叶子模块，没有这个风险。
 #
 # 语义：**CTF2 自己的**解题并发配额。它不再借用扫描那个
-# （见 `settings/models.py` 的 `Ctf2Config.max_concurrent_solves`：
+# （见 `settings/models.py` 的 `KernelConfig.max_concurrent_solves`：
 # 借用会让两个调度器各自拿到同一个上限，实际跑出 2 倍 —— 那是一处
 # 真实存在过的超卖，决赛两个模式同时跑时会打爆单机）。
 #
@@ -1137,7 +1137,7 @@ MAX_CTF2_SOLVE_POLL_SECONDS: Final[float] = 30.0
 #
 #   ① 平台**不会更快地出新题** —— 出题人的节奏是分钟级，不是秒级；
 #   ② 请求预算和解题**共享同一个账号**的限额。客户端那个 5 req/s 的
-#      令牌桶是**每个 `Ctf2Client` 实例**一个（见 `client.py` 的
+#      令牌桶是**每个 `KernelClient` 实例**一个（见 `client.py` 的
 #      `__init__`），不是每个 PAT 一个 —— 于是 N 个并发解题就是
 #      N × 5 req/s 打同一个账号。同步再挤进去只会推高撞 429 的概率，
 #      而 429 的代价落在**提交**上（重试耗尽 → 题目落到 failed）。

@@ -21,7 +21,7 @@
 ## ★ 凭据在这里只经过内存
 
 生成阶段用到的 key 由请求带进来，后台线程用完即弃，**不落库**
-（表上也刻意没有这一列，见 `models.Ctf2Platform` 的 docstring）。
+（表上也刻意没有这一列，见 `models.KernelPlatform` 的 docstring）。
 它只在第 ④ 步、用户明确点"启用"之后，才被加密写进账号表。
 
 多一次点击换的是"凭据只有一个家"。
@@ -46,7 +46,7 @@ from app.core.ids import new_id
 from app.kernel.adapters.builder import ChatFn, build_spec, verify_spec
 from app.kernel.adapters.generic import GenericDriver
 from app.kernel.adapters.spec import PlatformSpec, SpecError
-from app.kernel.models import Ctf2Account, Ctf2Platform
+from app.kernel.models import KernelAccount, KernelPlatform
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -79,28 +79,28 @@ def _run(coro: Any) -> Any:
 # ══════════════════════════════════════════════════════════
 
 
-def list_platforms(db: Session) -> list[Ctf2Platform]:
+def list_platforms(db: Session) -> list[KernelPlatform]:
     return list(
-        db.execute(select(Ctf2Platform).order_by(Ctf2Platform.created_at.desc()))
+        db.execute(select(KernelPlatform).order_by(KernelPlatform.created_at.desc()))
         .scalars()
         .all()
     )
 
 
-def get_platform(db: Session, platform_id: str) -> Ctf2Platform | None:
+def get_platform(db: Session, platform_id: str) -> KernelPlatform | None:
     if not platform_id:
         return None
-    return db.get(Ctf2Platform, platform_id)
+    return db.get(KernelPlatform, platform_id)
 
 
-def get_platform_or_404(db: Session, platform_id: str) -> Ctf2Platform:
+def get_platform_or_404(db: Session, platform_id: str) -> KernelPlatform:
     row = get_platform(db, platform_id)
     if row is None:
         raise ApiError(404, "CTF2_PLATFORM_NOT_FOUND", "找不到这个平台配置。")
     return row
 
 
-def spec_of(platform: Ctf2Platform | None) -> PlatformSpec | None:
+def spec_of(platform: KernelPlatform | None) -> PlatformSpec | None:
     """把库里那列 JSON 还原成配置对象。
 
     ⚠️ 解析失败**返回 None 而不是抛**：一份坏掉的配置不该让整个平台列表
@@ -185,21 +185,21 @@ def _unique_slug(db: Session, hint: str) -> str:
     candidate = base
     index = 2
     while db.execute(
-        select(Ctf2Platform.id).where(Ctf2Platform.slug == candidate)
+        select(KernelPlatform.id).where(KernelPlatform.slug == candidate)
     ).scalars().first():
         candidate = f"{base}-{index}"
         index += 1
     return candidate
 
 
-def create_building(db: Session, *, base_url: str) -> Ctf2Platform:
+def create_building(db: Session, *, base_url: str) -> KernelPlatform:
     """建一行"生成中"的记录。
 
     ★ 先落库再起线程（而不是反过来）：线程会立刻开始写状态，如果行还不
     存在，它就只能丢掉结果 —— 而用户看到的是"生成完了但什么都没有"。
     """
     base_url = assert_safe_base_url(base_url)
-    row = Ctf2Platform(
+    row = KernelPlatform(
         id=new_id("ctf2plat"),
         slug=_unique_slug(db, _slug_hint(base_url)),
         display_name="正在识别…",
@@ -311,7 +311,7 @@ def _finish(
     """把生成结果写回库。**失败也要把原始输出留下** —— 排查"它为什么
     总也生成不对"时，唯一能看的证据就是那段原文。"""
     with session_scope() as db:
-        row = db.get(Ctf2Platform, platform_id)
+        row = db.get(KernelPlatform, platform_id)
         if row is None:  # pragma: no cover - 只会在生成期间被删掉时发生
             logger.warning("平台 %s 在生成期间被删除，结果丢弃", platform_id)
             return
@@ -375,7 +375,7 @@ def _build_chat() -> ChatFn:
 
 
 def delete_platform(db: Session, platform_id: str) -> None:
-    """删掉一份配置。**不动账号** —— 见 `models.Ctf2Account.platform_id`
+    """删掉一份配置。**不动账号** —— 见 `models.KernelAccount.platform_id`
     那段说明（两件事在语义上无关）。
 
     ⚠️ 但如果账号正指向它，需要把账号退回内置驱动，否则那边会留下一个
@@ -383,7 +383,7 @@ def delete_platform(db: Session, platform_id: str) -> None:
     """
     row = get_platform_or_404(db, platform_id)
     account = (
-        db.execute(select(Ctf2Account).where(Ctf2Account.platform_id == platform_id))
+        db.execute(select(KernelAccount).where(KernelAccount.platform_id == platform_id))
         .scalars()
         .first()
     )
@@ -400,7 +400,7 @@ def delete_platform(db: Session, platform_id: str) -> None:
 
 def activate_platform(
     db: Session, *, platform_id: str, access_key: str, label: str = ""
-) -> Ctf2Account:
+) -> KernelAccount:
     """启用一个生成的平台：验证凭据 → 存进账号表 → 指向它。
 
     ## ★ 为什么要**再验一次**
@@ -430,12 +430,12 @@ def activate_platform(
         raise ApiError(400, "CTF2_PLATFORM_VERIFY_FAILED", f"这个平台没能通过验证：{result.error}")
 
     account = (
-        db.execute(select(Ctf2Account).where(Ctf2Account.status == "active"))
+        db.execute(select(KernelAccount).where(KernelAccount.status == "active"))
         .scalars()
         .first()
     )
     if account is None:
-        account = Ctf2Account(id=new_id("ctf2acc"), status="active")
+        account = KernelAccount(id=new_id("ctf2acc"), status="active")
         db.add(account)
 
     account.label = (label or "").strip() or account.label or platform.display_name
@@ -453,7 +453,7 @@ def activate_platform(
 def use_builtin_platform(db: Session) -> None:
     """把账号退回内置的 CTF2 驱动。"""
     account = (
-        db.execute(select(Ctf2Account).where(Ctf2Account.status == "active"))
+        db.execute(select(KernelAccount).where(KernelAccount.status == "active"))
         .scalars()
         .first()
     )
@@ -463,7 +463,7 @@ def use_builtin_platform(db: Session) -> None:
     db.commit()
 
 
-def driver_for(db: Session, account: Ctf2Account | None) -> Any:
+def driver_for(db: Session, account: KernelAccount | None) -> Any:
     """按账号拿到该用的驱动。
 
     * `platform_id IS NULL` → 内置 CTF2（`drivers/ctf2` 那条老路）
@@ -476,7 +476,7 @@ def driver_for(db: Session, account: Ctf2Account | None) -> Any:
     from app.kernel import service as ctf2_service
 
     if account is None or not account.platform_id:
-        return None  # 内置：调用方继续用 Ctf2Client
+        return None  # 内置：调用方继续用 KernelClient
     platform = get_platform(db, account.platform_id)
     spec = spec_of(platform)
     if spec is None:

@@ -29,9 +29,9 @@ import httpx
 from app.kernel.adapters.spec import NOT_ACCEPTED_CODES, AuthSpec, EnvelopeSpec
 from app.kernel.adapters.transport import JsonPlatformTransport
 from app.kernel.client import (
-    Ctf2RateLimited,
-    Ctf2ResponseError,
-    Ctf2Unavailable,
+    KernelRateLimited,
+    KernelResponseError,
+    KernelUnavailable,
 )
 from app.kernel.platform import (
     RemoteAttachment,
@@ -87,7 +87,7 @@ def _as_int(value: Any) -> int | None:
 class SlabMatchDriver:
     """比赛平台的驱动（同时是它的 HTTP 客户端）。
 
-    ⚠️ 与 `Ctf2Client` 不同，这里**不拆分** client / driver 两层：这个
+    ⚠️ 与 `KernelClient` 不同，这里**不拆分** client / driver 两层：这个
     平台没有 CTF2 那种"逐个容器试 id"的畸形路径，一个类就够了。
     多拆一层只会多一个转发方法。
     """
@@ -301,14 +301,14 @@ class SlabMatchDriver:
         """
         exercise_id = _as_int(handle.get("exerciseId"))
         if exercise_id is None:
-            raise Ctf2ResponseError("提交时 handle 里没有 exerciseId —— 寻址信息丢了。")
+            raise KernelResponseError("提交时 handle 里没有 exerciseId —— 寻址信息丢了。")
         try:
             data = await self._request(
                 "POST",
                 "/answer-panel/answer",
                 body={"exerciseId": exercise_id, "flag": answer},
             )
-        except Ctf2ResponseError as exc:
+        except KernelResponseError as exc:
             if exc.code and exc.code in NOT_ACCEPTED_CODES:
                 # 平台没受理：**不计错误次数**（那是不可再生资源）。
                 return SubmitOutcome(accepted=False, is_solved=False, message=str(exc))
@@ -396,7 +396,7 @@ class SlabMatchDriver:
         """
         exercise_id = _as_int(handle.get("exerciseId"))
         if exercise_id is None:
-            raise Ctf2ResponseError("启动环境时 handle 里没有 exerciseId。")
+            raise KernelResponseError("启动环境时 handle 里没有 exerciseId。")
         await self._request(
             "POST", "/ctf/build-exercise-env", body={"exerciseId": exercise_id}
         )
@@ -416,7 +416,7 @@ class SlabMatchDriver:
             await self._request(
                 "POST", "/ctf/recover-exercise-env", body={"exerciseId": exercise_id}
             )
-        except (Ctf2ResponseError, Ctf2RateLimited, Ctf2Unavailable) as exc:
+        except (KernelResponseError, KernelRateLimited, KernelUnavailable) as exc:
             logger.info("回收环境时平台返回错误（通常无害）：%s", exc)
 
     async def environment_prompt(self, env: RemoteEnvironment) -> str:

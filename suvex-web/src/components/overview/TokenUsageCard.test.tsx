@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import TokenUsageCard from './TokenUsageCard'
-import type { Ctf2TokenUsage } from '@/data/ctf2'
+import type { KernelTokenUsage } from '@/data/kernel'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -42,7 +42,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-const EMPTY_USAGE: Ctf2TokenUsage = {
+const EMPTY_USAGE: KernelTokenUsage = {
   calls: 0,
   recordedCalls: 0,
   promptTokens: 0,
@@ -338,7 +338,7 @@ describe('TokenUsageCard：按题细分的降级', () => {
       的 fallback）会让同一次解题用多个模型，而"换模前后各花多少"
       是这张卡最有信息量的读数之一；
     · 缺口二 —— 用户说的是"每个**任务**"，而只有按题聚合、点不进去。
-      逐轮端点早就有了（`loadCtf2ChallengeUsage`），只是没有入口用。
+      逐轮端点早就有了（`loadKernelChallengeUsage`），只是没有入口用。
 */
 describe('TokenUsageCard：按模型细分（v0.37）', () => {
   it('★★ 渲染出 byModel 的每一行（含 providerLabel 与调用次数）', async () => {
@@ -497,7 +497,7 @@ describe('TokenUsageCard：逐轮下钻（v0.37）', () => {
   v0.36/v0.37 初版写的是「去 CTF2 看逐轮明细」—— 那是**假承诺**：
 
     · 逐轮明细的 UI **只有本组件的就地展开有**。CTF2 页面根本没有
-      逐轮视图（全项目 `loadCtf2ChallengeUsage` 只有这里在用）；
+      逐轮视图（全项目 `loadKernelChallengeUsage` 只有这里在用）；
     · 而 CTF2 页也不读任何 query 参数，跳过去连"哪道题"都定位不到。
 
   用户点过去**看不到任何轮次明细**，与契约 §3.18「宁可少说，不说错的」

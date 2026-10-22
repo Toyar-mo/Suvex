@@ -49,13 +49,13 @@ from app.kernel import notes as notes_mod  # noqa: E402
 class NoteCard:
     """一张方法卡（磁盘形态与内存形态是同一个）。
 
-    字段与 `Ctf2SolveNote` 对齐，但**只保留被 prompt 用到的那些**：
+    字段与 `KernelSolveNote` 对齐，但**只保留被 prompt 用到的那些**：
     `id` / `challenge_id` 的 FK / `updated_at` 这些是数据库的事，
     文件形态不需要，多一个字段就多一处可能对不上的地方。
     """
 
     #: 这张卡是哪道题学出来的。召回时用它做"排除自己" ——
-    #: 与生产 `Ctf2SolveNote.challenge_id` 同义。
+    #: 与生产 `KernelSolveNote.challenge_id` 同义。
     challenge_id: str
     category: str
     #: 题目标题。生产里由 `getattr(note, "_title", ...)` 读，缺了会

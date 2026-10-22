@@ -244,7 +244,7 @@ def patch_ctf2_transport(monkeypatch: pytest.MonkeyPatch, handler: Any) -> Recor
     ## 打的是**模块里那个真实的** `AsyncClient` 类
 
     与 `factories.patch_llm_transport` 完全同一条思路：所以
-    `Ctf2Client` 里的 URL 构造、请求头拼装、状态码解释、重试与退避
+    `KernelClient` 里的 URL 构造、请求头拼装、状态码解释、重试与退避
     **全都真的跑一遍**，只有网络那一层是假的。
 
     ## ★★ 但换的是**每个模块的绑定**，不是 httpx 模块的属性
@@ -325,9 +325,9 @@ def ctf2_account(db_session: Session):
     在测试里从来没有被验证过，而真去调 CTF2 才会发现密钥对不上。
     """
     from app.core.crypto import encrypt_secret, mask_secret
-    from app.kernel.models import Ctf2Account
+    from app.kernel.models import KernelAccount
 
-    account = Ctf2Account(
+    account = KernelAccount(
         id=new_id("ctf2acc"),
         label="测试号",
         token_encrypted=encrypt_secret(TEST_PAT),
@@ -345,9 +345,9 @@ def ctf2_account(db_session: Session):
 
 @pytest.fixture()
 def ctf2_competition(db_session: Session, ctf2_account):
-    from app.kernel.models import Ctf2Competition
+    from app.kernel.models import KernelCompetition
 
-    competition = Ctf2Competition(
+    competition = KernelCompetition(
         id=new_id("ctf2comp"),
         account_id=ctf2_account.id,
         remote_id="1234",
@@ -363,8 +363,8 @@ def ctf2_competition(db_session: Session, ctf2_account):
 
 
 def _make_challenge(db: Session, competition, *, remote_id: str, **overrides):
-    from app.core.vocab import Ctf2ChallengeStatus, Ctf2SandboxProfile
-    from app.kernel.models import Ctf2Challenge
+    from app.core.vocab import KernelChallengeStatus, KernelSandboxProfile
+    from app.kernel.models import KernelChallenge
 
     kwargs: dict[str, Any] = {
         "id": new_id("ctf2chal"),
@@ -376,7 +376,7 @@ def _make_challenge(db: Session, competition, *, remote_id: str, **overrides):
         "description": "登录口有弱口令。",
         "attachments": [],
         "score": 100,
-        "status": Ctf2ChallengeStatus.UNSOLVED.value,
+        "status": KernelChallengeStatus.UNSOLVED.value,
         # ★ 拆列之后是**两个**字段（见 models 里那两列的说明）。
         #   `candidate_flag` = 等确认的候选；`confirmed_flag` = 平台判过对的。
         #   两者由数据库 CHECK 保证**不会同时有值**。
@@ -385,10 +385,10 @@ def _make_challenge(db: Session, competition, *, remote_id: str, **overrides):
         "wrong_submission_count": 0,
         "max_wrong_submissions": 3,
         "candidate_count": 0,
-        "sandbox_profile": Ctf2SandboxProfile.BASE.value,
+        "sandbox_profile": KernelSandboxProfile.BASE.value,
     }
     kwargs.update(overrides)
-    challenge = Ctf2Challenge(**kwargs)
+    challenge = KernelChallenge(**kwargs)
     db.add(challenge)
     db.commit()
     return challenge
@@ -411,7 +411,7 @@ def ctf2_challenge(db_session: Session, ctf2_competition):
 @pytest.fixture()
 def ctf2_reverse_challenge(db_session: Session, ctf2_competition):
     """一道**逆向**题（用来验证镜像按题型选择）。"""
-    from app.core.vocab import Ctf2SandboxProfile
+    from app.core.vocab import KernelSandboxProfile
 
     return _make_challenge(
         db_session,
@@ -419,7 +419,7 @@ def ctf2_reverse_challenge(db_session: Session, ctf2_competition):
         remote_id="4568",
         title="re1: 反调试",
         category="reverse",
-        sandbox_profile=Ctf2SandboxProfile.REVERSE.value,
+        sandbox_profile=KernelSandboxProfile.REVERSE.value,
     )
 
 
@@ -431,9 +431,9 @@ def ctf2_ready_environment(db_session: Session, ctf2_challenge):
     `access_url_only_when_ready` 管的是反向：非 ready 不能有 url）。
     这里两个都给上，是合法且完整的形状。
     """
-    from app.kernel.models import Ctf2Environment
+    from app.kernel.models import KernelEnvironment
 
-    environment = Ctf2Environment(
+    environment = KernelEnvironment(
         id=new_id("ctf2env"),
         challenge_id=ctf2_challenge.id,
         status="ready",

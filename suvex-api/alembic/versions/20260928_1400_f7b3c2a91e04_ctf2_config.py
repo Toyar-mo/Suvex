@@ -6,7 +6,7 @@ Create Date: 2026-09-28 14:00:00.000000+00:00
 
 ## 为什么是**一张新表**，不是往 sandbox_config 加三列
 
-见 `app/settings/models.py` 里 `Ctf2Config` 的说明：那张表回答
+见 `app/settings/models.py` 里 `KernelConfig` 的说明：那张表回答
 "扫描跑起来能动什么"（跨领域通用的执行参数），这张表回答
 "CTF2 的解题怎么对外提交"（领域专属的业务策略）。
 

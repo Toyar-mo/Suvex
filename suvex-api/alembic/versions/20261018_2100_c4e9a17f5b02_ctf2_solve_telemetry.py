@@ -51,7 +51,7 @@ n=1 时看到的"工具调用 −21%"在 n=5 下被推翻，差异 100% 来自�
 
 ## 不存 `elapsed_sec`
 
-它的来源是**借壳的 `Scan.duration_sec`**（`Ctf2Challenge` 自己没有
+它的来源是**借壳的 `Scan.duration_sec`**（`KernelChallenge` 自己没有
 耗时列），而那值要等 `finalize_solve_scan` 才存在；本表的写入点在
 `_record_outcome`，那时它还是 `None`。耗时在 `ctf2_writeups` 里已有，
 且实测**没有分辨力**（宿主负载能把同一题放大三倍），不为它在这里

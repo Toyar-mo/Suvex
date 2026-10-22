@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session
 from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.core.timeutil import now_utc
-from app.core.vocab import Ctf2ChallengeStatus, Ctf2SandboxProfile
+from app.core.vocab import KernelChallengeStatus, KernelSandboxProfile
 
 
 @pytest.fixture()
@@ -40,9 +40,9 @@ def competition_challenge(db_session: Session, ctf2_account):
     ⚠️ 与 `ctf2_challenge`（练习集）刻意分开：这两条路径的行为**不同**，
     而它们长得几乎一样 —— 正是那种"改了一处忘了另一处"的地方。
     """
-    from app.kernel.models import Ctf2Challenge, Ctf2Competition
+    from app.kernel.models import KernelChallenge, KernelCompetition
 
-    competition = Ctf2Competition(
+    competition = KernelCompetition(
         id=new_id("ctf2comp"),
         account_id=ctf2_account.id,
         remote_id="9001",
@@ -55,20 +55,20 @@ def competition_challenge(db_session: Session, ctf2_account):
     db_session.add(competition)
     db_session.commit()
 
-    challenge = Ctf2Challenge(
+    challenge = KernelChallenge(
         id=new_id("ctf2chal"),
         competition_id=competition.id,
         remote_id="c-9001",
         stage_id="stage-1",
         title="赛事题",
         category="web",
-        status=Ctf2ChallengeStatus.UNSOLVED.value,
+        status=KernelChallengeStatus.UNSOLVED.value,
         candidate_flag=None,
         confirmed_flag=None,
         wrong_submission_count=0,
         max_wrong_submissions=3,
         candidate_count=0,
-        sandbox_profile=Ctf2SandboxProfile.BASE.value,
+        sandbox_profile=KernelSandboxProfile.BASE.value,
     )
     db_session.add(challenge)
     db_session.commit()
@@ -94,7 +94,7 @@ def test_solve_is_refused_for_a_competition_challenge(
     assert "赛事" in excinfo.value.message
 
     db_session.refresh(competition_challenge)
-    assert competition_challenge.status == Ctf2ChallengeStatus.UNSOLVED.value
+    assert competition_challenge.status == KernelChallengeStatus.UNSOLVED.value
     assert competition_challenge.scan_id is None
 
 

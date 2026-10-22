@@ -34,7 +34,7 @@ def _rows(db: Session, action: str) -> list[AuditLog]:
 
 
 def _settings_body(mode: str, source: dict) -> dict:
-    """按 `Ctf2SettingsIn` 的契约拼一个**完整**的请求体。
+    """按 `KernelSettingsIn` 的契约拼一个**完整**的请求体。
 
     ⚠️ 字段全部必填（见那个 schema 的说明：漏传一项是调用方 bug，
     给默认值会让它静默改回默认）。所以这里把另外几项原样带回去 ——
@@ -48,7 +48,7 @@ def _settings_body(mode: str, source: dict) -> dict:
         # v0.22 新增。漏了它 PUT 会 422，而报错指向的是"字段缺失"，
         # 与这条测试真正关心的"提交策略有没有留痕"毫无关系。
         "maxConcurrentSolves": source["maxConcurrentSolves"],
-        # v0.24 新增的四项，同一条理由：`Ctf2SettingsIn` 的字段**全部
+        # v0.24 新增的四项，同一条理由：`KernelSettingsIn` 的字段**全部
         # 必填**（漏传一项是调用方 bug，给默认值会让它静默改回默认），
         # 所以每加一项，这个 helper 都要跟着透传一次。
         "solvePollSeconds": source["solvePollSeconds"],
@@ -154,7 +154,7 @@ def test_audit_never_contains_the_token(
     那一处挡的是"任何调用方写进去的字符串"，这一条挡的是"CTF2 的
     这几个端点写进去的东西"。
     """
-    from tests.ctf2.conftest import TEST_PAT
+    from tests.kernel.conftest import TEST_PAT
 
     current = ready_client.get("/api/v1/ctf2/settings").json()
     ready_client.put(

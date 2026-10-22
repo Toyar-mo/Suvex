@@ -65,7 +65,7 @@ import httpx
 import idna
 
 from app.core import hostguard
-from app.kernel.client import Ctf2Error
+from app.kernel.client import KernelError
 
 #: 跳转状态码。
 REDIRECT_CODES: frozenset[int] = frozenset({301, 302, 303, 307, 308})
@@ -96,7 +96,7 @@ MAX_PORT = 65535
 
 
 def _check_port(target: httpx.URL, *, what: str) -> None:
-    """`Location` 里的端口越界时**提前**抛 `Ctf2Error`。
+    """`Location` 里的端口越界时**提前**抛 `KernelError`。
 
     ## ★ 为什么必须在这里拦，而不是指望调用点的 `except`
 
@@ -116,13 +116,13 @@ def _check_port(target: httpx.URL, *, what: str) -> None:
     逐层对照见 `docs/security-checklist.md` 的 F-08。
 
     所以端口在校验层就当"平台给了一个不可用的地址"处理 —— 这与本模块
-    "逐跳校验、不合格就抛 `Ctf2Error`"的形状一致。
+    "逐跳校验、不合格就抛 `KernelError`"的形状一致。
     """
     port = target.port
     if port is None:
         return
     if not (MIN_PORT <= port <= MAX_PORT):
-        raise Ctf2Error(
+        raise KernelError(
             f"{what}里的端口越界（{port}，合法区间 {MIN_PORT}-{MAX_PORT}）。"
             "平台给的地址不可用。"
         )
@@ -145,7 +145,7 @@ def _check_port(target: httpx.URL, *, what: str) -> None:
 #:   （端口越界）包起来。同样不是 `HTTPError`。
 #:
 #: 这两类在调用点（`transport.py` / `probe.py` 的 `except httpx.HTTPError`）
-#: 都接不住 → 请求变成 500。所以在这里统一转成 `Ctf2Error`。
+#: 都接不住 → 请求变成 500。所以在这里统一转成 `KernelError`。
 #:
 #: ★ R-4 补上 `idna.IDNAError`：畸形 A-label（`http://xn--.invalid/x`）
 #:   在 `httpx.URL` 构造时**不抛**，要到第一次访问 `.host` 时才抛
@@ -168,7 +168,7 @@ def _leaf_exceptions(exc: BaseException) -> list[BaseException]:
 def _is_transport_level(exc: BaseException) -> bool:
     """这个异常是不是"网络/地址本身不可用"那一类。
 
-    ★ 只把这一类转成 `Ctf2Error`。**不要把 `ExceptionGroup` 无条件吞掉** ——
+    ★ 只把这一类转成 `KernelError`。**不要把 `ExceptionGroup` 无条件吞掉** ——
     它还可能是我们自己代码里的编程错误（那会被 task group 一起包起来），
     吞掉它等于用一个"平台的问题"盖住一个真 bug。判据是"每一条叶子都是
     连接/地址层面的错误"。
@@ -229,8 +229,8 @@ def _is_transport_level(exc: BaseException) -> bool:
 
     | 输入 | `_check_port` 在位 | 只有 `OverflowError` 兜底 |
     | --- | --- | --- |
-    | `:99999` / `:65536` / `:70000` | `Ctf2Error`（`_check_port`） | `Ctf2Error`（`ExceptionGroup[OverflowError]`） |
-    | **`:0`** | `Ctf2Error`（`_check_port`） | **放行（返回 404）** ★ |
+    | `:99999` / `:65536` / `:70000` | `KernelError`（`_check_port`） | `KernelError`（`ExceptionGroup[OverflowError]`） |
+    | **`:0`** | `KernelError`（`_check_port`） | **放行（返回 404）** ★ |
 
     `:0` 是**非溢出语义**的越界端口：它是个合法整数，连接层不会抛
     `OverflowError`，只是"连上了一个没人监听的端口"。
@@ -345,7 +345,7 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
 
     ⚠️ 校验的**顺序**在这里是有意义的，不能随便调换：
 
-    1. 先解析（解析失败 → `Ctf2Error`）；
+    1. 先解析（解析失败 → `KernelError`）；
     2. **先判协议**，再补 host —— 这样 `copy_with(host=…)` 只会作用在
        http(s) 上（相对地址另说，见 docstring 末尾那条）。
     3. 判端口越界（见 `_check_port`）。
@@ -359,11 +359,11 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
     """
     location = response.headers.get("location")
     if not location:
-        raise Ctf2Error("平台返回了跳转，但没有给出 Location 头。")
+        raise KernelError("平台返回了跳转，但没有给出 Location 头。")
     try:
         target = httpx.URL(location)
     except Exception as exc:  # noqa: BLE001 - httpx 对畸形 URL 抛的异常类型不固定
-        raise Ctf2Error(f"平台给的跳转地址不是一个合法 URL：{exc}") from exc
+        raise KernelError(f"平台给的跳转地址不是一个合法 URL：{exc}") from exc
 
     # ★ ② 先判协议：后面补 host、连接都只对 http(s) 有意义。
     #   ⚠️ 判据是"**有 scheme 且不是 http(s)**"：相对地址（`/final`）的
@@ -371,7 +371,7 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
     #      第一版写成 `scheme not in ("http","https")`，把相对跳转全拒了 ——
     #      实测让 6 个既有用例挂掉（"同 host 规范化跳转"等）。
     if target.scheme and target.scheme not in ("http", "https"):
-        raise Ctf2Error(f"平台把请求重定向到了不支持的协议（{target.scheme}）。")
+        raise KernelError(f"平台把请求重定向到了不支持的协议（{target.scheme}）。")
 
     # 只有 scheme 没有 host 的畸形 Location（`http:///path`）—— 补上当前 host，
     # 与 httpx 的处理一致，否则它会被当成"跨 host"而误拒。
@@ -385,7 +385,7 @@ def _next_url(current: httpx.URL, response: httpx.Response) -> httpx.URL:
     #    `request_same_host` 里被调用，而那次 `client.request()` 内部
     #    已经跑过 `_build_redirect_request`（`_redirect_url` 碰绝对地址那条、
     #    `_redirect_headers` 碰协议相对那条），畸形 A-label 早在那一层就抛了
-    #    （`request_same_host` 的 `except BaseException` 接住 → `Ctf2Error`），
+    #    （`request_same_host` 的 `except BaseException` 接住 → `KernelError`），
     #    根本轮不到这里。实测：加不加包装，端到端 21 条输入的
     #    (类型, message) 逐字节一致。
     # ⚠️ 但**别因此以为下面这个分支是死的**：直调本函数时它**进得去**，
@@ -421,7 +421,7 @@ async def request_same_host(
     ⚠️ 但 `params` **只在第一跳**生效 —— 后续每跳的 query 来自 `Location`
     自己带的（与 httpx 的 `_build_redirect_request` 一致，见模块 docstring）。
 
-    抛 `Ctf2Error` 的情况（都表示"平台给的东西不可用"）：
+    抛 `KernelError` 的情况（都表示"平台给的东西不可用"）：
     1. 跳转目标换了主机 —— 那是在打一个用户没填过的地址；
     2. 跳转目标不是 http/https；
     3. 跳转没给 `Location`，或 `Location` 不是合法 URL；
@@ -441,7 +441,7 @@ async def request_same_host(
     for hop in range(max_hops + 1):
         # ① 每一跳都过一遍"明确拒绝的地址"判据（与入口同一份实现）。
         if hostguard.is_blocked_host(current.host):
-            raise Ctf2Error(f"平台把请求指向了被拒绝的地址（{current.host}）。")
+            raise KernelError(f"平台把请求指向了被拒绝的地址（{current.host}）。")
 
         # ★ 端口越界也在这里拦。第一跳的 URL 是调用方给的
         #   （`transport` 拼的是 `base_url + path`），所以**入口**同样可能带着
@@ -461,18 +461,18 @@ async def request_same_host(
             response = await client.request(
                 current_method, current, follow_redirects=False, **hop_kwargs
             )
-        except (httpx.HTTPError, Ctf2Error):
+        except (httpx.HTTPError, KernelError):
             # 这两类是调用点认识的，原样上抛（`HTTPError` 由 `transport`
-            # 转成 `Ctf2Unavailable`，`probe` 则直接跳过这个候选端点）。
+            # 转成 `KernelUnavailable`，`probe` 则直接跳过这个候选端点）。
             raise
         except BaseException as exc:  # noqa: BLE001
             # ★ 这里是 httpx **内部**解析 Location 时抛出来的那两类
             #   （见 `_LIBRARY_URL_ERRORS` 上的说明）：畸形 Location 会在
             #   `client.request()` 里就炸，我们的 `_next_url` 还没机会执行。
-            #   只有"确实是地址/网络层面"的才转成 `Ctf2Error`；其它的
+            #   只有"确实是地址/网络层面"的才转成 `KernelError`；其它的
             #   （我们自己的编程错误）原样上抛，别用一个"平台的问题"盖住它。
             if _is_transport_level(exc):
-                raise Ctf2Error(
+                raise KernelError(
                     f"平台给的跳转地址无法使用（{type(exc).__name__}）：{exc}"
                 ) from exc
             raise
@@ -483,11 +483,11 @@ async def request_same_host(
 
         # ② 协议必须仍是 http(s)：`file://` 之类不能跟。
         if target.scheme not in ("http", "https"):
-            raise Ctf2Error(f"平台把请求重定向到了不支持的协议（{target.scheme}）。")
+            raise KernelError(f"平台把请求重定向到了不支持的协议（{target.scheme}）。")
 
         # ③ ★ 核心判据：**禁止跳转到用户没填过的主机**。
         if (target.host or "").lower() != base_host:
-            raise Ctf2Error(
+            raise KernelError(
                 f"平台把请求重定向到了另一个主机（{target.host}），已拒绝。"
                 "平台地址只允许指向你填写的那个主机。"
             )
@@ -506,7 +506,7 @@ async def request_same_host(
 
         current = target
 
-    raise Ctf2Error(f"平台连续跳转超过 {max_hops} 次，已中止（可能在绕圈）。")
+    raise KernelError(f"平台连续跳转超过 {max_hops} 次，已中止（可能在绕圈）。")
 
 
 __all__ = ["MAX_HOPS", "REDIRECT_CODES", "request_same_host"]

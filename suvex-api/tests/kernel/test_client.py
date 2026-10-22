@@ -1,9 +1,9 @@
-"""`Ctf2Client` 的行为：覆盖 401/403/429/退避/轮询超时。
+"""`KernelClient` 的行为：覆盖 401/403/429/退避/轮询超时。
 
 ## 打桩打在**传输层**，不打在方法上
 
 所有用例都走 `patch_ctf2_transport`（替换模块里的 `httpx.AsyncClient`），
-于是 `Ctf2Client` 自己那套 URL 构造、请求头、状态码解释、退避与轮询
+于是 `KernelClient` 自己那套 URL 构造、请求头、状态码解释、退避与轮询
 **全部真的跑一遍**。直接 mock `client.list_competitions` 会让
 "我们到底发了什么请求、怎么理解对方的回应"整块跳过 ——
 而那正是这个文件最值得测的部分。与 `tests/test_providers.py`
@@ -26,7 +26,7 @@ import httpx
 import pytest
 
 from app.kernel import client as ctf2
-from tests.ctf2.conftest import (
+from tests.kernel.conftest import (
     TEST_PAT,
     FakeClock,
     json_response,
@@ -37,7 +37,7 @@ from tests.ctf2.conftest import (
 P = "/api/open/v1/user"
 
 
-def _client(fake_clock: FakeClock, **overrides) -> ctf2.Ctf2Client:
+def _client(fake_clock: FakeClock, **overrides) -> ctf2.KernelClient:
     """默认参数的客户端。测试要改的只有那几项，其余保持生产形状。"""
     kwargs = {
         "token": TEST_PAT,
@@ -50,7 +50,7 @@ def _client(fake_clock: FakeClock, **overrides) -> ctf2.Ctf2Client:
         ),
     }
     kwargs.update(overrides)
-    return ctf2.Ctf2Client(**kwargs)
+    return ctf2.KernelClient(**kwargs)
 
 
 # ══════════════════════════════════════════════════════════
@@ -66,7 +66,7 @@ def test_client_refuses_to_start_without_a_token() -> None:
     那个误导会把排查方向带偏一整轮。
     """
     with pytest.raises(ValueError, match="PAT"):
-        ctf2.Ctf2Client(token="")
+        ctf2.KernelClient(token="")
 
 
 def test_client_refuses_a_non_official_base_url() -> None:
@@ -75,8 +75,8 @@ def test_client_refuses_a_non_official_base_url() -> None:
     这是凭据边界：一个被配错的 base_url 会把 PAT 发到**每一次**请求上。
     等到第一次 401 才发现，PAT 已经出去了。
     """
-    with pytest.raises(ctf2.Ctf2Error, match="不在允许范围"):
-        ctf2.Ctf2Client(token=TEST_PAT, base_url="https://ctf2-dasctf.evil.example")
+    with pytest.raises(ctf2.KernelError, match="不在允许范围"):
+        ctf2.KernelClient(token=TEST_PAT, base_url="https://ctf2-dasctf.evil.example")
 
 
 def test_official_subdomain_is_allowed() -> None:
@@ -86,7 +86,7 @@ def test_official_subdomain_is_allowed() -> None:
     `endswith("dasctf.com")` 会放过 `evil-dasctf.com`（见下一个用例），
     而写成正确形式就能收窄到真子域。
     """
-    client = ctf2.Ctf2Client(token=TEST_PAT, base_url="https://api.ctf2.dasctf.com")
+    client = ctf2.KernelClient(token=TEST_PAT, base_url="https://api.ctf2.dasctf.com")
     assert client is not None
 
 
@@ -100,14 +100,14 @@ def test_official_subdomain_is_allowed() -> None:
     ],
 )
 def test_target_whitelist_rejects_lookalikes(url: str) -> None:
-    with pytest.raises(ctf2.Ctf2Error):
+    with pytest.raises(ctf2.KernelError):
         ctf2.assert_allowed_target(url)
 
 
 def test_target_whitelist_accepts_the_challenge_environment() -> None:
     """本题的 access_url 由调用方传进来 —— 而它必须**逐题**给。"""
     ctf2.assert_allowed_target("http://1.2.3.4:8080", allowed_extra=("1.2.3.4:8080",))
-    with pytest.raises(ctf2.Ctf2Error):
+    with pytest.raises(ctf2.KernelError):
         ctf2.assert_allowed_target("http://5.6.7.8:8080", allowed_extra=("1.2.3.4:8080",))
 
 
@@ -141,7 +141,7 @@ async def test_token_never_appears_in_logs(
     patch_ctf2_transport(monkeypatch, json_response(500, {"error": "boom"}))
     with caplog.at_level(logging.DEBUG):
         async with _client(fake_clock) as client:
-            with pytest.raises(ctf2.Ctf2Unavailable):
+            with pytest.raises(ctf2.KernelUnavailable):
                 await client.list_competitions()
 
     assert TEST_PAT not in caplog.text
@@ -164,7 +164,7 @@ async def test_401_raises_auth_expired_and_does_not_retry(
         monkeypatch, json_response(401, {"error": "invalid token"})
     )
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2AuthExpired) as excinfo:
+        with pytest.raises(ctf2.KernelAuthExpired) as excinfo:
             await client.list_competitions()
 
     assert len(recorded) == 1, "401 不该重试"
@@ -183,7 +183,7 @@ async def test_401_detail_is_redacted(monkeypatch, fake_clock: FakeClock) -> Non
         monkeypatch, json_response(401, {"error": f"bad credentials: Bearer {TEST_PAT}"})
     )
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2AuthExpired) as excinfo:
+        with pytest.raises(ctf2.KernelAuthExpired) as excinfo:
             await client.list_competitions()
 
     assert TEST_PAT not in (excinfo.value.detail or "")
@@ -202,7 +202,7 @@ async def test_403_carries_the_missing_scope(monkeypatch, fake_clock: FakeClock)
         ),
     )
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2ScopeMissing) as excinfo:
+        with pytest.raises(ctf2.KernelScopeMissing) as excinfo:
             await client.start_environment(practice_id="1", challenge_id="2")
 
     assert excinfo.value.missing_scope == "environment:start"
@@ -219,7 +219,7 @@ async def test_403_without_a_named_scope_still_works(
     """
     patch_ctf2_transport(monkeypatch, json_response(403, {"detail": "no permission"}))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2ScopeMissing) as excinfo:
+        with pytest.raises(ctf2.KernelScopeMissing) as excinfo:
             await client.list_practice()
 
     assert excinfo.value.missing_scope is None
@@ -240,7 +240,7 @@ async def test_403_scope_is_found_in_several_shapes(
     """响应形状是**别人家的**，所以尽量认几种 —— 但不认的就说不认。"""
     patch_ctf2_transport(monkeypatch, json_response(403, payload))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2ScopeMissing) as excinfo:
+        with pytest.raises(ctf2.KernelScopeMissing) as excinfo:
             await client.list_practice()
     assert excinfo.value.missing_scope
 
@@ -309,7 +309,7 @@ async def test_retry_after_as_http_date_is_understood(
 
     patch_ctf2_transport(monkeypatch, handler)
     async with _client(fake_clock, retry=ctf2.RetryPolicy(max_attempts=1)) as client:
-        with pytest.raises(ctf2.Ctf2RateLimited) as excinfo:
+        with pytest.raises(ctf2.KernelRateLimited) as excinfo:
             await client.list_competitions()
 
     # date 形态会有几百毫秒的解析误差（now 与 moment 之间真实流逝），
@@ -335,7 +335,7 @@ async def test_huge_retry_after_is_refused_instead_of_slept(
 
     patch_ctf2_transport(monkeypatch, handler)
     async with _client(fake_clock, retry=ctf2.RetryPolicy(max_retry_after=120.0)) as client:
-        with pytest.raises(ctf2.Ctf2RateLimited) as excinfo:
+        with pytest.raises(ctf2.KernelRateLimited) as excinfo:
             await client.list_competitions()
 
     assert fake_clock.sleeps == [], "不该真的睡下去"
@@ -350,7 +350,7 @@ async def test_429_exhausting_attempts_raises_rate_limited(
 
     patch_ctf2_transport(monkeypatch, handler)
     async with _client(fake_clock, retry=ctf2.RetryPolicy(max_attempts=3, base_delay=1.0)) as client:
-        with pytest.raises(ctf2.Ctf2RateLimited):
+        with pytest.raises(ctf2.KernelRateLimited):
             await client.list_competitions()
 
     assert len(fake_clock.sleeps) == 2  # 3 次尝试之间睡 2 次
@@ -373,7 +373,7 @@ async def test_5xx_backoff_is_exponential(monkeypatch, fake_clock: FakeClock) ->
         fake_clock,
         retry=ctf2.RetryPolicy(max_attempts=4, base_delay=1.0, max_delay=60.0, jitter_ratio=0.0),
     ) as client:
-        with pytest.raises(ctf2.Ctf2Unavailable):
+        with pytest.raises(ctf2.KernelUnavailable):
             await client.list_competitions()
 
     assert fake_clock.sleeps == [1.0, 2.0, 4.0]
@@ -386,7 +386,7 @@ async def test_backoff_is_capped_at_max_delay(monkeypatch, fake_clock: FakeClock
         fake_clock,
         retry=ctf2.RetryPolicy(max_attempts=6, base_delay=1.0, max_delay=4.0, jitter_ratio=0.0),
     ) as client:
-        with pytest.raises(ctf2.Ctf2Unavailable):
+        with pytest.raises(ctf2.KernelUnavailable):
             await client.list_competitions()
 
     assert fake_clock.sleeps == [1.0, 2.0, 4.0, 4.0, 4.0]
@@ -428,7 +428,7 @@ def test_zero_jitter_is_allowed_for_deterministic_tests() -> None:
 async def test_network_error_is_retried_then_reported(
     monkeypatch, fake_clock: FakeClock
 ) -> None:
-    """连接失败要重试（链路抖动很常见），用尽后抛 `Ctf2Unavailable`。"""
+    """连接失败要重试（链路抖动很常见），用尽后抛 `KernelUnavailable`。"""
 
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused", request=request)
@@ -437,7 +437,7 @@ async def test_network_error_is_retried_then_reported(
     async with _client(
         fake_clock, retry=ctf2.RetryPolicy(max_attempts=3, base_delay=1.0, jitter_ratio=0.0)
     ) as client:
-        with pytest.raises(ctf2.Ctf2Unavailable):
+        with pytest.raises(ctf2.KernelUnavailable):
             await client.list_competitions()
 
     assert fake_clock.sleeps == [1.0, 2.0]
@@ -449,7 +449,7 @@ async def test_4xx_other_than_auth_is_not_retried(
     """404 / 400 这类**不重试** —— "请求错的或平台改了接口"，重试没有意义。"""
     recorded = patch_ctf2_transport(monkeypatch, json_response(404, {"error": "nope"}))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2ResponseError):
+        with pytest.raises(ctf2.KernelResponseError):
             await client.get_practice_challenge("1", "2")
 
     assert len(recorded) == 1
@@ -510,7 +510,7 @@ async def test_submit_is_not_retried_on_network_failure(
 
     recorded = patch_ctf2_transport(monkeypatch, handler)
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2Unavailable):
+        with pytest.raises(ctf2.KernelUnavailable):
             await client.submit_flag(practice_id="1", challenge_id="2", flag="flag{x}")
 
     assert len(recorded) == 1
@@ -711,7 +711,7 @@ async def test_environment_other_4xx_still_raises(
 
     patch_ctf2_transport(monkeypatch, handler)
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2ResponseError) as info:
+        with pytest.raises(ctf2.KernelResponseError) as info:
             await client.start_environment_until_ready(practice_id="1", challenge_id="2")
 
     # 状态码必须被带出来：调用方靠它分类，而不是靠 message 文案。
@@ -747,13 +747,13 @@ async def test_environment_poll_times_out_on_wall_clock(
 ) -> None:
     """★ 总超时：平台一直说"还没好"时我们必须能停下来。
 
-    异常类型是 `Ctf2EnvironmentTimeout` 而不是"启动失败"——
+    异常类型是 `KernelEnvironmentTimeout` 而不是"启动失败"——
     环境**可能还在起**，补救动作是"过一会儿再启动一次"（幂等，安全），
     不是"去看日志"。
     """
     patch_ctf2_transport(monkeypatch, json_response(200, {"access_ready": False}))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2EnvironmentTimeout) as excinfo:
+        with pytest.raises(ctf2.KernelEnvironmentTimeout) as excinfo:
             await client.start_environment_until_ready(
                 practice_id="1",
                 challenge_id="2",
@@ -778,7 +778,7 @@ async def test_environment_poll_stops_at_max_polls(
     """
     patch_ctf2_transport(monkeypatch, json_response(200, {"access_ready": False}))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2EnvironmentTimeout) as excinfo:
+        with pytest.raises(ctf2.KernelEnvironmentTimeout) as excinfo:
             await client.start_environment_until_ready(
                 practice_id="1",
                 challenge_id="2",
@@ -801,7 +801,7 @@ async def test_environment_poll_sleep_is_clamped_by_the_deadline(
     """
     patch_ctf2_transport(monkeypatch, json_response(200, {"access_ready": False}))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2EnvironmentTimeout):
+        with pytest.raises(ctf2.KernelEnvironmentTimeout):
             await client.start_environment_until_ready(
                 practice_id="1",
                 challenge_id="2",
@@ -825,7 +825,7 @@ async def test_environment_start_failure_is_propagated_not_swallowed(
     """
     patch_ctf2_transport(monkeypatch, json_response(401, {"error": "expired"}))
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2AuthExpired):
+        with pytest.raises(ctf2.KernelAuthExpired):
             await client.start_environment_until_ready(
                 practice_id="1", challenge_id="2", total_timeout_seconds=600.0
             )
@@ -840,12 +840,12 @@ async def test_environment_429_does_not_abandon_the_whole_poll(
     界面显示「启动失败 · CTF2 限流（429），已重试到上限」，而每一道都是
     `turns=0` —— 一个 token 都没花在解题上。
 
-    根因：`_request` 在 4 次重试后抛 `Ctf2RateLimited`，而当时的轮询
+    根因：`_request` 在 4 次重试后抛 `KernelRateLimited`，而当时的轮询
     循环只捕了 404，429 直接穿出去，把 **300 秒的预算**整个作废。
     换句话说，我们因为"被要求等 1 秒"而放弃了"还能等 300 秒"的机会。
 
     这里构造的正是那个形状：先连续 429（每次带 `Retry-After: 1`），
-    然后环境就绪。修复前它会抛 `Ctf2RateLimited`；修复后应当拿到地址。
+    然后环境就绪。修复前它会抛 `KernelRateLimited`；修复后应当拿到地址。
     """
     # `_request` 对 429 会自己重试 `max_attempts` 次才抛 —— 所以要喂
     # 足够多的 429 让它先抛出来，再由**轮询循环**接手继续等。
@@ -894,8 +894,8 @@ async def test_environment_429_still_gives_up_at_the_wall_clock(
     它 —— 唯一的护栏是墙钟。把这条钉住，免得将来有人以为"429 会自己
     停下来"。
 
-    抛的必须是 `Ctf2EnvironmentTimeout`（"可能还在起，过会儿再试"），
-    而**不是** `Ctf2RateLimited`（"别试了"）—— 两者的补救动作不同。
+    抛的必须是 `KernelEnvironmentTimeout`（"可能还在起，过会儿再试"），
+    而**不是** `KernelRateLimited`（"别试了"）—— 两者的补救动作不同。
     """
     patch_ctf2_transport(
         monkeypatch,
@@ -906,7 +906,7 @@ async def test_environment_429_still_gives_up_at_the_wall_clock(
         ),
     )
     async with _client(fake_clock) as client:
-        with pytest.raises(ctf2.Ctf2EnvironmentTimeout):
+        with pytest.raises(ctf2.KernelEnvironmentTimeout):
             await client.start_environment_until_ready(
                 practice_id="1", challenge_id="2", total_timeout_seconds=10.0
             )
@@ -976,7 +976,7 @@ async def test_endpoint_paths_match_the_platform_contract(
     """★ 端点路径的对账测试。
 
     路径拼错是这一层最可能的 bug，而它的症状是 404 ——
-    会被 `Ctf2ResponseError` 报成"平台接口可能变更了"，
+    会被 `KernelResponseError` 报成"平台接口可能变更了"，
     排查方向直接跑到"平台改接口了"那里去。
     所以把全部路径写成一张表断言一次。
     """
@@ -1269,7 +1269,7 @@ def test_every_module_that_builds_a_client_is_covered(
     import ast
     import pathlib
 
-    from tests.ctf2.conftest import CTF2_CLIENT_MODULES
+    from tests.kernel.conftest import CTF2_CLIENT_MODULES
 
     #: 会构造 client、但**不需要**被本夹具覆盖的模块（附理由）。
     #:
@@ -1287,10 +1287,13 @@ def test_every_module_that_builds_a_client_is_covered(
 
     covered = set(CTF2_CLIENT_MODULES) | NOT_NEEDED
     app_root = pathlib.Path(__file__).resolve().parents[2] / "app"
-    ctf2_root = app_root / "ctf2"
+    # v0.53：包目录 app/ctf2 → app/kernel 已重命名，扫描根必须跟着改。
+    # 不改的症状是：rglob 一个不存在的目录 → builders 恒为空 →
+    # 夹具表里每个模块都被判成「不再自己建 client」而误报 stale。
+    kernel_root = app_root / "kernel"
 
     builders: set[str] = set()
-    for path in ctf2_root.rglob("*.py"):
+    for path in kernel_root.rglob("*.py"):
         if "__pycache__" in path.parts:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"))

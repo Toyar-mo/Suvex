@@ -14,11 +14,11 @@ import time
 import pytest
 from sqlalchemy.orm import Session
 
-from app.core.vocab import Ctf2ChallengeStatus
+from app.core.vocab import KernelChallengeStatus
 from app.kernel import scheduler as scheduler_module
-from app.kernel.models import Ctf2Challenge
-from app.kernel.scheduler import Ctf2Scheduler
-from tests.ctf2.conftest import _make_challenge
+from app.kernel.models import KernelChallenge
+from app.kernel.scheduler import KernelScheduler
+from tests.kernel.conftest import _make_challenge
 
 
 @pytest.fixture(autouse=True)
@@ -134,8 +134,8 @@ def test_the_loop_does_not_read_the_scan_poll_setting() -> None:
     """
     import inspect
 
-    source = inspect.getsource(scheduler_module.Ctf2Scheduler._loop)
-    source += inspect.getsource(scheduler_module.Ctf2Scheduler._interval)
+    source = inspect.getsource(scheduler_module.KernelScheduler._loop)
+    source += inspect.getsource(scheduler_module.KernelScheduler._interval)
     assert "scan_poll_seconds" not in source, (
         "调度循环又在读扫描的轮询设置了 —— 那会让"
         "「改扫描轮询」意外改变 CTF2 的认领延迟（v0.24 修过这处耦合）"
@@ -178,7 +178,7 @@ def test_claim_prefers_higher_priority(db_session: Session, ctf2_competition, mo
     last.priority = 10
     db_session.commit()
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.tick() == 1
     assert started == [last.id], (
         "优先级高的应当先被认领 —— 这正是「调整解题优先级」要能生效的地方"
@@ -214,7 +214,7 @@ def test_claim_falls_back_to_fifo_when_priorities_are_equal(
     # "将来有人给模型加了非 0 默认值"之后会静默失去意义。
     assert first.priority == 0
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.tick() == 1
     assert started == [first.id], "同优先级下应当是先入先出"
 
@@ -243,7 +243,7 @@ def test_setting_priority_does_not_touch_a_running_challenge(
     running = _make_challenge(db_session, ctf2_competition, remote_id="run", status="solving")
     _make_challenge(db_session, ctf2_competition, remote_id="wait", status="solving")
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.tick() == 1
     assert started == [running.id]
 
@@ -337,7 +337,7 @@ def test_tick_respects_the_concurrency_limit(
             db_session, ctf2_competition, remote_id=str(index), status="solving"
         )
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.tick() == 2, "上限是 2，一轮最多起 2 个"
     assert len(started) == 2
 
@@ -369,7 +369,7 @@ def test_finished_workers_free_up_slots(
             db_session, ctf2_competition, remote_id=str(index), status="solving"
         )
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     scheduler.tick()
     time.sleep(0.3)  # 让第一个 worker 线程结束
     scheduler.tick()
@@ -403,9 +403,9 @@ def test_queue_is_fifo(db_session: Session, ctf2_competition, monkeypatch) -> No
         from app.core.db import session_scope
 
         with session_scope() as db:
-            row = db.get(Ctf2Challenge, challenge_id)
+            row = db.get(KernelChallenge, challenge_id)
             if row is not None:
-                row.status = Ctf2ChallengeStatus.FAILED.value
+                row.status = KernelChallengeStatus.FAILED.value
             db.commit()
 
     monkeypatch.setattr("app.kernel.runner.run_worker", recording_worker)
@@ -415,7 +415,7 @@ def test_queue_is_fifo(db_session: Session, ctf2_competition, monkeypatch) -> No
     time.sleep(0.05)
     second = _make_challenge(db_session, ctf2_competition, remote_id="2", status="solving")
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     scheduler.tick()
     time.sleep(0.3)
     scheduler.tick()
@@ -436,7 +436,7 @@ def test_non_solving_challenges_are_never_claimed(
     _make_challenge(db_session, ctf2_competition, remote_id="1", status="unsolved")
     _make_challenge(db_session, ctf2_competition, remote_id="2", status="failed")
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.tick() == 0
     assert started == []
 
@@ -462,12 +462,12 @@ def test_recover_orphans_resets_solving_challenges(
         db_session, ctf2_competition, remote_id="9", status="solving"
     )
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.recover_orphans() == 1
 
     db_session.expire_all()
     refreshed = db_session.get(type(challenge), challenge.id)
-    assert refreshed.status == Ctf2ChallengeStatus.UNSOLVED.value
+    assert refreshed.status == KernelChallengeStatus.UNSOLVED.value
     assert refreshed.last_error and "未完成" in refreshed.last_error
 
 
@@ -493,12 +493,12 @@ def test_recover_orphans_also_resets_environment_ready(
         db_session, ctf2_competition, remote_id="9b", status="environment_ready"
     )
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     assert scheduler.recover_orphans() == 1
 
     db_session.expire_all()
     refreshed = db_session.get(type(challenge), challenge.id)
-    assert refreshed.status == Ctf2ChallengeStatus.UNSOLVED.value
+    assert refreshed.status == KernelChallengeStatus.UNSOLVED.value
 
 
 def test_recover_orphans_emits_an_event(
@@ -516,7 +516,7 @@ def test_recover_orphans_emits_an_event(
     challenge = _make_challenge(
         db_session, ctf2_competition, remote_id="8", status="solving"
     )
-    Ctf2Scheduler().recover_orphans()
+    KernelScheduler().recover_orphans()
 
     db_session.expire_all()
     refreshed = db_session.get(type(challenge), challenge.id)
@@ -534,7 +534,7 @@ def test_recover_orphans_is_a_noop_when_nothing_is_running(
     db_session: Session, ctf2_competition
 ) -> None:
     _make_challenge(db_session, ctf2_competition, remote_id="1", status="unsolved")
-    assert Ctf2Scheduler().recover_orphans() == 0
+    assert KernelScheduler().recover_orphans() == 0
 
 
 # ══════════════════════════════════════════════════════════
@@ -561,7 +561,7 @@ def test_stop_waits_for_running_workers(
     monkeypatch.setattr(scheduler_module, "max_concurrent", lambda db=None: 1)
 
     _make_challenge(db_session, ctf2_competition, remote_id="1", status="solving")
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     scheduler.tick()
     scheduler.stop(timeout=3.0)
 
@@ -587,7 +587,7 @@ def test_stop_warns_when_workers_outlive_the_timeout(
     monkeypatch.setattr(scheduler_module, "max_concurrent", lambda db=None: 1)
 
     _make_challenge(db_session, ctf2_competition, remote_id="1", status="solving")
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     with caplog.at_level(logging.WARNING):
         scheduler.tick()
         scheduler.stop(timeout=0.2)
@@ -604,18 +604,18 @@ def test_scheduler_singleton_is_not_duplicated() -> None:
     是没有任何症状的**。
     """
     created: list[int] = []
-    original = scheduler_module.Ctf2Scheduler
+    original = scheduler_module.KernelScheduler
 
     class Counting(original):  # type: ignore[misc, valid-type]
         def __init__(self) -> None:
             created.append(1)
             super().__init__()
 
-    scheduler_module.Ctf2Scheduler = Counting  # type: ignore[misc]
+    scheduler_module.KernelScheduler = Counting  # type: ignore[misc]
     try:
         results = [scheduler_module.get_scheduler() for _ in range(8)]
     finally:
-        scheduler_module.Ctf2Scheduler = original  # type: ignore[misc]
+        scheduler_module.KernelScheduler = original  # type: ignore[misc]
 
     assert len(created) <= 2, f"被创建了 {len(created)} 次"
     assert len({id(item) for item in results}) == 1
@@ -637,7 +637,7 @@ def test_stats_reports_running_and_limit(
     monkeypatch.setattr(scheduler_module, "max_concurrent", lambda db=None: 2)
 
     _make_challenge(db_session, ctf2_competition, remote_id="1", status="solving")
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     scheduler.tick()
     time.sleep(0.2)
 
@@ -664,11 +664,11 @@ def test_enqueue_sets_solving_and_triggers_a_tick(
     )
     monkeypatch.setattr(scheduler_module, "max_concurrent", lambda db=None: 2)
 
-    scheduler = Ctf2Scheduler()
+    scheduler = KernelScheduler()
     scheduler.enqueue(ctf2_challenge.id)
     time.sleep(0.2)
 
     db_session.expire_all()
     refreshed = db_session.get(type(ctf2_challenge), ctf2_challenge.id)
-    assert refreshed.status == Ctf2ChallengeStatus.SOLVING.value
+    assert refreshed.status == KernelChallengeStatus.SOLVING.value
     assert started == [ctf2_challenge.id]

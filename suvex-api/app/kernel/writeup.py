@@ -399,7 +399,7 @@ def build_writeup(
         lines.append(description)
         lines.append("")
 
-    # ⚠️ **刻意不列"环境地址"**：`Ctf2Challenge` 上没有 environment 关系
+    # ⚠️ **刻意不列"环境地址"**：`KernelChallenge` 上没有 environment 关系
     #    （环境是单独一张表、单独查的），而 `build_writeup` 是**纯函数**
     #    （输入只有 challenge + outcome）。为一个可选展示去扩它的签名，
     #    会让"给定输入必得同一输出"这条性质变弱，也会让调用方多一次查询。
@@ -626,7 +626,7 @@ def filename_for(challenge: Any) -> str:
 
     ⚠️ 与 `scans/writeup.py` 的 `filename_for` 同一套规则（去掉文件名
     里不安全的字符），但**不共用函数** —— 那边的签名吃的是 `Scan`，
-    这里的吃 `Ctf2Challenge`，硬凑一个通用函数会让两边都难读。
+    这里的吃 `KernelChallenge`，硬凑一个通用函数会让两边都难读。
     """
     raw = getattr(challenge, "title", "") or "writeup"
     safe = "".join(ch if ch.isalnum() or ch in "-_（）()【】" else "_" for ch in raw)

@@ -637,7 +637,7 @@ def sweep_orphan_ctf2_workspaces(db) -> int:  # noqa: ANN001
     """
     from sqlalchemy import select
 
-    from app.kernel.models import Ctf2Challenge
+    from app.kernel.models import KernelChallenge
 
     root = get_settings().scan_root / "_ctf2_workspaces"
     if not root.is_dir():
@@ -650,7 +650,7 @@ def sweep_orphan_ctf2_workspaces(db) -> int:  # noqa: ANN001
     # 一次查完，不要每个目录查一次库。
     known = set(
         db.execute(
-            select(Ctf2Challenge.id).where(Ctf2Challenge.id.in_(on_disk))
+            select(KernelChallenge.id).where(KernelChallenge.id.in_(on_disk))
         ).scalars()
     )
     removed = 0

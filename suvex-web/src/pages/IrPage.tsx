@@ -46,8 +46,8 @@ import { ClipboardList, FileText, Siren, Upload } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { PageHeader } from '@/components/layout/AppShell'
-import { WorkOrderDialog } from '@/components/ctf2'
-import { WriteupDialog } from '@/components/ctf2/WriteupDialog'
+import { WorkOrderDialog } from '@/components/kernel'
+import { WriteupDialog } from '@/components/kernel/WriteupDialog'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -57,11 +57,11 @@ import {
   canHaveWorkOrder,
   canHaveWriteup,
   createIrTask,
-  loadCtf2,
+  loadKernel,
   solveChallenge,
-  useCtf2,
-  type Ctf2Challenge,
-} from '@/data/ctf2'
+  useKernel,
+  type KernelChallenge,
+} from '@/data/kernel'
 import { stageScanAttachments } from '@/data/scans-store'
 import { errorMessage } from '@/lib/api'
 
@@ -76,7 +76,7 @@ const IR_CATEGORY_PREFIX = 'ir-'
  * 靠批次判会把它们全漏掉；而 v0.43 之后本地复盘在 `kind='local'`
  * 批次里，但**将来也可能有平台上的 IR 题**。分类是唯一稳定的判据。
  */
-function isIrChallenge(challenge: Ctf2Challenge): boolean {
+function isIrChallenge(challenge: KernelChallenge): boolean {
   return (challenge.category || '').trim().toLowerCase().startsWith(IR_CATEGORY_PREFIX)
 }
 
@@ -91,7 +91,7 @@ function isIrChallenge(challenge: Ctf2Challenge): boolean {
  *
  * 判据只能落在"有没有产物"上：有工单或有题解 = 跑过了。
  */
-function irStatusText(challenge: Ctf2Challenge, ranBefore: boolean): string {
+function irStatusText(challenge: KernelChallenge, ranBefore: boolean): string {
   if (challenge.status === 'solving' || challenge.status === 'environment_ready') {
     return '复盘中'
   }
@@ -105,7 +105,7 @@ function irStatusText(challenge: Ctf2Challenge, ranBefore: boolean): string {
 
 /** 一个复盘任务条目需要的全部信息。 */
 interface IrTaskView {
-  challenge: Ctf2Challenge
+  challenge: KernelChallenge
   /** 跑过没有 —— 靠"有没有工单文件"判断，见 `irStatusText`。 */
   ranBefore: boolean
 }
@@ -114,10 +114,10 @@ export function IrPage() {
   // ★ 复用 CTF2 的 store，而不是新建一个。
   //
   // 复盘任务与 CTF2 题目在数据库里**是同一张表同一行**
-  // （`Ctf2Challenge`，靠 `category` 前缀区分）。另建一个 store 会让
+  // （`KernelChallenge`，靠 `category` 前缀区分）。另建一个 store 会让
   // 两个页面各自缓存一份同一批数据，症状是"在 CTF2 页跑完，切到
   // 应急响应页还显示待复盘"。
-  const snapshot = useCtf2()
+  const snapshot = useKernel()
 
   const [title, setTitle] = useState('')
   const [brief, setBrief] = useState('')
@@ -127,8 +127,8 @@ export function IrPage() {
   const [starting, setStarting] = useState<string | null>(null)
 
   /** 点开的是哪一道题的哪个产物（两个独立 state，刻意不合并 —— 它们是两件事）。 */
-  const [workOrderChallenge, setWorkOrderChallenge] = useState<Ctf2Challenge | null>(null)
-  const [writeupChallenge, setWriteupChallenge] = useState<Ctf2Challenge | null>(null)
+  const [workOrderChallenge, setWorkOrderChallenge] = useState<KernelChallenge | null>(null)
+  const [writeupChallenge, setWriteupChallenge] = useState<KernelChallenge | null>(null)
 
   /**
    * 哪些题**跑过**。
@@ -166,7 +166,7 @@ export function IrPage() {
     if (loaded.current) return
     loaded.current = true
     if (snapshot.status !== 'idle') return
-    void loadCtf2()
+    void loadKernel()
   }, [snapshot.status])
 
   const onPickFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
@@ -216,7 +216,7 @@ export function IrPage() {
       setTitle('')
       setBrief('')
       setFiles([])
-      await loadCtf2({ silent: true })
+      await loadKernel({ silent: true })
     } catch (error) {
       setNotice(errorMessage(error) || '建任务失败，请稍后重试。')
     } finally {
@@ -225,7 +225,7 @@ export function IrPage() {
   }, [brief, files, title])
 
   const onStart = useCallback(
-    async (challenge: Ctf2Challenge) => {
+    async (challenge: KernelChallenge) => {
       setStarting(challenge.id)
       try {
         await solveChallenge(challenge.id, {})
@@ -316,7 +316,7 @@ export function IrPage() {
           {snapshot.status === 'error' && (
             <ErrorState
               error={snapshot.error}
-              onRetry={() => void loadCtf2()}
+              onRetry={() => void loadKernel()}
               title="复盘任务列表加载失败"
             />
           )}

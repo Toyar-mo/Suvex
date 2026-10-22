@@ -29,7 +29,7 @@ false"**。区分不了，给默认值就是在替调用方做决定。`false` �
 
 ## 两处都要拦：HTTP 入口与 service 入口
 
-`Ctf2SettingsIn` 的必填字段只拦得住打 HTTP 的那一侧。`tests/` 里大量
+`KernelSettingsIn` 的必填字段只拦得住打 HTTP 的那一侧。`tests/` 里大量
 helper 与运维脚本是**直接调 `service.update_ctf2_settings`** 的，那条路径
 不经过 pydantic。如果只改 schema，同一个缺陷会从另一个入口原样复现 ——
 所以 `update_ctf2_settings` 的两个开关形参也去掉了默认值，改成必填
@@ -58,7 +58,7 @@ API = "/api/v1"
 
 #: 两个场景包开关。它们被单独拎出来是因为**只有它们**曾经带默认值
 #: （`fallbackProviderId` 也带，但它是可空字段，`None` 与"不传"等价，
-#: 不构成替调用方做决定 —— 见 `Ctf2SettingsIn` 的说明）。
+#: 不构成替调用方做决定 —— 见 `KernelSettingsIn` 的说明）。
 SCENARIO_SWITCHES = ("enableAgentsecScenarios", "enableIrScenarios")
 
 
@@ -199,7 +199,7 @@ def test_service_function_requires_both_switches(
 ) -> None:
     """★★ 直接调 service 函数时漏传 → 立刻 `TypeError`。
 
-    为什么这条不能省：`Ctf2SettingsIn` 只拦得住打 HTTP 的调用方。
+    为什么这条不能省：`KernelSettingsIn` 只拦得住打 HTTP 的调用方。
     `tests/` 里的 helper 和运维脚本是直接调这个函数的，那条路径
     不经过 pydantic —— 只改 schema 的话，同一个缺陷会从另一个入口
     原样复现。

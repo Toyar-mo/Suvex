@@ -492,7 +492,7 @@ export function ReportsPage() {
    *   · 组件卸载后那个 timer 照旧触发 `setNotice`。React 19 不再对卸载后
    *     setState 报警，所以它是**静默**的浪费 —— 不会有人发现它。
    *
-   * ⚠️ 这里用 ref 记 id，而不是 `Ctf2.tsx` 那种"`notice` 一变就重置计时"的
+   * ⚠️ 这里用 ref 记 id，而不是 `Kernel.tsx` 那种"`notice` 一变就重置计时"的
    *    effect：那个写法在**两条提示文字完全一样**时不会重跑（`notice` 的引用
    *    没变），于是第二次提示仍按第一次的剩余时间提前消失。而本页连续两次
    *    "已打开打印窗口 —— …"是完全可能的（先生成一份 PDF、再下载一份历史）。

@@ -1,5 +1,5 @@
 import { cn } from '@/lib/cn'
-import { SANDBOX_PROFILE_HINT, SANDBOX_PROFILE_LABEL, type Ctf2SandboxProfile } from '@/data/ctf2'
+import { SANDBOX_PROFILE_HINT, SANDBOX_PROFILE_LABEL, type KernelSandboxProfile } from '@/data/kernel'
 import { Boxes, Wrench } from 'lucide-react'
 
 /**
@@ -31,13 +31,13 @@ export function SandboxProfileSelect({
   compact = false,
   id = 'ctf2-sandbox-profile',
 }: {
-  value: Ctf2SandboxProfile
-  onChange: (next: Ctf2SandboxProfile) => void
+  value: KernelSandboxProfile
+  onChange: (next: KernelSandboxProfile) => void
   disabled?: boolean
   compact?: boolean
   id?: string
 }) {
-  const options: { value: Ctf2SandboxProfile; icon: typeof Boxes }[] = [
+  const options: { value: KernelSandboxProfile; icon: typeof Boxes }[] = [
     { value: 'ctf2-sandbox', icon: Boxes },
     { value: 'ctf2-sandbox-re', icon: Wrench },
   ]

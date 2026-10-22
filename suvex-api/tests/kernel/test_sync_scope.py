@@ -37,7 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
-from app.kernel.models import Ctf2Challenge, Ctf2Competition
+from app.kernel.models import KernelChallenge, KernelCompetition
 
 
 def _account(db: Session, *, remote_suffix: str, status: str = "active"):  # noqa: ANN202
@@ -48,9 +48,9 @@ def _account(db: Session, *, remote_suffix: str, status: str = "active"):  # noq
     而是真实数据形态：解绑后历史记录留着，题目也留着。
     """
     from app.core.crypto import encrypt_secret
-    from app.kernel.models import Ctf2Account
+    from app.kernel.models import KernelAccount
 
-    acc = Ctf2Account(
+    acc = KernelAccount(
         id=new_id("ctf2acc"),
         label=f"测试账号{remote_suffix}",
         token_encrypted=encrypt_secret("pat_test_" + remote_suffix),
@@ -62,7 +62,7 @@ def _account(db: Session, *, remote_suffix: str, status: str = "active"):  # noq
 
 
 def _competition(db: Session, account_id: str, *, remote_id: str, kind: str = "practice"):  # noqa: ANN202
-    comp = Ctf2Competition(
+    comp = KernelCompetition(
         id=new_id("ctf2comp"),
         account_id=account_id,
         remote_id=remote_id,
@@ -75,7 +75,7 @@ def _competition(db: Session, account_id: str, *, remote_id: str, kind: str = "p
 
 
 def _challenge(db: Session, competition_id: str, *, remote_id: str):  # noqa: ANN202
-    ch = Ctf2Challenge(
+    ch = KernelChallenge(
         id=new_id("ctf2chal"),
         competition_id=competition_id,
         remote_id=remote_id,
@@ -97,9 +97,9 @@ def _known_ids_for_account(db: Session, account_id: str) -> set[str]:
     return {
         str(x)
         for x in db.execute(
-            select(Ctf2Challenge.remote_id)
-            .join(Ctf2Competition, Ctf2Competition.id == Ctf2Challenge.competition_id)
-            .where(Ctf2Competition.account_id == account_id)
+            select(KernelChallenge.remote_id)
+            .join(KernelCompetition, KernelCompetition.id == KernelChallenge.competition_id)
+            .where(KernelCompetition.account_id == account_id)
         )
         .scalars()
         .all()
@@ -136,9 +136,9 @@ def test_old_accounts_tasks_do_not_leak_into_the_new_account(
     assert "task-1" in known_new
     # ★ 关键：作用域必须只覆盖新账号 —— 行数就是判据
     rows = db_session.execute(
-        select(Ctf2Challenge.id)
-        .join(Ctf2Competition, Ctf2Competition.id == Ctf2Challenge.competition_id)
-        .where(Ctf2Competition.account_id == new.id)
+        select(KernelChallenge.id)
+        .join(KernelCompetition, KernelCompetition.id == KernelChallenge.competition_id)
+        .where(KernelCompetition.account_id == new.id)
     ).scalars().all()
     assert len(rows) == 1, (
         "★ 作用域没收窄 —— 查到了已解绑账号的题，"

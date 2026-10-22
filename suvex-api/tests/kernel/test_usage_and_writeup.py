@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
 from app.kernel import runner, service
-from app.kernel.models import Ctf2SolveUsage, Ctf2Writeup
+from app.kernel.models import KernelSolveUsage, KernelWriteup
 
 # ══════════════════════════════════════════════════════════
 # 夹具：一条策略快照 + 一个 outcome
@@ -47,13 +47,13 @@ def _attempt(db: Session, challenge_id: str, *, llm_model: str = "test-model"):
     "`byAttempt` 的 model 来自 attempt 快照"这条断言就永远为真
     （空串也是假值，测不出 JOIN 有没有接上）。
     """
-    from app.core.vocab import Ctf2SubmitMode
-    from app.kernel.models import Ctf2SolveAttempt
+    from app.core.vocab import KernelSubmitMode
+    from app.kernel.models import KernelSolveAttempt
 
-    row = Ctf2SolveAttempt(
+    row = KernelSolveAttempt(
         id=new_id("ctf2try"),
         challenge_id=challenge_id,
-        mode=Ctf2SubmitMode.SAFE.value,
+        mode=KernelSubmitMode.SAFE.value,
         max_turns=40,
         sandbox_profile="ctf2-sandbox",
         llm_model=llm_model,
@@ -159,7 +159,7 @@ def test_record_solve_usages_skips_without_an_attempt(
 
     assert n == 0
     # 一条行都不该写进去
-    assert db_session.execute(select(func.count(Ctf2SolveUsage.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveUsage.id))).scalar() == 0
 
 
 def test_record_solve_usages_logs_a_warning_when_skipping(
@@ -191,7 +191,7 @@ def test_record_solve_usages_with_no_rows_is_a_noop(
     )
 
     assert n == 0
-    assert db_session.execute(select(func.count(Ctf2SolveUsage.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveUsage.id))).scalar() == 0
 
 
 def test_usage_rows_are_removed_with_their_attempt(
@@ -209,7 +209,7 @@ def test_usage_rows_are_removed_with_their_attempt(
     db_session.delete(attempt)
     db_session.commit()
 
-    assert db_session.execute(select(func.count(Ctf2SolveUsage.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveUsage.id))).scalar() == 0
 
 
 # ══════════════════════════════════════════════════════════
@@ -500,7 +500,7 @@ def test_save_writeup_inserts_once(db_session: Session, ctf2_challenge) -> None:
         elapsed_sec=42,
     )
 
-    rows = db_session.execute(select(Ctf2Writeup)).scalars().all()
+    rows = db_session.execute(select(KernelWriteup)).scalars().all()
     assert len(rows) == 1
     assert rows[0].challenge_id == ctf2_challenge.id
     assert rows[0].turns == 1
@@ -526,7 +526,7 @@ def test_save_writeup_updates_on_a_second_solve(db_session: Session, ctf2_challe
         attempt_id=second.id, elapsed_sec=99,
     )
 
-    rows = db_session.execute(select(Ctf2Writeup)).scalars().all()
+    rows = db_session.execute(select(KernelWriteup)).scalars().all()
     assert len(rows) == 1
     assert rows[0].attempt_id == second.id
     assert rows[0].turns == 7
@@ -588,7 +588,7 @@ def test_writeups_are_cascaded_with_their_challenge(db_session: Session, ctf2_ch
     ⚠️ 与上一条的方向相反，这是刻意的：
     challenge 是题解的**归属**，尝试只是它的**出处**。
     """
-    from app.kernel.models import Ctf2Challenge
+    from app.kernel.models import KernelChallenge
 
     attempt = _attempt(db_session, ctf2_challenge.id)
     service.save_writeup(
@@ -597,10 +597,10 @@ def test_writeups_are_cascaded_with_their_challenge(db_session: Session, ctf2_ch
         attempt_id=attempt.id, elapsed_sec=None,
     )
 
-    db_session.delete(db_session.get(Ctf2Challenge, ctf2_challenge.id))
+    db_session.delete(db_session.get(KernelChallenge, ctf2_challenge.id))
     db_session.commit()
 
-    assert db_session.execute(select(func.count(Ctf2Writeup.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelWriteup.id))).scalar() == 0
 
 
 # ══════════════════════════════════════════════════════════
@@ -640,7 +640,7 @@ def test_telemetry_writes_one_row_per_attempt(db_session: Session, ctf2_challeng
 
     ⚠️ 这条是整个 v0.45 的存在理由，不是细节。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     first = _attempt(db_session, ctf2_challenge.id)
     service.record_solve_telemetry(
@@ -660,7 +660,7 @@ def test_telemetry_writes_one_row_per_attempt(db_session: Session, ctf2_challeng
 
     rows = (
         db_session.execute(
-            select(Ctf2SolveTelemetry).order_by(Ctf2SolveTelemetry.created_at)
+            select(KernelSolveTelemetry).order_by(KernelSolveTelemetry.created_at)
         )
         .scalars()
         .all()
@@ -682,7 +682,7 @@ def test_telemetry_is_written_even_without_an_attempt(
     样本。为了外键好看把它们丢掉，等于让遥测只覆盖"走产品路径的那部分"
     ——而那恰好是最不需要被诊断的部分。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     ok = service.record_solve_telemetry(
         db_session,
@@ -692,7 +692,7 @@ def test_telemetry_is_written_even_without_an_attempt(
     )
 
     assert ok is True
-    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    row = db_session.execute(select(KernelSolveTelemetry)).scalars().one()
     assert row.attempt_id is None
     assert row.turns == 3
 
@@ -707,7 +707,7 @@ def test_telemetry_tolerates_an_outcome_without_the_new_fields(
     """
     from types import SimpleNamespace
 
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     ok = service.record_solve_telemetry(
         db_session,
@@ -717,7 +717,7 @@ def test_telemetry_tolerates_an_outcome_without_the_new_fields(
     )
 
     assert ok is True
-    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    row = db_session.execute(select(KernelSolveTelemetry)).scalars().one()
     assert (row.turns, row.tool_calls, row.notes_count) == (5, 0, 0)
 
 
@@ -744,7 +744,7 @@ def test_telemetry_records_whether_the_playbook_was_attached(
     """
     from types import SimpleNamespace
 
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     service.record_solve_telemetry(
         db_session,
@@ -761,7 +761,7 @@ def test_telemetry_records_whether_the_playbook_was_attached(
 
     rows = (
         db_session.execute(
-            select(Ctf2SolveTelemetry).order_by(Ctf2SolveTelemetry.created_at)
+            select(KernelSolveTelemetry).order_by(KernelSolveTelemetry.created_at)
         )
         .scalars()
         .all()
@@ -784,7 +784,7 @@ def test_telemetry_offensive_defaults_to_false_for_old_outcomes(
     """
     from types import SimpleNamespace
 
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     ok = service.record_solve_telemetry(
         db_session,
@@ -794,7 +794,7 @@ def test_telemetry_offensive_defaults_to_false_for_old_outcomes(
     )
 
     assert ok is True
-    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    row = db_session.execute(select(KernelSolveTelemetry)).scalars().one()
     assert row.offensive is False
 
 
@@ -818,7 +818,7 @@ def test_telemetry_does_not_count_scenario_tasks_as_attached(
     """
     from types import SimpleNamespace
 
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     for index, category in enumerate(
         ["agentsec-prompt-injection", "ir-timeline", "ir-scope"]
@@ -834,7 +834,7 @@ def test_telemetry_does_not_count_scenario_tasks_as_attached(
 
     rows = (
         db_session.execute(
-            select(Ctf2SolveTelemetry).order_by(Ctf2SolveTelemetry.created_at)
+            select(KernelSolveTelemetry).order_by(KernelSolveTelemetry.created_at)
         )
         .scalars()
         .all()
@@ -858,7 +858,7 @@ def test_telemetry_records_solved_from_the_challenge_status(
     于是一次成功的解题被记成 `solved=False`，"解出率"从此偏低，
     而偏低不会被任何人发现。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     ctf2_challenge.status = "solved"
     ctf2_challenge.confirmed_flag = "flag{ours}"
@@ -872,7 +872,7 @@ def test_telemetry_records_solved_from_the_challenge_status(
         outcome=_telemetry_outcome(),
     )
 
-    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    row = db_session.execute(select(KernelSolveTelemetry)).scalars().one()
     assert row.solved is True
 
 
@@ -885,7 +885,7 @@ def test_telemetry_freezes_the_category_at_write_time(
     `challenges.category` 会在同步时被平台侧改写；不冗余一份的话，
     "Web 题不需要卡"和"Crypto 题有卡也没用"会随着一次改名搅成一团。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     assert ctf2_challenge.category == "web"
 
@@ -899,7 +899,7 @@ def test_telemetry_freezes_the_category_at_write_time(
     ctf2_challenge.category = "web-lfi"
     db_session.commit()
 
-    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    row = db_session.execute(select(KernelSolveTelemetry)).scalars().one()
     assert row.category == "web", "历史行必须记得当时的分类，而不是现在的"
 
 
@@ -911,7 +911,7 @@ def test_telemetry_rejects_negative_numbers_without_raising(
     判据是"宁可这一行写不进去，也别污染统计"，但**不能**让记账失败
     把一次成功的解题变成报错 —— 所以每条写入路径都要留住那个 False。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     ok = service.record_solve_telemetry(
         db_session,
@@ -921,9 +921,9 @@ def test_telemetry_rejects_negative_numbers_without_raising(
     )
 
     assert ok is False
-    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveTelemetry.id))).scalar() == 0
     # ★ 会话必须还能用 —— 回滚之后继续查是"不抛"的实际含义
-    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveTelemetry.id))).scalar() == 0
 
 
 def test_telemetry_failure_does_not_roll_back_the_solve_result(
@@ -954,7 +954,7 @@ def test_telemetry_failure_does_not_roll_back_the_solve_result(
     修法是 `db.begin_nested()`（SAVEPOINT）：失败只退到保存点，调用方
     未提交的改动原样保留。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     # 模拟 `_record_outcome`：改内存 + flush，**不 commit**。
     ctf2_challenge.status = "solved"
@@ -981,7 +981,7 @@ def test_telemetry_failure_does_not_roll_back_the_solve_result(
     assert fresh.status == "solved", "★ 遥测失败把一次成功的解题回滚掉了"
     assert fresh.confirmed_flag == "flag{ours}"
     # 遥测确实没写成（这是"失败"该有的结果）
-    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveTelemetry.id))).scalar() == 0
 
 
 def test_usage_failure_does_not_roll_back_the_solve_result(
@@ -1021,7 +1021,7 @@ def test_usage_failure_does_not_roll_back_the_solve_result(
     assert fresh.status == "solved", "★ token 统计失败把一次成功的解题回滚掉了"
     assert fresh.confirmed_flag == "flag{ours}"
     # 统计确实没写成（这是"失败"该有的结果）
-    assert db_session.execute(select(func.count(Ctf2SolveUsage.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveUsage.id))).scalar() == 0
 
 
 def test_writeup_failure_does_not_roll_back_the_solve_result(
@@ -1054,7 +1054,7 @@ def test_writeup_failure_does_not_roll_back_the_solve_result(
     fresh = db_session.get(type(ctf2_challenge), ctf2_challenge.id)
     assert fresh is not None
     assert fresh.status == "solved", "★ 题解落库失败把一次成功的解题回滚掉了"
-    assert db_session.execute(select(func.count(Ctf2Writeup.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelWriteup.id))).scalar() == 0
 
 
 def test_telemetry_survives_attempt_deletion(db_session: Session, ctf2_challenge) -> None:
@@ -1063,7 +1063,7 @@ def test_telemetry_survives_attempt_deletion(db_session: Session, ctf2_challenge
     ⚠️ 与 usage 表的 CASCADE **刻意不同**：用量是那一次尝试的附属明细
     （尝试没了就没有意义），而观测说的是"这题解了几次、各花多少轮"。
     """
-    from app.kernel.models import Ctf2SolveTelemetry
+    from app.kernel.models import KernelSolveTelemetry
 
     attempt = _attempt(db_session, ctf2_challenge.id)
     service.record_solve_telemetry(
@@ -1076,7 +1076,7 @@ def test_telemetry_survives_attempt_deletion(db_session: Session, ctf2_challenge
     db_session.delete(attempt)
     db_session.commit()
 
-    row = db_session.execute(select(Ctf2SolveTelemetry)).scalars().one()
+    row = db_session.execute(select(KernelSolveTelemetry)).scalars().one()
     assert row.attempt_id is None
     assert row.turns == 3, "观测本身不该跟着快照一起消失"
 
@@ -1087,7 +1087,7 @@ def test_telemetry_is_cascaded_with_its_challenge(db_session: Session, ctf2_chal
     与上一条方向相反，这是刻意的：challenge 是观测的**归属**，
     尝试只是它的**出处**。
     """
-    from app.kernel.models import Ctf2Challenge, Ctf2SolveTelemetry
+    from app.kernel.models import KernelChallenge, KernelSolveTelemetry
 
     service.record_solve_telemetry(
         db_session,
@@ -1096,10 +1096,10 @@ def test_telemetry_is_cascaded_with_its_challenge(db_session: Session, ctf2_chal
         outcome=_telemetry_outcome(),
     )
 
-    db_session.delete(db_session.get(Ctf2Challenge, ctf2_challenge.id))
+    db_session.delete(db_session.get(KernelChallenge, ctf2_challenge.id))
     db_session.commit()
 
-    assert db_session.execute(select(func.count(Ctf2SolveTelemetry.id))).scalar() == 0
+    assert db_session.execute(select(func.count(KernelSolveTelemetry.id))).scalar() == 0
 
 
 def test_recall_notes_returns_both_text_and_count(
@@ -1113,13 +1113,13 @@ def test_recall_notes_returns_both_text_and_count(
     ⚠️ 这里同时钉住另一件事：**分类为空时返回 `("", 0)`**。给全部的
     后果是把无关题的方法灌进 prompt，比不给更坏。
     """
-    from app.core.vocab import Ctf2ChallengeStatus, Ctf2SandboxProfile
-    from app.kernel.models import Ctf2Challenge, Ctf2SolveNote
+    from app.core.vocab import KernelChallengeStatus, KernelSandboxProfile
+    from app.kernel.models import KernelChallenge, KernelSolveNote
 
     # 两张卡必须挂在**别道题**上：召回规则排除当前题（同一道题再解时
     # 该读的是自己的 transcript，而不是自己那张卡）。
     for index in range(2):
-        other = Ctf2Challenge(
+        other = KernelChallenge(
             id=new_id("ctf2chal"),
             competition_id=ctf2_challenge.competition_id,
             remote_id=f"other-{index}",
@@ -1129,18 +1129,18 @@ def test_recall_notes_returns_both_text_and_count(
             description="",
             attachments=[],
             score=100,
-            status=Ctf2ChallengeStatus.UNSOLVED.value,
+            status=KernelChallengeStatus.UNSOLVED.value,
             candidate_flag=None,
             confirmed_flag=None,
             wrong_submission_count=0,
             max_wrong_submissions=3,
             candidate_count=0,
-            sandbox_profile=Ctf2SandboxProfile.BASE.value,
+            sandbox_profile=KernelSandboxProfile.BASE.value,
         )
         db_session.add(other)
         db_session.flush()
         db_session.add(
-            Ctf2SolveNote(
+            KernelSolveNote(
                 id=new_id("ctf2note"),
                 challenge_id=other.id,
                 category=other.category,

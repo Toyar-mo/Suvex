@@ -84,7 +84,7 @@ def upgrade() -> None:
         # 与复盘，写进一个拼错的字符串会让"这次到底按什么策略跑的"
         # 变成读不出来的东西。
         #
-        # ⚠️ 与 `vocab.Ctf2SubmitMode` / `Ctf2SandboxProfile` 是同一对：
+        # ⚠️ 与 `vocab.KernelSubmitMode` / `KernelSandboxProfile` 是同一对：
         #    CHECK 表达式建好就固化在库里，而枚举能改 —— 两者不同步会
         #    表现成"应用层放行、数据库拒绝"。加新取值时两边一起改。
         sa.CheckConstraint(

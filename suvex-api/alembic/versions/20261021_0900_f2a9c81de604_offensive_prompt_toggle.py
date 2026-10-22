@@ -34,7 +34,7 @@ Create Date: 2026-10-21 09:00:00.000000+00:00
 
 ⚠️ 模型侧（`settings/models.py` 的 `SandboxConfig.enable_offensive_prompt`）
 只写 `default=False`、**不写 `server_default`**：迁移负责把老行填成
-false，模型负责新写入的默认值。同 `Ctf2Config.enable_agentsec_scenarios`。
+false，模型负责新写入的默认值。同 `KernelConfig.enable_agentsec_scenarios`。
 
 ## 为什么不进 `ExecutionSettings`
 

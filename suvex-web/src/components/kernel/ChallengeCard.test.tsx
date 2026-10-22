@@ -3,7 +3,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ChallengeCard } from './ChallengeCard'
-import type { Ctf2Challenge } from '@/data/ctf2'
+import type { KernelChallenge } from '@/data/kernel'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -17,7 +17,7 @@ import type { Ctf2Challenge } from '@/data/ctf2'
 
     `[ACTF2020 新生赛]Upload` 跑满 78 轮、未解出，收尾回到 `unsolved`
     —— 而它有题解。按状态判断会把这道题的入口藏掉（见
-    `data/ctf2.ts` 里 `canHaveWriteup` 的说明）。
+    `data/kernel.ts` 里 `canHaveWriteup` 的说明）。
 
   两条必须钉住的口径：
 
@@ -42,7 +42,7 @@ import type { Ctf2Challenge } from '@/data/ctf2'
 afterEach(cleanup)
 
 /** 造一道够渲染的题。只写这个用例关心与组件必读的字段 */
-function makeChallenge(over: Partial<Ctf2Challenge> = {}): Ctf2Challenge {
+function makeChallenge(over: Partial<KernelChallenge> = {}): KernelChallenge {
   return {
     id: 'chal_1',
     competitionId: 'comp_1',
@@ -82,8 +82,8 @@ const noop = () => {}
  *    要验"不传就没有"请用下面的 `renderCardWithoutWriteup`。
  */
 function renderCard(
-  challenge: Ctf2Challenge,
-  handlers: { onWriteup?: (c: Ctf2Challenge) => void } = { onWriteup: noop },
+  challenge: KernelChallenge,
+  handlers: { onWriteup?: (c: KernelChallenge) => void } = { onWriteup: noop },
 ) {
   return render(
     <MemoryRouter>
@@ -101,7 +101,7 @@ function renderCard(
 }
 
 /** 不传 `onWriteup` 的版本（验"按需能力"那条约定） */
-function renderCardWithoutWriteup(challenge: Ctf2Challenge) {
+function renderCardWithoutWriteup(challenge: KernelChallenge) {
   return render(
     <MemoryRouter>
       <ChallengeCard
@@ -227,8 +227,8 @@ describe('ChallengeCard：题解入口的可见性', () => {
   后果是有人把按钮改成常驻，而页面上多出一个永远点不出东西的入口。
 */
 function renderCardWithWorkOrder(
-  challenge: Ctf2Challenge,
-  onWorkOrder: (c: Ctf2Challenge) => void,
+  challenge: KernelChallenge,
+  onWorkOrder: (c: KernelChallenge) => void,
 ) {
   return render(
     <MemoryRouter>

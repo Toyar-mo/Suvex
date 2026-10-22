@@ -50,7 +50,7 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
-from app.kernel.client import Ctf2Error, assert_allowed_target
+from app.kernel.client import KernelError, assert_allowed_target
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -334,7 +334,7 @@ def _is_official(url: str) -> bool:
     try:
         assert_allowed_target(url)
         return True
-    except Ctf2Error:
+    except KernelError:
         return False
 
 
@@ -388,7 +388,7 @@ async def _download_one(
     if not _is_official(item.url):
         # ★ 这是**拒绝**而不是"警告后继续"。见模块 docstring 第 1 条：
         #   不校验 host 等于让出题人决定我们去访问哪里。
-        raise Ctf2Error(
+        raise KernelError(
             f"附件地址不在 CTF2 官方域名下，已拒绝下载：{urlsplit(item.url).hostname}"
         )
 
@@ -401,17 +401,17 @@ async def _download_one(
     # 上面那次净化是本模块的规则，而这一条是**文件系统层面的事实**，
     # 两者都在，将来谁改坏了净化规则都还会被挡住。
     if target.resolve().parent != target_dir.resolve():
-        raise Ctf2Error(f"附件名净化后仍然跳出了目录：{item.name!r}")
+        raise KernelError(f"附件名净化后仍然跳出了目录：{item.name!r}")
 
     headers = {"Authorization": f"Bearer {token}"} if token else {}
     async with http.stream("GET", item.url, headers=headers) as response:
         if response.status_code >= 400:
-            raise Ctf2Error(f"平台返回 {response.status_code}")
+            raise KernelError(f"平台返回 {response.status_code}")
 
         declared = response.headers.get("content-length")
         expected = int(declared) if declared and declared.isdigit() else None
         if expected is not None and expected > MAX_FILE_BYTES:
-            raise Ctf2Error(
+            raise KernelError(
                 f"附件超过单文件上限（{expected // 1024 // 1024} MB > "
                 f"{MAX_FILE_BYTES // 1024 // 1024} MB）"
             )
@@ -433,7 +433,7 @@ async def _download_one(
                 async for chunk in response.aiter_bytes(64 * 1024):
                     written += len(chunk)
                     if written > MAX_FILE_BYTES:
-                        raise Ctf2Error("附件在下载过程中超过了单文件上限，已中止")
+                        raise KernelError("附件在下载过程中超过了单文件上限，已中止")
                     digest.update(chunk)
                     handle.write(chunk)
         except Exception:

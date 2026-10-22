@@ -403,7 +403,7 @@ def test_read_only_token_can_still_read(ready_client: TestClient) -> None:
 def test_snapshot_never_leaks_the_token(ready_client: TestClient) -> None:
     """★ 只读的快照里**不能**出现凭据。
 
-    这条测的是"读接口不回填凭据"这条纪律。`Ctf2AccountOut` 里根本
+    这条测的是"读接口不回填凭据"这条纪律。`KernelAccountOut` 里根本
     没有 token 字段（只有掩码），所以它是结构上成立的 —— 但
     "结构上成立"值得有一条断言盯着：有人为了"方便调试"加一个
     `token` 字段，不会有任何别的东西报错。

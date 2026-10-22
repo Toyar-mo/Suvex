@@ -95,15 +95,15 @@ def _ctf2_categories(db: Session, scans: list) -> dict[str, str]:
     # 局部 import：`scans` 不该在模块加载期依赖 `ctf2`（依赖方向是
     # ctf2 → scans，反过来只能按需取）。与 `service.cleanup` 里
     # `from app.kernel import service as ctf2_service` 是同一个手法。
-    from app.kernel.models import Ctf2Challenge
+    from app.kernel.models import KernelChallenge
 
     ids = [scan.id for scan in scans if getattr(scan, "origin", None) == SCAN_ORIGIN_CTF2]
     if not ids:
         return {}
 
     rows = db.execute(
-        select(Ctf2Challenge.scan_id, Ctf2Challenge.category).where(
-            Ctf2Challenge.scan_id.in_(ids)
+        select(KernelChallenge.scan_id, KernelChallenge.category).where(
+            KernelChallenge.scan_id.in_(ids)
         )
     ).all()
     # 空分类当"没有分类"处理：`category` 的列默认值就是 `""`，

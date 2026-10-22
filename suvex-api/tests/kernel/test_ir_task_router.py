@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.audit.models import AuditLog
 from app.kernel import attachments as attachments_mod
-from app.kernel.models import Ctf2Challenge, Ctf2Competition
+from app.kernel.models import KernelChallenge, KernelCompetition
 
 API = "/api/v1"
 IR = f"{API}/ctf2/ir/tasks"
@@ -114,10 +114,10 @@ def test_create_task_does_not_require_ctf2_account(ready_client: TestClient, db_
     **本机上传的日志**，整个流程一次都不碰平台域名。要求先绑一个 CTF2
     PAT 才能复盘一台被入侵的机器，是把两件无关的事绑在一起。
     """
-    from app.kernel.models import Ctf2Account
+    from app.kernel.models import KernelAccount
 
     # 确认前提：这个库里真的没有账号
-    assert db_session.execute(select(Ctf2Account)).scalars().first() is None
+    assert db_session.execute(select(KernelAccount)).scalars().first() is None
 
     body = _create(ready_client, title="没绑账号也能建")
 
@@ -128,9 +128,9 @@ def test_create_task_places_it_in_local_batch(ready_client: TestClient, db_sessi
     """任务落在 `kind='local'` 的那个批次里。"""
     body = _create(ready_client, title="落在哪")
 
-    challenge = db_session.get(Ctf2Challenge, body["challenge"]["id"])
+    challenge = db_session.get(KernelChallenge, body["challenge"]["id"])
     assert challenge is not None
-    batch = db_session.get(Ctf2Competition, challenge.competition_id)
+    batch = db_session.get(KernelCompetition, challenge.competition_id)
     assert batch is not None
     assert batch.kind == "local"
     assert batch.account_id is None
@@ -145,8 +145,8 @@ def test_two_tasks_share_one_batch(ready_client: TestClient, db_session: Session
     first = _create(ready_client, title="甲")
     second = _create(ready_client, title="乙")
 
-    a = db_session.get(Ctf2Challenge, first["challenge"]["id"])
-    b = db_session.get(Ctf2Challenge, second["challenge"]["id"])
+    a = db_session.get(KernelChallenge, first["challenge"]["id"])
+    b = db_session.get(KernelChallenge, second["challenge"]["id"])
     assert a is not None and b is not None
     assert a.competition_id == b.competition_id
 
@@ -178,7 +178,7 @@ def test_brief_is_carried_into_description(ready_client: TestClient, db_session:
     """`brief` 会落进 `description` —— 提示词从那里读"本次复盘目标"。"""
     body = _create(ready_client, title="带目标", brief="只关心横向移动那一段")
 
-    challenge = db_session.get(Ctf2Challenge, body["challenge"]["id"])
+    challenge = db_session.get(KernelChallenge, body["challenge"]["id"])
     assert challenge is not None
     assert "横向移动" in (challenge.description or "")
 
@@ -231,7 +231,7 @@ def test_claimed_attachments_are_recorded_on_challenge(
 
     body = _create(ready_client, title="回写", attachmentStagingId=staging)
 
-    challenge = db_session.get(Ctf2Challenge, body["challenge"]["id"])
+    challenge = db_session.get(KernelChallenge, body["challenge"]["id"])
     assert challenge is not None
     names = [item.get("name") for item in (challenge.attachments or [])]
     assert "auth.log" in names
@@ -344,11 +344,11 @@ def test_audit_records_the_resolved_profile(
 
 
 def test_local_batch_is_not_listed_as_platform_batch(
-    ready_client: TestClient, ctf2_competition: Ctf2Competition
+    ready_client: TestClient, ctf2_competition: KernelCompetition
 ) -> None:
     """本地批次会出现在 `/ctf2/competitions` 里，但 `accountId` 是 null。
 
-    这条测的是"界面能不能正确处理 null"：`Ctf2CompetitionOut.accountId`
+    这条测的是"界面能不能正确处理 null"：`KernelCompetitionOut.accountId`
     若坚持 `str`，序列化会抛 `ValidationError`，表现是整个端点 500、
     页面全白 —— 而它在加了 local 之前永远不会发生。
     """
@@ -397,7 +397,7 @@ def test_solve_on_local_task_does_not_need_platform(
 def test_platform_challenge_still_needs_account(
     ready_client: TestClient,
     db_session: Session,
-    ctf2_challenge: Ctf2Challenge,
+    ctf2_challenge: KernelChallenge,
     provider_id: str,
     _never_enqueue: list[tuple],
 ) -> None:
@@ -422,9 +422,9 @@ def test_platform_challenge_still_needs_account(
     # 把账号置为 expired —— `get_account(active_only=True)` 就不认它了。
     from sqlalchemy import update
 
-    from app.kernel.models import Ctf2Account
+    from app.kernel.models import KernelAccount
 
-    db_session.execute(update(Ctf2Account).values(status="expired"))
+    db_session.execute(update(KernelAccount).values(status="expired"))
     db_session.commit()
 
     response = ready_client.post(
@@ -453,9 +453,9 @@ def test_local_task_runs_without_any_usable_account(
     """
     from sqlalchemy import update
 
-    from app.kernel.models import Ctf2Account
+    from app.kernel.models import KernelAccount
 
-    db_session.execute(update(Ctf2Account).values(status="expired"))
+    db_session.execute(update(KernelAccount).values(status="expired"))
     db_session.commit()
 
     body = _create(ready_client, title="账号过期也能复盘")

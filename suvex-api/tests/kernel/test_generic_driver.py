@@ -474,9 +474,9 @@ def test_a_wrong_handle_raises_on_submit_but_returns_none_on_detail() -> None:
         driver = _driver(_routes({"/ctf/exercise": _ok(DETAIL_PAYLOAD)}))
         try:
             assert await driver.fetch_challenge({}) is None
-            from app.kernel.client import Ctf2ResponseError
+            from app.kernel.client import KernelResponseError
 
-            with pytest.raises(Ctf2ResponseError):
+            with pytest.raises(KernelResponseError):
                 await driver.submit({}, "flag")
         finally:
             await driver.aclose()

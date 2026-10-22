@@ -40,7 +40,7 @@ Create Date: 2026-10-01 08:00:00.000000+00:00
 * 它没有 env 来源 —— 默认值来自代码常量，所以 NULL 只会多出
   "这一行还没设过"这一种要处理的状态，而它没有任何额外含义。
 
-3 这个数与 `app/settings/models.py` 里 `Ctf2Config.max_concurrent_solves`
+3 这个数与 `app/settings/models.py` 里 `KernelConfig.max_concurrent_solves`
 的 Python 默认值**是同一个数**，改任一处必须同时改另一处 ——
 与 `max_wrong_submissions <= 10` 那条约束留在表上的提醒同一条理由。
 （这里不用 CHECK 约束框住区间：它不是安全边界，而是一个可以按机器

@@ -7,7 +7,7 @@
 
 它是三处配合的结果，每一处单独看都"很合理"，只有一起改才成立：
 
-1. `Ctf2Competition.account_id` 可空 + `kind_valid` 接受 `'local'`
+1. `KernelCompetition.account_id` 可空 + `kind_valid` 接受 `'local'`
    （迁移 `d5a9e3c72f81`）；
 2. `service._requires_platform()` 对 local 返回 False，于是 `start_solve`
    不再要求账号；
@@ -28,9 +28,9 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session
 
-from app.core.vocab import Ctf2CompetitionKind
+from app.core.vocab import KernelCompetitionKind
 from app.kernel import service
-from app.kernel.models import Ctf2Challenge, Ctf2Competition
+from app.kernel.models import KernelChallenge, KernelCompetition
 
 # ══════════════════════════════════════════════════════════
 # 一、批次：本地复盘有自己的批次，且只有一个
@@ -45,7 +45,7 @@ def test_local_batch_has_no_account(db_session: Session) -> None:
     """
     batch = service.ensure_local_batch(db_session)
 
-    assert batch.kind == Ctf2CompetitionKind.LOCAL
+    assert batch.kind == KernelCompetitionKind.LOCAL
     assert batch.account_id is None
 
 
@@ -176,7 +176,7 @@ def test_local_review_does_not_require_platform(db_session: Session) -> None:
 
 
 def test_practice_challenge_still_requires_platform(
-    db_session: Session, ctf2_challenge: Ctf2Challenge
+    db_session: Session, ctf2_challenge: KernelChallenge
 ) -> None:
     """★★ 反向断言：**平台题照旧要求账号**。
 
@@ -188,10 +188,10 @@ def test_practice_challenge_still_requires_platform(
 
 
 def test_competition_challenge_requires_platform(
-    db_session: Session, ctf2_competition: Ctf2Competition
+    db_session: Session, ctf2_competition: KernelCompetition
 ) -> None:
     """赛事题同样要求账号（它不是 practice，走的是同一条收紧分支）。"""
-    challenge = Ctf2Challenge(
+    challenge = KernelChallenge(
         id="ctf2chal_comp_only",
         competition_id=ctf2_competition.id,
         remote_id="comp-1",
@@ -218,7 +218,7 @@ def test_unknown_competition_defaults_to_requiring_platform(
     ⚠️ 注意这与 `_assert_submission_supported` 的"查不到就放行"方向
        相反，两处理由不同（见两个函数的 docstring）。
     """
-    orphan = Ctf2Challenge(
+    orphan = KernelChallenge(
         id="ctf2chal_orphan",
         # 一个不存在的 competition_id。外键在 flush 时才校验，
         # 而这里要测的正是"查不到"这个分支 —— 用一个真实存在但
@@ -251,7 +251,7 @@ def test_local_review_passes_submission_gate(db_session: Session) -> None:
 def test_local_review_remote_ids_are_non_empty(db_session: Session) -> None:
     """★★ 本地题的 `practice_id` **不是空串** —— 反直觉但关键的事实。
 
-    `_remote_ids()` 直接拿 `Ctf2Competition.remote_id` 当 `practice_id`，
+    `_remote_ids()` 直接拿 `KernelCompetition.remote_id` 当 `practice_id`，
     而本地批次的 `remote_id` 是 `local-reviews`。所以
     `start_environment_for()` 开头那道"缺远端标识就提前抛"的闸**不会拦住
     它** —— 它会带着一个自造的 id 真的去请求 CTF2 平台，然后 404。
@@ -308,7 +308,7 @@ def test_ir_task_create_is_not_a_ctf2_action() -> None:
 
 
 def test_competition_kind_literal_covers_enum() -> None:
-    """★ `CompetitionKindLiteral` 必须与 `Ctf2CompetitionKind` 逐值一致。
+    """★ `CompetitionKindLiteral` 必须与 `KernelCompetitionKind` 逐值一致。
 
     漏改的症状是 `GET /ctf2/competitions` 直接 500，报
     `Input should be 'competition' or 'practice'` —— 而数据库、worker、
@@ -316,25 +316,25 @@ def test_competition_kind_literal_covers_enum() -> None:
     """
     from typing import get_args
 
-    from app.core.vocab import Ctf2CompetitionKind
+    from app.core.vocab import KernelCompetitionKind
     from app.kernel.schemas import CompetitionKindLiteral
 
     literal_values = set(get_args(CompetitionKindLiteral))
-    enum_values = {member.value for member in Ctf2CompetitionKind}
+    enum_values = {member.value for member in KernelCompetitionKind}
 
     assert literal_values == enum_values
 
 
 def test_competition_out_allows_null_account(db_session: Session) -> None:
-    """★ `Ctf2CompetitionOut.accountId` 必须接受 None。
+    """★ `KernelCompetitionOut.accountId` 必须接受 None。
 
     local 批次没有账号。类型坚持 `str` 的话，序列化一条本地批次
     会抛 `ValidationError` —— 而那个错误发生在**返回响应时**，
     表现是整个 `GET /ctf2/competitions` 500，页面全白。
     """
-    from app.kernel.schemas import Ctf2CompetitionOut
+    from app.kernel.schemas import KernelCompetitionOut
 
-    out = Ctf2CompetitionOut(
+    out = KernelCompetitionOut(
         id="ctf2comp_local",
         accountId=None,
         remoteId="local-reviews",
@@ -353,10 +353,10 @@ def test_competition_out_allows_null_account(db_session: Session) -> None:
 
 @pytest.mark.parametrize("kind", ["competition", "practice", "local"])
 def test_all_kinds_are_accepted_by_schema(kind: str) -> None:
-    """三个 kind 都能进 `Ctf2CompetitionOut`。"""
-    from app.kernel.schemas import Ctf2CompetitionOut
+    """三个 kind 都能进 `KernelCompetitionOut`。"""
+    from app.kernel.schemas import KernelCompetitionOut
 
-    out = Ctf2CompetitionOut(
+    out = KernelCompetitionOut(
         id="x",
         accountId=None,
         remoteId="r",

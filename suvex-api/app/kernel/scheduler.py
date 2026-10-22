@@ -67,10 +67,10 @@ from app.core.vocab import (
     DEFAULT_CTF2_SOLVE_POLL_SECONDS,
     MAX_CTF2_SOLVE_POLL_SECONDS,
     MIN_CTF2_SOLVE_POLL_SECONDS,
-    Ctf2ChallengeStatus,
+    KernelChallengeStatus,
 )
 from app.kernel import events
-from app.kernel.models import Ctf2Challenge
+from app.kernel.models import KernelChallenge
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -179,7 +179,7 @@ class SchedulerStats:
     challenges: list[str] = field(default_factory=list)
 
 
-class Ctf2Scheduler:
+class KernelScheduler:
     def __init__(self) -> None:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -399,11 +399,11 @@ class Ctf2Scheduler:
             #
             # ⚠️ `notin_` 在 `running_ids` 为空时会生成 `NOT IN ()` —— 那在
             #    SQL 里是语法错误。所以空集时要跳过这个条件。
-            stmt = select(Ctf2Challenge).where(
-                Ctf2Challenge.status == Ctf2ChallengeStatus.SOLVING.value
+            stmt = select(KernelChallenge).where(
+                KernelChallenge.status == KernelChallengeStatus.SOLVING.value
             )
             if running_ids:
-                stmt = stmt.where(Ctf2Challenge.id.notin_(running_ids))
+                stmt = stmt.where(KernelChallenge.id.notin_(running_ids))
 
             rows = list(
                 session.execute(
@@ -414,8 +414,8 @@ class Ctf2Scheduler:
                     #    一道三天前同步、刚才才点解题的题排到队首。
                     #    两条降序/升序都要显式写，否则会跟着主键序走。
                     .order_by(
-                        Ctf2Challenge.priority.desc(),
-                        Ctf2Challenge.updated_at.asc(),
+                        KernelChallenge.priority.desc(),
+                        KernelChallenge.updated_at.asc(),
                     )
                     .limit(min(slots, _MAX_CLAIMS_PER_TICK))
                     .with_for_update(skip_locked=True)
@@ -452,7 +452,7 @@ class Ctf2Scheduler:
         ## 两个参数的分工（v0.28 起）
 
         * `attempt_id` —— **主路径**：受理时落下的策略快照
-          （`Ctf2SolveAttempt`）。worker 读它拿到 mode / brief /
+          （`KernelSolveAttempt`）。worker 读它拿到 mode / brief /
           回合预算 / 模型，于是**排队期间改全局设置不会影响这次解题**。
         * `resume` —— **兜底**：没有快照的调用（测试、旧脚本）仍然
           靠这个内存标志表达"接着上次跑"。有快照时以快照里的
@@ -464,10 +464,10 @@ class Ctf2Scheduler:
             if resume:
                 self._resume.add(challenge_id)
         with session_scope() as db:
-            challenge = db.get(Ctf2Challenge, challenge_id)
+            challenge = db.get(KernelChallenge, challenge_id)
             if challenge is None:
                 return
-            challenge.status = Ctf2ChallengeStatus.SOLVING.value
+            challenge.status = KernelChallengeStatus.SOLVING.value
             challenge.last_error = None
             db.commit()
         self.tick()
@@ -551,14 +551,14 @@ class Ctf2Scheduler:
         with session_scope() as db:
             rows = list(
                 db.execute(
-                    select(Ctf2Challenge).where(
-                        Ctf2Challenge.status.in_(
+                    select(KernelChallenge).where(
+                        KernelChallenge.status.in_(
                             (
-                                Ctf2ChallengeStatus.SOLVING.value,
+                                KernelChallengeStatus.SOLVING.value,
                                 # ★ 见 docstring：它是解题过程的主状态，
                                 #   不是瞬间中间态 —— 漏了它就会留下
                                 #   "点不动也跑不了"的僵尸题。
-                                Ctf2ChallengeStatus.ENVIRONMENT_READY.value,
+                                KernelChallengeStatus.ENVIRONMENT_READY.value,
                                 # ★ 加上 submitting（2026-10-10 修）。
                                 #
                                 # `submit_candidate` 在**发出提交请求之前**
@@ -579,9 +579,9 @@ class Ctf2Scheduler:
                                 # ⚠️ 那条停在 `pending` 的提交记录**保留**：
                                 #    它的语义是"请求已发出、结果未知"，是
                                 #    一张需要人工对账的欠条（见
-                                #    `vocab.Ctf2SubmissionStatus.PENDING`）。
+                                #    `vocab.KernelSubmissionStatus.PENDING`）。
                                 #    这里只重置题目状态，不动提交记录。
-                                Ctf2ChallengeStatus.SUBMITTING.value,
+                                KernelChallengeStatus.SUBMITTING.value,
                             )
                         )
                     )
@@ -590,7 +590,7 @@ class Ctf2Scheduler:
                 .all()
             )
             for challenge in rows:
-                challenge.status = Ctf2ChallengeStatus.UNSOLVED.value
+                challenge.status = KernelChallengeStatus.UNSOLVED.value
                 challenge.last_error = "上一次运行未完成，已重置为未解出。"
                 events.emit_abandoned(db, challenge, reason="服务重启，解题中断")
                 # ★ v0.27：顺手把解题 scan 与 solver agent 收尾。
@@ -629,8 +629,8 @@ class Ctf2Scheduler:
         if db is not None:
             queued = len(
                 db.execute(
-                    select(Ctf2Challenge.id).where(
-                        Ctf2Challenge.status == Ctf2ChallengeStatus.SOLVING.value
+                    select(KernelChallenge.id).where(
+                        KernelChallenge.status == KernelChallengeStatus.SOLVING.value
                     )
                 ).all()
             )
@@ -646,11 +646,11 @@ class Ctf2Scheduler:
 # 模块级单例
 # ══════════════════════════════════════════════════════════
 
-_scheduler: Ctf2Scheduler | None = None
+_scheduler: KernelScheduler | None = None
 _scheduler_lock = threading.Lock()
 
 
-def get_scheduler() -> Ctf2Scheduler:
+def get_scheduler() -> KernelScheduler:
     """进程内单例。
 
     ⚠️ 延迟构造 + 加锁：`scans` 那边用的是一个裸的模块级全局，
@@ -662,7 +662,7 @@ def get_scheduler() -> Ctf2Scheduler:
     if _scheduler is None:
         with _scheduler_lock:
             if _scheduler is None:
-                _scheduler = Ctf2Scheduler()
+                _scheduler = KernelScheduler()
     return _scheduler
 
 
@@ -676,7 +676,7 @@ def reset_scheduler() -> None:
 
 
 __all__ = [
-    "Ctf2Scheduler",
+    "KernelScheduler",
     "SchedulerStats",
     "get_scheduler",
     "max_concurrent",

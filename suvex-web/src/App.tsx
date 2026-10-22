@@ -14,7 +14,7 @@ import {
 import { DEFAULT_PATH, NAV_ITEMS } from '@/navigation'
 import {
   ActivityPage,
-  Ctf2Page,
+  KernelPage,
   FindingsPage,
   IrPage,
   LandingPage,
@@ -52,7 +52,7 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   //   路由表由 `NAV_ITEMS.map()` 生成，`if (!Page) return null`
   //   静默返回空，既不报错也不警告。v0.43 加导航项时必须同时加这里。
   ir: IrPage,
-  ctf2: Ctf2Page,
+  ctf2: KernelPage,
   settings: SettingsPage,
 }
 

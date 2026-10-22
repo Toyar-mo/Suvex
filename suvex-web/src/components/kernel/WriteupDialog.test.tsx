@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { WriteupDialog } from './WriteupDialog'
-import type { Ctf2Challenge } from '@/data/ctf2'
+import type { KernelChallenge } from '@/data/kernel'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -95,7 +95,7 @@ const REAL_WRITEUP = {
 }
 
 /** 挑战对象：字段照真实 snapshot 抄（status=unsolved，未解出） */
-function realChallenge(): Ctf2Challenge {
+function realChallenge(): KernelChallenge {
   return {
     id: 'ctf2chal_01M4QRAT254DE91N89338Z7P4M',
     competitionId: 'ctf2comp_01M3PG846CV457JAFVBRPCG29M',

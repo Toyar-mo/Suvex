@@ -23,7 +23,7 @@
 | `outcome.transcript` | transcript 文件原文 |
 | `outcome.turns` | ⚠️ **见下** |
 | `outcome.candidates` / `error` | 从 transcript 里的 `FINAL:` 块解析（复用 runner 自己的解析器） |
-| `elapsed_sec` | 借的壳 scan 的 `duration_sec`（`Ctf2Challenge` 自己没有耗时列） |
+| `elapsed_sec` | 借的壳 scan 的 `duration_sec`（`KernelChallenge` 自己没有耗时列） |
 
 ## ⚠️ `turns` 不能靠"数 `[turn N]` 行"
 
@@ -93,10 +93,10 @@ for _stream in (sys.stdout, sys.stderr):
 from sqlalchemy import select  # noqa: E402
 
 from app.core.db import session_scope  # noqa: E402
-from app.core.vocab import Ctf2ChallengeStatus  # noqa: E402
+from app.core.vocab import KernelChallengeStatus  # noqa: E402
 from app.kernel import runner, service  # noqa: E402
 from app.kernel import writeup as writeup_mod  # noqa: E402
-from app.kernel.models import Ctf2Challenge  # noqa: E402
+from app.kernel.models import KernelChallenge  # noqa: E402
 from app.scans.models import Scan  # noqa: E402
 
 #: transcript 存放处。与 `runner._save_transcript` 的落点必须一致。
@@ -166,7 +166,7 @@ def _transcript_for(challenge_id: str) -> Path | None:
     return matches[-1] if matches else None
 
 
-def _elapsed_sec(db, challenge: Ctf2Challenge) -> int | None:
+def _elapsed_sec(db, challenge: KernelChallenge) -> int | None:
     """借的壳 scan 的耗时。没有就返回 None（题解会写"未记录"）。"""
     if not challenge.scan_id:
         return None
@@ -200,9 +200,9 @@ def main() -> int:
     with session_scope() as db:
         challenges = list(
             db.execute(
-                select(Ctf2Challenge)
-                .where(Ctf2Challenge.status == Ctf2ChallengeStatus.SOLVED.value)
-                .order_by(Ctf2Challenge.solved_at)
+                select(KernelChallenge)
+                .where(KernelChallenge.status == KernelChallengeStatus.SOLVED.value)
+                .order_by(KernelChallenge.solved_at)
             )
             .scalars()
             .all()

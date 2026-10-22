@@ -1924,7 +1924,7 @@ def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, in
     #
     # ★ 与上面几条同一个理由：`sweep_retention` 是"定期清理"的唯一入口。
     #
-    # ⚠️ 这条清的不是磁盘、是**状态**：`Ctf2EnvironmentStatus.EXPIRED` 从
+    # ⚠️ 这条清的不是磁盘、是**状态**：`KernelEnvironmentStatus.EXPIRED` 从
     #   定义那天起没有任何一处设置它，于是租期到了行还停在 ready，
     #   界面照旧渲染出一个标着「就绪」的死链接。判据与边界见
     #   `ctf2.service.expire_stale_environments` 的 docstring。

@@ -75,8 +75,8 @@ from app.core.vocab import (
 )
 from app.events.models import Agent
 from app.events.service import append_event, record_agent_activity
-from app.kernel.client import Ctf2Error
-from app.kernel.models import Ctf2ChallengeStatus
+from app.kernel.client import KernelError
+from app.kernel.models import KernelChallengeStatus
 from app.scans.models import Scan
 
 logger = logging.getLogger("suvex.ctf2")
@@ -124,7 +124,7 @@ def _default_provider_id(db: Session) -> str:
         .first()
     )
     if provider is None:
-        raise Ctf2Error(
+        raise KernelError(
             "还没有配置 LLM provider，无法为这次解题建立记录。"
             "请先在设置页添加一个 provider。"
         )
@@ -137,7 +137,7 @@ def ensure_solve_scan(db: Session, challenge) -> Scan:  # noqa: ANN001
     ## 幂等
 
     同一道题被解两次（重跑）时**复用同一条 scan**，不新建。
-    理由：`Ctf2Challenge.scan_id` 是一个单值列，新建会让它指向新的那条，
+    理由：`KernelChallenge.scan_id` 是一个单值列，新建会让它指向新的那条，
     而旧的那条变成孤儿 —— 于是"上次解题的活动流"再也关联不到这道题。
 
     复用时把状态**重置为 running**（因为它又要跑了），这是对的：
@@ -335,7 +335,7 @@ def _emit(
     """
     try:
         scan = ensure_solve_scan(db, challenge)
-    except Ctf2Error as exc:
+    except KernelError as exc:
         logger.warning(
             "CTF2 无法为题目 %s 建立解题记录，跳过这次事件（%s）：%s",
             challenge.id,
@@ -692,7 +692,7 @@ def finalize_solve_scan(db: Session, challenge) -> None:  # noqa: ANN001
     if scan is None:
         return
 
-    solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
+    solved = challenge.status == KernelChallengeStatus.SOLVED.value
     scan.status = ScanStatus.COMPLETED.value if solved else ScanStatus.FAILED.value
     scan.finished_at = now_utc()
     if scan.started_at is not None:
@@ -724,7 +724,7 @@ def promote_solve_scan_to_solved(db: Session, challenge) -> None:  # noqa: ANN00
 
     `finalize_solve_scan` 只在 **worker 收尾那一刻**看一眼题目状态：
 
-        solved = challenge.status == Ctf2ChallengeStatus.SOLVED.value
+        solved = challenge.status == KernelChallengeStatus.SOLVED.value
         scan.status = COMPLETED if solved else FAILED
 
     而 safe 模式下那一刻题目还是 `candidate_ready` —— 候选在**等人确认**。

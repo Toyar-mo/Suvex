@@ -121,7 +121,7 @@ _ERROR_KEY_HINTS: Final[dict[str, str]] = {
 # 这样做还有一个好处：客户端的测试不必去构造 FastAPI 的请求上下文。
 
 
-class Ctf2Error(Exception):
+class KernelError(Exception):
     """CTF2 交互失败的基类。
 
     `detail` 是给运维排查用的补充信息（平台原话、响应片段）。
@@ -134,18 +134,18 @@ class Ctf2Error(Exception):
         self.detail = detail
 
 
-class Ctf2AuthExpired(Ctf2Error):
+class KernelAuthExpired(KernelError):
     """401 —— 这条 PAT 已经不能用了（过期、被吊销、或复制时截断了）。
 
     ## ★ 它必须是一个**独立的类型**，不能混进通用的"调用失败"
 
     补救动作是"人重新授权"，而且**只有人能做**。如果它被归进一个
-    泛泛的 `Ctf2Error`，调用点的代码就只能给一句"对接 CTF2 失败，
+    泛泛的 `KernelError`，调用点的代码就只能给一句"对接 CTF2 失败，
     请重试"—— 用户会一直重试一个永远不会好的东西。
     """
 
 
-class Ctf2ScopeMissing(Ctf2Error):
+class KernelScopeMissing(KernelError):
     """403 —— PAT 本身有效，但缺某个 scope。
 
     ## ★ `missing_scope` 必须带出来
@@ -172,7 +172,7 @@ class Ctf2ScopeMissing(Ctf2Error):
         return self.message
 
 
-class Ctf2RateLimited(Ctf2Error):
+class KernelRateLimited(KernelError):
     """429 且重试次数用尽（或 `Retry-After` 长到不该干等）。"""
 
     def __init__(
@@ -182,14 +182,14 @@ class Ctf2RateLimited(Ctf2Error):
         self.retry_after = retry_after
 
 
-class Ctf2Unavailable(Ctf2Error):
+class KernelUnavailable(KernelError):
     """网络层失败 / 5xx，且重试次数用尽。"""
 
 
-class Ctf2ResponseError(Ctf2Error):
+class KernelResponseError(KernelError):
     """4xx（401/403/429 之外）或响应结构不是我们预期的形状。
 
-    ⚠️ 与 `Ctf2Unavailable` 分开：前者是"请求错的或平台改了接口"，
+    ⚠️ 与 `KernelUnavailable` 分开：前者是"请求错的或平台改了接口"，
     重试没有意义；后者是"链路抖了"，重试有意义。
 
     ## `status_code` 是给调用方**分类**用的
@@ -230,7 +230,7 @@ class Ctf2ResponseError(Ctf2Error):
         self.code = code
 
 
-class Ctf2EnvironmentTimeout(Ctf2Error):
+class KernelEnvironmentTimeout(KernelError):
     """环境启动的幂等轮询**总超时**。
 
     ★ 单独一个类型，因为它的语义与"启动失败"不同：
@@ -297,10 +297,10 @@ def assert_allowed_target(url: str, *, allowed_extra: tuple[str, ...] = ()) -> N
     """
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
-        raise Ctf2Error(f"不允许的目标协议：{parts.scheme or '（空）'}。只接受 http/https。")
+        raise KernelError(f"不允许的目标协议：{parts.scheme or '（空）'}。只接受 http/https。")
     host = (parts.hostname or "").lower()
     if not host:
-        raise Ctf2Error("目标地址里没有主机名。")
+        raise KernelError("目标地址里没有主机名。")
 
     # `allowed_extra` 里的项可能是 `1.2.3.4:8080` / `http://1.2.3.4:8080`
     # 这种带端口的形状 —— 见 `_as_host` 的说明。
@@ -310,7 +310,7 @@ def assert_allowed_target(url: str, *, allowed_extra: tuple[str, ...] = ()) -> N
     for allowed in candidates:
         if allowed and (host == allowed or host.endswith("." + allowed)):
             return
-    raise Ctf2Error(
+    raise KernelError(
         f"目标 {host} 不在允许范围内。只允许 CTF2 官方域名与本题的环境地址 —— "
         "这条限制是硬编码的，见 app/kernel/client.py 的说明。"
     )
@@ -409,7 +409,7 @@ class RetryPolicy:
     # 0.25 是"足够打散"与"不明显变慢"之间的折中：退避 10 秒时
     # 实际落在 7.5~12.5 秒之间。
     jitter_ratio: float = 0.25
-    # ★ `Retry-After` 的上限。超过它就不再干等，直接抛 `Ctf2RateLimited`。
+    # ★ `Retry-After` 的上限。超过它就不再干等，直接抛 `KernelRateLimited`。
     #
     # 为什么需要这个上限：`Retry-After` 是**服务端给的**，它可以给
     # 86400（一天）。老老实实睡一天会把一个 worker 挂死一整天，
@@ -472,13 +472,13 @@ class EnvironmentAccess:
 # ══════════════════════════════════════════════════════════
 
 
-class Ctf2Client:
+class KernelClient:
     """CTF2 Open API 的异步客户端。
 
     用法：
 
     ```python
-    async with Ctf2Client(token=pat) as client:
+    async with KernelClient(token=pat) as client:
         comps = await client.list_competitions()
         access = await client.start_environment_until_ready(
             practice_id="123", challenge_id="456"
@@ -519,7 +519,7 @@ class Ctf2Client:
             # 早失败。放行的话每个请求都会得到 401，而 401 的补救动作是
             # "重新授权"—— 而真实情况是"调用方忘了传 token"，
             # 那会把排查方向指到完全错误的地方。
-            raise ValueError("Ctf2Client 需要一条 PAT；没有凭据时不应构造客户端。")
+            raise ValueError("KernelClient 需要一条 PAT；没有凭据时不应构造客户端。")
 
         self._token = token
         self._base_url = base_url.rstrip("/")
@@ -568,7 +568,7 @@ class Ctf2Client:
         if self._owns_client:
             await self._client.aclose()
 
-    async def __aenter__(self) -> Ctf2Client:
+    async def __aenter__(self) -> KernelClient:
         return self
 
     async def __aexit__(self, *_exc: object) -> None:
@@ -636,7 +636,7 @@ class Ctf2Client:
                 # 网络层失败。**不确定请求有没有送达** ——
                 # 这正是 `retryable` 要区分的东西。
                 if not retryable or attempt >= policy.max_attempts:
-                    raise Ctf2Unavailable(
+                    raise KernelUnavailable(
                         f"连接 {redact(url)} 失败：{exc.__class__.__name__}。"
                         "请检查网络与平台可用性。"
                     ) from exc
@@ -647,7 +647,7 @@ class Ctf2Client:
 
             # ── 401：不重试 ────────────────────────────────
             if status == 401:
-                raise Ctf2AuthExpired(
+                raise KernelAuthExpired(
                     "CTF2 拒绝了这条凭据（401）。它可能已过期、被吊销，"
                     "或复制时被截断 —— 请重新绑定账号。"
                     + _identity_hint(self._error_identity(response)),
@@ -657,7 +657,7 @@ class Ctf2Client:
             # ── 403：不重试，带出缺失的 scope ──────────────
             if status == 403:
                 scope = self._missing_scope(response)
-                raise Ctf2ScopeMissing(
+                raise KernelScopeMissing(
                     "CTF2 拒绝了这次调用（403）：这条凭据缺少所需权限。"
                     + _identity_hint(self._error_identity(response)),
                     missing_scope=scope,
@@ -668,7 +668,7 @@ class Ctf2Client:
             if status == 429:
                 wait = self._retry_after(response, policy)
                 if not retryable or attempt >= policy.max_attempts:
-                    raise Ctf2RateLimited(
+                    raise KernelRateLimited(
                         "CTF2 限流（429），已重试到上限。请稍后再试。",
                         retry_after=wait,
                         detail=self._safe_excerpt(response),
@@ -676,7 +676,7 @@ class Ctf2Client:
                 if wait > policy.max_retry_after:
                     # 见 `RetryPolicy.max_retry_after` 的说明：
                     # 干等一整天是资源泄漏，不是尊重平台。
-                    raise Ctf2RateLimited(
+                    raise KernelRateLimited(
                         f"CTF2 要求等待 {wait:.0f} 秒后重试，超过本次调用的等待上限"
                         f"（{policy.max_retry_after:.0f} 秒）。请稍后再发起同步。",
                         retry_after=wait,
@@ -689,7 +689,7 @@ class Ctf2Client:
             # ── 5xx / 408：指数退避 ────────────────────────
             if status >= 500 or status == 408:
                 if not retryable or attempt >= policy.max_attempts:
-                    raise Ctf2Unavailable(
+                    raise KernelUnavailable(
                         f"CTF2 返回 {status}，已重试到上限（{policy.max_attempts} 次）。"
                         "这通常是平台侧故障，请稍后再试。",
                         detail=self._safe_excerpt(response),
@@ -702,7 +702,7 @@ class Ctf2Client:
             # ── 其余 4xx：不重试 ──────────────────────────
             if status >= 400:
                 error_code, error_key = self._error_identity(response)
-                raise Ctf2ResponseError(
+                raise KernelResponseError(
                     f"CTF2 拒绝了这次请求（{status}）。可能是参数不对，"
                     "或平台接口有变更。"
                     # ⚠️ 这里也带上平台标记：404 的 `params.resource == "route"`
@@ -927,7 +927,7 @@ class Ctf2Client:
         """`GET practice/{id}/challenges/{challengeId}/` —— 练习题的详情。
 
         同步时用它拿 `sub_flag_id`（套题提交必须带，见
-        `models.Ctf2Challenge` 的说明）。
+        `models.KernelChallenge` 的说明）。
         """
         return _as_dict(
             await self._request(
@@ -1063,7 +1063,7 @@ class Ctf2Client:
           而那会变成上百次请求打在同一秒上 —— 平台角度看就是攻击。
           次数上限把这种情况收在 200 次以内。
 
-        三者取**先到者**：任一触发即抛 `Ctf2EnvironmentTimeout`。
+        三者取**先到者**：任一触发即抛 `KernelEnvironmentTimeout`。
 
         ## ★ 为什么用 `self._clock()` 而不是 `time.monotonic()` 直接调
 
@@ -1072,7 +1072,7 @@ class Ctf2Client:
 
         ## 超时 ≠ 失败
 
-        抛的是 `Ctf2EnvironmentTimeout` 而**不是**"环境启动失败"
+        抛的是 `KernelEnvironmentTimeout` 而**不是**"环境启动失败"
         （后者不存在，因为"环境启动失败"平台没有明确的信号 ——
         它只是一直不说 ready）。**环境可能还在起**，所以补救动作是
         "过一会儿再调一次这个方法"（幂等，安全），不是"去看日志"。
@@ -1088,7 +1088,7 @@ class Ctf2Client:
 
         while True:
             if polls >= max_polls:
-                raise Ctf2EnvironmentTimeout(
+                raise KernelEnvironmentTimeout(
                     f"题目环境启动轮询次数已达上限（{max_polls} 次），仍未就绪。"
                     "环境可能仍在启动，请稍后重试。",
                     polls=polls,
@@ -1100,7 +1100,7 @@ class Ctf2Client:
                 last_payload = await self.start_environment(
                     practice_id=practice_id, challenge_id=challenge_id
                 )
-            except Ctf2ResponseError as exc:
+            except KernelResponseError as exc:
                 if exc.status_code == 404:
                     # ★「这道题没有靶机环境」—— `has_container: false`
                     #
@@ -1127,7 +1127,7 @@ class Ctf2Client:
                         },
                     )
                 raise
-            except Ctf2RateLimited as exc:
+            except KernelRateLimited as exc:
                 # ★★ 429 **不该**作废整个起环境过程。
                 #
                 # 实测（2026-10-01，用户一次点了 6 道题）：4 道题卡在
@@ -1137,7 +1137,7 @@ class Ctf2Client:
                 #
                 # 根因是这个循环原来**没有捕 429**：`_request` 在 4 次重试
                 # （平台给的 `Retry-After` 只有 1 秒，所以总共约 4 秒）之后
-                # 抛 `Ctf2RateLimited`，它直接穿出循环，把一份 **300 秒的
+                # 抛 `KernelRateLimited`，它直接穿出循环，把一份 **300 秒的
                 # 预算**整个作废。
                 #
                 # 换句话说：我们因为"被要求等 1 秒"而放弃了"还能等 300 秒"
@@ -1156,7 +1156,7 @@ class Ctf2Client:
                 #    不增），而循环中段的截止检查在 `_is_ready` 之后 ——
                 #    如果每一次调用都被限流，就永远走不到那里，变成死循环。
                 if self._clock() >= deadline:
-                    raise Ctf2EnvironmentTimeout(
+                    raise KernelEnvironmentTimeout(
                         f"题目环境启动在 {total_timeout_seconds:.0f} 秒内未就绪"
                         f"（其中最后一次是平台限流：{exc.message}）。"
                         "环境可能仍在启动，请稍后重试。",
@@ -1200,7 +1200,7 @@ class Ctf2Client:
                 )
 
             if self._clock() >= deadline:
-                raise Ctf2EnvironmentTimeout(
+                raise KernelEnvironmentTimeout(
                     f"题目环境启动在 {total_timeout_seconds:.0f} 秒内未就绪"
                     f"（已轮询 {polls} 次）。环境可能仍在启动，请稍后重试。",
                     polls=polls,
@@ -1481,14 +1481,14 @@ def _safe_json(payload: dict[str, Any], limit: int = 500) -> str:
 
 __all__ = [
     "DEFAULT_BASE_URL",
-    "Ctf2AuthExpired",
-    "Ctf2Client",
-    "Ctf2EnvironmentTimeout",
-    "Ctf2Error",
-    "Ctf2RateLimited",
-    "Ctf2ResponseError",
-    "Ctf2ScopeMissing",
-    "Ctf2Unavailable",
+    "KernelAuthExpired",
+    "KernelClient",
+    "KernelEnvironmentTimeout",
+    "KernelError",
+    "KernelRateLimited",
+    "KernelResponseError",
+    "KernelScopeMissing",
+    "KernelUnavailable",
     "EnvironmentAccess",
     "RetryPolicy",
     "TokenBucket",

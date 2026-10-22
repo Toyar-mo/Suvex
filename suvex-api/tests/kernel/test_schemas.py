@@ -34,31 +34,31 @@ def test_challenge_status_literal_matches_the_vocab_enum() -> None:
     而模型层、数据库层都是对的，只有一处字面量落后。
     """
     assert set(get_args(schemas.ChallengeStatusLiteral)) == {
-        member.value for member in vocab.Ctf2ChallengeStatus
+        member.value for member in vocab.KernelChallengeStatus
     }
 
 
 def test_submission_status_literal_matches_the_vocab_enum() -> None:
     assert set(get_args(schemas.SubmissionStatusLiteral)) == {
-        member.value for member in vocab.Ctf2SubmissionStatus
+        member.value for member in vocab.KernelSubmissionStatus
     }
 
 
 def test_environment_status_literal_matches_the_vocab_enum() -> None:
     assert set(get_args(schemas.EnvironmentStatusLiteral)) == {
-        member.value for member in vocab.Ctf2EnvironmentStatus
+        member.value for member in vocab.KernelEnvironmentStatus
     }
 
 
 def test_submit_mode_literal_matches_the_vocab_enum() -> None:
     assert set(get_args(schemas.SubmitModeLiteral)) == {
-        member.value for member in vocab.Ctf2SubmitMode
+        member.value for member in vocab.KernelSubmitMode
     }
 
 
 def test_sandbox_profile_literal_matches_the_vocab_enum() -> None:
     assert set(get_args(schemas.SandboxProfileLiteral)) == {
-        member.value for member in vocab.Ctf2SandboxProfile
+        member.value for member in vocab.KernelSandboxProfile
     }
 
 
@@ -66,12 +66,12 @@ def test_models_generate_their_checks_from_the_vocab() -> None:
     """模型层的 CHECK 表达式由 `values()` 生成，所以它自动跟着 vocab ——
     这条断言是那个"自动"的证据（万一有人把它改成手写字面量就会红）。
     """
-    from app.kernel.models import Ctf2Challenge, Ctf2Environment, Ctf2Submission
+    from app.kernel.models import KernelChallenge, KernelEnvironment, KernelSubmission
 
     for model, enum_cls in (
-        (Ctf2Challenge, vocab.Ctf2ChallengeStatus),
-        (Ctf2Environment, vocab.Ctf2EnvironmentStatus),
-        (Ctf2Submission, vocab.Ctf2SubmissionStatus),
+        (KernelChallenge, vocab.KernelChallengeStatus),
+        (KernelEnvironment, vocab.KernelEnvironmentStatus),
+        (KernelSubmission, vocab.KernelSubmissionStatus),
     ):
         rendered = " ".join(
             str(constraint.sqltext)
@@ -89,18 +89,18 @@ def test_models_generate_their_checks_from_the_vocab() -> None:
 def test_submit_mode_check_covers_every_value() -> None:
     """`submit_mode` 的 CHECK 同理，但它在**另一张表**上（配置单例）。
 
-    单独一条是因为它容易漏：`Ctf2Config` 住在 `settings/models.py`，
+    单独一条是因为它容易漏：`KernelConfig` 住在 `settings/models.py`，
     而"加一个提交策略"的人多半只想到 `ctf2_challenges` 那张表。
     """
-    from app.settings.models import Ctf2Config
+    from app.settings.models import KernelConfig
 
     rendered = " ".join(
         str(constraint.sqltext)
-        for constraint in Ctf2Config.__table__.constraints
+        for constraint in KernelConfig.__table__.constraints
         if constraint.name and "submit_mode_valid" in constraint.name
     )
     assert rendered
-    for value in vocab.values(vocab.Ctf2SubmitMode):
+    for value in vocab.values(vocab.KernelSubmitMode):
         assert f"'{value}'" in rendered
 
 
@@ -114,14 +114,14 @@ def test_wrong_submission_ceiling_matches_between_code_and_database() -> None:
     所以这条断言是那个提醒的**可执行版本**：改了任一处，另一处没跟就红。
     """
     from app.kernel.service import MAX_WRONG_SUBMISSIONS_CEILING
-    from app.settings.models import Ctf2Config
+    from app.settings.models import KernelConfig
 
     rendered = " ".join(
         str(constraint.sqltext)
-        for constraint in Ctf2Config.__table__.constraints
+        for constraint in KernelConfig.__table__.constraints
         if constraint.name and "max_wrong_submissions_within_ceiling" in constraint.name
     )
-    assert rendered, "Ctf2Config 上少了 max_wrong_submissions_within_ceiling"
+    assert rendered, "KernelConfig 上少了 max_wrong_submissions_within_ceiling"
     assert f"<= {MAX_WRONG_SUBMISSIONS_CEILING}" in rendered, (
         f"代码里的上限是 {MAX_WRONG_SUBMISSIONS_CEILING}，而表上的 CHECK 是："
         f"{rendered} —— 改了一处没改另一处"

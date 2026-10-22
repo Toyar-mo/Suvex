@@ -54,11 +54,11 @@ from app.core.db import Base
 from app.core.timeutil import now_utc
 from app.core.vocab import (
     DEFAULT_AGENTSEC_VERDICT,
-    Ctf2ChallengeStatus,
-    Ctf2EnvironmentStatus,
-    Ctf2SandboxProfile,
-    Ctf2SubmissionStatus,
-    Ctf2SubmitMode,
+    KernelChallengeStatus,
+    KernelEnvironmentStatus,
+    KernelSandboxProfile,
+    KernelSubmissionStatus,
+    KernelSubmitMode,
     values,
 )
 
@@ -99,7 +99,7 @@ CTF2_API_PREFIX = "/api/open/v1/user"
 _ACCOUNT_STATUSES = ("active", "expired", "revoked")
 
 
-class Ctf2Account(Base):
+class KernelAccount(Base):
     """一个绑定的 CTF2 账号。
 
     ## 为什么 token 是密文列 + 掩码列（两列）
@@ -197,10 +197,10 @@ class Ctf2Account(Base):
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         # ⚠️ 不含凭据、也不含密文。密文不算明文，但它出现在日志里
         # 同样没有好处，且会诱导别人"反正只是密文"—— 那是一条会滑坡的边。
-        return f"<Ctf2Account id={self.id!r} label={self.label!r} status={self.status!r}>"
+        return f"<KernelAccount id={self.id!r} label={self.label!r} status={self.status!r}>"
 
 
-class Ctf2Platform(Base):
+class KernelPlatform(Base):
     """一个"已接入的平台"：要么是内置驱动，要么是自动生成的配置。
 
     ## ★ 为什么"平台"要单独成一张表
@@ -269,12 +269,12 @@ class Ctf2Platform(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return (
-            f"<Ctf2Platform slug={self.slug!r} driver={self.driver!r} "
+            f"<KernelPlatform slug={self.slug!r} driver={self.driver!r} "
             f"status={self.status!r}>"
         )
 
 
-class Ctf2Competition(Base):
+class KernelCompetition(Base):
     """一场赛事（或一个练习集）。
 
     ## `remote_id` 与 `id` 是两件事
@@ -357,15 +357,15 @@ class Ctf2Competition(Base):
     raw: Mapped[dict | None] = mapped_column(JsonColumn, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Ctf2Competition id={self.id!r} remote={self.remote_id!r} name={self.name!r}>"
+        return f"<KernelCompetition id={self.id!r} remote={self.remote_id!r} name={self.name!r}>"
 
 
-class Ctf2Challenge(Base):
+class KernelChallenge(Base):
     """一道题。
 
     ## ★ 这是整个模块**状态最复杂**的一张表
 
-    `status` 的 7 个取值与它们的理由写在 `vocab.Ctf2ChallengeStatus`
+    `status` 的 7 个取值与它们的理由写在 `vocab.KernelChallengeStatus`
     的 docstring 里，这里不重复。要在这里记的是**两个计数字段的分工**：
 
     · `wrong_submission_count` —— **外部**后果的计数，只统计真正
@@ -387,11 +387,11 @@ class Ctf2Challenge(Base):
             "competition_id", "remote_id", name="uq_ctf2_challenges_competition_remote"
         ),
         CheckConstraint(
-            f"status IN ({', '.join(repr(v) for v in values(Ctf2ChallengeStatus))})",
+            f"status IN ({', '.join(repr(v) for v in values(KernelChallengeStatus))})",
             name="status_valid",
         ),
         CheckConstraint(
-            f"sandbox_profile IN ({', '.join(repr(v) for v in values(Ctf2SandboxProfile))})",
+            f"sandbox_profile IN ({', '.join(repr(v) for v in values(KernelSandboxProfile))})",
             name="sandbox_profile_valid",
         ),
         CheckConstraint("wrong_submission_count >= 0", name="wrong_count_non_negative"),
@@ -470,7 +470,7 @@ class Ctf2Challenge(Base):
 
     # ── 状态机 ────────────────────────────────────────────
     status: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=Ctf2ChallengeStatus.UNSOLVED.value
+        String(32), nullable=False, default=KernelChallengeStatus.UNSOLVED.value
     )
     # ── flag：候选与已确认**分两列** ──────────────────────
     #
@@ -502,7 +502,7 @@ class Ctf2Challenge(Base):
 
     # ── 沙箱与解题 ────────────────────────────────────────
     sandbox_profile: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=Ctf2SandboxProfile.BASE.value
+        String(32), nullable=False, default=KernelSandboxProfile.BASE.value
     )
     # 解题那一次对应的扫描 id（可空：还没解过）。
     #
@@ -563,10 +563,10 @@ class Ctf2Challenge(Base):
         return max(0, int(self.max_wrong_submissions or 0) - int(self.wrong_submission_count or 0))
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Ctf2Challenge id={self.id!r} title={self.title!r} status={self.status!r}>"
+        return f"<KernelChallenge id={self.id!r} title={self.title!r} status={self.status!r}>"
 
 
-class Ctf2Environment(Base):
+class KernelEnvironment(Base):
     """一次"启动题目环境"的尝试及其结果（已定设计决策 1）。
 
     见模块 docstring：它**不被合并进 challenges**，因为"同一道题起过
@@ -588,11 +588,11 @@ class Ctf2Environment(Base):
     __tablename__ = "ctf2_environments"
     __table_args__ = (
         CheckConstraint(
-            f"status IN ({', '.join(repr(v) for v in values(Ctf2EnvironmentStatus))})",
+            f"status IN ({', '.join(repr(v) for v in values(KernelEnvironmentStatus))})",
             name="status_valid",
         ),
         CheckConstraint(
-            f"sandbox_profile IN ({', '.join(repr(v) for v in values(Ctf2SandboxProfile))})",
+            f"sandbox_profile IN ({', '.join(repr(v) for v in values(KernelSandboxProfile))})",
             name="sandbox_profile_valid",
         ),
         # ★ 不变量：只有 `ready` 才允许有 access_url。
@@ -615,10 +615,10 @@ class Ctf2Environment(Base):
     )
 
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=Ctf2EnvironmentStatus.STOPPED.value
+        String(16), nullable=False, default=KernelEnvironmentStatus.STOPPED.value
     )
     sandbox_profile: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=Ctf2SandboxProfile.BASE.value
+        String(32), nullable=False, default=KernelSandboxProfile.BASE.value
     )
 
     access_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -648,10 +648,10 @@ class Ctf2Environment(Base):
     )
 
     def __repr__(self) -> str:  # pragma: no cover
-        return f"<Ctf2Environment id={self.id!r} status={self.status!r}>"
+        return f"<KernelEnvironment id={self.id!r} status={self.status!r}>"
 
 
-class Ctf2SolveAttempt(Base):
+class KernelSolveAttempt(Base):
     """**一次解题尝试的不可变策略快照。**
 
     ## ★ 为什么必须有这张表（2026-10-11 补）
@@ -684,28 +684,28 @@ class Ctf2SolveAttempt(Base):
 
     存到 challenge 上会让"上一次用什么策略"被下一次覆盖 ——
     而事后复盘"它当时是按什么策略跑的"正是最需要能回答的问题。
-    与 `Ctf2Environment` 存"同一道题起过三次环境"是同一条理由。
+    与 `KernelEnvironment` 存"同一道题起过三次环境"是同一条理由。
 
     ## ⚠️ 落库之后**不可变**
 
     写进去就不再改。worker 读它、不再读全局设置 —— 这就是这个类
     存在的全部意义。要换策略就再受理一次（新的一行）。
 
-    与 `Ctf2Submission` 的"只增不改"是同一条纪律，但方向相反：
+    与 `KernelSubmission` 的"只增不改"是同一条纪律，但方向相反：
     提交记录记的是**对外动作**，本表记的是**内部输入**。
     """
 
     __tablename__ = "ctf2_solve_attempts"
     __table_args__ = (
-        # 取值合法性。与 `Ctf2Submission.mode_valid` 同一个理由：
+        # 取值合法性。与 `KernelSubmission.mode_valid` 同一个理由：
         # 这两列会进审计与复盘，写进一个拼错的字符串会让
         # "这次到底按什么策略跑的"变成读不出来的东西。
         CheckConstraint(
-            f"mode IN ({', '.join(repr(v) for v in values(Ctf2SubmitMode))})",
+            f"mode IN ({', '.join(repr(v) for v in values(KernelSubmitMode))})",
             name="solve_attempt_mode_valid",
         ),
         CheckConstraint(
-            f"sandbox_profile IN ({', '.join(repr(v) for v in values(Ctf2SandboxProfile))})",
+            f"sandbox_profile IN ({', '.join(repr(v) for v in values(KernelSandboxProfile))})",
             name="solve_attempt_profile_valid",
         ),
         # 回合数必须有下界：0 或负数意味着"受理了但一轮都不跑"，
@@ -728,7 +728,7 @@ class Ctf2SolveAttempt(Base):
     #    取舍不同：那里漏填会静默变成某个值，这里漏填会被下面
     #    `service.start_solve` 的显式解析挡住。
     mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=Ctf2SubmitMode.SAFE.value
+        String(16), nullable=False, default=KernelSubmitMode.SAFE.value
     )
     max_turns: Mapped[int] = mapped_column(Integer, nullable=False)
     sandbox_profile: Mapped[str] = mapped_column(String(32), nullable=False)
@@ -748,7 +748,7 @@ class Ctf2SolveAttempt(Base):
     #   （换模型、删掉再建一个），而"这次尝试用的到底是哪个"必须与
     #   当时一致 —— 否则复盘时"为什么这次没解出来"永远说不清，
     #   因为看到的模型可能已经不是当时那个了。
-    #   与 `Ctf2Submission.sub_flag_id` 复制而非引用是同一条理由。
+    #   与 `KernelSubmission.sub_flag_id` 复制而非引用是同一条理由。
     #
     # 可空：受理时若还没配 provider，`build_spec` 会抛错并把题目置
     # failed —— 那时这行仍然是"受理过的证据"，不该因为没模型就不落库。
@@ -765,12 +765,12 @@ class Ctf2SolveAttempt(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"<Ctf2SolveAttempt id={self.id!r} challenge={self.challenge_id!r} "
+            f"<KernelSolveAttempt id={self.id!r} challenge={self.challenge_id!r} "
             f"mode={self.mode!r} turns={self.max_turns}>"
         )
 
 
-class Ctf2Submission(Base):
+class KernelSubmission(Base):
     """一条 flag 提交记录。**只增不改。**
 
     ## 为什么"只增不改"是一条硬规矩
@@ -795,11 +795,11 @@ class Ctf2Submission(Base):
     __tablename__ = "ctf2_submissions"
     __table_args__ = (
         CheckConstraint(
-            f"status IN ({', '.join(repr(v) for v in values(Ctf2SubmissionStatus))})",
+            f"status IN ({', '.join(repr(v) for v in values(KernelSubmissionStatus))})",
             name="status_valid",
         ),
         CheckConstraint(
-            f"mode IN ({', '.join(repr(v) for v in values(Ctf2SubmitMode))})",
+            f"mode IN ({', '.join(repr(v) for v in values(KernelSubmitMode))})",
             name="mode_valid",
         ),
         # ★ 不变量：`correct` 的提交必然有平台回执 id。
@@ -836,10 +836,10 @@ class Ctf2Submission(Base):
     sub_flag_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     status: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=Ctf2SubmissionStatus.PENDING.value
+        String(16), nullable=False, default=KernelSubmissionStatus.PENDING.value
     )
     mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=Ctf2SubmitMode.SAFE.value
+        String(16), nullable=False, default=KernelSubmitMode.SAFE.value
     )
 
     # 平台回执。见 `correct_implies_receipt` 约束。
@@ -858,10 +858,10 @@ class Ctf2Submission(Base):
     def __repr__(self) -> str:  # pragma: no cover
         # ⚠️ repr 不含 flag 本身：它会进日志与异常消息，而
         # "提交过什么"在日志里没有价值 —— 记录里有，且那才是有权限的读路径。
-        return f"<Ctf2Submission id={self.id!r} status={self.status!r} mode={self.mode!r}>"
+        return f"<KernelSubmission id={self.id!r} status={self.status!r} mode={self.mode!r}>"
 
 
-class Ctf2SolveNote(Base):
+class KernelSolveNote(Base):
     """一道题的**解题方法卡**（v0.32）—— 跨题复用的最小单位。
 
     ## 为什么需要它
@@ -979,12 +979,12 @@ class Ctf2SolveNote(Base):
         # ⚠️ 不含 approach/dead_ends 正文：它们会进日志，
         # 而卡片内容可能很长。id 与 category 足够定位。
         return (
-            f"<Ctf2SolveNote challenge={self.challenge_id!r} "
+            f"<KernelSolveNote challenge={self.challenge_id!r} "
             f"category={self.category!r} solved={self.solved}>"
         )
 
 
-class Ctf2SolveUsage(Base):
+class KernelSolveUsage(Base):
     """**一次 LLM 调用的 token 用量**（v0.36）。
 
     ## ★ 为什么是"每次调用一行"而不是在尝试上加累计列
@@ -1008,7 +1008,7 @@ class Ctf2SolveUsage(Base):
     token 记 0 —— 而"真的是 0 token"与"没记录到"在界面上长得一模一样。
 
     所以单开一列布尔值区分。这与 `providers` 的 `hasKey` / `apiKey`
-    分两列、`Ctf2Submission` 的 `candidateFlag` / `confirmedFlag`
+    分两列、`KernelSubmission` 的 `candidateFlag` / `confirmedFlag`
     分两列是同一条纪律：**两种语义不能共用一个"空"**。
 
     不这么做的后果很具体：用户看到"某次解题消耗 0"，要么以为它没跑过，
@@ -1056,7 +1056,7 @@ class Ctf2SolveUsage(Base):
     )
     # ⚠️ 冗余存 challenge_id（attempt 已经能关联到题）：题解与总览页
     #    都要"按题聚合 token"，而只走 attempt 需要多一次 JOIN。
-    #    与 `Ctf2SolveNote.category` 复制而非引用是同一条取舍。
+    #    与 `KernelSolveNote.category` 复制而非引用是同一条取舍。
     challenge_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("ctf2_challenges.id", ondelete="CASCADE"), nullable=False
     )
@@ -1086,12 +1086,12 @@ class Ctf2SolveUsage(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"<Ctf2SolveUsage attempt={self.attempt_id!r} turn={self.turn} "
+            f"<KernelSolveUsage attempt={self.attempt_id!r} turn={self.turn} "
             f"total={self.total_tokens} reported={self.usage_reported}>"
         )
 
 
-class Ctf2Writeup(Base):
+class KernelWriteup(Base):
     """一道题的**题解（Writeup）**（v0.36）—— 赛后提交的依据。
 
     ## 为什么 CTF2 需要自己一份（而不是复用 scans 的）
@@ -1112,7 +1112,7 @@ class Ctf2Writeup(Base):
     ## ★ 一题一份（`UNIQUE`），不是每次尝试一份
 
     题解是**给赛后提交用的**，一份就够。多次尝试产多份会让"提交哪一份"
-    变成新问题。重解时**更新**（与 `Ctf2SolveNote` 的 upsert 同理）。
+    变成新问题。重解时**更新**（与 `KernelSolveNote` 的 upsert 同理）。
 
     ## ★ 未解出也产出
 
@@ -1120,11 +1120,11 @@ class Ctf2Writeup(Base):
     ——"我们试过什么、卡在哪"本身就是可提交的材料，也是复盘依据。
     所以 `solved` 是一个**字段**而不是"要不要建这一行"的判据。
 
-    ## ★★ flag **不脱敏** —— 与 `Ctf2SolveNote` 恰好相反
+    ## ★★ flag **不脱敏** —— 与 `KernelSolveNote` 恰好相反
 
     这个差别必须写下来，否则后来者会"顺手统一"而把其中一边改坏：
 
-    | | `Ctf2SolveNote`（方法卡） | `Ctf2Writeup`（题解） |
+    | | `KernelSolveNote`（方法卡） | `KernelWriteup`（题解） |
     | --- | --- | --- |
     | 去哪 | **另一道题**的 prompt | 赛后提交 / 给人看 |
     | 带 flag 的后果 | **泄漏**（B 题可能把 A 题的答案交上去） | 正确 —— flag 正是要展示的 |
@@ -1175,12 +1175,12 @@ class Ctf2Writeup(Base):
     def __repr__(self) -> str:  # pragma: no cover
         # ⚠️ 不含 markdown 正文：它会进日志，而题解可能有几千行。
         return (
-            f"<Ctf2Writeup challenge={self.challenge_id!r} solved={self.solved} "
+            f"<KernelWriteup challenge={self.challenge_id!r} solved={self.solved} "
             f"len={len(self.markdown or '')}>"
         )
 
 
-class Ctf2SolveTelemetry(Base):
+class KernelSolveTelemetry(Base):
     """**一次解题的横向指标快照**（v0.45）—— 生产遥测。
 
     ## 为什么需要这张表（这是它存在的唯一理由）
@@ -1204,7 +1204,7 @@ class Ctf2SolveTelemetry(Base):
 
     ## ★ 为什么是独立表，而不是往 `ctf2_writeups` 加列
 
-    | | `Ctf2Writeup` | 本表 |
+    | | `KernelWriteup` | 本表 |
     | --- | --- | --- |
     | 行数/题 | **一题一行**（`UNIQUE`，重解时更新） | **一次解题一行** |
     | 是谁的产物 | 赛后提交的**成品** | 运行的**观测样本** |
@@ -1215,7 +1215,7 @@ class Ctf2SolveTelemetry(Base):
 
     ## ★ 为什么 `attempt_id` 是 `SET NULL` 而 `challenge_id` 是 `CASCADE`
 
-    与 `Ctf2Writeup` 的同名取舍是**同一个理由**但结论相反，值得写清：
+    与 `KernelWriteup` 的同名取舍是**同一个理由**但结论相反，值得写清：
 
     - attempt 快照被清理时，这条观测**仍然有价值**（它说的是"这道题解了
       几次、各花多少轮"），所以 `SET NULL` 让它活下来；
@@ -1232,7 +1232,7 @@ class Ctf2SolveTelemetry(Base):
     ## 不存什么
 
     不存 `elapsed_sec`：它的来源是**借壳的 `Scan.duration_sec`**
-    （`Ctf2Challenge` 自己没有耗时列），而那个值在 `finalize_solve_scan`
+    （`KernelChallenge` 自己没有耗时列），而那个值在 `finalize_solve_scan`
     之后才存在 —— 本表在 `_record_outcome` 里写，那时它还是 `None`。
     耗时列在 `ctf2_writeups` 里已有，且实测没有分辨力
     （宿主负载能把它放大三倍），不为它在这里再造一处不一致的读数。
@@ -1326,7 +1326,7 @@ class Ctf2SolveTelemetry(Base):
 
     def __repr__(self) -> str:  # pragma: no cover
         return (
-            f"<Ctf2SolveTelemetry challenge={self.challenge_id!r} "
+            f"<KernelSolveTelemetry challenge={self.challenge_id!r} "
             f"solved={self.solved} turns={self.turns} "
             f"tools={self.tool_calls} notes={self.notes_count} "
             f"sub={self.subcategory!r}>"
@@ -1336,14 +1336,14 @@ class Ctf2SolveTelemetry(Base):
 __all__ = [
     "CTF2_API_PREFIX",
     "CTF2_OFFICIAL_HOSTS",
-    "Ctf2Account",
-    "Ctf2Challenge",
-    "Ctf2Competition",
-    "Ctf2Environment",
-    "Ctf2SolveAttempt",
-    "Ctf2SolveNote",
-    "Ctf2SolveTelemetry",
-    "Ctf2SolveUsage",
-    "Ctf2Submission",
-    "Ctf2Writeup",
+    "KernelAccount",
+    "KernelChallenge",
+    "KernelCompetition",
+    "KernelEnvironment",
+    "KernelSolveAttempt",
+    "KernelSolveNote",
+    "KernelSolveTelemetry",
+    "KernelSolveUsage",
+    "KernelSubmission",
+    "KernelWriteup",
 ]

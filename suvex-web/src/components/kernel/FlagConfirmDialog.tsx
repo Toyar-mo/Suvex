@@ -1,5 +1,5 @@
 import { cn } from '@/lib/cn'
-import { normalizeFlag, validateFlag, type Ctf2Challenge, type Ctf2SubmitMode } from '@/data/ctf2'
+import { normalizeFlag, validateFlag, type KernelChallenge, type KernelSubmitMode } from '@/data/kernel'
 import { AlertTriangle, ChevronLeft, Flag, ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -81,9 +81,9 @@ export function FlagConfirmDialog({
   onConfirm,
   onCancel,
 }: {
-  challenge: Ctf2Challenge | null
+  challenge: KernelChallenge | null
   /** 当前提交策略 —— 决定第 2 步的一句附注 */
-  mode: Ctf2SubmitMode
+  mode: KernelSubmitMode
   open: boolean
   busy?: boolean
   onConfirm: (flag: string) => void
@@ -117,8 +117,8 @@ function FlagConfirmBody({
   onConfirm,
   onCancel,
 }: {
-  challenge: Ctf2Challenge
-  mode: Ctf2SubmitMode
+  challenge: KernelChallenge
+  mode: KernelSubmitMode
   busy: boolean
   onConfirm: (flag: string) => void
   onCancel: () => void
@@ -376,7 +376,7 @@ function FlagConfirmBody({
  * **够判断的最小信息**，不是一份文档。把几十行推理塞进来会让
  * 真正要看的那个 flag 被淹掉。
  */
-function EvidenceSummary({ challenge }: { challenge: Ctf2Challenge }) {
+function EvidenceSummary({ challenge }: { challenge: KernelChallenge }) {
   const description = challenge.description?.trim()
   return (
     <div className="flex flex-col gap-1 rounded-sm border border-line bg-surface-sunken p-2.5">

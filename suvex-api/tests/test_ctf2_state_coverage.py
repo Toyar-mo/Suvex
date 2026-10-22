@@ -22,7 +22,7 @@ import ast
 import inspect
 import textwrap
 
-from app.core.vocab import Ctf2ChallengeStatus
+from app.core.vocab import KernelChallengeStatus
 from app.kernel import runner, scheduler
 
 
@@ -35,8 +35,8 @@ def _code_of(func) -> str:  # noqa: ANN001
     结果**全部误报** —— 因为它们匹配到了我自己写的注释：
 
       · 断言"不该出现 `== SOLVING`"，而注释里正在引用它解释"改了什么"；
-      · 断言"不该出现 `Ctf2Submission`"，而注释里提到了
-        `Ctf2SubmissionStatus.PENDING`。
+      · 断言"不该出现 `KernelSubmission`"，而注释里提到了
+        `KernelSubmissionStatus.PENDING`。
 
     也就是说：**注释写得越详细，这种测试越容易假红** ——
     而详细注释恰恰是这个项目的风格。所以必须解析成 AST，
@@ -182,7 +182,7 @@ def test_record_outcome_covers_environment_ready() -> None:
     """
     source = _code_of(runner._record_outcome)
 
-    assert "== Ctf2ChallengeStatus.SOLVING.value" not in source, (
+    assert "== KernelChallengeStatus.SOLVING.value" not in source, (
         "`_record_outcome` 又用 `== SOLVING` 穷举了 —— worker 起来之后"
         "主状态是 `environment_ready`，那个分支几乎永远不命中，"
         "题目会永久卡在'环境已就绪'。\n"
@@ -226,7 +226,7 @@ def test_recover_orphans_covers_submitting() -> None:
     这正是 `recover_orphans` docstring 里描述过的那种僵尸
     （"没有错误、没有在跑、也点不动的题"），只是换了个状态值。
     """
-    source = _code_of(scheduler.Ctf2Scheduler.recover_orphans)
+    source = _code_of(scheduler.KernelScheduler.recover_orphans)
 
     assert "SUBMITTING.value" in source, (
         "`recover_orphans` 没有回收 `submitting` —— 服务重启若落在"
@@ -241,13 +241,13 @@ def test_recover_orphans_keeps_the_pending_submission_row() -> None:
     """★ 回收 `submitting` 时**不能**删掉那条 `pending` 提交记录。
 
     它的语义是"请求已发出、结果未知"（见
-    `vocab.Ctf2SubmissionStatus.PENDING` 的注释）—— 那是**一张需要
+    `vocab.KernelSubmissionStatus.PENDING` 的注释）—— 那是**一张需要
     人工对账的欠条**。删掉它等于把"我们可能已经提交过这个 flag"
     这件事抹掉，而平台那边可能已经记账。
     """
-    source = _code_of(scheduler.Ctf2Scheduler.recover_orphans)
+    source = _code_of(scheduler.KernelScheduler.recover_orphans)
 
-    assert "Ctf2Submission" not in source, (
+    assert "KernelSubmission" not in source, (
         "`recover_orphans` 动了提交记录 —— `pending` 那张欠条必须留着，"
         "它记录的是'可能已经提交过'，删了就再也对不上账。"
     )
@@ -267,7 +267,7 @@ def test_every_non_terminal_status_is_recoverable() -> None:
     **凡是"表示有东西正在跑"的状态，重启后都必须能被回收** ——
     因为重启意味着那些"东西"已经不存在了。
 
-    判据：`Ctf2ChallengeStatus` 里除终态外的每一个取值，
+    判据：`KernelChallengeStatus` 里除终态外的每一个取值，
     都要出现在 `recover_orphans` 的状态列表里。
 
     这条测试的价值在于**面向未来**：将来加一个新状态时，
@@ -278,19 +278,19 @@ def test_every_non_terminal_status_is_recoverable() -> None:
     # 终态：重启后**不该**被重置 —— 它们是已经定下来的结论。
     # 加新状态时，如果它不属于这里，就会被下面那条断言逼着加进回收列表。
     terminal = {
-        Ctf2ChallengeStatus.SOLVED.value,
-        Ctf2ChallengeStatus.CANDIDATE_READY.value,
-        Ctf2ChallengeStatus.FAILED.value,
-        Ctf2ChallengeStatus.UNSOLVED.value,
+        KernelChallengeStatus.SOLVED.value,
+        KernelChallengeStatus.CANDIDATE_READY.value,
+        KernelChallengeStatus.FAILED.value,
+        KernelChallengeStatus.UNSOLVED.value,
     }
 
-    source = _code_of(scheduler.Ctf2Scheduler.recover_orphans)
-    all_statuses = {member.value for member in Ctf2ChallengeStatus}
+    source = _code_of(scheduler.KernelScheduler.recover_orphans)
+    all_statuses = {member.value for member in KernelChallengeStatus}
     non_terminal = all_statuses - terminal
 
     # ⚠️ 按**枚举成员名**匹配，不按小写的值匹配。
     #
-    # 代码里写的是 `Ctf2ChallengeStatus.SOLVING.value`，而 AST 还原出来
+    # 代码里写的是 `KernelChallengeStatus.SOLVING.value`，而 AST 还原出来
     # 也是这个形状 —— 小写的 `solving` **根本不出现在源码里**。
     # 第一版我按小写值匹配，于是三条明明已经回收的状态全被判成"缺失"
     # （假红），而假红的代价是让人去改本来正确的代码。
@@ -300,7 +300,7 @@ def test_every_non_terminal_status_is_recoverable() -> None:
     missing = [
         value
         for value in sorted(non_terminal)
-        if f"Ctf2ChallengeStatus.{Ctf2ChallengeStatus(value).name}.value" not in source
+        if f"KernelChallengeStatus.{KernelChallengeStatus(value).name}.value" not in source
     ]
     assert not missing, (
         f"这些**非终态**没有被 `recover_orphans` 回收：{missing}\n"

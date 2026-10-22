@@ -32,7 +32,7 @@ from sqlalchemy import event, select
 
 from app.core.ids import new_id
 from app.core.vocab import SCAN_ORIGIN_CTF2, ScanGoal, ScanStatus
-from app.kernel.models import Ctf2Challenge, Ctf2Competition
+from app.kernel.models import KernelChallenge, KernelCompetition
 from app.scans import router as scans_router
 from app.scans.models import Scan
 from app.scans.schemas import ScanOut
@@ -73,9 +73,9 @@ def _make_scan(db_session, *, origin: str | None = None, goal: str = ScanGoal.FI
 
 def _make_challenge(db_session, scan, *, category: str, remote_id: str | None = None):  # noqa: ANN001
     """给某条 scan 挂一道 CTF2 题（`scan_id` 指过去）。"""
-    comp = db_session.execute(select(Ctf2Competition).limit(1)).scalar_one_or_none()
+    comp = db_session.execute(select(KernelCompetition).limit(1)).scalar_one_or_none()
     if comp is None:
-        comp = Ctf2Competition(
+        comp = KernelCompetition(
             id=new_id("ctf2comp"),
             account_id=None,
             remote_id="local-reviews",
@@ -86,7 +86,7 @@ def _make_challenge(db_session, scan, *, category: str, remote_id: str | None = 
         db_session.add(comp)
         db_session.flush()
 
-    challenge = Ctf2Challenge(
+    challenge = KernelChallenge(
         id=new_id("ctf2chal"),
         competition_id=comp.id,
         remote_id=remote_id or new_id("local"),

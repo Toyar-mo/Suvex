@@ -57,16 +57,16 @@ def _description(evidence_name: str) -> str:
 
 def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
     from app.core.ids import new_id
-    from app.core.vocab import Ctf2ChallengeStatus
-    from app.kernel.models import Ctf2Challenge, Ctf2Competition
+    from app.core.vocab import KernelChallengeStatus
+    from app.kernel.models import KernelChallenge, KernelCompetition
     from app.kernel.service import get_account
 
-    comp = db.query(Ctf2Competition).filter(Ctf2Competition.name == "IR-Lab").one_or_none()
+    comp = db.query(KernelCompetition).filter(KernelCompetition.name == "IR-Lab").one_or_none()
     if comp is None:
         account = get_account(db)
         if account is None:
             raise SystemExit("这台机器上没有绑定的 CTF2 账号，无法建赛事行。")
-        comp = Ctf2Competition(
+        comp = KernelCompetition(
             id=new_id("ctf2comp"),
             account_id=account.id,
             kind="practice",
@@ -78,13 +78,13 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
         db.refresh(comp)
 
     chal = (
-        db.query(Ctf2Challenge)
-        .filter(Ctf2Challenge.competition_id == comp.id)
-        .filter(Ctf2Challenge.title == title)
+        db.query(KernelChallenge)
+        .filter(KernelChallenge.competition_id == comp.id)
+        .filter(KernelChallenge.title == title)
         .one_or_none()
     )
     if chal is None:
-        chal = Ctf2Challenge(
+        chal = KernelChallenge(
             id=new_id("ctf2chal"),
             competition_id=comp.id,
             remote_id=f"ir-case-{new_id('x')[-8:]}",
@@ -92,7 +92,7 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
             category=IR_CATEGORY,
             description=_description(evidence.name),
             attachments=[{"name": evidence.name, "url": "http://ctf2.dasctf.com/ir/local"}],
-            status=Ctf2ChallengeStatus.UNSOLVED.value,
+            status=KernelChallengeStatus.UNSOLVED.value,
         )
         from app.kernel import runner as _runner
 
@@ -110,8 +110,8 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
         print(f"[case] profile 对账：{chal.sandbox_profile} -> {want_profile}")
         chal.sandbox_profile = want_profile
         dirty = True
-    if chal.status != Ctf2ChallengeStatus.UNSOLVED.value:
-        chal.status = Ctf2ChallengeStatus.UNSOLVED.value
+    if chal.status != KernelChallengeStatus.UNSOLVED.value:
+        chal.status = KernelChallengeStatus.UNSOLVED.value
         dirty = True
     # 描述与附件名按本次证据包重写（同一个标题可能在多次跑之间换了包）
     if chal.description != _description(evidence.name):
@@ -141,11 +141,11 @@ def _ensure_rows(db, *, evidence: Path, title: str):  # noqa: ANN001
 
 def _enable_ir(db) -> None:  # noqa: ANN001
     from app.kernel.service import effective_ctf2_settings
-    from app.settings.models import Ctf2Config
+    from app.settings.models import KernelConfig
 
-    row = db.get(Ctf2Config, "default")
+    row = db.get(KernelConfig, "default")
     if row is None:
-        row = Ctf2Config(id="default")
+        row = KernelConfig(id="default")
         db.add(row)
     row.enable_ir_scenarios = True
     row.submit_mode = "safe"          # 不向任何平台提交
@@ -156,7 +156,7 @@ def _enable_ir(db) -> None:  # noqa: ANN001
 def _usage_summary(outcome) -> dict:  # noqa: ANN001
     """把 `outcome.usages` 折成可对比的数。
 
-    直接照 `Ctf2SolveUsages` 的口径：优先 `total_tokens`，它缺失（=0）
+    直接照 `KernelSolveUsages` 的口径：优先 `total_tokens`，它缺失（=0）
     而分项有值时用 `prompt+completion`（见 `runner.TokenUsage.total`）。
     """
     rows = list(getattr(outcome, "usages", None) or [])

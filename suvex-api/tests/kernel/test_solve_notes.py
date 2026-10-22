@@ -14,12 +14,12 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
-from app.core.vocab import Ctf2ChallengeStatus
+from app.core.vocab import KernelChallengeStatus
 from app.kernel import notes as notes_mod
-from app.kernel.models import Ctf2SolveNote
+from app.kernel.models import KernelSolveNote
 
 
-def _note_for(db: Session, challenge_id: str, **overrides) -> Ctf2SolveNote:  # noqa: ANN003
+def _note_for(db: Session, challenge_id: str, **overrides) -> KernelSolveNote:  # noqa: ANN003
     """造一张方法卡。
 
     ⚠️ `challenge_id` **必须指向一条真实存在的题目行** ——
@@ -38,7 +38,7 @@ def _note_for(db: Session, challenge_id: str, **overrides) -> Ctf2SolveNote:  # 
         "dead_ends": "",
     }
     fields.update(overrides)
-    return Ctf2SolveNote(**fields)
+    return KernelSolveNote(**fields)
 
 
 # ══════════════════════════════════════════════════════════
@@ -567,7 +567,7 @@ def test_recall_only_returns_the_same_category(
 
     不同分类的方法不能混用（逆向的经验对 crypto 题是噪音）。
     """
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     # ⚠️ 卡片的 challenge_id 有外键 —— 必须造**真实题目行**。
     same = _make_challenge(db_session, ctf2_competition, remote_id="same-cat")
@@ -627,7 +627,7 @@ def test_recall_puts_solved_notes_first(
     db_session: Session, ctf2_challenge, ctf2_competition
 ) -> None:
     """★ 已解出的卡排前面（成功的经验信息量更大）。"""
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     for solved, approach in ((False, "失败的经验"), (True, "成功的经验")):
         ch = _make_challenge(db_session, ctf2_competition, remote_id=f"order-{solved}")
@@ -681,7 +681,7 @@ def test_recall_puts_ruled_out_notes_with_the_solved_ones(
     from sqlalchemy import update
 
     from app.core.vocab import AgentsecVerdict
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     _turn_agentsec_on(db_session)
     cat = "agentsec-prompt-injection"
@@ -730,8 +730,8 @@ def test_recall_puts_ruled_out_notes_with_the_solved_ones(
     # 库的精度一不够就成了同秒，`updated_at.desc()` 的次序不确定，
     # 这条测试会偶发飘红 —— 而偶发飘红的测试等于没有。
     db_session.execute(
-        update(Ctf2SolveNote)
-        .where(Ctf2SolveNote.challenge_id == pending.id)
+        update(KernelSolveNote)
+        .where(KernelSolveNote.challenge_id == pending.id)
         .values(updated_at=ruled_note.updated_at + timedelta(seconds=60))
     )
     db_session.commit()
@@ -762,7 +762,7 @@ def test_recall_returns_empty_without_a_category(
     所以现在**先造一张必然会被查到的卡**（分类为空串），再断言
     "无分类的题目仍然返回空" —— 只有早退分支真的在，才会返回空。
     """
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     # 造一张**真实存在**的卡，分类故意设成空串 ——
     # 这样"无分类"的题目如果没走早退分支，就会查到它。
@@ -785,7 +785,7 @@ def test_recall_respects_the_limit(
     db_session: Session, ctf2_challenge, ctf2_competition
 ) -> None:
     """★ 召回数量有上限。"""
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     for i in range(10):
         ch = _make_challenge(db_session, ctf2_competition, remote_id=f"many-{i}")
@@ -814,7 +814,7 @@ def test_render_says_these_are_other_challenges(db_session: Session) -> None:
     不这么写的话，模型会把它当成当前题的已知条件 —— 而它是另一道题
     的方法，工具名可能对、参数一定不对。
     """
-    note = Ctf2SolveNote(
+    note = KernelSolveNote(
         id=new_id("ctf2note"),
         challenge_id="ctf2chal_RENDER_TEST",
         category="REVERSE",
@@ -832,7 +832,7 @@ def test_render_says_these_are_other_challenges(db_session: Session) -> None:
 
 def test_render_includes_dead_ends(db_session: Session) -> None:
     """★ 走不通的方向也要渲染（那是卡片里最省时间的部分）。"""
-    note = Ctf2SolveNote(
+    note = KernelSolveNote(
         id=new_id("ctf2note"),
         challenge_id="ctf2chal_DEADEND_TEST",
         category="REVERSE",
@@ -1149,15 +1149,15 @@ class _FakeOutcome:
         self.candidates: list[object] = []
 
 
-def _learn(db: Session, challenge, outcome) -> Ctf2SolveNote:  # noqa: ANN001
+def _learn(db: Session, challenge, outcome) -> KernelSolveNote:  # noqa: ANN001
     """跑一次 `learn_from_solve` 并把落库的卡读回来。"""
     from app.kernel.service import learn_from_solve
 
     learn_from_solve(db, challenge, outcome)
     db.expire_all()
     return (
-        db.query(Ctf2SolveNote)
-        .filter(Ctf2SolveNote.challenge_id == challenge.id)
+        db.query(KernelSolveNote)
+        .filter(KernelSolveNote.challenge_id == challenge.id)
         .one()
     )
 
@@ -1167,11 +1167,11 @@ def test_learn_writes_confirmed_verdict_on_solve(
 ) -> None:
     """解出来了 → `verdict=confirmed`、`solved=True`。"""
     from app.core.vocab import AgentsecVerdict
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     ch = _make_challenge(
         db_session, ctf2_competition, remote_id="v-confirmed",
-        status=Ctf2ChallengeStatus.SOLVED.value,
+        status=KernelChallengeStatus.SOLVED.value,
         confirmed_flag="flag{ok}",
     )
     row = _learn(db_session, ch, _FakeOutcome(transcript="run_shell: ls -la"))
@@ -1190,7 +1190,7 @@ def test_learn_writes_needs_follow_up_on_bare_failure(
     `notes.RULED_OUT_EVIDENCE_MARKERS` 的说明）。
     """
     from app.core.vocab import AgentsecVerdict
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     ch = _make_challenge(db_session, ctf2_competition, remote_id="v-followup")
     row = _learn(db_session, ch, _FakeOutcome(error="timeout"))
@@ -1203,13 +1203,13 @@ def test_learn_accepts_agentsec_category_when_switch_on(
     db_session: Session, ctf2_competition
 ) -> None:
     """开关打开 + agentsec 分类 → 卡能写成那个分类。"""
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     _turn_agentsec_on(db_session)
     ch = _make_challenge(
         db_session, ctf2_competition, remote_id="v-sec-on",
         category="agentsec-data-leak",
-        status=Ctf2ChallengeStatus.SOLVED.value,
+        status=KernelChallengeStatus.SOLVED.value,
         confirmed_flag="flag{ok}",
     )
     row = _learn(db_session, ch, _FakeOutcome(transcript="run_shell: ls"))
@@ -1239,13 +1239,13 @@ def test_learn_degrades_to_blank_category_when_switch_off(
     新写入不产生脏数据，这一条守的是已有脏数据不会连带毁掉知识。
     两处判据不同是因为**风险方向不同**。
     """
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     _turn_agentsec_off(db_session)
     ch = _make_challenge(
         db_session, ctf2_competition, remote_id="v-sec-off",
         category="agentsec-prompt-injection",
-        status=Ctf2ChallengeStatus.SOLVED.value,
+        status=KernelChallengeStatus.SOLVED.value,
         confirmed_flag="flag{ok}",
     )
     row = _learn(db_session, ch, _FakeOutcome(transcript="run_shell: ls"))
@@ -1304,7 +1304,7 @@ def test_learn_marks_ruled_out_as_solved(
     然后读**数据库里的那一行**断言。
     """
     from app.core.vocab import AgentsecVerdict
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     _turn_agentsec_on(db_session)
     ch = _make_challenge(

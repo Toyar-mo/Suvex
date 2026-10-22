@@ -60,7 +60,7 @@ logger = logging.getLogger("suvex.ctf2")
 _DISABLED_RECHECK_SECONDS = 30.0
 
 
-class Ctf2AutoSync:
+class KernelAutoSync:
     """一个后台线程：定时增量同步 → 给新题发优先级 →（可选）自动开解。"""
 
     def __init__(self) -> None:
@@ -247,15 +247,15 @@ class Ctf2AutoSync:
 
 # ── 单例（与 `scheduler.get_scheduler` 同一个模式）──────────
 
-_autosync: Ctf2AutoSync | None = None
+_autosync: KernelAutoSync | None = None
 _singleton_lock = threading.Lock()
 
 
-def get_autosync() -> Ctf2AutoSync:
+def get_autosync() -> KernelAutoSync:
     global _autosync
     with _singleton_lock:
         if _autosync is None:
-            _autosync = Ctf2AutoSync()
+            _autosync = KernelAutoSync()
         return _autosync
 
 
@@ -266,4 +266,4 @@ def reset_autosync() -> None:
         _autosync = None
 
 
-__all__ = ["Ctf2AutoSync", "get_autosync", "reset_autosync"]
+__all__ = ["KernelAutoSync", "get_autosync", "reset_autosync"]

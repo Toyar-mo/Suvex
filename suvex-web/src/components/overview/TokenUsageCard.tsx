@@ -1,11 +1,11 @@
 import { cn } from '@/lib/cn'
 import {
-  loadCtf2ChallengeUsage,
-  loadCtf2Usage,
-  type Ctf2UsageByChallenge,
-  type Ctf2UsageByModel,
-  type Ctf2UsageEntry,
-} from '@/data/ctf2'
+  loadKernelChallengeUsage,
+  loadKernelUsage,
+  type KernelUsageByChallenge,
+  type KernelUsageByModel,
+  type KernelUsageEntry,
+} from '@/data/kernel'
 import { formatCompact } from '@/lib/format'
 import { formatRelativeTime } from '@/lib/datetime'
 import { ChevronRight, Coins } from 'lucide-react'
@@ -42,7 +42,7 @@ import { Link } from 'react-router-dom'
  *
  * ⚠️ 而"跳转"在这里**根本不可行**，不只是体验取舍：逐轮明细的 UI
  *   **只有本组件有**（CTF2 页面没有逐轮视图，全项目
- *   `loadCtf2ChallengeUsage` 只有这里在用）。所以任何"去 CTF2 看逐轮
+ *   `loadKernelChallengeUsage` 只有这里在用）。所以任何"去 CTF2 看逐轮
  *   明细"的文案都是假承诺 —— 见下面那个链接上的说明。
  *
  * ## ★★ 三种"空"必须说成三句不同的话（这个组件最要紧的地方）
@@ -111,15 +111,15 @@ export interface TokenUsageCardProps {
  */
 interface BreakdownState {
   status: 'idle' | 'ready' | 'error'
-  byModel: Ctf2UsageByModel[]
-  byChallenge: Ctf2UsageByChallenge[]
+  byModel: KernelUsageByModel[]
+  byChallenge: KernelUsageByChallenge[]
 }
 
 /** 逐轮明细的状态。`challengeId` 记录它是给哪道题取的 */
 interface TurnState {
   challengeId: string | null
   status: 'idle' | 'loading' | 'ready' | 'error'
-  rows: Ctf2UsageEntry[]
+  rows: KernelUsageEntry[]
 }
 
 export function TokenUsageCard({
@@ -148,7 +148,7 @@ export function TokenUsageCard({
     // 没有调用记录时**不发这个请求**：那是一次注定返回空数组的往返。
     if (!hasAny) return
     let alive = true
-    void loadCtf2Usage()
+    void loadKernelUsage()
       .then((data) => {
         if (alive) {
           setDetail({ status: 'ready', byModel: data.byModel, byChallenge: data.byChallenge })
@@ -194,7 +194,7 @@ export function TokenUsageCard({
     setOpenId(challengeId)
     if (turns.challengeId === challengeId && turns.status === 'ready') return
     setTurns({ challengeId, status: 'loading', rows: [] })
-    void loadCtf2ChallengeUsage(challengeId)
+    void loadKernelChallengeUsage(challengeId)
       .then((rows) => {
         // 用函数式更新里的 `prev.challengeId` 判"还是不是当前这道" ——
         // 用户可能在请求回来之前就点了别的题。
@@ -650,7 +650,7 @@ function TurnRows({
 
               原来写的是「去 CTF2 看逐轮明细」—— 那是**承诺了做不到的事**：
               逐轮明细的 UI **只存在于本组件的就地展开里**
-              （全项目 `loadCtf2ChallengeUsage` 只有这里在用，CTF2 页面
+              （全项目 `loadKernelChallengeUsage` 只有这里在用，CTF2 页面
               根本没有逐轮视图）。点过去看不到任何轮次明细，
               与契约 §3.18「宁可少说，不说错的」直接冲突。
 

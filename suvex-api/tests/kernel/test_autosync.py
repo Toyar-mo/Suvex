@@ -22,9 +22,9 @@ from sqlalchemy.orm import Session
 
 from app.kernel import autosync as autosync_module
 from app.kernel import service as ctf2_service
-from app.kernel.autosync import Ctf2AutoSync
+from app.kernel.autosync import KernelAutoSync
 from app.kernel.service import SyncResult
-from tests.ctf2.conftest import _make_challenge
+from tests.kernel.conftest import _make_challenge
 
 
 @pytest.fixture(autouse=True)
@@ -54,13 +54,13 @@ def test_interval_zero_means_disabled(db_session: Session) -> None:
     是一个正当诉求（PAT 有配额、比赛结束了想让系统安静下来）。
     """
     _set_config(db_session, auto_sync_seconds=0)
-    assert Ctf2AutoSync()._interval() == 0
+    assert KernelAutoSync()._interval() == 0
 
 
 def test_interval_comes_from_its_own_setting(db_session: Session) -> None:
     """间隔读的是 CTF2 自己的设置，不是扫描那个旋钮。"""
     _set_config(db_session, auto_sync_seconds=120)
-    assert Ctf2AutoSync()._interval() == 120
+    assert KernelAutoSync()._interval() == 120
 
 
 def test_interval_is_clamped_into_range(
@@ -78,7 +78,7 @@ def test_interval_is_clamped_into_range(
 
     fake = replace(ctf2_service.effective_ctf2_settings(db_session), auto_sync_seconds=99999)
     monkeypatch.setattr(ctf2_service, "effective_ctf2_settings", lambda db: fake)
-    assert Ctf2AutoSync()._interval() <= 3600
+    assert KernelAutoSync()._interval() <= 3600
 
 
 # ══════════════════════════════════════════════════════════
@@ -92,7 +92,7 @@ def test_without_an_account_it_quietly_does_nothing(db_session: Session) -> None
     记成错误会让界面上一片红，而用户此刻唯一该做的事就是去绑 PAT ——
     一个"你还没绑账号"的红字并不能告诉他这一点。
     """
-    sync = Ctf2AutoSync()
+    sync = KernelAutoSync()
     assert sync.run_once() == 0
     assert sync.stats()["lastError"] is None
 
@@ -124,7 +124,7 @@ def test_it_skips_while_a_manual_sync_is_running(db_session: Session, ctf2_accou
     holder.start()
     assert holder_ready.wait(10), "占锁线程没起来"
     try:
-        assert Ctf2AutoSync().run_once() == 0
+        assert KernelAutoSync().run_once() == 0
     finally:
         release.set()
         holder.join(10)
@@ -159,7 +159,7 @@ def test_new_challenges_get_auto_priority_and_old_ones_are_untouched(
     result.new_challenge_ids = [low.id, high.id]
     monkeypatch.setattr(ctf2_service, "try_sync", lambda db, **kw: result)
 
-    assert Ctf2AutoSync().run_once() == 2
+    assert KernelAutoSync().run_once() == 2
 
     db_session.expire_all()
     assert db_session.get(type(manual), manual.id).priority == 7, "人工优先级被覆盖了"
@@ -252,14 +252,14 @@ def test_auto_start_survives_a_failure_on_one_challenge(
 
     monkeypatch.setattr(ctf2_service, "start_solve", fake_start_solve)
 
-    assert Ctf2AutoSync().run_once() == 2
+    assert KernelAutoSync().run_once() == 2
     assert started == [second.id], "一道题失败影响了另一道"
 
 
 def test_auto_start_is_off_by_default(
     db_session: Session, ctf2_account, ctf2_competition, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """★ 默认**不**自动开解（判据是可逆性，见 `Ctf2Config` 的说明）。
+    """★ 默认**不**自动开解（判据是可逆性，见 `KernelConfig` 的说明）。
 
     它默认关是因为它会真的消耗模型额度和解题并发名额 —— 在一场"题量
     明显超过人工能力"的比赛里，它可能把 3 个名额全占在几道根本解不出
@@ -283,7 +283,7 @@ def test_auto_start_is_off_by_default(
         lambda db, challenge, **kw: started.append(challenge.id),
     )
 
-    Ctf2AutoSync().run_once()
+    KernelAutoSync().run_once()
     assert started == [], "默认配置下不该自动开解"
 
 
@@ -303,7 +303,7 @@ def test_stats_reports_what_the_last_round_did(
     result.new_challenge_ids = [challenge.id]
     monkeypatch.setattr(ctf2_service, "try_sync", lambda db, **kw: result)
 
-    sync = Ctf2AutoSync()
+    sync = KernelAutoSync()
     sync.run_once()
     stats = sync.stats()
     assert stats["lastNewChallenges"] == 1

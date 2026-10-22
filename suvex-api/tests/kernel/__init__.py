@@ -1,7 +1,7 @@
 """`ctf2` 子包的测试。
 
 有 `__init__.py` 是刻意的：`tests/` 是一个包（见 `tests/__init__.py`），
-而"包下面的目录也是包"让 `from tests.ctf2.conftest import ...` 这种
+而"包下面的目录也是包"让 `from tests.kernel.conftest import ...` 这种
 导入稳定可用，不依赖 pytest 的 rootdir 推断。
 
 ⚠️ 它同时也是父 conftest 生效的前提之一：`tests/conftest.py` 里

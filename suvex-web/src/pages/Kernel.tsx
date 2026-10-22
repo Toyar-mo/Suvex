@@ -1,5 +1,5 @@
 import { PageHeader } from '@/components/layout/AppShell'
-import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/ctf2'
+import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/kernel'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button, IconButton } from '@/components/ui/Button'
@@ -7,25 +7,25 @@ import ToggleChip from '@/components/ui/ToggleChip'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   CHALLENGE_STATUS_LABEL,
-  bindCtf2Account,
-  pullCtf2Challenge,
-  unbindCtf2Account,
+  bindKernelAccount,
+  pullKernelChallenge,
+  unbindKernelAccount,
   cancelChallenge,
-  clearCtf2Notice,
+  clearKernelNotice,
   hasActiveChallenges,
-  loadCtf2,
+  loadKernel,
   prioritizeByScore,
   releaseEnvironment,
   setChallengePriority,
   solveChallenge,
   submitFlag,
-  syncCtf2,
-  useCtf2,
-  type Ctf2Challenge,
-  type Ctf2ChallengeStatus,
-  type Ctf2SandboxProfile,
-  type Ctf2SubmitMode,
-} from '@/data/ctf2'
+  syncKernel,
+  useKernel,
+  type KernelChallenge,
+  type KernelChallengeStatus,
+  type KernelSandboxProfile,
+  type KernelSubmitMode,
+} from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
 import { errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -65,10 +65,10 @@ import { Link } from 'react-router-dom'
 /**
  * 后端题目的**全部**状态。
  *
- * ⚠️ 它与 `Ctf2ChallengeStatus` 是一一对应的，改枚举时必须同步改这里 ——
+ * ⚠️ 它与 `KernelChallengeStatus` 是一一对应的，改枚举时必须同步改这里 ——
  *    下面 `STATUS_FILTERS` 的完备性靠它保证（见那个常量上的说明）。
  */
-const ALL_CHALLENGE_STATUSES: readonly Ctf2ChallengeStatus[] = [
+const ALL_CHALLENGE_STATUSES: readonly KernelChallengeStatus[] = [
   'unsolved',
   'environment_ready',
   'solving',
@@ -107,10 +107,10 @@ const ALL_CHALLENGE_STATUSES: readonly Ctf2ChallengeStatus[] = [
  * 并进"解题中"会让它在计数里被淹没 —— 而用户一进页面最该看到的就是它。
  */
 const STATUS_FILTERS: {
-  value: Ctf2ChallengeStatus | 'all'
+  value: KernelChallengeStatus | 'all'
   label: string
   /** 这个桶收纳哪些后端状态。`all` 收全部。 */
-  match: readonly Ctf2ChallengeStatus[]
+  match: readonly KernelChallengeStatus[]
 }[] = [
   { value: 'all', label: '全部', match: ALL_CHALLENGE_STATUSES },
   { value: 'unsolved', label: CHALLENGE_STATUS_LABEL.unsolved, match: ['unsolved'] },
@@ -151,24 +151,24 @@ if (import.meta.env.DEV) {
   }
 }
 
-export function Ctf2Page() {
-  const { account, challenges, settings, settingsError, queue, status, error, notice } = useCtf2()
+export function KernelPage() {
+  const { account, challenges, settings, settingsError, queue, status, error, notice } = useKernel()
 
-  const [filter, setFilter] = useState<Ctf2ChallengeStatus | 'all'>('all')
+  const [filter, setFilter] = useState<KernelChallengeStatus | 'all'>('all')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   /** 正在确认提交的那道题 —— 存**整个对象**而不是 id */
-  const [pending, setPending] = useState<Ctf2Challenge | null>(null)
+  const [pending, setPending] = useState<KernelChallenge | null>(null)
   /** 待取消的那道题（取消会丢进度，所以要确认） */
-  const [canceling, setCanceling] = useState<Ctf2Challenge | null>(null)
+  const [canceling, setCanceling] = useState<KernelChallenge | null>(null)
   /** 这次解题用哪个镜像（默认取设置里的默认值） */
-  const [profile, setProfile] = useState<Ctf2SandboxProfile | null>(null)
+  const [profile, setProfile] = useState<KernelSandboxProfile | null>(null)
   /** 赛事选择弹窗（同步**赛事**题目用 —— 练习集同步不需要选） */
   const [picking, setPicking] = useState(false)
   /**
    * 解绑确认弹窗。
    *
-   * ★ 这个开关之前**不存在** —— `unbindCtf2Account()` 写在 data 层里，
+   * ★ 这个开关之前**不存在** —— `unbindKernelAccount()` 写在 data 层里，
    * 但没有任何页面调用它，于是界面上既退不出也换不了账号
    * （用户报的原话："这个账号也退出不了替换"）。
    * 后端端点一直是好的，缺的就是这一个入口。
@@ -196,7 +196,7 @@ export function Ctf2Page() {
    *
    * ⚠️ 题解属于"那一轮运行的结果"，名字就该是打开那一刻的那个。
    */
-  const [writeupChallenge, setWriteupChallenge] = useState<Ctf2Challenge | null>(null)
+  const [writeupChallenge, setWriteupChallenge] = useState<KernelChallenge | null>(null)
 
   /*
     要展示**处置工单**的那道题（v0.41）。
@@ -206,10 +206,10 @@ export function Ctf2Page() {
     但合并会让"关闭时清哪一个"变成需要判断的事，而判断错的表现是
     "关了工单，题解还开着"。两个独立 state 各自清各自的，不需要想。
   */
-  const [workOrderChallenge, setWorkOrderChallenge] = useState<Ctf2Challenge | null>(null)
+  const [workOrderChallenge, setWorkOrderChallenge] = useState<KernelChallenge | null>(null)
 
   useEffect(() => {
-    void loadCtf2()
+    void loadKernel()
   }, [])
 
   /*
@@ -224,7 +224,7 @@ export function Ctf2Page() {
     if (!active) return
     const timer = window.setInterval(() => {
       // silent：轮询失败不该把页面打成错误态
-      void loadCtf2({ silent: true })
+      void loadKernel({ silent: true })
     }, 3000)
     return () => window.clearInterval(timer)
   }, [active])
@@ -232,7 +232,7 @@ export function Ctf2Page() {
   /** 提示条自动消失 —— 它只是"刚才那件事的结果"，不是页面状态 */
   useEffect(() => {
     if (!notice) return
-    const timer = window.setTimeout(() => clearCtf2Notice(), 6000)
+    const timer = window.setTimeout(() => clearKernelNotice(), 6000)
     return () => window.clearTimeout(timer)
   }, [notice])
 
@@ -263,12 +263,12 @@ export function Ctf2Page() {
    * 同步。[competitionIds] 非空时同步的是**赛事**（那条链路要逐场指定）。
    *
    * ⚠️ 两条路径共用同一个函数：赛事侧的返回形状与练习集完全一样
-   * （都是 `Ctf2SyncResult`），而且**成功/失败的判读方式也必须一样** ——
+   * （都是 `KernelSyncResult`），而且**成功/失败的判读方式也必须一样** ——
    * 抄一份的后果是"附件失败提示"只在其中一条路径上出现。
    */
   const runSync = useCallback((competitionIds: string[] = []) => {
     setBusy(true)
-    void syncCtf2(competitionIds)
+    void syncKernel(competitionIds)
       .then((result) => {
         /*
           ★ 附件失败要**单独说**，而且用风险色。
@@ -310,7 +310,7 @@ export function Ctf2Page() {
     if (!raw) return
     setBusy(true)
     try {
-      const result = await pullCtf2Challenge(raw)
+      const result = await pullKernelChallenge(raw)
       setPulling(false)
       showToast({
         message: `已${result.created ? '拉取' : '更新'}「${result.challenge.title}」（${result.competitionName}）`,
@@ -323,12 +323,12 @@ export function Ctf2Page() {
   }, [pullInput])
 
   const runSolve = useCallback(
-    (challenge: Ctf2Challenge, resume = false) => {
+    (challenge: KernelChallenge, resume = false) => {
       setBusy(true)
       void solveChallenge(challenge.id, {
         // 不传 `mode` 时后端用设置里的值。这里显式传它，
         // 是为了让"这次解题用的什么策略"与界面上显示的一致。
-        mode: (settings?.submitMode ?? 'safe') as Ctf2SubmitMode,
+        mode: (settings?.submitMode ?? 'safe') as KernelSubmitMode,
         sandboxProfile: profile ?? challenge.sandboxProfile,
         // ★ v0.26：接着上一次的进度跑。后端找不到上次的过程文件时
         //   会退回从头开始（并记一条日志）—— 所以这里不需要先确认。
@@ -345,7 +345,7 @@ export function Ctf2Page() {
     (flag: string) => {
       if (!pending) return
       setBusy(true)
-      void submitFlag(pending.id, flag, (settings?.submitMode ?? 'safe') as Ctf2SubmitMode)
+      void submitFlag(pending.id, flag, (settings?.submitMode ?? 'safe') as KernelSubmitMode)
         .then((result) => {
           setPending(null)
           // 判定错误用默认色而不是 risk：猜错在解题里是**常态**，
@@ -379,7 +379,7 @@ export function Ctf2Page() {
       .finally(() => setBusy(false))
   }, [canceling])
 
-  const runRelease = useCallback((challenge: Ctf2Challenge) => {
+  const runRelease = useCallback((challenge: KernelChallenge) => {
     setBusy(true)
     void releaseEnvironment(challenge.id)
       .catch((err) => showToast({ message: `释放失败：${errorMessage(err)}`, tone: 'risk' }))
@@ -397,7 +397,7 @@ export function Ctf2Page() {
    *   "比赛现场连点几下调整顺序"变成一场点击马拉松。
    */
   const runSetPriority = useCallback(
-    (challenge: Ctf2Challenge, priority: number) => {
+    (challenge: KernelChallenge, priority: number) => {
       setBusy(true)
       void setChallengePriority(challenge.id, priority)
         .catch((err) => showToast({ message: `调整失败：${errorMessage(err)}`, tone: 'risk' }))
@@ -641,7 +641,7 @@ export function Ctf2Page() {
               />
               {notice}
             </p>
-            <IconButton label="关闭提示" onClick={clearCtf2Notice}>
+            <IconButton label="关闭提示" onClick={clearKernelNotice}>
               <X size={13} strokeWidth={2} aria-hidden="true" />
             </IconButton>
           </div>
@@ -675,9 +675,9 @@ export function Ctf2Page() {
         {status === 'idle' || status === 'loading' ? (
           <SkeletonRows rows={3} rowClassName="h-40" />
         ) : status === 'error' ? (
-          <ErrorState title="CTF2 数据加载失败" error={error} onRetry={() => void loadCtf2()} />
+          <ErrorState title="CTF2 数据加载失败" error={error} onRetry={() => void loadKernel()} />
         ) : filtered.length === 0 ? (
-          <Ctf2EmptyState hasAny={challenges.length > 0} onSync={() => runSync()} busy={busy} />
+          <KernelEmptyState hasAny={challenges.length > 0} onSync={() => runSync()} busy={busy} />
         ) : (
           <>
             <div className="grid gap-panel sm:grid-cols-2 xl:grid-cols-3">
@@ -728,7 +728,7 @@ export function Ctf2Page() {
       <FlagConfirmDialog
         open={pending !== null}
         challenge={pending}
-        mode={(settings?.submitMode ?? 'safe') as Ctf2SubmitMode}
+        mode={(settings?.submitMode ?? 'safe') as KernelSubmitMode}
         busy={busy}
         onConfirm={runSubmit}
         onCancel={() => setPending(null)}
@@ -837,7 +837,7 @@ export function Ctf2Page() {
         onConfirm={() => {
           if (!account) return
           setBusy(true)
-          void unbindCtf2Account(account.id)
+          void unbindKernelAccount(account.id)
             .then(() => {
               setUnbinding(false)
               showToast({ message: '已解绑。现在可以绑定另一个账号了。' })
@@ -896,7 +896,7 @@ function BindPrompt() {
   const submit = () => {
     if (!token.trim()) return
     setBusy(true)
-    void bindCtf2Account(token.trim(), label.trim())
+    void bindKernelAccount(token.trim(), label.trim())
       .then(() => {
         // ★ 立刻清空本地状态：这个字符串没有理由在组件里多留一秒。
         setToken('')
@@ -981,11 +981,11 @@ function BindPrompt() {
  * ★ 区分"一道题都没有"与"筛选后为空" —— 两者的下一步动作完全不同。
  *   混成一句"没有题目"会让改了筛选条件的用户以为题目被删了。
  *
- * ⚠️ 名字带 `Ctf2` 前缀是刻意的：项目里已有一个
+ * ⚠️ 名字带 `Kernel` 前缀是刻意的：项目里已有一个
  * `components/ui/EmptyState`，同名会遮蔽它（而这一次只是恰好没用到它，
  * 下次有人在这页引它就会撞上一个"指向本地函数"的坑）。
  */
-function Ctf2EmptyState({
+function KernelEmptyState({
   hasAny,
   onSync,
   busy,
@@ -1018,4 +1018,4 @@ function Ctf2EmptyState({
   )
 }
 
-export default Ctf2Page
+export default KernelPage

@@ -98,7 +98,7 @@ def test_client_factory_is_outside_the_submit_try() -> None:
     ## 为什么
 
     它在"账号不存在 / 凭据解不开"时抛的是 **`ApiError`**，而 `ApiError`
-    与 `Ctf2Error` **没有继承关系** —— `except Ctf2Error` 捕不到它。
+    与 `KernelError` **没有继承关系** —— `except KernelError` 捕不到它。
     异常穿透时，上面**已经写下了一条 `pending` 提交行**。
 
     ## 那条假 `pending` 的代价
@@ -111,7 +111,7 @@ def test_client_factory_is_outside_the_submit_try() -> None:
     ## 怎么断言
 
     关键是 `client_factory()` **不能和 `submit_flag(...)` 在同一个 `try` 里**
-    —— 因为那个 try 的 `except` 只捕 `Ctf2Error`。
+    —— 因为那个 try 的 `except` 只捕 `KernelError`。
 
     ⚠️ 不能笼统地断言"它不在任何 try 里"：修复后的写法是**给它单独一个
         `try`**（`except Exception`），而那恰恰是正确做法。
@@ -132,7 +132,7 @@ def test_client_factory_is_outside_the_submit_try() -> None:
 
     assert not offenders, (
         f"`client_factory()` 与 `submit_flag()` 在同一个 try 里（行 {offenders}）—— "
-        "那个 try 只捕 `Ctf2Error`，而建客户端失败抛的是 `ApiError`"
+        "那个 try 只捕 `KernelError`，而建客户端失败抛的是 `ApiError`"
         "（两者无继承关系），会留下一条「请求从未发出」的假 `pending`，"
         "那个 flag 以后永不重试。\n"
         "修法：把 `client_factory()` 挪进它自己的 try（`except Exception`）。"
@@ -146,7 +146,7 @@ def test_failed_client_build_marks_the_row_failed_not_pending() -> None:
     """
     source = _code_of(runner.submit_candidate)
 
-    assert "Ctf2SubmissionStatus.FAILED.value" in source, (
+    assert "KernelSubmissionStatus.FAILED.value" in source, (
         "建客户端失败时没有把提交行改成 `failed` —— 留着 `pending` 会让"
         "`already_submitted` 认为这个 flag 交过了，于是永不重试。"
     )
@@ -173,7 +173,7 @@ def test_claim_excludes_running_challenges_in_sql() -> None:
     ⚠️ 这条测试盯的是"排除发生在 SQL 里"而不是"内存里 continue 了" ——
         后者正是这次要修掉的写法，它看起来也对，只是会浪费名额。
     """
-    source = _code_of(scheduler.Ctf2Scheduler._claim)
+    source = _code_of(scheduler.KernelScheduler._claim)
 
     assert "notin_" in source, (
         "认领没有在 SQL 里排除已在跑的题 —— 被跳过的名额不会补取，"
@@ -186,7 +186,7 @@ def test_claim_still_has_the_per_tick_safety_valve() -> None:
 
     它是"一次最多认领几道"，防止"上限调大之后一次抢 50 个把宿主打爆"。
     """
-    source = _code_of(scheduler.Ctf2Scheduler._claim)
+    source = _code_of(scheduler.KernelScheduler._claim)
 
     assert "_MAX_CLAIMS_PER_TICK" in source, (
         "认领丢了每轮上限 —— 上限调大时会一次抢一大批，"
@@ -245,9 +245,9 @@ def test_release_environment_wraps_its_whole_body() -> None:
 
 
 def test_release_environment_catches_broad_exceptions() -> None:
-    """捕获面必须是 `Exception`，不能只捕 `Ctf2Error`。
+    """捕获面必须是 `Exception`，不能只捕 `KernelError`。
 
-    这条与上一条配套：包住了整段、但只捕 `Ctf2Error` 的话，
+    这条与上一条配套：包住了整段、但只捕 `KernelError` 的话，
     数据库异常照样穿透。
     """
     tree = ast.parse(textwrap.dedent(inspect.getsource(service.release_environment)))
@@ -261,7 +261,7 @@ def test_release_environment_catches_broad_exceptions() -> None:
                     broad = True
     assert broad, (
         "`release_environment` 没有捕 `Exception` —— 数据库层的异常"
-        "（SQLAlchemy）不是 `Ctf2Error`，会穿透这个「绝不抛」的函数。"
+        "（SQLAlchemy）不是 `KernelError`，会穿透这个「绝不抛」的函数。"
     )
 
 
@@ -292,7 +292,7 @@ def test_autosync_records_its_last_error() -> None:
     原来全文件没有任何一处给它赋过错误值 —— 于是自动同步连续失败十轮，
     界面上仍显示一切正常。
     """
-    source = _code_of(scheduler.Ctf2Scheduler._claim)  # 占位，真正看的是 autosync
+    source = _code_of(scheduler.KernelScheduler._claim)  # 占位，真正看的是 autosync
     del source
 
     from app.kernel import autosync

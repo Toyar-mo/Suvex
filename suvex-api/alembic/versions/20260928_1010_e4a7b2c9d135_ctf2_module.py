@@ -148,7 +148,7 @@ def upgrade() -> None:
         sa.Column("last_error", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        # ★ 7 个取值手写。**不 import `values(Ctf2ChallengeStatus)`** ——
+        # ★ 7 个取值手写。**不 import `values(KernelChallengeStatus)`** ——
         # 迁移是历史快照，从 vocab 取的话，将来加一个状态时，
         # 这条已经跑过的迁移会跟着改变含义（而且是在别人的库上
         # 不会再跑一次的那种改变）。

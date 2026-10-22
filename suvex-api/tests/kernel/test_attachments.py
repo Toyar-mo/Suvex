@@ -29,7 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.kernel import attachments
-from tests.ctf2.conftest import patch_ctf2_transport
+from tests.kernel.conftest import patch_ctf2_transport
 
 ZIP_BODY = b"PK\x03\x04 not really a zip"
 
@@ -331,7 +331,7 @@ def test_sync_downloads_attachments(
     而缺口正是后者（模块写完了但没接线）。
     """
     from app.kernel import service
-    from app.kernel.models import Ctf2Challenge
+    from app.kernel.models import KernelChallenge
 
     url = "https://ctf2.dasctf.com/files/readme.txt"
     body = b"attachment content"
@@ -377,7 +377,7 @@ def test_sync_downloads_attachments(
     # 附件摘要在同步结论里可见（用户据此判断"解题失败是不是因为没附件"）
     assert "附件 1" in result.summary()
 
-    challenge = db_session.execute(select(Ctf2Challenge)).scalars().one()
+    challenge = db_session.execute(select(KernelChallenge)).scalars().one()
     target: Path = attachments.attachment_root(challenge.id) / "readme.txt"
     assert target.read_bytes() == body, "文件没落在那道题的目录里"
 
@@ -392,7 +392,7 @@ def test_sync_survives_attachment_failure(
     全部回滚掉 —— 那是"为了干净而丢掉已完成的工作"。
     """
     from app.kernel import service
-    from app.kernel.models import Ctf2Challenge
+    from app.kernel.models import KernelChallenge
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -426,7 +426,7 @@ def test_sync_survives_attachment_failure(
     assert result.attachments.downloaded == 0
     assert result.attachments.failed, "站外附件应当被记为失败"
     # 题面照样落库了
-    assert db_session.execute(select(Ctf2Challenge)).scalars().one().title == "题一"
+    assert db_session.execute(select(KernelChallenge)).scalars().one().title == "题一"
     # 失败也进了同步的 errors，前端能提示"附件没下全"
     assert any("附件" in item for item in result.errors)
 
@@ -680,7 +680,7 @@ def test_a_failing_competition_does_not_sink_the_whole_sync(
     只是那句话原本只说在题目层面，没有落到赛事层面。
     """
     from app.kernel import service
-    from app.kernel.models import Ctf2Challenge, Ctf2Competition
+    from app.kernel.models import KernelChallenge, KernelCompetition
 
     def handler(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -727,9 +727,9 @@ def test_a_failing_competition_does_not_sink_the_whole_sync(
     result = service.sync(db_session, competition_ids=["comp-1"])
 
     # ① 练习集落库了（这是最要紧的一条）
-    competitions = list(db_session.execute(select(Ctf2Competition)).scalars())
+    competitions = list(db_session.execute(select(KernelCompetition)).scalars())
     assert [c.kind for c in competitions] == ["practice"]
-    assert db_session.execute(select(Ctf2Challenge)).scalars().all() != []
+    assert db_session.execute(select(KernelChallenge)).scalars().all() != []
     # ② 失败的那场记进了 errors，而且**说的是人话**
     assert result.errors, "赛事失败没有进同步的账"
     assert any("战队" in item for item in result.errors), (

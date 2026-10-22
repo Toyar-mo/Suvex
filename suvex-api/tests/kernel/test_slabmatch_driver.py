@@ -18,7 +18,7 @@ from typing import Any
 import httpx
 import pytest
 
-from app.kernel.client import Ctf2AuthExpired, Ctf2RateLimited, Ctf2ResponseError
+from app.kernel.client import KernelAuthExpired, KernelRateLimited, KernelResponseError
 from app.kernel.drivers.slabmatch import SlabMatchDriver, normalize_base_url
 
 AGENT_ROOT = "https://example.com/slab-match/api/v1/agent"
@@ -135,7 +135,7 @@ def test_http_200_with_a_failure_code_is_still_an_error() -> None:
     async def scenario() -> None:
         driver = _driver(handler)
         try:
-            with pytest.raises(Ctf2ResponseError) as exc_info:
+            with pytest.raises(KernelResponseError) as exc_info:
                 await driver.match_info()
         finally:
             await driver.aclose()
@@ -158,7 +158,7 @@ def test_a_response_without_the_code_envelope_is_rejected() -> None:
     async def scenario() -> None:
         driver = _driver(handler)
         try:
-            with pytest.raises(Ctf2ResponseError) as exc_info:
+            with pytest.raises(KernelResponseError) as exc_info:
                 await driver.match_info()
         finally:
             await driver.aclose()
@@ -176,8 +176,8 @@ def test_429_and_401_map_to_their_own_error_types() -> None:
 
     async def scenario() -> None:
         for status, expected, headers in (
-            (429, Ctf2RateLimited, {"retry-after": "7"}),
-            (401, Ctf2AuthExpired, {}),
+            (429, KernelRateLimited, {"retry-after": "7"}),
+            (401, KernelAuthExpired, {}),
         ):
             def handler(request: httpx.Request, _s: int = status, _h: dict = headers) -> httpx.Response:
                 return httpx.Response(_s, json={"code": "x"}, headers=_h)
@@ -201,7 +201,7 @@ def test_retry_after_is_parsed_from_the_header() -> None:
     async def scenario() -> None:
         driver = _driver(handler)
         try:
-            with pytest.raises(Ctf2RateLimited) as exc_info:
+            with pytest.raises(KernelRateLimited) as exc_info:
                 await driver.match_info()
         finally:
             await driver.aclose()
@@ -524,7 +524,7 @@ def test_starting_an_environment_failure_is_not_swallowed() -> None:
     async def scenario() -> None:
         driver = _driver(handler)
         try:
-            with pytest.raises(Ctf2ResponseError):
+            with pytest.raises(KernelResponseError):
                 await driver.start_environment({"exerciseId": 1001})
         finally:
             await driver.aclose()
@@ -615,7 +615,7 @@ def test_submitting_without_a_handle_raises() -> None:
     async def scenario() -> None:
         driver = _driver(_routes({}))
         try:
-            with pytest.raises(Ctf2ResponseError):
+            with pytest.raises(KernelResponseError):
                 await driver.submit({}, "flag")
         finally:
             await driver.aclose()

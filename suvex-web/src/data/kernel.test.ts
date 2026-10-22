@@ -3,12 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   canHaveWorkOrder,
   canHaveWriteup,
-  loadCtf2ChallengeUsage,
-  loadCtf2Usage,
-  loadCtf2Writeup,
-  saveCtf2Settings,
-  type Ctf2Challenge,
-} from './ctf2'
+  loadKernelChallengeUsage,
+  loadKernelUsage,
+  loadKernelWriteup,
+  saveKernelSettings,
+  type KernelChallenge,
+} from './kernel'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -54,11 +54,11 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-describe('loadCtf2Writeup', () => {
+describe('loadKernelWriteup', () => {
   it('★ 打到题目卡片那条路径，而不是扫描的题解端点', async () => {
     installFetchStub({ markdown: '# x' })
 
-    await loadCtf2Writeup('chal_1')
+    await loadKernelWriteup('chal_1')
 
     expect(requested).toHaveLength(1)
     // 这是本次改动的**核心**：CTF2 的题解不在 /scans/{id}/writeup
@@ -70,17 +70,17 @@ describe('loadCtf2Writeup', () => {
   it('★ challengeId 被转义 —— 否则带斜杠的 id 会打到别的路径', async () => {
     installFetchStub({ markdown: '# x' })
 
-    await loadCtf2Writeup('a/b c')
+    await loadKernelWriteup('a/b c')
 
     expect(requested[0]).toContain('/ctf2/challenges/a%2Fb%20c/writeup')
   })
 })
 
-describe('loadCtf2Usage', () => {
+describe('loadKernelUsage', () => {
   it('★ 两个筛选都不给时，URL 里**不出现**这两个参数', async () => {
     installFetchStub({ calls: 0 })
 
-    await loadCtf2Usage()
+    await loadKernelUsage()
 
     expect(requested[0]).toContain('/api/v1/ctf2/usage')
     /*
@@ -95,8 +95,8 @@ describe('loadCtf2Usage', () => {
   it('给了筛选就带上（两个维度分别可单用）', async () => {
     installFetchStub({ calls: 1 })
 
-    await loadCtf2Usage({ challengeId: 'chal_1' })
-    await loadCtf2Usage({ competitionId: 'comp_9' })
+    await loadKernelUsage({ challengeId: 'chal_1' })
+    await loadKernelUsage({ competitionId: 'comp_9' })
 
     expect(requested[0]).toContain('challengeId=chal_1')
     expect(requested[0]).not.toContain('competitionId')
@@ -106,17 +106,17 @@ describe('loadCtf2Usage', () => {
   it('★ 显式传 null 等同于"不筛"，不会被拼成字符串 "null"', async () => {
     installFetchStub({ calls: 0 })
 
-    await loadCtf2Usage({ challengeId: null, competitionId: null })
+    await loadKernelUsage({ challengeId: null, competitionId: null })
 
     expect(requested[0]).not.toContain('null')
   })
 })
 
-describe('loadCtf2ChallengeUsage', () => {
+describe('loadKernelChallengeUsage', () => {
   it('打到单题明细端点，且转义 id', async () => {
     installFetchStub([])
 
-    await loadCtf2ChallengeUsage('chal 2')
+    await loadKernelChallengeUsage('chal 2')
 
     expect(requested[0]).toContain('/api/v1/ctf2/challenges/chal%202/usage')
   })
@@ -139,8 +139,8 @@ describe('loadCtf2ChallengeUsage', () => {
   `has_solve_attempt` 表达同一件事）。下面每一条都对应一个真实状态。
 */
 describe('canHaveWriteup', () => {
-  const challenge = (over: Partial<Ctf2Challenge>): Ctf2Challenge =>
-    ({ id: 'chal_1', title: 't', status: 'unsolved', scanId: null, ...over }) as Ctf2Challenge
+  const challenge = (over: Partial<KernelChallenge>): KernelChallenge =>
+    ({ id: 'chal_1', title: 't', status: 'unsolved', scanId: null, ...over }) as KernelChallenge
 
   it('★★ 真实回归：未解出但跑过一轮的题**必须**有入口', () => {
     /*
@@ -204,8 +204,8 @@ describe('canHaveWriteup', () => {
   "后端能跑、界面上没入口"，没有任何报错。
 */
 describe('canHaveWorkOrder', () => {
-  const challenge = (over: Partial<Ctf2Challenge>): Ctf2Challenge =>
-    ({ id: 'chal_1', title: 't', status: 'unsolved', category: 'pwn', scanId: null, ...over }) as Ctf2Challenge
+  const challenge = (over: Partial<KernelChallenge>): KernelChallenge =>
+    ({ id: 'chal_1', title: 't', status: 'unsolved', category: 'pwn', scanId: null, ...over }) as KernelChallenge
 
   it('★★ 三个 `ir-*` 分类都给入口', () => {
     for (const category of ['ir-root-cause', 'ir-timeline', 'ir-scope']) {
@@ -273,7 +273,7 @@ describe('canHaveWorkOrder', () => {
 
 /*
   ══════════════════════════════════════════════════════════════
-  `saveCtf2Settings` 的请求体 —— 两个场景包开关必须真的发出去
+  `saveKernelSettings` 的请求体 —— 两个场景包开关必须真的发出去
   ══════════════════════════════════════════════════════════════
 
   ## 为什么这条值得单独立一组
@@ -287,7 +287,7 @@ describe('canHaveWorkOrder', () => {
   `false`，界面显示"关着"，就像本来就是关的。
 
   这个缺口在 v0.40 真的存在过：后端加完开关、API 能用，而前端
-  `Ctf2Settings` 与 `saveCtf2Settings` 都没有这两个字段。当时任何人
+  `KernelSettings` 与 `saveKernelSettings` 都没有这两个字段。当时任何人
   在设置页点一次保存（改任何别的项都会触发），开关就会被关掉。
 
   ## 断言的是"发出去的 JSON 里有这个字段且值对"
@@ -315,11 +315,11 @@ function installBodyCapturingFetch(payload: unknown = {}) {
   })
 }
 
-describe('saveCtf2Settings 的场景包开关', () => {
+describe('saveKernelSettings 的场景包开关', () => {
   it('★★ 两个开关都在 PUT 请求体里，且值原样带过去', async () => {
     installBodyCapturingFetch({ submitMode: 'safe' })
 
-    await saveCtf2Settings({
+    await saveKernelSettings({
       submitMode: 'safe',
       maxWrongSubmissions: 3,
       defaultSandboxProfile: 'ctf2-sandbox',
@@ -352,7 +352,7 @@ describe('saveCtf2Settings 的场景包开关', () => {
     */
     installBodyCapturingFetch({ submitMode: 'safe' })
 
-    await saveCtf2Settings({
+    await saveKernelSettings({
       submitMode: 'safe',
       maxWrongSubmissions: 3,
       defaultSandboxProfile: 'ctf2-sandbox',
@@ -391,7 +391,7 @@ describe('saveCtf2Settings 的场景包开关', () => {
     ] as const) {
       installBodyCapturingFetch({ submitMode: 'safe' })
 
-      await saveCtf2Settings({
+      await saveKernelSettings({
         submitMode: 'safe',
         maxWrongSubmissions: 3,
         defaultSandboxProfile: 'ctf2-sandbox',

@@ -23,19 +23,19 @@ from app.auth.models import AdminAccount, ApiToken, AuthSession  # noqa: F401
 from app.events.models import ActivityEvent, Agent  # noqa: F401
 from app.findings.models import Finding, FindingTimelineEntry  # noqa: F401
 from app.kernel.models import (  # noqa: F401
-    Ctf2Account,
-    Ctf2Challenge,
-    Ctf2Competition,
-    Ctf2Environment,
-    Ctf2Submission,
+    KernelAccount,
+    KernelChallenge,
+    KernelCompetition,
+    KernelEnvironment,
+    KernelSubmission,
 )
 from app.members.models import Member  # noqa: F401
 from app.providers.models import ProviderAccount  # noqa: F401
 from app.reports.models import Report, ReportFinding  # noqa: F401
 from app.scans.models import Scan  # noqa: F401
 from app.settings.models import (  # noqa: F401
-    Ctf2Config,
     FindingSlaConfig,
+    KernelConfig,
     NoticeRule,
     NotifyChannel,
     SandboxConfig,
@@ -64,10 +64,10 @@ __all__ = [
     "Member",
     "FindingSlaConfig",
     # ★ v0.20：CTF2 领域（五张 + 一张配置表）
-    "Ctf2Account",
-    "Ctf2Competition",
-    "Ctf2Challenge",
-    "Ctf2Config",
-    "Ctf2Environment",
-    "Ctf2Submission",
+    "KernelAccount",
+    "KernelCompetition",
+    "KernelChallenge",
+    "KernelConfig",
+    "KernelEnvironment",
+    "KernelSubmission",
 ]

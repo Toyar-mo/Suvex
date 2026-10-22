@@ -37,12 +37,12 @@ import IrPage from '@/pages/IrPage'
 //
 // ★ 只 mock"会发网络请求"的那几个，**不 mock 子组件**。
 //   Dialog 与 ErrorState 按真实实现跑 —— 它们的文案本身就是要守的契约。
-vi.mock('@/data/ctf2', async () => {
-  const actual = await vi.importActual<typeof import('@/data/ctf2')>('@/data/ctf2')
+vi.mock('@/data/kernel', async () => {
+  const actual = await vi.importActual<typeof import('@/data/kernel')>('@/data/kernel')
   return {
     ...actual,
-    useCtf2: vi.fn(),
-    loadCtf2: vi.fn(),
+    useKernel: vi.fn(),
+    loadKernel: vi.fn(),
     createIrTask: vi.fn(),
     solveChallenge: vi.fn(),
   }
@@ -56,18 +56,18 @@ vi.mock('@/components/ui/Toast', () => ({
   useToast: () => ({ success: vi.fn(), error: vi.fn(), info: vi.fn() }),
 }))
 
-import { createIrTask, loadCtf2, solveChallenge, useCtf2 } from '@/data/ctf2'
+import { createIrTask, loadKernel, solveChallenge, useKernel } from '@/data/kernel'
 import { stageScanAttachments } from '@/data/scans-store'
 
-const mockedUseCtf2 = vi.mocked(useCtf2)
-const mockedLoadCtf2 = vi.mocked(loadCtf2)
+const mockedUseKernel = vi.mocked(useKernel)
+const mockedLoadKernel = vi.mocked(loadKernel)
 const mockedCreateIrTask = vi.mocked(createIrTask)
 const mockedSolveChallenge = vi.mocked(solveChallenge)
 const mockedStage = vi.mocked(stageScanAttachments)
 
-type Challenge = ReturnType<typeof useCtf2>['challenges'][number]
+type Challenge = ReturnType<typeof useKernel>['challenges'][number]
 
-/** 造一道题。默认是一次 IR 复盘，字段形状与后端 `Ctf2ChallengeOut` 一致。 */
+/** 造一道题。默认是一次 IR 复盘，字段形状与后端 `KernelChallengeOut` 一致。 */
 function makeChallenge(overrides: Partial<Challenge> = {}): Challenge {
   return {
     id: 'ctf2chal_test01',
@@ -99,8 +99,8 @@ function makeChallenge(overrides: Partial<Challenge> = {}): Challenge {
 }
 
 /** 把 store 的返回值摆成指定形状。 */
-function setStore(overrides: Partial<ReturnType<typeof useCtf2>> = {}) {
-  mockedUseCtf2.mockReturnValue({
+function setStore(overrides: Partial<ReturnType<typeof useKernel>> = {}) {
+  mockedUseKernel.mockReturnValue({
     account: null,
     challenges: [],
     settings: null,
@@ -110,7 +110,7 @@ function setStore(overrides: Partial<ReturnType<typeof useCtf2>> = {}) {
     notice: null,
     settingsError: null,
     ...overrides,
-  } as ReturnType<typeof useCtf2>)
+  } as ReturnType<typeof useKernel>)
 }
 
 function renderPage() {
@@ -125,7 +125,7 @@ function renderPage() {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  mockedLoadCtf2.mockResolvedValue(undefined as never)
+  mockedLoadKernel.mockResolvedValue(undefined as never)
   setStore()
 })
 
@@ -507,7 +507,7 @@ describe('IrPage：空态与错误', () => {
 
     renderPage()
 
-    expect(mockedLoadCtf2).not.toHaveBeenCalled()
+    expect(mockedLoadKernel).not.toHaveBeenCalled()
   })
 
   it('store 还 idle 时拉一次，且只拉一次（重渲染不重复发）', () => {
@@ -520,6 +520,6 @@ describe('IrPage：空态与错误', () => {
       </MemoryRouter>,
     )
 
-    expect(mockedLoadCtf2).toHaveBeenCalledTimes(1)
+    expect(mockedLoadKernel).toHaveBeenCalledTimes(1)
   })
 })

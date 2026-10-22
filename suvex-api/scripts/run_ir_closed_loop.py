@@ -14,7 +14,7 @@
 
 那样会走 worker，而 worker 第一步就是 `start_environment_for()`。
 纯附件题在真实平台上会返回 404 并被当作"没有靶机"，但此刻我们调不通
-那个平台（没有可用 PAT），调用会抛 `Ctf2Unavailable`，整个解题在进入
+那个平台（没有可用 PAT），调用会抛 `KernelUnavailable`，整个解题在进入
 沙箱之前就失败了。所以这里驱动到 `solve_in_sandbox` 为止，其余（写库、
 生成题解、落工单）仍走 `service.save_writeup` 这个生产函数。
 
@@ -45,20 +45,20 @@ os.chdir(ROOT)
 def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
     """建一份练习集 + 一道 IR 题，附件指到本地证据包。"""
     from app.core.ids import new_id
-    from app.core.vocab import Ctf2ChallengeStatus
-    from app.kernel.models import Ctf2Challenge, Ctf2Competition
+    from app.core.vocab import KernelChallengeStatus
+    from app.kernel.models import KernelChallenge, KernelCompetition
     from app.kernel.service import get_account
 
     comp = (
-        db.query(Ctf2Competition)
-        .filter(Ctf2Competition.name == "IR-Lab")
+        db.query(KernelCompetition)
+        .filter(KernelCompetition.name == "IR-Lab")
         .one_or_none()
     )
     if comp is None:
         account = get_account(db)
         if account is None:
             raise SystemExit("这台机器上没有绑定的 CTF2 账号，无法建赛事行。")
-        comp = Ctf2Competition(
+        comp = KernelCompetition(
             id=new_id("ctf2comp"),
             account_id=account.id,
             kind="practice",
@@ -70,13 +70,13 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
         db.refresh(comp)
 
     chal = (
-        db.query(Ctf2Challenge)
-        .filter(Ctf2Challenge.competition_id == comp.id)
-        .filter(Ctf2Challenge.title == IR_TITLE)
+        db.query(KernelChallenge)
+        .filter(KernelChallenge.competition_id == comp.id)
+        .filter(KernelChallenge.title == IR_TITLE)
         .one_or_none()
     )
     if chal is None:
-        chal = Ctf2Challenge(
+        chal = KernelChallenge(
             id=new_id("ctf2chal"),
             competition_id=comp.id,
             remote_id="ir-case-001",
@@ -84,7 +84,7 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
             category=IR_CATEGORY,
             description=IR_DESCRIPTION,
             attachments=[{"name": evidence.name, "url": "http://ctf2.dasctf.com/ir/case-001"}],
-            status=Ctf2ChallengeStatus.UNSOLVED.value,
+            status=KernelChallengeStatus.UNSOLVED.value,
         )
         # ★ 落库时就要定下镜像 —— 这是 `service._profile_for` 在真实同步
         # 路径里做的事（唯一分类→镜像规则）。手工建行不会经过它，
@@ -111,9 +111,9 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
         chal.sandbox_profile = want_profile
         dirty = True
     # 重跑要能重新解一遍：上一轮可能已经把状态改成了 solving/solved
-    if chal.status != Ctf2ChallengeStatus.UNSOLVED.value:
+    if chal.status != KernelChallengeStatus.UNSOLVED.value:
         print(f"[case] 状态复位：{chal.status} -> unsolved")
-        chal.status = Ctf2ChallengeStatus.UNSOLVED.value
+        chal.status = KernelChallengeStatus.UNSOLVED.value
         dirty = True
     if dirty:
         db.commit()
@@ -133,11 +133,11 @@ def _ensure_rows(db, *, evidence: Path):  # noqa: ANN001
 
 def _enable_ir(db) -> None:  # noqa: ANN001
     from app.kernel.service import effective_ctf2_settings
-    from app.settings.models import Ctf2Config
+    from app.settings.models import KernelConfig
 
-    row = db.get(Ctf2Config, "default")
+    row = db.get(KernelConfig, "default")
     if row is None:
-        row = Ctf2Config(id="default")
+        row = KernelConfig(id="default")
         db.add(row)
     row.enable_ir_scenarios = True
     # safe 模式：本次不向任何平台提交，但保持与生产一致的默认值

@@ -35,7 +35,7 @@ import httpx
 import pytest
 
 from app.kernel.adapters.redirect import MAX_HOPS, request_same_host
-from app.kernel.client import Ctf2Error
+from app.kernel.client import KernelError
 
 
 def _routes(mapping: dict[str, httpx.Response]) -> Any:
@@ -108,7 +108,7 @@ def test_a_cross_host_redirect_is_refused() -> None:
         ),
     }
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _run(_request("http://127.0.0.2:18080/api", mapping))
 
     assert "另一个主机" in excinfo.value.message
@@ -124,7 +124,7 @@ def test_a_redirect_to_the_metadata_service_is_refused() -> None:
     """
     mapping = {"http://169.254.169.254/latest": httpx.Response(200, json={"creds": "…"})}
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _run(_request("http://169.254.169.254/latest", mapping))
 
     assert "被拒绝的地址" in excinfo.value.message
@@ -138,7 +138,7 @@ def test_a_redirect_loop_is_aborted() -> None:
     """
     mapping = {"http://127.0.0.1:18080/loop": httpx.Response(302, headers={"location": "/loop"})}
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _run(_request("http://127.0.0.1:18080/loop", mapping))
 
     assert "跳转" in excinfo.value.message
@@ -149,7 +149,7 @@ def test_a_redirect_without_a_location_header_is_refused() -> None:
     """给了 302 却没给 `Location` —— 说清楚，而不是当成正常响应返回。"""
     mapping = {"http://127.0.0.1:18080/x": httpx.Response(302)}
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _run(_request("http://127.0.0.1:18080/x", mapping))
 
     assert "Location" in excinfo.value.message
@@ -400,7 +400,7 @@ def test_a_redirect_without_query_does_not_get_params_replayed() -> None:
 
 
 #: 畸形 `Location` → 都必须在**调用点接得住**的范围内收场
-#: （`Ctf2Error` 或 `httpx.HTTPError` 的子类），不允许冒出别的东西。
+#: （`KernelError` 或 `httpx.HTTPError` 的子类），不允许冒出别的东西。
 #:
 #: ⚠️ 这一组是**在 Kali（生产同款 Linux）上定出来的**。第一版我在本机
 #: Windows 测，得到"httpx 返回 502、接得住"——**那个结论是错的**：
@@ -470,7 +470,7 @@ def test_a_malformed_location_never_escapes_as_a_non_domain_error(location: str)
     两者的后果一样：`transport.py` 与 `probe.py` 的
     `except httpx.HTTPError` 接不住 → 用户看到 500。
 
-    ⚠️ `probe.py` 那处**也**接 `Ctf2Error`（它把不合格的候选端点跳过），
+    ⚠️ `probe.py` 那处**也**接 `KernelError`（它把不合格的候选端点跳过），
        所以这组用例对两条调用点都成立。
     """
     mapping = {
@@ -481,9 +481,9 @@ def test_a_malformed_location_never_escapes_as_a_non_domain_error(location: str)
 
     try:
         response = _run(_request("http://127.0.0.1:18080/start", mapping))
-    except (Ctf2Error, httpx.HTTPError):
-        # Ctf2Error：probe 会换下一个候选端点；HTTPError：transport 转成
-        # Ctf2Unavailable。两者都是**调用点接得住**的，过关。
+    except (KernelError, httpx.HTTPError):
+        # KernelError：probe 会换下一个候选端点；HTTPError：transport 转成
+        # KernelUnavailable。两者都是**调用点接得住**的，过关。
         return
     except BaseException as exc:  # noqa: BLE001
         raise AssertionError(
@@ -530,7 +530,7 @@ def test_an_out_of_range_port_is_refused_with_a_domain_error() -> None:
         ),
     }
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _run(_request("http://127.0.0.1:18080/start", mapping))
 
     assert "端口" in excinfo.value.message
@@ -546,7 +546,7 @@ def test_an_out_of_range_port_in_the_base_url_is_refused() -> None:
     """
     mapping = {"http://127.0.0.1:18080/x": httpx.Response(200, json={"ok": True})}
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _run(
             _request(
                 "http://127.0.0.1:99999/x",
@@ -564,7 +564,7 @@ def test_an_out_of_range_port_in_the_base_url_is_refused() -> None:
 
 
 def test_a_plain_value_error_is_not_swallowed() -> None:
-    """★★ 我们自己抛的 `ValueError` 必须**原样上抛**，不许变成 `Ctf2Error`。
+    """★★ 我们自己抛的 `ValueError` 必须**原样上抛**，不许变成 `KernelError`。
 
     ## 这条钉的是判据收窄（R-1）
 
@@ -608,8 +608,8 @@ def test_a_plain_value_error_is_not_swallowed() -> None:
     with pytest.raises(ValueError) as excinfo:
         _run(go())
 
-    assert not isinstance(excinfo.value, Ctf2Error), (
-        "我们自己抛的 `ValueError` 被吞成了 `Ctf2Error` —— 判据又把裸 "
+    assert not isinstance(excinfo.value, KernelError), (
+        "我们自己抛的 `ValueError` 被吞成了 `KernelError` —— 判据又把裸 "
         "`ValueError` 收进去了。那会用一个'平台的问题'盖住一个真 bug。"
     )
 
@@ -629,7 +629,7 @@ def test_a_plain_value_error_is_not_swallowed() -> None:
     ids=lambda e: type(e).__name__,
 )
 def test_programming_errors_are_never_reported_as_platform_problems(exc) -> None:
-    """★★ 一类编程错误整体不得被吞成 `Ctf2Error`（R-1 的判据表）。
+    """★★ 一类编程错误整体不得被吞成 `KernelError`（R-1 的判据表）。
 
     ⚠️ 这里**直接打 `_is_transport_level`** 而不是绕一圈构造请求：
     这一组要穷举的是**判据本身**，而"怎么把某个异常从 httpx 里引出来"
@@ -645,7 +645,7 @@ def test_programming_errors_are_never_reported_as_platform_problems(exc) -> None
 
     assert _is_transport_level(exc) is False, (
         f"{type(exc).__name__} 被判成「传输层错误」了 —— 它会被转成 "
-        "`Ctf2Error`，于是我们自己的 bug 变成「平台给的地址不可用」。"
+        "`KernelError`，于是我们自己的 bug 变成「平台给的地址不可用」。"
     )
 
 
@@ -664,7 +664,7 @@ def test_programming_errors_are_never_reported_as_platform_problems(exc) -> None
     ids=lambda e: type(e).__name__,
 )
 def test_real_transport_failures_are_still_swallowed(exc) -> None:
-    """★ 反向闸：**真的**传输层错误必须仍然被转成 `Ctf2Error`。
+    """★ 反向闸：**真的**传输层错误必须仍然被转成 `KernelError`。
 
     ⚠️ 与上面那组是一对。只测"编程错误上抛"的话，一个
     `return False` 的实现也能全过 —— 而那样 F-08 的 9 条逃逸路径
@@ -789,16 +789,16 @@ def test_the_overflow_fallback_is_the_second_line() -> None:
     ## 这条只测**兜底逻辑本身**，与 OS 无关
 
     用 `MockTransport` 主动抛 `OverflowError`，把 `_check_port` 去掉后
-    它必须仍然以 `Ctf2Error` 收场。"真实连接层是不是真的抛
+    它必须仍然以 `KernelError` 收场。"真实连接层是不是真的抛
     `OverflowError`"是另一件事，见
     `test_the_real_transport_really_raises_overflow_on_out_of_range_port`。
     """
     restore = _without_check_port()
     try:
-        with pytest.raises(Ctf2Error) as excinfo:
+        with pytest.raises(KernelError) as excinfo:
             _redirect_go_raising_overflow("http://127.0.0.1:99999/x")
         assert "无法使用" in excinfo.value.message, (
-            "连接层抛 `OverflowError` 后没有转成 `Ctf2Error` —— "
+            "连接层抛 `OverflowError` 后没有转成 `KernelError` —— "
             "第二道防线失效了（调用点的 except 接不住 ExceptionGroup → 500）"
         )
     finally:
@@ -842,7 +842,7 @@ def test_the_real_transport_really_raises_overflow_on_out_of_range_port() -> Non
 
     restore = _without_check_port()
     try:
-        with pytest.raises(Ctf2Error) as excinfo:
+        with pytest.raises(KernelError) as excinfo:
             _redirect_go("http://127.0.0.1:99999/x")
         assert "无法使用" in excinfo.value.message, (
             "越界端口在去掉 `_check_port` 后没有由 `OverflowError` 兜底拦住 —— "
@@ -862,7 +862,7 @@ def test_zero_port_is_caught_by_check_port_not_by_the_overflow_fallback() -> Non
     try:
         try:
             _redirect_go("http://127.0.0.1:0/x")
-        except Ctf2Error as exc:
+        except KernelError as exc:
             raise AssertionError(
                 "`:0` 在去掉 `_check_port` 后就被拦住了？那说明它走的不是 "
                 "兜底路径 —— 这个对照的前提不成立，请重看两层分工。"
@@ -873,7 +873,7 @@ def test_zero_port_is_caught_by_check_port_not_by_the_overflow_fallback() -> Non
     finally:
         restore()
 
-    with pytest.raises(Ctf2Error) as excinfo:
+    with pytest.raises(KernelError) as excinfo:
         _redirect_go("http://127.0.0.1:0/x")
     assert "端口越界" in excinfo.value.message, (
         "`:0` 必须由 `_check_port` 的区间比较拦住（它是非溢出语义的越界，"

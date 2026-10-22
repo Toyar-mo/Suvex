@@ -33,7 +33,7 @@ Create Date: 2026-10-21 04:00:00.000000+00:00
 既有部署里必已存在，`nullable=False` 且无 server_default 会让
 `ALTER TABLE` 在非空表上直接失败。而 `false` 是唯一正确的填充值 ——
 那三个考察点本来就要求显式打开（理由见 `settings/models.py` 的
-`Ctf2Config.enable_ir_scenarios`），老行拿到 false = 行为与引入前
+`KernelConfig.enable_ir_scenarios`），老行拿到 false = 行为与引入前
 完全一致。
 
 ## 为什么不改 `ctf2_solve_notes` 的 CHECK

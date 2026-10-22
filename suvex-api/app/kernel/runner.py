@@ -86,18 +86,18 @@ from app.core.vocab import (
     DEFAULT_CTF2_MAX_TURNS,
     DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS,
     IR_CATEGORY_PREFIX,
-    Ctf2ChallengeStatus,
-    Ctf2CompetitionKind,
-    Ctf2SandboxProfile,
-    Ctf2SubmissionStatus,
-    Ctf2SubmitMode,
+    KernelChallengeStatus,
+    KernelCompetitionKind,
+    KernelSandboxProfile,
+    KernelSubmissionStatus,
+    KernelSubmitMode,
 )
 from app.kernel import events as ctf2_events
 from app.kernel.client import (
     CTF2_ERROR_ALREADY_SOLVED,
-    Ctf2EnvironmentTimeout,
-    Ctf2Error,
-    Ctf2ResponseError,
+    KernelEnvironmentTimeout,
+    KernelError,
+    KernelResponseError,
     assert_allowed_target,
 )
 
@@ -107,11 +107,11 @@ from app.kernel.client import (
 from app.kernel.history import recall_for_challenge
 from app.kernel.models import (
     CTF2_OFFICIAL_HOSTS,
-    Ctf2Challenge,
-    Ctf2Competition,
-    Ctf2Environment,
-    Ctf2SolveAttempt,
-    Ctf2Submission,
+    KernelChallenge,
+    KernelCompetition,
+    KernelEnvironment,
+    KernelSolveAttempt,
+    KernelSubmission,
 )
 
 logger = logging.getLogger("suvex.ctf2")
@@ -120,7 +120,7 @@ logger = logging.getLogger("suvex.ctf2")
 # 常量
 # ══════════════════════════════════════════════════════════
 
-# 镜像名。**与 `Ctf2SandboxProfile` 的取值逐字一致** ——
+# 镜像名。**与 `KernelSandboxProfile` 的取值逐字一致** ——
 # 这里不再做一层"逻辑名 → 镜像名"的映射，因为两层映射会让
 # "这个字段到底存的是什么"变成一个每次都要查的问题
 # （与 vocab 里那条注释同一条理由）。
@@ -135,8 +135,8 @@ logger = logging.getLogger("suvex.ctf2")
 # ⚠️ 只在**进程启动时**读一次（`import` 时）。不改 `image_for_profile`
 #   的语义：它仍然只是 profile → 镜像名，覆盖发生在更早的一层。
 #   默认值就是枚举值，所以不设这两个变量时行为与以前**逐字节一致**。
-IMAGE_BASE = os.environ.get("CTF2_IMAGE_BASE") or Ctf2SandboxProfile.BASE.value
-IMAGE_REVERSE = os.environ.get("CTF2_IMAGE_REVERSE") or Ctf2SandboxProfile.REVERSE.value
+IMAGE_BASE = os.environ.get("CTF2_IMAGE_BASE") or KernelSandboxProfile.BASE.value
+IMAGE_REVERSE = os.environ.get("CTF2_IMAGE_REVERSE") or KernelSandboxProfile.REVERSE.value
 # ★ v0.41：应急响应镜像。与上面两个**完全同构**，包括"不设变量时
 # 行为逐字节一致"这条 —— 默认值就是枚举值。
 #
@@ -144,7 +144,7 @@ IMAGE_REVERSE = os.environ.get("CTF2_IMAGE_REVERSE") or Ctf2SandboxProfile.REVER
 #    一件事：让 `profile_for_category` 有东西可返回、让镜像名可注入。
 #    "镜像里到底有没有那些命令"由 `scripts/verify_sandbox_tools.py`
 #    的能力契约回答（静态），**不是**由这一行回答。
-IMAGE_IR = os.environ.get("CTF2_IMAGE_IR") or Ctf2SandboxProfile.IR.value
+IMAGE_IR = os.environ.get("CTF2_IMAGE_IR") or KernelSandboxProfile.IR.value
 
 # CTF2 解题沙箱容器名的前缀。
 #
@@ -508,10 +508,10 @@ def profile_for_category(category: str | None) -> str:
     # 纪律（见 `vocab.IR_CATEGORY_PREFIX` 的说明）—— 前缀让"这批分类"
     # 成为一个可判定的集合，而不是一张要跟着改的名单。
     if normalized.startswith(IR_CATEGORY_PREFIX):
-        return Ctf2SandboxProfile.IR.value
+        return KernelSandboxProfile.IR.value
     if normalized in _REVERSE_CATEGORIES:
-        return Ctf2SandboxProfile.REVERSE.value
-    return Ctf2SandboxProfile.BASE.value
+        return KernelSandboxProfile.REVERSE.value
+    return KernelSandboxProfile.BASE.value
 
 
 def image_for_profile(profile: str) -> str:
@@ -522,11 +522,11 @@ def image_for_profile(profile: str) -> str:
     （迁移期间）。那时用 base 比让整道题起不来合理 —— 与
     `scans.runner._goal_clause` 的取舍完全一致。
     """
-    if profile == Ctf2SandboxProfile.REVERSE.value:
+    if profile == KernelSandboxProfile.REVERSE.value:
         return IMAGE_REVERSE
-    if profile == Ctf2SandboxProfile.IR.value:
+    if profile == KernelSandboxProfile.IR.value:
         return IMAGE_IR
-    if profile != Ctf2SandboxProfile.BASE.value:
+    if profile != KernelSandboxProfile.BASE.value:
         logger.warning("未知的沙箱 profile %r，按 base 处理", profile)
     return IMAGE_BASE
 
@@ -587,10 +587,10 @@ def guard_tool_url(url: str, *, access_urls: Sequence[str]) -> None:
     """
     try:
         assert_allowed_target(url, allowed_extra=tuple(allowed_hosts(access_urls)))
-    except Ctf2Error as exc:
+    except KernelError as exc:
         # 包成同一个领域异常，但消息要能直接喂回模型 ——
         # 它需要知道"为什么不行"才能换路子，而不是反复试同一个地址。
-        raise Ctf2Error(
+        raise KernelError(
             f"该地址不在允许范围内：{exc.message} 只允许访问本题的环境地址"
             f"与 CTF2 官方域名（{', '.join(CTF2_OFFICIAL_HOSTS)}）。"
         ) from exc
@@ -619,7 +619,7 @@ _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _CONTAINER_GONE_MARKER = "No such container"
 
 
-class Ctf2SandboxError(Ctf2Error):
+class KernelSandboxError(KernelError):
     """沙箱（Docker）层面的失败。"""
 
 
@@ -986,7 +986,7 @@ def ensure_docker_available() -> None:
     result = _run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=20)
     if not result.ok:
         tail = result.stderr.strip().splitlines()
-        raise Ctf2SandboxError(
+        raise KernelSandboxError(
             f"Docker 不可用，无法启动解题沙箱。（{tail[-1] if tail else '未知原因'}）"
         )
 
@@ -1296,7 +1296,7 @@ class SandboxContainer:
                 ensure_ctf2_network()
         result = _run(self._argv(), timeout=120)
         if not result.ok:
-            raise Ctf2SandboxError(
+            raise KernelSandboxError(
                 f"启动解题沙箱失败：{result.stderr.strip() or result.stdout.strip() or '未知原因'}"
             )
         self.container_id = result.stdout.strip()[:64] or None
@@ -1352,7 +1352,7 @@ class SandboxContainer:
     def _verify_running(self) -> None:
         """`docker run` 之后确认容器**真的在跑**；不在就把现场信息带出来。
 
-        失败时抛 `Ctf2SandboxError`，消息里带上 `docker inspect` 的
+        失败时抛 `KernelSandboxError`，消息里带上 `docker inspect` 的
         `.State.Status` / `.ExitCode` / `.OOMKilled` / `.Error` —— 排查
         "容器为什么秒退"时，这四个字段就是全部线索（OOM 与入口崩掉
         在外部看起来完全一样）。
@@ -1372,7 +1372,7 @@ class SandboxContainer:
         if not probe.ok:
             # 容器已经不存在了 —— 正是 `docker run -d --rm` 秒退的形态：
             # run 给了 ID，容器却在下一瞬间被删掉（`--rm` 生效）。
-            raise Ctf2SandboxError(
+            raise KernelSandboxError(
                 "启动解题沙箱失败：docker run 报告成功"
                 f"（ID {self.container_id or '(无)'}），但容器随即消失，"
                 "docker inspect 取不到它。"
@@ -1384,7 +1384,7 @@ class SandboxContainer:
         running, status, exit_code, oom_killed, state_error = (p.strip() for p in parts)
         if running.lower() == "true":
             return
-        raise Ctf2SandboxError(
+        raise KernelSandboxError(
             "启动解题沙箱失败：容器起来了但没在跑（可能秒退）。"
             f"name={self.name} id={self.container_id or '(无)'} "
             f"status={status or '(空)'} exit={exit_code or '(空)'} "
@@ -1634,7 +1634,7 @@ def parse_usage(body: object) -> TokenUsage:
 
     调用方（解题循环）不该因为"接入点没给 usage"而中断一道跑了
     三十轮的题。所以这里退化成 `TokenUsage(reported=False)`，
-    由上层如实落库（见 `Ctf2SolveUsage.usage_reported`）。
+    由上层如实落库（见 `KernelSolveUsage.usage_reported`）。
 
     ## 防御性取值
 
@@ -1771,7 +1771,7 @@ class LlmGateway:
 
         resolved = resolve_base_url(base_url, label)
         if not resolved:
-            raise Ctf2Error(
+            raise KernelError(
                 "没有可用的 LLM 接入点：provider 的 baseUrl 为空，"
                 "且无法从名称推断官方默认地址。请先在设置里配置 provider。"
             )
@@ -1784,7 +1784,7 @@ class LlmGateway:
         #   （"换模前后各花多少"），所以必须留住它。
         #
         #   ⚠️ 存的是**标签**（用户起的显示名，如 "gzd"），不是 id ——
-        #      与 `Ctf2SolveUsage.provider_label` 一致。
+        #      与 `KernelSolveUsage.provider_label` 一致。
         self.label = label
         # ⚠️ 这个类**故意没有 `__repr__`**：默认的 object repr 只给地址，
         # 而任何自定义 repr 都有把 `_api_key` 带进去的风险。
@@ -1902,11 +1902,11 @@ class LlmGateway:
             except httpx.HTTPError as exc:
                 # 其他协议层错误（畸形响应、写中断等）不重试：
                 # 它们不像"抖了一下"，重试通常只是把同一个错误再撞一遍。
-                raise Ctf2Error(
+                raise KernelError(
                     f"调用 LLM 失败（{type(exc).__name__}）：{redact(str(exc))[:200]}"
                 ) from exc
         if response is None:
-            raise Ctf2Error(
+            raise KernelError(
                 f"调用 LLM 失败（{type(last_error).__name__}）："
                 f"{redact(str(last_error))[:200]}（已重试 {_LLM_RETRY_ATTEMPTS} 次）"
             ) from last_error
@@ -1917,7 +1917,7 @@ class LlmGateway:
             parsed = None
 
         if response.status_code >= 400:
-            raise Ctf2Error(
+            raise KernelError(
                 f"LLM 拒绝了请求（HTTP {response.status_code}）："
                 f"{redact(str(parsed))[:200] if parsed else redact(response.text)[:200]}"
             )
@@ -2018,7 +2018,7 @@ def load_system_prompt() -> str:
     try:
         return PROMPT_PATH.read_text(encoding="utf-8")
     except OSError as exc:
-        raise Ctf2Error(
+        raise KernelError(
             f"读不到解题提示词 {PROMPT_PATH}。它必须随部署一起分发 —— "
             "缺了它 agent 的行为纪律（不越界、不爆破、不编造）就没了约束。"
         ) from exc
@@ -2041,7 +2041,7 @@ def load_agentsec_prompt() -> str:
     try:
         return PROMPT_AGENTSEC_PATH.read_text(encoding="utf-8")
     except OSError as exc:
-        raise Ctf2Error(
+        raise KernelError(
             f"读不到智能体安全评测提示词 {PROMPT_AGENTSEC_PATH}。"
             "它必须随部署一起分发 —— 缺了它这四类任务会按攻击模式跑，"
             "而它们要的是「判定考察点是否成立」。"
@@ -2064,7 +2064,7 @@ def load_ir_prompt() -> str:
     try:
         return PROMPT_IR_PATH.read_text(encoding="utf-8")
     except OSError as exc:
-        raise Ctf2Error(
+        raise KernelError(
             f"读不到应急响应提示词 {PROMPT_IR_PATH}。"
             "它必须随部署一起分发 —— 缺了它这类任务会按攻击模式跑，"
             "而它们要的是「复盘过去发生了什么」。"
@@ -2088,7 +2088,7 @@ def load_pentest_prompt() -> str:
     try:
         return PROMPT_PENTEST_PATH.read_text(encoding="utf-8")
     except OSError as exc:
-        raise Ctf2Error(
+        raise KernelError(
             f"读不到渗透评估提示词 {PROMPT_PENTEST_PATH}。"
             "它必须随部署一起分发 —— 缺了它这类任务会按 CTF 解题模式跑，"
             "而它们要的是「核实真实目标上有哪些问题」。"
@@ -2273,7 +2273,7 @@ _PLACEHOLDER_BODY = re.compile(r"^[\s.。*＊_?？\-—]+$")
 MAX_ANSWER_LENGTH = 1000
 
 
-class AnswerFormatError(Ctf2Error):
+class AnswerFormatError(KernelError):
     """一个**答案**不合法：空的、超长的、或纯占位符。
 
     ⚠️ v0.21 起它**不再**表示"flag 形状不对" —— 形状不再是拒绝的理由。
@@ -2400,7 +2400,7 @@ def already_submitted(db: Session, *, challenge_id: str, flag: str) -> bool:
     ## 为什么要连 `pending` 一起算进去
 
     `pending` 意味着"请求已经发出去了，但还没拿到判定"（见
-    `Ctf2SubmissionStatus` 的说明）。它**可能已经到达平台**。
+    `KernelSubmissionStatus` 的说明）。它**可能已经到达平台**。
     把它排除在外的话，模型重新提出同一个 flag 时会再发一次 ——
     如果第一次其实成功了，第二次就是对同一个 flag 的重复提交，
     而很多平台把重复提交计为错误。宁可漏掉一次重试机会，
@@ -2409,15 +2409,15 @@ def already_submitted(db: Session, *, challenge_id: str, flag: str) -> bool:
     ⚠️ `rejected` **不算**（它根本没发出去），所以不在这里的列表里。
     """
     rows = db.execute(
-        select(Ctf2Submission.id)
+        select(KernelSubmission.id)
         .where(
-            Ctf2Submission.challenge_id == challenge_id,
-            Ctf2Submission.flag == normalize_flag(flag),
-            Ctf2Submission.status.in_(
+            KernelSubmission.challenge_id == challenge_id,
+            KernelSubmission.flag == normalize_flag(flag),
+            KernelSubmission.status.in_(
                 (
-                    Ctf2SubmissionStatus.CORRECT.value,
-                    Ctf2SubmissionStatus.WRONG.value,
-                    Ctf2SubmissionStatus.PENDING.value,
+                    KernelSubmissionStatus.CORRECT.value,
+                    KernelSubmissionStatus.WRONG.value,
+                    KernelSubmissionStatus.PENDING.value,
                 )
             ),
         )
@@ -2490,7 +2490,7 @@ class SolveSpec:
     # 看到的模型可能不是当时真正用的那个。
     fallbacks: tuple[FallbackLlm, ...] = ()
     # ── 策略 ──
-    mode: str = Ctf2SubmitMode.SAFE.value
+    mode: str = KernelSubmitMode.SAFE.value
     max_turns: int = DEFAULT_MAX_TURNS
     max_wrong_submissions: int = DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS
     # ★ 默认**隔离**（容器无网络）。只有需要原始 TCP 的题型才放开，
@@ -2541,7 +2541,7 @@ class SolveSpec:
     #
     # ## 为什么它必须进来（2026-10-11 修）
     #
-    # `POST /solve` 的 schema 一直有这个字段（`schemas.Ctf2SolveIn.brief`），
+    # `POST /solve` 的 schema 一直有这个字段（`schemas.KernelSolveIn.brief`），
     # 注释写着"传给 agent 的额外提示"，而它**一个字都没到过模型那里**：
     # router 没转交 → service 没字段 → 这里也没有位置。
     #
@@ -3061,7 +3061,7 @@ async def dispatch_tool(
             return await _tool_http_request(args, spec=spec, http=http)
         if name == "run_shell":
             return await _tool_run_shell(args, sandbox=sandbox)
-    except Ctf2Error as exc:
+    except KernelError as exc:
         # 白名单拒绝走这里 —— 消息**必须回到模型**，它才知道换路子。
         return f"拒绝执行：{exc.message}"
     except Exception as exc:  # noqa: BLE001 - 工具不该让循环崩掉
@@ -3997,7 +3997,7 @@ async def solve_in_sandbox(
                 recent.append({"role": "user", "content": _final_stretch_note(remaining)})
             try:
                 reply = await gateway.chat(_messages(), system=system_prompt)
-            except Ctf2Error as exc:
+            except KernelError as exc:
                 # ★★ v0.35：判失败之前先试备用接入点。
                 #
                 # `LlmGateway.chat` 对**连接层**抖动（连不上 / 超时 / 读中断）
@@ -4512,7 +4512,7 @@ def decide_submission(
             "该题的错误提交次数已用尽。继续提交只会浪费平台的额度 —— "
             "请人工核对候选 flag 后再决定。",
         )
-    if mode != Ctf2SubmitMode.AUTO.value:
+    if mode != KernelSubmitMode.AUTO.value:
         return SubmitDecision("hold", "safe 模式：候选 flag 需要人工确认后才提交。")
     # ── 以下是 auto 独有的门禁 ────────────────────────────
     #
@@ -4563,7 +4563,7 @@ async def submit_candidate(
 
     ## ★ 三段式：sync 落库 → async 提交 → sync 回写
 
-    `Ctf2Submission` 的行**必须在发出请求之前**就落库（`pending`）。
+    `KernelSubmission` 的行**必须在发出请求之前**就落库（`pending`）。
     不这么做的话，一个在"请求已发出、响应还没回来"时崩溃的进程
     会留下**没有任何记录**的提交 —— 而那次提交很可能已经到达平台
     （对的记为解出、错的扣了额度）。事后对账时，我们连"发过这一个"
@@ -4590,11 +4590,11 @@ async def submit_candidate(
     submission_id = new_id("ctf2sub")
     with session_scope() as db:
         db.add(
-            Ctf2Submission(
+            KernelSubmission(
                 id=submission_id,
                 challenge_id=challenge_id,
                 flag=normalize_flag(flag),
-                status=Ctf2SubmissionStatus.PENDING.value,
+                status=KernelSubmissionStatus.PENDING.value,
                 mode=mode,
                 submitted_at=now_utc(),
             )
@@ -4623,13 +4623,13 @@ async def submit_candidate(
         # 这里兜住它：已解出的题保持 `solved` 不动。提交本身仍然发出去
         # （用户可能就是想再确认一次答案），平台会回 `ALREADY_SOLVED`，
         # 而那正是 `already_solved` 分支要处理的情形。
-        challenge = db.get(Ctf2Challenge, challenge_id)
-        if challenge is not None and challenge.status != Ctf2ChallengeStatus.SOLVED.value:
-            challenge.status = Ctf2ChallengeStatus.SUBMITTING.value
+        challenge = db.get(KernelChallenge, challenge_id)
+        if challenge is not None and challenge.status != KernelChallengeStatus.SOLVED.value:
+            challenge.status = KernelChallengeStatus.SUBMITTING.value
         db.commit()
 
     # ── 发请求（async） ──────────────────────────────────
-    status_value = Ctf2SubmissionStatus.PENDING.value
+    status_value = KernelSubmissionStatus.PENDING.value
     message = ""
     receipt: str | None = None
     already_solved = False
@@ -4640,13 +4640,13 @@ async def submit_candidate(
     #
     # `client_factory()` 在"账号不存在 / 凭据解不开"时抛的是
     # **`ApiError`**（见 `service.build_client_sync`），而 `ApiError` 与
-    # `Ctf2Error` **没有继承关系** —— 下面那个 `except Ctf2Error` 捕不到它。
+    # `KernelError` **没有继承关系** —— 下面那个 `except KernelError` 捕不到它。
     # 于是异常穿透本函数，而上面**已经写下了一条 `pending` 提交行**。
     #
     # ## 那条假 `pending` 的代价比"一次报错"大得多
     #
     # `pending` 的语义是"请求已发出、结果未知"（见
-    # `vocab.Ctf2SubmissionStatus.PENDING`）—— 那是**一张要人工对账的欠条**。
+    # `vocab.KernelSubmissionStatus.PENDING`）—— 那是**一张要人工对账的欠条**。
     # 但事实上请求**根本没发出去**。
     #
     # 更贵的是它的副作用：`already_submitted()` 把 `pending` 计入"已提交"，
@@ -4666,17 +4666,17 @@ async def submit_candidate(
         # 与下面那条正常回写走**同一条路**（同一个 `_advance_challenge`），
         # 不另写一套恢复逻辑 —— 两套状态恢复必然漂移。
         with session_scope() as db:
-            row = db.get(Ctf2Submission, submission_id)
+            row = db.get(KernelSubmission, submission_id)
             if row is not None:
-                row.status = Ctf2SubmissionStatus.FAILED.value
+                row.status = KernelSubmissionStatus.FAILED.value
                 row.local_error = _safe_text(reason)
-            challenge = db.get(Ctf2Challenge, challenge_id)
+            challenge = db.get(KernelChallenge, challenge_id)
             if challenge is not None:
                 _advance_challenge(
-                    challenge, Ctf2SubmissionStatus.FAILED.value, flag, already_solved=False
+                    challenge, KernelSubmissionStatus.FAILED.value, flag, already_solved=False
                 )
             db.commit()
-        return Ctf2SubmissionStatus.FAILED.value, reason
+        return KernelSubmissionStatus.FAILED.value, reason
 
     try:
         async with client:
@@ -4687,11 +4687,11 @@ async def submit_candidate(
                 sub_flag_id=remote_ids.get("sub_flag_id"),
             )
         status_value, message, receipt = interpret_submit(payload)
-    except Ctf2Error as exc:
+    except KernelError as exc:
         # 传输层失败 → `failed`（**不是** `wrong`，不消耗额度）。
-        # 这个区分见 `Ctf2SubmissionStatus` 的说明：把失败记成错误提交
+        # 这个区分见 `KernelSubmissionStatus` 的说明：把失败记成错误提交
         # 会让"还剩几次"莫名其妙地变少。
-        status_value = Ctf2SubmissionStatus.FAILED.value
+        status_value = KernelSubmissionStatus.FAILED.value
         message = exc.message
         # ★★ 但 `ALREADY_SOLVED` 不是"失败"，是"这题已经不用做了"。
         #
@@ -4710,20 +4710,20 @@ async def submit_candidate(
         #   没有认可**我们这次交的这个 flag**。凭空把 `confirmed_flag`
         #   写成某个值，等于在"平台认过的答案"这一列里放一个没被认过的
         #   字符串 —— 那正是 `models` 把候选与确认拆成两列要防的事。
-        if isinstance(exc, Ctf2ResponseError) and exc.code == CTF2_ERROR_ALREADY_SOLVED:
+        if isinstance(exc, KernelResponseError) and exc.code == CTF2_ERROR_ALREADY_SOLVED:
             already_solved = True
             message = PLATFORM_ALREADY_SOLVED_MESSAGE
 
     # ── 回写（sync） ────────────────────────────────────
     with session_scope() as db:
-        row = db.get(Ctf2Submission, submission_id)
+        row = db.get(KernelSubmission, submission_id)
         if row is not None:
             row.status = status_value
             row.remote_message = message or None
             row.remote_submission_id = receipt
-            if status_value == Ctf2SubmissionStatus.FAILED.value:
+            if status_value == KernelSubmissionStatus.FAILED.value:
                 row.local_error = message
-        challenge = db.get(Ctf2Challenge, challenge_id)
+        challenge = db.get(KernelChallenge, challenge_id)
         if challenge is not None:
             _advance_challenge(challenge, status_value, flag, already_solved=already_solved)
             # ★★ v0.48：判对了就把这题那条解题 scan 的状态跟着翻过来。
@@ -4745,7 +4745,7 @@ async def submit_candidate(
             # ⚠️ 该函数内部自己判了"只在 scan 已终态时才翻"：auto 模式在
             #    worker 还跑着的时候就提交候选，那时 scan 是 `running`，
             #    提前标成 completed 会让界面显示完成而进程还在干活。
-            if status_value == Ctf2SubmissionStatus.CORRECT.value:
+            if status_value == KernelSubmissionStatus.CORRECT.value:
                 ctf2_events.promote_solve_scan_to_solved(db, challenge)
         db.commit()
 
@@ -4760,7 +4760,7 @@ def interpret_submit(payload: dict[str, Any]) -> tuple[str, str, str | None]:
     只凭 `correct: true` 就标 `correct` 是危险的：我们没法区分
     "平台真的判对了"与"某个中间层返回了一个形状相似的默认值"。
     而回执 id 是**平台侧的凭据** —— 有它才说明这次提交真的进了
-    平台的记录（`Ctf2Submission` 上那条 `correct_implies_receipt`
+    平台的记录（`KernelSubmission` 上那条 `correct_implies_receipt`
     约束守着这条不变量）。
 
     拿不到回执 id 时退回 `pending` 并记下原因：这是**诚实**的处理，
@@ -4768,7 +4768,7 @@ def interpret_submit(payload: dict[str, Any]) -> tuple[str, str, str | None]:
     比看到"已解出"而下次同步又变回未解出要好得多。
     """
     if not isinstance(payload, dict):
-        return Ctf2SubmissionStatus.PENDING.value, "平台返回了无法解析的响应。", None
+        return KernelSubmissionStatus.PENDING.value, "平台返回了无法解析的响应。", None
 
     receipt = None
     for key in ("id", "submission_id", "submissionId"):
@@ -4814,26 +4814,26 @@ def interpret_submit(payload: dict[str, Any]) -> tuple[str, str, str | None]:
     if correct is True or correct == 1:
         if receipt:
             return (
-                Ctf2SubmissionStatus.CORRECT.value,
+                KernelSubmissionStatus.CORRECT.value,
                 message or "平台判定 flag 正确。",
                 receipt,
             )
         return (
-            Ctf2SubmissionStatus.PENDING.value,
+            KernelSubmissionStatus.PENDING.value,
             "平台表示正确，但没有给出提交回执 id，无法确认这次提交真的入账。",
             None,
         )
     if correct is False or correct == 0:
         return (
-            Ctf2SubmissionStatus.WRONG.value,
+            KernelSubmissionStatus.WRONG.value,
             message or "平台判定 flag 不正确。",
             receipt,
         )
-    return Ctf2SubmissionStatus.PENDING.value, message or "平台未给出明确判定。", receipt
+    return KernelSubmissionStatus.PENDING.value, message or "平台未给出明确判定。", receipt
 
 
 def _advance_challenge(
-    challenge: Ctf2Challenge, status_value: str, flag: str, *, already_solved: bool = False
+    challenge: KernelChallenge, status_value: str, flag: str, *, already_solved: bool = False
 ) -> None:
     """按提交结果推进题目状态。
 
@@ -4876,31 +4876,31 @@ def _advance_challenge(
         #    真实会走到这里的形状：拿一道**自己解出过**的题再次提交，
         #    平台回 `ALREADY_SOLVED` —— 那时它本来就该保持 `solved`。
         #    （这个坑与 `submit_candidate` 里那处是同一个，两处一起修。）
-        if challenge.status == Ctf2ChallengeStatus.SOLVED.value:
+        if challenge.status == KernelChallengeStatus.SOLVED.value:
             return
-        challenge.status = Ctf2ChallengeStatus.UNSOLVED.value
+        challenge.status = KernelChallengeStatus.UNSOLVED.value
         challenge.last_error = PLATFORM_ALREADY_SOLVED_MESSAGE
         return
 
-    if status_value == Ctf2SubmissionStatus.CORRECT.value:
-        challenge.status = Ctf2ChallengeStatus.SOLVED.value
+    if status_value == KernelSubmissionStatus.CORRECT.value:
+        challenge.status = KernelChallengeStatus.SOLVED.value
         challenge.confirmed_flag = normalize_flag(flag)
         challenge.candidate_flag = None
         challenge.solved_at = now_utc()
         challenge.last_error = None
-    elif status_value == Ctf2SubmissionStatus.WRONG.value:
+    elif status_value == KernelSubmissionStatus.WRONG.value:
         # ★ 只有真正被平台判错的才计数（见 vocab.CTF2_CREDITED_WRONG_STATUSES）。
         challenge.wrong_submission_count = int(challenge.wrong_submission_count or 0) + 1
         challenge.candidate_flag = None
         if challenge.remaining_wrong_submissions <= 0:
-            challenge.status = Ctf2ChallengeStatus.FAILED.value
+            challenge.status = KernelChallengeStatus.FAILED.value
             challenge.last_error = "错误提交次数已用尽。"
         else:
-            challenge.status = Ctf2ChallengeStatus.SOLVING.value
-    elif status_value == Ctf2SubmissionStatus.FAILED.value:
+            challenge.status = KernelChallengeStatus.SOLVING.value
+    elif status_value == KernelSubmissionStatus.FAILED.value:
         # ⚠️ 请求没到达平台（`failed`）时**候选也不清**：那个候选还没被
         # 判定过，它不是"错的"。清掉它等于让用户重跑一次解题才能再交。
-        challenge.status = Ctf2ChallengeStatus.FAILED.value
+        challenge.status = KernelChallengeStatus.FAILED.value
         challenge.last_error = "提交请求失败（未到达平台）。"
 
 
@@ -4911,7 +4911,7 @@ def _advance_challenge(
 
 def build_spec(
     db: Session,
-    challenge: Ctf2Challenge,
+    challenge: KernelChallenge,
     *,
     mode: str | None = None,
     resume: bool = False,
@@ -4922,7 +4922,7 @@ def build_spec(
     凭据通过 `providers.service.decrypt_provider_key` 拿（复用既有的
     "明文只在一处出现"那条纪律）；额度默认值来自 CTF2 自己的配置行
     （`service.effective_ctf2_settings`），而不是环境变量 ——
-    见 `settings.models.Ctf2Config` 的说明。
+    见 `settings.models.KernelConfig` 的说明。
 
     ## ★★ `attempt_id`：策略以快照为准（v0.28 修）
 
@@ -4934,7 +4934,7 @@ def build_spec(
 
     现在的优先级是**快照 > 全局**：
 
-      · 有 `attempt_id` → 读 `Ctf2SolveAttempt`，用它里面的 mode /
+      · 有 `attempt_id` → 读 `KernelSolveAttempt`，用它里面的 mode /
         回合预算 / brief / 模型。**不再读全局设置**（那正是修复的意义）；
       · 没有（测试直接调、或历史任务）→ 退回读全局，行为与修复前一致。
 
@@ -4952,9 +4952,9 @@ def build_spec(
     from app.settings import service as settings_service
 
     # ── 策略快照（有就用它，没有才读全局）────────────────────
-    attempt: Ctf2SolveAttempt | None = None
+    attempt: KernelSolveAttempt | None = None
     if attempt_id:
-        attempt = db.get(Ctf2SolveAttempt, attempt_id)
+        attempt = db.get(KernelSolveAttempt, attempt_id)
         if attempt is None:
             # 拿不到就退回旧行为，但**必须出声**：这意味着入队与启动
             # 之间快照被删了（或者 id 传错了），而"静默退回读全局"
@@ -4976,15 +4976,15 @@ def build_spec(
         .first()
     )
     if provider is None:
-        raise Ctf2Error(
+        raise KernelError(
             "还没有配置 LLM provider，无法解题。请先在设置页添加一个 provider。"
         )
 
     environment = (
         db.execute(
-            select(Ctf2Environment)
-            .where(Ctf2Environment.challenge_id == challenge.id)
-            .order_by(Ctf2Environment.created_at.desc())
+            select(KernelEnvironment)
+            .where(KernelEnvironment.challenge_id == challenge.id)
+            .order_by(KernelEnvironment.created_at.desc())
             .limit(1)
         )
         .scalars()
@@ -5133,7 +5133,7 @@ def build_spec(
         title=challenge.title,
         category=challenge.category or "",
         description=challenge.description or "",
-        profile=challenge.sandbox_profile or Ctf2SandboxProfile.BASE.value,
+        profile=challenge.sandbox_profile or KernelSandboxProfile.BASE.value,
         access_urls=access_urls,
         attachments=tuple(_attachment_paths(challenge)),
         llm_model=provider.model,
@@ -5233,7 +5233,7 @@ def _fallback_llms(db: Session, settings_row, *, primary) -> tuple[FallbackLlm, 
     )
 
 
-def _agentsec_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
+def _agentsec_enabled(db: Session, challenge: KernelChallenge) -> bool:
     """这道题要不要追加智能体安全评测块（v0.40）。
 
     两个条件**同时**成立才返回 True：
@@ -5267,7 +5267,7 @@ def _agentsec_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
         return False
 
 
-def _ir_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
+def _ir_enabled(db: Session, challenge: KernelChallenge) -> bool:
     """这道题要不要追加应急响应块（v0.41）。
 
     两个条件**同时**成立才返回 True：
@@ -5302,7 +5302,7 @@ def _ir_enabled(db: Session, challenge: Ctf2Challenge) -> bool:
         return False
 
 
-def _recall_notes(db: Session, challenge: Ctf2Challenge) -> tuple[str, int]:
+def _recall_notes(db: Session, challenge: KernelChallenge) -> tuple[str, int]:
     """召回同类题的方法卡并渲染成 prompt 片段。返回 `(片段, 张数)`。
 
     查不到就返回 `("", 0)`。
@@ -5348,7 +5348,7 @@ def _recall_notes(db: Session, challenge: Ctf2Challenge) -> tuple[str, int]:
 
 
 def _provider_from_snapshot(
-    db: Session, attempt: Ctf2SolveAttempt, *, fallback
+    db: Session, attempt: KernelSolveAttempt, *, fallback
 ):  # noqa: ANN001, ANN201
     """按快照里记的 `provider_id` 取回 provider；取不到就用 `fallback`。
 
@@ -5546,7 +5546,7 @@ def _make_writable_by_solver(path: Path) -> None:
         )
 
 
-def _attachment_paths(challenge: Ctf2Challenge) -> list[Path]:
+def _attachment_paths(challenge: KernelChallenge) -> list[Path]:
     """题目附件的**本地已下载副本**。
 
     ⚠️ 附件下载由**拉题/同步动作**负责（`service.sync` 与
@@ -5712,9 +5712,9 @@ def run_worker(
         logger.exception("CTF2 解题 worker 崩溃：%s", challenge_id)
         try:
             with session_scope() as db:
-                challenge = db.get(Ctf2Challenge, challenge_id)
+                challenge = db.get(KernelChallenge, challenge_id)
                 if challenge is not None and challenge.status in (
-                    Ctf2ChallengeStatus.SOLVING.value,
+                    KernelChallengeStatus.SOLVING.value,
                     # ★ 加上 environment_ready（2026-10-10 修）。
                     #
                     # 与 `_record_outcome` 是同一个洞的另一半：
@@ -5722,10 +5722,10 @@ def run_worker(
                     # 漏了它，崩溃时这道题会**永久留在"环境已就绪"**——
                     # 而 `finally` 里的 `release_environment` 已经把环境
                     # 停掉、`access_url` 清空，两边说法不一致且看不出来。
-                    Ctf2ChallengeStatus.ENVIRONMENT_READY.value,
-                    Ctf2ChallengeStatus.SUBMITTING.value,
+                    KernelChallengeStatus.ENVIRONMENT_READY.value,
+                    KernelChallengeStatus.SUBMITTING.value,
                 ):
-                    challenge.status = Ctf2ChallengeStatus.FAILED.value
+                    challenge.status = KernelChallengeStatus.FAILED.value
                     challenge.last_error = _safe_text(
                         f"worker 异常：{type(exc).__name__}: {exc}"
                     )
@@ -5752,10 +5752,10 @@ def _has_correct_submission(db: Session, challenge_id: str) -> bool:
     """
     return (
         db.execute(
-            select(Ctf2Submission.id)
+            select(KernelSubmission.id)
             .where(
-                Ctf2Submission.challenge_id == challenge_id,
-                Ctf2Submission.status == Ctf2SubmissionStatus.CORRECT.value,
+                KernelSubmission.challenge_id == challenge_id,
+                KernelSubmission.status == KernelSubmissionStatus.CORRECT.value,
             )
             .limit(1)
         ).scalar()
@@ -5771,7 +5771,7 @@ async def _run_worker(
 
     # ── ① 同步段：准备 ────────────────────────────────────
     with session_scope() as db:
-        challenge = db.get(Ctf2Challenge, challenge_id)
+        challenge = db.get(KernelChallenge, challenge_id)
         if challenge is None:
             logger.warning("要解的题不存在：%s", challenge_id)
             return
@@ -5792,13 +5792,13 @@ async def _run_worker(
         #
         # 实测（2026-10-01）：脚本直接重解一道已解出的题，拿到的就是
         # 上面那条看不懂的约束错误。
-        if challenge.status == Ctf2ChallengeStatus.SOLVED.value:
+        if challenge.status == KernelChallengeStatus.SOLVED.value:
             logger.info("这道题已经解出，跳过解题：%s", challenge_id)
             return
         try:
             spec = build_spec(db, challenge, resume=resume, attempt_id=attempt_id)
-        except Ctf2Error as exc:
-            challenge.status = Ctf2ChallengeStatus.FAILED.value
+        except KernelError as exc:
+            challenge.status = KernelChallengeStatus.FAILED.value
             challenge.last_error = _safe_text(exc.message)
             ctf2_events.emit_abandoned(db, challenge, reason=exc.message)
             db.commit()
@@ -5818,10 +5818,10 @@ async def _run_worker(
         # ⚠️ 判据是 `kind != 'local'`，即**默认走平台**。认不出的 kind
         #    因此仍然会去碰平台并如实报错，这与
         #    `service._assert_submission_supported` 的 fail-closed 同向。
-        _competition = db.get(Ctf2Competition, challenge.competition_id)
+        _competition = db.get(KernelCompetition, challenge.competition_id)
         platform_backed = (
             _competition is not None
-            and _competition.kind != Ctf2CompetitionKind.LOCAL
+            and _competition.kind != KernelCompetitionKind.LOCAL
         )
 
     # ── ★★ 开跑前先问平台一句：这题本队伍是不是**已经被别人**解出了 ──
@@ -5857,7 +5857,7 @@ async def _run_worker(
     if platform_backed:
         try:
             reports_solved = await ctf2_service.platform_reports_solved(challenge_id)
-        except Ctf2Error as exc:
+        except KernelError as exc:
             logger.warning(
                 "开跑前的平台状态探测失败（不阻断解题）：%s → %s", challenge_id, exc
             )
@@ -5865,12 +5865,12 @@ async def _run_worker(
 
     if reports_solved:
         with session_scope() as db:
-            blocked = db.get(Ctf2Challenge, challenge_id)
+            blocked = db.get(KernelChallenge, challenge_id)
             if blocked is not None and not _has_correct_submission(db, challenge_id):
                 # ★ 回到 `unsolved` 而**不是** `failed`：这不是我们的失败。
                 #   写成 `failed` 会让一道**已经解出的题**在界面上显示
                 #   "失败" —— 那正是最容易误导用户的地方。
-                blocked.status = Ctf2ChallengeStatus.UNSOLVED.value
+                blocked.status = KernelChallengeStatus.UNSOLVED.value
                 blocked.last_error = PLATFORM_ALREADY_SOLVED_MESSAGE
                 ctf2_events.emit_abandoned(
                     db, blocked, reason=PLATFORM_ALREADY_SOLVED_MESSAGE
@@ -6019,7 +6019,7 @@ async def _run_worker(
         def _on_progress(kind: str, summary: str, payload: dict[str, str]) -> None:
             try:
                 with session_scope() as db:
-                    challenge = db.get(Ctf2Challenge, challenge_id)
+                    challenge = db.get(KernelChallenge, challenge_id)
                     if challenge is None:
                         return
                     ctf2_events.emit_progress(
@@ -6057,23 +6057,23 @@ async def _run_worker(
         # 产出在题解与工单文件里，而这道题本身没有"解出"这回事。
         if platform_backed:
             await _handle_candidates(challenge_id, spec, outcome)
-    except Ctf2EnvironmentTimeout as exc:
+    except KernelEnvironmentTimeout as exc:
         outcome.error = exc.message
         with session_scope() as db:
-            challenge = db.get(Ctf2Challenge, challenge_id)
+            challenge = db.get(KernelChallenge, challenge_id)
             if challenge is not None:
-                challenge.status = Ctf2ChallengeStatus.FAILED.value
+                challenge.status = KernelChallengeStatus.FAILED.value
                 challenge.last_error = _safe_text(exc.message)
         logger.warning("CTF2 环境启动超时：%s（%d 次轮询）", challenge_id, exc.polls)
-    except Ctf2Error as exc:
+    except KernelError as exc:
         outcome.error = exc.message
         with session_scope() as db:
-            challenge = db.get(Ctf2Challenge, challenge_id)
+            challenge = db.get(KernelChallenge, challenge_id)
             if challenge is not None and challenge.status not in (
-                Ctf2ChallengeStatus.CANDIDATE_READY.value,
-                Ctf2ChallengeStatus.SOLVED.value,
+                KernelChallengeStatus.CANDIDATE_READY.value,
+                KernelChallengeStatus.SOLVED.value,
             ):
-                challenge.status = Ctf2ChallengeStatus.FAILED.value
+                challenge.status = KernelChallengeStatus.FAILED.value
                 challenge.last_error = _safe_text(exc.message)
         logger.warning("CTF2 解题失败：%s → %s", challenge_id, exc.message)
     finally:
@@ -6141,7 +6141,7 @@ async def _run_worker(
 
     # ── ③ 同步段：落库 ────────────────────────────────────
     with session_scope() as db:
-        challenge = db.get(Ctf2Challenge, challenge_id)
+        challenge = db.get(KernelChallenge, challenge_id)
         if challenge is not None:
             _record_outcome(db, challenge, outcome, platform_backed=platform_backed)
             # ★ v0.45：生产遥测（回合数 / 工具调用数 / 方法卡张数）。
@@ -6167,7 +6167,7 @@ async def _run_worker(
             #    统计与题解是**附加产物**，失败不该把一次成功的解题
             #    变成报错 —— 与 `learn_from_solve` 同一条纪律。
             # ⚠️ 耗时从**借的壳 scan** 上取（`Scan.duration_sec`）——
-            #    `Ctf2Challenge` 自己没有耗时列。
+            #    `KernelChallenge` 自己没有耗时列。
             #
             # ⚠️⚠️ **必须在 `finalize_solve_scan` 之后读**：`duration_sec`
             #     正是那个函数在收尾时算出来写上去的（见它的实现）。
@@ -6212,7 +6212,7 @@ async def _handle_candidates(
 
     ## ⚠️ 这里**不再接收**外层的 client
 
-    以前签名里有个 `client: Ctf2Client`，并且被塞进 `client_factory`
+    以前签名里有个 `client: KernelClient`，并且被塞进 `client_factory`
     交给 `submit_candidate` —— 而那个函数会对它 `async with`（即 aclose），
     等于**替调用方关掉共享资源**。实测后果：提交成功后收尾阶段
     `release_environment` 复用同一个 client 直接炸
@@ -6230,13 +6230,13 @@ async def _handle_candidates(
     for candidate in outcome.candidates:
         # 同步段：读状态 + 决定 + （safe 时）落候选
         with session_scope() as db:
-            challenge = db.get(Ctf2Challenge, challenge_id)
+            challenge = db.get(KernelChallenge, challenge_id)
             if challenge is None:
                 return
             if challenge.status not in (
-                Ctf2ChallengeStatus.SOLVING.value,
-                Ctf2ChallengeStatus.ENVIRONMENT_READY.value,
-                Ctf2ChallengeStatus.CANDIDATE_READY.value,
+                KernelChallengeStatus.SOLVING.value,
+                KernelChallengeStatus.ENVIRONMENT_READY.value,
+                KernelChallengeStatus.CANDIDATE_READY.value,
             ):
                 # 用户在这中间取消了 —— 不落候选（见 service.cancel_challenge
                 # 里那段"取消杀不掉线程，但那一轮不该产出"的说明）。
@@ -6265,7 +6265,7 @@ async def _handle_candidates(
                 #   写的是 `candidate_flag` 而不是 `confirmed_flag` ——
                 #   这两列的区别正是"它猜的"与"平台认的"（见 models）。
                 challenge.candidate_flag = candidate.flag
-                challenge.status = Ctf2ChallengeStatus.CANDIDATE_READY.value
+                challenge.status = KernelChallengeStatus.CANDIDATE_READY.value
                 ctf2_events.emit_candidate_ready(db, challenge, candidate=candidate)
             elif decision.action == "reject":
                 outcome.rejected.append(f"{candidate.flag}：{decision.reason}")
@@ -6301,7 +6301,7 @@ async def _handle_candidates(
             #     RuntimeError: Cannot send a request, as the client
             #                   has been closed.
             #
-            # 而这个 `RuntimeError` 不是 `Ctf2Error`，穿透了收尾函数的
+            # 而这个 `RuntimeError` 不是 `KernelError`，穿透了收尾函数的
             # except，把 worker 整个崩掉 —— 用户看到"解题失败"，而实际
             # 结果早已落库。一个"提交成功却报失败"的假象。
             #
@@ -6313,17 +6313,17 @@ async def _handle_candidates(
                 bound,
             ),
         )
-        if status_value == Ctf2SubmissionStatus.CORRECT.value:
+        if status_value == KernelSubmissionStatus.CORRECT.value:
             outcome.submitted.append(candidate.flag)
             with session_scope() as db:
-                challenge = db.get(Ctf2Challenge, challenge_id)
+                challenge = db.get(KernelChallenge, challenge_id)
                 if challenge is not None:
                     ctf2_events.emit_submitted_ok(db, challenge, flag=candidate.flag)
                 db.commit()
-        elif status_value == Ctf2SubmissionStatus.WRONG.value:
+        elif status_value == KernelSubmissionStatus.WRONG.value:
             outcome.rejected.append(f"{candidate.flag}：平台判错（{message}）")
             with session_scope() as db:
-                challenge = db.get(Ctf2Challenge, challenge_id)
+                challenge = db.get(KernelChallenge, challenge_id)
                 if challenge is not None:
                     ctf2_events.emit_submitted_failed(
                         db, challenge, flag=candidate.flag, reason=message
@@ -6336,13 +6336,13 @@ async def _handle_candidates(
 
 def _remote_ids(challenge_id: str) -> dict[str, Any]:
     """取提交需要的远端 id（competition 的 remote_id、challenge 的 remote_id）。"""
-    from app.kernel.models import Ctf2Competition
+    from app.kernel.models import KernelCompetition
 
     with session_scope() as db:
-        challenge = db.get(Ctf2Challenge, challenge_id)
+        challenge = db.get(KernelChallenge, challenge_id)
         if challenge is None:
             return {}
-        competition = db.get(Ctf2Competition, challenge.competition_id)
+        competition = db.get(KernelCompetition, challenge.competition_id)
         return {
             "competition_remote_id": competition.remote_id if competition else "",
             "remote_id": challenge.remote_id,
@@ -6350,12 +6350,12 @@ def _remote_ids(challenge_id: str) -> dict[str, Any]:
         }
 
 
-def _solve_elapsed_seconds(db: Session, challenge: Ctf2Challenge) -> int | None:
+def _solve_elapsed_seconds(db: Session, challenge: KernelChallenge) -> int | None:
     """这次解题跑了多久（秒）。取不到返回 `None`。
 
     ## 为什么从**借的壳 scan** 上取
 
-    `Ctf2Challenge` 没有耗时列；而 CTF2 借的那条 scan
+    `KernelChallenge` 没有耗时列；而 CTF2 借的那条 scan
     （`events.ensure_solve_scan` 建的）有 `duration_sec`，
     由 `finalize_solve_scan` 在收尾时算出。
 
@@ -6379,7 +6379,7 @@ def _solve_elapsed_seconds(db: Session, challenge: Ctf2Challenge) -> int | None:
 
 def _record_outcome(
     db: Session,
-    challenge: Ctf2Challenge,
+    challenge: KernelChallenge,
     outcome: SolveOutcome,
     *,
     platform_backed: bool = True,
@@ -6413,9 +6413,9 @@ def _record_outcome(
     """
     solved = (
         db.execute(
-            select(Ctf2Submission.flag).where(
-                Ctf2Submission.challenge_id == challenge.id,
-                Ctf2Submission.status == Ctf2SubmissionStatus.CORRECT.value,
+            select(KernelSubmission.flag).where(
+                KernelSubmission.challenge_id == challenge.id,
+                KernelSubmission.status == KernelSubmissionStatus.CORRECT.value,
             )
         )
         .scalars()
@@ -6437,29 +6437,29 @@ def _record_outcome(
         #
         #    本轮的候选**不覆盖**它：候选是"模型猜的"，`confirmed_flag`
         #    是"平台认的"，这两列的区别见 models 里的说明。
-        challenge.status = Ctf2ChallengeStatus.SOLVED.value
+        challenge.status = KernelChallengeStatus.SOLVED.value
         challenge.confirmed_flag = challenge.confirmed_flag or solved
         challenge.last_error = None
         return
 
     if outcome.error and challenge.status not in (
-        Ctf2ChallengeStatus.CANDIDATE_READY.value,
-        Ctf2ChallengeStatus.SOLVED.value,
+        KernelChallengeStatus.CANDIDATE_READY.value,
+        KernelChallengeStatus.SOLVED.value,
     ):
-        challenge.status = Ctf2ChallengeStatus.FAILED.value
+        challenge.status = KernelChallengeStatus.FAILED.value
         challenge.last_error = _safe_text(outcome.error)
         ctf2_events.emit_abandoned(db, challenge, reason=outcome.error)
     elif challenge.status not in (
-        Ctf2ChallengeStatus.CANDIDATE_READY.value,
-        Ctf2ChallengeStatus.SOLVED.value,
-        Ctf2ChallengeStatus.FAILED.value,
-        Ctf2ChallengeStatus.SUBMITTING.value,
+        KernelChallengeStatus.CANDIDATE_READY.value,
+        KernelChallengeStatus.SOLVED.value,
+        KernelChallengeStatus.FAILED.value,
+        KernelChallengeStatus.SUBMITTING.value,
     ):
         # 没出错、也没产出候选 —— 回到"未解出"，让人可以再点一次。
         #
         # ★★ 判据从 `== SOLVING` 改成"不在终态/候选态里"（2026-10-10 修）。
         #
-        # 原来写的是 `elif challenge.status == Ctf2ChallengeStatus.SOLVING.value`，
+        # 原来写的是 `elif challenge.status == KernelChallengeStatus.SOLVING.value`，
         # 而 **worker 跑起来之后主状态是 `environment_ready`**
         # （见 `service.py` 里 `challenge.status = ENVIRONMENT_READY`，
         # 以及 `scheduler.recover_orphans` docstring 里那句
@@ -6479,7 +6479,7 @@ def _record_outcome(
         # ⚠️ 用**排除法**而不是穷举"该收尾的状态"：将来加新状态时，
         #    排除法默认把它算作"需要收尾"，而穷举法默认漏掉它 ——
         #    后者正是这次 bug 的成因。
-        challenge.status = Ctf2ChallengeStatus.UNSOLVED.value
+        challenge.status = KernelChallengeStatus.UNSOLVED.value
         # ★ v0.43：措辞按任务类型分叉。
         #
         # 本地复盘案例没有 flag，所以"未产出候选 flag"是一句**错话** ——
@@ -6523,7 +6523,7 @@ __all__ = [
     "ATTACHMENT_DIR",
     "Candidate",
     "CommandResult",
-    "Ctf2SandboxError",
+    "KernelSandboxError",
     "DEFAULT_MAX_TURNS",
     "FINAL_STRETCH_TURNS",
     "MAX_DIGEST_LINES",

@@ -32,10 +32,10 @@ from app.core import netguard
 from app.kernel.adapters.redirect import request_same_host
 from app.kernel.adapters.spec import AuthSpec, EnvelopeSpec, dig, dig_str
 from app.kernel.client import (
-    Ctf2AuthExpired,
-    Ctf2RateLimited,
-    Ctf2ResponseError,
-    Ctf2Unavailable,
+    KernelAuthExpired,
+    KernelRateLimited,
+    KernelResponseError,
+    KernelUnavailable,
 )
 
 
@@ -131,8 +131,8 @@ class JsonPlatformTransport:
     ) -> Any:
         """发一次请求，返回**拆包之后**的数据。
 
-        抛出的异常全部是领域异常（`Ctf2RateLimited` / `Ctf2AuthExpired` /
-        `Ctf2Unavailable` / `Ctf2ResponseError`），上层不需要认识 httpx。
+        抛出的异常全部是领域异常（`KernelRateLimited` / `KernelAuthExpired` /
+        `KernelUnavailable` / `KernelResponseError`），上层不需要认识 httpx。
         """
         await self._throttle()
         query = {str(k): str(v) for k, v in (params or {}).items()}
@@ -150,26 +150,26 @@ class JsonPlatformTransport:
                 headers=headers,
             )
         except httpx.HTTPError as exc:
-            raise Ctf2Unavailable(f"平台请求失败：{exc}") from exc
+            raise KernelUnavailable(f"平台请求失败：{exc}") from exc
 
         if response.status_code == 429:
-            raise Ctf2RateLimited(
+            raise KernelRateLimited(
                 "平台限流，稍后重试。",
                 retry_after=parse_retry_after(response.headers.get("retry-after")),
             )
         if response.status_code in (401, 403):
-            raise Ctf2AuthExpired("凭据无效或已过期，请在设置里重新绑定。")
+            raise KernelAuthExpired("凭据无效或已过期，请在设置里重新绑定。")
         if response.status_code >= 500:
-            raise Ctf2Unavailable(f"平台返回 {response.status_code}，稍后重试。")
+            raise KernelUnavailable(f"平台返回 {response.status_code}，稍后重试。")
         if response.status_code >= 400:
-            raise Ctf2ResponseError(
+            raise KernelResponseError(
                 f"平台返回 {response.status_code}。", status_code=response.status_code
             )
 
         try:
             payload = response.json()
         except ValueError as exc:
-            raise Ctf2ResponseError(
+            raise KernelResponseError(
                 "平台响应不是 JSON（接口形状可能已经变了）。",
                 status_code=response.status_code,
             ) from exc
@@ -179,7 +179,7 @@ class JsonPlatformTransport:
             return payload
 
         if not isinstance(payload, dict):
-            raise Ctf2ResponseError(
+            raise KernelResponseError(
                 f"配了响应包装，但响应不是一个对象（是 {type(payload).__name__}）—— "
                 "配置里的 envelope 可能与真实响应不符。",
                 status_code=response.status_code,
@@ -188,7 +188,7 @@ class JsonPlatformTransport:
         code = dig_str(payload, self._envelope.success_path)
         if code != self._envelope.success_value:
             message = dig_str(payload, self._envelope.message_path) or f"平台返回 code={code}"
-            raise Ctf2ResponseError(message, status_code=response.status_code, code=code)
+            raise KernelResponseError(message, status_code=response.status_code, code=code)
         return dig(payload, self._envelope.data_path)
 
 

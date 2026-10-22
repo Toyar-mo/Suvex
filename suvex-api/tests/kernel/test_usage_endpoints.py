@@ -38,18 +38,18 @@ from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
 from app.kernel import runner, service
-from app.kernel.models import Ctf2SolveAttempt
+from app.kernel.models import KernelSolveAttempt
 
 API = "/api/v1"
 
 
 def _attempt(db: Session, challenge_id: str):
-    from app.core.vocab import Ctf2SubmitMode
+    from app.core.vocab import KernelSubmitMode
 
-    row = Ctf2SolveAttempt(
+    row = KernelSolveAttempt(
         id=new_id("ctf2try"),
         challenge_id=challenge_id,
-        mode=Ctf2SubmitMode.SAFE.value,
+        mode=KernelSubmitMode.SAFE.value,
         max_turns=40,
         sandbox_profile="ctf2-sandbox",
     )
@@ -107,7 +107,7 @@ def test_writeup_is_409_and_blames_the_old_version_when_missing_but_solved(
     而文案才是用户唯一能看到的东西。
 
     ⚠️ 判据是**受理快照存不存在**，不是状态。所以这里必须造一条
-    `Ctf2SolveAttempt` —— 光改 status 不够，那正是修掉的那个 bug。
+    `KernelSolveAttempt` —— 光改 status 不够，那正是修掉的那个 bug。
     """
     _attempt(db_session, ctf2_challenge.id)
 
@@ -317,7 +317,7 @@ def test_global_usage_exposes_the_attempt_breakdown(
     """★ `byAttempt` 的字段逐字核对（需求要的"细分到每个任务"）。
 
     这条走**真实 HTTP**，所以它同时验证了 router 的 schema 映射
-    （`Ctf2UsageByAttemptOut(**a)`）不会因为字段名对不上而 500。
+    （`KernelUsageByAttemptOut(**a)`）不会因为字段名对不上而 500。
     """
     attempt = _attempt(db_session, ctf2_challenge.id)
     service.record_solve_usages(

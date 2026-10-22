@@ -29,8 +29,8 @@ from app.core.db import Base
 from app.core.timeutil import now_utc
 from app.core.vocab import (
     # ★ v0.20：CTF2 解题策略
-    Ctf2SandboxProfile,
-    Ctf2SubmitMode,
+    KernelSandboxProfile,
+    KernelSubmitMode,
     NotifyChannelKind,
     SandboxEngine,
     SandboxStatus,
@@ -135,7 +135,7 @@ class SandboxConfig(Base):
     # `prompts/offensive_playbook.md` 那一块手法矩阵。关着时两条路径
     # 的提示词**逐字节不变**（连那个文件都不读）。
     #
-    # ## ★ 为什么它在这一行，而不是在 `Ctf2Config` 里
+    # ## ★ 为什么它在这一行，而不是在 `KernelConfig` 里
     #
     # 因为它要**被两条路径同时读到**。`ctf2_config` 只有 CTF2 侧读
     # （`app/scans/` 下对 `ctf2` 的引用全是注释性的）；而 `sandbox_config`
@@ -449,7 +449,7 @@ class NotifyChannel(Base):
 # 而没有人会去看那一行。所以这里非空、初值来自代码常量。
 
 
-class Ctf2Config(Base):
+class KernelConfig(Base):
     """CTF2 解题策略。单例行（`id = 'default'`）。
 
     与 `SandboxConfig` 共用 `SINGLETON_ID` —— 单例表的主键值统一，
@@ -459,11 +459,11 @@ class Ctf2Config(Base):
     __tablename__ = "ctf2_config"
     __table_args__ = (
         CheckConstraint(
-            f"submit_mode IN ({', '.join(repr(v) for v in values(Ctf2SubmitMode))})",
+            f"submit_mode IN ({', '.join(repr(v) for v in values(KernelSubmitMode))})",
             name="submit_mode_valid",
         ),
         CheckConstraint(
-            f"default_sandbox_profile IN ({', '.join(repr(v) for v in values(Ctf2SandboxProfile))})",
+            f"default_sandbox_profile IN ({', '.join(repr(v) for v in values(KernelSandboxProfile))})",
             name="default_sandbox_profile_valid",
         ),
         # 与 `ctf2/service.py` 的 `MAX_WRONG_SUBMISSIONS_CEILING` 同一条理由：
@@ -496,10 +496,10 @@ class Ctf2Config(Base):
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=SINGLETON_ID)
 
-    # 提交策略。**默认 safe** —— 见 `vocab.Ctf2SubmitMode` 的说明：
+    # 提交策略。**默认 safe** —— 见 `vocab.KernelSubmitMode` 的说明：
     # 这是安全取向而不是体验取向。
     submit_mode: Mapped[str] = mapped_column(
-        String(16), nullable=False, default=Ctf2SubmitMode.SAFE.value
+        String(16), nullable=False, default=KernelSubmitMode.SAFE.value
     )
     # 每题的错误提交次数上限（已定设计决策 4：默认 3，可配置）。
     max_wrong_submissions: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
@@ -576,7 +576,7 @@ class Ctf2Config(Base):
     # 新题默认用哪个沙箱镜像。题目同步时按分类推导，这里是**兜底值**
     # （分类认不出来时用它）。
     default_sandbox_profile: Mapped[str] = mapped_column(
-        String(32), nullable=False, default=Ctf2SandboxProfile.BASE.value
+        String(32), nullable=False, default=KernelSandboxProfile.BASE.value
     )
 
     # ── 换模 fallback（v0.35）──────────────────────────────
@@ -610,7 +610,7 @@ class Ctf2Config(Base):
     #
     # ## 它控制什么：一件事，且只有一件事
     #
-    # 打开时，`Ctf2SolveNote.category` 才允许取 `agentsec-*` 那四个值
+    # 打开时，`KernelSolveNote.category` 才允许取 `agentsec-*` 那四个值
     # （见 `vocab.AgentsecCategory`），并且命中其中之一的任务会在 system
     # prompt 末尾追加"判定考察点是否成立"的评测块。
     #
@@ -632,7 +632,7 @@ class Ctf2Config(Base):
     #
     # ## 为什么不放环境变量
     #
-    # 与 `submit_mode` 同一条理由（见本文件 `Ctf2Config` 的说明）：
+    # 与 `submit_mode` 同一条理由（见本文件 `KernelConfig` 的说明）：
     # 行为开关不该由一个部署参数静默决定。没有第二个来源，
     # 就没有"来源"要标。
     enable_agentsec_scenarios: Mapped[bool] = mapped_column(
@@ -643,7 +643,7 @@ class Ctf2Config(Base):
     #
     # ## 它控制什么：一件事，且只有一件事
     #
-    # 打开时，`Ctf2SolveNote.category` 才允许取 `ir-*` 那三个值
+    # 打开时，`KernelSolveNote.category` 才允许取 `ir-*` 那三个值
     # （见 `vocab.IrCategory`），并且命中其中之一的任务会在 system
     # prompt 末尾追加"复盘过去发生了什么"的场景块。
     #
@@ -684,6 +684,6 @@ class Ctf2Config(Base):
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return (
-            f"<Ctf2Config submit_mode={self.submit_mode!r} "
+            f"<KernelConfig submit_mode={self.submit_mode!r} "
             f"max_wrong={self.max_wrong_submissions}>"
         )

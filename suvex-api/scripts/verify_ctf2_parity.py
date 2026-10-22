@@ -207,11 +207,11 @@ def main() -> int:
     print("\n── 枚举取值集合（核心）──", flush=True)
 
     enum_pairs = [
-        ("Ctf2ChallengeStatus", "CHALLENGE_STATUS_LABEL", "题目状态"),
-        ("Ctf2SubmissionStatus", "SUBMISSION_STATUS_LABEL", "提交结果"),
-        ("Ctf2EnvironmentStatus", "ENVIRONMENT_STATUS_LABEL", "环境状态"),
-        ("Ctf2SubmitMode", "SUBMIT_MODE_LABEL", "提交策略"),
-        ("Ctf2SandboxProfile", "SANDBOX_PROFILE_LABEL", "沙箱镜像"),
+        ("KernelChallengeStatus", "CHALLENGE_STATUS_LABEL", "题目状态"),
+        ("KernelSubmissionStatus", "SUBMISSION_STATUS_LABEL", "提交结果"),
+        ("KernelEnvironmentStatus", "ENVIRONMENT_STATUS_LABEL", "环境状态"),
+        ("KernelSubmitMode", "SUBMIT_MODE_LABEL", "提交策略"),
+        ("KernelSandboxProfile", "SANDBOX_PROFILE_LABEL", "沙箱镜像"),
     ]
 
     for enum_name, ts_table, label in enum_pairs:
@@ -342,7 +342,7 @@ def main() -> int:
     # ══════════════════════════════════════════════════════
     print("\n── 沙箱镜像 ──", flush=True)
 
-    profile_values = {member.value for member in vocab.Ctf2SandboxProfile}
+    profile_values = {member.value for member in vocab.KernelSandboxProfile}
     check(
         profile_values == {"ctf2-sandbox", "ctf2-sandbox-re"},
         "镜像名与 Dockerfile 目录一致",
@@ -376,18 +376,18 @@ def main() -> int:
     # ══════════════════════════════════════════════════════
     print("\n── 接口字段 ──", flush=True)
 
-    from app.kernel.schemas import Ctf2ChallengeOut, Ctf2SettingsIn, Ctf2SettingsOut, Ctf2SyncOut
+    from app.kernel.schemas import KernelChallengeOut, KernelSettingsIn, KernelSettingsOut, KernelSyncOut
 
     field_pairs = [
-        (Ctf2ChallengeOut, "Ctf2Challenge", "题目出参"),
-        (Ctf2SyncOut, "Ctf2SyncResult", "同步出参"),
+        (KernelChallengeOut, "KernelChallenge", "题目出参"),
+        (KernelSyncOut, "KernelSyncResult", "同步出参"),
         # ★ v0.24 新增：**配置出参**也要对账。
         #
         # 它是一处真实存在过的漏同步点：加一个配置项要同时动三个地方
-        # （后端 schema、前端 interface、`saveCtf2Settings` 的入参形状），
+        # （后端 schema、前端 interface、`saveKernelSettings` 的入参形状），
         # 而漏掉第二处的症状是"这一项在界面上根本不存在"，漏掉第三处的
         # 症状是"改了这一项，保存后没反应"—— 后者看起来像保存按钮坏了。
-        (Ctf2SettingsOut, "Ctf2Settings", "配置出参"),
+        (KernelSettingsOut, "KernelSettings", "配置出参"),
     ]
     for model, ts_name, label in field_pairs:
         backend_fields = set(model.model_fields)
@@ -406,12 +406,12 @@ def main() -> int:
 
     # ★ 配置的**入参与出参必须是同一组字段**（只差 `updatedAt`）。
     #
-    # 为什么这值得单独一条：`Ctf2SettingsIn` 的字段**全部必填**
+    # 为什么这值得单独一条：`KernelSettingsIn` 的字段**全部必填**
     # （漏传一项是调用方 bug，给默认值会让它静默改回默认）。所以后端
     # 加了字段而前端没跟着传时，PUT 会 422 —— 而那个报错说的是"字段
     # 缺失"，与用户真正遇到的现象（"我改的那一项没生效"）毫不相干。
-    out_fields = set(Ctf2SettingsOut.model_fields)
-    in_fields = set(Ctf2SettingsIn.model_fields)
+    out_fields = set(KernelSettingsOut.model_fields)
+    in_fields = set(KernelSettingsIn.model_fields)
     check(
         in_fields == out_fields - {"updatedAt"},
         "配置入参与出参是同一组字段（只差 updatedAt）",
@@ -424,10 +424,10 @@ def main() -> int:
     # ★ 单独把这一条钉住：**候选与已确认必须是两个字段**。
     #   合并回一个 `flag` 之后，界面无法回答"现在有没有东西等着我确认"，
     #   而在一道判错退回未解出的题上会显示一个看起来像答案的字符串
-    #   （见 `Ctf2Challenge` 里那两列的说明）。这是一次真实修过的缺陷，
+    #   （见 `KernelChallenge` 里那两列的说明）。这是一次真实修过的缺陷，
     #   所以它值得一条专门的检查，而不是只靠上面的集合比较顺带覆盖 ——
     #   集合比较会在"两边同时改回一个 flag"时通过。
-    challenge_fields = set(Ctf2ChallengeOut.model_fields)
+    challenge_fields = set(KernelChallengeOut.model_fields)
     check(
         {"candidateFlag", "confirmedFlag"} <= challenge_fields and "flag" not in challenge_fields,
         "候选 flag 与已确认 flag 仍然是两个字段",

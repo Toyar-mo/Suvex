@@ -1,16 +1,16 @@
 import { cn } from '@/lib/cn'
 import { Field, Toggle } from './Field'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
-import SandboxProfileSelect from '@/components/ctf2/SandboxProfileSelect'
+import SandboxProfileSelect from '@/components/kernel/SandboxProfileSelect'
 import {
   SUBMIT_MODE_HINT,
   SUBMIT_MODE_LABEL,
-  loadCtf2,
-  saveCtf2Settings,
-  useCtf2,
-  type Ctf2Settings,
-  type Ctf2SubmitMode,
-} from '@/data/ctf2'
+  loadKernel,
+  saveKernelSettings,
+  useKernel,
+  type KernelSettings,
+  type KernelSubmitMode,
+} from '@/data/kernel'
 import { ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useProviders } from '@/data/providers'
@@ -49,7 +49,7 @@ const MIN_WRONG_SUBMISSIONS = 0
  * 解题并发的合法区间。
  *
  * ⚠️ 与 `app/core/vocab.py` 的 `MIN/MAX_CTF2_MAX_CONCURRENT_SOLVES`
- * 和 `schemas.Ctf2SettingsIn` 的 `Field(ge=1, le=16)` 是**同一对数**。
+ * 和 `schemas.KernelSettingsIn` 的 `Field(ge=1, le=16)` 是**同一对数**。
  *
  * 上限 16 而**不是**沙箱页那个 8：比赛规则写明「题量设计明显超过人工
  * 手工完成能力」，解题的并发诉求天然更高。两边的数不同是刻意的 ——
@@ -62,7 +62,7 @@ const MAX_CONCURRENT_SOLVES = 16
  * 认领轮询间隔的合法区间（秒，v0.24）。
  *
  * ⚠️ 与 `app/core/vocab.py` 的 `MIN/MAX_CTF2_SOLVE_POLL_SECONDS` 和
- * `schemas.Ctf2SettingsIn` 的 `Field(ge=0.5, le=30)` 是同一对数。
+ * `schemas.KernelSettingsIn` 的 `Field(ge=0.5, le=30)` 是同一对数。
  *
  * 下界 0.5 **不是建议值而是护栏**：填 0 会让调度线程变成忙等，
  * 症状是 CPU 打满而解题**反而变慢** —— 那种"越调越慢"最难归因到
@@ -84,7 +84,7 @@ const MAX_AUTO_SYNC_SECONDS = 3600
  * 解题回合预算的区间（v0.26）。
  *
  * ⚠️ 与 `app/core/vocab.py` 的 `MIN/MAX_CTF2_MAX_TURNS` 和
- * `schemas.Ctf2SettingsIn` 的 `Field(ge=5, le=500)` 是同一对数。
+ * `schemas.KernelSettingsIn` 的 `Field(ge=5, le=500)` 是同一对数。
  *
  * 上界 500 只是"别手滑填 100000"的护栏，**不是**成本护栏 ——
  * 真正的成本是每轮一次 LLM 调用，而那该由人在现场按题权衡。
@@ -92,20 +92,20 @@ const MAX_AUTO_SYNC_SECONDS = 3600
 const MIN_MAX_TURNS = 5
 const MAX_MAX_TURNS = 500
 
-export function Ctf2Panel() {
-  const { settings, status, settingsError } = useCtf2()
+export function KernelPanel() {
+  const { settings, status, settingsError } = useKernel()
 
   /*
     进页面拉一次。
-    ⚠️ 只在**还没加载过**时拉（`idle`）：`loadCtf2` 会打三个端点，
+    ⚠️ 只在**还没加载过**时拉（`idle`）：`loadKernel` 会打三个端点，
     而设置页与 CTF2 页共用同一个 store —— 每次切到设置页都重拉一遍
     是白烧请求，而且是肉眼可见的闪烁。
   */
   useEffect(() => {
-    if (status === 'idle') void loadCtf2()
+    if (status === 'idle') void loadKernel()
   }, [status])
 
-  const [draft, setDraft] = useState<Ctf2Settings | null>(settings)
+  const [draft, setDraft] = useState<KernelSettings | null>(settings)
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
   const [touched, setTouched] = useState(false)
   // 备用模型的下拉选项来自已配置的 provider（v0.35）。
@@ -216,7 +216,7 @@ export function Ctf2Panel() {
     }
     setSaveState({ kind: 'saving' })
     try {
-      await saveCtf2Settings({
+      await saveKernelSettings({
         submitMode: draft.submitMode,
         maxWrongSubmissions: draft.maxWrongSubmissions,
         defaultSandboxProfile: draft.defaultSandboxProfile,
@@ -280,7 +280,7 @@ export function Ctf2Panel() {
         <span className="text-xs font-medium text-ink">提交策略</span>
 
         <div role="radiogroup" aria-label="提交策略" className="flex flex-col gap-1.5">
-          {(Object.keys(SUBMIT_MODE_LABEL) as Ctf2SubmitMode[]).map((mode) => {
+          {(Object.keys(SUBMIT_MODE_LABEL) as KernelSubmitMode[]).map((mode) => {
             const active = draft.submitMode === mode
             const Icon = mode === 'safe' ? ShieldCheck : ShieldAlert
             return (
@@ -687,4 +687,4 @@ export function Ctf2Panel() {
   )
 }
 
-export default Ctf2Panel
+export default KernelPanel

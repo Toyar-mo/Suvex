@@ -32,7 +32,7 @@ v0.42 加的 `sandbox_config.enable_offensive_prompt` 是个**全局开关**，
 失败。而 `false` 是唯一诚实的填充值 —— v0.42 之前不存在这个开关，
 那些行本来就该算"没带"。
 
-⚠️ 模型侧（`ctf2/models.py` 的 `Ctf2SolveTelemetry.offensive`）只写
+⚠️ 模型侧（`ctf2/models.py` 的 `KernelSolveTelemetry.offensive`）只写
 `default=False`、**不写 `server_default`**：迁移负责把老行填成 false，
 模型负责新写入的默认值。同 `SandboxConfig.enable_offensive_prompt`。
 

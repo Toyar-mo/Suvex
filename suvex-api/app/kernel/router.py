@@ -62,41 +62,41 @@ from app.core.vocab import AuditAction
 from app.kernel import platforms, service
 from app.kernel import workorder as workorder_mod
 from app.kernel import writeup as writeup_mod
-from app.kernel.models import Ctf2Challenge, Ctf2Competition, Ctf2Environment
+from app.kernel.models import KernelChallenge, KernelCompetition, KernelEnvironment
 from app.kernel.schemas import (
-    Ctf2AccountBindIn,
-    Ctf2AccountOut,
-    Ctf2ChallengeOut,
-    Ctf2CompetitionOut,
-    Ctf2EnvironmentOut,
-    Ctf2PlatformActivateIn,
-    Ctf2PlatformDraftIn,
-    Ctf2PlatformOut,
-    Ctf2PrioritiesByScoreIn,
-    Ctf2PriorityBatchOut,
-    Ctf2PriorityIn,
-    Ctf2PullIn,
-    Ctf2PullOut,
-    Ctf2QueueOut,
-    Ctf2RemoteCompetitionOut,
-    Ctf2SettingsIn,
-    Ctf2SettingsOut,
-    Ctf2SnapshotOut,
-    Ctf2SolveIn,
-    Ctf2SolveOut,
-    Ctf2SubmitIn,
-    Ctf2SubmitOut,
-    Ctf2SyncIn,
-    Ctf2SyncOut,
-    Ctf2TokenUsageOut,
-    Ctf2UsageByAttemptOut,
-    Ctf2UsageByChallengeOut,
-    Ctf2UsageByModelOut,
-    Ctf2UsageEntryOut,
-    Ctf2WorkOrderOut,
-    Ctf2WriteupOut,
     IrTaskIn,
     IrTaskOut,
+    KernelAccountBindIn,
+    KernelAccountOut,
+    KernelChallengeOut,
+    KernelCompetitionOut,
+    KernelEnvironmentOut,
+    KernelPlatformActivateIn,
+    KernelPlatformDraftIn,
+    KernelPlatformOut,
+    KernelPrioritiesByScoreIn,
+    KernelPriorityBatchOut,
+    KernelPriorityIn,
+    KernelPullIn,
+    KernelPullOut,
+    KernelQueueOut,
+    KernelRemoteCompetitionOut,
+    KernelSettingsIn,
+    KernelSettingsOut,
+    KernelSnapshotOut,
+    KernelSolveIn,
+    KernelSolveOut,
+    KernelSubmitIn,
+    KernelSubmitOut,
+    KernelSyncIn,
+    KernelSyncOut,
+    KernelTokenUsageOut,
+    KernelUsageByAttemptOut,
+    KernelUsageByChallengeOut,
+    KernelUsageByModelOut,
+    KernelUsageEntryOut,
+    KernelWorkOrderOut,
+    KernelWriteupOut,
 )
 
 router = APIRouter(prefix="/ctf2", tags=["CTF2"])
@@ -112,10 +112,10 @@ DbDep = Annotated[Session, Depends(get_db)]
 # ══════════════════════════════════════════════════════════
 
 
-def _environment_out(environment: Ctf2Environment | None) -> Ctf2EnvironmentOut | None:
+def _environment_out(environment: KernelEnvironment | None) -> KernelEnvironmentOut | None:
     if environment is None:
         return None
-    return Ctf2EnvironmentOut(
+    return KernelEnvironmentOut(
         id=environment.id,
         challengeId=environment.challenge_id,
         status=environment.status,
@@ -132,9 +132,9 @@ def _environment_out(environment: Ctf2Environment | None) -> Ctf2EnvironmentOut 
 
 
 def _challenge_out(
-    challenge: Ctf2Challenge, environment: Ctf2EnvironmentOut | None
-) -> Ctf2ChallengeOut:
-    return Ctf2ChallengeOut(
+    challenge: KernelChallenge, environment: KernelEnvironmentOut | None
+) -> KernelChallengeOut:
+    return KernelChallengeOut(
         id=challenge.id,
         competitionId=challenge.competition_id,
         remoteId=challenge.remote_id,
@@ -146,7 +146,7 @@ def _challenge_out(
         score=challenge.score,
         status=challenge.status,
         # ★ 两列各归各位。前端据此判断"有没有东西等着我确认"——
-        #   见 `Ctf2ChallengeOut` 的说明：一个字段装不下两种意思。
+        #   见 `KernelChallengeOut` 的说明：一个字段装不下两种意思。
         candidateFlag=challenge.candidate_flag,
         confirmedFlag=challenge.confirmed_flag,
         # ⚠️ 由**服务端**算好，不让前端做减法：`max - count` 这条规则
@@ -166,7 +166,7 @@ def _challenge_out(
     )
 
 
-def _account_out(account) -> Ctf2AccountOut | None:  # noqa: ANN001
+def _account_out(account) -> KernelAccountOut | None:  # noqa: ANN001
     """⚠️ 这里**没有** token 字段，也永远不会有 —— 只有掩码。
 
     与 `ProviderAccount` 的 `apiKey` 同一个处理：读接口不回填凭据，
@@ -174,7 +174,7 @@ def _account_out(account) -> Ctf2AccountOut | None:  # noqa: ANN001
     """
     if account is None:
         return None
-    return Ctf2AccountOut(
+    return KernelAccountOut(
         id=account.id,
         label=account.label,
         status=account.status,
@@ -190,8 +190,8 @@ def _account_out(account) -> Ctf2AccountOut | None:  # noqa: ANN001
     )
 
 
-def _competition_out(competition) -> Ctf2CompetitionOut:  # noqa: ANN001
-    return Ctf2CompetitionOut(
+def _competition_out(competition) -> KernelCompetitionOut:  # noqa: ANN001
+    return KernelCompetitionOut(
         id=competition.id,
         accountId=competition.account_id,
         remoteId=competition.remote_id,
@@ -206,8 +206,8 @@ def _competition_out(competition) -> Ctf2CompetitionOut:  # noqa: ANN001
 
 
 def _challenges_with_environments(
-    db: Session, challenges: list[Ctf2Challenge]
-) -> list[Ctf2ChallengeOut]:
+    db: Session, challenges: list[KernelChallenge]
+) -> list[KernelChallengeOut]:
     """一次查询补齐每道题的最新环境。
 
     ★ 为什么不逐题查：列表上几十道题就是几十个请求打在同一秒里
@@ -215,7 +215,7 @@ def _challenges_with_environments(
     而下面的遍历只保留每道题的**最新**那条（查询已按 created_at 倒序）。
     """
     environments = service.list_environments(db, challenge_ids=[c.id for c in challenges])
-    latest: dict[str, Ctf2EnvironmentOut] = {}
+    latest: dict[str, KernelEnvironmentOut] = {}
     for environment in environments:
         if environment.challenge_id in latest:
             continue
@@ -230,24 +230,24 @@ def _challenges_with_environments(
 # ══════════════════════════════════════════════════════════
 
 
-@router.get("/accounts", response_model=list[Ctf2AccountOut], summary="CTF2 账号绑定列表")
-def list_accounts(_identity: ReadDep, db: DbDep) -> list[Ctf2AccountOut]:
+@router.get("/accounts", response_model=list[KernelAccountOut], summary="CTF2 账号绑定列表")
+def list_accounts(_identity: ReadDep, db: DbDep) -> list[KernelAccountOut]:
     """只返回掩码。**没有 `token` 字段**（见 `_account_out`）。"""
     return [out for out in (_account_out(a) for a in service.list_accounts(db)) if out]
 
 
 @router.post(
     "/accounts",
-    response_model=Ctf2AccountOut,
+    response_model=KernelAccountOut,
     status_code=status.HTTP_201_CREATED,
     summary="绑定（或换绑）CTF2 账号",
 )
 def bind_account(
-    payload: Ctf2AccountBindIn,
+    payload: KernelAccountBindIn,
     request: Request,
     identity: AdminDep,
     db: DbDep,
-) -> Ctf2AccountOut:
+) -> KernelAccountOut:
     """★ 会**真的调一次 CTF2** 验证凭据。
 
     不验的话用户会得到"绑定成功"，然后在第一次点解题时才吃到 401 ——
@@ -302,8 +302,8 @@ def unbind_account(accountId: str, request: Request, identity: AdminDep, db: DbD
 # ══════════════════════════════════════════════════════════
 
 
-def _settings_out(row) -> Ctf2SettingsOut:  # noqa: ANN001
-    return Ctf2SettingsOut(
+def _settings_out(row) -> KernelSettingsOut:  # noqa: ANN001
+    return KernelSettingsOut(
         submitMode=row.submit_mode,
         maxWrongSubmissions=row.max_wrong_submissions,
         defaultSandboxProfile=row.default_sandbox_profile,
@@ -320,16 +320,16 @@ def _settings_out(row) -> Ctf2SettingsOut:  # noqa: ANN001
     )
 
 
-@router.get("/settings", response_model=Ctf2SettingsOut, summary="CTF2 配置（提交策略）")
-def read_ctf2_settings(_identity: AdminDep, db: DbDep) -> Ctf2SettingsOut:
+@router.get("/settings", response_model=KernelSettingsOut, summary="CTF2 配置（提交策略）")
+def read_ctf2_settings(_identity: AdminDep, db: DbDep) -> KernelSettingsOut:
     """admin 级：`submitMode` 决定机器能否**无人确认**地对外提交 flag。"""
     return _settings_out(service.get_ctf2_config(db))
 
 
-@router.put("/settings", response_model=Ctf2SettingsOut, summary="改 CTF2 配置")
+@router.put("/settings", response_model=KernelSettingsOut, summary="改 CTF2 配置")
 def update_ctf2_settings(
-    payload: Ctf2SettingsIn, request: Request, identity: AdminDep, db: DbDep
-) -> Ctf2SettingsOut:
+    payload: KernelSettingsIn, request: Request, identity: AdminDep, db: DbDep
+) -> KernelSettingsOut:
     """保存后**立刻生效**（worker 每次读生效值，不需要重启）。
 
     ★ 从 `auto` 切回 `safe` 是**即时**的，反过来也一样 ——
@@ -403,10 +403,10 @@ def update_ctf2_settings(
 
 @router.get(
     "/competitions/remote",
-    response_model=list[Ctf2RemoteCompetitionOut],
+    response_model=list[KernelRemoteCompetitionOut],
     summary="平台上有哪些赛事（即时查询，不写库）",
 )
-def list_remote_competitions(_identity: ScanDep) -> list[Ctf2RemoteCompetitionOut]:
+def list_remote_competitions(_identity: ScanDep) -> list[KernelRemoteCompetitionOut]:
     """scan 级，虽然它**只读**。
 
     ★ 为什么一个只读端点要 scan 级：它每次都真的打一次平台接口。
@@ -422,18 +422,18 @@ def list_remote_competitions(_identity: ScanDep) -> list[Ctf2RemoteCompetitionOu
     ⚠️ 它**不写库**：拉回来的东西只用于给用户选，落库由 `/ctf2/sync` 做。
     """
     return [
-        Ctf2RemoteCompetitionOut(**item) for item in service.list_remote_competitions()
+        KernelRemoteCompetitionOut(**item) for item in service.list_remote_competitions()
     ]
 
 
 @router.post(
     "/challenges/pull",
-    response_model=Ctf2PullOut,
+    response_model=KernelPullOut,
     summary="按题目链接/ID 拉取一道练习集题目",
 )
 def pull_challenge(
-    payload: Ctf2PullIn, request: Request, identity: ScanDep, db: DbDep
-) -> Ctf2PullOut:
+    payload: KernelPullIn, request: Request, identity: ScanDep, db: DbDep
+) -> KernelPullOut:
     """scan 级：它**写库**且会打平台接口。
 
     ## 它存在的理由
@@ -457,8 +457,8 @@ def pull_challenge(
         target=challenge.id,
         detail={"remoteId": challenge.remote_id, "created": created},
     )
-    competition = db.get(Ctf2Competition, challenge.competition_id)
-    return Ctf2PullOut(
+    competition = db.get(KernelCompetition, challenge.competition_id)
+    return KernelPullOut(
         challenge=_challenge_out(challenge, None),
         created=created,
         challengeId=challenge.remote_id,
@@ -466,8 +466,8 @@ def pull_challenge(
     )
 
 
-@router.post("/sync", response_model=Ctf2SyncOut, summary="从 CTF2 同步赛事与题目")
-def sync_ctf2(payload: Ctf2SyncIn, request: Request, identity: ScanDep, db: DbDep) -> Ctf2SyncOut:
+@router.post("/sync", response_model=KernelSyncOut, summary="从 CTF2 同步赛事与题目")
+def sync_ctf2(payload: KernelSyncIn, request: Request, identity: ScanDep, db: DbDep) -> KernelSyncOut:
     """scan 级：它**改数据**（写库），且会发出去一串外部请求。
 
     给 read 级的话，一个只读令牌就能反复触发同步 —— 而每次同步都是
@@ -492,7 +492,7 @@ def sync_ctf2(payload: Ctf2SyncIn, request: Request, identity: ScanDep, db: DbDe
             "attachmentFailures": len(result.attachments.failed),
         },
     )
-    return Ctf2SyncOut(
+    return KernelSyncOut(
         competitions=result.competitions,
         challengesCreated=result.challenges_created,
         challengesUpdated=result.challenges_updated,
@@ -582,7 +582,7 @@ def create_ir_task(
     #       但库里不存在的 id
     #
     # 这个组合不是理论推演：第一次跑 `test_ir_task_router.py` 时它是红的，
-    # 报的错是 `Instance <Ctf2Challenge> is not persistent within this Session`
+    # 报的错是 `Instance <KernelChallenge> is not persistent within this Session`
     # 加一句 `AttributeError: 'Request' object has no attribute 'identity'`
     # —— 后者才是第一现场（见下面那行的说明），前者是它的后果。
     db.commit()
@@ -658,42 +658,42 @@ def _claim_ir_attachments(staging_id: str, challenge_id: str) -> list[dict]:
     return claimed
 
 
-@router.get("/competitions", response_model=list[Ctf2CompetitionOut], summary="赛事列表")
+@router.get("/competitions", response_model=list[KernelCompetitionOut], summary="赛事列表")
 def list_competitions(
     _identity: ReadDep,
     db: DbDep,
     accountId: Annotated[str | None, Query(description="只看某个绑定下的赛事")] = None,
-) -> list[Ctf2CompetitionOut]:
+) -> list[KernelCompetitionOut]:
     return [
         _competition_out(item) for item in service.list_competitions(db, account_id=accountId)
     ]
 
 
-@router.get("/challenges", response_model=list[Ctf2ChallengeOut], summary="题目列表")
+@router.get("/challenges", response_model=list[KernelChallengeOut], summary="题目列表")
 def list_challenges(
     _identity: ReadDep,
     db: DbDep,
     competitionId: Annotated[str | None, Query(description="只看某场赛事")] = None,
     status: Annotated[str | None, Query(description="按状态筛")] = None,
-) -> list[Ctf2ChallengeOut]:
+) -> list[KernelChallengeOut]:
     """一次把**环境**也带出去（见 `_challenges_with_environments` 的说明）。"""
     challenges = service.list_challenges(db, competition_id=competitionId, status=status)
     return _challenges_with_environments(db, challenges)
 
 
-@router.get("/challenges/{challengeId}", response_model=Ctf2ChallengeOut, summary="题目详情")
-def get_challenge(challengeId: str, _identity: ReadDep, db: DbDep) -> Ctf2ChallengeOut:
+@router.get("/challenges/{challengeId}", response_model=KernelChallengeOut, summary="题目详情")
+def get_challenge(challengeId: str, _identity: ReadDep, db: DbDep) -> KernelChallengeOut:
     challenge = service.get_challenge_or_404(db, challengeId)
     environment = service.latest_environment(db, challengeId)
     return _challenge_out(challenge, _environment_out(environment))
 
 
-@router.get("/snapshot", response_model=Ctf2SnapshotOut, summary="一次拿到账号+赛事+题目")
+@router.get("/snapshot", response_model=KernelSnapshotOut, summary="一次拿到账号+赛事+题目")
 def get_snapshot(
     _identity: ReadDep,
     db: DbDep,
     competitionId: Annotated[str | None, Query()] = None,
-) -> Ctf2SnapshotOut:
+) -> KernelSnapshotOut:
     """一次性把三层给全，而不是让前端三次往返。
 
     这三层在任何一次有意义的展示里都会同时被需要，而分三次请求
@@ -703,15 +703,15 @@ def get_snapshot(
         service.get_competition_or_404(db, competitionId) if competitionId else None
     )
     challenges = service.list_challenges(db, competition_id=competitionId or None)
-    return Ctf2SnapshotOut(
+    return KernelSnapshotOut(
         account=_account_out(service.get_account(db)),
         competition=_competition_out(competition) if competition is not None else None,
         challenges=_challenges_with_environments(db, challenges),
     )
 
 
-@router.get("/queue", response_model=Ctf2QueueOut, summary="解题队列状态")
-def read_queue(_identity: ReadDep, db: DbDep) -> Ctf2QueueOut:
+@router.get("/queue", response_model=KernelQueueOut, summary="解题队列状态")
+def read_queue(_identity: ReadDep, db: DbDep) -> KernelQueueOut:
     """与 `GET /scans/queue` 同一条思路：它回答的是
     「为什么我点了开始解题，却一直排在队列里」——
     答案通常是"并发上限满了"，而那需要能看到当前在跑几个、上限几个。
@@ -719,7 +719,7 @@ def read_queue(_identity: ReadDep, db: DbDep) -> Ctf2QueueOut:
     from app.kernel.scheduler import get_scheduler
 
     stats = get_scheduler().stats(db)
-    return Ctf2QueueOut(
+    return KernelQueueOut(
         running=stats.running,
         limit=stats.limit,
         queued=stats.queued,
@@ -733,11 +733,11 @@ def read_queue(_identity: ReadDep, db: DbDep) -> Ctf2QueueOut:
 
 
 @router.post(
-    "/challenges/{challengeId}/solve", response_model=Ctf2SolveOut, summary="开始解题"
+    "/challenges/{challengeId}/solve", response_model=KernelSolveOut, summary="开始解题"
 )
 def solve_challenge(
-    challengeId: str, payload: Ctf2SolveIn, request: Request, identity: ScanDep, db: DbDep
-) -> Ctf2SolveOut:
+    challengeId: str, payload: KernelSolveIn, request: Request, identity: ScanDep, db: DbDep
+) -> KernelSolveOut:
     """受理一次解题：起环境 → 沙箱 → 解题 → 产生候选 flag。
 
     ## ★ 它**不同步等解题结束**
@@ -760,7 +760,7 @@ def solve_challenge(
         sandbox_profile=payload.sandboxProfile,
         max_wrong_submissions=payload.maxWrongSubmissions,
         # ★ v0.28：这个字段在 schema 里一直有，而**从来没被转交过** ——
-        #   `Ctf2SolveIn.brief` 的注释写着"传给 agent 的额外提示"，
+        #   `KernelSolveIn.brief` 的注释写着"传给 agent 的额外提示"，
         #   实际上一路断在这里：router 不传 → service 没参数 →
         #   prompt 里没有位置。用户填了它，什么都不会发生，
         #   而且没有任何反馈告诉他这一点。
@@ -784,7 +784,7 @@ def solve_challenge(
             "maxWrongSubmissions": challenge.max_wrong_submissions,
         },
     )
-    return Ctf2SolveOut(
+    return KernelSolveOut(
         challenge=_challenge_out(challenge, _environment_out(environment)),
         environmentId=environment.id if environment else None,
         scanId=challenge.scan_id,
@@ -797,12 +797,12 @@ def solve_challenge(
 
 @router.put(
     "/challenges/{challengeId}/priority",
-    response_model=Ctf2ChallengeOut,
+    response_model=KernelChallengeOut,
     summary="设置解题优先级",
 )
 def set_challenge_priority(
-    challengeId: str, payload: Ctf2PriorityIn, identity: ScanDep, db: DbDep
-) -> Ctf2ChallengeOut:
+    challengeId: str, payload: KernelPriorityIn, identity: ScanDep, db: DbDep
+) -> KernelChallengeOut:
     """调一道题在**排队**中的先后。越大越先做，默认 0。
 
     ## 为什么比赛需要它
@@ -834,11 +834,11 @@ def set_challenge_priority(
 @router.post(
     "/priorities/by-score",
     summary="按分值批量设置解题优先级",
-    response_model=Ctf2PriorityBatchOut,
+    response_model=KernelPriorityBatchOut,
 )
 def set_priorities_by_score(
-    payload: Ctf2PrioritiesByScoreIn, identity: ScanDep, db: DbDep
-) -> Ctf2PriorityBatchOut:
+    payload: KernelPrioritiesByScoreIn, identity: ScanDep, db: DbDep
+) -> KernelPriorityBatchOut:
     """把排队中的题**按分值从高到低**批量设优先级。返回改了几道。
 
     ## ★ 它是便利入口，**不是默认策略**
@@ -860,17 +860,17 @@ def set_priorities_by_score(
     changed = service.set_priorities_by_score(
         db, competition_id=payload.competitionId, limit=payload.limit
     )
-    return Ctf2PriorityBatchOut(changed=changed)
+    return KernelPriorityBatchOut(changed=changed)
 
 
 @router.post(
     "/challenges/{challengeId}/submit",
-    response_model=Ctf2SubmitOut,
+    response_model=KernelSubmitOut,
     summary="确认提交候选 flag（safe 模式的人工确认点）",
 )
 def submit_flag(
-    challengeId: str, payload: Ctf2SubmitIn, request: Request, identity: ScanDep, db: DbDep
-) -> Ctf2SubmitOut:
+    challengeId: str, payload: KernelSubmitIn, request: Request, identity: ScanDep, db: DbDep
+) -> KernelSubmitOut:
     """★ **这个端点是 safe 模式的全部意义所在。**
 
     safe 模式下解题只产出候选、不提交，而"要不要提交"停在
@@ -913,7 +913,7 @@ def submit_flag(
             "flagFingerprint": runner.flag_fingerprint(payload.flag),
         },
     )
-    return Ctf2SubmitOut(
+    return KernelSubmitOut(
         status=status_value,
         message=message,
         challenge=_challenge_out(challenge, None),
@@ -921,11 +921,11 @@ def submit_flag(
 
 
 @router.post(
-    "/challenges/{challengeId}/cancel", response_model=Ctf2ChallengeOut, summary="取消解题"
+    "/challenges/{challengeId}/cancel", response_model=KernelChallengeOut, summary="取消解题"
 )
 def cancel_challenge(
     challengeId: str, request: Request, identity: ScanDep, db: DbDep
-) -> Ctf2ChallengeOut:
+) -> KernelChallengeOut:
     """取消。
 
     ⚠️ **它不能杀死已经在跑的 worker**（线程杀不掉，见 scheduler 的
@@ -977,10 +977,10 @@ def release_environment(challengeId: str, _identity: ScanDep, db: DbDep) -> None
 
 @router.get(
     "/challenges/{challengeId}/writeup",
-    response_model=Ctf2WriteupOut,
+    response_model=KernelWriteupOut,
     summary="CTF 题解（Writeup）",
 )
-def read_writeup(challengeId: str, _identity: ReadDep, db: DbDep) -> Ctf2WriteupOut:
+def read_writeup(challengeId: str, _identity: ReadDep, db: DbDep) -> KernelWriteupOut:
     """读这道题的题解（赛后提交的依据）。
 
     ## ★ 为什么不复用 `GET /scans/{id}/writeup`
@@ -1035,7 +1035,7 @@ def read_writeup(challengeId: str, _identity: ReadDep, db: DbDep) -> Ctf2Writeup
             "也可能那一次没有留下解题过程）。重新解一次就会生成。",
         )
 
-    return Ctf2WriteupOut(
+    return KernelWriteupOut(
         challengeId=challenge.id,
         title=challenge.title,
         category=challenge.category or "",
@@ -1052,12 +1052,12 @@ def read_writeup(challengeId: str, _identity: ReadDep, db: DbDep) -> Ctf2Writeup
 
 @router.get(
     "/challenges/{challengeId}/workorder",
-    response_model=Ctf2WorkOrderOut,
+    response_model=KernelWorkOrderOut,
     summary="处置建议工单（应急响应复盘产物，v0.41）",
 )
 def read_workorder(
     challengeId: str, _identity: ReadDep, db: DbDep
-) -> Ctf2WorkOrderOut:
+) -> KernelWorkOrderOut:
     """读这道题的**处置建议工单**（会话 C 工单的产物）。
 
     ## 这为什么是一个独立端点（而不是题解里的一节）
@@ -1095,7 +1095,7 @@ def read_workorder(
             "等本次复盘跑完再看。",
         )
 
-    return Ctf2WorkOrderOut(
+    return KernelWorkOrderOut(
         challengeId=challenge.id,
         title=challenge.title,
         markdown=markdown,
@@ -1106,12 +1106,12 @@ def read_workorder(
 
 @router.get(
     "/challenges/{challengeId}/usage",
-    response_model=list[Ctf2UsageEntryOut],
+    response_model=list[KernelUsageEntryOut],
     summary="单题的逐次 token 消耗",
 )
 def read_challenge_usage(
     challengeId: str, _identity: ReadDep, db: DbDep
-) -> list[Ctf2UsageEntryOut]:
+) -> list[KernelUsageEntryOut]:
     """这道题的**每一次 LLM 调用**花了多少（按时间与轮次升序）。
 
     这是"细分到每一次任务的消耗"最直接的视图 —— 能看出
@@ -1123,7 +1123,7 @@ def read_challenge_usage(
     service.get_challenge_or_404(db, challengeId)  # 不存在就 404
     rows = service.challenge_usage_entries(db, challengeId)
     return [
-        Ctf2UsageEntryOut(
+        KernelUsageEntryOut(
             turn=r.turn,
             model=r.model,
             providerLabel=r.provider_label,
@@ -1138,13 +1138,13 @@ def read_challenge_usage(
     ]
 
 
-@router.get("/usage", response_model=Ctf2TokenUsageOut, summary="token 消耗统计")
+@router.get("/usage", response_model=KernelTokenUsageOut, summary="token 消耗统计")
 def read_usage(
     _identity: ReadDep,
     db: DbDep,
     challengeId: Annotated[str | None, Query(alias="challengeId")] = None,
     competitionId: Annotated[str | None, Query(alias="competitionId")] = None,
-) -> Ctf2TokenUsageOut:
+) -> KernelTokenUsageOut:
     """token 消耗统计（总览页与题目详情共用）。
 
     ## ★★ `calls` 与 `recordedCalls` 分开看
@@ -1153,7 +1153,7 @@ def read_usage(
     真的返回了用量**的次数。两者不等时 `totalTokens` 是**下限**。
 
     把"没记录"显示成"消耗 0"会与"没跑过"混淆 —— 见
-    `schemas.Ctf2TokenUsageOut` 的说明。
+    `schemas.KernelTokenUsageOut` 的说明。
 
     ## ⚠️ 不做 token → 金额换算
 
@@ -1167,16 +1167,16 @@ def read_usage(
     data = service.token_usage_summary(
         db, challenge_id=challengeId, competition_id=competitionId
     )
-    return Ctf2TokenUsageOut(
+    return KernelTokenUsageOut(
         calls=data["calls"],
         recordedCalls=data["recordedCalls"],
         promptTokens=data["promptTokens"],
         completionTokens=data["completionTokens"],
         totalTokens=data["totalTokens"],
-        byModel=[Ctf2UsageByModelOut(**m) for m in data["byModel"]],
-        byChallenge=[Ctf2UsageByChallengeOut(**c) for c in data["byChallenge"]],
+        byModel=[KernelUsageByModelOut(**m) for m in data["byModel"]],
+        byChallenge=[KernelUsageByChallengeOut(**c) for c in data["byChallenge"]],
         # ★ v0.37：按每次解题分组（需求要的"细分到每个任务"）。
-        byAttempt=[Ctf2UsageByAttemptOut(**a) for a in data["byAttempt"]],
+        byAttempt=[KernelUsageByAttemptOut(**a) for a in data["byAttempt"]],
         since=data["since"],
     )
 
@@ -1195,8 +1195,8 @@ def read_usage(
 #    只拦云厂商的实例元数据服务 —— 见 `platforms.BLOCKED_HOSTS`。
 
 
-def _platform_out(row, *, active_id: str | None) -> Ctf2PlatformOut:  # noqa: ANN001
-    return Ctf2PlatformOut(
+def _platform_out(row, *, active_id: str | None) -> KernelPlatformOut:  # noqa: ANN001
+    return KernelPlatformOut(
         id=row.id,
         slug=row.slug,
         displayName=row.display_name,
@@ -1214,13 +1214,13 @@ def _platform_out(row, *, active_id: str | None) -> Ctf2PlatformOut:  # noqa: AN
     )
 
 
-def _builtin_platform_out(*, active_id: str | None) -> Ctf2PlatformOut:
+def _builtin_platform_out(*, active_id: str | None) -> KernelPlatformOut:
     """内置 CTF2 的**合成条目** —— 它不在数据库里。
 
-    见 `models.Ctf2Platform` 那段"为什么不插初始数据"：让"账号用哪个平台"
+    见 `models.KernelPlatform` 那段"为什么不插初始数据"：让"账号用哪个平台"
     只有一种表示法（`platform_id IS NULL` = 内置），列表在展示层补上它。
     """
-    return Ctf2PlatformOut(
+    return KernelPlatformOut(
         id=None,
         slug=platforms.BUILTIN_SLUG,
         displayName=platforms.BUILTIN_DISPLAY,
@@ -1243,8 +1243,8 @@ def _active_platform_id(db: Session) -> str | None:
     return account.platform_id if account is not None else None
 
 
-@router.get("/platforms", response_model=list[Ctf2PlatformOut], summary="已接入的平台")
-def list_platforms(_identity: ReadDep, db: DbDep) -> list[Ctf2PlatformOut]:
+@router.get("/platforms", response_model=list[KernelPlatformOut], summary="已接入的平台")
+def list_platforms(_identity: ReadDep, db: DbDep) -> list[KernelPlatformOut]:
     """内置的 CTF2 排在第一个（它是默认的那个）。"""
     active_id = _active_platform_id(db)
     return [
@@ -1255,10 +1255,10 @@ def list_platforms(_identity: ReadDep, db: DbDep) -> list[Ctf2PlatformOut]:
 
 @router.get(
     "/platforms/{platformId}",
-    response_model=Ctf2PlatformOut,
+    response_model=KernelPlatformOut,
     summary="平台详情（生成期间轮询它）",
 )
-def read_platform(platformId: str, _identity: ReadDep, db: DbDep) -> Ctf2PlatformOut:
+def read_platform(platformId: str, _identity: ReadDep, db: DbDep) -> KernelPlatformOut:
     """★ 前端在生成期间**轮询这个端点**，直到 `isBuilding` 变假。
 
     为什么不让生成挂在 POST 上同步返回：一轮生成最坏两分钟（探测几十个
@@ -1272,13 +1272,13 @@ def read_platform(platformId: str, _identity: ReadDep, db: DbDep) -> Ctf2Platfor
 
 @router.post(
     "/platforms/draft",
-    response_model=Ctf2PlatformOut,
+    response_model=KernelPlatformOut,
     status_code=status.HTTP_202_ACCEPTED,
     summary="让 agent 识别一个平台（后台生成）",
 )
 def draft_platform(
-    payload: Ctf2PlatformDraftIn, request: Request, identity: AdminDep, db: DbDep
-) -> Ctf2PlatformOut:
+    payload: KernelPlatformDraftIn, request: Request, identity: AdminDep, db: DbDep
+) -> KernelPlatformOut:
     """受理并**立刻返回**（202）。真正的生成在后台跑。
 
     ⚠️ 明文 key 只在内存里过一遍，**不落库** —— 要真正启用这个平台，
@@ -1313,16 +1313,16 @@ def draft_platform(
 
 @router.post(
     "/platforms/{platformId}/activate",
-    response_model=Ctf2PlatformOut,
+    response_model=KernelPlatformOut,
     summary="启用一个平台（校验并写入凭据）",
 )
 def activate_platform(
     platformId: str,
-    payload: Ctf2PlatformActivateIn,
+    payload: KernelPlatformActivateIn,
     request: Request,
     identity: AdminDep,
     db: DbDep,
-) -> Ctf2PlatformOut:
+) -> KernelPlatformOut:
     """验证凭据 → 写进账号表 → 把账号指向这个平台。"""
     account = platforms.activate_platform(
         db,

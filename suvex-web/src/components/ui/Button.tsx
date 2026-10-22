@@ -20,11 +20,11 @@ import { useEffect, useRef, type ButtonHTMLAttributes, type Ref } from 'react'
  * | 变体        | 出处（收编前的代表位置）                                     |
  * | ----------- | ------------------------------------------------------------ |
  * | `primary`   | `WizardChrome.tsx:71`、`NoScansYet.tsx:84`、`ScansPage.tsx:958` |
- * | `secondary` | `Ctf2.tsx:564`、`ScansPage.tsx` 的描边工具按钮                |
+ * | `secondary` | `Kernel.tsx:564`、`ScansPage.tsx` 的描边工具按钮                |
  * | `ghost`     | `FindingsPage.tsx:1006`、`ReportsPage.tsx:1042`               |
  * | `danger`    | `ConfirmDialog.tsx:102`（删除确认）                           |
  * | `link`      | `ScansPage.tsx:935`/`:970`、`FindingsPage.tsx:1154`           |
- * | `link-muted`| `Ctf2.tsx:469`                                                |
+ * | `link-muted`| `Kernel.tsx:469`                                                |
  *
  * `primary` 的 `bg-accent text-canvas` 是 §7 实测过的唯一组合：
  * 「`accent` 底 + `canvas` 字」= 5.98:1，hover 到 `accent-strong` = 8.36:1。
@@ -168,7 +168,7 @@ const SIZE: Record<ButtonSize, string> = {
 /**
  * `link` 族是**行内文字**，没有高度也没有内距 —— 给它 `h-8 px-3` 会让
  * 一段句子里嵌的链接把行撑开。所以它只取字号，`md`/`lg` 一律降到 `text-xs`
- * （现网 6 处下划线链接全是 `text-xs`，只有 `Ctf2.tsx:469` 是 `text-2xs`）。
+ * （现网 6 处下划线链接全是 `text-xs`，只有 `Kernel.tsx:469` 是 `text-2xs`）。
  */
 const LINK_SIZE: Record<ButtonSize, string> = {
   xs: 'text-2xs',

@@ -22,7 +22,7 @@ Create Date: 2026-10-21 14:00
 ## ★ 为什么必须手写，不能靠 `--autogenerate`
 
 与上一条 `c3d8f4b16a72`（sandbox profile 加 IR 镜像）**同一条理由**：
-`kind_valid` 在模型侧是从 `values(Ctf2CompetitionKind)` 生成的，所以
+`kind_valid` 在模型侧是从 `values(KernelCompetitionKind)` 生成的，所以
 改枚举之后模型层自动就有了 `local`；而数据库里那条约束是**建库时用
 当时的两个字面量固化下来的**。`--autogenerate` **不比对 CHECK 约束的
 表达式**（只比对表 / 列 / 索引），这个差异永远进不了自动生成的迁移。

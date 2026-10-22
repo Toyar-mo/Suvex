@@ -6,11 +6,11 @@ Create Date: 2026-10-21 12:00
 
 ## 为什么需要这条迁移
 
-`Ctf2SandboxProfile` 加了第三个取值 `ctf2-sandbox-ir`，三处模型定义都是
+`KernelSandboxProfile` 加了第三个取值 `ctf2-sandbox-ir`，三处模型定义都是
 **从枚举生成**约束表达式的：
 
     CheckConstraint(
-        f"sandbox_profile IN ({', '.join(repr(v) for v in values(Ctf2SandboxProfile))})",
+        f"sandbox_profile IN ({', '.join(repr(v) for v in values(KernelSandboxProfile))})",
         name="sandbox_profile_valid",
     )
 
@@ -30,7 +30,7 @@ Create Date: 2026-10-21 12:00
 
 ## 为什么三条约束都要改
 
-`Ctf2SandboxProfile` 被三张表用到，三处各有一条 CHECK：
+`KernelSandboxProfile` 被三张表用到，三处各有一条 CHECK：
 
 | 表 | 约束名 | 列 |
 | --- | --- | --- |
@@ -55,7 +55,7 @@ CHECK 表达式一建好就固化在库里，而枚举**以后还会变**。迁�
 这次是"枚举加了取值但忘了写迁移"的第 N 次。同一失败模式在
 `TargetKind` 上被写进注释警告过（`app/core/vocab.py:63` 的 docstring：
 "加取值时必须同时改三处……`--autogenerate` 不 diff 约束内容"）。
-`Ctf2SandboxProfile` 也该有这么一句 —— 见本次同步加的注释。
+`KernelSandboxProfile` 也该有这么一句 —— 见本次同步加的注释。
 """
 
 from __future__ import annotations

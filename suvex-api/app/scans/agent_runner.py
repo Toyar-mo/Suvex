@@ -223,7 +223,7 @@ class AgentRunner:
             # 不是"是不是 ImportError"这个分类。
             problems.append(f"自研引擎无法导入：{type(exc).__name__}: {exc}")
 
-        # ② docker 可用（`ensure_docker_available` 内部会抛 Ctf2Error）
+        # ② docker 可用（`ensure_docker_available` 内部会抛 KernelError）
         if not problems:
             try:
                 ctf2_runner.ensure_docker_available()
@@ -819,7 +819,7 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
         title=f"对 {spec.target} 做安全评估",
         category=PentestCategory.EVALUATION.value,
         description=spec.brief or f"对目标 {spec.target}（{spec.target_kind}）执行一次授权安全评估。",
-        profile=ctf2_runner.image_for_profile(ctf2_runner.Ctf2SandboxProfile.BASE.value),
+        profile=ctf2_runner.image_for_profile(ctf2_runner.KernelSandboxProfile.BASE.value),
         access_urls=access_urls,
         attachments=(),
         llm_model=spec.llm_model,

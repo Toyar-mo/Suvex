@@ -22,12 +22,12 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app.core.vocab import (
-    Ctf2SandboxProfile,
-    Ctf2SubmissionStatus,
-    Ctf2SubmitMode,
+    KernelSandboxProfile,
+    KernelSubmissionStatus,
+    KernelSubmitMode,
 )
 from app.kernel import runner
-from app.kernel.models import Ctf2Submission
+from app.kernel.models import KernelSubmission
 
 
 def _run(coro):
@@ -49,7 +49,7 @@ def _run(coro):
     "category", ["reverse", "REVERSE", " reverse ", "rev", "re", "逆向", "逆向工程"]
 )
 def test_reverse_categories_pick_the_reverse_image(category: str) -> None:
-    assert runner.profile_for_category(category) == Ctf2SandboxProfile.REVERSE.value
+    assert runner.profile_for_category(category) == KernelSandboxProfile.REVERSE.value
     assert (
         runner.image_for_profile(runner.profile_for_category(category))
         == runner.IMAGE_REVERSE
@@ -61,7 +61,7 @@ def test_reverse_categories_pick_the_reverse_image(category: str) -> None:
     ["web", "crypto", "misc", "pwn", "forensics", "stego", "osint", "", None],
 )
 def test_other_categories_pick_the_base_image(category: str | None) -> None:
-    assert runner.profile_for_category(category) == Ctf2SandboxProfile.BASE.value
+    assert runner.profile_for_category(category) == KernelSandboxProfile.BASE.value
 
 
 def test_forensics_is_not_misread_as_reverse() -> None:
@@ -72,9 +72,9 @@ def test_forensics_is_not_misread_as_reverse() -> None:
     直到某天有人为了收窄体积把 re 里的东西删了，取证题才开始失败，
     而那时已经查不出原因了。
     """
-    assert runner.profile_for_category("forensics") == Ctf2SandboxProfile.BASE.value
+    assert runner.profile_for_category("forensics") == KernelSandboxProfile.BASE.value
     # 顺手把另一个含 re 的常见词也钉住。
-    assert runner.profile_for_category("osint-recon") == Ctf2SandboxProfile.BASE.value
+    assert runner.profile_for_category("osint-recon") == KernelSandboxProfile.BASE.value
 
 
 def test_unknown_profile_falls_back_to_base() -> None:
@@ -129,9 +129,9 @@ def test_guard_rejects_out_of_scope_urls(url: str) -> None:
     返回 None 的校验会让"忘了判返回值"变成一次真实的越界请求 ——
     而那种 bug 不会报错，只会安静地发出去。
     """
-    from app.kernel.client import Ctf2Error
+    from app.kernel.client import KernelError
 
-    with pytest.raises(Ctf2Error):
+    with pytest.raises(KernelError):
         runner.guard_tool_url(url, access_urls=["http://1.2.3.4:8080"])
 
 
@@ -142,9 +142,9 @@ def test_guard_does_not_trust_the_description() -> None:
     题面是参赛者/出题人可控的内容（"请访问 http://10.0.0.1/"），
     拿它当白名单等于没有白名单。
     """
-    from app.kernel.client import Ctf2Error
+    from app.kernel.client import KernelError
 
-    with pytest.raises(Ctf2Error):
+    with pytest.raises(KernelError):
         runner.guard_tool_url("http://10.0.0.1/flag", access_urls=["http://1.2.3.4:8080"])
 
 
@@ -335,12 +335,12 @@ def test_already_submitted_detects_duplicates(db_session: Session, ctf2_challeng
     而重复提交在多数平台计为错误。宁可漏掉一次重试机会。
     """
     db_session.add(
-        Ctf2Submission(
+        KernelSubmission(
             id="ctf2sub_test_1",
             challenge_id=ctf2_challenge.id,
             flag="flag{dup}",
-            status=Ctf2SubmissionStatus.WRONG.value,
-            mode=Ctf2SubmitMode.SAFE.value,
+            status=KernelSubmissionStatus.WRONG.value,
+            mode=KernelSubmitMode.SAFE.value,
         )
     )
     db_session.commit()
@@ -362,12 +362,12 @@ def test_rejected_submissions_do_not_block_a_retry(
     影响去重判断。把它算进去会让"修好形状之后再试一次"被自己挡住。
     """
     db_session.add(
-        Ctf2Submission(
+        KernelSubmission(
             id="ctf2sub_test_2",
             challenge_id=ctf2_challenge.id,
             flag="flag{retry}",
-            status=Ctf2SubmissionStatus.REJECTED.value,
-            mode=Ctf2SubmitMode.SAFE.value,
+            status=KernelSubmissionStatus.REJECTED.value,
+            mode=KernelSubmitMode.SAFE.value,
         )
     )
     db_session.commit()
@@ -831,10 +831,10 @@ def test_interpret_submit_needs_a_receipt_to_claim_correct() -> None:
     "不要凭空宣称解出了一道题"。
     """
     status, _message, receipt = runner.interpret_submit({"correct": True, "id": 99})
-    assert (status, receipt) == (Ctf2SubmissionStatus.CORRECT.value, "99")
+    assert (status, receipt) == (KernelSubmissionStatus.CORRECT.value, "99")
 
     status, message, receipt = runner.interpret_submit({"correct": True})
-    assert status == Ctf2SubmissionStatus.PENDING.value
+    assert status == KernelSubmissionStatus.PENDING.value
     assert receipt is None
     assert "回执" in message
 
@@ -843,7 +843,7 @@ def test_interpret_submit_maps_wrong() -> None:
     status, _message, _receipt = runner.interpret_submit(
         {"correct": False, "message": "flag 格式应为 flag{...}"}
     )
-    assert status == Ctf2SubmissionStatus.WRONG.value
+    assert status == KernelSubmissionStatus.WRONG.value
 
 
 def test_interpret_submit_understands_the_real_ctf2_field_names() -> None:
@@ -873,12 +873,12 @@ def test_interpret_submit_understands_the_real_ctf2_field_names() -> None:
         "total_sub_flag_count": 1,
     }
     status, _message, receipt = runner.interpret_submit(wrong)
-    assert status == Ctf2SubmissionStatus.WRONG.value
+    assert status == KernelSubmissionStatus.WRONG.value
     assert receipt == "b3a0790e-6c00-4a66-b3b2-792f4103939d"
 
     right = {**wrong, "accepted": True, "is_solved": True, "earned_points": 100}
     status, _message, receipt = runner.interpret_submit(right)
-    assert status == Ctf2SubmissionStatus.CORRECT.value
+    assert status == KernelSubmissionStatus.CORRECT.value
     assert receipt == "b3a0790e-6c00-4a66-b3b2-792f4103939d"
 
     # 套题：单个子 flag 命中时 `accepted` 为真而整题仍未完成。
@@ -890,7 +890,7 @@ def test_interpret_submit_understands_the_real_ctf2_field_names() -> None:
         "solved_sub_flag_count": 1,
     }
     status, _message, _receipt = runner.interpret_submit(suite)
-    assert status == Ctf2SubmissionStatus.CORRECT.value
+    assert status == KernelSubmissionStatus.CORRECT.value
 
     # `accepted` 缺席时退回 `is_solved`，两个都没有才走旧的字符串兜底。
     only_solved = {
@@ -898,7 +898,7 @@ def test_interpret_submit_understands_the_real_ctf2_field_names() -> None:
         "submission_id": "s-1",
     }
     status, _message, _receipt = runner.interpret_submit(only_solved)
-    assert status == Ctf2SubmissionStatus.CORRECT.value
+    assert status == KernelSubmissionStatus.CORRECT.value
 
 
 # ══════════════════════════════════════════════════════════
@@ -1020,7 +1020,7 @@ def _spec(**overrides) -> runner.SolveSpec:
         "title": "签到题",
         "category": "web",
         "description": "登录口有弱口令。",
-        "profile": Ctf2SandboxProfile.BASE.value,
+        "profile": KernelSandboxProfile.BASE.value,
         "access_urls": ("http://1.2.3.4:8080",),
         "attachments": (),
         "llm_model": "deepseek-chat",
@@ -1120,7 +1120,7 @@ def test_the_loop_gives_up_when_the_sandbox_cannot_be_revived() -> None:
     （见 `MAX_SANDBOX_REVIVALS`）。所以这个用例必须让 `start()` 抛异常，
     否则重建会成功、循环会接着跑 —— 那时它测的就不是"放弃"了。
     """
-    sandbox = _FakeSandbox(start_error=runner.Ctf2SandboxError("docker 起不来"))
+    sandbox = _FakeSandbox(start_error=runner.KernelSandboxError("docker 起不来"))
     sandbox.died = True
     gateway = _FakeGateway(['FINAL: {"candidates": []}'])
 
@@ -1321,7 +1321,7 @@ def test_start_fails_when_the_container_vanished_right_after_run(monkeypatch) ->
     inspect = runner.CommandResult(
         1, "", "Error: No such object: bcff6db03babb"
     )
-    with pytest.raises(runner.Ctf2SandboxError) as exc:
+    with pytest.raises(runner.KernelSandboxError) as exc:
         _start_with(monkeypatch, inspect)
 
     message = str(exc.value)
@@ -1341,7 +1341,7 @@ def test_start_fails_when_the_container_exists_but_is_not_running(monkeypatch) -
     import pytest
 
     inspect = runner.CommandResult(0, "false|exited|137|true|something broke\n", "")
-    with pytest.raises(runner.Ctf2SandboxError) as exc:
+    with pytest.raises(runner.KernelSandboxError) as exc:
         _start_with(monkeypatch, inspect)
 
     message = str(exc.value)
@@ -2340,7 +2340,7 @@ def test_run_worker_passes_attempt_id_to_the_async_body() -> None:
 
     ## 为什么它值得单独一条（v0.28）
 
-    策略快照（`Ctf2SolveAttempt`）跨了**四层**才到达真正用它的地方：
+    策略快照（`KernelSolveAttempt`）跨了**四层**才到达真正用它的地方：
 
         service.start_solve → _enqueue → scheduler._start
         → run_worker → _run_worker → build_spec
@@ -2677,7 +2677,7 @@ def test_correct_answer_lands_in_confirmed_flag(
     db_session.commit()
 
     runner._advance_challenge(
-        ctf2_challenge, Ctf2SubmissionStatus.CORRECT.value, "flag{real}"
+        ctf2_challenge, KernelSubmissionStatus.CORRECT.value, "flag{real}"
     )
     db_session.commit()
     db_session.refresh(ctf2_challenge)
@@ -2700,7 +2700,7 @@ def test_wrong_answer_clears_the_candidate(db_session: Session, ctf2_challenge) 
     db_session.commit()
 
     runner._advance_challenge(
-        ctf2_challenge, Ctf2SubmissionStatus.WRONG.value, "flag{wrong}"
+        ctf2_challenge, KernelSubmissionStatus.WRONG.value, "flag{wrong}"
     )
     db_session.commit()
     db_session.refresh(ctf2_challenge)
@@ -2723,7 +2723,7 @@ def test_failed_submission_keeps_the_candidate(db_session: Session, ctf2_challen
     db_session.commit()
 
     runner._advance_challenge(
-        ctf2_challenge, Ctf2SubmissionStatus.FAILED.value, "flag{maybe}"
+        ctf2_challenge, KernelSubmissionStatus.FAILED.value, "flag{maybe}"
     )
     db_session.commit()
     db_session.refresh(ctf2_challenge)
@@ -2750,7 +2750,7 @@ def test_already_solved_is_not_a_failure(db_session: Session, ctf2_challenge) ->
 
     runner._advance_challenge(
         ctf2_challenge,
-        Ctf2SubmissionStatus.FAILED.value,
+        KernelSubmissionStatus.FAILED.value,
         "flag{known}",
         already_solved=True,
     )
@@ -2776,7 +2776,7 @@ def test_already_solved_flag_does_not_touch_the_wrong_counter(
 
     runner._advance_challenge(
         ctf2_challenge,
-        Ctf2SubmissionStatus.FAILED.value,
+        KernelSubmissionStatus.FAILED.value,
         "flag{known}",
         already_solved=True,
     )
@@ -2819,7 +2819,7 @@ def test_already_solved_on_a_solved_challenge_does_not_downgrade_it(
 
     runner._advance_challenge(
         ctf2_challenge,
-        Ctf2SubmissionStatus.FAILED.value,
+        KernelSubmissionStatus.FAILED.value,
         "flag{ours}",
         already_solved=True,
     )
@@ -2831,18 +2831,18 @@ def test_already_solved_on_a_solved_challenge_does_not_downgrade_it(
 
 
 def test_response_error_carries_the_platform_error_code() -> None:
-    """`Ctf2ResponseError.code` 要带出平台的机器码。
+    """`KernelResponseError.code` 要带出平台的机器码。
 
     没有它就只能靠状态码分类，而 `ALREADY_SOLVED` 与"参数写错了"都是
     400 —— 前者要停止解题，后者要改代码，方向完全相反。
     """
-    from app.kernel.client import Ctf2ResponseError
+    from app.kernel.client import KernelResponseError
 
-    exc = Ctf2ResponseError("boom", status_code=400, code="ALREADY_SOLVED")
+    exc = KernelResponseError("boom", status_code=400, code="ALREADY_SOLVED")
     assert exc.code == "ALREADY_SOLVED"
     assert exc.status_code == 400
     # 不带 code 时必须是 None，而不是空串 —— 调用方用 == 比机器码。
-    assert Ctf2ResponseError("boom", status_code=400).code is None
+    assert KernelResponseError("boom", status_code=400).code is None
 
 
 def test_has_correct_submission_separates_ours_from_a_teammates(
@@ -2859,16 +2859,16 @@ def test_has_correct_submission_separates_ours_from_a_teammates(
     会被取消打回，而一条 `correct` 提交一旦落库就永远算数。
     """
     from app.core.ids import new_id
-    from app.kernel.models import Ctf2Submission
+    from app.kernel.models import KernelSubmission
 
     assert runner._has_correct_submission(db_session, ctf2_challenge.id) is False
 
     db_session.add(
-        Ctf2Submission(
+        KernelSubmission(
             id=new_id("ctf2sub"),
             challenge_id=ctf2_challenge.id,
             flag="flag{wrong}",
-            status=Ctf2SubmissionStatus.WRONG.value,
+            status=KernelSubmissionStatus.WRONG.value,
             mode="auto",
         )
     )
@@ -2878,11 +2878,11 @@ def test_has_correct_submission_separates_ours_from_a_teammates(
     )
 
     db_session.add(
-        Ctf2Submission(
+        KernelSubmission(
             id=new_id("ctf2sub"),
             challenge_id=ctf2_challenge.id,
             flag="flag{real}",
-            status=Ctf2SubmissionStatus.CORRECT.value,
+            status=KernelSubmissionStatus.CORRECT.value,
             mode="auto",
             # ⚠️ 必须带回执：库上有一条 `ck_ctf2_submissions_correct_implies_receipt`
             #    —— 没有平台回执 id 的提交**不许**自称判对。
@@ -2903,7 +2903,7 @@ def test_platform_reports_solved_reads_the_platform_field(
     如果它哪天被改成读本地 `status`，这条会立刻红。
     """
     from app.kernel import service as ctf2_service
-    from tests.ctf2.conftest import json_response, patch_ctf2_transport
+    from tests.kernel.conftest import json_response, patch_ctf2_transport
 
     recorded = patch_ctf2_transport(
         monkeypatch, json_response(200, {"data": {"is_solved": True}, "success": True})
@@ -2918,7 +2918,7 @@ def test_platform_reports_solved_is_false_when_not_solved(
     monkeypatch: pytest.MonkeyPatch, db_session: Session, ctf2_challenge
 ) -> None:
     from app.kernel import service as ctf2_service
-    from tests.ctf2.conftest import json_response, patch_ctf2_transport
+    from tests.kernel.conftest import json_response, patch_ctf2_transport
 
     patch_ctf2_transport(
         monkeypatch, json_response(200, {"data": {"is_solved": False}, "success": True})
@@ -2936,7 +2936,7 @@ def test_platform_reports_solved_treats_404_as_cannot_tell(
     静默的：用户只看到点了解题却什么都没发生。
     """
     from app.kernel import service as ctf2_service
-    from tests.ctf2.conftest import json_response, patch_ctf2_transport
+    from tests.kernel.conftest import json_response, patch_ctf2_transport
 
     patch_ctf2_transport(
         monkeypatch,
@@ -3192,7 +3192,7 @@ class _FailThenSucceedGateway:
 
     ⚠️ v0.36：同样要带 `model` / `label`（见 `_FakeGateway` 的说明）。
     `failover()` 里改 `model` 是为了让**换模后的轮次记到新模型名下** ——
-    那正是 `Ctf2SolveUsage.model` 这一列存在的理由（同一次尝试、
+    那正是 `KernelSolveUsage.model` 这一列存在的理由（同一次尝试、
     两个模型，要能算出"换模前后各花多少"）。
     """
 
@@ -3207,7 +3207,7 @@ class _FailThenSucceedGateway:
     async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
         self.calls += 1
         if self.calls <= self.fail_times:
-            raise runner.Ctf2Error("调用 LLM 失败（ConnectError）：连接被拒绝")
+            raise runner.KernelError("调用 LLM 失败（ConnectError）：连接被拒绝")
         return runner.LlmReply(
             text=self.then,
             source="content",

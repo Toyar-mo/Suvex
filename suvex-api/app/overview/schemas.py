@@ -54,7 +54,7 @@ class OverviewMetricsOut(CamelModel):
     #:
     #: ★★ 与 `ctf2LlmCalls` 必须分开显示：两者不等时 `ctf2TotalTokens`
     #: 是**下限**（有几次没算进去）。把"没记录"显示成"消耗 0"
-    #: 会与"没跑过"混淆 —— 见 `Ctf2TokenUsageOut` 的说明。
+    #: 会与"没跑过"混淆 —— 见 `KernelTokenUsageOut` 的说明。
     ctf2RecordedCalls: int = 0
     #: 总 token（prompt + completion）。**未做金额换算**（单价易变）。
     ctf2TotalTokens: int = 0

@@ -17,7 +17,7 @@ import type { ButtonHTMLAttributes, Ref } from 'react'
  *
  * | 形态       | 现状                                                        |
  * | ---------- | ----------------------------------------------------------- |
- * | `pill`     | `Ctf2.tsx:513`、`ScansPage.tsx:597`/`:634`（带边框的胶囊）    |
+ * | `pill`     | `Kernel.tsx:513`、`ScansPage.tsx:597`/`:634`（带边框的胶囊）    |
  * | `segment`  | `FindingsPage.tsx:984`/`:1044`（无边框，边框由外层 `role="group"` 给） |
  *
  * ⚠️ `pill` 用 `rounded-pill`，这在 design-system §4 里本来是「只留给状态点」的。

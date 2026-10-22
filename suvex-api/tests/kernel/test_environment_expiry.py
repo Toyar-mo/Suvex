@@ -2,7 +2,7 @@
 
 ## 这组用例守的是什么
 
-`Ctf2EnvironmentStatus.EXPIRED` 从定义那天起**没有一处设置它** —— 全仓
+`KernelEnvironmentStatus.EXPIRED` 从定义那天起**没有一处设置它** —— 全仓
 `app/` 零处。于是 `expires_at` 过去之后：
 
 - 行还停在 `ready`；
@@ -31,8 +31,8 @@ from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
 from app.core.timeutil import now_utc
-from app.core.vocab import Ctf2ChallengeStatus, Ctf2EnvironmentStatus
-from app.kernel.models import Ctf2Challenge, Ctf2Environment
+from app.core.vocab import KernelChallengeStatus, KernelEnvironmentStatus
+from app.kernel.models import KernelChallenge, KernelEnvironment
 from app.kernel.service import STALE_ENVIRONMENT_WITHOUT_TTL_HOURS, expire_stale_environments
 
 
@@ -40,18 +40,18 @@ def _make_environment(
     db: Session,
     challenge_id: str,
     *,
-    status: str = Ctf2EnvironmentStatus.READY.value,
+    status: str = KernelEnvironmentStatus.READY.value,
     expires_at=None,
     ready_at=None,
-) -> Ctf2Environment:
+) -> KernelEnvironment:
     """造一条环境行。
 
     ⚠️ `status='ready'` 时 `access_url` 必须非空 —— 约束
     `access_url_only_when_ready` 管的是反向（非 ready 不许有 url）。
     这里按真实形状给：ready 带地址，其余不带。
     """
-    ready = status == Ctf2EnvironmentStatus.READY.value
-    environment = Ctf2Environment(
+    ready = status == KernelEnvironmentStatus.READY.value
+    environment = KernelEnvironment(
         id=new_id("ctf2env"),
         challenge_id=challenge_id,
         status=status,
@@ -82,9 +82,9 @@ def test_an_expired_ready_environment_becomes_expired(db_session: Session, ctf2_
     assert expire_stale_environments(db_session) == 1
 
     db_session.expire_all()
-    row = db_session.get(Ctf2Environment, expired.id)
+    row = db_session.get(KernelEnvironment, expired.id)
     assert row is not None
-    assert row.status == Ctf2EnvironmentStatus.EXPIRED.value
+    assert row.status == KernelEnvironmentStatus.EXPIRED.value
     assert row.access_url is None
     assert row.access_urls is None
 
@@ -104,9 +104,9 @@ def test_a_ready_environment_with_a_future_expiry_is_left_alone(
     assert expire_stale_environments(db_session) == 0
 
     db_session.expire_all()
-    row = db_session.get(Ctf2Environment, alive.id)
+    row = db_session.get(KernelEnvironment, alive.id)
     assert row is not None
-    assert row.status == Ctf2EnvironmentStatus.READY.value
+    assert row.status == KernelEnvironmentStatus.READY.value
     assert row.access_url == "http://1.2.3.4:8080"
 
 
@@ -134,9 +134,9 @@ def test_a_ready_environment_without_a_ttl_becomes_expired_when_stale(
     assert expire_stale_environments(db_session) == 1
 
     db_session.expire_all()
-    row = db_session.get(Ctf2Environment, old.id)
+    row = db_session.get(KernelEnvironment, old.id)
     assert row is not None
-    assert row.status == Ctf2EnvironmentStatus.EXPIRED.value
+    assert row.status == KernelEnvironmentStatus.EXPIRED.value
     assert row.access_url is None
 
 
@@ -162,9 +162,9 @@ def test_a_fresh_environment_without_a_ttl_is_left_alone(
     assert expire_stale_environments(db_session) == 0
 
     db_session.expire_all()
-    row = db_session.get(Ctf2Environment, fresh.id)
+    row = db_session.get(KernelEnvironment, fresh.id)
     assert row is not None
-    assert row.status == Ctf2EnvironmentStatus.READY.value
+    assert row.status == KernelEnvironmentStatus.READY.value
 
 
 def test_a_stopped_environment_is_not_touched(db_session: Session, ctf2_challenge) -> None:
@@ -177,7 +177,7 @@ def test_a_stopped_environment_is_not_touched(db_session: Session, ctf2_challeng
     stopped = _make_environment(
         db_session,
         ctf2_challenge.id,
-        status=Ctf2EnvironmentStatus.STOPPED.value,
+        status=KernelEnvironmentStatus.STOPPED.value,
         expires_at=now_utc() - timedelta(days=3),
         ready_at=now_utc() - timedelta(days=3),
     )
@@ -185,9 +185,9 @@ def test_a_stopped_environment_is_not_touched(db_session: Session, ctf2_challeng
     assert expire_stale_environments(db_session) == 0
 
     db_session.expire_all()
-    row = db_session.get(Ctf2Environment, stopped.id)
+    row = db_session.get(KernelEnvironment, stopped.id)
     assert row is not None
-    assert row.status == Ctf2EnvironmentStatus.STOPPED.value
+    assert row.status == KernelEnvironmentStatus.STOPPED.value
 
 
 def test_expiring_an_environment_does_not_touch_the_challenge(
@@ -202,7 +202,7 @@ def test_expiring_an_environment_does_not_touch_the_challenge(
     _make_environment(
         db_session, ctf2_challenge.id, expires_at=now_utc() - timedelta(minutes=1)
     )
-    before = db_session.get(Ctf2Challenge, ctf2_challenge.id)
+    before = db_session.get(KernelChallenge, ctf2_challenge.id)
     assert before is not None
     status_before = before.status
     error_before = before.last_error
@@ -210,9 +210,9 @@ def test_expiring_an_environment_does_not_touch_the_challenge(
     assert expire_stale_environments(db_session) == 1
 
     db_session.expire_all()
-    after = db_session.get(Ctf2Challenge, ctf2_challenge.id)
+    after = db_session.get(KernelChallenge, ctf2_challenge.id)
     assert after is not None
-    assert after.status == status_before == Ctf2ChallengeStatus.UNSOLVED.value
+    assert after.status == status_before == KernelChallengeStatus.UNSOLVED.value
     assert after.last_error == error_before
 
 

@@ -377,8 +377,8 @@ function ScanRow({
     后端**同样**拦（`409 SCAN_IS_CTF2_SHELL`）—— 两层都要有，
     因为 API 可以被直接调。
   */
-  const isCtf2Shell = scan.origin === 'ctf2'
-  const canAbort = !isCtf2Shell && (scan.status === 'running' || scan.status === 'queued')
+  const isKernelShell = scan.origin === 'ctf2'
+  const canAbort = !isKernelShell && (scan.status === 'running' || scan.status === 'queued')
   const found = totalFindings(scan.findings)
   const badge = failureBadge(scan)
   /*
@@ -774,7 +774,7 @@ function ScanRow({
                   </button>
                 )}
 
-                {!isCtf2Shell && (
+                {!isKernelShell && (
                   <button
                     role="menuitem"
                     type="button"
@@ -795,7 +795,7 @@ function ScanRow({
                   已完成的也不给 —— 它的子 agent 都已经终结，
                   续上去会立刻又结束。那两种情况放出来只会让用户点了没反应。
                 */}
-                {!isCtf2Shell &&
+                {!isKernelShell &&
                   onResume &&
                   (scan.status === 'failed' || scan.status === 'aborted') && (
                   <button

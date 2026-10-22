@@ -56,7 +56,7 @@ def fake_probe(
     missing_cmds: Iterable[str] = (),
     uninstalled: Iterable[tuple[str, str]] = (),
     absent_images: Iterable[str] = (),
-    status: "vst.ProbeStatus | None" = None,
+    status: vst.ProbeStatus | None = None,
 ):
     """构造一个假的 `probe_image_full`。
 

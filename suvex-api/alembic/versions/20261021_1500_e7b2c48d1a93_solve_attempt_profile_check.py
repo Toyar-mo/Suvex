@@ -6,7 +6,7 @@ Create Date: 2026-10-21 15:00
 
 ## 这条迁移补的是什么
 
-v0.41 加 `Ctf2SandboxProfile.IR`（`ctf2-sandbox-ir`）时，迁移
+v0.41 加 `KernelSandboxProfile.IR`（`ctf2-sandbox-ir`）时，迁移
 `c3d8f4b16a72` 重建了**三张**表上的取值约束：
 
 | 表 | 约束 | 列 |
@@ -17,14 +17,14 @@ v0.41 加 `Ctf2SandboxProfile.IR`（`ctf2-sandbox-ir`）时，迁移
 
 **漏了第四张**：`ctf2_solve_attempts` 也有一列 `sandbox_profile`
 （每次受理时的策略快照），它的约束 `solve_attempt_profile_valid` 同样
-由 `values(Ctf2SandboxProfile)` 生成 —— 模型侧自动带上了新值，
+由 `values(KernelSandboxProfile)` 生成 —— 模型侧自动带上了新值，
 数据库里那条却还是建库时固化的两个字面量。
 
 ## ★ 为什么漏了三个月都没被发现
 
 前三条约束在**建题**、**起环境**、**改全局设置**时就会撞上，都是高频
 路径。而这一条只在**真正受理一次解题**时触发 —— 更具体地说，只在
-`start_solve()` 里 `Ctf2SolveAttempt(...)` 落库的那一刻。
+`start_solve()` 里 `KernelSolveAttempt(...)` 落库的那一刻。
 
 于是"漏了这张表"的表现非常具体：
 
@@ -46,7 +46,7 @@ DETAIL: Failing row contains (ctf2try_…, ctf2chal_…, safe, 80, ctf2-sandbox-
 ## 为什么不用 --autogenerate
 
 同一个理由已经在 `c3d8f4b16a72` 里写过一次：`--autogenerate` **不比对
-CHECK 表达式**。它看不到"模型里的 `values(Ctf2SandboxProfile)` 多了一个值"
+CHECK 表达式**。它看不到"模型里的 `values(KernelSandboxProfile)` 多了一个值"
 与"数据库里那行字面量还是旧的"之间的差异，生成出来的迁移是空的。
 
 ## ⚠️ 约束名传裸名
@@ -71,7 +71,7 @@ from typing import Sequence, Union
 
 from alembic import op
 
-from app.core.vocab import Ctf2SandboxProfile
+from app.core.vocab import KernelSandboxProfile
 
 revision: str = "e7b2c48d1a93"
 down_revision: Union[str, None] = "d5a9e3c72f81"
@@ -91,7 +91,7 @@ def _allowed_values() -> str:
     不手写字符串常量：手写的那一刻它就开始与枚举漂移，而下一次加取值
     时又会漏掉这里 —— 这条迁移本身就是为了修一次这样的漂移。
     """
-    return ", ".join(repr(member.value) for member in Ctf2SandboxProfile)
+    return ", ".join(repr(member.value) for member in KernelSandboxProfile)
 
 
 def upgrade() -> None:

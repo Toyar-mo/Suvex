@@ -30,8 +30,8 @@ from sqlalchemy.orm import Session
 
 from app.core.ids import new_id
 from app.core.timeutil import now_utc
-from app.kernel import history
 from app.findings.models import Finding
+from app.kernel import history
 from app.scans.models import Scan
 from tests.factories import make_scan
 

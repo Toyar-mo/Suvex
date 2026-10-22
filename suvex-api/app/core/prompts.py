@@ -17,7 +17,7 @@
 与渗透扫描（`app/scans/runner.py`）两条路径都要追加它。而这两个模块
 **互相不能顶层 import** —— 它们已经在多个地方用函数内 import 互相引用
 （`app/kernel/runner.py` 用 `app.scans.runner._base_env`，
-`app/scans/runner.py` 用 `app.kernel.models.Ctf2Challenge`），
+`app/scans/runner.py` 用 `app.kernel.models.KernelChallenge`），
 再加一条顶层边就会撞成环。
 
 ## 所以路径常量放这里，而不是复制两份
@@ -30,7 +30,7 @@
 ## 为什么不在这里抛领域异常
 
 这个模块只负责"把文件读成字符串"。读不到时它让 `OSError` 直接冒出来，
-由各自调用方翻成自己的错误类型（`Ctf2Error` / `RunnerUnavailable`）——
+由各自调用方翻成自己的错误类型（`KernelError` / `RunnerUnavailable`）——
 那些异常的措辞要贴合各自的失效后果，在这里统一反而说不准。
 """
 

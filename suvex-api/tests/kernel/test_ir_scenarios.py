@@ -40,8 +40,8 @@ from app.core.vocab import (
     AGENTSEC_CATEGORIES,
     IR_CATEGORIES,
     IR_CATEGORY_PREFIX,
-    Ctf2SandboxProfile,
     IrCategory,
+    KernelSandboxProfile,
 )
 from app.kernel import notes
 from app.kernel.runner import (
@@ -78,7 +78,7 @@ def test_ir_prefix_does_not_collide_with_agentsec() -> None:
 
 def test_ir_profile_value_is_the_image_name() -> None:
     """profile 取值 == 镜像短名，不做第二层映射（`vocab` 的既有约定）。"""
-    assert Ctf2SandboxProfile.IR.value == "ctf2-sandbox-ir"
+    assert KernelSandboxProfile.IR.value == "ctf2-sandbox-ir"
 
 
 def test_five_existing_categories_are_not_ir() -> None:
@@ -96,7 +96,7 @@ def test_forensics_is_not_ir_but_looks_similar() -> None:
     而取证题本来就只是在分析附件。
     """
     assert not notes.is_ir_category("forensics")
-    assert profile_for_category("forensics") == Ctf2SandboxProfile.BASE.value
+    assert profile_for_category("forensics") == KernelSandboxProfile.BASE.value
 
 
 # ══════════════════════════════════════════════════════════
@@ -280,31 +280,31 @@ def test_ir_block_states_the_three_verdicts() -> None:
 @pytest.mark.parametrize("category", sorted(IR_CATEGORIES))
 def test_ir_category_routes_to_ir_image(category: str) -> None:
     """承诺 3：三个 IR 分类都路由到 `ctf2-sandbox-ir`。"""
-    assert profile_for_category(category) == Ctf2SandboxProfile.IR.value
+    assert profile_for_category(category) == KernelSandboxProfile.IR.value
 
 
 def test_ir_image_name_comes_from_profile() -> None:
     """`image_for_profile` 对 IR profile 回 IR 镜像（不是退回 base）。"""
     assert (
-        image_for_profile(Ctf2SandboxProfile.IR.value) == Ctf2SandboxProfile.IR.value
+        image_for_profile(KernelSandboxProfile.IR.value) == KernelSandboxProfile.IR.value
     )
 
 
 def test_ir_routing_is_normalized() -> None:
     """大小写与空白不该影响路由 —— 分类名来自平台，格式不可控。"""
-    assert profile_for_category("  IR-Root-Cause  ") == Ctf2SandboxProfile.IR.value
+    assert profile_for_category("  IR-Root-Cause  ") == KernelSandboxProfile.IR.value
 
 
 def test_unknown_category_still_routes_to_base() -> None:
     """认不出来时仍回 base（v0.41 不能改变这条既有行为）。"""
-    assert profile_for_category("something-else") == Ctf2SandboxProfile.BASE.value
-    assert profile_for_category(None) == Ctf2SandboxProfile.BASE.value
+    assert profile_for_category("something-else") == KernelSandboxProfile.BASE.value
+    assert profile_for_category(None) == KernelSandboxProfile.BASE.value
 
 
 def test_reverse_categories_still_route_to_reverse() -> None:
     """既有路由一个都不能坏。"""
     for category in ("reverse", "rev", "re", "逆向", "逆向工程", "反汇编"):
-        assert profile_for_category(category) == Ctf2SandboxProfile.REVERSE.value
+        assert profile_for_category(category) == KernelSandboxProfile.REVERSE.value
 
 
 def test_forensics_does_not_leak_into_reverse() -> None:
@@ -313,7 +313,7 @@ def test_forensics_does_not_leak_into_reverse() -> None:
     用 `"re" in category` 判的话，取证题会全进逆向镜像。症状不是报错，
     是"取证题也能跑"（re 镜像是 base 超集），于是**没人会发现**。
     """
-    assert profile_for_category("forensics") == Ctf2SandboxProfile.BASE.value
+    assert profile_for_category("forensics") == KernelSandboxProfile.BASE.value
 
 
 # ══════════════════════════════════════════════════════════

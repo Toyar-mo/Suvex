@@ -40,7 +40,7 @@ import httpx
 
 from app.core import netguard
 from app.kernel.adapters.redirect import request_same_host
-from app.kernel.client import Ctf2Error
+from app.kernel.client import KernelError
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -385,7 +385,7 @@ class Prober:
                 )
             except httpx.HTTPError:
                 continue
-            except Ctf2Error:
+            except KernelError:
                 # 跨 host 跳转 / 跳进被拒地址：这个端点不可用。
                 # ⚠️ 探测是**尽力而为**的（几十个候选端点里挑活的），
                 #    所以这里不往上抛 —— 抛出去会让一次探测整体失败，

@@ -1,4 +1,4 @@
-import { loadCtf2Writeup, type Ctf2Challenge } from '@/data/ctf2'
+import { loadKernelWriteup, type KernelChallenge } from '@/data/kernel'
 import { writeupErrorMessage } from '@/lib/writeup'
 import { FileText } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -38,7 +38,7 @@ import {
  */
 export interface WriteupDialogProps {
   /** 要展示题解的那道题。**由调用方条件挂载**，所以这里不会是 null */
-  challenge: Ctf2Challenge
+  challenge: KernelChallenge
   onClose: () => void
 }
 
@@ -55,7 +55,7 @@ export function WriteupDialog({ challenge, onClose }: WriteupDialogProps) {
   */
   useEffect(() => {
     let alive = true
-    void loadCtf2Writeup(challenge.id)
+    void loadKernelWriteup(challenge.id)
       .then((data) => {
         if (alive) setState({ phase: 'ready', markdown: data.markdown, filename: data.filename })
       })

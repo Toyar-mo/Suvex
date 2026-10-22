@@ -92,7 +92,7 @@ from pathlib import Path
 API_ROOT = Path(__file__).resolve().parent.parent
 
 # ⚠️ Dockerfile 的路径不在这里硬编码 —— 由 `load_router()` 从
-#    `Ctf2SandboxProfile` 的取值派生（profile 取值 == 镜像短名 ==
+#    `KernelSandboxProfile` 的取值派生（profile 取值 == 镜像短名 ==
 #    `docker/` 下的目录名）。硬编码两份路径就等于又造了一份"可能与
 #    枚举脱节的副本"。
 
@@ -399,7 +399,7 @@ CATEGORY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     #      反序列化 payload、畸形 pcap、伪造的内存/磁盘镜像），多余工具
     #      纯属多出来的攻击面。
     #
-    # ⚠️ 这条"故意不含"要和 `Ctf2SandboxProfile.IR` 的 docstring 一起读 ——
+    # ⚠️ 这条"故意不含"要和 `KernelSandboxProfile.IR` 的 docstring 一起读 ——
     #    那里写了为什么它必须独立成像，而不是 base 的超集。
     #
     # ## ★ 键用具体分类名 `ir-root-cause`，不用裸的 `ir`
@@ -766,7 +766,7 @@ class Router:
         ## ★ 这段是从 `runner.py` 的 `profile_for_category` 抄的
 
         抄的是**逻辑**，不抄**数据** —— 数据（`_REVERSE_CATEGORIES`、
-        `Ctf2SandboxProfile` 的三个取值、IR 前缀）每次运行都从源码现读。
+        `KernelSandboxProfile` 的三个取值、IR 前缀）每次运行都从源码现读。
         抄过来的只有"规范化 → 判前缀 → 查集合 → 三选一"这个形状，
         短到没有漂移空间。
 
@@ -805,7 +805,7 @@ def load_router() -> Router:
 
     真正要避开的另一半是"抄一份可能过时的副本"：抄了的话 `runner.py` 改
     路由这边不会跟着改，这个检查守的就成了副本而不是真实行为。所以数据
-    （`_REVERSE_CATEGORIES`、`Ctf2SandboxProfile` 三个取值、`IR_CATEGORY_PREFIX`）
+    （`_REVERSE_CATEGORIES`、`KernelSandboxProfile` 三个取值、`IR_CATEGORY_PREFIX`）
     全部从源码现读，只有那 4 行控制流是复刻的。
 
     ★ v0.41：`ir` 的 Dockerfile 是**必须存在**的，不是可选的。
@@ -823,9 +823,9 @@ def load_router() -> Router:
             f"StrEnum，导不进来说明环境本身有问题，不降级。"
         ) from exc
 
-    base_profile = vocab.Ctf2SandboxProfile.BASE.value
-    reverse_profile = vocab.Ctf2SandboxProfile.REVERSE.value
-    ir_profile = vocab.Ctf2SandboxProfile.IR.value
+    base_profile = vocab.KernelSandboxProfile.BASE.value
+    reverse_profile = vocab.KernelSandboxProfile.REVERSE.value
+    ir_profile = vocab.KernelSandboxProfile.IR.value
 
     profiles: dict[str, Path] = {}
     for name in (base_profile, reverse_profile, ir_profile):

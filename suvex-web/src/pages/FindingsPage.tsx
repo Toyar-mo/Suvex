@@ -1471,7 +1471,7 @@ function FilterField({
 /*
   ── 原来的本地 `Chip` 已收编进 `components/ui/ToggleChip`（`variant="pill" size="xs"`）──
 
-  它被两处筛选组共用（严重度、状态），形态与 `Ctf2.tsx` / `ScansPage.tsx`
+  它被两处筛选组共用（严重度、状态），形态与 `Kernel.tsx` / `ScansPage.tsx`
   的状态筛选是同一个 —— 放在页面里时三个地方各写一遍，改一次就得记着改三处。
   收编后 `disabled` 那条「不叠加 opacity」的规矩成了基元的固定行为，不会再被抄漏。
 */

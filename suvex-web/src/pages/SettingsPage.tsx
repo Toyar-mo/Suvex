@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import AccountPanel from '@/components/settings/AccountPanel'
-import Ctf2Panel from '@/components/settings/Ctf2Panel'
+import KernelPanel from '@/components/settings/KernelPanel'
 import PlatformPanel from '@/components/settings/PlatformPanel'
 import NotifyPanel from '@/components/settings/NotifyPanel'
 import ProviderPanel from '@/components/settings/ProviderPanel'
@@ -112,13 +112,13 @@ export function SettingsPage() {
               <ProviderPanel accounts={accounts} />
               <SandboxPanel config={sandbox} />
               {/*
-                CTF2 面板**自己读自己的 store**（`data/ctf2.ts`），
+                CTF2 面板**自己读自己的 store**（`data/kernel.ts`），
                 与 `ScanRetentionPanel` 同一个做法 —— 它有独立的端点、
                 独立的加载状态与独立的失败原因，塞进上面那个聚合
                 store 会让它的失败与别的混在一起，面板也就无法知道
                 自己为什么是空的。
               */}
-              <Ctf2Panel />
+              <KernelPanel />
               <PlatformPanel />
               <NotifyPanel rule={notices.rule} channels={notices.channels} />
               {/* 保留规则：属于「系统行为」这一类，与沙箱/通知同类 */}

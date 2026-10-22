@@ -56,7 +56,7 @@ def _challenge_with_scan(db: Session, *, status: str, **overrides):
     ⚠️ `challenge.scan_id` 是**单值列** —— 一条 scan 只能属于一道题。
     所以每次都造新 scan，不复用。
     """
-    from tests.ctf2.conftest import _make_challenge  # noqa: PLC2701
+    from tests.kernel.conftest import _make_challenge  # noqa: PLC2701
 
     competition = overrides.pop("competition", None)
     assert competition is not None, "调用方必须给 competition"
@@ -201,9 +201,9 @@ def test_submit_candidate_promotes_on_correct() -> None:
         "submit_candidate 没有调用 promote_solve_scan_to_solved —— "
         "人工确认之后 scan 会永远停在 failed"
     )
-    assert "Ctf2SubmissionStatus.CORRECT.value" in source
+    assert "KernelSubmissionStatus.CORRECT.value" in source
     # 必须在「判对」分支里，不是在随便某个地方。
-    correct_idx = source.index("Ctf2SubmissionStatus.CORRECT.value")
+    correct_idx = source.index("KernelSubmissionStatus.CORRECT.value")
     promote_idx = source.index("promote_solve_scan_to_solved")
     assert promote_idx > correct_idx, (
         "调用点出现在判对分支之前，那它对 failed/wrong 也会触发"

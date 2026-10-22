@@ -22,7 +22,7 @@ import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 
   它收的话是 `loading | ready | error` 三态 —— 而"怎么拿到题解"
   由调用方决定（扫描走 `loadWriteup(scanId)`，CTF2 走
-  `loadCtf2Writeup(challengeId)`）。
+  `loadKernelWriteup(challengeId)`）。
 
   ⚠️ 这样分层的理由：两个入口的**取数逻辑不同**（端点不同、
   错误文案不同），但**呈现必须相同**。把取数塞进外壳会让它

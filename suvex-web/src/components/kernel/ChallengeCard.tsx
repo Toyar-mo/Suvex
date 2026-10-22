@@ -8,8 +8,8 @@ import {
   SANDBOX_PROFILE_LABEL,
   canHaveWorkOrder,
   canHaveWriteup,
-  type Ctf2Challenge,
-} from '@/data/ctf2'
+  type KernelChallenge,
+} from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
 import { Check, ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileText, Flag, Percent, Play, ShieldCheck, X } from 'lucide-react'
@@ -101,9 +101,9 @@ export function ChallengeCard({
   onWorkOrder,
   busy = false,
 }: {
-  challenge: Ctf2Challenge
+  challenge: KernelChallenge
   /** 打开确认弹窗（**不是**直接提交） */
-  onSubmit: (challenge: Ctf2Challenge) => void
+  onSubmit: (challenge: KernelChallenge) => void
   /**
    * 开始/继续解题。
    *
@@ -114,16 +114,16 @@ export function ChallengeCard({
    *
    * ⚠️ 但"重来"也是真实需求（有时就是想换个思路），所以两个动作都留着。
    */
-  onSolve: (challenge: Ctf2Challenge, resume?: boolean) => void
-  onCancel: (challenge: Ctf2Challenge) => void
-  onRelease: (challenge: Ctf2Challenge) => void
+  onSolve: (challenge: KernelChallenge, resume?: boolean) => void
+  onCancel: (challenge: KernelChallenge) => void
+  onRelease: (challenge: KernelChallenge) => void
   /**
    * 调整调度优先级（v0.23）。
    *
    * ★ 只在题**排队中**（`solving`）时才会被调用 —— 优先级影响的是
    *   "谁先被认领"，而没在队列里的题点了不会有任何效果。
    */
-  onSetPriority: (challenge: Ctf2Challenge, priority: number) => void
+  onSetPriority: (challenge: KernelChallenge, priority: number) => void
   /**
    * 查看题解（v0.36）。
    *
@@ -134,7 +134,7 @@ export function ChallengeCard({
    * 不传时整项不渲染 —— 与 `ScanList` 的 `onWriteup` 同一个约定
    * （按需能力，而不是"必须实现"的接口）。
    */
-  onWriteup?: (challenge: Ctf2Challenge) => void
+  onWriteup?: (challenge: KernelChallenge) => void
   /**
    * 查看处置建议工单（v0.41，应急响应复盘产物）。
    *
@@ -144,7 +144,7 @@ export function ChallengeCard({
    *
    * 不传时整项不渲染，与 `onWriteup` 同一个约定。
    */
-  onWorkOrder?: (challenge: Ctf2Challenge) => void
+  onWorkOrder?: (challenge: KernelChallenge) => void
   busy?: boolean
 }) {
   const [copied, setCopied] = useState(false)

@@ -23,13 +23,13 @@ from app.kernel import platforms
 from app.kernel.adapters.builder import BuildAttempt, BuildResult, VerifyResult
 from app.kernel.adapters.generic import GenericDriver
 from app.kernel.adapters.spec import PlatformSpec
-from app.kernel.models import Ctf2Account, Ctf2Platform
-from tests.ctf2.test_generic_driver import SLABMATCH_SPEC
+from app.kernel.models import KernelAccount, KernelPlatform
+from tests.kernel.test_generic_driver import SLABMATCH_SPEC
 
 BASE = SLABMATCH_SPEC["base_url"]
 
 
-def _ready_platform(db: Session, *, status: str = "verified") -> Ctf2Platform:
+def _ready_platform(db: Session, *, status: str = "verified") -> KernelPlatform:
     row = platforms.create_building(db, base_url=BASE)
     row.spec = SLABMATCH_SPEC
     row.display_name = "比赛平台"
@@ -104,7 +104,7 @@ def test_a_successful_build_writes_the_spec_back(
     platforms._run_build(row.id, BASE, "ak_test", "")
 
     db_session.expire_all()
-    fresh = db_session.get(Ctf2Platform, row.id)
+    fresh = db_session.get(KernelPlatform, row.id)
     assert fresh is not None
     assert fresh.status == "verified"
     assert fresh.spec is not None
@@ -128,7 +128,7 @@ def test_a_failed_build_keeps_the_last_valid_spec(
             spec=PlatformSpec.from_dict(SLABMATCH_SPEC),
             attempts=[BuildAttempt(index=1, raw="{}", error="取不到题")] * 3,
             ok=False,
-            error="取题目列表失败：Ctf2ResponseError: 404",
+            error="取题目列表失败：KernelResponseError: 404",
         )
 
     monkeypatch.setattr(platforms, "build_spec", fake_build)
@@ -137,7 +137,7 @@ def test_a_failed_build_keeps_the_last_valid_spec(
     platforms._run_build(row.id, BASE, "ak_test", "")
 
     db_session.expire_all()
-    fresh = db_session.get(Ctf2Platform, row.id)
+    fresh = db_session.get(KernelPlatform, row.id)
     assert fresh is not None
     assert fresh.status == "failed"
     assert fresh.spec is not None, "差一点就成的那份配置不该被丢掉"
@@ -165,7 +165,7 @@ def test_a_crashing_build_still_clears_the_building_flag(
     platforms._run_build(row.id, BASE, "ak_test", "")
 
     db_session.expire_all()
-    fresh = db_session.get(Ctf2Platform, row.id)
+    fresh = db_session.get(KernelPlatform, row.id)
     assert fresh is not None
     assert fresh.status == "failed"
     assert fresh.last_error and "provider 挂了" in fresh.last_error
@@ -252,7 +252,7 @@ def test_activate_stores_the_key_and_points_at_the_platform(
 
 
 def test_deleting_a_platform_returns_the_account_to_builtin(
-    db_session: Session, ctf2_account: Ctf2Account, monkeypatch: pytest.MonkeyPatch
+    db_session: Session, ctf2_account: KernelAccount, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """★ 删配置**不动账号**，但必须把账号退回内置驱动。
 
@@ -271,22 +271,22 @@ def test_deleting_a_platform_returns_the_account_to_builtin(
     platforms.delete_platform(db_session, row.id)
 
     db_session.expire_all()
-    assert db_session.get(Ctf2Platform, row.id) is None
-    account = db_session.get(Ctf2Account, ctf2_account.id)
+    assert db_session.get(KernelPlatform, row.id) is None
+    account = db_session.get(KernelAccount, ctf2_account.id)
     assert account is not None
     assert account.platform_id is None, "账号应该退回内置驱动"
     assert account.token_encrypted, "删配置不该把凭据一起删掉"
 
 
 def test_driver_for_returns_none_for_the_builtin_driver(
-    db_session: Session, ctf2_account: Ctf2Account
+    db_session: Session, ctf2_account: KernelAccount
 ) -> None:
-    """内置驱动返回 `None` —— 调用方据此继续用 `Ctf2Client`。"""
+    """内置驱动返回 `None` —— 调用方据此继续用 `KernelClient`。"""
     assert platforms.driver_for(db_session, ctf2_account) is None
 
 
 def test_driver_for_builds_a_generic_driver_for_a_generated_platform(
-    db_session: Session, ctf2_account: Ctf2Account, monkeypatch: pytest.MonkeyPatch
+    db_session: Session, ctf2_account: KernelAccount, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     row = _ready_platform(db_session)
     ctf2_account.platform_id = row.id
@@ -299,7 +299,7 @@ def test_driver_for_builds_a_generic_driver_for_a_generated_platform(
 
 
 def test_driver_for_refuses_a_broken_config(
-    db_session: Session, ctf2_account: Ctf2Account
+    db_session: Session, ctf2_account: KernelAccount
 ) -> None:
     """账号指向一个坏掉的配置时，**明确报错**而不是静默退回内置驱动。
 

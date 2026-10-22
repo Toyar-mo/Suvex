@@ -30,8 +30,8 @@ import { useSyncExternalStore } from 'react'
 // ─────────────────────────────────────────────
 //
 // 下面五个联合类型的取值必须与后端 `app/core/vocab.py` 里的
-// `Ctf2ChallengeStatus` / `Ctf2SubmissionStatus` / `Ctf2EnvironmentStatus` /
-// `Ctf2SubmitMode` / `Ctf2SandboxProfile` **逐字一致**。
+// `KernelChallengeStatus` / `KernelSubmissionStatus` / `KernelEnvironmentStatus` /
+// `KernelSubmitMode` / `KernelSandboxProfile` **逐字一致**。
 //
 // ⚠️ 靠人眼对账必然漂移（本项目在 `FINDING_STATUS_LABEL` 上真栽过：
 // 后端把状态从 4 个扩到 6 个，前端标签表没跟上，于是新状态在界面上
@@ -43,7 +43,7 @@ import { useSyncExternalStore } from 'react'
 // 不是文案（文案改了不该让对账红）。
 
 /** 一道题在我们这边的推进状态 */
-export type Ctf2ChallengeStatus =
+export type KernelChallengeStatus =
   | 'unsolved'
   | 'environment_ready'
   | 'solving'
@@ -52,7 +52,7 @@ export type Ctf2ChallengeStatus =
   | 'solved'
   | 'failed'
 
-export const CHALLENGE_STATUS_LABEL: Record<Ctf2ChallengeStatus, string> = {
+export const CHALLENGE_STATUS_LABEL: Record<KernelChallengeStatus, string> = {
   unsolved: '未开始',
   environment_ready: '环境就绪',
   solving: '解题中',
@@ -77,12 +77,12 @@ export const CHALLENGE_STATUS_TONE = {
   submitting: 'accent',
   solved: 'ok',
   failed: 'risk',
-} as const satisfies Record<Ctf2ChallengeStatus, string>
+} as const satisfies Record<KernelChallengeStatus, string>
 
 /** 一次 flag 提交的结果 */
-export type Ctf2SubmissionStatus = 'pending' | 'correct' | 'wrong' | 'rejected' | 'failed'
+export type KernelSubmissionStatus = 'pending' | 'correct' | 'wrong' | 'rejected' | 'failed'
 
-export const SUBMISSION_STATUS_LABEL: Record<Ctf2SubmissionStatus, string> = {
+export const SUBMISSION_STATUS_LABEL: Record<KernelSubmissionStatus, string> = {
   pending: '待确认结果',
   correct: '判定正确',
   wrong: '判定错误',
@@ -94,9 +94,9 @@ export const SUBMISSION_STATUS_LABEL: Record<Ctf2SubmissionStatus, string> = {
 }
 
 /** 题目环境的生命周期 */
-export type Ctf2EnvironmentStatus = 'stopped' | 'starting' | 'ready' | 'error' | 'expired'
+export type KernelEnvironmentStatus = 'stopped' | 'starting' | 'ready' | 'error' | 'expired'
 
-export const ENVIRONMENT_STATUS_LABEL: Record<Ctf2EnvironmentStatus, string> = {
+export const ENVIRONMENT_STATUS_LABEL: Record<KernelEnvironmentStatus, string> = {
   stopped: '已停止',
   starting: '启动中',
   ready: '就绪',
@@ -107,9 +107,9 @@ export const ENVIRONMENT_STATUS_LABEL: Record<Ctf2EnvironmentStatus, string> = {
 }
 
 /** 提交策略 */
-export type Ctf2SubmitMode = 'safe' | 'auto'
+export type KernelSubmitMode = 'safe' | 'auto'
 
-export const SUBMIT_MODE_LABEL: Record<Ctf2SubmitMode, string> = {
+export const SUBMIT_MODE_LABEL: Record<KernelSubmitMode, string> = {
   safe: '先确认再提交',
   auto: '自动提交',
 }
@@ -121,7 +121,7 @@ export const SUBMIT_MODE_LABEL: Record<Ctf2SubmitMode, string> = {
  *   用户开它的时候是在拿"这道题的答题机会"换"不用盯着" ——
  *   而那笔交易只有他自己能判断值不值。
  */
-export const SUBMIT_MODE_HINT: Record<Ctf2SubmitMode, string> = {
+export const SUBMIT_MODE_HINT: Record<KernelSubmitMode, string> = {
   safe: '产出候选答案后停下，等你在界面上核对并确认。默认策略。',
   auto:
     '产出候选答案后直接提交，不等人。仍受每题错误提交次数上限约束 —— ' +
@@ -129,15 +129,15 @@ export const SUBMIT_MODE_HINT: Record<Ctf2SubmitMode, string> = {
 }
 
 /** 沙箱镜像 */
-export type Ctf2SandboxProfile = 'ctf2-sandbox' | 'ctf2-sandbox-re' | 'ctf2-sandbox-ir'
+export type KernelSandboxProfile = 'ctf2-sandbox' | 'ctf2-sandbox-re' | 'ctf2-sandbox-ir'
 
-export const SANDBOX_PROFILE_LABEL: Record<Ctf2SandboxProfile, string> = {
+export const SANDBOX_PROFILE_LABEL: Record<KernelSandboxProfile, string> = {
   'ctf2-sandbox': '通用（web / crypto / misc / 取证）',
   'ctf2-sandbox-re': '逆向专用',
   'ctf2-sandbox-ir': '应急响应专用',
 }
 
-export const SANDBOX_PROFILE_HINT: Record<Ctf2SandboxProfile, string> = {
+export const SANDBOX_PROFILE_HINT: Record<KernelSandboxProfile, string> = {
   'ctf2-sandbox': '预装 web、密码学、取证与 Misc 常用工具。',
   // ★ 这里要写清"为什么逆向要单独一个镜像"，否则用户会问
   //   "多一个镜像是不是多余"。
@@ -259,7 +259,7 @@ export function validateFlag(value: string): string | null {
 // 类型
 // ─────────────────────────────────────────────
 
-export interface Ctf2Account {
+export interface KernelAccount {
   id: string
   label: string
   status: 'active' | 'expired' | 'revoked'
@@ -276,7 +276,7 @@ export interface Ctf2Account {
   updatedAt: string
 }
 
-export interface Ctf2Competition {
+export interface KernelCompetition {
   id: string
   accountId: string
   remoteId: string
@@ -290,11 +290,11 @@ export interface Ctf2Competition {
   syncedAt: string
 }
 
-export interface Ctf2Environment {
+export interface KernelEnvironment {
   id: string
   challengeId: string
-  status: Ctf2EnvironmentStatus
-  sandboxProfile: Ctf2SandboxProfile
+  status: KernelEnvironmentStatus
+  sandboxProfile: KernelSandboxProfile
   /** ⚠️ 只有 `status === 'ready'` 时才非空（数据库层有约束守着） */
   accessUrl: string | null
   accessUrls: string[]
@@ -306,7 +306,7 @@ export interface Ctf2Environment {
   lastError: string | null
 }
 
-export interface Ctf2Challenge {
+export interface KernelChallenge {
   id: string
   competitionId: string
   remoteId: string
@@ -316,7 +316,7 @@ export interface Ctf2Challenge {
   description: string | null
   attachments: { name?: string; url?: string }[]
   score: number | null
-  status: Ctf2ChallengeStatus
+  status: KernelChallengeStatus
   /**
    * LLM 提出、**等人工确认**的候选答案。
    *
@@ -341,11 +341,11 @@ export interface Ctf2Challenge {
   wrongSubmissionCount: number
   maxWrongSubmissions: number
   candidateCount: number
-  sandboxProfile: Ctf2SandboxProfile
+  sandboxProfile: KernelSandboxProfile
   scanId: string | null
   solvedAt: string | null
   lastError: string | null
-  environment: Ctf2Environment | null
+  environment: KernelEnvironment | null
   /**
    * 调度优先级。**越大越先做**，默认 0。
    *
@@ -357,10 +357,10 @@ export interface Ctf2Challenge {
   updatedAt: string
 }
 
-export interface Ctf2Settings {
-  submitMode: Ctf2SubmitMode
+export interface KernelSettings {
+  submitMode: KernelSubmitMode
   maxWrongSubmissions: number
-  defaultSandboxProfile: Ctf2SandboxProfile
+  defaultSandboxProfile: KernelSandboxProfile
   /**
    * 解题并发配额（v0.22）。
    *
@@ -439,22 +439,22 @@ export interface Ctf2Settings {
   updatedAt: string
 }
 
-export interface Ctf2Queue {
+export interface KernelQueue {
   running: number
   limit: number
   queued: number
   challenges: string[]
 }
 
-export interface Ctf2Snapshot {
-  account: Ctf2Account | null
-  competition: Ctf2Competition | null
-  challenges: Ctf2Challenge[]
+export interface KernelSnapshot {
+  account: KernelAccount | null
+  competition: KernelCompetition | null
+  challenges: KernelChallenge[]
 }
 
 /** `POST /ctf2/challenges/pull` 的结果。 */
-export interface Ctf2PullResult {
-  challenge: Ctf2Challenge
+export interface KernelPullResult {
+  challenge: KernelChallenge
   /** 这次是新建还是更新已有（重复拉同一道题时是更新）。 */
   created: boolean
   /** 认出来的题目 id（回显，便于核对是不是想要的那道）。 */
@@ -463,7 +463,7 @@ export interface Ctf2PullResult {
   competitionName: string
 }
 
-export interface Ctf2SyncResult {
+export interface KernelSyncResult {
   competitions: number
   challengesCreated: number
   challengesUpdated: number
@@ -486,13 +486,13 @@ export interface Ctf2SyncResult {
 /**
  * **平台上**的一场赛事（`GET /ctf2/competitions/remote` 的返回项）。
  *
- * ⚠️ 与本地那份 `Ctf2Competition` 是两件事，**不要混用**：
+ * ⚠️ 与本地那份 `KernelCompetition` 是两件事，**不要混用**：
  *   · 这一份的 `remoteId` 是**平台 id**，它被原样回传给
- *     `syncCtf2([remoteId])`；本地那份的 `id` 是我们自己的主键。
+ *     `syncKernel([remoteId])`；本地那份的 `id` 是我们自己的主键。
  *   · 这一份可能包含"还没同步过"的赛事 —— 那正是它存在的意义
  *     （否则"要选赛事才能同步赛事"是个死结）。
  */
-export interface Ctf2RemoteCompetition {
+export interface KernelRemoteCompetition {
   remoteId: string
   name: string
   /** 平台给的时间字符串。**原样展示**（不在这里解析）—— 见后端 schema 的说明。 */
@@ -502,17 +502,17 @@ export interface Ctf2RemoteCompetition {
   status: string
 }
 
-export interface Ctf2SolveResult {
-  challenge: Ctf2Challenge
+export interface KernelSolveResult {
+  challenge: KernelChallenge
   environmentId: string | null
   scanId: string | null
   message: string
 }
 
-export interface Ctf2SubmitResult {
-  status: Ctf2SubmissionStatus
+export interface KernelSubmitResult {
+  status: KernelSubmissionStatus
   message: string
-  challenge: Ctf2Challenge
+  challenge: KernelChallenge
 }
 
 // ══════════════════════════════════════════════════════════
@@ -544,7 +544,7 @@ export interface Ctf2SubmitResult {
  * `409 WRITEUP_UNAVAILABLE`，界面要**原样显示后端那句话**，因为它区分了
  * "从没解过"与"解过但没有题解"两种处境（补救动作不同）。
  */
-export interface Ctf2Writeup {
+export interface KernelWriteup {
   challengeId: string
   title: string
   category: string
@@ -569,7 +569,7 @@ export interface Ctf2Writeup {
  * 这是"细分到每一次任务的消耗"最直接的视图 —— 能看出哪一轮最贵、
  * 是不是在兜圈子烧钱、换模前后各花了多少。
  */
-export interface Ctf2UsageEntry {
+export interface KernelUsageEntry {
   /** 第几轮 */
   turn: number
   model: string
@@ -584,14 +584,14 @@ export interface Ctf2UsageEntry {
    * ★★ 接入点**到底给没给**用量。
    *
    * `false` 时上面四个 token 值都是 0，而那个 0 **不代表没消耗** ——
-   * 所以界面必须把"0"与"未记录"分开显示。见 `Ctf2TokenUsage` 的说明。
+   * 所以界面必须把"0"与"未记录"分开显示。见 `KernelTokenUsage` 的说明。
    */
   usageReported: boolean
   at: string
 }
 
 /** 按模型分组的用量。换模（v0.35 的 fallback）之后同一次解题会用多个模型。 */
-export interface Ctf2UsageByModel {
+export interface KernelUsageByModel {
   model: string
   providerLabel: string
   calls: number
@@ -599,7 +599,7 @@ export interface Ctf2UsageByModel {
 }
 
 /** 按题分组的用量（"哪道题最烧钱"）。 */
-export interface Ctf2UsageByChallenge {
+export interface KernelUsageByChallenge {
   challengeId: string
   title: string
   calls: number
@@ -625,14 +625,14 @@ export interface Ctf2UsageByChallenge {
  *
  * 单价随模型、供应商、时段变化，写死在代码里会误导。只给 token 数。
  */
-export interface Ctf2TokenUsage {
+export interface KernelTokenUsage {
   calls: number
   recordedCalls: number
   promptTokens: number
   completionTokens: number
   totalTokens: number
-  byModel: Ctf2UsageByModel[]
-  byChallenge: Ctf2UsageByChallenge[]
+  byModel: KernelUsageByModel[]
+  byChallenge: KernelUsageByChallenge[]
   /**
    * 统计从哪一刻开始。**null = 一条记录都没有**。
    *
@@ -651,8 +651,8 @@ export interface Ctf2TokenUsage {
  * 完全不同 —— 前端换一个说法只会把可行动的信息换成泛泛的失败。
  * 与 `loadWriteup`（扫描侧）同一条纪律。
  */
-export async function loadCtf2Writeup(challengeId: string): Promise<Ctf2Writeup> {
-  return api.get<Ctf2Writeup>(`/ctf2/challenges/${encodeURIComponent(challengeId)}/writeup`)
+export async function loadKernelWriteup(challengeId: string): Promise<KernelWriteup> {
+  return api.get<KernelWriteup>(`/ctf2/challenges/${encodeURIComponent(challengeId)}/writeup`)
 }
 
 /**
@@ -678,7 +678,7 @@ export async function loadCtf2Writeup(challengeId: string): Promise<Ctf2Writeup>
  * 这种情况和"真的出错了"分开（与题解那三种 409 同理，
  * 靠后端那句中文原样显示来区分）。
  */
-export interface Ctf2WorkOrder {
+export interface KernelWorkOrder {
   challengeId: string
   title: string
   /** 工单全文（markdown）。四段齐全的在前、缺段的标注缺什么 */
@@ -698,12 +698,12 @@ export interface Ctf2WorkOrder {
 /**
  * 读一道题的处置建议工单。
  *
- * ⚠️ 与 `loadCtf2Writeup` 同一条纪律：**失败不在这里兜底**，
+ * ⚠️ 与 `loadKernelWriteup` 同一条纪律：**失败不在这里兜底**，
  * `ApiError` 原样抛给调用方 —— 后端那句中文说明了"这不是应急响应任务"
  * 还是"还没跑完"，两者的下一步动作完全不同。
  */
-export async function loadCtf2WorkOrder(challengeId: string): Promise<Ctf2WorkOrder> {
-  return api.get<Ctf2WorkOrder>(
+export async function loadKernelWorkOrder(challengeId: string): Promise<KernelWorkOrder> {
+  return api.get<KernelWorkOrder>(
     `/ctf2/challenges/${encodeURIComponent(challengeId)}/workorder`,
   )
 }
@@ -719,7 +719,7 @@ export async function loadCtf2WorkOrder(challengeId: string): Promise<Ctf2WorkOr
  * "刚建完却读到旧数据"的机会。
  */
 export interface IrTask {
-  challenge: Ctf2Challenge
+  challenge: KernelChallenge
   /**
    * 认领到的证据文件（名字 + 字节数）。
    *
@@ -780,10 +780,10 @@ export async function createIrTask(payload: {
  * 这一点很重要：后端把 query 参数当成筛选条件，传一个空串会筛出空集，
  * 而那看起来像"总共就花了 0"。
  */
-export async function loadCtf2Usage(
+export async function loadKernelUsage(
   filter: { challengeId?: string | null; competitionId?: string | null } = {},
-): Promise<Ctf2TokenUsage> {
-  return api.get<Ctf2TokenUsage>('/ctf2/usage', {
+): Promise<KernelTokenUsage> {
+  return api.get<KernelTokenUsage>('/ctf2/usage', {
     query: {
       challengeId: filter.challengeId ?? null,
       competitionId: filter.competitionId ?? null,
@@ -792,8 +792,8 @@ export async function loadCtf2Usage(
 }
 
 /** 读单道题的**逐次**消耗明细（按轮次升序）。 */
-export async function loadCtf2ChallengeUsage(challengeId: string): Promise<Ctf2UsageEntry[]> {
-  return api.get<Ctf2UsageEntry[]>(
+export async function loadKernelChallengeUsage(challengeId: string): Promise<KernelUsageEntry[]> {
+  return api.get<KernelUsageEntry[]>(
     `/ctf2/challenges/${encodeURIComponent(challengeId)}/usage`,
   )
 }
@@ -816,7 +816,7 @@ export async function loadCtf2ChallengeUsage(challengeId: string): Promise<Ctf2U
  *
  * ## 正确的判据：有没有**借过壳 scan**
  *
- * `Ctf2Challenge.scanId` 在**第一次开始解题**时被写上（CTF2 借一条
+ * `KernelChallenge.scanId` 在**第一次开始解题**时被写上（CTF2 借一条
  * scan 复用活动流，见 `ctf2/events.ensure_solve_scan`），之后**不再清空**。
  * 所以"`scanId` 非空" ⟺ "这道题至少被解过一次"。
  *
@@ -848,7 +848,7 @@ export async function loadCtf2ChallengeUsage(challengeId: string): Promise<Ctf2U
  * 后端对"跑过但没生成题解"的那句话是准确的，且跑完一轮才有题解。
  * 用户点开看到"这次没有生成题解，重新解一次会生成"也是有用的信息。
  */
-export function canHaveWriteup(challenge: Ctf2Challenge): boolean {
+export function canHaveWriteup(challenge: KernelChallenge): boolean {
   return Boolean(challenge.scanId)
 }
 
@@ -880,7 +880,7 @@ export function canHaveWriteup(challenge: Ctf2Challenge): boolean {
  * 一个能写进代码的依据 —— 两侧归一化规则不一致时，错的那一侧
  * 永远不会有报错。
  */
-export function canHaveWorkOrder(challenge: Ctf2Challenge): boolean {
+export function canHaveWorkOrder(challenge: KernelChallenge): boolean {
   return (challenge.category || '').trim().toLowerCase().startsWith('ir-')
 }
 
@@ -892,14 +892,14 @@ export function canHaveWorkOrder(challenge: Ctf2Challenge): boolean {
 // 判据是**它会不会被非组件代码读** —— 解题受理之后要立刻刷新列表，
 // 而那发生在事件处理器里，不是渲染期。
 
-export type Ctf2Status = 'idle' | 'loading' | 'ready' | 'error'
+export type KernelStatus = 'idle' | 'loading' | 'ready' | 'error'
 
-export interface Ctf2SnapshotState {
-  account: Ctf2Account | null
-  challenges: Ctf2Challenge[]
-  settings: Ctf2Settings | null
-  queue: Ctf2Queue | null
-  status: Ctf2Status
+export interface KernelSnapshotState {
+  account: KernelAccount | null
+  challenges: KernelChallenge[]
+  settings: KernelSettings | null
+  queue: KernelQueue | null
+  status: KernelStatus
   error: ApiError | null
   /** 最近一次同步/受理的结果，供页内提示用 */
   notice: string | null
@@ -916,16 +916,16 @@ export interface Ctf2SnapshotState {
 
 const listeners = new Set<() => void>()
 
-let account: Ctf2Account | null = null
-let challenges: Ctf2Challenge[] = []
-let settings: Ctf2Settings | null = null
-let queue: Ctf2Queue | null = null
-let status: Ctf2Status = 'idle'
+let account: KernelAccount | null = null
+let challenges: KernelChallenge[] = []
+let settings: KernelSettings | null = null
+let queue: KernelQueue | null = null
+let status: KernelStatus = 'idle'
 let error: ApiError | null = null
 let notice: string | null = null
 let settingsError: ApiError | null = null
 
-let snapshot: Ctf2SnapshotState = {
+let snapshot: KernelSnapshotState = {
   account,
   challenges,
   settings,
@@ -941,16 +941,16 @@ function commit() {
   for (const listener of listeners) listener()
 }
 
-export function subscribeCtf2(listener: () => void): () => void {
+export function subscribeKernel(listener: () => void): () => void {
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
 
-export function getCtf2Snapshot(): Ctf2SnapshotState {
+export function getKernelSnapshot(): KernelSnapshotState {
   return snapshot
 }
 
-export function clearCtf2Notice(): void {
+export function clearKernelNotice(): void {
   notice = null
   commit()
 }
@@ -969,7 +969,7 @@ export function clearCtf2Notice(): void {
  * 理由是它们的**后果不同**：没有题目列表这一页就没意义，
  * 而没有队列数字只少一行小字。
  */
-export async function loadCtf2(options: { silent?: boolean } = {}): Promise<void> {
+export async function loadKernel(options: { silent?: boolean } = {}): Promise<void> {
   const { silent = false } = options
   if (!silent) {
     status = 'loading'
@@ -979,16 +979,16 @@ export async function loadCtf2(options: { silent?: boolean } = {}): Promise<void
 
   try {
     const [snapshotData, settingsOutcome, queueOutcome] = await Promise.all([
-      api.get<Ctf2Snapshot>('/ctf2/snapshot'),
+      api.get<KernelSnapshot>('/ctf2/snapshot'),
       // 设置是 admin 级 —— 一个只有 read 的会话会拿到 403。
       // 那种情况下**不该让整页失败**（题目列表本来就能看），
       // 所以它自己 catch。但失败原因要留下来（见 settingsError）。
       api
-        .get<Ctf2Settings>('/ctf2/settings')
+        .get<KernelSettings>('/ctf2/settings')
         .then((value) => ({ ok: true as const, value }))
         .catch((err: unknown) => ({ ok: false as const, error: toApiError(err) })),
       api
-        .get<Ctf2Queue>('/ctf2/queue')
+        .get<KernelQueue>('/ctf2/queue')
         .then((value) => ({ ok: true as const, value }))
         .catch(() => ({ ok: false as const, error: null })),
     ])
@@ -1031,14 +1031,14 @@ export async function loadCtf2(options: { silent?: boolean } = {}): Promise<void
  * ⚠️ 与 `api.postFile` 的 `timeoutMs: 60_000` 是同一条理由：
  *    "这一步本来就要几十秒"的调用不该套默认值。
  */
-export async function syncCtf2(competitionIds: string[] = []): Promise<Ctf2SyncResult> {
-  const result = await api.post<Ctf2SyncResult>(
+export async function syncKernel(competitionIds: string[] = []): Promise<KernelSyncResult> {
+  const result = await api.post<KernelSyncResult>(
     '/ctf2/sync',
     { competitionIds },
     { timeoutMs: 120_000 },
   )
   notice = result.message + (result.errors.length ? `（${result.errors[0]}）` : '')
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return result
 }
 
@@ -1052,8 +1052,8 @@ export async function syncCtf2(competitionIds: string[] = []): Promise<Ctf2SyncR
  * 它走 `GET /ctf2/competitions/remote`，需要 **scan** 权限：虽然只读，
  * 但它每次都真的打一次平台接口。
  */
-export async function listRemoteCompetitions(): Promise<Ctf2RemoteCompetition[]> {
-  return api.get<Ctf2RemoteCompetition[]>('/ctf2/competitions/remote')
+export async function listRemoteCompetitions(): Promise<KernelRemoteCompetition[]> {
+  return api.get<KernelRemoteCompetition[]>('/ctf2/competitions/remote')
 }
 
 /**
@@ -1065,30 +1065,30 @@ export async function listRemoteCompetitions(): Promise<Ctf2RemoteCompetition[]>
  *
  * 服务端会自己在已知练习集里试出这道题属于哪个，所以只需要一条链接。
  */
-export async function pullCtf2Challenge(input: string): Promise<Ctf2PullResult> {
-  const result = await api.post<Ctf2PullResult>('/ctf2/challenges/pull', { input })
-  await loadCtf2({ silent: true })
+export async function pullKernelChallenge(input: string): Promise<KernelPullResult> {
+  const result = await api.post<KernelPullResult>('/ctf2/challenges/pull', { input })
+  await loadKernel({ silent: true })
   return result
 }
 
-export async function bindCtf2Account(token: string, label: string): Promise<Ctf2Account> {
-  const created = await api.post<Ctf2Account>('/ctf2/accounts', { token, label })
+export async function bindKernelAccount(token: string, label: string): Promise<KernelAccount> {
+  const created = await api.post<KernelAccount>('/ctf2/accounts', { token, label })
   account = created
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return created
 }
 
-export async function unbindCtf2Account(accountId: string): Promise<void> {
+export async function unbindKernelAccount(accountId: string): Promise<void> {
   await api.del<void>(`/ctf2/accounts/${encodeURIComponent(accountId)}`)
   account = null
   commit()
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
 }
 
-export async function saveCtf2Settings(next: {
-  submitMode: Ctf2SubmitMode
+export async function saveKernelSettings(next: {
+  submitMode: KernelSubmitMode
   maxWrongSubmissions: number
-  defaultSandboxProfile: Ctf2SandboxProfile
+  defaultSandboxProfile: KernelSandboxProfile
   maxConcurrentSolves: number
   solvePollSeconds: number
   autoSyncSeconds: number
@@ -1110,8 +1110,8 @@ export async function saveCtf2Settings(next: {
   enableAgentsecScenarios: boolean
   /** 应急响应场景包开关（v0.41）。必填，同上 —— 漏传会被静默关掉。 */
   enableIrScenarios: boolean
-}): Promise<Ctf2Settings> {
-  const saved = await api.put<Ctf2Settings>('/ctf2/settings', next)
+}): Promise<KernelSettings> {
+  const saved = await api.put<KernelSettings>('/ctf2/settings', next)
   settings = saved
   settingsError = null
   commit()
@@ -1128,8 +1128,8 @@ export async function saveCtf2Settings(next: {
 export async function solveChallenge(
   challengeId: string,
   body: {
-    mode?: Ctf2SubmitMode
-    sandboxProfile?: Ctf2SandboxProfile
+    mode?: KernelSubmitMode
+    sandboxProfile?: KernelSandboxProfile
     maxWrongSubmissions?: number
     brief?: string | null
     /**
@@ -1143,43 +1143,43 @@ export async function solveChallenge(
      */
     resume?: boolean
   },
-): Promise<Ctf2SolveResult> {
-  const result = await api.post<Ctf2SolveResult>(
+): Promise<KernelSolveResult> {
+  const result = await api.post<KernelSolveResult>(
     `/ctf2/challenges/${encodeURIComponent(challengeId)}/solve`,
     body,
   )
   notice = result.message
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return result
 }
 
 export async function submitFlag(
   challengeId: string,
   flag: string,
-  mode?: Ctf2SubmitMode,
-): Promise<Ctf2SubmitResult> {
-  const result = await api.post<Ctf2SubmitResult>(
+  mode?: KernelSubmitMode,
+): Promise<KernelSubmitResult> {
+  const result = await api.post<KernelSubmitResult>(
     `/ctf2/challenges/${encodeURIComponent(challengeId)}/submit`,
     { flag, mode },
   )
   notice = result.message
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return result
 }
 
-export async function cancelChallenge(challengeId: string): Promise<Ctf2Challenge> {
-  const updated = await api.post<Ctf2Challenge>(
+export async function cancelChallenge(challengeId: string): Promise<KernelChallenge> {
+  const updated = await api.post<KernelChallenge>(
     `/ctf2/challenges/${encodeURIComponent(challengeId)}/cancel`,
   )
   notice = '已取消。若它已经在跑，那一轮会跑完但不会产出候选。'
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return updated
 }
 
 export async function releaseEnvironment(challengeId: string): Promise<void> {
   await api.del<void>(`/ctf2/challenges/${encodeURIComponent(challengeId)}/environment`)
   notice = '已释放题目环境。'
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
 }
 
 /**
@@ -1198,12 +1198,12 @@ export async function releaseEnvironment(challengeId: string): Promise<void> {
 export async function setChallengePriority(
   challengeId: string,
   priority: number,
-): Promise<Ctf2Challenge> {
-  const updated = await api.put<Ctf2Challenge>(
+): Promise<KernelChallenge> {
+  const updated = await api.put<KernelChallenge>(
     `/ctf2/challenges/${encodeURIComponent(challengeId)}/priority`,
     { priority },
   )
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return updated
 }
 
@@ -1225,7 +1225,7 @@ export async function prioritizeByScore(
     result.changed > 0
       ? `已按分值调整 ${result.changed} 道排队题的优先级。`
       : '当前没有排队中的题，无需调整。'
-  await loadCtf2({ silent: true })
+  await loadKernel({ silent: true })
   return result.changed
 }
 
@@ -1249,10 +1249,10 @@ export async function prioritizeByScore(
 // `GET /ctf2/platforms/{id}` 轮询 —— 那里的 `isBuilding` 就是"还要不要
 // 继续轮"的判据。
 
-export type Ctf2PlatformDriver = 'ctf2' | 'generic'
-export type Ctf2PlatformStatus = 'building' | 'draft' | 'verified' | 'failed'
+export type KernelPlatformDriver = 'ctf2' | 'generic'
+export type KernelPlatformStatus = 'building' | 'draft' | 'verified' | 'failed'
 
-export interface Ctf2Platform {
+export interface KernelPlatform {
   /**
    * `null` = **内置的 CTF2**。
    *
@@ -1263,9 +1263,9 @@ export interface Ctf2Platform {
   slug: string
   displayName: string
   baseUrl: string
-  driver: Ctf2PlatformDriver
+  driver: KernelPlatformDriver
   source: 'builtin' | 'generated'
-  status: Ctf2PlatformStatus
+  status: KernelPlatformStatus
   lastError: string | null
   attempts: number
   isBuilding: boolean
@@ -1277,52 +1277,52 @@ export interface Ctf2Platform {
   updatedAt: string | null
 }
 
-export const PLATFORM_STATUS_LABEL: Record<Ctf2PlatformStatus, string> = {
+export const PLATFORM_STATUS_LABEL: Record<KernelPlatformStatus, string> = {
   building: '识别中',
   draft: '待验证',
   verified: '可用',
   failed: '识别失败',
 }
 
-export const PLATFORM_STATUS_TONE: Record<Ctf2PlatformStatus, 'ok' | 'warn' | 'risk' | 'idle'> = {
+export const PLATFORM_STATUS_TONE: Record<KernelPlatformStatus, 'ok' | 'warn' | 'risk' | 'idle'> = {
   building: 'idle',
   draft: 'warn',
   verified: 'ok',
   failed: 'risk',
 }
 
-export async function listCtf2Platforms(): Promise<Ctf2Platform[]> {
-  return api.get<Ctf2Platform[]>('/ctf2/platforms')
+export async function listKernelPlatforms(): Promise<KernelPlatform[]> {
+  return api.get<KernelPlatform[]>('/ctf2/platforms')
 }
 
 /**
- * 受理一次"识别平台"。**立刻返回**（后端 202），进度靠 `readCtf2Platform` 轮询。
+ * 受理一次"识别平台"。**立刻返回**（后端 202），进度靠 `readKernelPlatform` 轮询。
  *
  * ⚠️ `accessKey` 在这里只走一次内存：后端用它去探测和试跑，**不落库**。
  * 真正保存要等用户在结果上点「启用」。
  */
-export async function draftCtf2Platform(body: {
+export async function draftKernelPlatform(body: {
   baseUrl: string
   accessKey: string
   document: string
-}): Promise<Ctf2Platform> {
-  return api.post<Ctf2Platform>('/ctf2/platforms/draft', {
+}): Promise<KernelPlatform> {
+  return api.post<KernelPlatform>('/ctf2/platforms/draft', {
     baseUrl: body.baseUrl.trim(),
     accessKey: body.accessKey.trim(),
     document: body.document,
   })
 }
 
-export async function readCtf2Platform(id: string): Promise<Ctf2Platform> {
-  return api.get<Ctf2Platform>(`/ctf2/platforms/${encodeURIComponent(id)}`)
+export async function readKernelPlatform(id: string): Promise<KernelPlatform> {
+  return api.get<KernelPlatform>(`/ctf2/platforms/${encodeURIComponent(id)}`)
 }
 
 /** 启用：后端会**再验一次**凭据（中间隔着一段不确定的窗口），然后写进账号表。 */
-export async function activateCtf2Platform(
+export async function activateKernelPlatform(
   id: string,
   body: { accessKey: string; label?: string },
-): Promise<Ctf2Platform> {
-  return api.post<Ctf2Platform>(`/ctf2/platforms/${encodeURIComponent(id)}/activate`, {
+): Promise<KernelPlatform> {
+  return api.post<KernelPlatform>(`/ctf2/platforms/${encodeURIComponent(id)}/activate`, {
     accessKey: body.accessKey.trim(),
     label: (body.label ?? '').trim(),
   })
@@ -1339,7 +1339,7 @@ export async function switchToBuiltinPlatform(): Promise<void> {
   await api.post<void>('/ctf2/platforms/use-builtin', {})
 }
 
-export async function deleteCtf2Platform(id: string): Promise<void> {
+export async function deleteKernelPlatform(id: string): Promise<void> {
   await api.del<void>(`/ctf2/platforms/${encodeURIComponent(id)}`)
 }
 
@@ -1353,17 +1353,17 @@ export async function deleteCtf2Platform(id: string): Promise<void> {
  *   `wrongSubmissionCount` 可能因为别处的操作而变（用户可能在另一个
  *   标签页里提交了），而界面必须跟上。
  */
-export function hasActiveChallenges(items: Ctf2Challenge[]): boolean {
+export function hasActiveChallenges(items: KernelChallenge[]): boolean {
   return items.some((item) =>
     ['environment_ready', 'solving', 'submitting', 'candidate_ready'].includes(item.status),
   )
 }
 
-export function useCtf2(): Ctf2SnapshotState {
-  return useSyncExternalStore(subscribeCtf2, getCtf2Snapshot, getCtf2Snapshot)
+export function useKernel(): KernelSnapshotState {
+  return useSyncExternalStore(subscribeKernel, getKernelSnapshot, getKernelSnapshot)
 }
 
 /** 便捷取当前状态（非组件代码用，比如事件处理器） */
-export function currentCtf2State(): Ctf2SnapshotState {
-  return getCtf2Snapshot()
+export function currentKernelState(): KernelSnapshotState {
+  return getKernelSnapshot()
 }

@@ -1,9 +1,9 @@
 import { cn } from '@/lib/cn'
 import {
   ENVIRONMENT_STATUS_LABEL,
-  type Ctf2Environment,
-  type Ctf2EnvironmentStatus,
-} from '@/data/ctf2'
+  type KernelEnvironment,
+  type KernelEnvironmentStatus,
+} from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
 import { Check, Copy, ExternalLink, Loader2, TriangleAlert } from 'lucide-react'
@@ -36,7 +36,7 @@ export function EnvironmentStatus({
   onRelease,
   compact = false,
 }: {
-  environment: Ctf2Environment | null
+  environment: KernelEnvironment | null
   onRelease?: () => void
   /** 卡片上的紧凑形态：只显示徽标 + 入口，不套外框 */
   compact?: boolean
@@ -112,7 +112,7 @@ export function EnvironmentStatus({
   )
 }
 
-function StatusBadge({ status }: { status: Ctf2EnvironmentStatus }) {
+function StatusBadge({ status }: { status: KernelEnvironmentStatus }) {
   const spinning = status === 'starting'
   return (
     <span

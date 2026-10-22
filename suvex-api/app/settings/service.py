@@ -33,7 +33,7 @@ from app.core.ids import new_id
 from app.core.vocab import ScanMode, values
 from app.settings.models import (
     SINGLETON_ID,
-    Ctf2Config,
+    KernelConfig,
     NoticeRule,
     NotifyChannel,
     SandboxConfig,
@@ -181,14 +181,14 @@ def validate_execution_settings(
 # 不该 import ctf2 的业务模块（那会形成一个反向依赖）。
 
 
-def read_ctf2_config(db: Session) -> Ctf2Config | None:
+def read_ctf2_config(db: Session) -> KernelConfig | None:
     """读 CTF2 配置行。**没有就返回 None，不建行。**
 
     与 `read_sandbox_config` 同一个模式：为一个读操作写库既没必要，
     也会让 `updated_at`（回答"用户什么时候改过"）被反复刷新。
     没有行时调用方用代码常量兜底（见 `ctf2.service.effective_ctf2_settings`）。
     """
-    return db.get(Ctf2Config, SINGLETON_ID)
+    return db.get(KernelConfig, SINGLETON_ID)
 
 
 # ══════════════════════════════════════════════════════════

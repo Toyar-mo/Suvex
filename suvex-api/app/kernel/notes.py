@@ -1428,7 +1428,7 @@ def validate_note_category(
 
     ## 它守的是什么
 
-    `Ctf2SolveNote.category` 是 `String(64)`、**没有数据库约束** ——
+    `KernelSolveNote.category` 是 `String(64)`、**没有数据库约束** ——
     原来它直接抄平台 payload 的分类名（`Pwn` / `Web` / …），
     爱是什么是什么。那在只有平台定义题型时是对的。
 
@@ -1467,8 +1467,8 @@ def validate_note_category(
 
     Args:
         category: 待校验的分类名（可以是空串 —— 空串永远合法）。
-        agentsec_enabled: `Ctf2Settings.enable_agentsec_scenarios`。
-        ir_enabled: `Ctf2Settings.enable_ir_scenarios`。
+        agentsec_enabled: `KernelSettings.enable_agentsec_scenarios`。
+        ir_enabled: `KernelSettings.enable_ir_scenarios`。
 
     Raises:
         ValueError: 取值属于某族但不合法、或该族的开关没打开。
@@ -1660,7 +1660,7 @@ def resolve_verdict(*, solved: bool, dead_ends: str) -> str:
 
 
 def counts_as_solved(verdict: str) -> bool:
-    """这个 verdict 算不算"已解决"（用于 `Ctf2SolveNote.solved`）。
+    """这个 verdict 算不算"已解决"（用于 `KernelSolveNote.solved`）。
 
     `confirmed` 与 `ruled_out` 都算 —— 理由见 `resolve_verdict`。
     `needs_follow_up` 不算（它就是"还没定"）。
@@ -1813,7 +1813,7 @@ def notes_for_challenge(db, challenge, *, limit: int = MAX_NOTES_IN_PROMPT) -> l
     """
     from sqlalchemy import select
 
-    from app.kernel.models import Ctf2SolveNote
+    from app.kernel.models import KernelSolveNote
 
     category = (getattr(challenge, "category", "") or "").strip()
     if not category:
@@ -1823,11 +1823,11 @@ def notes_for_challenge(db, challenge, *, limit: int = MAX_NOTES_IN_PROMPT) -> l
 
     rows = (
         db.execute(
-            select(Ctf2SolveNote)
-            .where(Ctf2SolveNote.category == category)
-            .where(Ctf2SolveNote.challenge_id != challenge.id)
+            select(KernelSolveNote)
+            .where(KernelSolveNote.category == category)
+            .where(KernelSolveNote.challenge_id != challenge.id)
             # 已解出的排前面（`solved` 是 bool，降序即 True 优先）。
-            .order_by(Ctf2SolveNote.solved.desc(), Ctf2SolveNote.updated_at.desc())
+            .order_by(KernelSolveNote.solved.desc(), KernelSolveNote.updated_at.desc())
             .limit(limit)
         )
         .scalars()

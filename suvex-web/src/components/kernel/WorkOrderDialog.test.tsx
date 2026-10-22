@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { WorkOrderDialog } from './WorkOrderDialog'
-import type { Ctf2Challenge } from '@/data/ctf2'
+import type { KernelChallenge } from '@/data/kernel'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -87,7 +87,7 @@ const REAL_WORKORDER = {
 }
 
 /** 挑战对象：一道应急响应题（category 前缀是 `ir-`） */
-function realChallenge(): Ctf2Challenge {
+function realChallenge(): KernelChallenge {
   return {
     id: 'ctf2chal_IR0000000000000000000001',
     competitionId: 'ctf2comp_01M3PG846CV457JAFVBRPCG29M',
@@ -154,7 +154,7 @@ describe('处置工单弹窗：用真实 200 响应渲染', () => {
   it('★★ 打的是 `/workorder` 端点，不是 `/writeup`', async () => {
     /*
       这是本文件最该有的一条。两个 loader
-      （`loadCtf2WorkOrder` / `loadCtf2Writeup`）除了路径末段之外
+      （`loadKernelWorkOrder` / `loadKernelWriteup`）除了路径末段之外
       完全一样，抄错一处不会报错 —— 只会让用户点"处置工单"
       弹出一份题解，而那看起来"功能就是这样"。
     */

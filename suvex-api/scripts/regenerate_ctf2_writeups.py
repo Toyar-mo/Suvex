@@ -87,7 +87,7 @@ from sqlalchemy import select  # noqa: E402
 from app.core.db import session_scope  # noqa: E402
 from app.kernel import runner, service  # noqa: E402
 from app.kernel import writeup as writeup_mod  # noqa: E402
-from app.kernel.models import Ctf2Writeup  # noqa: E402
+from app.kernel.models import KernelWriteup  # noqa: E402
 
 #: 与 `runner._save_transcript` 的落点一致。
 SOLVES_DIR = PROJECT_ROOT / "_scan_runs" / "_ctf2_solves"
@@ -202,7 +202,7 @@ def main() -> int:
 
     with session_scope() as db:
         existing_rows = list(
-            db.execute(select(Ctf2Writeup).order_by(Ctf2Writeup.generated_at))
+            db.execute(select(KernelWriteup).order_by(KernelWriteup.generated_at))
             .scalars()
             .all()
         )

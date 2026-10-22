@@ -1,7 +1,7 @@
 import { Loader2, RefreshCw, TriangleAlert } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
-import { listRemoteCompetitions, type Ctf2RemoteCompetition } from '@/data/ctf2'
+import { listRemoteCompetitions, type KernelRemoteCompetition } from '@/data/kernel'
 import { errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
 
@@ -39,7 +39,7 @@ export function CompetitionPicker({
   onConfirm: (remoteIds: string[]) => void
   onCancel: () => void
 }) {
-  const [items, setItems] = useState<Ctf2RemoteCompetition[] | null>(null)
+  const [items, setItems] = useState<KernelRemoteCompetition[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
@@ -65,7 +65,7 @@ export function CompetitionPicker({
     ref 让 Esc 在同步中不生效，但同步一旦开始这个弹窗就已经关掉了
     （见页面里 `onConfirm` 先关弹窗再同步），所以那个判断本来也没有用武之地。
   */
-  const applyRows = useCallback((rows: Ctf2RemoteCompetition[]) => {
+  const applyRows = useCallback((rows: KernelRemoteCompetition[]) => {
     setItems(rows)
     setError(null)
     // 默认勾上第一场：多数场景就是"同步我正在打的那场"，

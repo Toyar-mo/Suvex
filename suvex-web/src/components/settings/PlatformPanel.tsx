@@ -3,14 +3,14 @@ import { cn } from '@/lib/cn'
 import {
   PLATFORM_STATUS_LABEL,
   PLATFORM_STATUS_TONE,
-  activateCtf2Platform,
-  deleteCtf2Platform,
-  draftCtf2Platform,
-  listCtf2Platforms,
-  readCtf2Platform,
+  activateKernelPlatform,
+  deleteKernelPlatform,
+  draftKernelPlatform,
+  listKernelPlatforms,
+  readKernelPlatform,
   switchToBuiltinPlatform,
-  type Ctf2Platform,
-} from '@/data/ctf2'
+  type KernelPlatform,
+} from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
 import { Check, Loader2, Plus, RotateCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
@@ -46,17 +46,17 @@ const TONE_CLASS: Record<string, string> = {
 }
 
 export function PlatformPanel() {
-  const [platforms, setPlatforms] = useState<Ctf2Platform[] | null>(null)
+  const [platforms, setPlatforms] = useState<KernelPlatform[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // 抽屉的两种用法：识别一个新平台 / 给已有平台补一把 key 来启用。
   const [dialog, setDialog] = useState<
-    { mode: 'draft' } | { mode: 'activate'; platform: Ctf2Platform } | null
+    { mode: 'draft' } | { mode: 'activate'; platform: KernelPlatform } | null
   >(null)
 
   const refresh = useCallback(async () => {
     try {
-      setPlatforms(await listCtf2Platforms())
+      setPlatforms(await listKernelPlatforms())
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : '读取平台列表失败')
@@ -76,7 +76,7 @@ export function PlatformPanel() {
     let cancelled = false
     void (async () => {
       try {
-        const rows = await listCtf2Platforms()
+        const rows = await listKernelPlatforms()
         if (!cancelled) {
           setPlatforms(rows)
           setError(null)
@@ -106,11 +106,11 @@ export function PlatformPanel() {
     }
   }
 
-  const handleDelete = async (item: Ctf2Platform) => {
+  const handleDelete = async (item: KernelPlatform) => {
     if (!item.id) return
     setBusy(true)
     try {
-      await deleteCtf2Platform(item.id)
+      await deleteKernelPlatform(item.id)
       await refresh()
       showToast({ message: '已删除这份平台配置', tone: 'ok' })
     } catch (err) {
@@ -285,14 +285,14 @@ function PlatformDialog({
   onDone,
 }: {
   mode: 'draft' | 'activate'
-  platform?: Ctf2Platform
+  platform?: KernelPlatform
   onClose: () => void
   onDone: () => void
 }) {
   const [baseUrl, setBaseUrl] = useState('')
   const [accessKey, setAccessKey] = useState('')
   const [document, setDocument] = useState('')
-  const [draft, setDraft] = useState<Ctf2Platform | null>(null)
+  const [draft, setDraft] = useState<KernelPlatform | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -308,7 +308,7 @@ function PlatformDialog({
   useEffect(() => {
     if (!draftId || !building) return
     const timer = window.setInterval(() => {
-      void readCtf2Platform(draftId)
+      void readKernelPlatform(draftId)
         .then(setDraft)
         .catch(() => {
           // 轮询失败不打断：下一次还会试。真正的失败由 status=failed 表达。
@@ -321,7 +321,7 @@ function PlatformDialog({
     setBusy(true)
     setError(null)
     try {
-      const created = await draftCtf2Platform({ baseUrl, accessKey, document })
+      const created = await draftKernelPlatform({ baseUrl, accessKey, document })
       setDraft(created)
     } catch (err) {
       setError(err instanceof Error ? err.message : '发起识别失败')
@@ -336,7 +336,7 @@ function PlatformDialog({
     setBusy(true)
     setError(null)
     try {
-      await activateCtf2Platform(id, { accessKey })
+      await activateKernelPlatform(id, { accessKey })
       showToast({ message: '已启用这个平台', tone: 'ok' })
       onDone()
     } catch (err) {
