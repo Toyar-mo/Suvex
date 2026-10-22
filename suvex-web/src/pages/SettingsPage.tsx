@@ -38,7 +38,7 @@ const SECTIONS = [
   { id: 'sandbox', label: '沙箱' },
   // ★ CTF2 紧挨沙箱：两者都在回答"解题跑起来是什么样"，
   //   而它与沙箱共享同一个并发上限（见后端 ctf2/scheduler 的说明）。
-  { id: 'ctf2', label: 'CTF2' },
+  { id: 'kernel', label: 'Suvex 内核' },
   { id: 'platform', label: '平台接入' },
   { id: 'notify', label: '通知' },
   { id: 'scan-retention', label: '扫描保留' },

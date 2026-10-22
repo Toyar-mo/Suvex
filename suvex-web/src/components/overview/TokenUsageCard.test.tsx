@@ -530,7 +530,7 @@ describe('TokenUsageCard：链接文案的诚实性', () => {
     await waitFor(() => expect(cardText()).toContain('最贵的 5 轮'))
 
     const link = screen.getByRole('link', { name: /去 CTF2/ })
-    expect(link.getAttribute('href')).toBe('/ctf2')
+    expect(link.getAttribute('href')).toBe('/kernel')
     expect(link.textContent).toContain('题解')
   })
 })

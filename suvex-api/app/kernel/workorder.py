@@ -63,7 +63,7 @@ MAX_WORKORDERS = 10
 MAX_ACTION_CHARS = 300
 
 #: `grade` 允许的取值。★ 只有两档 —— `ruled_out` 不产生处置动作。
-#: 见 `prompts/ctf2_ir.md` §六。
+#: 见 `prompts/kernel_ir.md` §六。
 ALLOWED_GRADES = ("confirmed", "needs_follow_up")
 
 #: 四个必填段。缺任何一段都降级为 `needs_follow_up` 并在工单里写明缺什么。
@@ -90,7 +90,7 @@ class WorkOrder:
     def approved_grade(self) -> str:
         """★ 缺段一律降级为 `needs_follow_up`。
 
-        见 `prompts/ctf2_ir.md` §六：四段缺任何一段都按 `needs_follow_up`
+        见 `prompts/kernel_ir.md` §六：四段缺任何一段都按 `needs_follow_up`
         处理。这里把它变成**代码**而不是只写在提示词里 —— 提示词是
         请求，这里是保证。
 

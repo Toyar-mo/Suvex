@@ -158,7 +158,7 @@ class SandboxConfig(Base):
     # 意外发现自己的 agent 变凶了。想用的人自己去打开。
     #
     # ⚠️ 它只扩大**手法覆盖面**，不放松任何判定纪律：
-    # `prompts/ctf2_system.md` 里「不越界访问」「禁止口令爆破与压力测试」
+    # `prompts/kernel_system.md` 里「不越界访问」「禁止口令爆破与压力测试」
     # 那几条照旧成立，手法块自己的开头也复述了一遍。
     enable_offensive_prompt: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False

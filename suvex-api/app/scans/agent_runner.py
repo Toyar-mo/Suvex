@@ -804,7 +804,7 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
     #
     # 分类固定 `pentest-evaluation`（前缀 `pentest-`）——这样
     # `build_system_prompt_by_spec` 会走 `is_pentest_category` 分支，
-    # 追加 `ctf2_pentest.md`，而不是 CTF 解题块。
+    # 追加 `kernel_pentest.md`，而不是 CTF 解题块。
     #
     # `offensive` 也打开：渗透评估要的不是"排除"手法，而是"用全手法
     # 打一遍再判"。手法块对 pentest 分类**照常生效**（它不是被排除的

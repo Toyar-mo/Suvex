@@ -433,7 +433,7 @@ export function KernelPage() {
   if (status === 'ready' && !account) {
     return (
       <>
-        <PageHeader navId="ctf2" />
+        <PageHeader navId="kernel" />
         <div className="px-gutter py-bay">
           <BindPrompt />
         </div>
@@ -443,7 +443,7 @@ export function KernelPage() {
 
   return (
     <>
-      <PageHeader navId="ctf2" />
+      <PageHeader navId="kernel" />
 
       <div className="px-gutter py-bay">
         {/* ── 账号状态条 ── */}

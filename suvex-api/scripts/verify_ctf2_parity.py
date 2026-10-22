@@ -364,9 +364,9 @@ def main() -> int:
     # ══════════════════════════════════════════════════════
     print("\n── 解题提示词 ──", flush=True)
 
-    prompt = PROJECT_ROOT / "prompts" / "ctf2_system.md"
+    prompt = PROJECT_ROOT / "prompts" / "kernel_system.md"
     text = read(prompt)
-    check(prompt.is_file(), "prompts/ctf2_system.md 存在", "" if text else str(prompt))
+    check(prompt.is_file(), "prompts/kernel_system.md 存在", "" if text else str(prompt))
     if text:
         for keyword in ("ACTION:", "FINAL:", "不越界", "不编造"):
             check(keyword in text, f"提示词含纪律条款：{keyword}")

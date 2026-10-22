@@ -105,13 +105,13 @@ export const NAV_ITEMS: NavItem[] = [
     inMobileTabBar: false,
   },
   {
-    id: 'ctf2',
-    path: '/ctf2',
-    label: 'CTF2 解题',
-    shortLabel: 'CTF2',
+    id: 'kernel',
+    path: '/kernel',
+    label: 'Suvex 内核',
+    shortLabel: '内核',
     icon: Flag,
     blurb: '从 ctf2.dasctf.com 拉取赛事与题目，在独立沙箱里由模型解题。',
-    // ★ 没有进移动端底栏：底栏只放最常用的那几个，而 CTF2 是
+    // ★ 没有进移动端底栏：底栏只放最常用的那几个，而解题内核是
     //   周期性使用的功能（比赛期间高频、平时不开）。它进「更多」面板。
     inMobileTabBar: false,
   },

@@ -256,8 +256,8 @@ export function KernelPanel() {
   if (!draft) {
     return (
       <SettingsPanel
-        id="ctf2"
-        title="CTF2 解题"
+        id="kernel"
+        title="Suvex 内核"
         description="对接 ctf2.dasctf.com，把题目交给沙箱里的模型去解。"
       >
         <p className="text-xs text-ink-muted">
@@ -271,8 +271,8 @@ export function KernelPanel() {
 
   return (
     <SettingsPanel
-      id="ctf2"
-      title="CTF2 解题"
+      id="kernel"
+      title="Suvex 内核"
       description="控制解题产出候选答案之后的提交行为。这些设置只影响 CTF2，不影响渗透扫描。"
     >
       {/* ── 提交策略 ── */}

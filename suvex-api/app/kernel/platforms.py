@@ -200,7 +200,7 @@ def create_building(db: Session, *, base_url: str) -> KernelPlatform:
     """
     base_url = assert_safe_base_url(base_url)
     row = KernelPlatform(
-        id=new_id("ctf2plat"),
+        id=new_id("knplat"),
         slug=_unique_slug(db, _slug_hint(base_url)),
         display_name="正在识别…",
         base_url=base_url,
@@ -435,7 +435,7 @@ def activate_platform(
         .first()
     )
     if account is None:
-        account = KernelAccount(id=new_id("ctf2acc"), status="active")
+        account = KernelAccount(id=new_id("knacc"), status="active")
         db.add(account)
 
     account.label = (label or "").strip() or account.label or platform.display_name

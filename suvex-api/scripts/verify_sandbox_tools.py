@@ -1719,7 +1719,7 @@ def main() -> int:
         if declared_gap:
             print(
                 "     1. 镜像里该有的 → 加到对应 Dockerfile 的 apt/pip 列表；\n"
-                "     2. 提示词里写错了/不该承诺的 → 改 prompts/ctf2_system.md，\n"
+                "     2. 提示词里写错了/不该承诺的 → 改 prompts/kernel_system.md，\n"
                 "        并同步 CATEGORY_REQUIREMENTS。"
             )
         if image_gap:

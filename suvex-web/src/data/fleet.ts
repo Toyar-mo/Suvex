@@ -115,7 +115,7 @@ export function useFleetStatus(): FleetStatus {
             budget: null,
             // §口径写进标签：这个数是 CTF2 解题的累计消耗，
             // 不是"整个平台的 LLM 花费"—— 后者目前没有独立记账
-            windowLabel: 'CTF2 解题累计',
+            windowLabel: '内核解题累计',
           }
         : null,
     }

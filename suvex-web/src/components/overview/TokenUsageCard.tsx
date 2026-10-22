@@ -216,7 +216,7 @@ export function TokenUsageCard({
           className="flex items-center gap-1.5 text-sm font-medium text-ink"
         >
           <Coins size={14} strokeWidth={1.75} className="text-ink-ghost" aria-hidden="true" />
-          LLM 消耗（CTF2 解题）
+          LLM 消耗（内核解题）
         </h2>
         {since && (
           /*
@@ -236,7 +236,7 @@ export function TokenUsageCard({
             而后者才是事实 —— 显示 0 会让用户以为解题没消耗。
         */
         <p className="mt-panel text-xs text-ink-faint">
-          还没有消耗记录。CTF2 解题跑完一轮之后，这里会显示 token 用量。
+          还没有消耗记录。内核解题跑完一轮之后，这里会显示 token 用量。
         </p>
       ) : (
         <>
@@ -669,7 +669,7 @@ function TurnRows({
                 （`save_writeup` 吞异常）。那种情况点开是一句诚实的
                 「这次解题没有生成题解，重新解一次会生成」—— 不是死路。
             */}
-            <Link to="/ctf2" className="text-accent-strong underline hover:text-accent">
+            <Link to="/kernel" className="text-accent-strong underline hover:text-accent">
               去 CTF2 看这道题的题解
             </Link>
           </p>

@@ -46,7 +46,7 @@ from app.arena.client import ArenaClient, ArenaError, Exercise  # noqa: E402
 from app.core.db import session_scope  # noqa: E402
 from app.kernel import runner as solver  # noqa: E402
 
-PROMPT = PROJECT_ROOT / "prompts" / "ctf2_system.md"
+PROMPT = PROJECT_ROOT / "prompts" / "kernel_system.md"
 ATTACH_DIR = PROJECT_ROOT / "_tmp" / "arena-attachments"
 
 

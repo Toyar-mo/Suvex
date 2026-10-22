@@ -48,7 +48,7 @@ from app.kernel.platform import RemoteChallenge
 
 logger = logging.getLogger("suvex.ctf2")
 
-#: 提示词。与 `ctf2_system.md` 放在一起 —— 都是"给模型看的东西"。
+#: 提示词。与 `kernel_system.md` 放在一起 —— 都是"给模型看的东西"。
 PROMPT_PATH = Path(__file__).resolve().parents[3] / "prompts" / "platform_spec.md"
 
 #: 一次对话调用。签名对齐 `runner.LlmGateway.chat`，但这一层不依赖它。

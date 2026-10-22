@@ -1939,7 +1939,7 @@ class LlmGateway:
 # 系统提示词
 # ══════════════════════════════════════════════════════════
 
-PROMPT_PATH = PROJECT_ROOT / "prompts" / "ctf2_system.md"
+PROMPT_PATH = PROJECT_ROOT / "prompts" / "kernel_system.md"
 
 #: 智能体安全评测块（v0.40）。**只在开关打开且本题属于 `agentsec-*` 时追加。**
 #:
@@ -1951,18 +1951,18 @@ PROMPT_PATH = PROJECT_ROOT / "prompts" / "ctf2_system.md"
 #:
 #: ## ★ 为什么是独立文件而不是拼在本模块的字符串常量里
 #:
-#: 与 `ctf2_system.md` 同一条理由：提示词是**要改的东西**，改它的人可能
+#: 与 `kernel_system.md` 同一条理由：提示词是**要改的东西**，改它的人可能
 #: 不写 Python。放进 `.md` 之后，措辞调整就是一次纯文本改动，
 #: 不需要碰代码、也不会误碰旁边的逻辑。
 #:
 #: ## ★ 为什么它是**追加**而不是另一份完整的系统提示词
 #:
-#: 因为 `ctf2_system.md` 里的纪律（不越界、不爆破、不编造、输出协议、
+#: 因为 `kernel_system.md` 里的纪律（不越界、不爆破、不编造、输出协议、
 #: 回合预算）**对智能体安全题一样适用** —— 那四类题更容易越界，不是更容易。
 #: 换成另一份提示词等于把那批纪律丢掉，而丢掉的恰好是最该在的时候。
 #:
 #: 所以注入方式是：原提示词**一个字不动**，块追加在**末尾**。
-PROMPT_AGENTSEC_PATH = PROJECT_ROOT / "prompts" / "ctf2_agentsec.md"
+PROMPT_AGENTSEC_PATH = PROJECT_ROOT / "prompts" / "kernel_agentsec.md"
 
 #: 应急响应 / 根因复盘块（v0.41）。**只在开关打开且本题属于 `ir-*` 时追加。**
 #:
@@ -1976,7 +1976,7 @@ PROMPT_AGENTSEC_PATH = PROJECT_ROOT / "prompts" / "ctf2_agentsec.md"
 #: 前缀（`agentsec-` / `ir-`），而 `category` 只有一个值。真出现了
 #: 两个前缀都匹配的取值，那意味着有人在分类名里拼了两段 ——
 #: 校验层（`validate_note_category`）会先拒掉，轮不到这里。
-PROMPT_IR_PATH = PROJECT_ROOT / "prompts" / "ctf2_ir.md"
+PROMPT_IR_PATH = PROJECT_ROOT / "prompts" / "kernel_ir.md"
 
 #: 渗透评估块（v0.47）。**只在开关打开且本题属于 `pentest-*` 时追加。**
 #:
@@ -1985,12 +1985,12 @@ PROMPT_IR_PATH = PROJECT_ROOT / "prompts" / "ctf2_ir.md"
 #:
 #: ## ★ 它与前两个块的区别：判据不同，输出字段也不同
 #:
-#: `ctf2_agentsec.md` 判"某个考察点成不成立"，`ctf2_ir.md` 判"入侵时间线"，
+#: `kernel_agentsec.md` 判"某个考察点成不成立"，`kernel_ir.md` 判"入侵时间线"，
 #: 而这一份判"我亲眼验证过哪些安全发现"。三者共用 `confirmed` /
 #: `ruled_out` / `needs_follow_up` 三档纪律，但**交付物形状不同**：
 #: 前两个走 `candidates`（flag 形态），这一份走 `findings`（结构化发现）。
 #: 所以 `SolveOutcome` 上多了一个 `findings` 字段（原样来自 `FINAL.findings`）。
-PROMPT_PENTEST_PATH = PROJECT_ROOT / "prompts" / "ctf2_pentest.md"
+PROMPT_PENTEST_PATH = PROJECT_ROOT / "prompts" / "kernel_pentest.md"
 
 #: 越权与注入手法块（v0.42）。**解题与渗透扫描共用同一份**，
 #: 所以路径常量不在这里定义 —— 见 `app/core/prompts.py` 的说明
@@ -1998,7 +1998,7 @@ PROMPT_PENTEST_PATH = PROJECT_ROOT / "prompts" / "ctf2_pentest.md"
 #:
 #: ## 与上面三个块的区别：它**不按分类**判
 #:
-#: `ctf2_agentsec.md` / `ctf2_ir.md` 是"某一类题该按另一套纪律做"，
+#: `kernel_agentsec.md` / `kernel_ir.md` 是"某一类题该按另一套纪律做"，
 #: 所以要先判分类。这一份是"同一件事做得更全"—— 打 Web 的手法是
 #: 打 Web 的手法，与这道题是 `web` 还是 `misc` 无关。所以它的门槛
 #: 只有开关本身，**外加一条排除**：`agentsec-*` 与 `ir-*` 那七类不吃它
@@ -2113,7 +2113,7 @@ def build_system_prompt(
 
     ## ★ 为什么是追加，不是替换
 
-    见 `PROMPT_AGENTSEC_PATH` 的说明：`ctf2_system.md` 里的纪律对这几类题
+    见 `PROMPT_AGENTSEC_PATH` 的说明：`kernel_system.md` 里的纪律对这几类题
     **一样适用**（它们更容易越界，不是更容易）。替换等于在最需要那批
     纪律的时候把它们丢掉。
 
@@ -2648,7 +2648,7 @@ class SolveSpec:
     #: ## ★ 与上面两个**不同构**：它在 `build_spec` 里**只读开关，不判分类**
     #:
     #: 上面两个算的是"开关开着 **且** 分类属于那一族"—— 因为
-    #: `ctf2_agentsec.md` / `ctf2_ir.md` 只对特定分类成立。
+    #: `kernel_agentsec.md` / `kernel_ir.md` 只对特定分类成立。
     #:
     #: 而手法块对**五个既有分类一律生效**（它的内容与题目叫什么无关），
     #: 只排除那两个场景包。那条排除判断需要 `category` 与两个开关三者
@@ -3431,7 +3431,7 @@ def _initial_prompt(spec: SolveSpec) -> str:
         # ★ 靶机怎么接，**平台是明确告诉我们的**（`access_type`），
         #   这里必须转达。
         #
-        # ⚠️ 不转达的后果：`ctf2_system.md` 里写着"沙箱默认无网络"，
+        # ⚠️ 不转达的后果：`kernel_system.md` 里写着"沙箱默认无网络"，
         #   于是模型对一台**裸 TCP** 靶机只会干试 `http_request`
         #   （而那个工具只讲 HTTP），然后在容器里连 `nc` 都不去试 ——
         #   一道本来能解的题被自己的提示词堵死。
@@ -4267,7 +4267,7 @@ async def solve_in_sandbox(
                 # ## 为什么要有这条
                 #
                 # 提示词里写了「连续 3 次尝试没有新信息就换方向」
-                # （`prompts/ctf2_system.md:149-158`），但代码里没有任何判据
+                # （`prompts/kernel_system.md:149-158`），但代码里没有任何判据
                 # （grep `新信息|consecutive|streak|same_output|stagnat` 零命中）——
                 # 完全靠模型自觉。这里把它接上执行。
                 #
@@ -4587,7 +4587,7 @@ async def submit_candidate(
     用会话（提交前后的落库），中间那段 await 完全不碰数据库 ——
     所以"用哪个会话"没有第二个答案，注入一个工厂只会多一层间接。
     """
-    submission_id = new_id("ctf2sub")
+    submission_id = new_id("knsub")
     with session_scope() as db:
         db.add(
             KernelSubmission(

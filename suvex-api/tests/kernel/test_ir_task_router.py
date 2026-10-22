@@ -121,7 +121,7 @@ def test_create_task_does_not_require_ctf2_account(ready_client: TestClient, db_
 
     body = _create(ready_client, title="没绑账号也能建")
 
-    assert body["challenge"]["id"].startswith("ctf2chal_")
+    assert body["challenge"]["id"].startswith("knchal_")
 
 
 def test_create_task_places_it_in_local_batch(ready_client: TestClient, db_session: Session) -> None:

@@ -363,7 +363,7 @@ def bind_account(db: Session, *, token: str, label: str = "") -> KernelAccount:
 
     account = get_account(db)
     if account is None:
-        account = KernelAccount(id=new_id("ctf2acc"), status="active")
+        account = KernelAccount(id=new_id("knacc"), status="active")
         db.add(account)
 
     account.label = (label or "").strip() or account.label or "CTF2 账号"
@@ -1124,7 +1124,7 @@ def _upsert_competition(
     """
     existing = _find_competition(db, account.id, remote_id, kind)
     competition = existing or KernelCompetition(
-        id=new_id("ctf2comp"),
+        id=new_id("kncomp"),
         account_id=account.id,
         remote_id=remote_id,
         kind=kind,
@@ -1227,7 +1227,7 @@ def _upsert_challenge(
     )
 
     challenge = existing or KernelChallenge(
-        id=new_id("ctf2chal"),
+        id=new_id("knchal"),
         competition_id=competition.id,
         remote_id=str(remote_id),
         status=KernelChallengeStatus.UNSOLVED.value,
@@ -1506,7 +1506,7 @@ async def start_environment_for(client: KernelClient, challenge_id: str) -> Star
     # ① 先落一行 `starting`：起环境可能要轮询几分钟，而这几分钟里
     #    用户必须能在界面上看到"正在起环境"—— 没有这行的话，
     #    他点了解题之后看到的是一片空白。
-    environment_id = new_id("ctf2env")
+    environment_id = new_id("knenv")
     with session_scope() as db:
         challenge = db.get(KernelChallenge, challenge_id)
         if challenge is not None:
@@ -1939,7 +1939,7 @@ def start_solve(
     challenge.last_error = None
 
     attempt = KernelSolveAttempt(
-        id=new_id("ctf2try"),
+        id=new_id("kntry"),
         challenge_id=challenge.id,
         mode=resolved_mode,
         max_turns=resolved_turns,
@@ -2283,7 +2283,7 @@ def learn_from_solve(db: Session, challenge: KernelChallenge, outcome) -> None: 
     if existing is None:
         db.add(
             KernelSolveNote(
-                id=new_id("ctf2note"),
+                id=new_id("knnote"),
                 challenge_id=challenge.id,
                 category=category,
                 solved=solved_effective,
@@ -2352,7 +2352,7 @@ def record_solve_usages(
 
     rows = [
         KernelSolveUsage(
-            id=new_id("ctf2use"),
+            id=new_id("knuse"),
             attempt_id=attempt_id,
             challenge_id=challenge_id,
             turn=turn,
@@ -2520,7 +2520,7 @@ def record_solve_telemetry(
         logger.warning("从 transcript 推工具种类失败：%s", challenge.id, exc_info=True)
 
     row = KernelSolveTelemetry(
-        id=new_id("ctf2tel"),
+        id=new_id("kntel"),
         challenge_id=challenge.id,
         attempt_id=attempt_id or None,
         # 冗余存当时的分类：见类 docstring（防止同步改分类让统计漂移）。
@@ -2659,7 +2659,7 @@ def save_writeup(
             )
             if existing is None:
                 row = KernelWriteup(
-                    id=new_id("ctf2wp"),
+                    id=new_id("knwp"),
                     challenge_id=challenge.id,
                     attempt_id=attempt_id,
                     markdown=markdown,
@@ -3147,7 +3147,7 @@ def ensure_local_batch(db: Session) -> KernelCompetition:
         return existing
 
     batch = KernelCompetition(
-        id=new_id("ctf2comp"),
+        id=new_id("kncomp"),
         # ★ NULL：本地批次不属于任何平台账号。这正是 v0.43 把这一列
         #   改成可空的原因 —— 见 `models.KernelCompetition.account_id`。
         account_id=None,
@@ -3197,7 +3197,7 @@ def create_local_review(
     batch = ensure_local_batch(db)
     category = _LOCAL_REVIEW_CATEGORY
     challenge = KernelChallenge(
-        id=new_id("ctf2chal"),
+        id=new_id("knchal"),
         competition_id=batch.id,
         # 本地任务没有远端 id。这里现造一个，是为了满足列上的 NOT NULL
         # 与"同一批次内唯一"（`uq_ctf2_challenges_competition_remote`）。

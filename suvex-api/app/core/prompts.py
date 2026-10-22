@@ -6,9 +6,9 @@
 
 | 文件 | 唯一的读者 |
 | ---- | ---------- |
-| `ctf2_system.md` | `app/kernel/runner.py` |
-| `ctf2_agentsec.md` | `app/kernel/runner.py` |
-| `ctf2_ir.md` | `app/kernel/runner.py` |
+| `kernel_system.md` | `app/kernel/runner.py` |
+| `kernel_agentsec.md` | `app/kernel/runner.py` |
+| `kernel_ir.md` | `app/kernel/runner.py` |
 | `platform_spec.md` | `app/kernel/adapters/builder.py` |
 
 所以它们的路径常量就写在各读者自己文件里，没必要集中。
@@ -42,10 +42,10 @@ PROMPTS_DIR = PROJECT_ROOT / "prompts"
 
 #: 越权与注入手法块（v0.42）。**解题与渗透扫描共用同一份。**
 #:
-#: ## ⚠️ 它不叫 `ctf2_*.md`，这不是笔误
+#: ## ⚠️ 它不叫 `kernel_*.md`，这不是笔误
 #:
-#: 同目录其它文件都带 `ctf2_` 前缀，因为它们只服务解题。这一份同时服务
-#: `app/scans/runner.py`，挂 `ctf2_` 前缀会让下一个人在扫描侧看到它时
+#: 同目录其它文件都带 `kernel_` 前缀，因为它们只服务内核的解题/复盘口径。这一份同时服务
+#: `app/scans/runner.py`，挂 `kernel_` 前缀会让下一个人在扫描侧看到它时
 #: 以为拿错了文件，进而"顺手"复制一份到 `scans/` 下 —— 那就正好制造出
 #: 两份会各自漂移的手法矩阵。
 OFFENSIVE_PLAYBOOK_PATH = PROMPTS_DIR / "offensive_playbook.md"
