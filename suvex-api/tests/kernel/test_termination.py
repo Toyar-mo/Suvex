@@ -468,3 +468,115 @@ def test_gate_receives_acting_ratio() -> None:
 
     src = inspect.getsource(multiagent.run_agent_loop)
     assert "acting_ratio=coord.acting_ratio(" in src
+
+
+# ══════════════════════════════════════════════════════════
+# 4. v0.77：粗粒度「同一个点」判定（学腾讯队的「已排除路径」）
+# ══════════════════════════════════════════════════════════
+
+
+class TestTargetShape:
+    """`target_shape` 把动作归约成"打的是哪个点"。
+
+    来自 2026 智能渗透黑客松第 7 名队伍的 ctf.md 硬约束：
+    > ✗ 禁止重复已在「已排除路径」中的命令/URL/payload（**换参数也算重复**）
+
+    我们原有的 `seen_calls` 要求"命令+输出逐字节相同"，太窄：
+    P2 实测 `/api/v1/scans` 被探 13 次、`/auth/login` 12 次，
+    每次换参数所以一次都没命中，模型在同一个点上耗尽 80 轮预算。
+    """
+
+    def test_id_segments_collapse(self) -> None:
+        """`/scans/1` 与 `/scans/999` 打的是同一个点 —— 这是"换参数也算重复"的核心。"""
+        from app.kernel.multiagent import target_shape
+
+        a = target_shape(
+            tool_name="http_request", command="", args={"method": "GET", "url": "http://h/api/v1/scans/1"}
+        )
+        b = target_shape(
+            tool_name="http_request", command="", args={"method": "GET", "url": "http://h/api/v1/scans/999"}
+        )
+        assert a == b
+        assert "{id}" in a
+
+    def test_different_paths_stay_different(self) -> None:
+        """不同路径不能被误并 —— 误判会阻止模型做该做的事。"""
+        from app.kernel.multiagent import target_shape
+
+        a = target_shape(
+            tool_name="http_request", command="", args={"url": "http://h/api/v1/scans"}
+        )
+        b = target_shape(
+            tool_name="http_request", command="", args={"url": "http://h/api/v1/findings"}
+        )
+        assert a != b
+
+    def test_method_is_part_of_the_shape(self) -> None:
+        """GET 与 POST 打同一个路径算不同的点（方法矩阵是有意义的尝试）。"""
+        from app.kernel.multiagent import target_shape
+
+        g = target_shape(
+            tool_name="http_request", command="", args={"method": "GET", "url": "http://h/api/v1/x"}
+        )
+        p = target_shape(
+            tool_name="http_request", command="", args={"method": "POST", "url": "http://h/api/v1/x"}
+        )
+        assert g != p
+
+    def test_shell_urls_share_shape_regardless_of_payload(self) -> None:
+        """`curl .../login -d a=1` 和 `-d a=2` 是同一个点（只是换了参数）。"""
+        from app.kernel.multiagent import target_shape
+
+        a = target_shape(
+            tool_name="run_shell", command="curl -s http://t/api/v1/auth/login -d user=a"
+        )
+        b = target_shape(
+            tool_name="run_shell", command="curl -s http://t/api/v1/auth/login -d user=b"
+        )
+        assert a == b
+        assert "/api/v1/auth/login" in a
+
+    def test_query_string_and_host_are_dropped(self) -> None:
+        from app.kernel.multiagent import target_shape
+
+        a = target_shape(
+            tool_name="run_shell", command="curl 'http://t/a/b?x=1&y=2'"
+        )
+        b = target_shape(tool_name="run_shell", command="curl http://other-host/a/b")
+        assert a == b
+
+    def test_local_analysis_has_no_shape(self) -> None:
+        """本地分析/端口扫描没有 URL → 返回空串，不参与"打点"统计。"""
+        from app.kernel.multiagent import target_shape
+
+        for cmd in (
+            "grep -r secret /tmp/x.js",
+            "python3 -c 'print(1)'",
+            "ls -la /work",
+            "nmap -p- 10.0.0.5",
+        ):
+            assert target_shape(tool_name="run_shell", command=cmd) == "", cmd
+
+    def test_bookkeeping_tools_have_no_shape(self) -> None:
+        from app.kernel.multiagent import target_shape
+
+        assert target_shape(tool_name="record_coverage", command="{}") == ""
+        assert target_shape(tool_name="write_note", command="{}") == ""
+
+    def test_warn_threshold_is_three(self) -> None:
+        """第二次打同一个点很可能是正常分支验证，第三次才提醒。"""
+        from app.kernel.multiagent import SHAPE_REPEAT_WARN_AT
+
+        assert SHAPE_REPEAT_WARN_AT == 3
+
+
+def test_shape_warning_is_wired_into_tool_loop() -> None:
+    """★ 接线断言：工具循环里必须真的调 `target_shape` 并用 `shape_hits` 计数。"""
+    import inspect
+
+    from app.kernel import multiagent
+
+    src = inspect.getsource(multiagent.run_agent_loop)
+    assert "target_shape(" in src
+    assert "shape_hits" in src
+    assert "SHAPE_REPEAT_WARN_AT" in src

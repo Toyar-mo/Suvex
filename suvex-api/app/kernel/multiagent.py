@@ -53,9 +53,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -181,6 +183,14 @@ THREAT_AMEND = "amend_threat_model"
 ACTION_WINDOW = 20
 ACTION_WINDOW_MIN_SAMPLES = 10
 
+#: ★ v0.77：同一个"打点形状"撞到第几次时提醒模型"换参数不算新尝试"。
+#:
+#: 3 而不是 2：第二次打同一个点很可能是正常的分支验证（先探 401，再试
+#: 未带凭据）；到第三次基本可以确认是在原地换参数。
+#: 提醒**只发一次**（`==` 而不是 `>=`）：反复提醒会挤占上下文，而模型的
+#: 行为已经被那句提醒影响过一次了，再刷只会让它分心。
+SHAPE_REPEAT_WARN_AT = 3
+
 #: 一次 `run_shell` 里出现这些词，算"真的向目标发了请求"。
 #:
 #: 用**动作词**而不是"是否包含 http"：`grep -oE 'http[A-Za-z]*' bundle.js`
@@ -230,6 +240,91 @@ def _looks_like_acting(*, tool_name: str, command: str) -> bool:
         return False
     low = command.lower()
     return any(tok in low for tok in _ACTING_TOKENS)
+
+#: ★ v0.77：把一次请求抽象成"打的是哪个点"，用于判定"换参数算不算重复"。
+#:
+#: ## 为什么需要它（学自腾讯"持续攻击模式"队的 ctf.md「已排除路径」）
+#:
+#: 那支队伍（2026 智能渗透黑客松第 7 名）在 ctf.md 里维护一个
+#: 「已排除路径（禁止重复）」清单，硬约束写得极狠：
+#:
+#: > ✗ 禁止重复已在「已排除路径」中的命令/URL/payload（**换参数也算重复**）
+#: > ✗ 禁止重复已在 session 日志中跑过的命令
+#: > ✗ 禁止反复验证已确认的事实
+#:
+#: 我们的项目**已有**的重复检测（`seen_calls`）只认"命令 + 输出逐字节相同"
+#: —— 那太窄了。P2 那轮实证：`/api/v1/scans` 被探 **13 次**、
+#: `/api/v1/auth/login` **12 次**、`/api/v1/auth/state` **9 次**，
+#: 每次参数都略有不同（换 payload、换 header、换方法），
+#: 所以 `seen_calls` 一次都没命中，模型在同一个点上原地耗尽 80 轮。
+#:
+#: 这里要做的是**粗粒度**的"同一个点"判定：抽掉参数值、留下动作形状。
+#: 它判的不是"完全一样"，而是"只是换了参数"——正好补上那个缺口。
+def target_shape(*, tool_name: str, command: str, args: dict[str, Any] | None = None) -> str:
+    """把一次动作归约成"打的是哪个点"的形状串。
+
+    返回空串 = 判不出（调用方跳过这条，不参与重复统计）——
+    宁可漏判也不要错判：把两个不同的点误判成同一个，会阻止模型做该做的事。
+
+    ## 归约规则
+
+    - `http_request`：`method + 路径模板`（路径里的数字段归一成 `{id}`）
+    - `run_shell` 里有 URL 的：所有 URL 的**路径部分**去参数、去 query
+    - `run_shell` 里没有 URL 的：不对应"打点"，返回空串
+      （本地分析类动作由 `_looks_like_acting` 那套管，不该混进这里）
+
+    ## 刻意不做的事
+
+    不归一化 payload、不归一化 header、不猜 `-d` 里的语义。
+    判据只到"同一个路径被反复打"这一层 —— 再细就要解析命令行语义，
+    复杂度和误判率都会上去，而收益（多提醒一句"换条路"）并不值得。
+    """
+    if tool_name == "http_request":
+        a = args or {}
+        method = str(a.get("method") or "GET").upper()
+        url = str(a.get("url") or "")
+        path = _url_path(url)
+        return f"http_request {method} {_normalize_path(path)}" if path else ""
+
+    if tool_name != "run_shell":
+        return ""
+
+    # `run_shell`：抽出命令里所有 URL 的路径，按出现顺序去重。
+    paths: list[str] = []
+    for m in _URL_IN_COMMAND.finditer(command):
+        p = _normalize_path(_url_path(m.group(0)))
+        if p and p not in paths:
+            paths.append(p)
+    if not paths:
+        return ""
+    return "run_shell " + " ".join(sorted(paths))
+
+
+#: 命令里的 http(s) URL（到空白或引号为止）。
+_URL_IN_COMMAND = re.compile(r"https?://[^\s'\"`)]+", re.IGNORECASE)
+
+#: 路径里的纯数字段 → `{id}`。
+#:
+#: 这是"换参数也算重复"的关键一步：`/scans/1` 与 `/scans/2` 打的是同一个点。
+#: 只对**整段都是数字**的段生效 —— `/v1` 这种带字母的不动。
+_ID_SEGMENT = re.compile(r"/\d+(?=/|$)")
+
+
+def _url_path(url: str) -> str:
+    """从 URL 里取出路径部分（丢掉 scheme/host/query/fragment）。"""
+    try:
+        parsed = urlsplit(url.strip())
+    except ValueError:
+        return ""
+    return parsed.path or ""
+
+
+def _normalize_path(path: str) -> str:
+    """路径归一：数字段换成 `{id}`，去掉尾斜杠。"""
+    if not path or path == "/":
+        return "/"
+    cleaned = _ID_SEGMENT.sub("/{id}", path)
+    return cleaned.rstrip("/") or "/"
 
 #: ★ v0.75：Idea / Memory 二分（学 BreachWeave）。
 #:
@@ -1166,6 +1261,8 @@ async def run_agent_loop(
 
     outcome = SolveOutcome()
     seen_calls: dict[tuple[str, str, str], int] = {}
+    #: ★ v0.77：同一个"打点形状"被撞了几次（见 `target_shape`）。
+    shape_hits: dict[str, int] = {}
 
     for turn in range(1, max_turns + 1):
         if coord.stop_requested:
@@ -1343,6 +1440,26 @@ async def run_agent_loop(
                 )
             else:
                 seen_calls[call_key] = turn
+
+            # ★ v0.77：粗粒度"同一个点"判定（学腾讯队的「已排除路径」）。
+            #
+            # 上面那个 `seen_calls` 要求**命令 + 输出逐字节相同**，太窄：
+            # P2 那轮 `/api/v1/scans` 被探 13 次、`/auth/login` 12 次，
+            # 每次都换了参数，所以一次都没命中，模型在同一个点上耗尽预算。
+            # 这里只判"打的是不是同一个路径"（数字段归一成 {id}），
+            # 命中就明确告诉它"换参数不算新尝试"。
+            shape = target_shape(tool_name=tool_name, command=command, args=tool_args)
+            if shape:
+                shape_hits[shape] = shape_hits.get(shape, 0) + 1
+                if shape_hits[shape] == SHAPE_REPEAT_WARN_AT:
+                    n = shape_hits[shape]
+                    _tip = (
+                        f"⚠️ 这是第 {n} 次打 `{shape}` 这个点，前面每一次都换了参数 —— "
+                        "**换参数不算新尝试**。同一个点上再试也得不到新结论："
+                        "换一个路径、换一个身份、或者换一层（换个协议/入口）再看。"
+                    )
+                    repeated_note += _tip + chr(10) + chr(10)
+
 
             completed.append((tool_name, command, result[:3000], repeated_note))
             notify(

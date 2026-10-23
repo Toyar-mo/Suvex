@@ -250,3 +250,41 @@ class TestPromptTeachesEvidenceKind:
         ).read_text(encoding="utf-8")
         missing = [k for k in EVIDENCE_KIND_TO_LEVEL if k not in text]
         assert not missing, f"提示词里缺这些 evidence_kind 的说明：{missing}"
+
+
+class TestPromptTeachesExcludedPaths:
+    """★ 提示词必须教「已排除路径」—— 这是 P2 真实损失的机制。
+
+    来源：2026 智能渗透黑客松第 7 名队伍的 CLAUDE.md 硬约束：
+      > ✗ 禁止重复已在「已排除路径」中的命令/URL/payload（换参数也算重复）
+
+    我们的 P2 实测：`/api/v1/scans` 被探 13 次、`/auth/login` 12 次、
+    `/auth/state` 9 次 —— 每次换参数，打的是同一个点，80 轮耗尽。
+    提示词若不讲这条，`target_shape` 的自动提醒也只会被当成噪音。
+    """
+
+    def _text(self) -> str:
+        from pathlib import Path
+
+        return (
+            Path(__file__).resolve().parents[2] / "prompts" / "kernel_pentest.md"
+        ).read_text(encoding="utf-8")
+
+    def test_section_exists(self) -> None:
+        assert "已排除路径" in self._text()
+
+    def test_says_changing_params_is_not_new(self) -> None:
+        """核心那句必须在：换参数不算新尝试。"""
+        t = self._text()
+        assert "换参数" in t and "不算新" in t
+
+    def test_lists_four_redirection_directions(self) -> None:
+        """必须给出可执行的方向，不能只说"换个思路"。"""
+        t = self._text()
+        for kw in ("换身份", "换入口", "换一层", "换一个面"):
+            assert kw in t, f"缺方向：{kw}"
+
+    def test_tells_agent_to_record_exclusions(self) -> None:
+        """排除掉了要写下来，否则下一个 agent 会重走。"""
+        t = self._text()
+        assert "add_fact" in t or "record_coverage" in t
