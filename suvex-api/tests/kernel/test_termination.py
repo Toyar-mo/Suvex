@@ -580,3 +580,54 @@ def test_shape_warning_is_wired_into_tool_loop() -> None:
     assert "target_shape(" in src
     assert "shape_hits" in src
     assert "SHAPE_REPEAT_WARN_AT" in src
+
+
+class TestMissedReadFirst:
+    """★ 打转时**先自查漏读，再换思路**（学腾讯队的顺序）。
+
+    那支队伍的纪律原文：
+      > 优先自查"漏读"（同一思路跑 2+ 轮无果，先做这步，**不要换思路**）
+
+    为什么顺序不能反：直接换思路会把已经握在手里的线索丢掉重来，
+    而漏读的补救成本远低于重新侦察。
+    """
+
+    def _nudge(self) -> str:
+        return termination.decide(
+            termination.Observation(
+                coverage_count=0,
+                finding_count=0,
+                turns_used=60,
+                total_budget=120,
+                model_claims_done=True,
+                acting_ratio=0.3,
+            )
+        ).nudge
+
+    def test_self_check_appears_when_stalled(self) -> None:
+        assert "先自查漏读" in self._nudge()
+
+    def test_self_check_comes_before_switch_direction(self) -> None:
+        """顺序断言：漏读必须在"换方向"之前出现。"""
+        n = self._nudge()
+        assert n.index("先自查漏读") < n.index("再换方向")
+
+    def test_self_check_names_concrete_places(self) -> None:
+        """必须给出具体可查项，不能只说"再检查一下"。"""
+        n = self._nudge()
+        for kw in ("Set-Cookie", "robots.txt", "HTML 注释", "grep"):
+            assert kw in n, f"漏读清单缺：{kw}"
+
+    def test_no_self_check_when_not_stalled(self) -> None:
+        """没打转时不许冒出漏读清单 —— 那会让正常的深入变成"回头翻旧账"。"""
+        d = termination.decide(
+            termination.Observation(
+                coverage_count=1,
+                finding_count=0,
+                turns_used=20,
+                total_budget=120,
+                model_claims_done=True,
+                acting_ratio=0.8,
+            )
+        )
+        assert "先自查漏读" not in d.nudge
