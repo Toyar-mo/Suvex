@@ -216,3 +216,37 @@ class TestBuildObservations:
         )
         levels = evidence.summarize_levels(obs)
         assert levels == {"L0": 1, "L1": 1, "L2": 2}
+
+class TestPromptTeachesEvidenceKind:
+    """★ 提示词必须教 `evidence_kind` —— 否则 U3 判级永远拿不到输入。
+
+    2026-10-23 的 P2 重跑就是这种情况：`app/kernel/evidence.py` 判级表写好了、
+    测试全绿、接线也在 `_write_vulnerabilities` 里 —— 但**提示词一个字没提**
+    `evidence_kind`。模型交上来的 7 条观察全都没有这个字段，于是全部落到
+    `DEFAULT_LEVEL="L0"`，再被 `should_enter_findings` 挡在报告外，
+    `vulnerabilities.json` 最后是 `[]`。
+
+    这是 v0.72 `mcp_servers` 事故的同一种形状：**代码写好了，但没有告诉
+    使用方要用它**。纯函数测试抓不到这种失效，只能盯提示词文本本身。
+    """
+
+    def test_pentest_prompt_requires_evidence_kind(self) -> None:
+        from pathlib import Path
+
+        text = (
+            Path(__file__).resolve().parents[2] / "prompts" / "kernel_pentest.md"
+        ).read_text(encoding="utf-8")
+        assert "evidence_kind" in text, "提示词没提 evidence_kind，模型不会写这个字段"
+        assert "必填" in text or "必须" in text
+
+    def test_pentest_prompt_lists_every_kind(self) -> None:
+        """判级表里的每个取值都必须在提示词里出现 —— 漏一个就有一条路走不通。"""
+        from pathlib import Path
+
+        from app.kernel.evidence import EVIDENCE_KIND_TO_LEVEL
+
+        text = (
+            Path(__file__).resolve().parents[2] / "prompts" / "kernel_pentest.md"
+        ).read_text(encoding="utf-8")
+        missing = [k for k in EVIDENCE_KIND_TO_LEVEL if k not in text]
+        assert not missing, f"提示词里缺这些 evidence_kind 的说明：{missing}"
