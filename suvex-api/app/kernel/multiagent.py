@@ -564,26 +564,32 @@ class AgentCoordinator:
     #: 结构化发现直接登记进来，超时取消时由 `_timeout_outcome` 收割。
     #: 为 None = 未开启（CTF 解题路径），所有登记点都是 no-op。
     finding_sink: list[Any] | None = None
-    #: ★ v0.76：最近的动作类型滑窗（只留最近 `ACTION_WINDOW` 条）。
+    #: ★ v0.76：最近的动作类型滑窗，**按 agent 分开记**。
     #:
     #: 记的是"这一轮到底碰没碰目标"。`run_shell` 里可能是 `curl`（碰了目标），
     #: 也可能是 `grep 本地 bundle`（没碰）—— 分工在 `_looks_like_acting` 里。
-    #: 门需要这个来判断"是没干活还是干错了活"：2026-10-23 的 P2 真跑里
-    #: root 用 63 轮只探了 4 个端点，42% 的轮次在 grep/写脚本，收到
-    #: "覆盖 0/5"之后它继续打同一个点，直到 80 轮耗尽。
-    recent_actions: list[bool] = field(default_factory=list)
+    #:
+    #: ⚠️ **必须按 agent 分开。** 第一版是 coordinator 上的一条全局列表，
+    #: 2026-10-23 的 P2 重跑当场抓出问题：门只拦 root，却读全局比例；
+    #: 子 agent a1 把 98 个动作里的 68 个花在 `cd /work/assets && grep/python`
+    #: （该 agent 只有 19% 在打目标），把 root 自己的 47% 稀释走，
+    #: 于是门在 root 明明打转时仍判"没打转"——**判定对象与判定依据必须是
+    #: 同一个 agent**，否则这个信号没有意义。
+    recent_actions: dict[str, list[bool]] = field(default_factory=dict)
 
-    def note_action(self, *, acted: bool) -> None:
+    def note_action(self, *, acted: bool, agent_id: str = "root") -> None:
         """登记一条动作（`acted` = 这一轮是否真的向目标发了请求）。"""
-        self.recent_actions.append(bool(acted))
-        if len(self.recent_actions) > ACTION_WINDOW:
-            del self.recent_actions[: len(self.recent_actions) - ACTION_WINDOW]
+        buf = self.recent_actions.setdefault(agent_id, [])
+        buf.append(bool(acted))
+        if len(buf) > ACTION_WINDOW:
+            del buf[: len(buf) - ACTION_WINDOW]
 
-    def acting_ratio(self) -> float | None:
-        """最近滑窗里"真打目标"的比例。样本不足时返回 None（不参与判定）。"""
-        if len(self.recent_actions) < ACTION_WINDOW_MIN_SAMPLES:
+    def acting_ratio(self, agent_id: str = "root") -> float | None:
+        """该 agent 最近滑窗里"真打目标"的比例。样本不足时返回 None（不参与判定）。"""
+        buf = self.recent_actions.get(agent_id) or []
+        if len(buf) < ACTION_WINDOW_MIN_SAMPLES:
             return None
-        return sum(1 for x in self.recent_actions if x) / len(self.recent_actions)
+        return sum(1 for x in buf if x) / len(buf)
 
     _todo_seq: int = 0
     _id_seq: int = 0
@@ -1246,7 +1252,7 @@ async def run_agent_loop(
                             turns_used=coord.turns_used,
                             total_budget=coord.total_budget,
                             model_claims_done=True,
-                            acting_ratio=coord.acting_ratio(),
+                            acting_ratio=coord.acting_ratio(node.agent_id),
                         ),
                         min_coverage=(
                             termination.MIN_COVERAGE if _min_cov is None else int(_min_cov)
@@ -1299,7 +1305,8 @@ async def run_agent_loop(
             # ★ v0.76：登记这一轮有没有真的向目标发请求。门的"原地打转"
             #   判定靠这个滑窗（见 `_looks_like_acting` 的顺序说明）。
             coord.note_action(
-                acted=_looks_like_acting(tool_name=tool_name, command=command)
+                acted=_looks_like_acting(tool_name=tool_name, command=command),
+                agent_id=node.agent_id,
             )
 
             # 编排工具 vs 基础工具，分派到不同入口。

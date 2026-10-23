@@ -341,8 +341,44 @@ class TestCoordinatorActionWindow:
             coord.note_action(acted=True)
         for _ in range(ACTION_WINDOW):
             coord.note_action(acted=False)
-        assert len(coord.recent_actions) == ACTION_WINDOW
+        assert len(coord.recent_actions["root"]) == ACTION_WINDOW
         assert coord.acting_ratio() == 0.0
+
+    def test_windows_are_isolated_per_agent(self) -> None:
+        """★ 按 agent 隔离：门只拦 root，就不能被别的 agent 的动作稀释。
+
+        2026-10-23 的 P2 重跑抓到的真缺陷：第一版是全局一条列表，
+        子 agent a1 把 98 个动作里 68 个花在 cd /work/assets 的 grep/python 上
+        （19% 打目标），把 root 的 47% 稀释掉，门于是在 root 打转时判"没打转"。
+        """
+        from app.kernel.multiagent import AgentCoordinator
+
+        coord = AgentCoordinator()
+        # root 全在打目标
+        for _ in range(20):
+            coord.note_action(acted=True, agent_id="root")
+        # a1 全在本地分析
+        for _ in range(20):
+            coord.note_action(acted=False, agent_id="a1")
+
+        assert coord.acting_ratio("root") == 1.0
+        assert coord.acting_ratio("a1") == 0.0
+
+    def test_gate_judges_root_not_everyone(self) -> None:
+        """门取的是被判定那个 agent 的比例 —— a1 打转不该让 root 被判打转。"""
+        from app.kernel.multiagent import AgentCoordinator
+
+        coord = AgentCoordinator()
+        for _ in range(20):
+            coord.note_action(acted=True, agent_id="root")
+        for _ in range(20):
+            coord.note_action(acted=False, agent_id="a1")
+
+        root_obs = termination.Observation(
+            coverage_count=0, finding_count=0, turns_used=10, total_budget=120,
+            model_claims_done=True, acting_ratio=coord.acting_ratio("root"),
+        )
+        assert root_obs.stalled is False, "root 全在打目标，不该被判打转"
 
 
 class TestLooksLikeActing:
@@ -417,6 +453,8 @@ def test_note_action_is_wired_into_the_tool_loop() -> None:
     src = inspect.getsource(multiagent.run_agent_loop)
     assert "coord.note_action(" in src, "动作登记没接进工具循环，原地打转判定永远拿不到数据"
     assert "_looks_like_acting(" in src
+    # 必须按 agent 记：门只拦 root，被别的 agent 稀释就失去意义。
+    assert "agent_id=node.agent_id" in src
 
 
 def test_gate_receives_acting_ratio() -> None:
@@ -429,4 +467,4 @@ def test_gate_receives_acting_ratio() -> None:
     from app.kernel import multiagent
 
     src = inspect.getsource(multiagent.run_agent_loop)
-    assert "acting_ratio=coord.acting_ratio()" in src
+    assert "acting_ratio=coord.acting_ratio(" in src
