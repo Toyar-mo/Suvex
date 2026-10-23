@@ -242,6 +242,10 @@ def upsert_fact(
 
     at = now or now_utc()
     key = fields["fact_key"]
+    # ⚠️ target 在**写入口**归一（见 `normalize_target` docstring）：
+    # `load_inherited_facts` 只按归一形比字符串，两边都归一才会让
+    # 「本次扫描写进去的」和「下次扫描要继承的」落在同一个键上。
+    target_key = normalize_target(target)
     existing = db.execute(
         select(ScanFact).where(ScanFact.scan_id == scan_id, ScanFact.fact_key == key)
     ).scalar_one_or_none()
@@ -259,7 +263,7 @@ def upsert_fact(
             trust_level=fields["trust_level"],
             edges=fields["edges"],
             recorded_by=recorded_by,
-            target=target,
+            target=target_key,
             version=1,
             created_at=at,
             updated_at=at,
@@ -278,7 +282,7 @@ def upsert_fact(
     existing.trust_level = fields["trust_level"]
     existing.edges = fields["edges"]
     existing.recorded_by = recorded_by
-    existing.target = target or existing.target
+    existing.target = target_key or existing.target
     existing.version += 1
     existing.updated_at = at
     db.flush()
@@ -292,6 +296,46 @@ def load_facts(db: Session, scan_id: str) -> list[ScanFact]:
             select(ScanFact).where(ScanFact.scan_id == scan_id).order_by(ScanFact.fact_key)
         ).scalars()
     )
+
+
+def normalize_target(raw: str | None) -> str:
+    """把目标归一成一个**可比较的继承键**。
+
+    ## 为什么不能直接拿 `spec.target` 比字符串
+
+    同一个目标在两次扫描里几乎从来不是同一个字符串：
+    `http://172.17.0.1:8080`、`172.17.0.1:8080`、`HTTP://172.17.0.1:8080/`
+    是同一台靶机的三种写法。而在**第一次**接上继承功能时，库里一条数据
+    都没有 —— 如果这一步写错，表现不是报错，是"继承永远 0 条"，
+    看起来像功能没生效，实际是键没对上。这正是这个函数存在的唯一理由。
+
+    ## 规则（顺序不能换）
+
+    1. 去掉首尾空白、整体转小写（scheme / host 都大小写不敏感）
+    2. 去 scheme（`http://` / `https://`）
+    3. 去尾部路径 `/`（但保留 `:8080` 这种端口）
+    4. 去 URL 里的用户信息（`user:pass@host` —— 口令会变，不是目标的一部分）
+
+    ⚠️ **刻意不做的事**：
+    - 不去端口：`172.17.0.1:8080` 与 `172.17.0.1:8443` 是两个服务面，
+      继承会让人跳过该测的那个端口 —— 这与"endpoint 类不继承"同一条理由。
+    - 不解析 IPv6 / 不做 DNS：扫描目标是用户填的字符串，解析失败时
+      "少继承"是可接受的失败方向，"错继承"不是。
+    - 空目标返回空串 —— 调用方据此跳过继承（没有目标就没有"同一个目标"）。
+    """
+    key = (raw or "").strip().lower()
+    if not key:
+        return ""
+    for scheme in ("https://", "http://"):
+        if key.startswith(scheme):
+            key = key[len(scheme) :]
+            break
+    # 只切掉**最后**一层用户信息：`user:pass@host:8080` → `host:8080`
+    if "@" in key.rsplit(":", 1)[0]:
+        key = key[1 + key.index("@"):]
+    while key.endswith("/"):
+        key = key[:-1]
+    return key
 
 
 def load_inherited_facts(
@@ -308,11 +352,23 @@ def load_inherited_facts(
 
     而 `ruled-out`（试过不行）与 `constraint`（结构性限制，如只读挂载）
     恰恰相反：它们失效得慢，重复验证它们的成本却最高。
+
+    ## ⚠️ 两边都要归一化
+
+    写入口 `upsert_fact` 把 `target` 存成归一形，但**调用方传进来的**
+    （`solve_spec.target` = 用户在界面上填的那串）几乎从来不是归一形：
+    `http://172.17.0.1:8080` vs `172.17.0.1:8080` vs `HTTP://…/`。
+    如果这里按原样比字符串，继承会**永远收 0 条且不报错** —— 这一条是
+    实测抓到的（第一版只在写侧归一化，`seed_inherited` 一条都抄不到）。
     """
+    key = normalize_target(target)
+    if not key:
+        # 空目标不能当通配符：那会让"没填目标"的扫描继承全场所有事实。
+        return []
     stmt = (
         select(ScanFact)
         .where(
-            ScanFact.target == target,
+            ScanFact.target == key,
             ScanFact.category.in_(("ruled-out", "constraint")),
         )
         .order_by(ScanFact.updated_at.desc())

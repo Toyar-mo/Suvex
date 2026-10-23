@@ -465,6 +465,18 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
             solve_spec.fact_store = ScopedFactStore(
                 scan_id=_scan_id, target=getattr(spec, "target", "") or ""
             )
+            # ★ v0.80：**扫描开始前**继承同目标上次的结论（ruled-out /
+            # constraint 两类）。不接这一步，`recorded_by="inherited"` 的行
+            # 永远不会出现 —— 想验证的"跨扫描继承"就只能靠人眼看代码。
+            #
+            # ⚠️ 必须在建 SolveSpec **之后、起沙箱之前**：索引块是 root 每轮
+            #    system prompt 的一部分，晚一步就有若干轮的提示里没有旧结论。
+            #
+            # ⚠️ `seed()` 自己不抛（内部吞异常并记 warning）：继承是增强项，
+            #    "迁移没跑 / 库抖一下"不该让这次扫描起不来。
+            _inherited = solve_spec.fact_store.seed()
+            if _inherited:
+                logger.info("扫描 %s：继承了 %d 条同目标的历史事实", _scan_id, _inherited)
     except Exception:  # noqa: BLE001
         logger.exception("扫描 %s：构造 SolveSpec 失败", spec.scan_id)
         return EXIT_ERROR
@@ -1189,6 +1201,19 @@ def build_solve_spec_from_scan(
         # 纯函数（不碰库），所以值来自 `LaunchSpec.multi_agent`，由调用方
         # `_run_engine` 在建 spec 前从配置读出并写进 LaunchSpec。
         multi_agent=bool(getattr(spec, "multi_agent", False)),
+        # ★ v0.82：MCP 连接配置。
+        #
+        # ⚠️ 这是**补 v0.81 的接线缺口**，不是新增能力：在此之前扫描路径
+        # 从来不传这两个字段，于是 `SolveSpec.mcp_servers` 恒为 `()` ——
+        # 而 `kernel_pentest.md` 整段在教模型用 `recon_scan` / `run_poc`。
+        # 提示词承诺了代码没接上的能力，这是本项目反复出现的失效形状
+        # （见 `settings/models.py` 里 `mcp_servers` 那段说明）。
+        #
+        # 值为空元组时行为与 v0.81 之前**逐字节相同**（那三个工具会说
+        # "没有配置任何 MCP 连接"）。
+        mcp_servers=tuple(getattr(spec, "mcp_servers", ()) or ()),
+        # ★ v0.82：被关掉的内置工具。同样空元组 = 一件都没关。
+        disabled_tools=tuple(getattr(spec, "disabled_tools", ()) or ()),
         # ★ v0.73：活收集器（None = 不收集，行为与旧版一致）。
         finding_sink=finding_sink,
     )

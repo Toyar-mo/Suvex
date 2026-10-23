@@ -870,6 +870,41 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         logger.warning("读多智能体开关失败，本次扫描走单循环", exc_info=True)
         multi_agent_on = False
 
+    # ★ v0.82：MCP 连接与被关掉的内置工具。与上面那段同一条纪律 ——
+    #   引擎侧跑在独立线程、不碰库，只能读这里写进 LaunchSpec 的快照。
+    #
+    # ## 为什么这段是"补缺口"而不是"加功能"
+    #
+    #   v0.81 把 MCP 连接做成了可管理清单，但**只有 CTF 解题那条路读它**。
+    #   渗透扫描（主线）从来没把 `mcp_servers` 送到 `SolveSpec`，于是
+    #   `kernel_pentest.md` 里"有 recon_scan 就用它"的整段指导落空：
+    #   模型调了只会收到"没有配置任何 MCP 连接"。
+    #
+    # ## 为什么读配置失败时**用空值**而不是沿用环境变量
+    #
+    #   与 `multi_agent_on` 不同：那个字段没配过时本就是 False，所以
+    #   "读失败 → False"是正确的降级。而这两个字段读失败时，正确的
+    #   降级是"按没配 / 没关处理"——也就是引入它们之前的行为
+    #   （没有 MCP、工具全开）。给一个猜测值会让一次配置故障变成
+    #   行为突变，而那种突变在日志里看不出来。
+    try:
+        from app.kernel import mcp as mcp_mod
+        from app.kernel.service import get_ctf2_config
+        from app.kernel.tools import normalize_disabled
+
+        kernel_row = get_ctf2_config(db)
+        mcp_server_cfgs = tuple(
+            mcp_mod.parse_server_configs(getattr(kernel_row, "mcp_servers", None))
+        )
+        disabled_tool_names = normalize_disabled(getattr(kernel_row, "disabled_tools", None))
+    except Exception:  # noqa: BLE001 - 读配置失败不该拦住启动扫描
+        logger.warning(
+            "读 MCP 连接/工具开关失败，本次扫描按「没有 MCP、工具全开」处理",
+            exc_info=True,
+        )
+        mcp_server_cfgs = ()
+        disabled_tool_names = ()
+
     # ★ 续跑判定（任务 16）：**同一个扫描记录再次启动**就是续跑。
     #
     # 判据只看"有没有 `run_id` + strix 的状态文件还在不在"，这是**无歧义**的：
@@ -982,6 +1017,11 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         # ★ v0.58：多智能体编排开关（见上面读取处）。只对自研引擎（agent
         #   后端）有意义；strix 后端不读这个字段。
         multi_agent=multi_agent_on,
+        # ★ v0.82：MCP 连接配置（见上面读取处）。空元组 = 没配，
+        #   三个 MCP 工具会如实说"没有可用的连接"（= v0.81 之前的行为）。
+        mcp_servers=mcp_server_cfgs,
+        # ★ v0.82：被关掉的内置工具（空元组 = 一件都没关）。
+        disabled_tools=disabled_tool_names,
         # 续跑（任务 16）。非空时 `command()` 会改传 `--resume` 而不传
         # `--target` —— 两者互斥，见 runner 的说明。
         resume_run_id=resume_run_id,

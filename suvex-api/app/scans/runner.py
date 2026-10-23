@@ -982,6 +982,36 @@ class LaunchSpec:
     # 由人显式打开（成本按子 agent 数量放大，见 KernelConfig 的说明）。
     multi_agent: bool = False
 
+    # ★ v0.82：可用的 MCP server 配置（学 strix 的 list_mcps 三件套）。
+    #
+    # ## 为什么要加这个字段（v0.81 的一个真实缺口）
+    #
+    # 这个字段在 **v0.81 之前根本不存在**，于是渗透扫描 —— 我们的**主线**
+    # —— 从来拿不到 MCP 配置：`KernelConfig.mcp_servers` 只被 CTF 侧
+    # 的 `build_spec` 读过，`agent_runner.build_solve_spec_from_scan`
+    # 不传 `mcp_servers`，`SolveSpec` 于是恒为 `()`。
+    #
+    # 后果不是"报错"，而是**提示词承诺了代码没接上的能力**：
+    # `kernel_pentest.md` 里整段写着"有 `recon_scan` / `run_poc` 就用它们，
+    # 这是唯一能跑 POC 模板的途径"，而扫描时模型调它只会收到
+    # "这次运行没有配置任何 MCP 连接"。模型据此退回 curl + 手搓，
+    # 而那正是我们想消灭的行为。
+    #
+    # 所以这条是**修补 v0.81 的接线缺口**，不是新增能力。
+    #
+    # ## 为什么是 `tuple` 且默认空
+    #
+    # 空元组 = 没配 = 与 v0.81 之前的行为**逐字节相同**（那三个 MCP 工具
+    # 会如实说"没有配置"）。默认值选择与 `multi_agent` 同一条纪律。
+    mcp_servers: tuple = ()
+
+    # ★ v0.82：被关掉的内置工具名（见 `SolveSpec.disabled_tools`）。
+    #
+    # 与上面那个不同：这里**直接透传**给引擎，不做第二次解析 ——
+    # 解析（剔除未知名字）在 `scans.service` 读配置时做一次就够，
+    # 两处各解析一次只会让"某个名字到底有没有被剔掉"多一个来源。
+    disabled_tools: tuple[str, ...] = ()
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据，也不含 `brief`**。
 

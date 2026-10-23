@@ -559,6 +559,32 @@ class AuditAction(StrEnum):
     CTF2_SOLVE_CANCEL = "ctf2.solve_cancel"
     CTF2_SUBMIT = "ctf2.submit"
     CTF2_SETTINGS_UPDATE = "ctf2.settings_update"
+    # ── MCP 连接与工具开关（v0.81）────────────────────────
+    #
+    # ★ 为什么要单独一条，而不是并进 `CTF2_SETTINGS_UPDATE`：
+    #
+    #   两者改的**后果不同维**。`settings_update` 改的是"解题怎么跑"
+    #   （提交策略、并发、回合预算）—— 最坏是跑得别扭。而配一条 MCP 连接
+    #   等于**允许智能体拉起任意子进程并与之通信**：command 是部署者填的
+    #   可执行文件路径，env 里可能带着凭据。它扩大的是**攻击面**，
+    #   不是调整了某个参数。
+    #
+    #   事后复盘要回答的问题也不同：
+    #     · settings_update → "谁把提交策略改成了 auto"（一次点击改变后果边界）
+    #     · mcp_servers_update → "这个 agent 当时为什么能调到 X"（谁把 X 接进来的、
+    #       用的哪个 command）
+    #
+    # ⚠️ 记 detail 时**只放 name / command / args / hasEnv / allowedTools**。
+    #    `env` 可能含 token，一律不进审计 —— 与 `ACCOUNT_BIND` 只记账号标签
+    #    是同一条纪律（`record()` 还会再过一次 `redact`，但那是最后一道）。
+    KERNEL_MCP_SERVERS_UPDATE = "kernel.mcp_servers_update"
+    #: 改内置工具的启用开关（v0.82）。
+    #:
+    #: ★ 它必须留痕，因为关掉一个工具会**静默改变智能体的能力边界**：
+    #:   关掉 `run_shell` 之后，一次扫描的产出会明显变差，而失败现场
+    #:   （模型不会用某个工具了）看起来像模型变笨，不像配置被改过。
+    #:   所以"谁在什么时候把哪个工具关掉了"必须是能回答的问题。
+    KERNEL_TOOLS_UPDATE = "kernel.tools_update"
     # ── 应急响应（v0.43）──────────────────────────────────
     #: 建一个本地复盘任务。
     #:
@@ -627,6 +653,14 @@ AUDIT_ACTION_LABELS: Final[dict[str, str]] = {
     AuditAction.CTF2_SOLVE_CANCEL: "取消 CTF2 解题",
     AuditAction.CTF2_SUBMIT: "提交 CTF2 flag",
     AuditAction.CTF2_SETTINGS_UPDATE: "更新 CTF2 配置",
+    # ── MCP 连接与工具开关（v0.81）────────────────────────
+    #
+    # ⚠️ 措辞与「更新 CTF2 配置」刻意区分开：这一条改的是
+    #    **智能体能拉起哪些外部进程**，不是解题参数。复盘时这两件事
+    #    在列表页必须一眼能分开 —— 混成同一句就只能在 detail 里辨，
+    #    而 detail 不会显示在列表上。
+    AuditAction.KERNEL_MCP_SERVERS_UPDATE: "更新 MCP 连接",
+    AuditAction.KERNEL_TOOLS_UPDATE: "更新工具启用开关",
     AuditAction.IR_TASK_CREATE: "发起应急响应复盘",
     AuditAction.CTF2_PLATFORM_DRAFT: "发起平台自动识别",
     AuditAction.CTF2_PLATFORM_ACTIVATE: "启用一个平台",

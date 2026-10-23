@@ -176,6 +176,18 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # 它显然是 `read`：只读地取一次已完成的夺旗扫描的题解，
         # 不改任何状态。（它读的东西本来就是 `GET /scans/{id}` 的产物。）
         ("GET", "/api/v1/scans/{scanId}/writeup"),
+        # ── 工具启用开关：读（v0.82）──────────────────────
+        #
+        # ★ 为什么是 **read** 而不是 admin：它回的是"哪些工具可用 + 当前
+        #   开关值"这份静态清单。不含凭据、不打外部接口、不改安全策略。
+        #
+        # ⚠️ 与 `GET /kernel/settings`（admin）刻意不同级：后者回的是
+        #   `submitMode` —— 那个值决定"机器会不会在无人确认下对外提交"，
+        #   属于安全策略。而"哪个工具被关掉了"只是能力清单，看见它
+        #   不构成任何后果。**判据是"看见这个值有没有后果"，不是"是不是
+        #   内核配置"** —— 否则会把一堆只读清单都拔高到 admin，
+        #   而拔高 admin 的副作用是只读账号连页面都打不开。
+        ("GET", "/api/v1/kernel/tools"),
     }
 )
 
@@ -371,6 +383,31 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/kernel/platforms/{platformId}/activate"): "admin",
     ("POST", "/api/v1/kernel/platforms/use-builtin"): "admin",
     ("DELETE", "/api/v1/kernel/platforms/{platformId}"): "admin",
+    # ── v0.81 MCP 连接 ────────────────────────────────
+    #
+    # ★ 三条全部 **admin**，判据不是"read 够不够看一眼"，而是
+    #   "这个动作能不能改变智能体的对外能力边界"：
+    #
+    #   · `PUT` 写的是 `command` —— 一个**会被 exec 的可执行文件路径**，
+    #     外加可能含 token 的 `env`。能改它的人就能让智能体拉起任意进程。
+    #     这与 `POST /providers`（写凭据）同级，不能给 scan 级。
+    #   · `POST /test` 不写库，但它**真的 exec 一次**用户给的 command
+    #     并握手。给 read 级的话，一个只读令牌就能拿服务端当任意命令的
+    #     执行器用（`command` 由请求体决定）—— 那是一条 RCE 通道，
+    #     不是"读一下配置"。这条最容易看错成只读，因为它叫 test。
+    #   · `GET` 只读，但它回的是"智能体能拉起哪些外部进程"的完整清单
+    #     （含 command 与 args）。这与 `GET /kernel/settings` 同级
+    #     ——后者回的是提交策略，同样 admin。
+    #
+    # ⚠️ 同一判据在 `tests/kernel/test_router_auth_matrix.py` 里也有一份。
+    ("GET", "/api/v1/kernel/mcp-servers"): "admin",
+    ("PUT", "/api/v1/kernel/mcp-servers"): "admin",
+    ("POST", "/api/v1/kernel/mcp-servers/test"): "admin",
+    # ── v0.82 工具启用开关：写 ───────────────────────────
+    # 改的是智能体**能力边界**。关掉 `run_shell` 会让之后每一次任务的
+    # 产出都明显变差，而现场看起来像"模型变笨了"而不是"配置被改过"。
+    # 与 `PUT /kernel/settings`（改提交策略）同类 —— 一次点击改变系统行为。
+    ("PUT", "/api/v1/kernel/tools"): "admin",
 }
 
 # 高风险操作单独点名（任务 8 要求 1 的原话）。

@@ -74,6 +74,12 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #    不含 flag、不含攻击载荷原文（`workorder.py` 只收四个
         #    文本字段，`detail_evidence`/`poc_code` 一概不碰）。
         ("GET", "/api/v1/kernel/challenges/{challengeId}/workorder"),
+        # ── 工具启用开关：读（v0.82）──────────────────────
+        #
+        # 静态清单 + 当前开关值：不含凭据、不打外部接口、不改安全策略。
+        # 判据是"看见这个值有没有后果"，不是"是不是内核配置" ——
+        # 否则只读账号连这个页面都打不开。
+        ("GET", "/api/v1/kernel/tools"),
     }
 )
 
@@ -149,6 +155,31 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     ("POST", "/api/v1/kernel/platforms/{platformId}/activate"): "admin",
     ("POST", "/api/v1/kernel/platforms/use-builtin"): "admin",
     ("DELETE", "/api/v1/kernel/platforms/{platformId}"): "admin",
+    # ── MCP 连接：**admin**（v0.81）─────────────────────
+    #
+    # ★ 判据：这几个端点改的是"**智能体能拉起哪些外部进程**"。
+    #   与「平台接入」同一类，但更强 —— 平台接入让服务端去打一个地址，
+    #   而这里让服务端 exec 一个**部署者/管理员填的可执行文件**并双向通信。
+    #
+    # ★★ 三个都 admin，尤其注意 `POST /test`：
+    #   它不写库，所以很容易被当成"只读的检查"而给 read 级。但它是
+    #   **真的 exec 一次请求体里的 command** —— 给 read 级等于给一个
+    #   只读令牌一条 RCE 通道（`command` 完全由请求体决定）。
+    #   名字里带 test 不代表它无害，"不写库"也不等于"没有后果"。
+    ("GET", "/api/v1/kernel/mcp-servers"): "admin",
+    ("PUT", "/api/v1/kernel/mcp-servers"): "admin",
+    ("POST", "/api/v1/kernel/mcp-servers/test"): "admin",
+    # ── 工具启用开关（v0.82）───────────────────────────
+    #
+    # ★ 读端点（`GET`）**不在这张表里** —— 它是 `read` 级，归上面的
+    #   `READ_ONLY`。`SCOPE_GATED` 的语义是"只读令牌必须 403"，
+    #   把一条 read 端点塞进来会让 `test_the_two_matrices_agree` 报红
+    #   （那份全站权威表把它放在 READ_ONLY）。
+    #
+    # 写：关掉 `run_shell` 会让之后每一次任务的产出都变差，而现场看起来
+    #     像"模型变笨"而不是"配置被改过"。一次点击改变系统能力边界
+    #     → 与 `PUT /kernel/settings` 同级，admin。
+    ("PUT", "/api/v1/kernel/tools"): "admin",
 }
 
 # 高风险操作单独点名。

@@ -735,6 +735,38 @@ class KernelConfig(Base):
     #: `McpServerConfig.public_dict` 去掉它；审计只记 name/command/args）。
     mcp_servers: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
 
+    #: ★ v0.82：被**显式关掉**的内置工具名清单（`["run_shell", ...]`）。
+    #:
+    #: ## 为什么存"关掉哪些"而不是"打开哪些"
+    #:
+    #: 缺省值是 `None`（= 一件都没关）。新增工具时它会**自动可用**，
+    #: 不需要有人记得来这个表里加一笔 —— 这是"能力增长默认生效"这一侧。
+    #: 反过来若存"打开哪些"，每次新增工具都会静默不可用，直到有人
+    #: 想起来去设置页勾上；而那个症状（新工具从不被调用）与"模型不会用
+    #: 新工具"完全一样，查起来极费劲。
+    #:
+    #: ## 为什么它不是"安全边界"
+    #:
+    #: ⚠️ 读这个字段的人容易误判它的用途。它**不**用来做防护隔离
+    #:    （真正的隔离在沙箱内、在 hostguard、在 URL 白名单），它回答的是
+    #:    「这一次任务我不想让模型用某几样东西」—— 比如出一份报告时关掉
+    #:    `run_shell` 以免它自己乱试。写错它的后果是**能力变差**，
+    #:    不是**越权**。所以关掉一个工具不构成安全事件，把它当安全边界
+    #:    反而会让人以为"开了就安全"。
+    #:
+    #: ## 为什么不放环境变量
+    #:
+    #: 同上面四项：它是行为开关，由人在界面上按任务调，不该由一个
+    #: 部署参数静默决定。
+    #:
+    #: ## ⚠️ `None` 与 `[]` 的语义差别（这一条最容易写错）
+    #:
+    #: 两者都表示"没有工具被关掉"，但**只有 `None` 是"从未被配置过"**。
+    #: 写入路径会把空清单存成 `None`（见 `kernel.service.save_tool_settings`），
+    #: 于是库里只有一种空表示 —— 与 `mcp_servers` 同一条纪律
+    #: （"同一种状态不要在库里有两个表示"）。
+    disabled_tools: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
+
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
     )

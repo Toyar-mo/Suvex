@@ -91,6 +91,9 @@ from app.kernel.schemas import (
     KernelSyncIn,
     KernelSyncOut,
     KernelTokenUsageOut,
+    KernelToolOut,
+    KernelToolsIn,
+    KernelToolsOut,
     KernelUsageByAttemptOut,
     KernelUsageByChallengeOut,
     KernelUsageByModelOut,
@@ -478,6 +481,10 @@ def replace_mcp_servers(
             "env": dict(item.env),
             "notes": item.notes,
             "allowed_tools": list(item.allowed_tools) if item.allowed_tools else None,
+            # ★ v0.82：前端编辑一条已有连接时**拿不到**它的 `env`（只进不出），
+            #    所以它用这个标记说"这次别动 env"。没有它，用户只改一下
+            #    notes 就会静默清掉凭据 —— 详见 `McpServerIn.preserveEnv`。
+            "preserve_env": bool(item.preserveEnv),
         }
         for item in payload.servers
     ]
@@ -534,6 +541,81 @@ async def test_mcp_server(
         }
     )
     return McpServerTestOut(**result)
+
+
+# ══════════════════════════════════════════════════════════
+# 内置工具清单与开关（v0.82）
+# ══════════════════════════════════════════════════════════
+#
+# ## 这两个端点补的是哪一处
+#
+# `runner.TOOL_NAMES` 的 13 个工具**从来没有过 HTTP 入口**：部署者既
+# 看不见智能体能调什么，也不能按任务收窄。而提示词里已经在教模型用
+# `recon_scan` / `run_poc` —— 界面上却一片空白。
+#
+# ## 鉴权为什么一读一写不同级
+#
+# `GET` 是 read：回的是静态清单 + 开关值，不含凭据、不涉安全策略。
+# `PUT` 是 admin：改的是**能力边界**（关掉 `run_shell` 会让之后每一次
+# 任务都变差，而现场看起来像"模型变笨"）。判据与 `PUT /kernel/settings`
+# 一致。两处分级都登记在 `tests/test_authorization_matrix.py`。
+
+
+def _tools_out(db: DbDep) -> KernelToolsOut:  # noqa: ARG001
+    """组装清单回执（内部只有这一个形状，避免两处各拼一次）。"""
+    payload = service.tools_catalog(db)
+    return KernelToolsOut(
+        tools=[KernelToolOut(**item) for item in payload["tools"]],
+        groups=list(payload["groups"]),
+        disabled=list(payload["disabled"]),
+        gogoReady=payload["gogo_ready"],
+        gogoReason=payload["gogo_reason"],
+    )
+
+
+@router.get(
+    "/tools",
+    response_model=KernelToolsOut,
+    summary="内置工具清单（含开关与 MCP 就绪判据）",
+)
+def list_kernel_tools(_identity: ReadDep, db: DbDep) -> KernelToolsOut:
+    """列全部内置工具，每个带 `enabled` 与 `ready` 两个**独立**状态。
+
+    ⚠️ 界面上这两个不能合成一个"可用/不可用"：
+      · `enabled=false` → 你去开关里打开它；
+      · `enabled=true` 但 `ready=false` → 你去 MCP 连接里配好它。
+    合成一个，用户就不知道该去哪修。
+    """
+    return _tools_out(db)
+
+
+@router.put(
+    "/tools",
+    response_model=KernelToolsOut,
+    summary="整份替换被关掉的内置工具清单",
+)
+def replace_kernel_tools(
+    payload: KernelToolsIn, request: Request, identity: AdminDep, db: DbDep
+) -> KernelToolsOut:
+    """保存"关掉哪些工具"（**全量替换**，空列表 = 全开）。
+
+    ★ 留痕：关掉一个工具会静默改变智能体的能力边界，而失败现场
+    （模型突然不会用某个工具了）看起来像模型变笨，不像配置被改过。
+    所以"谁在什么时候关了哪个"必须是能回答的问题。
+    """
+    unknown_before = service.get_disabled_tools(db)
+    saved = service.save_disabled_tools(db, list(payload.disabled))
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_TOOLS_UPDATE,
+        summary=f"更新工具开关（关掉 {len(saved['disabled'])} 个）",
+        detail={
+            "disabledBefore": list(unknown_before),
+            "disabledAfter": list(saved["disabled"]),
+        },
+    )
+    return _tools_out(db)
 
 
 # ══════════════════════════════════════════════════════════

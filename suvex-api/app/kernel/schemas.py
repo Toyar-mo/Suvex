@@ -305,6 +305,22 @@ class McpServerIn(StrictModel):
     args: list[str] = Field(default_factory=list, max_length=64)
     #: 追加进子进程的环境变量。**不回显**。
     env: dict[str, str] = Field(default_factory=dict)
+    #: ★ 保留已保存的 `env`，忽略本次提交的 `env` 字段（v0.82）。
+    #:
+    #: ## 为什么必须有这个开关（否则编辑一次就会丢凭据）
+    #:
+    #: `env` 是**只进不出**的（见 `McpServerOut` 没有该字段）。于是前端
+    #: 打开"编辑"时**拿不到原值**，输入框只能留空。而 `PUT /kernel/mcp-servers`
+    #: 是全量替换语义 —— 前端把空 `env` 提交上来，后端就真的把凭据清掉了。
+    #:
+    #: 那个失效形状正是本项目最忌讳的一类：**用户只改了一下 notes，
+    #: 保存成功、界面正常，而凭据已经没了**。而它要等到下一次真的调用
+    #: 那条连接时才会暴露（认证失败），届时没人会想到是三天前那次编辑。
+    #:
+    #: 所以给前端一个明确的"我这次不碰 env"的表示法，而不是让它
+    #: 在"清空"和"保留"之间靠猜。命名用 `preserveEnv` 而不是
+    #: `envUnchanged`：前者说的是后端要做什么，后者说的是一个模糊的状态。
+    preserveEnv: bool = False
     #: 用途说明（进 `list_mcps` 的描述位，帮模型判断该不该用）。
     notes: str = Field(default="", max_length=500)
     #: 白名单：只允许调这些工具名（`None` = 全放）。
@@ -312,15 +328,32 @@ class McpServerIn(StrictModel):
 
 
 class McpServerOut(CamelModel):
-    """已保存的一条 MCP 连接（**不含 `env`**）。"""
+    """已保存的一条 MCP 连接（**不含 `env`**）。
+
+    ## ⚠️ camelCase 字段名是**手写**的，这不是多余劳动
+
+    `CamelModel` 的 `alias_generator` 只给了 `validation_alias`
+    （入方向：允许用 snake_case 构造），**没有** `serialization_alias`
+    —— 所以字段名写成 `allowed_tools` 时，JSON 里就是 `allowed_tools`。
+
+    而本项目的契约（`docs/api-contract.md`）与全部既有出入参都是
+    camelCase（`submitMode` / `hasEnv`…）。v0.81 这里写成了 snake_case，
+    于是 `GET /kernel/mcp-servers` 回的键与契约**对不上**：前端按
+    `allowedTools` 读会拿到 `undefined`，而 `undefined` 在界面上表现为
+    "白名单是空的"——一个看起来完全正常、实际读错了字段的状态。
+
+    ⚠️ 与 `KernelSettingsOut` 里那些**本来就是 camelCase 的字段名**
+    （`submitMode` 等）做法一致：手写 camelCase 名字，靠对账测试钉住。
+    """
 
     name: str
     command: str
     args: list[str] = []
     notes: str = ""
-    allowed_tools: list[str] | None = None
+    #: 白名单：只允许调这些工具名（`None` = 全放）。
+    allowedTools: list[str] | None = None
     #: 是否配了 `env` —— 只说"有没有"，不说是**什么**。
-    has_env: bool = False
+    hasEnv: bool = False
 
 
 class McpServersIn(StrictModel):
@@ -346,9 +379,11 @@ class McpServersOut(CamelModel):
 
     servers: list[McpServerOut] = []
     #: gogo 的三个一等工具是否真的可用（三条前置检查全过）。
-    gogo_ready: bool = False
+    #:
+    #: ⚠️ camelCase 手写，理由见 `McpServerOut` 的说明。
+    gogoReady: bool = False
     #: 不可用时的原因（中文，可直接展示在界面上）。
-    gogo_reason: str = ""
+    gogoReason: str = ""
 
 
 class McpServerTestIn(StrictModel):
@@ -375,10 +410,96 @@ class McpServerTestOut(CamelModel):
     #: server 报上来的工具名清单（成功时才有）。
     tools: list[str] = []
     #: server 自报的名字与版本（成功时才有）。
-    server_name: str = ""
-    server_version: str = ""
+    #:
+    #: ⚠️ camelCase 手写，理由见 `McpServerOut` 的说明 —— 这一组三个类
+    #: 在 v0.81 都写成了 snake_case，与契约对不上（前端读 `serverName`
+    #: 会拿到 `undefined`，界面显示"未知"而实际是读错了键）。
+    serverName: str = ""
+    serverVersion: str = ""
     #: 握手耗时（毫秒）。用来回答"这个 server 是慢还是挂了"。
-    elapsed_ms: int = 0
+    elapsedMs: int = 0
+
+
+# ══════════════════════════════════════════════════════════
+# 内置工具清单与开关（v0.82）
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么这一组与 MCP 那一组分开
+#
+# MCP 连接是**用户添加的外部服务**（可以任意多条、带凭据、要试连）；
+# 内置工具是**代码里固定的 13 个**（不可增删、无凭据、只需要开关）。
+# 两者的 CRUD 语义完全不同，混成一个端点会让请求体里出现
+# "一半字段对另一半不适用"的形状 —— 那种接口最终的归宿是
+# 一大串 `if kind == ...`。
+#
+# ## 为什么 `enabled` 与 `disabled` 两个方向都要
+#
+# 只给 `disabled` 会让前端必须自己算差集才能渲染一个开关列表，而
+# 差集算法是"前端猜后端"的经典入口（后端加一个工具，前端不显示它，
+# 而界面上看不出少了什么）。所以回执里把**每一个工具的当前状态**
+# 直接给出，前端不需要做集合运算。
+
+
+class KernelToolOut(CamelModel):
+    """一个内置工具在界面上的完整样子。
+
+    ⚠️ `name` 是**标识符**，界面要用等宽字体原样显示 —— 模型在
+    `ACTION: {"tool": "<name>"}` 里写的就是它，所以它不能被翻译。
+    `label` 才是给人看的中文名。
+    """
+
+    name: str
+    label: str
+    group: str
+    summary: str
+    params: str = ""
+    #: 当前是否启用（= 不在 disabled_tools 里）。
+    enabled: bool = True
+    #: 关掉它会明显废掉主力能力。界面据此给出更重的提示。
+    core: bool = False
+    #: 依赖的 MCP 连接名（非空表示"配了那条连接才真的能用"）。
+    requiresConnection: str = ""
+    #: 那条依赖是否**真的就绪**（见 `service.gogo_readiness`）。
+    #:
+    #: ⚠️ 这个字段与 `enabled` 是**两件事**，界面必须分开显示：
+    #:   · `enabled=false` → 你把它关了（去开关里打开）；
+    #:   · `enabled=true` 但 `ready=false` → 它没配好（去 MCP 连接里配）。
+    #: 合成一个"不可用"会让用户不知道去哪修。
+    ready: bool = True
+    #: 未就绪的原因（中文，可直接展示）。
+    reason: str = ""
+
+
+class KernelToolsOut(CamelModel):
+    """`GET /kernel/tools` —— 内置工具清单 + 当前开关 + MCP 就绪状态。"""
+
+    tools: list[KernelToolOut] = []
+    #: 分组顺序（界面按它排栏，不从 tools 里二次推导 —— 同 `TOOL_GROUPS`）。
+    groups: list[str] = []
+    #: 被显式关掉的工具名（前端"重置为全开"要用它判断有没有改动）。
+    disabled: list[str] = []
+    #: gogo 那三个工具是否真的可用（与 `GET /kernel/mcp-servers` 同一判据）。
+    gogoReady: bool = False
+    gogoReason: str = ""
+
+
+class KernelToolsIn(StrictModel):
+    """`PUT /kernel/tools` —— 整份替换"关掉的工具"清单。
+
+    ## 为什么收"关掉的"而不是"启用的"
+
+    与数据库列同一条取舍（见 `settings/models.py::KernelConfig.disabled_tools`）：
+    这样前端**不需要知道**全部工具名就能表达"我只要关这一个"，
+    而且后端新增工具时老客户端提交上来的清单不会把它误关掉。
+
+    ## ⚠️ 全量替换语义
+
+    与 `PUT /kernel/mcp-servers` 一致：提交什么就是什么。空列表 = 全开。
+    部分更新（PATCH 语义）会引入"这条没传 = 保持原样还是关掉"的歧义，
+    而那正是本项目在 `KernelSettingsIn` 上记过的教训。
+    """
+
+    disabled: list[str] = Field(default_factory=list, max_length=64)
 
 
 # ══════════════════════════════════════════════════════════

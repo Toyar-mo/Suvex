@@ -26,7 +26,7 @@ import logging
 from app.core.db import session_scope
 from app.facts import service as facts_service
 from app.facts.models import ScanFact
-from app.facts.store import _to_dict
+from app.facts.store import _to_dict, seed_inherited
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,37 @@ class ScopedFactStore:
     def __init__(self, *, scan_id: str, target: str) -> None:
         self.scan_id = scan_id
         self.target = target
+
+    # ── 扫描开始前：继承 ────────────────────────────────
+    def seed(self) -> int:
+        """把同一个目标其它扫描的 `ruled-out` / `constraint` 抄进本次扫描。
+
+        ## 为什么这一步必须在**扫描开始前**跑
+
+        索引块是 `index_block()` 渲染的，而它只读 `scan_id == 本次`。
+        继承若发生在扫描中途，前面若干轮的 system prompt 里就没有这些
+        旧结论 —— 而"上次这个点试过不行"最该在**第一次**打这个点之前
+        出现，之后才出现等于没防住重复劳动。
+
+        ## 为什么失败不抛
+
+        继承是**增强**：拿不到旧结论仍应照常扫。而它发生在扫描入口，
+        抛出去会让"迁移没跑 / 库抖一下"变成"这次扫描起不来"——
+        那正是 `record_fact` 在 kernel 里用「未启用」分支避开的同一种坏结果。
+        所以这里吞异常、记 warning、返回 0。
+        """
+        if not facts_service.normalize_target(self.target):
+            # 没有目标就没有"同一个目标"。让空 target 去查会变成
+            # "匹配所有 target='' 的历史行"，是错继承。
+            return 0
+        try:
+            with session_scope() as session:
+                return seed_inherited(
+                    session, scan_id=self.scan_id, target=self.target
+                )
+        except Exception:  # noqa: BLE001 - 见 docstring：继承是增强，不是前置条件
+            logger.warning("继承上次扫描的事实失败（按无继承继续）", exc_info=True)
+            return 0
 
     def record(
         self,

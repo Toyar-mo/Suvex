@@ -96,6 +96,7 @@ from app.core.vocab import (
 from app.kernel import events as ctf2_events
 from app.kernel import mcp as mcp_mod
 from app.kernel import skills as skills_mod
+from app.kernel import tools as tools_mod
 from app.kernel.client import (
     CTF2_ERROR_ALREADY_SOLVED,
     KernelEnvironmentTimeout,
@@ -2999,6 +3000,25 @@ class SolveSpec:
     #: `app.kernel.mcp.McpRegistry | None`。
     mcp_registry: Any = None
 
+    #: ★ v0.82：本次运行**被关掉**的内置工具名（来自
+    #: `KernelConfig.disabled_tools`，经 `kernel.tools.normalize_disabled`
+    #: 规整 —— 未知名字已被剔除，所以这里全是 `TOOL_NAMES` 里真实存在的）。
+    #:
+    #: ## 为什么存"关掉的"而不是"可用的"
+    #:
+    #: 与配置列的取舍同一条（见 `settings/models.py::KernelConfig.disabled_tools`）：
+    #: 空元组 = 一件都没关 = 引入这个开关之前的行为，逐字节不变。
+    #: 存"可用的"会让本字段在默认情况下必须被填成 13 个名字，
+    #: 而那等于把 `TOOL_NAMES` 抄了第二份进每个 spec。
+    #:
+    #: ## 它与 `mcp_servers` 的关系
+    #:
+    #: 两者**独立**。关掉 `recon_scan` 不要求删掉 gogo 那条 MCP 连接，
+    #: 反之亦然 —— 一个是"我想不想用"，一个是"存不存在"。
+    #: 同时关掉与没配时给模型的措辞不同（前者"已被部署配置关闭"、
+    #: 后者"没有配置任何 MCP 连接"），因为它该采取的行动不同。
+    disabled_tools: tuple[str, ...] = ()
+
     def summary(self) -> str:
         """可以安全打进日志的摘要 —— **不含凭据**。"""
         return (
@@ -3715,7 +3735,26 @@ async def dispatch_tool(
 
     不抛是因为模型会拿它当反馈继续走；抛异常会让整个循环中断，
     而"模型用错了一次工具名"不该终止一次解题。
+
+    ## ★ v0.82：先挡「被关掉的工具」
+
+    这一道判断必须在**所有分支之前**。理由与那三条 MCP 前置检查同源：
+    只在界面上把开关画成"关"，而 `dispatch_tool` 照样执行，就是又一个
+    "配了却静默失效" —— 只不过这次失效的方向更糟：**用户以为自己关掉了
+    它**（比如关掉 `run_shell` 以求稳），而模型调起来一切照常。
+
+    ⚠️ 拦下时的措辞要给出**下一步**，不能只说"已禁用"：模型会拿着这句话
+    继续走，它需要知道"这个能力不存在了，换别的路"而不是"再试一次"。
     """
+    disabled = set(getattr(spec, "disabled_tools", ()) or ())
+    if name in disabled:
+        enabled = ", ".join(
+            n for n in TOOL_NAMES if n not in disabled
+        ) or "（一个都没有）"
+        return (
+            f"`{name}` 已被本次运行的部署配置**关闭**，不是你没用对。\n"
+            f"别再试它。当前可用工具：{enabled}。"
+        )
     try:
         if name == "read_attachment":
             return await _tool_read_attachment(args, spec=spec)
@@ -6016,6 +6055,13 @@ def build_spec(
     #    只记 warning，最坏情况是"没有可用 MCP"——那正是默认状态。
     mcp_server_cfgs = mcp_mod.parse_server_configs(getattr(settings_row, "mcp_servers", None))
 
+    # ★ v0.82：本次被关掉的内置工具。与上面那段同一条纪律 ——
+    # 解析容错交给 `normalize_disabled`（未知名字跳过并记 warning），
+    # 坏配置最坏退化成"全开"，也就是引入这个开关之前的行为。
+    disabled_tool_names = tools_mod.normalize_disabled(
+        getattr(settings_row, "disabled_tools", None)
+    )
+
     # ★ v0.41：攻防知识互查。只在**本题确实是 IR 题且开关开着**时才查 ——
     # 理由与 `_ir_enabled` 两条件同构：
     #
@@ -6096,6 +6142,8 @@ def build_spec(
         # ★ v0.72：MCP server 配置（见 `SolveSpec.mcp_servers`）。空元组 =
         #   没配，三个 MCP 工具会如实说"没有可用的连接"。
         mcp_servers=mcp_server_cfgs,
+        # ★ v0.82：被关掉的内置工具（空元组 = 一件都没关，行为逐字节不变）。
+        disabled_tools=disabled_tool_names,
         # ★ v0.42：手法块开关值（见 `SolveSpec.offensive` —— 它存的是
         #   开关本身，"该不该注入"要等 `build_system_prompt` 排掉场景包才定）。
         offensive=offensive_on,

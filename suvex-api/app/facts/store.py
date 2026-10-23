@@ -33,6 +33,11 @@ from app.facts.models import ScanFact
 
 logger = logging.getLogger(__name__)
 
+#: 继承来的行的 `recorded_by`。**常量而不是散落的字面量** ——
+#: 它同时是 `seed_inherited` 的幂等判据（见那里的说明）和复盘时的筛选条件，
+#: 两处写岔了就会表现成"继承了但下次又继承一遍"。
+INHERITED_BY = "inherited"
+
 
 class DbFactStore:
     """把一次扫描的黑板操作绑到一条 DB 会话上。
@@ -159,7 +164,30 @@ def seed_inherited(session: Session, *, scan_id: str, target: str, limit: int = 
     而 `ruled-out`（试过不行）与 `constraint`（结构性限制）失效得慢，
     重复验证它们的成本却最高。这是 CyberStrikeAI 那句
     「阴性结果也是可审计观察」的落地方式。
+
+    ## 幂等：本次已经有「继承来的」行就直接返回 0
+
+    不加这一步，第二次调用会把每条 `inherited` 行**再抄一遍新的
+    `fact.id`** —— `UNIQUE(scan_id, fact_key)` 只挡"同 key 已存在且被看到"，
+    而复制出来的新行同样会撞上这个约束，表现是 IntegrityError。
+    反过来，"本次已有 inherited 行"是**本次已经继承过**的确定信号，
+    所以直接短路，不必逐条比对。
+
+    ⚠️ 注意短路条件是 `recorded_by == "inherited"`，**不是**"有几行"：
+    模型自己用 `record_fact` 写的行也是 `scan_id == 本次`，
+    但它们不该阻止继承（那一轮还没继承呢）。
     """
+    if not facts_service.normalize_target(target):
+        # 没有目标就没有"同一个目标" —— 空 target 不能当通配符用，
+        # 否则一次没填目标的扫描会继承全场所有事实。
+        return 0
+    already = (
+        session.query(ScanFact)
+        .filter(ScanFact.scan_id == scan_id, ScanFact.recorded_by == INHERITED_BY)
+        .first()
+    )
+    if already is not None:
+        return 0
     rows = facts_service.load_inherited_facts(
         session, target=target, exclude_scan_id=scan_id, limit=limit
     )
@@ -185,8 +213,8 @@ def seed_inherited(session: Session, *, scan_id: str, target: str, limit: int = 
                 confidence=src.confidence,
                 trust_level=src.trust_level,
                 edges=list(src.edges or []),
-                recorded_by="inherited",
-                target=target,
+                recorded_by=INHERITED_BY,
+                target=facts_service.normalize_target(target),
                 version=1,
                 created_at=now_utc(),
                 updated_at=now_utc(),

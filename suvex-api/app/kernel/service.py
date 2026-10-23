@@ -3886,6 +3886,25 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
             )
 
     row = get_ctf2_config(db)
+
+    # ★ v0.82：`preserve_env` —— 保留同名连接已保存的 `env`。
+    #
+    # 这一段修的是一个**会丢凭据**的缺陷：`env` 只进不出（`McpServerOut`
+    # 里根本没有那个字段），所以前端编辑一条已有连接时拿不到原值。
+    # 而本函数是全量替换 —— 前端把空 `env` 提交上来就会被真的清掉。
+    # 症状是"只改了备注，保存成功、界面正常，三天后那条连接认证失败"。
+    #
+    # ⚠️ 按**名字**匹配旧值，不按位置：清单允许重排，靠下标会把 A 的
+    #    env 贴到 B 上 —— 那比丢掉更难查。
+    previous_env: dict[str, dict[str, str]] = {}
+    for old in row.mcp_servers or []:
+        if not isinstance(old, dict):
+            continue
+        old_name = str(old.get("name") or "").strip()
+        old_env = old.get("env")
+        if old_name and isinstance(old_env, dict):
+            previous_env[old_name] = {str(k): str(v) for k, v in old_env.items()}
+
     # 存 `None` 而不是 `[]`：与 `KernelSettings.mcp_servers` 的默认值
     # （`None` = 没配）保持一致，否则同一种状态在库里有两个表示。
     row.mcp_servers = [
@@ -3893,7 +3912,11 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
             "name": str(item.get("name") or "").strip(),
             "command": str(item.get("command") or "").strip(),
             "args": [str(a) for a in item.get("args") or []],
-            "env": {str(k): str(v) for k, v in (item.get("env") or {}).items()},
+            "env": (
+                previous_env.get(str(item.get("name") or "").strip(), {})
+                if item.get("preserve_env")
+                else {str(k): str(v) for k, v in (item.get("env") or {}).items()}
+            ),
             "notes": str(item.get("notes") or ""),
             "allowed_tools": (
                 [str(t) for t in item["allowed_tools"]]
@@ -4000,6 +4023,137 @@ async def test_mcp_server(item: dict) -> dict:
     }
 
 
+# ══════════════════════════════════════════════════════════
+# 内置工具清单与开关（v0.82）
+# ══════════════════════════════════════════════════════════
+#
+# 这一段补的是与 v0.81 MCP 管理**互补的那一半**：MCP 管"外部接进来什么"，
+# 这里管"内置的 13 个怎么开关"。两件事分开的理由见
+# `schemas.py` 的「为什么这一组与 MCP 那一组分开」。
+
+
+def get_disabled_tools(db: Session) -> tuple[str, ...]:
+    """读被显式关掉的内置工具名（已规整：未知名字剔除、去重、保序）。
+
+    ⚠️ 与 `get_mcp_servers` 刻意不同：那个回**原样 JSON**（因为要回给
+    前端编辑，坏条目应当照原样回显给用户去修）；而这里回**规整后的**，
+    因为工具名是代码里固定的枚举 —— 库里出现不认识的名字只可能是
+    "那个工具被删了"，把它显示在界面上只会让用户尝试去关一个
+    不存在的开关。
+    """
+    from app.kernel.tools import normalize_disabled
+
+    row = db.get(KernelConfig, SINGLETON_ID)
+    if row is None:
+        return ()
+    return normalize_disabled(getattr(row, "disabled_tools", None))
+
+
+def tools_catalog(db: Session) -> dict:
+    """组装界面要的完整清单：每个工具的名字、说明、开关、就绪状态。
+
+    ## 为什么每个工具的 `ready` 要单独算，而不是只看 gogo
+
+    目前只有 gogo 那三个依赖外部连接，但把判据写成"逐个按
+    `requires_connection` 查"而不是"写死这三个"，是为了将来接第二个
+    MCP 后端时不用改这里 —— 也为了让"某个工具为什么不可用"这件事
+    永远只有一个答案来源。
+
+    ⚠️ `gogo_readiness` 只判**配置是否就绪**（不真连、不 exec）：
+    它会因为每次打开页面都被调用，而真连要拉起子进程。
+    真正的连通性由 `POST /kernel/mcp-servers/test` 回答。
+    """
+    from app.kernel.tools import TOOL_GROUPS, TOOL_SPECS
+
+    disabled = set(get_disabled_tools(db))
+    servers = public_mcp_servers(db)
+    gogo_ok, gogo_reason = gogo_readiness(servers)
+
+    tools: list[dict] = []
+    for spec in TOOL_SPECS:
+        enabled = spec.name not in disabled
+        # 依赖判据：没有依赖就绪；有依赖就按该连接的就绪状态走。
+        #
+        # ⚠️ 目前 `gogo_readiness` 是**按连接名 gogo 硬判**的（它对齐的是
+        # `runner._gogo_via_mcp` 的三条前置检查）。所以这里判
+        # `spec.requires_connection == GOGO_CONNECTION_NAME`，而不是
+        # 拿连接名去 `servers` 里查一遍 —— 后者会得出与运行期不一致的
+        # 结论（运行期还要求白名单允许那三个工具名）。
+        if spec.requires_connection == GOGO_CONNECTION_NAME:
+            ready, reason = gogo_ok, gogo_reason
+        elif spec.requires_connection:
+            names = {str(s.get("name") or "") for s in servers}
+            ready = spec.requires_connection in names
+            reason = (
+                ""
+                if ready
+                else f"需要一条名为 `{spec.requires_connection}` 的 MCP 连接。"
+            )
+        else:
+            ready, reason = True, ""
+
+        tools.append(
+            {
+                "name": spec.name,
+                "label": spec.label,
+                "group": spec.group,
+                "summary": spec.summary,
+                "params": spec.params,
+                "enabled": enabled,
+                "core": spec.core,
+                "requires_connection": spec.requires_connection,
+                "ready": ready,
+                "reason": reason,
+            }
+        )
+
+    return {
+        "tools": tools,
+        "groups": list(TOOL_GROUPS),
+        "disabled": sorted(disabled),
+        "gogo_ready": gogo_ok,
+        "gogo_reason": gogo_reason,
+    }
+
+
+def save_disabled_tools(db: Session, disabled: list[str]) -> dict:
+    """整份替换"关掉的工具"清单。
+
+    ## 校验全部在写库之前做完
+
+    与 `save_mcp_servers` 同一纪律：不静默夹取、不静默丢弃。
+    提交一个不存在的工具名**直接 400** —— 它多半是拼错了，
+    而"拼错的开关"最坏的后果是用户以为关掉了某样东西、实际没有。
+
+    ⚠️ 空清单存 `None`（不是 `[]`）：与 `KernelSettings.mcp_servers`
+    同一条规矩，同一种状态不要在库里有两个表示。
+    """
+    from app.kernel.tools import TOOL_BY_NAME, normalize_disabled
+
+    unknown = [n for n in disabled if str(n).strip() not in TOOL_BY_NAME]
+    if unknown:
+        raise ApiError.validation(
+            f"未知工具名：{'、'.join(str(n) for n in unknown)}。",
+            {
+                "disabled": (
+                    "只能关内置工具。可用名字："
+                    + "、".join(sorted(TOOL_BY_NAME))
+                )
+            },
+        )
+
+    row = get_ctf2_config(db)
+    cleaned = normalize_disabled([str(n).strip() for n in disabled])
+    row.disabled_tools = list(cleaned) or None
+    db.commit()
+    db.refresh(row)
+    logger.info(
+        "内置工具开关已更新：关掉 %s",
+        "、".join(cleaned) if cleaned else "（无，全部可用）",
+    )
+    return tools_catalog(db)
+
+
 __all__ = [
     "MAX_SYNC_CHALLENGES",
     "MAX_SYNC_COMPETITIONS",
@@ -4022,6 +4176,9 @@ __all__ = [
     "get_account_or_404",
     "get_challenge_or_404",
     "get_competition_or_404",
+    "get_disabled_tools",
+    "save_disabled_tools",
+    "tools_catalog",
     "get_ctf2_config",
     "get_mcp_servers",
     "gogo_readiness",
