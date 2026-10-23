@@ -517,6 +517,18 @@ class ScanScheduler:
 
                 if latest is not None and latest != scan.last_event_at:
                     scan.last_event_at = latest
+                    # ★ 必须计入 `changed`，否则这一列**永远写不进库**。
+                    #
+                    # 实测（v0.72 真扫描）：`last_event_at` 每轮都被赋值，
+                    # 但这个循环只在"打上卡死标记"或"清掉标记"时才让
+                    # `changed += 1`；一条一直在出事件的**健康**扫描两条分支
+                    # 都不走，于是 `if changed: session.commit()` 从不执行 ——
+                    # 进程内看着有值、数据库里恒为 NULL。
+                    #
+                    # 症状只出现在界面上（`ScanOut.lastEventAt` 恒为 null，
+                    # 「最后活动」那列永远空白），不影响卡死判据本身
+                    # （那用的是下面这个内存里的 `latest`），所以它一直没被发现。
+                    changed += 1
 
                 # 判据用"最近活动"；一次事件都还没产生时退回 started_at ——
                 # 否则一个启动后就卡住的扫描永远不会被判为卡死

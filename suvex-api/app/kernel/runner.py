@@ -2728,6 +2728,34 @@ class SolveSpec:
     # 所以这里给的不是"更多轮数"，而是**接着上次的起点**。
     resume_digest: tuple[str, ...] = ()
 
+    #: ★ v0.73：**取消时也不丢发现**的活收集器（默认 `None` = 不收集）。
+    #:
+    #: ## 它解决的那个具体事故
+    #:
+    #: 一次 60 分钟的渗透扫描跑到 500 轮上限被墙钟超时取消，期间真找到了
+    #: 6 条已确认漏洞（子 agent 全写进了沙箱里的 `FINDINGS_NOTES.md`，
+    #: 事件流里 337 条 tool_call 也在），而入库结果是 **findings=0**。
+    #:
+    #: 根因不在"没找到"，而在收尾形状：模型只在写 `FINAL: {...}` 时才会
+    #: `outcome.findings = final.get("findings")`，而一个跑满 500 轮的多
+    #: 智能体编排**几乎不可能**收到 FINAL —— root 一直在等子 agent 回报。
+    #: 超时取消后 `_timeout_outcome()` 只能交回一个空 outcome，于是所有
+    #: 已经确认的发现随协程一起消失。P0 那次 findings=0 是同一个机制。
+    #:
+    #: ## 为什么是"传进来的容器"而不是"引擎自己留着"
+    #:
+    #: `outcome` 是 `solve_in_sandbox` 的**局部变量**，`task.cancel()` 之后
+    #: 它就没了。而 `SolveSpec` 是调用方持有的，取消后仍然在 —— 所以把
+    #: 收集器挂在 spec 上，`_timeout_outcome()` 才拿得到。
+    #:
+    #: ## 刻意只收"已经结构化"的东西
+    #:
+    #: 只在两处登记（`multiagent` 子 agent 的 `FINAL.findings`、单循环/root
+    #: 的 `FINAL.findings`），也就是**模型自己明确声明为发现的结构化对象**。
+    #: 绝不从自然语言推理、笔记正文、命令输出里"猜"发现 —— 那是编造数据。
+    #: 收集器的语义就是"这些是模型已经交出来的，别因为进程被砍就丢了"。
+    finding_sink: list[object] | None = None
+
     # ★ v0.70：token 预算上限（学 strix 的 cost budget，但用 token 不用美元）。
     #
     # `None`（默认）= 不设成本维度，只按回合梯度催收尾。
@@ -2923,6 +2951,36 @@ class SolveSpec:
             f"model={self.llm_model} key={'有' if self.llm_api_key else '无'} "
             f"mode={self.mode} urls={len(self.access_urls)}"
         )
+
+
+def _sink_findings(spec: object, findings: object) -> None:
+    """把模型已经交出来的一批发现登记到 `spec.finding_sink`（若已开启）。
+
+    ## 只做一件事：追加，不去重、不校验、不解释
+
+    去重交给 `multiagent._merge_outcomes`（它按标题去重）与
+    `findings.importer`（它按 `(scan_id, source_ref)` 幂等 upsert）。
+    这里若也去重，三处策略迟早漂移 —— 而症状是"某条发现神秘消失"。
+
+    ## 为什么不抛
+
+    它跑在引擎主循环里（`FINAL` 解析成功那一刻）。登记失败绝不该让一次
+    已经跑了几十轮的扫描崩掉；`sink` 是观测性附件，不是正确性的一部分。
+    与 `notify()` 同一条纪律。
+
+    ## ⚠️ 为什么必须判类型
+
+    `FINAL.findings` 是**模型给的原始值**（见 `SolveOutcome.findings` 的
+    说明），可能是字符串、对象、含 null 的数组。`extend` 一个字符串会把它
+    拆成单个字符 —— 那会造出一堆垃圾记录。所以只接受 list。
+    """
+    sink = getattr(spec, "finding_sink", None)
+    if sink is None or not isinstance(findings, list):
+        return
+    try:
+        sink.extend(findings)
+    except Exception:  # noqa: BLE001 - 见上面「为什么不抛」
+        logger.warning("登记发现到收集器失败（不影响本次运行）", exc_info=True)
 
 
 @dataclass(slots=True)
@@ -4764,6 +4822,10 @@ async def solve_in_sandbox(
                 # 与 workorders 完全同构：原样带走、不在这里校验 ——
                 # 转换与容错发生在 `scans/agent_runner` 那一刻。
                 outcome.findings = final.get("findings")
+                # ★ v0.73：同时登记到活收集器 —— 见 `SolveSpec.finding_sink`。
+                # 这一行与上一行不重复：上一行是"本次运行的结果"，这一行是
+                # "进程被砍时也别丢的存根"。两者角色不同，缺谁都会出事。
+                _sink_findings(spec, outcome.findings)
                 outcome.transcript = "\n\n".join(log)
                 if not outcome.candidates:
                     if rejected:

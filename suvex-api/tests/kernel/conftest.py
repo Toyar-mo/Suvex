@@ -193,6 +193,12 @@ CTF2_CLIENT_MODULES: tuple[str, ...] = (
     "app.kernel.attachments",
     "app.kernel.adapters.transport",
     "app.kernel.adapters.probe",
+    # v0.73：`run_multi_agent` 为整轮编排共享**一个** http client
+    # （`async with httpx.AsyncClient(...)`，供 root 与所有子 agent 复用）。
+    # 它自己构造 client，所以任何驱动 `run_multi_agent` 的用例若没被本夹具
+    # 覆盖，就会拿真 httpx 建 client 而**真的发外呼**。登记在这里让夹具
+    # 把它的传输也换成 MockTransport。
+    "app.kernel.multiagent",
 )
 
 

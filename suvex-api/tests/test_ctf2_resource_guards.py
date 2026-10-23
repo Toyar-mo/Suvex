@@ -133,8 +133,14 @@ def test_http_tool_streams_with_a_read_cap() -> None:
 
     · 用 `aiter_bytes()`（流式）而不是 `response.text`（全量）；
     · 有一个上限常量并在循环里 break。
+
+    ⚠️ 扫描范围是**两个函数**：`_tool_http_request` 只是调度/记录层，
+    真正发请求与读响应体的是它调用的 `_do_http`（v0.71 抽出，好让
+    `repeat_request` 重放复用同一条发送逻辑）。只扫 `_tool_http_request`
+    会在安全逻辑搬进 `_do_http` 之后**误报**——那种误报比不测更糟，
+    因为它会诱使人把流式读从 `_do_http` 挪回外层来"让测试变绿"。
     """
-    source = _code_of(runner._tool_http_request)
+    source = _code_of(runner._tool_http_request) + _code_of(runner._do_http)
 
     assert "aiter_bytes" in source, (
         "`http_request` 没有流式读 —— `response.text` 会把整个响应体读进宿主内存，"
@@ -151,8 +157,11 @@ def test_http_tool_tells_the_model_when_truncated() -> None:
 
     静默截断会让模型以为"响应就这么长"，从而得出错误结论 ——
     而它没有任何线索去怀疑。
+
+    ⚠️ 同上：截断标记在 `_do_http`（读出上限、置 `truncated`）与
+    `_tool_http_request`（把标记写回回执）两处，两处都要在扫描范围内。
     """
-    source = _code_of(runner._tool_http_request)
+    source = _code_of(runner._tool_http_request) + _code_of(runner._do_http)
 
     assert "truncated" in source, (
         "`http_request` 截断后没有告诉模型 —— 它会以为响应就这么长，"

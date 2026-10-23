@@ -57,6 +57,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+import httpx
+
 from app.kernel.client import KernelError
 from app.kernel.runner import (
     TOOL_NAMES,
@@ -71,6 +73,7 @@ from app.kernel.runner import (
     _initial_prompt,
     _narration_before_action,
     _output_fingerprint,
+    _sink_findings,
     _truncation_reminder,
     dispatch_tool,
     extract_candidates_with_reasons,
@@ -351,6 +354,11 @@ class AgentCoordinator:
     #: status: pending / doing / done。**不复用 coverage** —— 那个记"测过什么"，
     #: 这个记"打算做什么"，混淆会让两者都失真。
     todos: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: ★ v0.73：活发现收集器。与 `SolveSpec.finding_sink` 是**同一个 list 对象**
+    #: （由 `run_multi_agent` 从 spec 上取来挂这里）。子智能体 `agent_finish` 的
+    #: 结构化发现直接登记进来，超时取消时由 `_timeout_outcome` 收割。
+    #: 为 None = 未开启（CTF 解题路径），所有登记点都是 no-op。
+    finding_sink: list[Any] | None = None
     _todo_seq: int = 0
     _id_seq: int = 0
 
@@ -630,10 +638,28 @@ def _do_record_coverage(args: dict[str, Any], *, coord: AgentCoordinator, me: Ag
 
 
 def _do_agent_finish(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
-    """子 agent 收尾：把完成报告写进 node，由 spawner 的 task 结束时读走。"""
+    """子 agent 收尾：把完成报告写进 node，由 spawner 的 task 结束时读走。
+
+    ## ★ v0.73：`findings` 同时登记到活收集器
+
+    `agent_finish` 是子智能体**显式结构化交出来**的发现 —— 它比 `FINAL` 更早、
+    更可靠（子智能体干完自己那一块就交，而 `FINAL` 要等 root 收口，root 常常
+    等不到）。旧版只把它拼成一段纯文本塞进共享笔记，于是：
+    - 扫描正常结束时，走 `_render_completion_text` → root 的 FINAL → 能收到；
+    - 扫描被超时取消时，这段文本还在笔记里，但**没有任何代码把它变成 findings**。
+
+    所以这里补一次登记。只登记 `isinstance(findings, list)` 的元素，
+    且只挑**看起来是结构化发现**的（dict/字符串都收 —— `agent_finish` 的
+    schema 本来就允许字符串数组，那种情况按标题包一层）。
+    """
     summary = str(args.get("result_summary") or "").strip()
     findings = args.get("findings") if isinstance(args.get("findings"), list) else []
     open_items = args.get("open_items") if isinstance(args.get("open_items"), list) else []
+
+    # ★ v0.73：这一批是模型自己用 `agent_finish(findings=[...])` 明确交出来的
+    # 结构化发现，必须进活收集器 —— 否则超时取消时它们只存在于笔记文本里。
+    _sink_agent_findings(coord, findings, by=me.name)
+
     coord.shared.write_note(
         f"完成报告 · {me.name}",
         "\n".join(
@@ -646,6 +672,33 @@ def _do_agent_finish(args: dict[str, Any], *, coord: AgentCoordinator, me: Agent
     return _json_ok(
         note="完成报告已记录。请用 `FINAL: {...}` 给出你的结论（子智能体的 findings 会在 FINAL 里被父级收集）。"
     )
+
+
+def _sink_agent_findings(
+    coord: AgentCoordinator, findings: list[Any], *, by: str
+) -> None:
+    """把 `agent_finish(findings=[...])` 里的条目登记进 `finding_sink`。
+
+    条目可能是 dict（`{"title":..., "severity":...}`）也可能是纯字符串
+    （`"GET /api/v1/users 越权"`）。字符串按 `{"title": s}` 包一层 —— 宁可少
+    字段，也不能把一条真实发现丢了：丢掉的是"我们漏了"，包成 title 至少
+    人能在报告里看到它。
+
+    绝不猜：非 list 一律忽略（`_do_agent_finish` 已经保证是 list）。
+    异常只 warning —— 收集器是观测附件，不该让子智能体收尾失败。
+    """
+    sink = getattr(coord, "finding_sink", None)
+    if sink is None:
+        return
+    try:
+        for item in findings:
+            if isinstance(item, dict):
+                sink.append(item)
+            elif isinstance(item, str) and item.strip():
+                sink.append({"title": item.strip(), "reported_by": by})
+            # 其他类型（None/int/list）静默跳过：没有可用语义，包进去只是噪音。
+    except Exception:  # noqa: BLE001
+        logger.warning("agent_finish：登记发现到活收集器失败（不影响收尾）", exc_info=True)
 
 
 def _do_stop_agent(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
@@ -889,6 +942,11 @@ async def run_agent_loop(
             outcome.summary, outcome.tried, outcome.ruled_out = extract_final_analysis(final)
             outcome.workorders = final.get("workorders")
             outcome.findings = final.get("findings")
+            # ★ v0.73：同时登记到活收集器 —— 见 `SolveSpec.finding_sink`。
+            # 子 agent 是最常写出真实发现的那个角色，而它写完之后 root 往往
+            # 还在等其他子 agent 回报；超时一旦发生在那个窗口里，这一批
+            # 发现会随协程一起消失（实测：6 条已确认发现入库 0 条）。
+            _sink_findings(spec, outcome.findings)
             outcome.transcript = "\n\n".join(log)
             if not outcome.candidates and rejected and is_root:
                 outcome.error = (
@@ -1003,11 +1061,13 @@ async def run_multi_agent(
     **结构不同**（多协程、有 spawner、有汇总） —— 见 `runner.solve_in_sandbox`
     里分流的说明。
     """
-    import httpx
-
     coord = AgentCoordinator(
         total_budget=max(12, int(spec.max_turns * TOTAL_TURN_RATIO)),
         child_budget=child_turn_budget(spec),
+        # ★ v0.73：把 spec 上的活收集器**同一个对象**挂到协调器上 ——
+        # 子智能体 `agent_finish` 登记的东西必须与 `_timeout_outcome` 收割的
+        # 是同一个 list，否则超时路径依然拿不到子智能体交出来的发现。
+        finding_sink=getattr(spec, "finding_sink", None),
     )
     root = coord.add_root()
     root_outcome = SolveOutcome()

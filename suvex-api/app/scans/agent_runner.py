@@ -443,7 +443,11 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
     logger.info("自研引擎开跑：%s", spec.summary())
 
     try:
-        solve_spec = build_solve_spec_from_scan(spec)
+        # ★ v0.73：活收集器必须在**建 spec 之前**就存在，并挂在 spec 上 ——
+        # 超时取消时 `_timeout_outcome(solve_spec)` 只能看到 spec，
+        # 看不到这里函数的局部变量之外的任何东西。
+        finding_sink: list[object] = []
+        solve_spec = build_solve_spec_from_scan(spec, finding_sink=finding_sink)
     except Exception:  # noqa: BLE001
         logger.exception("扫描 %s：构造 SolveSpec 失败", spec.scan_id)
         return EXIT_ERROR
@@ -679,11 +683,27 @@ async def _solve_with_stop(
 
 
 def _timeout_outcome(solve_spec: object) -> object:
-    """超时被取消时返回的最小 outcome。
+    """超时被取消时返回的 outcome：人话原因 + **已确认发现的部分收割**。
 
-    只带 `error`（人话原因）与空的发现集合 —— 已经跑出来的部分发现
-    在取消前的 `solve_in_sandbox` 内部尚未归拢到返回值里，这里如实
-    不假装有。上层据此把扫描判成"超时收尾"而非"失败"。
+    ## ★ v0.73：这里以前是"空的发现集合"，那是一个 0 入库事故的元凶
+
+    旧版注释写的是"已经跑出来的部分发现尚未归拢到返回值里，这里如实
+    不假装有"。出发点（不编造）是对的，但结论错了：不假装有 ≠ 必须丢掉。
+
+    实测（2026-10-22，P1 对照 agent 侧）：一次 500 轮上限的渗透扫描跑到
+    60 分钟墙钟超时被取消，事件流里 337 次 tool_call、子智能体已经确认
+    6 条漏洞，而入库结果 **findings=0**。P0 那次 1802 秒被 30 分钟墙截断
+    导致 findings=0，是**同一个机制**——不是"没找到"，是"找到了没交出去"。
+
+    根因是收尾形状：`outcome.findings` 只在模型写出 `FINAL: {...}` 那一刻
+    才被赋值，而跑满几百轮的多智能体编排几乎收不到 FINAL（root 一直在等
+    子智能体回报）。`task.cancel()` 之后局部 `outcome` 就没了，于是所有
+    已经结构化的发现一起消失。
+
+    现在改成从 `solve_spec.finding_sink` 里收割。它**只**包含模型自己用
+    `FINAL.findings` 明确交出来的结构化对象（见 `SolveSpec.finding_sink`
+    的说明与 `_sink_findings`），不从自然语言、笔记、命令输出里猜 ——
+    所以"不编造"这条纪律没有被牺牲，只是不再白白丢弃。
     """
     from app.kernel import runner as ctf2_runner
 
@@ -692,7 +712,28 @@ def _timeout_outcome(solve_spec: object) -> object:
         "timeout_reason",
         "扫描超过设置页指定的单次超时，已被引擎停止。",
     )
-    return ctf2_runner.SolveOutcome(error=reason)
+    harvested = list(getattr(solve_spec, "finding_sink", None) or [])
+    outcome = ctf2_runner.SolveOutcome(error=reason)
+    if harvested:
+        # 去重靠标题，与 `multiagent._merge_outcomes` 同一条口子：
+        # 同一个子智能体可能重复提交同一条，合并时只留第一条。
+        seen: set[str] = set()
+        unique: list[object] = []
+        for item in harvested:
+            title = ""
+            if isinstance(item, dict):
+                title = str(item.get("title") or item.get("name") or "")
+            if not title:
+                title = repr(item)[:120]
+            if title in seen:
+                continue
+            seen.add(title)
+            unique.append(item)
+        outcome.findings = unique
+        logger.info(
+            "扫描超时收尾：从活收集器收割到 %d 条已确认发现（去重后）", len(unique)
+        )
+    return outcome
 
 
 def _write_run_json(spec: LaunchSpec, solve_spec: object, outcome: object) -> None:
@@ -828,8 +869,15 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
         logger.warning("写发现文件失败：%s", path, exc_info=True)
 
 
-def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
+def build_solve_spec_from_scan(
+    spec: LaunchSpec, *, finding_sink: list[object] | None = None
+) -> object:
     """把 `LaunchSpec` 翻译成引擎的 `SolveSpec`。
+
+    `finding_sink`（v0.73）是可选的活收集器：传进来就挂在 `SolveSpec` 上，
+    引擎每解析出一批 `FINAL.findings` 就登记进去，超时取消时由
+    `_timeout_outcome()` 收割 —— 见那个函数与 `SolveSpec.finding_sink` 的说明。
+    默认 `None` = 不收集，本函数对其余字段的翻译**逐字节不变**。
 
     ## 为什么不直接让引擎吃 `LaunchSpec`
 
@@ -968,6 +1016,8 @@ def build_solve_spec_from_scan(spec: LaunchSpec) -> object:
         # 纯函数（不碰库），所以值来自 `LaunchSpec.multi_agent`，由调用方
         # `_run_engine` 在建 spec 前从配置读出并写进 LaunchSpec。
         multi_agent=bool(getattr(spec, "multi_agent", False)),
+        # ★ v0.73：活收集器（None = 不收集，行为与旧版一致）。
+        finding_sink=finding_sink,
     )
 
 

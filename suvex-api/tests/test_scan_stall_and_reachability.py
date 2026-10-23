@@ -227,6 +227,62 @@ def test_stall_flag_clears_when_activity_resumes(db_session: Session, scan_confi
     assert db_session.get(Scan, scan.id).stalled_at is None, "有新事件就该清掉标记"
 
 
+def test_healthy_scan_persists_last_event_at(db_session: Session, scan_config) -> None:
+    """★ 一次**健康**（没卡死）的扫描，也必须把 `last_event_at` 落库。
+
+    这是一个真实的漏网 bug（v0.72 实测发现）：
+
+        if latest is not None and latest != scan.last_event_at:
+            scan.last_event_at = latest        # ← 赋值了
+        ...
+        if changed:                            # ← 但没 changed += 1
+            session.commit()
+
+    `changed` 只在**打上标记**或**清掉标记**时才自增。于是一条一直在
+    出事件的扫描（最健康的那种）走的是"更新了 `last_event_at`、但
+    `changed == 0`、于是从不 commit"这条路 —— 进程内看着有值，
+    数据库里永远是 NULL。
+
+    为什么之前的测试没抓到：已有的两条只测了"标记被打上"和"标记被清掉"，
+    两者都会让 `changed += 1`。**没被测到的那条路径恰好是最常见的**。
+
+    真实后果：`ScanOut.lastEventAt` 恒为 null，界面那一列永远空白；
+    而卡死判据本身不出错（它用的是内存里的 `latest`，不是库里的值）——
+    这正是它一直没被发现的原因：**症状只在界面上，不在逻辑里**。
+    """
+    scan_config(SUPEX_SCAN_STALL_SECONDS="600")
+    from app.scans.scheduler import get_scheduler
+
+    scan = _running_scan(db_session, started_ago_seconds=30)
+    assert db_session.get(Scan, scan.id).last_event_at is None, "起点应该是空的"
+
+    from tests.factories import make_agent, make_event
+
+    agent = make_agent(db_session, scan.id)
+    make_event(
+        db_session,
+        scan_id=scan.id,
+        agent_id=agent.id,
+        type="reasoning",
+        summary="还在干活",
+    )
+
+    get_scheduler()._detect_stalls()
+
+    # ★ 换一个**独立的会话**读，才能证明"真的提交了"。
+    #   用同一个 db_session 只能证明"内存里改了" —— 而 bug 恰恰是
+    #   内存里有、库里没有。
+    from app.core.db import get_session_factory
+
+    with get_session_factory()() as fresh:
+        row = fresh.get(Scan, scan.id)
+        assert row is not None
+        assert row.last_event_at is not None, (
+            "健康扫描的 last_event_at 也必须落库 —— 否则界面「最后活动」永远空白"
+        )
+        assert row.stalled_at is None, "有活跃事件，不该被判卡死"
+
+
 def test_stall_detection_can_be_disabled(db_session: Session, scan_config) -> None:
     """阈值设 0 = 关掉检测。"""
     scan_config(SUPEX_SCAN_STALL_SECONDS="0")

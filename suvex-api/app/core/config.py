@@ -352,6 +352,35 @@ class Settings(BaseSettings):
         return seen
 
     @property
+    def dev_cors_origins(self) -> list[str]:
+        """`cors_origin_list` 里属于**本地开发前端**的那些源。
+
+        ★ v0.73 新增：P1 对照扫描（打自家平台前端）实测报出
+        「CORS 白名单含开发源 http://localhost:5173 且 allow_credentials=True」。
+        回代码核对确认这是**真实配置缺陷**：`.env` 在部署副本里原样带着
+        `SUPEX_CORS_ORIGINS=http://localhost:5173,http://127.0.0.1:5173`，
+        而 `main.py` 是 `allow_credentials=True` —— 生产环境把 Vite 开发端口
+        留在凭据白名单里毫无必要（攻击者要利用需要受害者本机开着该端口，
+        影响有限，但没有任何理由保留）。
+
+        识别口径：host 是 `localhost` / `127.0.0.1` / `0.0.0.0` / `[::1]`
+        **且**端口是 Vite 默认的 5173（或其常见 dev 端口）。只认这几项，
+        不做模糊匹配 —— 误杀一个真实生产源比漏报更难排查。
+        """
+        dev_ports = {"5173", "5174", "3000", "4173"}
+        dev_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"}
+        out: list[str] = []
+        for origin in self.cors_origin_list:
+            # origin 形如 scheme://host:port，只拆 host 与 port，不看 scheme（两者都算）。
+            rest = origin.split("://", 1)[-1]
+            host, _, port = rest.rpartition(":")
+            if not host:  # 没有端口（如 http://localhost），整个 rest 就是 host
+                host, port = rest, ""
+            if host.lower() in dev_hosts and (port == "" or port in dev_ports):
+                out.append(origin)
+        return out
+
+    @property
     def is_prod(self) -> bool:
         return self.env == "prod"
 
@@ -460,6 +489,15 @@ class Settings(BaseSettings):
             raise RuntimeError(
                 "拒绝以不完整的配置启动：SUPEX_ENV=prod 时必须设置 SUPEX_SECRET_KEY，"
                 "否则 provider 的 API key 无法加密存储。生成：python -m app.core.crypto"
+            )
+        # ★ v0.73：生产环境不许把本地开发前端源留在 CORS 凭据白名单里。
+        # 依据见 `dev_cors_origins` 的注释（P1 对照扫描实测 + 代码核对）。
+        dev_origins = self.dev_cors_origins
+        if self.is_prod and dev_origins:
+            raise RuntimeError(
+                "拒绝以不安全的配置启动：SUPEX_ENV=prod 时 SUPEX_CORS_ORIGINS 不能包含"
+                f"本地开发前端源 {dev_origins}（allow_credentials=True 下等于把生产凭据"
+                "白名单开放给开发端口）。请只填真实生产前端源。"
             )
 
 

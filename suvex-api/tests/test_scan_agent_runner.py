@@ -431,14 +431,133 @@ def test_volume_write_false_mounts_workspace_ro(tmp_path: Path) -> None:
 
 
 def test_timeout_outcome_carries_human_reason() -> None:
-    """超时收尾的 outcome 带一句人话原因，且没有假造发现。"""
+    """超时收尾的 outcome 带一句人话原因；**没有**收集器时不假造发现。"""
 
     class _Spec:
         timeout_reason = "扫描超过设置页指定的单次超时（30 分钟），已被引擎停止。"
+        finding_sink = None
 
     outcome = agent_runner._timeout_outcome(_Spec())
     assert outcome.error and "超时" in outcome.error
     assert not outcome.findings
+
+
+# ══════════════════════════════════════════════════════════
+# 3b. ★ v0.73：超时取消不丢已确认发现（活收集器）
+#
+# 事故：一次 500 轮的渗透扫描跑满 60 分钟被墙钟超时取消，子智能体已确认
+# 6 条漏洞，入库 findings=0。旧代码把"超时必有 0 发现"写进了上面那条测试
+# 的断言（`assert not outcome.findings`），等于把缺陷固化成了预期行为。
+# ══════════════════════════════════════════════════════════
+
+
+def test_timeout_outcome_harvests_confirmed_findings() -> None:
+    """超时收尾时，已登记到 `finding_sink` 的发现必须被收割出来。
+
+    ## 反面对照（变异会红）
+
+    把 `_timeout_outcome` 里 `outcome.findings = unique` 那段删掉（回到
+    v0.72 的空 outcome），这条立刻因为没有 findings 而失败。
+    """
+
+    class _Spec:
+        timeout_reason = "扫描超过设置页指定的单次超时（60 分钟），已被引擎停止。"
+        finding_sink = [
+            {"title": "CORS 任意源反射", "severity": "medium"},
+            {"title": "登录时序枚举", "severity": "medium"},
+        ]
+
+    outcome = agent_runner._timeout_outcome(_Spec())
+    assert outcome.error and "超时" in outcome.error
+    assert isinstance(outcome.findings, list)
+    assert len(outcome.findings) == 2
+    assert outcome.findings[0]["title"] == "CORS 任意源反射"
+
+
+def test_timeout_outcome_dedupes_harvested_findings_by_title() -> None:
+    """同一个发现被两个子智能体重复交上来时只留一条（按标题去重）。
+
+    `multiagent._merge_outcomes` 用同一条口子，这里跟它保持一致；
+    否则超时路径会把同一条漏洞重复入库两次。
+    """
+
+    class _Spec:
+        timeout_reason = "超时"
+        finding_sink = [
+            {"title": "CORS 任意源反射", "severity": "medium"},
+            {"title": "CORS 任意源反射", "severity": "high"},  # 重复标题
+            {"title": "NUL 字节 500", "severity": "low"},
+        ]
+
+    outcome = agent_runner._timeout_outcome(_Spec())
+    assert [f["title"] for f in outcome.findings] == ["CORS 任意源反射", "NUL 字节 500"]
+
+
+def test_sink_findings_ignores_non_list() -> None:
+    """`FINAL.findings` 是模型给的原始值；非 list 时**不许**塞进收集器。
+
+    ## 这条防的是"把字符串拆成单字符"
+
+    `sink.extend("abc")` 会得到 `['a','b','c']` —— 三条垃圾记录。
+    所以 `_sink_findings` 必须先判 `isinstance(findings, list)`。
+    """
+    from app.kernel import runner as kernel_runner
+
+    class _Spec:
+        finding_sink: list[object] = []
+
+    for bogus in ("一条发现的字符串", {"title": "dict 不是 list"}, None, 42):
+        kernel_runner._sink_findings(_Spec(), bogus)
+    assert _Spec.finding_sink == []
+
+    kernel_runner._sink_findings(_Spec(), [{"title": "真发现"}])
+    assert len(_Spec.finding_sink) == 1
+
+
+def test_sink_findings_noop_when_sink_disabled() -> None:
+    """`finding_sink=None`（默认）时是彻底的 no-op —— 不影响 CTF 解题路径。"""
+
+    class _Spec:
+        finding_sink = None
+
+    from app.kernel import runner as kernel_runner
+
+    kernel_runner._sink_findings(_Spec(), [{"title": "x"}])  # 不该抛
+
+
+def test_build_solve_spec_passes_finding_sink_through() -> None:
+    """`build_solve_spec_from_scan(finding_sink=...)` 必须把它挂到 SolveSpec 上。
+
+    ## 这条防的是"配了不等于生效"
+
+    收集器要在**建 spec 之前**就存在并挂上去；只改了 `_run_engine` 的局部变量
+    而没接进 `SolveSpec`，超时路径依然拿不到任何东西 —— 而这个形状的 bug
+    在 v0.72 已经出现过一次（`parse_server_configs` 只吃 list+dict）。
+    """
+    from app.scans.runner import LaunchSpec
+
+    sink: list[object] = []
+    spec = LaunchSpec(
+        scan_id="scan_x",
+        target="http://example.test",
+        target_kind="url",
+        skills=("web",),
+        brief="",
+        goal=None,
+        scan_mode="standard",
+        scan_max_turns=10,
+        run_dir=__import__("pathlib").Path("/tmp/scan_x"),
+        log_path=__import__("pathlib").Path("/tmp/scan_x/scan.log"),
+        llm_model="openai/x",
+        llm_api_key="k",
+        llm_api_base="http://gw/v1",
+    )
+    solve_spec = agent_runner.build_solve_spec_from_scan(spec, finding_sink=sink)
+    assert solve_spec.finding_sink is sink
+
+    # 默认不传 = None（对 CTF 解题路径行为逐字节不变）
+    default_spec = agent_runner.build_solve_spec_from_scan(spec)
+    assert default_spec.finding_sink is None
 
 
 def test_solve_with_stop_cancels_on_wall_clock_timeout(monkeypatch) -> None:

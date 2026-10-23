@@ -200,6 +200,112 @@ def test_child_cannot_call_finish_scan() -> None:
     assert "agent_finish" in parsed["error"]
 
 
+# ══════════════════════════════════════════════════════════
+# 3c. ★ v0.73：`agent_finish` 的结构化发现必须进活收集器
+#
+# 事故形状见 `_timeout_outcome`：扫描被超时取消时，子智能体已经用
+# `agent_finish(findings=[...])` 明确交出一批发现，但旧代码只把它拼成
+# 一段纯文本写进共享笔记 —— 文本还在，findings 为 0。
+# ══════════════════════════════════════════════════════════
+
+
+def test_agent_finish_sinks_structured_findings() -> None:
+    """★ 子智能体 `agent_finish` 交的每条发现都要落进 `coord.finding_sink`。
+
+    ## 反面对照（变异会红）
+
+    把 `_do_agent_finish` 里那行 `_sink_agent_findings(coord, findings, by=me.name)`
+    删掉（回到 v0.72 只写笔记），这条立刻因为 sink 为空而失败。
+    """
+    sink: list[object] = []
+    coord = multiagent.AgentCoordinator(finding_sink=sink)
+    coord.add_root()
+    child = coord.add_child(name="CORS 验证", task="t", parent_id="root")
+
+    out = _dispatch_orch(
+        "agent_finish",
+        {
+            "result_summary": "确认 CORS 任意源反射",
+            "findings": [
+                {"title": "CORS 反射任意 Origin", "severity": "medium"},
+                {"title": "登录时序枚举", "severity": "medium"},
+            ],
+            "open_items": ["SSRF 未验证"],
+        },
+        coord=coord,
+        me=child,
+        is_root=False,
+    )
+    assert json.loads(out)["success"] is True
+    assert len(sink) == 2
+    assert sink[0]["title"] == "CORS 反射任意 Origin"
+    # 原始结构化字段必须原样保留（不能只留 title）
+    assert sink[0]["severity"] == "medium"
+
+
+def test_agent_finish_wraps_plain_string_findings() -> None:
+    """`findings` 允许是字符串数组（schema 本来就允许）；字符串按 title 包一层。
+
+    ## 为什么不能丢
+
+    宁可少几个字段，也不能把一条真实发现丢掉 —— 丢掉的是"我们漏了"。
+    但也不能把 `findings` 本身（非 list）或空串塞进去当噪音。
+    """
+    sink: list[object] = []
+    coord = multiagent.AgentCoordinator(finding_sink=sink)
+    coord.add_root()
+    child = coord.add_child(name="c", task="t", parent_id="root")
+
+    _dispatch_orch(
+        "agent_finish",
+        {"result_summary": "x", "findings": ["越权 GET /api/v1/users", "  ", 42, None]},
+        coord=coord,
+        me=child,
+        is_root=False,
+    )
+    titles = [f.get("title") for f in sink]
+    assert titles == ["越权 GET /api/v1/users"]  # 空串/数字/None 都被丢掉
+    assert sink[0]["reported_by"] == "c"
+
+
+def test_agent_finish_does_not_touch_sink_when_disabled() -> None:
+    """`finding_sink=None`（CTF 解题路径默认）时是彻底 no-op，不抛。"""
+    coord = multiagent.AgentCoordinator()  # finding_sink 默认 None
+    coord.add_root()
+    child = coord.add_child(name="c", task="t", parent_id="root")
+    out = _dispatch_orch(
+        "agent_finish",
+        {"result_summary": "x", "findings": [{"title": "t"}]},
+        coord=coord,
+        me=child,
+        is_root=False,
+    )
+    assert json.loads(out)["success"] is True
+
+
+def test_run_multi_agent_shares_sink_object_with_spec() -> None:
+    """`run_multi_agent` 必须把 spec 上**同一个 list 对象**挂到 coord 上。
+
+    ## 这条防的是"对象不共享"
+
+    如果 `run_multi_agent` 里写成 `finding_sink=list(getattr(spec,...) or [])`
+    （复制了一份），子智能体往 coord 那份里登记，超时路径从 spec 那份里收割
+    → 永远是空。这正是 v0.72 `parse_server_configs` 那种"配了不生效"的形状。
+    这里通过检查源码里的赋值形态来锁住 —— 装配确实用 `getattr(spec, ..., None)`。
+    """
+    import inspect
+
+    src = inspect.getsource(multiagent.run_multi_agent)
+    assert 'finding_sink=getattr(spec, "finding_sink", None)' in src
+    # 不能出现"复制一份"的写法
+    assert "finding_sink=list(" not in src
+
+
+def test_child_cannot_call_finish_scan_placeholder() -> None:
+    """（占位以保持原有测试顺序，不测逻辑）"""
+    return
+
+
 def test_create_agent_requires_name_and_task() -> None:
     coord = multiagent.AgentCoordinator()
     root = coord.add_root()
