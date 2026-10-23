@@ -183,6 +183,15 @@ THREAT_AMEND = "amend_threat_model"
 ACTION_WINDOW = 20
 ACTION_WINDOW_MIN_SAMPLES = 10
 
+# ★ v0.79：强制注入的「当前状态」硬上限（字符）。
+#
+# 为什么需要这个数：system prompt 已经 ~18KB，再无限长会挤掉真正的方法论。
+# 1400 字符大约是一屏，够写 8 条事实 + 8 个已测面 + 4 条待推进方向。
+#
+# ⚠️ 超限时**优先保留 negative 事实**（已排除的方向）—— 那是防止重复劳动
+#    最直接的东西，比"已确认"更值钱：已确认的模型多半记得，已排除的它一定会重试。
+LIVE_STATE_MAX_CHARS = 1400
+
 #: ★ v0.77：同一个"打点形状"撞到第几次时提醒模型"换参数不算新尝试"。
 #:
 #: 3 而不是 2：第二次打同一个点很可能是正常的分支验证（先探 401，再试
@@ -635,6 +644,84 @@ class SharedState:
                 f"（{info.get('by', '?')}）"
             )
         return "\n".join(lines)
+
+    def render_live_state(self, *, turn: int = 0, max_turns: int = 0) -> str:
+        """把共享状态渲染成**注入 system prompt** 的短状态（v0.79）。
+
+        ## 为什么需要它（这不是 `render_*` 的重复品）
+
+        v0.77 验证轮实测：`run_shell` 238 次，`record_coverage` 只有 **2 次**，
+        `add_idea` / `add_fact` 各 **0 次**。工具都在、提示词也写了，模型不用。
+
+        原因不是"看不见"——它每轮都看得到对话历史。真正的原因是**没有理由看**：
+        只要历史还在，它凭记忆就够了；等到历史被裁掉（`MAX_HISTORY_TURNS`），
+        它已经走远，而它并不知道自己忘了什么。
+
+        `get_memory` 这类「模型主动调用」的机制在这个前提下**必然失效**——
+        不觉得自己需要，就不会去取。所以改成**无条件推送**：拼进 system prompt，
+        每轮都在，模型想不看都不行。
+
+        ## 与 `_child_task_prompt` 的分工
+
+        子 agent 拿到的是**它自己的 task + 全场覆盖**（见 `_child_task_prompt`），
+        不注入全场事实——它只需要知道自己那块。全场状态只给 root，因为只有
+        root 在做全局决策。
+
+        ## 空状态返回空串
+
+        首轮一个字节都不加。否则 system prompt 里挂着「（还没有…）」四行占位，
+        既占预算又教模型"这些段可以空着"。
+
+        ## ⚠️ 回合位置**不参与**"有没有内容"的判定
+
+        「第 3/120 轮」这种话首轮就有、且永远有 —— 如果让它进 `parts`，
+        `if not parts` 永远为假，空状态就会返回一段只有回合数的壳子，
+        上面这段"一个字节都不加"的承诺当场失效（第一版就是这么写的，
+        `check_live_state.py` 测出来空状态 len=48 才抓到）。
+
+        所以回合位置单独判断：**只有当确实有状态可推时才附上它**。
+        """
+        parts: list[str] = []
+
+        # ② 待推进方向（只列 open/doing，死掉的已经转移进 facts）
+        if any(v.get("status") in ("open", "doing") for v in self.ideas.values()):
+            parts.append("## 当前方向\n" + self.render_ideas())
+
+        # ③ 已确认事实 —— **negative 排前面**（见 `LIVE_STATE_MAX_CHARS` 注释）
+        if self.facts:
+            neg = [t for t, i in self.facts.items() if i.get("kind") == "negative"]
+            rest = [t for t, i in self.facts.items() if i.get("kind") != "negative"]
+            lines: list[str] = []
+            for t in neg:
+                ev = (self.facts[t].get("evidence") or "")[:80]
+                lines.append(f"- [已排除] {t}" + (f"｜{ev}" if ev else ""))
+            for t in rest:
+                info = self.facts[t]
+                tag = {"positive": "成立", "constraint": "约束"}.get(info.get("kind", "positive"), "?")
+                ev = (info.get("evidence") or "")[:80]
+                lines.append(f"- [{tag}] {t}" + (f"｜{ev}" if ev else ""))
+            parts.append("## 已确认事实\n" + "\n".join(lines))
+
+        # ④ 已测覆盖 —— 这是"我打过哪些点"的权威清单
+        if self.coverage:
+            lines = [f"- {s}：{i.get('outcome', '?')}" for s, i in self.coverage.items()]
+            parts.append("## 已测位置\n" + "\n".join(lines))
+
+        if not parts:
+            return ""
+        # ① 回合位置 —— 放在最前，让"还剩多少"成为可感知的数字，而不是抽象的"要努力"。
+        #    ⚠️ 在 `if not parts` **之后**才插，见上面 docstring 的说明。
+        if max_turns > 0:
+            left = max(0, max_turns - turn)
+            parts.insert(0, f"（第 {turn}/{max_turns} 轮，剩 {left} 轮）")
+        body = "\n\n".join(parts)
+
+        # ⑤ 硬上限：超了从**末尾**截（前面的方向与已排除事实最值钱），
+        #    并显式标注被截断 —— 不静默丢，否则模型以为清单就这些。
+        if len(body) > LIVE_STATE_MAX_CHARS:
+            keep = LIVE_STATE_MAX_CHARS - 40
+            body = body[:keep] + "\n…（更多记录请调用 get_memory 查看）"
+        return "\n\n—— 当前状态（系统每轮推送，不是你的历史记忆）——\n" + body
 
 
 @dataclass
@@ -1307,8 +1394,20 @@ async def run_agent_loop(
                     {"text": hint[:200], "hint": "1"},
                 )
 
+        # ★ v0.79：root 的 system prompt 每轮**重建**，把当前状态推给它。
+        #
+        # 为什么不改 `system_prompt` 本身：它是入参、被多个子 agent 共享引用，
+        # 就地拼接会污染下一条循环。这里每轮算一份新的局部变量。
+        #
+        # 为什么只给 root：子 agent 有自己的 task 与全场覆盖（`_child_task_prompt`），
+        # 全场方向与事实对它只是噪音 —— 它会以为那些是自己的活儿。
+        _sys = system_prompt
+        if is_root:
+            _live = coord.shared.render_live_state(turn=turn, max_turns=max_turns)
+            if _live:
+                _sys = system_prompt + "\n\n" + _live
         try:
-            reply = await gateway.chat(_messages(), system=system_prompt)
+            reply = await gateway.chat(_messages(), system=_sys)
         except KernelError as exc:
             outcome.error = exc.message
             log.append(f"[{node.agent_id} t{turn}] LLM 失败：{exc.message}")
