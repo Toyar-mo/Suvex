@@ -2770,6 +2770,47 @@ class SolveSpec:
     #: 所以门恒开。要关它得在代码里显式写 `min_coverage=0`。
     min_coverage: int | None = None
 
+    #: ★ v0.79：项目黑板的存取器（学 CyberStrikeAI 的 `project_facts`）。
+    #:
+    #: ## 为什么是"存取器对象"而不是 session / 仓储函数
+    #:
+    #: kernel 是**纯编排层**，它不该 import SQLAlchemy —— 那样
+    #: `tests/kernel/` 里那些不碰数据库的用例就跑不起来了。所以这里收一个
+    #: 鸭子类型对象，只要两个方法：
+    #:
+    #:   · `record(**fields) -> {fact_key, created, version}`
+    #:   · `get(fact_key) -> dict | None`
+    #:
+    #: 生产实现是 `app/facts/store.py::DbFactStore`，由
+    #: `scans/agent_runner.build_solve_spec_from_scan` 注入。
+    #:
+    #: ## `None`（默认）= 本次扫描没有黑板
+    #:
+    #: CTF 解题路径与纯逻辑测试都是 `None`。这时 `record_fact` /
+    #: `get_scan_fact` 两个工具**仍然存在**（否则提示词里提到的工具名会变成
+    #: "不存在的工具"，模型白跑一轮 —— 那是 v0.72 `mcp_servers` 事故的形状），
+    #: 但调用会返回一句明确的"本次未启用黑板"，让模型改用 `add_fact`。
+    #:
+    #: ## 为什么不让两个记账工具合并
+    #:
+    #: `add_fact`（内存态）是 v0.75 就有、已被实测验证过的（v0.77 那轮出了
+    #: 5 条真发现）。`record_fact`（落库）依赖部署侧一次迁移。合并会让
+    #: "迁移没跑"变成"记账功能整体失效" —— 分开之后黑板挂了不影响原有记账。
+    fact_store: Any | None = None
+
+    #: ★ v0.79：项目黑板存取器（学 CyberStrikeAI 的 `project_facts`）。
+    #:
+    #: `None`（CTF 解题路径、纯逻辑测试）= **没有黑板**。此时
+    #: `record_fact` / `get_scan_fact` 两个工具仍然**存在于工具表里**
+    #: （否则提示词提到的工具名会变成"不存在的工具"，模型白跑一轮 ——
+    #: 这正是 v0.72 `mcp_servers` 那类事故的形状），调用时返回一句
+    #: "本次扫描未启用"，不抛。
+    #:
+    #: 生产路径由 `scans/agent_runner.build_solve_spec_from_scan` 注入
+    #: `app.facts.store.DbFactStore`。kernel 层因此**不需要 import
+    #: SQLAlchemy**，与 `finding_sink` 是同一条分层纪律。
+    fact_store: Any | None = None
+
     # ★ v0.70：token 预算上限（学 strix 的 cost budget，但用 token 不用美元）。
     #
     # `None`（默认）= 不设成本维度，只按回合梯度催收尾。

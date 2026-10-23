@@ -344,6 +344,19 @@ IDEA_RESOLVE = "resolve_idea"
 MEMORY_ADD = "add_fact"
 MEMORY_GET = "get_memory"
 
+# ★ v0.79：项目黑板（落库版，学 CyberStrikeAI 的 project_facts）。
+#
+# ⚠️ 与 `add_fact`（`MEMORY_ADD`）的区别要说清，否则模型会两个都记或都不记：
+#   · `add_fact`   = **本次运行的**内存态事实，进程结束就没了，跨扫描不继承；
+#   · `record_fact` = **落库的**事实，跨轮次、跨扫描都还在（同目标下次能继承）。
+#
+# 既然两个都在，为什么不做成一个？因为内存态那个是 v0.75 就有的、已被
+# 实测验证过（v0.77 那轮出了 5 条真发现，其中 2 条主动压级到 info），
+# 而落库这个是新加的、依赖部署侧一次迁移。合成一个会让"迁移没跑"变成
+# "记账功能整体失效"。分开之后，黑板挂了不影响原有记账。
+FACT_RECORD = "record_fact"
+FACT_GET = "get_scan_fact"
+
 #: Idea 的合法状态。`open` 待做 / `doing` 在做 / `done` 做成了 / `dropped` 走不通。
 IDEA_STATUS = frozenset({"open", "doing", "done", "dropped"})
 
@@ -377,6 +390,8 @@ _SHARED = frozenset({
     IDEA_RESOLVE,
     MEMORY_ADD,
     MEMORY_GET,
+    FACT_RECORD,
+    FACT_GET,
 })
 
 
@@ -645,7 +660,9 @@ class SharedState:
             )
         return "\n".join(lines)
 
-    def render_live_state(self, *, turn: int = 0, max_turns: int = 0) -> str:
+    def render_live_state(
+        self, *, turn: int = 0, max_turns: int = 0, fact_index: str = ""
+    ) -> str:
         """把共享状态渲染成**注入 system prompt** 的短状态（v0.79）。
 
         ## 为什么需要它（这不是 `render_*` 的重复品）
@@ -680,6 +697,16 @@ class SharedState:
         `check_live_state.py` 测出来空状态 len=48 才抓到）。
 
         所以回合位置单独判断：**只有当确实有状态可推时才附上它**。
+
+        ## `fact_index` 由调用方传入，不在这里读 DB
+
+        落库黑板（`record_fact` 写的那份）的索引块由 `DbFactStore.index_block()`
+        渲染好传进来。**`SharedState` 是纯内存的**，它 import 不到 SQLAlchemy
+        也不该 import —— 这条边界一破，`tests/kernel/` 里那些不碰数据库的
+        用例就全跑不起来了。
+
+        ⚠️ `fact_index` 非空时**即使 `self.facts` 为空也要出内容** ——
+        那是别的轮次/别的扫描留下的事实，正是最该被看见的一类。
         """
         parts: list[str] = []
 
@@ -706,6 +733,10 @@ class SharedState:
         if self.coverage:
             lines = [f"- {s}：{i.get('outcome', '?')}" for s, i in self.coverage.items()]
             parts.append("## 已测位置\n" + "\n".join(lines))
+
+        # ⑤ 落库黑板索引（跨轮次、跨扫描的事实，由调用方渲染好传进来）
+        if fact_index:
+            parts.append("## 项目黑板（持久，含上次扫描的结论）\n" + fact_index)
 
         if not parts:
             return ""
@@ -926,6 +957,10 @@ async def dispatch_orchestration_tool(
         return _do_add_fact(args, coord=coord, me=me)
     if name == MEMORY_GET:
         return _do_get_memory(args, coord=coord)
+    if name == FACT_RECORD:
+        return _do_record_fact(args, coord=coord, me=me, spec=spec)
+    if name == FACT_GET:
+        return _do_get_scan_fact(args, coord=coord, spec=spec)
     if name == THREAT_AMEND:
         return _do_amend_threat_model(args, coord=coord, me=me)
     if name == FINISH_SCAN:
@@ -1208,6 +1243,102 @@ def _do_get_memory(args: dict[str, Any], *, coord: AgentCoordinator) -> str:
     )
 
 
+def _do_record_fact(
+    args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode, spec: SolveSpec
+) -> str:
+    """写一条**落库**的事实（同 fact_key 覆盖）。
+
+    ## 为什么要落库而不是只进内存（`add_fact` 已经能做这件事了）
+
+    `add_fact` 记的事实活不过这次运行：进程重启就没了，扫描结束就没了，
+    下次对同一目标扫描时**什么也继承不到**。而"上次我试过 `/api/v1/scans`
+    走不通"这种认知，恰恰是最该跨扫描保留的 —— 它的失效速度最慢，
+    重复验证的成本却最高。
+
+    ## 校验在 `app/facts/service.validate_fact`
+
+    这里只做"把参数搬过去 + 把 ValueError 变成模型看得懂的 JSON"。
+    fact_key 形状、confidence 三态、summary 长度上限都在 service 里 ——
+    那些规则的唯一读者是模型，不该散落在 kernel。
+    """
+    store = getattr(spec, "fact_store", None)
+    if store is None:
+        # ⚠️ 不抛。模型调了一个合法存在的工具但部署侧没开 ——
+        # 要让它知道"这次没有黑板"，然后继续干活，而不是卡在这一步。
+        return _json_ok(
+            note="本次扫描未启用项目黑板（record_fact 需要落库）。"
+            "请改用 `add_fact` 记内存态事实，或直接继续。",
+            stored=False,
+        )
+    try:
+        res = store.record(
+            fact_key=str(args.get("fact_key") or ""),
+            summary=str(args.get("summary") or ""),
+            category=(str(args["category"]) if args.get("category") else None),
+            confidence=str(args.get("confidence") or "tentative"),
+            trust_level=(str(args["trust_level"]) if args.get("trust_level") else None),
+            detail=(str(args["detail"]) if args.get("detail") else None),
+            evidence_excerpt=(
+                str(args["evidence"]) if args.get("evidence") else None
+            ),
+            edges=args.get("edges") if isinstance(args.get("edges"), list) else None,
+            recorded_by=me.agent_id,
+        )
+    except ValueError as exc:
+        return _json_err(str(exc))
+    except Exception:  # noqa: BLE001 - DB 抖一下不该让整场编排停摆
+        logger.warning("写项目黑板失败", exc_info=True)
+        return _json_ok(
+            note="写黑板时出错（已记录日志）。继续用 `add_fact` 记内存态事实，不要重试。",
+            stored=False,
+        )
+    return _json_ok(
+        fact_key=res["fact_key"],
+        created=res["created"],
+        version=res["version"],
+        note=(
+            "已写入黑板（新条目）。"
+            if res["created"]
+            else f"已更新黑板（第 {res['version']} 版）。"
+        ),
+    )
+
+
+def _do_get_scan_fact(
+    args: dict[str, Any], *, coord: AgentCoordinator, spec: SolveSpec
+) -> str:
+    """按 fact_key 取一条事实的**全文**。
+
+    ## 为什么需要这个工具（索引块已经给了摘要）
+
+    索引块（`render_fact_index`）每条只给 80 字符摘要，因为它是每轮进
+    system prompt 的东西。而"这条事实的完整证据是什么"是**按需**的：
+    模型在准备复述或据此下结论时才需要。
+
+    ⚠️ 页脚（`INDEX_FOOTER`）明确写了「禁止凭摘要臆造细节」——
+    那个禁止要有对应动作可做，否则只是一句空话。这个工具就是那个动作。
+    """
+    key_raw = str(args.get("fact_key") or "").strip()
+    if not key_raw:
+        return _json_err("需要 `fact_key`，例如 `endpoint/put-auth-users-id`。索引块里每条开头那个就是。")
+    store = getattr(spec, "fact_store", None)
+    if store is None:
+        return _json_ok(note="本次扫描未启用项目黑板，没有可查的落库事实。", found=False)
+    try:
+        got = store.get(key_raw)
+    except ValueError as exc:
+        return _json_err(str(exc))
+    except Exception:  # noqa: BLE001
+        logger.warning("读项目黑板失败", exc_info=True)
+        return _json_ok(note="读黑板时出错（已记录日志）。", found=False)
+    if got is None:
+        return _json_ok(
+            note=f"黑板里没有 {key_raw!r}。先用 `record_fact` 记一条，或核对 key 拼写。",
+            found=False,
+        )
+    return _json_ok(found=True, **got)
+
+
 def _do_think(args: dict[str, Any], *, me: AgentNode) -> str:
     """给模型一个"只推理不动手"的出口。
 
@@ -1403,7 +1534,22 @@ async def run_agent_loop(
         # 全场方向与事实对它只是噪音 —— 它会以为那些是自己的活儿。
         _sys = system_prompt
         if is_root:
-            _live = coord.shared.render_live_state(turn=turn, max_turns=max_turns)
+            # 落库黑板的索引块（v0.79）。`fact_store` 是可选注入的
+            # （见 `SolveSpec.fact_store`）：CTF 解题路径与纯逻辑测试都是 None，
+            # 那时这里拿到空串，`render_live_state` 自然不会多吐一段。
+            #
+            # ⚠️ 用 try/except 包住：DB 抖一下不该让整轮 LLM 调用失败。
+            # 拿不到索引块就当没有黑板，继续跑 —— 记账是增强，不是前置条件。
+            _fact_index = ""
+            _store = getattr(spec, "fact_store", None)
+            if _store is not None:
+                try:
+                    _fact_index = _store.index_block() or ""
+                except Exception:  # noqa: BLE001 - 见上面的说明
+                    logger.warning("渲染黑板索引失败，本轮按无黑板处理", exc_info=True)
+            _live = coord.shared.render_live_state(
+                turn=turn, max_turns=max_turns, fact_index=_fact_index
+            )
             if _live:
                 _sys = system_prompt + "\n\n" + _live
         try:

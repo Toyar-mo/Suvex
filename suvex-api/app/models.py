@@ -21,6 +21,7 @@ from app.audit.models import AuditLog  # noqa: F401
 # 静态检查会认为它们是未使用。
 from app.auth.models import AdminAccount, ApiToken, AuthSession  # noqa: F401
 from app.events.models import ActivityEvent, Agent  # noqa: F401
+from app.facts.models import ScanFact  # noqa: F401
 from app.findings.models import Finding, FindingTimelineEntry  # noqa: F401
 from app.kernel.models import (  # noqa: F401
     KernelAccount,
@@ -52,6 +53,8 @@ __all__ = [
     "Scan",
     "Finding",
     "FindingTimelineEntry",
+    # ★ v0.79：扫描过程的项目黑板（跨轮次、跨扫描的认知）
+    "ScanFact",
     "Report",
     "ReportFinding",
     "Agent",

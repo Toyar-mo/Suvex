@@ -449,6 +449,22 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
         # 看不到这里函数的局部变量之外的任何东西。
         finding_sink: list[object] = []
         solve_spec = build_solve_spec_from_scan(spec, finding_sink=finding_sink)
+        # ★ v0.79：项目黑板（落库版）。
+        #
+        # 用 `ScopedFactStore` 而不是长会话的 `DbFactStore`：引擎跑在独立线程的
+        # 独立事件循环里，跨轮复用一个长会话会把连接钉住一整次扫描（几十分钟），
+        # 把连接池耗干 —— 与 `_hint_provider` 同一个坑（见那段注释）。
+        # 短会话的代价只是多几次 connect，而黑板每次调用读写一两条记录。
+        #
+        # ⚠️ 只在 `spec.scan_id` 存在时挂。CTF 解题路径走的是另一条 spec 构造，
+        # 那里没有 scan_id，黑板对它是无意义的（也没有表可写）。
+        _scan_id = getattr(spec, "scan_id", "")
+        if _scan_id:
+            from app.facts.scoped_store import ScopedFactStore
+
+            solve_spec.fact_store = ScopedFactStore(
+                scan_id=_scan_id, target=getattr(spec, "target", "") or ""
+            )
     except Exception:  # noqa: BLE001
         logger.exception("扫描 %s：构造 SolveSpec 失败", spec.scan_id)
         return EXIT_ERROR

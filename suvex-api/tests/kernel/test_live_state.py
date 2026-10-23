@@ -102,15 +102,26 @@ class TestWiring:
     def test_only_root_gets_it(self):
         """注入必须挂在 `is_root` 分支里 —— 子 agent 不该收到全场状态。
 
-        断言方式：取 `render_live_state(` 往前到最近的 `for turn` 循环体开头，
-        确认这段里 `if is_root:` 是它的**直接**守卫（比"全文某处有 is_root"严）。
+        断言方式：取 `render_live_state(` 往前到最近的 `if is_root:`，
+        确认两者之间**没有第二个 `if is_root:`**（那会说明隔着别的分支）。
+
+        ⚠️ 为什么不是「中间不许有任何 if」：v0.79 落库黑板接线后，注入点前
+        多了 `if _store is not None:`（取索引块，且自带 try/except）。那是个
+        **嵌套在 is_root 里的正常分支**，不是绕过守卫。原断言把"任何 if"
+        都当违规，于是把正确代码判成红的。
+
+        真正要钉住的是：**守卫是它所在的这一层**，即 `if is_root:` 与注入点
+        之间不许再出现一个新的 `if is_root:`（那等于重开了判断）。
+        `guard_block` 从 `if is_root:` 这个词本身开始，所以计数是 1。
         """
         src = inspect.getsource(multiagent.run_agent_loop)
         i = src.index("render_live_state(")
-        # 往前找最近的 if is_root: —— 中间不能有别的同级 if
         head = src[:i]
-        last_guard = head.rfind("if is_root:")
-        assert last_guard != -1
-        guard_block = head[last_guard:i]
-        # 守卫到注入点之间不应再出现"另一个 if"（否则说明隔着别的分支）
-        assert guard_block.count("if ") == 1, guard_block
+        guard_at = head.rfind("if is_root:")
+        assert guard_at != -1, "注入点前面必须有 if is_root: 守卫"
+        guard_block = head[guard_at:i]
+        # 从守卫关键词本身开始数，所以恰好 1 次；2 次 = 中间重开了判断。
+        assert guard_block.count("if is_root:") == 1, guard_block
+        # 再钉一层：注入点必须真的在这个 if 的缩进块里（不是同级后置）。
+        line = " " * (len(src[: i].split("\n")[-1]) - len(src[: i].split("\n")[-1].lstrip()))
+        assert len(line) > 4, "注入点应在缩进块内"
