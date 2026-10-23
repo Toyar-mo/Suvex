@@ -816,9 +816,21 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
     否则它们会被默认值吞掉（`info` / `needs_follow_up`），而"我的高危
     怎么变成 info 了"是很难回查的。
 
-    ## 只写 `findings`，不写 `candidates`
+    ## `findings` 与 `workorders` 都要写（v0.74）
 
-    `candidates` 是 flag（CTF 判据用的），渗透评估里没有它。
+    应急响应（IR）场景里，模型交出的是 `workorders`（取证处置工单：结论 +
+    证据 + 处置动作），而不是渗透场景的 `findings`。v0.73 之前这里只遍历
+    `outcome.findings`，于是 IR 那 4 个 case 全部 `ok:true` 但
+    `vulnerabilities.json` 是 `[]`、DB findings 恒 0 —— 又是一个
+    「跑出来了但没入库」。这里把两个列表都收进来：
+
+    - `findings` 原样（渗透语义）
+    - `workorders` 映射成同一记录形状：`title <- title/action`、
+      `description <- summary/conclusion`、`evidence <- evidence`、
+      `remediation_steps <- action/remediation`，并把 `discovered_by`
+      标成 `agent-workorder` 以便对账时区分来源。
+
+    `candidates` 是 flag（CTF 判据用的），渗透评估里没有它，仍然不写。
     """
     import json
 
@@ -862,6 +874,64 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
                     "discovered_by": "agent",
                 }
             )
+
+    # 应急响应（IR）场景：模型交出的是 workorders，不是 findings。
+    # 不把它们收进来，IR 扫描就永远是 ok:true / findings:0。
+    raw_orders = getattr(outcome, "workorders", None)
+    if isinstance(raw_orders, list):
+        for item in raw_orders:
+            if not isinstance(item, dict):
+                # 工单也可能是纯字符串（模型偷懒只写一句话）
+                text = str(item).strip() if isinstance(item, str) else ""
+                if text:
+                    records.append(
+                        {
+                            "title": text[:200],
+                            "severity": "info",
+                            "confidence": "medium",
+                            "cwe": "",
+                            "cvss": None,
+                            "target": "",
+                            "description": text,
+                            "technical_analysis": "",
+                            "evidence": "",
+                            "poc_script_code": "",
+                            "remediation_steps": "",
+                            "code_locations": "",
+                            "verification": "needs_follow_up",
+                            "discovered_by": "agent-workorder",
+                        }
+                    )
+                continue
+            title = str(item.get("title") or item.get("action") or "").strip()
+            target = str(item.get("target") or "").strip()
+            if not title and not target:
+                continue
+            verification = _normalize_verification(item.get("verification"))
+            evidence = str(item.get("evidence") or "")
+            records.append(
+                {
+                    "title": title,
+                    "severity": _normalize_severity(item.get("severity")),
+                    "confidence": "high" if verification == "confirmed" else "medium",
+                    "cwe": str(item.get("cwe") or ""),
+                    "cvss": None,
+                    "target": target,
+                    "description": str(
+                        item.get("summary") or item.get("conclusion") or item.get("description") or ""
+                    ),
+                    "technical_analysis": evidence,
+                    "evidence": evidence,
+                    "poc_script_code": "",
+                    "remediation_steps": str(
+                        item.get("action") or item.get("remediation") or item.get("remediation_steps") or ""
+                    ),
+                    "code_locations": "",
+                    "verification": verification,
+                    "discovered_by": "agent-workorder",
+                }
+            )
+
     path = spec.run_dir / "vulnerabilities.json"
     try:
         path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")

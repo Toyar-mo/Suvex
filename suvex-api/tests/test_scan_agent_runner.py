@@ -217,17 +217,18 @@ def test_pentest_prompt_keeps_methodology_sections() -> None:
 
 
 class _FakeOutcome:
-    def __init__(self, findings):  # noqa: ANN001
+    def __init__(self, findings, workorders=None):  # noqa: ANN001
         self.findings = findings
+        self.workorders = workorders
         self.error = None
         self.turns = 0
         self.tool_calls = 0
         self.llm_calls = 0
 
 
-def _write(tmp_path: Path, findings) -> list[dict]:  # noqa: ANN001
+def _write(tmp_path: Path, findings, workorders=None) -> list[dict]:  # noqa: ANN001
     spec = _spec(run_dir=tmp_path, log_path=tmp_path / "scan.log")
-    agent_runner._write_vulnerabilities(spec, _FakeOutcome(findings))
+    agent_runner._write_vulnerabilities(spec, _FakeOutcome(findings, workorders))
     path = tmp_path / "vulnerabilities.json"
     assert path.is_file()
     return json.loads(path.read_text(encoding="utf-8"))
@@ -303,6 +304,61 @@ def test_write_vulnerabilities_ignores_non_list_findings(tmp_path: Path) -> None
     assert records == []
     records = _write(tmp_path, None)
     assert records == []
+
+
+def test_write_vulnerabilities_collects_workorders_for_ir_scans(tmp_path: Path) -> None:
+    """IR 场景模型交的是 `workorders` 不是 `findings` —— 必须一起入库。
+
+    回归 v0.74 之前的缺陷：`_write_vulnerabilities` 只遍历
+    `outcome.findings`，于是 4 个 IR case 全部 `ok:true` 而
+    `vulnerabilities.json` 是 `[]`、DB findings 恒 0。
+    反向验证：把 workorders 那段删掉，本条立刻 FAILED。
+    """
+    records = _write(
+        tmp_path,
+        None,
+        [
+            {
+                "title": "web-01 应用上传接口路径穿越导致 RCE",
+                "severity": "高",
+                "verification": "confirmed",
+                "summary": "203.0.113.201 通过上传接口穿越实现 RCE",
+                "evidence": "/var/log/nginx/error.log 中 /../../etc/passwd 请求",
+                "action": "隔离 web-01，轮换 deploy 凭据",
+                "cwe": "CWE-22",
+            }
+        ],
+    )
+    assert len(records) == 1
+    got = records[0]
+    assert got["title"] == "web-01 应用上传接口路径穿越导致 RCE"
+    assert got["severity"] == "high"
+    assert got["verification"] == "confirmed"
+    assert got["confidence"] == "high"
+    assert got["discovered_by"] == "agent-workorder"
+    # 证据与处置动作都要落到 importer 真正读的字段上
+    assert "/../../etc/passwd" in got["evidence"]
+    assert "轮换 deploy 凭据" in got["remediation_steps"]
+    assert "203.0.113.201" in got["description"]
+
+
+def test_write_vulnerabilities_wraps_string_workorders(tmp_path: Path) -> None:
+    # 模型偷懒只给一句话的工单，也不能丢。
+    records = _write(tmp_path, None, ["检查 cron.d/system-update 的持久化"])
+    assert len(records) == 1
+    assert "system-update" in records[0]["title"]
+    assert records[0]["discovered_by"] == "agent-workorder"
+
+
+def test_write_vulnerabilities_keeps_both_findings_and_workorders(tmp_path: Path) -> None:
+    # 两个列表同时有值时都写，不互相覆盖。
+    records = _write(
+        tmp_path,
+        [{"title": "渗透发现", "severity": "低", "target": "http://x/", "verification": "confirmed"}],
+        [{"title": "IR 工单", "severity": "中", "verification": "needs_follow_up"}],
+    )
+    titles = sorted(r["title"] for r in records)
+    assert titles == ["IR 工单", "渗透发现"]
 
 
 # ══════════════════════════════════════════════════════════
