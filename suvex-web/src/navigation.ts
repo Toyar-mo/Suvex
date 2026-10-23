@@ -7,6 +7,7 @@ import {
   Settings2,
   ShieldAlert,
   Siren,
+  Wrench,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -125,6 +126,25 @@ export const NAV_ITEMS: NavItem[] = [
     label: '报告',
     icon: FileText,
     blurb: '把一次完成的扫描整理成可以直接交付给他人的报告。',
+    inMobileTabBar: false,
+  },
+  {
+    id: 'tools',
+    path: '/tools',
+    label: '工具管理',
+    shortLabel: '工具',
+    icon: Wrench,
+    blurb: '智能体此刻能调什么：外部接入的 MCP 连接，与内置工具的开关。',
+    /*
+      ★ 没有进移动端底栏：工具管理是**低频、按需**的动作（接一个新工具、
+        临时关掉某个能力），不是日常盯的那几个。它进「更多」面板。
+
+      ★ 但它必须是侧栏一级入口，而不是塞进设置页 ——
+        判据与「应急响应」那条一致：**它是不是另一件事**。
+        设置页四块都在回答"系统怎么跑"（模型/沙箱/通知/账号），
+        而这一页回答"能力边界是什么、为什么有几个不可用"，
+        它还要管外部进程的拉起与试连。塞进设置页只会让那一页更长更混。
+    */
     inMobileTabBar: false,
   },
   {

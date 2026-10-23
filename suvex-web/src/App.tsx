@@ -22,6 +22,7 @@ import {
   ReportsPage,
   ScansPage,
   SettingsPage,
+  ToolsPage,
 } from '@/pages'
 import LoginPage from '@/pages/LoginPage'
 import SetupPage from '@/pages/SetupPage'
@@ -53,6 +54,10 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   //   静默返回空，既不报错也不警告。v0.43 加导航项时必须同时加这里。
   ir: IrPage,
   kernel: KernelPage,
+  // ★ v0.82：工具管理页。漏掉这个键的症状是"侧栏点得动，但页面全白"——
+  //   路由表由 `NAV_ITEMS.map()` 生成，`if (!Page) return null` 静默返回空，
+  //   既不报错也不警告（与上面 `ir` 那条注释是同一个坑）。
+  tools: ToolsPage,
   settings: SettingsPage,
 }
 

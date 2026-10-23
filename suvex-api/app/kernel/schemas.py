@@ -324,7 +324,19 @@ class McpServerIn(StrictModel):
     #: 用途说明（进 `list_mcps` 的描述位，帮模型判断该不该用）。
     notes: str = Field(default="", max_length=500)
     #: 白名单：只允许调这些工具名（`None` = 全放）。
-    allowed_tools: list[str] | None = None
+    #:
+    #: ⚠️ **必须手写 camelCase**，与 `McpServerOut` 同一条理由。
+    #:
+    #: 入参是 `StrictModel`（`extra="forbid"`），而 `CamelModel` 的
+    #: `alias_generator` 只给了 `validation_alias`、**没有** `serialization_alias`，
+    #: 所以字段名写成 `allowed_tools` 时，**请求体里就必须也叫 `allowed_tools`**。
+    #:
+    #: 这个错误实测抓到过（2026-10-23）：前端按契约发 `allowedTools`，
+    #: 后端回 422「不认识的字段」，于是**新增/编辑 MCP 连接在界面上根本
+    #: 存不进去** —— 而报错说的是字段名，看起来像前端传错了，实际是
+    #: 两端对字段命名的口径不一致。`preserveEnv` 一开始就写成 camelCase，
+    #: 所以没踩到；这一行是漏改的那个。
+    allowedTools: list[str] | None = None
 
 
 class McpServerOut(CamelModel):

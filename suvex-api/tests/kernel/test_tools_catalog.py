@@ -463,3 +463,83 @@ def test_tools_get_does_not_leak_secrets(ready_client) -> None:  # noqa: ANN001
         assert not any(needle in key for key in keys), (
             f"工具清单里出现了可疑**字段**：{needle}（实际键名：{sorted(keys)}）"
         )
+
+
+# ══════════════════════════════════════════════════════════
+# 6. MCP 连接的出入参命名（v0.82 实测抓到的 bug）
+# ══════════════════════════════════════════════════════════
+
+
+def test_mcp_server_in_accepts_camel_case_payload() -> None:
+    """★ 前端按**契约**发 `allowedTools`，后端必须认。
+
+    ## 这条是实测抓到的真 bug，不是防御性编程
+
+    2026-10-23 在 Kali 上配 gogo 连接时，界面「添加连接」存不进去，
+    后端回 422：
+
+        {"error":{"code":"VALIDATION_FAILED",
+         "message":"提交的内容有误：server.allowedTools 不认识的字段。"}}
+
+    根因：`McpServerIn` 继承 `StrictModel`（`extra="forbid"`），而
+    `CamelModel` 的 `alias_generator` **只配了 `validation_alias`**、
+    没有 `serialization_alias` —— 所以字段名写成 `allowed_tools` 时，
+    请求体里就必须也叫 `allowed_tools`。而契约与前端都写 `allowedTools`。
+
+    后果是**整个"添加/编辑 MCP 连接"功能在界面上不可用**，而报错说的是
+    "不认识的字段"，看起来像前端传错了。
+
+    ⚠️ 所以这一条同时钉两个方向：camelCase 必须被接受（契约侧），
+    snake_case 也仍然接受（`populate_by_name=True`，测试与内部调用方在用）。
+    """
+    from app.kernel.schemas import McpServerIn
+
+    camel = McpServerIn(
+        **{
+            "name": "gogo",
+            "command": "/opt/suvex/bin/gogo",
+            "args": ["--x"],
+            "env": {"A": "1"},
+            "notes": "n",
+            "allowedTools": ["recon_scan"],
+            "preserveEnv": True,
+        }
+    )
+    assert camel.allowedTools == ["recon_scan"]
+    assert camel.preserveEnv is True
+
+    snake = McpServerIn(
+        name="gogo", command="/x", allowed_tools=["run_poc"],
+    )
+    assert snake.allowedTools == ["run_poc"]
+
+
+def test_mcp_server_out_serializes_camel_case() -> None:
+    """回执也必须是 camelCase —— 否则前端按契约读会拿到 `undefined`。
+
+    这是同一个 bug 的**另一半**：`McpServerOut` 原来也写的是
+    `allowed_tools` / `has_env`，于是 `GET /kernel/mcp-servers` 回的键
+    与契约对不上。前端读 `allowedTools` 得到 `undefined`，
+    在界面上表现为"白名单是空的"—— 一个看起来完全正常的状态。
+    """
+    from app.kernel.schemas import McpServerOut
+
+    dumped = McpServerOut(
+        name="gogo", command="/x", allowed_tools=["recon_scan"], has_env=True
+    ).model_dump()
+    assert "allowedTools" in dumped
+    assert "hasEnv" in dumped
+    assert "allowed_tools" not in dumped
+    assert "has_env" not in dumped
+
+
+def test_mcp_test_out_serializes_camel_case() -> None:
+    """试连回执同理（`serverName` / `elapsedMs`）。"""
+    from app.kernel.schemas import McpServerTestOut
+
+    dumped = McpServerTestOut(
+        ok=True, server_name="gogo", server_version="1.0", elapsed_ms=12
+    ).model_dump()
+    assert dumped["serverName"] == "gogo"
+    assert dumped["serverVersion"] == "1.0"
+    assert dumped["elapsedMs"] == 12

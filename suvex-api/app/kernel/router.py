@@ -480,7 +480,7 @@ def replace_mcp_servers(
             "args": list(item.args),
             "env": dict(item.env),
             "notes": item.notes,
-            "allowed_tools": list(item.allowed_tools) if item.allowed_tools else None,
+            "allowed_tools": list(item.allowedTools) if item.allowedTools else None,
             # ★ v0.82：前端编辑一条已有连接时**拿不到**它的 `env`（只进不出），
             #    所以它用这个标记说"这次别动 env"。没有它，用户只改一下
             #    notes 就会静默清掉凭据 —— 详见 `McpServerIn.preserveEnv`。
@@ -536,7 +536,7 @@ async def test_mcp_server(
             "env": dict(payload.server.env),
             "notes": payload.server.notes,
             "allowed_tools": (
-                list(payload.server.allowed_tools) if payload.server.allowed_tools else None
+                list(payload.server.allowedTools) if payload.server.allowedTools else None
             ),
         }
     )
