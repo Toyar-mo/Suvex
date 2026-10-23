@@ -254,6 +254,10 @@ def test_write_vulnerabilities_roundtrips_through_importer(tmp_path: Path) -> No
                 "reasoning": "可注入",
                 "remediation": "参数化查询",
                 "cwe": "CWE-89",
+                # v0.75 起的信任分级：两个身份对比 → L2，才能落 verified。
+                # 用 single_response（L1）的话，模型自述的 confirmed 会被降级成
+                # partial —— 那条规则本身由 test_..._downgrades_self_reported 钉住。
+                "evidence_kind": "cross_identity",
             }
         ],
     )
@@ -272,7 +276,7 @@ def test_write_vulnerabilities_drops_blank_entries(tmp_path: Path) -> None:
     records = _write(
         tmp_path,
         [
-            {"title": "有标题", "severity": "low"},
+            {"title": "有标题", "severity": "low", "evidence_kind": "single_response"},
             {"title": "", "target": ""},
             {"title": "  ", "target": "  "},
         ],
@@ -287,9 +291,11 @@ def test_write_vulnerabilities_confidence_maps_from_verification(tmp_path: Path)
     records = _write(
         tmp_path,
         [
-            {"title": "a", "verification": "confirmed"},
-            {"title": "b", "verification": "ruled_out"},
-            {"title": "c", "verification": "needs_follow_up"},
+            # 三条都给 L2（有对照实验），这样验证的是 verification 与
+            # confidence 的映射本身，而不是被分级规则挡掉。
+            {"title": "a", "verification": "confirmed", "evidence_kind": "cross_identity"},
+            {"title": "b", "verification": "ruled_out", "evidence_kind": "cross_identity"},
+            {"title": "c", "verification": "needs_follow_up", "evidence_kind": "cross_identity"},
         ],
     )
     by_title = {r["title"]: r for r in records}
@@ -354,7 +360,15 @@ def test_write_vulnerabilities_keeps_both_findings_and_workorders(tmp_path: Path
     # 两个列表同时有值时都写，不互相覆盖。
     records = _write(
         tmp_path,
-        [{"title": "渗透发现", "severity": "低", "target": "http://x/", "verification": "confirmed"}],
+        [
+            {
+                "title": "渗透发现",
+                "severity": "低",
+                "target": "http://x/",
+                "verification": "confirmed",
+                "evidence_kind": "cross_identity",
+            }
+        ],
         [{"title": "IR 工单", "severity": "中", "verification": "needs_follow_up"}],
     )
     titles = sorted(r["title"] for r in records)
@@ -784,3 +798,113 @@ def test_spec_resume_on_pulls_digest(tmp_path: Path) -> None:
     solve = agent_runner.build_solve_spec_from_scan(spec)
     assert len(solve.resume_digest) == 2
     assert "nmap" in solve.resume_digest[0]
+
+
+# ══════════════════════════════════════════════════════════
+# 4. 证据分级与观察落盘（v0.75）
+# ══════════════════════════════════════════════════════════
+
+
+def test_l0_findings_are_excluded_from_vulnerabilities(tmp_path: Path) -> None:
+    """纯推断（没写 evidence_kind）不许进 vulnerabilities.json。
+
+    反向验证：把 `_write_vulnerabilities` 里那道
+    `if not evidence_mod.should_enter_findings(level): continue` 删掉，
+    本条立刻 FAILED —— 漏洞统计一旦被未验证推断污染，对外报的数字就不再
+    可信，这是本项目最贵的一条线。
+    """
+    records = _write(
+        tmp_path,
+        [
+            {"title": "我猜这里有 SSRF", "evidence_kind": "inferred", "severity": "high"},
+            {"title": "确认的越权", "evidence_kind": "cross_identity", "severity": "high"},
+        ],
+    )
+    titles = [r["title"] for r in records]
+    assert titles == ["确认的越权"], f"L0 漏进了 findings：{titles}"
+
+
+def test_self_reported_confirmed_is_downgraded_without_control_experiment(
+    tmp_path: Path,
+) -> None:
+    """模型说 confirmed，但只给了单次响应（L1）→ 必须降成 partial。
+
+    这一条对应 P1 对照里那次真实误报：agent 报「可锁定全部登录」（high），
+    实际只是单源限流。**自述不是验证**。
+    """
+    records = _write(
+        tmp_path,
+        [
+            {
+                "title": "限流可锁定全部登录",
+                "verification": "confirmed",
+                "evidence_kind": "single_response",
+                "severity": "high",
+            }
+        ],
+    )
+    assert len(records) == 1
+    assert records[0]["verification"] == "needs_follow_up"
+    assert records[0]["confidence"] == "medium"
+
+
+def test_control_experiment_keeps_verified(tmp_path: Path) -> None:
+    # 反面：给了对照实验（两个身份）就是 L2，confirmed 得以保留。
+    records = _write(
+        tmp_path,
+        [
+            {
+                "title": "user 令牌可读 admin 列表",
+                "verification": "confirmed",
+                "evidence_kind": "cross_identity",
+                "severity": "high",
+            }
+        ],
+    )
+    assert records[0]["verification"] == "confirmed"
+    assert records[0]["confidence"] == "high"
+
+
+def test_observations_file_keeps_negative_and_l0(tmp_path: Path) -> None:
+    """`observations.json` 里两样都要有：被排除的（阴性）与未验证的（L0）。
+
+    反向验证：删掉 `_write_vulnerabilities` 末尾的 `_write_observations(...)`
+    调用，本条立刻 FAILED —— 这正是 v0.75 之前 ruled_out 随报告蒸发、
+    下一轮还要重走死路的原因。
+    """
+    spec = _spec(run_dir=tmp_path, log_path=tmp_path / "scan.log")
+    outcome = _FakeOutcome(
+        [
+            {"title": "确认的越权", "evidence_kind": "cross_identity"},
+            {"title": "我猜的 SSRF", "evidence_kind": "inferred"},
+        ]
+    )
+    outcome.ruled_out = ["alg:none 被拒（401）", "SPA 回退，未知路径不是 404"]
+    agent_runner._write_vulnerabilities(spec, outcome)
+
+    obs_path = tmp_path / "observations.json"
+    assert obs_path.is_file(), "observations.json 没写出来"
+    payload = json.loads(obs_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "suvex.observations/1"
+
+    obs = payload["observations"]
+    titles = {o["title"] for o in obs}
+    assert "我猜的 SSRF" in titles, "L0 提案被丢了"
+    assert "alg:none 被拒（401）" in titles, "阴性结果被丢了"
+
+    negs = [o for o in obs if o["polarity"] == "negative"]
+    assert len(negs) == 2
+    # 阴性结果一律 L2（能引用），但 polarity 让它们永远不算漏洞
+    assert all(o["trust_level"] == "L2" for o in negs)
+
+    levels = payload["levels"]
+    assert levels["L0"] == 1
+    assert levels["L2"] >= 3  # 1 条越权 + 2 条阴性
+
+
+def test_observations_not_written_when_nothing_to_say(tmp_path: Path) -> None:
+    # 空运行不建空文件 —— 空文件会让"没写"和"没跑"看起来一样。
+    agent_runner._write_vulnerabilities(
+        _spec(run_dir=tmp_path, log_path=tmp_path / "scan.log"), _FakeOutcome(None)
+    )
+    assert not (tmp_path / "observations.json").exists()

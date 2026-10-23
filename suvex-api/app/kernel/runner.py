@@ -2756,6 +2756,20 @@ class SolveSpec:
     #: 收集器的语义就是"这些是模型已经交出来的，别因为进程被砍就丢了"。
     finding_sink: list[object] | None = None
 
+    #: ★ v0.75：结束条件外置的门槛（学 BreachWeave 的"结束条件外置"）。
+    #:
+    #: root 写 `FINAL:` 时由编排层按**可数的**覆盖率与结论条数判定能不能
+    #: 收口，而不是听模型自己说"我扫完了"（见 `app/kernel/termination.py`）。
+    #:
+    #: `None` = 用模块默认值（`MIN_COVERAGE = 5`）。显式给一个数可以放宽/收紧。
+    #: 传 `0` = **关闭这道门**，行为退回 v0.74 —— 只有测试需要这么干：
+    #: 那些用一个写死脚本 gateway 跑 3 步的端到端测试里没有任何 coverage，
+    #: 门会把它们的 `FINAL` 全退回，测的就不再是它们本来要测的东西。
+    #:
+    #: ⚠️ 生产路径（`scans/agent_runner.build_solve_spec_from_scan`）**不传**，
+    #: 所以门恒开。要关它得在代码里显式写 `min_coverage=0`。
+    min_coverage: int | None = None
+
     # ★ v0.70：token 预算上限（学 strix 的 cost budget，但用 token 不用美元）。
     #
     # `None`（默认）= 不设成本维度，只按回合梯度催收尾。

@@ -160,6 +160,13 @@ _PHASE_BY_TOOL = (
     ("record_coverage", AgentPhase.SCAN),
     ("update_coverage", AgentPhase.SCAN),
     ("list_coverage", AgentPhase.SCAN),
+    # ★ v0.75：Idea / Memory 二分（学 BreachWeave）。登记方向与记事实
+    #   都属于"边干边理思路"，归 SCAN；读记忆是纯查看 —— 归 RECON 会让
+    #   活动流看起来像在反复侦察，所以也归 SCAN。
+    ("add_idea", AgentPhase.SCAN),
+    ("resolve_idea", AgentPhase.SCAN),
+    ("add_fact", AgentPhase.SCAN),
+    ("get_memory", AgentPhase.SCAN),
     ("repeat_request", AgentPhase.EXPLOIT),
     ("view_request", AgentPhase.EXPLOIT),
     ("list_requests", AgentPhase.EXPLOIT),

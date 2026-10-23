@@ -45,6 +45,19 @@ root 和别的子 agent 也能用到。不要攒到最后一次性写。
 的位置。你在一线，**发现与假设不符时主动 `amend_threat_model` 补充**
 （比如"这条信任边界其实没设防"）—— 那是给 root 和其它子 agent 的关键信息。
 
+### 方向与事实分开记（`add_idea` / `resolve_idea` / `add_fact` / `get_memory`）
+
+你手上正在试的东西有两种，**别混在一起**：
+
+- **方向**（还没验的假设）→ `add_idea`。试完立刻 `resolve_idea` 收掉它：
+  做成了标 `done` 并给 `evidence`；**走不通标 `dropped` 并给 `why`**。
+  没写原因的废弃等于没记，别人会把同一条死路重走一遍。
+- **事实**（已经确认的）→ `add_fact`，带 `evidence`。`kind` 用 `negative`
+  记"已排除"（这条路被堵死了，原因是…）。**阴性事实和阳性同等重要**。
+
+开工前用 `get_memory` 一次读回两栏（`ideas` 往哪走 / `facts` 确认了什么）。
+如果 `facts` 里已经有别人排除掉的东西，别再花轮次重试。
+
 ### 交报告（`agent_finish` 然后 `FINAL`）
 
 做完了：

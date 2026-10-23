@@ -79,6 +79,7 @@ from dataclasses import dataclass, field
 from datetime import UTC
 from pathlib import Path
 
+from app.kernel import evidence as evidence_mod
 from app.scans.runner import (
     LaunchResult,
     LaunchSpec,
@@ -846,7 +847,19 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
                 # 一条既没标题又没位置的"发现"不是发现 —— 丢掉它比
                 # 造一条空壳更诚实（空壳会让统计里多一条无意义记录）。
                 continue
+            # ★ v0.75：信任分级决定这一条能不能被当成"漏洞"统计。
+            #   模型声明的 `evidence_kind` 折算成 L0/L1/L2（规则在
+            #   `app/kernel/evidence.py`，不是模型自己说了算）。
+            #   L0 = 纯推断，只进 observations，**不进** vulnerabilities ——
+            #   漏洞统计是对外最常引用的数字，不能被未验证的推断污染。
+            level = evidence_mod.level_for(item)
+            if not evidence_mod.should_enter_findings(level):
+                continue
             verification = _normalize_verification(item.get("verification"))
+            # 级别优先于模型自述的 verification：说了 confirmed 但没有
+            # 对照实验（evidence_kind 只够 L1），那就不算 verified。
+            if evidence_mod.verification_for_level(level) == "partial":
+                verification = "needs_follow_up" if verification == "confirmed" else verification
             records.append(
                 {
                     "title": title,
@@ -937,6 +950,64 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
         path.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     except OSError:
         logger.warning("写发现文件失败：%s", path, exc_info=True)
+
+    _write_observations(spec, outcome)
+
+
+def _write_observations(spec: LaunchSpec, outcome: object) -> None:
+    """写 `run_dir/observations.json`：**全量**观察，含被排除的与未验证的。
+
+    ## 为什么要有这个文件（v0.75）
+
+    `vulnerabilities.json` 只装"够得上漏洞"的那些（见
+    `app/kernel/evidence.py` 的 `should_enter_findings`）。而一次扫描
+    真正干过的活远不止这些：
+
+    - **L0 提案**：模型推断但没验证的（不该算漏洞，但丢掉就是丢信息）；
+    - **否定结果**：模型在 `FINAL.ruled_out` 里写的"这条路走不通"。
+
+    否定结果尤其重要 —— 它是**下一次扫描不用重走死路**的依据，也是
+    答辩时能说清"排除了哪 15 条、每条反例是什么"的唯一来源。
+    之前它跟着 `FINAL` 一起蒸发，A/B 两轮都白跑一遍同样的排除。
+
+    文件不丢、不覆盖历史：每次运行写自己 run_dir 下的一份，
+    与 `vulnerabilities.json` 并列。
+
+    ⚠️ 读失败/写失败都只 warning：观察是观测附件，不该让扫描失败。
+    """
+    import json
+
+    try:
+        findings = getattr(outcome, "findings", None)
+        ruled_out = getattr(outcome, "ruled_out", None)
+        target = getattr(spec, "target", "") or ""
+        observations = evidence_mod.build_observations(
+            findings=findings,
+            ruled_out=ruled_out,
+            default_target=str(target),
+            reported_by="agent",
+        )
+        if not observations:
+            # 一条都没有就不建空文件 —— 空文件会让"没写"和"没跑"看起来一样。
+            return
+        payload = {
+            "schema": "suvex.observations/1",
+            "levels": evidence_mod.summarize_levels(observations),
+            "observations": observations,
+        }
+        path = spec.run_dir / "observations.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info(
+            "观察记录已落盘：%s（L0=%d L1=%d L2=%d，共 %d 条）",
+            path,
+            payload["levels"]["L0"],
+            payload["levels"]["L1"],
+            payload["levels"]["L2"],
+            len(observations),
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("写观察文件失败（不影响扫描）", exc_info=True)
+
 
 
 def build_solve_spec_from_scan(

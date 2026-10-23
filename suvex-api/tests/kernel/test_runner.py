@@ -1027,6 +1027,11 @@ def _spec(**overrides) -> runner.SolveSpec:
         "llm_api_key": "sk-test-not-real",
         "llm_api_base": "https://api.deepseek.com",
         "max_turns": 5,
+        # ★ v0.75：这些单元测试用写死的脚本 gateway 跑几步就收尾，
+        #   上下文里没有任何 coverage。结束条件外置那道门（termination.py）
+        #   会把它们的 FINAL 全退回，于是测的不再是它们本来要测的管道。
+        #   门本身由 tests/kernel/test_termination.py 专测。
+        "min_coverage": 0,
     }
     kwargs.update(overrides)
     return runner.SolveSpec(**kwargs)

@@ -59,6 +59,7 @@ from typing import Any
 
 import httpx
 
+from app.kernel import termination
 from app.kernel.client import KernelError
 from app.kernel.runner import (
     TOOL_NAMES,
@@ -170,6 +171,21 @@ TODO_UPDATE = "update_todo"
 THREAT_GET = "get_threat_model"
 THREAT_AMEND = "amend_threat_model"
 
+#: ★ v0.75：Idea / Memory 二分（学 BreachWeave）。
+#:
+#: `idea` 记"往哪走"，`fact` 记"已确认什么"。两者分开存、分开读 ——
+#: 详见 `SharedState.ideas` 那段注释里为什么不能用现成的 `notes`。
+IDEA_ADD = "add_idea"
+IDEA_RESOLVE = "resolve_idea"
+MEMORY_ADD = "add_fact"
+MEMORY_GET = "get_memory"
+
+#: Idea 的合法状态。`open` 待做 / `doing` 在做 / `done` 做成了 / `dropped` 走不通。
+IDEA_STATUS = frozenset({"open", "doing", "done", "dropped"})
+
+#: 事实的合法类型。`negative`（已排除）与 `positive` 同等重要 —— 它防止重走死路。
+FACT_KINDS = frozenset({"positive", "negative", "constraint"})
+
 _ROOT_ONLY = frozenset({
     CREATE_AGENT,
     SEND_MESSAGE,
@@ -193,6 +209,10 @@ _SHARED = frozenset({
     THINK,
     THREAT_GET,
     THREAT_AMEND,
+    IDEA_ADD,
+    IDEA_RESOLVE,
+    MEMORY_ADD,
+    MEMORY_GET,
 })
 
 
@@ -304,6 +324,131 @@ class SharedState:
             body = "\n".join(f"  - {s}" for s in items) if items else "  （空）"
             parts.append(f"### {label}\n{body}")
         return "\n".join(parts)
+
+    # ── ★ v0.75：Idea / Memory 二分（学 BreachWeave 的"状态分层维护"）──
+    #
+    # ## 为什么要把"往哪走"和"已确认什么"拆开
+    #
+    # 现在两者混在同一处：`notes`（平铺事实）+ `threat_model.hypotheses`
+    # （攻击假设）+ `coverage`（测过什么）。混着放的后果实测能看见 ——
+    # P1 那轮 agent 的共享笔记里同时躺着"确认了 CORS 反射"和"也许可以试试
+    # 前端 chunk"，而 root 每轮都要整块读一遍，读到的信噪比随着轮次下降，
+    # 到最后它自己也分不清哪条是事实、哪条是还没验的猜想。
+    #
+    # BreachWeave 的拆法：
+    #   · Idea   = "当前值得继续推进的方向"（假设，**可废弃**）
+    #   · Memory = "可复用的事实、证据与约束"（事实，**不可废**）
+    #
+    # 关键差别不在存储，在**生命周期**：
+    #   · Idea 有状态：open → doing → done / **dropped**（走不通就废弃，
+    #     并且要写为什么）。废弃的 Idea 会进 facts 当负面事实用。
+    #   · Memory 只增不减，每条都带证据来源。
+    #
+    # ## 为什么不用现成的 notes
+    #
+    # `notes` 是无结构的 标题→正文，谁都能写、谁都能改、没有状态。
+    # 一个"我打算试试 SPA 里那个 chunk"和一个"确认 `/api/v1/users` 无鉴权"
+    # 在 notes 里长得一样。Idea 需要状态机，Memory 需要证据字段，两者都不该
+    # 塞进一个裸 dict。
+
+    #: 待推进方向：idea_id → {text, status, by, why(废弃原因), evidence}
+    #:
+    #: status 取值见 `IDEA_STATUS`。**不是 open/doing 的 Idea 不再进 root 的
+    #: 提示**（做完了和走不通的都不该再占上下文）。
+    ideas: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: 已确认事实：fact 文本 → {evidence, by, kind}
+    #:
+    #: `kind` 是 `positive`/`negative`/`constraint` —— 阴性事实（"这条路
+    #: 走不通，因为…"）**同样重要**，它防止下一个 agent 重走一遍。
+    facts: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    def add_idea(self, text: str, *, by: str) -> dict[str, str]:
+        """登记一个待验证方向。返回该 Idea 的完整记录。"""
+        body = text.strip()
+        if not body:
+            raise ValueError("Idea 正文不能为空")
+        # 用正文前 60 字做 id：人可读，且同一句话不会重复登记。
+        idea_id = body[:60]
+        if idea_id in self.ideas:
+            return self.ideas[idea_id]
+        self.ideas[idea_id] = {
+            "text": body[:400],
+            "status": "open",
+            "by": by,
+            "why": "",
+            "evidence": "",
+        }
+        return self.ideas[idea_id]
+
+    def resolve_idea(
+        self, idea_id: str, status: str, *, by: str, why: str = "", evidence: str = ""
+    ) -> dict[str, str]:
+        """更新一个方向的状态。
+
+        `status="dropped"` 时**必须**给 `why` —— 这是本类唯一一条硬约束。
+        理由：没有原因的废弃等于没记，"我们试过了不行"是最容易失真的记忆
+        （下次没人知道到底试了什么）。`done` 同理要求 `evidence`。
+        """
+        rec = self.ideas.get(idea_id)
+        if rec is None:
+            # 允许用前缀模糊匹配，但必须唯一 —— 模型常常只记得前半句。
+            hits = [k for k in self.ideas if k.startswith(idea_id)]
+            if len(hits) != 1:
+                raise ValueError(f"没有匹配到唯一的 Idea：`{idea_id}`（命中 {len(hits)} 条）")
+            idea_id = hits[0]
+            rec = self.ideas[idea_id]
+        if status not in IDEA_STATUS:
+            raise ValueError(f"未知的 Idea 状态 `{status}`，只能是 {sorted(IDEA_STATUS)}")
+        if status == "dropped" and not why.strip():
+            raise ValueError("标记 dropped 必须给 `why`（试了什么、为什么走不通）")
+        if status == "done" and not evidence.strip():
+            raise ValueError("标记 done 必须给 `evidence`（凭什么说做完了）")
+        rec["status"] = status
+        rec["why"] = why.strip()
+        rec["evidence"] = evidence.strip()
+        rec["by"] = f"{rec.get('by', '?')} → {by}"
+        return rec
+
+    def add_fact(self, text: str, *, by: str, evidence: str = "", kind: str = "positive") -> None:
+        """记一条已确认事实。同文本覆盖（后者带新证据）。"""
+        body = text.strip()
+        if not body:
+            raise ValueError("事实正文不能为空")
+        if kind not in FACT_KINDS:
+            raise ValueError(f"未知的事实类型 `{kind}`，只能是 {sorted(FACT_KINDS)}")
+        self.facts[body[:300]] = {
+            "evidence": evidence.strip(),
+            "by": by,
+            "kind": kind,
+        }
+
+    def render_ideas(self) -> str:
+        """只列**还活着**的方向（open / doing）。
+
+        已完成与已废弃的不进来 —— 它们的存在价值已经转移到 facts 里，
+        再占 root 的上下文只会稀释它。这是 Idea/Memory 二分的真正收益。
+        """
+        live = {
+            k: v for k, v in self.ideas.items() if v.get("status") in ("open", "doing")
+        }
+        if not live:
+            return "（没有待推进的方向）"
+        lines = []
+        for k, v in live.items():
+            lines.append(f"- [{v.get('status')}] {v.get('text', k)}（{v.get('by', '?')}）")
+        return "\n".join(lines)
+
+    def render_facts(self) -> str:
+        if not self.facts:
+            return "（还没有确认的事实）"
+        labels = {"positive": "成立", "negative": "已排除", "constraint": "约束"}
+        lines = []
+        for text, info in self.facts.items():
+            tag = labels.get(info.get("kind", "positive"), "?")
+            ev = info.get("evidence") or ""
+            suffix = f"｜证据：{ev[:120]}" if ev else ""
+            lines.append(f"- [{tag}] {text}{suffix}")
+        return "\n".join(lines)
 
     def write_note(self, title: str, body: str, *, by: str) -> None:
         self.notes[title.strip()[:120]] = f"{body.strip()}\n\n— by {by}"
@@ -504,6 +649,14 @@ async def dispatch_orchestration_tool(
         return _do_update_todo(args, coord=coord)
     if name == THREAT_GET:
         return _json_ok(threat_model=coord.shared.render_threat_model())
+    if name == IDEA_ADD:
+        return _do_add_idea(args, coord=coord, me=me)
+    if name == IDEA_RESOLVE:
+        return _do_resolve_idea(args, coord=coord, me=me)
+    if name == MEMORY_ADD:
+        return _do_add_fact(args, coord=coord, me=me)
+    if name == MEMORY_GET:
+        return _do_get_memory(args, coord=coord)
     if name == THREAT_AMEND:
         return _do_amend_threat_model(args, coord=coord, me=me)
     if name == FINISH_SCAN:
@@ -737,6 +890,55 @@ def _do_stop_agent(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNo
     )
 
 
+def _do_add_idea(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    """登记一个待推进方向。"""
+    try:
+        rec = coord.shared.add_idea(str(args.get("text") or args.get("idea") or ""), by=me.name)
+    except ValueError as exc:
+        return _json_err(str(exc))
+    return _json_ok(
+        **rec,
+        note="已登记。做完或走不通时用 `resolve_idea` 收掉它 —— 走不通必须给 why。",
+    )
+
+
+def _do_resolve_idea(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    """把一个方向收成 done / dropped。"""
+    try:
+        rec = coord.shared.resolve_idea(
+            str(args.get("idea_id") or args.get("idea") or ""),
+            str(args.get("status") or ""),
+            by=me.name,
+            why=str(args.get("why") or ""),
+            evidence=str(args.get("evidence") or ""),
+        )
+    except ValueError as exc:
+        return _json_err(str(exc))
+    return _json_ok(**rec, note="已更新。剩下的待推进方向：" + coord.shared.render_ideas())
+
+
+def _do_add_fact(args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode) -> str:
+    """记一条已确认事实（含"已排除"这种阴性事实）。"""
+    try:
+        coord.shared.add_fact(
+            str(args.get("text") or args.get("fact") or ""),
+            by=me.name,
+            evidence=str(args.get("evidence") or ""),
+            kind=str(args.get("kind") or "positive"),
+        )
+    except ValueError as exc:
+        return _json_err(str(exc))
+    return _json_ok(note="已记入共享事实。")
+
+
+def _do_get_memory(args: dict[str, Any], *, coord: AgentCoordinator) -> str:
+    """一次读回"往哪走"与"已确认什么"两栏（分开呈现，不混在一起）。"""
+    return _json_ok(
+        ideas=coord.shared.render_ideas(),
+        facts=coord.shared.render_facts(),
+    )
+
+
 def _do_think(args: dict[str, Any], *, me: AgentNode) -> str:
     """给模型一个"只推理不动手"的出口。
 
@@ -938,6 +1140,44 @@ async def run_agent_loop(
         # ① 结论？
         final = parse_final(text)
         if final is not None:
+            # ★ v0.75：结束条件外置（学 BreachWeave）。
+            #
+            # root 说"我扫完了"不算数 —— 由编排层按可数的覆盖率/结论条数
+            # 判定。这里**只拦 root**：子 agent 的 FINAL 是它的交差，
+            # 拦它会让 root 永远等不到回报（那正是 v0.73 修的那个死法）。
+            if is_root:
+                # `spec.min_coverage = 0` = 显式关掉这道门（测试用，见字段注释）。
+                _min_cov = getattr(spec, "min_coverage", None)
+                if _min_cov != 0:
+                    # ⚠️ 先有鸡还是先有蛋：`finding_sink` 只在 FINAL **被放行之后**
+                    #    才登记，所以直接拿 sink 长度当结论条数，会永远判 0 条、
+                    #    永远拒绝收口 —— 实测连拒 5 轮直到轮次用尽（这一步
+                    #    `test_root_final_passes_after_recording_enough_coverage`
+                    #    第一次跑就抓到了）。
+                    #    正确口径：**这次 FINAL 里交上来的发现也算**。所以取
+                    #    "已登记的 + 本次这批"的并集大小。
+                    _batch = final.get("findings")
+                    _batch_n = len([x for x in _batch if x]) if isinstance(_batch, list) else 0
+                    gate = termination.decide(
+                        termination.Observation(
+                            coverage_count=len(coord.shared.coverage),
+                            finding_count=len(coord.finding_sink or []) + _batch_n,
+                            turns_used=coord.turns_used,
+                            total_budget=coord.total_budget,
+                            model_claims_done=True,
+                        ),
+                        min_coverage=(
+                            termination.MIN_COVERAGE if _min_cov is None else int(_min_cov)
+                        ),
+                    )
+                    if not gate.allow:
+                        # 不结束，把话塞回上下文继续跑。**不发 FINAL 事件** ——
+                        # 它没有发生；发一条 reasoning 让界面能看见"被退回了"。
+                        recent.append({"role": "user", "content": gate.nudge})
+                        log.append(f"[{node.agent_id} t{turn}] 收口被拒：{gate.reason}")
+                        notify("reasoning", f"还不能收口：{gate.reason}", {"text": gate.reason})
+                        continue
+
             outcome.candidates, rejected = extract_candidates_with_reasons(final)
             outcome.summary, outcome.tried, outcome.ruled_out = extract_final_analysis(final)
             outcome.workorders = final.get("workorders")
