@@ -171,6 +171,66 @@ TODO_UPDATE = "update_todo"
 THREAT_GET = "get_threat_model"
 THREAT_AMEND = "amend_threat_model"
 
+#: ★ v0.76：判定"原地打转"的滑窗参数。
+#:
+#: `ACTION_WINDOW = 20` 而非更大：门的判定发生在模型想收口的那一刻，
+#: 而它想收口通常正是因为"最近这一段没什么进展"——看 20 条已能覆盖
+#: 一次完整的探测试验；看 40+ 会把早期有效的侦察也混进来，稀释信号。
+#: `ACTION_WINDOW_MIN_SAMPLES = 10`：样本太少时比例没有意义，
+#: 宁可判"不知道"（`acting_ratio=None`）也不要误伤刚开始的扫描。
+ACTION_WINDOW = 20
+ACTION_WINDOW_MIN_SAMPLES = 10
+
+#: 一次 `run_shell` 里出现这些词，算"真的向目标发了请求"。
+#:
+#: 用**动作词**而不是"是否包含 http"：`grep -oE 'http[A-Za-z]*' bundle.js`
+#: 里有 http 字样但一次请求都没发。反过来 `nmap -p- 10.0.0.5` 没有 http
+#: 字样但确实是打目标。所以这里收的是发请求/发包的工具名。
+_ACTING_TOKENS = (
+    "curl",
+    "wget",
+    "nmap",
+    "ffuf",
+    "gobuster",
+    "dirb",
+    "nikto",
+    "whatweb",
+    "sqlmap",
+    "nc ",
+    "ncat",
+    "socat",
+    "openssl s_client",
+    "mqtt",
+    "redis-cli",
+    "mysql",
+    "psql",
+    "mongosh",
+    "docker ",
+)
+
+def _looks_like_acting(*, tool_name: str, command: str) -> bool:
+    """这一轮有没有真的向目标发起交互。
+
+    判定顺序（2026-10-23 P2 真跑后定下的）：
+
+    1. **`http_request`** → 一定是行动（它除了发请求没别的用途）。
+    2. **其他非 `run_shell` 工具**（`record_coverage` / `write_note` /
+       `think` / `create_agent` …）→ 未行动：记账与思考不碰目标。
+    3. **`run_shell` 的命令里有活体请求词**（`curl`/`nmap`/`ffuf`…）→ 行动。
+       哪怕同一条命令里也顺手 `grep` 了 —— 有一发打出去了就算打了。
+    4. 其余（`grep 本地文件`、`python3` 解析、写脚本、`ls`）→ 未行动。
+
+    ⚠️ 这是**启发式**，不是精确判定。它只回答"最近是不是在原地打转"，
+    误判的代价是"门多给或少给一句换向建议"，不影响结论对错。
+    用固定词表而不是解析命令行语法，是因为后者的复杂度远超收益。
+    """
+    if tool_name == "http_request":
+        return True
+    if tool_name != "run_shell":
+        return False
+    low = command.lower()
+    return any(tok in low for tok in _ACTING_TOKENS)
+
 #: ★ v0.75：Idea / Memory 二分（学 BreachWeave）。
 #:
 #: `idea` 记"往哪走"，`fact` 记"已确认什么"。两者分开存、分开读 ——
@@ -504,6 +564,27 @@ class AgentCoordinator:
     #: 结构化发现直接登记进来，超时取消时由 `_timeout_outcome` 收割。
     #: 为 None = 未开启（CTF 解题路径），所有登记点都是 no-op。
     finding_sink: list[Any] | None = None
+    #: ★ v0.76：最近的动作类型滑窗（只留最近 `ACTION_WINDOW` 条）。
+    #:
+    #: 记的是"这一轮到底碰没碰目标"。`run_shell` 里可能是 `curl`（碰了目标），
+    #: 也可能是 `grep 本地 bundle`（没碰）—— 分工在 `_looks_like_acting` 里。
+    #: 门需要这个来判断"是没干活还是干错了活"：2026-10-23 的 P2 真跑里
+    #: root 用 63 轮只探了 4 个端点，42% 的轮次在 grep/写脚本，收到
+    #: "覆盖 0/5"之后它继续打同一个点，直到 80 轮耗尽。
+    recent_actions: list[bool] = field(default_factory=list)
+
+    def note_action(self, *, acted: bool) -> None:
+        """登记一条动作（`acted` = 这一轮是否真的向目标发了请求）。"""
+        self.recent_actions.append(bool(acted))
+        if len(self.recent_actions) > ACTION_WINDOW:
+            del self.recent_actions[: len(self.recent_actions) - ACTION_WINDOW]
+
+    def acting_ratio(self) -> float | None:
+        """最近滑窗里"真打目标"的比例。样本不足时返回 None（不参与判定）。"""
+        if len(self.recent_actions) < ACTION_WINDOW_MIN_SAMPLES:
+            return None
+        return sum(1 for x in self.recent_actions if x) / len(self.recent_actions)
+
     _todo_seq: int = 0
     _id_seq: int = 0
 
@@ -1165,6 +1246,7 @@ async def run_agent_loop(
                             turns_used=coord.turns_used,
                             total_budget=coord.total_budget,
                             model_claims_done=True,
+                            acting_ratio=coord.acting_ratio(),
                         ),
                         min_coverage=(
                             termination.MIN_COVERAGE if _min_cov is None else int(_min_cov)
@@ -1213,6 +1295,12 @@ async def run_agent_loop(
         for tool_name, tool_args in batch:
             command = str(tool_args.get("command") or json.dumps(tool_args, ensure_ascii=False))
             log.append(f"[{node.agent_id} t{turn}] tool {tool_name} {json.dumps(tool_args, ensure_ascii=False)[:400]}")
+
+            # ★ v0.76：登记这一轮有没有真的向目标发请求。门的"原地打转"
+            #   判定靠这个滑窗（见 `_looks_like_acting` 的顺序说明）。
+            coord.note_action(
+                acted=_looks_like_acting(tool_name=tool_name, command=command)
+            )
 
             # 编排工具 vs 基础工具，分派到不同入口。
             orchestr_tools = _ROOT_ONLY | _CHILD_ONLY | _SHARED

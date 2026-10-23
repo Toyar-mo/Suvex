@@ -69,10 +69,30 @@ class Observation:
     total_budget: int = 0
     #: 模型是否已经写了 `FINAL:`。
     model_claims_done: bool = False
+    #: 最近若干轮里，"对目标发起的交互"（区分于 grep 本地文件、写脚本这类
+    #: **不碰目标**的轮次）占多少。`None` = 调用方没统计，不参与判定。
+    #:
+    #: ★ 为什么需要这个：2026-10-23 的 P2 真跑里 root 用 63 轮只探了
+    #:   4 个端点（scans 13 次 / login 12 次 / state 9 次 / health 6 次），
+    #:   42% 的轮次花在 grep 前端 bundle 和写解析脚本上 —— **一次请求
+    #:   都没发**。当时的门只说"覆盖 0/5"，模型收到后继续做它正在做的事，
+    #:   于是 80 轮预算在"更用力地打同一个点"上耗尽。
+    #:   所以门必须能区分"没干活"和"干错了活"：前者补动力，后者要换向。
+    acting_ratio: float | None = None
 
     @property
     def remaining_turns(self) -> int:
         return max(0, self.total_budget - self.turns_used)
+
+    @property
+    def stalled(self) -> bool:
+        """是否在原地打转：轮次花了不少，但绝大多数没落到目标身上。
+
+        阈值 0.6 是留了余量的：正常扫描里允许有一半以下的轮次用于
+        读文档、写脚本、分析响应（这些是必要劳动），但**低于四成在打目标**
+        时，继续给它"还差什么"的提示只会让它更用力地打同一个点。
+        """
+        return self.acting_ratio is not None and self.acting_ratio < 0.6
 
     @property
     def budget_exhausted(self) -> bool:
@@ -141,8 +161,24 @@ def _nudge(missing: list[str], obs: Observation) -> str:
     ⚠️ 措辞不提"覆盖率/预算"这些内部指标：模型不需要知道我们在数什么，
     也不需要学会"把 coverage 刷到 5 条就能收工"。所以这里写的是
     **具体的、要去做的动作**。
+
+    ★ 原地打转时**先换向、再补覆盖**。2026-10-23 的 P2 真跑暴露：
+    root 收到"覆盖 0/5"之后，把剩下的轮次继续花在同一个端点上
+    （scans 13 次 / login 12 次），因为它把这理解成"我做得还不够多"。
+    真正的问题不是不够多，是**太窄**。所以这种情况下第一条建议必须是
+    "换一类动作"，而不是"再多测几个"。
     """
     lines = ["还不能收口 —— 下面这些还没做到："]
+    if obs.stalled:
+        # 换向提示排在最前：它改变的是做事方式，覆盖数会随之自然变化。
+        lines.append(
+            "- 最近的轮次里，只有不到四成真的向目标发了请求，大部分花在"
+            "读本地文件、写脚本、解析响应上。**不是做得不够多，是打得太窄**："
+            "同一批入口反复试探不会得到新结论。换一类动作 ——"
+            "换一个身份（已登录/未登录/另一个用户）、换一个入口（网页里"
+            "点得到但你没测过的功能）、换一层（HTTP 之下的协议、文件上传、"
+            "批量导入这类入口），或者去测一个你现在能访问但没测过的接口。"
+        )
     if any("覆盖" in m for m in missing):
         lines.append(
             f"- 你只测了 {obs.coverage_count} 个位置。请把还没碰过的入口也走一遍，"

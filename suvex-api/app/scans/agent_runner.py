@@ -1108,10 +1108,26 @@ def build_solve_spec_from_scan(
     #   · 回合上限是用户更细的旋钮，取二者较小值 —— 用户可以说"标准深度
     #     但只给我 50 轮"，但不能靠填 500 突破 deep 也才 150 的天花板。
     # 这样两个旋钮都真有行为，界面上写的与实际一致（不再需要免责声明）。
+    # ★ v0.76：档位天花板按实测重标定（原 40/80/150）。
+    #
+    # 依据（两轮同槽真跑，同目标同模型同提示词）：
+    #   · P1 scan_01M5JB0TYY6EKM7CWWAHN30VS6：standard 档 80 轮，
+    #     实际 28:24 / 324 事件 / 63 次工具 / 17 条发现 —— **刚好够**，
+    #     但它是"开箱顺"的那次，不是常态。
+    #   · P2 scan_01M5KDP8Z1R37G35F8D4BQXZG6：standard 档 80 轮，
+    #     跑满 `error: 回合用尽（80 轮）仍未给出结论。`，
+    #     vulnerabilities.json = `[]`、无 observations.json。
+    #     root 63 次 run_shell 里 42% 花在 grep 前端 bundle / 写解析脚本，
+    #     只探了 4 个端点（scans 13 次、login 12 次），`record_coverage` 一次没调。
+    #
+    # 80 轮的真实含义是"只够一次窄探"：目标越大，探完面就没了预算。
+    # 现在 60/120/200 —— standard 给到 120 是为了留出"探完面后还能回来深挖
+    # 一个点"的余量（P2 的失败正是缺这段余量），仍显著低于 deep 的 200
+    # 以保持档位区分度。成本护栏仍在：用户填再大的数也压不过天花板。
     _DEPTH_CEILING = {
-        ScanMode.QUICK.value: 40,
-        ScanMode.STANDARD.value: 80,
-        ScanMode.DEEP.value: 150,
+        ScanMode.QUICK.value: 60,
+        ScanMode.STANDARD.value: 120,
+        ScanMode.DEEP.value: 200,
     }
     # 认不出的深度取值退回 standard 的天花板（不静默当成 deep 烧钱）。
     depth = (spec.scan_mode or ScanMode.STANDARD.value).strip().lower()

@@ -94,28 +94,29 @@ def test_pentest_spec_turns_follow_scan_mode_ceiling() -> None:
     回归锁：旧实现写死 `min(scan_max_turns, 80)`，导致
       ① 用户把「回合上限」调到 200/500 永远只有 80（界面填了不生效）；
       ② 「扫描深度」对自研引擎完全没被读，是死配置。
-    现 quick/standard/deep 各自给天花板 40/80/150，用户填入的值取较小值。
+    现 quick/standard/deep 各给天花板（v0.76 按 P2 实测从 40/80/150
+    上调到 60/120/200），用户填入的值取较小值。
     """
-    # deep 才能跑到 150（旧实现永远 80）
+    # deep 才能跑到 200（旧实现永远 80）
     assert (
         agent_runner.build_solve_spec_from_scan(
             _spec(scan_max_turns=500, scan_mode="deep")
         ).max_turns
-        == 150
+        == 200
     )
-    # standard 天花板 80（与旧默认一致）
+    # standard 天花板 120（v0.76 上调：P2 在 80 轮跑满未收敛）
     assert (
         agent_runner.build_solve_spec_from_scan(
             _spec(scan_max_turns=500, scan_mode="standard")
         ).max_turns
-        == 80
+        == 120
     )
-    # quick 天花板 40
+    # quick 天花板 60
     assert (
         agent_runner.build_solve_spec_from_scan(
             _spec(scan_max_turns=500, scan_mode="quick")
         ).max_turns
-        == 40
+        == 60
     )
     # 用户填得比天花板小 → 尊重用户值（细旋钮有效）
     assert (
@@ -139,8 +140,27 @@ def test_pentest_spec_unknown_scan_mode_falls_back_to_standard_ceiling() -> None
         agent_runner.build_solve_spec_from_scan(
             _spec(scan_max_turns=500, scan_mode="banana")
         ).max_turns
-        == 80
+        == 120
     )
+
+
+def test_depth_ceiling_leaves_room_to_dig_after_covering() -> None:
+    """★ v0.76：standard 档必须留出"探完面还能回来深挖"的余量。
+
+    P2 失败的形态不是"没探到"，是 80 轮刚好够窄探一遍就耗尽，
+    连一条带对照实验的结论都交不出来。这条盯的是档位之间的区分度
+    与 standard 的绝对值，而不是某个具体数字——数字可以再调，
+    但 standard 不能低到再次出现"探完就没预算"。
+    """
+    ceiling = {
+        mode: agent_runner.build_solve_spec_from_scan(
+            _spec(scan_max_turns=10_000, scan_mode=mode)
+        ).max_turns
+        for mode in ("quick", "standard", "deep")
+    }
+    assert ceiling["quick"] < ceiling["standard"] < ceiling["deep"]
+    # P1 那次 80 轮"刚好够"（28 分钟、17 条）是顺的一次；常态需要更多余量。
+    assert ceiling["standard"] > 80
 
 
 def test_pentest_spec_network_isolation_for_network_targets_is_forced_open() -> None:

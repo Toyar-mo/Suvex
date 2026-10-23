@@ -226,3 +226,207 @@ def _FakeSandboxProxy():
     from tests.kernel.test_runner import _FakeSandbox
 
     return _FakeSandbox()
+
+
+# ══════════════════════════════════════════════════════════
+# 3. v0.76：原地打转（acting_ratio）——P2 真跑催生的一层
+# ══════════════════════════════════════════════════════════
+
+
+class TestStalledDetection:
+    """`Observation.stalled` 的判据。
+
+    真跑依据（2026-10-23 P2）：root 用 63 轮只探了 4 个端点，
+    42% 的轮次在 grep 前端 bundle / 写解析脚本，一次请求都没发；
+    它收到"覆盖 0/5"之后继续打同一个点直到 80 轮耗尽。
+    """
+
+    def test_not_stalled_when_ratio_missing(self) -> None:
+        """没统计过（`None`）就不能判打转 —— 宁可不知道也不要误伤。"""
+        obs = termination.Observation(acting_ratio=None)
+        assert obs.stalled is False
+
+    def test_stalled_when_mostly_analyzing(self) -> None:
+        """四成以下在打目标 = 打转。0.42 正是 P2 的实测值。"""
+        assert termination.Observation(acting_ratio=0.42).stalled is True
+
+    def test_not_stalled_at_normal_mix(self) -> None:
+        """正常扫描允许一半以下用于读文档/写脚本，0.65 不该被判打转。"""
+        assert termination.Observation(acting_ratio=0.65).stalled is False
+
+    def test_boundary_is_sixty_percent(self) -> None:
+        """阈值就在 0.6：正好 0.6 不算打转（留余量）。"""
+        assert termination.Observation(acting_ratio=0.6).stalled is False
+        assert termination.Observation(acting_ratio=0.599).stalled is True
+
+
+class TestRedirectNudge:
+    """打转时给的提醒必须**换向**，而不是"再多测几个"。"""
+
+    def test_stalled_nudge_suggests_changing_approach(self) -> None:
+        d = termination.decide(
+            termination.Observation(
+                coverage_count=0,
+                finding_count=0,
+                turns_used=60,
+                total_budget=240,
+                model_claims_done=True,
+                acting_ratio=0.42,
+            )
+        )
+        assert d.allow is False
+        # 换向是第一位的要求，不是"再补覆盖"。
+        assert "打得太窄" in d.nudge
+        assert d.nudge.index("打得太窄") < d.nudge.index("record_coverage")
+
+    def test_normal_nudge_has_no_redirect_language(self) -> None:
+        """没打转时不许冒出"太窄"这类话 —— 否则模型会以为方向错了。"""
+        d = termination.decide(
+            termination.Observation(
+                coverage_count=1,
+                finding_count=0,
+                turns_used=20,
+                total_budget=240,
+                model_claims_done=True,
+                acting_ratio=0.75,
+            )
+        )
+        assert d.allow is False
+        assert "打得太窄" not in d.nudge
+
+    def test_stalled_never_leaks_internal_thresholds(self) -> None:
+        """换向提示里同样不能出现内部阈值（否则模型会去刷指标）。"""
+        d = termination.decide(
+            termination.Observation(
+                coverage_count=0,
+                finding_count=0,
+                turns_used=60,
+                total_budget=240,
+                model_claims_done=True,
+                acting_ratio=0.1,
+            )
+        )
+        assert "0.6" not in d.nudge
+        assert "60%" not in d.nudge
+
+
+class TestCoordinatorActionWindow:
+    """`AgentCoordinator` 的动作滑窗（`note_action` / `acting_ratio`）。"""
+
+    def test_ratio_is_none_before_enough_samples(self) -> None:
+        from app.kernel.multiagent import ACTION_WINDOW_MIN_SAMPLES, AgentCoordinator
+
+        coord = AgentCoordinator()
+        for _ in range(ACTION_WINDOW_MIN_SAMPLES - 1):
+            coord.note_action(acted=True)
+        assert coord.acting_ratio() is None
+
+    def test_ratio_computed_after_enough_samples(self) -> None:
+        from app.kernel.multiagent import ACTION_WINDOW_MIN_SAMPLES, AgentCoordinator
+
+        coord = AgentCoordinator()
+        for i in range(ACTION_WINDOW_MIN_SAMPLES):
+            coord.note_action(acted=(i % 2 == 0))
+        ratio = coord.acting_ratio()
+        assert ratio is not None
+        assert 0.0 < ratio < 1.0
+
+    def test_window_only_keeps_recent_actions(self) -> None:
+        """滑窗只留最近 `ACTION_WINDOW` 条 —— 早期有效侦察不该长期稀释信号。"""
+        from app.kernel.multiagent import ACTION_WINDOW, AgentCoordinator
+
+        coord = AgentCoordinator()
+        # 先 100 次全在打目标，再 20 次全在分析。
+        for _ in range(100):
+            coord.note_action(acted=True)
+        for _ in range(ACTION_WINDOW):
+            coord.note_action(acted=False)
+        assert len(coord.recent_actions) == ACTION_WINDOW
+        assert coord.acting_ratio() == 0.0
+
+
+class TestLooksLikeActing:
+    """`_looks_like_acting` 的分工判定（P2 的动作类别分布就靠它复现）。"""
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "curl -s http://t/api/v1/scans",
+            "nmap -p- 10.0.0.5",
+            "ffuf -u http://t/FUZZ -w /tmp/w.txt",
+            "gobuster dir -u http://t -w /tmp/w.txt",
+            "sqlmap -u 'http://t/x?id=1' --batch",
+        ],
+    )
+    def test_live_requests_count_as_acting(self, command: str) -> None:
+        from app.kernel.multiagent import _looks_like_acting
+
+        assert _looks_like_acting(tool_name="run_shell", command=command) is True
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "grep -oE 'http[A-Za-z]*' /tmp/index.js",
+            "python3 -c 'import json;print(1)'",
+            "ls -la /tmp",
+            "cat > /tmp/probe.sh <<'EOF'",
+            "jq '.paths | keys' /tmp/spec.json",
+        ],
+    )
+    def test_local_analysis_does_not_count(self, command: str) -> None:
+        from app.kernel.multiagent import _looks_like_acting
+
+        assert _looks_like_acting(tool_name="run_shell", command=command) is False
+
+    def test_curl_plus_grep_still_counts_as_acting(self) -> None:
+        """一条命令里既有 curl 又有 grep —— 打出去的那发子弹要算数。"""
+        from app.kernel.multiagent import _looks_like_acting
+
+        assert (
+            _looks_like_acting(
+                tool_name="run_shell",
+                command="curl -s http://t/ | grep -o '<title>[^<]*'",
+            )
+            is True
+        )
+
+    def test_http_request_tool_is_always_acting(self) -> None:
+        from app.kernel.multiagent import _looks_like_acting
+
+        assert _looks_like_acting(tool_name="http_request", command="{}") is True
+
+    def test_bookkeeping_tools_are_not_acting(self) -> None:
+        """`record_coverage` / `write_note` / `think` 是记账与思考，不碰目标。"""
+        from app.kernel.multiagent import _looks_like_acting
+
+        for name in ("record_coverage", "write_note", "think", "create_todo"):
+            assert _looks_like_acting(tool_name=name, command="{}") is False
+
+
+
+def test_note_action_is_wired_into_the_tool_loop() -> None:
+    """★ 接线断言：`_run_agent_loop` 里必须真的调 `coord.note_action`。
+
+    纯函数测试全绿但接线没接上，是 v0.72 `mcp_servers` 事故的形状。
+    这条用 `inspect.getsource` 直接盯源码里的调用点。
+    """
+    import inspect
+
+    from app.kernel import multiagent
+
+    src = inspect.getsource(multiagent.run_agent_loop)
+    assert "coord.note_action(" in src, "动作登记没接进工具循环，原地打转判定永远拿不到数据"
+    assert "_looks_like_acting(" in src
+
+
+def test_gate_receives_acting_ratio() -> None:
+    """★ 接线断言：门的 `Observation` 必须带上 `acting_ratio`。
+
+    否则 `stalled` 恒 False，换向提示永远不会触发。
+    """
+    import inspect
+
+    from app.kernel import multiagent
+
+    src = inspect.getsource(multiagent.run_agent_loop)
+    assert "acting_ratio=coord.acting_ratio()" in src
