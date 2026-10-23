@@ -3743,11 +3743,270 @@ def submit_mode_of(db: Session) -> str:
     return effective_ctf2_settings(db).submit_mode
 
 
+# ══════════════════════════════════════════════════════════
+# MCP 连接（v0.81）
+# ══════════════════════════════════════════════════════════
+#
+# 这一段补的是一处**贯通性缺口**，不是新功能：
+# `mcp_servers` 这一列在 v0.72 就存在（`settings/models.py`）、
+# `KernelSettings` 读它、`build_spec` 解析它 —— 但**没有任何 HTTP 端点
+# 能写它**。也就是说 gogo 那三个一等工具、以及所有 MCP 工具，在
+# v0.81 之前只能靠手工改数据库才能启用。
+#
+# 这正是交接文档里那个缺陷形状的翻版：**配了/写了但静默失效**。
+# 只不过这次失效的位置更早 —— 它连"配"这个动作都没有入口。
+
+#: gogo 那三个一等工具要求的连接名（与 `runner.GOGO_CONNECTION` 逐字一致）。
+#:
+#: ⚠️ 这里不能 `from app.kernel.runner import GOGO_CONNECTION`：runner 是
+#: 一个 import 成本极高的模块（它 import 了 sandbox/drivers/…），而
+#: router 层每个请求都会经过本模块。为此配了一条对账测试
+#: （`tests/kernel/test_mcp_servers_api.py::test_gogo_connection_name_matches_runner`）
+#: 盯着这两个字面量，避免哪天只改了一处。
+GOGO_CONNECTION_NAME: Final = "gogo"
+
+#: gogo 的三个一等工具（与 `runner.GOGO_TOOL_NAMES` 逐字一致，同上）。
+GOGO_TOOL_NAMES: Final = ("recon_scan", "run_poc", "extract_secrets")
+
+
+def get_mcp_servers(db: Session) -> list[dict]:
+    """读已保存的 MCP 连接清单（**原样 JSON**，不解析成 dataclass）。
+
+    返回原样 JSON 而不是 `McpServerConfig` 有两个原因：
+    1. 这里要回给前端编辑，`McpServerConfig` 是 frozen dataclass、
+       没有 `env` 的只读视图，转换会多一层丢失风险；
+    2. 坏条目应当**照原样回显**给用户去修，而不是被解析层悄悄丢掉。
+       （解析层的"跳过坏条目"是给 `build_spec` 用的运行时容错，
+       不是给编辑界面用的展示口径。）
+    """
+    row = db.get(KernelConfig, SINGLETON_ID)
+    if row is None or not row.mcp_servers:
+        return []
+    raw = row.mcp_servers
+    if not isinstance(raw, list):
+        logger.warning("mcp_servers 不是列表，按空处理：%r", type(raw).__name__)
+        return []
+    return [item for item in raw if isinstance(item, dict)]
+
+
+def _public_server_view(item: dict) -> dict:
+    """把一条已存配置转成回执形状：**去掉 `env`**，只留 `has_env`。
+
+    干不干净不靠自觉：`McpServerIn` 只做入参，`McpServerOut` 里根本没有
+    `env` 字段 —— 这个函数是它唯一的填充来源，漏不掉。
+    """
+    env = item.get("env")
+    allowed = item.get("allowed_tools")
+    return {
+        "name": str(item.get("name") or ""),
+        "command": str(item.get("command") or ""),
+        "args": [str(a) for a in item.get("args") or []],
+        "notes": str(item.get("notes") or ""),
+        "allowed_tools": [str(t) for t in allowed] if isinstance(allowed, list) else None,
+        "has_env": bool(env) if isinstance(env, dict) else False,
+    }
+
+
+def public_mcp_servers(db: Session) -> list[dict]:
+    """回给界面的连接清单（已去掉 `env`）。"""
+    return [_public_server_view(item) for item in get_mcp_servers(db)]
+
+
+def gogo_readiness(servers: list[dict]) -> tuple[bool, str]:
+    """gogo 三个一等工具**是否真的可用**，以及不可用的原因。
+
+    ## 为什么判据要逐条对齐 `runner._gogo_via_mcp` 的三条前置检查
+
+    界面上显示一个"就绪"绿灯，而模型调起来永远失败，是比"显示未配置"
+    更糟的状态：用户会去找模型的错，而问题在配置。
+
+    所以这里判的三条与运行期**一模一样**：
+      1. 有没有配任何连接；
+      2. 有没有名为 `gogo` 的那条；
+      3. 那条的白名单允不允许三个工具。
+
+    ⚠️ 唯一的区别是这里**不真连**（不 exec、不握手）：那会让每次打开
+    设置页都拉起一个子进程。真正的连通性由 `POST /mcp-servers/test` 回答，
+    界面把两件事分开显示（"配置就绪" / "试连通过"）。
+    """
+    if not servers:
+        return False, "还没有配置任何 MCP 连接。gogo 的三个工具需要一条名为 gogo 的连接。"
+
+    target = next((s for s in servers if s.get("name") == GOGO_CONNECTION_NAME), None)
+    if target is None:
+        names = ", ".join(str(s.get("name") or "（无名）") for s in servers) or "（无）"
+        return (
+            False,
+            f"没有名为 `{GOGO_CONNECTION_NAME}` 的连接（当前配的是：{names}）。"
+            f"那三个工具只认这个名字。",
+        )
+
+    allowed = target.get("allowed_tools")
+    if isinstance(allowed, list):
+        missing = [t for t in GOGO_TOOL_NAMES if t not in allowed]
+        if missing:
+            return (
+                False,
+                f"连接 `{GOGO_CONNECTION_NAME}` 的白名单挡住了：{', '.join(missing)}。"
+                "把白名单留空（= 全放）或补上这三个工具名。",
+            )
+    return True, ""
+
+
+def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
+    """整份替换 MCP 连接清单。
+
+    ## 校验在写库**之前**逐条做完
+
+    与 `update_ctf2_settings` 同一纪律：不静默夹取、不静默丢弃。
+    重名是最容易犯的错（复制粘贴一条改 command 忘了改 name），
+    而它的后果是解析层只收第一条 —— 第二条永远"配了但不生效"。
+    所以重名**直接 400**，不允许落到库里。
+
+    返回保存后的公开视图（已去 `env`）。
+    """
+    seen: set[str] = set()
+    for index, item in enumerate(servers):
+        name = str(item.get("name") or "").strip()
+        if not name:
+            raise ApiError.validation(
+                f"第 {index + 1} 条连接缺 name。",
+                {"servers": "每条连接都必须有名字（模型用它来调用）"},
+            )
+        if name in seen:
+            raise ApiError.validation(
+                f"连接名 `{name}` 重复。",
+                {"servers": "连接名必须唯一 —— 重名时只有第一条会生效"},
+            )
+        seen.add(name)
+        if not str(item.get("command") or "").strip():
+            raise ApiError.validation(
+                f"连接 `{name}` 缺 command。",
+                {"servers": "需要填写拉起 server 的可执行文件（如 npx / python3）"},
+            )
+
+    row = get_ctf2_config(db)
+    # 存 `None` 而不是 `[]`：与 `KernelSettings.mcp_servers` 的默认值
+    # （`None` = 没配）保持一致，否则同一种状态在库里有两个表示。
+    row.mcp_servers = [
+        {
+            "name": str(item.get("name") or "").strip(),
+            "command": str(item.get("command") or "").strip(),
+            "args": [str(a) for a in item.get("args") or []],
+            "env": {str(k): str(v) for k, v in (item.get("env") or {}).items()},
+            "notes": str(item.get("notes") or ""),
+            "allowed_tools": (
+                [str(t) for t in item["allowed_tools"]]
+                if isinstance(item.get("allowed_tools"), list)
+                else None
+            ),
+        }
+        for item in servers
+    ] or None
+    db.commit()
+    db.refresh(row)
+    logger.info(
+        "MCP 连接已更新：%s",
+        "、".join(f"{s['name']}({s['command']})" for s in (row.mcp_servers or [])) or "（清空）",
+    )
+    return public_mcp_servers(db)
+
+
+async def test_mcp_server(item: dict) -> dict:
+    """试连**一条尚未保存**的配置，返回结构化结果。
+
+    ## 为什么这个函数必须有
+
+    用户在设置页填完 `command`，唯一能验证的办法在此之前是"保存 →
+    跑一次真实解题 → 看模型能不能调" —— 而那条路上的失败是
+    **模型侧的一次工具报错**，既不会说清是 command 写错还是握手超时，
+    也会污染一次已受理的解题。
+
+    所以这里真拉起一次、握手一次、取一次工具清单，把三件事分开回答：
+    拉得起来吗（`reason` 说清为什么拉不起来）／工具叫啥／握手多久。
+
+    ⚠️ **不保存**：试连只读不写，失败不留痕。
+    """
+    import time
+
+    from app.kernel import mcp as mcp_mod
+
+    started = time.monotonic()
+    cfg = mcp_mod.McpServerConfig(
+        name=str(item.get("name") or "").strip() or "test",
+        command=str(item.get("command") or "").strip(),
+        args=[str(a) for a in item.get("args") or []],
+        env={str(k): str(v) for k, v in (item.get("env") or {}).items()},
+        notes=str(item.get("notes") or ""),
+        allowed_tools=(
+            [str(t) for t in item["allowed_tools"]]
+            if isinstance(item.get("allowed_tools"), list)
+            else None
+        ),
+    )
+    if not cfg.command:
+        return {
+            "ok": False,
+            "reason": "没有填 command —— 不知道要拉起什么。",
+            "tools": [],
+            "server_name": "",
+            "server_version": "",
+            "elapsed_ms": 0,
+        }
+    try:
+        async with mcp_mod.McpClient(cfg) as client:
+            tools = await client.list_tools()
+    except FileNotFoundError:
+        # 单独接这一支：这是最常见的失败，而且原因唯一 ——
+        # 可执行文件不在 PATH 上（或路径写错）。
+        return {
+            "ok": False,
+            "reason": (
+                f"找不到可执行文件 `{cfg.command}`。"
+                "容器里跑的话要确认它装在镜像里（PATH 上），或写绝对路径。"
+            ),
+            "tools": [],
+            "server_name": "",
+            "server_version": "",
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+    except mcp_mod.McpError as exc:
+        return {
+            "ok": False,
+            "reason": str(exc),
+            "tools": [],
+            "server_name": "",
+            "server_version": "",
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+    except Exception as exc:  # noqa: BLE001 - 试连的目的就是把各种异常变成一句话
+        return {
+            "ok": False,
+            "reason": f"{type(exc).__name__}: {exc}",
+            "tools": [],
+            "server_name": "",
+            "server_version": "",
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
+        }
+
+    names = [str(t.get("name") or "") for t in tools]
+    return {
+        "ok": True,
+        "reason": "" if names else "连上了，但这个 server 没报任何工具 —— 它可能启动即退出。",
+        "tools": names,
+        "server_name": "",
+        "server_version": "",
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+    }
+
+
 __all__ = [
     "MAX_SYNC_CHALLENGES",
     "MAX_SYNC_COMPETITIONS",
     "MAX_WRONG_SUBMISSIONS_CEILING",
     "MIN_WRONG_SUBMISSIONS",
+    "GOGO_CONNECTION_NAME",
+    "GOGO_TOOL_NAMES",
     "KernelSettings",
     "StartedEnvironment",
     "SyncResult",
@@ -3764,13 +4023,17 @@ __all__ = [
     "get_challenge_or_404",
     "get_competition_or_404",
     "get_ctf2_config",
+    "get_mcp_servers",
+    "gogo_readiness",
     "latest_environment",
     "list_accounts",
     "list_challenges",
     "list_competitions",
     "list_environments",
+    "public_mcp_servers",
     "release_environment",
     "release_environment_sync",
+    "save_mcp_servers",
     "set_challenge_priority",
     "set_priorities_by_score",
     "start_environment_for",
@@ -3778,7 +4041,9 @@ __all__ = [
     "start_solve",
     "submit_mode_of",
     "sync",
+    "test_mcp_server",
     "try_sync",
     "unbind_account",
     "update_ctf2_settings",
 ]
+

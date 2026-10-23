@@ -264,6 +264,124 @@ class KernelSettingsIn(StrictModel):
 
 
 # ══════════════════════════════════════════════════════════
+# MCP 连接（v0.81）
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么单独一套出入参，不塞进 `KernelSettingsIn/Out`
+#
+# `KernelSettingsIn` 是**全量提交**语义（漏传 = 静默改回默认），所以它的
+# 每个字段都必填 —— 这是 `enableMultiAgent` 那段血泪说明的纪律。
+# 但 MCP 连接是**一张清单**，而且需要两件 `KernelSettingsIn` 做不了的事：
+#
+#   1. **单独保存**：加一条 MCP 连接不该连带提交"提交策略是否 safe"；
+#   2. **单独试连**：填完 command 后必须先知道"拉得起来吗、有哪些工具"，
+#      而不是跑一次真实解题才发现 —— 那次失败不会说清原因。
+#
+# 所以它是独立端点 + 独立出入参。`KernelSettingsOut` 里**不出现**它：
+# 设置页的四块聚合快照里，这一块有自己的加载/失败状态。
+
+#: 单条 MCP 连接的入参。
+#:
+#: ⚠️ `env` **只进子进程环境**，不回显（见 `McpServerConfig.public_dict`
+#: 与 `settings/models.py` 的 `mcp_servers` 说明）。所以这个类只做入参，
+#: 对应的 `*Out` 里**没有** `env` 字段 —— 与 `KernelAccountOut` 不返回
+#: token 是同一件事：模型上根本没有那个字段，想漏也漏不出去。
+class McpServerIn(StrictModel):
+    """要保存的一条 MCP 连接。
+
+    ## 为什么 `env` 允许传、但回执里读不到
+
+    凭据（API token、数据库口令）属于 `env`。如果回显，它就进了浏览器、
+    进了前端 store、进了任何截图。而用户需要的是"我知道我配过它"，
+    不是"我要看见它" —— 所以回执只给 `hasEnv: true`。
+    """
+
+    #: 连接名 = 模型在 `list_mcps`/`call_mcp` 里用的 id。必填、唯一。
+    #: gogo 的三个一等工具要求的正是 `gogo`。
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
+    #: 拉起 server 的可执行文件（`npx` / `python3` / 绝对路径）。
+    command: str = Field(min_length=1, max_length=512)
+    #: 传给 `command` 的参数。
+    args: list[str] = Field(default_factory=list, max_length=64)
+    #: 追加进子进程的环境变量。**不回显**。
+    env: dict[str, str] = Field(default_factory=dict)
+    #: 用途说明（进 `list_mcps` 的描述位，帮模型判断该不该用）。
+    notes: str = Field(default="", max_length=500)
+    #: 白名单：只允许调这些工具名（`None` = 全放）。
+    allowed_tools: list[str] | None = None
+
+
+class McpServerOut(CamelModel):
+    """已保存的一条 MCP 连接（**不含 `env`**）。"""
+
+    name: str
+    command: str
+    args: list[str] = []
+    notes: str = ""
+    allowed_tools: list[str] | None = None
+    #: 是否配了 `env` —— 只说"有没有"，不说是**什么**。
+    has_env: bool = False
+
+
+class McpServersIn(StrictModel):
+    """`PUT /kernel/mcp-servers` 的整体清单（全量替换）。
+
+    ⚠️ **全量替换**而不是增量：清单只有几条，逐个 PATCH 会引入"顺序"
+    "删除"两类新状态。前端把整份清单提交上来，后端整份写回 —— 这与
+    设置页其他面板的"这一块整体保存"是同一个心智模型。
+    """
+
+    servers: list[McpServerIn] = Field(default_factory=list, max_length=32)
+
+
+class McpServersOut(CamelModel):
+    """`GET /kernel/mcp-servers`。
+
+    ⚠️ `gogo_ready` 是**这段接口存在的理由**：界面要能回答
+    "CTF 页那三个 gogo 工具现在可用吗"。判据不是"配了随便一个连接"，
+    而是**名为 `gogo` 的连接存在、且它的白名单允许那三个工具** ——
+    与 `runner._gogo_via_mcp` 的三条前置检查逐条对齐。少一条，
+    界面就会显示"就绪"而模型调起来永远失败。
+    """
+
+    servers: list[McpServerOut] = []
+    #: gogo 的三个一等工具是否真的可用（三条前置检查全过）。
+    gogo_ready: bool = False
+    #: 不可用时的原因（中文，可直接展示在界面上）。
+    gogo_reason: str = ""
+
+
+class McpServerTestIn(StrictModel):
+    """`POST /kernel/mcp-servers/test` —— 试连**尚未保存**的一条配置。
+
+    ★ 接受未保存的草稿：用户填完就想知道对不对，让他先保存再试连
+    会把"验证配置"变成"先污染配置再回滚"。
+    """
+
+    server: McpServerIn
+
+
+class McpServerTestOut(CamelModel):
+    """试连结果。
+
+    ⚠️ 失败时 `ok=false` **且** `reason` 带可执行的原因（"command 不存在"
+    "握手超时"…），而不是一个笼统的"连接失败"。这个区分很重要：
+    前者用户能自己改，后者只能来问我们。
+    """
+
+    ok: bool
+    #: 失败原因（中文）。成功时为空串。
+    reason: str = ""
+    #: server 报上来的工具名清单（成功时才有）。
+    tools: list[str] = []
+    #: server 自报的名字与版本（成功时才有）。
+    server_name: str = ""
+    server_version: str = ""
+    #: 握手耗时（毫秒）。用来回答"这个 server 是慢还是挂了"。
+    elapsed_ms: int = 0
+
+
+# ══════════════════════════════════════════════════════════
 # 平台接入（v0.25）
 # ══════════════════════════════════════════════════════════
 

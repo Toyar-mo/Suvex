@@ -97,6 +97,11 @@ from app.kernel.schemas import (
     KernelUsageEntryOut,
     KernelWorkOrderOut,
     KernelWriteupOut,
+    McpServerOut,
+    McpServersIn,
+    McpServersOut,
+    McpServerTestIn,
+    McpServerTestOut,
 )
 
 router = APIRouter(prefix="/kernel", tags=["Kernel"])
@@ -400,6 +405,135 @@ def update_ctf2_settings(
         },
     )
     return _settings_out(row)
+
+
+# ══════════════════════════════════════════════════════════
+# MCP 连接（v0.81）
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么是独立端点，不并进 `/kernel/settings`
+#
+# `PUT /kernel/settings` 是**全量提交**语义（`KernelSettingsIn` 每个字段
+# 必填，漏传 = 静默改回默认）。把 MCP 清单并进去，会变成"加一条 MCP
+# 连接必须同时把提交策略、并发、回合预算全部重发一遍" —— 而任何一次
+# 前端疏忽都会顺手改掉别的配置且不留痕。
+#
+# 它们本来也是两件事：那一组回答"解题怎么跑"，这一组回答"智能体除了
+# 沙箱工具还能调到哪些外部能力"。设置页的纪律是**每块独立保存**，
+# 这里照同一条办。
+#
+# ⚠️ 鉴权是 admin。与 `/settings` 同级 —— 配一条 MCP 连接等于允许智能体
+#    拉起任意子进程并与之通信。这是**扩大攻击面**的操作，不是普通偏好。
+
+
+def _mcp_servers_out(db: DbDep) -> McpServersOut:  # noqa: ARG001
+    """组装读取回执：清单（去 env）+ gogo 三工具的就绪判据。"""
+    servers = service.public_mcp_servers(db)
+    ready, reason = service.gogo_readiness(servers)
+    return McpServersOut(
+        servers=[McpServerOut(**item) for item in servers],
+        gogoReady=ready,
+        gogoReason=reason,
+    )
+
+
+@router.get(
+    "/mcp-servers",
+    response_model=McpServersOut,
+    summary="MCP 连接清单（含 gogo 工具就绪判据）",
+)
+def list_mcp_servers(_identity: AdminDep, db: DbDep) -> McpServersOut:
+    """读已保存的 MCP 连接。
+
+    ★ 回执里**没有** `env`，只有 `hasEnv`。凭据不进浏览器、不进前端
+    store、不进任何截图 —— 与 `KernelAccountOut` 只回 `tokenMask`
+    是同一条纪律。
+    """
+    return _mcp_servers_out(db)
+
+
+@router.put(
+    "/mcp-servers",
+    response_model=McpServersOut,
+    summary="整份替换 MCP 连接清单",
+)
+def replace_mcp_servers(
+    payload: McpServersIn, request: Request, identity: AdminDep, db: DbDep
+) -> McpServersOut:
+    """保存整份清单（**全量替换**，不是增量）。
+
+    为什么全量：清单只有几条，逐个 PATCH 会引入"顺序""删除"两类新状态。
+    前端把整份提交上来、后端整份写回，与设置页其他面板的"这一块整体保存"
+    是同一个心智模型。
+
+    ★ 留痕，且**记下每条连接的 name 与 command**：它决定智能体能拉起
+    哪些外部进程。事后"这个 agent 为什么能调到 X"要看这一条。
+    `env`（可能含 token）**不进审计**。
+    """
+    servers = [
+        {
+            "name": item.name,
+            "command": item.command,
+            "args": list(item.args),
+            "env": dict(item.env),
+            "notes": item.notes,
+            "allowed_tools": list(item.allowed_tools) if item.allowed_tools else None,
+        }
+        for item in payload.servers
+    ]
+    service.save_mcp_servers(db, servers)
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_MCP_SERVERS_UPDATE,
+        summary=f"更新 MCP 连接（{len(servers)} 条）",
+        detail={
+            "servers": [
+                {
+                    "name": item["name"],
+                    "command": item["command"],
+                    "args": item["args"],
+                    "hasEnv": bool(item["env"]),
+                    "allowedTools": item["allowed_tools"],
+                }
+                for item in servers
+            ]
+        },
+    )
+    return _mcp_servers_out(db)
+
+
+@router.post(
+    "/mcp-servers/test",
+    response_model=McpServerTestOut,
+    summary="试连一条尚未保存的 MCP 连接",
+)
+async def test_mcp_server(
+    payload: McpServerTestIn, _identity: AdminDep
+) -> McpServerTestOut:
+    """真拉起一次、握手一次、取一次工具清单。
+
+    ★ **不保存**：这是"验证配置"，不是"提交配置"。用户填完就想知道
+    对不对，让他先保存再试连会把验证变成"先污染配置再回滚"。
+
+    ★ 为什么必须真连而不是静态检查 command 存在：MCP 的失败大多在
+    协议层（不响应 initialize、stdout 混了日志、tools/list 报错），
+    静态检查一个都发现不了。而这类配置错误的暴露点本来是"跑一次
+    真实解题后的模型工具报错"—— 既说不清原因，又污染一次已受理的解题。
+    """
+    result = await service.test_mcp_server(
+        {
+            "name": payload.server.name,
+            "command": payload.server.command,
+            "args": list(payload.server.args),
+            "env": dict(payload.server.env),
+            "notes": payload.server.notes,
+            "allowed_tools": (
+                list(payload.server.allowed_tools) if payload.server.allowed_tools else None
+            ),
+        }
+    )
+    return McpServerTestOut(**result)
 
 
 # ══════════════════════════════════════════════════════════
