@@ -63,6 +63,28 @@ export interface EventRowProps {
   /** 是否显示 agent 列。按 agent 过滤时这一列是冗余的，隐藏可省宽度 */
   showAgent: boolean
   className?: string
+  /**
+   * 高度测量回调（虚拟滚动用）。挂到行根节点上，让 `useVirtualRows`
+   * 能读到这一行的真实高度。
+   *
+   * ⚠️ 它必须挂在**行根节点**（`<li>`），不是内层 div：内层有 padding 与边框，
+   *    量到的会比占位高度小一点，误差累加后滚到底会有几十像素偏差 ——
+   *    表现为最后几条被裁掉半行。
+   *
+   * ⚠️ 这个函数由 hook 保持**身份恒定**，所以不会破坏下面的 `memo`。
+   */
+  measureRef?: (node: HTMLElement | null) => void
+  /**
+   * 是否是"从时间线跳过来"的那一条。
+   *
+   * ★ 为什么需要它：时间线上点一段静默，用户被送到事件流里那个位置 ——
+   *   但那条边界事件和它上面的几十条在列表里长得一模一样，用户落地后
+   *   要自己找"是这一条吗"。给一条短暂的强调底色，落地即确认。
+   *
+   * ⚠️ 这是**瞬时**状态，由父级在几秒后清掉。常驻高亮会变成一个假的选择态，
+   *    用户会以为点选某条事件有什么后续含义。
+   */
+  highlighted?: boolean
 }
 
 /**
@@ -70,7 +92,13 @@ export interface EventRowProps {
  *    原因见文件末尾那段说明（`useActivityStream` 的上限是 5000 条，
  *    每次 flush 都会重建整个 `events` 数组）。
  */
-function EventRowImpl({ event, showAgent, className }: EventRowProps) {
+function EventRowImpl({
+  event,
+  showAgent,
+  className,
+  measureRef,
+  highlighted = false,
+}: EventRowProps) {
   const [expanded, setExpanded] = useState(false)
   const detailId = useId()
 
@@ -80,10 +108,21 @@ function EventRowImpl({ event, showAgent, className }: EventRowProps) {
 
   return (
     <li
+      ref={measureRef}
+      // 行身份由元素自己带着，hooks 侧的 measureRef 靠它认行。
+      // 用 id 而不是下标：列表头部丢事件时下标会整体左移，id 不会指错。
+      data-virtual-key={event.id}
       className={cn(
         'group border-b border-line/60 last:border-b-0',
         // 一眼能看出"出事了"的行给一点极淡的底色，不是整条染色
         tone === 'risk' && 'bg-signal-risk/[0.04]',
+        /*
+          从时间线跳过来的落点。用 outline 而不是背景色：
+          风险行已经有底色了，再叠一层背景会让人读不出是哪一种高亮；
+          outline 在两种底色之上都成立，且不占布局空间（不会让跳转前后
+          高度变化 —— 那会让虚拟滚动的偏移表当场失效）。
+        */
+        highlighted && 'outline outline-2 -outline-offset-2 outline-accent/70',
         className,
       )}
     >
@@ -488,10 +527,16 @@ function formatMs(ms: number | null): string {
  *    内联对象 prop（比如 `style={{...}}`），`memo` 会**静默失效**，
  *    表现为"加了 memo 但一帧都没省"，很难发现。改这个组件时请留意。
  *
- * ## 为什么不用虚拟化
+ * ## 与虚拟滚动的关系
  *
- * 那是另一个决策（会牵动 `useAutoScroll` 的滚动锚定与"回到最新"的定位），
- * 不在这次改动范围内 —— 这里只解决"已经渲染的行被白重渲染"。
+ * 这一列现在由 `EventStream` 虚拟化了（只渲染视口附近的几十行）。
+ * 两件事**不冲突**：`memo` 省的是"已渲染行被白重渲染"，虚拟化省的是
+ * "根本不需要渲染的行"。
+ *
+ * 但有一个交叉约束：`measureRef` 必须**身份恒定**，否则每次渲染都是新函数，
+ * `memo` 会静默失效。所以 `useVirtualRows` 把它做成空依赖的 `useCallback`，
+ * 行身份改由根节点的 `data-virtual-key`（事件 id）带过去 —— 原始字符串，
+ * 可以进浅比较；而且比下标稳：列表头部丢事件时下标会整体左移，id 不会指错行。
  */
 const EventRow = memo(EventRowImpl)
 

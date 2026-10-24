@@ -49,7 +49,29 @@ export function Drawer({
   // 记录打开前的焦点元素，关闭时还回去
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
-  // Escape 关闭 + body 滚动锁
+  /*
+    ★ onClose 必须放进 ref，且**不进 effect 依赖**。
+
+    踩过的坑（真 bug，用户报「打一个字就失焦」）：
+    调用方普遍这么写 `onClose={() => { setEditor(null); ... }}` ——
+    每次渲染都是新引用。如果 effect 依赖它，那么**抽屉里每敲一个字符**
+    （state 变 → 重渲染 → 新 onClose）都会让 effect 重跑一遍：
+
+      清理函数先把焦点还给触发元素（"新建"按钮）
+      → 新 effect 再把焦点移进面板
+
+    结果就是输入框在每次按键后都丢掉焦点，一个字都连不起来。
+    而且它只在「受控输入的浮层」里发作，光看代码很难联想到是浮层的问题。
+
+    修法：effect 只依赖 [open]，onClose 通过 ref 读最新值。
+    这样挂载/卸载只在真正开合时发生。
+  */
+  const onCloseRef = useRef(onClose)
+  useEffect(() => {
+    onCloseRef.current = onClose
+  }, [onClose])
+
+  // Escape 关闭 + body 滚动锁 + 焦点管理（只在 open 变化时跑）
   useEffect(() => {
     if (!open) return
 
@@ -58,7 +80,7 @@ export function Drawer({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         event.stopPropagation()
-        onClose()
+        onCloseRef.current()
       }
     }
 
@@ -77,7 +99,7 @@ export function Drawer({
       // 焦点还给触发元素 —— 键盘用户不会掉到页面顶部
       previousFocusRef.current?.focus({ preventScroll: true })
     }
-  }, [open, onClose])
+  }, [open])
 
   if (!open) return null
 

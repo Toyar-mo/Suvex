@@ -1,6 +1,7 @@
 import EventStream, { StreamToolbar } from '@/components/activity/EventStream'
 import AgentRoster from '@/components/activity/AgentRoster'
 import { HintComposer } from '@/components/activity/HintComposer'
+import TimelineView from '@/components/activity/TimelineView'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { FlagChip } from '@/components/ui/FlagChip'
 import type { Agent } from '@/data/activity'
@@ -52,6 +53,15 @@ const EMPTY_ROSTER: Agent[] = []
  * 每次渲染写一个新的 `[]` 会让下游依赖它的 `useMemo` 每次重算。
  */
 const EMPTY_HINTS: ScanHint[] = []
+
+/**
+ * 从时间线跳过来之后，落点高亮持续多久（毫秒）。
+ *
+ * 2600ms 的取法：平滑滚动本身在 300–600ms 量级，落地后还要留够
+ * "看见它、读一行摘要"的时间。再长就会让人以为是可点选状态，
+ * 再短则滚动的余韵还没消、高亮已经没了 —— 看起来像没生效。
+ */
+const FOCUS_HIGHLIGHT_MS = 2600
 
 export function ActivityPage() {
   /**
@@ -235,6 +245,61 @@ export function ActivityPage() {
 
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
 
+  /*
+    ── 视角切换：事件流 / 时间线 ──
+
+    为什么同一份数据要有两个视角：两者回答的是**不同的问题**。
+
+      · 事件流按**到达顺序**排。用户读它来回答"智能体在干什么"。
+        但它天然回答不了"它有没有卡住" —— 卡住的表现就是**没有新行进来**，
+        而"没有"在一列密排的行里根本看不出来。实测过的那次 32 分钟零产出，
+        用户盯着的就是这个看起来完全正常、其实早就停了的流。
+
+      · 时间线按**真实时间**摆。空白就是真的空白 —— 一段 8 分钟的静默
+        在轴上是可见的一块空白，一眼就能看出来。
+
+    所以切换不是"两种视图偏好"，是两种判据。默认给事件流（日常看这个）。
+  */
+  const [view, setView] = useState<'stream' | 'timeline'>('stream')
+
+  /*
+    ★ 从时间线的静默段跳到事件流里的落点。
+
+    只存 id 不存下标：下标会随事件到达而漂移（新事件一直往后追加），
+    而 id 不会 —— 这也是虚拟滚动那边按 key 而不是按下标存测量值的同一个理由。
+
+    高亮是**瞬时**的：落地后约 2.6 秒自动清掉。常驻高亮会变成一个假的选择态，
+    让人以为点某条事件有什么后续含义。
+  */
+  const [focusEventId, setFocusEventId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (focusEventId === null) return
+    /*
+      用 setTimeout 而不是"等滚动结束"：平滑滚动没有可靠的回调
+      （且浏览器在"减少动态效果"下会把它降级成瞬时跳转，时机完全变掉）。
+      固定时长让高亮的行为在任何设置下都一致。
+    */
+    const timer = window.setTimeout(() => setFocusEventId(null), FOCUS_HIGHLIGHT_MS)
+    return () => window.clearTimeout(timer)
+  }, [focusEventId])
+
+  /*
+    时间线需要一个"现在"来画**尾部**那段静默（"最后一条事件之后一直到现在"）。
+    不传的话 `buildTimeline` 用最后一条事件当轴终点 —— 那会让"当前还在卡着"
+    这件事在轴上完全看不出来（轴到最后一帧都是满的）。
+
+    ⚠️ 只在时间线视角且扫描在跑时跳秒。事件流视角下这个 tick 不该存在：
+      它会让整页每 15 秒重渲染一次，而那时没有任何东西需要它。
+  */
+  const [timelineNow, setTimelineNow] = useState(() => Date.now())
+  const timelineLive = view === 'timeline' && isRunning
+  useEffect(() => {
+    if (!timelineLive) return
+    const timer = window.setInterval(() => setTimelineNow(Date.now()), 15_000)
+    return () => window.clearInterval(timer)
+  }, [timelineLive])
+
   const scanEvents = useMemo(
     () => (scanFilter === null ? events : events.filter((e) => e.scanId === scanFilter)),
     [events, scanFilter],
@@ -344,6 +409,44 @@ export function ActivityPage() {
           */}
           {filteredScan?.flag && <FlagChip flag={filteredScan.flag} variant="full" />}
           {/*
+            ★ 视角切换（事件流 / 时间线）。
+
+            放在工具栏而不是做成两个 Tab 头：这是**同一个区域**的两个判据，
+            切走再切回来不该丢滚动位置，也不该有"另一个页面"的感觉。
+
+            只在指定了扫描时出现：时间线画的是"一次扫描的时间跨度"，
+            全局流（多个扫描混在一起）没有一条真实的轴可画 ——
+            硬画出来的轴是几次无关扫描的拼接，静默段毫无意义。
+
+            用 aria-pressed 而不是 role="tab"：它没有对应的 tabpanel
+            角色结构（事件流与时间线占同一个位置，不是并列的面板）。
+          */}
+          {scanFilter && (
+            <div className="inline-flex items-center overflow-hidden rounded-xs border border-line">
+              {(
+                [
+                  ['stream', '事件流'],
+                  ['timeline', '时间线'],
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setView(key)}
+                  aria-pressed={view === key}
+                  className={cn(
+                    'px-2 py-1 text-2xs transition-ui duration-fast',
+                    view === key
+                      ? 'bg-surface-overlay text-ink'
+                      : 'text-ink-muted hover:text-ink',
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
+          {/*
             ★「疑似卡死」提示（任务 11）。
 
             为什么放在**这一页**：32 分钟零产出那次，用户盯着的就是这里 ——
@@ -416,29 +519,67 @@ export function ActivityPage() {
           </div>
         )}
 
-        <EventStream
-          events={visibleEvents}
-          latestBatchIds={latestBatchIds}
-          filtered={selectedAgentId !== null}
-          isPaused={isPaused}
-          newWhilePaused={newWhilePaused}
-          onPauseChange={setPaused}
-          emptyState={
-            <EmptyStream
-              selectedAgentId={selectedAgentId}
-              scanFilter={scanFilter}
-              /* 空事件流的第三种成因：一次扫描都没跑过 */
-              noScansYet={scansStatus === 'ready' && scans.length === 0}
-              /* 最近一次扫描 —— 全局流没有 replay，用它给一条"看得到事件"的路 */
-              latestScanId={scans[0]?.id ?? null}
+        {view === 'timeline' && scanFilter ? (
+          <TimelineView
+            /*
+              ★ 用 `scanEvents` 而不是 `visibleEvents`。
+
+              时间线回答的是"这次扫描有没有卡住"，而卡住是全队的事：
+              按 agent 筛选后如果把别的 agent 的事件藏起来，就会出现
+              一段**假的**静默（其实别人一直在干活）。那种假静默比不画更糟 ——
+              它会让人去查一个不存在的问题。
+
+              所以时间线始终画全部事件。agent 筛选只影响事件流视角。
+            */
+            events={scanEvents}
+            /* 状态决定静默段算不算"可疑"：已结束的扫描里的静默不再可疑 */
+            scanStatus={filteredScan?.status ?? null}
+            scanMarked
+            /* 扫描在跑才给 now —— 否则轴用到最后一帧，不留一段假空白 */
+            now={isRunning ? timelineNow : undefined}
+            onSelectGap={(_gap, boundary) => {
               /*
-                当前这次扫描的状态（任务 12）。用来区分「正在启动」与
-                「已经结束但没事件」—— 后者要说的是另一句话。
+                跳到静默**结束**的那一条：那是"恢复干活"的时刻，
+                也正是用户想看的（静默前后到底发生了什么）。
+
+                `after === null` 表示静默一直持续到现在 —— 这种没有落点可跳
+                （说"之后的第一条"根本不存在），什么都不做。
+                父级的明细列表已经把这种情况写成"一直到现在"，信息不缺。
               */
-              currentScan={scanFilter ? (scans.find((s) => s.id === scanFilter) ?? null) : null}
-            />
-          }
-        />
+              if (boundary.after === null) return
+              setView('stream')
+              setFocusEventId(boundary.after.id)
+            }}
+          />
+        ) : (
+          <EventStream
+            events={visibleEvents}
+            latestBatchIds={latestBatchIds}
+            filtered={selectedAgentId !== null}
+            isPaused={isPaused}
+            newWhilePaused={newWhilePaused}
+            onPauseChange={setPaused}
+            /* 时间线点过静默段后的落点（滚动 + 短暂强调），见上面那段说明 */
+            focusEventId={focusEventId}
+            emptyState={
+              <EmptyStream
+                selectedAgentId={selectedAgentId}
+                scanFilter={scanFilter}
+                /* 空事件流的第三种成因：一次扫描都没跑过 */
+                noScansYet={scansStatus === 'ready' && scans.length === 0}
+                /* 最近一次扫描 —— 全局流没有 replay，用它给一条"看得到事件"的路 */
+                latestScanId={scans[0]?.id ?? null}
+                /*
+                  当前这次扫描的状态（任务 12）。用来区分「正在启动」与
+                  「已经结束但没事件」—— 后者要说的是另一句话。
+                */
+                currentScan={
+                  scanFilter ? (scans.find((s) => s.id === scanFilter) ?? null) : null
+                }
+              />
+            }
+          />
+        )}
       </div>
     </div>
   )

@@ -74,6 +74,26 @@ export const FINDING_STATUS_ORDER: FindingStatus[] = [
 ]
 
 /**
+ * 「还没处置完」的状态集合 —— 命令面板的「处理未关闭的漏洞」用它。
+ *
+ * ★ 为什么`closed` 与 `false_positive` 不在里面：那两个是**终态**，
+ *   已经不需要任何人动手了。把它们算进"未关闭"会让这个筛选出来的
+ *   列表里混进一堆已经处理完的条目 —— 用户点"处理未关闭的漏洞"
+ *   是想知道"我现在要做什么"，而不是"历史上出现过什么"。
+ *
+ * ★ 为什么 `fixed` 和 `retesting` 在里：修了不等于验过。`fixed` 是
+ *   开发说修好了，`retesting` 是正在复测 —— 两者都还没有人为结果签字，
+ *   都还排在某个人的待办上。把它们排除出去，等于鼓励"标个已修复就完事"
+ *   这个最坏的用法。
+ */
+export const OPEN_FINDING_STATUSES: readonly FindingStatus[] = [
+  'new',
+  'confirmed',
+  'fixed',
+  'retesting',
+]
+
+/**
  * 状态的视觉语义。
  *
  * 「待确认」用 warn 而不是中性色：它是唯一需要人动手的状态，

@@ -42,8 +42,24 @@ export interface UseAutoScrollOptions {
 }
 
 export interface UseAutoScrollResult {
-  /** 挂到滚动容器上 */
-  containerRef: React.RefObject<HTMLDivElement | null>
+  /**
+   * **挂载方式：稳定的回调 ref**。
+   *
+   * 为什么不直接 `ref={containerRef}` 或者从外面写 `containerRef.current = node`：
+   *
+   * ① 一个滚动元素常常需要同时喂给两个 hook（本 hook 判"用户往回翻"，
+   *    `useVirtualRows` 算可视区间）。如果各自导出一个 ref 对象、由组件去
+   *    写 `.current`，组件就在**改别的 hook 的内部状态** —— 那正是
+   *    `react-hooks/immutability` 要拦的"渲染结束后改本地变量"，
+   *    而且"哪个 hook 需要 node"这件事被泄漏到了调用方。
+   *
+   * ② 把写入收进 hook 自己的稳定回调里，调用方只需要 `ref={attachContainer}`，
+   *    组合两个 hook 时也就是两行 `a.attachContainer(node); b.attachContainer(node)`。
+   *
+   * 身份恒定（空依赖 `useCallback`）：身份一变，React 会先用 null 调旧的、
+   * 再用新节点调新的，等于让容器卸载又挂载一次 —— 滚动位置归零。
+   */
+  attachContainer: (node: HTMLDivElement | null) => void
   /** 是否贴在最底部 */
   isAtBottom: boolean
   /** 滚到最新并恢复自动滚动 */
@@ -56,8 +72,32 @@ export function useAutoScroll({
   onUserAway,
   onUserBack,
 }: UseAutoScrollOptions): UseAutoScrollResult {
-  const containerRef = useRef<HTMLDivElement | null>(null)
   const [isAtBottom, setIsAtBottom] = useState(true)
+
+  /*
+    ── 容器节点：ref + 一个"已挂载"版本号 ──
+
+    ① 和 `useVirtualRows` 同一个理由：effect 若依赖为空、在挂载时读一次
+       `ref.current`，那**容器晚于 effect 出现**时（骨架屏切正文、
+       条件渲染换节点）就再也读不到 —— 滚动监听挂不上，表现为"能渲染但
+       自动跟随失效、往上翻也不暂停"，没有任何报错。所以需要 `nodeVersion`
+       这个状态位来驱动 effect 重跑。
+
+    ② 节点不放进 state：state 按不可变语义对待，而这里要对真实 DOM 做命令式
+       操作（读 scrollTop、写 scrollTop）。放进 state 会让"这是可变对象"这件事
+       被掩盖，`react-hooks/immutability` 也会（正确地）拦下。
+
+    ③ 不导出 `containerRef`：导出就意味着调用方会去写 `.current`，
+       而那是在改本 hook 的内部状态。节点只以 ref 形式留在 hook 内，
+       外面只能通过 `attachContainer` 交进来。
+  */
+  const nodeRef = useRef<HTMLDivElement | null>(null)
+  const [nodeVersion, setNodeVersion] = useState(0)
+
+  const attachContainer = useCallback((next: HTMLDivElement | null) => {
+    nodeRef.current = next
+    setNodeVersion((v) => v + 1)
+  }, [])
 
   // 程序滚动时置位，scroll 事件里据此忽略 —— 防止自反馈
   const isProgrammaticRef = useRef(false)
@@ -73,7 +113,7 @@ export function useAutoScroll({
   }, [onUserAway, onUserBack])
 
   const scrollToLatest = useCallback((behavior: ScrollBehavior = 'smooth') => {
-    const container = containerRef.current
+    const container = nodeRef.current
     if (!container) return
 
     isProgrammaticRef.current = true
@@ -92,7 +132,7 @@ export function useAutoScroll({
 
   // 监听滚动，判断用户是否离开 / 回到底部
   useEffect(() => {
-    const container = containerRef.current
+    const container = nodeRef.current
     if (!container) return
 
     const onScroll = () => {
@@ -124,12 +164,12 @@ export function useAutoScroll({
     onScroll() // 处理"挂载时内容已超过一屏"
 
     return () => container.removeEventListener('scroll', onScroll)
-  }, [])
+  }, [nodeVersion])
 
   // 新内容到达时跟随到底部
   useEffect(() => {
     if (!follow) return
-    const container = containerRef.current
+    const container = nodeRef.current
     if (!container) return
 
     /*
@@ -142,7 +182,7 @@ export function useAutoScroll({
     requestAnimationFrame(() => {
       isProgrammaticRef.current = false
     })
-  }, [follow, contentKey])
+  }, [follow, contentKey, nodeVersion])
 
-  return { containerRef, isAtBottom, scrollToLatest }
+  return { attachContainer, isAtBottom, scrollToLatest }
 }
