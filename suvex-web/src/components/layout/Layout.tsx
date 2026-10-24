@@ -3,11 +3,12 @@ import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
 import TopStatusBar from './TopStatusBar'
 import AppShell from './AppShell'
 import MobileNav from './MobileNav'
+import { CommandPalette } from './CommandPalette'
 import { isNavItemActive, NAV_ITEMS } from '@/navigation'
 import { ensureOverviewLoaded } from '@/data/overview-store'
 import { ensureScansLoaded } from '@/data/scans-store'
 import { ensureSettingsLoaded } from '@/data/settings-store'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useLocation } from 'react-router-dom'
 
 /**
@@ -42,11 +43,41 @@ import { Outlet, useLocation } from 'react-router-dom'
 export function Layout() {
   const { collapsed, toggle } = useSidebarCollapsed()
   const { pathname } = useLocation()
+  const [paletteOpen, setPaletteOpen] = useState(false)
 
   useEffect(() => {
     ensureScansLoaded()
     ensureSettingsLoaded()
     ensureOverviewLoaded()
+  }, [])
+
+  /*
+    全局快捷键：Cmd/Ctrl+K 打开命令面板。
+
+    ★ 为什么绑在 window 而不是某个容器上：使用者可能在任意页面、
+      任意焦点位置按下它 —— 在输入框里打完字想跳走，是最常见的用法。
+      绑在容器上会漏掉那些情况，而"有时灵有时不灵"的快捷键比没有更糟：
+      人会以为是自己按错了。
+
+    ★ 为什么**不**在输入框里屏蔽它：Cmd/Ctrl+K 不是字符输入键，
+      在浏览器里它本来就被各种站点用作搜索入口，用户的预期是
+      "无论我在哪，按它都能搜"。
+
+    ★ macOS 上是 metaKey，其它平台是 ctrlKey —— 两个都收，因为
+      `navigator.platform` 判断在 iPad + 外接键盘等场景里并不可靠，
+      而"两种修饰键都认"的代价只是 Ctrl+K 在 Mac 上也能用（无害）。
+  */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k') return
+      if (!event.metaKey && !event.ctrlKey) return
+      // preventDefault：Chrome 的 Ctrl+K 是"聚焦地址栏"，不拦下来
+      // 面板会打开、焦点却跑到地址栏，用户以为没打开。
+      event.preventDefault()
+      setPaletteOpen((open) => !open)
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
   }, [])
 
   // 用导航项自己的声明判断，而不是在这里列一份"特殊路由"名单
@@ -73,6 +104,12 @@ export function Layout() {
       mobileNav={<MobileNav />}
     >
       <Outlet />
+      {/*
+        面板挂在 Outlet **之后**：它是 portal 到 body 的浮层，
+        位置不影响渲染结果；放这里是为了让「Layout 拥有它」这件事
+        在代码里一眼看得见（而不是藏在 AppShell 里）。
+      */}
+      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} />
     </AppShell>
   )
 }

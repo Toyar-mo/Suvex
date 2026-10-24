@@ -95,10 +95,8 @@ export function ScansPage() {
     结果是"点了没反应"。现在这类失败走 toast，与批量动作一致。
   */
 
-  const [wizardOpen, setWizardOpen] = useState(false)
   const [view, setView] = useState<ScanView>('default')
   const [statusFilter, setStatusFilter] = useState<ScanStatus | 'all'>('all')
-  const [targetQuery, setTargetQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('recent')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
@@ -152,6 +150,65 @@ export function ScansPage() {
 
   // 新建完成后高亮新记录，让用户明确看到"它加进去了"（验收要求）
   const justCreatedId = searchParams.get('created')
+
+  /*
+    ── 外部入口（命令面板 / 资产页 / 链接）传进来的意图 ──
+
+    两个参数，都只**消费一次**：读完就把参数从地址栏抹掉。
+
+    ★ 为什么必须抹掉：`?new=1` 如果留在地址栏里，用户关掉向导、
+      刷新页面、或者从别的页面返回，向导会再次弹出来 —— 那时
+      他已经不记得自己点过什么，只觉得"这玩意儿自己弹"。
+      抹掉之后地址栏恢复干净，副作用不再二次触发。
+
+    ── 为什么是 draft 而不是 effect 里 setState ──
+
+    ★ 需求本身是："用户**已经在这一页**、又从命令面板点了一次
+      '发起新扫描'，向导要再弹一次" —— 所以不能只在 `useState`
+      初值里读（初值只在首挂载算一次，组件不重挂载就永远不重算）。
+
+    ★ 但也**不能**在 effect 里 `setWizardOpen(true)`：那是
+      `react-hooks/set-state-in-effect`，会多一轮渲染；更麻烦的是它
+      让"向导开没开"有两份需要手动对齐的真相（URL 一份、state 一份），
+      而它们永远差一帧 —— 比如参数刚被抹掉、effect 还没跑完的那一帧。
+
+    ★ 解法与 `SchedulesPage`、`ScanRetentionPanel` 同一个模式：
+        · 没被用户碰过 → 由 URL 派生（`?new=1` 就是开着）
+        · 用户点了「发起扫描」或关掉 → `draft` 接管
+      于是"从命令面板跳进来"和"用户自己开关"是**同一个表达式**算出来的，
+      没有第二条路径需要维护。`targetQuery` 同理：URL 带了目标就是初值，
+      用户一打字 `draft` 接管。
+  */
+  const [wizardOpenDraft, setWizardOpenDraft] = useState<boolean | null>(null)
+  const wizardOpen = wizardOpenDraft ?? searchParams.get('new') === '1'
+  const setWizardOpen = setWizardOpenDraft
+
+  const urlTarget = searchParams.get('target')
+  const [targetQueryDraft, setTargetQueryDraft] = useState<string | null>(null)
+  const targetQuery = targetQueryDraft ?? (urlTarget ?? '')
+  const setTargetQuery = setTargetQueryDraft
+
+  /*
+    ── 把消费掉的参数从地址栏抹掉 ──
+
+    ★ 这里只有导航（`setSearchParams`），没有 setState ——
+      上面两个开关已经由派生的量表达，不需要在 effect 里纠正。
+  */
+  useEffect(() => {
+    const wantsNew = searchParams.get('new') === '1'
+    const targetFromUrl = searchParams.get('target')
+    if (!wantsNew && targetFromUrl === null) return
+
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('new')
+        next.delete('target')
+        return next
+      },
+      { replace: true },
+    )
+  }, [searchParams, setSearchParams])
 
   /*
     按需加载：进页面、以及每次切换视图时都走这里。
@@ -283,15 +340,21 @@ export function ScansPage() {
    * 会因为回收站里没有失败扫描而看到空列表 —— 他会以为视图坏了。
    * 视图的语义是"在扫描列表里怎么筛"，所以套用它就先回到扫描列表。
    */
-  const handleApplyView = useCallback((params: ScanViewParams) => {
-    setView('default')
-    setStatusFilter(params.status)
-    setTargetQuery(params.q)
-    setSortKey(params.sort)
-    setSortDir(params.dir)
-    setSelectedIds(new Set())
-    setFocusIndex(-1)
-  }, [])
+  const handleApplyView = useCallback(
+    (params: ScanViewParams) => {
+      setView('default')
+      setStatusFilter(params.status)
+      setTargetQuery(params.q)
+      setSortKey(params.sort)
+      setSortDir(params.dir)
+      setSelectedIds(new Set())
+      setFocusIndex(-1)
+    },
+    // `setTargetQuery` 现在是 `useState` 的 setter 本体（`setTargetQueryDraft`
+    // 的别名），引用永远稳定；但它已经不在组件体内联声明，ESLint 看不到
+    // 那个稳定性，所以显式列出来。
+    [setTargetQuery],
+  )
 
   // ── 批量动作 ─────────────────────────────────────────
   //

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AlarmClock, Play, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppShell'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
@@ -333,11 +333,30 @@ function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
 }
 
 export default function SchedulesPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const state = useSchedulesState()
   const [query, setQuery] = useState('')
   const [stateFilter, setStateFilter] = useState<StateFilter>('all')
   const [now, setNow] = useState(() => Date.now())
-  const [creating, setCreating] = useState(false)
+  /*
+    ── 新建抽屉的开关：draft 覆盖 URL 派生值 ──
+
+    ★ 为什么不是 `useState(false)` + effect 里看 `?new=1` 再 `setCreating(true)`：
+
+      那会撞上项目的 `react-hooks/set-state-in-effect` 规则（effect 里同步
+      setState 会多一轮渲染、容易写出循环）。规则挡得对 —— 但更重要的是
+      这种写法的**语义**是错的：它让「抽屉开没开」变成两份需要手动对齐的
+      真相（URL 里一份、state 里一份），而同步的时机永远差一帧。
+
+      这里用 `ScanRetentionPanel` 同一个模式：
+        · 没被用户碰过 → 由 URL 派生（`?new=1` 就是开着）
+        · 用户点了「新建」或「关闭」→ `draft` 接管
+      于是"从命令面板跳过来自动打开"和"用户自己开关"是同一个表达式算出来的，
+      没有第二条需要维护的路径。
+  */
+  const [creatingDraft, setCreatingDraft] = useState<boolean | null>(null)
+  const creating = creatingDraft ?? searchParams.get('new') === '1'
+  const setCreating = setCreatingDraft
   const [pendingDelete, setPendingDelete] = useState<Schedule | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
@@ -349,6 +368,31 @@ export default function SchedulesPage() {
     loadedOnce.current = true
     if (state.status === 'idle') void loadSchedules()
   }, [state.status])
+
+  /*
+    ── 把 `?new=1` 从地址栏抹掉 ──
+
+    命令面板的「新建定时复查」跳到这里时带 `?new=1`。
+
+    ★ 抹掉的理由：参数留在地址栏里，用户关掉抽屉后刷新页面、或者
+      从别的页面按后退回来，抽屉会**自己再弹一次** —— 那时他已经不记得
+      自己几秒前点过什么，只觉得"这玩意儿自己弹"。
+
+    ★ 这里只有导航（`setSearchParams`），没有 setState ——
+      抽屉是否打开已经由上面的派生存量表达，不需要在 effect 里纠正。
+  */
+  useEffect(() => {
+    if (searchParams.get('new') !== '1') return
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('new')
+        return next
+
+      },
+      { replace: true },
+    )
+  }, [searchParams, setSearchParams])
 
   /*
     ★ 轮询：每 30 秒静默刷新一次。

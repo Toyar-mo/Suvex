@@ -86,3 +86,27 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
     value: class extends NoopObserver {},
   })
 }
+
+/**
+ * `Element.prototype.scrollIntoView` —— jsdom 同样没有实现它
+ * （它属于"布局/滚动"一类，jsdom 一律不碰）。
+ *
+ * 用到它的地方：`components/layout/CommandPalette.tsx` 把高亮项滚进视口
+ * （按 ↑↓ 移动时要让人看得见当前选中哪一条）。
+ *
+ * ★ 补成**空实现**，不去记录"谁被滚动过"：
+ *   断言"滚动了"没有意义 —— 真正该断言的是 `aria-activedescendant`
+ *   指向了正确的那一条（读屏器读的是它，回车执行的也是它）。
+ *   滚动只是视觉跟随，滚没滚不影响正确性，所以这里只要不抛异常。
+ */
+if (
+  typeof window !== 'undefined' &&
+  typeof window.Element.prototype.scrollIntoView !== 'function'
+) {
+  Object.defineProperty(window.Element.prototype, 'scrollIntoView', {
+    writable: true,
+    configurable: true,
+    value: () => {},
+  })
+}
+

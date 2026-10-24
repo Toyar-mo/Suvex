@@ -19,6 +19,7 @@ import {
   FINDING_STATUS_LABEL,
   FINDING_STATUS_ORDER,
   FINDING_STATUS_TRANSITIONS,
+  OPEN_FINDING_STATUSES,
   type Finding,
   type FindingCategory,
   type FindingStatus,
@@ -55,11 +56,12 @@ import {
   filterToExportQuery,
   isFilterActive,
   sortFindings,
+  type FindingFilter,
   type FindingSortKey,
 } from '@/lib/finding-query'
 import { AlertTriangle, ArrowDownWideNarrow, Clock, Download, Filter, Search, ShieldCheck, UserCheck, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 
 /**
  * Findings 漏洞发现库。
@@ -87,6 +89,7 @@ import { useNavigate } from 'react-router-dom'
  */
 
 export function FindingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams()
   const { findings, status, error, scope } = useFindingsState()
   /*
     这一页还要知道"有没有扫描过" —— 两种空态的含义**完全相反**：
@@ -98,7 +101,7 @@ export function FindingsPage() {
   const scansState = useScansState()
 
   // ── 筛选与排序 ──
-  const [filter, setFilter] = useState(emptyFilter)
+  // `filter` / `setFilter` 在下面「外部入口」那段里声明（draft 覆盖 URL 派生值）
   const [sortKey, setSortKey] = useState<FindingSortKey>('severity')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -112,7 +115,113 @@ export function FindingsPage() {
 
   // ── 选择与详情 ──
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
-  const [openId, setOpenId] = useState<string | null>(null)
+
+  /*
+    ── 外部入口（命令面板 / 通知链接）传进来的意图 ──
+
+    三个参数：`status`（只看某状态）、`q`（全文关键字）、`finding`（打开某条详情）。
+    都只**消费一次**，读完立刻从地址栏抹掉。
+
+    ★ 为什么抹掉：`?finding=<id>` 留在地址栏里，用户关掉抽屉、刷新、
+      或从别的页面返回时会再次弹出同一条 —— 而他刚才是特意关掉的。
+      副作用参数不是页面状态，它们是一次性的指令。
+
+    ★ 为什么不把筛选条件**长期**同步到地址栏（双向绑定）：
+      那样每次勾选筛选都会往历史里压一条记录，浏览器后退键会变成
+      "撤销上一次筛选"，而用户以为它会回到上一页。要做可分享的筛选
+      链接是另一个需求，那是"复制链接"按钮的事，不该让后退键背这个锅。
+
+    ★ `status` 只支持 `open` 这一个取值：它是"还没处置完"的合称，
+      对应后端的状态集合而不是单个枚举值。用户从命令面板点"处理未关闭
+      的漏洞"时想的是这个意思；多状态列表（`?status=new,confirmed`）
+      属于高级用法，等真有人要再加，别先猜。
+
+    ── 实现：draft 覆盖 URL 派生值 ──
+
+    ★ 不能在 effect 里 `setFilter(...)` / `setOpenId(...)`：那是
+      `react-hooks/set-state-in-effect`（多一轮渲染），而且让同一件事
+      有两份需要手动对齐的真相。也不能只写进 `useState` 初值 ——
+      用户**已经在这一页**时组件不重挂载，再点一次命令面板会毫无反应。
+
+    ★ 所以和 `ScansPage`、`SchedulesPage` 用同一个模式：
+        · 用户还没碰过 → 由 URL 派生
+        · 用户一动手 → draft 接管
+      三个 draft 各自独立：从命令面板跳过来带了 `?q=sql`，用户随后
+      自己改筛选，`draftFilter` 接管而 `q` 仍来自 URL —— 两者互不打扰。
+  */
+
+  /** URL 里的一次性指令，解析成可直接用的形态。空参数 → null */
+  const urlIntent = useMemo(() => {
+    const statusParam = searchParams.get('status')
+    const queryParam = searchParams.get('q')
+    const findingParam = searchParams.get('finding')
+    if (statusParam === null && queryParam === null && findingParam === null) return null
+    return {
+      openOnly: statusParam === 'open',
+      query: queryParam,
+      finding: findingParam !== null && findingParam.length > 0 ? findingParam : null,
+    }
+  }, [searchParams])
+
+  const [filterDraft, setFilterDraft] = useState<FindingFilter | null>(null)
+  const filter = useMemo<FindingFilter>(() => {
+    const base = filterDraft ?? emptyFilter()
+    if (filterDraft !== null || urlIntent === null) return base
+    // 首帧（或刚从命令面板跳进来）：把 URL 指令叠在默认筛选上
+    if (!urlIntent.openOnly && urlIntent.query === null) return base
+    const next: FindingFilter = { ...base, statuses: new Set(base.statuses) }
+    if (urlIntent.openOnly) {
+      for (const s of OPEN_FINDING_STATUSES) next.statuses.add(s)
+    }
+    if (urlIntent.query !== null) next.query = urlIntent.query
+    return next
+  }, [filterDraft, urlIntent])
+
+  /*
+    `setFilter` 的签名必须和原来的 `useState<FindingFilter>` setter **一模一样**
+    —— 页里有十几处 `setFilter((prev) => ...)`，它们都读得到 `prev`（非空）。
+
+    所以这里做一层适配：
+      · 传函数 → 拿上面算出的 `filter` 当 `prev` 喂进去（而不是 draft，
+        因为 draft 可能是 `null`，而调用方假设 `prev` 是个完整的筛选器）
+      · 传值   → 直接用
+    两种都落到 `setFilterDraft`，于是从这一刻起 draft 接管、URL 不再参与。
+  */
+  const setFilter = useCallback<Dispatch<SetStateAction<FindingFilter>>>(
+    (action) => {
+      setFilterDraft((prevDraft) => {
+        const prev = prevDraft ?? filter
+        return typeof action === 'function' ? action(prev) : action
+      })
+    },
+    [filter],
+  )
+
+  const [openIdDraft, setOpenIdDraft] = useState<string | null>(null)
+  const openId = openIdDraft ?? urlIntent?.finding ?? null
+  const setOpenId = setOpenIdDraft
+
+  /*
+    ── 把消费掉的参数从地址栏抹掉 ──
+
+    ★ 这里只有导航（`setSearchParams`），没有 setState ——
+      filter / openId 已由上面的派生表达式表达。
+  */
+  useEffect(() => {
+    if (urlIntent === null) return
+
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('status')
+        next.delete('q')
+        next.delete('finding')
+        return next
+      },
+      { replace: true },
+    )
+  }, [urlIntent, searchParams, setSearchParams])
+
   /**
    * 「标记为误报」的理由弹窗。
    *
