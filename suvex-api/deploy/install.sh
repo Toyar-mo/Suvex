@@ -440,6 +440,15 @@ fi
 
 # 迁移不在这里跑：它在 unit 的 ExecStart 里（alembic upgrade head &&），
 # 跟服务同生共死。手工跑一次反而会在"迁移成功但服务没起"时留下半套表结构。
+#
+# ★★ 2026-10-25 补记：上面那句话在写下时**是错的** —— `suvex-api.service`
+#    的 ExecStart 里从来没有 `alembic upgrade head`，只有 uvicorn。于是
+#    "迁移会跟着服务跑"这个前提根本不成立，而症状极隐蔽：新迁移不生效，
+#    服务照常 active、日志干净，只有新功能碰到新表时才炸
+#    （`relation "scan_schedules" does not exist` 每 15 秒刷一次，但
+#     `systemctl is-active` 一直是绿的）。v0.85 的定时扫描因此在 Kali
+#    上空转了一整天。
+#    现在 unit 里真的加了这一步，这条注释才成为事实。
 
 # ── 6. systemd 服务 ─────────────────────────────────────────
 step "安装 systemd 服务"

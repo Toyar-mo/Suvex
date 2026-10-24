@@ -66,11 +66,25 @@ EnvironmentFile=/etc/suvex/api.env
 #    只加 `--proxy-headers` 会让 uvicorn 信任任何来源的
 #    `X-Forwarded-For` —— 而来源 IP 同时用于**登录限流**与**授权留痕**，
 #    伪造它等于同时绕过这两者。
-ExecStart=/opt/suvex/suvex-api/.venv/bin/uvicorn app.main:app \
-    --host 127.0.0.1 \
-    --port 8000 \
-    --proxy-headers \
-    --forwarded-allow-ips=127.0.0.1
+#
+# ★★ 2026-10-25 修正：上面那句注释一直是对的判断，但 ExecStart 里**从来
+#    没真的写过 `alembic upgrade head`** —— 注释陈述了一件不存在的事实。
+#    后果不是"少跑一步"，是**新迁移静默不生效**：服务照常起来、日志干净、
+#    旧表能读能写，只有新功能在新表缺失时才炸，而且炸出来的样子是
+#    "代码 bug"（`relation "scan_schedules" does not exist` 每 15 秒刷一次，
+#    但服务 is-active 一直是绿的）。v0.85 的定时扫描就这样在 Kali 上
+#    空转了一整天。
+#
+#    现在补上，用 `sh -c` 串起来（systemd 的 ExecStart 不做 shell 解释，
+#    所以 `&&` 不能直接写）。`alembic` 用绝对路径、`-c` 指 alembic.ini，
+#    因为 WorkingDirectory 已设好但 `-c` 显式写更不容易被环境变量带偏。
+ExecStart=/bin/sh -c '\
+    /opt/suvex/suvex-api/.venv/bin/python -m alembic -c /opt/suvex/suvex-api/alembic.ini upgrade head && \
+    exec /opt/suvex/suvex-api/.venv/bin/uvicorn app.main:app \
+        --host 127.0.0.1 \
+        --port 8000 \
+        --proxy-headers \
+        --forwarded-allow-ips=127.0.0.1'
 
 # ── 重启策略 ────────────────────────────────────────────────
 #
