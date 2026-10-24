@@ -4,6 +4,7 @@ import {
   filterSkillGroups,
   loadsOf,
   usageSummary,
+  validateAttachmentName,
   validateDraft,
   type SkillListSnapshot,
   type SkillSummary,
@@ -293,5 +294,44 @@ describe('validateDraft', () => {
     for (const name of illegal) {
       expect(validateDraft({ ...ok, name }), `应非法: ${name}`).not.toBeNull()
     }
+  })
+})
+
+describe('validateAttachmentName - same rules as backend', () => {
+  it('accepts normal attachment names', () => {
+    for (const ok of ['a.md','checklist.md','scripts/probe.sh','a/b/c.txt','_x.md','form-1.json','a.b.c.md']) {
+      expect(validateAttachmentName(ok), 'should accept ' + ok).toBeNull()
+    }
+  })
+
+  it('rejects absolute paths and traversal', () => {
+    for (const bad of ['/etc/passwd','a/../b.md','./a.md','../a.md']) {
+      expect(validateAttachmentName(bad), 'should reject ' + bad).not.toBeNull()
+    }
+  })
+
+  it('rejects backslash traversal', () => {
+    // 后端会先把 `\` 归一成 `/` 再切段，所以这里也要归一再判
+    const traversal = `..\\..\\x.md`
+    expect(validateAttachmentName(traversal)).not.toBeNull()
+  })
+
+  it('rejects SKILL.md but allows it in a subdirectory', () => {
+    expect(validateAttachmentName('SKILL.md')).not.toBeNull()
+    expect(validateAttachmentName('docs/SKILL.md')).toBeNull()
+  })
+
+  it('rejects more than three path segments', () => {
+    expect(validateAttachmentName('a/b/c/d.txt')).not.toBeNull()
+  })
+
+  it('rejects empty name and empty segments', () => {
+    expect(validateAttachmentName('')).not.toBeNull()
+    expect(validateAttachmentName('a//b.md')).not.toBeNull()
+  })
+
+  it('rejects segments starting with dot or hyphen', () => {
+    expect(validateAttachmentName('.hidden')).not.toBeNull()
+    expect(validateAttachmentName('-x.md')).not.toBeNull()
   })
 })

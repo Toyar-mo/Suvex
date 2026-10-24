@@ -3740,7 +3740,14 @@ async def dispatch_tool(
             # 纯查表：读一篇随代码分发的 markdown。不碰沙箱、不碰网络。
             # 名字取自参数 `name`（与 strix 的 load_skill 同名参数，方便
             # 模型迁移既有习惯）。拼错时 load_skill_text 会回可用清单。
-            return skills_mod.load_skill_text(str(args.get("name") or ""))
+            #
+            # ★ v0.90：`file` 用来读技能包里的**附件**（目录包形态）。
+            #   不传就是主文件，行为与之前完全一致 —— 这是刻意的向后兼容：
+            #   31 篇内置技能全是单文件形态，它们不该因为这次扩展而变形。
+            return skills_mod.load_skill_text(
+                str(args.get("name") or ""),
+                file=str(args.get("file") or ""),
+            )
         if name == "list_requests":
             return await _tool_list_requests(args, spec=spec)
         if name == "get_request":

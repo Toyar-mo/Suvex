@@ -173,8 +173,11 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         label="载入技能速查",
         group="技能与知识",
         summary="按需拉取一篇漏洞验证手法或工具打法的速查卡。",
-        params="name（技能包名）",
-        default_limitation="只返回速查文本，不执行任何命令；拼错名字会回可用清单。",
+        params="name（技能包名）、file（可选，读这一篇的附件）",
+        default_limitation=(
+            "只返回速查文本，不执行任何命令；拼错名字会回可用清单。"
+            "带附件的技能包会在正文末尾列出文件名，用 file 取。"
+        ),
     ),
     # ── 外部工具（MCP 桥）─────────────────────────────────
     ToolSpec(

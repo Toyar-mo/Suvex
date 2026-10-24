@@ -280,6 +280,7 @@ class KernelSettingsIn(StrictModel):
 # 所以它是独立端点 + 独立出入参。`KernelSettingsOut` 里**不出现**它：
 # 设置页的四块聚合快照里，这一块有自己的加载/失败状态。
 
+
 #: 单条 MCP 连接的入参。
 #:
 #: ⚠️ `env` **只进子进程环境**，不回显（见 `McpServerConfig.public_dict`
@@ -550,6 +551,13 @@ class KernelSkillOut(CamelModel):
     #:   `GET /skills/{name}` —— 31 篇就是 31 个请求，而且那些请求
     #:   还会把自定义技能的正文一起传回来（前端只要一个布尔）。
     source: SkillSourceLiteral = "builtin"
+    #: ★ v0.90：附件数。目录包形态的一个技能可以带配套文件
+    #: （表单清单、可复制脚本、检查表）。
+    #:
+    #: 只下发**个数**不下发文件名：清单要渲染 31 篇，每篇带一列文件名会让
+    #: 响应变胖，而清单上真正要表达的是"这一篇不只是一段文本"。文件名在
+    #: 详情接口里给（那里用户正在看这一篇）。
+    fileCount: int = 0
 
 
 class KernelSkillCategoryOut(CamelModel):
@@ -586,6 +594,29 @@ class SkillDetailOut(CamelModel):
     body: str = ""
     #: 正文行数（内置技能也给，用来在界面上显示"这一篇有多大"）。
     lineCount: int = 0
+    #: ★ v0.90：附件清单（相对路径）。空 = 单文件技能。
+    #:
+    #: 详情里给**文件名**（清单里只给个数）—— 用户正在看这一篇，
+    #: 他要的就是"这篇还带哪几份文件、分别是什么"。
+    files: list[str] = []
+
+
+class SkillFilesOut(CamelModel):
+    """`GET /kernel/skills/{name}/files` —— 一篇自定义技能的全部附件内容。
+
+    ## 为什么内容要单独一个端点，不跟详情一起回
+
+    详情接口要渲染**每一篇**（清单 → 点开 → 详情），而附件内容只有
+    "进入编辑"时才需要。带 20 MB 附件的技能若在详情里一起下发，
+    所有只读浏览都要付那份代价。
+
+    而这个端点只在编辑时调一次，且**必须一次给全**：
+    `PUT` 的 `files` 是全量替换，前端不手持全部内容就无法安全保存
+    （见端点自身的 docstring）。
+    """
+
+    #: `{相对路径: 内容}`。空 = 这篇没有附件（单文件技能）。
+    files: dict[str, str] = {}
 
 
 class SkillCreateIn(StrictModel):
@@ -610,6 +641,11 @@ class SkillCreateIn(StrictModel):
     description: str = Field(default="", max_length=2000)
     #: 正文（Markdown）。
     body: str = Field(min_length=1, max_length=200_000)
+    #: ★ v0.90：附件 —— `{相对路径: 内容}`。空 = 单文件技能（旧形态）。
+    #:
+    #: 相对路径的合法性在 `skill_store` 里做（那里才是路径的地界），
+    #: 这里只限总大小，防止一次 POST 塞进几十 MB。
+    files: dict[str, str] = Field(default_factory=dict)
 
 
 class SkillUpdateIn(StrictModel):
@@ -622,6 +658,13 @@ class SkillUpdateIn(StrictModel):
 
     description: str = Field(default="", max_length=2000)
     body: str = Field(min_length=1, max_length=200_000)
+    #: ★ v0.90：附件 —— `{相对路径: 内容}`。
+    #:
+    #: ⚠️ 语义是**全量替换**，不是增量合并：传 `{}` 等于"这篇没有附件"，
+    #: 会把原有的附件删掉。这样"页面上看到的就是磁盘上的"，
+    #: 而不是"看到的 + 一份看不见的旧残留"。
+    #: 只改正文不动附件时，前端要把现有附件原样带回来。
+    files: dict[str, str] | None = None
 
 
 # ── 技能调用统计（v0.88，"技能状态"）────────────────────

@@ -59,9 +59,17 @@ ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work/attachments"}}
 ACTION: {"tool": "load_skill", "args": {"name": "sql-injection"}}
 ```
 
+**有些技能还带附件**（一份表单清单、一段可复制的脚本、一张检查表）。
+拉主文件时正文末尾会列出它们；要哪一份就再拉一次：
+
+```
+ACTION: {"tool": "load_skill", "args": {"name": "sql-injection", "file": "scripts/forms.md"}}
+```
+
 **纪律**：技能速查给你的是**方法论与安全调用基线**，不是让你无脑复制。
 它讲的命令仍要先用 `command -v` 确认工具在镜像里真的存在；它没装的工具
 （例如 nuclei）别照着写。名字拼错时它会回一份可用清单，照清单重拉即可。
+附件名同样要照清单里的原文写，不要自己拼路径。
 
 ### 关于 MCP（`list_mcps` / `describe_mcp` / `call_mcp`）
 

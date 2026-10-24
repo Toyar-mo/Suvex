@@ -40,6 +40,7 @@ from app.kernel.schemas import (
     KernelSkillsOut,
     SkillCreateIn,
     SkillDetailOut,
+    SkillFilesOut,
     SkillUpdateIn,
     SkillUsageListOut,
     SkillUsageOut,
@@ -104,6 +105,10 @@ def list_kernel_skills(_identity: Identity = ReadDep) -> KernelSkillsOut:
                 #   不带的话，界面要为每一篇再发一次详情请求才知道，
                 #   而那些请求还会把自定义技能的正文一起传回来。
                 "source": getattr(skill, "source", "builtin"),
+                # ★ v0.90：附件个数，界面据此标出"这一篇不只是一段文本"。
+                #   只给个数不给文件名 —— 清单要渲染 31 篇，每篇带一列
+                #   文件名会让响应变胖，而文件名在详情接口里给。
+                "fileCount": len(getattr(skill, "files", ()) or ()),
             }
         )
     for bucket in grouped.values():
@@ -224,7 +229,55 @@ def get_kernel_skill(name: str, _identity: Identity = ReadDep) -> SkillDetailOut
         source=source,
         body=body,
         lineCount=(body.count("\n") + 1) if body else 0,
+        # ★ v0.90：附件清单直接取发现层的结果（它已经扫过包目录），
+        # 不为这一个字段再读一遍磁盘。
+        files=list(getattr(skill, "files", ()) or ()),
     )
+
+
+@router.get(
+    "/skills/{name}/files",
+    response_model=SkillFilesOut,
+    summary="一篇自定义技能的全部附件内容（编辑回填用）",
+)
+def get_kernel_skill_files(name: str, _identity: Identity = ReadDep) -> SkillFilesOut:
+    """读回全部附件内容。
+
+    ## 为什么需要这个端点（而不是让详情带内容）
+
+    `PUT /skills/{name}` 的 `files` 是**全量替换**语义：传 `{}` 就是
+    "这篇没有附件"。于是编辑器要"只改正文"时，必须把现有附件内容
+    原样带回去 —— 而它只有**文件名**（详情里只给清单），没有内容。
+
+    没有这个端点，前端只有两条路，都不可接受：
+
+    | 做法 | 后果 |
+    |---|---|
+    | 保存时不带 `files` | 后端收到 `None` = 不动附件 → 正确，但**用户就没法删附件** |
+    | 保存时带 `{}` | 改一个字 → 静默清空全部附件（不报错） |
+
+    有了它，前端拿到真内容 → 用户可以增删改任意附件，且"只改正文"
+    时把原样内容带回去，语义正确。
+
+    ## 为什么一次全给，不分文件
+
+    同上：全量替换语义要求前端**手持全部内容**才能安全保存。
+    按单个文件给的话，没被点开的那些文件编辑器就没有内容，
+    保存时带不回去 —— 又是一个静默删除。
+
+    代价是打开带大附件的技能会拉全部内容，但这有明确上限
+    （`skill_store.MAX_ATTACHMENT_BYTES` = 20 MB / 50 个文件），
+    且比"改一个字删光附件"好得多。
+    """
+    from app.kernel import skill_store
+
+    skill = _find_skill(name)
+    category = skill.category
+    if getattr(skill, "source", "builtin") != "custom":
+        # 内置技能没有可编辑的附件。回 404 而不是空 ——
+        # 空像是"这篇没有附件"，那不是事实（它可能带内置附件）。
+        raise ApiError.not_found(f"`{name}` 是内置技能，没有可编辑的附件。")
+    return SkillFilesOut(files=skill_store.read_custom_attachments(name=name, category=category))
 
 
 @router.post(
@@ -253,6 +306,7 @@ def create_kernel_skill(
             category=payload.category,
             description=payload.description,
             body=payload.body,
+            files=payload.files or None,
         )
     except skill_store.SkillWriteError as exc:
         raise ApiError.validation(str(exc), {"detail": exc.message}) from exc
@@ -266,6 +320,7 @@ def create_kernel_skill(
             "name": payload.name,
             "category": payload.category,
             "chars": len(payload.body),
+            "files": sorted(payload.files or {}),
         },
     )
     return SkillDetailOut(
@@ -275,6 +330,7 @@ def create_kernel_skill(
         source="custom",
         body=payload.body,
         lineCount=payload.body.count("\n") + 1,
+        files=sorted(payload.files or {}),
     )
 
 
@@ -309,6 +365,10 @@ def update_kernel_skill(
             category=skill.category,
             description=payload.description,
             body=payload.body,
+            # ★ v0.90：`None` = 不动附件；`{}` = 清空。
+            # 这个区分必须一路上传到这里，不能在路由层折叠成 `{}`
+            # （折叠的后果是"只改一个字 → 附件全没了"）。
+            files=payload.files,
             must_exist=True,
         )
     except skill_store.SkillWriteError as exc:
@@ -319,7 +379,12 @@ def update_kernel_skill(
         request=audit.from_http(request, identity),
         action=AuditAction.KERNEL_SKILL_UPDATE,
         summary=f"更新技能 {skill.category}/{name}",
-        detail={"name": name, "category": skill.category, "chars": len(payload.body)},
+        detail={
+            "name": name,
+            "category": skill.category,
+            "chars": len(payload.body),
+            "files": None if payload.files is None else sorted(payload.files),
+        },
     )
     return SkillDetailOut(
         name=name,
@@ -328,6 +393,11 @@ def update_kernel_skill(
         source="custom",
         body=payload.body,
         lineCount=payload.body.count("\n") + 1,
+        files=(
+            sorted(payload.files)
+            if payload.files is not None
+            else list(getattr(_find_skill(name), "files", ()) or ())
+        ),
     )
 
 

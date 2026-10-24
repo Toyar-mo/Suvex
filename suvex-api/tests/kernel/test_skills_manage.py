@@ -462,3 +462,199 @@ def test_usage_is_readable_by_viewer(ready_client) -> None:  # noqa: ANN001
     resp = ready_client.get(f"{API}/kernel/skills/usage")
     assert resp.status_code == 200, resp.text
 
+
+
+# ── v0.90：附件内容读回端点 ────────────────────────────────
+#
+# ★ 这一组测的是**编辑器能不能安全保存**，不是"端点存不存在"。
+#
+#   背景：`PUT` 的 `files` 是全量替换语义。编辑器要"只改正文"时，
+#   必须把现有附件内容原样带回去 —— 而详情接口只给文件名清单，没内容。
+#   若这个端点拿不到内容，前端唯一的选择就是保存时不带 `files`，
+#   而那样用户就永远删不掉附件；若带 `{}`，改一个字就静默清空全部附件。
+
+
+def test_files_route_is_registered() -> None:
+    """附件内容端点在 OpenAPI 里（漏注册 = 前端 404）。"""
+    from app.main import create_app
+
+    paths = create_app().openapi()["paths"]
+    assert "get" in paths.get("/api/v1/kernel/skills/{name}/files", {})
+
+
+def test_files_route_does_not_shadow_detail(ready_client) -> None:  # noqa: ANN001
+    """★ 加了 `/files` 之后，`GET /skills/{name}` 仍必须工作。
+
+    路由顺序错了的典型症状：`/skills/{name}` 把 `/skills/x/files`
+    当成 name="x/files" 匹配掉，于是附件端点永远 404。
+    这里两条都打一遍，确保它们互不吃掉。
+    """
+    ready_client.post(
+        f"{API}/kernel/skills",
+        json={
+            "name": "route-probe",
+            "category": "demo",
+            "description": "路由探测",
+            "body": "# 正文",
+        },
+    )
+    detail = ready_client.get(f"{API}/kernel/skills/route-probe")
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["name"] == "route-probe"
+
+    files = ready_client.get(f"{API}/kernel/skills/route-probe/files")
+    assert files.status_code == 200, files.text
+
+
+def test_files_returns_real_content(ready_client) -> None:  # noqa: ANN001
+    """带附件建的技能，读回的附件**内容**与写入的一致。
+
+    ★ 断言的是内容相等，不是"长度 > 0" —— 后者在返回了文件名或
+      空串时也能通过，而那正是会让编辑器保存时清空附件的形状。
+    """
+    payload = {
+        "name": "with-attach",
+        "category": "demo",
+        "description": "带附件",
+        "body": "# 正文\n见附件",
+        "files": {
+            "checklist.md": "# 清单\n- [ ] 第一项\n",
+            "scripts/probe.sh": "#!/bin/sh\necho hi\n",
+        },
+    }
+    created = ready_client.post(f"{API}/kernel/skills", json=payload)
+    assert created.status_code == 201, created.text
+
+    resp = ready_client.get(f"{API}/kernel/skills/with-attach/files")
+    assert resp.status_code == 200, resp.text
+    files = resp.json()["files"]
+    assert files["checklist.md"] == payload["files"]["checklist.md"]
+    assert files["scripts/probe.sh"] == payload["files"]["scripts/probe.sh"]
+    # SKILL.md 本身不算附件 —— 它是正文，由详情接口给
+    assert "SKILL.md" not in files
+
+
+def test_files_is_empty_for_single_file_skill(ready_client) -> None:  # noqa: ANN001
+    """不带附件的技能 → `{}`，不是 404。
+
+    ★ 区别很重要：`{}` 表示"这篇确实没有附件"（编辑器因此可以安全地
+      保存空 files = 清空），而 404 会让编辑器以为"读失败了，别动附件"。
+    """
+    ready_client.post(
+        f"{API}/kernel/skills",
+        json={
+            "name": "no-attach",
+            "category": "demo",
+            "description": "无附件",
+            "body": "# 正文",
+        },
+    )
+    resp = ready_client.get(f"{API}/kernel/skills/no-attach/files")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["files"] == {}
+
+
+def test_files_404_for_builtin(ready_client) -> None:  # noqa: ANN001
+    """内置技能的附件不可编辑 → 404（不是空 {}）。
+
+    空 `{}` 会被误读成"这篇没有附件"，而内置技能可能有随代码分发的附件。
+    回 404 才是实话："这里没有你可以改的东西"。
+    """
+    builtin_name = skills_mod.discover_skills()[0].name
+    resp = ready_client.get(f"{API}/kernel/skills/{builtin_name}/files")
+    assert resp.status_code == 404, resp.text
+
+
+def test_files_404_for_missing_skill(ready_client) -> None:  # noqa: ANN001
+    """不存在的技能 → 404。"""
+    resp = ready_client.get(f"{API}/kernel/skills/does-not-exist/files")
+    assert resp.status_code == 404, resp.text
+
+
+def test_roundtrip_preserves_attachments_when_body_edited(ready_client) -> None:  # noqa: ANN001
+    """★ 核心场景：拉内容 → 只改正文 → 原样带回 → 附件还在。
+
+    这就是编辑器真实要做的事。少了这个端点，这条链路走不通。
+    """
+    ready_client.post(
+        f"{API}/kernel/skills",
+        json={
+            "name": "edit-body",
+            "category": "demo",
+            "description": "改正文",
+            "body": "# 旧正文",
+            "files": {"keep.md": "别丢我"},
+        },
+    )
+
+    files = ready_client.get(f"{API}/kernel/skills/edit-body/files").json()["files"]
+    assert files == {"keep.md": "别丢我"}
+
+    updated = ready_client.put(
+        f"{API}/kernel/skills/edit-body",
+        json={"description": "改正文", "body": "# 新正文", "files": files},
+    )
+    assert updated.status_code == 200, updated.text
+
+    after = ready_client.get(f"{API}/kernel/skills/edit-body/files").json()["files"]
+    assert after == {"keep.md": "别丢我"}, "只改正文却把附件弄丢了"
+    detail = ready_client.get(f"{API}/kernel/skills/edit-body").json()
+    assert detail["body"].endswith("# 新正文")
+
+
+def test_omitting_files_keeps_attachments(ready_client) -> None:  # noqa: ANN001
+    """★ `files` 省略（None）= 不动附件；`{}` = 清空。两者必须不同。
+
+    这条固定住后端的 `files: dict | None` 语义 —— 若哪天有人把
+    "省略"当成 `{}` 处理，编辑器"只改描述"就会静默删光附件。
+    """
+    ready_client.post(
+        f"{API}/kernel/skills",
+        json={
+            "name": "omit-probe",
+            "category": "demo",
+            "description": "省略",
+            "body": "# 正文",
+            "files": {"a.md": "内容 A"},
+        },
+    )
+
+    # 省略 files → 附件应保留
+    resp = ready_client.put(
+        f"{API}/kernel/skills/omit-probe",
+        json={"description": "只改描述", "body": "# 正文"},
+    )
+    assert resp.status_code == 200, resp.text
+    kept = ready_client.get(f"{API}/kernel/skills/omit-probe/files").json()["files"]
+    assert kept == {"a.md": "内容 A"}, "省略 files 不应删附件"
+
+    # 显式 {} → 附件应清空
+    resp = ready_client.put(
+        f"{API}/kernel/skills/omit-probe",
+        json={"description": "清空附件", "body": "# 正文", "files": {}},
+    )
+    assert resp.status_code == 200, resp.text
+    cleared = ready_client.get(f"{API}/kernel/skills/omit-probe/files").json()["files"]
+    assert cleared == {}, "显式传 {} 应当清空附件"
+
+
+def test_list_reports_file_count(ready_client) -> None:  # noqa: ANN001
+    """清单里带 fileCount，界面据此标出"这一篇不只是一段文本"。"""
+    ready_client.post(
+        f"{API}/kernel/skills",
+        json={
+            "name": "counted",
+            "category": "demo",
+            "description": "有附件",
+            "body": "# 正文",
+            "files": {"x.md": "1", "y.md": "2", "sub/z.md": "3"},
+        },
+    )
+    resp = ready_client.get(f"{API}/kernel/skills")
+    assert resp.status_code == 200, resp.text
+    counts = {
+        item["name"]: item["fileCount"]
+        for group in resp.json()["categories"]
+        for item in group["skills"]
+    }
+    assert counts["counted"] == 3

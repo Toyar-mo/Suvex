@@ -1,16 +1,17 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
-import { Drawer } from '@/components/ui/Drawer'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
+import { SkillEditor, type SkillEditorState } from '@/components/kernel/SkillEditor'
 import {
   createSkill,
   deleteSkill,
   ensureSkillsLoaded,
   fetchSkill,
+  fetchSkillFiles,
   filterSkillGroups,
   loadSkills,
   loadsOf,
@@ -24,9 +25,7 @@ import { cn } from '@/lib/cn'
 import {
   AlertCircle,
   BookOpen,
-  Check,
   Eye,
-  Loader2,
   Lock,
   MousePointerClick,
   Pencil,
@@ -93,7 +92,7 @@ export function SkillsPage() {
   const [selected, setSelected] = useState<string | null>(null)
 
   /** 编辑器状态：`null` = 关闭；否则是正在编辑/新建的内容。 */
-  const [editor, setEditor] = useState<EditorState | null>(null)
+  const [editor, setEditor] = useState<SkillEditorState | null>(null)
   const [saving, setSaving] = useState(false)
   const [editorError, setEditorError] = useState<string | null>(null)
 
@@ -124,7 +123,7 @@ export function SkillsPage() {
   const activeSkill = visibleSkills.find((skill) => skill.name === activeName) ?? null
 
   function openCreate() {
-    setEditor({ mode: 'create', name: '', category: '', description: '', body: '' })
+    setEditor({ mode: 'create', name: '', category: '', description: '', body: '', files: {} })
     setEditorError(null)
   }
 
@@ -135,21 +134,31 @@ export function SkillsPage() {
       name: skill.name,
       category: skill.category,
       description: skill.description,
-      // 正文要现拉 —— 清单里没有（可能几百 KB，不该随清单下发）。
       body: '',
+      files: {},
+      // 正文与附件都要现拉 —— 清单里没有（可能几百 KB，不该随清单下发）。
       loading: true,
     })
     try {
-      const detail = await fetchSkill(skill.name)
+      /*
+        ★ 正文与附件**并行**拉，但两个请求的错误要分开管：
+          附件接口对内置技能会 400/404（内置没有附件可编辑），
+          而正文仍然应该正常显示。若用 Promise.all，附件一失败
+          正文也就一起没了 —— 用户会看到一篇空白的已存在技能。
+      */
+      const [detail, files] = await Promise.all([
+        fetchSkill(skill.name),
+        fetchSkillFiles(skill.name).catch(() => ({}) as Record<string, string>),
+      ])
       setEditor((prev) =>
         prev && prev.name === skill.name
-          ? { ...prev, body: detail.body, loading: false }
+          ? { ...prev, body: detail.body, files, loading: false }
           : prev,
       )
     } catch (err) {
       setEditor((prev) =>
         prev && prev.name === skill.name
-          ? { ...prev, loading: false, body: '' }
+          ? { ...prev, loading: false, body: '', files: {} }
           : prev,
       )
       setEditorError(err instanceof Error ? err.message : '拿不到正文。')
@@ -175,13 +184,21 @@ export function SkillsPage() {
     setSaving(true)
     setEditorError(null)
     try {
+      /*
+        ★ `files` 必须原样传下去，不能被折叠成 `?? {}`。
+          这里的 `editor.files` 永远是一个对象（打开时已填好），
+          所以**编辑**一律是全量替换语义 —— 这正是我们要的：
+          用户删掉的附件就该被删掉。而"只改正文不动附件"在这个
+          界面里不存在（附件面板始终可见且全部加载着）。
+      */
       if (editor.mode === 'create') {
-        await createSkill(draft)
+        await createSkill({ ...draft, files: editor.files })
         setSelected(draft.name)
       } else {
         await updateSkill(draft.name, {
           description: draft.description,
           body: draft.body,
+          files: editor.files,
         })
         setSelected(draft.name)
       }
@@ -510,6 +527,18 @@ function SkillRow({
                 自定义
               </span>
             )}
+            {/*
+              ★ 附件数只在 >0 时显示：0 是绝大多数（31 篇里多数是单文件），
+                每行都挂一个「0」只会把真正的信号（这一篇带配套文件）淹掉。
+            */}
+            {(skill.fileCount ?? 0) > 0 && (
+              <span
+                className="shrink-0 rounded-xs border border-line px-1 text-[10px] text-ink-faint"
+                title={`这一篇带 ${skill.fileCount} 个附件文件`}
+              >
+                +{skill.fileCount}
+              </span>
+            )}
           </div>
           <p className="mt-0.5 line-clamp-2 text-[12px] leading-relaxed text-ink-muted">
             {skill.description || '（没有写描述）'}
@@ -649,131 +678,6 @@ function SkillDetailPane({
         改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的技能库。
       </footer>
     </div>
-  )
-}
-
-// ─────────────────────────────────────────────
-// 编辑器
-// ─────────────────────────────────────────────
-
-interface EditorState {
-  mode: 'create' | 'edit'
-  name: string
-  category: string
-  description: string
-  body: string
-  loading?: boolean
-}
-
-function SkillEditor({
-  state,
-  saving,
-  error,
-  onChange,
-  onSave,
-  onClose,
-}: {
-  state: EditorState | null
-  saving: boolean
-  error: string | null
-  onChange: (next: EditorState) => void
-  onSave: () => void
-  onClose: () => void
-}) {
-  const open = state !== null
-  const isCreate = state?.mode === 'create'
-
-  return (
-    <Drawer
-      open={open}
-      onClose={onClose}
-      title={isCreate ? '新建技能' : `编辑 ${state?.name ?? ''}`}
-      footer={
-        <div className="flex items-center justify-end gap-tight">
-          <Button variant="ghost" onClick={onClose} disabled={saving}>
-            取消
-          </Button>
-          <Button onClick={onSave} disabled={saving || state?.loading}>
-            {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-            保存
-          </Button>
-        </div>
-      }
-    >
-      {state && (
-        <div className="flex flex-col gap-panel">
-          {error && (
-            <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-[13px] text-signal-risk">
-              <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
-              <span className="leading-relaxed">{error}</span>
-            </div>
-          )}
-
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
-              技能名 <span className="text-ink-faint">（模型 load_skill 时写的就是它）</span>
-            </span>
-            <input
-              value={state.name}
-              onChange={(event) => onChange({ ...state, name: event.target.value })}
-              /* ★ 编辑时名字不可改：它同时是文件名和模型调用时的标识符，
-                 改名等于"删一个建一个"。要改就删了重建。 */
-              disabled={!isCreate}
-              placeholder="例如 kerberos-preauth"
-              className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent disabled:opacity-60"
-            />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
-              分类 <span className="text-ink-faint">（会变成目录名，编辑时不可改）</span>
-            </span>
-            <input
-              value={state.category}
-              onChange={(event) => onChange({ ...state, category: event.target.value })}
-              disabled={!isCreate}
-              placeholder="例如 vulnerabilities"
-              className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent disabled:opacity-60"
-            />
-          </label>
-
-          <label className="flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
-              一句话描述 <span className="text-ink-faint">（进「可用技能清单」，模型据此判断该不该加载）</span>
-            </span>
-            <input
-              value={state.description}
-              onChange={(event) => onChange({ ...state, description: event.target.value })}
-              placeholder="什么时候该拉这一篇"
-              className="h-9 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
-            />
-          </label>
-
-          <label className="flex flex-1 flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
-              正文（Markdown）
-              {state.loading && (
-                <span className="ml-1 text-ink-faint">
-                  <Loader2 className="inline size-3 animate-spin" /> 正在读…
-                </span>
-              )}
-            </span>
-            <textarea
-              value={state.body}
-              onChange={(event) => onChange({ ...state, body: event.target.value })}
-              rows={18}
-              spellCheck={false}
-              disabled={state.loading}
-              placeholder="# 标题&#10;&#10;这里写清步骤、判据、常见坑。模型会照它做。"
-              className="min-h-[280px] flex-1 resize-y rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-line-accent disabled:opacity-60"
-            />
-            <span className="text-[11px] text-ink-faint">
-              {state.body.length.toLocaleString('zh-CN')} 字符
-            </span>
-          </label>
-        </div>
-      )}
-    </Drawer>
   )
 }
 

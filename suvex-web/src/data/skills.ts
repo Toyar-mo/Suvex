@@ -35,6 +35,13 @@ export interface SkillSummary {
   category: string
   description: string
   source: SkillSource
+  /**
+   * ★ v0.90：附件个数（0 = 单文件技能）。
+   *
+   * 清单里只给个数不给文件名：31 篇各带一列文件名会让响应变胖，
+   * 而清单要表达的只是"这一篇不只是一段文本"。文件名在详情里给。
+   */
+  fileCount?: number
 }
 
 /** `GET /kernel/skills` 的响应（按分类分组）。 */
@@ -51,6 +58,14 @@ export interface SkillDetail {
   source: SkillSource
   body: string
   lineCount: number
+  /**
+   * ★ v0.90：附件清单（相对路径），空 = 单文件技能。
+   *
+   * ⚠️ **只有文件名，没有内容**。内容要另拉（`fetchSkillFile`）：
+   *   一篇带 20 MB 附件的技能，若详情把内容一起下发，
+   *   光是打开编辑器就会卡住；而用户多数时候只看正文。
+   */
+  files?: string[]
 }
 
 /** 一篇技能的调用统计。 */
@@ -253,6 +268,21 @@ export interface SkillDraft {
   category: string
   description: string
   body: string
+  /**
+   * ★ v0.90：附件 —— `{相对路径: 内容}`。
+   *
+   * ## `undefined` 与 `{}` 是两件事（这条最容易写错）
+   *
+   * | 值 | 含义 | 什么时候用 |
+   * |---|---|---|
+   * | `undefined` | **不动附件** | 只改正文/描述时 |
+   * | `{}` | 这篇没有附件（清空） | 用户删光了全部附件 |
+   *
+   * 若把"只改正文"也发成 `{}`，则用户改一个字就静默清空他全部附件 ——
+   * 而那不会报错。后端就是按这个语义实现的（`files: dict | None`），
+   * 前端这一层必须把区别**传下去**，不能在发送前折叠成 `?? {}`。
+   */
+  files?: Record<string, string>
 }
 
 /**
@@ -277,11 +307,30 @@ export async function createSkill(draft: SkillDraft): Promise<SkillDetail> {
  */
 export async function updateSkill(
   name: string,
-  draft: { description: string; body: string },
+  draft: { description: string; body: string; files?: Record<string, string> },
 ): Promise<SkillDetail> {
   const detail = await api.put<SkillDetail>(`/kernel/skills/${encodeURIComponent(name)}`, draft)
   await loadSkills()
   return detail
+}
+
+/**
+ * 拉一篇自定义技能的**全部附件内容**（打开编辑器时调用一次）。
+ *
+ * ## 为什么一次拉全部，而不是按文件逐个拉
+ *
+ * 因为 `PUT` 的 `files` 是**全量替换**语义。若前端只拉了用户点开的那几个
+ * 文件，保存时就只有这几个能带回去 —— 其余附件会被静默删掉，且不报错。
+ *
+ * 所以这里的代价是明确的：打开一篇带 20 MB 附件的技能会拉 20 MB。
+ * 这比"改一个字删光附件"好得多。后端上限就是 20 MB / 50 个（与
+ * `skill_store.MAX_ATTACHMENT_BYTES` 一致），不会无限大。
+ */
+export async function fetchSkillFiles(name: string): Promise<Record<string, string>> {
+  const data = await api.get<{ files: Record<string, string> }>(
+    `/kernel/skills/${encodeURIComponent(name)}/files`,
+  )
+  return data.files ?? {}
 }
 
 /** 删一篇自定义技能。 */
@@ -377,6 +426,44 @@ export function usageSummary(
  *   前端这份不是为了安全（真正的边界在后端与文件层），是为了**不让人
  *   白填一遍表单**才被告知名字里不能有大写。
  */
+/**
+ * 校验一个附件相对路径，返回第一条错误（合法返回 null）。
+ *
+ * ★ 与后端 `skill_store._safe_attachment_rel()` **同规则**。前端这份
+ *   不是为了安全（真正的边界在文件层），而是为了**不让人填完表单
+ *   才被告知文件名不合法**。
+ *
+ * 规则四级（与后端逐条对应）：
+ *   1. 每段白名单 `[A-Za-z0-9_][A-Za-z0-9._-]*`
+ *   2. 不接受绝对路径
+ *   3. 不接受 `.` / `..` 段
+ *   4. 不接受 `SKILL.md`（正文框生成它）
+ *
+ * ⚠️ 用白名单而不是黑名单：本项目在附件删除那里列黑名单踩过坑
+ *   （漏一个就穿透）。白名单的失效方式是"拒绝合法名字"（可察觉），
+ *   黑名单的失效方式是"放过非法名字"（不可察觉）。
+ */
+export function validateAttachmentName(relative: string): string | null {
+  const raw = relative.trim().replace(/\\/g, '/')
+  if (!raw) return '附件名不能为空。'
+  if (raw.startsWith('/')) return '附件名不能是绝对路径。'
+  if (raw.length > 200) return `附件名太长（${raw.length} 字符，上限 200）。`
+
+  const parts = raw.split('/')
+  if (parts.length > 3) return '目录层数太多（最多 3 段，如 `scripts/extra.sh`）。'
+  for (const part of parts) {
+    if (!part) return '附件名里有空路径段（是不是多打了 `/`？）。'
+    if (part === '.' || part === '..') return '附件名不能包含 `.` 或 `..` 段。'
+    if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(part)) {
+      return `路径段 \`${part}\` 不合法：每段只能用字母、数字、下划线、点、连字符，且以字母数字或下划线开头。`
+    }
+  }
+  if (parts.length === 1 && parts[0] === 'SKILL.md') {
+    return '`SKILL.md` 是主文件名，正文请写在正文框里。'
+  }
+  return null
+}
+
 export function validateDraft(draft: {
   name: string
   category: string
