@@ -83,6 +83,24 @@ class ToolSpec:
     requires_connection: str = ""
     #: 关掉它会明显废掉主力能力（界面要提示这不是一个随手可关的开关）。
     core: bool = False
+    #: ★ v0.86：**默认参数下它做不到什么**（空串 = 默认就是全功能）。
+    #:
+    #: ## 为什么这个字段是必要的（对照实验实测出来的）
+    #:
+    #: 2026-10-24 做了一次 n=3 的 A/B 对照，发现最严重的问题不是"工具有没有用"，
+    #: 而是**工具在默认参数下悄悄缩水，而模型把缩水结果读成"结论"**：
+    #:
+    #:   · 某个 POC 工具不给模板目录时只跑内嵌的几条规则 → 命中 0；
+    #:     而同一个目标、同一工具、**只补上模板目录**就命中 2 条。
+    #:     模型看到那个 0，写下的结论是"这个目标没有该漏洞"。
+    #:
+    #: 这类失真**不会报错**，只会让结论错。所以每个"默认会缩水"的工具
+    #: 必须在这里写清缩水了什么，界面与 API 都要能展示。
+    #:
+    #: ⚠️ 这条借鉴自 CyberStrikeAI 的工具配方设计（它把「默认行为」写进
+    #: 工具描述里）。它的价值不是"文档更全"，而是**把一句本来只存在于
+    #: 提示词里的隐性知识，变成工具自身的一部分** —— 改工具的人会看到它。
+    default_limitation: str = ""
 
 
 #: 分组名。顺序即界面上的显示顺序 —— **从"最常用"到"最专用"**，
@@ -124,6 +142,9 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         group="网络请求",
         summary="从宿主发一次 HTTP 请求，受目标白名单限制，自动记入请求历史。",
         params="url（必填）、method、headers、body（可选）",
+        # 实测：它只打**单个** URL，不做任何枚举/跟随。模型容易把它当成
+        # "可以帮我扫一遍"，实际它一次就一个请求。
+        default_limitation="只发一次请求，不做路径枚举、不跟随页面里的链接。要扫路径得自己给清单。",
     ),
     ToolSpec(
         name="list_requests",
@@ -153,6 +174,7 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         group="技能与知识",
         summary="按需拉取一篇漏洞验证手法或工具打法的速查卡。",
         params="name（技能包名）",
+        default_limitation="只返回速查文本，不执行任何命令；拼错名字会回可用清单。",
     ),
     # ── 外部工具（MCP 桥）─────────────────────────────────
     ToolSpec(
@@ -160,6 +182,7 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         label="列出外部连接",
         group="外部工具",
         summary="列出本次可用的 MCP 连接（外部工具服务）。",
+        default_limitation="没配任何连接时返回空 —— 那是「没配」，不是「连不上」。",
     ),
     ToolSpec(
         name="describe_mcp",
@@ -167,6 +190,7 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         group="外部工具",
         summary="看某个 MCP 连接提供哪些工具，各带输入 schema。",
         params="connection（必填）",
+        default_limitation="只报工具名与 schema，不验证这些工具现在能不能跑通。",
     ),
     ToolSpec(
         name="call_mcp",
@@ -174,6 +198,11 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         group="外部工具",
         summary="调用一个 MCP 工具。需要先知道连接名与工具名。",
         params="connection、tool（必填）、arguments（JSON 对象，可省略）",
+        # ★ 这是对照实验得出的最贵一条教训，见 `ToolSpec.default_limitation`。
+        default_limitation=(
+            "默认参数只做该工具的基础那一层。返回「命中 0 / alive 0」时，"
+            "先分清是目标确实没有，还是它没查这一层 —— 别把后者写成结论。"
+        ),
     ),
 )
 

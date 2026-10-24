@@ -565,3 +565,64 @@ def test_mcp_test_out_serializes_camel_case() -> None:
     assert dumped["serverName"] == "demo"
     assert dumped["serverVersion"] == "1.0"
     assert dumped["elapsedMs"] == 12
+
+
+# ══════════════════════════════════════════════════════════
+# 7. 默认行为边界（v0.86，对照实验的教训）
+# ══════════════════════════════════════════════════════════
+#
+# 实测背景：某个 POC 工具在默认参数下只跑内嵌规则 → 命中 0；而同一个目标、
+# 同一个工具，**只补一个参数**就命中 2 条。模型看到那个 0，写下的结论是
+# "这个目标没有该漏洞"。
+#
+# 这类失真**不会报错**，只会让结论错。所以"默认会缩水"的工具必须把
+# 缩水了什么写进工具自身，并且透出到 API —— 让模型与人都看得到。
+
+
+def test_default_limitation_reaches_the_api(ready_client) -> None:  # noqa: ANN001
+    """★ `default_limitation` 必须出现在 `GET /kernel/tools` 的响应里。
+
+    只写在 `ToolSpec` 里是不够的：那个字段存在的**唯一目的**就是被
+    模型和用户看到。不透出到 API，它等于只写给自己看 —— 而这正是
+    "配了却静默失效"的又一个翻版（本项目已经踩过好几次）。
+    """
+    resp = ready_client.get(f"{API}/kernel/tools")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    by_name = {item["name"]: item for item in body["tools"]}
+    for spec in tools_mod.TOOL_SPECS:
+        if not spec.default_limitation:
+            continue
+        item = by_name[spec.name]
+        # camelCase 键名（与契约一致）
+        assert item.get("defaultLimitation") == spec.default_limitation, (
+            f"{spec.name} 的 default_limitation 没透出到 API"
+        )
+
+
+def test_default_limitation_keys_are_camel_case(ready_client) -> None:  # noqa: ANN001
+    """键名必须是 `defaultLimitation`，不能是 `default_limitation`。
+
+    与服务其余字段同一条纪律（`allowedTools` / `hasEnv` 那次踩过）：
+    `CamelModel` 只配了 `validation_alias`，字段名写成 snake_case 时
+    JSON 里就是 snake_case，前端按契约读会拿到 `undefined`。
+    """
+    body = ready_client.get(f"{API}/kernel/tools").json()
+    for item in body["tools"]:
+        assert "defaultLimitation" in item
+        assert "default_limitation" not in item
+
+
+def test_call_mcp_declares_its_default_blind_spot() -> None:
+    """★ `call_mcp` 必须写明"命中 0 不等于目标干净"。
+
+    这条不是风格要求，是**对照实验实测出来的最贵一条教训**：
+    外部工具在默认参数下常常只做表层，而模型会把"没查到"当"不存在"。
+    """
+    spec = tools_mod.TOOL_BY_NAME["call_mcp"]
+    assert spec.default_limitation, "call_mcp 没声明默认行为边界"
+    text = spec.default_limitation
+    # 必须同时讲清「会发生什么」与「该怎么读」
+    assert "命中 0" in text
+    assert "没查这一层" in text or "基础那一层" in text

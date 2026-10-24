@@ -4070,6 +4070,10 @@ def tools_catalog(db: Session) -> dict:
                 "group": spec.group,
                 "summary": spec.summary,
                 "params": spec.params,
+                # ★ v0.86：默认参数下的能力边界（空串 = 默认即全功能）。
+                # 必须透出到 API —— 否则这个字段等于只写给自己看，
+                # 而它存在的全部意义是让**模型和用户**看到"默认会缩水什么"。
+                "default_limitation": spec.default_limitation,
                 "enabled": enabled,
                 "core": spec.core,
                 "requires_connection": spec.requires_connection,
