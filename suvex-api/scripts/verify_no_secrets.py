@@ -132,9 +132,13 @@ def looks_like_expression(raw: str) -> bool:
         return True
     # 单个标识符：全由 [a-z_] 组成且含下划线（`llm_api_key` 这类）。
     # 真正的随机 key 几乎不可能**全小写无数字** —— 那熵太低了。
-    if raw.islower() and "_" in raw and not any(c.isdigit() for c in raw):
-        return True
-    return False
+    #
+    # ⚠️ 写成 `return <条件>` 而不是 `if <条件>: return True; return False`：
+    #    后者是 ruff 的 SIM103（"Return the condition directly"）。
+    #    我第一版就是那么写的，而本地验证时用了 `ruff check ... | tail -3`
+    #    —— 恰好把错误行截掉了，于是以为"本地绿、CI 环境不同"。
+    #    实际是同一个版本（0.16.8）报了同一个错，**是我的验证方法骗了我**。
+    return raw.islower() and "_" in raw and not any(c.isdigit() for c in raw)
 
 #: 见文件头「为什么白名单必须存在」。命中即放过。
 #:
