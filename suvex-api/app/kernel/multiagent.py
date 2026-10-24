@@ -250,6 +250,60 @@ def _looks_like_acting(*, tool_name: str, command: str) -> bool:
     low = command.lower()
     return any(tok in low for tok in _ACTING_TOKENS)
 
+
+#: v0.83：哪些工具调用算"干了一轮活"（→ 记账欠费 +1）。
+#:
+#: ## 为什么不是"每个工具调用都算"
+#:
+#: 记账类工具（`record_fact` / `add_fact` / `record_coverage` / `write_note` …）
+#: 本身就是**在产出**，把它们算成欠账会形成一个荒谬的不动点：
+#: 越记账欠账越多。所以它们必须排除，且 `record_fact` 还要**清零**。
+#:
+#: ## 为什么"读黑板"也不算欠账
+#:
+#: `get_scan_fact` / `get_memory` / `list_notes` 这些是**消费**而不是生产。
+#: 一个模型可能连着读十个事实而不产出一条新的 —— 那不是欠账，
+#: 那是它在用黑板（正是我们要的）。只有**探查**（碰了目标或处理了产物）
+#: 才可能产生新结论，也才谈得上"该记没记"。
+#:
+#: ⚠️ 定义必须放在 `FACT_RECORD` 等常量**之后**（Python 模块级名字在
+#:    执行到定义语句时才求值，放到常量前会 `NameError` 导入失败）。
+_DEBT_FREE_TOOL_NAMES = frozenset({
+    "record_fact",
+    "get_scan_fact",
+    "add_fact",
+    "get_memory",
+    "record_coverage",
+    "list_coverage",
+    "write_note",
+    "list_notes",
+    "think",
+    "get_threat_model",
+    "amend_threat_model",
+    "add_idea",
+    "resolve_idea",
+    "create_todo",
+    "list_todos",
+    "update_todo",
+    "view_agent_graph",
+    "wait_for_agents",
+    "send_message_to_agent",
+})
+
+
+def _counts_toward_fact_debt(*, tool_name: str) -> bool:
+    """这次调用是否属于"干了活但没记账"里的那个活。
+
+    判定只看**工具种类**，不看命令内容 —— 与 `_looks_like_acting` 不同：
+    那边判的是"碰没碰目标"（要扫命令里的 curl/nmap），这边判的是
+    "有没有可能产生新结论"（`run_shell` 里就算只是 grep 本地 bundle，
+    也可能读出了端点清单，那同样是该记的东西）。
+
+    ⚠️ 启发式，不是精确判定。误判的代价只是催早或催晚一次 ——
+    而"不催"的代价已经由 v0.80 那轮实测给出：42 次调用、0 条事实。
+    """
+    return tool_name not in _DEBT_FREE_TOOL_NAMES
+
 #: ★ v0.77：把一次请求抽象成"打的是哪个点"，用于判定"换参数算不算重复"。
 #:
 #: ## 为什么需要它（学自腾讯"持续攻击模式"队的 ctf.md「已排除路径」）
@@ -343,7 +397,6 @@ IDEA_ADD = "add_idea"
 IDEA_RESOLVE = "resolve_idea"
 MEMORY_ADD = "add_fact"
 MEMORY_GET = "get_memory"
-
 # ★ v0.79：项目黑板（落库版，学 CyberStrikeAI 的 project_facts）。
 #
 # ⚠️ 与 `add_fact`（`MEMORY_ADD`）的区别要说清，否则模型会两个都记或都不记：
@@ -372,6 +425,67 @@ FACT_INDEX_NUDGE = (
     "> 反过来，本轮**新得到**的结论（尤其是「试过走不通」）要用 `record_fact` 落库，"
     "否则下次扫同一个目标它不会在这里出现。要看某条全文（证据 / POC / 攻击链），"
     "调 `get_scan_fact(fact_key=...)`，**不要凭摘要臆造细节**。"
+)
+
+#: v0.83：连续多少个**动作轮**没 `record_fact` 就该催一次。
+#:
+#: ## 为什么需要这个（v0.80 实测证伪了「软提醒够了」）
+#:
+#: v0.80 上线后的第一轮真实扫描（`scan_01M5MTK3GA5EQ7BJ4CWYHC8YES`）
+#: 跑了 42 次工具调用（41 次 `run_shell` + 1 次 `list_mcps`），
+#: `record_fact` **0 次**、`record_coverage` **0 次**。
+#:
+#: 而那一轮里：工具注册在 `_SHARED` 里（模型看得见）、提示词 §6.2.1.2
+#: 专门写了「什么时候该用 record_fact 而不是 add_fact」、`FACT_INDEX_NUDGE`
+#: 也每轮跟着黑板推给它 —— **全都到位了，模型依然一次都不写**。
+#:
+#: 结论：和 v0.77 的 `add_fact=0` 是同一个病 ——
+#: 「把规矩讲清楚」和「行为真的发生」之间没有因果关系。
+#: 静态提示词会退化成背景音；而**软提醒**（"记得记"）同样退化成背景音，
+#: 因为它没有代价、也不阻断任何事。
+#:
+#: ## 所以改成计数阈值 + 附带一次强制动作
+#:
+#: 不是每轮都催（那会变成噪音，模型学会无视它），而是**攒够 N 轮才催一次**，
+#: 且催的时候给出**照抄即可的参数骨架** —— 把"要不要记"变成"填 payload"，
+#: 前者需要判断力，后者只需要执行。
+#:
+#: 值选 6 而不是 3：探查阶段常有 3-4 轮纯读（下载 bundle、解包、grep），
+#: 那些轮次本来就没有可记的结论；6 轮之后还没有任何一条结论才是异常信号。
+FACT_DEBT_WINDOW = 6
+
+#: 欠账达到 `FACT_DEBT_WINDOW` 时追加的强制提醒（v0.83）。
+#:
+#: ⚠️ 只在**欠账触发**时出现，不是每轮。区别：
+#:    · `FACT_INDEX_NUDGE` = 常驻引导（"怎么用黑板"）→ 每轮都在
+#:    · 这一条 = 异常信号（"你已经 N 轮没记了"）→ 只在真的欠账时出现
+#:
+#: 两者都要，因为它们回答不同问题。只有前者时模型会读到麻木（v0.80 实证）；
+#: 只有后者时它不知道平时该怎么用它。
+#:
+#: ## 为什么把参数骨架写进来
+#:
+#: 实测那 42 次调用里有大量"我已经确认了 X"的事实（比如 `/health` 不鉴权、
+#: API 面是 `/kernel/*`），这些停在模型的推理里，一步都没落库。
+#: 让模型从零构造 `record_fact` 的参数是一次额外的认知负担 ——
+#: 而它现在正处在"忙着干活"的状态，任何额外负担都会被推迟。
+#: 给一个只需替换内容的骨架，把成本降到接近零。
+FACT_DEBT_NUDGE = (
+    "⚠️ **你已经 {n} 轮没有把结论写进项目黑板了。**\n"
+    "\n"
+    "这一轮结束前，**先调一次 `record_fact`**，再继续你的探查。\n"
+    "\n"
+    "从上面 {n} 轮里挑**最有价值的一条**（通常是「试过走不通」或「确认了某个形状」），"
+    "按这个骨架填：\n"
+    "\n"
+    "```\n"
+    'ACTION: {{"tool": "record_fact", "fact_key": "<category>/<slug>", '
+    '"summary": "<一句话结论，≤300 字>", "category": "<endpoint|credential|surface|ruled-out|constraint|note>", '
+    '"confidence": "confirmed", "evidence": "<你凭什么这么判断，一句话>"}}\n'
+    "```\n"
+    "\n"
+    "**为什么不能跳过**：这轮扫描结束、对话历史被裁掉之后，"
+    "你上面那些结论就没了 —— 下次扫同一个目标要从头再来一遍。"
 )
 
 #: Idea 的合法状态。`open` 待做 / `doing` 在做 / `done` 做成了 / `dropped` 走不通。
@@ -678,7 +792,12 @@ class SharedState:
         return "\n".join(lines)
 
     def render_live_state(
-        self, *, turn: int = 0, max_turns: int = 0, fact_index: str = ""
+        self,
+        *,
+        turn: int = 0,
+        max_turns: int = 0,
+        fact_index: str = "",
+        fact_debt: int = 0,
     ) -> str:
         """把共享状态渲染成**注入 system prompt** 的短状态（v0.79）。
 
@@ -724,6 +843,12 @@ class SharedState:
 
         ⚠️ `fact_index` 非空时**即使 `self.facts` 为空也要出内容** ——
         那是别的轮次/别的扫描留下的事实，正是最该被看见的一类。
+
+        ## 记账欠费（v0.83）由调用方传入，不在这里算
+
+        `fact_debt` 状态挂在 `AgentCoordinator` 上（那里才知道"谁在干活"），
+        `SharedState` 不认识 coordinator。所以用 `fact_debt` 参数注入 ——
+        缺省 0 = 不提醒，CTF 路径与所有不传它的老调用方行为完全不变。
         """
         parts: list[str] = []
 
@@ -755,6 +880,32 @@ class SharedState:
         if fact_index:
             parts.append("## 项目黑板（持久，含上次扫描的结论）\n" + fact_index)
 
+        # ⑤.5 v0.83：记账欠费 —— 攒够 `FACT_DEBT_WINDOW` 轮没记才催。
+        #
+        # ## 为什么必须**在 `if not parts` 之前** `append`
+        #
+        # 这一条本身就是"非空"的来源：模型可能一次 `record_coverage` /
+        # `write_note` 都没写过，但已经 `run_shell` 了六轮 —— 此时
+        # `parts` 里只有 `fact_debt` 这一项，如果把它放在 `if not parts`
+        # 之后，恰好就是**最该被催的那一刻**被判成"空状态"直接 return 掉。
+        # 这个 bug 在写测试时当场抓住（`render_live_state(fact_debt=6) == ""`）。
+        #
+        # ⚠️ 它不破坏"空黑板一个字节都不多"的约束：`fact_debt=0` 时
+        #    什么都不 append，空状态仍然返回 ""（`test_empty_state_stays_empty`
+        #    与 `test_live_state.py` 都钉着）。
+        #
+        # ## 为什么这条必须是"条件触发"而不是"每轮都在"
+        #
+        # `FACT_INDEX_NUDGE` 是常驻引导，v0.80 实测它单独存在时
+        # `record_fact` 仍是 0 次 —— 因为在模型眼里它属于"背景说明"，
+        # 和 system prompt 里其它几十条规矩没有区别。
+        #
+        # 一条**只在异常时出现**的话才有信号价值：它的出现本身就在说
+        # "你现在做的事和规矩不一致"。这是它和常驻引导唯一的差别，
+        # 也是它值得多占这几百字节的全部理由。
+        if fact_debt >= FACT_DEBT_WINDOW:
+            parts.append(FACT_DEBT_NUDGE.format(n=fact_debt))
+
         if not parts:
             return ""
         # ① 回合位置 —— 放在最前，让"还剩多少"成为可感知的数字，而不是抽象的"要努力"。
@@ -784,6 +935,7 @@ class SharedState:
         #    已在跑的扫描不会因为这段文本而缓存全失效。
         if fact_index:
             parts.append(FACT_INDEX_NUDGE)
+
         body = "\n\n".join(parts)
 
         # ⑤ 硬上限：超了从**末尾**截（前面的方向与已排除事实最值钱），
@@ -842,6 +994,36 @@ class AgentCoordinator:
         if len(buf) < ACTION_WINDOW_MIN_SAMPLES:
             return None
         return sum(1 for x in buf if x) / len(buf)
+
+    # ── v0.83：记账欠费 ──────────────────────────────
+    #
+    # 与 `recent_actions` 分开记的理由：那个滑窗的语义是"最近 20 个动作里
+    # 有几个真打目标"，用来判**打转**；这个计数器回答的是另一件事 ——
+    # "我有多久没把结论记下来了"，用来判**欠账**。两者要的更新时机不同
+    # （`recent_actions` 每个工具调用都记；这个只在"产生新信息"时涨、
+    # 在 `record_fact` **写库成功**时清零），混进同一个列表会让两个判定
+    # 互相污染。
+    #
+    # ⚠️ 同样**按 agent 分开**：理由与 `recent_actions` 完全相同 ——
+    # 子 agent 的记账不能替代 root 的记账，反之亦然。
+    #
+    # ⚠️ 它挂在 coordinator 而不是 `SharedState` 上：`SharedState` 是**共享**
+    # 内容（黑板），欠费是**每个 agent 自己的**记账状态，和
+    # `recent_actions` / `todos` 同类。放错层会让"谁欠的"这个问题失去答案。
+    #: **自上次 `record_fact` 以来**，该 agent 花了多少个"干活轮"。
+    fact_debt: dict[str, int] = field(default_factory=dict)
+
+    def note_fact_recorded(self, agent_id: str = "root") -> None:
+        """记了一条 → 该 agent 的欠账清零。"""
+        self.fact_debt[agent_id] = 0
+
+    def note_investigation(self, agent_id: str = "root") -> None:
+        """干了一轮活（且没记账）→ 欠账 +1。"""
+        self.fact_debt[agent_id] = self.fact_debt.get(agent_id, 0) + 1
+
+    def fact_debt_of(self, agent_id: str = "root") -> int:
+        """该 agent 当前欠了多少轮没记账。"""
+        return self.fact_debt.get(agent_id, 0)
 
     _todo_seq: int = 0
     _id_seq: int = 0
@@ -1331,6 +1513,10 @@ def _do_record_fact(
             note="写黑板时出错（已记录日志）。继续用 `add_fact` 记内存态事实，不要重试。",
             stored=False,
         )
+    # ★ v0.83：真的存进去了才销账。放在 `store.record` 成功之后、
+    #   `stored=False` 那两条路径**不销账** —— 否则"调了但没存进去"
+    #   会把欠费清掉，而模型手上依然什么都没有。这正是要防的假完成。
+    coord.note_fact_recorded(me.agent_id)
     return _json_ok(
         fact_key=res["fact_key"],
         created=res["created"],
@@ -1587,7 +1773,12 @@ async def run_agent_loop(
                 except Exception:  # noqa: BLE001 - 见上面的说明
                     logger.warning("渲染黑板索引失败，本轮按无黑板处理", exc_info=True)
             _live = coord.shared.render_live_state(
-                turn=turn, max_turns=max_turns, fact_index=_fact_index
+                turn=turn,
+                max_turns=max_turns,
+                fact_index=_fact_index,
+                # v0.83：欠费按 agent 分，必须传"谁在看这段 prompt"对应的值，
+                # 否则子 agent 会读到 root 的欠费（反之亦然）。
+                fact_debt=coord.fact_debt_of(node.agent_id),
             )
             if _live:
                 _sys = system_prompt + "\n\n" + _live
@@ -1689,6 +1880,13 @@ async def run_agent_loop(
                 acted=_looks_like_acting(tool_name=tool_name, command=command),
                 agent_id=node.agent_id,
             )
+
+            # ★ v0.83：记账欠费 —— 干了一轮"可能产出结论"的活就 +1。
+            #   清零在 `_do_record_fact` 的**写库成功**之后（不在这里按工具名
+            #   清，因为"调了 record_fact"和"记进去了"不是一回事：
+            #   DB 抖动时 `stored=False`，模型手上仍然什么都没有，欠费不该销）。
+            if _counts_toward_fact_debt(tool_name=tool_name):
+                coord.note_investigation(node.agent_id)
 
             # 编排工具 vs 基础工具，分派到不同入口。
             orchestr_tools = _ROOT_ONLY | _CHILD_ONLY | _SHARED
