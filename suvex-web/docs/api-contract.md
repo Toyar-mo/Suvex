@@ -1017,7 +1017,7 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | ↳ ⚠️ `rejected` | **定义了，但运行时不会产生** | 见下方 §2.10 的说明与 §3.19.2 |
 | `Ctf2EnvironmentStatus` | `stopped` \| `starting` \| `ready` \| `error` \| `expired` | 题目环境（容器）的生命周期 |
 | `Ctf2SubmitMode` | `safe` \| `auto` | 提交策略 |
-| `Ctf2SandboxProfile` | `ctf2-sandbox` \| `ctf2-sandbox-re` \| `ctf2-sandbox-ir` | 用哪个沙箱镜像 |
+| `Ctf2SandboxProfile` | `suvex-sandbox` \| `suvex-sandbox-re` \| `suvex-sandbox-ir` | 用哪个沙箱镜像 |
 
 > **★ `Ctf2ChallengeStatus` 为什么不直接抄 CTF2 的题目状态。**
 >
@@ -1453,6 +1453,18 @@ v0.2 起 GET 的 `apiKey` 恒为空串。但界面需要显示"这里确实有�
 | POST | `/scans/batch/rerun`   | **scan** | 批量重跑（v0.13，**逐条授权确认**）|
 | DELETE | `/scans/{id}/purge`  | **scan** | **永久删除**（v0.13，仅回收站内） |
 | GET  | `/scans/compare`     | read     | 对比两条扫描的发现增减（v0.13）     |
+| POST | `/scans/{scanId}/hints` | **scan** | 给**运行中**的扫描补一条线索（v0.57，`201`）|
+| GET  | `/scans/{scanId}/hints` | read | 列出这次扫描收到的人补线索（含 `consumed`）|
+
+> **★ 补线索为什么是 `scan` 级而不是 `read`。**
+>
+> 它把一段**人写的话**插进正在跑的智能体的上下文，会实际改变它的下一步动作
+> （甚至转向）。这与 `POST /scans` 同级 —— 都是"让一次扫描去做别的事"。
+> 而 `GET` 只是回显已提交过什么（含"待送达 / 已送达"），给它 `read` 是对的：
+> 用户需要随时看见自己那几条线索引到哪儿了。
+>
+> ⚠️ 两个都不在 v0.57 的契约更新里 —— 端点建好了、前端也接了，
+> 但**契约这一份没跟上**。这正是 `verify:endpoints` 存在的理由。
 
 #### 批量操作（v0.13 新增）
 
@@ -1637,6 +1649,17 @@ flowchart LR
 | POST | `/findings/{id}/attachments` | **scan** | 上传附件，**multipart/form-data**（v0.18）        |
 | GET  | `/findings/{id}/attachments/{aid}/content` | read | 下载附件内容（v0.18）                  |
 | DELETE | `/findings/{id}/attachments/{aid}` | **scan** | 删除附件（v0.18）                           |
+| GET | `/findings/export/sarif` | read | **导出 SARIF 2.1.0**（v0.72），给 CI/代码扫描平台吃 |
+
+> **关于 `GET /findings/export/sarif`**
+>
+> 它是 `Content-Disposition: attachment` 的文件下载，不是 JSON 回执 ——
+> 消费方是 GitHub Code Scanning / DefectDojo 这类平台，不是浏览器里的代码。
+>
+> ⚠️ SARIF 的 `ruleId` 取的是 **`FindingCategory` 枚举值**，不是扫描时加载的
+> skill 名。v0.72 第一版按 skill 建键，于是每条规则的 id 都退化成
+> `suvex.finding` —— 报告能导出来、能通过 schema 校验，但**所有规则归成了同一条**，
+> 而那在 CI 里表现为"只有一个告警类型"，看起来像目标只有一个问题。
 
 > **为什么批量端点是 `POST /findings/status` 而不是 `PATCH /findings/{id}`**：
 > 前端是全选后一次提交（`BulkActionBar`），逐条 PATCH 会发出 N 个请求。
@@ -3031,36 +3054,36 @@ CTF 夺旗任务的产物**不是**漏洞报告。这一节把它与 §3.5 的�
 
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/ctf2/accounts` | read | 账号绑定列表。**只返回掩码，没有 token** |
-| POST | `/ctf2/accounts` | **admin** | 绑定账号（`201`）|
-| DELETE | `/ctf2/accounts/{accountId}` | **admin** | 解绑（`204`）|
-| GET | `/ctf2/settings` | **admin** | 解题策略配置 |
-| PUT | `/ctf2/settings` | **admin** | 改配置 |
-| GET | `/ctf2/competitions/remote` | **scan** | **平台侧**的赛事列表（不落库）|
-| POST | `/ctf2/challenges/pull` | **scan** | 从平台拉一道题入库 |
-| POST | `/ctf2/sync` | **scan** | 全量同步赛事与题目 |
-| GET | `/ctf2/competitions` | read | 本地赛事列表 |
-| GET | `/ctf2/challenges` | read | 本地题目列表 |
-| GET | `/ctf2/challenges/{challengeId}` | read | 题目详情 |
-| GET | `/ctf2/snapshot` | read | 一次拿到账号 + 赛事 + 题目 |
-| GET | `/ctf2/queue` | read | 解题队列状态 |
-| POST | `/ctf2/challenges/{challengeId}/solve` | **scan** | 开始解一道题 |
-| PUT | `/ctf2/challenges/{challengeId}/priority` | **scan** | 改优先级 |
-| POST | `/ctf2/priorities/by-score` | **scan** | 按分值批量排优先级 |
-| POST | `/ctf2/challenges/{challengeId}/submit` | **scan** | 提交 flag |
-| POST | `/ctf2/challenges/{challengeId}/cancel` | **scan** | 取消解题 |
-| DELETE | `/ctf2/challenges/{challengeId}/environment` | **scan** | 销毁题目环境（`204`）|
-| GET | `/ctf2/platforms` | read | 已接入的平台 |
-| GET | `/ctf2/platforms/{platformId}` | read | 单个平台详情 |
-| POST | `/ctf2/platforms/draft` | **admin** | 提交一个平台接入草稿（`202`）|
-| POST | `/ctf2/platforms/{platformId}/activate` | **admin** | 启用某个平台 |
-| POST | `/ctf2/platforms/use-builtin` | **admin** | 切回内置的 CTF2（`204`）|
-| DELETE | `/ctf2/platforms/{platformId}` | **admin** | 删除平台（`204`）|
-| GET | `/ctf2/challenges/{challengeId}/writeup` | read | **题解（Writeup）**（v0.36）|
-| GET | `/ctf2/usage` | read | **token 消耗统计**（v0.36，可按题/赛事/时间筛）|
-| GET | `/ctf2/challenges/{challengeId}/usage` | read | 单道题的逐次消耗明细（v0.36）|
-| GET | `/ctf2/challenges/{challengeId}/workorder` | read | **处置建议工单**（v0.41，只有应急响应任务才有）|
-| POST | `/ctf2/ir/tasks` | **scan** | 建一个**本地应急响应复盘任务**（v0.43，`201`，不绑 CTF2 账号）|
+| GET | `/kernel/accounts` | read | 账号绑定列表。**只返回掩码，没有 token** |
+| POST | `/kernel/accounts` | **admin** | 绑定账号（`201`）|
+| DELETE | `/kernel/accounts/{accountId}` | **admin** | 解绑（`204`）|
+| GET | `/kernel/settings` | **admin** | 解题策略配置 |
+| PUT | `/kernel/settings` | **admin** | 改配置 |
+| GET | `/kernel/competitions/remote` | **scan** | **平台侧**的赛事列表（不落库）|
+| POST | `/kernel/challenges/pull` | **scan** | 从平台拉一道题入库 |
+| POST | `/kernel/sync` | **scan** | 全量同步赛事与题目 |
+| GET | `/kernel/competitions` | read | 本地赛事列表 |
+| GET | `/kernel/challenges` | read | 本地题目列表 |
+| GET | `/kernel/challenges/{challengeId}` | read | 题目详情 |
+| GET | `/kernel/snapshot` | read | 一次拿到账号 + 赛事 + 题目 |
+| GET | `/kernel/queue` | read | 解题队列状态 |
+| POST | `/kernel/challenges/{challengeId}/solve` | **scan** | 开始解一道题 |
+| PUT | `/kernel/challenges/{challengeId}/priority` | **scan** | 改优先级 |
+| POST | `/kernel/priorities/by-score` | **scan** | 按分值批量排优先级 |
+| POST | `/kernel/challenges/{challengeId}/submit` | **scan** | 提交 flag |
+| POST | `/kernel/challenges/{challengeId}/cancel` | **scan** | 取消解题 |
+| DELETE | `/kernel/challenges/{challengeId}/environment` | **scan** | 销毁题目环境（`204`）|
+| GET | `/kernel/platforms` | read | 已接入的平台 |
+| GET | `/kernel/platforms/{platformId}` | read | 单个平台详情 |
+| POST | `/kernel/platforms/draft` | **admin** | 提交一个平台接入草稿（`202`）|
+| POST | `/kernel/platforms/{platformId}/activate` | **admin** | 启用某个平台 |
+| POST | `/kernel/platforms/use-builtin` | **admin** | 切回内置的 CTF2（`204`）|
+| DELETE | `/kernel/platforms/{platformId}` | **admin** | 删除平台（`204`）|
+| GET | `/kernel/challenges/{challengeId}/writeup` | read | **题解（Writeup）**（v0.36）|
+| GET | `/kernel/usage` | read | **token 消耗统计**（v0.36，可按题/赛事/时间筛）|
+| GET | `/kernel/challenges/{challengeId}/usage` | read | 单道题的逐次消耗明细（v0.36）|
+| GET | `/kernel/challenges/{challengeId}/workorder` | read | **处置建议工单**（v0.41，只有应急响应任务才有）|
+| POST | `/kernel/ir/tasks` | **scan** | 建一个**本地应急响应复盘任务**（v0.43，`201`，不绑 CTF2 账号）|
 
 > **鉴权分级的理由**：读操作是 `read`；**会对外发请求或消耗外部额度**的
 > 是 `scan`（同步、拉题、解题、提交）；**改系统级配置与凭据**的是 `admin`

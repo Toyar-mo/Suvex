@@ -74,17 +74,25 @@ const REQUIRED_ENDPOINTS = [
     ⚠️ 但**加清单不是根本解法** —— 它仍然是手写的。
        真正的保险是下面的"反向自动对账"：从后端代码抽端点，
        逐个反查契约。清单只能防"忘了写"，自动对账能防"写漏了"。
+
+    ⚠️ **v0.83 修过一次静默失效**：这 10 条写的是改名前的 `/ctf2/`，
+    而代码与契约早就是 `/kernel/`。于是它们**永远报红** ——
+    而"永久红"的检查等于没有检查：人看到它红了会当成已知噪音忽略，
+    真正的缺失就混在里面看不出来了。
+
+    这与 `contract-parity.mjs` 里 `src/data/ctf2.ts` 那次是**同一类问题**
+    （改名没同步脚本），所以一并修掉。**改名时要 grep 一遍 `scripts/`。**
   */
-  ['CTF2 账号列表', ['| GET | `/ctf2/accounts`']],
-  ['CTF2 账号绑定', ['| POST | `/ctf2/accounts`']],
-  ['CTF2 配置', ['| GET | `/ctf2/settings`']],
-  ['CTF2 同步', ['| POST | `/ctf2/sync`']],
-  ['CTF2 题目列表', ['| GET | `/ctf2/challenges`']],
-  ['CTF2 快照', ['| GET | `/ctf2/snapshot`']],
-  ['CTF2 队列', ['| GET | `/ctf2/queue`']],
-  ['CTF2 开始解题', ['| POST | `/ctf2/challenges/{challengeId}/solve`']],
-  ['CTF2 提交 flag', ['| POST | `/ctf2/challenges/{challengeId}/submit`']],
-  ['CTF2 平台列表', ['| GET | `/ctf2/platforms`']],
+  ['CTF2 账号列表', ['| GET | `/kernel/accounts`']],
+  ['CTF2 账号绑定', ['| POST | `/kernel/accounts`']],
+  ['CTF2 配置', ['| GET | `/kernel/settings`']],
+  ['CTF2 同步', ['| POST | `/kernel/sync`']],
+  ['CTF2 题目列表', ['| GET | `/kernel/challenges`']],
+  ['CTF2 快照', ['| GET | `/kernel/snapshot`']],
+  ['CTF2 队列', ['| GET | `/kernel/queue`']],
+  ['CTF2 开始解题', ['| POST | `/kernel/challenges/{challengeId}/solve`']],
+  ['CTF2 提交 flag', ['| POST | `/kernel/challenges/{challengeId}/submit`']],
+  ['CTF2 平台列表', ['| GET | `/kernel/platforms`']],
   ['题目附件', ['/scans/{scanId}/attachments']],
   ['扫描续跑', ['| POST | `/scans/{id}/resume`']],
   ['CTF 题解', ['| GET | `/scans/{id}/writeup`']],

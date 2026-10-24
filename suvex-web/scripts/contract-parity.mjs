@@ -31,7 +31,35 @@ import { join } from 'node:path'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
-const source = (rel) => readFileSync(join(ROOT, rel), 'utf8')
+/**
+ * 读一个源码文件。**读不到时给一句能照做的话**，而不是抛 ENOENT。
+ *
+ * ## 为什么这不只是"错误信息更友好"
+
+ * v0.82 实测踩到：改名阶段把 `src/data/ctf2.ts` 改成了 `kernel.ts`，
+ * 但本脚本的清单没跟上。于是整个校验**根本没跑起来**，退出码是 1，
+ * 输出是一段 `ENOENT: no such file or directory` 的栈。
+ *
+ * 在 CI 里这表现为"校验红了"，而红的原因看起来像环境问题（文件缺失），
+ * 于是最可能的处理是**跳过它**——那这一整个校验就白写了。
+ *
+ * 所以：文件不在时立刻说清"哪一行清单指向了一个不存在的文件、
+ * 它可能被改名了"，并**指出这就是清单本身要修**。
+ */
+const source = (rel) => {
+  try {
+    return readFileSync(join(ROOT, rel), 'utf8')
+  } catch (error) {
+    if (error && error.code === 'ENOENT') {
+      fail(
+        `❌ 读取不到源文件：${rel}\n` +
+          '   这不是环境问题 —— 多半是**文件被改名/移动了，而本脚本的清单没跟上**。\n' +
+          '   请把 `ENUM_CHECKS` 里指向它的那一行改成新路径（并同步类型名）。',
+      )
+    }
+    throw error
+  }
+}
 
 /*
   ★ 契约文本**先归一化空白再匹配**。
@@ -123,18 +151,27 @@ const ENUM_CHECKS = [
 
     · `ScanMode` —— 任务 13 新增的 `quick`/`standard`/`deep`，
       此前不在清单里（调研时明确核出"不会报红"）；
-    · 五个 `Ctf2*` —— 整个 CTF2 模块的枚举，此前零覆盖。
+    · 五个 `Kernel*` —— 整个 CTF 模块的枚举，此前零覆盖。
+
+    ⚠️ **v0.82 修过一次静默失效**：改名阶段（`ctf2.ts` → `kernel.ts`、
+    `Ctf2*` → `Kernel*`）没有同步这张清单，于是它一直在读一个**不存在的
+    文件**。而失败方式是 `ENOENT` 抛异常退出 —— 不是"报红说契约错了"，
+    而是脚本根本没跑起来。**一个坏掉的检查比没有检查更糟**：
+    CI 里它会红，但红的原因看起来像环境问题，于是容易被人跳过。
+
+    所以这里同时做了两件事：修正路径与类型名；以及把 `source()` 的
+    读取失败变成一条**说明清楚**的失败（见下面 `source()` 的实现）。
 
     ⚠️ 这份清单的维护规则：**新增一个枚举就要加一行**。
        漏加的症状是"校验全绿而契约已经错了"—— 比没有校验更危险，
        因为它会让人以为查过了。
   */
   ['src/data/settings.ts', 'ScanMode'],
-  ['src/data/ctf2.ts', 'Ctf2ChallengeStatus'],
-  ['src/data/ctf2.ts', 'Ctf2SubmissionStatus'],
-  ['src/data/ctf2.ts', 'Ctf2EnvironmentStatus'],
-  ['src/data/ctf2.ts', 'Ctf2SubmitMode'],
-  ['src/data/ctf2.ts', 'Ctf2SandboxProfile'],
+  ['src/data/kernel.ts', 'KernelChallengeStatus'],
+  ['src/data/kernel.ts', 'KernelSubmissionStatus'],
+  ['src/data/kernel.ts', 'KernelEnvironmentStatus'],
+  ['src/data/kernel.ts', 'KernelSubmitMode'],
+  ['src/data/kernel.ts', 'KernelSandboxProfile'],
 ]
 
 console.log('══ 枚举取值对账（源码 → 契约）══\n')
