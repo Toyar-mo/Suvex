@@ -82,6 +82,60 @@ PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ),
 ]
 
+#: "赋值给 *key*/*token* 的长串"这条规则的**名字**。
+#:
+#: ⚠️ 单独提出来是因为下面要按名字判断"这条规则是否该做表达式排除"。
+#:    写成字面量散落在两处，改一处就会静默失效 —— 而失效方向是
+#:    "表达式排除对某条规则意外生效"，那会**漏报真凭据**。
+ASSIGNMENT_RULE = "赋值给 *key*/*token* 的长串"
+
+#: ★ 「右侧其实是一个**表达式/标识符引用**」—— 不是字面量凭据。
+#:
+#: ## 为什么需要这一条（CI 实测踩到的误报）
+#:
+#: 2026-10-24 CI 在 `scans/agent_runner.py:545` 报了一处：
+#:
+#:     api_key=solve_spec.llm_api_key,
+#:
+#: 这显然是**变量引用**，不是硬编码凭据。但上面那条正则只看形状：
+#: `api_key=` 后面跟着 20+ 个合法字符 —— 而 `solve_spec.llm_api_key`
+#: 正好 22 个字符，还全是 `[A-Za-z0-9_.]`。
+#:
+#: ## 为什么不能靠"加进白名单"了事
+#:
+#: 白名单匹配的是**被捕获的那个串**（`solve_spec.llm_ap…`），
+#: 而每个调用点的变量名都不同 —— 逐个登记等于把白名单变成
+#: "所有可能的变量名"清单，永远追不上。而它红一次，人就想关掉整个检查。
+#:
+#: 所以要按**语义**区分：赋值右侧若是一个"路径/属性访问"或"函数调用"，
+#: 它就不是字面量。真正的凭据字面量长这样：`api_key="sk-abc123..."`。
+#:
+#: 判据（任一成立即视为非字面量）：
+#:   · 含 `.`（属性访问：`spec.llm_api_key`、`self.cfg.key`）
+#:   · 含 `(` 或 `)`（函数调用：`get_key()`、`os.environ[...]`）
+#:   · 是单个全小写/下划线的标识符（`llm_api_key_var`）—— 但那与
+#:     "高熵随机串"的区别在于**没有数字**且**含下划线**，见实现。
+#:
+#: ⚠️ 这条判断**只对"赋值"那条规则生效**，不用于 `sk-`/`AKIA`/私钥头
+#:    那几条有固定前缀的规则 —— 那些前缀本身就是强信号，不该被放宽。
+EXPRESSION_LIKE = re.compile(r"[.()\[\]]")
+
+
+def looks_like_expression(raw: str) -> bool:
+    """判断捕获到的长串是不是"表达式/标识符引用"而不是字面量凭据。
+
+    ⚠️ 刻意**保守**：只放过明确是表达式的情况。像 `sk-abc123def456ghi789`
+    这种既无点、无括号、又高熵的串，仍然照旧报出来 ——
+    宁可多报一次让人确认，不可漏报一次真凭据。
+    """
+    if EXPRESSION_LIKE.search(raw):
+        return True
+    # 单个标识符：全由 [a-z_] 组成且含下划线（`llm_api_key` 这类）。
+    # 真正的随机 key 几乎不可能**全小写无数字** —— 那熵太低了。
+    if raw.islower() and "_" in raw and not any(c.isdigit() for c in raw):
+        return True
+    return False
+
 #: 见文件头「为什么白名单必须存在」。命中即放过。
 #:
 #: ⚠️ 这几条都不是凭空的：仓库里现有的测试夹具长这样 ——
@@ -164,6 +218,11 @@ def main() -> int:
                     if FALSE_POSITIVE.search(raw) or FALSE_POSITIVE_UPPER.search(raw):
                         continue
                     if LOOKS_HUMAN.match(raw):
+                        continue
+                    # ★ 只对"赋值"那条规则判"是不是表达式"。
+                    #   其余几条有固定前缀（`sk-` / `AKIA` / 私钥头），
+                    #   前缀本身就是强信号，不该被放宽。
+                    if name == ASSIGNMENT_RULE and looks_like_expression(raw):
                         continue
                     hits.append(f"{rel}:{lineno}  [{name}]  {mask(raw)}")
 

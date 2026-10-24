@@ -142,15 +142,29 @@ def build(name: str, *, force: bool = False) -> Path:
 
     判据是 **mtime** 而不是内容哈希：源码是手改的，改一下就该重编；
     而内容哈希要读全部文件才能比，收益不成比例。
+
+    ## ★ 顺序：**先确认工具有没有，再产生副作用**
+
+    原来 `BUILD_DIR.mkdir(...)` 排在 `shutil.which("gcc")` **之前**。
+    两个后果：
+
+      1. **CI 上真的红了**（2026-10-24）。测试把 `BUILD_DIR` 指向
+         `/nonexistent-build-dir` 来验证"缺 gcc 要吵"，但在 Linux 上
+         创建那个目录会先抛 `PermissionError`（`/` 不可写），
+         于是报出来的错是权限问题，而非它要验证的"找不到 gcc"。
+         在 Windows 上跑不出来 —— 那里 `mkdir` 的失败形态不同，
+         本地因此一直是绿的。
+
+      2. 更重要的是**语义**：检查前置条件（有没有编译器）不该依赖
+         "能不能先建出一个目录"。一个环境连目录都建不出来时，
+         用户最该看到的是"缺 gcc"还是"没权限"？答案是前者 ——
+         它才是这个函数的存在意义，也是可操作的。
+
+    所以把编译器检查提到最前，`mkdir` 留在真正要编译时再做。
     """
     source = _source_path(name)
     if not source.is_file():
         raise BuildError(f"源码不存在：{source}")
-
-    BUILD_DIR.mkdir(parents=True, exist_ok=True)
-    target = BUILD_DIR / name
-    if not force and target.is_file() and target.stat().st_mtime >= source.stat().st_mtime:
-        return target
 
     compiler = shutil.which("gcc") or shutil.which("cc")
     if compiler is None:
@@ -158,6 +172,11 @@ def build(name: str, *, force: bool = False) -> Path:
             "找不到 gcc/cc —— 这道靶机需要在**宿主机**上编译（不是沙箱镜像里编）。"
             "Kali 自带 gcc；Windows 上跑 mock 时 pwn 题会起不来。"
         )
+
+    BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    target = BUILD_DIR / name
+    if not force and target.is_file() and target.stat().st_mtime >= source.stat().st_mtime:
+        return target
 
     completed = subprocess.run(  # noqa: S603 - 参数是常量 + 本地路径，无 shell
         [compiler, *CFLAGS, *EXTRA_FLAGS.get(name, ()), "-o", str(target), str(source)],
