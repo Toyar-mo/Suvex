@@ -93,15 +93,29 @@ def main() -> int:
     print()
 
     # 日志在 _scan_runs/<scan_id>/scan.log（实测确认，不在 /tmp）。
+    #
+    # ⚠️ 这里踩过一个坑：`sh -c "test -f X && stat -c '%s bytes' X"` 经过
+    # `ssh kali` → 远端 shell → `sudo sh -c` **三层**引号后，`%s` 被远端
+    # shell 当成自己的格式串吃掉，`&&` 也可能被拆到外层。结果是文件明明
+    # 在（12KB），脚本却报「不存在」——**这类误判比报错更危险**，
+    # 它会让人以为扫描没开始。
+    #
+    # 改法：整条命令只用 `ls -l`，不用 `stat` 的 `%` 格式串，也不放 `&&`。
     log_path = f"/root/suvex/suvex-api/_scan_runs/{args.scan_id}/scan.log"
     probe = ssh(
-        "echo 'kali' | sudo -S -p '' sh -c "
-        + shlex.quote(f"test -f {log_path} && stat -c '%s bytes' {log_path}")
+        "echo 'kali' | sudo -S -p '' ls -l " + shlex.quote(log_path) + " 2>/dev/null"
     )
     print("log:", log_path)
-    print("size:", probe.stdout.strip() or "(不存在 —— 扫描可能还没真正开始跑)")
+    size_line = probe.stdout.strip()
+    if size_line:
+        # `ls -l` 的第 5 个字段是字节数
+        parts = size_line.split()
+        nbytes = parts[4] if len(parts) > 4 else "?"
+        print("size:", f"{nbytes} bytes")
+    else:
+        print("size:", "(不存在 —— 扫描可能还没真正开始跑)")
     print()
-    if not probe.stdout.strip():
+    if not size_line:
         return 0
 
     # 日志是 root 写的，读要 sudo cat。
