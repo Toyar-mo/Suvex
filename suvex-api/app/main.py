@@ -40,6 +40,7 @@ from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.metrics_middleware import MetricsMiddleware
+from app.assets.router import router as assets_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
 from app.health import router as health_router
@@ -302,6 +303,7 @@ def create_app() -> FastAPI:
             {"name": "报告", "description": "冻结快照，编号由生成动作分配"},
             {"name": "实时事件流", "description": "SSE，带 Last-Event-ID 补发"},
             {"name": "全局统计", "description": "全部派生，不写死"},
+            {"name": "资产", "description": "按目标聚合：扫过什么、查出什么、还开着什么"},
             {"name": "LLM Provider", "description": "凭据管理，apiKey 永不出现在响应里"},
             {"name": "设置", "description": "沙箱、通知、令牌、口令"},
             {"name": "审计", "description": "只读。谁在什么时候对什么做了什么"},
@@ -395,6 +397,7 @@ def create_app() -> FastAPI:
         findings_router,
         reports_router,
         overview_router,
+        assets_router,
         providers_router,
         settings_router,
         members_router,
