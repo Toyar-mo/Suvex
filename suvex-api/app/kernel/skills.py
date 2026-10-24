@@ -41,6 +41,7 @@ playbook**。实测本镜像里 `nuclei`/`katana`/`naabu`/`subfinder`/`semgrep`
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -66,6 +67,11 @@ class Skill:
     category: str
     description: str
     path: Path
+    #: ★ v0.88：来源 —— `builtin`（随代码分发、只读）或 `custom`（页面上创建、可编辑）。
+    #:
+    #: 这个字段决定了界面上那一篇能不能被改/删：
+    #: 内置技能改了会被下次部署覆盖（所以只读），自定义的随便改。
+    source: str = "builtin"
 
     def read(self) -> str:
         """读正文（剥掉 frontmatter —— 模型不需要看 YAML 头）。"""
@@ -195,9 +201,100 @@ def discover_skills(root: Path | None = None) -> list[Skill]:
     return found
 
 
+# ══════════════════════════════════════════════════════════
+# 自定义技能（v0.88）：与内置技能分开存放
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么必须分两个目录（这是本模块最关键的一条设计）
+#
+# 内置技能在 `prompts/skills/`，它**随代码分发** —— 部署时用
+# `tar xzf ... -C /root/suvex` 整目录覆盖。
+#
+# 如果允许用户在页面上创建技能、直接写进那个目录，那么**下一次部署
+# 就会把用户写的东西覆盖掉**。而这不是"可能发生"，是每次升级都会发生。
+#
+# 症状会非常难查：用户创建的技能在升级后**静默消失**，没有任何报错，
+# 也没有任何地方记录过"它曾经存在"。
+#
+# 所以自定义技能放在**独立的可写目录**（默认 `SUPEX_CUSTOM_SKILLS`，
+# 未设时用 `app/../custom_skills`，且**不在部署 tar 的覆盖范围内**）。
+# 两层在读取时合并，冲突以内置为准（内置是随代码来的，不该被同名覆盖）。
+
+#: 自定义技能目录。可用 `SUPEX_CUSTOM_SKILLS` 覆盖（部署时指到持久区）。
+CUSTOM_SKILLS_ROOT: Path = Path(
+    os.environ.get("SUPEX_CUSTOM_SKILLS")
+    or (Path(__file__).resolve().parent.parent.parent / "custom_skills")
+)
+
+
+def _skill_of(path: Path, *, source: str) -> Skill | None:
+    """把一个 .md 文件解析成 Skill；没有 frontmatter `name` 的返回 None。"""
+    try:
+        head = path.read_text(encoding="utf-8")[:2000]
+    except OSError:
+        return None
+    fm = _parse_frontmatter(head)
+    if not fm.get("name"):
+        return None
+    return Skill(
+        name=fm["name"],
+        category=fm.get("category") or path.parent.name,
+        description=fm.get("description", "").strip(),
+        path=path,
+        source=source,
+    )
+
+
+def discover_custom_skills(root: Path | None = None) -> list[Skill]:
+    """扫描**自定义**技能目录。
+
+    目录不存在返回空列表（不是错误）：绝大多数部署不会创建自定义技能。
+    """
+    base = root or CUSTOM_SKILLS_ROOT
+    if not base.is_dir():
+        return []
+    found: list[Skill] = []
+    for path in sorted(base.rglob("*.md")):
+        skill = _skill_of(path, source="custom")
+        if skill is not None:
+            found.append(skill)
+    found.sort(key=lambda s: (s.category, s.name))
+    return found
+
+
+def all_skills(*, include_custom: bool = True) -> list[Skill]:
+    """内置 + 自定义，**内置优先**。
+
+    ## 为什么内置优先（同名时）
+
+    内置技能随代码分发、经过评审；自定义技能是运行时由人写的。
+    同名冲突时若让自定义覆盖内置，就等于"任何能打开设置页的人都能
+    悄悄改掉内置技能的行为" —— 而技能正文会进模型上下文，
+    那是一处不该有的后门。
+
+    冲突时记 warning，让"我建的那个没生效"能被看见，而不是静默丢弃。
+    """
+    builtin = discover_skills()
+    if not include_custom:
+        return builtin
+    custom = discover_custom_skills()
+    seen = {s.name for s in builtin}
+    merged = list(builtin)
+    for skill in custom:
+        if skill.name in seen:
+            logger.warning(
+                "自定义技能 %r 与内置技能同名，已忽略（内置优先）", skill.name
+            )
+            continue
+        merged.append(skill)
+    merged.sort(key=lambda s: (s.category, s.name))
+    return merged
+
+
+
 def skills_by_name(skills: list[Skill] | None = None) -> dict[str, Skill]:
     """name → Skill 映射（同名冲突时后者覆盖，并记 warning —— 名字必须唯一）。"""
-    items = skills if skills is not None else discover_skills()
+    items = skills if skills is not None else all_skills()
     out: dict[str, Skill] = {}
     for s in items:
         if s.name in out:
@@ -212,7 +309,7 @@ def render_index(skills: list[Skill] | None = None) -> str:
     只列 `name: 一句话描述`，按 category 分组。全文不进提示词 ——
     那是 `load_skill` 的活。清单太长时截断并如实说明。
     """
-    items = skills if skills is not None else discover_skills()
+    items = skills if skills is not None else all_skills()
     if not items:
         return ""
 

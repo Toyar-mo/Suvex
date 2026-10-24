@@ -3574,3 +3574,48 @@ def test_http_history_is_fifo_and_ids_never_collide() -> None:
 def test_new_tools_are_dispatched_and_in_tool_names() -> None:
     for name in ("list_requests", "get_request", "repeat_request"):
         assert name in runner.TOOL_NAMES
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ v0.88：run_shell 的截断必须**保尾**
+# ══════════════════════════════════════════════════════════
+#
+# 缺陷形状：`_tool_run_shell` 曾经用 `out[:MAX_TOOL_OUTPUT_CHARS]` 只留头。
+# 那是 v0.41 修过的缺陷的**复发形态** —— 同一份文件里 `_clip_both_ends`
+# 的文档写着"关键信息经常在末尾"，但 run_shell 这条路径没照着做。
+#
+# 为什么这条特别要命：`run_shell` 是最容易撞上长输出的工具（cat 大文件、
+# curl 长页面、ls -R），而**证据池收的就是这个返回值**。尾部被切掉之后，
+# "flag 其实出现过、只是在后面"这件事就彻底没有记录了 —— 不像 transcript
+# 还能从 tool_outputs 里查回来。
+#
+# 这条测试钉住的是行为契约，不是实现：**超长输出的末尾必须能读到。**
+
+
+def test_run_shell_truncation_keeps_the_tail() -> None:
+    """超长输出截断后，末尾那段必须还在（v0.88 缺陷回归）。"""
+    tail_marker = "flag{at-the-very-end}"
+    long_output = "A" * (runner.MAX_TOOL_OUTPUT_CHARS + 2000) + "\n" + tail_marker
+    sandbox = _FakeSandbox(outputs={"cat": long_output})
+
+    out = _run(
+        runner._tool_run_shell({"command": "cat /flag"}, sandbox=sandbox)
+    )
+
+    assert tail_marker in out, (
+        "★ 截断后末尾的标记不见了 —— 又变回「只留头」了。"
+        "  run_shell 是最容易撞长输出的工具，而证据池收的就是这个返回值。"
+    )
+    # 头部也要在（两头都留，中间省略）
+    assert out.startswith("A" * 100), "截断把开头也削了（应该是头 + 省略 + 尾）"
+    # 必须明说被截断了，否则模型以为看到的是全部
+    assert "截断" in out
+    assert "头尾两段" in out, "截断说明应告诉模型看到的是头尾，不是只有前面"
+
+
+def test_run_shell_short_output_is_not_touched() -> None:
+    """没超上限就原样返回 —— 不该平白多一段省略说明。"""
+    sandbox = _FakeSandbox(outputs={"cat": "hello"})
+    out = _run(runner._tool_run_shell({"command": "cat f"}, sandbox=sandbox))
+    assert out == "hello"
+    assert "截断" not in out

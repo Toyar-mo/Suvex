@@ -188,6 +188,33 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #   内核配置"** —— 否则会把一堆只读清单都拔高到 admin，
         #   而拔高 admin 的副作用是只读账号连页面都打不开。
         ("GET", "/api/v1/kernel/tools"),
+        # ── 技能库：读（v0.88）──────────────────────────────────
+        #
+        # 列表与详情都是**静态文本清单**（名字 + 描述 + 自定义技能的正文），
+        # 不含凭据、不改状态、不触发执行 → read 级够用。
+        #
+        # ⚠️ 详情端点回的是"自定义技能的正文"—— 那是人写的操作手册，
+        # 不是凭据。看得见它不构成后果：能看见的人本来也能在页面上读到。
+        ("GET", "/api/v1/kernel/skills"),
+        ("GET", "/api/v1/kernel/skills/usage"),
+        ("GET", "/api/v1/kernel/skills/{name}"),
+        # ── 资产总览：读（v0.85）────────────────────────────────
+        #
+        # ★ 为什么是 **read**：它把已有的扫描记录与漏洞记录按目标聚合
+        #   成一份台账（每个目标扫过几次、上次拿到结论是什么时候、
+        #   还有几个没处置的高危）。**不返回任何新信息** —— 里面每个
+        #   数字，能读 `GET /scans` 和 `GET /findings` 的人本来就能自己
+        #   数出来。给更高一级的后果是：只读角色打开"资产总览"整页 403，
+        #   而那一页的用途恰恰是"给人看现在该关注什么"。
+        ("GET", "/api/v1/assets"),
+        # ── 定时复查：读（v0.85）────────────────────────────────
+        #
+        # 与 `GET /scans` 同级 —— 它返回的就是"排了哪些计划、下次什么时候跑"。
+        # 不含凭据（provider 只给 id 和 label），不改状态。
+        #
+        # ⚠️ 写操作（新建 / 改 / 启停 / 删除）全部在 SCOPE_GATED 里，
+        #   见那一侧的理由：一条计划会让系统**在无人值守时对真实目标发包**。
+        ("GET", "/api/v1/schedules"),
     }
 )
 
@@ -408,6 +435,39 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # 产出都明显变差，而现场看起来像"模型变笨了"而不是"配置被改过"。
     # 与 `PUT /kernel/settings`（改提交策略）同类 —— 一次点击改变系统行为。
     ("PUT", "/api/v1/kernel/tools"): "admin",
+    # ── v0.88 技能库：写 ────────────────────────────────
+    #
+    # ★ 归 admin 的理由与工具开关**不同**，更强：
+    #   改工具改的是"能不能用某个能力"；改技能改的是**模型读到的文本**。
+    #   技能正文会进模型上下文，它教模型"怎么做事" —— 包括该守哪些纪律。
+    #   所以一段文字就能让模型绕过某条纪律（"这次不用附对照实验"），
+    #   而那在事后**完全看不出来**：技能正文不出现在任何执行日志里。
+    #
+    #   这与 `PUT /kernel/settings`（改提交策略）同级 —— 都是"一次点击
+    #   改变系统行为，而后果不在当场显现"。
+    ("POST", "/api/v1/kernel/skills"): "admin",
+    ("PUT", "/api/v1/kernel/skills/{name}"): "admin",
+    ("DELETE", "/api/v1/kernel/skills/{name}"): "admin",
+    # ── v0.85 定时复查：写 ──────────────────────────────
+    #
+    # ★ 这一组全部归 `scan`，而且**新建比改更该拦**。
+    #
+    #   一条定时计划的本性是「在**没有人看着**的时候，由系统自己向真实
+    #   目标发包」。它绕过了两道人眼：① 建扫描时用户要勾"我有权测试"
+    #   那句话，而计划只在建的那一刻确认一次；② 之后每次触发都没人
+    #   当场知道（通知是事后）。
+    #
+    #   所以：`read` 绝对不够 —— 一个只读账号能排一条"每 5 分钟扫一次
+    #   内网核心系统"的计划，然后什么都不用做，系统自己替它攻击。
+    #   这与 `POST /scans/{id}/hints`（改变正在跑的扫描的决策，也是 scan）
+    #   同一量级，但**危害更高**，因为它是持续且无人值守的。
+    #
+    #   「改启停」也是写：用户以为只是"暂停一下"，实际上把一条休眠的计划
+    #   唤醒到"下一分钟就对目标发包"。这一条最容易看错成低危。
+    ("POST", "/api/v1/schedules"): "scan",
+    ("PATCH", "/api/v1/schedules/{schedule_id}"): "scan",
+    ("POST", "/api/v1/schedules/{schedule_id}/enabled"): "scan",
+    ("DELETE", "/api/v1/schedules/{schedule_id}"): "scan",
 }
 
 # 高风险操作单独点名（任务 8 要求 1 的原话）。
@@ -436,7 +496,8 @@ STREAMING_PATHS: frozenset[str] = frozenset(
 # 能让"这条请求本来会 404"这件事在日志里一眼可读。
 FAKE = {"scanId": "scan_nonexistent", "findingId": "finding_nonexistent",
         "reportId": "rpt_nonexistent", "providerId": "prov_nonexistent",
-        "tokenId": "tok_nonexistent", "channelId": "ch_nonexistent"}
+        "tokenId": "tok_nonexistent", "channelId": "ch_nonexistent",
+        "name": "nonexistent_skill"}
 
 
 def _fill(path: str) -> str:

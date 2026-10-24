@@ -29,6 +29,7 @@ export const ReportsPage = lazy(() => import('./ReportsPage'))
 export const KernelPage = lazy(() => import('./Kernel'))
 export const IrPage = lazy(() => import('./IrPage'))
 export const ToolsPage = lazy(() => import('./ToolsPage'))
+export const SkillsPage = lazy(() => import('./SkillsPage'))
 export const SettingsPage = lazy(() => import('./SettingsPage'))
 
 /**

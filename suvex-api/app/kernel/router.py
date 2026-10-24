@@ -83,9 +83,6 @@ from app.kernel.schemas import (
     KernelRemoteCompetitionOut,
     KernelSettingsIn,
     KernelSettingsOut,
-    KernelSkillCategoryOut,
-    KernelSkillOut,
-    KernelSkillsOut,
     KernelSnapshotOut,
     KernelSolveIn,
     KernelSolveOut,
@@ -593,32 +590,6 @@ def list_kernel_tools(_identity: ReadDep, db: DbDep) -> KernelToolsOut:
     合成一个，用户就不知道该去哪修。
     """
     return _tools_out(db)
-
-
-@router.get(
-    "/skills",
-    response_model=KernelSkillsOut,
-    summary="技能库清单（load_skill 可加载的速查卡）",
-)
-def list_kernel_skills(_identity: ReadDep) -> KernelSkillsOut:
-    """列随代码分发的技能包，按分类分组。
-
-    ★ 为什么是 `read` 级：它回的是**静态文本清单**（名字 + 一句话描述），
-    不含凭据、不改状态、不触发任何执行。与 `GET /kernel/tools` 同级。
-
-    ⚠️ 不回 `path`：那是宿主文件系统路径，界面用不到且会泄露部署结构。
-    """
-    payload = service.skills_catalog()
-    return KernelSkillsOut(
-        total=payload["total"],
-        categories=[
-            KernelSkillCategoryOut(
-                category=item["category"],
-                skills=[KernelSkillOut(**skill) for skill in item["skills"]],
-            )
-            for item in payload["categories"]
-        ],
-    )
 
 
 @router.put(

@@ -527,6 +527,10 @@ class KernelToolsOut(CamelModel):
 # （v0.82 修过一次，见 `tools_catalog`）。
 
 
+#: 技能来源：`builtin` 随代码分发（只读），`custom` 页面上创建（可改可删）。
+SkillSourceLiteral = Literal["builtin", "custom"]
+
+
 class KernelSkillOut(CamelModel):
     """一篇技能包。
 
@@ -540,6 +544,12 @@ class KernelSkillOut(CamelModel):
     category: str
     #: 一句话描述，帮模型判断该不该加载这一篇。
     description: str = ""
+    #: 来源。`builtin` 随代码分发、页面上只能看；`custom` 是页面上建的，可改可删。
+    #:
+    #: ★ 清单里必须带它，否则前端要为了画一个"能不能改"的钮去逐条发
+    #:   `GET /skills/{name}` —— 31 篇就是 31 个请求，而且那些请求
+    #:   还会把自定义技能的正文一起传回来（前端只要一个布尔）。
+    source: SkillSourceLiteral = "builtin"
 
 
 class KernelSkillCategoryOut(CamelModel):
@@ -558,6 +568,96 @@ class KernelSkillsOut(CamelModel):
 
     total: int = 0
     categories: list[KernelSkillCategoryOut] = []
+
+
+class SkillDetailOut(CamelModel):
+    """`GET /kernel/skills/{name}` —— 单篇技能详情（含正文）。
+
+    ⚠️ **只有 `custom` 的会回 `body`。** 内置技能的正文是给模型
+    `load_skill` 用的，页面上不需要全文回显（它可能要几百 KB），
+    而且回显它没有任何用 —— 内置的改不了。
+    """
+
+    name: str
+    category: str
+    description: str = ""
+    source: SkillSourceLiteral = "builtin"
+    #: 只有自定义技能才有正文（编辑回填用）。
+    body: str = ""
+    #: 正文行数（内置技能也给，用来在界面上显示"这一篇有多大"）。
+    lineCount: int = 0
+
+
+class SkillCreateIn(StrictModel):
+    """`POST /kernel/skills` —— 新建一篇自定义技能。
+
+    ## 为什么名字与分类要严格限制形状
+
+    它们会变成文件路径的两段。允许 `..` 或 `/` 就是目录穿越的入口 ——
+    而这个目录之外是**随代码分发的内置技能与整个部署目录**。
+
+    校验在 `kernel/skill_store.py` 的 `_resolve_target()` 里再走一遍
+    （不只依赖这里）：schema 层挡的是"明显写错"，文件层挡的是"任何路径
+    最终落在哪" —— 后者才是真正的安全边界。
+    """
+
+    #: 技能名 —— 模型在 `load_skill({"name": ...})` 里写的标识符。
+    #: 只允许小写字母、数字、下划线、连字符。
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    #: 分类（会变成目录名）。
+    category: str = Field(min_length=1, max_length=32, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    #: 一句话描述 —— 进「可用技能清单」，模型据此判断该不该加载。
+    description: str = Field(default="", max_length=2000)
+    #: 正文（Markdown）。
+    body: str = Field(min_length=1, max_length=200_000)
+
+
+class SkillUpdateIn(StrictModel):
+    """`PUT /kernel/skills/{name}` —— 改一篇自定义技能。
+
+    分类**不允许改**：它决定文件在哪，改分类等于"删一个建一个"，
+    而那会让"编辑"这个动作产生副作用（原文件消失）。
+    要换分类就删了重建 —— 界面上也这么说。
+    """
+
+    description: str = Field(default="", max_length=2000)
+    body: str = Field(min_length=1, max_length=200_000)
+
+
+# ── 技能调用统计（v0.88，"技能状态"）────────────────────
+
+
+class SkillUsageOut(CamelModel):
+    """一篇技能被 `load_skill` 拉过几次。
+
+    ★ **这是"用过没有"，不是"好不好用"。** 数字的来源是活动流里
+    `type='tool_call'` 且 `detail.tool='load_skill'` 的事件 —— 它只证明
+    "模型请过这一篇"，不证明它读了、也不证明读完改了做法。
+    界面上必须按这个口径措辞，不能写成"效果"或"采纳率"。
+    """
+
+    name: str
+    #: 被拉取的次数（全部扫描累计）。
+    loads: int = 0
+    #: 最近一次被拉取的时刻（ISO8601 UTC）。从没被拉过则为 null。
+    lastLoadedAt: str | None = None
+
+
+class SkillUsageListOut(CamelModel):
+    """`GET /kernel/skills/usage` —— 技能调用统计。
+
+    ⚠️ **单独一个端点而不是塞进清单**：清单是静态文本（读一次就够），
+    而统计要扫事件表（随运行次数增长）。合成一个响应会让"打开技能页"
+    的代价随历史线性上升，而那和"我想看一眼有哪些技能"没有关系。
+    """
+
+    #: 统计覆盖的事件条数（用于说明"这个数是全量的还是截断的"）。
+    sampledEvents: int = 0
+    #: 被扫过的时间窗起点（ISO8601 UTC）。null = 不限时间。
+    since: str | None = None
+    #: 按加载次数降序。**只含被加载过的技能** —— 0 次的由前端用清单补齐，
+    #: 后端为每一篇都回一条 0 会让这个响应随技能总数增长（而问题不是那个）。
+    items: list[SkillUsageOut] = []
 
 
 class KernelToolsIn(StrictModel):

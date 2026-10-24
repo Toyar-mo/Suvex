@@ -585,6 +585,23 @@ class AuditAction(StrEnum):
     #:   （模型不会用某个工具了）看起来像模型变笨，不像配置被改过。
     #:   所以"谁在什么时候把哪个工具关掉了"必须是能回答的问题。
     KERNEL_TOOLS_UPDATE = "kernel.tools_update"
+    # ── 技能库增删改（v0.88）──────────────────────────────
+    #
+    # ★ 为什么技能要留痕，而且理由与工具**不同**：
+    #
+    #   改工具开关改的是"能不能用某个能力"；改技能改的是**模型读到的文本**。
+    #   技能正文会进模型上下文，它教模型"怎么做事" —— 包括该遵守哪些纪律。
+    #   所以能改技能的人，就能通过一段文字让模型**绕过某条纪律**
+    #   （比如"这次不用附对照实验"），而那在事后完全看不出来：
+    #   技能正文不会出现在任何执行日志里。
+    #
+    #   三条分开记（而不是一条 `skill.change`）是因为它们的事后问题不同：
+    #     · CREATE → "这个技能是谁加的、什么时候开始生效的"
+    #     · UPDATE → "行为变过吗？变了哪一版是最初的"
+    #     · DELETE → "为什么模型不再用那个方法了"
+    KERNEL_SKILL_CREATE = "kernel.skill_create"
+    KERNEL_SKILL_UPDATE = "kernel.skill_update"
+    KERNEL_SKILL_DELETE = "kernel.skill_delete"
     # ── 应急响应（v0.43）──────────────────────────────────
     #: 建一个本地复盘任务。
     #:
@@ -661,6 +678,12 @@ AUDIT_ACTION_LABELS: Final[dict[str, str]] = {
     #    而 detail 不会显示在列表上。
     AuditAction.KERNEL_MCP_SERVERS_UPDATE: "更新 MCP 连接",
     AuditAction.KERNEL_TOOLS_UPDATE: "更新工具启用开关",
+    # ── 技能库（v0.88）────────────────────────────────────
+    # ⚠️ 措辞刻意点出"技能正文会进模型上下文"，因为审计列表的读者
+    #    需要一眼看出"这条记录代表模型读到的文本变了"，而不是改了个配置。
+    AuditAction.KERNEL_SKILL_CREATE: "新建技能",
+    AuditAction.KERNEL_SKILL_UPDATE: "更新技能",
+    AuditAction.KERNEL_SKILL_DELETE: "删除技能",
     AuditAction.IR_TASK_CREATE: "发起应急响应复盘",
     AuditAction.CTF2_PLATFORM_DRAFT: "发起平台自动识别",
     AuditAction.CTF2_PLATFORM_ACTIVATE: "启用一个平台",

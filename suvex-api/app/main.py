@@ -45,6 +45,7 @@ from app.events.router import router as events_router
 from app.findings.router import router as findings_router
 from app.health import router as health_router
 from app.kernel.router import router as ctf2_router
+from app.kernel.skills_router import router as kernel_skills_router
 from app.members.router import router as members_router
 from app.overview.router import router as overview_router
 from app.providers.router import router as providers_router
@@ -406,6 +407,7 @@ def create_app() -> FastAPI:
         members_router,
         audit_router,
         ctf2_router,
+        kernel_skills_router,
     ):
         app.include_router(router, prefix=settings.api_prefix)
 

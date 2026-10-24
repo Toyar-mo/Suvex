@@ -3457,6 +3457,12 @@ prompt 末尾追加一段场景块，产出从"flag"变成"带三级标注的结
 | POST | `/kernel/mcp-servers/test` | **admin** | 试连一条**尚未保存**的配置 |
 | GET | `/kernel/tools` | read | 内置工具清单 + 开关 + 就绪状态 |
 | PUT | `/kernel/tools` | **admin** | 整份替换"被关掉的工具"清单 |
+| GET | `/kernel/skills` | read | 技能库清单（按分类分组，**不含正文**）|
+| GET | `/kernel/skills/usage` | read | 技能调用统计（模型拉过几次）|
+| GET | `/kernel/skills/{name}` | read | 单篇技能正文 |
+| POST | `/kernel/skills` | **admin** | 新建一篇自定义技能 |
+| PUT | `/kernel/skills/{name}` | **admin** | 更新技能（名字与分类不可改）|
+| DELETE | `/kernel/skills/{name}` | **admin** | 删除一篇自定义技能 |
 
 > **★ 为什么 `POST /mcp-servers/test` 是 admin 而不是 read。**
 >
@@ -3526,6 +3532,66 @@ prompt 末尾追加一段场景块，产出从"flag"变成"带三级标注的结
 > 它回答"这一次任务我不想让模型用某几样东西"，不负责隔离。
 > 真正的隔离在沙箱容器、`hostguard`、URL 白名单里。写错它的后果是
 > **能力变差**，不是**越权** —— 把它当安全机制会让人以为"开了就安全"。
+
+#### 技能库（v0.88）
+
+模型的"速查卡"：随代码分发的 Markdown，按需用 `load_skill` 拉起。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/kernel/skills` | read | 清单（按分类分组，**不含正文**）|
+| GET | `/kernel/skills/{name}` | read | 单篇正文 |
+| POST | `/kernel/skills` | **admin** | 新建一篇自定义技能 |
+| PUT | `/kernel/skills/{name}` | **admin** | 更新正文/描述（**名字与分类不可改**）|
+| DELETE | `/kernel/skills/{name}` | **admin** | 删除一篇自定义技能 |
+| GET | `/kernel/skills/usage` | read | 调用统计（模型拉过几次）|
+
+##### `KernelSkillOut`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `name` | `string` | 标识符 —— 模型 `load_skill` 里写的就是它 |
+| `category` | `string` | 分类（= 目录名）|
+| `description` | `string` | 一句话说明，进"可用技能清单"，模型据此判断该不该拉 |
+| `source` | `"builtin" \| "custom"` | 来源。**界面据此决定画不画编辑/删除** |
+
+##### `KernelSkillUsageOut`
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `sampledEvents` | `int` | 统计基于多少条事件 |
+| `since` | `string \| null` | 统计起点（ISO8601）；`null` = 全部历史 |
+| `items` | `{name, loads, lastLoadedAt}[]` | 每篇的加载次数与最后一次 |
+
+> **★ 这个数只能证明"请过"，不能证明"读进去了"。**
+>
+> `loads` 统计的是模型调用 `load_skill` 的次数。它不能区分
+> "读了并照做"与"读了但没照着做"，也无法反映"没读却做对了"。
+> 界面上这句必须跟着数字一起出现 —— 一个孤零零的次数会被读成
+> "有用程度"，而它不是那个东西。
+>
+> 同理 `sampledEvents` 也要露出来：统计只覆盖**从事件表里能捞到的**
+> 那部分调用，老数据可能已经被清。不写这个数，`loads` 会被当成全量。
+
+> **★ 为什么 `GET /skills` 是 read 而增删改是 admin。**
+>
+> 读：回的是静态文本清单（名字 + 一句话），不含凭据、不改状态、不触发执行，
+> 与 `GET /tools` 同级。**只读账号连技能库都打不开**是没道理的 ——
+> 他们最需要知道"模型手里有哪些卡"。
+>
+> 写：改的是**模型读到的文本**。技能正文进模型上下文，它教模型"怎么做事"，
+> 包括该守哪些纪律。能改技能的人，能通过一段文字让模型绕过某条纪律
+> （比如"这次不用附对照实验"），而那在事后完全看不出来 —— 技能正文
+> 不进任何执行日志。所以三种写操作在审计里**分开记三条**
+> （`kernel.skill_create` / `skill_update` / `skill_delete`），
+> 不是合成一条 `skill.change`：它们的事后问题不同。
+
+> **⚠️ 内置技能不可改，连"改了会警告"都不做。**
+>
+> 内置技能随代码分发在 `suvex-api/prompts/skills/`，删除或修改它
+> 会在下次部署时被覆盖回来（或被静默忽略）。做成"可改但会警告"的
+> 副作用是**改了却不知道没生效** —— 这正是本项目反复踩过的形状。
+> 要定制就新建同名自定义技能：自定义优先于内置。
 
 ---
 

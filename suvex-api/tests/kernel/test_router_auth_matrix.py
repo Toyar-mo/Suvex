@@ -80,6 +80,11 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # 判据是"看见这个值有没有后果"，不是"是不是内核配置" ——
         # 否则只读账号连这个页面都打不开。
         ("GET", "/api/v1/kernel/tools"),
+        # ── 技能库：读（v0.88）──
+        # 静态文本清单 + 自定义技能的正文（人写的操作手册，不是凭据）。
+        ("GET", "/api/v1/kernel/skills"),
+        ("GET", "/api/v1/kernel/skills/usage"),
+        ("GET", "/api/v1/kernel/skills/{name}"),
     }
 )
 
@@ -180,6 +185,12 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     #     像"模型变笨"而不是"配置被改过"。一次点击改变系统能力边界
     #     → 与 `PUT /kernel/settings` 同级，admin。
     ("PUT", "/api/v1/kernel/tools"): "admin",
+    # ── 技能库：写（v0.88）──
+    # 理由与工具开关不同、更强：技能正文会进模型上下文，一段文字就能
+    # 让模型绕过某条纪律，而那在事后完全看不出来（正文不进执行日志）。
+    ("POST", "/api/v1/kernel/skills"): "admin",
+    ("PUT", "/api/v1/kernel/skills/{name}"): "admin",
+    ("DELETE", "/api/v1/kernel/skills/{name}"): "admin",
 }
 
 # 高风险操作单独点名。
@@ -198,7 +209,8 @@ HIGH_RISK: list[tuple[str, str]] = [
     ("PUT", "/api/v1/kernel/settings"),
 ]
 
-FAKE = {"challengeId": "ctf2chal_nonexistent", "accountId": "ctf2acc_nonexistent"}
+FAKE = {"challengeId": "ctf2chal_nonexistent", "accountId": "ctf2acc_nonexistent",
+        "name": "nonexistent_skill"}
 
 _METHODS = frozenset({"GET", "POST", "PUT", "PATCH", "DELETE"})
 _PREFIX = "/api/v1/kernel"

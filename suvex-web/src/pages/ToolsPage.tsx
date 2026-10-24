@@ -9,7 +9,6 @@ import { useAuth } from '@/data/auth-store'
 import {
   disabledCoreTools,
   ensureToolsLoaded,
-  filterSkills,
   filterTools,
   groupTools,
   healthOf,
@@ -49,7 +48,9 @@ import { useEffect, useMemo, useState } from 'react'
  */
 
 export function ToolsPage() {
-  const { mcp, catalog, skills, status, error } = useTools()
+  // ★ v0.88：不再解构 `skills` —— 技能库搬到独立页面（`SkillsPage`）了。
+  //   留在这里会让人以为这一页还在管它，而实际渲染里已经没有任何引用。
+  const { mcp, catalog, status, error } = useTools()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
 
@@ -65,8 +66,6 @@ export function ToolsPage() {
   /** ★ v0.87：工具搜索与"只看有问题的"。 */
   const [toolQuery, setToolQuery] = useState('')
   const [onlyProblems, setOnlyProblems] = useState(false)
-  /** 技能库搜索（与工具搜索分开 —— 两者搜的是不同集合，共用一个框会互相污染）。 */
-  const [skillQuery, setSkillQuery] = useState('')
 
   useEffect(() => {
     ensureToolsLoaded()
@@ -340,84 +339,6 @@ export function ToolsPage() {
               >
                 改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的配置。
               </footer>
-            </section>
-
-            {/*
-              ── 技能库（v0.87）─────────────────────────────
-
-              ★ 为什么它必须出现在这一页：技能是 `load_skill` 的输入，
-                而此前**没有任何界面入口** —— 部署者看不到模型能查到什么。
-                这与"工具清单没有端点"是同一个缺口。
-            */}
-            <section className="rounded-md border border-line bg-surface">
-              <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
-                <div>
-                  <h2 className="text-sm font-medium text-ink">技能库</h2>
-                  <p className="mt-1 max-w-[64ch] text-[13px] leading-relaxed text-ink-muted">
-                    模型按需用 <code className="font-mono">load_skill</code>{' '}
-                    拉取的速查卡。随代码分发，不需要配置；它们是<b>只读文本</b>，
-                    不会执行任何命令。
-                  </p>
-                </div>
-                <span className="text-[12px] text-ink-faint">{skills.total} 篇</span>
-              </header>
-
-              <div className="flex flex-wrap items-center gap-tight border-b border-line px-4 py-2">
-                <input
-                  value={skillQuery}
-                  onChange={(event) => setSkillQuery(event.target.value)}
-                  placeholder="搜索技能（名字 / 分类 / 描述）"
-                  className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
-                />
-                {skillQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSkillQuery('')}
-                    className="text-[12px] text-ink-faint transition-ui duration-fast hover:text-ink"
-                  >
-                    清除
-                  </button>
-                )}
-              </div>
-
-              {(() => {
-                const filtered = filterSkills(skills.categories, skillQuery)
-                if (skills.total === 0) {
-                  return (
-                    <p className="px-4 py-6 text-sm text-ink-muted">
-                      没有找到技能包。它们随代码分发在{' '}
-                      <code className="font-mono">prompts/skills/</code> 下，缺了不影响工具可用。
-                    </p>
-                  )
-                }
-                if (filtered.length === 0) {
-                  return (
-                    <p className="px-4 py-6 text-sm text-ink-muted">
-                      没有匹配「{skillQuery}」的技能。
-                    </p>
-                  )
-                }
-                return filtered.map((group) => (
-                  <div key={group.category}>
-                    <h3 className="border-b border-line/60 bg-surface-raised/30 px-4 py-1.5 text-[11px] tracking-wide text-ink-faint uppercase">
-                      {group.category}
-                      <span className="ml-1 normal-case">（{group.skills.length}）</span>
-                    </h3>
-                    <ul>
-                      {group.skills.map((skill) => (
-                        <li key={skill.name} className="border-b border-line/60 last:border-b-0">
-                          <div className="px-4 py-2">
-                            <code className="font-mono text-[13px] text-ink">{skill.name}</code>
-                            <p className="mt-0.5 text-[12px] leading-relaxed text-ink-muted">
-                              {skill.description || '（这篇没有写描述）'}
-                            </p>
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                ))
-              })()}
             </section>
           </div>
         )}

@@ -24,6 +24,7 @@ import {
   ScansPage,
   SchedulesPage,
   SettingsPage,
+  SkillsPage,
   ToolsPage,
 } from '@/pages'
 import LoginPage from '@/pages/LoginPage'
@@ -65,6 +66,10 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   //   路由表由 `NAV_ITEMS.map()` 生成，`if (!Page) return null` 静默返回空，
   //   既不报错也不警告（与上面 `ir` 那条注释是同一个坑）。
   tools: ToolsPage,
+  // ★ v0.88：技能库。与上面 `ir` / `tools` 是同一个坑 —— 漏了这个键，
+  //   路由表照常生成，`if (!Page) return null` 静默返回空：
+  //   侧栏点得动、页面全白，不报错也不警告。
+  skills: SkillsPage,
   settings: SettingsPage,
 }
 

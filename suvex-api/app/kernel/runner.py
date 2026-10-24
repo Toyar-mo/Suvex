@@ -3672,12 +3672,26 @@ async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) ->
 
     out = result.combined()
     # ★ 截断必须明示：`MAX_TOOL_OUTPUT_CHARS` 是工具输出上限，超了会被切。
+    #
+    # ★★ 这里曾经是 `out[:MAX_TOOL_OUTPUT_CHARS]` —— **只留头**。
+    #    那是 v0.41 已经修过一次的缺陷的复发形态（见 `_clip_both_ends`
+    #    的文档：实测某个上传题的响应体长 8530~8640 字符，关键提示在
+    #    末尾，只留头让模型 78 轮都没看到它）。
+    #
+    #    `run_shell` 是**最容易踩到这条**的工具（`cat` 一个大文件、
+    #    `curl` 一个长页面、`ls -R` 一棵树），而它偏偏是唯一还在用
+    #    "只留头"的那条路径。证据池收的就是这里的返回值 —— 所以尾部
+    #    被切掉时，连"事后还能补救"的机会都没有：flag 在 2000 字符之后
+    #    这件事就彻底记录不到了。
+    #
+    #    改成 `_clip_both_ends` 后，返回值结构变成"头 + 中间省略说明 +
+    #    尾"，模型能同时看到开头和结论，而总长仍受 `limit` 约束。
     if len(out) > MAX_TOOL_OUTPUT_CHARS:
         return (
-            out[:MAX_TOOL_OUTPUT_CHARS]
+            _clip_both_ends(out, MAX_TOOL_OUTPUT_CHARS)
             + f"\n\n⚠️ 输出被截断：原长 {len(out)} 字符，上限 {MAX_TOOL_OUTPUT_CHARS}。"
-            "\n**你看到的是前一部分，不是全部。** 如果刚找的东西没出现，"
-            "它可能在后面 —— 用 `head`/`grep`/`sed -n 'X,Yp'` 缩小范围再看，"
+            "\n**你看到的是头尾两段，中间被省略了。** 如果刚找的东西没出现，"
+            "它可能在中间 —— 用 `head`/`grep`/`sed -n 'X,Yp'` 缩小范围再看，"
             "不要因为没看到就断定不存在。"
         )
     return out
