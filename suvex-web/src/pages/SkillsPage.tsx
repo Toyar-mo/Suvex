@@ -634,7 +634,8 @@ function SkillDetailPane({
             内置技能的正文随代码分发，页面上不回显全文（它可能有几百 KB，
             而回显一个改不了的文本没有用）。模型用{' '}
             <code className="font-mono">load_skill({'{'}"name": "{skill.name}"{'}'})</code>{' '}
-            按需拉取。想改它，请看是否存在同名自定义技能 —— 自定义的优先级更高。
+            按需拉取。它是随代码分发的，改不了，也没法用同名的自定义技能顶掉
+            （内置优先）—— 想要自己的版本，换个名字新建一篇。
           </p>
         ) : (
           <p className="max-w-[72ch] text-[13px] leading-relaxed text-ink-muted">
