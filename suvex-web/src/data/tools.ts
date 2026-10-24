@@ -49,6 +49,15 @@ export interface McpServer {
   allowedTools: string[] | null
   /** 是否配了环境变量。只说"有没有"，不说是**什么**。 */
   hasEnv: boolean
+  /**
+   * ★ v0.83：单次工具调用超时（秒）。`null` = 用内核默认 60 秒。
+   *
+   * 之所以要在界面上管它：`recon_scan` 扫 /24 实测约 85 秒、`run_poc`
+   * 合并大批模板要 100 秒以上 —— 用默认 60 秒时这类调用**必然超时**，
+   * 而报错长得像"MCP 连接坏了"，模型会去改配置而不是意识到"这个操作
+   * 本来就慢"。
+   */
+  callTimeout: number | null
 }
 
 /** `GET /kernel/mcp-servers` 的响应。 */
@@ -85,6 +94,8 @@ export interface McpServerDraft {
    * 所以编辑已有连接时**必须**带上它；新增一条时不带。
    */
   preserveEnv: boolean
+  /** ★ v0.83：单次调用超时（秒）。`null` = 用内核默认 60 秒。 */
+  callTimeout: number | null
 }
 
 /** `POST /kernel/mcp-servers/test` 的结果。 */
@@ -444,4 +455,33 @@ export function parseEnv(raw: string): Record<string, string> {
     if (key) out[key] = value
   }
   return out
+}
+
+/**
+ * 解析超时输入（秒）→ `number | null`。
+ *
+ * ★ 三个语义必须分清，混一个就会配出错的连接：
+ *
+ * | 输入 | 结果 | 含义 |
+ * | --- | --- | --- |
+ * | 空串 / 全空格 | `null` | **不配置**，用内核默认 60 秒 |
+ * | `"300"` | `300` | 这条连接的单次调用超时 |
+ * | `"abc"` / `"0"` / `"-5"` | `null` | 非法 → 按不配置处理 |
+ *
+ * ⚠️ 非法值**不能**返回 `NaN`：`NaN` 会被 `JSON.stringify` 变成
+ * `null`（碰巧对），但也会让 `Number.isFinite` 之类的判断在别处失效；
+ * 更糟的是如果某处把它当数字比较，`NaN > 0` 恒为 false，行为会静默走偏。
+ *
+ * ⚠️ 也不能返回 `0`：后端 `Field(gt=0)` 会 422，而用户只是清空了输入框，
+ * 看到"必须大于 0"会一头雾水。
+ */
+export function parseTimeout(raw: string): number | null {
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  const value = Number(trimmed)
+  if (!Number.isFinite(value) || value <= 0) return null
+  // 与后端 `Field(le=1800)` 对齐：超上限的输入按"不配置"处理，
+  // 而不是提交上去换一个 422。
+  if (value > 1800) return null
+  return value
 }

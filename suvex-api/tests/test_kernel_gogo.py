@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -476,3 +477,84 @@ def _cp(stdout: str, stderr: str, code: int):
     import subprocess
 
     return subprocess.CompletedProcess(args=["gogo"], returncode=code, stdout=stdout, stderr=stderr)
+
+
+# ── 组 6：模板数量上限（v0.83）─────────────────────────────────────
+#
+# 实测背景：把整个 nuclei 模板库（13,619 个）合并成 neutron 可读的
+# 单个 YAML 要 **102 秒**、产出 31 MB。而 MCP 层的调用超时默认 60 秒
+# —— 于是这类调用**必然失败**，且失败长得像"连接坏了"。
+#
+# 所以 `convert_templates` 主动挡在入口：超限立刻抛出带"该改成给
+# 哪一层子目录"的中文原因。**1 秒内失败并说清怎么改**，比跑 102 秒
+# 再超时有用得多。
+
+
+def _write_templates(root: Path, count: int) -> None:
+    """造 `count` 个最小可用的 nuclei 模板。"""
+    for i in range(count):
+        (root / f"t{i}.yaml").write_text(
+            f"id: tmpl-{i}\ninfo:\n  name: t{i}\n  severity: info\nhttp:\n"
+            "  - method: GET\n    path:\n      - \"{{BaseURL}}/\"\n",
+            encoding="utf-8",
+        )
+
+
+def test_convert_templates_accepts_under_limit(tmp_path):
+    """上限之内正常合并 —— 这是对照组，证明上限没有误伤正常用法。"""
+    _write_templates(tmp_path, 3)
+    merged = gogo_mcp.convert_templates([str(tmp_path)])
+    assert "tmpl-0" in merged
+    assert "tmpl-2" in merged
+
+
+def test_convert_templates_rejects_oversized_dir(tmp_path, monkeypatch):
+    """★ 超过 `MAX_TEMPLATES` 立刻失败，且原因**可操作**。
+
+    ⚠️ 异常文案本身是这条测试的重点：它必须同时说清
+      · 你给了多少（超过上限就停了）—— 否则用户不知道差多少；
+      · 为什么不行（合并一次 100 秒以上，只会撞超时）—— 否则他会以为
+        这是个可以调大的参数，于是去改环境变量而不是改用法；
+      · 该怎么改（给更具体的一层子目录 / 用 template_ids）。
+    """
+    monkeypatch.setattr(gogo_mcp, "MAX_TEMPLATES", 5)
+    _write_templates(tmp_path, 8)
+
+    with pytest.raises(gogo_mcp.ToolArgError) as excinfo:
+        gogo_mcp.convert_templates([str(tmp_path)])
+
+    message = str(excinfo.value)
+    assert "模板太多" in message
+    assert "模板" in message and "800" not in message or "5" in message
+    # 必须给出下一步，否则模型只会换个目录再撞一次
+    assert "子目录" in message or "template_ids" in message
+
+
+def test_max_templates_is_a_sane_default():
+    """默认上限必须**远小于**全量模板数，又**远大于**常见子目录规模。
+
+    13,619 是全量库的规模（实测）。默认上限如果接近它，这个检查就形同虚设；
+    如果小于 100，又会挡住 `http/cves/<年份>` 这类正常用法（通常几百个）。
+    """
+    from app.kernel import gogo_mcp as gm
+
+    assert 100 <= gm.MAX_TEMPLATES <= 2000, (
+        f"MAX_TEMPLATES={gm.MAX_TEMPLATES} 不在合理区间："
+        "太小会挡住按年份挑子目录的正常用法，太大则挡不住整个模板库"
+    )
+
+
+def test_gogo_timeout_is_less_than_schema_max():
+    """`GOGO_TIMEOUT` 应小于 `McpServerIn.callTimeout` 的上限（1800 秒）。
+
+    ⚠️ 这两个是**内外两层**超时，配反了会出一种很难查的失败：
+      · 外层(MCP) 比内层(gogo) 短 → 外层先超时，内层还在跑，子进程要等被 kill；
+      · 外层比内层长 → 内层先杀子进程并返回错误，外层再等也没意义。
+    正确关系是**内层(1800 上限内) ≥ 外层实际值**，所以内层默认值应当
+    落在外层允许的区间里。
+    """
+    from app.kernel import gogo_mcp as gm
+
+    assert 0 < gm.DEFAULT_TIMEOUT <= 1800, (
+        f"DEFAULT_TIMEOUT={gm.DEFAULT_TIMEOUT} 超出 MCP 侧 callTimeout 的允许区间"
+    )

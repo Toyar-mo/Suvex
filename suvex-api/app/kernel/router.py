@@ -485,6 +485,10 @@ def replace_mcp_servers(
             #    所以它用这个标记说"这次别动 env"。没有它，用户只改一下
             #    notes 就会静默清掉凭据 —— 详见 `McpServerIn.preserveEnv`。
             "preserve_env": bool(item.preserveEnv),
+            # ★ v0.83：单次调用超时（秒）。不传下去的话，界面配了、库里也存了，
+            #    但 `parse_server_configs` 读不到 —— 症状是"我明明配了 300 秒
+            #    还是超时"，而这是最难查的一类（配置层看不到断点）。
+            "call_timeout": item.callTimeout,
         }
         for item in payload.servers
     ]
@@ -538,6 +542,8 @@ async def test_mcp_server(
             "allowed_tools": (
                 list(payload.server.allowedTools) if payload.server.allowedTools else None
             ),
+            # ★ v0.83：试连也按这条连接自己的超时跑（见 `call_timeout` 的说明）。
+            "call_timeout": payload.server.callTimeout,
         }
     )
     return McpServerTestOut(**result)

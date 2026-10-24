@@ -431,3 +431,126 @@ def _spec(**overrides):
     }
     kwargs.update(overrides)
     return SolveSpec(**kwargs)
+
+
+# ══════════════════════════════════════════════════════════
+# 组 9：调用超时与大结果读取（v0.83，实测抓到的两个真缺陷）
+# ══════════════════════════════════════════════════════════
+#
+# 这两个都不在"纯逻辑"范畴，而是**配置能不能传到协议层**的问题。
+# 它们共同的特点是：错了不报错，只在真实调用某一类慢/大任务时才炸，
+# 而炸出来的错看起来与真实原因无关。
+
+
+def test_call_timeout_defaults_to_none_meaning_global():
+    """没配 `call_timeout` 时是 `None`（= 用全局 60 秒），不是 0。
+
+    ⚠️ 0 与 None 在这里必须区分：`McpServerConfig.call_timeout or DEFAULT`
+    里 `0` 是假值（会回落到默认），但语义上"配置成 0 秒"是一个**错误配置**
+    而不是"没配"。解析层把非正数一律当成"没配"并记 warning。
+    """
+    cfgs = mcp.parse_server_configs([{"name": "gogo", "command": "x"}])
+    assert cfgs[0].call_timeout is None
+
+
+@pytest.mark.parametrize("raw", [300, 300.0, "300"])
+def test_call_timeout_parsed_from_config(raw):
+    """配置里的超时要能解析成 float（字符串数字也收）。
+
+    这条挡的是"配了却不生效"：DB 是 JSON 列，手填时很容易写成字符串。
+    """
+    cfgs = mcp.parse_server_configs(
+        [{"name": "gogo", "command": "x", "call_timeout": raw}]
+    )
+    assert cfgs[0].call_timeout == 300.0
+
+
+@pytest.mark.parametrize("raw", [0, -5, "abc", {}])
+def test_bad_call_timeout_degrades_to_none(raw):
+    """非法超时**降级成"没配"**，不让整条配置解析失败。
+
+    与 mcp_servers 其余字段同一条容错纪律：一条连接写坏不该让整次任务
+    起不来。最坏退化成引入这个字段之前的行为（60 秒）。
+    """
+    cfgs = mcp.parse_server_configs(
+        [{"name": "gogo", "command": "x", "call_timeout": raw}]
+    )
+    assert len(cfgs) == 1
+    assert cfgs[0].call_timeout is None
+
+
+def test_call_tool_uses_its_own_timeout():
+    """★ `call_tool` 必须用**这条连接的**超时，不是全局常量。
+
+    这是本次修复的核心断言。做法：直接读源码确认没有把
+    `DEFAULT_MCP_TIMEOUT` 写死在 `call_tool` 里 —— 行为级断言需要真起
+    子进程并等 60 秒以上，太慢；而"实现里到底用了哪个变量"正是会退化的点。
+
+    ⚠️ 配对的另一半在 `test_call_tool_timeout_reaches_request`：那条用
+    打桩的 `_request` 验证**实际传下去的值**。两条一起才证明"读到配置"
+    且"用上了配置"。
+    """
+    import inspect
+
+    src = inspect.getsource(mcp.McpClient.call_tool)
+    assert "self.cfg.call_timeout" in src, (
+        "call_tool 没有读 self.cfg.call_timeout —— 配置的超时不会生效，"
+        "慢调用仍然按全局 60 秒超时失败"
+    )
+
+
+async def test_call_tool_timeout_reaches_request():
+    """行为级：`_request` 收到的 timeout 就是配置的那个值。"""
+
+    class _FakeClient(mcp.McpClient):
+        def __init__(self, cfg):  # noqa: D107 - 绕过真实子进程拉起
+            self.cfg = cfg
+            self.seen: list[float] = []
+
+        async def _request(self, method, params, *, timeout):  # noqa: ANN001
+            self.seen.append(timeout)
+            return {"content": []}
+
+    client = _FakeClient(mcp.McpServerConfig(name="g", command="x", call_timeout=300))
+    await client.call_tool("run_poc", {})
+    assert client.seen == [300.0]
+
+    # 没配时回落到全局默认
+    plain = _FakeClient(mcp.McpServerConfig(name="g", command="x"))
+    await plain.call_tool("run_poc", {})
+    assert plain.seen == [mcp.DEFAULT_MCP_TIMEOUT]
+
+
+def test_subprocess_gets_an_explicit_stream_limit():
+    """★ 起子进程时**必须**显式传 `limit=`，否则大结果会读崩。
+
+    实测（v0.83）：`recon_scan` 扫 /24 时 gogo 返回的那一行 JSON 超过
+    asyncio 默认行缓冲（64 KiB），`stdout.readline()` 抛
+
+        ValueError: Separator is found, but chunk is longer than limit
+
+    ⚠️ 这个错误读起来像协议错误，真实原因是"这一行太长了"。
+
+    断言方式：读源码确认 `create_subprocess_exec` 带了 `limit=`，并且
+    那个值与 `MAX_MESSAGE_BYTES` 是**同一个** —— 两处用不同的数会导致
+    "读取层允许、校验层拒绝"的分裂。
+
+    ⚠️ 起子进程在 `_start()` 里（不在 `__aenter__`）。第一版写成了
+    `__aenter__`，断言直接变红 —— 而那是**测试自己**的事实错误，
+    不是代码的错。所以这里先断言 `_start` 里确实有
+    `create_subprocess_exec`，再断言它带了 `limit`：万一将来把起进程
+    挪走，这一条会明确告诉你"找错方法了"，而不是给一个误导性的
+    "缺 limit"。
+    """
+    import inspect
+
+    src = inspect.getsource(mcp.McpClient._start)
+    assert "create_subprocess_exec" in src, (
+        "`_start()` 里没有 create_subprocess_exec —— 起进程的逻辑被挪走了，"
+        "请把这条测试指向新的位置（现在它检查的不是真正起进程的代码）"
+    )
+    assert "limit=MAX_MESSAGE_BYTES" in src, (
+        "起子进程时没有传 limit=MAX_MESSAGE_BYTES —— 大结果会抛 "
+        "「Separator is found, but chunk is longer than limit」，"
+        "而那个错误看起来与真实原因无关"
+    )

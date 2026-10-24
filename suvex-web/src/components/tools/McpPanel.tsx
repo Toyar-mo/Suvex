@@ -4,6 +4,7 @@ import {
   parseAllowedTools,
   parseArgs,
   parseEnv,
+  parseTimeout,
   validateDraft,
   type McpServer,
   type McpServerDraft,
@@ -61,6 +62,8 @@ function emptyDraft(): McpServerDraft {
     notes: '',
     allowedTools: null,
     preserveEnv: false,
+    // ★ v0.83：新增时不给超时（`null` = 用内核默认 60 秒）。
+    callTimeout: null,
   }
 }
 
@@ -75,6 +78,8 @@ function draftOf(server: McpServer): McpServerDraft {
     allowedTools: server.allowedTools ? [...server.allowedTools] : null,
     // ★ 编辑已有连接：默认不动 env（见文件头那段）。
     preserveEnv: true,
+    // ★ 编辑时把已存的超时带回来（它是可回显字段，不像 env）。
+    callTimeout: server.callTimeout,
   }
 }
 
@@ -94,6 +99,15 @@ export function McpPanel({
   const [argsText, setArgsText] = useState('')
   const [envText, setEnvText] = useState('')
   const [toolsText, setToolsText] = useState('')
+  /**
+   * ★ v0.83：超时用**文本**承载，因为"空"与"0"语义不同。
+   *
+   * 空串 = 不配置（用内核默认 60 秒）；`0` 是一个非法值，后端会 422。
+   * 用 number 状态的话，清空输入框会变成 NaN 或被当成 0，
+   * 而 0 会被 `Field(gt=0)` 拒掉 —— 用户会看到一个莫名其妙的"必须大于 0"，
+   * 而他只是想把这项改回默认。
+   */
+  const [timeoutText, setTimeoutText] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<McpTestResult | null>(null)
@@ -105,6 +119,7 @@ export function McpPanel({
     setArgsText('')
     setEnvText('')
     setToolsText('')
+    setTimeoutText('')
     setFormError(null)
     setTestResult(null)
   }
@@ -116,6 +131,8 @@ export function McpPanel({
     // env 不回显 —— 留空表示"不改动"（见文件头）
     setEnvText('')
     setToolsText(server.allowedTools ? server.allowedTools.join(', ') : '')
+    // 超时可回显（它不像 env 那样是凭据）
+    setTimeoutText(server.callTimeout == null ? '' : String(server.callTimeout))
     setFormError(null)
     setTestResult(null)
   }
@@ -127,7 +144,7 @@ export function McpPanel({
     setTestResult(null)
   }
 
-  /** 把界面上的三段文本拼回草稿。 */
+  /** 把界面上的几段文本拼回草稿。 */
   function currentDraft(): McpServerDraft {
     if (!draft) return emptyDraft()
     const env = parseEnv(envText)
@@ -139,6 +156,8 @@ export function McpPanel({
       // ★ 用户在 env 框里**真的写了东西** → 提交它并取消"保留"；
       //   编辑时留空 → 保留原值（不传空 env 把凭据清掉）。
       preserveEnv: editingName !== null && Object.keys(env).length === 0,
+      // ★ v0.83：空串 = 不配置（用内核默认）；否则按数字提交。
+      callTimeout: parseTimeout(timeoutText),
     }
   }
 
@@ -373,6 +392,28 @@ export function McpPanel({
               onChange={(event) => setToolsText(event.target.value)}
               placeholder="recon_scan, run_poc"
               className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+            />
+          </label>
+
+          {/*
+            ★ v0.83：单次调用超时。
+              它必须有输入框，因为 gogo 的慢操作（/24 扫描 ~85 秒、
+              合并大批模板 100 秒+）在默认 60 秒下**必然失败**，
+              而报错长得像"连接坏了"。
+          */}
+          <label className="mt-2 flex flex-col gap-1">
+            <span className="text-[12px] text-ink-muted">
+              单次调用超时（秒）
+              <span className="ml-1 text-ink-faint">
+                · 留空 = 用内核默认 60 秒；慢工具（资产测绘 / 跑 POC）建议 300
+              </span>
+            </span>
+            <input
+              value={timeoutText}
+              onChange={(event) => setTimeoutText(event.target.value)}
+              inputMode="numeric"
+              placeholder="300"
+              className="h-8 w-40 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
             />
           </label>
 

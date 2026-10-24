@@ -337,6 +337,23 @@ class McpServerIn(StrictModel):
     #: 两端对字段命名的口径不一致。`preserveEnv` 一开始就写成 camelCase，
     #: 所以没踩到；这一行是漏改的那个。
     allowedTools: list[str] | None = None
+    #: ★ v0.83：单次工具调用的超时（秒）。`None` = 用内核默认（60 秒）。
+    #:
+    #: ## 为什么必须让它可配（实测踩到的）
+    #:
+    #: 全局写死 60 秒时，gogo 的两类调用**必然失败**，而失败长得像
+    #: "MCP 连接坏了"（模型看到的是一句读取超时），于是它会去改配置、
+    #: 换参数，而不是意识到"这个操作本来就慢"：
+    #:
+    #:   · `run_poc` 指向整个 nuclei 模板库：光合并 13,619 个模板就要
+    #:     **102 秒**（实测），还没开始跑；
+    #:   · `recon_scan` 扫一个 /24：实测约 **85 秒**。
+    #:
+    #: ⚠️ 上限 1800 秒是"别手滑填 99999"的护栏，不是建议值。
+    #:    **它应当小于 `gogo_mcp.py` 自己的 `GOGO_TIMEOUT`**（默认 180 秒）：
+    #:    外层比内层短 → 外层先超时、内层还在跑；外层比内层长 → 内层先把
+    #:    子进程杀掉并返回错误，外层再等也没用。两边要对齐着配。
+    callTimeout: float | None = Field(default=None, gt=0, le=1800)
 
 
 class McpServerOut(CamelModel):
@@ -366,6 +383,12 @@ class McpServerOut(CamelModel):
     allowedTools: list[str] | None = None
     #: 是否配了 `env` —— 只说"有没有"，不说是**什么**。
     hasEnv: bool = False
+    #: ★ v0.83：单次工具调用超时（秒）。`None` = 用内核默认 60 秒。
+    #:
+    #: ★ 这个字段**必须**回显（它不像 `env` 那样是凭据）：部署者需要
+    #:   能看到这条连接实际生效的超时是多少。不回显的话，
+    #:   "我明明配了 300 秒"与"其实还在用 60 秒"在界面上无法区分。
+    callTimeout: float | None = None
 
 
 class McpServersIn(StrictModel):

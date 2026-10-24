@@ -67,6 +67,17 @@ GOGO_BIN = os.environ.get("GOGO_BIN", "gogo")
 #: 启发式扫描实测约 85 秒；但不能无限，卡住的扫描不能把整次解题拖死。
 DEFAULT_TIMEOUT = int(os.environ.get("GOGO_TIMEOUT", "180"))
 
+#: ★ v0.83：一次 `run_poc` 最多合并多少个模板。
+#:
+#: 实测基准：整个 nuclei 模板库（13,619 个）合并要 102 秒、产出 31 MB YAML。
+#: 那必然撞上 MCP 层超时，而失败看起来像"连接坏了"。所以挡在入口，
+#: 让它在 1 秒内失败并说清"该给哪一层子目录"。
+#:
+#: 800 这个数不是拍的：`http/exposures/configs`（实测可用的那一层）
+#: 只有几十个，`http/cves/2021` 这类年份目录通常是几百个 —— 800 覆盖
+#: "按年份/按类别挑一层"这个正确用法，同时挡住"整个库"这个错误用法。
+MAX_TEMPLATES = int(os.environ.get("GOGO_MAX_TEMPLATES", "800"))
+
 #: 允许出现在 target 里的字符。**这不是安全边界**（真正的隔离在沙箱网桥），
 #: 只是挡掉明显的错误用法 —— argv 不走 shell，所以也不需要 shell 转义。
 _TARGET_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-:/,[]")
@@ -602,6 +613,25 @@ def convert_templates(dirs: list[str]) -> str:
 
     没有可用模板时抛 ToolArgError —— **不能回空串**：空模板文件会让 gogo
     静默跑 0 个 POC，看起来像「没命中」，而真实原因是模板没读进来。
+
+    ## ★ v0.83：模板数上限（`MAX_TEMPLATES`）
+
+    实测：合并整个 `/root/nuclei-templates`（13,619 个模板）要 **102 秒**、
+    产出 31 MB YAML。这有两个后果，都很难在事后看出来：
+
+      1. **外层会先超时**。MCP 层的 `call_timeout` 默认 60 秒，于是这类调用
+         必然失败，而模型看到的是一句"读取超时"——它会去怀疑连接坏了、
+         改配置、重试，唯独不会想到"目录给太大了"。
+      2. **gogo 是"全有或全无"加载**。一个模板 schema 不匹配就可能让整批
+         加载失败，而那是 13,619 个一起失败。
+
+    所以这里**主动挡在入口**：超限就带上"你给了多少、上限多少、
+    该改成给哪一层子目录"的中文原因抛出来。让它在 1 秒内失败并说清
+    怎么改，比让它跑 102 秒再超时有用得多。
+
+    ⚠️ 上限不是"性能调优值"，是**给模型的一次纠错机会**：
+    nuclei 模板库本身是按 `http/cves/`、`http/exposures/configs/` 这样
+    分层组织的，正确的用法本来就是挑一层，而不是整个库。
     """
     # ★ 目录校验放在 import 之前：路径写错是**调用方**的错误，要优先于
     #   「环境缺 PyYAML」报出来。顺序反了的话，模型看到的是部署问题，
@@ -619,6 +649,15 @@ def convert_templates(dirs: list[str]) -> str:
             for fname in sorted(files):
                 if not fname.endswith((".yaml", ".yml")):
                     continue
+                # ★ 先看数量再看内容：解析到一半才报超限的话，时间已经花掉了。
+                if len(docs) >= MAX_TEMPLATES:
+                    raise ToolArgError(
+                        f"模板太多：`{base}` 下超过 {MAX_TEMPLATES} 个可用模板就停了。"
+                        f"整个 nuclei 模板库有上万个，合并一次要 100 秒以上，"
+                        f"只会撞上调用超时。请改成给**更具体的一层子目录**，"
+                        f"例如 `http/exposures/configs` 或 `http/cves/<年份>`；"
+                        f"也可以用 `template_ids` 只跑指定的几个模板。"
+                    )
                 try:
                     with open(os.path.join(root, fname), "rb") as fh:
                         doc = yaml.safe_load(fh)

@@ -124,6 +124,23 @@ class McpServerConfig:
     #: 注意这是**部署者的护栏**，不是安全边界（server 本身仍可能做任何事）——
     #: 真正的隔离靠"只配可信 server"。
     allowed_tools: list[str] | None = None
+    #: ★ v0.83：单次 `tools/call` 的超时（秒）。`None` = 用 `DEFAULT_MCP_TIMEOUT`。
+    #:
+    #: ## 为什么必须可配（实测踩到的）
+    #:
+    #: 全局写死 60 秒时，gogo 的两类调用**必然失败**：
+    #:   · `run_poc` 指向整个 `/root/nuclei-templates` 时，光是合并
+    #:     13,619 个模板就要 **102 秒**（实测），还没开始跑；
+    #:   · `recon_scan` 扫一个 /24 实测约 **85 秒**。
+    #:
+    #: 而失败的样子是"读取超时"——模型看到的是 MCP 层的错，会以为是连接坏了，
+    #: 于是改配置、换参数，而不是"这个操作本来就慢"。**超时值不该由
+    #: 一个与具体 server 无关的常量决定**：`npx` 拉一个文件系统 server 和
+    #: 跑一次全网段测绘，合理耗时差两个数量级。
+    #:
+    #: ⚠️ 这个值**同时**要小于 `gogo_mcp.py` 自己的 `GOGO_TIMEOUT`（默认 180s），
+    #: 否则外层先超时、内层还在跑，子进程要等外层 kill。配的时候两边对齐。
+    call_timeout: float | None = None
 
     def public_dict(self) -> dict[str, Any]:
         """给日志/回执用的安全视图：**去掉 env**（可能含凭据）。"""
@@ -133,6 +150,10 @@ class McpServerConfig:
             "args": list(self.args),
             "notes": self.notes,
             "allowed_tools": list(self.allowed_tools) if self.allowed_tools else None,
+            # ★ v0.83：超时不是凭据，可以回显 —— 而且**应该**回显：
+            #   部署者需要能看到"这条连接的超时到底是多少"，否则
+            #   "我明明配了 300 秒"与"实际还是 60 秒"无从区分。
+            "call_timeout": self.call_timeout,
         }
 
 
@@ -187,6 +208,24 @@ def parse_server_configs(raw: Any) -> tuple[McpServerConfig, ...]:
         env = {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
         allowed = item.get("allowed_tools")
         allowed = [str(t) for t in allowed] if isinstance(allowed, list) else None
+        # ★ v0.83：call_timeout（秒）。非法值按"没配"处理而不是报错 ——
+        # 一条连接的字段写坏不该让整次任务起不来（与其余字段同一条容错纪律），
+        # 但要记 warning，否则部署者会以为配的 300 秒生效了、实际还是 60 秒。
+        raw_timeout = item.get("call_timeout")
+        call_timeout: float | None = None
+        if raw_timeout is not None:
+            try:
+                parsed = float(raw_timeout)
+            except (TypeError, ValueError):
+                parsed = 0.0
+            if parsed > 0:
+                call_timeout = parsed
+            else:
+                logger.warning(
+                    "mcp_servers[%d] 的 call_timeout 不是正数（%r），按默认超时处理",
+                    index,
+                    raw_timeout,
+                )
         out.append(
             McpServerConfig(
                 name=name,
@@ -195,6 +234,7 @@ def parse_server_configs(raw: Any) -> tuple[McpServerConfig, ...]:
                 env=env,
                 notes=str(item.get("notes") or ""),
                 allowed_tools=allowed,
+                call_timeout=call_timeout,
             )
         )
     return tuple(out)
@@ -251,6 +291,22 @@ class McpClient:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
+                # ★ v0.83：**必须**显式给 `limit`，否则大结果会读崩。
+                #
+                # 实测：`recon_scan` 扫一个 /24 时，gogo 返回的那一行 JSON
+                # 超过 asyncio 的默认行缓冲（64 KiB），于是 `stdout.readline()`
+                # 直接抛：
+                #
+                #     ValueError: Separator is found, but chunk is longer than limit
+                #
+                # ⚠️ 这个错误**极其难读懂** —— 它看起来像协议错误或连接问题，
+                #    而真实原因是"这一行太长了"。模型只会看到一句莫名其妙的
+                #    异常，然后去重试一个永远不可能成功的调用。
+                #
+                # 设成 `MAX_MESSAGE_BYTES`（8 MiB）而不是更大：那个常量本来就是
+                # 我们允许的单条消息上限（防止失控 server 把宿主内存打爆），
+                # 两处用同一个数，才不会出现"读取层允许、校验层拒绝"的分裂。
+                limit=MAX_MESSAGE_BYTES,
             )
         except FileNotFoundError as exc:
             raise McpError(
@@ -401,10 +457,21 @@ class McpClient:
         return tools if isinstance(tools, list) else []
 
     async def call_tool(self, tool: str, arguments: dict[str, Any]) -> Any:
+        """调一个 MCP 工具。
+
+        ★ v0.83：超时取**这条连接自己的** `call_timeout`，没配才回落到
+        全局默认。见 `McpServerConfig.call_timeout` 的说明 —— 全局写死
+        60 秒时，gogo 的 `run_poc`（全量模板合并 102 秒）与 `recon_scan`
+        （/24 扫描 85 秒）都会必然超时，而报错长得像"连接坏了"。
+
+        ⚠️ `tools/list` 仍然用全局默认：列工具清单本来就该是快的，
+        给它配长超时只会掩盖"server 起不来"这个问题。
+        """
+        timeout = self.cfg.call_timeout or DEFAULT_MCP_TIMEOUT
         result = await self._request(
             "tools/call",
             {"name": tool, "arguments": arguments},
-            timeout=DEFAULT_MCP_TIMEOUT,
+            timeout=timeout,
         )
         return result
 

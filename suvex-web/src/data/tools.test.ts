@@ -7,6 +7,7 @@ import {
   parseAllowedTools,
   parseArgs,
   parseEnv,
+  parseTimeout,
   toolHealth,
   validateDraft,
   type KernelTool,
@@ -69,6 +70,7 @@ function makeDraft(over: Partial<McpServerDraft> = {}): McpServerDraft {
     notes: '',
     allowedTools: null,
     preserveEnv: false,
+    callTimeout: null,
     ...over,
   }
 }
@@ -378,5 +380,39 @@ describe('parseEnv：每行 KEY=VALUE，坏行忽略', () => {
 
   it('后出现的同名 key 覆盖先出现的', () => {
     expect(parseEnv('K=1\nK=2')).toEqual({ K: '2' })
+  })
+})
+
+// ─────────────────────────────────────────────
+// parseTimeout（v0.83）
+// ─────────────────────────────────────────────
+//
+// 三个语义必须分清，混一个就会配出错的连接：
+//   空 = 不配置（用内核默认 60 秒） / 数字 = 这条连接的超时 / 非法 = 按不配置处理
+
+describe('parseTimeout', () => {
+  it('空串 → null（= 用内核默认，不是 0 秒）', () => {
+    // 返回 0 的话后端 `Field(gt=0)` 会 422，而用户只是清空了输入框
+    expect(parseTimeout('')).toBeNull()
+    expect(parseTimeout('   ')).toBeNull()
+  })
+
+  it('正常数字原样保留', () => {
+    expect(parseTimeout('300')).toBe(300)
+    expect(parseTimeout(' 120 ')).toBe(120)
+    expect(parseTimeout('0.5')).toBe(0.5)
+  })
+
+  it('★ 非法输入 → null，不是 NaN 也不是 0', () => {
+    // NaN 会让 `NaN > 0` 恒为 false，行为静默走偏
+    for (const raw of ['abc', '0', '-5', 'NaN', 'Infinity']) {
+      expect(parseTimeout(raw)).toBeNull()
+    }
+  })
+
+  it('★ 超过后端上限（1800）→ null，避免提交上去换 422', () => {
+    expect(parseTimeout('1800')).toBe(1800)
+    expect(parseTimeout('1801')).toBeNull()
+    expect(parseTimeout('99999')).toBeNull()
   })
 })

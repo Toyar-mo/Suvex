@@ -3789,6 +3789,28 @@ def get_mcp_servers(db: Session) -> list[dict]:
     return [item for item in raw if isinstance(item, dict)]
 
 
+def _positive_float_or_none(raw: object) -> float | None:
+    """把配置里的超时值规整成"正数或 None"。
+
+    ## 为什么非法值退化成 `None` 而不是报错
+
+    与 `mcp_servers` 其余字段同一条容错纪律：一条连接的超时写坏
+    （`"abc"` / `0` / 负数）不该让整次任务的配置读写全部失败 ——
+    最坏退化成"用内核默认 60 秒"，也就是引入这个字段之前的行为。
+
+    ⚠️ 但**写库路径**不该静默接受坏值：`McpServerIn.callTimeout` 已经用
+    `Field(gt=0, le=1800)` 在入参处挡掉了。这里的容错是给**读取**准备的
+    （库里可能有手工改过的历史数据），两条是不同用途。
+    """
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def _public_server_view(item: dict) -> dict:
     """把一条已存配置转成回执形状：**去掉 `env`**，只留 `has_env`。
 
@@ -3797,6 +3819,8 @@ def _public_server_view(item: dict) -> dict:
     """
     env = item.get("env")
     allowed = item.get("allowed_tools")
+    # ★ v0.83：超时**要回显**（它不是凭据）。不回显的话部署者看不到
+    # "我配的 300 秒到底生效了没"，而超时配错的症状是"调用总失败"。
     return {
         "name": str(item.get("name") or ""),
         "command": str(item.get("command") or ""),
@@ -3804,6 +3828,7 @@ def _public_server_view(item: dict) -> dict:
         "notes": str(item.get("notes") or ""),
         "allowed_tools": [str(t) for t in allowed] if isinstance(allowed, list) else None,
         "has_env": bool(env) if isinstance(env, dict) else False,
+        "call_timeout": _positive_float_or_none(item.get("call_timeout")),
     }
 
 
@@ -3923,6 +3948,10 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
                 if isinstance(item.get("allowed_tools"), list)
                 else None
             ),
+            # ★ v0.83：单次调用超时。`None` = 用内核默认（60 秒）。
+            # 不落库的话，界面配了、`build_spec` 也读不到，等于没配 ——
+            # 而症状正是"我明明配了 300 秒，为什么还是超时"。
+            "call_timeout": _positive_float_or_none(item.get("call_timeout")),
         }
         for item in servers
     ] or None
@@ -3955,6 +3984,13 @@ async def test_mcp_server(item: dict) -> dict:
     from app.kernel import mcp as mcp_mod
 
     started = time.monotonic()
+    # ★ v0.83：试连也要带上 call_timeout —— 否则"配了 300 秒的连接"
+    # 在试连时仍按 60 秒跑，慢 server 会被误判成"握手失败"。
+    raw_timeout = item.get("call_timeout")
+    try:
+        parsed_timeout = float(raw_timeout) if raw_timeout is not None else 0.0
+    except (TypeError, ValueError):
+        parsed_timeout = 0.0
     cfg = mcp_mod.McpServerConfig(
         name=str(item.get("name") or "").strip() or "test",
         command=str(item.get("command") or "").strip(),
@@ -3966,6 +4002,7 @@ async def test_mcp_server(item: dict) -> dict:
             if isinstance(item.get("allowed_tools"), list)
             else None
         ),
+        call_timeout=parsed_timeout if parsed_timeout > 0 else None,
     )
     if not cfg.command:
         return {
