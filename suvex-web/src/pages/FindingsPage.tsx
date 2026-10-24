@@ -43,6 +43,7 @@ import {
 import { loadMembers, useMembers } from '@/data/members-store'
 import { apiText, errorMessage } from '@/lib/api'
 import { downloadCsv } from '@/lib/scan-export'
+import { downloadSarif, findingsSarifUrl, sarifFallbackFilename } from '@/lib/sarif-export'
 import { loadScans, useScansState } from '@/data/scans-store'
 import { showToast } from '@/data/toast-store'
 import {
@@ -135,6 +136,16 @@ export function FindingsPage() {
 
   /** CSV 导出进行中（任务 10 P6-c）—— 防重复点击，并给按钮一个忙碌态 */
   const [exporting, setExporting] = useState(false)
+
+  /**
+   * SARIF 导出进行中（v0.85）。
+   *
+   * ★ 与 `exporting` **分开**而不是共用一个布尔：
+   *   两者是并行的下载，共用会让"导 CSV 时 SARIF 按钮变灰"——
+   *   那是无谓的互斥。而且两个按钮各自显示自己的进行态，
+   *   用户才知道哪个动作在跑。
+   */
+  const [exportingSarif, setExportingSarif] = useState(false)
 
   /**
    * 永久删除的确认（任务 10 P6-a）。
@@ -703,6 +714,54 @@ export function FindingsPage() {
     }
   }, [filter, visible.length])
 
+  /**
+   * 导出当前筛选结果为 SARIF 2.1.0（v0.85）。
+   *
+   * ## 为什么值得一个按钮，而不是"用户自己拼 URL"
+   *
+   * 后端 `GET /findings/export/sarif` 从 v0.70 就在了（对齐 strix 的格式），
+   * 但界面上一直没有入口 —— **有能力的端点没有可达路径，等于没有**。
+   * SARIF 的实际使用者是 CI 和代码扫描平台，那些人恰恰不会手写 URL。
+   *
+   * ## 与 `handleExport`（CSV）的三处刻意差异
+   *
+   * 1. **不做"0 条就拦住"的判断**：空的 SARIF 是**合法**的
+   *    （`results: []`，`runs` 结构完整），CI 拿它当"本轮无新问题"
+   *    正好合适 —— 拦住反而让流水线拿不到基线。CSV 空表只有表头，
+   *    人类读它没有意义，所以那边拦。
+   *
+   * 2. **`unexpressableDimensions` 仍然要拦**：那条纪律与格式无关 ——
+   *    导出的范围比用户看到的大，是"错误的数据"，比没有数据更糟。
+   *
+   * 3. 提示文案说清是 SARIF，因为用户会同时看到两个导出按钮，
+   *    而两份文件长得完全不一样。
+   */
+  const handleExportSarif = useCallback(async () => {
+    const { query, unexpressableDimensions } = filterToExportQuery(filter)
+
+    if (unexpressableDimensions.length > 0) {
+      showToast({
+        message: `导出一次只能筛选一个${unexpressableDimensions.join('、')}，请先缩小选择。`,
+        tone: 'info',
+      })
+      return
+    }
+
+    setExportingSarif(true)
+    try {
+      const download = await apiText(findingsSarifUrl(query))
+      downloadSarif(download.filename ?? sarifFallbackFilename(), download.text)
+      showToast({
+        message:
+          visible.length > 0 ? `已导出 ${visible.length} 条为 SARIF` : '已导出空的 SARIF（本轮无匹配条目）',
+      })
+    } catch (err) {
+      showToast({ message: `SARIF 导出失败：${errorMessage(err)}`, tone: 'risk' })
+    } finally {
+      setExportingSarif(false)
+    }
+  }, [filter, visible.length])
+
   return (
     <>
       <PageHeader navId="findings" />
@@ -1058,23 +1117,48 @@ export function FindingsPage() {
               </div>
 
               {/*
-                ── 导出 CSV（任务 10 P6-c）──
+                ── 导出 CSV（任务 10 P6-c）与 SARIF（v0.85）──
 
                 ★ 导出的是**当前筛选结果**，不是全部 —— 见 `handleExport`。
                   这一点在按钮上就写清楚（"导出筛选结果"），
                   而不是只写"导出"让用户自己猜范围。
+
+                ★ 两个按钮并排，**不是**「一个导出按钮 + 下拉选格式」：
+                  两者服务的人不同 —— CSV 给人看（Excel 里过一遍），
+                  SARIF 给机器吃（CI / 代码扫描平台）。
+                  藏进下拉里，做 CI 集成的人要发现它得多点一次；
+                  而这一点发现成本，正是这个按钮存在的全部意义。
+
+                ⚠️ 两个按钮各自有进行态，**不互斥**：并行的下载没必要排队。
               */}
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => void handleExport()}
-                disabled={exporting}
-                title={filterActive ? '导出当前筛选结果（与列表一致）' : '导出全部漏洞'}
-                className="self-end px-2"
-              >
-                <Download size={12} strokeWidth={2} aria-hidden="true" />
-                {exporting ? '导出中…' : filterActive ? '导出筛选结果' : '导出全部'}
-              </Button>
+              <div className="flex items-center gap-1 self-end">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void handleExport()}
+                  disabled={exporting}
+                  title={filterActive ? '导出当前筛选结果（与列表一致）' : '导出全部漏洞'}
+                  className="px-2"
+                >
+                  <Download size={12} strokeWidth={2} aria-hidden="true" />
+                  {exporting ? '导出中…' : filterActive ? '导出筛选结果' : '导出全部'}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void handleExportSarif()}
+                  disabled={exportingSarif}
+                  title={
+                    filterActive
+                      ? '导出当前筛选结果为 SARIF 2.1.0（CI / 代码扫描平台可读）'
+                      : '导出全部漏洞为 SARIF 2.1.0（CI / 代码扫描平台可读）'
+                  }
+                  className="px-2"
+                >
+                  <Download size={12} strokeWidth={2} aria-hidden="true" />
+                  {exportingSarif ? '导出中…' : 'SARIF'}
+                </Button>
+              </div>
             </div>
 
             {/* ── 操作失败 ──
