@@ -47,6 +47,12 @@ import { Link, useSearchParams } from 'react-router-dom'
  */
 const EMPTY_ROSTER: Agent[] = []
 
+/**
+ * 空线索列表。**同样必须模块级** —— 理由与 `EMPTY_ROSTER` 一样：
+ * 每次渲染写一个新的 `[]` 会让下游依赖它的 `useMemo` 每次重算。
+ */
+const EMPTY_HINTS: ScanHint[] = []
+
 export function ActivityPage() {
   /**
    * 从 URL 读要看的扫描（Scans 页「查看活动」的落点是 `/activity?scan=<id>`）。
@@ -129,18 +135,33 @@ export function ActivityPage() {
    *
    * 轮询而不是只拉一次：线索被引擎取走后 `consumed` 会从 false 变 true，
    * 只拉一次就永远停在"待送达"，反而是误导。
+   *
+   * ## ★ 为什么把 scanId 和列表**存在一起**（而不是分开）
+   *
+   * 与下面 `rosterState` 同一条理由，两个问题一起解决：
+   *
+   *   1. **同步 setState 不能在 effect body 里**。原来写的是
+   *      `if (!scanFilter) setHints([]); return` —— 那会触发
+   *      `react-hooks/set-state-in-effect`（同步 setState → 级联渲染），
+   *      而且它是**不必要的一次渲染**：没有 scanFilter 时列表本来就该是空的。
+   *   2. **切换扫描时旧线索会先闪一帧**。分开存的话，"清空"是一个必须
+   *      执行的动作，而它只可能发生在 effect 里（也就是渲染之后）——
+   *      于是用户看到的是"上一个扫描的线索"闪一下才消失。
+   *
+   * 把 scanId 与列表绑成一个值、只在匹配时采用，两个问题一起消失：
+   * 不匹配就等同于空，不需要任何"清空"动作。
    */
-  const [hints, setHints] = useState<ScanHint[]>([])
+  const [hintState, setHintState] = useState<{ scanId: string | null; hints: ScanHint[] }>({
+    scanId: null,
+    hints: EMPTY_HINTS,
+  })
   useEffect(() => {
-    if (!scanFilter) {
-      setHints([])
-      return
-    }
+    if (!scanFilter) return
     let cancelled = false
     const refresh = () => {
       loadScanHints(scanFilter)
         .then((list) => {
-          if (!cancelled) setHints(list)
+          if (!cancelled) setHintState({ scanId: scanFilter, hints: list })
         })
         .catch(() => {
           /* 线索回显失败不影响事件流 —— 它是次要部分，不弹错页 */
@@ -153,6 +174,12 @@ export function ActivityPage() {
       window.clearInterval(timer)
     }
   }, [scanFilter])
+
+  /*
+    ★ 派生而不是"清空"：只有 scanId 对得上才采用那份线索。
+    与 `roster` 同一写法（见下面那段说明）。
+  */
+  const hints = hintState.scanId === scanFilter ? hintState.hints : EMPTY_HINTS
 
   const isRunning = filteredScan?.status === 'running'
 
@@ -342,7 +369,21 @@ export function ActivityPage() {
         {scanFilter && isRunning && (
           <HintComposer
             scanId={scanFilter}
-            onAdded={(hint) => setHints((prev) => [...prev, hint])}
+            /*
+              ★ 乐观追加：用户刚提交的线索**立刻**出现在上面那行回显里，
+              不等 5 秒轮询。否则输入完到看见它之间有一段空白，
+              而那段空白正是"我到底提交成功了吗"最容易让人重按一次的地方。
+
+              ⚠️ 用函数式更新并**带上 scanFilter**：把它写进状态，是为了让
+              "这条线索属于哪次扫描"与列表始终一致 —— 用户可能在提交返回前
+              就切走了，此时不该把旧扫描的线索贴到新扫描上。
+            */
+            onAdded={(hint) =>
+              setHintState((prev) => ({
+                scanId: scanFilter,
+                hints: prev.scanId === scanFilter ? [...prev.hints, hint] : [hint],
+              }))
+            }
           />
         )}
 
@@ -558,9 +599,7 @@ function EmptyStream({
   }
 
   if (startingUp) {
-    return (
-      <StartupNotice scanId={scanFilter} startedAt={currentScan?.startedAt ?? null} />
-    )
+    return <StartupNotice scanId={scanFilter} startedAt={currentScan?.startedAt ?? null} />
   }
 
   const headline = selectedAgentId
