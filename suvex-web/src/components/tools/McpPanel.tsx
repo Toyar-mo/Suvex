@@ -210,9 +210,7 @@ export function McpPanel({
   }
 
   function handleRemove(name: string) {
-    const rest = servers
-      .filter((server) => server.name !== name)
-      .map((server) => draftOf(server))
+    const rest = servers.filter((server) => server.name !== name).map((server) => draftOf(server))
     onSave(rest)
   }
 
@@ -227,7 +225,12 @@ export function McpPanel({
             资产测绘三件套。
           </p>
         </div>
-        <Button size="sm" variant="secondary" onClick={startAdd} disabled={saving || draft !== null}>
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={startAdd}
+          disabled={saving || draft !== null}
+        >
           <Plus className="size-3.5" strokeWidth={1.75} />
           添加连接
         </Button>
@@ -248,9 +251,7 @@ export function McpPanel({
           aria-hidden
         />
         <span className="leading-relaxed">
-          {gogoReady
-            ? 'gogo 资产测绘三件套已就绪。'
-            : `gogo 资产测绘三件套未就绪：${gogoReason}`}
+          {gogoReady ? 'gogo 资产测绘三件套已就绪。' : `gogo 资产测绘三件套未就绪：${gogoReason}`}
         </span>
       </div>
 
@@ -279,13 +280,20 @@ export function McpPanel({
                     白名单 {server.allowedTools.length} 项
                   </span>
                 )}
+                {/*
+                  ★ v0.83：把生效的超时显示在列表里。
+                    不显示的话，"这条连接到底是不是 60 秒"只能点进编辑才知道，
+                    而超时配错的症状是"调用偶尔失败"，没人会想到去核对它。
+                    没配时显示内核默认值，让人知道它确实是 60 而不是"没限制"。
+                */}
+                <span className="text-[11px] text-ink-faint">
+                  超时 {server.callTimeout == null ? '默认 60' : server.callTimeout} 秒
+                </span>
               </div>
-              <p className="mt-1 font-mono text-[12px] break-all text-ink-muted">
+              <p className="mt-1 break-all font-mono text-[12px] text-ink-muted">
                 {server.command} {server.args.join(' ')}
               </p>
-              {server.notes && (
-                <p className="mt-1 text-[12px] text-ink-faint">{server.notes}</p>
-              )}
+              {server.notes && <p className="mt-1 text-[12px] text-ink-faint">{server.notes}</p>}
               <div className="mt-2 flex gap-tight">
                 <button
                   type="button"
@@ -463,9 +471,7 @@ export function McpPanel({
               {testing ? <Loader2 className="size-3.5 animate-spin" /> : null}
               试连
             </Button>
-            <span className="text-[11px] text-ink-faint">
-              试连不会保存 —— 先确认能通，再保存。
-            </span>
+            <span className="text-[11px] text-ink-faint">试连不会保存 —— 先确认能通，再保存。</span>
           </div>
         </div>
       )}
