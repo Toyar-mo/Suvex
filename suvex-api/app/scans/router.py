@@ -790,9 +790,14 @@ async def stage_scan_attachments(
     staging_id = new_id("stage")
     rows: list[ScanAttachmentOut] = []
     for item in files:
-        content = await item.read()
-        name, size = uploads.store_staged(
-            staging_id=staging_id, filename=item.filename or "attachment", content=content
+        # ★ 流式落盘，**不** `await item.read()` 全量进内存。
+        # v0.84 把单附件上限提到 200 MB 之后，一次上传若整份读进内存
+        # 会让单进程 uvicorn 的 RSS 涨 200 MB 以上，期间整站都卡。
+        # 分块拷贝后常驻内存是 1 MiB，与文件大小无关。
+        name, size = await uploads.store_staged_stream(
+            staging_id=staging_id,
+            filename=item.filename or "attachment",
+            item=item,
         )
         rows.append(ScanAttachmentOut(name=name, sizeBytes=size))
 
@@ -871,9 +876,11 @@ async def upload_scan_attachments(
 
     created: list[ScanAttachmentOut] = []
     for item in files:
-        content = await item.read()
-        name, size = uploads.store(
-            scan_id=scan.id, filename=item.filename or "attachment", content=content
+        # 流式版，理由同 `stage_scan_attachments`。
+        name, size = await uploads.store_stream(
+            scan_id=scan.id,
+            filename=item.filename or "attachment",
+            item=item,
         )
         created.append(ScanAttachmentOut(name=name, sizeBytes=size))
 

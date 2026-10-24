@@ -57,7 +57,24 @@ logger = logging.getLogger("suvex.scans")
 #
 # ★ 但仍然**必须有上限**：没有它，一个 2 GB 的上传能把磁盘写满，
 #   而磁盘满是**整个服务**不可用（不只是那个请求失败）。
-MAX_BYTES = 50 * 1024 * 1024
+#
+# ## v0.84：50 MB → 200 MB（起因是一个真实的 97 MiB 附件）
+#
+# 实测 2026-10-24：传 101,703,716 字节的题面附件，用户只看到
+# 「服务端返回了非 JSON 响应（HTTP 413）」—— 那是 **nginx** 挡的
+# （`client_max_body_size 64m`），请求根本没到应用层。nginx 的
+# error.log 留了两条 `client intended to send too large body`。
+#
+# 光提这一处不够：nginx 放行之后本函数会在 50 MB 处再拒一次，
+# 只是那次会给出规范的中文 JSON 错误。所以两处必须**同时**改，
+# 且 nginx 那边要留余量给 multipart 的边界与头部开销 —— 见
+# `deploy/nginx/suvex-frontend.conf` 的 `client_max_body_size 200m`。
+#
+# ⚠️ 上限翻四倍的真实代价是**内存**：`_write` 收的是完整 `bytes`，
+#    所以落盘路径已改成 `_write_stream` 分块拷贝（常驻 1 MiB，
+#    与文件大小无关）。单进程 uvicorn 上，一次 200 MB 上传若整份
+#    读进内存会让整站卡住 —— 这正是 v0.84 顺手改掉的那处。
+MAX_BYTES = 200 * 1024 * 1024
 
 # 一次最多几个。防止"一次传几百个"占满磁盘与请求时间。
 MAX_COUNT = 10
@@ -130,8 +147,23 @@ def unique_name(directory, name: str) -> str:  # noqa: ANN001
 
 
 def store(*, scan_id: str, filename: str, content: bytes) -> tuple[str, int]:
-    """写入一个扫描附件。返回 `(消毒后的文件名, 字节数)`。"""
+    """写入一个扫描附件（已读进内存的 `bytes` 版）。
+
+    返回 `(消毒后的文件名, 字节数)`。路由层用的是流式版
+    `store_stream` —— 这个留给小文件与单元测试。
+    """
     return _write(directory=scan_upload_dir(scan_id), filename=filename, content=content)
+
+
+async def store_stream(*, scan_id: str, filename: str, item) -> tuple[str, int]:  # noqa: ANN001
+    """写入一个扫描附件 —— **流式**版，用于大文件。
+
+    路由层用它把 `UploadFile` 分块拷进磁盘，常驻内存只有
+    `_STREAM_CHUNK`（1 MiB），与文件大小无关。
+    """
+    return await _write_stream(
+        directory=scan_upload_dir(scan_id), filename=filename, item=item
+    )
 
 
 def _write(*, directory, filename: str, content: bytes) -> tuple[str, int]:  # noqa: ANN001
@@ -148,6 +180,9 @@ def _write(*, directory, filename: str, content: bytes) -> tuple[str, int]:  # n
 
     路由层按 `Content-Length` 挡一道，但那可以被客户端撒谎
     （分块传输）。真正的闸门在这。
+
+    ⚠️ 本函数收的是**已完整读进内存**的 `content`（留给小文件与
+    单元测试）。路由层走的是 `_write_stream` —— 见那里的说明。
     """
     if not content:
         raise ApiError.validation("空的附件不接收", {"file": filename})
@@ -157,6 +192,22 @@ def _write(*, directory, filename: str, content: bytes) -> tuple[str, int]:  # n
             {"file": f"「{filename}」实际 {len(content) / (1024 * 1024):.1f} MB"},
         )
 
+    name, resolved = _prepare_target(directory, filename)
+    resolved.write_bytes(content)
+    return name, len(content)
+
+
+#: 流式落盘的分块大小。1 MiB 是折中：够大不至于系统调用太密，
+#: 够小不至于让一次读占掉几十 MB（200 MB 的附件是 200 次读）。
+_STREAM_CHUNK = 1024 * 1024
+
+
+def _prepare_target(directory, filename: str) -> tuple[str, Path]:  # noqa: ANN001
+    """定名字 + 建目录 + 校验落点在目录内。`_write` 与 `_write_stream` 共用。
+
+    抽出来是为了让"路径安全"只有一份实现 —— 两条写路径各自复制一遍
+    校验，迟早会有一条忘记同步。
+    """
     directory.mkdir(parents=True, exist_ok=True)
 
     name = unique_name(directory, safe_filename(filename))
@@ -173,9 +224,56 @@ def _write(*, directory, filename: str, content: bytes) -> tuple[str, int]:  # n
     if not resolved.is_relative_to(root):
         logger.error("扫描附件路径越界，已拒绝：%s", filename)
         raise ApiError.validation("附件名不合法", {"file": filename})
+    return name, resolved
 
-    resolved.write_bytes(content)
-    return name, len(content)
+
+async def _write_stream(*, directory, filename: str, item) -> tuple[str, int]:  # noqa: ANN001
+    """写入的**流式**实现 —— 分块从 `UploadFile` 拷到磁盘。
+
+    ## 为什么要另有一条路径
+
+    `_write` 收 `content: bytes`，而路由层拿到 `UploadFile` 之后
+    `await item.read()` 是**把整个 body 读进内存**。50 MB 时代还能忍；
+    v0.84 把上限提到 200 MB 之后，一次上传就能让单进程 uvicorn 的
+    RSS 涨 200 MB 以上 —— 而本服务是单实例部署，那期间整站都会卡。
+
+    这里改成"读一块、写一块、丢一块"，常驻内存是 `_STREAM_CHUNK`
+    （1 MiB），与文件大小无关。
+
+    ## 超限时要**删掉半截文件**
+
+    大小校验按累计写入量判。超限时磁盘上已经有一个写了一半的文件，
+    必须删掉 —— 否则用户重试一次就多一个残骸，而残骸看起来和
+    成功上传的附件一样（`list_for` 只按名字列，不区分是否完整）。
+
+    返回的字节数是**实际写入**的，不是 `Content-Length` ——
+    后者可以被客户端撒谎。
+    """
+    name, resolved = _prepare_target(directory, filename)
+
+    written = 0
+    try:
+        with resolved.open("wb") as fh:
+            while True:
+                chunk = await item.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > MAX_BYTES:
+                    raise ApiError.validation(
+                        f"附件超过大小上限（{MAX_BYTES // (1024 * 1024)} MB）",
+                        {"file": f"「{filename}」已超过上限"},
+                    )
+                fh.write(chunk)
+        if written == 0:
+            raise ApiError.validation("空的附件不接收", {"file": filename})
+    except BaseException:
+        # 任何失败都清掉半截文件（含客户端断开、超限、磁盘满）。
+        # `missing_ok` 因为 `_prepare_target` 之后 open 也可能失败。
+        resolved.unlink(missing_ok=True)
+        raise
+
+    return name, written
 
 
 def list_for(scan_id: str) -> list[dict]:
@@ -264,6 +362,19 @@ def store_staged(*, staging_id: str, filename: str, content: bytes) -> tuple[str
         directory=staging_dir(staging_id),
         filename=filename,
         content=content,
+    )
+
+
+async def store_staged_stream(*, staging_id: str, filename: str, item) -> tuple[str, int]:  # noqa: ANN001
+    """把文件**流式**存进暂存区 —— `store_staged` 的分块版。
+
+    用户实际走的这条路（向导里选附件 → 建扫描之前先暂存），
+    所以 200 MB 的附件必须先经过它。
+    """
+    return await _write_stream(
+        directory=staging_dir(staging_id),
+        filename=filename,
+        item=item,
     )
 
 
