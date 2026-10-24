@@ -34,13 +34,13 @@ from fastapi.middleware.cors import CORSMiddleware
 # 缺了它，metadata 是空的 —— 测试里的建表、以及 alembic 的 autogenerate
 # 都会看到一张表都没有的世界。
 import app.models  # noqa: F401
+from app.assets.router import router as assets_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.metrics_middleware import MetricsMiddleware
-from app.assets.router import router as assets_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
 from app.health import router as health_router
@@ -50,6 +50,7 @@ from app.overview.router import router as overview_router
 from app.providers.router import router as providers_router
 from app.reports.router import router as reports_router
 from app.scans.router import router as scans_router
+from app.schedules.router import router as schedules_router
 from app.settings.router import router as settings_router
 
 logger = logging.getLogger("suvex")
@@ -304,6 +305,7 @@ def create_app() -> FastAPI:
             {"name": "实时事件流", "description": "SSE，带 Last-Event-ID 补发"},
             {"name": "全局统计", "description": "全部派生，不写死"},
             {"name": "资产", "description": "按目标聚合：扫过什么、查出什么、还开着什么"},
+            {"name": "定时扫描", "description": "定期自动复查：到点自动建扫描，无人值守"},
             {"name": "LLM Provider", "description": "凭据管理，apiKey 永不出现在响应里"},
             {"name": "设置", "description": "沙箱、通知、令牌、口令"},
             {"name": "审计", "description": "只读。谁在什么时候对什么做了什么"},
@@ -398,6 +400,7 @@ def create_app() -> FastAPI:
         reports_router,
         overview_router,
         assets_router,
+        schedules_router,
         providers_router,
         settings_router,
         members_router,

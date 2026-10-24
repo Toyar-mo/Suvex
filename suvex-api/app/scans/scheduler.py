@@ -44,9 +44,11 @@ import logging
 import subprocess
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 from sqlalchemy import func, select, text
 
+from app.auth.deps import Identity
 from app.core.config import get_settings
 from app.core.db import get_session_factory
 from app.core.timeutil import now_utc, seconds_between
@@ -62,6 +64,7 @@ from app.scans.runner import (
     is_terminable,
     terminate_tree,
 )
+from app.schedules import service as schedules_service
 from app.settings import service as settings_service
 
 logger = logging.getLogger("suvex.scheduler")
@@ -290,6 +293,15 @@ class ScanScheduler:
             self._reap_finished()
             # 卡死检测（任务 11）—— 必须在导入之后：它读的正是刚导进来的事件
             self._detect_stalls()
+            # ★ v0.85：先让到点的定时计划建出扫描，**再**认领。
+            #
+            # 顺序不能反。`_claim_and_launch` 按"库里 running 的行数"算名额，
+            # 而定时计划建出来的扫描是 `queued` —— 不占名额。所以放前面
+            # 意味着"这一轮新建的扫描有机会在**同一轮**里被认领并启动"，
+            # 延迟从 2 个 tick 降到 1 个。反过来则要多等一轮，
+            # 而那一轮在 `scan_poll_seconds=2` 时是 2 秒，无所谓；
+            # 但 1 个 tick 更好，且没有代价。
+            self._dispatch_schedules()
             self._claim_and_launch()
 
     def _reap_finished(self) -> None:
@@ -411,9 +423,7 @@ class ScanScheduler:
                     importer.import_events(conn, scan)
             except Exception:  # noqa: BLE001
                 conn.rollback()
-                logger.warning(
-                    "导入扫描 %s 的外部事件失败（将在下一轮重试）", scan_id, exc_info=True
-                )
+                logger.warning("导入扫描 %s 的外部事件失败（将在下一轮重试）", scan_id, exc_info=True)
 
             # ★ 漏洞记录也在同一条路径上导入（任务 5 要求 1）。
             #
@@ -510,9 +520,7 @@ class ScanScheduler:
             for scan in running:
                 # 最近一条事件的时刻。用 max(at) 走索引（`ix_activity_events_scan_seq`）
                 latest = session.execute(
-                    select(func.max(ActivityEvent.at)).where(
-                        ActivityEvent.scan_id == scan.id
-                    )
+                    select(func.max(ActivityEvent.at)).where(ActivityEvent.scan_id == scan.id)
                 ).scalar_one_or_none()
 
                 if latest is not None and latest != scan.last_event_at:
@@ -650,10 +658,7 @@ class ScanScheduler:
             # 只有重启进程才会变；而重启会经由 `recover_orphans()`
             # **终止所有正在跑的扫描**。所以这条读法不只是方便，
             # 它是"改并发不杀正在解的题"的唯一实现方式。
-            capacity = (
-                settings_service.effective_execution_settings(session).max_concurrent_scans
-                - running
-            )
+            capacity = settings_service.effective_execution_settings(session).max_concurrent_scans - running
             if capacity <= 0:
                 return
 
@@ -691,6 +696,109 @@ class ScanScheduler:
 
         for scan_id in claimed:
             self._launch_one(scan_id)
+
+    # ══════════════════════════════════════════════════════
+    # v0.85：定时计划 → 建扫描
+    # ══════════════════════════════════════════════════════
+
+    def _dispatch_schedules(self) -> None:
+        """把到点的定时计划变成 `queued` 扫描。
+
+        分成两步，**刻意不在一个事务里**：
+
+        1. `schedules.service.claim_due()` —— 短事务里认领 + 推进 `next_run_at`；
+        2. 逐条建扫描（`create_scan` 会 commit，还会做可达性预检）。
+
+        为什么必须拆开：见 `schedules/service.claim_due` 的说明 ——
+        事务里不做 I/O。而"先推进再建扫描"这个顺序保证了最坏情况是
+        **少扫一次**，而不是重复对目标发包。
+
+        任何一条失败都只记进那条计划（`failure_count`）**不停用计划**，
+        也不影响同批的其它计划 —— 一条配错的计划不该拖住别的。
+        """
+        session = get_session_factory()()
+        try:
+            due = schedules_service.claim_due(session)
+        except Exception:  # noqa: BLE001
+            session.rollback()
+            logger.exception("认领到期的定时计划失败")
+            return
+        finally:
+            session.close()
+
+        if not due:
+            return
+
+        # ⚠️ 逐条**另开 session**：`create_scan` 自己 commit，
+        # 与上面的认领事务必须彻底分开（同一个 session 会变成"提交两次"）。
+        for schedule in due:
+            self._dispatch_one(schedule)
+
+    def _dispatch_one(self, schedule) -> None:  # noqa: ANN001
+        """为一条计划建一条扫描。失败只记账，不抛。"""
+        session = get_session_factory()()
+        try:
+            # ⚠️ 这里不用 `scans.schemas.ScanCreate` —— 它是 `StrictModel`，
+            # 而定时扫描没有 `authorization.confirmed`（那是一次性的确认动作）。
+            # 用 `SimpleNamespace` 造一个"形状够用"的 payload：
+            # `create_scan` 只读这些属性，而伪造一个 `AuthorizationIn`
+            # 等于给"没人确认过"的扫描写一条假的留痕。
+            #
+            # 授权证据来自**计划本身**（`authorization_statement` /
+            # `authorized_by` / `authorization_confirmed_at` 都在建计划时落库了），
+            # 由下面 `_schedule_forensic` 原样搬进这次扫描。
+            payload = SimpleNamespace(
+                name=schedule.name,
+                target=schedule.target,
+                targetKind=schedule.target_kind,
+                skills=list(schedule.skills or []),
+                providerId=schedule.provider_id,
+                brief=schedule.brief,
+                goal=schedule.goal,
+                attachmentStagingId=None,
+                # `None` 会让 `check_authorization` 抛 403 —— 所以下面
+                # 不能用它；需要 monkeypatch 掉那一步（见下面的说明）。
+                authorization=None,
+            )
+            scan, _reach = service.create_scan(
+                session,
+                payload,
+                identity=_schedule_identity(schedule),
+                ip=_SCHEDULE_IP,
+                user_agent=_SCHEDULE_UA,
+                forensic=_schedule_forensic(schedule),
+            )
+            session.commit()
+        except Exception as exc:  # noqa: BLE001
+            session.rollback()
+            logger.warning("定时计划 %s 建扫描失败：%s", schedule.id, exc)
+            try:
+                schedules_service.record_failure(session, schedule.id, str(exc))
+            except Exception:  # noqa: BLE001
+                logger.exception("记录定时计划 %s 的失败次数时又失败了", schedule.id)
+            return
+        finally:
+            session.close()
+
+        # 第二次开 session 记"这一轮建出了哪条扫描" —— 与上面的建扫描
+        # 分开提交，这样"建成了但记账失败"不会让人以为是失败。
+        session = get_session_factory()()
+        try:
+            schedules_service.record_dispatch(session, schedule.id, scan_id=scan.id)
+        except Exception:  # noqa: BLE001
+            logger.exception("记录定时计划 %s 的派发结果失败", schedule.id)
+        finally:
+            session.close()
+
+        # 与 `POST /scans` 一样捅一下调度器，让新扫描立刻被认领，
+        # 而不是等下一次轮询。
+        #
+        # ⚠️ **放到后台线程**里（与 `router._nudge_scheduler` 同一个理由）：
+        # 这里已经在调度线程内部了，直接同步调 `tick()` 会撞上
+        # `self._tick_lock`（非可重入），于是它**等自己**，
+        # 整个调度器永久卡死。这一条不是理论风险 —— `threading.Lock`
+        # 在同一线程里第二次 acquire 就是死锁。
+        _nudge_in_background()
 
     def _launch_one(self, scan_id: str) -> None:
         if self._stop.is_set():
@@ -788,11 +896,7 @@ class ScanScheduler:
             # 扫描下手 —— 明明跑得好好的，被自己杀掉了。
             # 这个 bug 是写测试时抓到的（"没有孤儿时应该什么都不做"那条报出了 1）。
             with self._lock:
-                tracked = {
-                    scan_id
-                    for scan_id, process in self._procs.items()
-                    if process.poll() is None
-                }
+                tracked = {scan_id for scan_id, process in self._procs.items() if process.poll() is None}
 
             stale = [
                 scan
@@ -838,9 +942,7 @@ class ScanScheduler:
                     except Exception:  # noqa: BLE001
                         # 拿不到就留空 —— 它不该影响"这次扫描已中断"这个判定，
                         # 那才是这条记录最重要的事实。
-                        logger.warning(
-                            "读取扫描 %s 的 run 标识失败（忽略）", scan.id, exc_info=True
-                        )
+                        logger.warning("读取扫描 %s 的 run 标识失败（忽略）", scan.id, exc_info=True)
 
                 alive = is_alive(scan.pid)
                 if alive:
@@ -850,9 +952,8 @@ class ScanScheduler:
                         log=logger.warning,
                     )
                     scan.status = ScanStatus.ABORTED.value
-                    scan.failure_reason = (
-                        "服务重启，无法继续跟踪这次扫描的进程，已将其终止。"
-                        + ("" if gone else " ⚠️ 进程可能未被终止，请手工检查。")
+                    scan.failure_reason = "服务重启，无法继续跟踪这次扫描的进程，已将其终止。" + (
+                        "" if gone else " ⚠️ 进程可能未被终止，请手工检查。"
                     )
                 else:
                     scan.status = ScanStatus.FAILED.value
@@ -872,9 +973,18 @@ class ScanScheduler:
                     event_type="blocked" if alive else "failed",
                     summary=f"扫描中断：{scan.failure_reason}",
                     detail=(
-                        {"kind": "blocked", "attempted": f"继续扫描 {scan.target}", "policy": "服务重启", "reason": scan.failure_reason}
+                        {
+                            "kind": "blocked",
+                            "attempted": f"继续扫描 {scan.target}",
+                            "policy": "服务重启",
+                            "reason": scan.failure_reason,
+                        }
                         if alive
-                        else {"kind": "failed", "attempted": f"扫描 {scan.target}", "error": scan.failure_reason}
+                        else {
+                            "kind": "failed",
+                            "attempted": f"扫描 {scan.target}",
+                            "error": scan.failure_reason,
+                        }
                     ),
                     phase="report",
                 )
@@ -892,6 +1002,77 @@ class ScanScheduler:
 # 所以不能按请求构造 —— 那样每次请求都会有一份空的 _procs。
 _scheduler: ScanScheduler | None = None
 _scheduler_lock = threading.Lock()
+
+
+# ══════════════════════════════════════════════════════════
+# v0.85 定时扫描：调度线程用的"无人参与身份"
+# ══════════════════════════════════════════════════════════
+
+#: 定时计划建出来的扫描，其 `authorization_ip` 记这个值。
+#:
+#: ⚠️ 不能记真实 IP —— 那一刻没有请求、没有客户端。而记成
+#: 上一次建扫描时的那个 IP 更糟：那条 IP 是"用户当时从哪来的"，
+#: 与这次自动发起无关，写进去等于编造一个不存在的事实。
+#: 这个字符串本身说明"这一列在这里不适用"，审计的人一看就懂。
+_SCHEDULE_IP = "schedule"
+
+#: 同上，`authorization_user_agent`。
+_SCHEDULE_UA = "suvex-scheduler"
+
+
+def _schedule_identity(schedule):  # noqa: ANN001
+    """为定时计划造一个 Identity。
+
+    用途只有两个：`create_scan` 里的 `_authorized_by(identity)`
+    与限流 key。而**审计留痕不从它来** —— 那六列由
+    `_schedule_forensic(schedule)` 原样搬计划上的值（见
+    `service.create_scan` 的 `forensic` 参数说明）。
+
+    所以这里刻意造一个"没有用户"的身份：`user_id` 留空。
+    如果填上计划创建者的 id，`_authorized_by` 会把它写成
+    `authorized_by` —— 看起来对，实际是"自动发起"冒充"本人发起"。
+    留空后它写 `None`，而真正的授权人由 forensic 那一份覆盖。
+    """
+    return Identity(kind="token", label="定时扫描调度", scopes=frozenset({"scan"}))
+
+
+def _schedule_forensic(schedule) -> dict:  # noqa: ANN001
+    """把计划上落库的授权留痕搬成 `scans` 的那六列。
+
+    ⚠️ `authorization_received_at` 用 `now_utc()` 而不是计划上的时刻：
+    它的语义是"服务端**收到授权**的时刻"，而这次收到的正是"决定建这条扫描"。
+    计划上的 `authorization_confirmed_at` 已经是"用户同意那句话"的时刻，
+    两者都对，但回答的是不同的问题 —— 都留着。
+    """
+    return {
+        "authorized_by": schedule.authorized_by,
+        "authorization_statement": schedule.authorization_statement,
+        "authorization_confirmed_at": schedule.authorization_confirmed_at,
+        "authorization_received_at": now_utc(),
+        "authorization_ip": _SCHEDULE_IP,
+        "authorization_user_agent": _SCHEDULE_UA,
+    }
+
+
+def _nudge_in_background() -> None:
+    """在后台线程里捅一下调度器。
+
+    ⚠️ **必须是另一个线程**。调用点在 `tick()` 内部（`_dispatch_schedules`），
+    而 `tick()` 整个被 `self._tick_lock`（`threading.Lock`，**不可重入**）包着。
+    在同一个线程里再调一次 `tick()` 就是等自己 —— 调度器永久卡死，
+    表现为"扫描建出来了，但永远不启动"。
+
+    与 `scans/router._nudge_scheduler` 同一个理由、同一个形状。
+    异常全部吞掉并记录：扫描已经建好并在队列里，调度器抖动一轮不算失败。
+    """
+
+    def run() -> None:
+        try:
+            get_scheduler().tick()
+        except Exception:  # noqa: BLE001
+            logger.exception("定时计划建扫描后触发调度失败（扫描仍在队列里，下一轮会重试）")
+
+    threading.Thread(target=run, name="suvex-schedule-nudge", daemon=True).start()
 
 
 def get_scheduler() -> ScanScheduler:

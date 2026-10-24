@@ -392,12 +392,28 @@ def create_scan(
     identity: Identity,
     ip: str,
     user_agent: str | None,
+    forensic: dict | None = None,
 ) -> tuple[Scan, Reachability]:
     """新建扫描（契约 §3.3）。**初始状态 `queued`。**
 
     返回 `(scan, reach)` —— 第二个是**目标可达性预检**的结果（任务 11）。
     router 会把其中的 `notice` 放进响应，让界面能提示
     "该目标只在 http 下应答"这类情况。
+
+    ## `forensic`：给"无人参与的创建"用（v0.85 定时扫描）
+
+    默认 `None`，走原来的 `check_authorization(payload, ...)` —— 那条路
+    要求 `payload.authorization.confirmed`，因为 **`POST /scans` 是一次
+    用户此刻做出的授权动作**。
+
+    定时扫描不同：授权发生在**建计划那一刻**（那六列已经落库在
+    `scan_schedules` 上），而建扫描发生在几小时后的调度线程里，
+    身边没有任何人。这时传 `forensic=<计划上的那六列>` 直接写入，
+    于是这次扫描的审计留痕**仍然指向当初授权的人和那句话** ——
+    而不是编织一个"调度器在 10:03 确认过"的假动作。
+
+    ⚠️ 这条通道只给**已经落库的授权**用。它不做任何校验 ——
+    传进来什么就写什么，所以调用方必须是"从 `scan_schedules` 原样搬"的代码。
     """
     _require_provider(db, payload.providerId)
 
@@ -436,7 +452,9 @@ def create_scan(
             )
         normalized = staged[0]["name"]
 
-    forensic = check_authorization(payload, identity=identity, ip=ip, user_agent=user_agent)
+    forensic = forensic or check_authorization(
+        payload, identity=identity, ip=ip, user_agent=user_agent
+    )
 
     # ★ 协议预检（任务 11）。
     #

@@ -34,6 +34,7 @@ from app.members.models import Member  # noqa: F401
 from app.providers.models import ProviderAccount  # noqa: F401
 from app.reports.models import Report, ReportFinding  # noqa: F401
 from app.scans.models import Scan  # noqa: F401
+from app.schedules.models import ScanSchedule  # noqa: F401
 from app.settings.models import (  # noqa: F401
     FindingSlaConfig,
     KernelConfig,
@@ -51,6 +52,8 @@ __all__ = [
     "AuditLog",
     "ProviderAccount",
     "Scan",
+    # ★ v0.85：定时扫描计划（把资产视图里"40 天没被检查"变成自动复查）
+    "ScanSchedule",
     "Finding",
     "FindingTimelineEntry",
     # ★ v0.79：扫描过程的项目黑板（跨轮次、跨扫描的认知）
