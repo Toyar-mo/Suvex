@@ -14,6 +14,7 @@ import {
 import { DEFAULT_PATH, NAV_ITEMS } from '@/navigation'
 import {
   ActivityPage,
+  AssetsPage,
   KernelPage,
   FindingsPage,
   IrPage,
@@ -48,6 +49,9 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   scans: ScansPage,
   activity: ActivityPage,
   findings: FindingsPage,
+  // ★ v0.85：资产视图。**同样别漏这个键** —— 漏了就是"侧栏点得动、
+  //   页面全白"，不报错也不警告（与下面 ir / tools 是同一个坑）。
+  assets: AssetsPage,
   reports: ReportsPage,
   // ★ 这一个键漏掉的症状是"侧栏点得动，但页面全白"——
   //   路由表由 `NAV_ITEMS.map()` 生成，`if (!Page) return null`

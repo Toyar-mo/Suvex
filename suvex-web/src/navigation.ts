@@ -2,6 +2,7 @@ import {
   Activity,
   FileText,
   Flag,
+  Layers,
   Radar,
   ScanSearch,
   Settings2,
@@ -84,6 +85,27 @@ export const NAV_ITEMS: NavItem[] = [
     icon: ShieldAlert,
     blurb: '每一条漏洞及其证据、验证脚本（PoC）与处置状态。',
     inMobileTabBar: true,
+  },
+  {
+    id: 'assets',
+    path: '/assets',
+    label: '资产总览',
+    shortLabel: '资产',
+    icon: Layers,
+    blurb: '我有哪些目标，每个现在能不能信 —— 包括那些从没被真正检查过的。',
+    /*
+      ★ 为什么它是一级入口，而不是"漏洞页的一个分组"：
+        漏洞页回答「我发现了什么」，这一问题它**结构上**答不上来 ——
+        「这台机器我从没检查过」不存在于任何一条漏洞里，它只存在于扫描记录里。
+        最危险的形态是「看起来干净」：扫了 5 次全挂的目标，漏洞数是 0，
+        在漏洞页与「确实什么都没发现」长得一模一样。把这个判读藏进二级页，
+        等于让用户永远看不到它。
+
+      ★ 没有进移动端底栏：底栏只放日常盯的那几个（总览/扫描/活动/漏洞）。
+        资产总览是**周期性**打开的（每周过一遍、交付前过一遍），
+        不是每秒看一眼的驾驶舱。它进「更多」面板。
+    */
+    inMobileTabBar: false,
   },
   {
     id: 'ir',
