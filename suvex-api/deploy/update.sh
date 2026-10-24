@@ -83,7 +83,10 @@ else
 fi
 
 STEP_NO=0
-STEP_TOTAL=7
+# 步骤总数从脚本自身数出来，不手写 —— 手写的那次就写错了（7 vs 实际 8），
+# 打印成 `[8/7]`，加一步之后还会继续漂。
+STEP_TOTAL="$(grep -c '^step "' "$0" 2>/dev/null || echo 0)"
+[ "$STEP_TOTAL" -gt 0 ] || STEP_TOTAL=8
 
 step() { STEP_NO=$((STEP_NO + 1)); printf '\n%s[%d/%d] %s%s\n' "$C_STEP" "$STEP_NO" "$STEP_TOTAL" "$1" "$C_RESET"; }
 ok()   { printf '  %s✓%s %s\n' "$C_OK" "$C_RESET" "$1"; }
@@ -122,7 +125,14 @@ step "解包"
 STAGE="$(mktemp -d /tmp/suvex_update.XXXXXX)"
 trap 'rm -rf "$STAGE"' EXIT
 
-run tar xzf "$TARBALL" -C "$STAGE"
+# ⚠️ 解包**在 dry-run 下也真执行**。
+#
+# 最初写成 `run tar xzf ...`，于是 dry-run 时只打印命令、STAGE 是空的，
+# 后面每一步的「有没有 app/」「有几个文件」全是基于空目录的假结论 ——
+# dry-run 就失去了意义（它该告诉你"这次会改什么"，而不是"我什么都没看"）。
+#
+# 解到 mktemp 出来的临时目录里，不碰 $API_DIR，所以真执行是无害的。
+tar xzf "$TARBALL" -C "$STAGE" || die 3 "解包失败：$TARBALL（是 tar.gz 吗）"
 
 # 兼容两种打包结构：tar 包里直接是 app/，或者外面套了一层 suvex-api/
 if [ -d "$STAGE/suvex-api/app" ]; then
