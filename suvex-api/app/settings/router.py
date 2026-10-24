@@ -63,6 +63,7 @@ from app.core.results import SaveOk
 from app.core.timeutil import now_utc
 from app.core.vocab import NotifyChannelKind, Severity, values
 from app.providers.schemas import ProviderOut
+from app.settings import dispatch
 from app.settings import service as settings_service
 from app.settings.schemas import (
     ChangePasswordRequest,
@@ -314,11 +315,7 @@ def update_finding_sla(
             #   会在几百条上逐条发查询（N+1）—— 那是一次"看起来莫名其妙慢"
             #   的保存，而且只在用户切到 confirmed 起算时才出现。
             .options(selectinload(Finding.timeline))
-            .where(
-                Finding.status.notin_(
-                    (FindingStatus.CLOSED.value, FindingStatus.FALSE_POSITIVE.value)
-                )
-            )
+            .where(Finding.status.notin_((FindingStatus.CLOSED.value, FindingStatus.FALSE_POSITIVE.value)))
         ).scalars()
     )
     if findings_service.refresh_sla(db, open_findings):
@@ -359,9 +356,7 @@ def save_scan_views(
     # 名字去重：两个同名视图在界面上分不出来，用户会以为其中一个没保存
     names = [v.name.strip() for v in payload.views]
     if len(set(names)) != len(names):
-        raise ApiError.validation(
-            "视图名称不能重复。", {"views": "有两个视图用了同一个名字"}
-        )
+        raise ApiError.validation("视图名称不能重复。", {"views": "有两个视图用了同一个名字"})
 
     for existing in _load_views(db):
         db.delete(existing)
@@ -385,12 +380,14 @@ def _load_views(db: Session) -> list:  # noqa: ANN001
 
 
 def _view_out(view) -> ScanViewOut:  # noqa: ANN001
-    return ScanViewOut(
-        id=view.id, name=view.name, query=view.query, createdAt=view.created_at
-    )
+    return ScanViewOut(id=view.id, name=view.name, query=view.query, createdAt=view.created_at)
 
 
-@router.get("", response_model=SettingsSnapshotOut, summary="一次返回 SettingsSnapshot（accounts/sandbox/notices/tokens）")
+@router.get(
+    "",
+    response_model=SettingsSnapshotOut,
+    summary="一次返回 SettingsSnapshot（accounts/sandbox/notices/tokens）",
+)
 def read_settings(
     _identity: Annotated[Identity, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
@@ -425,10 +422,7 @@ def read_settings(
     tokens = auth_service.list_tokens(db)
 
     return SettingsSnapshotOut(
-        accounts=[
-            ProviderOut.from_model(account)
-            for account in providers_service.list_providers(db)
-        ],
+        accounts=[ProviderOut.from_model(account) for account in providers_service.list_providers(db)],
         sandbox=sandbox,
         notices=NoticesOut(
             rule=NoticeRuleOut(
@@ -473,9 +467,7 @@ def _sandbox_out(db: Session, *, config=None) -> SandboxOut:  # noqa: ANN001
         executionSource=ExecutionSourceOut(
             # `is not None` 而不是真值判断：`0` 是合法输入（虽然会被区间校验挡住），
             # 用真值判断会让"设过 0"显示成"没设过"。
-            maxConcurrentScans=(
-                "user" if config.max_concurrent_scans is not None else "default"
-            ),
+            maxConcurrentScans=("user" if config.max_concurrent_scans is not None else "default"),
             scanMaxTurns="user" if config.scan_max_turns is not None else "default",
             scanMode="user" if config.scan_mode else "default",
         ),
@@ -614,9 +606,7 @@ def update_notice_rule(
     而不是一条 Postgres 的约束违反错误。
     """
     if payload.minSeverity not in set(values(Severity)):
-        raise ApiError.validation(
-            {"minSeverity": f"应为 {'、'.join(values(Severity))} 之一"}
-        )
+        raise ApiError.validation({"minSeverity": f"应为 {'、'.join(values(Severity))} 之一"})
 
     rule = settings_service.get_notice_rule(db)
     rule.min_severity = payload.minSeverity
@@ -627,9 +617,7 @@ def update_notice_rule(
     return _rule_out(rule)
 
 
-@router.get(
-    "/notices/channels", response_model=list[NotifyChannelOut], summary="通知渠道列表"
-)
+@router.get("/notices/channels", response_model=list[NotifyChannelOut], summary="通知渠道列表")
 def list_channels(
     _identity: Annotated[Identity, Depends(require_admin)],
     db: Annotated[Session, Depends(get_db)],
@@ -689,9 +677,7 @@ def update_channel(
     return _channel_out(channel)
 
 
-@router.delete(
-    "/notices/channels/{channelId}", status_code=204, summary="删除通知渠道"
-)
+@router.delete("/notices/channels/{channelId}", status_code=204, summary="删除通知渠道")
 def delete_channel(
     channelId: str,
     _identity: Annotated[Identity, Depends(require_admin)],
@@ -713,43 +699,74 @@ def test_channel(
 ) -> NotifyChannelOut:
     """发一条测试通知，并把结果记进 `verified` / `verifyError`。
 
-    ## ⚠️ 本轮**只做本地校验**，不真的往外发
+    ## v0.89：这一步已经**真的发**了
 
-    真实的发送需要一个 HTTP 客户端 + 每个渠道类型的协议实现
-    （SMTP / Webhook POST / Slack 的 payload 形状）。那是独立的一块工作，
-    而**假装发了**是本项目明确禁止的那类做法 —— 它会让界面显示
-    "已验证"，而真出事时一条通知都发不出去。
+    v0.22 那一版只做本地校验，并在 `verifyError` 里诚实地写"真实发送尚未
+    接入"——那时这是对的，因为假装发了会让界面显示一个绿勾、而真出事时
+    一条通知都发不出去。
 
-    所以这里做的是**能诚实做到的那部分**：校验地址形状，把结论写回。
-    形状不对的地址会被标成未验证并给出原因（这本身就有用 ——
-    用户在保存时就能发现拼错的 URL）。
+    现在 webhook 与 slack 两条链路已经在 `app/settings/dispatch.py` 里接上
+    （同一件事的两种载荷，都是 `POST` JSON），所以这里改成：
 
-    ⚠️ **这句话必须留在响应里**：`verifyError` 会写"尚未接入真实发送"，
-    而不是留一个空的成功态。用户看到的是"地址形状没问题，
-    但真实发送还没接" —— 而不是一个会撒谎的绿勾。
+        形状校验 → 真发一次 → 按**真实结果**写 verified / verifyError
+
+    ## 三条边界
+
+    * **邮件仍然不发**：SMTP 需要凭据与证书信任策略，`smtplib` 还是同步
+      阻塞的。这一轮不做半吊子实现，`verifyError` 里照实写"尚未接入"。
+    * **测试通知不进业务规则**：它不看 `min_severity`、不看
+      `notify_on_scan_complete` —— 用户点"发送测试"就是想现在收到一条。
+    * **失败一定带原因**：`verified=False` 时 `verifyError` 不能为空，
+      否则界面上只剩一个红点，用户无从知道该改哪里。
     """
     channel = settings_service.get_channel(db, channelId)
+
+    # ① 地址形状。形状不对就别真发 —— 那只会得到一次注定失败的请求，
+    #    而且是**出站**的（形状错的地址常常仍指向一台真实的外部主机）。
     problem = _target_shape_problem(channel.kind, channel.target)
-
-    if problem is None:
-        channel = settings_service.mark_channel_verified(
-            db,
-            channelId,
-            ok=False,
-            error="地址形状正确，但真实发送尚未接入（本轮只做本地校验）。",
-        )
-    else:
+    if problem is not None:
         channel = settings_service.mark_channel_verified(db, channelId, ok=False, error=problem)
+        return _channel_out(channel)
 
+    # ② 这条渠道这一轮发得出去吗（邮件发不出去、未知类型发不出去）。
+    unsupported = dispatch.channel_problem(channel.kind, channel.target)
+    if unsupported is not None:
+        channel = settings_service.mark_channel_verified(db, channelId, ok=False, error=unsupported)
+        return _channel_out(channel)
+
+    # ③ 真发。
+    #    ★ 形状校验已经 commit 过（`mark_channel_verified` 里有 commit），
+    #    所以这里**没有**开着的写事务，网络 I/O 不夹在两次 commit 之间。
+    #    这与 `finalize_scan` 那条「持锁窗口不跨 I/O」是同一条约束。
+    outcome = dispatch.dispatch_one(channel, _probe_payload(channel))
+
+    channel = settings_service.mark_channel_verified(
+        db, channelId, ok=outcome.sent, error=None if outcome.sent else outcome.reason
+    )
     return _channel_out(channel)
+
+
+def _probe_payload(channel) -> dispatch.NoticePayload:  # noqa: ANN001
+    """测试通知的载荷。
+
+    ★ 文案里写明「测试」，因为这条会真的到达用户的 Slack / 工单系统里。
+    一条长得像真实告警的测试消息会让人半夜爬起来看。`scan_id` 留空、
+    `scan_url` 为 `None` —— 它没有对应的扫描，编一个 id 出来只会制造
+    "点进去 404"。
+    """
+    return dispatch.NoticePayload(
+        scan_id="",
+        target=f"[测试] {channel.label}",
+        status="completed",
+        summary="这是一条来自 Suvex 的测试通知 —— 收到它说明这个渠道是通的",
+        severity="info",
+    )
 
 
 def _validate_channel_kind(kind: str) -> None:
     """渠道类型白名单。DB 上有 CHECK 兜底，这里先校验是为了中文消息。"""
     if kind not in set(values(NotifyChannelKind)):
-        raise ApiError.validation(
-            {"kind": f"应为 {'、'.join(values(NotifyChannelKind))} 之一"}
-        )
+        raise ApiError.validation({"kind": f"应为 {'、'.join(values(NotifyChannelKind))} 之一"})
 
 
 def _target_shape_problem(kind: str, target: str) -> str | None:

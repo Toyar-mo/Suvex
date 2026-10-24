@@ -41,6 +41,7 @@ tick()
 from __future__ import annotations
 
 import logging
+import queue
 import subprocess
 import threading
 from pathlib import Path
@@ -174,6 +175,19 @@ class ScanScheduler:
         self._lock = threading.Lock()
         # ★ 让整个 tick 串行。见 `tick()` 的说明 —— 少了它并发上限会失效。
         self._tick_lock = threading.Lock()
+        # ★ 通知投递走**独立线程**（v0.89）。
+        #
+        # 为什么不能就地发：`dispatch` 里一次 POST 的超时是 8 秒，而这条路径
+        # 在 `_tick_lock` 里。就地发的后果是 —— 用户配了 3 个渠道、其中两个
+        # 对端在超时边缘，那么一个 tick 就要 16 秒以上，而 `tick()` 还要跑
+        # `_dispatch_schedules` 与 `_claim_and_launch`。**到点的定时计划会晚
+        # 十几个 tick 才建出来，排队的扫描一直排着** —— 症状是"配了通知之后
+        # 扫描启动变慢了"，而且看不出跟通知有关。
+        #
+        # 所以：收尾时只把 scan_id 丢进队列（非阻塞），由一个守护线程慢慢发。
+        # 发失败只影响通知本身，见 `_notify_finished`。
+        self._notice_queue: queue.Queue[str] = queue.Queue()
+        self._notice_thread: threading.Thread | None = None
 
     # ══════════════════════════════════════════════════════
     # 生命周期
@@ -185,7 +199,42 @@ class ScanScheduler:
         self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="suvex-scan-scheduler", daemon=True)
         self._thread.start()
+        # 通知线程与调度线程同生共死：没有调度器就不会有扫描进终态，
+        # 那条队列也就不会有生产者。
+        self._notice_thread = threading.Thread(
+            target=self._notice_loop, name="suvex-notify-dispatch", daemon=True
+        )
+        self._notice_thread.start()
         logger.info("扫描调度器已启动（上限 %d）", get_settings().max_concurrent_scans)
+
+    def _notice_loop(self) -> None:
+        """通知投递线程：从队列里取 scan_id，投一条。
+
+        ## ★ 为什么是 `get(timeout=1.0)` 而不是阻塞 `get()`
+
+        阻塞 `get()` 会让线程在 `stop()` 之后仍卡在那儿，而 `stop()` 只
+        `join` 调度线程、不去戳这个队列 —— 于是每重启一次就漏一个线程。
+        1 秒的超时让它在 `_stop` 置位后**最多 1 秒**就自己退。
+        （实测过：这个项目里泄漏的线程会在下一次 `start()` 时叠加成一个
+        看不到的放大，而症状是"配置改了但行为还是老的"。）
+
+        ## 异常边界
+
+        `_notify_finished` 自己已经吞掉全部异常了，这里再兜一层是因为
+        **线程死掉比投递失败严重得多** —— 死掉之后所有通知静默消失，
+        而界面上一切正常。
+        """
+        while not self._stop.is_set():
+            try:
+                scan_id = self._notice_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            try:
+                self._notify_finished(scan_id)
+            except Exception:  # noqa: BLE001
+                logger.warning("通知线程处理 %s 时出错（忽略）", scan_id, exc_info=True)
+            finally:
+                self._notice_queue.task_done()
 
     def stop(self, *, timeout: float = 15.0) -> None:
         """停下来。
@@ -202,6 +251,14 @@ class ScanScheduler:
         if self._thread is not None:
             self._thread.join(timeout=timeout)
             self._thread = None
+        if self._notice_thread is not None:
+            # 它自己最多 1 秒就退出（见 `_notice_loop`），给 5 秒余量是因为
+            # 队列里可能还有一条正在发（一次 POST 最长 8 秒），而**不该**
+            # 为了一条通知把整个关停拖到十几秒。超时就让它当 daemon 走 ——
+            # 那条通知丢了，但服务确实停了（这是对的取舍：关停的语义是
+            # "现在停"，不是"把手上的事做完"）。
+            self._notice_thread.join(timeout=5.0)
+            self._notice_thread = None
         self._terminate_tracked(reason="服务停止，扫描已终止")
         logger.info("扫描调度器已停止")
 
@@ -309,6 +366,14 @@ class ScanScheduler:
         with self._lock:
             handles = list(self._procs.items())
 
+        #: 本轮里进了终态的扫描 id。
+        #:
+        #: ★ 为什么攒起来、在循环**外面**发通知：循环体里每个扫描各开一个
+        #: 会话、并在 `finally` 里关掉它。在会话里发 HTTP 就是
+        #: "持锁窗口跨 I/O"（`finalize` 的注释记着它撞过 Deadlock），
+        #: 所以这里只记 id，等会话关掉再统一发。见 `_notify_finished`。
+        finished: list[str] = []
+
         for scan_id, process in handles:
             code = process.poll()
             if code is None:
@@ -381,11 +446,97 @@ class ScanScheduler:
                 # ★ `ran` 一并传下去：退出码 2 与"真的跑过"必须同时成立
                 #   才算"发现了漏洞"。见 `service.finalize` 的判定。
                 service.finalize(session, scan, exit_code=code, flag=flag, strix_ran=ran)
+                # ★ 记下"这个扫描进了终态"，等 session 关掉之后再发通知。
+                #   在事务里发 HTTP 是 `finalize_scan` 明令禁止的（持锁窗口
+                #   跨 I/O 撞过 Deadlock），所以这里只做标记，动作放到 finally 之后。
+                finished.append(scan_id)
             except Exception:  # noqa: BLE001
                 session.rollback()
                 logger.exception("收尾扫描 %s 时出错", scan_id)
             finally:
                 session.close()
+
+        # ★ 通知**入队**（v0.89），不在这里发。
+        #
+        # 为什么不在会话关掉之后就发：这里在 `_tick_lock` 里面。`dispatch`
+        # 一次 POST 超时 8 秒，配了 3 个渠道就是 24 秒 —— 这期间
+        # `_dispatch_schedules` 与 `_claim_and_launch` 全排在后面，症状是
+        # "配了通知之后扫描启动变慢"，而且看不出跟通知有关。详见
+        # `__init__` 里 `_notice_queue` 那段。
+        for scan_id in finished:
+            self._notice_queue.put(scan_id)
+
+    def _notify_finished(self, scan_id: str) -> None:
+        """扫描进终态后按规则投递通知。**异常一律吞掉**，只留 warning。
+
+        与 `_import_for` 同一个口径：通知是**可观测性**，不是扫描本身。
+        它挂了不该让调度循环出错 —— 下一轮收尾的是别的扫描，这条通知
+        丢了就丢了（一次性事件，没有重试价值；重试只会把对端打挂）。
+        """
+        from app.settings import dispatch
+
+        conn = get_session_factory()()
+        try:
+            scan = conn.get(Scan, scan_id)
+            if scan is None:
+                return
+            payload = self._notice_payload(conn, scan)
+            outcome = dispatch.dispatch(conn, payload)
+            if outcome.skipped:
+                logger.debug("扫描 %s 不发通知：%s", scan_id, outcome.skip_reason)
+        except Exception:  # noqa: BLE001
+            logger.warning("投递扫描 %s 的通知时出错", scan_id, exc_info=True)
+        finally:
+            conn.close()
+
+    @staticmethod
+    def _notice_payload(conn, scan) -> object:  # noqa: ANN001
+        """把一条扫描拼成通知载荷。
+
+        ★ 严重度取**这次扫描里最高的那一档**，而不是扫描本身的等级
+        （扫描没有严重度）。一条 Critical 存在时整条通知按 critical 算 ——
+        因为 `min_severity` 问的是"这次有没有值得叫醒我的东西"。
+
+        ⚠️ 计数来自 `Scan.findings` 这个 JSON 列，**不是**一组整数列。
+        它的形状是 `Partial<Record<Severity, number>>`：**没有发现某一级别时
+        该键不存在，而不是 0**（`app/scans/models.py` 上那段注释说得很清楚）。
+        所以这里必须用 `.get(k, 0)` 读，不能直接下标 —— 直接下标在"这次
+        零发现"的扫描上会抛 `KeyError`，而那条路径恰恰是最常见的一条。
+
+        ⚠️ 也不在这里对 findings 表做聚合：JSON 列由 `refresh_scan_rollup`
+        在收尾路径上刚刷过（`finalize` 末尾那次调用），是现成的；再查一次
+        会多一次全表扫描，而这条路径每结束一个扫描就跑一次。
+        """
+        from app.core.vocab import Severity
+        from app.settings.dispatch import NoticePayload
+
+        counts: dict[str, int] = scan.findings or {}
+
+        def count_of(level: Severity) -> int:
+            return int(counts.get(level.value, 0) or 0)
+
+        for level in (Severity.CRITICAL, Severity.HIGH, Severity.MEDIUM, Severity.LOW):
+            if count_of(level) > 0:
+                severity = level.value
+                break
+        else:
+            severity = Severity.INFO.value
+
+        if scan.status == ScanStatus.COMPLETED.value:
+            summary = f"扫描完成，用时 {scan.duration_sec or 0} 秒"
+        else:
+            summary = f"扫描未完成：{(scan.failure_reason or '未知原因')[:120]}"
+
+        return NoticePayload(
+            scan_id=scan.id,
+            target=scan.target,
+            status=scan.status,
+            summary=summary,
+            severity=severity,
+            duration_sec=scan.duration_sec,
+            critical_count=count_of(Severity.CRITICAL),
+            high_count=count_of(Severity.HIGH),
+        )
 
     def _import_for(self, scan_id: str, *, backfill: bool = False, session=None) -> None:  # noqa: ANN001
         """给一个扫描导入外部事件与漏洞记录。**异常一律吞掉。**

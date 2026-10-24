@@ -18,10 +18,75 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
+from app.settings import dispatch
+
 API = "/api/v1"
+
+
+# ══════════════════════════════════════════════════════════
+# 出站打桩（v0.89）
+# ══════════════════════════════════════════════════════════
+#
+# `/test` 从 v0.89 起会**真的发**（见 `settings/router.py` 里那段说明），
+# 所以这个文件里凡是走到 `/test` 的用例都会做出站请求。
+#
+# ⚠️ 必须打桩，两个理由：
+#   1. 测试不该依赖网络，更不该真的去敲 `hooks.example.com`；
+#   2. `tests/conftest.py` 的出站拦截（`guarded_getaddrinfo`）会把这次
+#      请求变成 `EgressBlocked` 抛进被测代码里 —— 那看起来像产品缺陷，
+#      实际是测试环境在拦外网。
+#
+# 打的是 `dispatch.httpx.Client`（模块级名字），所以不需要起 mock server。
+
+
+class _FakeRecorder:
+    """记录每次 `post` 的 (url, body)，并可按需返回状态码 / 抛异常。"""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, Any]] = []
+        self.status_code: int = 200
+        self.text: str = ""
+        self.raise_on_post: BaseException | None = None
+
+
+@pytest.fixture
+def outbound(monkeypatch: pytest.MonkeyPatch) -> _FakeRecorder:
+    """把 dispatch 的 HTTP 客户端换成记录器，默认回 200。"""
+    recorder = _FakeRecorder()
+
+    class _Client:
+        def __init__(self, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def post(self, url: str, json: Any = None) -> httpx.Response:
+            if recorder.raise_on_post is not None:
+                raise recorder.raise_on_post
+            recorder.calls.append((url, json))
+            return httpx.Response(
+                recorder.status_code,
+                text=recorder.text,
+                request=httpx.Request("POST", url),
+            )
+
+    monkeypatch.setattr(dispatch.httpx, "Client", _Client)
+    # 假 client 没有真实连接池，`ensure_guarded` 的结构检查会失败 ——
+    # 这里置成空操作。`BlockedAddressError` **不打桩**：SSRF 那条行为的
+    # 验证在 `tests/test_notice_dispatch.py` 里，那里看的就是它。
+    monkeypatch.setattr(dispatch.netguard, "ensure_guarded", lambda _client: None)
+    return recorder
 
 
 def _create(client: TestClient, **overrides) -> dict:
@@ -53,9 +118,7 @@ def test_settings_snapshot_is_no_longer_501(ready_client: TestClient) -> None:
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert set(body) == {"accounts", "sandbox", "notices", "tokens"}, (
-        f"快照的块不对：{sorted(body)}"
-    )
+    assert set(body) == {"accounts", "sandbox", "notices", "tokens"}, f"快照的块不对：{sorted(body)}"
     # notices 里必须**同时**有规则与渠道 —— 少一块就是半成品
     assert set(body["notices"]) == {"rule", "channels"}
 
@@ -96,9 +159,7 @@ def test_channel_crud_is_no_longer_501(ready_client: TestClient) -> None:
     created = _create(ready_client)
     assert created["id"].startswith("ntc")
 
-    patched = ready_client.patch(
-        f"{API}/settings/notices/channels/{created['id']}", json={"label": "改个名"}
-    )
+    patched = ready_client.patch(f"{API}/settings/notices/channels/{created['id']}", json={"label": "改个名"})
     assert patched.status_code == 200, patched.text
     assert patched.json()["label"] == "改个名"
 
@@ -107,19 +168,38 @@ def test_channel_crud_is_no_longer_501(ready_client: TestClient) -> None:
     assert ready_client.get(f"{API}/settings/notices/channels").json() == []
 
 
-def test_channel_test_endpoint_is_no_longer_501(ready_client: TestClient) -> None:
+def test_channel_test_endpoint_is_no_longer_501(ready_client: TestClient, outbound: _FakeRecorder) -> None:
+    """★ v0.89 起这里**真的发**，成功就会亮绿勾。
+
+    v0.22 那一版断言的是"不能报成功，因为真实发送还没接"。现在接上了，
+    所以断言反过来了 —— 但**前提是这次发送真的发生**：`outbound.calls`
+    必须有一条，否则"verified=True"就只是一个没被验证过的声明。
+    """
     channel = _create(ready_client)
 
-    response = ready_client.post(
-        f"{API}/settings/notices/channels/{channel['id']}/test"
-    )
+    response = ready_client.post(f"{API}/settings/notices/channels/{channel['id']}/test")
 
     assert response.status_code == 200, response.text
     body = response.json()
-    # ★ 它**不能**报成功：真实发送还没接。报绿就是在撒谎。
+    assert len(outbound.calls) == 1, "没有发出请求 —— 那 verified=True 就是假的"
+    assert outbound.calls[0][0] == "https://hooks.example.com/suvex"
+    assert body["verified"] is True
+    assert not body["verifyError"]
+
+
+def test_channel_test_endpoint_reports_failure_not_success(
+    ready_client: TestClient, outbound: _FakeRecorder
+) -> None:
+    """对端挂了必须报**失败**并给原因 —— 这是绿色勾的本分。"""
+    channel = _create(ready_client)
+    outbound.status_code = 500
+    outbound.text = "boom"
+
+    body = ready_client.post(f"{API}/settings/notices/channels/{channel['id']}/test").json()
+
     assert body["verified"] is False
-    assert body["verifyError"], "没有给出原因 —— 用户无法据此修复"
-    assert "尚未接入" in body["verifyError"]
+    assert body["verifyError"], "失败却没给原因 —— 用户无法据此修复"
+    assert "500" in body["verifyError"]
 
 
 # ══════════════════════════════════════════════════════════
@@ -161,10 +241,7 @@ def test_rule_can_be_updated(ready_client: TestClient) -> None:
     assert body["notifyOnScanComplete"] is False
 
     # 再读一次确认真的落库了（而不是只在响应里改了）
-    assert (
-        ready_client.get(f"{API}/settings/notices/rule").json()["minSeverity"]
-        == "critical"
-    )
+    assert ready_client.get(f"{API}/settings/notices/rule").json()["minSeverity"] == "critical"
 
 
 def test_rule_rejects_an_unknown_severity(ready_client: TestClient) -> None:
@@ -224,7 +301,9 @@ def test_client_cannot_claim_verified(ready_client: TestClient) -> None:
     assert "verified" in error["details"]
 
 
-def test_changing_target_resets_verified(ready_client: TestClient, db_session: Session) -> None:
+def test_changing_target_resets_verified(
+    ready_client: TestClient, db_session: Session, outbound: _FakeRecorder
+) -> None:
     """★★ 改地址把 `verified` 打回 `False`。
 
     这是本模块最容易漏的一处：`verified` 的含义是"**这个地址**
@@ -232,10 +311,13 @@ def test_changing_target_resets_verified(ready_client: TestClient, db_session: S
 
     漏掉的症状是"配好了、显示已验证、但真出事时一条通知都没发出去"——
     而那时已经太晚了。
+
+    ⚠️ v0.89 起 `/test` 会真的发，所以要打桩（`outbound`）。这里**不用**
+    它的返回值，只是避免这次调用去敲真实主机 —— 本用例要验的是
+    PATCH 那一步的重置，不是发送。
     """
     channel = _create(ready_client)
     # 先把它标成已验证（直接改库，模拟"之前验证通过过"）
-    ready_client.post(f"{API}/settings/notices/channels/{channel['id']}/test")
     from app.settings import service as settings_service
 
     settings_service.mark_channel_verified(db_session, channel["id"], ok=True)
@@ -261,9 +343,7 @@ def test_changing_label_keeps_verified(ready_client: TestClient, db_session: Ses
 
     settings_service.mark_channel_verified(db_session, channel["id"], ok=True)
 
-    patched = ready_client.patch(
-        f"{API}/settings/notices/channels/{channel['id']}", json={"label": "换个名"}
-    )
+    patched = ready_client.patch(f"{API}/settings/notices/channels/{channel['id']}", json={"label": "换个名"})
 
     assert patched.json()["verified"] is True
 
@@ -283,20 +363,22 @@ def test_unknown_channel_kind_is_rejected(ready_client: TestClient) -> None:
     assert response.json()["error"]["code"] == "VALIDATION_FAILED"
 
 
-def test_test_endpoint_reports_a_bad_webhook_shape(ready_client: TestClient) -> None:
+def test_test_endpoint_reports_a_bad_webhook_shape(ready_client: TestClient, outbound: _FakeRecorder) -> None:
     """地址形状不对时，原因要说清是**形状**问题。
 
-    这与"尚未接入真实发送"是两种不同的原因，混成一句话会让用户
-    改了半天地址却发现不是那个问题。
+    这与"发送失败"是两种不同的原因，混成一句话会让用户改了半天地址
+    却发现不是那个问题。
+
+    ★ 而且形状不对时**不该出站**：形状错的地址常常仍指向一台真实外部
+    主机，发出去既浪费一次请求，又可能把那台主机卷进我们的错误排查里。
     """
     channel = _create(ready_client, target="hooks.example.com/no-scheme")
 
-    body = ready_client.post(
-        f"{API}/settings/notices/channels/{channel['id']}/test"
-    ).json()
+    body = ready_client.post(f"{API}/settings/notices/channels/{channel['id']}/test").json()
 
     assert body["verified"] is False
     assert "http://" in body["verifyError"]
+    assert outbound.calls == [], "形状不对却仍然发了请求"
 
 
 def test_disabled_channel_is_still_listed(ready_client: TestClient) -> None:
