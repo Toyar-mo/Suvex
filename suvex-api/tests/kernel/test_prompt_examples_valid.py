@@ -117,3 +117,79 @@ def test_examples_cover_more_than_one_category(text):
         if not str(o["args"].get("fact_key", "")).startswith("<")
     }
     assert len(cats) >= 2, f"示例只覆盖了 {cats} 一类"
+
+
+# ── v0.84 #4：`record_coverage` 也要有可照抄的示例 ────────────────
+#
+# 起因是实测数据：v0.84 那轮扫描 `list_coverage` 被调 2 次，
+# `record_coverage` **0 次** —— 模型会去**读**覆盖表，却从不往里写。
+# 追下来提示词里 `record_coverage` 只出现 1 次，还是挂在
+# 「已排除要写下来」这一条的从句里，既没有参数形状也没讲什么时候用。
+#
+# 「工具在、提示词提到过、模型不用」是这个项目已经踩过三次的坑
+# （`add_fact` 0 次、`record_coverage` 2→0 次、空参数 `{}` 3 次）。
+# 三次的共同解法都是同一个：**给一段能直接照抄的ACTION**。
+
+
+def _coverage_examples(text: str) -> list[tuple[int, dict]]:
+    out: list[tuple[int, dict]] = []
+    for m in FENCE_RE.finditer(text):
+        block = m.group(1)
+        if "ACTION:" not in block:
+            continue
+        line_no = text[: m.start()].count("\n") + 1
+        obj = json.loads(block.split("ACTION:", 1)[1].strip())
+        if obj.get("tool") == "record_coverage":
+            out.append((line_no, obj))
+    return out
+
+
+def test_record_coverage_has_examples(text):
+    """`record_coverage` 必须有可照抄的 ACTION 示例。
+
+    没有示例时，模型即使想记也不知道参数长什么样，只能 `{}`——
+    和 v0.83 那三次空 `record_fact` 是同一个失败模式。
+    """
+    assert len(_coverage_examples(text)) >= 2, (
+        "提示词里 `record_coverage` 的 ACTION 示例不足 —— "
+        "模型会转而去调 `list_coverage`（只读），覆盖表永远长不大"
+    )
+
+
+def test_record_coverage_examples_have_surface(text):
+    """`surface` 是唯一必填字段，示例里不能漏。"""
+    for line_no, obj in _coverage_examples(text):
+        args = obj.get("args")
+        assert isinstance(args, dict) and args, (
+            f"第 {line_no} 行：`record_coverage` 示例缺 args 包装"
+        )
+        surface = args.get("surface")
+        assert isinstance(surface, str) and surface.strip(), (
+            f"第 {line_no} 行：`record_coverage` 示例缺 `surface`（唯一必填字段）"
+        )
+
+
+def test_record_coverage_examples_show_both_outcomes(text):
+    """示例要同时给出「成立」和「已排除」两种结果。
+
+    只给一种，模型会以为覆盖表是给"发现"用的；
+    而 v0.84 要纠正的正是"干净的结果也得记"。
+    """
+    joined = ""
+    for _, obj in _coverage_examples(text):
+        joined += str(obj["args"].get("outcome", ""))
+    assert "成立" in joined, "示例里没有「成立」的结果"
+    assert "已排除" in joined, "示例里没有「已排除」的结果 —— 干净的结果也必须记"
+
+
+def test_explains_why_reading_is_not_enough(text):
+    """必须明说「只看不写，表永远是空的」。
+
+    这是 v0.84 实测那轮的**主要失败模式**（list 2 次 / record 0 次），
+    不点破的话模型会一直以为"查一下就知道有没有人测过"。
+    """
+    assert "list_coverage" in text
+    assert "读一百次" in text or "先写" in text, (
+        "缺少「只读不写没用」的说明"
+    )
+
