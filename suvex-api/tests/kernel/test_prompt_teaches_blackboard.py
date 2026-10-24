@@ -60,18 +60,46 @@ class TestPromptTeachesBlackboard:
         assert "项目黑板" in text
 
     def test_all_categories_reachable_from_prompt(self, text):
-        """提示词里举的例子必须落在合法 category 里，否则模型照着例子写会被拒。"""
+        """提示词里举的例子必须落在合法 category 里，否则模型照着例子写会被拒。
+
+        ⚠️ v0.84 修过一次**静默失效**：原来只扫 `record_fact(fact_key=` 这种
+        Python 调用式，而 v0.84 把示例改成了真实 ACTION 协议的形状
+        （`"fact_key": "xxx/yyy"`）。旧循环一行都匹配不上 -> 空转通过 ->
+        守卫看似在、其实早就不检查任何东西了。
+
+        现在同时认两种形状；并且**断言至少真的检查到了例子**，
+        否则"零匹配"会让它再次静默变成空测试。
+        """
+        import re
+
         from app.facts.models import FACT_CATEGORIES
 
         # 至少要提到 ruled-out（最值钱的那类）
         assert "ruled-out" in text
-        # 举的例子里的 key 前缀都必须是合法 category
+
+        # 两种形状都认：老的 Python 调用式 + 新的 ACTION JSON 式
+        patterns = (
+            re.compile(r'record_fact\(fact_key="([^"]+)"'),
+            re.compile(r'"fact_key"\s*:\s*"([^"]+)"'),
+        )
+
+        checked = 0
         for line in text.splitlines():
-            stripped = line.strip()
-            if "record_fact(fact_key=" in stripped:
-                key = stripped.split("record_fact(fact_key=", 1)[1].strip("\"') ")
-                cat = key.split("/", 1)[0]
-                assert cat in FACT_CATEGORIES, f"示例 key {key!r} 的分类 {cat!r} 不合法"
+            for pat in patterns:
+                for key in pat.findall(line):
+                    # 骨架里的占位符不是真实例子，跳过
+                    if key.startswith("<"):
+                        continue
+                    cat = key.split("/", 1)[0]
+                    assert cat in FACT_CATEGORIES, (
+                        f"示例 key {key!r} 的分类 {cat!r} 不合法"
+                    )
+                    checked += 1
+
+        assert checked >= 2, (
+            f"只检查到 {checked} 个示例 key —— 提示词的示例格式可能又变了，"
+            "这个守卫正在静默失效，请同步更新正则"
+        )
 
 
 class TestToolNamesStillRegistered:

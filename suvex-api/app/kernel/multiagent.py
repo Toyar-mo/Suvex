@@ -454,6 +454,40 @@ FACT_INDEX_NUDGE = (
 #: 那些轮次本来就没有可记的结论；6 轮之后还没有任何一条结论才是异常信号。
 FACT_DEBT_WINDOW = 6
 
+#: `record_fact` 的参数骨架（v0.84）。
+#:
+#: ## 为什么单独抽成一个常量
+#:
+#: 这个骨架要在**两个地方**逐字出现：
+#:   1. `FACT_DEBT_NUDGE`（欠账到阈值时插进状态段）
+#:   2. `_do_record_fact` 的空参数分支（模型发了 `{}` 时的回包）
+#:
+#: 两处手写同一段 JSON 迟早会漂。抽出来之后改一处即可。
+#:
+#: ## 为什么必须带 `"args"`
+#:
+#: v0.83 的旧骨架把 `fact_key` / `summary` 放在**顶层**，而
+#: `runner.parse_actions` 只认 `payload["args"]` —— 模型照抄旧骨架会得到
+#: `args={}`，也就是**又一个空参数**。这正是 v0.83 那 3 次 `{}` 的候选成因
+#: 之一，所以 v0.84 把包装层写死进来，不再留给人手补。
+#:
+#: ## 为什么用 `+` 拼而不是写进 f-string / `.format()`
+#:
+#: ⚠️ **拼接发生在定义时**：`+` 拼出来的字符串里就是真花括号，所以
+#: 任何拿这个常量去 `.format()` 的地方都会把 `{"tool"` 当成替换字段。
+#:
+#: v0.84 第一次改写时就踩了：把 `FACT_DEBT_NUDGE` 定义成
+#: `"...{n}...".format` 拼骨架，结果调用点 `.format(n=6)` 直接抛
+#: `KeyError: '"tool"'` —— 那会让**每一个欠账到阈值的扫描崩**。
+#: 所以拆成三段，只 format 真正含 `{n}` 的那段，骨架原样接上。
+_RECORD_FACT_SKELETON = (
+    '{"tool": "record_fact", "args": {'
+    '"fact_key": "<category>/<slug>", '
+    '"summary": "<一句话结论，≤300 字>", '
+    '"confidence": "confirmed|tentative|deprecated", '
+    '"evidence": "<你凭什么这么判断，一句话>"}}'
+)
+
 #: 欠账达到 `FACT_DEBT_WINDOW` 时追加的强制提醒（v0.83）。
 #:
 #: ⚠️ 只在**欠账触发**时出现，不是每轮。区别：
@@ -470,7 +504,18 @@ FACT_DEBT_WINDOW = 6
 #: 让模型从零构造 `record_fact` 的参数是一次额外的认知负担 ——
 #: 而它现在正处在"忙着干活"的状态，任何额外负担都会被推迟。
 #: 给一个只需替换内容的骨架，把成本降到接近零。
-FACT_DEBT_NUDGE = (
+#:
+#: ## ★ 拼接顺序：**先 format 前半段，再拼骨架**
+#:
+#: 换成"整条写完再 `.format(n=...)`"会崩：
+#:
+#:     FACT_DEBT_NUDGE.format(n=6)
+#:     KeyError: '"tool"'
+#:
+#: 因为骨架里是**真**花括号。所以拆三段：`_FACT_DEBT_NUDGE_HEAD`
+#: （唯一含 `{n}`，要 format）+ `_RECORD_FACT_SKELETON`（原样）
+#: + `_FACT_DEBT_NUDGE_TAIL`（原样）。生产走 `fact_debt_nudge(n)`。
+_FACT_DEBT_NUDGE_HEAD = (
     "⚠️ **你已经 {n} 轮没有把结论写进项目黑板了。**\n"
     "\n"
     "这一轮结束前，**先调一次 `record_fact`**，再继续你的探查。\n"
@@ -479,14 +524,33 @@ FACT_DEBT_NUDGE = (
     "按这个骨架填：\n"
     "\n"
     "```\n"
-    'ACTION: {{"tool": "record_fact", "fact_key": "<category>/<slug>", '
-    '"summary": "<一句话结论，≤300 字>", "category": "<endpoint|credential|surface|ruled-out|constraint|note>", '
-    '"confidence": "confirmed", "evidence": "<你凭什么这么判断，一句话>"}}\n'
+    "ACTION: "
+)
+
+_FACT_DEBT_NUDGE_TAIL = (
+    "\n"
     "```\n"
     "\n"
     "**为什么不能跳过**：这轮扫描结束、对话历史被裁掉之后，"
     "你上面那些结论就没了 —— 下次扫同一个目标要从头再来一遍。"
 )
+
+
+def fact_debt_nudge(n: int) -> str:
+    """生成欠账提醒 —— **唯一正确的调用方式**。
+
+    不要写 `FACT_DEBT_NUDGE.format(n=n)`：骨架里的花括号会让它抛
+    `KeyError: '"tool"'`。见 `_FACT_DEBT_NUDGE_HEAD` 的说明。
+    """
+    return _FACT_DEBT_NUDGE_HEAD.format(n=n) + _RECORD_FACT_SKELETON + _FACT_DEBT_NUDGE_TAIL
+
+
+#: 兼容用的常量（0 填充的示例文本），不是生产用法。
+#:
+#: `tests/kernel/test_fact_debt_nudge.py` 有多处 `from ... import FACT_DEBT_NUDGE`
+#: 的引用，而那些测试验的是"提醒文案该有什么"，与那个数字无关 ——
+#: 保留这个名字免得连带改一堆断言。生产一律调 `fact_debt_nudge(n)`。
+FACT_DEBT_NUDGE = fact_debt_nudge(0)
 
 #: Idea 的合法状态。`open` 待做 / `doing` 在做 / `done` 做成了 / `dropped` 走不通。
 IDEA_STATUS = frozenset({"open", "doing", "done", "dropped"})
@@ -904,7 +968,9 @@ class SharedState:
         # "你现在做的事和规矩不一致"。这是它和常驻引导唯一的差别，
         # 也是它值得多占这几百字节的全部理由。
         if fact_debt >= FACT_DEBT_WINDOW:
-            parts.append(FACT_DEBT_NUDGE.format(n=fact_debt))
+            # ⚠️ 用 `fact_debt_nudge(n)`，**不是** `FACT_DEBT_NUDGE.format(n=...)` ——
+            # 后者会抛 `KeyError: '"tool"'`（骨架里的真花括号被当成替换字段）。
+            parts.append(fact_debt_nudge(fact_debt))
 
         if not parts:
             return ""
@@ -1490,6 +1556,26 @@ def _do_record_fact(
             note="本次扫描未启用项目黑板（record_fact 需要落库）。"
             "请改用 `add_fact` 记内存态事实，或直接继续。",
             stored=False,
+        )
+    if not args:
+        # ★ v0.84：空参数**不**只回一句"要 fact_key"。
+        #
+        # v0.83 的真实扫描里 `record_fact` 被调了 11 次，其中 **3 次是空参数
+        # `{}`**，全在最早期 —— 模型"想记账"但那一刻不知道骨架长什么样，
+        # 先发个空对象试探（后面被 `_json_err` 教会了格式，所以后面 8 次都对）。
+        #
+        # 提示词 §6.2.1.2 现在给了骨架，但提示词是几万字的，模型在赶进度时
+        # 会跳过细节。**报错回包是它一定会读的**（因为它在等结果），所以把
+        # 骨架放在这里比放在提示词里命中率更高。两处都写不嫌多 —— 这段文字
+        # 与 `FACT_DEBT_NUDGE` 里的骨架保持同一形状，改一处就要同步另一处。
+        return _json_err(
+            "record_fact 需要参数。按这个骨架填：\n"
+            "\n"
+            "ACTION: " + _RECORD_FACT_SKELETON + "\n"
+            "\n"
+            "`fact_key` 形状是 `category/slug`（全小写、只用 `-`），category 取 "
+            "endpoint / credential / surface / ruled-out / constraint / note 之一；"
+            "`summary` ≤300 字；`confidence` 取 confirmed / tentative / deprecated。"
         )
     try:
         res = store.record(
