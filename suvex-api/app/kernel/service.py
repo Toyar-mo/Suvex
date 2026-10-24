@@ -4127,6 +4127,47 @@ def save_disabled_tools(db: Session, disabled: list[str]) -> dict:
     return tools_catalog(db)
 
 
+def skills_catalog() -> dict:
+    """列出随代码分发的**技能包**（`prompts/skills/**/*.md`）。
+
+    ## 为什么这个端点要有
+
+    技能包是 `load_skill` 的输入，但它此前**没有任何界面入口** ——
+    部署者既看不到一共几篇、也不知道模型能查到什么。
+    这与"工具清单没有端点"是同一个缺口（v0.82 修过一次，见 `tools_catalog`）。
+
+    ## 为什么按 category 分组、且保留空分类
+
+    分组顺序直接决定界面栏位顺序。空分类**保留**是有意的：
+    "这一栏没有技能"与"没有这一栏"在界面上是两回事，
+    前者说明打包漏了（本该有），后者是正常布局。
+
+    ⚠️ `path` **不下发**：它是宿主文件系统路径，对界面无用，
+    且会泄露部署目录结构。只给 name / category / description。
+    """
+    from app.kernel.skills import discover_skills
+
+    skills = discover_skills()
+    categories: dict[str, list[dict]] = {}
+    for skill in skills:
+        categories.setdefault(skill.category, []).append(
+            {
+                "name": skill.name,
+                "category": skill.category,
+                "description": skill.description,
+            }
+        )
+    for items in categories.values():
+        items.sort(key=lambda item: item["name"])
+    return {
+        "total": len(skills),
+        "categories": [
+            {"category": name, "skills": items}
+            for name, items in sorted(categories.items())
+        ],
+    }
+
+
 __all__ = [
     "MAX_SYNC_CHALLENGES",
     "MAX_SYNC_COMPETITIONS",
@@ -4149,6 +4190,7 @@ __all__ = [
     "get_competition_or_404",
     "get_disabled_tools",
     "save_disabled_tools",
+    "skills_catalog",
     "tools_catalog",
     "get_ctf2_config",
     "get_mcp_servers",

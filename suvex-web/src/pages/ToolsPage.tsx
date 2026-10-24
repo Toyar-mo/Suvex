@@ -9,6 +9,8 @@ import { useAuth } from '@/data/auth-store'
 import {
   disabledCoreTools,
   ensureToolsLoaded,
+  filterSkills,
+  filterTools,
   groupTools,
   healthOf,
   loadTools,
@@ -47,7 +49,7 @@ import { useEffect, useMemo, useState } from 'react'
  */
 
 export function ToolsPage() {
-  const { mcp, catalog, status, error } = useTools()
+  const { mcp, catalog, skills, status, error } = useTools()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
 
@@ -60,13 +62,28 @@ export function ToolsPage() {
   const [savingMcp, setSavingMcp] = useState(false)
   const [mcpError, setMcpError] = useState<string | null>(null)
 
+  /** ★ v0.87：工具搜索与"只看有问题的"。 */
+  const [toolQuery, setToolQuery] = useState('')
+  const [onlyProblems, setOnlyProblems] = useState(false)
+  /** 技能库搜索（与工具搜索分开 —— 两者搜的是不同集合，共用一个框会互相污染）。 */
+  const [skillQuery, setSkillQuery] = useState('')
+
   useEffect(() => {
     ensureToolsLoaded()
   }, [])
 
+  /*
+    ★ 筛选后的可见集。
+    `groupTools` 收到的必须是**筛选后**的列表 —— 否则搜索只影响计数、
+    不影响实际渲染（那是"搜了但没筛"的经典半实现）。
+  */
+  const visibleTools = useMemo(
+    () => filterTools(catalog.tools, { query: toolQuery, onlyProblems }),
+    [catalog.tools, toolQuery, onlyProblems],
+  )
   const grouped = useMemo(
-    () => groupTools(catalog.tools, catalog.groups),
-    [catalog.tools, catalog.groups],
+    () => groupTools(visibleTools, catalog.groups),
+    [visibleTools, catalog.groups],
   )
   const health = useMemo(() => healthOf(catalog.tools), [catalog.tools])
 
@@ -220,6 +237,48 @@ export function ToolsPage() {
                 </div>
               </header>
 
+              {/*
+                ★ v0.87：搜索 + "只看有问题的"。
+                工具数到 10 还算好找，但这一栏会随版本增长；
+                而"我想确认某个工具是不是开着"是一个**高频但目标明确**的动作 ——
+                让它能在两秒内完成，比把清单排得更好看有用。
+              */}
+              <div className="flex flex-wrap items-center gap-tight border-b border-line px-4 py-2">
+                <input
+                  value={toolQuery}
+                  onChange={(event) => setToolQuery(event.target.value)}
+                  placeholder="搜索工具（名字 / 中文名 / 用途）"
+                  className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
+                />
+                <button
+                  type="button"
+                  onClick={() => setOnlyProblems((prev) => !prev)}
+                  className={cn(
+                    'rounded-sm border px-2 py-1 text-[12px] transition-ui duration-fast',
+                    onlyProblems
+                      ? 'border-line-accent text-ink'
+                      : 'border-line text-ink-muted hover:border-line-strong',
+                  )}
+                >
+                  只看有问题的
+                </button>
+                {(toolQuery || onlyProblems) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToolQuery('')
+                      setOnlyProblems(false)
+                    }}
+                    className="text-[12px] text-ink-faint transition-ui duration-fast hover:text-ink"
+                  >
+                    清除筛选
+                  </button>
+                )}
+                <span className="text-[12px] text-ink-faint">
+                  {visibleTools.length} / {catalog.tools.length}
+                </span>
+              </div>
+
               {toolsError && (
                 <div className="flex items-start gap-tight border-b border-line px-4 py-2.5 text-[13px] text-signal-risk">
                   <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
@@ -281,6 +340,84 @@ export function ToolsPage() {
               >
                 改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的配置。
               </footer>
+            </section>
+
+            {/*
+              ── 技能库（v0.87）─────────────────────────────
+
+              ★ 为什么它必须出现在这一页：技能是 `load_skill` 的输入，
+                而此前**没有任何界面入口** —— 部署者看不到模型能查到什么。
+                这与"工具清单没有端点"是同一个缺口。
+            */}
+            <section className="rounded-md border border-line bg-surface">
+              <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
+                <div>
+                  <h2 className="text-sm font-medium text-ink">技能库</h2>
+                  <p className="mt-1 max-w-[64ch] text-[13px] leading-relaxed text-ink-muted">
+                    模型按需用 <code className="font-mono">load_skill</code>{' '}
+                    拉取的速查卡。随代码分发，不需要配置；它们是<b>只读文本</b>，
+                    不会执行任何命令。
+                  </p>
+                </div>
+                <span className="text-[12px] text-ink-faint">{skills.total} 篇</span>
+              </header>
+
+              <div className="flex flex-wrap items-center gap-tight border-b border-line px-4 py-2">
+                <input
+                  value={skillQuery}
+                  onChange={(event) => setSkillQuery(event.target.value)}
+                  placeholder="搜索技能（名字 / 分类 / 描述）"
+                  className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
+                />
+                {skillQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setSkillQuery('')}
+                    className="text-[12px] text-ink-faint transition-ui duration-fast hover:text-ink"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+
+              {(() => {
+                const filtered = filterSkills(skills.categories, skillQuery)
+                if (skills.total === 0) {
+                  return (
+                    <p className="px-4 py-6 text-sm text-ink-muted">
+                      没有找到技能包。它们随代码分发在{' '}
+                      <code className="font-mono">prompts/skills/</code> 下，缺了不影响工具可用。
+                    </p>
+                  )
+                }
+                if (filtered.length === 0) {
+                  return (
+                    <p className="px-4 py-6 text-sm text-ink-muted">
+                      没有匹配「{skillQuery}」的技能。
+                    </p>
+                  )
+                }
+                return filtered.map((group) => (
+                  <div key={group.category}>
+                    <h3 className="border-b border-line/60 bg-surface-raised/30 px-4 py-1.5 text-[11px] tracking-wide text-ink-faint uppercase">
+                      {group.category}
+                      <span className="ml-1 normal-case">（{group.skills.length}）</span>
+                    </h3>
+                    <ul>
+                      {group.skills.map((skill) => (
+                        <li key={skill.name} className="border-b border-line/60 last:border-b-0">
+                          <div className="px-4 py-2">
+                            <code className="font-mono text-[13px] text-ink">{skill.name}</code>
+                            <p className="mt-0.5 text-[12px] leading-relaxed text-ink-muted">
+                              {skill.description || '（这篇没有写描述）'}
+                            </p>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))
+              })()}
             </section>
           </div>
         )}

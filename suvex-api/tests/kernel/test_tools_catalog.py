@@ -626,3 +626,71 @@ def test_call_mcp_declares_its_default_blind_spot() -> None:
     # 必须同时讲清「会发生什么」与「该怎么读」
     assert "命中 0" in text
     assert "没查这一层" in text or "基础那一层" in text
+
+
+# ══════════════════════════════════════════════════════════
+# 8. 技能库（v0.87）
+# ══════════════════════════════════════════════════════════
+#
+# 技能包是 `load_skill` 的输入，此前**没有任何界面入口** ——
+# 部署者看不到一共几篇、也不知道模型能查到什么。
+# 这与"工具清单没有端点"是同一个缺口（v0.82 修过一次）。
+
+
+def test_skills_endpoint_lists_skills(ready_client) -> None:  # noqa: ANN001
+    """`GET /kernel/skills` 回技能清单，且**不下发宿主路径**。"""
+    resp = ready_client.get(f"{API}/kernel/skills")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+
+    assert body["total"] > 0, "技能库为空 —— prompts/skills 没打包进部署？"
+    names = [s["name"] for group in body["categories"] for s in group["skills"]]
+    assert len(names) == body["total"], "total 与逐条列出数不一致"
+    # ⚠️ 路径是宿主文件系统信息，界面用不到 —— 与 McpServerOut 不下发 env 同理
+    for group in body["categories"]:
+        for skill in group["skills"]:
+            assert "path" not in skill
+            assert skill["name"]
+            assert skill["category"] == group["category"]
+
+
+def test_skills_frontmatter_multiline_description_parsed() -> None:
+    """★ YAML 折叠标量（`description: >-`）必须被解析成真实描述。
+
+    ## 这条是实测抓到的缺陷
+
+    第一版 `_parse_frontmatter` 只认单行 `key: value`，而新引入的一批技能
+    用的是折叠标量。于是 `description` 被解析成字面量 `">-"` ——
+    技能照样能被 `load_skill` 加载（`name` 是单行的），
+    只有"列表里看到的描述"是错的。而描述正是模型判断
+    "该不该加载这一篇"的唯一依据。
+
+    ⚠️ 排除 `methodology` 分类之外也要查：本项目自己的技能用的是单行写法，
+    只有外来技能才用折叠 —— 所以这条测试必须遍历全部技能，
+    不能只抽查我们自己写的那几篇。
+    """
+    from app.kernel.skills import discover_skills
+
+    bad = [
+        (s.name, s.description)
+        for s in discover_skills()
+        if s.description in (">-", ">", "|", "|-", "")
+    ]
+    assert not bad, f"这些技能的描述没被正确解析（摘要是 YAML 标记本身）：{bad}"
+
+
+def test_skills_catalog_never_puts_path_in_payload() -> None:
+    """`skills_catalog` 不许把宿主路径放进回执。
+
+    它是 read 级端点，只读账号也能看到 —— 顺手泄露部署目录结构
+    是没必要的信息暴露。与 `McpServerOut` 不下发 `env` 同一条纪律。
+
+    ⚠️ 用源码断言而不是行为断言：要验的是"这个 dict 里有没有那个键"，
+    而行为断言在字段**改叫别的名字但仍是路径**时抓不到。
+    """
+    import inspect
+
+    from app.kernel import service
+
+    src = inspect.getsource(service.skills_catalog)
+    assert '"path"' not in src, "skills_catalog 把宿主路径放进回执了"

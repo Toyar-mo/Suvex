@@ -148,10 +148,26 @@ export type ToolsStatus = 'loading' | 'ready' | 'error'
 export interface ToolsState {
   mcp: McpServersSnapshot
   catalog: KernelToolsSnapshot
+  /** ★ v0.87：技能库（`load_skill` 可加载的速查卡）。 */
+  skills: KernelSkillsSnapshot
   status: ToolsStatus
   error: ApiError | null
 }
 
+/** 一篇技能包。**没有 `path`** —— 后端刻意不下发宿主路径。 */
+export interface KernelSkill {
+  name: string
+  category: string
+  description: string
+}
+
+/** `GET /kernel/skills` 的响应（按分类分组）。 */
+export interface KernelSkillsSnapshot {
+  total: number
+  categories: { category: string; skills: KernelSkill[] }[]
+}
+
+const EMPTY_SKILLS: KernelSkillsSnapshot = { total: 0, categories: [] }
 const EMPTY_MCP: McpServersSnapshot = { servers: [] }
 const EMPTY_CATALOG: KernelToolsSnapshot = {
   tools: [],
@@ -161,6 +177,7 @@ const EMPTY_CATALOG: KernelToolsSnapshot = {
 
 let mcp: McpServersSnapshot = EMPTY_MCP
 let catalog: KernelToolsSnapshot = EMPTY_CATALOG
+let skills: KernelSkillsSnapshot = EMPTY_SKILLS
 let status: ToolsStatus = 'loading'
 let loadError: ApiError | null = null
 
@@ -177,10 +194,10 @@ let loadStarted = false
  * 快照必须**引用稳定** —— `useSyncExternalStore` 每次渲染都比较它。
  * 所以所有变更走"整体替换"，且只在真的变更时替换。
  */
-let snapshot: ToolsState = { mcp, catalog, status, error: loadError }
+let snapshot: ToolsState = { mcp, catalog, skills, status, error: loadError }
 
 function commit() {
-  snapshot = { mcp, catalog, status, error: loadError }
+  snapshot = { mcp, catalog, skills, status, error: loadError }
   emit()
 }
 
@@ -191,6 +208,7 @@ function getSnapshot(): ToolsState {
 const SERVER_SNAPSHOT: ToolsState = {
   mcp: EMPTY_MCP,
   catalog: EMPTY_CATALOG,
+  skills: EMPTY_SKILLS,
   status: 'loading',
   error: null,
 }
@@ -232,20 +250,23 @@ export async function loadTools(): Promise<void> {
   loadError = null
   commit()
 
-  const [mcpResult, catalogResult] = await Promise.allSettled([
+  const [mcpResult, catalogResult, skillsResult] = await Promise.allSettled([
     api.get<McpServersSnapshot>('/kernel/mcp-servers'),
     api.get<KernelToolsSnapshot>('/kernel/tools'),
+    // ★ v0.87：技能库也一起拉。三个端点并行 —— 串行会让这一页的
+    // 可用时间变成三者之和，而它们互不依赖。
+    api.get<KernelSkillsSnapshot>('/kernel/skills'),
   ])
 
   /*
     ★ 用 `allSettled` 而不是 `all`，且**部分成功也保留数据**。
 
-    理由：这两块回答的是不同问题（"外部接进来什么" vs "内置的开了哪些"）。
-    用 `all` 的话，MCP 端点 500 会让工具清单也变成空白 —— 而用户
-    只是想看工具清单，却得到一个"整页加载失败"。部分成功时把拿到的
-    显示出来，比整页白屏有用。
+    理由：这几块回答的是不同问题（"外部接进来什么" / "内置的开了哪些" /
+    "模型能查到什么"）。用 `all` 的话，MCP 端点 500 会让工具清单也变成
+    空白 —— 而用户只是想看工具清单，却得到一个"整页加载失败"。
+    部分成功时把拿到的显示出来，比整页白屏有用。
 
-    只有**两个都失败**才算整页失败。
+    只有**三个都失败**才算整页失败。
   */
   const errors: ApiError[] = []
 
@@ -261,7 +282,13 @@ export async function loadTools(): Promise<void> {
     errors.push(messageOf(catalogResult.reason))
   }
 
-  if (errors.length === 2) {
+  if (skillsResult.status === 'fulfilled') {
+    skills = skillsResult.value
+  } else {
+    errors.push(messageOf(skillsResult.reason))
+  }
+
+  if (errors.length === 3) {
     status = 'error'
     loadError = errors[0]
   } else {
@@ -475,4 +502,64 @@ export function parseTimeout(raw: string): number | null {
   // 而不是提交上去换一个 422。
   if (value > 1800) return null
   return value
+}
+
+// ─────────────────────────────────────────────
+// 筛选（v0.87，工具管理页的搜索）
+// ─────────────────────────────────────────────
+
+/**
+ * 按关键词与状态筛选工具。
+ *
+ * ## 为什么匹配 `name` / `label` / `summary` 三个字段
+ *
+ * 用户的搜索习惯不统一：有人记得英文标识符（`run_shell`），
+ * 有人记得中文名（"执行命令"），有人记得它能干什么（"shell"）。
+ * 只匹配一个字段，另两类人就搜不到 —— 而"搜不到"会被读成"没有这个工具"。
+ *
+ * ## 为什么关键词大小写不敏感、且按空白切分取**全部**命中
+ *
+ * - 大小写不敏感：没人会记得 `run_shell` 还是 `Run_Shell`；
+ * - 多词取交集（AND）：`web 扫描` 应当收窄结果而不是放大 ——
+ *   用户多打一个词是为了**缩小**范围，若按 OR 处理，打越多词结果越多，
+ *   与直觉相反。
+ */
+export function filterTools(
+  tools: KernelTool[],
+  options: { query?: string; onlyProblems?: boolean } = {},
+): KernelTool[] {
+  const query = (options.query ?? '').trim().toLowerCase()
+  const terms = query ? query.split(/\s+/) : []
+
+  return tools.filter((tool) => {
+    if (options.onlyProblems) {
+      // "只看有问题的" = 关掉了 或 依赖没就绪。
+      // 这两类正是用户需要动手的，正常可用的没有动作。
+      if (tool.enabled && tool.ready) return false
+    }
+    if (terms.length === 0) return true
+    const haystack = `${tool.name} ${tool.label} ${tool.summary}`.toLowerCase()
+    return terms.every((term) => haystack.includes(term))
+  })
+}
+
+/** 按关键词筛选技能（匹配 name / description / category）。 */
+export function filterSkills(
+  categories: { category: string; skills: KernelSkill[] }[],
+  query: string,
+): { category: string; skills: KernelSkill[] }[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
+  if (terms.length === 0) return categories
+
+  return categories
+    .map((group) => ({
+      category: group.category,
+      skills: group.skills.filter((skill) => {
+        const haystack = `${skill.name} ${skill.category} ${skill.description}`.toLowerCase()
+        return terms.every((term) => haystack.includes(term))
+      }),
+    }))
+    // 筛选后空分类**丢掉**（与"清单本身有空分类要保留"不同：
+    // 那是打包问题，这是筛选的必然结果，留着只会让界面空一片）
+    .filter((group) => group.skills.length > 0)
 }

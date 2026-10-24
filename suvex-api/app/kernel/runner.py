@@ -65,6 +65,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import subprocess
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -3618,7 +3619,27 @@ async def _tool_call_mcp(args: dict[str, Any], *, spec: SolveSpec) -> str:
 
 
 async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) -> str:
-    """在沙箱容器里执行命令。**这是解题的主力工具。**"""
+    """在沙箱容器里执行命令。**这是解题的主力工具。**
+
+    ## ★ v0.87：补齐「工作目录」与「输出截断的明示」
+
+    对照 CyberStrikeAI 的 `exec` 工具配方后发现我们缺两样**高频实用**的能力：
+
+      1. **工作目录**：解一道题常常在同一个目录里连做几步（解压 → 进去 →
+         跑脚本）。没有 `cwd` 时模型只能每步都写 `cd /work/x && ...`，
+         容易因为漏 `&&` 而在错误目录执行 —— 那种错误**不报错**，
+         只会让后续判断全错。
+      2. **截断要说清**：输出被截断时，模型看到的是一段"看起来完整"的文本。
+         它据此下的结论可能是错的（比如要找的东西正好在截断点之后）。
+         所以截断必须**在返回里明说**，而不是静默丢。
+
+    ## ⚠️ 但执行位置不跟它
+
+    它的 `exec` 是宿主机 `sh -c`；我们是**独立容器**
+    （`--network none` / `--read-only` / `--cap-drop ALL` / `--pids-limit`）。
+    那是本项目最硬的差异化，不因为"对方有这个工具"而放弃 ——
+    能加的是**参数能力**，不是**执行位置**。
+    """
     command = str(args.get("command") or "").strip()
     if not command:
         return "参数错误：需要 `command`。"
@@ -3626,10 +3647,40 @@ async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) ->
     # 夹在合理区间里：一个 `timeout_seconds: 100000` 会让这道题
     # 永远不返回，而调度器只能看到"还在跑"。
     timeout = max(5, min(timeout, DEFAULT_SHELL_TIMEOUT))
+
+    # ★ `cwd` 只允许 `/work` 之下。
+    #
+    # 为什么限制：容器里只有 `/work` 是可写 tmpfs，其余是只读根。
+    # 让模型把 cwd 指到 `/etc` 不是安全漏洞（那是只读的），而是会
+    # **让它误以为自己在工作区**——随后写文件会失败，而报错是
+    # "Read-only file system"，看起来像权限问题。直接挡住并说清
+    # "只能给 /work 之下"，比让它撞一次墙更省回合。
+    raw_cwd = str(args.get("cwd") or "").strip()
+    if raw_cwd:
+        if not raw_cwd.startswith("/work"):
+            return (
+                f"参数错误：`cwd` 只能是 `/work` 之下的路径（收到 {raw_cwd!r}）。\n"
+                "容器里只有 `/work` 可写，其余文件系统是只读的。"
+            )
+        # 用 `cd ... &&` 前缀而不是给执行器加参数：容器执行是
+        # `sh -c <command>`，前缀最简单且不依赖执行器支持 cwd。
+        command = f"cd {shlex.quote(raw_cwd)} && {command}"
+
     result = sandbox.shell(command, timeout=timeout)
     if result.exit_code == 124:
         return f"命令超时（{timeout} 秒）已被容器内 timeout 终止。\n{result.combined()}"
-    return result.combined()
+
+    out = result.combined()
+    # ★ 截断必须明示：`MAX_TOOL_OUTPUT_CHARS` 是工具输出上限，超了会被切。
+    if len(out) > MAX_TOOL_OUTPUT_CHARS:
+        return (
+            out[:MAX_TOOL_OUTPUT_CHARS]
+            + f"\n\n⚠️ 输出被截断：原长 {len(out)} 字符，上限 {MAX_TOOL_OUTPUT_CHARS}。"
+            "\n**你看到的是前一部分，不是全部。** 如果刚找的东西没出现，"
+            "它可能在后面 —— 用 `head`/`grep`/`sed -n 'X,Yp'` 缩小范围再看，"
+            "不要因为没看到就断定不存在。"
+        )
+    return out
 
 
 async def dispatch_tool(

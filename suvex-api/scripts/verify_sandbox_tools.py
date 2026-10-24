@@ -323,6 +323,35 @@ CATEGORY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "nikto",
         "whatweb",
         "python3",
+        # ★ v0.87 补（对照 CyberStrikeAI 的 90 个工具配方后实测加的）：
+        # 这批的共同点是"提示词本来就在教模型做的事，而镜像里没工具"。
+        #   · nuclei      —— 模板化漏洞验证，此前镜像里**完全没有**
+        #   · feroxbuster —— 递归内容发现（深目录比 gobuster 强）
+        #   · dirsearch   —— Web 字典向的目录扫描
+        #   · wafw00f     —— WAF 识别，决定 sqlmap 要不要 `--tamper`
+        #   · arjun       —— 隐藏 HTTP 参数发现（很多注入的入口）
+        #   · dalfox      —— XSS 扫描
+        "nuclei",
+        "feroxbuster",
+        "dirsearch",
+        "wafw00f",
+        "arjun",
+        "dalfox",
+        # ⚠️ `hydra` **刻意不列在这里**：提示词明令禁止口令爆破。
+        # 它装在镜像里（用户明确要求，审计/自查场景会用），但这个契约
+        # 表达的是"该分类**需要**什么" —— 列进来等于把"装了"当成"该用"。
+    ),
+    # ★ v0.87：「网络侦察」单列一类。
+    #
+    # 为什么不在 `web` 里：端口/网段扫描与 Web 应用测试是两件事，
+    # 混在一起会让"web 分类需要全文扫描器吗"这个问题无法回答。
+    # 这一类只放**不改目标状态**的探测工具。
+    "recon": (
+        "nmap",
+        "masscan",  # 大网段快速端口扫描（nmap 慢一个量级）
+        "rustscan",  # 单机全端口（速度优势）
+        "curl",
+        "python3",
     ),
     # pwn 走 base 镜像（`_REVERSE_CATEGORIES` 里没有它，是刻意的）。
     # 这些命令提示词第四节与第六节都点名要用。

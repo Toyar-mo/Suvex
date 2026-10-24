@@ -93,22 +93,69 @@ def _strip_frontmatter(text: str) -> str:
 
 
 def _parse_frontmatter(text: str) -> dict[str, str]:
-    """极简 frontmatter 解析：只取 `key: value` 单行标量。
+    """极简 frontmatter 解析：取 `key: value` 标量，**支持 YAML 多行折叠**。
 
-    不够格处理 YAML 的多行/嵌套/锚点 —— 我们只需要 `name` 与 `description`
-    两个标量，为此引一个 YAML 依赖不值得（而且技能包是我们自己 vendor 的，
-    格式已知）。解析不到就返回空 dict，调用方按文件名兜底。
+    ## ★ v0.87：为什么必须支持 `>-`（实测发现的缺陷）
+
+    第一版只认单行 `key: value`。而引入的一批方法论技能用 YAML 折叠标量：
+
+        description: >-
+          验证铁律:搜索≠漏洞,confirmed Fact须证据…
+          想象力拉满+单步验证零容忍。
+
+    于是解析结果是 `description = ">-"` —— **描述变成了两个字面字符**。
+    这个失效很隐蔽：技能照样被 `discover_skills` 收进清单（`name` 是单行的），
+    `load_skill` 也能返回全文，只有"列表里看到的描述"是错的。
+    而描述正是模型判断"该不该加载这一篇"的唯一依据。
+
+    ⚠️ **不引 PyYAML**：本模块在 `load_skill` 热路径上，而 PyYAML 是
+    可选依赖。要支持的只是 `>` / `>-` / `|` 三种块标量 —— 手写二十行
+    比引依赖更稳。
+
+    ## 支持的范围（超出的不猜）
+
+    - `key: value` 单行；
+    - `key: >-` / `>` / `|` + 后续**缩进的**续行；
+    - 续行遇到下一个顶格 `key:` 或 `---` 结束。
+
+    嵌套结构（`metadata:` 下的 `tags:` 等）**不展开** —— 我们不读它们。
     """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
         return {}
     out: dict[str, str] = {}
-    for line in lines[1:]:
+    i = 1
+    total = len(lines)
+    while i < total:
+        line = lines[i]
         if line.strip() == "---":
             break
-        if ":" in line:
+        # 只处理顶层键（顶格且含冒号）。缩进行属于上一个键的续行，
+        # 已在块标量分支里被消费；走到这里说明它没有归属，跳过。
+        if line[:1] not in (" ", "\t") and ":" in line:
             key, _, value = line.partition(":")
-            out[key.strip()] = value.strip()
+            key = key.strip()
+            value = value.strip()
+            if value in (">-", ">", "|", "|-", ">+", "|+"):
+                block: list[str] = []
+                i += 1
+                while i < total:
+                    nxt = lines[i]
+                    if nxt.strip() == "---":
+                        break
+                    if nxt[:1] not in (" ", "\t") and nxt.strip():
+                        break
+                    block.append(nxt.strip())
+                    i += 1
+                if value.startswith(">"):
+                    # 折叠：单换行变空格
+                    out[key] = " ".join(part for part in block if part).strip()
+                else:
+                    # 保留：原样换行
+                    out[key] = "\n".join(block).strip()
+                continue
+            out[key] = value
+        i += 1
     return out
 
 

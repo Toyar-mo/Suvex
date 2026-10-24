@@ -111,6 +111,41 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── 网络 / web 题 ──
     netcat-traditional socat openssl dnsutils iputils-ping \
     nmap whatweb ffuf gobuster dirb sqlmap nikto \
+    # ── ★ v0.87：按 CyberStrikeAI 的工具清单补齐（13 个，全部 apt 可装）──
+    #
+    # ## 为什么补这批
+    #
+    # 对照 CyberStrikeAI 的 90 个工具配方实测：我们的沙箱原本只能覆盖
+    # **21/76** 个命令名。其中一批是 Web/审计的常用件，而它们的缺失
+    # 属于"提示词教模型做的事、镜像里没工具"那类缺口 ——
+    # 本项目为这类问题已经栽过五次（见 `verify_sandbox_tools.py` 文件头）。
+    #
+    # ## 每个都核过 apt 来源（Kali 源，实测 `apt-cache policy`）
+    #
+    #   · `nuclei`      —— 模板化漏洞验证，此前**完全没有**（镜像里查不到）
+    #   · `feroxbuster` —— 递归内容发现，比 gobuster 更擅长深目录
+    #   · `dirsearch`   —— 目录扫描（Python 实现，字典更偏 Web）
+    #   · `wafw00f`     —— WAF 识别，决定后续要不要 `--tamper`
+    #   · `arjun`       —— HTTP 参数发现（隐藏参数是很多注入的入口）
+    #   · `dalfox`      —— XSS 扫描
+    #   · `xsser`       —— XSS 验证（与 dalfox 互补）
+    #   · `masscan`     —— 大网段快速端口扫描（nmap 慢一个量级）
+    #   · `rustscan`    —— 单机全端口扫描（速度优势）
+    #   · `hydra`       —— ⚠️ 见下方专门说明
+    #   · `radare2`     —— 反汇编/逆向主力（re 镜像已有，base 一直缺）
+    #
+    # ⚠️ `ROPgadget` **不在这一批**：它随 `pwntools` 来（见下面 pip 那段，
+    #    以及第 181 行那段说明）—— 再 apt 装一份会造出两个版本，
+    #    报错时不知道该信哪个。第一版误加了，`apt-get install -s` 直接
+    #    「Unable to locate package ropgadget」把它挡住了。
+    #
+    # ⚠️ **`hydra` 的边界**：提示词明令禁止口令爆破（`kernel_system.md`
+    #    的「不爆破」纪律）。装它是因为**用户明确要求**，且审计/自查场景
+    #    （对自己有权的系统做弱口令检查）确实会用；但**提示词里不教模型用它
+    #    做爆破**，也不进 `CATEGORY_REQUIREMENTS` —— 那个契约表达的是
+    #    "该分类需要什么"，把它列进去等于把"装了"当成"该用"。
+    nuclei feroxbuster dirsearch wafw00f arjun dalfox xsser \
+    masscan rustscan hydra radare2 \
     # ── 取证 / misc 题 ──
     binwalk foremost sleuthkit exiftool p7zip-full unzip \
     tcpdump tshark imagemagick \

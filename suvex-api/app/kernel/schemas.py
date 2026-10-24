@@ -515,6 +515,51 @@ class KernelToolsOut(CamelModel):
     disabled: list[str] = []
 
 
+# ══════════════════════════════════════════════════════════
+# 技能库（v0.87）
+# ══════════════════════════════════════════════════════════
+#
+# 技能包是 `load_skill` 的输入：模型按需拉取一篇"某类漏洞怎么验 / 某工具怎么调"
+# 的速查卡。它随代码分发（`prompts/skills/**/*.md`），不需要部署者配置。
+#
+# **为什么要有端点**：此前它没有任何界面入口 —— 部署者既看不到一共几篇、
+# 也不知道模型能查到什么。这与"工具清单没有端点"是同一个缺口
+# （v0.82 修过一次，见 `tools_catalog`）。
+
+
+class KernelSkillOut(CamelModel):
+    """一篇技能包。
+
+    ⚠️ **不下发 `path`**：那是宿主文件系统路径，界面用不到，
+    而且会泄露部署目录结构。这与 `McpServerOut` 不下发 `env` 是同一条纪律。
+    """
+
+    #: 技能名 —— 模型在 `load_skill({"name": "..."})` 里写的就是它。
+    name: str
+    #: 所属分类（目录名）。
+    category: str
+    #: 一句话描述，帮模型判断该不该加载这一篇。
+    description: str = ""
+
+
+class KernelSkillCategoryOut(CamelModel):
+    """一个分类下的全部技能。"""
+
+    category: str
+    skills: list[KernelSkillOut] = []
+
+
+class KernelSkillsOut(CamelModel):
+    """`GET /kernel/skills` —— 技能库清单。
+
+    ⚠️ 空分类**照样列出来**：那说明"这一栏本该有东西但打包漏了"，
+    而不是"没有这一栏"。两者在界面上必须是两回事。
+    """
+
+    total: int = 0
+    categories: list[KernelSkillCategoryOut] = []
+
+
 class KernelToolsIn(StrictModel):
     """`PUT /kernel/tools` —— 整份替换"关掉的工具"清单。
 
