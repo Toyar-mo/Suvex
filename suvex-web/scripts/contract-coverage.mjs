@@ -20,6 +20,8 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { join } from 'node:path'
 
+import { createAudit } from './_audit.mjs'
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const rawDoc = readFileSync(join(ROOT, 'docs/api-contract.md'), 'utf8')
 
@@ -110,9 +112,15 @@ const REQUIRED_STRUCTURE = [
 ]
 
 let missing = 0
+/*
+  ★ 空检查防线：每条"判一条需求"的分支都 audit.check()。
+  见 `_audit.mjs` —— 清单为空时脚本会**报错**而不是报绿。
+*/
+const audit = createAudit({ name: 'contract-coverage', minChecks: 10 })
 
 console.log('══ REST 端点覆盖度（对照任务合集需求清单）══\n')
 for (const [label, needles] of REQUIRED_ENDPOINTS) {
+  audit.check()
   const absent = needles.filter((n) => !doc.includes(n))
   if (absent.length === 0) {
     console.log(`✓  ${label.padEnd(18)} ${needles.length} 个端点`)
@@ -124,6 +132,7 @@ for (const [label, needles] of REQUIRED_ENDPOINTS) {
 
 console.log('\n══ 结构性要求 ══\n')
 for (const [label, needles] of REQUIRED_STRUCTURE) {
+  audit.check()
   const absent = needles.filter((n) => !doc.includes(n))
   if (absent.length === 0) {
     console.log(`✓  ${label}`)
@@ -162,6 +171,7 @@ const REJECTED_PHRASES = [
 
 console.log('\n══ 决策一致性（不该再出现的旧表述）══\n')
 for (const [label, deadPhrases] of REJECTED_PHRASES) {
+  audit.check()
   const alive = deadPhrases.filter((p) => doc.includes(p))
   if (alive.length === 0) {
     console.log(`✓  ${label}：无矛盾残留`)
@@ -171,8 +181,9 @@ for (const [label, deadPhrases] of REJECTED_PHRASES) {
   }
 }
 
-console.log(
-  `\n${missing === 0 ? '══ 需求清单全部覆盖，且决策无矛盾 ══' : `══ ${missing} 项待处理，请修 docs/api-contract.md ══`}`,
-)
-if (missing > 0) process.exitCode = 1
+audit.finish({
+  failures: missing,
+  okMessage: '══ 需求清单全部覆盖，且决策无矛盾 ══',
+  failMessage: `══ ${missing} 项待处理，请修 docs/api-contract.md ══`,
+})
 

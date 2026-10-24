@@ -29,7 +29,17 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { join } from 'node:path'
 
+import { createAudit } from './_audit.mjs'
+
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
+
+/*
+  `minChecks` = 6（枚举对账 6 条）+ 事件类型比较 + 状态流转表的每一行。
+
+  ⚠️ 这个下限刻意取得**保守**（当前实际执行 20+ 条），只用来挡"清单被误删
+  大半"这种事故。取精确值会让每次正常增删枚举都变红，红几次就没人看了。
+*/
+const audit = createAudit({ name: 'contract-parity', minChecks: 8 })
 
 /**
  * 读一个源码文件。**读不到时给一句能照做的话**，而不是抛 ENOENT。
@@ -120,11 +130,21 @@ function unionValues(code, typeName) {
 }
 
 let failures = 0
+/*
+  ★ 空检查防线（见 `_audit.mjs` 的文件头）：
+    这两个包装函数**同时**计数，所以"判通过/失败"与"记一条检查"
+    不可能脱节 —— 不存在"忘了计数但结论照出"的路径。
+    收尾由 `audit.finish()` 断言 checks > 0。
+*/
 const fail = (msg) => {
+  audit.check()
   console.log(msg)
   failures += 1
 }
-const pass = (msg) => console.log(msg)
+const pass = (msg) => {
+  audit.check()
+  console.log(msg)
+}
 
 // ─────────────────────────────────────────────
 // 1 · 枚举取值对账
@@ -263,7 +283,8 @@ if (!block) {
 
 // ─────────────────────────────────────────────
 
-console.log(
-  `\n${failures === 0 ? '══ 契约与源码一致 ══' : `══ 发现 ${failures} 处不一致：请先改 docs/api-contract.md ══`}`,
-)
-if (failures > 0) process.exitCode = 1
+audit.finish({
+  failures,
+  okMessage: '══ 契约与源码一致 ══',
+  failMessage: `══ 发现 ${failures} 处不一致：请先改 docs/api-contract.md ══`,
+})

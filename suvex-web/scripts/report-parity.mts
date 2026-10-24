@@ -26,7 +26,23 @@ import type { ReportOptions } from '@/data/report'
 const NOW = '2026-02-14T15:30:00.000Z'
 
 let failures = 0
+/**
+ * ★ 已执行检查条数 —— **空检查防线**。
+ *
+ * 这个脚本的所有判定都走 `check()`，所以在这里计数就不会漏。
+ * 见 `scripts/_audit.mjs` 的文件头：脚本"一条都没查却报绿"是
+ * 最危险的失效形态 —— 它会输出「全部通过」而实际什么都没验。
+ *
+ * ⚠️ 为什么这个脚本不能直接用 `createAudit`：它跑在 **Vite SSR** 里
+ * （`run-report-parity.mjs` 用 `ssrLoadModule` 加载它），
+ * 而 `_audit.mjs` 是 .mjs、且依赖 `process.exitCode` 的收尾约定 ——
+ * 这里用 `process.exit()` 直接退出更可靠（SSR 环境里 exitCode 需要
+ * 等事件循环排空，而 server.close() 之前不该等）。
+ * 所以断言逻辑在这里手写一遍，语义与 `createAudit` 保持一致。
+ */
+let checks = 0
 function check(label: string, condition: boolean, detail = '') {
+  checks++
   if (condition) {
     console.log(`  ✓ ${label}`)
   } else {
@@ -304,6 +320,24 @@ check(
   `entries=${pipeDoc.entries.length}，导出里没有出现 ${escapedScope}`,
 )
 
+/*
+  ★ 空检查防线：**先判"一条都没查"，再判"有没有失败"**。
+
+  顺序很重要 —— 一个什么都没查的脚本，`failures === 0` 也是成立的，
+  于是它会打印「全部通过」并退出 0。那正是最危险的形态：
+  检查看起来在跑，实际什么都没验证。
+*/
+if (checks === 0) {
+  console.log(
+    '\n❌ 一条检查都没执行 —— 这个脚本**没有在检查任何东西**。\n' +
+      '   最常见的原因：报告 IR 导入失败导致下面的检查块被跳过，\n' +
+      '   或 src/data/report-document.ts 的导出形状变了。\n' +
+      '   ⚠️ 这比"未通过"严重：它会输出"全部通过"而实际什么都没查。',
+  )
+  process.exit(1)
+}
+
+console.log(`（本脚本实际执行了 ${checks} 条检查）`)
 console.log(
   failures === 0 ? '\n══ 全部通过：预览与导出内容一致 ══' : `\n══ ${failures} 项未通过 ══`,
 )

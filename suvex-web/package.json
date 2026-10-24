@@ -18,7 +18,8 @@
     "verify:contract": "node scripts/contract-parity.mjs",
     "verify:coverage": "node scripts/contract-coverage.mjs",
     "verify:endpoints": "node scripts/endpoint-parity.mjs",
-    "verify:all": "npm run verify:contract && npm run verify:coverage && npm run verify:endpoints && npm run verify:report",
+    "verify:guards": "node scripts/verify-guards.mjs",
+    "verify:all": "npm run verify:guards && npm run verify:contract && npm run verify:coverage && npm run verify:endpoints && npm run verify:report",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
