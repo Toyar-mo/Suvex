@@ -488,6 +488,30 @@ _RECORD_FACT_SKELETON = (
     '"evidence": "<你凭什么这么判断，一句话>"}}'
 )
 
+#: `record_coverage` 的参数骨架（v0.84 #4）。
+#:
+#: ## 为什么需要它 —— 一个实地观察到的半个轮次浪费
+#:
+#: 实测 `scan_01M5PGMX9ADDWV0V42B1W48ZF9` 第 652 行，模型写的是：
+#:
+#:     record_coverage {"area": "api-v1-unauthenticated-endpoint-fuzz", ...}
+#:
+#: **字段名猜成了 `area`**。拿到回包后它自己纠正了（第 654 行：
+#: "The record_coverage needs `surface` field"），然后第 655 行重发成功 ——
+#: 但那一轮白花了。
+#:
+#: 而同一份代码里 `record_fact` 早就有骨架了（`_RECORD_FACT_SKELETON`），
+#: 所以它 v0.84 那轮一次空参数都没有。**两个工具的待遇应该一致。**
+#:
+#: 与 `_RECORD_FACT_SKELETON` 同样必须带 `"args"`：`parse_actions` 只认
+#: `payload["args"]`，没有这个包装模型照抄会得到 `args={}`。
+_COVERAGE_SKELETON = (
+    '{"tool": "record_coverage", "args": {'
+    '"surface": "<方法 + 路径 + 关键条件>", '
+    '"risk": "<这个点理论上可能出什么问题>", '
+    '"outcome": "<成立：… | 已排除：… | 未测完：…>"}}'
+)
+
 #: 欠账达到 `FACT_DEBT_WINDOW` 时追加的强制提醒（v0.83）。
 #:
 #: ⚠️ 只在**欠账触发**时出现，不是每轮。区别：
@@ -1376,7 +1400,27 @@ def _do_record_coverage(args: dict[str, Any], *, coord: AgentCoordinator, me: Ag
     risk = str(args.get("risk") or "").strip()
     outcome = str(args.get("outcome") or "").strip()
     if not surface:
-        return _json_err("需要 `surface`（测了什么：URL / 参数 / 端点）。")
+        # ★ v0.84 #4：空/错字段**不**只回一句"要 surface"。
+        #
+        # 实测（`scan_01M5PGMX9ADDWV0V42B1W48ZF9` 第 652 行）：模型第一次写的是
+        #
+        #     record_coverage {"area": "api-v1-unauthenticated-endpoint-fuzz", ...}
+        #
+        # —— 字段名猜成 `area`。它拿到报错后自己纠正了（第 654 行：
+        # "The record_coverage needs `surface` field"），但那白花了半轮。
+        #
+        # 与 `_do_record_fact` 同一个判断：**报错回包是模型一定会读的**
+        # （它在等结果），骨架放这里比放几万字提示词里命中率高。
+        # 骨架形状与提示词 §6.2.1.1 的两个示例保持一致。
+        return _json_err(
+            "record_coverage 需要 `surface`（测了什么：方法 + 路径 + 关键条件）。"
+            "按这个骨架填：\n"
+            "ACTION: "
+            + _COVERAGE_SKELETON
+            + "\n"
+            "`risk` 写这个点**理论上**可能出什么问题，`outcome` 写实际结果 —— "
+            "开头用「成立：」/「已排除：」/「未测完：」标清楚。"
+        )
     coord.shared.record_coverage(surface, risk or "未标", outcome or "未标", by=me.name)
     return _json_ok(note=f"已记录覆盖：{surface}。含「干净」的结果也要记 —— 那是别人不再重测的依据。")
 
