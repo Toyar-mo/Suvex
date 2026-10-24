@@ -3750,23 +3750,10 @@ def submit_mode_of(db: Session) -> str:
 # 这一段补的是一处**贯通性缺口**，不是新功能：
 # `mcp_servers` 这一列在 v0.72 就存在（`settings/models.py`）、
 # `KernelSettings` 读它、`build_spec` 解析它 —— 但**没有任何 HTTP 端点
-# 能写它**。也就是说 gogo 那三个一等工具、以及所有 MCP 工具，在
-# v0.81 之前只能靠手工改数据库才能启用。
+# 能写它**。所有 MCP 工具在 v0.81 之前只能靠手工改数据库才能启用。
 #
 # 这正是交接文档里那个缺陷形状的翻版：**配了/写了但静默失效**。
 # 只不过这次失效的位置更早 —— 它连"配"这个动作都没有入口。
-
-#: gogo 那三个一等工具要求的连接名（与 `runner.GOGO_CONNECTION` 逐字一致）。
-#:
-#: ⚠️ 这里不能 `from app.kernel.runner import GOGO_CONNECTION`：runner 是
-#: 一个 import 成本极高的模块（它 import 了 sandbox/drivers/…），而
-#: router 层每个请求都会经过本模块。为此配了一条对账测试
-#: （`tests/kernel/test_mcp_servers_api.py::test_gogo_connection_name_matches_runner`）
-#: 盯着这两个字面量，避免哪天只改了一处。
-GOGO_CONNECTION_NAME: Final = "gogo"
-
-#: gogo 的三个一等工具（与 `runner.GOGO_TOOL_NAMES` 逐字一致，同上）。
-GOGO_TOOL_NAMES: Final = ("recon_scan", "run_poc", "extract_secrets")
 
 
 def get_mcp_servers(db: Session) -> list[dict]:
@@ -3835,47 +3822,6 @@ def _public_server_view(item: dict) -> dict:
 def public_mcp_servers(db: Session) -> list[dict]:
     """回给界面的连接清单（已去掉 `env`）。"""
     return [_public_server_view(item) for item in get_mcp_servers(db)]
-
-
-def gogo_readiness(servers: list[dict]) -> tuple[bool, str]:
-    """gogo 三个一等工具**是否真的可用**，以及不可用的原因。
-
-    ## 为什么判据要逐条对齐 `runner._gogo_via_mcp` 的三条前置检查
-
-    界面上显示一个"就绪"绿灯，而模型调起来永远失败，是比"显示未配置"
-    更糟的状态：用户会去找模型的错，而问题在配置。
-
-    所以这里判的三条与运行期**一模一样**：
-      1. 有没有配任何连接；
-      2. 有没有名为 `gogo` 的那条；
-      3. 那条的白名单允不允许三个工具。
-
-    ⚠️ 唯一的区别是这里**不真连**（不 exec、不握手）：那会让每次打开
-    设置页都拉起一个子进程。真正的连通性由 `POST /mcp-servers/test` 回答，
-    界面把两件事分开显示（"配置就绪" / "试连通过"）。
-    """
-    if not servers:
-        return False, "还没有配置任何 MCP 连接。gogo 的三个工具需要一条名为 gogo 的连接。"
-
-    target = next((s for s in servers if s.get("name") == GOGO_CONNECTION_NAME), None)
-    if target is None:
-        names = ", ".join(str(s.get("name") or "（无名）") for s in servers) or "（无）"
-        return (
-            False,
-            f"没有名为 `{GOGO_CONNECTION_NAME}` 的连接（当前配的是：{names}）。"
-            f"那三个工具只认这个名字。",
-        )
-
-    allowed = target.get("allowed_tools")
-    if isinstance(allowed, list):
-        missing = [t for t in GOGO_TOOL_NAMES if t not in allowed]
-        if missing:
-            return (
-                False,
-                f"连接 `{GOGO_CONNECTION_NAME}` 的白名单挡住了：{', '.join(missing)}。"
-                "把白名单留空（= 全放）或补上这三个工具名。",
-            )
-    return True, ""
 
 
 def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
@@ -4089,38 +4035,26 @@ def get_disabled_tools(db: Session) -> tuple[str, ...]:
 def tools_catalog(db: Session) -> dict:
     """组装界面要的完整清单：每个工具的名字、说明、开关、就绪状态。
 
-    ## 为什么每个工具的 `ready` 要单独算，而不是只看 gogo
+    ## 为什么 `ready` 写成"逐个按 `requires_connection` 查"
 
-    目前只有 gogo 那三个依赖外部连接，但把判据写成"逐个按
-    `requires_connection` 查"而不是"写死这三个"，是为了将来接第二个
-    MCP 后端时不用改这里 —— 也为了让"某个工具为什么不可用"这件事
-    永远只有一个答案来源。
+    而不是"写死某几个工具需要某条连接"：这样将来接外部工具时不用改这里，
+    也让"某个工具为什么不可用"永远只有一个答案来源。
 
-    ⚠️ `gogo_readiness` 只判**配置是否就绪**（不真连、不 exec）：
-    它会因为每次打开页面都被调用，而真连要拉起子进程。
-    真正的连通性由 `POST /kernel/mcp-servers/test` 回答。
+    ⚠️ 这个判定**只看配置在不在**（不真连、不 exec）：它每次打开页面都会被
+    调用，而真连要拉起子进程。真正的连通性由 `POST /kernel/mcp-servers/test`
+    回答 —— 界面上把"配置就绪"与"试连通过"分开显示，因为用户该做的事不同。
     """
     from app.kernel.tools import TOOL_GROUPS, TOOL_SPECS
 
     disabled = set(get_disabled_tools(db))
     servers = public_mcp_servers(db)
-    gogo_ok, gogo_reason = gogo_readiness(servers)
+    configured = {str(s.get("name") or "") for s in servers}
 
     tools: list[dict] = []
     for spec in TOOL_SPECS:
         enabled = spec.name not in disabled
-        # 依赖判据：没有依赖就绪；有依赖就按该连接的就绪状态走。
-        #
-        # ⚠️ 目前 `gogo_readiness` 是**按连接名 gogo 硬判**的（它对齐的是
-        # `runner._gogo_via_mcp` 的三条前置检查）。所以这里判
-        # `spec.requires_connection == GOGO_CONNECTION_NAME`，而不是
-        # 拿连接名去 `servers` 里查一遍 —— 后者会得出与运行期不一致的
-        # 结论（运行期还要求白名单允许那三个工具名）。
-        if spec.requires_connection == GOGO_CONNECTION_NAME:
-            ready, reason = gogo_ok, gogo_reason
-        elif spec.requires_connection:
-            names = {str(s.get("name") or "") for s in servers}
-            ready = spec.requires_connection in names
+        if spec.requires_connection:
+            ready = spec.requires_connection in configured
             reason = (
                 ""
                 if ready
@@ -4148,8 +4082,6 @@ def tools_catalog(db: Session) -> dict:
         "tools": tools,
         "groups": list(TOOL_GROUPS),
         "disabled": sorted(disabled),
-        "gogo_ready": gogo_ok,
-        "gogo_reason": gogo_reason,
     }
 
 
@@ -4196,8 +4128,6 @@ __all__ = [
     "MAX_SYNC_COMPETITIONS",
     "MAX_WRONG_SUBMISSIONS_CEILING",
     "MIN_WRONG_SUBMISSIONS",
-    "GOGO_CONNECTION_NAME",
-    "GOGO_TOOL_NAMES",
     "KernelSettings",
     "StartedEnvironment",
     "SyncResult",
@@ -4218,7 +4148,6 @@ __all__ = [
     "tools_catalog",
     "get_ctf2_config",
     "get_mcp_servers",
-    "gogo_readiness",
     "latest_environment",
     "list_accounts",
     "list_challenges",

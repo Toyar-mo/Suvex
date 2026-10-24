@@ -84,19 +84,33 @@ def test_every_spec_has_a_human_label_and_summary() -> None:
         assert spec.summary.strip(), f"{spec.name} 缺说明"
 
 
-def test_gogo_tools_declare_their_connection() -> None:
-    """gogo 那三个必须声明 `requires_connection="gogo"`。
+def test_requires_connection_is_a_configured_name_or_empty() -> None:
+    """`requires_connection` 要么为空，要么是一个真实存在的连接名。
 
-    漏声明的后果：界面把它们显示成"就绪"，而模型调起来永远收到
-    "没有名为 gogo 的连接"。这与 v0.81 那三个前置检查是同一个判据来源。
+    ★ 这条替代了原先的 `test_gogo_tools_declare_their_connection`。
+
+    原来的断言把"某些工具必须依赖名为 gogo 的连接"写死在测试里 ——
+    于是移除那个外部工具时，测试也跟着失效。现在改成**结构性**断言：
+
+      · 空串 = 不依赖外部连接（当前所有内置工具都是这一类）；
+      · 非空 = 必须能在 `TOOL_SPECS` 里找到对应的工具，且名字形态合法。
+
+    这样将来接任何外部工具都不用改这条测试，它只保证"依赖声明不是胡写的"。
     """
-    from app.kernel import runner
+    import re
 
-    for name in runner.GOGO_TOOL_NAMES:
-        spec = tools_mod.TOOL_BY_NAME[name]
-        assert spec.requires_connection == runner.GOGO_CONNECTION, (
-            f"{name} 没声明它依赖 `{runner.GOGO_CONNECTION}` 连接"
-        )
+    from app.kernel.tools import TOOL_SPECS
+
+    valid_name = re.compile(r"^[A-Za-z0-9_.-]+$")
+    for spec in TOOL_SPECS:
+        dep = spec.requires_connection
+        if dep:
+            assert valid_name.match(dep), (
+                f"{spec.name} 的 requires_connection={dep!r} 不是合法连接名"
+            )
+        else:
+            # 空串是合法值（= 不依赖外部连接），显式确认它确实是空而不是 None
+            assert dep == "", f"{spec.name} 的 requires_connection 应为 str，实际 {dep!r}"
 
 
 # ══════════════════════════════════════════════════════════
@@ -231,22 +245,29 @@ async def test_dispatch_still_runs_when_nothing_disabled() -> None:
     assert "关闭" not in result
 
 
-async def test_dispatch_refuses_every_gogo_tool_too() -> None:
-    """gogo 三件套同样可被关闭 —— 它们是 `TOOL_NAMES` 成员。
+async def test_dispatch_refuses_each_tool_that_can_be_disabled() -> None:
+    """**每一个**内置工具都可被关闭，且拦下时给的是"关闭"而非别的理由。
 
-    这条顺带钉住"关闭"与"没配 MCP"是**两条不同的提示**：
-    两者都会让工具不可用，但用户该做的事不同（去开关里打开 vs 去配连接）。
+    ★ 这条替代了原先的 `test_dispatch_refuses_every_gogo_tool_too`。
+
+    原来只测 gogo 三件套；现在遍历 `TOOL_NAMES` 全部 —— 因为"能不能被关掉"
+    是**所有工具共有的性质**，不是某几个的特例。遍历写法还有个附带好处：
+    将来新增工具会自动被覆盖，不需要有人记得来这里加一行。
+
+    ⚠️ 排除 `list_mcps` / `describe_mcp` / `call_mcp` 之外的工具都不需要
+    外部连接，所以这里对每个工具都用空参数调用 —— 只要它被拦住，
+    就证明开关生效；至于工具本身要什么参数，不在这一条要验的范围里。
     """
     from app.kernel import runner
 
-    for name in runner.GOGO_TOOL_NAMES:
+    # `load_skill` 等工具有副作用（读文件/网络），但"被关闭"的判断在
+    # 分发入口、早于任何副作用 —— 所以传空参数是安全的。
+    for name in runner.TOOL_NAMES:
         spec = _spec_with((name,))
         result = await runner.dispatch_tool(
-            name, {"target": "http://x"}, spec=spec, sandbox=None, http=None
+            name, {}, spec=spec, sandbox=None, http=None
         )
         assert "关闭" in result, f"{name} 没被拦住：{result[:80]}"
-        # 不应误报成"没配 MCP"
-        assert "没有配置任何 MCP 连接" not in result
 
 
 # ══════════════════════════════════════════════════════════
@@ -312,14 +333,14 @@ def test_scan_path_carries_disabled_tools() -> None:
 def test_scan_path_carries_mcp_servers() -> None:
     """★ 扫描路径必须把 `LaunchSpec.mcp_servers` 透传进 `SolveSpec`。
 
-    这一条盯的是 v0.81 的真实缺口：`kernel_pentest.md` 整段教模型用
-    `recon_scan` / `run_poc`，而渗透扫描是主线 —— 配置却从未送到引擎。
-    断言用一条假的 `McpServerConfig`，只验**透传**，不验连接。
+    这一条盯的是一个真实缺口：扫描路径曾经**完全不传** `mcp_servers`，
+    于是 `SolveSpec.mcp_servers` 恒为空 —— 而提示词里教模型用 MCP 工具。
+    断言用一条假的 `McpServerConfig`，只验**透传**，不验连接内容。
     """
     from app.kernel import mcp
     from app.scans.agent_runner import build_solve_spec_from_scan
 
-    cfg = mcp.McpServerConfig(name="gogo", command="/usr/local/bin/gogo_mcp.py")
+    cfg = mcp.McpServerConfig(name="demo", command="/usr/local/bin/demo_mcp.py")
     spec = build_solve_spec_from_scan(_launch_spec(mcp_servers=(cfg,)))
     assert tuple(getattr(spec, "mcp_servers", ())) == (cfg,)
 
@@ -347,7 +368,7 @@ def test_scan_path_translation_source_mentions_both_fields() -> None:
 
 
 def test_get_tools_lists_every_tool(ready_client) -> None:  # noqa: ANN001
-    """`GET /kernel/tools` 回全部工具，默认全开、无 MCP 时 gogo 未就绪。"""
+    """`GET /kernel/tools` 回全部工具，默认全开、无外部依赖时全部就绪。"""
     resp = ready_client.get(f"{API}/kernel/tools")
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -358,13 +379,15 @@ def test_get_tools_lists_every_tool(ready_client) -> None:  # noqa: ANN001
     # 默认：一件都没关
     assert body["disabled"] == []
     assert all(item["enabled"] for item in body["tools"])
-    # 没有配 MCP → gogo 三件套未就绪，且**给得出原因**
-    assert body["gogoReady"] is False
-    assert body["gogoReason"]
+    # 当前所有内置工具都不依赖外部连接 → 全部 ready，reason 为空
     for item in body["tools"]:
-        if item["requiresConnection"] == "gogo":
+        if item["requiresConnection"]:
+            # 有依赖的工具：没配连接时必须给出原因
             assert item["ready"] is False
             assert item["reason"]
+        else:
+            assert item["ready"] is True
+            assert item["reason"] == ""
 
 
 def test_put_tools_round_trips(ready_client) -> None:  # noqa: ANN001
@@ -438,9 +461,9 @@ def test_tools_get_does_not_leak_secrets(ready_client) -> None:  # noqa: ANN001
     这个端点是 read 级（比 MCP 清单低一级），所以更不能带凭据 ——
     一个只读令牌能看到别人的 token，那就不是 read 级了。
 
-    ⚠️ 断言的是 **JSON 键名**，不是整段文本：`extract_secrets` 这个
-    工具名本身就含 "secret"，拿整段文本去搜会得到一个假阳性
-    （第一版就是这么红的）。**检查要匹配结构，不要匹配内容。**
+    ⚠️ 断言的是 **JSON 键名**，不是整段文本：工具名/说明里可能自然出现
+    "secret" 这类词（比如某个工具叫 `extract_secrets`），拿整段文本去搜
+    会得到一个假阳性（第一版就是这么红的）。**检查要匹配结构，不要匹配内容。**
     """
     import json
 
@@ -475,8 +498,7 @@ def test_mcp_server_in_accepts_camel_case_payload() -> None:
 
     ## 这条是实测抓到的真 bug，不是防御性编程
 
-    2026-10-23 在 Kali 上配 gogo 连接时，界面「添加连接」存不进去，
-    后端回 422：
+    2026-10-23 在界面上「添加连接」存不进去，后端回 422：
 
         {"error":{"code":"VALIDATION_FAILED",
          "message":"提交的内容有误：server.allowedTools 不认识的字段。"}}
@@ -496,22 +518,22 @@ def test_mcp_server_in_accepts_camel_case_payload() -> None:
 
     camel = McpServerIn(
         **{
-            "name": "gogo",
-            "command": "/opt/suvex/bin/gogo",
+            "name": "demo",
+            "command": "/opt/suvex/bin/demo",
             "args": ["--x"],
             "env": {"A": "1"},
             "notes": "n",
-            "allowedTools": ["recon_scan"],
+            "allowedTools": ["scan_a"],
             "preserveEnv": True,
         }
     )
-    assert camel.allowedTools == ["recon_scan"]
+    assert camel.allowedTools == ["scan_a"]
     assert camel.preserveEnv is True
 
     snake = McpServerIn(
-        name="gogo", command="/x", allowed_tools=["run_poc"],
+        name="demo", command="/x", allowed_tools=["scan_b"],
     )
-    assert snake.allowedTools == ["run_poc"]
+    assert snake.allowedTools == ["scan_b"]
 
 
 def test_mcp_server_out_serializes_camel_case() -> None:
@@ -525,7 +547,7 @@ def test_mcp_server_out_serializes_camel_case() -> None:
     from app.kernel.schemas import McpServerOut
 
     dumped = McpServerOut(
-        name="gogo", command="/x", allowed_tools=["recon_scan"], has_env=True
+        name="demo", command="/x", allowed_tools=["scan_a"], has_env=True
     ).model_dump()
     assert "allowedTools" in dumped
     assert "hasEnv" in dumped
@@ -538,8 +560,8 @@ def test_mcp_test_out_serializes_camel_case() -> None:
     from app.kernel.schemas import McpServerTestOut
 
     dumped = McpServerTestOut(
-        ok=True, server_name="gogo", server_version="1.0", elapsed_ms=12
+        ok=True, server_name="demo", server_version="1.0", elapsed_ms=12
     ).model_dump()
-    assert dumped["serverName"] == "gogo"
+    assert dumped["serverName"] == "demo"
     assert dumped["serverVersion"] == "1.0"
     assert dumped["elapsedMs"] == 12

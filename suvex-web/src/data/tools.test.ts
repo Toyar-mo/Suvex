@@ -63,7 +63,7 @@ function makeTool(over: Partial<KernelTool> = {}): KernelTool {
 /** 造一条最小可用的连接草稿。 */
 function makeDraft(over: Partial<McpServerDraft> = {}): McpServerDraft {
   return {
-    name: 'gogo',
+    name: 'demo',
     command: 'npx',
     args: [],
     env: {},
@@ -96,8 +96,8 @@ describe('toolHealth：每种"用不了"都要说清是哪一种', () => {
     const tool = makeTool({
       enabled: true,
       ready: false,
-      requiresConnection: 'gogo',
-      reason: '未找到名为 gogo 的连接',
+      requiresConnection: 'demo',
+      reason: '未找到名为 demo 的连接',
     })
     expect(toolHealth(tool)).toBe('unconfigured')
   })
@@ -109,7 +109,7 @@ describe('toolHealth：每种"用不了"都要说清是哪一种', () => {
     const tool = makeTool({
       enabled: true,
       ready: false,
-      requiresConnection: 'gogo',
+      requiresConnection: 'demo',
       reason: '白名单未包含 recon_scan',
     })
     expect(toolHealth(tool)).toBe('unconfigured')
@@ -260,7 +260,7 @@ describe('validateDraft：提交前先挡一遍', () => {
     },
   )
 
-  it.each(['gogo', 'gogo_v2', 'mock.server', 'a-b-c', 'A1'])('连接名 "%s" 合法', (name) => {
+  it.each(['demo', 'demo_v2', 'mock.server', 'a-b-c', 'A1'])('连接名 "%s" 合法', (name) => {
     expect(validateDraft(makeDraft({ name }))).toBeNull()
   })
 

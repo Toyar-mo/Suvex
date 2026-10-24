@@ -52,10 +52,9 @@ export interface McpServer {
   /**
    * ★ v0.83：单次工具调用超时（秒）。`null` = 用内核默认 60 秒。
    *
-   * 之所以要在界面上管它：`recon_scan` 扫 /24 实测约 85 秒、`run_poc`
-   * 合并大批模板要 100 秒以上 —— 用默认 60 秒时这类调用**必然超时**，
-   * 而报错长得像"MCP 连接坏了"，模型会去改配置而不是意识到"这个操作
-   * 本来就慢"。
+   * 之所以要在界面上管它：慢工具（网段扫描约 85 秒、批量模板处理 100 秒以上）
+   * 在默认 60 秒下**必然超时**，而报错长得像"MCP 连接坏了" ——
+   * 模型会去改配置，而不是意识到"这个操作本来就慢"。
    */
   callTimeout: number | null
 }
@@ -63,10 +62,6 @@ export interface McpServer {
 /** `GET /kernel/mcp-servers` 的响应。 */
 export interface McpServersSnapshot {
   servers: McpServer[]
-  /** gogo 的三个一等工具是否真的可用（三条前置检查全过）。 */
-  gogoReady: boolean
-  /** 不可用的原因（中文，可直接展示）。 */
-  gogoReason: string
 }
 
 /** 提交一条 MCP 连接时的载荷。**可以带 `env`**（后端只进子进程，不回显）。 */
@@ -135,8 +130,6 @@ export interface KernelToolsSnapshot {
   groups: string[]
   /** 被显式关掉的工具名。 */
   disabled: string[]
-  gogoReady: boolean
-  gogoReason: string
 }
 
 // ─────────────────────────────────────────────
@@ -159,13 +152,11 @@ export interface ToolsState {
   error: ApiError | null
 }
 
-const EMPTY_MCP: McpServersSnapshot = { servers: [], gogoReady: false, gogoReason: '' }
+const EMPTY_MCP: McpServersSnapshot = { servers: [] }
 const EMPTY_CATALOG: KernelToolsSnapshot = {
   tools: [],
   groups: [],
   disabled: [],
-  gogoReady: false,
-  gogoReason: '',
 }
 
 let mcp: McpServersSnapshot = EMPTY_MCP
@@ -303,7 +294,7 @@ export function ensureToolsLoaded(): void {
 export async function saveMcpServers(servers: McpServerDraft[]): Promise<McpServersSnapshot> {
   const saved = await api.put<McpServersSnapshot>('/kernel/mcp-servers', { servers })
   mcp = saved
-  // 连接变了，gogo 三件套的就绪状态跟着变 —— 工具清单必须一起刷新。
+  // 连接变了 → 依赖那些连接的工具的就绪状态跟着变，工具清单必须一起刷新。
   //
   // ★ 这里**不能**只更新本地字段：`catalog` 里每个工具的 `ready`
   //   是后端算的（见 `service.tools_catalog`），本地猜会与运行期不一致。

@@ -128,18 +128,17 @@ class McpServerConfig:
     #:
     #: ## 为什么必须可配（实测踩到的）
     #:
-    #: 全局写死 60 秒时，gogo 的两类调用**必然失败**：
-    #:   · `run_poc` 指向整个 `/root/nuclei-templates` 时，光是合并
-    #:     13,619 个模板就要 **102 秒**（实测），还没开始跑；
-    #:   · `recon_scan` 扫一个 /24 实测约 **85 秒**。
+    #: 全局写死 60 秒时，慢工具**必然失败**。实测过两类：
+    #:   · 需要先批量预处理再执行的：光展开上万个模板文件就要 **102 秒**；
+    #:   · 网段扫描：一个 /24 约 **85 秒**。
     #:
     #: 而失败的样子是"读取超时"——模型看到的是 MCP 层的错，会以为是连接坏了，
     #: 于是改配置、换参数，而不是"这个操作本来就慢"。**超时值不该由
     #: 一个与具体 server 无关的常量决定**：`npx` 拉一个文件系统 server 和
     #: 跑一次全网段测绘，合理耗时差两个数量级。
     #:
-    #: ⚠️ 这个值**同时**要小于 `gogo_mcp.py` 自己的 `GOGO_TIMEOUT`（默认 180s），
-    #: 否则外层先超时、内层还在跑，子进程要等外层 kill。配的时候两边对齐。
+    #: ⚠️ 如果 server 自己有内部超时，**这个值要与它对齐** ——
+    #: 否则外层先超时、内层还在跑，子进程要等外层 kill。
     call_timeout: float | None = None
 
     def public_dict(self) -> dict[str, Any]:
@@ -293,9 +292,8 @@ class McpClient:
                 env=env,
                 # ★ v0.83：**必须**显式给 `limit`，否则大结果会读崩。
                 #
-                # 实测：`recon_scan` 扫一个 /24 时，gogo 返回的那一行 JSON
-                # 超过 asyncio 的默认行缓冲（64 KiB），于是 `stdout.readline()`
-                # 直接抛：
+                # 实测：一次网段扫描的 JSON 结果行会超过 asyncio 默认行缓冲
+                # （64 KiB），于是 `stdout.readline()` 直接抛：
                 #
                 #     ValueError: Separator is found, but chunk is longer than limit
                 #
@@ -461,8 +459,8 @@ class McpClient:
 
         ★ v0.83：超时取**这条连接自己的** `call_timeout`，没配才回落到
         全局默认。见 `McpServerConfig.call_timeout` 的说明 —— 全局写死
-        60 秒时，gogo 的 `run_poc`（全量模板合并 102 秒）与 `recon_scan`
-        （/24 扫描 85 秒）都会必然超时，而报错长得像"连接坏了"。
+        60 秒时，慢工具（模板批处理 102 秒 / 网段扫描 85 秒）都会必然超时，
+        而报错长得像"连接坏了"。
 
         ⚠️ `tools/list` 仍然用全局默认：列工具清单本来就该是快的，
         给它配长超时只会掩盖"server 起不来"这个问题。

@@ -166,8 +166,6 @@ export function ToolsPage() {
             {/* ── 左：MCP 连接（外部接入）──────────────────── */}
             <McpPanel
               servers={mcp.servers}
-              gogoReady={mcp.gogoReady}
-              gogoReason={mcp.gogoReason}
               saving={savingMcp || !isAdmin}
               error={mcpError}
               onSave={(servers) => void handleSaveMcp(servers)}

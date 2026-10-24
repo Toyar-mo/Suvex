@@ -3008,15 +3008,13 @@ class SolveSpec:
     #:
     #: 与配置列的取舍同一条（见 `settings/models.py::KernelConfig.disabled_tools`）：
     #: 空元组 = 一件都没关 = 引入这个开关之前的行为，逐字节不变。
-    #: 存"可用的"会让本字段在默认情况下必须被填成 13 个名字，
+    #: 存"可用的"会让本字段在默认情况下必须被填满全部工具名，
     #: 而那等于把 `TOOL_NAMES` 抄了第二份进每个 spec。
     #:
     #: ## 它与 `mcp_servers` 的关系
     #:
-    #: 两者**独立**。关掉 `recon_scan` 不要求删掉 gogo 那条 MCP 连接，
-    #: 反之亦然 —— 一个是"我想不想用"，一个是"存不存在"。
-    #: 同时关掉与没配时给模型的措辞不同（前者"已被部署配置关闭"、
-    #: 后者"没有配置任何 MCP 连接"），因为它该采取的行动不同。
+    #: 两者**独立**：关掉某个 MCP 相关工具不要求删掉那条连接，反之亦然 ——
+    #: 一个是"我想不想用"，一个是"存不存在"。
     disabled_tools: tuple[str, ...] = ()
 
     def summary(self) -> str:
@@ -3308,9 +3306,6 @@ TOOL_NAMES = (
     "list_mcps",
     "describe_mcp",
     "call_mcp",
-    "recon_scan",
-    "run_poc",
-    "extract_secrets",
 )
 #: 技能包按需加载（学 strix 的 load_skill）。它**不碰沙箱、不碰网络** ——
 #: 只是把一篇随代码分发的 markdown 读出来给模型看，是纯查表操作，
@@ -3622,92 +3617,6 @@ async def _tool_call_mcp(args: dict[str, Any], *, spec: SolveSpec) -> str:
     return await reg.call(connection, tool, arguments)
 
 
-# ══════════════════════════════════════════════════════════
-# gogo 资产测绘工具（3 个一等工具）
-# ══════════════════════════════════════════════════════════
-#
-# ## 为什么是「一等工具」而不是让模型自己走 call_mcp
-#
-# 走 MCP 桥需要三步：`list_mcps` → `describe_mcp` → `call_mcp(connection,
-# tool, arguments)`。对「我要扫一下这个 IP」这种高频动作来说，三步里有两步
-# 是纯记账 —— 实测 208 次工具调用里 run_shell 占 100%，一个 POC 都没跑过，
-# 就是因为多一层仪式动作，模型宁可去 curl。
-#
-# 所以这三个工具直接出现在 TOOL_NAMES 里，名字就是动作本身。底座仍然是
-# `gogo_mcp.py`（一个 stdio MCP server，GPL 边界在那一层），这里只是把它
-# 的两个工具换成一次调用的形状。
-#
-# ## ⚠️ 边界：没有任何 MCP 配置时，这三个工具**不应该是可用的**
-#
-# 它们依赖部署者配了一条名为 `gogo` 的 MCP 连接。没配时不能静默失败，也
-# 不能凭空 exec 一个不存在的二进制 —— 见 `_gogo_via_mcp` 的三条前置检查。
-
-#: gogo 相关工具名（runner 里要单独识别，它们不走沙箱也不走出网客户端）。
-GOGO_TOOL_NAMES = ("recon_scan", "run_poc", "extract_secrets")
-
-#: 约定：gogo 的 MCP 连接就叫这个名字（部署者在设置页配）。
-GOGO_CONNECTION = "gogo"
-
-
-async def _gogo_via_mcp(
-    tool: str, arguments: dict[str, Any], *, spec: SolveSpec
-) -> str:
-    """把一个 gogo 工具调用转成一次 `call_mcp`，并做前置检查。
-
-    ## 三条前置检查，缺一条都会变成「配了却静默失效」
-
-    1. **有 MCP 配置**：`reg` 非空。没配时直接说"没配 gogo"，不要让模型
-       去试一个永远失败的工具。
-    2. **有名为 `gogo` 的连接**：`reg.get()` 非空。配了别的 server 不等于
-       配了 gogo —— 这时要说清"你配的是 X，不是 gogo"。
-    3. **该连接允许这个工具**：部署者的 `allowed_tools` 白名单。被拦时把
-       允许清单回给模型，它才知道换哪个。
-
-    这三条都对应本项目吃过的那类缺陷形状：**声明存在 ≠ 真的接上**。
-    """
-    reg = mcp_mod.registry_from_spec(spec)
-    if not reg:
-        return (
-            f"这次运行没有配置任何 MCP 连接，所以 `{tool}` 用不了。\n"
-            f"它不是内置工具：它需要部署者在「设置 → 内核 → MCP 连接」里配一条名为 "
-            f"`{GOGO_CONNECTION}` 的连接（command 指向 gogo 的 MCP server）。\n"
-            "没有 gogo 也不影响干活：用 run_shell 里的 nmap / ffuf / curl 做同类事情。"
-        )
-    cfg = reg.get(GOGO_CONNECTION)
-    if cfg is None:
-        available = ", ".join(reg.names()) or "（无）"
-        return (
-            f"`{tool}` 需要名为 `{GOGO_CONNECTION}` 的 MCP 连接，但当前配的是：{available}。\n"
-            f"要么把连接名改成 `{GOGO_CONNECTION}`，要么改用 call_mcp 显式指定连接。"
-        )
-    if cfg.allowed_tools is not None and tool not in cfg.allowed_tools:
-        allowed = ", ".join(cfg.allowed_tools) or "（空）"
-        return (
-            f"拒绝：连接 `{GOGO_CONNECTION}` 的部署白名单不允许调用 `{tool}`。"
-            f"允许的工具：{allowed}"
-        )
-    return await reg.call(GOGO_CONNECTION, tool, arguments)
-
-
-async def _tool_recon_scan(args: dict[str, Any], *, spec: SolveSpec) -> str:
-    """端口测绘 + 指纹（gogo 的 recon_scan）。参数原样透传给 gogo 侧校验。"""
-    return await _gogo_via_mcp("recon_scan", dict(args), spec=spec)
-
-
-async def _tool_run_poc(args: dict[str, Any], *, spec: SolveSpec) -> str:
-    """跑 POC（gogo 的 run_poc）。
-
-    ⚠️ 返回里带 `judgement_hint` 说明命中最多是 L1 —— 这一句来自 gogo 侧，
-    这里**不再**替它加码，也不把命中改写成 confirmed。
-    """
-    return await _gogo_via_mcp("run_poc", dict(args), spec=spec)
-
-
-async def _tool_extract_secrets(args: dict[str, Any], *, spec: SolveSpec) -> str:
-    """从响应抽密钥/内网 IP/桶（gogo 的 extract_secrets）。"""
-    return await _gogo_via_mcp("extract_secrets", dict(args), spec=spec)
-
-
 async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) -> str:
     """在沙箱容器里执行命令。**这是解题的主力工具。**"""
     command = str(args.get("command") or "").strip()
@@ -3779,12 +3688,6 @@ async def dispatch_tool(
             return await _tool_describe_mcp(args, spec=spec)
         if name == "call_mcp":
             return await _tool_call_mcp(args, spec=spec)
-        if name == "recon_scan":
-            return await _tool_recon_scan(args, spec=spec)
-        if name == "run_poc":
-            return await _tool_run_poc(args, spec=spec)
-        if name == "extract_secrets":
-            return await _tool_extract_secrets(args, spec=spec)
     except KernelError as exc:
         # 白名单拒绝走这里 —— 消息**必须回到模型**，它才知道换路子。
         return f"拒绝执行：{exc.message}"
@@ -7530,8 +7433,6 @@ __all__ = [
     "HttpRecord",
     "SubmitDecision",
     "TOOL_NAMES",
-    "GOGO_TOOL_NAMES",
-    "GOGO_CONNECTION",
     "TokenUsage",
     "parse_usage",
     "already_submitted",

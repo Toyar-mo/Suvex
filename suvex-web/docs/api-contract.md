@@ -3452,7 +3452,7 @@ prompt 末尾追加一段场景块，产出从"flag"变成"带三级标注的结
 
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/kernel/mcp-servers` | **admin** | MCP 连接清单（**不含 `env`**）+ gogo 就绪判据 |
+| GET | `/kernel/mcp-servers` | **admin** | MCP 连接清单（**不含 `env`**） |
 | PUT | `/kernel/mcp-servers` | **admin** | 整份替换连接清单（`env` 只进不出）|
 | POST | `/kernel/mcp-servers/test` | **admin** | 试连一条**尚未保存**的配置 |
 | GET | `/kernel/tools` | read | 内置工具清单 + 开关 + 就绪状态 |

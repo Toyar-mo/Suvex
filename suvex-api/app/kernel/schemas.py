@@ -297,7 +297,6 @@ class McpServerIn(StrictModel):
     """
 
     #: 连接名 = 模型在 `list_mcps`/`call_mcp` 里用的 id。必填、唯一。
-    #: gogo 的三个一等工具要求的正是 `gogo`。
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
     #: 拉起 server 的可执行文件（`npx` / `python3` / 绝对路径）。
     command: str = Field(min_length=1, max_length=512)
@@ -341,18 +340,17 @@ class McpServerIn(StrictModel):
     #:
     #: ## 为什么必须让它可配（实测踩到的）
     #:
-    #: 全局写死 60 秒时，gogo 的两类调用**必然失败**，而失败长得像
-    #: "MCP 连接坏了"（模型看到的是一句读取超时），于是它会去改配置、
-    #: 换参数，而不是意识到"这个操作本来就慢"：
+    #: 全局写死 60 秒时，慢工具**必然失败**，而失败长得像"MCP 连接坏了"
+    #: （模型看到的是一句读取超时），于是它会去改配置、换参数，
+    #: 而不是意识到"这个操作本来就慢"。实测两类：
     #:
-    #:   · `run_poc` 指向整个 nuclei 模板库：光合并 13,619 个模板就要
-    #:     **102 秒**（实测），还没开始跑；
-    #:   · `recon_scan` 扫一个 /24：实测约 **85 秒**。
+    #:   · 需要先批量预处理再执行的：光展开上万个模板文件就要 **102 秒**；
+    #:   · 网段扫描：一个 /24 约 **85 秒**。
     #:
     #: ⚠️ 上限 1800 秒是"别手滑填 99999"的护栏，不是建议值。
-    #:    **它应当小于 `gogo_mcp.py` 自己的 `GOGO_TIMEOUT`**（默认 180 秒）：
-    #:    外层比内层短 → 外层先超时、内层还在跑；外层比内层长 → 内层先把
-    #:    子进程杀掉并返回错误，外层再等也没用。两边要对齐着配。
+    #:    **它应当与 server 自己的内部超时对齐**：外层比内层短 → 外层先超时、
+    #:    内层还在跑；外层比内层长 → 内层先把子进程杀掉并返回错误，外层再等
+    #:    也没用。哪个 server 有内部超时，就在它的文档里写清并成对配置。
     callTimeout: float | None = Field(default=None, gt=0, le=1800)
 
 
@@ -403,22 +401,16 @@ class McpServersIn(StrictModel):
 
 
 class McpServersOut(CamelModel):
-    """`GET /kernel/mcp-servers`。
+    """`GET /kernel/mcp-servers` —— 已保存的 MCP 连接清单（**不含 `env`**）。
 
-    ⚠️ `gogo_ready` 是**这段接口存在的理由**：界面要能回答
-    "CTF 页那三个 gogo 工具现在可用吗"。判据不是"配了随便一个连接"，
-    而是**名为 `gogo` 的连接存在、且它的白名单允许那三个工具** ——
-    与 `runner._gogo_via_mcp` 的三条前置检查逐条对齐。少一条，
-    界面就会显示"就绪"而模型调起来永远失败。
+    ⚠️ 这里刻意**不做**任何"某个具体工具是否就绪"的判定。
+    曾经有一对 `gogoReady` / `gogoReason` 字段，是给某个特定外部工具定制的；
+    那个工具已移除，而"某工具是否就绪"这件事现在统一由
+    `GET /kernel/tools` 的 `ready` / `reason` 逐条回答 ——
+    判据按 `requires_connection` 查，不再写死某个连接名。
     """
 
     servers: list[McpServerOut] = []
-    #: gogo 的三个一等工具是否真的可用（三条前置检查全过）。
-    #:
-    #: ⚠️ camelCase 手写，理由见 `McpServerOut` 的说明。
-    gogoReady: bool = False
-    #: 不可用时的原因（中文，可直接展示在界面上）。
-    gogoReason: str = ""
 
 
 class McpServerTestIn(StrictModel):
@@ -494,7 +486,7 @@ class KernelToolOut(CamelModel):
     core: bool = False
     #: 依赖的 MCP 连接名（非空表示"配了那条连接才真的能用"）。
     requiresConnection: str = ""
-    #: 那条依赖是否**真的就绪**（见 `service.gogo_readiness`）。
+    #: 那条依赖是否**真的就绪**（按 `requiresConnection` 逐条查，不写死连接名）。
     #:
     #: ⚠️ 这个字段与 `enabled` 是**两件事**，界面必须分开显示：
     #:   · `enabled=false` → 你把它关了（去开关里打开）；
@@ -506,16 +498,13 @@ class KernelToolOut(CamelModel):
 
 
 class KernelToolsOut(CamelModel):
-    """`GET /kernel/tools` —— 内置工具清单 + 当前开关 + MCP 就绪状态。"""
+    """`GET /kernel/tools` —— 内置工具清单 + 当前开关 + 逐工具就绪状态。"""
 
     tools: list[KernelToolOut] = []
     #: 分组顺序（界面按它排栏，不从 tools 里二次推导 —— 同 `TOOL_GROUPS`）。
     groups: list[str] = []
     #: 被显式关掉的工具名（前端"重置为全开"要用它判断有没有改动）。
     disabled: list[str] = []
-    #: gogo 那三个工具是否真的可用（与 `GET /kernel/mcp-servers` 同一判据）。
-    gogoReady: bool = False
-    gogoReason: str = ""
 
 
 class KernelToolsIn(StrictModel):

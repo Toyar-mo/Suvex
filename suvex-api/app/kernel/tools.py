@@ -2,26 +2,19 @@
 
 ## 这个模块补的是什么
 
-`runner.TOOL_NAMES` 是一份**代码里的元组**：13 个工具名，硬编码，没有
-描述、没有分组、没有任何 HTTP 端点能读到它。于是出现过两种后果完全相反
-却同源的失效：
-
-  · 部署者**看不见**智能体到底能调什么 —— 提示词里写着 `recon_scan`，
-    界面上一片空白，只能靠读源码；
-  · `kernel_pentest.md` 教模型"有 `recon_scan` 就用它"，而扫描路径
-    根本没把 MCP 配置送到 `SolveSpec`（v0.81 遗留），模型调了也只会
-    收到一句"没有配置 MCP"。**提示词承诺了代码没接上的能力。**
+`runner.TOOL_NAMES` 是一份**代码里的元组**：12 个工具名，硬编码，没有
+描述、没有分组、没有任何 HTTP 端点能读到它。于是部署者**看不见**智能体
+到底能调什么 —— 界面上一片空白，只能靠读源码。
 
 所以这里把清单变成**可读、可开关、可对账**的一等数据。
 
-## ⚠️ 为什么这里又抄了一遍 13 个工具名
+## ⚠️ 为什么这里又抄了一遍工具名
 
 `TOOL_NAMES` 在 `runner.py`，而 `runner.py` import 成本极高（sandbox /
 docker / drivers / LLM 网关），`router` 层每个请求都会经过 service ——
-顶层反向 import 会让每个 HTTP 请求都付这份代价。这与
-`kernel/service.py::GOGO_CONNECTION_NAME` 是**同一个取舍**。
+顶层反向 import 会让每个 HTTP 请求都付这份代价。
 
-所以照那里的先例办：**抄一份，再用对账测试钉住**
+所以照 `kernel/service.py` 里同类常量的先例办：**抄一份，再用对账测试钉住**
 （`tests/kernel/test_tools_catalog.py::test_catalog_matches_runner_tool_names`
 断言 `set(TOOL_SPECS 的 name) == set(runner.TOOL_NAMES)` 且长度相等）。
 抄漏一个会红，多抄一个也会红。
@@ -68,9 +61,12 @@ class ToolSpec:
 
     ## 为什么 `requires_connection` 是名字而不是布尔
 
-    gogo 那三个工具不是"缺一个开关"，而是**缺一条名为 `gogo` 的 MCP
-    连接**（见 `runner._gogo_via_mcp` 的三条前置检查）。写名字让界面
-    能直接说"它需要名为 gogo 的连接"，而不是笼统的"未就绪"。
+    MCP 类工具不是"缺一个开关"，而是**缺一条具名连接**。写名字让界面
+    能直接说"它需要名为 X 的连接"，而不是笼统的"未就绪"。
+
+    ⚠️ 当前所有内置工具都不需要外部连接（`requires_connection` 全为空串）。
+    这个字段保留是为了将来接外部工具时不用改数据结构 —— 判据在
+    `service.tools_catalog` 里按名字逐条查，不写死。
     """
 
     #: 工具名 = 模型在 ACTION 里写的那个字符串。**不要改**，改了模型不认。
@@ -178,36 +174,6 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         group="外部工具",
         summary="调用一个 MCP 工具。需要先知道连接名与工具名。",
         params="connection、tool（必填）、arguments（JSON 对象，可省略）",
-    ),
-    # ── 外部工具：gogo 三件套 ─────────────────────────────
-    #
-    # ⚠️ 这三个是**一等工具**（在 `TOOL_NAMES` 里），但它们底下依赖一条
-    #    名为 `gogo` 的 MCP 连接 —— 没配时 `_gogo_via_mcp` 会说清原因，
-    #    不会静默失败。所以它们同时属于"外部工具"且 `requires_connection`
-    #    非空：界面据此显示"待配置"，而不是让用户以为关着。
-    ToolSpec(
-        name="recon_scan",
-        label="资产测绘",
-        group="外部工具",
-        summary="对单机或网段做端口与指纹测绘（gogo 引擎，一次调用拿到多项结果）。",
-        params="target（必填）、ports、smart（网段递归用 s / ss）",
-        requires_connection="gogo",
-    ),
-    ToolSpec(
-        name="run_poc",
-        label="跑 POC 模板",
-        group="外部工具",
-        summary="用 POC 模板验证某个漏洞是否成立。沙箱镜像里没有 nuclei，这是唯一途径。",
-        params="target（必填）、poc / tags（选模板的方式）",
-        requires_connection="gogo",
-    ),
-    ToolSpec(
-        name="extract_secrets",
-        label="提取密钥与敏感信息",
-        group="外部工具",
-        summary="从页面或流量里按规则提取密钥、内网地址、存储桶名等敏感信息。",
-        params="target（必填）、rules（可选）",
-        requires_connection="gogo",
     ),
 )
 

@@ -44,8 +44,6 @@ import { useState } from 'react'
 
 export interface McpPanelProps {
   servers: McpServer[]
-  gogoReady: boolean
-  gogoReason: string
   saving: boolean
   error: string | null
   onSave: (servers: McpServerDraft[]) => void
@@ -85,8 +83,6 @@ function draftOf(server: McpServer): McpServerDraft {
 
 export function McpPanel({
   servers,
-  gogoReady,
-  gogoReason,
   saving,
   error,
   onSave,
@@ -220,9 +216,9 @@ export function McpPanel({
         <div>
           <h2 className="text-sm font-medium text-ink">MCP 连接</h2>
           <p className="mt-1 max-w-[60ch] text-[13px] leading-relaxed text-ink-muted">
-            外部工具服务。配一条之后，智能体就能通过 <code className="font-mono">call_mcp</code>{' '}
-            调到它提供的工具；配名为 <code className="font-mono">gogo</code> 的那条会额外点亮
-            资产测绘三件套。
+            外部工具服务。配一条之后，智能体就能通过{' '}
+            <code className="font-mono">list_mcps</code> /{' '}
+            <code className="font-mono">call_mcp</code> 调到它提供的工具。
           </p>
         </div>
         <Button
@@ -235,25 +231,6 @@ export function McpPanel({
           添加连接
         </Button>
       </header>
-
-      {/* gogo 就绪判据 —— 它是这一栏存在的理由之一 */}
-      <div
-        className={cn(
-          'flex items-start gap-tight border-b border-line px-4 py-2.5 text-[13px]',
-          gogoReady ? 'text-ink-muted' : 'text-signal-warn',
-        )}
-      >
-        <span
-          className={cn(
-            'mt-1.5 size-1.5 shrink-0 rounded-full',
-            gogoReady ? 'bg-signal-ok' : 'bg-signal-warn',
-          )}
-          aria-hidden
-        />
-        <span className="leading-relaxed">
-          {gogoReady ? 'gogo 资产测绘三件套已就绪。' : `gogo 资产测绘三件套未就绪：${gogoReason}`}
-        </span>
-      </div>
 
       {/* 已保存的连接 */}
       {servers.length === 0 ? (
@@ -348,7 +325,7 @@ export function McpPanel({
               <input
                 value={draft.name}
                 onChange={(event) => setDraft({ ...draft, name: event.target.value })}
-                placeholder="gogo"
+                placeholder="demo"
                 className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
               />
             </label>
@@ -357,7 +334,7 @@ export function McpPanel({
               <input
                 value={draft.command}
                 onChange={(event) => setDraft({ ...draft, command: event.target.value })}
-                placeholder="/opt/suvex/gogo_mcp.py"
+                placeholder="/opt/suvex/demo_mcp.py"
                 className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
               />
             </label>
@@ -386,7 +363,7 @@ export function McpPanel({
               value={envText}
               onChange={(event) => setEnvText(event.target.value)}
               rows={2}
-              placeholder="GOGO_LICENSE_PATH=/opt/gogo/license"
+              placeholder="API_BASE=https://example.com"
               className="rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
             />
           </label>
@@ -405,9 +382,8 @@ export function McpPanel({
 
           {/*
             ★ v0.83：单次调用超时。
-              它必须有输入框，因为 gogo 的慢操作（/24 扫描 ~85 秒、
-              合并大批模板 100 秒+）在默认 60 秒下**必然失败**，
-              而报错长得像"连接坏了"。
+              它必须有输入框，因为慢工具（网段扫描 ~85 秒、批量模板处理
+              100 秒+）在默认 60 秒下**必然失败**，而报错长得像"连接坏了"。
           */}
           <label className="mt-2 flex flex-col gap-1">
             <span className="text-[12px] text-ink-muted">

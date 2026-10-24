@@ -449,7 +449,7 @@ def test_call_timeout_defaults_to_none_meaning_global():
     里 `0` 是假值（会回落到默认），但语义上"配置成 0 秒"是一个**错误配置**
     而不是"没配"。解析层把非正数一律当成"没配"并记 warning。
     """
-    cfgs = mcp.parse_server_configs([{"name": "gogo", "command": "x"}])
+    cfgs = mcp.parse_server_configs([{"name": "demo", "command": "x"}])
     assert cfgs[0].call_timeout is None
 
 
@@ -460,7 +460,7 @@ def test_call_timeout_parsed_from_config(raw):
     这条挡的是"配了却不生效"：DB 是 JSON 列，手填时很容易写成字符串。
     """
     cfgs = mcp.parse_server_configs(
-        [{"name": "gogo", "command": "x", "call_timeout": raw}]
+        [{"name": "demo", "command": "x", "call_timeout": raw}]
     )
     assert cfgs[0].call_timeout == 300.0
 
@@ -473,7 +473,7 @@ def test_bad_call_timeout_degrades_to_none(raw):
     起不来。最坏退化成引入这个字段之前的行为（60 秒）。
     """
     cfgs = mcp.parse_server_configs(
-        [{"name": "gogo", "command": "x", "call_timeout": raw}]
+        [{"name": "demo", "command": "x", "call_timeout": raw}]
     )
     assert len(cfgs) == 1
     assert cfgs[0].call_timeout is None
@@ -512,20 +512,20 @@ async def test_call_tool_timeout_reaches_request():
             return {"content": []}
 
     client = _FakeClient(mcp.McpServerConfig(name="g", command="x", call_timeout=300))
-    await client.call_tool("run_poc", {})
+    await client.call_tool("some_tool", {})
     assert client.seen == [300.0]
 
     # 没配时回落到全局默认
     plain = _FakeClient(mcp.McpServerConfig(name="g", command="x"))
-    await plain.call_tool("run_poc", {})
+    await plain.call_tool("some_tool", {})
     assert plain.seen == [mcp.DEFAULT_MCP_TIMEOUT]
 
 
 def test_subprocess_gets_an_explicit_stream_limit():
     """★ 起子进程时**必须**显式传 `limit=`，否则大结果会读崩。
 
-    实测（v0.83）：`recon_scan` 扫 /24 时 gogo 返回的那一行 JSON 超过
-    asyncio 默认行缓冲（64 KiB），`stdout.readline()` 抛
+    实测（v0.83）：一次网段扫描返回的那一行 JSON 超过 asyncio 默认行缓冲
+    （64 KiB），`stdout.readline()` 抛
 
         ValueError: Separator is found, but chunk is longer than limit
 

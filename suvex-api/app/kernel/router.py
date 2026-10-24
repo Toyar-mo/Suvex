@@ -430,20 +430,19 @@ def update_ctf2_settings(
 
 
 def _mcp_servers_out(db: DbDep) -> McpServersOut:  # noqa: ARG001
-    """组装读取回执：清单（去 env）+ gogo 三工具的就绪判据。"""
+    """组装读取回执：清单（去 env）。
+
+    ⚠️ 这里**不判**任何具体工具的可用性 —— 那是 `GET /kernel/tools` 的职责
+    （它按 `requires_connection` 逐条算）。两个端点各答一个问题，不重叠。
+    """
     servers = service.public_mcp_servers(db)
-    ready, reason = service.gogo_readiness(servers)
-    return McpServersOut(
-        servers=[McpServerOut(**item) for item in servers],
-        gogoReady=ready,
-        gogoReason=reason,
-    )
+    return McpServersOut(servers=[McpServerOut(**item) for item in servers])
 
 
 @router.get(
     "/mcp-servers",
     response_model=McpServersOut,
-    summary="MCP 连接清单（含 gogo 工具就绪判据）",
+    summary="MCP 连接清单",
 )
 def list_mcp_servers(_identity: AdminDep, db: DbDep) -> McpServersOut:
     """读已保存的 MCP 连接。
@@ -574,8 +573,6 @@ def _tools_out(db: DbDep) -> KernelToolsOut:  # noqa: ARG001
         tools=[KernelToolOut(**item) for item in payload["tools"]],
         groups=list(payload["groups"]),
         disabled=list(payload["disabled"]),
-        gogoReady=payload["gogo_ready"],
-        gogoReason=payload["gogo_reason"],
     )
 
 
