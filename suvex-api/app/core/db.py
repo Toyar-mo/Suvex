@@ -94,6 +94,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import MetaData, create_engine, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 logger = logging.getLogger("suvex.db")
@@ -257,3 +258,139 @@ def ping() -> bool:
         return True
     except Exception:
         return False
+
+
+def get_or_create_singleton(db: Session, model: type, pk: str, /, **defaults: object) -> object:
+    """读单例行，没有就建一条 —— **并发下也只有一个赢家**。
+
+    ## 为什么不能只写 `if db.get(...) is None: db.add(...); db.commit()`
+
+    那是本项目三处单例配置（`KernelConfig` / `FindingSlaConfig` /
+    `ScanRetentionConfig`）原本的写法，它们在并发下会撞主键：
+
+        会话 A: get → None
+        会话 B: get → None          ← 两个都看见"没有"
+        会话 A: add + commit        ← 成功
+        会话 B: add + commit        ← UniqueViolation: pk_... (id)=(default)
+
+    两个请求同时打开设置页、或一次扫描启动与设置页保存撞在一起，就会发生。
+    REPEATABLE READ 也挡不住 —— 这是**同一行不存在**的写-写冲突，
+    不是快照可见性问题。
+
+    ## 撞了之后会怎样（这才是真正难查的部分）
+
+    调用方通常写成：
+
+        try:
+            row = get_ctf2_config(db)
+        except Exception:
+            logger.warning("读配置失败，按默认处理")
+
+    异常被吞了，**但会话没有 rollback**。SQLAlchemy 的 Session 因此停在
+    `DEACTIVE` 状态：之后任何一次查询（甚至 `db.commit()`）都会抛
+
+        PendingRollbackError: This Session's transaction has been rolled back
+        due to a previous exception during flush.
+
+    而报错位置指向**下一个毫不相干的属性访问**。真实失败现场（后台全量
+    pytest，80 分钟那一轮）：
+
+        tests/test_scan_artifact.py::test_build_spec_hands_strix_a_local_directory
+
+        PendingRollbackError: ... Original exception was:
+        (psycopg.errors.UniqueViolation) duplicate key value violates
+        unique constraint "pk_suvex_config"
+        DETAIL:  Key (id)=(default) already exists.
+
+    失败点是 `app/scans/service.py:938` 的 `if scan.run_id:` —— 和配置表毫无
+    关系的一行。链条：`build_spec` → `get_ctf2_config(db)`（:913）→ 看见
+    None → `db.add` + `db.commit` → UniqueViolation → 被 :918 的
+    `except Exception` 吞掉、没 rollback → 会话 DEACTIVE → 后面炸。
+    单跑该文件永远通过 —— 只有全量跑时才会有别的用例先建了那行配置。
+
+    ## 修法
+
+    先照原样试一次（绝大多数调用都走这条，零额外开销）；插入放进
+    `begin_nested()`（SAVEPOINT）里，撞了就只回退这一段，然后**重读一次** ——
+    那一行此时必然已经存在，因为能撞上就说明别人已经提交成功了。
+
+    ⚠️ **撞了之后不要再调 `db.rollback()`**。实测（`_tmp/er/probe_savepoint.py`）：
+
+        SAVEPOINT 内撞主键 + 捕获异常，不调 db.rollback()
+          → 会话仍可用（is_active 仍为 True），调用方未提交的改动还在   ✅
+        调了 db.rollback()
+          → 调用方未提交的改动被一并丢掉                                ❌
+
+    之所以不用外层 rollback：`begin_nested()` 抛出 IntegrityError 时，
+    SAVEPOINT 已经把自己那一段回退了，而**会话本身没有坏**
+    （实测 `is_active` 仍是 True、后续查询正常）。也就是说外层 rollback
+    在这里纯粹是多余的破坏 —— 它唯一的作用就是把调用方的半截工作一起丢掉。
+
+    我第一版在这里写了 `db.rollback()`，还在注释里把它说成「取舍」。那不
+    是取舍，是**自己引入的第二个 bug**。`warn_if_pending_changes` 那条
+    约定（「带着待提交改动调服务层是允许的」）要求外层事务必须保住。
+
+    ## 撞了却读不到（几乎不可达，但不能留成炸弹）
+
+    READ COMMITTED 下收到 IntegrityError 意味着对手**已提交**，所以重读必然
+    读得到。读不到只可能是对手提交之后又删了它 —— 极窄的窗口。
+
+    这条分支我第一版写成「重读不到就直接 `db.add` + `db.commit()`」。探针
+    （`_tmp/er/probe_fallback_branch.py`）证明那样**会把上面好不容易修掉的
+    bug 原样搬回来**：那个 `commit()` 不在 SAVEPOINT 里，如果重读之后又有人
+    插了同一行，IntegrityError 会不带任何保护地抛出去 —— 没人捕获、没有
+    rollback，会话照样变砖。
+
+    现在这条分支也走 SAVEPOINT，最多再试一次；两次都不成就 `raise
+    RuntimeError`。**绝不返回 None** —— 返回 None 会让调用方拿着空对象在很
+    远的地方炸，比在这里失败难查得多。抛出时 SAVEPOINT 已回退、`is_active`
+    仍为 True，所以不留坏状态。
+
+    ## 一个刻意保留的旧语义（不是新引入的，但要知道）
+
+    **成功插入**那条路径结尾仍是 `db.commit()` —— 它会把调用方同一会话里
+    其他待提交的改动一起提交掉。这是原实现的语义（原来也是 add 完就
+    commit），本次没有改，因为改成 SAVEPOINT 内不提交会改变调用方对
+    「这行已经落库了」的预期（`get_ctf2_config` 的调用方确实依赖它，
+    例如设置页 PUT 之后立刻读回）。
+
+    所以这个函数的承诺是精确的两句话：
+      - **成功时**：行已落库，顺带提交了本会话的其他改动（旧语义）
+      - **撞车时**：不抛出、不留坏状态、**不**动调用方其他未提交的改动
+    """
+    row = db.get(model, pk)
+    if row is not None:
+        return row
+
+    # 至多两次尝试。第二次的存在只是为了让「撞了却读不到」这个几乎不可达的
+    # 分支也不必用无保护的 db.commit()（见下方注释）。
+    for _attempt in (1, 2):
+        try:
+            with db.begin_nested():
+                row = model(id=pk, **defaults)
+                db.add(row)
+                db.flush()  # 让主键冲突在 SAVEPOINT 内就暴露，而不是拖到 commit
+        except IntegrityError:
+            # 别人在 get 和 flush 之间提交了同一行。SAVEPOINT 已经回退，
+            # 会话可用，调用方的其他改动也没被动过。重读即可。
+            row = db.get(model, pk)
+            if row is not None:
+                return row
+            # 撞了主键却又读不到。READ COMMITTED 下能收到 IntegrityError
+            # 说明对手**已提交**，所以理论上再读一定读得到；读不到只可能是
+            # 对手提交之后又把它删了（极窄的窗口）。此时确实没有对手了，
+            # 再试一次是安全的 —— 但这次插入同样要待在 SAVEPOINT 里。
+            continue
+
+        db.commit()
+        db.refresh(row)
+        return row
+
+    # 两次都撞、两次都读不到 —— 说明这行对我们是不可见的（例如被别的会话
+    # 反复删除重建，或权限/可见性问题）。**不能返回 None**：调用方会拿着
+    # None 在很远的地方炸 AttributeError，比这里直接失败难查得多。
+    # 抛出时 SAVEPOINT 已回退，会话仍是可用的（is_active 为 True，
+    # 调用方未提交的改动仍在），所以这里的 raise 不会留下坏状态。
+    raise RuntimeError(
+        f"{model.__name__}(id={pk!r}) 反复主键冲突却始终读不到；这行对本会话不可见，无法安全创建。"
+    )

@@ -916,6 +916,24 @@ def build_spec(db: Session, scan: Scan) -> LaunchSpec:
         )
         disabled_tool_names = normalize_disabled(getattr(kernel_row, "disabled_tools", None))
     except Exception:  # noqa: BLE001 - 读配置失败不该拦住启动扫描
+        # ⚠️ 只在**会话真的坏了**才 rollback。
+        #
+        # 吞掉异常却不回滚，会话会停在 DEACTIVE，之后任何 ORM 访问都抛
+        # PendingRollbackError，报错点指向毫不相干的地方（实测现场见下）。
+        # 但**无条件** rollback 会吞掉调用方未提交的改动（实测：
+        # `_tmp/er/probe_except_rollback.py` —— rollback 后 note 从
+        # 'modified' 变回 'original'），而 build_spec 的调用方正是带着
+        # 未提交的 scan 状态进来的。
+        #
+        # 判据用 `db.is_active`：只有数据库层错误（DBAPIError 及其子类，
+        # 如主键冲突）才会把它置 False；普通异常（解析失败之类）不会，
+        # 那种情况会话是好的，rollback 纯属添乱。
+        #
+        # 实测现场（真实的那个 bug）：`tests/test_scan_artifact.py` 在
+        # 本函数之后的 `if scan.run_id:` 炸 PendingRollbackError，
+        # 根因是 `pk_suvex_config` 主键冲突被吃掉、没回滚。
+        if not db.is_active:
+            db.rollback()
         logger.warning(
             "读 MCP 连接/工具开关失败，本次扫描按「没有 MCP、工具全开」处理",
             exc_info=True,
@@ -1976,16 +1994,15 @@ def get_retention_config(db: Session):  # noqa: ANN201
     **读时建行**而不是靠迁移插入初始行：迁移插入的行在"用户从未打开设置页"
     的实例上也会存在，但它的 `updated_at` 会撒谎（显示成一个谁都没操作过的时刻）。
     读时建行则如实反映"这条是用默认值新建的"。
+
+    ★ 走 `get_or_create_singleton`（并发安全）。原先
+      `if db.get() is None: db.add + commit` 在「用户打开设置页」与
+      「后台保留期扫描」同时发生时撞 `pk_...` 主键。
     """
+    from app.core.db import get_or_create_singleton
     from app.settings.models import SINGLETON_ID, ScanRetentionConfig
 
-    config = db.get(ScanRetentionConfig, SINGLETON_ID)
-    if config is None:
-        config = ScanRetentionConfig(id=SINGLETON_ID)
-        db.add(config)
-        db.commit()
-        db.refresh(config)
-    return config
+    return get_or_create_singleton(db, ScanRetentionConfig, SINGLETON_ID)  # type: ignore[return-value]
 
 
 def sweep_retention(db: Session, *, now: datetime | None = None) -> dict[str, int]:

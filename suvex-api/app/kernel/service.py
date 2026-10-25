@@ -2213,6 +2213,14 @@ def learn_from_solve(db: Session, challenge: KernelChallenge, outcome) -> None: 
         agentsec_on = bool(ctf2_settings.enable_agentsec_scenarios)
         ir_on = bool(ctf2_settings.enable_ir_scenarios)
     except Exception:  # noqa: BLE001 - 读配置失败不该拦住写卡
+        # ⚠️ 只在会话真的坏了才 rollback（判据 `db.is_active`）。
+        #   不回滚 → 会话停在 DEACTIVE，之后任何 ORM 访问都抛
+        #   PendingRollbackError，报错点在别处。
+        #   无条件回滚 → 吞掉调用方未提交的改动（实测
+        #   `_tmp/er/probe_except_rollback.py`），而写卡这条路的调用方
+        #   通常正带着未提交的 note 改动。
+        if not db.is_active:
+            db.rollback()
         logger.warning("读 CTF2 配置失败，本次按未启用处理", exc_info=True)
         agentsec_on = False
         ir_on = False
@@ -3485,14 +3493,21 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
 
 
 def get_ctf2_config(db: Session) -> KernelConfig:
-    """读配置，没有就建一条。**设置页用这个**（那里"读"本身就要有东西可编辑）。"""
-    row = db.get(KernelConfig, SINGLETON_ID)
-    if row is None:
-        row = KernelConfig(id=SINGLETON_ID)
-        db.add(row)
-        db.commit()
-        db.refresh(row)
-    return row
+    """读配置，没有就建一条。**设置页用这个**（那里"读"本身就要有东西可编辑）。
+
+    ⚠️ 只用于「用户要编辑」的路径（设置页 GET/PUT）。
+       扫描启动、调度器轮询这类**只读**路径请用 `effective_ctf2_settings` ——
+       它不建行，也就没有下面这条并发问题。
+
+    ★ 走 `get_or_create_singleton`：原先是 `if db.get() is None: db.add + commit`，
+      两个请求同时进来会撞 `pk_suvex_config` 主键（实测复现过）。
+      而调用方 `scans/service.py` 那处是 `except Exception: logger.warning(...)`
+      —— 异常被吞、会话没 rollback，于是**下一个毫不相干的属性访问**才炸
+      `PendingRollbackError`，报错位置离真正原因很远。
+    """
+    from app.core.db import get_or_create_singleton
+
+    return get_or_create_singleton(db, KernelConfig, SINGLETON_ID)  # type: ignore[return-value]
 
 
 def update_ctf2_settings(
