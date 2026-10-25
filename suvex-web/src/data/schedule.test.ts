@@ -3,6 +3,7 @@ import {
   MAX_INTERVAL_MINUTES,
   MIN_INTERVAL_MINUTES,
   INTERVAL_PRESETS,
+  SCHEDULE_TARGET_KINDS,
   compareSchedules,
   formatInterval,
   formatRelative,
@@ -10,6 +11,7 @@ import {
   scheduleState,
   type Schedule,
 } from './schedule'
+import { TARGET_KIND_LABEL, type TargetKind } from './scan'
 
 /**
  * 定时计划的纯逻辑。
@@ -250,5 +252,40 @@ describe('常量', () => {
     // 后端会 400 的间隔 —— 而报错在提交那一刻才出现。
     expect(MIN_INTERVAL_MINUTES).toBe(5)
     expect(MAX_INTERVAL_MINUTES).toBe(365 * 24 * 60)
+  })
+})
+
+describe('SCHEDULE_TARGET_KINDS —— 一个"白名单"而不是"全集"', () => {
+  /*
+    这个数组的意义不是"列一遍有哪些形态"，而是**声明哪些形态排得了定时计划**。
+    所以它必须是一个显式白名单：`TARGET_KIND_LABEL` 里新加一个形态时，
+    它不会自动漏进来。
+
+    ★ 第一条测试正是为此存在。如果实现写成
+      `Object.keys(TARGET_KIND_LABEL)`，那么后端哪天加了 'docker' / 'k8s'
+      这类新形态，定时计划就会**自动**多出一个从没被验证过的选项 ——
+      而没有任何测试会红。反过来，白名单会让这条测试在你加形态时红一次，
+      逼你回答"这个形态排得了定时计划吗"。
+
+    这与本项目反复出现的那个缺陷形状是同一个：**选项存在，但它在某条
+    路径上其实立不起来，且没人知道。**
+  */
+
+  it('是显式白名单 —— 不等于 TARGET_KIND_LABEL 的全部键', () => {
+    const all = Object.keys(TARGET_KIND_LABEL) as TargetKind[]
+    // 当前两者差一个：artifact。如果哪天相等，说明有人把它改成了全量遍历。
+    expect(SCHEDULE_TARGET_KINDS.length).toBe(all.length - 1)
+    expect(SCHEDULE_TARGET_KINDS).not.toContain('artifact')
+  })
+
+  it('每个元素都是合法的目标形态（防手写成拼错的值）', () => {
+    const all = new Set(Object.keys(TARGET_KIND_LABEL))
+    for (const kind of SCHEDULE_TARGET_KINDS) {
+      expect(all.has(kind)).toBe(true)
+    }
+  })
+
+  it('没有重复项 —— 重复会让同一个按钮渲染两次', () => {
+    expect(new Set(SCHEDULE_TARGET_KINDS).size).toBe(SCHEDULE_TARGET_KINDS.length)
   })
 })

@@ -545,3 +545,86 @@ def test_404_message_does_not_double_say_deleted(ready_client: TestClient) -> No
 
     assert response.status_code == 404
     assert response.text.count("可能已被删除") == 1, response.text
+
+
+# ══════════════════════════════════════════════════════════
+# `artifact` 不能成为定时计划的目标（v0.91）
+# ══════════════════════════════════════════════════════════
+
+
+def test_artifact_kind_is_rejected_with_an_actionable_message(
+    ready_client: TestClient, provider_id: str, statement: str
+) -> None:
+    """「题目附件」不能排定时计划 —— 必须 400，且说清下一步该做什么。
+
+    ## 这条测试固定的是「两道门都必须关掉」
+
+    `artifact` 在定时计划里不是"暂时不支持"，而是**两种输入都立不起来**：
+
+    * `target=""` → `min_length=1` 让它 422（根本进不到 handler）；
+    * `target="tryre.zip"` → schema 放行，但 `targets.normalize_and_validate`
+      对任何非空输入都返回「这类题目不需要目标地址」→ 400。
+
+    于是旧实现了两种写法都失败，但**报错都指错了地方**：前者说
+    "字段太短"，后者说"不需要目标地址"，没有任何一句话提到
+    "定时计划存不下附件"。用户会以为是自己的写法问题。
+
+    这里断言的是**非空输入这一条**（能走到 handler 的那条），
+    因为它是真正被这次改动改掉的行为。空串那条由 schema 兜着，
+    见下面的 `test_artifact_with_empty_target_still_fails_schema`。
+    """
+    response = ready_client.post(
+        f"{API}/schedules",
+        json=_payload(statement, providerId=provider_id, targetKind="artifact", target="tryre.zip"),
+    )
+
+    assert response.status_code == 400, response.text
+    body = response.text
+    # 报错必须指向**真正的原因**，而不是"目标不合法"
+    assert "附件" in body, body
+    assert "定时计划" in body, body
+
+
+def test_artifact_with_empty_target_still_fails_schema(
+    ready_client: TestClient, provider_id: str, statement: str
+) -> None:
+    """空 target 在 schema 层就被拒，永远到不了 handler 的 artifact 判断。
+
+    ★ 这条存在的意义是防止有人"顺手把 min_length 放宽"来让 artifact 可用 ——
+    那样虽然能建出一条计划，但派发时 `attachmentStagingId=None`，
+    每一轮都会失败。放宽 schema 不是解法，改派发链路才是。
+
+    ⚠️ 断言 **400 而不是 422**：本项目把 `RequestValidationError` 统一翻成
+    400 + `VALIDATION_FAILED`（`app/core/errors.py`，契约 §1.3 的口径）。
+    两种 artifact 写法的状态码相同，真正的区别在**文案**：这一条说
+    "长度不足"（看起来像用户漏填），上面那条说"定时计划存不下附件"
+    （说清了真正原因）。靠文案区分，不是靠状态码。
+    """
+    response = ready_client.post(
+        f"{API}/schedules",
+        json=_payload(statement, providerId=provider_id, targetKind="artifact", target=""),
+    )
+
+    assert response.status_code == 400, response.text
+    # 这一条是"字段太短" → 说明 pydantic 先拦住了，没走到附件那条分支
+    assert "长度不足" in response.text, response.text
+    assert "附件" not in response.text, response.text
+
+
+def test_other_kinds_are_still_accepted(ready_client: TestClient, provider_id: str, statement: str) -> None:
+    """拒绝 artifact 不能误伤别的形态 —— 这是防守型改动最容易犯的错。
+
+    ★ 每加一条"拒绝某某"的规则，就要有一条"别人还能用"的测试，
+      否则规则写宽了（比如判成 `not in {url, repo}`）也没人发现。
+    """
+    for kind, target in [
+        ("url", "https://api.acme.internal"),
+        ("repo", "https://github.com/acme/backend.git"),
+        ("path", "/srv/app"),
+        ("service", "1.2.3.4:9999"),
+    ]:
+        response = ready_client.post(
+            f"{API}/schedules",
+            json=_payload(statement, providerId=provider_id, targetKind=kind, target=target),
+        )
+        assert response.status_code == 201, f"{kind} 被误伤了：{response.text}"

@@ -43,6 +43,7 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.core.errors import ApiError
 from app.core.timeutil import now_utc
+from app.core.vocab import TargetKind
 from app.scans import service as scans_service
 from app.scans import targets
 from app.schedules import service
@@ -121,7 +122,36 @@ def create_schedule(
     计划可能几小时后才跑，那时的连通性和现在没关系 ——
     现在探一次只会拿到一个会过期的结论，还可能把"目标此刻不通"
     变成一个假的创建失败。
+
+    ## 为什么 `artifact` 在这里被**明确拒绝**
+
+    这不是"少支持一种形态"，而是这一类在定时计划里**根本立不起来**：
+
+    * `artifact` 的合法 `target` 是**空串**（附件名由建扫描时自己填），
+      而 `ScheduleCreateIn.target` 是 `min_length=1` —— 空串在进到这里
+      之前就被 422 拦掉；
+    * 随便填个非空值（比如附件名）反而能被 schema 放过，但
+      `targets.normalize_and_validate("artifact", …)` 对任何非空输入
+      都返回"这类题目不需要目标地址" —— 于是 400。
+
+    两条路都走不通。更关键的是**即使放行也没意义**：附件是通过
+    `attachmentStagingId` 一次性暂存后由 `build_challenge` 铺开的，
+    而 `ScanSchedule` 没有存附件的地方，派发时 `attachmentStagingId=None`
+    —— 每一次到点都会建出一条没有素材的扫描然后必然失败，
+    并且每一轮 `failure_count` 都 +1。用户会看到一条"永远在失败"
+    的计划，而它不可能被修好。
+
+    所以在入口一次说清楚，比让它建出来再慢慢失败好得多。前端的
+    「目标形态」也去掉了这一项（`SchedulesPage`），两处口径一致。
     """
+    if payload.targetKind == TargetKind.ARTIFACT:
+        raise ApiError.validation(
+            "定时计划不能针对「题目附件」——附件只在提交时暂存，"
+            "计划里存不下它，每一轮都会因为没有素材而失败。"
+            "要分析附件请直接发起一次扫描。",
+            {"targetKind": "定时计划必须有一个可以反复访问的目标"},
+        )
+
     normalized, check = targets.normalize_and_validate(payload.targetKind, payload.target)
     if not check.ok:
         raise ApiError.validation(

@@ -340,3 +340,91 @@ describe('SchedulesPage', () => {
     })
   })
 })
+
+describe('新建定时计划 — 目标形态的取舍', () => {
+  /*
+    「题目附件」在定时计划里**立不起来**，所以选项里不该有它。
+
+    这条链路的两个断点（都不是猜测，是实测过的）：
+      · 附件的合法 target 是空串，而后端 `ScheduleCreateIn.target` 是
+        `min_length=1` —— 空串 422；
+      · 随便填个非空值能过 schema，但 `targets.normalize_and_validate`
+        对任何非空输入都回「这类题目不需要目标地址」—— 400。
+
+    也就是说：用户在界面上看到这个选项、选中它、填完整个表单、点创建，
+    得到的必定是一条报错。**更好的做法是它一开始就不出现。**
+
+    这个断言看着很薄，但它锁住的正是"界面允许了一个后端做不到的动作"
+    这个形状 —— 之前 `TARGET_KIND_LABEL` 是全量遍历的，加一个形态就自动
+    掉进这个坑里，没有任何测试会红。
+  */
+  it('目标形态里没有「题目附件」，其余四种都在', async () => {
+    response = { items: [], total: 0, dueCount: 0 }
+    renderPage()
+
+    await screen.findByText('还没有定时计划')
+    fireEvent.click(screen.getAllByRole('button', { name: '新建计划' })[0])
+
+    const dialog = await screen.findByRole('dialog')
+
+    expect(within(dialog).queryByRole('button', { name: '题目附件' })).toBeNull()
+    for (const label of ['已部署的应用', 'Git 仓库', '本地代码路径', 'TCP 服务']) {
+      expect(within(dialog).getByRole('button', { name: label })).toBeTruthy()
+    }
+  })
+
+  it('是居中弹窗（role=dialog）而不是右侧抽屉', async () => {
+    response = { items: [], total: 0, dueCount: 0 }
+    renderPage()
+
+    await screen.findByText('还没有定时计划')
+    fireEvent.click(screen.getAllByRole('button', { name: '新建计划' })[0])
+
+    // Modal 带 aria-modal；Drawer 没有这个属性（它是并存式浮层，不是遮断式）。
+    // 这条断言把"用哪个浮层"固定下来 —— 用错不会报错，只会让表单又变回竖长条。
+    const dialog = await screen.findByRole('dialog')
+    expect(dialog.getAttribute('aria-modal')).toBe('true')
+  })
+
+  it('没填目标时「创建」不可点，并给出原因', async () => {
+    response = { items: [], total: 0, dueCount: 0 }
+    renderPage()
+
+    await screen.findByText('还没有定时计划')
+    fireEvent.click(screen.getAllByRole('button', { name: '新建计划' })[0])
+
+    const dialog = await screen.findByRole('dialog')
+    const create = within(dialog).getByRole('button', { name: '创建' })
+    expect((create as HTMLButtonElement).disabled).toBe(true)
+    expect(dialog.textContent).toContain('请先填写要定期复查的目标')
+  })
+
+  it('填了目标之后「创建」变可点 —— 且不发请求直到真的点它', async () => {
+    response = { items: [], total: 0, dueCount: 0 }
+    const calls: string[] = []
+    vi.stubGlobal('fetch', (input: RequestInfo, init?: RequestInit) => {
+      calls.push(`${init?.method ?? 'GET'} ${String(input)}`)
+      return Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+
+    renderPage()
+    await screen.findByText('还没有定时计划')
+    fireEvent.click(screen.getAllByRole('button', { name: '新建计划' })[0])
+
+    const dialog = await screen.findByRole('dialog')
+    const targetInput = within(dialog).getAllByRole('textbox')[1]
+    fireEvent.change(targetInput, { target: { value: 'api.acme.internal' } })
+
+    const create = within(dialog).getByRole('button', { name: '创建' })
+    await waitFor(() => {
+      expect((create as HTMLButtonElement).disabled).toBe(false)
+    })
+    // 只是"能点了"，还没点 —— 编辑表单不该有任何副作用
+    expect(calls.every((c) => c.startsWith('GET'))).toBe(true)
+  })
+})

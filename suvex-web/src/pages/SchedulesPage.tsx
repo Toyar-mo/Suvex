@@ -3,7 +3,7 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { AlarmClock, Play, Plus, RefreshCw, Search, Trash2 } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppShell'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
-import Drawer from '@/components/ui/Drawer'
+import { Modal } from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
@@ -15,6 +15,7 @@ import {
   MAX_INTERVAL_MINUTES,
   MIN_INTERVAL_MINUTES,
   SCHEDULE_STATE_META,
+  SCHEDULE_TARGET_KINDS,
   compareSchedules,
   formatInterval,
   formatRelative,
@@ -30,7 +31,14 @@ import {
   toggleSchedule,
   useSchedulesState,
 } from '@/data/schedules-store'
-import { SCAN_AUTHORIZATION_STATEMENT, SCAN_GOAL_LABEL, TARGET_KIND_LABEL, type TargetKind } from '@/data/scan'
+import {
+  SCAN_AUTHORIZATION_STATEMENT,
+  SCAN_GOAL_HINT,
+  SCAN_GOAL_LABEL,
+  TARGET_KIND_HINT,
+  TARGET_KIND_LABEL,
+  type TargetKind,
+} from '@/data/scan'
 import { defaultProviderId, useProviders } from '@/data/providers'
 
 /**
@@ -121,13 +129,18 @@ function SummaryCard({
  * 应该删了重建（旧计划的历史与失败计数对它没有意义）。改名和改间隔
  * 走行内的 PATCH，因为那两个才是真的"调整同一条计划"。
  *
- * ★ **组件只在打开时挂载**（父组件 `{creating && <CreateScheduleDrawer/>}`）。
+ * ★ **组件只在打开时挂载**（父组件 `{creating && <CreateScheduleDialog/>}`）。
  *   这样"每次打开都是干净的"由 React 的挂载语义保证，不需要在 effect 里
  *   逐个 `setState('')` 重置 —— 那种写法会触发级联渲染（eslint
  *   `react-hooks/set-state-in-effect` 拦的就是它），而且漏掉一个字段就
  *   会把上次填了一半的内容留在那儿，用户会以为是自己填的。
+ *
+ * ★ 是 **Dialog（居中弹窗）不是 Drawer（右侧抽屉）**。六个字段 + 两个
+ *   横向按钮组塞进 34rem 的竖长抽屉，只能一路竖排，右侧空掉大半、
+ *   底部还要滚动才够得着「创建」。这个动作本身是"专心填完再建一条"，
+ *   遮断列表反而更对 —— 判据与 `components/ui/Modal.tsx` 顶部注释一致。
  */
-function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
+function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
   const providers = useProviders()
   const [name, setName] = useState('')
   const [target, setTarget] = useState('')
@@ -181,17 +194,26 @@ function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
     }
   }
 
+  const kindHint = TARGET_KIND_HINT[targetKind as TargetKind] ?? null
+  const goalHint = SCAN_GOAL_HINT[goal as keyof typeof SCAN_GOAL_HINT] ?? null
+
   return (
-    <Drawer
+    <Modal
       open
       onClose={onClose}
+      widthClass="max-w-3xl"
       title="新建定时计划"
+      titleAside={
+        <span className="rounded-sm border border-line px-1.5 py-0.5 text-[11px] text-ink-muted">
+          {formatInterval(intervalMinutes)}
+        </span>
+      }
       footer={
         <div className="flex items-center justify-between gap-tight">
-          <p className="text-xs text-ink-muted">
+          <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">
             {disabledReason ?? `每 ${formatInterval(intervalMinutes).replace('每 ', '')} 自动发起一次扫描`}
           </p>
-          <div className="flex gap-tight">
+          <div className="flex shrink-0 gap-tight">
             <Button variant="secondary" size="sm" onClick={onClose} disabled={busy}>
               取消
             </Button>
@@ -208,54 +230,74 @@ function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
         </div>
       }
     >
+      {/*
+        ★ 两列栅格而不是单列堆叠。
+        原先 544px 宽的抽屉里六个字段一路竖排，每行右边空掉一大半，
+        而整页要滚动才能看到"创建"按钮 —— 用户得反复上下找自己填到哪了。
+        改成 3xl（768px）弹窗 + 两列之后：名称与目标并排、形态与判据各占
+        一行（它们都是横向一组按钮），一整屏能看全，不用滚。
+      */}
       <div className="flex flex-col gap-panel">
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-ink-muted">名称（留空则用目标名）</span>
-          <input
-            type="text"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="例如：生产 API 每周复查"
-            className="rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-          />
-        </label>
+        <div className="grid grid-cols-1 gap-panel sm:grid-cols-2">
+          <label className="flex min-w-0 flex-col gap-1">
+            <span className="text-xs text-ink-muted">名称</span>
+            <input
+              type="text"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="留空则用目标名"
+              className="rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+            />
+          </label>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs text-ink-muted">目标</span>
-          <input
-            type="text"
-            value={target}
-            onChange={(event) => setTarget(event.target.value)}
-            placeholder="https://api.acme.internal"
-            className="rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
-          />
-        </label>
+          <label className="flex min-w-0 flex-col gap-1">
+            <span className="text-xs text-ink-muted">目标</span>
+            <input
+              type="text"
+              value={target}
+              onChange={(event) => setTarget(event.target.value)}
+              placeholder={kindHint?.placeholder ?? ''}
+              className="rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
+            />
+          </label>
+        </div>
 
         <div className="flex flex-col gap-1">
           <span className="text-xs text-ink-muted">目标形态</span>
           <div className="flex flex-wrap gap-tight">
-            {Object.entries(TARGET_KIND_LABEL).map(([value, label]) => (
+            {/*
+              ★ 遍历 `SCHEDULE_TARGET_KINDS` 而不是 `TARGET_KIND_LABEL` 的全部键。
+              「题目附件」在定时计划里立不起来（附件是一次性暂存，计划存不下），
+              放出来只会让用户选完、填完、点创建，然后收到一个 400。
+              为什么不在按钮上做 disabled：一个永远点不动的选项比不出现更让人
+              困惑 —— 用户会以为是权限问题或页面没加载完。
+              后端 `POST /schedules` 同样拒绝，两处口径一致。
+            */}
+            {SCHEDULE_TARGET_KINDS.map((value) => (
               <button
                 key={value}
                 type="button"
                 onClick={() => setTargetKind(value)}
                 aria-pressed={targetKind === value}
                 className={cn(
-                  'rounded-sm border px-2 py-1 text-xs transition-colors',
+                  'rounded-sm border px-2.5 py-1 text-xs transition-colors',
                   targetKind === value
                     ? 'border-accent bg-accent/10 text-accent'
                     : 'border-line text-ink-muted hover:text-ink',
                 )}
               >
-                {label}
+                {TARGET_KIND_LABEL[value]}
               </button>
             ))}
           </div>
+          {kindHint !== null && (
+            <p className="text-[11px] text-ink-muted">例如 {kindHint.example}</p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1">
           <span className="text-xs text-ink-muted">这次复查要达成什么</span>
-          <div className="flex flex-col gap-1">
+          <div className="grid grid-cols-1 gap-1 sm:grid-cols-3">
             {Object.entries(SCAN_GOAL_LABEL).map(([value, label]) => (
               <button
                 key={value}
@@ -273,6 +315,7 @@ function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
+          {goalHint !== null && <p className="text-[11px] text-ink-muted">{goalHint}</p>}
         </div>
 
         <div className="flex flex-col gap-1">
@@ -285,7 +328,7 @@ function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
                 onClick={() => setIntervalMinutes(preset.minutes)}
                 aria-pressed={intervalMinutes === preset.minutes}
                 className={cn(
-                  'rounded-sm border px-2 py-1 text-xs transition-colors',
+                  'rounded-sm border px-2.5 py-1 text-xs transition-colors',
                   intervalMinutes === preset.minutes
                     ? 'border-accent bg-accent/10 text-accent'
                     : 'border-line text-ink-muted hover:text-ink',
@@ -328,7 +371,7 @@ function CreateScheduleDrawer({ onClose }: { onClose: () => void }) {
           </p>
         )}
       </div>
-    </Drawer>
+    </Modal>
   )
 }
 
@@ -710,7 +753,7 @@ export default function SchedulesPage() {
       </div>
 
       {/* 只在打开时挂载 —— 这样"每次打开都是干净的"由挂载语义保证 */}
-      {creating && <CreateScheduleDrawer onClose={() => setCreating(false)} />}
+      {creating && <CreateScheduleDialog onClose={() => setCreating(false)} />}
 
       <ConfirmDialog
         open={pendingDelete !== null}

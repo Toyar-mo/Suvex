@@ -27,6 +27,8 @@
  *   · `lastScanId` 有值但 `lastRunAt` 为空      → 同样是不该出现的组合。
  */
 
+import type { TargetKind } from '@/data/scan'
+
 /** 一条定时计划。与后端 `ScheduleOut` 逐字一致。 */
 export interface Schedule {
   id: string
@@ -155,6 +157,34 @@ export const SCHEDULE_STATE_META: Record<
 /** 后端允许的间隔范围（`models.py` 的 `MIN_/MAX_INTERVAL_MINUTES`）。 */
 export const MIN_INTERVAL_MINUTES = 5
 export const MAX_INTERVAL_MINUTES = 365 * 24 * 60
+
+/**
+ * 定时计划**能**用的目标形态 —— 「题目附件」不在其中。
+ *
+ * ## 为什么不是直接复用 `TARGET_KIND_LABEL` 的全部键
+ *
+ * 因为 `artifact` 在定时计划里不是"暂时不支持"，而是**立不起来**：
+ *
+ *   · 它的合法 `target` 是空串（附件名由建扫描时自己填），而后端
+ *     `ScheduleCreateIn.target` 是 `min_length=1` —— 空串直接 422；
+ *   · 随便填个非空值又能过 schema，但 `targets.normalize_and_validate`
+ *     对任何非空输入都回「这类题目不需要目标地址」—— 400。
+ *
+ * 两条路都走不通。而**即使放行也没意义**：附件是提交时一次性暂存的，
+ * `ScanSchedule` 没有存它的地方，派发时 `attachmentStagingId=None`，
+ * 于是每一轮到点都会建出一条没有素材的扫描然后必然失败，
+ * `failureCount` 每轮 +1 —— 用户会看到一条**永远修不好**的计划。
+ *
+ * 所以在选项层面就不给。后端 `POST /schedules` 也做了同样的拒绝
+ * （`app/schedules/router.py`），两处口径一致：这里少一个按钮，
+ * 那里多一条可读的报错，绕过前端也拿不到一条注定失败的计划。
+ *
+ * ## ★ 顺序就是按钮的显示顺序
+ *
+ * 与 `TARGET_KIND_LABEL` 保持同样的相对次序（`artifact` 本来在最后，
+ * 去掉它不影响其余的位置记忆）。新增形态时**追加到末尾**，不要插中间。
+ */
+export const SCHEDULE_TARGET_KINDS: ReadonlyArray<TargetKind> = ['url', 'repo', 'path', 'service']
 
 /**
  * 常用间隔选项。
