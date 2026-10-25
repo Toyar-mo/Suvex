@@ -261,3 +261,79 @@ def test_fallback_branch_never_returns_none(seeded):
         assert row.id == SINGLETON_ID
     finally:
         other.close()
+
+
+def test_sla_config_call_site_survives_the_race(db_session):
+    """★ 走**真实调用点** `app.findings.service.sla_config`，不是裸函数。
+
+    上面几条测的都是 `get_or_create_singleton` 本身；这条守的是
+    「调用点接对了没有」。`sla_config` 原先是自己写的
+    `if db.get() is None: db.add + commit + refresh`，改成走
+    `get_or_create_singleton` 之后，如果谁把它改回去（或漏改某处），
+    下面这个「读到过期 None」的场景会当场撞主键。
+    """
+    from app.findings.service import sla_config
+    from app.settings.models import FindingSlaConfig
+
+    # 先由「别人」建好并提交
+    db_session.add(FindingSlaConfig(id=SINGLETON_ID))
+    db_session.commit()
+
+    other = get_session_factory()()
+    try:
+        real_get = Session.get
+        state = {"calls": 0}
+
+        def stale(self, entity, ident, *args, **kwargs):
+            # 只让第一次读到过期的 None（模拟「我先读、别人才提交」）；
+            # 之后的读取走真实实现 —— 否则重试也读不到，会走兜底分支
+            # 报 RuntimeError，测的就不是「撞了能否优雅输」这条路径了。
+            if entity is FindingSlaConfig and ident == SINGLETON_ID and state["calls"] == 0:
+                state["calls"] += 1
+                return None
+            return real_get(self, entity, ident, *args, **kwargs)
+
+        with mock.patch.object(Session, "get", stale):
+            cfg = sla_config(other)
+
+        # 返回的是别人的那一行，不是 None、也没抛
+        assert cfg.id == SINGLETON_ID
+        assert other.query(FindingSlaConfig).count() == 1
+        # 会话没被弄坏
+        assert other.is_active is True
+        assert other.execute(text("SELECT 1")).scalar() == 1
+    finally:
+        other.close()
+
+
+def test_sla_config_creates_with_documented_defaults(db_session):
+    """库里没有时，`sla_config` 必须用 `DEFAULT_SLA_DAYS` 建出来。
+
+    这条守的是「接线时别把 defaults 漏掉」——`get_or_create_singleton`
+    的 `**defaults` 是纯关键字，漏传不会报错，只会在运行期给出全 None
+    的 SLA 天数，然后 `sla_days_for` 算出一个荒唐的截止时间。
+    """
+    from app.findings.service import sla_config
+    from app.settings.models import DEFAULT_SLA_DAYS, FindingSlaConfig
+
+    assert db_session.query(FindingSlaConfig).count() == 0, "前置：库里不该有这一行"
+
+    cfg = sla_config(db_session)
+
+    assert cfg.id == SINGLETON_ID
+    for severity, days in DEFAULT_SLA_DAYS.items():
+        assert getattr(cfg, f"{severity}_days") == days, f"{severity} 的默认天数没落库"
+    assert db_session.query(FindingSlaConfig).count() == 1
+
+    # ★ 新建的那行必须**已经提交**：`sla_config` 的调用方（SLA 计算、
+    # 配置页）拿到对象后要立刻能读，且下次调用必须命中同一行而不是再插一次。
+    # 如果谁把 get_or_create_singleton 的 `db.commit()` 去掉（改成只 flush），
+    # 下面这条会红：另一条连接看不见未提交的行 → 又建一条 → 撞主键。
+    other = get_session_factory()()
+    try:
+        assert other.query(FindingSlaConfig).count() == 1, "新建的行没提交，别的会话看不见"
+        again = sla_config(other)
+        assert again.id == SINGLETON_ID
+        assert other.query(FindingSlaConfig).count() == 1, "第二次调用又建了一行"
+    finally:
+        other.close()

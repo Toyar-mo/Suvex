@@ -252,6 +252,22 @@ _COLLECTION_FAIL_TOKENS = (
     "curl: (28)",
     "curl: (6)",
     "curl: (56)",
+    # `curl -sS` 没拿到响应时的形态。与 `-w '%{http_code}'` 打出的 `000`
+    # 是**同一现象**（TCP 连上了、一个响应字节都没回），只是命令写法不同。
+    # 32231 那次模型恰好用了 `-w`，所以 `000` 被识别；同一份输出换成
+    # `-sS` 就会静默漏判 —— 同一个靶子死法，只因为少写一个参数。
+    #
+    # ⚠️ 刻意**不**收这几条（都实测过，都不是"发了但没拿到字节"）：
+    #   - `curl: (35)` TLS 握手失败 —— TCP 已连上，靶子活着，只是不说 TLS。
+    #     判成不可达正是把活靶子宣布成死的。
+    #   - `wget: unable to resolve host address` —— 本地 DNS 失败，
+    #     根本没碰到目标（与已收的 `could not resolve host` 不是一回事：
+    #     那条是 curl 的措辞，配 `--resolve` 失效时才出现）。
+    #   - `ssh: connect ... timed out` —— `ssh` 不在 `_ACTING_PROGRAMS`，
+    #     所以这条根本走不到判据里。**刻意不收** ssh：它是运维/传输工具，
+    #     本地 ssh 到构建机、跳板机会被误判成"在打靶"，而这类命令失败
+    #     与靶子可达性无关。真要用 ssh 打目标，模型通常配 curl/nmap。
+    "curl: (52)",
 )
 
 #: `curl -w '%{http_code}'` 打出来的「没拿到响应」。单独判，因为它是个裸的
@@ -340,32 +356,86 @@ def _looks_like_collection_failure(*, tool_name: str, command: str, output: str)
         return True
     return bool(_HTTP_000.search(output))
 
-#: 一次 `run_shell` 里出现这些词，算"真的向目标发了请求"。
+#: 一次 `run_shell` 里以**程序名**出现这些词，算"真的向目标发了请求"。
 #:
 #: 用**动作词**而不是"是否包含 http"：`grep -oE 'http[A-Za-z]*' bundle.js`
 #: 里有 http 字样但一次请求都没发。反过来 `nmap -p- 10.0.0.5` 没有 http
 #: 字样但确实是打目标。所以这里收的是发请求/发包的工具名。
-_ACTING_TOKENS = (
-    "curl",
-    "wget",
-    "nmap",
-    "ffuf",
-    "gobuster",
-    "dirb",
-    "nikto",
-    "whatweb",
-    "sqlmap",
-    "nc ",
-    "ncat",
-    "socat",
-    "openssl s_client",
-    "mqtt",
-    "redis-cli",
-    "mysql",
-    "psql",
-    "mongosh",
-    "docker ",
+#:
+#: ⚠️ 这些名字必须出现在**命令段的第一个词**（剥掉 `sudo`/`timeout`/
+#: `xargs` 这类包装后）才算数，不能是"整条命令里出现过这个子串"。
+#: 子串匹配会把 `cat nmap.log` / `grep curl notes.txt` / `vim curl.conf`
+#: / `less nmap_scan.xml` 全算成"在打靶" —— 这些一条请求都没发，
+#: 只是在翻上一次的日志。v0.92 之前这个误判只影响一句换向建议，
+#: v0.92 之后它成了"写不写黑板事实"的前置，代价从"多句废话"变成
+#: "往黑板写一条假事实"，所以口径必须收紧。
+_ACTING_PROGRAMS = frozenset(
+    {
+        "curl",
+        "wget",
+        "nmap",
+        "ffuf",
+        "gobuster",
+        "dirb",
+        "nikto",
+        "whatweb",
+        "sqlmap",
+        "nc",
+        "ncat",
+        "socat",
+        "openssl",  # 仅 s_client 子命令算（下面单独判）
+        "mqtt",
+        "redis-cli",
+        "mysql",
+        "psql",
+        "mongosh",
+        "docker",
+    }
 )
+
+#: 这些前缀不改变"谁在发请求"，剥掉后继续看第一个真正的词。
+_ACTING_WRAPPERS = frozenset(
+    {"sudo", "env", "timeout", "nohup", "xargs", "nice", "stdbuf", "command", "exec"}
+)
+
+#: 命令分段：一条 `run_shell` 里常有 `a && b | c; d`。
+_COMMAND_SEGMENT = re.compile(r"\|\||&&|\||;|\n|`|\$\(")
+
+
+def _command_programs(command: str) -> list[str]:
+    """把一条 shell 命令拆成"每个段实际在跑的程序名"。
+
+    只做执行位置判定，不解析 shell 语法 —— 目标是区分"在打靶"和
+    "在翻本地文件"，不是精确复现 shell 语义。
+
+    ⚠️ 已知不精确之处：heredoc 正文里的行会被当成独立段（`cat > x.sh
+    <<EOF` 里写的 `curl ...` 会被算成在打靶）。那种情况下模型确实在
+    准备发包，且失败词出现在脚本正文里的概率极低，故不特殊处理。
+    """
+    programs: list[str] = []
+    for segment in _COMMAND_SEGMENT.split(command):
+        words = segment.split()
+        i = 0
+        # 跳过前置 VAR=value 赋值（`FOO=1 curl ...`）
+        while i < len(words) and "=" in words[i] and words[i].split("=", 1)[0].isidentifier():
+            i += 1
+        # 剥掉包装器与它们自己的选项/时长参数
+        while i < len(words) and _basename(words[i]) in _ACTING_WRAPPERS:
+            i += 1
+            while i < len(words) and (words[i].startswith("-") or re.fullmatch(r"\d+[smhd]?", words[i])):
+                i += 1
+        if i < len(words):
+            programs.append(_basename(words[i]))
+        # openssl 要看到 s_client 才算发请求
+        if i < len(words) and _basename(words[i]) == "openssl" and "s_client" not in words:
+            programs.pop()
+    return programs
+
+
+def _basename(word: str) -> str:
+    """`/usr/bin/curl` → `curl`。"""
+    return word.rsplit("/", 1)[-1]
+
 
 def _looks_like_acting(*, tool_name: str, command: str) -> bool:
     """这一轮有没有真的向目标发起交互。
@@ -375,20 +445,23 @@ def _looks_like_acting(*, tool_name: str, command: str) -> bool:
     1. **`http_request`** → 一定是行动（它除了发请求没别的用途）。
     2. **其他非 `run_shell` 工具**（`record_coverage` / `write_note` /
        `think` / `create_agent` …）→ 未行动：记账与思考不碰目标。
-    3. **`run_shell` 的命令里有活体请求词**（`curl`/`nmap`/`ffuf`…）→ 行动。
-       哪怕同一条命令里也顺手 `grep` 了 —— 有一发打出去了就算打了。
+    3. **`run_shell` 的某个命令段以活体请求程序开头**（`curl`/`nmap`/`ffuf`…）
+       → 行动。哪怕同一条命令里也顺手 `grep` 了 —— 有一发打出去了就算打了。
     4. 其余（`grep 本地文件`、`python3` 解析、写脚本、`ls`）→ 未行动。
 
     ⚠️ 这是**启发式**，不是精确判定。它只回答"最近是不是在原地打转"，
-    误判的代价是"门多给或少给一句换向建议"，不影响结论对错。
-    用固定词表而不是解析命令行语法，是因为后者的复杂度远超收益。
+    误判的代价是"门多给或少给一句换向建议"。
+
+    ⚠️ v0.92 起它多了一个调用方：`_looks_like_collection_failure` 用它
+    判断"这次失败是不是朝向目标的"。那个场景下误判的代价是**往黑板写
+    一条假事实**（"目标不可达"），比"多句废话"重得多 —— 所以第 3 条从
+    "命令里出现过这个子串"收紧成"命令段的第一个词是这个程序"。
     """
     if tool_name == "http_request":
         return True
     if tool_name != "run_shell":
         return False
-    low = command.lower()
-    return any(tok in low for tok in _ACTING_TOKENS)
+    return any(prog in _ACTING_PROGRAMS for prog in _command_programs(command))
 
 
 def collection_fail_note(*, streak: int) -> str:

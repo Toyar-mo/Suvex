@@ -564,3 +564,148 @@ def test_a_running_child_picks_the_constraint_up_on_its_next_turn() -> None:
         "最后一轮子 agent 的 system prompt 里丢掉了约束 —— "
         "约束是持续状态，不该只报一次就消失"
     )
+
+
+# ===========================================================================
+# v0.92 补：判据的两处静默漏判（2026-10-25 实测发现）
+# ===========================================================================
+#
+# 上一版判据有两个洞，都能让「靶子死了」这件事**静默不报**：
+#
+# 1. 失败词表只收了 `curl: (7)/(28)/(6)/(56)` 与裸 `000`，漏了
+#    `curl: (52)`。它和 `000` 是**同一现象**（TCP 连上了、一个响应字节都
+#    没回），区别只在模型写没写 `-w '%{http_code}'`。32231 那次恰好写了
+#    `-w`，所以被识别；换一种写法就漏。
+#
+# 2. `_looks_like_acting` 用的是**子串匹配**：命令里只要出现 `nmap`/
+#    `curl` 就算"在打靶"。于是 `cat nmap.log`、`grep curl notes.txt`、
+#    `less nmap_scan.xml` 全被算成在打靶 —— 这些一条请求都没发，只是在翻
+#    上一次的日志。上一版这个误判只影响"多给一句换向建议"；v0.92 把它接成
+#    "写不写黑板事实"的前置之后，代价变成**往黑板写一条假事实**。
+#
+# 两条都直接对应"模型反复看失败日志 → 平台连续三次认定靶子不可达 →
+# 黑板多一条假事实"，所以必须钉住。
+
+
+def test_curl_52_is_the_same_failure_as_http_000() -> None:
+    """`curl -sS` 的 exit 52 与 `-w %{http_code}` 的 `000` 是同一现象。
+
+    同一个靶子、同一份"一个字节没回来"，只因为命令少写一个 `-w`，
+    上一版就判成"没失败" —— 静默漏报。这是本次补的第一个洞。
+    """
+    for output in (
+        "curl: (52) Empty reply from server",
+        # 大小写与实际输出可能不同（curl 也会走 stderr 混排）
+        "CURL: (52) Empty reply from server",
+    ):
+        assert (
+            multiagent._looks_like_collection_failure(
+                tool_name="run_shell", command="curl -sS http://1.2.3.4/", output=output
+            )
+            is True
+        ), f"curl (52) 与 000 是同一现象，必须判失败：{output!r}"
+
+
+def test_tls_handshake_failure_is_not_collection_failure() -> None:
+    """`curl: (35)` 是**靶子活着但不说 TLS**，不是"没拿到字节"。
+
+    判成不可达就是把活靶子宣布成死的 —— 正是文件开头警告的那种代价。
+    `https://` 打到只跑明文 HTTP 的服务上就是这条，特常见。
+    """
+    assert (
+        multiagent._looks_like_collection_failure(
+            tool_name="run_shell",
+            command="curl -sS https://1.2.3.4/",
+            output="curl: (35) error:0A00010B:SSL routines::wrong version number",
+        )
+        is False
+    )
+
+
+def test_local_dns_failure_is_not_collection_failure() -> None:
+    """`wget: unable to resolve host address` 是**本地解析**失败，没碰到目标。
+
+    与已收的 `could not resolve host`（curl 的措辞）不是一回事：curl 那条
+    在 `--resolve` 配错时才出现，确实是"打了但没通"；wget 这条只是本机
+    DNS 坏了，靶子可能好好的。
+    """
+    assert (
+        multiagent._looks_like_collection_failure(
+            tool_name="run_shell",
+            command="wget http://nope.invalid/",
+            output="wget: unable to resolve host address 'nope.invalid'",
+        )
+        is False
+    )
+
+
+def test_reading_old_failure_logs_does_not_count_as_acting() -> None:
+    """反复 `cat` 上次的失败日志，一次请求都没发 —— 不能算"在打靶"。
+
+    这是 32231 之后最容易发生的形状：模型看到一堆 `000`，先去翻日志，
+    翻出来的日志里当然全是 `connection refused`。若把"翻日志"算成打靶，
+    平台就会在模型**完全没碰目标**的情况下连续三次判它不可达，并写进黑板。
+    那条假事实会跟着每一轮的 prompt 走，把模型往更错的方向推。
+    """
+    for command in (
+        "cat /tmp/nmap_32231.log",
+        "grep curl /tmp/notes.txt",
+        "less nmap_scan.xml",
+        "cat ./nmap/out.txt | head",
+        "vim curl.conf",
+        "grep -rn ffuf docs/",
+    ):
+        assert (
+            multiagent._looks_like_collection_failure(
+                tool_name="run_shell",
+                command=command,
+                output="curl: (52) Empty reply from server\nconnection refused",
+            )
+            is False
+        ), f"「{command}」没有向目标发任何请求，不该被判采集失败"
+
+
+def test_acting_detection_ignores_tool_names_in_arguments() -> None:
+    """工具名只在其**作为程序名被执行**时才算数。
+
+    这是把判据从子串匹配收紧到"命令段第一个词"的直接守卫：
+    `curl`/`nmap` 出现在文件名、参数、echo 的字符串里都不算。
+    """
+    assert multiagent._looks_like_acting(tool_name="run_shell", command="cat nmap.log") is False
+    assert multiagent._looks_like_acting(tool_name="run_shell", command="grep curl notes.txt") is False
+    assert multiagent._looks_like_acting(tool_name="run_shell", command='echo "nmap -p- 10.0.0.5"') is False
+
+
+def test_acting_detection_still_recognises_real_invocations() -> None:
+    """收紧不能收过头 —— 这些**真的**发了请求，必须仍然算在打靶。
+
+    特别是最后几条：包装器（`sudo`/`timeout`/`xargs`）、前置赋值、
+    绝对路径、管道里的执行位置。收太紧会让"靶子真死了"变成永远不报。
+    """
+    for command in (
+        "curl -sS http://1.2.3.4/",
+        "nmap -Pn -p- 10.0.0.5",
+        "ffuf -u http://1.2.3.4/FUZZ -w c.txt",
+        "gobuster dir -u http://t -w w.txt",
+        "sqlmap -u 'http://t/x?id=1' --batch",
+        "nc -zv 1.2.3.4 80",
+        "echo | openssl s_client -connect 1.2.3.4:443",
+        "cat targets.txt | xargs -n1 curl -s -o /dev/null",
+        "curl -s http://t/ | grep -o '<title>[^<]*'",
+        "sudo /usr/bin/nmap -sV 10.0.0.5",
+        "timeout 30 nmap -p- 10.0.0.5",
+        "FOO=1 curl -s http://t/",
+        "cd /tmp && curl -s http://t/ && echo done",
+    ):
+        assert multiagent._looks_like_acting(tool_name="run_shell", command=command) is True, (
+            f"「{command}」确实向目标发了请求，必须算行动"
+        )
+
+
+def test_openssl_without_s_client_is_not_acting() -> None:
+    """`openssl dgst/sha256/rsa` 是本地运算，`openssl s_client` 才是发请求。"""
+    assert multiagent._looks_like_acting(tool_name="run_shell", command="openssl dgst -sha256 f.txt") is False
+    assert (
+        multiagent._looks_like_acting(tool_name="run_shell", command="openssl s_client -connect t:443")
+        is True
+    )

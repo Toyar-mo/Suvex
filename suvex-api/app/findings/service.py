@@ -935,23 +935,21 @@ def assignee_map(db: Session, findings: list[Finding]) -> dict[str, str]:
 
 
 def sla_config(db: Session):
-    """读（必要时建）SLA 配置单例。"""
-    from app.settings.models import DEFAULT_SLA_DAYS, SINGLETON_ID, FindingSlaConfig
+    """读（必要时建）SLA 配置单例。
 
-    config = db.get(FindingSlaConfig, SINGLETON_ID)
-    if config is None:
-        config = FindingSlaConfig(
-            id=SINGLETON_ID,
-            critical_days=DEFAULT_SLA_DAYS["critical"],
-            high_days=DEFAULT_SLA_DAYS["high"],
-            medium_days=DEFAULT_SLA_DAYS["medium"],
-            low_days=DEFAULT_SLA_DAYS["low"],
-            info_days=DEFAULT_SLA_DAYS["info"],
-        )
-        db.add(config)
-        db.commit()
-        db.refresh(config)
-    return config
+    ★ 走 `get_or_create_singleton`（并发安全）。原先
+      `if db.get() is None: db.add + commit` 在两个请求同时进来时
+      会撞 `pk_finding_sla_config` 主键；而调用方多半只 catch 不
+      rollback，于是错误在下一次属性访问时才显现。
+
+    不传 `defaults`：五个天数字段在 `FindingSlaConfig` 的
+    `mapped_column(default=...)` 上已经声明了默认值，这里再传一遍
+    只是把同一个常量抄第二次。真值以模型声明为准。
+    """
+    from app.core.db import get_or_create_singleton
+    from app.settings.models import SINGLETON_ID, FindingSlaConfig
+
+    return get_or_create_singleton(db, FindingSlaConfig, SINGLETON_ID)
 
 
 def sla_days_for(config, severity: str) -> int:
