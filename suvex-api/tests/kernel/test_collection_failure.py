@@ -925,3 +925,175 @@ def test_request_direction_arrow_is_not_a_status_line() -> None:
     assert multiagent._SUCCESS_EVIDENCE.search("* HTTP/1.1 404 Not Found") is None
     # 对照：同一个 404，`<` 方向必须能识别
     assert multiagent._SUCCESS_EVIDENCE.search("< HTTP/1.1 404 Not Found") is not None
+
+
+# ══════════════════════════════════════════════════════════
+# 七、三态判定：无证据 ≠ 成功（v0.95，修 scan_01M5SMPQ3CDDDHY46F30EWMA3D）
+# ══════════════════════════════════════════════════════════
+#
+# 事故：打 10.255.255.1:9（全程零字节返回）的那轮扫描，二值口径把 72 次
+# 调用里的 64 次判成「成功」——因为「没看到失败特征」被等同于「成功」。
+# 于是连续失败最长只有 1 次，升格一次都没触发。
+# 真实数据重放（72 条真实输出）：二值 64 成功 / 升格 0 → 三态 1 成功 / 升格 2。
+
+
+def test_outcome_is_none_when_acting_but_undecided() -> None:
+    """打了靶，但输出里既没成功标志也没失败标志 → `None`（无证据）。
+
+    `nmap -Pn` 打一个全丢包地址是典型：有扫描报告、有 port 行，
+    但没有「Host is up」也没有 `000`/refused/timeout。
+    """
+    assert (
+        multiagent._collection_outcome(
+            tool_name="run_shell",
+            command="nmap -Pn -p 9 10.255.255.1",
+            output="PORT   STATE" + chr(10) + "9/tcp  filtered",
+        )
+        is None
+    )
+
+
+def test_outcome_is_true_on_real_response() -> None:
+    assert (
+        multiagent._collection_outcome(
+            tool_name="run_shell",
+            command="curl -sS http://1.2.3.4/",
+            output="HTTP/1.1 200 OK",
+        )
+        is True
+    )
+
+
+def test_outcome_is_false_on_explicit_failure() -> None:
+    assert (
+        multiagent._collection_outcome(
+            tool_name="run_shell",
+            command="curl -sS http://1.2.3.4/",
+            output="curl: (7) Failed to connect",
+        )
+        is False
+    )
+    assert (
+        multiagent._collection_outcome(
+            tool_name="run_shell",
+            command="curl -sS -o /dev/null -w '%{http_code}' http://1.2.3.4/",
+            output="000",
+        )
+        is False
+    )
+
+
+def test_outcome_is_none_for_non_acting_tool() -> None:
+    """记账类工具对「靶子可不可达」零信息 —— 连失败都不算。"""
+    for name in ("record_fact", "think", "list_coverage"):
+        assert (
+            multiagent._collection_outcome(
+                tool_name=name, command="", output="connection refused"
+            )
+            is None
+        ), f"{name} 应判无证据"
+
+
+def test_unknown_does_not_reset_the_streak() -> None:
+    """★ 核心：`None` 两个计数都不动 —— 既不加也不清零。
+
+    这是本次修复的实质。若 `None` 清零，连续失败永远攒不起来。
+    """
+    coord = multiagent.AgentCoordinator()
+    coord.note_collection(ok=False)
+    coord.note_collection(ok=False)
+    assert coord.collection_fail_streak == 2
+    coord.note_collection(ok=None)  # 插一次说不清的
+    assert coord.collection_fail_streak == 2, "无证据不该清零"
+
+
+def test_unknown_does_not_clear_escalation() -> None:
+    coord = multiagent.AgentCoordinator()
+    for _ in range(multiagent.COLLECTION_FAIL_STREAK):
+        coord.note_collection(ok=False)
+    assert coord.take_escalation() is not None, "跨阈值这一次要返回次数"
+    assert coord.collection_fail_escalated is True
+    coord.note_collection(ok=None)
+    assert coord.collection_fail_escalated is True, "无证据不该撤销已升格"
+
+
+def test_unknown_between_failures_still_reaches_escalation() -> None:
+    """失败 → 无证据 → 失败 → 无证据 → 失败 仍算连续 3 次失败。
+
+    ★ 关键在末尾那条断言：`streak` 必须**恰好等于 3**。
+    若把无证据当成失败，会攒到 5 —— 那会让「3 次」这个阈值失去意义
+    （阈值变成「凑够 3 条输出」而不是「3 次明确的失败」）。
+    """
+    coord = multiagent.AgentCoordinator()
+    seq = [False, None, False, None, False]
+    got = None
+    for step in seq:
+        coord.note_collection(ok=step)
+        hit = coord.take_escalation()
+        if hit is not None:
+            got = hit
+    assert got == multiagent.COLLECTION_FAIL_STREAK
+    assert coord.collection_fail_escalated is True
+    assert coord.collection_fail_streak == sum(1 for s in seq if s is False), (
+        "无证据既不加也不清，streak 必须等于明确的失败次数"
+    )
+
+
+def test_escalation_returns_streak_only_once() -> None:
+    """升格是「一次性事件」：同一次死亡只会通知一次，后续失败不重复报。"""
+    coord = multiagent.AgentCoordinator()
+    for _ in range(3):
+        coord.note_collection(ok=False)
+    assert coord.take_escalation() == 3
+    assert coord.take_escalation() is None, "不能每轮都重复报"
+    coord.note_collection(ok=False)
+    assert coord.take_escalation() is None, "仍在同一次死亡里"
+    coord.note_collection(ok=True)  # 靶子活了
+    for _ in range(3):
+        coord.note_collection(ok=False)  # 又死了
+    assert coord.take_escalation() == 3, "第二次死亡要能再报一次"
+
+
+def test_real_scan_replay_escalates_under_tri_state() -> None:
+    """用事故扫描的真实输出序列重放：二值 0 升格，三态 >0 升格。
+
+    夹具 `tests/kernel/fixtures/real_undecided.json` 是从
+    `scan_01M5SMPQ3CDDDHY46F30EWMA3D`（目标 10.255.255.1:9，全程零字节返回）
+    导出的 72 条真实 [tool_call] / 输出对。二值口径下这 72 条里有 64 条被判
+    「成功」，连续失败最长 1 次 —— 这就是升格从未触发的全部原因。
+    """
+    import json
+    import pathlib
+
+    fixture = (
+        pathlib.Path(__file__).resolve().parent / "fixtures" / "real_undecided.json"
+    )
+    calls = json.loads(fixture.read_text(encoding="utf-8"))
+    assert len(calls) >= 70, "夹具应覆盖事故扫描的绝大部分调用"
+
+    def replay(tri_state: bool) -> tuple[int, int]:
+        coord = multiagent.AgentCoordinator()
+        escalations = 0
+        longest = 0
+        for name, cmd, out in calls:
+            if tri_state:
+                ok = multiagent._collection_outcome(
+                    tool_name=name, command=cmd, output=out
+                )
+            else:
+                ok = not multiagent._looks_like_collection_failure(
+                    tool_name=name, command=cmd, output=out
+                )
+            coord.note_collection(ok=ok)
+            if coord.take_escalation() is not None:
+                escalations += 1
+            longest = max(longest, coord.collection_fail_streak)
+        return escalations, longest
+
+    old_esc, old_streak = replay(tri_state=False)
+    new_esc, new_streak = replay(tri_state=True)
+
+    assert old_esc == 0, "二值口径下升格不该发生（这就是事故）"
+    assert old_streak < multiagent.COLLECTION_FAIL_STREAK, "二值口径攒不到阈值"
+    assert new_esc > 0, "三态口径下升格必须能触发"
+    assert new_streak >= multiagent.COLLECTION_FAIL_STREAK

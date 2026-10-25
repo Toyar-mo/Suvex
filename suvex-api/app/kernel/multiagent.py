@@ -406,6 +406,40 @@ def _looks_like_collection_failure(*, tool_name: str, command: str, output: str)
         return True
     return bool(_HTTP_000.search(output))
 
+
+def _collection_outcome(*, tool_name: str, command: str, output: str) -> bool | None:
+    """这一发调用关于「靶子可达性」给出了什么证据 —— **三态**。
+
+    返回值：
+    - `True`  明确拿到目标响应（状态行 / 2xx / flag）—— 靶子活着
+    - `False` 明确了「发了但没回来字节」（000 / 连接被拒 / 超时 / 空回复）
+    - `None`  说不清（没打靶，或打了但输出里既无成功也无失败特征）
+
+    ## 为什么需要第三态
+
+    `_looks_like_collection_failure` 是二值的：`False` 同时表示「成功了」
+    和「看不出所以然」。用它驱动计数器就会把后者当成前者，而实测表明
+    **后者占绝大多数**：`scan_01M5SMPQ3CDDDHY46F30EWMA3D` 打一个零字节
+    返回的地址，72 次调用里 63 次属于「打了但说不清」（`nmap -Pn` 全丢包、
+    `nc -z` 超时、gobuster 连上即断），二值口径判成 64 次成功，连续失败
+    永远到不了 3。
+
+    正例不该被这条影响：拿到状态行就是拿到状态行，仍然立刻清零。
+
+    与 `_looks_like_collection_failure` 的关系：本函数是它的超集，只在
+    「它说不失败」的内部再分出「明确成功」与「说不清」。保留旧函数是因为
+    别处（换向提醒）只需要二值判断，不需要操心计数口径。
+    """
+    if _looks_like_collection_failure(
+        tool_name=tool_name, command=command, output=output
+    ):
+        return False
+    if not _looks_like_acting(tool_name=tool_name, command=command):
+        return None  # 没打靶，对「靶子可不可达」零信息
+    if _SUCCESS_EVIDENCE.search(output):
+        return True
+    return None
+
 #: 一次 `run_shell` 里以**程序名**出现这些词，算"真的向目标发了请求"。
 #:
 #: 用**动作词**而不是"是否包含 http"：`grep -oE 'http[A-Za-z]*' bundle.js`
@@ -1465,17 +1499,72 @@ class AgentCoordinator:
     #: 只在采集成功（靶子活过来）时复位，这样"死了→活了→又死了"能再报一次。
     collection_fail_escalated: bool = False
 
-    def note_collection(self, *, ok: bool) -> None:
+    def note_collection(self, *, ok: bool | None) -> None:
         """登记一次采集结果，维护连续失败计数与升级标志。
 
         只做计数，**不发提醒** —— 提醒由调用方在用得上它的地方拼
         （那一处才知道要拼进哪条消息、给哪个 agent 看）。
+
+        ## ★ v0.95：`ok` 是**三态**，`None` = 无证据
+
+        原先这里是二态 `bool`，调用方写 `ok=not collection_failed`。那个写法
+        把「这次输出里没看到失败特征」等同于「这次成功了」—— 而绝大多数
+        工具调用其实是**第三种情况**：打了目标，但输出里既没有成功标志
+        （状态行 / 2xx / flag），也没有失败标志（000 / 连接被拒 / 超时），
+        比如 `nmap -Pn` 打一个全丢包的地址、`nc -z` 超时、gobuster 撞上
+        「连上就被关」的目标。
+
+        后果是**任何一次无法归类的打靶调用都会把计数清零**，于是
+
+            「不可达目标上永远攒不到连续 3 次失败」
+
+        这不是理论：`scan_01M5SMPQ3CDDDHY46F30EWMA3D`（10.255.255.1:9，全程
+        零字节返回）72 次调用里，二态模型判出 **64 次「成功」**、最长连续
+        失败 1 次、升格 0 条；三态模型判出 1 次真成功、63 次无证据、升格 2 条。
+        同一个目标、同一批输出，差别只在「无证据」算不算成功。
+
+        三态的口径与文件开头「宁可漏判失败」那条一致：
+        - `True`  明确拿到目标响应 → 清零（靶子活着，这是最可靠的信号）
+        - `False` 明确没拿到字节     → 计数 +1
+        - `None`  说不清             → **两个计数都不动**（既不加也不清零）
+
+        为什么 `None` 不清零：清零等于宣称「靶子活着」，而它只是想表达
+        「这次没说清」。宁可让计数停在原处等下一次明确信号。
         """
+        if ok is None:
+            return
         if ok:
             self.collection_fail_streak = 0
             self.collection_fail_escalated = False
         else:
             self.collection_fail_streak += 1
+
+    def take_escalation(self) -> int | None:
+        """跨过阈值的那一次返回连续失败次数并置位；否则 `None`。
+
+        ## 为什么阈值判断放在这里，不放在调用方
+
+        原先这段条件是手写在 `_execute_tool_batch` 里的：
+
+            if (coord.collection_fail_streak >= COLLECTION_FAIL_STREAK
+                    and not coord.collection_fail_escalated):
+
+        它读的两个字段和 `note_collection` 写的是同一对，却分散在两个地方 ——
+        于是「计数怎么涨」和「涨到多少算数」可以各自漂移。2026-10-23 那次
+        事故里，调用方写的是 `ok=not collection_failed`（二态），阈值照样是 3，
+        两处都"没错"，但合起来永远达不到阈值。把判据收进同一个类，
+        改口径时就不可能只改一半。
+
+        调用方拿到返回值后只做**副作用**（写黑板、拼提醒），不碰状态机。
+        返回次数而不是 `bool`，是因为事实正文里要写「连续 N 次」。
+        """
+        if (
+            self.collection_fail_streak >= COLLECTION_FAIL_STREAK
+            and not self.collection_fail_escalated
+        ):
+            self.collection_fail_escalated = True
+            return self.collection_fail_streak
+        return None
 
     def note_action(self, *, acted: bool, agent_id: str = "root") -> None:
         """登记一条动作（`acted` = 这一轮是否真的向目标发了请求）。"""
@@ -2553,16 +2642,13 @@ async def run_agent_loop(
             # 且每轮都往 prompt 里塞同一条没信息量的东西。`escalated` 标志
             # 保证一个"死亡周期"只写一次；靶子活过来（采集成功）时复位，
             # 于是"死了→活了→又死了"能再报一次。
-            collection_failed = _looks_like_collection_failure(
+            outcome_ = _collection_outcome(
                 tool_name=tool_name, command=command, output=result
             )
-            coord.note_collection(ok=not collection_failed)
-            if (
-                coord.collection_fail_streak >= COLLECTION_FAIL_STREAK
-                and not coord.collection_fail_escalated
-            ):
-                coord.collection_fail_escalated = True
-                _streak = coord.collection_fail_streak
+            coord.note_collection(ok=outcome_)
+            escalated_streak = coord.take_escalation()
+            if escalated_streak is not None:
+                _streak = escalated_streak
                 # 写黑板：root 每轮从 `render_live_state` 读到它，
                 # 子 agent 从 `render_global_constraints` 读到它
                 # （两者都按"每轮现算"推送，不是只写进某一轮的消息）。
