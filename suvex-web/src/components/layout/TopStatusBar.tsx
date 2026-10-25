@@ -36,7 +36,7 @@ import { formatCompact } from '@/lib/format'
  *     2026-10-17 接上真实值，`null` 的含义从"没有这个能力"改成"还没数"。
  */
 export function TopStatusBar() {
-  const { agents, provider, tokens } = useFleetStatus()
+  const { agents, provider, providerStatus, tokens } = useFleetStatus()
   const busy = agents.running > 0
 
   return (
@@ -88,14 +88,36 @@ export function TopStatusBar() {
             </>
           ) : (
             /*
-              没有 provider 是**真实状态**（新装的系统就是这样）。
-              不能拿一个假的模型名盖住它 —— 用户此刻需要知道的恰恰是
-              "还没配，去设置里加一个"，而这一条是全局常驻的，
-              它是这个提醒最合适的落点。
+              没有 provider 时要说的话**取决于为什么没有** —— 三种处境
+              用同一句话是错的，这是实测到的缺陷，不是理论顾虑：
+
+                · `loading` → 「读取中」。还没拉完就说"未配置"是在抢答。
+                · `error`   → 「读不到模型配置」。**这不是"没配"**。
+                  viewer 早先就撞在这个分支上：`GET /settings/*` 要 admin，
+                  四路 403 让 `accounts` 一直是空的，于是状态条告诉他
+                  「未配置 · 去「设置」添加模型服务」—— 而系统里配着
+                  默认 provider，且他去设置页只会拿到一整块加载失败。
+                  把那句话照原样留着，等于**因为他没权限而谎报系统状态**。
+                · `ready` + null → 「未配置 · 去「设置」添加模型服务」。
+                  这才是真的没配（新装的系统就是这样），提醒他是对的。
             */
             <span className="text-xs text-ink-faint">
-              <span className="hidden sm:inline">未配置 · 去「设置」添加模型服务</span>
-              <span className="sm:hidden">未配置</span>
+              {providerStatus === 'loading' ? (
+                <>
+                  <span className="hidden sm:inline">读取中</span>
+                  <span className="sm:hidden">—</span>
+                </>
+              ) : providerStatus === 'error' ? (
+                <>
+                  <span className="hidden sm:inline">读不到模型配置</span>
+                  <span className="sm:hidden">读不到</span>
+                </>
+              ) : (
+                <>
+                  <span className="hidden sm:inline">未配置 · 去「设置」添加模型服务</span>
+                  <span className="sm:hidden">未配置</span>
+                </>
+              )}
             </span>
           )}
         </div>

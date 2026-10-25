@@ -260,6 +260,25 @@ export const BACKEND_PENDING_NOTE =
 
 export interface SettingsSnapshot {
   accounts: ProviderAccount[]
+  /**
+   * provider 列表的**独立**加载状态。
+   *
+   * ★ 必须与 `status` 分开。`status` 描述的是"设置页那四块（令牌/沙箱/
+   *   通知×2）能不能显示"，它们要 admin；而 provider 是 `read`，
+   *   所有已登录角色都读得到。
+   *
+   * 合成一个状态的后果已经被实测到了：viewer 登录后状态条说
+   * 「未配置 · 去「设置」添加模型服务」—— 而库里明明有默认 provider。
+   * 那句话会把一个只读用户引到一个他永远无权修改的页面。
+   *
+   * 三态的意义与 `SettingsStatus` 相同，但**消费方不同**：
+   * `loading` → 状态条应该说"读取中"，不能说"未配置"；
+   * `error`   → 应该说"读不到模型配置"（这是权限或故障，不是没配）；
+   * `ready`   → `accounts.length === 0` 才真的是"没配"。
+   */
+  accountsStatus: SettingsStatus
+  /** provider 加载失败的原因。`accountsStatus === 'ready'` 时为 null */
+  accountsError: ApiError | null
   sandbox: SandboxConfig
   notices: { rule: NoticeRule; channels: NotifyChannel[] }
   tokens: ApiToken[]
@@ -270,6 +289,16 @@ export interface SettingsSnapshot {
 
 let dataStatus: SettingsStatus = 'loading'
 let loadError: ApiError | null = null
+
+/**
+ * provider 那一路的独立状态（理由见 `SettingsSnapshot.accountsStatus`）。
+ *
+ * ★ 初值 `'loading'` 而不是 `'ready'`：还没拉过的 `accounts === []`
+ *   若配 `'ready'`，状态条会立刻断言"没配模型"。这与本项目反复修过的
+ *   "用 0 冒充未知"是同一个错误（见 `OverviewMetricsOut` 的 docstring）。
+ */
+let accountsStatus: SettingsStatus = 'loading'
+let accountsError: ApiError | null = null
 
 /**
  * 「首次加载是否已经发起过」。
@@ -292,6 +321,8 @@ let loadStarted = false
  */
 let snapshot: SettingsSnapshot = {
   accounts,
+  accountsStatus,
+  accountsError,
   sandbox,
   notices,
   tokens,
@@ -300,7 +331,16 @@ let snapshot: SettingsSnapshot = {
 }
 
 function commit() {
-  snapshot = { accounts, sandbox, notices, tokens, status: dataStatus, error: loadError }
+  snapshot = {
+    accounts,
+    accountsStatus,
+    accountsError,
+    sandbox,
+    notices,
+    tokens,
+    status: dataStatus,
+    error: loadError,
+  }
   emit()
 }
 
@@ -370,23 +410,68 @@ async function loadAccounts(): Promise<ProviderAccount[]> {
 export async function loadSettings(): Promise<void> {
   loadStarted = true
   dataStatus = 'loading'
+  accountsStatus = 'loading'
   loadError = null
   commit()
 
+  /*
+    ## ★ 五路拆成「1 + 4」，不是一次性 `Promise.all`
+
+    ### 原来的写法错在哪
+
+    `accounts`（`GET /providers`）与另外四路（`GET /settings/tokens`
+    `|sandbox|notices/rule|notices/channels`）被 `Promise.all` 捆在一起。
+    前者的鉴权是 `read`（v0.24 专门放宽的，理由见后端
+    `app/providers/router.py:list_providers` 的 docstring），后四路是
+    `admin`。
+
+    于是 **viewer 登录后必然**：状态条显示「未配置 · 去「设置」添加模型服务」，
+    而系统里明明配着默认 provider；点进「设置」又是一整块「设置加载失败」。
+    两句都是说反了的话 —— 而且第二句把他引向一个他永远无权修改的页面。
+
+    这不是"多打了个 403"，是**三种状态被压成了一种**：
+    `accounts === []` 同时被当成"没配"、"还没加载"、"加载失败"。
+
+    ### 为什么要拆而不是把那四路也放宽到 `read`
+
+    那四路里 `tokens` 是**接口令牌列表**、`notices` 是**告警渠道路由**
+    （含收件人邮箱），它们的**内容本身就是秘密** —— 放宽等于让只读账号
+    看到公司安全组邮件列表和可用于接入 API 的令牌元数据。
+    后端那条注释里已经把分界线写清楚了：*"能不能看到"与"能不能改"是两件事*，
+    但**内容本身是秘密的东西连看都要 admin**。
+
+    ### 为什么不用 `allSettled` 让四路各自软失败
+
+    设置页的三态语义（`loading → ready|error`）是**故意整页失败**的：
+    半加载的设置页会让人对着"令牌 0 个"以为是空的（v0.22 记录过这个坑：
+    内存种子数据让用户删一条后端不存在的渠道，点下去 404）。
+    那个语义没错，错的是让**不属于这一页的东西**（provider）跟着它一起死。
+
+    provider 对**所有已登录角色**都该可读，所以它的加载独立于这四路。
+  */
+  const accountsTask = loadAccounts()
+    .then((remoteAccounts) => {
+      accounts = remoteAccounts
+      accountsStatus = 'ready'
+      accountsError = null
+    })
+    .catch((error: unknown) => {
+      accountsStatus = 'error'
+      accountsError = toApiError(error)
+    })
+    .finally(commit)
+
   try {
-    // 五路**并行**拉：它们互不依赖，串行会白等四个往返。
-    // ⚠️ 用 Promise.all 而不是分别 try —— 任何一路失败都该让整页进错误态，
-    //    因为半加载的设置页比明确的错误页更让人困惑。
-    const [remoteTokens, remoteAccounts, remoteSandbox, remoteRule, remoteChannels] =
-      await Promise.all([
-        api.get<ApiToken[]>('/settings/tokens'),
-        loadAccounts(),
-        api.get<SandboxConfig>('/settings/sandbox'),
-        api.get<NoticeRule>('/settings/notices/rule'),
-        api.get<NotifyChannel[]>('/settings/notices/channels'),
-      ])
+    // 四路**并行**拉：它们互不依赖，串行会白等三个往返。
+    // ⚠️ 这里仍然用 Promise.all —— 这四路都是 admin 才能读的同一类东西，
+    //    任何一路失败都该让整页进错误态（见上面的说明）。
+    const [remoteTokens, remoteSandbox, remoteRule, remoteChannels] = await Promise.all([
+      api.get<ApiToken[]>('/settings/tokens'),
+      api.get<SandboxConfig>('/settings/sandbox'),
+      api.get<NoticeRule>('/settings/notices/rule'),
+      api.get<NotifyChannel[]>('/settings/notices/channels'),
+    ])
     tokens = remoteTokens
-    accounts = remoteAccounts
     sandbox = remoteSandbox
     notices = { rule: remoteRule, channels: remoteChannels }
     dataStatus = 'ready'
@@ -397,6 +482,12 @@ export async function loadSettings(): Promise<void> {
     loadError = toApiError(error)
   }
   commit()
+
+  // 等 provider 那一路也落地，`loadSettings()` 的调用方拿到的才是完整快照。
+  // ⚠️ 它的失败**不**抛出去：provider 失败的后果是状态条显示"读不到"，
+  //    不该让设置页的 `loadSettings()` 调用方（`void loadSettings()`）
+    //    拿到一个 rejected promise 而在控制台留下 unhandled rejection。
+  await accountsTask
 }
 
 export function getSettingsSnapshot(): SettingsSnapshot {

@@ -66,6 +66,23 @@ export interface FleetStatus {
   /** 默认 provider。一个都没配时为 null */
   provider: ProviderInfo | null
   /**
+   * provider 那一路的加载状态。
+   *
+   * ★ 为什么 `provider === null` 不够：它在三种完全不同的处境下都是 null ——
+   *
+   *   | 处境 | 界面上该说的话 |
+   *   | --- | --- |
+   *   | `loading` | 「读取中」 |
+   *   | `error`   | 「读不到模型配置」（含权限不足，viewer 早先就撞这个） |
+   *   | `ready` + null | 「未配置 · 去「设置」添加模型服务」 |
+   *
+   *   把它们压成一句「未配置」的后果是**实测到的**：一个 viewer 登录后
+   *   被告知"去设置里加一个模型"，而系统里配着 `gzd/deepseek-v4.1-flash`，
+   *   且他去设置页只会拿到一整块加载失败。这句话是**说反了**，
+   *   而说反比不说更糟 —— 它会让人去重配一遍。
+   */
+  providerStatus: 'loading' | 'ready' | 'error'
+  /**
    * token 用量。`null` = **还没加载到**（不是"没有这个数据"）。
    *
    * 数据来自 `GET /overview` 的 `ctf2TotalTokens`，与总览页的
@@ -82,7 +99,7 @@ export interface FleetStatus {
 export function useFleetStatus(): FleetStatus {
   // 只订阅，不加载 —— 理由见文件头那段（它会 401 掉落地页）
   const { scans } = useScansState()
-  const { accounts } = useSettings()
+  const { accounts, accountsStatus } = useSettings()
   const overview = useOverviewState()
 
   /*
@@ -109,6 +126,11 @@ export function useFleetStatus(): FleetStatus {
       provider: defaultAccount
         ? { id: defaultAccount.id, label: defaultAccount.label, model: defaultAccount.model }
         : null,
+      /*
+        ★ 三态直接透传，不在这里做任何"null 就当没配"的化简。
+          化简发生在渲染处（TopStatusBar），因为只有它知道该说什么话。
+      */
+      providerStatus: accountsStatus,
       tokens: hasUsage
         ? {
             used: metrics.ctf2TotalTokens,
@@ -119,5 +141,5 @@ export function useFleetStatus(): FleetStatus {
           }
         : null,
     }
-  }, [scans, accounts, overview.data])
+  }, [scans, accounts, accountsStatus, overview.data])
 }
