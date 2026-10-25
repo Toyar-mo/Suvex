@@ -1,3 +1,18 @@
+import {
+  ApprovalCard,
+  ApprovalToggle,
+  AttachmentBar,
+  MultiSelect,
+  PersonaDialog,
+  ProjectInput,
+  ProviderSelect,
+} from '@/components/chat/ChatControls'
+import {
+  ToolMention,
+  parseMentionQuery,
+  resolveMentions,
+  type MentionQuery,
+} from '@/components/chat/ToolMention'
 import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -6,24 +21,36 @@ import { useAuth } from '@/data/auth-store'
 import {
   archiveSession,
   createSession,
+  decideApproval,
+  dropStagedAttachment,
+  loadPersonas,
   loadSessions,
   loadTools,
   openSession,
   sendMessage,
+  updateSettings,
+  uploadAttachment,
   useChat,
   type ChatMessage,
+  type ChatSession,
 } from '@/data/chat'
+import { useProjectedProviders } from '@/data/settings-store'
+import { useTools } from '@/data/tools'
 import { errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import {
   Archive,
+  BookOpen,
   ChevronDown,
   ChevronRight,
+  Folder,
   MessageSquarePlus,
   MessagesSquare,
+  Plug,
   Send,
   Sparkles,
   Terminal,
+  UserRound,
   Wrench,
   X,
 } from 'lucide-react'
@@ -75,7 +102,20 @@ const STARTERS = [
 ]
 
 export function ChatPage() {
-  const { sessions, active, status, error, sending } = useChat()
+  const {
+    sessions,
+    active,
+    status,
+    error,
+    sending,
+    personas,
+    stagedAttachments,
+    deciding,
+    // ★ `tools` 是**对话工具**（`GET /chat/tools`，10 个：list_scans /
+    //   create_scan / save_skill 一类），不是下面 `useTools()` 那份**内核
+    //   技能库**。两者名字都在讲"工具"，混用会让 @补全列出根本点不动的条目。
+    tools,
+  } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -94,7 +134,43 @@ export function ChatPage() {
   useEffect(() => {
     void loadSessions()
     void loadTools()
+    // ★ 人格列表与工具列表分开拉：`loadPersonas` 失败**不挂 error**
+    //   （人格是可选功能，读不到只意味着下拉是空的），而 `loadTools`
+    //   失败会让整页进错误态。两者的容错级别不同，所以不能并成一个。
+    void loadPersonas()
   }, [])
+
+  // 模型接入点：读设置里那份账号，只用**已配置好**的（没配的选了也跑不起来，
+  // 而界面上摆一堆跑不起来的选项等于把失败推给用户）。
+  const providers = useProjectedProviders()
+  const usableProviders = useMemo(
+    () => providers.filter((provider) => provider.configured),
+    [providers],
+  )
+
+  // 技能库与 MCP server 清单：挂载下拉的选项来源。
+  const toolsStore = useTools()
+  const skillOptions = useMemo(
+    () => toolsStore.skills.categories.flatMap((group) => group.skills.map((s) => s.name)),
+    [toolsStore.skills],
+  )
+  const mcpOptions = useMemo(
+    () => toolsStore.mcp.servers.map((server) => server.name),
+    [toolsStore.mcp],
+  )
+
+  // 项目建议：从已有会话里取，去重。这样它自动反映用户实际用过的名字，
+  // 不需要单独维护一份项目清单（平台里没有 project 表，见 ChatControls）。
+  const projectSuggestions = useMemo(() => {
+    const names = new Set<string>()
+    for (const session of sessions) {
+      if (session.project) names.add(session.project)
+    }
+    return [...names].sort()
+  }, [sessions])
+
+  const [personaOpen, setPersonaOpen] = useState(false)
+  const [uploading, setUploading] = useState(false)
 
   /*
     ★ 只在**会话 id 变了**时才拉详情。
@@ -112,6 +188,14 @@ export function ChatPage() {
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  /**
+   * 输入框里正在输入的 `@提及`。`null` = 不显示补全层。
+   *
+   * ★ 每次 `onChange` / 光标移动都重算，不做防抖：计算量是
+   *   `lastIndexOf` + 一次正则，比一次重渲染便宜得多；一旦防抖，
+   *   快速打字时会看到补全层"慢半拍"地追着光标跑。
+   */
+  const [mention, setMention] = useState<MentionQuery | null>(null)
 
   /*
     新消息到达时滚到底。
@@ -139,10 +223,39 @@ export function ChatPage() {
   async function handleSend() {
     if (!canSend || !active) return
     const content = draft.trim()
+    // ★ 从**原始 draft** 里解析提及，而不是从 trim 后的 content：
+    //   两者只差首尾空白，但用同一个来源能避免"编辑器看到的和发出去的
+    //   不是同一段字"这类难以复现的偏差。
+    const hinted = resolveMentions(draft, tools)
     // 先清输入框再发：失败时 store 里有 error，页面会把内容留在下面一条
     // 错误提示里让用户重发。留字在框里反而会让人以为没发出去。
-    const ok = await sendMessage(active.id, content)
+    const ok = await sendMessage(active.id, content, undefined, hinted)
     setDraft(ok ? '' : content)
+    setMention(null)
+  }
+
+  /**
+   * 选中补全项：把 `@正在输入` 换成 `@工具名 `。
+   *
+   * 末尾那个空格是刻意的 —— 换成 `@run_shell` 之后如果还要接别的字，
+   * 没有分隔符的话下一次 `parseMentionQuery` 会把新字当成提及的一部分，
+   * 补全层会一直挂着不走。
+   */
+  function handlePickMention(name: string) {
+    if (!mention) return
+    const caret = composerRef.current?.selectionStart ?? draft.length
+    const next = `${draft.slice(0, mention.start)}@${name} ${draft.slice(caret)}`
+    setDraft(next)
+    setMention(null)
+    // 光标放到插入内容之后。`requestAnimationFrame` 是因为受控 textarea
+    // 要等 React 把 value 刷进 DOM 之后设 selectionStart 才不会被重置回末尾。
+    requestAnimationFrame(() => {
+      const el = composerRef.current
+      if (!el) return
+      const pos = mention.start + name.length + 2
+      el.focus()
+      el.setSelectionRange(pos, pos)
+    })
   }
 
   async function handleArchive(id: string) {
@@ -157,8 +270,56 @@ export function ChatPage() {
     composerRef.current?.focus()
   }
 
+  /** 打开人格弹窗并提交选择。 */
+  async function handlePickPersona(personaId: string | null) {
+    setPersonaOpen(false)
+    if (!active) return
+    await updateSettings(active.id, { persona: personaId })
+  }
+
+  async function handleUpload(file: File) {
+    if (!active) return
+    setUploading(true)
+    try {
+      await uploadAttachment(active.id, file)
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function handleDecide(messageId: string, approve: boolean) {
+    if (!active) return
+    await decideApproval(active.id, messageId, approve)
+  }
+
   const messages = active?.messages ?? []
-  const grouped = useMemo(() => sessions, [sessions])
+
+  /*
+    按项目分组。
+
+    ★ 「无项目」必须排**最后**且有一个显式标题，而不是当成
+      `undefined` 悄悄并进第一组：用户新建的对话默认都没有项目，
+      让它排在前面会把真正的项目组挤到下面，而"我分好的东西在哪"
+      是分组功能唯一要解决的问题。
+
+    ★ 空项目名不建组：后端把空串归一成 `null`（见 `update_settings`），
+      但历史数据里可能有 `""`。这里再挡一次 —— 一个看不见名字的
+      分组会让人以为是渲染 bug。
+  */
+  const grouped = useMemo(() => {
+    const buckets = new Map<string, typeof sessions>()
+    for (const session of sessions) {
+      const key = session.project?.trim() || ''
+      const bucket = buckets.get(key)
+      if (bucket) bucket.push(session)
+      else buckets.set(key, [session])
+    }
+    const named = [...buckets.entries()]
+      .filter(([key]) => key !== '')
+      .sort(([a], [b]) => a.localeCompare(b))
+    const loose = buckets.get('') ?? []
+    return { named, loose }
+  }, [sessions])
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -208,61 +369,63 @@ export function ChatPage() {
                 compact
               />
             </div>
-          ) : grouped.length === 0 ? (
+          ) : grouped.named.length === 0 && grouped.loose.length === 0 ? (
             <p className="px-2 py-6 text-center text-xs text-ink-faint">
               还没有对话。点上面的「新对话」开始。
             </p>
           ) : (
-            <ul className="flex flex-col gap-0.5">
-              {grouped.map((session) => {
-                const isActive = active?.id === session.id
-                return (
-                  <li key={session.id}>
-                    <div
-                      className={cn(
-                        'group flex items-center gap-1 rounded-sm px-2 py-1.5',
-                        'transition-ui duration-fast',
-                        isActive ? 'bg-surface-raised' : 'hover:bg-surface-raised/60',
-                      )}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
+            <div className="flex flex-col gap-2">
+              {grouped.named.map(([project, items]) => (
+                <section key={project}>
+                  <h2 className="flex items-center gap-1 px-2 py-1 text-2xs uppercase tracking-wide text-ink-faint">
+                    <Folder size={10} strokeWidth={2} aria-hidden="true" />
+                    <span className="truncate">{project}</span>
+                  </h2>
+                  <ul className="flex flex-col gap-0.5">
+                    {items.map((session) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        active={active?.id === session.id}
+                        onOpen={() => {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
                         }}
-                        className="min-w-0 flex-1 text-left"
-                        aria-current={isActive ? 'page' : undefined}
-                      >
-                        <span className="block truncate text-xs text-ink">{session.title}</span>
-                        <span className="block text-2xs text-ink-faint">
-                          {session.messageCount} 条
-                        </span>
-                      </button>
-                      {/*
-                        ★ 归档按钮只在悬停/聚焦时出现，但要**始终可聚焦**：
-                          用 `opacity-0 group-hover:opacity-100` 而不是
-                          `hidden group-hover:block` —— 后者让键盘用户永远
-                          拿不到它（display:none 的元素不可聚焦）。
-                      */}
-                      <button
-                        type="button"
-                        onClick={() => void handleArchive(session.id)}
-                        className={cn(
-                          'rounded-xs p-1 text-ink-faint opacity-0 transition-ui duration-fast',
-                          'hover:text-signal-risk focus:opacity-100 group-hover:opacity-100',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                        )}
-                        aria-label={`归档对话「${session.title}」`}
-                        title="归档这个对话"
-                      >
-                        <Archive size={12} strokeWidth={2} aria-hidden="true" />
-                      </button>
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
+                        onArchive={() => void handleArchive(session.id)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+
+              {grouped.loose.length > 0 && (
+                <section>
+                  {/*
+                    ★ 「无项目」的标题在**有**命名项目时才出现。
+                      只有一堆无项目对话时，顶上一行「无项目」是纯噪音。
+                  */}
+                  {grouped.named.length > 0 && (
+                    <h2 className="px-2 py-1 text-2xs uppercase tracking-wide text-ink-faint">
+                      无项目
+                    </h2>
+                  )}
+                  <ul className="flex flex-col gap-0.5">
+                    {grouped.loose.map((session) => (
+                      <SessionRow
+                        key={session.id}
+                        session={session}
+                        active={active?.id === session.id}
+                        onOpen={() => {
+                          setSearchParams({ session: session.id }, { replace: true })
+                          setShowList(false)
+                        }}
+                        onArchive={() => void handleArchive(session.id)}
+                      />
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
           )}
         </div>
       </aside>
@@ -289,6 +452,67 @@ export function ChatPage() {
             </span>
           )}
         </div>
+
+        {/*
+          设置条：只在有会话时出现。
+
+          ★ 它读的是**这个会话**的设置（`active.project` 等），不是全局默认值。
+            每个会话各自记着自己的项目/人格/模型 —— 一个全局条会让人以为
+            改一下所有对话都变了。
+        */}
+        {active && (
+          <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
+            <ProjectInput
+              value={active.project ?? null}
+              suggestions={projectSuggestions}
+              onCommit={(project) => void updateSettings(active.id, { project })}
+            />
+
+            <button
+              type="button"
+              onClick={() => setPersonaOpen(true)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-sm border border-line px-2 py-1',
+                'text-2xs text-ink-muted transition-ui duration-fast',
+                'hover:border-accent/40 hover:text-ink',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              )}
+              title="这个人格决定模型扮演什么角色"
+            >
+              <UserRound size={11} strokeWidth={2} aria-hidden="true" />
+              {personas.find((p) => p.id === (active.persona ?? null))?.label ?? '默认'}
+            </button>
+
+            <ProviderSelect
+              providers={usableProviders}
+              value={active.providerId ?? null}
+              onChange={(providerId) => void updateSettings(active.id, { providerId })}
+            />
+
+            <ApprovalToggle
+              enabled={active.requireApproval ?? false}
+              onChange={(requireApproval) => void updateSettings(active.id, { requireApproval })}
+            />
+
+            <MultiSelect
+              label="技能"
+              icon={<BookOpen size={12} strokeWidth={2} aria-hidden="true" />}
+              options={skillOptions}
+              selected={active.skillNames ?? []}
+              emptyHint="技能库是空的"
+              onChange={(skillNames) => void updateSettings(active.id, { skillNames })}
+            />
+
+            <MultiSelect
+              label="MCP"
+              icon={<Plug size={12} strokeWidth={2} aria-hidden="true" />}
+              options={mcpOptions}
+              selected={active.mcpServerNames ?? []}
+              emptyHint="还没配 MCP server（在工具页加）"
+              onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
+            />
+          </div>
+        )}
 
         {/* 消息流 */}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
@@ -337,7 +561,16 @@ export function ChatPage() {
                 </p>
               )}
               {messages.map((message) => (
-                <MessageRow key={message.id} message={message} />
+                <MessageRow
+                  key={message.id}
+                  message={message}
+                  deciding={deciding}
+                  onDecide={
+                    message.approvalStatus === 'pending'
+                      ? (approve) => void handleDecide(message.id, approve)
+                      : undefined
+                  }
+                />
               ))}
 
               {sending && (
@@ -365,11 +598,52 @@ export function ChatPage() {
 
         {/* 输入框 */}
         <div className="shrink-0 border-t border-line px-3 py-2">
+          {active && (
+            /*
+              ★ 附件条**始终**渲染（含上传按钮），不只是有附件时。
+                只在有附件时才显示上传按钮，会让"怎么传文件"变成一个
+                要先传一个文件才能发现的谜。
+            */
+            <AttachmentBar
+              attachments={stagedAttachments}
+              uploading={uploading}
+              onPick={(file) => void handleUpload(file)}
+              onRemove={dropStagedAttachment}
+              disabled={sending}
+            />
+          )}
+          {mention && (
+            <ToolMention
+              tools={tools}
+              query={mention}
+              onPick={handlePickMention}
+              onClose={() => setMention(null)}
+            />
+          )}
           <div className="mx-auto flex max-w-[70ch] items-end gap-1.5">
             <textarea
               ref={composerRef}
               value={draft}
-              onChange={(e) => setDraft(e.target.value)}
+              onChange={(e) => {
+                setDraft(e.target.value)
+                setMention(
+                  parseMentionQuery(e.target.value, e.target.selectionStart ?? 0),
+                )
+              }}
+              // 光标移动也要重算：用户可能把光标移到前面一个 `@` 后面继续敲。
+              // 只在 keyup/click 上做，不做 selectionchange 轮询 —— 后者
+              // 对每个字符都触发一次，而这里只需要"用户主动挪了光标"。
+              onKeyUp={(e) => {
+                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                  const el = e.currentTarget
+                  setMention(parseMentionQuery(el.value, el.selectionStart ?? 0))
+                }
+              }}
+              onClick={(e) => {
+                const el = e.currentTarget
+                setMention(parseMentionQuery(el.value, el.selectionStart ?? 0))
+              }}
+              onBlur={() => setMention(null)}
               onKeyDown={(e) => {
                 /*
                   Enter 发送、Shift+Enter 换行。
@@ -378,6 +652,15 @@ export function ChatPage() {
                     不排除的话，每打一个词就会把半截拼音发出去 —— 这是中文
                     界面上最常见也最恼人的一类 bug。
                 */
+                /*
+                  Esc 先关补全层。不给这条的话，用户想放弃补全只能
+                  按方向键把光标挪走，或者把 `@` 删掉。
+                */
+                if (e.key === 'Escape' && mention) {
+                  e.preventDefault()
+                  setMention(null)
+                  return
+                }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault()
                   void handleSend()
@@ -385,7 +668,9 @@ export function ChatPage() {
               }}
               rows={2}
               placeholder={
-                active ? '说点什么…（Enter 发送，Shift+Enter 换行）' : '先新建或打开一个对话'
+                active
+                  ? '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
+                  : '先新建或打开一个对话'
               }
               disabled={!active || sending}
               aria-label="输入消息"
@@ -414,12 +699,99 @@ export function ChatPage() {
           )}
         </div>
       </div>
+
+      <PersonaDialog
+        open={personaOpen}
+        personas={personas}
+        current={active?.persona ?? null}
+        onPick={(personaId) => void handlePickPersona(personaId)}
+        onClose={() => setPersonaOpen(false)}
+      />
     </div>
   )
 }
 
-/** 一条消息。三种角色三种形状。 */
-function MessageRow({ message }: { message: ChatMessage }) {
+/**
+ * 侧栏里的一行会话。
+ *
+ * 抽出来是因为分组之后它出现两次（命名项目下 / 无项目下），
+ * 复制两份必然漂 —— 一处加了悬停样式另一处忘了。
+ */
+function SessionRow({
+  session,
+  active,
+  onOpen,
+  onArchive,
+}: {
+  session: ChatSession
+  active: boolean
+  onOpen: () => void
+  onArchive: () => void
+}) {
+  return (
+    <li>
+      <div
+        className={cn(
+          'group flex items-center gap-1 rounded-sm px-2 py-1.5',
+          'transition-ui duration-fast',
+          active ? 'bg-surface-raised' : 'hover:bg-surface-raised/60',
+        )}
+      >
+        <button
+          type="button"
+          onClick={onOpen}
+          className="min-w-0 flex-1 text-left"
+          aria-current={active ? 'page' : undefined}
+        >
+          <span className="block truncate text-xs text-ink">{session.title}</span>
+          <span className="block text-2xs text-ink-faint">{session.messageCount} 条</span>
+        </button>
+        {/*
+          ★ 归档按钮只在悬停/聚焦时出现，但要**始终可聚焦**：
+            用 `opacity-0 group-hover:opacity-100` 而不是
+            `hidden group-hover:block` —— 后者让键盘用户永远
+            拿不到它（display:none 的元素不可聚焦）。
+        */}
+        <button
+          type="button"
+          onClick={onArchive}
+          className={cn(
+            'rounded-xs p-1 text-ink-faint opacity-0 transition-ui duration-fast',
+            'hover:text-signal-risk focus:opacity-100 group-hover:opacity-100',
+            'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+          )}
+          aria-label={`归档对话「${session.title}」`}
+          title="归档这个对话"
+        >
+          <Archive size={12} strokeWidth={2} aria-hidden="true" />
+        </button>
+      </div>
+    </li>
+  )
+}
+
+/** 一条消息。三种角色三种形状。`onDecide` 只在该消息待审批时传。 */
+function MessageRow({
+  message,
+  deciding,
+  onDecide,
+}: {
+  message: ChatMessage
+  /** 有一条审批正在提交 —— 禁用按钮防重复点。 */
+  deciding?: boolean
+  onDecide?: (approve: boolean) => void
+}) {
+  /*
+    ★ 待审批的消息**优先**按审批卡渲染，不看 role。
+
+      它 role 是 `tool`，但工具还没执行过。当普通工具卡画出来，
+      用户在界面上看到的就是"它跑完了" —— 而实际上它在等一句话。
+      这个分支必须排在 role 判断之前。
+  */
+  if (message.approvalStatus === 'pending' && onDecide) {
+    return <ApprovalCard message={message} onDecide={onDecide} disabled={deciding} />
+  }
+
   if (message.role === 'user') {
     return (
       <div className="flex justify-end">

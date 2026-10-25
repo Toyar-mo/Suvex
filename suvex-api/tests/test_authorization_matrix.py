@@ -262,6 +262,29 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # 工具清单是静态元数据（名字 + 说明 + 所需 scope），
         # 与 `GET /kernel/tools` 同性质 —— 是能力清单，不是凭据。
         ("GET", "/api/v1/chat/tools"),
+        #
+        # ── v0.94 ──────────────────────────────────────────────
+        # 以下四个与上面同一条判据："端点本身有没有后果"。
+        #
+        # **改会话设置**（人格/模型/挂载技能/MCP/审批开关）：改的是
+        #   自己那条会话记录上的几个字段。挂载技能与 MCP 只是"这一轮
+        #   要不要把它们放进提示词"，不执行任何东西 —— 真正动手的是
+        #   `read_skill` / `add_mcp_server` 两个工具，它们在工具层
+        #   各自要 admin。
+        ("PATCH", "/api/v1/chat/sessions/{session_id}/settings"),
+        # **传附件**：文件落在服务端会话目录里，不碰外部世界，也不执行。
+        #   上游风险是"拿附件当跳板去扫靶标"，那条路由是 `create_scan`，
+        #   在工具层被 scan scope 拦住。
+        ("POST", "/api/v1/chat/sessions/{session_id}/attachments"),
+        # **人格清单**：纯静态元数据，与 `/chat/tools` 同类。
+        ("GET", "/api/v1/chat/personas"),
+        # ★ **审批决定**：看起来最该拔高，其实不能 —— 它不改权限，
+        #   只是把某个工具"要不要跑"这个判断权交还给用户。
+        #   真正的门槛在该工具自己的 scope 上，`router.decide_approval`
+        #   用 `may_call_tool` 再判一次（与引擎同一个函数）。若这里要求
+        #   admin，则只有管理员能点自己那条待办的"确认"，普通用户
+        #   会卡在一条永远无法处理的挂起消息上。
+        ("POST", "/api/v1/chat/sessions/{session_id}/messages/{message_id}/approval"),
     }
 )
 

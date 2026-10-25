@@ -98,6 +98,16 @@ MULTIPART_WRITE_ENDPOINTS: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/scans/{scanId}/attachments"),
         ("POST", "/scans/attachments/staging"),
         # 题目附件：建扫描**之前**的暂存（任务 12）
+        # 对话页附件（v0.94）
+        #
+        # ⚠️ 模板里的参数名必须**逐字**跟路由定义一致。我第一次照着
+        # findings 那条 `{findingId}` 的记忆写成 `{sessionId}`，而
+        # `app/chat/router.py` 里声明的是 `{session_id}`。星号不同，
+        # 匹配就是 False —— 症状是上传被 400 挡掉，而错误消息只说
+        # "写操作必须使用 Content-Type: application/json"，与真正的原因无关。
+        # 这就是本项目反复踩的"配了却静默失效"：名单在，名字差一个
+        # 下划线，防线看起来在、实际不认。
+        ("POST", "/chat/sessions/{session_id}/attachments"),
     }
 )
 

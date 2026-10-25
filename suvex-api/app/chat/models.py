@@ -30,10 +30,16 @@
 `seq` 是会话内单调递增的整数，由应用层在插入时按会话加锁取下一个值。
 排序只认它。
 
-## ★ 为什么没有「对话内改设置」的表字段
+## ★ 为什么设置挂在会话行上、而不是「对话内改设置」的独立表
 
-见 `_tmp/chat/设计-对话页.md` §5：让模型改模型自己的配置，风险面太大。
-这一版明确不做，所以模型里也没有对应的东西。
+v0.93 的初版这里写着「这一版明确不做，所以模型里也没有对应的东西」。
+v0.94 做了，但做法是**会话行上加列**，不是建 settings 表 —— 理由见
+`project` / `persona` 那几个字段上方的注释：六列标量、每轮必读，
+独立表只换来"加列时好看一点"，代价是每轮多一次 JOIN。
+
+仍然不做的：**让模型改自己的设置**（`providerId` / `persona` 只能由
+用户在界面上改）。模型能改自己的接入点意味着它能把自己换到一个更
+听话的模型上去，那是这条边界存在的全部理由。
 """
 
 from __future__ import annotations
@@ -49,6 +55,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -71,6 +78,33 @@ MAX_MESSAGE_CHARS = 60_000
 #: 会话标题的最大长度。标题是自动从首条提问生成的，超长就截。
 MAX_TITLE_CHARS = 80
 
+#: 角色（人格）id 的合法取值。
+#:
+#: ★ 与 `CHAT_ROLES`（消息角色 `user`/`assistant`/`tool`）**毫无关系**，
+#:   纯属中文都译作"角色"。这一组是「这个对话里模型扮演谁」。
+#:   定义在这里而不是 `prompts.py`，因为它要被写进 CHECK 约束 ——
+#:   而 CHECK 约束的那份列表必须是**数据库层**也认的。
+#:   `prompts.py` 里有一条断言钉住"两处必须同一组"。
+CHAT_PERSONAS = (
+    "default",
+    "recon",
+    "pentest",
+    "binary",
+    "postex",
+    "container",
+    "forensics",
+)
+
+#: 归属项目名的最大长度。够放中文项目名（20 个汉字），也够放英文长名。
+MAX_PROJECT_CHARS = 64
+
+#: 人工审批的状态取值。
+#:
+#: `pending` 是唯一"还没结束"的状态 —— 它意味着那条工具消息**还没执行过**。
+#: `approved` / `rejected` 都是终态：前者执行过（结果在 `content` 里），
+#: 后者没执行（`content` 里写着为什么没做）。
+APPROVAL_STATUSES = ("pending", "approved", "rejected")
+
 
 class ChatSession(Base):
     """一次对话。"""
@@ -81,6 +115,26 @@ class ChatSession(Base):
         Index("ix_chat_sessions_owner_updated", "created_by", "updated_at"),
         # 归档的会话默认不出现，但要能捞回来。
         Index("ix_chat_sessions_archived", "archived_at"),
+        # ★ persona 的合法值在**数据库层**也钉一遍，不只是 pydantic。
+        #
+        #   理由与 `chat_message_role_valid` 完全一致：pydantic 只挡 HTTP
+        #   入口。这条也挡得住"迁移脚本写错一个值"、"手工 UPDATE 写错"
+        #   这类没有经过 API 的写入 —— 而那种值一旦进库，`prompts.py`
+        #   查不到对应人格时会静默退回默认，界面上看起来一切正常。
+        #   `persona IS NULL` 必须放行：NULL 是"默认人格"，不是非法值。
+        CheckConstraint(
+            "persona IS NULL OR persona IN "
+            f"({', '.join(repr(p) for p in CHAT_PERSONAS)})",
+            name="chat_session_persona_valid",
+        ),
+        # 侧栏按项目分组列会话。见迁移 `e8f3c2a71b54` 里那一节：
+        # 它主要不是为了性能，而是让同名项目的分组有确定顺序。
+        #
+        # ★ 这行**必须**与迁移里 `create_index` 那一段同时存在。
+        #   只在迁移里建、不在模型里声明，会让 `alembic check` 永远想
+        #   生成一条 `remove_index` —— 一条永远清不掉的噪音 diff，
+        #   会训练人忽略 autogenerate 的输出。（这次正是这么发现的。）
+        Index("ix_chat_sessions_owner_project", "created_by", "project"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -105,7 +159,69 @@ class ChatSession(Base):
     #: 消息数。冗余但必要：列表页要显示"12 条"，而为一个数字
     #: 对每个会话跑一次 COUNT 是 N+1。
     #: ⚠️ 它必须由写消息的那一处同步维护，不能指望它自愈。
-    message_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #:
+    #: `server_default="0"` 必须与迁移 `d4e8b2f6a1c9` 里的声明一致。
+    #: 只在迁移里写、模型里漏掉，`alembic check` 就会永远想生成一条
+    #: `modify_default` —— 与上面那个索引是同一类漂移。
+    message_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+
+    # ── 以下是 v0.94 的「对话设置」六列 ──────────────────────────
+    #
+    # ★ 为什么这些设置挂在**会话**上而不是每条消息上：
+    #   用户在侧栏里切了一个「角色」，他的意思是「这个对话接下来都按
+    #   这个角色说」，而不是「这一句按新角色、下一句按旧的」。挂消息上
+    #   会让同一个对话的上下文在角色之间反复横跳，而模型看到的 system
+    #   提示词每轮都变 —— 那既贵又会让它自己都糊涂。
+    #
+    # ★ 为什么不给它们建一张 `chat_session_settings` 表：
+    #   六列全是标量/短列表，且**每个会话必读**（跑一轮就要全部拿到）。
+    #   独立表意味着每轮多一次 JOIN 或一次额外 SELECT，收益只有"加列的
+    #   时候好看一点"。等到真的出现「一个会话多条设置历史」这种需求再拆。
+
+    #: 归属的项目名。`None` = 未归属（侧栏归到「无项目」）。
+    #:
+    #: ★ 存**名字**而不是 project_id：项目是给用户分组用的便签，
+    #:   改个名不该让历史对话从分组里掉出去。而真建一张 projects 表
+    #:   就要处理"删项目时那些对话怎么办"，那是与这一页无关的复杂度。
+    project: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: 角色（persona）id。见 `prompts.CHAT_ROLES`。`None` = 默认角色。
+    #: ⚠️ 与 `models.CHAT_ROLES`（消息角色 user/assistant/tool）是**两件
+    #:   完全不同的事**，名字撞了纯属都叫"角色"。这个存的是"人格"。
+    persona: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    #: 用哪个模型接入点。`None` = 用平台默认接入点。
+    #:
+    #: ★ 存 id 而不是快照 model 名：接入点被删了就该退回默认，
+    #:   而不是拿一个已经不存在的 model 去请求。
+    provider_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: 是否要求人工审批有副作用的操作（`create_scan` / `save_skill` /
+    #: `delete_skill` / `add_mcp_server` / `start_ctf_solve`）。
+    #:
+    #: ★ 默认 `False`（关闭）：这是给「我要盯着它一步一步做」的场景用的，
+    #:   默认打开会让每一次建扫描都要多点一次，用户很快就会去关掉它 ——
+    #:   而那之后就再也不开了。默认关、让在意的人自己开，比默认开、
+    #:   被所有人关掉更有用。
+    require_approval: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
+
+    #: 这个对话里额外挂载的技能名（会把它们的正文注入系统提示词）。
+    #:
+    #: ★ 与 `load_skill` 工具的区别：那个是模型**按需**读，这个是用户
+    #:   **预先**指定"这个对话就按这几篇方法论来"。前者靠模型判断该读什么，
+    #:   后者靠人判断 —— 有些流程人比模型清楚。
+    skill_names: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
+
+    #: 这个对话里额外挂载的 MCP 服务器名（来自 `settings.mcp_servers`）。
+    #:
+    #: ★ 存名字而不是存配置：配置的唯一真相是设置页那一列。这里存名字
+    #:   意味着"设置页删了某个 server，这个对话自动就不挂它了"，
+    #:   而不是留一份过期副本继续连。
+    mcp_server_names: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
 
     messages: Mapped[list[ChatMessage]] = relationship(
         back_populates="session",
@@ -142,8 +258,24 @@ class ChatMessage(Base):
             f"role IN ({', '.join(repr(r) for r in CHAT_ROLES)})",
             name="chat_message_role_valid",
         ),
+        # ★ 审批状态只允许三种值。写死而不是放过：一个拼错的状态值
+        #   会让界面上那条消息**永远显示"等待确认"而没人能点** ——
+        #   用户以为对话卡住了，刷新也没用。
+        CheckConstraint(
+            "approval_status IS NULL OR approval_status IN "
+            f"({', '.join(repr(s) for s in APPROVAL_STATUSES)})",
+            name="chat_message_approval_status_valid",
+        ),
         # 读一个会话的全部消息：`WHERE session_id = ? ORDER BY seq`
         Index("ix_chat_messages_session_seq", "session_id", "seq"),
+        # 进会话时找"有没有挂着的确认"。
+        # ★ 部分索引：只索引 pending 的行。绝大多数消息 approval_status
+        #   是 NULL，全列索引会大得没道理，而这条查询只关心 pending。
+        Index(
+            "ix_chat_messages_pending_approval",
+            "session_id",
+            postgresql_where=text("approval_status = 'pending'"),
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -187,6 +319,31 @@ class ChatMessage(Base):
     #: 与"成功了"（False）是两件事。
     tool_failed: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
 
+    # ── 人工审批三列（v0.94）────────────────────────────────────
+    #
+    # `role == 'tool'` 且 `approval_status == 'pending'` 的行，表示
+    # 「模型想调这个工具，还在等用户点确认」。此时 `content` 里写的是
+    # "等待确认"，而**工具还没执行过**。
+    #
+    # ★ 为什么是同一行上的三个字段而不是一张 `chat_approvals` 表：
+    #   审批与那条工具消息是一对一的，而且批准后这条消息的内容就要
+    #   变成执行结果。分表会造出"消息说等待、表说已批、结果还没写"
+    #   这种半状态，界面得为它写专门分支。同一行改三个字段永远原子。
+    #   详细理由见迁移 `e8f3c2a71b54` 里那一节。
+
+    #: `None`（与审批无关）/ `'pending'` / `'approved'` / `'rejected'`。
+    #:
+    #: ★ 不用 `'none'` 这种假值：让"有没有审批"用一个 `IS NULL` 就能问。
+    approval_status: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    #: 谁点的确认/拒绝。按用户 id 存，不存用户名 —— 用户名可以改。
+    approval_decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: 什么时候点的。与 `approval_decided_by` 同时有值或同时为空。
+    approval_decided_at: Mapped[datetime | None] = mapped_column(
+        UtcDateTime, nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
 
     session: Mapped[ChatSession] = relationship(back_populates="messages")
@@ -196,8 +353,11 @@ class ChatMessage(Base):
 
 
 __all__ = [
+    "APPROVAL_STATUSES",
+    "CHAT_PERSONAS",
     "CHAT_ROLES",
     "MAX_MESSAGE_CHARS",
+    "MAX_PROJECT_CHARS",
     "MAX_TITLE_CHARS",
     "ChatMessage",
     "ChatSession",

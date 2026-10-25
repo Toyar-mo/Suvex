@@ -36,6 +36,21 @@ vi.mock('@/data/chat', () => ({
   sendMessage: vi.fn(async () => false),
   renameSession: vi.fn(async () => true),
   archiveSession: vi.fn(async () => true),
+  // ★ v0.94 新增的 store 函数必须在这里逐个列出。
+  //
+  //   ESM 命名导入在 vitest 的 mock 里是**逐名解析**的：工厂少导出一个，
+  //   页面那一行 `import` 不会在加载时报错，而是在**真正调用时**炸
+  //   `No "xxx" export is defined on the "@/data/chat" mock`。
+  //   症状是整组用例一起红，看起来像页面崩了，其实只是桩漏了一项 ——
+  //   我为此白查了十几分钟。以后给 store 加导出，回来补一次。
+  loadPersonas: vi.fn(async () => {}),
+  updateSettings: vi.fn(async () => true),
+  uploadAttachment: vi.fn(async () => null),
+  dropStagedAttachment: vi.fn(async () => true),
+  decideApproval: vi.fn(async () => true),
+  resetChatStore: vi.fn(),
+  subscribeChat: vi.fn(() => () => {}),
+  getChatSnapshot: vi.fn(),
 }))
 
 // `vi.mock` 会被提升，所以这里拿到的已是替身。
@@ -90,9 +105,12 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     sessions: [],
     active: null,
     tools: [],
+    personas: [],
+    stagedAttachments: [],
     status: 'ready',
     error: null,
     sending: false,
+    deciding: false,
     ...overrides,
   }
 }
@@ -266,7 +284,60 @@ describe('ChatPage — 输入框的中文输入法陷阱', () => {
     fireEvent.change(box, { target: { value: '你好' } })
     fireEvent.keyDown(box, { key: 'Enter', shiftKey: false, isComposing: false })
 
-    await waitFor(() => expect(mockedSendMessage).toHaveBeenCalledWith('chat_1', '你好'))
+    /*
+      ★ 断言的是**前两个实参**，不是完整调用。
+
+      v0.94 给 `sendMessage` 加了第 3、4 个参数（`providerId`、`explicitTools`），
+      而页面永远显式传四个。用 `toHaveBeenCalledWith('chat_1', '你好')` 会
+      因为"实参个数不同"而失败 —— 那种失败看起来像"消息没发出去"，
+      其实消息发得好好的。
+
+      这里只关心"发给哪个会话、发了什么内容"，这两个才是这一条用例的主题
+      （输入法组合态）。工具提示与模型选择各自有专门的用例。
+    */
+    await waitFor(() => {
+      expect(mockedSendMessage).toHaveBeenCalled()
+      const call = mockedSendMessage.mock.calls[0]
+      expect(call[0]).toBe('chat_1')
+      expect(call[1]).toBe('你好')
+    })
+  })
+
+  it('★ @工具 会作为提示一起发出去，且正文原样保留 @', async () => {
+    /*
+      两个都要断言，因为它们各自会单独坏：
+
+      · 提示没带上 → 模型不知道用户点名了哪个工具，`@` 这个功能等于装饰；
+      · 正文被改写（把 `@list_scans` 删掉）→ 用户看到自己打的字消失，
+        而且模型少了一条与提示互为印证的线索。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        tools: [
+          {
+            name: 'list_scans',
+            label: '列出扫描',
+            description: '看看跑过什么',
+            params: '无',
+            scope: null,
+            available: true,
+          },
+        ],
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const box = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '@list_scans 看看最近跑过什么' } })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: false, isComposing: false })
+
+    await waitFor(() => {
+      expect(mockedSendMessage).toHaveBeenCalled()
+      const call = mockedSendMessage.mock.calls[0]
+      expect(call[1]).toBe('@list_scans 看看最近跑过什么')
+      expect(call[3]).toEqual(['list_scans'])
+    })
   })
 
   it('Shift+Enter 换行，不发送', () => {

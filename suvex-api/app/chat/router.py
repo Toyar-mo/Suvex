@@ -9,6 +9,10 @@
 | DELETE | `/chat/sessions/{id}`           | read   | 归档（软删）             |
 | POST   | `/chat/sessions/{id}/messages`  | read   | 发一条消息，跑一轮       |
 | GET    | `/chat/tools`                   | read   | 这个对话能做什么         |
+| PATCH  | `/chat/sessions/{id}/settings`  | read   | 改六项会话设置（部分提交）|
+| GET    | `/chat/personas`                | read   | 人格列表                 |
+| POST   | `/chat/sessions/{id}/attachments` | read | 上传附件                 |
+| POST   | `/chat/sessions/{id}/messages/{mid}/approval` | read + 该工具所需 scope | 审批 |
 
 ## ★ 为什么写操作的门槛是 `read` 而不是 `admin`
 
@@ -35,22 +39,28 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, UploadFile
 from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read
+from app.chat import attachments as chat_attachments
 from app.chat import engine, service
-from app.chat.prompts import CHAT_TOOLS
+from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
+    ChatApprovalIn,
+    ChatAttachmentOut,
     ChatMessageOut,
+    ChatPersonaOut,
     ChatRenameIn,
     ChatSendIn,
     ChatSendOut,
     ChatSessionDetailOut,
     ChatSessionIn,
     ChatSessionOut,
+    ChatSettingsIn,
 )
 from app.core.db import get_db
 from app.core.errors import ApiError
@@ -156,6 +166,8 @@ async def send_message(
             content=content,
             identity=identity,
             provider_id=payload.providerId,
+            attachment_ids=payload.attachmentIds,
+            explicit_tools=payload.explicitTools,
         )
     except engine.ChatEngineError as exc:
         # ★ 把引擎的可读错误翻成 4xx 而不是 500：`ChatEngineError` 的两条
@@ -164,7 +176,10 @@ async def send_message(
         db.rollback()
         raise ApiError.validation(str(exc)) from exc
 
-    return ChatSendOut(messages=[ChatMessageOut.model_validate(m) for m in result.messages])
+    return ChatSendOut(
+        messages=[ChatMessageOut.model_validate(m) for m in result.messages],
+        awaitingApproval=result.awaiting_approval,
+    )
 
 
 @router.get("/chat/tools")
@@ -181,7 +196,11 @@ def list_tools(identity: Reader) -> list[dict]:
     """
     out: list[dict] = []
     for tool in CHAT_TOOLS:
-        available = True if tool.scope is None else identity.can(tool.scope)
+        # ★ 与 `engine._need_scope`、`decide_approval` 同一个判据。
+        #   这里算的是"界面上这个工具灰不灰"，而引擎算的是"真的能不能跑" ——
+        #   两处一旦不同步，用户会看到"按钮可点，点了说没权限"，或者反过来
+        #   "灰的但其实能跑"（后者更糟：用户以为没指望了）。
+        available = may_call_tool(tool.name, identity)
         out.append(
             {
                 "name": tool.name,
@@ -193,6 +212,205 @@ def list_tools(identity: Reader) -> list[dict]:
             }
         )
     return out
+
+
+@router.patch("/chat/sessions/{session_id}/settings", response_model=ChatSessionOut)
+def update_settings(
+    session_id: str, payload: ChatSettingsIn, db: DbSession, identity: Reader
+) -> ChatSessionOut:
+    """改六项会话设置。**部分提交**：只传要改的那几项。
+
+    ## 为什么单独一个端点而不是并入 `PATCH /chat/sessions/{id}`
+
+    那个端点改的是**标题**（`ChatRenameIn`）。把六项设置塞进去会让请求体
+    变成"标题与六个可选字段混在一起"，而前端在改标题时得小心别把
+    六个 `None` 一起发出去（会被解释成"清空"）。分成两个端点，两边的
+    请求体都只有一个意思。
+
+    ## 为什么不是 `admin`
+
+    改的是**自己的**会话（`get_session_or_404` 按 `created_by` 过滤）。
+    要求 `admin` 会让普通用户不能给自己的对话选人格。
+
+    ⚠️ 但 `skillNames` / `mcpServerNames` 挂载的是**平台资源**。这里不判
+       scope，因为挂载本身不执行任何东西 —— 它只是"下一轮把这几篇正文
+       附在系统提示词里"。真正要权限的是 `read_skill` / `add_mcp_server`
+       这类**动作**，那些在 `engine._need_scope` 里判。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    service.update_settings(db, session=session, payload=payload)
+    db.commit()
+    return ChatSessionOut.model_validate(session)
+
+
+@router.get("/chat/personas", response_model=list[ChatPersonaOut])
+def list_personas(identity: Reader) -> list[ChatPersonaOut]:
+    """可选人格列表（弹窗画卡片、下拉画选项都要它）。
+
+    ★ 从 `CHAT_PERSONAS_SPEC` 读而不是前端硬编码：人格的 label 与 summary
+      是**提示词的一部分**（`render_persona` 用同一份数据），两边各写一份
+      迟早会漂成"界面上叫渗透测试、提示词里说 recon"。
+    """
+    return [
+        ChatPersonaOut(id=spec.id, label=spec.label, summary=spec.summary)
+        for spec in CHAT_PERSONAS_SPEC
+    ]
+
+
+@router.post(
+    "/chat/sessions/{session_id}/attachments",
+    response_model=ChatAttachmentOut,
+    status_code=201,
+)
+async def upload_attachment(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+    file: Annotated[UploadFile, File(description="要带给模型看的文件")],
+) -> ChatAttachmentOut:
+    """上传一个附件，拿到 id（发消息时放进 `attachmentIds`）。
+
+    ## 为什么是 `async def`
+
+    `UploadFile.read()` 是 async 的（Starlette 的实现）。用同步函数读
+    会在事件循环里做阻塞 IO。
+
+    ## 为什么先落盘、不直接塞进消息
+
+    用户可能传三个文件再问一句话。落盘 → 拿到 id → 发消息时一起带上，
+    是唯一能表达"这三个属于同一条提问"的顺序。直接塞进消息的话，
+    每个文件都得单独发一条空消息。
+
+    ## 生命周期
+
+    上传后 `STAGED_TTL_SECONDS`（1 小时）内有效，发消息时被读走正文并
+    **立刻删除**（`engine.run_turn` 里那两行）。见 `attachments` 模块
+    docstring 的取舍说明。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    if session.archived:
+        raise ApiError.validation(
+            "这个会话已归档，不能再传附件。", {"sessionId": "已归档"}
+        )
+
+    staged_now = chat_attachments.list_staged(session_id=session.id)
+    if len(staged_now) >= chat_attachments.MAX_STAGED_PER_SESSION:
+        raise ApiError.validation(
+            f"这个会话暂存的附件太多（{len(staged_now)} 个）。"
+            f"上限 {chat_attachments.MAX_STAGED_PER_SESSION} 个，"
+            "先发一条消息把这些用掉。",
+            {"attachments": "暂存已满"},
+        )
+
+    # 顺手清掉过期的：用户可能一小时前传了几个、再也没发消息。
+    # 放在这里而不是定时任务里 —— 没有上传就不会有垃圾，而这里
+    # 正是"新垃圾要进来"的时刻。
+    chat_attachments.sweep(session_id=session.id)
+
+    content = await file.read()
+    try:
+        staged = chat_attachments.store(
+            session_id=session.id,
+            filename=file.filename or "attachment",
+            content=content,
+            attachment_id=uuid.uuid4().hex[:16],
+        )
+    except ValueError as exc:
+        # `store` 把"太大"/"是空的"抛 ValueError，翻成用户能读懂的 400。
+        raise ApiError.validation(str(exc), {"file": "不符合要求"}) from exc
+
+    return ChatAttachmentOut(id=staged.id, name=staged.name, sizeBytes=staged.size_bytes)
+
+
+@router.post(
+    "/chat/sessions/{session_id}/messages/{message_id}/approval",
+    response_model=ChatSendOut,
+)
+async def decide_approval(
+    session_id: str,
+    message_id: str,
+    payload: ChatApprovalIn,
+    db: DbSession,
+    identity: Reader,
+) -> ChatSendOut:
+    """对一条挂起的工具调用做决定，批准就**接着跑完这一轮**。
+
+    ## 权限：两道，与 `engine._need_scope` 同一判据
+
+    端点级只要求 `read`（能进这个会话）。真正的门槛在被批准那个工具
+    自己声明的 scope 上：`save_skill` 要 `admin`，`create_scan` 要 `scan`。
+    在这里按工具名重判一次，理由与 `send_message` 那段 docstring 一致 ——
+    用户可能在**上一轮**（有权限时）挂起、然后在**降权之后**才点确认。
+
+    ⚠️ 如果不重判，路径就是：管理员挂起一个 `save_skill` → 会话被降成
+       只读 → 点确认 → 工具照跑。审批变成了提权通道。
+
+    ## 拒绝时
+
+    只改状态，不执行、不继续。用户点拒绝的意思是"这条别做"，此时
+    自动让模型接着说一句什么会显得吵。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    message = service.get_message(db, session=session, message_id=message_id)
+
+    if message.approval_status != "pending":
+        raise ApiError.validation(
+            "这条调用已经处理过了，不能重复审批。",
+            {"messageId": f"当前状态：{message.approval_status}"},
+        )
+
+    tool_name = message.tool_name or ""
+    spec = TOOL_BY_NAME.get(tool_name)
+    if spec is None:
+        # 挂起时记的工具名不在当前工具表里（改了代码/降了版本）。
+        # 这时候不能执行 —— 我们不知道它要什么权限。
+        raise ApiError.validation(
+            f"这个工具（`{tool_name}`）已经不在可用列表里了，不能执行。",
+            {"toolName": "未知工具"},
+        )
+    # ★ 与 `engine._need_scope` 用**同一个判据**（`prompts.may_call_tool`）。
+    #
+    #   两处各写一遍 `spec.scope is not None and not identity.can(...)` 的
+    #   问题不是"今天会错"，而是"以后会漂"：给 `ChatToolSpec` 加一个
+    #   多权限字段时，只会改其中一处，于是"审批放行、执行被拒"（用户点了
+    #   确认，什么都没发生）或者反过来漏拦。判据只有一份，漂不了。
+    if not may_call_tool(tool_name, identity):
+        raise ApiError.validation(
+            f"`{tool_name}` 需要「{spec.scope}」权限，当前账号没有。",
+            {"scope": spec.scope},
+        )
+
+    service.decide_approval(
+        db,
+        session=session,
+        message=message,
+        approve=payload.approve,
+        decided_by=identity.user_id or f"token:{identity.label}",
+    )
+    db.commit()
+
+    if not payload.approve:
+        # 拒绝：只回那条改过状态的消息，不调模型。
+        return ChatSendOut(messages=[ChatMessageOut.model_validate(message)])
+
+    try:
+        result = await engine.resume_approved(
+            db, session=session, message=message, identity=identity
+        )
+    except engine.ChatEngineError as exc:
+        db.rollback()
+        raise ApiError.validation(str(exc)) from exc
+
+    return ChatSendOut(
+        messages=[ChatMessageOut.model_validate(m) for m in result.messages],
+        awaitingApproval=result.awaiting_approval,
+    )
 
 
 def _owner(identity: Identity) -> str:

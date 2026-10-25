@@ -500,18 +500,48 @@ async def test_a_reader_cannot_create_a_scan(db_session: Session, chat_session) 
     assert "scan" in tool_rows[0].content
 
 
-def test_the_tool_list_endpoint_hides_what_this_identity_cannot_do() -> None:
-    """`GET /chat/tools` 的 `available` 与 `engine._need_scope` 必须**同判据**。
+def test_the_tool_list_endpoint_hides_what_this_identity_cannot_do(
+    viewer_client: TestClient,
+) -> None:
+    """`GET /chat/tools` 的 `available` 必须反映这个账号的真实权限。
 
-    两处不一致会让界面说"能"而执行时说"不能" —— 用户会以为是 bug。
+    ## ★ 这条测试原先什么都没测
+
+    它原来的写法是：
+
+        for tool in CHAT_TOOLS:
+            available = True if tool.scope is None else reader.can(tool.scope)
+            assert available is False, ...
+
+    那个 `available` 是**测试自己按规则算出来的**，跟端点返回什么毫无关系。
+    换句话说它只验证了"READER.can() 实现是对的"，而 `GET /chat/tools` 就算
+    对所有人返回 `available: true`，这条也照样绿。我是在做变异验证时发现的：
+    把端点改成 `available = True` 硬编码，这条仍然 passed。
+
+    教训：**测端点的测试必须打到端点**。自己在测试里重算一遍判据，
+    测的是自己的算术，不是产品。
     """
-    from app.chat.prompts import CHAT_TOOLS
+    response = viewer_client.get(f"{API}/chat/tools")
+    assert response.status_code == 200
 
-    reader = READER
-    for tool in CHAT_TOOLS:
-        available = True if tool.scope is None else reader.can(tool.scope)
-        if tool.name in {"save_skill", "delete_skill", "add_mcp_server", "create_scan", "start_ctf_solve"}:
-            assert available is False, f"{tool.name} 对只读账号不该可用"
+    rows = {row["name"]: row for row in response.json()}
+    # 只读账号拿不到这些（引擎执行时会拒，界面必须一致地灰掉）。
+    for name in (
+        "save_skill",
+        "delete_skill",
+        "add_mcp_server",
+        "create_scan",
+        "start_ctf_solve",
+    ):
+        assert rows[name]["available"] is False, f"{name} 对只读账号不该显示为可用"
+
+    # 读类工具必须仍然可用 —— 否则"全灰"也能让上面那组断言通过。
+    for name in ("list_scans", "list_skills", "list_mcp_servers"):
+        assert rows[name]["available"] is True, f"{name} 是读操作，不该被挡住"
+
+    # 声明的 scope 要跟判据同一张表（`GET /chat/tools` 会把 scope 一起吐出来）。
+    assert rows["save_skill"]["scope"] == "admin"
+    assert rows["list_scans"]["scope"] is None
 
 
 # ══════════════════════════════════════════════════════════

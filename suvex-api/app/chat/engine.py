@@ -51,7 +51,13 @@ from sqlalchemy.orm import Session
 
 from app.chat import service as chat_service
 from app.chat.models import ChatSession
-from app.chat.prompts import CHAT_TOOL_NAMES, build_system_prompt
+from app.chat.prompts import (
+    CHAT_TOOL_NAMES,
+    CONSEQUENTIAL_TOOL_NAMES,
+    TOOL_BY_NAME,
+    build_system_prompt,
+    may_call_tool,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -66,6 +72,14 @@ MAX_TOOL_ROUNDS = 6
 #: 取 30 的理由：正常对话里 30 条 ≈ 10 轮问答，够模型理解"刚才在聊什么"。
 #: 更早的内容对当前这一轮几乎无用（用户真需要时会重述）。
 HISTORY_MESSAGE_LIMIT = 30
+
+#: 挂载技能正文的**总**预算（所有挂载技能加起来）。
+#:
+#: ★ 为什么需要这个而 `skills.MAX_SKILL_CHARS`（24000）不够：那一个是
+#:   **单篇**上限。用户挂五篇，总量就是 12 万字 —— 而它每一轮都要重发。
+#:   这里按总量卡，超出时按挂载顺序截：先挂的优先，因为界面上勾选按钮
+#:   的排列顺序就是用户心里的优先级。
+MAX_MOUNTED_SKILL_CHARS = 40_000
 
 #: 上下文里单条工具输出最多带多少字。
 #:
@@ -90,11 +104,58 @@ class ChatTurnResult:
     messages: list[Any] = field(default_factory=list)
     #: 这一轮是否因为达到工具轮数上限而提前收尾。
     hit_tool_limit: bool = False
+    #: 若这一轮停在等待人工确认上，这里是被挂起那条消息的 id。
+    #:
+    #: ⚠️ 它是**消息 id** 而不是布尔量：界面上要能定位到具体哪一条、
+    #:   用户点确认时也要把它带回来。用布尔量的话前端还得自己从
+    #:   `messages` 里再筛一遍。
+    awaiting_approval: str | None = None
 
 
 # ══════════════════════════════════════════════════════════
 # 上下文拼装
 # ══════════════════════════════════════════════════════════
+
+
+def _render_attachments(files: list[tuple[str, str]]) -> str:
+    """把附件的正文拼成一段，接在用户那句话**之后**。
+
+    ## 为什么接在用户消息里，而不是作为独立的一条
+
+    OpenAI/Anthropic 的 wire 格式里没有"附件"这个东西 —— 它要么是一条
+    user 消息的一部分，要么是一条独立的 user 消息。做成独立消息的后果：
+    `HISTORY_TOOL_CHARS` 的截断口径、`_render_history` 的三角色映射、
+    以及"这一轮到底问了什么"的语义都会多出一种形状要处理。
+
+    接在同一条里则完全不动现有的消息模型：模型看到的是一句提问 + 紧跟着
+    的材料，正是人类贴一段日志再问问题的样子。
+
+    ## 格式
+
+    ```
+    用户说的话
+
+    ---
+    ## 附件：`access.log`
+    <正文>
+
+    ## 附件：`nginx.conf`
+    <正文>
+    ---
+    ```
+
+    ★ 附件放在**后面**：先问题、后材料。反过来的话模型要读完几万字材料
+      才看到"到底要干什么"，而工具输出/长上下文里的注意力衰减是实测存在的。
+    """
+    if not files:
+        return ""
+    blocks: list[str] = ["", "---"]
+    for name, body in files:
+        blocks.append(f"## 附件：`{name}`")
+        blocks.append(body.rstrip())
+        blocks.append("")
+    blocks.append("---")
+    return "\n".join(blocks)
 
 
 def _render_history(rows: list[Any]) -> list[dict[str, str]]:
@@ -182,7 +243,7 @@ class _ToolContext:
         self.identity = identity
 
 
-def _need_scope(ctx: _ToolContext, scope: str) -> None:
+def _need_scope(ctx: _ToolContext, tool_name: str) -> None:
     """工具级权限复核。
 
     ## 为什么在引擎里再判一次（router 已经判过了）
@@ -192,18 +253,31 @@ def _need_scope(ctx: _ToolContext, scope: str) -> None:
     `read` scope，却让模型去改技能库。到了 `save_skill` 这一层才发现
     没权限，比在 router 层拒绝更准确，也才能给模型一句它能理解的话。
 
+    ## 为什么参数是工具名，不是 scope 字符串
+
+    原先是 `_need_scope(ctx, "admin")` —— 判据（谁能做什么）被写在了
+    **调用点**。同一个工具所需的权限因此在两处各存了一份：这里手写的
+    字符串，和 `ChatToolSpec.scope`。两处不一致时的症状特别隐蔽：
+    工具的声明是 `scan`，这里手写 `admin`，于是"有 scan 没 admin 的账号
+    看着工具可用、点了却被拒"，而错误信息会说"缺少 admin 权限"——
+    用户完全无从判断该找谁开权限。
+
+    改成传工具名后，判据只有一个来源（`prompts.TOOL_BY_NAME` 里的
+    `scope`），与 `router.decide_approval` 共用 `may_call_tool`。
+
     ⚠️ 不用 `require_admin` 那个 FastAPI 依赖：它抛 `ApiError`，
       而引擎里的失败要以**工具结果**的形式回到模型（让它知道"这条路
       走不通，换个说法"），不是让整个请求 403。
     """
-    if ctx.identity is None:
+    if may_call_tool(tool_name, ctx.identity):
+        return
+    spec = TOOL_BY_NAME.get(tool_name)
+    if spec is None or spec.scope is None:
         raise _ToolDenied("这次对话没有可用的身份信息，不能执行需要权限的操作。")
-    can = getattr(ctx.identity, "can", None)
-    if can is None or not can(scope):
-        raise _ToolDenied(
-            f"当前账号没有 `{scope}` 权限，做不了这件事。"
-            "需要的话请让管理员给你相应的权限。"
-        )
+    raise _ToolDenied(
+        f"当前账号没有 `{spec.scope}` 权限，做不了这件事。"
+        "需要的话请让管理员给你相应的权限。"
+    )
 
 
 class _ToolDenied(Exception):
@@ -268,7 +342,7 @@ async def _tool_create_scan(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.scans import service as scans_service
     from app.scans.schemas import AuthorizationIn, ScanCreate
 
-    _need_scope(ctx, "scan")
+    _need_scope(ctx, "create_scan")
 
     target = str(args.get("target") or "").strip()
     if not target:
@@ -358,7 +432,7 @@ async def _tool_list_challenges(ctx: _ToolContext, args: dict[str, Any]) -> str:
 async def _tool_start_ctf_solve(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import service as kernel_service
 
-    _need_scope(ctx, "scan")
+    _need_scope(ctx, "start_ctf_solve")
     challenge_id = str(args.get("challengeId") or args.get("challenge_id") or "").strip()
     if not challenge_id:
         return _err("没有给 `challengeId`。先用 `list_challenges` 找到题目 id。")
@@ -416,7 +490,7 @@ async def _tool_read_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
 async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
-    _need_scope(ctx, "admin")
+    _need_scope(ctx, "save_skill")
     name = str(args.get("name") or "").strip()
     category = str(args.get("category") or "").strip().lower()
     description = str(args.get("description") or "").strip()
@@ -452,7 +526,7 @@ async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
 async def _tool_delete_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
-    _need_scope(ctx, "admin")
+    _need_scope(ctx, "delete_skill")
     name = str(args.get("name") or "").strip()
     category = str(args.get("category") or "").strip().lower()
     if not name or not category:
@@ -499,7 +573,7 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
     """
     from app.kernel import service as kernel_service
 
-    _need_scope(ctx, "admin")
+    _need_scope(ctx, "add_mcp_server")
     name = str(args.get("name") or "").strip()
     command = str(args.get("command") or "").strip()
     if not name or not command:
@@ -728,6 +802,49 @@ def _build_gateway(provider_id: str | None, db: Session):
     )
 
 
+def _resolve_provider(session: ChatSession, explicit: str | None) -> str | None:
+    """决定这一轮用哪个接入点。
+
+    顺序：**本条显式指定 > 会话设置 > 平台默认**（`None` 交给 `_build_gateway`）。
+
+    ★ 顺序不能反过来。会话上的值是"这个对话的默认"，逐条指定是
+      "这一次例外" —— 反过来会让用户改了会话设置却发现某条消息还是
+      按旧的跑，而他找不到原因。
+    """
+    if explicit:
+        return explicit
+    return session.provider_id
+
+
+def _system_prompt_for(session: ChatSession, hinted_tools: list[str] | None = None) -> str:
+    """按会话设置渲染系统提示词。
+
+    ★ 这里读的是**库里的当前值**，不是请求参数：用户可能在另一个标签页
+      刚刚改了人格/审批开关，而本轮应该按最新的来。用请求参数会让两个
+      标签页各按各的跑，且"改了没生效"无法复现。
+    """
+    mounted = chat_service.mounted_skill_texts(session)
+    if mounted:
+        # 总量截断：按挂载顺序累加，超出预算的**截断正文**而不是整篇丢弃
+        # （丢一篇会让用户以为没勾上；截断至少前言还在，且下面会明确标注）。
+        trimmed: list[tuple[str, str]] = []
+        budget = MAX_MOUNTED_SKILL_CHARS
+        for name, body in mounted:
+            if budget <= 0:
+                break
+            text = body if len(body) <= budget else body[:budget] + "\n\n…（这篇超出本次对话的挂载预算，后面没展开）"
+            trimmed.append((name, text))
+            budget -= len(text)
+        mounted = trimmed
+
+    return build_system_prompt(
+        persona=session.persona,
+        require_approval=bool(session.require_approval),
+        mounted_skills=mounted,
+        hinted_tools=hinted_tools,
+    )
+
+
 async def run_turn(
     db: Session,
     *,
@@ -736,6 +853,8 @@ async def run_turn(
     identity: Any,
     provider_id: str | None = None,
     gateway: Any = None,
+    attachment_ids: list[str] | None = None,
+    explicit_tools: list[str] | None = None,
 ) -> ChatTurnResult:
     """跑一轮对话。
 
@@ -744,31 +863,53 @@ async def run_turn(
     给测试用的注入点。传了就不造真网关（测试里不可能真调 LLM）。
     生产路径永远不传，由 `_build_gateway` 从库里造。
 
+    ## 参数 `attachment_ids`
+
+    这一轮要带给模型看的附件 id。正文在**落用户消息之前**读出来并拼进
+    这条消息的 `content` —— 见 `attachments.read_text` 的说明为什么
+    "用完即删"。
+
     ## 流程
 
-    1. 落用户消息
-    2. 拼上下文（最近 N 条） + 系统提示词
+    1. 读附件正文，拼进用户消息，落库
+    2. 拼上下文（最近 N 条） + 系统提示词（按会话设置渲染）
     3. 调模型 → 解析 `ACTION:`
     4. 有动作就执行、落 tool 消息、回到 3（最多 `MAX_TOOL_ROUNDS` 轮）
+       - ⚠️ 打开审批时，**有副作用的工具不执行**，落一条 pending 消息并停
     5. 没有动作 = 模型说完了 → 落 assistant 消息，结束
 
     ⚠️ 每一轮模型的**文本正文**都落一条 assistant 消息（哪怕它同时带了
-       动作）。这正是界面上"它说要做什么 → 工具卡 → 它说结果"的对话感来
-       源；只保留最后一条会让中间过程消失。
+       动作）。这正是界面上"它说要做什么 → 工具卡 → 它说结果"的对话感来源。
     """
+    from app.chat import attachments as chat_attachments
     from app.kernel.runner import parse_actions
 
     result = ChatTurnResult()
 
-    user_message = chat_service.append_user_message(db, session=session, content=content)
+    # ── 附件：先读正文，再拼进这一轮的提问 ──────────────────
+    #
+    # ★ 拼接发生在**落库之前**：附件正文成为这条 user 消息的一部分，
+    #   于是下一轮它自然出现在历史里，不需要"这一轮额外带哪些附件"的状态。
+    #   代价是它每轮都重发（见 attachments 模块 docstring 的取舍说明）。
+    files: list[tuple[str, str]] = []
+    if attachment_ids:
+        files = chat_attachments.read_text(session_id=session.id, attachment_ids=attachment_ids)
+        # 用完即删：这些文件已经没有第二个用途了。
+        chat_attachments.discard(session_id=session.id, attachment_ids=attachment_ids)
+
+    stored_content = content + _render_attachments(files)
+    user_message = chat_service.append_user_message(db, session=session, content=stored_content)
     result.messages.append(user_message)
     db.commit()
 
     if gateway is None:
-        gateway = _build_gateway(provider_id, db)
+        gateway = _build_gateway(_resolve_provider(session, provider_id), db)
 
-    system = build_system_prompt()
+    system = _system_prompt_for(session, explicit_tools)
     ctx = _ToolContext(db=db, session=session, identity=identity)
+
+    #: 打开审批时，这些工具不执行、只挂起。
+    gate_on = bool(session.require_approval)
 
     for round_index in range(MAX_TOOL_ROUNDS + 1):
         history = chat_service.list_messages(
@@ -776,7 +917,6 @@ async def run_turn(
         )
         messages = _render_history(history)
 
-        # 到上限那一轮，不再允许动作 —— 明确要求它收尾。
         at_limit = round_index >= MAX_TOOL_ROUNDS
         system_this_round = system
         if at_limit:
@@ -794,45 +934,21 @@ async def run_turn(
             _log.warning("对话调模型失败", exc_info=True)
             raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc
 
-        # ★ 落库给用户看的是**剥掉动作之后**的正文，不是模型原始输出。
-        #
-        # 模型把 `ACTION: {...}` 和"人话"写在同一次回复里。原始的
-        # `reply.text` 直接落库会让用户在气泡里看到一行裸 JSON
-        # （实测形状：`好的，我先查一下。\nACTION: {"tool": "list_scans", "args": {}}`），
-        # 而工具其实已经调成功了。**内部协议出现在用户视野里，会让人
-        # 分不清这句话是模型说的还是系统拼的** —— 复核证据时这是致命的。
-        #
-        # ⚠️ 动作仍然从**原始** `reply.text` 解析：剥掉之后就找不到
-        #   `ACTION:` 了。
+        # ★ 落库给用户看的是**剥掉动作之后**的正文。理由见 `_narration_before_action`。
         raw_text = reply.text or ""
         text = _narration_before_action(raw_text)
         actions = [] if at_limit else parse_actions(raw_text)
         reasoning = getattr(reply, "reasoning", None)
         if not reasoning:
-            # `LlmGateway` 把推理段塞在 `raw` 里（不同 provider 键名不同），
-            # 这里只取一个展示用；拿不到就不展示，绝不编。
             raw = getattr(reply, "raw", None) or {}
             if isinstance(raw, dict):
                 candidate = raw.get("reasoning_content") or raw.get("thinking")
                 reasoning = candidate if isinstance(candidate, str) and candidate else None
 
-        # 模型既没说话也没动作：这是一次空转。
-        #
-        # ⚠️ 这里有两种**必须分开说**的情况，混在一起会让用户看到一句
-        #    误导的话：
-        #    a) 模型真的什么都没产出（空回复，常见于接入点异常）；
-        #    b) 模型写了 ACTION，但**这一轮不允许动作**（到上限了），
-        #       于是动作被丢弃 —— 它其实产出了东西，只是用不上。
-        #    对 b 说"模型没有产出内容"是错的，而用户会据此去换接入点，
-        #    换完还是一样。
         if not text and not actions:
             from app.kernel.runner import parse_actions as _parse
 
             discarded = _parse(raw_text) if at_limit else []
-            # ★ 三种情况必须分开说 —— 混在一起会让用户按错误方向去修：
-            #   a) 到上限了，模型还想调 X：说清"它还想调 X"，不是"没产出"；
-            #   b) 什么都没写：才说"没有产出内容"并提示换接入点；
-            #   c) 写了铺垫但没动作（`text` 非空）—— 根本不会走到这个分支。
             note = (
                 "（模型还想继续调工具，但本轮工具轮数已到上限，"
                 f"它最后想调的是 `{discarded[0][0]}`。"
@@ -857,6 +973,26 @@ async def run_turn(
             return result
 
         for name, args in actions:
+            # ── 人工审批闸门 ──────────────────────────────────
+            #
+            # ★ 判据是 `CONSEQUENTIAL_TOOL_NAMES`（与提示词里那段用的是
+            #   同一个集合），不是"凡是写操作"。两处用同一个集合是刻意的：
+            #   提示词告诉模型"这些会等确认"，如果这里实际拦的集合不一样，
+            #   模型会对某些工具毫无预警地卡住 —— 而它会以为是自己失败了。
+            #
+            # ★ 挂起之后**立刻停止这一轮**：用户还没确认，模型继续调下一个
+            #   工具会让界面上同时挂起多个确认框，而且它们的顺序取决于
+            #   模型而不是用户。停下来，等用户决定，由 `resume_approved`
+            #   接着跑。
+            if gate_on and name in CONSEQUENTIAL_TOOL_NAMES:
+                pending = chat_service.mark_awaiting_approval(
+                    db, session=session, tool_name=name, tool_args=args
+                )
+                result.messages.append(pending)
+                result.awaiting_approval = pending.id
+                db.commit()
+                return result
+
             output, failed = await _execute_tool(ctx, name, args)
             tool_message = chat_service.append_tool_message(
                 db,
@@ -872,11 +1008,138 @@ async def run_turn(
     return result
 
 
+async def resume_approved(
+    db: Session,
+    *,
+    session: ChatSession,
+    message: Any,
+    identity: Any,
+    gateway: Any = None,
+) -> ChatTurnResult:
+    """执行一条刚刚被批准的工具调用，然后**接着跑这一轮**。
+
+    ## 为什么是"接着跑"而不是"只执行"
+
+    用户点确认的意思是"这一步可以做，继续"。只执行不继续的话，模型下一条
+    消息会看到工具结果但不会主动说话 —— 用户还得再发一句"然后呢"。
+    所以这里执行完直接进入下一轮模型调用。
+
+    ## 与 `run_turn` 的关系
+
+    共用 `_execute_tool` / `_system_prompt_for` / `_build_gateway`，
+    但**不复用主循环**：这里已经有一条落好库的 user 消息了，再走一遍
+    "落用户消息"会造出一条重复的提问。复制这段循环的代价是两处都要维护，
+    而抽出一个"从当前历史继续跑 N 轮"的公共函数会让参数表长到读不懂
+    （它要接收 gate_on、at_limit 语义、以及"这一轮的 user 消息已经存在"
+    这个开关）。
+
+    ⚠️ 这是一个**已知的重复**。如果第三处需要同样的循环，那时再抽 ——
+       两处重复的代价小于现在就把抽象做错的代价。
+    """
+    from app.kernel.runner import parse_actions
+
+    result = ChatTurnResult()
+
+    output, failed = await _execute_tool(
+        _ToolContext(db=db, session=session, identity=identity),
+        message.tool_name or "",
+        message.tool_args or {},
+    )
+    chat_service.finish_approved_tool(
+        db, session=session, message=message, output=output, failed=failed
+    )
+    result.messages.append(message)
+    db.commit()
+
+    if gateway is None:
+        gateway = _build_gateway(_resolve_provider(session, None), db)
+
+    system = _system_prompt_for(session)
+    gate_on = bool(session.require_approval)
+    ctx = _ToolContext(db=db, session=session, identity=identity)
+
+    for round_index in range(MAX_TOOL_ROUNDS):
+        history = chat_service.list_messages(
+            db, session=session, limit=HISTORY_MESSAGE_LIMIT
+        )
+        messages = _render_history(history)
+        at_limit = round_index >= MAX_TOOL_ROUNDS - 1
+        system_this_round = system
+        if at_limit:
+            result.hit_tool_limit = True
+            system_this_round = (
+                system
+                + "\n\n## ⚠️ 工具调用已到本轮上限\n\n"
+                "不要再写 ACTION。现在直接用一段话总结。"
+            )
+
+        try:
+            reply = await gateway.chat(messages, system=system_this_round)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("对话调模型失败（审批后）", exc_info=True)
+            raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc
+
+        raw_text = reply.text or ""
+        text = _narration_before_action(raw_text)
+        actions = [] if at_limit else parse_actions(raw_text)
+        reasoning = getattr(reply, "reasoning", None)
+        if not reasoning:
+            raw = getattr(reply, "raw", None) or {}
+            if isinstance(raw, dict):
+                candidate = raw.get("reasoning_content") or raw.get("thinking")
+                reasoning = candidate if isinstance(candidate, str) and candidate else None
+
+        if not text and not actions:
+            placeholder = chat_service.append_assistant_message(
+                db,
+                session=session,
+                content="（批准后模型没有产出内容。可以再问一次，或换个接入点试试。）",
+            )
+            db.commit()
+            result.messages.append(placeholder)
+            return result
+
+        assistant_message = chat_service.append_assistant_message(
+            db, session=session, content=text, reasoning=reasoning
+        )
+        result.messages.append(assistant_message)
+        db.commit()
+
+        if not actions:
+            return result
+
+        for name, args in actions:
+            if gate_on and name in CONSEQUENTIAL_TOOL_NAMES:
+                pending = chat_service.mark_awaiting_approval(
+                    db, session=session, tool_name=name, tool_args=args
+                )
+                result.messages.append(pending)
+                result.awaiting_approval = pending.id
+                db.commit()
+                return result
+
+            tool_output, tool_failed = await _execute_tool(ctx, name, args)
+            tool_message = chat_service.append_tool_message(
+                db,
+                session=session,
+                tool_name=name,
+                tool_args=args,
+                content=tool_output,
+                failed=tool_failed,
+            )
+            result.messages.append(tool_message)
+            db.commit()
+
+    return result
+
+
 __all__ = [
     "HISTORY_MESSAGE_LIMIT",
     "HISTORY_TOOL_CHARS",
+    "MAX_MOUNTED_SKILL_CHARS",
     "MAX_TOOL_ROUNDS",
     "ChatEngineError",
     "ChatTurnResult",
+    "resume_approved",
     "run_turn",
 ]

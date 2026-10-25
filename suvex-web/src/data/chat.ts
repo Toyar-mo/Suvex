@@ -51,6 +51,17 @@ export interface ChatMessage {
   /** 工具是否失败。`null`/缺省 = 成功或不是工具消息。 */
   toolFailed?: boolean | null
   createdAt: string
+
+  /**
+   * 审批状态。`null`/缺省 = 这条消息与审批无关。
+   *
+   * ★ `'pending'` 时工具**还没执行过**，`content` 里写的是"等待确认"。
+   *   界面必须据此渲染确认按钮，而不是渲染成一张普通工具卡 ——
+   *   那样用户会以为它已经跑过了。
+   */
+  approvalStatus?: 'pending' | 'approved' | 'rejected' | null
+  approvalDecidedBy?: string | null
+  approvalDecidedAt?: string | null
 }
 
 /** 会话元信息（不含消息）。 */
@@ -62,6 +73,38 @@ export interface ChatSession {
   updatedAt: string
   messageCount: number
   archived: boolean
+
+  // ── v0.94 的六项「对话设置」 ──────────────────────────────
+  //
+  // ★ 它们出现在**列表**响应里（不只是详情）：侧栏要按 `project` 分组、
+  //   要在条目上标出人格/审批状态。为三个小字段让列表逐条再请求详情
+  //   是浪费 —— 而侧栏是每次进页面都要渲染的。
+  /** 归属项目。`null` = 无项目。 */
+  project?: string | null
+  /** 人格 id。`null` = 默认。 */
+  persona?: string | null
+  /** 模型接入点 id。`null` = 平台默认；逐条消息可以用 `providerId` 覆盖。 */
+  providerId?: string | null
+  /** 有副作用的工具是否要人工确认。 */
+  requireApproval?: boolean
+  /** 挂载的技能名。`null`/空 = 没挂。 */
+  skillNames?: string[] | null
+  /** 挂载的 MCP server 名。 */
+  mcpServerNames?: string[] | null
+}
+
+/** 供界面渲染的一种人格。 */
+export interface ChatPersona {
+  id: string
+  label: string
+  summary: string
+}
+
+/** 已上传、还没随消息发出去的附件。 */
+export interface ChatAttachment {
+  id: string
+  name: string
+  sizeBytes: number
 }
 
 /** `GET /chat/sessions/{id}` 的响应。 */
@@ -92,19 +135,34 @@ export interface ChatState {
   /** 当前打开的会话；`null` = 还没选（欢迎屏）。 */
   active: ChatSessionDetail | null
   tools: ChatTool[]
+  /** 可选人格（进页面拉一次即可，内容只随代码变）。 */
+  personas: ChatPersona[]
+  /**
+   * 当前会话里已上传、还没发出去的附件。
+   *
+   * ★ 它跟着**会话**而不是跟着输入框：切走再切回来时，用户传的那几个
+   *   文件还在（后端确实还留着，见 `attachments.STAGED_TTL_SECONDS`）。
+   *   放在页面状态里会让切换会话把附件"藏起来"，而用户会以为传丢了。
+   */
+  stagedAttachments: ChatAttachment[]
   status: ChatStatus
   error: ApiError | null
   /** 一轮正在跑。界面据此禁用输入框并显示"正在想"。 */
   sending: boolean
+  /** 有一条审批正在提交。界面据此禁用那两个按钮，防重复点。 */
+  deciding: boolean
 }
 
 const EMPTY: ChatState = {
   sessions: [],
   active: null,
   tools: [],
+  personas: [],
+  stagedAttachments: [],
   status: 'idle',
   error: null,
   sending: false,
+  deciding: false,
 }
 
 let state: ChatState = EMPTY
@@ -207,6 +265,9 @@ export async function loadTools(): Promise<void> {
 export async function openSession(sessionId: string): Promise<void> {
   patch({ status: 'loading', error: null })
   try {
+    // 切会话先把上一个会话的附件清掉：后端按 session 目录找附件，
+    // 留着上一个会话的 id 在这里，发出去会读不到（症状是"附件丢了"）。
+    clearStagedAttachments()
     const detail = await api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}`)
     patch({ active: detail, status: 'ready' })
   } catch (error) {
@@ -255,18 +316,30 @@ export async function sendMessage(
   sessionId: string,
   content: string,
   providerId?: string | null,
+  explicitTools?: string[],
 ): Promise<boolean> {
   if (state.sending) return false
   patch({ sending: true, error: null })
   try {
     const body: Record<string, unknown> = { content }
     if (providerId) body.providerId = providerId
-    const result = await api.post<{ messages: ChatMessage[] }>(
-      `/chat/sessions/${sessionId}/messages`,
-      body,
+    // ★ 附件 id 只在这一条上生效。后端读完正文就删（见 attachments 模块），
+    //   所以这里发完必须清空 `stagedAttachments` —— 不清的话界面会继续显示
+    //   "已上传 3 个"，而它们在服务端已经不存在了；用户再发一条会看到
+    //   "附件读不到"这种莫名其妙的错误。
+    const attachmentIds = state.stagedAttachments.map((a) => a.id)
+    if (attachmentIds.length > 0) body.attachmentIds = attachmentIds
+    // 用户在正文里 @ 的工具。★ 只影响提示词里的一句"优先用这些"，
+    //   不限制模型用别的 —— 强行限制会让它在工具不适用时无法退让。
+    if (explicitTools && explicitTools.length > 0) body.explicitTools = explicitTools
+
+    const result = await api.post<{
+      messages: ChatMessage[]
+      awaitingApproval?: string | null
+    }>(`/chat/sessions/${sessionId}/messages`, body, {
       // 一轮要等模型想 + 调工具，默认 20 秒不够。
-      { timeoutMs: 180_000 },
-    )
+      timeoutMs: 180_000,
+    })
 
     const active = state.active
     if (active && active.id === sessionId) {
@@ -280,6 +353,8 @@ export async function sendMessage(
           // 下一次 loadSessions 会用真值覆盖。
           title: active.messageCount === 0 ? deriveTitle(active.title, content) : active.title,
         },
+        // 附件已被后端读走并删除，本地也清掉。
+        stagedAttachments: attachmentIds.length > 0 ? [] : state.stagedAttachments,
       })
     }
 
@@ -292,6 +367,199 @@ export async function sendMessage(
     return false
   } finally {
     patch({ sending: false })
+  }
+}
+
+/**
+ * 拉人格列表。
+ *
+ * ★ 失败**不挂 error**：人格是"没有也能用"的东西（默认就是通用助手）。
+ *   为它把整页变成错误态，会让一个可选功能拖垮必选功能。
+ *   这与 `loadTools` 的取舍不同 —— 工具列表决定界面上显示哪些能力，
+ *   读不到就该报错；人格读不到只意味着下拉框是空的。
+ */
+export async function loadPersonas(): Promise<void> {
+  try {
+    const personas = await api.get<ChatPersona[]>('/chat/personas')
+    patch({ personas })
+  } catch {
+    // 故意吞掉：见上面 docstring。
+  }
+}
+
+/**
+ * 拉当前会话的暂存附件。
+ *
+ * ★ 目前后端没有"列出暂存附件"的端点，所以这个函数**只清空**。
+ *   保留它是为了在切会话时把上一个会话的附件从界面上抹掉 ——
+ *   不抹的话，切到 B 会话还会看到 A 的附件，而发出去时 B 会读不到
+ *   （后端按 session 目录找），症状是"附件莫名其妙丢了"。
+ */
+function clearStagedAttachments(): void {
+  if (state.stagedAttachments.length > 0) patch({ stagedAttachments: [] })
+}
+
+/**
+ * 上传一个附件到当前会话的暂存区。
+ *
+ * 返回 `null` 表示失败（错误已挂进 `state.error`）。
+ *
+ * ## 为什么用 `FormData` 而不是 base64
+ *
+ * 一个 5 MB 的文件 base64 之后是 6.7 MB，而 JSON 里还要再套一层字符串。
+ * 而且后端 `attachments.store` 收的是 `bytes`，走 multipart 能让 Starlette
+ * 直接流式交给它，不必先整段解码。
+ *
+ * ## 为什么前端也判大小
+ *
+ * 后端会拒（`MAX_ATTACHMENT_BYTES`），但那是**传完之后**才拒 ——
+ * 5 MB 的文件已经上传完了。在这里先判一次，用户立刻知道不行。
+ * ⚠️ 两个数必须一致：这里用的是同一个常量值，改后端要同步改这里。
+ */
+export async function uploadAttachment(
+  sessionId: string,
+  file: File,
+): Promise<ChatAttachment | null> {
+  const MAX_BYTES = 5 * 1024 * 1024
+  if (file.size > MAX_BYTES) {
+    patch({
+      error: {
+        code: 'VALIDATION_FAILED',
+        message: `文件太大（${Math.round(file.size / 1024)} KB）。单个附件上限 5 MB。`,
+      } as ApiError,
+    })
+    return null
+  }
+  if (file.size === 0) {
+    patch({
+      error: { code: 'VALIDATION_FAILED', message: '文件是空的，没有内容可以给模型看。' } as ApiError,
+    })
+    return null
+  }
+
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const stored = await api.upload<ChatAttachment>(
+      `/chat/sessions/${sessionId}/attachments`,
+      form,
+    )
+    // 只在**还是同一个会话**时收进状态：上传是异步的，用户在等待期间
+    // 可能已经切走了。收进去会让它在另一个会话的界面上出现。
+    if (state.active?.id === sessionId) {
+      patch({ stagedAttachments: [...state.stagedAttachments, stored], error: null })
+    }
+    return stored
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return null
+  }
+}
+
+/**
+ * 从界面上移除一个暂存附件（**只移除本地引用**，不删服务端文件）。
+ *
+ * ★ 为什么不删服务端：服务端那个文件会在一小时后被 `sweep` 清掉，
+ *   而现在删它需要额外一个 `DELETE` 端点。用户"不想要这个附件了"
+ *   这个动作的后果只是"这条消息不带它" —— 本地移除已经足够，
+ *   而少一个端点就少一处要维护的东西。
+ */
+export function dropStagedAttachment(attachmentId: string): void {
+  patch({
+    stagedAttachments: state.stagedAttachments.filter((a) => a.id !== attachmentId),
+  })
+}
+
+/**
+ * 改会话的六项设置（部分提交）。
+ *
+ * `partial` 里**只放要改的字段**。注意区分：
+ * - 不传某个键 → 不改
+ * - 传 `null` → 清空该项
+ *
+ * ★ 这个区分由后端 `update_settings` 的 `model_fields_set` 实现，
+ *   前端只需要"别把没改的字段也塞进去"。所以这里的入参是
+ *   `Partial<...>`，调用方按需拼对象。
+ */
+export interface ChatSettingsPatch {
+  project?: string | null
+  persona?: string | null
+  providerId?: string | null
+  requireApproval?: boolean | null
+  skillNames?: string[] | null
+  mcpServerNames?: string[] | null
+}
+
+export async function updateSettings(
+  sessionId: string,
+  partial: ChatSettingsPatch,
+): Promise<boolean> {
+  try {
+    const updated = await api.patch<ChatSession>(
+      `/chat/sessions/${sessionId}/settings`,
+      partial,
+    )
+    patch({
+      sessions: state.sessions.map((s) => (s.id === sessionId ? updated : s)),
+      active:
+        state.active?.id === sessionId
+          ? { ...state.active, ...updated, messages: state.active.messages }
+          : state.active,
+      error: null,
+    })
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
+  }
+}
+
+/**
+ * 对一条挂起的工具调用做决定。
+ *
+ * 批准 → 后端执行那个工具并**接着跑完这一轮**，返回新消息。
+ * 拒绝 → 只把那条消息改成 `rejected`，不调模型。
+ *
+ * ★ 返回的 `messages` 要**追加**进 active，不能整体替换：
+ *   替换会把这一轮的上下文全丢掉，而用户会看到对话"跳回"上一步。
+ */
+export async function decideApproval(
+  sessionId: string,
+  messageId: string,
+  approve: boolean,
+): Promise<boolean> {
+  if (state.deciding) return false
+  patch({ deciding: true, error: null })
+  try {
+    const result = await api.post<{
+      messages: ChatMessage[]
+      awaitingApproval?: string | null
+    }>(
+      `/chat/sessions/${sessionId}/messages/${messageId}/approval`,
+      { approve },
+      // 批准之后要执行工具 + 再调一轮模型，与 sendMessage 同量级。
+      { timeoutMs: 180_000 },
+    )
+
+    const active = state.active
+    if (active && active.id === sessionId) {
+      // ★ 按 id 合并而不是盲追加：被审批的那条消息**已经在** active 里了
+      //   （它是挂起时落的那条），后端返回的是它改过状态之后的版本。
+      //   盲追加会让它在界面上出现两次。
+      const byId = new Map(active.messages.map((m) => [m.id, m]))
+      for (const message of result.messages) byId.set(message.id, message)
+      const messages = [...byId.values()].sort((a, b) => a.seq - b.seq)
+      patch({
+        active: { ...active, messages, messageCount: messages.length },
+      })
+    }
+    void loadSessions()
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
+  } finally {
+    patch({ deciding: false })
   }
 }
 

@@ -30,6 +30,9 @@
  * 可以自己再覆盖一次（后来者生效）。
  */
 
+import { cleanup } from '@testing-library/react'
+import { afterEach } from 'vitest'
+
 if (typeof window !== 'undefined' && typeof window.matchMedia !== 'function') {
   Object.defineProperty(window, 'matchMedia', {
     writable: true,
@@ -109,4 +112,28 @@ if (
     value: () => {},
   })
 }
+
+/**
+ * ★ 每个用例后清空 DOM —— RTL 的自动清理在本项目**从来没生效**。
+ *
+ * `@testing-library/react` 的自动清理靠模块顶层那句
+ * `if (typeof afterEach === 'function') afterEach(cleanup)`；
+ * 而 `vitest.config.ts` 明确写了 `globals: false`，那些全局函数根本不存在，
+ * 于是它静默跳过了注册（`process.env.RTL_SKIP_AUTO_CLEANUP` 也没人设）。
+ *
+ * 症状极具误导性：同一文件里第二次 `render()` 之后，DOM 里同时躺着两次
+ * 渲染的节点，`getByText('x')` 报
+ * `Found multiple elements with the text: x` ——
+ * 看起来像夹具写重了或组件重复渲染，其实是上一个用例没清理。
+ * `ToolMention.test.tsx` 就因此误报过 3 次（标题/说明文字互相撞车），
+ * 组件本身一行没错。
+ *
+ * 为什么是 `afterEach` 而不是 `beforeEach`：某个用例失败时，DOM 能保留到
+ * 下一个用例开始前才被清掉，调试时还看得到现场。
+ * 为什么在这里而不是让每个测试文件自己写：漏写一个文件就退回到上面那种
+ * 假 bug，而排查一次要花掉半小时 —— 默认就对，比记得写更可靠。
+ */
+afterEach(() => {
+  cleanup()
+})
 
