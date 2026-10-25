@@ -1059,8 +1059,9 @@ def test_real_scan_replay_escalates_under_tri_state() -> None:
 
     夹具 `tests/kernel/fixtures/real_undecided.json` 是从
     `scan_01M5SMPQ3CDDDHY46F30EWMA3D`（目标 10.255.255.1:9，全程零字节返回）
-    导出的 72 条真实 [tool_call] / 输出对。二值口径下这 72 条里有 64 条被判
-    「成功」，连续失败最长 1 次 —— 这就是升格从未触发的全部原因。
+    导出的 72 条真实 [tool_call] / 输出对。二值口径下这 72 条里有 63 条被判
+    「成功」，连续失败最长 2 次 —— 这就是升格从未触发的全部原因。
+    三态口径下是 1 次真成功 / 9 次明确失败 / 62 次无证据，最长连续失败 6 次。
     """
     import json
     import pathlib
