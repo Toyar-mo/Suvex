@@ -816,6 +816,37 @@ FACT_INDEX_NUDGE = (
 #: 那些轮次本来就没有可记的结论；6 轮之后还没有任何一条结论才是异常信号。
 FACT_DEBT_WINDOW = 6
 
+#: 连续多少个**动作轮**没 `record_coverage` 就该催一次（v0.95）。
+#:
+#: ## 为什么这条必须存在 —— 覆盖表的调用次数**至今仍然是 0**
+#:
+#: 同一轮实测（`scan_01M5MTK3GA5EQ7BJ4CWYHC8YES`，42 次工具调用）里，
+#: `record_fact` 与 `record_coverage` **都是 0 次**。v0.83 只修了前者：
+#: 它现在有欠账计数 + 条件触发的骨架提醒，调用次数起来了。覆盖表没人动。
+#:
+#: v0.84 那轮扫描里更精确的形状是：`list_coverage` 被调 **2 次**、
+#: `record_coverage` **0 次** —— 模型会去**读**这张表，却从不往里**写**。
+#: 于是表永远是空的，读了也没用。
+#:
+#: ## ★ 为什么不是"常驻推送骨架"，而是复用欠账条件触发
+#:
+#: 这正是 `FACT_INDEX_NUDGE` 已经证伪过的那条路：它是同类的常驻引导，
+#: v0.80 实测它单独存在时 `record_fact` **仍是 0 次** —— 因为在模型眼里
+#: 它属于"背景说明"，和 system prompt 里其它几十条规矩没有区别
+#: （见 `render_live_state` ⑤.5 的注释）。把同一形态照搬给覆盖表，
+#: 只会得到同一个结果。
+#:
+#: 条件触发之所以有效，是因为**它的出现本身就是信号**："你已经 N 轮
+#: 没记了，这件事和规矩不一致"。这是它值得多占几百字节的全部理由。
+#:
+#: ## 为什么也用 6
+#:
+#: 与 `FACT_DEBT_WINDOW` 同一个理由（探查阶段常有几轮纯读），
+#: 但两者**独立计数**：一个 agent 可能一直在记事实却从不记覆盖
+#: （"确认了某个结论"比"测过哪个端点"更容易被想起来），
+#: 共用计数器会让后者的欠账被前者的写入清零。
+COVERAGE_DEBT_WINDOW = 6
+
 #: `record_fact` 的参数骨架（v0.84）。
 #:
 #: ## 为什么单独抽成一个常量
@@ -937,6 +968,53 @@ def fact_debt_nudge(n: int) -> str:
 #: 的引用，而那些测试验的是"提醒文案该有什么"，与那个数字无关 ——
 #: 保留这个名字免得连带改一堆断言。生产一律调 `fact_debt_nudge(n)`。
 FACT_DEBT_NUDGE = fact_debt_nudge(0)
+
+#: 覆盖欠账提醒（v0.95）—— 结构与 `fact_debt_nudge` 完全同构。
+#:
+#: ## 为什么同样要拆三段
+#:
+#: 与 `_FACT_DEBT_NUDGE_HEAD` 同一个坑：`_COVERAGE_SKELETON` 里是**真**花括号，
+#: 整条 `.format(n=...)` 会抛 `KeyError: '"tool"'`。所以只能
+#: 前半段（含 `{n}`）单独 format，骨架原样拼接。
+_COVERAGE_NUDGE_HEAD = (
+    "⚠️ **你已经 {n} 轮没有记录覆盖了。**\n"
+    "\n"
+    "这一轮结束前，**先调一次 `record_coverage`**，再继续你的探查。\n"
+    "\n"
+    "回忆一下你刚才 `run_shell` 打过哪些 URL / 参数集 —— **挑一个**记下来。"
+    "哪怕结论是「什么都没有」也要记：\n"
+    "\n"
+    "```\n"
+    "ACTION: "
+)
+
+#: ## 为什么这里要专门写"干净也要记"
+#:
+#: `record_coverage` 与 `record_fact` 最容易混淆的一点，是**干净的结果**
+#: 在后者可以省略、在前者必须记。模型天然的倾向是"没发现就等于没事"，
+#: 于是一次都不记 —— 而下一个 agent 会把同一个点重测一遍。
+#: 这句话在 `prompts/kernel_pentest.md` §6.2.1.1 里有完整版，
+#: 但那时它已经退化成背景音；这里紧挨着骨架，是模型真正会读的位置。
+_COVERAGE_NUDGE_TAIL = (
+    "\n"
+    "```\n"
+    "\n"
+    "**为什么不能跳过**：覆盖表是「这个点别人测过没有」的唯一依据。"
+    "你测过但没记的点，下一个 agent 会原样重测一遍 —— 那部分预算白花了。\n"
+    "\n"
+    "> `list_coverage` 只会**读**，读一百次也读不出你自己没记的东西。**先写，再看。**"
+)
+
+
+def coverage_debt_nudge(n: int) -> str:
+    """生成覆盖欠账提醒 —— **唯一正确的调用方式**。
+
+    不要写 `_COVERAGE_NUDGE_HEAD.format() + ...` 之外的变体：
+    `_COVERAGE_SKELETON` 里的花括号会让整条 `.format()` 抛
+    `KeyError: '"tool"'`（与 `fact_debt_nudge` 完全同源的坑）。
+    """
+    return _COVERAGE_NUDGE_HEAD.format(n=n) + _COVERAGE_SKELETON + _COVERAGE_NUDGE_TAIL
+
 
 #: Idea 的合法状态。`open` 待做 / `doing` 在做 / `done` 做成了 / `dropped` 走不通。
 IDEA_STATUS = frozenset({"open", "doing", "done", "dropped"})
@@ -1248,6 +1326,7 @@ class SharedState:
         max_turns: int = 0,
         fact_index: str = "",
         fact_debt: int = 0,
+        coverage_debt: int = 0,
     ) -> str:
         """把共享状态渲染成**注入 system prompt** 的短状态（v0.79）。
 
@@ -1357,6 +1436,31 @@ class SharedState:
             # ⚠️ 用 `fact_debt_nudge(n)`，**不是** `FACT_DEBT_NUDGE.format(n=...)` ——
             # 后者会抛 `KeyError: '"tool"'`（骨架里的真花括号被当成替换字段）。
             parts.append(fact_debt_nudge(fact_debt))
+
+        # ⑤.6 v0.95：覆盖欠账 —— 与 ⑤.5 同构、**独立计数**。
+        #
+        # ## 为什么需要这一段（v0.83 只修了事实那一半）
+        #
+        # 同一轮实测里 `record_fact` 与 `record_coverage` 都是 0 次；
+        # v0.83 给前者加了欠账触发后它起来了，覆盖表没人管。
+        # v0.84 那轮更精确：`list_coverage` 调了 2 次、`record_coverage` 0 次 ——
+        # 模型会**读**这张表，却从不往里**写**，于是表永远是空的。
+        #
+        # ## 为什么不能"常驻推送骨架"（这是我第一版的想法，被实测否掉）
+        #
+        # `FACT_INDEX_NUDGE` 就是常驻形态的对照组：v0.80 实测它单独存在时
+        # `record_fact` 仍然是 **0 次** —— 模型把常驻文本当背景音，
+        # 和 system prompt 里其它几十条规矩没有区别（见上面 ⑤.5 的注释）。
+        # 照搬同一形态给覆盖表，只会得到同一个结果。
+        #
+        # ⚠️ 必须在 `if not parts` **之前** append，理由与 ⑤.5 完全相同：
+        #    模型可能一次都没记过任何东西，此时 `parts` 里只有这一项 ——
+        #    放到 `if not parts` 之后，恰好就是**最该被催的那一刻**被判成空状态。
+        #
+        # ⚠️ `coverage_debt=0`（缺省值）时什么都不 append，空状态仍然返回 ""，
+        #    `test_empty_state_returns_empty_string` 的契约不受影响。
+        if coverage_debt >= COVERAGE_DEBT_WINDOW:
+            parts.append(coverage_debt_nudge(coverage_debt))
 
         if not parts:
             return ""
@@ -1610,6 +1714,40 @@ class AgentCoordinator:
     def fact_debt_of(self, agent_id: str = "root") -> int:
         """该 agent 当前欠了多少轮没记账。"""
         return self.fact_debt.get(agent_id, 0)
+
+    #: **自上次 `record_coverage` 以来**，该 agent 花了多少个"干活轮"（v0.95）。
+    #:
+    #: ## 为什么与 `fact_debt` 分开、不复用同一个计数
+    #:
+    #: 两者回答的问题不同：
+    #:   · `fact_debt`  = "我有多久没把**结论**记下来了"
+    #:   · `coverage_debt` = "我有多久没把**打过的点**记下来了"
+    #:
+    #: 实测里它们确实会分道扬镳：模型容易想起"我确认了某个结论所以记一条"
+    #: （那会清零 `fact_debt`），却想不起"我刚才还打了五个端点，一个都没记"。
+    #: 共用一个计数器时，前者的写入会把后者的欠账一起清零 —— 于是覆盖表
+    #: 永远等不到那次提醒。这正是为什么它必须是**独立**的字典。
+    coverage_debt: dict[str, int] = field(default_factory=dict)
+
+    def note_coverage_recorded(self, agent_id: str = "root") -> None:
+        """记了一条覆盖 → 该 agent 的覆盖欠账清零。
+
+        ⚠️ 只清 `coverage_debt`，**不动** `fact_debt` —— 记了"测过哪个端点"
+        不等于记了"得出什么结论"，两者是独立的账。
+        """
+        self.coverage_debt[agent_id] = 0
+
+    def note_investigation_for_coverage(self, agent_id: str = "root") -> None:
+        """干了一轮活（且没记覆盖）→ 覆盖欠账 +1。
+
+        与 `note_investigation` 在同一处、同一条件下调用（见主循环），
+        但写进不同的字典。
+        """
+        self.coverage_debt[agent_id] = self.coverage_debt.get(agent_id, 0) + 1
+
+    def coverage_debt_of(self, agent_id: str = "root") -> int:
+        """该 agent 当前欠了多少轮没记覆盖。"""
+        return self.coverage_debt.get(agent_id, 0)
 
     _todo_seq: int = 0
     _id_seq: int = 0
@@ -1918,6 +2056,13 @@ def _do_record_coverage(args: dict[str, Any], *, coord: AgentCoordinator, me: Ag
             "开头用「成立：」/「已排除：」/「未测完：」标清楚。"
         )
     coord.shared.record_coverage(surface, risk or "未标", outcome or "未标", by=me.name)
+    # ★ v0.95：记成功 → 覆盖欠账清零。
+    #
+    # ⚠️ 放在**写进去之后**，不是函数开头：`record_coverage` 这一行没有
+    #    数据库往返（`SharedState` 是纯内存的），所以不存在 `record_fact`
+    #    那种"调用成功但 stored=False"的中间态，写到这里就是真写进去了。
+    #    将来若给它加了落库，这行必须跟着挪到"确认落库"之后。
+    coord.note_coverage_recorded(me.agent_id)
     return _json_ok(note=f"已记录覆盖：{surface}。含「干净」的结果也要记 —— 那是别人不再重测的依据。")
 
 
@@ -2446,6 +2591,8 @@ async def run_agent_loop(
                 # v0.83：欠费按 agent 分，必须传"谁在看这段 prompt"对应的值，
                 # 否则子 agent 会读到 root 的欠费（反之亦然）。
                 fact_debt=coord.fact_debt_of(node.agent_id),
+                # v0.95：覆盖欠账同理、独立计数（见 `COVERAGE_DEBT_WINDOW`）。
+                coverage_debt=coord.coverage_debt_of(node.agent_id),
             )
             if _live:
                 _sys = system_prompt + "\n\n" + _live
@@ -2568,6 +2715,15 @@ async def run_agent_loop(
             #   DB 抖动时 `stored=False`，模型手上仍然什么都没有，欠费不该销）。
             if _counts_toward_fact_debt(tool_name=tool_name):
                 coord.note_investigation(node.agent_id)
+                # ★ v0.95：**同一个条件**同时给覆盖欠账 +1。
+                #
+                # 为什么共用判定函数而不另写一个：两者问的是同一个问题 ——
+                # "这一轮有没有产生新的、可记录的东西"。`_DEBT_FREE_TOOL_NAMES`
+                # 已经把 `record_coverage` / `list_coverage` 排除在外
+                # （记账类算产出、读表算消费），那套判断对覆盖表同样成立。
+                #
+                # 差别的只是**记到哪里**（两个独立字典），不是**什么时候涨**。
+                coord.note_investigation_for_coverage(node.agent_id)
 
             # 编排工具 vs 基础工具，分派到不同入口。
             orchestr_tools = _ROOT_ONLY | _CHILD_ONLY | _SHARED
