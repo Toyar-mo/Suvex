@@ -709,3 +709,50 @@ def test_openssl_without_s_client_is_not_acting() -> None:
         multiagent._looks_like_acting(tool_name="run_shell", command="openssl s_client -connect t:443")
         is True
     )
+
+
+def test_assignment_and_wrapper_prefixes_nest_in_both_orders() -> None:
+    """赋值前缀和包装器前缀会**互相嵌套**，两种顺序都得认出来。
+
+    这是真漏判：`env X=1 curl ...` 先剥 `env` 才露出 `X=1`，而
+    `X=1 env curl ...` 先跳过赋值才露出 `env`。按固定顺序跑两遍，
+    总有一种形态停在前缀上，把那个前缀词当成程序名 —— 于是真的
+    发出去了请求却被判成"在翻本地文件"，采集失败不计数，
+    模型会把"打不通"当成"扫完了没东西"。
+
+    这个 bug 是 `_tmp/er/probe_acting_firstword.py` 跑出来的
+    （13 条里恰好只有 `env X=1 curl` 这条不一致）。
+    """
+    for command in (
+        "env X=1 curl -s http://t/",
+        "X=1 env curl -s http://t/",
+        "X=1 Y=2 env Z=3 curl -s http://t/",
+        "sudo env X=1 timeout 30 curl -s http://t/",
+        "timeout 30 env X=1 sudo curl -s http://t/",
+    ):
+        assert multiagent._looks_like_acting(tool_name="run_shell", command=command) is True, (
+            f"「{command}」剥掉嵌套前缀后就是 curl，必须算行动"
+        )
+
+
+def test_nested_prefixes_stop_at_the_real_program() -> None:
+    """交替跳过不能一路吃到底 —— 遇到真正的程序就停，别把 `cat` 也剥了。"""
+    assert multiagent._looks_like_acting(tool_name="run_shell", command="X=1 env cat nmap.log") is False
+    assert multiagent._looks_like_acting(tool_name="run_shell", command="env X=1 grep curl notes.txt") is False
+    assert multiagent._command_programs("env X=1 grep curl notes.txt") == ["grep"]
+
+
+def test_wrapper_option_with_argument_is_a_documented_blind_spot() -> None:
+    """`env -u FOO curl ...` 仍会漏判 —— 这是**写明的已知限制**，不是回归。
+
+    `-u` 吃一个参数，所以内层跳选项时停在 `FOO` 上。要修得知道每个包装器
+    哪些选项吃参数（`sudo -u` 吃、`curl -s` 不吃），维护这样的表出错时
+    又是漏判。这个方向是保守的：少记一次采集失败，而不是凭空多记一条
+    （多记会往黑板写一条假事实，代价大得多）。
+
+    这条测试钉住「它现在确实漏」，这样将来谁真去修了它，会看到这条
+    测试红掉，从而必须回来更新这段说明，而不是默默改掉行为。
+    """
+    command = "env -u FOO curl -s http://t/"
+    assert multiagent._looks_like_acting(tool_name="run_shell", command=command) is False
+    assert multiagent._command_programs(command) == ["FOO"]

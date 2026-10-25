@@ -408,22 +408,44 @@ def _command_programs(command: str) -> list[str]:
     只做执行位置判定，不解析 shell 语法 —— 目标是区分"在打靶"和
     "在翻本地文件"，不是精确复现 shell 语义。
 
-    ⚠️ 已知不精确之处：heredoc 正文里的行会被当成独立段（`cat > x.sh
-    <<EOF` 里写的 `curl ...` 会被算成在打靶）。那种情况下模型确实在
-    准备发包，且失败词出现在脚本正文里的概率极低，故不特殊处理。
+    ⚠️ 已知不精确之处，两处都**刻意不修**，因为修错的代价更大：
+
+    1. **heredoc 正文里的行会被当成独立段**（`cat > x.sh <<EOF` 里写的
+       `curl ...` 会被算成在打靶）。剥 heredoc 正文要处理 `<<EOF` /
+       `<<-EOF` / `<<'EOF'` / 引号变体 / 正文缩进 / 同一行还有 `> file`
+       重定向，剥错了就是漏判（真打靶被判成没打）。
+    2. **包装器带参数的选项**（`env -u FOO curl ...` / `sudo -u www-data
+       curl ...` / `timeout -s KILL 30 curl ...`）会让 `-u` 后面的那个词
+       被当成程序名。要修得知道每个包装器的哪些选项吃参数，而 `sudo -u`
+       吃、`curl -s` 不吃 —— 维护一张这样的表，出错时又是漏判。
+
+    两处都落在**漏判**一侧（少记一次采集失败），不会凭空多记一条。
     """
     programs: list[str] = []
     for segment in _COMMAND_SEGMENT.split(command):
         words = segment.split()
         i = 0
-        # 跳过前置 VAR=value 赋值（`FOO=1 curl ...`）
-        while i < len(words) and "=" in words[i] and words[i].split("=", 1)[0].isidentifier():
-            i += 1
-        # 剥掉包装器与它们自己的选项/时长参数
-        while i < len(words) and _basename(words[i]) in _ACTING_WRAPPERS:
-            i += 1
-            while i < len(words) and (words[i].startswith("-") or re.fullmatch(r"\d+[smhd]?", words[i])):
+        # 交替前进，直到既不剩赋值也不剩包装器。
+        #
+        # ⚠️ 这两种前缀会**互相嵌套**，所以不能顺序跑两遍：`env X=1 curl ...`
+        # 的形态是先剥 `env`、才露出 `X=1`，而 `X=1 env curl ...` 是先跳过
+        # 赋值才露出 `env`。只按一个固定顺序走，总有一种形态漏掉 —— 那种漏
+        # 判的后果是「真打靶了却被判成没打靶」，采集失败不计数，模型会把
+        # 「打不通」当成「扫完了没东西」。实测见 `_tmp/er/probe_acting_firstword.py`。
+        while i < len(words):
+            start = i
+            # 跳过前置 VAR=value 赋值（`FOO=1 curl ...`）
+            while i < len(words) and "=" in words[i] and words[i].split("=", 1)[0].isidentifier():
                 i += 1
+            # 剥掉包装器与它们自己的选项/时长参数
+            while i < len(words) and _basename(words[i]) in _ACTING_WRAPPERS:
+                i += 1
+                while i < len(words) and (
+                    words[i].startswith("-") or re.fullmatch(r"\d+[smhd]?", words[i])
+                ):
+                    i += 1
+            if i == start:  # 这一轮什么都没吃掉，收敛
+                break
         if i < len(words):
             programs.append(_basename(words[i]))
         # openssl 要看到 s_client 才算发请求
