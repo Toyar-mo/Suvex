@@ -15,6 +15,7 @@ import { DEFAULT_PATH, NAV_ITEMS } from '@/navigation'
 import {
   ActivityPage,
   AssetsPage,
+  ChatPage,
   KernelPage,
   FindingsPage,
   IrPage,
@@ -47,6 +48,9 @@ import type { ComponentType, ReactNode } from 'react'
  * 用"无参函数返回 ReactNode"去描述它不准确，也会在挂载 <Page /> 时丢失 props 类型。
  */
 const PAGE_COMPONENTS: Record<string, ComponentType> = {
+  // ★ v0.93：对话页。**同样别漏这个键** —— 漏了就是"侧栏点得动、
+  //   页面全白"，不报错也不警告（与下面 ir / tools / skills 是同一个坑）。
+  chat: ChatPage,
   overview: OverviewPage,
   scans: ScansPage,
   activity: ActivityPage,

@@ -37,6 +37,7 @@ import app.models  # noqa: F401
 from app.assets.router import router as assets_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
+from app.chat.router import router as chat_router
 from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
@@ -408,6 +409,7 @@ def create_app() -> FastAPI:
         audit_router,
         ctf2_router,
         kernel_skills_router,
+        chat_router,
     ):
         app.include_router(router, prefix=settings.api_prefix)
 

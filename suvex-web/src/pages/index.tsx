@@ -30,6 +30,14 @@ export const KernelPage = lazy(() => import('./Kernel'))
 export const IrPage = lazy(() => import('./IrPage'))
 export const ToolsPage = lazy(() => import('./ToolsPage'))
 export const SkillsPage = lazy(() => import('./SkillsPage'))
+/**
+ * ★ v0.93：对话页。
+ *
+ * 它是 `fillsViewport` 页面（内部自己滚动），所以 `lazy` 之后必须靠
+ * Suspense 的兜底块透传高度链 —— 见 `PageFallback` 的注释。
+ * 兜底块若把高度链掐断，聊天区的滚动会静默失效（内容溢出但不滚）。
+ */
+export const ChatPage = lazy(() => import('./ChatPage'))
 export const SettingsPage = lazy(() => import('./SettingsPage'))
 
 /**

@@ -89,4 +89,59 @@ describe('NAV_ITEMS 自检', () => {
   it('未知路径不命中任何条目', () => {
     expect(findNavItem('/nope')).toBeUndefined()
   })
+
+  /*
+    ★ v0.93：把"漏一个键 = 白屏"从注释变成断言。
+
+    ## 为什么这条值得单独写
+
+    上面第 30-35 行解释了为什么本文件**不 import App.tsx**（那会把整棵
+    页面树拖进 jsdom，一个纯数据自检变成全站冒烟）。但那个决定留下一个
+    真实的缺口：`PAGE_COMPONENTS` 的完整性**一直只靠注释提醒**，
+    而"注释提醒"正是这个项目反复失效的那一类机制。
+
+    实测代价巨大：漏键时 TypeScript 不报（`Record<string, ComponentType>`
+    允许缺键）、ESLint 不报、构建成功、测试全绿 —— 症状只有
+    「侧栏点得动、URL 变了、页面全白，控制台无任何输出」。
+
+    ## 用读源码文本的办法补上，而不是 import
+
+    这是哑办法，但**没有副作用**：
+      · 不执行 App.tsx 的模块图（不拉十几个 page chunk、不拉 WebGL）；
+      · 不做"解析 TypeScript"（没有编译器依赖）；
+      · 只回答一个问题 —— 每个 nav id 在 `PAGE_COMPONENTS` 里有没有出现。
+
+    ⚠️ 它断言的是**单向包含**（每个 nav id 都要有页面），不是相等：
+      `PAGE_COMPONENTS` 里可以有多余的键（比如某个页面暂时从导航里摘下来
+      但保留路由），那不是缺陷。
+  */
+  it('★ 每个导航项都在 App.tsx 的 PAGE_COMPONENTS 里有对应页面', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const { dirname, join } = await import('node:path')
+
+    // 本测试文件与 App.tsx 同目录（src/）
+    const here = dirname(fileURLToPath(import.meta.url))
+    const source = readFileSync(join(here, 'App.tsx'), 'utf8')
+
+    // 取 `const PAGE_COMPONENTS: Record<string, ComponentType> = { ... }` 那一整块
+    const start = source.indexOf('const PAGE_COMPONENTS')
+    expect(start, 'App.tsx 里找不到 PAGE_COMPONENTS —— 它可能被改名了').toBeGreaterThanOrEqual(0)
+    const braceOpen = source.indexOf('{', start)
+    const braceClose = source.indexOf('\n}', braceOpen)
+    expect(braceClose, 'PAGE_COMPONENTS 的对象字面量没闭合？').toBeGreaterThan(braceOpen)
+    const block = source.slice(braceOpen, braceClose)
+
+    const missing = NAV_ITEMS.filter((item) => {
+      // 匹配 `  chat: ChatPage,` 这种行（允许前导空白）
+      const re = new RegExp(`^\\s*${item.id}\\s*:`, 'm')
+      return !re.test(block)
+    }).map((item) => item.id)
+
+    // 失败信息要直接告诉人怎么修，而不是只说"缺了"
+    expect(
+      missing,
+      `这些导航项在 App.tsx 的 PAGE_COMPONENTS 里没有页面，点进去会是白屏：${missing.join(', ')}`,
+    ).toEqual([])
+  })
 })

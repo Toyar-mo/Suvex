@@ -228,6 +228,40 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # ⚠️ 写操作（新建 / 改 / 启停 / 删除）全部在 SCOPE_GATED 里，
         #   见那一侧的理由：一条计划会让系统**在无人值守时对真实目标发包**。
         ("GET", "/api/v1/schedules"),
+        # ── 对话页：读（v0.93）──────────────────────────────────
+        #
+        # ★ 这 7 条**全部是 read 级**，包括看起来"会做事"的那三个写路径
+        #   （POST 建会话 / PATCH 改名 / DELETE 删 / POST 发消息）。理由是
+        #   对话的两层分工：
+        #
+        #   * **端点层**只做"会话记录的增删改查" —— 建一条会话、追加一条
+        #     消息、改个标题。这些都是**用户自己的笔记本**，和
+        #     `POST /reports` 那种"对外产生副作用"的写入不是一回事。
+        #   * **工具层**才是真正会碰外部世界的地方（`create_scan` 发包、
+        #     `delete_skill` 删文件），而每个工具的 `scope` 在
+        #     `chat/prompts.py::ChatToolSpec.scope` 里单独声明，
+        #     由 `engine._execute_tool` 在执行前**逐次**校验。
+        #
+        #   这不是设计洁癖，是实测过的：只读账号（zzviewer88）在真机上
+        #   说"帮我建一个扫描任务"，`create_scan` 卡在工具层被拒，
+        #   模型回复"当前账号没有 scan 权限…我这边没有绕过的方式"，
+        #   扫描没有排上。若把端点拔高到 scan，只读用户连"我上次扫了什么"
+        #   都问不了 —— 而那个查询只需要 list_scans（read 级工具）。
+        #
+        # ⚠️ **判据是"这个端点本身有没有后果"，不是"它背后能做什么"。**
+        #   后者会把整个对话页拔到 scan/admin，让只读角色完全用不了它。
+        ("GET", "/api/v1/chat/sessions"),
+        ("POST", "/api/v1/chat/sessions"),
+        ("GET", "/api/v1/chat/sessions/{session_id}"),
+        ("PATCH", "/api/v1/chat/sessions/{session_id}"),
+        # 删除是自己笔记本里撕掉一页。归属校验（只能删自己的）在
+        # `service` 层按 owner 做，与 `scan` scope 无关。
+        ("DELETE", "/api/v1/chat/sessions/{session_id}"),
+        # 发一条消息：真正做事的是它背后的工具，逐次受 scope 管。
+        ("POST", "/api/v1/chat/sessions/{session_id}/messages"),
+        # 工具清单是静态元数据（名字 + 说明 + 所需 scope），
+        # 与 `GET /kernel/tools` 同性质 —— 是能力清单，不是凭据。
+        ("GET", "/api/v1/chat/tools"),
     }
 )
 

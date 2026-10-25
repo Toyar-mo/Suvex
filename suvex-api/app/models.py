@@ -20,6 +20,10 @@ from app.audit.models import AuditLog  # noqa: F401
 # noqa: F401 是必要的：这些名字只为了副作用（注册到 Base.metadata）而导入，
 # 静态检查会认为它们是未使用。
 from app.auth.models import AdminAccount, ApiToken, AuthSession  # noqa: F401
+
+# ★ v0.93：对话页。漏了这一行，`alembic revision --autogenerate` 会生成
+# 一个"把 chat_sessions / chat_messages 删掉"的迁移 —— 见本文件开头那段。
+from app.chat.models import ChatMessage, ChatSession  # noqa: F401
 from app.events.models import ActivityEvent, Agent  # noqa: F401
 from app.facts.models import ScanFact  # noqa: F401
 from app.findings.models import Finding, FindingTimelineEntry  # noqa: F401
@@ -54,6 +58,9 @@ __all__ = [
     "Scan",
     # ★ v0.85：定时扫描计划（把资产视图里"40 天没被检查"变成自动复查）
     "ScanSchedule",
+    # ★ v0.93：对话页（会话 + 消息）
+    "ChatSession",
+    "ChatMessage",
     "Finding",
     "FindingTimelineEntry",
     # ★ v0.79：扫描过程的项目黑板（跨轮次、跨扫描的认知）
