@@ -203,11 +203,6 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
       onClose={onClose}
       widthClass="max-w-3xl"
       title="新建定时计划"
-      titleAside={
-        <span className="rounded-sm border border-line px-1.5 py-0.5 text-[11px] text-ink-muted">
-          {formatInterval(intervalMinutes)}
-        </span>
-      }
       footer={
         <div className="flex items-center justify-between gap-tight">
           <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">

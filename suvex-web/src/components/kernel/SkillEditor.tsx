@@ -137,7 +137,11 @@ export function SkillEditor({
       open={open}
       onClose={onClose}
       widthClass="max-w-5xl"
-      heightClass="max-h-[88vh]"
+      // ★ 显式给确定高度，不依赖 Modal 撑满。内部是「文件树 + 正文」两栏，
+      //   两边各自 overflow-y-auto，没有确定高度就滚不起来（内容一变弹窗就
+      //   自己长高变矮）。别处内容短的弹窗撑满只会留下半屏空白，所以这个
+      //   撑满是**这一处的需要**，不该写进 Modal 默认值。
+      heightClass="max-h-[88vh] h-[88vh]"
       title={
         isCreate ? (
           '新建技能'

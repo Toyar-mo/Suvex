@@ -121,7 +121,6 @@ export function Modal({
           'animate-rise-in',
           widthClass,
           heightClass,
-          'h-full',
         )}
       >
         <div className="flex shrink-0 items-start gap-tight border-b border-line px-panel py-3">

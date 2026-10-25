@@ -134,4 +134,31 @@ describe('Modal · 受控输入不失焦', () => {
     const dialog = screen.getByRole('dialog')
     expect(dialog.getAttribute('aria-label')).toBe('编辑 kerberos-preauth')
   })
+
+  it('默认不撑满高度 —— 内容短的弹窗不该在底部留半屏空白', () => {
+    // ★ 这条守着 Modal.tsx 里那个被删掉的硬编码 `h-full`。
+    //   它当时排在 heightClass 之后，于是**每一个**弹窗都被撑到 85vh：
+    //   新建定时计划的最后一个字段到页脚之间有约 160px 空白，看起来像
+    //   少渲染了一个字段。需要确定高度的调用方（技能编辑器）自己声明。
+    render(
+      <Modal open onClose={vi.fn()} title="短表单">
+        <span>body</span>
+      </Modal>,
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.className).not.toContain('h-full')
+    // 高度上限仍在，只是不再是固定高度
+    expect(dialog.className).toContain('max-h-[85vh]')
+  })
+
+  it('调用方给了高度类就用它，不被默认值覆盖', () => {
+    render(
+      <Modal open onClose={vi.fn()} title="两栏" heightClass="max-h-[88vh] h-[88vh]">
+        <span>body</span>
+      </Modal>,
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.className).toContain('h-[88vh]')
+    expect(dialog.className).not.toContain('max-h-[85vh]')
+  })
 })
