@@ -198,6 +198,19 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/kernel/skills"),
         ("GET", "/api/v1/kernel/skills/usage"),
         ("GET", "/api/v1/kernel/skills/{name}"),
+        # ⚠️ v0.90 加了附件端点后忘了登记，被 `test_every_endpoint_is_classified`
+        # 抓住（它扫真实的 OpenAPI 路径全集，不靠人记）。**这条测试的价值就在
+        # 这里：新端点漏登记时它红，而不是等上线后靠人工审计发现。**
+        #
+        # 为什么是 read：`GET /skills/{name}/files` 回的是**技能包附件正文**
+        # （`scripts/probe.sh` 这类随技能一起分发的小脚本），与
+        # `GET /skills/{name}` 回正文同性质 —— 都是人写的内容、不是凭据、
+        # 不改状态、不触发执行。能读详情的人本来就能读附件。
+        #
+        # 为什么**不是** admin：它对 admin 没有额外暴露面。
+        # 但它也**不能是 public** —— 附件里可能有内部脚本路径与用法，
+        # 未登录不该看到。
+        ("GET", "/api/v1/kernel/skills/{name}/files"),
         # ── 资产总览：读（v0.85）────────────────────────────────
         #
         # ★ 为什么是 **read**：它把已有的扫描记录与漏洞记录按目标聚合
