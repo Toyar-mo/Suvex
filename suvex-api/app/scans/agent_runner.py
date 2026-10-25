@@ -665,7 +665,30 @@ async def _solve_with_stop(
 
     from app.kernel import runner as ctf2_runner
 
-    deadline = (_time.monotonic() + timeout_seconds) if timeout_seconds else None
+    # ⚠️ **同一个起点**：`started_at` 只取一次 `monotonic()`，`deadline` 由它
+    # 算出，写进 spec 的也是它。分两次调用 `monotonic()` 会引入漂移 —— 引擎
+    # 报出的"剩余秒数"会和真正的硬杀时刻对不上，那比不催更糟。
+    started_at = _time.monotonic()
+    deadline = (started_at + timeout_seconds) if timeout_seconds else None
+
+    # ★★ v0.92：把墙钟**交给引擎**，让主循环能提前催促收尾。
+    #
+    # 原本墙钟只在这个旁路 `while` 里存在：到点 `task.cancel()`，引擎一无所知。
+    # 实测代价（2026-10-23 扫描 32231，61.69 分钟后失败）：
+    # ```
+    # 墙钟 deadline           : 03:57:36
+    # 最后一条 run_shell 发起 : 03:57:24   ← 只剩 12 秒
+    # 该命令实际跑完          : 03:59:16   ← 逾期 100 秒，全白费
+    # ```
+    # 而 `scan_max_turns=500` 它只用了 78 次工具调用（16%），三档回合催促
+    # 一个都没触发 —— 模型以为"还有 440 轮"，完全不知道墙钟将尽。
+    #
+    # ⚠️ 写不进去不算失败（`SolveSpec` 可能是 mock/鸭子类型）：催促是优化，
+    #    墙钟本身由下面的 `while` 执行，缺了它只是回到旧行为。
+    if timeout_seconds:
+        with contextlib.suppress(Exception):
+            solve_spec.wall_clock_seconds = timeout_seconds  # type: ignore[attr-defined]
+            solve_spec.wall_clock_started_at = started_at  # type: ignore[attr-defined]
 
     task = asyncio.ensure_future(
         ctf2_runner.solve_in_sandbox(

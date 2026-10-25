@@ -78,6 +78,9 @@ from app.kernel.runner import (
     _output_fingerprint,
     _sink_findings,
     _truncation_reminder,
+    _wall_clock_band,
+    _wall_clock_note,
+    _wall_clock_seconds_left,
     dispatch_tool,
     extract_candidates_with_reasons,
     extract_final_analysis,
@@ -200,6 +203,143 @@ LIVE_STATE_MAX_CHARS = 1400
 #: 行为已经被那句提醒影响过一次了，再刷只会让它分心。
 SHAPE_REPEAT_WARN_AT = 3
 
+#: ★ v0.92：连续几次「采集失败」升格成一条结构性事实。
+#:
+#: ## 这修的是什么（32231 事故，缺陷 B）
+#:
+#: 03:33:49 起目标进入持续死亡，之后 **25.5 分钟、9 次 run_shell** 全在重试。
+#: 模型 03:34:04 **自己意识到过**一次：
+#:
+#: > "The last sweep was all `000` — collection failure (server saturated),
+#: >  not evidence."
+#:
+#: 它甚至调了 `list_coverage` 检查覆盖度。**但这个认知只活了一轮**，下一轮
+#: 又回去重试了。平台没有任何机制把「连续 N 次 000」升级成一条结构性事实 ——
+#: 而一旦 `record_fact` 进黑板，后续所有轮都能看到（「目标已死」这个判断
+#: 现在是每次重新推导、随轮次蒸发）。
+#:
+#: ## 为什么是 3
+#:
+#: 2 次可能是抖动（服务在重启、网络在抖）—— 这时说「目标已死」会让模型
+#: 过早放弃一个其实还活着、只是刚好卡了两下的目标。3 次连续才够说明
+#: 「这不是偶发」。
+#:
+#: ## 为什么和 `SHAPE_REPEAT_WARN_AT` 分开
+#:
+#: 那个判「打的是不是同一个点」，这个判「打出去了但没有回应」。两者正交：
+#: 换着路径全 000（这个要报）和同一条路径打到 200（那个要报）是两件事。
+COLLECTION_FAIL_STREAK = 3
+
+#: 输出里出现这些词，算「这一发没拿到任何目标数据」。
+#:
+#: ⚠️ 判的是**输出**不是退出码：curl 连不上时退出码 7、`-w %{http_code}`
+#: 打 `000`、ffuf 报 `0 results` —— 形态太多，逐个判会漏。而"输出里有没有
+#: 一个 3 位状态码 / 有没有连接被拒"覆盖面够且误判代价低（最坏是多一句提醒）。
+#:
+#: ⚠️ 刻意**不**收空输出：`grep` 没匹配到、`ls` 空目录都是正常的空输出，
+#: 把它们算成采集失败会让模型以为目标死了，而目标可能好好的。
+_COLLECTION_FAIL_TOKENS = (
+    "connection refused",
+    "failed to connect",
+    "connection timed out",
+    "operation timed out",
+    "no route to host",
+    "network is unreachable",
+    "could not resolve host",
+    "temporary failure in name resolution",
+    "connection reset by peer",
+    "curl: (7)",
+    "curl: (28)",
+    "curl: (6)",
+    "curl: (56)",
+)
+
+#: `curl -w '%{http_code}'` 打出来的「没拿到响应」。单独判，因为它是个裸的
+#: `000`，不做边界限定会把 `Content-Length: 1000` 之类的数字误伤。
+_HTTP_000 = re.compile(r"(?<![\d.])000(?![\d.])")
+
+#: ★ 刻意**不**把「零结果」算成采集失败 —— 这条是实测纠正过来的。
+#:
+#: 32231 的 trace 里有两处形态诱人但会误判：
+#:
+#: ```
+#: 03:01:44  ffuf ... -> Encountered error(s): 1 errors occurred.
+#:                        * open /home/solver/.config/ffuf/scraper: no such file or directory
+#: 03:02:39  gobuster common.txt -> 0 results   （靶子当时 HTTP 200，活得好好的）
+#: ```
+#:
+#: 第一处是**本地配置坏了**（ffuf 的 scraper 路径不存在），第二处是**靶子健康
+#: 且确实没暴露路径** —— 后者正是 32231 那条唯一站得住的结论（「GET-only 路由
+#: 枚举干净」）。若把「0 results」或「encountered error」判成采集失败，就会在
+#: 靶子活得好好的时候宣布它死了，并往黑板里写一条假事实 —— 那**比不提醒更糟**：
+#: 它会让模型丢掉一个已经验证过的正确结论。
+#:
+#: 所以这里只认「一个响应字节都没拿到」：连接层失败 + `000`。零结果不算。
+
+#: 输出里出现这些，说明**这一发确实拿到了目标数据**（哪怕同时还夹杂失败）。
+#:
+#: 三条判据：
+#:
+#: 1. **HTTP 状态行**（`HTTP/1.1 200`）—— 收到 `500` 也算活：5xx 是目标**自己**
+#:    在报错，它还在跑。要抓的是「一个字节都没回来」，所以不区分 2xx/3xx/5xx。
+#: 2. **裸的成功状态码**（`curl -w '%{http_code}'` 只打三位数，没有状态行）。
+#:    32231 的 trace 里 `for i in 1..10; curl -w '%{http_code}' ...; done` 打的
+#:    正是 `200 000 200` 这种混合输出 —— 只认状态行会把它判成失败，而靶子活着。
+#: 3. **flag** —— 拿到 flag 时显然不该说目标死了。
+#:
+#: ⚠️ 第 2 条的前后向断言收得比 `\b` 紧：`\b` 在 `15016`/`1200` 这类数字里会
+#: 误命中（`Content-Length`、`ETag` 到处都是），冒号也排除掉是为了不吃
+#: `03:33:49` 这种时间戳里的 `333`。
+#:
+#: ## 为什么这里宁可漏判失败
+#:
+#: 漏判失败 = 少提醒一次「目标可能死了」；误判失败 = 把**活着的**靶子宣布成死的，
+#: 并往黑板写一条假事实。后者会毁掉模型已经验证过的正确结论（32231 里那条
+#: 「GET-only 路由枚举干净」正是靠靶子健康时才成立的），代价高得多。
+_SUCCESS_EVIDENCE = re.compile(
+    r"^\s*HTTP/[\d.]+\s+\d{3}\b"      # 状态行
+    r"|\bflag\{"                        # 拿到 flag
+    r"|(?<![\d:])[23]\d\d(?![\d:])",    # 裸状态码 2xx/3xx
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _looks_like_collection_failure(*, tool_name: str, command: str, output: str) -> bool:
+    """这一发工具调用是不是「发出去但没拿到目标数据」。
+
+    ## 为什么必须先确认「它真的打了目标」
+
+    本地命令失败也常有连接字样（`pip install` 连不上镜像源、`git clone`
+    被墙）。若不加这层，模型在容器里装个包失败就会被判「目标已死」，
+    那是**比不提醒更糟的误导**。所以先用 `_looks_like_acting` 确认这次
+    调用确实朝向目标，才把失败计入。
+
+    ## 返回 False 的三种情况
+
+    1. 不算行动（本地分析、记账、思考）—— 与目标可达性无关
+    2. 输出里没有失败特征 —— 这一发可能成功了（甚至拿到了 flag）
+    3. 输出里**同时**有成功标志 —— 见下
+
+    ## 为什么"同时有成功标志"要判 False
+
+    一条 `run_shell` 里常有多次请求（`for i in 1..10; curl ...; done` 打五个
+    路径，三个 200 两个 000）。若只要出现一个 `000` 就判失败，那模型**打得越
+    勤越会被判"靶子死了"**，而事实正相反。
+
+    所以只要输出里出现了 `200`/`30x` 这类成功状态码，或找到了 flag，就认定
+    这一发**拿到了目标数据**（哪怕部分请求失败）。宁可漏报也不要把活靶子
+    宣布成死的 —— 那会毁掉模型已经验证过的结论。
+    """
+    if not _looks_like_acting(tool_name=tool_name, command=command):
+        return False
+    # 成功标志优先：拿到过响应就说明目标活着。
+    if _SUCCESS_EVIDENCE.search(output):
+        return False
+    low = output.lower()
+    if any(tok in low for tok in _COLLECTION_FAIL_TOKENS):
+        return True
+    return bool(_HTTP_000.search(output))
+
 #: 一次 `run_shell` 里出现这些词，算"真的向目标发了请求"。
 #:
 #: 用**动作词**而不是"是否包含 http"：`grep -oE 'http[A-Za-z]*' bundle.js`
@@ -249,6 +389,49 @@ def _looks_like_acting(*, tool_name: str, command: str) -> bool:
         return False
     low = command.lower()
     return any(tok in low for tok in _ACTING_TOKENS)
+
+
+def collection_fail_note(*, streak: int) -> str:
+    """连续 N 次采集失败时发给模型的那句提醒（v0.92，缺陷 B）。
+
+    ## 与 `_wall_clock_note` 的分工
+
+    那条管「你还有多少时间」，这条管「你的靶子还在不在」。32231 那次两个
+    同时缺：模型既不知道只剩 12 秒，也不知道打了 25 分钟全是 000。
+
+    ## 措辞上的三个刻意选择
+
+    1. **点明"这不是'没漏洞'的证据"** —— 这是最关键的一句。模型把
+       "采不到" 当成 "干净" 是这类事故的共同形态。报告里模型自己写
+       "The last sweep was all `000` — collection failure, not evidence"，
+       说明它知道这个区分，只是这个认知活不过一轮。
+    2. **给出"现在该做什么"而不是只说"目标死了"** —— 只说事实会让模型
+       停下来等（它没法修服务器），必须把它导向「把已有证据收口」。
+    3. **明说这条已经写进黑板** —— 否则模型会把这条提醒当成一次性提示，
+       下一轮继续重试（正是 32231 的形态）。
+    """
+    return (
+        f"⚠️ **连续 {streak} 次采集失败**：目标当前不可达，这不是「没有漏洞」的证据。\n"
+        "- 这更像是目标被打饱和/挂掉了（你和你自己的子智能体都在打它）；"
+        "继续重试**只会加重它**，不会得到新结论；\n"
+        "- 这条已经记进「已确认事实」，后续轮次都会看到，不需要你重新推导；\n"
+        "- **现在该做的**：把已经拿到的证据收口成结论（写清哪几项确认了、"
+        "哪几项因为目标不可达而未能验证），而不是再发一条重试命令。\n"
+    )
+
+
+def _collection_fact_text(*, streak: int) -> str:
+    """写进黑板的那条事实正文。
+
+    ⚠️ 与提醒分开写：提醒是**给人看的行动指引**，事实是**给后续轮次的
+    状态记录**。事实必须能独立读懂（它会在别的 agent、别的轮次的 prompt 里
+    单独出现），所以带上"连续 N 次"这个量化前提与"不代表没漏洞"这个判读边界。
+    """
+    return (
+        f"目标当前不可达（连续 {streak} 次采集失败，多为 000 / 连接被拒 / 超时）。"
+        "这不是「没有漏洞」的证据 —— 采集能力本身失效了。"
+        "恢复可达前，任何「没找到」的结论都不成立。"
+    )
 
 
 #: v0.83：哪些工具调用算"干了一轮活"（→ 记账欠费 +1）。
@@ -1035,6 +1218,50 @@ class SharedState:
             body = body[:keep] + "\n…（更多记录请调用 get_memory 查看）"
         return "\n\n—— 当前状态（系统每轮推送，不是你的历史记忆）——\n" + body
 
+    def render_global_constraints(self) -> str:
+        """只渲染 `kind == "constraint"` 的事实 —— **给子 agent** 用（v0.92）。
+
+        ## 为什么子 agent 需要这一条，而其他事实不需要
+
+        `render_live_state` 只给 root，理由是"全场方向与事实对子 agent 是噪音，
+        它会以为那些是自己的活儿"。那个理由对 `positive` / `negative` 成立，
+        对 `constraint` **不成立**：
+
+        | kind | 说的是什么 | 对子 agent |
+        | --- | --- | --- |
+        | `positive` | 某个策略有效 | 噪音（不是它的活儿） |
+        | `negative` | 某条路已排除 | 噪音（它可能本来就该走那条） |
+        | `constraint` | **靶子本身现在打不通** | ★ 物理前提 |
+
+        靶子死了的时候，子 agent 枚举路径得到的每一条"没找到"都是**假阴性**。
+        它不需要知道别人在干什么，但必须知道"你现在打的这个东西没回字节"。
+
+        ## 为什么必须单独一个方法，而不是给 `render_live_state` 加参数
+
+        那个方法的 `is_root` 守卫被 `tests/kernel/test_live_state.py:test_only_root_gets_it`
+        按源码结构钉着（注入点前后不许重开 `if is_root:`）。加参数会让守卫
+        变成"取决于参数"的软约定，那条测试就钉不住了。两个方法、两个调用点，
+        各自的守卫都是硬结构。
+
+        ## 为什么按 kind 过滤而不是按 `by`（谁写的）过滤
+
+        写这条事实的 agent 可能是任意一个子 agent，而它要警示的是**所有**
+        agent。按 `by` 过滤会让"root 写的只给 root 看"，正好漏掉最需要它的那些。
+
+        ## 空时返回空串
+
+        与 `render_live_state` 同一条纪律：没有约束时一个字节都不加，
+        否则每轮都挂着一段占位、并且污染 system prompt 前缀（缓存全失效）。
+        """
+        constraints = [t for t, i in self.facts.items() if i.get("kind") == "constraint"]
+        if not constraints:
+            return ""
+        lines = [f"- {t}" for t in constraints]
+        return (
+            "## 全局约束（靶子层面，与你的具体任务无关，但会否掉你的结论）\n"
+            + "\n".join(lines)
+        )
+
 
 @dataclass
 class AgentCoordinator:
@@ -1070,6 +1297,40 @@ class AgentCoordinator:
     #: 于是门在 root 明明打转时仍判"没打转"——**判定对象与判定依据必须是
     #: 同一个 agent**，否则这个信号没有意义。
     recent_actions: dict[str, list[bool]] = field(default_factory=dict)
+
+    #: ★ v0.92：**连续**几次工具调用「发出去但没拿到目标数据」。
+    #:
+    #: ## 与 `recent_actions` 为什么一个按 agent 分、一个不分
+    #:
+    #: `recent_actions` 判的是「**这个 agent** 是不是在原地打转」—— 那是关于
+    #: 某个智能体的行为，所以必须按 agent 分（混着算会把 root 的 47% 稀释成
+    #: 30%，门就不拦了）。
+    #:
+    #: 「目标可不可达」是关于**靶子**的事实，全场所有智能体打的是同一个靶子。
+    #: 所以这里**故意全局**：a1 的三次 000 + root 的三次 000 就是六次，不该因为
+    #: 分属两个 agent 就各算三次。任何一次成功采集都会把计数清零 —— 因此
+    #: 一个 agent 在本地瞎折腾（DNS 写错）造成的失败，会被其它 agent 的
+    #: 成功立刻抵消，不会误判整个靶子已死。
+    collection_fail_streak: int = 0
+
+    #: 这一轮「目标不可达」的升级是否已经发过。
+    #:
+    #: 发过就不再重复往上下文里塞 —— 提醒的**持久化**靠写进 `shared.facts`
+    #: （每轮随「已确认事实」推送），而不是靠每轮重现一遍。
+    #: 只在采集成功（靶子活过来）时复位，这样"死了→活了→又死了"能再报一次。
+    collection_fail_escalated: bool = False
+
+    def note_collection(self, *, ok: bool) -> None:
+        """登记一次采集结果，维护连续失败计数与升级标志。
+
+        只做计数，**不发提醒** —— 提醒由调用方在用得上它的地方拼
+        （那一处才知道要拼进哪条消息、给哪个 agent 看）。
+        """
+        if ok:
+            self.collection_fail_streak = 0
+            self.collection_fail_escalated = False
+        else:
+            self.collection_fail_streak += 1
 
     def note_action(self, *, acted: bool, agent_id: str = "root") -> None:
         """登记一条动作（`acted` = 这一轮是否真的向目标发了请求）。"""
@@ -1811,6 +2072,11 @@ async def run_agent_loop(
 
     log: list[str] = []
     recent: list[dict[str, str]] = []
+    #: ★ v0.92：墙钟档位（-1 = 还没催过）。**每条循环各记各的** —— root 与
+    #: 各 child 是独立的 `run_agent_loop` 调用，共享一个墙钟但各自的对话历史
+    #: 独立。同一条催促要发给每一个在跑的智能体：32231 那次恰恰是 root 收工了
+    #: 而子 agent 还在跑（或反之），只提醒一边等于没提醒。
+    _wall_warn_stage: int = -1
 
     def _messages() -> list[dict[str, str]]:
         return [base_message, *recent]
@@ -1855,6 +2121,42 @@ async def run_agent_loop(
         # 收尾提醒（只剩最后一轮时）
         if max_turns - turn == 0:
             recent.append({"role": "user", "content": _final_stretch_note(0)})
+
+        # ★★ v0.92：**墙钟催促**（学 32231 事故）。
+        #
+        # ## 为什么多智能体这条路径特别需要它
+        #
+        # 单循环路径（`runner.solve_in_sandbox`）v0.70 起有回合三档催促，
+        # 但**这条多智能体路径连那个都没有** —— 只有上面那句"只剩最后一轮"。
+        # 而 32231 那次跑的正是多智能体（root + 3 child），于是：
+        #
+        # ```
+        # 墙钟 deadline           : 03:57:36
+        # 最后一条 run_shell 发起 : 03:57:24   ← 只剩 12 秒
+        # 该命令实际跑完          : 03:59:16   ← 逾期 100 秒，全白费
+        # ```
+        #
+        # `coord.remaining_budget()` 是**总轮次**预算（`max_turns * 3` = 1500），
+        # 这次只用了 78 次工具调用 —— 轮次池几乎没动，墙钟却到点了。轮次维度
+        # 的催促在这种"少轮次长墙钟"的扫描场景里**天然失效**，必须单独看时间。
+        #
+        # ⚠️ 每个 agent 各记各的 `_wall_warn_stage`：同一条催促要发给每一个
+        #    在跑的智能体。只提醒 root 的话，子 agent 会在 root 收工后继续
+        #    对着将死的目标发命令。
+        wall_stage = _wall_clock_band(spec)
+        if wall_stage is not None and wall_stage > _wall_warn_stage:
+            _wall_warn_stage = wall_stage
+            wall_left = _wall_clock_seconds_left(spec)
+            if wall_left is not None:
+                recent.append(
+                    {
+                        "role": "user",
+                        "content": _wall_clock_note(
+                            wall_stage, wall_left, (spec.wall_clock_seconds or 0) / 60
+                        ),
+                    }
+                )
+                log.append(f"[{node.agent_id} t{turn}] 墙钟催促（第 {wall_stage + 1} 档）：剩 {wall_left}s")
 
         # 人给的线索（只在 root 上生效 —— 子 agent 有明确 task，不掺人类线索）
         if is_root and hint_provider is not None:
@@ -1912,6 +2214,20 @@ async def run_agent_loop(
             )
             if _live:
                 _sys = system_prompt + "\n\n" + _live
+        else:
+            # ★ v0.92：子 agent 只拿**全局约束**（靶子层面的事实），不拿全场方向。
+            #
+            # 与上面 `is_root` 分支的分工写在 `render_global_constraints` 的
+            # docstring 里：`positive`/`negative` 对子 agent 是噪音，
+            # 但 `constraint`（"靶子现在打不通"）会把它所有的"没找到"变成假阴性。
+            #
+            # ⚠️ 这是**每轮**算的，不是只在首轮：升格可能发生在子 agent 已经
+            #    在跑之后（它自己连续打不通，或者别的 agent 打不通而计数器是
+            #    全局的）。只写进首轮消息的话，那时已经在跑的 agent 一辈子
+            #    都读不到这条（首轮 prompt 由 `_child_task_prompt` 一次性生成）。
+            _constraints = coord.shared.render_global_constraints()
+            if _constraints:
+                _sys = system_prompt + "\n\n" + _constraints
         try:
             reply = await gateway.chat(_messages(), system=_sys)
         except KernelError as exc:
@@ -2072,6 +2388,52 @@ async def run_agent_loop(
                     )
                     repeated_note += _tip + chr(10) + chr(10)
 
+            # ★ v0.92：连续采集失败升格为结构性事实（修 32231 事故缺陷 B）。
+            #
+            # ## 为什么记在这里而不是在 `_wall_clock_band` 那一层
+            #
+            # 这一层才拿得到 `result`（工具真实输出）。上面所有提醒判的都是
+            # 「你发了什么命令」，只有这里知道「发出去之后有没有回来东西」。
+            #
+            # ## 为什么必须写进 `shared.facts` 而不是只拼进 `repeated_note`
+            #
+            # `repeated_note` 只出现在**这一条**工具结果后面，下一轮就没了。
+            # 32231 的模型 03:34:04 自己意识到"all 000 — not evidence"，但
+            # **这个认知只活了一轮**，下一轮又回去重试。写进 facts 才会随
+            # 「已确认事实」每轮推送给所有 agent（`render_live_state` ③）。
+            #
+            # ## 为什么只在跨过阈值那一次写
+            #
+            # `add_fact` 是同文本覆盖，每次失败都写一次会把 facts 当成日志刷，
+            # 且每轮都往 prompt 里塞同一条没信息量的东西。`escalated` 标志
+            # 保证一个"死亡周期"只写一次；靶子活过来（采集成功）时复位，
+            # 于是"死了→活了→又死了"能再报一次。
+            collection_failed = _looks_like_collection_failure(
+                tool_name=tool_name, command=command, output=result
+            )
+            coord.note_collection(ok=not collection_failed)
+            if (
+                coord.collection_fail_streak >= COLLECTION_FAIL_STREAK
+                and not coord.collection_fail_escalated
+            ):
+                coord.collection_fail_escalated = True
+                _streak = coord.collection_fail_streak
+                # 写黑板：root 每轮从 `render_live_state` 读到它，
+                # 子 agent 从 `render_global_constraints` 读到它
+                # （两者都按"每轮现算"推送，不是只写进某一轮的消息）。
+                try:
+                    coord.shared.add_fact(
+                        _collection_fact_text(streak=_streak),
+                        by=node.agent_id,
+                        evidence=f"连续 {_streak} 次工具输出无响应字节",
+                        kind="constraint",
+                    )
+                except ValueError:  # 正文为空/kind 非法 —— 不该发生，不让它炸整轮
+                    logger.warning("写入目标不可达事实失败", exc_info=True)
+                repeated_note += collection_fail_note(streak=_streak) + chr(10)
+                log.append(
+                    f"[{node.agent_id} t{turn}] 连续 {_streak} 次采集失败，已升格为事实"
+                )
 
             completed.append((tool_name, command, result[:3000], repeated_note))
             notify(

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from pathlib import Path
 
 import httpx
@@ -3619,3 +3620,170 @@ def test_run_shell_short_output_is_not_touched() -> None:
     out = _run(runner._tool_run_shell({"command": "cat f"}, sandbox=sandbox))
     assert out == "hello"
     assert "截断" not in out
+
+
+# ══════════════════════════════════════════════════════════
+# ★★ v0.92：墙钟预算催促（学 2026-10-23 扫描 32231 事故）
+# ══════════════════════════════════════════════════════════
+
+
+def test_wall_clock_bands_cover_the_three_stages() -> None:
+    """墙钟档位的边界：60% / 80% / 92% 各触发一次，且逾时仍返回最高档。
+
+    ## 为什么墙钟的阈值比回合的（70/85/95）更早
+
+    回合/成本用尽时循环条件会**自然拦住**，模型交出去的结论还在；墙钟到点是
+    `task.cancel()` —— 正在跑的工具调用被直接撕掉，半截输出都拿不回来。
+    硬杀更严重，所以必须更早开始催。
+
+    ⚠️ 逾时（>100%）必须仍返回最高档而不是 None：`_band_of` 对超过所有阈值
+    的比例会返回最深那档，这里把"已过点但还没被杀"这个窗口也覆盖住。
+    """
+    kwargs = {
+        "challenge_id": "c",
+        "title": "t",
+        "category": "web",
+        "description": "d",
+        "profile": KernelSandboxProfile.BASE.value,
+        "access_urls": (),
+        "attachments": (),
+        "llm_model": "m",
+        "llm_api_key": "k",
+        "max_turns": 10,
+        "min_coverage": 0,
+        "wall_clock_seconds": 600,
+    }
+
+    # 没设墙钟 → 永远不催（CTF 解题路径就是这种）。
+    assert runner._wall_clock_band(_spec()) is None
+    assert runner._wall_clock_seconds_left(_spec()) is None
+
+    def at(fraction: float) -> int | None:
+        return runner._wall_clock_band(
+            runner.SolveSpec(**{**kwargs, "wall_clock_started_at": time.monotonic() - 600 * fraction})
+        )
+
+    assert at(0.0) is None, "刚起步不该催"
+    assert at(0.59) is None, "没到 60% 不该催"
+    assert at(0.60) == 0
+    assert at(0.79) == 0
+    assert at(0.80) == 1
+    assert at(0.91) == 1
+    assert at(0.92) == 2
+    assert at(1.05) == 2, "已逾时仍应是最高档（还没被硬杀的那个窗口）"
+
+    # 剩余秒数要能算出来，且逾时是负数（诚实，不夹到 0）。
+    overdue = runner.SolveSpec(
+        **{**kwargs, "wall_clock_started_at": time.monotonic() - 612}
+    )
+    left = runner._wall_clock_seconds_left(overdue)
+    assert left is not None and -14 <= left <= -10, f"逾时秒数应约为 -12，实际 {left}"
+
+
+def test_the_wall_clock_note_names_the_remaining_time_in_seconds() -> None:
+    """催促里必须出现**具体剩余时间**，而不只是"预算已用 X%"。
+
+    ## 这条挡的是什么
+
+    回合维度的措辞是"预算已用约 70%" —— 模型对"还剩 440 轮"的直觉是
+    "还有很多空间"。32231 那次正是这么误判的：轮次池 1500 只用了 78 次
+    调用（5%），而墙钟只剩 12 秒，它又发起了一条 112 秒的命令。
+
+    所以墙钟措辞的第一句必须给到秒，且必须点明"硬杀"这个性质。
+    """
+    note0 = runner._wall_clock_note(0, 252, 60)
+    assert "4 分 12 秒" in note0, f"第一档要给具体剩余时间：{note0[:120]}"
+
+    note2 = runner._wall_clock_note(2, 48, 60)
+    assert "48 秒" in note2
+    assert "硬杀" in note2, "最后一档必须点明会被硬杀（与'轮数用尽'性质不同）"
+
+    # 不足一分钟时直接说秒数 —— 不说"0 分钟"（那听起来像没时间了）。
+    assert "38 秒" in runner._humanize_seconds(38)
+    # 整分钟不带多余的"0 秒"。
+    assert runner._humanize_seconds(240) == "4 分钟"
+
+
+def test_the_engine_receives_the_wall_clock_and_warns_before_it_hits() -> None:
+    """★ 端到端：墙钟贯穿 `solve_in_sandbox` → 主循环 → 注入给模型的上下文。
+
+    这条是本次修复的**主验收**。它证明的不只是纯函数算得对，而是：
+      1. `SolveSpec.wall_clock_*` 被主循环真的读了；
+      2. 跨过档位时**真的把一条 user 消息塞进了 `recent`**（模型下一轮看得到）；
+      3. 同一个档位不会重复注入。
+
+    ## 怎么在测试里制造"时间流逝"
+
+    不 sleep（那会让测试变慢且不稳）。改用**把起点往过去挪**：给
+    `wall_clock_started_at = now - 0.55 * total`，于是第 1 轮就已在 55%，
+    每跑一轮再把起点往前推一点 —— 用 `_FakeGateway.chat` 的调用次数当
+    时间轴（每轮一次），这样"时间"与"轮次"同步推进，断言稳定。
+    """
+    total = 100.0
+
+    class _TickingGateway(_FakeGateway):
+        """每被调用一次，就让 spec 的"已过时间"增加 `step` 秒。
+
+        实现方式是**回拨起点**（`wall_clock_started_at` 往过去挪），而不是
+        sleep —— sleep 会让测试慢且不稳，而起点回拨与被测代码读的是同一个
+        `time.monotonic()`，等价性没有任何折扣。
+
+        `elapsed = step * 调用次数`：第 1 轮 0%、第 12 轮 99%。
+        """
+
+        def __init__(self, replies: list[str], spec, *, step: float) -> None:
+            super().__init__(replies)
+            self._spec = spec
+            self._step = step
+
+        async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
+            self._spec.wall_clock_started_at = time.monotonic() - self._step * len(self.seen)
+            return await super().chat(messages, system=system)
+
+    spec = _spec(max_turns=12)
+    spec.wall_clock_seconds = int(total)
+    spec.wall_clock_started_at = time.monotonic() - total * 0.0
+    gateway = _TickingGateway(
+        ['ACTION: {"tool": "run_shell", "args": {"command": "true"}}'] * 12,
+        spec,
+        # 12 轮覆盖 0→100%：每轮推进约 9%（起点额外回拨 step*seen）。
+        step=total * 0.09,
+    )
+    _run(
+        runner.solve_in_sandbox(
+            spec, sandbox=_FakeSandbox(), gateway=gateway, system_prompt="sys"
+        )
+    )
+
+    def _wall_notes_in(messages):
+        return [
+            m["content"]
+            for m in messages
+            if "⏱" in m["content"] or "🛑 **墙钟" in m["content"]
+        ]
+
+    per_turn = [_wall_notes_in(m) for m in gateway.seen]
+    final_notes = per_turn[-1]
+
+    # ★ 断言看**最后一份快照**，不看各轮累加。
+    #
+    # 催促一旦注入就作为 user 消息留在 `recent` 里（收口是最后几轮持续要做
+    # 的事，不是喊一声就完），所以第 11 轮的上下文里会同时有第 1、2、3 档
+    # 三条；各轮相加会得到 1+2+3=6 条。**正确的口径是「最终上下文里每档
+    # 恰好一条」** —— 各轮累加会把正确实现误判成重复注入。
+    assert final_notes, "墙钟跨过档位后必须真的注入了催促，实际一条都没有"
+    assert len(final_notes) <= len(runner.WALL_WARN_BANDS), (
+        f"同一档被重复注入了：最终上下文里有 {len(final_notes)} 条，"
+        f"档位只有 {len(runner.WALL_WARN_BANDS)} 个"
+    )
+    # 至少跨过两档，才说明「越接近越急」这条梯度真的在动。
+    assert len(final_notes) >= 2, f"应至少跨过两档，实际只注入了 {len(final_notes)} 条"
+
+    # 三档必须是**不同**档位（不是同一句重复三遍）。
+    assert len({n[:12] for n in final_notes}) == len(final_notes), (
+        f"注入的催促是重复内容，不是三档递进：{[n[:20] for n in final_notes]}"
+    )
+
+    # 催促里必须带具体秒数（不是只写「预算已用 X%」）。
+    joined = "\n".join(final_notes)
+    assert "只剩" in joined and "秒" in joined, f"催促应给出具体剩余时间：{joined[:300]}"

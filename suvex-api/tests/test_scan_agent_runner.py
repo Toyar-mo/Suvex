@@ -928,3 +928,113 @@ def test_observations_not_written_when_nothing_to_say(tmp_path: Path) -> None:
         _spec(run_dir=tmp_path, log_path=tmp_path / "scan.log"), _FakeOutcome(None)
     )
     assert not (tmp_path / "observations.json").exists()
+
+
+def test_solve_with_stop_hands_the_wall_clock_to_the_engine(monkeypatch) -> None:
+    """★ `_solve_with_stop` 必须把墙钟**写进 spec**，让主循环能提前催促。
+
+    ## 这条钉的是什么
+
+    墙钟原本只活在 `_solve_with_stop` 这个旁路的 `while` 里：到点
+    `task.cancel()`，引擎**一无所知**。实测代价（扫描 32231）：
+    ```
+    墙钟 deadline           : 03:57:36
+    最后一条 run_shell 发起 : 03:57:24   ← 只剩 12 秒
+    该命令实际跑完          : 03:59:16   ← 逾期 100 秒，全白费
+    ```
+    而 `scan_max_turns=500` 只用了 78 次工具调用 —— 回合催促一档都没触发。
+
+    ## 为什么断言"两个字段同源"
+
+    见 `agent_runner._solve_with_stop` 里那段注释：`started_at` 只取一次
+    `monotonic()`，`deadline` 与写进 spec 的起点都由它算出。分两次取会引入
+    漂移，引擎报出的"剩余秒数"就和真正硬杀时刻对不上 —— 那比不催更糟。
+    所以这里不只断言"写了"，还断言"**约束成立**"（约等式）。
+
+    ## 变异会红
+
+    · 删掉写入那两行 → `wall_clock_seconds is None` → 红；
+    · 改成两次 `monotonic()` 分别取 → `started_at` 与 `deadline - timeout`
+      的差超过容忍值 → 红。
+    """
+    import asyncio
+    import threading
+
+    from app.kernel import runner as kernel_runner
+
+    captured: dict[str, object] = {}
+
+    async def _capture(spec, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        # 引擎开跑时把 spec 上的值记下来 —— 这正是主循环会读到的东西。
+        captured["wall_clock_seconds"] = spec.wall_clock_seconds
+        captured["wall_clock_started_at"] = spec.wall_clock_started_at
+        return kernel_runner.SolveOutcome(error=None)
+
+    monkeypatch.setattr(kernel_runner, "solve_in_sandbox", _capture)
+
+    spec = agent_runner.build_solve_spec_from_scan(_spec())
+    asyncio.run(
+        agent_runner._solve_with_stop(
+            spec,
+            sandbox=object(),
+            gateway=object(),
+            system_prompt="x",
+            stop_event=threading.Event(),
+            on_progress=lambda *a, **k: None,
+            timeout_seconds=1800,
+        )
+    )
+
+    assert captured["wall_clock_seconds"] == 1800, (
+        "墙钟秒数没交给引擎 —— 主循环读到的会是 None，三档催促一个都不会触发"
+    )
+    assert captured["wall_clock_started_at"] is not None, (
+        "起点没交给引擎 —— 只有总时长没有起点，算不出'已经过了多久'"
+    )
+
+    # 起点 / deadline 同源：两者相减必须回到 timeout（容忍毫秒级误差）。
+    started = float(captured["wall_clock_started_at"])  # type: ignore[arg-type]
+    deadline = started + float(captured["wall_clock_seconds"])  # type: ignore[arg-type]
+    import time as _t
+
+    drift = abs((deadline - started) - 1800)
+    assert drift < 0.01, f"起点与时长不同源（drift={drift}s）"
+    assert started <= _t.monotonic(), "起点不能是未来时刻（那会让剩余时间为负）"
+
+
+def test_solve_with_stop_does_not_write_the_wall_clock_when_there_is_none(monkeypatch) -> None:
+    """`timeout_seconds=None` 时**不许**往 spec 上写 —— 否则引擎会以为有期限。
+
+    `wall_clock_seconds=None` 在引擎里是"没有墙钟"（`_wall_clock_band` 直接
+    返回 None）。若这里误写成 0 或某个默认值，非计时的扫描会莫名其妙开始
+    收到"快到点了"的催促。
+    """
+    import asyncio
+    import threading
+
+    from app.kernel import runner as kernel_runner
+
+    captured: dict[str, object] = {}
+
+    async def _capture(spec, **kwargs):  # noqa: ANN001, ANN003, ANN202
+        captured["wall_clock_seconds"] = spec.wall_clock_seconds
+        captured["wall_clock_started_at"] = spec.wall_clock_started_at
+        return kernel_runner.SolveOutcome(error=None)
+
+    monkeypatch.setattr(kernel_runner, "solve_in_sandbox", _capture)
+
+    spec = agent_runner.build_solve_spec_from_scan(_spec())
+    asyncio.run(
+        agent_runner._solve_with_stop(
+            spec,
+            sandbox=object(),
+            gateway=object(),
+            system_prompt="x",
+            stop_event=threading.Event(),
+            on_progress=lambda *a, **k: None,
+            timeout_seconds=None,
+        )
+    )
+
+    assert captured["wall_clock_seconds"] is None
+    assert captured["wall_clock_started_at"] is None

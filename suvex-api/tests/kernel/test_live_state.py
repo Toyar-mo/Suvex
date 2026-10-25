@@ -125,3 +125,48 @@ class TestWiring:
         # 再钉一层：注入点必须真的在这个 if 的缩进块里（不是同级后置）。
         line = " " * (len(src[: i].split("\n")[-1]) - len(src[: i].split("\n")[-1].lstrip()))
         assert len(line) > 4, "注入点应在缩进块内"
+
+
+class TestGlobalConstraints:
+    """`render_global_constraints`：**只**给子 agent 的那一段（v0.92）。
+
+    它与 `render_live_state` 的关系是"子集"而不是"变体"：只取
+    `kind == "constraint"` 的事实。理由是 `positive`/`negative` 说的是
+    "某个策略有效/已排除"（对子 agent 是噪音），而 `constraint` 说的是
+    "靶子本身现在打不通"（对它是物理前提 —— 靶子死了，它每一条
+    "没找到"都是假阴性）。
+    """
+
+    def test_empty_state_returns_empty_string(self):
+        """没有约束时一个字节都不加（与 render_live_state 同一条纪律）。
+
+        否则每轮都挂着一段空占位，而且 system prompt 前缀会因此变化，
+        正在跑的扫描缓存全失效。
+        """
+        assert SharedState().render_global_constraints() == ""
+
+    def test_only_constraints_are_rendered(self):
+        s = _populated()  # positive + negative + idea + coverage，**没有** constraint
+        assert s.render_global_constraints() == "", (
+            "既有的 positive/negative 事实都不该出现在子 agent 的约束段里"
+        )
+        s.add_fact(
+            "目标当前不可达（连续 3 次采集失败）",
+            by="child-a",
+            evidence="连续 3 次工具输出无响应字节",
+            kind="constraint",
+        )
+        r = s.render_global_constraints()
+        assert "不可达" in r
+        assert "鉴权是 Cookie 会话" not in r, "positive 事实不许漏进来"
+        assert "settings token 是前端 mock" not in r, "negative 事实不许漏进来"
+
+    def test_it_filters_by_kind_not_by_author(self):
+        """按 kind 过滤，**不按谁写的**。
+
+        写这条事实的可能是任意一个子 agent，而它要警示的是所有 agent。
+        按 `by` 过滤会让"root 写的只给 root 看"，正好漏掉最需要它的那些。
+        """
+        s = SharedState()
+        s.add_fact("靶子不可达", by="child-b", kind="constraint", evidence="000")
+        assert "靶子不可达" in s.render_global_constraints()

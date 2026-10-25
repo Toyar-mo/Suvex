@@ -85,6 +85,11 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("GET", "/api/v1/kernel/skills"),
         ("GET", "/api/v1/kernel/skills/usage"),
         ("GET", "/api/v1/kernel/skills/{name}"),
+        # 附件正文（v0.90）。与上一条同级：都是人写的操作手册正文，
+        # 不是凭据。前端编辑技能时必须能读回来才能显示在文件树里 ——
+        # 只读账号看得到技能正文却看不到它的附件，会出现"文件树是空的"
+        # 这种假的权限缺口。
+        ("GET", "/api/v1/kernel/skills/{name}/files"),
     }
 )
 

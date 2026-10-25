@@ -346,6 +346,37 @@ TURN_WARN_BANDS: tuple[float, ...] = (0.70, 0.85, 0.95)
 #: 判据与 `TURN_WARN_BANDS` 同一套比例语义（已用 token / 上限）。
 COST_WARN_BANDS: tuple[float, ...] = (0.70, 0.85, 0.95)
 
+#: ★★ v0.92：**墙钟**梯度 —— 三个预算维度里的第三个，也是唯一会"硬杀"的那个。
+#:
+#: ## 为什么必须有它（实测事故，2026-10-23 扫描 32231）
+#:
+#: 那次扫描跑了 61.69 分钟被判失败。逐条还原时间线后发现：
+#:
+#: ```
+#: 墙钟 deadline              : 03:57:36
+#: 最后一条 run_shell 发起    : 03:57:24  ← 只剩 12 秒
+#: 该命令实际跑完             : 03:59:16  ← 逾期 100 秒
+#: ```
+#:
+#: **它在只剩 12 秒时又发起了一条要跑 112 秒的命令** —— 这不是模型贪心，
+#: 是它完全不知道墙钟快到了。而 `scan_max_turns = 500`，它全程只用了 78 次
+#: 工具调用（16%）：`turn / max_turns` 永远停在 0.16 附近，三档回合催促
+#: （350/425/475 轮）**一个都没触发**。
+#:
+#: 于是同一个死法又发生了一次 —— `_WRAPUP_DIRECTIVES` 的 docstring 里记着
+#: "2026-10-22 一次渗透扫描被 60 分钟墙钟截断，就是这种死法"。**当时以为
+#: 加了回合梯度就治好了，其实只治了"轮数用尽"这一种，墙钟那种压根没接管。**
+#:
+#: ## 为什么单独一组常量而不是复用 TURN_WARN_BANDS
+#:
+#: 三个维度的紧急度语义不同：
+#:   · 回合用尽 → 循环自然结束，**有机会**交结论；
+#:   · token 用尽 → 同上，循环条件拦住；
+#:   · 墙钟到点 → `task.cancel()` **硬杀**，正在跑的工具调用直接被撕掉，
+#:     连半截输出都拿不回来。
+#: 硬杀比"用尽"严重，所以墙钟要**更早开始催**（见下面 0.60 的取值理由）。
+WALL_WARN_BANDS: tuple[float, ...] = (0.60, 0.80, 0.92)
+
 # 「平台说这题已经被本队伍解出了」时给用户看的那句话。
 #
 # ★ 它必须同时回答三件事，否则用户会以为是我们坏了：
@@ -2824,6 +2855,35 @@ class SolveSpec:
     # 会漂移），填错价格会把"省钱"变成"提前瞎收工"，比不设更糟。
     max_total_tokens: int | None = None
 
+    # ★★ v0.92：**墙钟预算**（秒）。`None` = 不设墙钟（CTF 解题路径、纯测试）。
+    #
+    # ## 为什么需要它进 spec，而不是留在 `scans/agent_runner.py` 的旁路循环里
+    #
+    # 墙钟原本只存在于 `agent_runner._solve_with_stop` 那个 `while` 里：它到点
+    # 就 `task.cancel()`。**引擎循环自己一无所知** —— 于是模型永远收不到
+    # "快没时间了"，会在最后几秒发起一条根本跑不完的命令。
+    #
+    # 实测（2026-10-23 扫描 32231，61.69 分钟后被判失败）：
+    # ```
+    # 墙钟 deadline           : 03:57:36
+    # 最后一条 run_shell 发起 : 03:57:24   ← 只剩 12 秒
+    # 该命令实际跑完          : 03:59:16   ← 逾期 100 秒
+    # ```
+    # 那条命令的 112 秒全白费，且模型连"我还没交结论"都没机会说。
+    #
+    # 所以这个字段的作用不是"设超时"（超时由 `_solve_with_stop` 执行），
+    # 而是**让主循环知道超时在哪**，从而能按 `WALL_WARN_BANDS` 提前催促。
+    # 两处必须用**同一个** `time.monotonic()` 起点算，否则催促的"剩余秒数"
+    # 会和真正的 deadline 对不上（那是比不催更糟的谎言）。
+    wall_clock_seconds: int | None = None
+
+    #: 墙钟起点的单调时钟读数（`time.monotonic()`），由调用方设。
+    #:
+    #: ⚠️ 单独一个字段而不是在 spec 里存绝对 deadline：`SolveSpec` 可能被
+    #:    序列化/重放，`monotonic()` 的原点在进程间没有意义。存"起点"+
+    #:    `wall_clock_seconds` 两个数，任何时刻现算都一致。
+    wall_clock_started_at: float | None = None
+
     # ★ v0.36：续解时，持久区里**已经有什么**（宿主侧列出来的清单）。
     #
     # ## 为什么不能只让模型自己去 `ls`
@@ -4347,6 +4407,31 @@ _WRAPUP_DIRECTIVES: tuple[str, ...] = (
 )
 
 
+#: 墙钟三档的措辞（v0.92）。与 `_WRAPUP_DIRECTIVES` 并列。
+#:
+#: ⚠️ 三档都**必须以具体剩余时间开头**，且必须点明"硬杀"这个性质 ——
+#:    回合/成本用尽时循环条件会自然拦住，模型交出去的结论还在；墙钟到点是
+#:    `task.cancel()`，正在跑的工具调用会被直接撕掉，半截输出都拿不回来。
+#:    `{left}` 由 `_humanize_seconds` 填，`{total}` 是这次运行的总墙钟分钟数。
+_WALL_DIRECTIVES: tuple[str, ...] = (
+    (
+        "⏱ **墙钟已用约 60%，只剩 {left}**（本次运行总共给了 {total} 分钟）。"
+        "注意这和回合预算**不是一回事**：回合用不完，时间会到点。"
+        "从现在起，每条新命令都要先想「它还来得及跑完吗」。"
+    ),
+    (
+        "⏱ **墙钟已用约 80%，只剩 {left}**。停止开启新的探索方向，"
+        "只把必要的几条线关掉。**不要再发起预计超过 {left} 的命令** —— "
+        "到点会硬杀，那条命令的结果永远拿不到，等于白跑。"
+    ),
+    (
+        "🛑 **墙钟已用约 92%，只剩 {left}。到点会直接硬杀**：正在跑的命令会被"
+        "撕掉、结果丢失。**立刻停止一切新动作**，现在就把已有证据整理成 FINAL —— "
+        "此刻还没收尾的部分，到上限时会**全部作废**。"
+    ),
+)
+
+
 def _final_stretch_note(remaining: int) -> str:
     """只剩几轮时的收尾提醒（第 2 档，向后兼容的旧入口）。
 
@@ -4354,6 +4439,87 @@ def _final_stretch_note(remaining: int) -> str:
     这个函数只为兼容旧调用/测试保留，行为等价于"第 2 档 + 具体剩余轮数"。
     """
     return _wrapup_note(2, remaining)
+
+
+def _wall_clock_note(stage: int, seconds_left: int, wall_minutes: float) -> str:
+    """墙钟维度的收尾提醒（v0.92）。与 `_wrapup_note` 并列，不互相覆盖。
+
+    ## 为什么不能复用 `_wrapup_note`
+
+    回合/成本维度的措辞是"预算已用约 X%"—— 模型对"还剩 440 轮"的直觉是
+    "还有很多空间"，而墙钟的真相可能是"只剩 4 分钟"。两个数字必须**分开说**，
+    否则模型会把"轮数宽裕"误当成"时间宽裕"（这正是 32231 事故的认知根源）。
+
+    所以这条消息的第一句就是**具体剩余时间**，并且明确点出"墙钟到点会硬杀、
+    正在跑的命令会被直接撕掉"—— 因为这是唯一不给人留收尾机会的结束方式，
+    模型必须知道它和"轮数用完"性质不同。
+
+    `seconds_left` 是算出来的剩余秒数（不是比例），因为这里要的就是具体感。
+    """
+    stage = max(0, min(stage, len(_WALL_DIRECTIVES) - 1))
+    head = _WALL_DIRECTIVES[stage].format(
+        left=_humanize_seconds(seconds_left), total=f"{wall_minutes:g}"
+    )
+    return (
+        f"{head}\n"
+        "- 已经在跑的长命令：不要再发新的**同类**重试；先看它的结果再决定；\n"
+        "- 已经有依据充分的答案 → 用 FINAL 给出候选，并写清证据来自哪几次工具输出；\n"
+        "- 还没拿到答案 → 用 FINAL 说清：试过什么、结果如何、卡在哪一步、"
+        "还差什么信息。**这比再开一个新方向有用得多**。"
+    )
+
+
+def _humanize_seconds(seconds: int) -> str:
+    """把剩余秒数说成人话（`4 分 12 秒` / `38 秒`）。
+
+    ⚠️ 必须给到"秒"这一档：只说"4 分钟"时，模型可能认为还够跑一条 5 分钟的
+    命令。32231 那次正是在"看起来还有几分钟"的情况下又发了一条 112 秒的命令。
+    """
+    seconds = max(0, int(seconds))
+    if seconds < 60:
+        return f"{seconds} 秒"
+    minutes, rest = divmod(seconds, 60)
+    if rest == 0:
+        return f"{minutes} 分钟"
+    return f"{minutes} 分 {rest} 秒"
+
+
+def _wall_clock_seconds_left(spec: SolveSpec) -> int | None:
+    """离墙钟 deadline 还有几秒（`None` = 没设墙钟，或起点缺失）。
+
+    ⚠️ 与 `agent_runner._solve_with_stop` 的 deadline **必须同源**：那边是
+    `time.monotonic() + timeout_seconds`，这边是
+    `started_at + wall_clock_seconds - time.monotonic()`。两者相减为 0 才是
+    "同一刻到点"。任何一边换了时钟（比如用 `time.time()`）都会让催促使劲
+    说"还剩 5 分钟"而实际 30 秒后就硬杀 —— 那比不催更糟。
+
+    ⚠️ 负数**原样返回**（不夹到 0）：模型看到"只剩 -8 秒"比看到"只剩 0 秒"
+    更诚实 —— 说明已经过点了，这一轮随时会被撕掉。
+    """
+    if spec.wall_clock_seconds is None or spec.wall_clock_started_at is None:
+        return None
+    elapsed = time.monotonic() - spec.wall_clock_started_at
+    return int(spec.wall_clock_seconds - elapsed)
+
+
+def _wall_clock_band(spec: SolveSpec) -> int | None:
+    """墙钟用到了第几档（`None` = 没设墙钟，或还没跨过第一档）。
+
+    分母是 `wall_clock_seconds`，分子是已过秒数。用比例而不是"剩几秒"判断
+    档位，理由与 `TURN_WARN_BANDS` 同：30 分钟的 60% 和 90 分钟的 60%
+    应当触发同一档，而不是"剩 15 分钟"和"剩 40 分钟"两种截然不同的判据。
+
+    ⚠️ 墙钟 <= 0 时直接返回最高档：一个 0 秒墙钟意味着"立刻就该收尾"，
+    按比例算会得到 0/0 或负数比例，`_band_of` 会返回 None —— 那就永远不催，
+    正好是最该催的场景漏掉。
+    """
+    if spec.wall_clock_seconds is None or spec.wall_clock_started_at is None:
+        return None
+    total = spec.wall_clock_seconds
+    if total <= 0:
+        return len(WALL_WARN_BANDS) - 1
+    elapsed = time.monotonic() - spec.wall_clock_started_at
+    return _band_of(elapsed / total, WALL_WARN_BANDS)
 
 
 def _wrapup_note(stage: int, remaining: int | None = None) -> str:
@@ -4716,6 +4882,9 @@ async def solve_in_sandbox(
     # 回合维度与成本维度各记一份 —— 各自只喊一次，取更深那档注入（见主循环）。
     _warn_stage: int = -1
     _cost_warn_stage: int = -1
+    #: ★ v0.92：墙钟档位（-1 = 还没催过）。与上面两个**分开**记：三个维度
+    #: 各自只喊一次，否则同一条催促会被重复注入、迅速失去注意力。
+    _wall_warn_stage: int = -1
 
     # ★ v0.45：把"这次带了几张方法卡"从 spec 拷到 outcome。
     #
@@ -4875,6 +5044,37 @@ async def solve_in_sandbox(
                             f"{cost_fraction:.0%}"
                         )
                         _warn_stage = cost_stage
+            # ★★ v0.92：墙钟维度（学 32231 事故）。
+            #
+            # ## 为什么它排在回合/成本之后，但优先级最高
+            #
+            # 三个维度各自只喊一次（各自的 `_*_stage`）。但如果墙钟档位比
+            # 回合档位更深，说明"时间比轮数更紧" —— 这时必须以墙钟为准，
+            # 否则模型会按回合档的宽松措辞继续开新方向。
+            #
+            # ⚠️ 与成本维度不同：成本维度**覆盖**本次注入（换一条消息），
+            #    墙钟维度是**追加**。理由：两者说的是不同的事（"钱花了多少"
+            #    vs "还剩几分钟"），而模型需要同时知道 —— 32231 那次恰恰是
+            #    "轮数宽裕 + 时间将尽"的组合，只给一个数就会误导。
+            #
+            # ⚠️ 只用 `time.monotonic()`：设备改时间/校时不该影响"给了它
+            #    一小时"这个承诺（与 `agent_runner` 的 deadline 同一条理由）。
+            wall_stage = _wall_clock_band(spec)
+            if wall_stage is not None and wall_stage > _wall_warn_stage:
+                _wall_warn_stage = wall_stage
+                wall_left = _wall_clock_seconds_left(spec)
+                if wall_left is not None:
+                    recent.append(
+                        {
+                            "role": "user",
+                            "content": _wall_clock_note(
+                                wall_stage,
+                                wall_left,
+                                (spec.wall_clock_seconds or 0) / 60,
+                            ),
+                        }
+                    )
+                    log.append(f"[turn {turn}] 墙钟催促（第 {wall_stage + 1} 档）：剩 {wall_left}s")
             # ★ v0.57：每轮开始前问一次"人有没有补线索"（P2 人机协同）。
             #
             # 放在 final_stretch 之后、chat 之前：这样这一轮模型一定能看到
