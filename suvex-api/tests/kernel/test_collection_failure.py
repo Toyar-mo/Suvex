@@ -756,3 +756,172 @@ def test_wrapper_option_with_argument_is_a_documented_blind_spot() -> None:
     command = "env -u FOO curl -s http://t/"
     assert multiagent._looks_like_acting(tool_name="run_shell", command=command) is False
     assert multiagent._command_programs(command) == ["FOO"]
+
+# ══════════════════════════════════════════════════════════════════
+# v0.94：IP 八位组 / 浮点秒数不能被当成裸状态码
+# ══════════════════════════════════════════════════════════════════
+#
+# 这一组全部来自一次真实扫描的实测（`scan_01M5SMPQ3CDDDHY46F30EWMA3D`）：
+# 目标 `10.255.255.1:9`，11 次以上「一个字节都没回来」的采集失败，
+# 但「连续采集失败升格」一次都没触发。根因见 `_SUCCESS_EVIDENCE` 的注释：
+# 裸状态码正则没有排除点号，于是
+#   `10.255.255.1` → 命中 `255`
+#   `total=0.200`  → 命中 `200`
+# 两者都被判成「拿到了目标数据」。
+
+
+def test_ip_octet_is_not_a_success_code() -> None:
+    """★ IP 里的 `255` 不是状态码 —— 否则本机制在真实目标上近乎永久失效。
+
+    这是 v0.94 的核心回归点：`10.255.255.1` 是本项目最常用的
+    「不可达目标」形状（RFC1918 里的黑洞地址），而它恰好含 `255`。
+    修之前这条会红。
+    """
+    assert multiagent._SUCCESS_EVIDENCE.search("10.255.255.1") is None
+    assert multiagent._SUCCESS_EVIDENCE.search("https://10.255.255.1:9/") is None
+    # 整个判定链路也要一致：000 + 只有 IP 当上下文 → 确实是采集失败
+    cmd = "curl -sS -m 8 -k -o /dev/null -w 'code=%{http_code}' https://10.255.255.1:9/"
+    assert (
+        multiagent._looks_like_collection_failure(
+            tool_name="run_shell", command=cmd, output="code=000"
+        )
+        is True
+    )
+
+
+def test_float_seconds_are_not_a_success_code() -> None:
+    """★ `total=0.200` 里的 `200` 不是状态码。
+
+    `curl -w '... total=%{time_total}'` 是这套提示词里最常见的写法，
+    而 `time_total` 恰好经常落在 `0.200`/`0.300` 这种值上。修之前，
+    只要模型带了 `total=`，采集失败就永远数不上。
+    """
+    for out in (
+        "code=000 total=0.200",
+        "code=000 total=0.300",
+        "connect=0.000 total=0.301",
+    ):
+        assert multiagent._SUCCESS_EVIDENCE.search(out) is None
+
+    cmd = (
+        "curl -sS -m 8 -k -o /dev/null "
+        "-w 'code=%{http_code} total=%{time_total}' https://10.255.255.1:9/"
+    )
+    assert (
+        multiagent._looks_like_collection_failure(
+            tool_name="run_shell", command=cmd, output="code=000 total=0.200"
+        )
+        is True
+    )
+
+
+def test_common_target_addresses_all_count_as_failure() -> None:
+    """12 个常见目标地址，纯 `000` 输出必须全部判成采集失败。
+
+    修之前这里 5/12 误判（含 `10.255.255.1`、`192.168.200.10`、
+    `203.0.113.50`、`172.16.255.1`、`300.1.1.1`）。参数化写法是刻意的：
+    将来再改这个正则，哪一类地址退化了会直接出现在用例名里。
+    """
+    hosts = [
+        "10.255.255.1",
+        "192.168.200.10",
+        "203.0.113.50",
+        "198.51.100.7",
+        "172.16.255.1",
+        "10.0.0.1",
+        "127.0.0.1",
+        "192.168.1.1",
+        "10.20.30.40",
+        "site.example.com",
+        "300.1.1.1",
+        "1.2.3.4",
+    ]
+    for host in hosts:
+        cmd = (
+            "curl -sS -m 8 -k -o /dev/null -w 'code=%{http_code}' https://"
+            + host
+            + "/"
+        )
+        out = "curl " + host + " -> code=000"
+        assert (
+            multiagent._looks_like_collection_failure(
+                tool_name="run_shell", command=cmd, output=out
+            )
+            is True
+        ), f"{host} 应判成采集失败"
+
+
+def test_real_success_still_wins_after_the_dot_fix() -> None:
+    """修点号不能把「真的拿到了数据」一起弄丢。
+
+    `_SUCCESS_EVIDENCE` 的两条主判据（状态行、flag）与裸状态码的正常
+    形态都必须继续生效 —— 否则就变成「为了修误判，把成功全判成失败」，
+    那会在活靶子上刷出一黑板假事实，比原 bug 更糟。
+    """
+    # 状态行（带 IP 也不能干扰）
+    assert multiagent._SUCCESS_EVIDENCE.search("HTTP/1.1 200 OK") is not None
+    # curl -v 的 `< ` 前缀（真实形态就是这个）
+    assert (
+        multiagent._SUCCESS_EVIDENCE.search("< HTTP/1.1 404 Not Found") is not None
+    )
+    assert (
+        multiagent._SUCCESS_EVIDENCE.search("< HTTP/1.1 500 Internal Server Error")
+        is not None
+    )
+    # flag
+    assert multiagent._SUCCESS_EVIDENCE.search("found flag{abc}") is not None
+    # 裸状态码的正常形态：前面是空格 / 行首 / 等号，后面是空格 / 行尾
+    assert multiagent._SUCCESS_EVIDENCE.search("200") is not None
+    assert multiagent._SUCCESS_EVIDENCE.search("codes: 200 000 200") is not None
+    assert multiagent._SUCCESS_EVIDENCE.search("http_code=301") is not None
+    # 混合批次：有成功就不算失败（32231 那条「GET-only 路由枚举干净」的依据）
+    assert (
+        multiagent._looks_like_collection_failure(
+            tool_name="run_shell",
+            command="for i in 1 2 3; do curl -w '%{http_code}' http://1.2.3.4/x; done",
+            output="200 000 200",
+        )
+        is False
+    )
+
+def test_curl_verbose_status_line_is_recognized() -> None:
+    """★ `curl -sv` 打出的 `< HTTP/1.1 404` 必须算「拿到了目标数据」。
+
+    v0.94 的第二个漏判（与 IP 点号那个互相独立）：原锚点 `^\s*HTTP/`
+    要求行首只有空白，而 `curl -v`/`-sv` 给收到的每一行加了 `< ` 前缀，
+    于是 **4xx/5xx 全部被判成「一个字节都没回来」**。
+
+    坏得最彻底的正是 4xx/5xx：2xx/3xx 还有裸码兜底，4xx/5xx 只能靠
+    状态行分支。而「服务活着但路径不存在」「服务活着但崩了」恰恰是最
+    常见的两条正常结论 —— 把它们判成「目标死了」，系统会往黑板写一条
+    「目标当前不可达」的假事实，每轮推给所有 agent。
+    """
+    for code in (400, 401, 403, 404, 500, 502, 503):
+        out = "< HTTP/1.1 " + str(code) + " X" + chr(10) + "< Content-Length: 1000"
+        assert multiagent._SUCCESS_EVIDENCE.search(out) is not None, f"{code} 应被识别"
+
+    # 整个链路：状态行 + 同批次的连接失败 → 不能判成采集失败
+    cmd = "curl -sv -m 8 https://1.2.3.4/a"
+    assert (
+        multiagent._looks_like_collection_failure(
+            tool_name="run_shell",
+            command=cmd,
+            output="< HTTP/1.1 404 Not Found" + chr(10) + "curl: (7) Failed to connect",
+        )
+        is False
+    )
+
+
+def test_request_direction_arrow_is_not_a_status_line() -> None:
+    """`> HTTP/1.1` 是**请求**方向（模型自己发的），不是目标的回应。
+
+    `curl -v` 同时打 `>`（发出去）和 `<`（收到）。若把 `>` 也收了，
+    那么「发了请求、一个字节都没回来」会被判成成功 —— 本机制彻底失效。
+    同样 `*` 开头的行是 curl 自己的注释，也不可能承载状态码。
+    """
+    # 用 4xx 验证才干净：4xx 没有裸码兜底（只在 2xx/3xx 上生效），
+    # 所以「能不能识别」唯一取决于状态行分支。
+    assert multiagent._SUCCESS_EVIDENCE.search("> HTTP/1.1 404 Not Found") is None
+    assert multiagent._SUCCESS_EVIDENCE.search("* HTTP/1.1 404 Not Found") is None
+    # 对照：同一个 404，`<` 方向必须能识别
+    assert multiagent._SUCCESS_EVIDENCE.search("< HTTP/1.1 404 Not Found") is not None
