@@ -469,6 +469,51 @@ def _secret_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _stable_getsource() -> Iterator[None]:
+    """把 `inspect.getsource` 换成本项目的抗漂移版本（`tests/source_guard.py`）。
+
+    ## 为什么需要
+
+    本项目有 38 处**源码级断言**：`assert "coord.note_action(" in
+    inspect.getsource(multiagent.run_agent_loop)`。这类断言用
+    `__code__.co_firstlineno` 去**当前磁盘文件**按行号切片，隐含假设
+    「磁盘文件 == 被 import 的那份」。
+
+    全量测试跑 35–45 分钟，中途只要有人（并行会话、变异测试脚本、
+    自己边跑边改）动了被 import 的源文件，行号就漂了 —— 断言切到
+    **别的函数**，于是报红，而红的理由与要守的东西毫无关系。
+
+    ## 实测过的事故（不是假想）
+
+    - `pytest tests/kernel/` 全量 43 分钟那次，3 条接线测试报红，报错里
+      打印的 `src` 开头是 `@dataclass class AgentLoopResult` ——
+      而它们断言的是 `run_agent_loop` 的内容。
+    - 清掉 `__pycache__` 后单跑 `tests/kernel/test_termination.py`
+      → 54 passed；全量复跑 → 1640 passed / 0 failed。
+    - 所以那 3 条既不是代码回归、也不是 stale pyc 单独造成的，
+      是「进程内已 import + 磁盘文件被改」这个组合。
+
+    ## 换了之后
+
+    `tests/source_guard.getsource` 不用行号，按**名字**解析磁盘文件的 AST
+    找定义节点再切片，文件被加几百行也不影响。同名定义用限定名链消歧。
+
+    ## 为什么是 session 级、且是 autouse
+
+    - 38 处调用点分散在 12 个文件里，逐个改 import 既啰嗦又容易漏；
+      替换函数本身，所有既有调用点自动生效。
+    - session 级：替换/还原各一次，不给每个用例增加开销。
+    """
+    import inspect
+
+    from tests.source_guard import getsource as stable_getsource
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(inspect, "getsource", stable_getsource)
+        yield
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _prepare_database() -> Iterator[None]:
     """整个测试会话一次：建库 + 迁移。"""
