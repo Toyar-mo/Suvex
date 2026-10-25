@@ -3,6 +3,10 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import { defineConfig, loadEnv } from 'vite'
 
+// tsconfig.node.json 是 `module: nodenext`，相对导入必须带扩展名；
+// `allowImportingTsExtensions` 已开，Vite 侧的 esbuild 也直接吃 .ts。
+import { requireTypecheck } from './build/require-typecheck.ts'
+
 // 版本号从 package.json 读，避免在代码里维护第二份（会漂移）
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8')) as {
   version: string
@@ -143,7 +147,14 @@ export default defineConfig(({ mode }) => {
   const disableHmr = (env.VITE_DISABLE_HMR ?? '').trim() === '1'
 
   return {
-    plugins: [react()],
+    plugins: [
+      react(),
+      /*
+        产物必须来自类型检查过的代码 —— 见 build/require-typecheck.ts。
+        `npx vite build` 也能产出 dist，不挂这个插件的话它不做跨作用域检查。
+      */
+      requireTypecheck(),
+    ],
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
     },
