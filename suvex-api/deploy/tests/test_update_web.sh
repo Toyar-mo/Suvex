@@ -26,6 +26,22 @@ cleanup() {
   umount "$ROOT/site/suvex-web/dist" 2>/dev/null || true
   rm -rf "$ROOT"
 }
+
+# ★ 失败时不要把现场也删掉 —— 那等于把唯一的证据（日志、dist 内容、
+# backup_web_* 目录）一起销毁，只能靠猜。这就是刚才 I4 变红却查不出
+# 原因的过程：cleanup 先把 /tmp/wtest 删了，再看日志已经没有了。
+keep_if_failed() {
+  local rc="$1"
+  if [ "$rc" -eq 0 ]; then
+    cleanup
+  else
+    # 只 umount，保留目录内容供排查
+    umount "$ROOT/site/suvex-web/dist" 2>/dev/null || true
+    echo
+    echo "  ⚠ 有失败，现场保留在 $ROOT（日志：*.txt，备份：backup_web_*）"
+  fi
+}
+
 cleanup
 
 # ── 造最小安装骨架 ────────────────────────────────────────
@@ -569,6 +585,194 @@ NOW5=$(cat "$ROOT/site/suvex-web/dist/index.html")
 [ "$NOW5" = "$PREV5" ] && pass "已回滚到旧 index.html（'$PREV5'）" \
   || fail "★ 未回滚（期望 '$PREV5'，实际 '$NOW5'）"
 
+# ── M. ★ 三重守卫：端口分离 / 就绪是轮询 / 状态码不重复拼接 ──────
+#
+# 由来（2026-10-25 真机部署的两个**假警报**）：
+#   ① `前端根路径 → 404` —— 检查拿后端的 $HEALTH_PORT(8000) 去请求前端，
+#      而 nginx 在 8080。于是每次部署必然报 404，真正的 nginx root 配错
+#      会被这条固定假警报彻底淹没。
+#   ② `健康检查 → 000` —— 写死 `sleep 6`，实测服务要 8 秒才回 200
+#      （先 alembic 再 uvicorn，还要跑保留期清理、启两个调度器）。
+#   ③ 顺带发现 `curl -w '%{http_code}' || echo 000` 会拼出 `000000`。
+#
+# 两条假警报的共同危害不是"报错"，而是**让真实故障看起来和它一样**。
+# 所以改完必须让每条都有能变红的断言，否则下次回退没人发现。
+echo
+echo "=== M. 端口分离 / 就绪轮询 / 状态码不重复拼接 ==="
+
+CHKBIN="$ROOT/chkbin"; mkdir -p "$CHKBIN"
+URL_LOG="$ROOT/curl_urls.txt"
+ATTEMPT_FILE="$ROOT/curl_attempts.txt"
+
+# 桩 systemctl：只回答 update.sh 会问的那几种形态，不碰真服务。
+cat > "$CHKBIN/systemctl" <<'STUB'
+#!/bin/sh
+case " $* " in
+  *" show "*" WorkingDirectory "*) exit 0 ;;
+  *" is-active "*" --quiet "*) exit 0 ;;
+  *" is-active "*) echo active; exit 0 ;;
+  *" restart "*) exit 0 ;;
+esac
+exit 0
+STUB
+chmod +x "$CHKBIN/systemctl"
+
+cat > "$CHKBIN/journalctl" <<'STUB'
+#!/bin/sh
+exit 0
+STUB
+chmod +x "$CHKBIN/journalctl"
+
+# 桩 curl：记录打到哪个 URL；健康检查的返回码由 CURL_FAIL_FIRST 控制
+# （前 N 次回 000，之后回 200）—— 这样"轮询"与"重试后仍失败"都能构造。
+# 桩 curl：记录打到哪个 URL；健康检查前 CURL_FAIL_FIRST 次回 000，之后回 200。
+#
+# ★ 失败时必须 `exit 7`（真 curl 连接不上就是这个退出码）。
+# 早先这里失败也 exit 0，于是 `curl ... || echo 000` 这个**错误写法**
+# 永远不会多输出一次 000 —— M4 那条断言就成了摆设，改回去也照样绿。
+# 桩的行为要贴近真程序，否则测的是桩。
+cat > "$CHKBIN/curl" <<STUB
+#!/bin/sh
+URL=""
+for a in "\$@"; do URL="\$a"; done
+echo "\$URL" >> "$URL_LOG"
+case "\$URL" in
+  *"/api/v1/health"*)
+    N=\$(cat "$ATTEMPT_FILE" 2>/dev/null || echo 0)
+    N=\$((N+1)); echo "\$N" > "$ATTEMPT_FILE"
+    if [ "\$N" -le "\${CURL_FAIL_FIRST:-0}" ]; then
+      printf 000; exit 7
+    fi
+    printf 200; exit 0
+    ;;
+  *) printf '%s' "\${CURL_WEB_CODE:-200}"; exit 0 ;;
+esac
+STUB
+chmod +x "$CHKBIN/curl"
+
+# 不加 --no-restart 才能走到第 8 步（restart 已被桩接管，不会动真服务）。
+run_upd_full() {  # $1=logfile, 其余=extra args
+  local log="$1"; shift
+  PATH="$CHKBIN:$PATH" SUPEX_HOME="$ROOT/site" \
+    SUPEX_DATABASE_URL="postgresql+psycopg://stub:stub@127.0.0.1:5432/stub" \
+    WAIT_READY_SEC="${WAIT_READY:-20}" \
+    bash "$UPDATE_SH" "$ROOT/backend.tgz" "$@" > "$log" 2>&1
+}
+
+# —— M1/M2/M3/M4：健康检查前 3 次失败、第 4 次成功 ——
+: > "$URL_LOG"; rm -f "$ATTEMPT_FILE"
+export CURL_FAIL_FIRST=3 CURL_WEB_CODE=200
+run_upd_full "$ROOT/m_ok.txt" --web "$DISTTGZ"
+RCM=$?
+
+[ "$RCM" -eq 0 ] && pass "M：健康检查重试后成功，整体退出 0" \
+  || { fail "M：退出码 $RCM（应能重试到 200）"; tail -12 "$ROOT/m_ok.txt" | sed 's/^/    /'; }
+
+grep -q ':8080/' "$URL_LOG" \
+  && pass "M1：前端根路径打的是 WEB_PORT(8080)，不是后端端口" \
+  || fail "★ M1：前端检查没打 8080 —— 端口分离回退了（$(tr '\n' ' ' < "$URL_LOG")）"
+
+grep -q ':8000/api/v1/health' "$URL_LOG" \
+  && pass "M2：健康检查仍打后端 8000" \
+  || fail "★ M2：健康检查端口不对（$(tr '\n' ' ' < "$URL_LOG")）"
+
+HEALTH_HITS=$(grep -c '/api/v1/health' "$URL_LOG" 2>/dev/null || echo 0)
+# 前 3 次必然失败，所以真的在轮询就必须至少探测 4 次。
+# 不能用"日志里有'就绪耗时'"来判 —— 那句话在"只探测一次但碰巧成功"时也会打印，
+# 而那种实现正是这次要防的东西（写死 sleep 后只探一次）。
+[ "$HEALTH_HITS" -ge 4 ] \
+  && pass "M3：真在轮询（探测了 $HEALTH_HITS 次，前 3 次失败后成功）" \
+  || fail "★ M3：只探测了 $HEALTH_HITS 次 —— 轮询退化成单次检查了"
+
+grep -q '就绪耗时' "$ROOT/m_ok.txt" \
+  && pass "M3b：日志记录了实际就绪耗时" \
+  || fail "★ M3b：日志里没有就绪耗时"
+
+# —— M5（反向对照）：一直不健康必须在上限内判失败 ——
+# 没有这条，"轮询"可能写成"无限等"或"根本不看返回值"，两者都能让 M3 绿。
+: > "$URL_LOG"; rm -f "$ATTEMPT_FILE"
+export CURL_FAIL_FIRST=9999
+WAIT_READY=3 run_upd_full "$ROOT/m_bad.txt" --web "$DISTTGZ"
+RCM5=$?
+
+[ "$RCM5" -ne 0 ] && pass "M5：始终不健康时判失败（退出码 $RCM5）" \
+  || fail "★ M5：服务一直 000 却放行 —— 健康检查没真正生效"
+grep -qE '未返回 200' "$ROOT/m_bad.txt" \
+  && pass "M5：错误信息说明了未就绪" || fail "M5：错误信息不明确"
+
+# —— M4：状态码不许重复拼接 ——
+# `CODE="$(curl -w '%{http_code}' URL || echo 000)"` 在连接失败时，
+# curl 先输出 000、`||` 分支再输出一个 000，命令替换把两者拼成 `000000`。
+# 于是错误信息变成「未返回 200（最后：000000）」—— 看起来像个神秘状态码，
+# 而不是"没连上"。这是那个错误的**唯一指纹**，只能按字面抓。
+if grep -q '000000' "$ROOT/m_bad.txt" 2>/dev/null; then
+  fail "★ M4：出现 000000 —— \`curl -w\` 与 \`|| echo 000\` 被叠加了"
+else
+  pass "M4：状态码没有重复拼接"
+fi
+
+unset CURL_FAIL_FIRST CURL_WEB_CODE
+
+# ── N. rsync 默认判等会跳过「同大小 + 同 mtime」的文件 ──────
+#
+# 这条不是人造边界，是**实测过的静默失败**：
+#   回滚点里 `index.html` 与现场 `index.html` 大小相同、mtime 落在同一秒，
+#   `rsync -a` 就认定"没变"而跳过 —— 发布时留下旧内容、回滚时不还原，
+#   而 rsync 退出码是 0。于是脚本报"已回滚，现场恢复为旧产物"，实际没恢复。
+#   `index.html` 在同一次构建里经常只差几十字节，正是这个形状。
+#
+# 修法是给所有 rsync 加 `--checksum`（按内容判等）。下面直接测那一行：
+echo
+echo "=== N. rsync 默认判等会漏拷同大小同 mtime 的文件 ==="
+
+NCASE="$ROOT/ncase"; rm -rf "$NCASE"; mkdir -p "$NCASE/src" "$NCASE/dst"
+# 两个内容不同、但长度完全相同的字符串（6 字节）
+printf 'KEEP3\n' > "$NCASE/dst/index.html"
+printf 'KEEP4\n' > "$NCASE/src/index.html"
+# 强制同 mtime：不这样做的话两次写入可能跨秒，测不出问题
+touch -d '2026-01-01 00:00:00' "$NCASE/src/index.html" "$NCASE/dst/index.html"
+
+SZ_S=$(stat -c %s "$NCASE/src/index.html")
+SZ_D=$(stat -c %s "$NCASE/dst/index.html")
+MT_S=$(stat -c %Y "$NCASE/src/index.html")
+MT_D=$(stat -c %Y "$NCASE/dst/index.html")
+[ "$SZ_S" = "$SZ_D" ] && [ "$MT_S" = "$MT_D" ] \
+  && pass "N0：已构造出「同大小 + 同 mtime」的两个文件（$SZ_S 字节）" \
+  || fail "N0：构造失败（size $SZ_S/$SZ_D, mtime $MT_S/$MT_D）—— 本段结论无效"
+
+# 正向对照：默认 rsync 确实会跳过（证明这个坑真实存在）
+rsync -a "$NCASE/src/" "$NCASE/dst/"
+DEF_CONTENT=$(cat "$NCASE/dst/index.html")
+[ "$DEF_CONTENT" = "KEEP3" ] \
+  && pass "N1：默认 rsync 跳过了内容不同的文件（坑存在）" \
+  || fail "N1：默认 rsync 竟然拷了（$DEF_CONTENT）—— 前提不成立，N2 无意义"
+
+# 加了 --checksum 必须真的拷过去
+rsync -a --checksum "$NCASE/src/" "$NCASE/dst/"
+CK_CONTENT=$(cat "$NCASE/dst/index.html")
+[ "$CK_CONTENT" = "KEEP4" ] \
+  && pass "N2：--checksum 按内容判等，正确覆盖" \
+  || fail "★ N2：--checksum 也没拷（$CK_CONTENT）—— 回滚仍会静默失败"
+
+# N3：update.sh 里**每一条** rsync 调用都必须带 --checksum。
+# 只测单条命令不够 —— 漏了一条（比如备份那条）同样造成静默失败。
+#
+# `grep -n` 的输出是 `523:    # 注释`（冒号后还有缩进），
+# 所以排注释要用 `^[0-9]+:[[:space:]]*#`，不能写成 `^[0-9]*:#` ——
+# 后者会把所有行都当成"不是注释"，于是注释里提到的 rsync 也会被算进去。
+MISSING=""
+while IFS= read -r line; do
+  case "$line" in
+    *--checksum*) ;;
+    *) MISSING="$MISSING ${line%%:*}" ;;
+  esac
+done < <(grep -n 'rsync -a' "$UPDATE_SH" | grep -vE '^[0-9]+:[[:space:]]*#')
+if [ -z "$MISSING" ]; then
+  pass "N3：update.sh 所有 rsync 调用都带 --checksum"
+else
+  fail "★ N3：这些行的 rsync 没有 --checksum：$MISSING"
+fi
+
 echo
 echo "=============================================="
 echo "  PASS: $PASS   FAIL: $FAIL"
@@ -579,5 +783,5 @@ else
 fi
 echo "=============================================="
 
-cleanup
+keep_if_failed $RC
 exit $RC

@@ -106,6 +106,10 @@ NO_RESTART=0
 KEEP_BACKUPS=3
 HEALTH_PATH="${HEALTH_PATH:-/api/v1/health}"
 HEALTH_PORT="${HEALTH_PORT:-8000}"
+# 前端由 nginx 提供，端口与后端的 uvicorn **不是同一个**。
+# 本机实测：8080 是 nginx 站点（server_name suvex.asia，SPA fallback），
+# 80 是 nginx 默认站（try_files → 404）。所以默认打 8080。
+WEB_PORT="${WEB_PORT:-8080}"
 
 usage() {
   sed -n '3,66p' "$0" | sed 's/^# \{0,1\}//'
@@ -320,7 +324,19 @@ fi
 # ── 4. 覆盖 ─────────────────────────────────────────────────
 step "覆盖代码"
 
-for d in app prompts alembic; do
+# ★ 2026-10-25 实测纠正：拷贝范围与 md5 回验范围必须来自**同一份清单**。
+#
+# 原实现里第 4 步硬编码 `for d in app prompts alembic`，第 5 步却
+# `find "$SRC" -type f  \( -name '*.py' -o ... \)` 遍历**整包**。
+# 只要包里带了 tests/、docs/、scripts/、README.md 等从不部署的东西，
+# 回验就会把它们全报成「不一致 / 缺失」，然后 die 4 在迁移前中止部署。
+#
+# 实测：`git archive HEAD` 打全树（440 文件）跑真机部署 → 88 个文件报不一致。
+# 不是文件坏了，是**校验口径与被拷贝口径脱节**。以前手工打包恰好只装那三个
+# 目录，所以这个缺陷一直没暴露。
+DEPLOY_DIRS="app prompts alembic"
+
+for d in $DEPLOY_DIRS; do
   if [ -d "$SRC/$d" ]; then
     run cp -a "$SRC/$d/." "$API_DIR/$d/"
     ok "$d/ 已覆盖"
@@ -329,30 +345,46 @@ for d in app prompts alembic; do
   fi
 done
 
+# 包里除这三个目录外的东西**不会**被部署。明确说出来，不静默：
+IGNORED_DIRS=""
+for e in "$SRC"/*/; do
+  [ -d "$e" ] || continue
+  b="$(basename "$e")"
+  case " $DEPLOY_DIRS " in *" $b "*) ;; *) IGNORED_DIRS="$IGNORED_DIRS $b" ;; esac
+done
+IGNORED_FILES="$(find "$SRC" -maxdepth 1 -mindepth 1 -type f 2>/dev/null | wc -l)"
+if [ -n "$IGNORED_DIRS" ] || [ "${IGNORED_FILES:-0}" -gt 0 ]; then
+  warn "包里另有内容不参与部署（只更新 $DEPLOY_DIRS）：${IGNORED_DIRS:- （无目录）}，另有 $IGNORED_FILES 个顶层文件"
+fi
+
 # ── 5. md5 回验（本脚本的核心）──────────────────────────────
 step "md5 回验"
 
 # 逐个文件比对 tar 包与目标目录。这是"漏拷文件"唯一的可靠防线 ——
 # 只 diff 目录树不够，因为源与目标都在同一台机上时容易自我印证。
+# 范围就是上面实际拷贝过的 DEPLOY_DIRS，一个不多一个不少。
 if [ "$DRY_RUN" -eq 0 ]; then
   MISMATCH=0
   CHECKED=0
-  while IFS= read -r f; do
-    rel="${f#"$SRC"/}"
-    dst="$API_DIR/$rel"
-    if [ ! -f "$dst" ]; then
-      printf '  %s✗ 缺失：%s%s\n' "$C_ERR" "$rel" "$C_RESET"
-      MISMATCH=$((MISMATCH + 1))
-      continue
-    fi
-    a="$(md5sum "$f" | cut -d' ' -f1)"
-    b="$(md5sum "$dst" | cut -d' ' -f1)"
-    if [ "$a" != "$b" ]; then
-      printf '  %s✗ 不一致：%s%s\n' "$C_ERR" "$rel" "$C_RESET"
-      MISMATCH=$((MISMATCH + 1))
-    fi
-    CHECKED=$((CHECKED + 1))
-  done < <(find "$SRC" -type f \( -name '*.py' -o -name '*.md' -o -name '*.ini' -o -name '*.json' -o -name '*.sql' -o -name '*.txt' \) ! -path '*__pycache__*')
+  for d in $DEPLOY_DIRS; do
+    [ -d "$SRC/$d" ] || continue
+    while IFS= read -r f; do
+      rel="${f#"$SRC"/}"
+      dst="$API_DIR/$rel"
+      if [ ! -f "$dst" ]; then
+        printf '  %s✗ 缺失：%s%s\n' "$C_ERR" "$rel" "$C_RESET"
+        MISMATCH=$((MISMATCH + 1))
+        continue
+      fi
+      a="$(md5sum "$f" | cut -d' ' -f1)"
+      b="$(md5sum "$dst" | cut -d' ' -f1)"
+      if [ "$a" != "$b" ]; then
+        printf '  %s✗ 不一致：%s%s\n' "$C_ERR" "$rel" "$C_RESET"
+        MISMATCH=$((MISMATCH + 1))
+      fi
+      CHECKED=$((CHECKED + 1))
+    done < <(find "$SRC/$d" -type f ! -path '*__pycache__*')
+  done
 
   if [ "$MISMATCH" -gt 0 ]; then
     die 4 "md5 回验失败：$MISMATCH 个文件不一致（已检查 $CHECKED）。备份在 $BACKUP，回滚：cp -a $BACKUP/* $API_DIR/"
@@ -396,13 +428,34 @@ else
   [ -f "$WEB_TARBALL" ] || die 6 "找不到前端包：$WEB_TARBALL"
   WEB_TARBALL="$(readlink -f "$WEB_TARBALL")"
 
-  # dist 是 **bind mount**（nginx 从 /opt 看，代码在 /root）。
-  # 所以只能动"挂载点里的内容"，绝不能删目录本身 —— 见文件头那段事故记录。
+  # dist 可能是 **bind mount**（nginx 从 /opt 看，代码在 /root，两边是同一个 inode）。
+  #
+  # ⚠️ 2026-10-25 实测纠正：原来的判断是 `mountpoint -q "$WEB_DIST"`，而那
+  # **永远返回 false** —— 因为 `WEB_DIST` 是 bind mount 的**源**，挂载点在
+  # `/opt/suvex/suvex-web/dist`。真机上 `findmnt` 的输出是：
+  #
+  #   /opt/suvex/suvex-web/dist  /dev/sda1[/root/suvex/suvex-web/dist]  ext4
+  #
+  # 于是脚本一直打印「不是挂载点」，与实际拓扑相反 —— 提示错不可怕，
+  # 可怕的是它让人以为「这里可以直接 rm -rf」，而那次 403 事故正是这么来的。
+  #
+  # 所以这里查的是「这条路径是否被当作 bind mount 的源引用过」，
+  # 并把真实形态如实报出来，不再猜。
+  WEB_IS_MOUNT=0
   if mountpoint -q "$WEB_DIST" 2>/dev/null; then
+    WEB_IS_MOUNT=1
     ok "$WEB_DIST 是挂载点（只替换内容，保留目录）"
+  elif grep -qF "[/$WEB_DIST]" /proc/self/mountinfo 2>/dev/null \
+       || awk -v d="$WEB_DIST" '$0 ~ / - / { for (i=1;i<=NF;i++) if ($i == d) found=1 } END{exit !found}' /proc/self/mountinfo 2>/dev/null; then
+    WEB_IS_MOUNT=1
+    ok "$WEB_DIST 是 bind mount 的源（挂载点另有其处；只替换内容，保留目录）"
   else
-    ok "$WEB_DIST 不是挂载点（直接替换内容）"
+    ok "$WEB_DIST 既不是挂载点也不是 bind mount 源（直接替换内容）"
   fi
+
+  # 无论哪种形态，都只用 rsync 动内容、绝不删目录本身。
+  # 这里显式记一笔，防止后来的人看到"不是挂载点"就写 rm -rf。
+  [ "$WEB_IS_MOUNT" -eq 1 ] || true
 
   WEB_STAGE="$(mktemp -d /tmp/suvex_web.XXXXXX)"
   # 注意：不能把 WEB_STAGE 的清理挂在 EXIT trap 上 —— 原来的 trap 已经
@@ -437,13 +490,13 @@ else
   ok "新产物：index.html $(wc -c < "$WEB_SRC/index.html") 字节，assets/ $ASSET_N 个文件"
 
   if [ "$DRY_RUN" -eq 1 ]; then
-    run rsync -a --delete "$WEB_SRC/" "$WEB_DIST/"
+    run rsync -a --checksum --delete "$WEB_SRC/" "$WEB_DIST/"
     rm -rf "$WEB_STAGE"
   else
     WEB_BACKUP="$SUPEX_HOME/backup_web_$(date +%Y%m%d_%H%M%S)"
     mkdir -p "$WEB_BACKUP"
     # 备份失败就必须在**动现场之前**停下 —— 否则后面出事没有回滚点。
-    if ! rsync -a "$WEB_DIST/" "$WEB_BACKUP/"; then
+    if ! rsync -a --checksum "$WEB_DIST/" "$WEB_BACKUP/"; then
       rm -rf "$WEB_STAGE"
       die 6 "旧产物备份失败，未做任何改动（现场完好）"
     fi
@@ -460,19 +513,27 @@ else
     # 光靠"用 rsync 不用 rm"不够：rsync 自己也可能中途失败（磁盘满、
     # 悬空链接、权限错误），那时 dist 里是**半套产物** —— 比空目录更难查。
     # 所以把回滚做成**唯一出口**，不在每个分支里重复写。
+    #
+    # ★ --checksum 不是优化，是正确性要求。
+    # rsync 默认按「大小 + mtime」判等。两套产物里同名同大小的文件
+    # （`index.html` 常见，回滚点与现场经常只差几十字节、同一秒生成）
+    # 会被判成"没变"而**跳过不拷** —— 发布时留下旧内容，回滚时不还原。
+    # 两者都是静默的：rsync 退出码 0，脚本报成功。
+    # 实测复现：`echo KEEP3 > dst/index.html` 与 `echo KEEP4 > src/index.html`
+    # 同秒生成，`rsync -a src/ dst/` 后 dst 仍是 KEEP3。
     web_rollback() {
       local reason="$1"
       rm -rf "$WEB_STAGE"
-      if rsync -a --delete "$WEB_BACKUP/" "$WEB_DIST/"; then
+      if rsync -a --checksum --delete "$WEB_BACKUP/" "$WEB_DIST/"; then
         die 6 "$reason —— 已从 $WEB_BACKUP 回滚，现场恢复为旧产物"
       else
-        die 6 "$reason —— 且自动回滚失败！立即人工恢复：rsync -a --delete $WEB_BACKUP/ $WEB_DIST/"
+        die 6 "$reason —— 且自动回滚失败！立即人工恢复：rsync -a --checksum --delete $WEB_BACKUP/ $WEB_DIST/"
       fi
     }
 
     # ★ 关键：rsync 只动挂载点里的内容，不碰挂载点自身。
     #   这一条就是"rm -rf 清空挂载点"事故的根治办法。
-    if ! rsync -a --delete "$WEB_SRC/" "$WEB_DIST/"; then
+    if ! rsync -a --checksum --delete "$WEB_SRC/" "$WEB_DIST/"; then
       web_rollback "rsync 发布失败"
     fi
 
@@ -499,11 +560,17 @@ else
 
     # 线上取一次 index.html，确认 nginx 真的能读到新产物。
     # 这一步能抓到"dist 没错但 nginx root 指向别处"这种更难的问题。
-    WEB_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HEALTH_PORT/" || echo 000)"
+    #
+    # ★ 必须打 nginx 的端口，不是 uvicorn 的端口。
+    # 这两个是不同的监听：后端 $HEALTH_PORT（默认 8000），前端由 nginx 提供
+    # （本机实测 8080，server_name suvex.asia）。早先这里写的是 $HEALTH_PORT，
+    # 于是每次部署都必然报「前端根路径 → 404」，纯属误报，而真正的 404 会被
+    # 这条固定的假警报淹没。
+    WEB_CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$WEB_PORT/" 2>/dev/null)" || WEB_CODE=000
     if [ "$WEB_CODE" = "200" ] || [ "$WEB_CODE" = "301" ] || [ "$WEB_CODE" = "302" ]; then
-      ok "前端根路径 → $WEB_CODE"
+      ok "前端根路径（端口 $WEB_PORT）→ $WEB_CODE"
     else
-      warn "前端根路径 → $WEB_CODE（nginx root 是否指向 $WEB_DIST？）"
+      warn "前端根路径（端口 $WEB_PORT）→ $WEB_CODE（nginx root 是否指向 $WEB_DIST？或改 WEB_PORT=）"
     fi
   fi
 fi
@@ -516,19 +583,47 @@ if [ "$NO_RESTART" -eq 1 ]; then
 else
   run systemctl restart suvex-api
   if [ "$DRY_RUN" -eq 0 ]; then
-    sleep 6
-    STATE="$(systemctl is-active suvex-api || true)"
+    # ★ 不能写死 sleep 6。本机实测：restart 到 /health 真的回 200 需要 8 秒
+    # （先 alembic upgrade 再 uvicorn 起来，还要跑保留期清理、启两个调度器）。
+    # 写死 6 秒的结果就是每次部署都在「还没起来」时探测，报一个假的
+    # `健康检查 → 000`；而真正的启动失败会被这条固定的假警报掩盖。
+    #
+    # 改成轮询到就绪，上限由 WAIT_READY_SEC 控制；超时才判失败。
+    WAIT_READY_SEC="${WAIT_READY_SEC:-60}"
+    STATE=""
+    READY=0
+    WAITED=0
+    while [ "$WAITED" -lt "$WAIT_READY_SEC" ]; do
+      STATE="$(systemctl is-active suvex-api 2>/dev/null || true)"
+      if [ "$STATE" = "active" ]; then
+        CODE="$(curl -s -o /dev/null -w '%{http_code}' \
+          "http://127.0.0.1:$HEALTH_PORT$HEALTH_PATH" 2>/dev/null)" || CODE=000
+        if [ "$CODE" = "200" ]; then
+          READY=1
+          break
+        fi
+      elif [ "$STATE" = "failed" ]; then
+        # 已经注定失败，不必再等满上限
+        die 5 "服务进入 failed 状态 —— journalctl -u suvex-api -n 100"
+      fi
+      sleep 1
+      WAITED=$((WAITED + 1))
+    done
+
     if [ "$STATE" = "active" ]; then
       ok "服务 active"
     else
       die 5 "服务未进入 active（当前：$STATE）—— journalctl -u suvex-api -n 100"
     fi
 
-    CODE="$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$HEALTH_PORT$HEALTH_PATH" || echo 000)"
-    if [ "$CODE" = "200" ]; then
-      ok "健康检查 $HEALTH_PATH → 200"
+    # ★ curl 的 `-w '%{http_code}'` 在连接失败时自己就会输出 `000`，
+    # 再挂 `|| echo 000` 会变成 `000000`（两次输出拼在一起）。
+    # 实测就是这样拿到 "→ 000000" 的，看起来像某种神秘状态码。
+    # 正确写法：只用 -w，让 curl 自己给 000。
+    if [ "$READY" -eq 1 ]; then
+      ok "健康检查 $HEALTH_PATH → 200（就绪耗时 ${WAITED}s）"
     else
-      die 5 "健康检查 $HEALTH_PATH → $CODE"
+      die 5 "健康检查 $HEALTH_PATH 在 ${WAIT_READY_SEC}s 内未返回 200（最后：$CODE）"
     fi
 
     # 只看 error/traceback 不够：`relation ... does not exist` 这类
