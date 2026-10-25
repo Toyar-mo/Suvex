@@ -69,7 +69,7 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.core.db import get_or_create_singleton, get_session_factory
+from app.core.db import get_engine, get_or_create_singleton, get_session_factory
 from app.settings.models import SINGLETON_ID, KernelConfig
 
 _REAL_GET = Session.get
@@ -152,9 +152,27 @@ def test_pending_changes_survive_the_race(seeded):
     `db.rollback()`，实测会把调用方未提交的改动一起丢掉
     （`_tmp/er/probe_savepoint.py` 的输出）。
     """
-    other = get_session_factory()()
+    # ⚠️ 绑到显式持有的 Connection：TEMP TABLE 是连接级对象，而
+    # `Session.commit()` 会把连接还回 pool，下次 execute 可能 checkout 到
+    # **另一条物理连接**，临时表就"消失"了（实测 pid 会变）。
+    # 当前这条测试恰好走的是「撞主键 → 重读命中 → 提前 return」，
+    # 没有 commit 发生，所以侥幸不飘；但一旦 `get_or_create_singleton`
+    # 的成功路径被改动（或 seeded 未生效），就会变成难查的 flake。
+    # 同修法见 tests/test_rollback_discipline.py。
+    conn = get_engine().connect()
+    other = Session(bind=conn)
     try:
         other.execute(text("CREATE TEMP TABLE _probe_pending (v int)"))
+        # ⚠️ 建表必须先 commit，只让 INSERT 停在不提交状态。
+        #
+        # 否则被改坏点的 `db.rollback()` 会把**表本身**一起回滚掉，
+        # 报错变成 `UndefinedTable: relation "_probe_pending" does not exist`
+        # —— 测试确实红了，但诊断指向"基础设施坏了"，而不是"回滚吞掉了
+        # 调用方的改动"。实测过这个假诊断，和我上一轮踩的
+        # 「红了但不是因为那条断言」是同一类陷阱。
+        # 提交建表后，改动只能落在 INSERT 那一行上，断言才会响亮。
+        # （绑定的 Connection 不受影响：commit 只结束事务、不还池。）
+        other.commit()
         other.execute(text("INSERT INTO _probe_pending VALUES (42)"))
         # 刻意不 commit —— 这就是「待提交的业务改动」
 
@@ -165,6 +183,7 @@ def test_pending_changes_survive_the_race(seeded):
         assert n == 1, "撞主键把调用方未提交的改动吞掉了"
     finally:
         other.close()
+        conn.close()
 
 
 def test_fallback_branch_retries_inside_savepoint(seeded):
