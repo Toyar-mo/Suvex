@@ -58,7 +58,7 @@ from app.chat.prompts import (
     build_system_prompt,
     may_call_tool,
 )
-from app.chat.stream import EVENT_AWAITING, EVENT_MESSAGE, EVENT_PHASE, Emit
+from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
 
 _log = logging.getLogger(__name__)
 
@@ -157,6 +157,91 @@ async def _emit_phase(
     if emit is None:
         return
     await emit(EVENT_PHASE, {"phase": phase, "round": round_index, **extra})
+
+
+async def _emit_delta(emit: Emit | None, text: str) -> None:
+    """推一段**确认安全**的正文增量（v0.102）。
+
+    `text` 必须是 `HoldbackBuffer` 放行过的前缀 —— 它已经过了
+    「不含 `ACTION:` / `FINAL:` 协议起头」这道闸。调用方**不要**把
+    模型原始 token 直接喂进来，那样内部协议会出现在用户视野里。
+    """
+    if emit is None or not text:
+        return
+    await emit(EVENT_DELTA, {"text": text})
+
+
+async def _call_model(
+    gateway: Any,
+    messages: list[dict[str, str]],
+    *,
+    system: str,
+    emit: Emit | None,
+) -> Any:
+    """调一次模型：**能流式就流式，否则退回非流式**（v0.102）。
+
+    ## 返回什么
+
+    始终是一个 `LlmReply`（`text` 是**完整原文**，含 `ACTION:` 部分）——
+    调用方（主循环）走的那条路与非流式时代**完全一样**：它仍然
+    `parse_actions(raw_text)`、仍然 `_narration_before_action(raw_text)` 落库。
+    流式只影响「中途推了什么给界面」，不影响「拿到手的回复长什么样」。
+
+    这是刻意的：如果流式路径返回拼起来的增量，那它必然缺 ACTION 段
+    （增量通道把协议扣掉了），`parse_actions` 就永远解析不出工具调用 ——
+    对话会退化成纯聊天，而且**没有任何报错**。
+
+    ## 什么时候不流式
+
+    `emit is None` —— 也就是非流式入口（`POST /messages`）。那条路径没有
+    人在看流，多一次 SSE 解析只是白花 CPU，且被审批/重放/大量测试用着，
+    让它走一条新的 HTTP 路径没有收益。
+
+    ## ★ 流式失败必须能退回非流式，不能整轮失败
+
+    流式比我方其它 HTTP 路径**新**，而接入点生态参差：某些自建网关对
+    `stream: true` 直接 400，某些代理会把 SSE 缓冲到整段才吐。
+    这两种情况下重发一次非流式请求是**便宜且正确**的兜底 —— 用户最坏
+    拿到的就是改造前的体验，而不是"这个模型用不了"。
+
+    但兜底只在**还没推出去任何字**时成立：已经推了半句再重来一遍，
+    界面上会出现"这句话写了两遍"。所以用 `pushed` 记着。
+    """
+    if emit is None:
+        return await gateway.chat(messages, system=system)
+
+    from app.chat.holdback import HoldbackBuffer
+    from app.kernel.runner import LlmReply, parse_usage  # 循环 import 规避
+
+    buffer = HoldbackBuffer()
+    collected: list[str] = []
+    pushed = False
+    try:
+        async for delta in gateway.chat_stream(messages, system=system):
+            collected.append(delta)
+            safe = buffer.feed(delta)
+            if safe:
+                pushed = True
+                await _emit_delta(emit, safe)
+        tail = buffer.flush()
+        if tail:
+            pushed = True
+            await _emit_delta(emit, tail)
+    except Exception:  # noqa: BLE001
+        if pushed:
+            # 已经吐出字了 —— 不能重来，只能如实失败。
+            raise
+        _log.info("流式调模型失败，退回非流式重试一次", exc_info=True)
+        return await gateway.chat(messages, system=system)
+
+    raw_text = "".join(collected)
+    return LlmReply(
+        text=raw_text,
+        source="content",
+        raw={},
+        usage=parse_usage({}),
+        finish_reason="",
+    )
 
 
 # ══════════════════════════════════════════════════════════
@@ -738,9 +823,42 @@ def _narration_before_action(text: str) -> str:
 
     ⚠️ 去掉代码围栏：模型常把 ACTION 包在 ``` 里，直接切会让正文尾部
       带一串 ```，界面上像是 Markdown 渲染坏了。
+
+    ## ★★ v0.102：判据必须与 `parse_actions` 用同一个正则（修一个真实缺陷）
+
+    原来这里用的是朴素的 `text.find("ACTION:")`，而解析器用的是
+    `runner._MARKER = re.compile(r"^\\s*(ACTION|FINAL)\\s*[:：]", re.MULTILINE)`。
+    两处判据不一致，产生了两个**方向相反**的缺陷：
+
+    **① 全角冒号：解析器认、这里不认 → 裸 JSON 漏给用户**
+
+            '好的。\\nACTION：{"tool": "run_shell", "args": {}}'
+
+        `parse_actions` 用 `[:：]` 认出了动作并**真的执行了工具**；
+        而 `find("ACTION:")` 找不到半角冒号，于是**整段（含裸 JSON）落库**。
+        界面上表现为"机器人把内部协议漏出来了"，而同时它的工具调用成功了 ——
+        这正是本函数 docstring 上半段在防的那个事故，只是换了个触发条件。
+
+    **② 行首之外的出现：这里认、解析器不认 → 正文被腰斩**
+
+            '我看到一段 ACTION: 开头的日志，那是模型写的。'
+
+        这句话里的 `ACTION:` 不在行首，`_MARKER` 要求 `^\\s*` 所以**不匹配**,
+        也就是这一轮**没有任何动作**。而 `find` 会命中，于是正文被切成
+        "我看到一段" —— 用户看到一句没说完的话。
+
+    两个都只在特定输入下出现，所以线上一直没炸；但都是**静默**的。
+    修法不是各打各的补丁，而是让两处共用同一个判据：这里直接 import
+    解析器的 `_MARKER`。
+
+    ⚠️ 连带影响：`FINAL:` 现在也会被切开。对话页从不产出 FINAL
+      （那是解题侧的收尾协议），模型偶尔会照猫画虎写出来 ——
+      那种东西同样不该出现在用户气泡里，所以这是个改进而不是回归。
     """
-    marker = text.find("ACTION:")
-    head = text[:marker] if marker >= 0 else text
+    from app.kernel.runner import _MARKER  # noqa: PLC2701 - 见上：必须与解析器同一判据
+
+    match = _MARKER.search(text)
+    head = text[: match.start()] if match else text
     return head.replace("```", "").strip()
 
 
@@ -1000,7 +1118,9 @@ async def run_turn(
             )
 
         try:
-            reply = await gateway.chat(messages, system=system_this_round)
+            reply = await _call_model(
+                gateway, messages, system=system_this_round, emit=emit
+            )
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败", exc_info=True)
             raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc

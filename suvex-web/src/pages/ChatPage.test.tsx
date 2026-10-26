@@ -120,6 +120,10 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     //   少一个字段意味着页面读到 undefined，渲染逻辑会静默走错分支。
     phase: null,
     interjections: [],
+    // ★ v0.102：正在流入的正文。同上，必须显式给 —— 缺了 tsc 会报，
+    //   而页面读到 undefined 时会走错分支（`!== null` 对 undefined 成立，
+    //   于是渲染一个空白的流式气泡）。
+    streamingText: null,
     deciding: false,
     ...overrides,
   }
@@ -753,5 +757,120 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
     expect(box, '插话没有显示在消息流里').not.toBeNull()
     expect(box?.textContent).toContain('顺便看下 8080')
     expect(box?.textContent).toContain('下一轮')
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  ChatPage — 工具调用收成一行（v0.103）
+  ══════════════════════════════════════════════════════════════
+
+  用户先贴了一张 `list_challenges` 的卡把 20 道题全铺在对话流中间（整屏
+  都是它），说「像这种可以折叠」；第一版做的是"长输出才折叠"，用户随后又贴
+  了 Claude Code 的截图说「就是要类似这样的」—— 那里的工具调用**默认就是
+  一行**，跟输出长短无关。
+
+  所以判据从"多长算长"变成"默认收成一行"。这里钉几条会真的骗到人的形态：
+
+  ① 默认必须收着（否则对话页又会被过程输出淹掉，回到用户抱怨的原点）
+  ② 收着时**不能把全文留在 DOM 里**（否则折叠只是视觉把戏：Ctrl+F 还能搜到
+     藏起来的内容，屏幕阅读器也照样读完全部）
+  ③ 折叠态那一行必须说清"干了什么"（工具名 + 参数摘要），不能只剩一个图标
+     —— 收起来就看不出这是哪次调用，用户得挨个点开找
+  ④ 失败必须在**折叠态**就看得出来（收起来看不见"失败"，用户会漏掉工具偷偷挂了）
+  ⑤ 展开后能看到全文，且 aria 状态跟着翻转（屏幕阅读器用户靠它判断）
+*/
+describe('ChatPage — 工具调用收成一行（v0.103）', () => {
+  // 用户截图里那张卡的形状：20 行短记录
+  const manyLines = Array.from({ length: 20 }, (_, i) => `- 第 ${i + 1} 条记录`).join('\n')
+
+  function renderTool(
+    content: string,
+    failed: boolean | null = false,
+    toolArgs: Record<string, unknown> | null = null,
+  ) {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [
+            message({ id: 'u1', seq: 1, role: 'user', content: '题库里还有什么没解' }),
+            message({
+              id: 't1',
+              seq: 2,
+              role: 'tool',
+              content,
+              toolName: 'list_challenges',
+              toolArgs,
+              toolFailed: failed,
+            }),
+          ],
+        },
+      }),
+    )
+    return renderPage('/chat?session=chat_1')
+  }
+
+  it('★ 默认收着 —— 输出再短也不铺开（收着才是默认值，不是"太长才收"）', () => {
+    const { container } = renderTool('OK')
+
+    const card = container.querySelector('[data-message-row="tool"]')
+    expect(card, '工具卡没渲染出来').not.toBeNull()
+    expect(card?.getAttribute('data-tool-collapsed'), '短输出被铺开了').toBe('true')
+    expect(container.querySelector('[data-tool-toggle="true"]')).not.toBeNull()
+  })
+
+  it('★ 收着时正文全文不在 DOM 里（只靠 CSS 藏 = 假折叠）', () => {
+    const { container } = renderTool(manyLines)
+
+    const card = container.querySelector('[data-message-row="tool"]')
+    expect(card?.getAttribute('data-tool-collapsed')).toBe('true')
+
+    /*
+      ★ 这条是折叠的关键判据。
+        如果收着的时候全文仍在 DOM（只靠 CSS 隐藏），那"折叠"就是视觉把戏：
+        Ctrl+F 能搜到藏起来的内容，屏幕阅读器也照样读完全部。用户以为自己
+        收起来了，其实没有。
+    */
+    expect(card?.textContent, '折叠态把全文留在 DOM 里了 —— 那不是折叠').not.toContain(
+      '第 20 条记录',
+    )
+  })
+
+  it('★ 那一行要说清"干了什么"：工具名 + 参数摘要（只剩图标等于没信息）', () => {
+    const { container } = renderTool('done', false, { command: 'nmap -sV 10.0.0.5' })
+
+    const card = container.querySelector('[data-message-row="tool"]')
+    expect(card?.textContent).toContain('list_challenges')
+    expect(card?.textContent, '参数摘要没显示 —— 收起来就看不出是哪次调用').toContain(
+      'nmap -sV 10.0.0.5',
+    )
+  })
+
+  it('★ 失败在折叠态就看得到（收起来看不见失败 = 用户漏掉工具挂了）', () => {
+    const { container } = renderTool(manyLines, true)
+
+    const card = container.querySelector('[data-message-row="tool"]')
+    expect(card?.getAttribute('data-tool-collapsed')).toBe('true')
+    expect(card?.textContent).toContain('失败')
+  })
+
+  it('★ 点开后看到全文，aria 与文案都翻转', () => {
+    const { container } = renderTool(manyLines)
+
+    const toggle = container.querySelector('[data-tool-toggle="true"]') as HTMLElement | null
+    expect(toggle, '工具卡没有折叠开关').not.toBeNull()
+    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
+
+    // 上面那条 expect 只在运行时生效，tsc 不认它是类型收窄 —— 显式断言非空。
+    if (!toggle) throw new Error('unreachable')
+    fireEvent.click(toggle)
+
+    const card = container.querySelector('[data-message-row="tool"]')
+    expect(card?.getAttribute('data-tool-collapsed')).toBe('false')
+    expect(card?.textContent).toContain('第 20 条记录')
+
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.textContent).toContain('收起')
   })
 })

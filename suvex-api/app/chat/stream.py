@@ -63,6 +63,38 @@ EVENT_AWAITING = "awaiting"
 EVENT_DONE = "done"
 EVENT_ERROR = "error"
 
+#: ★ v0.102：正文的**增量**。`{"text": "..."}` 是要追加到「正在生成那条」
+#: 尾巴上的字。
+#:
+#: ## 为什么在已有 `message` 帧之外还要一个 `delta`
+#:
+#: `message` 帧推的是**已落库**的整条消息 —— 它是权威的、刷新页面还能看到。
+#: 但它是**成块**的：模型想完一整段才有得推，界面上那块文字一瞬间铺开。
+#: 用户的原话是「消息是一瞬间蹦出一大块」。
+#:
+#: 调研三个同类项目（LibreChat / Open WebUI / LobeChat）之后的结论：
+#: 它们看起来「逐字长出来」**不是因为入场动画**，是因为正文本来就是
+#: 逐 token 到达的。Open WebUI 的 `ResponseMessage.svelte` 里唯一的
+#: `in:fade` 用在后继建议 chips 上，消息行本身零入场动画。
+#:
+#: 所以这里加一条增量通道：`delta` 负责**过程**，`message` 仍是**结果**。
+#: 两者的关系是硬不变式：**所有 delta 拼起来（规范化后）是随后那条
+#: `message` 帧 content 的前缀**。
+#:
+#: ## ★ 为什么是「前缀」而不是「相等」
+#:
+#: 引擎把 `ACTION: {...}` 之前的正文落库（`_narration_before_action`）。
+#: delta 通道只推那一部分（`app/chat/holdback.py` 的暂扣缓冲负责），
+#: 所以拼起来的 delta 必然落在落库正文之内。
+#:
+#: 但两处对**代码围栏**的处理无法逐字节相等：落库侧会
+#: `.replace("```", "")`（拿到整段才做得对），而实时缓冲做不到 ——
+#: 未闭合的 ` ``` ` 只有在流结束后才知道它是不是代码块的开头，而已经
+#: emit 出去的帧撤不回来。这个差异用户看不到（围栏是 Markdown 的零宽
+#: 结构标记）。所以不变式退到"去掉围栏与空白后为前缀"，由
+#: `tests/chat/test_holdback.py` 钉住。
+EVENT_DELTA = "delta"
+
 #: 推一帧的回调：`(event_name, payload)`。
 #:
 #: `engine.run_turn` 拿到的就是它。**它必须是可选的** —— 非流式路径
@@ -177,6 +209,7 @@ async def stream_turn(
 
 __all__ = [
     "EVENT_AWAITING",
+    "EVENT_DELTA",
     "EVENT_DONE",
     "EVENT_ERROR",
     "EVENT_MESSAGE",

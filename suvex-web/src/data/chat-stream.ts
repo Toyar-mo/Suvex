@@ -47,6 +47,29 @@ export const TURN_AWAITING = 'awaiting'
 export const TURN_DONE = 'done'
 export const TURN_ERROR = 'error'
 
+/**
+ * ★ v0.102：正文的**增量**。`{ text }` 是要追加到「正在生成那条」尾巴上的字。
+ *
+ * 加它的原因：`message` 帧推的是**已落库**的整条消息，它是权威的、刷新
+ * 还在，但它是**成块**的 —— 模型想完一整段才有得推，界面上那块文字
+ * 一瞬间铺开。用户的原话是「消息是一瞬间蹦出一大块」。
+ *
+ * 调研三个同类项目之后的结论推翻了「加个入场动画」的方案：它们看起来
+ * 逐字长出来**不是因为动画**，是因为正文本来就逐 token 到达。
+ *
+ * 两者的分工：`delta` 负责过程，`message` 仍是结果。收到 `message` 帧时
+ * 用它的 content **整体替换**流式缓冲 —— 不用增量拼出最终文本。理由：
+ * 服务端落库时对正文做过裁剪（`_narration_before_action`），增量是它的
+ * 前缀但不保证逐字节相等（比如首尾空白），拿增量当真值会让界面与刷新后
+ * 的界面差一个字。
+ */
+export const TURN_DELTA = 'delta'
+
+/** `delta.data` 的形态。 */
+export interface DeltaPayload {
+  text: string
+}
+
 /** `phase.data` 的形态。 */
 export interface PhasePayload {
   phase: 'thinking' | 'tool'

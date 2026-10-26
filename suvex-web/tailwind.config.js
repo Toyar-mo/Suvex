@@ -366,6 +366,20 @@ export default {
           '0%, 100%': { opacity: '1' },
           '50%': { opacity: '0.55' },
         },
+        // 生成中的光标（v0.102）。对齐 Open WebUI `ResponseMessage.svelte`
+        // 里那个 0.125rem 宽的竖条。
+        //
+        // ★ 与 `fade-in` 的区别，也是它为什么**安全**：
+        //   从 1 出发，只往下掉到 0.4。所以时间轴冻结、动画停在 0% 时，
+        //   计算 opacity 是 **1** —— 光标可见。这与 `fade-in` 那种
+        //   "初态 opacity: 0"有本质区别：那个冻结时会**整个消失**。
+        //
+        // 为什么不用 `animate-pulse`：它作用在整块上。给光标用的话，
+        // 需要包一层容器，而容器的布局会让光标与文字之间多出可变的间距。
+        'cursor-pulse': {
+          '0%, 100%': { opacity: '1' },
+          '50%': { opacity: '0.4' },
+        },
       },
 
       animation: {
@@ -391,6 +405,9 @@ export default {
         'flash-accent': 'flash-accent 900ms cubic-bezier(0.16, 1, 0.3, 1) both',
         'trace-y': 'trace-y 700ms cubic-bezier(0.16, 1, 0.3, 1) both',
         skeleton: 'skeleton 1.8s cubic-bezier(0.32, 0, 0.24, 1) infinite',
+        // v0.102 生成光标。不带 `both`：它从可见的 1 出发，
+        // `both` 只会把 1 一直"应用"着（没有 delay，毫无作用）。
+        'cursor-pulse': 'cursor-pulse 1s ease-in-out infinite',
         // `both` 保留：它让动画在 delay 期间就应用 from 状态（即那个 0.22em 位移），
         // 于是错位的词是"等在下方"而不是"先停在原位再突然跳下去"。
         // 注意这只影响 transform，不影响可见性 —— 文字全程可见。

@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit, urlunsplit
@@ -480,3 +481,85 @@ def probe(*, base_url: str, label: str, model: str, api_key: str, kind: str) -> 
             error=f"请求失败：{type(exc).__name__}。请检查接入点地址后重试。",
             endpoint=url,
         )
+
+
+# ══════════════════════════════════════════════════════════
+# 流式增量解析（v0.102）
+# ══════════════════════════════════════════════════════════
+
+#: 流式响应的结束标记。
+#:
+#: OpenAI 在 data 里给 `[DONE]`；Anthropic 用 `event: message_stop` 事件而
+#: data 里是 `{"type": "message_stop"}`。两种都要认 —— 只认一种的话，
+#: 另一家的流会**一直读到连接被对端关闭**，那既慢又容易被当成网络故障。
+STREAM_DONE_PAYLOAD = "[DONE]"
+
+
+def stream_delta(anthropic: bool, event: str | None, data: str) -> str:
+    """从**一帧**流式 SSE 里取出文本增量。取不到返回空串。
+
+    ## 参数
+
+    `event`：SSE 的 `event:` 行（OpenAI 不给，Anthropic 给）；
+    `data`：`data:` 行拼起来的内容（SSE 规范允许一个事件带多行 `data:`，
+             解析器负责拼接，本函数拿到的已经是拼好的）。
+
+    ## 两套 wire 形状
+
+    **OpenAI 兼容**（`/v1/chat/completions` + `stream: true`）：
+
+        data: {"choices": [{"delta": {"content": "好"}, "index": 0}]}
+        data: {"choices": [{"delta": {"content": "的"}}]}
+        data: {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+        data: [DONE]
+
+    ⚠️ 推理型模型的思考过程在 `delta.reasoning_content`，**不是** `content`。
+       本函数**不**返回它：那是给活动流看的 reasoning，而对话正文只认
+       `content`。混进去的后果是思考过程被当成回答显示给用户。
+
+    **Anthropic Messages API**（`stream: true`）：
+
+        event: content_block_delta
+        data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "好"}}
+
+    ⚠️ Anthropic 的 `message_delta` / `content_block_start` /
+       `content_block_stop` / `ping` 都不带正文，一律返回空串。
+
+    ## 为什么不抛异常
+
+    这是流的中间环节。抛出去的后果是一整轮对话作废，而"某一帧解不出来"
+    可能只是一帧没有正文的收尾事件（正常现象）。**认不出就当没内容** ——
+    与 `_extract_reply` 的容错同一条纪律：宁可少一个字，不要丢掉整轮。
+    """
+    if not data or data.strip() == STREAM_DONE_PAYLOAD:
+        return ""
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        # 半截 JSON（网络分片正好切在中间）—— 上层按帧缓冲，所以这里
+        # 遇到不该出现的概率很低；真遇到就跳过这一帧。
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+
+    if anthropic:
+        # 只认 text_delta。`input_json_delta`（工具调用的参数增量）
+        # 与 `thinking_delta` 都不是给正文的。
+        delta = parsed.get("delta")
+        if isinstance(delta, dict) and delta.get("type") == "text_delta":
+            text = delta.get("text")
+            if isinstance(text, str):
+                return text
+        return ""
+
+    choices = parsed.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    content = delta.get("content")
+    return content if isinstance(content, str) else ""

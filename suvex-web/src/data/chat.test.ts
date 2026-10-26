@@ -11,7 +11,7 @@ import {
   resetChatStore,
   sendMessage,
 } from './chat'
-import { TURN_DONE, TURN_ERROR, TURN_MESSAGE, TURN_PHASE } from './chat-stream'
+import { TURN_DELTA, TURN_DONE, TURN_ERROR, TURN_MESSAGE, TURN_PHASE } from './chat-stream'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -126,6 +126,45 @@ function finishTurn(
 /** 等一轮微任务，让 store 里的 await 推进到下一个 pending。 */
 function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0))
+}
+
+/**
+ * 手动可控的流式响应（v0.102）。
+ *
+ * ## 为什么需要它，`finishTurn` 不够
+ *
+ * `finishTurn` 把整串帧一次性塞进流里，那是**终态**。而 `streamingText`
+ * 这一组要断言的是**中间态**：「来了一个 delta 之后，界面上现在是什么」。
+ * 一次性喂完的话，所有中间态在同一帧里闪过，断言只能看到最后结果 ——
+ * 而"拼接 vs 替换"这类 bug 恰好只在中间态里现形。
+ *
+ * 所以这里把 controller 暴露出来，测试自己决定什么时候推哪一帧。
+ */
+let chatStreamController: ReadableStreamDefaultController<Uint8Array>
+
+function openManualStream() {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      chatStreamController = controller
+    },
+  })
+  pending[1].resolveRaw(
+    new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+  )
+}
+
+/** 补上正常收尾的 done 帧并关流。 */
+function finishStream() {
+  chatStreamController.enqueue(
+    new TextEncoder().encode(
+      sseFrame(TURN_DONE, {
+        messageCount: 0,
+        awaitingApproval: null,
+        hitToolLimit: false,
+      }),
+    ),
+  )
+  chatStreamController.close()
 }
 
 beforeEach(() => {
@@ -673,5 +712,226 @@ describe('interject — 插话兑现（v0.101）', () => {
     expect(calls.length).toBe(before)
     expect(calls.filter((c) => c.url.includes('/interject'))).toHaveLength(0)
     expect(getChatSnapshot().interjections).toEqual([])
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  正文增量（v0.102）
+  ══════════════════════════════════════════════════════════════
+
+  ## 这一组守什么
+
+  用户原话：「消息是一瞬间蹦出一大块」。调研三个同类项目之后的结论是：
+  它们看起来"逐字长出来"不是因为入场动画，而是因为正文本来就是逐 token
+  到达的。所以后端加了 `delta` 帧，前端把增量拼进 `streamingText`。
+
+  这条路径的失败模式**全是静默的**：
+
+    1. 拼错（用替换而不是拼接）→ 只有最后一个 token 显示；
+    2. 落库后不清 → 同一段文字在缓冲和真消息里各显示一遍；
+    3. 失败/结束时不清 → 半句话粘在下一轮开头；
+    4. 换会话时不重新开始 → 上一轮的残字出现在新会话里。
+
+  没有一条会抛异常，所以只能靠这里的断言。
+*/
+describe('streamingText — 正文增量（v0.102）', () => {
+  it('★ 多个 delta 帧按到达顺序拼起来', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '你好')
+    await tick()
+
+    // 手动控制流，逐帧推进 —— 这样才能断言"中间态"。
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        chatStreamController = controller
+      },
+    })
+    pending[1].resolveRaw(
+      new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } }),
+    )
+    await tick()
+
+    const encoder = new TextEncoder()
+    chatStreamController.enqueue(
+      encoder.encode(sseFrame(TURN_DELTA, { text: '好的' })),
+    )
+    await tick()
+    expect(getChatSnapshot().streamingText).toBe('好的')
+
+    chatStreamController.enqueue(
+      encoder.encode(sseFrame(TURN_DELTA, { text: '，我查一下。' })),
+    )
+    await tick()
+    // ★ 拼接而不是替换 —— 用替换的话这里会是「，我查一下。」
+    expect(getChatSnapshot().streamingText).toBe('好的，我查一下。')
+
+    finishStream()
+    const ok = await promise
+    expect(ok).toBe(true)
+  })
+
+  it('★ assistant 消息落库后缓冲退场（否则同一段文字显示两遍）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '你好')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_DELTA, { text: '好的' })),
+    )
+    await tick()
+    expect(getChatSnapshot().streamingText).toBe('好的')
+
+    // 这一轮的 assistant 正文落库了 → 真消息接管
+    chatStreamController.enqueue(
+      new TextEncoder().encode(
+        sseFrame(TURN_MESSAGE, {
+          ...message({ id: 'msg_a1', role: 'assistant', content: '好的' }),
+          seq: 2,
+        }),
+      ),
+    )
+    await tick()
+    expect(getChatSnapshot().streamingText).toBeNull()
+    // 真消息接上了
+    const messages = getChatSnapshot().active?.messages ?? []
+    expect(messages.some((m) => m.id === 'msg_a1')).toBe(true)
+
+    finishStream()
+    await promise
+  })
+
+  it('★ tool 帧不清正文缓冲（工具卡不该打断还在流的正文）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '你好')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_DELTA, { text: '让我' })),
+    )
+    await tick()
+    expect(getChatSnapshot().streamingText).toBe('让我')
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(
+        sseFrame(TURN_MESSAGE, {
+          ...message({ id: 'msg_t1', role: 'tool', content: '3 条结果' }),
+          seq: 3,
+        }),
+      ),
+    )
+    await tick()
+    // ★ 只清 assistant。工具卡落库不代表正文说完了。
+    expect(getChatSnapshot().streamingText).toBe('让我')
+
+    finishStream()
+    await promise
+  })
+
+  it('★ 一轮结束（done）后缓冲必须清空', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '你好')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_DELTA, { text: '还没来得及落库的半句' })),
+    )
+    await tick()
+    expect(getChatSnapshot().streamingText).toBe('还没来得及落库的半句')
+
+    // 直接 done，没有 message 帧（模型写了又被截断的形态）
+    finishStream()
+    const ok = await promise
+    expect(ok).toBe(true)
+    // 不清的话这半句话会永远挂在界面上
+    expect(getChatSnapshot().streamingText).toBeNull()
+  })
+
+  it('★ 失败路径也要清空（半句话不能粘在界面或下一轮开头）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '你好')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_DELTA, { text: '写到一半' })),
+    )
+    await tick()
+    expect(getChatSnapshot().streamingText).toBe('写到一半')
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_ERROR, { message: '模型挂了' })),
+    )
+    chatStreamController.close()
+    const ok = await promise
+    expect(ok).toBe(false)
+    expect(getChatSnapshot().streamingText).toBeNull()
+  })
+
+  it('★ 新一轮开始时清掉上一轮残留', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    // 第一轮：留半句（异常路径模拟 —— 直接不发 done 就 close）
+    const first = sendMessage('chat_1', '第一句')
+    await tick()
+    openManualStream()
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_DELTA, { text: '残留' })),
+    )
+    chatStreamController.close()
+    await first
+
+    // 第二轮开始时必须从空开始
+    const second = sendMessage('chat_1', '第二句')
+    await tick()
+    // ★ 不清的话新一轮开头会显示「残留」
+    expect(getChatSnapshot().streamingText).toBeNull()
+    finishTurn(2)
+    await second
+  })
+
+  it('★ 其它会话的 delta 不写进当前会话', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '你好')
+    await tick()
+    openManualStream()
+
+    // 用户切走了
+    const other = openSession('chat_2')
+    pending[2].resolve({ ...session({ id: 'chat_2' }), messages: [] })
+    await other
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_DELTA, { text: '不该出现在 chat_2 里' })),
+    )
+    await tick()
+    // ★ onEvent 里那句 `current.id !== sessionId` 的守卫
+    expect(getChatSnapshot().streamingText).toBeNull()
+
+    finishStream()
+    await promise
   })
 })

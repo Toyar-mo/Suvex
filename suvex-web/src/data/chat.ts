@@ -3,6 +3,7 @@ import { useSyncExternalStore } from 'react'
 
 import {
   TURN_AWAITING,
+  TURN_DELTA,
   TURN_DONE,
   TURN_ERROR,
   TURN_MESSAGE,
@@ -205,6 +206,29 @@ export interface ChatState {
    * 而不用等下一轮刷新。
    */
   interjections: ChatMessage[]
+  /**
+   * ★ v0.102：**正在流入的那段正文**（还没落库，模型还在写）。
+   *
+   * ## 为什么它是一个独立字段，不进 `messages`
+   *
+   * 与 `pendingUserContent` 同一条理由（见上）：往 `messages` 里插一条
+   * 假消息要伪造 `id`/`seq`，而真消息回来后要按 id 替换 —— 替换失败就会
+   * 留下一条永远消不掉的假气泡。
+   *
+   * 更重要的：这段文字**每来一个增量就变一次**。真让它进 `messages`，
+   * 每一帧都会触发整个消息列表的重渲染与滚动计算，而列表里其它消息
+   * 一个字节都没变。
+   *
+   * ## 谁负责清它
+   *
+   * 收到 `message` 帧（该轮的 assistant 正文落库了）→ 置 `null`，
+   * 由那条真消息接管显示。`finally` 里也置 `null`（失败路径）。
+   *
+   * ⚠️ 不要"收到 done 才清"：一轮里可能有多次模型调用（工具往返），
+   * 每次落库的正文都该立刻接替流式缓冲，否则工具往返之间那段文字
+   * 会在缓冲和真消息里各显示一次。
+   */
+  streamingText: string | null
   /** 有一条审批正在提交。界面据此禁用那两个按钮，防重复点。 */
   deciding: boolean
 }
@@ -221,6 +245,7 @@ const EMPTY: ChatState = {
   sending: false,
   phase: null,
   interjections: [],
+  streamingText: null,
   deciding: false,
 }
 
@@ -420,6 +445,9 @@ export async function sendMessage(
     pendingUserContent: content,
     phase: null,
     interjections: [],
+    // ★ v0.102：新的一轮从空缓冲开始。不清的话，上一轮异常退出时
+    //   残留的半句话会拼在新一轮的开头（"这个对话还是空的"那种矛盾感）。
+    streamingText: null,
   })
 
   // ★ 附件 id 只在这一条上生效。后端读完正文就删（见 attachments 模块），
@@ -483,7 +511,27 @@ export async function sendMessage(
             // 真用户消息到了 → 乐观气泡功成身退（不能等整轮结束：
             // 那会让两句话同屏几十秒）。
             pendingUserContent: message.role === 'user' ? null : state.pendingUserContent,
+            /*
+              ★ v0.102：assistant 正文落库 → 流式缓冲退场，由真消息接管。
+                不清的话这段文字会显示两遍（一次在缓冲里、一次在真消息里）。
+                ⚠️ 只清 assistant：tool 帧不该影响正文缓冲（它落的是工具卡，
+                而正文可能还在往里流）。
+            */
+            streamingText: message.role === 'assistant' ? null : state.streamingText,
           })
+          return
+        }
+
+        if (frame.event === TURN_DELTA) {
+          /*
+            ★ v0.102：正文增量。**拼接**而不是替换 —— 服务端推的是增量。
+
+            ⚠️ 用 `?? ''` 而不是判断 `typeof`：字段缺失（旧版服务端）时
+              应静默忽略这一帧，而不是把 undefined 拼进字符串变成 "undefined"。
+          */
+          const piece = typeof frame.data.text === 'string' ? frame.data.text : ''
+          if (!piece) return
+          patch({ streamingText: (state.streamingText ?? '') + piece })
           return
         }
 
@@ -564,7 +612,16 @@ export async function sendMessage(
     //   只管到这一轮结束。放 `finally` 而不是只在成功路径清，是因为失败
     //   路径上它同样已经过期：插话早就写进库了（`interject` 自己 commit），
     //   这一轮失败不影响那条消息存在，气泡留着只会继续说假话。
-    patch({ sending: false, pendingUserContent: null, phase: null, interjections: [] })
+    patch({
+      sending: false,
+      pendingUserContent: null,
+      phase: null,
+      interjections: [],
+      // ★ v0.102：流式缓冲在这里也必须清。失败路径上它留着一段
+      //   "写了一半就断了"的正文，界面上会有一条永远停在半句的气泡，
+      //   而错误条同时说这一轮失败了 —— 两者矛盾。
+      streamingText: null,
+    })
   }
 }
 

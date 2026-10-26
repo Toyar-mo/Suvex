@@ -68,7 +68,7 @@ import re
 import shlex
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -1896,6 +1896,24 @@ class LlmGateway:
             headers["Authorization"] = f"Bearer {self._api_key}"
         return headers
 
+    def _stream_headers(self) -> dict[str, str]:
+        """流式请求头：只把 `Accept` 换成 SSE，其余与 `_headers()` 一致。
+
+        ## 为什么 `Accept: text/event-stream` 是必须的
+
+        不带它（沿用 `application/json`）时，**大多数** OpenAI 兼容网关照样
+        会按 `stream: true` 返回 SSE —— 但 Anthropic 官方 API 会据此判
+        客户端要哪种响应，而某些代理/中间层会按 `Accept` 决定是否启用
+        缓冲。选错的代价是"流被整段攒住再一次性吐出"，界面上看起来与
+        非流式完全一样 —— 一个**静默失效**：功能写着有、跑起来没有，
+        而日志里全是 200。
+
+        凭据仍然只走 `x-api-key` / `Authorization`，与非流式同一条纪律。
+        """
+        headers = self._headers()
+        headers["Accept"] = "text/event-stream"
+        return headers
+
     def failover(self, other: FallbackLlm) -> LlmGateway:
         """换到另一个接入点，返回**新的** gateway（v0.35）。
 
@@ -2023,6 +2041,148 @@ class LlmGateway:
             usage=parse_usage(parsed),
             finish_reason=_finish_reason(parsed),
         )
+
+
+    async def chat_stream(
+        self, messages: list[dict[str, str]], *, system: str
+    ) -> AsyncIterator[str]:
+        """流式调模型，逐块产出**正文增量**（v0.102）。
+
+        ## 它和 `chat()` 的关系
+
+        同一个接入点、同一套地址归一化、同一份凭据纪律，唯一区别是
+        `stream: true` 与增量解析。**不替代 `chat()`** —— 解题循环继续用
+        非流式的那个（它要把整段拿去解析 ACTION，逐块拼反而多一层状态）。
+
+        ## ★ 为什么重试只包「建立连接」这一步
+
+        非流式时重试整次请求是安全的：没收到响应 = 什么都没发生。
+        流式不是——连接建立后已经吐出去的文字是**不可撤回**的，重试会
+        让界面上的文字突然从头再来一遍（用户看到"这句话写了两遍"）。
+
+        所以这里只重试"连不上"（`_LLM_RETRYABLE` 在 `client.stream(...)`
+        `__aenter__` 之前的部分视为整体，见实现）。读流中途断掉直接抛，
+        由 `engine` 翻成 error 帧 —— 那才是如实反映"这一轮失败了"。
+
+        ## ★ `trust_env=False` 同样必须
+
+        与 `chat()` 完全同一个理由（出站 SSRF 面 + 不把 LLM key 交给
+        `HTTP_PROXY`）。这条不是复制粘贴的洁癖：漏掉的后果是把凭据
+        交给环境里配置的任意代理。
+        """
+        from app.core.crypto import redact
+        from app.providers.llm import stream_delta  # noqa: PLC2701 - 见 chat() 的说明
+
+        body = self._body(messages, system=system)
+        body["stream"] = True
+
+        last_error: Exception | None = None
+        response: httpx.Response | None = None
+        client: httpx.AsyncClient | None = None
+        for attempt in range(_LLM_RETRY_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_LLM_RETRY_BACKOFF * attempt)
+            client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout), trust_env=False)
+            try:
+                request = client.build_request(
+                    "POST", self.url, json=body, headers=self._stream_headers()
+                )
+                response = await client.send(request, stream=True)
+                break
+            except _LLM_RETRYABLE as exc:
+                last_error = exc
+                await client.aclose()
+                client = None
+                logger.warning(
+                    "流式调 LLM 连接失败（%s，第 %d/%d 次）：%s",
+                    type(exc).__name__,
+                    attempt + 1,
+                    _LLM_RETRY_ATTEMPTS,
+                    redact(str(exc))[:120],
+                )
+            except httpx.HTTPError as exc:
+                await client.aclose()
+                raise KernelError(
+                    f"调用 LLM 失败（{type(exc).__name__}）：{redact(str(exc))[:200]}"
+                ) from exc
+
+        if response is None or client is None:
+            raise KernelError(
+                f"调用 LLM 失败（{type(last_error).__name__}）："
+                f"{redact(str(last_error))[:200]}（已重试 {_LLM_RETRY_ATTEMPTS} 次）"
+            ) from last_error
+
+        try:
+            # ★ 开流之前的 4xx 仍是普通 JSON 错误体，按 `chat()` 同一口径报。
+            #   不在这里判的话，一个 "model 不存在" 会表现成"流里一个字都没有"，
+            #   而那与"模型真的回了空"无法区分。
+            if response.status_code >= 400:
+                payload = await response.aread()
+                text = payload.decode("utf-8", errors="replace")
+                raise KernelError(
+                    f"LLM 拒绝了请求（HTTP {response.status_code}）：{redact(text)[:200]}"
+                )
+
+            async for sse_event, sse_data in _iter_sse(response):
+                delta = stream_delta(self.anthropic, sse_event, sse_data)
+                if delta:
+                    yield delta
+        finally:
+            # 一定要关：`send(stream=True)` 不关会把连接留在池里不归还。
+            await response.aclose()
+            await client.aclose()
+
+
+async def _iter_sse(response: httpx.Response) -> AsyncIterator[tuple[str, str]]:
+    """把一条 SSE 响应切成 `(event, data)` 帧。
+
+    ## 为什么自己切，不用现成库
+
+    `httpx-sse` 不在依赖里，而引入它只为这一个场景不值（它自己也只有
+    一百来行）。这里要处理的东西也很有限：两种换行（`\\n` / `\\r\\n`）、
+    多行 `data:` 拼接、注释行（`: keepalive`）。
+
+    ## ★ 按空行断帧，不是按行
+
+    SSE 规范里**一帧以空行结束**。按行断的后果是 `data:` 与 `event:` 被
+    当成两帧，Anthropic 的 `content_block_delta` 因此解析不出来 ——
+    症状是"Anthropic 接入点永远不流式"。
+
+    ## ★ 注释行必须忽略
+
+    我们自己的 `encode_keepalive()` 用 `: keepalive` 占住连接。上游
+    （尤其经过反代时）也可能插注释。把注释当 data 会喂给 `json.loads`
+    一个解不出的串。
+    """
+    event = ""
+    data_lines: list[str] = []
+    buffer = ""
+
+    async for chunk in response.aiter_text():
+        buffer += chunk
+        # ⚠️ 统一换行再切：`\\r\\n` 与 `\\n` 混用时不统一会把 `\\r` 留在
+        #    JSON 尾部，`json.loads` 因此失败（而 JSON 规范不容忍尾随 \r）。
+        buffer = buffer.replace("\r\n", "\n").replace("\r", "\n")
+        while "\n" in buffer:
+            line, buffer = buffer.split("\n", 1)
+            if not line:
+                # 空行 = 一帧结束
+                if data_lines:
+                    yield event, "\n".join(data_lines)
+                event = ""
+                data_lines = []
+                continue
+            if line.startswith(":"):
+                continue
+            if line.startswith("event:"):
+                event = line[len("event:") :].strip()
+                continue
+            if line.startswith("data:"):
+                data_lines.append(line[len("data:") :].lstrip())
+
+    # 流结束时可能还有一帧没收（对端没写结尾空行）。
+    if data_lines:
+        yield event, "\n".join(data_lines)
 
 
 # ══════════════════════════════════════════════════════════

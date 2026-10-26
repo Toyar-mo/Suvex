@@ -38,6 +38,7 @@ import {
 import type { PhasePayload } from '@/data/chat-stream'
 import { useProjectedProviders } from '@/data/settings-store'
 import { useTools } from '@/data/tools'
+import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import {
@@ -146,6 +147,8 @@ export function ChatPage() {
     // ★ v0.100：流式过程中的两个状态 —— 现在在做什么、用户插了哪些话。
     phase,
     interjections,
+    // ★ v0.102：正在流入的正文（还没落库）。
+    streamingText,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -340,9 +343,39 @@ export function ChatPage() {
     }
   }
 
-  function handlePickStarter(text: string) {
-    setDraft(text)
-    composerRef.current?.focus()
+  /**
+   * 点空态里的「可以这样问」——**真的把它发出去**（v0.102）。
+   *
+   * ## 修的是什么
+   *
+   * 原来这里只有 `setDraft(text)` + 聚焦输入框。而空态下 `active === null`，
+   * 输入框在整段渲染里是**禁用**的（占位文案「请先新建或打开一个对话」），
+   * 所以用户点了引导项之后：草稿写进去了、但看不见也发不出去 ——
+   * 表现就是「点了没反应」。
+   *
+   * ## 为什么直接建会话 + 发送，而不是"先建会话再把草稿填好"
+   *
+   * 引导项是**整句话的提问**，不是半个模板。用户点它的意图就是"我要问这个"。
+   * 还要再点一次发送等于让用户为自己的点击确认一次，那与"引导"的语义相反。
+   *
+   * ## 失败时不留残骸
+   *
+   * 建会话失败 → 什么都不做（`createSession` 已经 patch 了 error）。
+   * 发送失败 → 会话留着（它已经建好了，用户可以在里面重新问），
+   * 但把草稿填回输入框，让那句话不丢。
+   *
+   * ⚠️ `sending` 期间按钮要禁用（见渲染处），否则连点两下会建出两个会话。
+   */
+  async function handlePickStarter(text: string) {
+    if (sending) return
+    const session = await createSession()
+    if (!session) return
+    setSearchParams({ session: session.id }, { replace: true })
+    // 先不填草稿：那句话马上会以乐观气泡的形式出现在消息流里，
+    // 再把它留在输入框就是同屏两份。
+    setDraft('')
+    const ok = await sendMessage(session.id, text)
+    if (!ok) setDraft(text)
   }
 
   /** 打开人格弹窗并提交选择。 */
@@ -620,12 +653,20 @@ export function ChatPage() {
                   <button
                     key={text}
                     type="button"
-                    onClick={() => handlePickStarter(text)}
+                    onClick={() => void handlePickStarter(text)}
+                    /*
+                      ★ v0.102：`disabled` 是必须的。
+                        点一下会**建一个会话 + 发一轮消息**，连着点两下
+                        就是两个会话、两轮并发的模型调用 —— 而用户在界面上
+                        只会看到一个（另一个在会话列表里躺着）。
+                    */
+                    disabled={sending}
                     className={cn(
                       'w-full rounded-sm border border-line bg-surface-sunken px-2.5 py-2 text-left',
                       'text-xs text-ink-muted transition-ui duration-fast',
                       'hover:border-line-strong hover:text-ink',
                       'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                      'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-line disabled:hover:text-ink-muted',
                     )}
                   >
                     {text}
@@ -702,6 +743,53 @@ export function ChatPage() {
                   </div>
                 </div>
               ))}
+
+              {/*
+                ★★ v0.102：正在流入的正文。
+
+                ## 为什么它必须在这里（而不是等 message 帧）
+
+                加这一块之前，正文是**整块**出现的：模型在服务端想完、落库、
+                再推一帧全文，界面上那块文字一瞬间铺开。用户的原话是
+                「消息是一瞬间蹦出一大块」。
+
+                调研三个同类项目（LibreChat / Open WebUI / LobeChat）之后的
+                结论是：它们看起来逐字长出来**不是因为有入场动画**，而是
+                因为正文本来就逐 token 到达。所以这里做的是让服务端真的
+                流起来（`app/chat/holdback.py` 负责不泄漏内部协议），
+                而不是给消息行加一个动画盖住症状。
+
+                ## 位置：消息之后、「正在想」之前
+
+                与 `pendingUserContent` 同一条时间线理由 —— 这段文字是
+                模型**正在说**的话，它在时间上接着已有消息、并先于转圈消失。
+
+                ## `data-streaming-bubble` 是给端到端验证用的钩子
+
+                没有它的话，验证脚本只能靠"屏幕上有没有非空文本"猜，
+                而那分不出"流式气泡还在"与"真消息已经接管了"。
+              */}
+              {streamingText !== null && (
+                <div
+                  className="max-w-[85%] whitespace-pre-wrap break-words text-sm text-ink"
+                  data-streaming-bubble="true"
+                  data-message-row="assistant"
+                >
+                  {streamingText}
+                  {/*
+                    生成中的光标。对齐 Open WebUI 的形态
+                    （`ResponseMessage.svelte` 里那个 0.125rem 宽的竖条）：
+                    它证明"还在写"，而且在文字末尾随长度移动 —— 光靠
+                    逐字增加是分不出"流得慢"和"卡住了"的。
+                    ⚠️ 只动 opacity（`animate-cursor-pulse`），不动布局，
+                    否则每闪一次整段文字会重排。
+                  */}
+                  <span
+                    className="ml-0.5 inline-block h-3.5 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom"
+                    aria-hidden="true"
+                  />
+                </div>
+              )}
 
               {sending && (
                 <div className="flex items-center gap-1.5 pl-1" role="status" aria-live="polite">
@@ -987,9 +1075,54 @@ function MessageRow({
  *
  * ★ 失败必须**看得出来**。一次静默失败（工具返回了错误但界面显示成正常）
  *   会让用户以为"扫描已建"然后去扫描页找一个不存在的任务 —— 这比报错更糟。
+ *
+ * ## v0.103：默认收成**一行**
+ *
+ * 第一版（同一天早些时候）做的是"长输出才折叠、折叠时露前两行"。用户看了
+ * 截图说「就是要类似这样的」，对照的是 Claude Code / Codex 的形态：
+ * **每条工具调用默认就是一行灰色文字**（`⏺ 运行命令`），想看细节才点开。
+ *
+ * 两者差的不只是阈值，是**默认值代表谁的意见**：
+ *   · 原来那版：默认铺开，长到一定程度才收 —— 默认值是"给你看全"。
+ *   · 用户要的：默认收成一行，点了才开 —— 默认值是"别挡着我看结论"。
+ *
+ * 对话页的主线是**模型说了什么**，工具调用是过程证据。过程证据默认占一行，
+ * 是这两种价值的正确配比。所以现在**无条件折叠**，不再按长度分支 ——
+ * 也就不存在"多长才算长"这个只能拍脑袋定的阈值。
+ *
+ * ## 为什么不复用 ReasoningBlock
+ *
+ * 形态接近（都是一行可展开），但语义不同：思考过程是纯文本，工具卡要表达
+ * **成功/失败**、要显示工具名和参数摘要。失败状态必须留在**折叠态**那一行上
+ * —— 收起来之后看不见"失败"，用户就会漏掉"这个工具偷偷挂了"。
  */
 function ToolCard({ message }: { message: ChatMessage }) {
   const failed = message.toolFailed === true
+  const content = message.content ?? ''
+  const lineCount = content.split('\n').length
+  const [open, setOpen] = useState(false)
+  const bodyRef = useRevealOnExpand<HTMLDivElement>(open)
+
+  /*
+    摘要行写什么 —— 这是折叠态**唯一**的信息，所以它必须回答
+    "这次调用干了什么"，而不是"这是第几条消息"。
+
+    优先用参数里最能说明问题的那一个（命令、路径、名字），没有参数就退回
+    工具名本身。不做花哨的动词翻译：翻错了（把 list_challenges 说成"列出
+    挑战"）比不翻更糟 —— 用户核对的是工具名和自己给的目标，不是我的概括。
+  */
+  const argDigest = useMemo(() => {
+    const args = message.toolArgs
+    if (!args) return ''
+    for (const key of ['command', 'cmd', 'path', 'name', 'query', 'url', 'target']) {
+      const value = args[key]
+      if (typeof value === 'string' && value.trim()) {
+        return value.trim().split('\n')[0].slice(0, 80)
+      }
+    }
+    return ''
+  }, [message.toolArgs])
+
   return (
     <div
       // ★ v0.100：工具卡也要能被数出来 —— 端到端验证的核心判据之一就是
@@ -997,29 +1130,62 @@ function ToolCard({ message }: { message: ChatMessage }) {
       data-message-row="tool"
       data-seq={message.seq}
       data-tool-name={message.toolName ?? ''}
-      className={cn(
-        'rounded-sm border px-2.5 py-1.5',
-        failed ? 'border-signal-risk/40 bg-signal-risk/5' : 'border-line bg-surface-sunken',
-      )}
+      // v0.103：折叠态能被验证脚本单独数出来
+      data-tool-collapsed={open ? 'false' : 'true'}
     >
-      <div className="flex items-center gap-1.5">
-        {failed ? (
-          <Wrench size={12} strokeWidth={2} className="text-signal-risk" aria-hidden="true" />
-        ) : (
-          <Terminal size={12} strokeWidth={2} className="text-ink-faint" aria-hidden="true" />
+      {/* ── 折叠态 = 一行。整行是按钮，点击范围大、好点中。 ── */}
+      <button
+        type="button"
+        // ★ 稳定钩子：页面里还有"收起会话列表"这类 aria-label 带"收起"的按钮，
+        //   用文案选会撞车。测试与验证脚本都认这个属性。
+        data-tool-toggle="true"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className={cn(
+          'flex w-full items-center gap-1.5 rounded-sm px-1 py-0.5 text-left',
+          'transition-ui duration-fast',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+          failed ? 'text-signal-risk hover:bg-signal-risk/5' : 'text-ink-faint hover:text-ink-muted',
         )}
-        <span className={cn('font-mono text-2xs', failed ? 'text-signal-risk' : 'text-ink-muted')}>
-          {message.toolName ?? 'tool'}
-        </span>
+      >
+        {open ? (
+          <ChevronDown size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronRight size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        )}
+        {failed ? (
+          <Wrench size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        ) : (
+          <Terminal size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        )}
+        <span className="shrink-0 font-mono text-2xs">{message.toolName ?? 'tool'}</span>
+        {argDigest && (
+          // 参数摘要可能很长：可缩、可截，但不能把工具名挤掉
+          <span className="min-w-0 truncate text-2xs text-ink-faint/80">{argDigest}</span>
+        )}
         {failed && (
-          <span className="rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
+          <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
             失败
           </span>
         )}
-      </div>
-      <p className="mt-1 whitespace-pre-wrap break-words text-xs text-ink-muted">
-        {message.content}
-      </p>
+        {/* 右侧规模提示：收着时告诉用户"点开有多少"，开着时给个收起入口 */}
+        <span className="ml-auto shrink-0 text-2xs text-ink-faint/60">
+          {open ? '收起' : `${lineCount} 行`}
+        </span>
+      </button>
+
+      {/* ── 展开态 = 带边框的面板，输出全文 ── */}
+      {open && (
+        <div
+          ref={bodyRef}
+          className={cn(
+            'mt-1 rounded-sm border px-2.5 py-1.5',
+            failed ? 'border-signal-risk/40 bg-signal-risk/5' : 'border-line bg-surface-sunken',
+          )}
+        >
+          <p className="whitespace-pre-wrap break-words text-xs text-ink-muted">{content}</p>
+        </div>
+      )}
     </div>
   )
 }
