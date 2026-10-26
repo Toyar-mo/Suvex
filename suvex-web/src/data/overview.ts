@@ -224,6 +224,47 @@ export interface AttentionItem {
 
 export type AttentionLevel = 'urgent' | 'warning' | 'info'
 
+/**
+ * 「可用能力」的一格（v0.96，学 CyberStrikeAI dashboard 的六宫格）。
+ *
+ * ## 与 `metrics` 的分工
+ *
+ * `metrics` 是**产出**（扫了多少、发现了多少），这里是**家底**
+ * （多少工具、多少篇技能、几条 MCP 连接）。产出随使用变化，
+ * 家底只在部署者配置时变。两者放一起会让人误以为"技能 31 篇"
+ * 是一个成就 —— 而它是安装时就有的。
+ *
+ * ## ★ 只有三格，不是六格
+ *
+ * CyberStrikeAI 还有「知识」「角色」「Agents」三格，我们**没有对应物**：
+ * 这个代码库里没有 knowledge 模块；`CHAT_PERSONAS` 是写死的常量；
+ * `agents.scan_id` 是级联外键，agent 属于某一次扫描而不是常驻名册。
+ * 摆三个需要加注解才能看懂的数字，会让旁边三个真数字也被怀疑。
+ *
+ * ## 形状是数组而不是固定字段
+ *
+ * 前端按 `kind` 查图标与路由。将来补上知识库时，加一格不需要
+ * 同时改两侧类型 —— 固定字段会逼着改两处。
+ */
+export interface ResourceCount {
+  /** 稳定语义标识：`mcp_server` / `mcp_tool` / `skill` */
+  kind: string
+  /** 格子标题 */
+  label: string
+  count: number
+  /** 一句话补充口径。空串 = 不需要补充，不渲染空段 */
+  detail: string
+  /**
+   * 影响颜色的语气：`ok` / `attention` / `muted`。
+   *
+   * ⚠️ 什么时候算 `attention` 由**后端**定（比如"一条 MCP 都没配"）。
+   *    前端自己判断会出现"总览标黄、工具页标正常"的矛盾。
+   */
+  tone: ResourceTone
+}
+
+export type ResourceTone = 'ok' | 'attention' | 'muted'
+
 export interface SeverityBreakdownEntry {
   severity: Severity
   count: number
@@ -243,4 +284,8 @@ export interface OverviewData {
    *   这个是「该做什么」—— 将来时，随处置而消失，给决策用。
    */
   attention: AttentionItem[]
+  /**
+   * 可用能力三格（v0.96）。家底，与扫描无关 —— 新装系统也有内容。
+   */
+  resources: ResourceCount[]
 }

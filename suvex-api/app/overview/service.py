@@ -80,6 +80,7 @@ from app.overview.schemas import (
     OverviewMetricsOut,
     OverviewOut,
     ProjectedActivityOut,
+    ResourceCountOut,
     SeverityBreakdownOut,
 )
 from app.scans.models import Scan
@@ -433,6 +434,145 @@ def pending_approval_count(db: Session) -> int:
     )
 
 
+def build_resources(db: Session) -> list[ResourceCountOut]:
+    """「可用能力」三格（v0.96）。
+
+    ## 为什么这三格放在总览而不是留在各页面
+
+    部署者打开总览时最常问的不是"发现了几个漏洞"（那要有扫描才有数），
+    而是"这东西现在到底能干什么"。答案由三件事构成：能调多少工具、
+    有多少篇速查卡、接了几条外部连接。这三条都在设置页深处，
+    而它们决定了一次扫描的上限 —— 摆不上首屏，用户就只能靠记忆。
+
+    ## ⚠️ 顺序就是重要性顺序
+
+    `mcp_server` 在最前：一条都没配意味着 `requires_connection` 的工具
+    全部 `ready=false`，那是比"少几篇技能"严重得多的事 ——
+    它直接削掉能力，而不是减少参考资料。
+
+    ## 三格的失败彼此隔离
+
+    每格各自 `suppress(Exception)` 退回一个"读不到"的形态。
+    这三格任何一格出错都不该让首屏 500 —— 理由与 `failing_schedule_count`
+    那两处相同（总览是登录后第一屏）。但**不能退化成 0**：
+    0 是"确实没有"，而读不到是"不知道"。所以出错时 `tone="muted"`
+    且 `detail` 明说读不到，而不是显示一个会被误读为确定值的 0。
+    """
+    out: list[ResourceCountOut] = []
+
+    # ── ① MCP 连接 ──────────────────────────────────
+    #
+    # 口径：`get_mcp_servers()` 返回的条目数（**原样 JSON**，含坏条目）。
+    # 用原样而不是解析后的：解析层会跳过坏条目，而"你有 3 条连接但其中
+    # 1 条写坏了"与"你有 2 条连接"是两种需要不同行动的状态 ——
+    # 前者去修，后者去加。
+    try:
+        from app.kernel import service as kernel_service
+
+        servers = kernel_service.get_mcp_servers(db)
+        total = len(servers)
+        if total == 0:
+            out.append(
+                ResourceCountOut(
+                    kind="mcp_server",
+                    label="MCP 连接",
+                    count=0,
+                    detail="还没有接入外部工具。需要外部能力的工具会一直不可用。",
+                    tone="attention",
+                )
+            )
+        else:
+            out.append(
+                ResourceCountOut(
+                    kind="mcp_server",
+                    label="MCP 连接",
+                    count=total,
+                    detail="这些连接提供的外部工具可以直接被调用。",
+                    tone="ok",
+                )
+            )
+    except Exception:
+        logger.warning("总览：读 MCP 连接数失败", exc_info=True)
+        out.append(
+            ResourceCountOut(
+                kind="mcp_server", label="MCP 连接", count=0, detail="读取失败，数量未知。", tone="muted"
+            )
+        )
+
+    # ── ② 内置工具 ──────────────────────────────────
+    #
+    # 口径：`TOOL_SPECS` 里**没被显式关掉**的个数。
+    # detail 里同时说出总数与未就绪数：只看"可调用 N 个"会让人以为
+    # 其余的是不存在，而实际是"存在但被关掉/缺连接"—— 那是可修的。
+    try:
+        from app.kernel import service as kernel_service
+        from app.kernel.tools import TOOL_SPECS
+
+        disabled = set(kernel_service.get_disabled_tools(db))
+        ready, not_ready = 0, 0
+        servers_configured = {
+            str(s.get("name") or "") for s in kernel_service.public_mcp_servers(db)
+        }
+        for spec in TOOL_SPECS:
+            if spec.name in disabled:
+                continue
+            needs = spec.requires_connection
+            if needs and needs not in servers_configured:
+                not_ready += 1
+            else:
+                ready += 1
+        detail = f"共 {len(TOOL_SPECS)} 个"
+        if not_ready:
+            detail += f"，其中 {not_ready} 个缺 MCP 连接"
+        out.append(
+            ResourceCountOut(
+                kind="mcp_tool",
+                label="可调用工具",
+                count=ready,
+                detail=detail,
+                tone="ok" if not_ready == 0 else "attention",
+            )
+        )
+    except Exception:
+        logger.warning("总览：读工具清单失败", exc_info=True)
+        out.append(
+            ResourceCountOut(
+                kind="mcp_tool", label="可调用工具", count=0, detail="读取失败，数量未知。", tone="muted"
+            )
+        )
+
+    # ── ③ 技能库 ────────────────────────────────────
+    #
+    # 口径：`all_skills()` = 内置 + 自定义（内置优先，同名自定义被忽略）。
+    # ★ 不能只数内置：自定义技能是用户自己写的，那个数字对他更有意义 ——
+    #   只数内置会让"我建了 3 篇"完全不可见，于是他会怀疑自己没保存成功。
+    try:
+        from app.kernel import skills as skills_module
+
+        skills = skills_module.all_skills()
+        builtin = sum(1 for s in skills if getattr(s, "source", "builtin") == "builtin")
+        custom = len(skills) - builtin
+        detail = f"内置 {builtin} 篇" + (f" · 自定义 {custom} 篇" if custom else "")
+        out.append(
+            ResourceCountOut(
+                kind="skill",
+                label="技能库",
+                count=len(skills),
+                detail=detail,
+                tone="ok",
+            )
+        )
+    except Exception:
+        logger.warning("总览：读技能库失败", exc_info=True)
+        out.append(
+            ResourceCountOut(
+                kind="skill", label="技能库", count=0, detail="读取失败，数量未知。", tone="muted"
+            )
+        )
+
+    return out
+
+
 def build_overview(db: Session, *, scan_id: str | None = None) -> OverviewOut:
     """组装 Overview 页所需的全部数据（契约 §3.6）。"""
     # ★ 统计只调这一处 —— 它是 Findings 页与 Overview 页的共同来源。
@@ -532,6 +672,10 @@ def build_overview(db: Session, *, scan_id: str | None = None) -> OverviewOut:
         ],
         hasAnyScan=has_any_scan,
         attention=attention,
+        # 「可用能力」三格（v0.96）。家在部署时定，与扫描无关 ——
+        # 所以即使 `hasAnyScan=False` 也照常返回（见 `empty_overview` 的注释：
+        # 那是唯一让新装系统也能看到"我现在能干什么"的地方）。
+        resources=build_resources(db),
     )
 
 
@@ -578,6 +722,18 @@ def empty_overview() -> OverviewOut:
         # "该做什么"在空库时永远不为空，于是前端那个"全部处理完了"
         # 的正向状态永远不出现。
         attention=[],
+        # ⚠️ 「可用能力」在这里是空列表，而且**只能**是空列表（v0.96）。
+        #
+        # 这个函数没有 `db` 参数 —— 它是个不查库的静态工厂。三格的内容
+        # （几篇技能、几条 MCP 连接、几个可用工具）全都来自库与配置，
+        # 这里无中生有地写死几个数就会变成"新装系统显示 31 篇技能"这种
+        # 与环境无关的谎话。
+        #
+        # 所以：这个函数**不该**再接回线上（目前也确实没有调用点），
+        # 真要走空状态，`build_overview` 已经有了正确的分流 ——
+        # 它在 `hasAnyScan=False` 时照样会调 `build_resources(db)`，
+        # 让新装部署也能看到"我现在能干什么"。
+        resources=[],
     )
 
 
@@ -589,6 +745,7 @@ __all__: list[str] = [
     "RISK_WEIGHTS",
     "build_attention",
     "build_overview",
+    "build_resources",
     "empty_overview",
     "failing_schedule_count",
     "pending_approval_count",

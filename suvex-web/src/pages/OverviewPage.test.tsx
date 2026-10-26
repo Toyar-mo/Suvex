@@ -70,6 +70,14 @@ function makeData(hasAnyScan: boolean): OverviewData {
     severityBreakdown: [],
     hasAnyScan,
     attention: [],
+    // v0.96：可用能力三格。刻意给三种 tone 各一条 ——
+    // `muted` 与 `attention` 的视觉差别（"读不到"vs"待配置"）如果
+    // 在夹具里混成同一种，两个分支谁接错了都测不出来。
+    resources: [
+      { kind: 'mcp_tool', label: '可用工具', count: 21, detail: '本机内置', tone: 'ok' },
+      { kind: 'mcp_server', label: '外部 MCP', count: 0, detail: '还没配', tone: 'attention' },
+      { kind: 'skill', label: '技能卡', count: 31, detail: '', tone: 'muted' },
+    ],
   }
 }
 

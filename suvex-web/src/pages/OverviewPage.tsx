@@ -2,6 +2,7 @@ import { PageHeader } from '@/components/layout/AppShell'
 import ActivityFeed from '@/components/overview/ActivityFeed'
 import AttentionList from '@/components/overview/AttentionList'
 import RiskScoreCard from '@/components/overview/RiskScoreCard'
+import ResourceStrip from '@/components/overview/ResourceStrip'
 import SeverityChart from '@/components/overview/SeverityChart'
 import StatCard from '@/components/overview/StatCard'
 import TokenUsageCard from '@/components/overview/TokenUsageCard'
@@ -216,7 +217,7 @@ function OverviewContent({
   data: import('@/data/overview').OverviewData
   agents: { running: number; queued: number }
 }) {
-  const { metrics, activity, severityBreakdown, attention } = data
+  const { metrics, activity, severityBreakdown, attention, resources } = data
 
   return (
     <div className="flex flex-col gap-bay">
@@ -291,6 +292,26 @@ function OverviewContent({
           更让人怀疑 —— 消失时无法区分"没事"与"这块坏了"。
       */}
       <AttentionList items={attention} />
+
+      {/*
+        ── 2.5 · 可用能力（v0.96）──────────────────────
+
+        ★ 位置在「该做什么」**之后、活动流之前**，两个理由：
+
+          1. 「该做什么」是有时限的（有严重漏洞就现在去修），
+             「可用能力」是常驻家底（多少工具、多少技能）。
+             急的排前面，这是同一页里唯一合理的顺序。
+
+          2. 它在**没有待办时承担了"这系统能干什么"的回答**。
+             新装部署的「该做什么」是一段"没有需要你处理的事"，
+             紧接着就是一片空的活动流 —— 中间没有任何东西告诉用户
+             这平台配了 20 个工具和 31 篇技能。这一格把那句话补上。
+
+        ★ 不放进上面那个 4 列指标卡网格：那四张卡的共同语义是
+          "本次统计窗口内的产出"，三格家底是"部署时的配置"。
+          混进一排会让人以为"技能 31 篇"和"本周新增 18"是同一种数。
+      */}
+      <ResourceStrip resources={resources} />
 
       {/* ── 3 + 4 · 活动流 与 严重度分布 ─────────────── */}
       <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">

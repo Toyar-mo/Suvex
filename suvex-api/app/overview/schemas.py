@@ -178,6 +178,42 @@ class AttentionItemOut(CamelModel):
     count: int
 
 
+class ResourceCountOut(CamelModel):
+    """总览页「可用能力」六宫格的一格（v0.96，学 CyberStrikeAI dashboard）。
+
+    ## 为什么每格都要带 `detail` 而不是只有一个数
+
+    一个孤零零的「31」在界面上什么都回答不了：31 篇技能里可能有 5 篇从没被
+    加载过，也可能全都在用。数字本身没有方向，`detail` 才是让这格可行动的部分。
+
+    ## ★ 有三格刻意**不存在**（照抄会摆上没法解释的数字）
+
+    CyberStrikeAI 的六格是「MCP 工具 / External MCP / Skills / 知识 / 角色 /
+    Agents」。我们只做前三个，另外三个在这个代码库里没有对应物：
+
+    | 它那格 | 为什么这里没有 |
+    |---|---|
+    | 知识 | `app/` 下没有 knowledge 模块 —— 没有对象就没有数 |
+    | 角色 | `CHAT_PERSONAS` 是代码里写死的 7 个常量，永远显示 7，是装饰不是信息 |
+    | Agents | `agents.scan_id` 是级联外键，agent **属于某一次扫描**。它不是常驻名册，照抄会得到一个随扫描数单调增长的数，读作"我们有 300 个智能体"是错的 |
+
+    宁可少三格，也不摆三个需要加注解才能看懂的数字 ——
+    那种格子会让用户开始怀疑旁边那三个真数字。
+    """
+
+    #: 稳定语义标识（`mcp_server` / `mcp_tool` / `skill`），前端据此选图标与跳转。
+    kind: str
+    #: 格子标题（"MCP 连接"）
+    label: str
+    #: 主数字
+    count: int
+    #: 一句话补充口径。**空串表示不需要补充**，前端不渲染空段。
+    detail: str
+    #: `ok` / `attention` / `muted`。它只影响颜色，不改变语义 ——
+    #: 具体什么时候算 attention 由后端定，理由同 `AttentionItemOut.level`。
+    tone: str = "muted"
+
+
 class OverviewOut(CamelModel):
     """`GET /overview` 的响应（契约 §3.6）。
 
@@ -206,11 +242,24 @@ class OverviewOut(CamelModel):
     # 不是待办清单。超过 5 条时人会先关掉页面，而不是从第 6 条开始做。
     attention: list[AttentionItemOut] = []
 
+    # ── v0.96 新增：可用能力（学 CyberStrikeAI dashboard 的六宫格）──
+    #
+    # ⚠️ 与 `metrics` 的分工：`metrics` 是**产出**（扫了多少、发现了多少），
+    #    这里是**家底**（有多少工具、多少篇技能、几条 MCP 连接）。
+    #    产出会随使用变化，家底只在部署者配置时变 —— 两者放在一起会让人
+    #    误以为"技能 31 篇"是一个成就，而它其实是安装时就有的东西。
+    #
+    # 形状之所以是**列表**而不是固定五个字段：前端按 `kind` 查图标与路由，
+    # 增删一格不需要改前后端两侧的类型。这在"什么时候补上知识库"这件事
+    # 无法预知时是必要的 —— 固定字段会逼着将来加格的人同时改两处。
+    resources: list[ResourceCountOut] = []
+
 
 __all__ = [
     "AttentionItemOut",
     "OverviewMetricsOut",
     "OverviewOut",
     "ProjectedActivityOut",
+    "ResourceCountOut",
     "SeverityBreakdownOut",
 ]

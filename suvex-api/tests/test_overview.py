@@ -491,6 +491,8 @@ def test_overview_is_no_longer_a_stub(ready_client: TestClient) -> None:
         "hasAnyScan",
         # v0.95：现在最该动哪几件
         "attention",
+        # v0.96：可用能力三格
+        "resources",
     }
 
 
@@ -515,6 +517,8 @@ def test_response_shape_matches_frontend_type(ready_client: TestClient) -> None:
         "hasAnyScan",
         # v0.95
         "attention",
+        # v0.96：可用能力三格（家底，与扫描无关）
+        "resources",
     }
     assert set(body["metrics"]) == {
         "activeScans",
@@ -715,3 +719,104 @@ def test_service_uses_stats_not_a_second_count(
     assert "severityBreakdown" in result
     assert set(result["unresolvedBreakdown"][0]) == {"severity", "count"}
     assert result["unresolvedTotal"] >= 0
+
+
+# ──────────────────────────────────────────────────────────────
+# v0.96 · 「可用能力」三格
+#
+# 这块的风险与前几块不同：它的数字**不随扫描变化**，所以在测试里
+# 看起来"总是对的" —— 一个写死成常量的实现也能让接口形状全绿。
+# 所以下面每条都同时断言"数字来自哪"，而不只是"字段存在"。
+# ──────────────────────────────────────────────────────────────
+
+
+def test_resources_has_three_known_kinds_in_importance_order(
+    ready_client: TestClient,
+) -> None:
+    """三格固定三种 kind，且 `mcp_server` 排第一。
+
+    ★ 顺序是契约的一部分（见 `build_resources` docstring）：
+      一条 MCP 都没配会削掉能力，比"少几篇技能"严重。前端按收到的
+      顺序渲染，所以顺序只能由后端保证。
+    """
+    body = ready_client.get(f"{API}/overview").json()
+
+    assert [item["kind"] for item in body["resources"]] == [
+        "mcp_server",
+        "mcp_tool",
+        "skill",
+    ]
+
+
+def test_resource_count_is_a_real_number_not_a_placeholder(
+    ready_client: TestClient,
+) -> None:
+    """每格的 `count` 必须与它自称的口径对得上。
+
+    ★ 这条防的是"写死成常量"的实现 —— 那种实现能过掉形状断言，
+      但过不了这里：技能数必须等于技能库自己报的数。
+    """
+    from app.kernel import skills as skills_module
+
+    body = ready_client.get(f"{API}/overview").json()
+    by_kind = {item["kind"]: item for item in body["resources"]}
+
+    # 技能格：必须等于 `all_skills()` 的长度（不是"大约 30"）
+    assert by_kind["skill"]["count"] == len(skills_module.all_skills())
+    # 工具格：必须 ≤ TOOL_SPECS 总数（关掉的与缺连接的不算在 count 里）
+    from app.kernel.tools import TOOL_SPECS
+
+    assert 0 <= by_kind["mcp_tool"]["count"] <= len(TOOL_SPECS)
+
+
+def test_no_mcp_servers_yields_attention_not_ok(ready_client: TestClient) -> None:
+    """一条 MCP 都没配时必须是 `attention`，不是 `ok`。
+
+    ★ 这是这块存在的意义：0 条连接不是"恰好是零"，它是"有工具因此不可用"。
+      画成灰色的 0 会让用户以为那是正常状态。
+    """
+    body = ready_client.get(f"{API}/overview").json()
+    server = next(item for item in body["resources"] if item["kind"] == "mcp_server")
+
+    # 测试环境没有配任何 MCP
+    assert server["count"] == 0
+    assert server["tone"] == "attention"
+    assert "不可用" in server["detail"], server["detail"]
+
+
+def test_resource_failure_degrades_to_muted_not_zero(monkeypatch: pytest.MonkeyPatch, db_session: Session) -> None:
+    """读失败时是 `muted` + "数量未知"，**不能**退化成 `ok` 的 0。
+
+    ★ 0 是"确实没有"，读不到是"不知道"。两者画成一样的话，
+      用户会把一次故障读成一个事实 —— 这正是这块要避免的唯一欺骗。
+    """
+    from sqlalchemy.orm import Session as _Session
+
+    def boom(_db: _Session):  # noqa: ANN202
+        raise RuntimeError("模拟读库失败")
+
+    monkeypatch.setattr("app.kernel.service.get_mcp_servers", boom)
+
+    out = overview_service.build_resources(db_session)
+    server = next(item for item in out if item.kind == "mcp_server")
+
+    assert server.tone == "muted", "读失败必须是 muted（不知道），而不是 attention/ok（确定值）"
+    assert "未知" in server.detail or "失败" in server.detail, server.detail
+
+
+def test_each_resource_has_a_label_and_tone_in_the_allowed_set(
+    ready_client: TestClient,
+) -> None:
+    """三格的 `label` 非空、`tone` 落在允许域内。
+
+    `tone` 是前端唯一用来决定颜色的输入 —— 出现一个不认识的值，
+    前端会退回保守分支，但那应该发生在"后端改了契约"时，
+    不该是这里写错字导致的。
+    """
+    body = ready_client.get(f"{API}/overview").json()
+
+    for item in body["resources"]:
+        assert item["label"], f"{item['kind']} 没有标题"
+        assert item["tone"] in {"ok", "attention", "muted"}, item
+        assert isinstance(item["count"], int)
+        assert item["count"] >= 0
