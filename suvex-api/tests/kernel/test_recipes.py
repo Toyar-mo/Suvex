@@ -312,16 +312,161 @@ def test_checksec_recipe_is_documented_as_the_pwntools_one():
 # ══════════════════════════════════════════════════════════
 # 5. 接线 —— 配方库不能只是躺着
 # ══════════════════════════════════════════════════════════
+#
+# ★★ v0.99：这一节原来只有一条"app/ 下有没有字符串 RECIPE"的文本搜索。
+# 它**在 v0.98 状态就是绿的**，而当时模型根本看不到配方 —— API 列表那一处
+# 引用就满足了它。也就是说：那条测试测的是"有人提过这个名字"，
+# 不是"知识到了模型手上"。
+#
+# 这是本项目最贵的一类假绿灯：测试是绿的，功能是死的。
+# 下面改成三条，各钉一个**具体失效位**：
+#   ① 清单真的进了系统提示词（不是只进了 API）；
+#   ② `load_recipe` 在工具表里，且 dispatch 真的有这个分支；
+#   ③ 模型能从清单里读到"默认会漏"这句 —— 那是本模块存在的理由。
 
 
-def test_the_recipe_library_is_actually_imported_somewhere_outside_itself():
-    """★ 这条钉的是本项目最常犯的错：**写了模块，但没人用**。
+def test_recipe_index_reaches_the_system_prompt():
+    """★ 配方清单必须出现在**模型真正收到的那份提示词**里。
 
-    `mcp_servers` 在 v0.72 就是这样坏的：配置列、服务层、build_spec 都有，
-    但 HTTP 层两个方向都没暴露 —— 于是「配了却永远说没有连接」。
+    失效形态（v0.98 的真实状态）：`recipes.py` 写好了、`GET /kernel/recipes`
+    通了、工具页上能看到 34 条 —— 而系统提示词里一个字都没有。
+    模型照着默认参数跑 nmap，把"只扫了 1000 个端口"读成"目标只开了这些"。
 
-    配方库如果只被它自己的测试 import，那它在功能上等于不存在：
-    界面上看不到、模型调不到。
+    这条断言直接读 `load_system_prompt()` 的返回值，而不是读源码文本：
+    文本里出现 `RECIPE_INDEX` 只证明写了占位符，不证明它被替换了。
+    """
+    from app.kernel.runner import load_system_prompt
+
+    prompt = load_system_prompt()
+    assert "{{RECIPE_INDEX}}" not in prompt, (
+        "系统提示词里还留着未替换的 {{RECIPE_INDEX}} 占位符 —— "
+        "模型会原样看到这串东西"
+    )
+    assert "load_recipe" in prompt, (
+        "系统提示词里没有 load_recipe —— 模型不知道这个工具存在，"
+        "配方库退化成只有人能看到的东西"
+    )
+    # ★★ 这里**不能**只断言 `` `nmap` `` 在提示词里 —— 变异验证抓过这个洞。
+    #
+    # `nmap` 这个词在提示词里还有三处别的来源：
+    #   · 技能清单里那篇 `tooling/nmap.md`（"nmap：Canonical Nmap CLI syntax…"）
+    #   · 手法块里"`nmap` 只用来确认端口"
+    #   · 别处的 `command -v gobuster ffuf nmap`
+    # 所以 `` `nmap` in prompt `` 在配方清单**整个没渲染**时照样为真。
+    #
+    # 要区分"配方清单到了模型手上"，只能断言**配方清单独有的形态**：
+    # 每一条都以 `- \`名字\`` 起头并带「默认会漏」。
+    recipe_lines = [
+        line
+        for line in prompt.splitlines()
+        if line.startswith("- `") and "默认会漏" in line
+    ]
+    assert len(recipe_lines) >= 30, (
+        f"提示词里只有 {len(recipe_lines)} 行带「默认会漏」的配方条目，"
+        "而配方库有 34 条 —— 配方索引没真的渲染进去"
+        "（占位符被替换成一句废话也算这种情况）"
+    )
+    joined = "\n".join(recipe_lines)
+    for name in ("nmap", "sqlmap", "ffuf"):
+        assert f"`{name}`" in joined, f"配方清单里没有 `{name}`"
+
+
+def test_recipe_index_carries_the_default_limitation_inline():
+    """★ 清单里必须带一句「默认会漏」，而且这句要**真的到模型手上**。
+
+    ## 为什么这条是独立的一条用例
+
+    因为它是**这一节唯一不能省的东西**。选择发生在调用之前：模型决定
+    "用 nmap 扫一下"的那一刻，如果清单只说「nmap：端口扫描」，
+    它就会拿默认结果写结论。等它 `load_recipe` 看到局限，
+    那个结论已经写进上一轮推理了。
+
+    ## ★★ 为什么断言打在 `load_system_prompt()` 上而不是 `render_index()` 上
+
+    这是第一次写这条时留下的真洞，被变异验证抓出来的：原来只断言
+    `render_index()` 的输出里有「默认会漏」。把提示词里的
+    `{{RECIPE_INDEX}}` 换成一句废话之后，渲染函数照样正确、
+    这条照样绿 —— 而模型那边一个字都收不到。
+
+    **渲染函数对 ≠ 内容到达模型。** 中间那个占位符替换才是会断的一环。
+    所以现在一律从 `load_system_prompt()` 的返回值里取那一行。
+    """
+    from app.kernel.runner import load_system_prompt
+
+    prompt = load_system_prompt()
+    assert "默认会漏" in prompt, (
+        "模型收到的系统提示词里没有「默认会漏」标记 —— "
+        "清单要么没渲染进去，要么被渲染成了一列光秃秃的工具名"
+    )
+    # nmap 那一行必须自己承载"默认只扫一部分"这个判断。
+    #
+    # ⚠️ 必须**先切出配方清单那一节**再找 —— 技能清单里也有一行
+    # `` - `nmap`：Canonical Nmap CLI syntax… ``，直接取"第一个含 nmap 的行"
+    # 会抓到技能那一行，然后断言在一条本来就不该有局限的行上失败。
+    # （这个坑是跑出来的：它让这条用例在**正确实现**上变红。）
+    marker = "可用工具配方"
+    start = prompt.find(marker)
+    assert start >= 0, "提示词里没有「可用工具配方」这一节标题"
+    section = prompt[start:]
+    nmap_lines = [line for line in section.splitlines() if line.startswith("- `nmap`")]
+    assert nmap_lines, "配方清单里没有 nmap 那一行"
+    nmap_line = nmap_lines[0]
+    assert "默认会漏" in nmap_line, f"nmap 那一行没带局限：{nmap_line}"
+    assert "1000" in nmap_line or "端口" in nmap_line, (
+        f"nmap 的局限被渲染成了空话，看不出「默认只扫一部分」：{nmap_line}"
+    )
+
+
+def test_load_recipe_is_dispatchable_and_returns_full_recipe():
+    """★ `load_recipe` 必须在 `TOOL_NAMES` 里**且** dispatch 真的有分支。
+
+    两个失效位不同：
+      · 不在 `TOOL_NAMES` → 提示词说"你有这个工具"，调用却被当成未知工具；
+      · 在 `TOOL_NAMES` 但 dispatch 没分支 → 同上，而且更隐蔽
+        （工具表里看得见，调起来回「未知工具」）。
+
+    这里用 `inspect.getsource` 确认分支存在 —— 因为 dispatch 是
+    一个 async 大函数，没有可独立调用的入口（它要 sandbox/spec）。
+    """
+    import inspect
+
+    from app.kernel import runner
+
+    assert "load_recipe" in runner.TOOL_NAMES, "load_recipe 不在工具表里"
+
+    src = inspect.getsource(runner.dispatch_tool)
+    assert 'if name == "load_recipe"' in src, (
+        "dispatch_tool 里没有 load_recipe 分支 —— 工具表说它存在，"
+        "实际调用会落到「未知工具」"
+    )
+
+    # 全文形态：必须含可复制的命令行与完整局限
+    full = recipes_mod.render_recipe("sqlmap")
+    assert "sqlmap -u" in full, f"全文里没有可复制的命令行：{full[:200]}"
+    assert "默认参数下它做不到什么" in full, "全文里没有局限那一节"
+    assert "<url>" in full, (
+        "必填参数没渲染成 <占位符> —— 填一个像样的值会让模型直接复制走"
+    )
+
+
+def test_load_recipe_unknown_name_returns_available_list():
+    """名字拼错时回**可用清单**，不是空串。
+
+    与 `skills.load_skill_text` 同一条纪律：空串会让模型反复猜名字，
+    每猜一次烧一个回合。
+    """
+    got = recipes_mod.render_recipe("no-such-recipe-xyz")
+    assert "没有名为" in got
+    assert "nmap" in got and "sqlmap" in got, "没回可用清单，模型无从纠正"
+
+
+def test_recipes_module_imports_cleanly():
+    """模块本身能干净导入（一致性断言在 import 时执行，见模块末尾）。
+
+    ⚠️ 这条**故意不再是**「app/ 下有没有字符串 RECIPE」那种文本搜索。
+    那种断言在 v0.98——配方完全没进提示词的状态——就是绿的，
+    因为 `service.py` 的 API 列表满足了它。测"有人提过这个名字"
+    与测"知识到了模型手上"是两件事，后者见本节上面四条。
     """
     import subprocess
     import sys
@@ -333,19 +478,3 @@ def test_the_recipe_library_is_actually_imported_somewhere_outside_itself():
         cwd=".",
     )
     assert result.returncode == 0, f"recipes 模块导不进来：{result.stderr}"
-
-    # 用文本搜索而不是运行时反射：要确认代码里**有引用**，
-    # 而"被 import 了但没人读它的字段"也算没接线。
-    from pathlib import Path
-
-    app_dir = Path(__file__).resolve().parents[2] / "app"
-    hits = [
-        p
-        for p in app_dir.rglob("*.py")
-        if p.name != "recipes.py" and "RECIPE" in p.read_text(encoding="utf-8")
-    ]
-    assert hits, (
-        "app/ 下除了 recipes.py 自己，没有任何模块引用 RECIPE_*。"
-        "这意味着配方库没有接线：界面上看不到、模型也调不到 —— "
-        "与 mcp_servers 在 v0.72 的坏法完全相同"
-    )

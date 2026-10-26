@@ -1,6 +1,17 @@
 import { ApiError, api, toApiError } from '@/lib/api'
 import { useSyncExternalStore } from 'react'
 
+import {
+  TURN_AWAITING,
+  TURN_DONE,
+  TURN_ERROR,
+  TURN_MESSAGE,
+  TURN_PHASE,
+  asChatMessage,
+  streamTurn,
+  type PhasePayload,
+} from './chat-stream'
+
 /**
  * 对话页的会话与消息（v0.93）。
  *
@@ -168,6 +179,32 @@ export interface ChatState {
   pendingUserContent: string | null
   /** 一轮正在跑。界面据此禁用输入框并显示"正在想"。 */
   sending: boolean
+  /**
+   * ★ v0.100：这一轮**现在在做什么**（`thinking` / `tool`）。
+   *
+   * ## 为什么它必须与 `sending` 分开
+   *
+   * `sending` 只回答"有没有在跑"。而用户盯着屏幕的那几十秒想问的是
+   * 「它到底在推进还是卡住了」—— 那需要知道是第几轮、是不是在跑某个工具。
+   * 合成一个布尔量就只能显示一个没有信息的转圈。
+   *
+   * `null` = 没有在跑。
+   */
+  phase: PhasePayload | null
+  /**
+   * ★ v0.100：跑的过程中**用户插的话**（还没被模型看到的那几句）。
+   *
+   * ## 为什么它们不能直接进 `messages`
+   *
+   * 插话是真实落库的消息，但它插在**正在跑的那一轮**中间 ——
+   * 而那一轮的 `messages` 由服务端在结束时整体给出。两边同时往里写
+   * 会撞 id / 顺序。所以：插话先显示在这里（用户能看见自己的话进去了），
+   * 那一轮结束后由 `loadActiveSession` 从服务端拿真消息，这里清空。
+   *
+   * 这也是为什么插话端点**返回**那条消息：界面用它立刻显示，
+   * 而不用等下一轮刷新。
+   */
+  interjections: ChatMessage[]
   /** 有一条审批正在提交。界面据此禁用那两个按钮，防重复点。 */
   deciding: boolean
 }
@@ -182,6 +219,8 @@ const EMPTY: ChatState = {
   error: null,
   pendingUserContent: null,
   sending: false,
+  phase: null,
+  interjections: [],
   deciding: false,
 }
 
@@ -281,6 +320,39 @@ export async function loadTools(): Promise<void> {
   }
 }
 
+/**
+ * 只把「当前打开的那个会话」的消息列表重新拉一遍。
+ *
+ * ## 和 `openSession` 的区别
+ *
+ * `openSession` 会整块替换 `active`（标题、计数、消息全换），还会顺手清
+ * 附件 —— 它的语义是"切会话"。这里只补消息，因为调用它的场景是**同一
+ * 个会话正在看的时候**（插话那一轮刚结束），换掉整个对象会把别的状态
+ * （比如 `stagedAttachments`）一起冲掉。
+ *
+ * ## 什么时候需要它
+ *
+ * 只要服务端产生了一条**引擎不会通过流发出来的** user 消息，前端就看不见
+ * 它 —— 典型就是 `interject()`。它是直接调端点写库的，不经引擎，
+ * 所以既没有 message 帧，也不在 `active.messages` 里。
+ *
+ * 失败静默：这是一次补数据的机会，不是用户主动操作。报错会盖掉真正的
+ * 错误（比如那一轮本身的失败原因），反而更糊涂。
+ */
+export async function refreshActiveMessages(sessionId: string): Promise<void> {
+  try {
+    const detail = await api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}`)
+    const current = state.active
+    // 等回来的这段时间用户可能已经切走了 —— 那就不要往新会话里写旧数据。
+    if (!current || current.id !== sessionId) return
+    patch({
+      active: { ...current, messages: detail.messages, messageCount: detail.messages.length },
+    })
+  } catch {
+    // 静默（见 docstring）
+  }
+}
+
 /** 打开一个会话（拉详情）。 */
 export async function openSession(sessionId: string): Promise<void> {
   patch({ status: 'loading', error: null })
@@ -342,46 +414,135 @@ export async function sendMessage(
   // ★ 让用户那句话**立刻**出现在屏幕上（v0.97）。放在 `sending: true` 同一个
   //   patch 里，所以从用户点下发送到气泡出现的这段时间是一个渲染帧，
   //   而不是一整轮模型推理。
-  patch({ sending: true, error: null, pendingUserContent: content })
-  try {
-    const body: Record<string, unknown> = { content }
-    if (providerId) body.providerId = providerId
-    // ★ 附件 id 只在这一条上生效。后端读完正文就删（见 attachments 模块），
-    //   所以这里发完必须清空 `stagedAttachments` —— 不清的话界面会继续显示
-    //   "已上传 3 个"，而它们在服务端已经不存在了；用户再发一条会看到
-    //   "附件读不到"这种莫名其妙的错误。
-    const attachmentIds = state.stagedAttachments.map((a) => a.id)
-    if (attachmentIds.length > 0) body.attachmentIds = attachmentIds
-    // 用户在正文里 @ 的工具。★ 只影响提示词里的一句"优先用这些"，
-    //   不限制模型用别的 —— 强行限制会让它在工具不适用时无法退让。
-    if (explicitTools && explicitTools.length > 0) body.explicitTools = explicitTools
+  patch({
+    sending: true,
+    error: null,
+    pendingUserContent: content,
+    phase: null,
+    interjections: [],
+  })
 
-    const result = await api.post<{
-      messages: ChatMessage[]
-      awaitingApproval?: string | null
-    }>(`/chat/sessions/${sessionId}/messages`, body, {
-      // 一轮要等模型想 + 调工具，默认 20 秒不够。
-      timeoutMs: 180_000,
+  // ★ 附件 id 只在这一条上生效。后端读完正文就删（见 attachments 模块），
+  //   所以这里发完必须清空 `stagedAttachments` —— 不清的话界面会继续显示
+  //   "已上传 3 个"，而它们在服务端已经不存在了；用户再发一条会看到
+  //   "附件读不到"这种莫名其妙的错误。
+  const attachmentIds = state.stagedAttachments.map((a) => a.id)
+
+  try {
+    /**
+     * ★★ v0.100：走**流式**端点。
+     *
+     * ## 改的是什么
+     *
+     * 之前是 `await api.post(...)` —— 整轮一次回包（模型想 + 最多 6 轮
+     * 工具往返，实测 30 秒以上），期间界面上只有一个转圈。
+     * 用户原话：「没有思考过程、工具调用、调用结果的显示」。
+     *
+     * 现在每落一条消息就收到一帧，界面**边跑边长**。
+     *
+     * ## ★ 乐观气泡怎么退场
+     *
+     * `pendingUserContent`（v0.97 那个立刻显示的用户气泡）在收到**第一条
+     * user 消息帧**时清掉，而不是等整轮结束。它对应的那条真消息
+     * 紧接着就进了 `messages` —— 两者不会同屏，也不会在整轮期间留一条
+     * 假气泡在真气泡旁边。
+     */
+    const ok = await streamTurn({
+      sessionId,
+      content,
+      providerId,
+      attachmentIds,
+      explicitTools,
+      onEvent: (frame) => {
+        const current = state.active
+        if (!current || current.id !== sessionId) return
+
+        if (frame.event === TURN_PHASE) {
+          // 「正在想…」那一行现在能显示"第几轮 / 在跑哪个工具"
+          patch({ phase: frame.data as unknown as PhasePayload })
+          return
+        }
+
+        if (frame.event === TURN_MESSAGE) {
+          const message = asChatMessage(frame.data)
+          if (!message) return
+          // 同一条消息可能因为重连/重放来两次 —— 按 id 去重。
+          // 不去重的话界面上会出现两张一模一样的卡（而"重复"看起来像模型重复了动作）。
+          if (current.messages.some((m) => m.id === message.id)) return
+          const messages = [...current.messages, message]
+          patch({
+            active: {
+              ...current,
+              messages,
+              messageCount: messages.length,
+              title:
+                current.messageCount === 0 && message.role === 'user'
+                  ? deriveTitle(current.title, content)
+                  : current.title,
+            },
+            // 真用户消息到了 → 乐观气泡功成身退（不能等整轮结束：
+            // 那会让两句话同屏几十秒）。
+            pendingUserContent: message.role === 'user' ? null : state.pendingUserContent,
+          })
+          return
+        }
+
+        if (frame.event === TURN_AWAITING) {
+          // 停下来等人工确认：清掉 phase，界面据此把输入框让出来并提示
+          patch({ phase: null })
+          return
+        }
+
+        if (frame.event === TURN_ERROR) {
+          const detail = typeof frame.data.message === 'string' ? frame.data.message : '这一轮失败了'
+          patch({ error: { message: detail } as ApiError })
+          return
+        }
+
+        if (frame.event === TURN_DONE) {
+          patch({ phase: null })
+        }
+      },
     })
 
-    const active = state.active
-    if (active && active.id === sessionId) {
-      const messages = [...active.messages, ...result.messages]
-      patch({
-        active: {
-          ...active,
-          messages,
-          messageCount: messages.length,
-          // 首条消息会让后端自动生成标题，这里同步一份猜测值 ——
-          // 下一次 loadSessions 会用真值覆盖。
-          title: active.messageCount === 0 ? deriveTitle(active.title, content) : active.title,
-        },
-        // 附件已被后端读走并删除，本地也清掉。
-        stagedAttachments: attachmentIds.length > 0 ? [] : state.stagedAttachments,
-        // 真消息已经进了 `messages`，乐观气泡功成身退 —— 必须在这里清，
-        // 否则界面上会出现两条一模一样的用户消息。
-        pendingUserContent: null,
-      })
+    if (!ok) {
+      // 流里出现了 error 帧（onEvent 已经 patch 过 error）。这里只补一件事：
+      // 把 phase 清掉，否则界面会一直显示"正在想"。
+      patch({ phase: null })
+      return false
+    }
+
+    // 附件已被后端读走并删除，本地也清掉。
+    if (attachmentIds.length > 0) patch({ stagedAttachments: [] })
+
+    /*
+     * ★★ v0.101：把「插话」兑现成真消息。
+     *
+     * ## 为什么必须在这里刷新（这条修复的由来）
+     *
+     * `interject()` 写库后只把消息塞进本地 `interjections` 暂存区，
+     * 界面上显示成「插话 · 模型下一轮会看到」。而这句提示的**有效期
+     * 只有那一轮** —— 轮次一结束它就变成假话，因为：
+     *
+     *   - 引擎在每轮开头 `list_messages` 重读历史，所以它**确实**被模型
+     *     看到了（`tests/test_chat_stream.py` 的
+     *     `test_interjection_is_seen_by_the_next_round` 钉的正是这条）；
+     *   - 但它**不是引擎落库的**，所以引擎不会为它发 message 帧 ——
+     *     前端 `active.messages` 里永远没有它。
+     *
+     * 结果：那一轮结束后，屏幕上留着一条带「模型下一轮会看到」的僵尸
+     * 气泡，而服务端的真实消息列表里它已经是一条**普通 user 消息**了。
+     * 两边的说法互相矛盾，且要等用户发下一条消息（`sendMessage` 开头
+     * 那句 `interjections: []`）才会消失。
+     *
+     * 修法就是 docstring 里一直写着、但代码里从没做过的那句：
+     * 「那一轮结束时从服务端取回真消息，这里清空」。
+     */
+    const hadInterjection = state.interjections.length > 0
+    if (hadInterjection) {
+      // 不 await：气泡已经正确退场了（`finally` 里清），刷新只是把真消息
+      // 补进列表。await 它会让 `sending` 多挂一个往返，输入框白等。
+      void refreshActiveMessages(sessionId)
     }
 
     // 列表里的 updatedAt / messageCount 变了，静默刷新一次列表。
@@ -395,7 +556,55 @@ export async function sendMessage(
     // ★ 失败路径也要清乐观气泡：那句话没发出去（`pendingUserContent` 留着
     //   会让人以为发出去了，而实际服务端没有这条记录）。页面会把原文放回
     //   输入框，用户在那里能看到并重发。
-    patch({ sending: false, pendingUserContent: null })
+    //
+    // ★ 成功路径此时 `pendingUserContent` 已经是 null（第一条 user 消息帧
+    //   清掉了），这里再写一次 null 是幂等的。
+    //
+    // ★★ v0.101：`interjections` 也在这里清 —— 那条提示「模型下一轮会看到」
+    //   只管到这一轮结束。放 `finally` 而不是只在成功路径清，是因为失败
+    //   路径上它同样已经过期：插话早就写进库了（`interject` 自己 commit），
+    //   这一轮失败不影响那条消息存在，气泡留着只会继续说假话。
+    patch({ sending: false, pendingUserContent: null, phase: null, interjections: [] })
+  }
+}
+
+/**
+ * ★ v0.100：在一轮跑着的时候插一句话。
+ *
+ * ## 它为什么独立于 `sendMessage`
+ *
+ * `sendMessage` 会起一整轮（新的模型调用、预算、工具额度）。
+ * 插话**不起新一轮** —— 它只是往库里写一条 user 消息，正在跑的那一轮
+ * 在下一轮开头会重新读历史，于是自然看到它。
+ *
+ * ## 为什么返回 `boolean` 而不是抛
+ *
+ * 与 `sendMessage` 同一条纪律：失败时页面要把用户敲的字留在输入框里。
+ *
+ * ## ⚠️ 插话进 `interjections` 而不是 `active.messages`
+ *
+ * 那一轮的 `messages` 由服务端在结束时整体给出，两边同时往里写会撞
+ * id / 顺序。`interjections` 是"已送出去、模型还没看到"的暂存区，
+ * 界面把它显示在消息流末尾（用户能看见自己的话进去了）；
+ * 那一轮结束时由刷新从服务端取回真消息，这里清空。
+ */
+export async function interject(sessionId: string, content: string): Promise<boolean> {
+  const trimmed = content.trim()
+  if (!trimmed) return false
+  try {
+    const message = await api.post<ChatMessage>(
+      `/chat/sessions/${sessionId}/interject`,
+      { content: trimmed },
+      { timeoutMs: 15_000 },
+    )
+    const active = state.active
+    if (active && active.id === sessionId) {
+      patch({ interjections: [...state.interjections, message] })
+    }
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
   }
 }
 

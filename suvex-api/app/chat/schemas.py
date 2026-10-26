@@ -53,7 +53,19 @@ ChatRole = Literal["user", "assistant", "tool"]
 #:   被拒，而不是写进库、再被数据库 CHECK 拒（后者报的是英文约束名，
 #:   用户看不懂）。但数据库那条 CHECK 仍然保留 —— 它挡的是不经 API 的写入。
 ChatPersonaId = Literal[
-    "default", "recon", "pentest", "binary", "postex", "container", "forensics"
+    "default",
+    "recon",
+    "pentest",
+    "binary",
+    "postex",
+    "container",
+    "forensics",
+    # ★ v0.99：与 `models.CHAT_PERSONAS` / `prompts.CHAT_PERSONAS_SPEC` /
+    #   迁移 `f3a1c8d52e07` 同源。文件末尾那条断言钉住这里不能漏。
+    "api",
+    "cloud",
+    "ctf",
+    "aillm",
 ]
 
 #: 审批状态。与 `models.APPROVAL_STATUSES` 同源。
@@ -239,6 +251,22 @@ class ChatSendOut(CamelModel):
     awaitingApproval: str | None = None
 
 
+class ChatInterjectIn(StrictModel):
+    """在模型跑的时候插一句话（v0.100）。
+
+    ## 为什么它比 `ChatSendIn` 少了三个字段
+
+    `providerId` / `attachmentIds` / `explicitTools` 都是**对本次请求生效**
+    的东西：换模型、带附件、@ 工具。而插话是往一个**已经跑起来的轮次**
+    里补一句上下文 —— 那一轮的模型和附件在它启动时就已经定了，
+    改它们不会生效，只会在界面上造成"我换了模型但其实没换"的错觉。
+
+    所以这里只有正文。少即是准确。
+    """
+
+    content: MessageBody = Field(..., description="要插进去的话")
+
+
 class ChatRenameIn(StrictModel):
     """改标题。"""
 
@@ -247,7 +275,23 @@ class ChatRenameIn(StrictModel):
 
 #: 反向校验：`models.CHAT_PERSONAS` 与 `ChatPersonaId` 必须是同一组。
 #: 与下面那条 `CHAT_ROLES` 断言同样的理由：它是编译期断言，成本为零。
-_PERSONA_LITERALS = ("default", "recon", "pentest", "binary", "postex", "container", "forensics")
+#:
+#: ★ v0.99：这里必须与 `ChatPersonaId`（上面的 Literal）**一起**改。
+#:   这条断言正是为了让"只改一处"在 import 期就炸 —— 而它这次真的
+#:   在人格扩容时炸了一次（加四个新人格时漏了这个元组）。
+_PERSONA_LITERALS = (
+    "default",
+    "recon",
+    "pentest",
+    "binary",
+    "postex",
+    "container",
+    "forensics",
+    "api",
+    "cloud",
+    "ctf",
+    "aillm",
+)
 assert set(CHAT_PERSONAS) == set(_PERSONA_LITERALS), (
     f"models.CHAT_PERSONAS 与 schemas 的 ChatPersonaId 不一致：{CHAT_PERSONAS}"
 )

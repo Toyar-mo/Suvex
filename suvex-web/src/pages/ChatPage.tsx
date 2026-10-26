@@ -23,6 +23,7 @@ import {
   createSession,
   decideApproval,
   dropStagedAttachment,
+  interject,
   loadPersonas,
   loadSessions,
   loadTools,
@@ -34,6 +35,7 @@ import {
   type ChatMessage,
   type ChatSession,
 } from '@/data/chat'
+import type { PhasePayload } from '@/data/chat-stream'
 import { useProjectedProviders } from '@/data/settings-store'
 import { useTools } from '@/data/tools'
 import { errorMessage } from '@/lib/api'
@@ -101,6 +103,31 @@ const STARTERS = [
   '帮我加一个 MCP 工具连接',
 ]
 
+/**
+ * 「正在想…」那一行该显示什么（v0.100）。
+ *
+ * ## 为什么它值得一个独立函数 + 独立注释
+ *
+ * 改造前这一行永远是「正在想…」。而一轮对话可能有 1 次模型调用 +
+ * 最多 6 轮工具往返，实测能到 30 秒以上 —— 用户在那段时间里**无法判断**
+ * 「它在推进」还是「它卡住了」。这两件事的应对完全不同（等 / 刷新重发）。
+ *
+ * 所以这里把后端推来的 `phase` 翻成一句人话：
+ *   · `thinking` → 第几轮推理（数字让"在推进"看得见）
+ *   · `tool`     → 正在跑哪个工具（名字让"它到底在干嘛"看得见）
+ *
+ * `phase` 为 `null`（刚点发送、还没收到第一帧）时回落到原文案 ——
+ * 那一刻确实没有更多信息可说，硬编一个"准备中"反而像卡住了。
+ */
+function phaseLabel(phase: PhasePayload | null | { phase: string; round: number; tool?: string }): string {
+  if (!phase) return '正在想…'
+  const round = typeof phase.round === 'number' ? phase.round + 1 : 0
+  if (phase.phase === 'tool' && phase.tool) {
+    return `第 ${round} 轮 · 正在执行 ${phase.tool}…`
+  }
+  return round > 0 ? `第 ${round} 轮 · 模型在推理…` : '正在想…'
+}
+
 export function ChatPage() {
   const {
     sessions,
@@ -116,6 +143,9 @@ export function ChatPage() {
     //   技能库**。两者名字都在讲"工具"，混用会让 @补全列出根本点不动的条目。
     tools,
     pendingUserContent,
+    // ★ v0.100：流式过程中的两个状态 —— 现在在做什么、用户插了哪些话。
+    phase,
+    interjections,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -172,6 +202,14 @@ export function ChatPage() {
 
   const [personaOpen, setPersonaOpen] = useState(false)
   const [uploading, setUploading] = useState(false)
+  /**
+   * ★ v0.100：一次插话正在提交。
+   *
+   * 与 `sending` 分开：`sending` 是"整轮在跑"（由 store 管），这个是
+   * "我刚按下插话、HTTP 还没回来"（几百毫秒）。合成一个会让发送按钮
+   * 在整轮期间一直转圈 —— 暗示"点不动"，而它此刻正是**能**点的。
+   */
+  const [interjecting, setInterjecting] = useState(false)
 
   /*
     ★ 只在**会话 id 变了**时才拉详情。
@@ -213,7 +251,17 @@ export function ChatPage() {
     //   视口下方而页面不滚，用户以为点了没反应（正是这次要修的症状）。
   }, [messageCount, sending, pendingUserContent])
 
-  const canSend = draft.trim().length > 0 && !sending && active !== null
+  /**
+   * ★ v0.100：能不能按发送。
+   *
+   * 两种合法动作，**判据不同**：
+   *   · 空闲 → 发一条消息（会起一轮，所以要 `sending === false`）
+   *   · 跑着 → 插一句话（不起新一轮，所以 `sending === true` **也允许**）
+   *
+   * 改造前这里写的是 `!sending` —— 于是跑的时候输入框被禁用，
+   * 用户的原话「正在想的时候不能插话」说的就是这个。
+   */
+  const canSend = draft.trim().length > 0 && active !== null
 
   async function handleNew() {
     const session = await createSession()
@@ -227,6 +275,25 @@ export function ChatPage() {
   async function handleSend() {
     if (!canSend || !active) return
     const content = draft.trim()
+
+    // ★★ v0.100：跑着的时候，这一下是**插话**，不是发消息。
+    //
+    // 两条路径的差别不是措辞：`sendMessage` 会起一整轮（新的模型调用、
+    // 新的工具额度），而 `interject` 只往库里写一句话、由正在跑的那一轮
+    // 在下一轮开头读到。混用会让用户在模型跑的时候莫名开启第二轮，
+    // 而那一轮的上下文与第一轮并行 —— seq 顺序、工具预算都会乱。
+    if (sending) {
+      setDraft('')
+      setInterjecting(true)
+      try {
+        const ok = await interject(active.id, content)
+        if (!ok) setDraft(content)
+      } finally {
+        setInterjecting(false)
+      }
+      return
+    }
+
     // ★ 从**原始 draft** 里解析提及，而不是从 trim 后的 content：
     //   两者只差首尾空白，但用同一个来源能避免"编辑器看到的和发出去的
     //   不是同一段字"这类难以复现的偏差。
@@ -613,13 +680,43 @@ export function ChatPage() {
                 </div>
               )}
 
+              {/*
+                ★ v0.100：跑的过程中用户插的话。
+
+                它们在时间上位于"已有消息之后、模型下一轮之前" ——
+                而那正是下一轮模型会读到它们的位置。显示在消息流末尾
+                让用户能确认「我这句话真的进去了」（这是插话功能
+                唯一需要界面证明的事）。
+
+                与 `pendingUserContent` 分开画：那个是"还没落库"的乐观气泡，
+                这个是"已经落库、等模型下一轮看到"的真消息。
+                合成一个状态会让"到底发出去没有"变得不可知。
+              */}
+              {interjections.map((message) => (
+                <div key={message.id} className="flex justify-end" data-interjection="true">
+                  <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/8 px-3 py-2">
+                    <p className="mb-0.5 text-[11px] text-ink-faint">插话 · 模型下一轮会看到</p>
+                    <p className="whitespace-pre-wrap break-words text-sm text-ink">
+                      {message.content}
+                    </p>
+                  </div>
+                </div>
+              ))}
+
               {sending && (
                 <div className="flex items-center gap-1.5 pl-1" role="status" aria-live="polite">
                   <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-pill bg-accent opacity-60" />
                     <span className="relative inline-flex h-1.5 w-1.5 rounded-pill bg-accent" />
                   </span>
-                  <span className="text-2xs text-ink-faint">正在想…</span>
+                  {/*
+                    ★ v0.100：这一行不再只是「正在想…」。
+
+                    它现在会说**在做什么、第几轮** —— 因为用户盯着屏幕的
+                    那几十秒真正想知道的是「它在推进还是卡住了」，
+                    而一个没有信息的转圈回答不了这个问题。
+                  */}
+                  <span className="text-2xs text-ink-faint">{phaseLabel(phase)}</span>
                 </div>
               )}
               <div ref={bottomRef} />
@@ -708,11 +805,27 @@ export function ChatPage() {
               }}
               rows={2}
               placeholder={
-                active
-                  ? '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
-                  : '先新建或打开一个对话'
+                !active
+                  ? '先新建或打开一个对话'
+                  : sending
+                    ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
+                    : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
               }
-              disabled={!active || sending}
+              /*
+                ★★ v0.100：跑的时候**不再禁用**输入框。
+
+                改造前这里是 `disabled={!active || sending}` —— 而用户的原话
+                正是「正在想的时候不能插话」。禁用的理由当时是
+                "同一时刻只发一条"（`sending` 是全局布尔，两条并发会让
+                seq 乱序）。但**插话不是发第二条**：它不启新一轮，
+                只是往库里写一条 user 消息，由正在跑的那一轮在下一轮
+                开头读到（见后端 `interject` 端点的 docstring）。
+
+                所以这里放开输入，但**发送键的语义变了**（见 `canSend` 与
+                `handleSend`）：跑的时候 Enter 是"插话"，不是"发消息"。
+                文案必须跟着变，否则用户会以为自己在开第二轮。
+              */
+              disabled={!active}
               aria-label="输入消息"
               className={cn(
                 'max-h-40 min-h-[2.5rem] flex-1 resize-y rounded-sm border border-line bg-surface-sunken',
@@ -724,12 +837,17 @@ export function ChatPage() {
             <Button
               onClick={() => void handleSend()}
               disabled={!canSend}
-              loading={sending}
+              /*
+                ★ 跑着的时候这个按钮是「插话」，不该显示转圈：
+                转圈意味着"这个按钮正在忙、点不动"，而它此刻恰恰**能**点。
+                转圈只该出现在真正提交出去的那一下（`interjecting`）。
+              */
+              loading={interjecting}
               size="sm"
-              aria-label="发送"
+              aria-label={sending ? '插话' : '发送'}
             >
               <Send size={14} strokeWidth={2} aria-hidden="true" />
-              发送
+              {sending ? '插话' : '发送'}
             </Button>
           </div>
           {user?.role !== 'admin' && (
@@ -834,7 +952,15 @@ function MessageRow({
 
   if (message.role === 'user') {
     return (
-      <div className="flex justify-end">
+      <div
+        className="flex justify-end"
+        // ★ v0.100：稳定标记。端到端验证要靠它数「屏幕上有几条消息」，
+        //   而在此之前消息行**没有任何可定位的特征** —— 只能靠文案猜，
+        //   那种断言在文案改一个字之后就失效。
+        //   同时它也让"这条消息在第几位"在 DOM 里可查（`data-seq`）。
+        data-message-row="user"
+        data-seq={message.seq}
+      >
         <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/12 px-3 py-2">
           <p className="whitespace-pre-wrap break-words text-sm text-ink">{message.content}</p>
         </div>
@@ -847,7 +973,7 @@ function MessageRow({
   }
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1" data-message-row="assistant" data-seq={message.seq}>
       {message.reasoning && <ReasoningBlock text={message.reasoning} />}
       <div className="rounded-md rounded-bl-xs bg-surface-raised px-3 py-2">
         <p className="whitespace-pre-wrap break-words text-sm text-ink">{message.content}</p>
@@ -866,6 +992,11 @@ function ToolCard({ message }: { message: ChatMessage }) {
   const failed = message.toolFailed === true
   return (
     <div
+      // ★ v0.100：工具卡也要能被数出来 —— 端到端验证的核心判据之一就是
+      //   「工具卡是一张张出现的，不是最后一次性蹦出来的」。
+      data-message-row="tool"
+      data-seq={message.seq}
+      data-tool-name={message.toolName ?? ''}
       className={cn(
         'rounded-sm border px-2.5 py-1.5',
         failed ? 'border-signal-risk/40 bg-signal-risk/5' : 'border-line bg-surface-sunken',

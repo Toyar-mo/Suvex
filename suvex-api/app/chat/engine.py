@@ -58,6 +58,7 @@ from app.chat.prompts import (
     build_system_prompt,
     may_call_tool,
 )
+from app.chat.stream import EVENT_AWAITING, EVENT_MESSAGE, EVENT_PHASE, Emit
 
 _log = logging.getLogger(__name__)
 
@@ -110,6 +111,52 @@ class ChatTurnResult:
     #:   用户点确认时也要把它带回来。用布尔量的话前端还得自己从
     #:   `messages` 里再筛一遍。
     awaiting_approval: str | None = None
+
+
+# ══════════════════════════════════════════════════════════
+# 流式推送的辅助（v0.100）
+# ══════════════════════════════════════════════════════════
+#
+# 这三个都是**空转安全**的：`emit is None` 时立刻返回，一个 await 都不做。
+# 非流式路径（`POST /messages`）因此逐字节保持旧行为 —— 这条很重要，
+# 那条路径被审批、重放与大量测试用着。
+
+
+async def _emit(emit: Emit | None, event: str, payload: dict[str, Any]) -> None:
+    """推一帧（`emit` 为空就什么都不做）。"""
+    if emit is not None:
+        await emit(event, payload)
+
+
+async def _emit_message(emit: Emit | None, message: Any) -> None:
+    """推一条**已落库**的消息。
+
+    ⚠️ 用 `ChatMessageOut` 的序列化口径（camelCase），不是 ORM 对象直接 dump。
+       前端按 camelCase 解析，推 snake_case 会让字段全部读不到 ——
+       而那种错在界面上表现为「工具卡没有名字」这类奇怪的空值，
+       不像一个协议错误。
+    """
+    if emit is None:
+        return
+    from app.chat.schemas import ChatMessageOut
+
+    await emit(
+        EVENT_MESSAGE,
+        ChatMessageOut.model_validate(message).model_dump(mode="json", by_alias=True),
+    )
+
+
+async def _emit_phase(
+    emit: Emit | None, phase: str, round_index: int, **extra: Any
+) -> None:
+    """推一条「现在在做什么」的 phase 帧。
+
+    `phase` 取值：`thinking`（模型在推理）/ `tool`（正在执行某个工具）。
+    额外字段原样带上（工具名等），前端只认它认识的。
+    """
+    if emit is None:
+        return
+    await emit(EVENT_PHASE, {"phase": phase, "round": round_index, **extra})
 
 
 # ══════════════════════════════════════════════════════════
@@ -636,7 +683,8 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
 
 #: 工具名 → 实现。**这是唯一的注册表** —— `prompts.CHAT_TOOLS` 里列了但这里
 #: 没有的名字，会在 `_execute_tool` 里被明确报出来（而不是静默变成"未知工具"）。
-#: 反过来，这里有而清单里没有的名字，`test_chat_tools.py` 会红。
+#: 反过来，这里有而清单里没有的名字也会红
+#: （`tests/test_chat.py::test_every_declared_tool_has_an_implementation_and_vice_versa`）。
 _TOOL_IMPLS: dict[str, Any] = {
     "list_scans": _tool_list_scans,
     "create_scan": _tool_create_scan,
@@ -855,6 +903,7 @@ async def run_turn(
     gateway: Any = None,
     attachment_ids: list[str] | None = None,
     explicit_tools: list[str] | None = None,
+    emit: Emit | None = None,
 ) -> ChatTurnResult:
     """跑一轮对话。
 
@@ -868,6 +917,19 @@ async def run_turn(
     这一轮要带给模型看的附件 id。正文在**落用户消息之前**读出来并拼进
     这条消息的 `content` —— 见 `attachments.read_text` 的说明为什么
     "用完即删"。
+
+    ## 参数 `emit`（v0.100）
+
+    推一帧的回调。**不传就是老行为**（整轮跑完才回包），那条路径被审批、
+    重放与大量测试用着，不能因为这次改造而变成"必须有订阅者"。
+
+    传了之后，每一个「已经落库并 commit」的节点都会推一帧出去 ——
+    界面上于是能实时看到：模型在推理 → 它说了什么 → 它要调哪个工具 →
+    工具结果是什么 → 下一轮…
+
+    ⚠️ 推的必须是**已落库**的那条消息（`ChatMessageOut` 的形态），
+       不是临时拼的对象：界面上最终显示的是库里那条，
+       推一份临时数据会在结束时"跳一下"，更糟时两者内容不一致。
 
     ## 流程
 
@@ -901,6 +963,7 @@ async def run_turn(
     user_message = chat_service.append_user_message(db, session=session, content=stored_content)
     result.messages.append(user_message)
     db.commit()
+    await _emit_message(emit, user_message)
 
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, provider_id), db)
@@ -912,6 +975,14 @@ async def run_turn(
     gate_on = bool(session.require_approval)
 
     for round_index in range(MAX_TOOL_ROUNDS + 1):
+        # ★ v0.100：在调模型**之前**推一条 phase 帧。
+        #
+        # 这一帧对应的正是界面上「正在想…」那一行 —— 它现在能显示
+        # 「第 2 轮 · 模型在推理」而不是一个没有信息的转圈。
+        # 工具往返越多，这个信息越有用：用户能看出它是**在推进**
+        # 还是**卡住了**。
+        await _emit_phase(emit, "thinking", round_index, budget=MAX_TOOL_ROUNDS)
+
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
@@ -961,6 +1032,7 @@ async def run_turn(
             )
             db.commit()
             result.messages.append(placeholder)
+            await _emit_message(emit, placeholder)
             return result
 
         assistant_message = chat_service.append_assistant_message(
@@ -968,6 +1040,7 @@ async def run_turn(
         )
         result.messages.append(assistant_message)
         db.commit()
+        await _emit_message(emit, assistant_message)
 
         if not actions:
             return result
@@ -991,7 +1064,18 @@ async def run_turn(
                 result.messages.append(pending)
                 result.awaiting_approval = pending.id
                 db.commit()
+                await _emit_message(emit, pending)
+                # ★ 单独的 awaiting 帧：界面据此把输入框放出来并提示
+                #   "先确认一下"，而不是继续转圈等一个永远不会来的结果。
+                await _emit(emit, EVENT_AWAITING, {"messageId": pending.id})
                 return result
+
+            # ★ 工具**开始执行**之前先推一帧。
+            #
+            # 理由：`_execute_tool` 可能跑几十秒（一个扫描、一次模型调用的
+            # 代理）。只在结束时推结果的话，界面上那段时间是空的 ——
+            # 与改造前的体验一样。推一条"开始"帧，用户才知道它在干嘛。
+            await _emit_phase(emit, "tool", round_index, tool=name)
 
             output, failed = await _execute_tool(ctx, name, args)
             tool_message = chat_service.append_tool_message(
@@ -1004,6 +1088,7 @@ async def run_turn(
             )
             result.messages.append(tool_message)
             db.commit()
+            await _emit_message(emit, tool_message)
 
     return result
 

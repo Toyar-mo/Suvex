@@ -48,6 +48,8 @@ vi.mock('@/data/chat', () => ({
   uploadAttachment: vi.fn(async () => null),
   dropStagedAttachment: vi.fn(async () => true),
   decideApproval: vi.fn(async () => true),
+  // ★ v0.100：插话。跑着的时候 Enter 走这条路径（见 `handleSend`）。
+  interject: vi.fn(async () => true),
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
   getChatSnapshot: vi.fn(),
@@ -58,6 +60,7 @@ import { useAuth } from '@/data/auth-store'
 import {
   archiveSession,
   createSession,
+  interject,
   loadSessions,
   sendMessage,
   useChat,
@@ -71,6 +74,7 @@ const mockedUseChat = vi.mocked(useChat)
 const mockedSendMessage = vi.mocked(sendMessage)
 const mockedCreateSession = vi.mocked(createSession)
 const mockedArchiveSession = vi.mocked(archiveSession)
+const mockedInterject = vi.mocked(interject)
 
 function session(overrides: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -111,6 +115,11 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     error: null,
     pendingUserContent: null,
     sending: false,
+    // ★ v0.100：流式过程中的两个状态。
+    //   夹具不补它们，tsc 会报"缺属性" —— 那正是它该报的：
+    //   少一个字段意味着页面读到 undefined，渲染逻辑会静默走错分支。
+    phase: null,
+    interjections: [],
     deciding: false,
     ...overrides,
   }
@@ -588,5 +597,161 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
     // 1 条真消息 + 1 条乐观气泡 = 2
     expect(screen.getByText('2 条消息')).not.toBeNull()
     expect(screen.queryByText('1 条消息')).toBeNull()
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  v0.100：流式 —— 跑的时候能看见、能插话
+  ══════════════════════════════════════════════════════════════
+
+  用户的原话是「正在想的时候不能插话，没有思考过程、工具调用、
+  调用结果的显示」。所以这里钉两件**用户能直接感知**的事：
+
+  ① 那个转圈旁边必须真的说清「在做什么、第几轮」——
+     一个没有信息的转圈回答不了"它在推进还是卡住了"。
+  ② 跑的时候输入框**能用**，按下去是「插话」而不是再开一轮。
+*/
+
+describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
+  it('★ 转圈旁边显示"第几轮 + 在做什么"，而不是一句没有信息的"正在想"', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    // round 是 0-based，界面上要 1-based（"第 1 轮"比"第 0 轮"自然）
+    expect(screen.getByText(/第 1 轮/)).not.toBeNull()
+    expect(screen.getByText(/推理/)).not.toBeNull()
+  })
+
+  it('★ 执行工具时显示工具名（用户能看出它在干嘛，而不是卡住）', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        phase: { phase: 'tool', round: 1, tool: 'list_skills' },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    expect(screen.getByText(/list_skills/)).not.toBeNull()
+    expect(screen.getByText(/第 2 轮/)).not.toBeNull()
+  })
+
+  it('★ 没有 phase 时回落到"正在想…"（刚点发送、还没收到第一帧）', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        phase: null,
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    expect(screen.getByText('正在想…')).not.toBeNull()
+  })
+
+  it('★★ 跑着的时候输入框**不能用 disabled 挡住**（这是"不能插话"的直接原因）', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    expect(
+      textarea.disabled,
+      '跑的时候输入框被禁用了 —— 用户就没法插话，这正是要修的问题',
+    ).toBe(false)
+  })
+
+  it('★★ 跑着的时候按发送 → 走 interject，而不是再开一轮 sendMessage', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '顺便看一下 8080 端口' } })
+
+    // 跑着的时候按钮文案是「插话」（不是「发送」）——
+    // 文案不对用户会以为自己在开第二轮
+    const button = screen.getByRole('button', { name: '插话' })
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(mockedInterject).toHaveBeenCalledWith('chat_1', '顺便看一下 8080 端口')
+    })
+    expect(mockedSendMessage).not.toHaveBeenCalled()
+  })
+
+  it('★ 空闲时按发送 → 走 sendMessage（插话路径不能抢走正常发送）', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [] }, sending: false }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '你好' } })
+
+    const button = screen.getByRole('button', { name: '发送' })
+    fireEvent.click(button)
+
+    await waitFor(() => {
+      expect(mockedSendMessage).toHaveBeenCalled()
+    })
+    expect(mockedInterject).not.toHaveBeenCalled()
+  })
+
+  it('★ 插话失败时把原文放回输入框（别让用户重打一遍）', async () => {
+    mockedInterject.mockResolvedValueOnce(false)
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '插一句会失败的' } })
+    fireEvent.click(screen.getByRole('button', { name: '插话' }))
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe(
+        '插一句会失败的',
+      )
+    })
+  })
+
+  it('★ 插话显示在消息流里并说明"模型下一轮会看到"（用户要能确认话进去了）', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        interjections: [
+          message({ id: 'ij1', seq: 9, role: 'user', content: '顺便看下 8080' }),
+        ],
+      }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+
+    const box = container.querySelector('[data-interjection="true"]')
+    expect(box, '插话没有显示在消息流里').not.toBeNull()
+    expect(box?.textContent).toContain('顺便看下 8080')
+    expect(box?.textContent).toContain('下一轮')
   })
 })

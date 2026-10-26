@@ -72,6 +72,8 @@ export function ToolsPage() {
   /** ★ v0.87：工具搜索与"只看有问题的"。 */
   const [toolQuery, setToolQuery] = useState('')
   const [onlyProblems, setOnlyProblems] = useState(false)
+  /** ★ v0.99：只看"默认会漏东西"的（与 onlyProblems 是两个方向，见 filterTools）。 */
+  const [onlyLimited, setOnlyLimited] = useState(false)
 
   useEffect(() => {
     ensureToolsLoaded()
@@ -83,8 +85,8 @@ export function ToolsPage() {
     不影响实际渲染（那是"搜了但没筛"的经典半实现）。
   */
   const visibleTools = useMemo(
-    () => filterTools(catalog.tools, { query: toolQuery, onlyProblems }),
-    [catalog.tools, toolQuery, onlyProblems],
+    () => filterTools(catalog.tools, { query: toolQuery, onlyProblems, onlyLimited }),
+    [catalog.tools, toolQuery, onlyProblems, onlyLimited],
   )
   const grouped = useMemo(
     () => groupTools(visibleTools, catalog.groups),
@@ -252,7 +254,7 @@ export function ToolsPage() {
                 <input
                   value={toolQuery}
                   onChange={(event) => setToolQuery(event.target.value)}
-                  placeholder="搜索工具（名字 / 中文名 / 用途）"
+                  placeholder="搜索工具（名字 / 中文名 / 用途 / 默认会漏什么）"
                   className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
                 />
                 <button
@@ -267,12 +269,31 @@ export function ToolsPage() {
                 >
                   只看有问题的
                 </button>
-                {(toolQuery || onlyProblems) && (
+                {/*
+                  ★ v0.99：「只看会漏的」是**另一个方向**的筛选。
+                    「有问题的」= 现在用不了，去修；
+                    「会漏的」= 能用但默认参数会静默丢东西，加参数再跑。
+                    合成一个按钮会让两种完全不同的动作挤在一起。
+                */}
+                <button
+                  type="button"
+                  onClick={() => setOnlyLimited((prev) => !prev)}
+                  className={cn(
+                    'rounded-sm border px-2 py-1 text-[12px] transition-ui duration-fast',
+                    onlyLimited
+                      ? 'border-line-accent text-ink'
+                      : 'border-line text-ink-muted hover:border-line-strong',
+                  )}
+                >
+                  只看会漏的
+                </button>
+                {(toolQuery || onlyProblems || onlyLimited) && (
                   <button
                     type="button"
                     onClick={() => {
                       setToolQuery('')
                       setOnlyProblems(false)
+                      setOnlyLimited(false)
                     }}
                     className="text-[12px] text-ink-faint transition-ui duration-fast hover:text-ink"
                   >
@@ -324,6 +345,7 @@ export function ToolsPage() {
                             core={tool.core}
                             requiresConnection={tool.requiresConnection}
                             reason={tool.reason}
+                            defaultLimitation={tool.defaultLimitation}
                             enabled={
                               draftDisabled === null
                                 ? tool.enabled

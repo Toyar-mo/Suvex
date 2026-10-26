@@ -3,6 +3,7 @@ import {
   archiveSession,
   createSession,
   getChatSnapshot,
+  interject,
   loadSessions,
   loadTools,
   openSession,
@@ -10,6 +11,7 @@ import {
   resetChatStore,
   sendMessage,
 } from './chat'
+import { TURN_DONE, TURN_ERROR, TURN_MESSAGE, TURN_PHASE } from './chat-stream'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -33,6 +35,8 @@ import {
 
 interface Deferred {
   resolve: (body: unknown, status?: number) => void
+  /** 直接给一个现成的 Response —— 流式端点要自己造 `text/event-stream`。 */
+  resolveRaw: (response: Response) => void
   reject: (error: Error) => void
 }
 
@@ -43,6 +47,42 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+/**
+ * 造一条 SSE 帧。
+ *
+ * ★ 这一整个辅助（连同 `sseResponse`）是 v0.101 补的。在此之前这个文件
+ *   的 15 条测试**全部**假设 `sendMessage` 走旧的 `api.post` 普通回包 ——
+ *   流式改造之后它们喂的是 `{messages: [...]}` 这种 JSON 体，而
+ *   `streamTurn` 要从响应体里读 `done` 帧才算成功。于是：
+ *
+ *     - 一条断言 `ok === true` 的用例真的红了；
+ *     - 另外 14 条**全是假绿** —— 它们只看 `pendingUserContent` / `sending`
+ *       / `error`，而 `sendMessage` 把 `ok=false` 当普通失败处理，
+ *       恰好让那些字段仍然对得上。
+ *
+ *   也就是说：store 层「`streamTurn` 的装配 + onEvent 分发」这条路径
+ *   此前**零覆盖**。`chat-stream.test.ts` 只测了切帧（`parseSseChunk`），
+ *   而 `ChatPage.test.tsx` 把整个 `@/data/chat` mock 掉了。
+ */
+function sseFrame(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+/** 把所有帧拼成流式响应。 */
+function sseResponse(frames: string[], status = 200): Response {
+  const encoder = new TextEncoder()
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const frame of frames) controller.enqueue(encoder.encode(frame))
+      controller.close()
+    },
+  })
+  return new Response(body, {
+    status,
+    headers: { 'Content-Type': 'text/event-stream' },
   })
 }
 
@@ -61,11 +101,26 @@ function stubFetch() {
           //   它会在读取 `.headers` 时抛错，而 store 把错误吞进 `error` 字段，
           //   表现成"请求跑了但 state 没变" —— 看起来像 store 的 bug。
           resolve: (body, status = 200) => resolve(jsonResponse(body, status)),
+          resolveRaw: resolve,
           reject,
         })
       })
     }),
   )
+}
+
+/**
+ * 结束一轮流式请求。
+ *
+ * 帧序列刻意按**后端真实顺序**写：先 user 帧（引擎在 user 消息落库后立刻
+ * 发它），再 phase/message 交替，最后 done。手写顺序错了的话，测试会
+ * 通过一个生产里不存在的时序。
+ */
+function finishTurn(
+  index: number,
+  frames: string[] = [sseFrame(TURN_DONE, { messageCount: 0, awaitingApproval: null, hitToolLimit: false })],
+) {
+  pending[index].resolveRaw(sseResponse(frames))
 }
 
 /** 等一轮微任务，让 store 里的 await 推进到下一个 pending。 */
@@ -179,55 +234,167 @@ describe('openSession', () => {
   })
 })
 
-describe('sendMessage', () => {
-  it('★ 一轮追加的多条消息**整轮一次**接进 active', async () => {
-    // 先打开会话
+/**
+ * 一条**可手动推进**的流式响应。
+ *
+ * ★ 与 `sseResponse`（一次性把帧全塞进去）的区别是这个能测出
+ *   "边跑边出"本身：帧可以在断言之间逐条 push，于是能验证
+ *   "第一帧到了之后 `active.messages` 已经有东西，而这一轮还没结束"。
+ *   用一次性响应的话，所有帧会在同一个微任务里落地 ——
+ *   那样即使实现退化成"攒完再更新"，测试也照样绿。
+ */
+interface LiveStream {
+  response: Response
+  push: (event: string, data: unknown) => void
+  close: () => void
+}
+
+function liveSseResponse(): LiveStream {
+  const encoder = new TextEncoder()
+  let controller!: ReadableStreamDefaultController<Uint8Array>
+  const body = new ReadableStream<Uint8Array>({
+    start(c) {
+      controller = c
+    },
+  })
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    }),
+    push: (event, data) => controller.enqueue(encoder.encode(sseFrame(event, data))),
+    close: () => controller.close(),
+  }
+}
+
+const DONE_FRAME = { messageCount: 0, awaitingApproval: null, hitToolLimit: false }
+
+describe('sendMessage — 流式（v0.100）', () => {
+  /*
+    ★ 这一组是 v0.101 补的。v0.100 把 `sendMessage` 从 `api.post` 改成
+      `streamTurn` 时，**没有**同步改这个文件 —— 代价是 15 条里 1 条真红
+      （`ok === true` 那条，因为 JSON 体里没有 done 帧，`sawDone` 永远 false）、
+      14 条假绿（它们不看返回值）。store 层这条装配路径此前零覆盖。
+  */
+
+  it('★ 边跑边长：第一帧一到 active 就有内容，此时这一轮还没结束', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
     await open
 
+    const stream = liveSseResponse()
     const promise = sendMessage('chat_1', '帮我扫一下')
-    // 服务端回：user + assistant(带动作) + tool 三条
-    pending[1].resolve({
-      messages: [
-        message({ id: 'm1', seq: 1, role: 'user', content: '帮我扫一下' }),
-        message({ id: 'm2', seq: 2, role: 'assistant', content: '好的，我先看看。' }),
-        message({
-          id: 'm3',
-          seq: 3,
-          role: 'tool',
-          content: '建好了 scan_abc',
-          toolName: 'create_scan',
-        }),
-      ],
-    })
-    // 不发第三个 pending 的话 loadSessions 会挂着，这里给它一个空列表
+    pending[1].resolveRaw(stream.response)
+
+    // 引擎在 user 消息落库后立刻发它 —— 所以第一帧就是 user
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '帮我扫一下' }))
+    await tick()
+
+    // 关键：`sending` 还是 true（这一轮没结束），但消息已经在屏幕上了
+    expect(getChatSnapshot().sending).toBe(true)
+    expect(getChatSnapshot().active?.messages.map((m) => m.id)).toEqual(['m1'])
+
+    stream.push(TURN_MESSAGE, message({ id: 'm2', seq: 2, role: 'assistant', content: '好的。' }))
+    await tick()
+    expect(getChatSnapshot().active?.messages.map((m) => m.id)).toEqual(['m1', 'm2'])
+    // messageCount 要跟着长 —— 否则左侧列表一直显示"0 条"
+    expect(getChatSnapshot().active?.messageCount).toBe(2)
+
+    stream.push(TURN_DONE, { ...DONE_FRAME, messageCount: 2 })
+    stream.close()
     const ok = await promise
     if (pending[2]) pending[2].resolve([])
 
     expect(ok).toBe(true)
-    const active = getChatSnapshot().active
-    expect(active?.messages.map((m) => m.role)).toEqual(['user', 'assistant', 'tool'])
-    // messageCount 要跟着改 —— 否则左侧列表显示"0 条"而右边有三条。
-    expect(active?.messageCount).toBe(3)
-    // sending 必须复位，否则输入框永久禁用。
     expect(getChatSnapshot().sending).toBe(false)
+    expect(getChatSnapshot().phase).toBeNull()
   })
 
-  it('★ 失败时返回 false，sending 也要复位', async () => {
+  it('★ 同一条消息来两次只接一次（重连/重放会重复，重复看起来像模型重复动作）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+
+    const same = message({ id: 'm1', seq: 1, role: 'user', content: '你好' })
+    stream.push(TURN_MESSAGE, same)
+    stream.push(TURN_MESSAGE, same)
+    await tick()
+
+    expect(getChatSnapshot().active?.messages).toHaveLength(1)
+
+    stream.push(TURN_DONE, { ...DONE_FRAME, messageCount: 1 })
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
+  })
+
+  it('★ phase 帧驱动「正在想…」那一行（能显示第几轮 / 在跑哪个工具）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+
+    stream.push(TURN_PHASE, { phase: 'thinking', round: 1 })
+    await tick()
+    expect(getChatSnapshot().phase).toEqual({ phase: 'thinking', round: 1 })
+
+    stream.push(TURN_PHASE, { phase: 'tool', round: 2, tool: 'create_scan' })
+    await tick()
+    expect(getChatSnapshot().phase).toEqual({ phase: 'tool', round: 2, tool: 'create_scan' })
+
+    stream.push(TURN_DONE, DONE_FRAME)
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
+
+    // done 之后必须清掉，否则界面永远转着"正在执行 create_scan…"
+    expect(getChatSnapshot().phase).toBeNull()
+  })
+
+  it('★ error 帧 → 返回 false 并挂 error，sending 复位，已有消息不清空', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '你好' }))
+    stream.push(TURN_ERROR, { message: '模型挂了' })
+    stream.close()
+    const ok = await promise
+    if (pending[2]) pending[2].resolve([])
+
+    expect(ok).toBe(false)
+    expect(getChatSnapshot().sending).toBe(false)
+    expect(getChatSnapshot().error?.message).toBe('模型挂了')
+    // 已经显示出来的用户消息是**真的**（服务端确实落了库），不能清
+    expect(getChatSnapshot().active?.messages.map((m) => m.id)).toEqual(['m1'])
+    // 失败后不能继续转圈
+    expect(getChatSnapshot().phase).toBeNull()
+  })
+
+  it('★ HTTP 层失败（开流之前就非 2xx）也返回 false 并复位', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
     await open
 
     const promise = sendMessage('chat_1', '你好')
-    pending[1].reject(new Error('模型挂了'))
+    // 校验失败 / 会话不存在：此时没有流，是普通 JSON 错误
+    pending[1].resolve({ message: '会话不存在' }, 404)
     const ok = await promise
 
     expect(ok).toBe(false)
-    // 关键：sending 复位。不复位的话用户再也发不出消息，且没有任何提示。
     expect(getChatSnapshot().sending).toBe(false)
     expect(getChatSnapshot().error).not.toBeNull()
-    // 已有消息不能被清掉。
     expect(getChatSnapshot().active?.messages).toEqual([])
   })
 
@@ -236,14 +403,18 @@ describe('sendMessage', () => {
     pending[0].resolve({ ...session(), messages: [] })
     await open
 
+    const stream = liveSseResponse()
     const first = sendMessage('chat_1', '第一条')
+    pending[1].resolveRaw(stream.response)
+
     // 第一个还没回来就发第二条
     const second = await sendMessage('chat_1', '第二条')
     expect(second).toBe(false)
     // 第二条**不该**发出请求 —— 检查 fetch 只调了 2 次（open + first）
     expect(calls).toHaveLength(2)
 
-    pending[1].resolve({ messages: [] })
+    stream.push(TURN_DONE, DONE_FRAME)
+    stream.close()
     await first
     if (pending[2]) pending[2].resolve([])
   })
@@ -253,12 +424,12 @@ describe('sendMessage', () => {
     pending[0].resolve({ ...session({ id: 'chat_1' }), messages: [] })
     await open1
 
-    // 发到 chat_1（请求发出后不立刻 resolve）
+    // 发到 chat_1（请求发出后不立刻给流）
+    const stream = liveSseResponse()
     const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
 
-    // 期间用户切到 chat_2 —— 这里必须按**索引**取它自己的 pending：
-    // 上面的 sendMessage 已经占了一个槽位，且它内部还会再发一个
-    // loadSessions（`void` 出去的），所以槽位不能靠猜，按 URL 找。
+    // 期间用户切到 chat_2
     const open2 = openSession('chat_2')
     const openIdx = calls.findIndex(
       (c) => c.url.includes('/chat/sessions/chat_2') && c.method === 'GET',
@@ -266,11 +437,10 @@ describe('sendMessage', () => {
     pending[openIdx].resolve({ ...session({ id: 'chat_2' }), messages: [] })
     await open2
 
-    // 现在让 chat_1 的那一轮回来
-    const sendIdx = calls.findIndex(
-      (c) => c.url.includes('/chat/sessions/chat_1/messages') && c.method === 'POST',
-    )
-    pending[sendIdx].resolve({ messages: [message({ id: 'x', seq: 1 })] })
+    // 现在让 chat_1 的那一轮推一条消息 + 结束
+    stream.push(TURN_MESSAGE, message({ id: 'x', seq: 1 }))
+    stream.push(TURN_DONE, DONE_FRAME)
+    stream.close()
     await promise
     // 收尾：把 sendMessage 内部那个 loadSessions 也解决掉，避免悬挂的 Promise
     for (const [i, call] of calls.entries()) {
@@ -344,22 +514,34 @@ describe('sendMessage — 乐观气泡（v0.97）', () => {
     // 关键断言：此刻响应还没回来，但那句话已经被记住了
     expect(getChatSnapshot().pendingUserContent).toBe('列出可用技能')
 
-    pending[1].resolve({ messages: [message({ id: 'm1', seq: 1, content: '列出可用技能' })] })
+    finishTurn(1, [
+      sseFrame(TURN_MESSAGE, message({ id: 'm1', seq: 1, content: '列出可用技能' })),
+      sseFrame(TURN_DONE, DONE_FRAME),
+    ])
     await promise
     if (pending[2]) pending[2].resolve([])
   })
 
-  it('★ 回包落地后清空（否则界面上会同时有乐观气泡和真消息）', async () => {
+  it('★ 真 user 帧一到就清空（不等整轮结束：那会让两句话同屏几十秒）', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
     await open
 
+    const stream = liveSseResponse()
     const promise = sendMessage('chat_1', '列出可用技能')
-    pending[1].resolve({ messages: [message({ id: 'm1', seq: 1, content: '列出可用技能' })] })
-    await promise
-    if (pending[2]) pending[2].resolve([])
+    pending[1].resolveRaw(stream.response)
+
+    // 这一轮还远没结束，但真消息已经到了
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, content: '列出可用技能' }))
+    await tick()
 
     expect(getChatSnapshot().pendingUserContent).toBeNull()
+    expect(getChatSnapshot().sending).toBe(true)
+
+    stream.push(TURN_DONE, DONE_FRAME)
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
   })
 
   it('★ 失败时也清空 —— 那句话服务端没有，留着就是谎话', async () => {
@@ -377,5 +559,119 @@ describe('sendMessage — 乐观气泡（v0.97）', () => {
     await promise
 
     expect(getChatSnapshot().pendingUserContent).toBeNull()
+  })
+})
+
+describe('interject — 插话兑现（v0.101）', () => {
+  /*
+    ★ 这一组钉的是「插话气泡什么时候退场」。
+
+      背景：`interject()` 只把消息写进本地 `interjections` 暂存区，界面显示
+      「插话 · 模型下一轮会看到」。引擎在每轮开头重读历史，所以模型**确实**
+      看到了它；但它不是引擎落库的（是 interject 端点自己 commit 的），
+      引擎不会为它发 message 帧 —— 于是 `active.messages` 里永远没有它。
+
+      没有这一组的话，那个气泡会在轮次结束后继续挂着说假话，且要等用户发
+      下一条消息才被 `sendMessage` 开头那句 `interjections: []` 顺手清掉。
+  */
+
+  it('★ 一轮结束后插话气泡必须退场，且真消息由刷新补进来', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    // 用户在一轮进行中插话
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '先看一眼 nmap')
+    pending[1].resolveRaw(stream.response)
+
+    const interjectPromise = interject('chat_1', '顺便看一下 ffuf 的配方')
+    const interjectIdx = calls.findIndex((c) => c.url.includes('/interject'))
+    pending[interjectIdx].resolve(
+      message({ id: 'm_inter', seq: 2, role: 'user', content: '顺便看一下 ffuf 的配方' }),
+    )
+    await interjectPromise
+    expect(getChatSnapshot().interjections).toHaveLength(1)
+
+    // 这一轮正常跑完
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '先看一眼 nmap' }))
+    stream.push(TURN_DONE, { ...DONE_FRAME, messageCount: 3 })
+    stream.close()
+    const ok = await promise
+    expect(ok).toBe(true)
+
+    // 关键 1：暂存区清空 —— 气泡不该再显示「模型下一轮会看到」
+    expect(getChatSnapshot().interjections).toEqual([])
+
+    // 关键 2：真的去服务端取回了完整消息列表（插话现在是其中一条普通 user 消息）
+    //
+    // ★ 从**后往前**找：`openSession` 打的是同一个 URL，正着找会命中开头那次
+    //   （它早就 resolve 过了，于是把刷新那次留在悬挂状态，测试看起来"没刷新"）。
+    let refreshIdx = -1
+    for (let i = calls.length - 1; i >= 0; i--) {
+      if (calls[i].url.endsWith('/chat/sessions/chat_1') && calls[i].method === 'GET') {
+        refreshIdx = i
+        break
+      }
+    }
+    expect(refreshIdx).toBeGreaterThan(0)
+    pending[refreshIdx].resolve({
+      ...session(),
+      messages: [
+        message({ id: 'm1', seq: 1, role: 'user', content: '先看一眼 nmap' }),
+        message({ id: 'm_inter', seq: 2, role: 'user', content: '顺便看一下 ffuf 的配方' }),
+        message({ id: 'm3', seq: 3, role: 'assistant', content: '好，nmap 和 ffuf 都用上。' }),
+      ],
+    })
+    await tick()
+
+    const active = getChatSnapshot().active
+    expect(active?.messages.map((m) => m.id)).toEqual(['m1', 'm_inter', 'm3'])
+    // 插话现在是真消息了，不再是"待兑现"的暂存条目
+    expect(active?.messageCount).toBe(3)
+
+    for (const [i] of calls.entries()) {
+      if (pending[i] && i !== refreshIdx) pending[i].resolve([])
+    }
+  })
+
+  it('★ 失败路径也要退场 —— 插话早已自己 commit 进库，气泡留着只继续说假话', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '先看一眼 nmap')
+    pending[1].resolveRaw(stream.response)
+
+    const interjectPromise = interject('chat_1', '顺便看一下 ffuf 的配方')
+    const interjectIdx = calls.findIndex((c) => c.url.includes('/interject'))
+    pending[interjectIdx].resolve(
+      message({ id: 'm_inter', seq: 2, role: 'user', content: '顺便看一下 ffuf 的配方' }),
+    )
+    await interjectPromise
+    expect(getChatSnapshot().interjections).toHaveLength(1)
+
+    // 这一轮失败了
+    stream.push(TURN_ERROR, { message: '模型挂了' })
+    stream.close()
+    const ok = await promise
+    expect(ok).toBe(false)
+
+    expect(getChatSnapshot().interjections).toEqual([])
+  })
+
+  it('★ 空白插话不发请求（Enter 手滑不该产生一条空消息）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const before = calls.length
+    const ok = await interject('chat_1', '   ')
+    expect(ok).toBe(false)
+    // 不发请求 —— Enter 手滑不该打后端一次、更不该产生一条空消息
+    expect(calls.length).toBe(before)
+    expect(calls.filter((c) => c.url.includes('/interject'))).toHaveLength(0)
+    expect(getChatSnapshot().interjections).toEqual([])
   })
 })

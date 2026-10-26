@@ -958,6 +958,176 @@ def parse_probe(output: str) -> dict[str, str]:
 
 
 # ══════════════════════════════════════════════════════════
+# 渲染（进提示词 / 给 load_recipe 回全文）
+# ══════════════════════════════════════════════════════════
+#
+# ★★ 这一节补的是 v0.98 留下的**真缺口**，必须写清为什么。
+#
+# v0.98 建好了这一整套配方（34 条、6 组、参数拼法、探测函数），
+# 也接上了 `GET /kernel/recipes`，界面上能看。但**模型从头到尾看不到它**：
+# `probe_command()` / `parse_probe()` 在生产代码里零调用方，`default_limitation`
+# 只出现在 API 响应里。而这个模块存在的**全部理由**就是"让模型知道默认参数
+# 下会漏掉什么"（见文件头）。配方只进界面 = 知识只给了人看，
+# 而人是照着模型给的结论下判断的 —— 等于没修。
+#
+# 这正是本项目反复抓的那类形状：**配好了却静默失效**。
+
+
+#: 进提示词的配方清单里，每条局限最多显示多少字符。
+#:
+#: ## 为什么要截断，而不是全给
+#:
+#: 系统提示词**每一轮都要重发**（`runner.solve_in_sandbox` 里
+#: `gateway.chat(_messages(), system=system_prompt)`）。34 条配方的局限
+#: 全文约 6.2KB，跑 40 轮就是 248KB 的重复传输 —— 而其中大部分细节
+#: （某个 flag 具体怎么写）**只在真的要调那个工具时才有用**。
+#:
+#: 所以：清单里给**够判断"该不该用这个工具、要不要加参数"**的一句话，
+#: 全文交给 `load_recipe`。截断留 60 字符 ≈ 一句中文短句。
+INDEX_LIMITATION_CHARS: Final[int] = 60
+
+
+def render_index(*, probe: dict[str, str] | None = None) -> str:
+    """渲染「命令行工具配方清单」—— 进系统提示词。
+
+    ## ★ 为什么清单里必须带一句局限，而不是只列工具名
+
+    因为**选择发生在调用之前**。模型决定"用 nmap 扫一下"的时候，
+    如果那时它不知道"nmap 默认只扫约 1000 个端口"，它就会拿着默认结果
+    写下"目标只开了这几个端口"。等它 `load_recipe` 再看到局限，
+    那个结论**已经写进上一轮的推理里了**。
+
+    所以清单 = 名字 + 这一句最贵的局限。全文（参数怎么拼、完整局限）
+    才靠 `load_recipe` 按需拉。
+
+    ## `probe`：已探测到的可用性
+
+    `probe` 是 `parse_probe(probe_command(...))` 的结果，可以不给
+    （不给 = 不知道装没装）。给了就**如实标注没装的那些** ——
+    这是本模块与 CyberStrikeAI 那份 YAML 最重要的差别：
+    照抄 90 条会让模型对着不存在的二进制写命令，沙箱回
+    `sh: amap: not found`，而它看起来像"工具跑了但没结果"。
+
+    ⚠️ `probe` 里**有**某名字但值为空串 = 问过、没装。
+    `probe` 里**没有**该名字 = 没问过，不作标注（不能诬告它没装）。
+    """
+    if not RECIPE_SPECS:
+        return ''
+
+    lines: list[str] = []
+    for group in RECIPE_GROUPS:
+        items = [r for r in RECIPE_SPECS if r.group == group]
+        if not items:
+            continue
+        lines.append(f'\n【{group}】')
+        for recipe in items:
+            mark = ''
+            if probe is not None and recipe.name in probe:
+                mark = '' if probe[recipe.name] else '（★ 本镜像没装，别调）'
+            summary = recipe.summary
+            limitation = recipe.default_limitation
+            line = f'- `{recipe.name}`{mark}：{summary}'
+            if limitation:
+                clipped = limitation
+                if len(clipped) > INDEX_LIMITATION_CHARS:
+                    clipped = clipped[:INDEX_LIMITATION_CHARS] + '…'
+                line += f' **默认会漏**：{clipped}'
+            lines.append(line)
+    return '\n'.join(lines)
+
+
+def render_recipe(name: str, *, probe: dict[str, str] | None = None) -> str:
+    """渲染**一条**配方的全文（给 `load_recipe` 工具用）。
+
+    ## 为什么全文要单独一次调用，而不是塞进清单
+
+    见 `INDEX_LIMITATION_CHARS` 的说明：清单每轮重发，全文只在需要时看一次。
+
+    ## 名字未命中时返回**可用清单**，不是空串
+
+    与 `skills.load_skill_text` 同一条纪律：模型拼错名字时需要看到
+    "到底有哪些"，否则它会反复猜（每次猜都烧一个回合）。
+    """
+    recipe = RECIPE_BY_NAME.get((name or '').strip())
+    if recipe is None:
+        available = '、'.join(r.name for r in RECIPE_SPECS) or '（无）'
+        return f'没有名为 `{name}` 的工具配方。可用配方：{available}'
+
+    out: list[str] = [f'# `{recipe.name}`（{recipe.group}）', '', recipe.summary, '']
+
+    if probe is not None and recipe.name in probe:
+        where = probe[recipe.name]
+        out.append(
+            f'本镜像里**装了**：`{where}`' if where else '★ 本镜像里**没装这个二进制**，不要调它。'
+        )
+        out.append('')
+
+    # 命令行怎么拼 —— 这是"照着做"的部分，必须给完整可复制的形态。
+    out.append('## 怎么调')
+    out.append('')
+    out.append('```')
+    out.append(render_argv(recipe, _sample_values(recipe)))
+    out.append('```')
+    out.append('')
+
+    if recipe.params:
+        out.append('## 参数')
+        out.append('')
+        for param in recipe.params:
+            bits: list[str] = []
+            if param.format == 'flag':
+                bits.append(f'`{param.flag}`')
+            elif param.format == 'template':
+                bits.append(f'`{param.template}`')
+            else:
+                bits.append('（位置参数）')
+            need = '必填' if param.required else ('有默认值' if param.default else '可选')
+            detail = f'- `{param.name}` {bits[0]}　{need}'
+            if param.default:
+                detail += f'（省略时用 `{param.default}`）'
+            if param.description:
+                detail += f'：{param.description}'
+            out.append(detail)
+        out.append('')
+
+    if recipe.default_limitation:
+        # ★ 不折叠、不缩写成小字：这一节是本配方存在的理由。
+        out.append('## ★ 默认参数下它做不到什么')
+        out.append('')
+        out.append(recipe.default_limitation)
+        out.append('')
+
+    if recipe.allowed_exit_codes:
+        codes = '、'.join(str(c) for c in recipe.allowed_exit_codes)
+        out.append(
+            f'## 退出码\n\n下面这些退出码**不算失败**（没命中也是正常结果）：{codes}\n'
+        )
+    return '\n'.join(out)
+
+
+def _sample_values(recipe: ToolRecipe) -> dict[str, str]:
+    """给 `render_argv` 造一组**样例值**，用来展示"这条命令长什么样"。
+
+    ## 为什么必填参数填成 `<名字>` 占位符，而不是填一个像样的值
+
+    填 `example.com` 会让样例看起来**已经可以跑了** —— 模型容易把它整条
+    复制走，然后对着真实目标用了 `example.com`。而 `<target>` 明确写着
+    "这里要换成你的目标"，不可能被误读成成品。
+
+    ## 为什么可选参数不填
+
+    `build_argv` 的语义是"给了就拼、没给用默认值"。样例里全都给上，
+    会让"哪些是必须的"看不出来 —— 而那正是模型最容易搞错的地方。
+    """
+    return {p.name: f'<{p.name}>' for p in recipe.params if p.required}
+
+
+def recipe_names() -> list[str]:
+    """全部配方名（给"可用清单"与测试用）。"""
+    return [r.name for r in RECIPE_SPECS]
+
+
+# ══════════════════════════════════════════════════════════
 # 一致性断言（import 时执行）
 # ══════════════════════════════════════════════════════════
 

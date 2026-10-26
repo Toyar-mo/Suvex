@@ -121,6 +121,20 @@ export interface KernelTool {
   ready: boolean
   /** 未就绪的原因（中文）。 */
   reason: string
+  /**
+   * ★ v0.99：**默认参数下它做不到什么**（空串 = 默认就是全功能）。
+   *
+   * ## 为什么它此前在页面上不存在
+   *
+   * 后端从 v0.86 就在算这个字段并塞进 `GET /kernel/tools`，
+   * 但前端的类型里**没有它** —— 于是 JSON 被解析、字段被丢掉、
+   * 页面上一个字都不显示。类型少一个字段不会报错，只会静默少一块内容。
+   *
+   * 它答的不是"这个工具坏了"（那是 `reason`），而是"它正常工作，
+   * 但默认参数会静默漏掉东西"。两者必须分开显示：合成一个红色，
+   * 6 个本来正常的工具会看起来都坏了。
+   */
+  defaultLimitation: string
 }
 
 /** `GET /kernel/tools` 的响应。 */
@@ -604,7 +618,7 @@ export function parseTimeout(raw: string): number | null {
  */
 export function filterTools(
   tools: KernelTool[],
-  options: { query?: string; onlyProblems?: boolean } = {},
+  options: { query?: string; onlyProblems?: boolean; onlyLimited?: boolean } = {},
 ): KernelTool[] {
   const query = (options.query ?? '').trim().toLowerCase()
   const terms = query ? query.split(/\s+/) : []
@@ -615,8 +629,23 @@ export function filterTools(
       // 这两类正是用户需要动手的，正常可用的没有动作。
       if (tool.enabled && tool.ready) return false
     }
+    if (options.onlyLimited) {
+      // ★ v0.99：只留下"默认会漏东西"的那些。
+      //
+      // 与 `onlyProblems` 是**两个方向**，不能合并：
+      //   · onlyProblems → 这些工具现在**用不了**，去修；
+      //   · onlyLimited  → 这些工具能用但**会静默漏**，加参数再跑。
+      // 合成一个筛选会让两类完全不同的动作挤在一起。
+      if (!tool.defaultLimitation) return false
+    }
     if (terms.length === 0) return true
-    const haystack = `${tool.name} ${tool.label} ${tool.summary}`.toLowerCase()
+    // ★ v0.99：搜索必须能命中**局限文本本身**。
+    //
+    // 与 `RecipesPanel` 同一条理由（那边已经这么做，这边此前漏了）：
+    // 有人记得「有个工具默认只扫一部分端口」却不记得它叫 `http_request`。
+    // 搜不到等于这段文字只对已经知道答案的人有用。
+    const haystack =
+      `${tool.name} ${tool.label} ${tool.summary} ${tool.defaultLimitation}`.toLowerCase()
     return terms.every((term) => haystack.includes(term))
   })
 }

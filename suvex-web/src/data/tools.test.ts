@@ -56,6 +56,9 @@ function makeTool(over: Partial<KernelTool> = {}): KernelTool {
     requiresConnection: '',
     ready: true,
     reason: '',
+    // ★ v0.99：`defaultLimitation` 是必填字段（后端一直返回它）。
+    //   夹具不补这个字段，tsc 会报"缺属性" —— 那正是它该报的。
+    defaultLimitation: '',
     ...over,
   }
 }

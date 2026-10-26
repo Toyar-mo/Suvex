@@ -70,6 +70,13 @@ export interface ToolRowProps {
   requiresConnection: string
   /** 未就绪的原因（中文，后端给）。 */
   reason: string
+  /**
+   * ★ v0.99：默认参数下它做不到什么（后端 `defaultLimitation`）。
+   *
+   * 空串 = 默认就是全功能（`run_shell` 就是这样）。
+   * 与 `reason` 是**两件事**：`reason` 是"它现在坏了"，这条是"它能用但会漏"。
+   */
+  defaultLimitation?: string
   enabled: boolean
   onToggle: (next: boolean) => void
 }
@@ -83,6 +90,7 @@ export function ToolRow({
   core,
   requiresConnection,
   reason,
+  defaultLimitation,
   enabled,
   onToggle,
 }: ToolRowProps) {
@@ -128,6 +136,33 @@ export function ToolRow({
 
           {params && (
             <p className="mt-1 font-mono text-[12px] text-ink-faint">参数：{params}</p>
+          )}
+
+          {/*
+            ★ v0.99：「默认参数下它做不到什么」。
+
+            ## 为什么这一条此前是死的
+
+            `ToolSpec.default_limitation` 从 v0.86 就在后端写着，10 个工具里
+            有 6 个填了（`call_mcp` 那条直接讲「命中 0 可能是没查这一层」），
+            `GET /kernel/tools` 也一值在返回它 —— 而**这一行从来没渲染过**。
+            前端类型里有 `defaultLimitation` 字段，页面里零处引用。
+
+            这是本项目最贵的一类失真：数据写了、接口给了、界面上看不见。
+            用户看到「命中 0」只能自己猜是目标没有还是工具没查，
+            而那正是这条字段当初被写下来的原因。
+
+            ## 为什么用 warn 色而不是像 `reason` 那样用风险色
+
+            `reason` 是「这个工具现在用不了，去修」——那是故障，该醒目。
+            局限是「它能用，但会静默漏东西」——那不是故障，是**使用须知**。
+            用同一个红色会让 6 个正常工具看起来都坏了，用户会去修一个
+            根本不需要修的东西。所以用 warn 色 + 固定前缀「默认会漏」。
+          */}
+          {defaultLimitation && (
+            <p className="mt-1 text-[12px] leading-relaxed text-signal-warn">
+              <span className="font-medium">默认会漏</span>：{defaultLimitation}
+            </p>
           )}
 
           {/*

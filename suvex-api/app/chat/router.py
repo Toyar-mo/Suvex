@@ -43,6 +43,7 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read
@@ -52,6 +53,7 @@ from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_c
 from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
+    ChatInterjectIn,
     ChatMessageOut,
     ChatPersonaOut,
     ChatRenameIn,
@@ -62,7 +64,13 @@ from app.chat.schemas import (
     ChatSessionOut,
     ChatSettingsIn,
 )
-from app.core.db import get_db
+from app.chat.stream import (
+    SSE_HEADERS,
+    SSE_MEDIA_TYPE,
+    encode_frame,
+    stream_turn,
+)
+from app.core.db import get_db, get_session_factory
 from app.core.errors import ApiError
 
 logger = logging.getLogger("suvex.chat")
@@ -180,6 +188,150 @@ async def send_message(
         messages=[ChatMessageOut.model_validate(m) for m in result.messages],
         awaitingApproval=result.awaiting_approval,
     )
+
+
+@router.post(
+    "/chat/sessions/{session_id}/messages/stream",
+    summary="发一条消息，边跑边推（SSE）",
+)
+def send_message_stream(
+    session_id: str,
+    payload: ChatSendIn,
+    identity: Reader,
+) -> StreamingResponse:
+    """发一条消息，把它产出的每一步**实时**推给前端（v0.100）。
+
+    ## 为什么是 `def` 而不是 `async def`
+
+    这个函数体内**没有**任何 `await`：它只做校验、然后把一个 async
+    生成器交给 `StreamingResponse`。
+
+    ## ★★ 为什么这里**不注入** `db`，而是自己在生成器里开一个会话
+
+    这是整条流最容易写错的地方，而写错的表现是**间歇性的**
+    （本地好用、线上偶发 500），所以先讲清：
+
+    FastAPI 的 `Depends(get_db)` 是 `yield` 依赖。它的清理
+    （`session.close()`）发生在**响应开始之后、生成器真正跑之前** ——
+    也就是说，如果生成器里继续用那个 `db`，它拿到的是一条
+    **已关闭**的会话，第一个 `db.commit()` 就会炸。
+
+    所以校验用同一个短会话（那时还没开始流），真正的对话在生成器内部
+    自己开一个会话、自己关掉。两者职责分开：入口校验一个短事务，
+    流式执行一个长事务。
+
+    ## 为什么端点是 POST 但用 SSE
+
+    `EventSource` 只能发 GET，而发消息要带正文与附件 id。
+    这里是**用 fetch 读流**（见前端 `data/chat-stream.ts`），
+    所以 POST + `text/event-stream` 完全可行，且不需要把消息塞进 URL。
+
+    代价是浏览器不会自动重连 —— 对对话来说这是**对的**：
+    一轮对话没有"补发"的语义，断了就该重发一句，而不是把模型再跑一遍
+    （那会再烧一次 token，而且工具可能有副作用）。
+    """
+    # ── 入口校验：都在短事务里做完，与流式执行分开 ──────────
+    db = get_session_factory()()
+    try:
+        session = service.get_session_or_404(
+            db, session_id=session_id, created_by=_owner(identity)
+        )
+        if session.archived:
+            raise ApiError.validation(
+                "这个会话已归档，不能再发消息。新建一个会话继续。",
+                {"sessionId": "已归档"},
+            )
+        content = payload.content.strip()
+        if not content:
+            raise ApiError.validation("消息不能为空。", {"content": "必填"})
+    finally:
+        # 校验完就关：这个会话的作用到此为止。**不要**把它交给生成器。
+        db.close()
+
+    async def run(emit):
+        """真正跑一轮。自己开会话、自己关。"""
+        turn_db = get_session_factory()()
+        try:
+            turn_session = service.get_session_or_404(
+                turn_db, session_id=session_id, created_by=_owner(identity)
+            )
+            return await engine.run_turn(
+                turn_db,
+                session=turn_session,
+                content=content,
+                identity=identity,
+                provider_id=payload.providerId,
+                attachment_ids=payload.attachmentIds,
+                explicit_tools=payload.explicitTools,
+                emit=emit,
+            )
+        finally:
+            turn_db.close()
+
+    return StreamingResponse(
+        stream_turn(
+            run,
+            to_payload=lambda result: {
+                "messageCount": len(result.messages),
+                "awaitingApproval": result.awaiting_approval,
+                "hitToolLimit": result.hit_tool_limit,
+            },
+        ),
+        media_type=SSE_MEDIA_TYPE,
+        headers=SSE_HEADERS,
+    )
+
+
+@router.post(
+    "/chat/sessions/{session_id}/interject",
+    response_model=ChatMessageOut,
+    summary="在模型跑的时候插一句话（排队到下一轮开头）",
+)
+def interject(
+    session_id: str,
+    payload: ChatInterjectIn,
+    db: DbSession,
+    identity: Reader,
+) -> ChatMessageOut:
+    """把用户的一句话写进会话，**让它出现在正在跑的那一轮的下一轮开头**。
+
+    ## 为什么这是可行的（而不是需要打断循环）
+
+    `engine.run_turn` 的每一轮开头都会重新
+    `chat_service.list_messages(db, ...)` 读一遍历史。所以在它跑的
+    过程中往库里写一条 user 消息，**下一轮模型自然就看到它了** ——
+    不需要中断、不需要往运行中的协程里塞东西。
+
+    这也是为什么它做成**独立端点**而不是一个 WebSocket：
+    一次 HTTP 写入就够，没有任何长连接状态要维护。
+
+    ## ★ 为什么不做"立即中断当前工具"
+
+    那需要处理一堆中间态：工具正在跑（可能已经产生了副作用）、
+    它的结果还没落库、消息 seq 已经分配……而每一种中间态都对应一类
+    "库里留下半条记录"的事故。而用户真正需要的是
+    「我这句话别丢、模型下一轮能看到」—— 排队即可满足。
+
+    ## ⚠️ 它只在**当前有东西在跑**时有"插"的语义
+
+    没有在跑的轮次时，这句话仍然会写进库，行为等价于"发一条新消息"。
+    这里不因为"没在跑"而拒绝它：拒绝会让用户以为自己的话没发出去
+    （而实际上只是没有正在跑的东西可插）。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    if session.archived:
+        raise ApiError.validation(
+            "这个会话已归档，不能再插话。", {"sessionId": "已归档"}
+        )
+    content = payload.content.strip()
+    if not content:
+        raise ApiError.validation("插话不能为空。", {"content": "必填"})
+
+    message = service.append_user_message(db, session=session, content=content)
+    db.commit()
+    return ChatMessageOut.model_validate(message)
 
 
 @router.get("/chat/tools")

@@ -2118,6 +2118,31 @@ def load_system_prompt() -> str:
     if "{{SKILL_INDEX}}" in raw:
         index = skills_mod.render_index() or "（本次部署没有附带技能包。）"
         raw = raw.replace("{{SKILL_INDEX}}", index)
+    # ★ v0.99：命令行工具配方清单。
+    #
+    # ## 为什么清单里必须带一句「默认会漏」
+    #
+    # 选择发生在调用**之前**：模型决定「用 nmap 扫一下」的那一刻，如果它
+    # 不知道「nmap 默认只扫约 1000 个常用端口」，它会拿默认结果写下
+    # 「目标只开了这几个端口」。等它拉全文再看到那条局限，结论**已经
+    # 写进上一轮推理了**。所以清单 = 名字 + 最贵的那一句局限。
+    #
+    # ## 为什么全文不在提示词里
+    #
+    # 系统提示词**每轮重发**（下面 `gateway.chat(_messages(), system=...)`）。
+    # 34 条配方全文约 6.2KB，跑 40 轮就是 248KB 重复传输，而其中细节
+    # （某个 flag 具体怎么写）只在真要调那个工具时才有用 —— 那正是
+    # `load_recipe` 按需拉的活。
+    #
+    # ⚠️ 这里**不做探测**：`load_system_prompt()` 在起沙箱之前就会被调用
+    # （`build_spec` 阶段），那时容器还不存在。探测要 `sandbox.shell()`，
+    # 所以清单在这里给的是"不知道装没装"的形态 —— 与 CyberStrikeAI 那份
+    # 照抄 90 条的 YAML 相比，我们至少不谎报。
+    if "{{RECIPE_INDEX}}" in raw:
+        from app.kernel import recipes as recipes_mod
+
+        recipe_index = recipes_mod.render_index() or "（本次部署没有附带工具配方。）"
+        raw = raw.replace("{{RECIPE_INDEX}}", recipe_index)
     return raw
 
 
@@ -3361,6 +3386,7 @@ TOOL_NAMES = (
     "http_request",
     "run_shell",
     "load_skill",
+    "load_recipe",
     "list_requests",
     "get_request",
     "repeat_request",
@@ -3808,6 +3834,15 @@ async def dispatch_tool(
                 str(args.get("name") or ""),
                 file=str(args.get("file") or ""),
             )
+        if name == "load_recipe":
+            # ★ v0.99：命令行工具配方的**全文**（清单已在系统提示词里）。
+            #
+            # 与 `load_skill` 同一个形状：纯查表、不碰沙箱、不出网。
+            # 名字拼错时 render_recipe 回可用清单，而不是空串 ——
+            # 空串会让模型反复猜名字，每次猜都烧一个回合。
+            from app.kernel import recipes as recipes_mod
+
+            return recipes_mod.render_recipe(str(args.get("name") or ""))
         if name == "list_requests":
             return await _tool_list_requests(args, spec=spec)
         if name == "get_request":
