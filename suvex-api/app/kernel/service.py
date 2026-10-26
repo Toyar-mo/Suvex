@@ -4104,6 +4104,60 @@ def tools_catalog(db: Session) -> dict:
     }
 
 
+def list_recipes() -> dict:
+    """列出全部命令行工具配方（`GET /kernel/recipes`）。
+
+    ## 与 `list_kernel_tools` 的分工
+
+    那个是"引擎能调的动作"（有开关、有 MCP 就绪判据）；这个是"沙箱里的
+    二进制怎么调"（没有开关 —— 装没装由镜像决定）。
+
+    ## 为什么不做可用性探测
+
+    `recipes.probe_command()` 能一次问清这些二进制在不在，但那要**起容器**
+    （几十毫秒到几秒）。而这个端点是被"工具管理"页面每次打开都调的。
+    探测放在任务开始时做（那里已经在起容器了），这里只答"配方是什么"。
+    界面上"镜像里装没装"那一栏来自任务运行时的实测结果，不是这个端点。
+
+    ## 为什么直接返回 `dict` 而不是构造 schema
+
+    与 `list_kernel_tools` 同一条纪律：服务层不管 HTTP 形状，
+    `router` 用 `response_model` 收口。这样加一个字段不用改两处。
+    """
+    from app.kernel.recipes import RECIPE_GROUPS, RECIPE_SPECS
+
+    recipes: list[dict] = []
+    for recipe in RECIPE_SPECS:
+        recipes.append(
+            {
+                "name": recipe.name,
+                "summary": recipe.summary,
+                "group": recipe.group,
+                "command": recipe.command,
+                "args": list(recipe.args),
+                "params": [
+                    {
+                        "name": p.name,
+                        "format": p.format,
+                        "description": p.description,
+                        "required": p.required,
+                        "flag": p.flag,
+                        "default": p.default,
+                    }
+                    for p in recipe.params
+                ],
+                "default_limitation": recipe.default_limitation,
+                "allowed_exit_codes": list(recipe.allowed_exit_codes),
+            }
+        )
+
+    return {
+        "recipes": recipes,
+        "groups": list(RECIPE_GROUPS),
+        "total": len(recipes),
+    }
+
+
 def save_disabled_tools(db: Session, disabled: list[str]) -> dict:
     """整份替换"关掉的工具"清单。
 

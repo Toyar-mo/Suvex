@@ -89,6 +89,7 @@ from app.kernel.schemas import (
     KernelSubmitIn,
     KernelSubmitOut,
     KernelSyncIn,
+    KernelRecipesOut,
     KernelSyncOut,
     KernelTokenUsageOut,
     KernelToolOut,
@@ -619,6 +620,33 @@ def replace_kernel_tools(
         },
     )
     return _tools_out(db)
+
+
+@router.get(
+    "/recipes",
+    response_model=KernelRecipesOut,
+    summary="命令行工具配方库（怎么调 + 默认参数下做不到什么）",
+)
+def list_kernel_recipes(_identity: ReadDep) -> KernelRecipesOut:
+    """列全部命令行工具配方，每个带参数拼法与**默认参数下的能力边界**。
+
+    ## 为什么这个端点没有开关、没有可写端点
+
+    配方描述的是"沙箱镜像里装着的二进制怎么调"，而**装没装由镜像决定**，
+    不是由配置决定。给它们加开关会造出一个假的权力：
+    用户关掉 `nmap`，实际只是让文档里少一行，`run_shell nmap ...` 照样能跑。
+
+    能关的是上面 `/tools` 那十个**引擎动作**。两者的区别是
+    "关掉之后模型真的调不动了" vs "关掉之后只是不告诉模型"。
+
+    ## `defaultLimitation` 是这里最要紧的字段
+
+    它答的是"用默认参数跑会漏掉什么"。实测过同一目标、同一工具、
+    只补一个参数就从 0 命中变 2 命中 —— 而模型看到那个 0，
+    写下的是"目标没有这个漏洞"。这类失真**不报错，只让结论错**，
+    所以它必须在界面上可见，而不是只躺在源码注释里。
+    """
+    return KernelRecipesOut.model_validate(service.list_recipes())
 
 
 # ══════════════════════════════════════════════════════════

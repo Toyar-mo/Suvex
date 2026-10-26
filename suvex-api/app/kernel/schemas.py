@@ -517,6 +517,78 @@ class KernelToolsOut(CamelModel):
 
 
 # ══════════════════════════════════════════════════════════
+# 工具配方库（v0.98）
+# ══════════════════════════════════════════════════════════
+#
+# 与上面的 `KernelToolOut` 是**两套不同的东西**，界面必须分开展示：
+#
+#   · `KernelToolOut` 是"引擎能调的动作"（`run_shell` / `http_request` / …），
+#     模型通过 `ACTION:` 协议调用它们，每个都有开关。
+#   · `KernelRecipeOut` 是"沙箱里装着的命令行工具怎么调"（nmap / sqlmap / …），
+#     模型通过 `run_shell` 去跑它们，**没有开关**（装没装是镜像决定的）。
+#
+# 合成一个列表会让用户以为"nmap 也能被关掉"，而实际上关不掉；
+# 反过来也会让人以为"run_shell 是个二进制"。
+
+
+class KernelRecipeParamOut(CamelModel):
+    """配方里的一个参数。"""
+
+    name: str
+    #: `flag` / `positional` / `template`。
+    #:
+    #: 界面不需要为它做分支 —— 它的用途是让人看出"这个参数是开关还是位置值"。
+    format: str
+    description: str = ""
+    required: bool = False
+    #: `format=flag` 时的开关名（如 `-p`）。
+    flag: str = ""
+    #: 省略时的取值（非空表示"不给也用它"）。
+    default: str = ""
+
+
+class KernelRecipeOut(CamelModel):
+    """一个命令行工具的调用配方。
+
+    ⚠️ `name` 同时是**配方名**和**二进制名**（`exec` 例外，它跑的是 `sh`）。
+    界面展示时用等宽字体原样显示 —— 模型就是拿这个名字去 `run_shell` 里敲。
+    `summary` 才是给人看的一句话。
+    """
+
+    name: str
+    summary: str
+    group: str
+    #: 真正执行的命令。**与 `name` 不同的只有 `exec`**，但必须下发：
+    #: 界面上写"exec → sh"比写"exec"更不容易让人误解。
+    command: str
+    #: 无条件前置参数（如 nmap 的 `-sT -sV`）。界面可以用它说明"默认就带了这些"。
+    args: list[str] = []
+    params: list[KernelRecipeParamOut] = []
+    #: ★ **默认参数下它做不到什么**（空串 = 默认即全功能）。
+    #:
+    #: 这是配方库存在的主要理由，也是唯一**必须**透到界面上的字段：
+    #: 某个工具默认只扫 1000 个端口，返回"命中 0"，而人会把它读成
+    #: "目标本来就没有"。实测过同一目标、只补一个参数就从 0 → 2 命中。
+    defaultLimitation: str = ""
+    #: 这些退出码不算失败（如 ffuf 没命中时是 1）。
+    #:
+    #: 界面要据此把"没命中"与"命令出错"分开显示 —— 否则用户会去修一个
+    #: 本来正常工作的工具。
+    allowedExitCodes: list[int] = []
+
+
+class KernelRecipesOut(CamelModel):
+    """`GET /kernel/recipes` —— 配方库全量清单 + 分组顺序。"""
+
+    recipes: list[KernelRecipeOut] = []
+    #: 分组顺序（界面按它排栏，不从 recipes 里二次推导 —— 同 `RECIPE_GROUPS`）。
+    groups: list[str] = []
+    #: 共几条。**单独给**是因为前端要做"34 条里 12 条写了局限"这类计数，
+    #: 从 `recipes` 现算在 React 里会多一层 memo，而这是个常量。
+    total: int = 0
+
+
+# ══════════════════════════════════════════════════════════
 # 技能库（v0.87）
 # ══════════════════════════════════════════════════════════
 #

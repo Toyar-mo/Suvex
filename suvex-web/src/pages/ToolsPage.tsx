@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { PageHeader } from '@/components/layout/AppShell'
+import { RecipesPanel } from '@/components/kernel/RecipesPanel'
 import { McpPanel } from '@/components/tools/McpPanel'
 import { ToolListEmpty, ToolRow } from '@/components/tools/ToolRow'
 import { Button } from '@/components/ui/Button'
@@ -50,7 +51,12 @@ import { useEffect, useMemo, useState } from 'react'
 export function ToolsPage() {
   // ★ v0.88：不再解构 `skills` —— 技能库搬到独立页面（`SkillsPage`）了。
   //   留在这里会让人以为这一页还在管它，而实际渲染里已经没有任何引用。
-  const { mcp, catalog, status, error } = useTools()
+  //
+  // ★ v0.98：`recipes` 是**镜像里的二进制**（nmap / sqlmap …），与
+  //   `catalog`（引擎能调的动作）是两套东西，所以渲染成两个面板。
+  //   合在一个列表里会造出假的权力：用户以为关掉 `nmap` 就调不动了，
+  //   而 `run_shell nmap ...` 照样能跑。
+  const { mcp, catalog, recipes, status, error } = useTools()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
 
@@ -340,6 +346,13 @@ export function ToolsPage() {
                 改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的配置。
               </footer>
             </section>
+
+            {/*
+              ── 下：命令行工具（镜像里的二进制，只读）──────────────
+              ★ v0.98：与上面「内置工具」刻意分成两个面板，理由见
+                `RecipesPanel` 文件头（合在一起会造出假的权力）。
+            */}
+            <RecipesPanel recipes={recipes.recipes} />
           </div>
         )}
       </div>

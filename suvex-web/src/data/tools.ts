@@ -150,6 +150,8 @@ export interface ToolsState {
   catalog: KernelToolsSnapshot
   /** ★ v0.87：技能库（`load_skill` 可加载的速查卡）。 */
   skills: KernelSkillsSnapshot
+  /** ★ v0.98：命令行工具配方（沙箱里的二进制怎么调）。 */
+  recipes: KernelRecipesSnapshot
   status: ToolsStatus
   error: ApiError | null
 }
@@ -175,9 +177,75 @@ const EMPTY_CATALOG: KernelToolsSnapshot = {
   disabled: [],
 }
 
+// ─────────────────────────────────────────────
+// 命令行工具配方（v0.98）
+// ─────────────────────────────────────────────
+//
+// ★ 这与上面的 `KernelTool` 是**两套不同的东西**，界面上必须分栏：
+//
+//   | | 内置工具（`KernelTool`） | 命令行配方（`KernelRecipe`） |
+//   | --- | --- | --- |
+//   | 是什么 | 引擎能调的动作 | 沙箱里装着的二进制怎么调 |
+//   | 模型怎么用 | `ACTION: {"tool": ...}` | 写进 `run_shell` 的命令里 |
+//   | 能关掉吗 | 能（`disabled`） | **不能** —— 装没装由镜像决定 |
+//
+// 合成一个列表会造出假的权力：用户以为关掉 `nmap` 就调不动了，
+// 而 `run_shell nmap ...` 照样能跑。
+
+/** 配方里的一个参数。 */
+export interface KernelRecipeParam {
+  name: string
+  /** `flag` / `positional` / `template` —— 只用于显示，界面不做分支。 */
+  format: string
+  description: string
+  required: boolean
+  /** `format=flag` 时的开关名（如 `-p`）。 */
+  flag: string
+  /** 省略时的取值（非空 = 不给也用它）。 */
+  default: string
+}
+
+/**
+ * 一条命令行工具的调用配方。
+ *
+ * ★ `defaultLimitation` 是本模块存在的**主要理由**，不是附注：
+ * 它答"用默认参数跑会漏掉什么"。实测过同一目标、同一工具、只补一个参数
+ * 就从 0 命中变 2 命中 —— 而模型看到那个 0，写下的是"目标没有这个漏洞"。
+ */
+export interface KernelRecipe {
+  name: string
+  summary: string
+  group: string
+  /** 真正执行的命令。与 `name` 不同的只有 `exec`（→ `sh`）。 */
+  command: string
+  /** 无条件前置参数（如 nmap 的 `-sT -sV`）。 */
+  args: string[]
+  params: KernelRecipeParam[]
+  /** 默认参数下做不到什么（空串 = 默认即全功能）。 */
+  defaultLimitation: string
+  /**
+   * 这些退出码不算失败。
+   *
+   * 为什么重要：`ffuf` 没命中时退出码是 1。若界面把非 0 一律显示成"命令失败"，
+   * 用户会去修一个本来正常工作的工具。
+   */
+  allowedExitCodes: number[]
+}
+
+/** `GET /kernel/recipes` 的响应。 */
+export interface KernelRecipesSnapshot {
+  recipes: KernelRecipe[]
+  /** 分组顺序 —— 界面按它排栏。 */
+  groups: string[]
+  total: number
+}
+
+const EMPTY_RECIPES: KernelRecipesSnapshot = { recipes: [], groups: [], total: 0 }
+
 let mcp: McpServersSnapshot = EMPTY_MCP
 let catalog: KernelToolsSnapshot = EMPTY_CATALOG
 let skills: KernelSkillsSnapshot = EMPTY_SKILLS
+let recipes: KernelRecipesSnapshot = EMPTY_RECIPES
 let status: ToolsStatus = 'loading'
 let loadError: ApiError | null = null
 
@@ -194,10 +262,10 @@ let loadStarted = false
  * 快照必须**引用稳定** —— `useSyncExternalStore` 每次渲染都比较它。
  * 所以所有变更走"整体替换"，且只在真的变更时替换。
  */
-let snapshot: ToolsState = { mcp, catalog, skills, status, error: loadError }
+let snapshot: ToolsState = { mcp, catalog, skills, recipes, status, error: loadError }
 
 function commit() {
-  snapshot = { mcp, catalog, skills, status, error: loadError }
+  snapshot = { mcp, catalog, skills, recipes, status, error: loadError }
   emit()
 }
 
@@ -209,6 +277,7 @@ const SERVER_SNAPSHOT: ToolsState = {
   mcp: EMPTY_MCP,
   catalog: EMPTY_CATALOG,
   skills: EMPTY_SKILLS,
+  recipes: EMPTY_RECIPES,
   status: 'loading',
   error: null,
 }
@@ -250,12 +319,14 @@ export async function loadTools(): Promise<void> {
   loadError = null
   commit()
 
-  const [mcpResult, catalogResult, skillsResult] = await Promise.allSettled([
+  const [mcpResult, catalogResult, skillsResult, recipesResult] = await Promise.allSettled([
     api.get<McpServersSnapshot>('/kernel/mcp-servers'),
     api.get<KernelToolsSnapshot>('/kernel/tools'),
-    // ★ v0.87：技能库也一起拉。三个端点并行 —— 串行会让这一页的
-    // 可用时间变成三者之和，而它们互不依赖。
+    // ★ v0.87：技能库也一起拉。四个端点并行 —— 串行会让这一页的
+    // 可用时间变成四者之和，而它们互不依赖。
     api.get<KernelSkillsSnapshot>('/kernel/skills'),
+    // ★ v0.98：命令行工具配方。它是**只读**的（装没装由镜像决定）。
+    api.get<KernelRecipesSnapshot>('/kernel/recipes'),
   ])
 
   /*
@@ -288,7 +359,14 @@ export async function loadTools(): Promise<void> {
     errors.push(messageOf(skillsResult.reason))
   }
 
-  if (errors.length === 3) {
+  if (recipesResult.status === 'fulfilled') {
+    recipes = recipesResult.value
+  } else {
+    errors.push(messageOf(recipesResult.reason))
+  }
+
+  const totalSources = 4
+  if (errors.length === totalSources) {
     status = 'error'
     loadError = errors[0]
   } else {
