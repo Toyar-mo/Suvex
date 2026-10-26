@@ -81,13 +81,103 @@ def test_text_split_at_arbitrary_boundaries() -> None:
 
 
 def test_no_trailing_newline_is_flushed() -> None:
-    """最后一行没有换行也要放行。
+    """最后一行没有换行也要放行，一个字都不能少。
 
     不放的话界面上表现为「最后一句话少了一半」—— 最容易被当成渲染 bug。
+
+    ## v0.103：这条从「等 flush」放宽成「立刻放行」
+
+    旧版本这里断言 `feed()` 返回 `""`、只有 `flush()` 才吐全文 —— 那是
+    「逐行放行」的必然结果。但正因为它必须凑满一整行，界面才会一块一块
+    （实测 SSE 帧长 `69,69,69,...` 正好是表格一行）。现在能证明安全的
+    文本立刻放行，所以 `feed()` 就该直接返回。
+
+    不变的那条性质是：**这段字最终必须出去**（`feed() + flush()` 合起来）。
     """
     buffer = HoldbackBuffer()
-    assert buffer.feed("只有一行没有换行") == ""
-    assert buffer.flush() == "只有一行没有换行"
+    assert buffer.feed("只有一行没有换行") == "只有一行没有换行"
+    assert buffer.flush() == ""
+
+
+def test_undecided_tail_is_released_on_flush() -> None:
+    """判不定的尾巴（`ACT`、`ACTION` 没跟冒号）在 flush 时按放行处理。
+
+    `ACTION` 这个词本身不是协议头（协议头必须有冒号），显示它不泄漏任何
+    给机器看的东西。这也与非流式侧 `_narration_before_action` 一致 ——
+    它同样只在冒号成立时才切。
+    """
+    buffer = HoldbackBuffer()
+    assert buffer.feed("ACT") == ""
+    assert buffer.flush() == "ACT"
+
+    buffer = HoldbackBuffer()
+    assert buffer.feed("ACTION 之后的建议") == "ACTION 之后的建议"
+
+
+def test_safe_line_is_released_token_by_token() -> None:
+    """★ v0.103 的核心：判为安全的那一行，**不等换行**就逐 token 放行。
+
+    ## 这条测试钉住的是"粒度"，不是"内容"
+
+    v0.102 的纯行缓冲虽然一个字不漏，但实测界面仍是一块一块 ——
+    用 `_tmp/probe_sse_frames.py` 直接打 SSE 端点，帧长是
+    `69, 69, 69, 69`，正好等于表格一行的长度。用户的反馈是
+    「token 流怎么没了」。
+
+    所以这里逐字符喂一句长表格行，**每一个字符都要立刻出来**：
+    只要中间有任何一次 `feed()` 返回 `""`（除了开头那几个判不定的
+    字符），就说明还在攒行。
+    """
+    line = "| knchal_01M5VY64VM3WHYEH51MBM22VFG | 摩丝 | unsolved |\n"
+    buffer = HoldbackBuffer()
+    out = ""
+    released_now = 0
+    for index, char in enumerate(line):
+        piece = buffer.feed(char)
+        out += piece
+        if piece:
+            released_now += 1
+        # 前两个字符还判不定（"| " 之后才知道这行不是协议），之后必须即时出
+        if index >= 2:
+            assert piece == char, f"第 {index} 个字符没有即时放行：{char!r} 返回 {piece!r}"
+    assert out == line
+    assert released_now >= len(line) - 2
+
+
+def test_protocol_prefix_is_held_until_decided() -> None:
+    """`A` / `ACT` / `ACTION` 这些协议前缀必须扣住，不能提前放出去。
+
+    ## 为什么这条是安全底线
+
+    放出去就有个无法挽回的后果：`ACT` 已到屏幕、下一块是 `ION: {...}`
+    —— 用户已经看见"机器人正在写内部协议"这件事本身，而且帧撤不回来。
+
+    判据是"能不能证明它不会是协议"，而 `A` 恰好可能是 `ACTION` 的开头。
+    """
+    for head in ("A", "AC", "ACT", "ACTI", "ACTIO", "ACTION", "F", "FI", "FIN"):
+        buffer = HoldbackBuffer()
+        assert buffer.feed(head) == "", head
+        assert buffer.blocked is False, head
+
+    # 一旦岔开（后面不是标记），立刻整段放行。
+    buffer = HoldbackBuffer()
+    assert buffer.feed("ACT") == ""
+    assert buffer.feed("IONS 列表") == "ACTIONS 列表"
+
+
+def test_indented_protocol_spaces_are_not_released() -> None:
+    """协议前的缩进空格也不能先放出去。
+
+    `_MARKER` 是 `^\\s*`，所以 `  ACTION: {...}` 是协议。如果先把两个空格
+    放给界面，再锁死，用户会看到一段莫名其妙的空白 —— 更糟的是它看起来
+    像"消息开头有个 bug"。
+    """
+    buffer = HoldbackBuffer()
+    assert buffer.feed("  ") == ""
+    assert buffer.feed("ACTION") == ""
+    assert buffer.blocked is False
+    assert buffer.feed(":") == ""
+    assert buffer.blocked is True
 
 
 # ══════════════════════════════════════════════════════════

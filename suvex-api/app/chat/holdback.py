@@ -9,10 +9,8 @@ v0.102 之前，对话的正文是**整块**出现的：模型在服务端想完
 我最初的判断：**它们不是靠「入场动画」解决这个问题的**。Open WebUI 的
 `ResponseMessage.svelte` 里唯一的 `in:fade` 用在后继建议 chips 上，消息行
 本身零入场动画；正文之所以「逐字出现」，是因为它本来就是**逐 token 长出来的**。
-给我方消息行加一个 240ms 的动画只能掩盖症状 —— 动画结束后那块文字仍然
-是同时出现在屏幕上的。
 
-真正的修法是让 `LlmGateway` 也做 token 流。但直接推原文有一个硬问题。
+真正的修法是让 `LlmGateway` 也做 token 流。
 
 ## ★ 为什么不能直接把 token 推给界面
 
@@ -28,33 +26,38 @@ v0.102 之前，对话的正文是**整块**出现的：模型在服务端想完
     assistant | '好的，我先查一下最近的扫描。\nACTION: {"tool": "list_scans", ...}'
 
 用户看到的是一行裸 JSON，无法判断这句话是模型说的还是系统拼的。
-非流式时代这个问题好解决 —— 整段拿到手，`find("ACTION:")` 一刀切掉。
-**流式时切不了**：`ACTION:` 可能在第 80 个 token 才出现，那时前 79 个
-token 已经推到屏幕上了。
 
-## 做法：确认安全才放行
+## 做法：能判定的立刻放行，判不了的才扣住
 
-本模块是一个**行缓冲**。规则三条：
+本模块的核心是一个**逐行状态机**，每个未完成的行有三种判决：
 
-1. 完整的一行才判断。半个单词不做决定 —— 否则 "ACT" 放出去、"ION:" 到
-   下一块才来，已经被看见了。
-2. 一行**不是协议起头**（不以 `ACTION:` / `FINAL:` 开头）才整行放行。
-3. 一旦见到协议起头，**停止放行再也不放** —— 后面的都是给机器看的。
+| 判决 | 条件 | 动作 |
+| --- | --- | --- |
+| 协议 | 去掉缩进后以 `ACTION`/`FINAL` 开头、紧跟（可空白）`: ` 或 `：` | 锁死，此后一个字都不放 |
+| **安全** | 已能证明这行不可能成为协议头 | **整行（含后续增量）立刻放行** |
+| 待定 | 还说不准（只写了 `A`、`ACT`、`ACTION`） | 只扣住这几个字符 |
 
-第 3 条的「再也不放」是刻意的：模型有时先写一段正文、再写 ACTION、
-然后又写一段解释。按协议，见到 ACTION 之后的一切都不该进用户视野。
+「安全」判定为什么成立：协议头必须**紧贴行首**（`_MARKER` 是 `^\\s*`）。
+所以一行只要开头几个字符已经岔开了 —— 即去掉缩进后既不是 `ACTION`/`FINAL`
+的前缀，也不是这两个词加空白 —— 后面再写什么都不会让这一行变成协议。
+一旦判为安全，**同一行剩余部分逐 token 放行**，不必等换行。
+
+## ★ 为什么这里要改成「逐 token」而不是「逐行」
+
+v0.102 的第一版是纯行缓冲：凑满一整行才放行。它安全，但实测下来
+**界面还是一块一块的** —— 用 `_tmp/probe_sse_frames.py` 直接打 SSE 端点，
+量到的帧长是 `69, 69, 69, 69, 69`（反复相同），正好等于表格一行的长度。
+用户的反馈是「token 流怎么没了」。
+
+粒度问题不是靠改前端能解决的：后端每帧就是那么多字。所以判定要细化到
+「能判多少放多少」。
 
 ## 为什么按行而不是按句
 
 按句要处理中文标点（。！？）与英文句点的歧义（"0.5" 里的点、
 "e.g." 里的点），而那套启发式会在缩写上出错 —— 出错的表现是**把一句
 话从中间切断**。按行简单、可预测，而模型的正文本来就分行写。
-
-## 代价：首个字出现的延迟
-
-第一行要等模型把它写完（或写完一段没有换行就结束）。实测这一段通常在
-几百毫秒量级，而改造前要等**整轮**（含全部工具往返）—— 也就是几秒到
-几十秒。所以延迟是显著变短，不是变长。
+本模块的「逐 token」指的是**安全行内不再等换行**，不是把行拆成句。
 
 ## ⚠️ 与 `_narration_before_action` 的关系
 
@@ -63,7 +66,7 @@ token 已经推到屏幕上了。
 | | 用途 | 作用面 |
 | --- | --- | --- |
 | `_narration_before_action` | 决定**落库**什么 | 整段、一次 |
-| 本模块 | 决定**实时推给界面**什么 | 逐行、流式 |
+| 本模块 | 决定**实时推给界面**什么 | 逐行/逐 token |
 
 落库仍然走那个函数（库里的内容必须与非流式时代逐字节一致，否则刷新
 页面会和流式时看到的对不上）。本模块只管「中途看到什么」，它放行过
@@ -86,6 +89,11 @@ from __future__ import annotations
 #: 所以这里一并拦掉。两处集合不一致的后果是**某一种协议漏出去**，
 #: 而那种漏出只在特定模型上复现。
 PROTOCOL_MARKERS: tuple[str, ...] = ("ACTION", "FINAL")
+
+#: 一行未写完时的三种判决（见模块 docstring 的表）。
+_PROTOCOL = "protocol"
+_SAFE = "safe"
+_UNDECIDED = "undecided"
 
 
 def _is_protocol_head(line: str) -> bool:
@@ -111,30 +119,73 @@ def _is_protocol_head(line: str) -> bool:
     return False
 
 
+def _verdict(line: str) -> str:
+    """判断**尚未写完的一行**属于哪种判决：`_PROTOCOL` / `_SAFE` / `_UNDECIDED`。
+
+    这是「逐 token 放行」的全部依据，所以每一步都要能说清为什么安全。
+
+    ## 判定顺序
+
+    1. 已经是完整协议头（`_is_protocol_head`）→ `_PROTOCOL`。
+    2. 去掉缩进后是某个标记的**前缀**（`""`/`A`/`ACT`/`ACTION`/`F`/`FIN`…）
+       → `_UNDECIDED`：再写一个冒号它就是协议了，不能放。
+       ⚠️ `""`（整行还只有空白）也归这里 —— `  ACTION:` 前面的空格
+       不能先放出去，否则界面上会先出现两个空格再出现协议被锁死。
+    3. 以某个标记开头但**后面还有别的内容**（`ACTIONABLE`、`ACTIONS`）
+       → 不是协议（冒号位置不对），继续看下一个标记。
+    4. 以上都不是 → `_SAFE`：这行永远不可能变成协议头，可以整段放行。
+
+    ## 第 2 步为什么带长度条件
+
+    只写 `marker.startswith(stripped)` 的话，`ACTIONABLE 的建议` 会因为
+    前 6 个字符正好是 `ACTION` 而被判 `_UNDECIDED`，于是一整行要等到
+    换行才放 —— 安全但粒度退化。加上 `len(stripped) <= len(marker)`
+    就只在「还没写全」时待定。
+    """
+    if _is_protocol_head(line):
+        return _PROTOCOL
+    stripped = line.lstrip()
+    for marker in PROTOCOL_MARKERS:
+        if len(stripped) <= len(marker) and marker.startswith(stripped):
+            return _UNDECIDED
+        if stripped.startswith(marker):
+            rest = stripped[len(marker) :].lstrip()
+            if not rest:
+                # `ACTION` / `ACTION ` / `ACTION\n` —— 只差一个冒号。
+                return _UNDECIDED
+    return _SAFE
+
+
 class HoldbackBuffer:
-    """行缓冲：`feed()` 进增量，`drain()` 出「确认安全」的前缀。
+    """行状态机：`feed()` 进增量，返回「确认安全」的那部分。
 
     ## 用法
 
         buf = HoldbackBuffer()
         async for delta in gateway.chat_stream(...):
-            for safe in buf.feed(delta):
+            safe = buf.feed(delta)
+            if safe:
                 await emit(EVENT_DELTA, {"text": safe})
-        for safe in buf.flush():
-            await emit(EVENT_DELTA, {"text": safe})
+        tail = buf.flush()
+        if tail:
+            await emit(EVENT_DELTA, {"text": tail})
 
-    ## ★ 状态是「见过协议没有」，不是「当前行是不是协议」
+    ## 两个状态
 
-    见模块 docstring 第 3 条。一旦 `blocked`，`feed()` 再多的正文也不放行。
+    - `_blocked`：见过协议头，此后**再也不放**任何字（模块 docstring 第 3 条）。
+    - `_line_safe`：当前这一行已判为安全，剩余部分可以逐 token 直接放行，
+      直到换行才回到待定。
     """
 
-    __slots__ = ("_pending", "_blocked")
+    __slots__ = ("_pending", "_blocked", "_line_safe")
 
     def __init__(self) -> None:
-        #: 尚未构成完整一行（或尚未确认安全）的尾巴。
+        #: 尚未做出的判决所对应的尾巴（通常是当前行的开头几个字符）。
         self._pending = ""
         #: 见过协议起头之后就永远 True。
         self._blocked = False
+        #: 当前行已判为安全。
+        self._line_safe = False
 
     @property
     def blocked(self) -> bool:
@@ -144,67 +195,44 @@ class HoldbackBuffer:
     def feed(self, delta: str) -> str:
         """吃一个增量，返回**可以立刻推到界面**的那部分（可能是空串）。
 
-        空串是常态，不是错误：一个 token 通常只是一两个字符，凑不齐一行。
+        返回空串只发生在两种情形：已经锁死，或这一行还只有 `A`/`ACT`
+        这样判不定的开头。其余情况立刻返回，不再等换行 —— 这是 v0.103
+        修掉「界面一块一块」的关键。
         """
         if not delta:
             return ""
         if self._blocked:
-            # 见过协议之后的一切都是给机器看的。⚠️ 仍然要消费掉这个 delta
-            # （而不是提前 return 不理它）—— 这里没有别的状态要维护，
-            # 但保持「feed 吃下所有输入」的语义，将来加统计不会漏。
+            # 见过协议之后的一切都是给机器看的。仍然消费掉这个 delta，
+            # 保持「feed 吃下所有输入」的语义（将来加统计不会漏）。
             return ""
         self._pending += delta
         out: list[str] = []
-        while True:
-            newline = self._pending.find("\n")
-            if newline < 0:
-                # ── 没有换行 = 这一行还没写完。不能放行，但要先判一次
-                #    「已经开始写协议了」。理由：模型常把协议与正文写在
-                #    同一行（`好的。ACTION: {...}`），那种形态下**永远
-                #    等不到换行**，直到整轮结束 —— 于是 `flush()` 才判。
-                #    只靠 flush 的坏处是：这一行里的正文（"好的。"）也
-                #    被一起扣住了，而它其实是安全的。
-                #
-                #    所以这里提前判一次：**只要 pending 里已经出现协议头，
-                #    就把协议之前那部分正文放出去，然后锁死**。
-                head = self._protocol_head_index(self._pending)
-                if head is not None:
-                    prefix = self._pending[:head]
-                    if prefix:
-                        out.append(prefix)
+        while self._pending:
+            if self._line_safe:
+                # 已判安全：放到换行为止，剩下的留给下一行重新判。
+                newline = self._pending.find("\n")
+                if newline < 0:
+                    out.append(self._pending)
                     self._pending = ""
-                    self._blocked = True
                     break
-                break
-            line = self._pending[: newline + 1]
-            self._pending = self._pending[newline + 1 :]
-            if _is_protocol_head(line):
+                out.append(self._pending[: newline + 1])
+                self._pending = self._pending[newline + 1 :]
+                self._line_safe = False
+                continue
+
+            verdict = _verdict(self._pending)
+            if verdict == _PROTOCOL:
                 # ★ 这一行本身也不放行：`ACTION: {...}` 整行都是协议。
                 self._blocked = True
                 self._pending = ""
                 break
-            out.append(line)
+            if verdict == _SAFE:
+                self._line_safe = True
+                # 不 break：回到循环顶部按安全行的规则放行。
+                continue
+            # _UNDECIDED：只扣住这一小段，等更多增量。
+            break
         return "".join(out)
-
-    @staticmethod
-    def _protocol_head_index(text: str) -> int | None:
-        """`text` 里第一个**协议行的起点**下标（行首），没有就返回 None。
-
-        ## 为什么不能简单地 `text.find("ACTION:")`
-
-        正文里完全可能出现这个词："我看到一段 ACTION: 开头的日志"。
-        那不是协议（它不在行首），不该被当成协议 —— 判错的表现是
-        **把用户正常的一句话从中间切断**。
-
-        所以按行扫，每行用 `_is_protocol_head` 判（那个函数要求**行首**
-        紧邻标记，允许前导空白）。
-        """
-        offset = 0
-        for line in text.splitlines(keepends=True):
-            if _is_protocol_head(line):
-                return offset
-            offset += len(line)
-        return None
 
     def flush(self) -> str:
         """收尾：把最后一段没有换行的尾巴按同样规则判一次。
@@ -212,13 +240,20 @@ class HoldbackBuffer:
         流结束时 `_pending` 里可能留着正文的最后一行（模型没写结尾换行）。
         不 flush 的话那句话会被吞掉 —— 界面上表现为「最后一句话少了一半」，
         而那是最容易被当成渲染 bug 的形态。
+
+        `_UNDECIDED` 在这里按**放行**处理：能走到 flush 就说明这行到头了，
+        而 `ACTION`（没有冒号）、`ACT` 这类文本本身不是协议头，显示它不
+        泄漏任何给机器看的东西。旧实现也是这个口径（`_is_protocol_head`
+        判否即放行）。
         """
-        if self._blocked or not self._pending:
+        if self._blocked:
             self._pending = ""
             return ""
         tail = self._pending
         self._pending = ""
-        if _is_protocol_head(tail):
+        if self._line_safe:
+            return tail
+        if _verdict(tail) == _PROTOCOL:
             self._blocked = True
             return ""
         return tail
