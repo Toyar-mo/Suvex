@@ -109,6 +109,7 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     stagedAttachments: [],
     status: 'ready',
     error: null,
+    pendingUserContent: null,
     sending: false,
     deciding: false,
     ...overrides,
@@ -397,5 +398,129 @@ describe('ChatPage — 新对话', () => {
     await waitFor(() => expect(mockedCreateSession).toHaveBeenCalled())
     // 页面上仍能看到已有会话 —— 失败不该把用户已有的东西带走。
     expect(screen.getByText('查一下最近的扫描')).toBeTruthy()
+  })
+})
+
+describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
+  /*
+    ★ 这一组针对的是一次真实的体验事故：用户点发送后，输入框里的字
+      还在、屏幕上没有新气泡、只有右下角一个「正在想…」。原因有两个，
+      都在这组测试里被钉住：
+
+      ① 页面是 `await sendMessage(...)` 之后才 `setDraft('')` —— 而那一等
+         是整整一轮（模型想 + 可能十几次工具调用）。
+      ② `sendMessage` 整轮只 commit 一次，用户那句话要和服务端的全部回复
+         一起落地。
+
+      用户的判读是"我点了，什么都没发生"，然后他会再点一次 —— 于是同一句
+      话发两遍。所以这两条都不是"体验优化"，是会造成错误数据的缺陷。
+  */
+
+  it('★ 点下发送的瞬间，输入框就空了', async () => {
+    /*
+      用 `Promise` 手动控制 `sendMessage` 何时 resolve —— 只要它没 resolve，
+      就代表"服务端还在想"。此时输入框必须已经空了。
+    */
+    let release: ((ok: boolean) => void) | undefined
+    mockedSendMessage.mockImplementation(
+      () => new Promise<boolean>((resolve) => { release = resolve }),
+    )
+
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
+    renderPage('/chat?session=chat_1')
+
+    const box = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '列出可用技能' } })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: false, isComposing: false })
+
+    // 还没等到任何响应
+    await waitFor(() => expect(mockedSendMessage).toHaveBeenCalled())
+    expect(box.value, '发送后输入框必须立刻清空（否则用户以为没发出去，会再点一次）').toBe('')
+
+    release?.(true)
+    await waitFor(() => expect(box.value).toBe(''))
+  })
+
+  it('★ 发送失败时把原文放回输入框，不丢字', async () => {
+    /*
+      清空是乐观的，所以失败路径必须有回填。没有的话用户刚敲的那段字
+      就彻底没了 —— 而失败原因往往只是模型接入点抖了一下。
+    */
+    mockedSendMessage.mockResolvedValue(false)
+
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
+    renderPage('/chat?session=chat_1')
+
+    const box = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '这段字不能丢' } })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: false, isComposing: false })
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe(
+        '这段字不能丢',
+      )
+    })
+  })
+
+  it('★ 服务端没回之前，那句话已经画在屏幕上', () => {
+    /*
+      这条直接测渲染：`pendingUserContent` 就是"刚发出去、还没回"的那句。
+      它必须出现在屏幕上，而且带原文。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        pendingUserContent: '列出可用技能',
+      }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+
+    const bubble = container.querySelector('[data-pending-bubble="true"]')
+    expect(bubble, '找不到乐观气泡 —— 发送中的那句话必须立刻可见').not.toBeNull()
+    expect(bubble?.textContent).toBe('列出可用技能')
+  })
+
+  it('★ 乐观气泡在「正在想」**上面**（时间顺序不能反）', () => {
+    /*
+      画反了读起来就是"模型先想了，我才问"。用 `compareDocumentPosition`
+      比较两个节点在文档里的先后，而不是比较 `textContent` 里的下标 ——
+      后者会被无关文案干扰。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        pendingUserContent: '列出可用技能',
+      }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+
+    const bubble = container.querySelector('[data-pending-bubble="true"]')!
+    const thinking = screen.getByText('正在想…')
+    expect(
+      bubble.compareDocumentPosition(thinking) & Node.DOCUMENT_POSITION_FOLLOWING,
+      '「正在想」应该排在乐观气泡之后（下方）',
+    ).toBeTruthy()
+  })
+
+  it('服务端回来后乐观气泡消失（不会和真消息重复）', () => {
+    /*
+      `pendingUserContent` 为 null 时不画。store 在回包里会把它置空，
+      这里测的是"置空之后界面确实没有它"。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [message({ id: 'm1', seq: 1, role: 'user', content: '列出可用技能' })],
+        },
+        sending: false,
+        pendingUserContent: null,
+      }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+
+    expect(container.querySelector('[data-pending-bubble="true"]')).toBeNull()
   })
 })

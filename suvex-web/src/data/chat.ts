@@ -147,6 +147,25 @@ export interface ChatState {
   stagedAttachments: ChatAttachment[]
   status: ChatStatus
   error: ApiError | null
+  /**
+   * 刚发出去、服务端还没回的那句话（v0.97）。
+   *
+   * ★ 为什么要有它：`sendMessage` 是**整轮一次 commit** —— 服务端返回的
+   *   `messages` 里同时包含用户那句话和模型的全部回复，所以用户点发送后，
+   *   在他自己那句话上屏幕上要等整整一轮（模型想 + 可能十几次工具调用）。
+   *   实测一次能到 30 秒以上，期间界面只有一个小转圈，而输入框里的字
+   *   还在（清空也排在 await 之后）—— 用户看到的是"我点了发送，什么都没
+   *   发生"，然后就再点一次。
+   *
+   * ★ 为什么不直接往 `messages` 里插一条假消息：那需要伪造 `id` 与 `seq`，
+   *   而真消息回来后要按 `id` 去替换 —— 一旦替换失败（后端改了 id 规则、
+   *   或两次发送的乐观 id 撞了），界面上会留下一条永远消不掉的假气泡。
+   *   存成独立字段就没有这个失败模式：服务端回包一到，把它置空即可，
+   *   真消息由服务端数据自己负责。
+   *
+   * ★ 渲染位置固定在"已有消息之后、正在想之前"—— 那正是它在时间上的位置。
+   */
+  pendingUserContent: string | null
   /** 一轮正在跑。界面据此禁用输入框并显示"正在想"。 */
   sending: boolean
   /** 有一条审批正在提交。界面据此禁用那两个按钮，防重复点。 */
@@ -161,6 +180,7 @@ const EMPTY: ChatState = {
   stagedAttachments: [],
   status: 'idle',
   error: null,
+  pendingUserContent: null,
   sending: false,
   deciding: false,
 }
@@ -319,7 +339,10 @@ export async function sendMessage(
   explicitTools?: string[],
 ): Promise<boolean> {
   if (state.sending) return false
-  patch({ sending: true, error: null })
+  // ★ 让用户那句话**立刻**出现在屏幕上（v0.97）。放在 `sending: true` 同一个
+  //   patch 里，所以从用户点下发送到气泡出现的这段时间是一个渲染帧，
+  //   而不是一整轮模型推理。
+  patch({ sending: true, error: null, pendingUserContent: content })
   try {
     const body: Record<string, unknown> = { content }
     if (providerId) body.providerId = providerId
@@ -355,6 +378,9 @@ export async function sendMessage(
         },
         // 附件已被后端读走并删除，本地也清掉。
         stagedAttachments: attachmentIds.length > 0 ? [] : state.stagedAttachments,
+        // 真消息已经进了 `messages`，乐观气泡功成身退 —— 必须在这里清，
+        // 否则界面上会出现两条一模一样的用户消息。
+        pendingUserContent: null,
       })
     }
 
@@ -366,7 +392,10 @@ export async function sendMessage(
     patch({ error: messageOf(error) })
     return false
   } finally {
-    patch({ sending: false })
+    // ★ 失败路径也要清乐观气泡：那句话没发出去（`pendingUserContent` 留着
+    //   会让人以为发出去了，而实际服务端没有这条记录）。页面会把原文放回
+    //   输入框，用户在那里能看到并重发。
+    patch({ sending: false, pendingUserContent: null })
   }
 }
 

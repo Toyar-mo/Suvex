@@ -323,3 +323,59 @@ describe('renameSession', () => {
     expect(getChatSnapshot().active?.title).toBe('改过的名字')
   })
 })
+
+describe('sendMessage — 乐观气泡（v0.97）', () => {
+  /*
+    ★ 这组钉的是"点下发送到服务端回包之间"那段时间窗口。
+
+      没有它的话，`pendingUserContent` 这条链路可以整条删掉而 12 个旧测试
+      全绿 —— 实测过：把 store 里的 `patch({..., pendingUserContent: content})`
+      删掉，旧测试一条都不红。而生产线上的症状是"点了发送什么都没发生"。
+  */
+
+  it('★ 发出的那一刻就写进 pendingUserContent（不等服务端回包）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    // 只发起、不 resolve —— 模拟"服务端还在想"
+    const promise = sendMessage('chat_1', '列出可用技能')
+
+    // 关键断言：此刻响应还没回来，但那句话已经被记住了
+    expect(getChatSnapshot().pendingUserContent).toBe('列出可用技能')
+
+    pending[1].resolve({ messages: [message({ id: 'm1', seq: 1, content: '列出可用技能' })] })
+    await promise
+    if (pending[2]) pending[2].resolve([])
+  })
+
+  it('★ 回包落地后清空（否则界面上会同时有乐观气泡和真消息）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '列出可用技能')
+    pending[1].resolve({ messages: [message({ id: 'm1', seq: 1, content: '列出可用技能' })] })
+    await promise
+    if (pending[2]) pending[2].resolve([])
+
+    expect(getChatSnapshot().pendingUserContent).toBeNull()
+  })
+
+  it('★ 失败时也清空 —— 那句话服务端没有，留着就是谎话', async () => {
+    /*
+      失败路径最容易被漏。留着 `pendingUserContent` 的话，用户看到自己那句话
+      稳稳地画在屏幕上（像是发出去了），而服务端根本没这条记录 ——
+      刷新一下就消失。页面那边负责把原文放回输入框。
+    */
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '这段会失败')
+    pending[1].reject(new Error('接入点超时'))
+    await promise
+
+    expect(getChatSnapshot().pendingUserContent).toBeNull()
+  })
+})

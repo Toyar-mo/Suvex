@@ -115,6 +115,7 @@ export function ChatPage() {
     //   create_scan / save_skill 一类），不是下面 `useTools()` 那份**内核
     //   技能库**。两者名字都在讲"工具"，混用会让 @补全列出根本点不动的条目。
     tools,
+    pendingUserContent,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -207,7 +208,10 @@ export function ChatPage() {
   const messageCount = active?.messages.length ?? 0
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-  }, [messageCount, sending])
+    // ★ 依赖里带上 `pendingUserContent`（v0.97）：乐观气泡是在发送那一刻
+    //   插进来的，此时 `messageCount` 还没变 —— 不带它的话气泡会出现在
+    //   视口下方而页面不滚，用户以为点了没反应（正是这次要修的症状）。
+  }, [messageCount, sending, pendingUserContent])
 
   const canSend = draft.trim().length > 0 && !sending && active !== null
 
@@ -227,10 +231,14 @@ export function ChatPage() {
     //   两者只差首尾空白，但用同一个来源能避免"编辑器看到的和发出去的
     //   不是同一段字"这类难以复现的偏差。
     const hinted = resolveMentions(draft, tools)
-    // 先清输入框再发：失败时 store 里有 error，页面会把内容留在下面一条
-    // 错误提示里让用户重发。留字在框里反而会让人以为没发出去。
+    // ★ 先清输入框再发（v0.97）。原来是 `await sendMessage(...)` 之后才清，
+    //   而那一等是整整一轮（模型想 + 可能十几次工具调用，实测能到 30 秒）。
+    //   期间输入框里字还在、屏幕上也没有新气泡，用户看到的是"点了发送，
+    //   什么都没发生"—— 于是他会再点一次。现在点下即清、即出气泡。
+    //   失败时下面 catch 会把原文放回框里，不会丢字。
+    setDraft('')
     const ok = await sendMessage(active.id, content, undefined, hinted)
-    setDraft(ok ? '' : content)
+    if (!ok) setDraft(content)
     setMention(null)
   }
 
@@ -572,6 +580,28 @@ export function ChatPage() {
                   }
                 />
               ))}
+
+              {/*
+                乐观气泡（v0.97）：用户刚发出去、服务端还没回的那句话。
+
+                ★ 位置固定在"已有消息之后、正在想之前"——那正是它在时间上
+                  的位置。画在别处（比如紧跟最后一条）都会让转圈出现在
+                  用户消息上方，读起来像"模型先想了、我才问"。
+
+                ★ 用 `role="status"` 的容器之外单独画，不用 MessageRow：
+                  那条路要求一个完整的 `ChatMessage`（id/seq/createdAt），
+                  伪造那些字段就会引出"真消息回来后按 id 替换失败、
+                  界面上留一条消不掉的假气泡"这个失败模式。
+              */}
+              {pendingUserContent !== null && (
+                <div className="flex justify-end" data-pending-bubble="true">
+                  <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/12 px-3 py-2">
+                    <p className="whitespace-pre-wrap break-words text-sm text-ink">
+                      {pendingUserContent}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {sending && (
                 <div className="flex items-center gap-1.5 pl-1" role="status" aria-live="polite">
