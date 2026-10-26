@@ -484,7 +484,14 @@ def test_overview_is_no_longer_a_stub(ready_client: TestClient) -> None:
     response = ready_client.get(f"{API}/overview")
 
     assert response.status_code == 200, f"仍是占位：{response.text[:200]}"
-    assert set(response.json()) == {"metrics", "activity", "severityBreakdown", "hasAnyScan"}
+    assert set(response.json()) == {
+        "metrics",
+        "activity",
+        "severityBreakdown",
+        "hasAnyScan",
+        # v0.95：现在最该动哪几件
+        "attention",
+    }
 
 
 def test_response_shape_matches_frontend_type(ready_client: TestClient) -> None:
@@ -501,7 +508,14 @@ def test_response_shape_matches_frontend_type(ready_client: TestClient) -> None:
     """
     body = ready_client.get(f"{API}/overview").json()
 
-    assert set(body) == {"metrics", "activity", "severityBreakdown", "hasAnyScan"}
+    assert set(body) == {
+        "metrics",
+        "activity",
+        "severityBreakdown",
+        "hasAnyScan",
+        # v0.95
+        "attention",
+    }
     assert set(body["metrics"]) == {
         "activeScans",
         "newHighSeverityThisWeek",
@@ -514,7 +528,26 @@ def test_response_shape_matches_frontend_type(ready_client: TestClient) -> None:
         "ctf2RecordedCalls",
         "ctf2TotalTokens",
         "ctf2UsageSince",
+        # v0.95：待处置口径的风险分（见 schemas / overview.ts 的说明）
+        "unresolvedBreakdown",
+        "unresolvedTotal",
+        "riskScore",
+        "riskLevel",
     }
+
+    # v0.95 的形状细节：这三条不是"字段存在"就够，取值域也钉住
+    metrics = body["metrics"]
+    assert metrics["riskLevel"] in {"safe", "low", "medium", "high", "severe"}
+    assert isinstance(metrics["riskScore"], (int, float))
+    # ⚠️ 待处置分布必须**5 档齐全含 0**（与 severityBreakdown 一致），
+    #    因为它是加权分的输入，缺一档会让"这一级有没有东西"不可判断。
+    assert [item["severity"] for item in metrics["unresolvedBreakdown"]] == [
+        "critical",
+        "high",
+        "medium",
+        "low",
+        "info",
+    ]
 
 
 def test_scan_id_narrows_the_scope(ready_client: TestClient, db_session: Session, tmp_path: Path) -> None:
@@ -651,15 +684,34 @@ def test_service_uses_stats_not_a_second_count(
     做法：把 `stats` 换成探针，确认 `overview_metrics` 调了它。
     这比"比对两个数字"更硬 —— 数字相等也可能是因为各自数了一遍
     而恰好相等（并发编辑下就会不等，而那正是要防的场景）。
+
+    ## v0.95 起是**两次**调用，仍然只有一处实现
+
+    风险分要的是"**未收敛**发现的分布"，与 `severityBreakdown`
+    （全部发现）是两个口径。做法是再调一次 `stats(status=未收敛)`，
+    而不是另写一条 `GROUP BY` —— 后者会让"列表说 3 条、角标说 7 条"
+    这类不一致重新出现，也就是这条测试当初存在的理由。
+
+    所以这里断言的不是"恰好一次"，而是更强的那件事：
+    **每一次计数都经过 `stats()`，且两次的口径可区分**。
     """
-    called: dict[str, int] = {}
+    calls: list[dict] = []
     real = findings_service.stats
 
     def probe(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-        called["n"] = called.get("n", 0) + 1
+        calls.append(kwargs)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(findings_service, "stats", probe)
-    findings_service.overview_metrics(db_session)
+    result = findings_service.overview_metrics(db_session)
 
-    assert called.get("n") == 1, "Overview 必须调 stats()，不能自己再数一遍"
+    assert len(calls) == 2, f"预期两次（全量 + 未收敛），实际 {len(calls)} 次"
+    # 第一次：全量口径（不传 status）
+    assert calls[0].get("status") is None or "status" not in calls[0]
+    # 第二次：未收敛口径，且必须是**列举出来的那几个状态**
+    assert calls[1].get("status") == "confirmed,new,retesting"
+
+    # 两次的结果都必须进到返回值里，否则等于白算
+    assert "severityBreakdown" in result
+    assert set(result["unresolvedBreakdown"][0]) == {"severity", "count"}
+    assert result["unresolvedTotal"] >= 0

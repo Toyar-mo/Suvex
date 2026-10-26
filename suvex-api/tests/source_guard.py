@@ -104,21 +104,38 @@ def _find_node(tree: ast.AST, chain: list[str]) -> ast.AST | None:
 
 
 def getsource(obj: object) -> str:
-    """按名字取 `obj` 在当前磁盘文件里的源码。找不到时退回 inspect。"""
+    """按名字取 `obj` 在当前磁盘文件里的源码。找不到时退回**原始** inspect。
+
+    ## ★ 退回时必须用 `original_getsource`，不能用 `inspect.getsource`
+
+    这是一个真实踩到的无限递归：`tests/conftest.py` 的 autouse fixture 把
+    `inspect.getsource` 换成了本函数。如果这里再调 `inspect.getsource`，
+    调到的就是本函数自己 → 找不到节点 → 再调自己 → `RecursionError:
+    maximum recursion depth exceeded`，堆栈里全是 `ast.py:274`，
+    看不出真正原因。
+
+    触发条件不是假想的：`app.main.lifespan` 有 `@asynccontextmanager`，
+    装饰后它的 `__code__.co_filename` 是 **`contextlib.py`**，
+    于是 AST 里当然找不到叫 `lifespan` 的定义 → 走退回分支 → 递归。
+    2026-10-26 全量测试就这么红了 6 条，而它们与当轮改动毫无关系。
+
+    用 `original_getsource` 就退回到"Python 原本怎么取"，语义也对：
+    名字找不到时，行号切片至少还能给出**某个**源码，比递归崩溃好。
+    """
     code = getattr(obj, "__code__", None)
     if not code:
-        return inspect.getsource(obj)  # type: ignore[arg-type]
+        return original_getsource(obj)  # type: ignore[arg-type]
 
     path = Path(code.co_filename)
     try:
         text = path.read_text(encoding="utf-8")
         tree = ast.parse(text)
     except (OSError, SyntaxError, UnicodeDecodeError):
-        return inspect.getsource(obj)  # type: ignore[arg-type]
+        return original_getsource(obj)  # type: ignore[arg-type]
 
     node = _find_node(tree, _qualname_chain(obj))
     if node is None:
-        return inspect.getsource(obj)  # type: ignore[arg-type]
+        return original_getsource(obj)  # type: ignore[arg-type]
 
     start, end = _node_span(node)
     lines = text.splitlines(keepends=True)

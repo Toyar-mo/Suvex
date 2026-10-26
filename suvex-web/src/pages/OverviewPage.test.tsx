@@ -53,10 +53,23 @@ function makeData(hasAnyScan: boolean): OverviewData {
       ctf2RecordedCalls: 8,
       ctf2TotalTokens: 12345,
       ctf2UsageSince: '2026-10-01T00:00:00Z',
+      // v0.95：待处置口径。刻意给成与 `severityBreakdown` **不同**的值 ——
+      // 两者若在夹具里恒等，任何把风险分错接成全量口径的 bug 都测不出来。
+      unresolvedBreakdown: [
+        { severity: 'critical', count: 1 },
+        { severity: 'high', count: 2 },
+        { severity: 'medium', count: 0 },
+        { severity: 'low', count: 0 },
+        { severity: 'info', count: 0 },
+      ],
+      unresolvedTotal: 3,
+      riskScore: 20,
+      riskLevel: 'high',
     },
     activity: [],
     severityBreakdown: [],
     hasAnyScan,
+    attention: [],
   }
 }
 
@@ -64,12 +77,18 @@ function setSnapshot(snapshot: {
   data: OverviewData | null
   status: 'loading' | 'ready' | 'error'
   error: null
+  lastLoadedAt?: number | null
 }) {
   // `error` 恒为 null：这三个用例都不走"带 ApiError 的失败"那条更细的分支，
   // 真 ApiError 的区分能力由 ErrorState 自己的测试负责。
-  mockedUseOverviewState.mockReturnValue(
-    snapshot as unknown as ReturnType<typeof useOverviewState>,
-  )
+  //
+  // `lastLoadedAt` 默认给 `Date.now()`：绝大多数用例与新鲜度无关，
+  // 而**缺省成 null 会让提示条永远不出现**——那么"提示条该出现时出现了"
+  // 就永远不会被测到。需要测提示条的用例自己传一个旧时间戳。
+  mockedUseOverviewState.mockReturnValue({
+    lastLoadedAt: Date.now(),
+    ...snapshot,
+  } as unknown as ReturnType<typeof useOverviewState>)
 }
 
 /**
@@ -146,5 +165,146 @@ describe('OverviewPage 三态', () => {
     renderPage()
 
     expect(mockedLoadOverview).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * v0.95：风险分、该做什么、数据新鲜度。
+ *
+ * 这三块各自引一个"看起来在工作但什么都没说"的失效模式：
+ *   · 风险分接错口径（用全量而非待处置）→ 修完漏洞不降分；
+ *   · 该做什么永远为空（判据写错）→ 一块永远说"没事"的区块；
+ *   · 静默刷新失败不留痕 → 屏幕上是几分钟前的数字，用户不知道。
+ */
+describe('OverviewPage · 待处置风险（v0.95）', () => {
+  it('风险分卡显示后端给的分与等级，不自己重新分档', () => {
+    setSnapshot({ data: makeData(true), status: 'ready', error: null })
+
+    renderPage()
+
+    // 夹具：riskScore 20 / level high / unresolvedTotal 3
+    expect(screen.getByText('待处置风险')).toBeTruthy()
+    expect(screen.getByText('3 项')).toBeTruthy()
+    expect(screen.getByText('高')).toBeTruthy()
+  })
+
+  it('构成条列出非零档，不列 0 值档', () => {
+    setSnapshot({ data: makeData(true), status: 'ready', error: null })
+
+    renderPage()
+
+    // 夹具里 critical 1 / high 2，medium 及以下都是 0
+    expect(screen.getByText('严重')).toBeTruthy()
+    expect(screen.getByText('高危')).toBeTruthy()
+    expect(screen.queryByText('中危')).toBeNull()
+  })
+
+  it('该做什么：给建议时按后端顺序渲染，并带上数量', () => {
+    const data = makeData(true)
+    data.attention = [
+      {
+        kind: 'unresolved_critical',
+        level: 'urgent',
+        title: '修复 2 个待处置的严重漏洞',
+        detail: '严重等级的漏洞应优先处置。',
+        count: 2,
+      },
+      {
+        kind: 'failing_schedule',
+        level: 'warning',
+        title: '检查 1 个连续失败的定时复查',
+        detail: '',
+        count: 1,
+      },
+    ]
+    setSnapshot({ data, status: 'ready', error: null })
+
+    renderPage()
+
+    expect(screen.getByText('该做什么')).toBeTruthy()
+    expect(screen.getByText('修复 2 个待处置的严重漏洞')).toBeTruthy()
+    expect(screen.getByText('检查 1 个连续失败的定时复查')).toBeTruthy()
+    // 等级文字是第三条信息通道（颜色之外的）—— 必须在
+    expect(screen.getByText('紧急')).toBeTruthy()
+    expect(screen.getByText('需留意')).toBeTruthy()
+  })
+
+  it('该做什么：空列表时说清"查过哪几项"，而不是只说"没有"', () => {
+    setSnapshot({ data: makeData(true), status: 'ready', error: null })
+
+    renderPage()
+
+    // ★ 关键：不能只是"没有待办"——那与"这块坏了"长得一样
+    expect(screen.getByText(/没有需要你处理的事/)).toBeTruthy()
+    expect(screen.getByText(/连续失败的定时复查/)).toBeTruthy()
+  })
+
+  it('认不出的建议 kind 被忽略，而不是让整块崩掉', () => {
+    const data = makeData(true)
+    data.attention = [
+      {
+        kind: 'some_future_kind_the_backend_added',
+        level: 'info',
+        title: '这条旧前端不认识',
+        detail: '',
+        count: 1,
+      },
+      {
+        kind: 'unresolved_critical',
+        level: 'urgent',
+        title: '修复 1 个待处置的严重漏洞',
+        detail: '',
+        count: 1,
+      },
+    ]
+    setSnapshot({ data, status: 'ready', error: null })
+
+    renderPage()
+
+    expect(screen.queryByText('这条旧前端不认识')).toBeNull()
+    // 同一个列表里认识的那条照常渲染 —— 少显示一条是可接受的降级，白屏不是
+    expect(screen.getByText('修复 1 个待处置的严重漏洞')).toBeTruthy()
+  })
+
+  it('数据超过 5 分钟没更新时显式标出来', () => {
+    setSnapshot({
+      data: makeData(true),
+      status: 'ready',
+      error: null,
+      lastLoadedAt: Date.now() - 7 * 60 * 1000,
+    })
+
+    renderPage()
+
+    expect(screen.getByText(/这份数据是 7 分钟前取的/)).toBeTruthy()
+    expect(screen.getByText(/数字可能已经过时/)).toBeTruthy()
+  })
+
+  it('数据新鲜时不显示任何提示（不给正常状态加噪音）', () => {
+    setSnapshot({
+      data: makeData(true),
+      status: 'ready',
+      error: null,
+      lastLoadedAt: Date.now() - 10 * 1000,
+    })
+
+    renderPage()
+
+    expect(screen.queryByText(/这份数据是/)).toBeNull()
+    expect(screen.queryByText(/正在自动刷新/)).toBeNull()
+  })
+
+  it('时钟回拨（lastLoadedAt 在未来）时不显示荒谬的负数时间', () => {
+    setSnapshot({
+      data: makeData(true),
+      status: 'ready',
+      error: null,
+      lastLoadedAt: Date.now() + 10 * 60 * 1000,
+    })
+
+    renderPage()
+
+    // 块级断言而不是 `queryByText(/-/)`：页面别处有连字符，那种断言会永远通过
+    expect(screen.queryByText(/分钟前/)).toBeNull()
   })
 })

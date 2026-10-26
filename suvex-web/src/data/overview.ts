@@ -143,7 +143,86 @@ export interface OverviewMetrics {
    *    所以界面在它为 null 时要说"还没有数据"，而不是显示"0 token"。
    */
   ctf2UsageSince: string | null
+
+  /*
+    ── 待处置口径的风险分（v0.95）────────────────────────
+
+    学自 CyberStrikeAI 的 `renderSeverityInsights`，但口径是我们自己钉的：
+    只算**还没处置完**的发现（`new` / `confirmed` / `retesting`）。
+
+    ★ 为什么不用 `severityBreakdown`（全部发现）来算：
+      CyberStrikeAI 的 dashboard.js 那行注释写得很清楚 —— 用全量时
+      把漏洞全修完之后 by_severity 不变，风险分居高不下，而"待处理严重"
+      已经归零，界面同时显示「风险极高」与「没有待处理的严重漏洞」。
+      修复之后分数必须降，否则这个数字永远不会给人正反馈。
+
+    ⚠️ 与 `severityBreakdown` 是**两份数据**，不是同一份的两种算法：
+      前者含已修复项，后者不含。看到两个数字不一致是正常的。
+  */
+
+  /**
+   * 待处置发现按严重度的分布。**固定 5 档、保留 0 值**。
+   *
+   * 保留 0 与 `severityBreakdown` 同一条理由：它是加权分的输入，
+   * 少一档会让"这一级有没有东西"变得不可判断。
+   */
+  unresolvedBreakdown: SeverityBreakdownEntry[]
+  /** 待处置总数（上面五档之和）。0 是"确实没有"，不是"算不出来"。 */
+  unresolvedTotal: number
+  /**
+   * 加权风险分。严重×10 / 高危×5 / 中危×2 / 低危×0.5，info 不计。
+   *
+   * 直接当 0-100 的百分比用（进度条宽度）。后端已 `round(,1)`。
+   */
+  riskScore: number
+  /**
+   * 风险等级：`safe` / `low` / `medium` / `high` / `severe`。
+   *
+   * ★ 前端**不要**拿 `riskScore` 自己重新分档。分档阈值是后端的
+   *   `RISK_LEVEL_BANDS`，抄一份到前端就会出现"徽章写高风险、
+   *   进度条按中危宽度画"这种自相矛盾的画面。
+   */
+  riskLevel: RiskLevel
 }
+
+/** 风险等级（v0.95，与后端 `RISK_LEVEL_BANDS` 一一对应）。 */
+export type RiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'severe'
+
+/**
+ * 「该做什么」的一项（v0.95）。
+ *
+ * ★ 字段里**没有跳转地址**。`kind` 是稳定的语义标识，
+ *   前端用它在自己的路由表里查目标 —— 后端不该知道 `/findings?status=...`
+ *   这种前端路由，否则改一次路由要发布后端。
+ *
+ * 排序由后端完成（先 level 再数量）。前端只按收到的顺序渲染 ——
+ * 两边都排会让"为什么第 2 条在第 1 条上面"变成没法解释的事。
+ */
+export interface AttentionItem {
+  /**
+   * 语义标识：`unresolved_critical` / `pending_approval` /
+   * `failing_schedule` / `unresolved_high`。
+   *
+   * 前端按它选图标、文案与跳转。**认不出的 kind 要被忽略**而不是
+   * 报错：后端加一种新的建议时，旧前端不应该整页崩掉。
+   */
+  kind: string
+  /**
+   * 有多急：`urgent` / `warning` / `info`。
+   *
+   * ⚠️ **不是**漏洞的 severity。"一条挂了 30 天的中危"比"刚发现的严重"
+   *    更急，这两个概念混用会让界面出现没法解释的红黄搭配。
+   */
+  level: AttentionLevel
+  /** 一句话说清要做什么（含数量），由后端生成 */
+  title: string
+  /** 为什么要做 / 不做的后果。空串 = 没有补充说明，不渲染空段 */
+  detail: string
+  /** 涉及几条 */
+  count: number
+}
+
+export type AttentionLevel = 'urgent' | 'warning' | 'info'
 
 export interface SeverityBreakdownEntry {
   severity: Severity
@@ -156,4 +235,12 @@ export interface OverviewData {
   severityBreakdown: SeverityBreakdownEntry[]
   /** 有没有跑过任何扫描 —— 决定空状态与正常状态 */
   hasAnyScan: boolean
+  /**
+   * 现在最该动的几件（v0.95），最多 5 条，已由后端排序。
+   *
+   * ⚠️ 与 `activity` 不是一回事，别合并：
+   *   `activity` 是「正在发生什么」—— 过去时，只增不改，给扫视用；
+   *   这个是「该做什么」—— 将来时，随处置而消失，给决策用。
+   */
+  attention: AttentionItem[]
 }

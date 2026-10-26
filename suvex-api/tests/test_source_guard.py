@@ -153,3 +153,58 @@ def test_plain_inspect_drifts_under_same_conditions(drifted: ModuleType) -> None
     )
     # 污染必须看得见：填充行或别的定义被卷进来了
     assert "# 插入的填充行" in bad, f"漂移形态与预期不同（没卷进填充行），检查构造：{bad[:160]!r}"
+
+
+def test_fallback_does_not_recurse_when_the_source_is_wrapped() -> None:
+    """★ 退回分支不得递归 —— 这是 2026-10-26 全量测试红 6 条的真正原因。
+
+    ## 那条 bug 的形状
+
+    `tests/conftest.py` 的 autouse fixture 把 `inspect.getsource` **整体
+    换成了 `getsource` 本身**。而 `getsource` 在「AST 里按名字找不到定义」
+    时会退回 `inspect.getsource(obj)` —— 于是变成调自己，无限递归。
+    堆栈里全是 `ast.py:274`，完全看不出是自家守卫的问题。
+
+    当时六条一起红，而它们与本轮改动毫无关系：
+    `test_lifespan_ensures_the_network_after_sweeping_orphans`、
+    `test_history_does_not_touch_verdict`、两条
+    `test_run_worker_passes_*_to_the_async_body`、
+    `test_worker_crash_fallback_covers_environment_ready`、
+    `test_autosync_records_its_last_error`。
+
+    ## 为什么不是假想情形
+
+    `app.main.lifespan` 上有 `@asynccontextmanager`，装饰后
+    `__code__.co_filename` 是 `contextlib.py`（装饰器内部的 wrapper），
+    于是「去那个文件里找叫 lifespan 的定义」必然失败 → 一定走退回分支。
+    **任何一个被装饰的函数**都可能是这个形状。
+
+    ## 这条测试怎么钉住它
+
+    直接把 `inspect.getsource` 换成守卫（与 conftest 做的一样），
+    然后取一个**装饰过**的函数 —— 递归的话这里会抛 RecursionError；
+    修好之后应当有限地返回一段源码。
+    """
+    import inspect
+
+    from app import main
+
+    wrapped = main.lifespan
+
+    # 先确认前提：它确实被装饰过、__code__ 指向的不是 main.py。
+    # 前提变了（比如 python 版本换了对 asynccontextmanager 的实现），
+    # 这条测试就失效了，要换一个被装饰的函数重新构造。
+    assert wrapped.__code__.co_filename.endswith("contextlib.py"), (
+        f"前提变了：lifespan 的 __code__ 来自 {wrapped.__code__.co_filename}，"
+        "不再是 contextlib.py —— 这条测试构造失效，需换一个被装饰的函数"
+    )
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(inspect, "getsource", getsource)
+        # 递归的话这里抛 RecursionError；正常运行返回 wrapper 的源码
+        src = getsource(wrapped)
+
+    assert src.strip(), "取到空源码"
+    # 退回分支给的是 contextlib 里的 wrapper，不是 lifespan 本体 ——
+    # 这不理想，但它是**有限**的、可解释的退化；递归不是。
+    assert "def " in src or "@" in src, f"退回结果不像源码：{src[:120]!r}"

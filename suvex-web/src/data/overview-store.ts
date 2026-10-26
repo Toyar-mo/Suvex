@@ -36,6 +36,18 @@ export interface OverviewSnapshot {
   status: OverviewStatus
   /** ★ 真的 `ApiError`，不是一句文案 —— ErrorState 要靠它区分失败种类 */
   error: ApiError | null
+  /**
+   * 上一次**成功**取到数据的时刻（毫秒时间戳）。`null` = 还没成功过（v0.95）。
+   *
+   * ★ 为什么需要它：总览页的自动刷新（60 秒）是静默的 —— 静默刷新
+   *   失败时我们会**保留旧数据**（理由见 `loadOverview`），于是屏幕上
+   *   可能显示着 5 分钟前的数字而用户毫不知情。
+   *   看板页上"看起来在实时更新、其实不是"比"显示不出来"危险得多：
+   *   用户会拿这个数字做决定。
+   *
+   *   有了它，界面才能说"这是 4 分钟前的数据"，把判断权交回用户。
+   */
+  lastLoadedAt: number | null
 }
 
 const listeners = new Set<Listener>()
@@ -44,9 +56,15 @@ const listeners = new Set<Listener>()
 let data: OverviewData | null = null
 let dataStatus: OverviewStatus = 'loading'
 let loadError: ApiError | null = null
+let lastLoadedAt: number | null = null
 
 /** 快照必须引用稳定，否则 useSyncExternalStore 会无限重渲染 */
-let snapshot: OverviewSnapshot = { data, status: dataStatus, error: loadError }
+let snapshot: OverviewSnapshot = {
+  data,
+  status: dataStatus,
+  error: loadError,
+  lastLoadedAt: null,
+}
 
 /** 丢弃过期响应（StrictMode 双挂载、快速切页都会并发两次） */
 let epoch = 0
@@ -56,7 +74,7 @@ function emit() {
 }
 
 function commit() {
-  snapshot = { data, status: dataStatus, error: loadError }
+  snapshot = { data, status: dataStatus, error: loadError, lastLoadedAt }
   emit()
 }
 
@@ -101,6 +119,10 @@ export async function loadOverview(options: { silent?: boolean } = {}): Promise<
     data = next
     dataStatus = 'ready'
     loadError = null
+    // ★ 只在**成功**时记时间。静默刷新失败时保持旧值不动 ——
+    //   否则「上次更新时间」会被一次失败刷新推到"刚刚"，
+    //   于是数据越旧看起来越新，正好反了。
+    lastLoadedAt = Date.now()
   } catch (error) {
     if (current !== epoch) return
     // 静默刷新失败时保持 `ready` 与旧数据：一次超时不代表数据没了，
@@ -150,6 +172,7 @@ export function resetOverview(): void {
   data = null
   dataStatus = 'loading'
   loadError = null
+  lastLoadedAt = null
   loadStarted = false
   commit()
 }

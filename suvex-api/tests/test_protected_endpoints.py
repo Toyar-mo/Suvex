@@ -208,7 +208,22 @@ def test_overview_is_not_a_stub_anymore(ready_client: TestClient) -> None:
         f"/overview 仍在返回 {response.status_code}：{response.text[:200]}"
     )
     body = response.json()
-    assert set(body) == {"metrics", "activity", "severityBreakdown", "hasAnyScan"}
+
+    # ★ 断言"不是占位"而不是"字段集合恰好等于某四个名字"。
+    #
+    # 原来这里写的是 `set(body) == {"metrics", "activity", "severityBreakdown",
+    # "hasAnyScan"}` —— 用**相等**来证明"这不是 501 占位"。但相等同时禁止了
+    # 这个端点**增加任何字段**：v0.95 加 `attention` 与 `metrics.riskScore`
+    # 时它立刻变红，而那几个字段恰恰是这个端点还在正常演进的证据。
+    #
+    # 判据收紧到意图本身：必须有那四个基线字段（占位实现给不出它们），
+    # 且不得出现占位实现特有的形状（`detail`/`error` 信封）。
+    assert {"metrics", "activity", "severityBreakdown", "hasAnyScan"} <= set(body), (
+        f"/overview 缺少基线字段，返回的是 {sorted(body)}"
+    )
+    assert "error" not in body and "detail" not in body, (
+        f"/overview 返回了错误信封，不是正常响应：{body}"
+    )
 
 
 def test_unknown_path_returns_404_envelope(ready_client: TestClient) -> None:

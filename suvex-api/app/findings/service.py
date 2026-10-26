@@ -41,6 +41,7 @@ from app.core.ids import new_id
 from app.core.timeutil import now_utc
 from app.core.vocab import (
     FINDING_STATUS_TRANSITIONS,
+    UNRESOLVED_FINDING_STATUSES,
     FindingCategory,
     FindingStatus,
     Severity,
@@ -305,6 +306,15 @@ def _add_timeline(
 # ══════════════════════════════════════════════════════════
 # 查询
 # ══════════════════════════════════════════════════════════
+
+
+#: 「待处置」筛选表达式，给 `stats(status=...)` 用（v0.95）。
+#:
+#: `stats()` 的 `status` 参数支持逗号分隔多值（`_multi` 会拆成 `IN`），
+#: 所以"待处置"不需要给 `stats()` 加新参数 —— 它就是一个筛选条件。
+#: 在这里由**一处**集合生成，避免"总览算的待处置"与"Findings 页筛的待处置"
+#: 各写一份列表而慢慢漂移。
+_UNRESOLVED_STATUS_FILTER = ",".join(sorted(UNRESOLVED_FINDING_STATUSES))
 
 
 def _split_multi(value: str) -> list[str]:
@@ -1308,6 +1318,29 @@ def overview_metrics(db: Session, *, scan_id: str | None = None) -> dict:
         for member in Severity
     ]
 
+    # ── 「待处置」口径的分布（v0.95，总览的加权风险分用它）──────────
+    #
+    # ★ 复用 `stats()` 而不是另写一条 `GROUP BY severity WHERE status IN (...)`：
+    #   `stats()` 是统计的**唯一实现**（见它的 docstring）。在这里手写第二份
+    #   就会重蹈"列表 3 条、角标 7 条"的覆辙 —— 而且这次是风险分，
+    #   它对不上时用户看到的是一句"风险高"而找不到是哪几条。
+    #
+    # `status` 参数本来就支持逗号分隔多值（`_multi`），所以"待处置"
+    # 直接表达成一个筛选条件，不需要给 `stats()` 加参数。
+    unresolved_snapshot = stats(db, scan_id=scan_id, status=_UNRESOLVED_STATUS_FILTER)
+
+    # ⚠️ 与 `breakdown` 不同，这份**必须保留 0 值**：
+    #    它是加权分的输入，也是界面上"待处理严重 N / 待处理高危 N"
+    #    那两个数的来源。缺一个键会让"这一级确实没有"与"漏了"混同 ——
+    #    `SeverityCounts` 的 `Partial` 语义在这里是**错的**，所以要显式补齐。
+    unresolved_breakdown = [
+        {
+            "severity": member.value,
+            "count": getattr(unresolved_snapshot.bySeverity, member.value) or 0,
+        }
+        for member in Severity
+    ]
+
     return {
         "severityBreakdown": breakdown,
         "verifiedPocCount": verified_poc,
@@ -1318,6 +1351,8 @@ def overview_metrics(db: Session, *, scan_id: str | None = None) -> dict:
         # 给不出有意义的同比（"+3 vs 0" 会误导），界面显示"暂无对比数据"。
         # 0 变化和无法比较是两回事。
         "newHighSeverityDelta": None if last_week == 0 else this_week - last_week,
+        "unresolvedBreakdown": unresolved_breakdown,
+        "unresolvedTotal": sum(item["count"] for item in unresolved_breakdown),
     }
 
 

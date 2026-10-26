@@ -256,6 +256,56 @@ FINDING_STATUS_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
 }
 
 
+#: 还**没收敛**的处置状态（v0.95 加，总览的加权风险分与"待处理"计数用它）。
+#:
+#: ## 为什么不是 `!fixed and !closed`
+#:
+#: 用"排除法"写（`status NOT IN (fixed, closed)`）听起来更短，但它会把
+#: **将来新增的状态**默认算成"未收敛"。一个刚加的状态（比如「已接受风险」）
+#: 在被逐个审一遍之前，会悄悄把风险分推高 —— 而风险分是用来决定先修什么的，
+#: 那个偏差没有任何地方会报错。
+#:
+#: 反过来列举的话，新状态默认**不在**这个集合里，风险分会偏低。
+#: 两者都不完美，但偏低会让人去看"是不是漏了"，偏高只会让人以为
+#: "漏洞变多了" —— 后者更难发现。所以列举，并且让测试钉住
+#: 「每个状态的归属都必须被显式声明」（`test_every_status_is_classified`）。
+#:
+#: ## 为什么 `false_positive` 不算
+#:
+#: 它已经被判定为"不是漏洞"。算进待处理会让用户**无论怎么分诊**
+#: 风险分都不降 —— 那次分诊就成了没有反馈的无效劳动
+#: （与 `findings.overview_metrics` 排除误报同一条理由）。
+#:
+#: ## 为什么 `retesting` 算
+#:
+#: 它在流转图里是"**正在**验证修复效果"，不是终态：
+#: 复测不通过会退回 `confirmed`，那就又需要处理。把它当已收敛，
+#: 一条复测卡的严重漏洞会从风险分上消失，而它随时可能回来。
+#:
+#: ## ★ 为什么 `fixed` 不算（这一条最容易被写错）
+#:
+#: 「已修复」的意思是**修复动作已经做完了**。把它算进待处理，
+#: 会得到用户在真实使用里立刻发现的那种矛盾：
+#: 把一条严重漏洞修好，风险分一点不降、"待处理严重"却减了一 ——
+#: 界面上同时出现「风险极高」和「没有待处理的严重漏洞」。
+#:
+#: 这不是理论问题。CyberStrikeAI 在他们的 dashboard.js 里
+#: 专门写了这个坑（`renderSeverityInsights` 上方的注释）：
+#: 用全量口径算风险分时，"全部修完之后分布不变、风险分仍然居高，
+#: 但紧急徽章已经归零 —— 视觉上出现『极高 + 0 待处理』的语义冲突"。
+#: 他们改成只看 open 口径，让"修复即卸掉风险"。
+#:
+#: 我们这里对应的是"待处置"口径：`fixed` 已经处置过了，
+#: 剩下的"确认它真的好了"由 `retesting` / `closed` 表达。
+UNRESOLVED_FINDING_STATUSES: Final[frozenset[str]] = frozenset(
+    {
+        FindingStatus.NEW.value,
+        FindingStatus.CONFIRMED.value,
+        FindingStatus.RETESTING.value,
+    }
+)
+
+
 class TimelineActor(StrEnum):
     AGENT = "agent"
     USER = "user"
