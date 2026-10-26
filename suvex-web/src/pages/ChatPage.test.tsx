@@ -523,4 +523,70 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
 
     expect(container.querySelector('[data-pending-bubble="true"]')).toBeNull()
   })
+
+  it('★ 有乐观气泡时不能说「这个对话还是空的」', () => {
+    /*
+      实测截图上抓到的矛盾：点下发送后右侧已经画出"列出可用技能"，
+      中间却还挂着"这个对话还是空的。说点什么…"。一句话既在又不在。
+
+      根因是空态只看 `messages.length`，而乐观气泡不在 messages 里。
+      这条同时断言两件事，缺一不可：
+        ① 气泡在
+        ② 空态文案不在
+      只断 ① 的话，把空态条件写错也测不出来。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        pendingUserContent: '列出可用技能',
+      }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+
+    expect(container.querySelector('[data-pending-bubble="true"]')).not.toBeNull()
+    expect(
+      screen.queryByText(/这个对话还是空的/),
+      '用户已经发出话了，空态就不能再显示 —— 否则同一句话既在又不在',
+    ).toBeNull()
+  })
+
+  it('确实一条消息都没有、也没在发时，才显示空态', () => {
+    /* 上一条的对照组：防止「有气泡就永不显示空态」把正常空态也吞掉。 */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: false,
+        pendingUserContent: null,
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    expect(screen.getByText(/这个对话还是空的/)).not.toBeNull()
+  })
+
+  it('★ 条数徽标把乐观气泡算进去（不能一边显示气泡一边说「0 条消息」）', () => {
+    /*
+      实机截图上抓到的第三处同形谎报：右侧乐观气泡已画出，右上角还是
+      「0 条消息」。数字说没有、画面说已有，用户没法判断到底发出去没有。
+
+      只断"不是 0 条消息"还不够 —— 要断确切数字，否则把公式写成
+      `messages.length + 2` 也能过。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [message({ id: 'm1', seq: 1, role: 'user', content: '你好' })],
+        },
+        sending: true,
+        pendingUserContent: '列出可用技能',
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    // 1 条真消息 + 1 条乐观气泡 = 2
+    expect(screen.getByText('2 条消息')).not.toBeNull()
+    expect(screen.queryByText('1 条消息')).toBeNull()
+  })
 })

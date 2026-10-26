@@ -456,7 +456,12 @@ export function ChatPage() {
           </h1>
           {active && (
             <span className="shrink-0 text-2xs text-ink-faint">
-              {messages.length} 条消息
+              {/*
+                ★ 把乐观气泡计入条数。不记的话，点下发送的那几秒里屏幕上
+                  右侧明明已经有一句话，右上角却还是「0 条消息」——
+                  与空态文案是同一个形状的谎报（数字说没有，画面说已有）。
+              */}
+              {messages.length + (pendingUserContent !== null ? 1 : 0)} 条消息
             </span>
           )}
         </div>
@@ -563,7 +568,12 @@ export function ChatPage() {
             </div>
           ) : (
             <div className="mx-auto flex max-w-[70ch] flex-col gap-2.5">
-              {messages.length === 0 && (
+              {/*
+                ★ 空态必须把乐观气泡算进来。只看 messages.length 的话，
+                  用户点下发送的那 3 秒里，屏幕上会同时出现"这个对话还是空的"
+                  和右侧自己刚发出去的那句话 —— 一句话既在又不在。
+              */}
+              {messages.length === 0 && pendingUserContent === null && (
                 <p className="py-6 text-center text-xs text-ink-faint">
                   这个对话还是空的。说点什么，或者回到会话列表挑另一个。
                 </p>
