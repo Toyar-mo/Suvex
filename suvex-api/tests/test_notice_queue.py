@@ -33,6 +33,27 @@ from typing import Any
 import pytest
 
 from app.scans.scheduler import ScanScheduler
+from app.scans.scheduler import _NoticeItem as NoticeItem
+
+
+def _enqueue_finished(sched: ScanScheduler, scan_id: str) -> None:
+    """按**当前契约**入队一条「收尾」通知。
+
+    ★ 为什么要有这个壳，而不是各处直接 `put("scan_a")`：
+
+      队列里的项曾经是裸 `str`（v0.89），v0.90 起改成带事件类型的
+      `_NoticeItem` —— 因为同一个扫描会进队两次（途中告警 + 收尾），
+      两者走**不同**的规则判断、载荷也不同，只传 id 的话消费者只能猜。
+
+      契约一变，直接 `put("scan_a")` 的测试就会**静默地造出违反契约的项**：
+      消费者读到它时 `item.event` 当场 `AttributeError`，被 `_notice_loop`
+      的兜底 `except` 吞掉 → 线程没死、队列被取空、断言"发送了"变红，
+      而现场看起来像"生产者消费者没接通"。实际是夹具没跟着契约走。
+      把入队集中到这一个地方，契约再变时只有这里要改。
+    """
+    from app.settings.dispatch import EVENT_SCAN_FINISHED
+
+    sched._notice_queue.put(NoticeItem(event=EVENT_SCAN_FINISHED, scan_id=scan_id))
 
 
 class _FakeDispatch:
@@ -214,7 +235,7 @@ def test_reap_does_not_dispatch_inline(
 def test_notice_loop_dispatches_queued_scan(fake_dispatch: _FakeDispatch, fake_session: Any) -> None:
     """队列的生产者与消费者真的接通：入队的 scan_id 会被发出去。"""
     sched = ScanScheduler()
-    sched._notice_queue.put("scan_a")
+    _enqueue_finished(sched, "scan_a")
     sched._notice_thread = threading.Thread(target=sched._notice_loop, daemon=True)
     sched._notice_thread.start()
 
@@ -232,7 +253,7 @@ def test_dispatched_payload_carries_severity_and_counts(
 ) -> None:
     """载荷里的严重度/计数来自 `Scan.findings`，且**缺失的键当 0**。"""
     sched = ScanScheduler()
-    sched._notice_queue.put("scan_a")
+    _enqueue_finished(sched, "scan_a")
     sched._notice_thread = threading.Thread(target=sched._notice_loop, daemon=True)
     sched._notice_thread.start()
 
@@ -275,7 +296,7 @@ def test_empty_queue_does_not_spin_the_cpu(fake_dispatch: _FakeDispatch) -> None
     try:
         # 先让它空转一小会儿，再入队。
         threading.Event().wait(0.1)
-        sched._notice_queue.put("scan_b")
+        _enqueue_finished(sched, "scan_b")
         assert sched._notice_queue.qsize() in (0, 1)
         # 等到它被取走。
         deadline = threading.Event()
@@ -347,3 +368,176 @@ def test_tick_holds_the_tick_lock(monkeypatch: pytest.MonkeyPatch) -> None:
     # 而且它们是在锁内跑的
     assert recording.entered == 1, "tick() 没有进入 _tick_lock —— 并发上限会失效"
     assert recording.released == 1, "tick() 进了 _tick_lock 却没释放（会死锁）"
+
+
+# ══════════════════════════════════════════════════════════
+# 五、途中告警的**生产端**：只在新建 critical 时入队，且每扫描一次
+# ══════════════════════════════════════════════════════════
+#
+# 这一段守的是 v0.90 接上的那条路径的另一半。`test_notice_dispatch.py`
+# 里那几条验的是**判定**（该不该发），这里验的是**触发**（有没有入队、
+# 入了几次）—— 两者缺一：判定永远说"该发"而生产端从不入队的话，
+# 用户什么也收不到，而所有单元测试照样全绿。
+
+
+def _import_with_result(sched: ScanScheduler, result: Any, scan_id: str = "scan_a") -> None:
+    """跑一次 `_import_for`，让 `import_from_run` 返回指定的 ImportResult。
+
+    只打桩真正要验的那一处：其余（事件导入、汇总刷新）都替换成空操作，
+    否则这条用例会因为无关的文件系统读取而变成"测环境"。
+    """
+    from app.scans import importer
+    from app.findings import service as findings_service
+
+    class _Conn:
+        def get(self, _model: Any, sid: str) -> Any:
+            return _Scan(sid)
+
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    sched._import_for(scan_id, session=_Conn())
+
+
+class _Scan:
+    """`_import_for` 在入队分支上会碰到的属性。"""
+
+    def __init__(self, scan_id: str) -> None:
+        self.id = scan_id
+        self.target = "https://example.com"
+        self.status = "running"
+        self.duration_sec = 5
+        self.findings = {"critical": 1}
+        self.run_id = "run_1"
+        self.run_dir = "/tmp/run"
+
+
+@pytest.fixture
+def patched_import(monkeypatch: pytest.MonkeyPatch) -> Any:
+    """把 `_import_for` 的外部依赖收成空操作，并给出一个**能设返回值**的入口。
+
+    ## ★ 为什么这里必须是 `monkeypatch.setattr`，而不能直接给模块赋属性
+
+    这条用例的第一版写的是
+
+        patched_import.import_from_run = lambda *_: ...
+
+    `patched_import` 是**真实的 `app.findings.service` 模块对象**，直接赋值
+    会把它永久改掉 —— `monkeypatch` 没参与，就没人负责复原。后果是
+    整个测试进程里 `import_from_run` 从那一刻起永远是那个 lambda，
+    于是同一个进程里后跑的 `tests/test_findings.py` 几乎全红
+    （实测 33 条），而**产品代码一行没错**。
+
+    更坏的是这种污染**只在组合跑时出现**：`test_findings.py` 单跑 38 条
+    全绿，`test_notice_dispatch.py` + `test_findings.py` 也全绿，
+    只有带上本文件才炸 —— 于是很容易被读成"某个无关文件有问题"。
+
+    所以下面统一走 `monkeypatch.setattr`，`install(result)` 返回一个装好
+    返回值的替身。
+    """
+    from app.scans import importer, service as scans_service
+    from app.findings import service as findings_service
+
+    monkeypatch.setattr(importer, "import_events", lambda *_a, **_k: None)
+    monkeypatch.setattr(importer, "backfill_after_finish", lambda *_a, **_k: None)
+    # 汇总刷新在 `app.scans.service` 里（不是 findings.service）——
+    # 它旁边那句 `service.refresh_scan_rollup` 指的是 `app.scans.service`。
+    monkeypatch.setattr(scans_service, "refresh_scan_rollup", lambda *_a, **_k: None)
+
+    def install(result: Any) -> None:
+        monkeypatch.setattr(findings_service, "import_from_run", lambda *_a, **_k: result)
+
+    return install
+
+
+def test_new_critical_enqueues_one_alert(patched_import: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """新建出 critical → 入队一条 `scan.critical`。"""
+    from app.findings.service import ImportResult
+
+    patched_import(
+        ImportResult(created=1, updated=0, skipped=0, created_max_severity="critical")
+    )
+
+    sched = ScanScheduler()
+    _import_with_result(sched, None)
+
+    assert sched._notice_queue.qsize() == 1, "新建 critical 之后没有入队告警"
+    item = sched._notice_queue.get_nowait()
+    assert item.event == "scan.critical", f"入队的事件类型不对：{item.event}"
+    assert item.scan_id == "scan_a"
+
+
+def test_same_scan_alerts_only_once(patched_import: Any) -> None:
+    """★ 同一条扫描里连续新建 3 条 critical，用户只该被叫**一次**。
+
+    `_import_for` 每 2 秒跑一次。不去重的话，一条长扫描先后新建出
+    3 条 critical 会变成 3 条说同一件事的通知 —— 而用户要的是
+    "这次扫描出事了"这一件事。
+    """
+    from app.findings.service import ImportResult
+
+    patched_import(
+        ImportResult(created=1, updated=0, skipped=0, created_max_severity="critical")
+    )
+
+    sched = ScanScheduler()
+    for _ in range(3):
+        _import_with_result(sched, None)
+
+    assert sched._notice_queue.qsize() == 1, (
+        f"同一扫描入队了 {sched._notice_queue.qsize()} 条告警，应当只有 1 条"
+    )
+
+
+def test_forget_clears_the_dedup_mark(patched_import: Any) -> None:
+    """`forget()` 要清掉去重标记，否则集合会随扫描数单调增长。"""
+    from app.findings.service import ImportResult
+
+    patched_import(
+        ImportResult(created=1, updated=0, skipped=0, created_max_severity="critical")
+    )
+
+    sched = ScanScheduler()
+    _import_with_result(sched, None)
+    assert "scan_a" in sched._critical_alerted
+
+    sched.forget("scan_a")
+    assert "scan_a" not in sched._critical_alerted, "forget() 没有清掉去重标记（集合会无限增长）"
+
+
+def test_non_critical_new_findings_do_not_alert(patched_import: Any) -> None:
+    """新建了 high（不是 critical）→ 入队时必须**不**触发。
+
+    这是"立即通知"这条规则的名字：`notify_on_critical_immediate`。
+    按 high 也发的话，用户会把告警静音，然后真的 critical 也收不到。
+    """
+    from app.findings.service import ImportResult
+
+    patched_import(ImportResult(created=5, updated=0, skipped=0, created_max_severity="high"))
+
+    sched = ScanScheduler()
+    _import_with_result(sched, None)
+
+    assert sched._notice_queue.qsize() == 0, "high 级新发现不该触发「严重问题立即通知」"
+
+
+def test_zero_new_findings_do_not_alert(patched_import: Any) -> None:
+    """```created=0``（补全已有记录的证据）→ 不发。
+
+    已存在记录被补全**不是**新发现 —— 按 updated 发的话，同一条漏洞
+    每被补齐一次就叫一回。
+    """
+    from app.findings.service import ImportResult
+
+    patched_import(ImportResult(created=0, updated=0, skipped=0))
+
+    sched = ScanScheduler()
+    _import_with_result(sched, None)
+
+    assert sched._notice_queue.qsize() == 0, "没有新建记录却发了告警"

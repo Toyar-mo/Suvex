@@ -1080,18 +1080,40 @@ def is_alive(pid: int | None) -> bool:
         # Windows 上没有 os.kill(pid, 0) 那种"探活"语义（它会真的发信号）。
         # `tasklist` 是标准做法，但它要起一个进程 —— 一次回收扫描里
         # 调用几十次是可以接受的（不是热路径）。
+        #
+        # ★ 故意**不用** `text=True`（2026-10-27 真踩到）。
+        #   `tasklist` 的输出走的是 Windows 控制台代码页（中文机器上是 GBK/
+        #   CP936），而 `text=True` 会让 subprocess 在**读取线程**里用
+        #   `locale.getpreferredencoding()` 解码；那个编码可以被环境变量
+        #   改掉 —— 一旦进程的编码被设成 UTF-8（`PYTHONUTF8=1`，CI 里很常见），
+        #   解码线程直接抛 `UnicodeDecodeError: 'utf-8' codec can't decode
+        #   byte 0xd0 in position 0` 并**死掉**，于是 `completed.stdout`
+        #   是 `None`，下一行 `str(pid) in None` 变成
+        #   `TypeError: argument of type 'NoneType' is not iterable`。
+        #
+        #   后果比"一个测试红"严重得多：这个函数被 `recover_orphans()` 在
+        #   **lifespan 里**调用（服务启动时做孤儿回收），所以它一抛异常，
+        #   整个服务就起不来，而报错信息指向的是一句 `in` 比较 ——
+        #   跟"编码"八竿子打不着，查起来极费劲（本次实测跑了 65 分钟全量才暴露）。
+        #
+        #   所以这里拿**字节**，自己用 `errors="replace"` 解：解码永远不会
+        #   失败，拿到的串里可能有替换字符，但我们要找的只是一串 ASCII 数字，
+        #   替换字符不影响判断。
         try:
             completed = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
                 capture_output=True,
-                text=True,
                 timeout=10,
                 creationflags=_no_window(),
             )
         except (OSError, subprocess.SubprocessError):
             return False
-        # 没找到时 tasklist 打印一句"信息: 没有运行的任务匹配指定标准。"
-        return str(pid) in completed.stdout
+        raw = completed.stdout or b""
+        if isinstance(raw, str):  # 万一将来有人把 text=True 加回来
+            return str(pid) in raw
+        # ASCII 数字在 GBK 与 UTF-8 下字节相同，所以替换字符不影响命中判断 ——
+        # 不需要"再按控制台代码页解一次"的兜底（那只是一个永远不改变结果的分支）。
+        return str(pid) in raw.decode("utf-8", errors="replace")
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

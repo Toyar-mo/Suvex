@@ -11,7 +11,8 @@
   "预览与导出从同一份数据结构渲染"，那是"预览=导出"的物理保证；
 * `test_excluded_count_is_frozen` —— 复现时**不许重算**，
   否则"收录 0 条"的报告会谎称"未发现问题"（**那不是没问题，那是没看**）；
-* `test_frozen_order_survives_later_changes` —— `findingIds` 的顺序是报告的一部分。
+* `test_finding_ids_order_is_frozen` 与 `test_frozen_membership_survives_later_changes`
+  —— `findingIds` 的顺序是报告的一部分，生成之后改动漏洞也不许动它。
 """
 
 from __future__ import annotations

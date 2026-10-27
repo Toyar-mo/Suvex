@@ -10,7 +10,7 @@ import UsersPanel from '@/components/settings/UsersPanel'
 import ErrorState from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { isAdmin, useAuth } from '@/data/auth-store'
-import { BACKEND_PENDING, loadSettings, useSettings } from '@/data/settings-store'
+import { loadSettings, useSettings } from '@/data/settings-store'
 import { loadUsers } from '@/data/users-store'
 import { Database, Lock, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -345,14 +345,18 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
  *   持久化的。继续挂旧文案会让用户不信任一个其实已经可靠的功能，
  *   那和"吹嘘没有的能力"是同一种失真，只是方向相反。
  *
- *   反过来，没接入的部分也**必须说**：**通知**的后端接口尚未交付，
- *   它确实还是刷新即失。（沙箱在任务 13 交付后已从这句里移出 ——
- *   它的读写现在都走真实接口了。）
+ *   反过来，没接入的部分也**必须说**（这条规矩仍然成立）。
+ *   而到目前为止**没有**未接入的区块了：沙箱（任务 13）、通知（v0.22）、
+ *   模型服务（任务 7）都走真实接口并持久化。
  *   ——「模型服务」曾经也在这句里，但任务 7 之后 provider 与令牌、
  *     登录口令一起都是真实持久化的了，再把它列进来就是在**否认
  *     一个已经可靠的功能**，与吹嘘没有的能力是同一种失真。
  *   让用户以为"沙箱配置已经保存了"是最糟的 ——
  *   他会据此假设计划里的沙箱策略真的生效了。
+ *
+ *   ⚠️ 这里曾挂着一条"尚未接入：通知的后端接口还没交付，刷新回到初始值"
+ *      的提示。v0.22 通知交付后那句就成了假话，遂删除 —— 连同
+ *      `BACKEND_PENDING` 那套开关一起（见 settings-store 的说明）。
  *
  *   这与 TopStatusBar 给演示数据打标记是同一条原则：
  *   **不伪造不存在的持久化能力，也不否认已经存在的。**
@@ -364,22 +368,10 @@ function DataBoundaryNote() {
         <Database size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
           <span className="text-ink-muted">已接入服务端：</span>
-          模型服务、访问令牌与登录口令都会真正写到后端并持久化，刷新、换浏览器都还在。
+          模型服务、沙箱与执行、通知规则与渠道、扫描保留、访问令牌与登录口令
+          都会真正写到后端并持久化，刷新、换浏览器都还在。
         </span>
       </p>
-
-      {(BACKEND_PENDING.sandbox || BACKEND_PENDING.notices) && (
-        <p className="flex items-start gap-1.5">
-          <Lock size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
-          <span>
-            <span className="text-ink-muted">尚未接入：</span>
-            {BACKEND_PENDING.sandbox && BACKEND_PENDING.notices
-              ? '沙箱与通知的后端接口还没交付，这两块目前保存在内存里，'
-              : '通知的后端接口还没交付，它目前保存在内存里，'}
-            <span className="text-ink">刷新页面会回到初始值</span>。
-          </span>
-        </p>
-      )}
 
       <p className="flex items-start gap-1.5">
         <Lock size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />

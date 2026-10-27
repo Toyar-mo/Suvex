@@ -25,7 +25,9 @@ import { cn } from '@/lib/cn'
 import {
   AlertCircle,
   BookOpen,
+  Copy,
   Eye,
+  FileCode2,
   Lock,
   MousePointerClick,
   Pencil,
@@ -35,6 +37,7 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
+import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 
 /**
  * 技能库页（v0.88）。
@@ -125,6 +128,54 @@ export function SkillsPage() {
   function openCreate() {
     setEditor({ mode: 'create', name: '', category: '', description: '', body: '', files: {} })
     setEditorError(null)
+  }
+
+  /*
+    ★ 「复制为自定义」（2026-10-26 加）。
+
+    内置技能只读是正确的（部署会整目录覆盖，改了下次就没了），
+    但过去这一步是**死路**：想基于一篇内置技能改出自己的版本，
+    只能打开它、手动全选复制、再新建、再粘回去。76 篇里 72 篇是内置的，
+    等于"想改任何一篇"都要走这套手抄流程。
+
+    这里做的是把正文取出来填进新建表单：
+      · 名字留空 —— 由用户起。同名的内置优先（`all_skills` 的规则），
+        所以叫原名会静默不生效，那是最难自查的失败形状；
+      · 分类沿用原篇 —— 分类是界面分组的依据，让用户重选一遍没有收益；
+      · 附件不复制 —— 内置技能的附件接口回 404（不可编辑），
+        拿不到就别假装拿到了。
+
+    填进去的是**副本**，不是引用：保存后在自定义目录里生成真正的第二篇。
+  */
+  async function openDuplicateAsCustom(skill: SkillSummary) {
+    setEditorError(null)
+    setEditor({
+      mode: 'create',
+      /* 起一个明显不同的默认名，但仍是合法标识符（小写 + 连字符）。
+         用 `-copy` 后缀而不是空着：空名字会让"保存"按钮一直是灰的，
+         用户不知道要先想个名字；而直接叫原名会撞上"内置优先"静默失效。 */
+      name: `${skill.name}-copy`,
+      category: skill.category,
+      description: skill.description,
+      body: '',
+      files: {},
+      loading: true,
+    })
+    try {
+      const detail = await fetchSkill(skill.name)
+      setEditor((prev) =>
+        prev && prev.name === `${skill.name}-copy`
+          ? { ...prev, body: detail.body, loading: false }
+          : prev,
+      )
+    } catch (err) {
+      setEditor((prev) =>
+        prev && prev.name === `${skill.name}-copy`
+          ? { ...prev, loading: false, body: '' }
+          : prev,
+      )
+      setEditorError(err instanceof Error ? err.message : '拿不到正文，没法复制。')
+    }
   }
 
   async function openEdit(skill: SkillSummary) {
@@ -357,6 +408,7 @@ export function SkillsPage() {
                     loads={loadsOf(usage, activeSkill.name)}
                     isAdmin={isAdmin}
                     onEdit={() => void openEdit(activeSkill)}
+                    onDuplicate={() => void openDuplicateAsCustom(activeSkill)}
                     onDelete={() => setPendingDelete(activeSkill)}
                     error={editorError}
                   />
@@ -573,6 +625,7 @@ function SkillDetailPane({
   loads,
   isAdmin,
   onEdit,
+  onDuplicate,
   onDelete,
   error,
 }: {
@@ -580,10 +633,69 @@ function SkillDetailPane({
   loads: { loads: number; lastLoadedAt: string | null } | null
   isAdmin: boolean
   onEdit: () => void
+  onDuplicate: () => void
   onDelete: () => void
   error: string | null
 }) {
   const builtin = skill.source === 'builtin'
+
+  /*
+    ★ 正文按需拉（2026-10-26 改）。
+
+    在这之前，详情面板对内置技能**一片空白** —— 76 篇里 72 篇是内置的，
+    等于这一页只能看 4 篇。理由原本写的是「内置的改不了，回显没用」，
+    但「改不了」不等于「看不见」：真正决定模型行为的正是那 72 篇。
+
+    ## 为什么要按需拉而不是随清单下发
+
+    清单要渲染 76 篇，正文单篇就有 9000～24000 字符
+    （`llm-applications` 实测 23358），全下发是 800KB+ 的响应，
+    而用户通常只看一两篇。所以清单只给描述，点开哪篇拉哪篇。
+
+    ## 为什么切走之后不清空
+
+    用 `skill.name` 作 key 记在同一个 state 里，切换时先显示上一份
+    会被误读成"这篇的正文长这样"。所以切换时立刻置 loading，
+    并在请求回来时校验 `name` 仍是当前这篇（下面的 cancelled 标志 +
+    name 比对），避免慢请求回来覆盖了新选中的技能。
+  */
+  const [body, setBody] = useState('')
+  const [lineCount, setLineCount] = useState(0)
+  const [loading, setLoading] = useState(false)
+  const [bodyError, setBodyError] = useState<string | null>(null)
+  /*
+    视图状态**不随选中项重置** —— 用户切到「原文」是在表达一种偏好
+    （我要看保真原文），换一篇还按这个偏好来才是对的。
+    每次切换都弹回默认会让那个按钮看起来"不管用"。
+  */
+  const [viewMode, setViewMode] = useState<'rendered' | 'raw'>('rendered')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setBodyError(null)
+    setBody('')
+    setLineCount(0)
+
+    fetchSkill(skill.name)
+      .then((detail) => {
+        if (cancelled) return
+        setBody(detail.body)
+        setLineCount(detail.lineCount)
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return
+        setBodyError(err instanceof Error ? err.message : '拿不到正文。')
+      })
+      .finally(() => {
+        if (cancelled) return
+        setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [skill.name])
 
   return (
     <div className="flex h-full flex-col">
@@ -606,12 +718,23 @@ function SkillDetailPane({
               画一个禁用按钮再告诉用户"不许"，不如一开始就不画 ——
               界面上每个灰掉的按钮都在说"这里有东西你碰不到"，
               而内置技能根本没有可编辑的副本。
+
+            ★ 但「复制为自定义」要画（2026-10-26 加）。
+              它是一个**真能做成的动作**，不是灰按钮：把正文取出来
+              填进新建表单，保存后得到一篇属于你的技能。
+              没有它的话，"想改内置技能"就是死路 —— 只能手抄。
           */}
           {builtin ? (
-            <span className="flex items-center gap-1 text-[12px] text-ink-faint">
-              <Lock className="size-3" strokeWidth={2} />
-              内置 · 只读
-            </span>
+            <>
+              <span className="flex items-center gap-1 text-[12px] text-ink-faint">
+                <Lock className="size-3" strokeWidth={2} />
+                内置 · 只读
+              </span>
+              <Button size="sm" variant="ghost" onClick={onDuplicate} disabled={!isAdmin}>
+                <Copy className="size-3.5" strokeWidth={1.75} />
+                复制为自定义
+              </Button>
+            </>
           ) : (
             <>
               <Button size="sm" variant="ghost" onClick={onEdit} disabled={!isAdmin}>
@@ -654,22 +777,107 @@ function SkillDetailPane({
       )}
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
-        {builtin ? (
+        {loading ? (
+          <div className="space-y-2">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-full" />
+            <Skeleton className="h-4 w-5/6" />
+          </div>
+        ) : bodyError ? (
+          <div className="flex items-start gap-tight text-[13px] text-signal-risk">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
+            <span>{bodyError}</span>
+          </div>
+        ) : body ? (
           /*
-            ★ 内置技能不显示正文 —— 不是没做，是**后端就不回**（可能几百 KB）。
-              这里说清为什么，而不是留一片空白让人以为加载失败。
+            ★ 正文有两种看法，默认「排版」，可切到「原文」。
+
+            2026-10-26 用户反馈：「文字太紧凑了吧，右边还空着一大块」。
+
+            原因不是字号小，是**源文件本身就硬换行到 ~72 字符**：
+            技能 .md 是写给模型读的，作者按 72 列折了行，`whitespace-pre-wrap`
+            会把这些换行原样保留 —— 于是 12px 等宽字体下每行只占 ~500px，
+            而面板有 ~1400px，右边那一大块永远是空的，同时行距又挤。
+
+            所以：
+              · 「排版」走项目的 Markdown 渲染器，段落**自然重排**，
+                宽度用起来、行高 1.8、字号提到 14px；
+              · 「原文」保留逐字符保真的 `<pre>` —— 它仍是审计入口：
+                技能里的 HTML 版权注释、围栏、缩进只有在这里才原样可见，
+                渲染后那部分会消失。两个视图**各有各的用途**，不是二选一。
+
+            ⚠️ 默认给「排版」而不是「原文」：第一眼要能读懂，
+               保真需求是第二步才会有的（要核对"它到底怎么写的"）。
           */
-          <p className="max-w-[72ch] text-[13px] leading-relaxed text-ink-muted">
-            内置技能的正文随代码分发，页面上不回显全文（它可能有几百 KB，
-            而回显一个改不了的文本没有用）。模型用{' '}
-            <code className="font-mono">load_skill({'{'}"name": "{skill.name}"{'}'})</code>{' '}
-            按需拉取。它是随代码分发的，改不了，也没法用同名的自定义技能顶掉
-            （内置优先）—— 想要自己的版本，换个名字新建一篇。
-          </p>
+          <div>
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px] text-ink-faint">
+              <div
+                role="tablist"
+                aria-label="正文显示方式"
+                className="flex items-center gap-0.5 rounded-sm border border-line p-0.5"
+              >
+                <button
+                  role="tab"
+                  aria-selected={viewMode === 'rendered'}
+                  onClick={() => setViewMode('rendered')}
+                  className={cn(
+                    'flex items-center gap-1 rounded-xs px-2 py-1 transition-ui duration-fast',
+                    viewMode === 'rendered'
+                      ? 'bg-surface-raised text-ink'
+                      : 'text-ink-faint hover:text-ink-muted',
+                  )}
+                >
+                  <BookOpen className="size-3" strokeWidth={2} />
+                  排版
+                </button>
+                <button
+                  role="tab"
+                  aria-selected={viewMode === 'raw'}
+                  onClick={() => setViewMode('raw')}
+                  className={cn(
+                    'flex items-center gap-1 rounded-xs px-2 py-1 transition-ui duration-fast',
+                    viewMode === 'raw'
+                      ? 'bg-surface-raised text-ink'
+                      : 'text-ink-faint hover:text-ink-muted',
+                  )}
+                >
+                  <FileCode2 className="size-3" strokeWidth={2} />
+                  原文
+                </button>
+              </div>
+
+              <span className="flex items-center gap-1">
+                <Eye className="size-3" strokeWidth={2} />
+                {viewMode === 'raw'
+                  ? `逐字符保真 · ${lineCount} 行 · ${body.length} 字符`
+                  : `已排版 · 原文 ${lineCount} 行 · ${body.length} 字符`}
+              </span>
+              {viewMode === 'raw' && (
+                <span className="text-ink-faint/80">
+                  这里才看得到 HTML 注释与原始缩进
+                </span>
+              )}
+            </div>
+
+            {viewMode === 'rendered' ? (
+              /*
+                `max-w-[110ch]`：不用满整块面板，但也不像原文那样只用三分之一。
+                约 60% 宽度 —— 段落长到 150 字符以上会开始难读，110 是个折中。
+                列表、表格、代码块本来就没有这个上限（它们该占满）。
+              */
+              <div className="max-w-[110ch] text-[14px] leading-[1.8] text-ink-muted">
+                <WriteupMarkdown markdown={body} />
+              </div>
+            ) : (
+              <pre className="max-w-full overflow-x-auto rounded-sm border border-line bg-surface-raised/40 p-3 font-mono text-[12px] leading-relaxed break-words whitespace-pre-wrap text-ink-muted">
+                {body}
+              </pre>
+            )}
+          </div>
         ) : (
           <p className="max-w-[72ch] text-[13px] leading-relaxed text-ink-muted">
-            这是一篇<b>自定义</b>技能，正文存在部署目录下。点「编辑」看全文并修改 ——
-            正文会直接进模型上下文，改错了模型就会照着错的做法走。
+            读不到这一篇的正文。它可能没随部署包分发 —— 检查{' '}
+            <code className="font-mono">prompts/skills/</code> 下有没有这个文件。
           </p>
         )}
       </div>

@@ -506,6 +506,47 @@ def read_custom_skill(*, name: str, category: str) -> str:
         raise SkillWriteError(f"读不了 `{name}`：{exc}") from exc
 
 
+def read_builtin_skill(skill) -> str:  # noqa: ANN001 - 收 Skill dataclass，避免循环导入
+    """读一篇**内置**技能的全文（含 frontmatter）—— 只读，供界面查看。
+
+    ## 为什么需要它（2026-10-26 补）
+
+    在这之前，内置技能的正文在界面上**完全看不到**：`GET /skills/{name}`
+    只给自定义技能回正文，内置的回空串加一句"改不了所以不回显"。
+
+    那个理由只对了一半 —— 「改不了」是真的，「回显没用」是错的。
+    76 篇里有 72 篇是内置的，它们才是决定模型行为的主体；让部署者
+    看不见这 72 篇写了什么，等于把「技能正文会进模型上下文」这件事
+    变成黑箱：能改的 4 篇看得见，真正在起作用的那 72 篇看不见。
+
+    典型误用正是这次遇到的：一篇内置技能教了不存在的命令行工具，
+    而界面上没有任何地方能发现它 —— 只能 grep 源码。
+
+    ## 与 `read_custom_skill` 的分工
+
+    | 函数 | 受众 | 能否改 |
+    |---|---|---|
+    | `read_custom_skill` | 编辑器回填 | 能（PUT 写回） |
+    | `read_builtin_skill` | 界面查看 | **不能**（随代码分发） |
+
+    两者都只回文本，不写盘；这个函数**不碰** `_resolve_target`，
+    因为路径来自发现层已经校验过的 `Skill.path`，不经用户输入拼接。
+    """
+    path = getattr(skill, "path", None)
+    if path is None:
+        raise SkillWriteError("这篇技能没有可读的路径。")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:  # noqa: BLE001
+        raise SkillWriteError(f"读不了这篇技能的正文：{exc}") from exc
+    except UnicodeDecodeError as exc:
+        raise SkillWriteError(f"这篇技能不是 UTF-8 文本：{exc}") from exc
+
+    # 单文件形态的正文就是全文；目录包形态的 path 指向 SKILL.md，
+    # 附件在 package_dir 里 —— 这里只回主文件，附件清单由详情端点另给。
+    return text
+
+
 def read_custom_attachments(*, name: str, category: str) -> dict[str, str]:
     """读一篇自定义技能包的全部附件（编辑回填用）。
 

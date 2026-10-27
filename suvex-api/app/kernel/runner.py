@@ -4021,7 +4021,6 @@ TOOL_NAMES = (
     "http_request",
     "run_shell",
     "browser",
-    "rea",
     "load_skill",
     "load_recipe",
     "list_requests",
@@ -4855,15 +4854,6 @@ async def dispatch_tool(
             from app.kernel import browser as browser_mod
 
             return await browser_mod.run_browser(args, sandbox=sandbox)
-        if name == "rea":
-            # ★ v1.05：REA 逆向工具。为什么**不**当 MCP 连接挂：
-            #   它有 229 个工具 / 4.2MB 的 tools/list，而内核的
-            #   MAX_DESCRIBE_CHARS=24000 只够覆盖 4 个 —— 挂进来等于
-            #   225 个工具对模型不可见。走命令行则只需 1 个工具名。
-            #   理由与白名单设计详见 app/kernel/rea.py 的模块 docstring。
-            from app.kernel import rea as rea_mod
-
-            return rea_mod.run_rea_sync(args, sandbox=sandbox)
         if name == "load_skill":
             # 纯查表：读一篇随代码分发的 markdown。不碰沙箱、不碰网络。
             # 名字取自参数 `name`（与 strix 的 load_skill 同名参数，方便

@@ -268,7 +268,8 @@ FINDING_STATUS_TRANSITIONS: Final[dict[str, frozenset[str]]] = {
 #: 反过来列举的话，新状态默认**不在**这个集合里，风险分会偏低。
 #: 两者都不完美，但偏低会让人去看"是不是漏了"，偏高只会让人以为
 #: "漏洞变多了" —— 后者更难发现。所以列举，并且让测试钉住
-#: 「每个状态的归属都必须被显式声明」（`test_every_status_is_classified`）。
+#: 「每个状态的归属都必须被显式声明」
+#: （`tests/test_overview_risk.py::test_每个处置状态都被显式归类`）。
 #:
 #: ## 为什么 `false_positive` 不算
 #:

@@ -41,6 +41,7 @@ from app.core.ids import new_id
 from app.core.timeutil import now_utc
 from app.core.vocab import (
     FINDING_STATUS_TRANSITIONS,
+    SEVERITY_RANK,
     UNRESOLVED_FINDING_STATUSES,
     FindingCategory,
     FindingStatus,
@@ -88,6 +89,17 @@ class ImportResult:
     updated: int
     skipped: int
 
+    #: 本轮**新建**记录里最高的那一档严重度（`Severity` 的值），没有新建时为 `None`。
+    #:
+    #: ★ 为什么放在返回值里，而不是让调用方再查一次库：
+    #:   `_import_for` 每 2 秒对每个在跑的扫描调一次本函数。多一次聚合查询
+    #:   就是每扫描每 tick 一次全表扫，而调用方要回答的问题（"这一轮有没有
+    #:   新出现的严重问题"）在循环里已经逐条看过了 —— 让它顺手记下来是零成本。
+    #:
+    #: ⚠️ 只统计 **created**，不含 updated：已存在记录的证据被补全不是"新发现"，
+    #:   按它发告警会在同一件事上反复叫人。
+    created_max_severity: str | None = None
+
 
 def import_from_run(db: Session, scan: Scan) -> ImportResult:
     """把外部工具的漏洞记录导进本地库。
@@ -116,6 +128,7 @@ def import_from_run(db: Session, scan: Scan) -> ImportResult:
 
     parsed = strix_vulns.parse(records, default_target=scan.target)
     created = updated = skipped = 0
+    created_max_severity: str | None = None
 
     for item in parsed:
         existing = db.execute(
@@ -157,6 +170,13 @@ def import_from_run(db: Session, scan: Scan) -> ImportResult:
                     at=item.discovered_at,
                 )
             created += 1
+            # ★ 顺手记下本轮新建记录里最高的那一档（见 `ImportResult.created_max_severity`）。
+            #   比较用 `vocab.SEVERITY_RANK` —— 字符串序是 c/h/i/l/m，直接比大小
+            #   会把 `high` 判成比 `medium` 大，那是错的。
+            if created_max_severity is None or SEVERITY_RANK.get(
+                item.severity, 0
+            ) > SEVERITY_RANK.get(created_max_severity, 0):
+                created_max_severity = item.severity
         else:
             changed = _refresh_evidence(existing, item)
             updated += 1 if changed else 0
@@ -178,7 +198,7 @@ def import_from_run(db: Session, scan: Scan) -> ImportResult:
             updated,
             skipped,
         )
-    return ImportResult(created, updated, skipped)
+    return ImportResult(created, updated, skipped, created_max_severity)
 
 
 def _new_finding(scan: Scan, item: strix_vulns.ParsedFinding) -> Finding:

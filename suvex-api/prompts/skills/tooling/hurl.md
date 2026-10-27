@@ -5,7 +5,8 @@ description: Reproducible, reviewable HTTP request chains and response assertion
 <!--
 来源：strix（Apache-2.0）skills/tooling/hurl.md
 导入日期：2026-10-26
-本文件按 Apache-2.0 许可随本项目分发；正文未作修改。
+本文件按 Apache-2.0 许可随本项目分发；正文仅在「Install」段加了一段本沙箱的
+预装说明（下方标注 ★ 起头），其余未作修改。
 -->
 
 # Hurl Security Regression Playbook
@@ -15,6 +16,12 @@ Use [Hurl](https://hurl.dev/) when a security proof requires an ordered HTTP ses
 Hurl sends exactly what the file describes. It does not make state-changing requests safe. Review scope, methods, targets, and captured secrets before every run.
 
 ## Install
+
+★ 本沙箱镜像已预装 Hurl 7.1.0（`/usr/local/bin/hurl`、`/usr/local/bin/hurlfmt`），
+**直接就能跑，不需要装**。容器里没有 `brew`，也没有网 —— 照下面这行去装只会
+拿到 `brew: not found`，然后误以为是环境坏了。先 `hurl --version` 确认，有输出就用。
+
+下面这段是上游原文，保留给「在别的环境里复现同样步骤」时参考：
 
 Prefer an official release binary or package. On macOS:
 

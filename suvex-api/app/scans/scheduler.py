@@ -46,6 +46,7 @@ import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
 from sqlalchemy import func, select, text
 
@@ -67,11 +68,28 @@ from app.scans.runner import (
 )
 from app.schedules import service as schedules_service
 from app.settings import service as settings_service
+from app.settings import dispatch as dispatch_event
 
 logger = logging.getLogger("suvex.scheduler")
 
 # 认领扫描时用的 PostgreSQL 咨询锁 key。取一个本应用专用的常数即可。
 _CLAIM_LOCK_KEY = 0x5A17_0001
+
+
+class _NoticeItem(NamedTuple):
+    """通知队列里的一条。**带事件类型**，不只是扫描 id。
+
+    ★ 为什么不是 `queue.Queue[str]`（v0.90 之前是）：
+      同一个扫描会进队两次 —— 一次"途中发现严重问题"、一次"收尾"。
+      两者走**不同**的规则判断（`should_notify_critical` 与 `should_notify`），
+      载荷的 `event` / `summary` / `status` 也不同。只传 id 的话消费者
+      无从知道该发哪一种，只能再查一次库猜 —— 而"猜"在这里会表现成
+      收尾通知被当成即时告警发出去（或反过来，告警被阈值静默掉）。
+    """
+
+    #: `dispatch.EVENT_SCAN_FINISHED` 或 `dispatch.EVENT_SCAN_CRITICAL`。
+    event: str
+    scan_id: str
 
 
 def _flag_of(scan_id: str) -> str | None:
@@ -186,8 +204,29 @@ class ScanScheduler:
         #
         # 所以：收尾时只把 scan_id 丢进队列（非阻塞），由一个守护线程慢慢发。
         # 发失败只影响通知本身，见 `_notify_finished`。
-        self._notice_queue: queue.Queue[str] = queue.Queue()
+        #
+        # ★ 队列里带**事件类型**（v0.90），不只是 scan_id：
+        #   同一个扫描会进队两次 —— 一次"途中发现严重问题"、一次"收尾"。
+        #   两者走的是不同的规则判断（`should_notify_critical` vs
+        #   `should_notify`），载荷的 `event` / `summary` / `status` 也不同。
+        #   只传 id 的话消费者无从知道该发哪一种，只能再查一次库猜 ——
+        #   而"猜"在这里会表现成收尾通知被当成即时告警发出去。
+        #   单队列而不是两条队列：一条扫描的告警必须先于它的收尾通知到达，
+        #   这一点由队列的 FIFO 免费保证，两条队列则要另外排序。
+        self._notice_queue: queue.Queue[_NoticeItem] = queue.Queue()
         self._notice_thread: threading.Thread | None = None
+        #: 已经为哪些扫描发过「途中发现严重问题」的告警。
+        #:
+        #: 为什么需要它：`_import_for` 每 2 秒跑一次，而一条扫描可能先后
+        #: 新建出 3 条 critical 记录 —— 不记的话用户会收到 3 条说同一件事
+        #: （"这次扫描有严重问题"）的通知。归零的时机在 `forget()`：
+        #: 进程退出后不再导入，这个 id 也就没有意义了。
+        #:
+        #: ⚠️ 它是**内存态**，重启即清空。这是对的而不是缺陷：导入只对
+        #:    **新建**记录计数（`ImportResult.created_max_severity`），重启后
+        #:    老记录不会被重新创建，所以清空不会导致重复告警；而重启后真的
+        #:    又冒出新的 critical 时，那确实是一件新事，该再叫一次。
+        self._critical_alerted: set[str] = set()
 
     # ══════════════════════════════════════════════════════
     # 生命周期
@@ -208,7 +247,7 @@ class ScanScheduler:
         logger.info("扫描调度器已启动（上限 %d）", get_settings().max_concurrent_scans)
 
     def _notice_loop(self) -> None:
-        """通知投递线程：从队列里取 scan_id，投一条。
+        """通知投递线程：从队列里取一条，投一条。
 
         ## ★ 为什么是 `get(timeout=1.0)` 而不是阻塞 `get()`
 
@@ -220,19 +259,19 @@ class ScanScheduler:
 
         ## 异常边界
 
-        `_notify_finished` 自己已经吞掉全部异常了，这里再兜一层是因为
+        `_notify_item` 自己已经吞掉全部异常了，这里再兜一层是因为
         **线程死掉比投递失败严重得多** —— 死掉之后所有通知静默消失，
         而界面上一切正常。
         """
         while not self._stop.is_set():
             try:
-                scan_id = self._notice_queue.get(timeout=1.0)
+                item = self._notice_queue.get(timeout=1.0)
             except queue.Empty:
                 continue
             try:
-                self._notify_finished(scan_id)
+                self._notify_item(item)
             except Exception:  # noqa: BLE001
-                logger.warning("通知线程处理 %s 时出错（忽略）", scan_id, exc_info=True)
+                logger.warning("通知线程处理 %s（%s）时出错（忽略）", item.scan_id, item.event, exc_info=True)
             finally:
                 self._notice_queue.task_done()
 
@@ -288,8 +327,16 @@ class ScanScheduler:
             self._procs[scan_id] = process
 
     def forget(self, scan_id: str) -> None:
+        """丢掉一个扫描的进程句柄与告警去重标记。
+
+        ★ 为什么去重标记在这里清（而不是留到下次 start）：
+          它只在"这条扫描还在产事件"时有意义 —— 进程退出后不再导入，
+          这个 id 也就不会再进那条判断。不清的话这个集合会随扫描数
+          单调增长，而它没有任何上界（一条 8 小时的扫描列表足够让它变大）。
+        """
         with self._lock:
             self._procs.pop(scan_id, None)
+        self._critical_alerted.discard(scan_id)
 
     def request_stop(self, scan_id: str) -> bool:
         """请一个在跑的任务自己退出。返回"有没有找到可请求的句柄"。
@@ -464,10 +511,14 @@ class ScanScheduler:
         # "配了通知之后扫描启动变慢"，而且看不出跟通知有关。详见
         # `__init__` 里 `_notice_queue` 那段。
         for scan_id in finished:
-            self._notice_queue.put(scan_id)
+            self._enqueue_notice(dispatch_event.EVENT_SCAN_FINISHED, scan_id)
 
-    def _notify_finished(self, scan_id: str) -> None:
-        """扫描进终态后按规则投递通知。**异常一律吞掉**，只留 warning。
+    def _enqueue_notice(self, event: str, scan_id: str) -> None:
+        """把一条通知丢进队列（非阻塞）。"""
+        self._notice_queue.put(_NoticeItem(event=event, scan_id=scan_id))
+
+    def _notify_item(self, item: _NoticeItem) -> None:
+        """按 `item.event` 拼载荷并投递。**异常一律吞掉**，只留 warning。
 
         与 `_import_for` 同一个口径：通知是**可观测性**，不是扫描本身。
         它挂了不该让调度循环出错 —— 下一轮收尾的是别的扫描，这条通知
@@ -477,17 +528,68 @@ class ScanScheduler:
 
         conn = get_session_factory()()
         try:
-            scan = conn.get(Scan, scan_id)
+            scan = conn.get(Scan, item.scan_id)
             if scan is None:
                 return
-            payload = self._notice_payload(conn, scan)
+            payload = (
+                self._notice_payload(conn, scan)
+                if item.event == dispatch.EVENT_SCAN_FINISHED
+                else self._critical_payload(conn, scan)
+            )
             outcome = dispatch.dispatch(conn, payload)
             if outcome.skipped:
-                logger.debug("扫描 %s 不发通知：%s", scan_id, outcome.skip_reason)
+                logger.debug(
+                    "扫描 %s 的 %s 通知不发：%s", item.scan_id, item.event, outcome.skip_reason
+                )
         except Exception:  # noqa: BLE001
-            logger.warning("投递扫描 %s 的通知时出错", scan_id, exc_info=True)
+            logger.warning("投递扫描 %s 的 %s 通知时出错", item.scan_id, item.event, exc_info=True)
         finally:
             conn.close()
+
+    @staticmethod
+    def _critical_payload(conn, scan) -> object:  # noqa: ANN001
+        """拼「扫描途中出现严重问题」的载荷。
+
+        ## ★ 与 `_notice_payload` 的三处不同
+
+        1. `event` 是 `scan.critical` —— 接收方的脚本靠它分派；
+        2. `status` 用 `running`：这是**过程中**的通知，扫描还没结束，
+           谎称 completed 会让接收方以为可以来拉报告（那时报告还没生成）；
+        3. `summary` 说的是"发现了严重问题"这件事，不是收尾结论。
+
+        ## 计数仍然来自 `Scan.findings` 那个 JSON 列
+
+        它在 `_import_for` 里刚被 `refresh_scan_rollup` 刷过（导入 → 刷汇总
+        是同一次调用里相邻的两步），所以这里读到的是**含本轮新发现**的
+        最新值。不再单独聚合一次：这条路径的最主要理由是"快" ——
+        用户在扫描途中要的是几十秒内收到告警，不是多一次全表扫描。
+        """
+        from app.core.vocab import Severity
+        from app.settings.dispatch import EVENT_SCAN_CRITICAL, NoticePayload
+
+        counts: dict[str, int] = scan.findings or {}
+
+        def count_of(level: Severity) -> int:
+            return int(counts.get(level.value, 0) or 0)
+
+        return NoticePayload(
+            scan_id=scan.id,
+            target=scan.target,
+            # ⚠️ 不用 `scan.status`：那一刻它在库里确实是 `running`，
+            #   但写死它比读库更安全 —— 这个载荷的语义就是"还没结束"，
+            #   而这中间有一个 `finalize` 可能刚好把状态改了。
+            status=ScanStatus.RUNNING.value,
+            summary=(
+                f"扫描中发现 {count_of(Severity.CRITICAL)} 条严重问题"
+                f"（已跑 {scan.duration_sec or 0} 秒，扫描仍在进行）"
+            ),
+            severity=Severity.CRITICAL.value,
+            duration_sec=scan.duration_sec,
+            critical_count=count_of(Severity.CRITICAL),
+            high_count=count_of(Severity.HIGH),
+            scan_url=None,
+            event=EVENT_SCAN_CRITICAL,
+        )
 
     @staticmethod
     def _notice_payload(conn, scan) -> object:  # noqa: ANN001
@@ -582,10 +684,11 @@ class ScanScheduler:
             # 分开成两条独立的轮询会让"事件说发现了 X"与"漏洞列表里有 X"
             # 在时间上错开，而活动流与漏洞列表对不上的表现看起来像数据丢失。
             try:
-                findings_service.import_from_run(conn, scan)
+                result = findings_service.import_from_run(conn, scan)
             except Exception:  # noqa: BLE001
                 conn.rollback()
                 logger.warning("导入扫描 %s 的漏洞记录失败（将在下一轮重试）", scan_id, exc_info=True)
+                result = None
 
             # ★ 汇总列（`findings` / `agentCount`）在这里刷。
             #
@@ -605,6 +708,33 @@ class ScanScheduler:
             except Exception:  # noqa: BLE001
                 conn.rollback()
                 logger.warning("刷新扫描 %s 的汇总列失败（将在下一轮重试）", scan_id, exc_info=True)
+
+            # ★ 「发现严重问题时立即通知」的**唯一**生产端（v0.90）。
+            #
+            # 放在最后，且必须在 `refresh_scan_rollup` **之后**：
+            # 载荷的 `critical_count` 读的是 `scan.findings` 这个汇总列，
+            # 而在刷之前它还是上一轮的旧值 —— 那样告警里会写"0 条严重问题"，
+            # 恰好把这条通知的全部意义写没了。
+            #
+            # ## 为什么只在 `created_max_severity == critical` 时发
+            #
+            # 已存在记录被补全证据**不是**新发现（那正是
+            # `ImportResult.created_max_severity` 只统计 created 的理由）。
+            # 按 updated 发的话，同一条漏洞每被补齐一次就叫一回。
+            #
+            # ## 为什么去重集合是内存态、且在 `forget()` 里清
+            #
+            # 一条长扫描可能先后新建出 3 条 critical，而用户要的是
+            # "这次扫描出事了"这一件事被叫**一次**。见 `_critical_alerted`。
+            #
+            # ⚠️ 不去看 `notify_on_critical_immediate`：判定在 `dispatch` 里
+            #    （`should_notify_critical`）。在这里先读一次配置会让
+            #    "规则改了但行为没变"多一处可能 —— 而且这条路径每 2 秒
+            #    每扫描一次，多一次配置读就是多一次库查询。
+            if result is not None and result.created_max_severity == "critical":
+                if scan_id not in self._critical_alerted:
+                    self._critical_alerted.add(scan_id)
+                    self._enqueue_notice(dispatch_event.EVENT_SCAN_CRITICAL, scan_id)
         except Exception:  # noqa: BLE001
             conn.rollback()
             logger.warning("导入扫描 %s 时出错（将在下一轮重试）", scan_id, exc_info=True)

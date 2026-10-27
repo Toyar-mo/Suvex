@@ -24,19 +24,21 @@ import { useMemo, useState } from 'react'
  *
  * 保存走 `PUT /settings/sandbox`，**不需要重启服务**。
  *
- * ⚠️ 自研引擎下各字段的真实生效情况（2026-10 实测，`scans/agent_runner.py`）：
+ * ⚠️ 各字段的真实生效情况（2026-10 实测，`scans/agent_runner.py`）。
+ *   本平台只有一个执行引擎（Suvex 内核，`scan_runner` 默认 `agent`），
+ *   下面每项描述的就是当前安装的这一套：
  *   · CPU、内存 —— ✅ 真下发（`SolveSpec.cpus/memory_mb` → 临时容器）；
  *   · 禁止出网 —— ⚠️ 只对本地形态（repo/path/artifact）生效；url/service
  *     这类"要去连别人"的目标**强制开网**（否则工具全连不上，渗透必然失败）；
  *   · 扫描深度 —— ✅ 决定回合天花板（快速 40 / 标准 80 / 深度 150）；
  *   · 回合上限 —— ✅ 与深度天花板取较小值（不再是旧版"永远夹 80"的死值）；
  *   · 单次超时 —— ✅ 墙钟超时（v0.64）：到点引擎自己在轮询里取消循环、
- *     按"超时收尾"结束（不是失败）；strix 后端不读（它没有扫描级墙钟超时）；
+ *     按"超时收尾"结束（不是失败）；
  *   · 允许写入挂载卷 —— ✅ 持久工作区挂载读写开关（v0.64）：开→`:rw`、
  *     关→`:ro`；关掉后 agent 仍可用容器内 `/work` tmpfs，只是产出出不了
  *     容器、跨重启不保留（不影响发现收集）。
- * 界面必须把这些分开标注，否则用户会以为"我把内存调到 512MB 就限制了扫描"
- * 而实际什么也没发生。
+ * 界面必须把「禁止出网」那条按目标形态分开标注，否则用户会以为
+ * "我把这项打开就限制了扫描"，而实际 url/service 目标是强制开网的。
  */
 
 export interface SandboxPanelProps {
@@ -222,7 +224,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <Field
           label="单次超时"
           htmlFor="sandbox-timeout"
-          help="防止一次扫描无限跑下去。"
+          help="防止一次扫描无限跑下去。到点是按「超时收尾」结束，不是失败。"
           error={touched ? errors.timeout : null}
         >
           <div className="flex items-center gap-1.5">
@@ -251,8 +253,8 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
 
         <Toggle
           id="sandbox-network"
-          label="禁止沙箱访问外网"
-          hint="限制影响范围，但针对外部目标的扫描会直接失败 —— 按需开启。"
+          label="禁止沙箱访问外网（仅本地代码目标）"
+          hint="只对本地形态的目标（repo / path / 附件）生效。url、service 这类要去连别人的目标会被强制开网 —— 否则镜像里的 nmap / ffuf / sqlmap 全连不上，扫描必然失败。"
           checked={draft.networkIsolated}
           onChange={(v) => setDraft({ ...draft, networkIsolated: v })}
         />
@@ -270,8 +272,11 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               aria-hidden="true"
             />
             <span className="text-2xs text-ink-muted">
-              已禁止出网。针对 <code className="mono-ui">https://</code> 目标的动态扫描将无法执行，
-              只能分析本地代码。需要打外部目标时请关闭它。
+              已开启。注意它<span className="text-ink">管不住网络目标</span>：
+              针对 <code className="mono-ui">https://</code> 与 host:port 的扫描仍会联网
+              （否则沙箱里的工具一个都连不上目标）。真正的出站边界在宿主机 ——
+              iptables 的 <code className="mono-ui">DOCKER-USER</code> 白名单，
+              与这个开关无关。
             </span>
           </div>
         )}

@@ -231,32 +231,19 @@ export type SettingsStatus = 'loading' | 'ready' | 'error'
  *
  *    所以摘掉 `notices` 与当初摘掉 `sandbox` 是同一条判断：
  *    **提示必须与事实一致**，而不是"留着更保险"。
+ *
+ * ⚠️ v0.22 起**没有**未交付区块了（`sandbox` 与 `notices` 都已真实持久化）。
+ *    因此原先的 `BACKEND_PENDING` / `HAS_PENDING_BLOCK` /
+ *    `BACKEND_PENDING_NOTE` 三个出口已删除 —— 它们当时恒为
+ *    `false` / `''`，唯一的消费方（SettingsPage 的提示条）遂成了
+ *    **永久不可达的分支**。
+ *
+ *    按上面这条规矩本身这也该删：一个"永远不显示、但看起来在待命"的
+ *    提示条，会让下一个维护者以为某块仍未交付。**规矩留下，代码不必留下。**
+ *    将来真有区块未交付，照这条重建即可：
+ *      · 未交付却不说 → 虚假的安心 → **必须说**；
+ *      · 已交付却还标着未交付 → 否认可靠功能 → **必须删**。
  */
-export const BACKEND_PENDING = {
-  sandbox: false,
-  notices: false,
-} as const
-
-/** 是否还有未交付的区块 —— 有的话面板要显示提示条 */
-export const HAS_PENDING_BLOCK = Object.values(BACKEND_PENDING).some(Boolean)
-
-/**
- * 未交付区块的**保存提示**，直接挂在 `SaveBar` 的 `note` 上。
- *
- * ★ 为什么必须挂在保存按钮旁边，而不是只在页面底部说一次：
- *   用户改完配置、点"保存"、看到绿色的"已保存 15:30:42" ——
- *   他会合理地认为**配置已经生效且会持久**。而实际上刷新就回到初始值。
- *   这个误解的后果不轻：他可能据此以为沙箱策略已经收紧。
- *
- *   放在页面底部说明是**不够的** —— 那要用户先滚到底、再把它和
- *   上面那个"已保存"联系起来。提示必须出现在产生误解的那一刻。
- *
- * ⚠️ v0.22 起**没有**未交付区块了，所以这句话暂时不会被显示。
- *    留着它是给下一个新增区块用的 —— 届时改 `BACKEND_PENDING` 即可，
- *    文案不用重写（那句话本身仍然准确）。
- */
-export const BACKEND_PENDING_NOTE =
-  '这一块的后端接口尚未交付：保存在内存里，刷新页面会回到初始值。'
 
 export interface SettingsSnapshot {
   accounts: ProviderAccount[]
@@ -974,18 +961,16 @@ export async function sendTestNotification(channel: NotifyChannel): Promise<Acti
       return { status: 'ok', at: new Date().toISOString(), message: '测试通知已送达。' }
     }
     /*
-      ⚠️ 走到这里**是当前唯一可能的结果** —— 后端 v0.22 的测试端点
-      只做本地校验、不真的往外发（真实发送需要 SMTP / Webhook / Slack
-      三套协议实现，是独立的一块工作）。所以 `verified` 恒为 `false`，
-      而 `verifyError` 里写着具体原因。
+      ⚠️ v0.89 起后端测试端点**真的会发**（webhook / slack 两条链路已接上，
+      见 `app/settings/router.py` 的 `test_channel`：形状校验 → 真发一次 →
+      按真实结果写 verified / verifyError）。
 
-      这不是"失败"，也不该报成功 —— 它是**"动作执行了，但结论是
-      还不能确认送达"**。所以如实透传后端那句话，让用户看到
-      "地址形状没问题，但真实发送还没接"，而不是一个绿勾。
+      所以 `updated.verified` 现在**会**是 true，上面的成功分支真的走得到。
+      而走到这里时，是「发了但没成功」——`verifyError` 里是具体原因
+      （webhook 返非 2xx、邮件尚未接入……），如实透传即可。
 
-      ⚠️ 上面那个 `if (updated.verified)` 分支现在走不到，但**不能删** ——
-         后端接上真实发送之后它就会走到。留着它，并在注释里说明现状，
-         比删掉它、等那时再想起来补要可靠。
+      ⚠️ 邮件（SMTP）仍然不发：后端在 `channel_problem` 里直接拒绝并给原因。
+         这一条是**渠道能力**的缺口，不是前端的。
     */
     return {
       status: 'failed',

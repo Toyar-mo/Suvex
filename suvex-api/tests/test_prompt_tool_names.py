@@ -223,3 +223,69 @@ def test_no_strix_report_tool_names_remain_in_prompts() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__, "-q"]))
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2026-10-27 新增：A 档 misc/取证工具 —— 提示词教了，镜像里就必须真有
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: `prompts/kernel_system.md` §6「先用现成工具」那张表里点名的命令 → 镜像里
+#: 安装它所需的包名（不同名时才不同）。
+#:
+#: ## 这条在防什么
+#:
+#: 与 `test_real_skills_no_skill_for_uninstalled_tools` 是同一种病，只是
+#: 方向相反：那条守「技能包别讲镜像没装的工具」，这条守「**系统提示词**
+#: 里那张"镜像里都真装了"的表，不许随着 Dockerfile 漂移」。
+#:
+#: 表头那句原文是「下面这批工具镜像里都真装了（实测过能跑）」。这是**事实
+#: 断言**，不是愿望。只要 Dockerfile 少装一个，模型照表去敲就会拿到
+#: `command not found`，然后被带偏方向 —— 与 strix 工具名那次事故同一类。
+_ADVERTISED_SHELL_TOOLS: dict[str, str] = {
+    "zbarimg": "zbar-tools",
+    "qrencode": "qrencode",
+    "bkcrack": "bkcrack",
+    "repak": "repak",
+    "foremost": "foremost",
+    "testdisk": "testdisk",
+    "vol": "volatility3",
+    "fenjing": "fenjing",
+    "stegoveritas": "stegoveritas",
+    "sstimap": "sstimap",
+    "jwt_tool": "jwt_tool",
+    "pcapfix": "pcapfix",
+}
+
+
+def test_advertised_misc_tools_are_installed_in_the_dockerfile() -> None:
+    """`kernel_system.md` 承诺"镜像里都真装了"的工具，Dockerfile 必须真装。
+
+    失败时的修法：把对应工具补进 `docker/suvex-sandbox/Dockerfile`
+    （最好是**跑一遍**确认能启动，本项目最恨"能装上但一跑就崩"的假工具）；
+    确实装不上（源里没有 / 包已废弃）就从表里删掉那句，并在
+    `kernel_system.md` 里写明为什么不用它 —— 不要留着一句假承诺。
+    """
+    dockerfile = _PROMPTS_DIR.parent / "docker" / "suvex-sandbox" / "Dockerfile"
+    assert dockerfile.is_file(), f"找不到沙箱镜像的 Dockerfile：{dockerfile}"
+    text = dockerfile.read_text(encoding="utf-8", errors="replace")
+
+    prompt = (_PROMPTS_DIR / "kernel_system.md").read_text(encoding="utf-8", errors="replace")
+
+    missing_in_image: list[str] = []
+    missing_in_prompt: list[str] = []
+    for command, package in _ADVERTISED_SHELL_TOOLS.items():
+        if command not in prompt:
+            missing_in_prompt.append(command)
+        if package not in text:
+            missing_in_image.append(f"`{command}`（期望 Dockerfile 装 `{package}`）")
+
+    assert not missing_in_image, (
+        "kernel_system.md 的表说这些工具「镜像里都真装了」，但 Dockerfile 里"
+        "找不到它们 —— 那句承诺是假的，模型照做会拿到 command not found：\n  "
+        + "\n  ".join(missing_in_image)
+    )
+    assert not missing_in_prompt, (
+        "这些工具本来在 kernel_system.md 的工具表里，现在不见了 —— 如果是有意"
+        "删掉，请同步从本测试的 `_ADVERTISED_SHELL_TOOLS` 里移除，否则这条"
+        "断言就在守一个已经不存在的事实：\n  " + "\n  ".join(missing_in_prompt)
+    )

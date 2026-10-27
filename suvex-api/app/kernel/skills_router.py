@@ -203,25 +203,49 @@ def kernel_skills_usage(_identity: Identity = ReadDep, db: Session = DbDep) -> S
 @router.get(
     "/skills/{name}",
     response_model=SkillDetailOut,
-    summary="单篇技能详情（自定义的含正文）",
+    summary="单篇技能详情（含正文，内置的也回）",
 )
 def get_kernel_skill(name: str, _identity: Identity = ReadDep) -> SkillDetailOut:
     """看一篇技能的详情。
 
-    ⚠️ **只有自定义技能回正文。** 内置的正文由 `load_skill` 给模型，
-    页面不需要全文（可能几百 KB），回显它也没有用 —— 内置的改不了。
+    ## 内置技能也回正文（2026-10-26 改）
+
+    原实现只给自定义技能回 `body`，内置的回空串，理由写的是
+    「页面不需要全文，回显它也没有用 —— 内置的改不了」。
+
+    那个理由只对了一半。76 篇里 72 篇是内置的，**它们才是决定模型行为
+    的主体**。内置不回正文的效果是：能改的 4 篇看得见，真正在起作用的
+    72 篇在界面上是一片空白 + 一句「改不了」。
+
+    实测踩到的坑正是这个形状：一篇内置技能教了内核里不存在的命令，
+    界面上完全无从发现，只能去 grep 源码。所以「改不了」不该推出
+    「看不见」——**只读**和**不可知**是两件事。
+
+    代价是打开一篇大技能会拉几百 KB（`MAX_SKILL_CHARS` = 24000 截断在
+    `load_skill_text` 那一层，这里是原文）。这可接受：详情是用户主动点开的
+    单篇请求，不是随清单批量下发。
+
+    ⚠️ 区分两种「读不到」：自定义的读不到说明文件出了问题（编辑器要能
+    发现），内置的读不到说明部署包缺文件。两者都回空串 + 让 `lineCount`
+    为 0，界面据此显示「读不到正文」，不假装是空文件。
     """
     from app.kernel import skill_store
 
     skill = _find_skill(name)
     source = getattr(skill, "source", "builtin")
     body = ""
-    if source == "custom":
-        try:
+    try:
+        if source == "custom":
             raw = skill_store.read_custom_skill(name=name, category=skill.category)
             _, body = skill_store.split_content(raw)
-        except skill_store.SkillWriteError:
-            body = ""  # 读不到就给空，界面显示"读不到正文"
+        else:
+            # ★ 内置：只读查看。回的是含 frontmatter 的原文吗？
+            #   不是 —— 剥掉 frontmatter，因为 name/category/description
+            #   已经结构化成字段了，正文里再出现一遍只会让人以为能改它。
+            raw = skill_store.read_builtin_skill(skill)
+            _, body = skill_store.split_content(raw)
+    except skill_store.SkillWriteError:
+        body = ""  # 读不到就给空，界面显示"读不到正文"
     return SkillDetailOut(
         name=skill.name,
         category=skill.category,

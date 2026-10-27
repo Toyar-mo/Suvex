@@ -178,32 +178,6 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
             "缩完会告诉你原始和缩后各多少字节。"
         ),
     ),
-    ToolSpec(
-        name="rea",
-        label="逆向分析",
-        group="技能与知识",
-        summary=(
-            "对二进制、安装包、归档、前端 bundle、数据库做**静态**分析："
-            "ELF/PE 结构、Go/Rust 元数据、APK 签名、asar 归档图、"
-            "JS 应用调用图、SQLite 表结构等。"
-        ),
-        params=(
-            "command（必填，子命令）、path（沙箱内路径）、"
-            "extra（可选，其余 --flag）、timeout_seconds"
-        ),
-        # ★ 这条 limitation 是这个工具最重要的一句话。
-        #
-        #   模型对"逆向工具"的默认期待是**反编译**（ghidra/ida 那套：
-        #   给出伪代码、xrefs、函数图）。而我们装的这一套**没有**反编译
-        #   引擎 —— 那是另一层（Ghidra 1.5GB）。不写清，模型会拿
-        #   `inspect`/`decompile` 撞墙，然后把 provider_unavailable
-        #   读成"这个文件没什么可分析的"，直接放弃一条本来能走的路。
-        default_limitation=(
-            "**没有反编译引擎**（Ghidra/Hopper/IDA/JADX 都没装），所以 "
-            "`decompile`/`xrefs`/伪代码这一层用不了 —— 那是静态格式解析，"
-            "不是反汇编。做不了时它会明说 provider_unavailable。"
-        ),
-    ),
     # ── 网络请求 ──────────────────────────────────────────
     ToolSpec(
         name="http_request",

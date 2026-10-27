@@ -301,9 +301,28 @@ def test_run_multi_agent_shares_sink_object_with_spec() -> None:
     assert "finding_sink=list(" not in src
 
 
-def test_child_cannot_call_finish_scan_placeholder() -> None:
-    """（占位以保持原有测试顺序，不测逻辑）"""
-    return
+def test_every_root_only_tool_is_refused_for_children() -> None:
+    """★ `_ROOT_ONLY` 里的**每一个**工具，子 agent 调用都必须被拦下。
+
+    这条替换了原来的 `test_child_cannot_call_finish_scan_placeholder` ——
+    那个函数体只有一句 `return`（"占位以保持原有测试顺序，不测逻辑"），
+    名字在守一件事，实际什么都没守。
+
+    为什么按集合遍历而不是逐个手写：`_ROOT_ONLY` 是**集合**，加工具只要
+    往集合里塞一个名字就生效；手写用例永远跟不上，新加的那个就成了
+    没人守的漏洞。遍历让它自带"新增即覆盖"。
+
+    拦不住的后果：子 agent 自己调 `finish_scan` 会把整场扫描结束掉
+    （root 还在等它干活），或调 `create_agent` 无限分裂。
+    """
+    coord = multiagent.AgentCoordinator()
+    coord.add_root()
+    child = coord.add_child(name="c", task="t", parent_id="root")
+
+    for tool in sorted(multiagent._ROOT_ONLY):
+        out = json.loads(_dispatch_orch(tool, {}, coord=coord, me=child, is_root=False))
+        assert out["success"] is False, f"{tool} 没被子 agent 越权拦截挡住"
+        assert "只有 root 主智能体" in out["error"], f"{tool} 的拒绝理由没说明原因"
 
 
 def test_create_agent_requires_name_and_task() -> None:
@@ -732,3 +751,40 @@ def test_threat_model_and_todos_are_advertised_in_root_prompt() -> None:
         assert tool in root_p, tool
     child_p = runner.load_child_prompt()
     assert "get_threat_model" in child_p
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 日志截断必须留标记
+# ─────────────────────────────────────────────────────────────────────
+#
+# 裸切片（`text[:200]`）在日志里制造了一类真实误判：截断后的内容看起来
+# 就是完整内容，于是「字段缺失」「JSON 不完整」会被当成产品缺陷去查。
+# 实测被误导过一次 —— 某条记录里位于 JSON 最末尾的字段正好被切掉，
+# 解析出 `None`，一度判定「服务端会拒」。
+
+
+def test_没超长时原样返回():
+    assert multiagent._clip_for_log("短内容", 200) == "短内容"
+    assert multiagent._clip_for_log("", 200) == ""
+
+
+def test_恰好等于上限时不加标记():
+    """边界：等于上限没有丢任何字符，加标记反而会误导。"""
+    text = "y" * 10
+    assert multiagent._clip_for_log(text, 10) == text
+
+
+def test_超长时带标记与原长():
+    text = "x" * 25
+    clipped = multiagent._clip_for_log(text, 10)
+
+    assert clipped.startswith("x" * 10), "保留的必须是前缀"
+    assert "已截断" in clipped, f"必须明确说被截断了，实际：{clipped}"
+    assert "25" in clipped, f"标记里要有原始长度，实际：{clipped}"
+
+
+def test_标记本身不会被再次计入前缀():
+    """前缀长度必须严格等于 limit —— 否则日志行宽会随原长漂移。"""
+    clipped = multiagent._clip_for_log("z" * 100, 20)
+    prefix = clipped.split("…")[0]
+    assert len(prefix) == 20, f"前缀应为 20 字符，实际 {len(prefix)}"

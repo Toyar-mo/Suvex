@@ -175,11 +175,22 @@ export function ScanRetentionPanel() {
               产物清理是这条生命周期里**唯一不可逆**的一步，所以它的
               help 要把"删什么、留什么"说清楚 —— 否则用户会以为它连
               附件一起删，从而不敢开启。
+
+              ⚠️ 2026-10-26 审计修正：原文写「附件原件与 challenge 目录
+              不受影响」，**其中后半句是错的**。`challenge/` 住在
+              `<scan_id>/` 里面（`runner.challenge_dir()` = `scan_root /
+              scan_id / CHALLENGE_DIRNAME`），而 `sweep_retired_artifacts`
+              走 `remove_scan_artifacts` 的 `shutil.rmtree(scan_root/<scan_id>)`
+              会把整个目录端掉 —— `challenge/` 跟着走。
+              真正不受影响的是 `_uploads/<scan_id>/` 里的**原件**（按 id
+              拼路径，构造上碰不到兄弟目录）。`runner.py:715-718` 的注释
+              其实早就说对了这点（"`challenge/` 跟着产物一起删是对的"），
+              是界面文案写反了。
             */}
             <Field
               label="归档产物保留期"
               htmlFor="retention-artifact-days"
-              help="已归档的扫描，产物目录（扫描日志、报告素材）再留这么多天就清理掉，释放磁盘。附件原件与 challenge 目录不受影响。填 0 表示不自动清理。"
+              help="已归档的扫描，产物目录（扫描日志、报告素材、challenge/ 里解开的题目素材）再留这么多天就清理掉，释放磁盘。附件原件不受影响——它在 _uploads/ 下，重跑同一道题还要用。填 0 表示不自动清理。"
             >
               <TextInput
                 id="retention-artifact-days"

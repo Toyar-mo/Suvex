@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadScans, replaceScans, subscribeScans, getScansSnapshot } from './scans-store'
+import { loadScans, replaceScans, subscribeScans, getScansSnapshot, getViewSnapshot } from './scans-store'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -245,10 +245,26 @@ describe('失败处理', () => {
     await promise.catch(() => undefined)
     await Promise.resolve()
 
-    const snapshot = getScansSnapshot()
-    // 注意：这里断言的是**默认视图**的快照没被动过，
-    // archived 视图的错误在它自己的槽里（下面的订阅测试覆盖）
-    expect(snapshot).toBeDefined()
+    /* ★ 2026-10-24 修：这条用例原来只断言 `getScansSnapshot()` 是
+       `toBeDefined()` —— 而那是**默认视图**的快照，跟本次失败的
+       archived 槽毫无关系。把源码里 `status: 'error'` 改成 `'ready'`
+       之后它依然全绿（变异实测过），等于名字在骗人。
+
+       错误写在**自己那个视图的槽**里，所以必须读那个槽。 */
+    const archived = getViewSnapshot('archived')
+    expect(archived.status).toBe('error')
+    /* `lib/api` 会把网络层错误规范化成给人看的中文，所以这里断言的是
+       「确实带了错误信息」而不是原始 `Failed to fetch` —— 断字符串内容
+       会让这条用例绑在文案上，改一次提示就红一次。 */
+    expect(archived.error).not.toBeNull()
+    expect(archived.error?.message.length ?? 0).toBeGreaterThan(0)
+    // 失败不该把列表清成"什么都没有"的假象。
+    expect(archived.scans).toEqual([])
+
+    /* 默认视图没参与这次请求，它的槽不该被顺手写坏。
+       不断言具体值（默认槽的初始 `loading` 会被本文件前面的用例推进到
+       `ready`），只断言**没被这次失败带成 error** —— 那才是这条守的东西。 */
+    expect(getScansSnapshot().status).not.toBe('error')
   })
 
   it('★ silent 失败时**不**把状态写成 error', async () => {

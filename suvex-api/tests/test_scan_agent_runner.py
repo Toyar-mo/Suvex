@@ -368,6 +368,280 @@ def test_write_vulnerabilities_collects_workorders_for_ir_scans(tmp_path: Path) 
     assert "203.0.113.201" in got["description"]
 
 
+def test_write_vulnerabilities_keeps_honest_grading_fields(tmp_path: Path) -> None:
+    """模型按 `counterevidence` 技能写的四个诚实分级字段，必须到达报告。
+
+    回归 2026-10-26 的缺陷：这四项被 `prompts/kernel_pentest.md` 与
+    `skills/analysis/counterevidence.md:156-166` 明确教模型去写，而
+    `_write_vulnerabilities` 的 dict 里没有这四个键 —— 模型认真写完、
+    后端静默丢掉，不报错不警告，报告里一个字都没有。
+
+    后果不是"少一段文字"：丢掉 `counterevidence` 之后，一条**有反证**的
+    结论会和一条铁证在界面上长得一模一样，读的人无法判断该不该信。
+
+    这里断言的是**行为**（解析后的 reasoning 里有这些内容），不是源码
+    文本 —— 本项目栽过 `inspect.getsource` 按行号切片的假红。
+    """
+    from app.findings import strix_vulns
+
+    records = _write(
+        tmp_path,
+        [
+            {
+                "title": "简介页存储型 XSS",
+                "severity": "high",
+                "target": "https://example.test/profile",
+                "verification": "confirmed",
+                "evidence_kind": "cross_identity",
+                "evidence": "POST bio=<script>alert(1)</script>",
+                "reasoning": "个人简介未转义直接拼进 HTML。",
+                "remediation": "输出前做 HTML 实体编码。",
+                "cwe": "CWE-79",
+                "counterevidence": "检查了 CSP 响应头，未设置 script-src。",
+                "assumptions": "该页面对所有已登录用户可见。",
+                "confidence_rationale": "有可复现 PoC 且经浏览器确认执行。",
+                "severity_change_conditions": "若仅管理员可见则降为 medium。",
+            }
+        ],
+    )
+    assert len(records) == 1
+    record = records[0]
+    # ① 四个键必须被写进中间文件（否则下游无从读取）
+    assert record["counterevidence"] == "检查了 CSP 响应头，未设置 script-src。"
+    assert record["assumptions"] == "该页面对所有已登录用户可见。"
+    assert record["confidence_rationale"] == "有可复现 PoC 且经浏览器确认执行。"
+    assert record["severity_change_conditions"] == "若仅管理员可见则降为 medium。"
+
+    # ② 解析后它们必须真的出现在契约的 reasoning 里（带标签，读者能分辨）
+    parsed = strix_vulns.parse(records, default_target="https://example.test")
+    assert len(parsed) == 1
+    reasoning = parsed[0].reasoning
+    assert "【反证】" in reasoning
+    assert "未设置 script-src" in reasoning
+    assert "【成立假设】" in reasoning
+    assert "【置信度依据" in reasoning
+    assert "【严重度升降条件】" in reasoning
+
+
+def test_write_vulnerabilities_reasoning_is_not_the_evidence(tmp_path: Path) -> None:
+    """「为什么判断有问题」必须是推理，不能是复现命令。
+
+    回归 2026-10-26 的缺陷：`technical_analysis` 原来接的是 `evidence`，
+    而 `strix_vulns._reasoning()` 把 `technical_analysis` 当作契约的
+    `reasoning`。于是报告的「为什么判断有问题」渲染出 `curl -s ...`，
+    与「证据」栏**一模一样**，两栏都答非所问。
+    """
+    from app.findings import strix_vulns
+
+    records = _write(
+        tmp_path,
+        [
+            {
+                "title": "未授权读取他人扫描记录",
+                "severity": "high",
+                "target": "https://example.test/api/v1/scans/2",
+                "verification": "confirmed",
+                "evidence_kind": "cross_identity",
+                "evidence": "curl -H 'Authorization: Bearer userA' https://example.test/api/v1/scans/2",
+                "reasoning": "userA 的凭据拿到了 userB 的记录，鉴权只校验登录不校验归属。",
+                "remediation": "在查询层加 owner_id 过滤。",
+                "cwe": "CWE-639",
+            }
+        ],
+    )
+    parsed = strix_vulns.parse(records, default_target="https://example.test")
+    finding = parsed[0]
+    assert "鉴权只校验登录不校验归属" in finding.reasoning
+    # 证据仍然是证据（原文保留），但它不能是 reasoning 的全部
+    assert "curl -H" in finding.evidence
+    assert finding.reasoning.strip() != finding.evidence.strip()
+
+
+def test_write_vulnerabilities_passes_code_locations(tmp_path: Path) -> None:
+    """`code_locations` 必须进 `affected` —— 白盒扫描的交付物就是它。
+
+    回归 2026-10-26 的缺陷：原代码把 `code_locations` 写死成 `""`，而
+    `skills/custom/dependency_cve_scanning.md:231` 要求
+    "You MUST report usage sites in `code_locations`"。
+    `strix_vulns._affected_positions()` 读不到就退化成只有 target，
+    修的人还得自己去翻代码找位置。
+    """
+    from app.findings import strix_vulns
+
+    records = _write(
+        tmp_path,
+        [
+            {
+                "title": "pyyaml 反序列化",
+                "severity": "high",
+                "target": "requirements.txt",
+                "verification": "confirmed",
+                "evidence_kind": "static_artifact",
+                "evidence": "requirements.txt: pyyaml==5.1",
+                "reasoning": "5.1 的 yaml.load 默认走 FullLoader 之外的 UnsafeLoader。",
+                "remediation": "升到 6.x 并改用 safe_load。",
+                "cwe": "CWE-502",
+                "code_locations": [
+                    {"file": "app/config/loader.py", "start_line": 42},
+                ],
+            }
+        ],
+    )
+    assert records[0]["code_locations"] == [
+        {"file": "app/config/loader.py", "start_line": 42}
+    ]
+    parsed = strix_vulns.parse(records, default_target="requirements.txt")
+    assert parsed[0].affected == ["app/config/loader.py:42"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        # 模型实测会交这几种形状。不归一 = 静默丢弃。
+        (None, []),
+        ("", []),
+        ("src/app.py:42", [{"file": "src/app.py", "start_line": 42}]),
+        ("src/app.py", [{"file": "src/app.py", "start_line": None}]),
+        (["src/app.py:42"], [{"file": "src/app.py", "start_line": 42}]),
+        (["src/app.py"], [{"file": "src/app.py", "start_line": None}]),
+        (
+            [{"file": "src/app.py", "start_line": 42}],
+            [{"file": "src/app.py", "start_line": 42}],
+        ),
+        # 字符串行号 / 区间写法 / 浮点
+        (
+            [{"file": "a.py", "start_line": "42"}],
+            [{"file": "a.py", "start_line": 42}],
+        ),
+        (
+            [{"file": "a.py", "start_line": "42-45"}],
+            [{"file": "a.py", "start_line": 42}],
+        ),
+        # `path` / `line` 是别名
+        ([{"path": "a.py", "line": 7}], [{"file": "a.py", "start_line": 7}]),
+        # 没文件名 → 丢弃（没有位置的"位置"没有意义）
+        ([{"start_line": 42}], []),
+        ([{"file": ""}], []),
+        ([123], [{"file": "123", "start_line": None}]),
+    ],
+)
+def test_normalize_code_locations_shapes(raw, expected) -> None:  # noqa: ANN001
+    """`code_locations` 的容错归一。模型不会按提示词的形状交数据。"""
+    assert agent_runner._normalize_code_locations(raw) == expected
+
+
+def test_normalize_code_locations_keeps_url_and_windows_path() -> None:
+    """`file:line` 的拆分只能切**最后**一个冒号且右侧纯数字。
+
+    否则 `https://h/p:80`、`C:\\x\\y.py:42` 会被切错 —— 而 Windows 路径
+    在本项目里是真实存在的（开发机就是 Windows）。
+    """
+    got = agent_runner._normalize_code_locations(
+        ["https://example.test:8443/x", r"C:\repo\app\main.py:42"]
+    )
+    assert got == [
+        {"file": "https://example.test:8443/x", "start_line": None},
+        {"file": r"C:\repo\app\main.py", "start_line": 42},
+    ]
+
+
+def test_write_vulnerabilities_workorders_keep_basis_risk_permission(
+    tmp_path: Path,
+) -> None:
+    """IR 工单的 `basis` / `risk` / `permission` 不能丢。
+
+    回归 2026-10-26 的缺陷：`prompts/kernel_ir.md:94-112` 把
+    `action`/`basis`/`risk`/`permission` 定为必填，还写明了原因 ——
+    "省了 `permission` 就等于让人在不知情的前提下批权限"。而扫描侧
+    的 workorder 映射当时只读了 `action` 和 `evidence`（工单契约里
+    根本没有 `evidence`），`basis`/`risk`/`permission` 全部丢弃，
+    审批人只看到一个光秃秃的动作标题。
+    """
+    records = _write(
+        tmp_path,
+        None,
+        [
+            {
+                "action": "阻断 203.0.113.45 对该主机的访问",
+                "basis": "时间线第 3、7 条（confirmed）：该 IP 上传了 webshell",
+                "risk": "该 IP 若属办公出口，封禁会影响正常业务",
+                "permission": "边界防火墙策略写权限",
+                "grade": "confirmed",
+            }
+        ],
+    )
+    assert len(records) == 1
+    got = records[0]
+    narrative = got["technical_analysis"]
+    assert "【依据】" in narrative and "webshell" in narrative
+    assert "【误做风险】" in narrative and "办公出口" in narrative
+    assert "【所需权限】" in narrative and "防火墙" in narrative
+
+
+def test_write_vulnerabilities_workorders_read_grade_not_verification(
+    tmp_path: Path,
+) -> None:
+    """工单的可信度标签是 `grade`，不是 `verification`。
+
+    回归 2026-10-26 的缺陷：原代码读 `item.get("verification")`，而
+    `kernel_ir.md` §六 的工单契约里**没有这个键**（只有 `grade`，且取值
+    限于 `confirmed` / `needs_follow_up`）。于是每条 IR 工单都被判成
+    `needs_follow_up`，哪怕模型明确写了 `"grade": "confirmed"`。
+    """
+    records = _write(
+        tmp_path,
+        None,
+        [
+            {
+                "action": "隔离主机",
+                "basis": "第 2 条结论",
+                "risk": "短暂中断",
+                "permission": "EDR 隔离权限",
+                "grade": "confirmed",
+            },
+            {
+                "action": "建议排查",
+                "basis": "第 5 条",
+                "risk": "无",
+                "permission": "无",
+                # 模型违规写 ruled_out —— 工单里必须降级（"排除了"不产生动作）
+                "grade": "ruled_out",
+            },
+        ],
+    )
+    by_title = {r["title"]: r for r in records}
+    assert by_title["隔离主机"]["verification"] == "confirmed"
+    assert by_title["隔离主机"]["confidence"] == "high"
+    assert by_title["建议排查"]["verification"] == "needs_follow_up"
+    assert by_title["建议排查"]["confidence"] == "medium"
+
+
+def test_write_vulnerabilities_workorders_flag_missing_segments(tmp_path: Path) -> None:
+    """缺段的工单仍要保留，但可信度必须降级且写明缺了什么。
+
+    与 `app/kernel/workorder.py::parse_workorders` 的 `effective_grade`
+    同一条纪律：宁可低估不可高估。一条缺 `risk` 的建议**仍然值得人看**
+    （"他们想到了要封这个 IP，只是没写风险"），丢掉它等于让真实发现消失。
+    """
+    records = _write(
+        tmp_path,
+        None,
+        [
+            {
+                "action": "阻断该 IP",
+                "basis": "第 3 条",
+                # 故意不给 risk / permission
+                "grade": "confirmed",
+            }
+        ],
+    )
+    assert len(records) == 1
+    rationale = records[0]["confidence_rationale"]
+    assert "risk" in rationale
+    assert "permission" in rationale
+    assert "待跟进" in rationale
+
+
 def test_write_vulnerabilities_wraps_string_workorders(tmp_path: Path) -> None:
     # 模型偷懒只给一句话的工单，也不能丢。
     records = _write(tmp_path, None, ["检查 cron.d/system-update 的持久化"])

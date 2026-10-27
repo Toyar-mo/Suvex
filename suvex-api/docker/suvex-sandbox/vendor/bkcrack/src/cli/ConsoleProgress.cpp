@@ -1,0 +1,110 @@
+#include "ConsoleProgress.hpp"
+
+#include <bkcrack/log.hpp>
+
+#include <array>
+#include <cstdio>
+
+#ifdef _WIN32
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+#endif // _WIN32
+
+ConsoleProgress::ConsoleProgress(std::ostream& os, const std::chrono::milliseconds& interval)
+: Progress{os}
+, m_interval{interval}
+, m_in_destructor{false}
+, m_printer{&ConsoleProgress::printerFunction, this}
+{
+#ifdef _WIN32
+    const auto hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (auto curInfo = CONSOLE_CURSOR_INFO{}; GetConsoleCursorInfo(hStdOut, &curInfo))
+    {
+        curInfo.bVisible = FALSE;
+        SetConsoleCursorInfo(hStdOut, &curInfo);
+    }
+#endif // _WIN32
+}
+
+ConsoleProgress::~ConsoleProgress()
+{
+    {
+        const auto lock = std::scoped_lock{m_in_destructor_mutex};
+        m_in_destructor = true;
+    }
+
+    m_in_destructor_cv.notify_all();
+    m_printer.join();
+
+#ifdef _WIN32
+    const auto hStdOut = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (auto curInfo = CONSOLE_CURSOR_INFO{}; GetConsoleCursorInfo(hStdOut, &curInfo))
+    {
+        curInfo.bVisible = TRUE;
+        SetConsoleCursorInfo(hStdOut, &curInfo);
+    }
+#endif // _WIN32
+}
+
+void ConsoleProgress::printerFunction()
+{
+    auto repeat = true;
+
+    // Give a small delay before the first time progress is printed so that
+    // the running operation is likely to have initialized the total number of steps.
+    {
+        auto lock = std::unique_lock{m_in_destructor_mutex};
+        repeat = !m_in_destructor_cv.wait_for(lock, std::chrono::milliseconds{1}, [this] { return m_in_destructor; });
+    }
+
+    while (repeat)
+    {
+        if (const auto line = getProgressLine(); !line.empty())
+        {
+            const auto lock = std::scoped_lock{m_os_mutex};
+            m_os << '\r' << line;
+            if (line.size() < m_lengthToClear)
+                m_os << std::string(m_lengthToClear - line.size(), ' ');
+            m_os << std::flush;
+            m_lengthToClear = line.size();
+        }
+
+        auto lock = std::unique_lock{m_in_destructor_mutex};
+        repeat    = !m_in_destructor_cv.wait_for(lock, m_interval, [this] { return m_in_destructor; });
+    }
+
+    if (const auto line = getProgressLine(); !line.empty())
+    {
+        const auto lock = std::scoped_lock{m_os_mutex};
+        m_os << '\r' << line;
+        if (line.size() < m_lengthToClear)
+            m_os << std::string(m_lengthToClear - line.size(), ' ');
+        m_os << std::endl;
+        m_lengthToClear = 0;
+    }
+}
+
+void ConsoleProgress::beforeLog(std::ostream& os)
+{
+    if (!m_lengthToClear)
+        return;
+
+    os << '\r' << std::string(m_lengthToClear, ' ') << '\r';
+    m_lengthToClear = 0;
+}
+
+auto ConsoleProgress::getProgressLine() -> std::string
+{
+    if (const auto total = this->total.load())
+    {
+        const auto done   = this->done.load();
+        auto       buffer = std::array<char, 80 + 1>{};
+        const auto length =
+            std::snprintf(buffer.data(), buffer.size(), "%.1f %% (%d / %d)", 100.0 * done / total, done, total);
+        if (0 <= length && length < int{sizeof(buffer)})
+            return std::string{buffer.data(), static_cast<std::size_t>(length)};
+    }
+    return "";
+}

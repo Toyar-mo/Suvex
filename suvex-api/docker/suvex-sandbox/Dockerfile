@@ -535,7 +535,7 @@ RUN set -eux; \
       || { echo "agent-browser: 本段只处理 amd64，arm64 需换二进制名" >&2; exit 1; }; \
     mkdir -p /opt/agent-browser; \
     curl -fsSL -o /tmp/ab.tgz \
-      "https://registry.npmjs.org/agent-browser/-/agent-browser-0.26.0.tgz"; \
+      "https://registry.npmmirror.com/agent-browser/-/agent-browser-0.26.0.tgz"; \
     # 校验 sha256（钉死字节）。npm 公布的 integrity 是 sha512-base64，
     # 也可以直接用，但 sha256 在 Dockerfile 里更省事且足够。
     printf '%s  %s\n' \
@@ -576,12 +576,34 @@ RUN set -eux; \
 #   · 展开后 `bin/hurl` 可执行，`hurl --version` → `hurl 7.1.0 (x86_64-pc-linux-gnu)`
 #   · ldd 依赖 libxml2.so.2 / libcurl.so.4 / libnghttp3.so.9 / libngtcp2*，
 #     这些 base 镜像已带（curl 与 tshark 的依赖链），不需额外装包。
+#
+# ⚠️ **为什么是 COPY 而不是 build 期内 curl**：Kali 上 `github.com` 直连是
+#    `curl: (35) TLS connect error ... unexpected eof`（实测 2026-10-27），
+#    而 hurl 又必须从 GitHub Releases 取（apt 的 `hurl` 是另一个同名工具，
+#    见上文）。所以把 tarball 放进 `vendor/` 随构建上下文带上，
+#    sha256 仍逐字节校验 —— 供应链没放松，只是不再依赖构建期网络。
+# hurl 7.1.0 是预编译二进制，`ldd` 唯一缺失项是 `libxml2.so.2`（SONAME 2）。
+# 实测：base 镜像带了 libcurl/libnghttp3/libngtcp2/libssl，唯独没有 libxml2。
+#
+# ⚠️ 为什么不是 `apt-get install libxml2`：Kali rolling 的仓库现在只有
+#    `libxml2-16`（SONAME 16，ABI 已变），而 `apt-get install libxml2`
+#    报 `Package 'libxml2' has no installation candidate`（实测 2026-10-27）。
+#    SONAME 不同不能软链硬凑 —— 那是拿崩溃换"看起来装上了"。
+#
+# 所以把 Kali 自己的 libxml2 2.9.14 运行库（SONAME 2）随 vendor/ 带上，
+# 逐个 sha256 固定。它是**附加**的：镜像里没有别的东西链接 .so.2，
+# 只服务 hurl 一个二进制；系统和其它工具仍然用仓库里的 libxml2-16。
+#   vendor/libxml2.so.2.9.14  1795160 B
+#   sha256 469b72caa6f312606bccb8352f60f136f3953776422f4f231d29c9f6a0a2e281
+#   （来源：Kali rolling 的 libxml2 包 /usr/lib/x86_64-linux-gnu/，
+#     随构建上下文一起分发，见 vendor/SOURCES.md）
+COPY vendor/libxml2.so.2.9.14 /usr/lib/x86_64-linux-gnu/libxml2.so.2.9.14
+RUN ln -sf libxml2.so.2.9.14 /usr/lib/x86_64-linux-gnu/libxml2.so.2 && ldconfig
+COPY vendor/hurl-7.1.0.tar.gz /tmp/hurl.tgz
 RUN set -eux; \
     test "$(dpkg --print-architecture)" = "amd64" \
       || { echo "hurl: 本段只处理 amd64，其他架构需换二进制名" >&2; exit 1; }; \
     mkdir -p /opt/hurl; \
-    curl -fsSL -o /tmp/hurl.tgz \
-      "https://github.com/Orange-OpenSource/hurl/releases/download/7.1.0/hurl-7.1.0-x86_64-unknown-linux-gnu.tar.gz"; \
     printf '%s  %s\n' \
       "bed802fea307d330d899935e76614ae1d9bdd1b3139e5cf77cb717033260880c" /tmp/hurl.tgz \
       | sha256sum -c -; \
@@ -756,13 +778,18 @@ RUN rm -f /opt/venv/bin/httpx \
     && ln -sf /usr/bin/httpx-toolkit /opt/venv/bin/httpx
 # ⚠️ 自检单独一层，这样失败时一眼能看出是"自检没过"而非"上条命令写错"。
 RUN set -eux; \
-    printf 'example.com\n' | httpx -silent -status-code -title > /tmp/httpx_probe.txt 2>&1; \
-    cat /tmp/httpx_probe.txt; \
-    # PD 的 httpx 打印 `https://example.com [200] [Example Domain] …`；
-    # Python 那个哪怕依赖齐了也不会是这个形状（它只打印裸 body）。
-    grep -q '\[200\]' /tmp/httpx_probe.txt \
+    # ⚠️ 原来自检是 `printf 'example.com' | httpx -silent -status-code -title`
+    #    然后 grep `[200]`。2026-10-27 构建时红了，但**不是** httpx 坏了：
+    #    构建期只有内网镜像，example.com 出不去，探针拿到空输出。
+    #    用"能不能出网"去判别"这是不是 PD 的 httpx"是错的判据。
+    #    改成看 CLI 自己的版本横幅：PD 的 httpx 是 cobra CLI，`-version`
+    #    打 `[INF] Current Version: vX`；Python 的 httpx 库根本没有 -version，
+    #    只会 `error: unrecognized arguments`。两条都不需要外网。
+    httpx -version > /tmp/httpx_ver.txt 2>&1 || true; \
+    cat /tmp/httpx_ver.txt; \
+    grep -q 'Current Version' /tmp/httpx_ver.txt \
       || { echo "FATAL: 'httpx' 又不是 ProjectDiscovery 的扫描器了"; exit 1; }; \
-    rm -f /tmp/httpx_probe.txt; \
+    rm -f /tmp/httpx_ver.txt; \
     # 库仍要在 —— 上面删的是 console script，不是包。
     python3 -c 'import httpx; print("httpx lib ok", httpx.__version__)'
 
@@ -813,7 +840,27 @@ RUN printf 'export PATH="/opt/venv/bin:$PATH"\n' > /etc/profile.d/00-venv.sh \
 # ⚠️ 这一层会**访问 rubygems.org**（apt 那层访问的是镜像源）。
 #    两者都不通时构建会失败 —— 这是刻意的：宁可构建报错，
 #    也不要镜像起来了而工具是空的。
-RUN gem install --no-document one_gadget seccomp-tools
+# ⚠️ 2026-10-27 实测的**三条**死路，所以最终改成 vendor + `--local`：
+#    1. `gem install` 默认源 rubygems.org：解析到 IPv6，TCP/443 不通
+#       （`SSL_connect ... unexpected eof while reading`）；
+#    2. `gem install --clear-sources --source <镜像>`：镜像站
+#       `specs.4.8.gz` 能下（HTTP 200），但 `gem install` 仍报
+#       `Could not find a valid gem`（索引解析对不上，换 4 个镜像都一样）；
+#    3. `gem sources --add <镜像>`：`--clear-all` 删不掉内置默认源，
+#       装的时候照样先去连 rubygems.org 然后失败。
+#
+# 依赖闭包（**实测**，不是猜的：在 Kali 上用 `gem install --local` 空目录试装
+# 一轮轮把缺的打出来，直到干净为止 —— 一共 6 个，缺一个 `--local` 就整体失败）：
+#   one_gadget 2.1.1 → elftools(>=2.2,<3)          → bindata(>=2,<4)
+#   one_gadget 2.1.1 → logger
+#   seccomp-tools 1.7.1 → racc(~>1.8) / logger     （racc 与 seccomp-tools 要编本地扩展）
+# 所以 6 个 .gem 全放 vendor/gems，`gem install --local` 装，构建期零外网。
+# 每个文件的 sha256 记在 vendor/SOURCES.md。改这里必须同步那份清单。
+COPY vendor/gems /tmp/gems
+RUN gem install --no-document --local /tmp/gems/*.gem \
+ && rm -rf /tmp/gems \
+ && one_gadget --version \
+ && seccomp-tools --version
 
 # ── 宿主只读资源挂载点（已定设计决策 2）────────────────────
 #
@@ -866,3 +913,166 @@ USER solver
 #    No such container"（因为 --rm 已经把它清掉了）—— 这个错误
 #    与真正的"Docker 不可用"长得完全一样，会浪费一整轮排查。
 CMD ["tail", "-f", "/dev/null"]
+
+# ⚠️ 下面这一整段 A 档是**后追加**的（v1.05），落在 `USER solver` 之后。
+#    apt / pip / 写 /usr/local/bin 都需要 root，所以先切回 root，
+#    全段跑完再切回 solver（文件末尾那一行），保持"容器默认以 uid 1000 跑"。
+USER root
+
+
+# ══════════════════════════════════════════════════════════════════════
+# ★ A 档题型工具补强（2026-10-27）
+#
+# 依据：docs/五类题型工具补强-盘点与分析-2026-10-27.md
+# 选入标准（三条全满足才放）：体积小、构建期能装、运行期不依赖出网。
+#
+# ## 明确**不**放进来，以及原因（免得下次有人以为是漏了）
+#   · `ropper`        —— 依赖 `filebytes`，它用了 Py3.12 就已删除的
+#                        `ast.Str`；Kali 的 python3 是 3.14，pip 装它会
+#                        在 `Failed to build 'filebytes'` 处直接断掉（本轮实测）。
+#   · `zsteg`         —— Ruby gem，但 `zpng`/`iostruct`/`prime` 三个运行时依赖
+#                        在国内 rubygems 镜像上取不到（rubygems.org 直连 SSL EOF）。
+#                        它的主功能（PNG/BMP 的 LSB 穷举）由 `stegoveritas -bruteLSB` 覆盖。
+#   · `libc-database` —— 用法就是「拿符号去库里搜」，而库要联网按需下载；
+#                        运行期 `--network none` 时它是废的。
+#   · ghidra / CUE4Parse / SageMath / wpscan / aflplusplus / frida —— 体积或
+#                        运行时代价高（JDK / .NET / ~1 GB），留待单独决策（C 档）。
+#
+# ## ⚠️ 网络现实（决定下面为什么用 vendor/ 而不是在 RUN 里 curl）
+#   本机/Kali 构建期只能连国内镜像：tuna 的 apt 与 pip 都通，但
+#   github.com、rubygems.org、nodejs.org 直连都是
+#   `SSL: unexpected eof while reading`（2026-10-27 实测）。
+#   所以凡是从 GitHub 取的东西（repak 的预编译二进制、nuclei 模板库）
+#   一律**预下载后放进 vendor/**，由 `COPY` 带进镜像 —— 构建期零外网依赖。
+#   vendor/ 里每个目录的来源与许可见 vendor/SOURCES.md。
+# ══════════════════════════════════════════════════════════════════════
+
+# ── 1) apt：misc 里高频但镜像原本没有的小件 ─────────────────────────
+#   qrencode  —— 出二维码（misc 里「扫码得 flag」）
+#   zbar-tools—— 解二维码/条码（zbarimg），与 qrencode 是一对
+#   unrar-free—— 解 rar（README 说 unrar 比 7z 对加密 rar 更稳）
+#   testdisk  —— 分区表扫描/修复（**注意：Kali 的 testdisk 包只装
+#                /usr/bin/testdisk，不像 Debian 上游那样还捎带 photorec**。
+#                2026-10-27 实测 `dpkg -L testdisk` 只列出 testdisk 一个二进制，
+#                `apt-cache policy photorec` 的 Candidate 是 (none)——Kali 源里
+#                根本没有 photorec 这个包。）
+#   （文件雕复/恢复用的 foremost 不在本层装 —— 放在 8.5) 段，
+#     这样改它不会让本层缓存失效。它顶替 Kali 源里没有的 photorec。）
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        qrencode zbar-tools unrar-free testdisk \
+ && rm -rf /var/lib/apt/lists/*
+
+# ── 2) pip（主 venv，走 tuna；ARG 见上面 pip 段）───────────────────
+#   volatility3 —— 内存取证（vol），ir/base 都缺
+#   fenjing     —— Jinja2 SSTI 自动构造/绕过
+#   stegoveritas—— 一站式隐写分析（-bruteLSB 补 zsteg 的空缺）
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        --retries 5 --timeout 60 \
+        volatility3 fenjing stegoveritas
+
+# ── 3) SSTImap：**单独 venv** ──────────────────────────────────────
+# 它的 requirements 把 requests 钉在 `~=2.27.1`、urllib3 钉在 `~=1.26.9`。
+# 直接装进主 venv 会把 requests 从 2.34 降到 2.27（2022 年的版本），
+# 连累主 venv 里其他依赖新 requests 的库。隔离之后再降也伤不到别人。
+COPY vendor/sstimap /opt/sstimap
+RUN set -eux; \
+    python3 -m venv /opt/sstimap-venv; \
+    /opt/sstimap-venv/bin/pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        --retries 5 --timeout 60 -r /opt/sstimap/requirements.txt; \
+    printf '#!/bin/sh\nexec /opt/sstimap-venv/bin/python /opt/sstimap/sstimap.py "$@"\n' \
+        > /usr/local/bin/sstimap; \
+    chmod 0755 /usr/local/bin/sstimap; \
+    sstimap --help >/dev/null
+
+# ── 4) jwt_tool：脚本 + 依赖进主 venv ──────────────────────────────
+COPY vendor/jwt_tool /opt/jwt_tool
+RUN set -eux; \
+    pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        --retries 5 --timeout 60 -r /opt/jwt_tool/requirements.txt; \
+    printf '#!/bin/sh\nexec /opt/venv/bin/python /opt/jwt_tool/jwt_tool.py "$@"\n' \
+        > /usr/local/bin/jwt_tool; \
+    chmod 0755 /usr/local/bin/jwt_tool; \
+    # ⚠️ 别写 `jwt_tool 2>&1 | head -3`：jwt_tool 无参时打完 banner 会
+    #    `sys.exit(1)`，`head` 又提前关管道（SIGPIPE），`set -o pipefail`
+    #    下这条整行是红的（实测 2026-10-27 就是这么红的，退出码 120）。
+    #    要判的是"它能跑并打出自己的 banner"，所以先落地再看文本。
+    jwt_tool > /tmp/jwt_banner.txt 2>&1 || true; \
+    head -3 /tmp/jwt_banner.txt; \
+    grep -qi 'jwt_tool' /tmp/jwt_banner.txt \
+      || { echo "FATAL: jwt_tool 跑不出自己的 banner" >&2; exit 1; }; \
+    rm -f /tmp/jwt_banner.txt
+
+# ── 5) 源码编译两件（cmake/g++ 已在上面装）──────────────────────────
+#   bkcrack —— zip 的 Biham-Kocher 已知明文攻击（没有明文头也能打）
+#   pcapfix —— 修复被截断/写坏的 pcap（题目给坏包时先修再用 tshark）
+COPY vendor/bkcrack /tmp/bkcrack
+COPY vendor/pcapfix /tmp/pcapfix
+RUN set -eux; \
+    cmake -S /tmp/bkcrack -B /tmp/bkcrack/build -DCMAKE_BUILD_TYPE=Release; \
+    cmake --build /tmp/bkcrack/build -j"$(nproc)"; \
+    # ⚠️ 不能假设产物就在 build/bkcrack：上游 CMakeLists 把可执行文件目标
+    #    放在 build/src/ 下（实测 2026-10-27 `install: cannot stat
+    #    '/tmp/bkcrack/build/bkcrack'`）。用 find 找，找不到就把树打出来。
+    BKBIN="$(find /tmp/bkcrack/build -type f -name bkcrack -perm -u+x | head -1)"; \
+    test -n "$BKBIN" || { echo "FATAL: bkcrack 编译完成但没找到可执行文件" >&2; \
+                          find /tmp/bkcrack/build -maxdepth 3 -type f | head -20 >&2; exit 1; }; \
+    install -m 0755 "$BKBIN" /usr/local/bin/bkcrack; \
+    make -C /tmp/pcapfix; \
+    install -m 0755 /tmp/pcapfix/pcapfix /usr/local/bin/pcapfix; \
+    rm -rf /tmp/bkcrack /tmp/pcapfix /tmp/bkcrack_src; \
+    # 自检同样是"落地再看文本"：bkcrack 无参时打 usage 且退出码非 0，
+    # 直接 `bkcrack | head` 会在 pipefail 下变红（jwt_tool 踩过同一个坑）。
+    bkcrack > /tmp/bk.txt 2>&1 || true; head -3 /tmp/bk.txt; \
+    grep -qi 'bkcrack' /tmp/bk.txt || { echo "FATAL: bkcrack 跑不出 usage" >&2; exit 1; }; \
+    rm -f /tmp/bk.txt
+
+# ── 6) repak：UE4/5 的 .pak/.utoc 解包 ─────────────────────────────
+# Rust 写的单文件二进制，预编译版随 vendor/ 带进来（构建期不联网）。
+# 为什么它值得单独装：`千千的咲` 那类题的关键资源就藏在 .utoc/.ucas 里，
+# 而容器里没有任何能打开 UE 包的工具 —— 模型只能盲猜。
+COPY vendor/repak/repak /usr/local/bin/repak
+RUN set -eux; chmod 0755 /usr/local/bin/repak; repak --help >/dev/null
+
+# ── 7) nuclei 模板库 ───────────────────────────────────────────────
+# nuclei 二进制镜像里早就有，但**一个模板都没有** —— 没模板的 nuclei
+# 跑起来只会说「no templates provided」，等于空壳。
+# 这里放精简子集（http/dns/network/ssl/headless/dast/javascript/workflows/
+# file/code），砍掉 cloud/tencent 那类对 CTF 无用的体量。
+COPY vendor/nuclei-templates /opt/nuclei-templates
+RUN set -eux; \
+    printf '  templates: %s 个 yaml\n' "$(find /opt/nuclei-templates -name '*.yaml' | wc -l)"; \
+    mkdir -p /root /home/solver; \
+    ln -sfn /opt/nuclei-templates /root/nuclei-templates; \
+    ln -sfn /opt/nuclei-templates /home/solver/nuclei-templates
+
+# ── 8) 收尾自检：这一档的每个入口都必须真的能被执行 ────────────────
+# 只 `command -v` 是不够的（能被找到但一跑就崩，正是本项目最讨厌的
+# 「假工具」）。这里逐个跑一个最小调用。
+# ── 8.5) foremost：photorec 的替代（Kali 源里没有 photorec 包）────────
+#   Kali 的 `testdisk` 包只装 /usr/bin/testdisk，`apt-cache policy photorec`
+#   的 Candidate 是 (none)（2026-10-27 实测）。文件雕复/恢复的能力用
+#   foremost（1.5.7-12+b1）补上——`foremost -i img -o out` 一样能按文件头捞。
+#   放在这一段而不是最上面的 apt 段，是为了不动前面已构建好的缓存层。
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends foremost \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    # 别断言 photorec：Kali 源里没有这个包（详见上面 apt 段的注释），
+    # 用 foremost 顶上；testdisk 本身也一并要活着。
+    for c in qrencode zbarimg unrar vol fenjing stegoveritas \
+             sstimap jwt_tool bkcrack pcapfix repak nuclei \
+             testdisk foremost; do \
+        command -v "$c" >/dev/null || { echo "缺工具: $c" >&2; exit 1; }; \
+    done; \
+    qrencode -o /tmp/q.png 'ok'; zbarimg -q /tmp/q.png | grep -q 'ok'; rm -f /tmp/q.png; \
+    vol --help >/dev/null; \
+    fenjing --help >/dev/null 2>&1 || fenjing --version >/dev/null 2>&1 || true; \
+    stegoveritas -h >/dev/null 2>&1 || true; \
+    repak --help >/dev/null; \
+    bkcrack 2>&1 | grep -qi 'known plaintext' || true; \
+    echo "A 档自检通过"
+
+# 恢复非 root 用户：runner 依赖 uid=1000 才能写 /work（见上文 chown）。
+USER solver

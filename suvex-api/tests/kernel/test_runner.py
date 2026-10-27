@@ -3787,3 +3787,100 @@ def test_the_engine_receives_the_wall_clock_and_warns_before_it_hits() -> None:
     # 催促里必须带具体秒数（不是只写「预算已用 X%」）。
     joined = "\n".join(final_notes)
     assert "只剩" in joined and "秒" in joined, f"催促应给出具体剩余时间：{joined[:300]}"
+# ─────────────────────────────────────────────────────────────────────
+# `extra_env` 不能承载凭据
+# ─────────────────────────────────────────────────────────────────────
+#
+# 这里的判据来自一次真实发现：`SandboxContainer.__init__` 里原本只有
+# 一句注释声称「有测试盯着」，但那条测试从来没写。而 `extra_env`
+# 会被原样展开成 `-e KEY=VALUE` 进解题容器 —— 容器里的 agent 能读
+# 自己的环境变量，所以一个漏进去的令牌等于交到被审计代码手里。
+
+
+def test_无害开关可以进_extra_env():
+    """正面样本：真实调用点传的就是这个，不能把正常路径堵死。"""
+    container = runner.SandboxContainer(
+        name="probe-extra-env",
+        image="python:3.12",
+        workspace_dir=None,
+        extra_env={"PWNLIB_NOTERM": "1"},
+    )
+    assert container.extra_env == {"PWNLIB_NOTERM": "1"}
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "GITHUB_TOKEN",
+        "GH_TOKEN",
+        "MY_API_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+        "DB_PASSWORD",
+        "SUPEX_JWT_SECRET",
+        "PRIVATE_KEY_PATH",
+        "AUTHORIZATION",
+        "OPENAI_API_KEY",
+        "SESSION_COOKIE",
+    ],
+)
+def test_凭据键_无论什么变体都被拒(key: str):
+    """按子串匹配，所以前缀/后缀/大小写变体都盖住 ——
+    凭据键名没有统一命名，精确名单一定会漏。"""
+    with pytest.raises(runner.KernelSandboxError) as excinfo:
+        runner.SandboxContainer(
+            name="probe-extra-env",
+            image="python:3.12",
+            workspace_dir=None,
+            extra_env={key: "some-value"},
+        )
+
+    message = str(excinfo.value)
+    assert key in message, f"报错必须点名是哪个键，实际：{message}"
+    assert "extra_env" in message
+
+
+def test_大小写不敏感():
+    """`github_token` 与 `GITHUB_TOKEN` 一样危险。"""
+    with pytest.raises(runner.KernelSandboxError):
+        runner.SandboxContainer(
+            name="probe-extra-env",
+            image="python:3.12",
+            workspace_dir=None,
+            extra_env={"github_token": "ghp_xxx"},
+        )
+
+
+def test_多个违规键一次全报出来():
+    """一次报全，不要让人改一个跑一次。
+
+    注意不要断言「无害键不出现在报错里」：报错正文**故意**举了
+    `PWNLIB_NOTERM=1` 作为"该传什么"的例子，那是有效信息。
+    要验的是「两个违规键都在被点名的那份清单里」，所以只切
+    `：...。` 之间那段看。
+    """
+    with pytest.raises(runner.KernelSandboxError) as excinfo:
+        runner.SandboxContainer(
+            name="probe-extra-env",
+            image="python:3.12",
+            workspace_dir=None,
+            extra_env={"GITHUB_TOKEN": "a", "PWNLIB_NOTERM": "1", "DB_PASSWORD": "b"},
+        )
+
+    message = str(excinfo.value)
+    # 违规清单在第一个「：」与随后的「。」之间。
+    listed = message.split("：", 1)[1].split("。", 1)[0]
+    assert "GITHUB_TOKEN" in listed, f"违规清单里没有 GITHUB_TOKEN：{listed}"
+    assert "DB_PASSWORD" in listed, f"违规清单里没有 DB_PASSWORD：{listed}"
+    assert "PWNLIB_NOTERM" not in listed, f"无害键被算进了违规清单：{listed}"
+
+
+def test_空_extra_env_不受影响():
+    """默认路径（绝大多数调用点不传）必须毫无感觉。"""
+    for value in (None, {}):
+        container = runner.SandboxContainer(
+            name="probe-extra-env",
+            image="python:3.12",
+            workspace_dir=None,
+            extra_env=value,
+        )
+        assert container.extra_env == {}

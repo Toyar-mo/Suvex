@@ -560,3 +560,145 @@ def test_slack_text_starts_with_the_conclusion() -> None:
 
     assert text.startswith("https://example.com")
     assert "扫描完成" in text
+
+
+# ══════════════════════════════════════════════════════════
+# 七、`notify_on_critical_immediate` 的**消费端**（v0.90）
+# ══════════════════════════════════════════════════════════
+#
+# 2026-10-26 审计发现：这个开关能被保存、能被回显，但**没有任何投递路径读它**。
+# 设置页原本写着「不等扫描结束，边跑边发」，而实际投递只在扫描收尾发生一次。
+#
+# v0.90 把它接上了：`_import_for` 在**新建**出 critical 记录时入队一条
+# `scan.critical`，`dispatch` 按 `payload.event` 分派到
+# `should_notify_critical`。下面这些用例钉住三件事：
+#
+# 1. 开关真的说话（关掉就不发）；
+# 2. 两个开关**互不蕴含**（关掉收尾回执不该连告警一起静音）；
+# 3. 载荷的 `event` 真的进 webhook body（那是接收方脚本的分派键）。
+#
+# ⚠️ 历史的教训留在这里：这些断言原来是反的（断言"它没有作用"）。
+#    反转它们的原因不是断言写错了，而是**行为变了** —— 一个钉住
+#    "某功能没接上"的测试，唯一正确的处理就是在接上时反转它，
+#    否则它会开始保护那个 bug。
+
+
+def test_critical_immediate_off_means_no_alert(db_session: Any) -> None:
+    """开关关掉时，途中告警不发 —— 且原因说得清是哪个开关。"""
+    from app.settings import dispatch as d
+
+    payload = _payload(severity="critical", status="running", event=d.EVENT_SCAN_CRITICAL)
+    rule = _rule(db_session, notify_on_critical_immediate=False)
+
+    should, reason = d.should_notify_critical(rule, payload)
+    assert should is False
+    assert "立即通知" in reason
+
+
+def test_critical_immediate_on_means_alert_even_if_complete_off(db_session: Any) -> None:
+    """两个开关互不蕴含：关掉「扫描结束时通知」不该连告警一起静音。
+
+    ★ 这是这条路径最容易写错的地方 —— 顺手加一句
+      `if not rule.notify_on_scan_complete: return False` 看着很自然
+      （"都没开通知还发什么"），但关掉回执的**常见理由**恰恰是
+      "别每次都吵我，只在真出事时叫我"。串起来就正好灭了他们唯一的告警。
+    """
+    from app.settings import dispatch as d
+
+    payload = _payload(severity="critical", status="running", event=d.EVENT_SCAN_CRITICAL)
+    rule = _rule(db_session, notify_on_critical_immediate=True, notify_on_scan_complete=False)
+
+    should, _reason = d.should_notify_critical(rule, payload)
+    assert should is True
+
+
+def test_critical_alert_ignores_min_severity(db_session: Any) -> None:
+    """`min_severity` 是**收尾**时的判断，不该影响途中告警。
+
+    阈值最高只能选到 critical，而这条路上的事件本身已经是 critical ——
+    再比一次不算错，但会让"阈值"看起来对这条路也有语义，那是误导。
+    """
+    from app.settings import dispatch as d
+
+    payload = _payload(severity="critical", status="running", event=d.EVENT_SCAN_CRITICAL)
+    # 阈值选到 critical（最严），告警仍然该发：它就是 critical。
+    rule = _rule(db_session, min_severity="critical", notify_on_critical_immediate=True)
+
+    should, _reason = d.should_notify_critical(rule, payload)
+    assert should is True
+
+
+def test_critical_path_rejects_non_critical_payload(db_session: Any) -> None:
+    """走错门的载荷要被挡住，而不是发出去。
+
+    `_import_for` 只在 `created_max_severity == "critical"` 时入队，
+    所以正常情况下不会出现 non-critical 的 `scan.critical` 载荷。
+    但"正常情况下不会"不是判据 —— 拼错一个字段名就会造出这种载荷，
+    而它发出去会让接收方以为出了严重问题。
+    """
+    from app.settings import dispatch as d
+
+    high = _payload(severity="high", status="running", event=d.EVENT_SCAN_CRITICAL)
+    rule = _rule(db_session, notify_on_critical_immediate=True)
+
+    should, reason = d.should_notify_critical(rule, high)
+    assert should is False
+    assert "critical" in reason
+
+
+def test_finished_payload_is_not_judged_by_critical_rule(db_session: Any) -> None:
+    """收尾载荷交给 `should_notify_critical` 一定被拒 —— 它走的是另一条路。"""
+    from app.settings import dispatch as d
+
+    finished = _payload(severity="critical", status="completed")
+    rule = _rule(db_session, notify_on_critical_immediate=True)
+
+    should, reason = d.should_notify_critical(rule, finished)
+    assert should is False
+    assert d.EVENT_SCAN_FINISHED in reason
+
+
+def test_webhook_event_field_carries_the_dispatch_key() -> None:
+    """`event` 是写给**别人的脚本**做 `if event == ...` 分派用的。
+
+    所以它必须真的出现在 body 里，且两个路径取不同的值。
+    """
+    from app.settings import dispatch as d
+
+    finished = _payload().as_webhook_body()
+    critical = _payload(event=d.EVENT_SCAN_CRITICAL).as_webhook_body()
+
+    assert finished["event"] == d.EVENT_SCAN_FINISHED
+    assert critical["event"] == d.EVENT_SCAN_CRITICAL
+    # 别的字段不该因为这个新字段而变形
+    assert finished["scan_id"] == critical["scan_id"] == "scan_1"
+
+
+def test_dispatch_routes_critical_payload_to_the_critical_rule(
+    db_session: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`dispatch()` 按 `payload.event` 选判断函数，而不是永远用 `should_notify`。
+
+    ★ 用打桩断言"选了哪个判断函数"，而不是断言最终发出的字节 —
+      因为 `should_notify` 在 `critical + completed` 上也会返回 True
+      （阈值允许时），于是"选错函数"这件事在结果上**看不出来**。
+    """
+    from app.settings import dispatch as d
+
+    used: list[str] = []
+
+    def fake_finished(rule: Any, payload: Any) -> tuple[bool, str]:
+        used.append("finished")
+        return False, "stub"
+
+    def fake_critical(rule: Any, payload: Any) -> tuple[bool, str]:
+        used.append("critical")
+        return False, "stub"
+
+    monkeypatch.setattr(d, "should_notify", fake_finished)
+    monkeypatch.setattr(d, "should_notify_critical", fake_critical)
+
+    d.dispatch(db_session, _payload(event=d.EVENT_SCAN_FINISHED))
+    d.dispatch(db_session, _payload(event=d.EVENT_SCAN_CRITICAL))
+
+    assert used == ["finished", "critical"]

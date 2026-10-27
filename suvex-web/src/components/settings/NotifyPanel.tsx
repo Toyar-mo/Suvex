@@ -173,7 +173,19 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
         <Toggle
           id="notice-complete"
           label="扫描结束时通知"
-          hint="即使没有发现问题也发一条，用于确认扫描确实跑完了。"
+          hint={
+            // ⚠️ 这里原写「即使没有发现问题也发一条」——只有在阈值选到
+            //    「信息」时才成立。干净扫描的 severity 是 `info`（rank 0），
+            //    而 `dispatch._passes_severity` 在 `notify_on_scan_complete`
+            //    之后还要过一遍阈值：默认 `min_severity=high`（rank 3），
+            //    `0 >= 3` 为假 ⇒ **不发**。而"确认扫描确实跑完了"正是
+            //    用户打开这个开关的全部目的 —— 所以必须把前提说出来。
+            draft.minSeverity === 'info'
+              ? '扫描结束时发一条，包括没有发现任何问题的情况（阈值已选到「信息」）。'
+              : `扫描结束时发一条，但仍受上面的阈值约束：没有发现问题、或问题都低于「${
+                  SEVERITY_META[draft.minSeverity as Severity].label
+                }」时不会发。想每次都收到回执，把阈值选到「信息」。`
+          }
           checked={draft.notifyOnScanComplete}
           onChange={(v) => setDraft({ ...draft, notifyOnScanComplete: v })}
         />
@@ -181,7 +193,20 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
         <Toggle
           id="notice-critical"
           label="发现严重问题时立即通知"
-          hint="不等扫描结束，边跑边发 —— 早一分钟知道就少一分钟暴露窗口。"
+          hint={
+            // ★ v0.90 起真的生效了：`scheduler._import_for` 在**新建**出
+            //    critical 记录时入队一条 `scan.critical`，`dispatch` 按
+            //    `payload.event` 分派到 `should_notify_critical`。
+            //
+            // 三件用户需要知道的事，都写进来（少写哪一条都会让他误解）：
+            //   · 它不受上面的阈值约束（阈值是收尾判断，这条路上事件本身就是
+            //     critical）—— 不写的话，把阈值调到 critical 的人会以为
+            //     "那这个开关就没用了"；
+            //   · 它跟「扫描结束时通知」是两个开关，关掉回执不影响它；
+            //   · 每条扫描最多叫一次，不是每条漏洞都叫一次。
+            '扫描过程中一旦发现「严重」级问题就立即发一条，不需要等扫描跑完。不受上面的阈值约束，' +
+            '也与「扫描结束时通知」互不影响。同一次扫描只发一条，后续再出现严重问题不会重复打扰。'
+          }
           checked={draft.notifyOnCriticalImmediate}
           onChange={(v) => setDraft({ ...draft, notifyOnCriticalImmediate: v })}
         />
@@ -610,7 +635,7 @@ function ChannelEditor({
             type="button"
             onClick={handleTest}
             disabled={testing}
-            title="当前只校验地址形状，不会真的发送"
+            title="会对 Webhook / Slack 真的发一条测试消息；邮件尚未接入"
             className={cn(
               'inline-flex h-9 items-center gap-1.5 rounded-sm border px-3 text-xs transition-ui duration-fast',
               testing
@@ -622,7 +647,7 @@ function ChannelEditor({
             {testing ? '正在发送…' : '发送测试消息'}
           </button>
 
-          <span className="text-2xs text-ink-faint">接口只做本地校验 —— 点它不会真的发出通知</span>
+          <span className="text-2xs text-ink-faint">Webhook / Slack 会真的收到一条测试消息；邮件渠道暂不支持</span>
 
           {testState.kind === 'saved' && (
             <span role="status" className="inline-flex items-center gap-1 text-2xs text-signal-ok">

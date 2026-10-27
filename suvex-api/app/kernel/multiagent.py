@@ -65,10 +65,12 @@ from app.kernel import termination
 from app.kernel.client import KernelError
 from app.kernel.runner import (
     TOOL_NAMES,
+    ImagePayload,
     LlmGateway,
     SandboxContainer,
     SolveOutcome,
     SolveSpec,
+    attach_images,
     _final_stretch_note,
     _format_action_results,
     _format_reminder,
@@ -2376,6 +2378,24 @@ def _do_update_todo(args: dict[str, Any], *, coord: AgentCoordinator) -> str:
     )
 
 
+def _clip_for_log(text: str, limit: int) -> str:
+    """截断并**留下可见标记**。
+
+    裸切片（`text[:200]`）在日志里制造了一类真实误判：截断后的内容看起来
+    就是完整内容，于是「字段缺失」「JSON 不完整」会被当成产品缺陷去查。
+    实测被误导过一次 —— 某条记录里位于 JSON 最末尾的字段正好被切掉，
+    解析出 `None`，一度判定「服务端会拒」。
+
+    `app/scans/events.py` 的 `_clip` 早就这么做了，这里补上，
+    让两条路径同一套规矩。
+
+    标记里带原始长度：知道「原来多长」才能判断截掉的东西值不值得再去看。
+    """
+    if len(text) <= limit:
+        return text
+    return f"{text[:limit]}…（已截断，原长 {len(text)} 字符）"
+
+
 def _do_amend_threat_model(
     args: dict[str, Any], *, coord: AgentCoordinator, me: AgentNode
 ) -> str:
@@ -2460,6 +2480,31 @@ async def run_agent_loop(
 
     def _messages() -> list[dict[str, str]]:
         return [base_message, *recent]
+
+    #: ★ v1.04：本轮攒下的图（`view_image` 写进来）。与单循环同源，
+    #: 理由见 `runner.ImagePayload` 的 docstring 与 `_solve` 里
+    #: `turn_images` 的注释（一句话：图只挂一轮，常驻会每轮重发吃光上下文）。
+    #:
+    #: ⚠️ 这里是**每个 agent 各一份** —— `run_agent_loop` 是每个节点一次
+    #: 调用，局部变量天然隔离。所以 root 截的图不会被 child 看到，
+    #: 反之亦然。这是对的：图是"这条推理线自己眼前的证据"。
+    turn_images: list[ImagePayload] = []
+
+    def _messages_with_images() -> list[dict[str, Any]]:
+        """本轮的完整消息（含刚挂上的图）。**发完就清空 `turn_images`**。
+
+        挂法本身在 `runner.attach_images()` —— 与单循环共用同一份实现。
+        两个调用点各写一份必然分叉，症状是"单循环能看图、多智能体看不见"，
+        而多智能体在开关打开时是**默认**路径：那种缺口最难发现，因为
+        单循环的测试全绿。
+
+        ⚠️ 没图时提前返回：`anthropic=gateway.anthropic` 是实参，无图时
+        也会被求值，而它只在 `_image_block()` 里二选一形状 —— 没图时
+        一个字节都不影响结果。不该让"看图"给"不看图"的路径加前置条件。
+        """
+        if not turn_images:
+            return _messages()
+        return attach_images(_messages(), turn_images, anthropic=gateway.anthropic)
 
     def notify(kind: str, summary: str, payload: dict[str, str]) -> None:
         if on_progress is None:
@@ -2611,7 +2656,7 @@ async def run_agent_loop(
             if _constraints:
                 _sys = system_prompt + "\n\n" + _constraints
         try:
-            reply = await gateway.chat(_messages(), system=_sys)
+            reply = await gateway.chat(_messages_with_images(), system=_sys)
         except KernelError as exc:
             outcome.error = exc.message
             log.append(f"[{node.agent_id} t{turn}] LLM 失败：{exc.message}")
@@ -2686,7 +2731,7 @@ async def run_agent_loop(
         actions = parse_actions(text)
         if not actions:
             if len(text.strip()) >= 20:
-                notify("reasoning", text.strip()[:200], {"text": text.strip()})
+                notify("reasoning", _clip_for_log(text.strip(), 200), {"text": text.strip()})
             reminder = _truncation_reminder(len(text)) if truncated else _format_reminder()
             recent.append({"role": "user", "content": reminder})
             continue
@@ -2696,11 +2741,14 @@ async def run_agent_loop(
         completed: list[tuple[str, str, str, str]] = []
         narration = _narration_before_action(text)
         if narration:
-            notify("reasoning", narration[:200], {"text": narration})
+            notify("reasoning", _clip_for_log(narration, 200), {"text": narration})
 
         for tool_name, tool_args in batch:
             command = str(tool_args.get("command") or json.dumps(tool_args, ensure_ascii=False))
-            log.append(f"[{node.agent_id} t{turn}] tool {tool_name} {json.dumps(tool_args, ensure_ascii=False)[:400]}")
+            log.append(
+                f"[{node.agent_id} t{turn}] tool {tool_name} "
+                f"{_clip_for_log(json.dumps(tool_args, ensure_ascii=False), 400)}"
+            )
 
             # ★ v0.76：登记这一轮有没有真的向目标发请求。门的"原地打转"
             #   判定靠这个滑窗（见 `_looks_like_acting` 的顺序说明）。
@@ -2740,7 +2788,14 @@ async def run_agent_loop(
                     spec=spec,
                 )
             else:
-                result = await dispatch_tool(tool_name, tool_args, spec=spec, sandbox=sandbox, http=http)
+                result = await dispatch_tool(
+                    tool_name,
+                    tool_args,
+                    spec=spec,
+                    sandbox=sandbox,
+                    http=http,
+                    images=turn_images,
+                )
 
             log.append(f"[{node.agent_id} t{turn}] result: {result[:1500]}")
             outcome.tool_outputs.append(result)
@@ -2826,7 +2881,7 @@ async def run_agent_loop(
             completed.append((tool_name, command, result[:3000], repeated_note))
             notify(
                 "tool_call",
-                f"{tool_name} {command}"[:200],
+                _clip_for_log(f"{tool_name} {command}", 200),
                 {"tool": tool_name, "command": command, "output": result},
             )
 

@@ -20,19 +20,53 @@ strix 的开源 skills 目录**（Apache-2.0，见各文件头部），我们挑
 我们**不** import strix、不依赖它的运行环境 —— 镜像里没有 strix 也能用。
 
 ⚠️ 挑选时的一条硬纪律（踩过的坑）：**只 vendor 与镜像真实工具对得上的
-playbook**。实测本镜像里 `nuclei`/`katana`/`naabu`/`subfinder`/`semgrep`
-都**没装**，`httpx` 是 Python 库的 CLI 而不是 ProjectDiscovery 的 httpx 工具。
-把讲这些工具的 skill 塞进来，等于教模型用不存在的命令 —— 正是我们反复
-强调的「工具在镜像里 ≠ 你能用」那个反例。所以只留了真正能跑的那几个。
+playbook**。把讲镜像里没有的命令的 skill 塞进来，等于教模型用不存在的
+命令 —— 正是我们反复强调的「工具在镜像里 ≠ 你能用」那个反例。
+
+## 工具可用性必须对着 Dockerfile 说话，不能凭记忆
+
+这条纪律最早是"发现一堆工具没装，于是砍掉一半技能"的产物。但它有个
+反向陷阱：**工具装上之后，这份注释仍写着"没装"，于是新技能白白被拒**。
+2026-10-26 就发生过 —— 当时 `nuclei`/`katana`/`naabu`/`subfinder` 确实
+没装（下面提到的原始版本就是这么写的），后来按用户指令把它们连同
+`httpx-toolkit`/`hurl`/`gitleaks`/`trufflehog` 一起装进镜像，注释却没人改。
+
+所以现在的判据是**对着 `docker/suvex-sandbox/Dockerfile` 推导**，而不是
+读这段注释：
+
+  · `apt-get install` 的参数列表 = 镜像里会有的包
+  · 包名 ≠ 二进制名的情况单独映射（`httpx-toolkit` → `httpx`、
+    `binutils` → `strings`/`objdump`/`readelf`…、`dnsutils` → `dig`/`host`）
+
+据此对账的脚本：`_tmp/triage_skills_v2.py`（分诊，只打印）与
+`_tmp/import_skills.py`（按结论导入）。两者共用同一份常量，避免两套标准漂移。
+
+### 当前状态（2026-10-26）
+
+`prompts/skills/` 共 **76 篇**：原有 34 篇 + 从 strix 上游导入 42 篇
+（Apache-2.0，来源标注写在各文件 frontmatter **之后**的 HTML 注释里）。
+
+仍**未装**因而仍是缺口的两样（skill 里提到、镜像里没有）：
+
+  · `semgrep` —— Kali 源返回 HTTP 404（实测），只能 pip 装；而 Kali 的
+    python3 已是 **3.14**，`ropper` 依赖的 `filebytes` 用了 3.12 移除的
+    `ast.Str`，装了就崩 —— 所以不轻易加 pip 包。`tooling/semgrep.md`
+    与提到它的两篇（`source_aware_sast`、`django`）因此**没有导入**。
+  · `amass` —— 默认跑很久，`subfinder` 已覆盖同一需求，故不装。
 
 ## 目录结构
 
     prompts/skills/
       analysis/          —— 闭环纪律（confirmed/ruled_out/needs_follow_up）
-      tooling/           —— nmap / ffuf / sqlmap 的命令行打法
-      vulnerabilities/   —— 各类漏洞的验证手法
-      protocols/         —— GraphQL 等协议
+      cloud/             —— AWS / Azure / GCP / Kubernetes
+      custom/            —— 按需组合的专项（API 规格测试、供应链混淆等）
+      frameworks/        —— FastAPI / NestJS / Next.js 等框架打法
+      methodology/       —— 方法与流程
+      protocols/         —— OAuth / GraphQL 等协议
       reconnaissance/    —— 攻击面发现
+      technologies/      —— 具体技术栈（Firebase / Supabase / AD 等）
+      tooling/           —— 单工具命令行打法（nmap / ffuf / sqlmap / httpx…）
+      vulnerabilities/   —— 各类漏洞的验证手法
 
 `name` 取文件名（去 `.md`），全局唯一 —— 它在 `load_skill` 的参数里出现，
 必须短、好敲、无歧义。

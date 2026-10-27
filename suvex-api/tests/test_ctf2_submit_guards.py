@@ -276,13 +276,43 @@ def test_sandbox_gets_a_writable_tmp() -> None:
     不给的话 `cmake` / `gcc` / `john` / `hashcat` 这些默认写 `/tmp` 的工具
     会报 `Permission denied` —— 那看起来像**镜像里缺东西**，
     而不是"挂载少给了一个目录"，排查方向会跑偏。
-    """
-    source = _code_of(runner.SandboxContainer._argv)
 
-    assert "/tmp" in source, (
+    ## ⚠️ 断言的是**拼出来的 argv**，不是 `_argv` 的源码文本
+
+    原来这条读 `_argv` 的源码做 `"/tmp" in source`。v0.102 的
+    `3c0437b` 把 `_argv` 拆成了 `_restricted_argv` / `_unrestricted_argv`
+    两个 helper，`/tmp` 的 tmpfs 落在前者里 —— 于是源码文本里不再有
+    `/tmp`，这条**假红**了（容器行为一点没变，实测 argv 里两个参数都在）。
+
+    源码文本断言本来就是这个毛病：谁把代码挪个位置就红一次，而红的
+    时候你无法区分"行为退化了"和"代码搬家了"。改成调用 `_argv()`
+    看**真正会传给 docker 的参数**，搬家不再影响它，而一旦真把
+    `--tmpfs /tmp` 删掉，它仍然会红 —— 这才是这条测试想守的东西。
+    """
+    argv = runner.SandboxContainer(name="tmpfs_probe", image="suvex-sandbox:latest")._argv()
+
+    # `--read-only` 是前提：没有它，容器本来就能写任意路径，这条测试
+    # 会变成"什么都没验证"。一起断言，防止将来有人顺手删掉只读根、
+    # 而 /tmp 的 tmpfs 变成一句没有意义的残留参数。
+    assert "--read-only" in argv, "容器不再是只读根 —— 那 /tmp 的 tmpfs 就没有意义了"
+
+    assert "--tmpfs" in argv, "容器没有挂任何 tmpfs —— `--read-only` 下工具写临时文件会失败"
+    tmpfs_values = [argv[i + 1] for i, a in enumerate(argv) if a == "--tmpfs" and i + 1 < len(argv)]
+    tmp_entries = [v for v in tmpfs_values if v.split(":")[0] == "/tmp"]
+    assert tmp_entries, (
         "容器没有可写的 /tmp —— `--read-only` 下工具写临时文件会失败，"
-        "而报错看起来像镜像缺东西。"
+        f"而报错看起来像镜像缺东西。实挂的 tmpfs：{tmpfs_values}"
     )
+    # 可写（`rw`）是这条的全部意义。只写 `/tmp` 而不带 `rw` 时 Docker
+    # 的默认行为恰好也是可写，但显式写出来才能防止有人照抄别的项目
+    # 改成 `:ro` 还以为是同一个东西。
+    #
+    # ⚠️ `rw` 是**粘在路径后面**的：`/tmp:rw,exec,size=...`。
+    #   所以按 `,` 切开后第一段是 `/tmp:rw` 而不是 `rw` —— 要再把
+    #   路径与选项用 `:` 分开才取得到。这里曾经写成 `"rw" in parts`
+    #   而直接假红（`parts` 里只有 `/tmp:rw`），别改回去。
+    options = tmp_entries[0].split(":", 1)[1].split(",")
+    assert "rw" in options, f"/tmp 的 tmpfs 不是可写的：{tmp_entries[0]}"
 
 
 def test_autosync_records_its_last_error() -> None:

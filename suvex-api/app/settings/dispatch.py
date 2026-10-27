@@ -103,6 +103,17 @@ _SEVERITY_RANK: Final[dict[str, int]] = {
 }
 
 
+#: 两种投递时机 —— 也是 webhook 载荷里 `event` 的两个取值。
+#:
+#: ★ 为什么是**两个互斥取值**，而不是"一个事件 + 一个 flag 字段"：
+#:   `event` 是写给**别人的脚本**做分派用的（`if event == "...": ...`）。
+#:   分派键就该是取值本身，而不是让接收方再读第二个字段才知道走哪条分支。
+EVENT_SCAN_FINISHED: Final[str] = "scan.finished"
+
+#: 扫描**过程中**发现严重问题。与 `scan.finished` 是两件事：
+#: 一条到了这一刻就完了，另一条后面还会有最终的收尾通知。
+EVENT_SCAN_CRITICAL: Final[str] = "scan.critical"
+
 #: 邮件渠道"这一轮不发"的标准说法。
 #:
 #: ★ 抽成常量而不是在两处各写一遍文案：`build_body`（批量投递路径）与
@@ -189,6 +200,15 @@ class NoticePayload:
     critical_count: int = 0
     high_count: int = 0
     scan_url: str | None = None
+    #: 这是哪一类通知：收尾（`EVENT_SCAN_FINISHED`）还是扫描途中的严重发现
+    #: （`EVENT_SCAN_CRITICAL`）。
+    #:
+    #: ★ 放在载荷里、而不是做 `dispatch(..., event=...)` 的第二个参数：
+    #:   `event` 会进 webhook 的 JSON body（对外协议的一部分），而 body 是
+    #:   `as_webhook_body()` 从载荷自身拼出来的。让载荷带着它，"这个载荷是
+    #:   什么事"就只有一处定义；拆成参数则两处都可能写错，且错的方式是
+    #:   接收方收到 `scan.finished` 却带着 semi-live 的 summary。
+    event: str = EVENT_SCAN_FINISHED
 
     def as_webhook_body(self) -> dict[str, Any]:
         """webhook 的 JSON 载荷。
@@ -197,7 +217,7 @@ class NoticePayload:
         集成协议，它的消费者是别人写的脚本，改一次名字就断一次。
         """
         return {
-            "event": "scan.finished",
+            "event": self.event,
             "scan_id": self.scan_id,
             "target": self.target,
             "status": self.status,
@@ -297,9 +317,11 @@ def should_notify(rule: NoticeRule, payload: NoticePayload) -> tuple[bool, str]:
 
     ## `notify_on_critical_immediate`
 
-    这个开关在**扫描结束时**没有作用 —— 它的意思是在扫描**过程中**
-    发现严重漏洞就立刻发。本轮只在收尾投递，所以它不影响这里的判断。
-    它在 `_SKIP_*` 之外的说明写在设置页上。
+    这个开关在**扫描结束时**没有作用 —— 它的意思是"扫描**过程中**发现严重
+    问题就立刻发"，那是一条**另外的**投递路径：`should_notify_critical`
+    （同样在本模块，由 `dispatch` 按 `payload.event` 分派）。收尾时再去问
+    它一次是错的：用户已经在扫描过程中被告警过了，收尾这条消息属于
+    `notify_on_scan_complete` 的语义。
     """
     if payload.status != "completed":
         # 失败 / 中止：一定发，只看渠道在不在（由 list_channels 决定）。
@@ -313,6 +335,33 @@ def should_notify(rule: NoticeRule, payload: NoticePayload) -> tuple[bool, str]:
             False,
             f"本次最高严重度是 {payload.severity}，低于规则的 {rule.min_severity}",
         )
+    return True, ""
+
+
+def should_notify_critical(rule: NoticeRule, payload: NoticePayload) -> tuple[bool, str]:
+    """按规则判断这条**扫描途中**的严重发现要不要立刻发。返回 `(发不发, 原因)`。
+
+    ## ★ 为什么它不看 `min_severity`
+
+    `min_severity` 问的是"这次扫描的结果值不值得叫我" —— 那是一个**收尾**
+    时的判断，用的是整次扫描的最高档。而本函数处理的事件本身已经是
+    `critical`（`_import_for` 只在新建记录的最高档是 critical 时才入队），
+    所以阈值在这条路上恒成立：`min_severity` 最高也只能是 critical。
+    再比一次不算错，但会让人以为这条路径还有别的阈值语义。
+
+    ## ★ 为什么它不看 `notify_on_scan_complete`
+
+    两个开关是**两件事**，可以只开一个：
+    「过程中出严重问题马上叫我」与「扫完了给我一条回执」互不蕴含。
+    把它们串成"要收尾通知才发即时告警"会让关掉回执的人连告警也收不到 ——
+    而关掉回执的常见理由恰恰是"别每次都吵我，只在真出事时叫我"。
+    """
+    if payload.event != EVENT_SCAN_CRITICAL:
+        return False, f"载荷事件是 {payload.event}，不是扫描途中的严重发现"
+    if payload.severity != Severity.CRITICAL.value:
+        return False, f"这一条的最高严重度是 {payload.severity}，不是 {Severity.CRITICAL.value}"
+    if not rule.notify_on_critical_immediate:
+        return False, "通知规则关掉了「发现严重问题时立即通知」"
     return True, ""
 
 
@@ -460,7 +509,15 @@ def dispatch_one(channel: NotifyChannel, payload: NoticePayload) -> ChannelResul
 def dispatch(db: Session, payload: NoticePayload) -> DispatchOutcome:
     """按规则与渠道把一条通知发出去。**同步**，调用方负责放到线程里。
 
-    流程：读规则 → 判断要不要发 → 读启用的渠道 → 逐条发 → 汇总。
+    流程：读规则 → 按 `payload.event` 选判断函数 → 判断要不要发
+          → 读启用的渠道 → 逐条发 → 汇总。
+
+    ## ★ 两条投递路径共用这一个入口
+
+    `payload.event` 决定用哪套规则判断：
+    `scan.finished` → `should_notify`，`scan.critical` → `should_notify_critical`。
+    发送、失败回写、日志那段**完全一样** —— 所以它不该有两份。分成两个
+    `dispatch()` 会让"失败时写不写 `verify_error`"这类行为在两处慢慢漂移。
 
     ## ★ 一条渠道的失败不影响其他渠道
 
@@ -477,7 +534,8 @@ def dispatch(db: Session, payload: NoticePayload) -> DispatchOutcome:
     from app.settings.service import get_notice_rule, mark_channel_verified
 
     rule = get_notice_rule(db)
-    ok, reason = should_notify(rule, payload)
+    judge = should_notify_critical if payload.event == EVENT_SCAN_CRITICAL else should_notify
+    ok, reason = judge(rule, payload)
     if not ok:
         return DispatchOutcome(skipped=True, skip_reason=reason)
 
@@ -538,7 +596,8 @@ def dispatch(db: Session, payload: NoticePayload) -> DispatchOutcome:
             )
 
     logger.info(
-        "通知已投递 scan=%s sent=%d failed=%d",
+        "通知已投递 event=%s scan=%s sent=%d failed=%d",
+        payload.event,
         payload.scan_id,
         outcome.sent,
         outcome.failed,

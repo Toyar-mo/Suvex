@@ -565,6 +565,87 @@ def test_files_404_for_builtin(ready_client) -> None:  # noqa: ANN001
     assert resp.status_code == 404, resp.text
 
 
+def test_builtin_skill_detail_returns_body(ready_client) -> None:  # noqa: ANN001
+    """★ 内置技能的详情必须回正文 —— 只读 ≠ 不可知。
+
+    ## 这条测试在钉什么（2026-10-26 加）
+
+    原实现只给自定义技能回 `body`，内置回空串，理由写的是
+    「内置的改不了，回显它也没有用」。
+
+    那个理由是错的，而且错得很贵：76 篇技能里 72 篇是内置的，
+    真正决定模型行为的是这 72 篇。界面上一片空白的效果是 ——
+    一篇内置技能教了内核里不存在的命令（`create_vulnerability_report`
+    这种 strix 遗留工具名），页面上完全看不见，只能去 grep 源码才发现。
+    「改不了」不该推出「看不见」。
+
+    ## 断言的形状
+
+    不满足于 `body != ""`：
+      · `len(body) > 500` —— 一篇真技能不会短于这个数，防空壳；
+      · `body` 里没有 `---` 包裹的 frontmatter —— 描述已经结构化成字段了，
+        正文再出现一遍会让人以为那是可编辑的内容；
+      · `lineCount > 0` —— 界面靠它显示"多少行"，两者必须是同一个来源。
+    """
+    builtin = skills_mod.discover_skills()[0]
+    resp = ready_client.get(f"{API}/kernel/skills/{builtin.name}")
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+
+    assert payload["source"] == "builtin"
+    body = payload["body"]
+    assert len(body) > 500, f"内置技能 {builtin.name} 回的正文只有 {len(body)} 字符"
+    assert not body.lstrip().startswith("---"), "正文里还带着 frontmatter"
+    assert payload["lineCount"] > 1
+
+
+def test_builtin_and_custom_both_return_body(ready_client) -> None:  # noqa: ANN001
+    """内置与自定义的正文走同一条路，判据只有一个：能不能读到文件。
+
+    ★ 分开测而不是只测内置：`get_kernel_skill` 里是一个 if/else 分叉，
+      只测一边的话，另一边被删掉也不会有人发现。
+    """
+    ready_client.post(
+        f"{API}/kernel/skills",
+        json={
+            "name": "body-parity",
+            "category": "demo",
+            "description": "对比正文",
+            "body": "# 自定义正文\n\n这一篇是自定义的。",
+        },
+    )
+    custom = ready_client.get(f"{API}/kernel/skills/body-parity").json()
+    assert custom["source"] == "custom"
+    assert "自定义正文" in custom["body"]
+
+    builtin_name = skills_mod.discover_skills()[0].name
+    builtin = ready_client.get(f"{API}/kernel/skills/{builtin_name}").json()
+    assert builtin["source"] == "builtin"
+    assert builtin["body"], "内置技能的 body 又变回空串了"
+
+
+def test_builtin_body_is_read_only_not_write_blocked(ready_client) -> None:  # noqa: ANN001
+    """能看见正文 **不** 等于能改 —— 读与写的边界必须分开钉。
+
+    这条测试是为了防止一种"修得太宽"的回归：为了让界面显示正文，
+    顺手把写路径也放开了。内置技能改不了，是因为部署会整目录覆盖，
+    用户改完下次部署就消失 —— 那个理由与"能不能看见"无关。
+    """
+    builtin_name = skills_mod.discover_skills()[0].name
+    resp = ready_client.put(
+        f"{API}/kernel/skills/{builtin_name}",
+        json={
+            "name": builtin_name,
+            "category": skills_mod.discover_skills()[0].category,
+            "description": "试图改内置",
+            "body": "# 被改过了",
+        },
+    )
+    assert resp.status_code in (400, 403), (
+        f"内置技能竟然被改了，状态码 {resp.status_code}：{resp.text}"
+    )
+
+
 def test_files_404_for_missing_skill(ready_client) -> None:  # noqa: ANN001
     """不存在的技能 → 404。"""
     resp = ready_client.get(f"{API}/kernel/skills/does-not-exist/files")

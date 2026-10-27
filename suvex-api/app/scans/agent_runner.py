@@ -84,6 +84,7 @@ from app.scans.runner import (
     LaunchResult,
     LaunchSpec,
     RunnerUnavailable,
+    challenge_dir,
 )
 
 logger = logging.getLogger("suvex.scans.agent")
@@ -383,9 +384,41 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _scan_attachments(scan_id: str) -> tuple[Path, ...]:
+    """这次扫描的题目附件（宿主侧路径），供 `SolveSpec.attachments`。
+
+    ## 为什么需要它（2026-10-27 修，真跑实测）
+
+    这里是**扫描**路径，附件睡在 `challenge_dir(scan_id)`（`_scan_runs/<id>/challenge/`，
+    由 `uploads.claim()` 解压铺好）。而 `SolveSpec.attachments` 原本被写死成
+    空元组，于是：
+
+    · `read_attachment` 永远回"没有这个附件"（它在 `spec.attachments` 里按名字找）；
+    · 初始提示词里"## 附件"整段不出现 —— 模型不知道 `/work/attachments` 有东西。
+
+    实测后果：一道 97 MB 的题，容器里附件其实已经挂上了（修完挂载之后），
+    但模型仍然说"本题没有附件"，把轮次花去 `grep -rI /` 盲搜。
+
+    ## 口径
+
+    只收**文件**（跳过目录与隐藏文件，与 `scans.runner._workspace_files`
+    同一口径）；目录不存在时返回空元组 —— 这题真没附件，行为与修之前一致。
+
+    ⚠️ 这里**不判压缩包**：`claim()` 已经解过包了（`archive.stage`），
+    落到这个目录里的是**解出来的素材**。再解一次会把题目解成两层。
+    """
+    directory = challenge_dir(scan_id)
+    if not directory.is_dir():
+        return ()
+    return tuple(
+        path
+        for path in sorted(directory.iterdir())
+        if path.is_file() and not path.name.startswith(".")
+    )
+
+
 def _bare_model_name(model: str) -> str:
     """把 LiteLLM 路由前缀去掉，得到接入点真正认的裸 model 名。
-
     ## 为什么需要这一步（这是真跑踩出来的）
 
     `scans/service.build_spec` 给 `LaunchSpec.llm_model` 填的是 **LiteLLM 格式**
@@ -483,6 +516,29 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
 
     # 沙箱名：与 ctf2 的命名规则区分（`ctf2-` 前缀），避免混淆清理逻辑。
     sandbox_name = f"suvex-scan-{spec.scan_id[-12:]}"
+
+    # ★★ 题目附件必须**挂进**沙箱（2026-10-27 修，实测发现）。
+    #
+    # ## 修之前是什么样
+    #
+    # 这里**只传了 workspace_dir**，`attachments_dir` 用的是默认值 `None` ——
+    # 于是 `SandboxContainer._argv` 里那条 `-v <dir>:/work/attachments:ro`
+    # 根本不会生成。而 `uploads.claim()` 把（解包后的）题目素材铺在
+    # `challenge_dir(scan_id)`，那是宿主侧路径，容器里看不见。
+    #
+    # 实测症状（一道 97 MB 的 Android/UE 逆向题）：
+    #   · 宿主 `_scan_runs/<id>/challenge/千千的咲.apk` 105,774,224 字节，在；
+    #   · 容器里 `ls /work/attachments` → `No such file or directory`；
+    #   · 模型第一轮就下结论"本题没有附件"，然后拿 348 轮去 `grep -rI /`
+    #     盲搜整个文件系统，还尝试去 `ctf2.dasctf.com` 找题目文件。
+    #   也就是说：**题目给了，模型没见过** —— 它不是不会解，是没题可解。
+    #
+    # ## 为什么不是 `scan_upload_dir`
+    #
+    # `scan_upload_dir(scan_id)`（`_uploads/<id>/`）是**上传原件**，
+    # `challenge_dir(scan_id)`（`<id>/challenge/`）才是 `claim()` 解压后的
+    # 素材。解题要看的是后者（比如这里 zip 里的 `challenge.apk` 才是真题目）。
+    # ⚠️ 两个目录不同名不同地，别把它们当同义词。
     sandbox = ctf2_runner.SandboxContainer(
         name=sandbox_name,
         image=ctf2_runner.image_for_profile(solve_spec.profile),
@@ -495,6 +551,10 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
         network_name=ctf2_runner.PENTEST_NETWORK,
         cpus=solve_spec.cpus,
         memory_mb=solve_spec.memory_mb,
+        # ★ 附件目录（只读挂到容器 `/work/attachments`）。
+        #   `SandboxContainer` 对"目录不存在"自己会让开（这题没有附件时
+        #   不会因为多挂一个不存在的路径而起不来），所以这里不用判存在。
+        attachments_dir=challenge_dir(spec.scan_id),
         workspace_dir=spec.run_dir / "agent_run" / "workspace",
         # ★ v0.64：设置页「允许写入挂载卷」。透传到 SandboxContainer，
         #   由它决定 /work/persist 挂 :rw 还是 :ro。
@@ -853,6 +913,87 @@ def _normalize_verification(value: object) -> str:
     return "needs_follow_up"
 
 
+def _normalize_code_locations(value: object) -> list[dict[str, object]]:
+    r"""把模型交的 `code_locations` 归一到 importer 认得的形状。
+
+    契约（`findings/strix_vulns.py::_affected_positions`）要的是
+    `[{"file": str, "start_line": int|None}, ...]`。
+
+    模型那边经常交别的形状，实测见过三种：
+    1. 裸字符串列表 `["src/app.py:42"]` —— 最常见（提示词里就是这么举例的）；
+    2. dict 列表 `[{"file": "src/app.py", "start_line": 42}]` —— 最理想；
+    3. 单个字符串 `"src/app.py:42"` —— 只有一处时代模型会省掉列表。
+
+    不归一就等于把它们全丢掉（`_affected_positions` 只遍历 list of dict），
+    而 `skills/custom/dependency_cve_scanning.md:231` 明确要求
+    "You MUST report usage sites in `code_locations`" —— 教了却不收，
+    和教一个不存在的工具是同一类缺陷。
+
+    `file:line` 的拆分只认**最后一个**冒号且右侧全是数字，这样 Windows
+    盘符（`C:\x\y.py:42`）和 URL（`https://h/p:80`）不会被切错。
+    """
+    if isinstance(value, dict):
+        value = [value]
+    elif isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+
+    out: list[dict[str, object]] = []
+    for item in value:
+        if isinstance(item, dict):
+            file_path = str(item.get("file") or item.get("path") or "").strip()
+            if not file_path:
+                continue
+            line = item.get("start_line", item.get("line"))
+            out.append({"file": file_path, "start_line": _as_int_or_none(line)})
+            continue
+        text = str(item or "").strip()
+        if not text:
+            continue
+        file_path, line = text, None
+        head, sep, tail = text.rpartition(":")
+        if sep and head and tail.isdigit():
+            file_path, line = head, int(tail)
+        out.append({"file": file_path, "start_line": line})
+    return out
+
+
+def _as_int_or_none(value: object) -> int | None:
+    """宽松取整数：容忍 `"42"` / `"42-45"` / `42.0`，取不到就 None。"""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    # `start_line` 有时被写成区间（"42-45"），取起点。
+    head = text.split("-", 1)[0].split(",", 1)[0].strip()
+    try:
+        return int(float(head))
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_grade(value: object) -> str:
+    """工单可信度标签：只允许 `confirmed` / `needs_follow_up`。
+
+    **不**复用 `_normalize_verification`：那个函数认 `ruled_out`，而工单
+    契约明确禁止它（`prompts/kernel_ir.md:111`：「`grade` 只取
+    `confirmed` / `needs_follow_up` 两档。**不许写 `ruled_out`** ——
+    '排除了'不产生处置动作」）。判据同一份：`app/kernel/workorder.py`
+    的 `ALLOWED_GRADES = ("confirmed", "needs_follow_up")`。
+
+    宁可低估不可高估：模型写别的（中文、大写、`ruled_out`）一律降为
+    `needs_follow_up`。
+    """
+    text = str(value or "").strip().lower()
+    if text in ("confirmed", "确认", "已确认", "成立"):
+        return "confirmed"
+    return "needs_follow_up"
+
+
 def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
     """把引擎的 `findings` 写成 `run_dir/vulnerabilities.json`（strix 记录形状）。
 
@@ -861,12 +1002,38 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
     只写 `findings.importer` 真正会读的那些字段（见那个模块的解析）：
     `title` / `severity` / `confidence` / `cwe` / `cvss` / `target` /
     `description` / `technical_analysis` / `evidence` / `poc_script_code` /
-    `remediation_steps` / `code_locations` / `verification`。
+    `remediation_steps` / `code_locations` / `verification`，以及
+    `strix_vulns._reasoning()` 会折进契约 `reasoning` 的四个诚实分级字段
+    `counterevidence` / `assumptions` / `confidence_rationale` /
+    `severity_change_conditions`。
 
     多写的字段 importer 会忽略，所以不追求"一个字节不差"；但**一条
     发现一个对象**、`severity` 与 `verification` 用对词，是必须的 ——
     否则它们会被默认值吞掉（`info` / `needs_follow_up`），而"我的高危
     怎么变成 info 了"是很难回查的。
+
+    ## 2026-10-26：修「教了模型写、这里静默丢掉」
+
+    用 `_tmp/probe_field_loss.py` 走真实链路（`FINAL.findings` →
+    这里 → `vulnerabilities.json` → `strix_vulns.parse`）实测，五个字段
+    到了报告里**一个字都没有**，而且不报错、不警告：
+
+    - `counterevidence` / `assumptions` / `confidence_rationale` /
+      `severity_change_conditions`：这四项是 §6.1 与
+      `skills/analysis/counterevidence.md:156-166` 明确要求模型写的
+      "诚实分级"材料。`strix_vulns._reasoning()`（:383-416）本来就会把
+      它们带标签折进契约的 `reasoning`（【反证】/【成立假设】/…），
+      只要这里透传就自然出现 —— 之前这里没有这四个键，下游拿不到。
+    - `code_locations`：原代码写死 `""`，而
+      `skills/custom/dependency_cve_scanning.md:231` 要求
+      "You MUST report usage sites in `code_locations`"。写成空串等于
+      白盒扫描的交付出不来（`_affected_positions` 退化成只有 target）。
+
+    另外 `technical_analysis` 原来接的是 `evidence`，而
+    `_reasoning()` 把 `technical_analysis` 当作契约的 reasoning ——
+    于是界面上「为什么判断有问题」渲染出 `curl -s ...` 这条命令，
+    和「证据」栏一模一样且答非所问。模型的 `reasoning` 才是那个问题的
+    答案（§6.4），改接它。
 
     ## `findings` 与 `workorders` 都要写（v0.74）
 
@@ -926,12 +1093,36 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
                     "cwe": str(item.get("cwe") or ""),
                     "cvss": None,
                     "target": target,
+                    # ── 叙事字段：模型的 `reasoning` 同时喂两个槽 ──
+                    #
+                    # 见本函数 docstring「修『教了模型写、这里静默丢掉』」：
+                    # `technical_analysis` 原来接 `evidence`，而
+                    # `strix_vulns._reasoning()` 把它当作契约的 reasoning，
+                    # 于是「为什么判断有问题」那一栏渲染出复现命令。
+                    #
+                    # 为什么 `description` 也填同一段：模型的交付契约
+                    # （`kernel_pentest.md` §6.4）里**没有**独立的
+                    # description 字段，我们能拿到的叙事只有这一段。
+                    # 宁可两栏内容重合，也不要「漏洞描述」是空白。
+                    # 将来 §6.4 若加了 description，把这一行改成读它。
                     "description": str(item.get("reasoning") or ""),
-                    "technical_analysis": str(item.get("evidence") or ""),
+                    "technical_analysis": str(item.get("reasoning") or ""),
                     "evidence": str(item.get("evidence") or ""),
                     "poc_script_code": "",
                     "remediation_steps": str(item.get("remediation") or ""),
-                    "code_locations": "",
+                    "code_locations": _normalize_code_locations(item.get("code_locations")),
+                    # ── 诚实分级四件套（2026-10-26 补）──
+                    #
+                    # 模型被 §6.1 / counterevidence.md 明确要求写这四项。
+                    # 之前这里没有这些键 → 模型认真写完、后端静默丢掉，
+                    # 报告里一个字都看不到。`_reasoning()` 会把它们带标签
+                    # 折进契约 `reasoning`，所以透传即可，不必另造字段。
+                    "counterevidence": str(item.get("counterevidence") or ""),
+                    "assumptions": str(item.get("assumptions") or ""),
+                    "confidence_rationale": str(item.get("confidence_rationale") or ""),
+                    "severity_change_conditions": str(
+                        item.get("severity_change_conditions") or ""
+                    ),
                     # 自带一份归一后的分级，便于日志/对账（importer 不读它）。
                     "verification": verification,
                     # 记录一条来源标记，便于将来对账"这条来自哪个后端"。
@@ -971,8 +1162,35 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
             target = str(item.get("target") or "").strip()
             if not title and not target:
                 continue
-            verification = _normalize_verification(item.get("verification"))
-            evidence = str(item.get("evidence") or "")
+            # ⚠️ `grade` 才是工单的可信度标签（`kernel_ir.md` §六，取值只有
+            # `confirmed` / `needs_follow_up`）。原来这里读 `verification` ——
+            # 工单契约里根本没有这个键，于是每条 IR 工单都被判成
+            # `needs_follow_up`，哪怕模型写了 `"grade": "confirmed"`。
+            # 保留 `verification` 作为兼容回退（历史数据/其它调用方可能用）。
+            verification = _normalize_grade(item.get("grade") or item.get("verification"))
+            basis = str(item.get("basis") or "").strip()
+            risk = str(item.get("risk") or "").strip()
+            permission = str(item.get("permission") or "").strip()
+            # ── 工单的五个契约字段必须原样到达读者 ──
+            #
+            # `kernel_ir.md:94-112` 把 `action`/`basis`/`risk`/`permission`
+            # 定为必填（"一个都不能省"），并解释了为什么：省了 `permission`
+            # 就等于让人在不知情的前提下批权限。而这段映射此前只读了
+            # `action`，`basis`/`risk`/`permission` **全部丢弃** ——
+            # 报告里只剩一个光秃秃的动作标题，审批人看不到依据与风险。
+            #
+            # 折进 `technical_analysis` 是因为 `strix_vulns._reasoning()`
+            # 会把它原样带进契约的 `reasoning`（界面上「为什么判断有问题」
+            # 那一栏），这样三段都能被看到。不另造 `risk`/`permission`
+            # 独立键：importer 不读它们，加了就是新的"只存不读"。
+            parts: list[str] = []
+            if basis:
+                parts.append(f"【依据】{basis}")
+            if risk:
+                parts.append(f"【误做风险】{risk}")
+            if permission:
+                parts.append(f"【所需权限】{permission}")
+            narrative = "\n\n".join(parts)
             records.append(
                 {
                     "title": title,
@@ -982,15 +1200,33 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
                     "cvss": None,
                     "target": target,
                     "description": str(
-                        item.get("summary") or item.get("conclusion") or item.get("description") or ""
+                        basis
+                        or item.get("summary")
+                        or item.get("conclusion")
+                        or item.get("description")
+                        or ""
                     ),
-                    "technical_analysis": evidence,
-                    "evidence": evidence,
+                    "technical_analysis": narrative,
+                    "evidence": str(item.get("evidence") or basis or ""),
                     "poc_script_code": "",
                     "remediation_steps": str(
-                        item.get("action") or item.get("remediation") or item.get("remediation_steps") or ""
+                        item.get("action")
+                        or item.get("remediation")
+                        or item.get("remediation_steps")
+                        or ""
                     ),
-                    "code_locations": "",
+                    "code_locations": _normalize_code_locations(item.get("code_locations")),
+                    # `grade` 缺段的工单仍值得人看，但可信度必须降级 ——
+                    # 与 `workorder.py::parse_workorders` 的 `effective_grade`
+                    # 同一条纪律：宁可低估不可高估。
+                    "confidence_rationale": (
+                        "" if (basis and risk and permission)
+                        else "工单存在缺段（" + "、".join(
+                            name for name, value in (
+                                ("basis", basis), ("risk", risk), ("permission", permission)
+                            ) if not value
+                        ) + "），按约定降级为待跟进"
+                    ),
                     "verification": verification,
                     "discovered_by": "agent-workorder",
                 }
@@ -1205,7 +1441,17 @@ def build_solve_spec_from_scan(
         description=spec.brief or f"对目标 {spec.target}（{spec.target_kind}）执行一次授权安全评估。",
         profile=ctf2_runner.image_for_profile(ctf2_runner.KernelSandboxProfile.BASE.value),
         access_urls=access_urls,
-        attachments=(),
+        # ★★ 附件清单（2026-10-27 修）：这里原来是写死的 `()`。
+        #
+        # 那份空元组有两个后果，都会让模型以为"没题"：
+        #   1. `_tool_read_attachment` 只在 `spec.attachments` 里按名字找，
+        #      空元组 → 无论传什么名字都回"没有这个附件"（它连列都列不出来）；
+        #   2. `_initial_prompt` 的"## 附件"那一段（`runner.py` 的
+        #      `if spec.attachments:`）整段不出现 —— 模型根本不知道
+        #      `/work/attachments` 下应该有东西。
+        #
+        # 目录不存在（这题真没附件）时是空元组，行为与修之前一致。
+        attachments=_scan_attachments(spec.scan_id),
         llm_model=spec.llm_model,
         llm_api_key=spec.llm_api_key,
         llm_api_base=spec.llm_api_base,

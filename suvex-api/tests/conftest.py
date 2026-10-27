@@ -788,7 +788,10 @@ def _no_sweep_orphan_sandboxes() -> int:
     return 0
 
 
-#: 给用例一个能验证"替身确实装上了"的标记（见 `test_lifespan_never_sweeps_docker`）。
+#: 给用例一个能验证"替身确实装上了"的标记。
+#: 真正的守卫是 `tests/kernel/test_sandbox_sweep.py::test_the_test_client_never_sweeps_real_containers`
+#: —— 它读这个标记。这里原先把名字写成了另一个并不存在的用例，
+#: 指向不存在的守卫比没有注释更糟：读的人会以为那道防线已经有了。
 _no_sweep_orphan_sandboxes._is_test_stub = True  # type: ignore[attr-defined]
 
 

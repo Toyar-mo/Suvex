@@ -1,0 +1,5 @@
+**/*.o
+**/*.swp
+deb/package/
+deb/pcapfix.deb
+pcapfix

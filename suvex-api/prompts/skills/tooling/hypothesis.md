@@ -5,7 +5,8 @@ description: Property-based local differential testing with Hypothesis for parse
 <!--
 来源：strix（Apache-2.0）skills/tooling/hypothesis.md
 导入日期：2026-10-26
-本文件按 Apache-2.0 许可随本项目分发；正文未作修改。
+本文件按 Apache-2.0 许可随本项目分发；正文仅在「Install」段加了一段本沙箱的
+预装说明（下方标注 ★ 起头），其余未作修改。
 -->
 
 # Hypothesis Differential Testing
@@ -15,6 +16,15 @@ Use [Hypothesis](https://hypothesis.readthedocs.io/) when a security property ca
 Do not point unrestricted generators at a live service. Hypothesis is safest and most useful against pure local adapters with no network, subprocess, filesystem, or persistent-state side effects.
 
 ## Install
+
+★ 本沙箱镜像已预装 `python3-hypothesis`（apt 包），`python3 -c "import hypothesis"` 直接可用，
+不需要再装。容器无网，`pip install` 会失败并让人以为是网络问题。先确认：
+
+```bash
+python3 -c "import hypothesis, sys; print(hypothesis.__version__)"
+```
+
+下面这段是上游原文，保留给「在别的环境里复现」时参考：
 
 Use an isolated virtual environment and install a reviewed pinned version:
 

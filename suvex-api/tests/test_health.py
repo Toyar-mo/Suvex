@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -111,15 +112,33 @@ def test_openapi_schema_covers_every_contract_endpoint(client: TestClient) -> No
 
 
 def test_startup_verifies_schema(client: TestClient) -> None:
-    """lifespan 里的 `verify_database()` 真的跑过。
+    """★ `verify_database()` 的两条路径都要真验一遍。
 
-    间接验证方式：应用能起来就说明它没抛 —— 而如果它没被调用，
-    这条测试也不会失败。所以这里直接调一次函数本身，
-    确认它在结构完整时安静通过。
+    原来是「调一次，不抛即通过」—— 那条写法只覆盖了**成功路径**，而且
+    失败路径（缺表）恰恰是这个函数存在的理由：生产上真的发生过「表没建、
+    服务照起、第一个请求才炸」的事故，`verify_database` 就是为了把那个
+    错误提前到启动时。
+
+    只测成功路径等于什么都没测：把整个 `missing` 判断删掉，原用例照样绿。
     """
-    from app.core.bootstrap import verify_database
+    from app.core import bootstrap
 
-    verify_database()  # 不抛即通过
+    # 1) 结构完整时安静通过（lifespan 真的走到了这里，`client` 就是这个 fp）。
+    bootstrap.verify_database()
+
+    # 2) 缺表时必须抛，且错误消息要直接给出修复命令 —— 否则拿到一句
+    #    "结构不完整"还得自己去翻文档。
+    original = bootstrap.REQUIRED_TABLES
+    try:
+        bootstrap.REQUIRED_TABLES = (*original, "this_table_is_never_created")
+        with pytest.raises(RuntimeError) as excinfo:
+            bootstrap.verify_database()
+    finally:
+        bootstrap.REQUIRED_TABLES = original
+
+    message = str(excinfo.value)
+    assert "this_table_is_never_created" in message, "错误消息里要能看出缺的是哪张表"
+    assert "alembic upgrade head" in message, "错误消息里要直接给出修复命令"
 
 
 # ══════════════════════════════════════════════════════════
