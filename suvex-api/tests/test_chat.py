@@ -8,8 +8,12 @@
    要求 admin 会让普通用户连话都不能存）。于是**危险的不是发消息，
    而是消息里那次工具调用** —— `read` 账号让模型去 `save_skill`
    必须被拒。这一条漏了，对话页就是一个绕过整个权限模型的洞。
-3. **对话把重活自己干了。** 对话没有沙箱。模型若"假装跑了 nmap"并
-   编一个结果，用户会拿着假结论去做决策 —— 比报错危险得多。
+3. **对话假装执行了但没执行。** v0.107 之前对话没有沙箱，所以风险是
+   模型"假装跑了 nmap"并编一个结果，用户拿着假结论去做决策 —— 比报错
+   危险得多。v0.107 起了沙箱之后，同一个风险换了形状：模型**能**跑了，
+   于是"编一个看起来像 `nmap` 输出的东西"变得更容易被相信。所以现在
+   要守的是"工具真的被执行了"（`test_chat.py` 里那组 FakeGateway 用例
+   断言 tool 消息的 `tool_failed` 与内容来源），而不是"不许它尝试"。
 4. **`seq` 乱序。** 界面会出现"工具结果跑在调用前面"。而且 `seq` 是
    唯一顺序依据（`created_at` 精度不足），它坏了没有替代品。
 5. **空转被说成"模型没产出"。** 到工具轮数上限时模型想继续调工具，
@@ -729,15 +733,29 @@ async def test_an_unknown_tool_becomes_a_failed_tool_result_not_a_crash(
 
     抛异常会中断整轮，用户看到的是"服务器出错了"—— 而原因只是模型
     拼错了一个名字。
+
+    ## ★ v0.107：这里原来用的是 `run_shell`
+
+    那个名字当时**真的不存在**（对话侧只有平台操作工具），所以它是个
+    天然的好例子。但 v0.107 把 `run_shell` 接进对话后，这条测试变成了
+    "调用一个真实工具" —— 它会去起沙箱（本地没 docker 就抛
+    `KernelSandboxError`），断言 `没有叫` 当场失效。
+
+    改成 `scan_ports_quickly`：一个**永远**不该存在的名字，把这条测试的
+    意图（"未知工具名 → 可读失败"）与"哪些工具恰好存在"解耦。
+    这样将来再接工具也不会再撞一次。
     """
     gateway = FakeGateway(
-        ['ACTION: {"tool": "run_shell", "args": {"command": "ls"}}', "抱歉，我没有那个能力。"]
+        [
+            'ACTION: {"tool": "scan_ports_quickly", "args": {"target": "1.2.3.4"}}',
+            "抱歉，我没有那个能力。",
+        ]
     )
 
     result = await engine.run_turn(
         db_session,
         session=chat_session,
-        content="帮我跑 ls",
+        content="帮我扫一下端口",
         identity=ADMIN,
         gateway=gateway,
     )
@@ -921,20 +939,39 @@ def test_every_declared_tool_has_an_implementation_and_vice_versa() -> None:
     assert implemented - declared == set(), f"实现了但没有声明：{implemented - declared}"
 
 
-def test_the_system_prompt_tells_the_model_it_has_no_sandbox() -> None:
-    """写进提示词才不会让模型一直想调 `run_shell`。
+def test_the_system_prompt_tells_the_model_it_has_a_sandbox() -> None:
+    """★ v0.107：这条原来叫 `..._tells_the_model_it_has_no_sandbox`。
 
-    这不是文案洁癖：模型不知道这件事时，会花几轮去试跑命令，而每一轮
+    ## 为什么它必须反过来
+
+    v0.93 时对话**真的**没有沙箱，所以提示词里有一段"你做不到这些"。
+    那段话是有价值的：模型不知道边界时会花几轮去试跑命令，而每一轮
     都是一次真实的 LLM 调用（金钱 + 延迟），最后还是失败。
+
+    v0.107 把 `run_shell` / `browser` 接进来之后，那段话变成了**谎言** ——
+    而它的危害比原来更大：模型会对着一个真能跑命令的沙箱说"我没有执行
+    环境"，用户看到的就是他抱怨的那个现象（`User said (m02331): "还有这个
+    对话不能直接解题，需要修"`）。
+
+    ## 断言什么
+
+    不查文案措辞（改一个字就红是假信号），查**结论**：
+    提示词里必须出现"有沙箱"这个正向声明，且**不能**残留"没有沙箱容器"
+    这种否定形态。后者是这次改动最容易漏的地方 —— 加了新段落了旧段。
     """
-    from app.chat.prompts import build_system_prompt
+    from app.chat.prompts import CHAT_TOOL_NAMES, build_system_prompt
 
     prompt = build_system_prompt()
-    assert "没有" in prompt and "沙箱" in prompt
-    assert "扫描任务" in prompt
-    # 每个工具名都要在提示词里出现（否则模型不知道它能调）。
-    from app.chat.prompts import CHAT_TOOL_NAMES
 
+    # 正向：明确告诉模型它有执行环境。
+    assert "专属沙箱容器" in prompt, "提示词没告诉模型它有沙箱 —— 它会继续说'我没有执行环境'"
+    # 反向：旧的否定声明必须已经删掉。
+    assert "你**没有**自己的沙箱容器" not in prompt, "旧的『没有沙箱』声明还留着，模型会两套说法都看到"
+    # 执行工具必须被点名（否则模型不知道它能调）。
+    for name in ("run_shell", "browser"):
+        assert name in prompt, f"提示词里没提 `{name}`"
+
+    # 每个声明的工具名都要在提示词里出现（v0.93 起就有的不变式）。
     for name in CHAT_TOOL_NAMES:
         assert name in prompt, f"提示词里没提 `{name}`"
 

@@ -90,6 +90,16 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         # 只读账号看得到技能正文却看不到它的附件，会出现"文件树是空的"
         # 这种假的权限缺口。
         ("GET", "/api/v1/kernel/skills/{name}/files"),
+        # ── 命令行工具配方库：读（v0.98）──────────────────
+        #
+        # 与 `GET /kernel/tools` 同级、同一理由：静态清单（二进制怎么调 +
+        # 默认参数下会漏什么），不含凭据、不打外部接口、不改安全策略、
+        # 不触发执行。它比 `/tools` 更没有状态 —— 装没装由镜像决定，
+        # 所以连写端点都不存在。
+        #
+        # ⚠️ v0.98 加端点时漏登记，被 `test_every_ctf2_endpoint_is_classified`
+        #   抓住。补在这里同时也是为了让 `test_the_two_matrices_agree` 有对照。
+        ("GET", "/api/v1/kernel/recipes"),
     }
 )
 

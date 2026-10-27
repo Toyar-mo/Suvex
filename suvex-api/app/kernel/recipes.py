@@ -2,7 +2,7 @@
 
 ## 这个模块补的是什么
 
-`tools.py` 的 `TOOL_SPECS` 回答的是「**智能体**能调哪几个工具」—— 10 个，
+`tools.py` 的 `TOOL_SPECS` 回答的是「**智能体**能调哪几个工具」—— 12 个，
 是 ACTION 协议里的动作（`run_shell` / `http_request` / `call_mcp` …）。
 
 它**不**回答另一个问题：「`run_shell` 里我能跑哪些安全工具，怎么跑才不是

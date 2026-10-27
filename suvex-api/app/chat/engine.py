@@ -49,6 +49,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
 from app.chat.models import ChatSession
 from app.chat.prompts import (
@@ -365,7 +366,21 @@ def _render_history(rows: list[Any]) -> list[dict[str, str]]:
 
 
 class _ToolContext:
-    """执行工具需要的一切。打包成一个对象，免得每个 _tool_* 都收七个参数。"""
+    """执行工具需要的一切。打包成一个对象，免得每个 _tool_* 都收七个参数。
+
+    ## ★ v0.107：沙箱不在这里
+
+    执行类工具（`run_shell` / `browser`）需要 `SandboxContainer`，但它
+    **不在 `__slots__` 里**，也不由引擎持有 —— 它住在
+    `app/chat/sandbox.py` 的进程内注册表里，按 `session.id` 惰性创建、
+    跨轮保留。
+
+    为什么不做成 `ctx.sandbox`：`_ToolContext` 由 `run_turn` 每轮新建
+    一次，而沙箱要**跨轮活着**。放进来的话每轮看起来都是一个新沙箱
+    （类型上不假，语义上假），而真正持久的那个在别处 —— 同一件事两个
+    表述，早晚有人用错那个。让执行工具自己去 `sandbox.get_sandbox(ctx.session)`
+    取，只有一个来源。
+    """
 
     __slots__ = ("db", "session", "identity")
 
@@ -619,6 +634,50 @@ async def _tool_read_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     return skills_mod.load_skill_text(name)
 
 
+async def _tool_load_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`load_skill`：读一篇技能正文（可指定篇内的单个文件）。
+
+    ## 为什么它和 `read_skill` 并存，而不是合并
+
+    `read_skill` 是 v0.93 就有的（给平台操作对话读技能库用的），参数
+    只有 `name`。`load_skill` 是内核那套工具的名字与形状
+    （`name` + `file`），而**提示词里教模型用的是内核的用法** ——
+    两处名字不同，模型会把解题时的习惯带过来然后收到"没有叫 load_skill
+    的工具"。
+
+    别名成同一个函数也不行：内核版支持 `file`（技能包里的附件，比如
+    `payloads.md`），而 `read_skill` 的签名里没有它。保留两个名字、
+    共用同一个底层调用，是最小代价 —— 参数面是并集，实现只有一份。
+    """
+    from app.kernel import skills as skills_mod
+
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return _err("没有给 `name`。")
+    return skills_mod.load_skill_text(name, file=str(args.get("file") or ""))
+
+
+async def _tool_load_recipe(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`load_recipe`：读一条命令行工具配方（完整命令行 + 参数 + 局限）。
+
+    ## 与内核版的唯一区别：不探测
+
+    内核版同样只是 `render_recipe(name)` 查表。但配方库里写着"这个工具
+    的二进制**可能不存在**"（`recipes.py` 每条都有 `limitation`），
+    而对话沙箱是**无限制档**，装的包和解题镜像**不完全一样**。
+
+    这里仍不探测，理由与内核侧一致（见 `recipes.render_index` 的注释：
+    提示词构建时沙箱还没起，谎报"装没装"比不报更糟）。配方正文里
+    每条都带 `limitation`，模型读到就知道要先 `command -v` 确认。
+    """
+    from app.kernel import recipes as recipes_mod
+
+    name = str(args.get("name") or "").strip()
+    if not name:
+        return _err("没有给 `name`。用 `load_recipe` 之前先看提示词里的配方清单。")
+    return recipes_mod.render_recipe(name)
+
+
 async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
@@ -781,6 +840,12 @@ _TOOL_IMPLS: dict[str, Any] = {
     "delete_skill": _tool_delete_skill,
     "list_mcp_servers": _tool_list_mcp_servers,
     "add_mcp_server": _tool_add_mcp_server,
+    # ★ v0.107：执行类工具。实现在 `app/chat/sandbox.py` —— 那里复用
+    #   内核的 `_tool_run_shell` / `run_browser`，不抄一份。
+    "run_shell": chat_sandbox.tool_run_shell,
+    "browser": chat_sandbox.tool_browser,
+    "load_skill": _tool_load_skill,
+    "load_recipe": _tool_load_recipe,
 }
 
 

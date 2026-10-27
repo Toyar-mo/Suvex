@@ -48,7 +48,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
-from app.chat import engine, service
+from app.chat import engine, sandbox as chat_sandbox, service
 from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
     ChatApprovalIn,
@@ -133,6 +133,25 @@ def archive_session(session_id: str, db: DbSession, identity: Reader) -> ChatSes
     )
     service.archive_session(db, session=session, archived=True)
     db.commit()
+    # ★ 归档 = 这个会话不会再被发消息，它那个沙箱必须当场销毁。
+    #
+    #   不销毁会怎样：容器一直挂着（无限制网络 + 可写工作区），而
+    #   `_SANDBOXES` 是进程内字典 —— 只要进程不重启它就不会自己消失，
+    #   用户以为"删掉对话"了，实际容器还在。这是真泄漏，不是洁癖。
+    #
+    #   放在 commit 之后：先让"归档"这件事落库，再来清理资源。
+    #   反过来写的话，销毁失败（或进程正好在这里退出）会留下一个
+    #   归档了但容器还活着的组合，且没有第二次机会。
+    #
+    #   `drop_sandbox` 自己会吞掉 `destroy()` 里的异常，但这里再包一层：
+    #   归档**已经 commit 了**，此刻任何异常都会变成一个 500 —— 用户看到
+    #   "处理失败"，而会话其实已经删掉了。那是最糟的一种反馈：他以为没删
+    #   成，可能再点一次，或去找管理员说"这个功能坏了"。
+    #   资源清理失败该留在日志里，不该翻成用户的错误。
+    try:
+        chat_sandbox.drop_sandbox(session_id)
+    except Exception:  # noqa: BLE001 - 清理失败不该让已落库的归档报错
+        logger.warning("归档会话 %s 时销毁沙箱失败", session_id, exc_info=True)
     return ChatSessionOut.model_validate(session)
 
 

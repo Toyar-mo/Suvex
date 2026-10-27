@@ -135,6 +135,29 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         summary="读取随任务提交的附件内容（宿主侧读已下载的副本）。",
         params="path（附件文件名）、offset、limit（可选）",
     ),
+    ToolSpec(
+        name="browser",
+        label="操作浏览器",
+        group="沙箱执行",
+        summary=(
+            "在沙箱里驱动真实 Chromium：打开页面、看可交互元素、点击、"
+            "填写、执行 JS。用来处理必须跑 JS 才看得见的 Web 内容。"
+        ),
+        params=(
+            "command（必填：open/snapshot/click/fill/type/press/get/eval/"
+            "wait/screenshot/back/close/skills）、url、target、text、key、"
+            "what、expression、ms、path、full、interactive、timeout_seconds"
+        ),
+        # ★ 这个 `default_limitation` 是**必须写**的，不是可选文档。
+        #   理由见本字段的 docstring：模型会把"缩水的结果"读成"结论"。
+        #   这里缩水的是**看图**：`screenshot` 存了文件但模型看不到内容，
+        #   若不写清，模型会以为自己验证过页面外观。
+        default_limitation=(
+            "看不了图片。screenshot 只把 PNG 存成文件，模型无法读取其内容；"
+            "要了解页面必须用 snapshot（结构）/ get text（文字）/ eval（取值）。"
+            "另外 ref（@eN）每次快照重新分配，页面一变就得重新 snapshot。"
+        ),
+    ),
     # ── 网络请求 ──────────────────────────────────────────
     ToolSpec(
         name="http_request",
@@ -177,6 +200,26 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         default_limitation=(
             "只返回速查文本，不执行任何命令；拼错名字会回可用清单。"
             "带附件的技能包会在正文末尾列出文件名，用 file 取。"
+        ),
+    ),
+    ToolSpec(
+        name="load_recipe",
+        label="载入工具配方",
+        group="技能与知识",
+        summary="按需拉取一条命令行工具的完整配方（用法、参数、默认会漏什么）。",
+        params="name（配方名，如 nmap / ffuf）",
+        # ★ 补这条是修一个**真实漂移**：v0.99（提交 `1d1834a`）把
+        #   `load_recipe` 加进了 `runner.TOOL_NAMES`（它确实被
+        #   `kernel_system.md` 教给模型了），但漏了这里 ——
+        #   于是 `tests/kernel/test_tools_catalog.py::test_catalog_matches_runner_tool_names`
+        #   在 v0.99 之后一直是红的。
+        #
+        #   危害正好是那条测试文档里说的**更糟的一侧**：模型能调
+        #   `load_recipe`，而设置页的工具清单里根本没有它 ——
+        #   用户想关掉它也关不掉（`disabled_tools` 只认清单里的名字）。
+        default_limitation=(
+            "只返回配方文本，不执行命令、不检查那个工具装没装。"
+            "清单在系统提示词里，这个工具用来取单条全文。"
         ),
     ),
     # ── 外部工具（MCP 桥）─────────────────────────────────

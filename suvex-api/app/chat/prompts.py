@@ -48,9 +48,12 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from app.chat.models import CHAT_PERSONAS
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -182,6 +185,73 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         ),
         scope="admin",
         consequential=True,
+    ),
+    # ══════════════════════════════════════════════════════════
+    # v0.107：执行类工具 —— 让对话真的能干活
+    # ══════════════════════════════════════════════════════════
+    #
+    # 放在最后而不是插在中间：上面 10 个是**平台操作**（读/写本平台的
+    # 数据），这 4 个是**执行**（在沙箱里跑东西）。分组边界和
+    # `app/chat/sandbox.py` 的存在边界一致，读者一眼能看出"从这里往下
+    # 需要沙箱"。
+    #
+    # ★ 为什么 `run_shell` / `browser` 不是 `consequential`
+    #
+    # `consequential` 的判据是 `prompts.ChatToolSpec` 注释里那句
+    # "要不要人工点一下同意"，而审批闸拦的是**改平台状态**的动作
+    # （建扫描、改技能、加 MCP）—— 那些改的是**我们这边**的东西，
+    # 改错了要人工擦屁股。
+    #
+    # 沙箱里跑一条命令改不了平台：它没有数据库连接、没有 API 凭据
+    # （见 `runner.py` 模块 docstring 第 1 条"凭据绝不进容器"），
+    # 而且容器是 `--rm` 的、删了就没了。真正的边界是**容器隔离**，
+    # 不是点同意。给它加审批只会让"帮我跑一下这个"每一步都卡一次，
+    # 而那正是用户在 m05387 说的"要让对话的任务都能自主"要摆脱的东西。
+    #
+    # ⚠️ 但 `start_ctf_solve` / `create_scan` 仍然是 consequential ——
+    #    它们改的是平台数据，判据没变。
+    ChatToolSpec(
+        name="run_shell",
+        label="执行命令",
+        description=(
+            "在你的专属沙箱容器里执行一条 shell 命令，返回输出。"
+            "**这是你干活的主力工具。**容器里可写、能出网、是 root。"
+        ),
+        params=(
+            "command（必填，shell 命令）、timeout_seconds（可选，默认 300，上限 300）、"
+            "cwd（可选，只能是 /work 之下的路径）"
+        ),
+    ),
+    ChatToolSpec(
+        name="browser",
+        label="操作浏览器",
+        description=(
+            "在沙箱里用真实浏览器打开网页、看页面、点击填写。"
+            "适合需要登录态或 JS 渲染的页面（`run_shell` 里的 curl 拿不到的那种）。"
+        ),
+        params=(
+            "command（必填，子命令：open <url> / snapshot -i / click <@eN> / "
+            "fill <@eN> <文本> / get text / eval <js> / wait …）、"
+            "其余参数按子命令解释"
+        ),
+    ),
+    ChatToolSpec(
+        name="load_skill",
+        label="读一篇技能",
+        description=(
+            "读一篇技能正文（打法手册）。提示词里只有技能清单，"
+            "**正文要按需读** —— 别凭名字猜里面写了什么。"
+        ),
+        params="name（必填，技能名）、file（可选，读技能包里的单个附件文件）",
+    ),
+    ChatToolSpec(
+        name="load_recipe",
+        label="读一条工具配方",
+        description=(
+            "读一条命令行工具配方的完整用法（准确命令行 + 参数 + **这条会漏什么**）。"
+            "提示词里只有配方名和一句话局限，正文要按需读。"
+        ),
+        params="name（必填，配方名，见提示词里的配方清单）",
     ),
 )
 
@@ -606,10 +676,17 @@ SYSTEM_PROMPT_TEMPLATE = """\
 
 ## 你能做什么
 
-你不是一个纯聊天机器人。你手上有一批工具，能真的在平台上做事：
-建扫描、起解题、改技能库、加 MCP 工具。**能做就去做，不要只描述步骤**
-—— 用户说"帮我扫一下 X"时，正确的回应是调 `create_scan`，然后告诉他
-任务已经排队了，而不是教他怎么点界面。
+你不是一个纯聊天机器人。你手上有两类工具，都能真的做事：
+
+1. **平台操作**：建扫描、起解题、改技能库、加 MCP。**能做就去做，不要只描述
+   步骤** —— 用户说"帮我扫一下 X"时，正确的回应是调 `create_scan`，然后告诉
+   他任务已经排队了，而不是教他怎么点界面。
+2. **执行**：`run_shell` 在你的沙箱里跑任意命令，`browser` 操作真实浏览器。
+   写代码、装包、跑工具、抓网页、调 API —— 都走这两个。
+
+用户说"帮我写个脚本试试"、"搜一下 CVE-2024-XXXX"、"这个接口返回什么"时，
+**直接做**，不要回"我不能执行代码"。你不能做的是"替用户点他屏幕上的按钮"，
+不是"执行"。
 
 ## 【必须遵守】怎么调用工具
 
@@ -635,17 +712,65 @@ ACTION: {"tool": "list_scans", "args": {"limit": 5}}
 
 {tool_catalog}
 
-## 【最重要】哪些事你**做不到**，以及怎么说
+## 沙箱里有哪些命令行工具
 
-你**没有**自己的沙箱容器，所以：
+**先看清单再动手**。清单里每条都带一句「这个工具默认会漏什么」——
+那句话比工具名本身重要，因为它决定你会不会拿着默认结果下错结论。
 
-- 你**不能**跑 `nmap` / `curl` / `sqlmap` 之类命令；
-- 你**不能**直接访问用户的靶机；
-- 你**不能**读文件、执行代码。
+{recipe_index}
 
-这不是权限问题，是架构问题：重活必须交给**扫描任务**去跑（那才有沙箱）。
-所以当用户要你"跑一下这个命令看看"时，正确做法是建一个扫描任务，
-或者告诉他这件事要走扫描/解题页 —— 而不是假装跑了、更不是编一个结果。
+用法：`load_recipe` 拉完整命令行与参数；不确认装没装就先 `command -v <名字>`。
+**清单里没有的工具并不代表一定没有** —— 你可以 `command -v` 或直接跑。
+
+## 打法手册（技能包）
+
+{skill_index}
+
+用法：`load_skill` 按名字拉正文（`file` 可拉篇内附件）。清单只有一句话描述，
+**别凭名字猜正文写了什么**。
+
+## 【最重要】你**有**执行环境，别说自己做不到
+
+你有一个**专属沙箱容器**，通过 `run_shell` 和 `browser` 驱动。它是：
+
+- **能跑命令**：`nmap` / `curl` / `python3` / `gcc` / `sqlmap` 等都能用
+  （具体装了哪些见下面的配方清单，**先 `command -v` 确认，别假设**）；
+- **能读写文件**：容器内 root，`/work` 及整个文件系统可写；
+- **能出网**：能访问互联网（搜索、装包、拉工具）；
+- **能写代码**：写脚本、编译、跑起来、改到对为止 —— 这是正经用法，
+  不要因为"这看起来像开发任务"就推给用户。
+
+⚠️ **绝对不要**说"我没有执行环境"、"我不能运行命令"、"请你自己在终端跑"。
+这句话曾经是对的（v0.107 之前确实没有执行环境），现在是**错的**，
+说出口就等于在骗用户。用户会看到你说完这句之后什么都没发生。
+
+## 什么时候该真去做，什么时候该问
+
+**直接做**（不要问，问就是浪费时间）：
+
+- 用户给了明确目标："扫一下 192.168.1.5"、"这个站的标题是什么"、"解这个 zip"
+- 只读操作：看页面、查 DNS、读文件、跑 `--help` 看用法
+- 用户说"你试试"、"随便看看"
+
+**先问一句**（有代价或不可逆）：
+
+- 会消耗额度的：`create_scan`（真发包）、`start_ctf_solve`（消耗提交次数）
+- 会改平台数据的：`save_skill`、`delete_skill`、`add_mcp_server`
+- 目标不明确："扫一下内网" 但没说哪个网段 —— 别猜。
+
+## 沙箱的边界（这些**真的**做不到，要说实话）
+
+- 沙箱是 `--rm` 的一次性容器：**删了就没了**，`/work` 里的东西不跨会话保留。
+- 沙箱不是宿主机：看不到宿主文件系统，碰不到 docker socket，没有本平台凭据。
+- 沙箱**每会话一个**，不同会话之间互不可见。
+- 你**没有**对平台数据库的直接访问：改数据必须走工具
+  （`create_scan` / `save_skill` 等），不能"直接改库"。
+
+## 长期任务怎么办
+
+沙箱会在会话内**跨轮保留**（你说完一句话它不会消失），但会话结束就回收。
+所以：跑长任务前先把中间结果**落到 `/work` 并记下来**（写进你的回复里），
+别指望"上一轮跑出来的文件"永远在。
 
 ## 纪律（三条，都是硬的）
 
@@ -667,6 +792,41 @@ ACTION: {"tool": "list_scans", "args": {"limit": 5}}
 - 列表只在真的有三项以上并列时才用。
 - 出错了就直说，不要用"遇到了一些小问题"这种模糊表述。
 """
+
+
+def _render_recipe_index() -> str:
+    """命令行工具配方清单。取不到就给一句可读的空态。
+
+    ## 为什么空态也要给一句，而不是留空
+
+    提示词里 `{recipe_index}` 那一行如果被替换成空串，模型会看到
+    "## 可用的命令行工具" 下面一片空白 —— 它会以为"一个都没装"，
+    而真相是"这个部署没附带配方库"。一句空态文案把这两种情况分清。
+
+    ## 为什么用 try/except 包住
+
+    `app.kernel.recipes` 的 import 会连带拉起 `app.kernel` 包。
+    那条链在**不执行任何东西**的纯问答轮次里不该因为一个可选功能
+    把整轮对话打断 —— 配方清单是增强，不是必需。
+    """
+    try:
+        from app.kernel import recipes as recipes_mod
+
+        return recipes_mod.render_index() or '（本次部署没有附带命令行工具配方清单。）'
+    except Exception:  # noqa: BLE001 - 配方库坏了不该让对话说不了话
+        _log.warning('渲染对话配方清单失败', exc_info=True)
+        return '（配方清单这次读不出来 —— 不影响你 run_shell，自己 `command -v` 查。）'
+
+
+def _render_skill_index() -> str:
+    """技能包清单（名字 + 一句话描述，正文靠 `load_skill` 拉）。"""
+    try:
+        from app.kernel import skills as skills_mod
+
+        return skills_mod.render_index() or '（本次部署没有附带技能包。）'
+    except Exception:  # noqa: BLE001
+        _log.warning('渲染对话技能清单失败', exc_info=True)
+        return '（技能清单这次读不出来 —— 不影响别的事。）'
 
 
 def build_system_prompt(
@@ -709,6 +869,26 @@ def build_system_prompt(
     # 有 JSON」这件正常事变成一件要小心的事，而提示词将来还会加更多示例。
     # `replace` 只认那一个显式占位符，JSON 原样保留。
     prompt = SYSTEM_PROMPT_TEMPLATE.replace("{tool_catalog}", render_tool_catalog())
+    # ★ v0.107：把「有哪些命令行工具」和「有哪些打法手册」也注进来。
+    #
+    # ## 为什么对话页需要这两份清单（而 v0.98 只给了解题侧）
+    #
+    # 有了 `run_shell` 之后，模型面对的第一个问题是"我该跑什么"。
+    # 不给清单，它只会用自己脑子里那几样（`curl` / `nmap` / `ls`），
+    # 而镜像里实际装了 34 条配方覆盖的东西（`sqlmap` / `nuclei` /
+    # `pwntools` / `r2` …）它不会想到。
+    #
+    # ## 为什么是"清单 + 按需拉全文"，不是把全文塞进来
+    #
+    # 与 `runner.py:2609` 同一条理由：系统提示词**每轮重发**。34 条配方
+    # 全文约 6.2KB，跑 6 轮工具就是 37KB 重复传输，而那些细节（某个 flag
+    # 具体怎么写）只在真要调那个工具时才有用 —— 那正是 `load_recipe` 的活。
+    #
+    # ⚠️ 这里同样**不做探测**：提示词在起沙箱之前构建，那时容器还不存在。
+    #    所以清单里的工具是"可能装了"的形态，配方正文每条都带 `limitation`
+    #    写着"先 command -v 确认"。
+    prompt = prompt.replace("{recipe_index}", _render_recipe_index())
+    prompt = prompt.replace("{skill_index}", _render_skill_index())
     prompt += render_persona(persona)
     prompt += render_approval_rule(require_approval)
     prompt += render_tool_hint(hinted_tools)

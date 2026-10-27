@@ -583,3 +583,83 @@ def test_over_http_personas_are_listed_for_any_reader(
     assert isinstance(rows, list) and len(rows) >= 1
     first = rows[0]
     assert {"id", "label", "summary"} <= set(first)
+
+
+# ══════════════════════════════════════════════════════════
+# 6. 归档会话要连沙箱一起销毁（v0.107）
+# ══════════════════════════════════════════════════════════
+
+
+def test_archiving_a_session_destroys_its_sandbox(
+    ready_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 归档 = 删会话，那个会话的沙箱必须当场销毁。
+
+    ## 这条在防什么
+
+    `drop_sandbox` 曾经**没有任何调用方** —— 函数写好了、docstring 还
+    写着"调用点：DELETE /chat/sessions/{id}"，但 DELETE 里一行都没写。
+
+    后果不是"多占一点内存"：对话沙箱是**无限制档**（出网 + 可写工作区），
+    容器会一直挂着，而 `_SANDBOXES` 是进程内字典，进程不重启它就永远
+    不会自己消失。用户以为"我把对话删了"，实际一个能上网的容器还活着。
+
+    ## 为什么断言的是"被调用了"而不是"容器真的没了"
+
+    这条测的是**接线**（router 有没有调 drop_sandbox）。销毁本身由
+    `tests/chat/test_sandbox.py` 里那几条守。混在一起的话，docker 抽风
+    会让这条变成假红，而它想守的其实是"有人把调用删了"。
+    """
+    from app.chat import sandbox as chat_sandbox
+
+    created = ready_client.post(f"{API}/chat/sessions", json={"title": "会跑工具的对话"})
+    assert created.status_code == 201, created.text
+    session_id = created.json()["id"]
+
+    dropped: list[str] = []
+
+    def _fake_drop(sid: str) -> None:
+        dropped.append(sid)
+
+    monkeypatch.setattr(chat_sandbox, "drop_sandbox", _fake_drop)
+
+    resp = ready_client.delete(f"{API}/chat/sessions/{session_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived"] is True
+
+    assert dropped == [session_id], (
+        "归档会话时没有销毁它的沙箱 —— 那个无限制容器会一直挂着，"
+        "进程不重启就不会消失"
+    )
+
+
+def test_archiving_succeeds_even_if_sandbox_destruction_fails(
+    ready_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """销毁出错不能让"删会话"失败。
+
+    用户的意图是删掉这个对话。docker 抽风是平台的问题，不该变成
+    "你的对话删不掉" —— 那会把一个运维问题伪装成功能缺陷。
+    """
+    from app.chat import sandbox as chat_sandbox
+
+    created = ready_client.post(f"{API}/chat/sessions", json={"title": "docker 抽风"})
+    session_id = created.json()["id"]
+
+    real_drop = chat_sandbox.drop_sandbox
+
+    def _boom(sid: str) -> None:
+        # drop_sandbox 自己吞异常，这里模拟"连吞都没吞住"的最坏情况：
+        # 直接抛出去，看 router 会不会跟着炸。
+        raise RuntimeError("docker daemon 挂了")
+
+    monkeypatch.setattr(chat_sandbox, "drop_sandbox", _boom)
+
+    try:
+        resp = ready_client.delete(f"{API}/chat/sessions/{session_id}")
+    finally:
+        monkeypatch.setattr(chat_sandbox, "drop_sandbox", real_drop)
+
+    # 这里的期望：删除动作本身仍然成功。
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived"] is True

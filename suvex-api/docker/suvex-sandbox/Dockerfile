@@ -146,6 +146,89 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #    "该分类需要什么"，把它列进去等于把"装了"当成"该用"。
     nuclei feroxbuster dirsearch wafw00f arjun dalfox xsser \
     masscan rustscan hydra radare2 \
+    # ── ★ ProjectDiscovery 侦察三件套 + HTTP 断言（2026-10-26 补）──
+    #
+    # ## 为什么补：**我们自己的 skill 一直在教模型跑这些命令**
+    #
+    # 这不是"上游 strix 的 skill 引用了没装的东西"，而是**我方既有缺陷**。
+    # 清点时按名字 grep 我方 `prompts/skills/`，命中数：
+    #
+    #   · `naabu`     3 篇（含 `reconnaissance/asset_discovery.md:61`）
+    #   · `subfinder` 2 篇（含 `asset_discovery.md:59` 的完整命令行示例）
+    #   · `katana`    1 篇（`methodology/attack-surface-recon.md`）
+    #
+    # `asset_discovery.md:59` 逐字写着：
+    #   `subfinder -d example.com -all -recursive -silent -oJ -o subs.jsonl`
+    # 而镜像里根本没有 `subfinder` 这个命令 —— 模型照着做只会拿到
+    # `command not found`，然后**误以为是目标的问题**，转而去试别的方法。
+    # 这比"没装工具"更糟：它消耗的是模型的排查预算。
+    #
+    # ## 每个都核过 Kali 源（`pkg.kali.org/pkg/<name>` 实测 HTTP 200）
+    #
+    #   · `katana`    —— 爬虫。`-jc`（解析 JS 里的端点）是它相对
+    #                    `gospider`/`dirb` 的独有价值：现代 SPA 的路由全在 JS 里
+    #   · `naabu`     —— 端口扫描。相对 nmap 的优势是**快**（`-top-ports 100 -verify`）
+    #   · `subfinder` —— 被动子域枚举（证书透明日志等多源）。**不发包给目标**，
+    #                    纯被动，比字典爆破静默
+    #   · `hurl`      —— HTTP 请求链 + 响应断言，可复现、可 review。
+    #                    与 `run_shell` + `curl` 的区别是**断言是一等公民**
+    #                    （`[Asserts]` 段），不用自己写 `grep` 判断
+    #   · `python3-hypothesis` —— 属性测试库（差分测试/找边界）。
+    #                    ⚠️ 这是**库**不是 CLI，名字和上游 skill 撞车，
+    #                    见下面 `tooling/hypothesis.md` 的说明
+    #
+    # ## ⚠️ 不装的两个，以及为什么
+    #
+    #   · `semgrep` —— Kali 源里**没有**（`pkg.kali.org/pkg/semgrep` → HTTP 404）。
+    #     只能 pip 装，wheel 68.5 MB（有 cp314 轮子，能装）。
+    #     但它**运行时默认要从官方规则注册表拉规则**，而容器是 `--network none`
+    #     或 iptables 白名单 —— 拉了会超时。要装就得同时 vendor 一份规则集，
+    #     成本远大于收益。**当前决定：不装，并在 skill 里写明替代路径。**
+    #   · `amass` —— 我方 `asset_discovery.md` 提到 1 次，但它是子域枚举里
+    #     最慢的一档（默认跑很久），而 `subfinder` 已覆盖同一需求。
+    katana naabu subfinder hurl \
+    python3-hypothesis \
+    # ── ★ httpx：那个"两个同名工具"的坑（2026-10-26 补）──
+    #
+    # ## 坑在哪
+    #
+    # 镜像里早就有 `httpx` —— 但那是 `pip install httpx`（第 481 行
+    # `requests httpx beautifulsoup4 lxml`），**Python 的 HTTP 客户端库**，
+    # 没有 CLI 入口。而我方 `asset_discovery.md`、`attack-surface-recon.md`
+    # 教的却是 `httpx -l hosts.txt -sc -title -td -tls-grab` ——
+    # ProjectDiscovery 的 httpx **命令行工具**。两者只是恰好同名。
+    #
+    # 所以 `which httpx` 会失败，`python -c "import httpx"` 却成功 ——
+    # 这正是最难自查的一类缺口：按名字 grep 会以为"装过了"。
+    #
+    # ## Kali 源里怎么解决的
+    #
+    # Kali 把 PD 的 httpx 打包成 **`httpx-toolkit`**（v1.9.0-0kali2），
+    # 但**装出来的二进制仍叫 `/usr/bin/httpx`** —— 包名避让了 Python 的
+    # `httpx`，二进制名没有。实测 `www.kali.org/tools/httpx-toolkit/`
+    # 页面的 "Packages and Binaries" 只列 `/usr/bin/httpx`。
+    #
+    # 也就是说：装 `httpx-toolkit` 之后
+    #   · `httpx -l hosts.txt -sc -title`  → PD 的 CLI（skill 教的用法）
+    #   · `python3 -c "import httpx"`       → pip 的库（不变）
+    # 两者并存，不冲突 —— pip 那个只进 site-packages，不占 /usr/bin。
+    httpx-toolkit \
+    # ── ★ 密钥/ secrets 扫描 + 爬虫（2026-10-26 补，用户指令"直接全装"）──
+    #
+    # 这三个是 skill 里提到、而镜像里没有的：
+    #   · `gitleaks`   —— git 仓库 / 目录树里的密钥泄漏扫描（正则+熵）；
+    #   · `trufflehog` —— 同上，但会**验证**密钥是否仍然有效（多打一次请求
+    #                     确认活不活），这是它相对 gitleaks 的核心增量；
+    #   · `gospider`   —— 快速爬链接，`tooling/katana.md` 里作为替代方案提到。
+    #
+    # 为什么值这个体积：CTF 和真实渗透里"源码/仓库泄露"都靠这类工具先捞。
+    # 我方原本一个都没有 —— `semantic_confusion.md`、`source_aware_sast.md`
+    # 教模型用 trufflehog/gitleaks，但 `which trufflehog` 是空的。
+    #
+    # `bandit` 是 Python 静态审计（`django.md` 提到）。Kali 里包名是
+    # `python3-bandit`（`bandit` 是其依赖别名），装 `bandit` 会连带 Python 版。
+    gitleaks trufflehog gospider \
+    bandit \
     # ── 取证 / misc 题 ──
     binwalk foremost sleuthkit exiftool p7zip-full unzip \
     tcpdump tshark imagemagick \
@@ -283,7 +366,155 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ⚠️ seccomp-tools 带 **native extension**，所以 `make` 必须在
     #    装它之前就位（本文件上面的 `build-essential` 提供）。
     ruby ruby-dev \
+    # ── ★ 无头浏览器（2026-10-26 补）──
+    #
+    # ## 为什么补：这是"提示词教模型做的事、镜像里没工具"的第六例
+    #
+    # 本项目为这同一个结构性缺口已经栽过五次（`verify_sandbox_tools.py`
+    # 文件头列了清单：steghide、hashcat、.NET、msoffcrypto-tool、patchelf）。
+    # 这次清点镜像时发现的是：**三个镜像里一个浏览器都没有** ——
+    # 而 `docker/suvex-sandbox-re/Dockerfile:17` 那句注释一直写着
+    #
+    #     "base 镜像里那些为 web/取证装的东西（浏览器、代理、...）"
+    #
+    # **那句话是假的**：base 里 grep 不到 chrom/firefox/webkit/playwright
+    # 任何一个。注释里的"已有"从来没被真的装进来 —— 与 `steghide` 被写进
+    # 注释却不装（见本文件第 32 行那处讽刺）是同一个形态。
+    #
+    # ## 为什么值得占这一层（约 350 MB）
+    #
+    # Web 题里有一整类**必须执行 JS 才看得见**的东西：
+    #   · SPA / 前端路由（curl 只拿到 `<div id="app"></div>`）；
+    #   · 客户端加密后再提交的口令、token 生成；
+    #   · XSS 是否真的触发（要真渲染才知道 payload 有没有执行）；
+    #   · 靠 JS 做的跳转与 `document.write` 拼出来的隐藏端点。
+    # 这些用 `curl` / `http_request` **原理上看不到**，不是"慢一点"而是
+    # "拿不到"。没有浏览器时模型只能猜端点，然后反复 404。
+    #
+    # ## 为什么是 `chromium` 而不是 puppeteer/playwright
+    #
+    # puppeteer 要在**运行时**下载一份 Chromium（`~/.cache/puppeteer`），
+    # 而沙箱默认 `--network none` —— 那会在第一次调用时就失败，且失败
+    # 信息是"下载超时"，看起来像网络问题而不是"镜像没预装"。
+    # `apt install chromium` 把浏览器本体打进镜像，运行时零下载。
+    #
+    # `chromium-driver`（chromedriver）**不装**：那是 Selenium 用的，
+    # 而我们是直接命令行驱动（`--headless=new --dump-dom` / `--screenshot`），
+    # 用不到 WebDriver 协议，装了只是多开一个攻击面。
+    #
+    # ⚠️ 用户是 `solver`（uid 1000，见文件末的 `USER solver`）。
+    #    Chromium 拒绝以 **root** 运行（除非 `--no-sandbox`），
+    #    而我们**不给** `--no-sandbox`：容器本身就是隔离边界，
+    #    再关掉 Chromium 自己的沙箱是拿纵深换省事。
+    #    非 root 下不需要那个开关 —— 这也是坚持不用 root 跑的原因。
+    #
+    # ⚠️ 根文件系统是 `--read-only`（见 runner 的 `_argv`），所以
+    #    Chromium 的 profile / cache 目录**必须**指到 `/work` 下的
+    #    tmpfs，否则启动时报
+    #    "Failed to create a ProcessSingleton for your profile directory"。
+    #    那一句看起来像"权限问题"，实际是"只读根"—— 见 `browser` 工具的
+    #    `--user-data-dir`。字体同理：不装 `fonts-liberation` 时截图里
+    #    全是方块，而模型会以为自己拿到了乱码页面。
+    chromium \
+    fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
+
+# ── ★ agent-browser（2026-10-26 补）：把 Chromium 变成模型能操作的页面 ──
+#
+# ## 为什么装它，而不是自己写 CDP 驱动
+#
+# 上一轮（v0.102）我先写了 `app/kernel/browser_driver.py`：一个纯标准库
+# 手写 CDP 客户端。写完发现两件事：
+#
+#   1. 那份代码在**本机无法执行**（宿主没有 docker），也就是说它交付时
+#      一次都没跑过 —— 而"没跑过的浏览器驱动"必定有 bug（CDP 的会话
+#      初始化、target 附着、事件流都有非平凡时序）。
+#   2. `agent-browser` 已经在**本机实测跑通**（见下），且它做的事
+#      正是我们需要的：把可访问性树压成 `- button "Sign in" [ref=e2]`
+#      这种 200-400 token 的可操作文本。
+#
+# 所以选择**用它**、删掉手写驱动。判断依据是"哪个真的被验证过"，
+# 不是"哪个是我们自己写的"。
+#
+# ## 它是什么（三个容易搞错的点，都已实测确认）
+#
+# 1. **它不需要 node。** 这是个反直觉的结论，值得写下来：npm 包
+#    `agent-browser` 里的 `bin/agent-browser.js` 只是个 wrapper，它会
+#    `spawn` 同目录下的 `agent-browser-linux-x64` —— 而那个是
+#    **Bun 编译的独立 ELF**（`file` 报 "ELF 64-bit LSB pie executable"，
+#    动态依赖只有 libc/libdl/libm/libpthread）。实测 `env -i`（清空环境）
+#    直接执行它能输出 `agent-browser 0.26.0`，而走 wrapper 则报
+#    `env: 'node': No such file or directory`。
+#    → 所以下面**不装 node**，只取那个二进制。少一个运行时依赖，
+#      就少一个失败点。
+#
+# 2. **Chrome 的沙箱由它自己关。** 二进制里有 3 处写死的 `--no-sandbox`
+#    提示串，其中一条明写 "(required in containers, VMs, and some Linux
+#    setups)"。这条非常重要：它意味着**为 Chrome 沙箱去给容器加
+#    `SYS_ADMIN` 是白付代价** —— Chrome 根本不会启用那个沙箱。
+#    证据对照：strix 的 `strix/runtime/docker_client.py:250-257` 给容器
+#    加的 capabilities 只有 `NET_ADMIN`/`NET_RAW`（为 nmap 的原始套接字），
+#    并没有为 Chrome 加 SYS_ADMIN，而它的 Chrome 在非 root（`pentester`）
+#    下正常工作。我们据此**不给容器加任何 capability**。
+#
+# 3. **它自带技能文档**（`agent-browser skills get core`，15971 字符）。
+#    这是它相对"裸 CDP"最大的价值：说明书与 CLI 版本永远匹配。
+#
+# ## 版本与完整性
+#
+# 钉死 0.26.0 并校验 sha256 —— 版本与 strix 一致（它的 Dockerfile 里
+# 也是 `npm install -g agent-browser@0.26.0`）。用 `curl` 取 tarball 再
+# 手工解包，而不跑 `npm install`：既省掉 node，也省掉 postinstall 的
+# 联网下载（postinstall 会去 GitHub releases 抓二进制，构建期多一个
+# 外部依赖点）。
+#
+# ⚠️ 镜像里只放 **linux-x64** 那一个二进制（10.9MB），tarball 里另外 6 个
+#    平台的文件（~70MB）不落盘。
+ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
+#: 空闲回收：与 strix 同值。模型跑完一轮不会主动 close，靠它收尸。
+ENV AGENT_BROWSER_IDLE_TIMEOUT_MS=180000
+#: profile 必须落在可写处（根是只读的）。`/work` 是 tmpfs，见 runner 的 `--tmpfs`。
+ENV AGENT_BROWSER_PROFILE=/work/.browser/profile
+#: socket 目录同理；默认在 $XDG_RUNTIME_DIR 或 /tmp，都要显式指到可写处。
+ENV AGENT_BROWSER_SOCKET_DIR=/work/.browser/sock
+ENV AGENT_BROWSER_SCREENSHOT_DIR=/work/.browser/shots
+#: ★ 容器里必须带 `--no-sandbox`（见上面第 2 点）。写进 ENV 而不是让
+#:   模型每次自己加：模型不知道这是容器的约束，而漏了它的症状是
+#:   "Chrome 静默崩溃"，看起来像镜像坏了。
+ENV AGENT_BROWSER_ARGS="--no-sandbox,--disable-dev-shm-usage,--disable-gpu"
+
+RUN set -eux; \
+    # ⚠️ 架构门：只在 x86_64 上装。arm64 的二进制 tarball 里也有，
+    #    但本项目三个镜像目前都是 amd64。写死这条以防"在 arm 机器上
+    #    build 出没有浏览器的镜像"这种静默降级。
+    test "$(dpkg --print-architecture)" = "amd64" \
+      || { echo "agent-browser: 本段只处理 amd64，arm64 需换二进制名" >&2; exit 1; }; \
+    mkdir -p /opt/agent-browser; \
+    curl -fsSL -o /tmp/ab.tgz \
+      "https://registry.npmjs.org/agent-browser/-/agent-browser-0.26.0.tgz"; \
+    # 校验 sha256（钉死字节）。npm 公布的 integrity 是 sha512-base64，
+    # 也可以直接用，但 sha256 在 Dockerfile 里更省事且足够。
+    printf '%s  %s\n' \
+      "8a48cf4110d7dc2c12c1c4d6d25e0babdfa31604b537f05df0dc835fe2f854bf" /tmp/ab.tgz \
+      | sha256sum -c -; \
+    tar -xzf /tmp/ab.tgz -C /tmp \
+      package/bin/agent-browser-linux-x64 \
+      package/LICENSE \
+      package/skill-data \
+      package/skills; \
+    install -m 0755 /tmp/package/bin/agent-browser-linux-x64 /opt/agent-browser/agent-browser; \
+    ln -sf /opt/agent-browser/agent-browser /usr/local/bin/agent-browser; \
+    # 技能文档跟着二进制走：CLI 的 `skills` 子命令按 ../skill-data 推算路径，
+    # 所以两个目录必须同父级。
+    mv /tmp/package/skill-data /opt/agent-browser/skill-data; \
+    mv /tmp/package/skills /opt/agent-browser/skills; \
+    cp /tmp/package/LICENSE /opt/agent-browser/LICENSE; \
+    rm -rf /tmp/package /tmp/ab.tgz; \
+    # ⚠️ 构建期自检：这一步失败就等于"装了但用不了"，必须 build 时就炸。
+    #    不用 `doctor`：实测它会挂住（本机跑 25s 超时都没退出来），
+    #    而 `--version` 足够证明"二进制能在这台机器上执行"。
+    agent-browser --version; \
+    test -d /opt/agent-browser/skill-data/core
 
 # ── Python 解题环境（venv，独立于系统 python）──────────────
 #
@@ -435,7 +666,16 @@ VOLUME ["/opt/host-resources"]
 #    `--tmpfs /work`）。根文件系统只读意味着一个被攻下的解题进程
 #    无法持久化 —— 它写的东西随容器一起消失。
 RUN useradd --create-home --uid 1000 --shell /bin/bash solver \
-    && mkdir -p /work/attachments \
+    # ⚠️ `/work/.browser/*` 的三个子目录是给 agent-browser 用的
+    #    （profile / socket / screenshot，见上面的 ENV）。**必须在镜像里
+    #    就建好并 chown**，因为运行时 `/work` 是 tmpfs，一挂上来
+    #    镜像里的内容就被盖掉了 —— 那时目录不存在、属主是 root，
+    #    而 `AGENT_BROWSER_PROFILE=/work/.browser/profile` 写不进去的
+    #    报错是 "Failed to create a ProcessSingleton"，看不出是属主问题。
+    #    所以真正的创建动作在 runner 启动容器之后（`_argv` 的注释里
+    #    写了 /work 必须 uid=1000），这里建一份是给"手动 docker run
+    #    调试"用的，两者都留着。
+    && mkdir -p /work/attachments /work/.browser/profile /work/.browser/sock /work/.browser/shots \
     && chown -R solver:solver /work
 
 WORKDIR /work

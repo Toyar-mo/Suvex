@@ -212,6 +212,35 @@ _AGENT_SELF_REF = "agent-engine"
 #: 幂等。手动等价命令：`docker network create suvex-pentest`。
 PENTEST_NETWORK = "suvex-pentest"
 
+#: 通用 agent（对话里那个）专用网桥（2026-10-27）。
+#:
+#: ## 为什么又要一张新网络，而不是复用 `suvex-pentest`
+#:
+#: 因为**用处不同，边界就该不同**。`suvex-pentest` 上跑的是「对授权目标
+#: 的一次渗透扫描」，而这里跑的是「用户在对话里让它做任意一件事」：
+#: 装包、下载、编译、跑脚本、开浏览器。后者要的是**像一台普通开发机**，
+#: 前者要的是**像一台攻击机**。混在一张网络上，两条后果都是真的：
+#:
+#: · 并发时互相可见：`suvex-pentest` 的 ICC 是默认值（true，实测
+#:   `docker network inspect` 的 `enable_icc` 为空），A 扫描的容器能连到
+#:   B 对话的容器；
+#: · 出站策略没法各调各的：CTF 侧靠 iptables 白名单收窄，扫描侧要放开
+#:   任意目标，而对话侧要放开公网**但**封住平台自己 —— 三种策略挂在一张
+#:   网桥上必然互相妥协。
+#:
+#: 所以新建一张，只服务对话 agent。**ICC 关掉**（同容器之间不该互通）。
+AGENT_NETWORK = "suvex-agent"
+
+#: 对话 agent 沙箱的容器名前缀。
+#:
+#: ⚠️ 它**必须**与 `SANDBOX_NAME_PREFIX` 一起被 `sweep_orphan_sandboxes`
+#:    认领，否则进程被 `systemctl restart` 杀掉时（`finally` 没机会跑，
+#:    见 `sweep_orphan_sandboxes` 的 docstring）对话沙箱会一个个攒在宿主上，
+#:    而**没有任何界面能看到它们**。命名上以 `ctf2-chat-` 开头是为了让
+#:    既有的 `ctf2-` 前缀判据天然覆盖它 —— 少一处需要同步的判据，
+#:    就少一次"加了新前缀却忘了扩展清理"的泄漏。
+AGENT_SANDBOX_PREFIX = "ctf2-chat-"
+
 #: 关掉"同网络容器互通"的那个 Docker 网络选项。
 #:
 #: ## ★★ 为什么用这个，而不是"每道题一个网络"
@@ -698,6 +727,57 @@ _CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 _CONTAINER_GONE_MARKER = "No such container"
 
 
+#: `extra_env` 里**不允许**出现的键名片段（大写比较）。
+#:
+#: 为什么不靠"调用方自觉"：`extra_env` 会被原样展开成 `-e KEY=VALUE`
+#: 进容器（见 `_argv`），而容器里的 agent 能读自己的环境变量。
+#: 一旦有人为了"让工具顺手一点"把 `GITHUB_TOKEN` 传进来，
+#: 那个令牌就等于交到了正在被审计的那段代码手里 —— 而且出事时
+#: 日志里只有一行无害的 `-e`。
+#:
+#: 判据按子串匹配而不是精确名单，因为凭据键名有无数变体
+#: （`GH_TOKEN` / `GITHUB_TOKEN` / `MY_API_KEY` / `DB_PASSWORD`）。
+#: 宁可误伤一个无害的 `TOKEN_BUCKET_SIZE`，也不要放过一个真令牌
+#: —— 误伤的表现是启动时一句明确的报错，改个名就好。
+_EXTRA_ENV_CREDENTIAL_MARKERS: tuple[str, ...] = (
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "API_KEY",
+    "APIKEY",
+    "ACCESS_KEY",
+    "PRIVATE_KEY",
+    "CREDENTIAL",
+    "AUTH",
+    "COOKIE",
+    "SESSION_ID",
+    "BEARER",
+)
+
+
+def _reject_credentials_in_extra_env(extra_env: dict[str, str]) -> None:
+    """`extra_env` 承载凭据时立刻失败，不留到容器里去。
+
+    抛 `KernelSandboxError` 而不是 `ValueError`：这条路径上所有
+    "沙箱组装失败"都以那个异常收口，调用方的重试/清理逻辑挂在它上面。
+    """
+    offenders = sorted(
+        key
+        for key in extra_env
+        if any(marker in key.upper() for marker in _EXTRA_ENV_CREDENTIAL_MARKERS)
+    )
+    if not offenders:
+        return
+    raise KernelSandboxError(
+        "`extra_env` 里不能放凭据："
+        + "、".join(offenders)
+        + "。这些东西会原样传进沙箱容器，等同于交给正在被审计的那段代码。"
+        "如果某个工具确实需要一个无意义的开关变量，换个不带凭据字样的名字"
+        "（例如 `PWNLIB_NOTERM=1`）。"
+    )
+
+
 class KernelSandboxError(KernelError):
     """沙箱（Docker）层面的失败。"""
 
@@ -1052,6 +1132,74 @@ def ensure_pentest_network() -> bool:
     return False
 
 
+def ensure_agent_network() -> bool:
+    """确保通用 agent 网桥 `suvex-agent` 存在（幂等）。
+
+    ## 与另外两张网络的关系
+
+    三张，各有各的出站策略，**不合并**：
+
+    | 网络 | 谁在跑 | 出站 |
+    | --- | --- | --- |
+    | `suvex-ctf2` | 解题容器 | 只许 CTF 靶站网段（iptables 白名单） |
+    | `suvex-pentest` | 渗透扫描容器 | 任意目标 + 公网 |
+    | `suvex-agent` | 对话里的通用 agent | 公网 + 任意目标，**但封住平台自己** |
+
+    第三行的"封住平台自己"不是靠这张网络自己做到的 —— 用户自定义 bridge
+    的出站走宿主 NAT，所以它天然能打到宿主的 LAN IP，而平台前端就监听在
+    那上面（实测从 `suvex-pentest` 里的容器 `curl 192.168.44.128:8080`
+    返回 **200**）。那一层由 `deploy/sandbox-egress-guard.sh` 在 **INPUT**
+    链上封（`DOCKER-USER` 只管转发，管不到"容器 → 宿主自己的 IP"，
+    理由见那个脚本的注释）。
+
+    所以这张网络的责任只有一个：**把对话沙箱和另外两类隔开，并关掉 ICC**。
+
+    ## 为什么 ICC 必须关
+
+    对话 agent 是"用户在对话里让它做任意一件事"——它会下载不可信内容、
+    跑别人给的脚本。同一时刻可能有多个会话在跑各自的沙箱，彼此不该互通。
+    这与 `ensure_pentest_network` 同一条理由，实测机制也相同
+    （`-A DOCKER-FORWARD -i br-xxx -o br-xxx -j DROP`）。
+
+    ## 失败不阻断
+
+    返回 False 只记 warning：真正起不来会在 `start()` 时暴露成一条
+    有明确报错的失败，比在这里提前退出更容易定位。
+    """
+    inspected = _run(["docker", "network", "inspect", AGENT_NETWORK], timeout=30)
+    if inspected.ok:
+        return True
+
+    created = _run(
+        [
+            "docker",
+            "network",
+            "create",
+            "-o",
+            f"{NETWORK_ICC_OPTION}=false",
+            AGENT_NETWORK,
+        ],
+        timeout=60,
+    )
+    if created.ok:
+        logger.info(
+            "已创建通用 agent 网桥 %s（出站 NAT 正常，与平台库/CTF/扫描网桥隔离）",
+            AGENT_NETWORK,
+        )
+        return True
+
+    # 竞态复查：create 失败可能因为另一个进程刚建好。
+    if _run(["docker", "network", "inspect", AGENT_NETWORK], timeout=30).ok:
+        return True
+
+    logger.warning(
+        "无法创建通用 agent 网桥 %s，对话沙箱将起不来：%s",
+        AGENT_NETWORK,
+        (created.stderr.strip() or "未知原因"),
+    )
+    return False
+
+
 
 def ensure_docker_available() -> None:
     """起容器前的自检。
@@ -1099,10 +1247,66 @@ class SandboxContainer:
         workspace_dir: Path | None = None,
         extra_env: dict[str, str] | None = None,
         volume_write: bool = True,
+        unrestricted: bool = False,
     ) -> None:
         self.name = name
         self.image = image
         self.network_isolated = network_isolated
+        # ★★ 「无限制档」（2026-10-27，对话里的通用 agent 专用）。
+        #
+        # ## 它解决的那个具体症状
+        #
+        # 用户在对话里让 agent 做事，它回「在这个对话里我没有执行环境」。
+        # 接上内核工具之后仍然做不成事，因为**解题档的沙箱卡住的正是
+        # 「自主做事」这条能力**。实测（生产参数起容器，逐条试）：
+        #
+        #     pip install requests      → 只读根，写不进 /opt/venv
+        #     apt-get install -y jq     → 非 root + 只读根，被拒
+        #     curl https://pypi.org     → 000（`--network none`，完全无网）
+        #     touch /usr/local/bin/x    → Read-only file system
+        #
+        # 这四条不是"某个工具没装"，是**沙箱本身不是一台能干活儿的机器**。
+        #
+        # ## 「没有限制」到底放开了什么、又留了什么（逐条给理由）
+        #
+        # 放开（因为它们是「干活儿的摩擦」，不是「逃逸的通道」）：
+        #   · `--read-only` 去掉 → 根文件系统可写，`apt/pip` 装得进；
+        #   · `--user 0:0`      → 容器内 root，`apt` 装完能执行 postinst；
+        #   · `--cap-drop ALL` 去掉 → 用 Docker 默认能力集。留 ALL 丢弃时
+        #     root 也 chown/setuid 不了，`apt install` 装完注册用户会失败；
+        #   · `no-new-privileges` 去掉 → 保 setuid/setcap 生效，否则容器里
+        #     `ping` / `nmap -sS` / `su` 全部不可用（setcap 的 net_raw 被忽略）；
+        #   · `--pids-limit` 512 → 4096 → `make -j` / `npm` / JVM 会一次拉起
+        #     上百个线程与进程，512 会让它们在毫无提示的情况下 fork 失败；
+        #   · `/work`、`/tmp` 不再用 tmpfs → 直接用可写容器层。**这一条是
+        #     刻意的**：tmpfs 的页算进 cgroup 内存，给 4g 的 tmpfs 就等于
+        #     让"往 /work 拷一个数据集"和"跑一个进程"抢同一份内存上限。
+        #
+        # 留着（**这三条不是能力限制，是宿主存活与逃生边界**）：
+        #   · `--memory` / `--cpus` —— 实测这台 Kali 只有 8G 总量、
+        #     `free -m` 的 available 常年在 1.2G 上下。不给上限时容器一路
+        #     申请，内核 OOM killer 挑的受害者可能是**平台自己的 postgres**。
+        #     给了上限以后被杀的只会是容器自己（它自己的 cgroup OOM），
+        #     这是"限制容器"和"保住平台"之间的正确取舍。
+        #   · `--rm` —— 容器退出即删。它不限制 agent 能做什么，
+        #     只保证不留残骸（配合 `destroy()` 与 `sweep_orphan_sandboxes`）。
+        #   · `--network` 走 `AGENT_NETWORK` —— 有出站（pip/apt/git 要），
+        #     但与平台库、CTF 靶站、扫描网桥都隔离。
+        #
+        # ## ⛔ 无论这一档怎么配，这三条绝不出现
+        #
+        #   `--privileged`、`-v /var/run/docker.sock`、`--network host`。
+        #   理由见 `_argv` 末尾那段 —— 任何一条都会让上面全部努力归零。
+        #
+        # ## 如实记一条残余风险
+        #
+        # 容器内 root + 默认能力集 + 可写根，**比解题档的爆炸半径大**。
+        # 它的边界靠三件事撑着：不是 `--privileged`、不挂 docker.sock、
+        # 出站被封住平台自身端口（`deploy/sandbox-egress-guard.sh`）。
+        # 也就是说：拿到容器内 root 之后能做的事，止步于"这台一次性容器"。
+        # 内核提权漏洞是这条线上唯一真正的出口，而那不是靠多丢几个
+        # capability 能挡住的 —— 记在这里，免得有人以为这一档"一样安全"。
+        self.unrestricted = unrestricted
         # ★★ 渗透评估专用网桥（2026-10-22 加）。
         #
         # ## 为什么 CTF 那套 egress 白名单不能拿来跑渗透
@@ -1181,9 +1385,11 @@ class SandboxContainer:
         self.volume_write = volume_write
         # ⚠️ `extra_env` **绝不允许**承载凭据。它存在的唯一用途是
         # 传一些无害的开关（比如 `PWNLIB_NOTERM=1`）。
-        # 类型上没法强制这一点，所以这条规矩写在这里 + 有测试盯着
-        # （`test_extra_env_must_not_carry_credentials`）。
+        # ★ 这行注释以前写着"有测试盯着（`test_extra_env_must_not_carry_credentials`）"，
+        #   但那个测试**从来没有存在过**，构造函数也没有任何校验 —— 承诺是真的
+        #   风险（令牌漏进容器 = 交给被审计代码），守卫是假的。现在补上真校验。
         self.extra_env = extra_env or {}
+        _reject_credentials_in_extra_env(self.extra_env)
         self._started = False
         self.container_id: str | None = None
         # ★★ 容器是否已被外部移除（v0.41）。
@@ -1233,7 +1439,26 @@ class SandboxContainer:
         第 1 条排在 `network_name` 前面是**故意的**：即使渗透场景传了网桥名，
         只要上层判定要隔离（本地 repo/path 目标），就仍走 `none`。隔离永远是
         更安全的那一档，不该被"我传了个网桥名"覆盖。
+
+        ## 「无限制档」单独排在最前（第 0 条）
+
+        `unrestricted=True` 时**直接**返回 `AGENT_NETWORK`，不看
+        `network_isolated`。原因：那一档的调用方（对话 agent）创建容器时
+        很可能用构造函数的默认值（`network_isolated=True`），而默认值一
+        生效，沙箱就变成 `--network none` —— 装了包也下不了、`pip install`
+        全是 `000`。那症状与"沙箱没配好"完全一致，非常难查。
+
+        换句话说：这一档里"有没有网络"**不是**由 `network_isolated`
+        决定的（那个参数属于解题档的三态语义），而是由"这是哪一档"决定。
+        混用两个开关表达一件事，就会有人只拨一个。
+
+        ⚠️ 但它**不会**因此跳到默认 bridge 上：`AGENT_NETWORK` 是专用网桥，
+        与平台库（`172.17.0.0/16`）、CTF 靶站（`172.18.0.0/16`）、
+        扫描网桥（`172.19.0.0/16`）都隔离。放开的是"能出公网"，
+        不是"能看见平台自己"。
         """
+        if self.unrestricted:
+            return AGENT_NETWORK
         if self.network_isolated:
             return "none"
         return self.network_name or CTF2_NETWORK
@@ -1281,6 +1506,76 @@ class SandboxContainer:
             # 见 `guard_tool_url` 的说明。
             "--network",
             self._network_arg(),
+        ]
+        # ── 从这里往下分成两档 ────────────────────────────────
+        #
+        # 解题档（默认）与「无限制档」（对话 agent）在这里分叉，而不是在
+        # 调用点各拼一份 argv：`_argv` 是**唯一**构造 `docker run` 参数的地方，
+        # 分叉留在它内部，就保证了"两档共享同一份安全常量与同一段注释"。
+        # 反过来（调用点各自拼）会让两份 argv 慢慢漂开，而漂开的那一条
+        # 通常是某一天补的安全参数只补在一侧。
+        if self.unrestricted:
+            argv += self._unrestricted_argv()
+        else:
+            argv += self._restricted_argv()
+        # ── 两档共用的尾部 ────────────────────────────────────
+        if self.memory_mb:
+            argv += ["--memory", f"{self.memory_mb}m"]
+        if self.cpus:
+            argv += ["--cpus", str(self.cpus)]
+        # 只读挂宿主资源（已定设计决策 2）。
+        #
+        # ⚠️ 只在宿主路径**存在**时挂：挂一个不存在的路径会创建空目录，
+        # 而"资源目录是空的"与"资源没配"在容器里长得一样，
+        # 排查时会往"是不是 mount 没生效"的方向跑。
+        if self.host_resources is not None and self.host_resources.is_dir():
+            argv += ["-v", f"{self.host_resources}:{HOST_RESOURCES_PATH}:ro"]
+        # 题目附件（只读）。与上面同一条理由：只在目录**存在**时挂 ——
+        # 挂一个不存在的路径，Docker 会替我们建一个空目录，而"空目录"
+        # 与"没挂上"在容器里长得一模一样。
+        #
+        # ⚠️ 它位于 `/work` 这个 tmpfs **之下**。Docker 按路径深度先后
+        #    挂载（`/work` 先、`/work/attachments` 后），所以子挂载不会
+        #    被父 tmpfs 冲掉 —— 这也正是 Dockerfile 里那句
+        #    `mkdir -p /work/attachments` 在运行时失效的原因。
+        #
+        # ⚠️ 「无限制档」里没有 `/work` 这个 tmpfs，`/work` 是镜像里的
+        #    普通目录（可写容器层），子挂载行为不变。
+        if self.attachments_dir is not None and self.attachments_dir.is_dir():
+            argv += ["-v", f"{self.attachments_dir}:{ATTACHMENT_DIR}:ro"]
+        # ★★ 持久工作区（读写）。见 `workspace_dir` 的说明。
+        #
+        # ⚠️ 挂到 `/work/persist`（**不是** `/work` 本身）：
+        #    `/work` 是 tmpfs，直接挂载会把它整个换掉 —— 而那会连带
+        #    让 `/work/attachments` 那个子挂载失效（Docker 按路径深度
+        #    挂载，父层被替换后子层的可见性不再可靠）。
+        #    挂一个**子目录**则两者互不干扰：tmpfs 提供可写的工作区，
+        #    这个子目录提供跨容器存活的那部分。
+        #
+        # ⚠️ 目录不存在时**不挂**（与 host_resources / attachments 同一条
+        #    理由）：挂一个不存在的宿主路径，Docker 会替我们建一个
+        #    空目录 —— 而"空目录"与"没挂上"在容器里长得一模一样。
+        #    这里由调用方先 mkdir（见 `_workspace_dir`）。
+        if self.workspace_dir is not None and self.workspace_dir.is_dir():
+            # ★ v0.64：读写开关。`allowVolumeWrite=False` 时挂 `:ro` ——
+            #   设置页那一项从"写了不生效"变成真有行为。禁用时容器内
+            #   `/work/persist` 只读，agent 的写只能落在 `/work` 这个
+            #   tmpfs（容器停即消失），不影响内存里的发现收集。
+            _mode = "rw" if self.volume_write else "ro"
+            argv += ["-v", f"{self.workspace_dir}:{PERSIST_DIR}:{_mode}"]
+        for key, value in self.extra_env.items():
+            argv += ["-e", f"{key}={value}"]
+        argv += [self.image, "tail", "-f", "/dev/null"]
+        return argv
+
+    def _restricted_argv(self) -> list[str]:
+        """解题档的参数（历史行为，逐字节不变）。
+
+        这些参数挡什么，见 `_argv` 上半部分那张表。它们**没有**因为新增
+        了「无限制档」而改动任何一个字符 —— 解题场景的威胁模型
+        （题目给的任意附件，含恶意样本）与对话场景不同，不该被顺手放宽。
+        """
+        return [
             "--read-only",
             # /work 可写但在内存里：容器一停，题目样本与产出全部消失。
             # `uid/gid` 必须给：tmpfs 默认属主是 root，而容器里是非 root
@@ -1312,51 +1607,48 @@ class SandboxContainer:
             "--pids-limit",
             "512",
         ]
-        if self.memory_mb:
-            argv += ["--memory", f"{self.memory_mb}m"]
-        if self.cpus:
-            argv += ["--cpus", str(self.cpus)]
-        # 只读挂宿主资源（已定设计决策 2）。
-        #
-        # ⚠️ 只在宿主路径**存在**时挂：挂一个不存在的路径会创建空目录，
-        # 而"资源目录是空的"与"资源没配"在容器里长得一样，
-        # 排查时会往"是不是 mount 没生效"的方向跑。
-        if self.host_resources is not None and self.host_resources.is_dir():
-            argv += ["-v", f"{self.host_resources}:{HOST_RESOURCES_PATH}:ro"]
-        # 题目附件（只读）。与上面同一条理由：只在目录**存在**时挂 ——
-        # 挂一个不存在的路径，Docker 会替我们建一个空目录，而"空目录"
-        # 与"没挂上"在容器里长得一模一样。
-        #
-        # ⚠️ 它位于 `/work` 这个 tmpfs **之下**。Docker 按路径深度先后
-        #    挂载（`/work` 先、`/work/attachments` 后），所以子挂载不会
-        #    被父 tmpfs 冲掉 —— 这也正是 Dockerfile 里那句
-        #    `mkdir -p /work/attachments` 在运行时失效的原因。
-        if self.attachments_dir is not None and self.attachments_dir.is_dir():
-            argv += ["-v", f"{self.attachments_dir}:{ATTACHMENT_DIR}:ro"]
-        # ★★ 持久工作区（读写）。见 `workspace_dir` 的说明。
-        #
-        # ⚠️ 挂到 `/work/persist`（**不是** `/work` 本身）：
-        #    `/work` 是 tmpfs，直接挂载会把它整个换掉 —— 而那会连带
-        #    让 `/work/attachments` 那个子挂载失效（Docker 按路径深度
-        #    挂载，父层被替换后子层的可见性不再可靠）。
-        #    挂一个**子目录**则两者互不干扰：tmpfs 提供可写的工作区，
-        #    这个子目录提供跨容器存活的那部分。
-        #
-        # ⚠️ 目录不存在时**不挂**（与 host_resources / attachments 同一条
-        #    理由）：挂一个不存在的宿主路径，Docker 会替我们建一个
-        #    空目录 —— 而"空目录"与"没挂上"在容器里长得一模一样。
-        #    这里由调用方先 mkdir（见 `_workspace_dir`）。
-        if self.workspace_dir is not None and self.workspace_dir.is_dir():
-            # ★ v0.64：读写开关。`allowVolumeWrite=False` 时挂 `:ro` ——
-            #   设置页那一项从"写了不生效"变成真有行为。禁用时容器内
-            #   `/work/persist` 只读，agent 的写只能落在 `/work` 这个
-            #   tmpfs（容器停即消失），不影响内存里的发现收集。
-            _mode = "rw" if self.volume_write else "ro"
-            argv += ["-v", f"{self.workspace_dir}:{PERSIST_DIR}:{_mode}"]
-        for key, value in self.extra_env.items():
-            argv += ["-e", f"{key}={value}"]
-        argv += [self.image, "tail", "-f", "/dev/null"]
-        return argv
+
+    def _unrestricted_argv(self) -> list[str]:
+        """「无限制档」的参数（对话里的通用 agent）。
+
+        与 `_restricted_argv` 的差异，逐条都有实测依据 —— 见
+        构造函数里 `unrestricted` 那段注释的表格。这里只重复两条
+        最容易被人"顺手改回去"的：
+
+        ## 1. 为什么不用 `--tmpfs /work`
+
+        解题档用 tmpfs 是因为"题目样本不该在宿主上留痕"，而那一档的
+        工作集很小（一个题目的附件）。对话 agent 的工作集**可能很大**：
+        `git clone` 一个仓库、`pip download` 一堆 wheel、解一个数据集。
+        tmpfs 的页算进容器 cgroup 的内存上限，于是"拷一个大文件"
+        会和"跑一个进程"抢同一份内存 —— 症状是莫名其妙的 OOM，
+        而 `free -h` 在宿主上看不出异常（死在 cgroup 里）。
+
+        改成可写容器层之后，`--rm` 仍然保证容器一停字节就没了，
+        所以"不留痕"这条性质没有丢，丢的只是"在内存里"这个实现细节。
+
+        ## 2. 为什么保留 `--pids-limit`
+
+        这一条**不是**能力限制，是宿主存活限制。容器里 `npm install` /
+        `make -j` / `mvn` 一次就能拉起几百个进程，而默认的 512 在这种
+        真实负载下会让 fork 失败 —— 表现是 `fork: Resource temporarily
+        unavailable`，看起来像"机器太慢"。4096 让正常构建过得去，
+        同时仍然挡住 `:(){ :|:& };:` 那种把宿主拖死的形状。
+
+        ## ⛔ 这里同样绝不出现 `--privileged` / docker.sock / `--network host`
+        """
+        return [
+            # 容器内 root：`apt-get install` 需要，且 postinst 脚本
+            # （建用户、chown、setcap）在非 root 下会静默失败。
+            "--user",
+            "0:0",
+            # 不用 tmpfs：见上面第 1 条。
+            #
+            # ⚠️ 但仍然要保证 `/work` 存在且可写。镜像里 `/work` 是
+            #    solver 的目录，root 写它当然可以；`/tmp` 也是。
+            "--pids-limit",
+            "4096",
+        ]
 
     def start(self) -> None:
         ensure_docker_available()
@@ -1379,7 +1671,29 @@ class SandboxContainer:
         # 是"起来之前先确保存在"。按 `network_name` 分派，别混着查
         # `ensure_ctf2_network`（那个会去建 `suvex-ctf2` 靶站网络，
         # 渗透根本不用它）。
-        if not self.network_isolated:
+        # ★★ 「无限制档」的网络准备（2026-10-27）。
+        #
+        # ⚠️ 这一支必须排在 `not self.network_isolated` 那个判断**之前**，
+        #    而不是并进去。原因：对话 agent 创建容器时用的是构造函数
+        #    默认值 `network_isolated=True`（它不关心解题档那三态语义），
+        #    于是 `not self.network_isolated` 为假 —— 网络**一次都不会被
+        #    准备**，而 `_network_arg()` 那边又已经把参数改成了
+        #    `AGENT_NETWORK`。结果就是 `docker run` 报
+        #    `network suvex-agent not found`。
+        #
+        #    这与 `_network_arg()` 里"第 0 条"是同一个坑的两端：参数决定
+        #    走哪个网桥，准备也得跟着走同一个判断。两处判断各写一份就会
+        #    漂开，所以这里直接问 `_network_arg()` —— 它是唯一的事实来源。
+        if self._network_arg() == AGENT_NETWORK:
+            # 幂等（`ensure_agent_network` 内部判存在），每次起容器付一次
+            # 查询，换掉"网桥被 prune 掉之后一个看不懂的 not found"。
+            if not ensure_agent_network():
+                raise KernelSandboxError(
+                    "启动对话沙箱失败：缺少专用网桥 "
+                    f"`{AGENT_NETWORK}`，且自动创建没有成功。"
+                    "（它需要 root 建 docker 网络：见 deploy/install.sh）"
+                )
+        elif not self.network_isolated:
             if self.network_name:
                 ensure_pentest_network()
             else:
@@ -1431,11 +1745,17 @@ class SandboxContainer:
         # ⚠️ 位置：放在 `_verify_running()` **之后**。验活失败会抛异常，
         #    此时重建并没有成功，`died` 必须保持 True。
         self.died = False
+        # ⚠️ 网络名问 `_network_arg()`，不要在这里重写一遍三态判断 ——
+        #    原来这里是 `"none" if self.network_isolated else CTF2_NETWORK`，
+        #    加了无限制档之后它会同时打错两种情况（走 agent 网桥时打
+        #    CTF2，走 pentest 网桥时也打 CTF2）。日志说假话比没有日志更糟：
+        #    排查时人会照着这行去 `docker network inspect` 一个根本没用的网桥。
         logger.info(
-            "CTF2 沙箱已启动 name=%s image=%s network=%s id=%s",
+            "%s 沙箱已启动 name=%s image=%s network=%s id=%s",
+            "对话" if self.unrestricted else "CTF2",
             self.name,
             self.image,
-            "none" if self.network_isolated else CTF2_NETWORK,
+            self._network_arg(),
             self.container_id,
         )
 
@@ -2041,7 +2361,6 @@ class LlmGateway:
             usage=parse_usage(parsed),
             finish_reason=_finish_reason(parsed),
         )
-
 
     async def chat_stream(
         self, messages: list[dict[str, str]], *, system: str
@@ -3545,6 +3864,7 @@ TOOL_NAMES = (
     "read_attachment",
     "http_request",
     "run_shell",
+    "browser",
     "load_skill",
     "load_recipe",
     "list_requests",
@@ -3982,6 +4302,14 @@ async def dispatch_tool(
             return await _tool_http_request(args, spec=spec, http=http)
         if name == "run_shell":
             return await _tool_run_shell(args, sandbox=sandbox)
+        if name == "browser":
+            # ★ 浏览器走自己的模块。为什么不是塞进 run_shell：
+            #   `run_shell` 的返回契约是"命令输出原样给你"，而浏览器需要
+            #   一层**翻译** —— ref 失效要说"重新 snapshot"、截图要说
+            #   "你看不到图"。那些话必须由代码来说，不能指望模型自己悟。
+            from app.kernel import browser as browser_mod
+
+            return await browser_mod.run_browser(args, sandbox=sandbox)
         if name == "load_skill":
             # 纯查表：读一篇随代码分发的 markdown。不碰沙箱、不碰网络。
             # 名字取自参数 `name`（与 strix 的 load_skill 同名参数，方便
