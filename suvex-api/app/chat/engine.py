@@ -250,7 +250,11 @@ async def _call_model(
 # ══════════════════════════════════════════════════════════
 
 
-def _render_attachments(files: list[tuple[str, str]]) -> str:
+def _render_attachments(
+    files: list[tuple[str, str]],
+    *,
+    handed: list[tuple[str, str]] | None = None,
+) -> str:
     """把附件的正文拼成一段，接在用户那句话**之后**。
 
     ## 为什么接在用户消息里，而不是作为独立的一条
@@ -275,18 +279,44 @@ def _render_attachments(files: list[tuple[str, str]]) -> str:
     ## 附件：`nginx.conf`
     <正文>
     ---
+    原始文件（只读）：
+    - `/work/attachments/<id>-access.log`
     ```
 
     ★ 附件放在**后面**：先问题、后材料。反过来的话模型要读完几万字材料
       才看到"到底要干什么"，而工具输出/长上下文里的注意力衰减是实测存在的。
+
+    ## `handed` 为什么单独列一段
+
+    二进制附件（pcapng/zip/ELF）在正文里只有一句"读不了"。光有那句话，
+    模型会以为**没救了** —— 而文件其实就在沙箱里。所以必须显式给出
+    容器内路径，并且说清"路径带 id 前缀"（`a8f7-` 那种），否则模型会
+    按文件名 `ls` 然后报找不到。
+
+    这一段只在有交接文件时出现。纯文本附件也照样交接了（路径在），
+    但正文已经够用，不需要再引导；不过**给了也没坏处**——所以文案统一
+    说明"原始文件在这些路径"，让模型自己决定要不要 `xxd`。
     """
-    if not files:
+    handed = handed or []
+    if not files and not handed:
         return ""
     blocks: list[str] = ["", "---"]
     for name, body in files:
         blocks.append(f"## 附件：`{name}`")
         blocks.append(body.rstrip())
         blocks.append("")
+    if handed:
+        blocks.append("原始文件（只读）也在沙箱里，路径如下：")
+        for name, container_path in handed:
+            blocks.append(f"- `{name}` → `{container_path}`")
+        blocks.append(
+            "文本附件的正文已经贴在上面了；但被截断过的、或者你想 grep/awk "
+            "全文的，直接读这些路径。二进制附件（pcapng/zip/ELF）在上面只有"
+            "一句「读不了」，真正的内容在这条路径上 —— 用 `run_shell` 分析："
+            "`file` 看类型、`xxd` 看字节、`binwalk` 拆包、`tcpdump -r` 读抓包、"
+            "`strings` 捞可打印串。"
+            "路径里的数字前缀是附件 id，用完整路径，别只按文件名 `ls`。"
+        )
     blocks.append("---")
     return "\n".join(blocks)
 
@@ -1137,12 +1167,27 @@ async def run_turn(
     #   于是下一轮它自然出现在历史里，不需要"这一轮额外带哪些附件"的状态。
     #   代价是它每轮都重发（见 attachments 模块 docstring 的取舍说明）。
     files: list[tuple[str, str]] = []
+    # 交接给沙箱的附件：`(显示名, 容器内路径)`。
+    handed: list[tuple[str, str]] = []
     if attachment_ids:
         files = chat_attachments.read_text(session_id=session.id, attachment_ids=attachment_ids)
-        # 用完即删：这些文件已经没有第二个用途了。
-        chat_attachments.discard(session_id=session.id, attachment_ids=attachment_ids)
+        # ★ v0.109：不再「用完即删」。
+        #
+        #   原先是 `discard(...)` —— 文本读进上下文之后文件就没用了。那在
+        #   "附件只能当文本读"的时代是对的。
+        #
+        #   但现在对话有沙箱：一个 pcapng 的价值恰恰在于 `tcpdump`/`binwalk`
+        #   能跑它，而 `read_text` 对二进制只回一句"读不了"。**先删掉再去
+        #   告诉模型"你可以去 /work/attachments 看看"** 是自相矛盾的。
+        #
+        #   改成 `hand_over(...)`：文件从暂存区**搬**到会话交接目录，那个
+        #   目录以只读方式挂进沙箱的 `/work/attachments`。搬走而不是复制，
+        #   是为了让暂存区腾空 —— 否则一路撞 `MAX_STAGED_PER_SESSION`(30)。
+        handed = chat_attachments.hand_over(
+            session_id=session.id, attachment_ids=attachment_ids
+        )
 
-    stored_content = content + _render_attachments(files)
+    stored_content = content + _render_attachments(files, handed=handed)
     user_message = chat_service.append_user_message(db, session=session, content=stored_content)
     result.messages.append(user_message)
     db.commit()

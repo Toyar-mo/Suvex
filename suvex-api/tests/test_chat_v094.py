@@ -457,11 +457,24 @@ def test_reading_then_discarding_removes_it_from_the_list() -> None:
     assert chat_attachments.list_staged(session_id="chat_probe_6") == []
 
 
-def test_a_binary_attachment_says_it_cannot_be_read_instead_of_garbage() -> None:
-    """★ 二进制附件要明说读不了。
+def test_a_binary_attachment_names_a_way_forward_instead_of_garbage() -> None:
+    """★ 二进制附件要明说读不了，**并且**给出真能走的那条路。
 
     塞一堆替换字符（`\\ufffd`）让模型去猜，它会编一段"我看到文件里有…"。
     那比"读不了"危险得多 —— 用户会拿着编造的内容去做决策。
+
+    ## 为什么这条断言的期望值变过（v0.109）
+
+    原来是 `assert "扫描任务" in text`，对应旧文案"如果它是靶标附件，
+    请走「扫描任务」——那里有沙箱"。那句话在 v0.107 之前是对的：对话页
+    确实没有沙箱。
+
+    现在对话页**有**无限制沙箱，再说"你去别处做"就是把用户从他本来
+    就能做成这件事的地方赶走；更糟的是模型会顺着这句话说"这里做不了"，
+    而它脚下就站着一个能跑 binwalk 的容器（用户截图里正是这个表现：
+    `/work/attachments/` 是空的 → 模型如实说文件没落盘）。
+
+    所以现在断言的是**真路径**：挂载目录 + 至少一个能分析它的命令。
     """
     staged = chat_attachments.store(
         session_id="chat_probe_8",
@@ -475,7 +488,10 @@ def test_a_binary_attachment_says_it_cannot_be_read_instead_of_garbage() -> None
     )
     _, text = pairs[0]
     assert "二进制" in text
-    assert "扫描任务" in text, "要告诉用户该走哪条路，而不只是说读不了"
+    # 指向真实可用的出路：文件就在挂载目录里，用 run_shell 去分析。
+    assert chat_attachments.HANDOVER_MOUNT_DIR in text, "要给出文件所在的真实目录"
+    assert "run_shell" in text, "要告诉模型用哪个工具去分析"
+    assert "binwalk" in text or "xxd" in text, "要给至少一个具体命令，别只说「去分析」"
 
     chat_attachments.discard(session_id="chat_probe_8", attachment_ids=[staged.id])
 

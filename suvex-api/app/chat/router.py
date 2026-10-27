@@ -152,6 +152,22 @@ def archive_session(session_id: str, db: DbSession, identity: Reader) -> ChatSes
         chat_sandbox.drop_sandbox(session_id)
     except Exception:  # noqa: BLE001 - 清理失败不该让已落库的归档报错
         logger.warning("归档会话 %s 时销毁沙箱失败", session_id, exc_info=True)
+    # ★ 附件也要清。两棵树：暂存区（用户传了但还没发的）和交接目录
+    #   （已经搬进沙箱、被挂载的那份）。
+    #
+    #   为什么归档该清它们：附件是**一次性耗材**（见 `attachments` 模块
+    #   docstring），而归档意味着这个会话不会再被发消息 —— 留着只是磁盘
+    #   垃圾，且其中可能有用户不希望长期驻留的材料（pcap、日志、密钥文件）。
+    #
+    #   ⚠️ `drop_handed_over` 原先**没有任何调用方**（v0.109 前：`drop_session`
+    #      也是零调用方）。于是"归档"只销毁了容器，文件一直留在
+    #      `<tmp>/suvex-chat-attachments/<session_id>/` 下 —— 每次归档都在
+    #      磁盘上多留一份用户上传的原始文件，直到系统重启清 /tmp。
+    try:
+        chat_attachments.drop_session(session_id=session_id)
+        chat_attachments.drop_handed_over(session_id=session_id)
+    except Exception:  # noqa: BLE001 - 同一条理由：清理失败不该翻成 500
+        logger.warning("归档会话 %s 时清理附件失败", session_id, exc_info=True)
     return ChatSessionOut.model_validate(session)
 
 

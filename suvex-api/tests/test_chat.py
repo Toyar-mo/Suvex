@@ -976,7 +976,80 @@ def test_the_system_prompt_tells_the_model_it_has_a_sandbox() -> None:
         assert name in prompt, f"提示词里没提 `{name}`"
 
 
-def test_the_system_prompt_says_how_to_call_a_tool_not_just_that_tools_exist() -> None:
+def test_the_system_prompt_does_not_call_the_sandbox_disposable() -> None:
+    """提示词里关于沙箱**生命周期**的说法必须与实现一致。
+
+    ## 这条为什么存在
+
+    v0.107 的提示词写着「沙箱是 `--rm` 的一次性容器：删了就没了，`/work`
+    里的东西不跨会话保留」。当时它是从解题档抄来的描述。
+
+    但对话档的实际行为是：**跨轮保留**（同一 `session_id` 复用同一个容器，
+    v0.107 端到端实测过 `pwd`/主机名两轮一致），只在①归档会话 ②空闲 30 分钟
+    （v0.108 的 `reap_idle_sandboxes`）时才回收。
+
+    两处说法不一致的代价是具体的：模型读到"删了就没了"，就会每轮重跑一遍
+    准备工作（重新装包、重新下载字典），因为它以为上一轮的东西不在了 ——
+    而它其实还在。反过来，模型若以为"永久保留"，就会在容器被回收后
+    对着空 `/work` 发懵，还以为是自己的路径写错了。
+
+    所以断言两头：不能留"一次性/删了就没了"，且必须说清两个真实回收条件。
+    """
+    from app.chat.prompts import build_system_prompt
+    from app.chat.sandbox import IDLE_REAP_SECONDS
+
+    prompt = build_system_prompt()
+
+    for stale in ("一次性容器", "删了就没了", "不跨会话保留"):
+        assert stale not in prompt, (
+            f"提示词里还有「{stale}」—— 这是解题档的描述，对话档跨轮保留，"
+            "模型会因此每轮重跑已经做过的事"
+        )
+
+    assert "跨轮保留" in prompt, "必须告诉模型 `/work` 在会话内跨轮保留"
+    # 两个真实回收条件都要在，否则模型无法判断"我的文件什么时候会没"。
+    assert "归档" in prompt, "必须说清归档会回收沙箱"
+    # ⚠️ `IDLE_REAP_SECONDS` 是 float（1800.0），直接 `// 60` 得到 `30.0`，
+    #    而提示词里写的是人类语言的 "30 分钟"。先 int() 再拼 —— 这个坑我
+    #    自己踩了一次：断言在 `'30.0 分钟' in prompt` 上失败，而实现是对的。
+    idle_minutes = int(IDLE_REAP_SECONDS) // 60
+    assert f"{idle_minutes} 分钟" in prompt, (
+        f"必须说清空闲回收阈值（当前实现是 {idle_minutes} 分钟）。"
+        "阈值从 sandbox.IDLE_REAP_SECONDS 读，改了实现就该同步改提示词。"
+    )
+
+
+def test_the_system_prompt_warns_that_command_v_is_not_identity_proof() -> None:
+    """`command -v` 只能证明名字解析到了路径，证明不了是哪个程序。
+
+    ## 这条是一个真缺陷的回溯（2026-10-26，Kali 实测）
+
+    镜像里 `command -v httpx` 有输出（`/opt/venv/bin/httpx`，`pip install
+    httpx` 顺带放的 console script），跑起来只会报
+    `The httpx command line client could not run …`；而 skill 教的是
+    ProjectDiscovery 的 httpx 扫描器。
+
+    原先提示词写的是「具体装了哪些见配方清单，**先 `command -v` 确认，
+    别假设**」—— 把 `command -v` 当成了判据。这是**假绿灯**：缺失会让
+    检查变红，同名不同物会让检查变绿，而后者只在题目里表现成"工具不好用"，
+    模型于是会去改参数，白烧几个回合。
+
+    断言提示词教了正确判据：真跑一次看输出形状 + 怀疑同名不同物时看
+    `which -a`。
+    """
+    from app.chat.prompts import build_system_prompt
+
+    prompt = build_system_prompt()
+
+    assert "别只看 `command -v`" in prompt or "不只" in prompt, (
+        "提示词仍在暗示 command -v 足以判定工具可用"
+    )
+    assert "which -a" in prompt, (
+        "必须告诉模型：名字命中但行为不对时，用 `which -a` 看有没有多个候选"
+    )
+    assert "同名不同物" in prompt, (
+        "必须点明这类缺口的名字 —— 否则模型的第一反应是怀疑自己的参数"
+    )
     """工具清单只说明"有什么"，不说明"怎么用" —— 后者必须在提示词里。
 
     ## 这个用例是一个真事故的回溯（Kali 线上实测）

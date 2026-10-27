@@ -87,6 +87,18 @@ STAGED_TTL_SECONDS = 3600
 #:   而不是让它以为自己看到了全文。
 MAX_ATTACHMENT_CHARS = 60_000
 
+#: 交接目录在**沙箱里**挂到哪儿。
+#:
+#: 刻意用 `/work/attachments` 而不是别的路径：`/work` 是沙箱里唯一可写的
+#: 工作区（无限制档是容器层，受限档是 tmpfs），模型的所有相对路径操作都
+#: 从那儿出发。挂到 `/attachments` 会让它在两个"根"之间来回切。
+#:
+#: ⚠️ 这个名字与 `app.kernel.runner.ATTACHMENT_DIR`（`/work/attachments`）
+#:    必须一致 —— 解题档把题目附件挂在这儿，对话档把交接附件挂在这儿，
+#:    两边挂同一个路径意味着**同一段提示词在两种场景下都对**。有一条测试
+#:    钉住这个一致性（`tests/chat/test_attachment_handover.py`）。
+HANDOVER_MOUNT_DIR = "/work/attachments"
+
 #: 文件名白名单。允许中文、空格、点、括号 —— 拒绝路径分隔符与以点开头的隐藏名。
 #:
 #: ★ 与 `scans/uploads.py::safe_filename` 的口径一致（那边同样拒绝
@@ -270,12 +282,20 @@ def read_text(*, session_id: str, attachment_ids: list[str]) -> list[tuple[str, 
             except UnicodeDecodeError:
                 continue
         if text is None:
-            # 二进制：明确说读不了。不说的话模型会编一段"我看到文件里有…"。
+            # 二进制：明确说读不了，**并且**说清文件其实还在哪儿。
+            #
+            # ★ 这句曾经是"如果它是靶标附件，请走「扫描任务」——那里有沙箱"。
+            #   那是 v0.107 之前的事实：对话页没有沙箱。现在有了（无限制档），
+            #   再这么说就是**把用户赶去别的地方做本来这里就能做的事**。
+            #   而且更糟：模型会顺着这句话说"这里做不了，你去扫描任务"，
+            #   而它就站在一个能跑 binwalk 的沙箱里。
             out.append(
                 (
                     name,
-                    f"（这是二进制文件（{len(raw)} 字节），对话里读不了它的内容。"
-                    "如果它是靶标附件，请走「扫描任务」——那里有沙箱。",
+                    f"（这是二进制文件（{len(raw)} 字节），正文里读不了它的内容。"
+                    f"原始文件已挂到 `{HANDOVER_MOUNT_DIR}/`（只读），"
+                    "可以用 `run_shell` 去分析它：`file`、`xxd`、`binwalk`、"
+                    "`tcpdump -r`、`strings` 都可以。）",
                 )
             )
             continue
@@ -311,7 +331,83 @@ def drop_session(*, session_id: str) -> None:
         shutil.rmtree(directory, ignore_errors=True)
 
 
+#: 交接给沙箱的附件目录（**会话级**，独立于暂存区）。
+#:
+#: ## 为什么不能直接挂暂存区
+#:
+#: 暂存区有三个"耗材"性质：`sweep()` 按 mtime 一小时清、`MAX_STAGED_PER_SESSION`
+#: 卡 30 个、发消息后被 `discard()` 删掉。挂在沙箱里的目录必须是**稳定**的
+#: —— 一个 pcapng 如果因为 mtime 到点被 sweep 掉，模型上一轮还在 `tcpdump`
+#: 下一轮就 file not found，那比一开始就没有还糟。
+#:
+#: 所以分两层：暂存区（可清、有配额）+ 交接区（会话活多久就在多久）。
+#: `hand_over()` 把文件从暂存区搬到交接区。
+def handed_over_dir(session_id: str) -> Path:
+    """这个会话的附件交接目录（宿主侧路径）。
+
+    ⚠️ 它**可能不存在**（这个会话还没发过带附件的消息）。调用方必须按
+       "存在才挂"处理 —— `SandboxContainer._argv` 就是这么做的，因为挂一个
+       不存在的宿主路径会让 Docker 建一个空目录，而"空目录"与"没挂上"
+       在容器里长得一模一样。
+    """
+    return _root() / "_handed_over" / _session_dir(session_id).name
+
+
+def hand_over(*, session_id: str, attachment_ids: list[str]) -> list[tuple[str, str]]:
+    """把暂存附件**搬**到交接目录，返回 `(显示名, 容器内路径)`。
+
+    ## 为什么是「搬」而不是「复制」
+
+    复制的话暂存区里那份没人删，就会一路撞 `MAX_STAGED_PER_SESSION`
+    （30 个）—— 用户传第 31 个附件时被拒，而他其实一个都没落下。搬走
+    则暂存区自然腾空。
+
+    ## 为什么还要**同时**返回容器内路径
+
+    因为模型要的是路径，用户要的是文件名。`solver-<id>-x.pcapng` 这种
+    带 id 前缀的名字在容器里避不开（同名文件传两次不能互相覆盖），但
+    提示词里必须告诉模型文件名长什么样、在哪个目录，否则它得先 `ls`
+    一轮才知道有什么。
+
+    ⚠️ 找不到的 id **跳过**（不抛）—— 与 `read_text` 同一条理由：
+       前端开两个标签页时另一个可能已经用掉了。少一个比整个请求 400 好。
+    """
+    out: list[tuple[str, str]] = []
+    target_dir = handed_over_dir(session_id)
+    for ident in attachment_ids:
+        path = _find(session_id=session_id, attachment_id=ident)
+        if path is None:
+            logger.warning("对话附件不存在，跳过交接：session=%s id=%s", session_id, ident)
+            continue
+        name = path.name.split("-", 1)[1] if "-" in path.name else path.name
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / path.name
+            # `os.replace` 而不是 `shutil.move`：同一个文件系统内它是原子的，
+            # 而 shutil.move 会先尝试 rename、失败再退回 copy+unlink ——
+            # 那条回退路径在"沙箱正在读这个文件"时会读到半个文件。
+            os.replace(path, target)
+        except OSError:
+            # 搬不动（权限/跨设备）：退回只读文本路径，别让整轮失败。
+            logger.warning("交接对话附件失败，保留在暂存区：%s", path, exc_info=True)
+            continue
+        out.append((name, f"{HANDOVER_MOUNT_DIR}/{target.name}"))
+    return out
+
+
+def drop_handed_over(*, session_id: str) -> None:
+    """删掉这个会话的交接目录（归档时调用）。
+
+    ⚠️ 与 `drop_session` 分开：暂存区和工作区是两棵树，一个可能在归档时
+       已经被清过了。
+    """
+    directory = handed_over_dir(session_id)
+    if directory.is_dir():
+        shutil.rmtree(directory, ignore_errors=True)
+
+
 __all__ = [
+    "HANDOVER_MOUNT_DIR",
     "MAX_ATTACHMENT_BYTES",
     "MAX_ATTACHMENT_CHARS",
     "MAX_ATTACHMENTS_PER_MESSAGE",
@@ -319,7 +415,10 @@ __all__ = [
     "STAGED_TTL_SECONDS",
     "Staged",
     "discard",
+    "drop_handed_over",
     "drop_session",
+    "hand_over",
+    "handed_over_dir",
     "list_staged",
     "read_text",
     "sanitize_name",

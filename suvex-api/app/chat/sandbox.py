@@ -186,7 +186,39 @@ def _new_sandbox(session: ChatSession) -> Any:
     抄了清单 + 对账测试，因为清单是数据；这边 import 的是函数，
     抄函数会把实现搞成两份。所以这里选择延迟 import。
     """
+    from app.chat import attachments as chat_attachments
     from app.kernel import runner
+
+    # ★ 先把交接目录**建出来**，再交给 `SandboxContainer`。
+    #
+    #   为什么必须先建：`SandboxContainer._argv` 只在
+    #   `attachments_dir.is_dir()` 为真时才挂 —— 那个判据是对的（挂一个
+    #   不存在的宿主路径，Docker 会替我们建一个空目录，而"空目录"与
+    #   "没挂上"在容器里长得一模一样，排查时会一路往错误方向跑）。
+    #
+    #   但它带来一个次序问题：如果第一次工具调用发生在"用户还没传过附件"
+    #   之前，目录不存在 → 不挂 → **这个沙箱此后永远看不到附件**，因为
+    #   挂载点是在 `docker run` 时确定的，之后再传文件也进不去。
+    #   用户完全可能先聊两轮、再传一个 pcapng 回来。
+    #
+    #   所以在这里无条件 mkdir：目录一定存在 → 一定挂上。空目录多挂一次
+    #   的代价是零（`/work/attachments` 里就是空的），而少挂一次的代价是
+    #   "模型说找不到文件，用户以为功能坏了"。
+    #
+    #   ⚠️ 之后传进来的文件**会**出现在容器里：`-v` 是 bind mount，挂的是
+    #      目录本身，宿主侧新加的文件对容器立即可见（`:ro` 限制的是写入，
+    #      不是可见性）。
+    handed_over: Any = chat_attachments.handed_over_dir(session.id)
+    try:
+        handed_over.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # 建不出来（磁盘满 / 权限）就退回"不挂"，并留日志：此时沙箱仍可用，
+        # 只是看不见附件。静默失败不可接受 —— 那会让"附件没挂上"变成
+        # 一个只能靠猜的现象。
+        _log.warning(
+            "对话沙箱的附件交接目录建不出来，本次不挂附件：%s", handed_over, exc_info=True
+        )
+        handed_over = None
 
     return runner.SandboxContainer(
         name=_sandbox_name(session.id),
@@ -198,9 +230,17 @@ def _new_sandbox(session: ChatSession) -> Any:
         cpus=DEFAULT_CPUS,
         memory_mb=DEFAULT_MEMORY_MB,
         host_resources=runner._host_resources_path(),
-        # 对话附件目录只读挂进去。`run_shell` 里 `file` / `strings` /
-        # `binwalk` 比 `read_attachment`（遇二进制只回 256 字节 hex）有用。
-        attachments_dir=None,
+        # 对话附件（只读）挂到 `/work/attachments`。
+        #
+        # ★ 这个值曾经是 `None` —— 注释写着"只读挂进去"，代码却没传，
+        #   于是用户传的 pcapng 从来没到过沙箱（2026-10-26 实机发现：
+        #   模型 `ls /work/attachments` 是空的、全盘 `find` 也没有它，
+        #   它只好如实说"文件没落盘"）。注释与代码不一致时，信代码。
+        #
+        # 为什么值得挂：`run_shell` 里的 `file`/`strings`/`binwalk`/
+        #   `tcpdump` 对二进制有用，而 `read_attachment` 遇二进制只回
+        #   "这是二进制文件，读不了"——那句话现在指向这个目录。
+        attachments_dir=handed_over,
         # 不挂持久工作区：对话的工作集应该**随沙箱生灭**。
         # 解题侧挂 `persist` 是因为一道题可能续解好几天；对话没有这个需求，
         # 而挂上去会让"删了会话但 /work/persist 里还留着东西"。
