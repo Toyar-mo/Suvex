@@ -251,18 +251,51 @@ def test_tools_whose_defaults_shrink_the_search_space_must_explain_it(name: str)
     )
 
 
-def test_the_container_network_limitation_is_stated_for_network_tools():
-    """容器是 `--network none`，对外连接工具必须写明「连不上不是目标的问题」。
+def test_network_limitation_distinguishes_the_two_sandbox_modes():
+    """`nc`/`socat` 的局限说明必须分清**两种沙箱**，不能一句「无网络」了事。
 
-    这条是本轮实测出来的：`nc`/`socat` 在沙箱里对任何地址都会
-    `Network is unreachable`。不写明，模型会把它读成「目标端口没开」。
+    ## 为什么这条断言在本轮被重写
+
+    原断言是 `"无网络" in limitation`。它在 v0.98 是对的：那时只有一个
+    解题档（`--network none`）。v0.107 加了对话档（`suvex-agent` 网络，
+    能真出网），同一份配方库被两档共用，于是那句话就变成了一半真一半假：
+
+      - 在解题沙箱里跑 `nc`，确实 `Network is unreachable` —— 旧话正确。
+      - 在对话沙箱里跑同一条 `nc`，它能真连出去 —— 旧话在这里是**错的**。
+
+    而错的方向很坏：模型读到「一定失败」，就会在**能连的时候**也放弃
+    尝试，或者把连上了的输出当作不可能、进而怀疑自己的命令写错了。
+
+    所以断言从「提到无网络」升级为「必须提到两档并给出判别办法」——
+    单纯的措辞扩充不算通过，得有可执行的 `ip -o addr` 判别。
     """
     for name in ("nc", "socat"):
         limitation = RECIPE_BY_NAME[name].default_limitation
-        assert "无网络" in limitation or "network none" in limitation, (
-            f"{name} 在容器里连不上任何外部地址（--network none），"
-            "必须写明这一点，否则「连不上」会被读成「目标没开端口」"
+        assert "network none" in limitation, (
+            f"{name}：解题沙箱是 --network none，连不上必须写明"
         )
+        assert "对话沙箱" in limitation, (
+            f"{name}：对话沙箱（v0.107 起）挂 suvex-agent 网络、能真连出去。"
+            "只写「无网络」会让模型在能连的时候也放弃尝试 —— 这比不写更坏。"
+        )
+        assert "ip -o addr" in limitation, (
+            f"{name}：光说「两档不同」不够，模型无法从这句话知道**自己当前"
+            "在哪一档**。必须给出可执行的判别办法（`ip -o addr` 看有没有"
+            "非 loopback 地址）。"
+        )
+
+
+def test_exec_recipe_does_not_flatten_the_two_modes():
+    """`exec` 的局限说明同样不能把对话档说成只读、无网。
+
+    这是用户抱怨「在这个对话里我没有执行环境」的同一类失真：模型相信
+    自己做不到，就不会去试。对话档根可写、能出网、能装包，这些都该说。
+    """
+    limitation = RECIPE_BY_NAME["exec"].default_limitation
+    assert "对话沙箱" in limitation, (
+        "exec 的局限说明必须提到对话沙箱档，否则模型会以为对话里也只能"
+        "在只读无网环境里跑命令"
+    )
 
 
 def test_pwn_recipe_warns_that_the_disasm_subcommand_is_broken():

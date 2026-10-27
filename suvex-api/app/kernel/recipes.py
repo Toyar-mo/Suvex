@@ -208,8 +208,11 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
         # ★ 这一条是与 CyberStrikeAI 最大的不同，必须写明：它们的 exec 是
         #   宿主机 `sh -c`，我们是独立容器。不写清，模型会去摸宿主机路径。
         default_limitation=(
-            '执行位置是**独立沙箱容器**（无网络、只读根、无特权），不是宿主机。'
-            '宿主机的文件、进程、网络一概看不到；能写的只有 /work。'
+            '执行位置是**独立沙箱容器**（不是宿主机），宿主机文件/进程一概看不到；'
+            '能写的只有 /work。'
+            '但两档沙箱不同：**解题沙箱**是 `--network none` + 只读根；'
+            '**对话沙箱**（v0.107 起）挂 `suvex-agent` 网络、根可写，能 apt/pip 装包、'
+            '能出网搜索。别把解题档的限制当成对话档的，反之亦然。'
         ),
     ),
     # ── 侦察 ──────────────────────────────────────────────
@@ -742,10 +745,11 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
                required=True, position=0),
         ),
         default_limitation=(
-            '容器**无网络**（`--network none`），所以任何 TCP/UNIX 连接都会失败 —— '
-            '它不是拿来打远程的，主要用途是**本地起一个监听**给另一个进程连'
+            '能不能连出去**取决于你在哪种沙箱里**：解题沙箱是 `--network none`，'
+            '任何 TCP/UNIX 连接都会失败；对话沙箱（v0.107 起）挂 `suvex-agent` 网络，'
+            '可以真连出去。判断办法是先 `ip -o addr` 看有没有非 loopback 地址。'
+            '它主要用途是**本地起一个监听**给另一个进程连'
             '（如把 pwntools 脚本的 stdin/stdout 接到一个 socket 上）。'
-            '要真联网请用 `http_request` 工具（它走宿主侧代理），不是这个。'
         ),
     ),
     ToolRecipe(
@@ -760,9 +764,10 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
             _p('timeout', 'flag', '连接超时秒数（`-w`）。', flag='-w'),
         ),
         default_limitation=(
-            '容器**无网络**，对外连接一定失败（`Network is unreachable`）—— '
-            '这不是「目标没开端口」，别把它读成结论。'
-            '真正对外发请求要用 `http_request` 工具。'
+            '能不能连出去**取决于你在哪种沙箱里**：解题沙箱是 `--network none`，'
+            '对外连接一定失败（`Network is unreachable`）—— 这不是「目标没开端口」，'
+            '别把它读成结论；对话沙箱（v0.107 起）挂 `suvex-agent` 网络，能真连。'
+            '判断办法：先 `ip -o addr` 看有没有非 loopback 地址。'
             '另外它**不加密、不解析**：拿到的就是裸字节，HTTP/TLS 都不会自动处理。'
         ),
         allowed_exit_codes=(0, 1),
@@ -918,6 +923,26 @@ def probe_command(names: list[str] | tuple[str, ...]) -> str:
     `command -v` 在 POSIX shell 里是内建命令，本不会污染 stderr；但有些
     镜像的 `/bin/sh` 是 busybox，某些版本对不存在命令会写 stderr。留着这条
     重定向让「没找到」干脆是空的，省得解析时要滤。
+    ## ★ 这个探测能证明什么、不能证明什么（`httpx` 那次教训）
+
+    `command -v` 只回答一个问题：**这个名字能不能解析到一个可执行路径。**
+    它不回答"那是不是我方的 skill 想要的那个程序"。
+
+    2026-10-26 就栽在这上面。镜像里 `command -v httpx` 有输出
+    （`/opt/venv/bin/httpx`，`pip install httpx` 顺带放的 console script），
+    于是"工具在场"的检查**通过**了；而我方 `asset_discovery.md` 教的是
+    ProjectDiscovery 的 httpx 扫描器。模型照着 skill 跑，拿到的是
+    「the httpx command line client could not run because the required
+    dependencies were not installed」。
+
+    也就是说：**缺失会让检查变红，同名不同物会让检查变绿。** 后者更难查，
+    因为它不报错，只是在题目里表现为"模型不会用工具"。
+
+    这条探测保持原样（换成一万次 `--version` 会挂住、会咂出花来），但
+    调用方不能把"路径非空"读成"按 skill 的用法能跑" —— 真正的兜底在
+    镜像侧：`docker/suvex-sandbox/Dockerfile` 里对 `httpx` 做了
+    原地替换 + **构建期按 skill 的真实写法跑一遍并断言 `[200]`**。
+    新加同名易混的工具时，请照那个模式在层里自检，而不是只加一行 apt 包名。
     """
     if not names:
         return 'true'

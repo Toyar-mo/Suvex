@@ -227,17 +227,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # 所以 `which httpx` 会失败，`python -c "import httpx"` 却成功 ——
     # 这正是最难自查的一类缺口：按名字 grep 会以为"装过了"。
     #
-    # ## Kali 源里怎么解决的
+    # ## Kali 源里怎么解决的 —— 我第一版写错了，这是二次实测后的更正
     #
-    # Kali 把 PD 的 httpx 打包成 **`httpx-toolkit`**（v1.9.0-0kali2），
-    # 但**装出来的二进制仍叫 `/usr/bin/httpx`** —— 包名避让了 Python 的
-    # `httpx`，二进制名没有。实测 `www.kali.org/tools/httpx-toolkit/`
-    # 页面的 "Packages and Binaries" 只列 `/usr/bin/httpx`。
+    # Kali 把 PD 的 httpx 打包成 **`httpx-toolkit`**。
     #
-    # 也就是说：装 `httpx-toolkit` 之后
-    #   · `httpx -l hosts.txt -sc -title`  → PD 的 CLI（skill 教的用法）
-    #   · `python3 -c "import httpx"`       → pip 的库（不变）
-    # 两者并存，不冲突 —— pip 那个只进 site-packages，不占 /usr/bin。
+    # 第一版这里写的是：「包名避让了 Python 的 `httpx`，二进制名没有，
+    # 装完 `httpx` 命令就是 PD 的」。**这句是错的**，而且刚好错在最有
+    # 欺骗性的方向上 —— 它让「装上就完事了」看起来成立。
+    #
+    # 二次实测（在真镜像里跑 `dpkg -S` / `dpkg -L`）：
+    #
+    #   $ dpkg -S /usr/bin/httpx
+    #   python3-httpx: /usr/bin/httpx        ← Python 库的 CLI 入口
+    #   $ dpkg -L httpx-toolkit | grep bin
+    #   /usr/bin/httpx-toolkit               ← PD 扫描器，名字**也**避让了
+    #
+    # 二进制名同样避让了，只是我上一版没查就下了结论。后果三条：
+    #   · `which httpx` 命中 → 看起来装了 → 实际是 Python 的，`-l/-td` 全不认
+    #     （报 `Usage: httpx [OPTIONS] URL` + `No such option: -e`）；
+    #   · 我方 `asset_discovery.md` / `attack-surface-recon.md` 教的
+    #     `httpx -l hosts.txt -sc -title -td -tls-grab` 按 skill 跑必炸；
+    #   · `/opt/venv/bin/httpx` 还在 PATH 更前面，且连 CLI 依赖都没装，
+    #     直接报 "could not run because the required dependencies were not installed"。
+    #
+    # 这个坑的形状值得记：`command -v httpx` 返回了路径，于是"工具在场"的
+    # 检查**通过**了，而那种检查正是我用来核对镜像的那一种。名字命中不等于
+    # 是同一个程序 —— 同名不同物比缺失更难查。
+    #
+    # 修法：删掉 venv 里那个残废的 CLI，再把 PD 的二进制链到 PATH 前面。
+    # 见文件末尾的 `httpx` shim 那一段。
     httpx-toolkit \
     # ── ★ 密钥/ secrets 扫描 + 爬虫（2026-10-26 补，用户指令"直接全装"）──
     #
@@ -575,6 +593,7 @@ RUN set -eux; \
     install -m 0644 /tmp/hurl-7.1.0-x86_64-unknown-linux-gnu/completions/hurl.bash \
       /usr/share/bash-completion/completions/hurl; \
     rm -rf /tmp/hurl.tgz /tmp/hurl-7.1.0-x86_64-unknown-linux-gnu; \
+    ln -sf /opt/hurl/hurl /usr/local/bin/hurl; \
     ln -sf /opt/hurl/hurlfmt /usr/local/bin/hurlfmt; \
     # ⚠️ 构建期自检：`/usr/local/bin` 在 PATH 靠前，但 `--version`
     #    走的是软链后的真实入口，能同时验证"软链对不对"与"依赖齐不齐"。
@@ -682,6 +701,70 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         # · `oletools`：OLE 宏/结构分析（`olevba`、`oledump`），misc 题常用
         # · `pyzipper`：能处理 AES 加密的 zip（标准库 `zipfile` 不支持）
         msoffcrypto-tool olefile oletools pyzipper
+
+# ── ★ 修掉 `httpx` 那个同名不同物的坑 ──────────────────────────
+#
+# 上面 `pip install … httpx …` 装的是 **Python 库**，但它同时会在
+# `/opt/venv/bin/httpx` 放一个 console script。那个入口在本镜像里是坏的
+# —— `httpx[cli]` 那个 extra 没装，跑起来直接报：
+#
+#   The httpx command line client could not run because the required
+#   dependencies were not installed.
+#   Make sure you've installed everything with: pip install 'httpx[cli]'
+#
+# 而 PATH 里 `/opt/venv/bin` 排**最前**（见上面 `ENV PATH`），于是
+# `httpx` 这个名字命中一个"能执行但必然失败"的东西，PD 的扫描器
+# （`/usr/bin/httpx-toolkit`）和 Python 自己的入口（`/usr/bin/httpx`，
+# 属 `python3-httpx` 包，同样是库里那个）都被压在后面。
+#
+# ## 为什么必须在这里修，而不是"让模型自己发现"
+#
+# 因为 `command -v httpx` **会成功**。所有"工具在不在"的检查——包括我
+# 自己用来核对镜像的那套——都会判它"在场"，然后模型按 skill 教的
+# `httpx -l hosts.txt -sc -title -td` 去跑，拿到一句安装提示。它会先
+# 怀疑参数写错，再怀疑网络，几轮之后才可能想到"这不是同一个程序"。
+# 名字命中不等于同一个东西，这类缺口比"缺失"难查得多。
+#
+# ## 三步 —— 注意第 2 步的位置，我第一版就放错了
+#   1. 删掉 `pip` 放的那个残废 console script。
+#   2. 在**同一个路径** `/opt/venv/bin/httpx` 建软链指向 PD 真身。
+#   3. 构建期自检：按 skill 里真实写法跑一次，必须出 `[200]`。
+#
+# ⚠️ 第 2 步为什么必须落在 `/opt/venv/bin/` 而不是 `/usr/local/bin/`：
+#
+# 我第一版把软链放 `/usr/local/bin/httpx`，理由是"那目录在 PATH 里靠前"。
+# 实测（真镜像里 `echo $PATH | tr : '\n'`）**login shell 的顺序是**：
+#
+#   /home/solver/.local/bin
+#   /usr/local/sbin
+#   /usr/sbin
+#   /sbin
+#   /opt/venv/bin          ← 在 /usr/local/bin **之前**
+#   /usr/local/bin
+#
+# 也就是说 `/opt/venv/bin` 排在 `/usr/local/bin` 前面（`/etc/profile`
+# 会重排 PATH，`00-venv.sh` 又把 venv 插到最前）。软链放 `/usr/local/bin`
+# 根本盖不过那个坏脚本 —— 第一版修法实测无效，`which httpx` 仍指向坏的。
+#
+# 正确做法是**原地替换**：同一路径上删掉坏脚本、放上软链。这样无论
+# login / 非 login、无论 PATH 怎么排，`httpx` 都只有一个候选。
+#
+# ⚠️ 纯文件名替换不会伤到库本身：`import httpx` 走的是
+#    `/opt/venv/lib/python3.14/site-packages/httpx/`，与 `bin/` 下的
+#    console script 是两个文件。下面自检里断言了这一点。
+RUN rm -f /opt/venv/bin/httpx \
+    && ln -sf /usr/bin/httpx-toolkit /opt/venv/bin/httpx
+# ⚠️ 自检单独一层，这样失败时一眼能看出是"自检没过"而非"上条命令写错"。
+RUN set -eux; \
+    printf 'example.com\n' | httpx -silent -status-code -title > /tmp/httpx_probe.txt 2>&1; \
+    cat /tmp/httpx_probe.txt; \
+    # PD 的 httpx 打印 `https://example.com [200] [Example Domain] …`；
+    # Python 那个哪怕依赖齐了也不会是这个形状（它只打印裸 body）。
+    grep -q '\[200\]' /tmp/httpx_probe.txt \
+      || { echo "FATAL: 'httpx' 又不是 ProjectDiscovery 的扫描器了"; exit 1; }; \
+    rm -f /tmp/httpx_probe.txt; \
+    # 库仍要在 —— 上面删的是 console script，不是包。
+    python3 -c 'import httpx; print("httpx lib ok", httpx.__version__)'
 
 # ── ★ 让 **login shell** 也拿到 venv 的 PATH ────────────────
 #
