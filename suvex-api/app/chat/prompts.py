@@ -230,9 +230,13 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
             "适合需要登录态或 JS 渲染的页面（`run_shell` 里的 curl 拿不到的那种）。"
         ),
         params=(
-            "command（必填，子命令：open <url> / snapshot -i / click <@eN> / "
-            "fill <@eN> <文本> / get text / eval <js> / wait …）、"
-            "其余参数按子命令解释"
+            "command（必填，子命令名：open / snapshot / click / fill / type / "
+            "press / get / eval / wait / screenshot / back / close / skills）、"
+            "url（open 用，http:// 或 https:// 开头）、"
+            "target（click/fill/type 用，@eN 或 CSS 选择器；press 用 key）、"
+            "text（fill/type 要填的内容）、what（get 用：title|url|text|html|"
+            "value|count|attr）、expression（eval 用）、"
+            "interactive（snapshot 默认 true，只要可交互元素）"
         ),
     ),
     ChatToolSpec(
@@ -628,6 +632,72 @@ def render_tool_hint(hinted: list[str] | None) -> str:
         "硬用一个不对的工具会把结论带偏。"
     )
     return "\n".join(lines) + "\n"
+
+
+def render_format_reminder() -> str:
+    """模型只写了人话、没写动作时，喂回去的一句纠偏（v1.13）。
+
+    ## 为什么需要它（这是真实缺陷的修法）
+
+    改造前：模型回「文件到了。先判型：看包概况、协议分层、流量最大的会话。」
+    —— 一句**正确但停在半路**的叙述，没有 `ACTION:`。主循环看到
+    `actions` 为空就地 `return`，整轮结束。用户看到的就是"输出一次就停了"，
+    只能自己打「继续」把它推一下。
+
+    模型并不是拒绝干活：它已经想好了下一步，只是把"打算做"写成了人话。
+    所以要做的不是换个说法安慰用户，而是**把它推回协议里**。
+
+    ## 为什么把可用工具名一起列出来
+
+    只有"请用 ACTION 格式"这种抽象要求时，模型容易再写一段叙述 ——
+    它不知道**能调什么**。列真名让它有一个可照抄的落点。
+    这与内核侧 `runner._format_reminder()` 是同一个理由（那处也是
+    把 `TOOL_NAMES` 拼进去）。
+
+    ## 与 `render_truncation_reminder` 必须分开
+
+    见那个函数的 docstring：病因不同，药也不同。用同一句话会让被切断的
+    模型试图把断掉的话写完，于是又超一次。
+    """
+    sample = 'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}'
+    return (
+        "## ⚠️ 你上一条回复没有包含动作\n\n"
+        "那一轮里没有 `ACTION:` 行 —— 所以工具一个都没有执行，"
+        "如果没有这句提醒，这一轮就到此结束了。\n\n"
+        "如果你还要继续做事，**现在直接写下一步的 ACTION**，不要重复刚才的叙述：\n\n"
+        f"```\n{sample}\n```\n\n"
+        f"可用工具：{'、'.join(sorted(CHAT_TOOL_NAMES))}\n\n"
+        "如果你已经全部做完了，就用一段话给出结论，不要再写 ACTION。"
+    )
+
+
+def render_truncation_reminder(reply_chars: int) -> str:
+    """模型被输出上限切断时，喂回去的是**另一句**（v1.13）。
+
+    ## 为什么必须与上面那条分开
+
+    两件事的病因不同，药也不同：
+
+    | 病因 | 现象 | 该怎么办 |
+    |---|---|---|
+    | 格式错 | 想好了但没写 ACTION | 写 ACTION |
+    | 被切断 | 写了但话没说完 | **先只写 ACTION 一行** |
+
+    用同一句话的后果是：被切断的模型被要求"写下一步的 ACTION"，
+    它会试图接着把那句被切断的话写完 —— 于是又超一次。
+
+    `reply_chars` 只是告诉模型"你写了多少字就断了"，给它一个具体的量感
+    （内核 `runner._truncation_reminder` 同样带这个数）。
+    """
+    sample = 'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}'
+    return (
+        "## ⚠️ 你的上一条回复达到输出长度上限被切断了\n\n"
+        f"你写了大约 {reply_chars} 个字符就断了，最后那段内容丢失。\n\n"
+        "这次请**先只写 ACTION 那一行**，不要在动作前后写长段说明 —— "
+        "说明可以等拿到工具结果之后再写：\n\n"
+        f"```\n{sample}\n```\n\n"
+        f"可用工具：{'、'.join(sorted(CHAT_TOOL_NAMES))}"
+    )
 
 
 def render_mounted_skills(mounted: list[tuple[str, str]]) -> str:

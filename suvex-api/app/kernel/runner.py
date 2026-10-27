@@ -59,6 +59,8 @@ crypto / 取证 / 逆向用最严的 `--network none`；
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import html
 import json
@@ -67,6 +69,7 @@ import os
 import re
 import shlex
 import subprocess
+import tempfile
 import time
 from collections.abc import AsyncIterator, Callable, Iterator, Sequence
 from dataclasses import dataclass, field
@@ -547,6 +550,62 @@ MAX_TURN_OUTPUT_CHARS = 16000
 #: 无限重建会变成每轮都撞一次墙、白烧 token —— 与 v0.41 那条"容器一死就
 #: 停"要防的浪费是同一种。2 次给的是"偶发一次 + 一次重试"的余量。
 MAX_SANDBOX_REVIVALS = 2
+
+#: ★ v1.04：`view_image` 能把多大的图送进对话（读盘的**原始字节**上限）。
+#:
+#: ## 为什么必须有这个上限
+#:
+#: 图片进对话要 base64（体积 ×4/3），而它**不会**被 `MAX_TOOL_OUTPUT_CHARS`
+#: 那套字符裁剪管到 —— 裁剪只作用在文本上。一次 `browser screenshot` 出来的
+#: 全页 PNG 实测可以到 3-5 MB，base64 后 4-7 MB 塞进一条消息，几轮就把
+#: 上下文吃干净，症状与"模型突然变笨"一模一样（它真的在遗忘）。
+#:
+#: 4 MB 这条线对应"缩过一遍之后仍然超标就明确拒绝"，而不是悄悄送进去。
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
+
+#: 超过它就**先缩图**而不是直接拒绝（实测 1080p 全页截图约 1.5-3 MB）。
+IMAGE_SHRINK_TARGET_BYTES = 1200 * 1024
+
+#: 缩图后的最长边。1568 是视觉模型侧常见的"再大也不会更准"的拐点，
+#: 再放大只会增加 token 而不增加信息。
+IMAGE_MAX_EDGE = 1568
+
+#: 认识的后缀 → MIME。**白名单**：不认识的后缀直接拒绝并说明原因，
+#: 而不是猜一个 `application/octet-stream` 发给模型（它会当成图片读，
+#: 然后得到 400，报错文本完全看不出根因）。
+IMAGE_MEDIA_TYPES: dict[str, str] = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class ImagePayload:
+    """一张**已编码好**、等着随下一轮消息送进模型的图。
+
+    ## 为什么要有这个中间对象（而不是直接改 `dispatch_tool` 的返回类型）
+
+    `dispatch_tool` 的契约是"返回一段**文本**给模型"，而且它被两处调用：
+    解题主循环（`_solve`）与多智能体循环（`multiagent`）。两处都要把
+    返回的字符串塞进日志、进 `outcome.tool_outputs`、进"重复调用指纹"。
+    把返回值换成对象，等于把这三处全部改一遍，且其中一处漏改就会在
+    运行时炸成 `TypeError: unhashable`。
+
+    所以：文本照旧走返回值，图片走**旁路**（`images` 收集器），
+    两条路各自演进。代价是调用方要记得传收集器 —— 不传的话
+    `_tool_view_image` 会明确告诉模型"这次看不到图"，而不是假装看到了。
+    """
+
+    path: str
+    media_type: str
+    #: base64（**不含** `data:` 前缀 —— 两种 provider 的前缀不一样，
+    #: 拼接在发送前做，见 `_image_block`）。
+    data: str
+    #: 原始字节数（给人看的，用来判断"是不是缩过了"）。
+    size: int
 
 
 # ══════════════════════════════════════════════════════════
@@ -1930,6 +1989,75 @@ class SandboxContainer:
             ["docker", "cp", str(host_path), f"{self.name}:{container_path}"], timeout=120
         )
 
+    def copy_out(self, container_path: str, host_path: Path) -> CommandResult:
+        """把容器里的文件取出到宿主（`view_image` 靠它）。
+
+        ## 为什么不是"只从 /work/persist 读"
+
+        持久区 `/work/persist` 是 bind mount，宿主确实能直读 —— 但它挂载时
+        可能是**只读**（`_restricted_argv` 里按模式给 `:ro`），而浏览器截图
+        落在 `/work/.browser/shots`（tmpfs）下，根本不在持久区里。
+        两个约束叠起来：**不能假定"想看的图一定在持久区、且持久区可写"**。
+
+        ## ★★ 不能用 `docker cp`：它读不到 tmpfs（2026-10-27 实测推翻）
+
+        这个方法的**第一版用的是 `docker cp`**，理由写的是"docker cp 走容器的
+        挂载命名空间，tmpfs 里的文件一样取得出来"。**那句话是错的。**
+
+        Kali 实测（真容器、真文件）：
+
+        ```
+        /work/.t/small.png（tmpfs）   docker cp → exit=1
+                                     Error response from daemon:
+                                     Could not find the file /work/.t/small.png in container …
+        /work/persist/.t/small.png    docker cp → exit=0，221834 字节
+        ```
+
+        `docker cp` 由 **dockerd** 执行，它解析的是容器的 **rootfs 视图**；
+        tmpfs 是另一层挂载，在那个视图里看不到。所以凡是在 `/work` 里
+        生成的图（浏览器截图、`convert` 的中间产物）都取不出来 —— 而
+        "取不出来"的表现是 `view_image` 报"读不到这个文件"，看起来像
+        模型路径写错，实际是这条通路本身不成立。
+
+        这个错**单元测试抓不到**：假沙箱的 `copy_out` 直接写文件、永远成功。
+        只有真容器 + tmpfs 会暴露它。
+
+        ## 改用 `docker exec base64`：对 tmpfs 与 bind mount 一视同仁
+
+        `exec` 在**容器内**读文件，与挂载层级无关。实测三条通路对比：
+
+        | 通路 | tmpfs | 字节正确 | 备注 |
+        | --- | --- | --- | --- |
+        | `docker cp` | ❌ | — | daemon 看不到 tmpfs |
+        | `exec base64 -w0` | ✅ | ✅ 完全一致 | 33765 → 45020 字符，0.22s |
+        | `exec cat` | ✅ | ❌ 31679≠33765 | `text=True` + `errors=replace` 会破坏二进制 |
+
+        所以必须 base64：`_run` 用 `subprocess.run(text=True, errors="replace")`
+        收 stdout，裸二进制里的非法 UTF-8 字节会被替换成 U+FFFD，取回来
+        的图**看起来**是图但已经坏了（PNG magic 还在，像素错了）—— 这是
+        最坏的一种失败：模型会煞有介事地描述一张坏图。
+
+        ⚠️ 内存代价：小于 4 MB 的图 base64 后约 5.3 MB 字符串，在
+           `view_image` 的用量下可以忽略（它本来就只处理单张图）。
+
+        ⚠️ 文件不存在时 `base64` 自己就报错（exit=1，stderr 里是
+           `No such file or directory`），不需要额外的存在性检查 ——
+           多跑一次 `test -f` 只是多一次 docker 往返。
+        """
+        try:
+            res = self.exec(["base64", "-w0", container_path], timeout=180)
+            if not res.ok:
+                return res
+            raw = base64.b64decode(res.stdout.strip(), validate=True)
+        except (binascii.Error, ValueError) as exc:
+            return CommandResult(1, "", f"取回 `{container_path}` 失败：base64 解码出错（{exc}）")
+        try:
+            host_path.parent.mkdir(parents=True, exist_ok=True)
+            host_path.write_bytes(raw)
+        except OSError as exc:
+            return CommandResult(1, "", f"写宿主临时文件失败：{exc}")
+        return CommandResult(0, f"{len(raw)} 字节", "")
+
     def destroy(self) -> None:
         """销毁容器。**必须幂等**（`finally` 里会调，而它可能已经死了）。
 
@@ -2363,7 +2491,11 @@ class LlmGateway:
         )
 
     async def chat_stream(
-        self, messages: list[dict[str, str]], *, system: str
+        self,
+        messages: list[dict[str, str]],
+        *,
+        system: str,
+        finish_reason: list[str] | None = None,
     ) -> AsyncIterator[str]:
         """流式调模型，逐块产出**正文增量**（v0.102）。
 
@@ -2388,9 +2520,25 @@ class LlmGateway:
         与 `chat()` 完全同一个理由（出站 SSRF 面 + 不把 LLM key 交给
         `HTTP_PROXY`）。这条不是复制粘贴的洁癖：漏掉的后果是把凭据
         交给环境里配置的任意代理。
+
+        ## ★ 为什么要能带出 `finish_reason`（v1.13）
+
+        生成器只能 `yield` 正文，没有第二个出口 —— 而"这次输出是被长度
+        上限切断了"这件事**不在一段正文里**（它所在的收尾帧 `delta` 是空的）。
+        调用方拿到的就只是一段戛然而止的文字，与"模型说完了"无法区分。
+
+        所以给一个可选的输出参数 `finish_reason`：传一个 list 进来，
+        收流时把取值 `append` 进去。`append` 而不是赋值，是因为调用方
+        常常在 `async for` 之后才读它，而生成器的局部变量那时已经没了。
+
+        ★ 为什么是 list 而不是改返回值：`chat_stream` 的既有调用方
+          （`engine._call_model`）按 `AsyncIterator[str]` 消费它，改成
+          `AsyncIterator[tuple]` 会一次性改掉所有调用点与它们的测试，
+          而收益只是省一个参数。**可选参数是向后兼容的**：不传就是
+          改造前逐字节一样的行为。
         """
         from app.core.crypto import redact
-        from app.providers.llm import stream_delta  # noqa: PLC2701 - 见 chat() 的说明
+        from app.providers.llm import stream_delta, stream_finish_reason  # noqa: PLC2701 - 见 chat() 的说明
 
         body = self._body(messages, system=system)
         body["stream"] = True
@@ -2446,6 +2594,13 @@ class LlmGateway:
                 delta = stream_delta(self.anthropic, sse_event, sse_data)
                 if delta:
                     yield delta
+                    continue
+                # ★ 只有不产正文的帧才可能是收尾帧（`delta: {}` + finish_reason）。
+                #   放在 `if delta` 之后是为了不给每个正文帧多解析一次。
+                if finish_reason is not None:
+                    reason = stream_finish_reason(self.anthropic, sse_event, sse_data)
+                    if reason:
+                        finish_reason.append(reason)
         finally:
             # 一定要关：`send(stream=True)` 不关会把连接留在池里不归还。
             await response.aclose()
@@ -3862,9 +4017,11 @@ def needs_raw_network(category: str | None) -> bool:
 
 TOOL_NAMES = (
     "read_attachment",
+    "view_image",
     "http_request",
     "run_shell",
     "browser",
+    "rea",
     "load_skill",
     "load_recipe",
     "list_requests",
@@ -3923,6 +4080,389 @@ async def _tool_read_attachment(args: dict[str, Any], *, spec: SolveSpec) -> str
             "要分析它请用 run_shell（file / strings / r2 / binwalk 等）。"
         )
     return _clip(chunk.decode("utf-8", errors="replace"), limit)
+
+
+# ══════════════════════════════════════════════════════════
+# view_image：把沙箱里的图**真的**送进对话
+# ══════════════════════════════════════════════════════════
+
+
+def _shrink_image(raw: bytes, suffix: str) -> tuple[bytes, str, str]:
+    """把 PNG/JPEG 缩小到 `IMAGE_MAX_EDGE` 以内，返回 `(字节, 后缀, 说明)`。
+
+    ⚠️ **调用方必须处理 Pillow 缺失**：宿主 venv 里没有 PIL（实测
+       `import PIL` 失败），沙箱镜像里才有 `imagemagick`。所以这里
+       让 `ImportError` 冒出去，由调用方决定"跳过缩图直接送原图"
+       还是"回退到沙箱内 convert"。不在这里静默 swallow —— 那会变成
+       "图片悄悄没缩、然后超出上下文"，是最难查的那种。
+    """
+    from io import BytesIO
+
+    from PIL import Image  # noqa: PLC0415 - 故意延迟：没装 PIL 时不该影响本模块 import
+
+    with Image.open(BytesIO(raw)) as img:
+        before = img.size
+        img.load()
+        # 动图只取第一帧（视觉模型对多帧的支持不一致，取第一帧是确定的）。
+        if getattr(img, "n_frames", 1) > 1:
+            img.seek(0)
+        scale = IMAGE_MAX_EDGE / max(before)
+        if scale < 1:
+            size = (max(1, int(before[0] * scale)), max(1, int(before[1] * scale)))
+            img = img.resize(size, Image.LANCZOS)
+        else:
+            size = before
+        out = BytesIO()
+        if suffix in {".jpg", ".jpeg"}:
+            img.convert("RGB").save(out, format="JPEG", quality=85, optimize=True)
+            new_suffix = ".jpg"
+        elif suffix == ".webp":
+            img.save(out, format="WEBP", quality=85)
+            new_suffix = ".webp"
+        else:
+            # GIF 转 PNG：GIF 的调色板在视觉模型侧常被当成"模糊"，
+            # 而 PNG 无损、体积也不一定更大（截图类内容压缩率很高）。
+            img.convert("RGBA" if img.mode in {"RGBA", "LA", "P"} else "RGB").save(
+                out, format="PNG", optimize=True
+            )
+            new_suffix = ".png"
+    note = (
+        f"已缩图：{before[0]}×{before[1]} → {size[0]}×{size[1]}"
+        if scale < 1
+        else f"原尺寸 {before[0]}×{before[1]}"
+    )
+    return out.getvalue(), new_suffix, note
+
+
+def _shrink_image_in_sandbox(
+    sandbox: Any, raw_path: str, suffix: str
+) -> tuple[bytes, str, str] | None:
+    """在**沙箱里**把图缩小，取回字节。失败返回 `None`（调用方自己决定怎么办）。
+
+    ## 为什么缩图必须在容器里做，而不是在宿主
+
+    宿主 API 进程的 venv 里**没有 Pillow**（`requirements.txt` 里都没声明
+    PIL，实测 `import PIL` 直接 `ModuleNotFoundError`）。而沙箱镜像里
+    **两样都有**：`imagemagick`（Dockerfile:278）和 pip 的 `pillow`
+    （Dockerfile:676）。
+
+    这意味着：缩图如果只写在宿主侧，线上就**永远不会缩** —— 只会走
+    "宿主没装 Pillow，按原样送出"那条路，而那条路的后果是 3-5 MB 的
+    全页截图 base64 后 4-7 MB 塞进一条消息，几轮就把上下文吃干净。
+    症状是"模型突然变笨"，根因在几十轮之前。
+
+    所以顺序是**先容器、后宿主**：容器缩图是线上唯一真正生效的路径，
+    宿主 Pillow 只作为开发机上的兜底。
+
+    ## 为什么用 `convert` 而不是沙箱里的 python-pillow
+
+    `convert` 是单条命令、无解释器启动开销、且 `-strip` 顺手去掉
+    EXIF（那里面可能有靶机会话信息）。而沙箱里那个 pillow 属于
+    Kali 的 `python3`（3.14），跟 API 进程的 venv 完全是两套，
+    调它要拼 `python3 -c` 多行脚本，失败时的报错也更难读。
+
+    ## 临时文件放哪
+
+    放 `{WORK_DIR}/.viewimg/` —— `/work` 是容器里唯一的可写 tmpfs，
+    写在别处会因 `--read-only` 直接失败。用完在 `finally` 里删掉。
+    """
+    shell = getattr(sandbox, "shell", None)
+    if shell is None:
+        return None
+    tmp_dir = f"{WORK_DIR}/.viewimg"
+    out_suffix = ".png" if suffix in {".gif", ".png", ".webp"} else ".jpg"
+    out_path = f"{tmp_dir}/small{out_suffix}"
+    # `1568x1568>` 里的 `>` 要转义，否则会被 shell 当成重定向。
+    # `-strip` 去 EXIF；`-quality 85` 对 JPEG 有效、对 PNG 无副作用。
+    argv = (
+        f"mkdir -p {shlex.quote(tmp_dir)} && "
+        f"convert {shlex.quote(raw_path)} "
+        f"-resize {IMAGE_MAX_EDGE}x{IMAGE_MAX_EDGE}\\> "
+        f"-strip -quality 85 {shlex.quote(out_path)}"
+    )
+    try:
+        res = shell(argv, timeout=90.0)
+        if not res.ok:
+            return None
+        host_copy = Path(tempfile.mkdtemp(prefix="viewshrink-")) / f"small{out_suffix}"
+        try:
+            cp = sandbox.copy_out(out_path, host_copy)
+            if not cp.ok or not host_copy.is_file():
+                return None
+            shrunk = host_copy.read_bytes()
+        finally:
+            host_copy.unlink(missing_ok=True)
+            host_copy.parent.rmdir()
+    finally:
+        # 沙箱里的临时文件也要删：`/work` 是 tmpfs，容器活着就一直占内存。
+        try:
+            shell(f"rm -rf {shlex.quote(tmp_dir)}", timeout=30.0)
+        except Exception:  # noqa: BLE001 - 清理失败不该盖住主结果
+            logger.debug("清不掉沙箱缩图临时目录 %s", tmp_dir)
+    if not shrunk:
+        return None
+    return shrunk, out_suffix, f"沙箱内 convert 缩到 ≤{IMAGE_MAX_EDGE}px"
+
+
+def _image_block(payload: ImagePayload, *, anthropic: bool) -> dict[str, Any]:
+    """把一张图编成 provider 认的 content block。
+
+    ## 为什么两种形状不能用同一份
+
+    OpenAI 兼容端点是 `{"type": "image_url", "image_url": {"url": "data:..."}}`；
+    Anthropic Messages 是 `{"type": "image", "source": {"type": "base64",
+    "media_type": "...", "data": "..."}}` —— 后者**不带** `data:` 前缀，
+    把前缀留在 `data` 里会得到 400 `Invalid base64`。
+
+    （Kali 实测：`http://10.39.16.9/v1` 是这个 OpenAI 形状，
+    `prompt_tokens` 从 31 涨到 223。）
+    """
+    if anthropic:
+        return {
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": payload.media_type,
+                "data": payload.data,
+            },
+        }
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{payload.media_type};base64,{payload.data}"},
+    }
+
+
+def attach_images(
+    messages: list[dict[str, Any]],
+    images: list[ImagePayload],
+    *,
+    anthropic: bool,
+) -> list[dict[str, Any]]:
+    """把这一轮攒下的图并进**最后一条**消息，并**清空** `images`。
+
+    ## 为什么是模块级函数，而不是每条循环各写一份
+
+    项目里有**两条**解题循环：单循环（`_solve`）与多智能体
+    （`multiagent.run_agent_loop`）。它们各有一个消息列表、各自调
+    `gateway.chat`。图片接线如果各写一份，必然分叉 —— 而分叉的症状是
+    "单循环能看图、多智能体看不见"，偏偏多智能体在开关打开时是
+    **默认**路径。这种缺口最难发现，因为单循环的测试全绿。
+
+    所以只留这一份，两个调用点都调它。
+
+    ## 为什么并进最后一条，而不是新开一条
+
+    模型的视角应当是"工具 `view_image` 说已把 x.png 挂到这一轮"
+    **加上**那张图，是一个整体。新开一条会让这一轮出现两条连续的
+    user 消息：OpenAI 兼容端点部分实现直接拒绝，Anthropic 侧要求
+    user/assistant 严格交替。
+
+    并进最后一条时 `content` 从 `str` 变成
+    `[{"type":"text",...}, image_block]` —— 两个 provider 都认的多模态形状。
+
+    ## 为什么在这里清空
+
+    图是**一次性的**。`messages` 每轮都是全量重发，而一张图 base64 后
+    1.6 MB —— 留在历史里三轮就把上下文吃光。模型看完这一轮就够了：
+    它已经把看到的东西写进下一轮推理里；要再看就再调一次 `view_image`
+    （文件还在沙箱里，重取的成本远低于常驻）。
+
+    ## 契约
+
+    · 空 `images` → 原样返回（**逐字节相同**，不复制、不改形状）；
+    · 非空 → 返回新列表，最后一条是新 dict；`images` 被清空；
+    · 调用方传进来的 `messages` 不被修改。
+    """
+    if not images:
+        return messages
+    tail = messages[-1]
+    blocks: list[dict[str, Any]] = []
+    text = tail.get("content")
+    if isinstance(text, str) and text:
+        blocks.append({"type": "text", "text": text})
+    blocks.extend(_image_block(p, anthropic=anthropic) for p in images)
+    merged = {**tail, "content": blocks}
+    images.clear()
+    return [*messages[:-1], merged]
+
+
+async def _tool_view_image(
+    args: dict[str, Any],
+    *,
+    sandbox: SandboxContainer,
+    images: list[ImagePayload] | None,
+) -> str:
+    """读沙箱里的一张图，把它挂到下一轮消息上，返回一句给模型看的说明。
+
+    ## ★ 这个工具存在的理由
+
+    之前 `browser screenshot` 的返回值里写着一句诚实但无用的提示：
+    "这张图存成了文件，但**你无法看到图片内容**"。那是当时的事实
+    （消息 `content` 恒为 `str`，没有图片通道）。代价是截图这个能力
+    等于不存在 —— 页面渲染错位、CSS 导致的元素重叠、验证码、图表、
+    验证过的 UI 状态，全都只能靠 `snapshot` 的结构文本去猜。
+
+    Kali 实测已确认模型侧支持视觉（同一端点 base64 送图 → 200，
+    `prompt_tokens` 31 → 223），所以缺的只是协议层的这一小段接线。
+
+    ## 路径白名单
+
+    只允许读沙箱内 `/work/` 下的文件。理由与 `_tool_read_attachment`
+    同源：黑名单式过滤 `..` 在本项目栽过（附件删除的路径穿越）。
+    `/work` 之外的东西（`/etc/shadow`、`/root`）对解题没有正当用途，
+    而"能读整机文件再送给外部 LLM"是一个不该存在的通道。
+    """
+    raw_path = str(args.get("path") or "").strip()
+    if not raw_path:
+        return (
+            "参数错误：需要 `path`（沙箱内图片路径）。\n"
+            f'例如：{{"path": "{ATTACHMENT_DIR}/shot.png"}} 或 '
+            '{"path": "/work/persist/page.png"}'
+        )
+    if ".." in Path(raw_path).parts:
+        return f"拒绝：`{raw_path}` 里含 `..`，不在白名单内。"
+    # ★ 只许 `/work` 之下。这是**白名单**（不是"排除几个敏感目录"）：
+    #   `docker cp` 能把整机文件搬出来，而"能读 /etc/shadow 再送给外部 LLM"
+    #   是一个不该存在的通道。`/work` 里放的是题目附件、持久区和现场产物，
+    #   解题需要的图全在那儿。
+    if not raw_path.startswith(WORK_DIR + "/"):
+        return (
+            f"拒绝：只能读 `{WORK_DIR}` 之下的图片（`{raw_path}` 不在其中）。\n"
+            f"附件在 `{ATTACHMENT_DIR}`，持久区在 `{PERSIST_DIR}`，"
+            "浏览器截图在 `/work/.browser/shots`。"
+        )
+
+    suffix = Path(raw_path).suffix.lower()
+    media_type = IMAGE_MEDIA_TYPES.get(suffix)
+    if media_type is None:
+        return (
+            f"拒绝：`{suffix or '（无后缀）'}` 不是认识的图片格式。"
+            f"支持：{', '.join(sorted(IMAGE_MEDIA_TYPES))}"
+        )
+
+    # ── 1. 从容器里取出来 ──
+    #
+    # 走 `copy_out` 而不是"从持久区直读"：持久区 `/work/persist` 是 bind
+    # mount，但 ① 它可能是 `:ro`（`_restricted_argv` 按模式给），
+    # ② 浏览器截图落在 `/work/.browser/shots`（tmpfs），根本不在持久区里。
+    #
+    # ⚠️ `copy_out` 内部用 `exec base64` 而**不是 `docker cp`** ——
+    #    cp 由 dockerd 执行，只看得见 rootfs 视图，tmpfs 里的文件它报
+    #    "Could not find the file"（2026-10-27 实测）。细节见
+    #    `SandboxContainer.copy_out` 的 docstring。
+    tmp_dir = Path(tempfile.mkdtemp(prefix="viewimg-"))
+    host_copy = tmp_dir / f"in{suffix}"
+    try:
+        cp = sandbox.copy_out(raw_path, host_copy)
+        if not cp.ok or not host_copy.is_file():
+            return (
+                f"读不到 `{raw_path}`。\n"
+                f"{cp.combined(limit=800)}\n"
+                f"（要确认路径对不对：`ls -la {raw_path}`。"
+                "浏览器截图默认在 `/work/.browser/shots` 下。）"
+            )
+        raw = host_copy.read_bytes()
+    finally:
+        # 取完就删：图片可能含靶机凭据/会话，不该在宿主上留副本。
+        for p in (host_copy,):
+            p.unlink(missing_ok=True)
+        tmp_dir.rmdir()
+
+    if not raw:
+        return f"`{raw_path}` 是空文件（0 字节）。"
+    if len(raw) > MAX_IMAGE_BYTES:
+        return (
+            f"拒绝：`{raw_path}` 有 {len(raw)} 字节，超过上限 "
+            f"{MAX_IMAGE_BYTES}（≈{MAX_IMAGE_BYTES // 1024 // 1024} MB）。\n"
+            "先在沙箱里把它缩小再送：\n"
+            f"  `convert {raw_path} -resize {IMAGE_MAX_EDGE}x{IMAGE_MAX_EDGE}\\> "
+            f"{PERSIST_DIR}/small.png`\n"
+            "（镜像里有 imagemagick / graphicsmagick。）"
+        )
+
+    # ── 2. 太大就缩 ──
+    #
+    # ★ v1.04 修正：缩图**先在容器里做**，宿主 Pillow 只作兜底。
+    #
+    # 原实现只在宿主调 Pillow，而线上 API 进程的 venv 里根本没有 Pillow
+    # （`requirements.txt` 没声明，Kali 实测 `import PIL` 直接
+    # `ModuleNotFoundError`）—— 也就是说那条路径**在线上永远是死的**，
+    # 只会在 `except ImportError` 里留一句"宿主没装 Pillow，按原样送出"。
+    # 症状是上下文悄悄被一张 4 MB 的截图吃掉，而日志里看起来"一切正常"。
+    #
+    # 容器里有 imagemagick（Dockerfile:278）和 pip pillow（:676），
+    # 所以真正能缩图的地方是容器。宿主 Pillow 留着只因为开发机上可能有。
+    note = f"原始 {len(raw)} 字节"
+    if len(raw) > IMAGE_SHRINK_TARGET_BYTES:
+        shrunk_info = _shrink_image_in_sandbox(sandbox, raw_path, suffix)
+        if shrunk_info is not None:
+            raw, suffix, shrink_note = shrunk_info
+            media_type = IMAGE_MEDIA_TYPES[suffix]
+            note = f"{shrink_note}，缩后 {len(raw)} 字节"
+        else:
+            # 容器缩图没成（镜像里没 convert？文件其实是别的格式？）。
+            # 退到宿主 Pillow —— 与旧行为一致，仍然不静默跳过。
+            try:
+                shrunk, new_suffix, shrink_note = _shrink_image(raw, suffix)
+            except ImportError:
+                note = (
+                    f"没有可用的缩图工具（容器里没 `convert`，宿主也没装 "
+                    f"Pillow），按原样送出（{len(raw)} 字节）。"
+                    f"下次可以自己在沙箱里先缩：`convert <图> -resize "
+                    f"{IMAGE_MAX_EDGE}x{IMAGE_MAX_EDGE}\\> {PERSIST_DIR}/small.png`"
+                )
+            except Exception as exc:  # noqa: BLE001 - 图坏了不该让解题崩掉
+                return (
+                    f"解码 `{raw_path}` 失败（{type(exc).__name__}: {exc}）。"
+                    "文件可能不是真正的图片 —— 用 `file` 确认一下。"
+                )
+            else:
+                raw = shrunk
+                suffix = new_suffix
+                media_type = IMAGE_MEDIA_TYPES[suffix]
+                note = f"{shrink_note}，缩后 {len(raw)} 字节"
+
+    # 缩过之后**仍然**超上限 → 明确拒绝。这条线是给"缩了也没用"的图用的：
+    # 一张纯噪声 PNG 缩到 1568px 仍然可能上 MB，而 base64 后还要 ×4/3。
+    # 悄悄送进去的后果不是报错，是上下文被吃掉之后模型开始遗忘 —— 那
+    # 比一次明确的拒绝糟得多。
+    if len(raw) > MAX_IMAGE_BYTES:
+        return (
+            f"拒绝：`{raw_path}` 缩过之后仍有 {len(raw)} 字节，超过上限 "
+            f"{MAX_IMAGE_BYTES}（≈{MAX_IMAGE_BYTES // 1024 // 1024} MB）。\n"
+            "它大概是纯噪声/照片而非截图。自己裁一块再送：\n"
+            f"  `convert {raw_path} -crop 800x600+0+0 {PERSIST_DIR}/crop.png`"
+        )
+
+    payload = ImagePayload(
+        path=raw_path,
+        media_type=media_type,
+        data=base64.b64encode(raw).decode("ascii"),
+        size=len(raw),
+    )
+
+    # ── 3. 交给旁路收集器 ──
+    if images is None:
+        # 调用方没挂收集器（旧调用点 / 直接调 `dispatch_tool` 的脚本）。
+        # **明说**，不假装成功：假装成功会让模型基于"我看过了"开始编，
+        # 那比看不到更糟。
+        #
+        # ⚠️ 两条真实执行路径（单循环 `_solve`、多智能体
+        #    `multiagent.run_agent_loop`）**都挂了**收集器。这里剩下的
+        #    只有测试与一次性脚本 —— 但也不能因此就静默返回空串：
+        #    将来有人新加第三条执行路径忘了挂，模型看到的是这句
+        #    "你还是看不到它"，而不是一句假的"已挂到这一轮"。
+        return (
+            f"⚠️ 这张图（`{raw_path}`）取到了（{note}），但当前这条执行路径"
+            "没有图片通道，**你还是看不到它**。\n"
+            "请改用文本手段：`snapshot`（结构）/ `get text <选择器>`（文字）/ "
+            "`get html`（渲染后的 HTML）。"
+        )
+    images.append(payload)
+    return (
+        f"已把 `{raw_path}` 挂到这一轮（{note}）。"
+        "下一轮你就能看到它了 —— 直接描述你看到的内容，不要假装看过。"
+    )
 
 
 async def _do_http(
@@ -4270,6 +4810,7 @@ async def dispatch_tool(
     spec: SolveSpec,
     sandbox: SandboxContainer,
     http: httpx.AsyncClient,
+    images: list[ImagePayload] | None = None,
 ) -> str:
     """工具分发。**未知工具返回一句话，不抛异常。**
 
@@ -4298,6 +4839,10 @@ async def dispatch_tool(
     try:
         if name == "read_attachment":
             return await _tool_read_attachment(args, spec=spec)
+        if name == "view_image":
+            # ★ v1.04：图不进返回值（返回的是给模型看的一句话），
+            #   图本身走 `images` 旁路 —— 理由见 `ImagePayload` 的 docstring。
+            return await _tool_view_image(args, sandbox=sandbox, images=images)
         if name == "http_request":
             return await _tool_http_request(args, spec=spec, http=http)
         if name == "run_shell":
@@ -4310,6 +4855,15 @@ async def dispatch_tool(
             from app.kernel import browser as browser_mod
 
             return await browser_mod.run_browser(args, sandbox=sandbox)
+        if name == "rea":
+            # ★ v1.05：REA 逆向工具。为什么**不**当 MCP 连接挂：
+            #   它有 229 个工具 / 4.2MB 的 tools/list，而内核的
+            #   MAX_DESCRIBE_CHARS=24000 只够覆盖 4 个 —— 挂进来等于
+            #   225 个工具对模型不可见。走命令行则只需 1 个工具名。
+            #   理由与白名单设计详见 app/kernel/rea.py 的模块 docstring。
+            from app.kernel import rea as rea_mod
+
+            return rea_mod.run_rea_sync(args, sandbox=sandbox)
         if name == "load_skill":
             # 纯查表：读一篇随代码分发的 markdown。不碰沙箱、不碰网络。
             # 名字取自参数 `name`（与 strix 的 load_skill 同名参数，方便
@@ -5399,6 +5953,39 @@ async def solve_in_sandbox(
             head.append(_digest_message(digest))
         return [*head, *recent]
 
+    #: ★ v1.04：本轮攒下的图（`view_image` 写进来）。
+    #:
+    #: ## 为什么图不进 `recent`，而是每轮清空的独立列表
+    #:
+    #: `recent` 会被 `del recent[: len(recent) - MAX_HISTORY_TURNS * 2]` 裁，
+    #: 而且它是**历史**（每一轮的文本都留着）。图片不能那样：它是
+    #: `content` 为 list 的多模态消息，一旦进了历史，后面每一轮请求都会
+    #: 把它**重发一遍**（`_messages()` 每次都发全量 `recent`）——
+    #: 一张图 base64 后 1.6 MB，留在历史里三轮就把上下文吃光。
+    #:
+    #: 所以：**图只挂一轮**。模型看完这一轮就够 —— 它已经把看到的东西
+    #: 写在后一轮的推理里了，需要再看就再调一次 `view_image`
+    #: （文件还在沙箱里，重取一次的成本远低于常驻）。
+    turn_images: list[ImagePayload] = []
+
+    def _messages_with_images() -> list[dict[str, Any]]:
+        """本轮的完整消息（含刚挂上的图）。**发完就清空 `turn_images`**。
+
+        真正的挂法在模块级 `attach_images()` —— 与多智能体共用同一份。
+        这里只是把它接到本循环的 `_messages()` 与 `gateway.anthropic` 上：
+        两个调用点各写一份实现必然分叉，分叉的症状是"单循环能看图、
+        多智能体看不见"，而多智能体在开关打开时是**默认**路径。
+
+        ⚠️ 没有图时必须**提前返回**，不能一路算到 `attach_images(...)`：
+        `anthropic=gateway.anthropic` 是**实参**，无图时也会被求值。而
+        `anthropic` 只用来在 `_image_block()` 里二选一形状 —— 没图时它
+        一个字节都不影响结果。要求每个 gateway（含单测里的假 gateway）
+        都长这个属性，等于让"看图"功能给"不看图"的路径加前置条件。
+        """
+        if not turn_images:
+            return _messages()
+        return attach_images(_messages(), turn_images, anthropic=gateway.anthropic)
+
     outcome = SolveOutcome()
 
     # ★ v0.70：收尾催促已提示到第几档（-1 = 还没提示过任何一档）。
@@ -5626,7 +6213,9 @@ async def solve_in_sandbox(
                     except Exception:  # noqa: BLE001 - notify 内部已吞，这里再兜一层
                         logger.warning("推送人工线索事件失败", exc_info=True)
             try:
-                reply = await gateway.chat(_messages(), system=system_prompt)
+                reply = await gateway.chat(
+                    _messages_with_images(), system=system_prompt
+                )
             except KernelError as exc:
                 # ★★ v0.35：判失败之前先试备用接入点。
                 #
@@ -5807,7 +6396,12 @@ async def solve_in_sandbox(
                     f"{_clip(json.dumps(args, ensure_ascii=False), 500)}"
                 )
                 result = await dispatch_tool(
-                    name, args, spec=spec, sandbox=sandbox, http=http
+                    name,
+                    args,
+                    spec=spec,
+                    sandbox=sandbox,
+                    http=http,
+                    images=turn_images,
                 )
                 log.append(f"[turn {turn}] result: {_clip(result, 2000)}")
                 # ★ 完整输出进证据池（v0.42）—— 提交闸门要逐字符核对

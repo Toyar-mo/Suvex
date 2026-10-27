@@ -72,10 +72,24 @@ export interface DeltaPayload {
 
 /** `phase.data` 的形态。 */
 export interface PhasePayload {
-  phase: 'thinking' | 'tool'
+  /**
+   * `resume` 是 v1.14 加的：模型这一轮没写动作（或干脆交了白卷），
+   * 服务端正在**自动纠偏续跑**。它不是答案，不落库，只用于告诉用户
+   * 「这一轮还没结束，在替你再问一次模型」。
+   *
+   * 加它的原因：改造前这个位置**一帧都不推**，界面上「正在想…」停住
+   * 然后凭空蹦出下一段，用户无法区分「它在自动重试」与「它卡死了」。
+   */
+  phase: 'thinking' | 'tool' | 'resume'
   round: number
   /** `phase === 'tool'` 时是工具名。 */
   tool?: string
+  /** `phase === 'resume'` 时：为什么会续跑。 */
+  reason?: 'truncation' | 'format'
+  /** `phase === 'resume'` 时：这是第几次纠偏（从 1 起）。 */
+  attempt?: number
+  /** `phase === 'resume'` 时：最多纠偏几次。 */
+  maxAttempts?: number
 }
 
 /** `done.data` 的形态。 */

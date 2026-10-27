@@ -60,18 +60,36 @@ class _FakeReply:
       走那条回落路径的用例会拿不到预期值 —— 所以这里两个都给。
     """
 
-    def __init__(self, text: str, *, reasoning: str | None = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        *,
+        reasoning: str | None = None,
+        finish_reason: str = "",
+    ) -> None:
         self.text = text
         self.reasoning = reasoning
         self.raw: dict = {}
+        #: ★ v1.13：`engine._is_truncated` 读它区分"被切断"与"格式错"。
+        #:
+        #: 默认空串 = 没被截断，与 `runner.LlmReply.finish_reason` 的默认值
+        #: 一致（那里的注释明写"未知一律当作没被截断 —— 宁可漏报"）。
+        self.finish_reason = finish_reason
 
 
 class FakeGateway:
     """按剧本回话的假模型。记录收到的 `messages` / `system`，让喂回去什么可断言。"""
 
-    def __init__(self, replies: list[str], *, reasoning: list[str | None] | None = None) -> None:
+    def __init__(
+        self,
+        replies: list[str],
+        *,
+        reasoning: list[str | None] | None = None,
+        finish_reason: str = "",
+    ) -> None:
         self.replies = list(replies)
         self.reasoning = list(reasoning) if reasoning else []
+        self.finish_reason = finish_reason
         self.seen: list[list[dict[str, str]]] = []
         self.systems: list[str] = []
 
@@ -80,7 +98,20 @@ class FakeGateway:
         self.systems.append(system)
         text = self.replies.pop(0) if self.replies else ""
         reasoning = self.reasoning.pop(0) if self.reasoning else None
-        return _FakeReply(text, reasoning=reasoning)
+        return _FakeReply(
+            text, reasoning=reasoning, finish_reason=self.finish_reason
+        )
+
+
+class _TruncatingGateway(FakeGateway):
+    """每次回话都声称"被输出上限切断"的假模型（v1.13）。
+
+    单列一个子类而不是给 `FakeGateway` 传参数，是为了让**默认**保持
+    "没被截断" —— 那是绝大多数用例的语义，也是 `LlmReply` 的默认值。
+    """
+
+    def __init__(self, replies: list[str], *, finish_reason: str = "length") -> None:
+        super().__init__(replies, finish_reason=finish_reason)
 
 
 def _identity(*, scopes: frozenset[str], user_id: str = "user_test") -> Identity:
@@ -1109,3 +1140,188 @@ def test_now_utc_is_timezone_aware() -> None:
 
     assert now_utc().tzinfo is not None
     assert now_utc().tzinfo is UTC
+
+
+# ══════════════════════════════════════════════════════════════════════
+# v1.13：模型"输出一次就停了"（`User said: "为什么输出一次就停了"`）
+# ══════════════════════════════════════════════════════════════════════
+#
+# ## 这一组守的是什么
+#
+# 实库里那条会话（「你能做什么」，30 条消息）的轨迹里，同一个形态出现了
+# **两次**：模型回一句「文件到了。先判型：看包概况、协议分层、流量最大的
+# 会话。」（27 字，没有 `ACTION:`），主循环看到 `actions` 为空就地
+# `return`，整轮结束。用户只能自己打「继续」「解题啊」把它推一下。
+#
+# 所以这一组断言的不是"消息条数"，而是**主循环有没有推它一次**：
+# `gateway.seen` 的长度与最后一条 `messages` 里有没有那句提醒语。
+
+
+async def test_narration_without_action_gets_one_nudge_and_keeps_going(
+    db_session: Session, chat_session
+) -> None:
+    """只叙述、没动作，且话里有"接下来要动手"的意图 → 推一次，继续跑。
+
+    ★ 这是 v1.13 的主要修复点。改造前这里只有一条 assistant 消息，
+      `gateway.seen` 长度是 1。
+    """
+    gateway = FakeGateway(
+        [
+            # 实测原文（会话「你能做什么」seq 22）：短、有意图、没 ACTION。
+            "文件到了。先判型：看包概况、协议分层、流量最大的会话。",
+            "看完了：这是 USB 抓包，flag 在中间那一段。",
+        ]
+    )
+
+    result = await engine.run_turn(
+        db_session,
+        session=chat_session,
+        content="这个包里有几个包？",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    # 推了：模型被调了两次。
+    assert len(gateway.seen) == 2
+    # 第二次调用时，提醒语已经进了上下文（否则推了等于没推）。
+    assert any(
+        "没有包含动作" in (m.get("content") or "") for m in gateway.seen[1]
+    )
+    # 两句都落库了 —— 第一句不是废稿，用户要能看见它。
+    assert [m.role for m in result.messages] == ["user", "assistant", "assistant"]
+    assert "先判型" in result.messages[1].content
+
+
+async def test_a_complete_short_answer_is_not_nudged(db_session: Session, chat_session) -> None:
+    """完整但很短的问答**不该**被推。
+
+    ★ 这条是我第一次实现的直接反证：当时判据只看长度（< 200 字就推），
+      于是「你好，我能帮你建扫描、改技能库、加 MCP 工具。」被推了两次，
+      界面上出现三条一模一样的助手气泡 —— 比原来的缺陷更糟。
+      判据改成"意图词 + 不太长"之后，这一条才绿。
+    """
+    gateway = FakeGateway(["你好，我能帮你建扫描、改技能库、加 MCP 工具。"])
+
+    result = await engine.run_turn(
+        db_session,
+        session=chat_session,
+        content="你能做什么",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    assert len(gateway.seen) == 1, "完整回答被推了，说明判据误伤"
+    assert [m.role for m in result.messages] == ["user", "assistant"]
+
+
+async def test_a_long_narration_is_not_nudged(db_session: Session, chat_session) -> None:
+    """长文里顺带一句「我先看了一下」不算停在半路 —— 那是在叙述做过的事。
+
+    ★ 这是意图词判据的**必要配对**：只有"意图词 + 短"两条同时成立才推。
+      少了长度上限，一段 600 字的完整结论会因为里面有个「我先」被反复推。
+    """
+    long_tail = "然后我把样本都过了一遍，结论如上。" * 20
+    gateway = FakeGateway(["我先看了一下抓包的整体情况。" + long_tail])
+
+    result = await engine.run_turn(
+        db_session,
+        session=chat_session,
+        content="说说这个包",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    assert len(gateway.seen) == 1
+    assert [m.role for m in result.messages] == ["user", "assistant"]
+
+
+async def test_nudges_are_capped_and_do_not_eat_the_tool_budget(
+    db_session: Session, chat_session
+) -> None:
+    """反复只叙述时，推 `MAX_NARRATION_NUDGES` 次就收尾，不能无限推。
+
+    ## 为什么这条重要
+
+    没有上限就是死循环：模型继续只写人话，我们继续推，用户永远等不到回复，
+    而每一次推都是一次真金白银的模型调用。
+
+    ## 同时钉住"纠偏不吃工具预算"
+
+    循环上界是 `MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES`，而
+    `at_limit` 用的是 `round_index - nudges_used`。混算的话"提醒两次"
+    会吃掉两个工具轮次 —— 真正需要跑工具的那一轮反而没预算了。
+    """
+    nudge = "我先看一下情况。"  # 有意图词、够短 → 每一轮都会被推
+    gateway = FakeGateway([nudge] * (engine.MAX_NARRATION_NUDGES + 5))
+
+    result = await engine.run_turn(
+        db_session,
+        session=chat_session,
+        content="看看",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    # 被推了 `MAX_NARRATION_NUDGES` 次 = 模型被调了 1 + 2 次。
+    assert len(gateway.seen) == 1 + engine.MAX_NARRATION_NUDGES
+    # 每一句都落库了（用户能看见它反复说要动却一直没动）。
+    assert [m.role for m in result.messages] == ["user"] + ["assistant"] * (
+        1 + engine.MAX_NARRATION_NUDGES
+    )
+
+
+async def test_an_at_limit_round_is_never_nudged(db_session: Session, chat_session) -> None:
+    """到工具轮数上限那一轮**不推**。
+
+    那一轮我们要的就是"用一段话总结" —— 推它继续会让它去写
+    "不要再写 ACTION"之外的 ACTION，与那一轮的 system 指令直接冲突。
+    """
+    # 先跑满工具轮次，最后一轮给一句有意图词的短叙述。
+    loop = ['ACTION: {"tool": "list_scans", "args": {}}'] * engine.MAX_TOOL_ROUNDS
+    gateway = FakeGateway(loop + ["我先总结一下。"])
+
+    result = await engine.run_turn(
+        db_session,
+        session=chat_session,
+        content="一直查",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    assert result.hit_tool_limit is True
+    # 到了上限就不再调模型（最后那句叙述是收尾，不是要推的半句话）。
+    assert len(gateway.seen) == engine.MAX_TOOL_ROUNDS + 1
+
+
+async def test_a_truncated_reply_gets_the_truncation_reminder(
+    db_session: Session, chat_session
+) -> None:
+    """被输出上限切断时，喂的是**另一句**提醒。
+
+    ## 为什么必须是另一句
+
+    | 病因 | 现象 | 药 |
+    |---|---|---|
+    | 格式错 | 想好了但没写 ACTION | 写 ACTION |
+    | 被切断 | 写了但话没说完 | **先只写 ACTION 一行** |
+
+    用同一句话的后果：被切断的模型被要求"写下一步的 ACTION"，它会试图
+    接着把那句被切断的话写完 —— 于是又超一次。
+    """
+    gateway = _TruncatingGateway(
+        ["我先把这堆流量按协议分层过一遍再看会话", "ACTION 拉起来：走。"],
+        finish_reason="length",
+    )
+
+    await engine.run_turn(
+        db_session,
+        session=chat_session,
+        content="分析这个包",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    assert len(gateway.seen) == 2
+    fed = [m.get("content") or "" for m in gateway.seen[1]]
+    assert any("达到输出长度上限被切断" in c for c in fed), "没有喂截断提醒"
+    assert not any("没有包含动作" in c for c in fed), "错喂了格式提醒（病因不同，药也不同）"

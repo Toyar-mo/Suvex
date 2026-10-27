@@ -120,9 +120,21 @@ const STARTERS = [
  * `phase` 为 `null`（刚点发送、还没收到第一帧）时回落到原文案 ——
  * 那一刻确实没有更多信息可说，硬编一个"准备中"反而像卡住了。
  */
-function phaseLabel(phase: PhasePayload | null | { phase: string; round: number; tool?: string }): string {
+export function phaseLabel(phase: PhasePayload | null | { phase: string; round: number; tool?: string; reason?: string; attempt?: number; maxAttempts?: number }): string {
   if (!phase) return '正在想…'
   const round = typeof phase.round === 'number' ? phase.round + 1 : 0
+  if (phase.phase === 'resume') {
+    // ★ v1.14：模型这一轮没写动作（或交了白卷），服务端正在自动续跑。
+    //
+    // 为什么要区分 `reason`：被输出上限切断时，模型是"话说了一半"，
+    // 用户已经看到半句话；格式错时它是"想好了没说怎么动手"，界面上什么都没有。
+    // 两种等待的体验不同，但**都不要在界面暴露协议内部词**（`ACTION`、
+    // `finish_reason`）—— 用户只关心"还要不要等"。
+    if (phase.reason === 'truncation') {
+      return `第 ${round} 轮 · 回复太长被截断了，正在接着写…`
+    }
+    return `第 ${round} 轮 · 正在让它把话说完…`
+  }
   if (phase.phase === 'tool' && phase.tool) {
     return `第 ${round} 轮 · 正在执行 ${phase.tool}…`
   }

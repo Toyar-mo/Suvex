@@ -38,6 +38,7 @@ import ipaddress
 import json
 import time
 from dataclasses import dataclass
+from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
@@ -563,3 +564,64 @@ def stream_delta(anthropic: bool, event: str | None, data: str) -> str:
         return ""
     content = delta.get("content")
     return content if isinstance(content, str) else ""
+
+
+#: 表示"这次输出是被长度上限切断的"——两家各叫一个名字。
+#:
+#: ★ 只认一个就会漏掉另一家：OpenAI 兼容端点给 `length`，
+#:   Anthropic 给 `max_tokens`。漏掉的后果不是崩溃，而是**静默**：
+#:   模型被切断这件事没人知道，界面把它当成"回答完了"。
+#:   与 `runner._finish_reason` 的取值口径保持一致。
+TRUNCATED_FINISH_REASONS: Final = frozenset({"length", "max_tokens"})
+
+
+def stream_finish_reason(anthropic: bool, event: str | None, data: str) -> str:
+    """从**一帧**流式 SSE 里取出 `finish_reason`／`stop_reason`。取不到返回空串。
+
+    ## 为什么需要它（v1.13）
+
+    `stream_delta` 只取正文增量，把"我为什么停下"这件事**扔掉了**：
+
+        data: {"choices": [{"delta": {}, "finish_reason": "length"}]}
+
+    这一帧 `delta` 是空的，所以 `stream_delta` 返回 `""`，调用方看不出
+    与"正常收尾"（`finish_reason: "stop"`）有任何区别。于是被输出上限
+    切断的回复会以"回答完了"的样子呈现给用户 —— 而模型其实话没说完。
+
+    ## 两套 wire 形状（与 `stream_delta` 一致）
+
+    **OpenAI 兼容**：收尾帧 `choices[0].finish_reason`；
+    **Anthropic**：`message_delta` 帧的 `delta.stop_reason`
+    （`content_block_delta` 那些帧里没有它）。
+
+    ## 为什么不抛异常
+
+    与 `stream_delta` 同一条纪律：这是流的中间环节，认不出就当没有。
+    取不到 finish_reason 的上游，行为与改造前**完全一致**（都当没被切断）。
+    """
+    if not data or data.strip() == STREAM_DONE_PAYLOAD:
+        return ""
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+
+    if anthropic:
+        # `message_delta` 帧：{"type": "message_delta", "delta": {"stop_reason": "max_tokens"}}
+        delta = parsed.get("delta")
+        if isinstance(delta, dict):
+            reason = delta.get("stop_reason")
+            if isinstance(reason, str):
+                return reason
+        return ""
+
+    choices = parsed.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    reason = first.get("finish_reason")
+    return reason if isinstance(reason, str) else ""

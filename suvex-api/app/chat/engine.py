@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -58,6 +59,8 @@ from app.chat.prompts import (
     TOOL_BY_NAME,
     build_system_prompt,
     may_call_tool,
+    render_format_reminder,
+    render_truncation_reminder,
 )
 from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
 
@@ -89,6 +92,74 @@ MAX_MOUNTED_SKILL_CHARS = 40_000
 #: 喂模型是花钱**。一条 6 万字的 nmap 输出塞进上下文，代价是后面每一轮
 #: 都要重新付这 6 万 token，而模型真正需要的通常只是前几百行。
 HISTORY_TOOL_CHARS = 4000
+
+#: 一轮里最多"提醒"模型几次让它别停半路（v1.13）。
+#:
+#: ## 它修的是什么（真实缺陷）
+#:
+#: 改造前：模型回一句「文件到了。先判型：看包概况、协议分层、流量最大的会话。」
+#: —— 正确，但停在半路，没有 `ACTION:`。主循环看到 `actions` 为空就地
+#: `return`，整轮结束。用户看到的就是"输出一次就停了"，只能自己打
+#: 「继续」「解题啊」把它推一下。
+#:
+#: ## 为什么是 2 而不是无限
+#:
+#: 每一次提醒都是一次额外的模型调用（用户等的时间、平台的 token 钱）。
+#: 取 2 的理由：模型被推一次就够了；推第二次还不写动作，说明它不是
+#: "忘了写"，而是"本来就想这么答"——再推只是烧钱。
+#:
+#: 上界还必须与 `MAX_TOOL_ROUNDS` 分开算：那个管的是**工具往返**预算，
+#: 这个管的是**纠偏**预算。混在一起会让"提醒了两次"吃掉两个工具轮次，
+#: 于是真正需要跑工具的一轮反而没预算了。
+MAX_NARRATION_NUDGES = 2
+
+#: 「只叙述、没动作」的正文要**同时**满足这两条，才值得推它一下（v1.13）。
+#:
+#: ## 为什么必须两条都满足（否则每次纯问答都要多花一次调用）
+#:
+#: 绝大多数对话轮次**本来就以"没有 ACTION"结束** —— 用户问「你能做什么」，
+#: 模型答一段话，这就是完整的一轮。如果见到 `actions` 为空就去提醒，
+#: 每一次普通问答都会被强行多调 1-2 次模型（延迟翻倍、费用翻倍），
+#: 而绝大多数情况下它答得挺好。
+#:
+#: ## 判据一：有"接下来要动手"的意图词
+#:
+#: 长度是最先想到的判据，但**它是错的** —— 实测一跑就发现
+#: 「你好，我能帮你建扫描、改技能库、加 MCP 工具。」（22 字）是完整回答，
+#: 而它会被长度判据推两次，界面上于是出现三条一模一样的助手气泡。
+#:
+#: 真正区分"说完"与"停在半路"的，是正文里有没有**指向下一步动作**的词。
+#: 实测样本（会话「你能做什么」30 条里的原文）逐条对照：
+#:
+#: | 正文 | 意图词 | 实际是什么 |
+#: |---|---|---|
+#: | 「文件到了。**先判**型：看包概况、协议分层…」 | `先判` ✓ | **停在半路**，该推 |
+#: | 「能，而且比"起引擎"更可控…**我先看**沙箱里有没有附件」 | `我先` ✓ | **停在半路**，该推 |
+#: | 「你好，我能帮你建扫描、改技能库、加 MCP 工具。」 | 无 | 完整回答，不该推 |
+#: | 「目前平台上没有扫描任务。」 | 无 | 完整回答，不该推 |
+#: | 「能。区别在于两种解题方式…」（225 字） | 无 | 完整回答，不该推 |
+#:
+#: ⚠️ 注意 `我能` **不在**词表里（`我(先|这就|马上|现在)`），它就是被
+#:   长度判据误伤的那一条。词表要跟着实测样本改，不要凭感觉加。
+_NARRATION_INTENT = re.compile(
+    r"(我(先|这就|马上|现在)|先(看|判|查|跑|扫|试|起|摸|确|列|读|拉|执行)"
+    r"|接下来|下一步|下面我|让我|我来(看|查|跑|试|扫))"
+)
+
+#: 判据二：正文还不能太长。
+#:
+#: 意图词是弱信号 —— 一段 600 字的完整结论里完全可能顺带写一句「我先看了
+#: 一下」，那不是"停在半路"，那是在叙述**已经做过**的事。长文一律当作
+#: 说完：真正的"停在半路"形态是**短短一句打算**（实测两条分别是 27 字和
+#: 66 字），它没有篇幅去铺开结论。
+#:
+#: ## 已知的代价（刻意接受）
+#:
+#: 一个"确实完整但很短、而且碰巧用了意图词"的回答（例如「解出来了：flag{…}，
+#: 我先把过程写一下」）会被推一次。模型会再说一遍（这次照样没有动作），
+#: 之后 `MAX_NARRATION_NUDGES` 用完，我们照常收尾。用户多等一次调用，
+#: 但**不会丢内容** —— 这个方向的错误比"停在半路没人管"轻得多。
+MAX_NARRATION_ONLY_CHARS = 200
 
 
 class ChatEngineError(Exception):
@@ -152,8 +223,15 @@ async def _emit_phase(
 ) -> None:
     """推一条「现在在做什么」的 phase 帧。
 
-    `phase` 取值：`thinking`（模型在推理）/ `tool`（正在执行某个工具）。
-    额外字段原样带上（工具名等），前端只认它认识的。
+    `phase` 取值：`thinking`（模型在推理）/ `tool`（正在执行某个工具）/
+    `resume`（模型这一轮没写动作或写了空回复，我们正在自动纠偏续跑）。
+    额外字段原样带上（工具名、`reason`/`attempt`/`maxAttempts` 等），
+    前端只认它认识的。
+
+    ★ `resume` 的语义边界：**它不是一条消息，不落库**。它表示"这一轮
+      还没有结束，服务端在替用户多推一次模型"。所以它必须走 phase 帧，
+      不能走 message 帧 —— message 帧推的都是已落库的行，用户刷新还在；
+      而这次纠偏如果成功，库里根本不会留下痕迹（只有模型最终那句）。
     """
     if emit is None:
         return
@@ -216,9 +294,15 @@ async def _call_model(
 
     buffer = HoldbackBuffer()
     collected: list[str] = []
+    #: `chat_stream` 把收尾帧里的 finish_reason `append` 到这里（v1.13）。
+    #: 用 list 是因为生成器只能 yield 正文，没有第二个返回值 —— 见
+    #: `LlmGateway.chat_stream` 的 docstring。
+    finish_reasons: list[str] = []
     pushed = False
     try:
-        async for delta in gateway.chat_stream(messages, system=system):
+        async for delta in gateway.chat_stream(
+            messages, system=system, finish_reason=finish_reasons
+        ):
             collected.append(delta)
             safe = buffer.feed(delta)
             if safe:
@@ -241,8 +325,76 @@ async def _call_model(
         source="content",
         raw={},
         usage=parse_usage({}),
-        finish_reason="",
+        # ★ 取最后一个取值：正常只有一帧带它，但代理/网关吐多帧时，
+        #   以最后那个为准（更接近真实收尾原因）。
+        finish_reason=finish_reasons[-1] if finish_reasons else "",
     )
+
+
+# ══════════════════════════════════════════════════════════
+# 截断判据（v1.13）
+# ══════════════════════════════════════════════════════════
+
+
+def _looks_unfinished(text: str) -> bool:
+    """这段"只叙述、没动作"的正文，是不是**停在半路**（打算接着做但没写 ACTION）。
+
+    ## 为什么要它，而不是"见到没有 ACTION 就提醒"
+
+    绝大多数对话轮次**本来就以"没有 ACTION"结束** —— 用户问「你能做什么」，
+    模型答一段话，那就是完整的一轮。见到 `actions` 为空就提醒，会让每一次
+    普通问答都多花 1-2 次模型调用（延迟翻倍、费用翻倍）。
+
+    ## 判据：意图词 + 不算太长，**两条都要**
+
+    先试过"只看长度"，一跑测试就发现是错的：
+    「你好，我能帮你建扫描、改技能库、加 MCP 工具。」（22 字）是完整回答，
+    却会被推两次 —— 界面上出现三条一模一样的助手气泡，比原来的缺陷更糟。
+
+    真正区分两者的是正文里有没有**指向下一步动作**的词，配合长度上限把
+    「叙述已经做过的事」排除掉。逐条依据见 `_NARRATION_INTENT` 上方那张表。
+
+    ## 与 `_is_truncated` 的分工
+
+    被切断时**必然**没有 ACTION，但那不是"忘写格式"，是"话没说完"——
+    两种病因要喂不同的提醒语，见 `render_format_reminder` /
+    `render_truncation_reminder`。这里只判"要不要推"，推的时候才去问
+    "为什么没写动作"。
+    """
+    body = text.strip()
+    if not body or len(body) >= MAX_NARRATION_ONLY_CHARS:
+        return False
+    return bool(_NARRATION_INTENT.search(body))
+
+
+def _is_truncated(reply: Any) -> bool:
+    """这次回复是不是**被输出长度上限切断**的。
+
+    ## 为什么需要它（v1.13 修的真实缺陷）
+
+    被切断和"格式写错"看起来都是"回复里没有 ACTION"，但病因完全不同，
+    药也不同 —— 见 `render_format_reminder` / `render_truncation_reminder`
+    的对照表。用同一句话的后果是：被切断的模型被要求"写下一步动作"，
+    它会试图把断掉的那句话写完，于是**又超一次**。
+
+    ## 判据与内核侧保持同一口径
+
+    `runner.py` 里是 `reply.finish_reason in ("length", "max_tokens")`，
+    取值集合来自 `app.providers.llm.TRUNCATED_FINISH_REASONS` ——
+    两家 provider 各叫一个名字（OpenAI `length` / Anthropic `max_tokens`），
+    **只认一个就会漏掉另一家**，而漏掉的后果是静默的（界面把截断当成答完）。
+
+    ## 取不到就当作没被截断
+
+    `finish_reason` 为空串是常态：非流式入口走 `gateway.chat()`，而
+    `LlmReply.finish_reason` 的默认值就是 `""`；自建网关也常常不给这个字段。
+    这种情况下退回"格式错"那句提醒是**正确的**——那是更常见也更安全的猜测
+    （它至少不会让模型试图把断掉的话补完）。
+    """
+    from app.providers.llm import TRUNCATED_FINISH_REASONS
+
+    reason = getattr(reply, "finish_reason", "") or ""
+    return reason in TRUNCATED_FINISH_REASONS
 
 
 # ══════════════════════════════════════════════════════════
@@ -1227,21 +1379,47 @@ async def run_turn(
     #: 打开审批时，这些工具不执行、只挂起。
     gate_on = bool(session.require_approval)
 
-    for round_index in range(MAX_TOOL_ROUNDS + 1):
+    #: 已经"提醒"过模型几次（见 `MAX_NARRATION_NUDGES`）。
+    #:
+    #: ★ 它单独计数、不从 `MAX_TOOL_ROUNDS` 里扣 —— 两笔预算管的是不同的
+    #:   东西（纠偏 vs 工具往返）。混在一起会让"提醒了两次"吃掉两个工具
+    #:   轮次，于是真正需要跑工具的那一轮反而没预算了。
+    nudges_used = 0
+
+    #: 下一轮要往上下文里补的一句提醒（一次性）。
+    #:
+    #: ⚠️ 不能直接 `messages.append(...)` —— `messages` 每轮都由
+    #:   `_render_history(history)` **从库里重新拼**，append 上去的东西
+    #:   在下一轮就被丢掉了。所以用一个变量把它带到下一轮，在那里补。
+    pending_reminder: str | None = None
+
+    #: 循环上界 = 工具轮数 + 1（最后那轮用来总结）+ 纠偏轮数。
+    for round_index in range(MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES):
         # ★ v0.100：在调模型**之前**推一条 phase 帧。
         #
         # 这一帧对应的正是界面上「正在想…」那一行 —— 它现在能显示
         # 「第 2 轮 · 模型在推理」而不是一个没有信息的转圈。
         # 工具往返越多，这个信息越有用：用户能看出它是**在推进**
         # 还是**卡住了**。
-        await _emit_phase(emit, "thinking", round_index, budget=MAX_TOOL_ROUNDS)
+        #
+        # v1.13：序号用**工具轮次**而不是循环变量 —— 纠偏轮不该让界面上
+        # 的"第 N 轮"跳号（用户看到的是"怎么突然第 4 轮了"）。
+        await _emit_phase(
+            emit, "thinking", round_index - nudges_used, budget=MAX_TOOL_ROUNDS
+        )
 
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
         messages = _render_history(history)
+        if pending_reminder is not None:
+            # ★ 一次性：补进去之后立刻清掉。留着的话它会出现在之后每一轮
+            #   的上下文里，模型会以为用户反复在催它。
+            messages.append({"role": "user", "content": pending_reminder})
+            pending_reminder = None
 
-        at_limit = round_index >= MAX_TOOL_ROUNDS
+        # ★ v1.13：`round_index - nudges_used` —— 纠偏轮不消耗工具预算。
+        at_limit = (round_index - nudges_used) >= MAX_TOOL_ROUNDS
         system_this_round = system
         if at_limit:
             result.hit_tool_limit = True
@@ -1272,6 +1450,55 @@ async def run_turn(
                 reasoning = candidate if isinstance(candidate, str) and candidate else None
 
         if not text and not actions:
+            # ★ v1.13：空回复也要先试一次提醒，而不是当场给用户一句
+            #   「（模型这次没有产出内容。可以再问一次，或换个接入点试试。）」
+            #
+            # 那句占位语把**平台的失败**推给了用户去处理。而实测里这个形态
+            # （会话「你能做什么」seq 8 / seq 24）出现时，模型下一轮其实
+            # 完全能正常产出 —— 它只是这一轮什么都没写。多调一次的成本，
+            # 比让用户重打一遍问题低得多。
+            #
+            # 但 `at_limit` 那轮不能推：那一轮我们要的就是"用一段话总结"，
+            # 模型交白卷时占位语是唯一能给用户的信息。
+            if not at_limit and nudges_used < MAX_NARRATION_NUDGES:
+                nudges_used += 1
+                truncated = _is_truncated(reply)
+                pending_reminder = (
+                    render_truncation_reminder(len(raw_text))
+                    if truncated
+                    else render_format_reminder()
+                )
+                # ★ v1.14：纠偏续跑必须有个可见的 Phase 帧。
+                #
+                # 改造前这里什么都不推：界面上「正在想…」停住，然后凭空蹦出
+                # 下一段。用户无法区分「它在自动重试」与「它卡死了」——
+                # 而这两件事该做的动作完全相反（等 / 刷新重发）。
+                # CyberStrikeAI 在同一位置推 `finalization_auto_continue`
+                # （"最终回复检查尚未收敛，正在基于已有轨迹继续执行…"），
+                # 我们是同一个语义，只是走 phase 帧而不是 message 帧：
+                # 它不是答案，不该落库变成一条气泡。
+                await _emit_phase(
+                    emit,
+                    "resume",
+                    round_index,
+                    reason="truncation" if truncated else "format",
+                    attempt=nudges_used,
+                    maxAttempts=MAX_NARRATION_NUDGES,
+                )
+                continue
+
+            # ★ v1.13：**这一轮已经给用户看过话了，就不要再补一句占位语。**
+            #
+            # 典型形态：模型答了一句短的完整回答（"你好，我能帮你…"），
+            # 我们按长度判据推了它一次，它这次什么都没写。此时它上一句
+            # 就是答案，追加「模型这次没有产出内容」等于告诉用户
+            # "刚才那句话不算数" —— 而那句话其实是对的。
+            already_spoke = any(
+                getattr(m, "role", None) == "assistant" for m in result.messages
+            )
+            if already_spoke and not at_limit:
+                return result
+
             from app.kernel.runner import parse_actions as _parse
 
             discarded = _parse(raw_text) if at_limit else []
@@ -1298,6 +1525,53 @@ async def run_turn(
         await _emit_message(emit, assistant_message)
 
         if not actions:
+            # ★ v1.13：**不立刻结束**，先分清它是"说完了"还是"停在半路"。
+            #
+            # 改造前这里就是一句 `return result` —— 于是模型回一句
+            # 「文件到了。先判型：看包概况、协议分层、流量最大的会话。」
+            # （27 字，没写 ACTION）整轮就结束了，用户只能自己打「继续」。
+            # 实测那条会话里两次出现这个形态。
+            #
+            # 判据分三层，**顺序有意义**：
+            #
+            # 1. `at_limit` —— 已经到工具上限，这句总结是我们要的结局，
+            #    推它继续只会让它去写"不要再写 ACTION"之外的 ACTION。
+            # 2. `MAX_NARRATION_NUDGES` 用完 —— 推过两次还不写动作，
+            #    说明它本来就想这么答，再推只是烧钱与拖时间。
+            # 3. `_looks_unfinished` —— 正文里得有"接下来要动手"的意图词，
+            #    且不算太长。纯问答（没有意图词）不该被推。
+            #
+            # 三层都过了才推，且把**为什么**告诉模型（被切断 vs 格式错），
+            # 见 `render_format_reminder` / `render_truncation_reminder`。
+            if (
+                not at_limit
+                and nudges_used < MAX_NARRATION_NUDGES
+                and _looks_unfinished(text)
+            ):
+                nudges_used += 1
+                truncated = _is_truncated(reply)
+                pending_reminder = (
+                    render_truncation_reminder(len(raw_text))
+                    if truncated
+                    else render_format_reminder()
+                )
+                # ★ v1.14：同上 —— 自动续跑要让用户看得见（见空回复分支的长注释）。
+                #
+                # 这条路的 `reason` 更有信息量：此时模型**写了**正文却没写
+                # ACTION，所以除了「格式错 / 被切断」之外，正文本身也是
+                # 用户已经看到的半句话。前端据此可以说「它停在半句话上，
+                # 正在让它接着干」而不是笼统的「重试中」。
+                await _emit_phase(
+                    emit,
+                    "resume",
+                    round_index,
+                    reason="truncation" if truncated else "format",
+                    attempt=nudges_used,
+                    maxAttempts=MAX_NARRATION_NUDGES,
+                )
+                # 这一轮没有动作，所以循环末尾的"工具预算 +1"不适用；
+                # 用 `continue` 直接进下一轮模型调用。
+                continue
             return result
 
         for name, args in actions:
@@ -1398,12 +1672,24 @@ async def resume_approved(
     gate_on = bool(session.require_approval)
     ctx = _ToolContext(db=db, session=session, identity=identity)
 
-    for round_index in range(MAX_TOOL_ROUNDS):
+    # ★ v1.13：与 `run_turn` 同一套纠偏预算。
+    #
+    # 不同步这条路径的后果是**只在审批之后**复现"输出一次就停了"：
+    # 用户点完"确认"，模型说一句"好的，我来跑"就没了 —— 而这个形态
+    # 恰恰更容易出现，因为刚批准的工具结果正要喂回去，它常常先播报一句。
+    nudges_used = 0
+    pending_reminder: str | None = None
+
+    for round_index in range(MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES):
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
         messages = _render_history(history)
-        at_limit = round_index >= MAX_TOOL_ROUNDS - 1
+        if pending_reminder is not None:
+            messages.append({"role": "user", "content": pending_reminder})
+            pending_reminder = None
+
+        at_limit = (round_index - nudges_used) >= MAX_TOOL_ROUNDS - 1
         system_this_round = system
         if at_limit:
             result.hit_tool_limit = True
@@ -1430,6 +1716,15 @@ async def resume_approved(
                 reasoning = candidate if isinstance(candidate, str) and candidate else None
 
         if not text and not actions:
+            if not at_limit and nudges_used < MAX_NARRATION_NUDGES:
+                nudges_used += 1
+                pending_reminder = (
+                    render_truncation_reminder(len(raw_text))
+                    if _is_truncated(reply)
+                    else render_format_reminder()
+                )
+                continue
+
             placeholder = chat_service.append_assistant_message(
                 db,
                 session=session,
@@ -1446,6 +1741,20 @@ async def resume_approved(
         db.commit()
 
         if not actions:
+            # ★ v1.13：与 `run_turn` 同一条判据顺序（见那边的长注释）：
+            #   到上限 / 用尽纠偏 / `_looks_unfinished` —— 三者都过了才推。
+            if (
+                not at_limit
+                and nudges_used < MAX_NARRATION_NUDGES
+                and _looks_unfinished(text)
+            ):
+                nudges_used += 1
+                pending_reminder = (
+                    render_truncation_reminder(len(raw_text))
+                    if _is_truncated(reply)
+                    else render_format_reminder()
+                )
+                continue
             return result
 
         for name, args in actions:

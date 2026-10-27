@@ -34,11 +34,23 @@ v0.97 之前，`POST /chat/sessions/{id}/messages` 是**整轮一次回包**：
 
 ```
 event: phase       {"phase": "thinking", "round": 0}      模型在推理
+event: phase       {"phase": "tool", "round": 1, "tool": "run_shell"}
+event: phase       {"phase": "resume", "round": 1, "reason": "format",
+                    "attempt": 1, "maxAttempts": 2}        自动纠偏续跑（v1.14）
 event: message     {<一条已落库的消息>}                     每落一条推一条
 event: awaiting    {"messageId": "..."}                    停下来等人工确认
 event: done        {"messageCount": 3}                     本轮结束
 event: error       {"message": "..."}                      这一轮失败了
 ```
+
+★ **`phase: resume` 的边界**：它表示「这一轮还没结束，服务端在替用户
+  多推一次模型」。**它不是答案，不落库**，所以走 `phase` 帧而不走
+  `message` 帧 —— `message` 帧推的都是已落库的行，刷新页面还在；而一次
+  成功的纠偏在库里不会留下任何痕迹（只有模型最终那句话）。
+  加它的原因：改造前这个位置一帧都不推，界面「正在想…」停住后凭空蹦出
+  下一段，用户分不清「在自动重试」与「卡死了」，而这两件事该做的动作相反。
+  `reason` 取 `truncation`（被输出长度上限切断）或 `format`（写了话但没写
+  动作）。
 
 ★ **`message` 帧推的是「已落库」的消息，不是临时拼的假对象。**
 理由：界面上最终显示的就是库里那条（刷新页面还在）。如果流里推一份

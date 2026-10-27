@@ -67,7 +67,7 @@ import {
 } from '@/data/chat'
 import type { ChatMessage, ChatSession, ChatState } from '@/data/chat'
 import { ApiError } from '@/lib/api'
-import ChatPage from './ChatPage'
+import ChatPage, { phaseLabel } from './ChatPage'
 
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedUseChat = vi.mocked(useChat)
@@ -872,5 +872,64 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
 
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(toggle.textContent).toContain('收起')
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  phaseLabel：自动纠偏续跑必须"看得见"（v1.14）
+  ══════════════════════════════════════════════════════════════
+
+  纠偏逻辑本身是静默的：模型这一轮没写动作，服务端悄悄再问它一次。
+  改造前这个位置**一帧都不推**，界面上的「正在想…」就那么停着，然后
+  凭空蹦出下一段 —— 用户分不清「在自动重试」（该等）与「卡死了」（该刷新）。
+  这两件事的动作相反，所以"看不出来"本身就是缺陷。
+
+  这里测的是**文案**，因为文案是用户唯一能看到的东西。三条判据：
+  ① `resume` 必须有自己的文案，不能回落成「正在想…」（那就等于没做）；
+  ② 被输出长度切断与"没写动作"要给不同的话 —— 用户已经看到半句话时，
+     说"正在把话说完"才对；说"重试"会让他以为刚才那段作废了；
+  ③ 不能把协议内部词（ACTION、finish_reason、truncation）漏到界面上。
+*/
+
+describe('phaseLabel：纠偏续跑的文案', () => {
+  it('★ resume 必须有自己的文案，不能回落到推理/正在想', () => {
+    const label = phaseLabel({ phase: 'resume', round: 0 })
+    // ⚠️ 只断言 `not.toBe('正在想…')` 是不够的：`round: 0` 时回落分支给出
+    //    的是「第 1 轮 · 模型在推理…」，那条断言照样绿。变异验证暴露过这一点。
+    expect(label).not.toBe('正在想…')
+    expect(label, 'resume 回落成了推理文案 —— 等于这个功能没做').not.toContain('模型在推理')
+    expect(label).toContain('第 1 轮')
+  })
+
+  it('★ 被切断时说"接着写"，不说"重试"', () => {
+    const label = phaseLabel({ phase: 'resume', round: 1, reason: 'truncation' })
+    expect(label).toContain('截断')
+    expect(label).not.toContain('重试')
+  })
+
+  it('★ 没写动作时说"把话说完"（与切断区分开）', () => {
+    const truncated = phaseLabel({ phase: 'resume', round: 0, reason: 'truncation' })
+    const format = phaseLabel({ phase: 'resume', round: 0, reason: 'format' })
+    expect(format).not.toBe(truncated)
+    expect(format).toContain('把话说完')
+  })
+
+  it('★ 不把协议内部词漏给用户', () => {
+    for (const reason of ['truncation', 'format', undefined]) {
+      const label = phaseLabel({ phase: 'resume', round: 0, reason })
+      expect(label).not.toContain('ACTION')
+      expect(label).not.toContain('finish_reason')
+      expect(label).not.toContain('truncation')
+      expect(label).not.toContain('format')
+    }
+  })
+
+  it('既有两种 phase 的文案不变（别为了加 resume 改坏它们）', () => {
+    expect(phaseLabel({ phase: 'thinking', round: 0 })).toBe('第 1 轮 · 模型在推理…')
+    expect(phaseLabel({ phase: 'tool', round: 2, tool: 'run_shell' })).toBe(
+      '第 3 轮 · 正在执行 run_shell…',
+    )
+    expect(phaseLabel(null)).toBe('正在想…')
   })
 })
