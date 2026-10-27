@@ -150,12 +150,58 @@ TOOL_SPECS: Final[tuple[ToolSpec, ...]] = (
         ),
         # ★ 这个 `default_limitation` 是**必须写**的，不是可选文档。
         #   理由见本字段的 docstring：模型会把"缩水的结果"读成"结论"。
-        #   这里缩水的是**看图**：`screenshot` 存了文件但模型看不到内容，
-        #   若不写清，模型会以为自己验证过页面外观。
+        #   ⚠️ v1.04 起 "看不了图片" 这句**不再成立** —— `view_image` 把图
+        #   真送进对话了（Kali 实测 base64 → 200、prompt_tokens 31→223）。
+        #   留旧文案会让模型明明能看却不去看，比没这个工具更糟。
         default_limitation=(
-            "看不了图片。screenshot 只把 PNG 存成文件，模型无法读取其内容；"
-            "要了解页面必须用 snapshot（结构）/ get text（文字）/ eval（取值）。"
+            "screenshot 存成文件后，要用 `view_image` 才**真的看得见**"
+            "（只截图不调 view_image，你还是只拿到一个路径）。"
             "另外 ref（@eN）每次快照重新分配，页面一变就得重新 snapshot。"
+        ),
+    ),
+    ToolSpec(
+        name="view_image",
+        label="看图",
+        group="沙箱执行",
+        summary=(
+            "把沙箱里的一张图片（截图 / 验证码 / 图表 / 题目给的图）"
+            "送进你自己的视觉，下一轮就能真的看到它。"
+        ),
+        params="path（必填，沙箱内路径，需在 /work 之下）",
+        # 为什么这条 limitation 是**反的**（别写"看不到"）：这个工具的整个
+        # 意义就是"你能看到"。真正的限制是**时机**和**路径范围**——
+        # 图是挂到"下一轮"，且只挂一轮（不常驻历史，否则每轮重发吃光上下文）。
+        # 不写清会让模型在同一条消息里就开始描述一张它还没收到的图。
+        default_limitation=(
+            "图在**下一轮**才可见，且只挂一轮 —— 之后要看就再调一次（文件还在）。"
+            "只能读 /work 之下的图；超过 4 MB 会先在容器里用 imagemagick 缩图再送，"
+            "缩完会告诉你原始和缩后各多少字节。"
+        ),
+    ),
+    ToolSpec(
+        name="rea",
+        label="逆向分析",
+        group="技能与知识",
+        summary=(
+            "对二进制、安装包、归档、前端 bundle、数据库做**静态**分析："
+            "ELF/PE 结构、Go/Rust 元数据、APK 签名、asar 归档图、"
+            "JS 应用调用图、SQLite 表结构等。"
+        ),
+        params=(
+            "command（必填，子命令）、path（沙箱内路径）、"
+            "extra（可选，其余 --flag）、timeout_seconds"
+        ),
+        # ★ 这条 limitation 是这个工具最重要的一句话。
+        #
+        #   模型对"逆向工具"的默认期待是**反编译**（ghidra/ida 那套：
+        #   给出伪代码、xrefs、函数图）。而我们装的这一套**没有**反编译
+        #   引擎 —— 那是另一层（Ghidra 1.5GB）。不写清，模型会拿
+        #   `inspect`/`decompile` 撞墙，然后把 provider_unavailable
+        #   读成"这个文件没什么可分析的"，直接放弃一条本来能走的路。
+        default_limitation=(
+            "**没有反编译引擎**（Ghidra/Hopper/IDA/JADX 都没装），所以 "
+            "`decompile`/`xrefs`/伪代码这一层用不了 —— 那是静态格式解析，"
+            "不是反汇编。做不了时它会明说 provider_unavailable。"
         ),
     ),
     # ── 网络请求 ──────────────────────────────────────────
