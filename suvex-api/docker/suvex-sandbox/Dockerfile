@@ -170,9 +170,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #   · `naabu`     —— 端口扫描。相对 nmap 的优势是**快**（`-top-ports 100 -verify`）
     #   · `subfinder` —— 被动子域枚举（证书透明日志等多源）。**不发包给目标**，
     #                    纯被动，比字典爆破静默
-    #   · `hurl`      —— HTTP 请求链 + 响应断言，可复现、可 review。
-    #                    与 `run_shell` + `curl` 的区别是**断言是一等公民**
-    #                    （`[Asserts]` 段），不用自己写 `grep` 判断
+    #   · `hurl`      —— ★ **从 GitHub Releases 取官方包，不走 apt**（2026-10-27 实测）。
+    #
+    #                    ## 为什么不能用 `apt install hurl`
+    #
+    #                    Kali 源里确实有个叫 `hurl` 的包，但它**不是**
+    #                    Orange-OpenSource 的 hurl（HTTP 请求链 + `[Asserts]`
+    #                    断言的测试工具），而是 `hurl 2.1-0kali3` =
+    #                    "Hexadecimal & URL encoder + decoder" —— 完全无关。
+    #                    更糟的是它连 `/usr/bin/hurl` 都**不提供**
+    #                    （`dpkg -l` 有、`which hurl` 空）。
+    #
+    #                    这是比"没装"更坏的形态：`apt install hurl` 成功、
+    #                    `dpkg -l | grep hurl` 有输出，于是按名字对账会以为
+    #                    "装过了"；而模型真去跑 `hurl --test x.hurl` 拿到
+    #                    `unrecognized option`，它会以为是自己语法写错，
+    #                    花好几轮去猜 —— 而不是意识到工具根本不存在。
+    #                    （同款坑见下面 `httpx` 那一段，那次是包名避让。）
+    #
+    #                    ## 为什么还是装
+    #
+    #                    `tooling/hurl.md` 教的是"把多步 HTTP 会话写成可
+    #                    review、可复现的文件，断言是一等公民"。这确实能用
+    #                    `curl` + `grep` 硬拼，但模型的产出就没法被部署者
+    #                    一眼审阅了 —— 而那正是该 skill 的核心价值。
+    #                    二进制依赖 `libcurl.so.4` / `libxml2.so.2`，基础镜像
+    #                    已带，不额外加包。
+    #
+    #                    取 tarball 而不是 `cargo install`：后者要在镜像里装
+    #                    整个 Rust 工具链（几百 MB）只为编一个二进制。
     #   · `python3-hypothesis` —— 属性测试库（差分测试/找边界）。
     #                    ⚠️ 这是**库**不是 CLI，名字和上游 skill 撞车，
     #                    见下面 `tooling/hypothesis.md` 的说明
@@ -186,7 +212,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #     成本远大于收益。**当前决定：不装，并在 skill 里写明替代路径。**
     #   · `amass` —— 我方 `asset_discovery.md` 提到 1 次，但它是子域枚举里
     #     最慢的一档（默认跑很久），而 `subfinder` 已覆盖同一需求。
-    katana naabu subfinder hurl \
+    katana naabu subfinder \
     python3-hypothesis \
     # ── ★ httpx：那个"两个同名工具"的坑（2026-10-26 补）──
     #
@@ -516,6 +542,47 @@ RUN set -eux; \
     agent-browser --version; \
     test -d /opt/agent-browser/skill-data/core
 
+# ── ★ hurl（官方二进制，不走 apt —— 见上文第 173 行的长注释）──────────
+#
+# 一句话：Kali 源的 `hurl` 是另一个工具（十六进制/URL 编解码器），
+# 而且连 `/usr/bin/hurl` 都不提供。装它会让"按名字对账"通过、让模型
+# 拿到 `unrecognized option` —— 比没装更坏。所以从 GitHub Releases 取
+# 官方 tarball 并校验 sha256。
+#
+# 为什么钉 7.1.0：这是 2026-10 时的最新稳定版，且 `tooling/hurl.md`
+# 里的 `[Options]` / `[Asserts]` 语法在该版本上实测通过。
+# 升级时**必须同时**重算 sha256 并重跑 `hurl --version` 自检。
+#
+# 实测（2026-10-27，Kali rolling）：
+#   · tarball 3184899 字节 / sha256 bed802fe…880c
+#   · 展开后 `bin/hurl` 可执行，`hurl --version` → `hurl 7.1.0 (x86_64-pc-linux-gnu)`
+#   · ldd 依赖 libxml2.so.2 / libcurl.so.4 / libnghttp3.so.9 / libngtcp2*，
+#     这些 base 镜像已带（curl 与 tshark 的依赖链），不需额外装包。
+RUN set -eux; \
+    test "$(dpkg --print-architecture)" = "amd64" \
+      || { echo "hurl: 本段只处理 amd64，其他架构需换二进制名" >&2; exit 1; }; \
+    mkdir -p /opt/hurl; \
+    curl -fsSL -o /tmp/hurl.tgz \
+      "https://github.com/Orange-OpenSource/hurl/releases/download/7.1.0/hurl-7.1.0-x86_64-unknown-linux-gnu.tar.gz"; \
+    printf '%s  %s\n' \
+      "bed802fea307d330d899935e76614ae1d9bdd1b3139e5cf77cb717033260880c" /tmp/hurl.tgz \
+      | sha256sum -c -; \
+    tar -xzf /tmp/hurl.tgz -C /tmp; \
+    install -m 0755 /tmp/hurl-7.1.0-x86_64-unknown-linux-gnu/bin/hurl /opt/hurl/hurl; \
+    install -m 0755 /tmp/hurl-7.1.0-x86_64-unknown-linux-gnu/bin/hurlfmt /opt/hurl/hurlfmt; \
+    # 补全脚本跟着二进制走（模型用不上，但 `hurl` 的 man 里提到它们）。
+    mkdir -p /usr/share/bash-completion/completions; \
+    install -m 0644 /tmp/hurl-7.1.0-x86_64-unknown-linux-gnu/completions/hurl.bash \
+      /usr/share/bash-completion/completions/hurl; \
+    rm -rf /tmp/hurl.tgz /tmp/hurl-7.1.0-x86_64-unknown-linux-gnu; \
+    ln -sf /opt/hurl/hurlfmt /usr/local/bin/hurlfmt; \
+    # ⚠️ 构建期自检：`/usr/local/bin` 在 PATH 靠前，但 `--version`
+    #    走的是软链后的真实入口，能同时验证"软链对不对"与"依赖齐不齐"。
+    #    少一个共享库时这里会报 `error while loading shared libraries`，
+    #    而不是等到题目里才发现 —— 那正是本段存在的理由。
+    hurl --version; \
+    hurlfmt --version
+
 # ── Python 解题环境（venv，独立于系统 python）──────────────
 #
 # ## 为什么用 venv 而不是直接 pip install 到系统
@@ -534,8 +601,36 @@ ENV VIRTUAL_ENV=/opt/venv
 RUN python3 -m venv "$VIRTUAL_ENV"
 ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel \
-    && pip install --no-cache-dir \
+# ★ pip 也要走镜像源 —— 2026-10-27 实测：直连 pypi.org 会 SSLEOF/超时。
+#
+# 那天的构建日志（这是"没有镜像就必然失败"，不是偶发）：
+#
+#   WARNING: Retrying … after connection broken by 'SSLError(SSLEOFError(8,
+#     '[SSL: UNEXPECTED_EOF_WHILE_READING] …'))': /simple/setuptools/
+#   WARNING: Retrying … 'ReadTimeoutError("HTTPSConnectionPool(host='pypi.org',
+#     port=443): Read timed out. (read timeout=15)")'
+#   ERROR: Could not find a version that satisfies the requirement setuptools
+#     (from versions: none)
+#
+# 于是整层 RUN 以 exit code 1 断掉，镜像根本没重建出来 —— 而同一次构建里
+# apt（走第 70 行的 tuna）**一路正常**。也就是说网络是通的，只是到 pypi.org
+# 这条路不通。只给 apt 配镜像、不给 pip 配，是同一类"配了一半"的疏忽。
+#
+# ⛔ 刻意用 `--index-url` 而**不是** `ENV PIP_INDEX_URL`：
+#    ENV 会把它写进镜像，从而改变沙箱里**运行时** pip 的默认源。
+#    而这个镜像的通用 agent 档是要能自由出网的（见 runner 的无限制档），
+#    运行时该用官方源；构建期只是需要一个能连上的源。
+#    另外它只影响这两条命令，别人在别处 `pip install` 不会被暗中改道。
+#
+# ★ 仍用 ARG 而不是写死：换机器/换源时
+#    `docker build --build-arg PIP_INDEX_URL=https://pypi.org/simple ...`。
+# ★ 带 --retries/--timeout：镜像站偶尔抖一下不该让整层失败。
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        --retries 5 --timeout 60 --upgrade pip setuptools wheel \
+    && pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        --retries 5 --timeout 60 \
         # Pwn / 二进制交互（也常被 misc 与 web 题借用）
         pwntools \
         # crypto：对称/非对称原语、数论、SMT 求解

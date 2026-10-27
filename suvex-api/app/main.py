@@ -238,6 +238,30 @@ async def lifespan(_app: FastAPI):
 
     get_autosync().start()
 
+    # ── 对话沙箱空闲回收（v0.108）─────────────────────────────
+    #
+    # ★ 为什么需要它：对话沙箱（`app/chat/sandbox.py`）是**长期驻留**的
+    #   （跨轮保留 `/work`），而它原本只有两条回收路径，两条都不够：
+    #
+    #   1. `DELETE /chat/sessions/{id}` —— 那条路由的真实语义是**归档**
+    #      （`archive_session`"不硬删"，用户可以取消归档），正常使用
+    #      几乎不会调到。
+    #   2. `sweep_orphan_sandboxes()` —— 只在进程重启时发生。
+    #
+    #   于是正常运行期间**一个都不会被回收**。2026-10-27 实测：一台机器
+    #   跑了几轮验证就攒到 6 个 `ctf2-chat-*`，每个 `--memory 2g`，
+    #   配额合计 12 GiB —— 而宿主只有 7.9 GiB，`available` 掉到 930 MiB。
+    #   可见的症状是别人的沙箱开始 `docker run` 失败。
+    #
+    # ⚠️ 顺序：必须在 `sweep_orphan_sandboxes()` 与 `ensure_ctf2_network()`
+    #   **之后**。那两个动的是容器与网络，回收器只读进程内的字典 ——
+    #   反过来说，如果回收器先起，它可能在清理还没跑完时就去 `docker rm`，
+    #   与 `sweep_orphan_sandboxes` 抢同一批容器（虽然幂等，但会白白
+    #   打一堆"容器不存在"的日志，掩盖真正的问题）。
+    from app.chat import sandbox as chat_sandbox
+
+    chat_sandbox.start_reaper()
+
     logger.info(
         "Suvex API %s 已就绪（env=%s，前缀=%s，扫描后端=%s，并发上限=%d，CORS 源=%s）",
         settings.app_version,
@@ -266,6 +290,24 @@ async def lifespan(_app: FastAPI):
         from app.kernel.autosync import get_autosync
 
         get_autosync().stop()
+
+        # 对话沙箱回收线程 + 所有驻留的对话沙箱（v0.108）。
+        #
+        # ⚠️ 先停线程再销毁容器：反过来的话，回收线程可能在我们遍历
+        #    字典的中途又摘掉一个，然后对同一个容器发两次 `docker rm`。
+        #    （`destroy()` 幂等，但日志会说两次"销毁失败"而容器其实早
+        #    没了 —— 那是让停机日志变得不可读。）
+        #
+        # ★ 这里**真的**要把沙箱都销毁：`sweep_orphan_sandboxes()` 在下次
+        #   启动时也能清，但"停机时干净地收掉"是更好的行为 ——
+        #   尤其是用户手动 `systemctl restart` 之后立刻 `docker ps` 时，
+        #   不该看到一堆上一代的容器。代价是停机多花几十微秒。
+        from app.chat import sandbox as chat_sandbox
+
+        chat_sandbox.stop_reaper()
+        dropped = chat_sandbox.drop_all_sandboxes()
+        if dropped:
+            logger.info("已销毁 %d 个驻留的对话沙箱", dropped)
 
         logger.info("Suvex API 已停止")
 

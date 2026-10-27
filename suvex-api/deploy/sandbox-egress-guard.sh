@@ -35,8 +35,49 @@
 # 幂等：先删自己的旧规则再追加，且只动带 `suvex-sandbox-guard` 注释的规则。
 set -u
 
-# 沙箱所在的子网（实测：suvex-ctf2 = 172.18/16，suvex-pentest = 172.19/16）。
-SANDBOX_SUBNETS="172.18.0.0/16 172.19.0.0/16"
+# 沙箱所在的子网（**动态取自 docker，不写死**）。
+#
+# ## ★ 为什么必须动态取（2026-10-27 实测踩到）
+#
+# 原来这里写死 `172.18.0.0/16 172.19.0.0/16` —— 那是 ctf2 和 pentest 两个
+# 网络。通用 agent 档用的是新网络 `suvex-agent`，docker 分配到
+# **172.20.0.0/16**，不在这个列表里。
+#
+# 后果是实测出来的，不是推想的：
+#
+#     docker exec ctf2-chat-… sh -c "curl -s -o /dev/null -w %{http_code} \
+#         http://192.168.44.128:8080/"   →  200
+#
+# 也就是**一个 purposely 放开的通用 agent 容器，能直接打开平台自己的
+# 前端**。脚本明明写好了、规则明明也下发了 —— 只是它没覆盖那个子网。
+# 这是"写了却不生效"最难自查的一种：`iptables -S INPUT` 看得见规则，
+# 所以肉眼检查会过。
+#
+# 所以改成从 docker 读实际网段。取不到的跳过（不猜一个默认值 —— 猜错了
+# 就等于又写死一次，而且错得静默）。
+TAG="suvex-sandbox-guard"
+
+# log() 必须定义在**第一个调用点之前**。原来它放在文件靠下的位置，而下面的
+# 网段解析会调用它，于是第一次运行打出的是 `line 72: log: command not found`
+# —— 功能没坏（规则照样写进去了），但末尾那句「解析到沙箱网段：…」永远不出现。
+# 那种失败最费时间：看不到关键那行，会以为解析逻辑没跑。
+log() { echo "[sandbox-egress-guard] $*"; }
+
+SANDBOX_NETWORKS="suvex-ctf2 suvex-pentest suvex-agent"
+
+resolve_subnets() {
+  for net in $SANDBOX_NETWORKS; do
+    docker network inspect "$net" \
+      --format '{{range .IPAM.Config}}{{.Subnet}} {{end}}' 2>/dev/null
+  done | tr ' ' '\n' | grep -E '^[0-9]' | sort -u
+}
+
+SANDBOX_SUBNETS="$(resolve_subnets)"
+if [ -z "$SANDBOX_SUBNETS" ]; then
+  log "一个沙箱网段都没解析到（docker 不可用？），放弃"
+  exit 1
+fi
+log "解析到沙箱网段：$(echo $SANDBOX_SUBNETS)"
 
 # 平台自身的服务端口：
 #   8080  nginx（前端，实测 0.0.0.0 监听 → 这是唯一从容器真能连上的）
@@ -45,10 +86,6 @@ SANDBOX_SUBNETS="172.18.0.0/16 172.19.0.0/16"
 #   55432 宿主上 postgres 的发布端口（docker ps 实测 127.0.0.1:55432->5432）
 #   22    ssh
 PLATFORM_PORTS="8080 8000 5432 55432 22"
-
-TAG="suvex-sandbox-guard"
-
-log() { echo "[sandbox-egress-guard] $*"; }
 
 if ! iptables -S INPUT >/dev/null 2>&1; then
   log "INPUT 链不可用，放弃"

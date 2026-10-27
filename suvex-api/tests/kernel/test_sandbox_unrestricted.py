@@ -356,3 +356,87 @@ def test_network_isolated_never_prepares_any_network(monkeypatch) -> None:
     _sandbox(network_isolated=True).start()
 
     assert not [a for a in seen if a[:3] == ["docker", "network", "inspect"]]
+
+
+# ══════════════════════════════════════════════════════════
+# 5. 出站封堵脚本必须覆盖每一个沙箱网桥
+# ══════════════════════════════════════════════════════════
+
+
+def test_egress_guard_script_covers_every_sandbox_network() -> None:
+    """★ 封堵脚本的网段清单必须跟着 `runner.py` 的网络常量走。
+
+    ## 这条钉的是实测发生过的漏洞（2026-10-27）
+
+    脚本原先把子网**写死**成 `172.18.0.0/16 172.19.0.0/16`（ctf2 与
+    pentest）。通用 agent 档用的是后来新增的 `suvex-agent`，docker 给它
+    分了 `172.20.0.0/16` —— 不在清单里。实测后果：
+
+        docker exec ctf2-chat-… sh -c \
+            "curl -s -o /dev/null -w %{http_code} http://192.168.44.128:8080/"
+        →  200
+
+    即**一个特意放开的通用 agent 容器能直接打开平台自己的前端**。
+
+    ## 为什么肉眼检查会漏掉它
+
+    规则确实下发成功了，`iptables -S INPUT` 里看得见 15 条 DROP ——
+    缺的那一条不会报错、不会缺席地显眼。只有拿「有哪些网桥」去对
+    「清单里写了哪些」，才能发现少一个。
+
+    ## 为什么断言"赋值行"而不是"文件里出现过这个名字"
+
+    第一版就是断言 `net in text`，结果**变异验证没抓住**：把 `suvex-agent`
+    从赋值里删掉，那条断言照样绿 —— 因为名字在我自己写的注释里也出现过
+    （"通用 agent 档用的是新网络 `suvex-agent`"）。文件里出现过 = 什么都
+    证明不了。改成只解析 `SANDBOX_NETWORKS=` 那一行，注释不参与。
+
+    ## 为什么断言"名字在赋值里"而不是跑脚本
+
+    跑脚本要 root + 会改真实防火墙，测试环境不该碰。这里断言的是一件
+    更弱但仍有价值的事：**新增沙箱网络时，会有人被迫回来改这个文件**
+    （常量加进 `runner.py` 而脚本没跟上 → 这条红）。
+    """
+    from pathlib import Path
+
+    script = (
+        Path(__file__).resolve().parents[2] / "deploy" / "sandbox-egress-guard.sh"
+    )
+    text = script.read_text(encoding="utf-8")
+
+    # 只取赋值语句的内容，注释里的名字不算数（见上面那段）。
+    assignments = [
+        line for line in text.splitlines() if line.startswith("SANDBOX_NETWORKS=")
+    ]
+    assert len(assignments) == 1, f"SANDBOX_NETWORKS 应恰好赋值一次：{assignments}"
+    listed = assignments[0].split("=", 1)[1].strip().strip('"').split()
+
+    for net in (runner.CTF2_NETWORK, runner.PENTEST_NETWORK, runner.AGENT_NETWORK):
+        assert net in listed, (
+            f"出站封堵脚本没覆盖网桥 {net} —— 那个网桥里的容器能直接连平台端口。"
+            f"把 {net} 加进 SANDBOX_NETWORKS。当前清单：{listed}"
+        )
+
+    # 反向：不许再写死具体网段。写死就必然在下次新增网桥时静默漏掉
+    # （这正是本次漏洞的成因）。
+    assert not any(item.startswith("172.") for item in listed), (
+        f"网段不许写死：新增网桥时会静默漏掉。用 resolve_subnets() 从 docker 读。"
+        f"当前清单：{listed}"
+    )
+
+
+def test_egress_guard_resolves_subnets_from_docker() -> None:
+    """网段必须真的从 docker 读，不是换个地方继续写死。
+
+    `resolve_subnets()` 存在还不够 —— 它可能被定义了却没人调用（本项目
+    反复出现的"写了却不生效"）。所以同时钉住调用点。
+    """
+    from pathlib import Path
+
+    text = (
+        Path(__file__).resolve().parents[2] / "deploy" / "sandbox-egress-guard.sh"
+    ).read_text(encoding="utf-8")
+    assert "$(resolve_subnets)" in text, (
+        "定义了 resolve_subnets() 却没有调用点 —— 网段会一直是空的"
+    )
+    assert "docker network inspect" in text, "网段应从 docker network inspect 读"

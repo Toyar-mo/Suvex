@@ -45,9 +45,19 @@ keepalive、其他会话的轮次）全部卡死。
   1~3 秒。
 - **跨轮保留**：`/work` 里的中间产物（解压出来的文件、写的脚本）下一轮
   还要用。每轮销毁等于让模型每轮从头再来。
-- **回收**：`DELETE /chat/sessions/{id}` 时销毁；进程重启时由
-  `runner.sweep_orphan_sandboxes()` 兜底（`ctf2-chat-` 前缀天然被
-  `ctf2-` 判据覆盖）。
+- **回收**：三条路径，**缺一不可**（v0.108 修正了这里曾经的错误）：
+  1. **空闲回收**（`start_reaper` → `reap_idle_sandboxes`）：超过
+     `IDLE_REAP_SECONDS` 没被任何工具调用命中的沙箱被销毁。这是
+     **正常运行期间唯一会发生的回收** —— 下面两条都太罕见。
+  2. 归档会话（`DELETE /chat/sessions/{id}`）时销毁。
+     ⚠️ 这条路由的真实语义是**归档**（可取消），所以它不能当主路径。
+  3. 进程启停兜底：启动时 `runner.sweep_orphan_sandboxes()` 清上一代
+     残留（`ctf2-chat-` 前缀天然被 `ctf2-` 判据覆盖），停机时
+     `drop_all_sandboxes()` 主动收掉。
+  
+  最初只写了 2 和 3，结果实测攒到 6 个容器 / 12 GiB 配额上限而宿主
+  只有 7.9 GiB（见 `reap_idle_sandboxes` 的 docstring）。**"有回收代码"
+  不等于"回收会发生"** —— 判据是"正常运行一小时里它被调到几次"。
 
 ## 无限制档
 
@@ -63,11 +73,31 @@ import asyncio
 import logging
 import os
 import threading
+import time
 from typing import Any
 
 from app.chat.models import ChatSession
 
 _log = logging.getLogger(__name__)
+
+#: 一个会话的沙箱 + 最后一次被用到的时间。
+#:
+#: ## 为什么要把 `last_used` 和沙箱放进同一个对象
+#:
+#: 空闲回收（见 `start_reaper`）要原子地判断"这个沙箱从没人用过"并删掉它。
+#: 如果 `last_used` 单独放一个 `dict`，回收器就会在两次 `_LOCK` 之间
+#: 看到"沙箱还在、时间戳已被更新"或反过来 —— 前者会误杀一个正在被用的
+#: 沙箱（模型的下一条命令打到已销毁的容器上），后者什么都不坏但需要
+#: 额外推理才能确认不坏。放同一个值里，判断和删除都在一把锁内完成。
+class _Entry:
+    """会话沙箱 + 最后使用时间（monotonic 秒）。"""
+
+    __slots__ = ("last_used", "sandbox")
+
+    def __init__(self, sandbox: Any, *, last_used: float) -> None:
+        self.sandbox = sandbox
+        self.last_used = last_used
+
 
 #: 会话 id → 沙箱。进程内单例，靠 `_lock` 保护。
 #:
@@ -75,7 +105,7 @@ _log = logging.getLogger(__name__)
 #: （`ExecStart` 里没有 `--workers`），所以进程内状态跨请求可见。
 #: 哪天加了 `--workers > 1`，这里会变成"有时找得到沙箱、有时找不到" ——
 #: 那时必须换成共享存储（Redis 或 DB 表）。这个注释就是那个前提的钉子。
-_SANDBOXES: dict[str, Any] = {}
+_SANDBOXES: dict[str, _Entry] = {}
 #: 保护 `_SANDBOXES` 本身（只做字典读写，毫秒级）。
 _LOCK = threading.Lock()
 #: 保护"某个会话的沙箱正在启动"这一段（`docker run` 1~3 秒）。
@@ -95,6 +125,32 @@ _STARTING: dict[str, threading.Lock] = {}
 #: 两个会话各占 2G 就已经很紧。给保守值，让"起不来"早暴露。
 DEFAULT_CPUS = 2
 DEFAULT_MEMORY_MB = 2048
+
+#: 空闲多久的对话沙箱会被回收（秒）。
+#:
+#: ## 为什么是 30 分钟这个量级
+#:
+#: 回收会丢掉 `/work`（见 `reap_idle_sandboxes` 的取舍说明），所以这个值
+#: 不想取小。但它也不能取大：
+#:
+#: - **上限由内存决定**：每个沙箱 `--memory 2g`，宿主 7.9 GiB。
+#:   经验上 3~4 个活跃沙箱是这台机器的天花板；6 个就已经让
+#:   `available` 掉到 930 MiB（2026-10-27 实测）。
+#: - **下限由真实使用节律决定**：用户读一轮回答、想一想、再问 ——
+#:   这个间隔通常是分钟级，不会超过半小时。真超过半小时的会话，
+#:   用户的下一轮本来也要重新"热身"。
+#:
+#: ⚠️ 刻意**不用**"容器数超过 N 就驱逐最旧的"：那会在用户同时开很多
+#:    会话时误杀仍在用的沙箱，而误杀的后果（模型看到 `/work` 空了、
+#:    正在跑的任务被打断）比"多占一会儿内存"严重得多。
+IDLE_REAP_SECONDS = 30 * 60.0
+
+#: 回收线程多久检查一次（秒）。
+#:
+#: 相对于 `IDLE_REAP_SECONDS` 足够小即可：它决定的是"空闲超时后最多
+#: 晚多久被回收"，不是回收本身的精度。取 60s 让 `docker ps` 的次数
+#: 可以忽略（每次只是读进程内字典，只有真需要回收时才碰 docker）。
+REAP_INTERVAL_SECONDS = 60.0
 
 
 def _sandbox_name(session_id: str) -> str:
@@ -174,7 +230,11 @@ def get_sandbox(session: ChatSession) -> Any:
     with _LOCK:
         existing = _SANDBOXES.get(session.id)
         if existing is not None:
-            return existing
+            # ★ 命中也算"用过"：空闲回收靠这个时间戳判活。漏了这一步，
+            #   一个每分钟用一次的会话会在启动 30 分钟后被回收掉 ——
+            #   而它明明一直在用。
+            existing.last_used = time.monotonic()
+            return existing.sandbox
         # 拿（或建）这个会话的启动锁。在 `_LOCK` 里做，避免两个线程
         # 同时 `setdefault` 出两把不同的锁。
         start_lock = _STARTING.setdefault(session.id, threading.Lock())
@@ -184,7 +244,8 @@ def get_sandbox(session: ChatSession) -> Any:
         with _LOCK:
             existing = _SANDBOXES.get(session.id)
             if existing is not None:
-                return existing
+                existing.last_used = time.monotonic()
+                return existing.sandbox
 
         sandbox = _new_sandbox(session)
         try:
@@ -203,7 +264,7 @@ def get_sandbox(session: ChatSession) -> Any:
             raise
 
         with _LOCK:
-            _SANDBOXES[session.id] = sandbox
+            _SANDBOXES[session.id] = _Entry(sandbox, last_used=time.monotonic())
             _STARTING.pop(session.id, None)
         _log.info("对话沙箱已就绪：session=%s container=%s", session.id, sandbox.name)
         return sandbox
@@ -212,15 +273,15 @@ def get_sandbox(session: ChatSession) -> Any:
 def drop_sandbox(session_id: str) -> None:
     """销毁并忘掉一个会话的沙箱。**幂等**。
 
-    调用点：`DELETE /chat/sessions/{id}`。也用于测试清理。
+    调用点：`DELETE /chat/sessions/{id}`（归档）、空闲回收、测试清理。
     """
     with _LOCK:
-        sandbox = _SANDBOXES.pop(session_id, None)
+        entry = _SANDBOXES.pop(session_id, None)
         _STARTING.pop(session_id, None)
-    if sandbox is None:
+    if entry is None:
         return
     try:
-        sandbox.destroy()
+        entry.sandbox.destroy()
     except Exception:  # noqa: BLE001 - 销毁失败不该让删会话这个动作失败
         _log.warning("销毁对话沙箱 %s 时出错", session_id, exc_info=True)
 
@@ -231,9 +292,9 @@ def drop_all_sandboxes() -> int:
         items = list(_SANDBOXES.items())
         _SANDBOXES.clear()
         _STARTING.clear()
-    for session_id, sandbox in items:
+    for session_id, entry in items:
         try:
-            sandbox.destroy()
+            entry.sandbox.destroy()
         except Exception:  # noqa: BLE001
             _log.warning("销毁对话沙箱 %s 时出错", session_id, exc_info=True)
     return len(items)
@@ -243,6 +304,152 @@ def has_sandbox(session_id: str) -> bool:
     """这个会话是否已经有活着的沙箱。给测试和诊断用，不启动新的。"""
     with _LOCK:
         return session_id in _SANDBOXES
+
+
+def live_sandbox_count() -> int:
+    """当前驻留的对话沙箱数。给诊断/实机验证用。"""
+    with _LOCK:
+        return len(_SANDBOXES)
+
+
+def reap_idle_sandboxes(idle_seconds: float | None = None) -> int:
+    """回收空闲超过阈值的沙箱，返回回收了几个。**幂等、可反复调**。
+
+    ## 为什么必须有这个东西（实测暴露的资源泄漏）
+
+    这个模块最初的回收路径只有两条，而**两条都不够**：
+
+    1. `DELETE /chat/sessions/{id}` —— 那条路由的真实语义是**归档**
+       （`archive_session`，docstring 明说"不硬删"，用户可以取消归档）。
+       所以正常使用时它几乎不会被调到。
+    2. 进程重启时的 `runner.sweep_orphan_sandboxes()` —— 只在部署/重启
+       时发生。
+
+    于是**正常运行期间一个沙箱都不会被回收**。2026-10-27 实测：
+    一台机器跑了几轮验证就有了 6 个 `ctf2-chat-*`，每个 `--memory 2g`，
+    **配额合计 12 GiB，而宿主只有 7.9 GiB**，`available` 掉到 930 MiB。
+    这不是"理论上的泄漏"，是当场就能测到的：容器数只会随"用户开过几个
+    会话"单调增长，而每个都常驻一份 chromium + python venv 的内存。
+
+    ## 为什么按"空闲"而不是按"总数上限"
+
+    按总数驱逐（LRU）会在用户正同时用很多会话时误杀仍在用的沙箱。
+    按空闲驱逐的语义是"这个会话已经 N 分钟没有任何命令了" —— 那正
+    对应"它的 `/work` 里没有正在进行的中间产物"。
+
+    ⚠️ 代价说清楚：被回收后这个会话的 `/work` 内容丢失，下一轮会
+    **新建**一个沙箱（模型会看到 `/work` 是空的）。这是刻意的取舍
+    —— 相对于"把机器内存吃光导致所有人的沙箱都起不来"，丢 `/work`
+    是更轻的故障。阈值取得足够大（默认 30 分钟）就是让这个取舍
+    只在真正闲置的会话上发生。
+    """
+    threshold = IDLE_REAP_SECONDS if idle_seconds is None else idle_seconds
+    now = time.monotonic()
+
+    # ⚠️ 先在锁内挑出候选并**从字典里摘掉**，再在锁外 destroy。
+    #
+    #   反过来（锁内 destroy）会让一次 `docker rm` 的最长几十秒里，
+    #   所有会话的 `get_sandbox` 全部阻塞 —— 那是把一个后台清理动作
+    #   变成全局停顿。
+    #   而在锁内摘掉之后，即使并发来了一个新命令，它看到的也是
+    #   "没有沙箱" → 建一个新的。旧容器的名字带随机段，不会撞名。
+    with _LOCK:
+        victims = [
+            (sid, entry)
+            for sid, entry in _SANDBOXES.items()
+            if now - entry.last_used > threshold
+        ]
+        for sid, _ in victims:
+            _SANDBOXES.pop(sid, None)
+
+    for sid, entry in victims:
+        try:
+            entry.sandbox.destroy()
+        except Exception:  # noqa: BLE001 - 一个销毁失败不该中断其余回收
+            _log.warning("回收空闲对话沙箱 %s 时出错", sid, exc_info=True)
+        else:
+            _log.info(
+                "回收空闲对话沙箱：session=%s container=%s 空闲 %.0fs",
+                sid,
+                entry.sandbox.name,
+                now - entry.last_used,
+            )
+    return len(victims)
+
+
+# ══════════════════════════════════════════════════════════
+# 后台回收线程
+# ══════════════════════════════════════════════════════════
+
+
+class _Reaper:
+    """定时调 `reap_idle_sandboxes` 的后台线程。
+
+    ## 为什么是线程而不是 asyncio 任务
+
+    `destroy()` → `docker rm` 是**阻塞** subprocess。放进 asyncio 任务里
+    会冻住事件循环（与模块 docstring 决定 2 同一个理由）。线程里跑
+    阻塞 subprocess 是安全的，代价只是多一个栈。
+
+    ## 三条纪律（照 `app/kernel/autosync.py` 的同名约定）
+
+    1. **绝不抛异常出去**。后台线程一次未捕获异常就静默死掉，而症状是
+       "内存又开始涨了" —— 没有任何界面能看出回收器已经不在跑了。
+    2. **`stop()` 要等线程真的退出**（带超时），否则测试里会留下
+       跨用例的线程去动下一个用例的沙箱。
+    3. **可被反复 start/stop**（测试需要）。
+    """
+
+    def __init__(self) -> None:
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self, *, interval_seconds: float | None = None) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        interval = REAP_INTERVAL_SECONDS if interval_seconds is None else interval_seconds
+        thread = threading.Thread(
+            target=self._loop,
+            args=(interval,),
+            name="chat-sandbox-reaper",
+            daemon=True,
+        )
+        self._thread = thread
+        thread.start()
+
+    def stop(self, *, timeout: float = 10.0) -> None:
+        self._stop.set()
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.join(timeout)
+
+    def _loop(self, interval: float) -> None:
+        while not self._stop.wait(interval):
+            try:
+                reap_idle_sandboxes()
+            except Exception:  # noqa: BLE001 - 后台线程不许死
+                _log.warning("空闲沙箱回收轮次失败（下一轮继续）", exc_info=True)
+
+
+_reaper = _Reaper()
+
+
+def start_reaper(*, interval_seconds: float | None = None) -> None:
+    """启动空闲回收线程。调用点：`app/main.py` 的 lifespan 启动段。
+
+    ⚠️ 为什么由 lifespan 调、而不是模块导入时自动起：
+    导入时起线程会让**每一次测试导入**都在后台跑一个线程去 `docker rm`，
+    测试之间互相干扰，而且 `pytest` 收集阶段也会起。生命周期归
+    lifespan，和 `scheduler` / `autosync` 一致。
+    """
+    _reaper.start(interval_seconds=interval_seconds)
+
+
+def stop_reaper(*, timeout: float = 10.0) -> None:
+    """停止回收线程。调用点：`app/main.py` 的 lifespan `finally`。"""
+    _reaper.stop(timeout=timeout)
 
 
 # ══════════════════════════════════════════════════════════
@@ -355,16 +562,22 @@ async def _tool_browser(ctx: Any, args: dict[str, Any]) -> str:
 __all__ = [
     "DEFAULT_CPUS",
     "DEFAULT_MEMORY_MB",
+    "IDLE_REAP_SECONDS",
+    "REAP_INTERVAL_SECONDS",
     "drop_all_sandboxes",
     "drop_sandbox",
     "get_sandbox",
     "has_sandbox",
+    "live_sandbox_count",
     # ★ 引擎的 `_TOOL_IMPLS` 用这两个名字注册。对外不带下划线，因为它们
     #   是**跨模块**的注册点 —— 下划线在 `engine.py` 里读起来像"内部函数
     #   被外部调用"，正是那种让人怀疑"是不是该抄一份"的信号。
     #
     #   `load_skill` / `load_recipe` 不在这里：它们纯查表、不碰沙箱，
     #   实现在 `engine.py` 里（见 `_tool_load_skill` / `_tool_load_recipe`）。
+    "reap_idle_sandboxes",
+    "start_reaper",
+    "stop_reaper",
     "tool_browser",
     "tool_run_shell",
 ]

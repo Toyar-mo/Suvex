@@ -418,3 +418,303 @@ def test_sandbox_names_stay_within_the_docker_length_limit() -> None:
     long_id = "chat_" + "x" * 200
     name = chat_sandbox._sandbox_name(long_id)
     assert len(name) <= 63, f"容器名 {len(name)} 字符，超过 Docker 上限 63"
+
+
+# ══════════════════════════════════════════════════════════
+# 空闲回收：唯一在正常运行期真会发生的回收路径
+# ══════════════════════════════════════════════════════════
+#
+# ## 这一节为什么存在
+#
+# v0.107 交付时我以为"回收"已经有了：归档会话会销毁、进程启动会清孤儿。
+# 端到端实测把这个假设打掉了 —— 一台机器跑几轮验证就攒了 6 个
+# `ctf2-chat-*`（每个 `--memory 2g`，配额 12 GiB），而宿主只有 7.9 GiB，
+# `available` 掉到 930 MiB。
+#
+# 根因不是"忘了写销毁"，是**两条销毁路径在正常使用中都不会被触发**：
+# 归档路由真实语义是"软删/可取消"，几乎不调；sweep 只在重启时跑。
+# 所以判据不是"有没有回收代码"，而是
+# 「正常运行一小时内，那个函数被调到几次」—— 答案是 0。
+#
+# 下面这几条钉住的是：**空闲到达阈值时，回收真的会发生，且只发生在
+# 该被回收的那些沙箱上**。
+
+
+def _age(session_id: str, seconds: float) -> None:
+    """把一个会话的 `last_used` 往回拨 `seconds` 秒。
+
+    直接改 `_Entry` 而不是 sleep：把用例的耗时从"分钟级"降到"微秒级"，
+    否则只能靠 `time.sleep(阈值)` 来造空闲，一个用例就得跑三十秒。
+    """
+    with chat_sandbox._LOCK:
+        entry = chat_sandbox._SANDBOXES[session_id]
+        entry.last_used = time.monotonic() - seconds
+
+
+def test_an_idle_sandbox_is_reaped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """空闲超过阈值的沙箱必须被销毁并忘掉。
+
+    这条是本节的核心断言：不成立的话，进程跑一整天就会攒下
+    "用户开过几个会话"个常驻容器。
+    """
+    fake = FakeSandbox()
+    _install(monkeypatch, fake)
+    chat_sandbox.get_sandbox(FakeSession("chat_idle"))
+    assert fake.destroyed is False
+
+    _age("chat_idle", chat_sandbox.IDLE_REAP_SECONDS + 1)
+    reaped = chat_sandbox.reap_idle_sandboxes()
+
+    assert reaped == 1, "空闲超阈值的沙箱没被回收"
+    assert fake.destroyed is True, "沙箱被忘了但容器没销毁 —— 会变成孤儿"
+    assert chat_sandbox.has_sandbox("chat_idle") is False
+
+
+def test_a_busy_sandbox_is_not_reaped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """刚用过的沙箱不许回收。
+
+    ⚠️ 这条比上一条更重要：误杀正在用的沙箱会让模型在下一轮看到
+    `/work` 空了、正在跑的任务被打断。宁可多占一会儿内存。
+    """
+    fake = FakeSandbox()
+    _install(monkeypatch, fake)
+    chat_sandbox.get_sandbox(FakeSession("chat_busy"))
+
+    # 只往回拨 1 秒 —— 远没到阈值。
+    _age("chat_busy", 1.0)
+    reaped = chat_sandbox.reap_idle_sandboxes()
+
+    assert reaped == 0
+    assert fake.destroyed is False, "刚用过的沙箱被误杀了"
+    assert chat_sandbox.has_sandbox("chat_busy") is True
+
+
+def test_using_a_sandbox_resets_its_idle_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**每次命中 `get_sandbox` 都要刷新时间戳。**
+
+    ## 这条钉住的是什么缺陷
+
+    最初的实现里 `get_sandbox` 命中缓存时直接 `return existing`，没有更新
+    `last_used`。后果不是"立刻出错"，而是：一个每分钟用一次的会话，
+    它的 `last_used` 永远停在**创建那一刻**，于是启动满 30 分钟后被
+    回收 —— 而它明明一直在用。
+
+    ## ⚠️ 时序必须这样构造（第一版写错过）
+
+    第一版把沙箱老化到 `阈值 - 60 秒`，然后"用一次"再回收。看起来合理，
+    但**变异验证时它没红**：因为不刷新时间戳时 `age = 1740s < 1800s`，
+    本来就不该回收 —— 刷新与不刷新结果一样，测不出差别。
+
+    正确构造是：先把沙箱老化到**已经超过阈值**（`阈值 + 1`），此时它
+    按道理该被回收；再用一次 —— 这一次必须把它救回来。于是：
+      - 刷新了 → `age ≈ 0` → 不回收（期望）
+      - 没刷新 → `age = 1801s` → 被回收（缺陷）
+    两种实现的**结果相反**，这才有判别力。
+    """
+    fake = FakeSandbox()
+    _install(monkeypatch, fake)
+    session = FakeSession("chat_active")
+    chat_sandbox.get_sandbox(session)
+
+    # 弄老到"已经该被回收"的程度。
+    _age("chat_active", chat_sandbox.IDLE_REAP_SECONDS + 1)
+
+    # 再用一次 —— 这一次必须把时间戳拨回"现在"，把它救回来。
+    chat_sandbox.get_sandbox(session)
+
+    assert chat_sandbox.reap_idle_sandboxes() == 0, (
+        "命中缓存的 `get_sandbox` 没有刷新 last_used —— "
+        "一直在用的会话会被误当成空闲回收掉"
+    )
+    assert fake.destroyed is False
+
+
+def test_reaping_only_touches_the_idle_ones(monkeypatch: pytest.MonkeyPatch) -> None:
+    """多个会话时，只回收空闲的那些。
+
+    这条防的是"回收器把注册表整个清空"这种粗暴实现 —— 那在只有一个
+    沙箱的用例里完全看不出来。
+    """
+    idle = FakeSandbox(name="idle")
+    busy = FakeSandbox(name="busy")
+    session_to_sandbox = {"chat_idle": idle, "chat_busy": busy}
+    monkeypatch.setattr(
+        chat_sandbox,
+        "_new_sandbox",
+        lambda session: session_to_sandbox[session.id],
+    )
+
+    chat_sandbox.get_sandbox(FakeSession("chat_idle"))
+    chat_sandbox.get_sandbox(FakeSession("chat_busy"))
+
+    _age("chat_idle", chat_sandbox.IDLE_REAP_SECONDS + 1)
+
+    assert chat_sandbox.reap_idle_sandboxes() == 1
+    assert idle.destroyed is True
+    assert busy.destroyed is False, "正在用的沙箱被一起回收了"
+    assert chat_sandbox.has_sandbox("chat_busy") is True
+
+
+def test_reaping_an_empty_registry_is_harmless() -> None:
+    """没有沙箱时回收必须什么都不做（后台线程每分钟都会调它）。"""
+    assert chat_sandbox.reap_idle_sandboxes() == 0
+
+
+def test_a_failed_destroy_does_not_stop_the_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """一个容器删不掉，不能连累其余沙箱的回收。
+
+    ## 为什么这条真实存在
+
+    `docker rm` 会因为"容器有进程正在用"、"docker daemon 正忙"等
+    各种原因失败。如果 `reap_idle_sandboxes` 让第一个异常逃出去，
+    后台线程会带着它死掉 —— 之后永不回收，而症状只是"内存又开始涨"，
+    界面上完全看不出来。
+    """
+    doomed = FakeSandbox(name="doomed")
+    healthy = FakeSandbox(name="healthy")
+
+    def failing_destroy() -> None:
+        doomed.destroy_count += 1
+        raise RuntimeError("docker rm 失败")
+
+    doomed.destroy = failing_destroy  # type: ignore[method-assign]
+    session_to_sandbox = {"chat_a": doomed, "chat_b": healthy}
+    monkeypatch.setattr(
+        chat_sandbox,
+        "_new_sandbox",
+        lambda session: session_to_sandbox[session.id],
+    )
+
+    chat_sandbox.get_sandbox(FakeSession("chat_a"))
+    chat_sandbox.get_sandbox(FakeSession("chat_b"))
+    _age("chat_a", chat_sandbox.IDLE_REAP_SECONDS + 1)
+    _age("chat_b", chat_sandbox.IDLE_REAP_SECONDS + 1)
+
+    # 不抛异常，且 healthy 仍然被销毁了。
+    assert chat_sandbox.reap_idle_sandboxes() == 2
+    assert healthy.destroyed is True, "一个 destroy 失败连累了另一个沙箱的回收"
+
+
+def test_reaping_takes_a_custom_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+    """阈值可传参 —— 后台线程用默认值，诊断时可以立刻回收。"""
+    fake = FakeSandbox()
+    _install(monkeypatch, fake)
+    chat_sandbox.get_sandbox(FakeSession("chat_x"))
+
+    _age("chat_x", 5.0)
+
+    # 默认阈值下不该回收。
+    assert chat_sandbox.reap_idle_sandboxes() == 0
+    # 显式给 1 秒就该回收。
+    assert chat_sandbox.reap_idle_sandboxes(idle_seconds=1.0) == 1
+    assert fake.destroyed is True
+
+
+# ══════════════════════════════════════════════════════════
+# 回收线程：必须活着、必须停得掉、必须不把异常抛出去
+# ══════════════════════════════════════════════════════════
+
+
+def test_the_reaper_thread_reaps_on_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    """线程真的会自己调回收 —— 不只是"有个 start_reaper 函数"。
+
+    这是"接线"断言：`start_reaper()` 写在 `app/main.py` 里，如果它
+    只是把线程起起来而线程里什么都不做，前面所有回收测试仍然全绿。
+    """
+    fake = FakeSandbox()
+    _install(monkeypatch, fake)
+    chat_sandbox.get_sandbox(FakeSession("chat_bg"))
+    _age("chat_bg", chat_sandbox.IDLE_REAP_SECONDS + 1)
+
+    # 间隔给 20ms，等最多 2 秒 —— 足够宽松，不会在慢机器上偶发。
+    chat_sandbox.start_reaper(interval_seconds=0.02)
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not fake.destroyed:
+            time.sleep(0.01)
+        assert fake.destroyed is True, "回收线程起来了但从不真的回收"
+    finally:
+        chat_sandbox.stop_reaper()
+
+
+def test_the_reaper_stops_cleanly() -> None:
+    """`stop_reaper()` 返回后线程必须已经退出。
+
+    不退出的话，测试之间会留下跨用例的后台线程去动下一个用例的注册表，
+    表现为"单跑全绿、全量偶发红"。
+    """
+    import threading
+
+    before = {t.name for t in threading.enumerate()}
+    chat_sandbox.start_reaper(interval_seconds=0.01)
+    during = {t.name for t in threading.enumerate()}
+    assert "chat-sandbox-reaper" in during, "start_reaper 没起线程"
+
+    chat_sandbox.stop_reaper()
+
+    after = {t.name for t in threading.enumerate()}
+    assert "chat-sandbox-reaper" not in after, "stop_reaper 返回后线程还活着"
+    # 冒烟：确认前后集合差异只有这一个线程（别顺手起了别的）。
+    assert during - before == {"chat-sandbox-reaper"}
+
+
+def test_starting_the_reaper_twice_is_idempotent() -> None:
+    """重复 start 不该起两个线程（lifespan 重入 / 测试重复调）。"""
+    import threading
+
+    chat_sandbox.start_reaper(interval_seconds=0.05)
+    try:
+        chat_sandbox.start_reaper(interval_seconds=0.05)
+        names = [t.name for t in threading.enumerate()]
+        assert names.count("chat-sandbox-reaper") == 1, "起了不止一个回收线程"
+    finally:
+        chat_sandbox.stop_reaper()
+
+
+def test_the_reaper_survives_a_failed_round(monkeypatch: pytest.MonkeyPatch) -> None:
+    """**一轮回收抛异常，线程必须继续跑下一轮。**
+
+    ## 这条为什么必须存在（变异验证抓出来的缺口）
+
+    最初的这一节只测了"线程会自己回收"。把 `_loop` 里的 try/except 删掉
+    之后，**所有测试仍然全绿** —— 因为正常路径上从来没有异常，那层
+    保护根本没有被测到。
+
+    而这个保护的失效方式是**完全静默**的：线程死在一次偶发的
+    `docker rm` 失败上，之后永不回收。症状不是报错，是几小时后
+    "内存又涨了、别人的沙箱起不来" —— 没有任何界面能看出回收器
+    已经不在跑了。所以它必须被测到。
+
+    构造方式：让 `reap_idle_sandboxes` 前两次调用抛异常，第三次
+    才真正干活 —— 然后断言它真的干到了活。
+    """
+    fake = FakeSandbox()
+    _install(monkeypatch, fake)
+    chat_sandbox.get_sandbox(FakeSession("chat_resilient"))
+    _age("chat_resilient", chat_sandbox.IDLE_REAP_SECONDS + 1)
+
+    real = chat_sandbox.reap_idle_sandboxes
+    calls = {"n": 0}
+
+    def flaky(*args: Any, **kwargs: Any) -> int:
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("偶发的 docker rm 失败")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(chat_sandbox, "reap_idle_sandboxes", flaky)
+
+    chat_sandbox.start_reaper(interval_seconds=0.02)
+    try:
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline and not fake.destroyed:
+            time.sleep(0.01)
+        assert calls["n"] > 2, "回收线程在前两轮异常之后就死了，没再调第三次"
+        assert fake.destroyed is True, "线程活着但异常之后再也不干活了"
+    finally:
+        chat_sandbox.stop_reaper()
+
+
+def test_stopping_a_reaper_that_never_started_is_harmless() -> None:
+    """`stop_reaper()` 在没起过线程时必须直接返回（停机路径幂等）。"""
+    chat_sandbox.stop_reaper()
