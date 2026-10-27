@@ -671,6 +671,71 @@ def test_starting_the_reaper_twice_is_idempotent() -> None:
         chat_sandbox.stop_reaper()
 
 
+def test_reaper_is_running_reports_the_truth() -> None:
+    """`reaper_is_running()` 必须反映真实状态 —— 它是**唯一**可靠判据。
+
+    ## 为什么不能靠 `ps -T` 查线程名（实测踩过）
+
+    CPython 起线程时不会把系统层面的 `comm` 设成
+    `threading.Thread(name=...)` 给的名字。实测：往一个进程里起一个叫
+    `chat-sandbox-reaper` 的线程，`ps -T -o comm` 输出的仍是 `python`；
+    在 uvicorn 进程里则全显示成 `uvicorn`。
+
+    所以我第一次部署后核查「回收器在不在跑」时，看到线程列表里没有
+    `chat-sandbox-reaper`，一度以为它没启动 —— 白查一轮。这个函数
+    就是为了不再重复那次误判：它有判别力，`ps -T` 没有。
+    """
+    chat_sandbox.stop_reaper()
+    assert chat_sandbox.reaper_is_running() is False, (
+        "还没 start 就报告在跑"
+    )
+
+    chat_sandbox.start_reaper(interval_seconds=0.05)
+    try:
+        assert chat_sandbox.reaper_is_running() is True, (
+            "start_reaper 之后报告没在跑"
+        )
+    finally:
+        chat_sandbox.stop_reaper()
+
+    assert chat_sandbox.reaper_is_running() is False, (
+        "stop_reaper 之后仍报告在跑"
+    )
+
+
+def test_the_reaper_logs_that_it_started(caplog: pytest.LogCaptureFixture) -> None:
+    """启动必须留一行日志。
+
+    ## 为什么"打日志"在这里是功能而不是装饰
+
+    回收器失效是**完全静默**的：线程没起、或起在一次未捕获异常之后
+    死掉，都不会有任何报错。可见的症状要几小时后才出现（内存涨了、
+    别人的沙箱 `docker run` 失败），那时没有任何线索指向这里。
+
+    而它也没有别的观测面：没有容器要回收时 `docker ps` 跑一万次也
+    看不出差别；`ps -T` 又读不到线程名（见上一条）。所以这行日志是
+    运维唯一能确认"它真的起来了"的凭据 —— 这是可测试的。
+    """
+    import logging
+
+    caplog.set_level(logging.INFO)
+    chat_sandbox.start_reaper(interval_seconds=0.05)
+    chat_sandbox.stop_reaper()
+
+    started = [
+        r.getMessage() for r in caplog.records if "对话沙箱空闲回收已启动" in r.getMessage()
+    ]
+    assert started, (
+        "回收器启动没有留下日志 —— 运维无法确认它是否在跑，"
+        "而它失效时的症状要几小时后才可见。"
+        f"实际日志：{[r.getMessage() for r in caplog.records]}"
+    )
+    # 日志里要带上两个关键数字，否则运维看不出"多久判定为空闲"。
+    assert "30" in started[0] or "1800" in started[0] or "空闲超过" in started[0], (
+        f"启动日志没说清回收阈值：{started[0]}"
+    )
+
+
 def test_the_reaper_survives_a_failed_round(monkeypatch: pytest.MonkeyPatch) -> None:
     """**一轮回收抛异常，线程必须继续跑下一轮。**
 

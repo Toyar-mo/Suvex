@@ -417,6 +417,25 @@ class _Reaper:
         )
         self._thread = thread
         thread.start()
+        # ★ 必须打这行日志。这是运维判断"回收器到底在不在跑"的**唯一**
+        #   可靠手段：
+        #
+        #   - `ps -T` 读的是线程的 `comm`，而 CPython 起线程时不会把它
+        #     设成 `threading.Thread(name=...)` 给的名字 —— 实测进程里
+        #     所有线程都显示成 `uvicorn`（主线程还叫 `uvicorn`）。
+        #     所以"线程列表里找不到 chat-sandbox-reaper"**不能**作为
+        #     "回收器没起"的证据，反之也一样。我为此白查过一轮。
+        #   - `docker ps` 也看不出：没有容器要回收时，它跑一万次
+        #     也不会产生任何可见痕迹。
+        #
+        #   于是只剩日志。而它一旦静默失效（线程没起、起在抓不到异常的
+        #   地方死掉），症状要几小时后才表现为"内存涨了、沙箱起不来"，
+        #   那时没有任何线索指向这里。
+        _log.info(
+            "对话沙箱空闲回收已启动（每 %.0fs 检查一次，空闲超过 %.0fs 回收）",
+            interval,
+            IDLE_REAP_SECONDS,
+        )
 
     def stop(self, *, timeout: float = 10.0) -> None:
         self._stop.set()
@@ -424,7 +443,6 @@ class _Reaper:
         self._thread = None
         if thread is not None:
             thread.join(timeout)
-
     def _loop(self, interval: float) -> None:
         while not self._stop.wait(interval):
             try:
@@ -450,6 +468,27 @@ def start_reaper(*, interval_seconds: float | None = None) -> None:
 def stop_reaper(*, timeout: float = 10.0) -> None:
     """停止回收线程。调用点：`app/main.py` 的 lifespan `finally`。"""
     _reaper.stop(timeout=timeout)
+
+
+def reaper_is_running() -> bool:
+    """回收线程现在是否活着。
+
+    ## 为什么要有这个函数（而不是让人去 `ps -T` 里找线程名）
+
+    实测过：CPython 起线程时**不会**把系统层面的 `comm` 设成
+    `threading.Thread(name=...)` 给的名字。往一个进程里起一个叫
+    `chat-sandbox-reaper` 的线程，`ps -T -o comm` 输出的仍然是
+    `python` —— 在 uvicorn 进程里则显示成 `uvicorn`。
+
+    也就是说「线程列表里没有 chat-sandbox-reaper」**不能**当作
+    「回收器没起」的证据。我第一次核查时就被这个骗了，白查一轮。
+
+    这个函数是唯一的可靠判据。给测试用，也给运维排查用
+    （`python -c "from app.chat import sandbox; print(sandbox.reaper_is_running())"`
+    在服务进程里跑不出来，但可以作为健康检查端点的一部分）。
+    """
+    thread = _reaper._thread  # noqa: SLF001 - 同模块内读私有字段
+    return thread is not None and thread.is_alive()
 
 
 # ══════════════════════════════════════════════════════════
@@ -569,15 +608,16 @@ __all__ = [
     "get_sandbox",
     "has_sandbox",
     "live_sandbox_count",
+    "reap_idle_sandboxes",
+    "reaper_is_running",
+    "start_reaper",
+    "stop_reaper",
     # ★ 引擎的 `_TOOL_IMPLS` 用这两个名字注册。对外不带下划线，因为它们
     #   是**跨模块**的注册点 —— 下划线在 `engine.py` 里读起来像"内部函数
     #   被外部调用"，正是那种让人怀疑"是不是该抄一份"的信号。
     #
     #   `load_skill` / `load_recipe` 不在这里：它们纯查表、不碰沙箱，
     #   实现在 `engine.py` 里（见 `_tool_load_skill` / `_tool_load_recipe`）。
-    "reap_idle_sandboxes",
-    "start_reaper",
-    "stop_reaper",
     "tool_browser",
     "tool_run_shell",
 ]
