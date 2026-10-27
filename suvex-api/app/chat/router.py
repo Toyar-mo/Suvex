@@ -472,9 +472,19 @@ async def upload_attachment(
 
     ## 生命周期
 
-    上传后 `STAGED_TTL_SECONDS`（1 小时）内有效，发消息时被读走正文并
-    **立刻删除**（`engine.run_turn` 里那两行）。见 `attachments` 模块
-    docstring 的取舍说明。
+    上传后 `STAGED_TTL_SECONDS`（1 小时）内有效。发消息时：
+    - 正文被读进上下文；
+    - 文件本身被 `hand_over()` **搬**到会话级交接目录，该目录以只读方式
+      挂进沙箱的 `/work/attachments`（v0.109 起）。所以 `run_shell` 里的
+      `file` / `binwalk` / `tcpdump -r` 能直接分析它。
+
+    ⚠️ 这里原先写的是「发消息时被读走正文并**立刻删除**」。那句话在
+       v0.107 之前是对的，之后就成了错的 —— 而且正是用户截图里那个
+       「`/work/attachments/` 是空的」的直接来源：文件在模型有机会去看
+       之前就已经没了。
+
+    清理时机改为：会话归档（`archive_session` 里清两棵树）、或交接目录
+    随会话消失。
     """
     session = service.get_session_or_404(
         db, session_id=session_id, created_by=_owner(identity)

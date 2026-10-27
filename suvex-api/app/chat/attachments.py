@@ -275,12 +275,30 @@ def read_text(*, session_id: str, attachment_ids: list[str]) -> list[tuple[str, 
             continue
 
         text: str | None = None
-        for encoding in ("utf-8", "gbk"):
-            try:
-                text = raw.decode(encoding)
-                break
-            except UnicodeDecodeError:
-                continue
+        # ★ 先看有没有 NUL 字节，再看能不能解码。
+        #
+        #   顺序**不能**反。`\x00` 是合法的 UTF-8（码位 U+0000），所以
+        #   `raw.decode("utf-8")` 对 pcapng / pcap / zip / ELF / PNG 里
+        #   那些大段零填充**全部成功**。只靠 try-decode 判断"这是不是文本"，
+        #   得到的是"二进制也算文本" —— 然后这堆含 NUL 的字符串一路走到
+        #   `append_user_message`，PostgreSQL 用
+        #   `psycopg.DataError: PostgreSQL text fields cannot contain NUL
+        #   (0x00) bytes` 拒掉，用户看到的是 **500「处理失败」**。
+        #
+        #   这不是"少数格式才有的边角"：pcapng 文件头之后就是零填充，
+        #   用户上传取证文件、zip、二进制样本都会踩到。2026-10-27 在 Kali
+        #   实机复现（上传 2060 字节的 pcapng → 发消息 → 500）。
+        #
+        #   NUL 作为判据的依据：文本文件里出现 U+0000 没有合理用途，而
+        #   只要有一个，这个字段就存不进 PostgreSQL。所以"有 NUL"既足以
+        #   判定为二进制，也**必须**判定为二进制。
+        if b"\x00" not in raw:
+            for encoding in ("utf-8", "gbk"):
+                try:
+                    text = raw.decode(encoding)
+                    break
+                except UnicodeDecodeError:
+                    continue
         if text is None:
             # 二进制：明确说读不了，**并且**说清文件其实还在哪儿。
             #

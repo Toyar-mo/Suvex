@@ -62,6 +62,65 @@ _log = logging.getLogger(__name__)
 _AUTO_TITLE_CHARS = 32
 
 
+def _scrub_nul(text: str) -> str:
+    """去掉 U+0000，因为 PostgreSQL 的 text 字段**存不了它**。
+
+    ## 这条为什么是必需的，以及为什么只能守在这里
+
+    本轮实测（2026-10-27，Kali）复现了一条 500：
+    用户上传一个 pcapng 附件 → 点发送 → `psycopg.DataError: PostgreSQL
+    text fields cannot contain NUL (0x00) bytes` → 前端只看到「处理失败」。
+
+    直接的成因是附件被判成了文本（已在 `attachments.read_text` 里修）。
+    但**只修那儿不够**，因为能落进 `content` 的文本有三个来源：
+
+    1. 用户消息（含附件正文）；
+    2. 模型回复与推理段；
+    3. **工具输出** —— 模型跑 `run_shell` 里的 `cat /bin/ls`、`xxd`、
+       `strings`、`tcpdump -r`（不转 hex 时）就能产生含 NUL 的输出。
+
+    第 3 条是最坏的一条：它不需要用户做任何特别的事，只要模型想看一个
+    二进制文件。而失败发生在 `append_tool_message` → 整轮 500 ——
+    连它已经跑成功的命令结果都一起丢掉。
+
+    所以在**写入边界**兜底：所有进 text 字段的字符串都过一遍。这不是
+    "顺手清洗"，而是这一层的职责之一 —— `_append` 是 `message_count`
+    不漂移的唯一保证，同理它也必须是"写进 Postgres 的都能写进去"的
+    唯一保证。
+
+    换成空格而不是直接删除：`\x00` 分隔的两段在删掉之后会粘成一个词，
+    而替换成空格能保住原来的分词边界（对 `strings`/日志类输出有意义）。
+    """
+    if "\x00" not in text:
+        return text
+    return text.replace("\x00", " ")
+
+
+def _scrub_nul_json(value: Any) -> Any:
+    """`_scrub_nul` 的结构版：把 JSON 值里所有字符串的 NUL 清掉。
+
+    ## 为什么 `tool_args` 也逃不掉
+
+    `tool_args` 落的是 `JsonColumn`，在 PostgreSQL 上是 **JSONB**。JSONB
+    同样不接受字符串里的 `\\u0000`，报的是
+    `unsupported Unicode escape sequence` —— 与 text 字段那个 500 是同一
+    类失败，只是换了个字段名。
+
+    模型写的工具参数里出现 NUL 不算离奇：它可能把一段二进制片段当作
+    `run_shell` 的入参（哪怕这么做本身是错的），那时参数 JSON 里就会有
+    转义后的 `\\u0000`，于是"它想执行一个命令"变成"整轮 500"。
+
+    递归而不是只处理顶层 dict：参数可以是嵌套的（`{"env": {"X": "..."}}`）。
+    """
+    if isinstance(value, str):
+        return _scrub_nul(value)
+    if isinstance(value, dict):
+        return {_scrub_nul(str(k)): _scrub_nul_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_scrub_nul_json(item) for item in value]
+    return value
+
+
 def _clip_title(raw: str) -> str:
     """把一段文本压成可当标题的一行。
 
@@ -72,8 +131,8 @@ def _clip_title(raw: str) -> str:
     """
     line = " ".join(raw.split())
     if len(line) <= _AUTO_TITLE_CHARS:
-        return line
-    return line[:_AUTO_TITLE_CHARS] + "…"
+        return _scrub_nul(line)
+    return _scrub_nul(line[:_AUTO_TITLE_CHARS] + "…")
 
 
 def _clip_body(text: str) -> str:
@@ -85,16 +144,19 @@ def _clip_body(text: str) -> str:
       最需要看到的。
     """
     if len(text) <= MAX_MESSAGE_CHARS:
-        return text
+        return _scrub_nul(text)
     head = text[: MAX_MESSAGE_CHARS - 200]
-    return f"{head}\n\n…（另有 {len(text) - len(head)} 字已截断）"
+    return _scrub_nul(f"{head}\n\n…（另有 {len(text) - len(head)} 字已截断）")
 
 
 def create_session(db: Session, *, created_by: str, title: str | None = None) -> ChatSession:
     """新建一个空会话。"""
     session = ChatSession(
         id=new_id("chat"),
-        title=(title or "")[:MAX_TITLE_CHARS],
+        # ★ 标题落 PostgreSQL 的 VARCHAR —— 同样存不了 NUL。前端不会传
+        #   NUL，但这个函数也被测试与将来的脚本直接调用，所以在边界上
+        #   统一清洗，而不是假设调用方守规矩。
+        title=_scrub_nul((title or "")[:MAX_TITLE_CHARS]),
         created_by=created_by,
         message_count=0,
     )
@@ -135,7 +197,13 @@ def get_session_or_404(db: Session, *, session_id: str, created_by: str) -> Chat
 
 def rename_session(db: Session, *, session: ChatSession, title: str) -> ChatSession:
     """改标题。空标题回 400 —— 空标题会让侧栏出现一条看不见的条目。"""
-    cleaned = " ".join(title.split())[:MAX_TITLE_CHARS]
+    # ★ 先清洗再判空，顺序不能反。
+    #
+    #   `" ".join(title.split())` 不会吃掉 `\x00`（它不是空白字符 ——
+    #   `"\x00".isspace()` 是 False）。所以一个只由 NUL 组成的标题能过
+    #   "非空"检查，然后在 flush 时被 PostgreSQL 拒掉 → 500。
+    #   清洗放在判空之前，"只剩 NUL 的标题"就会正确地报"标题不能为空"。
+    cleaned = _scrub_nul(" ".join(title.split()))[:MAX_TITLE_CHARS].strip()
     if not cleaned:
         raise ApiError.validation("标题不能为空。", {"title": "至少写一个字"})
     session.title = cleaned
@@ -181,7 +249,9 @@ def _append(
 ) -> ChatMessage:
     """插入一条消息并维护会话的冗余计数与更新时间。
 
-    所有写入都必须经过这里 —— 那是 `message_count` 不会漂移的唯一保证。
+    所有写入都必须经过这里 —— 那是 `message_count` 不会漂移的唯一保证，
+    也是「写进 Postgres text 字段的东西一定写得进去」的唯一保证
+    （`_clip_body` 里过 `_scrub_nul`，`reasoning` 单独过一遍）。
     """
     message = ChatMessage(
         id=new_id("msg"),
@@ -189,9 +259,12 @@ def _append(
         seq=_next_seq(db, session=session),
         role=role,
         content=_clip_body(content),
-        reasoning=reasoning,
+        # ★ `reasoning` 不走 `_clip_body`（它有自己的长度语义），所以
+        #   NUL 必须单独清一次。漏了这里，模型只要在推理段里贴一段含
+        #   `\x00` 的原始输出，同一条 500 就会从另一个入口复现。
+        reasoning=_scrub_nul(reasoning) if reasoning is not None else None,
         tool_name=tool_name,
-        tool_args=tool_args,
+        tool_args=_scrub_nul_json(tool_args),
         tool_failed=tool_failed,
     )
     db.add(message)
