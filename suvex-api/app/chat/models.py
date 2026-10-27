@@ -331,6 +331,22 @@ class ChatMessage(Base):
     #:    「有调用没结果」的半截记录，而界面必须为这种半截状态写专门分支。）
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
+    #: ★ v0.112：**只给模型看、不给用户看**的附加材料，可空。
+    #:
+    #: 目前的唯一来源是附件注入（`engine._render_attachments`）：附件正文、
+    #: 容器内真实路径、以及"用 binwalk / tcpdump 去分析"这类**我们写给
+    #: 模型的指令**。这些东西拼进 `content` 的后果是界面上看起来像用户
+    #: 自己打了一大段 —— 与 `_narration_before_action` 那条判例同一个形状
+    #: （内部协议进了用户视野，复核时无法判断某句话是模型说的还是系统拼的）。
+    #:
+    #: 组装模型上下文时由 `_render_history` 拼回 `content` 之后，所以模型
+    #: 看到的东西与以前逐字节一致；界面只渲染 `content`，于是那段材料
+    #: 从用户视野里消失。
+    #:
+    #: ★ `NULL` 与 `''` 语义不同：NULL = 没有注入材料（绝大多数消息）。
+    #:   读侧一律 `(row.model_extra or "")`，不写 `is NULL` 的特殊分支。
+    model_extra: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     #: 模型的推理段（`reasoning_content` / Anthropic thinking），可空。
     #: 它**不**进下一轮上下文（见 service 里的说明），只用于展示。
     reasoning: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -246,6 +246,7 @@ def _append(
     tool_name: str | None = None,
     tool_args: dict | None = None,
     tool_failed: bool | None = None,
+    model_extra: str | None = None,
 ) -> ChatMessage:
     """插入一条消息并维护会话的冗余计数与更新时间。
 
@@ -263,6 +264,13 @@ def _append(
         #   NUL 必须单独清一次。漏了这里，模型只要在推理段里贴一段含
         #   `\x00` 的原始输出，同一条 500 就会从另一个入口复现。
         reasoning=_scrub_nul(reasoning) if reasoning is not None else None,
+        # ★ v0.112：给模型看的附加材料（附件正文等）。它**同样**要清 NUL ——
+        #   附件正文就是任意二进制的最好载体，`service` 模块 docstring 那条
+        #   「写进 Postgres 的都能写进去」在这里一个字也不能少。
+        #   长度用 `_clip_body` 同一口径：超长留头，与正文一致。
+        model_extra=(
+            _clip_body(model_extra) if model_extra is not None else None
+        ),
         tool_name=tool_name,
         tool_args=_scrub_nul_json(tool_args),
         tool_failed=tool_failed,
@@ -282,9 +290,25 @@ def _append(
     return message
 
 
-def append_user_message(db: Session, *, session: ChatSession, content: str) -> ChatMessage:
-    """落一条用户消息。"""
-    return _append(db, session=session, role="user", content=content)
+def append_user_message(
+    db: Session,
+    *,
+    session: ChatSession,
+    content: str,
+    model_extra: str | None = None,
+) -> ChatMessage:
+    """落一条用户消息。
+
+    `model_extra` 是**给模型看的附加材料**（v0.112，附件正文与路径说明）。
+    它在库里有自己的列，不拼进 `content` —— 界面渲染 `content`，所以用户
+    只看到自己说的话；`_render_history` 按需拼回，所以模型看到的东西不变。
+
+    ★ 标题只取 `content`（见 `_append` 里 `_clip_title(content)`）：拼进去
+      的话会话标题会变成「## 附件：access.log」，侧栏一排都是同样的名字。
+    """
+    return _append(
+        db, session=session, role="user", content=content, model_extra=model_extra
+    )
 
 
 def append_assistant_message(

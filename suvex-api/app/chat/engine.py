@@ -386,7 +386,15 @@ def _render_history(rows: list[Any]) -> list[dict[str, str]]:
             if content.strip():
                 out.append({"role": "assistant", "content": content})
         else:
-            out.append({"role": "user", "content": content})
+            # ★ v0.112：`model_extra` 是**只给模型看**的材料（附件正文、
+            #   容器内路径、分析指路）。用户那句话在 `content` 里，材料
+            #   单独一列，拼回来之后模型看到的东西与改动前逐字节一致。
+            #
+            #   为什么在这里拼、而不是在写入时拼好：界面上 `content` 就是
+            #   用户气泡里的字。写入时拼进去，用户会看到自己"说过"一大段
+            #   `## 附件：…` 的内部说明（v0.112 修的就是这个）。
+            extra = getattr(row, "model_extra", None) or ""
+            out.append({"role": "user", "content": content + extra})
     return out
 
 
@@ -1187,8 +1195,25 @@ async def run_turn(
             session_id=session.id, attachment_ids=attachment_ids
         )
 
-    stored_content = content + _render_attachments(files, handed=handed)
-    user_message = chat_service.append_user_message(db, session=session, content=stored_content)
+    # ★ v0.112：附件材料进 `model_extra`，**不**拼进 `content`。
+    #
+    #   原来这里是 `stored_content = content + _render_attachments(...)`，
+    #   于是界面把那段材料当作用户自己打的字渲染出来 —— 里面有
+    #   `## 附件：xxx`、容器内路径、以及"用 binwalk / tcpdump 分析"这类
+    #   我们写给模型的指令。用户看到会合理地以为"我什么时候说过这些"。
+    #
+    #   这与 `_narration_before_action` 那条判例是同一个形状：内部材料进了
+    #   用户视野之后，复核时无法判断某句话是模型说的还是系统拼的。
+    #
+    #   拆成两列之后：界面只渲染 `content`（用户原话），模型上下文由
+    #   `_render_history` 拼回 `content + model_extra`，**逐字节不变**。
+    attachments_extra = _render_attachments(files, handed=handed)
+    user_message = chat_service.append_user_message(
+        db,
+        session=session,
+        content=content,
+        model_extra=attachments_extra or None,
+    )
     result.messages.append(user_message)
     db.commit()
     await _emit_message(emit, user_message)
