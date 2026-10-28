@@ -21,6 +21,7 @@ import { Modal } from '@/components/ui/Modal'
 import { SessionAttackChainModal } from '@/components/chat/SessionAttackChainModal'
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
+import { ProcessGroup } from '@/components/chat/ProcessGroup'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -32,6 +33,7 @@ import {
   dropStagedAttachment,
   clearStaleSending,
   interject,
+  interruptTurn,
   loadPersonas,
   loadSessions,
   loadTools,
@@ -52,6 +54,7 @@ import {
   type ChatTurnRun,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
+import { groupMessageRows } from '@/lib/messageRows'
 import {
   buildConversationMarkdown,
   buildConversationMarkdownFileName,
@@ -266,6 +269,15 @@ export function ChatPage() {
    * 在整轮期间一直转圈 —— 暗示"点不动"，而它此刻正是**能**点的。
    */
   const [interjecting, setInterjecting] = useState(false)
+  /**
+   * ★ v1.25：「中断当前步骤」弹窗。
+   *
+   * `interrupting` 是"中断请求已发出、还在等服务端确认"的那几百毫秒；
+   * `interruptNote` 是用户填的补充说明（只在「中断并继续」时有意义）。
+   */
+  const [interruptOpen, setInterruptOpen] = useState(false)
+  const [interruptNote, setInterruptNote] = useState('')
+  const [interrupting, setInterrupting] = useState(false)
 
   /*
     ── v1.15 会话管理（右键菜单 / 批量 / 已归档）────────────────────
@@ -471,6 +483,27 @@ export function ChatPage() {
       setSearchParams({ session: session.id }, { replace: true })
       setDraft('')
       composerRef.current?.focus()
+    }
+  }
+
+  /**
+   * ★ v1.25：中断当前这一轮。
+   *
+   * 两个按钮落到同一个端点、两种 mode：
+   * - 「中断并继续」（`continue`）：停下当前输出，把补充并入上下文后自动接着跑。
+   * - 「彻底停止」（`stop`）：这一轮就地结束，后台不再自动接手。
+   */
+  async function submitInterrupt(mode: 'continue' | 'stop') {
+    if (!active || interrupting) return
+    setInterrupting(true)
+    try {
+      const ok = await interruptTurn(active.id, mode, interruptNote.trim())
+      if (ok) {
+        setInterruptOpen(false)
+        setInterruptNote('')
+      }
+    } finally {
+      setInterrupting(false)
     }
   }
 
@@ -789,6 +822,8 @@ export function ChatPage() {
   }
 
   const messages = active?.messages ?? []
+  // ★ v1.25：把过程面（旁白 + 工具）折成折叠块，主对话流只留用户的话与结论。
+  const messageRows = useMemo(() => groupMessageRows(messages), [messages])
 
   /*
     按项目分组。
@@ -1150,18 +1185,22 @@ export function ChatPage() {
                   这个对话还是空的。说点什么，或者回到会话列表挑另一个。
                 </p>
               )}
-              {messages.map((message) => (
-                <MessageRow
-                  key={message.id}
-                  message={message}
-                  deciding={deciding}
-                  onDecide={
-                    message.approvalStatus === 'pending'
-                      ? (approve) => void handleDecide(message.id, approve)
-                      : undefined
-                  }
-                />
-              ))}
+              {messageRows.map((row) =>
+                row.kind === 'process' ? (
+                  <ProcessGroup key={`p-${row.items[0].id}`} items={row.items} />
+                ) : (
+                  <MessageRow
+                    key={row.message.id}
+                    message={row.message}
+                    deciding={deciding}
+                    onDecide={
+                      row.message.approvalStatus === 'pending'
+                        ? (approve) => void handleDecide(row.message.id, approve)
+                        : undefined
+                    }
+                  />
+                ),
+              )}
 
               {/*
                 乐观气泡（v0.97）：用户刚发出去、服务端还没回的那句话。
@@ -1433,6 +1472,22 @@ export function ChatPage() {
                 'disabled:cursor-not-allowed disabled:opacity-60',
               )}
             />
+            {/*
+              ★ v1.25：「中断」入口。只在**当前会话**正在跑时出现 ——
+                跑在别的会话里时这里根本没有可中断的轮次（见 `sendingElsewhere`）。
+            */}
+            {sendingHere && (
+              <Button
+                onClick={() => setInterruptOpen(true)}
+                variant="ghost"
+                size="sm"
+                disabled={interrupting}
+                aria-label="中断"
+                data-interrupt-open
+              >
+                中断
+              </Button>
+            )}
             <Button
               onClick={() => void handleSend()}
               disabled={!canSend}
@@ -1519,6 +1574,63 @@ export function ChatPage() {
       />
 
       {/* ── 重命名对话框 ───────────────────────────────────── */}
+      {/* ── 中断当前步骤（v1.25）────────────────────────────── */}
+      <Modal
+        open={interruptOpen}
+        onClose={() => setInterruptOpen(false)}
+        title="中断当前步骤"
+        widthClass="max-w-xl"
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setInterruptOpen(false)}>
+              关闭
+            </Button>
+            <Button
+              variant="danger"
+              size="sm"
+              disabled={interrupting}
+              data-interrupt-stop
+              onClick={() => void submitInterrupt('stop')}
+            >
+              彻底停止
+            </Button>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={interrupting}
+              data-interrupt-continue
+              onClick={() => void submitInterrupt('continue')}
+            >
+              中断并继续
+            </Button>
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-3 text-xs leading-relaxed text-ink-muted">
+          <p>
+            <span className="font-medium text-ink">中断并继续</span>：他上一条输出会立刻停下，
+            你写的说明会并入上下文，然后他会接着做。中途改方向用这个。
+          </p>
+          <p>
+            <span className="font-medium text-ink">彻底停止</span>：这一轮就地结束，后台不会再自动接着跑。
+          </p>
+          <p className="text-2xs text-ink-faint">
+            注意：如果当前正在执行一个工具命令，它要跑完才会停 —— 我们没法中断一个已经在跑的子进程。
+          </p>
+          <label className="flex flex-col gap-1">
+            <span className="text-2xs text-ink-faint">中断说明（可留空）</span>
+            <textarea
+              value={interruptNote}
+              onChange={(event) => setInterruptNote(event.target.value)}
+              rows={4}
+              aria-label="中断说明"
+              placeholder="例如：别扫端口了，先去看 /api/login 的鉴权逻辑"
+              className="w-full resize-y rounded-sm border border-line bg-surface px-2.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40"
+            />
+          </label>
+        </div>
+      </Modal>
+
       <Modal
         open={renameTarget !== null}
         onClose={() => setRenameTarget(null)}

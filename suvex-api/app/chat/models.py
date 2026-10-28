@@ -335,6 +335,26 @@ class ChatMessage(Base):
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
 
     role: Mapped[str] = mapped_column(String(16), nullable=False)
+    #: 这条消息属于**哪一面**（v1.25）。
+    #:
+    #: - `answer`（默认）：用户可见的对话内容 —— 用户自己说的话、模型的最终答复。
+    #: - `process`：过程证据 —— 模型"我先把附件解出来"这类**边干边说**的旁白。
+    #:
+    #: ## 为什么要分开
+    #:
+    #: 用户原话：「又中断了，就不能一次性把 flag 给我解出来吗」+ 截图里一串
+    #: 小气泡（「我先看看附件里是什么。」「解出来的文件叫 pwn…」「这是 CTF 的
+    #: pwn 二进制，我拆开看逻辑。」）夹在工具行之间。那是**工作过程**，
+    #: 不是回答 —— 它把真正的结论挤到屏幕外，而且任何一句被截断都长得像
+    #: "它停在半路"。
+    #:
+    #: CyberStrikeAI 把这件事叫「过程面 / 交付面隔离」：只有过 final gate 的
+    #: 内容才写 `messages.content`，其余进 `process_details` 时间线。
+    #: 这里用同一原则的最小实现：`process` 的消息**保留在上下文里**（模型
+    #: 仍看得到自己之前说过什么），但界面上收进「过程详情」折叠块，不占气泡。
+    surface: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="answer", server_default="answer"
+    )
 
     #: 正文。
     #:
@@ -419,7 +439,7 @@ class ChatMessage(Base):
 #: | `done` | 正常收尾（模型说完了 / 到工具上限 / 等审批） |
 #: | `failed` | 抛异常死了。`last_error` 记原因，**用户界面上也看得到** |
 #: | `interrupted` | 进程重启时还挂在 `running` 的那些 —— 属于"没人接手了" |
-TURN_RUN_STATUSES = ("running", "done", "failed", "interrupted")
+TURN_RUN_STATUSES = ("running", "done", "failed", "interrupted", "cancelled")
 
 
 class ChatTurnRun(Base):

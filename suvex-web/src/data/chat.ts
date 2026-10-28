@@ -63,6 +63,15 @@ export interface ChatMessage {
   /** 工具是否失败。`null`/缺省 = 成功或不是工具消息。 */
   toolFailed?: boolean | null
   createdAt: string
+  /**
+   * ★ v1.25：这条消息属于哪一面。
+   *
+   * - `answer`（默认）：对话内容 —— 用户自己的话、模型的最终答复，画成气泡。
+   * - `process`：过程证据 —— 边干边说的旁白、工具结果，收进「过程详情」折叠块。
+   *
+   * 老数据/老后端没有这个字段 → 当作 `answer`，行为不变。
+   */
+  surface?: 'answer' | 'process'
 
   /**
    * 审批状态。`null`/缺省 = 这条消息与审批无关。
@@ -468,7 +477,7 @@ export async function openSession(sessionId: string): Promise<void> {
 export interface ChatTurnRun {
   id: string
   sessionId: string
-  status: 'running' | 'interrupted' | 'done' | 'failed'
+  status: 'running' | 'interrupted' | 'done' | 'failed' | 'cancelled'
   resumeAttempts: number
   lastError?: string | null
   startedAt: string
@@ -826,6 +835,28 @@ export async function sendMessage(
  * 那一轮结束时由刷新从服务端取回真消息，这里清空。
  */
 export type InterjectOutcome = 'ok' | 'no-turn' | 'failed'
+
+/**
+ * ★ v1.25：中断正在跑的那一轮。
+ *
+ * - `mode: 'continue'` —— 停下当前输出，把 `note` 并入上下文后自动接着跑。
+ * - `mode: 'stop'` —— 这一轮就地结束（后台不会再自动接手）。
+ *
+ * 与 `interject`（插话）的区别：插话只排队，**当前输出不会停**。
+ */
+export async function interruptTurn(
+  sessionId: string,
+  mode: 'continue' | 'stop',
+  note = '',
+): Promise<boolean> {
+  try {
+    await api.post(`/chat/sessions/${sessionId}/interrupt`, { mode, note })
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
+  }
+}
 
 export async function interject(
   sessionId: string,

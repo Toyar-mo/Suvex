@@ -54,6 +54,7 @@ from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
 from app.chat.models import ChatSession
 from app.chat import failure as failure_kind
+from app.chat import interrupts as interrupt_bus
 from app.chat import nudge as nudge_policy
 from app.chat import turn_runs as turn_run_store
 from app.chat.prompts import (
@@ -70,7 +71,7 @@ from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PH
 _log = logging.getLogger(__name__)
 
 #: 一轮用户消息里最多做几轮"模型→工具→模型"。
-MAX_TOOL_ROUNDS = 6
+MAX_TOOL_ROUNDS = 40
 
 #: 喂给模型的上下文里，最多带多少条历史消息。
 #:
@@ -140,7 +141,7 @@ MAX_TRUNCATION_CONTINUES = 6
 #:
 #: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
-MAX_TOOL_NUDGES = 8
+MAX_TOOL_NUDGES = 30
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
@@ -261,6 +262,10 @@ class ChatTurnResult:
     #:   用户点确认时也要把它带回来。用布尔量的话前端还得自己从
     #:   `messages` 里再筛一遍。
     awaiting_approval: str | None = None
+    #: 这一轮是**用户主动停掉**的（v1.25）。`_run_guarded` 据此把执行记录落成
+    #: `cancelled` 而不是 `done` —— 后者会被后台当成"跑完了"，而用户的意思
+    #: 恰恰是"别再跑了"。
+    stopped: bool = False
 
 
 # ══════════════════════════════════════════════════════════
@@ -334,6 +339,7 @@ async def _call_model(
     *,
     system: str,
     emit: Emit | None,
+    session_id: str | None = None,
 ) -> Any:
     """调一次模型：**能流式就流式，否则退回非流式**（v0.102）。
 
@@ -381,13 +387,17 @@ async def _call_model(
         async for delta in gateway.chat_stream(
             messages, system=system, finish_reason=finish_reasons
         ):
+            # ★ v1.25：每个增量查一次"用户有没有按中断"。按停得**立刻**
+            #   生效 —— 这是"中断并继续"与"插话"的根本区别（后者要等下一轮）。
+            if session_id and interrupt_bus.should_break(session_id):
+                break
             collected.append(delta)
             safe = buffer.feed(delta)
             if safe:
                 pushed = True
                 await _emit_delta(emit, safe)
         tail = buffer.flush()
-        if tail:
+        if tail and not (session_id and interrupt_bus.should_break(session_id)):
             pushed = True
             await _emit_delta(emit, tail)
     except Exception:  # noqa: BLE001
@@ -1543,7 +1553,11 @@ async def run_turn(
 
         try:
             reply = await _call_model(
-                gateway, messages, system=system_this_round, emit=emit
+                gateway,
+                messages,
+                system=system_this_round,
+                emit=emit,
+                session_id=session.id,
             )
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败", exc_info=True)
@@ -1575,6 +1589,46 @@ async def run_turn(
             if isinstance(raw, dict):
                 candidate = raw.get("reasoning_content") or raw.get("thinking")
                 reasoning = candidate if isinstance(candidate, str) and candidate else None
+
+        # ══════════════════════════════════════════════════════════
+        # ★ v1.25：用户按了「中断」/「彻底停止」
+        # ══════════════════════════════════════════════════════════
+        #
+        # 检查点放在**模型回复之后**：流式循环里已经按 `should_break`
+        # 提前停了收字，所以此刻 `raw_text` 就是"被打断时说到哪儿"。
+        #
+        # 为什么不抛异常：抛异常会被 `_run_guarded` 当成"中途断了"记成
+        # `interrupted`，而 `interrupted` 会被后台 `resumer` 自动接手 ——
+        # 与"用户明确要停"完全相反。所以这里正常返回 + `stopped` 标志。
+        _stop = interrupt_bus.stop_requested(session.id)
+        _note = None if _stop else interrupt_bus.take_note(session.id)
+        if _stop or _note is not None:
+            if text:
+                _m = chat_service.append_assistant_message(
+                    db, session=session, content=text, reasoning=reasoning,
+                    surface="answer" if _stop else "process",
+                )
+                result.messages.append(_m)
+                db.commit()
+                await _emit_message(emit, _m)
+            if _stop:
+                result.stopped = True
+                interrupt_bus.clear(session.id)
+                return result
+            # 中断并继续：把用户补充作为一条 user 消息注入，然后接着跑。
+            _m2 = chat_service.append_user_message(
+                db,
+                session=session,
+                content=INTERRUPT_NOTE.format(note=_note or "(无)"),
+                # ★ 过程面：这句是我们**替用户写的注入模板**，不是他打的字。
+                #   画成用户气泡会让人以为是自己说的话（v1.25）。
+                surface="process",
+            )
+            result.messages.append(_m2)
+            db.commit()
+            await _emit_message(emit, _m2)
+            await _emit_phase(emit, "resume", round_index, reason="user")
+            continue
 
         if not text and not actions:
             # ★ v1.13：空回复也要先试一次提醒，而不是当场给用户一句
@@ -1653,7 +1707,14 @@ async def run_turn(
             return result
 
         assistant_message = chat_service.append_assistant_message(
-            db, session=session, content=text, reasoning=reasoning
+            db,
+            session=session,
+            content=text,
+            reasoning=reasoning,
+            # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
+            #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
+            #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
+            surface="answer" if not actions else "process",
         )
         result.messages.append(assistant_message)
         db.commit()
@@ -1886,6 +1947,46 @@ async def resume_approved(
                 candidate = raw.get("reasoning_content") or raw.get("thinking")
                 reasoning = candidate if isinstance(candidate, str) and candidate else None
 
+        # ══════════════════════════════════════════════════════════
+        # ★ v1.25：用户按了「中断」/「彻底停止」
+        # ══════════════════════════════════════════════════════════
+        #
+        # 检查点放在**模型回复之后**：流式循环里已经按 `should_break`
+        # 提前停了收字，所以此刻 `raw_text` 就是"被打断时说到哪儿"。
+        #
+        # 为什么不抛异常：抛异常会被 `_run_guarded` 当成"中途断了"记成
+        # `interrupted`，而 `interrupted` 会被后台 `resumer` 自动接手 ——
+        # 与"用户明确要停"完全相反。所以这里正常返回 + `stopped` 标志。
+        _stop = interrupt_bus.stop_requested(session.id)
+        _note = None if _stop else interrupt_bus.take_note(session.id)
+        if _stop or _note is not None:
+            if text:
+                _m = chat_service.append_assistant_message(
+                    db, session=session, content=text, reasoning=reasoning,
+                    surface="answer" if _stop else "process",
+                )
+                result.messages.append(_m)
+                db.commit()
+                await _emit_message(emit, _m)
+            if _stop:
+                result.stopped = True
+                interrupt_bus.clear(session.id)
+                return result
+            # 中断并继续：把用户补充作为一条 user 消息注入，然后接着跑。
+            _m2 = chat_service.append_user_message(
+                db,
+                session=session,
+                content=INTERRUPT_NOTE.format(note=_note or "(无)"),
+                # ★ 过程面：这句是我们**替用户写的注入模板**，不是他打的字。
+                #   画成用户气泡会让人以为是自己说的话（v1.25）。
+                surface="process",
+            )
+            result.messages.append(_m2)
+            db.commit()
+            await _emit_message(emit, _m2)
+            await _emit_phase(emit, "resume", round_index, reason="user")
+            continue
+
         if not text and not actions:
             nudge_truncated = _is_truncated(reply)
             nudge_allowed = (
@@ -1914,7 +2015,14 @@ async def resume_approved(
             return result
 
         assistant_message = chat_service.append_assistant_message(
-            db, session=session, content=text, reasoning=reasoning
+            db,
+            session=session,
+            content=text,
+            reasoning=reasoning,
+            # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
+            #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
+            #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
+            surface="answer" if not actions else "process",
         )
         result.messages.append(assistant_message)
         db.commit()
@@ -1985,6 +2093,19 @@ async def resume_approved(
 #: 告诉他"这一轮断了、我在后台接着做、也可以催我一句"。
 INTERRUPTED_NOTE = "（这一轮中途断了：{reason}。我在后台接着做；也可以发「继续」催我一下。）"
 
+#: ★ v1.25：「中断并继续」时注入给模型的那条 user 消息。
+#:
+#: 用户按了「中断」——他要的是**立刻别按原计划走**，并把自己的补充纳入。
+#: 所以这句话必须同时交代两件事：① 上面那段输出被打断了；② 优先照新说明来。
+INTERRUPT_NOTE = chr(10).join([
+    "【用户中断并继续】",
+    "你上一条输出被用户主动打断了。请把下面的补充纳入考虑，然后**直接继续做事**"
+    "（写 ACTION），不要重复已经完成的步骤。",
+    "",
+    "用户补充：{note}",
+    "（若用户没写补充，就基于已有结果继续推进，并在这一轮给出结论。）",
+])
+
 #: ★ v1.22：**不值得重试**的失败（密钥/权限）。说清"修好之后点重试"，
 #: 因为用户唯一能做的事在设置页，而重试入口就在错误条上。
 FAILED_NOTE = (
@@ -2035,7 +2156,9 @@ async def _run_guarded(
         except Exception:  # noqa: BLE001 - 连记账都失败就别再抛新的
             _log.warning("记录中断状态失败（%s）", kind, exc_info=True)
         raise
-    turn_run_store.finish(db, run, status="done")
+    # ★ v1.25：用户主动停掉的这一轮落 `cancelled` —— 不能落 `done`（会被当成
+    #   跑完了），也不能落 `interrupted`（后台 resumer 会自动接手，与"别再跑"相反）。
+    turn_run_store.finish(db, run, status="cancelled" if result.stopped else "done")
     db.commit()
     return result
 

@@ -180,3 +180,40 @@ def test_a_failed_run_can_be_retried_by_a_human(
     )
     assert response.status_code == 200, response.text
     assert "跑通了" in response.json()["messages"][0]["content"]
+
+
+def test_interrupt_without_a_running_turn_is_rejected(
+    ready_client: TestClient,
+) -> None:
+    """★ v1.25：没有在跑的轮次时，中断要明确拒绝（409），而不是假装排上了。"""
+    session_id = _make_session_via_api(ready_client)
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/interrupt",
+        json={"mode": "stop", "note": ""},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "NO_RUNNING_TURN"
+
+
+def test_interrupt_with_a_running_turn_is_scheduled(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """有 open 的轮次时，中断请求被接受并落下信号。"""
+    from app.chat import interrupts
+
+    interrupts.reset_all()
+    session_id = _make_session_via_api(ready_client)
+    turn_runs.start(db_session, session_id=session_id)
+    db_session.commit()
+
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/interrupt",
+        json={"mode": "continue", "note": "换个入口"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["mode"] == "continue"
+    assert body["hasNote"] is True
+    # 信号真的落到了注册表（引擎下一个检查点会看到）
+    assert interrupts.take_note(session_id) == "换个入口"
+    interrupts.reset_all()

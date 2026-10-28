@@ -49,11 +49,13 @@ from sqlalchemy.orm import Session
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
 from app.chat import engine, resumer, sandbox as chat_sandbox, service, turn_runs
+from app.chat import interrupts as chat_interrupts
 from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
     ChatInterjectIn,
+    ChatInterruptIn,
     ChatMessageOut,
     ChatPersonaOut,
     ChatPinIn,
@@ -472,6 +474,70 @@ def interject(
     message = service.append_user_message(db, session=session, content=content)
     db.commit()
     return ChatMessageOut.model_validate(message)
+
+
+@router.post(
+    "/chat/sessions/{session_id}/interrupt",
+    summary="中断正在跑的那一轮（并继续 / 彻底停止）",
+)
+def interrupt(
+    session_id: str,
+    payload: ChatInterruptIn,
+    db: DbSession,
+    identity: Reader,
+) -> dict:
+    """让**正在跑的那一轮**停下来（v1.25）。
+
+    用户原话：「打断当前会话也没做，看人家 CyberStrikeAI 的设计」——
+    而 `interject`（插话）只往库里写一句话，**当前输出不会停**，用户
+    看到的是「我让它停，它还在写」。
+
+    ## 两种模式
+
+    - `continue`：停掉当前流式输出 → 把 `note` 注入上下文 → 自动接着跑。
+      用户中途要改方向（"别扫端口了，去看 /api/login"）时用这个。
+    - `stop`：这一轮就地结束，执行记录落 `cancelled`，后台不接手。
+
+    ## 时序（必须说实话）
+
+    - 模型**正在流式输出**时：每个增量都查一次中断信号 → **立刻**停。
+    - **工具正在执行**时：我们是在等一个阻塞的子进程，打断不了 →
+      那个工具返回后才生效。所以接口返回里带 `latency`，前端据此
+      告诉用户"当前工具跑完就停"。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    if session.archived:
+        raise ApiError.validation("这个会话已归档，不能中断。", {"sessionId": "已归档"})
+
+    latest = turn_runs.list_runs(db, session_id=session_id, limit=1)
+    if not latest or latest[0].status not in turn_runs.OPEN_STATUSES:
+        raise ApiError.conflict(
+            "NO_RUNNING_TURN",
+            "这个对话当前没有在跑的回复，不需要中断。",
+        )
+
+    note = (payload.note or "").strip()
+    if payload.mode == "stop":
+        chat_interrupts.request_stop(session_id)
+        return {
+            "mode": "stop",
+            "status": "scheduled",
+            "message": "已请求停止：当前步骤结束（若正在跑工具，等它返回）后这一轮就结束。",
+        }
+
+    chat_interrupts.request_continue(session_id, note)
+    return {
+        "mode": "continue",
+        "status": "scheduled",
+        "hasNote": bool(note),
+        "message": (
+            "已请求中断：正在输出的内容会立刻停下，"
+            + ("你的补充会并入上下文，" if note else "")
+            + "然后自动接着跑。"
+        ),
+    }
 
 
 @router.get("/chat/tools")

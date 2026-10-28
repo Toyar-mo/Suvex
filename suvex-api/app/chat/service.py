@@ -304,6 +304,7 @@ def _append(
     tool_args: dict | None = None,
     tool_failed: bool | None = None,
     model_extra: str | None = None,
+    surface: str = "answer",
 ) -> ChatMessage:
     """插入一条消息并维护会话的冗余计数与更新时间。
 
@@ -331,6 +332,7 @@ def _append(
         tool_name=tool_name,
         tool_args=_scrub_nul_json(tool_args),
         tool_failed=tool_failed,
+        surface=surface,
     )
     db.add(message)
 
@@ -353,6 +355,7 @@ def append_user_message(
     session: ChatSession,
     content: str,
     model_extra: str | None = None,
+    surface: str = "answer",
 ) -> ChatMessage:
     """落一条用户消息。
 
@@ -364,7 +367,12 @@ def append_user_message(
       的话会话标题会变成「## 附件：access.log」，侧栏一排都是同样的名字。
     """
     return _append(
-        db, session=session, role="user", content=content, model_extra=model_extra
+        db,
+        session=session,
+        role="user",
+        content=content,
+        model_extra=model_extra,
+        surface=surface,
     )
 
 
@@ -374,6 +382,7 @@ def append_assistant_message(
     session: ChatSession,
     content: str,
     reasoning: str | None = None,
+    surface: str = "answer",
 ) -> ChatMessage:
     """落一条模型回复。
 
@@ -381,7 +390,14 @@ def append_assistant_message(
       那种情况下这条消息仍有意义（它保住了"模型在这一轮说过什么"的顺序），
       所以不拒绝空串。界面按 `content === ''` 渲染成"正在调用工具…"。
     """
-    return _append(db, session=session, role="assistant", content=content, reasoning=reasoning)
+    return _append(
+        db,
+        session=session,
+        role="assistant",
+        content=content,
+        reasoning=reasoning,
+        surface=surface,
+    )
 
 
 def append_tool_message(
@@ -393,7 +409,7 @@ def append_tool_message(
     content: str,
     failed: bool = False,
 ) -> ChatMessage:
-    """落一条工具执行记录。"""
+    """落一条工具执行记录。工具结果永远属于**过程面**（v1.25）。"""
     return _append(
         db,
         session=session,
@@ -402,6 +418,7 @@ def append_tool_message(
         tool_name=tool_name,
         tool_args=tool_args,
         tool_failed=failed,
+        surface="process",
     )
 
 

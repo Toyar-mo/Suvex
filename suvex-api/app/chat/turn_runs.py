@@ -138,9 +138,16 @@ def heartbeat(
 
 
 def finish(db: Session, run: ChatTurnRun, *, status: str, error: str | None = None) -> None:
-    """收尾。`status` 只能是 `done` / `failed`。"""
-    if status not in ("done", "failed"):
-        raise ValueError(f"finish() 不接受 {status!r}，它只收 done/failed")
+    """收尾。`status` 只能是 `done` / `failed` / `cancelled`（v1.25）。
+
+    `cancelled` = 用户主动「彻底停止」。它与 `failed` 的区别：失败是"没做成"，
+    取消是"用户不让做了"。两者都**不**会被后台接手；但 `cancelled` 不该在
+    界面上被标成红色错误。
+    """
+    if status not in ("done", "failed", "cancelled"):
+        raise ValueError(
+            f"finish() 不接受 {status!r}，它只收 done/failed/cancelled"
+        )
     run.status = status
     run.last_error = redact(error) if error else None
     run.heartbeat_at = now_utc()

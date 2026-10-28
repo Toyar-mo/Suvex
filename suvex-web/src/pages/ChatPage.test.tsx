@@ -71,6 +71,7 @@ vi.mock('@/data/chat', () => ({
   // ★ v0.100：插话。跑着的时候 Enter 走这条路径（见 `handleSend`）。
   clearStaleSending: vi.fn(),
   interject: vi.fn(async () => 'ok'),
+  interruptTurn: vi.fn(async () => true),
   // v1.15 会话生命周期：同样必须逐个列出，漏一个就在调用时炸。
   pinSession: vi.fn(async () => true),
   unarchiveSession: vi.fn(async () => true),
@@ -91,6 +92,7 @@ import {
   createSession,
   clearStaleSending,
   interject,
+  interruptTurn,
   listTurns,
   loadSessions,
   resumeTurn,
@@ -110,6 +112,7 @@ const mockedInterject = vi.mocked(interject)
 const mockedListTurns = vi.mocked(listTurns)
 const mockedResumeTurn = vi.mocked(resumeTurn)
 const mockedClearStaleSending = vi.mocked(clearStaleSending)
+const mockedInterruptTurn = vi.mocked(interruptTurn)
 
 function session(overrides: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -1224,5 +1227,83 @@ describe('ChatPage — 别的会话在跑时不许把话插进去（v1.24）', (
       expect(mockedSendMessage).toHaveBeenCalledWith('chat_1', '其实这一轮早结束了')
     })
     expect(mockedClearStaleSending).toHaveBeenCalled()
+  })
+})
+
+describe('ChatPage — 中断当前步骤（v1.25）', () => {
+  /*
+    ★ 用户原话：「打断当前会话也没做，看人家 CyberStrikeAI 的设计」。
+      插话只排队、不会停当前输出 —— 所以必须有一个真的"按停"入口。
+  */
+  it('★ 当前会话在跑 → 出现「中断」按钮；点开有三个选项', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        sendingSessionId: 'chat_1',
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    fireEvent.click(await screen.findByRole('button', { name: '中断' }))
+
+    expect(await screen.findByRole('button', { name: '中断并继续' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: '彻底停止' })).toBeTruthy()
+    expect(screen.getByLabelText('中断说明')).toBeTruthy()
+  })
+
+  it('★ 「中断并继续」把说明带给 interruptTurn(continue, note)', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        sendingSessionId: 'chat_1',
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    fireEvent.click(await screen.findByRole('button', { name: '中断' }))
+    fireEvent.change(screen.getByLabelText('中断说明'), {
+      target: { value: '别扫端口了，先看登录' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: '中断并继续' }))
+
+    await waitFor(() => {
+      expect(mockedInterruptTurn).toHaveBeenCalledWith(
+        'chat_1',
+        'continue',
+        '别扫端口了，先看登录',
+      )
+    })
+  })
+
+  it('★「彻底停止」用 stop 模式', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        sendingSessionId: 'chat_1',
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    fireEvent.click(await screen.findByRole('button', { name: '中断' }))
+    fireEvent.click(screen.getByRole('button', { name: '彻底停止' }))
+
+    await waitFor(() => {
+      expect(mockedInterruptTurn).toHaveBeenCalledWith('chat_1', 'stop', '')
+    })
+  })
+
+  it('★ 没在跑的时候**不出现**「中断」按钮（没有可中断的轮次）', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [] }, sending: false }),
+    )
+    renderPage('/chat?session=chat_1')
+    await screen.findByPlaceholderText(/说点什么/)
+    expect(screen.queryByRole('button', { name: '中断' })).toBeNull()
   })
 })

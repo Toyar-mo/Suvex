@@ -44,6 +44,13 @@ from app.core.timeutil import IsoDateTime
 #: 收到一段被砍掉一半的提问还浑然不觉。
 MessageBody = Annotated[str, Field(min_length=1, max_length=MAX_MESSAGE_CHARS)]
 
+#: 「中断并继续」的说明上限（v1.25）。
+#:
+#: 它会被拼进一条 user 消息注入上下文。给 2000 是刻意的**小**：这不是让用户
+#: 写小作文的入口，而是一句方向修正（"别扫端口了，去看 /api/login"）。
+#: 太长会挤占上下文预算，而预算正是这类长任务最先耗尽的东西。
+MAX_INTERRUPT_NOTE_CHARS = 2000
+
 #: 角色。与 `models.CHAT_ROLES` 必须同源，模块末尾有一条断言钉住。
 ChatRole = Literal["user", "assistant", "tool"]
 
@@ -130,6 +137,9 @@ class ChatMessageOut(CamelModel):
     toolArgs: dict | None = None
     toolFailed: bool | None = None
     createdAt: IsoDateTime
+    #: `answer`（对话内容，页面画气泡）/ `process`（过程证据，收进折叠块）。
+    #: 默认 `answer`：老客户端/老数据不用改。
+    surface: str = "answer"
 
     # ── 人工审批三字段（v0.94）────────────────────────────────
     # `None` = 这条消息与审批无关。`'pending'` = 模型想调这个工具、
@@ -269,6 +279,25 @@ class ChatInterjectIn(StrictModel):
     """
 
     content: MessageBody = Field(..., description="要插进去的话")
+
+
+class ChatInterruptIn(StrictModel):
+    """中断正在跑的那一轮（v1.25）。
+
+    ## 两种模式的区别（不是措辞，是后果）
+
+    - `continue`：**中断并继续**。停掉当前输出，把 `note` 作为补充注入上下文，
+      然后自动接着跑。用户要改方向时用这个。
+    - `stop`：**彻底停止**。这一轮就地结束，执行记录落 `cancelled`，
+      后台不会自动接手。
+
+    `note` 只在 `continue` 时有意义，可为空（空 = "别按原计划走，但也没别的补充"）。
+    """
+
+    mode: Literal["continue", "stop"] = Field(
+        ..., description="continue=中断并继续；stop=彻底停止"
+    )
+    note: Annotated[str, Field(max_length=MAX_INTERRUPT_NOTE_CHARS)] = ""
 
 
 class ChatRenameIn(StrictModel):

@@ -321,6 +321,11 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #   ⚠️ 反过来（要求 scan/admin）会让"我说的话别丢"这个最朴素
         #   的诉求变成只有管理员能做 —— 而插话的用户往往是操作者本人。
         ("POST", "/api/v1/chat/sessions/{session_id}/interject"),
+        # ★ **中断**（v1.25）：`continue` 只是"停下当前输出、把用户补充并进
+        #   上下文"，`stop` 只是"这一轮别再跑了" —— 两者都不触外部世界、
+        #   不发起任何对目标的动作（真正动手的是工具层，它有单独的 scope）。
+        #   判据与插话一致：这是"控制我自己的这一轮"，不是"操作平台"。
+        ("POST", "/api/v1/chat/sessions/{session_id}/interrupt"),
     }
 )
 
