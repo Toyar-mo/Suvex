@@ -117,12 +117,30 @@ async def resume_stale_once(db: Session) -> int:
     return done
 
 
-async def run_forever(db_factory: Any, *, poll_seconds: float = POLL_SECONDS) -> None:
-    """后台常驻循环。`app.main` 的 lifespan 负责起停。"""
+async def run_forever(
+    session_factory: Any, *, poll_seconds: float = POLL_SECONDS
+) -> None:
+    """后台常驻循环。`app.main` 的 lifespan 负责起停。
+
+    ## ★ 参数是 **sessionmaker**，不是"能返回 sessionmaker 的函数"
+
+    这里踩过一个坑，而且是最难自查的那一类：`app.main` 原来传的是
+    `get_session_factory`（一个**函数**），循环里写 `db = db_factory()`，
+    拿到的却是 `sessionmaker` 本身 —— 于是 `db.scalars(...)` 每 10 秒抛
+    `AttributeError: 'sessionmaker' object has no attribute 'scalars'`。
+
+    它被下面那个 `except Exception` 降级成一条 WARNING，日志看起来
+    岁月静好，而**自动接手从来没有发生过一次**。线上表现就是"对话停了
+    就永远停着"，与没做这个功能一模一样。
+
+    所以：签名收窄成 `session_factory`（`db.sessionmaker` 实例），循环里
+    `session_factory()` 才是一次真正的会话；并把"拿到的是不是 Session"
+    钉进 `tests/chat/test_turn_persistence.py` 的回归用例里。
+    """
     while True:
         try:
             await asyncio.sleep(poll_seconds)
-            db = db_factory()
+            db = session_factory()
             try:
                 await resume_stale_once(db)
             finally:

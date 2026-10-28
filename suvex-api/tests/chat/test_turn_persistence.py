@@ -15,6 +15,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from datetime import timedelta
 from typing import Any
 
@@ -389,3 +391,50 @@ async def test_resumer_gives_up_when_the_owner_account_is_gone(
     assert ran is False
     db_session.refresh(run)
     assert run.status == "failed"
+
+
+async def test_run_forever_feeds_a_real_session_to_the_scanner() -> None:
+    """★ 回归：后台循环必须把**真正的 Session** 交给 `stale_runs`。
+
+    ## 这条守的是一个已经上线过的静默缺陷
+
+    `app.main` 原来写的是 `create_task(run_forever(get_session_factory))` ——
+    传的是**函数**。循环里 `db = db_factory()` 于是得到 `sessionmaker`，
+    `db.scalars(...)` 每 10 秒抛 `AttributeError`，被 `except Exception`
+    降级成一条 WARNING。日志里只有"接手扫描失败（下一轮继续）"，
+    而**自动接手一次都没发生过**：用户看到的表现与完全没做这个功能一样。
+
+    判据刻意不看日志、不看返回值，而是直接检查"被扫描函数收到了什么类型"：
+    只有真的 `Session` 才能查库。若有人把 main 里的传参改回函数，或把
+    `run_forever` 里的 `session_factory()` 写回 `db_factory`，这里立刻红。
+    """
+    from app.core import db as db_module
+    from sqlalchemy.orm import Session
+
+    seen: list[object] = []
+
+    def spy(db: object, **_kwargs: object) -> list[object]:
+        seen.append(db)
+        return []
+
+    original = turn_runs.stale_runs
+    turn_runs.stale_runs = spy  # type: ignore[assignment]
+    task = asyncio.create_task(
+        resumer.run_forever(db_module.get_session_factory(), poll_seconds=0.01)
+    )
+    try:
+        for _ in range(300):
+            if seen:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+        turn_runs.stale_runs = original  # type: ignore[assignment]
+
+    assert seen, "后台循环一次扫描都没跑起来"
+    assert isinstance(seen[0], Session), (
+        f"交给扫描的不是 Session 而是 {type(seen[0]).__name__} —— 这正是"
+        "「传 get_session_factory 函数」那个缺陷的形态，自动接手会永远不生效"
+    )

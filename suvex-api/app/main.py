@@ -282,7 +282,15 @@ async def lifespan(_app: FastAPI):
                 logger.info("有 %d 轮对话在上次进程退出时未完成，已标记为可接手", _n)
         finally:
             _boot_db.close()
-        resume_task = asyncio.create_task(resumer.run_forever(get_session_factory))
+        # ⚠️ 传 **sessionmaker**（`get_session_factory()` 的返回值），
+        #   不是 `get_session_factory` 这个函数本身。
+        #   传错的后果实测过：循环里 `db` 拿到的是 sessionmaker，
+        #   `db.scalars()` 每 10 秒抛 AttributeError，被 resumer 的
+        #   `except Exception` 降级成 WARNING —— 自动接手一次都没跑过，
+        #   而日志看起来正常。见 `resumer.run_forever` 的 docstring。
+        resume_task = asyncio.create_task(
+            resumer.run_forever(get_session_factory())
+        )
     except Exception:  # noqa: BLE001 - 接手是增强项，起不来不能拦住整个服务
         logger.warning("长任务接手循环启动失败（服务继续启动）", exc_info=True)
 
