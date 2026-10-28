@@ -88,6 +88,18 @@ class _Reply:
             {"tools_used": 2, "text": "Let me see the rest.", "nudges_used": 2},
             True,
         ),
+        # ★ v1.25：跑过工具**但回答已经完整**（够长、无"要动手"意图词）→ 不推。
+        #   实测缺陷：打断并继续之后，模型给了 93 字的完整结论，仍被推一次，
+        #   于是同一条结论出现两遍。
+        (
+            "complete_answer_after_tools_is_not_nudged",
+            {
+                "tools_used": 2,
+                "text": "当前目录是 /work（沙箱的工作目录，可写；pwd 返回 /work）。"
+                "之前那次 ls -la /work 你也看到了只有 attachments/ 和 persist/。",
+            },
+            False,
+        ),
         # 但工具纠偏自身也有额度（否则确定性失败会无限续）。
         (
             "tool_round_budget_used_up",

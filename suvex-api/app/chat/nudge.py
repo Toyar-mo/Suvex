@@ -141,7 +141,16 @@ def should_nudge(
     # 「任务中途不许推进」的。跑过工具的轮次本来就该继续，给它一个独立
     # 且更大的额度（`max_tool_nudges`），花的是钱，省的是用户手打「继续」。
     if tools_used > 0:
-        return tool_nudges_used < max_tool_nudges
+        # ★ v1.25：跑过工具**不等于**"没说完"。实测（打断并继续之后那一轮）
+        #   出现两条一模一样的结论气泡：模型给出 93 字的完整回答，我们仍然
+        #   按"跑过工具就推"又推了一次，它只好把同一句话说第二遍。
+        #
+        # 所以这里再收一道：只有"像半句"（意图词 / 短到不可能是结论）才推。
+        # 60 字的门限是实测取的 —— "Let me see the rest of the main function."
+        # (41) 要推，"当前目录是 /work（…）"(93) 不该推。
+        if tool_nudges_used >= max_tool_nudges:
+            return False
+        return looks_unfinished(text) or len(text.strip()) < 60
     if nudges_used >= max_nudges:
         return False
     return looks_unfinished(text)
