@@ -1104,3 +1104,47 @@ describe('resumeTurn — 重试前清掉旧错误（v1.22）', () => {
     await p2
   })
 })
+
+describe('humanizeDetail — 错误条不该以异常类名开头（v1.23）', () => {
+  /*
+    ★ 服务端 detail 形如 `ChatProviderAuthError: 模型接入点拒绝了…`。
+      类名对用户是噪音，界面要从那句人话开始。
+  */
+  it('★ 剥掉 Python 异常类名前缀', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '你好' }))
+    stream.push(TURN_ERROR, {
+      message: 'ChatProviderAuthError: 模型接入点拒绝了这次请求（API key 无效或已过期）。',
+    })
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
+
+    const msg = getChatSnapshot().error?.message ?? ''
+    expect(msg.startsWith('模型接入点拒绝')).toBe(true)
+    expect(msg).not.toContain('ChatProviderAuthError')
+  })
+
+  it('★ 不误伤正常句子里的冒号', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '你好' }))
+    stream.push(TURN_ERROR, { message: '原因：磁盘满了' })
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
+
+    expect(getChatSnapshot().error?.message).toBe('原因：磁盘满了')
+  })
+})

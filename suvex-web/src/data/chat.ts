@@ -318,6 +318,21 @@ export function getChatSnapshot(): ChatState {
   return state
 }
 
+/**
+ * 把错误帧里那句"机器话"收拾成用户能读的一句话。
+ *
+ * ★ v1.23：服务端发来的 `detail` 形如
+ *   `ChatProviderAuthError: 模型接入点拒绝了这次请求（API key 无效或已过期）。`
+ * 前面那截是 Python 异常类名 —— 对排查有用，对用户是纯噪音（"Chat..."）。
+ * 真正要读的是冒号后面那句人话。
+ *
+ * 只剥**类名式**前缀（`Foo` / `Foo.Bar` / `FooError` / `FooException`），
+ * 不碰正常句子里的冒号（例如「原因：磁盘满了」不该被切）。
+ */
+function humanizeDetail(detail: string): string {
+  return detail.replace(/^[A-Za-z_][\w.]*(?:Error|Exception):\s*/, '').trim() || detail
+}
+
 function messageOf(error: unknown): ApiError {
   return error instanceof ApiError ? error : toApiError(error)
 }
@@ -666,7 +681,7 @@ export async function sendMessage(
           //
           // 404/409 这类流开流前的失败由 `streamTurn` 抛 `ApiError` 处理；
           // 这里补的是**开流之后**才出现的 `error` 帧。
-          patch({ error: new ApiError('TURN_FAILED', detail, 200) })
+          patch({ error: new ApiError('TURN_FAILED', humanizeDetail(detail), 200) })
           return
         }
 
