@@ -133,7 +133,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #
 # ⛔ 不要为了"凑齐工具清单"把它加回来 —— 加了构建就断，而断了之后
 #    整个 re 镜像都没有（连带 radare2 / gdb / angr 一起没有）。
-RUN pip install --no-cache-dir \
+# ⚠️ 必须显式给 --index-url：镜像里没有全局 pip 配置，裸 `pip install` 会去
+#    pypi.org，而构建期到 pypi.org 是 SSL EOF（实测
+#    `[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol`）
+#    → 整个 re 构建断在 angr 这一步（2026-10-27 实测）。
+#    base 镜像用同一套 ARG + --index-url 的做法（见 base Dockerfile 的
+#    PIP_INDEX_URL 段），这里保持一致，便于 `--build-arg` 切换源。
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         angr \
         capstone keystone-engine unicorn \
         lief \
