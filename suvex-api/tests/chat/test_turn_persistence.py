@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import inspect
 from datetime import timedelta
 from typing import Any
 
@@ -77,6 +78,26 @@ class _Reply:
         ("intent_word", {"tools_used": 0, "text": "我先看一下环境。"}, True),
         # 额度用尽 → 不推（否则死循环）。
         ("no_budget", {"tools_used": 2, "text": "先判型", "nudges_used": 2}, False),
+        # ★ v1.21：截断有**独立额度** —— 格式额度用完了，被切断的仍要接着写。
+        #   这一条就是线上「解一半又停下」的判据：`nudges_used` 已经 2，
+        #   但其中 0 次是截断，所以截断额度还有 6 次可用。
+        (
+            "truncated_after_format_budget",
+            {"truncated": True, "text": "第二次 read 则", "nudges_used": 2},
+            True,
+        ),
+        # 截断额度本身用尽 → 停（否则一条超长回复可以无限续下去）。
+        (
+            "truncation_budget_exhausted",
+            {"truncated": True, "text": "半句", "nudges_used": 8, "truncations_used": 6},
+            False,
+        ),
+        # 改了截断额度**不能**顺手把格式额度也放开：它仍然是 2。
+        (
+            "format_budget_still_two",
+            {"text": "我先看看。", "tools_used": 2, "nudges_used": 2},
+            False,
+        ),
     ],
 )
 def test_should_nudge_matrix(case: str, kwargs: dict, expected: bool) -> None:
@@ -438,3 +459,67 @@ async def test_run_forever_feeds_a_real_session_to_the_scanner() -> None:
         f"交给扫描的不是 Session 而是 {type(seen[0]).__name__} —— 这正是"
         "「传 get_session_factory 函数」那个缺陷的形态，自动接手会永远不生效"
     )
+
+
+async def test_truncated_reply_keeps_continuing_past_the_format_budget(
+    db_session: Session,
+) -> None:
+    """被切断的回复可以连推多次，不受 `MAX_NARRATION_NUDGES`(=2) 限制。
+
+    ★ 这条钉的是线上那条会话（`chat_01M60YNRTZ0Z8S7BF85NNWMRNN`）的形态：
+      三条 turn_run 全部 `nudges_used=2` 就收尾，而模型每次都是撞
+      `max_tokens` 被切在半句话上。旧逻辑把两种纠偏共用两次额度，于是
+      第三次被切断时什么都不做 —— 界面上就是「解一半又停下了」。
+
+    回退方式：把 `MAX_TRUNCATION_CONTINUES` 改成 0，或让 `should_nudge`
+    在截断时也看 `max_nudges` → 这里的 calls 会掉回 3 而红。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ("我先确认工具。", "length"),
+            ("主函数在 0x40070b。看它的逻辑。", "length"),
+            ("第二次 read 则", "length"),
+            ("FINAL: 拿到 shell 了。", ""),
+        ]
+    )
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="解出 flag",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 4, "连续三次被切断都必须接着写，而不是停在半句话上"
+
+
+async def test_truncation_continues_are_bounded(db_session: Session) -> None:
+    """一直撞 `max_tokens` 也必须有限收尾 —— 否则无限续跑烧钱。"""
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [("还是半句话", "length")] * (engine.MAX_TRUNCATION_CONTINUES + 5)
+    )
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="解题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == engine.MAX_TRUNCATION_CONTINUES + 1
+
+
+def test_chat_gateway_asks_for_a_larger_output_budget() -> None:
+    """对话侧必须显式把 `max_tokens` 抬到 `CHAT_MAX_TOKENS`（v1.21）。
+
+    ★ 为什么用源码契约而不是构造真 gateway：`_build_gateway` 需要一个
+      数据库里的 `ProviderAccount` 行，而这里要钉的只是"那一行参数还在"。
+
+    背景：`LlmGateway` 默认 `max_tokens=4096`。模型把推理写进正文时会反复
+    撞到这个上限（线上三条 turn_run 都是 `nudges_used=2` 收尾的半句话）。
+    截断续跑是兜底，抬上限是减少发生 —— 两者都要有。删掉这个参数不会让
+    任何行为测试变红（默认值仍然能跑），所以只能这样钉。
+    """
+    source = inspect.getsource(engine._build_gateway)
+    assert "max_tokens=CHAT_MAX_TOKENS" in source
+    assert engine.CHAT_MAX_TOKENS > 4096

@@ -10,6 +10,7 @@ import {
   renameSession,
   resetChatStore,
   sendMessage,
+  uploadAttachment,
 } from './chat'
 import { TURN_DELTA, TURN_DONE, TURN_ERROR, TURN_MESSAGE, TURN_PHASE } from './chat-stream'
 
@@ -933,5 +934,58 @@ describe('streamingText — 正文增量（v0.102）', () => {
 
     finishStream()
     await promise
+  })
+})
+
+describe('附件条即发即收（v1.21）', () => {
+  /*
+    ★ 用户原话：「对话发送了文件还贴在这」。
+
+      之前是**整轮跑完**之后才清 `stagedAttachments`，于是这期间输入框上方
+      一直挂着那条附件 —— 而输入框此时已经切成「插话」模式，那条残留让人
+      以为"下次发送还会带上"。上传物其实已经被这一轮读走了。
+  */
+
+  async function stageOne(): Promise<void> {
+    const uploading = uploadAttachment('chat_1', new File(['x'], 'a.pcapng'))
+    pending[1].resolve({ id: 'att1', name: 'a.pcapng', sizeBytes: 1 })
+    await uploading
+    expect(getChatSnapshot().stagedAttachments).toHaveLength(1)
+  }
+
+  it('★ 按发送那一刻就收起，不等整轮跑完', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    await stageOne()
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '看这个包')
+    pending[2].resolveRaw(stream.response)
+    await tick()
+
+    // 关键：这一轮还在跑（sending 仍 true），但附件条已经收起
+    expect(getChatSnapshot().sending).toBe(true)
+    expect(getChatSnapshot().stagedAttachments).toEqual([])
+
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '看这个包' }))
+    stream.push(TURN_DONE, { ...DONE_FRAME, messageCount: 1 })
+    stream.close()
+    await promise
+    if (pending[3]) pending[3].resolve([])
+    expect(getChatSnapshot().stagedAttachments).toEqual([])
+  })
+
+  it('★ 发送失败要把附件条放回去 —— 否则用户得重新选文件', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    await stageOne()
+
+    const promise = sendMessage('chat_1', '看这个包')
+    pending[2].reject(new Error('接入点超时'))
+    await promise
+
+    expect(getChatSnapshot().stagedAttachments.map((a) => a.id)).toEqual(['att1'])
   })
 })

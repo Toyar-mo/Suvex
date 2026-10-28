@@ -99,10 +99,15 @@ def heartbeat(
     round_index: int,
     nudges_used: int,
     tools_used: int,
+    truncations_used: int = 0,
 ) -> None:
     """每轮更新一次进度与心跳。调用方负责 commit（与消息落库同一个事务）。"""
     run.round_index = round_index
     run.nudges_used = nudges_used
+    #: `nudges_used` 的一个子集，见 `app.chat.engine.MAX_TRUNCATION_CONTINUES`。
+    #: 持久化的理由与 `nudges_used` 相同：接手的那一轮要接着用**同一个**
+    #: 额度，否则每次自动接手都把额度重置，切断的长回复可以无限续下去。
+    run.truncations_used = truncations_used
     run.tools_used = tools_used
     run.heartbeat_at = now_utc()
     db.flush()

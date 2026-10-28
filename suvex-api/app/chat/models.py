@@ -472,6 +472,11 @@ class ChatTurnRun(Base):
     round_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 这一轮用掉了几次纠偏（见 `app/chat/nudge.py`）。resume 要接着算预算。
     nudges_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 上面那个数的**子集**：多少次是"回复被 max_tokens 切断"引起的（v1.21）。
+    #:
+    #: 单独存一列而不是从别处推算，是因为接手的那一轮必须知道"截断额度
+    #: 还剩多少" —— 推算需要原始 finish_reason，而它没有落库。
+    truncations_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 这一轮真正执行过几次工具。判"是不是任务型轮次"用。
     tools_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 已经被 resume 过几次。到上限就放弃，避免一个坏会话反复重跑烧钱。

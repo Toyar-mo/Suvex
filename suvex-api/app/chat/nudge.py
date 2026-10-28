@@ -102,6 +102,8 @@ def should_nudge(
     text: str,
     nudges_used: int,
     max_nudges: int,
+    truncations_used: int = 0,
+    max_truncations: int = 6,
 ) -> bool:
     """要不要为这一轮"没有动作"的回复再推一次模型。
 
@@ -111,10 +113,20 @@ def should_nudge(
     """
     if at_limit or said_final or actions:
         return False
+    # ★ v1.21：被输出上限切断**单独记一个预算**，不与「格式错」共用。
+    #
+    # 实测（线上会话 chat_01M60YNRTZ0Z8S7BF85NNWMRNN 的三条 turn_run 全是
+    # `nudges_used=2` 就收尾）：模型在正文里用英文长篇推理，单条回复反复
+    # 撞到 `max_tokens`。原来的顺序是「先看格式预算、再看截断」，于是两次
+    # 提醒用完之后，**第三次被切断时我们什么都不做**，界面上就停在
+    # 「第二次 read 则」这种半句话上 —— 用户说的「解一半又停下」。
+    #
+    # 切断是**我们的上限**造成的，不是模型没听指令，所以它该有更大的
+    # 额度；而"忘了写 ACTION"才是模型的问题，那个额度保持小（2 次）。
+    if truncated:
+        return truncations_used < max_truncations
     if nudges_used >= max_nudges:
         return False
-    if truncated:
-        return True
     if tools_used > 0:
         return True
     return looks_unfinished(text)

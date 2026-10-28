@@ -542,6 +542,20 @@ export async function sendMessage(
   //   "附件读不到"这种莫名其妙的错误。
   const attachmentIds = state.stagedAttachments.map((a) => a.id)
 
+  // ★ v1.21：附件条**在按发送的那一刻**收起来，不再等整轮跑完。
+  //
+  // 之前是成功之后才清（原「附件已被后端读走并删除，本地也清掉」那句），
+  // 于是整轮跑多久、附件条就在输入框上挂多久 —— 用户的原话是
+  // 「对话发送了文件还贴在这」。更糟的是这期间输入框已经切成「插话」模式，
+  // 那条残留的附件看起来像"下次发送还会带上"，其实这一轮已经读走它了。
+  //
+  // 失败/异常时在 `finally` 里放回去：上传物在服务端仍然是 staged 的，
+  // 放回去用户能直接重发，不用重新选文件。放回用**合并**而不是覆盖 ——
+  // 失败前用户可能已经又选了个新附件，覆盖会把它弄丢。
+  const stagedBeforeSend = state.stagedAttachments
+  if (attachmentIds.length > 0) patch({ stagedAttachments: [] })
+
+  let sentOk = false
   try {
     /**
      * ★★ v0.100：走**流式**端点。
@@ -646,8 +660,7 @@ export async function sendMessage(
       return false
     }
 
-    // 附件已被后端读走并删除，本地也清掉。
-    if (attachmentIds.length > 0) patch({ stagedAttachments: [] })
+    sentOk = true
 
     /*
      * ★★ v0.101：把「插话」兑现成真消息。
@@ -687,6 +700,17 @@ export async function sendMessage(
     patch({ error: messageOf(error) })
     return false
   } finally {
+    // ★ v1.21：这一轮没成，把刚才收起来的附件条放回输入区（合并，不覆盖）。
+    if (!sentOk && stagedBeforeSend.length > 0) {
+      const stillThere = new Set(state.stagedAttachments.map((a) => a.id))
+      patch({
+        stagedAttachments: [
+          ...state.stagedAttachments,
+          ...stagedBeforeSend.filter((a) => !stillThere.has(a.id)),
+        ],
+      })
+    }
+
     // ★ 失败路径也要清乐观气泡：那句话没发出去（`pendingUserContent` 留着
     //   会让人以为发出去了，而实际服务端没有这条记录）。页面会把原文放回
     //   输入框，用户在那里能看到并重发。

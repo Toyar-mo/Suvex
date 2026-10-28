@@ -115,6 +115,27 @@ HISTORY_TOOL_CHARS = 4000
 #: 于是真正需要跑工具的一轮反而没预算了。
 MAX_NARRATION_NUDGES = 2
 
+#: 回复被 `max_tokens` 切断时，允许多少次「接着写」（v1.21）。
+#:
+#: ★ 必须与 `MAX_NARRATION_NUDGES` 分开。实测线上会话
+#:   `chat_01M60YNRTZ0Z8S7BF85NNWMRNN` 的三条 turn_run 全部是
+#:   `nudges_used=2` 就收尾 —— 模型在正文里用英文长篇推理，单条回复反复
+#:   撞 `max_tokens`；两次纠偏额度用完之后，第三次被切断时我们什么都不做，
+#:   界面上就停在「第二次 read 则」这种半句话上（用户说的「解一半又停下」）。
+#:
+#:   切断是**我们的上限**造成的，不是模型不听话，所以给大额度；"忘了写
+#:   ACTION"才是模型的问题，那个保持 2 次。6 次 × 每轮几千 token 仍是
+#:   可控成本，而用户不用再手打「继续」。
+MAX_TRUNCATION_CONTINUES = 6
+
+#: 对话侧一次模型调用的输出上限（v1.21）。
+#:
+#: `LlmGateway` 的默认是 4096，那对"一句话回答"够、对"看完反汇编再讲
+#: 结论"不够 —— 实测模型会把推理过程写成正文，然后在半句话处被切掉。
+#: 8192 不改变协议，只是把天花板抬高；真正的兜底仍是
+#: `MAX_TRUNCATION_CONTINUES` 的续跑（抬上限不能消除切断，只能减少它）。
+CHAT_MAX_TOKENS = 8192
+
 #: 「只叙述、没动作」的正文要**同时**满足这两条，才值得推它一下（v1.13）。
 #:
 #: ## 为什么必须两条都满足（否则每次纯问答都要多花一次调用）
@@ -1222,6 +1243,7 @@ def _build_gateway(provider_id: str | None, db: Session):
         base_url=provider.base_url or "",
         label=provider.label,
         kind=provider.kind,
+        max_tokens=CHAT_MAX_TOKENS,
     )
 
 
@@ -1393,9 +1415,16 @@ async def run_turn(
     #:   东西（纠偏 vs 工具往返）。混在一起会让"提醒了两次"吃掉两个工具
     #:   轮次，于是真正需要跑工具的那一轮反而没预算了。
     nudges_used = 0
+    #: 上面那个数里，有多少次是**被切断**引起的（v1.21）。
+    #:
+    #: 两个数分开记的理由见 `MAX_TRUNCATION_CONTINUES`：`nudges_used` 管
+    #: 「总共多花了几轮」（循环上界与工具预算要用它），`truncations_used`
+    #: 只是它的子集，用来判断截断额度还剩多少。格式错的次数 = 前者减后者。
+    truncations_used = 0
 
     if resume_from is not None:
         nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
+        truncations_used = int(getattr(resume_from, "truncations_used", 0) or 0)
         tools_used = int(getattr(resume_from, "tools_used", 0) or 0)
 
     #: 这一轮**真正执行过**几次工具（v1.19）。
@@ -1413,7 +1442,9 @@ async def run_turn(
     pending_reminder: str | None = None
 
     #: 循环上界 = 工具轮数 + 1（最后那轮用来总结）+ 纠偏轮数。
-    for round_index in range(MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES):
+    for round_index in range(
+        MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES
+    ):
         # ★ v0.100：在调模型**之前**推一条 phase 帧。
         #
         # 这一帧对应的正是界面上「正在想…」那一行 —— 它现在能显示
@@ -1463,6 +1494,7 @@ async def run_turn(
                 turn_run,
                 round_index=round_index,
                 nudges_used=nudges_used,
+                truncations_used=truncations_used,
                 tools_used=tools_used,
             )
             db.commit()
@@ -1493,9 +1525,17 @@ async def run_turn(
             #
             # 但 `at_limit` 那轮不能推：那一轮我们要的就是"用一段话总结"，
             # 模型交白卷时占位语是唯一能给用户的信息。
-            if not at_limit and nudges_used < MAX_NARRATION_NUDGES:
+            nudge_truncated = _is_truncated(reply)
+            nudge_allowed = (
+                truncations_used < MAX_TRUNCATION_CONTINUES
+                if nudge_truncated
+                else (nudges_used - truncations_used) < MAX_NARRATION_NUDGES
+            )
+            if not at_limit and nudge_allowed:
                 nudges_used += 1
-                truncated = _is_truncated(reply)
+                if nudge_truncated:
+                    truncations_used += 1
+                truncated = nudge_truncated
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if truncated
@@ -1583,10 +1623,14 @@ async def run_turn(
                 truncated=_is_truncated(reply),
                 tools_used=tools_used,
                 text=text,
-                nudges_used=nudges_used,
+                nudges_used=nudges_used - truncations_used,
                 max_nudges=MAX_NARRATION_NUDGES,
+                truncations_used=truncations_used,
+                max_truncations=MAX_TRUNCATION_CONTINUES,
             ):
                 nudges_used += 1
+                if _is_truncated(reply):
+                    truncations_used += 1
                 truncated = _is_truncated(reply)
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
@@ -1718,10 +1762,13 @@ async def resume_approved(
     # 用户点完"确认"，模型说一句"好的，我来跑"就没了 —— 而这个形态
     # 恰恰更容易出现，因为刚批准的工具结果正要喂回去，它常常先播报一句。
     nudges_used = 0
+    truncations_used = 0
     tools_used = 0
     pending_reminder: str | None = None
 
-    for round_index in range(MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES):
+    for round_index in range(
+        MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES
+    ):
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
@@ -1752,6 +1799,7 @@ async def resume_approved(
                 turn_run,
                 round_index=round_index,
                 nudges_used=nudges_used,
+                truncations_used=truncations_used,
                 tools_used=tools_used,
             )
             db.commit()
@@ -1771,11 +1819,19 @@ async def resume_approved(
                 reasoning = candidate if isinstance(candidate, str) and candidate else None
 
         if not text and not actions:
-            if not at_limit and nudges_used < MAX_NARRATION_NUDGES:
+            nudge_truncated = _is_truncated(reply)
+            nudge_allowed = (
+                truncations_used < MAX_TRUNCATION_CONTINUES
+                if nudge_truncated
+                else (nudges_used - truncations_used) < MAX_NARRATION_NUDGES
+            )
+            if not at_limit and nudge_allowed:
                 nudges_used += 1
+                if nudge_truncated:
+                    truncations_used += 1
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
-                    if _is_truncated(reply)
+                    if nudge_truncated
                     else render_format_reminder()
                 )
                 continue
@@ -1805,10 +1861,14 @@ async def resume_approved(
                 truncated=_is_truncated(reply),
                 tools_used=tools_used,
                 text=text,
-                nudges_used=nudges_used,
+                nudges_used=nudges_used - truncations_used,
                 max_nudges=MAX_NARRATION_NUDGES,
+                truncations_used=truncations_used,
+                max_truncations=MAX_TRUNCATION_CONTINUES,
             ):
                 nudges_used += 1
+                if _is_truncated(reply):
+                    truncations_used += 1
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if _is_truncated(reply)
