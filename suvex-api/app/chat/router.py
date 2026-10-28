@@ -42,7 +42,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -56,6 +56,7 @@ from app.chat.schemas import (
     ChatInterjectIn,
     ChatMessageOut,
     ChatPersonaOut,
+    ChatPinIn,
     ChatRenameIn,
     ChatSendIn,
     ChatSendOut,
@@ -82,9 +83,26 @@ Reader = Annotated[Identity, Depends(require_read)]
 
 
 @router.get("/chat/sessions", response_model=list[ChatSessionOut])
-def list_sessions(db: DbSession, identity: Reader) -> list[ChatSessionOut]:
-    """我的会话列表（不含消息）。"""
-    rows = service.list_sessions(db, created_by=_owner(identity))
+def list_sessions(
+    db: DbSession,
+    identity: Reader,
+    include_archived: Annotated[
+        bool,
+        Query(
+            alias="includeArchived",
+            description="连归档的一起返回（「已归档」区用）。默认只返回未归档的。",
+        ),
+    ] = False,
+) -> list[ChatSessionOut]:
+    """我的会话列表（不含消息）。
+
+    ★ 默认**不**返回归档的：归档的语义就是"从侧栏消失"。
+      但「已归档」区需要它们，所以留一个显式开关 —— 不开的时候
+      连查询条件都不加，而不是拉回来再在内存里过滤。
+    """
+    rows = service.list_sessions(
+        db, created_by=_owner(identity), include_archived=include_archived
+    )
     return [ChatSessionOut.model_validate(row) for row in rows]
 
 
@@ -117,6 +135,19 @@ def rename_session(
         db, session_id=session_id, created_by=_owner(identity)
     )
     service.rename_session(db, session=session, title=payload.title)
+    db.commit()
+    return ChatSessionOut.model_validate(session)
+
+
+@router.post("/chat/sessions/{session_id}/pin", response_model=ChatSessionOut)
+def pin_session(
+    session_id: str, payload: ChatPinIn, db: DbSession, identity: Reader
+) -> ChatSessionOut:
+    """置顶 / 取消置顶。"""
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    service.set_pinned(db, session=session, pinned=payload.pinned)
     db.commit()
     return ChatSessionOut.model_validate(session)
 
@@ -169,6 +200,63 @@ def archive_session(session_id: str, db: DbSession, identity: Reader) -> ChatSes
     except Exception:  # noqa: BLE001 - 同一条理由：清理失败不该翻成 500
         logger.warning("归档会话 %s 时清理附件失败", session_id, exc_info=True)
     return ChatSessionOut.model_validate(session)
+
+
+@router.post("/chat/sessions/{session_id}/unarchive", response_model=ChatSessionOut)
+def unarchive_session(session_id: str, db: DbSession, identity: Reader) -> ChatSessionOut:
+    """从「已归档」里恢复。
+
+    ★ 只恢复**消息**。归档时（v0.106/v0.108）沙箱与附件已经当场销毁了，
+      这一点无法回退 —— `/work` 里跑出来的产物、上传的原始文件都回不来。
+      所以前端必须在归档前给出二次确认，而不是让用户以为可以后悔。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    service.archive_session(db, session=session, archived=False)
+    db.commit()
+    return ChatSessionOut.model_validate(session)
+
+
+@router.post("/chat/sessions/{session_id}/purge", response_model=ChatSessionOut)
+def purge_session(session_id: str, db: DbSession, identity: Reader) -> ChatSessionOut:
+    """彻底删除一个会话（**物理删除**，不可恢复）。
+
+    ## 第一道闸：必须先归档
+    与 `scans` 的 `purge_scan` 同一条规则、同一个理由：给"手滑"留一段
+    可回退的路。用户想永久删，就得先点一次「删除此对话」（= 归档），
+    再在「已归档」里点「彻底删除」——中间隔着一次列表刷新，一次误点
+    不会直接抹掉几百条消息。
+
+    ## 清理顺序：先落库，再删文件
+    与 `purge_scan` 相同：`db.commit()` 成功之后才删磁盘上的东西。
+    反过来的话，删文件成功而 commit 失败，就留下一个"文件没了但会话还在"
+    的幽灵 —— 那种状态没有任何界面能修。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    if session.archived_at is None:
+        raise ApiError.conflict(
+            "CHAT_SESSION_NOT_ARCHIVED",
+            "这个对话不在「已归档」里。请先删除它（进已归档），再执行彻底删除。",
+        )
+    # ★ 先取快照再删行：`purge_session` 之后这个对象已经不在会话里，
+    #   再对它做 `model_validate` 是在读一个已删除的行。
+    snapshot = ChatSessionOut.model_validate(session)
+    removed = service.purge_session(db, session=session)
+    db.commit()
+    try:
+        chat_sandbox.drop_sandbox(session_id)
+    except Exception:  # noqa: BLE001 - 清理失败不该让已落库的删除报错
+        logger.warning("彻底删除会话 %s 时销毁沙箱失败", session_id, exc_info=True)
+    try:
+        chat_attachments.drop_session(session_id=session_id)
+        chat_attachments.drop_handed_over(session_id=session_id)
+    except Exception:  # noqa: BLE001 - 同上
+        logger.warning("彻底删除会话 %s 时清理附件失败", session_id, exc_info=True)
+    logger.info("彻底删除会话 %s：%d 条消息", session_id, removed)
+    return snapshot
 
 
 @router.post("/chat/sessions/{session_id}/messages", response_model=ChatSendOut)

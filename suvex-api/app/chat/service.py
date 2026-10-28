@@ -40,7 +40,7 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.chat.models import (
@@ -178,7 +178,17 @@ def list_sessions(
     stmt = select(ChatSession).where(ChatSession.created_by == created_by)
     if not include_archived:
         stmt = stmt.where(ChatSession.archived_at.is_(None))
-    stmt = stmt.order_by(ChatSession.updated_at.desc())
+    # 置顶的排在最前（最近置顶的更前），其余按最近更新。
+    #
+    # ★ `pinned_at.is_(None)` 升序 = 有值的（False=0）在前、NULL（True=1）在后。
+    #   这一句在 SQLite 与 PostgreSQL 上语义一致：布尔排序两处都按 0/1。
+    #   写在 `updated_at` 之前而不是分两次查询，是因为前端拿到的必须**已经**
+    #   是最终顺序 —— 让它自己再排一遍等于把判据分散到两个地方。
+    stmt = stmt.order_by(
+        ChatSession.pinned_at.is_(None),
+        ChatSession.pinned_at.desc(),
+        ChatSession.updated_at.desc(),
+    )
     return list(db.scalars(stmt))
 
 
@@ -218,6 +228,53 @@ def archive_session(db: Session, *, session: ChatSession, archived: bool = True)
     session.updated_at = now_utc()
     db.flush()
     return session
+
+
+def set_pinned(db: Session, *, session: ChatSession, pinned: bool) -> ChatSession:
+    """置顶/取消置顶。
+
+    ★ 重复置顶会**刷新时刻**（"刚置顶的排最前"）。这是刻意的：
+      用户再点一次「置顶」，期望是它回到最上面，而不是原地不动。
+    """
+    session.pinned_at = now_utc() if pinned else None
+    session.updated_at = now_utc()
+    db.flush()
+    return session
+
+
+def purge_session(db: Session, *, session: ChatSession) -> int:
+    """**物理删除**一个会话及其全部消息，返回删掉的消息条数。
+
+    ## 两道闸不在这里
+    「必须先归档才能彻底删除」是**业务规则**，但它需要一个 HTTP 状态码
+    （409）才能让用户看懂，所以放在 router。这一层只负责删。
+
+    ## 为什么要显式删消息，而不是靠 relationship 的 cascade
+    `cascade="all, delete-orphan"` 只在 **ORM 层**且关系已加载时生效。
+    这里再显式删一遍，是为了不依赖"关系有没有被 lazy load 过"这种
+    隐式条件 —— 依赖它意味着同一段代码换个调用方式就会静默漏删。
+
+    ## 为什么返回条数
+    "删掉了 0 条消息的会话"和"删掉了 300 条"是两种完全不同的事故现场，
+    调用方要能把它写进日志与回执。
+    """
+    deleted = (
+        db.scalar(
+            select(func.count())
+            .select_from(ChatMessage)
+            .where(ChatMessage.session_id == session.id)
+        )
+        or 0
+    )
+    db.execute(delete(ChatMessage).where(ChatMessage.session_id == session.id))
+    # ★ 必须先把关系从 identity map 里踢掉：否则 `db.delete(session)` 触发
+    #   ORM 级联时，它会拿**已加载**的那批消息再去发一遍 DELETE，而后端
+    #   返回 0 行 → SQLAlchemy 报 "expected to delete N row(s); 0 were matched"。
+    #   这个警告本身无害，但它意味着"同一批行被删了两次"，而第二次是空转。
+    db.expire(session, ["messages"])
+    db.delete(session)
+    db.flush()
+    return int(deleted)
 
 
 def _next_seq(db: Session, *, session: ChatSession) -> int:

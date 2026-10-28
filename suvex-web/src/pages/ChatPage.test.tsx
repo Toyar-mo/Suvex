@@ -50,6 +50,10 @@ vi.mock('@/data/chat', () => ({
   decideApproval: vi.fn(async () => true),
   // ★ v0.100：插话。跑着的时候 Enter 走这条路径（见 `handleSend`）。
   interject: vi.fn(async () => true),
+  // v1.15 会话生命周期：同样必须逐个列出，漏一个就在调用时炸。
+  pinSession: vi.fn(async () => true),
+  unarchiveSession: vi.fn(async () => true),
+  purgeSession: vi.fn(async () => true),
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
   getChatSnapshot: vi.fn(),
@@ -83,6 +87,7 @@ function session(overrides: Partial<ChatSession> = {}): ChatSession {
     createdBy: 'u1',
     messageCount: 2,
     archived: false,
+    pinned: false,
     createdAt: '2026-10-25T00:00:00Z',
     updatedAt: '2026-10-25T00:00:00Z',
     ...overrides,
@@ -107,6 +112,9 @@ function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
 function chatState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     sessions: [],
+    // v1.15：已归档是独立一段。不给它，页面里 archivedSessions.length
+    // 会读到 undefined 直接抛错，看起来像页面崩了。
+    archivedSessions: [],
     active: null,
     tools: [],
     personas: [],
@@ -370,7 +378,7 @@ describe('ChatPage — 归档', () => {
   it('★ 归档按钮有可读的 aria-label（不能只是个图标）', () => {
     /*
       悬停才出现的图标按钮，如果只有图标没有标签，键盘和读屏用户
-      永远不知道它是干什么的。`aria-label` 里带上会话标题，连"归档哪个"
+      永远不知道它是干什么的。aria-label 里带上会话标题，连归档哪个
       都说清楚了。
     */
     mockedUseChat.mockReturnValue(chatState({ sessions: [session()] }))
@@ -379,11 +387,26 @@ describe('ChatPage — 归档', () => {
     expect(screen.getByRole('button', { name: '归档对话「查一下最近的扫描」' })).toBeTruthy()
   })
 
-  it('点击归档调用 archiveSession', async () => {
+  it('★ 点归档先问一句（因为归档会当场销毁沙箱与附件）', async () => {
+    /*
+      v1.15 起归档不再是“能后悔”的动作：后端会当场销毁对话沙箱与上传附件，
+      /work 里跑出来的东西回不来。既然不能悔，就得先问。
+    */
     mockedUseChat.mockReturnValue(chatState({ sessions: [session()] }))
     renderPage()
 
     fireEvent.click(screen.getByRole('button', { name: '归档对话「查一下最近的扫描」' }))
+    // 还没确认，不能就归档了
+    expect(mockedArchiveSession).not.toHaveBeenCalled()
+    expect(screen.getByText('删除这个对话？')).toBeTruthy()
+  })
+
+  it('确认后才调用 archiveSession', async () => {
+    mockedUseChat.mockReturnValue(chatState({ sessions: [session()] }))
+    renderPage()
+
+    fireEvent.click(screen.getByRole('button', { name: '归档对话「查一下最近的扫描」' }))
+    fireEvent.click(screen.getByRole('button', { name: '删除' }))
     await waitFor(() => expect(mockedArchiveSession).toHaveBeenCalledWith('chat_1'))
   })
 })

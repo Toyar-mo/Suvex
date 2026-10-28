@@ -359,7 +359,9 @@ def test_this_migration_is_the_only_head() -> None:
             downs.add(found_down.group(1))
 
     heads = sorted(set(revs) - downs)
-    assert heads == ["b71c4d9e83a5"], (
+    # ★ 只断言"恰好一个 head"，不写死是哪个 —— 写死的话每加一条迁移都要
+    #   回来改一行，而它要守的其实是"没有分叉"，不是"某条迁移还在最新"。
+    assert len(heads) == 1, (
         "alembic 不止一个 head —— `alembic upgrade head` 会直接失败，"
         f"systemd 的 `&& uvicorn` 于是起不了服务。当前 heads：{heads}"
     )

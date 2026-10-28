@@ -14,8 +14,12 @@ import {
   type MentionQuery,
 } from '@/components/chat/ToolMention'
 import { Button } from '@/components/ui/Button'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
+import { Modal } from '@/components/ui/Modal'
+import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
+import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
 import {
@@ -28,18 +32,29 @@ import {
   loadSessions,
   loadTools,
   openSession,
+  pinSession,
+  purgeSession,
+  renameSession,
   sendMessage,
+  unarchiveSession,
   updateSettings,
   uploadAttachment,
   useChat,
   type ChatMessage,
   type ChatSession,
+  type ChatSessionDetail,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
+import {
+  buildConversationMarkdown,
+  buildConversationMarkdownFileName,
+  downloadMarkdownFile,
+  type MarkdownDetail,
+} from '@/lib/conversationMarkdown'
 import { useProjectedProviders } from '@/data/settings-store'
 import { useTools } from '@/data/tools'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
-import { errorMessage } from '@/lib/api'
+import { api, errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import {
   Archive,
@@ -49,6 +64,7 @@ import {
   Folder,
   MessageSquarePlus,
   MessagesSquare,
+  MoreHorizontal,
   Plug,
   Send,
   Sparkles,
@@ -144,6 +160,7 @@ export function phaseLabel(phase: PhasePayload | null | { phase: string; round: 
 export function ChatPage() {
   const {
     sessions,
+    archivedSessions,
     active,
     status,
     error,
@@ -225,6 +242,39 @@ export function ChatPage() {
    * 在整轮期间一直转圈 —— 暗示"点不动"，而它此刻正是**能**点的。
    */
   const [interjecting, setInterjecting] = useState(false)
+
+  /*
+    ── v1.15 会话管理（右键菜单 / 批量 / 已归档）────────────────────
+
+    ★ `menuAnchor` 存的是**右键那一刻的视口坐标 + 会话 id**，不是"某条会话
+      被选中"。菜单自己算边界要用坐标；而 `sessionId` 让菜单在列表刷新后
+      还能确认自己指向谁（刷新会重排，靠索引会指错行）。
+  */
+  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; sessionId: string } | null>(null)
+  /** 正在重命名的会话（`null` = 对话框关着）。 */
+  const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [renaming, setRenaming] = useState(false)
+  /** 等待二次确认的危险操作。 */
+  const [confirmAction, setConfirmAction] = useState<
+    | { kind: 'archive'; id: string; title: string }
+    | { kind: 'purge'; id: string; title: string }
+    | null
+  >(null)
+  const [batchOpen, setBatchOpen] = useState(false)
+  const [batchBusy, setBatchBusy] = useState(false)
+  /** 「已归档」区是否展开。默认收起 —— 它是低频的"回收站"。 */
+  const [archivedOpen, setArchivedOpen] = useState(false)
+
+  /** 右键时被点的那条会话。列表刷新后可能已经不在，返回 `null` 让菜单自灭。 */
+  const menuSession = useMemo(() => {
+    if (!menuAnchor) return null
+    return (
+      sessions.find((s) => s.id === menuAnchor.sessionId) ??
+      archivedSessions.find((s) => s.id === menuAnchor.sessionId) ??
+      null
+    )
+  }, [menuAnchor, sessions, archivedSessions])
 
   /*
     ★ 只在**会话 id 变了**时才拉详情。
@@ -353,6 +403,84 @@ export function ChatPage() {
     if (wantedId === id) {
       setSearchParams({}, { replace: true })
     }
+  }
+
+  /**
+   * 下载会话 Markdown。
+   *
+   * ★ 一定要**先拉详情**：`sessions` 里只有元信息，没有 `messages`。
+   *   拿 `active.messages` 只在"导出的正是当前打开的那个会话"时才对，
+   *   而右键菜单对**任意**一条都可用。
+   */
+  async function handleDownload(id: string, detail: MarkdownDetail) {
+    try {
+      const full = await api.get<ChatSessionDetail>(`/chat/sessions/${id}`)
+      downloadMarkdownFile(
+        buildConversationMarkdownFileName(full, detail),
+        buildConversationMarkdown(full, detail),
+      )
+    } catch {
+      // 导出失败**不**改全局 error 状态：那会把整页推进错误态，
+      // 而用户只是没下到一个文件。静默失败 + 控制台留痕已足够。
+      console.warn('导出对话 Markdown 失败')
+    }
+  }
+
+  function openRename(target: { id: string; title: string }) {
+    setRenameTarget(target)
+    setRenameDraft(target.title)
+  }
+
+  async function submitRename() {
+    if (!renameTarget) return
+    const next = renameDraft.trim()
+    if (!next || next === renameTarget.title) {
+      setRenameTarget(null)
+      return
+    }
+    setRenaming(true)
+    try {
+      await renameSession(renameTarget.id, next)
+      setRenameTarget(null)
+    } finally {
+      setRenaming(false)
+    }
+  }
+
+  async function handleMoveTo(id: string, project: string | null) {
+    await updateSettings(id, { project })
+  }
+
+  async function handleBatchMoveTo(ids: string[], project: string | null) {
+    setBatchBusy(true)
+    try {
+      for (const id of ids) await updateSettings(id, { project })
+      await loadSessions()
+    } finally {
+      setBatchBusy(false)
+    }
+  }
+
+  /**
+   * 批量删除（= 归档）。返回失败条数。
+   *
+   * ★ 逐个循环而不是 batch 端点：与 CyberStrikeAI 的做法一致
+   *   （`chat.js:11121`），详见 `SessionBatchModal` 顶部注释。
+   */
+  async function handleBatchArchive(ids: string[]): Promise<number> {
+    setBatchBusy(true)
+    let failed = 0
+    try {
+      for (const id of ids) {
+        const ok = await archiveSession(id)
+        if (!ok) failed += 1
+        if (wantedId === id) setSearchParams({}, { replace: true })
+      }
+      await loadSessions()
+    } finally {
+      setBatchBusy(false)
+    }
+    return failed
   }
 
   /**
@@ -511,7 +639,8 @@ export function ChatPage() {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
                         }}
-                        onArchive={() => void handleArchive(session.id)}
+                        onArchive={() => setConfirmAction({ kind: 'archive', id: session.id, title: session.title })}
+                        onContextMenu={(anchor) => setMenuAnchor({ ...anchor, sessionId: session.id })}
                       />
                     ))}
                   </ul>
@@ -539,10 +668,58 @@ export function ChatPage() {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
                         }}
-                        onArchive={() => void handleArchive(session.id)}
+                        onArchive={() => setConfirmAction({ kind: 'archive', id: session.id, title: session.title })}
+                        onContextMenu={(anchor) => setMenuAnchor({ ...anchor, sessionId: session.id })}
                       />
                     ))}
                   </ul>
+                </section>
+              )}
+
+              {/*
+                ── 「已归档」区 ────────────────────────────────────
+
+                ★ 默认收起、有条数才出现。它是"回收站"：频率极低，但**必须
+                  有入口** —— 否则「删除此对话」对用户就是单向黑洞，而
+                  「彻底删除」也没有地方可以点。
+              */}
+              {archivedSessions.length > 0 && (
+                <section className="mt-1 border-t border-line pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setArchivedOpen((open) => !open)}
+                    aria-expanded={archivedOpen}
+                    className={cn(
+                      'flex w-full items-center gap-1 rounded-sm px-2 py-1 text-2xs text-ink-faint',
+                      'transition-ui duration-fast hover:text-ink',
+                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                    )}
+                  >
+                    {archivedOpen ? (
+                      <ChevronDown size={10} strokeWidth={2} aria-hidden="true" />
+                    ) : (
+                      <ChevronRight size={10} strokeWidth={2} aria-hidden="true" />
+                    )}
+                    已归档（{archivedSessions.length}）
+                  </button>
+                  {archivedOpen && (
+                    <ul className="mt-0.5 flex flex-col gap-0.5">
+                      {archivedSessions.map((session) => (
+                        <SessionRow
+                          key={session.id}
+                          session={session}
+                          archived
+                          active={active?.id === session.id}
+                          onOpen={() => {
+                            setSearchParams({ session: session.id }, { replace: true })
+                            setShowList(false)
+                          }}
+                          onArchive={() => undefined}
+                          onContextMenu={(anchor) => setMenuAnchor({ ...anchor, sessionId: session.id })}
+                        />
+                      ))}
+                    </ul>
+                  )}
                 </section>
               )}
             </div>
@@ -965,6 +1142,108 @@ export function ChatPage() {
         onPick={(personaId) => void handlePickPersona(personaId)}
         onClose={() => setPersonaOpen(false)}
       />
+
+      {/* ── v1.15：会话右键菜单 ─────────────────────────────── */}
+      <SessionContextMenu
+        anchor={menuSession ? menuAnchor : null}
+        archived={Boolean(menuSession?.archived)}
+        pinned={Boolean(menuSession?.pinned)}
+        projects={projectSuggestions}
+        currentProject={menuSession?.project ?? null}
+        onRename={() => menuSession && openRename({ id: menuSession.id, title: menuSession.title })}
+        onTogglePin={() => {
+          if (menuSession) void pinSession(menuSession.id, !menuSession.pinned)
+        }}
+        onDownload={(detail) => {
+          if (menuSession) void handleDownload(menuSession.id, detail)
+        }}
+        onMoveTo={(project) => {
+          if (menuSession) void handleMoveTo(menuSession.id, project)
+        }}
+        onBatchManage={() => setBatchOpen(true)}
+        onArchive={() =>
+          menuSession && setConfirmAction({ kind: 'archive', id: menuSession.id, title: menuSession.title })
+        }
+        onUnarchive={() => {
+          if (menuSession) void unarchiveSession(menuSession.id)
+        }}
+        onPurge={() =>
+          menuSession && setConfirmAction({ kind: 'purge', id: menuSession.id, title: menuSession.title })
+        }
+        onClose={() => setMenuAnchor(null)}
+      />
+
+      {/* ── 重命名对话框 ───────────────────────────────────── */}
+      <Modal
+        open={renameTarget !== null}
+        onClose={() => setRenameTarget(null)}
+        title="重命名对话"
+        widthClass="max-w-md"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" size="sm" onClick={() => setRenameTarget(null)}>
+              取消
+            </Button>
+            <Button variant="primary" size="sm" disabled={renaming} onClick={() => void submitRename()}>
+              保存
+            </Button>
+          </div>
+        }
+      >
+        <input
+          value={renameDraft}
+          onChange={(event) => setRenameDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') void submitRename()
+          }}
+          aria-label="对话标题"
+          className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
+          // 打开就把光标放进输入框、并全选 —— 重命名十次有九次要整条换掉
+          autoFocus
+          onFocus={(event) => event.currentTarget.select()}
+        />
+      </Modal>
+
+      {/* ── 批量管理 ───────────────────────────────────────── */}
+      <SessionBatchModal
+        open={batchOpen}
+        sessions={sessions}
+        projects={projectSuggestions}
+        busy={batchBusy}
+        onClose={() => setBatchOpen(false)}
+        onMoveTo={handleBatchMoveTo}
+        onArchive={handleBatchArchive}
+      />
+
+      {/* ── 危险操作二次确认 ───────────────────────────────── */}
+      {/*
+        ★ 归档也要确认，这一点**偏离**了 `ConfirmDialog` 注释里那张表
+          （"归档可撤销 → 不要确认"）。原因是 v0.106/v0.108 之后归档会
+          **当场销毁沙箱与附件**：`/work` 里的产物、上传的原始文件都回不来，
+          所以它实际上不可撤销。既然不可撤销，就该先问一句 ——
+          让用户以为能后悔，比多一次点击糟得多。
+      */}
+      <ConfirmDialog
+        open={confirmAction !== null}
+        title={confirmAction?.kind === 'purge' ? '彻底删除这个对话？' : '删除这个对话？'}
+        description={
+          confirmAction?.kind === 'purge'
+            ? `「${confirmAction.title}」及其全部消息将被**永久删除**，无法恢复。`
+            : `「${confirmAction?.title ?? ''}」会移入「已归档」，对话里的沙箱文件与上传的附件会被立即清理。`
+        }
+        confirmLabel={confirmAction?.kind === 'purge' ? '永久删除' : '删除'}
+        onCancel={() => setConfirmAction(null)}
+        onConfirm={() => {
+          const action = confirmAction
+          setConfirmAction(null)
+          if (!action) return
+          if (action.kind === 'purge') {
+            void purgeSession(action.id)
+          } else {
+            void handleArchive(action.id)
+          }
+        }}
+      />
     </div>
   )
 }
@@ -980,12 +1259,28 @@ function SessionRow({
   active,
   onOpen,
   onArchive,
+  onContextMenu,
+  archived = false,
 }: {
   session: ChatSession
   active: boolean
   onOpen: () => void
   onArchive: () => void
+  /** 右键（以及"⋯"按钮）打开上下文菜单。 */
+  onContextMenu: (anchor: { x: number; y: number }) => void
+  /** 已归档的行：不显示归档按钮，改由菜单里的「恢复/彻底删除」处理。 */
+  archived?: boolean
 }) {
+  /*
+    ★ 菜单按钮给出锚点坐标时，用**按钮自己**的位置而不是 (0,0)：
+      键盘用户（Tab 到"⋯"再回车）没有鼠标坐标，用 (0,0) 会让菜单
+      出现在窗口左上角，离他按的地方几百像素远。
+  */
+  function openMenuFromButton(element: HTMLElement) {
+    const rect = element.getBoundingClientRect()
+    onContextMenu({ x: rect.left, y: rect.bottom })
+  }
+
   return (
     <li>
       <div
@@ -994,6 +1289,11 @@ function SessionRow({
           'transition-ui duration-fast',
           active ? 'bg-surface-raised' : 'hover:bg-surface-raised/60',
         )}
+        // 整行都可以右键 —— 目标越大会越好点，而"必须精确点到标题"很烦
+        onContextMenu={(event) => {
+          event.preventDefault()
+          onContextMenu({ x: event.clientX, y: event.clientY })
+        }}
       >
         <button
           type="button"
@@ -1001,7 +1301,16 @@ function SessionRow({
           className="min-w-0 flex-1 text-left"
           aria-current={active ? 'page' : undefined}
         >
-          <span className="block truncate text-xs text-ink">{session.title}</span>
+          <span className="flex items-center gap-1">
+            {session.pinned && (
+              // 📌 用 Unicode 而不是 SVG：它是**状态标记**，不需要跟主题变色，
+              // 而一个 12px 的图标会跟标题抢注意力。与 CyberStrikeAI 一致。
+              <span className="shrink-0 text-2xs" title="已置顶" aria-label="已置顶">
+                📌
+              </span>
+            )}
+            <span className="truncate text-xs text-ink">{session.title}</span>
+          </span>
           <span className="block text-2xs text-ink-faint">{session.messageCount} 条</span>
         </button>
         {/*
@@ -1010,18 +1319,38 @@ function SessionRow({
             `hidden group-hover:block` —— 后者让键盘用户永远
             拿不到它（display:none 的元素不可聚焦）。
         */}
+        {!archived && (
+          <button
+            type="button"
+            onClick={onArchive}
+            className={cn(
+              'rounded-xs p-1 text-ink-faint opacity-0 transition-ui duration-fast',
+              'hover:text-signal-risk focus:opacity-100 group-hover:opacity-100',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+            )}
+            aria-label={`归档对话「${session.title}」`}
+            title="归档这个对话"
+          >
+            <Archive size={12} strokeWidth={2} aria-hidden="true" />
+          </button>
+        )}
+        {/*
+          "⋯" 按钮是右键菜单的**可发现入口**：右键本身不可发现 ——
+          用户不试就不会知道有这些功能（这正是"你忘记做了"的来源）。
+        */}
         <button
           type="button"
-          onClick={onArchive}
+          onClick={(event) => openMenuFromButton(event.currentTarget)}
           className={cn(
             'rounded-xs p-1 text-ink-faint opacity-0 transition-ui duration-fast',
-            'hover:text-signal-risk focus:opacity-100 group-hover:opacity-100',
+            'hover:text-ink focus:opacity-100 group-hover:opacity-100',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           )}
-          aria-label={`归档对话「${session.title}」`}
-          title="归档这个对话"
+          aria-label={`打开对话「${session.title}」的菜单`}
+          aria-haspopup="menu"
+          title="更多操作"
         >
-          <Archive size={12} strokeWidth={2} aria-hidden="true" />
+          <MoreHorizontal size={12} strokeWidth={2} aria-hidden="true" />
         </button>
       </div>
     </li>

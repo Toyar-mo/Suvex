@@ -180,6 +180,15 @@ class ChatSession(Base):
     #: 事后价值极高的记录，而删掉是不可逆的。归档 = 从默认列表里消失。
     archived_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
 
+    #: 置顶时刻。`None` = 没置顶。
+    #:
+    #: ★ 为什么存时刻而不是一个 `pinned bool`：
+    #:   置顶多条时需要**它们之间**的顺序。用 bool 就只能拿 `updated_at`
+    #:   兜底，而 `updated_at` 会因为"又聊了两句"而变 —— 用户置顶的三条
+    #:   会自己换位置。存时刻则「最近置顶的在上」是确定的，且不需要第二列。
+    #:   撤销置顶就是写回 `NULL`。
+    pinned_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
@@ -270,6 +279,11 @@ class ChatSession(Base):
           自动清空"，前端那些判断就全错了，而且不会报错。
         """
         return self.archived_at is not None
+
+    @property
+    def pinned(self) -> bool:
+        """给 `ChatSessionOut.pinned` 读的派生属性。理由与 `archived` 同。"""
+        return self.pinned_at is not None
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return f"<ChatSession id={self.id!r} title={self.title!r} n={self.message_count}>"

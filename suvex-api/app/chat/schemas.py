@@ -100,6 +100,10 @@ class ChatSessionOut(CamelModel):
     updatedAt: IsoDateTime
     messageCount: int
     archived: bool
+    #: 是否置顶。列表已按「置顶在前」排好序，这个字段是给条目上的
+    #: 那个小旗子图标与「置顶/取消置顶」菜单文案用的 —— 前端不需要
+    #: 自己再判断一次顺序。
+    pinned: bool = False
 
     # ── v0.94 的六个「对话设置」 ────────────────────────────────
     #
@@ -271,6 +275,17 @@ class ChatRenameIn(StrictModel):
     """改标题。"""
 
     title: Annotated[str, Field(max_length=MAX_TITLE_CHARS)]
+
+
+class ChatPinIn(StrictModel):
+    """置顶/取消置顶。
+
+    ★ 用显式的 `pinned` 而不是两个端点（`/pin` 与 `/unpin`）：
+      两个端点会让前端多一个分支，而"置顶"与"取消置顶"在服务端只差
+      一个布尔值。同一个端点上翻转也顺手支持了将来的"幂等重放"。
+    """
+
+    pinned: bool
 
 
 #: 反向校验：`models.CHAT_PERSONAS` 与 `ChatPersonaId` 必须是同一组。

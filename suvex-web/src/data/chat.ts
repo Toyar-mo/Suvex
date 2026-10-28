@@ -85,6 +85,15 @@ export interface ChatSession {
   updatedAt: string
   messageCount: number
   archived: boolean
+  /**
+   * 是否置顶。
+   *
+   * ★ 列表**已经**按「置顶在前、其余按最近更新」排好序（后端
+   *   `service.list_sessions` 的 order_by 就是最终顺序）。这个字段只用来
+   *   画条目上那个小旗子、以及切换菜单文案 —— 前端**不要**再自己排一次，
+   *   否则判据就有两份，迟早漂。
+   */
+  pinned?: boolean
 
   // ── v0.94 的六项「对话设置」 ──────────────────────────────
   //
@@ -144,6 +153,14 @@ export type ChatStatus = 'idle' | 'loading' | 'ready' | 'error'
 
 export interface ChatState {
   sessions: ChatSession[]
+  /**
+   * 已归档的会话（`GET /chat/sessions?includeArchived=true` 减去未归档的）。
+   *
+   * ★ 与 `sessions` **分两份存**，不是一份再过滤：侧栏的「已归档」是一个
+   *   折叠区，只在用户展开时才需要；混进主列表就得在十几个渲染点各过滤
+   *   一次，漏一处就会让归档的对话冒到主列表里（那正是归档想避免的）。
+   */
+  archivedSessions: ChatSession[]
   /** 当前打开的会话；`null` = 还没选（欢迎屏）。 */
   active: ChatSessionDetail | null
   tools: ChatTool[]
@@ -235,6 +252,7 @@ export interface ChatState {
 
 const EMPTY: ChatState = {
   sessions: [],
+  archivedSessions: [],
   active: null,
   tools: [],
   personas: [],
@@ -327,8 +345,19 @@ export function resetChatStore(): void {
 export async function loadSessions(): Promise<void> {
   patch({ status: state.sessions.length === 0 ? 'loading' : state.status, error: null })
   try {
-    const sessions = await api.get<ChatSession[]>('/chat/sessions')
-    patch({ sessions, status: 'ready' })
+    /*
+      ★ 一次拉**全部**（含已归档），在前端拆成两份，而不是发两次请求。
+
+        两个列表的排序规则完全一致（置顶在前、其余按最近更新），拆请求会让
+        两次响应之间的顺序可能不一致；而多一个请求就多一次可能失败的机会。
+        拆的动作是纯过滤，没有额外信息量。
+    */
+    const all = await api.get<ChatSession[]>('/chat/sessions?includeArchived=true')
+    patch({
+      sessions: all.filter((s) => !s.archived),
+      archivedSessions: all.filter((s) => s.archived),
+      status: 'ready',
+    })
   } catch (error) {
     patch({ status: 'error', error: messageOf(error) })
   }
@@ -894,9 +923,78 @@ export async function renameSession(sessionId: string, title: string): Promise<b
  */
 export async function archiveSession(sessionId: string): Promise<boolean> {
   try {
-    await api.del<ChatSession>(`/chat/sessions/${sessionId}`)
+    const archived = await api.del<ChatSession>(`/chat/sessions/${sessionId}`)
+    const moving = state.sessions.find((s) => s.id === sessionId)
     patch({
       sessions: state.sessions.filter((s) => s.id !== sessionId),
+      /*
+        ★ 归档后**当场**挪进「已归档」，而不是等下一次 `loadSessions`。
+
+          有两个理由：① 用户刚点了「删除此对话」，如果侧栏的「已归档」区
+          里立刻能看到它，他就知道"东西还在，只是挪走了"；② `purge` 的
+          第一道闸就是"必须先归档"，用户要能马上接着点「彻底删除」。
+          用服务端返回的对象（带 `archived: true`），不要自己拼一个 ——
+          拼的那份缺字段，渲染时会静默少一块。
+      */
+      archivedSessions: moving ? [{ ...archived, archived: true }, ...state.archivedSessions] : state.archivedSessions,
+      active: state.active?.id === sessionId ? null : state.active,
+    })
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
+  }
+}
+
+/**
+ * 置顶 / 取消置顶。
+ *
+ * ★ 成功后重新拉列表（`loadSessions`）而不是就地改这一条：
+ *   置顶改变的是**整体顺序**（它要挪到最前），就地改只能改这一条的字段，
+ *   位置不对用户就会觉得"点了没反应"。重新拉一次是唯一能保证顺序与后端
+ *   一致的做法 —— 而这条路径一次只发生在一个用户点菜单的瞬间。
+ */
+export async function pinSession(sessionId: string, pinned: boolean): Promise<boolean> {
+  try {
+    await api.post<ChatSession>(`/chat/sessions/${sessionId}/pin`, { pinned })
+    await loadSessions()
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
+  }
+}
+
+/**
+ * 从「已归档」里恢复。
+ *
+ * ★ 只恢复**消息**。归档时后端已经把沙箱与附件当场销毁（`archive_session`
+ *   里的 `drop_sandbox` / `drop_*`），`/work` 里跑出来的东西和上传的原始
+ *   文件都回不来。所以归档前必须二次确认 —— 界面不能给出"可以后悔"的错觉。
+ */
+export async function unarchiveSession(sessionId: string): Promise<boolean> {
+  try {
+    await api.post<ChatSession>(`/chat/sessions/${sessionId}/unarchive`, {})
+    await loadSessions()
+    return true
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return false
+  }
+}
+
+/**
+ * 彻底删除（**物理删除**，不可恢复）。
+ *
+ * 后端有一道闸：会话必须**已归档**，否则 409。界面上「彻底删除」只出现在
+ * 「已归档」区的条目上，所以正常路径不会撞到那道闸 —— 留着它是为了防
+ * 有人直接调 API。
+ */
+export async function purgeSession(sessionId: string): Promise<boolean> {
+  try {
+    await api.post<ChatSession>(`/chat/sessions/${sessionId}/purge`, {})
+    patch({
+      archivedSessions: state.archivedSessions.filter((s) => s.id !== sessionId),
       active: state.active?.id === sessionId ? null : state.active,
     })
     return true
