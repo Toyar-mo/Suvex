@@ -68,6 +68,8 @@ export interface SessionContextMenuProps {
   onViewFindings: () => void
   onDownload: (detail: 'summary' | 'full') => void
   onMoveTo: (project: string | null) => void
+  /** 新建一个分组并把这条对话放进去（子菜单里的「新建分组…」）。 */
+  onMoveToNew: () => void
   onBatchManage: () => void
   onArchive: () => void
   onUnarchive: () => void
@@ -214,6 +216,19 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
               自己现在在哪一组 —— 否则"移动到分组"这个动作没有反馈。
           */
           submenu: [
+            /*
+              ★ v1.20：「新建分组…」放在**最前面**。
+
+                理由：一个分组都没有的时候，原来这个子菜单里只有「✓ 无分组」——
+                点它等于什么都没发生，用户看到的就是"这个菜单项是摆设"。
+                而分组清单是从已有会话推导出来的（没有 project 表），
+                所以"先有分组"只能靠这一项。放在最前面才能被看见。
+            */
+            {
+              key: 'mv-new',
+              label: '新建分组…',
+              onSelect: props.onMoveToNew,
+            },
             ...projects.map((name) => ({
               key: `mv-${name}`,
               label: name === currentProject ? `✓ ${name}` : name,

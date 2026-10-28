@@ -31,6 +31,7 @@ function makeProps(over: Partial<SessionContextMenuProps> = {}): SessionContextM
     onViewFindings: vi.fn(),
     onDownload: vi.fn(),
     onMoveTo: vi.fn(),
+    onMoveToNew: vi.fn(),
     onBatchManage: vi.fn(),
     onArchive: vi.fn(),
     onUnarchive: vi.fn(),
@@ -125,6 +126,27 @@ describe('SessionContextMenu', () => {
 
     fireEvent.click(screen.getByText('无分组'))
     expect(props.onMoveTo).toHaveBeenCalledWith(null)
+  })
+
+  it('「移动到分组 → 新建分组…」排在第一项，且点了真的走 onMoveToNew', () => {
+    /*
+      ★ 为什么这一项必须**排第一**：分组清单是从会话的 `project` 推导出来的
+        （平台没有 project 表）。一个分组都没有的时候，这个子菜单里就只剩
+        「✓ 无分组」——点它等于什么都没发生。用户看到的是"菜单项是摆设"。
+        「新建分组…」是唯一能让分组从无到有的入口，藏到列表末尾就等于没有。
+    */
+    const props = makeProps({ projects: [], currentProject: null })
+    render(<SessionContextMenu {...props} />)
+
+    fireEvent.click(screen.getByText('移动到分组'))
+    const newItem = screen.getByText('新建分组…')
+    // 排第一：它前面没有别的菜单项兄弟
+    expect(newItem.previousElementSibling).toBeNull()
+
+    fireEvent.click(newItem)
+    expect(props.onMoveToNew).toHaveBeenCalledTimes(1)
+    expect(props.onMoveTo).not.toHaveBeenCalled()
+    expect(props.onClose).toHaveBeenCalledTimes(1)
   })
 
   it('按 Escape 关闭', () => {

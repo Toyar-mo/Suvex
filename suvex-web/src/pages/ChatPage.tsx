@@ -20,6 +20,7 @@ import { ErrorState } from '@/components/ui/ErrorState'
 import { Modal } from '@/components/ui/Modal'
 import { SessionAttackChainModal } from '@/components/chat/SessionAttackChainModal'
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
+import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -291,6 +292,8 @@ export function ChatPage() {
     | null
   >(null)
   const [batchOpen, setBatchOpen] = useState(false)
+  /* v1.20：新建分组弹窗。`ids` 让同一套 UI 同时服务「单条右键」与「批量勾选」。 */
+  const [newGroupFor, setNewGroupFor] = useState<string[] | null>(null)
   const [batchBusy, setBatchBusy] = useState(false)
   /** 「已归档」区是否展开。默认收起 —— 它是低频的"回收站"。 */
   const [archivedOpen, setArchivedOpen] = useState(false)
@@ -616,6 +619,18 @@ export function ChatPage() {
    * ★ 逐个循环而不是 batch 端点：与 CyberStrikeAI 的做法一致
    *   （`chat.js:11121`），详见 `SessionBatchModal` 顶部注释。
    */
+  /**
+   * 新建分组并把 `ids` 放进去（v1.20）。
+   *
+   * 与 `handleBatchMoveTo` 共用同一条路径 —— 新建分组的最后一步**就是**
+   * 一次普通移动，多的只有"名字校验"这一层，而校验在 `GroupNameDialog` 里。
+   * 分成两份实现的话，一处改了另一处必然漂开。
+   */
+  async function handleCreateGroup(ids: string[], name: string) {
+    await handleBatchMoveTo(ids, name)
+    setNewGroupFor(null)
+  }
+
   async function handleBatchArchive(ids: string[]): Promise<number> {
     setBatchBusy(true)
     let failed = 0
@@ -1360,6 +1375,7 @@ export function ChatPage() {
         onMoveTo={(project) => {
           if (menuSession) void handleMoveTo(menuSession.id, project)
         }}
+        onMoveToNew={() => menuSession && setNewGroupFor([menuSession.id])}
         onBatchManage={() => setBatchOpen(true)}
         onArchive={() =>
           menuSession && setConfirmAction({ kind: 'archive', id: menuSession.id, title: menuSession.title })
@@ -1432,7 +1448,17 @@ export function ChatPage() {
         busy={batchBusy}
         onClose={() => setBatchOpen(false)}
         onMoveTo={handleBatchMoveTo}
+        onCreateGroup={handleCreateGroup}
         onArchive={handleBatchArchive}
+      />
+
+      {/* ── v1.20：新建分组（右键「移动到分组 → 新建分组…」与批量管理共用） ── */}
+      <GroupNameDialog
+        open={newGroupFor !== null}
+        existing={projectSuggestions}
+        busy={batchBusy}
+        onConfirm={(name) => void handleCreateGroup(newGroupFor ?? [], name)}
+        onCancel={() => setNewGroupFor(null)}
       />
 
       {/* ── 危险操作二次确认 ───────────────────────────────── */}

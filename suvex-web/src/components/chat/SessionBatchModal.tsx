@@ -30,6 +30,14 @@ export interface SessionBatchModalProps {
   onClose: () => void
   /** 批量移动到分组。`null` = 无分组。 */
   onMoveTo: (ids: string[], project: string | null) => Promise<void>
+  /**
+   * 批量移动到一个**新**分组（v1.20）。
+   *
+   * 与 `onMoveTo` 分开而不是传一个"可能不存在"的名字：新建要拦重复、
+   * 要回填错误，语义比"移到一个名字"多一层。这里只负责把名字交上去，
+   * 校验在页面侧的 `GroupNameDialog`/行内校验里做。
+   */
+  onCreateGroup: (ids: string[], name: string) => Promise<void>
   /** 批量删除（= 归档）。返回失败条数。 */
   onArchive: (ids: string[]) => Promise<number>
 }
@@ -41,17 +49,27 @@ export function SessionBatchModal({
   busy,
   onClose,
   onMoveTo,
+  onCreateGroup,
   onArchive,
 }: SessionBatchModalProps) {
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [moveTo, setMoveTo] = useState<string>('')
+  /** 按分组筛选（对齐 CyberStrikeAI 的 `batch-project-filter`）：条目一多，靠标题搜不够。 */
+  const [projectFilter, setProjectFilter] = useState<string>('')
+  /** 选中「＋ 新建分组…」时手输的名字。 */
+  const [newGroup, setNewGroup] = useState('')
+  /** 行内校验的错误文案（只在用户点过"应用"之后才显示）。 */
+  const [newGroupError, setNewGroupError] = useState('')
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
-    if (!q) return sessions
-    return sessions.filter((s) => (s.title || '').toLowerCase().includes(q))
-  }, [sessions, query])
+    return sessions.filter((s) => {
+      if (projectFilter && (s.project?.trim() || '') !== projectFilter) return false
+      if (!q) return true
+      return (s.title || '').toLowerCase().includes(q)
+    })
+  }, [sessions, query, projectFilter])
 
   const allPicked = filtered.length > 0 && filtered.every((s) => picked.has(s.id))
 
@@ -90,7 +108,10 @@ export function SessionBatchModal({
             <select
               id="batch-move-select"
               value={moveTo}
-              onChange={(event) => setMoveTo(event.target.value)}
+              onChange={(event) => {
+                setMoveTo(event.target.value)
+                setNewGroupError('')
+              }}
               disabled={busy || pickedIds.length === 0}
               className="h-7 rounded-sm border border-line bg-surface px-2 text-xs text-ink disabled:opacity-50"
             >
@@ -101,14 +122,73 @@ export function SessionBatchModal({
                 </option>
               ))}
               <option value="__none__">无分组</option>
+              {/*
+                ★ v1.20：与右键菜单里的「新建分组…」是同一个能力。
+                  放在这里是为了"批量"这个场景 —— 一次勾 8 条再一条条
+                  去右键菜单新建分组，是把同一件事做 8 遍。
+              */}
+              <option value="__new__">＋ 新建分组…</option>
             </select>
+            {moveTo === '__new__' && (
+              <input
+                value={newGroup}
+                onChange={(event) => {
+                  setNewGroup(event.target.value)
+                  setNewGroupError('')
+                }}
+                placeholder="新分组名字"
+                aria-label="新分组名字"
+                aria-invalid={newGroupError !== ''}
+                className={cn(
+                  'h-7 w-32 rounded-sm border bg-surface px-2 text-xs text-ink',
+                  newGroupError ? 'border-signal-risk' : 'border-line',
+                )}
+              />
+            )}
+            {/*
+              ★ 错误必须**画出来**。原来只 setNewGroupError 不渲染，
+                等于"校验了但不告诉用户为什么点不动"——所以这条测试
+                第一轮是红的（它抓的就是这个真缺口）。
+            */}
+            {moveTo === '__new__' && newGroupError && (
+              <span role="alert" className="text-2xs text-signal-risk">
+                {newGroupError}
+              </span>
+            )}
             <Button
               variant="secondary"
               size="sm"
               disabled={busy || pickedIds.length === 0 || !moveTo}
               onClick={() => {
-                const project = moveTo === '__none__' ? null : moveTo
-                void onMoveTo(pickedIds, project)
+                void (async () => {
+                  if (moveTo === '__new__') {
+                    const name = newGroup.trim()
+                    if (!name) {
+                      setNewGroupError('名字不能为空')
+                      return
+                    }
+                    if (name.length > 24) {
+                      setNewGroupError('最多 24 个字符')
+                      return
+                    }
+                    if (projects.includes(name)) {
+                      setNewGroupError(`「${name}」已存在，直接选它即可`)
+                      return
+                    }
+                    await onCreateGroup(pickedIds, name)
+                    setNewGroup('')
+                  } else {
+                    const project = moveTo === '__none__' ? null : moveTo
+                    await onMoveTo(pickedIds, project)
+                  }
+                  /*
+                    应用成功后清空勾选与选择：留着勾选会让用户以为"还没生效"，
+                    再点一次就变成对同一批的重复移动（幂等但白跑一遍网络）。
+                  */
+                  setPicked(new Set())
+                  setMoveTo('')
+                  setNewGroupError('')
+                })()
               }}
             >
               应用
@@ -126,14 +206,30 @@ export function SessionBatchModal({
       }
     >
       <div className="flex flex-col gap-2">
-        <input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="按标题搜索"
-          aria-label="按标题搜索对话"
-          className="h-8 rounded-sm border border-line bg-surface px-2 text-xs text-ink"
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="按标题搜索"
+            aria-label="按标题搜索对话"
+            className="h-8 min-w-0 flex-1 rounded-sm border border-line bg-surface px-2 text-xs text-ink"
+          />
+          <select
+            value={projectFilter}
+            onChange={(event) => setProjectFilter(event.target.value)}
+            aria-label="按分组筛选"
+            className="h-8 rounded-sm border border-line bg-surface px-2 text-xs text-ink"
+          >
+            <option value="">全部分组</option>
+            {projects.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+            <option value="__none__">无分组</option>
+          </select>
+        </div>
         <div className="flex items-center gap-2 border-b border-line pb-1">
           <Checkbox
             id="batch-select-all"
