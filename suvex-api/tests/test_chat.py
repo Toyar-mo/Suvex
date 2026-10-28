@@ -1321,7 +1321,10 @@ async def test_a_truncated_reply_gets_the_truncation_reminder(
         gateway=gateway,
     )
 
-    assert len(gateway.seen) == 2
+    # ★ v1.19：`truncated` 现在是硬信号，被切断的回复每次都会被推；
+    #   这个夹具的每条回复都声称被切断，所以轮数 >= 2 而不是恰好 2。
+    #   要守的不变量是第一次纠偏喂的是**截断**那句，不是格式那句。
+    assert len(gateway.seen) >= 2
     fed = [m.get("content") or "" for m in gateway.seen[1]]
     assert any("达到输出长度上限被切断" in c for c in fed), "没有喂截断提醒"
     assert not any("没有包含动作" in c for c in fed), "错喂了格式提醒（病因不同，药也不同）"
