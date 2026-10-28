@@ -99,7 +99,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 #    失败会让整个镜像不可用。命令行工具（sleuthkit / tshark）已经
 #    够用，而"够用且构建得出来"胜过"功能全但构建断掉"——这条与
 #    re 镜像里 `ropper`/`filebytes` 那次事故是同一个教训。
-RUN pip install --no-cache-dir \
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         pandas \
         python-dateutil \
         openpyxl \
