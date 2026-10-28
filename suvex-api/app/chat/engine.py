@@ -71,16 +71,63 @@ from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PH
 _log = logging.getLogger(__name__)
 
 #: 一轮用户消息里最多做几轮"模型→工具→模型"。
-MAX_TOOL_ROUNDS = 40
+def _env_int(name: str, default: int) -> int:
+    """读一个正整数环境变量（读不到/非法就用默认值）。
+
+    ★ 为什么预算要能改：不同任务的"够用"差一个数量级 —— 一道 pwn 题
+      十几到几十轮工具往返，而一个"查一下扫描结果"两轮就完。写死在代码
+      里意味着要么把简单任务拖慢，要么把难题截断。默认值给难题留足，
+      运维再用环境变量收紧。
+    """
+    import os
+
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+#: 一轮里最多几次**工具往返**。
+#:
+#: ★ v1.26：6 → 40 → **200**。
+#:
+#: 为什么必须这么大：参考实现 CyberStrikeAI 的默认就是 `max_iterations: 800`。
+#: 而实测一条真实的 CTF pwn 链（侦察 → 反汇编 → 找 gadget → 构造 ROP →
+#: 打远程 → 拿 flag）动辄几十上百次工具调用。上限 40 的失败形态很具体：
+#: 不是"报错"，而是**任务刚好做到一半，循环用尽，模型被迫收尾** ——
+#: 用户看到的就是「又中断了，不能一次性解出来吗」。
+#:
+#: 每次往返都是真金白银，所以默认可调（`SUPEX_CHAT_MAX_TOOL_ROUNDS`）。
+MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 200)
 
 #: 喂给模型的上下文里，最多带多少条历史消息。
 #:
 #: 为什么不是"全部"：一次长对话可能有几百条，而每条工具输出都可能有几万字
 #: （虽然落库时截到 60000）。全带上会让第 50 轮的一次调用就撑爆上下文。
 #:
-#: 取 30 的理由：正常对话里 30 条 ≈ 10 轮问答，够模型理解"刚才在聊什么"。
-#: 更早的内容对当前这一轮几乎无用（用户真需要时会重述）。
-HISTORY_MESSAGE_LIMIT = 30
+#: ★ v1.26：30 → **200**。
+#:
+#: 取 30 的失败形态和轮次上限一样：**难题做到一半，早期证据被挤掉了**。
+#: 一条工具结果就是一条消息，30 条只够 10 轮左右；而 200 轮的预算下，
+#: 第 60 轮时模型已经看不到第 5 轮拿到的关键输出 —— 于是它开始重复
+#: 已经做过的事，看起来"笨"、"绕圈"。
+#:
+#: 模型窗口是 1M token（`deepseek-v4.1-flash`），200 条 × 每条最多
+#: `HISTORY_TOOL_CHARS` 字仍在安全范围内。真正的兜底是下面的
+#: `MAX_HISTORY_CHARS`：超了就按"先丢最老的**工具结果**"降级，
+#: 保住用户的话与模型的结论。
+HISTORY_MESSAGE_LIMIT = _env_int("SUPEX_CHAT_HISTORY_MESSAGE_LIMIT", 200)
+
+#: 送进模型的**历史总字符**上限（约 1 char ≈ 0.6 token，40 万字符 ≈ 24 万 token）。
+#:
+#: ★ 为什么既要条数上限又要总字符上限：条数管"记得多久"，字符管"一次调用
+#:   多贵"。一条 8000 字的工具输出和一条 3 字的消息在条数上是等价的，
+#:   在成本上差 2000 倍。只卡条数等于把成本交给运气。
+MAX_HISTORY_CHARS = _env_int("SUPEX_CHAT_MAX_HISTORY_CHARS", 400_000)
 
 #: 挂载技能正文的**总**预算（所有挂载技能加起来）。
 #:
@@ -128,7 +175,7 @@ MAX_NARRATION_NUDGES = 2
 #:   切断是**我们的上限**造成的，不是模型不听话，所以给大额度；"忘了写
 #:   ACTION"才是模型的问题，那个保持 2 次。6 次 × 每轮几千 token 仍是
 #:   可控成本，而用户不用再手打「继续」。
-MAX_TRUNCATION_CONTINUES = 6
+MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
 
 #: 「本轮跑过工具」的轮次最多被推几次（v1.23）。
 #:
@@ -141,7 +188,7 @@ MAX_TRUNCATION_CONTINUES = 6
 #:
 #: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
-MAX_TOOL_NUDGES = 30
+MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 100)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
@@ -635,7 +682,70 @@ def _render_history(rows: list[Any]) -> list[dict[str, str]]:
             #   `## 附件：…` 的内部说明（v0.112 修的就是这个）。
             extra = getattr(row, "model_extra", None) or ""
             out.append({"role": "user", "content": content + extra})
-    return out
+    return _trim_history_to_budget(out)
+
+
+def _trim_history_to_budget(out: list[dict[str, str]]) -> list[dict[str, str]]:
+    """按**总字符**再收一道，超了就丢最老的工具结果（v1.26）。
+
+    ## 为什么条数上限不够
+
+    一条 8000 字的工具输出和一条 3 字的消息在"条数"上等价，在 token 上
+    差两千倍。只卡条数 = 把一次调用的成本交给运气，而运气差的那次就是
+    `context_length_exceeded`（整轮直接失败，用户看到"又没反应"）。
+
+    ## 丢的顺序（有讲究）
+
+    1. **先丢最老的 `[工具结果]`** —— 它们最占地方，而且最新一轮的模型
+       调用通常只需要"最近几步 + 结论"，早期的原始输出价值递减。
+    2. 工具都丢完了还超，再从最老的普通消息丢。
+    3. **永远保留最后一条**（模型要回的就是它）和第一条 user（用户的问题）。
+
+    丢过东西时在**第一条**消息上挂一句说明，让模型知道"上面被省略了"，
+    而不是以为自己漏看了什么。
+    """
+    total = sum(len(m["content"]) for m in out)
+    if total <= MAX_HISTORY_CHARS or len(out) <= 1:
+        return out
+
+    keep = [True] * len(out)
+    last = len(out) - 1
+    first_user = 0 if out and out[0]["role"] == "user" else None
+
+    def droppable(index: int) -> bool:
+        if index == last:
+            return False
+        if first_user is not None and index == first_user:
+            return False
+        return True
+
+    # 第一轮：只丢工具结果，从最老的开始。
+    for index in range(len(out)):
+        if total <= MAX_HISTORY_CHARS:
+            break
+        if droppable(index) and keep[index] and out[index]["content"].startswith("[工具结果]"):
+            total -= len(out[index]["content"])
+            keep[index] = False
+
+    # 第二轮：还不够就从最老的开始丢其它消息。
+    for index in range(len(out)):
+        if total <= MAX_HISTORY_CHARS:
+            break
+        if droppable(index) and keep[index]:
+            total -= len(out[index]["content"])
+            keep[index] = False
+
+    dropped = keep.count(False)
+    if dropped == 0:
+        return out
+
+    trimmed = [m for m, k in zip(out, keep) if k]
+    note = "（上下文已省略较早的 " + str(dropped) + " 段内容以控制长度。如需要，可用工具重新读取。）"
+    trimmed[0] = {
+        "role": trimmed[0]["role"],
+        "content": note + chr(10) + chr(10) + trimmed[0]["content"],
+    }
+    return trimmed
 
 
 # ══════════════════════════════════════════════════════════

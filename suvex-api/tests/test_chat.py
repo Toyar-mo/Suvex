@@ -713,13 +713,15 @@ async def test_an_action_with_no_narration_still_does_not_leak_the_json(
 
 
 async def test_hitting_the_tool_round_cap_says_what_it_still_wanted(
-    db_session: Session, chat_session
+    db_session: Session, chat_session, monkeypatch
 ) -> None:
     """到上限时模型想继续调工具，提示必须说清"它还想调 X"。
 
     ★ 这一条是**分流**：把"模型什么都没产出"与"模型产出了但本轮不许用"
       说成同一句话是错的 —— 用户会据此去换接入点，换完还是一样。
     """
+    # ★ v1.26：预算默认 200，真跑 201 轮太慢；把常量调小，语义不变。
+    monkeypatch.setattr(engine, "MAX_TOOL_ROUNDS", 3)
     loop = ['ACTION: {"tool": "list_scans", "args": {}}'] * (engine.MAX_TOOL_ROUNDS + 1)
     gateway = FakeGateway(loop)
 
@@ -1270,13 +1272,16 @@ async def test_nudges_are_capped_and_do_not_eat_the_tool_budget(
     )
 
 
-async def test_an_at_limit_round_is_never_nudged(db_session: Session, chat_session) -> None:
+async def test_an_at_limit_round_is_never_nudged(
+    db_session: Session, chat_session, monkeypatch
+) -> None:
     """到工具轮数上限那一轮**不推**。
 
     那一轮我们要的就是"用一段话总结" —— 推它继续会让它去写
     "不要再写 ACTION"之外的 ACTION，与那一轮的 system 指令直接冲突。
     """
     # 先跑满工具轮次，最后一轮给一句有意图词的短叙述。
+    monkeypatch.setattr(engine, "MAX_TOOL_ROUNDS", 3)
     loop = ['ACTION: {"tool": "list_scans", "args": {}}'] * engine.MAX_TOOL_ROUNDS
     gateway = FakeGateway(loop + ["我先总结一下。"])
 
