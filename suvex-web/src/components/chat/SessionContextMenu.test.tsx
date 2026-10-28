@@ -27,6 +27,8 @@ function makeProps(over: Partial<SessionContextMenuProps> = {}): SessionContextM
     currentProject: null,
     onRename: vi.fn(),
     onTogglePin: vi.fn(),
+    onViewAttackChain: vi.fn(),
+    onViewFindings: vi.fn(),
     onDownload: vi.fn(),
     onMoveTo: vi.fn(),
     onBatchManage: vi.fn(),
@@ -50,7 +52,16 @@ describe('SessionContextMenu', () => {
 
   it('普通会话给出完整的操作项', () => {
     render(<SessionContextMenu {...makeProps()} />)
-    for (const label of ['下载 Markdown', '重命名', '置顶此对话', '批量管理', '移动到分组', '删除此对话']) {
+    for (const label of [
+      '查看攻击链',
+      '查看漏洞',
+      '下载 Markdown',
+      '重命名',
+      '置顶此对话',
+      '批量管理',
+      '移动到分组',
+      '删除此对话',
+    ]) {
       expect(screen.getByText(label)).toBeTruthy()
     }
     // 普通会话不该出现"恢复"或"彻底删除"
@@ -133,5 +144,36 @@ describe('SessionContextMenu', () => {
 
     fireEvent.pointerDown(document.body)
     expect(props.onClose).toHaveBeenCalledTimes(1)
+  })
+})
+
+/*
+  v1.16：两个只读洞察项（查看攻击链 / 查看漏洞）。
+
+  为什么单独测：它们是**菜单里唯二不写数据的项**，而"只读"最容易出的错恰恰是
+  点了没反应（handler 没接上）或点了不关菜单（用户以为没生效又点一次）。
+  另外已归档的会话也必须能看 —— 归档只影响写操作，不该把复盘入口一起关掉。
+*/
+describe('SessionContextMenu · 只读洞察项', () => {
+  it('点「查看攻击链」会调用对应 handler 并关掉菜单', () => {
+    const props = makeProps()
+    render(<SessionContextMenu {...props} />)
+    fireEvent.click(screen.getByText('查看攻击链'))
+    expect(props.onViewAttackChain).toHaveBeenCalledTimes(1)
+    expect(props.onClose).toHaveBeenCalled()
+  })
+
+  it('点「查看漏洞」会调用对应 handler 并关掉菜单', () => {
+    const props = makeProps()
+    render(<SessionContextMenu {...props} />)
+    fireEvent.click(screen.getByText('查看漏洞'))
+    expect(props.onViewFindings).toHaveBeenCalledTimes(1)
+    expect(props.onClose).toHaveBeenCalled()
+  })
+
+  it('已归档的会话同样能看到这两项（归档只关写操作）', () => {
+    render(<SessionContextMenu {...makeProps({ archived: true })} />)
+    expect(screen.getByText('查看攻击链')).toBeTruthy()
+    expect(screen.getByText('查看漏洞')).toBeTruthy()
   })
 })

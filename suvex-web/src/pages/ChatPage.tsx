@@ -18,8 +18,10 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Modal } from '@/components/ui/Modal'
+import { SessionAttackChainDrawer } from '@/components/chat/SessionAttackChainDrawer'
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
+import { SessionFindingsDrawer } from '@/components/chat/SessionFindingsDrawer'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
 import {
@@ -51,6 +53,8 @@ import {
   downloadMarkdownFile,
   type MarkdownDetail,
 } from '@/lib/conversationMarkdown'
+import { fetchSessionFindings, fetchSessionMessages } from '@/data/session-insight'
+import type { FindingListItem } from '@/data/finding'
 import { useProjectedProviders } from '@/data/settings-store'
 import { useTools } from '@/data/tools'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
@@ -266,6 +270,31 @@ export function ChatPage() {
   /** 「已归档」区是否展开。默认收起 —— 它是低频的"回收站"。 */
   const [archivedOpen, setArchivedOpen] = useState(false)
 
+  /*
+    ── v1.16 两个只读洞察视图 ────────────────────────────────────
+
+    ★ 取数放在**事件处理器**里，不放进 effect：本项目的 lint 明确禁止
+      `set-state-in-effect`（在 effect 体里同步 setState 会触发级联渲染）。
+      菜单点了才取，天然是事件；也顺手解决了"右键别人的会话"这个场景 ——
+      `fetchSessionMessages` 不会改 `active`（`openSession` 会）。
+  */
+  const [chainView, setChainView] = useState<{
+    open: boolean
+    title: string
+    loading: boolean
+    error: string | null
+    messages: ChatMessage[]
+  }>({ open: false, title: '', loading: false, error: null, messages: [] })
+  const [findingsView, setFindingsView] = useState<{
+    open: boolean
+    title: string
+    loading: boolean
+    error: string | null
+    sessionId: string
+    scanIds: string[]
+    items: FindingListItem[]
+  }>({ open: false, title: '', loading: false, error: null, sessionId: '', scanIds: [], items: [] })
+
   /** 右键时被点的那条会话。列表刷新后可能已经不在，返回 `null` 让菜单自灭。 */
   const menuSession = useMemo(() => {
     if (!menuAnchor) return null
@@ -429,6 +458,45 @@ export function ChatPage() {
   function openRename(target: { id: string; title: string }) {
     setRenameTarget(target)
     setRenameDraft(target.title)
+  }
+
+  /**
+   * 打开「攻击链」：先确保拿到那条会话的**消息**。
+   *
+   * ★ 当前正在看的会话直接用 `active.messages`，省一次请求；别的会话才去拉。
+   *   判断依据是 `active.id`，不是"会话在列表里"——列表里只有元信息。
+   */
+  async function openAttackChain(session: { id: string; title: string }) {
+    const cached = active?.id === session.id ? active.messages : null
+    setChainView({ open: true, title: session.title, loading: cached === null, error: null, messages: cached ?? [] })
+    if (cached !== null) return
+    try {
+      const messages = await fetchSessionMessages(session.id)
+      setChainView((view) => (view.open ? { ...view, loading: false, messages } : view))
+    } catch (error) {
+      setChainView((view) =>
+        view.open ? { ...view, loading: false, error: errorMessage(error) } : view,
+      )
+    }
+  }
+
+  /** 取关联漏洞。`sessionId` 单独存一份，重试时不用再问调用方要。 */
+  async function loadFindings(sessionId: string, title: string) {
+    setFindingsView((view) => ({ ...view, open: true, title, loading: true, error: null, sessionId }))
+    try {
+      const { scanIds, items } = await fetchSessionFindings(sessionId)
+      setFindingsView((view) =>
+        view.sessionId === sessionId ? { ...view, loading: false, scanIds, items } : view,
+      )
+    } catch (error) {
+      setFindingsView((view) =>
+        view.sessionId === sessionId ? { ...view, loading: false, error: errorMessage(error) } : view,
+      )
+    }
+  }
+
+  function openFindings(session: { id: string; title: string }) {
+    void loadFindings(session.id, session.title)
   }
 
   async function submitRename() {
@@ -1151,6 +1219,8 @@ export function ChatPage() {
         projects={projectSuggestions}
         currentProject={menuSession?.project ?? null}
         onRename={() => menuSession && openRename({ id: menuSession.id, title: menuSession.title })}
+        onViewAttackChain={() => menuSession && void openAttackChain(menuSession)}
+        onViewFindings={() => menuSession && openFindings(menuSession)}
         onTogglePin={() => {
           if (menuSession) void pinSession(menuSession.id, !menuSession.pinned)
         }}
@@ -1171,6 +1241,26 @@ export function ChatPage() {
           menuSession && setConfirmAction({ kind: 'purge', id: menuSession.id, title: menuSession.title })
         }
         onClose={() => setMenuAnchor(null)}
+      />
+
+      {/* ── 攻击链 / 关联漏洞（只读洞察） ───────────────────── */}
+      <SessionAttackChainDrawer
+        open={chainView.open}
+        onClose={() => setChainView((view) => ({ ...view, open: false }))}
+        sessionTitle={chainView.title}
+        messages={chainView.messages}
+        loading={chainView.loading}
+        error={chainView.error}
+      />
+      <SessionFindingsDrawer
+        open={findingsView.open}
+        onClose={() => setFindingsView((view) => ({ ...view, open: false }))}
+        sessionTitle={findingsView.title}
+        scanIds={findingsView.scanIds}
+        items={findingsView.items}
+        loading={findingsView.loading}
+        error={findingsView.error}
+        onRetry={() => void loadFindings(findingsView.sessionId, findingsView.title)}
       />
 
       {/* ── 重命名对话框 ───────────────────────────────────── */}

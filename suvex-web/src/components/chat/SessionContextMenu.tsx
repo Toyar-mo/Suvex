@@ -1,9 +1,11 @@
 import { cn } from '@/lib/cn'
 import {
   Archive,
+  Bug,
   ChevronRight,
   Download,
   MoreHorizontal,
+  Network,
   Pin,
   PinOff,
   RotateCcw,
@@ -61,6 +63,9 @@ export interface SessionContextMenuProps {
   currentProject: string | null
   onRename: () => void
   onTogglePin: () => void
+  /** 只读的洞察视图：从这条对话的消息里还原步骤 / 汇总关联漏洞。 */
+  onViewAttackChain: () => void
+  onViewFindings: () => void
   onDownload: (detail: 'summary' | 'full') => void
   onMoveTo: (project: string | null) => void
   onBatchManage: () => void
@@ -127,8 +132,24 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
 
   if (!anchor) return null
 
+  const insightItems: MenuItem[] = [
+    {
+      key: 'chain',
+      label: '查看攻击链',
+      icon: <Network size={14} strokeWidth={2} />,
+      onSelect: props.onViewAttackChain,
+    },
+    {
+      key: 'vulns',
+      label: '查看漏洞',
+      icon: <Bug size={14} strokeWidth={2} />,
+      onSelect: props.onViewFindings,
+    },
+  ]
+
   const items: MenuItem[] = archived
     ? [
+        ...insightItems,
         { key: 'unarchive', label: '恢复此对话', icon: <RotateCcw size={14} strokeWidth={2} />, onSelect: props.onUnarchive },
         {
           key: 'download',
@@ -142,6 +163,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
         { key: 'purge', label: '彻底删除', icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onPurge },
       ]
     : [
+        ...insightItems,
         {
           key: 'download',
           label: '下载 Markdown',
