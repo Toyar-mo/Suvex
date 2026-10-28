@@ -92,6 +92,27 @@ def start(db: Session, *, session_id: str) -> ChatTurnRun:
     return run
 
 
+def reset_for_manual_retry(db: Session, run: ChatTurnRun) -> None:
+    """人工点「重试」时把一轮 `failed` 放回可接手状态（v1.22）。
+
+    ## 为什么 `failed` 也能重试
+
+    `failed` 的语义是「**自动**接手别再来」（重试额度用尽、或凭证错这种
+    确定性失败）。但人点一下是**新的决定**：他可能刚按提示改好了密钥。
+    拒绝他这个请求，等于告诉他"改完也没用"。
+
+    ## 为什么要把心跳往回拨
+
+    `claim` 只要求行处于未结束状态，但如果不拨心跳，这一行看起来"刚动过"，
+    会让并发的后台扫描与这次点击产生不必要的竞态。拨到 `STALE_SECONDS + 1`
+    秒之前，语义就是"确定没人跑"，与本函数调用者的意图一致。
+    """
+    run.status = "interrupted"
+    run.resume_attempts = 0
+    run.heartbeat_at = now_utc() - timedelta(seconds=STALE_SECONDS + 1)
+    db.flush()
+
+
 def heartbeat(
     db: Session,
     run: ChatTurnRun,
@@ -100,6 +121,7 @@ def heartbeat(
     nudges_used: int,
     tools_used: int,
     truncations_used: int = 0,
+    tool_nudges_used: int = 0,
 ) -> None:
     """每轮更新一次进度与心跳。调用方负责 commit（与消息落库同一个事务）。"""
     run.round_index = round_index
@@ -108,6 +130,8 @@ def heartbeat(
     #: 持久化的理由与 `nudges_used` 相同：接手的那一轮要接着用**同一个**
     #: 额度，否则每次自动接手都把额度重置，切断的长回复可以无限续下去。
     run.truncations_used = truncations_used
+    #: 见 `app.chat.engine.MAX_TOOL_NUDGES`。同样是"接手要接着用同一个额度"。
+    run.tool_nudges_used = tool_nudges_used
     run.tools_used = tools_used
     run.heartbeat_at = now_utc()
     db.flush()

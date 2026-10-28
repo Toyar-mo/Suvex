@@ -77,7 +77,23 @@ class _Reply:
         # 零工具但写了"我先看一下" → 补充判据兜住。
         ("intent_word", {"tools_used": 0, "text": "我先看一下环境。"}, True),
         # 额度用尽 → 不推（否则死循环）。
-        ("no_budget", {"tools_used": 2, "text": "先判型", "nudges_used": 2}, False),
+        # ★ v1.23：纯问答（零工具）的 2 次额度用尽 → 不推（成本闸）。
+        ("no_budget", {"tools_used": 0, "text": "我先看看。", "nudges_used": 2}, False),
+        # ★★ v1.23 核心：**跑过工具的轮次不受那 2 次额度限制**。
+        #   线上会话 chat_01M61DWC71W8989RRMW6DZS9SP 就是 nudges_used=2 /
+        #   tools_used=2，旧逻辑在这里 return False，界面停在
+        #   「Let me see the rest of the main function.」。
+        (
+            "tool_round_ignores_narration_budget",
+            {"tools_used": 2, "text": "Let me see the rest.", "nudges_used": 2},
+            True,
+        ),
+        # 但工具纠偏自身也有额度（否则确定性失败会无限续）。
+        (
+            "tool_round_budget_used_up",
+            {"tools_used": 2, "text": "再看一下。", "tool_nudges_used": 8},
+            False,
+        ),
         # ★ v1.21：截断有**独立额度** —— 格式额度用完了，被切断的仍要接着写。
         #   这一条就是线上「解一半又停下」的判据：`nudges_used` 已经 2，
         #   但其中 0 次是截断，所以截断额度还有 6 次可用。
@@ -92,10 +108,12 @@ class _Reply:
             {"truncated": True, "text": "半句", "nudges_used": 8, "truncations_used": 6},
             False,
         ),
-        # 改了截断额度**不能**顺手把格式额度也放开：它仍然是 2。
+        # 改了截断额度**不能**顺手把纯问答额度也放开：它仍然是 2。
+        # （v1.23 起这条必须用 tools_used=0 —— 跑过工具的轮次已改为独立额度，
+        #   见上面的 tool_round_ignores_narration_budget。）
         (
             "format_budget_still_two",
-            {"text": "我先看看。", "tools_used": 2, "nudges_used": 2},
+            {"text": "我先看看。", "tools_used": 0, "nudges_used": 2},
             False,
         ),
     ],
@@ -110,6 +128,8 @@ def test_should_nudge_matrix(case: str, kwargs: dict, expected: bool) -> None:
         "text": "",
         "nudges_used": 0,
         "max_nudges": 2,
+        "tool_nudges_used": 0,
+        "max_tool_nudges": 8,
     }
     base.update(kwargs)
     assert nudge_policy.should_nudge(**base) is expected, case
@@ -523,3 +543,44 @@ def test_chat_gateway_asks_for_a_larger_output_budget() -> None:
     source = inspect.getsource(engine._build_gateway)
     assert "max_tokens=CHAT_MAX_TOKENS" in source
     assert engine.CHAT_MAX_TOKENS > 4096
+
+
+async def test_a_tool_round_still_gets_nudged_after_an_empty_reply_ate_the_budget(
+    db_session: Session,
+) -> None:
+    """★ v1.23：空回复吃掉纠偏额度后，跑过工具的轮次**仍然**要被推。
+
+    这是线上会话 `chat_01M61DWC71W8989RRMW6DZS9SP` 的完整复现（33 条消息）：
+
+        seq16/17  反汇编结果 → assistant「防护：...看主逻辑。」（只叙述，被推 #1）
+        seq18     assistant 内容长度 0（模型抽风写空串，被推 #2 —— 额度用尽）
+        seq19     tool run_shell（反汇编输出）
+        seq20     assistant「Let me see the rest of the main function.」
+                  → 旧逻辑 nudges_used=2 已满 → return → 界面停在这句英文上
+
+    修法：跑过工具的轮次有独立额度 `MAX_TOOL_NUDGES`，不受那 2 次影响。
+
+    回退方式：把 `should_nudge` 里 `if tools_used > 0` 的分支删掉（或挪回
+    `nudges_used >= max_nudges` 之后）→ 这里的 calls 会停在 5 而红。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("防护看完了，接着看主逻辑。", ""),
+            ("", ""),
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("Let me see the rest of the main function.", ""),
+            ("FINAL: 拿到了。", ""),
+        ]
+    )
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="解题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 6, (
+        "跑过工具的轮次在纠偏额度用尽后仍必须被推一次，而不是停在半句英文上"
+    )

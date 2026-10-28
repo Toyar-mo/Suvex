@@ -1076,3 +1076,76 @@ describe('ChatPage — 中断的一轮要能看见、能继续（v1.19）', () =
     })
   })
 })
+
+describe('ChatPage — 错误条要说出真原因、并给重试入口（v1.22）', () => {
+  it('★ 错误条渲染 ApiError 的真实文案（不是泛化的「请求失败」）', async () => {
+    /*
+      用户看到的是「请求失败，请稍后再试。」—— 一句什么信息都没有的话。
+      真因（密钥无效）其实已经到了前端，只是被塞进一个裸对象、丢了类型，
+      于是 `errorMessage()` 走到兜底文案。这条钉住"真因必须显示出来"。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        error: new ApiError(
+          'TURN_FAILED',
+          '模型接入点拒绝了请求：密钥无效或已过期（HTTP 401）。',
+          200,
+        ),
+      }),
+    )
+    mockedListTurns.mockResolvedValue([])
+
+    renderPage('/chat?session=chat_1')
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('密钥无效或已过期')
+    expect(alert.textContent).not.toContain('请稍后再试')
+  })
+
+  it('★ 有 failed 的轮次时，错误条出现可点的「重试」并调 resumeTurn', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        error: new ApiError('TURN_FAILED', '密钥无效', 200),
+      }),
+    )
+    mockedListTurns.mockResolvedValue([
+      {
+        id: 'turn_failed_1',
+        sessionId: 'chat_1',
+        status: 'failed',
+        resumeAttempts: 3,
+        lastError: '密钥无效',
+        startedAt: '2026-10-28T05:00:00Z',
+        updatedAt: '2026-10-28T05:01:00Z',
+        resumable: false,
+      },
+    ])
+    mockedResumeTurn.mockResolvedValue([])
+
+    renderPage('/chat?session=chat_1')
+
+    const retry = await screen.findByRole('button', { name: '重试' })
+    expect(retry.getAttribute('data-error-retry')).toBe('turn_failed_1')
+    fireEvent.click(retry)
+    await waitFor(() => {
+      expect(mockedResumeTurn).toHaveBeenCalledWith('chat_1', 'turn_failed_1')
+    })
+  })
+
+  it('★ 没有 failed 的轮次时，错误条不出现「重试」（避免点了没反应）', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        error: new ApiError('TURN_FAILED', '密钥无效', 200),
+      }),
+    )
+    mockedListTurns.mockResolvedValue([])
+
+    renderPage('/chat?session=chat_1')
+
+    await screen.findByRole('alert')
+    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
+  })
+})

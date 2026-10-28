@@ -477,6 +477,12 @@ class ChatTurnRun(Base):
     #: 单独存一列而不是从别处推算，是因为接手的那一轮必须知道"截断额度
     #: 还剩多少" —— 推算需要原始 finish_reason，而它没有落库。
     truncations_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 上面那个数的**另一部分**：多少次是"本轮跑过工具、只写了一句人话"引起的（v1.23）。
+    #:
+    #: 它与 `truncations_used` 互斥（一次纠偏要么是被切断、要么是任务中途停），
+    #: 单独存的原因同样是为了让接手的那一轮**接着用同一个额度** ——
+    #: 否则每次自动接手都把 `MAX_TOOL_NUDGES` 重置，能无限续。
+    tool_nudges_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 这一轮真正执行过几次工具。判"是不是任务型轮次"用。
     tools_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 已经被 resume 过几次。到上限就放弃，避免一个坏会话反复重跑烧钱。

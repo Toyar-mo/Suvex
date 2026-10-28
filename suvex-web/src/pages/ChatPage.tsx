@@ -195,6 +195,8 @@ export function ChatPage() {
   // v1.19：服务端说"这一轮可以继续"时，把那个 run 存下来渲染提示条。
   const [stuckTurn, setStuckTurn] = useState<ChatTurnRun | null>(null)
   const [resuming, setResuming] = useState(false)
+  //: 最近一次 `listTurns` 的结果。错误条要从中取「最近一条 failed 的 run」做重试。
+  const [lastRuns, setLastRuns] = useState<ChatTurnRun[]>([])
 
   /*
     ★ 从 URL 派生"要打开哪个会话"，而不是在 effect 里 setState。
@@ -402,18 +404,49 @@ export function ChatPage() {
     let alive = true
     if (!sessionId) {
       setStuckTurn(null)
+      setLastRuns([])
       return () => {
         alive = false
       }
     }
     void listTurns(sessionId).then((runs) => {
       if (!alive) return
+      setLastRuns(runs)
       setStuckTurn(runs.find((run) => run.resumable) ?? null)
     })
     return () => {
       alive = false
     }
   }, [active?.id, sending])
+
+  /**
+   * ★ v1.22：手动复查一次"这一轮还能不能继续"。
+   *
+   * 抽成函数的理由：`handleRetryError` 跑完之后要知道黄条该不该收起来
+   * （它可能已经 done 了）。与上面那个 effect 是同一段逻辑，不抽出来就
+   * 会漂成两份 —— 而两份口径不一致时的症状是"点了重试，黄条和红条同时
+   * 挂在屏幕上"，用户不知道该看哪个。
+   */
+  async function refreshStuckTurn(sessionId: string) {
+    const runs = await listTurns(sessionId)
+    // 只在用户还停在同一个会话时才写状态（请求是异步的，期间可能切走）。
+    if (active?.id !== sessionId) return
+    setLastRuns(runs)
+    setStuckTurn(runs.find((run) => run.resumable) ?? null)
+  }
+
+  /**
+   * ★ v1.22：错误条上「重试」指向哪一轮。
+   *
+   * 判据：最近一次 `listTurns` 里**状态为 `failed` 的最近那条**。为什么
+   * 不是 `interrupted`：`interrupted` 由后台 resumer 自动接手（黄条那条路），
+   * 用户不需要点；而 `failed` 是我们已经放弃自动接手的（重试次数用尽或
+   * 确定性失败，例如密钥无效），只有人工介入才可能好 —— 那正是这个按钮。
+   *
+   * 取最近一条而不是全部：重试是按轮次的，一次只推一轮。
+   */
+  const retryableRunId =
+    lastRuns.find((run) => run.status === 'failed')?.id ?? null
 
   const canSend = draft.trim().length > 0 && active !== null
 
@@ -484,6 +517,29 @@ export function ChatPage() {
       /* 保持提示条，让用户能重试 */
     } finally {
       setResuming(false)
+    }
+  }
+
+  /**
+   * ★ v1.22：错误条上的「重试」。
+   *
+   * 与 `handleResume`（黄条）的区别只在**触发时机**：黄条是服务端主动
+   * 告诉我们"这一轮还能继续"（心跳判定），这里是用户在红色错误条上
+   * 自己决定再试一次。两者落到同一个端点、同一个"从断点接着跑"的语义。
+   */
+  async function handleRetryError() {
+    const runId = retryableRunId
+    if (!active || !runId || resuming) return
+    setResuming(true)
+    try {
+      await resumeTurn(active.id, runId)
+      setStuckTurn(null)
+    } catch {
+      /* 新的失败会经 store 的 `error` 重新挂上错误条，保持可再点 */
+    } finally {
+      setResuming(false)
+      // 无论成败都重新对一次账：这一轮可能已经 done，黄条要收起来。
+      void refreshStuckTurn(active.id)
     }
   }
 
@@ -1194,10 +1250,33 @@ export function ChatPage() {
 
         {/* 错误条：只占一行，不弹窗。它不阻止用户继续输入 */}
         {error && (
-          <div className="shrink-0 border-t border-signal-risk/30 bg-signal-risk/5 px-3 py-1.5">
-            <p role="alert" className="text-2xs text-signal-risk">
-              {errorMessage(error)}
-            </p>
+          <div
+            className="shrink-0 border-t border-signal-risk/30 bg-signal-risk/5 px-3 py-1.5"
+            data-error-code={error.code}
+          >
+            <div className="flex items-start gap-2">
+              <p role="alert" className="flex-1 text-2xs text-signal-risk">
+                {errorMessage(error)}
+              </p>
+              {/*
+                ★ v1.22：重试入口直接放在错误条上。
+                  用户看到"密钥无效"之后唯一能做的是去设置页改密钥，
+                  然后回来点这里 —— 如果重试入口在别处（或根本没有），
+                  他只能把问题重打一遍。服务端会把这一轮从断点接着跑
+                  （`/turns/{id}/resume`），不会重复发用户消息。
+              */}
+              {retryableRunId && (
+                <button
+                  type="button"
+                  data-error-retry={retryableRunId}
+                  className="shrink-0 rounded border border-signal-risk/40 px-2 py-0.5 text-2xs text-signal-risk hover:bg-signal-risk/10 disabled:opacity-50"
+                  disabled={resuming || sending}
+                  onClick={() => void handleRetryError()}
+                >
+                  {resuming ? '正在重试…' : '重试'}
+                </button>
+              )}
+            </div>
           </div>
         )}
 

@@ -468,14 +468,23 @@ export async function resumeTurn(
   sessionId: string,
   runId: string,
 ): Promise<ChatMessage[]> {
-  const out = await api.post<{ messages: ChatMessage[] }>(
-    `/chat/sessions/${sessionId}/turns/${runId}/resume`,
-  )
-  const active = state.active
-  if (active && active.id === sessionId) {
-    patch({ active: { ...active, messages: [...active.messages, ...out.messages] } })
+  // ★ v1.22：重试前先清掉上一次的错误条。用户点「重试」就是"我处理过了"，
+  //   旧错误继续挂着会让人以为这次也是同一个错 —— 而这次可能成功了。
+  patch({ error: null })
+  try {
+    const out = await api.post<{ messages: ChatMessage[] }>(
+      `/chat/sessions/${sessionId}/turns/${runId}/resume`,
+    )
+    const active = state.active
+    if (active && active.id === sessionId) {
+      patch({ active: { ...active, messages: [...active.messages, ...out.messages] } })
+    }
+    return out.messages
+  } catch (error) {
+    // 失败时把新原因摆出来（而不是让调用方自己猜）。
+    patch({ error: messageOf(error) })
+    throw error
   }
-  return out.messages
 }
 
 // ─────────────────────────────────────────────
@@ -642,8 +651,22 @@ export async function sendMessage(
         }
 
         if (frame.event === TURN_ERROR) {
-          const detail = typeof frame.data.message === 'string' ? frame.data.message : '这一轮失败了'
-          patch({ error: { message: detail } as ApiError })
+          const detail =
+            typeof frame.data.message === 'string' && frame.data.message.trim()
+              ? frame.data.message
+              : '这一轮失败了，但没有给出原因。'
+          // ★ v1.22：必须造**真的** `ApiError`，不能 `{ message } as ApiError`。
+          //
+          // 原来那句类型断言把服务端发来的真实原因（例如
+          // "模型接入点拒绝了这次请求（API key 无效或已过期）…（原始信息：HTTP 401 Invalid token）"）
+          // 直接丢掉：`ChatPage` 渲染错误条时走的是
+          // `errorMessage(error)`，而它的第一步是 `error instanceof ApiError`
+          // —— 一个裸对象不是实例 → 落到"请求失败，请稍后再试"的兜底分支。
+          // 用户因此只看到一句没有任何信息量的话（本次缺陷的直接成因）。
+          //
+          // 404/409 这类流开流前的失败由 `streamTurn` 抛 `ApiError` 处理；
+          // 这里补的是**开流之后**才出现的 `error` 帧。
+          patch({ error: new ApiError('TURN_FAILED', detail, 200) })
           return
         }
 

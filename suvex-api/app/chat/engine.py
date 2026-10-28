@@ -53,6 +53,7 @@ from sqlalchemy.orm import Session
 from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
 from app.chat.models import ChatSession
+from app.chat import failure as failure_kind
 from app.chat import nudge as nudge_policy
 from app.chat import turn_runs as turn_run_store
 from app.chat.prompts import (
@@ -128,6 +129,19 @@ MAX_NARRATION_NUDGES = 2
 #:   可控成本，而用户不用再手打「继续」。
 MAX_TRUNCATION_CONTINUES = 6
 
+#: 「本轮跑过工具」的轮次最多被推几次（v1.23）。
+#:
+#: ★ 独立于 `MAX_NARRATION_NUDGES`(2)。那 2 次是给**纯问答**的成本闸，
+#:   而任务型轮次（`tools_used > 0`）的语义是"任务进行中，突然只写一句
+#:   人话就收尾几乎总是没做完"。共用 2 次会让一次空回复（模型抽风写了个
+#:   空串）就吃掉一半预算，于是后面真正的"没写完"反而推不动 —— 实测线上
+#:   会话 `chat_01M61DWC71W8989RRMW6DZS9SP` 就是 `nudges_used=2 /
+#:   truncations_used=0 / tools_used=2`，界面停在一句英文上。
+#:
+#: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
+#: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
+MAX_TOOL_NUDGES = 8
+
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
 #: `LlmGateway` 的默认是 4096，那对"一句话回答"够、对"看完反汇编再讲
@@ -191,6 +205,47 @@ class ChatEngineError(Exception):
     ⚠️ 与 `KernelError` 分开：那个类的文案是给**解题**场景写的
     （"这道题"、"沙箱"），直接抛到对话里会牛头不对马嘴。
     """
+
+    #: 再跑一遍有没有意义。默认 True —— "多试一次"的代价是几秒，
+    #: 而"该重试却没重试"的代价是任务停在半路。
+    retryable: bool = True
+
+
+class ChatProviderAuthError(ChatEngineError):
+    """模型接入点**拒绝了我们**（密钥无效/过期/无权限）。
+
+    ★ 为什么要单独一个类：这不是"模型这次答坏了"，而是**配置错了**。
+      自动接手再跑一百次都是同一个 401，而每一轮要白等 90 秒心跳窗口，
+      用户只会看到同一条错误反复出现三遍（实测 `resume_attempts=3`）。
+      所以 `retryable = False`，`resumer` 见到它直接放弃并留下可操作说明。
+    """
+
+    retryable = False
+
+
+def _wrap_model_failure(exc: BaseException) -> ChatEngineError:
+    """把底层异常翻译成用户能照着做的失败。
+
+    ## 为什么不能只写类名
+
+    改造前这里是 `f"调用模型失败：{type(exc).__name__}。"` —— 于是界面上
+    只有「请求失败，请稍后再试。」，而真实原因是
+    `HTTP 401 Invalid token`。用户完全无从判断该改密钥还是该等一等。
+
+    ## 为什么两种文案
+
+    凭证错要给出**下一步动作**（去哪改、改完点什么）；其余错误保留原始
+    细节（截断到 300 字），因为那些细节恰恰是排查线索（502/超时/上下文超限）。
+    """
+    detail = failure_kind.describe(exc)
+    if failure_kind.classify(detail) == failure_kind.PROVIDER_AUTH:
+        return ChatProviderAuthError(
+            "模型接入点拒绝了这次请求（API key 无效或已过期）。"
+            "请到「设置 → 模型」里更新这个接入点的密钥，保存后点下面的「重试」，"
+            "这一轮会从断点接着跑，不用重新发问。"
+            f"（原始信息：{detail}）"
+        )
+    return ChatEngineError(f"调用模型失败：{detail}")
 
 
 @dataclass
@@ -1415,6 +1470,11 @@ async def run_turn(
     #:   东西（纠偏 vs 工具往返）。混在一起会让"提醒了两次"吃掉两个工具
     #:   轮次，于是真正需要跑工具的那一轮反而没预算了。
     nudges_used = 0
+    #: 上面两个数里，有多少次是「本轮跑过工具、只写了一句人话」引起的（v1.23）。
+    #:
+    #: 单独一个计数器，因为它有自己的额度 `MAX_TOOL_NUDGES`。见那个常量的注释。
+    tool_nudges_used = 0
+
     #: 上面那个数里，有多少次是**被切断**引起的（v1.21）。
     #:
     #: 两个数分开记的理由见 `MAX_TRUNCATION_CONTINUES`：`nudges_used` 管
@@ -1425,6 +1485,7 @@ async def run_turn(
     if resume_from is not None:
         nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
         truncations_used = int(getattr(resume_from, "truncations_used", 0) or 0)
+        tool_nudges_used = int(getattr(resume_from, "tool_nudges_used", 0) or 0)
         tools_used = int(getattr(resume_from, "tools_used", 0) or 0)
 
     #: 这一轮**真正执行过**几次工具（v1.19）。
@@ -1443,7 +1504,7 @@ async def run_turn(
 
     #: 循环上界 = 工具轮数 + 1（最后那轮用来总结）+ 纠偏轮数。
     for round_index in range(
-        MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES
+        MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES + MAX_TOOL_NUDGES
     ):
         # ★ v0.100：在调模型**之前**推一条 phase 帧。
         #
@@ -1486,7 +1547,7 @@ async def run_turn(
             )
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败", exc_info=True)
-            raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc
+            raise _wrap_model_failure(exc) from exc
 
         if turn_run is not None:
             turn_run_store.heartbeat(
@@ -1495,6 +1556,7 @@ async def run_turn(
                 round_index=round_index,
                 nudges_used=nudges_used,
                 truncations_used=truncations_used,
+                tool_nudges_used=tool_nudges_used,
                 tools_used=tools_used,
             )
             db.commit()
@@ -1627,10 +1689,14 @@ async def run_turn(
                 max_nudges=MAX_NARRATION_NUDGES,
                 truncations_used=truncations_used,
                 max_truncations=MAX_TRUNCATION_CONTINUES,
+                tool_nudges_used=tool_nudges_used,
+                max_tool_nudges=MAX_TOOL_NUDGES,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
                     truncations_used += 1
+                elif tools_used > 0:
+                    tool_nudges_used += 1
                 truncated = _is_truncated(reply)
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
@@ -1763,11 +1829,12 @@ async def resume_approved(
     # 恰恰更容易出现，因为刚批准的工具结果正要喂回去，它常常先播报一句。
     nudges_used = 0
     truncations_used = 0
+    tool_nudges_used = 0
     tools_used = 0
     pending_reminder: str | None = None
 
     for round_index in range(
-        MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES
+        MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES + MAX_TOOL_NUDGES
     ):
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
@@ -1791,7 +1858,7 @@ async def resume_approved(
             reply = await gateway.chat(messages, system=system_this_round)
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败（审批后）", exc_info=True)
-            raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc
+            raise _wrap_model_failure(exc) from exc
 
         if turn_run is not None:
             turn_run_store.heartbeat(
@@ -1800,6 +1867,7 @@ async def resume_approved(
                 round_index=round_index,
                 nudges_used=nudges_used,
                 truncations_used=truncations_used,
+                tool_nudges_used=tool_nudges_used,
                 tools_used=tools_used,
             )
             db.commit()
@@ -1865,10 +1933,14 @@ async def resume_approved(
                 max_nudges=MAX_NARRATION_NUDGES,
                 truncations_used=truncations_used,
                 max_truncations=MAX_TRUNCATION_CONTINUES,
+                tool_nudges_used=tool_nudges_used,
+                max_tool_nudges=MAX_TOOL_NUDGES,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
                     truncations_used += 1
+                elif tools_used > 0:
+                    tool_nudges_used += 1
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if _is_truncated(reply)
@@ -1913,6 +1985,14 @@ async def resume_approved(
 #: 告诉他"这一轮断了、我在后台接着做、也可以催我一句"。
 INTERRUPTED_NOTE = "（这一轮中途断了：{reason}。我在后台接着做；也可以发「继续」催我一下。）"
 
+#: ★ v1.22：**不值得重试**的失败（密钥/权限）。说清"修好之后点重试"，
+#: 因为用户唯一能做的事在设置页，而重试入口就在错误条上。
+FAILED_NOTE = (
+    "（这一轮没能跑起来：{reason}"
+    "这类问题重试通常也一样 —— 请先按上面的提示处理（比如更新模型接入点的密钥），"
+    "再点错误条上的「重试」，这一轮会从断点接着跑，不用重新发问。）"
+)
+
 
 async def _run_guarded(
     db: Session,
@@ -1935,12 +2015,22 @@ async def _run_guarded(
         #   见**的"又没反应"，如果只接 `Exception` 就把它漏成"没人管的
         #   running 行"，后台永远不接手。
         reason = turn_run_store.redact(f"{type(exc).__name__}: {exc}")
+        # ★ v1.22：不可重试的失败（凭证错）直接落 `failed`，别再伪装成
+        #   "中途断了、我在后台接着做" —— 后台接手会一路重试到上限，
+        #   用户会看到同一条错误反复出现三遍。`failed` 的语义正是"自动别再来"。
+        retryable = bool(getattr(exc, "retryable", True))
         try:
             db.rollback()
-            turn_run_store.finish_from_error(db, run, reason=reason)
-            note = chat_service.append_assistant_message(
-                db, session=session, content=INTERRUPTED_NOTE.format(reason=reason)
-            )
+            if retryable:
+                turn_run_store.finish_from_error(db, run, reason=reason)
+                note = chat_service.append_assistant_message(
+                    db, session=session, content=INTERRUPTED_NOTE.format(reason=reason)
+                )
+            else:
+                turn_run_store.finish(db, run, status="failed", error=reason)
+                note = chat_service.append_assistant_message(
+                    db, session=session, content=FAILED_NOTE.format(reason=reason)
+                )
             db.commit()
         except Exception:  # noqa: BLE001 - 连记账都失败就别再抛新的
             _log.warning("记录中断状态失败（%s）", kind, exc_info=True)

@@ -104,6 +104,8 @@ def should_nudge(
     max_nudges: int,
     truncations_used: int = 0,
     max_truncations: int = 6,
+    tool_nudges_used: int = 0,
+    max_tool_nudges: int = 8,
 ) -> bool:
     """要不要为这一轮"没有动作"的回复再推一次模型。
 
@@ -125,8 +127,21 @@ def should_nudge(
     # 额度；而"忘了写 ACTION"才是模型的问题，那个额度保持小（2 次）。
     if truncated:
         return truncations_used < max_truncations
+    # ★ v1.23：**跑过工具的轮次不受纠偏预算限制**。
+    #
+    # 实测（线上会话 chat_01M61DWC71W8989RRMW6DZS9SP，33 条）：那一轮的
+    # `chat_turn_runs` 是 `nudges_used=2 / truncations_used=0 / tools_used=2`。
+    # 也就是说两次纠偏额度**已经被吃掉**（其中一次是前面一条空回复 `seq 18`
+    # 长度 0 用掉的 —— 一次模型抽风就耗掉一半预算），于是轮到用户截图这一刻
+    # 「刚跑完反汇编、只写了一句 `Let me see the rest of the main function.`」
+    # 时，`nudges_used >= max_nudges` 先返回 False，`tools_used > 0` 这条
+    # **最硬的结构信号根本没机会生效** —— 界面就停在那句英文上。
+    #
+    # 判断：纠偏预算是用来防「纯问答被反复推」的成本闸，而不是用来限制
+    # 「任务中途不许推进」的。跑过工具的轮次本来就该继续，给它一个独立
+    # 且更大的额度（`max_tool_nudges`），花的是钱，省的是用户手打「继续」。
+    if tools_used > 0:
+        return tool_nudges_used < max_tool_nudges
     if nudges_used >= max_nudges:
         return False
-    if tools_used > 0:
-        return True
     return looks_unfinished(text)

@@ -9,9 +9,11 @@ import {
   openSession,
   renameSession,
   resetChatStore,
+  resumeTurn,
   sendMessage,
   uploadAttachment,
 } from './chat'
+import { ApiError } from '@/lib/api'
 import { TURN_DELTA, TURN_DONE, TURN_ERROR, TURN_MESSAGE, TURN_PHASE } from './chat-stream'
 
 /*
@@ -1018,5 +1020,87 @@ describe('附件条即发即收（v1.21）', () => {
 
     expect(ok).toBe(false)
     expect(getChatSnapshot().stagedAttachments).toEqual([])
+  })
+})
+
+describe('TURN_ERROR 挂的是带真因的 ApiError（v1.22）', () => {
+  /*
+    ★ 用户看到的是「请求失败，请稍后再试。」
+
+      真因一直在 SSE 的 error 帧里（`detail`），但 store 把它塞进一个裸对象
+      `{ message: detail } as ApiError` —— 类型断言不等于实例。页面渲染走
+      `errorMessage()`，它的第一行是 `error instanceof ApiError`，裸对象为假，
+      于是落到泛化兜底。这条钉住"error 必须是真 ApiError、message 是 detail"。
+  */
+  it('★ error 帧的真因进入 ApiError.message（不是泛化文案）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '你好' }))
+    stream.push(TURN_ERROR, {
+      message: 'ChatEngineError: 调用模型失败：密钥无效或已过期（HTTP 401）。',
+    })
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
+
+    const err = getChatSnapshot().error
+    expect(err?.message).toContain('密钥无效或已过期')
+    // 关键：是 ApiError 实例，`errorMessage()` 才不会走兜底
+    expect(err).toBeInstanceOf(ApiError)
+  })
+
+  it('★ error 帧没给原因时，至少说"没有给出原因"而不是空白', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '你好' }))
+    stream.push(TURN_ERROR, {})
+    stream.close()
+    await promise
+    if (pending[2]) pending[2].resolve([])
+
+    const err = getChatSnapshot().error
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err?.message).toContain('没有给出原因')
+  })
+})
+
+describe('resumeTurn — 重试前清掉旧错误（v1.22）', () => {
+  /*
+    ★ 用户点「重试」= "我处理过了"。旧错误如果还挂在 error 上，用户会以为
+      这次又是同一个错（哪怕这次成功了）。这条钉住"进函数先清"。
+  */
+  it('★ resumeTurn 一进来就把上一次的错误清掉', async () => {
+    // 先制造一个错误状态
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    const stream = liveSseResponse()
+    const p1 = sendMessage('chat_1', '你好')
+    pending[1].resolveRaw(stream.response)
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '你好' }))
+    stream.push(TURN_ERROR, { message: '密钥无效' })
+    stream.close()
+    await p1
+    if (pending[2]) pending[2].resolve([])
+    expect(getChatSnapshot().error).not.toBeNull()
+
+    // 现在点重试：清错误 + 发请求
+    const p2 = resumeTurn('chat_1', 'turn_x')
+    // 请求还没返回，错误就应该已经清掉了
+    expect(getChatSnapshot().error).toBeNull()
+    pending[pending.length - 1].resolve({ messages: [] })
+    await p2
   })
 })
