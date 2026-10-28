@@ -69,7 +69,8 @@ vi.mock('@/data/chat', () => ({
   dropStagedAttachment: vi.fn(async () => true),
   decideApproval: vi.fn(async () => true),
   // ★ v0.100：插话。跑着的时候 Enter 走这条路径（见 `handleSend`）。
-  interject: vi.fn(async () => true),
+  clearStaleSending: vi.fn(),
+  interject: vi.fn(async () => 'ok'),
   // v1.15 会话生命周期：同样必须逐个列出，漏一个就在调用时炸。
   pinSession: vi.fn(async () => true),
   unarchiveSession: vi.fn(async () => true),
@@ -88,6 +89,7 @@ import { useAuth } from '@/data/auth-store'
 import {
   archiveSession,
   createSession,
+  clearStaleSending,
   interject,
   listTurns,
   loadSessions,
@@ -107,6 +109,7 @@ const mockedArchiveSession = vi.mocked(archiveSession)
 const mockedInterject = vi.mocked(interject)
 const mockedListTurns = vi.mocked(listTurns)
 const mockedResumeTurn = vi.mocked(resumeTurn)
+const mockedClearStaleSending = vi.mocked(clearStaleSending)
 
 function session(overrides: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -151,6 +154,7 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     error: null,
     pendingUserContent: null,
     sending: false,
+    sendingSessionId: null,
     // ★ v0.100：流式过程中的两个状态。
     //   夹具不补它们，tsc 会报"缺属性" —— 那正是它该报的：
     //   少一个字段意味着页面读到 undefined，渲染逻辑会静默走错分支。
@@ -549,6 +553,7 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         pendingUserContent: '列出可用技能',
       }),
     )
@@ -569,6 +574,7 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         pendingUserContent: '列出可用技能',
       }),
     )
@@ -617,6 +623,7 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         pendingUserContent: '列出可用技能',
       }),
     )
@@ -658,6 +665,7 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
           messages: [message({ id: 'm1', seq: 1, role: 'user', content: '你好' })],
         },
         sending: true,
+        sendingSessionId: 'chat_1',
         pendingUserContent: '列出可用技能',
       }),
     )
@@ -688,6 +696,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         phase: { phase: 'thinking', round: 0 },
       }),
     )
@@ -703,6 +712,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         phase: { phase: 'tool', round: 1, tool: 'list_skills' },
       }),
     )
@@ -717,6 +727,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         phase: null,
       }),
     )
@@ -730,6 +741,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         phase: { phase: 'thinking', round: 0 },
       }),
     )
@@ -747,6 +759,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         phase: { phase: 'thinking', round: 0 },
       }),
     )
@@ -785,11 +798,12 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
   })
 
   it('★ 插话失败时把原文放回输入框（别让用户重打一遍）', async () => {
-    mockedInterject.mockResolvedValueOnce(false)
+    mockedInterject.mockResolvedValueOnce('failed')
     mockedUseChat.mockReturnValue(
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         phase: { phase: 'thinking', round: 0 },
       }),
     )
@@ -811,6 +825,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
+        sendingSessionId: 'chat_1',
         interjections: [
           message({ id: 'ij1', seq: 9, role: 'user', content: '顺便看下 8080' }),
         ],
@@ -1147,5 +1162,67 @@ describe('ChatPage — 错误条要说出真原因、并给重试入口（v1.22�
 
     await screen.findByRole('alert')
     expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
+  })
+})
+
+describe('ChatPage — 别的会话在跑时不许把话插进去（v1.24）', () => {
+  /*
+    ★ 实测事故：会话 A 的长任务在跑（78 秒），用户切到新建的会话 B 打「你好」
+      按 Enter —— 旧代码只看全局 `sending`，于是走了 `interject`，服务端
+      200 并落了一条 user 消息；而 B 里没有任何在跑的轮次会去读历史，
+      那句话永远没有回复，界面停在「插话 · 模型下一轮会看到」+「模型在推理…」。
+
+    修法：`sending` 要带上"是哪个会话在跑"，只有**当前会话**在跑才是插话语义。
+  */
+  it('★ 别的会话正在跑 → 按钮是「发送」不是「插话」，且点了不发请求', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        sendingSessionId: 'chat_other',
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    expect(textarea.placeholder).toContain('另一个对话正在跑')
+    fireEvent.change(textarea, { target: { value: '你好' } })
+
+    // 按钮文案必须是「发送」——绝不能在别的会话跑着时变成「插话」
+    expect(screen.queryByRole('button', { name: '插话' })).toBeNull()
+    const send = screen.getByRole('button', { name: '发送' }) as HTMLButtonElement
+    // 全局只允许一轮在跑，所以这一下被禁用（而不是静默吞掉用户的话）
+    expect(send.disabled).toBe(true)
+    fireEvent.click(send)
+
+    await waitFor(() => {
+      expect(mockedInterject).not.toHaveBeenCalled()
+      expect(mockedSendMessage).not.toHaveBeenCalled()
+    })
+  })
+
+  it('★ 服务端说"没在跑"（no-turn）→ 清掉过期状态并按普通消息发出去', async () => {
+    mockedInterject.mockResolvedValueOnce('no-turn')
+    mockedSendMessage.mockResolvedValueOnce(true)
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: true,
+        sendingSessionId: 'chat_1',
+        phase: { phase: 'thinking', round: 0 },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(textarea, { target: { value: '其实这一轮早结束了' } })
+    fireEvent.click(screen.getByRole('button', { name: '插话' }))
+
+    await waitFor(() => {
+      // 关键：不能把这句话丢掉 —— 要退回正常发送
+      expect(mockedSendMessage).toHaveBeenCalledWith('chat_1', '其实这一轮早结束了')
+    })
+    expect(mockedClearStaleSending).toHaveBeenCalled()
   })
 })

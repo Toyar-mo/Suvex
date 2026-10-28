@@ -198,6 +198,23 @@ export interface ChatState {
   /** 一轮正在跑。界面据此禁用输入框并显示"正在想"。 */
   sending: boolean
   /**
+   * ★ v1.24：**哪一个会话**在跑（`null` = 没有在跑）。
+   *
+   * ## 为什么 `sending` 一个布尔不够
+   *
+   * `sending` 是全局的（"同一时刻只允许一轮"），但界面必须区分
+   * 「跑的是**当前这个**会话」还是「跑的是**另一个**会话」：
+   *   · 前者 → 输入框变成「插话」，Enter 往那一轮里塞话；
+   *   · 后者 → 这里根本没有在跑的轮次，**绝不能**变成插话 —— 插进去的
+   *     那句话不会被任何一轮读到（没有轮次在读历史），用户会看到一条
+   *     「插话 · 模型下一轮会看到」的僵尸气泡 + 永久「模型在推理…」。
+   *
+   * 实测事故：会话 A 的长任务在跑（78 秒），用户切到新建的会话 B 打「你好」
+   * 按 Enter → 走了 `interject` → 服务端 200 并落了一条 user 消息 → B 里
+   * 永远没有回复。
+   */
+  sendingSessionId: string | null
+  /**
    * ★ v0.100：这一轮**现在在做什么**（`thinking` / `tool`）。
    *
    * ## 为什么它必须与 `sending` 分开
@@ -261,6 +278,7 @@ const EMPTY: ChatState = {
   error: null,
   pendingUserContent: null,
   sending: false,
+  sendingSessionId: null,
   phase: null,
   interjections: [],
   streamingText: null,
@@ -551,6 +569,7 @@ export async function sendMessage(
   //   而不是一整轮模型推理。
   patch({
     sending: true,
+    sendingSessionId: sessionId,
     error: null,
     pendingUserContent: content,
     phase: null,
@@ -774,6 +793,7 @@ export async function sendMessage(
     //   这一轮失败不影响那条消息存在，气泡留着只会继续说假话。
     patch({
       sending: false,
+      sendingSessionId: null,
       pendingUserContent: null,
       phase: null,
       interjections: [],
@@ -805,9 +825,14 @@ export async function sendMessage(
  * 界面把它显示在消息流末尾（用户能看见自己的话进去了）；
  * 那一轮结束时由刷新从服务端取回真消息，这里清空。
  */
-export async function interject(sessionId: string, content: string): Promise<boolean> {
+export type InterjectOutcome = 'ok' | 'no-turn' | 'failed'
+
+export async function interject(
+  sessionId: string,
+  content: string,
+): Promise<InterjectOutcome> {
   const trimmed = content.trim()
-  if (!trimmed) return false
+  if (!trimmed) return 'failed'
   try {
     const message = await api.post<ChatMessage>(
       `/chat/sessions/${sessionId}/interject`,
@@ -818,11 +843,30 @@ export async function interject(sessionId: string, content: string): Promise<boo
     if (active && active.id === sessionId) {
       patch({ interjections: [...state.interjections, message] })
     }
-    return true
+    return 'ok'
   } catch (error) {
-    patch({ error: messageOf(error) })
-    return false
+    const api_error = messageOf(error)
+    // ★ v1.24：服务端说"这一轮其实没在跑"（我们这边的 sending 是过期的）。
+    //   这不是失败 —— 调用方应退回"正常发送"，把那句话当一条新消息发出去。
+    if (api_error.code === 'NO_RUNNING_TURN') return 'no-turn'
+    patch({ error: api_error })
+    return 'failed'
   }
+}
+
+/**
+ * ★ v1.24：当我们以为有一轮在跑、服务端说没有时，把这个过期状态清掉。
+ *
+ * 为什么需要它：`sendMessage` 一进来就 `if (state.sending) return false`。
+ * 如果 `sending` 是过期的（那一轮的 done 帧丢了），不清它就没法退回去
+ * 发一条正常消息 —— 用户会看到自己的话被吞掉。
+ *
+ * ⚠️ 只在**确认服务端没有在跑的轮次**之后调用（`interject` 返回 `'no-turn'`）。
+ *   别处调用它会把正在跑的那一轮的界面状态抹掉（进度、插话暂存区）。
+ */
+export function clearStaleSending(): void {
+  if (!state.sending) return
+  patch({ sending: false, sendingSessionId: null, phase: null, interjections: [] })
 }
 
 /**

@@ -384,9 +384,17 @@ async def test_interjection_is_seen_by_the_next_round(db_session, chat_session):
 
 
 def test_interject_endpoint_persists_a_user_message(db_session, chat_session):
-    """端点把话写进库，并返回那条消息（带 id / seq）。"""
+    """端点把话写进库，并返回那条消息（带 id / seq）。
+
+    ★ v1.24：必须先有一轮在跑 —— 插话的语义就是"塞给正在跑的那一轮"。
+      没有在跑的轮次时端点会 409 `NO_RUNNING_TURN`（见下一条用例）。
+    """
+    from app.chat import turn_runs
     from app.chat.router import interject
     from app.chat.schemas import ChatInterjectIn
+
+    run = turn_runs.start(db_session, session_id=chat_session.id)
+    db_session.commit()
 
     out = interject(
         chat_session.id,
@@ -400,6 +408,29 @@ def test_interject_endpoint_persists_a_user_message(db_session, chat_session):
 
     rows = chat_service.list_messages(db_session, session=chat_session)
     assert any(r.content == "插一句" for r in rows)
+
+    turn_runs.finish(db_session, run, status="done")
+    db_session.commit()
+
+
+def test_interject_without_a_running_turn_is_rejected(db_session, chat_session):
+    """★ v1.24：没有在跑的轮次时必须拒绝，而不是默默写一条没人回答的消息。
+
+    实测事故：会话 A 的长任务在跑，用户切到新建的会话 B 打「你好」按 Enter
+    → 旧逻辑落了一条 user 消息，而 B 里没有轮次会去读历史 → 那句话永远
+    没有回复，界面停在「插话 · 模型下一轮会看到」+ 永不消失的「模型在推理…」。
+    """
+    from app.chat.router import interject
+    from app.chat.schemas import ChatInterjectIn
+    from app.core.errors import ApiError
+
+    with pytest.raises(ApiError) as caught:
+        interject(chat_session.id, ChatInterjectIn(content="你好"), db_session, ADMIN)
+
+    assert getattr(caught.value, "code", "") == "NO_RUNNING_TURN"
+    # 关键：不要留下一条无人回答的消息
+    rows = chat_service.list_messages(db_session, session=chat_session)
+    assert not any(r.content == "你好" for r in rows)
 
 
 def test_interject_rejects_blank(db_session, chat_session):

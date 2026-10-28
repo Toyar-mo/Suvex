@@ -8,6 +8,7 @@ import {
   loadTools,
   openSession,
   renameSession,
+  clearStaleSending,
   resetChatStore,
   resumeTurn,
   sendMessage,
@@ -710,7 +711,7 @@ describe('interject — 插话兑现（v0.101）', () => {
 
     const before = calls.length
     const ok = await interject('chat_1', '   ')
-    expect(ok).toBe(false)
+    expect(ok).toBe('failed')
     // 不发请求 —— Enter 手滑不该打后端一次、更不该产生一条空消息
     expect(calls.length).toBe(before)
     expect(calls.filter((c) => c.url.includes('/interject'))).toHaveLength(0)
@@ -1146,5 +1147,55 @@ describe('humanizeDetail — 错误条不该以异常类名开头（v1.23）', (
     if (pending[2]) pending[2].resolve([])
 
     expect(getChatSnapshot().error?.message).toBe('原因：磁盘满了')
+  })
+})
+
+describe('interject 的 no-turn 语义 + clearStaleSending（v1.24）', () => {
+  /*
+    ★ 服务端在"这个会话没有在跑的轮次"时回 409 `NO_RUNNING_TURN`。
+      前端必须把它当**信号**而不是错误：`sending` 是过期的（done 帧丢了），
+      要清掉它并退回正常发送，否则用户那句话被静默吞掉。
+  */
+  it('★ 服务端说没在跑 → 返回 no-turn，且不挂 error', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p = interject('chat_1', '这一轮其实早结束了')
+    const idx = calls.length - 1
+    pending[idx].resolve(
+      { error: { code: 'NO_RUNNING_TURN', message: '这个对话当前没有在跑的回复。' } },
+      409,
+    )
+    const outcome = await p
+
+    expect(outcome).toBe('no-turn')
+    // ★ 关键：不是"失败"，不该把红条挂上去吓用户
+    expect(getChatSnapshot().error).toBeNull()
+  })
+
+  it('★ clearStaleSending 会把过期的 sending/phase 清掉（否则发不出去）', () => {
+    // 先造一个"以为在跑"的状态
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    return open.then(() => {
+      // 直接改 store 里的 sending 需要走 sendMessage；这里用它的公开路径：
+      const p = sendMessage('chat_1', '先跑一轮')
+      // sendMessage 已把 sending 置 true（还没等响应）
+      expect(getChatSnapshot().sending).toBe(true)
+      expect(getChatSnapshot().sendingSessionId).toBe('chat_1')
+
+      clearStaleSending()
+
+      expect(getChatSnapshot().sending).toBe(false)
+      expect(getChatSnapshot().sendingSessionId).toBeNull()
+      expect(getChatSnapshot().phase).toBeNull()
+
+      // 收尾：把悬挂的请求 resolve 掉
+      pending[pending.length - 1].resolveRaw(
+        sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]),
+      )
+      return p
+    })
   })
 })

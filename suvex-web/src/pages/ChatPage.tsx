@@ -30,6 +30,7 @@ import {
   createSession,
   decideApproval,
   dropStagedAttachment,
+  clearStaleSending,
   interject,
   loadPersonas,
   loadSessions,
@@ -173,6 +174,7 @@ export function ChatPage() {
     status,
     error,
     sending,
+    sendingSessionId,
     personas,
     stagedAttachments,
     deciding,
@@ -448,7 +450,20 @@ export function ChatPage() {
   const retryableRunId =
     lastRuns.find((run) => run.status === 'failed')?.id ?? null
 
-  const canSend = draft.trim().length > 0 && active !== null
+  /**
+   * ★ v1.24：正在跑的那一轮是不是**当前这个会话**的。
+   *
+   * 只有它才该把输入框变成「插话」。跑在别的会话里时，当前会话根本没有
+   * 在读历史的轮次 —— 插进去的话永远不会被读到（实测事故见 `chat.ts` 里
+   * `sendingSessionId` 的注释：A 会话长任务在跑，用户在新建的 B 会话发
+   * 「你好」被当成插话，B 里就永远停在「模型在推理…」）。
+   */
+  const sendingHere = sending && sendingSessionId === active?.id
+  /** 有别的会话在跑 —— 全局只允许一轮，这时当前会话不能再开一条。 */
+  const sendingElsewhere = sending && !sendingHere
+
+  const canSend =
+    draft.trim().length > 0 && active !== null && !sendingElsewhere
 
   async function handleNew() {
     const session = await createSession()
@@ -469,12 +484,25 @@ export function ChatPage() {
     // 新的工具额度），而 `interject` 只往库里写一句话、由正在跑的那一轮
     // 在下一轮开头读到。混用会让用户在模型跑的时候莫名开启第二轮，
     // 而那一轮的上下文与第一轮并行 —— seq 顺序、工具预算都会乱。
-    if (sending) {
+    // ★ v1.24：先挡「另一个会话在跑」——这一支绝不能落到下面的 `interject`，
+    //   那会把这句话塞进**另一个会话的**轮次里（甚至塞进一个没人读的历史）。
+    if (sendingElsewhere) return
+
+    if (sendingHere) {
       setDraft('')
       setInterjecting(true)
       try {
-        const ok = await interject(active.id, content)
-        if (!ok) setDraft(content)
+        const outcome = await interject(active.id, content)
+        if (outcome === 'no-turn') {
+          // ★ v1.24：服务端说这一轮其实早就结束了（我们这边的 `sending`
+          //   是过期的 —— done 帧丢了的典型症状）。把过期状态清掉，退回
+          //   "正常发送"，否则这句话会被静默吞掉（用户以为发了，没人回答）。
+          clearStaleSending()
+          const ok = await sendMessage(active.id, content)
+          if (!ok) setDraft(content)
+        } else if (outcome === 'failed') {
+          setDraft(content)
+        }
       } finally {
         setInterjecting(false)
       }
@@ -1376,9 +1404,11 @@ export function ChatPage() {
               placeholder={
                 !active
                   ? '先新建或打开一个对话'
-                  : sending
+                  : sendingHere
                     ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
-                    : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
+                    : sendingElsewhere
+                      ? '另一个对话正在跑 —— 等它跑完再发'
+                      : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
               }
               /*
                 ★★ v0.100：跑的时候**不再禁用**输入框。
@@ -1413,10 +1443,10 @@ export function ChatPage() {
               */
               loading={interjecting}
               size="sm"
-              aria-label={sending ? '插话' : '发送'}
+              aria-label={sendingHere ? '插话' : '发送'}
             >
               <Send size={14} strokeWidth={2} aria-hidden="true" />
-              {sending ? '插话' : '发送'}
+              {sendingHere ? '插话' : '发送'}
             </Button>
           </div>
           {user?.role !== 'admin' && (

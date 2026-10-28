@@ -437,11 +437,18 @@ def interject(
     "库里留下半条记录"的事故。而用户真正需要的是
     「我这句话别丢、模型下一轮能看到」—— 排队即可满足。
 
-    ## ⚠️ 它只在**当前有东西在跑**时有"插"的语义
+    ## ⚠️ 只在**当前真的有轮次在跑**时才允许插话（v1.24 修）
 
-    没有在跑的轮次时，这句话仍然会写进库，行为等价于"发一条新消息"。
-    这里不因为"没在跑"而拒绝它：拒绝会让用户以为自己的话没发出去
-    （而实际上只是没有正在跑的东西可插）。
+    改造前这里不判"有没有在跑"，理由写的是"没在跑就等价于发一条新消息"。
+    那句话是错的：**一条 user 消息本身不会起一轮**，只有 `run_turn` 会。
+    没有在跑的轮次时把话写进库，那句话永远不会被回答 —— 界面上留下一条
+    「插话 · 模型下一轮会看到」的僵尸气泡，加一个永不消失的「模型在推理…」。
+
+    实测事故：会话 A 的长任务在跑（78 秒），用户切到新建的会话 B 打「你好」
+    按 Enter → 走了 interject → 200 且落库 → B 里永远没有回复。
+
+    所以这里改成**拒绝**（409 `NO_RUNNING_TURN`），让客户端退回"正常发送"。
+    拒绝比默默写一条没人回答的消息好：前者用户能立刻看到这句话被正常回复。
     """
     session = service.get_session_or_404(
         db, session_id=session_id, created_by=_owner(identity)
@@ -453,6 +460,14 @@ def interject(
     content = payload.content.strip()
     if not content:
         raise ApiError.validation("插话不能为空。", {"content": "必填"})
+
+    latest = turn_runs.list_runs(db, session_id=session_id, limit=1)
+    if not latest or latest[0].status not in turn_runs.OPEN_STATUSES:
+        raise ApiError.conflict(
+            "NO_RUNNING_TURN",
+            "这个对话当前没有在跑的回复。请直接发送（Enter），"
+            "不要用插话 —— 插话只在模型正在回答时才有意义。",
+        )
 
     message = service.append_user_message(db, session=session, content=content)
     db.commit()
