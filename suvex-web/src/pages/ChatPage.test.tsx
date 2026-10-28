@@ -2,6 +2,7 @@
 //    RTL 自动清理只在 globals 模式下注册。漏了它的症状是「Found multiple
 //    elements」——上一个用例的 DOM 留在 document 里。
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { ensureToolsLoaded } from '@/data/tools'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,6 +21,25 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
   ③ 拿不到会话列表时给出重试路径，而不是伪装成空列表；
   ④ 中文输入法敲拼音按 Enter 不能把半截拼音发出去。
 */
+
+// ── 桩：工具 store（技能 / MCP 下拉的选项来源） ──
+//
+// ★ v1.18：对话页里有两个同名的 `loadTools`。`@/data/chat` 那个拉的是
+//   `/chat/tools`（说明文本），而 `@/data/tools` 的 `ensureToolsLoaded()`
+//   才是「技能」「MCP」两个下拉的选项来源。后者以前从来没被调用过，
+//   于是技能下拉永远显示"技能库是空的"。这里把它换成替身，就能直接
+//   断言"进页面有没有去加载"——这是那条缺陷唯一可靠的判据。
+vi.mock('@/data/tools', () => ({
+  ensureToolsLoaded: vi.fn(),
+  useTools: vi.fn(() => ({
+    mcp: { servers: [] },
+    catalog: { tools: [] },
+    skills: { total: 0, categories: [] },
+    recipes: { total: 0, recipes: [] },
+    status: 'ready',
+    error: null,
+  })),
+}))
 
 // ── 桩：auth ───────────────────────────────────────────────
 vi.mock('@/data/auth-store', () => ({
@@ -57,6 +77,10 @@ vi.mock('@/data/chat', () => ({
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
   getChatSnapshot: vi.fn(),
+  // ★ v1.19：中断轮次的账目与「继续」。同样必须逐个列出 —— 漏一项就在
+  //   页面渲染时炸 `No "listTurns" export is defined`，整组用例一起红。
+  listTurns: vi.fn(async () => []),
+  resumeTurn: vi.fn(async () => []),
 }))
 
 // `vi.mock` 会被提升，所以这里拿到的已是替身。
@@ -65,7 +89,9 @@ import {
   archiveSession,
   createSession,
   interject,
+  listTurns,
   loadSessions,
+  resumeTurn,
   sendMessage,
   useChat,
 } from '@/data/chat'
@@ -79,6 +105,8 @@ const mockedSendMessage = vi.mocked(sendMessage)
 const mockedCreateSession = vi.mocked(createSession)
 const mockedArchiveSession = vi.mocked(archiveSession)
 const mockedInterject = vi.mocked(interject)
+const mockedListTurns = vi.mocked(listTurns)
+const mockedResumeTurn = vi.mocked(resumeTurn)
 
 function session(overrides: Partial<ChatSession> = {}): ChatSession {
   return {
@@ -256,6 +284,20 @@ describe('ChatPage — 拿不到会话列表时给重试，而不是伪装成空
 
     fireEvent.click(screen.getByRole('button', { name: /重试/ }))
     await waitFor(() => expect(vi.mocked(loadSessions)).toHaveBeenCalled())
+  })
+
+  it('★ v1.18：进对话页必须去加载技能/MCP 那份 store', () => {
+    /*
+      症状是技能下拉里写着"技能库是空的"，而技能库其实有 77 篇。
+
+      根因不在渲染，在**加载入口**：页面调的是 `@/data/chat` 的
+      `loadTools()`（`/chat/tools`，说明文本），而两个下拉读的是
+      `useTools()` 的快照 —— 那个 store 只有工具页会去加载。
+      所以这条只能断言"有没有去加载"，渲染结果测不出来。
+    */
+    renderPage()
+
+    expect(vi.mocked(ensureToolsLoaded)).toHaveBeenCalled()
   })
 
   it('★ 已有列表时的失败**不抹掉列表**', () => {
@@ -954,5 +996,83 @@ describe('phaseLabel：纠偏续跑的文案', () => {
       '第 3 轮 · 正在执行 run_shell…',
     )
     expect(phaseLabel(null)).toBe('正在想…')
+  })
+})
+
+describe('ChatPage — 中断的一轮要能看见、能继续（v1.19）', () => {
+  it('★ 服务端说可接手时，页面出现「继续这一轮」', async () => {
+    /*
+      用户原话：「对话又没反应的，没有长任务持久化啊」。
+
+      这条钉的是**可见性**：后端把中断落了库、也给了接口，但页面不显示，
+      用户看到的仍然是一片空白 —— 那就等于没修。判据用稳定的
+      `data-stuck-turn`，不靠文案（文案会改，夹具不该跟着文案漂）。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [] } }),
+    )
+    mockedListTurns.mockResolvedValue([
+      {
+        id: 'turn_1',
+        sessionId: 'chat_1',
+        status: 'interrupted',
+        resumeAttempts: 1,
+        lastError: 'ClientDisconnected: 客户端断开',
+        startedAt: '2026-10-28T05:00:00Z',
+        updatedAt: '2026-10-28T05:01:00Z',
+        resumable: true,
+      },
+    ])
+
+    renderPage('/chat?session=chat_1')
+
+    const banner = await screen.findByText(/上一轮没有跑完/)
+    expect(banner).toBeTruthy()
+    expect(screen.getByText('继续这一轮')).toBeTruthy()
+    // 原因要写出来，否则用户还是不知道"为什么停了"
+    expect(screen.getByText(/客户端断开/)).toBeTruthy()
+  })
+
+  it('★ 没有可接手的轮次时不显示提示条', async () => {
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [] } }),
+    )
+    mockedListTurns.mockResolvedValue([])
+
+    const { container } = renderPage('/chat?session=chat_1')
+    // 等一拍，让 effect 里的 promise 落定 —— 否则断言会在"还没查"时通过
+    await screen.findByPlaceholderText(/说点什么/)
+    expect(container.querySelector('[data-stuck-turn]')).toBeNull()
+  })
+
+  it('★ 点「继续这一轮」会用当前 run 调 resumeTurn', async () => {
+    /*
+      只验"点了有没有发出去"。真正跑一轮的语义在服务端测
+      （`tests/chat/test_turns_api.py`）—— 前端不该假装能验模型说什么。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [] } }),
+    )
+    mockedListTurns.mockResolvedValue([
+      {
+        id: 'turn_9',
+        sessionId: 'chat_1',
+        status: 'interrupted',
+        resumeAttempts: 0,
+        lastError: null,
+        startedAt: '2026-10-28T05:00:00Z',
+        updatedAt: '2026-10-28T05:01:00Z',
+        resumable: true,
+      },
+    ])
+    mockedResumeTurn.mockResolvedValue([])
+
+    renderPage('/chat?session=chat_1')
+
+    fireEvent.click(await screen.findByText('继续这一轮'))
+
+    await waitFor(() => {
+      expect(mockedResumeTurn).toHaveBeenCalledWith('chat_1', 'turn_9')
+    })
   })
 })

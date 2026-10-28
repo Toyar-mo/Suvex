@@ -48,7 +48,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
-from app.chat import engine, sandbox as chat_sandbox, service
+from app.chat import engine, resumer, sandbox as chat_sandbox, service, turn_runs
 from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
     ChatApprovalIn,
@@ -64,6 +64,7 @@ from app.chat.schemas import (
     ChatSessionIn,
     ChatSessionOut,
     ChatSettingsIn,
+    ChatTurnRunOut,
 )
 from app.chat.stream import (
     SSE_HEADERS,
@@ -73,6 +74,7 @@ from app.chat.stream import (
 )
 from app.core.db import get_db, get_session_factory
 from app.core.errors import ApiError
+from app.core.timeutil import now_utc
 
 logger = logging.getLogger("suvex.chat")
 
@@ -291,7 +293,7 @@ async def send_message(
         raise ApiError.validation("消息不能为空。", {"content": "必填"})
 
     try:
-        result = await engine.run_turn(
+        result = await engine.run_turn_durable(
             db,
             session=session,
             content=content,
@@ -378,7 +380,7 @@ def send_message_stream(
             turn_session = service.get_session_or_404(
                 turn_db, session_id=session_id, created_by=_owner(identity)
             )
-            return await engine.run_turn(
+            return await engine.run_turn_durable(
                 turn_db,
                 session=turn_session,
                 content=content,
@@ -685,7 +687,7 @@ async def decide_approval(
         return ChatSendOut(messages=[ChatMessageOut.model_validate(message)])
 
     try:
-        result = await engine.resume_approved(
+        result = await engine.resume_approved_durable(
             db, session=session, message=message, identity=identity
         )
     except engine.ChatEngineError as exc:
@@ -696,6 +698,101 @@ async def decide_approval(
         messages=[ChatMessageOut.model_validate(m) for m in result.messages],
         awaitingApproval=result.awaiting_approval,
     )
+
+
+@router.get("/chat/sessions/{session_id}/turns", response_model=list[ChatTurnRunOut])
+def list_turns(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> list[ChatTurnRunOut]:
+    """这个会话最近几轮的执行账目（v1.19）。
+
+    ## 为什么要有这个只读端点
+
+    用户报的「对话又没反应了」在界面上原本无法自查：没有任何地方能回答
+    "刚才那轮跑完了没有、是不是断了"。有了账目，前端才能把"上一轮中断"
+    变成一条可操作的提示，而不是让用户对着空白猜。
+
+    ## 权限：`read` + 归属过滤
+
+    和所有会话子资源一致 —— 先按 `created_by` 取会话（别人的会话是 404），
+    再列它的执行记录。执行记录里没有消息正文，只有状态与脱敏后的原因。
+    """
+    service.get_session_or_404(db, session_id=session_id, created_by=_owner(identity))
+    runs = turn_runs.list_runs(db, session_id=session_id)
+    stamp = now_utc()
+    return [
+        ChatTurnRunOut(
+            id=run.id,
+            sessionId=run.session_id,
+            status=run.status,
+            resumeAttempts=run.resume_attempts,
+            lastError=run.last_error,
+            startedAt=run.started_at,
+            updatedAt=run.updated_at,
+            resumable=turn_runs.is_resumable(run, now=stamp),
+        )
+        for run in runs
+    ]
+
+
+@router.post(
+    "/chat/sessions/{session_id}/turns/{run_id}/resume",
+    response_model=ChatSendOut,
+)
+async def resume_turn(
+    session_id: str,
+    run_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> ChatSendOut:
+    """手动接着跑一轮中断的执行（v1.19）。
+
+    ## 为什么用户点一下比等后台更值得做
+
+    后台接手要等心跳超过 `STALE_SECONDS`（90 秒）才判定"没人跑了"——
+    这个延迟是**必须的**（否则会把正在跑的一轮当成死的，造出两轮并发
+    写同一个会话）。但用户在他自己眼前看着对话停了的时候，不需要等：
+    他知道那一轮已经死了。所以给一个显式入口，把 90 秒的等待变成 0。
+
+    ## 两道闸
+
+    1. `turn_runs.is_resumable` —— 只有 `running`/`interrupted` 且心跳够旧、
+       重试没用尽的行才可接手；对已完成/已放弃的轮次点继续必须明确报错，
+       而不是"看起来成功了但什么都没发生"。
+    2. `resumer.resume_one` 里的 `claim` —— 带条件的 UPDATE，防止后台循环
+       和这次点击同时捞到同一行。
+
+    ## 为什么返回 `ChatSendOut`
+
+    接手本质就是"把这一轮跑完"，产出同样是**新落库的消息**。复用同一个
+    响应形状，前端拿到后按普通一轮的处理方式追加即可，不必写第二条渲染
+    路径。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    run = turn_runs.get(db, run_id=run_id)
+    if run is None or run.session_id != session.id:
+        raise ApiError.not_found("找不到这一轮的执行记录。")
+
+    if not turn_runs.is_resumable(run, now=now_utc()):
+        raise ApiError.validation(
+            "这一轮不需要继续（可能已经跑完、或者已经放弃重试）。",
+            {"runId": f"当前状态：{run.status}，重试 {run.resume_attempts} 次"},
+        )
+
+    before = {m.id for m in service.list_messages(db, session=session)}
+    ran = await resumer.resume_one(db, run)
+    if not ran:
+        raise ApiError.validation(
+            "没能接手这一轮（可能已被后台接手）。",
+            {"runId": f"当前状态：{run.status}"},
+        )
+
+    fresh = [m for m in service.list_messages(db, session=session) if m.id not in before]
+    return ChatSendOut(messages=[ChatMessageOut.model_validate(m) for m in fresh])
 
 
 def _owner(identity: Identity) -> str:

@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -262,6 +263,29 @@ async def lifespan(_app: FastAPI):
 
     chat_sandbox.start_reaper()
 
+    # 长任务持久化（v1.19）：先把上次进程遗留的 `running` 改判 `interrupted`，
+    # 再起一个后台循环去接手。
+    #
+    # ⚠️ 顺序不能反：如果在改判之前就开始扫，那些行的心跳还是"刚写的"
+    #   （进程被杀时心跳时间戳就是最后一次写入的时刻），`is_resumable`
+    #   会因为不够 stale 而跳过它们 —— 于是永远不接手。改判之后它们至少
+    #   要等满一个心跳阈值，语义是对的：我们确实不知道它们死了多久。
+    resume_task = None
+    try:
+        from app.chat import resumer
+        from app.core.db import get_session_factory
+
+        _boot_db = get_session_factory()()
+        try:
+            _n = resumer.turn_runs.close_stale_on_startup(_boot_db)
+            if _n:
+                logger.info("有 %d 轮对话在上次进程退出时未完成，已标记为可接手", _n)
+        finally:
+            _boot_db.close()
+        resume_task = asyncio.create_task(resumer.run_forever(get_session_factory))
+    except Exception:  # noqa: BLE001 - 接手是增强项，起不来不能拦住整个服务
+        logger.warning("长任务接手循环启动失败（服务继续启动）", exc_info=True)
+
     logger.info(
         "Suvex API %s 已就绪（env=%s，前缀=%s，扫描后端=%s，并发上限=%d，CORS 源=%s）",
         settings.app_version,
@@ -276,6 +300,14 @@ async def lifespan(_app: FastAPI):
     finally:
         # 停止时**终止在跑的扫描** —— 见 `scheduler.stop` 的说明：
         # 留着它们会变成没有任何界面能终止的攻击进程。
+        if resume_task is not None:
+            # 先取消接手循环：它可能正在跑一轮模型调用，取消掉才能让下面的
+            # 沙箱销毁不撞上一个还在用容器的轮次。
+            resume_task.cancel()
+            try:
+                await resume_task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
         scheduler.stop()
         # ⚠️ CTF2 的停止语义不同：线程杀不掉，所以它只"不再启动新的 +
         #    等一会儿"。超时后残留的沙箱容器是**已知且无法在这里解决**的

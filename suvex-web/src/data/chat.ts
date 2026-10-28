@@ -422,6 +422,63 @@ export async function openSession(sessionId: string): Promise<void> {
 }
 
 // ─────────────────────────────────────────────
+// 执行账目（v1.19）：一轮到底跑完了没有
+// ─────────────────────────────────────────────
+
+/**
+ * 一轮对话的执行账目。
+ *
+ * ★ `resumable` 由**服务端**算（`turn_runs.is_resumable`），前端不要自己
+ *   按 `status` 再推一遍 —— 那会变成两份判据，且后台接手用的就是服务端
+ *   那一份，两边迟早漂开。
+ */
+export interface ChatTurnRun {
+  id: string
+  sessionId: string
+  status: 'running' | 'interrupted' | 'done' | 'failed'
+  resumeAttempts: number
+  lastError?: string | null
+  startedAt: string
+  updatedAt: string
+  resumable: boolean
+}
+
+/**
+ * 列出一个会话最近的执行账目。
+ *
+ * 失败时返回空数组而不是抛：这是**辅助信息**（一条提示），拿不到就等于
+ * "没有中断的轮次"，不该让整个会话打不开。
+ */
+export async function listTurns(sessionId: string): Promise<ChatTurnRun[]> {
+  try {
+    return await api.get<ChatTurnRun[]>(`/chat/sessions/${sessionId}/turns`)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * 手动接着跑一轮中断的执行，并把新落库的消息接进当前会话。
+ *
+ * ★ 为什么复用 `sendMessage` 那套"整轮只 commit 一次"的做法：接手本质
+ *   就是"把这一轮跑完再返回"，服务端返回的就是**新落库的消息**。前端
+ *   追加即可，不需要第二条渲染路径。
+ */
+export async function resumeTurn(
+  sessionId: string,
+  runId: string,
+): Promise<ChatMessage[]> {
+  const out = await api.post<{ messages: ChatMessage[] }>(
+    `/chat/sessions/${sessionId}/turns/${runId}/resume`,
+  )
+  const active = state.active
+  if (active && active.id === sessionId) {
+    patch({ active: { ...active, messages: [...active.messages, ...out.messages] } })
+  }
+  return out.messages
+}
+
+// ─────────────────────────────────────────────
 // 写
 // ─────────────────────────────────────────────
 

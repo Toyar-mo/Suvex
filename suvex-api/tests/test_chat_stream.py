@@ -504,7 +504,10 @@ async def test_a_streaming_truncated_reply_gets_the_truncation_reminder(
         emit=recorder,
     )
 
-    assert len(gateway.seen) == 2, "被切断的回复没有被推"
+    # ★ v1.19：`truncated` 是硬信号，被切断的回复每次都被推 —— 这个夹具
+    #   每条回复都声称被切断，所以轮数 >= 2。要守的是第一次纠偏喂的是
+    #   **截断**那句（不是格式那句）。
+    assert len(gateway.seen) >= 2, "被切断的回复没有被推"
     fed = [m.get("content") or "" for m in gateway.seen[1]]
     assert any("达到输出长度上限被切断" in c for c in fed)
 
@@ -603,7 +606,13 @@ async def test_a_truncated_streaming_nudge_says_truncation_not_format(
     )
 
     resumes = _resume_phases(rec)
-    assert len(resumes) == 1, f"没有推 resume 帧：{rec.of(EVENT_PHASE)}"
+    # ★ v1.19：被切断的回复**每次**都会被推（`nudge.should_nudge` 里
+    #   `truncated` 是硬信号），所以这个夹具"每条回复都声称被切断"时会推
+    #   两次而不是一次。这里断言的不变量是**原因标签**：只要推了，就必须
+    #   报 truncation，绝不能报成 format —— 界面文案据此区分
+    #   「在让它把话说完」与「在让它按格式重写」。
+    assert resumes, f"没有推 resume 帧：{rec.of(EVENT_PHASE)}"
+    assert {r["reason"] for r in resumes} == {"truncation"}, resumes
     assert resumes[0]["reason"] == "truncation", (
         "被切断却报了 format —— 界面会说「正在让它把话说完」而不是「被截断」"
     )

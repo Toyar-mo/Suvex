@@ -53,6 +53,8 @@ from sqlalchemy.orm import Session
 from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
 from app.chat.models import ChatSession
+from app.chat import nudge as nudge_policy
+from app.chat import turn_runs as turn_run_store
 from app.chat.prompts import (
     CHAT_TOOL_NAMES,
     CONSEQUENTIAL_TOOL_NAMES,
@@ -1277,6 +1279,8 @@ async def run_turn(
     attachment_ids: list[str] | None = None,
     explicit_tools: list[str] | None = None,
     emit: Emit | None = None,
+    turn_run: Any = None,
+    resume_from: Any = None,
 ) -> ChatTurnResult:
     """跑一轮对话。
 
@@ -1329,7 +1333,7 @@ async def run_turn(
     files: list[tuple[str, str]] = []
     # 交接给沙箱的附件：`(显示名, 容器内路径)`。
     handed: list[tuple[str, str]] = []
-    if attachment_ids:
+    if attachment_ids and resume_from is None:
         files = chat_attachments.read_text(session_id=session.id, attachment_ids=attachment_ids)
         # ★ v0.109：不再「用完即删」。
         #
@@ -1360,15 +1364,19 @@ async def run_turn(
     #   拆成两列之后：界面只渲染 `content`（用户原话），模型上下文由
     #   `_render_history` 拼回 `content + model_extra`，**逐字节不变**。
     attachments_extra = _render_attachments(files, handed=handed)
-    user_message = chat_service.append_user_message(
-        db,
-        session=session,
-        content=content,
-        model_extra=attachments_extra or None,
-    )
-    result.messages.append(user_message)
-    db.commit()
-    await _emit_message(emit, user_message)
+    # ★ v1.19：从断点接手时**不再追加**一条用户消息 —— 那一轮的用户提问
+    #   早就在历史里了（它在第一轮就落库了）。再追加一条会变成"用户又说
+    #   了一遍"，把上下文搞成两份。
+    if resume_from is None:
+        user_message = chat_service.append_user_message(
+            db,
+            session=session,
+            content=content,
+            model_extra=attachments_extra or None,
+        )
+        result.messages.append(user_message)
+        db.commit()
+        await _emit_message(emit, user_message)
 
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, provider_id), db)
@@ -1385,6 +1393,17 @@ async def run_turn(
     #:   东西（纠偏 vs 工具往返）。混在一起会让"提醒了两次"吃掉两个工具
     #:   轮次，于是真正需要跑工具的那一轮反而没预算了。
     nudges_used = 0
+
+    if resume_from is not None:
+        nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
+        tools_used = int(getattr(resume_from, "tools_used", 0) or 0)
+
+    #: 这一轮**真正执行过**几次工具（v1.19）。
+    #:
+    #: 它是纠偏判据里最重要的一条结构信号：跑过工具的轮次突然"只写一句
+    #: 人话"就收尾，绝大多数是没做完；而整轮零工具的纯问答不该被推。
+    #: 见 `app/chat/nudge.py`。
+    tools_used = 0
 
     #: 下一轮要往上下文里补的一句提醒（一次性）。
     #:
@@ -1438,8 +1457,22 @@ async def run_turn(
             _log.warning("对话调模型失败", exc_info=True)
             raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc
 
+        if turn_run is not None:
+            turn_run_store.heartbeat(
+                db,
+                turn_run,
+                round_index=round_index,
+                nudges_used=nudges_used,
+                tools_used=tools_used,
+            )
+            db.commit()
+
         # ★ 落库给用户看的是**剥掉动作之后**的正文。理由见 `_narration_before_action`。
         raw_text = reply.text or ""
+        # ★ v1.19：先摘掉开头的 `FINAL:`。必须在 `_narration_before_action`
+        #   之前 —— 那个函数复用内核的 `ACTION|FINAL` 正则，会把
+        #   `FINAL: 解出来了` 整条截成空串，再落成"模型没有产出内容"的占位语。
+        raw_text, said_final = nudge_policy.split_final(raw_text)
         text = _narration_before_action(raw_text)
         actions = [] if at_limit else parse_actions(raw_text)
         reasoning = getattr(reply, "reasoning", None)
@@ -1543,10 +1576,15 @@ async def run_turn(
             #
             # 三层都过了才推，且把**为什么**告诉模型（被切断 vs 格式错），
             # 见 `render_format_reminder` / `render_truncation_reminder`。
-            if (
-                not at_limit
-                and nudges_used < MAX_NARRATION_NUDGES
-                and _looks_unfinished(text)
+            if nudge_policy.should_nudge(
+                at_limit=at_limit,
+                said_final=said_final,
+                actions=actions,
+                truncated=_is_truncated(reply),
+                tools_used=tools_used,
+                text=text,
+                nudges_used=nudges_used,
+                max_nudges=MAX_NARRATION_NUDGES,
             ):
                 nudges_used += 1
                 truncated = _is_truncated(reply)
@@ -1607,6 +1645,7 @@ async def run_turn(
             await _emit_phase(emit, "tool", round_index, tool=name)
 
             output, failed = await _execute_tool(ctx, name, args)
+            tools_used += 1
             tool_message = chat_service.append_tool_message(
                 db,
                 session=session,
@@ -1629,6 +1668,7 @@ async def resume_approved(
     message: Any,
     identity: Any,
     gateway: Any = None,
+    turn_run: Any = None,
 ) -> ChatTurnResult:
     """执行一条刚刚被批准的工具调用，然后**接着跑这一轮**。
 
@@ -1678,6 +1718,7 @@ async def resume_approved(
     # 用户点完"确认"，模型说一句"好的，我来跑"就没了 —— 而这个形态
     # 恰恰更容易出现，因为刚批准的工具结果正要喂回去，它常常先播报一句。
     nudges_used = 0
+    tools_used = 0
     pending_reminder: str | None = None
 
     for round_index in range(MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES):
@@ -1705,7 +1746,21 @@ async def resume_approved(
             _log.warning("对话调模型失败（审批后）", exc_info=True)
             raise ChatEngineError(f"调用模型失败：{type(exc).__name__}。") from exc
 
+        if turn_run is not None:
+            turn_run_store.heartbeat(
+                db,
+                turn_run,
+                round_index=round_index,
+                nudges_used=nudges_used,
+                tools_used=tools_used,
+            )
+            db.commit()
+
         raw_text = reply.text or ""
+        # ★ v1.19：先摘掉开头的 `FINAL:`。必须在 `_narration_before_action`
+        #   之前 —— 那个函数复用内核的 `ACTION|FINAL` 正则，会把
+        #   `FINAL: 解出来了` 整条截成空串，再落成"模型没有产出内容"的占位语。
+        raw_text, said_final = nudge_policy.split_final(raw_text)
         text = _narration_before_action(raw_text)
         actions = [] if at_limit else parse_actions(raw_text)
         reasoning = getattr(reply, "reasoning", None)
@@ -1743,10 +1798,15 @@ async def resume_approved(
         if not actions:
             # ★ v1.13：与 `run_turn` 同一条判据顺序（见那边的长注释）：
             #   到上限 / 用尽纠偏 / `_looks_unfinished` —— 三者都过了才推。
-            if (
-                not at_limit
-                and nudges_used < MAX_NARRATION_NUDGES
-                and _looks_unfinished(text)
+            if nudge_policy.should_nudge(
+                at_limit=at_limit,
+                said_final=said_final,
+                actions=actions,
+                truncated=_is_truncated(reply),
+                tools_used=tools_used,
+                text=text,
+                nudges_used=nudges_used,
+                max_nudges=MAX_NARRATION_NUDGES,
             ):
                 nudges_used += 1
                 pending_reminder = (
@@ -1768,6 +1828,7 @@ async def resume_approved(
                 return result
 
             tool_output, tool_failed = await _execute_tool(ctx, name, args)
+            tools_used += 1
             tool_message = chat_service.append_tool_message(
                 db,
                 session=session,
@@ -1782,13 +1843,119 @@ async def resume_approved(
     return result
 
 
+# ── v1.19：把"一轮"包成可持久化、可接手的东西 ─────────────────────
+
+
+#: 中断时写进对话里的那句话。
+#:
+#: 为什么必须**落一条消息**而不是只写日志：改造前用户看到的是"半句话 +
+#: 什么都不发生"，无从判断是卡了、断了、还是模型不想说了。一条说明至少
+#: 告诉他"这一轮断了、我在后台接着做、也可以催我一句"。
+INTERRUPTED_NOTE = "（这一轮中途断了：{reason}。我在后台接着做；也可以发「继续」催我一下。）"
+
+
+async def _run_guarded(
+    db: Session,
+    *,
+    session: ChatSession,
+    kind: str,
+    call,
+) -> ChatTurnResult:
+    """跑一轮并把执行状态落库；失败时留下可接手的状态与一句说明。
+
+    `kind` 只用于日志（"turn" / "resume"），不参与判据。
+    """
+    run = turn_run_store.start(db, session_id=session.id)
+    db.commit()
+    try:
+        result = await call(run)
+    except BaseException as exc:  # noqa: BLE001 - 见下
+        # ⚠️ 接 `BaseException` 是刻意的：客户端断开时 `stream_turn` 会
+        #   `task.cancel()`，抛的是 `CancelledError` —— 那恰恰是**最常
+        #   见**的"又没反应"，如果只接 `Exception` 就把它漏成"没人管的
+        #   running 行"，后台永远不接手。
+        reason = turn_run_store.redact(f"{type(exc).__name__}: {exc}")
+        try:
+            db.rollback()
+            turn_run_store.finish_from_error(db, run, reason=reason)
+            note = chat_service.append_assistant_message(
+                db, session=session, content=INTERRUPTED_NOTE.format(reason=reason)
+            )
+            db.commit()
+        except Exception:  # noqa: BLE001 - 连记账都失败就别再抛新的
+            _log.warning("记录中断状态失败（%s）", kind, exc_info=True)
+        raise
+    turn_run_store.finish(db, run, status="done")
+    db.commit()
+    return result
+
+
+async def run_turn_durable(
+    db: Session,
+    *,
+    session: ChatSession,
+    content: str,
+    identity: Any,
+    provider_id: str | None = None,
+    gateway: Any = None,
+    attachment_ids: list[str] | None = None,
+    explicit_tools: list[str] | None = None,
+    emit: Emit | None = None,
+    resume_from: Any = None,
+) -> ChatTurnResult:
+    """`run_turn` 的持久化外壳（生产路径都走这个）。"""
+
+    async def call(run: Any) -> ChatTurnResult:
+        return await run_turn(
+            db,
+            session=session,
+            content=content,
+            identity=identity,
+            provider_id=provider_id,
+            gateway=gateway,
+            attachment_ids=attachment_ids,
+            explicit_tools=explicit_tools,
+            emit=emit,
+            turn_run=run,
+            resume_from=resume_from,
+        )
+
+    return await _run_guarded(db, session=session, kind="turn", call=call)
+
+
+async def resume_approved_durable(
+    db: Session,
+    *,
+    session: ChatSession,
+    message: Any,
+    identity: Any,
+    gateway: Any = None,
+) -> ChatTurnResult:
+    """`resume_approved` 的持久化外壳。"""
+
+    async def call(run: Any) -> ChatTurnResult:
+        return await resume_approved(
+            db,
+            session=session,
+            message=message,
+            identity=identity,
+            gateway=gateway,
+            turn_run=run,
+        )
+
+    return await _run_guarded(db, session=session, kind="resume", call=call)
+
+
 __all__ = [
     "HISTORY_MESSAGE_LIMIT",
     "HISTORY_TOOL_CHARS",
+    "INTERRUPTED_NOTE",
     "MAX_MOUNTED_SKILL_CHARS",
     "MAX_TOOL_ROUNDS",
     "ChatEngineError",
     "ChatTurnResult",
     "resume_approved",
+    "resume_approved_durable",
     "run_turn",
+    "run_turn_durable",
 ]

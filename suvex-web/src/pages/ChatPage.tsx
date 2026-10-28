@@ -45,6 +45,9 @@ import {
   type ChatMessage,
   type ChatSession,
   type ChatSessionDetail,
+  listTurns,
+  resumeTurn,
+  type ChatTurnRun,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
 import {
@@ -56,7 +59,7 @@ import {
 import { fetchSessionFindings, fetchSessionMessages } from '@/data/session-insight'
 import type { FindingListItem } from '@/data/finding'
 import { useProjectedProviders } from '@/data/settings-store'
-import { useTools } from '@/data/tools'
+import { ensureToolsLoaded, useTools } from '@/data/tools'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { api, errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -188,6 +191,9 @@ export function ChatPage() {
 
   const [draft, setDraft] = useState('')
   const [showList, setShowList] = useState(false)
+  // v1.19：服务端说"这一轮可以继续"时，把那个 run 存下来渲染提示条。
+  const [stuckTurn, setStuckTurn] = useState<ChatTurnRun | null>(null)
+  const [resuming, setResuming] = useState(false)
 
   /*
     ★ 从 URL 派生"要打开哪个会话"，而不是在 effect 里 setState。
@@ -200,7 +206,16 @@ export function ChatPage() {
 
   useEffect(() => {
     void loadSessions()
+    // ⚠️ 这里有两个同名的 `loadTools`，它们拉的是**不同的东西**：
+    //   · `@/data/chat` 的 `loadTools()` → `GET /chat/tools`，是给消息区做“这个模型能干什么”的说明文本；
+    //   · `@/data/tools` 的 `ensureToolsLoaded()` → `GET /kernel/{skills,mcp-servers}`，才是下面「技能」「MCP」两个下拉的选项来源。
+    //
+    // ★ v1.18 修的是后者从来没被调用过：`skillOptions` / `mcpOptions` 读的是 `useTools()` 的快照，
+    //   而那个 store 只有工具页会去加载。于是对话页的技能下拉永远是空的（显示“技能库是空的”），
+    //   而技能库其实有 77 篇。这类“配了但是没接线”的缺陷在界面上只表现为一句空提示，
+    //   很难联想到是加载入口漏了。
     void loadTools()
+    void ensureToolsLoaded()
     // ★ 人格列表与工具列表分开拉：`loadPersonas` 失败**不挂 error**
     //   （人格是可选功能，读不到只意味着下拉是空的），而 `loadTools`
     //   失败会让整页进错误态。两者的容错级别不同，所以不能并成一个。
@@ -370,6 +385,33 @@ export function ChatPage() {
    * 改造前这里写的是 `!sending` —— 于是跑的时候输入框被禁用，
    * 用户的原话「正在想的时候不能插话」说的就是这个。
    */
+  /*
+    ★ v1.19：进会话时问一次"上一轮是不是断在半路"。
+
+    依赖里带 `sending` 是刻意的：一轮**刚结束**时要复查一次。中断的那一轮
+    服务端会落成 `interrupted`，但前端手上没有那个信号 —— 只有等这一轮
+    结束后再问一次，提示条才会在用户眼前出现，而不是要等刷新页面。
+
+    拿不到（网络错/接口 404）就当没有：`listTurns` 内部已经吞掉了异常。
+  */
+  useEffect(() => {
+    const sessionId = active?.id
+    let alive = true
+    if (!sessionId) {
+      setStuckTurn(null)
+      return () => {
+        alive = false
+      }
+    }
+    void listTurns(sessionId).then((runs) => {
+      if (!alive) return
+      setStuckTurn(runs.find((run) => run.resumable) ?? null)
+    })
+    return () => {
+      alive = false
+    }
+  }, [active?.id, sending])
+
   const canSend = draft.trim().length > 0 && active !== null
 
   async function handleNew() {
@@ -416,6 +458,30 @@ export function ChatPage() {
     const ok = await sendMessage(active.id, content, undefined, hinted)
     if (!ok) setDraft(content)
     setMention(null)
+  }
+
+  /**
+   * 手动接着跑一轮中断的对话（v1.19）。
+   *
+   * ★ 为什么要有这个按钮，而不是只靠后台自动接手：后台要等心跳过期
+   *   （90 秒）才敢判定"那一轮没人跑了"—— 那个延迟是必须的，否则会把
+   *   正在跑的一轮当成死的，造出两轮并发写同一个会话。但用户**眼看着**
+   *   对话停住的时候，他知道那一轮已经死了，不需要等 90 秒。
+   *
+   * 失败时不把提示条收起来：服务端状态没变，用户还能再点一次；
+   * 收起来反而会让人以为"点成功了但没反应"。
+   */
+  async function handleResume() {
+    if (!active || !stuckTurn || resuming) return
+    setResuming(true)
+    try {
+      await resumeTurn(active.id, stuckTurn.id)
+      setStuckTurn(null)
+    } catch {
+      /* 保持提示条，让用户能重试 */
+    } finally {
+      setResuming(false)
+    }
   }
 
   /**
@@ -1117,6 +1183,28 @@ export function ChatPage() {
             <p role="alert" className="text-2xs text-signal-risk">
               {errorMessage(error)}
             </p>
+          </div>
+        )}
+
+        {/* 中断提示条（v1.19）：服务端说这一轮还能继续，就把"继续"交到用户手上 */}
+        {stuckTurn && (
+          <div
+            className="shrink-0 border-t border-signal-warn/30 bg-signal-warn/5 px-3 py-1.5"
+            data-stuck-turn={stuckTurn.id}
+          >
+            <p className="text-2xs text-signal-warn">
+              上一轮没有跑完
+              {stuckTurn.lastError ? `（${stuckTurn.lastError}）` : ''}
+              ，可以接着做。
+            </p>
+            <button
+              type="button"
+              className="mt-1 rounded border border-signal-warn/40 px-2 py-0.5 text-2xs text-signal-warn hover:bg-signal-warn/10 disabled:opacity-50"
+              disabled={resuming || sending}
+              onClick={() => void handleResume()}
+            >
+              {resuming ? '正在接着跑…' : '继续这一轮'}
+            </button>
           </div>
         )}
 

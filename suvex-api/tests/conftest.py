@@ -795,6 +795,28 @@ def _no_sweep_orphan_sandboxes() -> int:
 _no_sweep_orphan_sandboxes._is_test_stub = True  # type: ignore[attr-defined]
 
 
+async def _chat_resumer_stays_idle(*_args: object, **_kwargs: object) -> None:
+    """替身：测试里**不真跑**对话轮的接手循环（v1.19）。
+
+    ## 为什么必须替身掉
+
+    lifespan 会 `asyncio.create_task(resumer.run_forever(...))`，而它每 10 秒
+    扫一次"心跳过期但没结束"的轮次并**真的接着跑**（那意味着真实调用模型）。
+    而本仓库有一批用例**故意**造出 `interrupted` / `running` 的行来测判据 ——
+    后台循环一跑起来就会把它们 claim 走，测试当场变成"有时通过"。
+
+    这与 `_no_sweep_orphan_sandboxes` 是同一条纪律：**接线必须被真实走过**
+    （lifespan 里那行 `create_task` 照旧执行、日志照打），但**行为必须静音**。
+    """
+
+
+def _install_noop_resumer(monkeypatch: pytest.MonkeyPatch) -> None:
+    """把接手循环换成空协程（必须在 `TestClient(app)` 进入**之前**调用）。"""
+    from app.chat import resumer as chat_resumer
+
+    monkeypatch.setattr(chat_resumer, "run_forever", _chat_resumer_stays_idle)
+
+
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     """带 lifespan 的测试客户端。
@@ -838,6 +860,8 @@ def client(monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     from app.main import app
 
     monkeypatch.setattr(ctf2_runner, "sweep_orphan_sandboxes", _no_sweep_orphan_sandboxes)
+    # ★ v1.19：对话轮的接手循环同样只许接线、不许真跑（见 _chat_resumer_stays_idle）
+    _install_noop_resumer(monkeypatch)
 
     with TestClient(app) as test_client:
         stop_ctf2_background_loops()

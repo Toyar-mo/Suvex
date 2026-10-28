@@ -117,15 +117,22 @@ export function PersonaDialog({
 /**
  * 选模型接入点的下拉。
  *
- * ## 为什么用一个原生 `<select>` 而不是自绘下拉
+ * ## 为什么从原生 `<select>` 改成自绘
  *
- * 行为上它就是一个单选：一个 id。原生控件免费带来键盘导航、
- * 输入法、读屏器支持、以及"点外面关掉"。自绘一个要在三处
- * 处理焦点，而收益只是外观。本项目的设计纪律是"能借就不自己写"。
+ * v0.94 原本用的是原生 `<select>`：行为上它就是一个单选，原生控件
+ * 免费带来键盘导航、输入法、读屏器支持，符合"能借就不自己写"。
  *
- * ⚠️ 但外观还是统一处理的（`appearance-none` + 自定义箭头）：
- *   各浏览器的原生 select 长得不一样，直接放着会破坏这一页的密度。
+ * 但它的**展开层是操作系统画的**：`appearance-none` 只能改收起状态的
+ * 那个框，改不了弹出来的列表（系统蓝色的选中条、系统字体、方角）。
+ * 它左边紧挨着的「技能」「MCP」是我们自己画的浮层（圆角、主题色、
+ * 悬停底色），并排放着两种弹层，一眼就看得出不是一套东西 ——
+ * 用户的原话是"这个 ui 一点割裂"。
+ *
+ * 所以这里改成与 `MultiSelect` **同一套骨架**：同样的按钮样式、
+ * 同样的浮层容器与选项行、同样的"点外面 / Esc 关掉"。差别只在
+ * 单选（点一条即生效并关闭）而不是勾选。
  */
+
 export function ProviderSelect({
   providers,
   value,
@@ -138,35 +145,99 @@ export function ProviderSelect({
   onChange: (providerId: string | null) => void
   disabled?: boolean
 }) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+
+  // 点外面 / Esc 关掉。与 `MultiSelect` 同一套（用 `pointerdown`
+  // 而不是 `click`：触摸设备上 click 要等 300ms，浮层已经画出来了，
+  // 用户会觉得它卡了一下）。
+  useEffect(() => {
+    if (!open) return
+    function onDown(event: PointerEvent) {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const items = [
+    { id: '', label: '平台默认模型' },
+    ...providers.map((provider) => ({ id: provider.id, label: provider.label })),
+  ]
+  const current = items.find((item) => item.id === (value ?? ''))?.label ?? '平台默认模型'
+
   return (
-    <label className="relative flex items-center gap-1">
-      <span className="sr-only">模型接入点</span>
-      <Bot size={12} strokeWidth={2} className="shrink-0 text-ink-faint" aria-hidden="true" />
-      <select
-        value={value ?? ''}
-        onChange={(e) => onChange(e.target.value || null)}
+    <div ref={boxRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
         disabled={disabled}
+        title="用哪个模型接入点"
         className={cn(
-          'appearance-none rounded-xs border border-line bg-surface-sunken py-1 pl-1.5 pr-5',
-          'text-2xs text-ink-muted transition-ui duration-fast',
-          'hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40',
+          'flex items-center gap-1 rounded-xs border px-1.5 py-1 text-2xs',
+          'transition-ui duration-fast',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
+          value
+            ? 'border-accent/50 bg-accent/5 text-ink'
+            : 'border-line bg-surface-sunken text-ink-muted hover:border-line-strong',
         )}
+        aria-expanded={open}
+        aria-haspopup="listbox"
       >
-        <option value="">平台默认模型</option>
-        {providers.map((provider) => (
-          <option key={provider.id} value={provider.id}>
-            {provider.label}
-          </option>
-        ))}
-      </select>
-      <ChevronDown
-        size={10}
-        strokeWidth={2}
-        className="pointer-events-none absolute right-1.5 text-ink-faint"
-        aria-hidden="true"
-      />
-    </label>
+        <span className="text-ink-faint" aria-hidden="true">
+          <Bot size={12} strokeWidth={2} />
+        </span>
+        <span className="max-w-[11rem] truncate">{current}</span>
+        <ChevronDown size={10} strokeWidth={2} aria-hidden="true" />
+      </button>
+
+      {open && (
+        <div
+          role="listbox"
+          className={cn(
+            'absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto',
+            'rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
+          )}
+        >
+          {items.map((item) => {
+            const active = (value ?? '') === item.id
+            return (
+              <button
+                key={item.id || '__default'}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(item.id || null)
+                  setOpen(false)
+                }}
+                className={cn(
+                  'flex w-full items-center gap-1.5 rounded-xs px-1.5 py-1 text-left',
+                  'text-2xs transition-ui duration-fast hover:bg-surface-sunken',
+                  active ? 'text-ink' : 'text-ink-muted',
+                )}
+              >
+                <Check
+                  size={10}
+                  strokeWidth={2.5}
+                  className={cn('shrink-0', active ? 'text-accent' : 'invisible')}
+                  aria-hidden="true"
+                />
+                <span className="truncate">{item.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </div>
   )
 }
 

@@ -411,6 +411,92 @@ class ChatMessage(Base):
         return f"<ChatMessage {self.session_id!r}#{self.seq} {self.role} n={len(self.content)}>"
 
 
+#: 一轮对话的执行状态（长任务持久化，v1.19）。
+#:
+#: | 值 | 含义 |
+#: |---|---|
+#: | `running` | 正在跑。`heartbeat_at` 每轮刷新 |
+#: | `done` | 正常收尾（模型说完了 / 到工具上限 / 等审批） |
+#: | `failed` | 抛异常死了。`last_error` 记原因，**用户界面上也看得到** |
+#: | `interrupted` | 进程重启时还挂在 `running` 的那些 —— 属于"没人接手了" |
+TURN_RUN_STATUSES = ("running", "done", "failed", "interrupted")
+
+
+class ChatTurnRun(Base):
+    """一轮对话的执行记录 —— 长任务持久化的**唯一事实来源**（v1.19）。
+
+    ## 为什么需要这张表（用户原话：「没有长任务持久化啊」）
+
+    改造前，"这一轮跑到哪儿了"只存在于**一个 Python 栈帧里**：`run_turn`
+    的局部变量（`round_index` / `nudges_used` / `pending_reminder`）。
+    一旦这个栈帧消失 —— 进程重启、请求断开、代码抛异常 —— 那一轮的进度
+    就**永久丢失**，而库里留下的只是半句话。界面上表现为"又没反应"，
+    用户唯一的补救是再打一次「继续」，而那等于从零开始。
+
+    持久化之后：每一轮往这张表写一次心跳，进程重启后后台的 resume 循环
+    扫到"心跳停了但状态还是 running"的行，就从 `round_index` 接着跑。
+
+    ## 为什么不复用 `chat_messages`
+
+    消息是**给用户看的产物**，这张表是**执行状态**。混在一起会让
+    「界面该渲染几条消息」和「这一轮跑到第几轮」互相耦合 —— 而后者
+    恰恰是崩溃时会不一致的那个东西。
+
+    ## 为什么状态里要有 `interrupted`
+
+    进程重启时无法区分"正在跑"和"跑到一半被打断"（内存里的栈帧一起没了）。
+    启动时把遗留的 `running` 一律改判 `interrupted`，是为了让"谁该被接手"
+    这件事有确定的判据，而不是去猜 `heartbeat_at` 有多旧。
+    """
+
+    __tablename__ = "chat_turn_runs"
+    __table_args__ = (
+        CheckConstraint(
+            f"status IN ({', '.join(repr(s) for s in TURN_RUN_STATUSES)})",
+            name="chat_turn_run_status_valid",
+        ),
+        # 后台扫描只关心"还没结束"的行，所以索引带上 status。
+        Index("ix_chat_turn_runs_status_heartbeat", "status", "heartbeat_at"),
+        Index("ix_chat_turn_runs_session", "session_id", "started_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="running")
+
+    #: 已经跑到第几轮（0 基）。resume 从这里接着跑。
+    round_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 这一轮用掉了几次纠偏（见 `app/chat/nudge.py`）。resume 要接着算预算。
+    nudges_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 这一轮真正执行过几次工具。判"是不是任务型轮次"用。
+    tools_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: 已经被 resume 过几次。到上限就放弃，避免一个坏会话反复重跑烧钱。
+    resume_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    #: 死掉的原因（异常类型 + 一句话）。对用户可见，所以要脱敏。
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    heartbeat_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return (
+            f"<ChatTurnRun {self.session_id!r} {self.status} "
+            f"round={self.round_index} tries={self.resume_attempts}>"
+        )
+
+
 __all__ = [
     "APPROVAL_STATUSES",
     "CHAT_PERSONAS",
@@ -418,6 +504,8 @@ __all__ = [
     "MAX_MESSAGE_CHARS",
     "MAX_PROJECT_CHARS",
     "MAX_TITLE_CHARS",
+    "TURN_RUN_STATUSES",
     "ChatMessage",
     "ChatSession",
+    "ChatTurnRun",
 ]

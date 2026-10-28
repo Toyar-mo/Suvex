@@ -277,6 +277,30 @@ class ChatRenameIn(StrictModel):
     title: Annotated[str, Field(max_length=MAX_TITLE_CHARS)]
 
 
+class ChatTurnRunOut(CamelModel):
+    """一轮执行的账目（v1.19）。
+
+    ## 为什么把 `lastError` 也给界面
+
+    用户报的是「对话又没反应了」—— 界面原来对这种状态的表达是**空白**。
+    把原因写出来，用户至少能判断"是我网断了"还是"平台挂了"，而不是
+    只能反复刷新。文案已经在服务端 `turn_runs.redact()` 里做过脱敏与
+    截断，这里不再二次加工。
+    """
+
+    id: str
+    sessionId: str
+    status: str
+    resumeAttempts: int
+    lastError: str | None = None
+    startedAt: IsoDateTime
+    updatedAt: IsoDateTime
+
+    #: 现在点"继续"有没有意义。前端据此决定是否显示那个按钮 ——
+    #: 判断放在服务端，避免前后端各写一份"什么算可接手"而慢慢漂开。
+    resumable: bool
+
+
 class ChatPinIn(StrictModel):
     """置顶/取消置顶。
 
