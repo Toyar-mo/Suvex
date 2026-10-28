@@ -138,7 +138,7 @@ export function GroupNameDialog({
           </p>
         )}
         <p className="text-2xs text-ink-faint">
-          分组不是文件夹：一条对话只在**一个**分组里，移动会覆盖原来的分组。
+          分组不是文件夹：一条对话只在一个分组里，移动会覆盖原来的分组。
         </p>
       </div>
     </Modal>
