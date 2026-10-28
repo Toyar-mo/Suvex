@@ -1,19 +1,19 @@
 /**
- * 「查看攻击链」抽屉：把一条对话的消息序列按时间轴摊开。
+ * 「查看攻击链」弹窗：把一条对话的消息序列按时间轴摊开。
  *
  * 设计取舍见 `@/lib/attackChain` 的模块注释：这里只渲染**有确定依据**的
  * 步骤，不猜攻击阶段、不做图布局。
  *
- * ⚠️ 数据由调用方传入（消息已在页面里），抽屉自己**不取数**。这样打开它是
- * 瞬时的，也不会出现"抽屉里看到 3 步、聊天记录里 5 条"这种两份数据源打架。
+ * ⚠️ 数据由调用方传入（消息已在页面里），弹窗自己**不取数**。这样打开它是
+ * 瞬时的，也不会出现"弹窗里看到 3 步、聊天记录里 5 条"这种两份数据源打架。
  */
 
 import { cn } from '@/lib/cn'
-import { Drawer } from '@/components/ui/Drawer'
+import { Modal } from '@/components/ui/Modal'
 import { buildAttackChain, summarizeChain, type AttackStep } from '@/lib/attackChain'
 import type { ChatMessage } from '@/data/chat'
 
-export interface SessionAttackChainDrawerProps {
+export interface SessionAttackChainModalProps {
   open: boolean
   onClose: () => void
   sessionTitle: string
@@ -30,29 +30,28 @@ const KIND_TONE: Record<AttackStep['kind'], { dot: string; text: string; label: 
   answer: { dot: 'bg-signal-ok', text: 'text-ink', label: '回答' },
 }
 
-export function SessionAttackChainDrawer({
+export function SessionAttackChainModal({
   open,
   onClose,
   sessionTitle,
   messages,
   loading = false,
   error = null,
-}: SessionAttackChainDrawerProps) {
+}: SessionAttackChainModalProps) {
   const steps = buildAttackChain(messages)
   const summary = summarizeChain(steps)
 
   return (
-    <Drawer
+    <Modal
       open={open}
       onClose={onClose}
-      labelledBy="attack-chain-title"
-      title={<span id="attack-chain-title">攻击链</span>}
-      titleAside={
-        <span className="text-2xs text-ink-faint">
-          {summary.asks} 问 · {summary.tools} 次工具
-          {summary.failed > 0 ? ` · ${summary.failed} 次失败` : ''}
-        </span>
-      }
+      widthClass="max-w-3xl"
+      /*
+        ★ `title` 保持**纯字符串**：`Modal` 只在 title 是字符串时才设
+          `aria-label`，换成 ReactNode 会让弹窗失去可访问名（读屏器读不出
+          "这是什么弹窗"）。摘要就写在括号里，一行说清。
+      */
+      title={`攻击链（${summary.asks} 问 · ${summary.tools} 次工具${summary.failed > 0 ? ` · ${summary.failed} 次失败` : ''}）`}
     >
       <div className="space-y-3">
         <p className="text-2xs text-ink-faint">
@@ -118,6 +117,6 @@ export function SessionAttackChainDrawer({
           <p className="text-2xs text-ink-faint">用到的工具：{summary.toolNames.join('、')}</p>
         )}
       </div>
-    </Drawer>
+    </Modal>
   )
 }

@@ -1,8 +1,8 @@
 /**
- * 「查看漏洞」抽屉：列出**这条对话关联到的**漏洞。
+ * 「查看漏洞」弹窗：列出**这条对话关联到的**漏洞。
  *
  * ⚠️ 它不取数。取数在 `data/session-insight.ts` 里，由调用方（ChatPage）
- * 在菜单被点时触发 —— 这样打开抽屉不会出现 loading 闪烁两遍，也避免了
+ * 在菜单被点时触发 —— 这样打开弹窗不会出现 loading 闪烁两遍，也避免了
  * 在 effect 里同步 setState（本项目 lint 明确禁止 `set-state-in-effect`）。
  *
  * 空态有三种，必须分开说，否则用户会把"没有"读成"坏了"：
@@ -12,12 +12,12 @@
  */
 
 import { Link } from 'react-router-dom'
-import { Drawer } from '@/components/ui/Drawer'
+import { Modal } from '@/components/ui/Modal'
 import { SeverityBadge, StatusBadge } from '@/components/findings/FindingBadges'
 import type { FindingListItem } from '@/data/finding'
 import { scanFindingsHref } from '@/data/session-insight'
 
-export interface SessionFindingsDrawerProps {
+export interface SessionFindingsModalProps {
   open: boolean
   onClose: () => void
   sessionTitle: string
@@ -28,7 +28,7 @@ export interface SessionFindingsDrawerProps {
   onRetry?: () => void
 }
 
-export function SessionFindingsDrawer({
+export function SessionFindingsModal({
   open,
   onClose,
   sessionTitle,
@@ -37,18 +37,14 @@ export function SessionFindingsDrawer({
   loading,
   error,
   onRetry,
-}: SessionFindingsDrawerProps) {
+}: SessionFindingsModalProps) {
   return (
-    <Drawer
+    <Modal
       open={open}
       onClose={onClose}
-      labelledBy="session-findings-title"
-      title={<span id="session-findings-title">关联漏洞</span>}
-      titleAside={
-        <span className="text-2xs text-ink-faint">
-          {loading ? '载入中…' : `${items.length} 条 · ${scanIds.length} 个扫描`}
-        </span>
-      }
+      widthClass="max-w-2xl"
+      /* 同理保持纯字符串，弹窗才有可访问名。 */
+      title={`关联漏洞（${loading ? '载入中…' : `${items.length} 条 · ${scanIds.length} 个扫描`}）`}
     >
       <div className="space-y-3">
         <p className="text-2xs text-ink-faint">
@@ -109,6 +105,6 @@ export function SessionFindingsDrawer({
           </ul>
         )}
       </div>
-    </Drawer>
+    </Modal>
   )
 }

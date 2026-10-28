@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { FindingListItem } from '@/data/finding'
 import { scanFindingsHref } from '@/data/session-insight'
-import { SessionFindingsDrawer } from './SessionFindingsDrawer'
+import { SessionFindingsModal } from './SessionFindingsModal'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -32,7 +32,7 @@ function finding(over: Partial<FindingListItem> = {}): FindingListItem {
   } as FindingListItem
 }
 
-function renderDrawer(over: Partial<React.ComponentProps<typeof SessionFindingsDrawer>> = {}) {
+function renderDrawer(over: Partial<React.ComponentProps<typeof SessionFindingsModal>> = {}) {
   const props = {
     open: true,
     onClose: vi.fn(),
@@ -46,7 +46,7 @@ function renderDrawer(over: Partial<React.ComponentProps<typeof SessionFindingsD
     props,
     ...render(
       <MemoryRouter>
-        <SessionFindingsDrawer {...props} {...over} />
+        <SessionFindingsModal {...props} {...over} />
       </MemoryRouter>,
     ),
   }
@@ -56,7 +56,7 @@ function renderDrawer(over: Partial<React.ComponentProps<typeof SessionFindingsD
 // 而不是 render 返回的 container（那里永远是空的）。
 afterEach(() => cleanup())
 
-describe('SessionFindingsDrawer', () => {
+describe('SessionFindingsModal', () => {
   it('关闭时不渲染内容', () => {
     renderDrawer({ open: false })
     expect(document.querySelector('[data-findings-list]')).toBeNull()
@@ -115,6 +115,14 @@ describe('SessionFindingsDrawer', () => {
 
   it('标题栏摘要同时给出条数与扫描数', () => {
     renderDrawer({ scanIds: ['scan_a'], items: [finding()] })
-    expect(screen.getByText('1 条 · 1 个扫描')).toBeTruthy()
+    /*
+      标题是**一个字符串**（`Modal` 只有这样才会设 `aria-label`，弹窗才有
+      可访问名）。所以断言读弹窗的可访问名，而不是去找一个独立的文本节点 ——
+      后者会因为「摘要现在长在标题里」而假红。
+    */
+    const dialog = screen.getByRole('dialog')
+    const label = dialog.getAttribute('aria-label') ?? ''
+    expect(label).toContain('关联漏洞')
+    expect(label).toContain('1 条 · 1 个扫描')
   })
 })

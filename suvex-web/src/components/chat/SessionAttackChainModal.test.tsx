@@ -2,7 +2,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import type { ChatMessage } from '@/data/chat'
-import { SessionAttackChainDrawer } from './SessionAttackChainDrawer'
+import { SessionAttackChainModal } from './SessionAttackChainModal'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -32,7 +32,7 @@ function msg(over: Partial<ChatMessage>): ChatMessage {
   }
 }
 
-function renderDrawer(over: Partial<React.ComponentProps<typeof SessionAttackChainDrawer>> = {}) {
+function renderDrawer(over: Partial<React.ComponentProps<typeof SessionAttackChainModal>> = {}) {
   const props = {
     open: true,
     onClose: vi.fn(),
@@ -40,14 +40,14 @@ function renderDrawer(over: Partial<React.ComponentProps<typeof SessionAttackCha
     messages: [] as ChatMessage[],
     ...over,
   }
-  return { props, ...render(<SessionAttackChainDrawer {...props} />) }
+  return { props, ...render(<SessionAttackChainModal {...props} />) }
 }
 
 // ⚠️ Drawer 用 `createPortal` 渲染到 document.body，所以断言一律查 `document`，
 // 而不是 render 返回的 container（那里永远是空的）。
 afterEach(() => cleanup())
 
-describe('SessionAttackChainDrawer', () => {
+describe('SessionAttackChainModal', () => {
   it('关闭时不渲染内容（Esc 之后不能被键盘 focus 到）', () => {
     renderDrawer({ open: false })
     expect(document.querySelector('[data-attack-chain]')).toBeNull()
@@ -106,8 +106,13 @@ describe('SessionAttackChainDrawer', () => {
 
   it('点关闭按钮会调用 onClose', () => {
     const { props } = renderDrawer({ messages: [msg({ role: 'user', content: 'x' })] })
-    // ⚠️ 精确匹配 "关闭"：遮罩那个按钮的可访问名是 "关闭详情"，用正则会把两个都选中。
-    const close = screen.getByRole('button', { name: '关闭' })
+    /*
+      ⚠️ `Modal` 里有**两个**可访问名都是「关闭」的按钮：遮罩层（点击关闭）
+        和右上角的 X。取最后一个（X）来点，既验证了关闭通路，也不会因为
+        "找到多个" 而让测试红 —— 这不是缺陷，是两个都该存在。
+    */
+    const closeButtons = screen.getAllByRole('button', { name: '关闭' })
+    const close = closeButtons[closeButtons.length - 1]
     fireEvent.click(close)
     expect(props.onClose).toHaveBeenCalled()
   })

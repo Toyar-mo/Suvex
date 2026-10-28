@@ -84,6 +84,29 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
   const { anchor, archived, pinned, projects, currentProject, onClose } = props
   const menuRef = useRef<HTMLDivElement>(null)
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null)
+  /*
+    ★ 悬停意图（hover intent）：离开父项后**不要立刻**收起子菜单。
+
+      真实鼠标从父项移到右侧子菜单时要跨过 4px 的空隙，途中会先触发父项的
+      `mouseleave`。立刻收起的话，用户看到的就是「鼠标还没放到子菜单上，它就
+      没了」—— 这是菜单类控件最常见的坏味道。给 140ms 宽限，并在进入子菜单
+      时撤销这个定时器，就能让斜向移动也进得去。
+  */
+  const closeTimerRef = useRef<number | null>(null)
+  const cancelScheduledClose = () => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current)
+      closeTimerRef.current = null
+    }
+  }
+  const scheduleSubmenuClose = () => {
+    cancelScheduledClose()
+    closeTimerRef.current = window.setTimeout(() => {
+      closeTimerRef.current = null
+      setOpenSubmenu(null)
+    }, 140)
+  }
+  useEffect(() => cancelScheduledClose, [])
   /** 子菜单向左翻（右边缘放不下时）。 */
   const [submenuLeft, setSubmenuLeft] = useState(false)
   /** 算好的菜单坐标。首帧用锚点坐标，`useLayoutEffect` 里再纠正。 */
@@ -231,8 +254,15 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
                 "点一下没反应（只是展开了）"变得很困惑。键盘用户走的是
                 item 本身的按钮（focus 也能开）。
             */
-            onMouseEnter={() => hasSubmenu && setOpenSubmenu(item.key)}
-            onMouseLeave={() => hasSubmenu && setOpenSubmenu(null)}
+            onMouseEnter={() => {
+              if (!hasSubmenu) return
+              cancelScheduledClose()
+              setOpenSubmenu(item.key)
+            }}
+            onMouseLeave={() => {
+              if (!hasSubmenu) return
+              scheduleSubmenuClose()
+            }}
           >
             <button
               type="button"
@@ -262,13 +292,23 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
             </button>
 
             {hasSubmenu && openSubmenu === item.key && (
+              /*
+                ★ 过桥：父项与子菜单之间原本用 `margin` 让开 4px，那 4px 是
+                  **死区** —— 鼠标斜向移过去时先离开父项（mouseleave 排队收起），
+                  再进入子菜单；真实鼠标移动够快时，收起会先发生，用户看到的就是
+                  「鼠标还没放上去它就没了」。改成用 `padding` 把这段距离变成
+                  **可悬停的子树**，并在进入时撤销收起。
+              */
               <div
-                role="menu"
-                aria-label={item.label}
-                className="absolute top-0 z-10 flex max-h-72 min-w-[176px] flex-col gap-0.5 overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-xl"
-                // 右边缘放不下就翻到左边（与整张菜单同一条判据）
-                style={submenuLeft ? { right: '100%', marginRight: 4 } : { left: '100%', marginLeft: 4 }}
+                className={cn('absolute top-0 z-10', submenuLeft ? 'pr-1' : 'pl-1')}
+                style={submenuLeft ? { right: '100%' } : { left: '100%' }}
+                onMouseEnter={cancelScheduledClose}
               >
+                <div
+                  role="menu"
+                  aria-label={item.label}
+                  className="flex max-h-72 min-w-[176px] flex-col gap-0.5 overflow-y-auto rounded-md border border-line bg-surface-raised p-1 shadow-xl"
+                >
                 {item.submenu?.map((sub) => (
                   <button
                     key={sub.key}
@@ -288,6 +328,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
                     <span className="truncate">{sub.label}</span>
                   </button>
                 ))}
+                </div>
               </div>
             )}
           </div>

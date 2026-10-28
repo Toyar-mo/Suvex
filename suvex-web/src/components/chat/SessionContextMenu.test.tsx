@@ -1,5 +1,5 @@
 // ⚠️ 必须手动 import `cleanup`：本仓库没开 vitest 的 `globals: true`。
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { SessionContextMenu, type SessionContextMenuProps } from './SessionContextMenu'
@@ -175,5 +175,94 @@ describe('SessionContextMenu · 只读洞察项', () => {
     render(<SessionContextMenu {...makeProps({ archived: true })} />)
     expect(screen.getByText('查看攻击链')).toBeTruthy()
     expect(screen.getByText('查看漏洞')).toBeTruthy()
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  子菜单的「过桥」：鼠标移过去不能被收掉
+  ══════════════════════════════════════════════════════════════
+
+  真实鼠标从父项移到右侧子菜单，要跨过一小段距离，途中必然先触发父项的
+  `mouseleave`。若立刻收起，用户看到的就是「鼠标根本放不上去就没了」——
+  这是用户实际报过的现象。
+
+  判据两条：
+  ① 离开父项后立刻进入子菜单 → 宽限期过后子菜单**仍在**（过桥生效）；
+  ② 离开父项且不进子菜单 → 宽限期过后子菜单**收起**（不能一直挂着）。
+*/
+describe('SessionContextMenu · 子菜单过桥', () => {
+  /** 拿到「下载 Markdown」那一行（父项 div）与它的子菜单。 */
+  function openDownloadSubmenu() {
+    render(<SessionContextMenu {...makeProps()} />)
+    const parent = screen.getByRole('menuitem', { name: /下载 Markdown/ })
+    fireEvent.mouseEnter(parent.parentElement as HTMLElement)
+    const submenu = screen.getByRole('menu', { name: '下载 Markdown' })
+    return { parent, submenu }
+  }
+
+  it('子菜单与父项之间的空隙必须用 padding 撑出来（margin 是死区）', () => {
+    /*
+      ★ 这条是真正钉住「鼠标放不上去就没了」的那一条。
+
+      用户报的现象：鼠标从父项移向右侧子菜单，还没到子菜单就整块消失了。
+      根因是父项与子菜单之间用 `margin` 让开 4px —— margin 在盒子**外面**，
+      那 4px 不属于任何元素，鼠标经过时 `mouseleave` 立刻触发收起。
+
+      修法是把这段距离变成 `padding`（盒子**里面**），于是「空隙」始终落在
+      子树的命中范围里，`mouseleave` 不会触发。
+
+      jsdom 没有布局，量不出 4px；所以这里断言**结构契约**：留白必须是
+      wrapper 的 padding 类，而不是子菜单面板的 margin —— 结构一变，这条红。
+    */
+    render(<SessionContextMenu {...makeProps()} />)
+    const parent = screen.getByRole('menuitem', { name: /下载 Markdown/ })
+    fireEvent.mouseEnter(parent.parentElement as HTMLElement)
+    const submenu = screen.getByRole('menu', { name: '下载 Markdown' })
+
+    const bridge = submenu.parentElement as HTMLElement
+    expect(bridge.className.includes('pl-1') || bridge.className.includes('pr-1')).toBe(true)
+    // 面板自己不能再靠 margin 让位（那又会变成死区）
+    expect(submenu.style.marginLeft).toBe('')
+    expect(submenu.style.marginRight).toBe('')
+  })
+
+  it('离开父项后立刻回到父项区域 → 不收起（宽限期会被撤销）', () => {
+    vi.useFakeTimers()
+    try {
+      const { parent } = openDownloadSubmenu()
+
+      fireEvent.mouseLeave(parent.parentElement as HTMLElement)
+      // 鼠标抖动/回移：重新进入父项子树（子菜单也在这棵子树里）
+      fireEvent.mouseEnter(parent.parentElement as HTMLElement)
+      act(() => {
+        vi.advanceTimersByTime(400)
+      })
+
+      expect(screen.getByRole('menu', { name: '下载 Markdown' })).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('离开父项且不进子菜单 → 宽限期后收起（不能一直挂着）', () => {
+    vi.useFakeTimers()
+    try {
+      const { parent } = openDownloadSubmenu()
+      fireEvent.mouseLeave(parent.parentElement as HTMLElement)
+
+      // 宽限期内还在
+      act(() => {
+        vi.advanceTimersByTime(100)
+      })
+      expect(screen.queryByRole('menu', { name: '下载 Markdown' })).toBeTruthy()
+
+      act(() => {
+        vi.advanceTimersByTime(100)
+      })
+      expect(screen.queryByRole('menu', { name: '下载 Markdown' })).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

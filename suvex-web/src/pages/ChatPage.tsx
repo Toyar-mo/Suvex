@@ -18,10 +18,10 @@ import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { Modal } from '@/components/ui/Modal'
-import { SessionAttackChainDrawer } from '@/components/chat/SessionAttackChainDrawer'
+import { SessionAttackChainModal } from '@/components/chat/SessionAttackChainModal'
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
-import { SessionFindingsDrawer } from '@/components/chat/SessionFindingsDrawer'
+import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
 import {
@@ -254,7 +254,17 @@ export function ChatPage() {
       被选中"。菜单自己算边界要用坐标；而 `sessionId` 让菜单在列表刷新后
       还能确认自己指向谁（刷新会重排，靠索引会指错行）。
   */
-  const [menuAnchor, setMenuAnchor] = useState<{ x: number; y: number; sessionId: string } | null>(null)
+  const [menuAnchor, setMenuAnchor] = useState<{
+    x: number
+    y: number
+    sessionId: string
+    /* 标题**在右键那一刻**就抄一份：列表刷新后那条会话可能暂时不在数组里，
+       而菜单不该因此自己消失（用户会以为"鼠标放上去就没了"）。 */
+    title: string
+    archived: boolean
+    pinned: boolean
+    project: string | null
+  } | null>(null)
   /** 正在重命名的会话（`null` = 对话框关着）。 */
   const [renameTarget, setRenameTarget] = useState<{ id: string; title: string } | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
@@ -295,13 +305,18 @@ export function ChatPage() {
     items: FindingListItem[]
   }>({ open: false, title: '', loading: false, error: null, sessionId: '', scanIds: [], items: [] })
 
-  /** 右键时被点的那条会话。列表刷新后可能已经不在，返回 `null` 让菜单自灭。 */
+  /** 右键时被点的那条会话。找不到时退回右键那一刻的快照，**不返回 null**。 */
   const menuSession = useMemo(() => {
     if (!menuAnchor) return null
     return (
       sessions.find((s) => s.id === menuAnchor.sessionId) ??
-      archivedSessions.find((s) => s.id === menuAnchor.sessionId) ??
-      null
+      archivedSessions.find((s) => s.id === menuAnchor.sessionId) ?? {
+        id: menuAnchor.sessionId,
+        title: menuAnchor.title,
+        archived: menuAnchor.archived,
+        pinned: menuAnchor.pinned,
+        project: menuAnchor.project,
+      }
     )
   }, [menuAnchor, sessions, archivedSessions])
 
@@ -708,7 +723,16 @@ export function ChatPage() {
                           setShowList(false)
                         }}
                         onArchive={() => setConfirmAction({ kind: 'archive', id: session.id, title: session.title })}
-                        onContextMenu={(anchor) => setMenuAnchor({ ...anchor, sessionId: session.id })}
+                        onContextMenu={(anchor) =>
+                          setMenuAnchor({
+                            ...anchor,
+                            sessionId: session.id,
+                            title: session.title,
+                            archived: Boolean(session.archived),
+                            pinned: Boolean(session.pinned),
+                            project: session.project ?? null,
+                          })
+                        }
                       />
                     ))}
                   </ul>
@@ -737,7 +761,16 @@ export function ChatPage() {
                           setShowList(false)
                         }}
                         onArchive={() => setConfirmAction({ kind: 'archive', id: session.id, title: session.title })}
-                        onContextMenu={(anchor) => setMenuAnchor({ ...anchor, sessionId: session.id })}
+                        onContextMenu={(anchor) =>
+                          setMenuAnchor({
+                            ...anchor,
+                            sessionId: session.id,
+                            title: session.title,
+                            archived: Boolean(session.archived),
+                            pinned: Boolean(session.pinned),
+                            project: session.project ?? null,
+                          })
+                        }
                       />
                     ))}
                   </ul>
@@ -783,7 +816,16 @@ export function ChatPage() {
                             setShowList(false)
                           }}
                           onArchive={() => undefined}
-                          onContextMenu={(anchor) => setMenuAnchor({ ...anchor, sessionId: session.id })}
+                          onContextMenu={(anchor) =>
+                          setMenuAnchor({
+                            ...anchor,
+                            sessionId: session.id,
+                            title: session.title,
+                            archived: Boolean(session.archived),
+                            pinned: Boolean(session.pinned),
+                            project: session.project ?? null,
+                          })
+                        }
                         />
                       ))}
                     </ul>
@@ -1213,7 +1255,7 @@ export function ChatPage() {
 
       {/* ── v1.15：会话右键菜单 ─────────────────────────────── */}
       <SessionContextMenu
-        anchor={menuSession ? menuAnchor : null}
+        anchor={menuAnchor}
         archived={Boolean(menuSession?.archived)}
         pinned={Boolean(menuSession?.pinned)}
         projects={projectSuggestions}
@@ -1244,7 +1286,7 @@ export function ChatPage() {
       />
 
       {/* ── 攻击链 / 关联漏洞（只读洞察） ───────────────────── */}
-      <SessionAttackChainDrawer
+      <SessionAttackChainModal
         open={chainView.open}
         onClose={() => setChainView((view) => ({ ...view, open: false }))}
         sessionTitle={chainView.title}
@@ -1252,7 +1294,7 @@ export function ChatPage() {
         loading={chainView.loading}
         error={chainView.error}
       />
-      <SessionFindingsDrawer
+      <SessionFindingsModal
         open={findingsView.open}
         onClose={() => setFindingsView((view) => ({ ...view, open: false }))}
         sessionTitle={findingsView.title}
