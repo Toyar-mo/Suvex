@@ -14,6 +14,8 @@
 | `jwt_tool/` | https://github.com/ticarpi/jwt_tool | 2026-10-27 克隆的 main | GPL-3.0 | 完整源码（脚本 + requirements）。 |
 | `sstimap/` | https://github.com/vladko312/SSTImap | 2026-10-27 克隆的 main | GPL-3.0 | 完整源码（脚本 + requirements），装进独立 venv。 |
 | `nuclei-templates/` | https://github.com/projectdiscovery/nuclei-templates | 2026-10-27 克隆的 main | MIT | **精简子集**：http / dns / network / ssl / headless / dast / javascript / workflows / file / code。砍掉 cloud、tencent、helpers 等对 CTF 无用且占体积的部分。 |
+| `gef/gef.py` | https://github.com/hugsy/gef | 2026-10-27 克隆的 main（单文件 451,120 字节） | MIT | GDB 增强（P0 · Pwn）。**只有 gef.py 一个文件**，由 `/etc/gdb/gdbinit` 用 try/except 包住加载：gef 挂了 gdb 仍可用，不会把 Pwn 全废掉。 |
+| `RsaCtfTool/` | https://github.com/RsaCtfTool/RsaCtfTool | 2026-10-27 克隆的 main（4.7 MB / 124 文件，去掉 .git/.venv/tests/docs） | MIT | RSA 全攻击面（P0 · Crypto）。**PyPI 上只有 1.0/1.1 且 Require-Python >=3.8,<3.9**，装不到镜像的 3.14 上，所以 vendor 源码本地 `pip install --no-deps`；依赖（cryptography/gmpy2/pycryptodome/z3-solver/psutil/tqdm/factordb-pycli）单独 pip 装。 |
 
 ## 许可合规说明
 - `bkcrack`（zlib）、`jwt_tool`（GPL-3.0）、`sstimap`（GPL-3.0）、

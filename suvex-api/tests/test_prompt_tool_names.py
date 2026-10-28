@@ -254,7 +254,56 @@ _ADVERTISED_SHELL_TOOLS: dict[str, str] = {
     "sstimap": "sstimap",
     "jwt_tool": "jwt_tool",
     "pcapfix": "pcapfix",
+    # ── P0 + P1（2026-10-27 第二批）──────────────────────────────────
+    # Android 三件套：此前三镜像全缺，APK 题连壳都打不开
+    "jadx": "jadx",
+    "apktool": "apktool",
+    "d2j-dex2jar": "dex2jar",
+    # Misc：音视频隐写 / 造包解析
+    # ⚠️ scapy 必须走 pip，不能用 apt 的 `python3-scapy` —— 镜像里 `python3`
+    #   是 /opt/venv 的解释器，看不到 apt 装进系统 dist-packages 的包。
+    "ffmpeg": "ffmpeg",
+    "scapy": "scapy",
+    # Crypto：椭圆曲线 / RSA 全攻击面
+    "ecdsa": "ecdsa",
+    "RsaCtfTool": "RsaCtfTool",
+    # Pwn：gdb 增强（单文件，随 /etc/gdb/gdbinit 以 try/except 加载）
+    "gef": "gef",
 }
+
+
+def _dockerfile_instructions(raw: str) -> list[str]:
+    """把 Dockerfile 拆成"逻辑指令"：去掉注释行，并按反斜杠续行合并。
+
+    这样 `apt-get install -y --no-install-recommends \\` 与它下一行真正列包名
+    的那一行，会合成同一条指令，`install` 关键字才能覆盖到包名。
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    for line in raw.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        buf.append(line)
+        if line.rstrip().endswith("\\"):
+            continue
+        out.append("\n".join(buf))
+        buf = []
+    if buf:
+        out.append("\n".join(buf))
+    return out
+
+
+def _mentions(text: str, token: str) -> bool:
+    """`token` 是否作为**独立记号**出现在 `text` 里（不是更长单词的一部分）。
+
+    为什么不用 `token in text`：`ffmpeg` 是 `ffmpegNOPE` 的子串。用子串判会
+    让"把 apt 包名改错成 ffmpegNOPE"这种漂移**照样绿**——2026-10-27 做变异
+    验证时真踩到了（`mut exit=0`）。所以按包名/命令名的字符集加边界。
+    注意边界**不含点号**：提示词里写的是 `from scapy.all import *`、
+    `jwt_tool.py`，点号是"模块/文件后缀"而不是名字的一部分。
+    """
+    pattern = r"(?<![A-Za-z0-9_\-])" + re.escape(token) + r"(?![A-Za-z0-9_\-])"
+    return re.search(pattern, text) is not None
 
 
 def test_advertised_misc_tools_are_installed_in_the_dockerfile() -> None:
@@ -267,16 +316,30 @@ def test_advertised_misc_tools_are_installed_in_the_dockerfile() -> None:
     """
     dockerfile = _PROMPTS_DIR.parent / "docker" / "suvex-sandbox" / "Dockerfile"
     assert dockerfile.is_file(), f"找不到沙箱镜像的 Dockerfile：{dockerfile}"
-    text = dockerfile.read_text(encoding="utf-8", errors="replace")
+    raw = dockerfile.read_text(encoding="utf-8", errors="replace")
+    # ★ 只在**安装指令**里找包名，不能把"任何地方出现过"当成"装了"。
+    #   两次变异验证（2026-10-27）证明这是必须的：
+    #     · 注释里提一句「P1 · Android 三件套（jadx / apktool / dex2jar）」
+    #       → 把 apt 行里的 jadx 删掉，测试仍绿；
+    #     · 自检段写着 `jadx --version` / `ffmpeg -f lavfi ...`
+    #       → 把包从 apt 行删掉，测试仍绿（名字还在自检里）。
+    #   所以先按反斜杠续行把逻辑指令拼起来，再只保留含 `install`
+    #   或 `COPY vendor` 的指令。
+    instructions = _dockerfile_instructions(raw)
+    install_text = "\n\n".join(
+        instr
+        for instr in instructions
+        if "install" in instr.lower() or instr.lstrip().upper().startswith("COPY VENDOR")
+    )
 
     prompt = (_PROMPTS_DIR / "kernel_system.md").read_text(encoding="utf-8", errors="replace")
 
     missing_in_image: list[str] = []
     missing_in_prompt: list[str] = []
     for command, package in _ADVERTISED_SHELL_TOOLS.items():
-        if command not in prompt:
+        if not _mentions(prompt, command):
             missing_in_prompt.append(command)
-        if package not in text:
+        if not _mentions(install_text, package):
             missing_in_image.append(f"`{command}`（期望 Dockerfile 装 `{package}`）")
 
     assert not missing_in_image, (

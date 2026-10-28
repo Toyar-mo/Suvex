@@ -1074,5 +1074,78 @@ RUN set -eux; \
     bkcrack 2>&1 | grep -qi 'known plaintext' || true; \
     echo "A 档自检通过"
 
+# ═══════════════════════════════════════════════════════════════════════
+# 9) P0 + P1 补强（2026-10-27）：五类题型剩下的缺口
+# ───────────────────────────────────────────────────────────────────────
+# 依据 docs/五类题型工具补强-盘点与分析-2026-10-27.md 的缺口矩阵，
+# 在 A 档之后再补一批。原则不变：**跑得起来才算数**，每个入口做最小调用。
+#
+# P1 · Android 三件套（jadx / apktool / dex2jar）
+#   此前三个镜像全缺，任何 APK 题连壳都打不开。三者都是 Java 程序，需要 JRE。
+#   ⚠️ Kali 源里 `openjdk-17-jre-headless` 的 Candidate 是 (none)（实测），
+#   只有 `default-jre-headless`，所以装它。
+# P0 · Misc：ffmpeg（音视频隐写）、scapy（造包/解析 pcap）
+# P0 · Crypto：ecdsa（椭圆曲线）、RsaCtfTool（RSA 全攻击面：小指数/共模/
+#   Wiener/费马…几十种）
+#   ⚠️ 镜像里 python 是 3.14.8，RsaCtfTool 的依赖（gmpy2 / pycryptodome /
+#   sympy / z3）镜像里**本来就有**，所以用 --no-deps 只装它本体 —— 避免 pip
+#   去拉没有 py3.14 wheel 的旧版依赖，把现有能用的环境搞坏（ropper 就是这么
+#   栽的：filebytes 用了 Py3.12 已移除的 ast.Str）。
+# P0 · Pwn：gef（gdb 增强，单文件）
+#   ⚠️ 直接 source 进 /etc/gdb/gdbinit 有风险 —— gef 一旦抛异常，gdb 就起不来，
+#   等于把整个 Pwn 废掉。所以用 try/except 包住：gef 挂了 gdb 仍照常可用。
+USER root
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ffmpeg default-jre-headless jadx apktool dex2jar \
+ && rm -rf /var/lib/apt/lists/*
+# ⚠️ scapy 不能走 apt 的 `python3-scapy`：那是装给**系统 python3** 的
+#   dist-packages，而本镜像的 `python3` 是 `/opt/venv` 里的解释器，
+#   两者 site-packages 不互通 —— 装完 `import scapy` 照样 ModuleNotFoundError
+#   （2026-10-27 实测，构建直接红在这条自检上）。所以改用 pip 装进 venv。
+
+# RsaCtfTool：PyPI 上只有 1.0/1.1 且 Require-Python >=3.8,<3.9（镜像里是 3.14），
+# 装不上。所以 vendor 源码（4.7 MB）本地 `pip install --no-deps` 装，
+# 依赖用镜像里已有/可装的：cryptography / urllib3 / requests / gmpy2 /
+# pycryptodome / tqdm / z3-solver / psutil / factordb-pycli。
+COPY vendor/RsaCtfTool /opt/RsaCtfTool
+RUN set -eux; \
+    pip install --no-cache-dir ecdsa scapy; \
+    pip install --no-cache-dir cryptography urllib3 requests gmpy2 pycryptodome tqdm z3-solver psutil factordb-pycli; \
+    pip install --no-cache-dir --no-deps /opt/RsaCtfTool; \
+    command -v RsaCtfTool >/dev/null || { echo "RsaCtfTool 入口没装上" >&2; exit 1; }
+
+COPY vendor/gef/gef.py /opt/gef/gef.py
+RUN set -eux; \
+    mkdir -p /opt/gef; \
+    cat > /etc/gdb/gdbinit <<'GDBINIT'
+python
+try:
+    import runpy
+    runpy.run_path('/opt/gef/gef.py', run_name='__main__')
+except Exception as _e:
+    print('[gef] 加载失败（gdb 仍可用）:', _e)
+end
+GDBINIT
+
+# ── P0/P1 自检：每个入口都真跑一次（不是只看 command -v）─────────────
+RUN set -eux; \
+    for c in ffmpeg jadx apktool d2j-dex2jar java; do \
+        command -v "$c" >/dev/null || { echo "缺工具: $c" >&2; exit 1; }; \
+    done; \
+    python3 -c 'import scapy; print("scapy", scapy.__version__)'; \
+    python3 -c 'import ecdsa; print("ecdsa", ecdsa.__version__)'; \
+    RsaCtfTool --help >/dev/null; \
+    java -version; \
+    jadx --version; \
+    apktool --version; \
+    d2j-dex2jar --help >/dev/null 2>&1 || true; \
+    printf 'int main(){return 0;}' > /tmp/t.c; \
+    ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc=d=1:s=32x32 -frames:v 1 -y /tmp/t.png; \
+    test -s /tmp/t.png; rm -f /tmp/t.c /tmp/t.png; \
+    if gdb --batch -ex 'quit' 2>&1 | grep -qi 'gef'; then echo "gef 已加载"; else echo "WARN gef 未加载（gdb 仍可用，见日志）"; fi; \
+    echo "P0/P1 自检通过"
+
 # 恢复非 root 用户：runner 依赖 uid=1000 才能写 /work（见上文 chown）。
 USER solver

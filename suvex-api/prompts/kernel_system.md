@@ -359,9 +359,18 @@ cat /work/found.txt; hashcat -m 9500 h.txt --show --potfile-path=/work/pot
   | 服务端模板注入扫描/利用 | `sstimap -u 'http://t/?name=1'` |
   | JWT（改算法、爆破、伪造） | `jwt_tool <token>`（`-T` 重放、`-C -d 字典` 爆破） |
   | 分区表 / 恢复被删的文件 | `testdisk` 看分区；`foremost -i img -o out` 按文件头捞文件 |
+  | **APK / Android 题（`classes.dex`、`resources.arsc`）** | **`jadx -d out x.apk`**（出 Java 源码，先看 `AndroidManifest.xml` 和入口 Activity）；`apktool d x.apk -o out`（拿 smali + 原始资源）；`d2j-dex2jar classes.dex -o c.jar` 转 jar |
+  | **RSA 题（小指数 / 共模 / Wiener / 费马分解…）** | **`RsaCtfTool --publickey pub.pem --attack all`**；已知 `n,e,c` 就用 `--n --e --uncipher` |
+  | 椭圆曲线（ECDSA nonce 复用、曲线参数） | `python3 -c 'import ecdsa'` 直接用，不要手写椭圆曲线运算 |
+  | 音视频隐写（WAV/MP4 藏数据、频谱图上的图/字） | `ffmpeg -i in.mp4 -vn -acodec copy out.wav` 抽音轨；`ffmpeg -i x.wav -lavfi showspectrumpic=s=1024x512 spec.png` 出频谱图，再用 `view_image` 看 |
+  | 造包 / 改包 / 按字段解析 pcap | `python3 -c 'from scapy.all import *'`（Scapy 2.8 已装） |
 
   ⚠️ **`photorec` 不在镜像里**（Kali 源里没有这个包），文件恢复用 `foremost`。
   ⚠️ **`semgrep` 也不在**（Kali 源 404，且它要联网拉规则）。别调它们。
+
+  **Pwn 调试**：`gef` 已随 `gdb` 自动加载，直接用 `gdb ./pwn` 后敲 `heap`、
+  `vmmap`、`rop`、`checksec`。若看到 `[gef] 加载失败`，说明是 gef 自己的问题，
+  **gdb 本身照常可用**，退回原生 `x/`、`info proc mappings`、`bt`。
 
 - **★ .NET 题不要用 `objdump` 硬看。** `file` 输出里出现
   `Mono/.Net assembly` 时，正确的第一步是 `monodis` 或直接
