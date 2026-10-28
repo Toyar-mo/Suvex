@@ -777,9 +777,15 @@ async def resume_turn(
     if run is None or run.session_id != session.id:
         raise ApiError.not_found("找不到这一轮的执行记录。")
 
-    if not turn_runs.is_resumable(run, now=now_utc()):
+    # ★ v1.22：`failed` 也允许重试 —— 那是**人**点的，不是自动接手。
+    #   典型场景：密钥过期 → 自动重试被判定无意义而放弃 → 用户改好密钥
+    #   后点错误条上的「重试」。若这里继续拒绝，用户唯一能做对的事也被堵死。
+    if run.status == "failed":
+        turn_runs.reset_for_manual_retry(db, run)
+        db.commit()
+    elif not turn_runs.is_resumable(run, now=now_utc()):
         raise ApiError.validation(
-            "这一轮不需要继续（可能已经跑完、或者已经放弃重试）。",
+            "这一轮不需要继续（可能已经跑完、或者还在跑）。",
             {"runId": f"当前状态：{run.status}，重试 {run.resume_attempts} 次"},
         )
 

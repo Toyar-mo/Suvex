@@ -92,9 +92,16 @@ async def resume_one(db: Session, run: Any) -> bool:
         )
     except BaseException as exc:  # noqa: BLE001 - 与 engine._run_guarded 同因
         reason = turn_runs.redact(f"{type(exc).__name__}: {exc}")
+        # ★ v1.22：凭证类失败（密钥无效）是**确定性**的 —— 再跑一百次都是
+        #   同一个 401，而每一轮要白等 90 秒心跳窗口，用户只会看到同一条
+        #   错误反复出现。直接放弃，把"去改密钥"写进 `last_error`。
+        retryable = bool(getattr(exc, "retryable", True))
         try:
             db.rollback()
-            if run.resume_attempts >= turn_runs.MAX_RESUME_ATTEMPTS:
+            if not retryable:
+                _log.warning("这一轮失败不可重试（凭证/权限），不再接手：%s", run.id)
+                turn_runs.give_up(db, run, reason=reason)
+            elif run.resume_attempts >= turn_runs.MAX_RESUME_ATTEMPTS:
                 turn_runs.give_up(db, run, reason=reason)
             else:
                 turn_runs.finish_from_error(db, run, reason=reason)

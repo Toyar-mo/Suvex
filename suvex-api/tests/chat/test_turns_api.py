@@ -135,3 +135,48 @@ def test_resuming_an_interrupted_run_returns_its_new_messages(
     messages = response.json()["messages"]
     assert [m["role"] for m in messages] == ["assistant"]
     assert "接着跑完了" in messages[0]["content"]
+
+
+def test_a_failed_run_can_be_retried_by_a_human(
+    ready_client: TestClient,
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★ v1.22：`failed`（自动接手已放弃）也必须允许人工重试。
+
+    典型场景：密钥过期 → 后台判定"再跑也没用"直接 `give_up`，状态落成
+    `failed`；用户去设置页改好密钥，回来点错误条上的「重试」。
+
+    ★ 这条钉的是一个**把用户唯一能做对的事堵死**的缺陷形态：如果这里
+      继续用 `is_resumable` 判（它只认 running/interrupted），用户改完
+      密钥点重试会收到 400「这一轮不需要继续」—— 而界面上的错误条正要
+      求他去改密钥。要求做一件事，却在做完后拒绝执行。
+
+    回退方式：把 router 里 `if run.status == "failed": reset_for_manual_retry`
+    删掉 → 这里会变 400 而红。
+    """
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    db_session.commit()
+    turn_runs.give_up(db_session, run, reason="密钥无效")
+    db_session.commit()
+    assert run.status == "failed"
+
+    async def fake_resume_one(db: Session, target: object) -> bool:
+        row = turn_runs.get(db, run_id=getattr(target, "id"))
+        assert row is not None
+        chat_session = db.get(ChatSession, row.session_id)
+        chat_service.append_assistant_message(
+            db, session=chat_session, content="改完密钥之后跑通了。"
+        )
+        turn_runs.finish(db, row, status="done")
+        db.commit()
+        return True
+
+    monkeypatch.setattr(resumer, "resume_one", fake_resume_one)
+
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/turns/{run.id}/resume"
+    )
+    assert response.status_code == 200, response.text
+    assert "跑通了" in response.json()["messages"][0]["content"]
