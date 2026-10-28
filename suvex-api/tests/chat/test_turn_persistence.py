@@ -88,17 +88,17 @@ class _Reply:
             {"tools_used": 2, "text": "Let me see the rest.", "nudges_used": 2},
             True,
         ),
-        # ★ v1.25：跑过工具**但回答已经完整**（够长、无"要动手"意图词）→ 不推。
-        #   实测缺陷：打断并继续之后，模型给了 93 字的完整结论，仍被推一次，
-        #   于是同一条结论出现两遍。
+        # ★ v1.25：完整回答**仍然推一次**（安全网不松），但引擎会把被推掉的
+        #   那句降级成 `process`，所以界面上不会出现两条一样的结论气泡。
+        #   见 `test_a_nudged_answer_is_demoted_to_process`。
         (
-            "complete_answer_after_tools_is_not_nudged",
+            "complete_answer_after_tools_still_nudges",
             {
                 "tools_used": 2,
                 "text": "当前目录是 /work（沙箱的工作目录，可写；pwd 返回 /work）。"
                 "之前那次 ls -la /work 你也看到了只有 attachments/ 和 persist/。",
             },
-            False,
+            True,
         ),
         # 但工具纠偏自身也有额度（否则确定性失败会无限续）。
         (
@@ -596,3 +596,41 @@ async def test_a_tool_round_still_gets_nudged_after_an_empty_reply_ate_the_budge
     assert gateway.calls == 6, (
         "跑过工具的轮次在纠偏额度用尽后仍必须被推一次，而不是停在半句英文上"
     )
+
+
+async def test_a_nudged_answer_is_demoted_to_process(db_session: Session) -> None:
+    """★ v1.25：被纠偏推掉的那句"提前结论"要降级成过程面。
+
+    实测缺陷（两次）：模型先给一句完整结论，我们按"跑过工具就推"再推一次，
+    它只好把同一句话重复一遍 —— 界面上就是两条几乎一样的气泡。
+
+    修法不是在判据里猜"像不像半句"（「`pwd` 输出是 `/work`。」这种 18 字的
+    完整回答任何启发式都会误判），而是**落库时就把它降级**：只有最后一句
+    才是 `answer`。
+
+    回退方式：删掉 engine 里 nudge 分支的 `assistant_message.surface = "process"`
+    → 这里会看到两条 answer 而红。
+    """
+    from app.chat.service import list_messages
+
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            # 第一次给出"完整结论" → 降级为 process，再问一次
+            ("`pwd` 输出是 `/work`。", ""),
+            # 又是完整结论 → 已经降级过一次，**接受**它作为最终答复
+            ("当前工作目录是 `/work`。", ""),
+        ]
+    )
+    await engine.run_turn_durable(
+        db_session, session=session, content="看当前目录", identity=ADMIN, gateway=gateway
+    )
+
+    rows = list_messages(db_session, session=session, limit=50)
+    answers = [r for r in rows if r.role == "assistant" and (r.content or "").strip()]
+    assert [r.surface for r in answers] == ["process", "answer"], (
+        "只有最后一句才是对话内容；被推掉的提前结论要收进过程详情"
+    )
+    # 允许为"可能没说完"多问一次（安全网），但界面上只有一句结论
+    assert gateway.calls >= 3

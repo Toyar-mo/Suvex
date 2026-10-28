@@ -1758,6 +1758,9 @@ async def run_turn(
                     truncations_used += 1
                 elif tools_used > 0:
                     tool_nudges_used += 1
+                # ★ v1.25：这句是**被纠偏推掉的提前结论**，不是最终答复。
+                #   降级成过程面 —— 否则用户会看到两条几乎一样的结论气泡
+                #   （实测：「`pwd` 输出是 `/work`。」+「当前工作目录是 `/work`。」）。
                 truncated = _is_truncated(reply)
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
@@ -2049,6 +2052,9 @@ async def resume_approved(
                     truncations_used += 1
                 elif tools_used > 0:
                     tool_nudges_used += 1
+                # ★ v1.25：这句是**被纠偏推掉的提前结论**，不是最终答复。
+                #   降级成过程面 —— 否则用户会看到两条几乎一样的结论气泡
+                #   （实测：「`pwd` 输出是 `/work`。」+「当前工作目录是 `/work`。」）。
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if _is_truncated(reply)
@@ -2115,6 +2121,36 @@ FAILED_NOTE = (
 )
 
 
+def _collapse_turn_answers(db: Session, result: "ChatTurnResult") -> None:
+    """一轮里**只保留最后一条** assistant 消息作为 `answer`（v1.25）。
+
+    ## 为什么
+
+    用户实测：一次任务里出现两条几乎一样的结论气泡
+    （「`pwd` 输出是 `/work`。」+「当前工作目录是 `/work`。」）。原因是
+    纠偏机制会为了"可能没说完"再问一次模型，而模型常常把同一句话再说一遍。
+
+    ## 为什么在**轮末**统一收拾，而不是在推之前逐句判断
+
+    "这句像不像半句"是不可靠的：`pwd` 输出是 `/work`。这种 18 字的完整
+    回答，任何长度/标点启发式都会误判；而误判成"说完了"就等于放行一次
+    半路停（更贵的错）。所以判据保持宽松（宁可多问一次），但在轮末把
+    **中间的** assistant 消息降级成过程面 —— 界面上永远只有一句结论。
+    """
+    assistants = [
+        m
+        for m in result.messages
+        if getattr(m, "role", None) == "assistant" and (getattr(m, "content", "") or "").strip()
+    ]
+    changed = False
+    for earlier in assistants[:-1]:
+        if getattr(earlier, "surface", "answer") != "process":
+            earlier.surface = "process"
+            changed = True
+    if changed:
+        db.commit()
+
+
 async def _run_guarded(
     db: Session,
     *,
@@ -2156,6 +2192,9 @@ async def _run_guarded(
         except Exception:  # noqa: BLE001 - 连记账都失败就别再抛新的
             _log.warning("记录中断状态失败（%s）", kind, exc_info=True)
         raise
+    # ★ v1.25：一轮只留最后一条 assistant 作为对话内容（见 `_collapse_turn_answers`）。
+    _collapse_turn_answers(db, result)
+
     # ★ v1.25：用户主动停掉的这一轮落 `cancelled` —— 不能落 `done`（会被当成
     #   跑完了），也不能落 `interrupted`（后台 resumer 会自动接手，与"别再跑"相反）。
     turn_run_store.finish(db, run, status="cancelled" if result.stopped else "done")
