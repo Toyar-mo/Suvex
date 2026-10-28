@@ -701,7 +701,19 @@ export async function sendMessage(
     return false
   } finally {
     // ★ v1.21：这一轮没成，把刚才收起来的附件条放回输入区（合并，不覆盖）。
-    if (!sentOk && stagedBeforeSend.length > 0) {
+    //
+    // ★★ 前置条件是 `pendingUserContent !== null` —— 也就是**一条 user 消息帧
+    //   都没收到**。这条判据不是保守，是必需：后端 `run_turn` 一进来就
+    //   `attachments.hand_over(...)`，把暂存区的文件**搬**到会话交接目录
+    //   （`/work/attachments`）。也就是说只要这一轮真的开始跑了，那些附件
+    //   在服务端已经不在暂存区了；此时把 chip 放回去，用户下一条消息会带着
+    //   一个查不到的 id 发出去 —— 附件静默丢失，比"要重新选一次文件"糟得多。
+    //
+    //   而 `pendingUserContent` 恰好是"服务端是否已经开始这一轮"的现成信号：
+    //   页面在发送那一刻写它，收到第一条 user 消息帧时清它。所以：
+    //   - 请求根本没到后端（网络错、连接被拒）→ 仍在 → 放回去，用户可直接重发；
+    //   - 后端已开始（哪怕模型 502 挂了）→ 已清 → 不放回，因为文件已被搬走。
+    if (!sentOk && stagedBeforeSend.length > 0 && state.pendingUserContent !== null) {
       const stillThere = new Set(state.stagedAttachments.map((a) => a.id))
       patch({
         stagedAttachments: [

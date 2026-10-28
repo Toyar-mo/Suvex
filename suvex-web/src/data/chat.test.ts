@@ -988,4 +988,35 @@ describe('附件条即发即收（v1.21）', () => {
 
     expect(getChatSnapshot().stagedAttachments.map((a) => a.id)).toEqual(['att1'])
   })
+
+  it('★ 后端已经开始这一轮之后失败，附件条**不要**放回来（文件已被搬走）', async () => {
+    /*
+      ★ 这条守的是「放回去」那条修复的边界。
+
+        后端 `run_turn` 一进来就 `attachments.hand_over(...)`：暂存区的文件被
+        **搬**到会话交接目录（挂进沙箱 `/work/attachments`）。所以只要这一轮
+        真的开始跑了，服务端就不再有那些暂存文件 —— 此时把 chip 放回去，用户
+        下一条消息会带一个查不到的 id 发出去，附件静默丢失。
+
+        判据是 `pendingUserContent`：页面发送时写它，收到第一条 user 消息帧时
+        清它。所以「收到了 user 帧然后失败」= 后端已开始 = 不放回。
+    */
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    await stageOne()
+
+    const stream = liveSseResponse()
+    const promise = sendMessage('chat_1', '看这个包')
+    pending[2].resolveRaw(stream.response)
+    // 先来 user 消息帧（服务端已落库 → 附件已被 hand_over 搬走），再来 error 帧
+    stream.push(TURN_MESSAGE, message({ id: 'm1', seq: 1, role: 'user', content: '看这个包' }))
+    stream.push(TURN_ERROR, { message: '模型挂了' })
+    stream.close()
+    const ok = await promise
+    if (pending[3]) pending[3].resolve([])
+
+    expect(ok).toBe(false)
+    expect(getChatSnapshot().stagedAttachments).toEqual([])
+  })
 })
