@@ -751,12 +751,23 @@ export async function sendMessage(
      * 修法就是 docstring 里一直写着、但代码里从没做过的那句：
      * 「那一轮结束时从服务端取回真消息，这里清空」。
      */
-    const hadInterjection = state.interjections.length > 0
-    if (hadInterjection) {
-      // 不 await：气泡已经正确退场了（`finally` 里清），刷新只是把真消息
-      // 补进列表。await 它会让 `sending` 多挂一个往返，输入框白等。
-      void refreshActiveMessages(sessionId)
-    }
+    /*
+     * ★ v1.25：**无条件**从服务端重取一次本轮消息。
+     *
+     * 两个理由（前一个是 v0.101 的插话兑现，后一个是 v1.25 的"轮末收拾"）：
+     *
+     * 1. 插话（`interject`）是引擎外的写入，不会发 message 帧 —— 不刷新就
+     *    留下一条带「模型下一轮会看到」的僵尸气泡。
+     * 2. 引擎在**轮末**会把"提前给出的结论"降级成过程面（`_collapse_turn_answers`），
+     *    但那些消息在流式过程中已经以 `answer` 推给前端了。不重取，界面上
+     *    会留着两条几乎一样的结论气泡，直到用户手动刷新 —— 实测就是这么
+     *    暴露的（seq4/seq5 两条「当前目录是 /work」）。
+     *
+     * 服务端列表才是**最终事实**，界面以它为准。
+     * 不 await：气泡已经正确退场了（`finally` 里清），刷新只是校正列表，
+     * await 它会让 `sending` 多挂一个往返，输入框白等。
+     */
+    void refreshActiveMessages(sessionId)
 
     // 列表里的 updatedAt / messageCount 变了，静默刷新一次列表。
     // 不 await：它不影响这一轮的显示，慢了也不该让输入框卡住。
