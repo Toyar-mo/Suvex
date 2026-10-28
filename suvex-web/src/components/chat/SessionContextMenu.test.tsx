@@ -18,8 +18,6 @@ import { SessionContextMenu, type SessionContextMenuProps } from './SessionConte
   ④ 置顶项的文案必须随状态变（置顶 ↔ 取消置顶），否则用户不知道现在是什么状态。
 */
 
-const noop = () => undefined
-
 function makeProps(over: Partial<SessionContextMenuProps> = {}): SessionContextMenuProps {
   return {
     anchor: { x: 40, y: 60, sessionId: 'chat_1' },
