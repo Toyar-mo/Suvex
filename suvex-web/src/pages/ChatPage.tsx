@@ -158,6 +158,11 @@ export function phaseLabel(phase: PhasePayload | null | { phase: string; round: 
     // 用户已经看到半句话；格式错时它是"想好了没说怎么动手"，界面上什么都没有。
     // 两种等待的体验不同，但**都不要在界面暴露协议内部词**（`ACTION`、
     // `finish_reason`）—— 用户只关心"还要不要等"。
+    if (phase.reason === 'final-check') {
+      // ★ v1.29：模型写了 FINAL 但那像是「接下来要做什么」，服务端正在
+      // 让它确认一次。用户看到的是「已经停下」，所以要明确说在核实。
+      return `第 ${round} 轮 · 正在确认它是不是真的做完了…`
+    }
     if (phase.reason === 'truncation') {
       return `第 ${round} 轮 · 回复太长被截断了，正在接着写…`
     }

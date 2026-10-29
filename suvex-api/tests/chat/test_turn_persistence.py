@@ -634,3 +634,135 @@ async def test_a_nudged_answer_is_demoted_to_process(db_session: Session) -> Non
     )
     # 允许为"可能没说完"多问一次（安全网），但界面上只有一句结论
     assert gateway.calls >= 3
+
+
+# ══════════════════════════════════════════════════════════
+# 6. `FINAL:` 打回闸（v1.29）—— 写了 FINAL 但那只是计划
+# ══════════════════════════════════════════════════════════
+
+
+async def test_a_premature_final_is_pushed_back_once_and_the_turn_continues(
+    db_session: Session,
+) -> None:
+    """跑过工具之后写 `FINAL: 现在查 libc 版本。` 不能就此收尾。
+
+    ★ 线上会话 `chat_01M62X9DDC52RM95NKQW8P5DY8` 就是这个形态：模型把
+      「接下来要做什么」当成结论写进 `FINAL:`，而 `FINAL:` 是终止符 ——
+      用户看到的是「又是中途停下，继续都没用啊」，每点一次「继续」只推进一步。
+
+    修法是**只打回一次**：第二次仍写 FINAL 就认（否则会死循环，见下一条用例）。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("FINAL: 现在查 libc 版本。", ""),
+            ("FINAL: 查到了，libc 是 2.31-0ubuntu9。", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解出 flag",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3, "计划型的 FINAL 必须被打回一次，而不是直接收尾"
+    assert result.messages[-1].content.strip() == "查到了，libc 是 2.31-0ubuntu9。"
+
+
+async def test_the_premature_final_is_stored_as_process_not_as_an_answer(
+    db_session: Session,
+) -> None:
+    """被打回的那句不能以「结论气泡」的身份留在界面上。
+
+    它还会被写进历史（模型下一轮要看到自己说过什么），但 `surface` 必须是
+    `process` —— 否则用户先看到一句「现在查 libc 版本。」的结论气泡，
+    再看到真正的结论，同一个问题两个答案。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("FINAL: 现在查 libc 版本。", ""),
+            ("FINAL: 结论是 2.31。", ""),
+        ]
+    )
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="解题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    rows = chat_service.list_messages(db_session, session=session)
+    premature = [r for r in rows if r.content.strip() == "现在查 libc 版本。"]
+    assert premature, "那句计划必须留在历史里（模型要看到自己说过）"
+    assert premature[0].surface == "process", "计划型的 FINAL 不能当结论气泡"
+    assert rows[-1].surface == "answer"
+
+
+async def test_a_second_final_is_accepted_so_the_turn_is_bounded(
+    db_session: Session,
+) -> None:
+    """模型坚持写 FINAL 时必须收尾 —— 打回闸只能问一次。"""
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("FINAL: 现在查 libc 版本。", ""),
+            ("FINAL: 现在查 libc 版本。", ""),
+        ]
+    )
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="解题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3, (
+        "第二次 FINAL 必须被接受；否则模型一直写 FINAL 就会死循环烧钱"
+    )
+
+
+async def test_a_resumed_turn_keeps_its_tool_count(db_session: Session) -> None:
+    """接手一轮时必须接着用**原来那轮的工具计数**（v1.29 修的真 bug）。
+
+    ## 这条守的是什么
+
+    `run_turn` 里原来把 `tools_used = 0` 写在 `if resume_from is not None:`
+    **之后**，无条件清零 —— 于是接手的那一轮永远以为「这一轮没跑过工具」，
+    而 `should_nudge` 的 tool 分支正是靠 `tools_used > 0` 判「任务型轮次」。
+    后果：接手后模型只写一句叙述就静默收尾，正是用户说的「继续都没用」。
+
+    判据不看内部变量，只看**多花了几次模型调用**：
+      - 计数被保留（tools_used=2）→ 第一句叙述就该推 → calls == 2；
+      - 计数被清零 → 那句「输出都在上面了。」零意图词 → 不推 → calls == 1。
+    """
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    turn_runs.heartbeat(
+        db_session,
+        run,
+        round_index=3,
+        nudges_used=0,
+        tool_nudges_used=0,
+        tools_used=2,
+    )
+    db_session.commit()
+
+    gateway = ScriptedGateway([("输出都在上面了。", ""), ("FINAL: 好了。", "")])
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="",
+        identity=ADMIN,
+        gateway=gateway,
+        turn_run=run,
+        resume_from=run,
+    )
+    assert gateway.calls >= 2, (
+        "接手后工具计数必须被保留（bug 时清零 → 这句零意图词的叙述不推 → calls==1）"
+    )
+

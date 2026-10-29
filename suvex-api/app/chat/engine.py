@@ -63,6 +63,7 @@ from app.chat.prompts import (
     TOOL_BY_NAME,
     build_system_prompt,
     may_call_tool,
+    render_final_confirm_reminder,
     render_format_reminder,
     render_truncation_reminder,
 )
@@ -190,6 +191,21 @@ MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
 #: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
 MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
+
+#: 任务型轮次里，模型写了 `FINAL:` 之后我们先**打回**几次（v1.29）。
+#:
+#: ## 为什么需要打回
+#:
+#: 线上会话 `chat_01M62X9DDC52RM95NKQW8P5DY8` 里，模型的 FINAL 写的是
+#: 「现在查 libc 版本。」—— 那是**进度播报**，不是结论。而 `should_nudge`
+#: 的第一条判据是 `said_final -> 不推`，于是这一轮在跑完一个工具后就结束了。
+#: 用户看到「又是中途停下，继续都没用」：每点一次「继续」只推进一步。
+#:
+#: ## 为什么只问一次
+#:
+#: 打回要花一次模型调用。给 1 次：真做完的轮次多花一次就能收尾；而把
+#: FINAL 当口头禅的模型第二次也会被接受（不能无限问下去）。
+MAX_FINAL_CONFIRMATIONS = _env_int("SUPEX_CHAT_MAX_FINAL_CONFIRMATIONS", 1)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
@@ -1603,18 +1619,25 @@ async def run_turn(
     #: 只是它的子集，用来判断截断额度还剩多少。格式错的次数 = 前者减后者。
     truncations_used = 0
 
-    if resume_from is not None:
-        nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
-        truncations_used = int(getattr(resume_from, "truncations_used", 0) or 0)
-        tool_nudges_used = int(getattr(resume_from, "tool_nudges_used", 0) or 0)
-        tools_used = int(getattr(resume_from, "tools_used", 0) or 0)
-
     #: 这一轮**真正执行过**几次工具（v1.19）。
     #:
     #: 它是纠偏判据里最重要的一条结构信号：跑过工具的轮次突然"只写一句
     #: 人话"就收尾，绝大多数是没做完；而整轮零工具的纯问答不该被推。
     #: 见 `app/chat/nudge.py`。
+    #:
+    #: ★ v1.29：**必须在 `if resume_from` 之前初始化。** 之前它被写在恢复块
+    #:   后面，于是任何一次"自动接手"都会把刚从库里恢复的工具计数清零 ——
+    #:   接手后的那一轮以为"这轮没跑过工具"，最重要的结构信号失效。
     tools_used = 0
+
+    #: 本轮 FINAL 被"打回"过几次（v1.29）。见 `MAX_FINAL_CONFIRMATIONS`。
+    final_confirmations = 0
+
+    if resume_from is not None:
+        nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
+        truncations_used = int(getattr(resume_from, "truncations_used", 0) or 0)
+        tool_nudges_used = int(getattr(resume_from, "tool_nudges_used", 0) or 0)
+        tools_used = int(getattr(resume_from, "tools_used", 0) or 0)
 
     #: 下一轮要往上下文里补的一句提醒（一次性）。
     #:
@@ -1625,7 +1648,12 @@ async def run_turn(
 
     #: 循环上界 = 工具轮数 + 1（最后那轮用来总结）+ 纠偏轮数。
     for round_index in range(
-        MAX_TOOL_ROUNDS + 1 + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES + MAX_TOOL_NUDGES
+        MAX_TOOL_ROUNDS
+        + 1
+        + MAX_NARRATION_NUDGES
+        + MAX_TRUNCATION_CONTINUES
+        + MAX_TOOL_NUDGES
+        + MAX_FINAL_CONFIRMATIONS
     ):
         # ★ v0.100：在调模型**之前**推一条 phase 帧。
         #
@@ -1817,6 +1845,17 @@ async def run_turn(
             await _emit_message(emit, placeholder)
             return result
 
+        # ★ v1.29：这次 FINAL 是不是**提前宣言**（跑过工具、还没打回过）。
+        #   是的话它就不是结论，落 process —— 否则界面会先闪一条"结论"气泡，
+        #   随后又被真正的结论顶掉（v1.25 修过同一形态）。
+        premature_final = bool(
+            said_final
+            and not actions
+            and tools_used > 0
+            and not at_limit
+            and final_confirmations < MAX_FINAL_CONFIRMATIONS
+            and nudge_policy.looks_like_plan(text)
+        )
         assistant_message = chat_service.append_assistant_message(
             db,
             session=session,
@@ -1825,13 +1864,30 @@ async def run_turn(
             # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
             #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
             #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
-            surface="answer" if not actions else "process",
+            surface="answer" if (not actions and not premature_final) else "process",
         )
         result.messages.append(assistant_message)
         db.commit()
         await _emit_message(emit, assistant_message)
 
         if not actions:
+            # ★ v1.29：`FINAL:` 是模型自己宣告"做完了"。实测它会把这句话用在
+            #   **进度播报**上（线上原文：`FINAL: 现在查 libc 版本。`），于是
+            #   这一轮在跑完一个工具后就结束了。所以任务型轮次第一次收到
+            #   FINAL 时先打回，问它一句"真的交付了吗"。
+            if premature_final:
+                final_confirmations += 1
+                pending_reminder = render_final_confirm_reminder(text)
+                await _emit_phase(
+                    emit,
+                    "resume",
+                    round_index,
+                    reason="final-check",
+                    attempt=final_confirmations,
+                    maxAttempts=MAX_FINAL_CONFIRMATIONS,
+                )
+                continue
+
             # ★ v1.13：**不立刻结束**，先分清它是"说完了"还是"停在半路"。
             #
             # 改造前这里就是一句 `return result` —— 于是模型回一句
@@ -2006,10 +2062,15 @@ async def resume_approved(
     truncations_used = 0
     tool_nudges_used = 0
     tools_used = 0
+    final_confirmations = 0
     pending_reminder: str | None = None
 
     for round_index in range(
-        MAX_TOOL_ROUNDS + MAX_NARRATION_NUDGES + MAX_TRUNCATION_CONTINUES + MAX_TOOL_NUDGES
+        MAX_TOOL_ROUNDS
+        + MAX_NARRATION_NUDGES
+        + MAX_TRUNCATION_CONTINUES
+        + MAX_TOOL_NUDGES
+        + MAX_FINAL_CONFIRMATIONS
     ):
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
@@ -2128,6 +2189,17 @@ async def resume_approved(
             result.messages.append(placeholder)
             return result
 
+        # ★ v1.29：这次 FINAL 是不是**提前宣言**（跑过工具、还没打回过）。
+        #   是的话它就不是结论，落 process —— 否则界面会先闪一条"结论"气泡，
+        #   随后又被真正的结论顶掉（v1.25 修过同一形态）。
+        premature_final = bool(
+            said_final
+            and not actions
+            and tools_used > 0
+            and not at_limit
+            and final_confirmations < MAX_FINAL_CONFIRMATIONS
+            and nudge_policy.looks_like_plan(text)
+        )
         assistant_message = chat_service.append_assistant_message(
             db,
             session=session,
@@ -2136,12 +2208,18 @@ async def resume_approved(
             # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
             #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
             #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
-            surface="answer" if not actions else "process",
+            surface="answer" if (not actions and not premature_final) else "process",
         )
         result.messages.append(assistant_message)
         db.commit()
 
         if not actions:
+            # ★ v1.29：与 `run_turn` 同一条 FINAL 打回闸（见那边的长注释）。
+            if premature_final:
+                final_confirmations += 1
+                pending_reminder = render_final_confirm_reminder(text)
+                continue
+
             # ★ v1.13：与 `run_turn` 同一条判据顺序（见那边的长注释）：
             #   到上限 / 用尽纠偏 / `_looks_unfinished` —— 三者都过了才推。
             if nudge_policy.should_nudge(

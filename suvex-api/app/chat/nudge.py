@@ -92,6 +92,38 @@ def looks_unfinished(text: str) -> bool:
     return bool(_INTENT.search(body))
 
 
+#: 「这句 FINAL 其实是个计划」的判据（v1.29）。
+#:
+#: ## 为什么要单独一个函数
+#:
+#: 任务型轮次收到 `FINAL:` 时我们要打回一次确认。但**真结论**也写 `FINAL:`，
+#: 一律打回等于每解完一道题都多花一次模型调用。实测里问题只出在一种形态：
+#: 模型把「现在查 libc 版本。」「接下来跑一下 libc.rip」这类**下一步计划**
+#: 当结论写进了终止符。
+#:
+#: 判据刻意很窄：句子级起点词 + 紧邻的动词。「查到了，libc 是 2.31」不含
+#: 这些形态，所以不会被误打回。
+_PLAN_START = re.compile(
+    r"(?:^|[。；！？\n])\s*(?:先|现在|接下来|下一步|然后|下面|接着|待会|稍后)"
+)
+_PLAN_VERB = re.compile(
+    r"(?:现在|先|接下来|下一步|然后|接着|待会)\s*"
+    r"(?:查|看|试|跑|去|来|要|开始|执行|写|扫|读|改|装|下|测|确认|分析|拿|抓|起)"
+)
+
+
+def looks_like_plan(text: str) -> bool:
+    """这句 `FINAL:` 的内容是不是「接下来要做什么」（v1.29）。
+
+    只判**长短 + 形态**，不理解语义：短句（<200 字）且命中计划词才算。
+    长正文里顺带一句「然后我看了下」不算计划 —— 那通常是真的在讲过程。
+    """
+    body = text.strip()
+    if not body or len(body) >= MAX_UNFINISHED_CHARS:
+        return False
+    return bool(_PLAN_START.search(body) or _PLAN_VERB.search(body))
+
+
 def should_nudge(
     *,
     at_limit: bool,

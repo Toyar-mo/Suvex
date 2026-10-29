@@ -998,8 +998,15 @@ describe('phaseLabel：纠偏续跑的文案', () => {
     expect(format).toContain('把话说完')
   })
 
+  it('★ v1.29：FINAL 打回时说"正在确认做完了没"（与"重试"区分）', () => {
+    const label = phaseLabel({ phase: 'resume', round: 2, reason: 'final-check' })
+    expect(label).toContain('正在确认它是不是真的做完了')
+    expect(label).not.toContain('重试')
+    expect(label).not.toBe(phaseLabel({ phase: 'resume', round: 2, reason: 'format' }))
+  })
+
   it('★ 不把协议内部词漏给用户', () => {
-    for (const reason of ['truncation', 'format', undefined]) {
+    for (const reason of ['truncation', 'format', 'final-check', undefined]) {
       const label = phaseLabel({ phase: 'resume', round: 0, reason })
       expect(label).not.toContain('ACTION')
       expect(label).not.toContain('finish_reason')

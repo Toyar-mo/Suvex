@@ -85,7 +85,7 @@ export interface PhasePayload {
   /** `phase === 'tool'` 时是工具名。 */
   tool?: string
   /** `phase === 'resume'` 时：为什么会续跑。 */
-  reason?: 'truncation' | 'format'
+  reason?: 'truncation' | 'format' | 'final-check'
   /** `phase === 'resume'` 时：这是第几次纠偏（从 1 起）。 */
   attempt?: number
   /** `phase === 'resume'` 时：最多纠偏几次。 */
