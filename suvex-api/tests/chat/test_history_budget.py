@@ -15,9 +15,10 @@ from app.chat import engine
 
 def test_default_budgets_are_sized_for_hard_tasks() -> None:
     """默认值必须能撑住一道难题（否则就是"必然半路停"）。"""
-    assert engine.MAX_TOOL_ROUNDS >= 100
-    assert engine.MAX_TOOL_NUDGES >= 50
-    assert engine.HISTORY_MESSAGE_LIMIT >= 100
+    # 用户明确要求与 CyberStrikeAI 对齐（其 `max_iterations: 800`）。
+    assert engine.MAX_TOOL_ROUNDS >= 800
+    assert engine.MAX_TOOL_NUDGES >= 200
+    assert engine.HISTORY_MESSAGE_LIMIT >= 200
     assert engine.MAX_HISTORY_CHARS >= 100_000
 
 

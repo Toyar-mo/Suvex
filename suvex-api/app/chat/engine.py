@@ -93,7 +93,8 @@ def _env_int(name: str, default: int) -> int:
 
 #: 一轮里最多几次**工具往返**。
 #:
-#: ★ v1.26：6 → 40 → **200**。
+#: ★ v1.26：6 → 40 → **200** → **800**（与 CyberStrikeAI 的
+#:   `max_iterations: 800` 对齐 —— 用户明确要求"人家 800 我们也 800"）。
 #:
 #: 为什么必须这么大：参考实现 CyberStrikeAI 的默认就是 `max_iterations: 800`。
 #: 而实测一条真实的 CTF pwn 链（侦察 → 反汇编 → 找 gadget → 构造 ROP →
@@ -102,14 +103,14 @@ def _env_int(name: str, default: int) -> int:
 #: 用户看到的就是「又中断了，不能一次性解出来吗」。
 #:
 #: 每次往返都是真金白银，所以默认可调（`SUPEX_CHAT_MAX_TOOL_ROUNDS`）。
-MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 200)
+MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 800)
 
 #: 喂给模型的上下文里，最多带多少条历史消息。
 #:
 #: 为什么不是"全部"：一次长对话可能有几百条，而每条工具输出都可能有几万字
 #: （虽然落库时截到 60000）。全带上会让第 50 轮的一次调用就撑爆上下文。
 #:
-#: ★ v1.26：30 → **200**。
+#: ★ v1.26：30 → **200** → **400**（随轮次上限 800 同比放大）。
 #:
 #: 取 30 的失败形态和轮次上限一样：**难题做到一半，早期证据被挤掉了**。
 #: 一条工具结果就是一条消息，30 条只够 10 轮左右；而 200 轮的预算下，
@@ -120,7 +121,7 @@ MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 200)
 #: `HISTORY_TOOL_CHARS` 字仍在安全范围内。真正的兜底是下面的
 #: `MAX_HISTORY_CHARS`：超了就按"先丢最老的**工具结果**"降级，
 #: 保住用户的话与模型的结论。
-HISTORY_MESSAGE_LIMIT = _env_int("SUPEX_CHAT_HISTORY_MESSAGE_LIMIT", 200)
+HISTORY_MESSAGE_LIMIT = _env_int("SUPEX_CHAT_HISTORY_MESSAGE_LIMIT", 400)
 
 #: 送进模型的**历史总字符**上限（约 1 char ≈ 0.6 token，40 万字符 ≈ 24 万 token）。
 #:
@@ -188,7 +189,7 @@ MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
 #:
 #: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
-MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 100)
+MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
