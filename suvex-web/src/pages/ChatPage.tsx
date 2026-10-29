@@ -1060,7 +1060,7 @@ export function ChatPage() {
                   右侧明明已经有一句话，右上角却还是「0 条消息」——
                   与空态文案是同一个形状的谎报（数字说没有，画面说已有）。
               */}
-              {messages.length + (pendingUserContent !== null ? 1 : 0)} 条消息
+              {messages.length + (sendingHere && pendingUserContent !== null ? 1 : 0)} 条消息
             </span>
           )}
         </div>
@@ -1180,7 +1180,8 @@ export function ChatPage() {
                   用户点下发送的那 3 秒里，屏幕上会同时出现"这个对话还是空的"
                   和右侧自己刚发出去的那句话 —— 一句话既在又不在。
               */}
-              {messages.length === 0 && pendingUserContent === null && (
+              {messages.length === 0 &&
+                !(sendingHere && pendingUserContent !== null) && (
                 <p className="py-6 text-center text-xs text-ink-faint">
                   这个对话还是空的。说点什么，或者回到会话列表挑另一个。
                 </p>
@@ -1214,7 +1215,7 @@ export function ChatPage() {
                   伪造那些字段就会引出"真消息回来后按 id 替换失败、
                   界面上留一条消不掉的假气泡"这个失败模式。
               */}
-              {pendingUserContent !== null && (
+              {sendingHere && pendingUserContent !== null && (
                 <div className="flex justify-end" data-pending-bubble="true">
                   <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/12 px-3 py-2">
                     <p className="whitespace-pre-wrap break-words text-sm text-ink">
@@ -1236,7 +1237,8 @@ export function ChatPage() {
                 这个是"已经落库、等模型下一轮看到"的真消息。
                 合成一个状态会让"到底发出去没有"变得不可知。
               */}
-              {interjections.map((message) => (
+              {sendingHere &&
+                interjections.map((message) => (
                 <div key={message.id} className="flex justify-end" data-interjection="true">
                   <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/8 px-3 py-2">
                     <p className="mb-0.5 text-[11px] text-ink-faint">插话 · 模型下一轮会看到</p>
@@ -1272,7 +1274,7 @@ export function ChatPage() {
                 没有它的话，验证脚本只能靠"屏幕上有没有非空文本"猜，
                 而那分不出"流式气泡还在"与"真消息已经接管了"。
               */}
-              {streamingText !== null && (
+              {sendingHere && streamingText !== null && (
                 <div
                   className="max-w-[85%] whitespace-pre-wrap break-words text-sm text-ink"
                   data-streaming-bubble="true"
@@ -1294,7 +1296,7 @@ export function ChatPage() {
                 </div>
               )}
 
-              {sending && (
+              {sendingHere && (
                 <div className="flex items-center gap-1.5 pl-1" role="status" aria-live="polite">
                   <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
                     <span className="absolute inline-flex h-full w-full animate-ping rounded-pill bg-accent opacity-60" />

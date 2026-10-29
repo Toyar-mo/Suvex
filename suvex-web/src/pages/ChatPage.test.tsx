@@ -1307,3 +1307,51 @@ describe('ChatPage — 中断当前步骤（v1.25）', () => {
     expect(screen.queryByRole('button', { name: '中断' })).toBeNull()
   })
 })
+
+describe('ChatPage — 进程状态只属于正在跑的那个会话（v1.28）', () => {
+  /*
+    ★ 用户原话：「显示有问题啊，一个对话正在推理，全部对话都显示在推理」
+
+    `phase` / `pendingUserContent` / `streamingText` / `interjections` 都是
+    **store 级全局字段**（同一时刻全站只跑一轮，所以 store 只存一份是对的）。
+    但渲染时必须按「这一轮是不是跑在你正看的这个会话里」过滤 —— 否则切到
+    任何一个历史会话，底部都挂着「第 7 轮 · 正在执行 run_shell…」，
+    读起来像那个对话也在推理（而它其实什么都没做）。
+  */
+
+  const busy = (sendingSessionId: string) =>
+    chatState({
+      active: { ...session(), messages: [] },
+      sending: true,
+      sendingSessionId,
+      phase: { phase: 'tool', round: 6, tool: 'run_shell' },
+      pendingUserContent: '别处正在发的那句话',
+      streamingText: '别处正在流入的半句话',
+      interjections: [message({ id: 'i1', content: '别处的插话' })],
+    })
+
+  it('★ 跑在别的会话时，本会话**一条进程状态都不该出现**', () => {
+    mockedUseChat.mockReturnValue(busy('chat_2'))
+    renderPage('/chat?session=chat_1')
+
+    expect(screen.queryByText(/第 7 轮/), '别处的轮次被画到了本会话').toBeNull()
+    expect(document.querySelector('[data-pending-bubble]'), '别处的乐观气泡漏过来了').toBeNull()
+    expect(document.querySelector('[data-streaming-bubble]'), '别处的流式正文漏过来了').toBeNull()
+    expect(screen.queryByText('插话 · 模型下一轮会看到'), '别处的插话气泡漏过来了').toBeNull()
+    // 条数也不能把别处的乐观气泡算进来
+    expect(screen.queryByText(/1 条消息/)).toBeNull()
+    expect(screen.getByText(/0 条消息/)).not.toBeNull()
+  })
+
+  it('★ 但跑在**本会话**时这些必须都在（别为了过滤把它们全关掉）', () => {
+    mockedUseChat.mockReturnValue(busy('chat_1'))
+    renderPage('/chat?session=chat_1')
+
+    expect(screen.getByText(/第 7 轮/)).not.toBeNull()
+    expect(screen.getByText(/run_shell/)).not.toBeNull()
+    expect(document.querySelector('[data-pending-bubble]')).not.toBeNull()
+    expect(document.querySelector('[data-streaming-bubble]')).not.toBeNull()
+    expect(screen.getByText('插话 · 模型下一轮会看到')).not.toBeNull()
+    expect(screen.getByText(/1 条消息/)).not.toBeNull()
+  })
+})
