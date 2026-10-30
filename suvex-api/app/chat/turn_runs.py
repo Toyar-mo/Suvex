@@ -5,9 +5,12 @@
 
 ## 两条互不重叠的判据
 
-1. **该不该被接手**（`is_resumable`）—— 纯函数，只看状态、心跳、重试次数。
-   纯函数的意义：这套判据的失败模式是静默的（该接手没接手 = 界面卡住；
-   不该接手却接手 = 两轮并发写同一个会话），只能靠测试逐条钉住。
+1. **该不该被接手**（`is_resumable`）—— 只看状态、心跳、重试次数，
+   外加本进程的活跃租约 `is_active()`。后者的意义：心跳是 90 秒粒度，
+   慢工具期间会显得过期，但本进程里那一轮其实还在跑；不跳过它，界面
+   会把「正在跑」标成「可继续」。这套判据的失败模式是静默的（该接手
+   没接手 = 界面卡住；不该接手却接手 = 两轮并发写同一个会话），只能
+   靠测试逐条钉住。
 2. **谁来接手**（`claim`）—— 带条件的 UPDATE：只有"仍然是未结束状态"
    的行才会被改成 running 并把 `resume_attempts` +1。这是为了防止两个
    worker 同时捞到同一行（本项目是单 worker，但测试和多进程部署下会发生）。
@@ -48,6 +51,31 @@ MAX_RESUME_ATTEMPTS = 3
 
 #: 还没结束的状态。`done` / `failed` 都不在其中。
 OPEN_STATUSES = ("running", "interrupted")
+
+#: 本进程里正在跑的轮次 id（v1.33）。
+#:
+#: 心跳是跨进程的唯一判据，但它有 90 秒的粒度：一次合法但很慢的工具调用
+#: （例如本地跑 exploit）期间心跳不会刷新，后台扫描就会把**本进程里还活着**
+#: 的一轮当成死行抢走，造成同一轮被两个执行体各写一条结论。
+#:
+#: 这个集合只做同一进程内的补充判据：`stale_runs()` 和 `claim()` 都会跳过
+#: 它。跨进程/重启后的接手仍然完全依赖数据库里的心跳。
+_ACTIVE: set[str] = set()
+
+
+def mark_active(run_id: str) -> None:
+    """标记这一轮在本进程里正在跑。"""
+    _ACTIVE.add(run_id)
+
+
+def unmark_active(run_id: str) -> None:
+    """这一轮在本进程里跑完了（成功、失败或取消都要调用）。"""
+    _ACTIVE.discard(run_id)
+
+
+def is_active(run_id: str) -> bool:
+    """这一轮是否正在本进程里跑。"""
+    return run_id in _ACTIVE
 
 
 def list_runs(db: Session, *, session_id: str, limit: int = 20) -> list[ChatTurnRun]:
@@ -171,10 +199,18 @@ def is_resumable(
     stale_seconds: int = STALE_SECONDS,
     max_attempts: int = MAX_RESUME_ATTEMPTS,
 ) -> bool:
-    """这一轮该不该被后台接手。纯函数（见模块 docstring）。"""
+    """这一轮该不该被后台接手。
+
+    判据本身只看持久化状态；唯一一处进程内信息是 `is_active()`：
+    本进程明明还在跑这一轮时，前端不能把它标成「可继续」，否则用户
+    点黄条会得到一个必然失败的 422（v1.33.1）。跨进程仍靠心跳 + `claim`
+    的条件 UPDATE 兜底。
+    """
     if run.status not in OPEN_STATUSES:
         return False
     if run.resume_attempts >= max_attempts:
+        return False
+    if is_active(run.id):
         return False
     return run.heartbeat_at <= now - timedelta(seconds=stale_seconds)
 
@@ -197,9 +233,10 @@ def stale_runs(
             ChatTurnRun.resume_attempts < max_attempts,
         )
         .order_by(ChatTurnRun.heartbeat_at.asc())
-        .limit(limit)
     )
-    return list(db.scalars(stmt))
+    # ★ v1.33.1：先过滤再截断。SQL 的 LIMIT 放在过滤前，活跃轮次一多
+    #   就会把真正过期的行挤出窗口。
+    return [run for run in db.scalars(stmt) if not is_active(run.id)][:limit]
 
 
 def claim(
@@ -211,16 +248,22 @@ def claim(
 ) -> bool:
     """抢占这一轮：条件 UPDATE，返回是否抢到。
 
-    条件里重复检查"还是未结束状态 + 额度未用尽"，因为从 `stale_runs()`
-    到真正开跑之间有时间差，而这段时间里原来的 worker 可能刚好活过来
-    继续写了进度。抢不到就跳过，绝不要带着过期的状态去跑。
+    条件里重复检查"还是未结束状态 + 额度未用尽 + 心跳确实过期"，因为从
+    `stale_runs()` 到真正开跑之间有时间差，而这段时间里原来的 worker 可能
+    刚好活过来继续写了进度。抢不到就跳过，绝不要带着过期的状态去跑。
+
+    同一进程内还额外看 `is_active()`：心跳是 90 秒粒度，慢工具期间会显得
+    过期，但那一轮其实还在跑。
     """
+    if is_active(run.id):
+        return False
     result = db.execute(
         update(ChatTurnRun)
         .where(
             ChatTurnRun.id == run.id,
             ChatTurnRun.status.in_(OPEN_STATUSES),
             ChatTurnRun.resume_attempts < max_attempts,
+            ChatTurnRun.heartbeat_at <= now - timedelta(seconds=STALE_SECONDS),
         )
         .values(
             status="running",
@@ -268,6 +311,29 @@ def finish_from_error(db: Session, run: ChatTurnRun, *, reason: str) -> None:
     run.last_error = redact(reason)
     run.heartbeat_at = now_utc()
     db.flush()
+
+
+#: 一轮停在计划句上时的记账原因（v1.35）。
+#:
+#: 它同时是 `turn_run.last_error` 的内容与"后台接手时知道为什么又跑起来了"的
+#: 唯一线索 —— 与真实异常不同，这里没有栈，只有一句事实。
+NEEDS_CONTINUE_REASON = "本轮停在下一步计划上，尚未给出可交付结论"
+
+
+def finish_incomplete(db: Session, run: ChatTurnRun, *, reason: str = NEEDS_CONTINUE_REASON) -> None:
+    """一轮**停在计划句上**（v1.35）：落 `interrupted`，不能落 `done`。
+
+    ## 为什么需要单独的入口
+
+    `finish()` 只接受 done/failed/cancelled（见它的 docstring）：这三种状态的
+    语义是"这一问有结果了"。而"模型说完"接下来写 exploit。"就停了"既不是
+    成功、也不是失败、更不是用户取消 —— 它的正确语义是**没答完，可以接着做**，
+    也就是 `interrupted`（与客户端断开、进程重启同一类，见 `finish_from_error`）。
+
+    不直接用 `finish_from_error` 是为了让调用点读起来是意图（"没答完"）而
+    不是异常路径；两者共享同一个终态与脱敏口径。
+    """
+    finish_from_error(db, run, reason=reason)
 
 
 def give_up(db: Session, run: ChatTurnRun, *, reason: str) -> None:

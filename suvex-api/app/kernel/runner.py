@@ -2289,6 +2289,14 @@ class LlmReply:
     #    都落到这里。**未知一律当作没被截断** —— 宁可漏报，也不要在正常
     #    回复上说"你被切断了"（那会让模型无缘无故去压缩它的推理）。
     finish_reason: str = ""
+    # ★ 2026-10-30：上游回的原生工具调用（`tool_calls` / `tool_use`）。
+    #   形状统一为 `{"index", "id", "name", "arguments"}`，由
+    #   `providers.llm.tool_calls_from_message` 归一化。
+    #
+    #   **不要**在这里把 ACTION 拼进 `text` —— `adapters/builder.py` 的
+    #   `extract_json` 依赖正文原样。合成在 `chat.engine._call_model` 里做，
+    #   因为那是唯一知道"对话页要文本 ACTION 协议"的层。
+    tool_calls: tuple[dict, ...] = ()
 
 
 class LlmGateway:
@@ -2401,7 +2409,10 @@ class LlmGateway:
 
     async def chat(self, messages: list[dict[str, str]], *, system: str) -> LlmReply:
         from app.core.crypto import redact
-        from app.providers.llm import _extract_reply  # noqa: PLC2701 - 见下
+        from app.providers.llm import (  # noqa: PLC2701 - 见下
+            _extract_reply,
+            tool_calls_from_message,
+        )
 
         # ⚠️ 这里 import 了 `providers/llm.py` 的私有 `_extract_reply`。
         #
@@ -2479,6 +2490,10 @@ class LlmGateway:
             )
 
         text, source = _extract_reply(self.anthropic, parsed)
+        # ★ 2026-10-30：把原生工具调用原样带出去。**不**在这里合成文本 ——
+        #   对话页之外（解题侧/适配器）拿到的 `text` 必须保持接入点原样，
+        #   否则 `extract_json` 会被拼进去的 ACTION 打断。
+        native_calls = tool_calls_from_message(self.anthropic, parsed)
         # ★ v0.36：顺手把 token 用量解出来带上。**不在这里落库** ——
         #   本函数按设计不碰 DB（见 `solve_in_sandbox` 的说明），
         #   由解题循环收进 `SolveOutcome`，收尾时统一写。
@@ -2488,6 +2503,7 @@ class LlmGateway:
             raw=parsed if isinstance(parsed, dict) else {},
             usage=parse_usage(parsed),
             finish_reason=_finish_reason(parsed),
+            tool_calls=tuple(native_calls),
         )
 
     async def chat_stream(
@@ -2496,6 +2512,7 @@ class LlmGateway:
         *,
         system: str,
         finish_reason: list[str] | None = None,
+        tool_calls: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """流式调模型，逐块产出**正文增量**（v0.102）。
 
@@ -2538,7 +2555,11 @@ class LlmGateway:
           改造前逐字节一样的行为。
         """
         from app.core.crypto import redact
-        from app.providers.llm import stream_delta, stream_finish_reason  # noqa: PLC2701 - 见 chat() 的说明
+        from app.providers.llm import (  # noqa: PLC2701 - 见 chat() 的说明
+            stream_delta,
+            stream_finish_reason,
+            tool_calls_delta,
+        )
 
         body = self._body(messages, system=system)
         body["stream"] = True
@@ -2590,17 +2611,56 @@ class LlmGateway:
                     f"LLM 拒绝了请求（HTTP {response.status_code}）：{redact(text)[:200]}"
                 )
 
+            # ★ 2026-10-30：原生工具调用按 `index` 累积。
+            #   OpenAI 的 `arguments` 是分片；Anthropic 的 `content_block_start`
+            #   可能直接给完整 `input`（非空 dict）—— 那种直接覆盖终值，
+            #   后续 `input_json_delta` 不再拼（否则会拼出重复 JSON）。
+            accumulated: dict[int, dict] = {}
+            complete: set[int] = set()
+
             async for sse_event, sse_data in _iter_sse(response):
                 delta = stream_delta(self.anthropic, sse_event, sse_data)
                 if delta:
                     yield delta
-                    continue
-                # ★ 只有不产正文的帧才可能是收尾帧（`delta: {}` + finish_reason）。
-                #   放在 `if delta` 之后是为了不给每个正文帧多解析一次。
+                if tool_calls is not None:
+                    for piece in tool_calls_delta(self.anthropic, sse_event, sse_data):
+                        index = piece.get("index")
+                        index = index if isinstance(index, int) else 0
+                        slot = accumulated.setdefault(
+                            index, {"index": index, "id": "", "name": "", "arguments": ""}
+                        )
+                        if piece.get("id"):
+                            slot["id"] = piece["id"]
+                        if piece.get("name"):
+                            slot["name"] = piece["name"]
+                        fragment = piece.get("arguments") or ""
+                        if self.anthropic:
+                            if piece.get("name"):
+                                # `content_block_start`：可能是空 input（arguments=""），
+                                # 也可能是完整 input（终值）。
+                                slot["arguments"] = fragment
+                                if fragment:
+                                    complete.add(index)
+                            elif index not in complete:
+                                slot["arguments"] += fragment
+                        else:
+                            slot["arguments"] += fragment
+                # ★ 收尾帧**不一定**不产正文：部分 OpenAI 兼容网关会把正文
+                #   与 `finish_reason` 放进同一帧
+                #   （`{"delta":{"content":"hello"},"finish_reason":"length"}`）。
+                #   所以不能用 `delta` 是否为空来门控，否则这类网关的收尾原因
+                #   会被丢掉，v1.13 的截断检测随之静默失效。
+                #   多解析一帧正文的成本可以接受（每帧只有一次字典取值）。
                 if finish_reason is not None:
                     reason = stream_finish_reason(self.anthropic, sse_event, sse_data)
                     if reason:
                         finish_reason.append(reason)
+
+            if tool_calls is not None:
+                for index in sorted(accumulated):
+                    call = accumulated[index]
+                    if call["name"] or call["arguments"]:
+                        tool_calls.append(call)
         finally:
             # 一定要关：`send(stream=True)` 不关会把连接留在池里不归还。
             await response.aclose()

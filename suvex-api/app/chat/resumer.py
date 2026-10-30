@@ -81,38 +81,58 @@ async def resume_one(db: Session, run: Any) -> bool:
         return False
 
     _log.info("接手中断的一轮：%s（第 %d 次）", run.id, run.resume_attempts)
+    # ★ v1.33.1：resumer 走的也是本进程里的一轮真实执行。不登记的话，
+    #   它跑长工具时心跳过期，前端会看到「可继续」黄条；用户一点，
+    #   `claim()` 因为看不到活跃租约而放行，同进程就出现两个执行体。
+    turn_runs.mark_active(run.id)
     try:
-        await engine.run_turn(
-            db,
-            session=session,
-            content="",
-            identity=identity,
-            turn_run=run,
-            resume_from=run,
-        )
-    except BaseException as exc:  # noqa: BLE001 - 与 engine._run_guarded 同因
-        reason = turn_runs.redact(f"{type(exc).__name__}: {exc}")
-        # ★ v1.22：凭证类失败（密钥无效）是**确定性**的 —— 再跑一百次都是
-        #   同一个 401，而每一轮要白等 90 秒心跳窗口，用户只会看到同一条
-        #   错误反复出现。直接放弃，把"去改密钥"写进 `last_error`。
-        retryable = bool(getattr(exc, "retryable", True))
         try:
-            db.rollback()
-            if not retryable:
-                _log.warning("这一轮失败不可重试（凭证/权限），不再接手：%s", run.id)
-                turn_runs.give_up(db, run, reason=reason)
-            elif run.resume_attempts >= turn_runs.MAX_RESUME_ATTEMPTS:
-                turn_runs.give_up(db, run, reason=reason)
-            else:
-                turn_runs.finish_from_error(db, run, reason=reason)
-            db.commit()
-        except Exception:  # noqa: BLE001
-            _log.warning("接手失败后记账也失败：%s", run.id, exc_info=True)
-        return False
+            result = await engine.run_turn(
+                db,
+                session=session,
+                content="",
+                identity=identity,
+                turn_run=run,
+                resume_from=run,
+            )
+            # ★ v1.32：后台接手走的是 `run_turn` 本身，不经过 `_run_guarded`；
+            #   不在这里折叠，被接手的一轮就会留下多条结论气泡。
+            engine._collapse_turn_answers(db, result)
+        except BaseException as exc:  # noqa: BLE001 - 与 engine._run_guarded 同因
+            reason = turn_runs.redact(f"{type(exc).__name__}: {exc}")
+            # ★ v1.22：凭证类失败（密钥无效）是**确定性**的 —— 再跑一百次都是
+            #   同一个 401，而每一轮要白等 90 秒心跳窗口，用户只会看到同一条
+            #   错误反复出现。直接放弃，把"去改密钥"写进 `last_error`。
+            retryable = bool(getattr(exc, "retryable", True))
+            try:
+                db.rollback()
+                if not retryable:
+                    _log.warning("这一轮失败不可重试（凭证/权限），不再接手：%s", run.id)
+                    turn_runs.give_up(db, run, reason=reason)
+                elif run.resume_attempts >= turn_runs.MAX_RESUME_ATTEMPTS:
+                    turn_runs.give_up(db, run, reason=reason)
+                else:
+                    turn_runs.finish_from_error(db, run, reason=reason)
+                db.commit()
+            except Exception:  # noqa: BLE001
+                _log.warning("接手失败后记账也失败：%s", run.id, exc_info=True)
+            return False
 
-    turn_runs.finish(db, run, status="done")
-    db.commit()
-    return True
+        # ★ v1.35：与 `_run_guarded_active` 保持同一条收尾语义。
+        #   后台接手走的是 `run_turn` 本身、不经过 `_run_guarded_active`，
+        #   所以「停在计划句上」的分流必须在这里再做一次 —— 否则被接手
+        #   的一轮即使又一次停在计划上也会被记成 `done`，用户看到的仍是
+        #   「没解出又结束」（G1-review P1_RESUMER_MARKS_DONE）。
+        if result.stopped:
+            turn_runs.finish(db, run, status="cancelled")
+        elif result.needs_continue:
+            turn_runs.finish_incomplete(db, run)
+        else:
+            turn_runs.finish(db, run, status="done")
+        db.commit()
+        return True
+    finally:
+        turn_runs.unmark_active(run.id)
 
 
 async def resume_stale_once(db: Session) -> int:

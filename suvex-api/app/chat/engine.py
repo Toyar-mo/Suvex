@@ -42,17 +42,19 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
-from app.chat.models import ChatSession
+from app.chat.models import ChatMessage, ChatSession
 from app.chat import failure as failure_kind
 from app.chat import interrupts as interrupt_bus
 from app.chat import nudge as nudge_policy
@@ -64,7 +66,9 @@ from app.chat.prompts import (
     build_system_prompt,
     may_call_tool,
     render_final_confirm_reminder,
+    render_plan_exhausted_note,
     render_format_reminder,
+    render_native_tool_note,
     render_truncation_reminder,
 )
 from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
@@ -192,6 +196,19 @@ MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
 MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
 
+#: 跑过工具的轮次里，模型回了**空回复**时最多再推几次（v1.31）。
+#:
+#: ★ 空回复与「写了人话没写 ACTION」是两种病：前者是模型抽风（实测线上
+#:   复跑 `chat_01M652CRXMJ4H9P1XABAJ4VGSH`，计划句之后连回两次空），
+#:   后者是它真在描述进度。旧代码把空回复挤在 `MAX_NARRATION_NUDGES`(2)
+#:   里，两个空就把额度吃光，于是「已经说过话」直接收尾 —— 界面停在半句
+#:   计划上。
+#:
+#: 6 次而不是 300（`MAX_TOOL_NUDGES`）：空回复没有进展可言，连回 6 次
+#: 就是确定性的模型/接入点故障，再推只是烧钱；而 6 次足够跨过偶发的
+#: 两次抽风。计数用 `nudges_used`，不新增持久字段。
+MAX_EMPTY_NUDGES = _env_int("SUPEX_CHAT_MAX_EMPTY_NUDGES", 6)
+
 #: 任务型轮次里，模型写了 `FINAL:` 之后我们先**打回**几次（v1.29）。
 #:
 #: ## 为什么需要打回
@@ -206,6 +223,21 @@ MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
 #: 打回要花一次模型调用。给 1 次：真做完的轮次多花一次就能收尾；而把
 #: FINAL 当口头禅的模型第二次也会被接受（不能无限问下去）。
 MAX_FINAL_CONFIRMATIONS = _env_int("SUPEX_CHAT_MAX_FINAL_CONFIRMATIONS", 1)
+
+#: 计划句（"接下来要看主逻辑"）最多打回几次（v1.30）。
+#:
+#: ## 为什么不和 `MAX_FINAL_CONFIRMATIONS` 共用
+#:
+#: 线上会话 `chat_01M640EY2P54QC1E2QS54R0R3Z`（用户原话「解题到一半就结束了」）：
+#: seq 8 先写了一句「checksec 没输出，我用 readelf 和 pwn 自己看防护」——
+#: 那句是计划，被打回一次；seq 10 又写「典型栈溢出。看主逻辑。」—— 同样是
+#: 计划，但 `final_confirmations` 已经到 1，闸门直接放行，落成 `answer`，
+#: 整轮 `done`。用户看到的仍是停一半。
+#:
+#: 计划句和"真的做完没有"是两件事：前者只说明**还没动手**，它的额度就该
+#: 按"还要推几步"算，而不是按"问没问过"算。4 次足够覆盖"分析→利用→打通"
+#: 这类多步任务；再多就是模型在绕圈，该停下来告诉用户实情。
+MAX_PLAN_BOUNCES = _env_int("SUPEX_CHAT_MAX_PLAN_BOUNCES", 4)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
@@ -330,6 +362,12 @@ class ChatTurnResult:
     #: `cancelled` 而不是 `done` —— 后者会被后台当成"跑完了"，而用户的意思
     #: 恰恰是"别再跑了"。
     stopped: bool = False
+    #: 这一轮**还没给出可交付结论**（v1.35）：最后停在计划句上、额度已经用尽。
+    #:
+    #: `_run_guarded` 据此把执行记录落成 `interrupted` 而不是 `done`：
+    #: `done` 会被界面和后台都当成"这一问已经答完"，而实际上下一步还没执行。
+    #: 不落 `cancelled` —— 那是用户主动停，与"模型自己停在半路"是两件事。
+    needs_continue: bool = False
 
 
 # ══════════════════════════════════════════════════════════
@@ -397,6 +435,123 @@ async def _emit_delta(emit: Emit | None, text: str) -> None:
     await emit(EVENT_DELTA, {"text": text})
 
 
+#: 原生工具调用合成文本时最多保留几条。
+#:
+#: ★ 与解题侧 `app/kernel/runner.py` 的 `MAX_ACTIONS_PER_TURN = 5` 对齐：
+#:   一轮里真要调 6 个以上工具，说明模型在发散，而不是在执行计划。
+MAX_SYNTH_ACTIONS = 5
+
+#: 上游"这一轮只回了工具调用、正文为空"的收尾原因集合。
+#:
+#: 线上会话 `chat_01M6556ES13EGH8NN712252SPB` 就是 `tool_calls`：网关
+#: 回 `delta.tool_calls` + `finish_reason="tool_calls"`，正文为空。
+#: 另外两个是 Anthropic / 旧 OpenAI 的同义写法，一起收。
+_NATIVE_FINISH_REASONS = frozenset({"tool_calls", "tool_use", "function_call"})
+
+
+def _has_protocol_marker(text: str) -> bool:
+    """正文里已经写了 `ACTION:` / `FINAL:` 吗（即模型自己走了文本协议）。"""
+    from app.kernel.runner import _MARKER  # 循环 import 规避
+
+    return bool(_MARKER.search(text or ""))
+
+
+def _native_action_lines(calls: object) -> list[str]:
+    """把归一化的原生工具调用转成 `ACTION:` 行（每行以换行开头）。
+
+    ★ 换行开头是契约：`HoldbackBuffer` 靠行首识别协议起头，行中出现的
+      `ACTION:` 会照常推给前端（那就是泄漏）。
+
+    `arguments` 是接入点给的 JSON 字符串（可能不合法 —— 模型写坏 JSON
+    是已知形态，解题侧 `parse_actions` 同一容忍度）；解析失败按 `{}` 走，
+    其它调用照常产出，并留一条日志给排障。
+    """
+    items = [call for call in (calls or ()) if isinstance(call, dict)]
+    if len(items) > MAX_SYNTH_ACTIONS:
+        _log.warning(
+            "chat.native_tool_calls 一轮回了 %s 个工具调用，只保留前 %s 个",
+            len(items),
+            MAX_SYNTH_ACTIONS,
+        )
+        items = items[:MAX_SYNTH_ACTIONS]
+
+    lines: list[str] = []
+    for call in items:
+        name = str(call.get("name") or "")
+        arguments = call.get("arguments")
+        args: dict = {}
+        if isinstance(arguments, str) and arguments.strip():
+            try:
+                parsed = json.loads(arguments)
+            except ValueError:
+                _log.warning(
+                    "chat.native_tool_calls 参数不是合法 JSON，按空对象处理 name=%s",
+                    name,
+                )
+            else:
+                if isinstance(parsed, dict):
+                    args = parsed
+        # ★ 有的网关把整个动作对象塞进 `arguments`（`{"tool": ..., "args": ...}`），
+        #   而不是只塞参数 —— 取内层，否则会变成 `tool=name` 而参数套一层壳。
+        if "tool" in args and "args" in args:
+            name = str(args.get("tool") or name)
+            inner = args.get("args")
+            args = inner if isinstance(inner, dict) else {}
+        if not name:
+            _log.warning("chat.native_tool_calls 工具调用没有名字，已丢弃")
+            continue
+        lines.append(
+            "\nACTION: " + json.dumps({"tool": name, "args": args}, ensure_ascii=False)
+        )
+    return lines
+
+
+def _with_native_actions(reply: Any) -> Any:
+    """上游只回了原生工具调用时，补合成 `ACTION:` 文本（v1.33）。
+
+    ★ **不**改 `LlmReply.tool_calls`：那是给排障/审计看的"网关原样"，
+      合成只发生在这里 —— 对话页唯一需要文本协议的地方。
+    ★ 正文里已经有 `ACTION:`/`FINAL:` 时**不**合成：模型自己走了文本协议，
+      再加一行就是重复调用同一个工具。
+    """
+    calls = tuple(getattr(reply, "tool_calls", ()) or ())
+    if not calls:
+        return reply
+    text = getattr(reply, "text", "") or ""
+    if _has_protocol_marker(text):
+        return reply
+    lines = _native_action_lines(calls)
+    if not lines:
+        return reply
+    return replace(reply, text=text + "".join(lines))
+
+
+def _native_names(reply: Any) -> list[str]:
+    """回复里原生工具调用的名字（给用户看的提示语用，去重保序）。"""
+    names: list[str] = []
+    for call in getattr(reply, "tool_calls", ()) or ():
+        name = str((call or {}).get("name") or "") if isinstance(call, dict) else ""
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _supports_tool_calls(stream_fn: Any) -> bool:
+    """这个 `chat_stream` 认不认 `tool_calls=` 这个可选出口。
+
+    ★ 为什么不用"先传再捕获 TypeError"：`async for` 里的 `TypeError`
+      分不清是"参数不认识"还是"流内容坏了"，而后者的语义是"退回非流式
+      重试"。签名探测把两件事分开。
+    """
+    try:
+        params = inspect.signature(stream_fn).parameters
+    except (TypeError, ValueError):
+        return False
+    if "tool_calls" in params:
+        return True
+    return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
 async def _call_model(
     gateway: Any,
     messages: list[dict[str, str]],
@@ -435,7 +590,7 @@ async def _call_model(
     界面上会出现"这句话写了两遍"。所以用 `pushed` 记着。
     """
     if emit is None:
-        return await gateway.chat(messages, system=system)
+        return _with_native_actions(await gateway.chat(messages, system=system))
 
     from app.chat.holdback import HoldbackBuffer
     from app.kernel.runner import LlmReply, parse_usage  # 循环 import 规避
@@ -446,11 +601,23 @@ async def _call_model(
     #: 用 list 是因为生成器只能 yield 正文，没有第二个返回值 —— 见
     #: `LlmGateway.chat_stream` 的 docstring。
     finish_reasons: list[str] = []
+    #: ★ 2026-10-30：`chat_stream` 按 `index` 累积原生工具调用，收流后写进来。
+    #:   这里不合成文本 —— 合成在 `_with_native_actions` 里做（只此一处）。
+    tool_calls_out: list[dict] = []
     pushed = False
+    stream_kwargs: dict[str, Any] = {
+        "system": system,
+        "finish_reason": finish_reasons,
+    }
+    # ★ `tool_calls` 是新增的可选输出通道。旧实现（以及大量测试里的
+    #   假网关）只接受 `system` / `finish_reason` —— 不看签名就传 kwarg
+    #   会直接 `TypeError`，而那会被外层 `except` 误判成"流式坏了"，
+    #   于是每次对话都白跑一次非流式重试。
+    stream_fn = getattr(gateway, "chat_stream", None)
+    if stream_fn is not None and _supports_tool_calls(stream_fn):
+        stream_kwargs["tool_calls"] = tool_calls_out
     try:
-        async for delta in gateway.chat_stream(
-            messages, system=system, finish_reason=finish_reasons
-        ):
+        async for delta in gateway.chat_stream(messages, **stream_kwargs):
             # ★ v1.25：每个增量查一次"用户有没有按中断"。按停得**立刻**
             #   生效 —— 这是"中断并继续"与"插话"的根本区别（后者要等下一轮）。
             if session_id and interrupt_bus.should_break(session_id):
@@ -469,17 +636,20 @@ async def _call_model(
             # 已经吐出字了 —— 不能重来，只能如实失败。
             raise
         _log.info("流式调模型失败，退回非流式重试一次", exc_info=True)
-        return await gateway.chat(messages, system=system)
+        return _with_native_actions(await gateway.chat(messages, system=system))
 
     raw_text = "".join(collected)
-    return LlmReply(
-        text=raw_text,
-        source="content",
-        raw={},
-        usage=parse_usage({}),
-        # ★ 取最后一个取值：正常只有一帧带它，但代理/网关吐多帧时，
-        #   以最后那个为准（更接近真实收尾原因）。
-        finish_reason=finish_reasons[-1] if finish_reasons else "",
+    return _with_native_actions(
+        LlmReply(
+            text=raw_text,
+            source="content",
+            raw={},
+            usage=parse_usage({}),
+            # ★ 取最后一个取值：正常只有一帧带它，但代理/网关吐多帧时，
+            #   以最后那个为准（更接近真实收尾原因）。
+            finish_reason=finish_reasons[-1] if finish_reasons else "",
+            tool_calls=tuple(tool_calls_out),
+        )
     )
 
 
@@ -1633,6 +1803,18 @@ async def run_turn(
     #: 本轮 FINAL 被"打回"过几次（v1.29）。见 `MAX_FINAL_CONFIRMATIONS`。
     final_confirmations = 0
 
+    #: 本轮因为"这句是计划不是结论"被打回几次（v1.30）。见 `MAX_PLAN_BOUNCES`。
+    #:
+    #: ★ 与 `final_confirmations` 分开：后者是"问过没有"，前者是"推了几步"。
+    #:   共用一个计数就是上面那场线上事故的成因。
+    plan_bounces = 0
+
+    #: 本轮「模型一个字没写」被推了几次（v1.32，见 `MAX_EMPTY_NUDGES`）。
+    #:
+    #: ★ 与 `nudges_used` 分开：共用一个数时，前面几次叙述纠偏会把空回复
+    #:   的额度一起吃掉，于是计划句之后的第一个空回复就被判「额度用完」。
+    empty_nudges_used = 0
+
     if resume_from is not None:
         nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
         truncations_used = int(getattr(resume_from, "truncations_used", 0) or 0)
@@ -1722,6 +1904,29 @@ async def run_turn(
         raw_text, said_final = nudge_policy.split_final(raw_text)
         text = _narration_before_action(raw_text)
         actions = [] if at_limit else parse_actions(raw_text)
+        # ★ v1.32：一行一帧的诊断日志。这类故障的失败模式是**静默的**：
+        #   界面停在半句话上，没有异常、没有报错、turn_run 也是 done，
+        #   只能靠自己猜「它到底回了什么」。只记长度与标志，不记正文。
+        _log.info(
+            "chat.round round=%s raw_len=%s text_len=%s actions=%s said_final=%s "
+            "truncated=%s tools=%s nudges=%s tool_nudges=%s empty_nudges=%s "
+            "reasoning_len=%s finish=%r raw_keys=%s",
+            round_index,
+            len(raw_text),
+            len(text),
+            len(actions),
+            said_final,
+            _is_truncated(reply),
+            tools_used,
+            nudges_used,
+            tool_nudges_used,
+            empty_nudges_used,
+            len(getattr(reply, "reasoning", None) or ""),
+            getattr(reply, "finish_reason", ""),
+            sorted((getattr(reply, "raw", None) or {}).keys())
+            if isinstance(getattr(reply, "raw", None), dict)
+            else type(getattr(reply, "raw", None)).__name__,
+        )
         reasoning = getattr(reply, "reasoning", None)
         if not reasoning:
             raw = getattr(reply, "raw", None) or {}
@@ -1780,16 +1985,29 @@ async def run_turn(
             #
             # 但 `at_limit` 那轮不能推：那一轮我们要的就是"用一段话总结"，
             # 模型交白卷时占位语是唯一能给用户的信息。
+            #
+            # ★ v1.31：跑过工具的轮次用**空回复额度**（见 `MAX_EMPTY_NUDGES`）。
+            #   复跑实测：计划句之后模型连回两次空，2 次纠偏额度当场见底，
+            #   于是「已经说过话」就 `return` —— 界面上最后一句仍是半句计划。
+            # ★ v1.32：单独计数。与 `nudges_used` 共用时，前面几次叙述纠偏
+            #   会把空回复的额度一起吃掉 —— 实跑 round 15 就是 6 次 format
+            #   纠偏之后，第一个空回复当场判「用完」，又停在半句计划上。
             nudge_truncated = _is_truncated(reply)
-            nudge_allowed = (
-                truncations_used < MAX_TRUNCATION_CONTINUES
-                if nudge_truncated
-                else (nudges_used - truncations_used) < MAX_NARRATION_NUDGES
-            )
+            if nudge_truncated:
+                nudge_allowed = truncations_used < MAX_TRUNCATION_CONTINUES
+            elif tools_used > 0:
+                nudge_allowed = empty_nudges_used < MAX_EMPTY_NUDGES
+            else:
+                nudge_allowed = (
+                    nudges_used - truncations_used
+                ) < MAX_NARRATION_NUDGES
             if not at_limit and nudge_allowed:
                 nudges_used += 1
                 if nudge_truncated:
                     truncations_used += 1
+                elif tools_used > 0:
+                    tool_nudges_used += 1
+                    empty_nudges_used += 1
                 truncated = nudge_truncated
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
@@ -1815,6 +2033,21 @@ async def run_turn(
                 )
                 continue
 
+            # ★ v1.33：上游只回了原生工具调用、正文为空（线上
+            #   `chat_01M6556ES13EGH8NN712252SPB`）。纠偏额度用尽后**不许**
+            #   沿 `already_spoke` 静默 return —— 那正是用户看到的
+            #   「对话跑到一半就结束」。改为追加一句可见的实话。
+            if reply.finish_reason in _NATIVE_FINISH_REASONS:
+                note = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=render_native_tool_note(_native_names(reply)),
+                )
+                db.commit()
+                result.messages.append(note)
+                await _emit_message(emit, note)
+                return result
+
             # ★ v1.13：**这一轮已经给用户看过话了，就不要再补一句占位语。**
             #
             # 典型形态：模型答了一句短的完整回答（"你好，我能帮你…"），
@@ -1825,7 +2058,38 @@ async def run_turn(
                 getattr(m, "role", None) == "assistant" for m in result.messages
             )
             if already_spoke and not at_limit:
+                # ★ v1.31：额度见底、模型又不吽声时，最后一句话要是**计划**，
+                #   就补一句实话再收尾 —— 否则用户看到的就是「话停在半句上」。
+                last = next(
+                    (
+                        m
+                        for m in reversed(result.messages)
+                        if getattr(m, "role", None) == "assistant"
+                    ),
+                    None,
+                )
+                if last is not None and nudge_policy.looks_like_plan(
+                    getattr(last, "content", "") or ""
+                ):
+                    exhausted = chat_service.append_assistant_message(
+                        db, session=session, content=render_plan_exhausted_note()
+                    )
+                    db.commit()
+                    result.messages.append(exhausted)
+                    result.needs_continue = True
+                    await _emit_message(emit, exhausted)
                 return result
+
+            _log.warning(
+                "chat.giveup empty_reply nudges=%s tool_nudges=%s empty_nudges=%s "
+                "truncations=%s at_limit=%s already_spoke=%s",
+                nudges_used,
+                tool_nudges_used,
+                empty_nudges_used,
+                truncations_used,
+                at_limit,
+                already_spoke,
+            )
 
             from app.kernel.runner import parse_actions as _parse
 
@@ -1848,13 +2112,30 @@ async def run_turn(
         # ★ v1.29：这次 FINAL 是不是**提前宣言**（跑过工具、还没打回过）。
         #   是的话它就不是结论，落 process —— 否则界面会先闪一条"结论"气泡，
         #   随后又被真正的结论顶掉（v1.25 修过同一形态）。
-        premature_final = bool(
-            said_final
-            and not actions
-            and tools_used > 0
+        #
+        # ★ v1.30：额度改用 `plan_bounces`。计划句与"问过没有"无关 ——
+        #   见 `MAX_PLAN_BOUNCES` 的长注释（线上会话 chat_01M640EY2…）。
+        #
+        # ★ v1.31：**不再要求模型自己写 `FINAL:`**。线上复跑
+        #   chat_01M652CRXMJ4H9P1XABAJ4VGSH 的停点是：模型写
+        #   「保护很弱：没有 PIE，也没有 canary。接下来查看 main、read_input
+        #   等函数。」—— 它没写 FINAL，于是 `said_final=False`，这句话按
+        #   `answer` 落库；紧接着两次空回复吃光纠偏额度，整轮 `done`，
+        #   界面就停在半句计划上（用户：「输出一半就停了」）。
+        #   计划句的判据是**句子本身**，与模型有没有自称 FINAL 无关。
+        # ★ v1.35：同样不再要求 `tools_used > 0` —— 零工具轮次的计划句也
+        #   是计划句（见 `nudge.looks_like_plan` 的长正文窗口）。
+        # ★ v1.35：**被输出上限切断的回复不算计划句** —— 它并非"说完就停了
+        #   "，而是话没说完；截断提醒（"接着写完"）比计划提醒更准，
+        #   而且截断有自己的额度（`MAX_TRUNCATION_CONTINUES`）。
+        plan_like_final = bool(
+            not actions
             and not at_limit
-            and final_confirmations < MAX_FINAL_CONFIRMATIONS
+            and not _is_truncated(reply)
             and nudge_policy.looks_like_plan(text)
+        )
+        premature_final = (
+            plan_like_final and tools_used > 0 and plan_bounces < MAX_PLAN_BOUNCES
         )
         assistant_message = chat_service.append_assistant_message(
             db,
@@ -1864,7 +2145,12 @@ async def run_turn(
             # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
             #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
             #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
-            surface="answer" if (not actions and not premature_final) else "process",
+            # ★ v1.30：额度用完的计划句也不能当 `answer` —— 它是计划，不是结果。
+            surface=(
+                "answer"
+                if (not actions and not premature_final and not plan_like_final)
+                else "process"
+            ),
         )
         result.messages.append(assistant_message)
         db.commit()
@@ -1876,15 +2162,20 @@ async def run_turn(
             #   这一轮在跑完一个工具后就结束了。所以任务型轮次第一次收到
             #   FINAL 时先打回，问它一句"真的交付了吗"。
             if premature_final:
+                plan_bounces += 1
                 final_confirmations += 1
-                pending_reminder = render_final_confirm_reminder(text)
+                pending_reminder = (
+                    render_final_confirm_reminder(text)
+                    if said_final
+                    else render_format_reminder()
+                )
                 await _emit_phase(
                     emit,
                     "resume",
                     round_index,
                     reason="final-check",
-                    attempt=final_confirmations,
-                    maxAttempts=MAX_FINAL_CONFIRMATIONS,
+                    attempt=plan_bounces,
+                    maxAttempts=MAX_PLAN_BOUNCES,
                 )
                 continue
 
@@ -1906,6 +2197,27 @@ async def run_turn(
             #
             # 三层都过了才推，且把**为什么**告诉模型（被切断 vs 格式错），
             # 见 `render_format_reminder` / `render_truncation_reminder`。
+            #
+            # ★ v1.32：计划句的打回额度用尽时**先**收尾，与
+            #   `resume_approved` 的顺序对齐 —— 否则它会先走 tool nudge
+            #   一路推到 300 次工具轮数，用户等的还是半句话。
+            # ★ v1.35：只限**跑过工具**的轮次。零工具的计划句本质是
+            #   "说要去做却没写 ACTION"，走下面的纠偏通道（`format`，
+            #   额度 `MAX_NARRATION_NUDGES`）更准：它既不该当成答复，
+            #   也不该占用"提前宣告结论"的预算。
+            if plan_like_final and tools_used > 0:
+                # ★ v1.30：打回额度用完，但这句话仍然是计划 —— **不能当结论
+                #   交出去**。补一句实话，用户才知道该说「继续」。
+                exhausted = chat_service.append_assistant_message(
+                    db, session=session, content=render_plan_exhausted_note()
+                )
+                db.commit()
+                result.messages.append(exhausted)
+                # ★ v1.35：停在计划句上 = 还没给出结论，不能记成 `done`。
+                result.needs_continue = True
+                await _emit_message(emit, exhausted)
+                return result
+
             if nudge_policy.should_nudge(
                 at_limit=at_limit,
                 said_final=said_final,
@@ -1948,9 +2260,34 @@ async def run_turn(
                     attempt=nudges_used,
                     maxAttempts=MAX_NARRATION_NUDGES,
                 )
-                # 这一轮没有动作，所以循环末尾的"工具预算 +1"不适用；
-                # 用 `continue` 直接进下一轮模型调用。
                 continue
+
+            # ★ v1.35：纠偏额度也用完了，但这句仍然是计划 —— 同样不能
+            #   当结论交出去（零工具轮次走的就是这条通道）。补一句实话，
+            #   并记下"这一轮还没答完"，由 `_run_guarded_active` 落
+            #   `interrupted`。
+            if plan_like_final:
+                exhausted = chat_service.append_assistant_message(
+                    db, session=session, content=render_plan_exhausted_note()
+                )
+                db.commit()
+                result.messages.append(exhausted)
+                result.needs_continue = True
+                await _emit_message(emit, exhausted)
+                return result
+
+            _log.warning(
+                "chat.giveup no_action said_final=%s plan_like=%s plan_bounces=%s "
+                "nudges=%s tool_nudges=%s truncations=%s at_limit=%s text_len=%s",
+                said_final,
+                plan_like_final,
+                plan_bounces,
+                nudges_used,
+                tool_nudges_used,
+                truncations_used,
+                at_limit,
+                len(text),
+            )
             return result
 
         for name, args in actions:
@@ -2061,8 +2398,11 @@ async def resume_approved(
     nudges_used = 0
     truncations_used = 0
     tool_nudges_used = 0
+    #: 「模型一个字没写」被推了几次（v1.32，见 `MAX_EMPTY_NUDGES`）。
+    empty_nudges_used = 0
     tools_used = 0
     final_confirmations = 0
+    plan_bounces = 0
     pending_reminder: str | None = None
 
     for round_index in range(
@@ -2164,21 +2504,41 @@ async def resume_approved(
 
         if not text and not actions:
             nudge_truncated = _is_truncated(reply)
-            nudge_allowed = (
-                truncations_used < MAX_TRUNCATION_CONTINUES
-                if nudge_truncated
-                else (nudges_used - truncations_used) < MAX_NARRATION_NUDGES
-            )
+            # ★ v1.31：与 `run_turn` 同一条额度分级（空回复走 `MAX_EMPTY_NUDGES`）。
+            # ★ v1.32：空回复单独计数，不被叙述纠偏吃额度。
+            if nudge_truncated:
+                nudge_allowed = truncations_used < MAX_TRUNCATION_CONTINUES
+            elif tools_used > 0:
+                nudge_allowed = empty_nudges_used < MAX_EMPTY_NUDGES
+            else:
+                nudge_allowed = (
+                    nudges_used - truncations_used
+                ) < MAX_NARRATION_NUDGES
             if not at_limit and nudge_allowed:
                 nudges_used += 1
                 if nudge_truncated:
                     truncations_used += 1
+                elif tools_used > 0:
+                    tool_nudges_used += 1
+                    empty_nudges_used += 1
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if nudge_truncated
                     else render_format_reminder()
                 )
                 continue
+
+            # ★ v1.33：与 `run_turn` 同一条原生工具调用兜底 —— 批准后上游
+            #   只回工具调用时，不能落一句「批准后模型没有产出内容」了事。
+            if reply.finish_reason in _NATIVE_FINISH_REASONS:
+                note = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=render_native_tool_note(_native_names(reply)),
+                )
+                db.commit()
+                result.messages.append(note)
+                return result
 
             placeholder = chat_service.append_assistant_message(
                 db,
@@ -2192,13 +2552,18 @@ async def resume_approved(
         # ★ v1.29：这次 FINAL 是不是**提前宣言**（跑过工具、还没打回过）。
         #   是的话它就不是结论，落 process —— 否则界面会先闪一条"结论"气泡，
         #   随后又被真正的结论顶掉（v1.25 修过同一形态）。
-        premature_final = bool(
-            said_final
-            and not actions
-            and tools_used > 0
+        # ★ v1.30：与 `run_turn` 同一条计划句闸（见 `MAX_PLAN_BOUNCES`）。
+        # ★ v1.31：同样不再要求 `FINAL:` —— 计划句就是计划句（见 run_turn）。
+        # ★ v1.35：也不再要求 `tools_used > 0`（与 run_turn 同步），同样
+        #   不把被切断的回复当计划句（见 run_turn 那里的注释）。
+        plan_like_final = bool(
+            not actions
             and not at_limit
-            and final_confirmations < MAX_FINAL_CONFIRMATIONS
+            and not _is_truncated(reply)
             and nudge_policy.looks_like_plan(text)
+        )
+        premature_final = (
+            plan_like_final and tools_used > 0 and plan_bounces < MAX_PLAN_BOUNCES
         )
         assistant_message = chat_service.append_assistant_message(
             db,
@@ -2208,7 +2573,11 @@ async def resume_approved(
             # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
             #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
             #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
-            surface="answer" if (not actions and not premature_final) else "process",
+            surface=(
+                "answer"
+                if (not actions and not premature_final and not plan_like_final)
+                else "process"
+            ),
         )
         result.messages.append(assistant_message)
         db.commit()
@@ -2216,12 +2585,35 @@ async def resume_approved(
         if not actions:
             # ★ v1.29：与 `run_turn` 同一条 FINAL 打回闸（见那边的长注释）。
             if premature_final:
+                plan_bounces += 1
                 final_confirmations += 1
-                pending_reminder = render_final_confirm_reminder(text)
+                pending_reminder = (
+                    render_final_confirm_reminder(text)
+                    if said_final
+                    else render_format_reminder()
+                )
                 continue
+
+            # ★ v1.35：同 `run_turn` —— 只有跑过工具的计划句才走"提前宣告
+            #   结论"的额度；零工具的计划句走下面的纠偏通道。
+            if plan_like_final and tools_used > 0:
+                # ★ v1.30：额度用尽的计划句不当结论，补一句实话（同 `run_turn`）。
+                # ★ v1.35：并记下"这一轮还没答完"，由 `_run_guarded_active`
+                #   落 `interrupted`。
+                exhausted = chat_service.append_assistant_message(
+                    db, session=session, content=render_plan_exhausted_note()
+                )
+                db.commit()
+                result.messages.append(exhausted)
+                result.needs_continue = True
+                return result
 
             # ★ v1.13：与 `run_turn` 同一条判据顺序（见那边的长注释）：
             #   到上限 / 用尽纠偏 / `_looks_unfinished` —— 三者都过了才推。
+            #
+            # ★ v1.31：这段原本被一行无条件的 `return result` 挡在后面，
+            #   永远不执行 —— 批准后的续跑从来没有纠偏过，模型写完一句
+            #   计划就直接收尾（与 run_turn 的 v1.13 缺陷同源）。
             if nudge_policy.should_nudge(
                 at_limit=at_limit,
                 said_final=said_final,
@@ -2250,6 +2642,17 @@ async def resume_approved(
                     else render_format_reminder()
                 )
                 continue
+
+            # ★ v1.35：纠偏额度用完而句子仍是计划 —— 同 `run_turn`，
+            #   不当结论，记下"还没答完"。
+            if plan_like_final:
+                exhausted = chat_service.append_assistant_message(
+                    db, session=session, content=render_plan_exhausted_note()
+                )
+                db.commit()
+                result.messages.append(exhausted)
+                result.needs_continue = True
+                return result
             return result
 
         for name, args in actions:
@@ -2326,10 +2729,33 @@ def _collapse_turn_answers(db: Session, result: "ChatTurnResult") -> None:
     半路停（更贵的错）。所以判据保持宽松（宁可多问一次），但在轮末把
     **中间的** assistant 消息降级成过程面 —— 界面上永远只有一句结论。
     """
+    # ★ v1.33：按**会话里最后一条用户消息之后**的全部 assistant 消息折叠，
+    #   而不是只看 `result.messages`。后台接手会另起一个执行体，它拿不到
+    #   原执行体那条结论；只折叠自己的列表，界面上就会留下两条 answer。
+    #   以用户消息为界不需要给消息加 turn_id：同一轮的所有消息都排在它后面。
+    if not result.messages:
+        return
+    session_id = getattr(result.messages[0], "session_id", None)
+    if not session_id:
+        return
+    last_user_seq = db.scalar(
+        select(ChatMessage.seq)
+        .where(ChatMessage.session_id == session_id, ChatMessage.role == "user")
+        .order_by(ChatMessage.seq.desc())
+        .limit(1)
+    )
     assistants = [
         m
-        for m in result.messages
-        if getattr(m, "role", None) == "assistant" and (getattr(m, "content", "") or "").strip()
+        for m in db.scalars(
+            select(ChatMessage)
+            .where(
+                ChatMessage.session_id == session_id,
+                ChatMessage.role == "assistant",
+                ChatMessage.seq > (last_user_seq or 0),
+            )
+            .order_by(ChatMessage.seq)
+        )
+        if (m.content or "").strip()
     ]
     changed = False
     for earlier in assistants[:-1]:
@@ -2353,6 +2779,27 @@ async def _run_guarded(
     """
     run = turn_run_store.start(db, session_id=session.id)
     db.commit()
+    # ★ v1.33：本进程正在跑的轮次不能被本进程的后台 resumer 抢走。
+    #   心跳是 90 秒粒度，长工具期间会显得过期；集合在 finally 里清掉，
+    #   进程崩溃后集合自然消失，跨进程接手仍由数据库心跳决定。
+    turn_run_store.mark_active(run.id)
+    try:
+        return await _run_guarded_active(
+            db, session=session, kind=kind, run=run, call=call
+        )
+    finally:
+        turn_run_store.unmark_active(run.id)
+
+
+async def _run_guarded_active(
+    db: Session,
+    *,
+    session: ChatSession,
+    kind: str,
+    run: Any,
+    call,
+) -> ChatTurnResult:
+    """`_run_guarded` 的主体：此时 `run` 已经登记为本进程活跃轮次。"""
     try:
         result = await call(run)
     except BaseException as exc:  # noqa: BLE001 - 见下
@@ -2386,7 +2833,14 @@ async def _run_guarded(
 
     # ★ v1.25：用户主动停掉的这一轮落 `cancelled` —— 不能落 `done`（会被当成
     #   跑完了），也不能落 `interrupted`（后台 resumer 会自动接手，与"别再跑"相反）。
-    turn_run_store.finish(db, run, status="cancelled" if result.stopped else "done")
+    # ★ v1.35：停在计划句上的轮次落 `interrupted` —— 它还没给出结论，落 `done`
+    #   会让界面和后台都以为"答完了"。
+    if result.stopped:
+        turn_run_store.finish(db, run, status="cancelled")
+    elif result.needs_continue:
+        turn_run_store.finish_incomplete(db, run)
+    else:
+        turn_run_store.finish(db, run, status="done")
     db.commit()
     return result
 

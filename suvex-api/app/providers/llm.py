@@ -625,3 +625,189 @@ def stream_finish_reason(anthropic: bool, event: str | None, data: str) -> str:
         return ""
     reason = first.get("finish_reason")
     return reason if isinstance(reason, str) else ""
+
+
+# ══════════════════════════════════════════════════════════
+# 原生工具调用（tool_calls / tool_use）
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么这两个函数存在
+#
+# 2026-10-30 的线上会话 `chat_01M6556ES13EGH8NN712252SPB`：
+# 本地 OpenAI 兼容网关**只**回原生 `tool_calls`（`delta.tool_calls` +
+# `finish_reason="tool_calls"`，正文为空）。`stream_delta` 只取
+# `delta.content`，于是整段工具调用被丢弃；引擎拿到
+# `text='' actions=[] finish='tool_calls'`，进空回复分支后静默收尾 ——
+# 用户看到的就是「对话跑到一半就结束」。
+#
+# 这两个函数只做一件事：把**两套 wire 形状**归一化成一串
+# `{"index", "id", "name", "arguments"}`，交给调用方合成平台的
+# `ACTION:` 文本协议。**认不出就返回空列表，绝不抛** —— 与
+# `stream_delta` / `stream_finish_reason` 同一条纪律。
+
+
+def _json_text(value: object) -> str:
+    """把工具调用的参数值转成字符串（dict → JSON，其余 → 空串）。"""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        # ★ Anthropic 的 `content_block_start` 里空 `input` 表示"参数随后
+        #   由 `input_json_delta` 拼"；非空 dict 才是完整终值。空 dict 必须
+        #   回空串，否则会被当成一个真的 `{}` 终值，后续分片全被丢掉。
+        return json.dumps(value, ensure_ascii=False) if value else ""
+    return ""
+
+
+def tool_calls_delta(anthropic: bool, event: str | None, data: str) -> list[dict]:
+    """从**一帧**流式 SSE 里取出增量工具调用。认不出返回 `[]`。
+
+    ## OpenAI 兼容
+
+        data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1",
+               "function":{"name":"run_shell","arguments":"{\\\"comm"}}]}}]}
+
+    `arguments` 是**分片**的：这一帧可能只有半截 JSON，下一帧才补齐。
+    调用方按 `index` 累积（见 `runner.LlmGateway.chat_stream`）。
+
+    ## Anthropic
+
+    * `content_block_start` 且 `content_block.type == "tool_use"`：
+      给出 `name` / `id`，`input` 为空 dict 时 `arguments` 记空串；
+      非空 dict 是**完整终值**，直接 `json.dumps`。
+    * `content_block_delta` 且 `delta.type == "input_json_delta"`：
+      `arguments` 是 `partial_json` 片段。
+
+    其余帧（正文、`ping`、`message_delta`…）一律返回 `[]`。
+    """
+    if not data or data.strip() == STREAM_DONE_PAYLOAD:
+        return []
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        return []
+    if not isinstance(parsed, dict):
+        return []
+
+    if anthropic:
+        kind = parsed.get("type") or event or ""
+        if kind == "content_block_start":
+            block = parsed.get("content_block")
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                return []
+            index = block.get("index", parsed.get("index", 0))
+            return [
+                {
+                    "index": index if isinstance(index, int) else 0,
+                    "id": str(block.get("id") or ""),
+                    "name": str(block.get("name") or ""),
+                    "arguments": _json_text(block.get("input")),
+                }
+            ]
+        if kind == "content_block_delta":
+            delta = parsed.get("delta")
+            if not isinstance(delta, dict) or delta.get("type") != "input_json_delta":
+                return []
+            partial = delta.get("partial_json")
+            index = parsed.get("index", 0)
+            return [
+                {
+                    "index": index if isinstance(index, int) else 0,
+                    "id": "",
+                    "name": "",
+                    "arguments": partial if isinstance(partial, str) else "",
+                }
+            ]
+        return []
+
+    choices = parsed.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    first = choices[0]
+    if not isinstance(first, dict):
+        return []
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return []
+    raw_calls = delta.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return []
+
+    calls: list[dict] = []
+    for position, item in enumerate(raw_calls):
+        if not isinstance(item, dict):
+            continue
+        index = item.get("index", position)
+        function = item.get("function")
+        function = function if isinstance(function, dict) else {}
+        name = str(function.get("name") or "")
+        arguments = _json_text(function.get("arguments"))
+        call_id = str(item.get("id") or "")
+        if not (name or arguments or call_id):
+            continue
+        calls.append(
+            {
+                "index": index if isinstance(index, int) else position,
+                "id": call_id,
+                "name": name,
+                "arguments": arguments,
+            }
+        )
+    return calls
+
+
+def tool_calls_from_message(anthropic: bool, body: object) -> list[dict]:
+    """从**非流式整包**响应里取出工具调用。认不出返回 `[]`。
+
+    OpenAI：`choices[0].message.tool_calls[*].function.{name,arguments}`；
+    Anthropic：`content` 列表里 `type == "tool_use"` 的块（`input` 用
+    `json.dumps`）。形状与 `tool_calls_delta` 一致。
+    """
+    if not isinstance(body, dict):
+        return []
+
+    if anthropic:
+        blocks = body.get("content")
+        if not isinstance(blocks, list):
+            return []
+        calls: list[dict] = []
+        for position, block in enumerate(blocks):
+            if not isinstance(block, dict) or block.get("type") != "tool_use":
+                continue
+            calls.append(
+                {
+                    "index": position,
+                    "id": str(block.get("id") or ""),
+                    "name": str(block.get("name") or ""),
+                    "arguments": _json_text(block.get("input")) or "{}",
+                }
+            )
+        return calls
+
+    choices = body.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return []
+    first = choices[0]
+    if not isinstance(first, dict):
+        return []
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return []
+    raw_calls = message.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return []
+
+    calls = []
+    for position, item in enumerate(raw_calls):
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        function = function if isinstance(function, dict) else {}
+        calls.append(
+            {
+                "index": position,
+                "id": str(item.get("id") or ""),
+                "name": str(function.get("name") or ""),
+                "arguments": _json_text(function.get("arguments")),
+            }
+        )
+    return calls

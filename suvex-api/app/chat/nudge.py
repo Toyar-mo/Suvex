@@ -103,25 +103,199 @@ def looks_unfinished(text: str) -> bool:
 #:
 #: 判据刻意很窄：句子级起点词 + 紧邻的动词。「查到了，libc 是 2.31」不含
 #: 这些形态，所以不会被误打回。
+#: 分句边界：计划动词不一定在整条正文的第一句，更常见的是**逗号后面**那半句。
+#:
+#: 线上原句（`chat_01M64ANA9DQVW1FGWMPEZY6NZD` 第 9 条，2026-10-29 17:19 EDT）：
+#:
+#:     FINAL: 主逻辑在 0x40070b，看它。
+#:
+#: 前半句是事实，动作在「，」后面。只按句号/换行切分时「看它」漏掉 →
+#: `plan_like_final=False` → 消息落成 `surface='answer'` → 整轮 `done`，
+#: 界面就停在「主逻辑在 0x40070b，看它。」上，用户又得手打「继续」。
+_CLAUSE_BREAK = r"(?:^|[。；！？\n，、：:])"
+
 _PLAN_START = re.compile(
-    r"(?:^|[。；！？\n])\s*(?:先|现在|接下来|下一步|然后|下面|接着|待会|稍后)"
+    _CLAUSE_BREAK
+    + r"\s*(?:先|现在|接下来|下一步|然后|下面|接着|待会|稍后|还差|差一步|最后一步)"
 )
 _PLAN_VERB = re.compile(
     r"(?:现在|先|接下来|下一步|然后|接着|待会)\s*"
     r"(?:查|看|试|跑|去|来|要|开始|执行|写|扫|读|改|装|下|测|确认|分析|拿|抓|起)"
 )
 
+#: 句首**直接**是动词的计划句（v1.29.1）。
+#:
+#: ## 为什么 v1.29 的判据不够
+#:
+#: 上面两条正则都要求句首有**话语标记**（先/现在/接下来…），且
+#: `_PLAN_VERB` 还要求标记与动词紧邻。但实测里模型更常写的是裸动词：
+#:
+#:     线上会话 `chat_01M63WHGQJHAJ684E5YTBQC0QX` 最后一轮的原句：
+#:     `FINAL: stripped、动态链接、只有 read/puts/setbuf，两次输入。看反汇编确认溢出点。`
+#:
+#: `看反汇编确认溢出点` 前面没有任何标记词，两条正则都不命中 →
+#: `premature_final=False` → 这条消息落成 `answer` 气泡 → 整轮 `done`。
+#: 用户看到的就是「输出一半就停了」。
+#:
+#: ## 为什么负向断言 `(?!了|到|出|过|完)`
+#:
+#: 「看了」「查到了」「跑完了」是**已经发生**的事，属于结论的一部分；
+#: 没有这个断言，`看了反汇编，偏移是 0x28。` 会被误打回。
+_PLAN_BARE_VERB = re.compile(
+    _CLAUSE_BREAK
+    # ★ v1.34：`我` 不能挡住裸动词。「我看下反汇编。」在 v1.33 里
+    #   因为分句边界后先遇到「我」而漏判 → 落成 answer → 整轮结束。
+    + r"\s*(?:我)?\s*"
+    r"(?:看|查|试|跑|分析|确认|读|写|扫|执行|找|验证|反汇编|构造|编写|调试|继续|跟进|连接|上传|下载|提交|发送|打)"
+    # ★ v1.30.1：`通过/入/即/成/好` 也是"已经发生"或状态描述，不是下一步。
+    #   reviewer-7d4f40 实测：`偏移 0x28，验证通过。` 与
+    #   `地址在 0x40070b，写入即覆盖返回地址。` 都被误判成计划 ——
+    #   于是真结论被多问一轮，用户多等一次模型调用。
+    # ★ v1.32：`起` —— 「看起来」是结论式开场（「看起来 flag 在 /flag 里」），
+    #   不是下一步动作；没有它，`看` 会被当成裸动词计划。
+    r"(?!了|到|出|过|完|通过|入|即|成|好|起)"
+    # ★ v1.34：`我先把 gadget … 确认下来` 是计划；「把」不在动词表里，
+    #   分句边界后又被「我」挡住，所以单独认「（我）先把」。
+    + r"|"
+    + _CLAUSE_BREAK
+    + r"\s*(?:我)?先把"
+)
+
+#: 正文里出现这些，说明有**实际交付物**，不该当计划打回。
+#:
+#: 打回一次的成本是一次模型调用；把真结论打回的代价是用户多等一轮，
+#: 而漏判的代价是用户以为解完了、其实停在半路 —— 后者更贵，所以判据
+#: 只排除**明确的完成证据**，不做语义理解。
+#:
+#: ★ v1.30.1：`拿到` / `成功` 不能裸判 —— reviewer-7d4f40 实测
+#:   `先看反汇编，拿到偏移后再写 exploit。` 因为句中有「拿到」被放过，
+#:   落成 `answer` 后整轮结束。只有**完成态**（已…／…了／…过／成功读出）
+#:   才算交付物；「拿到 X 再 Y」是计划。
+_RESULT_MARKERS = re.compile(
+    r"flag\{|flag："
+    r"|已(?:经)?(?:解出|拿到|取得|完成|通过|验证|成功)"
+    r"|(?:拿到|得到|解出|读出|取得|打通|getshell)[^，。；！？\n]{0,12}(?:了|过)"
+    r"|成功(?:地)?(?:读出|拿到|解出|取得|打通)"
+    # ★ v1.32：`跑通了/试通过` 是完成态；「接下来跑通 exploit」没有"了/过"，
+    #   仍然是计划。
+    r"|(?:跑|试)通(?:了|过)"
+    # ★ v1.32：只认**明确交付物**的"如下"（反汇编/输出/结果/代码）。
+    #   宽泛的"如下"会漏掉「先看如下命令」这类计划。
+    r"|(?:反汇编|输出|结果|代码|分析)如下"
+    # ★ v1.32：`flag 是 DASCTF{…}` 是结果；宽泛的"flag 是"会漏掉
+    #   「确认 flag 是什么格式」——那句后面没有 `{`。
+    r"|flag\s*(?:是|为)\s*[A-Za-z0-9_]{2,32}\{"
+    r"|溢出点在|偏移是",
+    re.IGNORECASE,
+)
+
+
+#: 计划动作是写给「你/您」的，说明模型在交代用法，不是自己还没做完。
+#: 例：`已解出 flag{…}，接下来你可以提交。` 是真结论，不能打回。
+_SECOND_PERSON_TRAILING = re.compile(
+    r"(?:接下来|下一步|然后|接着|下面|待会|稍后|先|现在)"
+    r"[^。；！？\n]{0,6}(?:你|您)"
+)
+
+#: 「接下来是结论/下面是总结」是在引出结论，不是下一步动作。
+#: reviewer-266f16 实测：`已解出 flag{abc}，接下来是结论：偏移 0xb8。`
+#: 被当成计划多打回一轮；它其实是结论。
+_CONCLUSION_LEAD = re.compile(
+    r"(?:接下来|下面|以下|后面)(?:是|为)?(?:结论|总结|汇总|结果)"
+)
+
+
+#: 长正文只看末尾这么多**非空分句**（v1.35）。
+#:
+#: 为什么不是"长正文一律不算计划"：实测里模型经常先写一段（>200 字）的
+#: 反汇编/防护说明，最后一句才是「接下来写 exploit。」。整条按长度一刀切会
+#: 把这种真正的半路停当成结论放过 —— 与 v1.29 修的是同一类线上形态，只是
+#: 正文更长。
+#:
+#: 为什么是 3：计划是**收尾**句，最多再加上一句过渡（「因此」「所以」）。
+#: 窗口再大就会把正文中段的「先看过 main」重新算进来，那正是长度判据要
+#: 避免的误判。
+TRAILING_PLAN_CLAUSES = 3
+
+
+def _has_trailing_plan(body: str, *, allow_bare_verb: bool = True) -> bool:
+    """完成标记附近是否还挂着下一步动作（v1.34）。
+
+    reviewer-4e5f63 的线上级复现：
+
+        FINAL: 已拿到 libc 版本，接下来跑 one_gadget。
+        FINAL: 反汇编如下：main 在 0x40070b。接下来写 exploit。
+        FINAL: 输出如下：uid=0。接下来读 /flag。
+
+    三句都被 `_RESULT_MARKERS` 命中后直接放过，落成 `answer` 结束。
+    正确语义是：完成标记只说明**已经做到哪一步**，同一句里还有
+    「接下来…」就说明本轮没做完。
+
+    ★ 不能只看最后一个完成标记的尾巴：计划也可能写在前面，例如
+    `接下来写 exploit，已拿到 libc 版本。`。这里按分句扫描，先把
+    完成标记剥掉，再判断剩下的部分有没有计划动作。
+    """
+    for clause in re.split(r"[。；！？\n，、：:]", body):
+        if not clause.strip():
+            continue
+        if _SECOND_PERSON_TRAILING.search(clause):
+            continue
+        if _CONCLUSION_LEAD.search(clause):
+            continue
+        cleaned = _RESULT_MARKERS.sub("", clause)
+        if _PLAN_START.search(cleaned) or _PLAN_VERB.search(cleaned):
+            return True
+        # ★ v1.35：长正文只认带话语标记的计划（见 `TRAILING_PLAN_CLAUSES`）。
+        #   裸动词表里「反汇编」「看」这类词在技术性结论里太常见，窗口化之后
+        #   误判率反而上升（例如「反汇编里逐条对照栈帧」）。
+        if allow_bare_verb and _PLAN_BARE_VERB.search(cleaned):
+            return True
+    return False
+
+
+def _tail_clauses(body: str, window: int = TRAILING_PLAN_CLAUSES) -> str:
+    """取正文最后 `window` 个非空**句子**（按句末标点切，逗号留在句内）。
+
+    只按逗号切会让「，」把一个长句拆成很多碎片，一个 200 字的结论会只剩
+    三个逗号短语；只按句号切又会把"最后一句里逗号后的计划"整句带进来。
+    这里按句子切窗口，再交给 `_has_trailing_plan` 按分句扫描 —— 两个粒度
+    各自负责一件事。
+    """
+    sentences = [s for s in re.split(r"[。；！？\n]", body) if s.strip()]
+    if not sentences:
+        return ""
+    return "。".join(sentences[-window:])
+
 
 def looks_like_plan(text: str) -> bool:
     """这句 `FINAL:` 的内容是不是「接下来要做什么」（v1.29）。
 
-    只判**长短 + 形态**，不理解语义：短句（<200 字）且命中计划词才算。
-    长正文里顺带一句「然后我看了下」不算计划 —— 那通常是真的在讲过程。
+    只判**长短 + 形态**，不理解语义：短句（<200 字）命中计划词才算；
+    长正文（≥200 字）只看**末尾几个分句**里有没有带话语标记的计划 ——
+    正文中段顺带一句「然后我看了下」通常是过程叙述，不是半路停。
+
+    ★ v1.34：完成标记不再无条件放过。`已拿到 libc 版本，接下来跑
+    one_gadget。` 前半句是交付物、后半句仍是计划；只看前半句会让整轮
+    停在半路。现在改为只看**最后一个完成标记之后**的尾巴。
+
+    ★ v1.35：长正文不再一刀切返回 False。线上形态是「先讲 200 多字的
+    保护/反汇编结论，最后一句：接下来写 exploit。」—— 长度判据把它当成了
+    真结论，整轮落 `done`。窗口化之后长正文也会打回，但只看收尾那几句。
     """
     body = text.strip()
-    if not body or len(body) >= MAX_UNFINISHED_CHARS:
+    if not body:
         return False
-    return bool(_PLAN_START.search(body) or _PLAN_VERB.search(body))
+    if len(body) >= MAX_UNFINISHED_CHARS:
+        # 长正文：只扫收尾窗口，且只认带话语标记的计划（见 `_has_trailing_plan`）。
+        return _has_trailing_plan(_tail_clauses(body), allow_bare_verb=False)
+    # ★ v1.29.1：有交付物的句子通常不是计划；但 v1.34 起要检查尾巴。
+    if _RESULT_MARKERS.search(body):
+        return _has_trailing_plan(body)
+    return bool(
+        _PLAN_START.search(body)
+        or _PLAN_VERB.search(body)
+        or _PLAN_BARE_VERB.search(body)
+    )
 
 
 def should_nudge(

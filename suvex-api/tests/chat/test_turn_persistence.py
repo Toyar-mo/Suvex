@@ -176,6 +176,12 @@ def _new_session(db: Session) -> Any:
     return session
 
 
+def _make_stale(db: Session, run: Any) -> None:
+    """把心跳拨到过期，模拟 `stale_runs()` 捞出来的那一行。"""
+    run.heartbeat_at = now_utc() - timedelta(seconds=turn_runs.STALE_SECONDS + 1)
+    db.commit()
+
+
 def test_start_creates_running_row(db_session: Session) -> None:
     session = _new_session(db_session)
     run = turn_runs.start(db_session, session_id=session.id)
@@ -238,6 +244,203 @@ def test_claim_bumps_attempts_and_keeps_it_running(db_session: Session) -> None:
     assert turn_runs.claim(db_session, run, now=now) is True
     assert run.resume_attempts == 1
     assert run.status == "running"
+
+
+def test_claim_refuses_a_fresh_heartbeat(db_session: Session) -> None:
+    """心跳还新的一轮不能被抢：条件 UPDATE 必须自己再看一次心跳。"""
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+
+    assert turn_runs.claim(db_session, run, now=now_utc()) is False
+
+
+def test_claim_refuses_a_turn_active_in_this_process(db_session: Session) -> None:
+    """慢工具期间心跳会显得过期，但本进程里还在跑的一轮不能被抢。"""
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    later = now_utc() + timedelta(seconds=turn_runs.STALE_SECONDS + 1)
+
+    turn_runs.mark_active(run.id)
+    try:
+        assert turn_runs.claim(db_session, run, now=later) is False
+        assert turn_runs.is_resumable(run, now=later) is False
+        assert all(
+            row.id != run.id
+            for row in turn_runs.stale_runs(db_session, now=later)
+        )
+    finally:
+        turn_runs.unmark_active(run.id)
+
+    assert turn_runs.claim(db_session, run, now=later) is True
+
+
+async def test_resume_one_marks_the_run_active_while_it_runs(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """resumer 自己接手的那一轮也必须登记活跃租约（v1.33.1）。"""
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    _make_stale(db_session, run)
+
+    assert run.session_id == session.id
+    assert session.archived is False
+    # 这个用例只验证活跃租约；身份解析由线上账号表负责，测试库没有
+    # `user_admin` 这一行，直接给一个管理员身份即可。
+    monkeypatch.setattr(resumer, "_identity_for", lambda db, s: ADMIN)
+
+    seen: list[bool] = []
+
+    async def fake_run_turn(db: Session, **kwargs: Any) -> Any:
+        seen.append(turn_runs.is_active(run.id))
+        return engine.ChatTurnResult(messages=[])
+
+    monkeypatch.setattr(engine, "run_turn", fake_run_turn)
+    claimed: list[bool] = []
+    real_claim = turn_runs.claim
+
+    def spy_claim(*args: Any, **kwargs: Any) -> bool:
+        out = real_claim(*args, **kwargs)
+        claimed.append(out)
+        return out
+
+    monkeypatch.setattr(turn_runs, "claim", spy_claim)
+
+    ran = await resumer.resume_one(db_session, run)
+    assert claimed == [True]
+    assert ran is True
+    assert seen == [True]
+    assert turn_runs.is_active(run.id) is False
+    db_session.refresh(run)
+    assert run.status == "done"
+
+
+async def test_resume_one_keeps_the_turn_incomplete_when_the_model_stops_on_a_plan(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """后台接手再停在计划句上，也不能记成 done（v1.35）。
+
+    resumer 走的是 `run_turn` 本身，不经过 `_run_guarded_active`；
+    v1.35 新增的『停在计划句 → interrupted』如果不在这里重复一次，
+    被接手的一轮会重新落回 `done`，用户看到的仍然是「没解出又结束」。
+    """
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    _make_stale(db_session, run)
+    monkeypatch.setattr(resumer, "_identity_for", lambda db, s: ADMIN)
+
+    async def still_planning(db: Session, **kwargs: Any) -> Any:
+        return engine.ChatTurnResult(messages=[], needs_continue=True)
+
+    monkeypatch.setattr(engine, "run_turn", still_planning)
+
+    ran = await resumer.resume_one(db_session, run)
+    assert ran is True
+    db_session.refresh(run)
+    assert run.status == "interrupted", "还没给出结论的轮次不能记成 done"
+    assert run.last_error == turn_runs.NEEDS_CONTINUE_REASON
+
+
+async def test_resume_one_keeps_a_user_stop_cancelled(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """后台接手期间用户停掉的一轮落 cancelled，与前台路径一致。"""
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    _make_stale(db_session, run)
+    monkeypatch.setattr(resumer, "_identity_for", lambda db, s: ADMIN)
+
+    async def stopped(db: Session, **kwargs: Any) -> Any:
+        return engine.ChatTurnResult(messages=[], stopped=True)
+
+    monkeypatch.setattr(engine, "run_turn", stopped)
+
+    ran = await resumer.resume_one(db_session, run)
+    assert ran is True
+    db_session.refresh(run)
+    assert run.status == "cancelled"
+
+
+async def test_resume_one_releases_the_lease_when_run_turn_raises(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """异常路径也必须释放租约，否则这一轮在本进程里永远不可接手。"""
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    _make_stale(db_session, run)
+    monkeypatch.setattr(resumer, "_identity_for", lambda db, s: ADMIN)
+
+    async def boom(db: Session, **kwargs: Any) -> Any:
+        assert turn_runs.is_active(run.id) is True
+        raise RuntimeError("gateway exploded")
+
+    monkeypatch.setattr(engine, "run_turn", boom)
+
+    ran = await resumer.resume_one(db_session, run)
+    assert ran is False
+    assert turn_runs.is_active(run.id) is False
+    db_session.refresh(run)
+    assert run.status == "interrupted"
+    assert "gateway exploded" in (run.last_error or "")
+
+
+def test_collapse_demotes_answers_from_another_executor(
+    db_session: Session,
+) -> None:
+    """后台接手另起执行体时，后完成者也要把对方那条 answer 降级。"""
+    session = _new_session(db_session)
+    chat_service.append_user_message(db_session, session=session, content="继续")
+    first = chat_service.append_assistant_message(
+        db_session, session=session, content="旧结论", surface="answer"
+    )
+    second = chat_service.append_assistant_message(
+        db_session, session=session, content="新结论", surface="answer"
+    )
+    db_session.commit()
+
+    # 模拟接手方只拿到自己这条消息的 result。
+    engine._collapse_turn_answers(
+        db_session, engine.ChatTurnResult(messages=[second])
+    )
+
+    db_session.refresh(first)
+    db_session.refresh(second)
+    assert first.surface == "process"
+    assert second.surface == "answer"
+
+
+def test_collapse_does_not_touch_the_previous_turn_answer(
+    db_session: Session,
+) -> None:
+    """折叠以最后一条用户消息为界，不能把上一轮的结论也降级。"""
+    session = _new_session(db_session)
+    chat_service.append_user_message(db_session, session=session, content="第一问")
+    previous = chat_service.append_assistant_message(
+        db_session, session=session, content="第一答", surface="answer"
+    )
+    chat_service.append_user_message(db_session, session=session, content="第二问")
+    middle = chat_service.append_assistant_message(
+        db_session, session=session, content="中间结论", surface="answer"
+    )
+    last = chat_service.append_assistant_message(
+        db_session, session=session, content="最终结论", surface="answer"
+    )
+    db_session.commit()
+
+    engine._collapse_turn_answers(
+        db_session, engine.ChatTurnResult(messages=[last])
+    )
+
+    for message in (previous, middle, last):
+        db_session.refresh(message)
+    assert previous.surface == "answer"
+    assert middle.surface == "process"
+    assert last.surface == "answer"
 
 
 def test_finish_from_error_keeps_it_resumable_not_failed(db_session: Session) -> None:
@@ -309,6 +512,274 @@ async def test_tool_rounds_alone_are_enough_to_nudge(db_session: Session) -> Non
     assert gateway.calls == 3, "跑过工具后停住，必须推一次再收尾"
 
 
+async def test_plan_like_final_with_bare_verb_is_bounced(
+    db_session: Session,
+) -> None:
+    """线上原句的收尾形态（v1.29.1）：句首直接是动词的计划，不能当结论。
+
+    `chat_01M63WHGQJHAJ684E5YTBQC0QX` 最后一轮的原文是：
+
+        FINAL: stripped、动态链接、只有 read/puts/setbuf，两次输入。看反汇编确认溢出点。
+
+    v1.29 的判据要求「先/现在/接下来…」+ 动词紧邻，这句话两个正则都不命中，
+    于是 `premature_final=False` → 落成 `answer` 气泡 → 整轮 `done`。
+    用户看到的就是「输出一半就停了」。
+
+    断言三件事，缺一不可：
+    * 被打回一次（`gateway.calls == 3`）—— 否则没有任何继续
+    * 被打回的那条落成 `process`（折叠进过程详情，不当结论闪一下）
+    * 最终结论是第三条，不是那句计划
+    """
+    session = _new_session(db_session)
+    plan = "stripped、动态链接、只有 read/puts/setbuf，两次输入。看反汇编确认溢出点。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (f"FINAL: {plan}", ""),
+            ("FINAL: 溢出点在 0x4006a0，偏移 0x28。", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3, "计划式的 FINAL 必须先被打回一次，而不是直接收尾"
+    bounced = [m for m in result.messages if m.content.strip() == plan]
+    assert bounced, "被打回的原句仍要留在过程面里，用户能回看"
+    assert bounced[0].surface == "process", "被打回的计划不是结论，不能画成答复气泡"
+    assert result.messages[-1].content.strip() == "溢出点在 0x4006a0，偏移 0x28。"
+
+
+async def test_plan_after_a_comma_is_bounced(
+    db_session: Session,
+) -> None:
+    """线上原句（`chat_01M64ANA9DQVW1FGWMPEZY6NZD` 第 9 条）：
+
+        FINAL: 主逻辑在 0x40070b，看它。
+
+    前半句是事实，逗号后面才是动作。旧判据只认句号/换行后的裸动词，
+    于是这句话被当成结论落成 `answer`，整轮 `done`。
+    """
+    session = _new_session(db_session)
+    plan = "主逻辑在 0x40070b，看它。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (f"FINAL: {plan}", ""),
+            ("FINAL: 溢出点在 0x4006a0，偏移 0x28。", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="继续，解出flag再停",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3, "逗号后的计划句也必须被打回一次"
+    bounced = [m for m in result.messages if m.content.strip() == plan]
+    assert bounced and bounced[0].surface == "process"
+    assert result.messages[-1].content.strip() == "溢出点在 0x4006a0，偏移 0x28。"
+
+
+async def test_repeated_plan_finals_never_land_as_an_answer(
+    db_session: Session,
+) -> None:
+    """连着多次计划句，后面的也不能当结论（v1.30）。
+
+    线上会话 `chat_01M640EY2P54QC1E2QS54R0R3Z`：seq 8「checksec 没输出，我用
+    readelf 和 pwn 自己看防护」先被打回一次；seq 10「……典型栈溢出。看主逻辑。」
+    同样是计划，但 `final_confirmations` 已经到 1，闸门直接放行 —— 落成
+    `answer`、整轮 `done`。用户看到的还是「解题到一半就结束了」。
+
+    这里让模型连续写计划句：前 `MAX_PLAN_BOUNCES` 次必须继续推，额度用尽
+    之后也不能把计划画成结论 —— 要补一句"这是计划，不是结果"。
+    """
+    session = _new_session(db_session)
+    plan = "没有 PIE、没有 canary，NX 开、Partial RELRO —— 典型栈溢出。看主逻辑。"
+    replies = [('ACTION: {"tool": "list_scans", "args": {}}', "")]
+    replies += [(f"FINAL: {plan}", "")] * (engine.MAX_PLAN_BOUNCES + 2)
+    gateway = ScriptedGateway(replies)
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 1 + engine.MAX_PLAN_BOUNCES + 1, (
+        "额度内必须一直推（每推一次多一次调用），用完后停下来补实话"
+    )
+    plan_messages = [m for m in result.messages if m.content.strip() == plan]
+    assert plan_messages, "被打回的计划句要留在过程面里"
+    assert all(m.surface == "process" for m in plan_messages), (
+        "计划句永远不是结论，哪怕打回额度已经用完"
+    )
+    assert "继续" in result.messages[-1].content, (
+        "额度用尽时必须告诉用户下一步还没做，而不是静默收尾"
+    )
+
+
+async def test_plan_prose_without_final_is_bounced(
+    db_session: Session,
+) -> None:
+    """线上复跑原句（`chat_01M652CRXMJ4H9P1XABAJ4VGSH` 第 12 条）：
+
+        保护很弱：没有 PIE，也没有 canary。接下来查看 main、read_input 等函数。
+
+    模型**没写** `FINAL:`，旧判据要求 `said_final` 才当计划，于是这句以
+    `answer` 落库；接着两次空回复吃光纠偏额度，整轮 `done` —— 用户看到
+    「输出一半就停了」。计划句的判据应该只看句子本身。
+    """
+    session = _new_session(db_session)
+    plan = "保护很弱：没有 PIE，也没有 canary。接下来查看 main、read_input 等函数。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (plan, ""),
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("FINAL: 溢出点在 0x4006a0，偏移 0x28。", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 4, "没写 FINAL 的计划句也必须被打回继续干"
+    bounced = [m for m in result.messages if m.content.strip() == plan]
+    assert bounced and bounced[0].surface == "process", "计划句不能落成结论气泡"
+    assert result.messages[-1].content.strip() == "溢出点在 0x4006a0，偏移 0x28。"
+
+
+async def test_plan_after_a_result_marker_is_bounced(
+    db_session: Session,
+) -> None:
+    """v1.34：完成标记之后还挂着「接下来」时，不能当结论结束。
+
+    reviewer-4e5f63 的引擎级复现：第二轮写
+
+        FINAL: 反汇编如下：main 在 0x40070b。接下来写 exploit。
+
+    旧判据只看前半句的「反汇编如下」就直接放过，surface=answer、
+    gateway.calls=2，整轮 done。正确行为是打回一次，等真正的结论。
+    """
+    session = _new_session(db_session)
+    plan = "FINAL: 反汇编如下：main 在 0x40070b。接下来写 exploit。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (plan, ""),
+            ("FINAL: exploit 跑通，flag 是 flag{ok}。", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3, "结尾仍是计划时必须打回一次，而不是直接收尾"
+    bounced = [m for m in result.messages if m.content.strip() == plan.removeprefix("FINAL: ")]
+    assert bounced and bounced[0].surface == "process", "计划句不能落成结论气泡"
+    assert result.messages[-1].content.strip() == "exploit 跑通，flag 是 flag{ok}。"
+
+
+async def test_empty_replies_after_a_plan_use_the_tool_budget(
+    db_session: Session,
+) -> None:
+    """跑过工具的轮次，空回复不能吃光那 2 次叙事额度（v1.31）。
+
+    线上复跑：计划句之后模型连回两次空，`nudges_used` 当场到 2，空回复分支
+    看到「已经说过话」就直接 `return` —— 界面停在半句计划上。跑过工具的
+    轮次应该跟 `should_nudge` 用同一个更大的工具额度。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("保护很弱：没有 PIE。接下来查看 main。", ""),
+            ("", ""),
+            ("", ""),
+            ("FINAL: flag{live_replay}", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 5, "两次空回复之后仍然要再推一次，而不是就此收尾"
+    assert result.messages[-1].content.strip() == "flag{live_replay}"
+    assert not any("没有产出内容" in m.content for m in result.messages)
+
+
+async def test_narration_nudges_do_not_eat_the_empty_reply_budget(
+    db_session: Session,
+) -> None:
+    """叙述纠偏不能把空回复的额度一起吃掉（v1.32）。
+
+    线上复跑（log `/home/kali/replay3.log`，会话 `chat_01M652CRXMJ4H9P1XABAJ4VGSH`）：
+    round 0 ～ 12 里有 6 次 `resume/format` 纠偏，每一次都 `nudges_used += 1`；
+    轮到 round 15 的计划句被打回、下一个回复是空的时候，
+    `(nudges_used - truncations_used) < MAX_EMPTY_NUDGES` 已经是 `6 < 6`，
+    当场判「额度用完」，于是又停在半句计划上（只是这次多了一句说明）。
+
+    两类纠偏的花费该分开记账：叙述纠偏是「它写了但没动手」，
+    空回复是「它一个字没写」——后者才是需要单独兜底的故障。
+    """
+    session = _new_session(db_session)
+    narration = "这是一个 64 位 ELF，保护很弱。"
+    plan = "接下来查看 main、read_input 等函数。"
+    replies = [('ACTION: {"tool": "list_scans", "args": {}}', "")]
+    replies += [(narration, "")] * 6
+    replies += [(plan, ""), ("", ""), ("FINAL: flag{live_replay}", "")]
+    gateway = ScriptedGateway(replies)
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 10, "前面 6 次叙述纠偏之后，空回复仍然要再推一次"
+    assert result.messages[-1].content.strip() == "flag{live_replay}"
+
+
+async def test_plan_gate_note_when_empty_replies_exhaust_everything(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """连空回复额度也烧完时，不能把半句计划当结论交出去（v1.31）。"""
+    from app.chat.prompts import render_plan_exhausted_note
+
+    monkeypatch.setattr(engine, "MAX_EMPTY_NUDGES", 1)
+    session = _new_session(db_session)
+    plan = "接下来查看 main、read_input 等函数。"
+    replies = [('ACTION: {"tool": "list_scans", "args": {}}', ""), (plan, "")]
+    replies += [("", "")] * 3
+    gateway = ScriptedGateway(replies)
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert result.messages[-1].content == render_plan_exhausted_note(), (
+        "预算全烧完时也要告诉用户「上面那句是计划，不是结果」"
+    )
+    plan_messages = [m for m in result.messages if m.content.strip() == plan]
+    assert plan_messages and all(m.surface == "process" for m in plan_messages)
+
+
 async def test_plain_answer_ends_without_an_extra_model_call(
     db_session: Session,
 ) -> None:
@@ -346,10 +817,18 @@ async def test_truncated_reply_is_nudged_even_with_no_tools(
 
 
 async def test_nudges_are_bounded(db_session: Session) -> None:
-    """模型一直只写叙述时，必须有限收尾，不能死循环。"""
+    """模型一直只写打算时，必须有限收尾，不能死循环。
+
+    v1.35 起「先看看。」是计划句：零工具轮次走叙述纠偏额度
+    （`MAX_NARRATION_NUDGES`），额度用完后不再把它当答复，而是补一句
+    `render_plan_exhausted_note()` 并记下"还没答完"。这里钉的是
+    "不超过额度 + 一次收尾"。
+    """
     session = _new_session(db_session)
-    gateway = ScriptedGateway([("先看看。", "")] * (engine.MAX_NARRATION_NUDGES + 5))
-    await engine.run_turn(
+    gateway = ScriptedGateway(
+        [("先看看。", "")] * (engine.MAX_NARRATION_NUDGES + 5)
+    )
+    result = await engine.run_turn(
         db_session,
         session=session,
         content="解题",
@@ -357,6 +836,98 @@ async def test_nudges_are_bounded(db_session: Session) -> None:
         gateway=gateway,
     )
     assert gateway.calls <= 1 + engine.MAX_NARRATION_NUDGES
+    assert result.needs_continue is True
+
+
+# ══════════════════════════════════════════════════════════
+# 3b. 计划句不能落 `done`（v1.35）
+# ══════════════════════════════════════════════════════════
+
+
+async def test_zero_tool_plan_does_not_finish_the_turn(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """零工具轮次的计划句也不能整轮 `done`（v1.35 的漏洞类别 1）。
+
+    旧判据要求 `tools_used > 0` 才把 FINAL 当计划 —— 纯问答轮次里模型写
+    「接下来分析 main 函数，然后构造 exploit。」会被当成 `answer`，整轮
+    `done`，用户看到的就是「话停在计划上」。
+
+    v1.35 的通道选择：零工具 = "说要去做却没写 ACTION"，走纠偏通道
+    （`format`，额度 `MAX_NARRATION_NUDGES`）；额度用完后仍不落 `done`。
+    """
+    monkeypatch.setattr(engine, "MAX_NARRATION_NUDGES", 1)
+    session = _new_session(db_session)
+    plan = "接下来分析 main 函数，然后构造 exploit。"
+    gateway = ScriptedGateway([(plan, ""), (plan, "")])
+    result = await engine.run_turn_durable(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 2, "零工具的计划句必须先被打回一次"
+    assert result.needs_continue is True
+    rows = chat_service.list_messages(db_session, session=session)
+    plan_rows = [r for r in rows if r.content.strip() == plan]
+    assert plan_rows and all(r.surface == "process" for r in plan_rows), (
+        "计划句永远是过程面，不能画成答复气泡"
+    )
+    assert rows[-1].content == engine.render_plan_exhausted_note()
+    run = db_session.query(ChatTurnRun).filter_by(session_id=session.id).one()
+    assert run.status == "interrupted", "还没给出结论的轮次不能记成 done"
+
+
+async def test_plan_after_tools_with_exhausted_bounces_is_not_done(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """跑过工具后额度用尽的计划句：最后一条可见消息是「这是计划」且不落 done。"""
+    monkeypatch.setattr(engine, "MAX_PLAN_BOUNCES", 1)
+    session = _new_session(db_session)
+    plan = "接下来分析 main 函数，然后构造 exploit。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (plan, ""),
+            (plan, ""),
+        ]
+    )
+    result = await engine.run_turn_durable(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert result.needs_continue is True
+    rows = chat_service.list_messages(db_session, session=session)
+    assert rows[-1].content == engine.render_plan_exhausted_note(), (
+        "额度用尽时必须把「这是计划，不是结果」作为最后一条可见消息"
+    )
+    run = db_session.query(ChatTurnRun).filter_by(session_id=session.id).one()
+    assert run.status != "done"
+    assert run.status == "interrupted"
+
+
+async def test_plain_qa_still_finishes_done(db_session: Session) -> None:
+    """纯问答（无 ACTION、无计划词）仍然是一句 `answer` + `done`。"""
+    session = _new_session(db_session)
+    gateway = ScriptedGateway([("能，而且比你想的更可控。", "")])
+    result = await engine.run_turn_durable(
+        db_session,
+        session=session,
+        content="你能做什么",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 1, "普通回答不该被误打回（成本底线）"
+    assert result.needs_continue is False
+    rows = chat_service.list_messages(db_session, session=session)
+    assert rows[-1].content.strip() == "能，而且比你想的更可控。"
+    assert rows[-1].surface == "answer"
+    run = db_session.query(ChatTurnRun).filter_by(session_id=session.id).one()
+    assert run.status == "done"
 
 
 # ══════════════════════════════════════════════════════════
@@ -421,6 +992,7 @@ async def test_resumer_gives_up_when_the_session_is_archived(
     session = _new_session(db_session)
     run = turn_runs.start(db_session, session_id=session.id)
     db_session.commit()
+    _make_stale(db_session, run)
     chat_service.archive_session(db_session, session=session, archived=True)
     db_session.commit()
 
@@ -439,6 +1011,7 @@ async def test_resumer_gives_up_when_the_owner_account_is_gone(
     db_session.commit()
     run = turn_runs.start(db_session, session_id=session.id)
     db_session.commit()
+    _make_stale(db_session, run)
 
     ran = await resumer.resume_one(db_session, run)
     assert ran is False
@@ -702,28 +1275,39 @@ async def test_the_premature_final_is_stored_as_process_not_as_an_answer(
     assert rows[-1].surface == "answer"
 
 
-async def test_a_second_final_is_accepted_so_the_turn_is_bounded(
+async def test_repeated_finals_are_bounded_and_never_end_silently(
     db_session: Session,
 ) -> None:
-    """模型坚持写 FINAL 时必须收尾 —— 打回闸只能问一次。"""
+    """模型坚持写计划式 FINAL 时必须收尾，但**不能静默把计划当结论**。
+
+    v1.30 之前这条用例断言的是「第二次 FINAL 必须被接受」—— 那正是线上
+    会话 `chat_01M640EY2P54QC1E2QS54R0R3Z` 停在半路的原因：唯一的打回额度
+    被前一句计划用掉，第二句同样是计划却只能当结论（`surface=answer`）。
+
+    现在的契约是两句话：
+    * 调用次数依然有界（每轮最多 `MAX_PLAN_BOUNCES` 次打回 + 1 次收尾）；
+    * 额度用尽时补一句实话，不把计划伪装成结果。
+    """
     session = _new_session(db_session)
-    gateway = ScriptedGateway(
-        [
-            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
-            ("FINAL: 现在查 libc 版本。", ""),
-            ("FINAL: 现在查 libc 版本。", ""),
-        ]
-    )
-    await engine.run_turn(
+    plan = "现在查 libc 版本。"
+    replies = [('ACTION: {"tool": "list_scans", "args": {}}', "")]
+    replies += [(f"FINAL: {plan}", "")] * (engine.MAX_PLAN_BOUNCES + 3)
+    gateway = ScriptedGateway(replies)
+    result = await engine.run_turn(
         db_session,
         session=session,
         content="解题",
         identity=ADMIN,
         gateway=gateway,
     )
-    assert gateway.calls == 3, (
-        "第二次 FINAL 必须被接受；否则模型一直写 FINAL 就会死循环烧钱"
+    assert gateway.calls == 1 + engine.MAX_PLAN_BOUNCES + 1, (
+        "打回额度必须有限，否则模型一直写计划句就会死循环烧钱"
     )
+    plan_messages = [m for m in result.messages if m.content.strip() == plan]
+    assert all(m.surface == "process" for m in plan_messages), (
+        "计划句永远不是结论，哪怕打回次数已经用完"
+    )
+    assert "继续" in result.messages[-1].content
 
 
 async def test_a_resumed_turn_keeps_its_tool_count(db_session: Session) -> None:
@@ -766,3 +1350,218 @@ async def test_a_resumed_turn_keeps_its_tool_count(db_session: Session) -> None:
         "接手后工具计数必须被保留（bug 时清零 → 这句零意图词的叙述不推 → calls==1）"
     )
 
+
+async def test_empty_reply_without_tools_uses_the_narration_budget(
+    db_session: Session,
+) -> None:
+    """没跑过工具的轮次，空回复仍走 `MAX_NARRATION_NUDGES` 那条老额度。
+
+    v1.31 给跑过工具的轮次单独开了空回复额度，但不能顺手把闲聊也改宽：
+    「在吗」这种一问一答的轮次碰到空回复，历史行为是推一次就够。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway([("", ""), ("FINAL: 你好。", "")])
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="在吗",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 2
+
+
+async def test_truncated_empty_reply_after_tools_uses_the_truncation_budget(
+    db_session: Session,
+) -> None:
+    """跑过工具的轮次被截断到空串时，走的是**截断**额度而不是空回复额度。
+
+    两条额度的语义不同：截断是「字数切在半句」，空回复是「一个字没写」。
+    混用会让截断的重试次数跟着空回复的默认值飘。
+    """
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("", "length"),
+            ("FINAL: flag{ok}", ""),
+        ]
+    )
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="解题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3
+
+
+async def test_approved_resume_bounces_its_plan_and_survives_empty_replies(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """点「确认」之后的续跑，也必须能打回计划句、扛住空回复。
+
+    这条守的是 v1.31 删掉的那行：`resume_approved` 里原本有一段纠偏代码，
+    但它前面无条件 `return result`，所以批准后的续跑**从来没有纠偏过** ——
+    模型说完一句「我来跑一下」就直接收尾，与 `run_turn` 的 v1.13 缺陷同源。
+
+    判据只看次数与落库的 `surface`：计划句必须四步走完
+    （工具 → 计划句 → 空回复 → 结论），且计划句永远不是 `answer`。
+    """
+    session = _new_session(db_session)
+    message = chat_service.append_tool_message(
+        db_session,
+        session=session,
+        tool_name="list_scans",
+        tool_args={},
+        content="",
+    )
+    message.approval_status = "approved"
+    db_session.commit()
+
+    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202
+        return "scans: 3", False
+
+    monkeypatch.setattr(engine, "_execute_tool", fake_execute)
+
+    plan = "先看反汇编，确认溢出点，然后再写 exploit。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (plan, ""),
+            ("", ""),
+            ("FINAL: 好了。", ""),
+        ]
+    )
+    result = await engine.resume_approved(
+        db_session,
+        session=session,
+        message=message,
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 4, (
+        "批准后的续跑必须能推：工具 → 计划句打回 → 空回复推一次 → 结论"
+    )
+    plan_messages = [m for m in result.messages if m.content == plan]
+    assert plan_messages, "那句计划句必须落库（用户要能看见它）"
+    assert all(m.surface == "process" for m in plan_messages), (
+        "计划句是过程面，不能画成结论气泡"
+    )
+    assert result.messages[-1].content == "好了。"
+
+
+async def test_approved_resume_without_actions_uses_the_old_budgets(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """续跑里一个工具都没跑时，截断/空回复仍走原来的两条额度。
+
+    批准后模型可能先被截断、再吐一次空 —— 两者都不是「跑过工具」的轮次，
+    所以 `tools_used > 0` 那两条分支不能盖住它们。
+    """
+    session = _new_session(db_session)
+    message = chat_service.append_tool_message(
+        db_session,
+        session=session,
+        tool_name="list_scans",
+        tool_args={},
+        content="",
+    )
+    message.approval_status = "approved"
+    db_session.commit()
+
+    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202
+        return "scans: 0", False
+
+    monkeypatch.setattr(engine, "_execute_tool", fake_execute)
+
+    gateway = ScriptedGateway(
+        [("", "length"), ("", ""), ("FINAL: 好了。", "")]
+    )
+    result = await engine.resume_approved(
+        db_session,
+        session=session,
+        message=message,
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3
+    assert result.messages[-1].content == "好了。"
+
+
+async def test_approved_resume_stops_on_a_plan_when_bounces_run_out(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """续跑把计划句的打回额度用完时，也要补一句实话再收尾。
+
+    否则用户看到的最后一句话仍然是那句计划 —— 与主循环 v1.30 修的是同一件事，
+    只是换在了批准后的分支上。
+    """
+    session = _new_session(db_session)
+    message = chat_service.append_tool_message(
+        db_session,
+        session=session,
+        tool_name="list_scans",
+        tool_args={},
+        content="",
+    )
+    message.approval_status = "approved"
+    db_session.commit()
+
+    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202
+        return "scans: 1", False
+
+    monkeypatch.setattr(engine, "_execute_tool", fake_execute)
+    monkeypatch.setattr(engine, "MAX_PLAN_BOUNCES", 1)
+
+    plan = "FINAL: 先看反汇编，确认溢出点。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (plan, ""),
+            (plan, ""),
+        ]
+    )
+    result = await engine.resume_approved(
+        db_session,
+        session=session,
+        message=message,
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert result.messages[-1].content == engine.render_plan_exhausted_note()
+    assert "继续" in result.messages[-1].content
+    assert result.needs_continue is True, "批准后续跑停在计划上，也不是答完了"
+
+
+
+async def test_repeated_prose_plans_are_bounded(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """计划句打回额度用尽后立刻收尾，不再先走 tool nudge（v1.32）。
+
+    reviewer-9e8e8e 的 P2：`run_turn` 的 `if plan_like_final:` 原本在
+    `should_nudge(...)` **之后**，于是额度用尽的计划句还会被 tool nudge
+    继续推，最多拖到 300 次工具轮数；`resume_approved` 里同一段却在之前。
+    现在两边顺序一致：额度用尽 → 补一句实话 → `return`。
+    """
+    monkeypatch.setattr(engine, "MAX_PLAN_BOUNCES", 1)
+    session = _new_session(db_session)
+    plan = "接下来查看 main。"
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            (plan, ""),
+            (plan, ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解一下这道题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+    assert gateway.calls == 3, "额度用尽后必须立刻收尾，不能再走 tool nudge"
+    assert result.messages[-1].content == engine.render_plan_exhausted_note()

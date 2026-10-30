@@ -740,6 +740,52 @@ def render_final_confirm_reminder(narration: str) -> str:
         f"可用工具：{'、'.join(sorted(CHAT_TOOL_NAMES))}",
     ]
     return "\n".join(lines)
+def render_plan_exhausted_note() -> str:
+    """打回额度用尽时，替模型给用户的一句实话（v1.30）。
+
+    ## 为什么需要这句话
+
+    线上会话 `chat_01M640EY2P54QC1E2QS54R0R3Z`：模型先把「checksec 没输出，
+    我用 readelf 和 pwn 自己看防护」当成 `FINAL:`（被打回一次），下一次又写
+    「典型栈溢出。看主逻辑。」。每轮的打回额度只有 1 次，于是第二句被当作
+    结论落进对话流（`surface=answer`），用户看到的仍是「解题到一半就停」。
+
+    ## 为什么不是继续打回
+
+    打回要花一次真实模型调用，无限问下去会把钱和时间都烧在一个不肯收尾的
+    模型上。所以额度用完就停 —— 但**不能假装那是结论**：补一句实话，让
+    用户知道下一步还没执行，也知道该说什么才能接着跑。
+    """
+    return "（这一轮停在了下一步上：「继续」我接着执行 —— 上面那句是计划，不是结果。）"
+
+
+def render_native_tool_note(names: list[str] | None = None) -> str:
+    """上游只回了原生工具调用、平台没能执行时，替模型给用户的一句实话。
+
+    ## 为什么必须有一句可见的话（这是真实缺陷的修法）
+
+    线上会话 `chat_01M6556ES13EGH8NN712252SPB`：本地 OpenAI 兼容网关
+    回的是 `delta.tool_calls` + `finish_reason="tool_calls"`，正文为空。
+    引擎拿到空正文、空动作，纠偏额度用尽后直接 `return` —— turn_run
+    正常 `done`，界面上什么都不动，用户看到的就是「对话跑到一半就结束」。
+
+    所以额度用尽时**不能静默收尾**：必须明确告诉用户这一轮的失败形态，
+    并给出可行动作（重发 / 换接入点）。
+
+    ## 为什么点名是哪个工具
+
+    「只回了原生工具调用」是内部协议层的事，用户看到会一头雾水。带上
+    工具名（`run_shell`、`http_request`…）至少能对上界面上的工具卡，
+    也能在排障时区分「网关给的是空壳」与「网关给了一个我们没实现的工具」。
+    未知名字用「工具调用」—— 不编造一个不存在的工具名。
+    """
+    label = "、".join(name for name in (names or []) if name) or "工具调用"
+    return (
+        f"（上游这一轮只回了原生工具调用（{label}），平台没能执行，"
+        "因此本轮没有结果；可以重发或换接入点。）"
+    )
+
+
 def render_mounted_skills(mounted: list[tuple[str, str]]) -> str:
     """渲染"用户挂载的技能"那一段。
 
@@ -1084,6 +1130,7 @@ __all__ = [
     "build_system_prompt",
     "render_approval_rule",
     "render_mounted_skills",
+    "render_native_tool_note",
     "render_persona",
     "render_tool_catalog",
     "render_tool_hint",
