@@ -499,6 +499,29 @@ export async function listTurns(sessionId: string): Promise<ChatTurnRun[]> {
   }
 }
 
+/** 会话持久工作区（`/work/persist`）里的一个可下载产物。 */
+export interface ChatWorkspaceFile {
+  /** 相对工作区根目录的路径，下载时原样放进 `?path=`。 */
+  path: string
+  name: string
+  sizeBytes: number
+  modifiedAt: number
+}
+
+/**
+ * 列出会话持久工作区里的产物。
+ *
+ * ★ 与 `listTurns` 同一条取舍：这是辅助信息，拿不到就当"没有产物"，
+ *   不该让对话页整块报错。
+ */
+export async function listWorkspaceFiles(sessionId: string): Promise<ChatWorkspaceFile[]> {
+  try {
+    return await api.get<ChatWorkspaceFile[]>(`/chat/sessions/${sessionId}/files`)
+  } catch {
+    return []
+  }
+}
+
 /**
  * 手动接着跑一轮中断的执行，并把新落库的消息接进当前会话。
  *
@@ -963,17 +986,30 @@ export async function uploadAttachment(
 ): Promise<ChatAttachment | null> {
   const MAX_BYTES = 5 * 1024 * 1024
   if (file.size > MAX_BYTES) {
+    /*
+      ★ 必须是 **真的** `ApiError` 实例，不能 `{...} as ApiError`。
+
+        `as` 只是骗过 TypeScript，运行时那个裸对象 `instanceof ApiError` 为假，
+        页面渲染走 `errorMessage()` 就落到兜底「请求失败，请稍后重试。」—— 用户
+        传一个 96.9 MB 的 zip 时看到的就是这句（v1.38.1 修复）。这和 `TURN_ERROR`
+        （v1.22）踩过的是同一个坑，只是这里漏改了。
+
+      文案要给出**下一步**：对话附件是"给模型看"的一次性附件，上限 5 MB；
+      真要放大文件（几十上百 MB）应当去「文件管理」页，那里上限 512 MB。
+    */
     patch({
-      error: {
-        code: 'VALIDATION_FAILED',
-        message: `文件太大（${Math.round(file.size / 1024)} KB）。单个附件上限 5 MB。`,
-      } as ApiError,
+      error: new ApiError(
+        'VALIDATION_FAILED',
+        `文件太大（${(file.size / 1024 / 1024).toFixed(1)} MB）。对话附件是给模型看的一次性文件，` +
+          `单个上限 5 MB。若想传大文件，请到左侧「文件管理」页上传（上限 512 MB）。`,
+        400,
+      ),
     })
     return null
   }
   if (file.size === 0) {
     patch({
-      error: { code: 'VALIDATION_FAILED', message: '文件是空的，没有内容可以给模型看。' } as ApiError,
+      error: new ApiError('VALIDATION_FAILED', '文件是空的，没有内容可以给模型看。', 400),
     })
     return null
   }

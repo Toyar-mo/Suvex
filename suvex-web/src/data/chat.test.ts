@@ -1077,6 +1077,53 @@ describe('TURN_ERROR 挂的是带真因的 ApiError（v1.22）', () => {
   })
 })
 
+describe('上传预判的报错必须是真 ApiError（v1.38.1）', () => {
+  /*
+    ★ 用户原话（截图）：传一个 96.9 MB 的 zip，看到「请求失败，请稍后重试。」
+
+      这不是网络失败 —— 是 `uploadAttachment` 的 5 MB 前端预判在 `patch` 里
+      塞了 `{...} as ApiError`（裸对象，类型断言不等于实例）。页面渲染走
+      `errorMessage()`，第一步 `error instanceof ApiError` 为假 → 落到
+      `api.ts:338` 的兜底「请求失败，请稍后重试。」。
+
+      这和 `TURN_ERROR`（v1.22）踩过的是同一个坑，只是这里漏改了。
+      下面钉住两件事：预判不发起网络请求、error 是带真实文案的 ApiError 实例。
+  */
+  it('★ 超过 5 MB 不发请求，且 error 是 ApiError、文案说清「上限 5 MB」', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    // 6 MB 的 File（size 是只读属性，构造一个足够大的 Blob）
+    const big = new File([new Uint8Array(6 * 1024 * 1024)], 'big.zip')
+    const result = await uploadAttachment('chat_1', big)
+
+    expect(result).toBeNull()
+    const err = getChatSnapshot().error
+    // 关键 1：是 ApiError 实例，`errorMessage()` 才不会走兜底
+    expect(err).toBeInstanceOf(ApiError)
+    // 关键 2：文案说清上限，不是泛化的「请求失败」
+    expect(err?.message).toContain('5 MB')
+    expect(err?.message).not.toContain('请求失败')
+    // 关键 3：没有发起任何上传请求（预判在网络之前短路）
+    expect(calls.some((c) => c.url.includes('/attachments'))).toBe(false)
+  })
+
+  it('★ 空文件的 error 也是 ApiError 实例', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const result = await uploadAttachment('chat_1', new File([], 'empty.txt'))
+
+    expect(result).toBeNull()
+    const err = getChatSnapshot().error
+    expect(err).toBeInstanceOf(ApiError)
+    expect(err?.message).toContain('空')
+    expect(err?.message).not.toContain('请求失败')
+  })
+})
+
 describe('resumeTurn — 重试前清掉旧错误（v1.22）', () => {
   /*
     ★ 用户点「重试」= "我处理过了"。旧错误如果还挂在 error 上，用户会以为
