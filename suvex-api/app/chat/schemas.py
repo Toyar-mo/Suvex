@@ -221,6 +221,14 @@ class ChatFileOut(CamelModel):
     modifiedAt: float
 
 
+class ChatFileUploadOut(CamelModel):
+    """上传进工作区后的回执（v1.38）。"""
+
+    path: str
+    name: str
+    sizeBytes: int
+
+
 class ChatFileItemOut(CamelModel):
     """「文件管理」页跨会话列出的一条产物（v1.37）。
 

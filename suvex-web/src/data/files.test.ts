@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 vi.mock('@/lib/api', () => ({
-  api: { get: vi.fn(), del: vi.fn() },
+  api: { get: vi.fn(), del: vi.fn(), upload: vi.fn() },
 }))
 
 import { api } from '@/lib/api'
@@ -12,14 +12,17 @@ import {
   formatTimestamp,
   listFiles,
   subPathOf,
+  uploadFile,
 } from './files'
 
 const getMock = vi.mocked(api.get)
 const delMock = vi.mocked(api.del)
+const uploadMock = vi.mocked(api.upload)
 
 beforeEach(() => {
   getMock.mockReset()
   delMock.mockReset()
+  uploadMock.mockReset()
 })
 
 describe('formatBytes', () => {
@@ -89,5 +92,30 @@ describe('deleteFile', () => {
     expect(path).toBe(
       `/chat/sessions/chat_1/files?path=${encodeURIComponent('out/报告 1.md')}`,
     )
+  })
+})
+
+describe('uploadFile', () => {
+  it('走 multipart，字段名是 file，落地到会话 files 端点', async () => {
+    uploadMock.mockResolvedValue({ path: 'uploads/a.txt', name: 'a.txt', sizeBytes: 3 })
+    const file = new File([new Uint8Array([1, 2, 3])], 'a.txt', { type: 'text/plain' })
+
+    const result = await uploadFile('chat_1', file)
+
+    expect(uploadMock).toHaveBeenCalledTimes(1)
+    const [path, form] = uploadMock.mock.calls[0] as [string, FormData]
+    expect(path).toBe('/chat/sessions/chat_1/files')
+    expect(form).toBeInstanceOf(FormData)
+    // 字段名必须是 file —— 后端按这个名字取，错一个字母就是 422。
+    const sent = form.get('file')
+    expect(sent).toBeInstanceOf(File)
+    expect((sent as File).name).toBe('a.txt')
+    expect(result.path).toBe('uploads/a.txt')
+  })
+
+  it('会话 id 做 URL 编码', async () => {
+    uploadMock.mockResolvedValue({ path: 'uploads/x', name: 'x', sizeBytes: 1 })
+    await uploadFile('a b', new File([new Uint8Array([1])], 'x'))
+    expect(uploadMock.mock.calls[0][0]).toBe('/chat/sessions/a%20b/files')
   })
 })

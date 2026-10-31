@@ -108,6 +108,13 @@ MULTIPART_WRITE_ENDPOINTS: frozenset[tuple[str, str]] = frozenset(
         # 这就是本项目反复踩的"配了却静默失效"：名单在，名字差一个
         # 下划线，防线看起来在、实际不认。
         ("POST", "/chat/sessions/{session_id}/attachments"),
+        # 对话工作区上传（v1.38「文件管理」页的「上传文件」）。
+        #
+        # 与上面那条 attachments 的区别：这条写进持久工作区
+        # （`/work/persist/uploads/`），是「存档/管理」用途，不是
+        # 「喂给模型看」的一次性耗材。两条端点都收 multipart，都得登记。
+        # 参数名同样必须逐字对齐 `app/chat/router.py` 的 `{session_id}`。
+        ("POST", "/chat/sessions/{session_id}/files"),
     }
 )
 

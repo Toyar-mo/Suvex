@@ -1,5 +1,5 @@
-import { Copy, Download, FileDown, FolderOpen, RefreshCw, Search, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Copy, Download, FileDown, FolderOpen, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageHeader } from '@/components/layout/AppShell'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import EmptyState from '@/components/ui/EmptyState'
@@ -17,6 +17,7 @@ import {
   formatTimestamp,
   listFiles,
   subPathOf,
+  uploadFile,
   type FileFilters,
   type FilesStatus,
   type WorkspaceFileRow,
@@ -76,6 +77,8 @@ export default function FilesPage() {
   const [groupBy, setGroupBy] = useState<GroupBy>('none')
   const [pendingDelete, setPendingDelete] = useState<WorkspaceFileRow | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploading, setUploading] = useState(false)
 
   const load = useCallback(async (filters: FileFilters) => {
     setStatus('loading')
@@ -175,6 +178,50 @@ export default function FilesPage() {
     URL.revokeObjectURL(url)
   }
 
+  /** 点击「上传文件」：先确定目标会话，再拉起文件选择框。 */
+  const pickUpload = () => {
+    // 工作区是按会话隔离的，这一页没有"当前会话"——必须让用户先指定一个。
+    // 复用筛选栏里的会话 ID：用户要往哪个会话传，通常正是他刚筛的那个。
+    const sessionId = (draft.sessionId || applied.sessionId || '').trim()
+    if (!sessionId) {
+      showToast({ tone: 'info', message: '先在上面的「会话 ID」里填一个会话，再上传。' })
+      return
+    }
+    fileInputRef.current?.click()
+  }
+
+  const onFilesChosen = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const sessionId = (draft.sessionId || applied.sessionId || '').trim()
+    const files = event.target.files ? Array.from(event.target.files) : []
+    // 立刻清空 value：否则连续选同一个文件不会再触发 change。
+    event.target.value = ''
+    if (!sessionId || files.length === 0) return
+
+    setUploading(true)
+    let ok = 0
+    const failures: string[] = []
+    for (const file of files) {
+      try {
+        await uploadFile(sessionId, file)
+        ok += 1
+      } catch (err) {
+        failures.push(`${file.name}：${toApiError(err).message}`)
+      }
+    }
+    setUploading(false)
+
+    if (ok > 0) {
+      showToast({ tone: 'ok', message: `已上传 ${ok} 个文件` })
+      void load(applied)
+    }
+    if (failures.length > 0) {
+      showToast({
+        tone: 'risk',
+        message: failures.length === 1 ? failures[0] : `${failures.length} 个文件上传失败`,
+      })
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader navId="files" />
@@ -247,6 +294,18 @@ export default function FilesPage() {
               搜索
             </Button>
             <div className="ml-auto flex items-center gap-2">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                className="hidden"
+                onChange={(event) => void onFilesChosen(event)}
+                data-testid="upload-input"
+              />
+              <Button variant="primary" size="sm" onClick={pickUpload} disabled={uploading}>
+                <Upload size={14} strokeWidth={2} aria-hidden="true" />
+                {uploading ? '上传中…' : '上传文件'}
+              </Button>
               <Button variant="secondary" size="sm" onClick={exportCsv}>
                 <FileDown size={14} strokeWidth={2} aria-hidden="true" />
                 导出当前结果

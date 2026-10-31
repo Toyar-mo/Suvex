@@ -171,6 +171,89 @@ def resolve_file(session_id: str, relpath: str) -> Path | None:
     return target
 
 
+@dataclass(frozen=True)
+class SavedFile:
+    """一个刚写进工作区的文件。"""
+
+    path: str
+    name: str
+    size_bytes: int
+
+
+def save_file(session_id: str, filename: str, content: bytes) -> SavedFile:
+    """把一个上传的字节流写进工作区（v1.38「文件管理」页的上传）。
+
+    ## 与 `attachments.store` 的区别
+
+    `attachments` 是"用户 → 模型，一次性耗材"（1 小时 TTL、发消息即消费）；
+    这里写的是**产物**：不设 TTL、随会话归档/删除才清、在「文件管理」页
+    与会话工作区里都能看到和下载。所以不能复用 `attachments`。
+
+    ## 落在哪
+
+    `/work/persist/uploads/`（宿主侧 `uploads/`）。刻意放 `uploads/` 子目录：
+    * 与模型自己写在 `reports/`、`scripts/` 下的产物分开，谁是谁一目了然；
+    * 万一同名，``<stem>-<8位hex>.<ext>`` 追加后缀，不覆盖模型已有文件
+      （`resolve_file` 的名字对用户可见，静默覆盖是数据丢失）。
+
+    ## 安全
+
+    * 文件名过 `attachments.sanitize_name`（同一套白名单：去 `/` `\\`、
+      去控制字符、去前导点、长度截断），**不信任**浏览器给的 `filename`；
+    * 落盘前 `resolve()` 复核仍在工作区内（即使 sanitize 有漏也不越界）；
+    * 超过 `MAX_DOWNLOAD_BYTES` 的拒（与下载同一上限，避免写满磁盘）。
+
+    ## 为什么去重而不是覆盖
+
+    用户可能把同一个 `nmap.xml` 传两次。覆盖会让人以为第一次那份还在，
+    实际已被换掉；加后缀则两份都在，用户自己删不要的。与 `attachments.store`
+    的命名取向一致（那边也带随机段）。
+    """
+    if not content:
+        raise ValueError("文件是空的。")
+
+    from app.chat import attachments as chat_attachments
+
+    directory = _session_dir(session_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    uploads = directory / "uploads"
+    uploads.mkdir(parents=True, exist_ok=True)
+
+    name = chat_attachments.sanitize_name(filename, fallback="upload")
+    if len(content) > MAX_DOWNLOAD_BYTES:
+        raise ValueError(
+            f"文件太大（{len(content) / 1024 / 1024:.1f} MB）。"
+            f"上限 {MAX_DOWNLOAD_BYTES // 1024 // 1024} MB。"
+        )
+
+    base = directory.resolve()
+    stem, ext = os.path.splitext(name)
+    candidate = uploads / name
+    # 只防"已存在"，不做无界重试：撞上 100 次说明磁盘上已经乱了，
+    # 不如报错让用户看见，而不是默默生成 upload-9f3a2b1c.txt。
+    for _ in range(100):
+        try:
+            # `x` 模式：原子地"不存在才创建"，并发两个同名上传也不会互相覆盖。
+            with open(candidate, "xb") as handle:
+                handle.write(content)
+            break
+        except FileExistsError:
+            candidate = uploads / f"{stem}-{os.urandom(4).hex()}{ext}"
+    else:
+        raise ValueError("同名文件太多，换个名字再传。")
+
+    resolved = candidate.resolve()
+    if resolved != base and base not in resolved.parents:  # pragma: no cover - 防御
+        resolved.unlink(missing_ok=True)
+        raise ValueError("文件名不合法。")
+
+    return SavedFile(
+        path=resolved.relative_to(base).as_posix(),
+        name=resolved.name,
+        size_bytes=len(content),
+    )
+
+
 def drop_workspace(session_id: str) -> None:
     """删掉这个会话的工作区目录（归档/彻底删除时调用）。"""
     directory = _session_dir(session_id)
@@ -182,10 +265,12 @@ __all__ = [
     "MAX_DOWNLOAD_BYTES",
     "MAX_LISTED_FILES",
     "PERSIST_MOUNT_DIR",
+    "SavedFile",
     "WorkspaceFile",
     "drop_workspace",
     "ensure_workspace",
     "list_files",
     "resolve_file",
     "root",
+    "save_file",
 ]

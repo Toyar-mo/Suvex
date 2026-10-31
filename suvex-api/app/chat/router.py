@@ -58,6 +58,7 @@ from app.chat.schemas import (
     ChatAttachmentOut,
     ChatFileItemOut,
     ChatFileOut,
+    ChatFileUploadOut,
     ChatInterjectIn,
     ChatInterruptIn,
     ChatMessageOut,
@@ -743,6 +744,56 @@ def download_workspace_file(
         path=str(target),
         filename=target.name,
         media_type="application/octet-stream",
+    )
+
+
+@router.post(
+    "/chat/sessions/{session_id}/files",
+    response_model=ChatFileUploadOut,
+    status_code=201,
+)
+async def upload_workspace_file(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+    file: Annotated[UploadFile, File(description="要存进会话工作区的文件")],
+) -> ChatFileUploadOut:
+    """把一个文件上传进这个会话的**工作区**（v1.38「文件管理」页的上传）。
+
+    ## 与 `/attachments` 的区别（别混）
+
+    | | `/attachments` | `/files`（这里） |
+    |---|---|---|
+    | 方向 | 用户 → 模型，发消息时读正文进上下文 | 用户 → 工作区，长期留存 |
+    | 落点 | 暂存区，发消息后交接进 `/work/attachments` | `/work/persist/uploads/` |
+    | TTL | 1 小时 | 无，随会话归档/删除才清 |
+    | 用途 | 让模型**看**一份文件 | 给会话**存档**、或在「文件管理」页管理 |
+
+    「文件管理」页要的是后者：用户在页面上传一份东西，之后在列表里能看到、
+    能下载、能删 —— 与模型是否引用它无关。所以不复用 attachments 的暂存
+    语义，直接写进工作区。
+
+    ## 为什么 `async def`
+
+    `UploadFile.read()` 是 async 的；在同步函数里读会在事件循环里做阻塞 IO。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    if session.archived:
+        raise ApiError.validation(
+            "这个会话已归档，不能再往工作区里放文件。", {"sessionId": "已归档"}
+        )
+
+    content = await file.read()
+    try:
+        saved = chat_workspaces.save_file(
+            session.id, file.filename or "upload", content
+        )
+    except ValueError as exc:
+        raise ApiError.validation(str(exc), {"file": "不符合要求"}) from exc
+    return ChatFileUploadOut(
+        path=saved.path, name=saved.name, sizeBytes=saved.size_bytes
     )
 
 

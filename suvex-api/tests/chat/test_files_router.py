@@ -131,3 +131,109 @@ class TestDeleteFile:
             "/api/v1/chat/sessions/chat_does_not_exist/files", params={"path": "a.txt"}
         )
         assert got.status_code == 404, got.text
+
+
+class TestSaveFile:
+    """工作区写入（v1.38 上传的底层函数）。"""
+
+    def test_writes_into_uploads_dir(self, ws_root: Path) -> None:
+        saved = chat_workspaces.save_file("chat_x", "notes.txt", b"hello")
+        assert saved.path == "uploads/notes.txt"
+        assert saved.size_bytes == 5
+        base = chat_workspaces.ensure_workspace("chat_x")
+        assert base is not None
+        assert (base / "uploads" / "notes.txt").read_bytes() == b"hello"
+
+    def test_sanitizes_path_separators(self, ws_root: Path) -> None:
+        # 浏览器给的 filename 不可信：`../../etc/passwd` 不能逃出工作区。
+        saved = chat_workspaces.save_file("chat_x", "../../etc/passwd", b"x")
+        assert saved.path.startswith("uploads/")
+        # 路径分隔符被压平：".." 只是文件名里的两个点，不再是一段父目录。
+        assert "/" not in saved.path[len("uploads/"):]
+        assert saved.path.rsplit("/", 1)[-1].endswith("etc_passwd")
+        lists = [item.path for item in chat_workspaces.list_files("chat_x")]
+        assert lists == [saved.path]
+        # 真正的检验：文件确实落在 uploads/ 下，没有跑到工作区外。
+        base = chat_workspaces.ensure_workspace("chat_x")
+        assert base is not None
+        assert (base / saved.path).is_file()
+
+    def test_does_not_overwrite_same_name(self, ws_root: Path) -> None:
+        first = chat_workspaces.save_file("chat_x", "a.txt", b"one")
+        second = chat_workspaces.save_file("chat_x", "a.txt", b"two")
+        assert first.path != second.path
+        base = chat_workspaces.ensure_workspace("chat_x")
+        assert base is not None
+        assert (base / "uploads" / "a.txt").read_bytes() == b"one"
+        assert (base / second.path).read_bytes() == b"two"
+
+    def test_rejects_empty(self, ws_root: Path) -> None:
+        with pytest.raises(ValueError):
+            chat_workspaces.save_file("chat_x", "empty.txt", b"")
+
+    def test_rejects_oversize(self, ws_root: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(chat_workspaces, "MAX_DOWNLOAD_BYTES", 4)
+        with pytest.raises(ValueError):
+            chat_workspaces.save_file("chat_x", "big.bin", b"12345")
+
+
+class TestUploadEndpoint:
+    def test_upload_shows_up_in_lists_and_is_downloadable(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        session = _session(ready_client, "上传")
+        payload = "# 结论\n".encode()
+
+        got = ready_client.post(
+            f"/api/v1/chat/sessions/{session}/files",
+            files={"file": ("报告.md", payload, "text/markdown")},
+        )
+        assert got.status_code == 201, got.text
+        body = got.json()
+        assert body["path"] == "uploads/报告.md"
+        assert body["sizeBytes"] == len(payload)
+
+        # 会话级列表和跨会话列表都能看到它。
+        per_session = ready_client.get(f"/api/v1/chat/sessions/{session}/files").json()
+        assert [row["path"] for row in per_session] == ["uploads/报告.md"]
+        cross = ready_client.get("/api/v1/chat/files").json()
+        assert [row["path"] for row in cross] == ["uploads/报告.md"]
+
+        # 下载回来字节一致。
+        dl = ready_client.get(
+            f"/api/v1/chat/sessions/{session}/files/download",
+            params={"path": "uploads/报告.md"},
+        )
+        assert dl.status_code == 200, dl.text
+        assert dl.content == payload
+
+    def test_upload_empty_file_is_400(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        session = _session(ready_client, "空文件")
+        got = ready_client.post(
+            f"/api/v1/chat/sessions/{session}/files",
+            files={"file": ("empty.txt", b"", "text/plain")},
+        )
+        assert got.status_code == 400, got.text
+
+    def test_upload_to_archived_session_is_400(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        session = _session(ready_client, "归档后")
+        assert ready_client.delete(f"/api/v1/chat/sessions/{session}").status_code == 200
+
+        got = ready_client.post(
+            f"/api/v1/chat/sessions/{session}/files",
+            files={"file": ("a.txt", b"x", "text/plain")},
+        )
+        assert got.status_code == 400, got.text
+
+    def test_upload_to_other_users_session_is_404(
+        self, viewer_client: TestClient, ws_root: Path
+    ) -> None:
+        got = viewer_client.post(
+            "/api/v1/chat/sessions/chat_does_not_exist/files",
+            files={"file": ("a.txt", b"x", "text/plain")},
+        )
+        assert got.status_code == 404, got.text

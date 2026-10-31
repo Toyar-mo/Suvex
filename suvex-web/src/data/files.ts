@@ -53,6 +53,35 @@ export async function deleteFile(sessionId: string, path: string): Promise<void>
   )
 }
 
+/** 上传回执。 */
+export interface UploadedFile {
+  path: string
+  name: string
+  sizeBytes: number
+}
+
+/**
+ * 往某个会话的工作区上传一个文件（v1.38「文件管理」页的「上传文件」）。
+ *
+ * 与对话页附件上传不同：这里写进 `/work/persist/uploads/`，长期留存，
+ * 上传后立刻出现在本页清单里。必须指定会话 —— 工作区是按会话隔离的，
+ * 「文件管理」页本身没有"当前会话"，所以由调用方先选一个。
+ *
+ * ⚠️ 用 `api.upload`（multipart），**不能** `api.post(path, {file})`：
+ * `post` 会 `JSON.stringify` 请求体，`JSON.stringify(FormData)` 等于 `"{}"`，
+ * 服务端收到一个没有文件的请求却**不报错**（见 `lib/api.ts` 的注记）。
+ */
+export async function uploadFile(sessionId: string, file: File): Promise<UploadedFile> {
+  const form = new FormData()
+  // 字段名必须是 `file` —— 后端 `upload_workspace_file(file: UploadFile = File(...))`
+  // 按这个名字取。写得不一样会得到 422「field required」，而不是"没传文件"。
+  form.append('file', file, file.name)
+  return api.upload<UploadedFile>(
+    `/chat/sessions/${encodeURIComponent(sessionId)}/files`,
+    form,
+  )
+}
+
 /** 人类可读的文件大小。 */
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '—'
