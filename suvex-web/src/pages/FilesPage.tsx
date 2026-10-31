@@ -1,4 +1,14 @@
-import { Copy, Download, FileDown, FolderOpen, RefreshCw, Search, Trash2, Upload } from 'lucide-react'
+import {
+  Copy,
+  Download,
+  FileDown,
+  FolderOpen,
+  Hash,
+  RefreshCw,
+  Search,
+  Trash2,
+  Upload,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageHeader } from '@/components/layout/AppShell'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
@@ -16,10 +26,12 @@ import {
   formatDate,
   formatTimestamp,
   listFiles,
+  listUploadSessions,
   subPathOf,
   uploadFile,
   type FileFilters,
   type FilesStatus,
+  type UploadSessionOption,
   type WorkspaceFileRow,
 } from '@/data/files'
 
@@ -68,6 +80,13 @@ const GROUP_OPTIONS: ReadonlyArray<{ value: GroupBy; label: string }> = [
 const INPUT_CLASS =
   'w-full rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none'
 
+/** 会话 ID 太长，列表里截短显示；完整值放在 title 与「复制会话 ID」按钮里。 */
+function shortSessionId(id: string): string {
+  // chat_01M6ABC... 这种前缀 + 随机段；保留头 12 位 + 尾 4 位即可辨认同一个。
+  if (id.length <= 18) return id
+  return `${id.slice(0, 12)}…${id.slice(-4)}`
+}
+
 export default function FilesPage() {
   const [rows, setRows] = useState<WorkspaceFileRow[]>([])
   const [status, setStatus] = useState<FilesStatus>('loading')
@@ -79,6 +98,26 @@ export default function FilesPage() {
   const [deleting, setDeleting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploading, setUploading] = useState(false)
+  // v1.39：上传目标会话改成下拉选（会话 ID 不在这一页上，让用户手填看不到的东西是设计缺陷）。
+  const [uploadSessions, setUploadSessions] = useState<UploadSessionOption[]>([])
+  const [uploadTarget, setUploadTarget] = useState('')
+
+  // 拉一次可选会话。失败不致命：上传按钮会提示"先选会话"，列表为空时用户也能
+  // 通过筛选栏里的会话 ID 兜底（pickUpload 仍会回落到 draft.sessionId）。
+  useEffect(() => {
+    let alive = true
+    void listUploadSessions()
+      .then((items) => {
+        if (!alive) return
+        setUploadSessions(items)
+      })
+      .catch(() => {
+        /* 吞掉：会话列表拿不到不该挡住「浏览/下载/删除」这些只读能力 */
+      })
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const load = useCallback(async (filters: FileFilters) => {
     setStatus('loading')
@@ -132,6 +171,15 @@ export default function FilesPage() {
     }
   }
 
+  const copySessionId = async (row: WorkspaceFileRow) => {
+    try {
+      await navigator.clipboard.writeText(row.sessionId)
+      showToast({ tone: 'ok', message: `已复制会话 ID：${row.sessionId}` })
+    } catch {
+      showToast({ tone: 'risk', message: '复制失败，请手动选择会话 ID。' })
+    }
+  }
+
   const confirmDelete = async () => {
     if (!pendingDelete) return
     setDeleting(true)
@@ -178,20 +226,28 @@ export default function FilesPage() {
     URL.revokeObjectURL(url)
   }
 
+  /**
+   * 当前选定的上传目标会话。
+   *
+   * 优先用下拉里选的（v1.39）；没选就回落到筛选栏里填的 sessionId（老路子，
+   * 给"我就是想往某个 ID 传"的人留个后门）。
+   */
+  const resolveUploadTarget = (): string =>
+    (uploadTarget || draft.sessionId || applied.sessionId || '').trim()
+
   /** 点击「上传文件」：先确定目标会话，再拉起文件选择框。 */
   const pickUpload = () => {
     // 工作区是按会话隔离的，这一页没有"当前会话"——必须让用户先指定一个。
-    // 复用筛选栏里的会话 ID：用户要往哪个会话传，通常正是他刚筛的那个。
-    const sessionId = (draft.sessionId || applied.sessionId || '').trim()
+    const sessionId = resolveUploadTarget()
     if (!sessionId) {
-      showToast({ tone: 'info', message: '先在上面的「会话 ID」里填一个会话，再上传。' })
+      showToast({ tone: 'info', message: '先在「上传到会话」里选一个会话，再上传。' })
       return
     }
     fileInputRef.current?.click()
   }
 
   const onFilesChosen = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const sessionId = (draft.sessionId || applied.sessionId || '').trim()
+    const sessionId = resolveUploadTarget()
     const files = event.target.files ? Array.from(event.target.files) : []
     // 立刻清空 value：否则连续选同一个文件不会再触发 change。
     event.target.value = ''
@@ -294,6 +350,30 @@ export default function FilesPage() {
               搜索
             </Button>
             <div className="ml-auto flex items-center gap-2">
+              <label className="flex items-center gap-1.5 text-sm">
+                <span className="whitespace-nowrap text-ink-muted">上传到会话</span>
+                <select
+                  value={uploadTarget}
+                  onChange={(e) => setUploadTarget(e.target.value)}
+                  disabled={uploading || uploadSessions.length === 0}
+                  title={
+                    uploadSessions.length === 0
+                      ? '还没有能上传的会话，先去对话页开一个'
+                      : undefined
+                  }
+                  className={cn(INPUT_CLASS, 'w-auto max-w-[240px]')}
+                  data-testid="upload-target"
+                >
+                  <option value="">
+                    {uploadSessions.length === 0 ? '（没有会话）' : '请选择会话…'}
+                  </option>
+                  {uploadSessions.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.title || '(无标题)'} · {s.id}
+                    </option>
+                  ))}
+                </select>
+              </label>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -363,6 +443,7 @@ export default function FilesPage() {
                       label={group.label}
                       rows={group.rows}
                       onCopy={copyPath}
+                      onCopySession={copySessionId}
                       onDelete={setPendingDelete}
                     />
                   ))}
@@ -391,11 +472,13 @@ function FileGroupBody({
   label,
   rows,
   onCopy,
+  onCopySession,
   onDelete,
 }: {
   label: string
   rows: WorkspaceFileRow[]
   onCopy: (row: WorkspaceFileRow) => void
+  onCopySession: (row: WorkspaceFileRow) => void
   onDelete: (row: WorkspaceFileRow) => void
 }) {
   return (
@@ -413,8 +496,17 @@ function FileGroupBody({
           className="border-b border-line last:border-0 hover:bg-surface-raised"
         >
           <td className="whitespace-nowrap px-3 py-2 text-ink-muted">{formatDate(row.modifiedAt)}</td>
-          <td className="max-w-[180px] truncate px-3 py-2 text-ink" title={row.sessionTitle}>
-            {row.sessionTitle}
+          <td className="max-w-[220px] px-3 py-2">
+            <div className="flex flex-col leading-tight">
+              <span className="truncate text-ink" title={row.sessionTitle}>
+                {row.sessionTitle || '(无标题)'}
+              </span>
+              {/* v1.39：会话 ID 直接显示在页面上、可一键复制 —— 之前这一页根本查不到它，
+                  「上传文件」却要求用户填会话 ID，等于让人填一个看不到的值。 */}
+              <span className="truncate font-mono text-[11px] text-ink-muted" title={row.sessionId}>
+                {shortSessionId(row.sessionId)}
+              </span>
+            </div>
           </td>
           <td className="max-w-[160px] truncate px-3 py-2 text-ink-muted" title={subPathOf(row.path)}>
             {subPathOf(row.path)}
@@ -443,6 +535,9 @@ function FileGroupBody({
             <div className="flex items-center justify-end gap-1">
               <IconButton label={`复制 ${row.name} 的路径`} onClick={() => onCopy(row)}>
                 <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
+              </IconButton>
+              <IconButton label={`复制会话 ID ${row.sessionId}`} onClick={() => onCopySession(row)}>
+                <Hash size={15} strokeWidth={1.75} aria-hidden="true" />
               </IconButton>
               <IconButton
                 label={`下载 ${row.name}`}

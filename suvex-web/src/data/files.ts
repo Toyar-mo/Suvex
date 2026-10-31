@@ -11,6 +11,35 @@ import { api } from '@/lib/api'
 /** 产物来源。当前只有工作区；后端留了字符串以便以后扩展。 */
 export type FileSource = 'workspace'
 
+/**
+ * 上传时可选的会话（v1.39）。
+ *
+ * ★ 为什么要有它：工作区是按会话隔离的，上传必须先指定会话；但「文件管理」
+ *   页本身没有"当前会话"，而会话 ID（`chat_01M...`）**不在这一页上**——用户
+ *   被要求填一个自己看不到的东西，只能去对话页翻地址栏。这是设计缺陷。
+ *   改成下拉选会话，列表直接来自 `GET /chat/sessions`，同时把 ID 显示在选项
+ *   边上（副标题），用户一眼就能对照。
+ */
+export interface UploadSessionOption {
+  id: string
+  title: string
+}
+
+/**
+ * 拉「我能上传到哪些会话」的列表。
+ *
+ * 只取未归档的：归档会话的后端 `POST .../files` 会 400「这个会话已归档」，
+ * 与其让用户选中后再失败，不如干脆不列出来。
+ */
+export async function listUploadSessions(): Promise<UploadSessionOption[]> {
+  const sessions = await api.get<Array<{ id: string; title: string; archived?: boolean }>>(
+    '/chat/sessions',
+  )
+  return sessions
+    .filter((s) => !s.archived)
+    .map((s) => ({ id: s.id, title: s.title }))
+}
+
 /** 清单里的一行。 */
 export interface WorkspaceFileRow {
   sessionId: string

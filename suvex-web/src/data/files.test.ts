@@ -11,6 +11,7 @@ import {
   formatDate,
   formatTimestamp,
   listFiles,
+  listUploadSessions,
   subPathOf,
   uploadFile,
 } from './files'
@@ -117,5 +118,17 @@ describe('uploadFile', () => {
     uploadMock.mockResolvedValue({ path: 'uploads/x', name: 'x', sizeBytes: 1 })
     await uploadFile('a b', new File([new Uint8Array([1])], 'x'))
     expect(uploadMock.mock.calls[0][0]).toBe('/chat/sessions/a%20b/files')
+  })
+})
+
+describe('listUploadSessions（v1.39 上传目标下拉）', () => {
+  it('只列未归档会话，映射成 id/title', async () => {
+    getMock.mockResolvedValue([
+      { id: 'chat_1', title: '解题' },
+      { id: 'chat_2', title: '旧的', archived: true },
+    ])
+    const out = await listUploadSessions()
+    expect(getMock.mock.calls[0][0]).toBe('/chat/sessions')
+    expect(out).toEqual([{ id: 'chat_1', title: '解题' }])
   })
 })
