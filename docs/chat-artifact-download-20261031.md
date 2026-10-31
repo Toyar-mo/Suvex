@@ -75,3 +75,28 @@ CTF pwn 报告，最终答复里写"平台工具清单里没有提交报告的�
   `/work/persist/`，用 `GET /chat/sessions/{id}/files` 即可列/下。
 - **历史产物救不回来**：功能上线前被回收的沙箱，`/work` 里的文件已经没了。
 - 工作区目录随会话删除清理；不做全局定时清理（与附件同一取舍）。
+
+## 部署记录（2026-10-31 生产 Kali `/root/suvex`）
+
+- 5 个文件覆盖后，生产 sha 与源逐一相等：`workspaces.py ef06548b…c9`、
+  `sandbox.py aa4e29cc…47`、`router.py 4c0f8b5e…5c`、`schemas.py 015edea4…e0`、
+  `prompts.py 88b655da…2c`。
+- `/etc/suvex/api.env` 增加 `SUPEX_CHAT_WORKSPACES=/root/suvex/chat-workspaces`
+  （持久盘，避免默认 `/tmp` 重启即失），目录权限 755。
+- 重启：日志出现 `Application startup complete`（10-31 02:01:56）、
+  `39 张表`、无 traceback；`is-active=active`；`GET /api/v1/health` = 200
+  `{"status":"ok","version":"0.1.0"}`。
+- 线上复现（viewer 登录，临时会话 `chat_01M688TSXC7GMWTJGWAN7M20DR`）：
+  - 宿主放 `reports/pwn-分析.md`（93B，sha `d855763a…baa`）；
+  - `GET /chat/sessions/{id}/files` → 200，
+    `[{"path":"reports/pwn-分析.md","sizeBytes":93,...}]`；
+  - `GET /files/download?path=reports/pwn-分析.md` → 200、93B，
+    下载文件 sha `d855763a…baa`（与宿主一致）；
+  - `path=../../etc/passwd` → 404；
+  - `purge` 后宿主工作区目录自动消失（`drop_workspace` 生效）。
+- 沙箱接线实测：`sandbox._new_sandbox(SimpleNamespace(id=...))` 的
+  `workspace_dir = /root/suvex/chat-workspaces/<sid>`（确实读到了 env）。
+- **真实挂载实测**：起一个沙箱容器，在容器里对 `/work/persist/reports/live.txt`
+  写 `live-through-mount`，宿主 `<workspaceRoot>/<sid>/reports/live.txt`
+  立即读到同样内容（rc=0）；`drop_sandbox` 后容器与宿主目录都清理干净。
+
