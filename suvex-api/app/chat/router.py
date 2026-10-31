@@ -43,17 +43,20 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
-from app.chat import engine, resumer, sandbox as chat_sandbox, service, turn_runs
+from app.chat import engine, resumer, service, turn_runs
 from app.chat import interrupts as chat_interrupts
+from app.chat import sandbox as chat_sandbox
+from app.chat import workspaces as chat_workspaces
 from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
+    ChatFileOut,
     ChatInterjectIn,
     ChatInterruptIn,
     ChatMessageOut,
@@ -201,6 +204,9 @@ def archive_session(session_id: str, db: DbSession, identity: Reader) -> ChatSes
     try:
         chat_attachments.drop_session(session_id=session_id)
         chat_attachments.drop_handed_over(session_id=session_id)
+        # ★ 持久工作区也清：归档意味着这个会话不会再被发消息，留一整个
+        #   宿主目录只是磁盘垃圾（里面可能有用户不想长期驻留的材料）。
+        chat_workspaces.drop_workspace(session_id)
     except Exception:  # noqa: BLE001 - 同一条理由：清理失败不该翻成 500
         logger.warning("归档会话 %s 时清理附件失败", session_id, exc_info=True)
     return ChatSessionOut.model_validate(session)
@@ -257,6 +263,7 @@ def purge_session(session_id: str, db: DbSession, identity: Reader) -> ChatSessi
     try:
         chat_attachments.drop_session(session_id=session_id)
         chat_attachments.drop_handed_over(session_id=session_id)
+        chat_workspaces.drop_workspace(session_id)
     except Exception:  # noqa: BLE001 - 同上
         logger.warning("彻底删除会话 %s 时清理附件失败", session_id, exc_info=True)
     logger.info("彻底删除会话 %s：%d 条消息", session_id, removed)
@@ -692,6 +699,50 @@ async def upload_attachment(
         raise ApiError.validation(str(exc), {"file": "不符合要求"}) from exc
 
     return ChatAttachmentOut(id=staged.id, name=staged.name, sizeBytes=staged.size_bytes)
+
+
+@router.get("/chat/sessions/{session_id}/files", response_model=list[ChatFileOut])
+def list_workspace_files(
+    session_id: str, db: DbSession, identity: Reader
+) -> list[ChatFileOut]:
+    """列出这个会话在**宿主工作区**里的产物。
+
+    工作区就是沙箱里 `/work/persist/` 的宿主那一侧：模型写进那里的文件
+    不随容器生灭，会话归档/彻底删除时由 `drop_workspace` 一起清掉。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    return [
+        ChatFileOut(
+            path=item.path,
+            name=item.name,
+            sizeBytes=item.size_bytes,
+            modifiedAt=item.modified_at,
+        )
+        for item in chat_workspaces.list_files(session.id)
+    ]
+
+
+@router.get("/chat/sessions/{session_id}/files/download")
+def download_workspace_file(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+    path: Annotated[str, Query(min_length=1, max_length=1024)],
+) -> FileResponse:
+    """下载工作区里的一个文件。`path` 是相对工作区根目录的 POSIX 路径。"""
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    target = chat_workspaces.resolve_file(session.id, path)
+    if target is None:
+        raise ApiError.not_found("这个文件")
+    return FileResponse(
+        path=str(target),
+        filename=target.name,
+        media_type="application/octet-stream",
+    )
 
 
 @router.post(

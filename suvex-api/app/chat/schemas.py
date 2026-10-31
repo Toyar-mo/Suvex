@@ -210,6 +210,17 @@ class ChatAttachmentOut(CamelModel):
     sizeBytes: int
 
 
+class ChatFileOut(CamelModel):
+    """会话工作区里的一个产物文件（`/work/persist` 的宿主侧）。"""
+
+    #: 相对工作区根目录的 POSIX 路径，下载时原样回传。
+    path: str
+    name: str
+    sizeBytes: int
+    #: 修改时间（epoch 秒），前端显示用。
+    modifiedAt: float
+
+
 class ChatApprovalIn(StrictModel):
     """对一条待审批的工具调用做决定。"""
 

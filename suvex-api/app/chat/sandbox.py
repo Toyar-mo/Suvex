@@ -187,6 +187,7 @@ def _new_sandbox(session: ChatSession) -> Any:
     抄函数会把实现搞成两份。所以这里选择延迟 import。
     """
     from app.chat import attachments as chat_attachments
+    from app.chat import workspaces as chat_workspaces
     from app.kernel import runner
 
     # ★ 先把交接目录**建出来**，再交给 `SandboxContainer`。
@@ -220,6 +221,21 @@ def _new_sandbox(session: ChatSession) -> Any:
         )
         handed_over = None
 
+    # ★ 持久工作区（`:rw` 挂到容器 `/work/persist`）。
+    #
+    #   模型把要交付/下载的产物写这里：它属于**宿主**，容器回收后文件仍在，
+    #   平台可以直接从宿主目录下载（`GET /chat/sessions/{id}/files`）。
+    #   建不出来（磁盘满/权限）就退回"不挂"，沙箱仍可用，只是产物不持久。
+    workspace: Any = None
+    try:
+        workspace = chat_workspaces.ensure_workspace(session.id, create=True)
+    except OSError:
+        _log.warning(
+            "对话沙箱的持久工作区建不出来，本次不挂持久工作区：%s",
+            session.id,
+            exc_info=True,
+        )
+
     return runner.SandboxContainer(
         name=_sandbox_name(session.id),
         # ★ 无限制档：对话是通用 agent，不是解题。它要能装包、写代码、
@@ -241,10 +257,12 @@ def _new_sandbox(session: ChatSession) -> Any:
         #   `tcpdump` 对二进制有用，而 `read_attachment` 遇二进制只回
         #   "这是二进制文件，读不了"——那句话现在指向这个目录。
         attachments_dir=handed_over,
-        # 不挂持久工作区：对话的工作集应该**随沙箱生灭**。
-        # 解题侧挂 `persist` 是因为一道题可能续解好几天；对话没有这个需求，
-        # 而挂上去会让"删了会话但 /work/persist 里还留着东西"。
-        workspace_dir=None,
+        # ★ v1.36：挂会话级宿主工作区到 `/work/persist`（`:rw`）。
+        #   从前这里是 `None`，理由是"对话工作集应随沙箱生灭"；但用户
+        #   明确需要在平台下载模型产出的报告/脚本，而容器一回收 `/work`
+        #   就没了。挂到宿主后文件随会话留着，归档/彻底删除时由 router
+        #   的 `drop_workspace` 一起清（不是无主垃圾）。
+        workspace_dir=workspace,
         extra_env={"PWNLIB_NOTERM": "1"},
     )
 
