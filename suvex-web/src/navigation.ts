@@ -4,6 +4,7 @@ import {
   BookOpen,
   FileText,
   Flag,
+  FolderOpen,
   Layers,
   MessagesSquare,
   Radar,
@@ -209,6 +210,24 @@ export const NAV_ITEMS: NavItem[] = [
     label: '报告',
     icon: FileText,
     blurb: '把一次完成的扫描整理成可以直接交付给他人的报告。',
+    inMobileTabBar: false,
+  },
+  {
+    id: 'files',
+    path: '/files',
+    label: '文件管理',
+    shortLabel: '文件',
+    icon: FolderOpen,
+    blurb: '对话里产出的报告、脚本、证据都在哪，多大，随时下载。',
+    /*
+      ★ 为什么单开一页，而不是塞进「对话」侧栏：
+        对话页是「按时间线读一次交互」，文件管理是「按文件横向找东西」——
+        两者正交。用户常常记得"我让它做过一个 pcap 分析"，却不记得在哪个
+        会话里；让他逐个会话翻聊天记录找路径，是把检索成本推给用户。
+        这一页就是那个「把产物当一等公民」的索引。
+      ★ 没进移动端底栏：它是**回看/取件**用途（做完事回来拿东西），
+        与总览/对话/扫描/活动/漏洞这种"日常驾驶舱"不同期。进「更多」。
+    */
     inMobileTabBar: false,
   },
   {

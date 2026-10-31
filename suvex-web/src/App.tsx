@@ -18,6 +18,7 @@ import {
   ChatPage,
   KernelPage,
   FindingsPage,
+  FilesPage,
   IrPage,
   LandingPage,
   OverviewPage,
@@ -61,6 +62,8 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   // ★ v0.85：定时计划。同一个坑 —— 漏键 = 侧栏点得动、页面全白。
   schedules: SchedulesPage,
   reports: ReportsPage,
+  // ★ v1.37：文件管理。同一个坑 —— 漏键 = 侧栏点得动、页面全白。
+  files: FilesPage,
   // ★ 这一个键漏掉的症状是"侧栏点得动，但页面全白"——
   //   路由表由 `NAV_ITEMS.map()` 生成，`if (!Page) return null`
   //   静默返回空，既不报错也不警告。v0.43 加导航项时必须同时加这里。

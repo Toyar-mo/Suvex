@@ -39,6 +39,11 @@ export const SkillsPage = lazy(() => import('./SkillsPage'))
  */
 export const ChatPage = lazy(() => import('./ChatPage'))
 export const SettingsPage = lazy(() => import('./SettingsPage'))
+/**
+ * ★ v1.37：文件管理页（跨会话的产物清单）。与其它页面同样是 lazy ——
+ *   它带一张可能上千行的表，不该进首屏包。
+ */
+export const FilesPage = lazy(() => import('./FilesPage'))
 
 /**
  * ★ 首页**不走 lazy**，是全站唯一同步引入的页面。

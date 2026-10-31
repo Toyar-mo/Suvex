@@ -221,6 +221,29 @@ class ChatFileOut(CamelModel):
     modifiedAt: float
 
 
+class ChatFileItemOut(CamelModel):
+    """「文件管理」页跨会话列出的一条产物（v1.37）。
+
+    与 `ChatFileOut`（单会话）的区别：这里多带会话身份，好让全局列表
+    能显示「这是哪个会话、哪个项目」的文件，并支持按它们筛选。
+    """
+
+    #: 文件所属会话。
+    sessionId: str
+    sessionTitle: str
+    #: 会话上标注的项目（v0.94 的会话设置），没有就是 None。
+    project: str | None = None
+    #: 产物来源。当前只有工作区（`/work/persist` 宿主侧）。留成字符串
+    #: 而不是枚举：以后接上传附件/工具输出时不必改响应结构。
+    source: str
+    #: 相对会话工作区根目录的 POSIX 路径，下载时原样回传。
+    path: str
+    name: str
+    sizeBytes: int
+    #: 修改时间（epoch 秒）。
+    modifiedAt: float
+
+
 class ChatApprovalIn(StrictModel):
     """对一条待审批的工具调用做决定。"""
 

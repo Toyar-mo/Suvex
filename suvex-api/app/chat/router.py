@@ -42,7 +42,7 @@ import logging
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -56,6 +56,7 @@ from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_c
 from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
+    ChatFileItemOut,
     ChatFileOut,
     ChatInterjectIn,
     ChatInterruptIn,
@@ -743,6 +744,96 @@ def download_workspace_file(
         filename=target.name,
         media_type="application/octet-stream",
     )
+
+
+@router.get("/chat/files", response_model=list[ChatFileItemOut])
+def list_all_workspace_files(
+    db: DbSession,
+    identity: Reader,
+    session_id: Annotated[str | None, Query(alias="sessionId", max_length=128)] = None,
+    project_id: Annotated[str | None, Query(alias="projectId", max_length=128)] = None,
+    name: Annotated[str | None, Query(max_length=256)] = None,
+    source: Annotated[str, Query(max_length=32)] = "all",
+) -> list[ChatFileItemOut]:
+    """「文件管理」页：跨会话列出**我的**产物文件（v1.37）。
+
+    数据来源与会话级 `/chat/sessions/{id}/files` 相同 —— 每个会话在宿主上
+    的持久工作区（沙箱 `/work/persist` 那一侧），不随容器回收而丢失。
+
+    ## 为什么是服务端过滤，而不是前端拉全量
+
+    工作区文件数可能上万（一个会话里跑数据集的场景）。`sessionId`/`projectId`/
+    `name` 三个过滤都下推到这一层：命中单会话时连别的会话目录都不扫，
+    避免把整机所有会话的文件都读一遍再丢掉。
+
+    ## 为什么只列**未归档**会话
+
+    `service.list_sessions` 默认就不返回归档的；归档时 `drop_workspace`
+    也早把目录删了。两处一致，不需要在这里再判一次 `archived_at`。
+    """
+    if source not in ("all", "workspace"):
+        raise ApiError.validation(
+            "未知的文件来源。", {"source": "只支持 all / workspace"}
+        )
+    if session_id:
+        sessions = [
+            service.get_session_or_404(
+                db, session_id=session_id, created_by=_owner(identity)
+            )
+        ]
+    else:
+        sessions = service.list_sessions(db, created_by=_owner(identity))
+
+    needle = name.casefold() if name else None
+    out: list[ChatFileItemOut] = []
+    truncated = False
+    for session in sessions:
+        if project_id and (session.project or "") != project_id:
+            continue
+        for item in chat_workspaces.list_files(session.id):
+            if needle and needle not in item.name.casefold():
+                continue
+            out.append(
+                ChatFileItemOut(
+                    sessionId=session.id,
+                    sessionTitle=session.title,
+                    project=session.project,
+                    source="workspace",
+                    path=item.path,
+                    name=item.name,
+                    sizeBytes=item.size_bytes,
+                    modifiedAt=item.modified_at,
+                )
+            )
+            if len(out) >= chat_workspaces.MAX_LISTED_FILES:
+                truncated = True
+                break
+        if truncated:
+            break
+    # 最近修改的排前面 —— 「文件管理」页第一眼要找的通常是刚产出的东西。
+    out.sort(key=lambda row: row.modifiedAt, reverse=True)
+    return out
+
+
+@router.delete("/chat/sessions/{session_id}/files", status_code=204)
+def delete_workspace_file(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+    path: Annotated[str, Query(min_length=1, max_length=1024)],
+) -> Response:
+    """删除工作区里的一个文件（v1.37，「文件管理」页的删除操作）。"""
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    target = chat_workspaces.resolve_file(session.id, path)
+    if target is None:
+        raise ApiError.not_found("这个文件")
+    try:
+        target.unlink()
+    except OSError as exc:  # noqa: BLE001 - 磁盘错误翻成 4xx 而不是 500
+        raise ApiError.validation("删除失败：文件可能正被占用。") from exc
+    return Response(status_code=204)
 
 
 @router.post(
