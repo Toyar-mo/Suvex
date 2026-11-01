@@ -1520,26 +1520,43 @@ def _narration_before_action(text: str) -> str:
 #: `HoldbackBuffer` 原样能拦。
 _XML_ACTION_RE = re.compile(r"<action>\s*(\{.*?\})\s*</action>", re.DOTALL)
 _XML_ANALYSIS_RE = re.compile(r"<analysis>.*?</analysis>", re.DOTALL)
+# ★ v1.44：模型伪造「工具结果」—— `<result>ok</result>`。工具结果只能由平台
+#   真实返回，模型自己在正文里写出来的 `<result>` 是**幻觉**，必须删掉：
+#   一来它不该出现在用户视野里（界面上一堆 `<result>ok</result>`），二来更
+#   要命的是它会**随历史回灌给模型**，让模型以为自己"已经执行过了"，于是
+#   一直写"执行。/<result>ok</result>"空转（线上实测会话
+#   `chat_01M6BWQ69MZJNBAB7C7QMVXPV2`：单轮 40 回合、77 工具、37 次纠偏）。
+_XML_RESULT_RE = re.compile(r"<result>.*?</result>", re.DOTALL)
+#: 收尾兜底：删掉还没闭合/落单的协议标签本身（增量截断时可能只剩半个标签）。
+_XML_STRAY_TAG_RE = re.compile(r"</?(?:action|analysis|result)>", re.DOTALL)
 
 
 def _normalize_xml_actions(text: str) -> str:
-    """把自创的 XML 动作/推理块改写成 `ACTION:` 文本协议（找不到就是原文）。
+    """把自创的 XML 块规范化（找不到就是原文）。
 
     - `<action>{...}</action>` → `\\nACTION: {...}\\n`（每块一行，行首起协议）；
-    - `<analysis>...</analysis>` → 整块删掉（推理不进正文，也不该执行）。
+    - `<analysis>...</analysis>` → 整块删掉（推理不进正文，也不该执行）；
+    - `<result>...</result>`（v1.44）→ 整块删掉（**伪造的工具结果**，工具结果
+      只能由平台返回；留着还会随历史回灌把模型带进"我已执行"的空转）。
 
     只在**检测到** XML 协议标签时才动；普通回复（无 XML）逐字节不变。
     """
-    if not text or ("<action>" not in text and "<analysis>" not in text):
+    if not text or not any(
+        tag in text
+        for tag in ("<action>", "<analysis>", "<result>", "</result>", "</action>")
+    ):
         return text
-    # 先删 <analysis>（它可能包着引擎自己也不想要的推理），再改写 <action>。
+    # 先删 <analysis> / <result>（都不该进正文），再改写 <action>。
     text = _XML_ANALYSIS_RE.sub("", text)
-    return _XML_ACTION_RE.sub(lambda m: "\nACTION: " + m.group(1) + "\n", text)
+    text = _XML_RESULT_RE.sub("", text)
+    text = _XML_ACTION_RE.sub(lambda m: "\nACTION: " + m.group(1) + "\n", text)
+    # 兜底：清掉落单/未闭合的标签残留（如半截 `<result>`）。
+    return _XML_STRAY_TAG_RE.sub("", text)
 
 
 def _has_protocol_marker_or_xml(text: str) -> bool:
-    """正文里已经有文本协议（`ACTION:`/`FINAL:`）**或** XML 动作块吗。"""
-    if "<action>" in (text or ""):
+    """正文里已经有文本协议（`ACTION:`/`FINAL:`）**或** XML 块吗。"""
+    if "<action>" in (text or "") or "<result>" in (text or ""):
         return True
     return _has_protocol_marker(text)
 

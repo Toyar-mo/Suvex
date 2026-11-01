@@ -47,6 +47,7 @@ from app.chat.models import (
     MAX_MESSAGE_CHARS,
     MAX_PROJECT_CHARS,
     MAX_TITLE_CHARS,
+    MAX_TOOL_NAME_CHARS,
     ChatMessage,
     ChatSession,
 )
@@ -149,6 +150,23 @@ def _clip_body(text: str) -> str:
     return _scrub_nul(f"{head}\n\n…（另有 {len(text) - len(head)} 字已截断）")
 
 
+def _clip_tool_name(name: str | None) -> str | None:
+    """把工具名夹到列宽（`MAX_TOOL_NAME_CHARS = 64`），避免 varchar 溢出。
+
+    ★ 为什么必须有（v1.44，线上实测 2026-11-01）：模型会把一整串工具清单
+      塞进 `ACTION: {"tool": "<逗号分隔的一长串>"}`；这句 `tool` 值当
+      `tool_name` 落库时超出 `varchar(64)`，Postgres 抛
+      `StringDataRightTruncation`，整轮 500、resumer 反复接手（用户看到
+      「166 步 · 66 个工具」一直在循环）。未知/超长工具名本应只是**一条
+      干净的"没有叫 X 的工具"结果**，不该炸库 —— 截断保命即可，完整的
+      原文仍在同一条消息的 `tool_args` 里（那是 JSONB，没有 64 字上限）。
+    """
+    if name is None:
+        return None
+    cleaned = _scrub_nul(name)
+    return cleaned[:MAX_TOOL_NAME_CHARS]
+
+
 def create_session(db: Session, *, created_by: str, title: str | None = None) -> ChatSession:
     """新建一个空会话。"""
     session = ChatSession(
@@ -184,10 +202,19 @@ def list_sessions(
     #   这一句在 SQLite 与 PostgreSQL 上语义一致：布尔排序两处都按 0/1。
     #   写在 `updated_at` 之前而不是分两次查询，是因为前端拿到的必须**已经**
     #   是最终顺序 —— 让它自己再排一遍等于把判据分散到两个地方。
+    #
+    # ★ 末尾的 `id.desc()` 是**唯一兜底键**，不是装饰。
+    #   上面三列都可能相等：`now_utc()` 在 Windows 上的可见粒度是**毫秒级**
+    #   （实测相邻两次调用相同 19991/20000），两次置顶完全可能落在同一刻度。
+    #   一旦前几列全相等，SQL 就**不保证**行序 —— SQLite 按 rowid、
+    #   PostgreSQL 按堆序，同一份数据换后端或换查询计划就会换顺序。
+    #   补上主键后排序键构成全序，结果才是确定的。
+    #   与 `app/chat/turn_runs.py:68` 的 `updated_at.desc(), id.desc()` 同一写法。
     stmt = stmt.order_by(
         ChatSession.pinned_at.is_(None),
         ChatSession.pinned_at.desc(),
         ChatSession.updated_at.desc(),
+        ChatSession.id.desc(),
     )
     return list(db.scalars(stmt))
 
@@ -235,9 +262,15 @@ def set_pinned(db: Session, *, session: ChatSession, pinned: bool) -> ChatSessio
 
     ★ 重复置顶会**刷新时刻**（"刚置顶的排最前"）。这是刻意的：
       用户再点一次「置顶」，期望是它回到最上面，而不是原地不动。
+
+    ★ 只取**一次** now —— 两次 `now_utc()` 会得到两个相差几微秒的时刻，
+      于是 `pinned_at` 与 `updated_at` 的关系在不同平台上不一致（Windows
+      上两次调用 99.98% 相同，Linux 上稳定差几微秒）。这与
+      `app/findings/service.py:1307` 是同一条约定。
     """
-    session.pinned_at = now_utc() if pinned else None
-    session.updated_at = now_utc()
+    moment = now_utc()
+    session.pinned_at = moment if pinned else None
+    session.updated_at = moment
     db.flush()
     return session
 
@@ -329,7 +362,7 @@ def _append(
         model_extra=(
             _clip_body(model_extra) if model_extra is not None else None
         ),
-        tool_name=tool_name,
+        tool_name=_clip_tool_name(tool_name),
         tool_args=_scrub_nul_json(tool_args),
         tool_failed=tool_failed,
         surface=surface,

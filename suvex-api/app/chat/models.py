@@ -78,6 +78,17 @@ MAX_MESSAGE_CHARS = 60_000
 #: 会话标题的最大长度。标题是自动从首条提问生成的，超长就截。
 MAX_TITLE_CHARS = 80
 
+#: 工具名的最大长度。**必须等于** `ChatMessage.tool_name` 列的宽度
+#: （`String(64)`）；写入前在 `service._append` 里按它截断。
+#:
+#: ★ 为什么要有这个常量（v1.44，线上实测 2026-11-01）：模型会把一整串
+#:   工具清单塞进 `ACTION: {"tool": "<一长串逗号分隔的工具名>"}`，那句
+#:   `tool` 值被当成 `tool_name` 落库时超出 `varchar(64)` —— Postgres 抛
+#:   `StringDataRightTruncation`，整轮 500、被后台 resumer 反复接手（截图上
+#:   「166 步 · 66 个工具」一直在循环，turn_run 的 last_error 就是这条）。
+#:   未知/超长工具名本身应当是**一条干净的"没有叫 X 的工具"结果**，不该炸库。
+MAX_TOOL_NAME_CHARS = 64
+
 #: 角色（人格）id 的合法取值。
 #:
 #: ★ 与 `CHAT_ROLES`（消息角色 `user`/`assistant`/`tool`）**毫无关系**，
@@ -534,6 +545,7 @@ __all__ = [
     "CHAT_ROLES",
     "MAX_MESSAGE_CHARS",
     "MAX_PROJECT_CHARS",
+    "MAX_TOOL_NAME_CHARS",
     "MAX_TITLE_CHARS",
     "TURN_RUN_STATUSES",
     "ChatMessage",

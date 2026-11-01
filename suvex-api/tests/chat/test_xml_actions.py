@@ -99,3 +99,58 @@ def test_has_protocol_marker_or_xml_detects_xml() -> None:
     assert _has_protocol_marker_or_xml('<action> {"tool": "x"} </action>') is True
     assert _has_protocol_marker_or_xml('ACTION: {"tool": "x"}') is True
     assert _has_protocol_marker_or_xml("只是一句普通的话。") is False
+
+
+# ══════════════════════════════════════════════════════════════════════
+# v1.44：模型伪造 `<result>...</result>`（工具结果只能由平台返回）
+# ══════════════════════════════════════════════════════════════════════
+#
+# 线上实测（2026-11-01 会话 `chat_01M6BWQ69MZJNBAB7C7QMVXPV2`，单轮 40 回合 /
+# 77 工具 / 37 次纠偏）：模型在正文里写「执行。<result>ok</result>现在真正调用。
+# <result>ok</result>…」——它把自己"假装成工具和结果"，于是以为已经执行过，
+# 不断空转。这些 `<result>` 既泄漏给用户看，又会随历史回灌把模型带进循环。
+
+
+def test_normalize_drops_fabricated_result_blocks() -> None:
+    """`<result>ok</result>` 整块删掉（工具结果只能由平台返回）。"""
+    raw = "现在真正调用。\n<result>ok</result>\n继续执行。"
+    out = _normalize_xml_actions(raw)
+    assert "<result>" not in out
+    assert "</result>" not in out
+    assert "ok" not in out  # 伪造的结果内容也一起没了
+    assert "现在真正调用。" in out and "继续执行。" in out
+
+
+def test_normalize_drops_many_fake_results_keeps_human_words() -> None:
+    """一整段 `执行。/<result>ok</result>` 反复，删干净伪造结果、保留人话。"""
+    raw = (
+        "抱歉，前面那串空转是我的问题。现在直接执行。\n"
+        "<result>ok</result>\n现在真正调用。\n"
+        "<result>ok</result>\n"
+        "我需要真正写出 ACTION 行，先 dump 字节：\n<result>ok</result>\n好，执行：\n"
+        "<result>ok</result>"
+    )
+    out = _normalize_xml_actions(raw)
+    assert "<result>" not in out and "ok" not in out
+    assert "现在直接执行。" in out
+    assert "先 dump 字节" in out
+
+
+def test_normalize_result_with_leftover_stray_tag() -> None:
+    """未闭合的半截 `<result>` 也被兜底清掉（增量截断时的残留）。"""
+    raw = "人话一句。<result>\n后面还有内容"
+    out = _normalize_xml_actions(raw)
+    assert "<result>" not in out
+    assert "人话一句。" in out
+
+
+def test_has_protocol_marker_or_xml_detects_result() -> None:
+    """含 `<result>` 时也算"已有 XML"，不该再合成原生动作。"""
+    assert _has_protocol_marker_or_xml("执行。<result>ok</result>") is True
+
+
+def test_real_tool_result_still_kept_as_narration_prefix() -> None:
+    """★ 不能误伤：真实 `<result>` 外的正文必须保留（删块不删话）。"""
+    raw = "我先跑一下 ls。\nACTION: {\"tool\": \"run_shell\", \"args\": {}}\n等结果。"
+    assert "<result>" not in raw
+    assert _normalize_xml_actions(raw) == raw

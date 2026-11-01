@@ -38,7 +38,6 @@ import pytest
 from app.chat import attachments as chat_attachments
 from app.chat import service as chat_service
 
-
 #: 一段真 pcapng 的开头：魔数 + 版本 + 大段零填充。
 #: 用真实字节而不是 `b"\x00\x00"`：真实的失败正是被这个形状触发的。
 PCAPNG_BYTES = bytes.fromhex("0a0d0d0a") + b"\x1c\x00\x00\x00" + bytes(64)
@@ -276,3 +275,75 @@ class TestTitlesNeverCarryNul:
 
         assert "\x00" not in session.title
         assert "正常" in session.title and "标题" in session.title
+
+
+class TestToolNameNeverOverflowsTheVarchar:
+    """`tool_name` 是 `VARCHAR(64)`，超了会整轮 500（v1.44）。
+
+    ## 这条守的实测 500（2026-11-01，Kali）
+
+    截图上是一个"166 步 · 66 个工具"一直循环的会话，turn_run 的
+    `last_error` 是：
+
+        DataError: (psycopg.errors.StringDataRightTruncation)
+        value too long for type character varying(64)
+
+    失败的 SQL 是 `INSERT INTO chat_messages (... tool_name ...)`，而
+    `tool_name` 的值是模型把**一整串工具清单**塞进
+    `ACTION: {"tool": "delete_skill, list_challenges, …, run_shell, …"}` 的
+    那一长串（远超 64 字）。未知工具本应只是**一条干净的"没有叫 X 的工具"
+    结果**，不该炸库 —— 于是写入前把 `tool_name` 夹到列宽。
+
+    ## 为什么判据是"交给 ORM 的字符串长度"
+
+    本机 SQLite 不管 `VARCHAR(64)`，写超长也不报错；真正的拒收只发生在
+    PostgreSQL。但既然 `psycopg` 拒的就是"发给它的值"，只要进 ORM 之前
+    `tool_name` 已 ≤ 64，那条 500 就不可能复现。
+    """
+
+    def test_clip_tool_name_truncates_to_column_width(self) -> None:
+        from app.chat.models import MAX_TOOL_NAME_CHARS
+
+        long_name = "delete_skill, list_challenges, list_mcp_servers, " * 5
+        assert len(long_name) > MAX_TOOL_NAME_CHARS
+        clipped = chat_service._clip_tool_name(long_name)
+        assert clipped is not None
+        assert len(clipped) == MAX_TOOL_NAME_CHARS
+
+    def test_clip_tool_name_passes_short_name_through(self) -> None:
+        assert chat_service._clip_tool_name("run_shell") == "run_shell"
+        assert chat_service._clip_tool_name(None) is None
+
+    def test_clip_tool_name_strips_nul(self) -> None:
+        assert "\x00" not in chat_service._clip_tool_name("run\x00_shell")
+
+    def test_tool_message_with_long_name_is_clamped_before_orm(self, db_session) -> None:
+        """端到端：模型塞一整串工具名进来，落库值必须 ≤ 64（不炸库）。"""
+        from app.chat.models import MAX_TOOL_NAME_CHARS
+
+        session = chat_service.create_session(db_session, created_by="u1")
+        db_session.flush()
+
+        blob = ", ".join(
+            ["delete_skill", "list_challenges", "list_mcp_servers", "load_skill",
+             "read_skill", "run_shell", "save_skill", "start_ctf_solve"]
+        ) * 3
+        assert len(blob) > MAX_TOOL_NAME_CHARS
+
+        message = chat_service.append_tool_message(
+            db_session,
+            session=session,
+            tool_name=blob,
+            tool_args={"tool": blob, "args": {}},
+            content=f"失败：没有叫 `{blob[:20]}…` 的工具",
+            failed=True,
+        )
+
+        assert message.tool_name is not None
+        assert len(message.tool_name) <= MAX_TOOL_NAME_CHARS, (
+            "写进 VARCHAR(64) 的值必须 ≤ 64，否则 PostgreSQL 抛 "
+            "StringDataRightTruncation，整轮 500"
+        )
+        # 完整原文仍在 tool_args（JSONB，无 64 字上限），便于事后复盘。
+        assert message.tool_args is not None
+        assert message.tool_args["tool"] == blob

@@ -100,6 +100,11 @@ _XML_PROTOCOL_TAGS: tuple[str, ...] = (
     "</action>",
     "<analysis>",
     "</analysis>",
+    # ★ v1.44：`<result>...</result>` 是模型**伪造的工具结果**，既不该显示、
+    #   也不该随历史回灌给模型（否则它以为自己执行过了）。流式时见到即锁死、
+    #   落库时由 `engine._normalize_xml_actions` 整块删掉。
+    "<result>",
+    "</result>",
 )
 
 #: 一行未写完时的三种判决（见模块 docstring 的表）。
