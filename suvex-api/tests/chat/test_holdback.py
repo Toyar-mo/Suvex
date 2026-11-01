@@ -427,3 +427,44 @@ def test_narration_and_holdback_agree_on_final() -> None:
     released, blocked = _run([raw])
     assert released.strip() == "先说结论。"
     assert blocked is True
+
+
+# ══════════════════════════════════════════════════════════
+# 自创 XML 协议（v1.41）：`<action>` / `<analysis>` 一行出现即锁死
+# ══════════════════════════════════════════════════════════
+
+
+def test_xml_action_tag_blocks_live_stream() -> None:
+    """流式时 `<action>` 块一个字都不能放给用户（与落库一致）。
+
+    线上实测（2026-11-01）：模型自创 `<action>{...}</action>`，HoldbackBuffer
+    原来只认 `ACTION:`/`FINAL:`，于是整段 XML 实时推给了前端。
+    """
+    raw = (
+        "我先跑一下。\n"
+        '<action> {"tool": "run_shell", "args": {"command": "ls"}} </action>\n'
+    )
+    released, blocked = _run([raw])
+    assert blocked is True
+    assert "<action>" not in released
+    assert "run_shell" not in released
+    # 标签之前的正文可以放。
+    assert "我先跑一下。" in released
+
+
+def test_xml_action_tag_blocked_even_when_split_across_chunks() -> None:
+    """标签被增量切成 `<act` + `ion>` 也要锁死（状态机按累积行判）。"""
+    raw = '<action> {"tool": "x", "args": {}} </action>'
+    released, blocked = _run(list(raw))  # 逐字符喂
+    assert blocked is True
+    assert "<action>" not in released
+    assert released.strip() == ""
+
+
+def test_xml_analysis_tag_blocks_live_stream() -> None:
+    """`<analysis>...</analysis>` 也不该实时推给用户。"""
+    raw = "看这里。\n<analysis> 内心推理 </analysis>\n"
+    released, blocked = _run([raw])
+    assert blocked is True
+    assert "<analysis>" not in released
+    assert "内心推理" not in released

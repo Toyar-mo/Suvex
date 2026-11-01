@@ -90,6 +90,18 @@ from __future__ import annotations
 #: 而那种漏出只在特定模型上复现。
 PROTOCOL_MARKERS: tuple[str, ...] = ("ACTION", "FINAL")
 
+#: v1.41：模型偶尔自创 XML 风格协议 —— `<action>{...}</action>` 是个动作、
+#: `<analysis>...</analysis>` 是内心推理，两者都不该出现在用户视野里。
+#: 这些标签不像 `ACTION:` 那样"行首 + 冒号"，所以单独按"行内出现即锁死"处理：
+#: 一旦某一行出现 `<action` / `</action` / `<analysis` / `</analysis`，
+#: 就认为进了 XML 协议区，此后不再放行任何字（与见过 `ACTION:` 后同等处理）。
+_XML_PROTOCOL_TAGS: tuple[str, ...] = (
+    "<action>",
+    "</action>",
+    "<analysis>",
+    "</analysis>",
+)
+
 #: 一行未写完时的三种判决（见模块 docstring 的表）。
 _PROTOCOL = "protocol"
 _SAFE = "safe"
@@ -126,6 +138,7 @@ def _verdict(line: str) -> str:
 
     ## 判定顺序
 
+    0. 行内出现 XML 协议标签（`<action>` 等，v1.41）→ `_PROTOCOL`。
     1. 已经是完整协议头（`_is_protocol_head`）→ `_PROTOCOL`。
     2. 去掉缩进后是某个标记的**前缀**（`""`/`A`/`ACT`/`ACTION`/`F`/`FIN`…）
        → `_UNDECIDED`：再写一个冒号它就是协议了，不能放。
@@ -142,6 +155,19 @@ def _verdict(line: str) -> str:
     换行才放 —— 安全但粒度退化。加上 `len(stripped) <= len(marker)`
     就只在「还没写全」时待定。
     """
+    # ★ v1.41：XML 协议标签行内一出现就锁死（它们不遵「行首+冒号」形态）。
+    #   注意这里查的是**当前这一行**（到第一个换行为止）——`_verdict` 收到的是
+    #   尚未判决的整段 pending，可能含已安全行的换行 + 后面才出现的 `<action>`；
+    #   若直接 `tag in line` 会把整段判成协议、连前面的人话也吞掉。
+    #   标签也可能被增量切成 `<act` + `ion>`，所以再看行尾前缀判待定。
+    current_line = line.split("\n", 1)[0]
+    for tag in _XML_PROTOCOL_TAGS:
+        if tag in current_line:
+            return _PROTOCOL
+    for tag in _XML_PROTOCOL_TAGS:
+        for cut in range(1, len(tag)):
+            if current_line.endswith(tag[:cut]):
+                return _UNDECIDED
     if _is_protocol_head(line):
         return _PROTOCOL
     stripped = line.lstrip()

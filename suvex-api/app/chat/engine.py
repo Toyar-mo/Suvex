@@ -518,7 +518,7 @@ def _with_native_actions(reply: Any) -> Any:
     if not calls:
         return reply
     text = getattr(reply, "text", "") or ""
-    if _has_protocol_marker(text):
+    if _has_protocol_marker_or_xml(text):
         return reply
     lines = _native_action_lines(calls)
     if not lines:
@@ -1502,6 +1502,49 @@ def _narration_before_action(text: str) -> str:
     return head.replace("```", "").strip()
 
 
+#: 模型偶尔不写 `ACTION:` 协议，而是自创 XML 风格：`<action>{...}</action>`
+#: 包一个动作、`<analysis>...</analysis>` 包一段内心推理。
+#:
+#: ★ 为什么必须处理它（v1.41，线上实测 2026-11-01 会话
+#:   `chat_01M690GSFE4SSP0DB5BHR0BNDK`）：
+#:   那个模型（deepseek-v4.1-flash）在长链解题里一轮写了 576 个 `<action>`
+#:   标签，但只有 54 条工具结果 —— 也就是说**绝大多数动作既没被执行、也没被
+#:   隐藏**，原样落进 process 面消息给用户看（界面上是一堆裸 `<action>` /
+#:   `<analysis>` 和 JSON）。同时走原生 `tool_calls` 的那少数步执行了，
+#:   于是 turn_run 记成 `nudges_used=95 / tools_used=45` 一直烧到纠偏额度用尽，
+#:   仍停在计划句 —— 用户看到的是"停在下一步的计划上"。
+#:
+#: 修法：在解析/落库/推送三处统一把 XML 风格**改写成**文本协议
+#: （`ACTION: {...}`），并删掉 `<analysis>` 块（那是推理，不该进正文）。
+#: 这样 `parse_actions` 原样能执行、`_narration_before_action` 原样能剥离、
+#: `HoldbackBuffer` 原样能拦。
+_XML_ACTION_RE = re.compile(r"<action>\s*(\{.*?\})\s*</action>", re.DOTALL)
+_XML_ANALYSIS_RE = re.compile(r"<analysis>.*?</analysis>", re.DOTALL)
+
+
+def _normalize_xml_actions(text: str) -> str:
+    """把自创的 XML 动作/推理块改写成 `ACTION:` 文本协议（找不到就是原文）。
+
+    - `<action>{...}</action>` → `\\nACTION: {...}\\n`（每块一行，行首起协议）；
+    - `<analysis>...</analysis>` → 整块删掉（推理不进正文，也不该执行）。
+
+    只在**检测到** XML 协议标签时才动；普通回复（无 XML）逐字节不变。
+    """
+    if not text or ("<action>" not in text and "<analysis>" not in text):
+        return text
+    # 先删 <analysis>（它可能包着引擎自己也不想要的推理），再改写 <action>。
+    text = _XML_ANALYSIS_RE.sub("", text)
+    return _XML_ACTION_RE.sub(lambda m: "\nACTION: " + m.group(1) + "\n", text)
+
+
+def _has_protocol_marker_or_xml(text: str) -> bool:
+    """正文里已经有文本协议（`ACTION:`/`FINAL:`）**或** XML 动作块吗。"""
+    if "<action>" in (text or ""):
+        return True
+    return _has_protocol_marker(text)
+
+
+
 def _int_arg(args: dict[str, Any], key: str, *, default: int, low: int, high: int) -> int:
     """取一个整数参数并夹到区间内。
 
@@ -1898,6 +1941,11 @@ async def run_turn(
 
         # ★ 落库给用户看的是**剥掉动作之后**的正文。理由见 `_narration_before_action`。
         raw_text = reply.text or ""
+        # ★ v1.41：先把自创的 XML 动作写法（`<action>{...}</action>` /
+        #   `<analysis>...</analysis>`）统一改写成文本协议，再做后面所有
+        #   "剥离 / 解析 / 落库"。否则这些块既不被执行也不被隐藏，整段
+        #   漏进用户气泡（见 `_normalize_xml_actions` 的线上实测记录）。
+        raw_text = _normalize_xml_actions(raw_text)
         # ★ v1.19：先摘掉开头的 `FINAL:`。必须在 `_narration_before_action`
         #   之前 —— 那个函数复用内核的 `ACTION|FINAL` 正则，会把
         #   `FINAL: 解出来了` 整条截成空串，再落成"模型没有产出内容"的占位语。
