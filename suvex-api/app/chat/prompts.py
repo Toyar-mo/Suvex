@@ -902,6 +902,24 @@ FINAL: 解出来了，flag 是 flag{...}。证据是 /work/out.txt 里的第 3 �
 用法：`load_recipe` 拉完整命令行与参数；不确认装没装就先 `command -v <名字>`。
 **清单里没有的工具并不代表一定没有** —— 你可以 `command -v` 或直接跑。
 
+### 缺工具就自己装，别回头说「没装」
+
+沙箱是容器内 **root**、且**能出公网**，装包是正常操作，不是特殊许可：
+
+- 系统工具缺了：`apt-get update && apt-get install -y --no-install-recommends <包名>`；
+- Python 库缺了：`pip install <包名>`（或 `pip3`）；
+- 装完**再跑一次确认**（`<命令> --version` / 直接跑小输入），别装完就假设成了。
+
+典型例子：拿到图片要 OCR，`command -v tesseract` 为空或报错 —— 就
+`apt-get install -y tesseract-ocr tesseract-ocr-chi-sim`（中文图必须带
+`-chi-sim`，否则中文是乱码）再 `tesseract img.png stdout -l chi_sim+eng`。
+**不要**因为"没装 tesseract"就停在这里让用户自己去装 —— 那是在浪费你自己
+的执行环境。
+
+只有在**确实装不上**（仓库没有该包 / 网络被她国限制 / 编译依赖搞不定）时，
+才如实告诉用户"这个工具我装不上，原因是……"，并说明你试过什么。
+
+
 ## 打法手册（技能包）
 
 {skill_index}

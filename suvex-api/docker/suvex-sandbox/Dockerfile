@@ -276,6 +276,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ── 取证 / misc 题 ──
     binwalk foremost sleuthkit exiftool p7zip-full unzip \
     tcpdump tshark imagemagick \
+    # ★ OCR（2026-11-01 补）。图片/截图里出题面/出 flag 是常见 Misc 题，
+    #   而镜像此前**没有** tesseract —— 模型遇到图片只会说"没装 tesseract"然后放弃。
+    #   体积很小：tesseract-ocr 416KB + 中/英语言包各 ~1.6MB + libtesseract5
+    #   1.4MB + 少量依赖，下载 ~5–6MB、装好占盘 ~15–20MB。中文包必须单独装
+    #   （`tesseract-ocr-chi-sim`），否则中文图片识别出来是乱码。
+    tesseract-ocr tesseract-ocr-chi-sim tesseract-ocr-eng \
     # ── ★ 隐写题的两个常用工具（2026-10-11 实测补）──
     #
     # 这两个是**实测发现的缺口**：清点镜像时 `steghide` / `pngcheck`
