@@ -108,7 +108,7 @@ def _env_int(name: str, default: int) -> int:
 #: 用户看到的就是「又中断了，不能一次性解出来吗」。
 #:
 #: 每次往返都是真金白银，所以默认可调（`SUPEX_CHAT_MAX_TOOL_ROUNDS`）。
-MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 800)
+MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 100000)
 
 #: 喂给模型的上下文里，最多带多少条历史消息。
 #:
@@ -237,7 +237,7 @@ MAX_FINAL_CONFIRMATIONS = _env_int("SUPEX_CHAT_MAX_FINAL_CONFIRMATIONS", 1)
 #: 计划句和"真的做完没有"是两件事：前者只说明**还没动手**，它的额度就该
 #: 按"还要推几步"算，而不是按"问没问过"算。4 次足够覆盖"分析→利用→打通"
 #: 这类多步任务；再多就是模型在绕圈，该停下来告诉用户实情。
-MAX_PLAN_BOUNCES = _env_int("SUPEX_CHAT_MAX_PLAN_BOUNCES", 4)
+MAX_PLAN_BOUNCES = _env_int("SUPEX_CHAT_MAX_PLAN_BOUNCES", 100)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
