@@ -102,8 +102,8 @@ export default function FilesPage() {
   const [uploadSessions, setUploadSessions] = useState<UploadSessionOption[]>([])
   const [uploadTarget, setUploadTarget] = useState('')
 
-  // 拉一次可选会话。失败不致命：上传按钮会提示"先选会话"，列表为空时用户也能
-  // 通过筛选栏里的会话 ID 兜底（pickUpload 仍会回落到 draft.sessionId）。
+  // 拉一次可选会话。失败不致命：上传按钮会提示"先选会话"（v1.40 起上传目标
+  // 只认下拉里的真实会话，不再回落到筛选栏的自由文本，见 resolveUploadTarget）。
   useEffect(() => {
     let alive = true
     void listUploadSessions()
@@ -227,19 +227,24 @@ export default function FilesPage() {
   }
 
   /**
-   * 当前选定的上传目标会话。
+   * 当前选定的上传目标会话（v1.40）。
    *
-   * 优先用下拉里选的（v1.39）；没选就回落到筛选栏里填的 sessionId（老路子，
-   * 给"我就是想往某个 ID 传"的人留个后门）。
+   * ★ 只认下拉里真正列出的会话，**不再回落到筛选栏里的自由文本**。
+   *   曾经的回落（`uploadTarget || draft.sessionId`）有个真实事故：用户往
+   *   筛选栏「会话 ID」里写了标题「解题」，上传时就把「解题」当会话 ID 发出去，
+   *   后端 `get_session_or_404` 返回 404 → 页面报「这个对话不存在，可能已被删除」。
+   *   自由文本框是给人**筛**的，不是给人**填 ID** 的；上传目标必须是校验过的真实会话。
    */
-  const resolveUploadTarget = (): string =>
-    (uploadTarget || draft.sessionId || applied.sessionId || '').trim()
+  const resolveUploadTarget = (): UploadSessionOption | null => {
+    if (!uploadTarget) return null
+    return uploadSessions.find((s) => s.id === uploadTarget) ?? null
+  }
 
   /** 点击「上传文件」：先确定目标会话，再拉起文件选择框。 */
   const pickUpload = () => {
     // 工作区是按会话隔离的，这一页没有"当前会话"——必须让用户先指定一个。
-    const sessionId = resolveUploadTarget()
-    if (!sessionId) {
+    const target = resolveUploadTarget()
+    if (!target) {
       showToast({ tone: 'info', message: '先在「上传到会话」里选一个会话，再上传。' })
       return
     }
@@ -247,18 +252,18 @@ export default function FilesPage() {
   }
 
   const onFilesChosen = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const sessionId = resolveUploadTarget()
+    const target = resolveUploadTarget()
     const files = event.target.files ? Array.from(event.target.files) : []
     // 立刻清空 value：否则连续选同一个文件不会再触发 change。
     event.target.value = ''
-    if (!sessionId || files.length === 0) return
+    if (!target || files.length === 0) return
 
     setUploading(true)
     let ok = 0
     const failures: string[] = []
     for (const file of files) {
       try {
-        await uploadFile(sessionId, file)
+        await uploadFile(target.id, file)
         ok += 1
       } catch (err) {
         failures.push(`${file.name}：${toApiError(err).message}`)
@@ -267,8 +272,17 @@ export default function FilesPage() {
     setUploading(false)
 
     if (ok > 0) {
-      showToast({ tone: 'ok', message: `已上传 ${ok} 个文件` })
-      void load(applied)
+      // ★ 上传成功后把筛选切到**这个会话**并带上它的标题 ——
+      //   否则刷新后列表回到"全部会话"，用户会怀疑"是不是没按会话区分/传到别处了"。
+      //   顺带把筛选栏的会话 ID 也填上，让"这些文件属于哪个会话"一眼可见。
+      const nextFilters: FileFilters = { sessionId: target.id }
+      setDraft({ ...EMPTY_DRAFT, sessionId: target.id })
+      setApplied(nextFilters)
+      showToast({
+        tone: 'ok',
+        message: `已上传 ${ok} 个文件到「${target.title || target.id}」`,
+      })
+      void load(nextFilters)
     }
     if (failures.length > 0) {
       showToast({
