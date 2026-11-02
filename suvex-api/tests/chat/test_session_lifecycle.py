@@ -21,6 +21,8 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
@@ -28,6 +30,9 @@ from sqlalchemy.orm import Session
 
 from app.chat import service
 from app.chat.models import ChatMessage, ChatSession
+
+#: 测试里显式控制的"当前时刻"，不依赖真实时钟。
+_T0 = datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 API = "/api/v1"
 
@@ -44,10 +49,19 @@ def chat_session(db_session: Session) -> ChatSession:
 # ══════════════════════════════════════════════════════════
 
 
-def test_pinning_moves_the_session_to_the_front(db_session: Session) -> None:
-    """置顶的那条排最前，其余仍按最近更新。"""
+def test_pinning_moves_the_session_to_the_front(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """置顶的那条排最前，其余仍按最近更新。
+
+    ★ 时间戳显式给定，不靠真实时钟：`now_utc()` 在 Windows 上的可见粒度是
+      毫秒级，两次 `create_session` 可能拿到完全相同的 `updated_at`，那样"谁更新"
+      就失去判据 —— 测试会偶发假红，而不是真的发现回归。
+    """
     oldest = service.create_session(db_session, created_by="user_admin", title="最早")
     newest = service.create_session(db_session, created_by="user_admin", title="最新")
+    oldest.updated_at = _T0
+    newest.updated_at = _T0 + timedelta(seconds=1)
     db_session.commit()
 
     # 默认顺序：更新新的在前
@@ -56,6 +70,7 @@ def test_pinning_moves_the_session_to_the_front(db_session: Session) -> None:
         oldest.id,
     ]
 
+    monkeypatch.setattr(service, "now_utc", lambda: _T0 + timedelta(seconds=2))
     service.set_pinned(db_session, session=oldest, pinned=True)
     db_session.commit()
 
@@ -64,15 +79,35 @@ def test_pinning_moves_the_session_to_the_front(db_session: Session) -> None:
     assert rows[1].id == newest.id
 
 
-def test_pinning_a_second_session_puts_it_before_the_first(db_session: Session) -> None:
+def test_pinning_a_second_session_puts_it_before_the_first(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """后置顶的排在先置顶的前面 —— 这是"存时刻"而不是"存布尔"的全部意义。
 
     用布尔值时只能拿 `updated_at` 兜底，而 `updated_at` 会因为"又聊了两句"
     而变，用户置顶的那几条会自己换位置。
+
+    ★ 这里**显式控制** `now_utc` 的返回值，不再依赖真实时钟。
+      真实时钟在 Windows 上的可见粒度是毫秒级，两次 `set_pinned` 之间的
+      `commit()` 有可能落在同一个刻度里 —— 那样两条会话的 `pinned_at`
+      完全相同，"谁在前"就失去判据了。这不是被测代码的错，是这条测试
+      依赖了一个代码并不保证的性质。实测全量跑 3 轮复现过 1 次假红。
     """
     first = service.create_session(db_session, created_by="user_admin", title="A")
     second = service.create_session(db_session, created_by="user_admin", title="B")
     db_session.commit()
+
+    ticks: list[datetime] = []
+
+    def fake_now() -> datetime:
+        # 单调递增，不限定次数：修复前 `set_pinned` 一次调用会取两次时间，
+        # 用定长迭代器会被耗尽而误报成 StopIteration。现在它只取一次，
+        # 但这里仍然不限定次数 —— 这条假时钟不应随被测实现的取时次数变化而失效。
+        moment = _T0 + timedelta(seconds=len(ticks))
+        ticks.append(moment)
+        return moment
+
+    monkeypatch.setattr(service, "now_utc", fake_now)
 
     service.set_pinned(db_session, session=first, pinned=True)
     db_session.commit()
@@ -81,6 +116,73 @@ def test_pinning_a_second_session_puts_it_before_the_first(db_session: Session) 
 
     rows = service.list_sessions(db_session, created_by="user_admin")
     assert [r.id for r in rows] == [second.id, first.id]
+
+
+def test_set_pinned_takes_the_timestamp_once(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """置顶时 `pinned_at` 与 `updated_at` 必须来自**同一次**取时。
+
+    `findings/service.py:1307` 已经记过这个坑：「两次 `now_utc()` 会得到两个
+    相差几微秒的时刻」。chat 侧漏了。Windows 上相邻两次调用 99.98% 相同，
+    所以本地跑不出来；换到 Linux（生产）就会稳定地差几微秒 —— 同一份代码
+    在两个平台上给出不同的 `pinned_at` / `updated_at` 关系。
+    """
+    target = service.create_session(db_session, created_by="user_admin", title="A")
+    db_session.commit()
+
+    calls: list[datetime] = []
+
+    def fake_now() -> datetime:
+        moment = _T0 + timedelta(microseconds=len(calls) + 1)
+        calls.append(moment)
+        return moment
+
+    monkeypatch.setattr(service, "now_utc", fake_now)
+
+    service.set_pinned(db_session, session=target, pinned=True)
+
+    assert len(calls) == 1, f"置顶取了 {len(calls)} 次时间，应只取一次"
+    assert target.pinned_at == target.updated_at
+
+
+def test_list_sessions_order_is_deterministic_when_timestamps_collide(
+    db_session: Session,
+) -> None:
+    """时间戳完全相同时，列表顺序仍必须是确定的。
+
+    `order_by(pinned_at, updated_at)` 在时间戳相同的两行上没有判据 ——
+    SQL 不保证顺序：SQLite 实测按 rowid 返回、PostgreSQL 可能按物理页顺序。
+    同一份数据换后端或换查询计划就会给出不同顺序，而前端拿到的必须是
+    最终顺序（见 `list_sessions` 里的注释）。
+    """
+    moment = _T0
+    # 刻意让"插入顺序"与"id 倒序"相反：没有兜底键时按 rowid 返回，
+    # 有兜底键时按 id 倒序 —— 两种结果不同，这条测试才有判别力。
+    low = ChatSession(
+        id="chat_aaa_collide",
+        created_by="user_admin",
+        title="A",
+        message_count=0,
+        pinned_at=moment,
+        updated_at=moment,
+    )
+    high = ChatSession(
+        id="chat_zzz_collide",
+        created_by="user_admin",
+        title="B",
+        message_count=0,
+        pinned_at=moment,
+        updated_at=moment,
+    )
+    db_session.add(low)
+    db_session.flush()
+    db_session.add(high)
+    db_session.commit()
+
+    rows = service.list_sessions(db_session, created_by="user_admin")
+
+    assert [r.id for r in rows] == ["chat_zzz_collide", "chat_aaa_collide"]
 
 
 def test_unpinning_puts_it_back_among_the_rest(db_session: Session) -> None:
