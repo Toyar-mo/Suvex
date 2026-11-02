@@ -2305,6 +2305,11 @@ async def run_turn(
         raw_text, said_final = nudge_policy.split_final(raw_text)
         text = _narration_before_action(raw_text)
         actions = [] if at_limit else parse_actions(raw_text)
+        # ★ v1.51：见下 —— 贴了命令没写 ACTION 时直接当 run_shell 跑。
+        if not actions and not at_limit and not said_final:
+            _synth_cmd = nudge_policy.extract_trailing_command(text)
+            if _synth_cmd:
+                actions = [("run_shell", {"command": _synth_cmd})]
         # ★ v1.32：一行一帧的诊断日志。这类故障的失败模式是**静默的**：
         #   界面停在半句话上，没有异常、没有报错、turn_run 也是 done，
         #   只能靠自己猜「它到底回了什么」。只记长度与标志，不记正文。
@@ -2887,6 +2892,11 @@ async def resume_approved(
         raw_text, said_final = nudge_policy.split_final(raw_text)
         text = _narration_before_action(raw_text)
         actions = [] if at_limit else parse_actions(raw_text)
+        # ★ v1.51：见主循环同一处注释 —— 贴了命令没写 ACTION 时直接当 run_shell 跑。
+        if not actions and not at_limit and not said_final:
+            _synth_cmd = nudge_policy.extract_trailing_command(text)
+            if _synth_cmd:
+                actions = [("run_shell", {"command": _synth_cmd})]
         reasoning = getattr(reply, "reasoning", None)
         if not reasoning:
             raw = getattr(reply, "raw", None) or {}

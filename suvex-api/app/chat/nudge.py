@@ -129,6 +129,92 @@ def has_unactioned_command(text: str) -> bool:
     return bool(_SHELL_LINE.search(body))
 
 
+#: 结论性/终止性措辞 —— 出现这些就**不要**把尾部的命令当"下一步要跑"去自动执行
+#: （v1.51：模型在给出结论时也会贴示例命令，那是解释不是动作）。
+_CONCLUSION_CUES = re.compile(
+    r"(已解出|拿到了|找到\s*flag|flag\s*[是为:：]|结论[：:]|总结[：:]|"
+    r"以上(就)?是|无法|没能|没有(找到|解出)|做完了|全部完成)",
+)
+
+#: 尾部意图提示词 —— 正文里说"接下来/现在/下面/我来"，才认为它真的想跑那段命令。
+_NEXT_STEP_CUE = re.compile(
+    r"(接下来|下面|现在|下一步|然后|接着|我来|我就|让我|这就|开始|执行|跑一下|跑一遍|再跑|试试)",
+)
+
+#: v1.51：一段**裸命令块**（用于从正文尾巴里抠出要执行的命令）。
+#: 命令块是从某一行开始、到正文末尾（或到空行后的纯叙述）为止的命令式行。
+_CMD_LINE_START = re.compile(
+    r"^\s*(?:"
+    r"cd|ls|cat|grep|find|python3?|pip3?|bash|sh|curl|wget|apt-get|apt|"
+    r"chmod|chown|mkdir|rm|cp|mv|tar|unzip|zip|objdump|readelf|nm|strings|file|"
+    r"xxd|hexdump|base64|echo|sed|awk|nc|ncat|socat|openssl|docker|git|"
+    r"\./|/bin/|/usr/|R=|f=|if\s|for\s|while\s"
+    r")"
+)
+
+#: 出现这些可疑/破坏性的命令片段就**拒绝**自动执行（宁可让模型自己发 tool_call）。
+_DANGEROUS_CMD = re.compile(
+    r"(rm\s+-rf?\s+/(?!work|tmp)|mkfs|dd\s+of=/dev/|:\(\)\s*\{|shutdown|reboot|"
+    r"curl[^\n]*\|\s*(?:ba)?sh|wget[^\n]*\|\s*(?:ba)?sh)",
+)
+
+
+def extract_trailing_command(text: str) -> str | None:
+    """从"说了要干、贴了命令、但没写 ACTION"的正文里，抠出那段命令（v1.51）。
+
+    ## 为什么要这么干
+
+    v1.50 让这类回复被**纠偏一次**——救回了"静默收尾"，但代价是**每两步走一步**：
+    实测线上会话 `chat_01M6BWQ69MZJNBAB7C7QMVXPV2` 跑到 `round=33 / tools=16 /
+    nudges=17` —— **近一半的模型调用是纯贴命令的轮次，被纠一下、下一轮才用
+    原生 tool_call 补执行**。比赛按用时计分，这等于把时间扔了一半。
+
+    既然命令已经在正文里、结构明确（`cd /work ...` / `python3 -c "..."`），
+    直接把它变成 `run_shell` 动作就省掉一次完整模型往返。
+
+    ## 为什么要一堆守卫（这是安全边界，不是注释）
+
+    **自动执行模型写的命令**是危险操作，必须极窄：
+
+    1. 没有 `ACTION:` / `FINAL:`（否则走正常协议）；
+    2. 命中结论性措辞（`_CONCLUSION_CUES`，含"已解出/没法/结论是"）→ **放弃**，
+       那是解释不是动作；
+    3. 正文里要有"接下来/现在/执行"之类的下一步提示（`_NEXT_STEP_CUE`）；
+    4. 抠出来的命令要含可疑/破坏性片段（`_DANGEROUS_CMD`）→ **放弃**。
+
+    任一条不满足就返回 None，交回 v1.50 的纠偏路径（模型自己用 tool_call 重发）。
+    宁可多花一次调用，不可错跑一条命令。
+    """
+    body = (text or "").strip()
+    if not body:
+        return None
+    if "ACTION:" in body or "FINAL:" in body:
+        return None
+    if _CONCLUSION_CUES.search(body):
+        return None
+    if not _NEXT_STEP_CUE.search(body):
+        return None
+    # 从正文里找"第一行像命令"的位置，从那里开始到结尾整段作为候选命令。
+    lines = body.split("\n")
+    start = None
+    for idx, line in enumerate(lines):
+        if _CMD_LINE_START.match(line):
+            start = idx
+            break
+    if start is None:
+        return None
+    cmd = "\n".join(lines[start:]).strip()
+    # 裁剪：遇到连续两个空行之后的纯中文叙述就截断（命令块内部不会有两个空行）。
+    if "\n\n" in cmd:
+        # 保留到第一个双空行之前
+        cmd = cmd.split("\n\n", 1)[0].strip()
+    if not cmd:
+        return None
+    if _DANGEROUS_CMD.search(cmd):
+        return None
+    return cmd
+
+
 def split_final(raw: str) -> tuple[str, bool]:
     """把回复开头的 `FINAL:` 摘掉，并告诉调用方它有没有写。
 
