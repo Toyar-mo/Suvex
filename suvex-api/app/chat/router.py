@@ -38,6 +38,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from typing import Annotated
@@ -81,7 +82,7 @@ from app.chat.stream import (
 )
 from app.core.db import get_db, get_session_factory
 from app.core.errors import ApiError
-from app.core.timeutil import now_utc
+from app.core.timeutil import now_utc, to_iso
 
 logger = logging.getLogger("suvex.chat")
 
@@ -133,6 +134,79 @@ def get_session(session_id: str, db: DbSession, identity: Reader) -> ChatSession
     return ChatSessionDetailOut(
         **ChatSessionOut.model_validate(session).model_dump(),
         messages=[ChatMessageOut.model_validate(m) for m in messages],
+    )
+
+
+@router.get("/chat/sessions/{session_id}/export")
+def export_session(
+    session_id: str, db: DbSession, identity: Reader
+) -> StreamingResponse:
+    """把整段对话导出成 **JSONL**（一行一条消息），用作审计留痕。
+
+    比赛（羊城杯这类）要求「保留完整 AI 对话记录备审」，而页面上的
+    对话只有人看得到、导不出来。这个端点把会话原样吐成 **ndjson**：
+    第一行是会话头（`{"type":"session",...}`），之后每行一条消息
+    （`{"type":"message","uuid":...,"parentUuid":...,"message":{...}}`），
+    字段形状对齐常见编码 agent 的 `.jsonl` 记录习惯（Claude Code 那类），
+    交给评委看就是"这支队每一步怎么想的、调了什么工具、拿到什么"。
+
+    为什么是流式：一个长会话可能有几百上千条消息，一次性 `json.dumps`
+    整份再回会让内存和首字节都变差；这里按行 yield，客户端边收边写盘。
+
+    只读：不落库、不改会话。归档的会话**也能导出**（备审时往往正是要
+    归档的旧记录），但仍受归属校验约束——只能导自己的会话。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    messages = service.list_messages(db, session=session)
+
+    def _gen():
+        header = {
+            "type": "session",
+            "id": session.id,
+            "title": session.title,
+            "createdAt": to_iso(session.created_at),
+            "project": session.project,
+            "persona": session.persona,
+            "providerId": session.provider_id,
+            "archived": session.archived_at is not None,
+        }
+        yield json.dumps(header, ensure_ascii=False) + "\n"
+        parent: str | None = None
+        for m in messages:
+            row = {
+                "type": "message",
+                "uuid": m.id,
+                "parentUuid": parent,
+                "seq": m.seq,
+                "timestamp": to_iso(m.created_at),
+                "role": m.role,
+                "surface": m.surface,
+                "text": m.content,
+            }
+            if m.reasoning:
+                row["reasoning"] = m.reasoning
+            if m.tool_name:
+                row["toolName"] = m.tool_name
+            if m.tool_args is not None:
+                row["toolArgs"] = m.tool_args
+            if m.tool_failed is not None:
+                row["toolFailed"] = m.tool_failed
+            if m.approval_status:
+                row["approvalStatus"] = m.approval_status
+                row["approvalDecidedBy"] = m.approval_decided_by
+                row["approvalDecidedAt"] = (
+                    to_iso(m.approval_decided_at) if m.approval_decided_at else None
+                )
+            parent = m.id
+            yield json.dumps(row, ensure_ascii=False) + "\n"
+
+    filename = f"session-{session.id}.jsonl"
+    return StreamingResponse(
+        _gen(),
+        media_type="application/x-ndjson",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
