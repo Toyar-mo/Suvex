@@ -105,13 +105,29 @@ G0 RED → GREEN：
 
 ## 部署
 
-- 本机 sha（nudge.py）：见下方部署回执。
+- 本机 `app/chat/nudge.py` sha256=`b0152107d37be44141529b41c7966c47243cfff7769ac6245128cd81defdd48c`。
 - 生产 `/root/suvex`（非 git，复制部署）：`install -m 644` 覆盖
-  `suvex-api/app/chat/nudge.py`，备份 `nudge.py.bak-...`。
-- `nsenter ... systemctl restart suvex-api`，轮询日志 `Application startup complete`，
-  `GET /api/v1/health` = 200。
+  `suvex-api/app/chat/nudge.py`，备份 `nudge.py.bak-v145-<ts>`。
+  部署后 prod sha256 与本地**逐一相等**：`b0152107…dd48c`。
+- `nsenter ... systemctl restart suvex-api` → 日志 `Application startup complete`
+  （重启后约 2 轮内出现），`systemctl is-active suvex-api`=`active`，
+  `GET /api/v1/health` = **200**。
 
 ## 线上验证
 
-- 探针（prod venv）：对刚触发过的长完成态结论 `looks_like_plan(...)` 返回 `False`；
-  对真计划句仍返回 `True`。
+prod venv（`/root/suvex/suvex-api/.venv/bin/python`）探针，对部署后的 `nudge` 模块：
+
+```
+COMPLETED1_not_plan=True    # 长正文 + "然后我把所有 gadget 都过了一遍，结论如上。" → 不是计划
+COMPLETED2_not_plan=True    # 长正文 + "接着我把所有配置文件都读完了，结论如下。" → 不是计划
+PLAN1_is_plan=True          # 长正文 + "然后我要看 libc 版本，接着写 exploit。" → 仍是计划
+PLAN2_is_plan=True          # 长正文 + "下一步跑 one_gadget 找 gadget。" → 仍是计划
+ALL_OK= True
+```
+
+## 套件
+
+- `pytest tests/chat` → **315 passed, 1 skipped**
+- `pytest tests/test_chat.py tests/test_chat_stream.py` → **66 passed**（含此前失败的 2 条）
+- `ruff check app/chat/nudge.py tests/chat/test_plan_detection.py tests/test_chat.py` → All checks passed
+
