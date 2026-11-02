@@ -1177,6 +1177,144 @@ async def _tool_start_ctf_solve(ctx: _ToolContext, args: dict[str, Any]) -> str:
     )
 
 
+async def _tool_fetch_competition_challenges(
+    ctx: _ToolContext, args: dict[str, Any]
+) -> str:
+    """列出**比赛平台**（羊城杯）的题，可选择带上某道题的靶机连接信息。
+
+    ## 和 `list_challenges` 的区别（最容易被混淆的一处）
+
+    * `list_challenges` —— 本平台 `KernelChallenge` 题库（`/ctf2` 看板
+      那条链路，我们自己的题）。
+    * **本工具** —— 比赛平台（`ycb-test.dasctf.com`）的题，就是比赛当天
+      真正要刷的那批。
+
+    用户说"看看有哪些题""第几题开放了没"时，比赛场景要用**这个**。
+
+    ## 参数
+
+    * `remoteId`（可选）—— 给了就顺带查这道题的靶机环境（IP/端口/账号
+      密码/是否就绪），省去模型再调一次工具。
+    """
+    from app.chat import competition
+
+    try:
+        tasks = await competition.list_tasks(ctx.db)
+    except LookupError:
+        return _err(
+            "当前账号没有指向比赛平台。请先在「设置 → 解题 / 比赛平台」里"
+            "绑定比赛平台的 AccessKey（或启用一个平台配置），再用这个工具。"
+        )
+    except Exception as exc:  # noqa: BLE001 - 网络/协议错误都变成人话
+        return _err(competition.friendly_driver_error(exc, "拉比赛平台题库"))
+
+    if not tasks:
+        return "比赛平台这边还没有题（可能还没放题，或者全部已结束）。"
+
+    solved = sum(1 for t in tasks if t.solved)
+    open_count = sum(1 for t in tasks if t.is_open)
+    lines = [f"比赛平台共 {len(tasks)} 道题：已解 {solved} 道，已开放 {open_count} 道。"]
+    for task in tasks:
+        flags = []
+        if task.solved:
+            flags.append("✅已解")
+        if not task.is_open:
+            flags.append("🔒未开放")
+        score = f" {task.score}分" if task.score else ""
+        cat = f"[{task.category}] " if task.category else ""
+        suffix = f"（{' / '.join(flags)}）" if flags else ""
+        lines.append(f"- `{task.remote_id}` {cat}{task.title}{score}{suffix}")
+
+    remote_id = str(args.get("remoteId") or args.get("remote_id") or "").strip()
+    if remote_id:
+        lines.append("")
+        try:
+            env, prompt_text = await competition.read_env(ctx.db, remote_id)
+        except Exception as exc:  # noqa: BLE001
+            lines.append(f"（查题目 `{remote_id}` 的靶机环境失败：{exc}）")
+        else:
+            if prompt_text:
+                lines.append(f"题目 `{remote_id}` 的靶机：")
+                lines.append(prompt_text)
+            elif env.needs_init:
+                lines.append(f"题目 `{remote_id}` 的靶机还没起，需要先启动环境。")
+            else:
+                lines.append(f"题目 `{remote_id}` 没有靶机环境（多半是附件/静态题）。")
+    return "\n".join(lines)
+
+
+async def _tool_submit_flag(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """把 flag 提交到**比赛平台**（羊城杯）。
+
+    ## 两件必须做的事（都在这里做，不指望模型记得）
+
+    1. **剥花括号外壳**：赛事要求"只交花括号内的内容"。模型交
+       `DASCTF{xxx}` 会被判错、白扣一次额度。这里统一过
+       `competition.strip_flag_shell`。
+    2. **区分「没受理」和「判错」**：`SubmitOutcome.accepted` 为 False 时
+       平台根本没受理（限流/格式/额度用完），**不消耗错误次数** —— 这时
+       要让模型知道"可以重试"，而不是"答案错了"。
+
+    ## 参数
+
+    * `remoteId`（必填）—— 题目 id（`fetch_competition_challenges` 列出来的）
+    * `flag`（必填）—— 答案。带不带 `DASCTF{}` 外壳都行，这里会剥。
+    """
+    from app.chat import competition
+
+    remote_id = str(args.get("remoteId") or args.get("remote_id") or "").strip()
+    if not remote_id:
+        return _err("没有给 `remoteId`。先用 `fetch_competition_challenges` 看题目 id。")
+    raw = str(args.get("flag") or args.get("answer") or "").strip()
+    if not raw:
+        return _err("没有给 `flag`（答案）。")
+
+    answer = competition.strip_flag_shell(raw)
+    if not answer:
+        return _err("剥掉花括号后答案是空的，检查一下你交的是什么。")
+
+    try:
+        limit = competition.answer_max_length(ctx.db)
+    except LookupError:
+        return _err(
+            "当前账号没有指向比赛平台，交不了 flag。请先在设置里绑定比赛平台。"
+        )
+    except Exception:  # noqa: BLE001 - 读上限失败不该挡住提交
+        limit = 256
+    if len(answer) > limit:
+        return _err(
+            f"答案太长（{len(answer)} 字符，平台上限 {limit}）。"
+            "检查是不是多带了提示语或换行 —— 只交答案本身。"
+        )
+
+    try:
+        outcome = await competition.submit(ctx.db, remote_id, answer)
+    except LookupError:
+        return _err("当前账号没有指向比赛平台，交不了 flag。请先在设置里绑定比赛平台。")
+    except Exception as exc:  # noqa: BLE001
+        return _err(competition.friendly_driver_error(exc, "提交到比赛平台"))
+
+    shown = answer if len(answer) <= 80 else answer[:77] + "…"
+    if outcome.is_solved:
+        return (
+            f"✅ 正确！题目 `{remote_id}` 已解出（提交内容 `{shown}`）。"
+            "这是最终答案，不要再重复提交同一道题。"
+        )
+    if outcome.already_solved:
+        return f"题目 `{remote_id}` 在这之前就已经解出了（提交内容 `{shown}`），不用再交。"
+    if not outcome.accepted:
+        # 平台没受理 —— 不消耗错误次数，可以重试。
+        return (
+            f"⚠️ 平台没受理这次提交（题目 `{remote_id}`），**没有消耗错误次数**，"
+            f"可以稍后重试。平台原话：{outcome.message or '（无）'}"
+        )
+    # 受理了但判错：真的错了一次。
+    return (
+        f"❌ 平台判定为错误答案（题目 `{remote_id}`，提交内容 `{shown}`）。"
+        f"答案不对，别原样再交 —— 回去再核一遍。{('平台原话：' + outcome.message) if outcome.message else ''}"
+    )
+
+
 async def _tool_list_skills(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skills as skills_mod
 
@@ -1409,6 +1547,11 @@ _TOOL_IMPLS: dict[str, Any] = {
     "create_scan": _tool_create_scan,
     "list_challenges": _tool_list_challenges,
     "start_ctf_solve": _tool_start_ctf_solve,
+    # ★ v1.46：比赛平台（羊城杯）原生工具 —— 对话页直接刷题/交 flag。
+    #   与上面两个的区别：这两个走**比赛平台 API**（slabmatch 驱动），
+    #   不是本平台 KernelChallenge 题库。见 `app/chat/competition.py`。
+    "fetch_competition_challenges": _tool_fetch_competition_challenges,
+    "submit_flag": _tool_submit_flag,
     "list_skills": _tool_list_skills,
     "read_skill": _tool_read_skill,
     "save_skill": _tool_save_skill,

@@ -131,6 +131,38 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         scope="scan",
         consequential=True,
     ),
+    # ══════════════════════════════════════════════════════════
+    # v1.46：比赛平台（羊城杯）原生工具
+    # ══════════════════════════════════════════════════════════
+    #
+    # ★ 这两个和上面的 `list_challenges` / `start_ctf_solve` **不是一回事**，
+    #   提示词必须把区别讲清楚，否则模型会混用：
+    #     · `list_challenges` / `start_ctf_solve` —— 本平台 KernelChallenge
+    #       题库（`/ctf2` 看板那条链路，我们自己的题）。
+    #     · `fetch_competition_challenges` / `submit_flag` —— **比赛平台**
+    #       （如羊城杯 ycb-test.dasctf.com）的题，比赛当天真正要刷的那批。
+    ChatToolSpec(
+        name="fetch_competition_challenges",
+        label="列出比赛平台的题",
+        description=(
+            "列出**比赛平台**（羊城杯那类 CTF 比赛平台）上的题目：题号、标题、"
+            "分值、分类、是否已解、是否已开放。给 `remoteId` 就顺带查那道题的"
+            "靶机连接信息（IP/端口/账号密码）。"
+            "⚠️ 比赛当天刷题用**这个**，不是 `list_challenges`（那个是我们自己库里的题）。"
+        ),
+        params="remoteId（可选，给了就查这道题的靶机环境）",
+    ),
+    ChatToolSpec(
+        name="submit_flag",
+        label="交 flag 到比赛平台",
+        description=(
+            "把一个答案提交到**比赛平台**。会自动剥掉 `DASCTF{}`/`flag{}` 花括号"
+            "（赛事只收花括号内的内容，交整串会判错白扣次数）。"
+            "平台没受理（限流/额度）时**不消耗错误次数**、可以重试；判错就是真错一次。"
+            "每题最多提交 50 次，别暴力试。"
+        ),
+        params="remoteId（必填，题目 id）、flag（必填，答案，带不带外壳都行）",
+    ),
     ChatToolSpec(
         name="list_skills",
         label="查看技能库",
@@ -1007,6 +1039,35 @@ ProjectDiscovery 的 httpx 扫描器（真实命令是 `httpx -silent -sc -title
 - 会消耗额度的：`create_scan`（真发包）、`start_ctf_solve`（消耗提交次数）
 - 会改平台数据的：`save_skill`、`delete_skill`、`add_mcp_server`
 - 目标不明确："扫一下内网" 但没说哪个网段 —— 别猜。
+
+## 打比赛（羊城杯这类平台）
+
+比赛当天你在对话页里刷题。有两条路，**优先用原生工具**：
+
+1. **首选（原生工具）**：`fetch_competition_challenges` 看题 → 记下题号
+   （`remoteId`）和靶机信息 → 解题 → `submit_flag` 交答案。
+   `submit_flag` 会**自动剥掉 `DASCTF{}`/`flag{}` 外壳**（赛事只收花括号
+   内的内容，交整串会判错），也会区分"平台没受理（不扣次数，可重试）"和
+   "判错（真错一次）"。每题最多 50 次，别暴力试。
+
+2. **兜底（自己拼 HTTP）**：原生工具报错、或需要调工具没覆盖的接口时，
+   用 `run_shell` + `curl` 直接打比赛平台 API。沙箱**能出网**。命令形如：
+
+   ```bash
+   curl -s -H "X-Agent-AccessKey: $KEY" \
+     "https://<平台地址>/slab-match/api/v1/agent/ctf/exercise-list"
+   ```
+
+   提交：`curl -s -X POST -H "X-Agent-AccessKey: $KEY" -H "Content-Type: application/json" \
+   -d '{"exerciseId": 123, "flag": "花括号内内容"}' \
+   "https://<平台地址>/slab-match/api/v1/agent/answer-panel/answer"`
+
+   ⚠️ 走 curl 时**你自己负责**：只看 `code=="00000"` 才算成功（HTTP 200
+   也可能是失败）；交之前**自己把 flag 的花括号剥掉**；别把 accesskey 写进
+   会被下载的产物里。
+
+> 两条路都一样：flag 只交花括号内的内容；一题 50 次机会；解出来的答案
+> 不要重复交。
 
 ## 沙箱的边界（这些**真的**做不到，要说实话）
 

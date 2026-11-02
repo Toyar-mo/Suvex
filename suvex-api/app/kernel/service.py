@@ -157,10 +157,14 @@ MAX_SYNC_CHALLENGES = 500
 # 是**不可逆**的。所以给一个天花板，并在 API 层拒绝超出的值。
 #
 # ⚠️ 这个数与 `settings/models.py` 的 `KernelConfig` 上的 CHECK
-# （`max_wrong_submissions <= 10`）是**同一个数**，改一处必须改另一处
+# （`max_wrong_submissions <= 50`）是**同一个数**，改一处必须改另一处
 # 并补一条迁移 —— 那条 CHECK 是字面量固化的，不会跟着这里变。
+#
+# ★ v1.46：天花板 10 → 50。赛事（羊城杯）规定每题 flag 最多提交 50 次，
+#   原来的 10 会把这道题的可提交次数砍掉五分之四。50 仍是"有刹车"的：
+#   上限存在的意义是别把机会一次性烧光，而不是限制到比赛规则之下。
 MIN_WRONG_SUBMISSIONS = 0
-MAX_WRONG_SUBMISSIONS_CEILING = 10
+MAX_WRONG_SUBMISSIONS_CEILING = 50
 
 # 没有租期信息的环境，多久之后算陈旧。
 #

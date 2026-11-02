@@ -475,7 +475,7 @@ class KernelConfig(Base):
         # `findings.status` 上踩过的那类漂移（见迁移 b1f7c0a25e38）。
         # 两者必须**一起**改，而这条注释就是那个提醒。
         CheckConstraint(
-            "max_wrong_submissions >= 0 AND max_wrong_submissions <= 10",
+            "max_wrong_submissions >= 0 AND max_wrong_submissions <= 50",
             name="max_wrong_submissions_within_ceiling",
         ),
         # 与 `vocab.MIN/MAX_CTF2_SOLVE_POLL_SECONDS` 是同一对。理由同上：
