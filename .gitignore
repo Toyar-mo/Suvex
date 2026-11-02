@@ -184,3 +184,30 @@ AGENTS.md
 # ⚠️ 若要固化某条自定义技能，把它移进 `prompts/skills/<分类>/` 并提交，
 #    不要 `git add -f custom_skills/`。
 suvex-api/custom_skills/
+
+# ── artifacts/ 里的调试中间产物（2026-11-02 清）────────────────────
+#
+# `artifacts/` 只放**交付证据**（部署记录 md、线上截图 png、必要的验证 json）。
+# 下面这些是排查/迁移过程中的一次性中间物 —— 大（会话备份 2MB）、
+# 过期即失真（mutation 结果、某版 review json）、或可重生成（属性截图）。
+# 保留在磁盘上不影响使用，但不该进仓库。
+artifacts/chat-archived-backup-*.json
+artifacts/guard-mutation-results.json
+artifacts/host-g1-review-*.json
+artifacts/host-g1-verify-*.json
+artifacts/mutation-*-output.txt
+artifacts/.ChatPage.tsx.orig
+artifacts/*.orig
+
+# 编辑器/系统在仓库根留下的垃圾（Windows `> nul` 重定向会造一个 0 字节 nul）
+nul
+
+# ── 含环境细节/比赛成绩的过程性文档（2026-11-02 清）────────────────
+#
+# 这几份是某次会话的产物，且**内容不适合进公共仓库**：
+#   · `ctf-flag.md`：含真实比赛 flag（题解记录），等于把答案公开；
+#   · `Kali同步记录.md` / `本机清理记录.md`：内网 IP、部署路径、运维命令。
+# 与本文件上面「过程性文档刻意不入库」同一条理由。交付走交付目录。
+docs/ctf-flag.md
+docs/Kali同步记录.md
+docs/本机清理记录.md
