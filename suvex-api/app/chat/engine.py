@@ -1670,8 +1670,84 @@ _XML_ANALYSIS_RE = re.compile(r"<analysis>.*?</analysis>", re.DOTALL)
 #   一直写"执行。/<result>ok</result>"空转（线上实测会话
 #   `chat_01M6BWQ69MZJNBAB7C7QMVXPV2`：单轮 40 回合、77 工具、37 次纠偏）。
 _XML_RESULT_RE = re.compile(r"<result>.*?</result>", re.DOTALL)
+# ★ v1.48：模型改用 Anthropic 工具调用风格——`<parameter name="command">…</parameter>`
+#   + `<parameter name="tool">run_shell</parameter>`，外面常常**没有** `<invoke>` 开标签、
+#   只有 `</invoke>` 收尾。参数体是**纯文本**（可含换行/heredoc/引号/花括号），
+#   不是 JSON —— 所以不能用 JSON 解析，只能按 `<parameter name="X">…</parameter>`
+#   逐个抓值，再合成 `ACTION: {"tool":..., "args":{...}}`。
+#   线上实测（2026-11-02，会话 chat_01M6BWQ69MZJNBAB7C7QMVXPV2 的下一轮
+#   turn_01M6E99VZ6G3CYW5XY5GAX80WZ）：不认这套时该轮 101 回合、纠偏 45 次，
+#   反复出现「参数错误：需要 `command`」——工具被调起但参数没送到。
+_XML_PARAM_RE = re.compile(
+    r'<parameter\s+name\s*=\s*"([^"]+)"\s*>(.*?)</parameter>', re.DOTALL
+)
+_XML_INVOKE_TAG_RE = re.compile(r"</?invoke\b[^>]*>", re.DOTALL)
+#: `<invoke name="run_shell">` 这种"工具名在开标签属性里"的写法（真 Claude 格式）。
+_XML_INVOKE_NAME_RE = re.compile(r'<invoke\s+name\s*=\s*"([^"]+)"[^>]*>', re.DOTALL)
 #: 收尾兜底：删掉还没闭合/落单的协议标签本身（增量截断时可能只剩半个标签）。
-_XML_STRAY_TAG_RE = re.compile(r"</?(?:action|analysis|result)>", re.DOTALL)
+_XML_STRAY_TAG_RE = re.compile(
+    r"</?(?:action|analysis|result|invoke|parameter)\b[^>]*>", re.DOTALL
+)
+
+
+def _parameter_blocks_to_actions(text: str) -> str:
+    """把 Anthropic 风格 `<parameter>` 组改写成 `ACTION:` 行（v1.48）。
+
+    逐组（一次 `<invoke>` 内的一组 `<parameter>`）合成一个动作：取
+    `name="tool"` 作工具名、`name="args"` 若存在则整体当 args，其余
+    `<parameter name="X">body</parameter>` 里 X 作参数名、body 原文（**不 strip
+    内部换行**，只去首尾空白）作参数值 —— 参数体是 bash 脚本，逐字节保留才对。
+
+    认不出（没有 `name="tool"`）的 `<parameter>` 组**不猜**，原样留着交给
+    兜底清理（宁可少执行一个，也不执行一个参数错的动作）。
+    """
+    out: list[str] = []
+    last = 0
+    # 连续出现的 <parameter> 归为同一组（中间只允许空白/换行）。
+    matches = list(_XML_PARAM_RE.finditer(text))
+    if not matches:
+        return text
+    i = 0
+    while i < len(matches):
+        group = [matches[i]]
+        j = i + 1
+        while j < len(matches) and text[group[-1].end() : matches[j].start()].strip() == "":
+            group.append(matches[j])
+            j += 1
+        params: dict[str, Any] = {}
+        for m in group:
+            params[m.group(1).strip()] = m.group(2).strip()
+        tool = params.pop("tool", "")
+        if not tool:
+            # 工具名可能写在 `<invoke name="run_shell">` 开标签上（真 Claude 格式）。
+            # 在组之前最近的文本里找它。
+            preceding = text[last : group[0].start()]
+            inv = None
+            for m in _XML_INVOKE_NAME_RE.finditer(preceding):
+                inv = m.group(1).strip()
+            if inv:
+                tool = inv
+        if not tool:
+            # 这一组认不出工具名：整组原样保留（交给兜底删标签），跳过。
+            i = j
+            continue
+        args: dict[str, Any] = {}
+        raw_args = params.pop("args", None)
+        if raw_args is not None:
+            try:
+                parsed = json.loads(raw_args)
+                if isinstance(parsed, dict):
+                    args = parsed
+            except ValueError:
+                pass
+        args.update(params)
+        # 把这一整段（组内所有 parameter 标签 + 之间空白）替换成一行 ACTION。
+        out.append(text[last : group[0].start()])
+        out.append("\nACTION: " + json.dumps({"tool": tool, "args": args}, ensure_ascii=False) + "\n")
+        last = group[-1].end()
+        i = j
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _normalize_xml_actions(text: str) -> str:
@@ -1686,20 +1762,37 @@ def _normalize_xml_actions(text: str) -> str:
     """
     if not text or not any(
         tag in text
-        for tag in ("<action>", "<analysis>", "<result>", "</result>", "</action>")
+        for tag in (
+            "<action>",
+            "<analysis>",
+            "<result>",
+            "</result>",
+            "</action>",
+            "<parameter",
+            "<invoke",
+            "</invoke",
+        )
     ):
         return text
     # 先删 <analysis> / <result>（都不该进正文），再改写 <action>。
     text = _XML_ANALYSIS_RE.sub("", text)
     text = _XML_RESULT_RE.sub("", text)
+    # v1.48：Anthropic 风格 <parameter> 组 → ACTION:（在删 <action> 之前做，
+    # 两者不会同时出现；分开放是为了各自可读、可单独测）。
+    if "<parameter" in text:
+        text = _parameter_blocks_to_actions(text)
+        text = _XML_INVOKE_TAG_RE.sub("", text)  # 去掉 <invoke>/</invoke> 外壳
     text = _XML_ACTION_RE.sub(lambda m: "\nACTION: " + m.group(1) + "\n", text)
-    # 兜底：清掉落单/未闭合的标签残留（如半截 `<result>`）。
+    # 兜底：清掉落单/未闭合的标签残留（如半截 `<result>`、`</invoke>`）。
     return _XML_STRAY_TAG_RE.sub("", text)
 
 
 def _has_protocol_marker_or_xml(text: str) -> bool:
     """正文里已经有文本协议（`ACTION:`/`FINAL:`）**或** XML 块吗。"""
-    if "<action>" in (text or "") or "<result>" in (text or ""):
+    if any(
+        tag in (text or "")
+        for tag in ("<action>", "<result>", "<parameter", "<invoke", "</invoke")
+    ):
         return True
     return _has_protocol_marker(text)
 

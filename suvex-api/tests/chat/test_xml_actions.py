@@ -154,3 +154,74 @@ def test_real_tool_result_still_kept_as_narration_prefix() -> None:
     raw = "我先跑一下 ls。\nACTION: {\"tool\": \"run_shell\", \"args\": {}}\n等结果。"
     assert "<result>" not in raw
     assert _normalize_xml_actions(raw) == raw
+
+
+
+# ══════════════════════════════════════════════════════════════════════
+# v1.48：Anthropic 风格 <invoke>/<parameter> 工具调用
+#
+# 线上实测（2026-11-02，同一会话 chat_01M6BWQ69MZJNBAB7C7QMVXPV2 的下一轮
+# turn_01M6E99VZ6G3CYW5XY5GAX80WZ，round=101、tools_used=50、nudges=45）：
+# 模型改用 Claude 工具调用的 XML：
+#
+#     <parameter name="command">cd /work && python3 - <<'EOF' ... EOF</parameter>
+#     <parameter name="tool">run_shell</parameter>
+#     </invoke>
+#
+# 特点：没有 JSON 外层、参数体是纯文本（可含换行/bash heredoc/引号/花括号），
+# 开标签 <invoke> 常常缺失，只有 </invoke> 收尾。v1.41/v1.44 都不认这套 ->
+# 结果与老问题相同：不执行 + 不隐藏 + 烧纠偏（该轮出现 9 次以上
+# 「参数错误：需要 `command`」= 工具被调起但没收到参数）。
+# ══════════════════════════════════════════════════════════════════════
+
+
+def test_normalize_parameter_style_call_becomes_action() -> None:
+    """<parameter name=tool/command> 合成 ACTION:，命令原文一字不差。"""
+    raw = (
+        "我先确认工作区。\n"
+        '<parameter name="command">ls -la /work/r/ 2>&1 | head -20</parameter>\n'
+        '<parameter name="tool">run_shell</parameter>\n'
+        "</invoke>"
+    )
+    out = _normalize_xml_actions(raw)
+    assert "<parameter" not in out and "</invoke>" not in out
+    assert "我先确认工作区。" in out  # 人话保留
+    assert parse_actions(out) == [("run_shell", {"command": "ls -la /work/r/ 2>&1 | head -20"})]
+
+
+def test_normalize_parameter_body_with_heredoc_and_braces_is_verbatim() -> None:
+    """参数体含换行/heredoc/引号/花括号（bash 脚本）——原样保留，不当 JSON 切。"""
+    script = "cd /work/chunks && python3 - <<'EOF'\nd={'a': 1}\nprint(d)\nEOF"
+    raw = (
+        '<parameter name="command">' + script + "</parameter>\n"
+        '<parameter name="tool">run_shell</parameter>\n</invoke>'
+    )
+    out = _normalize_xml_actions(raw)
+    actions = parse_actions(out)
+    assert len(actions) == 1
+    name, args = actions[0]
+    assert name == "run_shell"
+    assert args["command"] == script  # 逐字节相等（含换行与花括号）
+
+
+def test_normalize_invoke_open_tag_present() -> None:
+    """带 <invoke> 开标签也认（模型有时写全）。"""
+    raw = (
+        '<invoke name="run_shell">'
+        '<parameter name="command">uname -a</parameter>'
+        "</invoke>"
+    )
+    out = _normalize_xml_actions(raw)
+    assert parse_actions(out) == [("run_shell", {"command": "uname -a"})]
+
+
+def test_normalize_parameter_does_not_touch_plain_text() -> None:
+    """普通回复（无任何协议标签）逐字节不变，绝不误伤。"""
+    raw = "这是一段普通说明，里面有 < 号和 > 号，还有 {花括号}。"
+    assert _normalize_xml_actions(raw) == raw
+
+
+def test_has_protocol_marker_or_xml_detects_parameter_style() -> None:
+    """带 <parameter 时也算已有协议，不该再合成原生动作。"""
+    assert _has_protocol_marker_or_xml('<parameter name="tool">run_shell</parameter>') is True
+    assert _has_protocol_marker_or_xml("</invoke>") is True
