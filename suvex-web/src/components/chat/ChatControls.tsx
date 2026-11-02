@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   Bot,
   Check,
@@ -407,11 +407,20 @@ export function ProjectInput({
 
   // 外部值变了（切会话）时同步草稿。只在**没在编辑**时同步 ——
   // 正在打字时被覆盖会让人以为自己打的字消失了。
+  //
+  // 这里确实是在 effect 里 setState（规则说要避免），但这是**刻意**的：
+  // 草稿是"外部 value 的镜像 + 编辑中的本地副本"，只有在退出编辑/切会话
+  // 时才该用外部值覆盖草稿。改成受控组件会把"切会话时丢掉用户正在打的字"
+  // 这个 bug 引回来，所以保留 effect 并显式豁免这条规则。
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!editing) setDraft(value ?? '')
   }, [value, editing])
 
-  const listId = useMemo(() => `projects-${Math.random().toString(36).slice(2)}`, [])
+  // datalist 需要一个稳定且在文档内唯一的 id。用 `useId()` 而不是
+  // `Math.random()`：后者在渲染期产生不确定值，会让并发渲染/严格模式
+  // 下同一组件前后两次渲染拿到不同 id，进而让 `list`→`datalist` 关联失效。
+  const listId = `projects-${useId()}`
 
   if (!editing) {
     return (
@@ -505,7 +514,7 @@ export function AttachmentBar({
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   return (
-    <div className="mx-auto flex w-full max-w-[70ch] flex-wrap items-center gap-1 pb-1.5">
+    <div className="mx-auto flex w-full flex-wrap items-center gap-1 px-2.5 pb-0.5 pt-1.5">
       <input
         ref={inputRef}
         type="file"

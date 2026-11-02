@@ -1362,3 +1362,412 @@ describe('ChatPage — 进程状态只属于正在跑的那个会话（v1.28）'
     expect(screen.getByText(/1 条消息/)).not.toBeNull()
   })
 })
+
+describe('ChatPage — 助手回合的版面（v1.29 metis 形态）', () => {
+  /*
+    ★ 这一组补的是 v1.29 重写之后**一直没人测过**的那半边：上面全部用例
+      渲染的都是用户消息与工具卡，没有一条碰过助手回合的结构。
+
+      重写的判据有三条，每条都在下面钉住：
+      ① 正在跑的那一轮**留在原地**（过程在上、正文在下、状态行最底、无页脚）；
+      ② 最终答复是**纯文本**，不能套用户气泡的皮；
+      ③ 插话只属于正在跑的那个会话，不能飘到历史会话里。
+  */
+
+  it('★ 跑着的回合原地变 live：流式正文与阶段行都在回合内，且没有回合页脚', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [
+            message({ id: 'm1', seq: 1, role: 'user', content: '扫一下' }),
+            message({
+              id: 'm2',
+              seq: 2,
+              role: 'tool',
+              toolName: 'run_shell',
+              content: '{"ok":true}',
+            }),
+          ],
+        },
+        sending: true,
+        sendingSessionId: 'chat_1',
+        pendingUserContent: null,
+        // round 是 0 起的下标：第 7 轮 = round 6
+        phase: { phase: 'thinking', round: 6 },
+        streamingText: '半截',
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const live = document.querySelector(
+      '[data-conversation-turn][data-turn-live="true"]',
+    ) as HTMLElement | null
+    expect(live, '正在跑的这一轮没有在回合上标 live').not.toBeNull()
+
+    const bubble = live!.querySelector('[data-streaming-bubble]') as HTMLElement | null
+    expect(bubble, '流式正文没有画在回合里').not.toBeNull()
+    // 不是空气泡：流入的半句必须真的在里面
+    expect(bubble!.textContent).toContain('半截')
+
+    const status = live!.querySelector('[role="status"]') as HTMLElement | null
+    expect(status, '阶段行没有画在回合里').not.toBeNull()
+    expect(status!.textContent).toContain('第 7 轮')
+
+    // ★ 这一轮还没结束：页脚上的「N 步 · 时间」现在出现就是在说谎
+    expect(live!.querySelector('[data-turn-footer]'), '跑着的回合不该显示页脚').toBeNull()
+  })
+
+  it('★ 最终答复是纯文本（不是气泡），并带回合页脚', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [
+            message({ id: 'm1', seq: 1, role: 'user', content: '扫一下' }),
+            message({
+              id: 'm2',
+              seq: 2,
+              role: 'assistant',
+              surface: 'answer',
+              content: '已清点完毕',
+            }),
+          ],
+        },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const paragraph = screen.getByText('已清点完毕')
+    const row = paragraph.closest('[data-message-row="assistant"]') as HTMLElement | null
+    expect(row, '助手正文没有 [data-message-row="assistant"] 标记').not.toBeNull()
+    // ★ 气泡皮只属于用户消息；助手正文套上它，长回答就变成一大块灰砖
+    expect(row!.className).not.toContain('rounded-[10px]')
+    expect(row!.className).not.toContain('bg-surface')
+
+    const footer = document.querySelector('[data-turn-footer]') as HTMLElement | null
+    expect(footer, '回合结束时应该有页脚').not.toBeNull()
+    expect(footer!.getAttribute('data-turn-tools')).toBe('0')
+    // 回合里只有这一条答复（用户那句属于回合头，不算「步」）
+    expect(footer!.getAttribute('data-turn-steps')).toBe('1')
+  })
+
+  it('★ 插话只画在正在跑的那个会话里：别的会话在跑时不出现', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [message({ id: 'm1', seq: 1, role: 'user', content: '扫一下' })],
+        },
+        sending: true,
+        sendingSessionId: 'chat_2',
+        pendingUserContent: null,
+        interjections: [message({ id: 'i1', seq: 9, role: 'user', content: '别处的插话' })],
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    expect(document.querySelector('[data-interjection]')).toBeNull()
+    expect(screen.queryByText(/别处的插话/)).toBeNull()
+  })
+
+  it('★ 本会话在跑时，插话画在回合**内部**（下一轮就会读到它）', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [message({ id: 'm1', seq: 1, role: 'user', content: '扫一下' })],
+        },
+        sending: true,
+        sendingSessionId: 'chat_1',
+        pendingUserContent: null,
+        interjections: [message({ id: 'i1', seq: 9, role: 'user', content: '别处的插话' })],
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const turn = document.querySelector('[data-conversation-turn]') as HTMLElement | null
+    expect(turn).not.toBeNull()
+    const note = turn!.querySelector('[data-interjection]') as HTMLElement | null
+    expect(note, '插话没有画在回合里').not.toBeNull()
+    expect(note!.textContent).toContain('别处的插话')
+    // 只有一条：不能既在回合里又飘在回合外
+    expect(document.querySelectorAll('[data-interjection]').length).toBe(1)
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  底栏守卫（v1.30）：输入区周围不许再出现「第二层底色」
+  ══════════════════════════════════════════════════════════════
+
+  事故：底栏 <div> 用 `bg-gradient-to-t from-canvas via-canvas to-transparent`
+  把页面底色又画了一遍。页面背景是被 AppShell 的 bg-canvas、AgentField 的
+  压角层、main 的 bg-canvas/80 三次合成出来的 209，而 canvas 是 245 ——
+  于是输入卡左右各多出一条 35 级的亮白带，全宽、被卡片跨在中间。
+
+  为什么不在浏览器里量一次像素就完事：那是脚本，不落库，下一个人把背景类
+  加回来它不会红。这里把「这一带由谁负责涂色」写成结构约束 ——
+    · 底栏自己的 class 恰好四个，一个不多一个不少；
+    · 卡片以外的元素一个涂色 token 都不许有（底色/渐变/阴影/描边/滤镜/文字色）；
+    · 整棵子树不许有伪元素、内联 style、绝对定位、负值与任意值逃逸；
+    · 字号的任意值（text-[180px]）也算 —— 那是用字形把白带画到卡外；
+    · 父层兄弟只允许工具条与滚动区（外加带 data-* 的两条状态条）；
+    · 祖先层到 body 为止不许自带涂色，页面里不许出现 <style>/<link> 注入。
+
+  代价是有意为之：改动输入区内部结构要同步改这里。这正是这条用例的价值
+  —— 涂色这件事必须被显式想一遍，而不是顺手加一个类。
+*/
+const DOCK_CLASSES = ['shrink-0', 'px-3', 'pb-3', 'pt-4']
+const CARD_CLASSES = [
+  'mx-auto',
+  'w-full',
+  'max-w-[880px]',
+  'rounded-2xl',
+  'border',
+  'border-line',
+  'bg-surface',
+  'shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)]',
+  'transition-shadow',
+  'duration-200',
+  'focus-within:border-line-strong',
+  'focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]',
+]
+const TOOLBAR_CLASSES = [
+  'flex',
+  'shrink-0',
+  'items-center',
+  'gap-tight',
+  'border-b',
+  'border-line',
+  'px-3',
+  'py-2',
+]
+const SCROLLER_CLASSES = ['min-h-0', 'flex-1', 'overflow-y-auto', 'px-3', 'py-3']
+
+/** Tailwind 的变体前缀以「括号外的第一个冒号」结尾；任意值里的冒号在括号内。 */
+function stripVariants(token: string): string {
+  let depth = 0
+  for (let i = 0; i < token.length; i += 1) {
+    const ch = token[i]
+    if (ch === '[') depth += 1
+    else if (ch === ']') depth -= 1
+    else if (ch === ':' && depth === 0) return stripVariants(token.slice(i + 1))
+  }
+  return token
+}
+
+const tokensOf = (el: Element): string[] =>
+  (el.getAttribute('class') ?? '').split(/\s+/).filter(Boolean)
+
+/** 所有能把颜色留在屏幕上的 token 词根。 */
+const PAINT_ROOTS = [
+  'bg-',
+  'from-',
+  'via-',
+  'to-',
+  'shadow',
+  'ring-',
+  'outline-',
+  'border-',
+  'divide-',
+  'fill-',
+  'stroke-',
+  'backdrop-',
+  'blur',
+  'brightness',
+  'contrast',
+  'grayscale',
+  'invert',
+  'saturate',
+  'sepia',
+  'mask-',
+  'opacity-',
+  'mix-blend-',
+  'text-[',
+  'text-canvas',
+  'text-surface',
+  'font-[',
+  'leading-[',
+  'tracking-[',
+]
+
+/** 能把绘制挪出自身盒子的写法。 */
+const ESCAPE_ROOTS = ['absolute', 'fixed', 'sticky', 'inset-', 'w-screen', 'h-screen', '100vw', '100vh']
+
+/**
+ * 这些写法在输入区里**任何时候**都不合法，包括卡片内部：
+ * 任意字号是用字形把颜色画到卡外（text-[180px] + 白色方块），
+ * 任意阴影/描边/底色是不经过类名黑名单的整块涂色（shadow-[0_0_0_9999px_…]），
+ * 任意属性 token（[background:#F4F5F7]）则是直接写 CSS。
+ */
+const ALWAYS_BANNED = [
+  'text-[',
+  'font-[',
+  'leading-[',
+  'tracking-[',
+  'shadow-[',
+  'ring-[',
+  'outline-[',
+  'bg-[',
+  'border-[',
+  'from-[',
+  'via-[',
+  'to-[',
+  'fill-[',
+  'stroke-[',
+]
+
+/**
+ * @param allowPaint 卡片内部允许涂色（那里本来就有合法的浅底按钮、主色发送键）；
+ *   但逃逸、伪元素、内联 style、任意值在任何位置都不允许。
+ */
+function guardViolations(el: Element, allowPaint: boolean, isCard = false): string[] {
+  const found: string[] = []
+  for (const token of tokensOf(el)) {
+    const core = stripVariants(token)
+    if (core.startsWith('[')) {
+      found.push(token)
+      continue
+    }
+    if (/^(before|after|content):/.test(token) || core.startsWith('content-')) found.push(token)
+    if (core.startsWith('-')) found.push(token)
+    if (ESCAPE_ROOTS.some((root) => core === root || core.startsWith(root))) found.push(token)
+    // 卡片的 class 已被第一条断言钉成精确集合；这里不再重复报它的两层阴影。
+    if (!isCard && ALWAYS_BANNED.some((root) => core === root || core.startsWith(root))) {
+      found.push(token)
+    }
+    if (!allowPaint && PAINT_ROOTS.some((root) => core === root || core.startsWith(root))) {
+      found.push(token)
+    }
+  }
+  return found
+}
+
+function walkElements(root: Element): Element[] {
+  const out: Element[] = []
+  const visit = (el: Element) => {
+    out.push(el)
+    for (const child of Array.from(el.children)) visit(child)
+  }
+  visit(root)
+  return out
+}
+
+function isInsideCard(el: Element, card: Element): boolean {
+  return el === card || card.contains(el)
+}
+
+describe('ChatPage — 输入区周围不许出现第二层底色（v1.30）', () => {
+  function renderComposer(): HTMLElement {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session(),
+          messages: [message({ id: 'm1', seq: 1, role: 'user', content: 'hi' })],
+        },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+    return screen.getByTestId('composer-dock')
+  }
+
+  it('★ 底栏与卡片的 class 都是精确集合（多一个涂色 token 就红）', () => {
+    /*
+      最直接的回归面：事故就是把三个背景类加在这里。这条用精确集合
+      而不是「不含 bg-gradient」的黑名单 —— 黑名单永远漏下一个变体
+      （[background:#F4F5F7]、before:bg-canvas、border-[999px]）。
+      卡片同理：它的两层阴影是唯一允许的任意值，换一个就红 ——
+      否则 shadow-[0_0_0_9999px_#F4F5F7] 能用合法类把整条白带铺回来。
+    */
+    renderComposer()
+    const dock = screen.getByTestId('composer-dock')
+    const card = screen.getByTestId('composer-card')
+    expect(tokensOf(dock).sort()).toEqual([...DOCK_CLASSES].sort())
+    expect(tokensOf(card).sort()).toEqual([...CARD_CLASSES].sort())
+  })
+
+  it('★ 卡片以外：一个涂色 token 都不许有', () => {
+    const dock = renderComposer()
+    const card = screen.getByTestId('composer-card')
+    const offenders: string[] = []
+    for (const el of walkElements(dock)) {
+      if (isInsideCard(el, card)) continue
+      for (const hit of guardViolations(el, false)) offenders.push(`${el.tagName}.${hit}`)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('★ 整棵子树：没有伪元素、没有内联 style、没有逃逸写法', () => {
+    /*
+      这三样是「卡内元素把白带画到卡外」的通道：
+        before:absolute before:inset-x-[-500px] before:bg-canvas（伪元素）
+        style={{ background: '#F4F5F7' }}（内联）
+        absolute -inset-x-[100vw] / -mt-[200px]（逃逸）
+      卡片内部允许涂色，但「涂在自己盒子里」这一条对它同样成立。
+    */
+    const dock = renderComposer()
+    const card = screen.getByTestId('composer-card')
+    const offenders: string[] = []
+    for (const el of walkElements(dock)) {
+      for (const hit of guardViolations(el, true, el === card)) {
+        offenders.push(`${el.tagName}.${hit}`)
+      }
+      if (el.hasAttribute('style')) offenders.push(`${el.tagName}[style]`)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('★ 父层兄弟只允许工具条与滚动区，底栏必须是最后一个', () => {
+    /*
+      只在底栏身上设防是不够的：在会话列里另起一个兄弟 div，写
+      `absolute right-0 bottom-0 h-32 w-[136px] bg-canvas`，就能把
+      同一條白带画回来，而底栏自己一个类都没多。
+    */
+    const dock = renderComposer()
+    const column = dock.parentElement
+    expect(column).toBeTruthy()
+    const children = Array.from(column!.children)
+    expect(children[children.length - 1]).toBe(dock)
+    const allowed = [
+      { classes: TOOLBAR_CLASSES, status: null },
+      { classes: SCROLLER_CLASSES, status: null },
+    ]
+    const rest = children.filter((child) => child !== dock)
+    expect(rest.length).toBeGreaterThanOrEqual(2)
+    expect(tokensOf(rest[0]).sort()).toEqual([...allowed[0].classes].sort())
+    expect(tokensOf(rest[1]).sort()).toEqual([...allowed[1].classes].sort())
+    // 第三类只允许「带 data-* 的状态条」：错误条与中断条，其余一律红。
+    for (const extra of rest.slice(2)) {
+      expect(extra.hasAttribute('data-error-code') || extra.hasAttribute('data-stuck-turn')).toBe(true)
+      for (const hit of guardViolations(extra, true)) {
+        throw new Error(`状态条上出现了额外绘制：${extra.tagName}.${hit}`)
+      }
+    }
+  })
+
+  it('★ 祖先层到 body 为止不许自带涂色', () => {
+    const dock = renderComposer()
+    const offenders: string[] = []
+    let cur: Element | null = dock.parentElement
+    while (cur && cur !== document.body) {
+      for (const hit of guardViolations(cur, false)) offenders.push(`${cur.tagName}.${hit}`)
+      if (cur.hasAttribute('style')) offenders.push(`${cur.tagName}[style]`)
+      cur = cur.parentElement
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('★ 页面里没有 <style>/<link rel=stylesheet> 注入', () => {
+    /*
+      类名守卫看不见 CSSOM：一个指向祖先 ::before 的 <style> 就能重画白带。
+      测试环境本身没有样式表（index.css 由入口文件引入，不在这里），
+      所以「0 条」就是基线。
+    */
+    renderComposer()
+    expect(document.querySelectorAll('style').length).toBe(0)
+    expect(document.querySelectorAll('link[rel="stylesheet"]').length).toBe(0)
+    expect(document.styleSheets.length).toBe(0)
+  })
+})
+

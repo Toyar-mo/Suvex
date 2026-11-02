@@ -1,5 +1,4 @@
 import {
-  ApprovalCard,
   ApprovalToggle,
   AttachmentBar,
   MultiSelect,
@@ -21,7 +20,8 @@ import { Modal } from '@/components/ui/Modal'
 import { SessionAttackChainModal } from '@/components/chat/SessionAttackChainModal'
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
-import { ProcessGroup } from '@/components/chat/ProcessGroup'
+import { AssistantTurn } from '@/components/chat/AssistantTurn'
+import { MessageRow } from '@/components/chat/MessageRow'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -54,7 +54,7 @@ import {
   type ChatTurnRun,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
-import { groupMessageRows } from '@/lib/messageRows'
+import { groupConversationTurns } from '@/lib/conversationTurns'
 import {
   buildConversationMarkdown,
   buildConversationMarkdownFileName,
@@ -65,7 +65,6 @@ import { fetchSessionFindings, fetchSessionMessages } from '@/data/session-insig
 import type { FindingListItem } from '@/data/finding'
 import { useProjectedProviders } from '@/data/settings-store'
 import { ensureToolsLoaded, useTools } from '@/data/tools'
-import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { api, errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import {
@@ -80,9 +79,7 @@ import {
   Plug,
   Send,
   Sparkles,
-  Terminal,
   UserRound,
-  Wrench,
   X,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -826,9 +823,28 @@ export function ChatPage() {
     await decideApproval(active.id, messageId, approve)
   }
 
-  const messages = active?.messages ?? []
-  // ★ v1.25：把过程面（旁白 + 工具）折成折叠块，主对话流只留用户的话与结论。
-  const messageRows = useMemo(() => groupMessageRows(messages), [messages])
+  /*
+    ★ `messages` 自己也要 memo：`active?.messages ?? []` 在没有会话时每次
+      渲染都造一个新数组，下游 `turns` 的 useMemo 就永远命中不了
+      （`react-hooks/exhaustive-deps` 也会指着这一行）。
+  */
+  const messages = useMemo(() => active?.messages ?? [], [active])
+  // ★ 按回合切：用户消息开一个回合，它之后的助手/工具消息都归同一回合。
+  const turns = useMemo(() => groupConversationTurns(messages), [messages])
+
+  /*
+    ★ 正在跑的那一轮必须**在原地**变成 live，而不是在消息流末尾另起一块。
+
+    store 把这一轮的旁白 / 工具 / 答复**边跑边落库**。如果这轮仍按
+    "已完成"渲染，用户会看到页脚先冒出来、正文却还挂在回合外面 ——
+    同一个回合被画成两半，等 `TURN_DONE` 一到整段又跳位。
+
+    判据：`sendingHere` 且乐观气泡已经消失（= 这句用户消息已落库，
+    它后面的回合就是正在进行的那一轮）。乐观气泡还在时用户消息还没进
+    `messages`，没有"进行中的回合"可以复用，只能在流末尾另画一块。
+  */
+  const liveTurnIndex =
+    sendingHere && pendingUserContent === null ? turns.length - 1 : -1
 
   /*
     按项目分组。
@@ -856,6 +872,72 @@ export function ChatPage() {
     const loose = buckets.get('') ?? []
     return { named, loose }
   }, [sessions])
+
+  /* 回合页脚右侧那点元信息：模型现在是谁。 */
+  const sessionMeta = active
+    ? (personas.find((p) => p.id === (active.persona ?? null))?.label ?? null)
+    : null
+
+  /*
+    设置控件放在输入卡工具栏里（CyberStrikeAI 的形态）。
+
+    ★ 它读的是**这个会话**的设置（`active.project` 等），不是全局默认值。
+      每个会话各自记着自己的项目/人格/模型 —— 一个全局条会让人以为
+      改一下所有对话都变了。
+  */
+  const settingsBar = active ? (
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      <ProjectInput
+        value={active.project ?? null}
+        suggestions={projectSuggestions}
+        onCommit={(project) => void updateSettings(active.id, { project })}
+      />
+
+      <button
+        type="button"
+        onClick={() => setPersonaOpen(true)}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-md border border-line px-2 py-1',
+          'text-2xs text-ink-muted transition-colors duration-150',
+          'hover:border-accent/40 hover:text-ink',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        )}
+        title="这个人格决定模型扮演什么角色"
+      >
+        <UserRound size={11} strokeWidth={2} aria-hidden="true" />
+        {personas.find((p) => p.id === (active.persona ?? null))?.label ?? '默认'}
+      </button>
+
+      <ProviderSelect
+        providers={usableProviders}
+        value={active.providerId ?? null}
+        onChange={(providerId) => void updateSettings(active.id, { providerId })}
+      />
+
+      <ApprovalToggle
+        enabled={active.requireApproval ?? false}
+        onChange={(requireApproval) => void updateSettings(active.id, { requireApproval })}
+      />
+
+      <MultiSelect
+        label="技能"
+        icon={<BookOpen size={12} strokeWidth={2} aria-hidden="true" />}
+        options={skillOptions}
+        selected={active.skillNames ?? []}
+        emptyHint="技能库是空的"
+        onChange={(skillNames) => void updateSettings(active.id, { skillNames })}
+      />
+
+      <MultiSelect
+        label="MCP"
+        icon={<Plug size={12} strokeWidth={2} aria-hidden="true" />}
+        options={mcpOptions}
+        selected={active.mcpServerNames ?? []}
+        emptyHint="还没配 MCP server（在工具页加）"
+        onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
+      />
+    </div>
+  ) : null
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -1070,67 +1152,6 @@ export function ChatPage() {
           )}
         </div>
 
-        {/*
-          设置条：只在有会话时出现。
-
-          ★ 它读的是**这个会话**的设置（`active.project` 等），不是全局默认值。
-            每个会话各自记着自己的项目/人格/模型 —— 一个全局条会让人以为
-            改一下所有对话都变了。
-        */}
-        {active && (
-          <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
-            <ProjectInput
-              value={active.project ?? null}
-              suggestions={projectSuggestions}
-              onCommit={(project) => void updateSettings(active.id, { project })}
-            />
-
-            <button
-              type="button"
-              onClick={() => setPersonaOpen(true)}
-              className={cn(
-                'inline-flex items-center gap-1 rounded-sm border border-line px-2 py-1',
-                'text-2xs text-ink-muted transition-ui duration-fast',
-                'hover:border-accent/40 hover:text-ink',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-              )}
-              title="这个人格决定模型扮演什么角色"
-            >
-              <UserRound size={11} strokeWidth={2} aria-hidden="true" />
-              {personas.find((p) => p.id === (active.persona ?? null))?.label ?? '默认'}
-            </button>
-
-            <ProviderSelect
-              providers={usableProviders}
-              value={active.providerId ?? null}
-              onChange={(providerId) => void updateSettings(active.id, { providerId })}
-            />
-
-            <ApprovalToggle
-              enabled={active.requireApproval ?? false}
-              onChange={(requireApproval) => void updateSettings(active.id, { requireApproval })}
-            />
-
-            <MultiSelect
-              label="技能"
-              icon={<BookOpen size={12} strokeWidth={2} aria-hidden="true" />}
-              options={skillOptions}
-              selected={active.skillNames ?? []}
-              emptyHint="技能库是空的"
-              onChange={(skillNames) => void updateSettings(active.id, { skillNames })}
-            />
-
-            <MultiSelect
-              label="MCP"
-              icon={<Plug size={12} strokeWidth={2} aria-hidden="true" />}
-              options={mcpOptions}
-              selected={active.mcpServerNames ?? []}
-              emptyHint="还没配 MCP server（在工具页加）"
-              onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
-            />
-          </div>
-        )}
-
         {/* 消息流 */}
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {!active ? (
@@ -1179,7 +1200,7 @@ export function ChatPage() {
               </div>
             </div>
           ) : (
-            <div className="mx-auto flex max-w-[70ch] flex-col gap-2.5">
+            <div className="mx-auto flex w-full max-w-[880px] flex-col gap-5">
               {/*
                 ★ 空态必须把乐观气泡算进来。只看 messages.length 的话，
                   用户点下发送的那 3 秒里，屏幕上会同时出现"这个对话还是空的"
@@ -1187,26 +1208,69 @@ export function ChatPage() {
               */}
               {messages.length === 0 &&
                 !(sendingHere && pendingUserContent !== null) && (
-                <p className="py-6 text-center text-xs text-ink-faint">
-                  这个对话还是空的。说点什么，或者回到会话列表挑另一个。
-                </p>
+                <>
+                  <p className="py-4 text-center text-xs text-ink-faint">
+                    这个对话还是空的。说点什么，或者回到会话列表挑另一个。
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {STARTERS.map((text) => (
+                      <button
+                        key={text}
+                        type="button"
+                        disabled={sending}
+                        onClick={() => setDraft(text)}
+                        className={cn(
+                          'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
+                          'text-xs text-ink-muted transition-colors duration-150',
+                          'hover:border-line-strong hover:text-ink',
+                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                          'disabled:cursor-not-allowed disabled:opacity-60',
+                        )}
+                      >
+                        <Sparkles size={12} strokeWidth={2} className="shrink-0 text-ink-faint" aria-hidden="true" />
+                        {text}
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
-              {messageRows.map((row) =>
-                row.kind === 'process' ? (
-                  <ProcessGroup key={`p-${row.items[0].id}`} items={row.items} />
-                ) : (
-                  <MessageRow
-                    key={row.message.id}
-                    message={row.message}
-                    deciding={deciding}
-                    onDecide={
-                      row.message.approvalStatus === 'pending'
-                        ? (approve) => void handleDecide(row.message.id, approve)
-                        : undefined
-                    }
-                  />
-                ),
-              )}
+
+              {turns.map((turn, index) => {
+                const isLive = index === liveTurnIndex
+                /*
+                  ★ 人格标签只挂在**最新一回合**上。
+
+                    数据契约里没有"这条消息是哪个人格说的"（人格存在
+                    会话上，改一次就只记最新值）。把当前人格盖到每个历史
+                    回合上，等于凭空断言一件没记录的事；只在最新一回合显示，
+                    至少它是造出这一轮的那份配置（刚改人格、还没发新消息时
+                    仍有误差，所以文案只说人格名，不说"这一轮用的"）。
+                */
+                const turnMeta = !isLive && index === turns.length - 1 ? sessionMeta : null
+                return (
+                  <section
+                    key={turn.user?.id ?? turn.items[0]?.id ?? `turn-${index}`}
+                    className="flex flex-col gap-2.5"
+                    data-conversation-turn
+                    data-turn-live={isLive || undefined}
+                  >
+                    {turn.user && <MessageRow message={turn.user} />}
+                    {(turn.items.length > 0 || isLive) && (
+                      <AssistantTurn
+                        items={turn.items}
+                        live={isLive}
+                        streamingText={isLive ? streamingText : null}
+                        phaseText={isLive ? phaseLabel(phase) : null}
+                        interjections={isLive ? interjections : []}
+                        meta={turnMeta}
+                        sessionId={active?.id}
+                        deciding={deciding}
+                        onDecide={(messageId, approve) => void handleDecide(messageId, approve)}
+                      />
+                    )}
+                  </section>
+                )
+              })}
 
               {/*
                 乐观气泡（v0.97）：用户刚发出去、服务端还没回的那句话。
@@ -1222,8 +1286,8 @@ export function ChatPage() {
               */}
               {sendingHere && pendingUserContent !== null && (
                 <div className="flex justify-end" data-pending-bubble="true">
-                  <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/12 px-3 py-2">
-                    <p className="whitespace-pre-wrap break-words text-sm text-ink">
+                  <div className="max-w-[520px] rounded-[10px] rounded-br-xs bg-accent/12 px-3.5 py-2">
+                    <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
                       {pendingUserContent}
                     </p>
                   </div>
@@ -1231,91 +1295,31 @@ export function ChatPage() {
               )}
 
               {/*
-                ★ v0.100：跑的过程中用户插的话。
+                ★ v0.100：跑的过程中用户插的话在**回合内部**画
+                （见 `AssistantTurn` 的 `interjections`）。
 
-                它们在时间上位于"已有消息之后、模型下一轮之前" ——
-                而那正是下一轮模型会读到它们的位置。显示在消息流末尾
-                让用户能确认「我这句话真的进去了」（这是插话功能
-                唯一需要界面证明的事）。
-
-                与 `pendingUserContent` 分开画：那个是"还没落库"的乐观气泡，
-                这个是"已经落库、等模型下一轮看到"的真消息。
-                合成一个状态会让"到底发出去没有"变得不可知。
+                不能在这里无条件渲染：`interjections` 是 store 级全局字段，
+                跑在别的会话时它也会在，画出来就成了"这个对话里也有一句
+                我没说过的话"。只有 `sendingHere` 时才属于本会话。
               */}
-              {sendingHere &&
-                interjections.map((message) => (
-                <div key={message.id} className="flex justify-end" data-interjection="true">
-                  <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/8 px-3 py-2">
-                    <p className="mb-0.5 text-[11px] text-ink-faint">插话 · 模型下一轮会看到</p>
-                    <p className="whitespace-pre-wrap break-words text-sm text-ink">
-                      {message.content}
-                    </p>
-                  </div>
-                </div>
-              ))}
 
               {/*
-                ★★ v0.102：正在流入的正文。
+                ★★ 正在跑、但还没有回合可归的那一段（用户消息还没落库，
+                或者会话里一条消息都没有）。
 
-                ## 为什么它必须在这里（而不是等 message 帧）
-
-                加这一块之前，正文是**整块**出现的：模型在服务端想完、落库、
-                再推一帧全文，界面上那块文字一瞬间铺开。用户的原话是
-                「消息是一瞬间蹦出一大块」。
-
-                调研三个同类项目（LibreChat / Open WebUI / LobeChat）之后的
-                结论是：它们看起来逐字长出来**不是因为有入场动画**，而是
-                因为正文本来就逐 token 到达。所以这里做的是让服务端真的
-                流起来（`app/chat/holdback.py` 负责不泄漏内部协议），
-                而不是给消息行加一个动画盖住症状。
-
-                ## 位置：消息之后、「正在想」之前
-
-                与 `pendingUserContent` 同一条时间线理由 —— 这段文字是
-                模型**正在说**的话，它在时间上接着已有消息、并先于转圈消失。
-
-                ## `data-streaming-bubble` 是给端到端验证用的钩子
-
-                没有它的话，验证脚本只能靠"屏幕上有没有非空文本"猜，
-                而那分不出"流式气泡还在"与"真消息已经接管了"。
+                用的是同一个 `AssistantTurn` —— 否则"跑的时候"和
+                "跑完之后"是两套排版，消息一落库整段内容会跳位。
+                两者的差别只在 `live`：不画页脚、正文末尾带光标、
+                阶段文案用 `role="status"` 持续播报。
               */}
-              {sendingHere && streamingText !== null && (
-                <div
-                  className="max-w-[85%] whitespace-pre-wrap break-words text-sm text-ink"
-                  data-streaming-bubble="true"
-                  data-message-row="assistant"
-                >
-                  {streamingText}
-                  {/*
-                    生成中的光标。对齐 Open WebUI 的形态
-                    （`ResponseMessage.svelte` 里那个 0.125rem 宽的竖条）：
-                    它证明"还在写"，而且在文字末尾随长度移动 —— 光靠
-                    逐字增加是分不出"流得慢"和"卡住了"的。
-                    ⚠️ 只动 opacity（`animate-cursor-pulse`），不动布局，
-                    否则每闪一次整段文字会重排。
-                  */}
-                  <span
-                    className="ml-0.5 inline-block h-3.5 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom"
-                    aria-hidden="true"
-                  />
-                </div>
-              )}
-
-              {sendingHere && (
-                <div className="flex items-center gap-1.5 pl-1" role="status" aria-live="polite">
-                  <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-                    <span className="absolute inline-flex h-full w-full animate-ping rounded-pill bg-accent opacity-60" />
-                    <span className="relative inline-flex h-1.5 w-1.5 rounded-pill bg-accent" />
-                  </span>
-                  {/*
-                    ★ v0.100：这一行不再只是「正在想…」。
-
-                    它现在会说**在做什么、第几轮** —— 因为用户盯着屏幕的
-                    那几十秒真正想知道的是「它在推进还是卡住了」，
-                    而一个没有信息的转圈回答不了这个问题。
-                  */}
-                  <span className="text-2xs text-ink-faint">{phaseLabel(phase)}</span>
-                </div>
+              {sendingHere && liveTurnIndex < 0 && (
+                <AssistantTurn
+                  items={[]}
+                  live
+                  streamingText={streamingText}
+                  phaseText={phaseLabel(phase)}
+                  interjections={interjections}
+                />
               )}
               <div ref={bottomRef} />
             </div>
@@ -1376,8 +1380,12 @@ export function ChatPage() {
           </div>
         )}
 
-        {/* 输入框 */}
-        <div className="shrink-0 border-t border-line px-3 py-2">
+        {/* 输入卡（CyberStrikeAI 形态）：设置、附件、输入、发送同一张卡 */}
+        <div className="shrink-0 px-3 pb-3 pt-4" data-testid="composer-dock">
+          <div className="mx-auto w-full max-w-[880px] rounded-2xl border border-line bg-surface shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)] transition-shadow duration-200 focus-within:border-line-strong focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]" data-testid="composer-card">
+            {active && settingsBar && (
+              <div className="border-b border-line/70 px-2 py-1.5">{settingsBar}</div>
+            )}
           {active && (
             /*
               ★ 附件条**始终**渲染（含上传按钮），不只是有附件时。
@@ -1400,7 +1408,7 @@ export function ChatPage() {
               onClose={() => setMention(null)}
             />
           )}
-          <div className="mx-auto flex max-w-[70ch] items-end gap-1.5">
+          <div className="flex items-end gap-1.5 p-2">
             <textarea
               ref={composerRef}
               value={draft}
@@ -1473,9 +1481,9 @@ export function ChatPage() {
               disabled={!active}
               aria-label="输入消息"
               className={cn(
-                'max-h-40 min-h-[2.5rem] flex-1 resize-y rounded-sm border border-line bg-surface-sunken',
-                'px-2.5 py-2 text-sm text-ink placeholder:text-ink-faint',
-                'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                'max-h-40 min-h-[2.5rem] flex-1 resize-none rounded-md bg-transparent px-1 py-1.5',
+                'text-sm text-ink placeholder:text-ink-faint',
+                'focus:outline-none',
                 'disabled:cursor-not-allowed disabled:opacity-60',
               )}
             />
@@ -1511,8 +1519,9 @@ export function ChatPage() {
               {sendingHere ? '插话' : '发送'}
             </Button>
           </div>
+          </div>
           {user?.role !== 'admin' && (
-            <p className="mx-auto mt-1 max-w-[70ch] text-2xs text-ink-faint">
+            <p className="mx-auto mt-2 w-full max-w-[880px] text-2xs text-ink-faint">
               你是只读角色：可以查询和看结果，但不能让它建扫描或改技能库。
             </p>
           )}
@@ -1831,214 +1840,5 @@ function SessionRow({
   )
 }
 
-/** 一条消息。三种角色三种形状。`onDecide` 只在该消息待审批时传。 */
-function MessageRow({
-  message,
-  deciding,
-  onDecide,
-}: {
-  message: ChatMessage
-  /** 有一条审批正在提交 —— 禁用按钮防重复点。 */
-  deciding?: boolean
-  onDecide?: (approve: boolean) => void
-}) {
-  /*
-    ★ 待审批的消息**优先**按审批卡渲染，不看 role。
-
-      它 role 是 `tool`，但工具还没执行过。当普通工具卡画出来，
-      用户在界面上看到的就是"它跑完了" —— 而实际上它在等一句话。
-      这个分支必须排在 role 判断之前。
-  */
-  if (message.approvalStatus === 'pending' && onDecide) {
-    return <ApprovalCard message={message} onDecide={onDecide} disabled={deciding} />
-  }
-
-  if (message.role === 'user') {
-    return (
-      <div
-        className="flex justify-end"
-        // ★ v0.100：稳定标记。端到端验证要靠它数「屏幕上有几条消息」，
-        //   而在此之前消息行**没有任何可定位的特征** —— 只能靠文案猜，
-        //   那种断言在文案改一个字之后就失效。
-        //   同时它也让"这条消息在第几位"在 DOM 里可查（`data-seq`）。
-        data-message-row="user"
-        data-seq={message.seq}
-      >
-        <div className="max-w-[85%] rounded-md rounded-br-xs bg-accent/12 px-3 py-2">
-          <p className="whitespace-pre-wrap break-words text-sm text-ink">{message.content}</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (message.role === 'tool') {
-    return <ToolCard message={message} />
-  }
-
-  return (
-    <div className="flex flex-col gap-1" data-message-row="assistant" data-seq={message.seq}>
-      {message.reasoning && <ReasoningBlock text={message.reasoning} />}
-      <div className="rounded-md rounded-bl-xs bg-surface-raised px-3 py-2">
-        <p className="whitespace-pre-wrap break-words text-sm text-ink">{message.content}</p>
-      </div>
-    </div>
-  )
-}
-
-/**
- * 工具卡：它到底做了什么。
- *
- * ★ 失败必须**看得出来**。一次静默失败（工具返回了错误但界面显示成正常）
- *   会让用户以为"扫描已建"然后去扫描页找一个不存在的任务 —— 这比报错更糟。
- *
- * ## v0.103：默认收成**一行**
- *
- * 第一版（同一天早些时候）做的是"长输出才折叠、折叠时露前两行"。用户看了
- * 截图说「就是要类似这样的」，对照的是 Claude Code / Codex 的形态：
- * **每条工具调用默认就是一行灰色文字**（`⏺ 运行命令`），想看细节才点开。
- *
- * 两者差的不只是阈值，是**默认值代表谁的意见**：
- *   · 原来那版：默认铺开，长到一定程度才收 —— 默认值是"给你看全"。
- *   · 用户要的：默认收成一行，点了才开 —— 默认值是"别挡着我看结论"。
- *
- * 对话页的主线是**模型说了什么**，工具调用是过程证据。过程证据默认占一行，
- * 是这两种价值的正确配比。所以现在**无条件折叠**，不再按长度分支 ——
- * 也就不存在"多长才算长"这个只能拍脑袋定的阈值。
- *
- * ## 为什么不复用 ReasoningBlock
- *
- * 形态接近（都是一行可展开），但语义不同：思考过程是纯文本，工具卡要表达
- * **成功/失败**、要显示工具名和参数摘要。失败状态必须留在**折叠态**那一行上
- * —— 收起来之后看不见"失败"，用户就会漏掉"这个工具偷偷挂了"。
- */
-function ToolCard({ message }: { message: ChatMessage }) {
-  const failed = message.toolFailed === true
-  const content = message.content ?? ''
-  const lineCount = content.split('\n').length
-  const [open, setOpen] = useState(false)
-  const bodyRef = useRevealOnExpand<HTMLDivElement>(open)
-
-  /*
-    摘要行写什么 —— 这是折叠态**唯一**的信息，所以它必须回答
-    "这次调用干了什么"，而不是"这是第几条消息"。
-
-    优先用参数里最能说明问题的那一个（命令、路径、名字），没有参数就退回
-    工具名本身。不做花哨的动词翻译：翻错了（把 list_challenges 说成"列出
-    挑战"）比不翻更糟 —— 用户核对的是工具名和自己给的目标，不是我的概括。
-  */
-  const argDigest = useMemo(() => {
-    const args = message.toolArgs
-    if (!args) return ''
-    for (const key of ['command', 'cmd', 'path', 'name', 'query', 'url', 'target']) {
-      const value = args[key]
-      if (typeof value === 'string' && value.trim()) {
-        return value.trim().split('\n')[0].slice(0, 80)
-      }
-    }
-    return ''
-  }, [message.toolArgs])
-
-  return (
-    <div
-      // ★ v0.100：工具卡也要能被数出来 —— 端到端验证的核心判据之一就是
-      //   「工具卡是一张张出现的，不是最后一次性蹦出来的」。
-      data-message-row="tool"
-      data-seq={message.seq}
-      data-tool-name={message.toolName ?? ''}
-      // v0.103：折叠态能被验证脚本单独数出来
-      data-tool-collapsed={open ? 'false' : 'true'}
-    >
-      {/* ── 折叠态 = 一行。整行是按钮，点击范围大、好点中。 ── */}
-      <button
-        type="button"
-        // ★ 稳定钩子：页面里还有"收起会话列表"这类 aria-label 带"收起"的按钮，
-        //   用文案选会撞车。测试与验证脚本都认这个属性。
-        data-tool-toggle="true"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        className={cn(
-          'flex w-full items-center gap-1.5 rounded-sm px-1 py-0.5 text-left',
-          'transition-ui duration-fast',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-          failed ? 'text-signal-risk hover:bg-signal-risk/5' : 'text-ink-faint hover:text-ink-muted',
-        )}
-      >
-        {open ? (
-          <ChevronDown size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        )}
-        {failed ? (
-          <Wrench size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <Terminal size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        )}
-        <span className="shrink-0 font-mono text-2xs">{message.toolName ?? 'tool'}</span>
-        {argDigest && (
-          // 参数摘要可能很长：可缩、可截，但不能把工具名挤掉
-          <span className="min-w-0 truncate text-2xs text-ink-faint/80">{argDigest}</span>
-        )}
-        {failed && (
-          <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
-            失败
-          </span>
-        )}
-        {/* 右侧规模提示：收着时告诉用户"点开有多少"，开着时给个收起入口 */}
-        <span className="ml-auto shrink-0 text-2xs text-ink-faint/60">
-          {open ? '收起' : `${lineCount} 行`}
-        </span>
-      </button>
-
-      {/* ── 展开态 = 带边框的面板，输出全文 ── */}
-      {open && (
-        <div
-          ref={bodyRef}
-          className={cn(
-            'mt-1 rounded-sm border px-2.5 py-1.5',
-            failed ? 'border-signal-risk/40 bg-signal-risk/5' : 'border-line bg-surface-sunken',
-          )}
-        >
-          <p className="whitespace-pre-wrap break-words text-xs text-ink-muted">{content}</p>
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * 可折叠的「思考过程」。
- *
- * ★ 默认折叠。它是"我要看才展开"的东西，不是正文；默认铺开会让每条回复
- *   都变成两屏，而用户大多数时候只关心结论。
- */
-function ReasoningBlock({ text }: { text: string }) {
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="rounded-sm border border-line/60 bg-surface-sunken/50">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          'flex w-full items-center gap-1 px-2 py-1 text-left text-2xs text-ink-faint',
-          'transition-ui duration-fast hover:text-ink-muted',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-        )}
-        aria-expanded={open}
-      >
-        {open ? (
-          <ChevronDown size={11} strokeWidth={2} aria-hidden="true" />
-        ) : (
-          <ChevronRight size={11} strokeWidth={2} aria-hidden="true" />
-        )}
-        思考过程
-      </button>
-      {open && (
-        <p className="whitespace-pre-wrap break-words border-t border-line/60 px-2 py-1.5 text-2xs text-ink-muted">
-          {text}
-        </p>
-      )}
-    </div>
-  )
-}
 
 export default ChatPage
