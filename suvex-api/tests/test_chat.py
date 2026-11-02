@@ -1267,8 +1267,13 @@ async def test_nudges_are_capped_and_do_not_eat_the_tool_budget(
     # 被推了 `MAX_NARRATION_NUDGES` 次 = 模型被调了 1 + 2 次。
     assert len(gateway.seen) == 1 + engine.MAX_NARRATION_NUDGES
     # 每一句都落库了（用户能看见它反复说要动却一直没动）。
-    assert [m.role for m in result.messages] == ["user"] + ["assistant"] * (
-        1 + engine.MAX_NARRATION_NUDGES
+    # ★ v1.36：v1.35 起，纠偏额度用尽且这句仍是计划句时，引擎会**再补一条**
+    #   收尾实话（`render_plan_exhausted_note()`，engine.py 零工具计划句分支），
+    #   并置 `needs_continue=True`。所以这里比"用户 + N 条回复"多一条：
+    #   要守的真正不变量是"模型调用次数有上限"（上面那条），消息数只是它的
+    #   投影 —— 补上那条 v1.35 新增的收尾消息。
+    assert [m.role for m in result.messages] == (
+        ["user"] + ["assistant"] * (1 + engine.MAX_NARRATION_NUDGES) + ["assistant"]
     )
 
 

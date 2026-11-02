@@ -218,6 +218,31 @@ _CONCLUSION_LEAD = re.compile(
 TRAILING_PLAN_CLAUSES = 3
 
 
+#: 完成态动词：`看过了`/`跑完了`/`读到了`/`扫过了`。动词后紧跟这些体标记，
+#: 说明动作**已经发生**，属于结论的一部分（v1.36）。
+#:
+#: 为什么需要它：`_PLAN_START` 只认句首话语标记（先/然后/接着/下一步…），
+#: **不看后面是不是已完成**。于是「然后我把样本都过了一遍，结论如上。」
+#: 这类**完成态**长结论会被判成计划句 → 整轮被打回/标 `needs_continue`，
+#: 用户看到「这一轮停在了下一步上」，可它其实已经交付了结论。
+#: `_PLAN_BARE_VERB` 早有 `(?!了|到|出|过|完…)` 守卫，`_PLAN_START` 这条
+#: 路径却漏了同一个道理。
+_COMPLETED_ASPECT = re.compile(
+    r"(?:看|查|试|跑|分析|确认|读|写|扫|执行|找|验证|反汇编|构造|编写|调试|"
+    r"继续|跟进|连接|上传|下载|提交|发送|打|过|做|核|对|比|拼|解|提|算|记|读)"
+    r"(?:了|过|完|到|出|好)"
+)
+
+
+def _clause_is_completed(clause: str) -> bool:
+    """分句是不是"已经做完"的陈述（动词 + 了/过/完/到/出/好）。
+
+    用于放松 `_PLAN_START` 的判定：句首虽是「然后/接着/下一步」这类标记，
+    但正文其实是完成态时，它是结论，不是计划。
+    """
+    return bool(_COMPLETED_ASPECT.search(clause))
+
+
 def _has_trailing_plan(body: str, *, allow_bare_verb: bool = True) -> bool:
     """完成标记附近是否还挂着下一步动作（v1.34）。
 
@@ -243,7 +268,14 @@ def _has_trailing_plan(body: str, *, allow_bare_verb: bool = True) -> bool:
         if _CONCLUSION_LEAD.search(clause):
             continue
         cleaned = _RESULT_MARKERS.sub("", clause)
-        if _PLAN_START.search(cleaned) or _PLAN_VERB.search(cleaned):
+        # ★ v1.36：`_PLAN_VERB` 是"标记 + 紧邻动词"，那个动词后面已有
+        #   `(?!了|到|出|过|完…)` 守卫（见 `_PLAN_VERB` 定义）——命中即真计划。
+        #   但 `_PLAN_START` 只认句首标记、不看后续，所以「然后我把样本都过
+        #   了一遍」「接着我把配置都读完了」这种**完成态**会被误判成计划。
+        #   这里补上同一道守卫：命中 `_PLAN_START` 且该分句是完成态时不算计划。
+        if _PLAN_VERB.search(cleaned):
+            return True
+        if _PLAN_START.search(cleaned) and not _clause_is_completed(cleaned):
             return True
         # ★ v1.35：长正文只认带话语标记的计划（见 `TRAILING_PLAN_CLAUSES`）。
         #   裸动词表里「反汇编」「看」这类词在技术性结论里太常见，窗口化之后

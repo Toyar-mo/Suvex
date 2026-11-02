@@ -201,3 +201,42 @@ def test_long_body_keeps_the_second_person_and_conclusion_exemptions():
     """窗口化之后，两条豁免仍然生效。"""
     assert looks_like_plan(_LONG_CONTEXT + "接下来你可以提交。") is False
     assert looks_like_plan(_LONG_CONTEXT + "接下来是结论：偏移 0xb8。") is False
+
+
+#: 几个"句首话语标记 + 完成态动词"的收尾句 —— 是**结论**，不是计划（v1.36）。
+#:
+#: 线上形态：模型写了一大段（>200 字）反汇编/排查结论，收尾句是
+#: 「然后我把所有 gadget 都过了一遍，结论如上。」。`_PLAN_START` 只认句首
+#: 「然后」，不看后面其实已经「…过了」——于是被判成计划句，整轮被补一句
+#: 「这一轮停在了下一步上」并置 `needs_continue`，用户看着一条**已交付的
+#: 结论**却被说成"停在计划上"。`_PLAN_BARE_VERB` 早有 `(?!了|过|完…)` 守卫，
+#: `_PLAN_START` 这条路径漏了同一个道理。
+_COMPLETED_TAILS = [
+    "然后我把所有 gadget 都过了一遍，结论如上。",
+    "接着我把所有配置文件都读完了，结论如下。",
+    "然后我把样本都过了一遍，结论如上。",
+    "最后我把这几条路径都验证完了，没有额外防护。",
+]
+
+
+def test_long_completed_action_tail_is_not_a_plan():
+    """长正文收尾是「然后/接着…了/过/完」的**完成态** → 不是计划。
+
+    守卫的是 `_PLAN_START` 路径上的完成态误判（v1.36）。每条都必须
+    带足长正文，确保走的是「长正文只扫收尾窗口」这条路。
+    """
+    for tail in _COMPLETED_TAILS:
+        body = _LONG_CONTEXT + tail
+        assert len(body) >= 200, tail
+        assert looks_like_plan(body) is False, tail
+
+
+def test_long_forward_looking_tail_after_marker_is_still_a_plan():
+    """对照：同样的句首标记，但后面是**未完成**的下一步 → 仍是计划。
+
+    防止上一条的修法把真计划也放过（过修）。这几句动词后面都没有
+    「了/过/完/到」，是明确要去做的事。
+    """
+    assert looks_like_plan(_LONG_CONTEXT + "然后我要看 libc 版本，接着写 exploit。") is True
+    assert looks_like_plan(_LONG_CONTEXT + "下一步跑 one_gadget 找 gadget。") is True
+    assert looks_like_plan(_LONG_CONTEXT + "接下来写脚本拿 shell。") is True
