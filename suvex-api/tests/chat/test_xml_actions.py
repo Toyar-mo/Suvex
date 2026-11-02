@@ -225,3 +225,68 @@ def test_has_protocol_marker_or_xml_detects_parameter_style() -> None:
     """带 <parameter 时也算已有协议，不该再合成原生动作。"""
     assert _has_protocol_marker_or_xml('<parameter name="tool">run_shell</parameter>') is True
     assert _has_protocol_marker_or_xml("</invoke>") is True
+
+
+# ─────────────────────────────────────────────────────────────────────
+# v1.49：DeepSeek 的 DSML 全角标签（`</｜DSML｜ parameter>`）
+#
+# 线上实测（2026-11-02，会话 chat_01M6BWQ69MZJNBAB7C7QMVXPV2 的
+# turn_01M6E99VZ…）：模型用全角竖线 U+FF5C 包的分隔符写
+# `</｜DSML｜ parameter>` / `</｜DSML｜ invoke>` / `</｜DSML｜ calls>`。
+# v1.41/v1.44/v1.48 的正则都只认半角 `<parameter>`/`<invoke>`，这套
+# 一个都不命中 → 该轮被判「无动作」，空转 75 轮反复说「现在真正运行」。
+# ─────────────────────────────────────────────────────────────────────
+
+_DSML = "\uff5c"  # 全角竖线 ｜
+
+
+def test_dsml_closing_only_marks_are_removed_and_not_actions() -> None:
+    """只有收尾标记、没有开标签：标记删掉，**不猜**成动作。"""
+    text = (
+        "我继续。\n\n"
+        "cd /work/r && ls -l p.bin"
+        f"\n</{_DSML}DSML{_DSML} parameter>"
+        f"\n</{_DSML}DSML{_DSML} invoke>"
+        f"\n</{_DSML}DSML{_DSML} calls>"
+    )
+    out = _normalize_xml_actions(text)
+    assert "DSML" not in out
+    assert _DSML not in out
+    # 命令体（人话/正文）保留下来，且没有被误当成动作
+    assert "ls -l p.bin" in out
+    assert parse_actions(out) == []
+
+
+def test_dsml_parameter_open_tag_becomes_action() -> None:
+    """有 `<｜DSML｜ parameter name="...">` 开标签时规范成半角并合成动作。"""
+    text = (
+        f'<{_DSML}DSML{_DSML} invoke name="run_shell">'
+        f'<{_DSML}DSML{_DSML} parameter name="command">echo dsml-ok</{_DSML}DSML{_DSML} parameter>'
+        f'</{_DSML}DSML{_DSML} invoke>'
+    )
+    out = _normalize_xml_actions(text)
+    assert "DSML" not in out
+    assert parse_actions(out) == [("run_shell", {"command": "echo dsml-ok"})]
+
+
+def test_dsml_mixed_named_and_closing() -> None:
+    """开标签 + 收尾标记混用（真实形态）：能出动作，残留标记清干净。"""
+    text = (
+        "先跑一下。\n"
+        f'<{_DSML}DSML{_DSML} invoke name="run_shell">'
+        f'<{_DSML}DSML{_DSML} parameter name="command">id</{_DSML}DSML{_DSML} parameter>'
+        f'</{_DSML}DSML{_DSML} calls>'
+    )
+    out = _normalize_xml_actions(text)
+    assert "DSML" not in out
+    assert parse_actions(out) == [("run_shell", {"command": "id"})]
+
+
+def test_has_protocol_marker_or_xml_detects_dsml() -> None:
+    assert _has_protocol_marker_or_xml(f"x</{_DSML}DSML{_DSML} calls>") is True
+
+
+def test_dsml_plain_text_untouched() -> None:
+    """普通回复（无 DSML）逐字节不变。"""
+    s = "这是一段普通的话，没有 DSML，也没有竖线。"
+    assert _normalize_xml_actions(s) == s

@@ -476,6 +476,29 @@ export function ChatPage() {
   /** 有别的会话在跑 —— 全局只允许一轮，这时当前会话不能再开一条。 */
   const sendingElsewhere = sending && !sendingHere
 
+  /**
+   * ★ v1.49：**服务端**说这个会话还有一轮在跑（`lastRuns` 里最近一条是
+   * `running`）。
+   *
+   * 为什么光靠本地的 `sending` 不够：`sending` 只是**这个浏览器**握着的
+   * SSE 流的本地布尔。done 帧一旦丢了（网络抖动、切页面、关了又开），
+   * 本地 `sending` 会变成 false —— 可服务端那一轮**还在跑**。此时用户再
+   * 发一条，老代码会起一条新轮次，两条并行（老轮还在干、新轮 round=0 空转）
+   * = 用户看到的「问一句停一次 / 一直在循环」。
+   *
+   * 后端 P0 已经用 409 `TURN_ALREADY_RUNNING` 兜住了这条；这里把同一事实
+   * 反映到 UI 上：本地 `sending` 已经跟不上服务端时，也要把输入框变成
+   * 「插话」并给一句提示，而不是让用户以为可以开第二轮。
+   */
+  const serverRunning =
+    !sendingHere &&
+    !sendingElsewhere &&
+    (lastRuns[0]?.status === 'running' ||
+      lastRuns.some((run) => run.status === 'running'))
+
+  /** 当前会话这一轮正在跑（本地在跑，或服务端说还在跑）—— Enter 是插话。 */
+  const turnRunningHere = sendingHere || serverRunning
+
   const canSend =
     draft.trim().length > 0 && active !== null && !sendingElsewhere
 
@@ -523,7 +546,7 @@ export function ChatPage() {
     //   那会把这句话塞进**另一个会话的**轮次里（甚至塞进一个没人读的历史）。
     if (sendingElsewhere) return
 
-    if (sendingHere) {
+    if (turnRunningHere) {
       setDraft('')
       setInterjecting(true)
       try {
@@ -1460,9 +1483,11 @@ export function ChatPage() {
                   ? '先新建或打开一个对话'
                   : sendingHere
                     ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
-                    : sendingElsewhere
-                      ? '另一个对话正在跑 —— 等它跑完再发'
-                      : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
+                    : serverRunning
+                      ? '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
+                      : sendingElsewhere
+                        ? '另一个对话正在跑 —— 等它跑完再发'
+                        : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
               }
               /*
                 ★★ v0.100：跑的时候**不再禁用**输入框。
@@ -1490,8 +1515,10 @@ export function ChatPage() {
             {/*
               ★ v1.25：「中断」入口。只在**当前会话**正在跑时出现 ——
                 跑在别的会话里时这里根本没有可中断的轮次（见 `sendingElsewhere`）。
+              ★ v1.49：`turnRunningHere` 也包含服务端说还在跑（本地 done 帧
+                丢了）的情况 —— 那种时候用户更需要「中断」这个出口。
             */}
-            {sendingHere && (
+            {turnRunningHere && (
               <Button
                 onClick={() => setInterruptOpen(true)}
                 variant="ghost"
@@ -1513,10 +1540,10 @@ export function ChatPage() {
               */
               loading={interjecting}
               size="sm"
-              aria-label={sendingHere ? '插话' : '发送'}
+              aria-label={turnRunningHere ? '插话' : '发送'}
             >
               <Send size={14} strokeWidth={2} aria-hidden="true" />
-              {sendingHere ? '插话' : '发送'}
+              {turnRunningHere ? '插话' : '发送'}
             </Button>
           </div>
           </div>

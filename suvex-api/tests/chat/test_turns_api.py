@@ -217,3 +217,58 @@ def test_interrupt_with_a_running_turn_is_scheduled(
     # 信号真的落到了注册表（引擎下一个检查点会看到）
     assert interrupts.take_note(session_id) == "换个入口"
     interrupts.reset_all()
+
+
+def test_sending_a_message_while_a_turn_is_running_is_rejected(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ v1.49：会话已经有一轮在跑时，`POST .../messages/stream` 必须 409。
+
+    改造前这里什么都不查，`run_turn_durable` → `_run_guarded` →
+    `turn_run_store.start()` 是**无条件新建一条 turn**。线上事故
+    （chat_01M6BWQ69MZJNBAB7C7QMVXPV2）：一条长任务 turn 从 14:06 一直
+    running（浏览器 SSE 断了、服务端还在跑），用户以为停了就发「继续」，
+    结果同一会话上起了两条并发 turn —— 老的那条继续干，新起的那条
+    `round_index=0 / tools_used=0` 空转 20 多秒后 `done`。用户看到的就是
+    「问一句停一次」。
+
+    这个用例只验入口闸：有 open 轮次 → 409 `TURN_ALREADY_RUNNING`，
+    且**不会**因此落下第二条 turn。
+    """
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    db_session.commit()
+    assert run.status in turn_runs.OPEN_STATUSES
+
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/messages/stream",
+        json={"content": "继续"},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "TURN_ALREADY_RUNNING"
+
+    # 关键：没有偷偷多出第二条 turn。
+    rows = turn_runs.list_runs(db_session, session_id=session_id, limit=10)
+    assert len(rows) == 1, f"不该新建 turn，实际 {len(rows)} 条"
+
+
+def test_sending_a_message_is_allowed_after_the_running_turn_finishes(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """闸只拦「有 open 轮次」；那一轮结束（done）之后必须放行。
+
+    否则修完就又造出「会话再也发不出消息」的新坑。用一个会先撞上闸、
+    再被后面的空内容校验挡下的请求来区分：拿到 400（空内容）就说明
+    已经越过了 `TURN_ALREADY_RUNNING` 那道闸，也说明没有落在 409。
+    """
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    turn_runs.finish(db_session, run, status="done")
+    db_session.commit()
+
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/messages/stream",
+        json={"content": "   "},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] != "TURN_ALREADY_RUNNING"

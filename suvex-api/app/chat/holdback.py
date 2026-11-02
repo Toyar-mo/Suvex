@@ -107,6 +107,15 @@ _XML_PROTOCOL_TAGS: tuple[str, ...] = (
     "</result>",
 )
 
+# ★ v1.49：DeepSeek 的 DSML 全角标签（`</｜DSML｜ parameter>`，分隔符是全角竖线
+#   U+FF5C）。它们同样是协议噪声，不该出现在用户视野里；流式时见到即锁死，
+#   落库时由 `engine._normalize_xml_actions` 删掉。单独成组是因为它们不是
+#   "行首+冒号"也不是半角标签，`_XML_PROTOCOL_TAGS` 那套 `tag in line` 认不出。
+_DSML_PROTOCOL_MARKERS: tuple[str, ...] = (
+    "｜DSML｜",
+    "|DSML|",
+)
+
 #: 一行未写完时的三种判决（见模块 docstring 的表）。
 _PROTOCOL = "protocol"
 _SAFE = "safe"
@@ -172,6 +181,15 @@ def _verdict(line: str) -> str:
     for tag in _XML_PROTOCOL_TAGS:
         for cut in range(1, len(tag)):
             if current_line.endswith(tag[:cut]):
+                return _UNDECIDED
+    # ★ v1.49：DSML 全角标签同上 —— 行内出现即锁死；行尾是"半个标记"
+    #   （如 `</｜DSM`）时待定，防止把半截标记先放给用户。
+    for dsml in _DSML_PROTOCOL_MARKERS:
+        if dsml in current_line:
+            return _PROTOCOL
+    for dsml in _DSML_PROTOCOL_MARKERS:
+        for cut in range(1, len(dsml)):
+            if current_line.endswith(dsml[:cut]):
                 return _UNDECIDED
     if _is_protocol_head(line):
         return _PROTOCOL

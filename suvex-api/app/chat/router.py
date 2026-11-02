@@ -454,6 +454,31 @@ def send_message_stream(
         content = payload.content.strip()
         if not content:
             raise ApiError.validation("消息不能为空。", {"content": "必填"})
+
+        # ★ v1.49：这个会话**已经有一轮在跑**时，不许再起一轮。
+        #
+        # 改造前这里什么都不查，于是 `run_turn_durable` → `_run_guarded` →
+        # `turn_run_store.start()` 会**无条件新建一条 turn**。当一条长任务
+        # 正在跑（浏览器那条 SSE 可能已经断了、但服务端心跳还在），用户以为
+        # 「对话停了」就再发一句「继续」—— 结果同一会话上**两条 turn 并发**：
+        # 老的那条继续干，新建的那条抢不到活儿、round=0 空转 20 多秒后 `done`。
+        # 用户看到的就是「问一句停一次」：每次发话只换回一条空转的结束。
+        #
+        # 线上证据（chat_01M6BWQ69MZJNBAB7C7QMVXPV2）：turn_01M6E99VZ… 从
+        # 14:06 一直 running（客户端断开但服务端在跑），而 14:50/14:52 两条
+        # 「继续」各自新建的 turn 都是 `done / round_index=0 / tools_used=0`。
+        #
+        # 拒绝而不是静默新建：并发写同一个会话本就没有正确语义（两轮会各自
+        # 读同一份历史、各自追加消息，seq 会交错）。要插话用 `/interject`
+        # （排队到下一轮开头），要停/改方向用 `/interrupt`，要接手死掉的轮次
+        # 用 `/turns/{run_id}/resume` —— 这三条路都能选，唯独不该悄悄再开一轮。
+        latest = turn_runs.list_runs(db, session_id=session_id, limit=1)
+        if latest and latest[0].status in turn_runs.OPEN_STATUSES:
+            raise ApiError.conflict(
+                "TURN_ALREADY_RUNNING",
+                "这个对话还有一轮正在跑。想补一句话用「插话」，想让它停下或改方向用"
+                "「中断」，想接手已经断掉的那一轮点「继续」——它们都会接在同一轮上。",
+            )
     finally:
         # 校验完就关：这个会话的作用到此为止。**不要**把它交给生成器。
         db.close()

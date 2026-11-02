@@ -69,6 +69,7 @@ from app.chat.prompts import (
     render_plan_exhausted_note,
     render_format_reminder,
     render_native_tool_note,
+    render_stall_reminder,
     render_truncation_reminder,
 )
 from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
@@ -195,6 +196,18 @@ MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
 #: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
 MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
+
+#: ★ v1.49：同一条命令（工具+参数完全相同）连续执行多少次就判定"原地打转"。
+#:
+#: 实测（会话 chat_01M6BWQ69MZJNBAB7C7QMVXPV2 的 turn_01M6E99VZ…）：
+#: round_index 75、tools_used 101，模型在同一个死胡同里反复写「我意识到一个
+#: 从未做过的测试…现在真正运行」，跑的却是**同一条**命令、拿到**一模一样**的
+#: 结果。判据只认这个最硬的信号（完全相同 = 不可能有新信息），不掺任何长度/
+#: 语义启发式 —— 那些在技术性长文里误判率太高。
+#:
+#: 取 5：容许偶发的"重跑一次确认"（模型有时确实会重跑同一命令对比），
+#: 但连跑 5 次完全相同的命令而还在期待不同结果，只可能是策略走死了。
+MAX_REPEATED_ACTIONS = _env_int("SUPEX_CHAT_MAX_REPEATED_ACTIONS", 5)
 
 #: 跑过工具的轮次里，模型回了**空回复**时最多再推几次（v1.31）。
 #:
@@ -656,6 +669,26 @@ async def _call_model(
 # ══════════════════════════════════════════════════════════
 # 截断判据（v1.13）
 # ══════════════════════════════════════════════════════════
+
+
+def _action_signature(name: str, args: Any) -> str:
+    """一个动作的稳定签名，用于"原地打转"检测（v1.49）。
+
+    同一工具 + **参数完全相同** = 同一个动作。用 `json.dumps(sort_keys=True)`
+    保证字典顺序不影响判等：`{"a":1,"b":2}` 与 `{"b":2,"a":1}` 是同一个命令，
+    必须得到同一个签名，否则"模型每次把参数换个顺序写"就能绕过检测。
+
+    ★ 参数里的**文本内容**要逐字参与判等 —— 「同一条命令连跑 N 次」的定义就是
+      命令文本一模一样；只要命令改了一个字节（换个路径、加个参数），
+      就是"尝试了不同策略"，不该算打转。所以不做任何归一化/截断。
+    """
+    try:
+        rendered = json.dumps(args, sort_keys=True, ensure_ascii=False)
+    except (TypeError, ValueError):
+        # 参数不是可 JSON 化的（理论上不该发生，动作都来自 JSON 解析），
+        # 退化成 repr —— 宁可保守也算出一个签名，不要让检测因为一个怪参数崩掉。
+        rendered = repr(args)
+    return f"{name}\x00{rendered}"
 
 
 def _looks_unfinished(text: str) -> bool:
@@ -1689,6 +1722,55 @@ _XML_STRAY_TAG_RE = re.compile(
     r"</?(?:action|analysis|result|invoke|parameter)\b[^>]*>", re.DOTALL
 )
 
+# ★ v1.49：DeepSeek 的 DSML 风格 —— `<｜DSML｜ parameter>` / `<｜DSML｜ invoke>`
+#   / `<｜DSML｜ calls>`，分隔符是**全角竖线 U+FF5C**（`｜`，UTF-8 ef bd 9c），
+#   竖线与词之间常有空格。线上实测（会话 chat_01M6BWQ69MZJNBAB7C7QMVXPV2
+#   的 turn_01M6E99VZ…，2026-11-02）：模型只写**收尾标记**（`</｜DSML｜ parameter>`
+#   等），命令体直接内联在正文里、前面**没有**开标签、没有 `name=`、没有
+#   `tool` 标记 —— 于是 v1.41/v1.44/v1.48 都认不出，这一轮被判「无动作」，
+#   反复「我意识到一个从未做过的测试…现在真正运行」却执行不了，空转 75 轮。
+#
+#   两种形态分别处理：
+#   1. 有真 `<parameter name="X">body</parameter>`（开标签在，可能是全角也可能是
+#      半角）→ 交给 `_parameter_blocks_to_actions` 合成动作（先把它规范成半角标签）。
+#   2. 只有收尾标记、没有开标签 → 这些标记**只是正文噪声**，直接删掉（不猜命令，
+#      因为无从得知哪段文本是命令、传给哪个工具）。
+_DSML_TAG_RE = re.compile(r"</?\s*[｜|]\s*DSML\s*[｜|]\s*[A-Za-z_]+[^>]*>", re.DOTALL)
+#: 带 `name="X"` 的 DSML 开标签（`<｜DSML｜ parameter name="command">`）。
+_DSML_NAMED_INVOKE_RE = re.compile(
+    r"<\s*[｜|]\s*DSML\s*[｜|]\s*invoke\s+name\s*=\s*\"([^\"]+)\"\s*>", re.DOTALL
+)
+
+
+def _is_dsml(text: str) -> bool:
+    return bool(text) and bool(_DSML_TAG_RE.search(text))
+
+
+def _dsml_tag_to_halfwidth(match: re.Match[str]) -> str:
+    """把一个 DSML 标签改写成对应的半角标签。
+
+    只做"翻译"，不做判断：`</｜DSML｜ parameter>` → `</parameter>`；
+    `<｜DSML｜ invoke name="run_shell">` → `<invoke name="run_shell">`；
+    `<｜DSML｜ parameter name="command">` → `<parameter name="command">`；
+    `<｜DSML｜ calls>` / `</｜DSML｜ calls>` → 空串（`calls` 只是外层包裹）。
+    翻译后交给现有的半角正则链路（`_parameter_blocks_to_actions` /
+    `_XML_INVOKE_TAG_RE` / `_XML_STRAY_TAG_RE`）统一处理。
+    """
+    raw = match.group(0)
+    closing = raw.lstrip().startswith("</")
+    # 去掉前后 `<`/`</` `>` 与分隔符，取出"标签名 + 属性"
+    body = raw[2:] if closing else raw[1:]
+    body = body.rsplit(">", 1)[0]
+    body = re.sub(r"^\s*[｜|]\s*DSML\s*[｜|]\s*", "", body).strip()
+    name = re.match(r"([A-Za-z_]+)", body)
+    tag = name.group(1).lower() if name else ""
+    if tag == "calls":
+        return ""  # 外层包裹，无意义
+    attrs = body[name.end() :] if name else ""
+    if closing:
+        return f"</{tag}>"
+    return f"<{tag}{attrs}>" if attrs else f"<{tag}>"
+
 
 def _parameter_blocks_to_actions(text: str) -> str:
     """把 Anthropic 风格 `<parameter>` 组改写成 `ACTION:` 行（v1.48）。
@@ -1772,8 +1854,17 @@ def _normalize_xml_actions(text: str) -> str:
             "<invoke",
             "</invoke",
         )
-    ):
+    ) and not _is_dsml(text):
         return text
+    # ★ v1.49：先把 DSML 全角标签规范成半角，让下游正则统一处理。
+    #
+    #   `<｜DSML｜ parameter>`（收尾，无开标签）→ `</parameter>`。这类只有收尾
+    #   标记的形态，命令体内联在正文里、无处可还原，删掉标记即可（下面的
+    #   `_XML_STRAY_TAG_RE` 会清掉裸 `</parameter>`）；**不猜**它是哪个工具。
+    #   `<｜DSML｜ parameter name="command">`（有开标签）→ `<parameter name="command">`，
+    #   交给 `_parameter_blocks_to_actions` 正常合成动作。
+    if _is_dsml(text):
+        text = _DSML_TAG_RE.sub(_dsml_tag_to_halfwidth, text)
     # 先删 <analysis> / <result>（都不该进正文），再改写 <action>。
     text = _XML_ANALYSIS_RE.sub("", text)
     text = _XML_RESULT_RE.sub("", text)
@@ -1793,6 +1884,8 @@ def _has_protocol_marker_or_xml(text: str) -> bool:
         tag in (text or "")
         for tag in ("<action>", "<result>", "<parameter", "<invoke", "</invoke")
     ):
+        return True
+    if _is_dsml(text):
         return True
     return _has_protocol_marker(text)
 
@@ -2110,6 +2203,13 @@ async def run_turn(
     #: ★ 与 `nudges_used` 分开：共用一个数时，前面几次叙述纠偏会把空回复
     #:   的额度一起吃掉，于是计划句之后的第一个空回复就被判「额度用完」。
     empty_nudges_used = 0
+
+    #: ★ v1.49：最近执行过的动作签名（工具+参数），用于"原地打转"检测。
+    #:   只留最近 `MAX_REPEATED_ACTIONS` 条，够判连续重复即可。
+    recent_action_sigs: list[str] = []
+    #: ★ v1.49：这一轮是否已经因为"原地打转"提醒过一次 —— 只提醒一次，
+    #:   不能每轮都喂同一句（那就成了新的死循环）。
+    stall_warned = False
 
     if resume_from is not None:
         nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
@@ -2636,6 +2736,28 @@ async def run_turn(
             result.messages.append(tool_message)
             db.commit()
             await _emit_message(emit, tool_message)
+
+            # ★ v1.49：原地打转检测 —— 同一条命令（工具+参数完全相同）
+            #   连续执行 MAX_REPEATED_ACTIONS 次 = 只可能在空转。
+            #   判据只认这个最硬的信号（完全相同 = 不可能有新信息），不掺
+            #   长度/语义启发式（技术性长文里误判率太高）。
+            sig = _action_signature(name, args)
+            recent_action_sigs.append(sig)
+            if len(recent_action_sigs) > MAX_REPEATED_ACTIONS:
+                del recent_action_sigs[0]
+            if (
+                not stall_warned
+                and len(recent_action_sigs) >= MAX_REPEATED_ACTIONS
+                and len(set(recent_action_sigs)) == 1
+            ):
+                # 只提醒一次：喂回去之后本轮不再重复同一句（否则又成死循环）。
+                pending_reminder = render_stall_reminder(
+                    name, len(recent_action_sigs)
+                )
+                stall_warned = True
+                _log.warning(
+                    "chat.stall tool=%s repeated=%s", name, len(recent_action_sigs)
+                )
 
     return result
 

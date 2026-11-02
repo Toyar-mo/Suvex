@@ -501,6 +501,49 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
       话发两遍。所以这两条都不是"体验优化"，是会造成错误数据的缺陷。
   */
 
+  it('★ v1.49：服务端说这一轮还在跑（本地 done 帧丢了）→ Enter 是「插话」不是发新轮', async () => {
+    /*
+      线上事故：done 帧丢了以后本地 `sending` 变成 false，可服务端那一轮还在
+      跑。老代码这时会冒然 sendMessage → 起第二轮，老轮还在干、新轮 round=0
+      空转 = 「问一句停一次 / 一直在循环」。
+
+      现在：`lastRuns` 里最近一条是 `running` 时，输入框该显示「插话」按钮，
+      并且 Enter 走 interject（不是 sendMessage）。
+    */
+    mockedListTurns.mockResolvedValue([
+      {
+        id: 'run_1',
+        sessionId: 'chat_1',
+        status: 'running',
+        resumeAttempts: 0,
+        startedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        resumable: false,
+      },
+    ])
+    mockedInterject.mockResolvedValue('ok')
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
+    renderPage('/chat?session=chat_1')
+
+    // 按钮文案变成「插话」（服务端在跑 → turnRunningHere 为真）
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: '插话' }),
+        '服务端还在跑时按钮必须显示「插话」，而不是「发送」',
+      ).toBeTruthy()
+    })
+
+    const box = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    fireEvent.change(box, { target: { value: '换一个思路' } })
+    fireEvent.keyDown(box, { key: 'Enter', shiftKey: false, isComposing: false })
+
+    await waitFor(() => expect(mockedInterject).toHaveBeenCalled())
+    expect(
+      mockedSendMessage,
+      '服务端说还在跑时绝不能起新一轮（sendMessage），否则就是并发双轮',
+    ).not.toHaveBeenCalled()
+  })
+
   it('★ 点下发送的瞬间，输入框就空了', async () => {
     /*
       用 `Promise` 手动控制 `sendMessage` 何时 resolve —— 只要它没 resolve，
