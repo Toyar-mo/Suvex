@@ -70,6 +70,64 @@ _INTENT = re.compile(
 #: 「我先看了一下」，那不是"停在半路"。真正的形态是**短短一句打算**。
 MAX_UNFINISHED_CHARS = 200
 
+#: 围栏代码块（``` ... ```）。v1.50：模型把 shell 命令**写进代码块正文**、
+#: 却不写 `ACTION:` 时，那段命令是它\"想执行\"的强信号 —— 与长度无关。
+_FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+
+#: 一眼看着像 shell 命令的行（代码块里出现一行即可判定）。
+#: 只认命令式的开头词，避免把普通英文/示例文本误判成\"要执行\"。
+_SHELL_LINE = re.compile(
+    r"(?:^|\n)\s*(?:"
+    r"cd|ls|cat|grep|find|python3?|pip3?|bash|sh|curl|wget|apt-get|apt|"
+    r"chmod|chown|mkdir|rm|cp|mv|tar|unzip|objdump|readelf|nm|strings|file|"
+    r"xxd|hexdump|base64|echo|sed|awk|nc|ncat|socat|openssl|docker|git|"
+    r"\./|/bin/|/usr/"
+    r")\b"
+)
+
+
+def has_unactioned_command(text: str) -> bool:
+    """正文里写了（围栏代码块中的）shell 命令，但没有 `ACTION:`（v1.50）。
+
+    ## 为什么需要它
+
+    线上实测（会话 `chat_01M6BWQ69MZJNBAB7C7QMVXPV2`，seq 660）：模型说
+    「我现在做一件从未检查过的事：对全部图像做 LSB 隐写提取」，然后**把
+    shell 命令原样贴进代码块**，没写 `ACTION:`。整轮 `chat.round` 记到
+    `actions=0 / tools=0 / text_len=666`：
+
+    - `looks_like_plan` → False（没有「先/现在/接下来」这类标记落在收尾三句窗口）
+    - `looks_unfinished` → False（正文 ≥ `MAX_UNFINISHED_CHARS`=200，被判成\"长结论\"）
+    - `tools_used == 0` → 那条\"跑过工具就推\"的分支够不着
+
+    三条判据全部漏掉 → `should_nudge=False`、`nudges=0` → 直接 `giveup
+    no_action`，整轮 `done`，界面停在「继续」上。**这就是用户说的\"还是会停\"。**
+
+    但是\"正文里有一段 shell 命令、且没走 ACTION 协议\"是**极强**的\"想执行\"
+    信号 —— 比任何长度/意图词都硬。把它单独认出来，与长度无关地推一次
+    （提醒它\"命令要用 ACTION 协议写\"），就能救回这一类。
+
+    ## 为什么不复用 `looks_unfinished`
+
+    那个函数刻意很窄（短短一句 + 意图词），是给\"问答型半句\"用的。这里
+    要认的是另一个形态：\"写了命令但没走协议\"。两者病因与药都不同（见
+    模块 docstring 的表），共用一个判据会两头都判不准。
+    """
+    body = text or ""
+    if "ACTION:" in body or "FINAL:" in body:
+        # 已经走了文本协议 —— 不是这一类。`_normalize_xml_actions` 之外的
+        # 残缺协议另有分支处理，这里不掺和。
+        return False
+    # 形态一：围栏代码块里的 shell 命令。
+    for block in _FENCED_BLOCK.findall(body):
+        if _SHELL_LINE.search(block):
+            return True
+    # 形态二（线上 seq 660 的真实形态）：命令**裸写在正文里**，没有围栏。
+    # 用整段匹配 —— `_SHELL_LINE` 锚在行首，正文那行 `cd /work/... && python3`
+    # 会命中。为了不把"叙述里提到 cd/curl"之类误判，要求该行是**命令式**
+    # （行首就是命令词），而不是出现在句中。
+    return bool(_SHELL_LINE.search(body))
+
 
 def split_final(raw: str) -> tuple[str, bool]:
     """把回复开头的 `FINAL:` 摘掉，并告诉调用方它有没有写。
@@ -386,6 +444,12 @@ def should_nudge(
         #   为什么不在这里加"像不像半句"的判据：实测「`pwd` 输出是 `/work`。」
         #   这种 18 字的**完整**回答，任何长度/标点启发式都会误判；而误判成
         #   "说完了"就等于放行一次半路停 —— 那是更贵的错。
+        return tool_nudges_used < max_tool_nudges
+    # ★ v1.50：正文里塞了一段 shell 命令却没走 `ACTION:` —— 想执行但没走对
+    #   协议。这是最强的\"要动手\"信号，**与长度无关**地推一次（否则 666 字的
+    #   这类回复会被 `looks_unfinished` 的长度闸挡掉，直接 giveup = 用户看到
+    #   \"还是会停\"）。给它独立且更大的额度，别被\"纯问答\"那 2 次预算卡死。
+    if has_unactioned_command(text):
         return tool_nudges_used < max_tool_nudges
     if nudges_used >= max_nudges:
         return False

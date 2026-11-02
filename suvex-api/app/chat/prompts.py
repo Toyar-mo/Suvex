@@ -666,7 +666,7 @@ def render_tool_hint(hinted: list[str] | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_format_reminder() -> str:
+def render_format_reminder(code_block_only: bool = False) -> str:
     """模型只写了人话、没写动作时，喂回去的一句纠偏（v1.13）。
 
     ## 为什么需要它（这是真实缺陷的修法）
@@ -692,11 +692,18 @@ def render_format_reminder() -> str:
     模型试图把断掉的话写完，于是又超一次。
     """
     sample = 'ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work"}}'
-    return (
-        "## ⚠️ 你上一条回复没有包含动作\n\n"
+    pasted = (
+        "## ⚠️ 你把命令写进了代码块/正文，但它没有被执行\n\n"
+        "我看到了你贴的 shell 命令，但**那只是文字**——没有 `ACTION:` 行，"
+        "工具一个都没有运行，命令结果也不会回来。\n\n"
+        if code_block_only
+        else "## ⚠️ 你上一条回复没有包含动作\n\n"
         "那一轮里没有 `ACTION:` 行 —— 所以工具一个都没有执行，"
         "如果没有这句提醒，这一轮就到此结束了。\n\n"
-        "如果你还要继续做事，**现在直接写下一步的 ACTION**，不要重复刚才的叙述：\n\n"
+    )
+    return (
+        pasted
+        + "如果你还要继续做事，**现在直接写下一步的 ACTION**，不要重复刚才的叙述：\n\n"
         f"```\n{sample}\n```\n\n"
         f"可用工具：{'、'.join(sorted(CHAT_TOOL_NAMES))}\n\n"
         "如果你已经全部做完了，就用一段话给出结论，不要再写 ACTION。"

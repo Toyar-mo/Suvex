@@ -2413,7 +2413,9 @@ async def run_turn(
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if truncated
-                    else render_format_reminder()
+                    else render_format_reminder(
+                        code_block_only=nudge_policy.has_unactioned_command(text)
+                    )
                 )
                 # ★ v1.14：纠偏续跑必须有个可见的 Phase 帧。
                 #
@@ -2636,7 +2638,12 @@ async def run_turn(
                 nudges_used += 1
                 if _is_truncated(reply):
                     truncations_used += 1
-                elif tools_used > 0:
+                elif tools_used > 0 or nudge_policy.has_unactioned_command(text):
+                    # ★ v1.50：\"正文里写了 shell 命令却没走 ACTION\"同样走
+                    #   `tool_nudges` 额度 —— 否则它既不在 `tools_used>0` 分支
+                    #   累加计数、又绕过了 narration 额度（`has_unactioned_command`
+                    #   分支直接返回 True），`tool_nudges_used < max_tool_nudges`
+                    #   永远为真 → 死循环。
                     tool_nudges_used += 1
                 # ★ v1.25：这句是**被纠偏推掉的提前结论**，不是最终答复。
                 #   降级成过程面 —— 否则用户会看到两条几乎一样的结论气泡
@@ -2645,7 +2652,9 @@ async def run_turn(
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if truncated
-                    else render_format_reminder()
+                    else render_format_reminder(
+                        code_block_only=nudge_policy.has_unactioned_command(text)
+                    )
                 )
                 # ★ v1.14：同上 —— 自动续跑要让用户看得见（见空回复分支的长注释）。
                 #
@@ -2947,7 +2956,9 @@ async def resume_approved(
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if nudge_truncated
-                    else render_format_reminder()
+                    else render_format_reminder(
+                        code_block_only=nudge_policy.has_unactioned_command(text)
+                    )
                 )
                 continue
 
@@ -3054,7 +3065,12 @@ async def resume_approved(
                 nudges_used += 1
                 if _is_truncated(reply):
                     truncations_used += 1
-                elif tools_used > 0:
+                elif tools_used > 0 or nudge_policy.has_unactioned_command(text):
+                    # ★ v1.50：\"正文里写了 shell 命令却没走 ACTION\"同样走
+                    #   `tool_nudges` 额度 —— 否则它既不在 `tools_used>0` 分支
+                    #   累加计数、又绕过了 narration 额度（`has_unactioned_command`
+                    #   分支直接返回 True），`tool_nudges_used < max_tool_nudges`
+                    #   永远为真 → 死循环。
                     tool_nudges_used += 1
                 # ★ v1.25：这句是**被纠偏推掉的提前结论**，不是最终答复。
                 #   降级成过程面 —— 否则用户会看到两条几乎一样的结论气泡
@@ -3062,7 +3078,9 @@ async def resume_approved(
                 pending_reminder = (
                     render_truncation_reminder(len(raw_text))
                     if _is_truncated(reply)
-                    else render_format_reminder()
+                    else render_format_reminder(
+                        code_block_only=nudge_policy.has_unactioned_command(text)
+                    )
                 )
                 continue
 
