@@ -52,13 +52,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.chat import sandbox as chat_sandbox
-from app.chat import service as chat_service
-from app.chat.models import ChatMessage, ChatSession
 from app.chat import failure as failure_kind
 from app.chat import interrupts as interrupt_bus
 from app.chat import nudge as nudge_policy
+from app.chat import sandbox as chat_sandbox
+from app.chat import service as chat_service
 from app.chat import turn_runs as turn_run_store
+from app.chat.models import ChatMessage, ChatSession
 from app.chat.prompts import (
     CHAT_TOOL_NAMES,
     CONSEQUENTIAL_TOOL_NAMES,
@@ -66,9 +66,9 @@ from app.chat.prompts import (
     build_system_prompt,
     may_call_tool,
     render_final_confirm_reminder,
-    render_plan_exhausted_note,
     render_format_reminder,
     render_native_tool_note,
+    render_plan_exhausted_note,
     render_stall_reminder,
     render_truncation_reminder,
 )
@@ -1703,6 +1703,10 @@ _XML_ANALYSIS_RE = re.compile(r"<analysis>.*?</analysis>", re.DOTALL)
 #   一直写"执行。/<result>ok</result>"空转（线上实测会话
 #   `chat_01M6BWQ69MZJNBAB7C7QMVXPV2`：单轮 40 回合、77 工具、37 次纠偏）。
 _XML_RESULT_RE = re.compile(r"<result>.*?</result>", re.DOTALL)
+# ★ v1.52：模型自创的"安全自检"块 `<ds_safety>…</ds_safety>`（线上见
+#   `<ds_safety>[用户未成年]否 [分类]其他 [判定]…[规则]无</ds_safety>`）。
+#   与 `<analysis>` 同类：推理/自检不进正文，也不该随历史回灌。
+_XML_DS_SAFETY_RE = re.compile(r"<ds_safety\b[^>]*>.*?</ds_safety>", re.DOTALL)
 # ★ v1.48：模型改用 Anthropic 工具调用风格——`<parameter name="command">…</parameter>`
 #   + `<parameter name="tool">run_shell</parameter>`，外面常常**没有** `<invoke>` 开标签、
 #   只有 `</invoke>` 收尾。参数体是**纯文本**（可含换行/heredoc/引号/花括号），
@@ -1719,7 +1723,13 @@ _XML_INVOKE_TAG_RE = re.compile(r"</?invoke\b[^>]*>", re.DOTALL)
 _XML_INVOKE_NAME_RE = re.compile(r'<invoke\s+name\s*=\s*"([^"]+)"[^>]*>', re.DOTALL)
 #: 收尾兜底：删掉还没闭合/落单的协议标签本身（增量截断时可能只剩半个标签）。
 _XML_STRAY_TAG_RE = re.compile(
-    r"</?(?:action|analysis|result|invoke|parameter)\b[^>]*>", re.DOTALL
+    r"</?(?:action|analysis|result|invoke|parameter|ds_safety)\b[^>]*>", re.DOTALL
+)
+#: ★ v1.52：判断"要不要走规范化"的**同一套**标签集合（含收尾 `/` 形态）。
+#:   与 `_XML_STRAY_TAG_RE` 保持一致——历史上正因为两处集合不同（v1.48 守卫漏了
+#:   `</parameter>`）导致裸收尾标记原样漏出、甚至被拼进要执行的 shell 命令。
+_XML_ANY_PROTOCOL_TAG_RE = re.compile(
+    r"</?(?:action|analysis|result|invoke|parameter|ds_safety)\b[^>]*>", re.DOTALL
 )
 
 # ★ v1.49：DeepSeek 的 DSML 风格 —— `<｜DSML｜ parameter>` / `<｜DSML｜ invoke>`
@@ -1842,19 +1852,13 @@ def _normalize_xml_actions(text: str) -> str:
 
     只在**检测到** XML 协议标签时才动；普通回复（无 XML）逐字节不变。
     """
-    if not text or not any(
-        tag in text
-        for tag in (
-            "<action>",
-            "<analysis>",
-            "<result>",
-            "</result>",
-            "</action>",
-            "<parameter",
-            "<invoke",
-            "</invoke",
-        )
-    ) and not _is_dsml(text):
+    # ★ v1.52：这个"要不要动手"的守卫**必须**和 `_XML_STRAY_TAG_RE` 认的标签集合
+    #   一致。历史教训：v1.48 只把 `"<parameter"` 放进守卫、漏了 `"</parameter>"`
+    #   —— 于是「只有收尾 `</parameter>`、没有开标签」的正文**直接原样返回**，
+    #   残留标记既没被 strip、还会随历史回灌（线上 seq794/818：`</parameter>`
+    #   甚至被拼进了 shell 命令，bash 报 `/parameter: No such file or directory`）。
+    #   现在改用同一个正则判断，杜绝两处集合漂移。
+    if not text or not (_XML_ANY_PROTOCOL_TAG_RE.search(text) or _is_dsml(text)):
         return text
     # ★ v1.49：先把 DSML 全角标签规范成半角，让下游正则统一处理。
     #
@@ -1865,25 +1869,28 @@ def _normalize_xml_actions(text: str) -> str:
     #   交给 `_parameter_blocks_to_actions` 正常合成动作。
     if _is_dsml(text):
         text = _DSML_TAG_RE.sub(_dsml_tag_to_halfwidth, text)
-    # 先删 <analysis> / <result>（都不该进正文），再改写 <action>。
+    # 先删 <analysis> / <result> / <ds_safety>（都不该进正文），再改写 <action>。
     text = _XML_ANALYSIS_RE.sub("", text)
     text = _XML_RESULT_RE.sub("", text)
+    # ★ v1.52：`<ds_safety>...</ds_safety>` 是模型的另一套"安全自检"块（线上见
+    #   `<ds_safety>[用户未成年]否 [分类]其他 [判定]…[规则]无</ds_safety>`）。
+    #   它与 `<analysis>` 同类：既不该给用户看，也不该随历史回灌（和 v1.44 的
+    #   `<result>` 一样会自我强化）。整块删掉。只删成对的；落单的收尾标记由下面
+    #   `_XML_STRAY_TAG_RE` 兜。
+    text = _XML_DS_SAFETY_RE.sub("", text)
     # v1.48：Anthropic 风格 <parameter> 组 → ACTION:（在删 <action> 之前做，
     # 两者不会同时出现；分开放是为了各自可读、可单独测）。
     if "<parameter" in text:
         text = _parameter_blocks_to_actions(text)
         text = _XML_INVOKE_TAG_RE.sub("", text)  # 去掉 <invoke>/</invoke> 外壳
     text = _XML_ACTION_RE.sub(lambda m: "\nACTION: " + m.group(1) + "\n", text)
-    # 兜底：清掉落单/未闭合的标签残留（如半截 `<result>`、`</invoke>`）。
+    # 兜底：清掉落单/未闭合的标签残留（如半截 `<result>`、`</invoke>`、`</parameter>`）。
     return _XML_STRAY_TAG_RE.sub("", text)
 
 
 def _has_protocol_marker_or_xml(text: str) -> bool:
     """正文里已经有文本协议（`ACTION:`/`FINAL:`）**或** XML 块吗。"""
-    if any(
-        tag in (text or "")
-        for tag in ("<action>", "<result>", "<parameter", "<invoke", "</invoke")
-    ):
+    if _XML_ANY_PROTOCOL_TAG_RE.search(text or ""):
         return True
     if _is_dsml(text):
         return True
@@ -3164,7 +3171,7 @@ FAILED_NOTE = (
 )
 
 
-def _collapse_turn_answers(db: Session, result: "ChatTurnResult") -> None:
+def _collapse_turn_answers(db: Session, result: ChatTurnResult) -> None:
     """一轮里**只保留最后一条** assistant 消息作为 `answer`（v1.25）。
 
     ## 为什么

@@ -105,6 +105,16 @@ _XML_PROTOCOL_TAGS: tuple[str, ...] = (
     #   落库时由 `engine._normalize_xml_actions` 整块删掉。
     "<result>",
     "</result>",
+    # ★ v1.52：v1.48 的 `<parameter>`/`<invoke>` 与 v1.52 的 `<ds_safety>` 当时**漏加**
+    #   到这里——于是流式时被当普通文本放行，用户直播流里看到 `</parameter>`，
+    #   线上甚至把它拼进了要执行的 shell 命令（bash 报 `/parameter: No such file`）。
+    #   这里用不带 `>` 的开放前缀，收尾/带属性形态都能命中。
+    "<parameter",
+    "</parameter",
+    "<invoke",
+    "</invoke",
+    "<ds_safety",
+    "</ds_safety",
 )
 
 # ★ v1.49：DeepSeek 的 DSML 全角标签（`</｜DSML｜ parameter>`，分隔符是全角竖线

@@ -468,3 +468,22 @@ def test_xml_analysis_tag_blocks_live_stream() -> None:
     assert blocked is True
     assert "<analysis>" not in released
     assert "内心推理" not in released
+
+
+def test_parameter_and_ds_safety_tags_block_live_stream() -> None:
+    """v1.52：`</parameter>` / `<ds_safety>` 也必须在流式时锁死。
+
+    历史坑：v1.48/v1.52 把这两个标签只加进了 engine 的落库清洗，**忘了**加进
+    `holdback._XML_PROTOCOL_TAGS`，于是用户直播流里能看到 `</parameter>`
+    （线上 seq794），落库是干净的、界面却是脏的——最难查的那种形态。
+    """
+    for raw in (
+        "人话。</parameter> 继续。",
+        "人话。<parameter name=\"command\">id</parameter>",
+        "<ds_safety>[判定]无</ds_safety>后面。",
+    ):
+        released, blocked = _run([raw])
+        assert blocked is True, f"应当锁死: {raw!r}"
+        assert "</parameter>" not in released
+        assert "<parameter" not in released
+        assert "ds_safety" not in released

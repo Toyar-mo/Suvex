@@ -290,3 +290,67 @@ def test_dsml_plain_text_untouched() -> None:
     """普通回复（无 DSML）逐字节不变。"""
     s = "这是一段普通的话，没有 DSML，也没有竖线。"
     assert _normalize_xml_actions(s) == s
+
+
+# ---------------------------------------------------------------------------
+# v1.52：只有收尾 `</parameter>`、没有开标签的正文，曾经原样漏出（守卫集合缺
+#   `</parameter>`），线上甚至被拼进 shell 命令（bash 报 `/parameter: No such
+#   file or directory`）。以及模型自创的 `<ds_safety>` 安全自检块。
+# ---------------------------------------------------------------------------
+
+#: 线上 (2026-11-02, 会话 chat_01M6BWQ69MZJNBAB7C7QMVXPV2) seq794 正文的形态：
+#: 一段裸命令 + 结尾孤零零的 `</parameter> 继续：…`
+_LIVE_SEQ794 = (
+    "容器又被回收了。关键产物 `scriptobjects.bin` 已保存到持久区，我用它继续工作。\n"
+    "\n"
+    "cd /work && ls -l /work/persist/chisaki/scriptobjects.bin 2>/dev/null; "
+    "echo done</parameter> 继续：确认持久区里的拿到了 scriptobjects.bin，并重建 so。\n"
+)
+
+
+def test_lone_closing_parameter_tag_is_removed() -> None:
+    """只有收尾 `</parameter>` 也不能漏出（回归 v1.48 守卫集合缺项）。"""
+    out = _normalize_xml_actions(_LIVE_SEQ794)
+    assert "</parameter>" not in out
+    assert "<parameter" not in out
+    # 命令正文与人话都在，只少了那个标记。
+    assert "scriptobjects.bin" in out
+    assert "继续：确认" in out
+
+
+def test_lone_closing_parameter_does_not_corrupt_command() -> None:
+    """线上的致命细节：`</parameter>` 拼进 shell 命令会让 bash 报错。
+    规范化之后，命令里不能再出现 `/parameter` 这种要被当成路径执行的碎片。"""
+    out = _normalize_xml_actions(_LIVE_SEQ794)
+    assert "/parameter" not in out
+
+
+def test_has_protocol_marker_or_xml_detects_lone_parameter_close() -> None:
+    assert _has_protocol_marker_or_xml("x</parameter>") is True
+
+
+def test_ds_safety_block_is_removed_keeps_surrounding_text() -> None:
+    text = (
+        "开头一句人话。\n"
+        "<ds_safety>[用户未成年]否\n"
+        "[分类]其他\n"
+        "[判定]用户输入为继续分析 CTF 的技术请求。\n"
+        "[规则]无</ds_safety>\n"
+        "结尾一句人话。\n"
+    )
+    out = _normalize_xml_actions(text)
+    assert "ds_safety" not in out
+    assert "用户未成年" not in out
+    assert "[判定]" not in out
+    assert "开头一句人话" in out
+    assert "结尾一句人话" in out
+
+
+def test_bare_ds_safety_closing_tag_is_removed() -> None:
+    out = _normalize_xml_actions("人话。</ds_safety>后面的话。")
+    assert "ds_safety" not in out
+    assert "人话。" in out and "后面的话" in out
+
+
+def test_has_protocol_marker_or_xml_detects_ds_safety() -> None:
+    assert _has_protocol_marker_or_xml("<ds_safety>x</ds_safety>") is True
