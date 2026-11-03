@@ -151,6 +151,16 @@ const CATEGORY_FILTERS: { value: CanonicalCategory | 'all'; label: string }[] = 
   })),
 ]
 
+/**
+ * 来源筛选（第三个维度）：按「接入」分开看题。
+ *
+ * ★ 为什么不写死成两个固定按钮（CTF2 / DASCTF Pro）：接入是**可增删**的，
+ *   写死会让"新识别一个平台"之后它在筛选栏里不存在，题只能并到「全部」里看不见。
+ *   所以选项从**当前题目集合里真实出现过的 `platformSlug`** 现算 ——
+ *   有哪个接入的题，就出现哪个按钮；没题的接入不必占一格。
+ */
+type SourceFilter = string // platformSlug，或 'all'
+
 // ── ★ 开发期不变量：各桶的并集必须覆盖**全部**状态 ────────────────
 //
 // 漏掉一个状态的后果不是"少一个 tab"，而是**那类题在任何筛选下都看不见**，
@@ -177,6 +187,7 @@ export function KernelPage() {
 
   const [filter, setFilter] = useState<KernelChallengeStatus | 'all'>('all')
   const [categoryFilter, setCategoryFilter] = useState<CanonicalCategory | 'all'>('all')
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   /** 正在确认提交的那道题 —— 存**整个对象**而不是 id */
@@ -259,7 +270,7 @@ export function KernelPage() {
   }, [notice])
 
   /**
-   * 只按「状态」收窄后的集合 —— 分类筛选的**计数**要基于它。
+   * 只按「状态」收窄后的集合 —— 分类/来源筛选的**计数**要基于它。
    *
    * ★ 为什么计数不直接用 `challenges`：如果分类标签的计数用全量算，
    *   用户在「未开始」下点「逆向」会看到"标签写 67、列表只 4 条"，
@@ -270,12 +281,29 @@ export function KernelPage() {
     return challenges.filter((item) => bucket.match.includes(item.status))
   }, [challenges, filter])
 
+  /**
+   * 实际出现过的接入来源（去重、按出现顺序）。来源筛选项由此现算 ——
+   * 见 `SourceFilter` 的说明：写死会让新接入的题无处可筛。
+   */
+  const sourceOptions: { value: string; label: string }[] = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const c of challenges) {
+      if (!c.platformSlug) continue
+      if (!seen.has(c.platformSlug)) seen.set(c.platformSlug, c.platformName || c.platformSlug)
+    }
+    return [...seen.entries()].map(([value, label]) => ({ value, label }))
+  }, [challenges])
+
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase()
     // ★ 用桶的 `match` 而不是"桶名 == 状态名" —— 见 `STATUS_FILTERS` 的说明。
     //   严格相等会让 `environment_ready` / `submitting` 那两类题
     //   **从所有筛选下消失**（它们不属于任何一个桶）。
     return challengesInStatusBucket.filter((item) => {
+      // 来源维度：与状态/分类都是「与」关系
+      if (sourceFilter !== 'all' && (item.platformSlug || '') !== sourceFilter) {
+        return false
+      }
       // 分类维度：与状态是「与」关系
       if (categoryFilter !== 'all' && canonicalCategoryOf(item.canonicalCategory) !== categoryFilter) {
         return false
@@ -290,7 +318,7 @@ export function KernelPage() {
         item.remoteId.includes(text)
       )
     })
-  }, [challengesInStatusBucket, categoryFilter, query])
+  }, [challengesInStatusBucket, sourceFilter, categoryFilter, query])
 
   // ── 动作 ──────────────────────────────────────────────
   //
@@ -620,6 +648,42 @@ export function KernelPage() {
             })}
           </div>
 
+          {/*
+            ── 来源筛选（第三个维度：按「接入」分开看题） ──
+            ★ 只要**有题目带着来源**就显示，哪怕只有一个来源：这一行本身
+              就在回答"这些题是从哪个接入同步来的"（用户 2026-11-03 的原话：
+              "接入之后题目在哪"）。只有全都没有来源信息时才隐藏 —— 那时
+              每个按钮都等于「全部」，纯噪音。
+            ★ 选项由 `sourceOptions` 从真实题目里现算 —— 新识别一个平台、
+              它同步下来的题一进来，这里就自动多一格，不需要改代码。
+            ★ 计数同样按当前状态桶算，和列表口径一致。
+          */}
+          {sourceOptions.length > 0 && (
+            <div role="group" aria-label="按接入来源筛选" className="flex flex-wrap items-center gap-1">
+              {[{ value: 'all', label: '全部来源' }, ...sourceOptions].map((item) => {
+                const count = challengesInStatusBucket.filter((c) =>
+                  item.value === 'all' ? true : (c.platformSlug || '') === item.value,
+                ).length
+                const isActive = sourceFilter === item.value
+                return (
+                  <ToggleChip
+                    key={item.value}
+                    active={isActive}
+                    onToggle={() => setSourceFilter(item.value)}
+                  >
+                    {item.label}
+                    <span
+                      className={cn('tabular text-2xs', isActive ? 'text-accent-strong' : 'text-ink-faint')}
+                      data-numeric
+                    >
+                      {count}
+                    </span>
+                  </ToggleChip>
+                )
+              })}
+            </div>
+          )}
+
           <div className="flex-1" />
 
           <div className="relative">
@@ -771,10 +835,10 @@ export function KernelPage() {
             </div>
 
             <p className="mt-panel text-2xs text-ink-faint">
-              {/* ★ 两个筛选维度任一收窄都要报"筛选出 N 道" —— 只看 filter
-                  （状态）会漏掉只按分类筛的情形（此时 tag 上写 67、页脚却
+              {/* ★ 三个筛选维度任一收窄都要报"筛选出 N 道" —— 只看 filter
+                  （状态）会漏掉只按分类/来源筛的情形（此时 tag 上写 67、页脚却
                   写"共 423"），用户会以为筛选没生效。 */}
-              {filter === 'all' && categoryFilter === 'all'
+              {filter === 'all' && categoryFilter === 'all' && sourceFilter === 'all'
                 ? `共 ${challenges.length} 道题`
                 : `筛选出 ${filtered.length} 道，共 ${challenges.length} 道`}
               {challenges.some((c) => c.status === 'candidate_ready') && (
