@@ -1123,6 +1123,28 @@ export async function syncKernel(competitionIds: string[] = []): Promise<KernelS
 }
 
 /**
+ * 从**比赛平台**（slab-match 协议）同步题目进本地库。
+ *
+ * ★ 为什么单独一条：`syncKernel` 走的是 CTF2 自己的接口，比赛平台的题
+ *   （羊城杯那种）根本不在那条链路上 —— 从没进过这张表。这条走比赛平台
+ *   驱动，把题落进一个 `remote_id='slab-match'` 的批次，页面上按真实来源
+ *   显示，不冒充别的平台。
+ *
+ * ⚠️ 需要 scan 权限（改数据 + 一串外部请求）。失败通常是"accesskey 没开通
+ *   agent 接口权限"，服务端会翻成一句可行动的话放在 message/errors 里。
+ */
+export async function syncCompetition(): Promise<KernelSyncResult> {
+  const result = await api.post<KernelSyncResult>(
+    '/kernel/competition/sync',
+    {},
+    { timeoutMs: 120_000 },
+  )
+  notice = result.message + (result.errors.length ? `（${result.errors[0]}）` : '')
+  await loadKernel({ silent: true })
+  return result
+}
+
+/**
  * **平台上**有哪些赛事（即时查询，不写库）。
  *
  * ★ 为什么不复用本地那份 `competitions`：本地库里的赛事正是**上一次同步

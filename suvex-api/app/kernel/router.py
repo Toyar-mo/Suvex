@@ -147,73 +147,70 @@ def _environment_out(environment: KernelEnvironment | None) -> KernelEnvironment
 _BUILTIN_PLATFORM_SLUG = "ctf2"
 _BUILTIN_PLATFORM_NAME = "CTF2（内置）"
 
-#: 题目 → 归属接入的规范名。`platform_info` 是 `platform_id -> (slug, name)`
+#: 题目 → 归属接入的规范名。`platform_info` 是 `challenge.id -> (slug, name)`
 #: 的索引，由调用方一次查好传进来（列表页几十道题共用一个，避免 N+1）。
 PlatformInfo = dict[str, "tuple[str, str]"]
 
 
-def _resolve_platform_info(db: Session, challenges: list[KernelChallenge]) -> PlatformInfo:
-    """一次查询把"题目 → 接入 slug/displayName"整条链建好。
+def _competition_source_slug(competition_id: str) -> str:
+    """competition id → 稳定的来源 slug（`src-<id>`）。
 
-    `challenge.competition_id → KernelCompetition.account_id →
-     KernelAccount.platform_id → KernelPlatform.slug/display_name`。
-
-    ★ 为什么批量：列表页可能一次返回几十上百道题，逐题走 ORM 懒加载就是
-      N+1（每题 3 次查询）。这里用三次 `IN` 查询把整张索引建出来。
-    ★ 内置 CTF2 的 `platform_id` 是 NULL（没有 `KernelPlatform` 行），
-      或者是某行 `driver='ctf2'` 的平台 —— 两种都落回内置默认名。
+    ★ 为什么要一个合成 slug：来源是**题目真实出处**（这一批题从哪同步来
+      的），而"题目出自哪一批"最准确的粒度就是 `competition` —— 一个
+      账号可能先后同步过 BUUCTF / N1BOOK / IR-Lab 等多个批次，它们的
+      `competition_id` 不同、显示名（`KernelCompetition.name`）也不同。
+      直接用 `competition.id` 做筛选键最稳（不随平台改名而漂移），
+      前缀 `src-` 是为了和真正的 platform slug（`ctf2`/`pro-dasctf-com`）
+      区分开，避免语义混淆。
     """
-    from app.kernel.models import KernelAccount, KernelPlatform
+    return f"src-{competition_id}"
 
+
+def _resolve_platform_info(db: Session, challenges: list[KernelChallenge]) -> PlatformInfo:
+    """一次查询把"题目 → 来源 slug/显示名"整条链建好。
+
+    ★ 来源取**题目真实出处**，而不是"账号当前指向哪个平台"：
+      一个账号可能先后同步过多个练习集/赛事（BUUCTF / N1BOOK / IR-Lab …），
+      它们同属一个 account，但显然不是同一个来源。早期版本按
+      `challenge → competition → account → platform` 推，导致**所有老题
+      都被贴上账号当前平台的标签**（线上实测：407 道 BUUCTF 老题全被
+      标成「DASCTF Pro（slab-match）」）—— 那是错的，它们根本不在
+      那个平台上。改为按 `competition` 这一级取来源：显示名用
+      `KernelCompetition.name`（如「BUUCTF」），slug 用 `src-<competition_id>`。
+
+    ★ 为什么批量：列表页可能一次返回几十上百道题，逐题查就是 N+1。
+      这里用一次 `IN` 查询把整张索引建出来。
+    ★ `kind == 'local'`（本地复盘案例）没有远端，来源显示「本地案例」。
+    """
     competition_ids = {c.competition_id for c in challenges if c.competition_id}
     if not competition_ids:
         return {}
 
     rows = (
-        db.query(KernelCompetition.id, KernelCompetition.account_id)
+        db.query(KernelCompetition.id, KernelCompetition.name, KernelCompetition.kind)
         .filter(KernelCompetition.id.in_(competition_ids))
         .all()
     )
-    comp_to_account = {cid: aid for cid, aid in rows}
+    comp_source: dict[str, tuple[str, str]] = {}
+    for cid, name, kind in rows:
+        if kind == "local":
+            comp_source[cid] = ("local", "本地案例")
+        else:
+            display = (name or "").strip() or _BUILTIN_PLATFORM_NAME
+            comp_source[cid] = (_competition_source_slug(cid), display)
 
-    account_ids = {aid for aid in comp_to_account.values() if aid}
-    acc_to_platform: dict[str, str | None] = {}
-    if account_ids:
-        acc_rows = (
-            db.query(KernelAccount.id, KernelAccount.platform_id)
-            .filter(KernelAccount.id.in_(account_ids))
-            .all()
-        )
-        acc_to_platform = {aid: pid for aid, pid in acc_rows}
-
-    platform_ids = {pid for pid in acc_to_platform.values() if pid}
-    platform_by_id: dict[str, tuple[str, str]] = {}
-    if platform_ids:
-        plat_rows = (
-            db.query(KernelPlatform.id, KernelPlatform.slug, KernelPlatform.display_name, KernelPlatform.driver)
-            .filter(KernelPlatform.id.in_(platform_ids))
-            .all()
-        )
-        for pid, slug, display_name, driver in plat_rows:
-            platform_by_id[pid] = _platform_label(slug, display_name, driver)
-
-    # 题目 id → (slug, name)
     info: PlatformInfo = {}
     for challenge in challenges:
-        account_id = comp_to_account.get(challenge.competition_id or "")
-        platform_id = acc_to_platform.get(account_id) if account_id else None
-        if platform_id and platform_id in platform_by_id:
-            info[challenge.id] = platform_by_id[platform_id]
-        else:
-            info[challenge.id] = (_BUILTIN_PLATFORM_SLUG, _BUILTIN_PLATFORM_NAME)
+        info[challenge.id] = comp_source.get(
+            challenge.competition_id or "", (_BUILTIN_PLATFORM_SLUG, _BUILTIN_PLATFORM_NAME)
+        )
     return info
 
 
 def _platform_label(slug: str, display_name: str, driver: str) -> tuple[str, str]:
     """平台行 → (slug, 展示名)。内置驱动一律显示「CTF2（内置）」。
 
-    内置驱动（`driver='ctf2'`）的题目和"真正从 CTF2 同步来的"是同一批；
-    即便库里有 `driver='ctf2'` 的平台行，展示上也当成内置。
+    保留给"按平台行取名"的旧路径使用（如平台列表页）。
     """
     if driver == "ctf2":
         return (_BUILTIN_PLATFORM_SLUG, _BUILTIN_PLATFORM_NAME)
@@ -851,6 +848,44 @@ def sync_ctf2(payload: KernelSyncIn, request: Request, identity: ScanDep, db: Db
         attachmentsDownloaded=result.attachments.downloaded,
         attachmentsSkipped=result.attachments.skipped,
         attachmentsFailed=len(result.attachments.failed),
+        message=result.message(),
+    )
+
+
+@router.post(
+    "/competition/sync",
+    response_model=KernelSyncOut,
+    summary="从比赛平台（slab-match 协议）同步题目进本地库",
+)
+def sync_competition(request: Request, identity: ScanDep, db: DbDep) -> KernelSyncOut:
+    """scan 级：与 `/ctf2/sync` 同理 —— 改数据 + 一串外部请求。
+
+    与 CTF2 `sync` 的区别：这条走**比赛平台**驱动（slab-match），
+    把比赛平台的题落进一个 `remote_id='slab-match'` 的批次里。CTF 页
+    因此能按真实来源显示这批题，而非把它们冒充成别的平台。
+    """
+    result = service.sync_competition(db)
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.CTF2_SYNC,
+        summary=f"同步比赛平台：{result.summary()}",
+        target=None,
+        detail={
+            "competitions": result.competitions,
+            "challengesCreated": result.challenges_created,
+            "challengesUpdated": result.challenges_updated,
+            "errors": len(result.errors),
+        },
+    )
+    return KernelSyncOut(
+        competitions=result.competitions,
+        challengesCreated=result.challenges_created,
+        challengesUpdated=result.challenges_updated,
+        errors=result.errors,
+        attachmentsDownloaded=0,
+        attachmentsSkipped=0,
+        attachmentsFailed=0,
         message=result.message(),
     )
 

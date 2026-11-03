@@ -1118,6 +1118,123 @@ def pull_challenge(db: Session, *, raw_input: str) -> tuple[KernelChallenge, boo
     return challenge, created
 
 
+def sync_competition(db: Session, *, competition_name: str = "羊城杯 AI Agent 解题赛") -> SyncResult:
+    """从**比赛平台**（slab-match 协议）同步题目进本地库。
+
+    ## 为什么需要单独一条同步
+
+    `sync()` 只会调 `KernelClient` —— 那是 **CTF2 自己的接口**（practice/
+    challenges 端点），根本不知道 slab-match 协议长什么样。比赛平台的题
+    从来没进过这张表，所以 CTF 页上看到的 407 道 BUUCTF「老题」跟比赛
+    无关。要在页面上看到比赛题、能开环境、能交 flag，就得用比赛平台的
+    驱动去取，再按本地模型落库。
+
+    ## 数据怎么落
+
+    * 建/更新**一个** `KernelCompetition`，`remote_id` 固定为
+      `slab-match`（同一账号只一份），`name` 用 `competition_name`
+      或平台给的赛事名。这样来源标注会显示这批题的真名，而不是冒充
+      某个平台。
+    * 每道题用 `_upsert_challenge` 落库，`remote_id` 是平台的整数
+      `exerciseId`（`handle["exerciseId"]`）。平台列表端点只有
+      `id/name/order/isOpen/hasSolved`，题面/分值要逐题取详情。
+
+    ## 与 CTF2 `sync()` 的三点差异（都是刻意的）
+
+    1. **不删**：只 upsert，不清理"平台上已消失"的题。比赛进行中误删
+       一道正在做的题，后果比留一条旧记录严重得多。
+    2. **不动解题状态**：`_upsert_challenge` 本身就不碰
+       status/flag/wrong_submission_count，这里沿用。
+    3. **已解标记同步**：平台给的 `hasSolved` 只用来**提示**，不直接
+       写 `status` —— 本地 status 是权威（见 `_upsert_challenge` 的
+       说明）。把 `hasSolved` 塞进 note 里供人核对。
+
+    失败口径与 `sync()` 一致：单题失败记进 `errors` 继续走。
+    """
+    account = get_account(db)
+    if account is None:
+        raise ApiError(409, "CTF2_NOT_BOUND", "尚未绑定比赛平台账号。请先绑定 AccessKey。")
+    # 解密一次：既验证凭据能解开（解不开会在 resolve_driver 里抛 ApiError），
+    # 也保证"没 token"的情况在这里就报错，而不是拿到一个空驱动的怪结果。
+    decrypt_account_token(account)
+
+    # 延迟导入，避免 service ↔ competition 的循环依赖
+    # （competition.py 会 import service 里的 get_account）。
+    from app.chat.competition import resolve_driver
+
+    driver = resolve_driver(db)
+    if driver is None:
+        raise ApiError(
+            409,
+            "COMPETITION_NOT_BOUND",
+            "当前账号没有指向比赛平台。请到「设置 → 解题 / 比赛平台」绑定比赛平台的 AccessKey。",
+        )
+
+    result = SyncResult()
+
+    async def _fetch() -> tuple[list[Any], dict[str, dict[str, Any]]]:
+        # 列表 + 逐题详情。详情失败只记错误，不中断。
+        remotes = await driver.fetch_challenges(known_ids=set())
+        details: dict[str, dict[str, Any]] = {}
+        for remote in remotes:
+            try:
+                detail = await driver.fetch_challenge(remote.handle)
+            except Exception as exc:  # noqa: BLE001 —— 单题失败不该中断整批
+                result.errors.append(f"{remote.title}：拉取详情失败（{exc}）")
+                continue
+            if detail is not None:
+                details[remote.remote_id] = {
+                    "id": detail.remote_id,
+                    "title": detail.title,
+                    "category": detail.category,
+                    "description": detail.description,
+                    "score": detail.score,
+                    "attachments": detail.attachments,
+                    "order": detail.order,
+                    "hasSolved": detail.solved,
+                }
+        return remotes, details
+
+    remotes, details = _run(_fetch())
+
+    # 一个稳定的本地 batch —— 同一账号重复同步会命中同一条。
+    competition = _upsert_competition(
+        db,
+        account=account,
+        remote_id="slab-match",
+        kind="competition",
+        payload={"name": competition_name, "status": "ongoing"},
+    )
+    result.competitions = 1
+
+    for remote in remotes:
+        payload = details.get(remote.remote_id) or {
+            "id": remote.remote_id,
+            "title": remote.title,
+            "category": remote.category,
+        }
+        try:
+            _challenge, created = _upsert_challenge(
+                db, competition=competition, stage_id=None, payload=payload
+            )
+        except Exception as exc:  # noqa: BLE001 —— 同上
+            result.errors.append(f"{remote.title}：落库失败（{exc}）")
+            continue
+        if created:
+            result.challenges_created += 1
+        else:
+            result.challenges_updated += 1
+
+    competition.challenge_count = len(remotes)
+    db.flush()
+
+    solved = sum(1 for r in remotes if r.solved)
+    result.note = f"比赛平台共 {len(remotes)} 道题（平台标记已解 {solved} 道）。"
+    logger.info("比赛平台同步：%d 道（新增 %d / 更新 %d）", len(remotes),
+                result.challenges_created, result.challenges_updated)
+    return result
+
+
 def _upsert_competition(
     db: Session, *, account: KernelAccount, remote_id: str, kind: str, payload: dict[str, Any]
 ) -> KernelCompetition:
@@ -1127,6 +1244,7 @@ def _upsert_competition(
     两个并发同步会同时"查不到、然后各插一条"，而唯一约束让第二个失败 ——
     失败会被翻译成一次可重试的错误，比留下两条重复记录好。
     """
+
     existing = _find_competition(db, account.id, remote_id, kind)
     competition = existing or KernelCompetition(
         id=new_id("kncomp"),

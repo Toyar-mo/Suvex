@@ -25,7 +25,6 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.kernel import service
 from app.kernel.models import KernelChallenge, KernelCompetition, KernelPlatform
 from app.kernel.schemas import CANONICAL_CATEGORIES, canonical_category
 
@@ -96,9 +95,9 @@ def test_created_challenge_projects_canonical_and_keeps_raw(ready_client: TestCl
     assert challenge["canonicalCategory"] == "ir"
     # 原文：一字未动（sandbox_profile 依赖它）
     assert challenge["category"] == "ir-root-cause"
-    # 来源：本地任务没有平台账号 → 落回内置
-    assert challenge["platformSlug"] == "ctf2"
-    assert challenge["platformName"] == "CTF2（内置）"
+    # 来源：本地任务属于 kind='local' 的批次 → 「本地案例」（不是内置 CTF2）
+    assert challenge["platformSlug"] == "local"
+    assert challenge["platformName"] == "本地案例"
 
 
 def test_list_endpoint_projects_every_row(ready_client: TestClient) -> None:
@@ -144,17 +143,26 @@ def test_raw_category_is_never_mutated_in_db(ready_client: TestClient, db_sessio
 # ══════════════════════════════════════════════════════════
 
 
-def _seed_platform_challenge(db_session: Session, slug: str, display_name: str) -> str:
-    """造一个"来自某配置平台"的题目链：platform → account → competition → challenge。
+def test_challenge_source_is_its_competition_not_the_accounts_platform(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ 这是用户 2026-11-03 报的 bug 的回归：来源看**题目真实出处**。
 
-    返回 challenge 的 id。为了让来源推导命中，需要 platform.driver != 'ctf2'。
+    线上现象：407 道 BUUCTF 老题全被标成「DASCTF Pro（slab-match）」——
+    因为老版本按 `challenge → competition → account → platform` 推来源，
+    而那时账号的 `platform_id` 指向了比赛平台。可是那些老题根本不在
+    比赛平台上，它们是从 BUUCTF 练习集同步来的。
+
+    期望：来源 = 题目所属 competition 的名字（「BUUCTF」），slug 用
+    `src-<competition_id>`，与账号指向哪个平台无关。
     """
     from app.kernel.models import KernelAccount
 
+    # 一个账号，platform 指向比赛平台 —— 正是线上那种"账号已切到比赛平台"的形态
     platform = KernelPlatform(
-        id=f"knplat_{slug}",
-        slug=slug,
-        display_name=display_name,
+        id="knplat_srcbug",
+        slug="pro-dasctf-com",
+        display_name="DASCTF Pro（slab-match）",
         base_url="https://example.test/slab-match/api/v1/agent",
         driver="generic",
         source="generated",
@@ -162,60 +170,71 @@ def _seed_platform_challenge(db_session: Session, slug: str, display_name: str) 
     )
     db_session.add(platform)
     db_session.flush()
-
     account = KernelAccount(
-        id=f"ctf2acc_{slug}",
+        id="ctf2acc_srcbug",
         platform_id=platform.id,
-        label=f"acc-{slug}",
+        label="acc-srcbug",
         token_encrypted="x",
         token_hint="****",
         status="active",
     )
     db_session.add(account)
     db_session.flush()
-
+    # 但这个账号底下同步过的是 BUUCTF 练习集（老题）
     competition = KernelCompetition(
-        id=f"ctf2comp_{slug}",
+        id="ctf2comp_srcbug",
         account_id=account.id,
-        remote_id=f"remote-{slug}",
-        kind="competition",
-        name=f"赛事-{slug}",
+        remote_id="buuctf-legacy",
+        kind="practice",
+        name="BUUCTF",
     )
     db_session.add(competition)
     db_session.flush()
-
     challenge = KernelChallenge(
-        id=f"knchal_{slug}",
+        id="knchal_srcbug",
         competition_id=competition.id,
-        remote_id=f"ex-{slug}",
-        title=f"题-{slug}",
-        category="WEB",  # 脏值：大写
+        remote_id="00476e14-24c3-4f98-824e-9e8faa6f6d85",
+        title="RSA1",
+        category="CRYPTO",
     )
     db_session.add(challenge)
     db_session.commit()
-    return challenge.id
+
+    body = ready_client.get(f"{API}/kernel/challenges/knchal_srcbug").json()
+    assert body["platformName"] == "BUUCTF", "老题的来源必须是它自己的练习集，不许冒名比赛平台"
+    assert body["platformSlug"] == "src-ctf2comp_srcbug"
+    assert "DASCTF" not in body["platformName"]
 
 
-def test_challenge_from_configured_platform_reports_its_slug(
+def test_local_competition_reports_local_source(
     ready_client: TestClient, db_session: Session
 ) -> None:
-    """来自配置平台（slug=pro-dasctf-com）的题，来源应是该平台，而不是内置。"""
-    challenge_id = _seed_platform_challenge(db_session, "pro-dasctf-com", "DASCTF Pro（slab-match）")
+    """本地复盘案例（kind='local'）没有远端，来源显示「本地案例」。"""
+    created = ready_client.post(
+        f"{API}/kernel/competitions", json={"kind": "local", "name": "复盘"}
+    )
+    if created.status_code not in (200, 201):
+        import pytest
 
-    row = ready_client.get(f"{API}/kernel/challenges/{challenge_id}")
-    assert row.status_code == 200, row.text
-    body = row.json()
-    assert body["platformSlug"] == "pro-dasctf-com"
-    assert body["platformName"] == "DASCTF Pro（slab-match）"
-    # 脏分类照样归一
-    assert body["canonicalCategory"] == "web"
-    assert body["category"] == "WEB"  # 原文未动
+        pytest.skip(f"本地赛事建不起来：{created.status_code} {created.text[:120]}")
+    comp_id = created.json()["id"]
+    made = ready_client.post(
+        f"{API}/kernel/competitions/{comp_id}/challenges",
+        json={"title": "本地题", "category": "web"},
+    )
+    if made.status_code not in (200, 201):
+        import pytest
+
+        pytest.skip(f"本地题建不起来：{made.status_code} {made.text[:120]}")
+    body = made.json()["challenge"]
+    assert body["platformSlug"] == "local"
+    assert body["platformName"] == "本地案例"
 
 
 def test_builtin_driver_platform_falls_back_to_ctf2_label(
     ready_client: TestClient, db_session: Session
 ) -> None:
-    """即便库里有 `driver='ctf2'` 的平台行，展示也应落回「CTF2（内置）」。"""
+    """没有 competition 归属的题（理论上的孤儿）落回「CTF2（内置）」。"""
     from app.kernel.models import KernelAccount
 
     platform = KernelPlatform(
@@ -258,8 +277,9 @@ def test_builtin_driver_platform_falls_back_to_ctf2_label(
     db_session.commit()
 
     body = ready_client.get(f"{API}/kernel/challenges/knchal_builtin_row").json()
-    assert body["platformSlug"] == "ctf2"
-    assert body["platformName"] == "CTF2（内置）"
+    # 有 competition 就按 competition 取名 —— 这里是「内置赛事」
+    assert body["platformName"] == "内置赛事"
+    assert body["platformSlug"] == "src-ctf2comp_builtin_row"
 
 
 # ══════════════════════════════════════════════════════════

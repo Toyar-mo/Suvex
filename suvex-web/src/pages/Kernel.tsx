@@ -22,6 +22,7 @@ import {
   setChallengePriority,
   solveChallenge,
   submitFlag,
+  syncCompetition,
   syncKernel,
   useKernel,
   normalizeSandboxProfile,
@@ -363,6 +364,27 @@ export function KernelPage() {
         })
       })
       .catch((err) => showToast({ message: `同步失败：${errorMessage(err)}`, tone: 'risk' }))
+      .finally(() => setBusy(false))
+  }, [])
+
+  /**
+   * 从**比赛平台**同步题目。与 `runSync` 分开一个函数：失败口径不同 ——
+   * 这里最常见的失败是"accesskey 没开 agent 权限"，后端已把它翻成一句
+   * 可行动的话，直接整句显示即可（不要拼"同步完成"）。
+   */
+  const runSyncCompetition = useCallback(() => {
+    setBusy(true)
+    void syncCompetition()
+      .then((result) => {
+        const problems = result.errors[0] ?? ''
+        showToast({
+          message: problems
+            ? `比赛平台同步：${result.message} ${problems}`
+            : `比赛平台同步完成：${result.message}`,
+          tone: problems ? 'risk' : undefined,
+        })
+      })
+      .catch((err) => showToast({ message: `比赛平台同步失败：${errorMessage(err)}`, tone: 'risk' }))
       .finally(() => setBusy(false))
   }, [])
 
@@ -763,6 +785,17 @@ export function KernelPage() {
               aria-hidden="true"
             />
             同步题目
+          </Button>
+
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy}
+            onClick={() => runSyncCompetition()}
+            title="从比赛平台（羊城杯这类 slab-match 平台）把题目拉进本地库"
+          >
+            <Trophy size={12} strokeWidth={2} aria-hidden="true" />
+            同步比赛题
           </Button>
         </div>
 
