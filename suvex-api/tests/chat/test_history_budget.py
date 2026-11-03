@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace as _NS
+
 from app.chat import engine
 
 
@@ -97,3 +99,47 @@ def test_render_history_actually_feeds_the_budget(monkeypatch) -> None:
 
     assert "t" * 300 not in joined, "超预算的工具结果没有被裁掉 —— 接线断了"
     assert any("上下文已省略" in m["content"] for m in rendered)
+
+
+# ---------------------------------------------------------------------------
+# v1.53：历史滑窗切开后，首条可能是 assistant / tool —— 必须以 user 开头。
+#
+# `list_messages(limit=N)` 是 `order_by(seq.desc()).limit(N)` 再 reverse，
+# 会话超过 N 条时窗口从中间切开，第一条可能是 assistant（残句）或 tool。
+# Anthropic 风格 Messages API **要求首条是 user**（否则 400），而平台明说
+# "国内所有大模型均可用" —— 一换 provider 就炸；即便 provider 宽容，模型
+# 也会"凭空接话"（看不到用户的问题）。
+# ---------------------------------------------------------------------------
+
+
+def _row(role: str, content: str, *, tool_name=None, tool_failed=False,
+         tool_args=None, model_extra=None):
+    return _NS(role=role, content=content, tool_name=tool_name,
+               tool_failed=tool_failed, tool_args=tool_args, model_extra=model_extra)
+
+
+def test_history_starts_with_user_when_window_opens_on_assistant() -> None:
+    """窗口从 assistant 开始（滑窗切开）→ 必须丢掉开头的非 user 残句，
+    保证送模型的 messages 以 user 开头。"""
+    rows = [
+        _row("assistant", "上一轮的半句话"),
+        _row("user", "[工具结果] run_shell\n结果"),
+        _row("assistant", "结论"),
+        _row("user", "新问题"),
+    ]
+    msgs = engine._render_history(rows)
+    assert msgs, "不能渲染成空"
+    assert msgs[0]["role"] == "user", "首条必须是 user（Anthropic 硬要求）"
+
+
+def test_history_starts_with_user_when_window_opens_on_tool() -> None:
+    rows = [_row("tool", "裸工具输出", tool_name="run_shell"), _row("user", "新问题")]
+    msgs = engine._render_history(rows)
+    assert msgs[0]["role"] == "user"
+
+
+def test_history_that_already_starts_with_user_is_unchanged() -> None:
+    rows = [_row("user", "问题"), _row("assistant", "答"), _row("user", "追问")]
+    msgs = engine._render_history(rows)
+    assert [m["role"] for m in msgs] == ["user", "assistant", "user"]
+    assert msgs[0]["content"] == "问题", "已经以 user 开头时不能动它"

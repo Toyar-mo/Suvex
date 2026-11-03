@@ -902,6 +902,13 @@ def _render_history(rows: list[Any]) -> list[dict[str, str]]:
             #   `## 附件：…` 的内部说明（v0.112 修的就是这个）。
             extra = getattr(row, "model_extra", None) or ""
             out.append({"role": "user", "content": content + extra})
+    # ★ v1.53：滑窗可能从会话中间切开，让首条是 assistant（残句）或 tool。
+    #   Anthropic 风格 Messages API **要求首条是 user**（否则 400），而平台
+    #   明说"国内所有大模型均可用"；即便 provider 宽容，模型也会凭空接话
+    #   （看不到用户最早的问题）。丢掉开头的非 user 消息（都是半截上下文，
+    #   丢了无害）。
+    while out and out[0]["role"] != "user":
+        out.pop(0)
     return _trim_history_to_budget(out)
 
 
@@ -1820,7 +1827,16 @@ def _parameter_blocks_to_actions(text: str) -> str:
             if inv:
                 tool = inv
         if not tool:
-            # 这一组认不出工具名：整组原样保留（交给兜底删标签），跳过。
+            # 这一组认不出工具名：**整组丢掉**（连同 body），不保留。
+            #
+            # ★ v1.53：历史坑 —— 早先这里 `continue` 跳过、把 body 原样留成正文，
+            #   于是 `<parameter name="command">rm -rf /tmp/x</parameter>`（缺 tool）
+            #   被删掉标签后 body 变成人话里的一段裸命令，紧接着 v1.51 的
+            #   `extract_trailing_command` 会把它**当成要执行的命令直接跑掉**。
+            #   一个"认不出的协议碎片"绝不该变成一条被执行的真实命令 ——
+            #   认不出就整组丢弃（丢字节比跑错命令安全得多）。
+            out.append(text[last : group[0].start()])
+            last = group[-1].end()
             i = j
             continue
         args: dict[str, Any] = {}
@@ -2257,6 +2273,12 @@ async def run_turn(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
         messages = _render_history(history)
+        # ★ v1.53 兜底：`_render_history` 会把开头的非 user 消息丢掉（保证首条
+        #   是 user，见其文档）。极端情况下（小窗口里全是 assistant/tool 残句）
+        #   可能把窗口清空 —— 直接拿空数组调模型必然 400。给一条最小 user 占位，
+        #   让模型至少有话可接，而不是整轮失败。
+        if not messages:
+            messages = [{"role": "user", "content": "（继续之前的工作。）"}]
         if pending_reminder is not None:
             # ★ 一次性：补进去之后立刻清掉。留着的话它会出现在之后每一轮
             #   的上下文里，模型会以为用户反复在催它。
@@ -2860,6 +2882,8 @@ async def resume_approved(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
         messages = _render_history(history)
+        if not messages:
+            messages = [{"role": "user", "content": "（继续之前的工作。）"}]
         if pending_reminder is not None:
             messages.append({"role": "user", "content": pending_reminder})
             pending_reminder = None

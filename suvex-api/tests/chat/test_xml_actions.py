@@ -354,3 +354,47 @@ def test_bare_ds_safety_closing_tag_is_removed() -> None:
 
 def test_has_protocol_marker_or_xml_detects_ds_safety() -> None:
     assert _has_protocol_marker_or_xml("<ds_safety>x</ds_safety>") is True
+
+
+# ---------------------------------------------------------------------------
+# v1.53：认不出工具名的 `<parameter>` 组，曾经只删标签、把 body 留成正文 —— 而
+#   v1.51 的 extract_trailing_command 会把这个"裸命令 body"当成要执行的命令
+#   直接跑掉。一个认不出的协议碎片绝不能变成一条被执行的真实命令。现在整组丢弃。
+# ---------------------------------------------------------------------------
+
+def test_unrecognized_parameter_group_is_dropped_not_leaked() -> None:
+    """缺 tool 的 parameter 组：body 也不能当正文漏出来（否则会被 auto-synth 执行）。"""
+    text = '接下来执行。\n<parameter name="command">rm -rf /tmp/x</parameter>'
+    out = _normalize_xml_actions(text)
+    assert "rm -rf /tmp/x" not in out, "认不出的参数组 body 不该漏成正文"
+    assert "<parameter" not in out
+    # 人话保留。
+    assert "接下来执行" in out
+
+
+def test_unrecognized_parameter_group_does_not_become_autosynth_command() -> None:
+    """端到端：认不出的参数组不能让 v1.51 抽出命令来执行。"""
+    from app.chat.nudge import extract_trailing_command
+
+    text = '接下来执行。\n<parameter name="command">cat /etc/shadow</parameter>'
+    out = _normalize_xml_actions(text)
+    assert extract_trailing_command(out) is None
+
+
+def test_recognized_parameter_group_still_becomes_action_after_dropping_rules() -> None:
+    """丢掉认不出的组，不能影响认得出的组正常合成动作。"""
+    text = (
+        '<parameter name="command">BAD</parameter> 中间人话 '
+        '<parameter name="tool">run_shell</parameter>'
+        '<parameter name="command">echo ok</parameter>'
+    )
+    out = _normalize_xml_actions(text)
+    assert "BAD" not in out
+    assert parse_actions(out) == [("run_shell", {"command": "echo ok"})]
+
+
+def test_dsml_unrecognized_group_dropped() -> None:
+    text = f'接下来。\n<{_DSML}DSML{_DSML} parameter name="command">rm -rf /tmp/x</{_DSML}DSML{_DSML} parameter>'
+    out = _normalize_xml_actions(text)
+    assert "rm -rf /tmp/x" not in out
+    assert "DSML" not in out
