@@ -441,6 +441,30 @@ describe('sendMessage — 流式（v0.100）', () => {
     expect(getChatSnapshot().active?.messages).toEqual([])
   })
 
+  it('★ v1.58 开流前 409（后端 error 信封）→ 错误条显示后端中文，不是裸「HTTP 409」', async () => {
+    // 复现线上事故：这一轮还在跑时用户按发送 → /messages/stream 回 409，
+    // 后端 body 是 { error: { code: 'TURN_ALREADY_RUNNING', message: '…中文…' } }。
+    // 早先 chat-stream 读顶层 payload.message（永远是 undefined），用户只看到
+    // 裸「HTTP 409」。这里钉住：中文必须真的出现在错误条上。
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const backend_message =
+      '这个对话还有一轮正在跑。想补一句话用「插话」，想让它停下或改方向用「中断」，' +
+      '想接手已经断掉的那一轮点「继续」——它们都会接在同一轮上。'
+    const promise = sendMessage('chat_1', '不用下载了，比赛结束了，清除文件')
+    // 注意信封：message 在 error 里面（后端 core/errors.py 的固定形状）
+    pending[1].resolve({ error: { code: 'TURN_ALREADY_RUNNING', message: backend_message } }, 409)
+    const ok = await promise
+
+    expect(ok).toBe(false)
+    expect(getChatSnapshot().sending).toBe(false)
+    // 铁证：错误条拿到的是后端中文，而不是 `HTTP 409`
+    expect(getChatSnapshot().error?.message).toBe(backend_message)
+    expect(getChatSnapshot().error?.message).not.toBe('HTTP 409')
+  })
+
   it('★ 一轮在跑时不允许再发（否则 seq 顺序取决于谁先返回 → 消息乱序）', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })

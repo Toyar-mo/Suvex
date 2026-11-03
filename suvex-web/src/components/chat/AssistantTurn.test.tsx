@@ -92,19 +92,22 @@ describe('AssistantTurn — 最终答复是纯文本', () => {
 })
 
 describe('AssistantTurn — 回合页脚', () => {
-  it('★ 4 步 · 2 个工具 · 1 个失败，时间取最后一条消息，右侧带 meta', () => {
+  it('★ 4 步 · 2 个工具，已交付答复时工具报错报成「已恢复」不标红（v1.59）', () => {
     const { container } = render(<AssistantTurn items={fullTurn()} meta="红队" />)
 
     const footer = container.querySelector('[data-turn-footer]') as HTMLElement
     expect(footer).not.toBeNull()
     expect(footer.getAttribute('data-turn-steps')).toBe('4')
     expect(footer.getAttribute('data-turn-tools')).toBe('2')
+    // 真实失败数照旧挂在 data 属性上（事实不藏）
     expect(footer.getAttribute('data-turn-failures')).toBe('1')
 
     expect(footer.textContent).toContain('4 步')
     expect(footer.textContent).toContain('2 个工具')
-    // ★ 失败数要在页脚上露出来，不能只活在收起的分组里
-    expect(footer.textContent).toContain('1 个失败')
+    // ★ v1.59：这一轮**给出了最终答复**，中途一次工具报错是过程挫折、已恢复。
+    //   页脚如实报「1 次工具报错（已恢复）」，不再用会让人以为整轮失败的红字「1 个失败」。
+    expect(footer.textContent).toContain('1 次工具报错（已恢复）')
+    expect(footer.textContent).not.toContain('1 个失败')
 
     // 时间来自最后一条消息（03:07），不是第一条
     const time = footer.querySelector('time') as HTMLTimeElement
@@ -112,6 +115,18 @@ describe('AssistantTurn — 回合页脚', () => {
     expect(time.getAttribute('datetime')).toBe('2026-10-25T03:07:00Z')
     expect(time.textContent).toMatch(/^\d{2}:\d{2}$/)
     expect(footer.textContent).toContain('红队')
+  })
+
+  it('★ 没给出答复（真的没成）时，失败仍报红字「N 个失败」（v1.59）', () => {
+    // 一个没有最终答复（全 process）的回合，工具还失败了 —— 这才是真失败，要红字。
+    const { container } = render(
+      <AssistantTurn items={[narration, toolOk, toolFailed]} />,
+    )
+    const footer = container.querySelector('[data-turn-footer]') as HTMLElement
+    expect(footer).not.toBeNull()
+    expect(footer.getAttribute('data-turn-failures')).toBe('1')
+    expect(footer.textContent).toContain('1 个失败')
+    expect(footer.textContent).not.toContain('已恢复')
   })
 
   it('★ 时间戳解析不了时退成空串，而不是渲染「Invalid Date」', () => {

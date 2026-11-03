@@ -176,12 +176,24 @@ export async function streamTurn(options: StreamTurnOptions): Promise<boolean> {
 
   if (!response.ok) {
     // ★ 流式端点在**开流之前**的失败仍然是普通 JSON 错误
-    //   （校验失败、会话不存在）。此时没有流可读，直接报错。
+    //   （校验失败、会话不存在、这一轮已在跑）。此时没有流可读，直接报错。
     //   开流之后的失败只会以 `error` 帧出现（见后端 stream_turn 的 docstring）。
+    //
+    // ★ v1.58：后端错误信封是 `{ error: { code, message, details? } }`
+    //   （见 `src/lib/api.ts` 顶部的契约说明），message 在 **error 里面**。
+    //   早先这里错读成顶层 `payload.message` —— 永远取不到，于是用户看到的
+    //   只有 `HTTP 409`（线上实测：那一轮还在跑时按发送 → 裸 409，
+    //   后端写好的一句「这个对话还有一轮正在跑…用插话/中断/继续」没被读出来）。
+    //   与 lib/api.ts 的解析口径对齐：优先 `error.message`，兼容顶层 `message`，
+    //   都没有才回退到状态码。
     let detail = `HTTP ${response.status}`
     try {
-      const payload = (await response.json()) as { message?: string }
-      if (payload?.message) detail = payload.message
+      const payload = (await response.json()) as {
+        message?: string
+        error?: { code?: string; message?: string }
+      }
+      const server_message = payload?.error?.message ?? payload?.message
+      if (server_message) detail = server_message
     } catch {
       // 不是 JSON 就保留状态码
     }

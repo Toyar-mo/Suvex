@@ -67,6 +67,14 @@ export function AssistantTurn({
 }) {
   const tools = items.filter((message) => message.role === 'tool')
   const failed = tools.filter((message) => message.toolFailed === true).length
+  // ★ v1.59：这一轮最终有没有给出答复。工具中途报错但模型顶住、照样交付了
+  //   结论，就不该把整轮标红成「N 个失败」——那是把「一次工具调用失败」
+  //   误读成「这一轮失败了」，用户看到一条完整、正确的答案下面挂个红色
+  //   「1 个失败」，会以为活儿没干成（线上实测：比赛结束后拉题库接口 40403
+  //   报错，模型改用 curl 绕过后照样给了完整结论，页脚却红字「1 个失败」）。
+  //   所以按「有没有最终答复」分流：有答复 → 报「N 次工具报错（已恢复）」且不标红；
+  //   没答复 → 才是真的失败，保留红字「N 个失败」。
+  const hasAnswer = items.some(isAnswer)
   const last = items.at(-1)
   // ★ v1.56b：单一时间线（对照 CyberStrikeAI 的事件流）。按到达顺序分段，
   //   推理 / 工具 / 结果 / 答复各在**它发生的那个位置**逐条铺下来，不再把
@@ -166,7 +174,15 @@ export function AssistantTurn({
           <span>
             {items.length} 步
             {tools.length > 0 && ` · ${tools.length} 个工具`}
-            {failed > 0 && <span className="text-signal-risk"> · {failed} 个失败</span>}
+            {failed > 0 && hasAnswer && (
+              // 已交付答复：工具报错是过程中的正常挫折、且已恢复，用中性灰字
+              // 如实说「N 次工具报错（已恢复）」，不标红、不叫「失败」。
+              <span className="text-ink-faint"> · {failed} 次工具报错（已恢复）</span>
+            )}
+            {failed > 0 && !hasAnswer && (
+              // 没给出答复才是这一轮真的失败 —— 保留红字，别让用户漏看。
+              <span className="text-signal-risk"> · {failed} 个失败</span>
+            )}
           </span>
           {last && <span aria-hidden="true">·</span>}
           {last && <time dateTime={last.createdAt}>{formatClock(last.createdAt)}</time>}
