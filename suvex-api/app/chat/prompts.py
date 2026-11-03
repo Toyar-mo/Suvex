@@ -1078,6 +1078,48 @@ for i in range(len(d) - 16):   # ~5000 万次迭代，纯 Python
   平台会把 `/work/persist/<相对路径>` 渲染成可点的下载链接。
 - 例：`mkdir -p /work/persist/reports && mv /work/report.md /work/persist/reports/`。
 
+### 下载大附件（几十 MB ~ 数 GB）：必须断点续传 + 直接落到 `/work/persist/`
+
+**一条 `run_shell` 最多跑 300 秒**（`timeout_seconds` 上限就是 300，超了会被容器内
+`timeout` 杀掉）。所以：
+
+- **一条命令下不完的大文件，别指望一次 `curl -o` 下完** —— 超时被杀的后果是
+  **只留下半截文件**（比如 1.9GB 的包下到 480MB 就被砍），而你很可能以为它下好了。
+- **断点续传（关键）**：用 `curl -C -`（offset 续传）。中断/超时后**再跑同一条命令
+  会从断点接着下**，而不是从 0 重来：
+
+  ```bash
+  # 目标：把 1.9GB 的包下到持久目录（容器回收也不丢）
+  mkdir -p /work/persist/dl
+  curl -C - -sS --retry 5 --retry-delay 2 -m 280 \
+       -o /work/persist/dl/misc.zip 'https://…/Be_Powerful.zip'
+  ```
+
+- **一条命令只给一次机会**：`-m 280` 让 curl 在 300 秒上限前自己先停（留 20s 余量），
+  这样是 curl 正常退出、文件是完整可续的，而不是被 `timeout` 强杀。
+  下到一半没完？**再发一次同样的命令**即可续上（`-C -` 会读已有文件大小）。循环几次直到下完：
+
+  ```bash
+  cd /work/persist/dl && for i in 1 2 3 4 5 6 7 8; do
+    curl -C - -sS --retry 3 -m 280 -o misc.zip 'https://…/Be_Powerful.zip' && break
+    echo "retry $i"; sleep 1
+  done; ls -l misc.zip
+  ```
+
+- **一定要边下边看进度**：`ls -l` 看当前大小，或 `curl` 的进度。下完后用 `file` /
+  `unzip -l` 验证**真的完整**（1.9GB 的 zip `unzip -l` 能列出条目才算好），再解压。
+  只下到一半就 `unzip` 会报 "unexpected end of file"，别据此断定"包是坏的"。
+- **下到持久目录**：写成 `/work/persist/...`，容器中途回收也不会白下；即使下了几次，
+  `-C -` 也能在回收后（文件还在 persist）继续续传。
+- 如果附件 URL 需要鉴权（比赛平台的 `X-Agent-AccessKey` 等），把 header 一并带上；
+  断点续传下 header 每次都要带全，不能只在第一条命令里 export。
+- **服务端不支持续传时**（`curl -C -` 报 "server does not support byte ranges"，
+  或 `curl -I` 里没有 `Accept-Ranges: bytes`）：续传走不通，就换 `wget -c`
+  （同理会续传）；若 wget 也不支持，就只能尽量把单条命令的时间留给下载
+  （去掉 `-m`、把 `timeout_seconds` 用满 300）、一次尽量多下，并在每次被截断后
+  用 `ls -l` 记下已下大小，如实告诉用户「这个包无法续传、需要更长时限」，
+  而不是假装下完了。
+
 ### 确认工具在不在：别只看 `command -v`
 
 `command -v <名字>` 只能证明**这个名字解析到了一个可执行路径**，
