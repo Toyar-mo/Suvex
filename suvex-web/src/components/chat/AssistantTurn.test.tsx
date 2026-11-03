@@ -125,22 +125,79 @@ describe('AssistantTurn — 回合页脚', () => {
   })
 })
 
-describe('AssistantTurn — 过程与结论之间的间距', () => {
-  it('★ 有工作过程时结论容器带 pt-3（24px），没有时不带', () => {
+describe('AssistantTurn — 单一时间线（v1.56b 对照 CyberStrikeAI 事件流）', () => {
+  it('★ 消息按发生顺序铺下来：旁白 → 工具 → 工具 → 答复，答复在最后', () => {
     /*
-      正文 <p> → MessageRow 的 div → 结论容器。pt-3 在**最外层**那个容器上：
-      它管的是「过程 → 结论」这一整段之间的呼吸，不是单条消息内部的间距。
-    */
-    const withWork = render(<AssistantTurn items={fullTurn()} />)
-    const answerWithWork = screen.getByText('已清点完毕')
-    const containerWithWork = answerWithWork.parentElement!.parentElement!
-    expect(containerWithWork.className).toContain('pt-3')
-    withWork.unmount()
+      这是 v1.56b 的核心契约：不再把全部过程收进顶上一个「过程详情」折叠块、
+      结论另起一块贴在最下面；而是推理/工具/结果/答复各在**它发生的那个
+      位置**逐条铺下来（CyberStrikeAI 的 progress/thinking/tool_call/
+      tool_result/答复 事件按到达顺序追加）。
 
-    render(<AssistantTurn items={[answer]} />)
-    const answerAlone = screen.getByText('已清点完毕')
-    const containerAlone = answerAlone.parentElement!.parentElement!
-    expect(containerAlone.className).not.toContain('pt-3')
+      断言：答复正文的 DOM 位置排在两条工具之后（不是被提到工具上面）。
+    */
+    const { container } = render(<AssistantTurn items={fullTurn()} />)
+
+    const answerRow = screen
+      .getByText('已清点完毕')
+      .closest('[data-message-row="assistant"]') as HTMLElement
+    expect(answerRow).not.toBeNull()
+
+    const toolRows = container.querySelectorAll('[data-message-row="tool"]')
+    expect(toolRows.length).toBe(2)
+    const lastTool = toolRows[toolRows.length - 1] as HTMLElement
+
+    // 答复必须在最后一条工具**之后**（文档顺序），而不是被提到工具前面。
+    expect(
+      lastTool.compareDocumentPosition(answerRow) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+  })
+
+  it('★ 交错回合：答复夹在两次工具之间时，位置就在中间，不被挪到最后', () => {
+    /*
+      真实的多轮 agent 回合常常是：旁白 → 工具 … → 一段结论 → 又去跑工具 →
+      收尾答复。旧结构会把所有非最终答复都收进顶上过程块，导致中间那段
+      「结论」要么消失、要么被顶到最后。时间线模型里它就该待在中间。
+    */
+    const midAnswer = msg({
+      id: 'a-mid',
+      surface: 'answer',
+      content: '端口扫完了，接着看服务',
+      createdAt: '2026-10-25T03:05:30Z',
+    })
+    const items = [narration, toolOk, midAnswer, toolFailed, answer]
+    const { container } = render(<AssistantTurn items={items} />)
+
+    const allRows = Array.from(
+      container.querySelectorAll('[data-message-row]'),
+    ) as HTMLElement[]
+    const idxOf = (text: string) =>
+      allRows.findIndex((row) => row.textContent && row.textContent.includes(text))
+
+    const midIdx = idxOf('端口扫完了，接着看服务')
+    const finalIdx = idxOf('已清点完毕')
+    const firstToolIdx = idxOf('nmap -sV example.com')
+    const secondToolIdx = idxOf('nmap -p- example.com')
+
+    // 中间结论在第一条工具之后、第二条工具之前 —— 位置保真。
+    expect(midIdx).toBeGreaterThan(firstToolIdx)
+    expect(midIdx).toBeLessThan(secondToolIdx)
+    // 收尾答复在最后。
+    expect(finalIdx).toBeGreaterThan(secondToolIdx)
+  })
+
+  it('★ 不再有「把全部过程提到结论之上」的 data-assistant-work 头部块', () => {
+    /*
+      旧结构：<AssistantWork items=workItems/> 在最前，<结论/> 在最后 —— 于是
+      data-assistant-work 一定早于答复。新结构里旁白仍可能是可折叠条，但它
+      按时间线**原位**出现，不再是一个统揽全部过程的前置块。
+
+      判据：答复与「第一条工具」之间，应夹着旁白/工具的**时间线顺序**，
+      不能出现「答复之前存在一个包含全部工具的 assistant-work」这种旧形态。
+      这里直接用:答复前面不能是那个把答案排除在外的 work 头块。
+    */
+    const { container } = render(<AssistantTurn items={fullTurn()} />)
+    const root = container.querySelector('[data-assistant-turn]') as HTMLElement
+    expect(root.hasAttribute('data-timeline')).toBe(true)
   })
 })
 

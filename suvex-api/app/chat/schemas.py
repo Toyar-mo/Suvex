@@ -23,9 +23,10 @@
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 
 from app.chat.attachments import MAX_ATTACHMENTS_PER_MESSAGE
 from app.chat.models import (
@@ -125,6 +126,75 @@ class ChatSessionOut(CamelModel):
     mcpServerNames: list[str] | None = None
 
 
+#: ★ v1.56：历史消息里残留的自创 XML 包装 `<system>…</system>` 的**显示期**清洗。
+#:
+#:   泄漏是在 v1.56 之前就写进库的（那次线上会话 146 条正文带 `<system>`），
+#:   「写入口」的修复（`engine._normalize_xml_actions`）只管**新**消息；旧的
+#:   一大坨仍会原样回放，正是用户截图看到的刷屏。这里在**读出口**再兜一层：
+#:   - 块里含真 `ACTION: {...}` → 保留那段 ACTION 文本（人还能读到它想做什么）；
+#:   - 其余碎片（`ACTION.`/`执行.`/`先.`）整块删掉。
+#: 只做展示清洗，不动库、不改落库逻辑。
+_SYSTEM_BLOCK_RE = re.compile(
+    r"<system[a-zA-Z_]*(?![A-Za-z_])[^>]*>(.*?)</system[a-zA-Z_]*(?![A-Za-z_])>",
+    re.DOTALL,
+)
+_SYSTEM_ACTION_RE = re.compile(r"ACTION\s*[:：]\s*(\{.*\})\s*$", re.DOTALL)
+#: 只有开标签、后跟裸 JSON 的 `<system_call>{json}`（无闭合），v1.57。
+_SYSTEM_OPEN_CALL_RE = re.compile(
+    r"<system[a-zA-Z_]*(?![A-Za-z_])[^>]*>\s*(\{.*?\})\s*(?=<|$)", re.DOTALL
+)
+#: 能当动作的裸 JSON 必须含 `"tool"` 键（`<system_call>` 块内）。
+_SYSTEM_BARE_TOOL_JSON_RE = re.compile(r"\{.*\"tool\".*\}", re.DOTALL)
+_STRAY_SYSTEM_TAG_RE = re.compile(
+    r"</?system[a-zA-Z_]*(?![A-Za-z_])[^>]*>", re.DOTALL
+)
+
+
+def _is_tool_json(raw: str) -> bool:
+    """`raw` 是否是一段可当动作的 JSON（dict 且含非空 `"tool"`）。"""
+    import json as _json
+
+    try:
+        obj = _json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(obj, dict) and bool(obj.get("tool"))
+
+
+def strip_system_wrappers(text: str) -> str:
+    """把正文里的 `system*` 标签族（`<system>`/`<system_warning>`/`<system_call>`/…）
+    清洗成可读文本（展示用，幂等）。
+
+    v1.56 只认 `<system>` 精确标签；v1.57 扩到整族 `system*`，并处理
+    "只有开标签 + 裸 `{"tool":…}` JSON"的 `<system_call>` 形态（展开成 ACTION 行）。
+    """
+    if "<system" not in text:
+        return text
+
+    def _unpack(m: re.Match[str]) -> str:
+        inner = m.group(1)
+        am = _SYSTEM_ACTION_RE.search(inner)
+        if am:
+            return "\nACTION: " + am.group(1) + "\n"
+        bm = _SYSTEM_BARE_TOOL_JSON_RE.search(inner)
+        if bm and _is_tool_json(bm.group(0)):
+            return "\nACTION: " + bm.group(0).strip() + "\n"
+        return ""
+
+    text = _SYSTEM_BLOCK_RE.sub(_unpack, text)
+
+    def _unpack_open(m: re.Match[str]) -> str:
+        body = m.group(1)
+        if _is_tool_json(body):
+            return "\nACTION: " + body.strip() + "\n"
+        return ""
+
+    text = _SYSTEM_OPEN_CALL_RE.sub(_unpack_open, text)
+    # 落单/未闭合的 `system*` 残壳也清掉。
+    text = _STRAY_SYSTEM_TAG_RE.sub("", text)
+    return text
+
+
 class ChatMessageOut(CamelModel):
     """一条消息。"""
 
@@ -148,6 +218,17 @@ class ChatMessageOut(CamelModel):
     approvalStatus: ApprovalStatus | None = None
     approvalDecidedBy: str | None = None
     approvalDecidedAt: IsoDateTime | None = None
+
+    @field_validator("content")
+    @classmethod
+    def _sanitize_system_wrappers(cls, value: str) -> str:
+        """★ v1.56：读出口再兜一次历史 `<system>…</system>` 刷屏的清洗。
+
+        写入口（engine）已修，但**修复前**落库的旧消息仍带 `<system>`；
+        这条 validator 保证无论新旧消息、无论走哪个出参，前端拿到的正文都
+        不含该标签的碎壳（含真 ACTION 的展开成一行可读 `ACTION: {...}`）。
+        """
+        return strip_system_wrappers(value) if isinstance(value, str) else value
 
 
 class ChatSessionDetailOut(ChatSessionOut):

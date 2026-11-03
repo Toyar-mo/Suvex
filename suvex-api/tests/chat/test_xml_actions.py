@@ -398,3 +398,140 @@ def test_dsml_unrecognized_group_dropped() -> None:
     out = _normalize_xml_actions(text)
     assert "rm -rf /tmp/x" not in out
     assert "DSML" not in out
+
+
+# ---------------------------------------------------------------------------
+# v1.56：`<system>…</system>` —— 模型自创的第四套 XML 包装，把意图碎片包起来
+#   刷屏（线上会话「Server Host: https://pro.dasctl.c…」）。
+#   策略=整块丢弃 + 只留真 ACTION：含真 `ACTION: {...}` 的只保留那段 ACTION 行，
+#   其余 `ACTION.`/`执行.`/`先.` 纯碎片整块删、绝不执行。
+# ---------------------------------------------------------------------------
+
+def test_system_fragment_blocks_are_removed() -> None:
+    """`<system>ACTION.</system>` 这类刷屏碎片整块删掉，正文不留标签。"""
+    text = (
+        "我先看一下。\n"
+        "<system>ACTION.</system>\n"
+        "<system>执行.</system>\n"
+        "<system>先.</system>\n"
+        "接下来反汇编驱动。"
+    )
+    out = _normalize_xml_actions(text)
+    assert "<system" not in out
+    assert "</system>" not in out
+    # 碎片文字（ACTION./执行./先.）不应残留成正文。
+    assert "ACTION." not in out
+    assert "执行." not in out
+    assert "先." not in out
+    # 人话保留。
+    assert "我先看一下" in out
+    assert "接下来反汇编驱动" in out
+
+
+def test_system_fragment_is_not_executed() -> None:
+    """碎片里的词绝不能被当成命令执行（parse_actions 不认、auto-synth 也抽不出）。"""
+    from app.chat.nudge import extract_trailing_command
+
+    out = _normalize_xml_actions("<system>执行.</system><system>先.</system>")
+    assert out.strip() == ""
+    assert parse_actions(out) == []
+    assert extract_trailing_command(out) is None
+
+
+def test_system_block_with_real_action_is_unpacked() -> None:
+    """`<system>ACTION: {...}</system>` → 展开成裸 ACTION 行，可被解析执行。"""
+    text = (
+        "现在跑。\n"
+        '<system>ACTION: {"tool": "run_shell", "args": {"command": "echo hi"}}</system>'
+    )
+    out = _normalize_xml_actions(text)
+    assert "<system" not in out
+    assert parse_actions(out) == [("run_shell", {"command": "echo hi"})]
+    # 人话保留。
+    assert "现在跑" in out
+
+
+def test_system_mixed_fragments_and_real_action() -> None:
+    """混合：碎片块被删、真 ACTION 块被展开，两者共存时各走各的路。"""
+    text = (
+        "<system>先.</system>\n"
+        '<system>ACTION: {"tool": "run_shell", "args": {"command": "id"}}</system>\n'
+        "<system>执行.</system>"
+    )
+    out = _normalize_xml_actions(text)
+    assert "<system" not in out
+    assert parse_actions(out) == [("run_shell", {"command": "id"})]
+    assert "执行." not in out and "先." not in out
+
+
+def test_system_action_command_not_corrupted() -> None:
+    """展开后命令体逐字节保留（不能被拼接污染）。"""
+    cmd = "cd /work && objdump -dr note.ko > note.disasm.txt 2>&1"
+    text = '<system>ACTION: {"tool": "run_shell", "args": {"command": "cd /work && objdump -dr note.ko > note.disasm.txt 2>&1"}}</system>'
+    out = _normalize_xml_actions(text)
+    assert parse_actions(out) == [("run_shell", {"command": cmd})]
+
+
+def test_has_protocol_marker_or_xml_detects_system() -> None:
+    assert _has_protocol_marker_or_xml("<system>x</system>") is True
+
+
+def test_plain_text_without_system_is_unchanged() -> None:
+    text = "这是一段普通回复，没有 system 标签。"
+    assert _normalize_xml_actions(text) == text
+
+
+# ── v1.57：整族 `system*` 标签 ─────────────────────────────────────
+#   线上审计（chat_01M6BWQ69MZJNBAB7C7QMVXPV2）发现同族还有
+#   `<system_warning>` / `<system_welcome/>` / `<system_call>{json}` 三种变体。
+#   v1.56 的 `system\b` 正则因 `_` 是词字符，一个都没匹配到 → 31/33 条照样漏。
+
+
+def test_system_warning_block_is_removed() -> None:
+    """`<system_warning>…</system_warning>` 是平台纠偏提示，纯噪声，整块删。"""
+    text = (
+        "静态分析走到极限。\n"
+        "<system_warning>你没写 ACTION，请补上。</system_warning>"
+    )
+    out = _normalize_xml_actions(text)
+    assert "<system_warning" not in out
+    assert "你没写 ACTION" not in out
+    assert "静态分析走到极限" in out
+
+
+def test_system_welcome_self_closing_is_removed() -> None:
+    out = _normalize_xml_actions("开场。<system_welcome/>后续。")
+    assert "<system_welcome" not in out
+    assert "开场" in out and "后续" in out
+
+
+def test_system_call_with_bare_tool_json_is_unpacked() -> None:
+    """`<system_call>\n{"tool":…, "args":…}`（无闭合）→ 展开成可执行 ACTION。"""
+    text = '<system_call>\n{"tool": "run_shell", "args": {"command": "ls -la /work"}}'
+    out = _normalize_xml_actions(text)
+    assert "<system_call" not in out
+    assert parse_actions(out) == [("run_shell", {"command": "ls -la /work"})]
+
+
+def test_system_call_empty_tag_is_dropped() -> None:
+    """裸 `<system_call>`（后面没有 JSON）→ 删掉，不执行不残留。"""
+    out = _normalize_xml_actions("做完了。<system_call>")
+    assert "<system_call" not in out
+    assert parse_actions(out) == []
+    assert "做完了" in out
+
+
+def test_system_call_invalid_json_is_dropped_not_executed() -> None:
+    """`<system_call>{坏 JSON}` → 不猜、不执行，整块删。"""
+    out = _normalize_xml_actions('<system_call>{"tool": broken json')
+    assert "<system_call" not in out
+    assert parse_actions(out) == []
+
+
+def test_has_protocol_marker_or_xml_detects_system_family() -> None:
+    for t in (
+        "<system_warning>x</system_warning>",
+        "<system_welcome/>",
+        '<system_call>{"tool":"run_shell","args":{}}',
+    ):
+        assert _has_protocol_marker_or_xml(t) is True, t

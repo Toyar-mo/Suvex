@@ -1730,14 +1730,59 @@ _XML_INVOKE_TAG_RE = re.compile(r"</?invoke\b[^>]*>", re.DOTALL)
 _XML_INVOKE_NAME_RE = re.compile(r'<invoke\s+name\s*=\s*"([^"]+)"[^>]*>', re.DOTALL)
 #: 收尾兜底：删掉还没闭合/落单的协议标签本身（增量截断时可能只剩半个标签）。
 _XML_STRAY_TAG_RE = re.compile(
-    r"</?(?:action|analysis|result|invoke|parameter|ds_safety)\b[^>]*>", re.DOTALL
+    r"</?(?:action|analysis|result|invoke|parameter|ds_safety|system[a-zA-Z_]*)"
+    r"(?![A-Za-z_])[^>]*>",
+    re.DOTALL,
 )
 #: ★ v1.52：判断"要不要走规范化"的**同一套**标签集合（含收尾 `/` 形态）。
 #:   与 `_XML_STRAY_TAG_RE` 保持一致——历史上正因为两处集合不同（v1.48 守卫漏了
 #:   `</parameter>`）导致裸收尾标记原样漏出、甚至被拼进要执行的 shell 命令。
 _XML_ANY_PROTOCOL_TAG_RE = re.compile(
-    r"</?(?:action|analysis|result|invoke|parameter|ds_safety)\b[^>]*>", re.DOTALL
+    r"</?(?:action|analysis|result|invoke|parameter|ds_safety|system[a-zA-Z_]*)"
+    r"(?![A-Za-z_])[^>]*>",
+    re.DOTALL,
 )
+
+# ★ v1.56：`<system>…</system>` —— 模型自创的第四套 XML 包装。
+#
+#   线上实测（会话「Server Host: https://pro.dasctl.c…」，2026-11-03）：模型把
+#   一堆**意图碎片**包进 `<system>` 标签刷屏：
+#       <system>ACTION.</system> <system>执行.</system> <system>先.</system> ……
+#       <system>ACTION: {"tool":"run_shell","args":{"command":"…"}}</system>
+#   这些既不是合法 `ACTION:` 行、也不在任何已知标签集合里 → 不执行也不隐藏，
+#   正文刷屏停不下来（与 v1.41/v1.44/v1.49/v1.52 同一类"自创协议"坑）。
+#
+#   处理策略（两段）：
+#   1. `<system>…</system>` 里若含真正的 `ACTION: {...}`，**只保留那段 ACTION 行**
+#      （这是模型唯一想让它执行的形态），其余包裹文字丢掉；
+#   2. 其余 `<system>…</system>`（`ACTION.` / `执行.` / `先.` 这种纯碎片）整块删掉，
+#      绝不把里面的碎词当命令执行（与 v1.53"认不出的参数组整组丢弃"同一原则）。
+#
+# ★ v1.57：整族 `system*` 标签一起处理。线上审计（会话
+#   chat_01M6BWQ69MZJNBAB7C7QMVXPV2，2026-11-03）发现同族还有三种变体：
+#     · `<system_warning>你没写 ACTION，请补上。</system_warning>` —— 纠偏提示，纯噪声；
+#     · `<system_welcome/>` —— 空自闭合；
+#     · `<system_call>\n{"tool": "run_shell", "args": {…}}` —— **只有开标签、没有闭合**，
+#       后跟一段 `{"tool":…, "args":…}` 的 JSON（这其实是模型想发的真动作，只是用错了
+#       标签名，引擎认不出 → 那轮"无动作" → 平台又回灌 `<system_warning>你没写 ACTION`）。
+#   v1.56 的正则用 `system\b`，而 `\b` 卡在 `system_warning` 的 `_`（`_` 是词字符），
+#   **一个都没匹配到** —— 31/33 条历史消息照样原样回放给前端。
+#   现在标签名扩成 `system[a-zA-Z_]*`（用 `(?![A-Za-z_])` 收边界，不用 `\b`），
+#   并单独处理"只有开标签的 `<system_call>{json}`"。
+_XML_SYSTEM_BLOCK_RE = re.compile(
+    r"<system[a-zA-Z_]*(?![A-Za-z_])[^>]*>(.*?)</system[a-zA-Z_]*(?![A-Za-z_])>",
+    re.DOTALL,
+)
+#: `<system>` 块里真正可执行的行：`ACTION: {…}`（JSON 到行尾）。
+_XML_SYSTEM_ACTION_RE = re.compile(r"ACTION\s*[:：]\s*(\{.*\})\s*$", re.DOTALL)
+#: 只有开标签、后面直接跟 JSON 的形态：`<system_call>\n{"tool":…, "args":…}`（无闭合）。
+#: 抓"开标签 + 其后到文末（或下一个裸标签）的 JSON 对象"。
+_XML_SYSTEM_OPEN_CALL_RE = re.compile(
+    r"<system[a-zA-Z_]*(?![A-Za-z_])[^>]*>\s*(\{.*?\})\s*(?=<|$)",
+    re.DOTALL,
+)
+#: 判定一段括号文本是不是"可当动作"的 JSON：必须能解析且含 `"tool"` 键。
+_XML_BARE_TOOL_JSON_RE = re.compile(r"\{.*\"tool\".*\}", re.DOTALL)
 
 # ★ v1.49：DeepSeek 的 DSML 风格 —— `<｜DSML｜ parameter>` / `<｜DSML｜ invoke>`
 #   / `<｜DSML｜ calls>`，分隔符是**全角竖线 U+FF5C**（`｜`，UTF-8 ef bd 9c），
@@ -1858,6 +1903,22 @@ def _parameter_blocks_to_actions(text: str) -> str:
     return "".join(out)
 
 
+def _is_tool_json(raw: str) -> bool:
+    """`raw` 是否是一段可当动作的 JSON（能解析成 dict 且含非空 `"tool"`）。
+
+    v1.57：`<system_call>\n{"tool":…, "args":…}` 这种只有开标签的形态，其 JSON
+    是模型想发的真动作 —— 只有确认它结构合法（dict + 有 tool 名）才展开成
+    ACTION，绝不把任意一坨花括号当命令。解析失败一律 False（随后整块丢弃）。
+    """
+    import json as _json
+
+    try:
+        obj = _json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    return isinstance(obj, dict) and bool(obj.get("tool"))
+
+
 def _normalize_xml_actions(text: str) -> str:
     """把自创的 XML 块规范化（找不到就是原文）。
 
@@ -1885,6 +1946,34 @@ def _normalize_xml_actions(text: str) -> str:
     #   交给 `_parameter_blocks_to_actions` 正常合成动作。
     if _is_dsml(text):
         text = _DSML_TAG_RE.sub(_dsml_tag_to_halfwidth, text)
+    # ★ v1.56：先处理 `<system>…</system>`。分两种：
+    #   · 块内含真 `ACTION: {...}` → 只保留那段 ACTION 行（这是模型唯一想执行的
+    #     形态），其余包裹文字丢掉；
+    #   · 其余（`ACTION.`/`执行.`/`先.` 这种碎片）→ 整块删掉，绝不把碎词当命令执行。
+    #   必须在删 `<analysis>/<result>` 之前做：`<system>` 里的 ACTION 要能被下面
+    #   的 `_XML_ACTION_RE`/`parse_actions` 正常接住。
+    if "<system" in text:
+        def _unpack_system(m: re.Match[str]) -> str:
+            inner = m.group(1)
+            am = _XML_SYSTEM_ACTION_RE.search(inner)
+            if am:
+                return "\nACTION: " + am.group(1) + "\n"
+            # v1.57：块内是一个裸 `{"tool":…}` JSON（`<system_call>{…}</system_call>`）→
+            # 它其实是想发动作，展开成 ACTION 行。
+            bm = _XML_BARE_TOOL_JSON_RE.search(inner)
+            if bm and _is_tool_json(bm.group(0)):
+                return "\nACTION: " + bm.group(0).strip() + "\n"
+            return ""  # 纯碎片，整块丢弃
+
+        text = _XML_SYSTEM_BLOCK_RE.sub(_unpack_system, text)
+        # v1.57：只有开标签、后跟裸 JSON 的 `<system_call>{json}`（无闭合）。
+        def _unpack_open_call(m: re.Match[str]) -> str:
+            body = m.group(1)
+            if _is_tool_json(body):
+                return "\nACTION: " + body.strip() + "\n"
+            return ""
+
+        text = _XML_SYSTEM_OPEN_CALL_RE.sub(_unpack_open_call, text)
     # 先删 <analysis> / <result> / <ds_safety>（都不该进正文），再改写 <action>。
     text = _XML_ANALYSIS_RE.sub("", text)
     text = _XML_RESULT_RE.sub("", text)
