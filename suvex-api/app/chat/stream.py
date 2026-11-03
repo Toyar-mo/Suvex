@@ -214,9 +214,28 @@ async def stream_turn(
             return
         yield encode_frame(EVENT_DONE, to_payload(result))
     finally:
-        # 客户端断开（用户关页面 / 切会话）时，别让 run_turn 在后台继续烧模型。
-        if not task.done():
-            task.cancel()
+        # ★ v1.54：客户端断开（刷新页面 / 切会话 / 关标签）**不取消** run_turn。
+        #
+        # 改造前这里是 `task.cancel()`，于是刷新一下就让整轮随浏览器一起断
+        # （`CancelledError` → `finish_from_error` 落 interrupted + 一条
+        # 「这一轮中途断了」），用户看到的正是「刷新网页会中断会话」。
+        #
+        # 但这与「durable 轮次」的设计矛盾：一轮已经跑起来（有 turn_run 行、
+        # 有 heartbeat、沙箱在跑、工具可能有副作用），它就不该因为**看的人换了
+        # 个页面**而中断。断开只是「不再往这条已死的连接推帧」，不是「停止干活」。
+        #
+        # 所以这里让任务继续在后台跑完：它自己会落 done / interrupted /
+        # cancelled（`_run_guarded_active` 负责），用户刷新回来看到的是最新
+        # 进度；真要停下，走 `/interrupt`（用户主动 stop），那才是「别再跑」。
+        #
+        # 注意：`emit` 往这条断掉的连接 `queue.put` 不会抛（队列在内存里），
+        # 只是没人取；任务结束即被 GC，不泄漏。
+        #
+        # ⚠️ 这里**不能**写 `return`：`finally` 里的 `return` 会静默吞掉
+        # 正在传播的异常（ruff B012），那样 `run_turn` 抛的错就不会变成
+        # error 帧，前端只会看到连接无声断掉。所以用一个空语句收尾 ——
+        # 「什么都不做」本身就是新行为（不 cancel）。
+        pass
 
 
 __all__ = [

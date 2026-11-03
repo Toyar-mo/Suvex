@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -313,13 +314,60 @@ async def test_stream_turn_turns_exceptions_into_error_frames() -> None:
 
 
 async def test_stream_turn_prints_error_type_name() -> None:
-    """error 帧要带异常**类型名** —— 只有 message 时看不出是哪种失败。"""
 
     async def runner(emit):
         raise ValueError("参数不对")
 
     body = "".join(await _collect(stream_turn(runner, to_payload=lambda r: {})))
     assert "ValueError" in body
+
+
+async def test_stream_turn_does_not_cancel_the_turn_when_the_client_disconnects() -> None:
+    """★ v1.54：客户端断开（刷新页面）时，**不许**取消 run_turn。
+
+    改造前这里是 `task.cancel()`，刷新一下就让整轮随浏览器一起断
+    （`CancelledError` → `finished_from_error` 落 interrupted）。durable 的
+    语义是「跑起来的一轮不该因为看的人换了页面就中断」。
+
+    这里模拟：生成器取到第一帧后就不再取（客户端断开），然后等 runner
+    自己跑完 —— 它必须**跑到终点**，而不是被 cancel 掉。
+    """
+    finished = asyncio.Event()
+    cancelled = {"flag": False}
+
+    async def runner(emit):
+        try:
+            await emit(EVENT_PHASE, {"phase": "thinking", "round": 0})
+            # 模拟一段"很慢"的活儿：断开后仍然应当继续跑完
+            await asyncio.sleep(0.05)
+            return {"n": 1}
+        except asyncio.CancelledError:  # pragma: no cover - 改了就是失败
+            cancelled["flag"] = True
+            raise
+        finally:
+            finished.set()
+
+    gen = stream_turn(runner, to_payload=lambda r: {"messageCount": r["n"]})
+    first = await gen.__anext__()  # 只取第一帧
+    assert "event: phase" in first
+
+    await gen.aclose()  # 客户端断开：触发 stream_turn 的 finally
+
+    # 给后台任务一点时间跑完
+    await asyncio.wait_for(finished.wait(), timeout=2.0)
+    assert cancelled["flag"] is False, "客户端断开不该取消这一轮"
+
+
+async def test_stream_turn_still_emits_done_when_not_disconnected() -> None:
+    """对照组：没有断开时，正常发 done 收尾（防止上面的改动误伤正常路径）。"""
+
+    async def runner(emit):
+        await emit(EVENT_PHASE, {"phase": "thinking", "round": 0})
+        return {"n": 7}
+
+    body = "".join(await _collect(stream_turn(runner, to_payload=lambda r: {"messageCount": r["n"]})))
+    assert "event: done" in body
+    assert '"messageCount":7' in body
 
 
 # ══════════════════════════════════════════════════════════
