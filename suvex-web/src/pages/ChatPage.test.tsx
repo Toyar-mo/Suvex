@@ -101,7 +101,7 @@ import {
 } from '@/data/chat'
 import type { ChatMessage, ChatSession, ChatState } from '@/data/chat'
 import { ApiError } from '@/lib/api'
-import ChatPage, { phaseLabel } from './ChatPage'
+import ChatPage, { phaseLabel, turnToolCount } from './ChatPage'
 
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedUseChat = vi.mocked(useChat)
@@ -1064,6 +1064,34 @@ describe('phaseLabel：纠偏续跑的文案', () => {
       '第 3 轮 · 正在执行 run_shell…',
     )
     expect(phaseLabel(null)).toBe('正在想…')
+  })
+})
+
+describe('turnToolCount：live 阶段行上的「已 N 次工具」计数（v1.30）', () => {
+  /*
+    这个计数接在 `<AssistantTurn progress={...}>` 上（ChatPage 传给
+    AssistantTurn，AssistantTurn 用 progressLabel 渲染）。数错会让用户
+    在跑的时候看到假的推进数 —— 所以只钉两条最会骗人的边界：
+
+    ① 只数 `role === 'tool'`：旁白（`process`）也"动过"，但每轮开头模型
+       必先写一句旁白；把旁白算进去，计数会在真正执行第一个工具前就从 1
+       开始，反而看不出工具推进。
+    ② 空列表 = 0，不 NaN、不崩。
+  */
+  it('★ 只数 tool 消息：旁白（process）不算', () => {
+    const items: ChatMessage[] = [
+      message({ role: 'assistant', content: '我先看看工作目录' }), // 旁白
+      message({ role: 'tool' }),
+      message({ role: 'assistant', content: '再跑一次' }), // 旁白
+      message({ role: 'tool' }),
+      message({ role: 'tool' }),
+      message({ role: 'user', content: '继续' }),
+    ]
+    expect(turnToolCount(items)).toBe(3)
+  })
+
+  it('空回合 = 0', () => {
+    expect(turnToolCount([])).toBe(0)
   })
 })
 

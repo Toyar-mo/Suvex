@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Terminal, Wrench } from 'lucide-react'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { cn } from '@/lib/cn'
 import type { ChatMessage } from '@/data/chat'
+import { digestToolArgs } from './toolCardDigest'
 
 /**
  * 工具卡：它到底做了什么。
@@ -98,16 +99,4 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
       )}
     </div>
   )
-}
-
-/** 折叠态那行参数摘要：只在白名单键里找第一个非空字符串。 */
-function digestToolArgs(args: ChatMessage['toolArgs']): string {
-  if (!args) return ''
-  for (const key of ['command', 'cmd', 'path', 'name', 'query', 'url', 'target']) {
-    const value = args[key]
-    if (typeof value === 'string' && value.trim()) {
-      return value.trim().split('\n')[0].slice(0, 80)
-    }
-  }
-  return ''
 }

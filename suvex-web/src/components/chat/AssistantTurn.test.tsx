@@ -256,6 +256,39 @@ describe('AssistantTurn — 跑着的时候', () => {
   })
 })
 
+describe('AssistantTurn — live 阶段行上的「已 N 次工具」计数（v1.30）', () => {
+  /*
+    这个计数由 ChatPage 从 `turnToolCount(turn.items)` 算好、经 `progress`
+    prop 传进来（ChatPage 那边数对，这里负责渲染）。钉两条最容易骗人的：
+
+    ① live 且 tools>0 时，阶段行要显示「（已 N 次工具）」；
+    ② tools 为 0 或没传 progress 时，**不显示**——不能在还没执行工具时
+       就蹦出「已 0 次工具」让用户以为卡住了。
+  */
+  it('★ live 且传了 tools，阶段行显示「（已 N 次工具）」', () => {
+    const { container } = render(
+      <AssistantTurn items={[narration, toolOk]} live phaseText="第 3 轮 · 正在执行 run_shell…" progress={{ tools: 3 }} />,
+    )
+    const status = container.querySelector('[role="status"]') as HTMLElement
+    expect(status).not.toBeNull()
+    expect(status.textContent).toContain('（已 3 次工具）')
+  })
+
+  it('★ tools=0 时不显示计数（别在没跑工具时就写「已 0 次」）', () => {
+    const { container } = render(
+      <AssistantTurn items={[narration]} live phaseText="第 1 轮 · 模型在推理…" progress={{ tools: 0 }} />,
+    )
+    const status = container.querySelector('[role="status"]') as HTMLElement
+    expect(status.textContent).not.toContain('次工具')
+  })
+
+  it('没传 progress 时不显示计数', () => {
+    const { container } = render(<AssistantTurn items={[narration]} live phaseText="第 1 轮 · 模型在推理…" />)
+    const status = container.querySelector('[role="status"]') as HTMLElement
+    expect(status.textContent).not.toContain('次工具')
+  })
+})
+
 describe('AssistantTurn — 待审批的消息透传回调', () => {
   it('★ 最终答复位的待审批消息：回合把 id 补回 callback，不只交一个 bool', () => {
     const onDecide = vi.fn()

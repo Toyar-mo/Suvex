@@ -171,6 +171,17 @@ export function phaseLabel(phase: PhasePayload | null | { phase: string; round: 
   return round > 0 ? `第 ${round} 轮 · 模型在推理…` : '正在想…'
 }
 
+/**
+ * 这一轮已经跑了几次工具（v1.30）。
+ *
+ * 只数 `role === 'tool'` 的消息：它们是**执行过**的证据。旁白（`process`）
+ * 也代表"动过"，但每轮开头模型都会先写一句旁白 —— 把旁白算进去会让
+ * 计数在真正执行第一个工具之前就从 1 开始，反而看不出工具的推进。
+ */
+export function turnToolCount(items: ChatMessage[]): number {
+  return items.filter((message) => message.role === 'tool').length
+}
+
 export function ChatPage() {
   const {
     sessions,
@@ -870,6 +881,20 @@ export function ChatPage() {
     sendingHere && pendingUserContent === null ? turns.length - 1 : -1
 
   /*
+    ★ v1.30：live 阶段行上的「已 N 次工具」计数。
+
+    `liveTurnIndex >= 0` 时（那句用户消息已落库、回合在原地 live），计数器
+    直接从**当前这一轮已经落库的消息**里数，不需要后端再推一个新字段 ——
+    `turn.items` 本来就随每轮工具结果刷新。
+
+    `liveTurnIndex < 0` 时（乐观气泡还在、这一轮还没有回合可归），消息流里
+    没有正在进行的回合，但**前面几轮的**工具数并不代表这一轮，所以不冒充：
+    此时返回 undefined，阶段行就只显示轮次文案。
+  */
+  const liveLooseToolCount =
+    liveTurnIndex >= 0 ? turnToolCount(turns[liveTurnIndex].items) : undefined
+
+  /*
     按项目分组。
 
     ★ 「无项目」必须排**最后**且有一个显式标题，而不是当成
@@ -1284,6 +1309,7 @@ export function ChatPage() {
                         live={isLive}
                         streamingText={isLive ? streamingText : null}
                         phaseText={isLive ? phaseLabel(phase) : null}
+                        progress={isLive ? { tools: turnToolCount(turn.items) } : null}
                         interjections={isLive ? interjections : []}
                         meta={turnMeta}
                         sessionId={active?.id}
@@ -1341,6 +1367,7 @@ export function ChatPage() {
                   live
                   streamingText={streamingText}
                   phaseText={phaseLabel(phase)}
+                  progress={{ tools: liveLooseToolCount }}
                   interjections={interjections}
                 />
               )}
