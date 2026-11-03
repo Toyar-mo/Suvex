@@ -1,0 +1,18 @@
+v1.56 / v1.57 验证结果汇总
+================================
+后端单测：
+  tests/chat/test_xml_actions.py + tests/chat/test_message_out_system_cleanup.py
+    → 58 passed
+  tests/chat 全量回归
+    → 432 passed, 1 skipped in 452.44s
+前端：
+  AssistantTurn.test.tsx (11) + AssistantWork.test.tsx (5) → 16 passed
+  npx tsc -b → exit 0
+  npx eslint AssistantTurn.tsx/.test.tsx → exit 0
+  npm run build → 成功（ChatPage-DCrb8Jjh.js / index-BC551C11.js，与已部署 prod 同名同 hash）
+线上 prod 真库端到端（v157-prod-e2e-verify.txt）：
+  chat_01M6GAVGDD7JTENZ2ZANK7CT4W: 146 条含 <system> → 序列化后 0 残留
+  chat_01M6BWQ69MZJNBAB7C7QMVXPV2: 33 条含 <system> → 序列化后 0 残留
+线上页面 DOM 复核（v157-page-dom-check.json）：
+  hasSystemTag=false，systemSnippets=[]，timelineRoots=2
+  turn2 子节点顺序：[过程详情, run_shell pwd, answer段1, answer段2, footer]
