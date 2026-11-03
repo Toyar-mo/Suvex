@@ -381,6 +381,10 @@ CATEGORY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "strace",
         "mono",
         "monodis",
+        # ★ v1.61 补：pyc 反编译（Decompyle++）。pycdc 反编译、pycdas 反汇编。
+        #   加进这张表正是这个脚本的用途——"装了但没进镜像"是它存在的理由。
+        "pycdc",
+        "pycdas",
         "checksec",
         "xvfb-run",
         "python3",
@@ -481,6 +485,29 @@ CATEGORY_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 _APT_INSTALL_RE = re.compile(r"apt-get\s+install\b([^&|;]*)")
 _PIP_INSTALL_RE = re.compile(r"\bpip3?\s+install\b([^&|;]*)")
 
+#: 从源码构建后 `install -m 755 <bin> /usr/local/bin/<name>` 或
+#: `cp <bin> /usr/local/bin/<name>` 落地的二进制。
+#:
+#: ## 为什么需要单独认这一类（v1.61 补）
+#:
+#: 这个脚本原本只认 apt / pip —— 因为在那之前所有工具都是那么装的。
+#: pycdc（Decompyle++，pyc 反编译）是**从源码 C++ 构建**的：`git clone`
+#: 后 `cmake --build`，再把 `build/pycdc` `install` 到 `/usr/local/bin/`。
+#: 它既不在 apt 也不在 pip 表里，于是 `declared()` 看不见它 ——
+#: 一旦把它写进 `CATEGORY_REQUIREMENTS["reverse"]`（这正是我们想要的，
+#: 「re 镜像必须能反编译 pyc」），脚本就误报「Dockerfile 里没声明」。
+#:
+#: 误报的根子是**这个脚本的世界观漏了一类安装方式**，不是契约写错了。
+#: 所以修这里（把"装进 /usr/local/bin 的二进制"也当作已声明），而不是
+#: 把 pycdc 从契约里删掉 —— 后者等于为了方便脚本而否认镜像真的缺东西。
+#:
+#: ⚠️ 只认 `/usr/local/bin/` 下的落地：那是 PATH 里、`command -v` 找得到的
+#:    位置。装到别处的（如 `/opt/x/bin` 且没加 PATH）不算 —— 那种
+#:    `command -v` 照样找不到，不该在这里被当成"有"。
+_LOCAL_BIN_INSTALL_RE = re.compile(
+    r"(?:^|\s)(?:install|cp)\s[^&|;]*?\s/usr/local/bin/([A-Za-z0-9_.+-]+)"
+)
+
 #: `install` 后面可能跟的选项，都不是包名。
 _OPTION_PREFIX = "-"
 
@@ -544,6 +571,10 @@ class ImagePackages:
     name: str
     apt: list[str]
     pip: list[str]
+    #: 从源码构建后落进 `/usr/local/bin/` 的二进制名（如 pycdc/pycdas）。
+    #: 它们没有对应的 apt/pip 包名，故单列 —— `declared()`/`commands()`
+    #: 把它们当命令名直接计，`packages()`/`owners()` 则不含（没有包可探）。
+    binaries: list[str] = field(default_factory=list)
 
     def _translate(self, pkg: str, kind: str = "apt") -> tuple[str, tuple[str, ...]]:
         """把一个包名翻成 `(归一化包名, 它提供的命令)`。
@@ -577,6 +608,8 @@ class ImagePackages:
             for pkg in group:
                 _, provided = self._translate(pkg, kind)
                 cmds.update(provided)
+        # 源码构建落进 /usr/local/bin 的二进制直接就是命令名。
+        cmds.update(self.binaries)
         return cmds
 
     def owners(self) -> dict[str, list[tuple[str, str]]]:
@@ -630,6 +663,9 @@ class ImagePackages:
                 _, provided = self._translate(pkg, kind)
                 for cmd in provided:
                     seen.setdefault(cmd, None)
+        # 源码构建的二进制也属于"名单里声明了的命令"。
+        for name in self.binaries:
+            seen.setdefault(name, None)
         return list(seen)
 
     def packages(self) -> list[tuple[str, str]]:
@@ -694,14 +730,22 @@ def parse_image(path: Path, name: str) -> ImagePackages:
 
     apt: list[str] = []
     pip: list[str] = []
+    binaries: list[str] = []
     for line in _logical_lines(text):
         for match in _APT_INSTALL_RE.finditer(line):
             apt.extend(_packages_from(match.group(1)))
         for match in _PIP_INSTALL_RE.finditer(line):
             pip.extend(_packages_from(match.group(1)))
+        for match in _LOCAL_BIN_INSTALL_RE.finditer(line):
+            binaries.append(match.group(1))
 
     # 去重但保序（报错信息里的顺序稳定，diff 才好看）
-    return ImagePackages(name=name, apt=list(dict.fromkeys(apt)), pip=list(dict.fromkeys(pip)))
+    return ImagePackages(
+        name=name,
+        apt=list(dict.fromkeys(apt)),
+        pip=list(dict.fromkeys(pip)),
+        binaries=list(dict.fromkeys(binaries)),
+    )
 
 
 # ══════════════════════════════════════════════════════════
@@ -1510,6 +1554,7 @@ def _resolve_image(
         name=own.name,
         apt=base.apt + [p for p in own.apt if p not in base.apt],
         pip=base.pip + [p for p in own.pip if p not in base.pip],
+        binaries=base.binaries + [b for b in own.binaries if b not in base.binaries],
     )
     return merged, True
 

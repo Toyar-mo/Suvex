@@ -470,6 +470,18 @@ export interface KernelSettings {
    */
   maxTurns: number
   /**
+   * 每题墙钟预算（秒，v1.61）。**留空 = 按回合自动推导**（`maxTurns × 45`）。
+   *
+   * ★ 它治的是"CTF 求解没有时间感知"：在这之前 CTF 路径的墙钟恒为空，
+   * 那套 60/80/92% 的按时间催促一次都没触发过，只剩回合催兜底 —— 而回合催
+   * 治不了"一轮花很久"的题（真库实测有题跑满 80 轮、单次求解烧到 9.5 小时）。
+   *
+   * ★ `null` ≠ "关闭"，而是"自动"（与 `fallbackProviderId` 语义**相反**）：
+   * 零配置就修好病态长跑，且自动值随 `maxTurns` 联动，不会出现"改了回合
+   * 忘了改墙钟"的错位。显式填数则覆盖自动值（区间 120-86400 秒）。
+   */
+  wallClockSeconds: number | null
+  /**
    * 换模 fallback（v0.35）。默认 provider 调不动时改用哪个 provider；
    * `null` = 不启用（**默认**）。
    *
@@ -1005,6 +1017,26 @@ let error: ApiError | null = null
 let notice: string | null = null
 let settingsError: ApiError | null = null
 
+/**
+ * 仅供测试：把模块级缓存清回初始态。
+ *
+ * ★ 模块级 `let` 会在同一测试文件的多条用例间**残留**（`status` 卡在
+ * 'ready' 时 `loadKernel` 会被 `useEffect` 的 `status==='idle'` 判断挡掉）。
+ * 组件渲染测试需要每条用例从干净起点加载，故暴露此钩子。生产代码不调用。
+ */
+export function __resetKernelForTest(): void {
+  account = null
+  challenges = []
+  settings = null
+  queue = null
+  status = 'idle'
+  error = null
+  notice = null
+  settingsError = null
+  commit()
+}
+
+
 let snapshot: KernelSnapshotState = {
   account,
   challenges,
@@ -1197,6 +1229,15 @@ export async function saveKernelSettings(next: {
   autoPriorityNew: boolean
   autoStartNew: boolean
   maxTurns: number
+  /**
+   * 每题墙钟预算（秒，v1.61）。**`null` = 按回合自动推导**，不是关闭。
+   *
+   * ★ 与上面两个必填开关**不同**：它是可空字段，`null` 与"不传"等价
+   * （都=自动），所以**可以**给默认值（`null`），不构成"替调用方做决定"。
+   * 与 `fallbackProviderId` 同类可空 —— 只是语义相反（那里 `null`=关闭）。
+   * 这个区别有意为之，别照抄开关的"必填"改法把它也改成必填。
+   */
+  wallClockSeconds: number | null
   fallbackProviderId: string | null
   /**
    * 智能体安全评测开关（v0.40）。

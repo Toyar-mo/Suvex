@@ -421,6 +421,7 @@ def _settings_out(row) -> KernelSettingsOut:  # noqa: ANN001
         autoPriorityNew=row.auto_priority_new,
         autoStartNew=row.auto_start_new,
         maxTurns=row.max_turns,
+        wallClockSeconds=row.wall_clock_seconds,
         fallbackProviderId=row.fallback_provider_id,
         enableAgentsecScenarios=row.enable_agentsec_scenarios,
         enableIrScenarios=row.enable_ir_scenarios,
@@ -465,6 +466,7 @@ def update_ctf2_settings(
         enable_agentsec_scenarios=payload.enableAgentsecScenarios,
         enable_ir_scenarios=payload.enableIrScenarios,
         enable_multi_agent=payload.enableMultiAgent,
+        wall_clock_seconds=payload.wallClockSeconds,
     )
     audit.record(
         db,
@@ -489,6 +491,9 @@ def update_ctf2_settings(
             # ★ 回合预算也留痕：它决定"一道题最多烧多少次 LLM 调用"，
             #   属于会改变机器对外行为的配置（与并发、提交模式同一类）。
             "maxTurns": row.max_turns,
+            # ★ v1.61：墙钟预算也留痕。None = 自动（按回合推导）；显式给了
+            #   数就记下来 —— 复盘"这道题当时为什么被提前催促收尾"要看它。
+            "wallClockSeconds": row.wall_clock_seconds,
             # ★ v0.40：场景包开关也留痕，且理由比上面几项更硬 ——
             #   打开它会把 agent 的行为纪律从"攻破系统拿 flag"换成
             #   "判定安全考察点是否成立"（证据分三级、多智能体结论只能

@@ -332,6 +332,7 @@ describe('saveKernelSettings 的场景包开关', () => {
       autoPriorityNew: true,
       autoStartNew: false,
       maxTurns: 40,
+      wallClockSeconds: null,
       fallbackProviderId: null,
       enableAgentsecScenarios: true,
       enableIrScenarios: true,
@@ -367,6 +368,7 @@ describe('saveKernelSettings 的场景包开关', () => {
       autoPriorityNew: true,
       autoStartNew: false,
       maxTurns: 40,
+      wallClockSeconds: null,
       fallbackProviderId: null,
       enableAgentsecScenarios: false,
       enableIrScenarios: false,
@@ -408,6 +410,7 @@ describe('saveKernelSettings 的场景包开关', () => {
         autoPriorityNew: true,
         autoStartNew: false,
         maxTurns: 40,
+        wallClockSeconds: null,
         fallbackProviderId: null,
         enableAgentsecScenarios: agentsec,
         enableIrScenarios: ir,
@@ -418,6 +421,79 @@ describe('saveKernelSettings 的场景包开关', () => {
       expect(body.enableAgentsecScenarios, `agentsec=${agentsec} ir=${ir}`).toBe(agentsec)
       expect(body.enableIrScenarios, `agentsec=${agentsec} ir=${ir}`).toBe(ir)
     }
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  `saveKernelSettings` 的墙钟预算（v1.61）
+  ══════════════════════════════════════════════════════════════
+
+  ## 为什么也单独立一条
+
+  与上面两个开关同一个坑：`PUT /kernel/settings` 是全量提交，漏传
+  `wallClockSeconds` 会被后端按默认 `None` 落库 —— 而这里 `None` 表示
+  "自动"，恰好也是默认，**看起来没坏**。所以单看"保存成功"抓不到漏传。
+
+  但另一侧有真问题：若前端在拿到 `null`（自动）时**不把这个键写进 body**
+  （比如用了 `if (value)` 之类的过滤），那就变成"从显式设了墙钟 → 改成自动"
+  时，后端拿不到"这次要设成 null"的信号。全量提交语义要求前端**永远把
+  这个键带上**，`null` 也带。
+*/
+
+describe('saveKernelSettings 的墙钟预算', () => {
+  it('★★ 显式值原样带进请求体', async () => {
+    installBodyCapturingFetch({ submitMode: 'safe' })
+
+    await saveKernelSettings({
+      submitMode: 'safe',
+      maxWrongSubmissions: 3,
+      defaultSandboxProfile: 'suvex-sandbox',
+      maxConcurrentSolves: 2,
+      solvePollSeconds: 1,
+      autoSyncSeconds: 60,
+      autoPriorityNew: true,
+      autoStartNew: false,
+      maxTurns: 40,
+      wallClockSeconds: 1800,
+      fallbackProviderId: null,
+      enableAgentsecScenarios: false,
+      enableIrScenarios: false,
+      enableMultiAgent: false,
+    })
+
+    const body = putBodies[0] as Record<string, unknown>
+    expect(body.wallClockSeconds).toBe(1800)
+  })
+
+  it('★★ 自动（null）也必须把键带出去，且是 null 不是缺字段', async () => {
+    /*
+      ★ 关键：`'wallClockSeconds' in body` 必须为 true。
+      `null` 表示"自动推导"，是一个**有意义的指令**（把之前的显式值清掉）。
+      全量提交语义下，漏带这个键就无法表达"改回自动"这个意图。
+    */
+    installBodyCapturingFetch({ submitMode: 'safe' })
+
+    await saveKernelSettings({
+      submitMode: 'safe',
+      maxWrongSubmissions: 3,
+      defaultSandboxProfile: 'suvex-sandbox',
+      maxConcurrentSolves: 2,
+      solvePollSeconds: 1,
+      autoSyncSeconds: 60,
+      autoPriorityNew: true,
+      autoStartNew: false,
+      maxTurns: 40,
+      wallClockSeconds: null,
+      fallbackProviderId: null,
+      enableAgentsecScenarios: false,
+      enableIrScenarios: false,
+      enableMultiAgent: false,
+    })
+
+    const body = putBodies[0] as Record<string, unknown>
+    expect('wallClockSeconds' in body).toBe(true)
+    expect(body.wallClockSeconds).toBeNull()
   })
 })
 

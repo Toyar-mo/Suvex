@@ -206,6 +206,13 @@ class KernelSettingsOut(CamelModel):
     #   实测同一批题里，简单题 6 轮出结果、.NET 逆向题跑满 40 轮
     #   发出 37 条各不相同的命令仍是"没做完"。所以它是配置项。
     maxTurns: int
+    # ★ v1.61：每题墙钟预算（秒）。`null` = 按 `maxTurns × 45` 自动推导
+    #   （见 `vocab.default_ctf2_wall_clock_seconds`）。它给主循环的墙钟三档
+    #   催促（60/80/92%）供电，此前 CTF 路径没有它 → 模型对时间无感知。
+    #   非 null 时覆盖自动值。这个字段**有默认值 None**（= 自动），与
+    #   `fallbackProviderId` 同理：`None` 与"不传"语义等价（都表示自动），
+    #   不构成"替调用方做决定"。
+    wallClockSeconds: int | None = None
     # ★ v0.35：换模 fallback。默认 provider 调不动时改用哪个 provider；
     #   空串 / null = 不启用（默认）。见 `settings/models.py` 的说明。
     fallbackProviderId: str | None = None
@@ -274,6 +281,11 @@ class KernelSettingsIn(StrictModel):
     # 上界 500 是"别手滑填 100000"的护栏，**不是**成本护栏 ——
     # 真正的成本该由人在现场按题权衡。
     maxTurns: int = Field(ge=5, le=500)
+    # ★ v1.61：每题墙钟预算（秒）。**可选**（有默认值 None = 自动推导）。
+    #   与 `fallbackProviderId` 同一类可空字段：None 与"不传"语义等价
+    #   （都表示"按 maxTurns×45 自动"），所以默认值不构成"替调用方做决定"。
+    #   区间与 `vocab.MIN/MAX_CTF2_WALL_CLOCK_SECONDS` 是同一对数。
+    wallClockSeconds: int | None = Field(default=None, ge=120, le=86400)
     # ★ v0.35：换模 fallback。**可选**（有默认值）—— 与上面"全部必填"
     #   不同，理由是它是一个**新增**字段：老的客户端不带它时应当按
     #   "不启用"处理，而不是报 422。空串与 null 都表示"不启用"。

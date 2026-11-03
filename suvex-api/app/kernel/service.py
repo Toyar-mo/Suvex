@@ -93,10 +93,12 @@ from app.core.vocab import (
     MAX_CTF2_MAX_CONCURRENT_SOLVES,
     MAX_CTF2_MAX_TURNS,
     MAX_CTF2_SOLVE_POLL_SECONDS,
+    MAX_CTF2_WALL_CLOCK_SECONDS,
     MIN_CTF2_AUTO_SYNC_SECONDS,
     MIN_CTF2_MAX_CONCURRENT_SOLVES,
     MIN_CTF2_MAX_TURNS,
     MIN_CTF2_SOLVE_POLL_SECONDS,
+    MIN_CTF2_WALL_CLOCK_SECONDS,
     RESOLVABLE_CTF2_CHALLENGE_STATUSES,
     IrCategory,
     KernelChallengeStatus,
@@ -3546,6 +3548,11 @@ class KernelSettings:
     #: 每题最多跑多少回合（v0.26）。见 `vocab.DEFAULT_CTF2_MAX_TURNS` ——
     #: 这个数没有全局最优（简单题 6 轮、硬题 200 轮），所以它是配置项。
     max_turns: int
+    #: ★ v1.61：每题墙钟预算（秒）。`None` = 按 `max_turns × 45` 自动推导
+    #: （见 `vocab.default_ctf2_wall_clock_seconds`）。它给主循环的墙钟三档
+    #: 催促（`runner.WALL_WARN_BANDS`）供电 —— 此前 CTF 路径没有它，模型
+    #: 对"时间还剩多少"完全无感知。非 None 时覆盖自动值（已夹区间）。
+    wall_clock_seconds: int | None = None
     #: 换模 fallback（v0.35）。默认 provider 调不动时改用哪个；
     #: `None` = 不换（默认），行为与引入前一致。见 `settings/models.py`
     #: 的 `KernelConfig.fallback_provider_id`。
@@ -3604,6 +3611,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
             auto_priority_new=True,
             auto_start_new=False,
             max_turns=DEFAULT_CTF2_MAX_TURNS,
+            wall_clock_seconds=None,
             fallback_provider_id=None,
             enable_agentsec_scenarios=False,
             enable_ir_scenarios=False,
@@ -3620,6 +3628,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
         auto_priority_new=row.auto_priority_new,
         auto_start_new=row.auto_start_new,
         max_turns=row.max_turns,
+        wall_clock_seconds=row.wall_clock_seconds,
         fallback_provider_id=row.fallback_provider_id,
         enable_agentsec_scenarios=row.enable_agentsec_scenarios,
         enable_ir_scenarios=row.enable_ir_scenarios,
@@ -3662,6 +3671,7 @@ def update_ctf2_settings(
     enable_agentsec_scenarios: bool,
     enable_ir_scenarios: bool,
     enable_multi_agent: bool,
+    wall_clock_seconds: int | None = None,
 ) -> KernelConfig:
     """保存配置。**逐项校验，不静默夹取。**
 
@@ -3694,6 +3704,8 @@ def update_ctf2_settings(
     _assert_solve_poll_seconds(solve_poll_seconds)
     _assert_auto_sync_seconds(auto_sync_seconds)
     _assert_max_turns(max_turns)
+    # ★ v1.61：墙钟预算。None = 自动（按 max_turns×45）；给了数就校验区间。
+    _assert_wall_clock_seconds(wall_clock_seconds)
     # ★ 换模 fallback：空串归一成 None（"不换"），给了一个 id 就必须
     #   真的存在 —— 存一个不存在的 id 会让它在解题失败时才暴露，
     #   而那时正是最不该再出一个"配置指错了"的时刻。
@@ -3717,6 +3729,7 @@ def update_ctf2_settings(
     row.auto_priority_new = auto_priority_new
     row.auto_start_new = auto_start_new
     row.max_turns = max_turns
+    row.wall_clock_seconds = wall_clock_seconds
     row.fallback_provider_id = normalized_fallback
     row.enable_agentsec_scenarios = bool(enable_agentsec_scenarios)
     row.enable_ir_scenarios = bool(enable_ir_scenarios)
@@ -3725,7 +3738,7 @@ def update_ctf2_settings(
     db.refresh(row)
     logger.info(
         "CTF2 配置已更新：mode=%s maxWrong=%d profile=%s 解题并发=%d "
-        "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 备用模型=%s "
+        "认领间隔=%.1fs 自动同步=%s 新题自动优先=%s 新题自动开解=%s 回合预算=%d 墙钟=%s 备用模型=%s "
         "智能体安全场景=%s 应急响应场景=%s 多智能体=%s",
         submit_mode,
         max_wrong_submissions,
@@ -3736,6 +3749,9 @@ def update_ctf2_settings(
         auto_priority_new,
         auto_start_new,
         max_turns,
+        # ★ v1.61：墙钟预算。None = 自动（按 max_turns×45），日志里写明，
+        #   免得复盘时"当时墙钟到底是多少"只能靠猜（它是从回合数推的）。
+        f"{wall_clock_seconds}s" if wall_clock_seconds else "自动（回合×45）",
         normalized_fallback or "（不启用）",
         # 这一项会**改变模型的行为纪律**（从"攻破系统"变成"判定考察点"），
         # 所以它的开/关必须能在日志里查得到 —— 复盘时"当时到底开没开"
@@ -3884,6 +3900,30 @@ def _assert_max_turns(value: int) -> None:
             {
                 "maxTurns": (
                     f"应在 {MIN_CTF2_MAX_TURNS}-{MAX_CTF2_MAX_TURNS} 之间，收到 {value}"
+                )
+            },
+        )
+
+
+def _assert_wall_clock_seconds(value: int | None) -> None:
+    """校验每题墙钟预算（秒）。`None` = 自动推导，直接放行。
+
+    给了数就校验区间，**不静默夹取** —— 与 `_assert_max_turns` 同一条纪律：
+    用户填 120、保存成功、实际跑 3600，他会以为是 bug 再改一次。
+
+    ⚠️ 区间下界 120 秒：再小会打断正常求解（一道题光看附件就要几轮，每轮
+       还可能有一条 300 秒命令）。这不是成本闸，是"别填 5 秒"的护栏。
+    """
+    if value is None:
+        return
+    if not (MIN_CTF2_WALL_CLOCK_SECONDS <= value <= MAX_CTF2_WALL_CLOCK_SECONDS):
+        raise ApiError.validation(
+            f"墙钟预算应在 {MIN_CTF2_WALL_CLOCK_SECONDS}-"
+            f"{MAX_CTF2_WALL_CLOCK_SECONDS} 秒之间（或留空按回合自动推导）。",
+            {
+                "wallClockSeconds": (
+                    f"应在 {MIN_CTF2_WALL_CLOCK_SECONDS}-"
+                    f"{MAX_CTF2_WALL_CLOCK_SECONDS} 秒之间，收到 {value}"
                 )
             },
         )

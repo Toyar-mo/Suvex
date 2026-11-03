@@ -146,6 +146,54 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         lief \
         pyelftools
 
+# ── ★ pyc 反编译：pycdc（Decompyle++）（v1.61 项目2 补）──────
+#
+# ## 为什么必须补：Python 字节码题是逆向的常见题型
+#
+# 审计（2026-11-03）发现两个镜像里**没有任何 .pyc 反编译器**。面对一道
+# 「给一个 .pyc，还原源码找 flag」的题，模型只能 `strings` / `dis` 硬看
+# 字节码 —— 与当初 .NET 题「没有 mono/ILSpy」是同一类环境缺口。
+#
+# ## 为什么是 pycdc 而不是 decompyle3 / uncompyle6
+#
+# 那两个是 pip 包，但**只覆盖到 Python 3.8 的字节码**，且要在**目标版本
+# 的解释器**上跑；本镜像的系统 python 是 3.14（Kali rolling），既装不上
+# 老版本也解析不了新 pyc。CTF 的 pyc 版本五花八门（3.6/3.8/3.10/…），
+# `decompyle3` 这条路线是死的。
+#
+# pycdc 是**独立 C++ 二进制**，自己解析 pyc 的 marshal 格式，
+# **不依赖**目标版本解释器，覆盖 Python 1.x ~ 3.13 的字节码。同仓库还带
+# `pycdas`（字节码反汇编器）—— 反编译失败时至少能看反汇编，这正是
+# 「遇到难的要有应对的办法」需要的兜底。
+#
+# ⚠️ 已知边界：pycdc 读不了 **3.14** 的 pyc（它支持到 3.13）。本镜像的
+#    `python3` 恰好是 3.14（Kali rolling），所以「用本镜像的 python 现编译
+#    一个 pyc 再喂给 pycdc」会报 `Bad MAGIC!`。这不是故障 —— 真实 CTF 题
+#    给的 pyc 绝大多数是 3.6–3.11（更老的题更常见），pycdc 都能反编译
+#    （实测 3.7 / 3.11 均完整还原源码）。真要解 3.14 的 pyc，用
+#    `python3 -m dis` 或 find_pycdc 之外的 `dis` 模块先看字节码。
+#
+# ⚠️ 从源码构建（自 C++）：需要 git + cmake + build-essential + ninja，
+#    这些 base 镜像里**都已有**（见 base Dockerfile 的构建工具段）。
+#    构建完删掉源码树 + apt 列表，只留 ~2 MB 的两个二进制，不占体积。
+# ⚠️ 克隆用 --depth 1（只要最新）：完整历史对运行毫无用处，却要多拉几十 MB。
+# ⚠️ 这一步放在 pip 之后：pycdc 的构建与 python 包无关，万一它失败，
+#    前面 angr 等已装好的层能命中缓存，排查更快（Docker 分层从前到后）。
+ARG PYCDC_REPO=https://github.com/zrax/pycdc.git
+RUN git clone --depth 1 "$PYCDC_REPO" /tmp/pycdc \
+    && cmake -S /tmp/pycdc -B /tmp/pycdc/build -DCMAKE_BUILD_TYPE=Release -G Ninja \
+    && cmake --build /tmp/pycdc/build \
+    && install -m 755 /tmp/pycdc/build/pycdc /usr/local/bin/pycdc \
+    && install -m 755 /tmp/pycdc/build/pycdas /usr/local/bin/pycdas \
+    # ── 自检（用仓库自带的**真 3.11 pyc**，不是"跑一下无参命令"）──
+    # 构建成功但二进制跑不起来（缺动态库等）是这条最怕的"静默坏掉"，
+    # 所以拿一份真 pyc 反编译一次、grep 出预期源码才算过。
+    && pycdas /tmp/pycdc/tests/compiled/binary_ops.3.11.pyc >/dev/null \
+    && pycdc /tmp/pycdc/tests/compiled/binary_ops.3.11.pyc | grep -q 'print(.Addition' \
+    && echo "pycdc/pycdas OK (3.11 pyc decompiled)" \
+    && rm -rf /tmp/pycdc
+
+
 # ── 反调试相关的便利设置 ──────────────────────────────────
 #
 # ⚠️ 这里**刻意不做** ptrace 的放宽（`--cap-add SYS_PTRACE` 之类）。

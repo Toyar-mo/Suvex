@@ -92,6 +92,15 @@ const MAX_AUTO_SYNC_SECONDS = 3600
 const MIN_MAX_TURNS = 5
 const MAX_MAX_TURNS = 500
 
+/*
+  每题墙钟预算（秒，v1.61）。与后端 `vocab.MIN/MAX_CTF2_WALL_CLOCK_SECONDS` 同值。
+
+  ★ 留空 = 自动（按 `maxTurns × 45` 推导），所以这一项**允许为空**，
+    校验只在"填了数"时生效（见 `wallClockError`）。
+*/
+const MIN_WALL_CLOCK_SECONDS = 120
+const MAX_WALL_CLOCK_SECONDS = 24 * 3600
+
 export function KernelPanel() {
   const { settings, status, settingsError } = useKernel()
 
@@ -135,6 +144,7 @@ export function KernelPanel() {
       draft.autoPriorityNew !== settings.autoPriorityNew ||
       draft.autoStartNew !== settings.autoStartNew ||
       draft.maxTurns !== settings.maxTurns ||
+      draft.wallClockSeconds !== settings.wallClockSeconds ||
       draft.fallbackProviderId !== settings.fallbackProviderId ||
       draft.enableAgentsecScenarios !== settings.enableAgentsecScenarios ||
       draft.enableIrScenarios !== settings.enableIrScenarios ||
@@ -205,9 +215,35 @@ export function KernelPanel() {
     return null
   }, [draft])
 
+  /*
+    墙钟预算校验：**只有填了数才校验**（`null` = 自动，合法）。
+    与上面几项"必填区间"不同 —— 这一项留空是**推荐**行为（自动推导），
+    所以空值通过。填了数越界才报错（与后端的 `_assert_wall_clock_seconds`
+    同一条纪律：越界 400，不静默夹取）。
+  */
+  const wallClockError = useMemo(() => {
+    if (!draft) return null
+    if (draft.wallClockSeconds === null) return null
+    if (
+      draft.wallClockSeconds < MIN_WALL_CLOCK_SECONDS ||
+      draft.wallClockSeconds > MAX_WALL_CLOCK_SECONDS
+    ) {
+      return `应在 ${MIN_WALL_CLOCK_SECONDS}-${MAX_WALL_CLOCK_SECONDS} 秒之间（留空 = 按回合自动）`
+    }
+    return null
+  }, [draft])
+
   const handleSave = async () => {
     setTouched(true)
-    if (error || concurrencyError || pollError || autoSyncError || maxTurnsError || !draft) {
+    if (
+      error ||
+      concurrencyError ||
+      pollError ||
+      autoSyncError ||
+      maxTurnsError ||
+      wallClockError ||
+      !draft
+    ) {
       setSaveState({ kind: 'failed', error: '有配置项超出允许范围，请先修正' })
       return
     }
@@ -227,6 +263,7 @@ export function KernelPanel() {
         autoPriorityNew: draft.autoPriorityNew,
         autoStartNew: draft.autoStartNew,
         maxTurns: draft.maxTurns,
+        wallClockSeconds: draft.wallClockSeconds,
         fallbackProviderId: draft.fallbackProviderId,
         enableAgentsecScenarios: draft.enableAgentsecScenarios,
         enableIrScenarios: draft.enableIrScenarios,
@@ -641,6 +678,56 @@ export function KernelPanel() {
               )}
             />
             <span className="shrink-0 text-2xs text-ink-faint">轮</span>
+          </span>
+        </Field>
+
+        {/* ── 墙钟预算（v1.61）── */}
+        <Field
+          label="每题墙钟预算（秒）"
+          htmlFor="ctf2-wall-clock"
+          /*
+            ★ 说明必须点破"留空 = 自动"，否则用户会以为空着是"没设=不限时"。
+            它恰恰相反：空着是"按回合自动给一个合理值"，而**这**才是推荐用法。
+          */
+          help={
+            '一次解题最多允许跑多久（墙钟）。到 60%/80%/92% 会提醒模型整理已有证据收尾。' +
+            '留空 = 按回合预算自动推导（回合 × 45 秒，如 80 轮 → 60 分钟），推荐留空。' +
+            `填数则覆盖自动值，区间 ${MIN_WALL_CLOCK_SECONDS}-${MAX_WALL_CLOCK_SECONDS} 秒。`
+          }
+          error={touched ? wallClockError : null}
+        >
+          <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
+            <input
+              id="ctf2-wall-clock"
+              type="number"
+              step={60}
+              // 空串 ⇄ null：留空表示"自动推导"，不是 0。
+              value={draft.wallClockSeconds === null ? '' : draft.wallClockSeconds}
+              min={MIN_WALL_CLOCK_SECONDS}
+              max={MAX_WALL_CLOCK_SECONDS}
+              placeholder={`自动（${draft.maxTurns * 45}s）`}
+              onChange={(e) => {
+                const raw = e.target.value
+                if (raw === '') {
+                  setDraft({ ...draft, wallClockSeconds: null })
+                  return
+                }
+                const parsed = Number(raw)
+                setDraft({
+                  ...draft,
+                  wallClockSeconds: Number.isFinite(parsed) ? parsed : null,
+                })
+              }}
+              aria-invalid={wallClockError && touched ? true : undefined}
+              className={cn(
+                'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
+                'transition-ui duration-fast placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40',
+                wallClockError && touched
+                  ? 'border-signal-risk'
+                  : 'border-line hover:border-line-strong',
+              )}
+            />
+            <span className="shrink-0 text-2xs text-ink-faint">秒</span>
           </span>
         </Field>
 

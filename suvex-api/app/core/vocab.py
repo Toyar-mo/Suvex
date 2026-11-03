@@ -1390,6 +1390,53 @@ MIN_CTF2_MAX_TURNS: Final[int] = 5
 #    拦得太紧，等于我们替他决定"这道题能不能解出来"。
 MAX_CTF2_MAX_TURNS: Final[int] = 500
 
+# ── 每题墙钟预算（v1.61）──────────────────────────────────────
+#
+# ## 它治的病：CTF 求解路径**没有任何墙钟**，模型对时间完全无感知
+#
+# 在此之前，三档墙钟催促（`runner.WALL_WARN_BANDS` 60%/80%/92%，
+# 唯一的"硬杀"维度）只在**渗透/扫描**路径（`app/scans/agent_runner.py`）
+# 生效 —— 因为那条路径有一个旁路 `while` 到点 `task.cancel()`，把墙钟
+# 交给引擎是为了让它提前催促。而 CTF 解题（`runner._run_worker` →
+# `solve_in_sandbox`）**没有旁路 while**，`SolveSpec.wall_clock_seconds`
+# 一路是 `None`，只有回合预算 `max_turns`。
+#
+# 后果（实测出处，v1.60 那次 1.9GB 附件下载被沙箱回收打断三次）：
+# 模型闷头把回合喂给一条慢命令、或自己起一个跑不完的爆破，**完全不知道
+# "时间还剩多少"**，直到回合耗尽。回合维度催促按 `turn/max_turns` 算，
+# 80 轮题跑到第 10 轮才 12%，三档一个都不触发 —— 而墙钟可能已经过去
+# 大半小时（一条 `run_shell` 上限就是 300 秒）。
+#
+# ## 为什么默认值 = 每轮 45 秒 × 回合预算
+#
+# 真库口径（`suvex_solve_telemetry` 24 条 + `suvex_solve_attempts`）：
+# 跑满 80 轮的题，单次求解墙钟多落在 **1000–3000 秒**（16–50 分钟），
+# 极端那条借壳的 `Scan.duration_sec` 飙到 **9.5 小时**（就是它促成了
+# 这条修复）。取每轮 45 秒作平均预算，80 轮 → **3600 秒（60 分钟）**：
+#   · 正常 80 轮题（16–50 分钟）不会被打断；
+#   · 9.5 小时那种病态长跑在 60 分钟处就收敛（提前 3 档催促让它收尾）；
+#   · 且它**随 `max_turns` 联动** —— 用户为难题把回合提到 200，墙钟自动
+#     变 9000 秒，不会出现"界面给了 200 轮、实际 60 分钟就被砍"的错位。
+#
+# ⚠️ 它是**软预算**：到 60%/80%/92% 只注入催促、让模型整理已有证据收尾，
+#    到 100% 才由外层取消。与"回合用尽"同性质（结论还在），比渗透路径的
+#    硬杀温和。用户可显式改 `wall_clock_seconds` 配置覆盖它。
+DEFAULT_CTF2_SECONDS_PER_TURN: Final[int] = 45
+# 下界：再小会打断正常求解（80 轮 × 45 秒 = 3600；别让它被配到几分钟）。
+MIN_CTF2_WALL_CLOCK_SECONDS: Final[int] = 120
+# 上界：只是"别手滑填 100000000"的护栏，不是成本闸（与 MAX_CTF2_MAX_TURNS 同理）。
+MAX_CTF2_WALL_CLOCK_SECONDS: Final[int] = 24 * 3600
+
+
+def default_ctf2_wall_clock_seconds(max_turns: int) -> int:
+    """按回合预算推导默认墙钟（秒）。见 `DEFAULT_CTF2_SECONDS_PER_TURN` 的说明。
+
+    夹在 `[MIN, MAX]` 之间，防止 `max_turns` 被填成极端值时算出荒谬的墙钟。
+    """
+    raw = int(max_turns) * DEFAULT_CTF2_SECONDS_PER_TURN
+    return max(MIN_CTF2_WALL_CLOCK_SECONDS, min(raw, MAX_CTF2_WALL_CLOCK_SECONDS))
+
+
 # ── 优先级的取值分层（v0.24）────────────────────────────────
 #
 # `ctf2_challenges.priority` 现在有两个写入方：**人**（题目卡片上的

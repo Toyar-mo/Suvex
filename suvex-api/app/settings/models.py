@@ -573,6 +573,26 @@ class KernelConfig(Base):
     # 写死一个数字，等于我们替他决定"哪道题不配解出来"。
     max_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=80)
 
+    # ── 每题墙钟预算（v1.61）────────────────────────────────
+    #
+    # ## 它治的病：CTF 求解路径此前**没有墙钟**，模型对时间无感知
+    #
+    # 详见 `vocab.DEFAULT_CTF2_SECONDS_PER_TURN` 与
+    # `vocab.default_ctf2_wall_clock_seconds` 的说明（记了实测口径与
+    # 为什么默认 = 每轮 45 秒 × 回合预算）。一句话：墙钟三档催促（60/80/
+    # 92%，唯一的"硬杀"维度）此前只在渗透路径生效，CTF 只有回合预算，
+    # 于是跑满 80 轮的题可能闷头烧到 9.5 小时（真库实测），中间一个催促
+    # 都没触发 —— 因为 `turn/max_turns` 一直停在低位。
+    #
+    # ## ★ NULL = 按 `max_turns × 45` 自动推导（推荐），不是"关闭"
+    #
+    # 与 `fallback_provider_id`（NULL = 关闭）语义不同：这里 NULL 表示
+    # "让系统按回合预算自动给一个合理的墙钟"（`default_ctf2_wall_clock_seconds`）。
+    # 之所以默认自动而非关闭：① 零配置就修好病态长跑；② 自动值随
+    # `max_turns` 联动，不会出现"改了回合忘了改墙钟"的错位。
+    # 显式填一个数则覆盖自动值（夹在 `[MIN, MAX]` 之间）。
+    wall_clock_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     # 新题默认用哪个沙箱镜像。题目同步时按分类推导，这里是**兜底值**
     # （分类认不出来时用它）。
     default_sandbox_profile: Mapped[str] = mapped_column(

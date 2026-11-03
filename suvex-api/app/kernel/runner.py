@@ -96,6 +96,7 @@ from app.core.vocab import (
     KernelSandboxProfile,
     KernelSubmissionStatus,
     KernelSubmitMode,
+    default_ctf2_wall_clock_seconds,
 )
 from app.kernel import events as ctf2_events
 from app.kernel import mcp as mcp_mod
@@ -6038,6 +6039,21 @@ async def solve_in_sandbox(
 
     outcome = SolveOutcome()
 
+    # ★★ v1.61：墙钟起点打点（见 `SolveSpec.wall_clock_started_at`）。
+    #
+    # ## 为什么要"在这里"打，而不是在 `build_spec` 里
+    #
+    # `build_spec` 只是**装配**输入，那一刻到真正开跑之间还有建沙箱、
+    # 起容器、上传附件的耗时（实测常有几十秒）。若在 `build_spec` 打点，
+    # 这段准备时间会被算进模型可用的墙钟里 —— 模型还没拿到第一轮就被
+    # 扣掉了时间，催促会比实际更早触发，等于偷走它的预算。
+    #
+    # 这里是解题循环**真正开始**的地方：打点之后，`_wall_clock_seconds_left`
+    # / `_wall_clock_fraction` 才会有非 None 的分子分母，三档墙钟催促
+    # （60/80/92%）才供电。
+    if spec.wall_clock_seconds is not None and spec.wall_clock_started_at is None:
+        spec.wall_clock_started_at = time.monotonic()
+
     # ★ v0.70：收尾催促已提示到第几档（-1 = 还没提示过任何一档）。
     # 回合维度与成本维度各记一份 —— 各自只喊一次，取更深那档注入（见主循环）。
     _warn_stage: int = -1
@@ -7287,6 +7303,33 @@ def build_spec(
         resolved_turns = int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS)
         resolved_brief = None
 
+    # ★★ v1.61：墙钟预算（见 `SolveSpec.wall_clock_seconds` 的说明）。
+    #
+    # ## 它治的病：CTF 求解路径此前**没有墙钟**，模型对"还剩多少时间"无感知
+    #
+    # 墙钟三档催促（`WALL_WARN_BANDS` = 60/80/92%）此前只在渗透路径
+    # （`app/scans/agent_runner.py`）接线，CTF 走 `_run_worker` → 这里
+    # → `solve_in_sandbox`，`SolveSpec.wall_clock_seconds` 恒为 `None`，于是
+    # 那三档催促一次都没触发过。只剩"回合催"（70/85/95% of max_turns）
+    # 在兜底 —— 而回合催治不了"一轮花很久"的题：真库实测有题目跑满 80 轮
+    # 单次求解墙钟烧到 9.5 小时，中间回合比一直停在低位，催促全程沉默。
+    #
+    # ## 取值：配置显式给了就听配置；没给就按回合自动推导
+    #
+    # `settings_row.wall_clock_seconds` 为 `None` 表示"自动"（不是"关闭"）——
+    # 用 `default_ctf2_wall_clock_seconds(resolved_turns)` = `max_turns × 45s`
+    # 夹到 `[MIN, MAX]`。这样零配置就修好病态长跑，且与回合预算联动，
+    # 不会出现"改了回合忘了改墙钟"的错位。
+    #
+    # ⚠️ 快照（`attempt`）路径：`attempt` 上没有墙钟字段（那是"这一次"的
+    #    回合/模式/brief 快照，墙钟是后来才加的），所以仍按 `resolved_turns`
+    #    自动推导 —— 与"续解沿用同一回合预算"的既有口径一致。
+    _configured_wall = getattr(settings_row, "wall_clock_seconds", None)
+    if _configured_wall is not None:
+        resolved_wall_clock = int(_configured_wall)
+    else:
+        resolved_wall_clock = default_ctf2_wall_clock_seconds(resolved_turns)
+
     # ★ 沙箱配额（2026-10-10 补）。
     #
     # ## 这里原来漏了，而后果不是"少个优化"
@@ -7451,6 +7494,10 @@ def build_spec(
         # v0.36：持久区已有的产物清单（见 `persist_listing` 的说明）。
         persist_listing=tuple(persist_listing),
         max_turns=resolved_turns,
+        # ★ v1.61：墙钟预算（见上面 `resolved_wall_clock` 那段说明）。
+        #   非 None → 主循环会据此跑三档墙钟催促（60/80/92%）；
+        #   `wall_clock_started_at` 在 `solve_in_sandbox` 真正启动时再打点。
+        wall_clock_seconds=resolved_wall_clock,
         # ★ v0.28：人工线索。`resolved_brief` 来自快照（有快照时）
         #   或 None（没快照的旧路径）—— 后者与修复前的行为一致。
         brief=resolved_brief or "",
