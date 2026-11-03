@@ -113,6 +113,9 @@ function realChallenge(): KernelChallenge {
     priority: 1001,
     createdAt: '2026-10-21T03:20:00.000Z',
     updatedAt: '2026-10-21T04:10:00.000Z',
+    canonicalCategory: 'ir',
+    platformSlug: 'ctf2',
+    platformName: 'CTF2（内置）',
   }
 }
 
