@@ -22,18 +22,26 @@ strix 的实现依赖 `mcp` SDK + `agents.mcp`（openai-agents）。本项目**�
 **极小的 JSON-RPC 2.0 over stdio 客户端**，只覆盖 MCP 需要的那几个方法：
 `initialize` / `notifications/initialized` / `tools/list` / `tools/call`。
 
-## 传输：只做 stdio
+## 传输：stdio + streamable-HTTP（v1.62 起）
 
-MCP 有 stdio 与 streamable-HTTP 两种传输。这里**只做 stdio**（子进程，
-按行分隔的 JSON-RPC）。HTTP 传输要处理 SSE、断线重连、鉴权、cancel scope
-跨任务这些坑（strix 的 `session.py` 用了整整一套 supervising-task 架构就是
-为此），投入产出比在这一版不划算。stdio 覆盖了绝大多数本地 MCP server
-（`npx @modelcontextprotocol/server-xxx`、以及各种 `python -m xxx_mcp`）。
+MCP 有两种传输：**stdio**（子进程，按行分隔的 JSON-RPC）与
+**streamable-HTTP**（POST JSON-RPC 到一个 URL，响应可以是 application/json
+或 SSE）。两个都支持：
 
-⚠️ 将来若要加 HTTP：务必把连接**放在独立任务**上持有（strix 的
-`session.py` 头注释讲得很清楚——transport 的 cancel scope 在哪条任务上进入
-就绑在哪条任务上，放错任务会让一次后台 403 把整个扫描 cancel 掉，还被误
-标成"用户中断"）。这条经验是别人用血换的，别重新踩。
+  - **stdio**：`command` + `args` + `env` 拉起子进程。覆盖绝大多数本地
+    server（`npx @modelcontextprotocol/server-xxx`、`python -m xxx_mcp`）。
+  - **streamable-HTTP**：`type="http"` + `url` + `headers`。覆盖托管型
+    server（如 `https://ctf2.dasctf.com/api/ai/v1/mcp`）。`headers` 语义与
+    `env` 同级：**可含凭据、只进请求、不回显、不记日志**。
+
+⚠️ v1.61 及之前**只做 stdio**，于是 http 条目会被当坏条目跳过 / 被模型引去
+`npx` spawn 进程、连不上远端 URL 报「stdout 已关闭（server 退出了）」——
+一个 grep 不到的假象。v1.62 补上 http。
+
+关于 cancel scope（strix `session.py` 那条血泪警告）：它针对的是"长连接 +
+独立 supervising task"的架构。我们这里两种传输都走**即用即连即断**（见下面
+「生命周期」），每次 list/call 现开、用完关，全程在调用方那条任务里，没有
+跨任务持有的 transport，也就没有 cancel scope 串台的可能。
 
 ## 生命周期：每次调用即连即断
 
@@ -113,11 +121,28 @@ class McpServerConfig:
     #: 连接名 = 模型在 list_mcps/describe_mcp/call_mcp 里用的 id。必填、唯一。
     name: str
     #: 拉起 server 的可执行文件（如 `npx` / `python3` / 绝对路径）。
-    command: str
+    #: stdio 连接**必填**；http 连接**不用**（留空即可）。
+    command: str = ""
     #: 传给 `command` 的参数（如 `["-y", "@modelcontextprotocol/server-filesystem", "/data"]`）。
     args: list[str] = field(default_factory=list)
     #: 追加进子进程的环境变量（可含 token；**不落盘、不记日志**）。
     env: dict[str, str] = field(default_factory=dict)
+    #: ★ v1.62：传输类型。`"stdio"`（默认，command 拉起子进程）或
+    #: `"http"`（streamable-HTTP，直接打一个远端 URL）。
+    #:
+    #: ## 为什么加它（用户实测踩到的）
+    #:
+    #: 用户贴了一条 `{"type":"http","url":"https://.../mcp"}` 的配置，
+    #: 老版本只认 command，模型被引去 `npx` spawn 进程、连不上远端 URL，
+    #: 报「stdout 已关闭（server 退出了）」—— 一个 grep 不到的假象：
+    #: 问题不在 stdio，在于**这条连接根本不该走 stdio**。
+    type: str = "stdio"
+    #: ★ v1.62：http 连接的地址（如 `https://ctf2.dasctf.com/api/ai/v1/mcp`）。
+    #: stdio 连接不用（留空）。
+    url: str = ""
+    #: ★ v1.62：http 连接附加的请求头（如 `{"Authorization": "Bearer xxx"}`）。
+    #: 语义与 `env` 同级：**可含凭据、只进请求、不回显、不记日志**。
+    headers: dict[str, str] = field(default_factory=dict)
     #: 可选的用途说明（进 `list_mcps` 的描述位，帮模型判断该不该用）。
     notes: str = ""
     #: 可选的白名单：只允许调这些工具名（None = 全放）。
@@ -141,12 +166,20 @@ class McpServerConfig:
     #: 否则外层先超时、内层还在跑，子进程要等外层 kill。
     call_timeout: float | None = None
 
+    def is_http(self) -> bool:
+        """这条连接是否走 streamable-HTTP。（大小写不敏感，容错手填。）"""
+        return self.type.strip().lower() == "http"
+
     def public_dict(self) -> dict[str, Any]:
-        """给日志/回执用的安全视图：**去掉 env**（可能含凭据）。"""
+        """给日志/回执用的安全视图：**去掉 env / headers**（可能含凭据）。"""
         return {
             "name": self.name,
+            "type": self.type,
             "command": self.command,
             "args": list(self.args),
+            # http 连接的 url 不是凭据（部署者本来就要能看到它连去哪），回显；
+            # 但 headers 可能含 token —— 与 env 同级，**不回显**。
+            "url": self.url,
             "notes": self.notes,
             "allowed_tools": list(self.allowed_tools) if self.allowed_tools else None,
             # ★ v0.83：超时不是凭据，可以回显 —— 而且**应该**回显：
@@ -194,8 +227,17 @@ def parse_server_configs(raw: Any) -> tuple[McpServerConfig, ...]:
             continue
         name = str(item.get("name") or "").strip()
         command = str(item.get("command") or "").strip()
-        if not name or not command:
-            logger.warning("mcp_servers[%d] 缺 name 或 command，跳过", index)
+        # ★ v1.62：type 决定这条连接走 stdio 还是 http。缺省按 stdio（向后兼容：
+        # 历史配置里的条目本来就只有 command，没有 type）。
+        conn_type = str(item.get("type") or "stdio").strip().lower() or "stdio"
+        url = str(item.get("url") or "").strip()
+        # http 条目只要 name+url（**不需要** command）；stdio 条目要 name+command。
+        # 这是老版本把 http 条目当坏条目跳过的根因：它只认 command。
+        needs = "name" if (conn_type == "http" and url) else "name/command"
+        if not name or (conn_type == "http" and not url) or (conn_type != "http" and not command):
+            logger.warning(
+                "mcp_servers[%d] 缺 %s（type=%s），跳过", index, needs, conn_type
+            )
             continue
         if name in seen:
             logger.warning("mcp_servers[%d] 连接名重复（%s），跳过后者", index, name)
@@ -205,6 +247,12 @@ def parse_server_configs(raw: Any) -> tuple[McpServerConfig, ...]:
         args = [str(a) for a in args] if isinstance(args, list) else []
         env = item.get("env")
         env = {str(k): str(v) for k, v in env.items()} if isinstance(env, dict) else {}
+        headers = item.get("headers")
+        headers = (
+            {str(k): str(v) for k, v in headers.items()}
+            if isinstance(headers, dict)
+            else {}
+        )
         allowed = item.get("allowed_tools")
         allowed = [str(t) for t in allowed] if isinstance(allowed, list) else None
         # ★ v0.83：call_timeout（秒）。非法值按"没配"处理而不是报错 ——
@@ -228,9 +276,12 @@ def parse_server_configs(raw: Any) -> tuple[McpServerConfig, ...]:
         out.append(
             McpServerConfig(
                 name=name,
+                type=conn_type,
                 command=command,
                 args=args,
                 env=env,
+                url=url,
+                headers=headers,
                 notes=str(item.get("notes") or ""),
                 allowed_tools=allowed,
                 call_timeout=call_timeout,
@@ -239,8 +290,46 @@ def parse_server_configs(raw: Any) -> tuple[McpServerConfig, ...]:
     return tuple(out)
 
 
+def _safe_excerpt(resp: Any, limit: int = 300) -> str:
+    """把 HTTP 响应体截一小段做成可读摘要（避免把整个 body 塞进错误信息）。"""
+    try:
+        text = resp.text or ""
+    except Exception:  # noqa: BLE001 - 取不到就当空
+        return ""
+    text = text.strip().replace("\n", " ")
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _parse_sse_messages(body: str) -> list[dict[str, Any]]:
+    """从 SSE（text/event-stream）body 里抽出所有 JSON-RPC 消息对象。
+
+    streamable-HTTP 用 SSE 时，每条消息是一行 `data: {...}`（事件之间用空行
+    分隔）。我们只关心 `data:` 行里的 JSON；`event:`/`id:`/`retry:` 行以及
+    注释（`:` 开头）一律忽略。一条也解析不出来时报错——那说明 server 回的
+    不是我们认识的 streamable-HTTP。
+    """
+    messages: list[dict[str, Any]] = []
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(":"):
+            continue
+        if not line.startswith("data:"):
+            continue
+        data = line[len("data:") :].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            obj = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            messages.append(obj)
+        elif isinstance(obj, list):
+            messages.extend(o for o in obj if isinstance(o, dict))
+    return messages
+
+
 def _format_tool(tool: dict[str, Any]) -> str:
-    """把一个 MCP 工具描述渲染成一段给人看的文本（名字+描述+schema）。"""
     name = str(tool.get("name") or "(无名)")
     desc = str(tool.get("description") or "").strip() or "（无描述）"
     schema = tool.get("inputSchema") or tool.get("input_schema") or {"type": "object"}
@@ -264,11 +353,20 @@ class McpClient:
     子进程。任何协议错误都转成 `McpError`（带中文 message）。
     """
 
-    def __init__(self, cfg: McpServerConfig) -> None:
+    def __init__(self, cfg: McpServerConfig, *, http_client: Any = None) -> None:
         self.cfg = cfg
         self._proc: asyncio.subprocess.Process | None = None
         self._next_id = 0
         self._stderr_task: asyncio.Task[None] | None = None
+        # ★ v1.62：HTTP 传输相关。
+        # `_http` 是 httpx.AsyncClient；`_session_id` 是 server 在 initialize
+        # 响应头 `Mcp-Session-Id` 里回推的会话标识（streamable-HTTP 规范要求
+        # 后续每个请求都带上它）；`_http_client_factory` 允许测试注入
+        # MockTransport（与 `client.py` 的 `client=` 注入同一套纪律）。
+        self._http: Any = None
+        self._http_client_factory = http_client
+        self._session_id: str | None = None
+        self._protocol_version: str | None = None
 
     # ---- 生命周期 ---------------------------------------------------
     async def __aenter__(self) -> McpClient:
@@ -279,6 +377,10 @@ class McpClient:
         await self.close()
 
     async def _start(self) -> None:
+        # ★ v1.62：http 传输不 spawn 子进程，直接建 HTTP 客户端并握手。
+        if self.cfg.is_http():
+            await self._start_http()
+            return
         env = dict(os.environ)
         # 配置里的 env 覆盖/追加进来（可含 token）。只进子进程。
         env.update(self.cfg.env)
@@ -334,6 +436,10 @@ class McpClient:
             return
 
     async def close(self) -> None:
+        # ★ v1.62：http 传输的关闭是关 httpx 客户端。
+        if self.cfg.is_http():
+            await self._close_http()
+            return
         proc = self._proc
         self._proc = None
         if self._stderr_task is not None:
@@ -359,6 +465,159 @@ class McpClient:
                 # 极少数情况下管道已断，`wait()` 会抛，但那时也确实没别的事可做。
                 with contextlib.suppress(Exception):
                     await proc.wait()
+
+    # ---- HTTP（streamable-HTTP）传输 -------------------------------
+    #
+    # ★ v1.62：MCP 的 streamable-HTTP 传输。与 stdio 的关键差异：
+    #   · 不用子进程，直接 POST JSON-RPC 到 `cfg.url`；
+    #   · 服务端可以回 `application/json`（一次性响应）或
+    #     `text/event-stream`（SSE，data: 行里塞 JSON-RPC 消息）；
+    #   · initialize 响应头里可能带 `Mcp-Session-Id`，后续请求要原样带回；
+    #   · 通知（notifications/initialized）走 POST 且服务端回 202 无 body。
+    #
+    # ## 关于 cancel scope（模块 docstring 里那条血泪警告）
+    #
+    # 那条警告针对的是"**长连接 + 独立 supervising task**"的架构（strix 的
+    # session.py）。我们这里是**即用即连即断**：每次 list/call 现开一个
+    # httpx.AsyncClient、发一两个请求、关掉，全程就在调用方那条任务里跑，
+    # 没有跨任务持有的 transport、也就没有 cancel scope 串台的可能。
+    # 这正是模块生命周期设计（见 docstring「每次调用即连即断」）顺带规避掉的风险。
+
+    async def _start_http(self) -> None:
+        if not self.cfg.url:
+            raise McpError(
+                f"MCP 连接 `{self.cfg.name}` 是 http 类型，但没有填 url。"
+            )
+        import httpx
+
+        # 关掉 env 代理（与 attachments.py 同一条纪律：代理会把内网地址也劫走）。
+        # trust_env=False 让配置里的 headers 是唯一的凭据来源，可预测。
+        self._http = (
+            self._http_client_factory
+            if self._http_client_factory is not None
+            else httpx.AsyncClient(
+                timeout=httpx.Timeout(INIT_TIMEOUT),
+                trust_env=False,
+                follow_redirects=True,
+            )
+        )
+        await self._initialize()
+
+    async def _close_http(self) -> None:
+        http = self._http
+        self._http = None
+        if http is None or self._http_client_factory is not None:
+            # 注入的 client 由调用方（测试）负责关，我们不越权关它。
+            return
+        with contextlib.suppress(Exception):
+            await http.aclose()
+
+    def _http_headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+        }
+        # 会话标识建起来之后，每个请求都要带回（streamable-HTTP 规范）。
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        if self._protocol_version:
+            headers["MCP-Protocol-Version"] = self._protocol_version
+        # 配置里的 headers 最后叠加（可含 Authorization 等；覆盖同名默认头）。
+        headers.update(self.cfg.headers)
+        return headers
+
+    async def _http_post(
+        self, payload: dict[str, Any], *, timeout: float
+    ) -> list[dict[str, Any]]:
+        """POST 一条 JSON-RPC 消息，返回响应里的全部 JSON-RPC 消息对象。
+
+        streamable-HTTP 的响应可能是：
+          · `application/json`：body 直接就是一（或多）条 JSON-RPC 消息；
+          · `text/event-stream`：SSE，逐行 `data: {...}`，取其中的 JSON 消息。
+        通知（无 id）服务端回 202/无 body —— 返回空列表。
+        """
+        assert self._http is not None
+        import httpx
+
+        try:
+            resp = await self._http.post(
+                self.cfg.url, json=payload, headers=self._http_headers(), timeout=timeout
+            )
+        except httpx.TimeoutException as exc:
+            raise McpError(
+                f"MCP 连接 `{self.cfg.name}` 请求超时（{timeout:.0f} 秒）。", detail=str(exc)
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise McpError(
+                f"MCP 连接 `{self.cfg.name}` 请求失败：{exc}", detail=str(exc)
+            ) from exc
+
+        # initialize 的响应头里带会话/协议版本，记下来供后续请求。
+        sid = resp.headers.get("Mcp-Session-Id") or resp.headers.get("mcp-session-id")
+        if sid:
+            self._session_id = sid
+        pver = resp.headers.get("MCP-Protocol-Version") or resp.headers.get(
+            "mcp-protocol-version"
+        )
+        if pver:
+            self._protocol_version = pver
+
+        if resp.status_code == 202 or not resp.content:
+            # 通知被接受（202 Accepted）—— 没有要读的消息。
+            return []
+        if resp.status_code >= 400:
+            raise McpError(
+                f"MCP 连接 `{self.cfg.name}` 返回 HTTP {resp.status_code}："
+                f"{_safe_excerpt(resp)}",
+            )
+        ctype = (resp.headers.get("content-type") or "").lower()
+        if "text/event-stream" in ctype:
+            return _parse_sse_messages(resp.text)
+        # application/json：body 可能是单条，也可能是批量数组。
+        try:
+            data = resp.json()
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise McpError(
+                f"MCP 连接 `{self.cfg.name}` 返回的不是合法 JSON：{_safe_excerpt(resp)}",
+                detail=str(exc),
+            ) from exc
+        if isinstance(data, list):
+            return [m for m in data if isinstance(m, dict)]
+        return [data] if isinstance(data, dict) else []
+
+    async def _http_request(
+        self, method: str, params: dict[str, Any], *, timeout: float
+    ) -> dict[str, Any]:
+        """HTTP 上发一条**请求**（有 id）并取回对应的 result。"""
+        self._next_id += 1
+        msg_id = self._next_id
+        payload = {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params}
+        messages = await self._http_post(payload, timeout=timeout)
+        for msg in messages:
+            if msg.get("id") != msg_id:
+                continue  # 跳过通知 / 别的 id
+            if "error" in msg:
+                err = msg["error"]
+                message = err.get("message") if isinstance(err, dict) else str(err)
+                raise McpError(
+                    f"MCP 连接 `{self.cfg.name}` 报了错误：{message}",
+                    detail=json.dumps(err, ensure_ascii=False),
+                )
+            result = msg.get("result")
+            return result if isinstance(result, dict) else {"result": result}
+        raise McpError(
+            f"MCP 连接 `{self.cfg.name}` 的响应里没有 id={msg_id} 的结果。"
+            "server 可能没有按 JSON-RPC 回复。"
+        )
+
+    async def _http_notify(
+        self, method: str, params: dict[str, Any] | None = None
+    ) -> None:
+        """HTTP 上发一条**通知**（无 id，服务端回 202）。"""
+        payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            payload["params"] = params
+        await self._http_post(payload, timeout=INIT_TIMEOUT)
 
     # ---- JSON-RPC 收发 ---------------------------------------------
     async def _send(self, method: str, params: dict[str, Any]) -> int:
@@ -432,6 +691,9 @@ class McpClient:
             return result if isinstance(result, dict) else {"result": result}
 
     async def _request(self, method: str, params: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+        # ★ v1.62：http 传输走独立的 POST 路径（stdio 的 send/read 是管道行协议）。
+        if self.cfg.is_http():
+            return await self._http_request(method, params, timeout=timeout)
         msg_id = await self._send(method, params)
         return await self._read_response(msg_id, timeout=timeout)
 
@@ -447,7 +709,10 @@ class McpClient:
             timeout=INIT_TIMEOUT,
         )
         # 协议要求初始化后再发一条 initialized 通知（无 id、无响应）。
-        await self._send_notification("notifications/initialized")
+        if self.cfg.is_http():
+            await self._http_notify("notifications/initialized")
+        else:
+            await self._send_notification("notifications/initialized")
 
     async def list_tools(self) -> list[dict[str, Any]]:
         result = await self._request("tools/list", {}, timeout=DEFAULT_MCP_TIMEOUT)
@@ -515,6 +780,10 @@ class McpRegistry:
                 {
                     "id": s.name,
                     "name": s.name,
+                    "type": s.type,
+                    # http 连接回显 url（非凭据），stdio 回显 command —— 帮模型
+                    # 判断这条连接是什么（连去哪 / 拉起什么）。
+                    "endpoint": s.url if s.is_http() else s.command,
                     "description": s.notes or "（未填写用途说明）",
                     "tool_count": len(cached) if cached is not None else None,
                 }

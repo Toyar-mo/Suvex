@@ -3997,15 +3997,21 @@ def _public_server_view(item: dict) -> dict:
     """
     env = item.get("env")
     allowed = item.get("allowed_tools")
+    headers = item.get("headers")
     # ★ v0.83：超时**要回显**（它不是凭据）。不回显的话部署者看不到
     # "我配的 300 秒到底生效了没"，而超时配错的症状是"调用总失败"。
     return {
         "name": str(item.get("name") or ""),
+        # ★ v1.62：http 连接回显 type/url；headers 与 env 同级（可能含 token）
+        # 只回 has_headers，不回内容。stdio 连接 command 是核心展示字段。
+        "type": str(item.get("type") or "stdio"),
         "command": str(item.get("command") or ""),
         "args": [str(a) for a in item.get("args") or []],
+        "url": str(item.get("url") or ""),
         "notes": str(item.get("notes") or ""),
         "allowed_tools": [str(t) for t in allowed] if isinstance(allowed, list) else None,
         "has_env": bool(env) if isinstance(env, dict) else False,
+        "has_headers": bool(headers) if isinstance(headers, dict) else False,
         "call_timeout": _positive_float_or_none(item.get("call_timeout")),
     }
 
@@ -4041,7 +4047,15 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
                 {"servers": "连接名必须唯一 —— 重名时只有第一条会生效"},
             )
         seen.add(name)
-        if not str(item.get("command") or "").strip():
+        # ★ v1.62：按传输类型校验必填项 —— http 要 url，stdio 要 command。
+        conn_type = str(item.get("type") or "stdio").strip().lower() or "stdio"
+        if conn_type == "http":
+            if not str(item.get("url") or "").strip():
+                raise ApiError.validation(
+                    f"连接 `{name}` 缺 url。",
+                    {"servers": "http 类型的连接要填服务地址（如 https://host/mcp）"},
+                )
+        elif not str(item.get("command") or "").strip():
             raise ApiError.validation(
                 f"连接 `{name}` 缺 command。",
                 {"servers": "需要填写拉起 server 的可执行文件（如 npx / python3）"},
@@ -4059,6 +4073,9 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
     # ⚠️ 按**名字**匹配旧值，不按位置：清单允许重排，靠下标会把 A 的
     #    env 贴到 B 上 —— 那比丢掉更难查。
     previous_env: dict[str, dict[str, str]] = {}
+    # ★ v1.62：headers 与 env 同一条"只进不出、全量替换会丢凭据"的纪律 ——
+    # 同样按名字保留旧值（preserve_headers），道理与上一段完全对称。
+    previous_headers: dict[str, dict[str, str]] = {}
     for old in row.mcp_servers or []:
         if not isinstance(old, dict):
             continue
@@ -4066,18 +4083,30 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
         old_env = old.get("env")
         if old_name and isinstance(old_env, dict):
             previous_env[old_name] = {str(k): str(v) for k, v in old_env.items()}
+        old_headers = old.get("headers")
+        if old_name and isinstance(old_headers, dict):
+            previous_headers[old_name] = {str(k): str(v) for k, v in old_headers.items()}
 
     # 存 `None` 而不是 `[]`：与 `KernelSettings.mcp_servers` 的默认值
     # （`None` = 没配）保持一致，否则同一种状态在库里有两个表示。
     row.mcp_servers = [
         {
             "name": str(item.get("name") or "").strip(),
+            # ★ v1.62：落库必须带上 type/url/headers，否则 http 连接存进去就
+            # 退化成 stdio（type 丢、url 丢），症状正是"我加了 http 但连不上"。
+            "type": str(item.get("type") or "stdio").strip().lower() or "stdio",
             "command": str(item.get("command") or "").strip(),
             "args": [str(a) for a in item.get("args") or []],
             "env": (
                 previous_env.get(str(item.get("name") or "").strip(), {})
                 if item.get("preserve_env")
                 else {str(k): str(v) for k, v in (item.get("env") or {}).items()}
+            ),
+            "url": str(item.get("url") or "").strip(),
+            "headers": (
+                previous_headers.get(str(item.get("name") or "").strip(), {})
+                if item.get("preserve_headers")
+                else {str(k): str(v) for k, v in (item.get("headers") or {}).items()}
             ),
             "notes": str(item.get("notes") or ""),
             "allowed_tools": (
@@ -4130,9 +4159,12 @@ async def test_mcp_server(item: dict) -> dict:
         parsed_timeout = 0.0
     cfg = mcp_mod.McpServerConfig(
         name=str(item.get("name") or "").strip() or "test",
+        type=str(item.get("type") or "stdio").strip().lower() or "stdio",
         command=str(item.get("command") or "").strip(),
         args=[str(a) for a in item.get("args") or []],
         env={str(k): str(v) for k, v in (item.get("env") or {}).items()},
+        url=str(item.get("url") or "").strip(),
+        headers={str(k): str(v) for k, v in (item.get("headers") or {}).items()},
         notes=str(item.get("notes") or ""),
         allowed_tools=(
             [str(t) for t in item["allowed_tools"]]
@@ -4141,7 +4173,18 @@ async def test_mcp_server(item: dict) -> dict:
         ),
         call_timeout=parsed_timeout if parsed_timeout > 0 else None,
     )
-    if not cfg.command:
+    # ★ v1.62：http 连接要 url（不用 command）；stdio 连接要 command。
+    if cfg.is_http():
+        if not cfg.url:
+            return {
+                "ok": False,
+                "reason": "http 类型的连接没有填 url —— 不知道要连哪个地址。",
+                "tools": [],
+                "server_name": "",
+                "server_version": "",
+                "elapsed_ms": 0,
+            }
+    elif not cfg.command:
         return {
             "ok": False,
             "reason": "没有填 command —— 不知道要拉起什么。",

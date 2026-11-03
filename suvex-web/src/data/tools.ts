@@ -42,13 +42,27 @@ import { useSyncExternalStore } from 'react'
 /** 一条已保存的 MCP 连接。**没有 `env`** —— 只有 `hasEnv`。 */
 export interface McpServer {
   name: string
+  /**
+   * ★ v1.62：传输类型。`stdio`（默认，拉起子进程）或 `http`（streamable-HTTP）。
+   *
+   * 老版本只有 stdio：用户贴一条 `{type:"http", url:...}` 的配置，界面逼他填
+   * command，模型只好拿 `npx` 去 spawn 一个进程、连不上远端 URL，报
+   * "stdout 已关闭（server 退出了）" —— 一个看起来像"server 崩了"、
+   * 实际是"这条连接根本不该走 stdio"的假象。
+   */
+  type: 'stdio' | 'http'
+  /** stdio 要填；http 不用。 */
   command: string
+  /** http 连接的端点（stdio 为空串）。 */
+  url: string
   args: string[]
   notes: string
   /** 白名单：只允许调这些工具名（`null` = 全放）。 */
   allowedTools: string[] | null
   /** 是否配了环境变量。只说"有没有"，不说是**什么**。 */
   hasEnv: boolean
+  /** ★ v1.62：是否配了请求头（http 用）。只说"有没有"，不说是**什么**（可能含 token）。 */
+  hasHeaders: boolean
   /**
    * ★ v0.83：单次工具调用超时（秒）。`null` = 用内核默认 60 秒。
    *
@@ -67,7 +81,13 @@ export interface McpServersSnapshot {
 /** 提交一条 MCP 连接时的载荷。**可以带 `env`**（后端只进子进程，不回显）。 */
 export interface McpServerDraft {
   name: string
+  /** ★ v1.62：传输类型。`http` 用 url，`stdio` 用 command。 */
+  type: 'stdio' | 'http'
   command: string
+  /** ★ v1.62：http 端点。stdio 连接留空。 */
+  url: string
+  /** ★ v1.62：http 请求头（如 Authorization）。不回显，靠 preserveHeaders 保留旧值。 */
+  headers: Record<string, string>
   args: string[]
   env: Record<string, string>
   notes: string
@@ -89,6 +109,14 @@ export interface McpServerDraft {
    * 所以编辑已有连接时**必须**带上它；新增一条时不带。
    */
   preserveEnv: boolean
+  /**
+   * ★ v1.62：保留已保存的 http 请求头，忽略本次提交的 `headers`。
+   *
+   * 与 `preserveEnv` 完全同源的理由：`headers` 可能含 token，后端只回
+   * `hasHeaders` 不回显原值。编辑时输入框必然为空，若直接提交空 headers
+   * 就会把凭据静默清掉。所以编辑已有连接时**必须**带上它。
+   */
+  preserveHeaders: boolean
   /** ★ v0.83：单次调用超时（秒）。`null` = 用内核默认 60 秒。 */
   callTimeout: number | null
 }
@@ -529,6 +557,17 @@ export function validateDraft(draft: McpServerDraft): string | null {
   if (!/^[A-Za-z0-9_.-]+$/.test(draft.name.trim())) {
     return '连接名只能含字母、数字、下划线、点、连字符。'
   }
+  // ★ v1.62：按传输类型分别要求 URL 或 command。http 连接不需要 command
+  //   （它不 spawn 进程，直接 POST 到 url），stdio 连接不需要 url。
+  if (draft.type === 'http') {
+    if (!draft.url.trim()) {
+      return 'http 连接要填 url —— 它是这个 MCP server 的端点（如 https://host/api/mcp）。'
+    }
+    if (!/^https?:\/\//i.test(draft.url.trim())) {
+      return 'url 要以 http:// 或 https:// 开头。'
+    }
+    return null
+  }
   if (!draft.command.trim()) {
     return '要填 command —— 它是拉起这个 server 的可执行文件（如 npx / python3 / 绝对路径）。'
   }
@@ -559,6 +598,33 @@ export function parseEnv(raw: string): Record<string, string> {
     const trimmed = line.trim()
     if (!trimmed || trimmed.startsWith('#')) continue
     const at = trimmed.indexOf('=')
+    if (at <= 0) continue
+    const key = trimmed.slice(0, at).trim()
+    const value = trimmed.slice(at + 1).trim()
+    if (key) out[key] = value
+  }
+  return out
+}
+
+/**
+ * ★ v1.62：解析 http 请求头输入（每行 `KEY: VALUE`，冒号或等号都收）→ 对象。
+ *
+ * 两种分隔符都收，因为 HTTP 头习惯写 `Authorization: Bearer xxx`（冒号），
+ * 而 env 习惯写 `KEY=VALUE`（等号）。用户写混了不该报错、也不该静默丢头。
+ * 值里本身含冒号的（`Bearer a:b`）只有当第一个分隔符是冒号且后面还有内容时
+ * 才算 key —— 所以切在**第一个**分隔符上，剩下全归 value。
+ */
+export function parseHeaders(raw: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const colon = trimmed.indexOf(':')
+    const equals = trimmed.indexOf('=')
+    // 取最先出现的那个分隔符（且不能在开头）。
+    let at = -1
+    if (colon > 0 && (equals < 0 || colon < equals)) at = colon
+    else if (equals > 0) at = equals
     if (at <= 0) continue
     const key = trimmed.slice(0, at).trim()
     const value = trimmed.slice(at + 1).trim()

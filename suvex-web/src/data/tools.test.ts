@@ -7,6 +7,7 @@ import {
   parseAllowedTools,
   parseArgs,
   parseEnv,
+  parseHeaders,
   parseTimeout,
   toolHealth,
   validateDraft,
@@ -67,12 +68,16 @@ function makeTool(over: Partial<KernelTool> = {}): KernelTool {
 function makeDraft(over: Partial<McpServerDraft> = {}): McpServerDraft {
   return {
     name: 'demo',
+    type: 'stdio',
     command: 'npx',
+    url: '',
+    headers: {},
     args: [],
     env: {},
     notes: '',
     allowedTools: null,
     preserveEnv: false,
+    preserveHeaders: false,
     callTimeout: null,
     ...over,
   }
@@ -283,6 +288,34 @@ describe('validateDraft：提交前先挡一遍', () => {
       validateDraft(makeDraft({ env: {}, notes: '', args: [], allowedTools: null })),
     ).toBeNull()
   })
+
+  // ★ v1.62：按传输类型分别要求 url / command。
+  describe('v1.62 按传输类型校验', () => {
+    it('http 连接不要求 command、要求 url', () => {
+      // http 没有 command 也该过（老版本就卡在这里：非逼着填 command）
+      expect(
+        validateDraft(makeDraft({ type: 'http', command: '', url: 'https://h/api/mcp' })),
+      ).toBeNull()
+    })
+
+    it('http 连接缺 url → 报错并说明 url 是端点', () => {
+      const msg = validateDraft(makeDraft({ type: 'http', command: '', url: '' }))
+      expect(msg).toBeTruthy()
+      expect(msg).toContain('url')
+    })
+
+    it('http 连接 url 不是 http(s) 开头 → 报错', () => {
+      expect(
+        validateDraft(makeDraft({ type: 'http', command: '', url: 'ctf2.example/mcp' })),
+      ).toBeTruthy()
+    })
+
+    it('stdio 连接不要求 url、要求 command（不回归）', () => {
+      expect(validateDraft(makeDraft({ type: 'stdio', command: 'npx', url: '' }))).toBeNull()
+      const msg = validateDraft(makeDraft({ type: 'stdio', command: '', url: '' }))
+      expect(msg).toContain('command')
+    })
+  })
 })
 
 // ─────────────────────────────────────────────
@@ -383,6 +416,38 @@ describe('parseEnv：每行 KEY=VALUE，坏行忽略', () => {
 
   it('后出现的同名 key 覆盖先出现的', () => {
     expect(parseEnv('K=1\nK=2')).toEqual({ K: '2' })
+  })
+})
+
+// ─────────────────────────────────────────────
+// parseHeaders（v1.62，http 连接的请求头）
+// ─────────────────────────────────────────────
+
+describe('parseHeaders：冒号或等号分隔，值里含分隔符也不截断', () => {
+  it('标准 HTTP 头写法（冒号）', () => {
+    expect(parseHeaders('Authorization: Bearer tok')).toEqual({ Authorization: 'Bearer tok' })
+  })
+
+  it('也收等号写法（与 env 习惯一致）', () => {
+    expect(parseHeaders('X-Key=abc')).toEqual({ 'X-Key': 'abc' })
+  })
+
+  it('★ 值里含冒号不截断（只切第一个分隔符）', () => {
+    expect(parseHeaders('Authorization: Bearer a:b:c')).toEqual({
+      Authorization: 'Bearer a:b:c',
+    })
+  })
+
+  it('多行各成一条', () => {
+    expect(parseHeaders('A: 1\nB: 2')).toEqual({ A: '1', B: '2' })
+  })
+
+  it('逗号/空行/注释行忽略', () => {
+    expect(parseHeaders('\n# comment\n')).toEqual({})
+  })
+
+  it('没有分隔符的行忽略', () => {
+    expect(parseHeaders('justtext')).toEqual({})
   })
 })
 

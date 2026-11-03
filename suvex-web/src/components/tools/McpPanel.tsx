@@ -4,6 +4,7 @@ import {
   parseAllowedTools,
   parseArgs,
   parseEnv,
+  parseHeaders,
   parseTimeout,
   validateDraft,
   type McpServer,
@@ -54,28 +55,39 @@ export interface McpPanelProps {
 function emptyDraft(): McpServerDraft {
   return {
     name: '',
+    type: 'stdio',
     command: '',
+    url: '',
+    headers: {},
     args: [],
     env: {},
     notes: '',
     allowedTools: null,
     preserveEnv: false,
+    // ★ v1.62：新增时没有旧请求头可保。
+    preserveHeaders: false,
     // ★ v0.83：新增时不给超时（`null` = 用内核默认 60 秒）。
     callTimeout: null,
   }
 }
 
-/** 已保存的连接 → 编辑用草稿。`env` 恒为空、`preserveEnv` 恒为真。 */
+/** 已保存的连接 → 编辑用草稿。`env`/`headers` 恒为空、`preserve*` 恒为真。 */
 function draftOf(server: McpServer): McpServerDraft {
   return {
     name: server.name,
+    type: server.type,
     command: server.command,
+    url: server.url,
+    // headers 不回显（可能含 token），留空 + preserveHeaders=true 表示"别动它"。
+    headers: {},
     args: [...server.args],
     env: {},
     notes: server.notes,
     allowedTools: server.allowedTools ? [...server.allowedTools] : null,
     // ★ 编辑已有连接：默认不动 env（见文件头那段）。
     preserveEnv: true,
+    // ★ v1.62：编辑已有连接：默认不动 headers（与 env 同一纪律）。
+    preserveHeaders: true,
     // ★ 编辑时把已存的超时带回来（它是可回显字段，不像 env）。
     callTimeout: server.callTimeout,
   }
@@ -94,6 +106,8 @@ export function McpPanel({
   const [editingName, setEditingName] = useState<string | null>(null)
   const [argsText, setArgsText] = useState('')
   const [envText, setEnvText] = useState('')
+  /** ★ v1.62：http 请求头输入（每行 `KEY: VALUE` 或 `KEY=VALUE`）。不回显，留空 = 保留原值。 */
+  const [headersText, setHeadersText] = useState('')
   const [toolsText, setToolsText] = useState('')
   /**
    * ★ v0.83：超时用**文本**承载，因为"空"与"0"语义不同。
@@ -114,6 +128,7 @@ export function McpPanel({
     setEditingName(null)
     setArgsText('')
     setEnvText('')
+    setHeadersText('')
     setToolsText('')
     setTimeoutText('')
     setFormError(null)
@@ -126,6 +141,8 @@ export function McpPanel({
     setArgsText(server.args.join(' '))
     // env 不回显 —— 留空表示"不改动"（见文件头）
     setEnvText('')
+    // headers 同样不回显 —— 留空表示"不改动"
+    setHeadersText('')
     setToolsText(server.allowedTools ? server.allowedTools.join(', ') : '')
     // 超时可回显（它不像 env 那样是凭据）
     setTimeoutText(server.callTimeout == null ? '' : String(server.callTimeout))
@@ -144,14 +161,18 @@ export function McpPanel({
   function currentDraft(): McpServerDraft {
     if (!draft) return emptyDraft()
     const env = parseEnv(envText)
+    const headers = parseHeaders(headersText)
     return {
       ...draft,
       args: parseArgs(argsText),
       env,
+      headers,
       allowedTools: parseAllowedTools(toolsText),
       // ★ 用户在 env 框里**真的写了东西** → 提交它并取消"保留"；
       //   编辑时留空 → 保留原值（不传空 env 把凭据清掉）。
       preserveEnv: editingName !== null && Object.keys(env).length === 0,
+      // ★ v1.62：headers 同一纪律 —— 编辑时留空 = 保留原值。
+      preserveHeaders: editingName !== null && Object.keys(headers).length === 0,
       // ★ v0.83：空串 = 不配置（用内核默认）；否则按数字提交。
       callTimeout: parseTimeout(timeoutText),
     }
@@ -200,7 +221,15 @@ export function McpPanel({
     //    实现上做不到"留空就保留"——我们提交的是整份草稿，env 为空对象
     //    会让后端把那条连接的 env 清掉。所以这里**显式提示**用户：
     //    编辑已有连接时必须重填 env，否则会丢。见下面渲染里的警告。
-    onSave([...others, { ...next, name: next.name.trim(), command: next.command.trim() }])
+    onSave([
+      ...others,
+      {
+        ...next,
+        name: next.name.trim(),
+        command: next.type === 'http' ? '' : next.command.trim(),
+        url: next.type === 'http' ? next.url.trim() : '',
+      },
+    ])
     setDraft(null)
     setEditingName(null)
   }
@@ -247,9 +276,18 @@ export function McpPanel({
             <li key={server.name} className="px-4 py-3">
               <div className="flex flex-wrap items-baseline gap-x-tight gap-y-1">
                 <code className="font-mono text-[13px] text-ink">{server.name}</code>
+                {/* ★ v1.62：传输类型徽标，一眼分清 stdio / http。 */}
+                <span className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint">
+                  {server.type === 'http' ? 'HTTP' : 'stdio'}
+                </span>
                 {server.hasEnv && (
                   <span className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint">
                     带环境变量
+                  </span>
+                )}
+                {server.hasHeaders && (
+                  <span className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint">
+                    带请求头
                   </span>
                 )}
                 {server.allowedTools && (
@@ -268,7 +306,9 @@ export function McpPanel({
                 </span>
               </div>
               <p className="mt-1 break-all font-mono text-[12px] text-ink-muted">
-                {server.command} {server.args.join(' ')}
+                {server.type === 'http'
+                  ? `http ${server.url}`
+                  : `${server.command} ${server.args.join(' ')}`}
               </p>
               {server.notes && <p className="mt-1 text-[12px] text-ink-faint">{server.notes}</p>}
               <div className="mt-2 flex gap-tight">
@@ -330,25 +370,75 @@ export function McpPanel({
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">命令（可执行文件）</span>
-              <input
-                value={draft.command}
-                onChange={(event) => setDraft({ ...draft, command: event.target.value })}
-                placeholder="/opt/suvex/demo_mcp.py"
-                className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
-              />
+              <span className="text-[12px] text-ink-muted">传输类型</span>
+              <select
+                value={draft.type}
+                onChange={(event) =>
+                  setDraft({ ...draft, type: event.target.value as 'stdio' | 'http' })
+                }
+                className="h-8 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
+              >
+                <option value="stdio">stdio（拉起本地进程）</option>
+                <option value="http">http（连远端端点）</option>
+              </select>
             </label>
           </div>
 
-          <label className="mt-2 flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">参数（空格分隔）</span>
-            <input
-              value={argsText}
-              onChange={(event) => setArgsText(event.target.value)}
-              placeholder="--port 9000"
-              className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
-            />
-          </label>
+          {/* ★ v1.62：按类型切换 url / command 输入框。 */}
+          {draft.type === 'http' ? (
+            <label className="mt-2 flex flex-col gap-1">
+              <span className="text-[12px] text-ink-muted">端点 URL</span>
+              <input
+                value={draft.url}
+                onChange={(event) => setDraft({ ...draft, url: event.target.value })}
+                placeholder="https://example.com/api/mcp"
+                className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+              />
+            </label>
+          ) : (
+            <>
+              <label className="mt-2 flex flex-col gap-1">
+                <span className="text-[12px] text-ink-muted">命令（可执行文件）</span>
+                <input
+                  value={draft.command}
+                  onChange={(event) => setDraft({ ...draft, command: event.target.value })}
+                  placeholder="/opt/suvex/demo_mcp.py"
+                  className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                />
+              </label>
+
+              <label className="mt-2 flex flex-col gap-1">
+                <span className="text-[12px] text-ink-muted">参数（空格分隔）</span>
+                <input
+                  value={argsText}
+                  onChange={(event) => setArgsText(event.target.value)}
+                  placeholder="--port 9000"
+                  className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                />
+              </label>
+            </>
+          )}
+
+          {/* ★ v1.62：http 连接的请求头（如鉴权 token）。不回显，留空 = 保留原值。 */}
+          {draft.type === 'http' && (
+            <label className="mt-2 flex flex-col gap-1">
+              <span className="text-[12px] text-ink-muted">
+                请求头（每行 KEY: VALUE）
+                {editingName && !headersText && (
+                  <span className="ml-1 text-ink-faint">
+                    · 留空 = 保留原值（已保存的不回显，所以这里看不到它）
+                  </span>
+                )}
+              </span>
+              <textarea
+                value={headersText}
+                onChange={(event) => setHeadersText(event.target.value)}
+                rows={2}
+                placeholder="Authorization: Bearer xxx"
+                className="rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+              />
+            </label>
+          )}
 
           <label className="mt-2 flex flex-col gap-1">
             <span className="text-[12px] text-ink-muted">

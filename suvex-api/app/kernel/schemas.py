@@ -360,12 +360,19 @@ class McpServerIn(StrictModel):
 
     #: 连接名 = 模型在 `list_mcps`/`call_mcp` 里用的 id。必填、唯一。
     name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_.-]+$")
-    #: 拉起 server 的可执行文件（`npx` / `python3` / 绝对路径）。
-    command: str = Field(min_length=1, max_length=512)
+    #: ★ v1.62：传输类型，`stdio` 或 `http`。缺省 stdio（向后兼容老配置）。
+    type: Literal["stdio", "http"] = "stdio"
+    #: 拉起 server 的可执行文件（`npx` / `python3` / 绝对路径）。**stdio 必填**；
+    #: http 连接可以为空（不校验，由 service 层按类型判）。
+    command: str = Field(default="", max_length=512)
     #: 传给 `command` 的参数。
     args: list[str] = Field(default_factory=list, max_length=64)
     #: 追加进子进程的环境变量。**不回显**。
     env: dict[str, str] = Field(default_factory=dict)
+    #: ★ v1.62：http 连接的地址（如 `https://host/mcp`）。http 必填，stdio 可空。
+    url: str = Field(default="", max_length=2048)
+    #: ★ v1.62：http 连接的请求头（如 `Authorization`）。**不回显**（可能含凭据）。
+    headers: dict[str, str] = Field(default_factory=dict)
     #: ★ 保留已保存的 `env`，忽略本次提交的 `env` 字段（v0.82）。
     #:
     #: ## 为什么必须有这个开关（否则编辑一次就会丢凭据）
@@ -382,6 +389,10 @@ class McpServerIn(StrictModel):
     #: 在"清空"和"保留"之间靠猜。命名用 `preserveEnv` 而不是
     #: `envUnchanged`：前者说的是后端要做什么，后者说的是一个模糊的状态。
     preserveEnv: bool = False
+    #: ★ v1.62：保留已保存的 `headers`，忽略本次提交的 `headers` 字段。
+    #: 与 `preserveEnv` 同一条理由 —— `headers` 也只进不出（可能含 token），
+    #: 全量替换时若前端拿不到原值又提交空对象，会把凭据清掉。
+    preserveHeaders: bool = False
     #: 用途说明（进 `list_mcps` 的描述位，帮模型判断该不该用）。
     notes: str = Field(default="", max_length=500)
     #: 白名单：只允许调这些工具名（`None` = 全放）。
@@ -436,13 +447,19 @@ class McpServerOut(CamelModel):
     """
 
     name: str
-    command: str
+    #: ★ v1.62：传输类型（stdio / http）。
+    type: str = "stdio"
+    command: str = ""
     args: list[str] = []
+    #: ★ v1.62：http 连接的地址（stdio 连接为空串）。
+    url: str = ""
     notes: str = ""
     #: 白名单：只允许调这些工具名（`None` = 全放）。
     allowedTools: list[str] | None = None
     #: 是否配了 `env` —— 只说"有没有"，不说是**什么**。
     hasEnv: bool = False
+    #: ★ v1.62：是否配了 `headers` —— 只说"有没有"，不说是**什么**（可能含 token）。
+    hasHeaders: bool = False
     #: ★ v0.83：单次工具调用超时（秒）。`None` = 用内核默认 60 秒。
     #:
     #: ★ 这个字段**必须**回显（它不像 `env` 那样是凭据）：部署者需要

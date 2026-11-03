@@ -1494,7 +1494,16 @@ async def _tool_list_mcp_servers(ctx: _ToolContext, args: dict[str, Any]) -> str
         env_note = "，带凭据" if item.get("has_env") else ""
         tools = item.get("allowed_tools")
         allow = f"，白名单 {len(tools)} 个工具" if tools else "，不限制工具"
-        lines.append(f"- `{item['name']}`：{item['command']} {' '.join(item['args'])}{env_note}{allow}")
+        # ★ v1.62：http 连接展示 url（没有 command/args）；stdio 展示命令行。
+        if str(item.get("type") or "stdio") == "http":
+            where = f"http {item.get('url') or '(缺 url)'}"
+            hdr = "，带请求头" if item.get("has_headers") else ""
+            lines.append(f"- `{item['name']}`：{where}{hdr}{env_note}{allow}")
+        else:
+            lines.append(
+                f"- `{item['name']}`：{item.get('command', '')} "
+                f"{' '.join(item.get('args') or [])}{env_note}{allow}"
+            )
     return "\n".join(lines)
 
 
@@ -1520,8 +1529,16 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
     _need_scope(ctx, "add_mcp_server")
     name = str(args.get("name") or "").strip()
     command = str(args.get("command") or "").strip()
-    if not name or not command:
-        return _err("`name` 与 `command` 都要给。")
+    # ★ v1.62：支持 http 类型（url + headers，不需要 command）。
+    conn_type = str(args.get("type") or "stdio").strip().lower() or "stdio"
+    url = str(args.get("url") or "").strip()
+    if not name:
+        return _err("`name` 要给（模型用它来调这条连接）。")
+    if conn_type == "http":
+        if not url:
+            return _err("http 类型的连接要给 `url`（如 https://host/mcp）。")
+    elif not command:
+        return _err("stdio 连接要给 `command`（拉起 server 的可执行文件，如 npx / python3）。")
 
     raw_args = args.get("args") or []
     if isinstance(raw_args, str):
@@ -1535,6 +1552,11 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
         return _err("`env` 应该是一个对象（键值都是字符串）。")
     env_map = {str(k): str(v) for k, v in env.items()}
 
+    headers = args.get("headers") or {}
+    if not isinstance(headers, dict):
+        return _err("`headers` 应该是一个对象（键值都是字符串）。")
+    headers_map = {str(k): str(v) for k, v in headers.items()}
+
     allowed = args.get("allowedTools") or args.get("allowed_tools")
     if allowed is not None:
         if isinstance(allowed, str):
@@ -1545,9 +1567,12 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
 
     proposal = {
         "name": name,
+        "type": conn_type,
         "command": command,
         "args": arg_list,
         "env": env_map,
+        "url": url,
+        "headers": headers_map,
         "notes": "由对话页添加",
         "allowed_tools": allowed,
     }
@@ -1569,7 +1594,10 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
         return _err(f"保存被拒：{exc}")
     ctx.db.commit()
 
-    tool_names = "、".join(str(t.get("name") or "") for t in tools[:10])
+    # ★ v1.62：`test_mcp_server` 回的 `tools` 是**工具名字符串列表**（不是 dict）。
+    #   这里原写成 `t.get("name")` —— 那是 dict 的用法，对字符串会 AttributeError。
+    #   之前没暴露是因为这条工具在测试里从未真跑到"试连成功、有工具"的分支。
+    tool_names = "、".join(str(t) for t in tools[:10])
     more = f"（还有 {len(tools) - 10} 个）" if len(tools) > 10 else ""
     return (
         f"已添加 MCP 服务器 `{name}`，试连成功（{verdict.get('elapsed_ms')} ms），"

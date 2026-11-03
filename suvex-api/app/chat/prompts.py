@@ -207,12 +207,16 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         name="add_mcp_server",
         label="添加 MCP 服务器",
         description=(
-            "加一条 MCP 连接。**加了就会尝试拉起它并握手** —— "
+            "加一条 MCP 连接。**加了就会尝试连上它并握手** —— "
             "失败会明确告诉你为什么（找不到命令 / 握手超时 / 返回不符协议）。"
+            "支持两种类型：stdio（本地可执行文件拉起子进程）与 http（连一个远端 URL）。"
+            "用户贴的 `{\"type\":\"http\",\"url\":...}` 配置就用 type=http + url，不要再塞 npx。"
         ),
         params=(
-            "name（必填，唯一）、command（必填，可执行文件）、"
-            "args（可选，列表）、env（可选，对象，**凭据**）、"
+            "name（必填，唯一）、"
+            "type（可选，stdio 或 http，默认 stdio）、"
+            "command（stdio 必填，可执行文件）、args（可选，列表）、env（可选，对象，**凭据**）、"
+            "url（http 必填，连接地址）、headers（可选，对象，**凭据**）、"
             "allowedTools（可选，列表，白名单）"
         ),
         scope="admin",
