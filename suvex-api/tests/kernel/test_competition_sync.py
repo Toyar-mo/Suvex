@@ -17,7 +17,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.kernel.models import KernelAccount, KernelChallenge, KernelCompetition
+from app.kernel.models import (
+    KernelAccount,
+    KernelChallenge,
+    KernelCompetition,
+    KernelPlatform,
+)
 from app.kernel.platform import RemoteChallenge, RemoteEnvironment, SubmitOutcome
 
 API = "/api/v1"
@@ -74,6 +79,17 @@ def _bind_account(db_session: Session) -> None:
     """
     from app.core.crypto import encrypt_secret
 
+    # 平台行：来源名从这里来（用户接入一个平台后，CTF 页该显示它的名字）。
+    db_session.add(
+        KernelPlatform(
+            id="knplat_sync",
+            slug="pro-dasctf-com",
+            display_name="DASCTF Pro（slab-match）",
+            base_url="https://example.test/slab-match/api/v1/agent",
+            driver="generic",
+            status="verified",
+        )
+    )
     acct = KernelAccount(
         id="ctf2acc_sync",
         platform_id="knplat_sync",
@@ -161,8 +177,8 @@ def test_synced_tasks_report_their_true_source_on_the_api(
     assert ch is not None
 
     body = ready_client.get(f"{API}/kernel/challenges/{ch.id}").json()
-    # 来源 = 比赛平台批次的名字（默认「羊城杯 AI Agent 解题赛」）
-    assert body["platformName"] == "羊城杯 AI Agent 解题赛"
+    # 来源 = 平台自己的名字（用户接入新平台后，CTF 页就该显示那个平台名）
+    assert body["platformName"] == "DASCTF Pro（slab-match）"
     assert body["platformSlug"].startswith("src-")
 
 
@@ -172,3 +188,87 @@ def test_sync_competition_without_account_is_409(ready_client: TestClient) -> No
     assert resp.status_code == 409, resp.text
     # 错误信封是 {"error": {"code": ..., "message": ...}}
     assert resp.json()["error"]["code"] in ("CTF2_NOT_BOUND", "COMPETITION_NOT_BOUND")
+
+
+def test_activating_a_platform_kicks_off_a_sync(
+    ready_client: TestClient, db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 用户要的效果：新接入一个平台并启用后，CTF 页立刻开始拉题。
+
+    这里验证的是"接线"：`activate_platform` 端点启用成功后，后台线程真的
+    调了 `service.sync_competition`（且用的是这个平台自己的名字）。
+    真实网络那一步由 `resolve_driver` 的假驱动替身完成。
+    """
+    import threading
+
+    # 造一个已经"识别完（verified）"的平台行，省掉识别流程。
+    db_session.add(
+        KernelPlatform(
+            id="knplat_activate",
+            slug="pro-dasctf-com",
+            display_name="DASCTF Pro（slab-match）",
+            base_url="https://example.test/slab-match/api/v1/agent",
+            driver="generic",
+            status="verified",
+        )
+    )
+    db_session.commit()
+
+    calls: list[dict] = []
+
+    # 本测试只验证"启用 → 触发同步"这条接线，不验证凭据在线校验
+    # （那是 platforms.verify_spec 的事，需要真网络）。把 activate 本身
+    # 换成直接返回账号，把焦点收窄到我们改的那一段。
+    from app.kernel.models import KernelAccount
+
+    def _fake_activate(db, *, platform_id, access_key, label=""):
+        acct = db.execute(
+            __import__("sqlalchemy").select(KernelAccount).where(KernelAccount.status == "active")
+        ).scalars().first()
+        if acct is None:
+            acct = KernelAccount(id="knacc_test", status="active")
+            db.add(acct)
+        acct.label = label or "比赛号"
+        acct.platform_id = platform_id
+        db.flush()
+        return acct
+
+    monkeypatch.setattr("app.kernel.router.platforms.activate_platform", _fake_activate)
+
+    def _fake_sync(db, *, competition_name="x"):
+        from app.kernel.service import SyncResult
+
+        calls.append({"name": competition_name})
+        return SyncResult(competitions=1, challenges_created=5)
+
+    # 端点里的线程体 import 的是 `service.sync_competition`，patch 它即可。
+    monkeypatch.setattr("app.kernel.router.service.sync_competition", _fake_sync)
+    # 让线程里的 db 会话也走测试库（get_session_factory 已被 conftest 指向测试库）。
+    # 用一个小屏障等线程把 calls 填上，避免竞态。
+    done = threading.Event()
+    monkeypatch.setattr(
+        "app.kernel.router.threading.Thread",
+        lambda target, name=None, daemon=None: _FakeThread(target, done),
+    )
+
+    resp = ready_client.post(
+        f"{API}/kernel/platforms/knplat_activate/activate",
+        json={"accessKey": "ak_test_key", "label": "比赛号"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert done.wait(timeout=5), "后台同步线程没有被触发"
+    assert calls == [{"name": "DASCTF Pro（slab-match）"}]
+
+
+class _FakeThread:
+    """同步执行 target（在本线程里跑），跑完 set event —— 让断言确定。"""
+
+    def __init__(self, target, done):
+        self._target = target
+        self._done = done
+
+    def start(self):
+        try:
+            self._target()
+        finally:
+            self._done.set()

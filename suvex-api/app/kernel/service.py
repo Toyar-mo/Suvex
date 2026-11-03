@@ -107,6 +107,7 @@ from app.core.vocab import (
     normalize_sandbox_profile,
 )
 from app.kernel import events as ctf2_events
+from app.kernel import platforms
 from app.kernel.attachments import (
     DownloadResult,
     PendingDownload,
@@ -1197,13 +1198,26 @@ def sync_competition(db: Session, *, competition_name: str = "羊城杯 AI Agent
 
     remotes, details = _run(_fetch())
 
+    # 这批题的来源名：优先用**平台**自己的名字（用户新接入一个平台时，
+    # CTF 页上就该显示那个平台名，而不是写死的「羊城杯」），退回显式传入
+    # 的 competition_name，再退回到一个中性名。
+    #
+    # ★ 为什么从平台取而不是从驱动取：`resolve_driver` 在 platform_id 指空
+    #   时会造一个**没有 display_name** 的内置驱动（见 platforms.driver_for），
+    #   而配置驱动（GenericDriver）才有 `display_name`。所以这里先读平台行。
+    batch_name = competition_name
+    if account.platform_id:
+        platform = platforms.get_platform(db, account.platform_id)
+        if platform is not None and (platform.display_name or "").strip():
+            batch_name = platform.display_name.strip()
+
     # 一个稳定的本地 batch —— 同一账号重复同步会命中同一条。
     competition = _upsert_competition(
         db,
         account=account,
         remote_id="slab-match",
         kind="competition",
-        payload={"name": competition_name, "status": "ongoing"},
+        payload={"name": batch_name, "status": "ongoing"},
     )
     result.competitions = 1
 

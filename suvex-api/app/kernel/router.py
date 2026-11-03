@@ -49,6 +49,8 @@
 
 from __future__ import annotations
 
+import logging
+import threading
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, Request, status
@@ -56,7 +58,7 @@ from sqlalchemy.orm import Session
 
 from app.audit import service as audit
 from app.auth.deps import Identity, require_admin, require_read, require_scan
-from app.core.db import get_db
+from app.core.db import get_db, get_session_factory
 from app.core.errors import ApiError, ErrorCode
 from app.core.vocab import AuditAction
 from app.kernel import platforms, service
@@ -110,6 +112,8 @@ from app.kernel.schemas import (
 )
 
 router = APIRouter(prefix="/kernel", tags=["Kernel"])
+
+logger = logging.getLogger("suvex.ctf2")
 
 ReadDep = Annotated[Identity, Depends(require_read)]
 ScanDep = Annotated[Identity, Depends(require_scan)]
@@ -1725,7 +1729,44 @@ def activate_platform(
         target=row.id,
         detail={"slug": row.slug, "baseUrl": row.base_url, "label": account.label},
     )
+    # 新接入平台后**立刻同步一次题**，让 CTF 页马上有题可看 —— 否则用户
+    # 得自己再手动点「同步比赛题」，而"接入了却没题"正是他这次的困惑。
+    #
+    # ⚠️ 用后台线程而不是在这里同步跑：同步是 O(题数) 次外部请求（逐题
+    #    取详情），在请求里跑会让"启用"按钮转圈几十秒。启用本身已成功
+    #    （凭据已验证并写库），同步是**附加的便利**，失败不该让启用报错。
+    _kick_off_competition_sync(row.display_name)
     return _platform_out(row, active_id=account.platform_id)
+
+
+def _kick_off_competition_sync(display_name: str) -> None:
+    """起一个后台线程把比赛平台的题拉进来。**立刻返回**，绝不抛。
+
+    线程体自带会话（`get_session_factory()()`）—— 请求的 `db` 会在响应
+    返回后被关闭，绝不能在别的线程里用它。
+    """
+
+    def _run() -> None:
+        db = get_session_factory()()
+        try:
+            result = service.sync_competition(db, competition_name=display_name)
+            db.commit()
+            logger.info(
+                "启用平台后自动同步：%s 新增 %d / 更新 %d（%s）",
+                display_name,
+                result.challenges_created,
+                result.challenges_updated,
+                result.note,
+            )
+        except Exception:  # noqa: BLE001 —— 见函数 docstring：这是附加便利
+            db.rollback()
+            logger.exception("启用平台后自动同步失败（platform=%s）", display_name)
+        finally:
+            db.close()
+
+    threading.Thread(
+        target=_run, name="suvex-competition-autosync", daemon=True
+    ).start()
 
 
 @router.post(

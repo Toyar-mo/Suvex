@@ -7,6 +7,7 @@ import {
   deleteKernelPlatform,
   draftKernelPlatform,
   listKernelPlatforms,
+  loadKernel,
   readKernelPlatform,
   switchToBuiltinPlatform,
   type KernelPlatform,
@@ -258,6 +259,13 @@ export function PlatformPanel() {
           onDone={() => {
             setDialog(null)
             void refresh()
+            /*
+              ★ 启用一个平台后，后端会**立刻**在后台拉这批平台的题。
+              这里再拉一次全量，让用户切到 CTF 页时看到的就是新平台的题，
+              而不是旧列表。即便后端那一步还在跑（题还没落完），
+              这一次刷新也只是"暂时没题"，用户切过去再回来就有了。
+            */
+            void loadKernel({ silent: true })
           }}
         />
       )}
