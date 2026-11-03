@@ -71,6 +71,55 @@ SandboxProfileLiteral = Literal[
 # 的那条同族）。
 CompetitionKindLiteral = Literal["competition", "practice", "local"]
 
+# ── 分类归一（v1.55）───────────────────────────────────────
+#
+# 平台给的 `category` 原文很杂：大小写不一致（`REVERSE` vs `reverse`）、
+# 混了题号/中文（`第01题 web入门`）、还有 `ir-root-cause` / `basic` / `real`
+# 这类非标准值。直接展示会让 CTF 页一地鸡毛，直接拿来筛选则几乎筛不出东西。
+#
+# ⚠️ 归一**只发生在展示层**（这里给一个投影 `canonicalCategory`）：
+#   数据库里的 `category` 原文一个字不动 —— 它决定 `sandbox_profile`
+#   选哪个镜像，改了会让同一道题前后用不同镜像（不可复现）。
+#
+# 标准七类（含 other 兜底）。命中顺序：先看**子串**（包容 `第01题 web入门`
+# 这种），再落回 other。
+_CANONICAL_CATEGORY_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("pwn", ("pwn", "heap", "stack", "rop", "binary exploit", "二进制", "溢出")),
+    ("reverse", ("reverse", "reversing", "逆向", "反汇编", "re\n", " re ", "misc-re")),
+    ("crypto", ("crypto", "cryptography", "密码", "密码学", "cipher", "rsa", "aes")),
+    ("web", ("web", "xss", "sql", "ssrf", "sqli", "web入门")),
+    ("ir", ("ir-", "incident", "forensic-ir", "应急", "响应", "溯源")),
+    ("misc", ("misc", "stego", "隐写", "杂项", "取★", "取证", "forensic", "basic", "real")),
+)
+
+CANONICAL_CATEGORIES: tuple[str, ...] = (
+    "web",
+    "crypto",
+    "reverse",
+    "pwn",
+    "misc",
+    "ir",
+    "other",
+)
+
+
+def canonical_category(raw: str | None) -> str:
+    """把平台给的分类原文归一到标准七类之一。
+
+    ★ 只用于**展示与筛选**。认不出就归 `other`，绝不猜测成某一类
+      （比"猜错"更难查的是"看起来对但其实错了"）。
+    """
+    text = (raw or "").strip().lower()
+    if not text:
+        return "other"
+    # reverse 子串 `re` 太短会误伤（`reverse` 里也有），单独先处理复合词
+    for canonical, keywords in _CANONICAL_CATEGORY_KEYWORDS:
+        for keyword in keywords:
+            if keyword.strip() and keyword in text:
+                return canonical
+    return "other"
+
+
 # ★ 平台接入（v0.25）。与 `models.KernelPlatform` 的 CHECK 约束是**同一对** ——
 #   加一个新的驱动或状态时两处都要改。CHECK 表达式建好就固化在数据库里，
 #   而这两个 Literal 能改：只改这里会让"应用层放行、数据库拒绝"，
@@ -951,6 +1000,21 @@ class KernelChallengeOut(CamelModel):
     priority: int
     createdAt: IsoDateTime
     updatedAt: IsoDateTime
+
+    # ── 接入来源 + 规范化分类（v1.55）──────────────────────
+    #
+    # `category` 是平台给的**原文**（`REVERSE` / `第01题 web入门` /
+    # `ir-root-cause` …），大小写与命名都不统一，直接拿来展示/筛选会让
+    # 用户看到一地鸡毛。而它又**不能就地改写**：`sandbox_profile` 是在
+    # 同步时按它选的镜像，改原文会让"同一道题昨天用 re、今天用 base"。
+    #
+    # 所以另给一个**只读投影** `canonicalCategory`（web/crypto/reverse/
+    # pwn/misc/ir/other），供展示与筛选；原文仍原样保留在 `category`。
+    canonicalCategory: str
+    #: 这道题来自哪个接入（`ctf2` = 内置驱动；其余是配置生成的平台 slug）。
+    platformSlug: str
+    #: 接入的展示名（内置为「CTF2（内置）」，其余取平台 displayName）。
+    platformName: str
 
 
 class KernelRemoteCompetitionOut(CamelModel):

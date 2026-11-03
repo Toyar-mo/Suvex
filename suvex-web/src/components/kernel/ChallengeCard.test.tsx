@@ -68,6 +68,9 @@ function makeChallenge(over: Partial<KernelChallenge> = {}): KernelChallenge {
     priority: 0,
     createdAt: '2026-10-01T00:00:00Z',
     updatedAt: '2026-10-01T00:00:00Z',
+    canonicalCategory: 'web',
+    platformSlug: 'ctf2',
+    platformName: 'CTF2（内置）',
     ...over,
   }
 }

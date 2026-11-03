@@ -6,6 +6,8 @@ import {
   CHALLENGE_STATUS_TONE,
   PRIORITY_MANUAL_BASE,
   SANDBOX_PROFILE_LABEL,
+  CANONICAL_CATEGORY_LABEL,
+  canonicalCategoryOf,
   canHaveWorkOrder,
   normalizeSandboxProfile,
   canHaveWriteup,
@@ -241,7 +243,21 @@ export function ChallengeCard({
         <div className="flex min-w-0 flex-col gap-0.5">
           <h3 className="text-sm text-ink">{challenge.title}</h3>
           <div className="flex flex-wrap items-center gap-x-tight gap-y-0.5 text-2xs text-ink-faint">
-            <span>{challenge.category || '未分类'}</span>
+            <span>{CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)]}</span>
+            {challenge.platformName && (
+              <>
+                <span aria-hidden="true">·</span>
+                {/* 来源徽标：一眼看出这题是从哪个接入同步来的。
+                    ★ 只在有值时才画 —— 老缓存/本地题可能没有这个字段，
+                      画一个空的徽标比不画更让人困惑。 */}
+                <span
+                  className="rounded-pill border border-line px-1.5 py-0.5 leading-none"
+                  title={`来源：${challenge.platformName}`}
+                >
+                  {challenge.platformName}
+                </span>
+              </>
+            )}
             {challenge.score !== null && (
               <>
                 <span aria-hidden="true">·</span>

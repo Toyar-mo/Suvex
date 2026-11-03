@@ -80,6 +80,7 @@ from app.kernel.schemas import (
     KernelPullIn,
     KernelPullOut,
     KernelQueueOut,
+    KernelRecipesOut,
     KernelRemoteCompetitionOut,
     KernelSettingsIn,
     KernelSettingsOut,
@@ -89,7 +90,6 @@ from app.kernel.schemas import (
     KernelSubmitIn,
     KernelSubmitOut,
     KernelSyncIn,
-    KernelRecipesOut,
     KernelSyncOut,
     KernelTokenUsageOut,
     KernelToolOut,
@@ -106,6 +106,7 @@ from app.kernel.schemas import (
     McpServersOut,
     McpServerTestIn,
     McpServerTestOut,
+    canonical_category,
 )
 
 router = APIRouter(prefix="/kernel", tags=["Kernel"])
@@ -140,9 +141,93 @@ def _environment_out(environment: KernelEnvironment | None) -> KernelEnvironment
     )
 
 
+#: 内置驱动的平台 slug / 展示名。内置 CTF2 没有 `KernelPlatform` 行
+#: （它的 `spec` 是 NULL，见 `models.KernelPlatform` 的 docstring），
+#: 所以「这道题来自哪个接入」推到空时要落回这两个默认值，而不是空串。
+_BUILTIN_PLATFORM_SLUG = "ctf2"
+_BUILTIN_PLATFORM_NAME = "CTF2（内置）"
+
+#: 题目 → 归属接入的规范名。`platform_info` 是 `platform_id -> (slug, name)`
+#: 的索引，由调用方一次查好传进来（列表页几十道题共用一个，避免 N+1）。
+PlatformInfo = dict[str, "tuple[str, str]"]
+
+
+def _resolve_platform_info(db: Session, challenges: list[KernelChallenge]) -> PlatformInfo:
+    """一次查询把"题目 → 接入 slug/displayName"整条链建好。
+
+    `challenge.competition_id → KernelCompetition.account_id →
+     KernelAccount.platform_id → KernelPlatform.slug/display_name`。
+
+    ★ 为什么批量：列表页可能一次返回几十上百道题，逐题走 ORM 懒加载就是
+      N+1（每题 3 次查询）。这里用三次 `IN` 查询把整张索引建出来。
+    ★ 内置 CTF2 的 `platform_id` 是 NULL（没有 `KernelPlatform` 行），
+      或者是某行 `driver='ctf2'` 的平台 —— 两种都落回内置默认名。
+    """
+    from app.kernel.models import KernelAccount, KernelPlatform
+
+    competition_ids = {c.competition_id for c in challenges if c.competition_id}
+    if not competition_ids:
+        return {}
+
+    rows = (
+        db.query(KernelCompetition.id, KernelCompetition.account_id)
+        .filter(KernelCompetition.id.in_(competition_ids))
+        .all()
+    )
+    comp_to_account = {cid: aid for cid, aid in rows}
+
+    account_ids = {aid for aid in comp_to_account.values() if aid}
+    acc_to_platform: dict[str, str | None] = {}
+    if account_ids:
+        acc_rows = (
+            db.query(KernelAccount.id, KernelAccount.platform_id)
+            .filter(KernelAccount.id.in_(account_ids))
+            .all()
+        )
+        acc_to_platform = {aid: pid for aid, pid in acc_rows}
+
+    platform_ids = {pid for pid in acc_to_platform.values() if pid}
+    platform_by_id: dict[str, tuple[str, str]] = {}
+    if platform_ids:
+        plat_rows = (
+            db.query(KernelPlatform.id, KernelPlatform.slug, KernelPlatform.display_name, KernelPlatform.driver)
+            .filter(KernelPlatform.id.in_(platform_ids))
+            .all()
+        )
+        for pid, slug, display_name, driver in plat_rows:
+            platform_by_id[pid] = _platform_label(slug, display_name, driver)
+
+    # 题目 id → (slug, name)
+    info: PlatformInfo = {}
+    for challenge in challenges:
+        account_id = comp_to_account.get(challenge.competition_id or "")
+        platform_id = acc_to_platform.get(account_id) if account_id else None
+        if platform_id and platform_id in platform_by_id:
+            info[challenge.id] = platform_by_id[platform_id]
+        else:
+            info[challenge.id] = (_BUILTIN_PLATFORM_SLUG, _BUILTIN_PLATFORM_NAME)
+    return info
+
+
+def _platform_label(slug: str, display_name: str, driver: str) -> tuple[str, str]:
+    """平台行 → (slug, 展示名)。内置驱动一律显示「CTF2（内置）」。
+
+    内置驱动（`driver='ctf2'`）的题目和"真正从 CTF2 同步来的"是同一批；
+    即便库里有 `driver='ctf2'` 的平台行，展示上也当成内置。
+    """
+    if driver == "ctf2":
+        return (_BUILTIN_PLATFORM_SLUG, _BUILTIN_PLATFORM_NAME)
+    return (slug, display_name or slug)
+
+
 def _challenge_out(
-    challenge: KernelChallenge, environment: KernelEnvironmentOut | None
+    challenge: KernelChallenge,
+    environment: KernelEnvironmentOut | None,
+    platform_info: PlatformInfo | None = None,
 ) -> KernelChallengeOut:
+    slug, name = (platform_info or {}).get(
+        challenge.id, (_BUILTIN_PLATFORM_SLUG, _BUILTIN_PLATFORM_NAME)
+    )
     return KernelChallengeOut(
         id=challenge.id,
         competitionId=challenge.competition_id,
@@ -150,6 +235,9 @@ def _challenge_out(
         stageId=challenge.stage_id,
         title=challenge.title,
         category=challenge.category,
+        canonicalCategory=canonical_category(challenge.category),
+        platformSlug=slug,
+        platformName=name,
         description=challenge.description,
         attachments=list(challenge.attachments or []),
         score=challenge.score,
@@ -214,6 +302,15 @@ def _competition_out(competition) -> KernelCompetitionOut:  # noqa: ANN001
     )
 
 
+def _challenge_out_one(
+    db: Session,
+    challenge: KernelChallenge,
+    environment: KernelEnvironmentOut | None,
+) -> KernelChallengeOut:
+    """单题响应（详情/解题/提交/拉取…）用。只有一道题，直接查一次索引即可。"""
+    return _challenge_out(challenge, environment, _resolve_platform_info(db, [challenge]))
+
+
 def _challenges_with_environments(
     db: Session, challenges: list[KernelChallenge]
 ) -> list[KernelChallengeOut]:
@@ -231,7 +328,8 @@ def _challenges_with_environments(
         out = _environment_out(environment)
         if out is not None:
             latest[environment.challenge_id] = out
-    return [_challenge_out(c, latest.get(c.id)) for c in challenges]
+    platform_info = _resolve_platform_info(db, challenges)
+    return [_challenge_out(c, latest.get(c.id), platform_info) for c in challenges]
 
 
 # ══════════════════════════════════════════════════════════
@@ -712,7 +810,7 @@ def pull_challenge(
     )
     competition = db.get(KernelCompetition, challenge.competition_id)
     return KernelPullOut(
-        challenge=_challenge_out(challenge, None),
+        challenge=_challenge_out_one(db, challenge, None),
         created=created,
         challengeId=challenge.remote_id,
         competitionName=competition.name if competition else "",
@@ -860,7 +958,7 @@ def create_ir_task(
     db.refresh(challenge)
 
     return IrTaskOut(
-        challenge=_challenge_out(challenge, None),
+        challenge=_challenge_out_one(db, challenge, None),
         attachments=claimed,
         notice=notice,
     )
@@ -938,7 +1036,7 @@ def list_challenges(
 def get_challenge(challengeId: str, _identity: ReadDep, db: DbDep) -> KernelChallengeOut:
     challenge = service.get_challenge_or_404(db, challengeId)
     environment = service.latest_environment(db, challengeId)
-    return _challenge_out(challenge, _environment_out(environment))
+    return _challenge_out_one(db, challenge, _environment_out(environment))
 
 
 @router.get("/snapshot", response_model=KernelSnapshotOut, summary="一次拿到账号+赛事+题目")
@@ -1038,7 +1136,7 @@ def solve_challenge(
         },
     )
     return KernelSolveOut(
-        challenge=_challenge_out(challenge, _environment_out(environment)),
+        challenge=_challenge_out_one(db, challenge, _environment_out(environment)),
         environmentId=environment.id if environment else None,
         scanId=challenge.scan_id,
         message=(
@@ -1081,7 +1179,7 @@ def set_challenge_priority(
         db, challengeId, priority=payload.priority
     )
     environment = service.latest_environment(db, challengeId)
-    return _challenge_out(challenge, _environment_out(environment))
+    return _challenge_out_one(db, challenge, _environment_out(environment))
 
 
 @router.post(
@@ -1169,7 +1267,7 @@ def submit_flag(
     return KernelSubmitOut(
         status=status_value,
         message=message,
-        challenge=_challenge_out(challenge, None),
+        challenge=_challenge_out_one(db, challenge, None),
     )
 
 
@@ -1201,7 +1299,7 @@ def cancel_challenge(
         target=challenge.id,
         detail={"fromStatus": previous, "toStatus": challenge.status},
     )
-    return _challenge_out(challenge, None)
+    return _challenge_out_one(db, challenge, None)
 
 
 @router.delete(

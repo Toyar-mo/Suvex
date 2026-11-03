@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  CANONICAL_CATEGORIES,
+  CANONICAL_CATEGORY_LABEL,
+  canonicalCategoryOf,
   canHaveWorkOrder,
   canHaveWriteup,
   loadKernelChallengeUsage,
@@ -414,6 +417,47 @@ describe('saveKernelSettings 的场景包开关', () => {
       const body = putBodies[0] as Record<string, unknown>
       expect(body.enableAgentsecScenarios, `agentsec=${agentsec} ir=${ir}`).toBe(agentsec)
       expect(body.enableIrScenarios, `agentsec=${agentsec} ir=${ir}`).toBe(ir)
+    }
+  })
+})
+
+
+/*
+  ══════════════════════════════════════════════════════════════
+  规范化分类（v1.55）
+  ══════════════════════════════════════════════════════════════
+
+  ## 前端这里**不做关键词猜测**
+
+  真正的脏值归一（`REVERSE`→reverse、`第01题 web入门`→web、`ir-root-cause`→ir）
+  在**服务端** `canonical_category()` 里做。前端只负责一件事：拿到的值是不是
+  七类之一 —— 不是（老缓存 / 罕见投影缺失）就落 `other`。
+
+  为什么不在这里再抄一份关键词表：两份实现必然分叉，而分叉的症状是
+  "列表里归到 misc、点 misc 又筛不出来"，且不报错。
+*/
+describe('canonicalCategoryOf', () => {
+  it('七类原样通过（大小写不敏感、去空白）', () => {
+    for (const c of CANONICAL_CATEGORIES) {
+      expect(canonicalCategoryOf(c)).toBe(c)
+      expect(canonicalCategoryOf(` ${c.toUpperCase()} `)).toBe(c)
+    }
+  })
+
+  it('大小写变体照常归一（REVERSE→reverse，因为服务端就是这样归的）', () => {
+    expect(canonicalCategoryOf('REVERSE')).toBe('reverse')
+    expect(canonicalCategoryOf('Web')).toBe('web')
+  })
+
+  it('未知/空值一律落 other（绝不猜成某个具体类）', () => {
+    for (const v of ['', '   ', '第01题 web入门', 'ir-root-cause', 'basic', '???', null, undefined]) {
+      expect(canonicalCategoryOf(v)).toBe('other')
+    }
+  })
+
+  it('中文标签表覆盖全部七类且非空', () => {
+    for (const c of CANONICAL_CATEGORIES) {
+      expect(CANONICAL_CATEGORY_LABEL[c]).toBeTruthy()
     }
   })
 })

@@ -379,6 +379,50 @@ export interface KernelChallenge {
   priority: number
   createdAt: string
   updatedAt: string
+  /**
+   * 标准分类（服务端归一的只读投影）。
+   *
+   * ⚠️ 与 `category`（平台原始值）是两件事，**不要混用**：
+   *   · `category` 给的是平台原话，脏得离谱（`REVERSE`、`第01题 web入门`、
+   *     `ir-root-cause`、`basic`……），而且**改它会连带选错沙箱镜像**
+   *     （`sandboxProfile` 依赖它），所以服务端一个字节都不动；
+   *   · `canonicalCategory` 是把它归一到七类之一，只用于展示与筛选。
+   * 拿它当"真相"去回写是不允许的 —— 它不是事实，是投影。
+   */
+  canonicalCategory: string
+  /** 这道题来自哪个接入的 slug（内置 CTF2 也是 `ctf2`）。 */
+  platformSlug: string
+  /** 来源的展示名（如「CTF2（内置）」「DASCTF Pro（slab-match）」）。 */
+  platformName: string
+}
+
+/** 标准分类的固定顺序（筛选器的按钮顺序，也是「其它」永远排最后）。 */
+export const CANONICAL_CATEGORIES = ['web', 'crypto', 'reverse', 'pwn', 'misc', 'ir', 'other'] as const
+
+export type CanonicalCategory = (typeof CANONICAL_CATEGORIES)[number]
+
+/** 标准分类 → 中文标签。 */
+export const CANONICAL_CATEGORY_LABEL: Record<CanonicalCategory, string> = {
+  web: 'Web',
+  crypto: '密码学',
+  reverse: '逆向',
+  pwn: 'Pwn',
+  misc: '杂项',
+  ir: '应急响应',
+  other: '其它',
+}
+
+/**
+ * 把一个未知字符串收敛成合法分类；**前端不做关键词猜测** —— 真正的归一在
+ * 服务端 `canonical_category()` 里，这里只负责"这值是不是七类之一"。
+ *
+ * ★ 为什么不在这里再复制一份关键词表：两份实现迟早分叉，而分叉的症状是
+ *   "列表里归到 misc、筛选器点 misc 又筛不出来"。服务端给的字段就是答案，
+ *   前端只兜底（老数据 / 罕见投影缺失 → other）。
+ */
+export function canonicalCategoryOf(value: string | null | undefined): CanonicalCategory {
+  const v = (value || '').trim().toLowerCase()
+  return (CANONICAL_CATEGORIES as readonly string[]).includes(v) ? (v as CanonicalCategory) : 'other'
 }
 
 export interface KernelSettings {

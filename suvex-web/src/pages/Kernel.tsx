@@ -7,6 +7,9 @@ import ToggleChip from '@/components/ui/ToggleChip'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import {
   CHALLENGE_STATUS_LABEL,
+  CANONICAL_CATEGORIES,
+  CANONICAL_CATEGORY_LABEL,
+  canonicalCategoryOf,
   bindKernelAccount,
   pullKernelChallenge,
   unbindKernelAccount,
@@ -26,6 +29,7 @@ import {
   type KernelChallengeStatus,
   type KernelSandboxProfile,
   type KernelSubmitMode,
+  type CanonicalCategory,
 } from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
 import { errorMessage } from '@/lib/api'
@@ -131,6 +135,22 @@ const STATUS_FILTERS: {
   { value: 'failed', label: CHALLENGE_STATUS_LABEL.failed, match: ['failed'] },
 ]
 
+/**
+ * 分类筛选（第二个维度）。
+ *
+ * ★ 为什么分类值来自 `canonicalCategoryOf()` 而不是平台原话：平台的
+ *   `category` 是 `REVERSE` / `第01题 web入门` / `basic` 这种脏值，
+ *   直接拿来当筛选键会出现"每个脏值一个按钮"的灾难。归一后的七类
+ *   才是可筛选的稳定集合。**归一的真值在服务端**，这里是投影。
+ */
+const CATEGORY_FILTERS: { value: CanonicalCategory | 'all'; label: string }[] = [
+  { value: 'all', label: '全部类' },
+  ...CANONICAL_CATEGORIES.map((value) => ({
+    value,
+    label: CANONICAL_CATEGORY_LABEL[value],
+  })),
+]
+
 // ── ★ 开发期不变量：各桶的并集必须覆盖**全部**状态 ────────────────
 //
 // 漏掉一个状态的后果不是"少一个 tab"，而是**那类题在任何筛选下都看不见**，
@@ -156,6 +176,7 @@ export function KernelPage() {
   const { account, challenges, settings, settingsError, queue, status, error, notice } = useKernel()
 
   const [filter, setFilter] = useState<KernelChallengeStatus | 'all'>('all')
+  const [categoryFilter, setCategoryFilter] = useState<CanonicalCategory | 'all'>('all')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
   /** 正在确认提交的那道题 —— 存**整个对象**而不是 id */
@@ -237,22 +258,39 @@ export function KernelPage() {
     return () => window.clearTimeout(timer)
   }, [notice])
 
+  /**
+   * 只按「状态」收窄后的集合 —— 分类筛选的**计数**要基于它。
+   *
+   * ★ 为什么计数不直接用 `challenges`：如果分类标签的计数用全量算，
+   *   用户在「未开始」下点「逆向」会看到"标签写 67、列表只 4 条"，
+   *   看起来像坏了。用本状态桶算才和列表一致。
+   */
+  const challengesInStatusBucket = useMemo(() => {
+    const bucket = STATUS_FILTERS.find((f) => f.value === filter) ?? STATUS_FILTERS[0]
+    return challenges.filter((item) => bucket.match.includes(item.status))
+  }, [challenges, filter])
+
   const filtered = useMemo(() => {
     const text = query.trim().toLowerCase()
     // ★ 用桶的 `match` 而不是"桶名 == 状态名" —— 见 `STATUS_FILTERS` 的说明。
     //   严格相等会让 `environment_ready` / `submitting` 那两类题
     //   **从所有筛选下消失**（它们不属于任何一个桶）。
-    const bucket = STATUS_FILTERS.find((f) => f.value === filter) ?? STATUS_FILTERS[0]
-    return challenges.filter((item) => {
-      if (!bucket.match.includes(item.status)) return false
+    return challengesInStatusBucket.filter((item) => {
+      // 分类维度：与状态是「与」关系
+      if (categoryFilter !== 'all' && canonicalCategoryOf(item.canonicalCategory) !== categoryFilter) {
+        return false
+      }
       if (!text) return true
       return (
         item.title.toLowerCase().includes(text) ||
         item.category.toLowerCase().includes(text) ||
+        // 也搜标准中文类名与来源 —— 用户按「逆向」或「DASCTF」搜时要搜得到
+        CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(item.canonicalCategory)].toLowerCase().includes(text) ||
+        (item.platformName || '').toLowerCase().includes(text) ||
         item.remoteId.includes(text)
       )
     })
-  }, [challenges, filter, query])
+  }, [challengesInStatusBucket, categoryFilter, query])
 
   // ── 动作 ──────────────────────────────────────────────
   //
@@ -548,6 +586,40 @@ export function KernelPage() {
             })}
           </div>
 
+          {/*
+            ── 分类筛选（第二个维度，与状态**同时**生效） ──
+            ★ 与上面那排状态是"与"关系，不是替换关系：先按状态收窄到
+              "未开始"，再在这批里点「逆向」，看到的才是"未开始的逆向题"。
+              两者共用一个 `filtered`，所以计数与列表天然一致。
+            ★ 计数按**当前状态筛选后**的集合算 —— 否则会出现"点了逆向
+              显示 0 道题、但标签上写着 67"的错觉。
+          */}
+          <div role="group" aria-label="按分类筛选" className="flex flex-wrap items-center gap-1">
+            {CATEGORY_FILTERS.map((item) => {
+              const count = challengesInStatusBucket.filter((c) =>
+                item.value === 'all'
+                  ? true
+                  : canonicalCategoryOf(c.canonicalCategory) === item.value,
+              ).length
+              const isActive = categoryFilter === item.value
+              return (
+                <ToggleChip
+                  key={item.value}
+                  active={isActive}
+                  onToggle={() => setCategoryFilter(item.value)}
+                >
+                  {item.label}
+                  <span
+                    className={cn('tabular text-2xs', isActive ? 'text-accent-strong' : 'text-ink-faint')}
+                    data-numeric
+                  >
+                    {count}
+                  </span>
+                </ToggleChip>
+              )
+            })}
+          </div>
+
           <div className="flex-1" />
 
           <div className="relative">
@@ -699,7 +771,10 @@ export function KernelPage() {
             </div>
 
             <p className="mt-panel text-2xs text-ink-faint">
-              {filter === 'all'
+              {/* ★ 两个筛选维度任一收窄都要报"筛选出 N 道" —— 只看 filter
+                  （状态）会漏掉只按分类筛的情形（此时 tag 上写 67、页脚却
+                  写"共 423"），用户会以为筛选没生效。 */}
+              {filter === 'all' && categoryFilter === 'all'
                 ? `共 ${challenges.length} 道题`
                 : `筛选出 ${filtered.length} 道，共 ${challenges.length} 道`}
               {challenges.some((c) => c.status === 'candidate_ready') && (
