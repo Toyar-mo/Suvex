@@ -1,4 +1,4 @@
-import { Drawer } from '@/components/ui/Drawer'
+import { Modal } from '@/components/ui/Modal'
 import { cn } from '@/lib/cn'
 import {
   PLATFORM_STATUS_LABEL,
@@ -10,6 +10,7 @@ import {
   loadKernel,
   readKernelPlatform,
   switchToBuiltinPlatform,
+  syncCompetition,
   type KernelPlatform,
 } from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
@@ -124,6 +125,24 @@ export function PlatformPanel() {
     }
   }
 
+  const handleSync = async () => {
+    setBusy(true)
+    try {
+      const result = await syncCompetition()
+      showToast({
+        message: result.message,
+        tone: result.errors.length ? 'risk' : 'ok',
+      })
+    } catch (err) {
+      showToast({
+        message: err instanceof Error ? err.message : '同步题目失败',
+        tone: 'risk',
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return (
     <SettingsPanel
       id="platform"
@@ -211,6 +230,31 @@ export function PlatformPanel() {
                     )}
                   >
                     启用
+                  </button>
+                )}
+
+                {/*
+                  ★ 正在使用的平台也给一个「同步题目」的显式入口。
+                  用户原话是"哪有启用？" —— 因为平台一旦是「使用中」，
+                  上面那个「启用」按钮就不显示了，而"让 CTF 页出题"这件事
+                  就没有任何可见的按钮可点。这里补一个，任何时候都能手动
+                  把题拉一遍（启用时虽已自动拉，但平台抖动时能重试）。
+                */}
+                {item.id && item.active && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => {
+                      void handleSync()
+                    }}
+                    className={cn(
+                      'inline-flex h-7 items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-muted',
+                      'transition-ui duration-fast hover:border-line-strong hover:text-ink',
+                      'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
+                    )}
+                  >
+                    <RotateCw size={11} aria-hidden="true" />
+                    同步题目
                   </button>
                 )}
 
@@ -358,12 +402,11 @@ function PlatformDialog({
   const canActivate = target?.status === 'verified' && target.id !== null
 
   return (
-    <Drawer
+    <Modal
       open
       onClose={onClose}
-      labelledBy="platform-dialog-title"
       title={mode === 'draft' ? '识别一个新平台' : `启用「${platform?.displayName ?? ''}」`}
-      className="max-w-xl"
+      widthClass="max-w-2xl"
       footer={
         <div className="flex items-center justify-end gap-2">
           <button
@@ -505,7 +548,7 @@ function PlatformDialog({
           </div>
         )}
       </div>
-    </Drawer>
+    </Modal>
   )
 }
 

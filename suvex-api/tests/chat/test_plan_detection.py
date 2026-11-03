@@ -24,7 +24,12 @@
 漏判的代价是用户以为解完了、其实停在半路 —— 后者更贵。
 """
 
-from app.chat.nudge import _has_trailing_plan, looks_like_plan
+from app.chat.nudge import (
+    MAX_UNFINISHED_CHARS,
+    _has_trailing_plan,
+    looks_like_plan,
+    looks_unfinished,
+)
 
 
 def test_bare_verb_plan_from_the_live_session():
@@ -240,3 +245,42 @@ def test_long_forward_looking_tail_after_marker_is_still_a_plan():
     assert looks_like_plan(_LONG_CONTEXT + "然后我要看 libc 版本，接着写 exploit。") is True
     assert looks_like_plan(_LONG_CONTEXT + "下一步跑 one_gadget 找 gadget。") is True
     assert looks_like_plan(_LONG_CONTEXT + "接下来写脚本拿 shell。") is True
+
+
+# ══════════════════════════════════════════════════════════════
+# 英文碎句复读（v1.55）
+# ══════════════════════════════════════════════════════════════
+#
+# 线上复读（chat_01M6BWQ69MZJNBAB7C7QMVXPV2）：
+#     Let me continue.
+#     I need to check the state.
+#     Let me continue. I need to check the state.
+# 三句不到 200 字，但全是英文 —— 原来的 looks_unfinished 只认中文 _INTENT，
+# 而这一轮又 tools_used==0，于是既不走纠偏也不走工具分支，整轮 done，
+# 界面停在"让我继续"上。修法：补一个英文 `_EN_INTENT`，仍受长度闸约束。
+
+
+
+_EN_FRAGMENTS = [
+    "Let me continue.\nI need to check the state.",
+    "Let me continue. I need to check the state. Let me continue.",
+    "I'll run a quick scan now.",
+    "Next, I will look at the symbols.",
+    "Let me check the disassembly first.",
+]
+
+
+def test_english_intent_fragments_count_as_unfinished():
+    for body in _EN_FRAGMENTS:
+        assert len(body) < MAX_UNFINISHED_CHARS, body
+        assert looks_unfinished(body) is True, body
+
+
+def test_english_complete_answers_are_not_flagged():
+    # 短结论（无意图词）不该被判成"没做完"
+    assert looks_unfinished("The flag is flag{abc}. Done.") is False
+    assert looks_unfinished("All checks passed.") is False
+    # 超过长度闸的长英文正文也不打回（与中文同一条闸）
+    long_en = "Let me explain. " + ("This binary has no stack canary. " * 20)
+    assert len(long_en) >= MAX_UNFINISHED_CHARS
+    assert looks_unfinished(long_en) is False

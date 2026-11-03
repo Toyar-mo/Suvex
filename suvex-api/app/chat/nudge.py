@@ -66,6 +66,29 @@ _INTENT = re.compile(
     r"|接下来|下一步|下面我|让我|我来(看|查|跑|试|扫))"
 )
 
+#: 英文版"打算接着动手"的短语（v1.55）。
+#:
+#: ## 为什么要有它
+#:
+#: 线上真实复读（`chat_01M6BWQ69MZJNBAB7C7QMVXPV2`，用户报"一直循环"）：
+#:
+#:     Let me continue.
+#:     I need to check the state.
+#:     Let me continue. I need to check the state.
+#:
+#: 三句加起来不到 200 字（没触发长度闸），但全是英文 —— `_INTENT` 只认中文，
+#: 于是 `looks_unfinished=False`，而这一轮又 `tools_used==0`（还没跑过工具），
+#: 结果既不走纠偏、也不走工具分支，整轮 `done`，界面停在"让我继续"上。
+#:
+#: ⚠️ 与中文 `_INTENT` 一样是**弱信号**，仍受 `MAX_UNFINISHED_CHARS` 长度闸约束：
+#:   完整的长英文结论（>200 字）里顺带一句 "Let me explain" 不会被打回。
+_EN_INTENT = re.compile(
+    r"\b(let me|let us|let's|i'll|i will|i need to|i'm going to|i am going to|"
+    r"now i|next i|next,|first,? i|first let me)\b",
+    re.IGNORECASE,
+)
+
+
 #: 正文长度上界。意图词是弱信号：600 字的完整结论里完全可能顺带一句
 #: 「我先看了一下」，那不是"停在半路"。真正的形态是**短短一句打算**。
 MAX_UNFINISHED_CHARS = 200
@@ -233,7 +256,7 @@ def looks_unfinished(text: str) -> bool:
     body = text.strip()
     if not body or len(body) >= MAX_UNFINISHED_CHARS:
         return False
-    return bool(_INTENT.search(body))
+    return bool(_INTENT.search(body) or _EN_INTENT.search(body))
 
 
 #: 「这句 FINAL 其实是个计划」的判据（v1.29）。
