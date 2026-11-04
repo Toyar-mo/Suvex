@@ -274,6 +274,36 @@ export interface ChatState {
   streamingText: string | null
   /** 有一条审批正在提交。界面据此禁用那两个按钮，防重复点。 */
   deciding: boolean
+  /**
+   * ★ v1.61：**服务端**说当前会话这一轮跑到哪了（轮询得来，见
+   * `pollTurnProgress`）。
+   *
+   * ## 为什么要在 `sending` / `phase` 之外再加一个
+   *
+   * `sending` 是**本浏览器**握着 SSE 流时的本地布尔，`phase` 是那条流里
+   * 推来的瞬时状态。两者都只在一件事成立时有值：这条 SSE 还活着。
+   *
+   * 可服务端从 v1.54 起**断开不取消**：刷新页面、切会话、done 帧丢失，
+   * 那一轮都还在后台跑。此时 `sending=false`、`phase=null`，界面认为
+   * "没在跑"—— 而它明明在跑。用户原话「服务端在后台跑、前端没有显示，
+   * 我不知道进行得怎么样」说的就是这个。
+   *
+   * 所以本页在没有 SSE 时**轮询** `/chat/sessions/{id}/turns`，把最新一条
+   * `running` 的 round/tools/heartbeat 存到这里，界面据此画"仍在推进"。
+   * 照抄 CyberStrikeAI 的 resumable polling（跑着时 1.5s 一次）。
+   *
+   * `null` = 没有在轮询 / 服务端没有在跑的轮次。
+   */
+  serverTurn: ChatServerTurn | null
+}
+
+/** v1.61：轮询拿到的"服务端这一轮跑到哪了"。 */
+export interface ChatServerTurn {
+  runId: string
+  roundIndex: number
+  toolsUsed: number
+  /** ISO 时间；`null` = 服务端没给（老后端）。 */
+  heartbeatAt: string | null
 }
 
 const EMPTY: ChatState = {
@@ -292,6 +322,7 @@ const EMPTY: ChatState = {
   interjections: [],
   streamingText: null,
   deciding: false,
+  serverTurn: null,
 }
 
 let state: ChatState = EMPTY
@@ -483,6 +514,10 @@ export interface ChatTurnRun {
   startedAt: string
   updatedAt: string
   resumable: boolean
+  /** v1.61：进度（老后端缺省 → 0 / null）。 */
+  roundIndex?: number
+  toolsUsed?: number
+  heartbeatAt?: string | null
 }
 
 /**
@@ -497,6 +532,53 @@ export async function listTurns(sessionId: string): Promise<ChatTurnRun[]> {
   } catch {
     return []
   }
+}
+
+/**
+ * ★ v1.61：轮询服务端"这一轮跑到哪了"，并落进 `serverTurn`。
+ *
+ * ## 它解决什么（用户原话）
+ *
+ * 「服务端在后台跑、前端没有显示，我不知道进行得怎么样」+「中断/继续
+ * 点了要刷新网页才行」。两者的共同根因：前端只信本页那条 SSE 流，
+ * 一旦流断了/丢了（刷新、切页、网络抖动），界面就再也看不到服务端那一轮。
+ *
+ * ## 做法照抄 CyberStrikeAI 的 resumable polling
+ *
+ * 它的长工具用 `execution_id` 异步跑，客户端 `get_tool_execution` /
+ * `wait_tool_execution` **可恢复地轮询**（plan 进度页 1500ms 一次）。
+ * 我们这里没有 execution_id（一轮就是一条 turn_run 行），但形态一样：
+ * 只要服务端还有 `running` 的轮次，就每隔一会儿拉一次 `/turns`，
+ * 把最新进度写进 `serverTurn`；顺便**重取消息**（服务端可能已经落了新的
+ * tool 结果/正文，而本页没收到帧）。
+ *
+ * ## 返回值：还有没有在跑
+ *
+ * `true` = 服务端说还在跑（调用方应继续轮询）；`false` = 已经结束
+ * （调用方该停下来，并做最后一次消息刷新 —— 见 `refreshActiveMessages`）。
+ *
+ * ⚠️ 只读**当前打开的那个会话**：轮询是页面级行为，切走了就不该再往
+ *    `serverTurn` 里写旧会话的进度。
+ */
+export async function pollTurnProgress(sessionId: string): Promise<boolean> {
+  const runs = await listTurns(sessionId)
+  // 异步期间用户可能已经切走 —— 不往新会话里写旧数据。
+  if (state.active?.id !== sessionId) return false
+  const running = runs.find((run) => run.status === 'running') ?? null
+  if (running) {
+    patch({
+      serverTurn: {
+        runId: running.id,
+        roundIndex: running.roundIndex ?? 0,
+        toolsUsed: running.toolsUsed ?? 0,
+        heartbeatAt: running.heartbeatAt ?? null,
+      },
+    })
+    return true
+  }
+  // 没有在跑的了：清掉进度提示。
+  patch({ serverTurn: null })
+  return false
 }
 
 /** 会话持久工作区（`/work/persist`）里的一个可下载产物。 */
@@ -544,6 +626,17 @@ export async function resumeTurn(
     if (active && active.id === sessionId) {
       patch({ active: { ...active, messages: [...active.messages, ...out.messages] } })
     }
+    /*
+      ★ v1.61：接手这一轮是**同步跑完再返回**（`resume_turn` 里 await
+      `resumer.resume_one`），所以这里返回时那一轮已经结束了。补两件事：
+      （1）把 `sending` 清掉 —— 否则如果调用方（`handleResume`）没清，
+          界面会一直显示"在跑"，用户以为没反应。
+      （2）重取一次执行账目与消息 —— 用户原话「重新发送继续没有响应，
+          还是要刷新网页」。刷新让黄条/错误条/消息列表都跟服务端对齐。
+    */
+    patch({ sending: false, sendingSessionId: null, phase: null })
+    void pollTurnProgress(sessionId)
+    void refreshActiveMessages(sessionId)
     return out.messages
   } catch (error) {
     // 失败时把新原因摆出来（而不是让调用方自己猜）。
@@ -885,6 +978,29 @@ export async function interruptTurn(
 ): Promise<boolean> {
   try {
     await api.post(`/chat/sessions/${sessionId}/interrupt`, { mode, note })
+    /*
+      ★ v1.61：点完中断，立刻做两件事，别等用户手动刷新网页。
+      
+      用户原话「中断并继续按钮是坏的，点击之后要刷新网页才行」。根因：
+      `/interrupt` 只是**投递一个信号**给正在跑的那一轮（服务端在这一轮
+      的下一个检查点才生效），它**不返回新版消息**，也不改前端状态 ——
+      于是界面看起来"点了没反应"，必须刷新页面重新拉 `/turns` 与 `/messages`
+      才看得到变化。
+
+      这里点完就：（1）刷新一次轮次账目（`interrupting` 的 spinner 之外，
+      用户能马上看到"已请求中断"这一轮的状态）；（2）如果是 `continue`，
+      把本地 `sending` 拉起来 —— 服务端会接着跑，界面据此把转圈续上，
+      而不是停在"没在跑"。`stop` 则反过来把本地 `sending` 清掉（真的停了）。
+      两处都不 await：这是附带的界面校正，失败也不该让按钮报错。
+    */
+    if (mode === 'continue') {
+      // 服务端会接着跑同一轮；本地把"在跑"状态续上，配合轮询显示进度。
+      patch({ sending: true, sendingSessionId: sessionId })
+    } else {
+      patch({ sending: false, sendingSessionId: null, phase: null })
+    }
+    void refreshActiveMessages(sessionId)
+    void pollTurnProgress(sessionId)
     return true
   } catch (error) {
     patch({ error: messageOf(error) })

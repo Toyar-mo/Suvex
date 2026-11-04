@@ -1105,6 +1105,10 @@ def list_turns(
             startedAt=run.started_at,
             updatedAt=run.updated_at,
             resumable=turn_runs.is_resumable(run, now=stamp),
+            # v1.61：进度 —— 前端在本页丢了 SSE 时靠它轮询出"还在推进"。
+            roundIndex=run.round_index,
+            toolsUsed=run.tools_used,
+            heartbeatAt=run.heartbeat_at,
         )
         for run in runs
     ]

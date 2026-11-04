@@ -58,10 +58,44 @@ def test_turns_endpoint_reports_an_interrupted_run_as_resumable(
     assert rows[0]["resumable"] is True, "中断且心跳过期的轮次必须可接手"
 
 
+def test_turns_endpoint_reports_round_and_tool_progress(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ v1.61：`/turns` 必须把轮次进度（第几轮 / 用过几次工具 / 心跳）吐出来。
+
+    这是「服务端在跑、前端不知道进行到哪了」那条症状的**服务端侧接线**：
+    前端在没有 SSE 时靠轮询这个端点画"仍在推进：第 N 轮 · 已用 M 次工具"。
+    漏了这几项，前端拿到的就永远是 0/0，进度条会卡在"第 1 轮"看起来像没动。
+    """
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    db_session.commit()
+    # 模拟引擎跑了几轮、执行过几次工具后的心跳。
+    turn_runs.heartbeat(
+        db_session,
+        run,
+        round_index=4,
+        nudges_used=1,
+        truncations_used=0,
+        tool_nudges_used=0,
+        tools_used=7,
+    )
+    db_session.commit()
+
+    response = ready_client.get(f"/api/v1/chat/sessions/{session_id}/turns")
+    assert response.status_code == 200, response.text
+    rows = response.json()
+    assert len(rows) == 1
+    # 驼峰命名（CamelModel）：roundIndex / toolsUsed / heartbeatAt。
+    assert rows[0]["roundIndex"] == 4
+    assert rows[0]["toolsUsed"] == 7
+    assert rows[0]["heartbeatAt"] is not None
+    assert rows[0]["status"] == "running"
+
+
 def test_turns_endpoint_hides_another_users_session(
     ready_client: TestClient, db_session: Session
 ) -> None:
-    """归属过滤：别人的会话连执行记录都不该看得到（404，不是空列表）。"""
     other = chat_service.create_session(db_session, created_by="someone-else", title="别人的")
     db_session.commit()
 

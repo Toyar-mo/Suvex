@@ -51,6 +51,9 @@ import {
   type ChatSessionDetail,
   listTurns,
   resumeTurn,
+  pollTurnProgress,
+  refreshActiveMessages,
+  getChatSnapshot,
   type ChatTurnRun,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
@@ -204,6 +207,8 @@ export function ChatPage() {
     interjections,
     // ★ v0.102：正在流入的正文（还没落库）。
     streamingText,
+    // ★ v1.61：服务端轮询到的"这一轮跑到哪了"（本页丢了 SSE 时的兜底）。
+    serverTurn,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -446,6 +451,78 @@ export function ChatPage() {
     }
   }, [active?.id, sending])
 
+  /*
+    ★ v1.61：**服务端在跑、本页看不见**时的兜底轮询（resumable polling）。
+
+    背景（用户原话）：「服务端在后台跑、前端没有显示，我不知道进行得怎么样」。
+    根因：前端只信本页那条 SSE 流。流一断（刷新、切页面、done 帧丢），
+    界面就以为"没在跑"，而服务端 v1.54 起**断开不取消**，那一轮还在后台干。
+
+    做法照抄 CyberStrikeAI 的 `get_tool_execution` / resumable polling：
+    - 只要服务端还有 `running` 的轮次，就每 1.5s 拉一次 `/turns` 更新进度；
+    - 每轮都顺手重取消息（服务端可能已落了新工具结果/正文，本页没收到帧）；
+    - 一旦服务端说"跑完了"：
+        · 若本页**没有**在跑（`!sending`，说明流早断了）→ 把这批新消息接上、
+          清掉本地残留的"在跑"状态，界面自动变成"已结束"，**不必刷新网页**；
+        · 若本页在跑（`sending`，SSE 正常）→ 交给 SSE 的 done 帧收尾，这里不动。
+
+    触发条件：进会话就启动。为什么进会话就启动（而不是只在发现异常时）：
+    刷新页面那一刻 `sending` 是 false、`lastRuns` 还没拉到 —— 正是"服务端在跑
+    我却不知道"的最典型场景；进会话即开轮询，才能立刻把那条 running 轮接回来。
+    */
+  useEffect(() => {
+    const sessionId = active?.id
+    if (!sessionId) return
+    let alive = true
+    let timer: ReturnType<typeof setTimeout> | null = null
+    // 见过服务端报"在跑"没有。用来区分"刚发出去、服务端还没建 running 行"
+    // 和"流早断了、本地 sending 卡住"两种情形（见下面 done 分支）。
+    let sawRunning = false
+
+    const tick = async () => {
+      if (!alive) return
+      const stillRunning = await pollTurnProgress(sessionId)
+      if (!alive) return
+      if (stillRunning) {
+        sawRunning = true
+        // 还在跑：把最新消息也拉一次（可能落了新工具结果/正文），再排下一拍。
+        if (!getChatSnapshot().sending) void refreshActiveMessages(sessionId)
+        timer = setTimeout(() => void tick(), 1500)
+        return
+      }
+      // 服务端说没在跑了。
+      if (getChatSnapshot().sending) {
+        // 本页还以为在跑。两种可能：
+        //   (a) 刚发出去，服务端还没建 running 行 —— 再等一拍看看；
+        //   (b) 流早断了、本地 sending 卡死 —— 清掉它（否则界面永远转圈）。
+        // 判据：见过 running 之后再消失 = 真结束((b))；从没见过 = 大概率(a)。
+        if (sawRunning) {
+          clearStaleSending()
+          void refreshActiveMessages(sessionId)
+          void loadSessions()
+          void refreshStuckTurn(sessionId)
+          return
+        }
+        timer = setTimeout(() => void tick(), 1500)
+        return
+      }
+      // 本页也没在跑：说明流早断了、服务端这轮已收尾 —— 把尾巴接上。
+      void refreshActiveMessages(sessionId)
+      void loadSessions()
+      void refreshStuckTurn(sessionId)
+      // 不再排下一拍（SSE 结束后 sending 变 false，这个 effect 依赖 sending
+      // 会重跑一次 listTurns；真没活动了就没有轮询开销）。
+    }
+
+    void tick()
+    return () => {
+      alive = false
+      if (timer !== null) clearTimeout(timer)
+    }
+    // 依赖 `sending`：一轮 SSE 刚结束/刚开始时重新评估要不要接着轮询。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active?.id, sending])
+
   /**
    * ★ v1.22：手动复查一次"这一轮还能不能继续"。
    *
@@ -505,7 +582,11 @@ export function ChatPage() {
     !sendingHere &&
     !sendingElsewhere &&
     (lastRuns[0]?.status === 'running' ||
-      lastRuns.some((run) => run.status === 'running'))
+      lastRuns.some((run) => run.status === 'running') ||
+      // ★ v1.61：轮询说服务端还在跑（`pollTurnProgress` 写进 `serverTurn`）。
+      //   这条比 `lastRuns` 更新（`lastRuns` 只在进入会话/一轮结束时刷新），
+      //   刷新页面回到一个正在跑的长任务时，靠它立刻把界面切成"在跑"。
+      serverTurn !== null)
 
   /** 当前会话这一轮正在跑（本地在跑，或服务端说还在跑）—— Enter 是插话。 */
   const turnRunningHere = sendingHere || serverRunning
@@ -1370,6 +1451,41 @@ export function ChatPage() {
                   progress={{ tools: liveLooseToolCount }}
                   interjections={interjections}
                 />
+              )}
+              {/*
+                ★ v1.61：**服务端在跑、本页没有实时流**时的进度条。
+
+                用户的抱怨原话：「服务端在后台跑、前端没有显示，我不知道进行
+                得怎么样了」。刷新页面 / 切回来 / done 帧丢了之后，本页没有了
+                SSE，`sendingHere` 为 false —— 于是画面上一点"还在跑"的痕迹都
+                没有，用户以为它停了。这里用轮询来的 `serverTurn` 画一条明确的
+                "仍在后台推进：第 N 轮 · 已用 M 次工具"，让人心里有数，且顺带
+                提示"点「中断」可以停下来"。
+
+                只在 `serverRunning`（服务端在跑但本页没在跑）时出现 —— 本页
+                正在流式输出时上下两处都有状态，不必重复。
+              */}
+              {serverRunning && (
+                <div
+                  className="flex items-start gap-2 rounded-[10px] border border-accent/25 bg-accent/[0.06] px-3.5 py-2.5"
+                  role="status"
+                  aria-live="polite"
+                  data-server-progress="true"
+                >
+                  <span
+                    className="mt-1 inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent/30 border-t-accent"
+                    aria-hidden="true"
+                  />
+                  <p className="flex-1 text-xs leading-[1.6] text-ink-soft">
+                    服务端仍在后台推进这一轮
+                    {serverTurn
+                      ? `：第 ${serverTurn.roundIndex + 1} 轮${
+                          serverTurn.toolsUsed > 0 ? ` · 已用 ${serverTurn.toolsUsed} 次工具` : ''
+                        }`
+                      : ''}
+                    。可以在这里等，或点「中断」停下；进度会自动跟进，不用刷新网页。
+                  </p>
+                </div>
               )}
               <div ref={bottomRef} />
             </div>

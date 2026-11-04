@@ -78,11 +78,15 @@ vi.mock('@/data/chat', () => ({
   purgeSession: vi.fn(async () => true),
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
-  getChatSnapshot: vi.fn(),
+  getChatSnapshot: vi.fn(() => ({ sending: false, serverTurn: null }) as never),
   // ★ v1.19：中断轮次的账目与「继续」。同样必须逐个列出 —— 漏一项就在
   //   页面渲染时炸 `No "listTurns" export is defined`，整组用例一起红。
   listTurns: vi.fn(async () => []),
   resumeTurn: vi.fn(async () => []),
+  // ★ v1.61：轮询入口与消息刷新。工厂少导出 → 调用时炸 No "xxx" export，
+  //   所以新增 store 函数一律在这里补。
+  pollTurnProgress: vi.fn(async () => false),
+  refreshActiveMessages: vi.fn(async () => {}),
 }))
 
 // `vi.mock` 会被提升，所以这里拿到的已是替身。
@@ -168,6 +172,8 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     //   于是渲染一个空白的流式气泡）。
     streamingText: null,
     deciding: false,
+    // ★ v1.61：服务端轮询到的轮次进度。同上，必须显式给 —— 缺了 tsc 会报。
+    serverTurn: null,
     ...overrides,
   }
 }

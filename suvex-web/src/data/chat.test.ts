@@ -4,9 +4,11 @@ import {
   createSession,
   getChatSnapshot,
   interject,
+  interruptTurn,
   loadSessions,
   loadTools,
   openSession,
+  pollTurnProgress,
   renameSession,
   clearStaleSending,
   resetChatStore,
@@ -1268,5 +1270,123 @@ describe('interject 的 no-turn 语义 + clearStaleSending（v1.24）', () => {
       )
       return p
     })
+  })
+})
+
+describe('服务端轮次进度轮询（v1.61）', () => {
+  /*
+    ★ 用户原话：「服务端在后台跑、前端没有显示，我不知道进行得怎么样了」，
+      以及「中断并继续……点击之后要刷新网页才行」。
+
+    前面根因有两条：
+    1. 前端只信本页 SSE，流一断就看不到服务端还在跑的那一轮；
+    2. `interruptTurn` 点完不刷新任何东西，界面停在旧状态。
+
+    这一组钉住（照抄 CyberStrikeAI 的 resumable polling）：
+    - `pollTurnProgress` 能从 `/turns` 里认出 `running` 的轮次并写进
+      `serverTurn`（返回 true = 还在跑）；没有 running 就清空并返回 false；
+    - `interruptTurn('continue')` 之后本地 `sending` 恢复为 true（服务端会
+      接着跑，界面据此把转圈续上），并触发一次消息刷新，**不用手动刷新网页**。
+  */
+
+  it('pollTurnProgress 有 running 轮次时写入 serverTurn 并返回 true', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p = pollTurnProgress('chat_1')
+    // 这是 `/chat/sessions/chat_1/turns` 请求
+    pending[pending.length - 1].resolve([
+      {
+        id: 'turn_run_1',
+        sessionId: 'chat_1',
+        status: 'running',
+        resumeAttempts: 0,
+        startedAt: '2026-11-04T00:00:00Z',
+        updatedAt: '2026-11-04T00:00:00Z',
+        resumable: false,
+        roundIndex: 3,
+        toolsUsed: 5,
+        heartbeatAt: '2026-11-04T00:00:10Z',
+      },
+    ])
+    const stillRunning = await p
+    expect(stillRunning).toBe(true)
+    const turn = getChatSnapshot().serverTurn
+    expect(turn).not.toBeNull()
+    expect(turn?.roundIndex).toBe(3)
+    expect(turn?.toolsUsed).toBe(5)
+  })
+
+  it('pollTurnProgress 没有 running 轮次时清空 serverTurn 并返回 false', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p = pollTurnProgress('chat_1')
+    pending[pending.length - 1].resolve([
+      {
+        id: 'turn_run_1',
+        sessionId: 'chat_1',
+        status: 'done',
+        resumeAttempts: 0,
+        startedAt: '2026-11-04T00:00:00Z',
+        updatedAt: '2026-11-04T00:00:00Z',
+        resumable: false,
+      },
+    ])
+    const stillRunning = await p
+    expect(stillRunning).toBe(false)
+    expect(getChatSnapshot().serverTurn).toBeNull()
+  })
+
+  it('interruptTurn(continue) 之后本地 sending 恢复为 true 并刷新消息', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    // 先把 sending 置成 true（模拟正在跑），再「继续」
+    const p0 = sendMessage('chat_1', '开始')
+    expect(getChatSnapshot().sending).toBe(true)
+
+    const p1 = interruptTurn('chat_1', 'continue')
+    // interrupt 的 POST 请求
+    pending[pending.length - 1].resolve({ ok: true })
+    const ok = await p1
+    expect(ok).toBe(true)
+    // ★ 关键断言：不用刷新网页，本地状态就已经"还在跑"
+    expect(getChatSnapshot().sending).toBe(true)
+    expect(getChatSnapshot().sendingSessionId).toBe('chat_1')
+
+    // interruptTurn 内部触发的 pollTurnProgress / refreshActiveMessages 会各发一个
+    // 请求；连同 sendMessage 悬挂的流请求一起收尾，别留悬挂（否则用例结束时
+    // unhandled rejection）。
+    await tick()
+    while (pending.length > 0) {
+      const d = pending.shift()!
+      // 第一个可能是 sendMessage 的流端点 —— 给它一个带 done 帧的 SSE 响应；
+      // 其余（turns / 消息刷新）给普通 JSON 数组即可。
+      d.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+    }
+    await p0.catch(() => {})
+  })
+
+  it('interruptTurn(stop) 之后本地 sending 变 false', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    const p0 = sendMessage('chat_1', '开始')
+    expect(getChatSnapshot().sending).toBe(true)
+
+    const p1 = interruptTurn('chat_1', 'stop')
+    pending[pending.length - 1].resolve({ ok: true })
+    await p1
+    expect(getChatSnapshot().sending).toBe(false)
+    expect(getChatSnapshot().sendingSessionId).toBeNull()
+
+    await tick()
+    while (pending.length > 0) {
+      pending.shift()!.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+    }
+    await p0.catch(() => {})
   })
 })
