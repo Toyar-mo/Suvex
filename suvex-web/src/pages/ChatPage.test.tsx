@@ -78,7 +78,7 @@ vi.mock('@/data/chat', () => ({
   purgeSession: vi.fn(async () => true),
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
-  getChatSnapshot: vi.fn(() => ({ sending: false, serverTurn: null }) as never),
+  getChatSnapshot: vi.fn(() => ({ sending: false, sendingSessionIds: [], serverTurn: null }) as never),
   // ★ v1.19：中断轮次的账目与「继续」。同样必须逐个列出 —— 漏一项就在
   //   页面渲染时炸 `No "listTurns" export is defined`，整组用例一起红。
   listTurns: vi.fn(async () => []),
@@ -148,7 +148,7 @@ function message(overrides: Partial<ChatMessage> = {}): ChatMessage {
 }
 
 function chatState(overrides: Partial<ChatState> = {}): ChatState {
-  return {
+  const merged: ChatState = {
     sessions: [],
     // v1.15：已归档是独立一段。不给它，页面里 archivedSessions.length
     // 会读到 undefined 直接抛错，看起来像页面崩了。
@@ -176,8 +176,21 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     serverTurn: null,
     // ★ v1.62：已请求停止（但这一轮还没真正停）。同上。
     stopRequested: false,
+    // ★ v1.65：本浏览器在跑的会话集合。同上，必须显式给。
+    sendingSessionIds: [],
     ...overrides,
   }
+  // ★ v1.65 迁移：老夹具用 `sending:true + sendingSessionId:'x'` 表示"这个
+  //   会话在跑"。新模型下 `sendingHere` 读的是 `sendingSessionIds`，所以
+  //   这里把老写法自动补成集合，避免逐个改几十处夹具。若显式给了集合则以它为准。
+  if (
+    merged.sending &&
+    merged.sendingSessionId &&
+    (overrides.sendingSessionIds === undefined)
+  ) {
+    merged.sendingSessionIds = [merged.sendingSessionId]
+  }
+  return merged
 }
 
 function renderPage(initialPath = '/chat') {
@@ -1254,40 +1267,51 @@ describe('ChatPage — 错误条要说出真原因、并给重试入口（v1.22�
   })
 })
 
-describe('ChatPage — 别的会话在跑时不许把话插进去（v1.24）', () => {
+describe('ChatPage — 别的会话在跑时当前会话仍能发（v1.65 对齐 CyberStrikeAI）', () => {
   /*
-    ★ 实测事故：会话 A 的长任务在跑（78 秒），用户切到新建的会话 B 打「你好」
-      按 Enter —— 旧代码只看全局 `sending`，于是走了 `interject`，服务端
-      200 并落了一条 user 消息；而 B 里没有任何在跑的轮次会去读历史，
-      那句话永远没有回复，界面停在「插话 · 模型下一轮会看到」+「模型在推理…」。
+    ★ v1.24 的旧语义（"别的会话在跑就禁止当前会话发"）已在 v1.65 推翻。
 
-    修法：`sending` 要带上"是哪个会话在跑"，只有**当前会话**在跑才是插话语义。
+    原因：后端从设计上就是**按请求独立并发**（每个轮次自己跑，无全局轮次锁，
+    实测两个会话的 turn 同时 running）。CyberStrikeAI 也是请求级独立并发。
+    前端老设计用全局 `sending` 把"同时只能发一条"写死，导致用户在一个长会话
+    跑着时，切到新建会话发消息被拦下 —— 用户实测「另一个对话正在进行，新开
+    一个对话发送不出去，同时只能一个会话运行吗？」。
+
+    v1.65 改成按会话独立：判断"这个会话在不在跑"看 `sendingSessionIds` 是否
+    包含它；别会话在跑只给一句提示，**不再拦发消息**。
+
+    （旧 v1.24 真正防的那个事故 —— 把话插进**别的**会话的轮次 —— 仍被防住：
+    `turnRunningHere` 只在本会话有轮次时为真，走的一定是正确分支。）
   */
-  it('★ 别的会话正在跑 → 按钮是「发送」不是「插话」，且点了不发请求', async () => {
+  it('★ 别的会话正在跑 → 当前会话仍能发（按钮是「发送」、可点、发得出去）', async () => {
+    mockedSendMessage.mockResolvedValueOnce(true)
     mockedUseChat.mockReturnValue(
       chatState({
         active: { ...session(), messages: [] },
         sending: true,
         sendingSessionId: 'chat_other',
+        sendingSessionIds: ['chat_other'],
         phase: { phase: 'thinking', round: 0 },
       }),
     )
     renderPage('/chat?session=chat_1')
 
     const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
-    expect(textarea.placeholder).toContain('另一个对话正在跑')
+    // 提示只说明"别处也在跑"，但不再说"等它跑完再发"
+    expect(textarea.placeholder).toContain('另一个对话')
     fireEvent.change(textarea, { target: { value: '你好' } })
 
-    // 按钮文案必须是「发送」——绝不能在别的会话跑着时变成「插话」
+    // 当前会话没在跑 → 按钮是「发送」，不是「插话」
     expect(screen.queryByRole('button', { name: '插话' })).toBeNull()
     const send = screen.getByRole('button', { name: '发送' }) as HTMLButtonElement
-    // 全局只允许一轮在跑，所以这一下被禁用（而不是静默吞掉用户的话）
-    expect(send.disabled).toBe(true)
+    // ★ 关键：不再被禁用（别的会话在跑不阻止当前会话发）
+    expect(send.disabled).toBe(false)
     fireEvent.click(send)
 
     await waitFor(() => {
+      // 走的是"发新消息"，不是"插进别的会话"
+      expect(mockedSendMessage).toHaveBeenCalledTimes(1)
       expect(mockedInterject).not.toHaveBeenCalled()
-      expect(mockedSendMessage).not.toHaveBeenCalled()
     })
   })
 

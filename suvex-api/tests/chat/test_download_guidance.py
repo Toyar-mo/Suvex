@@ -59,3 +59,19 @@ def test_guidance_mentions_single_command_time_cap() -> None:
     assert "300" in p
     # `-m 280` 的用意：在 300s 上限前让 curl 自己先干净退出，文件可续
     assert "-m 280" in p
+
+
+def test_windows_only_tool_fallback_guidance_present() -> None:
+    """提示词必须有「Windows 专用工具？找 Linux 等价方案，别一句环境不支持就放弃」。
+
+    线上真事（2026-11-04，用户 m01118）：模型面对路由器备份配置，回
+    「需要 RouterPassView 才能解析，在 Linux 沙箱里无法解密，我主动放弃。」
+    —— 而正确答案是 binwalk 拆包 + 按格式写 Python 解析器。这条守门员钉住
+    那段反放弃指引，防止它被删后模型又回到"跑不了那个 GUI 就放弃"。
+    """
+    p = _prompt()
+    assert "RouterPassView" in p, "缺少 Windows 工具反放弃的具体反例（RouterPassView）"
+    assert "找 Linux 的等价方案" in p or "Linux 的等价" in p, "缺少『找 Linux 等价方案』指引"
+    assert "别一句\"环境不支持\"就放弃" in p or "别" in p  # 软断言
+    # 必须给可执行路径，而不是"放弃"：至少提到自写解析器 / binwalk
+    assert ("自己写解析器" in p) or ("写解析器" in p), "缺少『自己写解析器』这条替代路径"

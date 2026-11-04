@@ -1027,3 +1027,71 @@ def test_should_nudge_no_tool_cap_does_not_affect_when_no_tools_used() -> None:
         )
         is False
     )
+
+
+# ---------------------------------------------------------------------------
+# v1.64.2：历史污染清洗 —— 回喂历史前剥掉旧文本协议的「写 ACTION：/ 执行：」残渣
+# ---------------------------------------------------------------------------
+def test_strip_legacy_action_narration_removes_stub_lines() -> None:
+    """整行纯占位的「执行：/ 写 ACTION：/ 执行。」要被剥掉，实义句子保留。"""
+    from app.chat.engine import _strip_legacy_action_narration as s
+
+    sample = (
+        "上传成功后的路径是 ./uplo4d/x.gif，先确认 .gif 后缀能否执行。\n\n\n"
+        "执行：\n\n\n写 ACTION：\n\n\n执行。\n\n"
+        "现在只写 ACTION JSON 行：\n\n\n执行：\n\n\n写 ACTION：\n\n\n执行。\n\n"
+        "我现在测试 .user.ini 与 gif 后缀执行。"
+    )
+    out = s(sample)
+    assert "写 ACTION：" not in out
+    assert "现在只写 ACTION JSON 行" not in out
+    # 实义句子保留
+    assert "上传成功后的路径" in out
+    assert "我现在测试" in out
+    # 连续空行被压掉
+    assert "\n\n\n" not in out
+
+
+def test_strip_legacy_action_narration_keeps_real_action_json() -> None:
+    """真正的 `ACTION: {...}`（含全角冒号）不能被当占位碎句删掉。"""
+    from app.chat.engine import _strip_legacy_action_narration as s
+
+    t = '好的。\nACTION：{"tool": "run_shell", "args": {"command": "ls"}}'
+    out = s(t)
+    assert "run_shell" in out
+    assert "好的。" in out
+
+
+def test_strip_legacy_action_narration_keeps_body_with_execute_word() -> None:
+    """句子里出现了"执行"这个字、但不是整行占位 → 原样保留，不误删。"""
+    from app.chat.engine import _strip_legacy_action_narration as s
+
+    t = "执行这个命令：ls -la"
+    assert s(t) == t
+
+
+def test_render_history_applies_narration_cleanup() -> None:
+    """`_render_history` 回喂 assistant 历史时确实清洗过（不把残渣喂给模型）。"""
+    from app.chat import engine
+
+    class _Row:
+        def __init__(self, role, content, **kw):
+            self.role = role
+            self.content = content
+            self.tool_name = kw.get("tool_name")
+            self.tool_args = kw.get("tool_args")
+            self.tool_failed = kw.get("tool_failed")
+            self.model_extra = kw.get("model_extra")
+
+    rows = [
+        _Row("user", "继续"),
+        _Row(
+            "assistant",
+            "我先看下目录。\n\n执行：\n\n写 ACTION：\n\n执行。\n\n现在读一下。",
+        ),
+    ]
+    msgs = engine._render_history(rows)
+    joined = "\n".join(m["content"] for m in msgs)
+    assert "写 ACTION" not in joined
+    assert "我先看下目录" in joined
+    assert "现在读一下" in joined

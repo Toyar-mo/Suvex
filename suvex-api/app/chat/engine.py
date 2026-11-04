@@ -883,12 +883,106 @@ def _render_attachments(
     return "\n".join(blocks)
 
 
+def _strip_legacy_action_narration(text: str) -> str:
+    """剥掉旧文本协议时代模型自己写下的「写 ACTION：/ 执行：」叙述残渣（v1.64.2）。
+
+    ## 为什么要这个
+
+    迁移到原生 tool-calling 之后，模型不再需要手写 `ACTION: {...}`。但**老会话**
+    的 assistant 历史是文本协议时代留下的 —— 那时模型常常在正文里刷出一片纯占位
+    碎句，例如线上会话 `chat_01M6H1JNW3S2010NB0474PN369`（「ctf」）实测：
+
+        上传成功后的路径是 … 先确认 … 测试 `.user.ini` 上传。
+
+        执行：
+
+        写 ACTION：
+
+        执行。
+
+        现在只写 ACTION JSON 行：
+
+        执行：
+
+        写 ACTION：
+
+        执行。
+
+        我现在测试 `.user.ini` 与 gif 后缀执行。…
+
+    那些「执行：」「写 ACTION：」「执行。」「现在只写 ACTION JSON 行：」是**当年**模型
+    想发动作却没真发出去、只把"打算"写成正文的碎渣。它们不含任何 JSON、不含命令，
+    是纯噪声。
+
+    ## 为什么要在**回喂历史**时剥
+
+    模型会**照抄它自己的历史**。即使这轮的系统提示词已经改成原生调用、当前工具调用
+    也是干干净净的原生 `tool_calls`（实测 `tool_args` 是 `{"command": "…"}`），模型
+    看到历史里一屏「写 ACTION：」，就会继续在正文里写「写 ACTION：」——历史污染，
+    界面上看着像"又坏了"，其实工具一直在正常执行。把历史里的残渣剥掉，模型就没有
+    坏模板可抄了。
+
+    ## 剥什么 / 不剥什么（保守）
+
+    只删**整行就是占位碎句**的行（去空白和常见尾标点后，等于 "执行" / "写ACTION" /
+    "现在只写ACTIONJSON行" 之类，且**不含 `{`、不含命令字符**）。理由：
+    · 一行里但凡有 `{`（真的 JSON）就不删 —— 那是有效动作；
+    · 一行里但凡有其它实义文字就不删 —— 只处理"整行纯占位"这一种。
+    删完把连续空行压成一个，避免留一堆空行。
+
+    ★ 只作用于**喂给模型的 messages**（`_render_history`）。落库的 `content` 原样保留，
+      界面上历史气泡显示的还是当时的原文 —— 不改写用户看到的历史。
+    """
+    lines = text.split("\n")
+    kept: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        # 归一：去掉常见尾标点/空白再做比对。
+        core = stripped.rstrip("：:。. 　")
+        core_nospace = core.replace(" ", "").replace("　", "")
+        # 仅当「整行是占位碎句」且不含 JSON/命令迹象时才丢。
+        is_stub = (
+            "{" not in stripped
+            and core_nospace in _LEGACY_NARRATION_STUBS
+        )
+        if is_stub:
+            continue
+        kept.append(line)
+    # 压连续空行：两次以上空行折成一次。
+    out: list[str] = []
+    blank = False
+    for line in kept:
+        if line.strip() == "":
+            if blank:
+                continue
+            blank = True
+        else:
+            blank = False
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+#: 「整行纯占位」的旧叙述碎句全集（去空白、去尾标点后比对）。v1.64.2。
+_LEGACY_NARRATION_STUBS = frozenset(
+    {
+        "执行",
+        "执行下面",
+        "写ACTION",
+        "写ACTIONJSON行",
+        "现在只写ACTION",
+        "现在只写ACTIONJSON行",
+        "我现在只写ACTIONJSON行",
+        "现在写ACTION",
+        "接下来写ACTION",
+        "ACTION",
+    }
+)
+
+
 def _render_history(rows: list[Any]) -> list[dict[str, str]]:
     """把库里的消息渲染成 LLM 的 `messages` 数组。
 
     ## 三种角色怎么映射
-
-    | 库里的 role | 送到模型时 |
     |---|---|
     | `user` | `user` |
     | `assistant` | `assistant` |
@@ -943,10 +1037,17 @@ def _render_history(rows: list[Any]) -> list[dict[str, str]]:
                 }
             )
         elif role == "assistant":
+            # ★ v1.64.2：回喂前剥掉**旧文本协议时代的叙述残渣**。
+            #   见 `_strip_legacy_action_narration` 的长注释 —— 老会话里
+            #   模型自己写过成片的「执行：/ 写 ACTION：/ 执行。」占位碎句，
+            #   迁移到原生调用后这些碎句仍是**历史**，模型会照抄自己的旧
+            #   写法（历史污染），界面上继续刷「写 ACTION：」。只清洗**喂给
+            #   模型的历史**，不动落库正文、不动界面显示。
+            clean = _strip_legacy_action_narration(content)
             # 空正文的 assistant 消息（模型只调了工具、没说话）不送 ——
             # 一个空的 assistant turn 在部分 provider 上是 400。
-            if content.strip():
-                out.append({"role": "assistant", "content": content})
+            if clean.strip():
+                out.append({"role": "assistant", "content": clean})
         else:
             # ★ v0.112：`model_extra` 是**只给模型看**的材料（附件正文、
             #   容器内路径、分析指路）。用户那句话在 `content` 里，材料

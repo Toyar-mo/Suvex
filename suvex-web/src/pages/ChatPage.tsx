@@ -193,7 +193,6 @@ export function ChatPage() {
     status,
     error,
     sending,
-    sendingSessionId,
     personas,
     stagedAttachments,
     deciding,
@@ -211,6 +210,8 @@ export function ChatPage() {
     serverTurn,
     // ★ v1.62：用户已请求「彻底停止」，但这一轮还没真正停下（可能卡在工具里）。
     stopRequested,
+    // ★ v1.65：本浏览器在跑的会话集合 —— 按会话独立并发的唯一事实来源。
+    sendingSessionIds,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -289,6 +290,9 @@ export function ChatPage() {
    * 在整轮期间一直转圈 —— 暗示"点不动"，而它此刻正是**能**点的。
    */
   const [interjecting, setInterjecting] = useState(false)
+  /** ★ v1.65：正在建会话+发首句（防连点建出两个会话）。与全局 `sending`
+   *  解耦 —— 别的会话在跑不该让欢迎屏的推荐问法按钮变灰。 */
+  const [pickingStarter, setPickingStarter] = useState(false)
   /**
    * ★ v1.25：「中断当前步骤」弹窗。
    *
@@ -485,15 +489,19 @@ export function ChatPage() {
       if (!alive) return
       const stillRunning = await pollTurnProgress(sessionId)
       if (!alive) return
+      // ★ v1.65：判"本会话这一轮在本浏览器里有没有 SSE 在跑"，要看**这个
+      //   会话**是否在 `sendingSessionIds` 里 —— 不能再用全局 `sending`
+      //   （它现在表示"任意会话在跑"，会把别的会话的跑算成本会话的跑）。
+      const localRunning = () => getChatSnapshot().sendingSessionIds.includes(sessionId)
       if (stillRunning) {
         sawRunning = true
         // 还在跑：把最新消息也拉一次（可能落了新工具结果/正文），再排下一拍。
-        if (!getChatSnapshot().sending) void refreshActiveMessages(sessionId)
+        if (!localRunning()) void refreshActiveMessages(sessionId)
         timer = setTimeout(() => void tick(), 1500)
         return
       }
       // 服务端说没在跑了。
-      if (getChatSnapshot().sending) {
+      if (localRunning()) {
         // 本页还以为在跑。两种可能：
         //   (a) 刚发出去，服务端还没建 running 行 —— 再等一拍看看；
         //   (b) 流早断了、本地 sending 卡死 —— 清掉它（否则界面永远转圈）。
@@ -562,9 +570,15 @@ export function ChatPage() {
    * `sendingSessionId` 的注释：A 会话长任务在跑，用户在新建的 B 会话发
    * 「你好」被当成插话，B 里就永远停在「模型在推理…」）。
    */
-  const sendingHere = sending && sendingSessionId === active?.id
-  /** 有别的会话在跑 —— 全局只允许一轮，这时当前会话不能再开一条。 */
-  const sendingElsewhere = sending && !sendingHere
+  const sendingHere = sendingSessionIds.includes(active?.id ?? '')
+  /**
+   * 有**别的**会话在本浏览器里跑着。
+   *
+   * ★ v1.65：这不再阻止当前会话发送（后端本来就支持多会话并发，CyberStrikeAI
+   *   也是请求级独立并发）。它只用来给一句温和的提示，绝不当"不能发"的闸。
+   *   老设计拿它当闸，于是"一个长会话跑着 → 新建会话发不出去"（用户实测）。
+   */
+  const sendingElsewhere = sendingSessionIds.some((id) => id !== active?.id)
 
   /**
    * ★ v1.49：**服务端**说这个会话还有一轮在跑（`lastRuns` 里最近一条是
@@ -582,7 +596,6 @@ export function ChatPage() {
    */
   const serverRunning =
     !sendingHere &&
-    !sendingElsewhere &&
     (lastRuns[0]?.status === 'running' ||
       lastRuns.some((run) => run.status === 'running') ||
       // ★ v1.61：轮询说服务端还在跑（`pollTurnProgress` 写进 `serverTurn`）。
@@ -593,8 +606,8 @@ export function ChatPage() {
   /** 当前会话这一轮正在跑（本地在跑，或服务端说还在跑）—— Enter 是插话。 */
   const turnRunningHere = sendingHere || serverRunning
 
-  const canSend =
-    draft.trim().length > 0 && active !== null && !sendingElsewhere
+  // ★ v1.65：能不能发只看**当前会话**能不能发 —— 别的会话在跑不该拦。
+  const canSend = draft.trim().length > 0 && active !== null
 
   async function handleNew() {
     const session = await createSession()
@@ -636,9 +649,11 @@ export function ChatPage() {
     // 新的工具额度），而 `interject` 只往库里写一句话、由正在跑的那一轮
     // 在下一轮开头读到。混用会让用户在模型跑的时候莫名开启第二轮，
     // 而那一轮的上下文与第一轮并行 —— seq 顺序、工具预算都会乱。
-    // ★ v1.24：先挡「另一个会话在跑」——这一支绝不能落到下面的 `interject`，
-    //   那会把这句话塞进**另一个会话的**轮次里（甚至塞进一个没人读的历史）。
-    if (sendingElsewhere) return
+    //
+    // ★ v1.65：不再挡「另一个会话在跑」。别的会话在跑，不影响当前会话发一条
+    //   新消息（后端支持多会话并发）。`turnRunningHere` 只在本会话有轮次时
+    //   才为真，所以这里走的是正确的分支：本会话跑着 → 插话；本会话没跑 →
+    //   正常发（即便别的会话在跑）。
 
     if (turnRunningHere) {
       setDraft('')
@@ -907,15 +922,23 @@ export function ChatPage() {
    * ⚠️ `sending` 期间按钮要禁用（见渲染处），否则连点两下会建出两个会话。
    */
   async function handlePickStarter(text: string) {
-    if (sending) return
-    const session = await createSession()
-    if (!session) return
-    setSearchParams({ session: session.id }, { replace: true })
-    // 先不填草稿：那句话马上会以乐观气泡的形式出现在消息流里，
-    // 再把它留在输入框就是同屏两份。
-    setDraft('')
-    const ok = await sendMessage(session.id, text)
-    if (!ok) setDraft(text)
+    // ★ v1.65：只防"连点建出两个会话"，不再因**别的**会话在跑而拦下
+    //   （后端支持多会话并发；欢迎屏时 `active` 是 null，全局 sending 判断
+    //   也会因为「别的会话在跑」而误伤）。
+    if (pickingStarter) return
+    setPickingStarter(true)
+    try {
+      const session = await createSession()
+      if (!session) return
+      setSearchParams({ session: session.id }, { replace: true })
+      // 先不填草稿：那句话马上会以乐观气泡的形式出现在消息流里，
+      // 再把它留在输入框就是同屏两份。
+      setDraft('')
+      const ok = await sendMessage(session.id, text)
+      if (!ok) setDraft(text)
+    } finally {
+      setPickingStarter(false)
+    }
   }
 
   /** 打开人格弹窗并提交选择。 */
@@ -1316,7 +1339,7 @@ export function ChatPage() {
                         就是两个会话、两轮并发的模型调用 —— 而用户在界面上
                         只会看到一个（另一个在会话列表里躺着）。
                     */
-                    disabled={sending}
+                    disabled={pickingStarter}
                     className={cn(
                       'w-full rounded-sm border border-line bg-surface-sunken px-2.5 py-2 text-left',
                       'text-xs text-ink-muted transition-ui duration-fast',
@@ -1348,7 +1371,7 @@ export function ChatPage() {
                       <button
                         key={text}
                         type="button"
-                        disabled={sending}
+                        disabled={pickingStarter}
                         onClick={() => setDraft(text)}
                         className={cn(
                           'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
@@ -1545,7 +1568,7 @@ export function ChatPage() {
                   type="button"
                   data-error-retry={retryableRunId}
                   className="shrink-0 rounded border border-signal-risk/40 px-2 py-0.5 text-2xs text-signal-risk hover:bg-signal-risk/10 disabled:opacity-50"
-                  disabled={resuming || sending}
+                  disabled={resuming || sendingHere}
                   onClick={() => void handleRetryError()}
                 >
                   {resuming ? '正在重试…' : '重试'}
@@ -1569,7 +1592,7 @@ export function ChatPage() {
             <button
               type="button"
               className="mt-1 rounded border border-signal-warn/40 px-2 py-0.5 text-2xs text-signal-warn hover:bg-signal-warn/10 disabled:opacity-50"
-              disabled={resuming || sending}
+              disabled={resuming || sendingHere}
               onClick={() => void handleResume()}
             >
               {resuming ? '正在接着跑…' : '继续这一轮'}
@@ -1594,7 +1617,9 @@ export function ChatPage() {
               uploading={uploading}
               onPick={(file) => void handleUpload(file)}
               onRemove={dropStagedAttachment}
-              disabled={sending}
+              // ★ v1.65：只在本会话有轮次在跑时才禁用附件（跑着不能改附件）。
+              //   别的会话在跑不影响这里。
+              disabled={sendingHere}
             />
           )}
           {mention && (
@@ -1662,7 +1687,9 @@ export function ChatPage() {
                         ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
                         : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
                       : sendingElsewhere
-                        ? '另一个对话正在跑 —— 等它跑完再发'
+                        ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
+                          //   并发）。这里只做一句轻提示，Enter 照常发送。
+                          '另一个对话正在后台跑（不影响这里）—— Enter 发送，可同时进行'
                         : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
               }
               /*

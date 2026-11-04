@@ -1454,3 +1454,81 @@ describe('服务端轮次进度轮询（v1.61）', () => {
     await p0.catch(() => {})
   })
 })
+
+describe('按会话独立并发（v1.65 对齐 CyberStrikeAI）', () => {
+  /*
+    ★ 用户原话：「另一个对话正在进行，新开一个对话发送不出去，同时只能一个
+      会话运行吗？对齐CyberStrikeAI的设计修复」。
+
+    后端**本来就支持**多会话并发（每个轮次按请求独立跑，无全局轮次锁；
+    实测两个会话的 turn 同时 running）。CyberStrikeAI 也是请求级独立并发。
+    卡住的是前端：老代码用全局 `sending` 布尔把"同时只能发一条"写死。
+
+    v1.65 用 `sendingSessionIds`（集合）做唯一事实来源：判"某会话在不在跑"
+    看它在不在集合里；**不同的会话可以各跑各的**，同会话重复发仍被拦。
+  */
+
+  it('★ 一个会话在跑时，另一个会话仍能发（不再被全局 sending 拦）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    // chat_1 起一轮，挂着不回包（模拟长任务在跑）
+    const p1 = sendMessage('chat_1', '第一条')
+    expect(getChatSnapshot().sending).toBe(true)
+    expect(getChatSnapshot().sendingSessionIds).toEqual(['chat_1'])
+
+    // ★ 关键：chat_2 不在集合里 → 允许发（老代码这里会 return false）
+    const p2 = sendMessage('chat_2', '另一会话也能发')
+    await tick()
+    // 两个会话都进了集合，sending 仍为 true（集合里还有）
+    expect(getChatSnapshot().sendingSessionIds).toContain('chat_1')
+    expect(getChatSnapshot().sendingSessionIds).toContain('chat_2')
+
+    // 收尾两条流（顺序无要求）
+    finishTurn(1, [sseFrame(TURN_DONE, DONE_FRAME)])
+    await p1
+    if (pending[2]) finishTurn(2, [sseFrame(TURN_DONE, DONE_FRAME)])
+    await p2
+    if (pending[3]) pending[3].resolve([])
+  })
+
+  it('★ 同一个会话重复发仍被拦（不会在一条会话里开两轮）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p1 = sendMessage('chat_1', '第一次')
+    // 同一会话再发一次 → 直接 return false，不起第二个请求
+    const second = await sendMessage('chat_1', '第二次')
+    expect(second).toBe(false)
+
+    finishTurn(1, [sseFrame(TURN_DONE, DONE_FRAME)])
+    await p1
+    if (pending[2]) pending[2].resolve([])
+  })
+
+  it('★ 一个会话跑完移出集合后，sending 只在其余会话还在跑时才为 true', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p1 = sendMessage('chat_a', 'a 先跑')
+    const p2 = sendMessage('chat_b', 'b 也跑')
+    await tick()
+    expect(getChatSnapshot().sendingSessionIds.sort()).toEqual(['chat_a', 'chat_b'])
+
+    // a 先收尾 → 集合只剩 b，sending 仍 true
+    // 注意：a 的流是 pending[1]，b 的流是 pending[2]，按发起顺序。
+    finishTurn(1, [sseFrame(TURN_DONE, DONE_FRAME)])
+    await p1
+    expect(getChatSnapshot().sendingSessionIds).toEqual(['chat_b'])
+    expect(getChatSnapshot().sending).toBe(true)
+
+    finishTurn(2, [sseFrame(TURN_DONE, DONE_FRAME)])
+    await p2
+    expect(getChatSnapshot().sendingSessionIds).toEqual([])
+    expect(getChatSnapshot().sending).toBe(false)
+    if (pending[3]) pending[3].resolve([])
+  })
+})

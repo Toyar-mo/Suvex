@@ -313,6 +313,34 @@ export interface ChatState {
    * 等服务端真的不再 `running`（轮询返回 false），这个标记一并清掉。
    */
   stopRequested: boolean
+  /**
+   * ★ v1.65：**本浏览器**正在跑的会话集合（按会话独立并发）。
+   *
+   * ## 为什么需要它（对齐 CyberStrikeAI）
+   *
+   * 后端从设计上就是**按请求独立**跑：每个轮次自己开会话、自己跑，不存在
+   * 「全局同时只允许一轮」的锁 —— 实测同一时刻能有两个会话的轮次并行
+   * （`chat_turn_runs` 里两条 status=running 同时存在）。CyberStrikeAI 也是
+   * 请求级独立并发（Go/Gin，每个 HTTP 请求跑自己的 agent 循环）。
+   *
+   * 但前端老设计用一个全局 `sending` 布尔把"同时只能发一条"写死了，于是
+   * 用户在一个长会话跑着时，切到新建的会话发消息会被前端拦下（`canSend`
+   * 要求 `!sendingElsewhere` 且 `sendMessage` 里 `if (state.sending) return
+   * false`）—— 用户原话「另一个对话正在进行，新开一个对话发送不出去」。
+   *
+   * ## 语义
+   *
+   * 这是**唯一事实来源**：某个会话在不在跑，看它是否在这个集合里。
+   * `sending` / `sendingSessionId` / `phase` / `streamingText` 这些**展示字段**
+   * 只描述"用户此刻正在看的那个会话的流"，是它的投影；切到别的会话时它们
+   * 由该会话自己的帧/轮询重建（`onEvent` 已按 `active.id === sessionId` 过滤，
+   * 别的会话的帧不会污染当前展示）。
+   *
+   * 这样：A 跑着 → 用户切到 B → B 不在集合里 → 可以正常发 → B 也进集合 →
+   * A、B 并行；切回 A，A 的 `sendingHere` 由「A 在集合里」为真判定，
+   * 展示靠轮询/刷新接回。
+   */
+  sendingSessionIds: string[]
 }
 
 /** v1.61：轮询拿到的"服务端这一轮跑到哪了"。 */
@@ -342,6 +370,7 @@ const EMPTY: ChatState = {
   deciding: false,
   serverTurn: null,
   stopRequested: false,
+  sendingSessionIds: [],
 }
 
 let state: ChatState = EMPTY
@@ -597,7 +626,15 @@ export async function pollTurnProgress(sessionId: string): Promise<boolean> {
   }
   // 没有在跑的了：清掉进度提示，也清掉「已请求停止」的标记
   // （v1.62：服务端真的停下来了，停止确认气泡该收了）。
-  patch({ serverTurn: null, stopRequested: false })
+  // v1.65：同时把这个会话从"在跑集合"里摘掉 —— 服务端确认它没在跑了，
+  //   本地若还挂着它会导致 `sendingHere` 一直为真、输入框一直是"插话"。
+  const remaining = state.sendingSessionIds.filter((id) => id !== sessionId)
+  patch({
+    serverTurn: null,
+    stopRequested: false,
+    sendingSessionIds: remaining,
+    sending: state.sendingSessionId === sessionId && remaining.length > 0 ? true : false,
+  })
   return false
 }
 
@@ -654,7 +691,16 @@ export async function resumeTurn(
       （2）重取一次执行账目与消息 —— 用户原话「重新发送继续没有响应，
           还是要刷新网页」。刷新让黄条/错误条/消息列表都跟服务端对齐。
     */
-    patch({ sending: false, sendingSessionId: null, phase: null, stopRequested: false })
+    // v1.65：本会话接手跑完后，从"在跑集合"里摘掉它（别的会话仍可能跑着，
+    // 所以 `sending` 按剩余集合算，不再无脑置 false）。
+    const remaining = state.sendingSessionIds.filter((id) => id !== sessionId)
+    patch({
+      sending: remaining.length > 0,
+      sendingSessionId: null,
+      sendingSessionIds: remaining,
+      phase: null,
+      stopRequested: false,
+    })
     void pollTurnProgress(sessionId)
     void refreshActiveMessages(sessionId)
     return out.messages
@@ -708,13 +754,17 @@ export async function sendMessage(
   providerId?: string | null,
   explicitTools?: string[],
 ): Promise<boolean> {
-  if (state.sending) return false
+  // ★ v1.65：**按会话**判重 —— 只有"这个会话自己已经有一轮在跑"才拦。
+  //   别的会话在跑不该阻止当前会话发（后端本来就支持多会话并发）。
+  if (state.sendingSessionIds.includes(sessionId)) return false
   // ★ 让用户那句话**立刻**出现在屏幕上（v0.97）。放在 `sending: true` 同一个
   //   patch 里，所以从用户点下发送到气泡出现的这段时间是一个渲染帧，
   //   而不是一整轮模型推理。
   patch({
     sending: true,
     sendingSessionId: sessionId,
+    // ★ v1.65：登记进"本浏览器在跑的会话集合"（按会话独立并发的唯一事实来源）。
+    sendingSessionIds: [...state.sendingSessionIds, sessionId],
     error: null,
     pendingUserContent: content,
     phase: null,
@@ -949,16 +999,33 @@ export async function sendMessage(
     //   只管到这一轮结束。放 `finally` 而不是只在成功路径清，是因为失败
     //   路径上它同样已经过期：插话早就写进库了（`interject` 自己 commit），
     //   这一轮失败不影响那条消息存在，气泡留着只会继续说假话。
+    // ★ v1.65：从这个会话的"在跑集合"里去掉它（按会话独立并发的收尾）。
+    const remaining = state.sendingSessionIds.filter((id) => id !== sessionId)
+    // ★ v1.65：展示字段（sending/phase/streamingText/pendingUserContent/
+    //   interjections）只属于"用户此刻正在看的那个会话"。如果这一轮结束时
+    //   **正在看的仍是本会话**（`sendingSessionId === sessionId`），就清掉这些
+    //   展示字段；否则（用户早切到别的会话、那边正握着自己的流）**不能清**，
+    //   否则会把另一会话刚画上去的进度/正文误清成空。
+    const stillWatched = state.sendingSessionId === sessionId
     patch({
-      sending: false,
-      sendingSessionId: null,
-      pendingUserContent: null,
-      phase: null,
-      interjections: [],
-      // ★ v0.102：流式缓冲在这里也必须清。失败路径上它留着一段
-      //   "写了一半就断了"的正文，界面上会有一条永远停在半句的气泡，
-      //   而错误条同时说这一轮失败了 —— 两者矛盾。
-      streamingText: null,
+      sendingSessionIds: remaining,
+      // `sending` 只要集合里还有别的会话在跑就仍为 true（有轮在跑的事实），
+      // 但 sendingHere 由页面按 `sendingSessionIds.includes(active.id)` 判，
+      // 不再依赖这个全局布尔做并发闸。
+      sending: remaining.length > 0,
+      ...(stillWatched
+        ? {
+            sendingSessionId:
+              remaining.length > 0 ? (remaining[remaining.length - 1] ?? null) : null,
+            pendingUserContent: null,
+            phase: null,
+            interjections: [],
+            // ★ v0.102：流式缓冲在这里也必须清。失败路径上它留着一段
+            //   "写了一半就断了"的正文，界面上会有一条永远停在半句的气泡，
+            //   而错误条同时说这一轮失败了 —— 两者矛盾。
+            streamingText: null,
+          }
+        : {}),
     })
   }
 }
@@ -1018,14 +1085,26 @@ export async function interruptTurn(
     if (mode === 'continue') {
       // 服务端会接着跑同一轮；本地把"在跑"状态续上，配合轮询显示进度。
       // v1.62：改方向后就不该再显示"已请求停止"。
-      patch({ sending: true, sendingSessionId: sessionId, stopRequested: false })
+      // v1.65：把本会话登记回"在跑集合"（它确实又跑起来了）。
+      const ids = state.sendingSessionIds.includes(sessionId)
+        ? state.sendingSessionIds
+        : [...state.sendingSessionIds, sessionId]
+      patch({ sending: true, sendingSessionId: sessionId, sendingSessionIds: ids, stopRequested: false })
     } else {
       // ★ v1.62：stop 的服务端语义是「下一个检查点停」——若正卡在一个
       //   跑着的工具里，它要等工具返回才停（子进程打断不了）。所以这里
       //   不清 `serverTurn`、并置 `stopRequested`：轮次仍 running 时，
       //   进度条改说「已请求停止，等当前工具返回后结束」，而不是又弹出
       //   「服务端仍在后台推进…点中断停下」（那会让用户以为停止没生效）。
-      patch({ sending: false, sendingSessionId: null, phase: null, stopRequested: true })
+      // v1.65：本会话从"在跑集合"里摘掉；别的会话仍在跑时 `sending` 保持 true。
+      const remaining = state.sendingSessionIds.filter((id) => id !== sessionId)
+      patch({
+        sending: remaining.length > 0,
+        sendingSessionId: null,
+        sendingSessionIds: remaining,
+        phase: null,
+        stopRequested: true,
+      })
     }
     void refreshActiveMessages(sessionId)
     void pollTurnProgress(sessionId)
@@ -1078,7 +1157,14 @@ export function clearStaleSending(): void {
   // ★ v1.62：清掉卡死的本地 sending 时，也一并收掉可能残留的「已请求停止」
   //   标记（轮询随后会把 serverTurn 也清掉）。否则一个早已停下的轮次会
   //   留着"已请求停止"的红条。
+  // ★ v1.65：`clearStaleSending` 是"看到服务端说这个会话没在跑"才调的，
+  //   要清的就是**当前正在看的**会话那一条；把它从集合里摘掉，别把别的
+  //   会话（可能真在跑）也一起当成死的。
+  const watched = state.sendingSessionId
   patch({
+    sendingSessionIds: watched
+      ? state.sendingSessionIds.filter((id) => id !== watched)
+      : [],
     sending: false,
     sendingSessionId: null,
     phase: null,
