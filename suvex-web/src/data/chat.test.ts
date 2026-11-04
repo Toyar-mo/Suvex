@@ -1389,4 +1389,68 @@ describe('服务端轮次进度轮询（v1.61）', () => {
     }
     await p0.catch(() => {})
   })
+
+  /*
+    ★ v1.62：点「彻底停止」不等于立刻停 —— 若正卡在一个跑着的工具里
+      （子进程打断不了），服务端要等工具返回才停。此时轮询会发现这一轮
+      仍 `running`。若不单独记「已请求停止」，界面会把「服务端仍在后台
+      推进…点中断停下」那条**又画回来**，让人误以为停止按钮没生效、
+      手贱再点一次。`stopRequested` 就是给这个窗口期用的标记。
+  */
+  it('interruptTurn(stop) 之后 stopRequested 置 true（承认"已请求停止"）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    const p0 = sendMessage('chat_1', '开始')
+    expect(getChatSnapshot().sending).toBe(true)
+
+    const p1 = interruptTurn('chat_1', 'stop')
+    pending[pending.length - 1].resolve({ ok: true })
+    await p1
+    expect(getChatSnapshot().sending).toBe(false)
+    // ★ 关键断言：界面据此显示「已请求停止…等当前工具返回」，而不是又劝再点
+    expect(getChatSnapshot().stopRequested).toBe(true)
+
+    await tick()
+    while (pending.length > 0) {
+      pending.shift()!.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+    }
+    await p0.catch(() => {})
+  })
+
+  it('pollTurnProgress 发现已无 running 轮次时把 stopRequested 清掉（停止真的落地了）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    // 先把 stopRequested 置成 true（模拟刚点完彻底停止、这一轮还没停）
+    const p0 = sendMessage('chat_1', '开始')
+    const p1 = interruptTurn('chat_1', 'stop')
+    pending[pending.length - 1].resolve({ ok: true })
+    await p1
+    expect(getChatSnapshot().stopRequested).toBe(true)
+
+    // 服务端这一轮结束（cancelled，不再是 running）→ 轮询应清掉标记
+    const p2 = pollTurnProgress('chat_1')
+    pending[pending.length - 1].resolve([
+      {
+        id: 'turn_run_1',
+        sessionId: 'chat_1',
+        status: 'cancelled',
+        resumeAttempts: 0,
+        startedAt: '2026-11-04T00:00:00Z',
+        updatedAt: '2026-11-04T00:00:05Z',
+        resumable: false,
+      },
+    ])
+    const stillRunning = await p2
+    expect(stillRunning).toBe(false)
+    expect(getChatSnapshot().stopRequested).toBe(false)
+
+    await tick()
+    while (pending.length > 0) {
+      pending.shift()!.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+    }
+    await p0.catch(() => {})
+  })
 })

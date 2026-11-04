@@ -295,6 +295,24 @@ export interface ChatState {
    * `null` = 没有在轮询 / 服务端没有在跑的轮次。
    */
   serverTurn: ChatServerTurn | null
+  /**
+   * ★ v1.62：用户已请求「彻底停止」，但服务端这一轮还没真正停下
+   * （典型情况：正卡在一个跑着的工具里 —— 子进程没法中途打断，
+   * 要等它返回，见 `interrupts.py` 的「时间点」说明）。
+   *
+   * ## 为什么需要它
+   *
+   * `stop` 会立刻把本地 `sending` 清掉（"真的停了"的乐观假设）。但服务端
+   * 可能还在跑工具：轮询随后又发现 `serverTurn` 仍 `running`，于是界面把
+   * 刚才那条「服务端仍在后台推进…可以点『中断』停下」的条**又画了回来** ——
+   * 用户刚点了「彻底停止」，却看到界面像是没收到、还劝他"再点一次中断"。
+   * 实测（v1.61 线上，`sleep 90` 场景）就是这样，会让人以为停止按钮坏了。
+   *
+   * 所以单独记一个"已请求停止"的标记：轮次还在跑时，进度条改说
+   * 「已请求停止 · 等当前工具返回后这一轮就结束」，不再劝他重复点中断。
+   * 等服务端真的不再 `running`（轮询返回 false），这个标记一并清掉。
+   */
+  stopRequested: boolean
 }
 
 /** v1.61：轮询拿到的"服务端这一轮跑到哪了"。 */
@@ -323,6 +341,7 @@ const EMPTY: ChatState = {
   streamingText: null,
   deciding: false,
   serverTurn: null,
+  stopRequested: false,
 }
 
 let state: ChatState = EMPTY
@@ -576,8 +595,9 @@ export async function pollTurnProgress(sessionId: string): Promise<boolean> {
     })
     return true
   }
-  // 没有在跑的了：清掉进度提示。
-  patch({ serverTurn: null })
+  // 没有在跑的了：清掉进度提示，也清掉「已请求停止」的标记
+  // （v1.62：服务端真的停下来了，停止确认气泡该收了）。
+  patch({ serverTurn: null, stopRequested: false })
   return false
 }
 
@@ -634,7 +654,7 @@ export async function resumeTurn(
       （2）重取一次执行账目与消息 —— 用户原话「重新发送继续没有响应，
           还是要刷新网页」。刷新让黄条/错误条/消息列表都跟服务端对齐。
     */
-    patch({ sending: false, sendingSessionId: null, phase: null })
+    patch({ sending: false, sendingSessionId: null, phase: null, stopRequested: false })
     void pollTurnProgress(sessionId)
     void refreshActiveMessages(sessionId)
     return out.messages
@@ -702,6 +722,8 @@ export async function sendMessage(
     // ★ v0.102：新的一轮从空缓冲开始。不清的话，上一轮异常退出时
     //   残留的半句话会拼在新一轮的开头（"这个对话还是空的"那种矛盾感）。
     streamingText: null,
+    // ★ v1.62：新的一轮开始了，上一轮遗留的「已请求停止」标记作废。
+    stopRequested: false,
   })
 
   // ★ 附件 id 只在这一条上生效。后端读完正文就删（见 attachments 模块），
@@ -995,9 +1017,15 @@ export async function interruptTurn(
     */
     if (mode === 'continue') {
       // 服务端会接着跑同一轮；本地把"在跑"状态续上，配合轮询显示进度。
-      patch({ sending: true, sendingSessionId: sessionId })
+      // v1.62：改方向后就不该再显示"已请求停止"。
+      patch({ sending: true, sendingSessionId: sessionId, stopRequested: false })
     } else {
-      patch({ sending: false, sendingSessionId: null, phase: null })
+      // ★ v1.62：stop 的服务端语义是「下一个检查点停」——若正卡在一个
+      //   跑着的工具里，它要等工具返回才停（子进程打断不了）。所以这里
+      //   不清 `serverTurn`、并置 `stopRequested`：轮次仍 running 时，
+      //   进度条改说「已请求停止，等当前工具返回后结束」，而不是又弹出
+      //   「服务端仍在后台推进…点中断停下」（那会让用户以为停止没生效）。
+      patch({ sending: false, sendingSessionId: null, phase: null, stopRequested: true })
     }
     void refreshActiveMessages(sessionId)
     void pollTurnProgress(sessionId)
@@ -1047,7 +1075,16 @@ export async function interject(
  */
 export function clearStaleSending(): void {
   if (!state.sending) return
-  patch({ sending: false, sendingSessionId: null, phase: null, interjections: [] })
+  // ★ v1.62：清掉卡死的本地 sending 时，也一并收掉可能残留的「已请求停止」
+  //   标记（轮询随后会把 serverTurn 也清掉）。否则一个早已停下的轮次会
+  //   留着"已请求停止"的红条。
+  patch({
+    sending: false,
+    sendingSessionId: null,
+    phase: null,
+    interjections: [],
+    stopRequested: false,
+  })
 }
 
 /**

@@ -174,6 +174,8 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     deciding: false,
     // ★ v1.61：服务端轮询到的轮次进度。同上，必须显式给 —— 缺了 tsc 会报。
     serverTurn: null,
+    // ★ v1.62：已请求停止（但这一轮还没真正停）。同上。
+    stopRequested: false,
     ...overrides,
   }
 }

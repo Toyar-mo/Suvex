@@ -209,6 +209,8 @@ export function ChatPage() {
     streamingText,
     // ★ v1.61：服务端轮询到的"这一轮跑到哪了"（本页丢了 SSE 时的兜底）。
     serverTurn,
+    // ★ v1.62：用户已请求「彻底停止」，但这一轮还没真正停下（可能卡在工具里）。
+    stopRequested,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -1467,23 +1469,52 @@ export function ChatPage() {
               */}
               {serverRunning && (
                 <div
-                  className="flex items-start gap-2 rounded-[10px] border border-accent/25 bg-accent/[0.06] px-3.5 py-2.5"
+                  className={cn(
+                    'flex items-start gap-2 rounded-[10px] border px-3.5 py-2.5',
+                    stopRequested
+                      ? 'border-signal-risk/30 bg-signal-risk/[0.06]'
+                      : 'border-accent/25 bg-accent/[0.06]',
+                  )}
                   role="status"
                   aria-live="polite"
                   data-server-progress="true"
+                  data-stop-requested={stopRequested ? 'true' : 'false'}
                 >
                   <span
-                    className="mt-1 inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-accent/30 border-t-accent"
+                    className={cn(
+                      'mt-1 inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2',
+                      stopRequested
+                        ? 'border-signal-risk/30 border-t-signal-risk'
+                        : 'border-accent/30 border-t-accent',
+                    )}
                     aria-hidden="true"
                   />
                   <p className="flex-1 text-xs leading-[1.6] text-ink-soft">
-                    服务端仍在后台推进这一轮
-                    {serverTurn
-                      ? `：第 ${serverTurn.roundIndex + 1} 轮${
-                          serverTurn.toolsUsed > 0 ? ` · 已用 ${serverTurn.toolsUsed} 次工具` : ''
-                        }`
-                      : ''}
-                    。可以在这里等，或点「中断」停下；进度会自动跟进，不用刷新网页。
+                    {stopRequested ? (
+                      <>
+                        已请求停止
+                        {serverTurn
+                          ? `（第 ${serverTurn.roundIndex + 1} 轮${
+                              serverTurn.toolsUsed > 0
+                                ? ` · 已用 ${serverTurn.toolsUsed} 次工具`
+                                : ''
+                            }）`
+                          : ''}
+                        ：当前正在跑的工具没法中途打断，等它返回后这一轮就会结束。不用再点中断。
+                      </>
+                    ) : (
+                      <>
+                        服务端仍在后台推进这一轮
+                        {serverTurn
+                          ? `：第 ${serverTurn.roundIndex + 1} 轮${
+                              serverTurn.toolsUsed > 0
+                                ? ` · 已用 ${serverTurn.toolsUsed} 次工具`
+                                : ''
+                            }`
+                          : ''}
+                        。可以在这里等，或点「中断」停下；进度会自动跟进，不用刷新网页。
+                      </>
+                    )}
                   </p>
                 </div>
               )}
