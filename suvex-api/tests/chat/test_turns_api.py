@@ -93,6 +93,40 @@ def test_turns_endpoint_reports_round_and_tool_progress(
     assert rows[0]["status"] == "running"
 
 
+def test_sessions_list_reports_running_flag(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ v1.66：会话列表接口必须标出「哪个会话此刻在跑」。
+
+    用户原话「左侧这边不知道哪个会话正在运行」。侧栏据此给条目画转圈点，
+    判据是服务端 `chat_turn_runs.status == 'running'`（跨刷新/跨浏览器权威），
+    不是前端本地 SSE 布尔。
+
+    守三件事：
+      1. 有一轮 running 的会话 → `running=True`；
+      2. 没有 running 轮次的会话 → `running=False`（不能误标）；
+      3. 轮次结束后 → 回到 `running=False`（点要能灭，不能永远亮）。
+    """
+    running_session = _make_session_via_api(ready_client)
+    idle_session = _make_session_via_api(ready_client)
+
+    run = turn_runs.start(db_session, session_id=running_session)
+    db_session.commit()
+
+    response = ready_client.get("/api/v1/chat/sessions?includeArchived=true")
+    assert response.status_code == 200, response.text
+    by_id = {row["id"]: row for row in response.json()}
+    assert by_id[running_session]["running"] is True, "有 running 轮次的会话必须标运行中"
+    assert by_id[idle_session]["running"] is False, "没有轮次的会话不能误标运行中"
+
+    # 轮次结束后，标记得灭掉。
+    run.status = "done"
+    db_session.commit()
+    response2 = ready_client.get("/api/v1/chat/sessions?includeArchived=true")
+    by_id2 = {row["id"]: row for row in response2.json()}
+    assert by_id2[running_session]["running"] is False, "轮次结束后必须摘掉运行中标记"
+
+
 def test_turns_endpoint_hides_another_users_session(
     ready_client: TestClient, db_session: Session
 ) -> None:

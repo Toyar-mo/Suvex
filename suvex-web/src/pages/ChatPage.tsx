@@ -251,6 +251,22 @@ export function ChatPage() {
     void loadPersonas()
   }, [])
 
+  /*
+    ★ v1.66：只要**本浏览器**还有会话在跑，就每 4 秒刷一次会话列表，
+    让侧栏的「运行中」转圈点保持新鲜。
+
+    为什么需要：`running` 来自服务端列表接口（`loadSessions`），而列表只在
+    进页面 / 一轮结束时重拉。若用户盯着列表而某个**后台**会话（不是当前
+    打开这个）在跑，它的点不会自己亮/灭。这里在有会话跑时低频轮询列表补上。
+    没有会话在跑就完全不轮询（依赖数组为空则停），不产生无谓开销。
+  */
+  const anyRunning = sendingSessionIds.length > 0
+  useEffect(() => {
+    if (!anyRunning) return
+    const timer = setInterval(() => void loadSessions(), 4000)
+    return () => clearInterval(timer)
+  }, [anyRunning])
+
   // 模型接入点：读设置里那份账号，只用**已配置好**的（没配的选了也跑不起来，
   // 而界面上摆一堆跑不起来的选项等于把失败推给用户）。
   const providers = useProjectedProviders()
@@ -1478,69 +1494,21 @@ export function ChatPage() {
                 />
               )}
               {/*
-                ★ v1.61：**服务端在跑、本页没有实时流**时的进度条。
+                ★ v1.66：**已删除** v1.61 那条「服务端仍在后台推进这一轮：第 N 轮
+                · 已用 M 次工具…」的底部蓝条。
 
-                用户的抱怨原话：「服务端在后台跑、前端没有显示，我不知道进行
-                得怎么样了」。刷新页面 / 切回来 / done 帧丢了之后，本页没有了
-                SSE，`sendingHere` 为 false —— 于是画面上一点"还在跑"的痕迹都
-                没有，用户以为它停了。这里用轮询来的 `serverTurn` 画一条明确的
-                "仍在后台推进：第 N 轮 · 已用 M 次工具"，让人心里有数，且顺带
-                提示"点「中断」可以停下来"。
+                用户原话（m01705）：「可以不要显示…这个吗，CyberStrikeAI 刷新
+                网页也不会有这个」。CyberStrikeAI 的做法是把「哪个会话在跑」标在
+                **左侧会话列表**上（条目一个小转圈点 + 「运行中」），而不是在聊天
+                区底部常驻一条带轮次/工具数的横幅。
 
-                只在 `serverRunning`（服务端在跑但本页没在跑）时出现 —— 本页
-                正在流式输出时上下两处都有状态，不必重复。
+                所以运行态的可见性改由两处承担：
+                  ① 左侧每条 `SessionRow` 上的转圈点（服务端 `running` 字段，
+                     v1.66，跨刷新/跨浏览器权威）；
+                  ② 输入框 placeholder 与「中断」按钮（`turnRunningHere`）——
+                     停在某个正在跑的会话里时，仍明确提示「这一轮还在跑…想停下用
+                     中断」，但不再重复画那条带数字的蓝条。
               */}
-              {serverRunning && (
-                <div
-                  className={cn(
-                    'flex items-start gap-2 rounded-[10px] border px-3.5 py-2.5',
-                    stopRequested
-                      ? 'border-signal-risk/30 bg-signal-risk/[0.06]'
-                      : 'border-accent/25 bg-accent/[0.06]',
-                  )}
-                  role="status"
-                  aria-live="polite"
-                  data-server-progress="true"
-                  data-stop-requested={stopRequested ? 'true' : 'false'}
-                >
-                  <span
-                    className={cn(
-                      'mt-1 inline-block h-3 w-3 shrink-0 animate-spin rounded-full border-2',
-                      stopRequested
-                        ? 'border-signal-risk/30 border-t-signal-risk'
-                        : 'border-accent/30 border-t-accent',
-                    )}
-                    aria-hidden="true"
-                  />
-                  <p className="flex-1 text-xs leading-[1.6] text-ink-soft">
-                    {stopRequested ? (
-                      <>
-                        已请求停止
-                        {serverTurn
-                          ? `（第 ${serverTurn.roundIndex + 1} 轮${
-                              serverTurn.toolsUsed > 0
-                                ? ` · 已用 ${serverTurn.toolsUsed} 次工具`
-                                : ''
-                            }）`
-                          : ''}
-                        ：当前正在跑的工具没法中途打断，等它返回后这一轮就会结束。不用再点中断。
-                      </>
-                    ) : (
-                      <>
-                        服务端仍在后台推进这一轮
-                        {serverTurn
-                          ? `：第 ${serverTurn.roundIndex + 1} 轮${
-                              serverTurn.toolsUsed > 0
-                                ? ` · 已用 ${serverTurn.toolsUsed} 次工具`
-                                : ''
-                            }`
-                          : ''}
-                        。可以在这里等，或点「中断」停下；进度会自动跟进，不用刷新网页。
-                      </>
-                    )}
-                  </p>
-                </div>
-              )}
               <div ref={bottomRef} />
             </div>
           )}
@@ -2015,6 +1983,17 @@ function SessionRow({
           aria-current={active ? 'page' : undefined}
         >
           <span className="flex items-center gap-1">
+            {session.running && (
+              // ★ v1.66：正在跑的会话在列表里画一个转圈点 + 「运行中」。
+              //   这样一眼能看出哪个会话在跑（服务端事实，跨刷新权威），
+              //   取代了聊天区底部那条常驻蓝条（用户不要它）。
+              <span
+                className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-accent/30 border-t-accent"
+                title="运行中"
+                aria-label="运行中"
+                data-session-running="true"
+              />
+            )}
             {session.pinned && (
               // 📌 用 Unicode 而不是 SVG：它是**状态标记**，不需要跟主题变色，
               // 而一个 12px 的图标会跟标题抢注意力。与 CyberStrikeAI 一致。
@@ -2024,7 +2003,10 @@ function SessionRow({
             )}
             <span className="truncate text-xs text-ink">{session.title}</span>
           </span>
-          <span className="block text-2xs text-ink-faint">{session.messageCount} 条</span>
+          <span className="block text-2xs text-ink-faint">
+            {session.running ? '运行中 · ' : ''}
+            {session.messageCount} 条
+          </span>
         </button>
         {/*
           ★ 归档按钮只在悬停/聚焦时出现，但要**始终可聚焦**：

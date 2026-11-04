@@ -99,6 +99,34 @@ def list_runs(db: Session, *, session_id: str, limit: int = 20) -> list[ChatTurn
     return list(db.scalars(stmt))
 
 
+def running_session_ids(db: Session, *, session_ids: list[str]) -> set[str]:
+    """这一批会话里，哪些**此刻**有一轮在跑（`status='running'`）。
+
+    ★ v1.66：侧栏要在每个条目上画「运行中」转圈点。判据必须是**服务端**
+      事实（`chat_turn_runs.status == 'running'`），不能用前端本地 SSE 布尔
+      —— 刷新页面/换个浏览器后本地不知道别的会话在跑，而服务端知道。
+
+    只认 `running`，不认 `interrupted`：后者是"被中断、等着后台接手"的
+    中间态，多数会在几秒内变回 `running`（那时再亮），也可能因为额度用尽
+    永久停在 `interrupted`（那时不该显示在跑）。只认 `running` 最诚实。
+
+    入参 `session_ids` 由调用方先按归属过滤好（列表接口只会传当前用户
+    自己的会话 id），这里不再重复鉴权 —— 但**只查这些 id**，避免把别人
+    会话的运行态泄漏出来。
+    """
+    if not session_ids:
+        return set()
+    stmt = (
+        select(ChatTurnRun.session_id)
+        .where(
+            ChatTurnRun.session_id.in_(session_ids),
+            ChatTurnRun.status == "running",
+        )
+        .distinct()
+    )
+    return set(db.scalars(stmt))
+
+
 def get(db: Session, *, run_id: str) -> ChatTurnRun | None:
     """按 id 取一行（不抛 —— 是否 404 由调用方决定）。"""
     return db.get(ChatTurnRun, run_id)

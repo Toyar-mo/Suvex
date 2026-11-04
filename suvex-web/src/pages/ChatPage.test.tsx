@@ -126,6 +126,7 @@ function session(overrides: Partial<ChatSession> = {}): ChatSession {
     messageCount: 2,
     archived: false,
     pinned: false,
+    running: false,
     createdAt: '2026-10-25T00:00:00Z',
     updatedAt: '2026-10-25T00:00:00Z',
     ...overrides,
@@ -346,6 +347,64 @@ describe('ChatPage — 拿不到会话列表时给重试，而不是伪装成空
 
     expect(screen.getByText('查一下最近的扫描')).toBeTruthy()
     expect(screen.queryByText('拿不到会话列表')).toBeNull()
+  })
+})
+
+describe('ChatPage — 侧栏标出「哪个会话在跑」、不再画底部蓝条（v1.66）', () => {
+  /*
+    ★ 用户两条原话：
+      m01705「可以不要显示"服务端仍在后台推进这一轮：第 N 轮 · 已用 M 次工具…"
+             这个吗，CyberStrikeAI 刷新网页也不会有这个」
+      m01720「左侧这边不知道哪个会话正在运行」
+
+    做法对齐 CyberStrikeAI：删掉聊天区底部那条带轮次/工具数的常驻蓝条，
+    改在**左侧会话列表**的条目上画一个转圈点 + 「运行中」。运行态来自服务端
+    `running` 字段（跨刷新/跨浏览器权威），不是本地 SSE 布尔。
+  */
+  it('★ 会话 running=true → 该条目出现转圈点(data-session-running) 与「运行中」前缀', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        sessions: [session({ id: 'chat_run', title: '正在跑的会话', running: true })],
+      }),
+    )
+    const { container } = renderPage()
+
+    const dot = container.querySelector('[data-session-running="true"]')
+    expect(dot).not.toBeNull()
+    // 「运行中」出现在副标题（messageCount 前）
+    expect(screen.getByText(/运行中/)).toBeTruthy()
+  })
+
+  it('★ 会话 running=false/缺省 → 没有转圈点，也不显示「运行中」', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        sessions: [session({ id: 'chat_idle', title: '空闲会话', running: false })],
+      }),
+    )
+    const { container } = renderPage()
+
+    expect(container.querySelector('[data-session-running="true"]')).toBeNull()
+    expect(screen.queryByText(/运行中/)).toBeNull()
+  })
+
+  it('★ 服务端在跑（本页无 SSE）时也**不再**出现底部蓝条 data-server-progress', () => {
+    /*
+      v1.61 加的底部蓝条已按用户要求删除。这里守住"别又画回来"：
+      即便 serverRunning 为真（服务端在跑、本页没流），聊天区也不该再出现
+      那条 `data-server-progress` 横幅。运行态的可见性交给侧栏转圈点 + 输入区
+      的「中断」按钮。
+    */
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session(), messages: [] },
+        sending: false,
+        sendingSessionIds: [],
+        serverTurn: { runId: 'r1', roundIndex: 3, toolsUsed: 7, heartbeatAt: null },
+      }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+
+    expect(container.querySelector('[data-server-progress="true"]')).toBeNull()
   })
 })
 

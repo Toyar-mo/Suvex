@@ -113,7 +113,18 @@ def list_sessions(
     rows = service.list_sessions(
         db, created_by=_owner(identity), include_archived=include_archived
     )
-    return [ChatSessionOut.model_validate(row) for row in rows]
+    # ★ v1.66：给每个会话标上「此刻是否在跑」，侧栏据此画运行中转圈点。
+    #   一次批量查（只查本用户这些 id），不是逐条查 —— 列表是每次进页面都要渲染的。
+    running_ids = turn_runs.running_session_ids(
+        db, session_ids=[row.id for row in rows]
+    )
+    out: list[ChatSessionOut] = []
+    for row in rows:
+        item = ChatSessionOut.model_validate(row)
+        if row.id in running_ids:
+            item = item.model_copy(update={"running": True})
+        out.append(item)
+    return out
 
 
 @router.post("/chat/sessions", response_model=ChatSessionOut, status_code=201)
