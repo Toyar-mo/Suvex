@@ -470,6 +470,33 @@ describe('IrPage：开跑与产物', () => {
 
     expect(screen.getByText(/回合用尽（80 轮）仍未给出结论/)).toBeTruthy()
   })
+
+  it('★ INVALID_ID 平台标记在列表卡片上不显示（v1.63）—— 无操作价值又误导', () => {
+    setStore({
+      challenges: [
+        makeChallenge({
+          status: 'unsolved',
+          lastError:
+            'CTF2 拒绝了这次请求（400）。可能是参数不对，或平台接口有变更。平台标记：INVALID_ID（errors.validation.invalid_id）。',
+        }),
+      ],
+    })
+
+    renderPage()
+
+    expect(screen.queryByText(/INVALID_ID/)).toBeNull()
+    expect(screen.queryByText(/errors\.validation\.invalid_id/)).toBeNull()
+  })
+
+  it('★ 其它 lastError 仍照常显示（只隐藏 INVALID_ID 这一类）', () => {
+    setStore({
+      challenges: [makeChallenge({ status: 'failed', lastError: '权限不足：缺少比赛读权限' })],
+    })
+
+    renderPage()
+
+    expect(screen.getByText(/权限不足：缺少比赛读权限/)).toBeTruthy()
+  })
 })
 
 describe('IrPage：空态与错误', () => {

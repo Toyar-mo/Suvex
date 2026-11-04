@@ -103,6 +103,27 @@ function irStatusText(challenge: KernelChallenge, ranBefore: boolean): string {
   return '待复盘'
 }
 
+/**
+ * 列表卡片上要不要显示这条 `lastError`。
+ *
+ * ★ 背景（v1.63）：`lastError` 是后端写入的整段报错，例如
+ *   「CTF2 拒绝了这次请求（400）。可能是参数不对，或平台接口有变更。
+ *    平台标记：INVALID_ID（errors.validation.invalid_id）。」
+ *   这类"平台标记：INVALID_ID"的提示对用户没有可操作性 ——
+ *   `INVALID_ID` 多半只是某个 id 参数格式不对，卡片上挂着只会让人
+ *   以为平台坏了。用户要求「暂时撤销列表卡片上的这行标识」。
+ *
+ * ⚠️ 只在**列表卡片**这一处隐藏；后端文案、会话日志、详情/工单里
+ *   仍然保留完整报错，排查时看得到。别的错误（权限、限流、故障等）
+ *   照常显示 —— 那些是有话可说的。
+ */
+function shouldShowCardError(lastError: string | null | undefined): boolean {
+  if (!lastError) return false
+  // INVALID_ID 及同源的校验/平台标记，列表上不显示
+  if (/INVALID_ID|errors\.validation\.invalid_id/.test(lastError)) return false
+  return true
+}
+
 /** 一个复盘任务条目需要的全部信息。 */
 interface IrTaskView {
   challenge: KernelChallenge
@@ -347,7 +368,7 @@ export function IrPage() {
                     {' · '}
                     证据包 {challenge.attachments.length} 份
                   </p>
-                  {challenge.lastError && (
+                  {shouldShowCardError(challenge.lastError) && (
                     <p className="mt-1 text-xs text-warn">{challenge.lastError}</p>
                   )}
                 </div>
