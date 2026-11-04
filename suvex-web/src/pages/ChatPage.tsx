@@ -1658,7 +1658,9 @@ export function ChatPage() {
                   : sendingHere
                     ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
                     : serverRunning
-                      ? '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
+                      ? stopRequested
+                        ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
+                        : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
                       : sendingElsewhere
                         ? '另一个对话正在跑 —— 等它跑完再发'
                         : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
