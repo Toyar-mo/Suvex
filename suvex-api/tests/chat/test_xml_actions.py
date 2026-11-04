@@ -149,6 +149,45 @@ def test_has_protocol_marker_or_xml_detects_result() -> None:
     assert _has_protocol_marker_or_xml("执行。<result>ok</result>") is True
 
 
+# ══════════════════════════════════════════════════════════════════════
+# v1.62：模型自创同族新标签 `<result_note>`（不是 `<result>`）
+# ══════════════════════════════════════════════════════════════════════
+#
+# 线上实测（2026-11-04，会话 `chat_01M6H1JNW3S2010NB0474PN369` seq976，用户报
+# 「发继续，干一轮就停了」）：模型陷入「一直写 `写 ACTION：` 却从不真的发
+# `ACTION: {...}`」的空转，最终整条 `surface=answer` 正文是一大串**无闭合**的
+# `<result_note> 执行：… <result_note> 写 ACTION：…`。旧的 `<result>` 精确正则
+# 认不出 `<result_note>` → 既没删块、也没兜底清单标签 → 原样泄漏给用户。
+
+
+def test_normalize_drops_result_note_family_blocks() -> None:
+    """`<result_note>…</result_note>` 同族标签整块删掉（不泄漏进正文）。"""
+    raw = "继续处理 conf.bin。\n<result_note>执行：分析 conf.bin</result_note>\n下一步。"
+    out = _normalize_xml_actions(raw)
+    assert "<result_note" not in out
+    assert "</result_note" not in out
+    assert "继续处理 conf.bin。" in out and "下一步。" in out
+
+
+def test_normalize_strips_unclosed_result_note_stray_tags() -> None:
+    """★ 线上真实形态：一串**未闭合**的 `<result_note>` 也被兜底清单标签。"""
+    raw = (
+        "两题都已解出，共 31 题。继续处理 conf.bin 和 pcapng。"
+        "<result_note> 执行：分析 conf.bin 和 pcapng。"
+        "<result_note> 写 ACTION：\n<result_note> 执行。"
+    )
+    out = _normalize_xml_actions(raw)
+    assert "<result_note" not in out
+    # 人话前缀必须保留
+    assert "两题都已解出，共 31 题。" in out
+
+
+def test_has_protocol_marker_or_xml_detects_result_note() -> None:
+    """含 `<result_note>` 时也算"已有 XML"（守卫必须认同族前缀，否则不触发规范化）。"""
+    assert _has_protocol_marker_or_xml("执行。<result_note>ok</result_note>") is True
+    assert _has_protocol_marker_or_xml("执行。<result_note> 写 ACTION：") is True
+
+
 def test_real_tool_result_still_kept_as_narration_prefix() -> None:
     """★ 不能误伤：真实 `<result>` 外的正文必须保留（删块不删话）。"""
     raw = "我先跑一下 ls。\nACTION: {\"tool\": \"run_shell\", \"args\": {}}\n等结果。"

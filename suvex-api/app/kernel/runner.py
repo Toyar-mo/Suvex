@@ -2392,23 +2392,55 @@ class LlmGateway:
             max_tokens=self.max_tokens,
         )
 
-    def _body(self, messages: list[dict[str, str]], *, system: str) -> dict[str, Any]:
+    def _body(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        system: str,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         if self.anthropic:
             # Messages API 的 system 是**顶层字段**，不是一条 message。
             # 放进 messages 会得到 400。
-            return {
+            body = {
                 "model": self.model,
                 "max_tokens": self.max_tokens,
                 "system": system,
                 "messages": messages,
             }
-        return {
+            if tools:
+                # Anthropic 的 tools 形状与 OpenAI 不同：外层直接是
+                # {"name","description","input_schema"}，没有 `function` 包一层，
+                # 参数键叫 `input_schema` 而不是 `parameters`。
+                body["tools"] = [
+                    {
+                        "name": t["function"]["name"],
+                        "description": t["function"].get("description", ""),
+                        "input_schema": t["function"]["parameters"],
+                    }
+                    for t in tools
+                ]
+            return body
+        body = {
             "model": self.model,
             "max_tokens": self.max_tokens,
             "messages": [{"role": "system", "content": system}, *messages],
         }
+        if tools:
+            # OpenAI 兼容形态：`tools` 原样，`tool_choice="auto"` 让模型自己决定
+            # 调不调。**不发 `tool_choice` 也行**（默认 auto），显式发是为了让
+            # 网关行为确定 —— 有的网关默认值不明确。
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
+        return body
 
-    async def chat(self, messages: list[dict[str, str]], *, system: str) -> LlmReply:
+    async def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        system: str,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LlmReply:
         from app.core.crypto import redact
         from app.providers.llm import (  # noqa: PLC2701 - 见下
             _extract_reply,
@@ -2454,7 +2486,7 @@ class LlmGateway:
                 ) as client:
                     response = await client.post(
                         self.url,
-                        json=self._body(messages, system=system),
+                        json=self._body(messages, system=system, tools=tools),
                         headers=self._headers(),
                     )
                 break
@@ -2514,6 +2546,7 @@ class LlmGateway:
         system: str,
         finish_reason: list[str] | None = None,
         tool_calls: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         """流式调模型，逐块产出**正文增量**（v0.102）。
 
@@ -2562,7 +2595,7 @@ class LlmGateway:
             tool_calls_delta,
         )
 
-        body = self._body(messages, system=system)
+        body = self._body(messages, system=system, tools=tools)
         body["stream"] = True
 
         last_error: Exception | None = None

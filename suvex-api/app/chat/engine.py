@@ -64,6 +64,7 @@ from app.chat.prompts import (
     CONSEQUENTIAL_TOOL_NAMES,
     TOOL_BY_NAME,
     build_system_prompt,
+    build_tools_schema,
     may_call_tool,
     render_final_confirm_reminder,
     render_format_reminder,
@@ -208,6 +209,28 @@ MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
 #: 取 5：容许偶发的"重跑一次确认"（模型有时确实会重跑同一命令对比），
 #: 但连跑 5 次完全相同的命令而还在期待不同结果，只可能是策略走死了。
 MAX_REPEATED_ACTIONS = _env_int("SUPEX_CHAT_MAX_REPEATED_ACTIONS", 5)
+
+#: ★ v1.64.1：跑过工具、但**连续多少轮没再调任何工具**（只写了正文）就认定
+#: 它已经干完了，不再推。
+#:
+#: 为什么要有这条：`should_nudge` 的 `tools_used > 0` 分支是**无条件**推
+#: （"跑过工具就推"的安全网，见 nudge.py）。原生工具调用（v1.64）之后，模型
+#: 干完活就**不再调工具、只写一段结论**——没有 `FINAL:`/`ACTION:` 这种终止
+#: 信号，于是"跑过工具就推"会把一段完整的结论当成"还没说完"反复推，模型只好
+#: 反复复述完成情况，一路烧到 `MAX_TOOL_NUDGES=300`。
+#: 实测（chat_01M6KEQ7VJTN9A5QER9KQJEV0B，2026-11-04）：一个两步小任务，
+#: round_index 已到 38、tool_nudges_used 33，其中真工具调用只有 2 次，其余
+#: 全是模型在复述"两步都完成了"。用户说的"别再出 bug"就是这类。
+#:
+#: 判据只认最硬的信号：**这一轮有没有真的执行工具**。执行了就清零重来
+#: （说明它还在推进）；连续 N 轮没执行又没被别的通道（计划句打回/截断/
+#: 正文带命令）接住 → 认定它是在作答，收尾。
+#:
+#: 取 5：与 `MAX_REPEATED_ACTIONS` 同口径 —— 容许"工具返回后想再确认一下、只
+#: 写一句不调工具"的偶发情况，但连 5 轮都不调工具还在被推，只可能是它其实
+#: 已经答完了。必须 ≤ `MAX_NARRATION_NUDGES`(2) 之上的合理值、且远小于
+#: `MAX_TOOL_NUDGES`(300)，否则等于没设。
+MAX_NO_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_NO_TOOL_NUDGES", 5)
 
 #: 跑过工具的轮次里，模型回了**空回复**时最多再推几次（v1.31）。
 #:
@@ -556,13 +579,36 @@ def _supports_tool_calls(stream_fn: Any) -> bool:
       分不清是"参数不认识"还是"流内容坏了"，而后者的语义是"退回非流式
       重试"。签名探测把两件事分开。
     """
+    return _supports_param(stream_fn, "tool_calls")
+
+
+def _supports_param(fn: Any, name: str) -> bool:
+    """`fn` 的签名里有没有名为 `name` 的参数（含 `**kwargs` 兜底）。"""
     try:
-        params = inspect.signature(stream_fn).parameters
+        params = inspect.signature(fn).parameters
     except (TypeError, ValueError):
         return False
-    if "tool_calls" in params:
+    if name in params:
         return True
     return any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+
+
+async def _gateway_chat(
+    gateway: Any,
+    messages: list[dict[str, str]],
+    *,
+    system: str,
+    tools: list[dict] | None = None,
+) -> Any:
+    """非流式调模型，`tools` 只在网关认这个参数时才传。
+
+    ★ 与 `_supports_param` 同一理由：旧网关 / 测试假网关的 `chat()` 可能
+      根本没收 `tools` 形参，硬传会 `TypeError`，而那是"每个非流式对话
+      都炸"的级别。认才传，不认就走改造前那条路（纯文本协议）。
+    """
+    if tools and _supports_param(getattr(gateway, "chat", None), "tools"):
+        return await gateway.chat(messages, system=system, tools=tools)
+    return await gateway.chat(messages, system=system)
 
 
 async def _call_model(
@@ -572,6 +618,7 @@ async def _call_model(
     system: str,
     emit: Emit | None,
     session_id: str | None = None,
+    tools: list[dict] | None = None,
 ) -> Any:
     """调一次模型：**能流式就流式，否则退回非流式**（v0.102）。
 
@@ -603,7 +650,9 @@ async def _call_model(
     界面上会出现"这句话写了两遍"。所以用 `pushed` 记着。
     """
     if emit is None:
-        return _with_native_actions(await gateway.chat(messages, system=system))
+        return _with_native_actions(
+            await _gateway_chat(gateway, messages, system=system, tools=tools)
+        )
 
     from app.chat.holdback import HoldbackBuffer
     from app.kernel.runner import LlmReply, parse_usage  # 循环 import 规避
@@ -629,6 +678,10 @@ async def _call_model(
     stream_fn = getattr(gateway, "chat_stream", None)
     if stream_fn is not None and _supports_tool_calls(stream_fn):
         stream_kwargs["tool_calls"] = tool_calls_out
+    # ★ v1.64：原生工具调用。把 tools 定义透传给 chat_stream（若它认这个参数）。
+    #   `_supports_param` 判断签名里有没有 `tools`，避免旧网关/假网关 TypeError。
+    if tools and stream_fn is not None and _supports_param(stream_fn, "tools"):
+        stream_kwargs["tools"] = tools
     try:
         async for delta in gateway.chat_stream(messages, **stream_kwargs):
             # ★ v1.25：每个增量查一次"用户有没有按中断"。按停得**立刻**
@@ -649,7 +702,9 @@ async def _call_model(
             # 已经吐出字了 —— 不能重来，只能如实失败。
             raise
         _log.info("流式调模型失败，退回非流式重试一次", exc_info=True)
-        return _with_native_actions(await gateway.chat(messages, system=system))
+        return _with_native_actions(
+            await _gateway_chat(gateway, messages, system=system, tools=tools)
+        )
 
     raw_text = "".join(collected)
     return _with_native_actions(
@@ -1730,14 +1785,35 @@ def _narration_before_action(text: str) -> str:
 #: 这样 `parse_actions` 原样能执行、`_narration_before_action` 原样能剥离、
 #: `HoldbackBuffer` 原样能拦。
 _XML_ACTION_RE = re.compile(r"<action>\s*(\{.*?\})\s*</action>", re.DOTALL)
-_XML_ANALYSIS_RE = re.compile(r"<analysis>.*?</analysis>", re.DOTALL)
+# ★ v1.62：`result` / `analysis` 都改成**同族前缀**（`result[a-zA-Z_]*` 等）。
+#   线上真实漏网（会话 chat_01M6H1JNW3S2010NB0474PN369 seq976，2026-11-04）：
+#   模型自创了新的 `<result_note>` 标签（不是 `<result>`），一句
+#   `<result_note> 执行：… <result_note> 写 ACTION：…` 连成一长串还**没有闭合**。
+#   旧正则只认精确 `<result>` → 既没删掉、也没锁流，最终把这一坨塞进了 `surface=answer`
+#   的正文里，用户看到满屏 `<result_note> 执行：写 ACTION：`，还以为"干一轮就停了"
+#   （其实模型一直在自说自话地"写 ACTION"却从没真的发出 `ACTION: {...}`）。
+#   与 v1.56/v1.57 处理 `system*` 家族是同一类"模型自创协议"坑：按族收口。
+#: ★ v1.63：改成同族前缀（`analysis[a-zA-Z_]*`，用 `(?![A-Za-z_])` 收边界，不用 `\b`
+#:   —— `\b` 卡在 `_` 上是词字符，`<result_note>` 这类带下划线的同族标签根本匹配不到，
+#:   与 v1.57 处理 `system*` 家族是同一坑）。
+_XML_ANALYSIS_RE = re.compile(
+    r"<analysis[a-zA-Z_]*(?![A-Za-z_])[^>]*>.*?</analysis[a-zA-Z_]*(?![A-Za-z_])>",
+    re.DOTALL,
+)
 # ★ v1.44：模型伪造「工具结果」—— `<result>ok</result>`。工具结果只能由平台
 #   真实返回，模型自己在正文里写出来的 `<result>` 是**幻觉**，必须删掉：
 #   一来它不该出现在用户视野里（界面上一堆 `<result>ok</result>`），二来更
 #   要命的是它会**随历史回灌给模型**，让模型以为自己"已经执行过了"，于是
 #   一直写"执行。/<result>ok</result>"空转（线上实测会话
 #   `chat_01M6BWQ69MZJNBAB7C7QMVXPV2`：单轮 40 回合、77 工具、37 次纠偏）。
-_XML_RESULT_RE = re.compile(r"<result>.*?</result>", re.DOTALL)
+#: ★ v1.63：同 `_XML_ANALYSIS_RE`，`result` 改同族前缀（`result[a-zA-Z_]*`）。线上
+#:   模型自创 `<result_note>`（会话 chat_01M6H1JNW3S2010NB0474PN369 seq976）——
+#:   旧 `\b` 边界匹配不到 `_`，于是「一直在自说自话写 ACTION 却不真发」的一长串
+#:   `<result_note> 执行：…` 原样漏进 `surface=answer`。改成前缀后整族一起删。
+_XML_RESULT_RE = re.compile(
+    r"<result[a-zA-Z_]*(?![A-Za-z_])[^>]*>.*?</result[a-zA-Z_]*(?![A-Za-z_])>",
+    re.DOTALL,
+)
 # ★ v1.52：模型自创的"安全自检"块 `<ds_safety>…</ds_safety>`（线上见
 #   `<ds_safety>[用户未成年]否 [分类]其他 [判定]…[规则]无</ds_safety>`）。
 #   与 `<analysis>` 同类：推理/自检不进正文，也不该随历史回灌。
@@ -1758,16 +1834,16 @@ _XML_INVOKE_TAG_RE = re.compile(r"</?invoke\b[^>]*>", re.DOTALL)
 _XML_INVOKE_NAME_RE = re.compile(r'<invoke\s+name\s*=\s*"([^"]+)"[^>]*>', re.DOTALL)
 #: 收尾兜底：删掉还没闭合/落单的协议标签本身（增量截断时可能只剩半个标签）。
 _XML_STRAY_TAG_RE = re.compile(
-    r"</?(?:action|analysis|result|invoke|parameter|ds_safety|system[a-zA-Z_]*)"
-    r"(?![A-Za-z_])[^>]*>",
+    r"</?(?:action|analysis|result|invoke|parameter|ds_safety|system)"
+    r"[a-zA-Z_]*(?![A-Za-z_])[^>]*>",
     re.DOTALL,
 )
 #: ★ v1.52：判断"要不要走规范化"的**同一套**标签集合（含收尾 `/` 形态）。
 #:   与 `_XML_STRAY_TAG_RE` 保持一致——历史上正因为两处集合不同（v1.48 守卫漏了
 #:   `</parameter>`）导致裸收尾标记原样漏出、甚至被拼进要执行的 shell 命令。
 _XML_ANY_PROTOCOL_TAG_RE = re.compile(
-    r"</?(?:action|analysis|result|invoke|parameter|ds_safety|system[a-zA-Z_]*)"
-    r"(?![A-Za-z_])[^>]*>",
+    r"</?(?:action|analysis|result|invoke|parameter|ds_safety|system)"
+    r"[a-zA-Z_]*(?![A-Za-z_])[^>]*>",
     re.DOTALL,
 )
 
@@ -2152,7 +2228,28 @@ def _resolve_provider(session: ChatSession, explicit: str | None) -> str | None:
     return session.provider_id
 
 
-def _system_prompt_for(session: ChatSession, hinted_tools: list[str] | None = None) -> str:
+def _gateway_supports_tools(gateway: Any) -> bool:
+    """这个网关能不能接收 `tools=`（原生工具调用）。
+
+    ★ `chat_stream`（流式主路径）或 `chat`（非流式/审批续跑）任一认这个参数，
+      就算"支持"。用来同时决定两件事，且必须一致：
+        ① 要不要把 `tools=` 发出去；
+        ② 系统提示词用「原生调用」版还是「文本 ACTION」版。
+      两者错配会自相矛盾（教它写 ACTION 却又给 tools，或反之）。
+    """
+    for attr in ("chat_stream", "chat"):
+        fn = getattr(gateway, attr, None)
+        if fn is not None and _supports_param(fn, "tools"):
+            return True
+    return False
+
+
+def _system_prompt_for(
+    session: ChatSession,
+    hinted_tools: list[str] | None = None,
+    *,
+    native_tools: bool = False,
+) -> str:
     """按会话设置渲染系统提示词。
 
     ★ 这里读的是**库里的当前值**，不是请求参数：用户可能在另一个标签页
@@ -2178,6 +2275,7 @@ def _system_prompt_for(session: ChatSession, hinted_tools: list[str] | None = No
         require_approval=bool(session.require_approval),
         mounted_skills=mounted,
         hinted_tools=hinted_tools,
+        native_tools=native_tools,
     )
 
 
@@ -2294,7 +2392,9 @@ async def run_turn(
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, provider_id), db)
 
-    system = _system_prompt_for(session, explicit_tools)
+    system = _system_prompt_for(
+        session, explicit_tools, native_tools=_gateway_supports_tools(gateway)
+    )
     ctx = _ToolContext(db=db, session=session, identity=identity)
 
     #: 打开审批时，这些工具不执行、只挂起。
@@ -2328,6 +2428,10 @@ async def run_turn(
     #:   后面，于是任何一次"自动接手"都会把刚从库里恢复的工具计数清零 ——
     #:   接手后的那一轮以为"这轮没跑过工具"，最重要的结构信号失效。
     tools_used = 0
+
+    #: ★ v1.64.1：连续多少轮"跑过工具但这一轮没再调任何工具"（只写了正文）。
+    #:   见 `MAX_NO_TOOL_NUDGES`。执行工具时清零。
+    no_tool_rounds = 0
 
     #: 本轮 FINAL 被"打回"过几次（v1.29）。见 `MAX_FINAL_CONFIRMATIONS`。
     final_confirmations = 0
@@ -2421,6 +2525,10 @@ async def run_turn(
                 system=system_this_round,
                 emit=emit,
                 session_id=session.id,
+                # ★ v1.64：原生工具调用。到本轮工具上限时**不再给 tools**
+                #   —— 那时系统提示已要求"直接用一段话总结"，再给它 tools
+                #   会让模型继续调工具，把「收尾」变成下一轮工具调用。
+                tools=None if at_limit else build_tools_schema(),
             )
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败", exc_info=True)
@@ -2711,6 +2819,11 @@ async def run_turn(
         await _emit_message(emit, assistant_message)
 
         if not actions:
+            # ★ v1.64.1：这一轮模型没调任何工具（只写了正文）。累计"连续没调
+            #   工具"的轮数 —— 一旦它跑过工具又连续 N 轮不再动手，就认定它是在
+            #   作答而非中停（见 `MAX_NO_TOOL_NUDGES`）。执行工具的分支会把它
+            #   清零。
+            no_tool_rounds += 1
             # ★ v1.29：`FINAL:` 是模型自己宣告"做完了"。实测它会把这句话用在
             #   **进度播报**上（线上原文：`FINAL: 现在查 libc 版本。`），于是
             #   这一轮在跑完一个工具后就结束了。所以任务型轮次第一次收到
@@ -2785,6 +2898,8 @@ async def run_turn(
                 max_truncations=MAX_TRUNCATION_CONTINUES,
                 tool_nudges_used=tool_nudges_used,
                 max_tool_nudges=MAX_TOOL_NUDGES,
+                no_tool_rounds=no_tool_rounds,
+                max_no_tool_rounds=MAX_NO_TOOL_NUDGES,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
@@ -2885,6 +3000,7 @@ async def run_turn(
 
             output, failed = await _execute_tool(ctx, name, args)
             tools_used += 1
+            no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
             tool_message = chat_service.append_tool_message(
                 db,
                 session=session,
@@ -2969,7 +3085,7 @@ async def resume_approved(
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, None), db)
 
-    system = _system_prompt_for(session)
+    system = _system_prompt_for(session, native_tools=_gateway_supports_tools(gateway))
     gate_on = bool(session.require_approval)
     ctx = _ToolContext(db=db, session=session, identity=identity)
 
@@ -2984,6 +3100,8 @@ async def resume_approved(
     #: 「模型一个字没写」被推了几次（v1.32，见 `MAX_EMPTY_NUDGES`）。
     empty_nudges_used = 0
     tools_used = 0
+    #: ★ v1.64.1：见 `MAX_NO_TOOL_NUDGES`（run_turn 同名计数）。
+    no_tool_rounds = 0
     final_confirmations = 0
     plan_bounces = 0
     pending_reminder: str | None = None
@@ -3016,7 +3134,18 @@ async def resume_approved(
             )
 
         try:
-            reply = await gateway.chat(messages, system=system_this_round)
+            # ★ v1.64：与主循环同款 —— 原生工具调用（到上限时不给 tools），
+            #   并把回复过一遍 `_with_native_actions` 合成回 `ACTION:` 文本，
+            #   这样下面 `parse_actions`/`_narration_before_action` 那段
+            #   （本就为文本协议写的）原样能用，不出现"审批后续跑不会执行工具"。
+            reply = _with_native_actions(
+                await _gateway_chat(
+                    gateway,
+                    messages,
+                    system=system_this_round,
+                    tools=None if at_limit else build_tools_schema(),
+                )
+            )
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败（审批后）", exc_info=True)
             raise _wrap_model_failure(exc) from exc
@@ -3034,6 +3163,13 @@ async def resume_approved(
             db.commit()
 
         raw_text = reply.text or ""
+        # ★ v1.62：与 `run_turn` 主循环同一处规范化。历史遗漏 —— 这个
+        #   "批准后继续"（resume_approved / tool-approval）分支原先**没有**
+        #   调用 `_normalize_xml_actions`，于是模型自创的 XML 块（`<action>` /
+        #   `<result_note>` / `<parameter>` 等）在这条路上原样漏进正文、也不
+        #   参与动作解析。补齐后再做 `split_final` / `_narration_before_action`
+        #   / `parse_actions`，与主循环保持完全一致。
+        raw_text = _normalize_xml_actions(raw_text)
         # ★ v1.19：先摘掉开头的 `FINAL:`。必须在 `_narration_before_action`
         #   之前 —— 那个函数复用内核的 `ACTION|FINAL` 正则，会把
         #   `FINAL: 解出来了` 整条截成空串，再落成"模型没有产出内容"的占位语。
@@ -3219,6 +3355,8 @@ async def resume_approved(
                 max_truncations=MAX_TRUNCATION_CONTINUES,
                 tool_nudges_used=tool_nudges_used,
                 max_tool_nudges=MAX_TOOL_NUDGES,
+                no_tool_rounds=no_tool_rounds,
+                max_no_tool_rounds=MAX_NO_TOOL_NUDGES,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
@@ -3266,6 +3404,7 @@ async def resume_approved(
 
             tool_output, tool_failed = await _execute_tool(ctx, name, args)
             tools_used += 1
+            no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
             tool_message = chat_service.append_tool_message(
                 db,
                 session=session,

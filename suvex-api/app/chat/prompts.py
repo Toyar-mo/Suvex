@@ -310,6 +310,234 @@ CONSEQUENTIAL_TOOL_NAMES: frozenset[str] = frozenset(
 )
 
 
+# ══════════════════════════════════════════════════════════
+# 原生工具调用（v1.64）—— 从文本协议迁到 provider 原生 tool-calling
+# ══════════════════════════════════════════════════════════
+#
+# ## 为什么要这一步（而不是继续打补丁）
+#
+# 改造前对话走「文本协议」：系统提示词教模型写一行 `ACTION: {json}`，引擎再用
+# 一整套正则（`_XML_*` / `parse_actions` / `looks_like_plan` …）去解析与纠偏。
+# 模型每发明一种新写法（`<result>` / `<result_note>` / `<analysis>` / DSML /
+# `<parameter>` / 代码块里的命令 …）就要加一条正则 —— 这正是「bug 反复」的
+# 结构性根源（见 v1.44/v1.52/v1.57/v1.63 的修法记录）。
+#
+# 原生 tool-calling 把「工具名 + 结构化参数」交给 provider 在协议层保证，
+# 我们不再解析任何自由文本，也不再教模型「写 ACTION」。（生产接入点
+# `deepseek-v4.1-flash` 实测支持：单选/纯答/多轮/并行四类全部返回结构化
+# `tool_calls`；见 docs/native-tool-calling-20261104.md。）
+#
+# ## 这份表为什么手写、不解析 `ChatToolSpec.params`
+#
+# `params` 是给人读的散文（"limit（可选，默认 10）"），拿正则拆成 JSON schema
+# 会在某个措辞上崩掉。这里按 `engine._execute_tool` 实际读取的键名，逐字写死
+# 每个工具的参数，**保证 schema 与执行侧同源**：读的是 `args.get("command")`，
+# 这里就声明 `command`。少一个键 = 模型不知道能传它；多一个键 = 模型乱填却
+# 被忽略。二者都不是我们想要的。
+
+#: 工具名 → 参数 JSON schema（`{"type":"object","properties":{...},"required":[...]}`）。
+#: 与 `CHAT_TOOLS` 一一对应；`build_tools_schema()` 按 `CHAT_TOOLS` 顺序取用，
+#: 缺一条会 KeyError（宁可启动即炸，也不要某天某个工具静默消失）。
+_TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
+    "list_scans": {
+        "type": "object",
+        "properties": {"limit": {"type": "integer", "description": "最多返回几条，默认 10"}},
+        "required": [],
+    },
+    "create_scan": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "description": "目标地址/仓库/路径"},
+            "targetKind": {
+                "type": "string",
+                "enum": ["url", "repo", "path", "service"],
+                "description": "目标类型，默认 url",
+            },
+            "skills": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": [
+                        "web", "api", "container", "cloud",
+                        "dependencies", "secrets", "protocol",
+                    ],
+                },
+                "description": "要用的扫描技能（必填，至少一项）",
+            },
+            "goal": {
+                "type": "string",
+                "enum": ["findVulns", "captureFlag", "verifyFix"],
+                "description": "扫描目标，默认 findVulns",
+            },
+            "brief": {"type": "string", "description": "任务背景（可选）"},
+        },
+        "required": ["target", "skills"],
+    },
+    "list_challenges": {
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "默认 10"},
+            "status": {
+                "type": "string",
+                "enum": ["unsolved", "solved", "failed"],
+                "description": "按状态过滤（可选）",
+            },
+        },
+        "required": [],
+    },
+    "start_ctf_solve": {
+        "type": "object",
+        "properties": {
+            "challengeId": {"type": "string", "description": "题目 id（库里已有的题）"},
+            "mode": {"type": "string", "enum": ["safe", "auto"], "description": "解题模式，可选"},
+            "brief": {"type": "string", "description": "人工提示（可选）"},
+        },
+        "required": ["challengeId"],
+    },
+    "fetch_competition_challenges": {
+        "type": "object",
+        "properties": {
+            "remoteId": {"type": "string", "description": "给这道题的 id 就顺带查靶机环境（可选）"},
+        },
+        "required": [],
+    },
+    "submit_flag": {
+        "type": "object",
+        "properties": {
+            "remoteId": {"type": "string", "description": "题目 id"},
+            "flag": {"type": "string", "description": "答案，带不带 DASCTF{}/flag{} 外壳都行"},
+        },
+        "required": ["remoteId", "flag"],
+    },
+    "list_skills": {
+        "type": "object",
+        "properties": {"category": {"type": "string", "description": "按分类过滤（可选）"}},
+        "required": [],
+    },
+    "read_skill": {
+        "type": "object",
+        "properties": {"name": {"type": "string", "description": "技能名"}},
+        "required": ["name"],
+    },
+    "save_skill": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "小写字母数字与连字符"},
+            "category": {"type": "string", "description": "分类"},
+            "description": {"type": "string", "description": "一句话描述"},
+            "body": {"type": "string", "description": "SKILL.md 正文（markdown）"},
+        },
+        "required": ["name", "category", "description", "body"],
+    },
+    "delete_skill": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "技能名"},
+            "category": {"type": "string", "description": "分类"},
+        },
+        "required": ["name", "category"],
+    },
+    "list_mcp_servers": {"type": "object", "properties": {}, "required": []},
+    "add_mcp_server": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "唯一名字"},
+            "type": {"type": "string", "enum": ["stdio", "http"], "description": "默认 stdio"},
+            "command": {"type": "string", "description": "stdio 必填，可执行文件"},
+            "args": {"type": "array", "items": {"type": "string"}, "description": "stdio 参数（可选）"},
+            "env": {"type": "object", "description": "stdio 环境变量/凭据（可选）"},
+            "url": {"type": "string", "description": "http 必填，连接地址"},
+            "headers": {"type": "object", "description": "http 请求头/凭据（可选）"},
+            "allowedTools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "工具白名单（可选）",
+            },
+        },
+        "required": ["name"],
+    },
+    "run_shell": {
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "shell 命令"},
+            "timeout_seconds": {
+                "type": "integer",
+                "description": "超时秒数，默认 300，上限 300",
+            },
+            "cwd": {"type": "string", "description": "工作目录，只能是 /work 之下（可选）"},
+        },
+        "required": ["command"],
+    },
+    "browser": {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "enum": [
+                    "open", "snapshot", "click", "fill", "type", "press",
+                    "get", "eval", "wait", "screenshot", "back", "close", "skills",
+                ],
+                "description": "子命令",
+            },
+            "url": {"type": "string", "description": "open 用，http:// 或 https:// 开头"},
+            "target": {"type": "string", "description": "click/fill/type 用，@eN 或 CSS 选择器"},
+            "text": {"type": "string", "description": "fill/type 要填的内容"},
+            "what": {
+                "type": "string",
+                "enum": ["title", "url", "text", "html", "value", "count", "attr"],
+                "description": "get 取什么",
+            },
+            "expression": {"type": "string", "description": "eval 用的 JS 表达式"},
+            "interactive": {"type": "boolean", "description": "snapshot 是否只要可交互元素，默认 true"},
+            "full": {"type": "boolean", "description": "snapshot 整页 / screenshot 全屏（可选）"},
+            "path": {"type": "string", "description": "screenshot 输出路径（可选）"},
+            "timeout_seconds": {"type": "integer", "description": "超时秒数（可选）"},
+        },
+        "required": ["command"],
+    },
+    "load_skill": {
+        "type": "object",
+        "properties": {
+            "name": {"type": "string", "description": "技能名"},
+            "file": {"type": "string", "description": "读技能包里的单个附件文件（可选）"},
+        },
+        "required": ["name"],
+    },
+    "load_recipe": {
+        "type": "object",
+        "properties": {"name": {"type": "string", "description": "配方名（见提示词里的配方清单）"}},
+        "required": ["name"],
+    },
+}
+
+
+def build_tools_schema() -> list[dict[str, object]]:
+    """把 `CHAT_TOOLS` 渲染成 OpenAI 风格的 `tools=` 数组（原生工具调用用）。
+
+    形状（OpenAI / 兼容网关统一认）::
+
+        [{"type": "function",
+          "function": {"name": ..., "description": ..., "parameters": {...}}}]
+
+    Anthropic 需要在 `LlmGateway._body` 里换成它自己的
+    `{"name","description","input_schema"}` 形态（见那边的说明）。
+    """
+    schema: list[dict[str, object]] = []
+    for tool in CHAT_TOOLS:
+        params = _TOOL_PARAM_SCHEMAS[tool.name]
+        schema.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool.name,
+                    "description": f"{tool.label}：{tool.description}",
+                    "parameters": params,
+                },
+            }
+        )
+    return schema
+
+
 def may_call_tool(name: str, identity: object | None) -> bool:
     """这个身份能不能调这个工具。
 
@@ -900,8 +1128,43 @@ def render_mounted_skills(mounted: list[tuple[str, str]]) -> str:
 #: 静默故障 —— 加了新工具忘了改文件，模型就永远不知道那个工具存在。
 #:
 #: 代价是改文案要发版。考虑到这份文案才刚刚定型（v0.93 首版），
-#: 先把"不会不同步"排在"能热修"前面。将来文案稳了再挪到文件里，
+#: 先把"不会不同步"排在"能修"前面。将来文案稳了再挪到文件里，
 #: 那时清单注入应该走占位符（像 `{{SKILL_INDEX}}` 那样）。
+#:
+#: ⚠️ v1.64：`SYSTEM_PROMPT_TEMPLATE` 里「## 【必须遵守】怎么调用工具」到
+#:   「…正常说完即可。」这一段被一对 `####` 包住，作为**文本协议**版本。
+#:   当接入点支持原生工具调用时，`build_system_prompt(native_tools=True)` 会把
+#:   这一段（含两端的 `####`）整段换成 `_NATIVE_TOOLS_SECTION`，让模型用结构化
+#:   调用而不是写 `ACTION:`/`FINAL:`。不支持时原样保留（向后兼容/降级网关）。
+_NATIVE_TOOLS_SECTION = """\
+## 【必须遵守】怎么调用工具
+
+工具**已经作为原生函数提供给你了**（function calling）。想用一个工具时，直接
+发起一个工具调用（tool call），把工具名和参数填进去即可 —— **不要**再在正文里
+手写 `ACTION:` 那行 JSON，也**不要**写 `FINAL:`。正文只写给人看的话（叙述/结论）。
+
+要点：
+
+- 工具调用由协议层传送，参数结构见每个工具的 schema。填错参数名系统会拒绝，
+  按报错改正再调。
+- 一轮里可以发起一个或多个工具调用；系统把执行结果回给你，你再决定下一步。
+- ★ **工具结果只能由系统返回，你不能自己编**：绝不要在正文里写
+  `<result>…</result>`、"结果：xxx" 之类假装工具已经跑完了。你写下的任何
+  "结果"都不是真的。**要么发起工具调用真去调，要么老实说还缺什么。**
+- ★ **最常见的错**：正文里写"我来调用一下 run_shell"或贴一段 shell 命令，
+  却**没有真正发起调用**。那只是叙述，工具不会执行。要它执行就发起一次工具调用。
+
+### 什么时候算"这一轮真的做完了"
+
+- 还要继续做 → 继续发起工具调用；
+- 全部做完了 → **直接用一段话给出结论**（拿到了什么、证据在哪个文件），
+  正文即最终答复，不需要任何终止符。
+
+★ 只有**真的拿到的东西**才算结论，绝不能把"接下来要做什么"当成结论文本写出来
+  —— 那会让这一轮提前结束、用户只能再打「继续」。凡是有「先…」「接下来…」
+  「然后…」「现在去…」这类话，就去把它做成一次工具调用。
+"""
+
 SYSTEM_PROMPT_TEMPLATE = """\
 你是 Suvex 平台的对话助手。用户用自然语言跟你说话，你负责**把话变成事**。
 
@@ -919,6 +1182,7 @@ SYSTEM_PROMPT_TEMPLATE = """\
 **直接做**，不要回"我不能执行代码"。你不能做的是"替用户点他屏幕上的按钮"，
 不是"执行"。
 
+####
 ## 【必须遵守】怎么调用工具
 
 想用一个工具时，你**必须**在回复里单独写一行 `ACTION:` 加一个 JSON 对象。
@@ -966,6 +1230,7 @@ FINAL: 解出来了，flag 是 flag{...}。证据是 /work/out.txt 里的第 3 �
 
 - `FINAL:` 之后的正文会原样展示给用户（`FINAL:` 这三个词本身不会）。
 - 纯聊天、查资料这类**没动过工具**的回答不需要写 `FINAL:`，正常说完即可。
+####
 
 ## 你的工具清单
 
@@ -1266,6 +1531,7 @@ def build_system_prompt(
     require_approval: bool = False,
     mounted_skills: list[tuple[str, str]] | None = None,
     hinted_tools: list[str] | None = None,
+    native_tools: bool = False,
 ) -> str:
     """渲染最终的对话系统提示词。
 
@@ -1300,6 +1566,23 @@ def build_system_prompt(
     # 有 JSON」这件正常事变成一件要小心的事，而提示词将来还会加更多示例。
     # `replace` 只认那一个显式占位符，JSON 原样保留。
     prompt = SYSTEM_PROMPT_TEMPLATE.replace("{tool_catalog}", render_tool_catalog())
+    # ★ v1.64：接入点支持原生工具调用时，把文本协议那段换成原生调用说明。
+    #   `####` 分隔的那一段（含两端标记）整段替换成 `_NATIVE_TOOLS_SECTION`。
+    #   模板里只有这一对 `####`，所以按它切片是确定的；找不到（有人误删了
+    #   分隔符）就**保留文本协议**原样 —— 宁可退回旧行为，也不要生成一份
+    #   自相矛盾的提示词。
+    if native_tools:
+        start = prompt.find("####")
+        end = prompt.find("####", start + 4) if start != -1 else -1
+        if start != -1 and end != -1:
+            prompt = prompt[:start] + _NATIVE_TOOLS_SECTION + prompt[end + 4 :]
+        else:
+            # 分隔符不见了（有人误删）—— 退回文本协议，并把残留标记清掉。
+            prompt = prompt.replace("####", "")
+    else:
+        # 文本协议模式：`####` 只是内部给替换用的分隔标记，不能出现在给模型
+        # 的提示词里（模型会照着写）。这里把它们清掉。
+        prompt = prompt.replace("####\n", "").replace("####", "")
     # ★ v0.107：把「有哪些命令行工具」和「有哪些打法手册」也注进来。
     #
     # ## 为什么对话页需要这两份清单（而 v0.98 只给了解题侧）
@@ -1339,6 +1622,7 @@ __all__ = [
     "ChatPersona",
     "ChatToolSpec",
     "build_system_prompt",
+    "build_tools_schema",
     "render_approval_rule",
     "render_mounted_skills",
     "render_native_tool_note",

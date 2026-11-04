@@ -96,15 +96,20 @@ PROTOCOL_MARKERS: tuple[str, ...] = ("ACTION", "FINAL")
 #: 一旦某一行出现 `<action` / `</action` / `<analysis` / `</analysis`，
 #: 就认为进了 XML 协议区，此后不再放行任何字（与见过 `ACTION:` 后同等处理）。
 _XML_PROTOCOL_TAGS: tuple[str, ...] = (
-    "<action>",
-    "</action>",
-    "<analysis>",
-    "</analysis>",
+    "<action",
+    "</action",
+    # ★ v1.62：`analysis`/`result` 改成**开放前缀**（去掉结尾 `>`）。线上模型自创
+    #   了同族新标签 `<result_note>`（会话 chat_01M6H1JNW3S2010NB0474PN369 seq976，
+    #   2026-11-04）：一句 `<result_note> 执行：…` 连成串还无闭合，旧集合只认精确
+    #   `<result>`/`</result>` → 流式时不锁、被当普通文本放给用户，落库也漏进
+    #   `surface=answer`。改前缀后 `<result_note`/`<result_xxx` 一并锁死。
+    "<analysis",
+    "</analysis",
     # ★ v1.44：`<result>...</result>` 是模型**伪造的工具结果**，既不该显示、
     #   也不该随历史回灌给模型（否则它以为自己执行过了）。流式时见到即锁死、
-    #   落库时由 `engine._normalize_xml_actions` 整块删掉。
-    "<result>",
-    "</result>",
+    #   落库时由 `engine._normalize_xml_actions` 整块删掉。v1.62 起覆盖 result 全族。
+    "<result",
+    "</result",
     # ★ v1.52：v1.48 的 `<parameter>`/`<invoke>` 与 v1.52 的 `<ds_safety>` 当时**漏加**
     #   到这里——于是流式时被当普通文本放行，用户直播流里看到 `</parameter>`，
     #   线上甚至把它拼进了要执行的 shell 命令（bash 报 `/parameter: No such file`）。

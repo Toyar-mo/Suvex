@@ -211,3 +211,6 @@ nul
 docs/ctf-flag.md
 docs/Kali同步记录.md
 docs/本机清理记录.md
+
+# v1.64：本地生产接入点密钥（base|model|key），绝不入库。
+abase_wsl.txt

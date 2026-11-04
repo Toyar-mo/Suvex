@@ -511,6 +511,8 @@ def should_nudge(
     max_truncations: int = 6,
     tool_nudges_used: int = 0,
     max_tool_nudges: int = 8,
+    no_tool_rounds: int = 0,
+    max_no_tool_rounds: int = 5,
 ) -> bool:
     """要不要为这一轮"没有动作"的回复再推一次模型。
 
@@ -553,6 +555,20 @@ def should_nudge(
         #   为什么不在这里加"像不像半句"的判据：实测「`pwd` 输出是 `/work`。」
         #   这种 18 字的**完整**回答，任何长度/标点启发式都会误判；而误判成
         #   "说完了"就等于放行一次半路停 —— 那是更贵的错。
+        #
+        # ★ v1.64.1：**但这张安全网不能无条件张开**。原生工具调用之后，模型
+        #   干完活就不再调工具、只写结论（没有 FINAL/ACTION 终止信号），
+        #   "跑过工具就推"会把完整结论当"没说完"反复推，模型只好反复复述，
+        #   一路烧到 `max_tool_nudges`(300)。所以：若它已连续 `no_tool_rounds`
+        #   轮**没再调任何工具**（`no_tool_rounds >= max_no_tool_rounds`），
+        #   且这一轮正文也没夹着"想跑但没跑的 shell 命令"，就认定它在作答，
+        #   **不再推**——让它落成答案收尾。执行了工具的分支会把计数清零。
+        if has_unactioned_command(text):
+            # 正文里贴了命令却没执行 = 最强的"还要动手"信号，照推。
+            return tool_nudges_used < max_tool_nudges
+        if no_tool_rounds >= max_no_tool_rounds:
+            # 连续多轮只写正文、不动手：这是在作答，不是中停。收尾。
+            return False
         return tool_nudges_used < max_tool_nudges
     # ★ v1.50：正文里塞了一段 shell 命令却没走 `ACTION:` —— 想执行但没走对
     #   协议。这是最强的\"要动手\"信号，**与长度无关**地推一次（否则 666 字的

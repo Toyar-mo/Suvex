@@ -729,3 +729,301 @@ async def test_giveup_path_still_records_a_placeholder(
 
     assert "没有产出内容" in result.messages[-1].content
 
+
+
+# ══════════════════════════════════════════════════════════
+# 13. v1.64：真正地把 tools 定义发给接入点（而不只是会解析回来的调用）
+# ══════════════════════════════════════════════════════════
+#
+# 上面 §1-12 证明的是"接入点回原生调用 → 我们合成 ACTION 文本 → 解析执行"
+# 这条**接收侧**链路。v1.64 补的是**发送侧**：把工具清单作为 `tools=` 发给
+# 接入点，让模型一开始就用结构化调用，而不是被提示词教着写 `ACTION:` 文本。
+# 少了这一半，模型照样能写文本协议、照样能发明 `<result_note>` 这类新标签
+# —— 那正是要根治的 bug 来源。
+
+
+def test_build_tools_schema_covers_every_chat_tool_in_order() -> None:
+    """`build_tools_schema()` 与 `CHAT_TOOLS` 一一对应、顺序一致、键名齐全。"""
+    from app.chat.prompts import CHAT_TOOLS, build_tools_schema
+
+    schema = build_tools_schema()
+    assert [t["function"]["name"] for t in schema] == [t.name for t in CHAT_TOOLS]
+    for entry in schema:
+        assert entry["type"] == "function"
+        fn = entry["function"]
+        assert fn["name"] and fn["description"]
+        params = fn["parameters"]
+        assert params["type"] == "object"
+        assert isinstance(params["properties"], dict)
+        assert isinstance(params["required"], list)
+        # required 里的键必须真的在 properties 里（否则模型永远填不对）。
+        for key in params["required"]:
+            assert key in params["properties"], f"{fn['name']}.{key} 不在 properties"
+
+
+def _capture_body(handler_sink: dict[str, Any]):  # noqa: ANN202
+    """构造一个 handler，把收到的 request body 记进 `handler_sink`。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        handler_sink["body"] = json.loads(request.content.decode())
+        handler_sink["headers"] = dict(request.headers)
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]})
+
+    return handler
+
+
+async def test_openai_body_includes_tools_when_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink: dict[str, Any] = {}
+    _install_transport(monkeypatch, _capture_body(sink))
+    gateway = _gateway()  # OpenAI 形态（非 anthropic）
+
+    await gateway.chat(
+        [{"role": "user", "content": "go"}],
+        system="sys",
+        tools=[{"type": "function", "function": {"name": "run_shell", "description": "d", "parameters": {"type": "object", "properties": {}, "required": []}}}],
+    )
+
+    body = sink["body"]
+    assert body["tools"][0]["function"]["name"] == "run_shell"
+    assert body["tool_choice"] == "auto"
+
+
+async def test_body_omits_tools_when_not_passed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink: dict[str, Any] = {}
+    _install_transport(monkeypatch, _capture_body(sink))
+    gateway = _gateway()
+
+    await gateway.chat([{"role": "user", "content": "go"}], system="sys")
+
+    assert "tools" not in sink["body"]
+    assert "tool_choice" not in sink["body"]
+
+
+async def test_anthropic_body_converts_tools_to_input_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sink: dict[str, Any] = {}
+    _install_transport(monkeypatch, _capture_body(sink))
+    gateway = _gateway(base_url="https://api.anthropic.com", model="claude")
+    assert gateway.anthropic is True
+
+    await gateway.chat(
+        [{"role": "user", "content": "go"}],
+        system="sys",
+        tools=[{"type": "function", "function": {"name": "run_shell", "description": "d", "parameters": {"type": "object", "properties": {"command": {"type": "string"}}, "required": ["command"]}}}],
+    )
+
+    tools = sink["body"]["tools"]
+    # Anthropic 形态：没有 `function` 外壳，参数键叫 input_schema。
+    assert tools[0]["name"] == "run_shell"
+    assert "input_schema" in tools[0]
+    assert "function" not in tools[0]
+    assert tools[0]["input_schema"]["required"] == ["command"]
+
+
+async def test_call_model_forwards_tools_only_when_gateway_supports_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """旧网关（chat 不收 tools）不该被硬塞 kwargs 而 TypeError。"""
+    received: dict[str, Any] = {}
+
+    class _OldGateway:
+        async def chat(self, messages, *, system):  # noqa: ANN001, ANN201, ARG002
+            received["called"] = True
+            return LlmReply(text="ok", source="content", raw={}, usage=None, finish_reason="stop")
+
+    # _gateway_chat 探测 chat() 签名里没有 tools → 不传，正常返回。
+    reply = await engine._gateway_chat(
+        _OldGateway(),
+        [{"role": "user", "content": "go"}],
+        system="sys",
+        tools=[{"type": "function", "function": {"name": "x"}}],
+    )
+    assert received.get("called") is True
+    assert reply.text == "ok"
+
+
+def test_supports_param_reads_signature_and_kwargs() -> None:
+    class _Has:
+        async def chat(self, messages, *, system, tools=None): ...  # noqa: ANN001
+
+    class _Kw:
+        async def chat(self, messages, *, system, **kwargs): ...  # noqa: ANN001
+
+    class _None:
+        async def chat(self, messages, *, system): ...  # noqa: ANN001
+
+    assert engine._supports_param(_Has().chat, "tools") is True
+    assert engine._supports_param(_Kw().chat, "tools") is True
+    assert engine._supports_param(_None().chat, "tools") is False
+    assert engine._supports_param(object(), "tools") is False
+
+
+# ══════════════════════════════════════════════════════════
+# 14. v1.64 stage2：系统提示词按「接入点是否支持原生调用」切换协议
+# ══════════════════════════════════════════════════════════
+
+
+def test_prompt_text_mode_teaches_action_protocol() -> None:
+    from app.chat.prompts import build_system_prompt
+
+    prompt = build_system_prompt()  # 默认文本协议
+    assert 'ACTION: {"tool"' in prompt and "FINAL:" in prompt
+    # 内部替换用的 `####` 分隔标记绝不能漏给模型。
+    assert "####" not in prompt
+
+
+def test_prompt_native_mode_drops_action_protocol_and_uses_function_calling() -> None:
+    from app.chat.prompts import build_system_prompt
+
+    prompt = build_system_prompt(native_tools=True)
+    assert "####" not in prompt
+    # 不再教它手写 ACTION JSON，而是说工具已作为原生函数提供。
+    assert 'ACTION: {"tool"' not in prompt
+    assert "原生函数" in prompt or "function calling" in prompt
+    # 工具清单仍在（两种模式都要能看到有哪些工具）。
+    assert "## 你的工具清单" in prompt
+
+
+def test_gateway_supports_tools_detects_stream_and_chat() -> None:
+    class _StreamOnly:
+        async def chat_stream(self, messages, *, system, tools=None): ...  # noqa: ANN001
+
+    class _ChatOnly:
+        async def chat(self, messages, *, system, tools=None): ...  # noqa: ANN001
+
+    class _None:
+        async def chat(self, messages, *, system): ...  # noqa: ANN001
+
+        async def chat_stream(self, messages, *, system): ...  # noqa: ANN001
+
+    assert engine._gateway_supports_tools(_StreamOnly()) is True
+    assert engine._gateway_supports_tools(_ChatOnly()) is True
+    assert engine._gateway_supports_tools(_None()) is False
+
+
+async def test_run_turn_uses_native_prompt_and_passes_tools_when_gateway_supports_it(
+    db_session: Session,
+) -> None:
+    """支持 tools 的网关：系统提示走原生版、请求体带 tools。"""
+    session = chat_service.create_session(db_session, created_by="user_admin")
+    db_session.commit()
+
+    seen: dict[str, Any] = {}
+
+    class _NativeGateway:
+        async def chat(self, messages, *, system, tools=None):  # noqa: ANN001, ANN201
+            seen["has_native_prompt"] = "原生函数" in system or "function calling" in system
+            seen["tools_len"] = len(tools or [])
+            return LlmReply(text="好的，已完成。", source="content", raw={}, usage=None, finish_reason="stop")
+
+    await engine.run_turn(
+        db_session,
+        session=session,
+        content="你好",
+        identity=ADMIN,
+        gateway=_NativeGateway(),
+    )
+
+    assert seen.get("has_native_prompt") is True
+    assert seen.get("tools_len", 0) == 16
+
+
+async def test_run_turn_keeps_text_protocol_for_legacy_gateway(
+    db_session: Session,
+) -> None:
+    """旧网关（不收 tools）：系统提示仍是文本协议版、且不会被塞 tools。"""
+    session = chat_service.create_session(db_session, created_by="user_admin")
+    db_session.commit()
+
+    seen: dict[str, Any] = {}
+
+    class _LegacyGateway:
+        async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
+            seen["has_text_protocol"] = 'ACTION: {"tool"' in system
+            return LlmReply(text="FINAL: 完成。", source="content", raw={}, usage=None, finish_reason="stop")
+
+    try:
+        await engine.run_turn(
+            db_session, session=session, content="你好", identity=ADMIN, gateway=_LegacyGateway()
+        )
+    except Exception:  # noqa: BLE001 - 只关心提示词构建，不关心收尾
+        pass
+
+    assert seen.get("has_text_protocol") is True
+
+
+# ══════════════════════════════════════════════════════════
+# 15. v1.64.1：模型干完活只写正文（不调工具）时不再无限推
+# ══════════════════════════════════════════════════════════
+
+
+def test_should_nudge_stops_when_no_tool_for_many_rounds() -> None:
+    """跑过工具、但连续 5 轮只写正文不动手 → 认定作答，不再推。"""
+    from app.chat import nudge as np
+
+    base = dict(
+        at_limit=False,
+        said_final=False,
+        actions=[],
+        truncated=False,
+        tools_used=2,
+        text="两步都完成了：hello.txt 已创建（30 字节），cat 读回内容原样是 原生工具调用测试成功。",
+        nudges_used=0,
+        max_nudges=2,
+        tool_nudges_used=3,  # 远未到 300 上限
+    )
+    # 连续没动工具 5 轮 → 不推
+    assert np.should_nudge(**base, no_tool_rounds=5, max_no_tool_rounds=5) is False
+    # 才第 1 轮没动工具 → 仍然推（给"工具返回后想再确认一下"留余地）
+    assert np.should_nudge(**base, no_tool_rounds=1, max_no_tool_rounds=5) is True
+    # 第 4 轮 → 还没到上限，仍推
+    assert np.should_nudge(**base, no_tool_rounds=4, max_no_tool_rounds=5) is True
+
+
+def test_should_nudge_still_nudges_unactioned_command_even_past_no_tool_cap() -> None:
+    """正文里夹着要跑的 shell 命令 → 无论连续多少轮没动手都要推（还想动手）。"""
+    from app.chat import nudge as np
+
+    assert (
+        np.should_nudge(
+            at_limit=False,
+            said_final=False,
+            actions=[],
+            truncated=False,
+            tools_used=2,
+            text="接下来我跑一下：\n```\ncat hello.txt\n```",
+            nudges_used=0,
+            max_nudges=2,
+            tool_nudges_used=3,
+            no_tool_rounds=99,
+            max_no_tool_rounds=5,
+        )
+        is True
+    )
+
+
+def test_should_nudge_no_tool_cap_does_not_affect_when_no_tools_used() -> None:
+    """从没跑过工具（纯问答）→ 走 narration 通道，不受 no_tool 计数影响。"""
+    from app.chat import nudge as np
+
+    # 纯问答、完整回答、没有意图词 → looks_unfinished=False → 不推
+    assert (
+        np.should_nudge(
+            at_limit=False,
+            said_final=False,
+            actions=[],
+            truncated=False,
+            tools_used=0,
+            text="当前工作目录是 /work。",
+            nudges_used=0,
+            max_nudges=2,
+            no_tool_rounds=99,
+            max_no_tool_rounds=5,
+        )
+        is False
+    )

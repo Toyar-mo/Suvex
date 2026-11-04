@@ -740,7 +740,11 @@ async def test_narration_nudges_do_not_eat_the_empty_reply_budget(
     narration = "这是一个 64 位 ELF，保护很弱。"
     plan = "接下来查看 main、read_input 等函数。"
     replies = [('ACTION: {"tool": "list_scans", "args": {}}', "")]
-    replies += [(narration, "")] * 6
+    # ★ v1.64.1：叙述轮数从 6 降到 3 —— 必须**小于** `MAX_NO_TOOL_NUDGES`(5)。
+    #   新加的"连续 NO_TOOL 轮不再推"闸会在第 5 轮没动手时收尾；本测试要验的
+    #   是"叙述纠偏不吃空回复额度"这件事，3 轮已足够体现分离，且不会被那道闸
+    #   提前截断。（真实任务里叙述后紧跟工具调用会清零计数，不会累积到 5。）
+    replies += [(narration, "")] * 3
     replies += [(plan, ""), ("", ""), ("FINAL: flag{live_replay}", "")]
     gateway = ScriptedGateway(replies)
     result = await engine.run_turn(
@@ -750,7 +754,7 @@ async def test_narration_nudges_do_not_eat_the_empty_reply_budget(
         identity=ADMIN,
         gateway=gateway,
     )
-    assert gateway.calls == 10, "前面 6 次叙述纠偏之后，空回复仍然要再推一次"
+    assert gateway.calls == 7, "前面 3 次叙述纠偏之后，空回复仍然要再推一次"
     assert result.messages[-1].content.strip() == "flag{live_replay}"
 
 
