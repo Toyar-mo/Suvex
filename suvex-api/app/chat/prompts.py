@@ -1062,6 +1062,30 @@ def render_plan_exhausted_note() -> str:
     return "（这一轮停在了下一步上：「继续」我接着执行 —— 上面那句是计划，不是结果。）"
 
 
+def render_turn_wall_note(max_seconds: int) -> str:
+    """单轮墙钟预算（`TURN_WALL_SECONDS`）到点时，替模型给用户的一句实话（v1.68）。
+
+    ## 为什么需要这句话
+
+    会话 `ctf` 的 turn_01M6N2JEY1FZ9HERVADHSQHVZ3 单轮连跑 6.3 小时、629 次工具，
+    每步都是不同的真实命令（真在做一道极难的堆 pwn），所以"连续重复动作"检测
+    永不触发、"纠偏额度"也管不到"动作" —— 于是一个合法但极难的活会无限烧下去，
+    用户点「中断并继续」只是让它接着跑，观感就是"一直不停"。对应 CyberStrikeAI
+    的 `agent.tool_timeout_minutes`：一次任务必须有总时长上界。
+
+    ## 为什么不是硬砍
+
+    到点**优雅收尾**并如实说明"到了本轮时长上限、点继续可以接着跑"，把控制权
+    交回用户，而不是静默中断或假装是结论。这样既不失控，也不一刀切死真正的长任务。
+    """
+    minutes = max(1, int(round(max_seconds / 60)))
+    return (
+        f"（这一轮已经连续跑了超过 {minutes} 分钟，为了不让它无上限地一直跑，"
+        "我先停下、释放了环境。任务还没结束的话，点「继续」我再接着干——"
+        "已经做过的步骤不会重来。）"
+    )
+
+
 def render_native_tool_note(names: list[str] | None = None) -> str:
     """上游只回了原生工具调用、平台没能执行时，替模型给用户的一句实话。
 

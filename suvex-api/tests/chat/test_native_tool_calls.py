@@ -1181,3 +1181,79 @@ async def test_stream_idle_timeout_falls_back_to_nonstream_when_nothing_pushed(
         emit=emit,
     )
     assert reply.text == "兜底成功"
+
+
+# ══════════════════════════════════════════════════════════
+# 15. 单轮墙钟预算（v1.68）：合法长任务也在到点优雅收尾，不是无限烧
+# ══════════════════════════════════════════════════════════
+
+
+def test_render_turn_wall_note_mentions_minutes_and_continue() -> None:
+    """到点提示必须说清"跑了多久"和"点继续可接着干"，不是装成结论。"""
+    note = engine.render_turn_wall_note(3600)
+    assert "60 分钟" in note
+    assert "继续" in note
+    # 至少 1 分钟（防止四舍五入成 0 分钟这种怪话）。
+    assert "1 分钟" in engine.render_turn_wall_note(10)
+
+
+async def test_run_turn_stops_gracefully_when_wall_budget_exceeded(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """单轮连续跑超过墙钟预算 → 落一句实话、needs_continue=True、不再继续烧。
+
+    复刻 ctf 那个"每步都是不同真实命令、连续跑 6 小时"的形态：网关每轮都发一个
+    可执行的 ACTION，tools_used 持续增长，MAX_REPEATED_ACTIONS 不触发；靠墙钟预算
+    兜底收尾。
+    """
+    session = chat_service.create_session(db_session, created_by="user_admin")
+    db_session.commit()
+
+    monkeypatch.setattr(engine, "TURN_WALL_SECONDS", 1)
+
+    # monotonic 每次调用 +10 秒 → 第一轮结束前就超过 1 秒预算。
+    clock = {"t": 0.0}
+
+    def _fake_monotonic() -> float:
+        clock["t"] += 10.0
+        return clock["t"]
+
+    monkeypatch.setattr(engine.time, "monotonic", _fake_monotonic)
+
+    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202, ARG001
+        return "ok", False
+
+    monkeypatch.setattr(engine, "_execute_tool", fake_execute)
+
+    # 动作由文本协议合成：直接用 ACTION 文本，保证 parse_actions 能解析出动作。
+    class _ActionTextGateway:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat(self, messages, *, system, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            return LlmReply(
+                text=f'继续。\nACTION: {{"tool": "run_shell", "args": {{"command": "echo step-{self.calls}"}}}}',
+                source="content",
+                raw={},
+                usage=None,
+                finish_reason="stop",
+            )
+
+    gateway = _ActionTextGateway()
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="开始长任务",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    assert result.needs_continue is True
+    assert result.hit_tool_limit is True
+    last = result.messages[-1]
+    assert last.role == "assistant"
+    assert "分钟" in last.content
+    assert "继续" in last.content
+    # 关键：并非无限跑；墙钟闸在某次工具执行后立刻停手（不会跑满 300 轮）。
+    assert gateway.calls <= 3

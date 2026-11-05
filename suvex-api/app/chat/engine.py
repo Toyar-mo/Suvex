@@ -47,6 +47,7 @@ import inspect
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -73,6 +74,7 @@ from app.chat.prompts import (
     render_plan_exhausted_note,
     render_stall_reminder,
     render_truncation_reminder,
+    render_turn_wall_note,
 )
 from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
 
@@ -268,6 +270,25 @@ MAX_EMPTY_NUDGES = _env_int("SUPEX_CHAT_MAX_EMPTY_NUDGES", 6)
 #: 卡死的是"连接还在、但永远没有正文"，那正是要抓的。
 #: 设 0 关闭（仅供测试/特殊部署），生产绝不置 0。
 STREAM_IDLE_SECONDS = _env_int("SUPEX_CHAT_STREAM_IDLE_SECONDS", 180)
+
+#: ★ v1.68：单轮**墙钟预算**（秒）。一次 `run_turn` / `resume_approved` 调用从
+#:   开始干活算起，连续跑超过这么久就**优雅收尾**：落一句"本轮已运行超过 N 分钟，
+#:   先停下，确认需要可再发「继续」"，落 `interrupted`（可接手），释放沙箱。
+#:
+#: ## 为什么需要（线上事故）
+#:
+#: 会话 `ctf` 的 turn_01M6N2JEY1FZ9HERVADHSQHVZ3 单轮连续跑了 **22732s（≈6.3h）**、
+#: 214 轮 / 629 次工具 —— 每一步都是**不同的**真实 `run_shell`（在真做一道堆 pwn），
+#: 所以 `MAX_REPEATED_ACTIONS`(5) 永不触发、`MAX_TOOL_NUDGES`(300) 管的是"纠偏"不是
+#: "动作"。也就是说：**一个合法但极难的活会在没有任何总上限的情况下一直烧下去**，
+#: 用户点「中断并继续」只是让它接着无限跑，观感就是"一直不停"。
+#:
+#: 这正是 CyberStrikeAI 的 `agent.tool_timeout_minutes`（默认 10，"avoid 0 (no limit)"）
+#: —— **一次任务必须有总时长上界**，到点停并释放资源，而不是让"动作"不受限。
+#: 取 3600s（1h）：远大于任何正常单轮（正常的活几分钟内收）；真需要更久的大任务，
+#: 用户点「继续」即可再拿一整段预算，既不失控、也不一刀切死长任务。
+#: 设 0 关闭（仅供测试/特殊部署），生产绝不置 0。
+TURN_WALL_SECONDS = _env_int("SUPEX_CHAT_TURN_WALL_SECONDS", 3600)
 
 #: 任务型轮次里，模型写了 `FINAL:` 之后我们先**打回**几次（v1.29）。
 #:
@@ -2623,6 +2644,9 @@ async def run_turn(
     #:   在下一轮就被丢掉了。所以用一个变量把它带到下一轮，在那里补。
     pending_reminder: str | None = None
 
+    #: ★ v1.68：本调用内"墙钟预算"的起点。见 `TURN_WALL_SECONDS`。
+    turn_wall_start = time.monotonic()
+
     #: 循环上界 = 工具轮数 + 1（最后那轮用来总结）+ 纠偏轮数。
     for round_index in range(
         MAX_TOOL_ROUNDS
@@ -2632,6 +2656,26 @@ async def run_turn(
         + MAX_TOOL_NUDGES
         + MAX_FINAL_CONFIRMATIONS
     ):
+        # ★ v1.68：墙钟预算闸。跑到超过 `TURN_WALL_SECONDS` 就地优雅收尾 ——
+        #   不是让它接着烧，也不是硬砍，而是落一句"到点了、要继续再发继续"，
+        #   本轮 marked interrupted（可接手/可续跑），沙箱释放。
+        #   只在"真跑过工具"（tools_used>0）时判，纯问答不受影响；设 0 关闭。
+        if (
+            TURN_WALL_SECONDS
+            and tools_used > 0
+            and time.monotonic() - turn_wall_start >= TURN_WALL_SECONDS
+        ):
+            exhausted = chat_service.append_assistant_message(
+                db,
+                session=session,
+                content=render_turn_wall_note(TURN_WALL_SECONDS),
+            )
+            db.commit()
+            result.messages.append(exhausted)
+            result.hit_tool_limit = True
+            result.needs_continue = True
+            return result
+
         # ★ v0.100：在调模型**之前**推一条 phase 帧。
         #
         # 这一帧对应的正是界面上「正在想…」那一行 —— 它现在能显示
@@ -3261,6 +3305,9 @@ async def resume_approved(
     plan_bounces = 0
     pending_reminder: str | None = None
 
+    #: ★ v1.68：本调用内"墙钟预算"的起点。见 `TURN_WALL_SECONDS`（同 run_turn）。
+    turn_wall_start = time.monotonic()
+
     for round_index in range(
         MAX_TOOL_ROUNDS
         + MAX_NARRATION_NUDGES
@@ -3268,6 +3315,23 @@ async def resume_approved(
         + MAX_TOOL_NUDGES
         + MAX_FINAL_CONFIRMATIONS
     ):
+        # ★ v1.68：墙钟预算闸（同 run_turn）。
+        if (
+            TURN_WALL_SECONDS
+            and tools_used > 0
+            and time.monotonic() - turn_wall_start >= TURN_WALL_SECONDS
+        ):
+            exhausted = chat_service.append_assistant_message(
+                db,
+                session=session,
+                content=render_turn_wall_note(TURN_WALL_SECONDS),
+            )
+            db.commit()
+            result.messages.append(exhausted)
+            result.hit_tool_limit = True
+            result.needs_continue = True
+            return result
+
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
