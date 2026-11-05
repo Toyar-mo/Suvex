@@ -263,12 +263,27 @@ export function ChatPage() {
     打开这个）在跑，它的点不会自己亮/灭。这里在有会话跑时低频轮询列表补上。
     没有会话在跑就完全不轮询（依赖数组为空则停），不产生无谓开销。
   */
-  const anyRunning = sendingSessionIds.length > 0
+  /*
+    ★ v1.68.2：只要**还有任何「在跑」的迹象**就每 4 秒刷一次会话列表。
+
+    用户原话「结束了前端对话列还会打转，要刷新网页才行」。根因：`anyRunning`
+    原来只看本浏览器的 `sendingSessionIds` —— 某个会话这一轮结束、`sending` 一清，
+    `anyRunning` 立刻变 false，4 秒轮询就停了；可侧栏那枚转圈点读的是**服务端**
+    的 `session.running`，最后一次 fetch 若恰好是 `true`（DB 还没翻成 done，
+    或结束不是本页发起的），这个 `true` 就**冻结**在那里，转圈永远不停，必须刷新
+    网页重新拉列表才消失。
+
+    修法：把「侧栏还有会话显示 running」也算进轮询条件。这样只要还有一枚转圈点，
+    就持续每 4 秒重拉列表，等服务端把 `running` 翻成 false，点自动灭掉 —— 自愈，
+    不用刷新。等所有点都灭了才停轮询，不产生无谓开销。
+  */
+  const anySessionRunning =
+    sendingSessionIds.length > 0 || sessions.some((s) => s.running)
   useEffect(() => {
-    if (!anyRunning) return
+    if (!anySessionRunning) return
     const timer = setInterval(() => void loadSessions(), 4000)
     return () => clearInterval(timer)
-  }, [anyRunning])
+  }, [anySessionRunning])
 
   // 模型接入点：读设置里那份账号，只用**已配置好**的（没配的选了也跑不起来，
   // 而界面上摆一堆跑不起来的选项等于把失败推给用户）。
@@ -526,10 +541,16 @@ export function ChatPage() {
         //   (b) 流早断了、本地 sending 卡死 —— 清掉它（否则界面永远转圈）。
         // 判据：见过 running 之后再消失 = 真结束((b))；从没见过 = 大概率(a)。
         if (sawRunning) {
-          clearStaleSending()
+          clearStaleSending(sessionId)
           void refreshActiveMessages(sessionId)
           void loadSessions()
           void refreshStuckTurn(sessionId)
+          // ★ v1.68.2：done 帧/轮询可能比轮次落库（status→done）先到，这一拍
+          //   拉到的 `session.running` 可能仍是 true。1 秒后再权威补拉一次列表，
+          //   让侧栏转圈点跟着服务端真正收尾 —— 否则要刷新网页它才灭。
+          window.setTimeout(() => {
+            if (alive) void loadSessions()
+          }, 1000)
           return
         }
         timer = setTimeout(() => void tick(), 1500)
@@ -539,6 +560,10 @@ export function ChatPage() {
       void refreshActiveMessages(sessionId)
       void loadSessions()
       void refreshStuckTurn(sessionId)
+      // ★ v1.68.2：同上，1 秒后权威补拉一次，收掉可能残留的侧栏转圈点。
+      window.setTimeout(() => {
+        if (alive) void loadSessions()
+      }, 1000)
       // 不再排下一拍（SSE 结束后 sending 变 false，这个 effect 依赖 sending
       // 会重跑一次 listTurns；真没活动了就没有轮询开销）。
     }
@@ -689,7 +714,7 @@ export function ChatPage() {
           // ★ v1.24：服务端说这一轮其实早就结束了（我们这边的 `sending`
           //   是过期的 —— done 帧丢了的典型症状）。把过期状态清掉，退回
           //   "正常发送"，否则这句话会被静默吞掉（用户以为发了，没人回答）。
-          clearStaleSending()
+          clearStaleSending(active?.id)
           const ok = await sendMessage(active.id, content)
           if (!ok) setDraft(content)
         } else if (outcome === 'failed') {

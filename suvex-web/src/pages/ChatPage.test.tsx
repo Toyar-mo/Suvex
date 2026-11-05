@@ -391,6 +391,36 @@ describe('ChatPage — 侧栏标出「哪个会话在跑」、不再画底部蓝
     expect(screen.queryByText(/运行中/)).toBeNull()
   })
 
+  it('★ v1.68.2：侧栏还有会话 running=true 时，持续每 4s 重拉列表（自愈转圈点，无需刷新）', async () => {
+    /*
+      用户原话「结束了前端对话列还会打转，要刷新网页才行」。根因：轮询条件是
+      `sendingSessionIds.length>0`，本会话一结束就停，侧栏 `session.running`
+      最后一次拉到的 true 冻结不动。修法：侧栏还有 running 的会话时也持续轮询。
+      这里用假定时器验证：本页无本地 sending，但列表里有一条 running=true →
+      loadSessions 会被 4s 定时器反复调用。
+    */
+    vi.useFakeTimers()
+    try {
+      vi.mocked(loadSessions).mockClear()
+      vi.mocked(useChat).mockReturnValue(
+        chatState({
+          // 本页没有本地在跑（sendingSessionIds 空）
+          sendingSessionIds: [],
+          // 但列表里有一条服务端 running=true（别的会话 / 后台残留）
+          sessions: [session({ id: 'chat_run', title: '后台在跑', running: true })],
+        }),
+      )
+      renderPage()
+
+      // 初始 tick 后，推进 4 秒应触发一次 loadSessions（定时器）
+      const before = vi.mocked(loadSessions).mock.calls.length
+      await vi.advanceTimersByTimeAsync(4200)
+      expect(vi.mocked(loadSessions).mock.calls.length).toBeGreaterThan(before)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('★ 服务端在跑（本页无 SSE）时也**不再**出现底部蓝条 data-server-progress', () => {
     /*
       v1.61 加的底部蓝条已按用户要求删除。这里守住"别又画回来"：

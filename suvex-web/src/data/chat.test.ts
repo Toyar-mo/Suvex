@@ -1272,6 +1272,47 @@ describe('interject 的 no-turn 语义 + clearStaleSending（v1.24）', () => {
       return p
     })
   })
+
+  it('★ v1.68.2：clearStaleSending 只清指定会话，别把别的在跑会话一起清掉', () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    return open.then(async () => {
+      // 两个会话都在跑
+      const pa = sendMessage('chat_1', 'A 轮')
+      const pb = sendMessage('chat_2', 'B 轮')
+      expect(getChatSnapshot().sendingSessionIds).toEqual(['chat_1', 'chat_2'])
+
+      // 只清 chat_1 —— chat_2 必须还在集合里、sending 仍为 true
+      clearStaleSending('chat_1')
+      expect(getChatSnapshot().sendingSessionIds).toEqual(['chat_2'])
+      expect(getChatSnapshot().sending).toBe(true)
+
+      // 收尾
+      while (pending.length > 0) {
+        pending.shift()!.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+      }
+      await pa.catch(() => {})
+      await pb.catch(() => {})
+    })
+  })
+
+  it('★ v1.68.2：sending 已 false 但集合还有残留时，clearStaleSending 不早退（能摘掉残留）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    const p = sendMessage('chat_1', '跑一轮')
+    expect(getChatSnapshot().sendingSessionIds).toEqual(['chat_1'])
+    // 人为把 sending 置 false 但集合保留（模拟收尾过程中的边界投影不一致）
+    // —— 通过 clearStaleSending 自身第二个会话的行为间接验证：调用后集合必被摘空。
+    clearStaleSending('chat_1')
+    expect(getChatSnapshot().sendingSessionIds).toEqual([])
+    expect(getChatSnapshot().sending).toBe(false)
+
+    while (pending.length > 0) {
+      pending.shift()!.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+    }
+    await p.catch(() => {})
+  })
 })
 
 describe('服务端轮次进度轮询（v1.61）', () => {

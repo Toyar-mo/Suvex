@@ -1217,24 +1217,44 @@ export async function interject(
  * ⚠️ 只在**确认服务端没有在跑的轮次**之后调用（`interject` 返回 `'no-turn'`）。
  *   别处调用它会把正在跑的那一轮的界面状态抹掉（进度、插话暂存区）。
  */
-export function clearStaleSending(): void {
-  if (!state.sending) return
+export function clearStaleSending(sessionId?: string): void {
+  // ★ v1.68.2：原来这里 `if (!state.sending) return`。但 v1.65 起 `sending` 只是
+  //   "本浏览器有任意会话在跑"的投影，可能已经是 false，而 `sendingSessionIds`
+  //   里还留着当前会话、`stopRequested` 还挂着 —— 此时直接 return 就漏清了，
+  //   表现为"这一轮明明结束了，输入框还写着「已请求停止」、侧栏还在转圈"。
+  //   改成只要还有**任何**待清的痕迹就继续清。
+  const target = sessionId ?? state.sendingSessionId
+  const hasEntry = target ? state.sendingSessionIds.includes(target) : false
+  if (
+    !state.sending &&
+    state.sendingSessionIds.length === 0 &&
+    !state.stopRequested &&
+    !hasEntry
+  ) {
+    return
+  }
   // ★ v1.62：清掉卡死的本地 sending 时，也一并收掉可能残留的「已请求停止」
   //   标记（轮询随后会把 serverTurn 也清掉）。否则一个早已停下的轮次会
   //   留着"已请求停止"的红条。
-  // ★ v1.65：`clearStaleSending` 是"看到服务端说这个会话没在跑"才调的，
-  //   要清的就是**当前正在看的**会话那一条；把它从集合里摘掉，别把别的
-  //   会话（可能真在跑）也一起当成死的。
-  const watched = state.sendingSessionId
+  // ★ v1.65/v1.68.2：`clearStaleSending` 是"看到服务端说**这个会话**没在跑"
+  //   才调的，要清的就是这一条；把它从集合里摘掉，别把别的会话（可能真在跑）
+  //   也一起当成死的。`target` 明确指向要清的那条（调用方传入或退回被观看的那条）。
+  const remaining = target
+    ? state.sendingSessionIds.filter((id) => id !== target)
+    : state.sendingSessionIds
+  // 只有被观看的会话被清掉时，才清它的展示字段（别的会话在跑不该被误清）。
+  const wasWatched = target === state.sendingSessionId || target === undefined
   patch({
-    sendingSessionIds: watched
-      ? state.sendingSessionIds.filter((id) => id !== watched)
-      : [],
-    sending: false,
-    sendingSessionId: null,
-    phase: null,
-    interjections: [],
-    stopRequested: false,
+    sendingSessionIds: remaining,
+    sending: remaining.length > 0,
+    ...(wasWatched
+      ? {
+          sendingSessionId: remaining.length ? remaining[remaining.length - 1] : null,
+          phase: null,
+          interjections: [],
+          stopRequested: false,
+        }
+      : {}),
   })
 }
 
