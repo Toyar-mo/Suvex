@@ -1095,3 +1095,89 @@ def test_render_history_applies_narration_cleanup() -> None:
     assert "写 ACTION" not in joined
     assert "我先看下目录" in joined
     assert "现在读一下" in joined
+
+
+# ---------------------------------------------------------------------------
+# v1.67：模型流空闲超时 —— 上游只发 keepalive 不吐正文时必须超时，不许无限阻塞
+# ---------------------------------------------------------------------------
+
+
+async def test_stream_idle_timeout_raises_when_upstream_hangs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """复现线上卡死：上游挂着连接、只发 keepalive（无正文增量）。
+
+    旧代码 `async for delta in gateway.chat_stream(...)` 会**永远**等下去，
+    心跳冻结、租约被僵尸协程占死。v1.67 给每帧加空闲超时：`STREAM_IDLE_SECONDS`
+    毫秒级无正文就抛 `ChatEngineError`（可重试），交回上层记 interrupted。
+    """
+    import asyncio
+
+    # 把空闲阈值压到很小，让测试快速触发（生产默认 180s）
+    monkeypatch.setattr(engine, "STREAM_IDLE_SECONDS", 0.05)
+
+    class _HangingGateway:
+        async def chat_stream(self, messages, *, system, finish_reason=None):  # noqa: ANN001, ANN201
+            # 先吐一点点正文（pushed=True），然后永远阻塞（模拟 keepalive-only
+            # 的死连接）。已有正文时超时不再退回非流式，而是如实抛出。
+            yield "正在处理"
+            await asyncio.sleep(3600)
+            yield "永远不会到这里"
+
+    emit = Recorder()
+    with pytest.raises(engine.ChatEngineError) as excinfo:
+        await engine._call_model(
+            _HangingGateway(), [{"role": "user", "content": "go"}], system="sys", emit=emit
+        )
+    assert "无正文增量" in str(excinfo.value)
+    # 可重试 → 交给 resumer，不落 failed
+    assert getattr(excinfo.value, "retryable", True) is True
+
+
+async def test_stream_idle_timeout_does_not_trip_on_slow_but_progressing_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """真在吐字的慢流不该被误杀：每个正文增量都会重置计时。"""
+    import asyncio
+
+    monkeypatch.setattr(engine, "STREAM_IDLE_SECONDS", 0.2)
+
+    class _SlowGateway:
+        async def chat_stream(self, messages, *, system, finish_reason=None):  # noqa: ANN001, ANN201
+            for piece in ["你", "好", "，", "世", "界"]:
+                await asyncio.sleep(0.05)  # 每帧 50ms < 200ms 阈值，绝不触发
+                yield piece
+
+    emit = Recorder()
+    reply = await engine._call_model(
+        _SlowGateway(), [{"role": "user", "content": "go"}], system="sys", emit=emit
+    )
+    assert reply.text == "你好，世界"
+
+
+async def test_stream_idle_timeout_falls_back_to_nonstream_when_nothing_pushed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """还没吐过正文就超时 → 退回非流式（而非整轮失败），与既有兜底一致。"""
+    import asyncio
+
+    monkeypatch.setattr(engine, "STREAM_IDLE_SECONDS", 0.05)
+
+    class _HangingThenNonStreamGateway:
+        async def chat_stream(self, messages, *, system, finish_reason=None):  # noqa: ANN001, ANN201
+            await asyncio.sleep(3600)
+            yield "x"
+
+        async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
+            return LlmReply(
+                text="兜底成功", source="content", raw={}, usage=None, finish_reason="stop"
+            )
+
+    emit = Recorder()
+    reply = await engine._call_model(
+        _HangingThenNonStreamGateway(),
+        [{"role": "user", "content": "go"}],
+        system="sys",
+        emit=emit,
+    )
+    assert reply.text == "兜底成功"

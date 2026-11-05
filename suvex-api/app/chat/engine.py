@@ -42,6 +42,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -244,6 +245,29 @@ MAX_NO_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_NO_TOOL_NUDGES", 5)
 #: 就是确定性的模型/接入点故障，再推只是烧钱；而 6 次足够跨过偶发的
 #: 两次抽风。计数用 `nudges_used`，不新增持久字段。
 MAX_EMPTY_NUDGES = _env_int("SUPEX_CHAT_MAX_EMPTY_NUDGES", 6)
+
+#: ★ v1.67：模型流式响应的**空闲超时**（秒）。超过这么久没有新的"正文增量"，
+#:   就判定上游把连接挂死了，抛可重试超时 → 本轮回退为 `interrupted`、交给
+#:   resumer 接手，而不是让协程永远等下去。
+#:
+#: ## 为什么要这一条（线上事故）
+#:
+#: 会话 `ctf`（turn_01M6N2JEY1FZ9HERVADHSQHVZ3）和"加一个 MCP 工具连接"
+#: 两个轮次都 `status=running` 但 `heartbeat_at` 冻在原地 49~53 分钟 —— 它们
+#: **不是**在跑工具（工具 `DEFAULT_SHELL_TIMEOUT=300` 会超时），而是卡在
+#: `_call_model` 的 `async for delta in gateway.chat_stream(...)`：上游只发
+#: SSE 注释行 `: keepalive`（`runner._iter_sse` 会跳过，不 yield 正文），没有
+#: 任何**正文**增量，`async for` 就永远阻塞。更糟的是这个卡死协程仍占着进程内
+#: `_ACTIVE` 租约（`turn_runs.is_active` 恒 True），resumer 的 `stale_runs` /
+#: `claim` 都因 `is_active()` 跳过它 —— 被自己的安全网挡在门外，永不接手。
+#:
+#: 这一条对应 CyberStrikeAI 的「bounded agent waits」（每一次阻塞等待都必须有
+#: 界，绝不 no-limit）。取 180s：远大于正常"上游吐字间隔"（正常几秒一个字），
+#: 又小于单个合法工具上限 300s —— 只要真的在吐正文就会不断刷新，不会误杀。
+#: 模型正在长思考但**最终会吐字**时，也仍在 180s 内（思考完会出首字）；真正
+#: 卡死的是"连接还在、但永远没有正文"，那正是要抓的。
+#: 设 0 关闭（仅供测试/特殊部署），生产绝不置 0。
+STREAM_IDLE_SECONDS = _env_int("SUPEX_CHAT_STREAM_IDLE_SECONDS", 180)
 
 #: 任务型轮次里，模型写了 `FINAL:` 之后我们先**打回**几次（v1.29）。
 #:
@@ -682,8 +706,29 @@ async def _call_model(
     #   `_supports_param` 判断签名里有没有 `tools`，避免旧网关/假网关 TypeError。
     if tools and stream_fn is not None and _supports_param(stream_fn, "tools"):
         stream_kwargs["tools"] = tools
+    stream_iter = gateway.chat_stream(messages, **stream_kwargs).__aiter__()
     try:
-        async for delta in gateway.chat_stream(messages, **stream_kwargs):
+        # ★ v1.67：逐帧"空闲超时"。不再直接 `async for delta in ...`，而是手动
+        #   驱动迭代器、给每次 `__anext__` 套一个 `asyncio.wait_for(..., 空闲秒数)`。
+        #   这样"上游挂着连接却永远不吐正文"（只发 `: keepalive` 注释，被
+        #   `runner._iter_sse` 跳过）会在 `STREAM_IDLE_SECONDS` 后抛
+        #   `asyncio.TimeoutError`，走下面 `except` 的"没吐过字就退回非流式"；
+        #   而非流式也有 httpx 的 `DEFAULT_LLM_TIMEOUT=180` 兜底，最终会失败并被
+        #   `_run_guarded_active` 记成 `interrupted`、交给 resumer 接手 ——
+        #   绝不无限阻塞（对应 CyberStrikeAI 的 bounded agent waits）。
+        #   每个**正文**增量都会重新计时，所以真在吐字的慢模型不会误伤。
+        while True:
+            try:
+                delta = await asyncio.wait_for(
+                    stream_iter.__anext__(),
+                    timeout=STREAM_IDLE_SECONDS or None,
+                )
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                raise ChatEngineError(
+                    f"模型流 {STREAM_IDLE_SECONDS}s 无正文增量（上游卡死）"
+                ) from None
             # ★ v1.25：每个增量查一次"用户有没有按中断"。按停得**立刻**
             #   生效 —— 这是"中断并继续"与"插话"的根本区别（后者要等下一轮）。
             if session_id and interrupt_bus.should_break(session_id):
@@ -705,6 +750,15 @@ async def _call_model(
         return _with_native_actions(
             await _gateway_chat(gateway, messages, system=system, tools=tools)
         )
+    finally:
+        # ★ v1.67：无论正常结束、break 还是超时/异常，都必须关掉底层生成器，
+        #   否则 httpx 那条 SSE 连接会泄漏（超时场景尤其关键 —— 上游还挂着连接）。
+        aclose = getattr(stream_iter, "aclose", None)
+        if aclose is not None:
+            try:
+                await aclose()
+            except Exception:  # noqa: BLE001 - 关闭失败不该盖过真正的结果/异常
+                _log.debug("关闭模型流迭代器失败", exc_info=True)
 
     raw_text = "".join(collected)
     return _with_native_actions(

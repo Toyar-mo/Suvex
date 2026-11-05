@@ -276,6 +276,64 @@ def test_claim_refuses_a_turn_active_in_this_process(db_session: Session) -> Non
     assert turn_runs.claim(db_session, run, now=later) is True
 
 
+def test_hard_stale_reclaims_a_zombie_turn_active_in_this_process(
+    db_session: Session,
+) -> None:
+    """★ v1.67：卡死僵尸即便挂着 `_ACTIVE` 租约，心跳硬过期后也必须能被回收。
+
+    复现线上事故：一轮卡在模型流上（上游只发 keepalive），心跳冻了 49 分钟，
+    协程一直占着 `_ACTIVE`，旧的 `STALE_SECONDS=90` 安全网因 `is_active()` 恒
+    True 而永远跳过它 —— 自己把自己锁死。硬过期后必须放行。
+    """
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    # 心跳拨到"硬过期"之外（远大于 HARD_STALE_SECONDS）
+    run.heartbeat_at = now_utc() - timedelta(
+        seconds=turn_runs.HARD_STALE_SECONDS + 30
+    )
+    db_session.commit()
+    later = now_utc()
+
+    turn_runs.mark_active(run.id)
+    try:
+        # 硬过期 → 即便 active 也应被视为可接手
+        assert turn_runs.is_resumable(run, now=later) is True
+        assert any(
+            r.id == run.id for r in turn_runs.stale_runs(db_session, now=later)
+        )
+        assert turn_runs.claim(db_session, run, now=later) is True
+    finally:
+        turn_runs.unmark_active(run.id)
+
+
+def test_hard_stale_threshold_refuses_reclaim_just_below_it(
+    db_session: Session,
+) -> None:
+    """★ v1.67：心跳只超过 STALE 但没到 HARD 的活跃轮次**仍**不能抢。
+
+    守住"慢工具期间不误抢"这条老红线（v1.33.1）：硬过期阈值必须真比慢工具
+    长。让心跳落在 `STALE_SECONDS+1 .. HARD_STALE_SECONDS` 之间，活跃时仍拒绝。
+    """
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+    run.heartbeat_at = now_utc() - timedelta(seconds=turn_runs.STALE_SECONDS + 1)
+    db_session.commit()
+    later = now_utc()
+
+    turn_runs.mark_active(run.id)
+    try:
+        assert turn_runs.is_resumable(run, now=later) is False
+        assert all(
+            r.id != run.id
+            for r in turn_runs.stale_runs(db_session, now=later)
+        )
+        assert turn_runs.claim(db_session, run, now=later) is False
+    finally:
+        turn_runs.unmark_active(run.id)
+
+
 async def test_resume_one_marks_the_run_active_while_it_runs(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

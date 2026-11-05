@@ -42,6 +42,25 @@ from app.core.timeutil import now_utc
 #: 用户还能忍受"自动接着跑"的等待。
 STALE_SECONDS = 90
 
+#: ★ v1.67：**硬过期**阈值（秒）。心跳超过这么久没刷新，即便这一轮 id 还挂在
+#:   本进程的 `_ACTIVE` 里，也认定那只是一具僵尸、允许后台接手。
+#:
+#: ## 为什么需要它（线上卡死事故）
+#:
+#: 会话 `ctf` 与"加一个 MCP 工具连接"两个轮次 `status=running` 但心跳冻了
+#: 49~53 分钟 —— 它们卡在 `_call_model` 的模型流上（上游只发 keepalive 不吐
+#: 正文），卡死协程一直占着 `_ACTIVE` 租约。而 `STALE_SECONDS=90` 那条安全网
+#: 因为 `is_active()` 恒 True 而永远跳过它们 —— 自己把自己锁死了。
+#:
+#: `STALE_SECONDS`(90s) 的语义是"慢工具期间别抢"；本阈值(900s) 的语义是
+#: "根本没有合法单步会 15 分钟不心跳，那就不是慢、是死了"。一回合最长 =
+#: 一次模型调用 + 一次工具（`DEFAULT_SHELL_TIMEOUT=300`），远小于 900s。所以
+#: 超过 900s 必是僵尸，回收它不会造成"合法两轮并发"。
+#:
+#: 真正的止血在 engine 的 `STREAM_IDLE_SECONDS`（v1.67 同批）——本阈值是
+#: 纵深防御：即便某个 await 点没加超时，僵尸租约也会在 900s 后被回收。
+HARD_STALE_SECONDS = 900
+
 #: 一轮最多被自动接手几次。到上限就放弃并把状态改成 `failed`。
 #:
 #: 为什么必须有上限：某些失败是**确定性的**（例如提示词让模型每次都写出
@@ -76,6 +95,17 @@ def unmark_active(run_id: str) -> None:
 def is_active(run_id: str) -> bool:
     """这一轮是否正在本进程里跑。"""
     return run_id in _ACTIVE
+
+
+def _is_hard_stale(
+    run: ChatTurnRun, *, now: datetime, hard_seconds: int = HARD_STALE_SECONDS
+) -> bool:
+    """心跳是否久到"必是僵尸"——超过硬阈值就觉得它即便挂着 `_ACTIVE` 也可回收。
+
+    见 `HARD_STALE_SECONDS` 的长注释：这是给"卡在某个没有超时的 await 上、
+    永远不返回、却仍占着进程内租约"的僵尸轮次留的最后一扇门。
+    """
+    return run.heartbeat_at <= now - timedelta(seconds=hard_seconds)
 
 
 def list_runs(db: Session, *, session_id: str, limit: int = 20) -> list[ChatTurnRun]:
@@ -238,7 +268,10 @@ def is_resumable(
         return False
     if run.resume_attempts >= max_attempts:
         return False
-    if is_active(run.id):
+    # ★ v1.67：本进程在跑的一轮通常不能接手（慢工具期间心跳会显得过期）。
+    #   但若心跳已硬过期（僵尸卡死），仍然可接手 —— 否则它永远占着租约、
+    #   永远没人救。
+    if is_active(run.id) and not _is_hard_stale(run, now=now):
         return False
     return run.heartbeat_at <= now - timedelta(seconds=stale_seconds)
 
@@ -264,7 +297,13 @@ def stale_runs(
     )
     # ★ v1.33.1：先过滤再截断。SQL 的 LIMIT 放在过滤前，活跃轮次一多
     #   就会把真正过期的行挤出窗口。
-    return [run for run in db.scalars(stmt) if not is_active(run.id)][:limit]
+    # ★ v1.67：本进程活跃的轮次默认跳过（慢工具期间心跳会显得过期）；但心跳
+    #   硬过期（僵尸卡死 > HARD_STALE_SECONDS）时仍收进来 —— 见 `is_active` 注释。
+    return [
+        run
+        for run in db.scalars(stmt)
+        if (not is_active(run.id)) or _is_hard_stale(run, now=now)
+    ][:limit]
 
 
 def claim(
@@ -281,9 +320,10 @@ def claim(
     刚好活过来继续写了进度。抢不到就跳过，绝不要带着过期的状态去跑。
 
     同一进程内还额外看 `is_active()`：心跳是 90 秒粒度，慢工具期间会显得
-    过期，但那一轮其实还在跑。
+    过期，但那一轮其实还在跑。★ v1.67：例外是心跳硬过期（僵尸卡死）——
+    此时放行，否则僵尸会永远占着租约。
     """
-    if is_active(run.id):
+    if is_active(run.id) and not _is_hard_stale(run, now=now):
         return False
     result = db.execute(
         update(ChatTurnRun)
