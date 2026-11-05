@@ -351,6 +351,25 @@ export interface ChatState {
    * 展示靠轮询/刷新接回。
    */
   sendingSessionIds: string[]
+  /**
+   * ★ v1.68（对齐 CyberStrikeAI）：最近一次「中断 / 继续」操作的结果。
+   *
+   * ## 为什么需要它
+   *
+   * 用户原话「我按了中断继续，没有反馈」。根因不一而足：
+   *  - 那一轮其实已经结束了 → 后端返回 409 `NO_RUNNING_TURN`（"这个对话当前
+   *    没有在跑的回复，不需要中断"），而旧界面只把错误塞进全局 `error`，弹窗
+   *    原地不动、看不到任何变化 —— 用户以为"点了没反应"；
+   *  - `continue` 时服务端只是**投递一个信号**（下一个检查点才生效），点完这一
+   *    瞬间界面也没有明确回执。
+   *
+   * 所以把每次中断的结果单独记在这里，弹窗直接读它显示：成功→「已请求中断并
+   * 继续，正在等待模型响应…」；失败→如实显示服务端那句话（尤其是 409 "不需要
+   * 中断"这种最容易被误当成"没反馈"的情况）。
+   *
+   * `null` = 本次弹窗还没点过。弹窗重新打开时清空。
+   */
+  lastInterrupt: { mode: 'continue' | 'stop'; ok: boolean; message: string } | null
 }
 
 /** v1.61：轮询拿到的"服务端这一轮跑到哪了"。 */
@@ -381,6 +400,7 @@ const EMPTY: ChatState = {
   serverTurn: null,
   stopRequested: false,
   sendingSessionIds: [],
+  lastInterrupt: null,
 }
 
 let state: ChatState = EMPTY
@@ -432,6 +452,14 @@ export function useChat(): ChatState {
  */
 export function getChatSnapshot(): ChatState {
   return state
+}
+
+/**
+ * ★ v1.68：清掉上一次「中断/继续」的回执 —— 弹窗每次重新打开时调用，
+ * 免得用户看到上一次（不同会话 / 早已过时）的反馈。
+ */
+export function clearLastInterrupt(): void {
+  if (state.lastInterrupt !== null) patch({ lastInterrupt: null })
 }
 
 /**
@@ -1076,7 +1104,12 @@ export async function interruptTurn(
   note = '',
 ): Promise<boolean> {
   try {
-    await api.post(`/chat/sessions/${sessionId}/interrupt`, { mode, note })
+    // ★ v1.68：接住服务端回执里的 `message`（"已请求中断…" / 具体原因），
+    //   放进 `lastInterrupt` 让弹窗给用户一个明确的反馈，而不是"点了没反应"。
+    const body = await api.post<{ message?: string }>(
+      `/chat/sessions/${sessionId}/interrupt`,
+      { mode, note },
+    )
     /*
       ★ v1.61：点完中断，立刻做两件事，别等用户手动刷新网页。
       
@@ -1118,9 +1151,31 @@ export async function interruptTurn(
     }
     void refreshActiveMessages(sessionId)
     void pollTurnProgress(sessionId)
+    // ★ v1.68：给弹窗一个明确回执（用户在等"到底点没点上"）。
+    patch({
+      lastInterrupt: {
+        mode,
+        ok: true,
+        message:
+          body?.message ||
+          (mode === 'continue'
+            ? '已请求中断并继续，正在等待模型响应…'
+            : '已请求彻底停止。'),
+      },
+    })
     return true
   } catch (error) {
-    patch({ error: messageOf(error) })
+    const api_error = messageOf(error)
+    // ★ v1.68：失败也要有明确反馈 —— 尤其 409「这个对话当前没有在跑的回复」
+    //   是最常被误当成"点了没反应"的情形，把服务端原话显示到弹窗里。
+    patch({
+      error: api_error,
+      lastInterrupt: {
+        mode,
+        ok: false,
+        message: api_error.message || '中断请求失败，请稍后重试。',
+      },
+    })
     return false
   }
 }

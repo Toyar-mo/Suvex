@@ -87,6 +87,8 @@ vi.mock('@/data/chat', () => ({
   //   所以新增 store 函数一律在这里补。
   pollTurnProgress: vi.fn(async () => false),
   refreshActiveMessages: vi.fn(async () => {}),
+  // ★ v1.68：打开中断弹窗前清一次旧回执。工厂少导出 → 调用时炸，故必须列。
+  clearLastInterrupt: vi.fn(),
 }))
 
 // `vi.mock` 会被提升，所以这里拿到的已是替身。
@@ -179,6 +181,8 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     stopRequested: false,
     // ★ v1.65：本浏览器在跑的会话集合。同上，必须显式给。
     sendingSessionIds: [],
+    // ★ v1.68：最近一次中断/继续回执。默认无。
+    lastInterrupt: null,
     ...overrides,
   }
   // ★ v1.65 迁移：老夹具用 `sending:true + sendingSessionId:'x'` 表示"这个

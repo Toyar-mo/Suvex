@@ -54,6 +54,7 @@ import {
   pollTurnProgress,
   refreshActiveMessages,
   getChatSnapshot,
+  clearLastInterrupt,
   type ChatTurnRun,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
@@ -212,6 +213,8 @@ export function ChatPage() {
     stopRequested,
     // ★ v1.65：本浏览器在跑的会话集合 —— 按会话独立并发的唯一事实来源。
     sendingSessionIds,
+    // ★ v1.68：最近一次中断/继续操作的结果 —— 让弹窗有明确回执，不再"点了没反应"。
+    lastInterrupt,
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -646,9 +649,15 @@ export function ChatPage() {
     setInterrupting(true)
     try {
       const ok = await interruptTurn(active.id, mode, interruptNote.trim())
+      // ★ v1.68：不再"成功就静默关窗"（那正是用户说的"点了没反馈"）。
+      //   两种结果都在弹窗里显示明确回执（读 store 里的 `lastInterrupt`）；
+      //   成功时停留 1.4s 让用户看清"已请求…"，再自动关；失败则留在弹窗里
+      //   显示服务端原话（尤其 409「当前没有在跑的回复」），由用户手动关。
       if (ok) {
-        setInterruptOpen(false)
         setInterruptNote('')
+        window.setTimeout(() => {
+          setInterruptOpen(false)
+        }, 1400)
       }
     } finally {
       setInterrupting(false)
@@ -1691,7 +1700,11 @@ export function ChatPage() {
             */}
             {turnRunningHere && (
               <Button
-                onClick={() => setInterruptOpen(true)}
+                onClick={() => {
+                  // ★ v1.68：每次打开清掉上一次回执，避免看到过时/别的会话的反馈。
+                  clearLastInterrupt()
+                  setInterruptOpen(true)
+                }}
                 variant="ghost"
                 size="sm"
                 disabled={interrupting}
@@ -1842,6 +1855,26 @@ export function ChatPage() {
               className="w-full resize-y rounded-sm border border-line bg-surface px-2.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40"
             />
           </label>
+          {/* ★ v1.68：明确回执 —— 用户点完按钮就能看到"到底点没点上"，
+              而不是"点了没反应"。409「当前没有在跑的回复」等失败也原样显示。 */}
+          {interrupting && (
+            <p className="text-2xs text-ink-faint" data-interrupt-feedback="pending">
+              正在发送中断请求…
+            </p>
+          )}
+          {!interrupting && lastInterrupt && (
+            <p
+              className={
+                lastInterrupt.ok
+                  ? 'text-2xs text-accent'
+                  : 'text-2xs text-signal-risk'
+              }
+              data-interrupt-feedback={lastInterrupt.ok ? 'ok' : 'err'}
+              role="status"
+            >
+              {lastInterrupt.message}
+            </p>
+          )}
         </div>
       </Modal>
 

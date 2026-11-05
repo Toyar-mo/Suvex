@@ -11,6 +11,7 @@ import {
   pollTurnProgress,
   renameSession,
   clearStaleSending,
+  clearLastInterrupt,
   resetChatStore,
   resumeTurn,
   sendMessage,
@@ -1397,6 +1398,58 @@ describe('服务端轮次进度轮询（v1.61）', () => {
       推进…点中断停下」那条**又画回来**，让人误以为停止按钮没生效、
       手贱再点一次。`stopRequested` 就是给这个窗口期用的标记。
   */
+  it('interruptTurn(continue) 之后 lastInterrupt 记录成功回执（弹窗给"已请求…"）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+    const p0 = sendMessage('chat_1', '开始')
+
+    const p1 = interruptTurn('chat_1', 'continue')
+    pending[pending.length - 1].resolve({ message: '已请求中断：正在输出的内容会立刻停下，然后自动接着跑。' })
+    await p1
+    const fb = getChatSnapshot().lastInterrupt
+    expect(fb?.ok).toBe(true)
+    expect(fb?.mode).toBe('continue')
+    expect(fb?.message).toContain('已请求中断')
+
+    await tick()
+    while (pending.length > 0) {
+      pending.shift()!.resolveRaw(sseResponse([sseFrame(TURN_DONE, DONE_FRAME)]))
+    }
+    await p0.catch(() => {})
+  })
+
+  it('interruptTurn 遇到 409「没有在跑的回复」时 lastInterrupt 记录失败原话（不再静默）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p1 = interruptTurn('chat_1', 'continue')
+    // 后端 409：那一轮其实已经结束了（error 信封）。
+    pending[pending.length - 1].resolve(
+      { error: { code: 'NO_RUNNING_TURN', message: '这个对话当前没有在跑的回复，不需要中断。' } },
+      409,
+    )
+    const ok = await p1
+    expect(ok).toBe(false)
+    const fb = getChatSnapshot().lastInterrupt
+    expect(fb?.ok).toBe(false)
+    expect(fb?.message).toContain('没有在跑的回复')
+  })
+
+  it('clearLastInterrupt 清掉回执（弹窗重开不留旧反馈）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const p1 = interruptTurn('chat_1', 'stop')
+    pending[pending.length - 1].resolve({ ok: true })
+    await p1
+    expect(getChatSnapshot().lastInterrupt).not.toBeNull()
+    clearLastInterrupt()
+    expect(getChatSnapshot().lastInterrupt).toBeNull()
+  })
+
   it('interruptTurn(stop) 之后 stopRequested 置 true（承认"已请求停止"）', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
