@@ -72,6 +72,44 @@ class TestListFiles:
     def test_absent_workspace_lists_empty(self, ws_root: Path) -> None:
         assert chat_workspaces.list_files("chat_none") == []
 
+    def test_list_files_sanitizes_non_utf8_filenames(self, ws_root: Path) -> None:
+        """★ v1.68.3：文件名含非 UTF-8 字节时，list_files 必须返回**可 JSON
+        序列化**的字符串，不能抛 UnicodeEncodeError（否则整个「文件管理」页 500）。
+
+        实测（2026-11-05）：某个 CTF 产物文件名是 GBK 乱码字节，被
+        `surrogateescape` 映射成孤立代理项，写 JSON 时炸。这条在底层
+        `_safe_display` 上直接验证（不依赖在某个 OS 上能否造出这种文件名）。
+        """
+        import json
+
+        # 孤立代理项（surrogateescape 会把 b"\xff\xfe" 映射成这种）
+        raw = "x_" + b"\xff\xfe".decode("utf-8", "surrogateescape") + ".txt"
+        safe = chat_workspaces._safe_display(raw)
+        # 关键：能 utf-8 无损编码成 JSON（不抛 surrogates not allowed）
+        json.dumps({"path": safe, "name": safe})
+        # 且可读（坏字节变成替换符），不残留代理项
+        assert "\udcff" not in safe
+        assert "\ufffd" in safe  # 替换符 U+FFFD
+
+    @pytest.mark.skipif(
+        os.name == "nt",
+        reason="Windows 无法创建含非 UTF-8 字节的文件名，这条在 Linux 上跑",
+    )
+    def test_resolve_file_matches_sanitized_display_path(self, ws_root: Path) -> None:
+        """★ v1.68.3：前端把列表给出的**显示名**（带 `�`）带回来下载/删除时，
+        `resolve_file` 应能反查到真实文件，而不是 404。（Linux-only：需真实坏字节文件名。）
+        """
+        base = chat_workspaces.ensure_workspace("chat_res", create=True)
+        assert base is not None
+        bad_name = "y_" + os.fsdecode(b"\xff\xfe") + ".bin"
+        (base / bad_name).write_bytes(b"payload")
+
+        files = chat_workspaces.list_files("chat_res")
+        display_path = files[0].path  # 已 sanitize（含 �）
+        resolved = chat_workspaces.resolve_file("chat_res", display_path)
+        assert resolved is not None, "显示名必须能反查回真实文件"
+        assert resolved.read_bytes() == b"payload"
+
 
 class TestResolveFileSecurity:
     def test_accepts_plain_and_nested_file(self, ws_root: Path) -> None:

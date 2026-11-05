@@ -51,6 +51,26 @@ MAX_LISTED_FILES = 5000
 _ROOT_ENV = "SUPEX_CHAT_WORKSPACES"
 
 
+def _safe_display(value: str) -> str:
+    """把文件名/相对路径里**非 UTF-8 的字节**转成可安全 JSON 序列化的字符串。
+
+    ## 为什么需要
+
+    实测（2026-11-05 用户「文件管理」页 500）：某个会话产物文件名是 GBK/乱码
+    字节（CTF 题里解出来的 `附件\\enc.py` 之类），`os.scandir`/`Path.rglob`
+    用 `surrogateescape` 把不可解码的字节映射成**孤立代理项**（U+DC80–U+DCFF）
+    塞进 Python str。这个 str 写进 JSON 时 `encode('utf-8')` 会抛
+    `UnicodeEncodeError: surrogates not allowed` —— 整个文件列表接口 500，
+    一个坏文件名拖垮整页。
+
+    修法：`encode('utf-8', 'surrogateescape')` 把代理项还原成原始字节，再
+    `decode('utf-8', 'replace')` 得到带 `�` 的合法字符串。展示层拿到的是
+    "看起来对"的名字；下载走的是 `path` 原始字节（resolve 时不受影响，因为
+    文件系统层面仍是原字节）。
+    """
+    return value.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def root() -> Path:
     """工作区根目录。
 
@@ -123,8 +143,8 @@ def list_files(session_id: str) -> list[WorkspaceFile]:
             continue
         out.append(
             WorkspaceFile(
-                path=path.relative_to(directory).as_posix(),
-                name=path.name,
+                path=_safe_display(path.relative_to(directory).as_posix()),
+                name=_safe_display(path.name),
                 size_bytes=stat.st_size,
                 modified_at=stat.st_mtime,
             )
@@ -158,17 +178,31 @@ def resolve_file(session_id: str, relpath: str) -> Path | None:
     try:
         target = directory.joinpath(*parts).resolve()
     except OSError:
-        return None
-    if target != base and base not in target.parents:
-        return None
-    try:
-        if not target.is_file() or target.is_symlink():
-            return None
-        if target.stat().st_size > MAX_DOWNLOAD_BYTES:
-            return None
-    except OSError:
-        return None
-    return target
+        target = None
+    if target is not None and (target == base or base in target.parents):
+        try:
+            if target.is_file() and not target.is_symlink():
+                if target.stat().st_size > MAX_DOWNLOAD_BYTES:
+                    return None
+                return target
+        except OSError:
+            pass
+    # ★ 回退：文件名含非 UTF-8 字节时，列表接口把它显示成带 `�` 的名字
+    #   （见 `_safe_display`）；前端把那个显示名原样带回来下载/删除时，
+    #   直接 joinpath 对不上真实字节。这里按**显示名**在 `list_files`
+    #   结果里反查真实路径 —— 否则这类文件在界面上点下载/删除都会 404。
+    for item in list_files(session_id):
+        if item.path == raw:
+            real = directory.joinpath(*item.path.split("/"))
+            try:
+                real_r = real.resolve()
+                if (real_r == base or base in real_r.parents) and real_r.is_file():
+                    if real_r.stat().st_size > MAX_DOWNLOAD_BYTES:
+                        return None
+                    return real_r
+            except OSError:
+                return None
+    return None
 
 
 @dataclass(frozen=True)
