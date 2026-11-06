@@ -164,6 +164,42 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         params="remoteId（必填，题目 id）、flag（必填，答案，带不带外壳都行）",
     ),
     ChatToolSpec(
+        name="start_competition_race",
+        label="赛事自动托管（多模型赛跑）",
+        description=(
+            "把**整场比赛**交给自动托管：自动拉取当前比赛的全部题目、并发地用"
+            "多个模型对每道题赛跑（先解出者胜）、卡住自动换思路重试、跳过已解/未开放的题，"
+            "解出的 flag 自动提交。适合「这场比赛你帮我全跑了」。"
+            "它在后台跑（一场可能几十分钟），起完立即返回，进度用 `competition_race_status` 查、"
+            "要停用 `stop_competition_race`。"
+            "⚠️ 只处理**比赛平台**的题（与 `fetch_competition_challenges` 同一个平台），"
+            "不是本地题库。同一时刻只能有一场，已在跑会告诉你。"
+        ),
+        params=(
+            "models（可选，模型名列表，默认就用当前默认模型）、"
+            "maxConcurrent（可选，并发题数 1-8，默认 2）、"
+            "maxBudgetUsd（可选，总预算上限，留空不限）、"
+            "noSubmit（可选，true=只跑不提交，用于演练）、"
+            "maxBumps（可选，每题卡住重试次数 0-10，默认 3）"
+        ),
+        scope="scan",
+        consequential=True,
+    ),
+    ChatToolSpec(
+        name="competition_race_status",
+        label="查赛事托管进度",
+        description="查当前赛事托管的进度快照：在跑没有、第几轮、每题状态、解出哪些 flag、累计成本。",
+        params="（无）",
+    ),
+    ChatToolSpec(
+        name="stop_competition_race",
+        label="停止赛事托管",
+        description="请求停止当前赛事托管（当前正在跑的工具返回后这一轮就结束）。",
+        params="（无）",
+        scope="scan",
+        consequential=True,
+    ),
+    ChatToolSpec(
         name="list_skills",
         label="查看技能库",
         description="列出技能包（含内置/自定义来源、描述）。改之前先看一遍。",
@@ -409,6 +445,26 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
         },
         "required": ["remoteId", "flag"],
     },
+    "start_competition_race": {
+        "type": "object",
+        "properties": {
+            "models": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "赛跑用的模型名列表（可选，默认当前默认模型）",
+            },
+            "maxConcurrent": {
+                "type": "integer",
+                "description": "并发题数 1-8，默认 2",
+            },
+            "maxBudgetUsd": {"type": "number", "description": "总预算上限（美元，可选，留空不限）"},
+            "noSubmit": {"type": "boolean", "description": "true=只跑不提交（演练）"},
+            "maxBumps": {"type": "integer", "description": "每题卡住重试次数 0-10，默认 3"},
+        },
+        "required": [],
+    },
+    "competition_race_status": {"type": "object", "properties": {}, "required": []},
+    "stop_competition_race": {"type": "object", "properties": {}, "required": []},
     "list_skills": {
         "type": "object",
         "properties": {"category": {"type": "string", "description": "按分类过滤（可选）"}},
@@ -741,7 +797,14 @@ CHAT_PERSONAS_SPEC: tuple[ChatPersona, ...] = (
 判据：拿到 flag 才算解出。中途的任何"应该可以"都不是结论。
 
 ⚠️ 注意：只有 `web` / `pwn` / 网络类题的容器有网；
-`crypto` / `取证` / `逆向` 是 `--network none`，任何联网手法都不成立。""",
+`crypto` / `取证` / `逆向` 是 `--network none`，任何联网手法都不成立。
+
+**赛跑 / 整场托管**：用户说"帮我全跑了 / 整场比赛交给你 / 多模型一起跑"
+这类话时，用 `start_competition_race` 起**赛事自动托管**（多模型对每道题
+赛跑、卡住自动重试、跳过已解、自动交 flag），而不是自己一题一题地用
+`fetch_competition_challenges` + `run_shell` 手搓。起完用
+`competition_race_status` 汇报进度；用户要停就用 `stop_competition_race`。
+如果只想解**一道**题、或想自己一步步来，那就别开赛跑，正常解题即可。""",
     ),
     ChatPersona(
         id="aillm",

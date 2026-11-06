@@ -7,21 +7,15 @@ import asyncio
 import pytest
 
 from app.ctf_race import competition_racer as cr_mod
-from app.ctf_race import router as router_mod
+from app.ctf_race import manager as manager_mod
 
 
 @pytest.fixture(autouse=True)
 def _reset_race_state():
     """每个测试前后都清进程内单例，避免串味。"""
-    def _clear():
-        router_mod._state["racer"] = None
-        router_mod._state["task"] = None
-        router_mod._state["report"] = None
-        router_mod._state["error"] = None
-
-    _clear()
+    manager_mod.reset_for_test()
     yield
-    _clear()
+    manager_mod.reset_for_test()
 
 
 def test_status_requires_auth(client):

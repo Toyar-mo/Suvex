@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.chat import engine, service as chat_service
 from app.chat.prompts import render_native_tool_note
+from app.chat.prompts import build_tools_schema
 from app.kernel import runner
 from app.kernel.runner import LlmReply, parse_actions
 from tests.test_chat import ADMIN
@@ -930,7 +931,7 @@ async def test_run_turn_uses_native_prompt_and_passes_tools_when_gateway_support
     )
 
     assert seen.get("has_native_prompt") is True
-    assert seen.get("tools_len", 0) == 16
+    assert seen.get("tools_len", 0) == len(build_tools_schema())
 
 
 async def test_run_turn_keeps_text_protocol_for_legacy_gateway(

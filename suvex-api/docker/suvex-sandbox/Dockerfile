@@ -757,7 +757,15 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         #   `flatter`(LLL) 无 3.14 轮子且旧，fpylll+sympy 已覆盖；
         #   `stegseek` 是 C++ 二进制（非 pip），镜像已有 stegoveritas+zsteg；
         #   `pyghidra` 要装整套 Ghidra+JDK，radare2/angr 已覆盖 RE。
-        pytesseract fpylll
+        #
+        # ## cysignals —— fpylll 的**运行期**依赖（v1.71 修）
+        #   fpylll 的 cython 扩展 `fplll/integer_matrix` 在 import 时
+        #   `from cysignals.signals import ...`。缺它 → import fpylll 直接
+        #   `ModuleNotFoundError: No module named 'cysignals'`。这是 v0.88
+        #   加 fpylll 时漏掉的依赖 —— 因为镜像当时从没真正构建过，这个坑
+        #   一直没暴露（2026-11-07 首次真机构建才炸在 A 档自检）。cysignals
+        #   是纯 cython（有 py3.14 轮子），pip 直接装。
+        pytesseract fpylll cysignals
 
 # ── ★ 修掉 `httpx` 那个同名不同物的坑 ──────────────────────────
 #
@@ -1107,9 +1115,13 @@ RUN set -eux; \
     stegoveritas -h >/dev/null 2>&1 || true; \
     repak --help >/dev/null; \
     bkcrack 2>&1 | grep -qi 'known plaintext' || true; \
-    # ★ v0.88：pytesseract / fpylll 是库不是 CLI，用 python import 自检。
-    # fpylll 源码构建最易出错（缺头/缺 cython），这里必须真的 import + 跑一次 LLL 雏形。
-    python -c "import pytesseract, fpylll; from fpylll import IntegerMatrix, LLL; A=IntegerMatrix(3,3); A[0]=[1,0,0]; A[1]=[0,1,0]; A[2]=[0,0,1]; LLL.reduction(A); print('fpylll LLL ok')" \
+    # ★ v0.88/v1.71：pytesseract / fpylll 是库不是 CLI，用 python import 自检。
+    # fpylll 源码构建最易出错（缺头/缺 cython），这里必须真的 import + 跑一次 LLL。
+    # ⚠️ 只构造零矩阵直接 reduce —— 不逐元素赋值：`A[i]=[列表]` 会抛
+    #   NotImplementedError（真实踩过）；`A[i,j]=v` 在 `-c` 一行里写不进推导式。
+    #   零矩阵本就是既约的，`LLL.reduction` 能跑通即可证明 fpylll + cysignals
+    #   的 cython 扩展在运行期真的可用（这才是自检要测的东西）。
+    python -c "import pytesseract, fpylll; from fpylll import IntegerMatrix, LLL; A=IntegerMatrix(3,3); LLL.reduction(A); print('fpylll LLL ok')" \
       || { echo "FATAL: pytesseract/fpylll import 或 LLL 自检失败" >&2; exit 1; }; \
     echo "A 档自检通过"
 

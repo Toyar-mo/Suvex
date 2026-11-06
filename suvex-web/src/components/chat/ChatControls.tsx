@@ -634,14 +634,19 @@ export function ApprovalToggle({
 // ══════════════════════════════════════════════════════════════
 
 /**
- * 一条等待确认的工具调用。
+ * 少数工具光看名字/参数看不出「即将发生什么」的，给一句人话说明（v1.71）。
  *
- * ## 为什么要显示参数全文（而不是只显示工具名）
- *
- * 用户要判断的是"这条命令该不该跑"。只说"它想调 `run_shell`" 等于
- * 什么都没说 —— `run_shell` 可以跑 `ls` 也可以跑 `rm -rf`。
- * 参数是判断的唯一依据，所以 `toolArgs` 要原样铺开。
+ * 判据：**会不会花钱 / 会不会对赛事产生不可逆影响**。`start_competition_race`
+ * 一旦放行会自动拉整场的题、多模型赛跑并**自动交 flag**（每题有提交次数上限），
+ * 只看到 `{"models":[...],"maxConcurrent":2}` 用户没法判断该不该点「执行」。
+ * 这里补一句直白的说明；没登记的工具照旧只显示名字 + 参数。
  */
+const APPROVAL_TOOL_HINTS: Record<string, string> = {
+  start_competition_race:
+    '赛事自动托管：自动拉取整场比赛的题，用多个模型对每道题赛跑解题，先解出的模型胜出，并会把 flag 自动提交（每题有提交次数上限）。会消耗较多算力/费用。',
+  stop_competition_race: '停止正在进行的赛事自动托管（正在跑的那道题会在工具返回后结束）。',
+}
+
 export function ApprovalCard({
   message,
   onDecide,
@@ -652,6 +657,7 @@ export function ApprovalCard({
   disabled?: boolean
 }) {
   const args = message.toolArgs
+  const hint = message.toolName ? APPROVAL_TOOL_HINTS[message.toolName] : undefined
   return (
     <div className="flex flex-col gap-1.5 rounded-sm border border-accent/40 bg-accent/5 px-2.5 py-2">
       <div className="flex items-center gap-1.5">
@@ -662,6 +668,7 @@ export function ApprovalCard({
         <span className="text-ink-faint">工具：</span>
         <code className="font-mono text-ink">{message.toolName ?? '（未知）'}</code>
       </div>
+      {hint && <p className="text-2xs leading-relaxed text-ink-muted">{hint}</p>}
       {args && Object.keys(args).length > 0 && (
         <pre
           className={cn(

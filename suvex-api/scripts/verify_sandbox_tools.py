@@ -302,6 +302,9 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     #   登记为空元组，避免走默认「包名==命令名」被误判缺失。
     "pytesseract": (),
     "fpylll": (),
+    #   · cysignals  —— fpylll 的运行期依赖（v1.71 补：fpylll 的 cython 扩展
+    #     import 时 `from cysignals.signals import ...`，缺了会 ModuleNotFoundError）
+    "cysignals": (),
     # pip 自身与其构建链，出现在 `--upgrade` 那一行
     "pip": (),
     "setuptools": (),

@@ -1616,6 +1616,136 @@ async def _tool_submit_flag(ctx: _ToolContext, args: dict[str, Any]) -> str:
     )
 
 
+# ══════════════════════════════════════════════════════════
+# v1.71：赛事自动托管（多模型赛跑）—— 对话里下指令就能起整场
+# ══════════════════════════════════════════════════════════
+#
+# 这三个工具复用 `app/ctf_race/manager.py` 的**进程内单例** —— 与 CTF 页
+# 的 `/ctf-race/*` 面板是**同一场**。所以对话里起的那场，打开 CTF 页能
+# 看到同样的进度；反过来面板上起的，对话里 `competition_race_status`
+# 也查得到。同一时刻只允许一场（多场=多倍容器+多倍额度，且面板只显示一场）。
+#
+# ⚠️ 起赛跑是**真活**（连平台、起容器、烧模型额度）：`start` 是
+#   consequential（走审批闸，见 CONSEQUENTIAL_TOOL_NAMES）。`status` 只读。
+
+
+def _race_snapshot_brief(snap: dict) -> str:
+    """把 manager 的完整快照压成一段给人看的中文摘要（工具回执）。"""
+    if not snap.get("running"):
+        report = snap.get("report")
+        if report:
+            return _race_report_brief(report)
+        return "当前没有在跑的赛事托管。"
+    lines = ["赛事托管进行中："]
+    challenges = snap.get("challenges") or {}
+    # coordinator.snapshot() 形状：{remote_id: {stage, winner_model, ...}} 或 {rounds,...}
+    rounds = challenges.get("rounds") if isinstance(challenges, dict) else None
+    if rounds is not None:
+        lines.append(f"- 第 {rounds} 轮")
+    per = challenges.get("challenges") if isinstance(challenges, dict) else None
+    if isinstance(per, dict):
+        solved = sum(1 for c in per.values() if (c or {}).get("stage") == "solved")
+        total = len(per)
+        lines.append(f"- 已解 {solved}/{total}")
+        for rid, c in per.items():
+            c = c or {}
+            stage = c.get("stage", "?")
+            title = c.get("title") or rid
+            line = f"  · {title}（{stage}）"
+            if c.get("flag"):
+                line += f" flag={c['flag']}"
+            if c.get("last_error"):
+                line += f" 备注：{c['last_error']}"
+            lines.append(line)
+    cost = snap.get("cost") or {}
+    if isinstance(cost, dict) and cost.get("totalCostUsd") is not None:
+        lines.append(f"- 累计成本 ${cost.get('totalCostUsd'):.4f}")
+    return "\n".join(lines)
+
+
+def _race_report_brief(report: dict) -> str:
+    lines = [
+        "赛事托管已结束：",
+        f"- 共 {report.get('total', 0)} 道，解出 {report.get('solved', 0)}，"
+        f"失败 {report.get('failed', 0)}，跳过 {report.get('skipped', 0)}",
+    ]
+    if report.get("stopped_reason"):
+        lines.append(f"- 结束原因：{report['stopped_reason']}")
+    by = report.get("by_challenge") or {}
+    for rid, c in by.items():
+        c = c or {}
+        if c.get("flag"):
+            lines.append(f"  · {c.get('title') or rid}：已解出 flag={c['flag']}")
+    return "\n".join(lines)
+
+
+async def _tool_start_competition_race(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    from app.ctf_race import manager as race_manager
+
+    _need_scope(ctx, "start_competition_race")
+
+    models_arg = args.get("models")
+    if isinstance(models_arg, str):
+        models_list = [m.strip() for m in models_arg.split(",") if m.strip()]
+    elif isinstance(models_arg, (list, tuple)):
+        models_list = [str(m).strip() for m in models_arg if str(m).strip()]
+    else:
+        models_list = []
+
+    max_concurrent = _int_arg(args, "maxConcurrent", default=2, low=1, high=8)
+    max_bumps = _int_arg(args, "maxBumps", default=3, low=0, high=10)
+    no_submit = bool(args.get("noSubmit") or args.get("no_submit") or False)
+    raw_budget = args.get("maxBudgetUsd", args.get("max_budget_usd"))
+    max_budget: float | None = None
+    if raw_budget not in (None, ""):
+        try:
+            max_budget = float(raw_budget)
+            if max_budget < 0:
+                max_budget = None
+        except (TypeError, ValueError):
+            max_budget = None
+
+    try:
+        snap = await race_manager.start(
+            models=tuple(models_list),
+            max_concurrent=max_concurrent,
+            max_budget_usd=max_budget,
+            no_submit=no_submit,
+            max_bumps=max_bumps,
+        )
+    except race_manager.RaceAlreadyRunning:
+        return "已经有一场赛事托管在跑，先停掉再来（用 `stop_competition_race`），或者用 `competition_race_status` 看进度。"
+    except LookupError:
+        return _err(
+            "当前账号没有指向比赛平台，起不了赛事托管。"
+            "请先在「设置 → 解题 / 比赛平台」里绑定比赛平台的 AccessKey。"
+        )
+    except Exception as exc:  # noqa: BLE001
+        from app.chat import competition as competition_mod
+
+        return _err(competition_mod.friendly_driver_error(exc, "启动赛事托管"))
+
+    return (
+        "已启动赛事自动托管（多模型赛跑，整场）。它在后台跑，可能几十分钟。\n"
+        "用 `competition_race_status` 查进度，`stop_competition_race` 停。\n\n"
+        + _race_snapshot_brief(snap)
+    )
+
+
+async def _tool_competition_race_status(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    from app.ctf_race import manager as race_manager
+
+    return _race_snapshot_brief(race_manager.snapshot())
+
+
+async def _tool_stop_competition_race(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    from app.ctf_race import manager as race_manager
+
+    _need_scope(ctx, "stop_competition_race")
+    snap = race_manager.stop("对话里手动停止")
+    return "已请求停止赛事托管（当前正在跑的工具返回后这一轮就结束）。\n\n" + _race_snapshot_brief(snap)
+
+
 async def _tool_list_skills(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skills as skills_mod
 
@@ -1881,6 +2011,11 @@ _TOOL_IMPLS: dict[str, Any] = {
     #   不是本平台 KernelChallenge 题库。见 `app/chat/competition.py`。
     "fetch_competition_challenges": _tool_fetch_competition_challenges,
     "submit_flag": _tool_submit_flag,
+    # ★ v1.71：赛事自动托管（多模型赛跑，整场）—— 对话里下指令起赛跑。
+    #   与 CTF 页 `/ctf-race/*` 面板共用 `app/ctf_race/manager.py` 的同一场单例。
+    "start_competition_race": _tool_start_competition_race,
+    "competition_race_status": _tool_competition_race_status,
+    "stop_competition_race": _tool_stop_competition_race,
     "list_skills": _tool_list_skills,
     "read_skill": _tool_read_skill,
     "save_skill": _tool_save_skill,

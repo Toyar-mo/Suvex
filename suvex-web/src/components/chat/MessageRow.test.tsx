@@ -136,4 +136,40 @@ describe('MessageRow — 待审批优先于角色', () => {
     fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
     expect(onDecide).toHaveBeenCalledWith(false)
   })
+
+  it('★ v1.71：start_competition_race 审批卡带「会自动交 flag / 有费用」的人话说明', () => {
+    render(
+      <MessageRow
+        message={msg({
+          id: 'p2',
+          role: 'tool',
+          approvalStatus: 'pending',
+          toolName: 'start_competition_race',
+          toolArgs: { models: ['deepseek-v4.1-flash'], maxConcurrent: 2 },
+          content: '等待确认',
+        })}
+        onDecide={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('要执行一个操作，等你确认')).not.toBeNull()
+    expect(screen.getByText(/自动提交/)).not.toBeNull()
+    expect(screen.getByText(/费用/)).not.toBeNull()
+  })
+
+  it('未登记说明的工具（如 create_scan）不显示多余的人话说明', () => {
+    render(
+      <MessageRow
+        message={msg({
+          id: 'p3',
+          role: 'tool',
+          approvalStatus: 'pending',
+          toolName: 'create_scan',
+          toolArgs: { target: 'example.com' },
+          content: '等待确认',
+        })}
+        onDecide={vi.fn()}
+      />,
+    )
+    expect(screen.queryByText(/自动提交/)).toBeNull()
+  })
 })
