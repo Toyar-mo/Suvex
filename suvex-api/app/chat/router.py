@@ -462,9 +462,6 @@ def send_message_stream(
                 "这个会话已归档，不能再发消息。新建一个会话继续。",
                 {"sessionId": "已归档"},
             )
-        content = payload.content.strip()
-        if not content:
-            raise ApiError.validation("消息不能为空。", {"content": "必填"})
 
         # ★ v1.49：这个会话**已经有一轮在跑**时，不许再起一轮。
         #
@@ -483,13 +480,38 @@ def send_message_stream(
         # 读同一份历史、各自追加消息，seq 会交错）。要插话用 `/interject`
         # （排队到下一轮开头），要停/改方向用 `/interrupt`，要接手死掉的轮次
         # 用 `/turns/{run_id}/resume` —— 这三条路都能选，唯独不该悄悄再开一轮。
+        #
+        # ★ v1.68.4：并发检查放在**内容校验之前** —— 它判的是会话状态、与这条
+        #   消息内容无关；且死轮收尾（give_up）也在这里发生，不该因为用户一次
+        #   空输入就跳过。
         latest = turn_runs.list_runs(db, session_id=session_id, limit=1)
         if latest and latest[0].status in turn_runs.OPEN_STATUSES:
-            raise ApiError.conflict(
-                "TURN_ALREADY_RUNNING",
-                "这个对话还有一轮正在跑。想补一句话用「插话」，想让它停下或改方向用"
-                "「中断」，想接手已经断掉的那一轮点「继续」——它们都会接在同一轮上。",
-            )
+            now = now_utc()
+            # 只有**真在跑**（running 且未僵尸）才挡；`interrupted` 一律不挡 ——
+            # 它没在跑，只是"没答完等接手"。用户发消息时：
+            #   * 若这条 interrupted 已死（resume 额度用尽，resumer 永不再接手），
+            #     先把它判 failed 收尾，再放行新消息（否则会话被死轮永久卡住，
+            #     用户既发不出去、又没有 resume 按钮可用 —— 2026-11-05 实锤）。
+            #   * 若还可接手，也放行：新消息自会另起一轮（旧的由 resumer 或
+            #     stale 回收处理），不再用一条 409 把用户按在原地。
+            if turn_runs.is_blocking_new_turn(latest[0], now=now):
+                raise ApiError.conflict(
+                    "TURN_ALREADY_RUNNING",
+                    "这个对话还有一轮正在跑。想补一句话用「插话」，想让它停下或改方向用"
+                    "「中断」，想接手已经断掉的那一轮点「继续」——它们都会接在同一轮上。",
+                )
+            if turn_runs.is_abandoned_open(latest[0], now=now):
+                turn_runs.give_up(
+                    db,
+                    latest[0],
+                    reason="上一轮已中断且自动接手次数用尽，放行新消息",
+                )
+                db.commit()
+
+        content = payload.content.strip()
+        if not content:
+            raise ApiError.validation("消息不能为空。", {"content": "必填"})
+
     finally:
         # 校验完就关：这个会话的作用到此为止。**不要**把它交给生成器。
         db.close()

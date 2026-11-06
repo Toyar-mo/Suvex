@@ -276,6 +276,52 @@ def is_resumable(
     return run.heartbeat_at <= now - timedelta(seconds=stale_seconds)
 
 
+def is_blocking_new_turn(
+    run: ChatTurnRun,
+    *,
+    now: datetime,
+    stale_seconds: int = STALE_SECONDS,
+    hard_seconds: int = HARD_STALE_SECONDS,
+    max_attempts: int = MAX_RESUME_ATTEMPTS,
+) -> bool:
+    """「发新消息」时，这条最近的开着的轮次是否该把会话**堵住**（TURN_ALREADY_RUNNING）。
+
+    ## 为什么需要这个判据（v1.68.4）
+
+    实测（2026-11-05 用户截图）：一条 CTF 轮跑到墙钟 60 分钟上限停下 → 落
+    `interrupted`；后台 resumer 接手 3 次仍失败（每次都撞上限）→ 停在
+    `interrupted` 但 `resume_attempts` 已达上限。此后用户发「继续」，被
+    `TURN_ALREADY_RUNNING` **永远**挡住：它既不在跑、又接不了手（resume 按钮
+    也没有），可它就是 `interrupted`（在 OPEN_STATUSES 里）→ 会话彻底卡死，
+    用户既不能发消息也不能继续。
+
+    正确语义：只有**真正在跑**（running 且未僵尸）的一轮才该挡住新消息。
+      * `running` 且未硬过期 → 挡住（真在跑，别并发写）。
+      * `running` 但已硬过期（僵尸）→ 不挡（让新消息推进，旧僵尸由 resumer/claim 回收）。
+      * `interrupted` → **一律不挡**：它本来就没在跑，只是"没答完、等着接手"。
+        用户发消息时由调用方决定是把它判死（resume 额度已尽）还是别的处理。
+    """
+    if run.status != "running":
+        return False
+    return not _is_hard_stale(run, now=now, hard_seconds=hard_seconds)
+
+
+def is_abandoned_open(
+    run: ChatTurnRun,
+    *,
+    now: datetime,
+    max_attempts: int = MAX_RESUME_ATTEMPTS,
+) -> bool:
+    """一条仍开着的轮次是否已「死了」：`interrupted` 且重试额度用尽。
+
+    这种轮次永远不会再被 resumer 接手（`stale_runs` 按 `resume_attempts < max`
+    过滤），却又卡在 OPEN_STATUSES 里，会一直占着「还有一轮在跑」的位置。调用方
+    应当把它判成 `failed`（见 `give_up`）后放行新消息。
+    """
+    return run.status == "interrupted" and run.resume_attempts >= max_attempts
+
+
+
 def stale_runs(
     db: Session,
     *,

@@ -340,3 +340,51 @@ def test_sending_a_message_is_allowed_after_the_running_turn_finishes(
     )
     assert response.status_code == 400, response.text
     assert response.json()["error"]["code"] != "TURN_ALREADY_RUNNING"
+
+
+def test_abandoned_interrupted_turn_does_not_block_a_new_message(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ v1.68.4：一条已死（interrupted + resume 额度用尽）的轮次不能永久堵住
+    会话。用户发消息应被放行，且那条死轮被收尾成 `failed`。
+
+    复现 2026-11-05 用户事故：CTF 轮撞墙钟 60 分钟 → interrupted，后台接手 3 次
+    仍失败 → 停在 interrupted 但 resume_attempts=3（=上限）。此后发「继续」被
+    TURN_ALREADY_RUNNING 永远挡住，既发不出去、又没有 resume 按钮。
+    """
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    run.status = "interrupted"
+    run.resume_attempts = turn_runs.MAX_RESUME_ATTEMPTS  # 额度用尽 = 死了
+    run.heartbeat_at = now_utc() - timedelta(seconds=turn_runs.STALE_SECONDS + 30)
+    db_session.commit()
+
+    # 用空内容区分：越过 409 闸后会被 400(空内容) 挡下 —— 400 即证明没被 TURN_ALREADY_RUNNING 拦。
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/messages/stream",
+        json={"content": "   "},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] != "TURN_ALREADY_RUNNING"
+
+    # 死轮应被收尾成 failed（放行新消息时顺手判死），不再占着 open。
+    db_session.expire_all()
+    rows = turn_runs.list_runs(db_session, session_id=session_id, limit=10)
+    assert rows[0].status == "failed", f"死轮应判 failed，实际 {rows[0].status}"
+
+
+def test_genuinely_running_turn_still_blocks_a_new_message(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ v1.68.4：真在跑（running、心跳新鲜）的一轮仍要 409 —— 别把并发保护一起删了。"""
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    run.heartbeat_at = now_utc()  # 新鲜心跳，非僵尸
+    db_session.commit()
+
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/messages/stream",
+        json={"content": "再来一次"},
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "TURN_ALREADY_RUNNING"
