@@ -82,6 +82,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget git jq file xxd less vim-tiny \
     python3 python3-venv python3-pip python3-dev \
     build-essential pkg-config libssl-dev libffi-dev \
+    # ── ★ v0.88：格密码（LLL/BKZ）源码构建 fpylll 的前置 ──
+    #   fpylll 在 pypi 上没有 py3.14 轮子（实测，torch 同样没有 → 见下方
+    #   pip 段说明为什么没装 torch），只能源码构建，而它需要 libfplll 的
+    #   C 头 + Cython 生成的 .cpp。这两个 apt 包 Kali rolling 都有（实测
+    #   libfplll-dev 5.5.0 / cython3 3.1.6）。装在 base 段，re/ir 继承即可。
+    libfplll-dev cython3 \
     # ⚠️ `grep` / `sed` / `mawk`（提供 `awk`）**必须显式写出来**，理由和
     #    下面 `binutils` 那段一样：它们经由 build-essential 的依赖链其实
     #    早就装上了，实测 `suvex-sandbox:latest` 里 `/usr/bin/grep` 等都在。
@@ -728,7 +734,30 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         # ## 其余两个是同一类"最后一公里"的补充
         # · `oletools`：OLE 宏/结构分析（`olevba`、`oledump`），misc 题常用
         # · `pyzipper`：能处理 AES 加密的 zip（标准库 `zipfile` 不支持）
-        msoffcrypto-tool olefile oletools pyzipper
+        msoffcrypto-tool olefile oletools pyzipper \
+        # ── ★ v0.88：对照 verialabs/ctf-agent 的沙箱清单补的缺口 ──
+        #
+        # ## pytesseract —— 纯 Python 轮子（py3-none-any），安全
+        #   OCR：验证码、图片里的文字、截图里的 flag。二进制 `tesseract`
+        #   早就装过（本镜像有 tesseract-ocr/chi-sim/eng），只差这个胶水
+        #   库。ctf-agent 也装了它。
+        #
+        # ## fpylll —— **源码构建**（pypi 无 py3.14 轮子）
+        #   格密码（LLL/BKZ/CVP）的主力库：Coppersmith、格基约减、
+        #   背包/子集和、部分 hidden number 题都靠它。这是本镜像相对
+        #   ctf-agent 最实的一块缺口 —— 之前 crypto 只能靠 sympy 手搓
+        #   LLL，慢且易错。前置 libfplll-dev + cython3 已在 base apt 段装好。
+        #
+        #  ⚠️ 与 torch/keras 的取舍说明（为什么**没**装）：
+        #   镜像 python 是 3.14，而 torch 截至 2026-11 **没有任何 cp314 轮子**
+        #   （实测 pypi：cp313/cp314 全空）。硬装必然源码构建巨型 C++，
+        #   大概率把这一层构建打爆 —— 正是本项目踩过的 ropper/filebytes 同类坑。
+        #   ML 题可用已装的 numpy/scipy 兜底（若确需 torch 再单独开一个
+        #   py3.12 的 sidecar venv，别塞进主 venv 赌构建）。
+        #   `flatter`(LLL) 无 3.14 轮子且旧，fpylll+sympy 已覆盖；
+        #   `stegseek` 是 C++ 二进制（非 pip），镜像已有 stegoveritas+zsteg；
+        #   `pyghidra` 要装整套 Ghidra+JDK，radare2/angr 已覆盖 RE。
+        pytesseract fpylll
 
 # ── ★ 修掉 `httpx` 那个同名不同物的坑 ──────────────────────────
 #
@@ -1078,6 +1107,10 @@ RUN set -eux; \
     stegoveritas -h >/dev/null 2>&1 || true; \
     repak --help >/dev/null; \
     bkcrack 2>&1 | grep -qi 'known plaintext' || true; \
+    # ★ v0.88：pytesseract / fpylll 是库不是 CLI，用 python import 自检。
+    # fpylll 源码构建最易出错（缺头/缺 cython），这里必须真的 import + 跑一次 LLL 雏形。
+    python -c "import pytesseract, fpylll; from fpylll import IntegerMatrix, LLL; A=IntegerMatrix(3,3); A[0]=[1,0,0]; A[1]=[0,1,0]; A[2]=[0,0,1]; LLL.reduction(A); print('fpylll LLL ok')" \
+      || { echo "FATAL: pytesseract/fpylll import 或 LLL 自检失败" >&2; exit 1; }; \
     echo "A 档自检通过"
 
 # ═══════════════════════════════════════════════════════════════════════

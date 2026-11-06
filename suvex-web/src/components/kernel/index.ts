@@ -30,3 +30,4 @@ export { default as WriteupDialog } from './WriteupDialog'
  * 只有取数端点与两句文案不同 —— 见文件头那张对比表。
  */
 export { default as WorkOrderDialog } from './WorkOrderDialog'
+export { default as RacePanel } from './RacePanel'

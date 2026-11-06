@@ -1,5 +1,5 @@
 import { PageHeader } from '@/components/layout/AppShell'
-import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/kernel'
+import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, RacePanel, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/kernel'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button, IconButton } from '@/components/ui/Button'
@@ -535,6 +535,11 @@ export function KernelPage() {
       <PageHeader navId="kernel" />
 
       <div className="px-gutter py-bay">
+        {/* ── 赛事托管（整场自动跑：多模型赛跑） ── */}
+        <div className="mb-panel">
+          <RacePanel />
+        </div>
+
         {/* ── 账号状态条 ── */}
         {account && (
           <div className="mb-panel flex flex-wrap items-center gap-x-tight gap-y-1 rounded-sm border border-line bg-surface-sunken p-2.5">
