@@ -75,3 +75,22 @@ def test_windows_only_tool_fallback_guidance_present() -> None:
     assert "别一句\"环境不支持\"就放弃" in p or "别" in p  # 软断言
     # 必须给可执行路径，而不是"放弃"：至少提到自写解析器 / binwalk
     assert ("自己写解析器" in p) or ("写解析器" in p), "缺少『自己写解析器』这条替代路径"
+
+
+def test_userspace_emulation_guidance_present() -> None:
+    """提示词必须教「需要动态分析 ≠ 必须起模拟器」——给 userspace 模拟的替代路。
+
+    线上真事（2026-11-06，CTF 会话 chat_01M6P1TAYTASS6P64P85PED8MB）：Android
+    原生 `.so` 逆向，模型把「动态分析」窄化成「起 Android 模拟器」，发现没有
+    `/dev/kvm` 就反复换算法穷尽、烧了 12 小时。正确认知是：userspace 指令级模拟
+    （unicorn / qemu-user / unidbg）不需要 KVM，沙箱里就能跑。这条守门员钉住
+    这段指引，防止它被删后模型又回到「没 KVM = 做不了动态分析」。
+    """
+    p = _prompt()
+    assert "userspace" in p.lower() or "用户态" in p, "缺少 userspace 模拟的指引"
+    assert "unicorn" in p.lower(), "缺少 unicorn（userspace CPU 模拟）指引"
+    assert "unidbg" in p.lower() or "qemu-aarch64" in p.lower() or "qemu-user" in p.lower(), (
+        "缺少 unidbg / qemu-user 的指引"
+    )
+    # 必须点破核心误区：没有 KVM 不等于做不了动态分析
+    assert "KVM" in p, "缺少对 KVM（硬件虚拟化）缺失的澄清"

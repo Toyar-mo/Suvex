@@ -1340,6 +1340,39 @@ X，我尝试了 A/B/C 都不行，建议……"。**给的是可执行的替代
 —— 正确做法是 `binwalk` 拆包 → 认出配置段格式 → 用 Python 按该格式解密，
 这段配置的算法公开且简单。**"跑不了那个 GUI"从来不是终点。**
 
+### 需要「动态分析」不等于「必须起 Android 模拟器」——userspace 模拟不走 KVM
+
+分析 Android 原生 `.so`（尤其加壳/加密/运行时才算密钥的题）时，常见错误是：
+一听说「要动态分析」，就想「起一个 Android 模拟器跑起来」——然后发现沙箱/本机
+没有 `/dev/kvm`（没有硬件虚拟化），于是断定「动态分析做不了，我放弃」。
+**这是把唯一一条路当成全部。** 动态分析有两条路：
+
+1. **整机模拟**（Android 模拟器 / 真机）：需要 `/dev/kvm` 或真机。环境缺 KVM 时这条走不通。
+2. **userspace 指令级模拟**（**不需要 KVM，沙箱里通常就能跑**）——把 `.so` 里的
+   **目标函数**单独放进 CPU 模拟器执行，只求算出一个值（密钥/明文/判定结果），
+   不需要整个系统起来：
+   - **unicorn**（`pip install unicorn`，本沙箱通常已自带，`python3 -c "import unicorn"` 先确认）——最灵活：
+     自己用 `Uc(UC_ARCH_ARM64, UC_MODE_ARM)` `mem_map` 映射 `.so` 的代码段，`emu_start(函数地址)`
+     执行，hook 读寄存器拿返回值。配 `capstone`（也常自带）反汇编定位函数。能做「只跑解密函数、
+     喂密文、读明文」。已验证：用 unicorn 直接 `mem_map` arm64 `.so` 的 PT_LOAD 可执行段并
+     `emu_start` 执行真实函数是可行的（`bti c`/`adrp`/`b` 这些指令都能正常解码执行）。
+   - **qemu-user**（`qemu-aarch64`，`qemu-aarch64-static` 更常见）——直接 `qemu-aarch64 ./arm64_binary`，
+     或 `qemu-aarch64 -L <sysroot> 程序`；能跑单个 ELF，不需要模拟整个 Android。
+   - **unidbg**（Java，专门做 Android `.so` 的 JNI 级模拟；`apt install default-jdk` 后
+     从 GitHub 拉 unidbg，`emulatorForJni`/`emulateFunction` 直接调 `.so` 里的函数）——
+     Android 原生破解的首选，缺 KVM 也能用。
+
+**做之前先确认一件事**：这个「加密/解密」到底发生在**哪个函数**、`p.bin` 这类数据到底
+**有没有被程序读**。别假设「一定有解密函数」：先 `strings -n 6 lib.so | grep -iE '<文件名>|Data/|Decrypt|AES'`
+确认二进制里真的引用了目标数据；如果 `strings` 里 `p.bin`/`Data/` 全 0 命中，说明**这个
+文件根本没被程序读取**（可能是纯拼图/图形题、或数据在别处），那就不存在「解密函数」可
+模拟——此时应转去分析**判题/校验逻辑**（hook 或模拟 `Submit*`/`IsComplete` 这类函数看它
+怎么判对错），而不是硬啃一个不存在的解密。
+
+**只有当**：目标函数确实存在、且 unicorn/qemu-user/unidbg 三条**都试过确实跑不通**
+（函数依赖未实现的 JNI/系统调用且无法 stub、或需要真实 GPU/输入）时，才说「这一步在
+无 KVM 环境需要 X，我试了 A/B/C」。**「没有 KVM」不是「做不了动态分析」。**
+
 ### 先找现成工具，别自己搓暴力扫描（这条能省你几分钟到几十分钟）
 
 分析二进制/大文件时，**先想"有没有现成工具能干这件事"，不要一上来写 Python
