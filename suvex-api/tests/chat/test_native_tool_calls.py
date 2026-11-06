@@ -1257,3 +1257,123 @@ async def test_run_turn_stops_gracefully_when_wall_budget_exceeded(
     assert "继续" in last.content
     # 关键：并非无限跑；墙钟闸在某次工具执行后立刻停手（不会跑满 300 轮）。
     assert gateway.calls <= 3
+
+
+# ══════════════════════════════════════════════════════════
+# 16. 同一结论复读闸（v1.69）：模型反复给同一句"做不下去"就收尾，别再换个算法穷尽
+# ══════════════════════════════════════════════════════════
+
+
+def test_is_repeated_conclusion_detects_repeated_blocked_verdict() -> None:
+    """同一句结论（措辞小幅变化、结论不变）出现 ≥3 次 → 判 True。"""
+    from app.chat import nudge
+
+    verdicts = [
+        "没拿到 flag。这道题需要动态分析，而本沙箱没有 KVM、虚拟化缺失，硬件虚拟化不可用，静态已全空间穷尽。",
+        "没拿到 flag。这道题需要动态分析，本沙箱没有 KVM、虚拟化缺失，硬件虚拟化不可用，静态已全空间穷尽。",
+        "没拿到 flag。这道题需要动态分析，而本沙箱没有 KVM、虚拟化缺失，静态已全空间穷尽。",
+    ]
+    assert nudge.is_repeated_conclusion(verdicts) is True
+
+
+def test_is_repeated_conclusion_false_for_distinct_progress() -> None:
+    """不同的实质进展（不是复读结论）不该误判。"""
+    from app.chat import nudge
+
+    progress = [
+        "创建了 a.txt 并写入 hello，验证通过。",
+        "读取 b.txt 得到 world，内容正确。",
+        "已经遍历 3 个目录，找到目标文件并开始解析。",
+    ]
+    assert nudge.is_repeated_conclusion(progress) is False
+
+
+def test_is_repeated_conclusion_detects_oscillation() -> None:
+    """结论与独特推理交替出现（振荡）也要抓到（v1.69 冒烟教训）。"""
+    from app.chat import nudge
+
+    verdict = "任务已完成，文件已就位，无需再做验证，内容为 hi 三字节。"
+    seq = [
+        verdict,
+        "The UUID result loop keeps going; let me look at stderr differently.",
+        verdict,
+        "Interesting, this has a stderr block with uuidgen not found in path.",
+        verdict,
+        "我按原生工具接口真正执行一次，不再重复解释这一点了。",
+    ]
+    assert nudge.is_repeated_conclusion(seq) is True
+
+
+def test_is_repeated_conclusion_false_when_fewer_than_threshold() -> None:
+    from app.chat import nudge
+
+    two = ["没拿到 flag，需要 KVM。", "没拿到 flag，需要 KVM。"]
+    assert nudge.is_repeated_conclusion(two) is False
+
+
+def test_render_repeated_conclusion_note_is_a_blocked_statement() -> None:
+    note = engine.render_repeated_conclusion_note()
+    # 必须讲清"这是阻塞、不是没试够"，并指出要补条件。
+    assert "结论" in note
+    assert "环境" in note or "信息" in note
+    assert "继续" in note
+
+
+async def test_run_turn_stops_when_conclusion_repeats(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """模型每轮都发出动作但结论完全一样 → 复读闸收尾（不再无限换个命令试）。
+
+    复刻 chat_01M6P1TAYTASS6P64P85PED8MB 的形态：每步都是不同真实命令（重复动作
+    检测不触发），但每次给的结论都是同一句"没拿到 flag、需要 KVM"。第 3 次之后
+    应被复读闸收尾。
+    """
+    session = chat_service.create_session(db_session, created_by="user_admin")
+    db_session.commit()
+
+    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202, ARG001
+        return "ok", False
+
+    monkeypatch.setattr(engine, "_execute_tool", fake_execute)
+    # 把上下文门槛降到很小，让测试几轮内就能验证"复读即收尾"这件事本身
+    # （生产门槛是 20 工具/12 轮，见 engine 常量注释）。
+    monkeypatch.setattr(engine, "REPEATED_CONCLUSION_MIN_TOOLS", 2)
+    monkeypatch.setattr(engine, "REPEATED_CONCLUSION_MIN_ROUNDS", 2)
+
+    class _RepeatingConclusionGateway:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def chat(self, messages, *, system, tools=None):  # noqa: ANN001, ANN201
+            self.calls += 1
+            # 每个命令都不同（避免 MAX_REPEATED_ACTIONS），但正文结论是同一句。
+            verdict = (
+                "没拿到 flag。这道题需要动态分析，而本沙箱没有 KVM、虚拟化缺失，"
+                "硬件虚拟化不可用，静态已全空间穷尽。"
+            )
+            return LlmReply(
+                text=(
+                    f"{verdict}\n"
+                    f'ACTION: {{"tool": "run_shell", "args": {{"command": "echo probe-{self.calls}"}}}}'
+                ),
+                source="content",
+                raw={},
+                usage=None,
+                finish_reason="stop",
+            )
+
+    gateway = _RepeatingConclusionGateway()
+    result = await engine.run_turn(
+        db_session,
+        session=session,
+        content="解这道 rev 题",
+        identity=ADMIN,
+        gateway=gateway,
+    )
+
+    last = result.messages[-1]
+    assert last.role == "assistant"
+    assert "结论" in last.content
+    # 不该无限跑：复读闸在少数几轮内收尾。
+    assert gateway.calls <= 5
+

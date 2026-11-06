@@ -238,6 +238,81 @@ def extract_trailing_command(text: str) -> str | None:
     return cmd
 
 
+#: 「同一结论复读」判据（v1.69）。
+#:
+#: ## 为什么需要它
+#:
+#: 实测（2026-11-05 会话 chat_01M6P1TAYTASS6P64P85PED8MB「千千的咲.zip解题」）：
+#: 模型在一条 CTF 轮里跑了 **12+ 小时 / 429 次 run_shell / 127 轮**，最后反复给出
+#: 同一句结论（「没拿到 flag——这题需要动态分析，而本沙箱没有 KVM/虚拟化」），
+#: 却每次都在换个算法"再穷尽一下"。因为每步都是**不同**的真实命令，
+#: `MAX_REPEATED_ACTIONS`（连续相同命令）永不触发；`MAX_TOOL_NUDGES` 只管纠偏；
+#: `TURN_WALL_SECONDS` 单轮 60 分钟后停下，用户一点「继续」又续 60 分钟 ×N。
+#:
+#: 结果是：一个**已经想清楚、确定做不了**的任务，把算力和用户耐心一起烧光。
+#: 正确行为是：当模型**连续多次**给出同一个"结论/阻塞"（近似重复的 answer），
+#: 就判定它已经到底了，收尾并把"这是阻塞、不是没试够"讲清楚，别再自动续跑。
+_REPEATED_CONCLUSION_SIMILARITY = 0.7
+#: 最近多少个 answer 面消息参与比对（够看出"它在复读同一个结论"即可）。
+_REPEATED_CONCLUSION_WINDOW = 10
+
+
+def _fingerprint(text: str) -> set[str]:
+    """把一段结论压成"特征集合"用于近似判重（不依赖分词库）。
+
+    取法：去空白/标点后取字符 2-gram 集合。中文没有词边界，2-gram 足够稳，
+    且对"同一结论换个说法"有容错。
+    """
+    norm = "".join(ch for ch in text if ch.isalnum()).lower()
+    if len(norm) < 2:
+        return set()
+    return {norm[i : i + 2] for i in range(len(norm) - 1)}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    union = len(a | b)
+    return inter / union if union else 0.0
+
+
+def is_repeated_conclusion(
+    answer_texts: list[str],
+    *,
+    window: int = _REPEATED_CONCLUSION_WINDOW,
+    similarity: float = _REPEATED_CONCLUSION_SIMILARITY,
+    threshold: int = 3,
+) -> bool:
+    """最近若干条 assistant 正文里，是否已**几乎重复**地给出同一句结论 threshold 次及以上。
+
+    `answer_texts`：按时间顺序（旧→新）的 assistant 正文（含 process，见 engine
+    `_recent_assistant_texts`）。取最近 `window` 条。
+
+    ## 判据（v1.69 改进：按"成簇"而非"锚最新一条"）
+    早期版本只拿**最新一条**当锚，数有几条与它相似 —— 但线上实测（v169 冒烟）
+    发现模型会"结论 A → 换句独特推理 → 结论 A → 换句独特推理"地**振荡**：
+    最新一条常常是那句独特推理，于是锚点选错、复读漏判。
+    改为**两两成簇**：在最近 window 条里找任意一个"簇"，簇内彼此 Jaccard
+    ≥ similarity 且簇大小 ≥ threshold，即判复读。这样振荡也抓得住。
+
+    纯函数（不看库/不看时间），便于逐条钉住。
+    """
+    if len(answer_texts) < threshold:
+        return False
+    recent = answer_texts[-window:]
+    prints = [_fingerprint(t) for t in recent]
+    valid = [i for i, fp in enumerate(prints) if fp]
+    if len(valid) < threshold:
+        return False
+    # 以每条为潜在锚，统计与它相似（含自身）的条数；任一条达到 threshold 即成簇。
+    for i in valid:
+        cluster = sum(1 for j in valid if _jaccard(prints[i], prints[j]) >= similarity)
+        if cluster >= threshold:
+            return True
+    return False
+
+
 def split_final(raw: str) -> tuple[str, bool]:
     """把回复开头的 `FINAL:` 摘掉，并告诉调用方它有没有写。
 

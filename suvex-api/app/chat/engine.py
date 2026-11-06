@@ -72,6 +72,7 @@ from app.chat.prompts import (
     render_format_reminder,
     render_native_tool_note,
     render_plan_exhausted_note,
+    render_repeated_conclusion_note,
     render_stall_reminder,
     render_truncation_reminder,
     render_turn_wall_note,
@@ -289,6 +290,15 @@ STREAM_IDLE_SECONDS = _env_int("SUPEX_CHAT_STREAM_IDLE_SECONDS", 180)
 #: 用户点「继续」即可再拿一整段预算，既不失控、也不一刀切死长任务。
 #: 设 0 关闭（仅供测试/特殊部署），生产绝不置 0。
 TURN_WALL_SECONDS = _env_int("SUPEX_CHAT_TURN_WALL_SECONDS", 3600)
+
+#: 「同一结论复读闸」（v1.69）的两个上下文门槛。
+#:
+#: 只判「最近几条 assistant 正文是否在复读同一句结论」，但**必须先干够活**：
+#: 会话 chat_01M6P1TAYTASS6P64P85PED8MB 卡死时是 round 127 / tools 437；正常
+#: 长任务远低于此。门槛设在十几轮/二十次工具，既能拦住真正的死循环，又不会
+#: 误伤「刚开始干活时正常地重复描述现状」（那会误杀正常会话与测试）。
+REPEATED_CONCLUSION_MIN_TOOLS = _env_int("SUPEX_CHAT_REPEATED_CONCLUSION_MIN_TOOLS", 20)
+REPEATED_CONCLUSION_MIN_ROUNDS = _env_int("SUPEX_CHAT_REPEATED_CONCLUSION_MIN_ROUNDS", 12)
 
 #: 任务型轮次里，模型写了 `FINAL:` 之后我们先**打回**几次（v1.29）。
 #:
@@ -1052,6 +1062,26 @@ _LEGACY_NARRATION_STUBS = frozenset(
         "ACTION",
     }
 )
+
+
+def _recent_assistant_texts(rows: list[Any], *, window: int = 12) -> list[str]:
+    """从历史消息里取最近 `window` 条 assistant 正文（旧→新），供「同一结论复读」判据用。
+
+    ## 为什么**不**只看 `surface=="answer"`（v1.69 实测教训）
+
+    带动作的 assistant 消息落库时 `surface="process"`（见 `run_turn` 的
+    surface 赋值）—— 而"反复给出同一句结论"恰恰发生在这些**叙述**里（每轮都带
+    一个不同的真实 ACTION，正文却是同一句"没拿到 flag、需要 KVM"）。
+    只看 `answer` 会漏掉全部复读样本、判据永不触发（集成测试当场挂死就是这个）。
+    所以这里取所有 assistant 正文；`content` 已是 `_narration_before_action` 后的
+    人类叙述（动作被剥掉），正是要比对的东西。
+    """
+    texts = [
+        (getattr(r, "content", "") or "")
+        for r in rows
+        if getattr(r, "role", "") == "assistant"
+    ]
+    return [t for t in texts if t.strip()][-window:]
 
 
 def _render_history(rows: list[Any]) -> list[dict[str, str]]:
@@ -2692,6 +2722,25 @@ async def run_turn(
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
+        # ★ v1.69：同一结论复读闸。模型连续多次给出几乎同一句结论（"没拿到、
+        #   做不下去"）时，判定它已经到底，收尾并讲清是阻塞、不是没试够 ——
+        #   避免像 chat_01M6P1TAYTASS6P64P85PED8MB 那样换个算法反复穷尽 12 小时。
+        #   ★ 只在**已经干了足够多轮/足够多次工具**时才判：反复复述"我看到的是
+        #     一个 ELF…"这种正常叙述不算"结论复读"（否则会误杀正常长任务/测试）。
+        #     真正卡死的会话是几百次工具、上百轮；这个门槛远高于任何正常节奏。
+        if (
+            tools_used >= REPEATED_CONCLUSION_MIN_TOOLS
+            and round_index - nudges_used >= REPEATED_CONCLUSION_MIN_ROUNDS
+            and nudge_policy.is_repeated_conclusion(_recent_assistant_texts(history))
+        ):
+            exhausted = chat_service.append_assistant_message(
+                db,
+                session=session,
+                content=render_repeated_conclusion_note(),
+            )
+            db.commit()
+            result.messages.append(exhausted)
+            return result
         messages = _render_history(history)
         # ★ v1.53 兜底：`_render_history` 会把开头的非 user 消息丢掉（保证首条
         #   是 user，见其文档）。极端情况下（小窗口里全是 assistant/tool 残句）
@@ -3335,6 +3384,20 @@ async def resume_approved(
         history = chat_service.list_messages(
             db, session=session, limit=HISTORY_MESSAGE_LIMIT
         )
+        # ★ v1.69：同一结论复读闸（与 run_turn 同一判据/门槛，见那里的长注释）。
+        if (
+            tools_used >= REPEATED_CONCLUSION_MIN_TOOLS
+            and round_index - nudges_used >= REPEATED_CONCLUSION_MIN_ROUNDS
+            and nudge_policy.is_repeated_conclusion(_recent_assistant_texts(history))
+        ):
+            exhausted = chat_service.append_assistant_message(
+                db,
+                session=session,
+                content=render_repeated_conclusion_note(),
+            )
+            db.commit()
+            result.messages.append(exhausted)
+            return result
         messages = _render_history(history)
         if not messages:
             messages = [{"role": "user", "content": "（继续之前的工作。）"}]
