@@ -188,10 +188,20 @@ def test_real_skills_have_no_unrendered_template_syntax():
     root = skills.SKILLS_ROOT
     offenders: list[str] = []
     for path in sorted(root.rglob("*.md")):
+        # ★ v1.71：跳过导入的 CTF 技能包（`ctf/`）。
+        #   那里是**上游 CTF 教学材料**，`{% include "/flag.txt" %}` 这类是
+        #   SSTI/Go 模板注入的**攻击载荷**（正是要教模型打的东西），不是
+        #   漏渲染的 Jinja 控制流。把它们当模板残留去改，等于删掉题解。
+        #   与上面"`{{7*7}}` 是 SSTI 载荷"同一条理由，只是载荷这里恰好用了
+        #   `include` 关键字。真正的模板残留仍靠「只钉我们自己的 prompts」
+        #   这条覆盖（ctf 之外的目录照扫）。
+        rel_probe = path.relative_to(root).as_posix()
+        if rel_probe.startswith("ctf/"):
+            continue
         text = path.read_text(encoding="utf-8")
         hits = sorted({m.group(0).strip() for m in _JINJA_STATEMENTS.finditer(text)})
         if hits:
-            rel = path.relative_to(root).as_posix()
+            rel = rel_probe
             offenders.append(f"{rel}（含 {'、'.join(hits)}）")
     assert not offenders, (
         "技能库里残留未渲染的 Jinja 控制流语句 —— 我们没有模板引擎，模型会读到"

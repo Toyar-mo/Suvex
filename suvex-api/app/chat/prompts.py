@@ -771,6 +771,22 @@ PERSONA_BY_ID: dict[str, ChatPersona] = {p.id: p for p in CHAT_PERSONAS_SPEC}
 #: 没有选人格时用哪个。
 DEFAULT_PERSONA_ID = "default"
 
+#: ★ v1.71：人格 → 默认注入的技能包名字。
+#:
+#: 「默认调用」的含义：用户选了某个人格，就自动把对应技能包的正文塞进
+#: 系统提示词，而不必他再手动在「挂载技能」里一篇篇勾。这样模型一进这个
+#: 方向就带着那套打法，不需要先自己 `load_skill` 摸索。
+#:
+#: 只挑**入口/分诊**级的那篇进去（`solve-challenge` 就是 CTF 的派发入口：
+#: 它自己讲 triage + 按题型路由到各 `ctf-*` 子技能的流程，模型读它就知道
+#: 该 `load_skill("ctf-web")` 还是 `ctf-pwn`）。把 12 篇全塞进去会把上下文
+#: 撑爆（ctf-pwn 单篇 + 70 个附件），而且大部分和当前这道题无关 —— 那正
+#: 违背了「清单 + 按需拉」的设计。所以默认只给这一篇「路由图」，具体题型
+#: 手册仍由模型按需 `load_skill`。
+PERSONA_DEFAULT_SKILLS: dict[str, tuple[str, ...]] = {
+    "ctf": ("solve-challenge",),
+}
+
 #: ★ 断言：`models.CHAT_PERSONAS`（进库 CHECK 的那份）与本文件这份
 #: 必须逐字一致。
 #:
@@ -1635,6 +1651,39 @@ def _render_skill_index() -> str:
         return '（技能清单这次读不出来 —— 不影响别的事。）'
 
 
+def persona_default_skill_texts(
+    persona_id: str | None,
+    already: list[tuple[str, str]] | None = None,
+) -> list[tuple[str, str]]:
+    """人格默认注入的技能正文 `(name, text)`（v1.71）。
+
+    - 只对 `PERSONA_DEFAULT_SKILLS` 里登记的人格生效，其余返回空列表。
+    - 已经被用户显式挂载（`already` 里同名）的不重复注入 —— 用户自己挂的
+      那篇正文以用户的为准，避免同一篇正文在提示词里出现两遍。
+    - 技能读不到（目录缺失/名字改了）**静默跳过并记 warning**，不抛异常：
+      跟 `mounted_skill_texts` 同一条理由 —— 少一篇方法论不该让对话发不出去。
+    """
+    names = PERSONA_DEFAULT_SKILLS.get(persona_id or "")
+    if not names:
+        return []
+    have = {n for n, _ in (already or [])}
+    try:
+        from app.kernel import skills as skills_mod
+    except Exception:  # noqa: BLE001
+        _log.warning('人格默认技能：导入 skills 模块失败', exc_info=True)
+        return []
+    out: list[tuple[str, str]] = []
+    for name in names:
+        if name in have:
+            continue
+        text = skills_mod.load_skill_text(name)
+        if text.startswith("没有名为"):
+            _log.warning("人格 %s 的默认技能不存在：%s", persona_id, name)
+            continue
+        out.append((name, text))
+    return out
+
+
 def build_system_prompt(
     *,
     persona: str | None = None,
@@ -1716,6 +1765,9 @@ def build_system_prompt(
     prompt += render_persona(persona)
     prompt += render_approval_rule(require_approval)
     prompt += render_tool_hint(hinted_tools)
+    # ★ v1.71：人格默认技能（CTF 方向自动带 solve-challenge 路由图）。
+    #   放在用户显式挂载之前，让「用户自己挂的」排更后面（更具体、更优先）。
+    prompt += render_mounted_skills(persona_default_skill_texts(persona, mounted_skills))
     prompt += render_mounted_skills(mounted_skills or [])
     return prompt
 
@@ -1727,12 +1779,14 @@ __all__ = [
     "CONSEQUENTIAL_TOOL_NAMES",
     "DEFAULT_PERSONA_ID",
     "PERSONA_BY_ID",
+    "PERSONA_DEFAULT_SKILLS",
     "SYSTEM_PROMPT_TEMPLATE",
     "TOOL_BY_NAME",
     "ChatPersona",
     "ChatToolSpec",
     "build_system_prompt",
     "build_tools_schema",
+    "persona_default_skill_texts",
     "render_approval_rule",
     "render_mounted_skills",
     "render_native_tool_note",
