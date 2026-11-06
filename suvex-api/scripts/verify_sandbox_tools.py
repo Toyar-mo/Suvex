@@ -296,6 +296,12 @@ PACKAGE_COMMANDS: dict[str, tuple[str, ...]] = {
     "angr": (),
     "olefile": (),
     "pyzipper": (),
+    # ★ v0.88：对照 verialabs/ctf-agent 补的两个纯 Python 库（不提供同名命令）。
+    #   · pytesseract —— tesseract 的 Python 胶水（二进制 tesseract 早就在镜像里）
+    #   · fpylll      —— 格密码（源码构建），提供 `fpylll` module 而非 CLI
+    #   登记为空元组，避免走默认「包名==命令名」被误判缺失。
+    "pytesseract": (),
+    "fpylll": (),
     # pip 自身与其构建链，出现在 `--upgrade` 那一行
     "pip": (),
     "setuptools": (),
