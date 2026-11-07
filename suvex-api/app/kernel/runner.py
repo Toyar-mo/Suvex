@@ -533,6 +533,22 @@ MAX_HISTORY_TURNS = 24
 #: "我来把这几件事都做了"可以把整道题的墙钟时间吃光。
 MAX_ACTIONS_PER_TURN = 5
 
+#: 同一个工具**连续**失败到第几次时，往对话里塞一条"换路子"的强提示。
+#:
+#: 为什么需要（2026-11-08 实测）：一道题里模型反复调一个不存在的 MCP
+#: 工具，每次只收到一句 unknown tool，25 分钟、几十轮下去沙箱里一个文件
+#: 都没有。提示词里那句"连续 3 次没有新信息就换方向"是**给模型看的建议**,
+#: 不是代码判据 —— 它完全可以不理。这里把它变成真的判据。
+TOOL_FAILURE_HINT_AT = 4
+
+#: 同一个工具连续失败到第几次时直接中止这道题。
+#:
+#: 10 是"明显不是在探索，而是在撞墙"的量级：正常解题里一个工具连错 10 次
+#: 说明它压根不可用（名字不存在 / 服务挂了 / 权限不够），继续试只会把
+#: 剩余轮次烧在同一处。中止时把原因写进 outcome.error，worker 会落库并
+#: 释放并发槽 —— 比"烧完 500 轮"诚实得多。
+TOOL_FAILURE_ABORT_AT = 10
+
 #: ★ v0.42：一轮批量动作喂回模型的**输出总预算**（字符）。
 #:
 #: 单条仍是 `MAX_TOOL_OUTPUT_CHARS`（8000），但 5 条 × 8000 = 40000 字符
@@ -4925,6 +4941,18 @@ async def _tool_run_shell(args: dict[str, Any], *, sandbox: SandboxContainer) ->
     return out
 
 
+def _looks_like_tool_error(result: str) -> bool:
+    """这次工具执行的结果是不是**错误**（而不是数据）。
+
+    ★ 判据取 `dispatch_tool` 自己产出的那几种前缀（`拒绝执行：` /
+      `工具执行出错（` / `未知工具 ` / `参数错误：`）。不去匹配任意
+      "error" 字样：模型读的文件里本来就可能出现 error，那会把一次
+      成功的 `cat` 误判成失败，进而误熔断。
+    """
+    head = result.lstrip()[:16]
+    return head.startswith(("拒绝执行：", "工具执行出错（", "未知工具", "参数错误："))
+
+
 async def dispatch_tool(
     name: str,
     args: dict[str, Any],
@@ -6180,6 +6208,8 @@ async def solve_in_sandbox(
     async with httpx.AsyncClient(timeout=httpx.Timeout(60.0), trust_env=False) as http:
         # ★ v0.43：本次解题已经重建过几次沙箱（上限见 `MAX_SANDBOX_REVIVALS`）。
         revivals = 0
+        #: 每个工具**连续**失败了几次（成功一次就清零）。见 `TOOL_FAILURE_*`。
+        failure_streak: dict[str, int] = {}
         for turn in range(1, spec.max_turns + 1):
             outcome.turns = turn
             # ★★ 沙箱已经没了 → 立刻中止（v0.41）。
@@ -6504,6 +6534,8 @@ async def solve_in_sandbox(
             per_action_budget = _per_action_budget(len(batch))
             #: 每条一个 `(工具名, 命令, 已截断输出, 重复提醒)`，循环外组装消息。
             completed: list[tuple[str, str, str, str]] = []
+            #: 这一轮里"连续失败到提示阈值"的工具名（批次结束后统一提示一次）
+            failed_tools: list[str] = []
 
             # ★ v0.41.2：这一轮虽然动作完整、跑成功了，但**回复本身被切过**。
             #
@@ -6539,6 +6571,30 @@ async def solve_in_sandbox(
                     http=http,
                     images=turn_images,
                 )
+                # ★★ 连续失败熔断（2026-11-08）。
+                #
+                # 实测：模型在一个不存在的 MCP 工具上撞了几十轮，每轮只收到
+                # 一句 unknown tool —— 25 分钟过去，沙箱里一个文件都没有，
+                # 而唯一的止损是"烧完 500 轮"。提示词里"连续 3 次没新信息就
+                # 换方向"是建议，不是判据；这里把它变成判据。
+                if _looks_like_tool_error(result):
+                    streak = failure_streak.get(name, 0) + 1
+                    failure_streak[name] = streak
+                    if streak >= TOOL_FAILURE_ABORT_AT:
+                        outcome.error = (
+                            f"工具 `{name}` 连续失败 {streak} 次，判定它在本环境不可用，"
+                            "已中止本题（继续试只会把剩余轮次烧在同一处）。"
+                        )
+                        outcome.transcript = "\n\n".join(log)
+                        logger.warning(
+                            "[turn %d] 工具 %s 连续失败 %d 次，中止本题", turn, name, streak
+                        )
+                        return outcome
+                    if streak == TOOL_FAILURE_HINT_AT:
+                        failed_tools.append(name)
+                else:
+                    failure_streak[name] = 0
+
                 log.append(f"[turn {turn}] result: {_clip(result, 2000)}")
                 # ★ 完整输出进证据池（v0.42）—— 提交闸门要逐字符核对
                 #   "这个答案到底有没有在工具输出里出现过"。用 `transcript`
@@ -6692,6 +6748,23 @@ async def solve_in_sandbox(
                     "content": _format_action_results(completed, dropped) + truncation_note,
                 }
             )
+            # 连续失败到阈值 → 把"换路子"的要求**当成一条新消息**塞回去。
+            # 用 role="user" 有实测依据：模型对"刚说的"遵从度高于系统提示词
+            # 里一直挂着的那句（见 `_final_stretch_note` 的同一条理由）。
+            if failed_tools:
+                names = "、".join(sorted(set(failed_tools)))
+                recent.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            f"（系统提醒：工具 {names} 已经连续失败 "
+                            f"{TOOL_FAILURE_HINT_AT} 次，返回的都是错误而不是数据。"
+                            "先确认名字与参数（list_mcps / describe_mcp / command -v），"
+                            "然后换工具或换方向；不要再用同样的参数重试。"
+                            "如果确认这条路不可用，把它写进 tried 并转别的方向。）"
+                        ),
+                    }
+                )
             # ★ 记录"这次解题真的跑过工具"（v0.31）—— 供 auto 模式的
             #   证据门禁判断"答案是跑出来的还是想出来的"。
             #   见 `SolveOutcome.saw_tool_output`。
