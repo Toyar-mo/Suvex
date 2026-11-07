@@ -528,6 +528,17 @@ function messageOf(error: unknown): ApiError {
  */
 export function resetChatStore(): void {
   state = EMPTY
+  /*
+    ★ 连"在飞的请求"一起清掉。
+
+    合流用的 promise 是模块级状态：一个测试若故意让请求悬着不收尾
+    （很多流式用例就是这么写的），下一次 `loadSessions()` 会拿到那个
+    永不 settle 的旧 promise，于是**根本不会发新请求** —— 表现不是
+    "慢"，而是后面所有用例都读不到 mock 的调用记录。重置语义里
+    "忘掉一切"本来就该包括挂起的请求。
+  */
+  sessionsInFlight = null
+  detailInFlight.clear()
   emit()
 }
 
@@ -542,7 +553,27 @@ export function resetChatStore(): void {
  *   大概率成功；把一次瞬时失败变成"列表变空"，用户会以为自己的对话
  *   被删了 —— 那是比"列表没刷新"严重得多的误判。
  */
-export async function loadSessions(): Promise<void> {
+/**
+ * 同一时刻只允许一次 `/chat/sessions` 在飞。
+ *
+ * ★ 实测（2026-11-07）：进对话页时这个接口被**并发发了三次**
+ *   （挂载 effect + URL 会话 effect + 运行中轮询），每次 1.7–3.7 秒，
+ *   互相抢连接池，越排越慢。合流之后只发一次，其余调用者等同一个 promise。
+ *
+ * ★ 只合并**并发**的调用：结束后再调就是新请求，归档/改名这类
+ *   需要立刻看到最新数据的路径不受影响。
+ */
+let sessionsInFlight: Promise<void> | null = null
+
+export function loadSessions(): Promise<void> {
+  if (sessionsInFlight) return sessionsInFlight
+  sessionsInFlight = fetchSessions().finally(() => {
+    sessionsInFlight = null
+  })
+  return sessionsInFlight
+}
+
+async function fetchSessions(): Promise<void> {
   patch({ status: state.sessions.length === 0 ? 'loading' : state.status, error: null })
   try {
     /*
@@ -595,7 +626,7 @@ export async function loadTools(): Promise<void> {
  */
 export async function refreshActiveMessages(sessionId: string): Promise<void> {
   try {
-    const detail = await api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}`)
+    const detail = await fetchSessionDetail(sessionId)
     const current = state.active
     // 等回来的这段时间用户可能已经切走了 —— 那就不要往新会话里写旧数据。
     if (!current || current.id !== sessionId) return
@@ -607,6 +638,25 @@ export async function refreshActiveMessages(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * 拉会话详情，**同一会话并发时合流**。
+ *
+ * 实测进对话页时 `/chat/sessions/{id}` 会被发两次（URL 还原一次、
+ * 打开会话一次），而它带着整段消息历史 —— 长会话下每次都是上百 KB。
+ * 两次内容完全一样，没必要发两遍。
+ */
+const detailInFlight = new Map<string, Promise<ChatSessionDetail>>()
+
+function fetchSessionDetail(sessionId: string): Promise<ChatSessionDetail> {
+  const existing = detailInFlight.get(sessionId)
+  if (existing) return existing
+  const request = api
+    .get<ChatSessionDetail>(`/chat/sessions/${sessionId}`)
+    .finally(() => detailInFlight.delete(sessionId))
+  detailInFlight.set(sessionId, request)
+  return request
+}
+
 /** 打开一个会话（拉详情）。 */
 export async function openSession(sessionId: string): Promise<void> {
   patch({ status: 'loading', error: null })
@@ -614,7 +664,7 @@ export async function openSession(sessionId: string): Promise<void> {
     // 切会话先把上一个会话的附件清掉：后端按 session 目录找附件，
     // 留着上一个会话的 id 在这里，发出去会读不到（症状是"附件丢了"）。
     clearStagedAttachments()
-    const detail = await api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}`)
+    const detail = await fetchSessionDetail(sessionId)
     patch({ active: detail, status: 'ready' })
   } catch (error) {
     patch({ status: 'error', error: messageOf(error) })

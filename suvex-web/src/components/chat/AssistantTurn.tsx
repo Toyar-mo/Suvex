@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
@@ -34,7 +34,51 @@ import type { ChatMessage } from '@/data/chat'
  * 默认**始终收起**（不随 live 自动展开/收起）：跑着的时候展开、结束时收起
  * 会造成整段高度突变、滚动位置跳动，这正是用户抱怨的"跳一下"。
  */
-export function AssistantTurn({
+export const AssistantTurn = memo(
+  AssistantTurnImpl,
+  (prev, next) =>
+    sameRefList(prev.items, next.items) &&
+    prev.live === next.live &&
+    prev.streamingText === next.streamingText &&
+    prev.phaseText === next.phaseText &&
+    prev.deciding === next.deciding &&
+    prev.meta === next.meta &&
+    prev.sessionId === next.sessionId &&
+    prev.hideWork === next.hideWork &&
+    prev.startedAt === next.startedAt &&
+    (prev.progress?.tools ?? null) === (next.progress?.tools ?? null) &&
+    sameRefList(prev.interjections ?? [], next.interjections ?? []) &&
+    /*
+      ★ 有待审批的回合必须比 `onDecide`。
+        否则会留着**第一次渲染**的那个闭包，而它捕获的是当时的
+        `deciding` / 会话状态 —— 审批就会用一个过期的上下文去提交
+        （表现为"点了一下没反应"或重复提交）。这种回合很少，
+        每次重渲染的代价可以忽略。
+    */
+    (!hasPendingApproval(prev.items) || prev.onDecide === next.onDecide),
+) as typeof AssistantTurnImpl
+
+/**
+ * 两个数组**逐项比引用**。
+ *
+ * ★ 数组本身每次渲染都是新的（`filter` 出来的），所以比数组引用等于没 memo。
+ *   消息对象是 store 里的不可变值：除了正在流式产出的那一回合，
+ *   历史回合里的元素引用一直不变 —— 这正是可以跳过它们重渲染的依据。
+ */
+function hasPendingApproval(items: readonly ChatMessage[]): boolean {
+  return items.some((message) => message.approvalStatus === 'pending')
+}
+
+function sameRefList<T>(a: readonly T[], b: readonly T[]): boolean {
+  if (a === b) return true
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false
+  }
+  return true
+}
+
+function AssistantTurnImpl({
   items,
   live = false,
   streamingText = null,

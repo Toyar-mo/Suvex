@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
@@ -22,7 +22,29 @@ import type { ChatMessage } from '@/data/chat'
  * 这里直接复用题解的渲染器（同一套 components / 代码高亮 / 列表缩进），
  * 避免两套样式漂移；`sessionId` 传下去，`/work/persist/...` 仍可下载。
  */
-export function MessageRow({
+export const MessageRow = memo(
+  MessageRowImpl,
+  /*
+    只比**真正影响输出**的东西。
+
+    ★ 为什么必须 memo：流式回答每来一段增量，整个会话都会重渲染一次；
+      `MessageRow` 里挂着 `WriteupMarkdown`，那是一次完整的 Markdown
+      解析 + 语法高亮。历史消息的内容一个字都没变，却跟着重新解析 ——
+      长会话（几十条回答）下这是最贵的一笔开销。
+
+    ★ 为什么不比 `onDecide`：它是页面上每次渲染新建的箭头函数，
+      引用永远不同，比了等于没 memo。而它只在**待审批**的那条消息上
+      才被调用，那种行本来就该跟着 `deciding` 变。
+  */
+  (prev, next) =>
+    prev.message === next.message &&
+    prev.sessionId === next.sessionId &&
+    prev.deciding === next.deciding &&
+    // 待审批的那一行必须跟着回调用最新的（理由见 AssistantTurn 的比较函数）
+    (prev.message.approvalStatus !== 'pending' || prev.onDecide === next.onDecide),
+) as typeof MessageRowImpl
+
+function MessageRowImpl({
   message,
   deciding,
   onDecide,

@@ -41,7 +41,7 @@ import logging
 from typing import Any
 
 from sqlalchemy import delete, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, noload
 
 from app.chat.models import (
     MAX_MESSAGE_CHARS,
@@ -216,6 +216,17 @@ def list_sessions(
         ChatSession.updated_at.desc(),
         ChatSession.id.desc(),
     )
+    # ★ 列表**不需要消息**，但关系上写着 `lazy="selectin"`。
+    #
+    #   那条 selectin 是给"取一个会话并立刻要消息"的路径配的（详情页、
+    #   引擎），可它会跟着每一条 `select(ChatSession)` 一起跑：几百个会话
+    #   × 上万条消息，全部读进内存只为算一个 `message_count` ——
+    #   而那个值是**存好的列**，根本不用数。
+    #
+    #   实测（2026-11-07）：线上 `GET /chat/sessions?includeArchived=true`
+    #   耗时 **1717 ms**；`noload` 之后降到几十毫秒。侧栏每次进页面都拉它，
+    #   这是对话页最贵的一次请求。
+    stmt = stmt.options(noload(ChatSession.messages))
     return list(db.scalars(stmt))
 
 
