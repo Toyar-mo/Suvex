@@ -427,6 +427,47 @@ function getSnapshot(): ChatState {
   return state
 }
 
+/*
+  正文增量按帧合并（rAF）。
+
+  ## 为什么不在每个 delta 上 patch 一次
+
+  `patch` 会替换整个 store 快照并通知页面，而 ChatPage 订阅的是整份状态：
+  长会话里每个 token 都会让整段消息列表重渲染一次。一个网络分片常常带好
+  几个 token，合并成一次渲染能直接砍掉大部分主线程工作，观感也更稳。
+
+  顺序不受影响：任何非 delta 帧（message/phase/error/done）进入前都会先
+  `flushDelta()`，保证正文先落、状态后改。
+*/
+let deltaBuffer = ''
+let deltaFrame: number | null = null
+
+function flushDelta(): void {
+  deltaFrame = null
+  if (!deltaBuffer) return
+  const piece = deltaBuffer
+  deltaBuffer = ''
+  patch({ streamingText: (state.streamingText ?? '') + piece })
+}
+
+function queueDelta(piece: string): void {
+  deltaBuffer += piece
+  if (deltaFrame !== null) return
+  const raf: (cb: FrameRequestCallback) => number =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb) => window.setTimeout(() => cb(performance.now()), 16)
+  deltaFrame = raf(flushDelta)
+}
+
+function clearDelta(): void {
+  if (deltaFrame !== null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(deltaFrame)
+  }
+  deltaFrame = null
+  deltaBuffer = ''
+}
+
 /** SSR 快照。本项目是纯 CSR，但 `useSyncExternalStore` 要求给一个。 */
 const SERVER_SNAPSHOT: ChatState = EMPTY
 function getServerSnapshot(): ChatState {
@@ -652,14 +693,21 @@ export async function pollTurnProgress(sessionId: string): Promise<boolean> {
   if (state.active?.id !== sessionId) return false
   const running = runs.find((run) => run.status === 'running') ?? null
   if (running) {
-    patch({
-      serverTurn: {
-        runId: running.id,
-        roundIndex: running.roundIndex ?? 0,
-        toolsUsed: running.toolsUsed ?? 0,
-        heartbeatAt: running.heartbeatAt ?? null,
-      },
-    })
+    const next = {
+      runId: running.id,
+      roundIndex: running.roundIndex ?? 0,
+      toolsUsed: running.toolsUsed ?? 0,
+      heartbeatAt: running.heartbeatAt ?? null,
+    }
+    const prev = state.serverTurn
+    const changed =
+      prev === null ||
+      prev.runId !== next.runId ||
+      prev.roundIndex !== next.roundIndex ||
+      prev.toolsUsed !== next.toolsUsed ||
+      prev.heartbeatAt !== next.heartbeatAt
+    // 数值没变时不要再 patch：1.5s 一次的无意义更新会让整页重渲染。
+    if (changed) patch({ serverTurn: next })
     return true
   }
   // 没有在跑的了：清掉进度提示，也清掉「已请求停止」的标记
@@ -798,6 +846,8 @@ export async function sendMessage(
   // ★ 让用户那句话**立刻**出现在屏幕上（v0.97）。放在 `sending: true` 同一个
   //   patch 里，所以从用户点下发送到气泡出现的这段时间是一个渲染帧，
   //   而不是一整轮模型推理。
+  // 上一轮异常退出时可能还有未落帧的增量，先清掉再开新一轮。
+  clearDelta()
   patch({
     sending: true,
     sendingSessionId: sessionId,
@@ -834,6 +884,7 @@ export async function sendMessage(
   if (attachmentIds.length > 0) patch({ stagedAttachments: [] })
 
   let sentOk = false
+  let sawErrorFrame = false
   try {
     /**
      * ★★ v0.100：走**流式**端点。
@@ -862,6 +913,8 @@ export async function sendMessage(
       onEvent: (frame) => {
         const current = state.active
         if (!current || current.id !== sessionId) return
+        // 任何非增量帧进入前，先把还没渲染的正文增量落下去，保持顺序。
+        if (frame.event !== TURN_DELTA) flushDelta()
 
         if (frame.event === TURN_PHASE) {
           // 「正在想…」那一行现在能显示"第几轮 / 在跑哪个工具"
@@ -909,7 +962,8 @@ export async function sendMessage(
           */
           const piece = typeof frame.data.text === 'string' ? frame.data.text : ''
           if (!piece) return
-          patch({ streamingText: (state.streamingText ?? '') + piece })
+          // 按渲染帧合并，避免每个 token 都替换一次整份 store 快照。
+          queueDelta(piece)
           return
         }
 
@@ -920,6 +974,7 @@ export async function sendMessage(
         }
 
         if (frame.event === TURN_ERROR) {
+          sawErrorFrame = true
           const detail =
             typeof frame.data.message === 'string' && frame.data.message.trim()
               ? frame.data.message
@@ -946,9 +1001,21 @@ export async function sendMessage(
     })
 
     if (!ok) {
-      // 流里出现了 error 帧（onEvent 已经 patch 过 error）。这里只补一件事：
-      // 把 phase 清掉，否则界面会一直显示"正在想"。
-      patch({ phase: null })
+      /*
+        ★ 流被**干净地**关掉、但既没 done 也没 error 帧时，旧代码只清 phase：
+        用户看到"正在想"消失、正文停在半截，屏幕上没有任何失败原因 ——
+        观感就是卡死。这里补一条明确的连接中断错误（有 error 帧时不动它）。
+      */
+      flushDelta()
+      const next: Partial<ChatState> = { phase: null }
+      if (!sawErrorFrame && state.error === null) {
+        next.error = new ApiError(
+          'TURN_STREAM_BROKEN',
+          '连接中断，这一轮没有跑完。点「重试」可以接着跑。',
+          200,
+        )
+      }
+      patch(next)
       return false
     }
 

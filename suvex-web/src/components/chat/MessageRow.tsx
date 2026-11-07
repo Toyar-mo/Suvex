@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
 import { cn } from '@/lib/cn'
-import { splitWorkLinks, workspaceFileUrl } from '@/lib/workFiles'
+import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 import type { ChatMessage } from '@/data/chat'
 
 /**
@@ -11,9 +11,16 @@ import type { ChatMessage } from '@/data/chat'
  *
  * ## 与 v1.25 的差别
  *
- * 助手正文不再包一层灰底气泡。metis 的对话页里，助手最终答复是**纯文本**
- * （只有用户消息有气泡），这样长回答不会变成一大块灰砖；分隔靠间距与
- * 回合页脚，而不是每个回合一个框。
+ * 助手正文不再包一层灰底气泡。metis 的对话页里，助手最终答复是**无气泡的
+ * 正文块**（只有用户消息有气泡），这样长回答不会变成一大块灰砖；分隔靠
+ * 间距与回合页脚，而不是每个回合一个框。
+ *
+ * ## v1.75：助手正文改为 Markdown
+ *
+ * 成熟客户端（ChatGPT / Claude / LobeChat）都渲染 Markdown：加粗、列表、
+ * 代码块、表格。之前是纯文本，模型写的 `**结论**` 会原样显示成星号。
+ * 这里直接复用题解的渲染器（同一套 components / 代码高亮 / 列表缩进），
+ * 避免两套样式漂移；`sessionId` 传下去，`/work/persist/...` 仍可下载。
  */
 export function MessageRow({
   message,
@@ -63,25 +70,9 @@ export function MessageRow({
   return (
     <div className="flex flex-col gap-1.5" data-message-row="assistant" data-seq={message.seq}>
       {message.reasoning && <ReasoningBlock text={message.reasoning} />}
-      <p className="whitespace-pre-wrap break-words text-sm leading-7 text-ink">
-        {sessionId
-          ? splitWorkLinks(message.content).map((segment, index) =>
-              segment.type === 'link' ? (
-                <a
-                  key={index}
-                  href={workspaceFileUrl(sessionId, segment.path)}
-                  download
-                  className="text-accent underline underline-offset-2 hover:text-accent/80"
-                  title="下载这个产物"
-                >
-                  {segment.value}
-                </a>
-              ) : (
-                <span key={index}>{segment.value}</span>
-              ),
-            )
-          : message.content}
-      </p>
+      <div className="break-words text-sm leading-7 text-ink" data-markdown-answer>
+        <WriteupMarkdown markdown={message.content} sessionId={sessionId} />
+      </div>
     </div>
   )
 }

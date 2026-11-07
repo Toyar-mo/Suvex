@@ -227,10 +227,13 @@ afterEach(() => {
 })
 
 describe('ChatPage — 工具失败必须看得出来', () => {
-  it('★ 失败的工具卡带「失败」字样', () => {
+  it('★ 失败在收起的工作过程摘要上就能看到', () => {
     /*
       这条钉的是最贵的一类骗局：工具其实没干成，界面画得和干成了一样。
       事故形态是用户读到"扫描已建"，去扫描页找不到东西，然后开始不信平台。
+
+      新形态下工具调用收在「工作过程」里，失败数必须冒到摘要行上 ——
+      收起时看不见失败，等于把"工具挂了"藏起来。
     */
     const failed = message({
       id: 'm_tool',
@@ -244,7 +247,29 @@ describe('ChatPage — 工具失败必须看得出来', () => {
       chatState({ active: { ...session(), messages: [failed] } }),
     )
 
-    renderPage('/chat?session=chat_1')
+    const { container } = renderPage('/chat?session=chat_1')
+
+    const work = container.querySelector('[data-turn-work]') as HTMLElement
+    expect(work).not.toBeNull()
+    expect(work.textContent).toContain('1 个失败')
+  })
+
+  it('★ 展开后工具卡带「失败」字样，且露出工具名', () => {
+    const failed = message({
+      id: 'm_tool',
+      seq: 3,
+      role: 'tool',
+      content: '创建扫描失败：值为空',
+      toolName: 'create_scan',
+      toolFailed: true,
+    })
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [failed] } }),
+    )
+    const { container } = renderPage('/chat?session=chat_1')
+    const toggle = container.querySelector('[data-turn-work] button') as HTMLElement | null
+    if (!toggle) throw new Error('没有工作过程摘要')
+    fireEvent.click(toggle)
 
     expect(screen.getByText('失败')).toBeTruthy()
     // 工具名也要露出来 —— 只说"失败"不告诉用户是哪个动作失败，等于没说。
@@ -263,7 +288,11 @@ describe('ChatPage — 工具失败必须看得出来', () => {
     })
     mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [ok] } }))
 
-    renderPage('/chat?session=chat_1')
+    const { container } = renderPage('/chat?session=chat_1')
+    expect(screen.queryByText(/个失败/)).toBeNull()
+    const toggle = container.querySelector('[data-turn-work] button') as HTMLElement | null
+    if (!toggle) throw new Error('没有工作过程摘要')
+    fireEvent.click(toggle)
 
     expect(screen.getByText('create_scan')).toBeTruthy()
     expect(screen.queryByText('失败')).toBeNull()
@@ -1051,17 +1080,28 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
     return renderPage('/chat?session=chat_1')
   }
 
-  it('★ 默认收着 —— 输出再短也不铺开（收着才是默认值，不是"太长才收"）', () => {
+  function openWork(container: HTMLElement): void {
+    const toggle = container.querySelector('[data-turn-work] button') as HTMLElement | null
+    if (!toggle) throw new Error('没有工作过程摘要')
+    fireEvent.click(toggle)
+  }
+
+  it('★ 默认收着 —— 工具调用收进「工作过程」，一条摘要就够', () => {
     const { container } = renderTool('OK')
 
-    const card = container.querySelector('[data-message-row="tool"]')
-    expect(card, '工具卡没渲染出来').not.toBeNull()
-    expect(card?.getAttribute('data-tool-collapsed'), '短输出被铺开了').toBe('true')
-    expect(container.querySelector('[data-tool-toggle="true"]')).not.toBeNull()
+    // 工具卡不在 DOM 里：默认只露一条「工作过程 · N 步 · 1 个工具」
+    expect(container.querySelector('[data-message-row="tool"]')).toBeNull()
+    const work = container.querySelector('[data-turn-work]') as HTMLElement
+    expect(work).not.toBeNull()
+    expect(work.getAttribute('data-turn-work-tools')).toBe('1')
+    expect(
+      screen.getByRole('button', { name: /工作过程/ }).getAttribute('aria-expanded'),
+    ).toBe('false')
   })
 
   it('★ 收着时正文全文不在 DOM 里（只靠 CSS 藏 = 假折叠）', () => {
     const { container } = renderTool(manyLines)
+    openWork(container)
 
     const card = container.querySelector('[data-message-row="tool"]')
     expect(card?.getAttribute('data-tool-collapsed')).toBe('true')
@@ -1079,6 +1119,7 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
 
   it('★ 那一行要说清"干了什么"：工具名 + 参数摘要（只剩图标等于没信息）', () => {
     const { container } = renderTool('done', false, { command: 'nmap -sV 10.0.0.5' })
+    openWork(container)
 
     const card = container.querySelector('[data-message-row="tool"]')
     expect(card?.textContent).toContain('list_challenges')
@@ -1090,6 +1131,11 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
   it('★ 失败在折叠态就看得到（收起来看不见失败 = 用户漏掉工具挂了）', () => {
     const { container } = renderTool(manyLines, true)
 
+    // 折叠态：失败数冒到工作过程摘要行
+    const work = container.querySelector('[data-turn-work]') as HTMLElement
+    expect(work.textContent).toContain('1 个失败')
+
+    openWork(container)
     const card = container.querySelector('[data-message-row="tool"]')
     expect(card?.getAttribute('data-tool-collapsed')).toBe('true')
     expect(card?.textContent).toContain('失败')
@@ -1097,6 +1143,7 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
 
   it('★ 点开后看到全文，aria 与文案都翻转', () => {
     const { container } = renderTool(manyLines)
+    openWork(container)
 
     const toggle = container.querySelector('[data-tool-toggle="true"]') as HTMLElement | null
     expect(toggle, '工具卡没有折叠开关').not.toBeNull()
@@ -1739,7 +1786,8 @@ const TOOLBAR_CLASSES = [
   'px-3',
   'py-2',
 ]
-const SCROLLER_CLASSES = ['min-h-0', 'flex-1', 'overflow-y-auto', 'px-3', 'py-3']
+// 会话列里滚动区的外层容器（真正滚动的那层在它内部）。
+const SCROLLER_CLASSES = ['relative', 'flex', 'min-h-0', 'flex-1', 'flex-col']
 
 /** Tailwind 的变体前缀以「括号外的第一个冒号」结尾；任意值里的冒号在括号内。 */
 function stripVariants(token: string): string {
@@ -1853,6 +1901,37 @@ function walkElements(root: Element): Element[] {
 function isInsideCard(el: Element, card: Element): boolean {
   return el === card || card.contains(el)
 }
+
+describe('ChatPage — 输入区单行形态（v1.75）', () => {
+  function renderComposerOnly() {
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [] } }),
+    )
+    return renderPage('/chat?session=chat_1')
+  }
+
+  it('★ 设置默认收起，点齿轮才展开，点「完成」收起', () => {
+    const { container } = renderComposerOnly()
+    expect(container.querySelector('[data-composer-settings]')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '对话设置' }))
+    expect(container.querySelector('[data-composer-settings]')).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '完成' }))
+    expect(container.querySelector('[data-composer-settings]')).toBeNull()
+  })
+
+  it('★ 输入框是单行，且与附件按钮在同一行', () => {
+    renderComposerOnly()
+    const box = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    expect(box.getAttribute('rows')).toBe('1')
+
+    const attach = screen.getByRole('button', { name: '附件' })
+    const row = attach.closest('.flex.items-end')
+    expect(row).not.toBeNull()
+    expect(row?.contains(box)).toBe(true)
+  })
+})
 
 describe('ChatPage — 输入区周围不许出现第二层底色（v1.30）', () => {
   function renderComposer(): HTMLElement {

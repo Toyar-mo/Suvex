@@ -21,6 +21,7 @@ import { SessionAttackChainModal } from '@/components/chat/SessionAttackChainMod
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
 import { AssistantTurn } from '@/components/chat/AssistantTurn'
+import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
@@ -73,15 +74,19 @@ import { api, errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import {
   Archive,
+  ArrowDown,
   BookOpen,
   ChevronDown,
   ChevronRight,
+  Eye,
+  EyeOff,
   Folder,
   MessageSquarePlus,
   MessagesSquare,
   MoreHorizontal,
   Plug,
   Send,
+  Settings2,
   Sparkles,
   UserRound,
   X,
@@ -425,9 +430,11 @@ export function ChatPage() {
     void openSession(wantedId)
   }, [wantedId, active?.id])
 
-  const scrollRef = useRef<HTMLDivElement | null>(null)
-  const bottomRef = useRef<HTMLDivElement | null>(null)
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+  /** 只看回答：隐藏工作过程，只保留结论。 */
+  const [answersOnly, setAnswersOnly] = useState(false)
+  /** 对话设置（项目/人格/审批/技能/MCP）收在齿轮后面，默认不占一行。 */
+  const [settingsOpen, setSettingsOpen] = useState(false)
   /**
    * 输入框里正在输入的 `@提及`。`null` = 不显示补全层。
    *
@@ -437,20 +444,40 @@ export function ChatPage() {
    */
   const [mention, setMention] = useState<MentionQuery | null>(null)
 
-  /*
-    新消息到达时滚到底。
-
-    ⚠️ 依赖是 `active?.messages.length` 而不是 `active`：后者每次
-      patch 都换新对象，会让这段在"正在想"的转圈也滚一次 ——
-      用户往上翻看历史时会被反复拽回去。
-  */
   const messageCount = active?.messages.length ?? 0
+
+  /*
+    自动滚动对标成熟客户端（ChatGPT / Claude）：
+      · 用户没往回翻 → 跟随到底，**流式 token 增长也跟随**；
+      · 用户往上翻 → 暂停，不再把他拽回底部；
+      · 用户自己滚回底部 → 自动恢复跟随。
+    旧实现只监听「消息条数」：token 在视口下方增长时页面不动，落一条
+    消息又无条件跳到底 —— 正是"卡一下、猛跳一下"的来源。
+  */
+  const streamingLength = streamingText?.length ?? 0
+  const contentKey =
+    messageCount * 10_000_000 +
+    streamingLength +
+    (pendingUserContent !== null ? 5_000_000 : 0)
+  const [autoFollow, setAutoFollow] = useState(true)
+  const { attachContainer, isAtBottom, scrollToLatest } = useAutoScroll({
+    follow: autoFollow,
+    contentKey,
+    onUserAway: () => setAutoFollow(false),
+    onUserBack: () => setAutoFollow(true),
+  })
+
+  // 切会话：回到跟随（新会话直接看最新）。
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' })
-    // ★ 依赖里带上 `pendingUserContent`（v0.97）：乐观气泡是在发送那一刻
-    //   插进来的，此时 `messageCount` 还没变 —— 不带它的话气泡会出现在
-    //   视口下方而页面不滚，用户以为点了没反应（正是这次要修的症状）。
-  }, [messageCount, sending, pendingUserContent])
+    setAutoFollow(true)
+  }, [active?.id])
+
+  // 刚发出消息：无论此前翻到哪，都拉回底部（否则会以为点了没反应）。
+  useEffect(() => {
+    if (pendingUserContent === null) return
+    setAutoFollow(true)
+    scrollToLatest('auto')
+  }, [pendingUserContent, scrollToLatest])
 
   /**
    * ★ v0.100：能不能按发送。
@@ -1091,6 +1118,18 @@ export function ChatPage() {
   */
   const settingsBar = active ? (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+      {/*
+        窄屏时模型选择收进设置面板：输入行在手机上放不下
+        「附件 + 输入 + 模型 + 齿轮 + 发送」五样东西。
+      */}
+      <div className="sm:hidden">
+        <ProviderSelect
+          providers={usableProviders}
+          value={active.providerId ?? null}
+          onChange={(providerId) => void updateSettings(active.id, { providerId })}
+        />
+      </div>
+
       <ProjectInput
         value={active.project ?? null}
         suggestions={projectSuggestions}
@@ -1111,12 +1150,6 @@ export function ChatPage() {
         <UserRound size={11} strokeWidth={2} aria-hidden="true" />
         {personas.find((p) => p.id === (active.persona ?? null))?.label ?? '默认'}
       </button>
-
-      <ProviderSelect
-        providers={usableProviders}
-        value={active.providerId ?? null}
-        onChange={(providerId) => void updateSettings(active.id, { providerId })}
-      />
 
       <ApprovalToggle
         enabled={active.requireApproval ?? false}
@@ -1345,6 +1378,27 @@ export function ChatPage() {
             {active?.title ?? '对话'}
           </h1>
           {active && (
+            <button
+              type="button"
+              onClick={() => setAnswersOnly((value) => !value)}
+              aria-pressed={answersOnly}
+              title={answersOnly ? '显示工具与过程' : '隐藏工具与过程，只看结论'}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs',
+                'transition-colors duration-150',
+                answersOnly ? 'bg-accent/12 text-accent' : 'text-ink-faint hover:text-ink-muted',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              )}
+            >
+              {answersOnly ? (
+                <EyeOff size={12} strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <Eye size={12} strokeWidth={2} aria-hidden="true" />
+              )}
+              <span className="hidden sm:inline">只看回答</span>
+            </button>
+          )}
+          {active && (
             <span className="shrink-0 text-2xs text-ink-faint">
               {/*
                 ★ 把乐观气泡计入条数。不记的话，点下发送的那几秒里屏幕上
@@ -1357,7 +1411,8 @@ export function ChatPage() {
         </div>
 
         {/* 消息流 */}
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          <div ref={attachContainer} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
           {!active ? (
             <div className="mx-auto flex max-w-[62ch] flex-col items-start gap-bay py-6">
               <EmptyState
@@ -1470,6 +1525,8 @@ export function ChatPage() {
                         meta={turnMeta}
                         sessionId={active?.id}
                         deciding={deciding}
+                        hideWork={answersOnly}
+                        startedAt={turn.user?.createdAt ?? null}
                         onDecide={(messageId, approve) => void handleDecide(messageId, approve)}
                       />
                     )}
@@ -1525,6 +1582,7 @@ export function ChatPage() {
                   phaseText={phaseLabel(phase)}
                   progress={{ tools: liveLooseToolCount }}
                   interjections={interjections}
+                  hideWork={answersOnly}
                 />
               )}
               {/*
@@ -1543,9 +1601,25 @@ export function ChatPage() {
                      停在某个正在跑的会话里时，仍明确提示「这一轮还在跑…想停下用
                      中断」，但不再重复画那条带数字的蓝条。
               */}
-              <div ref={bottomRef} />
             </div>
           )}
+
+          {!isAtBottom && (
+            <button
+              type="button"
+              onClick={() => scrollToLatest()}
+              className={cn(
+                'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-pill border border-line bg-surface px-3 py-1',
+                'text-2xs text-ink-muted shadow-sm transition-colors duration-150 hover:text-ink',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              )}
+              data-jump-to-bottom
+            >
+              <ArrowDown size={11} strokeWidth={2} aria-hidden="true" className="mr-1 inline" />
+              回到底部
+            </button>
+          )}
+          </div>
         </div>
 
         {/* 错误条：只占一行，不弹窗。它不阻止用户继续输入 */}
@@ -1602,28 +1676,28 @@ export function ChatPage() {
           </div>
         )}
 
-        {/* 输入卡（CyberStrikeAI 形态）：设置、附件、输入、发送同一张卡 */}
+        {/* 输入卡（单行形态）：附件、输入、模型、设置、发送同一行 */}
         <div className="shrink-0 px-3 pb-3 pt-4" data-testid="composer-dock">
           <div className="mx-auto w-full max-w-[880px] rounded-2xl border border-line bg-surface shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)] transition-shadow duration-200 focus-within:border-line-strong focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]" data-testid="composer-card">
-            {active && settingsBar && (
-              <div className="border-b border-line/70 px-2 py-1.5">{settingsBar}</div>
+            {/*
+              ★ v1.75：设置默认收进齿轮，输入区只占一行。
+              项目/人格/审批/技能/MCP 不是每句话都要改的东西，常驻会
+              把输入框挤成三行（用户原话："太难用了"）。
+            */}
+            {active && settingsOpen && (
+              <div className="border-b border-line/70 px-2 py-1.5" data-composer-settings>
+                {settingsBar}
+                <div className="mt-1.5 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setSettingsOpen(false)}
+                    className="rounded-md border border-line px-2 py-1 text-2xs text-ink-muted transition-colors duration-150 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                  >
+                    完成
+                  </button>
+                </div>
+              </div>
             )}
-          {active && (
-            /*
-              ★ 附件条**始终**渲染（含上传按钮），不只是有附件时。
-                只在有附件时才显示上传按钮，会让"怎么传文件"变成一个
-                要先传一个文件才能发现的谜。
-            */
-            <AttachmentBar
-              attachments={stagedAttachments}
-              uploading={uploading}
-              onPick={(file) => void handleUpload(file)}
-              onRemove={dropStagedAttachment}
-              // ★ v1.65：只在本会话有轮次在跑时才禁用附件（跑着不能改附件）。
-              //   别的会话在跑不影响这里。
-              disabled={sendingHere}
-            />
-          )}
           {mention && (
             <ToolMention
               tools={tools}
@@ -1633,6 +1707,23 @@ export function ChatPage() {
             />
           )}
           <div className="flex items-end gap-1.5 p-2">
+            {/*
+              ★ v1.75：附件按钮收进输入行左侧（回形针图标）。
+              旧形态是输入框上方一条「附件」横栏 —— 与设置条一起把
+              输入区撑成三行。有附件时芯片仍在行内换行显示。
+            */}
+            {active && (
+              <AttachmentBar
+                inline
+                attachments={stagedAttachments}
+                uploading={uploading}
+                onPick={(file) => void handleUpload(file)}
+                onRemove={dropStagedAttachment}
+                // ★ v1.65：只在本会话有轮次在跑时才禁用附件（跑着不能改附件）。
+                //   别的会话在跑不影响这里。
+                disabled={sendingHere}
+              />
+            )}
             <textarea
               ref={composerRef}
               value={draft}
@@ -1678,7 +1769,7 @@ export function ChatPage() {
                   void handleSend()
                 }
               }}
-              rows={2}
+              rows={1}
               placeholder={
                 !active
                   ? '先新建或打开一个对话'
@@ -1717,6 +1808,32 @@ export function ChatPage() {
                 'disabled:cursor-not-allowed disabled:opacity-60',
               )}
             />
+            {active && (
+              <div className="hidden shrink-0 sm:block">
+                <ProviderSelect
+                  providers={usableProviders}
+                  value={active.providerId ?? null}
+                  onChange={(providerId) => void updateSettings(active.id, { providerId })}
+                />
+              </div>
+            )}
+            {active && (
+              <button
+                type="button"
+                onClick={() => setSettingsOpen((value) => !value)}
+                aria-expanded={settingsOpen}
+                aria-label="对话设置"
+                title="对话设置"
+                className={cn(
+                  'shrink-0 rounded-md border border-line p-1.5',
+                  'text-ink-faint transition-colors duration-150 hover:text-ink',
+                  settingsOpen && 'border-accent/40 text-accent',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                )}
+              >
+                <Settings2 size={14} strokeWidth={2} aria-hidden="true" />
+              </button>
+            )}
             {/*
               ★ v1.25：「中断」入口。只在**当前会话**正在跑时出现 ——
                 跑在别的会话里时这里根本没有可中断的轮次（见 `sendingElsewhere`）。

@@ -88,6 +88,47 @@ describe('MessageRow — 助手正文', () => {
   })
 })
 
+describe('MessageRow — 助手正文渲染 Markdown（v1.75）', () => {
+  it('★ 加粗/列表/代码块被渲染，而不是显示星号原文', () => {
+    const { container } = render(
+      <MessageRow
+        message={msg({
+          id: 'md1',
+          content: '**结论**\n\n- 第一项\n- 第二项\n\n```bash\nls -la\n```',
+        })}
+      />,
+    )
+
+    const row = container.querySelector('[data-markdown-answer]') as HTMLElement
+    expect(row).not.toBeNull()
+    expect(row.querySelector('strong')?.textContent).toBe('结论')
+    expect(row.querySelectorAll('li').length).toBe(2)
+    expect(row.querySelector('pre')).not.toBeNull()
+    expect(row.textContent).not.toContain('**结论**')
+  })
+
+  it('★ /work/persist 路径（正文与行内代码）都变成下载链接', () => {
+    const { container } = render(
+      <MessageRow
+        sessionId="chat_1"
+        message={msg({
+          id: 'md2',
+          content: '结果在 `/work/persist/report.md`，副本 /work/persist/copy.txt',
+        })}
+      />,
+    )
+
+    const links = Array.from(
+      container.querySelectorAll('a[download]'),
+    ) as HTMLAnchorElement[]
+    expect(links.length).toBe(2)
+    const hrefs = links.map((link) => decodeURIComponent(link.getAttribute('href') ?? ''))
+    expect(hrefs[0]).toContain('/chat/sessions/chat_1/files/download')
+    expect(hrefs[0]).toContain('path=report.md')
+    expect(hrefs[1]).toContain('path=copy.txt')
+  })
+})
+
 describe('MessageRow — 工具消息', () => {
   it('★ 工具消息走工具卡，而不是一段正文', () => {
     const { container } = render(

@@ -132,7 +132,16 @@ function finishTurn(
 
 /** 等一轮微任务，让 store 里的 await 推进到下一个 pending。 */
 function tick() {
-  return new Promise((resolve) => setTimeout(resolve, 0))
+  // 正文增量按 rAF 合并（chat.ts 的 queueDelta），断言前要多等一帧。
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      if (typeof requestAnimationFrame === 'function') {
+        requestAnimationFrame(() => resolve())
+      } else {
+        resolve()
+      }
+    }, 0)
+  })
 }
 
 /**

@@ -1,33 +1,38 @@
+import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
 import { MessageRow } from '@/components/chat/MessageRow'
-import { AssistantWork } from '@/components/chat/AssistantWork'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
+import { ApprovalCard } from '@/components/chat/ChatControls'
+import { ToolCard } from '@/components/chat/ToolCard'
+import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
+import { cn } from '@/lib/cn'
 import type { ChatMessage } from '@/data/chat'
 
 /**
  * 一个助手回合。
  *
- * ## 结构（对照 metis 的 AssistantTurn / AssistantWork）
+ * ## 形态：对标 ChatGPT / Claude 的「结论是主角，过程是一条可展开的工作记录」
  *
  * ```
- * ┌ 工作过程（旁白折叠 + 工具分组）           ← 有过程才出现
- * ├ 最终答复（纯文本）                        ← surface !== 'process' 的助手消息
- * ├ 思考过程（可折叠，跟随那条消息）
- * ├ 插话（跑着的时候用户在回合中间说的话）
- * ├ 回合页脚：N 步 · M 个工具 · 时间           ← 非流式时出现
- * └ （流式中）正文光标 +「第 N 轮 · 在做什么」
+ * ┌ 工作过程 · 24 步 · 13 个工具                    ⌄   ← 默认收起，一个回合只有这一行
+ * ├ 最终答复（纯文本，可有多段）
+ * ├ 待审批卡（永远可见，绝不折进过程里）
+ * ├ 插话（跑着的时候用户插的话）
+ * └ 回合页脚：N 步 · M 个工具 · 时间
  * ```
  *
- * ## 为什么插话画在回合里
+ * ## 为什么改回「一条总过程」而不是时间线逐条铺
  *
- * 插话确实属于**正在进行**的这一轮：模型下一轮就会读到它。画在回合
- * 外面（消息流末尾）会让「阶段状态行」跑到用户刚说的话上方，读起来像
- * 那句话发出去之后模型才开始想。
+ * v1.56b 曾经把旁白/工具按发生顺序逐条铺开（对照 CyberStrikeAI 的事件流）。
+ * 真实长任务下这会把一回合撑成几十行「过程详情 · 2 步」，结论被顶到几屏
+ * 之外 —— 生产会话里 92% 的消息是过程/工具，用户的原话是"太难用了"。
  *
- * ## 为什么"最终答复"要挑出来
+ * 成熟产品的做法相反：**过程默认是一条可展开的摘要，结论始终在视野里**。
+ * 所以这里把一回合的全部过程（旁白 + 工具）收进一个 `TurnWork`；用户想看
+ * 细节时点开，里面仍是按发生顺序排列的原始记录。
  *
- * 过程旁白与工具结果都属于**证据**，默认收着；用户真正要看的是结论。
- * 后端已经用 `surface` 标好了：`process` 是过程，其余是给人看的正文。
- * 没有 surface 的历史消息按正文处理（不能因为字段缺失就把旧对话藏起来）。
+ * 默认**始终收起**（不随 live 自动展开/收起）：跑着的时候展开、结束时收起
+ * 会造成整段高度突变、滚动位置跳动，这正是用户抱怨的"跳一下"。
  */
 export function AssistantTurn({
   items,
@@ -40,6 +45,10 @@ export function AssistantTurn({
   meta,
   progress = null,
   sessionId,
+  /** 只看回答：隐藏工作过程，只保留结论（空回合给一行说明）。 */
+  hideWork = false,
+  /** 回合开始时刻：live 时用来显示「已等待 N 秒」。 */
+  startedAt = null,
 }: {
   items: ChatMessage[]
   live?: boolean
@@ -51,84 +60,56 @@ export function AssistantTurn({
   interjections?: ChatMessage[]
   /** 页脚右侧的附加信息（例如人格 / 接入点）。 */
   meta?: string | null
-  /**
-   * 跑着的时候，已经积累了多少（v1.30）。
-   *
-   * 长任务（贴一段 ffuf/curl，模型能连着跑十几二十次工具）最难受的地方
-   * 是：那一行「第 4 轮 · 正在执行 run_shell…」从第 1 次工具到第 18 次
-   * 长得一模一样。用户无法区分「在推进」和「卡在这个工具上」。
-   *
-   * 所以不传 `phaseText` 也行 —— 只要给 `progress`，这一行就把计数带上：
-   * 「第 4 轮 · 正在执行 run_shell…（已 18 次工具）」。
-   */
+  /** 跑着的时候已经积累了多少（轮次外的计数，见 ChatPage）。 */
   progress?: { steps?: number; tools?: number } | null
   /** 当前会话 id：给正文里的 `/work/persist/...` 产物做下载链接。 */
   sessionId?: string
+  hideWork?: boolean
+  startedAt?: string | null
 }) {
+  const answers = items.filter(isAnswer)
+  const work = items.filter((message) => !isAnswer(message))
+  // 待审批的永远单独拿出来画：它还没执行，折进过程里会让用户看不见"在等我点"。
+  const approvals = work.filter((message) => message.approvalStatus === 'pending')
+  const body = work.filter((message) => message.approvalStatus !== 'pending')
   const tools = items.filter((message) => message.role === 'tool')
   const failed = tools.filter((message) => message.toolFailed === true).length
-  // ★ v1.59：这一轮最终有没有给出答复。工具中途报错但模型顶住、照样交付了
-  //   结论，就不该把整轮标红成「N 个失败」——那是把「一次工具调用失败」
-  //   误读成「这一轮失败了」，用户看到一条完整、正确的答案下面挂个红色
-  //   「1 个失败」，会以为活儿没干成（线上实测：比赛结束后拉题库接口 40403
-  //   报错，模型改用 curl 绕过后照样给了完整结论，页脚却红字「1 个失败」）。
-  //   所以按「有没有最终答复」分流：有答复 → 报「N 次工具报错（已恢复）」且不标红；
-  //   没答复 → 才是真的失败，保留红字「N 个失败」。
-  const hasAnswer = items.some(isAnswer)
+  const hasAnswer = answers.length > 0
   const last = items.at(-1)
-  // ★ v1.56b：单一时间线（对照 CyberStrikeAI 的事件流）。按到达顺序分段，
-  //   推理 / 工具 / 结果 / 答复各在**它发生的那个位置**逐条铺下来，不再把
-  //   全部过程收进顶上「过程详情」折叠块、结论另起一块贴在最后。
-  const segments = buildTimelineSegments(items)
+  const elapsed = useElapsed(live, startedAt ?? items[0]?.createdAt ?? null)
 
   return (
-    <div className="flex flex-col gap-3" data-assistant-turn data-timeline>
-      {segments.map((segment) => {
-        if (segment.kind === 'answer') {
-          return (
-            <MessageRow
-              key={`a-${segment.message.id}`}
-              message={segment.message}
-              sessionId={sessionId}
-              deciding={deciding}
-              onDecide={
-                segment.message.approvalStatus === 'pending'
-                  ? (approve) => onDecide?.(segment.message.id, approve)
-                  : undefined
-              }
-            />
-          )
-        }
-        if (segment.kind === 'tools') {
-          return (
-            <div key={`t-${segment.items[0].id}`} className="flex flex-col gap-1">
-              {segment.items.map((message) => (
-                <MessageRow
-                  key={message.id}
-                  message={message}
-                  sessionId={sessionId}
-                  deciding={deciding}
-                  onDecide={
-                    message.approvalStatus === 'pending'
-                      ? (approve) => onDecide?.(message.id, approve)
-                      : undefined
-                  }
-                />
-              ))}
-            </div>
-          )
-        }
-        // 连续旁白收成一条可折叠的「过程」条，**留在它在时间线里的位置**。
-        return (
-          <AssistantWork
-            key={`n-${segment.items[0].id}`}
-            items={segment.items}
-            live={live}
-            deciding={deciding}
-            onDecide={onDecide}
-          />
-        )
-      })}
+    <div className="flex flex-col gap-3" data-assistant-turn>
+      {!hideWork && body.length > 0 && <TurnWork items={body} live={live} />}
+
+      {approvals.map((message) => (
+        <ApprovalCard
+          key={message.id}
+          message={message}
+          onDecide={(approve) => onDecide?.(message.id, approve)}
+          disabled={deciding}
+        />
+      ))}
+
+      {answers.map((message) => (
+        <MessageRow
+          key={message.id}
+          message={message}
+          sessionId={sessionId}
+          deciding={deciding}
+          onDecide={
+            message.approvalStatus === 'pending'
+              ? (approve) => onDecide?.(message.id, approve)
+              : undefined
+          }
+        />
+      ))}
+
+      {hideWork && items.length > 0 && !hasAnswer && !live && (
+        <p className="text-2xs text-ink-faint" data-answers-only-placeholder>
+          本轮没有给出回答（工具与过程已隐藏）。
+        </p>
+      )}
 
       {live &&
         interjections.map((message) => (
@@ -137,11 +118,12 @@ export function AssistantTurn({
 
       {live && streamingText !== null && (
         <div
-          className="w-full whitespace-pre-wrap break-words text-sm leading-7 text-ink"
+          className="w-full break-words text-sm leading-7 text-ink"
           data-streaming-bubble="true"
           data-message-row="assistant"
         >
-          {streamingText}
+          {/* 流式正文也走 Markdown：否则落库那一刻会从「星号原文」跳成「加粗」。 */}
+          <WriteupMarkdown markdown={streamingText} sessionId={sessionId} />
           <span
             className="ml-0.5 inline-block h-3.5 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom"
             aria-hidden="true"
@@ -158,6 +140,9 @@ export function AssistantTurn({
           <span className="text-2xs text-ink-faint">
             {phaseText ?? '正在想…'}
             {progressLabel(progress)}
+            {elapsed > 0 && (
+              <span className="text-ink-faint/70"> · 已 {formatElapsed(elapsed)}</span>
+            )}
           </span>
         </div>
       )}
@@ -198,81 +183,112 @@ export function AssistantTurn({
   )
 }
 
-/*
-  ★ v1.56b：把一回合的消息切成**按发生顺序**的时间线段。
-
-  CyberStrikeAI 的事件流是 progress / iteration / thinking / tool_call /
-  tool_result / 最终答复 逐条推、前端按到达顺序逐条追加。落到这里就是：
-  「旁白 → 工具 → 旁白 → 工具 → 答复」原样铺下来，不再「过程全收进顶上
-  一个折叠块、结论另起一块贴最后」。
-
-  切段规则（只把**连续的同类**合在一起，绝不跨类型重排）：
-  - 连续工具消息 → 一个 tools 段（每张 ToolCard 仍各占一行）；
-  - 连续旁白（assistant 且 surface==='process'）→ 一个 narration 段
-    （沿用它原来的「过程详情」折叠条，只是留在时间线原位）；
-  - 最终答复（assistant 且 surface!=='process'）→ 单条 narration 段，
-    由 MessageRow 画成纯文本正文 —— 它就出现在它**实际产生的位置**。
-  - 待审批消息单独成段（它 role 可能是 tool，但还没执行），
-    MessageRow 会优先画审批卡。
-
-  为什么最终答复也走 narration 段：AssistantWork 对「只有一条、且不是
-  process」的项不会把它当旁白折起来 —— 见下面 timeline 渲染里对单条
-  answer 的处理。这样答复正文位置正确、形态也仍是纯文本。
+/**
+ * 一回合的「工作过程」：一条摘要 + 可展开的原始时间线。
+ *
+ * 摘要行是折叠态**唯一**的信息，所以它要回答"做了多少、做到了哪"：
+ * 步数、工具数、失败数。展开后按发生顺序铺旁白与工具卡（工具卡自身仍是一行）。
+ *
+ * 默认收起且不随 `live` 变化 —— 见 `AssistantTurn` 顶部注释。
  */
-type TimelineSegment =
-  | { kind: 'tools'; items: ChatMessage[] }
-  | { kind: 'narration'; items: ChatMessage[] }
-  | { kind: 'answer'; message: ChatMessage }
+function TurnWork({ items, live }: { items: ChatMessage[]; live: boolean }) {
+  const [override, setOverride] = useState<boolean | null>(null)
+  const open = override ?? false
+  const tools = items.filter((message) => message.role === 'tool')
+  const failed = tools.filter((message) => message.toolFailed === true).length
+
+  return (
+    <div
+      className="flex flex-col"
+      data-turn-work
+      data-turn-work-steps={items.length}
+      data-turn-work-tools={tools.length}
+    >
+      <button
+        type="button"
+        onClick={() => setOverride(!open)}
+        aria-expanded={open}
+        className={cn(
+          'flex w-full items-center gap-1.5 rounded-sm px-1 py-1 text-left',
+          'text-2xs text-ink-faint transition-colors duration-150 hover:text-ink-muted',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+        )}
+      >
+        {open ? (
+          <ChevronDown size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronRight size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        )}
+        <Sparkles size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
+        <span className="shrink-0">
+          {live ? '正在处理' : '工作过程'} · {items.length} 步
+        </span>
+        {tools.length > 0 && (
+          <span className="shrink-0 text-ink-faint/70">· {tools.length} 个工具</span>
+        )}
+        {failed > 0 && (
+          <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
+            {failed} 个失败
+          </span>
+        )}
+        <span className="ml-auto shrink-0 text-ink-faint/60">{open ? '收起' : '展开'}</span>
+      </button>
+
+      {open && (
+        /*
+          展开后的记录限高 320px（≈ 12 行），避免一次点开把结论顶出屏幕。
+          里面保留真实顺序：旁白是灰色小字，工具卡仍各自一行可再展开。
+        */
+        <div className="ml-2 flex max-h-[320px] flex-col gap-0.5 overflow-y-auto border-l border-line/70 pl-2.5">
+          {items.map((message) =>
+            message.role === 'tool' ? (
+              <ToolCard key={message.id} message={message} compact />
+            ) : (
+              <p
+                key={message.id}
+                className="whitespace-pre-wrap break-words px-1 py-0.5 text-xs leading-relaxed text-ink-muted"
+                data-narration-line
+              >
+                {message.content}
+              </p>
+            ),
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 /** 这条消息是「最终答复」（要露正文、纯文本）还是「过程旁白」（可折）。 */
 function isAnswer(message: ChatMessage): boolean {
   return message.role === 'assistant' && message.surface !== 'process'
 }
 
-function buildTimelineSegments(items: ChatMessage[]): TimelineSegment[] {
-  const segments: TimelineSegment[] = []
-  let tools: ChatMessage[] = []
-  let narration: ChatMessage[] = []
+/**
+ * live 时的已等待秒数。
+ *
+ * 长任务里最难受的是"看不出它还在不在动"：阶段文案可能几十秒不变，
+ * 一个持续增长的秒数是最便宜、也最诚实的活着的证据。
+ */
+function useElapsed(live: boolean, since: string | null): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!live) return
+    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    return () => window.clearInterval(timer)
+  }, [live])
 
-  const flushTools = () => {
-    if (tools.length > 0) {
-      segments.push({ kind: 'tools', items: tools })
-      tools = []
-    }
-  }
-  const flushNarration = () => {
-    if (narration.length > 0) {
-      segments.push({ kind: 'narration', items: narration })
-      narration = []
-    }
-  }
+  if (!live || !since) return 0
+  const start = new Date(since).getTime()
+  if (Number.isNaN(start)) return 0
+  return Math.max(0, Math.floor((now - start) / 1000))
+}
 
-  for (const message of items) {
-    // 最终答复自成一段，永远画正文（不折叠、也不跟旁白混）。
-    if (isAnswer(message)) {
-      flushTools()
-      flushNarration()
-      segments.push({ kind: 'answer', message })
-      continue
-    }
-    // 待审批消息：role 可能还是 tool，但还没执行，单独成段走 MessageRow 审批卡。
-    if (message.approvalStatus === 'pending') {
-      flushTools()
-      flushNarration()
-      segments.push({ kind: 'tools', items: [message] })
-      continue
-    }
-    if (message.role === 'tool') {
-      flushNarration()
-      tools.push(message)
-      continue
-    }
-    flushTools()
-    narration.push(message)
-  }
-  flushTools()
-  flushNarration()
-  return segments
+function formatElapsed(seconds: number): string {
+  if (seconds < 60) return `${seconds} 秒`
+  const minutes = Math.floor(seconds / 60)
+  const rest = seconds % 60
+  return rest > 0 ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`
 }
 
 function formatClock(value: string): string {
@@ -286,10 +302,6 @@ function formatClock(value: string): string {
  *
  * 只在「真的积累了一点东西」时才出现：0 次工具的时候写「（已 0 次工具）」
  * 是噪音，第一轮开始前那几秒本来也没有进度可言。
- *
- * 为什么只报工具次数、不报轮次：轮次已经在 `phaseLabel` 的前缀里
- * （「第 4 轮 · …」），再写一遍就成了「第 4 轮 · …（第 4 轮）」。工具次数
- * 是真正随时间长的那一维，也是用户判断"它还在动"的依据。
  */
 function progressLabel(progress: { steps?: number; tools?: number } | null): string {
   if (!progress) return ''

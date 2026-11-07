@@ -504,17 +504,31 @@ export function AttachmentBar({
   onPick,
   onRemove,
   disabled,
+  inline = false,
 }: {
   attachments: ChatAttachment[]
   uploading: boolean
   onPick: (file: File) => void
   onRemove: (id: string) => void
   disabled?: boolean
+  /**
+   * ★ v1.75：收进输入行的左侧（单行输入卡）。
+   *
+   * 旧形态是输入框上方单独一条「附件」横栏 —— 加上设置条，一个输入区
+   * 占了三行。成熟客户端都是一个输入框 + 一排小按钮。`inline` 时只留
+   * 一个回形针图标；有附件时芯片仍会就地换行显示（不另起一条横栏）。
+   */
+  inline?: boolean
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   return (
-    <div className="mx-auto flex w-full flex-wrap items-center gap-1 px-2.5 pb-0.5 pt-1.5">
+    <div
+      className={cn(
+        'flex items-center gap-1',
+        inline ? 'min-w-0 flex-wrap' : 'mx-auto w-full flex-wrap px-2.5 pb-0.5 pt-1.5',
+      )}
+    >
       <input
         ref={inputRef}
         type="file"
@@ -532,8 +546,10 @@ export function AttachmentBar({
         type="button"
         onClick={() => inputRef.current?.click()}
         disabled={disabled || uploading}
+        aria-label={inline ? '附件' : undefined}
         className={cn(
-          'flex items-center gap-1 rounded-xs border border-line bg-surface-sunken px-1.5 py-1',
+          'flex items-center gap-1 rounded-xs border border-line bg-surface-sunken',
+          inline ? 'shrink-0 p-1.5' : 'px-1.5 py-1',
           'text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
@@ -543,9 +559,9 @@ export function AttachmentBar({
         {uploading ? (
           <Loader2 size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
         ) : (
-          <Paperclip size={12} strokeWidth={2} aria-hidden="true" />
+          <Paperclip size={13} strokeWidth={2} aria-hidden="true" />
         )}
-        {uploading ? '上传中…' : '附件'}
+        {!inline && (uploading ? '上传中…' : '附件')}
       </button>
 
       {attachments.map((attachment) => (

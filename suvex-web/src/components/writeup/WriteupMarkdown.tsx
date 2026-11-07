@@ -2,11 +2,13 @@ import CodeBlock from '@/components/ui/CodeBlock'
 import { cn } from '@/lib/cn'
 import {
   isValidElement,
+  useMemo,
   type ComponentPropsWithoutRef,
   type ReactNode,
 } from 'react'
 import Markdown, { type Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { remarkWorkLinks } from '@/lib/remarkWorkLinks'
 /*
   ─────────────────────────────────────────────────────────────
   题解的 Markdown 渲染器（2026-10-14 从 `scans/WriteupDialog` 抽出）
@@ -284,11 +286,16 @@ const WRITEUP_MARKDOWN_COMPONENTS: Components = {
     用户回来时那个弹窗已经关了、列表也刷新过 —— "我刚才看的是哪次扫描的题解"
     这个上下文就丢了。`noreferrer` 顺带挡住 window.opener。
   */
-  a: ({ children, href }: ComponentPropsWithoutRef<'a'>) => (
+  a: ({ children, href, download, title }: ComponentPropsWithoutRef<'a'>) => (
     <a
       href={href}
       target="_blank"
       rel="noreferrer noopener"
+      // v1.75：对话里的产物链接带 `download`（由 remarkWorkLinks 注入），
+      // 题解普通链接没有这个属性 —— 不转发它，产物链接就会在浏览器里
+      // 新开一个标签页而不是直接下载。
+      download={download}
+      title={title}
       className="text-accent-strong underline decoration-accent/40 transition-ui duration-fast hover:text-accent"
     >
       {children}
@@ -322,14 +329,31 @@ const WRITEUP_MARKDOWN_COMPONENTS: Components = {
 const REMARK_PLUGINS = [remarkGfm]
 
 /**
- * 渲染一份题解 markdown。
+ * 渲染一段 markdown（题解 / 对话正文共用）。
  *
- * ⚠️ 两个入口（扫描 / CTF2）都用它，**不要各自包一层 Markdown** ——
- *    那样 `components` 会各自成为新引用，记忆化失效，长题解会卡。
+ * ⚠️ 三个入口（扫描 / CTF2 / 对话）都用它，**不要各自包一层 Markdown** ——
+ *    那样 `components` 会各自成为新引用，记忆化失效，长文会卡。
+ *
+ * `sessionId`：对话正文才需要。给了就把 `/work/persist/...` 渲染成
+ * 可下载链接（v1.36 的行为，改成 Markdown 后用 remark 插件实现）。
  */
-export function WriteupMarkdown({ markdown }: { markdown: string }) {
+export function WriteupMarkdown({
+  markdown,
+  sessionId,
+}: {
+  markdown: string
+  sessionId?: string
+}) {
+  /*
+    plugins 也要引用稳定：react-markdown 把它作为记忆化依赖。
+    会话内 sessionId 不变，所以这个数组在整段对话里是常量。
+  */
+  const plugins = useMemo(
+    () => (sessionId ? [remarkGfm, remarkWorkLinks(sessionId)] : REMARK_PLUGINS),
+    [sessionId],
+  )
   return (
-    <Markdown remarkPlugins={REMARK_PLUGINS} components={WRITEUP_MARKDOWN_COMPONENTS}>
+    <Markdown remarkPlugins={plugins} components={WRITEUP_MARKDOWN_COMPONENTS}>
       {markdown}
     </Markdown>
   )

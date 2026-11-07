@@ -117,7 +117,13 @@ export function useAutoScroll({
     if (!container) return
 
     isProgrammaticRef.current = true
-    container.scrollTo({ top: container.scrollHeight, behavior })
+    // jsdom（以及少数老浏览器）没有实现元素级 scrollTo —— 退成直接赋 scrollTop。
+    // 测试环境里缺这一个方法会让整页直接抛错，而滚动本身并不依赖平滑动画。
+    if (typeof container.scrollTo === 'function') {
+      container.scrollTo({ top: container.scrollHeight, behavior })
+    } else {
+      container.scrollTop = container.scrollHeight
+    }
     setIsAtBottom(true)
 
     // 平滑滚动是异步的，标志要等它结束才清。

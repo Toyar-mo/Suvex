@@ -76,8 +76,8 @@ describe('AssistantTurn — 最终答复是纯文本', () => {
     expect(answerRow.className).not.toContain('rounded-[10px]')
     expect(answerRow.className).not.toContain('bg-surface')
 
-    // 过程（data-assistant-work）必须出现在结论之前，否则读起来像"先有结论后找证据"
-    const work = container.querySelector('[data-assistant-work]') as HTMLElement
+    // 过程摘要（data-turn-work）在结论之前，结论不被工具记录淹没
+    const work = container.querySelector('[data-turn-work]') as HTMLElement
     expect(work).not.toBeNull()
     expect(work.compareDocumentPosition(answerRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
@@ -140,79 +140,78 @@ describe('AssistantTurn — 回合页脚', () => {
   })
 })
 
-describe('AssistantTurn — 单一时间线（v1.56b 对照 CyberStrikeAI 事件流）', () => {
-  it('★ 消息按发生顺序铺下来：旁白 → 工具 → 工具 → 答复，答复在最后', () => {
+describe('AssistantTurn — 工作过程收成一条摘要（对标成熟客户端）', () => {
+  it('★ 默认收起：结论可见，工具与旁白不占版面', () => {
     /*
-      这是 v1.56b 的核心契约：不再把全部过程收进顶上一个「过程详情」折叠块、
-      结论另起一块贴在最下面；而是推理/工具/结果/答复各在**它发生的那个
-      位置**逐条铺下来（CyberStrikeAI 的 progress/thinking/tool_call/
-      tool_result/答复 事件按到达顺序追加）。
-
-      断言：答复正文的 DOM 位置排在两条工具之后（不是被提到工具上面）。
+      生产会话里 92% 的消息是过程/工具，逐条铺开会把结论顶到几屏之外。
+      成熟客户端（ChatGPT / Claude）的做法是一回合只有一条「工作过程」
+      摘要，点开才看细节 —— 这里钉住这个默认形态。
     */
     const { container } = render(<AssistantTurn items={fullTurn()} />)
 
-    const answerRow = screen
-      .getByText('已清点完毕')
-      .closest('[data-message-row="assistant"]') as HTMLElement
-    expect(answerRow).not.toBeNull()
-
-    const toolRows = container.querySelectorAll('[data-message-row="tool"]')
-    expect(toolRows.length).toBe(2)
-    const lastTool = toolRows[toolRows.length - 1] as HTMLElement
-
-    // 答复必须在最后一条工具**之后**（文档顺序），而不是被提到工具前面。
+    const work = container.querySelector('[data-turn-work]') as HTMLElement
+    expect(work).not.toBeNull()
+    expect(work.getAttribute('data-turn-work-steps')).toBe('3')
+    expect(work.getAttribute('data-turn-work-tools')).toBe('2')
     expect(
-      lastTool.compareDocumentPosition(answerRow) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy()
+      screen.getByRole('button', { name: /工作过程/ }).getAttribute('aria-expanded'),
+    ).toBe('false')
+
+    // 收起时原始记录不在 DOM 里，版面只有摘要 + 结论
+    expect(container.querySelector('[data-message-row="tool"]')).toBeNull()
+    expect(container.textContent).not.toContain('我先跑一遍端口扫描')
+    expect(screen.getByText('已清点完毕')).toBeTruthy()
   })
 
-  it('★ 交错回合：答复夹在两次工具之间时，位置就在中间，不被挪到最后', () => {
-    /*
-      真实的多轮 agent 回合常常是：旁白 → 工具 … → 一段结论 → 又去跑工具 →
-      收尾答复。旧结构会把所有非最终答复都收进顶上过程块，导致中间那段
-      「结论」要么消失、要么被顶到最后。时间线模型里它就该待在中间。
-    */
+  it('★ 失败数冒到收起态摘要行上（收起时也要看得见工具挂了）', () => {
+    const { container } = render(<AssistantTurn items={[toolFailed]} />)
+    const work = container.querySelector('[data-turn-work]') as HTMLElement
+    expect(work.textContent).toContain('1 个失败')
+  })
+
+  it('★ 点开摘要后按发生顺序铺出旁白与工具', () => {
+    const { container } = render(<AssistantTurn items={fullTurn()} />)
+    fireEvent.click(screen.getByRole('button', { name: /工作过程/ }))
+
+    const toolRows = Array.from(
+      container.querySelectorAll('[data-message-row="tool"]'),
+    ) as HTMLElement[]
+    expect(toolRows.length).toBe(2)
+
+    const narrationLine = container.querySelector('[data-narration-line]') as HTMLElement
+    expect(narrationLine.textContent).toContain('我先跑一遍端口扫描')
+    // 旁白在第一条工具之前 —— 展开后仍是真实发生顺序
+    expect(
+      narrationLine.compareDocumentPosition(toolRows[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy()
+    // 工具参数摘要仍在折叠行上
+    expect(container.textContent).toContain('nmap -sV example.com')
+  })
+
+  it('★ 交错回合的中间结论也始终露在过程之外', () => {
     const midAnswer = msg({
       id: 'a-mid',
       surface: 'answer',
       content: '端口扫完了，接着看服务',
       createdAt: '2026-10-25T03:05:30Z',
     })
-    const items = [narration, toolOk, midAnswer, toolFailed, answer]
-    const { container } = render(<AssistantTurn items={items} />)
+    render(<AssistantTurn items={[narration, toolOk, midAnswer, toolFailed, answer]} />)
+    // 两条结论都不被收进「工作过程」，始终可见
+    expect(screen.getByText('端口扫完了，接着看服务')).toBeTruthy()
+    expect(screen.getByText('已清点完毕')).toBeTruthy()
+  })
+})
 
-    const allRows = Array.from(
-      container.querySelectorAll('[data-message-row]'),
-    ) as HTMLElement[]
-    const idxOf = (text: string) =>
-      allRows.findIndex((row) => row.textContent && row.textContent.includes(text))
-
-    const midIdx = idxOf('端口扫完了，接着看服务')
-    const finalIdx = idxOf('已清点完毕')
-    const firstToolIdx = idxOf('nmap -sV example.com')
-    const secondToolIdx = idxOf('nmap -p- example.com')
-
-    // 中间结论在第一条工具之后、第二条工具之前 —— 位置保真。
-    expect(midIdx).toBeGreaterThan(firstToolIdx)
-    expect(midIdx).toBeLessThan(secondToolIdx)
-    // 收尾答复在最后。
-    expect(finalIdx).toBeGreaterThan(secondToolIdx)
+describe('AssistantTurn — 只看回答', () => {
+  it('★ hideWork 时不渲染过程摘要，只留结论', () => {
+    const { container } = render(<AssistantTurn items={fullTurn()} hideWork />)
+    expect(container.querySelector('[data-turn-work]')).toBeNull()
+    expect(screen.getByText('已清点完毕')).toBeTruthy()
   })
 
-  it('★ 不再有「把全部过程提到结论之上」的 data-assistant-work 头部块', () => {
-    /*
-      旧结构：<AssistantWork items=workItems/> 在最前，<结论/> 在最后 —— 于是
-      data-assistant-work 一定早于答复。新结构里旁白仍可能是可折叠条，但它
-      按时间线**原位**出现，不再是一个统揽全部过程的前置块。
-
-      判据：答复与「第一条工具」之间，应夹着旁白/工具的**时间线顺序**，
-      不能出现「答复之前存在一个包含全部工具的 assistant-work」这种旧形态。
-      这里直接用:答复前面不能是那个把答案排除在外的 work 头块。
-    */
-    const { container } = render(<AssistantTurn items={fullTurn()} />)
-    const root = container.querySelector('[data-assistant-turn]') as HTMLElement
-    expect(root.hasAttribute('data-timeline')).toBe(true)
+  it('★ hideWork 且本轮没有回答时给一行说明，而不是空白', () => {
+    const { container } = render(<AssistantTurn items={[narration, toolOk]} hideWork />)
+    expect(container.querySelector('[data-answers-only-placeholder]')).not.toBeNull()
   })
 })
 
