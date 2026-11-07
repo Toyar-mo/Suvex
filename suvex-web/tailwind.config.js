@@ -129,7 +129,9 @@ export default {
         signal: {
           ok: 'rgb(var(--suvex-signal-ok) / <alpha-value>)', // 已确认 / 通过
           warn: 'rgb(var(--suvex-signal-warn) / <alpha-value>)', // 待确认 / 中危
-          risk: 'rgb(var(--suvex-signal-risk) / <alpha-value>)', // 高危 / 失败
+          risk: 'rgb(var(--suvex-signal-risk) / <alpha-value>)', // 严重 / 失败
+          high: 'rgb(var(--suvex-signal-high) / <alpha-value>)', // 高危文字（比 risk 浅一档）
+          'high-solid': 'rgb(var(--suvex-signal-high-solid) / <alpha-value>)', // 高危实心底 / 描边
           info: 'rgb(var(--suvex-signal-info) / <alpha-value>)', // 中性提示
         },
 

@@ -237,11 +237,15 @@ export function ChallengeCard({
     challenge.status === 'failed' && (challenge.lastError ?? '').includes('回合用尽')
 
   return (
-    <article className="flex flex-col gap-panel rounded-md border border-line bg-surface p-panel">
+    /*
+      min-w-0：网格项的 min-width 默认是 auto，一道长标题的题会把整列
+      撑到 565px（列宽只有 332），整页横向溢出 209px。
+    */
+    <article className="flex min-w-0 flex-col gap-panel rounded-md border border-line bg-surface p-panel">
       {/* ── 头部：标题 + 状态 ── */}
       <header className="flex items-start justify-between gap-tight">
         <div className="flex min-w-0 flex-col gap-0.5">
-          <h3 className="text-sm text-ink">{challenge.title}</h3>
+          <h3 className="break-words text-sm text-ink">{challenge.title}</h3>
           <div className="flex flex-wrap items-center gap-x-tight gap-y-0.5 text-2xs text-ink-faint">
             <span>{CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)]}</span>
             {challenge.platformName && (

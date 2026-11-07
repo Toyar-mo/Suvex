@@ -1564,7 +1564,7 @@ export function ChatPage() {
               */}
               {sendingHere && pendingUserContent !== null && (
                 <div className="flex justify-end" data-pending-bubble="true">
-                  <div className="max-w-[520px] rounded-[10px] rounded-br-xs bg-accent/12 px-3.5 py-2">
+                  <div className="max-w-[520px] rounded-lg rounded-br-xs bg-accent/12 px-3.5 py-2">
                     <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
                       {pendingUserContent}
                     </p>
@@ -2186,7 +2186,11 @@ function SessionRow({
                 📌
               </span>
             )}
-            <span className="truncate text-xs text-ink">{session.title}</span>
+            {/* 空标题没有兜底时，列表里会出现只有「0 条」没有名字的一行 ——
+                看起来像渲染坏了。未命名也要能被指认。 */}
+            <span className="truncate text-xs text-ink">
+              {session.title.trim() || '未命名对话'}
+            </span>
           </span>
           <span className="block text-2xs text-ink-faint">
             {session.running ? '运行中 · ' : ''}
@@ -2208,7 +2212,7 @@ function SessionRow({
               'hover:text-signal-risk focus:opacity-100 group-hover:opacity-100',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             )}
-            aria-label={`归档对话「${session.title}」`}
+            aria-label={`归档对话「${session.title.trim() || '未命名对话'}」`}
             title="归档这个对话"
           >
             <Archive size={12} strokeWidth={2} aria-hidden="true" />
@@ -2226,7 +2230,7 @@ function SessionRow({
             'hover:text-ink focus:opacity-100 group-hover:opacity-100',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           )}
-          aria-label={`打开对话「${session.title}」的菜单`}
+          aria-label={`打开对话「${session.title.trim() || '未命名对话'}」的菜单`}
           aria-haspopup="menu"
           title="更多操作"
         >

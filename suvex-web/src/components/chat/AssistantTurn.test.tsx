@@ -13,7 +13,7 @@ import type { ChatMessage } from '@/data/chat'
   这个组件的整篇注释都在讲同一件事：最终答复不包气泡、过程收进折叠。
   所以断言的落点不是"元素存在"，而是**两种消息长得不一样**：
 
-  · 助手正文外面没有 `rounded-[10px]` / `bg-surface`（那是用户气泡的皮）；
+  · 助手正文外面没有 `rounded-lg` / `bg-surface`（那是用户气泡的皮）；
   · 过程在结论之前，且中间有 24px 的呼吸（`pt-3`）；
   · 页脚上的步数 / 工具数 / 失败数是真的数出来的，不是常量。
 */
@@ -73,7 +73,7 @@ describe('AssistantTurn — 最终答复是纯文本', () => {
     const answerRow = paragraph.closest('[data-message-row="assistant"]') as HTMLElement
     expect(answerRow).not.toBeNull()
     // ★ 用户气泡才有这两样；助手正文套上它们，长回答就变成一大块灰砖
-    expect(answerRow.className).not.toContain('rounded-[10px]')
+    expect(answerRow.className).not.toContain('rounded-lg')
     expect(answerRow.className).not.toContain('bg-surface')
 
     // 过程摘要（data-turn-work）在结论之前，结论不被工具记录淹没

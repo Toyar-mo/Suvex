@@ -308,7 +308,7 @@ export function SkillsPage() {
             />
 
             {!isAdmin && (
-              <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-[13px] text-ink-muted">
+              <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-sm text-ink-muted">
                 <Eye className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
                 <span>
                   你现在的角色是<b>只读</b>：能看全部技能与调用统计，但改不了。
@@ -332,7 +332,7 @@ export function SkillsPage() {
               {/* 左：清单 */}
               <section className="flex min-w-0 flex-col rounded-md border border-line bg-surface">
                 <header className="flex items-center justify-between gap-tight border-b border-line px-3 py-2">
-                  <h2 className="text-[13px] font-medium text-ink">
+                  <h2 className="text-sm font-medium text-ink">
                     全部技能
                     <span className="ml-1.5 font-normal text-ink-faint">{list.total}</span>
                   </h2>
@@ -357,7 +357,7 @@ export function SkillsPage() {
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
                       placeholder="搜索名字 / 分类 / 描述"
-                      className="h-8 w-full rounded-sm border border-line bg-surface pr-2 pl-7 text-[13px] text-ink outline-none focus:border-line-accent"
+                      className="h-8 w-full rounded-sm border border-line bg-surface pr-2 pl-7 text-sm text-ink outline-none focus:border-line-accent"
                     />
                   </div>
                 </div>
@@ -369,14 +369,14 @@ export function SkillsPage() {
                     description="技能包随代码分发在 prompts/skills/ 下。这里是空的，说明打包时漏了 —— 不影响工具可用。"
                   />
                 ) : visibleSkills.length === 0 ? (
-                  <p className="px-3 py-6 text-[13px] text-ink-muted">
+                  <p className="px-3 py-6 text-sm text-ink-muted">
                     没有匹配「{query}」的技能。
                   </p>
                 ) : (
                   <ul className="max-h-[60dvh] overflow-y-auto lg:max-h-[calc(100dvh-320px)]">
                     {filtered.map((group) => (
                       <li key={group.category}>
-                        <h3 className="border-b border-line/60 bg-surface-raised/30 px-3 py-1.5 text-[11px] tracking-wide text-ink-faint uppercase">
+                        <h3 className="border-b border-line/60 bg-surface-raised/30 px-3 py-1.5 text-2xs tracking-wide text-ink-faint uppercase">
                           {categoryLabel(group.category)}
                           <span className="ml-1 normal-case">（{group.skills.length}）</span>
                         </h3>
@@ -490,7 +490,7 @@ function StatsBar({
         />
         <Metric label="累计加载" value={totalLoads} />
         {topName && (
-          <div className="flex items-center gap-1.5 text-[13px]">
+          <div className="flex items-center gap-1.5 text-sm">
             <TrendingUp className="size-3.5 text-ink-faint" strokeWidth={1.75} />
             <span className="text-ink-muted">最常用</span>
             <code className="font-mono text-ink">{topName}</code>
@@ -504,7 +504,7 @@ function StatsBar({
           不是「有用」「命中」「采纳」—— 后者从事件流里推不出来。
           把它写大一点很好看，但它就是编的。
       */}
-      <p className="mt-2 max-w-[80ch] text-[12px] leading-relaxed text-ink-faint">
+      <p className="mt-2 max-w-[80ch] text-xs leading-relaxed text-ink-faint">
         统计口径：模型调用 <code className="font-mono">load_skill</code> 的次数。
         它证明「请过这一篇」，不证明「读进去了」或「照做了」。
         {truncated && (
@@ -528,9 +528,9 @@ function StatsBar({
 function Metric({ label, value, hint }: { label: string; value: number; hint?: string }) {
   return (
     <div className="flex items-baseline gap-1.5">
-      <span className="text-[12px] text-ink-muted">{label}</span>
+      <span className="text-xs text-ink-muted">{label}</span>
       <span className="font-mono text-lg text-ink">{value}</span>
-      {hint && <span className="text-[11px] text-ink-faint">{hint}</span>}
+      {hint && <span className="text-2xs text-ink-faint">{hint}</span>}
     </div>
   )
 }
@@ -562,7 +562,7 @@ function SkillRow({
       >
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
-            <code className="truncate font-mono text-[13px] text-ink">{skill.name}</code>
+            <code className="truncate font-mono text-sm text-ink">{skill.name}</code>
             {skill.source === 'builtin' ? (
               /* ★ 图标必须有可读的名字：读屏软件面对一个裸 <svg> 只会
                  报"图形"，而这里表达的是"内置/只读"这个**状态**。
@@ -592,7 +592,7 @@ function SkillRow({
               </span>
             )}
           </div>
-          <p className="mt-0.5 line-clamp-2 text-[12px] leading-relaxed text-ink-muted">
+          <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-ink-muted">
             {skill.description || '（没有写描述）'}
           </p>
         </div>
@@ -604,7 +604,7 @@ function SkillRow({
         */}
         <span
           className={cn(
-            'shrink-0 font-mono text-[11px]',
+            'shrink-0 font-mono text-2xs',
             loads > 0 ? 'text-ink-muted' : 'text-ink-faint',
           )}
           title={loads > 0 ? `被加载 ${loads} 次` : '从没被加载过'}
@@ -703,11 +703,11 @@ function SkillDetailPane({
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <code className="font-mono text-base text-ink">{skill.name}</code>
-            <span className="rounded-xs border border-line px-1.5 py-0.5 text-[11px] text-ink-muted">
+            <span className="rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted">
               {categoryLabel(skill.category)}
             </span>
           </div>
-          <p className="mt-1 max-w-[68ch] text-[13px] leading-relaxed text-ink-muted">
+          <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-ink-muted">
             {skill.description || '（没有写描述）'}
           </p>
         </div>
@@ -726,7 +726,7 @@ function SkillDetailPane({
           */}
           {builtin ? (
             <>
-              <span className="flex items-center gap-1 text-[12px] text-ink-faint">
+              <span className="flex items-center gap-1 text-xs text-ink-faint">
                 <Lock className="size-3" strokeWidth={2} />
                 内置 · 只读
               </span>
@@ -756,7 +756,7 @@ function SkillDetailPane({
         </div>
       </header>
 
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-line px-4 py-2 text-[12px] text-ink-muted">
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-line px-4 py-2 text-xs text-ink-muted">
         <span>
           被加载 <b className="font-mono text-ink">{loads?.loads ?? 0}</b> 次
         </span>
@@ -770,7 +770,7 @@ function SkillDetailPane({
       </div>
 
       {error && (
-        <div className="flex items-start gap-tight border-b border-line px-4 py-2 text-[13px] text-signal-risk">
+        <div className="flex items-start gap-tight border-b border-line px-4 py-2 text-sm text-signal-risk">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
           <span>{error}</span>
         </div>
@@ -784,7 +784,7 @@ function SkillDetailPane({
             <Skeleton className="h-4 w-5/6" />
           </div>
         ) : bodyError ? (
-          <div className="flex items-start gap-tight text-[13px] text-signal-risk">
+          <div className="flex items-start gap-tight text-sm text-signal-risk">
             <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
             <span>{bodyError}</span>
           </div>
@@ -810,7 +810,7 @@ function SkillDetailPane({
                保真需求是第二步才会有的（要核对"它到底怎么写的"）。
           */
           <div>
-            <div className="mb-2 flex flex-wrap items-center gap-2 text-[12px] text-ink-faint">
+            <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-ink-faint">
               <div
                 role="tablist"
                 aria-label="正文显示方式"
@@ -865,24 +865,24 @@ function SkillDetailPane({
                 约 60% 宽度 —— 段落长到 150 字符以上会开始难读，110 是个折中。
                 列表、表格、代码块本来就没有这个上限（它们该占满）。
               */
-              <div className="max-w-[110ch] text-[14px] leading-[1.8] text-ink-muted">
+              <div className="max-w-[110ch] text-base leading-[1.8] text-ink-muted">
                 <WriteupMarkdown markdown={body} />
               </div>
             ) : (
-              <pre className="max-w-full overflow-x-auto rounded-sm border border-line bg-surface-raised/40 p-3 font-mono text-[12px] leading-relaxed break-words whitespace-pre-wrap text-ink-muted">
+              <pre className="max-w-full overflow-x-auto rounded-sm border border-line bg-surface-raised/40 p-3 font-mono text-xs leading-relaxed break-words whitespace-pre-wrap text-ink-muted">
                 {body}
               </pre>
             )}
           </div>
         ) : (
-          <p className="max-w-[72ch] text-[13px] leading-relaxed text-ink-muted">
+          <p className="max-w-[72ch] text-sm leading-relaxed text-ink-muted">
             读不到这一篇的正文。它可能没随部署包分发 —— 检查{' '}
             <code className="font-mono">prompts/skills/</code> 下有没有这个文件。
           </p>
         )}
       </div>
 
-      <footer className="border-t border-line px-4 py-2.5 text-[12px] leading-relaxed text-ink-faint">
+      <footer className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint">
         改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的技能库。
       </footer>
     </div>

@@ -195,7 +195,7 @@ function Side({
       <p className="mt-0.5 text-2xs text-ink-faint">{hint}</p>
 
       {items.length === 0 ? (
-        <p className="mt-2 text-2xs text-ink-ghost">没有</p>
+        <p className="mt-2 text-2xs text-ink-faint">没有</p>
       ) : (
         <ul className="mt-2 flex flex-col gap-1">
           {items.map((item) => (

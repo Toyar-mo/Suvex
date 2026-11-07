@@ -159,7 +159,7 @@ function AssignDialogInner({
                       >
                         <span className="min-w-0 flex-1 truncate">{member.name}</span>
                         {member.email && (
-                          <span className="shrink-0 truncate text-2xs text-ink-ghost">
+                          <span className="shrink-0 truncate text-2xs text-ink-faint">
                             {member.email}
                           </span>
                         )}

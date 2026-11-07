@@ -112,6 +112,18 @@ export function FindingsPage() {
    * —— 后者是第二问。进来先答第一问。
    */
   const [view, setView] = useState<'list' | 'groups'>('list')
+  /*
+    列表一次渲染多少行。
+
+    ★ 为什么要有这个上限：121 条全部渲染时文档高 30,129px，278 个可聚焦元素，
+      键盘用户要按两百多次 Tab 才走完一屏内容。首屏只铺 60 行，
+      往下点一次再多 60 行 —— DOM 规模跟着"用户真的想看多少"走。
+
+    ★ 为什么不做成页码：这一页的筛选、排序、批量选择都建立在
+      "当前这批数据"上，翻页会让"全选"的含义忽然变成"全选这一页"。
+      渐进展开没有这个问题：已经展开的行不会消失，选择也不会被清掉。
+  */
+  const [renderLimit, setRenderLimit] = useState(60)
 
   // ── 选择与详情 ──
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
@@ -910,7 +922,7 @@ export function FindingsPage() {
                   网格则由浏览器统一分配列宽，不看顺序，窄屏固定两列后
                   高度立刻减半，且所有字段天然共享同一条左基准（这正是重构的目的）。
                   宽屏字段总宽放得下，才换回 flex-wrap 让它自然流动。 */}
-            <div className="mb-panel grid grid-cols-2 items-start gap-x-tight gap-y-tight min-[380px]:grid-cols-3 sm:flex sm:flex-wrap">
+            <div className="grid grid-cols-2 items-start gap-x-tight gap-y-tight min-[380px]:grid-cols-3 sm:flex sm:flex-wrap">
               <FilterGroup label="严重度">
                 {SEVERITY_ORDER.map((severity) => {
                   const count = bySeverity[severity] ?? 0
@@ -1111,9 +1123,13 @@ export function FindingsPage() {
                       </option>
                     ))}
                   </select>
+                  {/*
+                    shrink-0 是必须的：父级是 flex，符号按钮只有 24px 宽，
+                    实测被压缩到 **8.7×24** —— 基本点不中。外面这层固定 28px 见方。
+                  */}
                   <IconButton
                     label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
-                    className="ml-0.5"
+                    className="ml-0.5 h-7 w-7 shrink-0"
                     onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
                   >
                     {sortDir === 'desc' ? '↓' : '↑'}
@@ -1177,7 +1193,16 @@ export function FindingsPage() {
                   清除筛选
                 </Button>
               )}
+            </div>
 
+            {/*
+              范围与导出**不参与筛选栅格**。
+
+              390px 下栅格只有两列，把这两个动作块塞进去会被压成
+              「未删 / 除」「回 / 收 / 站」「导 / 出 / 全 / 部」的竖排文字；
+              它们本来也不是筛选字段 —— 改变的是范围与输出，不是看到哪些数据。
+            */}
+            <div className="mb-panel flex flex-wrap items-end gap-x-panel gap-y-tight">
               {/*
                 ── 回收站入口（任务 10 P6-a）──
 
@@ -1344,7 +1369,7 @@ export function FindingsPage() {
               /* ── 列表 ── */
               <div className="rounded-md border border-line bg-surface">
                 <FindingsTable
-                findings={visible}
+                findings={visible.slice(0, renderLimit)}
                 selectedIds={selectedIds}
                 onToggleSelect={toggleSelect}
                 onToggleSelectAll={toggleSelectAll}
@@ -1392,6 +1417,18 @@ export function FindingsPage() {
                   )
                 }
               />
+
+                {visible.length > renderLimit && (
+                  <div className="border-t border-line px-panel py-2 text-center">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => setRenderLimit((n) => n + 60)}
+                    >
+                      显示更多（还有 {visible.length - renderLimit} 条）
+                    </Button>
+                  </div>
+                )}
               </div>
             )}
 

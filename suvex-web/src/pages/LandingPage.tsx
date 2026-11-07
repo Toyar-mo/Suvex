@@ -117,7 +117,13 @@ export function LandingPage() {
       <HeroBackdrop />
 
       {/* 顶部：只有品牌和一个入口。刻意不做完整导航 —— 去产品里看比在这里看导航有用 */}
-      <header className="relative z-10 flex items-center justify-between px-gutter py-panel">
+      {/*
+        z-20 而不是 z-10：header 与下面的 main 各是一个层叠上下文，且 header
+        在 DOM 里**靠前** —— 两者同为 z-10 时，main 会压在 header 的浮层上。
+        主题菜单的 z-30 只在 header 内部生效，于是三个选项全都点不动
+        （实测 elementFromPoint 命中的是 MAIN）。抬一层就好。
+      */}
+      <header className="relative z-20 flex items-center justify-between px-gutter py-panel">
         <span className="text-base font-medium text-ink">
           Suvex
           <span className="text-accent">.</span>

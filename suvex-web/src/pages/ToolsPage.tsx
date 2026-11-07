@@ -178,7 +178,7 @@ export function ToolsPage() {
                 而不是点一下才发现。
             */}
             {!isAdmin && (
-              <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-[13px] text-ink-muted">
+              <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-sm text-ink-muted">
                 <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
                 <span>
                   你现在的角色是<b>只读</b>：能看清单，但改不了开关。
@@ -201,7 +201,7 @@ export function ToolsPage() {
               <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
                 <div>
                   <h2 className="text-sm font-medium text-ink">内置工具</h2>
-                  <p className="mt-1 max-w-[64ch] text-[13px] leading-relaxed text-ink-muted">
+                  <p className="mt-1 max-w-[64ch] text-sm leading-relaxed text-ink-muted">
                     智能体在沙箱里能调的全部动作。这里的开关<b>不改变进程边界</b> ——
                     隔离在沙箱、URL 白名单与 hostguard 里；关掉某个工具只是让它这一侧
                     少一个能力。
@@ -228,7 +228,7 @@ export function ToolsPage() {
                       （design-system §12：toast 把"看过"当成了"知道"）。
                   */}
                   {savedAt && !dirty && (
-                    <span className="flex items-center gap-1 text-[12px] text-ink-muted">
+                    <span className="flex items-center gap-1 text-xs text-ink-muted">
                       <Check className="size-3" strokeWidth={2} />
                       已保存 · {new Date(savedAt).toLocaleTimeString('zh-CN')}
                     </span>
@@ -255,13 +255,13 @@ export function ToolsPage() {
                   value={toolQuery}
                   onChange={(event) => setToolQuery(event.target.value)}
                   placeholder="搜索工具（名字 / 中文名 / 用途 / 默认会漏什么）"
-                  className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
+                  className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-line-accent"
                 />
                 <button
                   type="button"
                   onClick={() => setOnlyProblems((prev) => !prev)}
                   className={cn(
-                    'rounded-sm border px-2 py-1 text-[12px] transition-ui duration-fast',
+                    'rounded-sm border px-2 py-1 text-xs transition-ui duration-fast',
                     onlyProblems
                       ? 'border-line-accent text-ink'
                       : 'border-line text-ink-muted hover:border-line-strong',
@@ -279,7 +279,7 @@ export function ToolsPage() {
                   type="button"
                   onClick={() => setOnlyLimited((prev) => !prev)}
                   className={cn(
-                    'rounded-sm border px-2 py-1 text-[12px] transition-ui duration-fast',
+                    'rounded-sm border px-2 py-1 text-xs transition-ui duration-fast',
                     onlyLimited
                       ? 'border-line-accent text-ink'
                       : 'border-line text-ink-muted hover:border-line-strong',
@@ -295,18 +295,18 @@ export function ToolsPage() {
                       setOnlyProblems(false)
                       setOnlyLimited(false)
                     }}
-                    className="text-[12px] text-ink-faint transition-ui duration-fast hover:text-ink"
+                    className="text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
                   >
                     清除筛选
                   </button>
                 )}
-                <span className="text-[12px] text-ink-faint">
+                <span className="text-xs text-ink-faint">
                   {visibleTools.length} / {catalog.tools.length}
                 </span>
               </div>
 
               {toolsError && (
-                <div className="flex items-start gap-tight border-b border-line px-4 py-2.5 text-[13px] text-signal-risk">
+                <div className="flex items-start gap-tight border-b border-line px-4 py-2.5 text-sm text-signal-risk">
                   <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
                   <span className="leading-relaxed">{toolsError}</span>
                 </div>
@@ -317,7 +317,7 @@ export function ToolsPage() {
                   这里提示一句"另一半没拿到"，而不是把已拿到的也藏起来。
               */}
               {error && (
-                <div className="border-b border-line px-4 py-2 text-[12px] text-ink-faint">
+                <div className="border-b border-line px-4 py-2 text-xs text-ink-faint">
                   一部分数据没加载出来：{error.message}
                 </div>
               )}
@@ -327,11 +327,11 @@ export function ToolsPage() {
               ) : (
                 grouped.map(({ group, tools }) => (
                   <div key={group}>
-                    <h3 className="border-b border-line/60 bg-surface-raised/30 px-4 py-1.5 text-[11px] tracking-wide text-ink-faint uppercase">
+                    <h3 className="border-b border-line/60 bg-surface-raised/30 px-4 py-1.5 text-2xs tracking-wide text-ink-faint uppercase">
                       {group}
                     </h3>
                     {tools.length === 0 ? (
-                      <p className="px-4 py-2 text-[12px] text-ink-faint">这一栏是空的。</p>
+                      <p className="px-4 py-2 text-xs text-ink-faint">这一栏是空的。</p>
                     ) : (
                       <ul>
                         {tools.map((tool) => (
@@ -362,7 +362,7 @@ export function ToolsPage() {
 
               <footer
                 className={cn(
-                  'border-t border-line px-4 py-2.5 text-[12px] leading-relaxed text-ink-faint',
+                  'border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint',
                 )}
               >
                 改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的配置。

@@ -41,7 +41,8 @@ export type ToggleChipVariant = 'pill' | 'segment'
 
 /** 高度 + 内距 + 字号。`segment` 的高度由外层给，见下 */
 const PILL_SIZE: Record<ToggleChipSize, string> = {
-  xs: 'h-7 px-2 text-2xs',
+  // 32px 是触控下限。原来 28px 在一排筛选胶囊里实测最难按中。
+  xs: 'h-8 px-2 text-2xs',
   sm: 'h-8 px-2.5 text-xs',
 }
 

@@ -304,7 +304,11 @@ export function TokenUsageCard({
                   hint="换模（fallback）之后同一次解题会用多个模型 —— 这里是换模前后各花了多少。"
                   rows={detail.byModel.map((row) => ({
                     key: `${row.model}·${row.providerLabel}`,
-                    label: row.providerLabel ? `${row.model}（${row.providerLabel}）` : row.model || '未标注',
+                    // 接入点名与模型号相同时不写括号 —— 否则是「X（X）」
+                    label:
+                      row.providerLabel && row.providerLabel !== row.model
+                        ? `${row.model}（${row.providerLabel}）`
+                        : row.model || '未标注',
                     calls: row.calls,
                     totalTokens: row.totalTokens,
                   }))}

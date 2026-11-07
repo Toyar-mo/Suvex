@@ -53,9 +53,9 @@ export const SEVERITY_META: Record<Severity, SeverityMeta> = {
   high: {
     id: 'high',
     label: '高危',
-    bg: 'bg-[#C2544A]',
-    text: 'text-[#E08C82]',
-    border: 'border-[#C2544A]',
+    bg: 'bg-signal-high-solid',
+    text: 'text-signal-high',
+    border: 'border-signal-high-solid',
     fill: '#C2544A',
     definition: '在真实条件下可直接利用。',
   },

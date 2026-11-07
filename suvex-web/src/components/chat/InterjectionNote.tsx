@@ -11,8 +11,8 @@ import type { ChatMessage } from '@/data/chat'
 export function InterjectionNote({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-end" data-interjection="true">
-      <div className="max-w-[520px] rounded-[10px] rounded-br-xs bg-accent/8 px-3.5 py-2">
-        <p className="mb-0.5 text-[11px] text-ink-faint">插话 · 模型下一轮会看到</p>
+      <div className="max-w-[520px] rounded-lg rounded-br-xs bg-accent/8 px-3.5 py-2">
+        <p className="mb-0.5 text-2xs text-ink-faint">插话 · 模型下一轮会看到</p>
         <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
           {message.content}
         </p>

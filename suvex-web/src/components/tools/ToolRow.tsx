@@ -120,11 +120,11 @@ export function ToolRow({
               ★ 标识符用等宽字体原样显示 —— 模型在 ACTION 里写的就是它。
                 翻译它会让人对不上日志与提示词（见 `data/tools.ts` 的类型注释）。
             */}
-            <code className="font-mono text-[13px] text-ink">{name}</code>
+            <code className="font-mono text-sm text-ink">{name}</code>
             <span className="text-sm text-ink-muted">{label}</span>
             {core && (
               <span
-                className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint"
+                className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint"
                 title="关掉它会让绝大多数任务基本做不了"
               >
                 主力
@@ -135,7 +135,9 @@ export function ToolRow({
           <p className="mt-1 text-sm leading-relaxed text-ink-muted">{summary}</p>
 
           {params && (
-            <p className="mt-1 font-mono text-[12px] text-ink-faint">参数：{params}</p>
+            <p className="mt-1 break-words font-mono text-xs text-ink-faint [overflow-wrap:anywhere]">
+              参数：{params}
+            </p>
           )}
 
           {/*
@@ -160,7 +162,7 @@ export function ToolRow({
             根本不需要修的东西。所以用 warn 色 + 固定前缀「默认会漏」。
           */}
           {defaultLimitation && (
-            <p className="mt-1 text-[12px] leading-relaxed text-signal-warn">
+            <p className="mt-1 text-xs leading-relaxed text-signal-warn">
               <span className="font-medium">默认会漏</span>：{defaultLimitation}
             </p>
           )}
@@ -171,7 +173,7 @@ export function ToolRow({
               两处各拼一次，界面上说的与模型实际遇到的就会不一致。
           */}
           {reason && health !== 'ready' && (
-            <p className={cn('mt-1 text-[12px] leading-relaxed', meta.className)}>
+            <p className={cn('mt-1 text-xs leading-relaxed', meta.className)}>
               {reason}
               {requiresConnection && health === 'unconfigured' && (
                 <span className="text-ink-faint">
@@ -184,7 +186,7 @@ export function ToolRow({
         </div>
 
         <span
-          className={cn('mt-0.5 flex shrink-0 items-center gap-1 text-[12px]', meta.className)}
+          className={cn('mt-0.5 flex shrink-0 items-center gap-1 text-xs', meta.className)}
           title={meta.label}
         >
           <span className={cn('size-1.5 rounded-full', meta.dot)} aria-hidden />
@@ -203,7 +205,7 @@ export function ToolListEmpty({ reason }: { reason?: string }) {
       <CircleSlash className="mt-0.5 size-4 shrink-0 text-ink-faint" strokeWidth={1.75} />
       <div>
         <p>没拿到工具清单。</p>
-        {reason && <p className="mt-1 text-[12px] text-ink-faint">{reason}</p>}
+        {reason && <p className="mt-1 text-xs text-ink-faint">{reason}</p>}
       </div>
     </div>
   )

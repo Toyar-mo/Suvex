@@ -142,7 +142,9 @@ describe('ToggleChip：两种形态', () => {
     expect(segCss.split(/\s+/)).not.toContain('border')
   })
 
-  it('pill 的 xs 是 h-7 px-2 text-2xs（FindingsPage 的紧凑筛选）', () => {
+  // v1.76：xs 从 h-7(28px) 抬到 h-8(32px) —— 32 是触控下限，
+  // 28px 的筛选胶囊在手机上实测最难按中（设计审查 P1）。
+  it('pill 的 xs 是 h-8 px-2 text-2xs（FindingsPage 的紧凑筛选）', () => {
     render(
       <ToggleChip active={false} onToggle={() => {}} variant="pill" size="xs">
         待确认
@@ -150,7 +152,7 @@ describe('ToggleChip：两种形态', () => {
     )
 
     const css = screen.getByRole('button').className
-    expect(css).toContain('h-7')
+    expect(css).toContain('h-8')
     expect(css).toContain('text-2xs')
   })
 })

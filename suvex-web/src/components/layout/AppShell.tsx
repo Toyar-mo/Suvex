@@ -89,6 +89,25 @@ export function AppShell({
       )}
       data-shell-mode={fillsViewport ? 'viewport' : 'document'}
     >
+      {/*
+        跳到主要内容。全站第一个可聚焦元素，平时藏起来，Tab 到时才出现。
+
+        14 项导航 + 底部三个控件排在正文之前，键盘用户每换一页都要按十几次
+        Tab 才能到内容 —— 在 121 行的漏洞页上这个成本会叠加。
+        `#main-content` 上加了 tabIndex={-1}，否则锚点跳过去焦点不会落地，
+        下一个 Tab 又会从文档开头重来。
+      */}
+      <a
+        href="#main-content"
+        className={cn(
+          'sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50',
+          'focus:rounded-sm focus:border focus:border-line focus:bg-surface focus:px-3 focus:py-2',
+          'focus:text-sm focus:text-ink',
+        )}
+      >
+        跳到主要内容
+      </a>
+
       {/* 全站氛围底。固定定位，不随内容滚动 —— 它表达的是"这个系统一直在跑"。
           懒加载（见文件头的说明）：背景不该出现在首屏关键路径上。 */}
       <div className="pointer-events-none fixed inset-0 z-0">
@@ -108,7 +127,11 @@ export function AppShell({
           design-system §5 说的"背景被单独注意到就是过头了"。
           80% 是实测出来的平衡点：再高就看不见场，再低正文开始抖。
         */}
-        <main className="flex min-h-0 flex-1 flex-col bg-canvas/80">
+        <main
+          id="main-content"
+          tabIndex={-1}
+          className="flex min-h-0 flex-1 flex-col bg-canvas/80 focus:outline-none"
+        >
           {/*
             高度用 flex 链传递，而不是让页面自己写 `h-[calc(100dvh-44px-56px)]`。
             硬编码高度要和状态条(44px)、移动端底栏(56px+safe-area) 三处同步，

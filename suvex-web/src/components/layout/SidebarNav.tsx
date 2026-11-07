@@ -1,5 +1,5 @@
 import { cn } from '@/lib/cn'
-import { isNavItemActive, NAV_ITEMS, type NavItem } from '@/navigation'
+import { groupNavItems, isNavItemActive, type NavItem } from '@/navigation'
 import { NavLink, useLocation } from 'react-router-dom'
 
 /**
@@ -84,10 +84,32 @@ export interface SidebarNavProps {
 }
 
 export function SidebarNav({ collapsed, onNavigate }: SidebarNavProps) {
+  const groups = groupNavItems()
+
   return (
-    <nav aria-label="主导航" data-sidebar-nav="" className="flex flex-col gap-0.5 px-2">
-      {NAV_ITEMS.map((item) => (
-        <SidebarNavItem key={item.id} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+    <nav
+      aria-label="主导航"
+      data-sidebar-nav=""
+      className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2"
+    >
+      {/*
+        分组解决的是「14 个并列入口不知道先点哪个」。组名给的是一条判断顺序：
+        先看它在跑什么，再看它留下了什么，然后是自动跑的那部分，最后才是配置。
+        折叠态没有横向空间放组名，改用一条细分隔线 —— 分组信息不丢，只是退化。
+      */}
+      {groups.map((group, index) => (
+        <div key={group.id} className="flex flex-col gap-0.5" data-nav-group={group.id}>
+          {collapsed ? (
+            index > 0 && <span aria-hidden="true" className="mx-2 my-1.5 h-px shrink-0 bg-line" />
+          ) : (
+            <h2 className="px-3 pb-0.5 pt-2 text-2xs font-medium tracking-[0.06em] text-ink-faint">
+              {group.label}
+            </h2>
+          )}
+          {group.items.map((item) => (
+            <SidebarNavItem key={item.id} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+          ))}
+        </div>
       ))}
     </nav>
   )

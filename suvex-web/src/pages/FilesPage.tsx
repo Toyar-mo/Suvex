@@ -80,6 +80,64 @@ const GROUP_OPTIONS: ReadonlyArray<{ value: GroupBy; label: string }> = [
 const INPUT_CLASS =
   'w-full rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none'
 
+/**
+ * 每页行数。
+ *
+ * ★ 为什么必须有分页：设计审查实测 5,000 个文件时这一页渲染了
+ *   **20,008 个 button**、文档高 **234,855px**。行内四个图标按钮 × 5000 行，
+ *   滚动、筛选、Tab 遍历全被拖垮（键盘用户要经过两万个停靠点）。
+ *   100 行/页把 DOM 压到约 1/50，同时保住"一眼扫一屏"的密度。
+ *
+ * ★ 为什么是分页而不是虚拟滚动：这里是 `<table>`，还带按会话/项目分组；
+ *   虚拟滚动要求固定行高并自己接管表头、分组行和滚动锚点，分组一开就对不齐。
+ *   分页对分组是天然兼容的 —— 页边界可以落在组内（标「续」），
+ *   而 DOM 规模只跟页大小有关，跟总行数无关。
+ */
+const PAGE_SIZE = 100
+
+interface RowGroup {
+  key: string
+  label: string
+  rows: WorkspaceFileRow[]
+}
+
+/**
+ * 把「分组」切成「页」。
+ *
+ * 一个组可能大于一页（5000 个文件全在同一个会话里），所以不能简单地
+ * "每页 N 个组"：组要能在页边界处断开，断开的第二段标「（续）」。
+ */
+function paginate(units: RowGroup[], pageSize: number): RowGroup[][] {
+  const pages: RowGroup[][] = []
+  let current: RowGroup[] = []
+  let count = 0
+
+  for (const unit of units) {
+    let rest = unit.rows
+    let part = 0
+    while (rest.length > 0) {
+      const room = pageSize - count
+      const take = rest.slice(0, room)
+      current.push({
+        key: `${unit.key}#${part}`,
+        label: part === 0 ? unit.label : `${unit.label}（续）`,
+        rows: take,
+      })
+      count += take.length
+      rest = rest.slice(room)
+      part += 1
+      if (count >= pageSize) {
+        pages.push(current)
+        current = []
+        count = 0
+      }
+    }
+  }
+
+  if (current.length > 0) pages.push(current)
+  return pages
+}
+
 /** 会话 ID 太长，列表里截短显示；完整值放在 title 与「复制会话 ID」按钮里。 */
 function shortSessionId(id: string): string {
   // chat_01M6ABC... 这种前缀 + 随机段；保留头 12 位 + 尾 4 位即可辨认同一个。
@@ -94,6 +152,8 @@ export default function FilesPage() {
   const [draft, setDraft] = useState<FilterDraft>(EMPTY_DRAFT)
   const [applied, setApplied] = useState<FileFilters>({})
   const [groupBy, setGroupBy] = useState<GroupBy>('none')
+  /** 当前页（0 起）。筛选、分组、上传、删除后都回到第一页。 */
+  const [page, setPage] = useState(0)
   const [pendingDelete, setPendingDelete] = useState<WorkspaceFileRow | null>(null)
   const [deleting, setDeleting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -141,13 +201,16 @@ export default function FilesPage() {
     return () => window.clearTimeout(timer)
   }, [applied, load])
 
-  const search = () => setApplied({ ...draft })
+  const search = () => {
+    setPage(0)
+    setApplied({ ...draft })
+  }
   const refresh = () => void load(applied)
 
   /** 分组后的渲染单元。空组不渲染。 */
-  const groups = useMemo(() => {
+  const units = useMemo<RowGroup[]>(() => {
     if (groupBy === 'none') return [{ key: 'all', label: '', rows }]
-    const map = new Map<string, { key: string; label: string; rows: WorkspaceFileRow[] }>()
+    const map = new Map<string, RowGroup>()
     for (const row of rows) {
       const key = groupBy === 'session' ? row.sessionId : (row.project ?? '(未标项目)')
       const label = groupBy === 'session' ? row.sessionTitle : (row.project ?? '(未标项目)')
@@ -160,6 +223,12 @@ export default function FilesPage() {
     }
     return [...map.values()]
   }, [rows, groupBy])
+
+  const pages = useMemo(() => paginate(units, PAGE_SIZE), [units])
+  const pageCount = Math.max(1, pages.length)
+  // 数据变少（筛选、删除）后页码可能越界：夹一下，不要报错也不要空白页
+  const currentPage = Math.min(page, pageCount - 1)
+  const groups = pages[currentPage] ?? []
 
   const copyPath = async (row: WorkspaceFileRow) => {
     const value = `${PERSIST_PREFIX}${row.path}`
@@ -277,6 +346,7 @@ export default function FilesPage() {
       //   顺带把筛选栏的会话 ID 也填上，让"这些文件属于哪个会话"一眼可见。
       const nextFilters: FileFilters = { sessionId: target.id }
       setDraft({ ...EMPTY_DRAFT, sessionId: target.id })
+      setPage(0)
       setApplied(nextFilters)
       showToast({
         tone: 'ok',
@@ -350,7 +420,10 @@ export default function FilesPage() {
             <label className="text-sm text-ink-muted">分组方式</label>
             <select
               value={groupBy}
-              onChange={(e) => setGroupBy(e.target.value as GroupBy)}
+              onChange={(e) => {
+                setPage(0)
+                setGroupBy(e.target.value as GroupBy)
+              }}
               className={cn(INPUT_CLASS, 'w-auto')}
             >
               {GROUP_OPTIONS.map((option) => (
@@ -363,8 +436,12 @@ export default function FilesPage() {
               <Search size={14} strokeWidth={2} aria-hidden="true" />
               搜索
             </Button>
-            <div className="ml-auto flex items-center gap-2">
-              <label className="flex items-center gap-1.5 text-sm">
+            {/* 窄屏必须换行：这一组（上传目标 + 三个按钮）在 390px 下宽 507px，
+                不换行就把整页撑出 168px 的横向滚动。宽屏才靠 ml-auto 靠右。 */}
+            <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
+              {/* min-w-0 + 固定宽度：`<select>` 的固有宽度由最长选项决定，
+                  不给宽度它会撑到 682px，整页横向滚动。 */}
+              <label className="flex min-w-0 max-w-full items-center gap-1.5 text-sm">
                 <span className="whitespace-nowrap text-ink-muted">上传到会话</span>
                 <select
                   value={uploadTarget}
@@ -375,7 +452,7 @@ export default function FilesPage() {
                       ? '还没有能上传的会话，先去对话页开一个'
                       : undefined
                   }
-                  className={cn(INPUT_CLASS, 'w-auto max-w-[240px]')}
+                  className={cn(INPUT_CLASS, 'w-40 min-w-0 sm:w-60')}
                   data-testid="upload-target"
                 >
                   <option value="">
@@ -465,6 +542,35 @@ export default function FilesPage() {
               </table>
             </div>
           )}
+
+          {pageCount > 1 && (
+            <div
+              className="flex flex-wrap items-center justify-between gap-2 border-t border-line px-gutter py-2 text-sm text-ink-muted"
+              data-pagination
+            >
+              <span className="tabular" data-numeric>
+                第 {currentPage + 1} / {pageCount} 页 · 每页 {PAGE_SIZE} 条
+              </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPage(Math.max(0, currentPage - 1))}
+                  disabled={currentPage === 0}
+                >
+                  上一页
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setPage(Math.min(pageCount - 1, currentPage + 1))}
+                  disabled={currentPage >= pageCount - 1}
+                >
+                  下一页
+                </Button>
+              </div>
+            </div>
+          )}
         </section>
       </div>
 
@@ -517,7 +623,7 @@ function FileGroupBody({
               </span>
               {/* v1.39：会话 ID 直接显示在页面上、可一键复制 —— 之前这一页根本查不到它，
                   「上传文件」却要求用户填会话 ID，等于让人填一个看不到的值。 */}
-              <span className="truncate font-mono text-[11px] text-ink-muted" title={row.sessionId}>
+              <span className="truncate font-mono text-2xs text-ink-muted" title={row.sessionId}>
                 {shortSessionId(row.sessionId)}
               </span>
             </div>

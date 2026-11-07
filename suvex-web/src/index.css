@@ -72,7 +72,9 @@
     /* ── 语义信号：只用于「结论」，不用于装饰 ── */
     --suvex-signal-ok: 74 222 155; /* #4ADE9B 已确认 / 通过 */
     --suvex-signal-warn: 232 180 84; /* #E8B454 待确认 / 中危 */
-    --suvex-signal-risk: 240 122 106; /* #F07A6A 高危 / 失败 */
+    --suvex-signal-risk: 240 122 106; /* #F07A6A 严重 / 失败 */
+    --suvex-signal-high: 224 140 130; /* #E08C82 高危（与 risk 拉开一档明度） */
+    --suvex-signal-high-solid: 194 84 74; /* #C2544A 高危实心（徽标底、描边、图表） */
     --suvex-signal-info: 111 168 245; /* #6FA8F5 中性提示 */
 
     /* ── 语法高亮（解出时的底色 = sunken #0A0B0F，每个 ≥4.9:1）── */
@@ -159,6 +161,10 @@
     --suvex-signal-ok: 18 122 75; /* #127A4B 5.37:1 */
     --suvex-signal-warn: 154 91 0; /* #9A5B00 5.43:1 */
     --suvex-signal-risk: 176 42 30; /* #B02A1E 6.57:1 */
+    /* 高危必须比「严重」浅一档，但浅到 #E08C82 在白底只有 2.34:1。
+       这个值是按白底重解的：对 canvas #F4F5F7 实测 4.88:1，对白 5.12:1。 */
+    --suvex-signal-high: 178 74 60; /* #B24A3C 4.88:1 */
+    --suvex-signal-high-solid: 194 84 74; /* #C2544A 实心底与暗色同值：白字压在上面对 4.5:1 */
     --suvex-signal-info: 31 85 176; /* #1F55B0 7.04:1 */
 
     /* 底色从 #0A0B0F 换成 #EEF0F3，九个色按同两条约束重解（易混对亮度比 1.77 / 1.73） */

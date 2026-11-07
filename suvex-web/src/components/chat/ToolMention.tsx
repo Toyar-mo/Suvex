@@ -176,12 +176,12 @@ export function ToolMention({ tools, query, onPick }: ToolMentionProps) {
           )}
         >
           <span className="flex items-center gap-1.5 text-xs font-medium text-ink">
-            <code className="rounded-xs bg-surface-sunken px-1 py-0.5 font-mono text-[11px]">
+            <code className="rounded-xs bg-surface-sunken px-1 py-0.5 font-mono text-2xs">
               {tool.name}
             </code>
             <span className="font-normal text-ink-faint">{tool.label}</span>
           </span>
-          <span className="line-clamp-2 text-[11px] text-ink-faint">{tool.description}</span>
+          <span className="line-clamp-2 text-2xs text-ink-faint">{tool.description}</span>
         </button>
       ))}
     </div>

@@ -78,7 +78,10 @@ export function ActivityFeedItem({ event, href, className }: ActivityFeedItemPro
         />
 
         <div className="min-w-0 flex-1">
-          <p className="text-sm leading-snug text-ink">{event.summary}</p>
+          {/* break-words：摘要里常带没有空格的长命令/URL，窄屏会被撑成整页横向滚动 */}
+          <p className="break-words text-sm leading-snug text-ink [overflow-wrap:anywhere]">
+            {event.summary}
+          </p>
 
           <div className="mono-ui mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-faint">
             <span className="text-ink-muted">{event.agentId}</span>
@@ -92,7 +95,9 @@ export function ActivityFeedItem({ event, href, className }: ActivityFeedItemPro
               <>
                 <span aria-hidden="true">·</span>
                 {/* 端点/参数：等宽，超长时省略而不是换行 —— 换行会把每条挤成三行 */}
-                <span className="truncate text-ink-faint" title={event.subject}>
+                {/* max-w-full 是必须的：flex 项的 min-width 默认是 auto，
+                    只写 truncate 它仍会按内容宽度撑开（实测撑到 4846px）。 */}
+                <span className="min-w-0 max-w-full truncate text-ink-faint" title={event.subject}>
                   {event.subject}
                 </span>
               </>

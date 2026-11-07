@@ -146,19 +146,19 @@ export function SkillEditor({
         isCreate ? (
           '新建技能'
         ) : (
-          <span className="font-mono text-[13px]">{state?.name}</span>
+          <span className="font-mono text-sm">{state?.name}</span>
         )
       }
       titleAside={
         state && !state.loading ? (
-          <span className="rounded-sm border border-line px-1.5 py-0.5 text-[11px] text-ink-faint">
+          <span className="rounded-sm border border-line px-1.5 py-0.5 text-2xs text-ink-faint">
             {fileCount === 0 ? '单文件' : `1 篇正文 + ${fileCount} 个附件`}
           </span>
         ) : null
       }
       footer={
         <div className="flex items-center justify-between gap-tight">
-          <span className="text-[11px] text-ink-faint">
+          <span className="text-2xs text-ink-faint">
             保存后模型可用 <code className="font-mono">load_skill</code> 按名加载，
             附件按相对路径读。
           </span>
@@ -181,7 +181,7 @@ export function SkillEditor({
       {state && (
         <div className="flex h-full min-h-0 flex-col gap-panel">
           {error && (
-            <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-[13px] text-signal-risk">
+            <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-sm text-signal-risk">
               <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
               <span className="leading-relaxed">{error}</span>
             </div>
@@ -190,7 +190,7 @@ export function SkillEditor({
           {/* ── 元信息（两行并排，占满宽度）────────────── */}
           <div className="grid shrink-0 gap-panel sm:grid-cols-2">
             <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">
+              <span className="text-xs text-ink-muted">
                 技能名{' '}
                 <span className="text-ink-faint">（模型 load_skill 时写的就是它）</span>
               </span>
@@ -200,12 +200,12 @@ export function SkillEditor({
                 /* ★ 编辑时名字不可改：它同时是目录名和模型调用标识，改名等于删一个建一个 */
                 disabled={!isCreate}
                 placeholder="例如 kerberos-preauth"
-                className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent disabled:opacity-60"
+                className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent disabled:opacity-60"
               />
             </label>
 
             <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">
+              <span className="text-xs text-ink-muted">
                 分类 <span className="text-ink-faint">（会变成目录名，编辑时不可改）</span>
               </span>
               <input
@@ -213,13 +213,13 @@ export function SkillEditor({
                 onChange={(event) => onChange({ ...state, category: event.target.value })}
                 disabled={!isCreate}
                 placeholder="例如 vulnerabilities"
-                className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent disabled:opacity-60"
+                className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent disabled:opacity-60"
               />
             </label>
           </div>
 
           <label className="flex shrink-0 flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
+            <span className="text-xs text-ink-muted">
               一句话描述{' '}
               <span className="text-ink-faint">（进「可用技能清单」，模型据此判断该不该加载）</span>
             </span>
@@ -227,7 +227,7 @@ export function SkillEditor({
               value={state.description}
               onChange={(event) => onChange({ ...state, description: event.target.value })}
               placeholder="什么时候该拉这一篇"
-              className="h-9 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
+              className="h-9 rounded-sm border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-line-accent"
             />
           </label>
 
@@ -236,7 +236,7 @@ export function SkillEditor({
             {/* 左：包内文件 */}
             <div className="flex min-h-0 flex-col rounded-sm border border-line">
               <div className="flex shrink-0 items-center justify-between border-b border-line px-2 py-1.5">
-                <span className="text-[11px] font-medium uppercase tracking-wide text-ink-faint">
+                <span className="text-2xs font-medium uppercase tracking-wide text-ink-faint">
                   包内文件
                 </span>
                 <button
@@ -257,7 +257,7 @@ export function SkillEditor({
 
               <div className="min-h-0 flex-1 overflow-y-auto py-1">
                 {state.loading ? (
-                  <div className="flex items-center gap-1 px-2 py-1 text-[12px] text-ink-faint">
+                  <div className="flex items-center gap-1 px-2 py-1 text-xs text-ink-faint">
                     <Loader2 className="size-3 animate-spin" /> 正在读…
                   </div>
                 ) : (
@@ -269,7 +269,7 @@ export function SkillEditor({
                         <div
                           key={'dir:' + row.path}
                           style={{ paddingLeft: row.depth * 10 + 8 }}
-                          className="flex items-center gap-1 py-0.5 text-[12px] text-ink-faint"
+                          className="flex items-center gap-1 py-0.5 text-xs text-ink-faint"
                         >
                           <FolderOpen size={12} strokeWidth={1.75} />
                           <span className="truncate">{row.label}</span>
@@ -283,7 +283,7 @@ export function SkillEditor({
                         key={key}
                         style={{ paddingLeft: row.depth * 10 + 8 }}
                         className={cn(
-                          'group flex items-center gap-1 py-0.5 pr-1 text-[12px]',
+                          'group flex items-center gap-1 py-0.5 pr-1 text-xs',
                           selected ? 'bg-surface-raised text-ink' : 'text-ink-muted',
                         )}
                       >
@@ -333,7 +333,7 @@ export function SkillEditor({
                         }
                       }}
                       placeholder="scripts/extra.sh"
-                      className="h-7 w-full rounded-sm border border-line bg-surface px-1.5 font-mono text-[11px] text-ink outline-none focus:border-line-accent"
+                      className="h-7 w-full rounded-sm border border-line bg-surface px-1.5 font-mono text-2xs text-ink outline-none focus:border-line-accent"
                     />
                     {newNameError && (
                       <span className="text-[10px] leading-tight text-signal-risk">
@@ -370,7 +370,7 @@ export function SkillEditor({
 
             {/* 右：内容 */}
             <label className="flex min-h-0 flex-col gap-1">
-              <span className="shrink-0 text-[12px] text-ink-muted">
+              <span className="shrink-0 text-xs text-ink-muted">
                 {activePath === null ? (
                   <>
                     正文（Markdown）
@@ -397,9 +397,9 @@ export function SkillEditor({
                     ? '# 标题\n\n这里写清步骤、判据、常见坑。模型会照它做。'
                     : '附件内容'
                 }
-                className="min-h-[240px] flex-1 resize-none rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-[12px] leading-relaxed text-ink outline-none focus:border-line-accent disabled:opacity-60"
+                className="min-h-[240px] flex-1 resize-none rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-xs leading-relaxed text-ink outline-none focus:border-line-accent disabled:opacity-60"
               />
-              <span className="shrink-0 text-[11px] text-ink-faint">
+              <span className="shrink-0 text-2xs text-ink-faint">
                 {activeValue.length.toLocaleString('zh-CN')} 字符
               </span>
             </label>

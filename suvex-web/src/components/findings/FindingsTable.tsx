@@ -193,7 +193,7 @@ function FindingRow({
           {finding.assigneeName ? (
             <span className="text-ink-muted">{finding.assigneeName}</span>
           ) : (
-            <span className="text-ink-ghost">未指派</span>
+            <span className="text-ink-faint">未指派</span>
           )}
         </span>
 

@@ -4,7 +4,7 @@ import TopStatusBar from './TopStatusBar'
 import AppShell from './AppShell'
 import MobileNav from './MobileNav'
 import { CommandPalette } from './CommandPalette'
-import { isNavItemActive, NAV_ITEMS } from '@/navigation'
+import { findNavItem, isNavItemActive, NAV_ITEMS } from '@/navigation'
 import { ensureOverviewLoaded } from '@/data/overview-store'
 import { ensureScansLoaded } from '@/data/scans-store'
 import { ensureSettingsLoaded } from '@/data/settings-store'
@@ -50,6 +50,18 @@ export function Layout() {
     ensureSettingsLoaded()
     ensureOverviewLoaded()
   }, [])
+
+  /*
+    浏览器标题跟着路由走。
+
+    index.html 里那句是**静态的**，切 14 个页面全是「Suvex · 智能体行为流」——
+    多标签页分不出来，浏览历史是一条一样的记录，读屏器每换一页也念同一句。
+    标题取导航项的 label（`navigation.ts` 是唯一事实来源，不另写一份）。
+  */
+  useEffect(() => {
+    const item = findNavItem(pathname)
+    document.title = item ? `${item.label} · Suvex` : 'Suvex'
+  }, [pathname])
 
   /*
     全局快捷键：Cmd/Ctrl+K 打开命令面板。

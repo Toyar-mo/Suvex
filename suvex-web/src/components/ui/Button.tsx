@@ -342,9 +342,15 @@ const ICON_VARIANT_DISABLED: Record<IconButtonVariant, string> = {
     'disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
 }
 
+/*
+  after:-inset-1 是**触控命中区**，不是视觉尺寸：按钮看上去还是 24×24，
+  实际可点范围 32×32。图标按钮在表格行里一排放四个，24px 在手机上实测
+  低于 32 的下限（整套 21,232 个控件里 95% 不达标）。命中区只往外扩 4px，
+  相邻按钮之间（gap-1=4px）刚好相接、不互相遮挡。
+*/
 const ICON_SIZE: Record<IconButtonSize, string> = {
-  xs: 'h-6 w-6 rounded-xs',
-  sm: 'h-8 w-8 rounded-sm',
+  xs: "relative after:absolute after:-inset-1 after:content-[''] h-6 w-6 rounded-xs",
+  sm: "relative after:absolute after:-inset-1 after:content-[''] h-8 w-8 rounded-sm",
 }
 
 export interface IconButtonProps

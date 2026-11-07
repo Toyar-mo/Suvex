@@ -84,7 +84,11 @@ export function TopStatusBar() {
           {provider ? (
             <>
               <span className="text-xs font-medium text-ink">{provider.label}</span>
-              <span className="mono-ui hidden text-ink-faint lg:inline">{provider.model}</span>
+              {/* 名称与模型号相同时只写一次。线上出现过
+                  「deepseek-v4.1-flash deepseek-v4.1-flash」并排。 */}
+              {provider.model !== provider.label && (
+                <span className="mono-ui hidden text-ink-faint lg:inline">{provider.model}</span>
+              )}
             </>
           ) : (
             /*

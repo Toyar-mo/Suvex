@@ -1685,7 +1685,7 @@ describe('ChatPage — 助手回合的版面（v1.29 metis 形态）', () => {
     const row = paragraph.closest('[data-message-row="assistant"]') as HTMLElement | null
     expect(row, '助手正文没有 [data-message-row="assistant"] 标记').not.toBeNull()
     // ★ 气泡皮只属于用户消息；助手正文套上它，长回答就变成一大块灰砖
-    expect(row!.className).not.toContain('rounded-[10px]')
+    expect(row!.className).not.toContain('rounded-lg')
     expect(row!.className).not.toContain('bg-surface')
 
     const footer = document.querySelector('[data-turn-footer]') as HTMLElement | null

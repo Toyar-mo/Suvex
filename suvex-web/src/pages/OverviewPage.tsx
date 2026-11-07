@@ -21,12 +21,12 @@ import { useEffect, useState } from 'react'
  *
  * 目标：**5 秒内明白系统现在的状态。** 这个约束决定了整个版面：
  *
- *   1. 四个指标卡在最上，高度统一，一行扫过。（"现在有多少、发现了多少"）
- *   2. 左栏是实时活动流（"正在发生什么"）—— 它是这一页的核心叙事，
- *      占主要宽度，因为它是唯一会动、也是唯一需要读的东西。
- *   3. 右栏是严重度分布（"留下了什么"）—— 静态、结构化，窄栏足够。
+ *   1. 第一屏是活动流（"正在发生什么"）—— 它是这一页的核心叙事，
+ *      也是产品承诺本身。右栏并排放风险分与严重度分布（结论 + 明细）。
+ *   2. 第二块是「该做什么」—— 有严重发现时它是有时限的。
+ *   3. 四个指标卡退到第三块：它们是**积累量**，不该占掉第一屏。
  *
- * 版面顺序对应阅读顺序：数字 → 动作 → 结果。
+ * 版面顺序对应阅读顺序：过程 → 动作 → 数字。
  *
  * 宽屏两栏，<lg 单栏堆叠（活动流在前，分布在后 —— 顺序不变，
  * 因为"正在发生什么"比"历史分布"更该先看到）。
@@ -221,7 +221,43 @@ function OverviewContent({
 
   return (
     <div className="flex flex-col gap-bay">
-      {/* ── 1 · 关键指标 ───────────────────────────── */}
+      {/*
+        ── 1 · 此刻在发生什么 + 留下了什么 ─────────────
+
+        ★ 活动流从第三屏提到了第一屏（2026-11 设计审查）。
+
+          改之前是「4 张指标卡 → 该做什么 → 可用能力 → 活动流」，
+          实测 1440×900 下活动流标题落在 y=859、手机落在 1570 ——
+          产品的承诺是「看它每一步在想什么」，而第一屏是一张静态报表。
+          现在第一屏就是它，风险分与严重度分布并排放在右栏（结论 + 明细）。
+
+        ★ 标题随状态切换「实时 / 最近」：没有任务在跑时，流里是历史事件，
+          再叫「实时」就是在骗人。
+      */}
+      <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <ActivityFeed
+          events={activity}
+          isLive={metrics.activeScans > 0}
+          limit={8}
+          title={metrics.activeScans > 0 ? '实时活动' : '最近活动'}
+        />
+
+        <div className="flex flex-col gap-bay self-start">
+          <RiskScoreCard
+            score={metrics.riskScore}
+            level={metrics.riskLevel}
+            total={metrics.unresolvedTotal}
+            breakdown={metrics.unresolvedBreakdown}
+          />
+
+          <SeverityChart data={severityBreakdown} />
+        </div>
+      </div>
+
+      {/* ── 2 · 该做什么 ───────────────────────────── */}
+      <AttentionList items={attention} />
+
+      {/* ── 3 · 关键指标 ───────────────────────────── */}
       <section aria-label="关键指标">
         <div className="grid grid-cols-1 gap-panel sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
@@ -280,60 +316,16 @@ function OverviewContent({
       </section>
 
       {/*
-        ── 2 · 该做什么（v0.95）────────────────────────
+        ── 4 · 可用能力（v0.96）──────────────────────
 
-        ★ 位置在指标卡**之后、活动流之前**，这是刻意的：
-          用户打开总览页的第一件事不是"看看发生了什么"，而是
-          "有没有我该处理的"。把这块放在活动流下面，就等于让
-          实时日志的滚动画面的喧闹盖住"你有 3 个严重漏洞"。
+        ★ 放在指标卡之后：四张卡的共同语义是"本次统计窗口内的产出"，
+          三格家底是"部署时的配置"。混进一排会让人以为"技能 31 篇"
+          和"本周新增 18"是同一种数。
 
-        ★ 它在没有待办时**仍然渲染**（显示那段"检查了四项"的说明），
-          不隐藏：一块会消失的区块比一块说"我查过了，没事"的区块
-          更让人怀疑 —— 消失时无法区分"没事"与"这块坏了"。
-      */}
-      <AttentionList items={attention} />
-
-      {/*
-        ── 2.5 · 可用能力（v0.96）──────────────────────
-
-        ★ 位置在「该做什么」**之后、活动流之前**，两个理由：
-
-          1. 「该做什么」是有时限的（有严重漏洞就现在去修），
-             「可用能力」是常驻家底（多少工具、多少技能）。
-             急的排前面，这是同一页里唯一合理的顺序。
-
-          2. 它在**没有待办时承担了"这系统能干什么"的回答**。
-             新装部署的「该做什么」是一段"没有需要你处理的事"，
-             紧接着就是一片空的活动流 —— 中间没有任何东西告诉用户
-             这平台配了 20 个工具和 31 篇技能。这一格把那句话补上。
-
-        ★ 不放进上面那个 4 列指标卡网格：那四张卡的共同语义是
-          "本次统计窗口内的产出"，三格家底是"部署时的配置"。
-          混进一排会让人以为"技能 31 篇"和"本周新增 18"是同一种数。
+        ★ 它承担了「这系统能干什么」的回答：新装部署的活动流是空的，
+          这一格告诉用户平台配了多少工具、多少技能。
       */}
       <ResourceStrip resources={resources} />
-
-      {/* ── 3 + 4 · 活动流 与 严重度分布 ─────────────── */}
-      <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <ActivityFeed events={activity} isLive={metrics.activeScans > 0} limit={6} />
-
-        {/*
-          右栏放两张卡：风险分在上（它是结论），严重度分布在下（它是明细）。
-          ★ `self-start` 只给最外层容器，两张卡各自按内容高度排列 ——
-            之前 `SeverityChart` 直接 `self-start`，加一张卡之后
-            需要把它们包一层，否则第二张会被 grid 拉伸到与左栏等高。
-        */}
-        <div className="flex flex-col gap-bay self-start">
-          <RiskScoreCard
-            score={metrics.riskScore}
-            level={metrics.riskLevel}
-            total={metrics.unresolvedTotal}
-            breakdown={metrics.unresolvedBreakdown}
-          />
-
-          <SeverityChart data={severityBreakdown} />
-        </div>
-      </div>
 
       {/*
         ── 4 · LLM 消耗（CTF2 解题，v0.36）─────────────
@@ -370,15 +362,18 @@ function OverviewSkeleton() {
     <div className="flex flex-col gap-bay" role="status" aria-live="polite" aria-busy="true">
       <span className="sr-only">正在加载总览数据</span>
 
+      {/* 骨架顺序跟着真实版面走：先是活动流 + 右栏，再是该做什么，最后才是指标卡。 */}
+      <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
+        <SkeletonRows rows={6} rowClassName="h-11" />
+        <Skeleton className="h-64 rounded-md bg-surface" />
+      </div>
+
+      <Skeleton className="h-16 rounded-md bg-surface" />
+
       <div className="grid grid-cols-1 gap-panel sm:grid-cols-2 xl:grid-cols-4">
         {Array.from({ length: 4 }, (_, index) => (
           <Skeleton key={index} className="h-[5.5rem] rounded-md bg-surface" />
         ))}
-      </div>
-
-      <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <SkeletonRows rows={6} rowClassName="h-11" />
-        <Skeleton className="h-64 rounded-md bg-surface" />
       </div>
     </div>
   )

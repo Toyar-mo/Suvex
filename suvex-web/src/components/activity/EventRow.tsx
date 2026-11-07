@@ -153,7 +153,9 @@ function EventRowImpl({
               {EVENT_TYPE_LABEL[event.type]}
             </span>
 
-            <p className="min-w-0 flex-1 text-sm leading-snug text-ink">{event.summary}</p>
+            <p className="min-w-0 flex-1 break-words text-sm leading-snug text-ink [overflow-wrap:anywhere]">
+              {event.summary}
+            </p>
           </div>
 
           {/* ── 第 2 层：关键字段（折叠态也可见）── */}

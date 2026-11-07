@@ -117,7 +117,7 @@ function SummaryCard({
       >
         {value}
       </p>
-      {hint && <p className="mt-1 text-[11px] leading-snug text-ink-muted">{hint}</p>}
+      {hint && <p className="mt-1 text-2xs leading-snug text-ink-muted">{hint}</p>}
     </div>
   )
 }
@@ -286,7 +286,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
             ))}
           </div>
           {kindHint !== null && (
-            <p className="text-[11px] text-ink-muted">例如 {kindHint.example}</p>
+            <p className="text-2xs text-ink-muted">例如 {kindHint.example}</p>
           )}
         </div>
 
@@ -310,7 +310,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          {goalHint !== null && <p className="text-[11px] text-ink-muted">{goalHint}</p>}
+          {goalHint !== null && <p className="text-2xs text-ink-muted">{goalHint}</p>}
         </div>
 
         <div className="flex flex-col gap-1">
@@ -333,7 +333,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          <p className="text-[11px] text-ink-muted">
+          <p className="text-2xs text-ink-muted">
             允许范围 {MIN_INTERVAL_MINUTES} 分钟 ~ {Math.round(MAX_INTERVAL_MINUTES / 1440)} 天。
             再密就不是定期复查，而是持续压测了。
           </p>
@@ -355,7 +355,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
           </select>
         </label>
 
-        <p className="rounded-sm border border-line bg-canvas px-2.5 py-2 text-[11px] leading-relaxed text-ink-muted">
+        <p className="rounded-sm border border-line bg-canvas px-2.5 py-2 text-2xs leading-relaxed text-ink-muted">
           创建即表示你确认：{SCAN_AUTHORIZATION_STATEMENT}。每到一个周期，系统会以你的身份
           对上述目标发起一次真实扫描 —— 它会发包、会尝试利用，可能触发目标侧的告警。
         </p>
@@ -673,12 +673,12 @@ export default function SchedulesPage() {
                       <td className="px-3 py-2 align-top">
                         <StateBadge state={value} />
                         {schedule.failureCount > 0 && (
-                          <p className="mt-0.5 text-[11px] text-signal-risk">
+                          <p className="mt-0.5 text-2xs text-signal-risk">
                             连续 {schedule.failureCount} 次失败
                           </p>
                         )}
                         {schedule.lastFailureReason !== null && (
-                          <p className="mt-0.5 max-w-[16rem] truncate text-[11px] text-ink-muted" title={schedule.lastFailureReason}>
+                          <p className="mt-0.5 max-w-[16rem] truncate text-2xs text-ink-muted" title={schedule.lastFailureReason}>
                             {schedule.lastFailureReason}
                           </p>
                         )}
@@ -739,7 +739,7 @@ export default function SchedulesPage() {
           </div>
         )}
 
-        <p className="mt-3 text-[11px] leading-relaxed text-ink-muted">
+        <p className="mt-3 text-2xs leading-relaxed text-ink-muted">
           排序口径：数据异常 → 连续失败 → 已到点 → 待首次执行 → 正常 → 已停用，
           同档内按下次执行时间从近到远。
           <Play size={10} className="mx-1 inline align-baseline" aria-hidden="true" />

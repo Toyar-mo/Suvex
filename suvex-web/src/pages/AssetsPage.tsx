@@ -330,25 +330,25 @@ export default function AssetsPage() {
             <table className="w-full min-w-[52rem] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-line bg-sunken text-left text-xs text-ink-muted">
-                  <th scope="col" className="px-panel py-2 font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     目标
                   </th>
-                  <th scope="col" className="px-panel py-2 font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     状态
                   </th>
-                  <th scope="col" className="px-panel py-2 text-right font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
                     未处置
                   </th>
-                  <th scope="col" className="px-panel py-2 text-right font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
                     高危 / 中危+
                   </th>
-                  <th scope="col" className="px-panel py-2 font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     上次扫描
                   </th>
-                  <th scope="col" className="px-panel py-2 font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     上次拿到结论
                   </th>
-                  <th scope="col" className="px-panel py-2 text-right font-normal">
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
                     扫描次数
                   </th>
                 </tr>

@@ -44,7 +44,7 @@ describe('MessageRow — 用户消息', () => {
     expect(row.textContent).toContain('扫一下 10.0.0.5')
     // 气泡皮只在这一支上出现
     const bubble = row.firstElementChild as HTMLElement
-    expect(bubble.className).toContain('rounded-[10px]')
+    expect(bubble.className).toContain('rounded-lg')
     expect(bubble.className).toContain('bg-surface')
   })
 })
@@ -58,7 +58,7 @@ describe('MessageRow — 助手正文', () => {
     const row = container.querySelector('[data-message-row="assistant"]') as HTMLElement
     expect(row).not.toBeNull()
     expect(row.textContent).toContain('已清点完毕')
-    expect(row.className).not.toContain('rounded-[10px]')
+    expect(row.className).not.toContain('rounded-lg')
     expect(row.className).not.toContain('bg-surface')
     // 没有 reasoning 就不该冒出「思考过程」按钮
     expect(screen.queryByRole('button', { name: '思考过程' })).toBeNull()

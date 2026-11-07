@@ -60,12 +60,12 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
       <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
         <div>
           <h2 className="text-sm font-medium text-ink">命令行工具</h2>
-          <p className="mt-1 max-w-[64ch] text-[13px] leading-relaxed text-ink-muted">
+          <p className="mt-1 max-w-[64ch] text-sm leading-relaxed text-ink-muted">
             沙箱镜像里装着的二进制<b>怎么调</b>，以及<b>用默认参数跑会漏掉什么</b>。
             这些<b>没有开关</b> —— 装没装由镜像决定，不是由配置决定。
           </p>
         </div>
-        <span className="shrink-0 text-[12px] text-ink-faint">
+        <span className="shrink-0 text-xs text-ink-faint">
           {withLimits} / {recipes.length} 条写了局限
         </span>
       </header>
@@ -80,14 +80,14 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索工具（名字 / 用途 / 局限）"
-            className="h-8 w-full rounded-sm border border-line bg-surface pr-2 pl-7 text-[13px] text-ink outline-none focus:border-line-accent"
+            className="h-8 w-full rounded-sm border border-line bg-surface pr-2 pl-7 text-sm text-ink outline-none focus:border-line-accent"
           />
         </div>
         <button
           type="button"
           onClick={() => setOnlyLimited((prev) => !prev)}
           className={cn(
-            'rounded-sm border px-2 py-1 text-[12px] transition-ui duration-fast',
+            'rounded-sm border px-2 py-1 text-xs transition-ui duration-fast',
             onlyLimited
               ? 'border-line-accent text-ink'
               : 'border-line text-ink-muted hover:border-line-strong',
@@ -102,18 +102,18 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
               setQuery('')
               setOnlyLimited(false)
             }}
-            className="text-[12px] text-ink-faint transition-ui duration-fast hover:text-ink"
+            className="text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
           >
             清除筛选
           </button>
         )}
-        <span className="text-[12px] text-ink-faint">
+        <span className="text-xs text-ink-faint">
           {visible.length} / {recipes.length}
         </span>
       </div>
 
       {visible.length === 0 ? (
-        <p className="px-4 py-6 text-center text-[13px] text-ink-muted">
+        <p className="px-4 py-6 text-center text-sm text-ink-muted">
           没有匹配的工具。
           {onlyLimited && recipes.length > 0 && withLimits === 0
             ? '（这一版还没有任何一条写了局限说明）'
@@ -132,7 +132,7 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
         </ul>
       )}
 
-      <footer className="border-t border-line px-4 py-2.5 text-[12px] leading-relaxed text-ink-faint">
+      <footer className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint">
         配方是<b>只读</b>的：它不是开关，只是把「该怎么调」与「默认会漏什么」写下来，
         让模型与你都看得到。要改调用方式，直接在任务里让它用不同的参数。
       </footer>
@@ -180,13 +180,13 @@ function RecipeRow({
               ★ 等宽字体：`name` 同时是配方名和二进制名，模型就是拿这个名字
                 去 `run_shell` 里敲的。用正文字体显示会让人以为它可以被翻译。
             */}
-            <code className="font-mono text-[13px] text-ink">{recipe.name}</code>
+            <code className="font-mono text-sm text-ink">{recipe.name}</code>
             {recipe.command !== recipe.name && (
-              <span className="text-[11px] text-ink-faint">→ {recipe.command}</span>
+              <span className="text-2xs text-ink-faint">→ {recipe.command}</span>
             )}
             {recipe.defaultLimitation && (
               <span
-                className="inline-flex items-center gap-1 rounded-sm border border-signal-risk/40 px-1.5 py-px text-[11px] text-signal-risk"
+                className="inline-flex items-center gap-1 rounded-sm border border-signal-risk/40 px-1.5 py-px text-2xs text-signal-risk"
                 title="用默认参数跑会漏掉东西"
               >
                 <AlertTriangle className="size-3" strokeWidth={2} />
@@ -194,14 +194,14 @@ function RecipeRow({
               </span>
             )}
           </div>
-          <p className="mt-0.5 text-[12px] leading-relaxed text-ink-muted">{recipe.summary}</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{recipe.summary}</p>
         </div>
       </button>
 
       {open && hasDetail && (
         <div className="border-t border-line/40 bg-surface-raised/20 px-4 py-2.5 pl-[3.25rem]">
           {recipe.args.length > 0 && (
-            <p className="text-[12px] text-ink-muted">
+            <p className="text-xs text-ink-muted">
               默认就带：<code className="font-mono text-ink">{recipe.args.join(' ')}</code>
             </p>
           )}
@@ -209,14 +209,14 @@ function RecipeRow({
           {recipe.params.length > 0 && (
             <ul className="mt-1.5 flex flex-col gap-1">
               {recipe.params.map((param) => (
-                <li key={param.name} className="flex flex-wrap items-baseline gap-tight text-[12px]">
+                <li key={param.name} className="flex flex-wrap items-baseline gap-tight text-xs">
                   <code className="font-mono text-ink">{param.name}</code>
                   {param.flag && <code className="font-mono text-ink-faint">{param.flag}</code>}
                   {param.required && (
-                    <span className="text-[11px] text-signal-risk">必填</span>
+                    <span className="text-2xs text-signal-risk">必填</span>
                   )}
                   {param.default && (
-                    <span className="text-[11px] text-ink-faint">默认 {param.default}</span>
+                    <span className="text-2xs text-ink-faint">默认 {param.default}</span>
                   )}
                   {param.description && (
                     <span className="text-ink-muted">{param.description}</span>
@@ -233,12 +233,12 @@ function RecipeRow({
                 strokeWidth={1.75}
               />
               <div className="min-w-0">
-                <p className="text-[12px] font-medium text-signal-risk">默认参数下做不到什么</p>
+                <p className="text-xs font-medium text-signal-risk">默认参数下做不到什么</p>
                 {/*
                   ★ 保留换行：局限说明里有的是分点写的（`·` 开头）。
                     用普通 <p> 会把它们挤成一段，看不出是几条独立的边界。
                 */}
-                <p className="mt-0.5 text-[12px] leading-relaxed whitespace-pre-line text-ink-muted">
+                <p className="mt-0.5 text-xs leading-relaxed whitespace-pre-line text-ink-muted">
                   {recipe.defaultLimitation}
                 </p>
               </div>
@@ -246,7 +246,7 @@ function RecipeRow({
           )}
 
           {recipe.allowedExitCodes.length > 1 && (
-            <p className="mt-1.5 flex items-center gap-1 text-[12px] text-ink-muted">
+            <p className="mt-1.5 flex items-center gap-1 text-xs text-ink-muted">
               <Check className="size-3 shrink-0 text-ink-faint" strokeWidth={2} />
               退出码 <code className="font-mono">{recipe.allowedExitCodes.join(' / ')}</code>{' '}
               都不算失败 —— 包括「没命中」。

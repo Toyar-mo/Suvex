@@ -1,5 +1,5 @@
 import { cn } from '@/lib/cn'
-import { isNavItemActive, MOBILE_MORE_ITEMS, MOBILE_TAB_ITEMS } from '@/navigation'
+import { groupNavItems, isNavItemActive, MOBILE_MORE_ITEMS, MOBILE_TAB_ITEMS } from '@/navigation'
 import { MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
@@ -75,25 +75,34 @@ export function MobileNav() {
           id="mobile-more-panel"
           className="fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] right-3 z-40 w-56 animate-stream-in rounded-md border border-line bg-surface-overlay p-1 shadow-overlay md:hidden"
         >
-          {MOBILE_MORE_ITEMS.map((item) => {
-            const Icon = item.icon
-            const active = isNavItemActive(item, pathname)
-            return (
-              <NavLink
-                key={item.id}
-                to={item.path}
-                aria-current={active ? 'page' : undefined}
-                onClick={closeMore}
-                className={cn(
-                  'flex items-center gap-tight rounded-sm px-3 py-2 text-sm transition-ui duration-fast',
-                  active ? 'text-ink' : 'text-ink-muted hover:bg-surface-raised hover:text-ink',
-                )}
-              >
-                <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-                <span className="truncate">{item.label}</span>
-              </NavLink>
-            )
-          })}
+          {/* 与侧栏同一份分组（navigation.ts），手机上尤其需要：面板里一次列出 9 项，
+              没有组名就是一串看不出关系的入口。 */}
+          {groupNavItems(MOBILE_MORE_ITEMS).map((group) => (
+            <div key={group.id} className="flex flex-col" data-nav-group={group.id}>
+              <h2 className="px-3 pb-0.5 pt-2 text-2xs font-medium tracking-[0.06em] text-ink-faint">
+                {group.label}
+              </h2>
+              {group.items.map((item) => {
+                const Icon = item.icon
+                const active = isNavItemActive(item, pathname)
+                return (
+                  <NavLink
+                    key={item.id}
+                    to={item.path}
+                    aria-current={active ? 'page' : undefined}
+                    onClick={closeMore}
+                    className={cn(
+                      'flex items-center gap-tight rounded-sm px-3 py-2 text-sm transition-ui duration-fast',
+                      active ? 'text-ink' : 'text-ink-muted hover:bg-surface-raised hover:text-ink',
+                    )}
+                  >
+                    <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
+                    <span className="truncate">{item.label}</span>
+                  </NavLink>
+                )
+              })}
+            </div>
+          ))}
         </div>
       )}
 

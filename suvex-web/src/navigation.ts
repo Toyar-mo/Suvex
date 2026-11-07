@@ -27,11 +27,35 @@ import {
  * 也不便于和代码/日志对照。
  */
 
+/**
+ * 导航分组。
+ *
+ * 14 个入口平铺时，第一次进来的人不知道先点哪个；分组给的是**判断顺序**，
+ * 不是装饰。四组的划分依据是「同一件事的不同阶段」：
+ *
+ *   运行      —— 系统现在在做什么（看、指挥、等结果）
+ *   资产与产出 —— 它做完了留下什么（证据、报告、文件）
+ *   自动化    —— 不用人盯的那部分（定时、应急、比赛）
+ *   能力与配置 —— 它能干什么、怎么配（工具、技能、设置）
+ *
+ * 组名必须短：侧栏 208px 放得下，折叠态会隐藏。
+ */
+export type NavGroupId = 'run' | 'output' | 'automation' | 'config'
+
+export const NAV_GROUPS: ReadonlyArray<{ id: NavGroupId; label: string }> = [
+  { id: 'run', label: '运行' },
+  { id: 'output', label: '资产与产出' },
+  { id: 'automation', label: '自动化' },
+  { id: 'config', label: '能力与配置' },
+]
+
 export interface NavItem {
   /** 稳定 id，用作 React key 与测试钩子。标识符，不翻译 */
   id: string
   /** 路由路径。标识符，不翻译 */
   path: string
+  /** 属于哪一组（侧栏与「更多」面板按组渲染，见 NAV_GROUPS） */
+  group: NavGroupId
   /** 侧栏与底栏显示名 */
   label: string
   /** 超长时用的短名（窄屏底栏）。不传则用 label */
@@ -59,6 +83,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'overview',
     path: '/overview',
+    group: 'run',
     label: '总览',
     icon: Radar,
     blurb: '全局态势：此刻在跑什么，已经发现了什么。',
@@ -67,6 +92,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'chat',
     path: '/chat',
+    group: 'run',
     label: '对话',
     icon: MessagesSquare,
     blurb: '用一句话让它动手：发起扫描、看结果、改技能库、接工具。',
@@ -98,6 +124,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'scans',
     path: '/scans',
+    group: 'run',
     label: '扫描任务',
     icon: ScanSearch,
     blurb: '对目标发起扫描，并跟踪每一次运行从排队到出报告的全程。',
@@ -106,6 +133,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'activity',
     path: '/activity',
+    group: 'run',
     label: '智能体活动',
     shortLabel: '活动',
     icon: Activity,
@@ -116,6 +144,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'findings',
     path: '/findings',
+    group: 'output',
     label: '漏洞发现',
     icon: ShieldAlert,
     blurb: '每一条漏洞及其证据、验证脚本（PoC）与处置状态。',
@@ -124,6 +153,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'assets',
     path: '/assets',
+    group: 'output',
     label: '资产总览',
     shortLabel: '资产',
     icon: Layers,
@@ -145,6 +175,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'schedules',
     path: '/schedules',
+    group: 'automation',
     label: '定时复查',
     shortLabel: '复查',
     icon: AlarmClock,
@@ -172,6 +203,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'ir',
     path: '/ir',
+    group: 'automation',
     label: '应急响应',
     icon: Siren,
     blurb: '把一批日志与证据包交给智能体，还原入侵时间线并给出处置建议。',
@@ -192,6 +224,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'kernel',
     path: '/kernel',
+    group: 'automation',
     // ★ 侧栏显示名用「CTF」而不是「Suvex 内核」：这一项对用户来说就是
     //   「去 ctf2.dasctf.com 拉题、解题」，用域名叫得明白。但内部跑的是
     //   自研的 Suvex 内核（id/path 仍是 kernel），只是对外不把这层名字
@@ -207,6 +240,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'reports',
     path: '/reports',
+    group: 'output',
     label: '报告',
     icon: FileText,
     blurb: '把一次完成的扫描整理成可以直接交付给他人的报告。',
@@ -215,6 +249,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'files',
     path: '/files',
+    group: 'output',
     label: '文件管理',
     shortLabel: '文件',
     icon: FolderOpen,
@@ -233,6 +268,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'tools',
     path: '/tools',
+    group: 'config',
     label: '工具管理',
     shortLabel: '工具',
     icon: Wrench,
@@ -252,6 +288,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'skills',
     path: '/skills',
+    group: 'config',
     label: '技能库',
     shortLabel: '技能',
     icon: BookOpen,
@@ -278,6 +315,7 @@ export const NAV_ITEMS: NavItem[] = [
   {
     id: 'settings',
     path: '/settings',
+    group: 'config',
     label: '设置',
     icon: Settings2,
     blurb: '模型供应商、沙箱与工具策略、通知。',
@@ -292,6 +330,19 @@ export const MOBILE_TAB_ITEMS = NAV_ITEMS.filter((item) => item.inMobileTabBar)
 
 /** 「更多」面板里列出的条目（移动端底栏放不下的那些） */
 export const MOBILE_MORE_ITEMS = NAV_ITEMS.filter((item) => !item.inMobileTabBar)
+
+/**
+ * 按 `NAV_GROUPS` 的顺序分组。空组不返回 —— 某个组全被移走时，
+ * 侧栏不该留一个孤零零的标题。
+ */
+export function groupNavItems(
+  items: ReadonlyArray<NavItem> = NAV_ITEMS,
+): Array<{ id: NavGroupId; label: string; items: NavItem[] }> {
+  return NAV_GROUPS.map((group) => ({
+    ...group,
+    items: items.filter((item) => item.group === group.id),
+  })).filter((group) => group.items.length > 0)
+}
 
 /**
  * 判断某个导航项是否处于激活态。

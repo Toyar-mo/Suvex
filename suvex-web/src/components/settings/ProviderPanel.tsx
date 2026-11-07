@@ -276,7 +276,10 @@ function AccountRow({
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="flex flex-wrap items-center gap-1.5">
             <span className="text-sm text-ink">{account.label}</span>
-            <span className="mono-ui text-ink-faint">{account.model}</span>
+            {/* 名称与模型号相同时只写一次（线上出现过同名并排两次）。 */}
+            {account.model !== account.label && (
+              <span className="mono-ui text-ink-faint">{account.model}</span>
+            )}
             {account.kind === 'local' && (
               <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
                 本地

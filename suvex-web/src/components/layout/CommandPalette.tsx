@@ -322,7 +322,7 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-ink">{item.title}</span>
-                    <span className="block truncate text-[11px] text-ink-muted">
+                    <span className="block truncate text-2xs text-ink-muted">
                       {item.subtitle}
                     </span>
                   </span>

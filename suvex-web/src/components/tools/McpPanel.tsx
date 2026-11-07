@@ -244,7 +244,7 @@ export function McpPanel({
       <header className="flex items-start justify-between gap-tight border-b border-line px-4 py-3">
         <div>
           <h2 className="text-sm font-medium text-ink">MCP 连接</h2>
-          <p className="mt-1 max-w-[60ch] text-[13px] leading-relaxed text-ink-muted">
+          <p className="mt-1 max-w-[60ch] text-sm leading-relaxed text-ink-muted">
             外部工具服务。配一条之后，智能体就能通过{' '}
             <code className="font-mono">list_mcps</code> /{' '}
             <code className="font-mono">call_mcp</code> 调到它提供的工具。
@@ -265,7 +265,7 @@ export function McpPanel({
       {servers.length === 0 ? (
         <div className="px-4 py-6 text-sm text-ink-muted">
           <p>还没有配置任何 MCP 连接。</p>
-          <p className="mt-1 text-[12px] text-ink-faint">
+          <p className="mt-1 text-xs text-ink-faint">
             不配也能正常跑 —— 沙箱里的 nmap / ffuf / curl 一直都在。
             配了才会多出「外部工具」那一类能力。
           </p>
@@ -275,23 +275,23 @@ export function McpPanel({
           {servers.map((server) => (
             <li key={server.name} className="px-4 py-3">
               <div className="flex flex-wrap items-baseline gap-x-tight gap-y-1">
-                <code className="font-mono text-[13px] text-ink">{server.name}</code>
+                <code className="font-mono text-sm text-ink">{server.name}</code>
                 {/* ★ v1.62：传输类型徽标，一眼分清 stdio / http。 */}
-                <span className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint">
+                <span className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint">
                   {server.type === 'http' ? 'HTTP' : 'stdio'}
                 </span>
                 {server.hasEnv && (
-                  <span className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint">
+                  <span className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint">
                     带环境变量
                   </span>
                 )}
                 {server.hasHeaders && (
-                  <span className="rounded-sm border border-line px-1 py-px text-[11px] text-ink-faint">
+                  <span className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint">
                     带请求头
                   </span>
                 )}
                 {server.allowedTools && (
-                  <span className="text-[11px] text-ink-faint">
+                  <span className="text-2xs text-ink-faint">
                     白名单 {server.allowedTools.length} 项
                   </span>
                 )}
@@ -301,22 +301,22 @@ export function McpPanel({
                     而超时配错的症状是"调用偶尔失败"，没人会想到去核对它。
                     没配时显示内核默认值，让人知道它确实是 60 而不是"没限制"。
                 */}
-                <span className="text-[11px] text-ink-faint">
+                <span className="text-2xs text-ink-faint">
                   超时 {server.callTimeout == null ? '默认 60' : server.callTimeout} 秒
                 </span>
               </div>
-              <p className="mt-1 break-all font-mono text-[12px] text-ink-muted">
+              <p className="mt-1 break-all font-mono text-xs text-ink-muted">
                 {server.type === 'http'
                   ? `http ${server.url}`
                   : `${server.command} ${server.args.join(' ')}`}
               </p>
-              {server.notes && <p className="mt-1 text-[12px] text-ink-faint">{server.notes}</p>}
+              {server.notes && <p className="mt-1 text-xs text-ink-faint">{server.notes}</p>}
               <div className="mt-2 flex gap-tight">
                 <button
                   type="button"
                   onClick={() => startEdit(server)}
                   disabled={saving}
-                  className="text-[12px] text-ink-muted transition-ui duration-fast hover:text-ink disabled:opacity-50"
+                  className="text-xs text-ink-muted transition-ui duration-fast hover:text-ink disabled:opacity-50"
                 >
                   编辑
                 </button>
@@ -324,7 +324,7 @@ export function McpPanel({
                   type="button"
                   onClick={() => handleRemove(server.name)}
                   disabled={saving}
-                  className="text-[12px] text-ink-muted transition-ui duration-fast hover:text-signal-risk disabled:opacity-50"
+                  className="text-xs text-ink-muted transition-ui duration-fast hover:text-signal-risk disabled:opacity-50"
                 >
                   删除
                 </button>
@@ -336,7 +336,7 @@ export function McpPanel({
 
       {/* 保存错误 */}
       {error && (
-        <div className="flex items-start gap-tight border-t border-line px-4 py-2.5 text-[13px] text-signal-risk">
+        <div className="flex items-start gap-tight border-t border-line px-4 py-2.5 text-sm text-signal-risk">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
           <span className="leading-relaxed">{error}</span>
         </div>
@@ -346,7 +346,7 @@ export function McpPanel({
       {draft && (
         <div className="border-t border-line bg-surface-raised/40 px-4 py-3">
           <div className="flex items-center justify-between">
-            <h3 className="text-[13px] font-medium text-ink">
+            <h3 className="text-sm font-medium text-ink">
               {editingName ? `编辑 ${editingName}` : '添加连接'}
             </h3>
             <button
@@ -361,22 +361,22 @@ export function McpPanel({
 
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">连接名（模型用它指认）</span>
+              <span className="text-xs text-ink-muted">连接名（模型用它指认）</span>
               <input
                 value={draft.name}
                 onChange={(event) => setDraft({ ...draft, name: event.target.value })}
                 placeholder="demo"
-                className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent"
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">传输类型</span>
+              <span className="text-xs text-ink-muted">传输类型</span>
               <select
                 value={draft.type}
                 onChange={(event) =>
                   setDraft({ ...draft, type: event.target.value as 'stdio' | 'http' })
                 }
-                className="h-8 rounded-sm border border-line bg-surface px-2 text-[13px] text-ink outline-none focus:border-line-accent"
+                className="h-8 rounded-sm border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-line-accent"
               >
                 <option value="stdio">stdio（拉起本地进程）</option>
                 <option value="http">http（连远端端点）</option>
@@ -387,33 +387,33 @@ export function McpPanel({
           {/* ★ v1.62：按类型切换 url / command 输入框。 */}
           {draft.type === 'http' ? (
             <label className="mt-2 flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">端点 URL</span>
+              <span className="text-xs text-ink-muted">端点 URL</span>
               <input
                 value={draft.url}
                 onChange={(event) => setDraft({ ...draft, url: event.target.value })}
                 placeholder="https://example.com/api/mcp"
-                className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent"
               />
             </label>
           ) : (
             <>
               <label className="mt-2 flex flex-col gap-1">
-                <span className="text-[12px] text-ink-muted">命令（可执行文件）</span>
+                <span className="text-xs text-ink-muted">命令（可执行文件）</span>
                 <input
                   value={draft.command}
                   onChange={(event) => setDraft({ ...draft, command: event.target.value })}
                   placeholder="/opt/suvex/demo_mcp.py"
-                  className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                  className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent"
                 />
               </label>
 
               <label className="mt-2 flex flex-col gap-1">
-                <span className="text-[12px] text-ink-muted">参数（空格分隔）</span>
+                <span className="text-xs text-ink-muted">参数（空格分隔）</span>
                 <input
                   value={argsText}
                   onChange={(event) => setArgsText(event.target.value)}
                   placeholder="--port 9000"
-                  className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                  className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent"
                 />
               </label>
             </>
@@ -422,7 +422,7 @@ export function McpPanel({
           {/* ★ v1.62：http 连接的请求头（如鉴权 token）。不回显，留空 = 保留原值。 */}
           {draft.type === 'http' && (
             <label className="mt-2 flex flex-col gap-1">
-              <span className="text-[12px] text-ink-muted">
+              <span className="text-xs text-ink-muted">
                 请求头（每行 KEY: VALUE）
                 {editingName && !headersText && (
                   <span className="ml-1 text-ink-faint">
@@ -435,13 +435,13 @@ export function McpPanel({
                 onChange={(event) => setHeadersText(event.target.value)}
                 rows={2}
                 placeholder="Authorization: Bearer xxx"
-                className="rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+                className="rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-sm text-ink outline-none focus:border-line-accent"
               />
             </label>
           )}
 
           <label className="mt-2 flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
+            <span className="text-xs text-ink-muted">
               环境变量（每行 KEY=VALUE）
               {editingName && !envText && (
                 <span className="ml-1 text-ink-faint">
@@ -454,19 +454,19 @@ export function McpPanel({
               onChange={(event) => setEnvText(event.target.value)}
               rows={2}
               placeholder="API_BASE=https://example.com"
-              className="rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+              className="rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-sm text-ink outline-none focus:border-line-accent"
             />
           </label>
 
           <label className="mt-2 flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
+            <span className="text-xs text-ink-muted">
               白名单（逗号分隔，留空 = 允许这条连接的全部工具）
             </span>
             <input
               value={toolsText}
               onChange={(event) => setToolsText(event.target.value)}
               placeholder="recon_scan, run_poc"
-              className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+              className="h-8 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent"
             />
           </label>
 
@@ -476,7 +476,7 @@ export function McpPanel({
               100 秒+）在默认 60 秒下**必然失败**，而报错长得像"连接坏了"。
           */}
           <label className="mt-2 flex flex-col gap-1">
-            <span className="text-[12px] text-ink-muted">
+            <span className="text-xs text-ink-muted">
               单次调用超时（秒）
               <span className="ml-1 text-ink-faint">
                 · 留空 = 用内核默认 60 秒；慢工具（资产测绘 / 跑 POC）建议 300
@@ -487,12 +487,12 @@ export function McpPanel({
               onChange={(event) => setTimeoutText(event.target.value)}
               inputMode="numeric"
               placeholder="300"
-              className="h-8 w-40 rounded-sm border border-line bg-surface px-2 font-mono text-[13px] text-ink outline-none focus:border-line-accent"
+              className="h-8 w-40 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent"
             />
           </label>
 
           {formError && (
-            <p className="mt-2 flex items-start gap-1 text-[12px] text-signal-risk">
+            <p className="mt-2 flex items-start gap-1 text-xs text-signal-risk">
               <AlertCircle className="mt-0.5 size-3 shrink-0" strokeWidth={1.75} />
               {formError}
             </p>
@@ -502,7 +502,7 @@ export function McpPanel({
           {testResult && (
             <div
               className={cn(
-                'mt-2 rounded-sm border px-2 py-1.5 text-[12px] leading-relaxed',
+                'mt-2 rounded-sm border px-2 py-1.5 text-xs leading-relaxed',
                 testResult.ok
                   ? 'border-line text-ink-muted'
                   : 'border-signal-risk/40 text-signal-risk',
@@ -537,7 +537,7 @@ export function McpPanel({
               {testing ? <Loader2 className="size-3.5 animate-spin" /> : null}
               试连
             </Button>
-            <span className="text-[11px] text-ink-faint">试连不会保存 —— 先确认能通，再保存。</span>
+            <span className="text-2xs text-ink-faint">试连不会保存 —— 先确认能通，再保存。</span>
           </div>
         </div>
       )}
