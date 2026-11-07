@@ -60,6 +60,16 @@ describe('ProviderSelect', () => {
     expect(document.querySelector('select')).toBeNull()
   })
 
+  it('★ 菜单向上展开（输入区在页面底部，向下会掉出屏幕）', () => {
+    renderSelect({ align: 'right' })
+    fireEvent.click(screen.getByRole('button', { name: /平台默认模型/ }))
+    const menu = screen.getByRole('listbox')
+    expect(menu.className).toContain('bottom-full')
+    expect(menu.className).not.toContain('top-full')
+    // 位于输入行右端：向左展开，避免右侧溢出
+    expect(menu.className).toContain('right-0')
+  })
+
   it('点一个接点会回调它的 id，并关闭浮层', () => {
     const { onChange } = renderSelect()
     fireEvent.click(screen.getByRole('button', { name: /平台默认模型/ }))

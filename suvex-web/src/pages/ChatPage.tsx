@@ -1811,6 +1811,7 @@ export function ChatPage() {
             {active && (
               <div className="hidden shrink-0 sm:block">
                 <ProviderSelect
+                  align="right"
                   providers={usableProviders}
                   value={active.providerId ?? null}
                   onChange={(providerId) => void updateSettings(active.id, { providerId })}

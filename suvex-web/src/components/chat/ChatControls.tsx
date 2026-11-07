@@ -138,12 +138,20 @@ export function ProviderSelect({
   value,
   onChange,
   disabled,
+  align = 'left',
 }: {
   providers: Array<{ id: string; label: string }>
   /** `null` = 用平台默认。 */
   value: string | null
   onChange: (providerId: string | null) => void
   disabled?: boolean
+  /**
+   * 菜单与触发器的水平对齐。
+   *
+   * 模型选择在输入行里靠近右边缘（后面还有齿轮和发送），左对齐会让
+   * 224px 的菜单从右侧溢出屏幕；那里传 `right`，菜单向左展开。
+   */
+  align?: 'left' | 'right'
 }) {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -203,7 +211,14 @@ export function ProviderSelect({
         <div
           role="listbox"
           className={cn(
-            'absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto',
+            /*
+              ★ v1.76：菜单**向上**展开。
+              模型选择位于页面最底部的输入行，向下展开会直接落到屏幕外
+              （用户截图：只看到半截「平台默认模型」）。向上展开落在
+              消息流区域里，永远不会被视口底边裁掉。
+            */
+            'absolute bottom-full z-20 mb-1 max-h-64 w-56 overflow-y-auto',
+            align === 'right' ? 'right-0' : 'left-0',
             'rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
           )}
         >
@@ -330,7 +345,8 @@ export function MultiSelect({
           role="listbox"
           aria-multiselectable="true"
           className={cn(
-            'absolute left-0 top-full z-20 mt-1 max-h-64 w-56 overflow-y-auto',
+            // v1.76：同样向上展开 —— 这个控件只出现在贴着页面底部的设置面板里。
+            'absolute bottom-full left-0 z-20 mb-1 max-h-64 w-56 overflow-y-auto',
             'rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
           )}
         >
