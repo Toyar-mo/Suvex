@@ -565,7 +565,9 @@ export function AttachmentBar({
         aria-label={inline ? '附件' : undefined}
         className={cn(
           'flex items-center gap-1 rounded-xs border border-line bg-surface-sunken',
-          inline ? 'shrink-0 p-1.5' : 'px-1.5 py-1',
+          inline
+            ? 'shrink-0 p-1.5 max-sm:min-h-10 max-sm:min-w-10 max-sm:justify-center'
+            : 'px-1.5 py-1',
           'text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',

@@ -74,14 +74,14 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
         )}
         <span className="shrink-0 font-mono text-2xs">{message.toolName ?? 'tool'}</span>
         {argDigest && (
-          <span className="min-w-0 truncate text-2xs text-ink-faint/80">{argDigest}</span>
+          <span className="min-w-0 truncate text-2xs text-ink-faint">{argDigest}</span>
         )}
         {failed && (
           <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
             失败
           </span>
         )}
-        <span className="ml-auto shrink-0 text-2xs text-ink-faint/60">
+        <span className="ml-auto shrink-0 text-2xs text-ink-faint">
           {open ? '收起' : `${lineCount} 行`}
         </span>
       </button>

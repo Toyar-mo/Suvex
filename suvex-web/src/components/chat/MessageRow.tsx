@@ -55,7 +55,7 @@ export function MessageRow({
         data-seq={message.seq}
       >
         <div className="max-w-[520px] rounded-[10px] rounded-br-xs border border-line bg-surface px-3.5 py-2">
-          <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
+          <p className="whitespace-pre-wrap break-words text-base leading-[1.5] text-ink">
             {message.content}
           </p>
         </div>
@@ -70,7 +70,7 @@ export function MessageRow({
   return (
     <div className="flex flex-col gap-1.5" data-message-row="assistant" data-seq={message.seq}>
       {message.reasoning && <ReasoningBlock text={message.reasoning} />}
-      <div className="break-words text-sm leading-7 text-ink" data-markdown-answer>
+      <div className="break-words text-base leading-7 text-ink" data-markdown-answer>
         <WriteupMarkdown markdown={message.content} sessionId={sessionId} />
       </div>
     </div>

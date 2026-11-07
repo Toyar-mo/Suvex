@@ -1141,7 +1141,7 @@ export function ChatPage() {
         onClick={() => setPersonaOpen(true)}
         className={cn(
           'inline-flex items-center gap-1 rounded-md border border-line px-2 py-1',
-          'text-2xs text-ink-muted transition-colors duration-150',
+          'text-2xs text-ink-muted transition-ui duration-fast',
           'hover:border-accent/40 hover:text-ink',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         )}
@@ -1173,6 +1173,20 @@ export function ChatPage() {
         emptyHint="还没配 MCP server（在工具页加）"
         onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
       />
+
+      {/*
+        ★ 「完成」与上面几个控件**同一行**、右对齐。
+        之前它单独占一行（chips 在上、按钮在下），视觉上是一个台阶：
+        一行 28px 的控件后面空出一整行再放按钮，既浪费高度也显得没对齐。
+        窄屏 chips 换行时 `ml-auto` 会把它推到最后一个换行行的右端。
+      */}
+      <button
+        type="button"
+        onClick={() => setSettingsOpen(false)}
+        className="ml-auto shrink-0 rounded-md border border-line px-2 py-1 text-2xs text-ink-muted transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+      >
+        完成
+      </button>
     </div>
   ) : null
 
@@ -1382,10 +1396,12 @@ export function ChatPage() {
               type="button"
               onClick={() => setAnswersOnly((value) => !value)}
               aria-pressed={answersOnly}
+              aria-label="只看回答"
               title={answersOnly ? '显示工具与过程' : '隐藏工具与过程，只看结论'}
               className={cn(
                 'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs',
-                'transition-colors duration-150',
+                'max-sm:min-h-9 max-sm:min-w-9 max-sm:justify-center',
+                'transition-ui duration-fast',
                 answersOnly ? 'bg-accent/12 text-accent' : 'text-ink-faint hover:text-ink-muted',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
               )}
@@ -1480,7 +1496,7 @@ export function ChatPage() {
                         onClick={() => setDraft(text)}
                         className={cn(
                           'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
-                          'text-xs text-ink-muted transition-colors duration-150',
+                          'text-xs text-ink-muted transition-ui duration-fast',
                           'hover:border-line-strong hover:text-ink',
                           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                           'disabled:cursor-not-allowed disabled:opacity-60',
@@ -1609,8 +1625,8 @@ export function ChatPage() {
               type="button"
               onClick={() => scrollToLatest()}
               className={cn(
-                'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-pill border border-line bg-surface px-3 py-1',
-                'text-2xs text-ink-muted shadow-sm transition-colors duration-150 hover:text-ink',
+                'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-md border border-line bg-surface px-3 py-1',
+                'text-2xs text-ink-muted shadow-sm transition-ui duration-fast hover:text-ink',
                 'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
               )}
               data-jump-to-bottom
@@ -1678,7 +1694,7 @@ export function ChatPage() {
 
         {/* 输入卡（单行形态）：附件、输入、模型、设置、发送同一行 */}
         <div className="shrink-0 px-3 pb-3 pt-4" data-testid="composer-dock">
-          <div className="mx-auto w-full max-w-[880px] rounded-2xl border border-line bg-surface shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)] transition-shadow duration-200 focus-within:border-line-strong focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]" data-testid="composer-card">
+          <div className="mx-auto w-full max-w-[880px] rounded-lg border border-line bg-surface shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)] transition-shadow duration-200 focus-within:border-line-strong focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]" data-testid="composer-card">
             {/*
               ★ v1.75：设置默认收进齿轮，输入区只占一行。
               项目/人格/审批/技能/MCP 不是每句话都要改的东西，常驻会
@@ -1687,15 +1703,6 @@ export function ChatPage() {
             {active && settingsOpen && (
               <div className="border-b border-line/70 px-2 py-1.5" data-composer-settings>
                 {settingsBar}
-                <div className="mt-1.5 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={() => setSettingsOpen(false)}
-                    className="rounded-md border border-line px-2 py-1 text-2xs text-ink-muted transition-colors duration-150 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
-                  >
-                    完成
-                  </button>
-                </div>
               </div>
             )}
           {mention && (
@@ -1803,7 +1810,7 @@ export function ChatPage() {
               aria-label="输入消息"
               className={cn(
                 'max-h-40 min-h-[2.5rem] flex-1 resize-none rounded-md bg-transparent px-1 py-1.5',
-                'text-sm text-ink placeholder:text-ink-faint',
+                'text-base text-ink placeholder:text-ink-faint',
                 'focus:outline-none',
                 'disabled:cursor-not-allowed disabled:opacity-60',
               )}
@@ -1827,7 +1834,8 @@ export function ChatPage() {
                 title="对话设置"
                 className={cn(
                   'shrink-0 rounded-md border border-line p-1.5',
-                  'text-ink-faint transition-colors duration-150 hover:text-ink',
+                  'max-sm:flex max-sm:min-h-10 max-sm:min-w-10 max-sm:items-center max-sm:justify-center',
+                  'text-ink-faint transition-ui duration-fast hover:text-ink',
                   settingsOpen && 'border-accent/40 text-accent',
                   'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
                 )}
@@ -1867,6 +1875,7 @@ export function ChatPage() {
               */
               loading={interjecting}
               size="sm"
+              className="max-sm:min-h-10"
               aria-label={turnRunningHere ? '插话' : '发送'}
             >
               <Send size={14} strokeWidth={2} aria-hidden="true" />

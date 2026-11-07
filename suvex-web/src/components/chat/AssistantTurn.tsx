@@ -118,7 +118,7 @@ export function AssistantTurn({
 
       {live && streamingText !== null && (
         <div
-          className="w-full break-words text-sm leading-7 text-ink"
+          className="w-full break-words text-base leading-7 text-ink"
           data-streaming-bubble="true"
           data-message-row="assistant"
         >
@@ -141,7 +141,7 @@ export function AssistantTurn({
             {phaseText ?? '正在想…'}
             {progressLabel(progress)}
             {elapsed > 0 && (
-              <span className="text-ink-faint/70"> · 已 {formatElapsed(elapsed)}</span>
+              <span className="text-ink-faint"> · 已 {formatElapsed(elapsed)}</span>
             )}
           </span>
         </div>
@@ -149,7 +149,7 @@ export function AssistantTurn({
 
       {!live && items.length > 0 && (
         <div
-          className="flex min-h-5 items-center gap-2 pl-1 text-2xs text-ink-faint/80"
+          className="flex min-h-5 items-center gap-2 pl-1 text-2xs text-ink-faint"
           data-turn-footer
           data-turn-steps={items.length}
           data-turn-tools={tools.length}
@@ -224,14 +224,14 @@ function TurnWork({ items, live }: { items: ChatMessage[]; live: boolean }) {
           {live ? '正在处理' : '工作过程'} · {items.length} 步
         </span>
         {tools.length > 0 && (
-          <span className="shrink-0 text-ink-faint/70">· {tools.length} 个工具</span>
+          <span className="shrink-0 text-ink-faint">· {tools.length} 个工具</span>
         )}
         {failed > 0 && (
           <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
             {failed} 个失败
           </span>
         )}
-        <span className="ml-auto shrink-0 text-ink-faint/60">{open ? '收起' : '展开'}</span>
+        <span className="ml-auto shrink-0 text-ink-faint">{open ? '收起' : '展开'}</span>
       </button>
 
       {open && (

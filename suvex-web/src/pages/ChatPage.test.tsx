@@ -1766,7 +1766,7 @@ const CARD_CLASSES = [
   'mx-auto',
   'w-full',
   'max-w-[880px]',
-  'rounded-2xl',
+  'rounded-lg',
   'border',
   'border-line',
   'bg-surface',
