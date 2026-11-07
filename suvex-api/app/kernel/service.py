@@ -133,6 +133,7 @@ from app.kernel.models import (
     KernelChallenge,
     KernelCompetition,
     KernelEnvironment,
+    KernelPlatform,
     KernelSolveAttempt,
 )
 from app.settings.models import SINGLETON_ID, KernelConfig
@@ -839,7 +840,11 @@ def _sync_locked(db: Session, *, competition_ids: list[str] | None = None) -> Sy
     # ── 附件下载（第二段：网络，且**不碰 Session**）────────────
     if pending_downloads:
         try:
-            result.attachments = _run(download_all(token, pending_downloads))
+            result.attachments = _run(
+                download_all(
+                    token, pending_downloads, allowed_domains=_attachment_allowed_domains(db)
+                )
+            )
         except KernelError as exc:
             # 只吞**领域内**的错误：真 bug（比如 file 路径算错）必须冒出来。
             result.attachments.failed.append(str(exc))
@@ -1006,6 +1011,24 @@ def extract_challenge_id(raw: str) -> str | None:
     return match.group(0) if match else None
 
 
+def _attachment_allowed_domains(db: Session) -> tuple[str, ...]:
+    """当前接入平台的**注册域**（如 `dasctf.com`），用于放行它自己的附件 CDN。
+
+    ★ 只取 base_url 的注册域，不取附件 URL 自己的域 —— 后者等于让出题人
+      决定我们去访问哪台机器。CTF2 官方域名由 `assert_allowed_target`
+      原生放行，这里补的是配置驱动平台（附件常在它自己的 OSS 上）。
+    """
+    from urllib.parse import urlsplit
+
+    domains: set[str] = set()
+    for row in db.scalars(select(KernelPlatform)):
+        host = (urlsplit(row.base_url or "").hostname or "").lower()
+        labels = host.split(".")
+        if len(labels) >= 2:
+            domains.add(".".join(labels[-2:]))
+    return tuple(sorted(domains))
+
+
 def pull_challenge(db: Session, *, raw_input: str) -> tuple[KernelChallenge, bool]:
     """按 id / 链接拉**一道**练习集题目。返回 `(题目, 是不是新建的)`。
 
@@ -1108,7 +1131,7 @@ def pull_challenge(db: Session, *, raw_input: str) -> tuple[KernelChallenge, boo
     pending = plan_downloads(challenge.id, challenge.attachments)
     if pending:
         try:
-            _run(download_all(token, pending))
+            _run(download_all(token, pending, allowed_domains=_attachment_allowed_domains(db)))
         except KernelError as exc:
             # 附件没下全**不该**把"题目已经进库"这件事回滚 ——
             # 重新拉一次即可（已存在的文件会跳过）。
@@ -1289,7 +1312,11 @@ def sync_competition(db: Session, *, competition_name: str = "羊城杯 AI Agent
     #    AccessKey 不该出现在第三方域名。平台给的都是可直下的签名 URL。
     if pending_downloads:
         try:
-            result.attachments = _run(download_all("", pending_downloads))
+            result.attachments = _run(
+                download_all(
+                    "", pending_downloads, allowed_domains=_attachment_allowed_domains(db)
+                )
+            )
         except KernelError as exc:
             result.attachments.failed.append(str(exc))
         if result.attachments.failed:

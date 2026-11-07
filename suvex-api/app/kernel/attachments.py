@@ -45,7 +45,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Collection
 from urllib.parse import unquote, urlsplit
 
 import httpx
@@ -329,13 +329,31 @@ def _write_fingerprint(target: Path, digest: str) -> None:
         logger.warning("写附件指纹失败（不影响本次下载）：%s", exc)
 
 
-def _is_official(url: str) -> bool:
-    """附件 URL 必须落在 CTF2 官方域名下。**不传 `allowed_extra`**（见模块 docstring）。"""
+def _is_official(url: str, allowed_domains: Collection[str] = ()) -> bool:
+    """附件 URL 必须落在 CTF2 官方域名下，**或**当前接入平台的域名下。
+
+    ## 为什么多了 `allowed_domains`（2026-11-08 实测）
+
+    接配置驱动的平台（DASCTF Pro）之后，附件放在它自己的 CDN
+    `pro-resource.dasctf.com`，而白名单只认 CTF2 官方域名 —— 于是
+    **每一道带附件的题都下不下来**：沙箱里没有 attachments 目录，
+    模型拿着"题面说附件里有什么"干跑。
+
+    实测 4 道 RE/MISC 各跑了 20+ 分钟、几十次工具调用，`/work` 里
+    一个附件文件都没有。排查时它长得像"模型不会用附件"，实际是
+    下载在第一步就被拒了。
+
+    调用方传的是**当前平台 base_url 的域名**（如 `dasctf.com`），
+    不是附件 URL 自己的域名 —— 后者等于让出题人决定我们访问哪。
+    """
     try:
         assert_allowed_target(url)
         return True
     except KernelError:
-        return False
+        host = (urlsplit(url).hostname or "").lower()
+        return bool(host) and any(
+            host == domain or host.endswith("." + domain) for domain in allowed_domains
+        )
 
 
 async def download_all(
@@ -343,6 +361,7 @@ async def download_all(
     pending: list[PendingDownload],
     *,
     client: httpx.AsyncClient | None = None,
+    allowed_domains: Collection[str] = (),
 ) -> DownloadResult:
     """下载清单里的全部附件。**单条失败不中断整批。**
 
@@ -371,7 +390,7 @@ async def download_all(
                 )
                 break
             try:
-                await _download_one(http, token, item, result)
+                await _download_one(http, token, item, result, allowed_domains)
             except Exception as exc:  # noqa: BLE001 - 一条失败不该中断整批
                 logger.warning("下载附件失败 %s：%s", item.url, exc)
                 result.failed.append(f"{item.name}：{exc}")
@@ -382,10 +401,14 @@ async def download_all(
 
 
 async def _download_one(
-    http: httpx.AsyncClient, token: str, item: PendingDownload, result: DownloadResult
+    http: httpx.AsyncClient,
+    token: str,
+    item: PendingDownload,
+    result: DownloadResult,
+    allowed_domains: Collection[str] = (),
 ) -> None:
     """下载一个附件。见 `download_all` 的说明。"""
-    if not _is_official(item.url):
+    if not _is_official(item.url, allowed_domains):
         # ★ 这是**拒绝**而不是"警告后继续"。见模块 docstring 第 1 条：
         #   不校验 host 等于让出题人决定我们去访问哪里。
         raise KernelError(
