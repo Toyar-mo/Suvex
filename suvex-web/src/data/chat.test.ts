@@ -5,6 +5,7 @@ import {
   getChatSnapshot,
   interject,
   interruptTurn,
+  loadEarlierMessages,
   loadSessions,
   loadTools,
   openSession,
@@ -286,6 +287,76 @@ describe('openSession', () => {
     pending[0].resolve({ ...session(), messages: [message()] })
     await promise
     expect(getChatSnapshot().active?.messages).toHaveLength(1)
+  })
+
+  it('只请求最后一页（带 limit），不是整段历史', async () => {
+    const promise = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await promise
+    expect(calls[0]?.url).toContain('limit=')
+  })
+})
+
+describe('loadEarlierMessages — 往上翻页（2026-11）', () => {
+  it('把更早的一页插在前面，并按服务端的 hasEarlier 收尾', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({
+      ...session(),
+      messageCount: 5,
+      hasEarlier: true,
+      messages: [
+        message({ id: 'm3', seq: 3 }),
+        message({ id: 'm4', seq: 4 }),
+        message({ id: 'm5', seq: 5 }),
+      ],
+    })
+    await open
+
+    const page = loadEarlierMessages('chat_1')
+    const idx = calls.findIndex((c) => c.url.includes('before='))
+    expect(idx).toBeGreaterThan(0)
+    pending[idx].resolve({
+      ...session(),
+      messageCount: 5,
+      hasEarlier: false,
+      messages: [message({ id: 'm1', seq: 1 }), message({ id: 'm2', seq: 2 })],
+    })
+
+    expect(await page).toBe(true)
+    const active = getChatSnapshot().active
+    expect(active?.messages.map((m) => m.id)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5'])
+    expect(active?.hasEarlier).toBe(false)
+  })
+
+  it('服务端重复返回已有的行时按 id 去重，不插两遍', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({
+      ...session(),
+      hasEarlier: true,
+      messages: [message({ id: 'm3', seq: 3 })],
+    })
+    await open
+
+    const page = loadEarlierMessages('chat_1')
+    const idx = calls.findIndex((c) => c.url.includes('before='))
+    pending[idx].resolve({
+      ...session(),
+      hasEarlier: false,
+      messages: [message({ id: 'm2', seq: 2 }), message({ id: 'm3', seq: 3 })],
+    })
+    await page
+
+    expect(getChatSnapshot().active?.messages.map((m) => m.id)).toEqual(['m2', 'm3'])
+  })
+
+  it('没有更早的消息时不发请求', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), hasEarlier: false, messages: [message()] })
+    await open
+    const before = calls.length
+
+    expect(await loadEarlierMessages('chat_1')).toBe(false)
+    expect(calls.length).toBe(before)
   })
 })
 
@@ -688,7 +759,12 @@ describe('interject — 插话兑现（v0.101）', () => {
     //   （它早就 resolve 过了，于是把刷新那次留在悬挂状态，测试看起来"没刷新"）。
     let refreshIdx = -1
     for (let i = calls.length - 1; i >= 0; i--) {
-      if (calls[i].url.endsWith('/chat/sessions/chat_1') && calls[i].method === 'GET') {
+      // 刷新请求现在带 `?after=<游标>`，所以用 includes 而不是 endsWith
+      if (
+        calls[i].url.includes('/chat/sessions/chat_1') &&
+        !calls[i].url.includes('/turns') &&
+        calls[i].method === 'GET'
+      ) {
         refreshIdx = i
         break
       }
@@ -696,6 +772,9 @@ describe('interject — 插话兑现（v0.101）', () => {
     expect(refreshIdx).toBeGreaterThan(0)
     pending[refreshIdx].resolve({
       ...session(),
+      // 真实后端总会带总数；这里显式写 3，因为分页后前端**不再用
+      // messages.length 冒充总数**（那只是这一页的条数）
+      messageCount: 3,
       messages: [
         message({ id: 'm1', seq: 1, role: 'user', content: '先看一眼 nmap' }),
         message({ id: 'm_inter', seq: 2, role: 'user', content: '顺便看一下 ffuf 的配方' }),

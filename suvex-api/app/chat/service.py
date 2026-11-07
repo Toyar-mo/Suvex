@@ -685,13 +685,45 @@ def finish_approved_tool(
     return message
 
 
-def list_messages(db: Session, *, session: ChatSession, limit: int | None = None) -> list[ChatMessage]:
+def list_messages(
+    db: Session,
+    *,
+    session: ChatSession,
+    limit: int | None = None,
+    before_seq: int | None = None,
+    after_seq: int | None = None,
+) -> list[ChatMessage]:
     """按 seq 取消息。
 
     `limit` 给定时取**最近** N 条，但返回仍是升序 ——
     "最近 50 条按时间正序"是聊天界面的标准语义。
+
+    ## 分页与增量（2026-11 性能）
+
+    长会话的详情曾经把**整段历史**一次性返回。实测有会话到过几 MB ——
+    打开它要下载、解析、渲染全部消息，而用户一进来只看得到最后几屏。
+    现在三种取法都走这里：
+
+      · `before_seq` —— 往上翻页。「加载更早」取 seq < 游标的最近 N 条；
+      · `after_seq`  —— 增量刷新。只取 seq > 游标的那些（插话、后台补写），
+        避免"为了看一条新消息把整个会话重下一遍"；
+      · 都不给        —— 保持旧语义（全量 / 最近 N 条）。
     """
     stmt = select(ChatMessage).where(ChatMessage.session_id == session.id)
+
+    if after_seq is not None:
+        stmt = stmt.where(ChatMessage.seq > after_seq).order_by(ChatMessage.seq.asc())
+        if limit is not None:
+            stmt = stmt.limit(limit)
+        return list(db.scalars(stmt))
+
+    if before_seq is not None:
+        stmt = stmt.where(ChatMessage.seq < before_seq).order_by(ChatMessage.seq.desc())
+        stmt = stmt.limit(limit if limit is not None else 200)
+        rows = list(db.scalars(stmt))
+        rows.reverse()
+        return rows
+
     if limit is not None:
         stmt = stmt.order_by(ChatMessage.seq.desc()).limit(limit)
         rows = list(db.scalars(stmt))

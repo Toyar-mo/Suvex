@@ -35,6 +35,7 @@ import {
   clearStaleSending,
   interject,
   interruptTurn,
+  loadEarlierMessages,
   loadPersonas,
   loadSessions,
   loadTools,
@@ -91,7 +92,7 @@ import {
   UserRound,
   X,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 
 /**
@@ -466,6 +467,48 @@ export function ChatPage() {
     onUserAway: () => setAutoFollow(false),
     onUserBack: () => setAutoFollow(true),
   })
+
+  /*
+    「加载更早」要自己保住滚动位置。
+
+    往上插一页会让内容高度突然变大：浏览器的锚定在这里不可靠（消息列表
+    高度是动态的，Markdown 渲染完才定型），表现是**点一下就跳回几个月前
+    的某一句**。所以插入前后各量一次 scrollHeight，把差值补进 scrollTop ——
+    用户视线停在原来那条消息上，新的旧消息在它上面出现。
+  */
+  const scrollerElRef = useRef<HTMLDivElement | null>(null)
+  const [loadingEarlier, setLoadingEarlier] = useState(false)
+
+  /*
+    ★ 这个回调的**身份必须恒定**（`attachContainer` 的 docstring 写了原因）：
+      身份一变，React 会先用 null 调旧的、再用节点调新的，等于把滚动容器
+      卸载重挂一次 —— 滚动位置归零，用户正在看的地方被弹回顶部。
+  */
+  const setScrollerRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      scrollerElRef.current = el
+      attachContainer(el)
+    },
+    [attachContainer],
+  )
+
+  const handleLoadEarlier = async () => {
+    if (!active || loadingEarlier) return
+    const el = scrollerElRef.current
+    const before = el?.scrollHeight ?? 0
+    setLoadingEarlier(true)
+    const wasFollowing = autoFollow
+    setAutoFollow(false)
+    const inserted = await loadEarlierMessages(active.id)
+    setLoadingEarlier(false)
+    if (inserted && el) {
+      // 等 Markdown 渲染完再补偿，否则量到的是插入前的高度
+      requestAnimationFrame(() => {
+        el.scrollTop += el.scrollHeight - before
+      })
+    }
+    if (wasFollowing && !inserted) setAutoFollow(true)
+  }
 
   // 切会话：回到跟随（新会话直接看最新）。
   useEffect(() => {
@@ -877,9 +920,14 @@ export function ChatPage() {
    *
    * ★ 当前正在看的会话直接用 `active.messages`，省一次请求；别的会话才去拉。
    *   判断依据是 `active.id`，不是"会话在列表里"——列表里只有元信息。
+   *
+   * ★ 分页（2026-11）之后还要看 `hasEarlier`：长会话的 `active.messages`
+   *   只是最后一页。直接拿它去拼攻击链，会**静悄悄地**只分析后半段 ——
+   *   而攻击链恰恰最需要开头那几步。没载全就照常去拉全量。
    */
   async function openAttackChain(session: { id: string; title: string }) {
-    const cached = active?.id === session.id ? active.messages : null
+    const complete = active?.id === session.id && !active.hasEarlier
+    const cached = complete && active ? active.messages : null
     setChainView({ open: true, title: session.title, loading: cached === null, error: null, messages: cached ?? [] })
     if (cached !== null) return
     try {
@@ -1428,7 +1476,10 @@ export function ChatPage() {
 
         {/* 消息流 */}
         <div className="relative flex min-h-0 flex-1 flex-col">
-          <div ref={attachContainer} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          <div
+            ref={setScrollerRef}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+          >
           {!active ? (
             <div className="mx-auto flex max-w-[62ch] flex-col items-start gap-bay py-6">
               <EmptyState
@@ -1508,6 +1559,21 @@ export function ChatPage() {
                     ))}
                   </div>
                 </>
+              )}
+
+              {/* 长会话只加载最后一页；更早的从服务端按游标翻，见 loadEarlierMessages */}
+              {active?.hasEarlier && (
+                <div className="flex justify-center" data-load-earlier>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    loading={loadingEarlier}
+                    loadingLabel="加载中…"
+                    onClick={() => void handleLoadEarlier()}
+                  >
+                    加载更早的消息
+                  </Button>
+                </div>
               )}
 
               {turns.map((turn, index) => {

@@ -150,7 +150,18 @@ export interface ChatAttachment {
 /** `GET /chat/sessions/{id}` 的响应。 */
 export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
+  /**
+   * 这份消息是不是"最后一页"（前面还有更早的）。
+   *
+   * ★ 由**服务端**按 `messages[0].seq > 1` 给出，前端不要用
+   *   `messages.length < messageCount` 自己推 —— seq 有空洞时会算错，
+   *   而算错的表现是「加载更早」要么永远出现、要么永远不出现。
+   */
+  hasEarlier?: boolean
 }
+
+/** 一页消息的条数。够填满几屏，又不至于让首屏下载几百 KB。 */
+const MESSAGE_PAGE_SIZE = 200
 
 /** `GET /chat/tools` 的一条。 */
 export interface ChatTool {
@@ -539,6 +550,7 @@ export function resetChatStore(): void {
   */
   sessionsInFlight = null
   detailInFlight.clear()
+  earlierInFlight = null
   emit()
 }
 
@@ -626,17 +638,106 @@ export async function loadTools(): Promise<void> {
  */
 export async function refreshActiveMessages(sessionId: string): Promise<void> {
   try {
-    const detail = await fetchSessionDetail(sessionId)
     const current = state.active
-    // 等回来的这段时间用户可能已经切走了 —— 那就不要往新会话里写旧数据。
     if (!current || current.id !== sessionId) return
+    const lastSeq = current.messages.at(-1)?.seq
+    /*
+      ★ 只拉"最后一条之后"的新消息，不再把整个会话重下一遍。
+
+        原来这里是无参全量拉：插话、后台补写这类"补一条"的场景，
+        代价是几百 KB 到几 MB 的下载 + 全量重渲染。现在带 after 游标，
+        返回通常是一条或零条。
+
+        没有消息时退回全量：空会话没有游标可用，而那份数据本来也小。
+    */
+    const detail =
+      lastSeq === undefined
+        ? await fetchSessionDetail(sessionId, { limit: MESSAGE_PAGE_SIZE })
+        : await fetchSessionDetail(sessionId, { after: lastSeq })
+
+    // 等回来的这段时间用户可能已经切走了 —— 那就不要往新会话里写旧数据。
+    const latest = state.active
+    if (!latest || latest.id !== sessionId) return
+
+    /*
+      只接**比最后一条更新**的行。
+
+      服务端带 after 游标时只会返回这些；这里再筛一遍是防御：
+      老后端不认识 after 参数会退回全量，那时不筛就会把已有消息
+      整段再拼一遍（界面上同一句话出现两次）。
+    */
+    const incoming =
+      lastSeq === undefined
+        ? detail.messages
+        : detail.messages.filter((m) => m.seq > lastSeq)
+    if (lastSeq !== undefined && incoming.length === 0) return
+    const merged =
+      lastSeq === undefined ? incoming : [...latest.messages, ...incoming]
+
     patch({
-      active: { ...current, messages: detail.messages, messageCount: detail.messages.length },
+      active: {
+        ...latest,
+        messages: merged,
+        messageCount: detail.messageCount,
+        // 增量刷新不会改变"前面还有没有更早的"
+        hasEarlier: detail.hasEarlier ?? latest.hasEarlier,
+      },
     })
   } catch {
     // 静默（见 docstring）
   }
 }
+
+/**
+ * 往上游标翻一页（「加载更早」）。
+ *
+ * 返回是否真的插进去了一页 —— 页面用它决定要不要保持滚动位置。
+ */
+export async function loadEarlierMessages(sessionId: string): Promise<boolean> {
+  const current = state.active
+  if (!current || current.id !== sessionId) return false
+  const firstSeq = current.messages[0]?.seq
+  if (firstSeq === undefined || !current.hasEarlier) return false
+
+  // 同一时刻只允许一次：连点两下不该把同一页插两遍
+  if (earlierInFlight) return earlierInFlight
+
+  earlierInFlight = (async () => {
+    try {
+      const page = await fetchSessionDetail(sessionId, {
+        before: firstSeq,
+        limit: MESSAGE_PAGE_SIZE,
+      })
+      const latest = state.active
+      if (!latest || latest.id !== sessionId) return false
+
+      // 期间可能已经刷新过消息：按 id 去重，绝不插重复行
+      const known = new Set(latest.messages.map((m) => m.id))
+      const older = page.messages.filter((m) => !known.has(m.id))
+      if (older.length === 0) {
+        patch({ active: { ...latest, hasEarlier: false } })
+        return false
+      }
+
+      patch({
+        active: {
+          ...latest,
+          messages: [...older, ...latest.messages],
+          hasEarlier: page.hasEarlier ?? false,
+        },
+      })
+      return true
+    } catch {
+      return false
+    } finally {
+      earlierInFlight = null
+    }
+  })()
+
+  return earlierInFlight
+}
+
+let earlierInFlight: Promise<boolean> | null = null
 
 /**
  * 拉会话详情，**同一会话并发时合流**。
@@ -647,13 +748,29 @@ export async function refreshActiveMessages(sessionId: string): Promise<void> {
  */
 const detailInFlight = new Map<string, Promise<ChatSessionDetail>>()
 
-function fetchSessionDetail(sessionId: string): Promise<ChatSessionDetail> {
-  const existing = detailInFlight.get(sessionId)
+interface DetailQuery {
+  /** 只取最近 N 条 */
+  limit?: number
+  /** 取 seq 小于它的（往上翻页） */
+  before?: number
+  /** 只取 seq 大于它的（增量刷新） */
+  after?: number
+}
+
+function fetchSessionDetail(sessionId: string, query: DetailQuery = {}): Promise<ChatSessionDetail> {
+  const params = new URLSearchParams()
+  if (query.limit !== undefined) params.set('limit', String(query.limit))
+  if (query.before !== undefined) params.set('before', String(query.before))
+  if (query.after !== undefined) params.set('after', String(query.after))
+  const suffix = params.toString()
+  const key = suffix ? `${sessionId}?${suffix}` : sessionId
+
+  const existing = detailInFlight.get(key)
   if (existing) return existing
   const request = api
-    .get<ChatSessionDetail>(`/chat/sessions/${sessionId}`)
-    .finally(() => detailInFlight.delete(sessionId))
-  detailInFlight.set(sessionId, request)
+    .get<ChatSessionDetail>(`/chat/sessions/${sessionId}${suffix ? `?${suffix}` : ''}`)
+    .finally(() => detailInFlight.delete(key))
+  detailInFlight.set(key, request)
   return request
 }
 
@@ -664,7 +781,8 @@ export async function openSession(sessionId: string): Promise<void> {
     // 切会话先把上一个会话的附件清掉：后端按 session 目录找附件，
     // 留着上一个会话的 id 在这里，发出去会读不到（症状是"附件丢了"）。
     clearStagedAttachments()
-    const detail = await fetchSessionDetail(sessionId)
+    // 只取最后一页：长会话（实测有到几 MB 的）不该为了第一屏全下下来
+    const detail = await fetchSessionDetail(sessionId, { limit: MESSAGE_PAGE_SIZE })
     patch({ active: detail, status: 'ready' })
   } catch (error) {
     patch({ status: 'error', error: messageOf(error) })

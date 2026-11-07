@@ -137,14 +137,45 @@ def create_session(
 
 
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetailOut)
-def get_session(session_id: str, db: DbSession, identity: Reader) -> ChatSessionDetailOut:
+def get_session(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+    limit: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            le=2000,
+            description="只取最近 N 条。给了它才可能返回 hasEarlier=true。",
+        ),
+    ] = None,
+    before: Annotated[
+        int | None,
+        Query(
+            ge=1,
+            description="取 seq 小于它的最近 N 条 —— 「加载更早」用的游标。",
+        ),
+    ] = None,
+    after: Annotated[
+        int | None,
+        Query(
+            ge=0,
+            description="只取 seq 大于它的消息 —— 增量刷新用，别重下整个会话。",
+        ),
+    ] = None,
+) -> ChatSessionDetailOut:
     session = service.get_session_or_404(
         db, session_id=session_id, created_by=_owner(identity)
     )
-    messages = service.list_messages(db, session=session)
+    messages = service.list_messages(
+        db, session=session, limit=limit, before_seq=before, after_seq=after
+    )
+    # 增量刷新（after）永远不是"更早的一段"，hasEarlier 只对整页/翻页有意义
+    has_earlier = bool(messages) and after is None and messages[0].seq > 1
     return ChatSessionDetailOut(
         **ChatSessionOut.model_validate(session).model_dump(),
         messages=[ChatMessageOut.model_validate(m) for m in messages],
+        hasEarlier=has_earlier,
     )
 
 

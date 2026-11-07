@@ -237,9 +237,18 @@ class ChatMessageOut(CamelModel):
 
 
 class ChatSessionDetailOut(ChatSessionOut):
-    """会话 + 消息。"""
+    """会话 + 消息。
+
+    ## `hasEarlier`：这份消息是「全部」还是「最后一页」
+
+    长会话按 `limit` 只返回最近 N 条，前端据此在顶部显示「加载更早」。
+    由**服务端**判断（`messages[0].seq > 1`），而不是让前端拿
+    `len(messages) < messageCount` 去猜 —— 删过消息、seq 有空洞时
+    那个不等式会给出错误结论，而"猜错了"的表现是永远加载不到更早的消息。
+    """
 
     messages: list[ChatMessageOut]
+    hasEarlier: bool = False
 
 
 class ChatSettingsIn(StrictModel):
