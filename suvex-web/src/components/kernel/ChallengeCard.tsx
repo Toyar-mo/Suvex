@@ -15,7 +15,7 @@ import {
 } from '@/data/kernel'
 import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
-import { Check, ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileText, Flag, Percent, Play, ShieldCheck, X } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, ClipboardList, Copy, ExternalLink, FileText, Flag, Percent, Play, ShieldCheck, TriangleAlert, X } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -246,6 +246,20 @@ export function ChallengeCard({
       <header className="flex items-start justify-between gap-tight">
         <div className="flex min-w-0 flex-col gap-0.5">
           <h3 className="break-words text-sm text-ink">{challenge.title}</h3>
+          {/*
+            声明了附件但本地没有（2026-11-08 事故）。不提示的话，
+            模型在沙箱里看不到题面文件，而界面上一切正常 —— 复盘时
+            只能靠翻 journal 才发现是下载被拒。
+          */}
+          {challenge.attachments.length > 0 && challenge.attachmentsReady === false && (
+            <p
+              className="mt-0.5 flex items-center gap-1 text-2xs text-signal-warn"
+              title="附件还没下载到服务器，解题时模型看不到这些文件。重新同步这道题即可补齐。"
+            >
+              <TriangleAlert size={11} strokeWidth={2} aria-hidden="true" />
+              附件未下载 · 模型看不到这些文件
+            </p>
+          )}
           <div className="flex flex-wrap items-center gap-x-tight gap-y-0.5 text-2xs text-ink-faint">
             <span>{CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)]}</span>
             {challenge.platformName && (

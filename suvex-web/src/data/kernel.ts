@@ -339,6 +339,14 @@ export interface KernelChallenge {
   category: string
   description: string | null
   attachments: { name?: string; url?: string }[]
+  /**
+   * 声明了附件、但**本地还没下下来** → false。
+   *
+   * ★ 为什么要有：2026-11-08 四道题跑了 20 分钟、沙箱里一个附件都没有，
+   *   而界面上一切正常 —— 原因是附件下载被域名白名单拒了，失败只进了日志。
+   *   服务端现在按宿主目录 stat 出这个值，卡片据此提示。
+   */
+  attachmentsReady?: boolean
   score: number | null
   status: KernelChallengeStatus
   /**

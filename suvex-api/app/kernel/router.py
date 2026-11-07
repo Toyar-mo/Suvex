@@ -221,6 +221,27 @@ def _platform_label(slug: str, display_name: str, driver: str) -> tuple[str, str
     return (slug, display_name or slug)
 
 
+def _attachments_present(challenge: KernelChallenge) -> bool:
+    """声明的附件是不是都真的在宿主目录里。
+
+    ★ 只 stat 不下载：这是**读接口**，不该有副作用，也不该把一次列表请求
+      变成几百次网络请求。缺了就老老实实报 False，让界面提示去重新同步。
+    """
+    attachments = list(challenge.attachments or [])
+    if not attachments:
+        return True
+    try:
+        from app.kernel.attachments import attachment_root, plan_downloads
+
+        planned = plan_downloads(challenge.id, attachments)
+        if not planned:
+            return True
+        root = attachment_root(challenge.id)
+        return all((root / item.name).exists() for item in planned)
+    except Exception:  # noqa: BLE001 - 读不到目录不该让整个列表 500
+        return False
+
+
 def _challenge_out(
     challenge: KernelChallenge,
     environment: KernelEnvironmentOut | None,
@@ -241,6 +262,7 @@ def _challenge_out(
         platformName=name,
         description=challenge.description,
         attachments=list(challenge.attachments or []),
+        attachmentsReady=_attachments_present(challenge),
         score=challenge.score,
         status=challenge.status,
         # ★ 两列各归各位。前端据此判断"有没有东西等着我确认"——

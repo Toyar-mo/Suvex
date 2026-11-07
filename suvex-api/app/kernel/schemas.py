@@ -1003,6 +1003,12 @@ class KernelChallengeOut(CamelModel):
     category: str
     description: str | None
     attachments: list[dict[str, Any]]
+    #: 声明了附件、但**本地还没下下来** → False。
+    #:
+    #: ★ 为什么由服务端算：附件在宿主目录里，前端看不到。而"有附件但没下到"
+    #:   是 2026-11-08 那次事故的直接原因 —— 模型拿着题面干跑 20 分钟，
+    #:   界面上一切正常。没有这个字段，同样的事只能靠翻日志发现。
+    attachmentsReady: bool = True
     score: int | None
 
     status: ChallengeStatusLiteral
