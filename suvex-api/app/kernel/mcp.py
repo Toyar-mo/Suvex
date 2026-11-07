@@ -833,8 +833,48 @@ class McpRegistry:
                 f"允许的工具：{allowed}"
             )
         async with McpClient(cfg) as client:
-            result = await client.call_tool(tool, arguments)
+            try:
+                result = await client.call_tool(tool, arguments)
+            except McpError as exc:
+                hint = await _unknown_tool_hint(client, cfg, tool, exc)
+                if hint is not None:
+                    return hint
+                raise
         return _render_call_result(result)
+
+
+async def _unknown_tool_hint(
+    client: McpClient, cfg: McpServerConfig, tool: str, exc: Exception
+) -> str | None:
+    """工具名不存在时，把**真实清单**回给模型。
+
+    ## 为什么必须有它（2026-11-08 实测）
+
+    4 道题跑了 25 分钟、沙箱里一个文件都没有：模型反复调
+    `ctf2_list_practice_ground_challenges` 这类**这个连接根本没有的工具**，
+    每次只收到一句 `unknown tool "…"` —— 它没有任何依据去猜对的
+    名字，于是同一个错误重复到轮次烧完。
+
+    `tools/list` 本来就在协议里，代价一次往返。相比"再烧 20 轮"，
+    这是最便宜的一次降级。
+
+    ⚠️ 只在**明确是未知工具**时触发：连接超时/服务挂了也去列清单，
+      只会把一次网络错误拖成两次超时。
+    """
+    text = str(exc).lower()
+    if "unknown tool" not in text and "method not found" not in text:
+        return None
+    try:
+        tools = await client.list_tools()
+    except Exception:  # noqa: BLE001 - 列清单失败就退回原始错误
+        return None
+    names = [str(t.get("name")) for t in tools if isinstance(t, dict) and t.get("name")]
+    if not names:
+        return None
+    return (
+        f"连接 `{cfg.name}` 没有工具 `{tool}`。它实际提供：{', '.join(names)}。"
+        f"下次从这份清单里选；参数不确定时先 describe_mcp。"
+    )
 
 
 def _render_call_result(result: Any) -> str:

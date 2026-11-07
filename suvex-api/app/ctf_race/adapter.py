@@ -37,8 +37,11 @@ flag 文本列表，`_handle_candidates` 才真正提交。所以本 adapter 的
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import inspect
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
@@ -69,6 +72,74 @@ _QUOTA_MARKERS = (
 def _looks_quota(err: str) -> bool:
     low = (err or "").lower()
     return any(m in low for m in _QUOTA_MARKERS)
+
+
+class _EventSink:
+    """把解题循环的过程回调，落到活动流。
+
+    ## 为什么需要它（2026-11-08 实测）
+
+    单题解题走的是赛跑链路（`SolveOneAdapter` → `solve_in_sandbox`），
+    而那条链路**从来没有传 `on_progress`** —— 于是模型调了多少工具、
+    报了什么错，活动流里一条都没有。用户看到的是「开始处理题目」之后
+    一片空白，原话是"没有记录啊"。
+
+    ## 为什么要缓冲
+
+    `solve_in_sandbox` 是 async 且**按设计不碰 DB**（同步 Session 会
+    阻塞事件循环）。所以这里只入队；写库交给 `flush_loop`，
+    每 1.5 秒在**线程里**写一次（`asyncio.to_thread`）。
+    """
+
+    #: 一次最多写多少条 —— 防线：某个工具疯狂失败时别把 DB 打满
+    MAX_BATCH = 200
+
+    def __init__(self, challenge_id: str) -> None:
+        self._challenge_id = challenge_id
+        self._items: list[tuple[str, str, dict]] = []
+        self._lock = threading.Lock()
+
+    def __call__(self, kind: str, summary: str, payload: dict) -> None:
+        with self._lock:
+            if len(self._items) < self.MAX_BATCH:
+                self._items.append((kind, summary, payload))
+
+    def flush(self) -> None:
+        with self._lock:
+            items, self._items = self._items, []
+        if not items:
+            return
+        try:
+            from app.core.db import session_scope
+            from app.kernel import events as kernel_events
+            from app.kernel.models import KernelChallenge
+
+            with session_scope() as db:
+                challenge = db.get(KernelChallenge, self._challenge_id)
+                if challenge is None:
+                    return
+                for kind, summary, payload in items:
+                    if kind == "reasoning":
+                        kernel_events.emit_reasoning(
+                            db, challenge, text=str(payload.get("text") or summary)
+                        )
+                    else:
+                        kernel_events.emit_tool_call(
+                            db,
+                            challenge,
+                            tool=str(payload.get("tool") or ""),
+                            command=str(payload.get("command") or ""),
+                            output=str(payload.get("output") or ""),
+                        )
+        except Exception:  # noqa: BLE001 - 过程写不进去不该中断解题
+            logger.warning("写解题过程事件失败（忽略，解题继续）", exc_info=True)
+
+
+async def _flush_loop(sink: _EventSink, interval: float = 1.5) -> None:
+    """周期性把缓冲写进活动流。取消时由调用方做最后一次同步 flush。"""
+    while True:
+        await asyncio.sleep(interval)
+        await asyncio.to_thread(sink.flush)
 
 
 @dataclass
@@ -150,6 +221,7 @@ class SolveOneAdapter:
         runner: Callable[..., Awaitable[Any]] | None = None,
         cost_tracker: Any = None,
         system_prompt_builder: Callable[[Any], str] | None = None,
+        challenge_id: str | None = None,
     ) -> None:
         self._spec_factory = spec_factory
         self._sandbox_factory = sandbox_factory
@@ -157,14 +229,32 @@ class SolveOneAdapter:
         self._runner = runner
         self._cost_tracker = cost_tracker
         self._system_prompt_builder = system_prompt_builder
+        #: 给了它才把过程写进活动流（见 `_EventSink`）
+        self._challenge_id = challenge_id
 
-    async def _run(self, spec: Any, sandbox: Any, gateway: Any, system_prompt: str) -> Any:
+    async def _run(
+        self,
+        spec: Any,
+        sandbox: Any,
+        gateway: Any,
+        system_prompt: str,
+        *,
+        on_progress: Callable[[str, str, dict], None] | None = None,
+    ) -> Any:
         """跑解题循环；runner 未注入时就地 import 真实的。"""
         if self._runner is not None:
-            return await self._runner(spec, sandbox=sandbox, gateway=gateway, system_prompt=system_prompt)
+            return await self._runner(
+                spec, sandbox=sandbox, gateway=gateway, system_prompt=system_prompt
+            )
         from app.kernel.runner import solve_in_sandbox
 
-        return await solve_in_sandbox(spec, sandbox=sandbox, gateway=gateway, system_prompt=system_prompt)
+        return await solve_in_sandbox(
+            spec,
+            sandbox=sandbox,
+            gateway=gateway,
+            system_prompt=system_prompt,
+            on_progress=on_progress,
+        )
 
     async def __call__(self, model: str, *, hint: str | None) -> SolverResult:
         spec = self._spec_factory(model)
@@ -183,6 +273,8 @@ class SolveOneAdapter:
             except Exception:  # spec 可能是 frozen dataclass 之类
                 logger.debug("无法把 hint 写入 spec.brief（忽略）")
 
+        sink = _EventSink(self._challenge_id) if self._challenge_id else None
+        flusher: asyncio.Task | None = None
         sandbox = None
         try:
             sandbox = self._sandbox_factory(spec)
@@ -192,7 +284,11 @@ class SolveOneAdapter:
                 if self._system_prompt_builder
                 else getattr(spec, "system_prompt", "") or ""
             )
-            outcome = await self._run(spec, sandbox, gateway, system_prompt)
+            if sink is not None:
+                flusher = asyncio.create_task(_flush_loop(sink))
+            outcome = await self._run(
+                spec, sandbox, gateway, system_prompt, on_progress=sink
+            )
             return await self._translate(outcome, model)
         except Exception as exc:  # 单模型崩溃不该拖垮整场
             logger.warning("[ctf_race] model=%s 求解异常: %s", model, exc)
@@ -203,6 +299,15 @@ class SolveOneAdapter:
                 findings_summary=f"求解异常：{err[:300]}",
             )
         finally:
+            # 过程事件：停掉冲刷循环，再把剩下的**同步写一次**。
+            # 顺序不能反 —— 先停再写，否则最后一次 flush 可能和循环里那次
+            # 抢同一批条目（sink 内部有锁，但那样会把顺序打乱）。
+            if flusher is not None:
+                flusher.cancel()
+                with contextlib.suppress(Exception):
+                    await flusher
+            if sink is not None:
+                sink.flush()
             # ★ v1.73：`SandboxContainer` 的销毁方法叫 `destroy()`（docker rm -f，
             #   幂等），**不是** `stop()`。旧代码这里调 `stop()` —— 抛出
             #   AttributeError 又被 except 吞掉，于是**每跑一个模型就漏一个

@@ -163,6 +163,16 @@ IMAGE_IR = os.environ.get("CTF2_IMAGE_IR") or KernelSandboxProfile.IR.value
 #   · 容器名必须**永远**以它开头，否则泄漏的容器会攒下来没人清。
 SANDBOX_NAME_PREFIX = "ctf2-"
 
+#: 比赛/单题赛跑链路的沙箱前缀（`competition_racer` 起容器时用 `race-`）。
+#:
+#: ⚠️ 它**必须**和 `SANDBOX_NAME_PREFIX` 一起被 `sweep_orphan_sandboxes`
+#:    认领。原来只认 `ctf2-`：服务重启后，赛跑链路的容器一个都不会被清，
+#:    实测 2026-11-08 重启一次留下 4 个 `race-*`（沙箱里还有上一轮的
+#:    `/work`），而界面上完全看不出来。命名当初取 `race-` 是为了在
+#:    `docker ps` 里一眼分辨"这是赛跑的"，代价就是清理判据要跟着多一条 ——
+#:    少同步一处就是一次泄漏。
+RACE_SANDBOX_PREFIX = "race-"
+
 # 沙箱所在的 Docker 网络。
 #
 # ## ★★ "独立网络"解决了什么、**没有**解决什么（2026-10-16 实测改正）
@@ -962,7 +972,13 @@ def sweep_orphan_sandboxes() -> int:
     # 时按**名字**查（`docker network inspect suvex-ctf2`），
     # 而 `docker network create` 也是名字精确匹配 —— 都不经过子串匹配。
     listed = _run(
-        ["docker", "ps", "-aq", "--filter", f"name=^{SANDBOX_NAME_PREFIX}"],
+        [
+            "docker",
+            "ps",
+            "-aq",
+            "--filter",
+            f"name=^({SANDBOX_NAME_PREFIX}|{RACE_SANDBOX_PREFIX})",
+        ],
         timeout=30,
     )
     if not listed.ok:

@@ -295,6 +295,24 @@ async def lifespan(_app: FastAPI):
     except Exception:  # noqa: BLE001 - 接手是增强项，起不来不能拦住整个服务
         logger.warning("长任务接手循环启动失败（服务继续启动）", exc_info=True)
 
+    # CTF2 解题壳在进程重启后**必然**没有 worker（worker 是进程内线程）。
+    # 那些仍标 `running` 的 scan 会让状态条谎报「N 个扫描运行中」——
+    # 实测 2026-11-08：24 个里 20 个是重启/取消留下的僵尸，用户据此以为
+    # 系统在满负荷跑。这里启动时一次性收尾，判据只认 `origin='ctf2'`。
+    try:
+        from app.core.db import get_session_factory as _session_factory
+        from app.kernel import service as kernel_service
+
+        _boot_db2 = _session_factory()()
+        try:
+            _orphans = kernel_service.abort_orphan_ctf2_scans(_boot_db2)
+            if _orphans:
+                logger.info("有 %d 个 CTF2 解题壳在上次进程退出时未收尾，已标记为 aborted", _orphans)
+        finally:
+            _boot_db2.close()
+    except Exception:  # noqa: BLE001 - 收尾失败不能拦住服务启动
+        logger.warning("CTF2 遗留解题壳收尾失败（服务继续启动）", exc_info=True)
+
     logger.info(
         "Suvex API %s 已就绪（env=%s，前缀=%s，扫描后端=%s，并发上限=%d，CORS 源=%s）",
         settings.app_version,

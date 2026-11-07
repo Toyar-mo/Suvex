@@ -590,6 +590,10 @@ class CompetitionRacer:
             submit_fn=swarm.try_submit_flag,
             cost_tracker=self._cost,
             system_prompt_builder=system_prompt_builder,
+            # 过程写进活动流（推理 / 工具调用 / 工具报错）。
+            # 不传它，单题解题在界面上只有"开始 / 结束"两条 —— 实测
+            # 2026-11-08 用户看到一片空白，原话「没有记录啊」。
+            challenge_id=challenge_id,
         )
 
         try:

@@ -100,6 +100,8 @@ from app.core.vocab import (
     MIN_CTF2_SOLVE_POLL_SECONDS,
     MIN_CTF2_WALL_CLOCK_SECONDS,
     RESOLVABLE_CTF2_CHALLENGE_STATUSES,
+    SCAN_ORIGIN_CTF2,
+    ScanStatus,
     IrCategory,
     KernelChallengeStatus,
     KernelCompetitionKind,
@@ -3558,8 +3560,71 @@ def cancel_challenge(db: Session, challenge: KernelChallenge) -> KernelChallenge
 
     challenge.status = KernelChallengeStatus.UNSOLVED.value
     challenge.last_error = "已取消。"
+    _abort_ctf2_scan(db, challenge, reason="解题被取消。", terminated_by="user")
     db.commit()
     return challenge
+
+
+def _abort_ctf2_scan(
+    db: Session, challenge: Any, *, reason: str, terminated_by: str
+) -> None:
+    """把这条题借的 scan 壳一起收尾。
+
+    ## 为什么必须有这一步（2026-11-08 实测）
+
+    取消只会改题目行；那道题对应的 `scans` 行仍是 `running`。于是：
+      · 状态条与扫描列表把已取消的题算成「运行中」（实测一次显示 24 个，
+        其中 20 个的 worker 早就不存在了）；
+      · 用户据这个数字判断"系统在忙"，而它是一句假话。
+
+    scan 是 CTF2 **借的壳**（`origin='ctf2'`），它的生命周期完全由解题
+    决定，所以题目一收尾，它就该一起收尾。
+    """
+    if not getattr(challenge, "scan_id", None):
+        return
+    from app.scans.models import Scan
+
+    scan = db.get(Scan, challenge.scan_id)
+    if scan is None or scan.status != ScanStatus.RUNNING.value:
+        return
+    now = now_utc()
+    scan.status = ScanStatus.ABORTED.value
+    scan.finished_at = now
+    scan.failure_reason = reason
+    scan.terminated_by = terminated_by
+    scan.updated_at = now
+
+
+def abort_orphan_ctf2_scans(db: Session) -> int:
+    """启动时收尾上一进程遗留的 CTF2 解题壳。
+
+    ★ 为什么只能**在启动时**判：解题 worker 是进程内线程，进程一退，
+      它们全部消失 —— 那一刻仍标 `running` 的 ctf2 壳**必然**没有 worker。
+      反过来，运行中调用这个函数会把真在跑的题误杀。
+
+    只动 `origin='ctf2'` 的行：真扫描有自己的 runner 进程，不在这个判据里。
+    """
+    from app.scans.models import Scan
+
+    rows = list(
+        db.scalars(
+            select(Scan).where(
+                Scan.origin == SCAN_ORIGIN_CTF2,
+                Scan.status == ScanStatus.RUNNING.value,
+            )
+        )
+    )
+    if not rows:
+        return 0
+    now = now_utc()
+    for scan in rows:
+        scan.status = ScanStatus.ABORTED.value
+        scan.finished_at = now
+        scan.failure_reason = "服务重启，解题进程已退出（启动时自动收尾）。"
+        scan.terminated_by = "system"
+        scan.updated_at = now
+    db.commit()
+    return len(rows)
 
 
 # ══════════════════════════════════════════════════════════
