@@ -46,6 +46,12 @@ class RaceStatusOut(BaseModel):
     models: list[str] = []
     challenges: dict = {}
     cost: dict = {}
+    #: ★ v1.73：赛事规则/注意事项（开赛时从 `/match/notice/match-info` 取一次）。
+    match: str = ""
+    #: ★ v1.73：最新排名（`stagePoint` / `stageRank`），节流刷新。
+    overview: dict = {}
+    #: 本次是否演练（不真提交）。前端要能一眼看出来。
+    noSubmit: bool = False
     report: dict | None = None
     error: str | None = None
 

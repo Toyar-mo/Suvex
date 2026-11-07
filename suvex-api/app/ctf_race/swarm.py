@@ -101,7 +101,7 @@ class ChallengeSwarm:
         *,
         challenge: str,
         models: list[str],
-        solve_one: SolveOneFn,
+        solve_one: SolveOneFn | None = None,
         config: SwarmConfig | None = None,
         submit_fn: SubmitFn | None = None,
         message_bus: ChallengeMessageBus | None = None,
@@ -124,6 +124,24 @@ class ChallengeSwarm:
         self._submitted_flags: set[str] = set()       # 全局精确去重
         self._last_submit_at: dict[str, float] = {}   # per-model 上次提交时钟
         self._findings_text: dict[str, str] = {}       # per-model 最近 findings 摘要
+
+    def bind_solver(self, solve_one: SolveOneFn) -> None:
+        """事后绑定「跑一个模型」的实现。
+
+        ## 为什么需要它（v1.73）
+
+        生产接线里两个对象互相依赖：`SolveOneAdapter` 要拿
+        `swarm.try_submit_flag` 当提交闸（no_submit / 冷却 / 去重 / 已解
+        短路），而 `ChallengeSwarm` 要拿 adapter 当 `solve_one`。
+
+        原来绕开的办法是"adapter 直接调 `competition.submit`"——代价是
+        **整道闸被跳过**：演练模式（`noSubmit=true`）照样真提交、模型连错
+        时没有冷却、多个模型会把同一个 flag 重复交。每一次都在消耗平台
+        给的错误提交次数（不可再生资源）。
+
+        所以改成：先建 swarm（`solve_one` 占位），绑定 adapter 再跑。
+        """
+        self._solve_one = solve_one
 
     # ── 提交安全 ───────────────────────────────────────────────────────
     def _now(self) -> float:
@@ -181,6 +199,12 @@ class ChallengeSwarm:
         return "\n\n".join(parts) if parts else "（其它模型暂时还没有可用洞察。）"
 
     async def _run_solver(self, model: str) -> SolverResult:
+        if self._solve_one is None:
+            # 生产接线忘了 `bind_solver` 时，宁可在这里**大声**炸掉，
+            # 也不要让模型跑到一半才发现没有解题实现。
+            raise RuntimeError(
+                f"swarm({self.challenge}) 没有绑定 solve_one —— 忘了 bind_solver()"
+            )
         bump_count = 0
         consecutive_errors = 0
         last = SolverResult(model=model, status=CANCELLED)

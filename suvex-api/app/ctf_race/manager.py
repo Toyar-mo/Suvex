@@ -95,6 +95,9 @@ def snapshot() -> dict:
             "models": [],
             "challenges": {},
             "cost": {},
+            "match": "",
+            "overview": {},
+            "noSubmit": False,
             "report": _state["report"],
             "error": _state["error"],
         }
@@ -104,6 +107,10 @@ def snapshot() -> dict:
         "models": snap.get("models", []),
         "challenges": snap.get("challenges", {}),
         "cost": snap.get("cost", {}),
+        # ★ v1.73：赛事级信息（规则 / 排名 / 是否演练）与题目级状态分开。
+        "match": snap.get("match", ""),
+        "overview": snap.get("overview", {}),
+        "noSubmit": snap.get("noSubmit", False),
         "report": _state["report"],
         "error": _state["error"],
     }

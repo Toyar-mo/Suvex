@@ -214,3 +214,6 @@ docs/本机清理记录.md
 
 # v1.64：本地生产接入点密钥（base|model|key），绝不入库。
 abase_wsl.txt
+
+# v1.74：本地临时工作目录（spec 调试稿等），不入库。
+suvex-api/tmpwork/

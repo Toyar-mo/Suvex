@@ -1478,6 +1478,21 @@ async def _tool_start_ctf_solve(ctx: _ToolContext, args: dict[str, Any]) -> str:
     )
 
 
+def _brief_text(text: str | None, limit: int = 320) -> str:
+    """把题面压成一行：折叠换行、截断。
+
+    题面常常是多段 markdown（含代码块）。列表里逐题铺原文会把 30 道题
+    撑成几千行；模型需要的是"这题在问什么"，完整内容可以在真要动手时
+    再从平台详情/本地同步快照里取。
+    """
+    if not text:
+        return ""
+    flat = " ".join(str(text).split())
+    if len(flat) <= limit:
+        return flat
+    return flat[:limit] + "…"
+
+
 async def _tool_fetch_competition_challenges(
     ctx: _ToolContext, args: dict[str, Any]
 ) -> str:
@@ -1515,6 +1530,11 @@ async def _tool_fetch_competition_challenges(
     solved = sum(1 for t in tasks if t.solved)
     open_count = sum(1 for t in tasks if t.is_open)
     lines = [f"比赛平台共 {len(tasks)} 道题：已解 {solved} 道，已开放 {open_count} 道。"]
+    # ★ v1.76：题面与附件地址从**本地同步快照**补齐（零网络成本）。
+    #   列表接口只有 id/标题/分值，模型以前根本看不到题目在问什么；
+    #   而库里 24/30 道题的附件 URL 其实都有。
+    from app.kernel.service import get_challenge_by_remote_id
+
     for task in tasks:
         flags = []
         if task.solved:
@@ -1525,6 +1545,21 @@ async def _tool_fetch_competition_challenges(
         cat = f"[{task.category}] " if task.category else ""
         suffix = f"（{' / '.join(flags)}）" if flags else ""
         lines.append(f"- `{task.remote_id}` {cat}{task.title}{score}{suffix}")
+
+        local = get_challenge_by_remote_id(ctx.db, task.remote_id)
+        if local is None:
+            continue
+        brief = _brief_text(local.description)
+        if brief:
+            lines.append(f"  题面：{brief}")
+        for item in local.attachments or []:
+            if not isinstance(item, dict):
+                continue
+            url = str(item.get("url") or "").strip()
+            if not url:
+                continue
+            name = str(item.get("name") or "附件").strip() or "附件"
+            lines.append(f"  - 附件：{name} {url}")
 
     remote_id = str(args.get("remoteId") or args.get("remote_id") or "").strip()
     if remote_id:

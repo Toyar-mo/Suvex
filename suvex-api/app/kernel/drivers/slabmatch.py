@@ -388,26 +388,76 @@ class SlabMatchDriver:
             can_refresh=bool(payload.get("canRefreshEndpoint")),
         )
 
-    async def start_environment(self, handle: dict[str, Any]) -> None:
-        """启动环境（文档 §6）。**幂等**：已经在跑的题再调一次是安全的。
+    async def reset_info(self, handle: dict[str, Any]) -> dict[str, Any]:
+        """重置次数（文档 §6）：`freeResetQty` 免费次数 / `resetQty` 已用次数。
 
-        ⚠️ 不吞异常：启动失败要能被上层看见并重试。这与 `stop_environment`
-        正好相反。
+        ★ 为什么要读它：重置是**有限资源**。模型如果把"重置环境"当成
+        "重连一下"来用，几次就把免费额度烧光 —— 而那时它不会有任何感觉，
+        因为报错只是"重置失败"。上层据此决定"还允许不允许重置"。
+        """
+        exercise_id = _as_int(handle.get("exerciseId"))
+        if exercise_id is None:
+            return {}
+        data = await self._request(
+            "GET", "/ctf/endpoint-reset-info", params={"exerciseId": exercise_id}
+        )
+        return data if isinstance(data, dict) else {}
+
+    async def start_environment(self, handle: dict[str, Any]) -> None:
+        """启动/重置环境（文档 §7）。**幂等**：已经在跑的题再调一次是安全的。
+
+        ## ★ v1.73：端点名改为文档里的 `reset-endpoint`
+
+        官方 agent 文档（`api_doc.md`）里**没有**"起环境"这个动作，只有
+        §7 `POST /ctf/reset-endpoint`：重置是异步的，受理之后要继续取详情
+        直到 `isNeedCheck=false` 且 `endpoints` 可用。
+
+        旧实现打的是 `/ctf/build-exercise-env` —— 那是 Web 控制台那套接口的
+        名字，agent AccessKey 未必有权限。踩中时的症状极具误导性：一个
+        404/无权限，而流程里看起来像"这道题没有靶机"。
+
+        所以：优先文档端点；只有它明确"路由不存在"（404 / 未知路由码）时
+        才退回旧名字，兼容还没升级的部署。其它错误（比如免费重置次数用完）
+        要原样抛上去 —— 上层据此决定"用现有环境接着解"。
         """
         exercise_id = _as_int(handle.get("exerciseId"))
         if exercise_id is None:
             raise KernelResponseError("启动环境时 handle 里没有 exerciseId。")
+        try:
+            await self._request(
+                "POST", "/ctf/reset-endpoint", body={"exerciseId": exercise_id}
+            )
+            return
+        except KernelResponseError as exc:
+            status = getattr(exc, "status_code", None)
+            code = str(getattr(exc, "code", "") or "")
+            route_missing = status == 404 or code.upper() in {
+                "404",
+                "NOT_FOUND",
+                "A0404",
+                "NO_HANDLER",
+                "UNKNOWN_ROUTE",
+            }
+            if not route_missing:
+                raise
+            logger.info(
+                "比赛平台没有 /ctf/reset-endpoint（code=%s），回退到旧端点 build-exercise-env",
+                code or status,
+            )
         await self._request(
             "POST", "/ctf/build-exercise-env", body={"exerciseId": exercise_id}
         )
 
     async def stop_environment(self, handle: dict[str, Any]) -> None:
-        """回收环境（文档 §7）。
+        """回收环境。**官方 agent 文档没有这个端点**，所以只是尽力而为。
 
-        ★ 容错，**不抛**：回收一个本来就没起、或已经过期的环境会报错，
-        而那是完全正常的情况（我们的目的是"别在平台侧留资源"，不是为了
-        拿到一个成功的回执）。抛出去会让"停止解题"这个动作失败 ——
-        而它本该总是成功。
+        ★ 容错，**不抛**：我们的目的是"别在平台侧留资源"，不是为了拿到
+        一个成功回执。回收一个本来就没起、或已经过期的环境会报错，而那
+        是完全正常的情况。抛出去会让"停止解题"这个动作失败 —— 而它本该
+        总是成功。
+
+        ⚠️ 保留对旧端点 `/ctf/recover-exercise-env` 的尝试：有些部署确实
+        开了它。失败就记一条 info，不改变任何行为。
         """
         exercise_id = _as_int(handle.get("exerciseId"))
         if exercise_id is None:

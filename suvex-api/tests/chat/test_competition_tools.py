@@ -168,6 +168,34 @@ async def test_fetch_tool_lists_tasks(db_session, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_tool_includes_description_and_attachments(db_session, monkeypatch) -> None:
+    """列表工具要带题面与附件地址（v1.76）。
+
+    以前只给 id/标题/分值：模型能"看到 30 道题"，但不知道题在问什么、
+    也没有料。库里其实有 description，24/30 道题的附件 URL 也在。
+    """
+    from types import SimpleNamespace
+
+    from app.chat.engine import _tool_fetch_competition_challenges
+    from app.kernel import service as kernel_service
+
+    monkeypatch.setattr(
+        kernel_service,
+        "get_challenge_by_remote_id",
+        lambda db, rid: SimpleNamespace(
+            description="用 root 登录后读取 flag\n\n第二段",
+            attachments=[{"name": "a.zip", "url": "https://x/a.zip"}],
+        ),
+    )
+    driver = _FakeDriver(tasks=[RemoteChallenge(remote_id="7", title="SSH 题")])
+    _patch_driver(monkeypatch, driver)
+
+    out = await _tool_fetch_competition_challenges(_Ctx(db_session), {})
+    assert "题面：用 root 登录后读取 flag 第二段" in out
+    assert "附件：a.zip https://x/a.zip" in out
+
+
+@pytest.mark.asyncio
 async def test_fetch_tool_appends_endpoint_info(db_session, monkeypatch) -> None:
     from app.chat.engine import _tool_fetch_competition_challenges
 
@@ -194,7 +222,8 @@ async def test_submit_tool_strips_shell_before_submit(db_session, monkeypatch) -
     _patch_driver(monkeypatch, driver)
     out = await _tool_submit_flag(_Ctx(db_session), {"remoteId": "5", "flag": "DASCTF{secret}"})
     # 交出去的是**剥过壳**的内容
-    assert driver.submitted == [({"exerciseId": 5}, "secret")]
+    # v1.76：两种驱动认的键不同，handle 同时带 `id` 与 `exerciseId`
+    assert driver.submitted == [({"id": "5", "exerciseId": "5"}, "secret")]
     assert "正确" in out and "已解出" in out
 
 
@@ -208,7 +237,7 @@ async def test_submit_tool_reports_wrong_answer(db_session, monkeypatch) -> None
     _patch_driver(monkeypatch, driver)
     out = await _tool_submit_flag(_Ctx(db_session), {"remoteId": "5", "flag": "wrong"})
     assert "错误答案" in out
-    assert driver.submitted == [({"exerciseId": 5}, "wrong")]
+    assert driver.submitted == [({"id": "5", "exerciseId": "5"}, "wrong")]
 
 
 @pytest.mark.asyncio

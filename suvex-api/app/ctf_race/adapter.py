@@ -37,6 +37,7 @@ flag 文本列表，`_handle_candidates` 才真正提交。所以本 adapter 的
 
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -167,6 +168,10 @@ class SolveOneAdapter:
 
     async def __call__(self, model: str, *, hint: str | None) -> SolverResult:
         spec = self._spec_factory(model)
+        # ★ v1.73：`spec_factory` 允许是 async（比赛平台要先拉靶机环境，
+        #   那是一次网络请求）。同步工厂照旧可用 —— 测试与老调用不受影响。
+        if inspect.isawaitable(spec):
+            spec = await spec
         # hint 作为一次人类线索注入：套进已有的 hint_provider 机制最省。
         if hint:
             existing_brief = getattr(spec, "brief", "") or ""
@@ -198,11 +203,18 @@ class SolveOneAdapter:
                 findings_summary=f"求解异常：{err[:300]}",
             )
         finally:
-            if sandbox is not None and hasattr(sandbox, "stop"):
-                try:
-                    sandbox.stop()
-                except Exception:  # noqa: BLE001
-                    logger.debug("沙箱停止失败（忽略）", exc_info=True)
+            # ★ v1.73：`SandboxContainer` 的销毁方法叫 `destroy()`（docker rm -f，
+            #   幂等），**不是** `stop()`。旧代码这里调 `stop()` —— 抛出
+            #   AttributeError 又被 except 吞掉，于是**每跑一个模型就漏一个
+            #   容器**（实测一次赛跑漏了 141 个）。destroy 优先，stop 兜底
+            #   （兼容注入的假对象）。
+            if sandbox is not None:
+                teardown = getattr(sandbox, "destroy", None) or getattr(sandbox, "stop", None)
+                if teardown is not None:
+                    try:
+                        teardown()
+                    except Exception:  # noqa: BLE001
+                        logger.debug("沙箱销毁失败（忽略）", exc_info=True)
 
     def _make_gateway(self, spec: Any) -> Any:
         from app.kernel.runner import LlmGateway

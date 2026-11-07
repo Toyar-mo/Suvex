@@ -129,6 +129,13 @@ def dig_int(payload: Any, path: str) -> int | None:
         text = value.strip()
         if text.lstrip("-").isdigit():
             return int(text)
+        # ★ v1.72：比赛平台实测 `"score": "190.0"` —— 是**带小数点的字符串**。
+        #   只认整数串会让分值整列读成 None（"按分值排队"失效，高分题不优先）。
+        #   这里只在整串能被 float() 解析时取整，其它（"100分"、空串）仍返回 None。
+        try:
+            return int(float(text))
+        except (TypeError, ValueError):
+            return None
     return None
 
 

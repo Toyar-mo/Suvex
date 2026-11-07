@@ -160,3 +160,137 @@ def test_unknown_kind_is_refused_conservatively(
         service._assert_submission_supported(db_session, competition_challenge)
 
     assert excinfo.value.code == "CTF2_COMPETITION_SUBMIT_UNSUPPORTED"
+
+
+# ══════════════════════════════════════════════════════════════════════
+# v1.72：赛事题在**配置驱动平台**上要能解（不再一刀切拒绝）
+# ══════════════════════════════════════════════════════════════════════
+#
+# 旧断言依据的是 **CTF2 旧开放 API** 的实测（赛事端点全 404）。但它不认识
+# 我们自建的 GenericDriver 平台（如 slab-match：官方 api_doc.md 明确给了
+# `POST /answer-panel/answer` 提交 + `POST /ctf/reset-endpoint` 起环境）。
+# 这类平台上赛事题是**能解**的，所以闸门要放行。
+
+_SPEC_WITH_SUBMIT_AND_ENV = {
+    "display_name": "比赛平台",
+    "base_url": "https://example.test/slab-match/api/v1/agent",
+    "auth": {"style": "header", "name": "X-Agent-AccessKey", "prefix": ""},
+    "envelope": {
+        "success_path": "code",
+        "success_value": "00000",
+        "data_path": "data",
+        "message_path": "message",
+    },
+    "list_challenges": {
+        "request": {"method": "GET", "path": "/ctf/exercise-list"},
+        "items_path": "",
+        "children_path": "corpus",
+        "category_from_group": True,
+    },
+    "challenge_detail": {
+        "method": "GET",
+        "path": "/ctf/exercise",
+        "params": {"exerciseId": "{id}"},
+    },
+    "submit": {
+        "method": "POST",
+        "path": "/answer-panel/answer",
+        "body": {"exerciseId": "{id}", "flag": "{answer}"},
+    },
+    "start_env": {"method": "POST", "path": "/ctf/reset-endpoint", "body": {"exerciseId": "{id}"}},
+    "environment": {"from_detail": True, "endpoints_path": "endpoints", "ready_path": "isNeedCheck", "ready_negate": True},
+    "fields": {"id": "id", "title": "name", "description": "description", "score": "score", "solved": "hasSolved"},
+}
+
+
+def _backed_competition(db_session: Session, *, spec: dict | None):
+    """造一个「账号→平台→赛事」链，供放行断言用。"""
+    from app.core.crypto import encrypt_secret, mask_secret
+    from app.kernel.models import KernelAccount, KernelCompetition, KernelPlatform
+
+    platform = KernelPlatform(
+        id=new_id("knplat"),
+        slug=f"test-src-{new_id('x')[:8]}",
+        display_name="比赛平台",
+        base_url="https://example.test/slab-match/api/v1/agent",
+        driver="generic",
+        spec=spec,
+        status="verified",
+    )
+    db_session.add(platform)
+    db_session.commit()
+
+    account = KernelAccount(
+        id=new_id("knacc"),
+        label="比赛号",
+        token_encrypted=encrypt_secret("ak_test_key"),
+        token_hint=mask_secret("ak_test_key"),
+        status="active",
+        platform_id=platform.id,
+    )
+    db_session.add(account)
+    db_session.commit()
+
+    competition = KernelCompetition(
+        id=new_id("kncomp"),
+        account_id=account.id,
+        remote_id="c-1",
+        kind="competition",
+        name="比赛赛",
+        remote_status="ongoing",
+        challenge_count=1,
+        synced_at=now_utc(),
+    )
+    db_session.add(competition)
+    db_session.commit()
+    return competition
+
+
+def test_competition_on_generic_platform_with_submit_env_is_allowed(db_session: Session) -> None:
+    """配了 submit + 起环境的 GenericDriver 平台上的赛事题：**放行**。"""
+    from app.kernel import service
+
+    competition = _backed_competition(db_session, spec=_SPEC_WITH_SUBMIT_AND_ENV)
+    assert service._competition_backed_by_generic_driver(db_session, competition) is True
+    # 直接调闸门，不抛即放行。
+    from app.kernel.models import KernelChallenge
+
+    challenge = KernelChallenge(
+        id=new_id("knchal"),
+        competition_id=competition.id,
+        remote_id="c-1",
+        title="赛事题",
+        category="web",
+        status=KernelChallengeStatus.UNSOLVED.value,
+        sandbox_profile=KernelSandboxProfile.BASE.value,
+    )
+    db_session.add(challenge)
+    db_session.commit()
+    service._assert_submission_supported(db_session, challenge)  # 不抛 = 通过
+
+
+def test_competition_on_generic_platform_without_submit_still_refused(db_session: Session) -> None:
+    """平台没配 submit（或根本不是 generic 配置）→ 仍按旧断言拒绝。"""
+    from app.kernel import service
+
+    bad_spec = dict(_SPEC_WITH_SUBMIT_AND_ENV)
+    bad_spec["submit"] = {"method": "POST", "path": ""}  # 没有 path
+    competition = _backed_competition(db_session, spec=bad_spec)
+    assert service._competition_backed_by_generic_driver(db_session, competition) is False
+
+    from app.kernel.models import KernelChallenge
+
+    challenge = KernelChallenge(
+        id=new_id("knchal"),
+        competition_id=competition.id,
+        remote_id="c-1",
+        title="赛事题",
+        category="web",
+        status=KernelChallengeStatus.UNSOLVED.value,
+        sandbox_profile=KernelSandboxProfile.BASE.value,
+    )
+    db_session.add(challenge)
+    db_session.commit()
+    with pytest.raises(ApiError) as excinfo:
+        service._assert_submission_supported(db_session, challenge)
+    assert excinfo.value.code == "CTF2_COMPETITION_SUBMIT_UNSUPPORTED"

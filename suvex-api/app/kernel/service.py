@@ -1174,25 +1174,50 @@ def sync_competition(db: Session, *, competition_name: str = "羊城杯 AI Agent
         )
 
     result = SyncResult()
+    #: 附件清单**只收集、不下载**：`download_all` 是协程，而这里还在事务里。
+    #: 与 `sync()` / CTF2 单题拉取同一条边界（见那两处的说明）。
+    pending_downloads: list[PendingDownload] = []
 
     async def _fetch() -> tuple[list[Any], dict[str, dict[str, Any]]]:
         # 列表 + 逐题详情。详情失败只记错误，不中断。
         remotes = await driver.fetch_challenges(known_ids=set())
         details: dict[str, dict[str, Any]] = {}
         for remote in remotes:
-            try:
-                detail = await driver.fetch_challenge(remote.handle)
-            except Exception as exc:  # noqa: BLE001 —— 单题失败不该中断整批
-                result.errors.append(f"{remote.title}：拉取详情失败（{exc}）")
-                continue
+            # ★ v1.72：逐题取详情时**重试限流**。真机一次性拉 30 题详情，
+            #   `min_interval=0.2s` 会撞平台 429，而原实现只记一条错误就
+            #   跳过 —— 结果一半题没有题面/分值（同步"成功"但数据残缺）。
+            #   这里对 `KernelRateLimited` 按 `retry_after` 退避重试若干次。
+            detail = None
+            for attempt in range(4):
+                try:
+                    detail = await driver.fetch_challenge(remote.handle)
+                    break
+                except KernelRateLimited as exc:
+                    if attempt == 3:
+                        result.errors.append(f"{remote.title}：拉取详情失败（平台限流，稍后重试。）")
+                        break
+                    wait = exc.retry_after if exc.retry_after else (0.6 * (attempt + 1) + 0.4)
+                    await asyncio.sleep(min(wait, 10.0))
+                except Exception as exc:  # noqa: BLE001 —— 单题失败不该中断整批
+                    result.errors.append(f"{remote.title}：拉取详情失败（{exc}）")
+                    break
             if detail is not None:
-                details[remote.remote_id] = {
+                details[detail.remote_id] = {
                     "id": detail.remote_id,
                     "title": detail.title,
                     "category": detail.category,
                     "description": detail.description,
                     "score": detail.score,
-                    "attachments": detail.attachments,
+                    # ★ v1.72：`detail.attachments` 是 `RemoteAttachment`
+                    #   **dataclass 对象**，直接塞进 JSONB 列会在 flush 时抛
+                    #   `Object of type RemoteAttachment is not JSON serializable`
+                    #   （真机同步 30 题时第一次暴露）。这里就地转成
+                    #   `{"name","url","ext"}` 字典 —— 这也是下游
+                    #   `plan_downloads` 认识的形状（`url`/`name`/`ext`）。
+                    "attachments": [
+                        {"name": a.name, "url": a.url, "ext": a.ext}
+                        for a in (detail.attachments or [])
+                    ],
                     "order": detail.order,
                     "hasSolved": detail.solved,
                 }
@@ -1240,9 +1265,33 @@ def sync_competition(db: Session, *, competition_name: str = "羊城杯 AI Agent
             result.challenges_created += 1
         else:
             result.challenges_updated += 1
+        # ★ v1.73：附件清单落库之后**要真的把文件拉下来**。
+        #
+        # 解题沙箱是按 `_ctf2_attachments/<challenge_id>/` 挂给容器的：
+        # 目录不存在 = 模型一个附件都看不到。而症状是"模型很笨"
+        # （它对着题面猜），不是"文件没下" —— 所以这一步漏了很难发现。
+        pending_downloads.extend(plan_downloads(_challenge.id, _challenge.attachments))
 
     competition.challenge_count = len(remotes)
     db.flush()
+
+    # ── 附件下载（第二段：网络，且**不碰 Session**）────────────
+    #
+    # ★ v1.73：这一段原来**缺了**。`_upsert_challenge` 把附件清单写进了
+    #   JSONB，但没有任何人把文件拉到 `_ctf2_attachments/<challenge_id>/`，
+    #   而解题沙箱正是按那个目录挂载给容器的。症状极具误导性：题面有了、
+    #   靶机有了、模型开跑，然后它说"没有附件"—— 因为它真的看不到。
+    #
+    # ⚠️ 用**空 token** 下载：`download_all` 会把 token 当 `Authorization`
+    #    Bearer 头发给附件 URL 的 host，而附件通常在 CDN / OSS 上，
+    #    AccessKey 不该出现在第三方域名。平台给的都是可直下的签名 URL。
+    if pending_downloads:
+        try:
+            result.attachments = _run(download_all("", pending_downloads))
+        except KernelError as exc:
+            result.attachments.failed.append(str(exc))
+        if result.attachments.failed:
+            result.errors.extend(f"附件：{item}" for item in result.attachments.failed[:5])
 
     solved = sum(1 for r in remotes if r.solved)
     result.note = f"比赛平台共 {len(remotes)} 道题（平台标记已解 {solved} 道）。"
@@ -1497,6 +1546,30 @@ def get_challenge_or_404(db: Session, challenge_id: str) -> KernelChallenge:
     if challenge is None:
         raise ApiError.not_found("这道题")
     return challenge
+
+
+def get_challenge_by_remote_id(db: Session, remote_id: str) -> KernelChallenge | None:
+    """按**平台侧题目 id** 找一道题（对话工具用来补题面 / 附件）。
+
+    ★ 优先限定在当前账号名下的批次：不同平台可能有相同的 remote_id
+      （练习场与赛事各一套）。只按 id 查会把别的平台的题面贴过来 ——
+      那比"没有题面"更糟，模型会照着错的题做。
+
+    没有绑定账号时退化为全局匹配（首次同步前 / 测试里没有账号）。
+    """
+    stmt = select(KernelChallenge).where(KernelChallenge.remote_id == str(remote_id))
+    account = get_account(db)
+    if account is not None:
+        stmt = (
+            stmt.join(
+                KernelCompetition, KernelCompetition.id == KernelChallenge.competition_id
+            )
+            .where(KernelCompetition.account_id == account.id)
+        )
+    stmt = stmt.order_by(
+        KernelChallenge.updated_at.desc(), KernelChallenge.id.desc()
+    ).limit(1)
+    return db.execute(stmt).scalars().first()
 
 
 def latest_environment(db: Session, challenge_id: str) -> KernelEnvironment | None:
@@ -2235,6 +2308,53 @@ def _assert_resolvable(challenge: KernelChallenge) -> None:
         )
 
 
+def _competition_backed_by_generic_driver(db: Session, competition: KernelCompetition) -> bool:
+    """这道赛事题背后的平台是不是一份**配置驱动**、且声明了提交+环境能力。
+
+    ## 为什么需要这个判据（v1.72）
+
+    旧代码对所有 `kind='competition'` 的题一律拒绝（`CTF2_COMPETITION_SUBMIT_UNSUPPORTED`），
+    依据是对 **CTF2 旧开放 API** 的实测：它的赛事端点全 404。但那只对
+    CTF2 那套旧的 `practice/...` 形状成立。当我们接的是**自己配置的
+    GenericDriver 平台**（例如 slab-match，官方 `api_doc.md` 明确给了
+    `POST /answer-panel/answer` 提交与 `POST /ctf/reset-endpoint` 起环境），
+    这类赛事题是**能解**的 —— 再拿旧断言挡住它，症状就是用户点「开始解题」
+    看到一句"平台没开放"，而实际上平台完全开放。
+
+    ## 判据（只认"合同里写明了"的）
+
+    competition → account(`account_id`) → platform(`account.platform_id`)：
+      * 账号与平台都在；
+      * 平台 `spec` 能解析成 `PlatformSpec`（即 GenericDriver，不是内置直连驱动）；
+      * spec 的 `submit.request` 有 method+path（真的有提交端点）；
+      * spec 的 `environment` 声明了 `from_detail` 或 `ready_path`（能读环境）。
+
+    任一项不满足就返回 False，落回旧的 fail-closed 断言 —— 宁可按
+    "不支持"如实拒绝，也不发一个注定 404 的请求（旧注释里的不对称代价依然适用）。
+    """
+    if getattr(competition, "account_id", None) is None:
+        return False
+    account = db.get(KernelAccount, competition.account_id)
+    if account is None or not getattr(account, "platform_id", None):
+        return False
+    from app.kernel import platforms as platforms_mod
+
+    platform = platforms_mod.get_platform(db, account.platform_id)
+    spec = platforms_mod.spec_of(platform) if platform is not None else None
+    if spec is None:
+        return False
+    # 提交端点必须真的写了 method + path。
+    submit_req = spec.submit
+    if not (getattr(submit_req, "method", "") and getattr(submit_req, "path", "")):
+        return False
+    # 环境读取：要么从详情里读（from_detail），要么配了就绪判据（ready_path）。
+    # 也接受声明了独立起环境端点（start_env）的平台。
+    env = spec.environment
+    if not (env.from_detail or env.ready_path or spec.start_env is not None):
+        return False
+    return True
+
+
 def _assert_submission_supported(db: Session, challenge: KernelChallenge) -> None:
     """这道题的提交/环境接口在平台的开放 API 里**到底存不存在**。
 
@@ -2272,6 +2392,15 @@ def _assert_submission_supported(db: Session, challenge: KernelChallenge) -> Non
     一个永久的架构假设。
     """
     competition = db.get(KernelCompetition, challenge.competition_id)
+    # ★ v1.72：`competition` 类题目**不再一律拒绝** —— 只要它背后的平台是
+    #   一份**配置驱动（GenericDriver）**、且 spec 里给了提交（`submit`）与
+    #   环境（`environment`）配置，就说明这条路是平台**明确公开**的
+    #   （例如 slab-match：POST /answer-panel/answer 提交、/ctf/reset-endpoint
+    #   起环境，见官方 `api_doc.md`）。旧代码把 `kind='competition'` 全挡在门外，
+    #   是因为旧 CTF2 开放 API 的赛事端点全 404 —— 那条断言对它仍成立，但它
+    #   不认识新的配置平台。
+    if competition is not None and _competition_backed_by_generic_driver(db, competition):
+        return
     if competition is None or competition.kind in _ALLOWED_SOLVE_KINDS:
         # ⚠️ 查不到赛事行时**放行**：外键保证它平时一定在
         #    （`ondelete=CASCADE` 会连带删题），所以这个分支真出现时
@@ -4474,6 +4603,7 @@ __all__ = [
     "expire_stale_environments",
     "get_account",
     "get_account_or_404",
+    "get_challenge_by_remote_id",
     "get_challenge_or_404",
     "get_competition_or_404",
     "get_disabled_tools",

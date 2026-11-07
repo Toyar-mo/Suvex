@@ -227,6 +227,12 @@ def test_dig_int_accepts_the_string_score_the_document_uses() -> None:
     assert dig_int({"score": 100}, "score") == 100
     assert dig_int({"score": "abc"}, "score") is None
     assert dig_int({}, "score") is None
+    # ★ v1.72：真机 pro.dasctf.com 的详情里 `"score": "190.0"` 是**带小数的
+    #   字符串**（不是 "100"）。只认整数串会让分值整列读成 None。
+    assert dig_int({"score": "190.0"}, "score") == 190
+    assert dig_int({"score": 190.0}, "score") == 190
+    assert dig_int({"score": "100分"}, "score") is None
+    assert dig_int({"score": ""}, "score") is None
 
 
 # ══════════════════════════════════════════════════════════

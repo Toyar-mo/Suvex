@@ -191,6 +191,19 @@ async def list_tasks(db: Session) -> list[RemoteChallenge]:
     return await driver.fetch_challenges(known_ids=set())
 
 
+def _driver_handle(remote_id: str) -> dict[str, str]:
+    """驱动寻址用的 handle。
+
+    ★ 两种驱动认的键不同：内置 `SlabMatchDriver` 读 `exerciseId`，
+      配置驱动（GenericDriver）的 spec 模板读 `id`。两个键都带、值相同，
+      同一条对话链路才能既支持"只绑 AccessKey"（内置驱动）又支持
+      "建了 platform 行"（配置驱动），而不用在调用处判分支。
+      `SlabMatchDriver._as_int` 接受数字字符串；`GenericDriver` 原样渲染。
+    """
+    rid = str(remote_id)
+    return {"id": rid, "exerciseId": rid}
+
+
 async def read_env(db: Session, remote_id: str) -> tuple[RemoteEnvironment, str]:
     """读一道题的靶机环境，并把连接信息渲染成给模型看的一段话。
 
@@ -199,7 +212,7 @@ async def read_env(db: Session, remote_id: str) -> tuple[RemoteEnvironment, str]
     driver = resolve_driver(db)
     if driver is None:
         raise LookupError("NO_COMPETITION_DRIVER")
-    handle = {"exerciseId": _as_int(remote_id)}
+    handle = _driver_handle(remote_id)
     env = await driver.read_environment(handle)
     return env, render_endpoints_prompt(env)
 
@@ -214,7 +227,7 @@ async def submit(db: Session, remote_id: str, answer: str) -> SubmitOutcome:
     driver = resolve_driver(db)
     if driver is None:
         raise LookupError("NO_COMPETITION_DRIVER")
-    handle = {"exerciseId": _as_int(remote_id)}
+    handle = _driver_handle(remote_id)
     return await driver.submit(handle, answer)
 
 

@@ -224,6 +224,75 @@ def render_endpoints_prompt(env: RemoteEnvironment) -> str:
     return "\n".join(lines)
 
 
+def endpoint_access_urls(
+    env: RemoteEnvironment, *, default_scheme: str = "http", cap: int = 8
+) -> tuple[str, ...]:
+    """把 `endpoints[]` 归一成**允许访问的 URL 清单**。
+
+    ## 为什么需要它（v1.73 补的接线）
+
+    `render_endpoints_prompt` 只是"讲给模型听的一段话"。而沙箱侧还有一道
+    **机器判据**：`guard_tool_url` / `assert_allowed_target` 只放行
+    `SolveSpec.access_urls` 里的 host。赛跑路径（`CompetitionRacer`）
+    的题是从比赛平台同步来的 `KernelChallenge`，本地**没有**
+    `KernelEnvironment` 行 → `build_spec` 给的 `access_urls` 是空的 →
+    模型一旦用 `http_request` 就会被自己的白名单拦下（而 `run_shell` 里的
+    curl 又可能因为容器 DNS/网段不同而连不上）。
+
+    症状是最难查的那种："工具明明有、命令也没写错，就是连不上"。
+
+    ## 代理优先
+
+    平台用 `isProxy` 表示"优先走代理端口"（`portMappings[].proxy`）。
+    这种情况下 `exposeIps` 往往在容器网段外不可达，只有代理端口通。
+    所以**有代理就用代理**，没有才退回 `exposeIps + ports`。
+
+    ## 多 IP 时不交叉相乘
+
+    `exposeIps` 有多个时，`ports` 未必每个 IP 都开。交叉相乘会造出
+    "看起来能用、实际拒绝连接"的地址，比不给更费时间。所以多 IP 时
+    只取每个 IP 的第一个端口。宁可少给一个，也不给一个假的。
+    """
+    urls: list[str] = []
+
+    def _push(url: str) -> None:
+        if url and url not in urls:
+            urls.append(url)
+
+    # CTF2 那种直接给 URL 的平台：原样带上（它已经是我们能访问的形状）。
+    for url in env.access_urls or ():
+        _push(str(url))
+
+    for endpoint in env.endpoints:
+        hosts = (
+            list(endpoint.proxy_ips)
+            if endpoint.is_proxy and endpoint.proxy_ips
+            else list(endpoint.expose_ips)
+        )
+        if not hosts:
+            continue
+
+        ports: list[str] = []
+        if endpoint.is_proxy and endpoint.port_mappings:
+            for mapping in endpoint.port_mappings:
+                proxy_port = str(mapping.get("proxy") or "").strip()
+                if proxy_port.isdigit():
+                    ports.append(proxy_port)
+        if not ports:
+            ports = [str(p).strip() for p in endpoint.ports if str(p).strip().isdigit()]
+        if len(hosts) > 1 and len(ports) > 1:
+            ports = ports[:1]
+
+        for host in hosts:
+            if not ports:
+                _push(f"{default_scheme}://{host}")
+                continue
+            for port in ports:
+                _push(f"{default_scheme}://{host}:{port}")
+
+    return tuple(urls[:cap])
+
+
 @runtime_checkable
 class PlatformDriver(Protocol):
     """一个平台的驱动。

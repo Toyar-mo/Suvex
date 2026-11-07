@@ -60,6 +60,10 @@ class ChallengeStage(str, Enum):
 class ChallengeState:
     remote_id: str
     title: str = ""
+    #: 平台给的分类名（WEB / PWN / MISC / RE / CR …）。
+    #:
+    #: ★ v1.73：它决定**并发出发的顺序**，不只是显示用。见 `_next_pending`。
+    category: str = ""
     stage: ChallengeStage = ChallengeStage.PENDING
     winner_model: str | None = None
     flag: str | None = None
@@ -151,6 +155,7 @@ class MatchCoordinator:
             cid: {
                 "remoteId": cid,
                 "title": st.title,
+                "category": st.category,
                 "stage": st.stage.value,
                 "winnerModel": st.winner_model,
                 "flag": st.flag,
@@ -201,13 +206,10 @@ class MatchCoordinator:
                     and not self.budget_exhausted()
                     and not self._stop.is_set()
                 ):
-                    pending = [
-                        cid for cid, st in self._states.items()
-                        if st.stage == ChallengeStage.PENDING
-                    ]
-                    if not pending:
+                    nxt = self._next_pending()
+                    if nxt is None:
                         break
-                    self._launch(pending[0])
+                    self._launch(nxt)
 
                 # 收掉已结束的 swarm
                 await self._reap()
@@ -244,6 +246,37 @@ class MatchCoordinator:
             await asyncio.wait_for(self._stop.wait(), timeout=seconds)
         except asyncio.TimeoutError:
             pass
+
+    def _next_pending(self) -> str | None:
+        """下一个该开的题：**先开"当前在跑最少的分类"**。
+
+        ## 为什么不是"谁先来开谁"（v1.73）
+
+        平台是按**分类分组**返回题库的（WEB 一整个组、PWN 一组 …）。按插入
+        顺序开题的话，两个并发名额会连续开两道 WEB —— 一道题卡住时另一个
+        名额也跟着卡在同一类上（同一类题往往用同一套工具、同一类假设）。
+        这正是"分批多并行解不同类"要避免的：并行的价值在于**覆盖不同的
+        攻击面**，而不是把同一类题做两遍。
+
+        这里用稳定排序：同分类内的相对顺序不变，所以行为是可预测的。
+        """
+        pending = [
+            (cid, st) for cid, st in self._states.items()
+            if st.stage == ChallengeStage.PENDING
+        ]
+        if not pending:
+            return None
+
+        running_by_category: dict[str, int] = {}
+        for cid in self._running:
+            st = self._states.get(cid)
+            if st is not None:
+                running_by_category[st.category] = (
+                    running_by_category.get(st.category, 0) + 1
+                )
+
+        pending.sort(key=lambda item: running_by_category.get(item[1].category, 0))
+        return pending[0][0]
 
     def _launch(self, cid: str) -> None:
         st = self._states[cid]
@@ -298,6 +331,7 @@ class MatchCoordinator:
             seen.add(cid)
             st = self._states.setdefault(cid, ChallengeState(remote_id=cid))
             st.title = _field(ch, "title", default=st.title) or st.title
+            st.category = _field(ch, "category", default=st.category) or st.category
             if _is_solved(ch):
                 # 平台已解（可能网页手交/别的实例解的）→ 跳过，别浪费额度
                 if st.stage not in (ChallengeStage.SOLVED,):

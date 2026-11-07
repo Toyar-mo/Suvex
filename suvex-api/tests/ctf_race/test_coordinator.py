@@ -46,6 +46,42 @@ def _ch(cid, *, solved=False, open_=True):
 
 
 # ── 测试 ──────────────────────────────────────────────────────────────
+async def test_first_wave_spans_different_categories():
+    """★ v1.73：并发名额要分给**不同分类**，而不是把同一类题连开两道。
+
+    平台按分类分组返回题库。按插入顺序开题的话，两个名额会连续开两道
+    WEB —— 一道卡住时另一个名额也跟着卡在同一类假设上。
+    """
+    launched: list[str] = []
+
+    async def list_fn():
+        # 前四道都是 WEB，后面才是 PWN / MISC
+        return [
+            {"remote_id": "w1", "title": "WEB1", "category": "WEB"},
+            {"remote_id": "w2", "title": "WEB2", "category": "WEB"},
+            {"remote_id": "p1", "title": "PWN1", "category": "PWN"},
+            {"remote_id": "m1", "title": "MISC1", "category": "MISC"},
+        ]
+
+    def make_fn(state):
+        launched.append(state.remote_id)
+
+        class SlowSwarm:
+            async def run(self_inner):
+                await asyncio.sleep(0.02)
+                return SwarmResult(challenge="c", winner_model="m", flag="flag{x}")
+
+        return SlowSwarm()
+
+    # max_concurrent=3：第一波应该是 w1(WEB) + p1(PWN) + m1(MISC)
+    coord = MatchCoordinator(
+        list_challenges=list_fn, make_swarm=make_fn, max_concurrent=3, poll_interval=0
+    )
+    await coord.run_until_idle()
+
+    assert launched[:3] == ["w1", "p1", "m1"], f"第一波开题顺序：{launched[:3]}"
+
+
 async def test_solves_all_open_challenges():
     made: dict[str, FakeSwarm] = {}
 

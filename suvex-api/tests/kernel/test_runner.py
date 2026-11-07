@@ -3401,6 +3401,34 @@ def test_persist_listing_absent_when_empty() -> None:
     assert "持久区里已经有" not in prompt
 
 
+# ══════════════════════════════════════════════════════════
+# 平台下发的靶机信息（v1.73）
+# ══════════════════════════════════════════════════════════
+
+
+def test_env_prompt_from_platform_reaches_the_prompt() -> None:
+    """★ 比赛平台的靶机信息在**平台侧**，本地表里没有 —— 必须由
+    `spec.env_prompt` 带进提示词，否则模型手里只有题面（它会对着空气解题）。"""
+    spec = _spec(
+        env_prompt="靶机连接信息：\n  IP：10.0.0.10\n  开放端口：80\n  登录账号：root / password"
+    )
+    prompt = runner._initial_prompt(spec)
+    assert "平台下发的靶机连接信息" in prompt
+    assert "10.0.0.10" in prompt
+    assert "root / password" in prompt
+
+
+def test_env_prompt_without_access_urls_does_not_claim_there_is_no_network() -> None:
+    """有靶机但没 URL（pwn 那种 IP+端口）时，**不能**说"没有可访问地址"。
+
+    那句话会把模型直接引向"翻附件找题"，而题在远端。
+    """
+    spec = _spec(access_urls=(), env_prompt="靶机：\n  IP：10.0.0.10\n  开放端口：9999")
+    prompt = runner._initial_prompt(spec)
+    assert "没有可访问的网络地址" not in prompt
+    assert "10.0.0.10" in prompt
+
+
 def test_list_workspace_files_reads_the_host_dir(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     """★ 清单从**宿主上的持久区目录**读，列文件名与大小。"""
     workspace = tmp_path / "ws"

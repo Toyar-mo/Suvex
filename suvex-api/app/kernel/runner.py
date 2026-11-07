@@ -3496,6 +3496,19 @@ class SolveSpec:
     #   ① 沙箱要不要放开网络（见那里的说明）；
     #   ② 提示词要不要告诉模型"别只试 http_request"。
     access_type: str = ""
+    # ★ v1.73：平台给的**靶机连接块**（`platform.render_endpoints_prompt`）。
+    #:
+    #: ## 为什么它必须进 spec
+    #:
+    #: `access_urls` 只够让 `guard_tool_url` 放行，它讲不了"IP 是什么、
+    #: 账号密码是什么、直连不通时走哪个代理端口"。比赛平台的题尤其如此：
+    #: 靶机信息在**平台侧**（`GET /ctf/exercise` 的 `endpoints`），本地
+    #: `KernelChallenge` 表里没有 —— 而 `build_spec` 只读本地。
+    #:
+    #: 于是赛跑路径会出现最坏的一种失败：题面给了、容器起了、模型开跑，
+    #: 但它**不知道靶机地址**，只能对着空环境瞎猜。把渲染好的块塞进来，
+    #: `_initial_prompt` 会原样贴到「环境」小节下面。
+    env_prompt: str = ""
     cpus: int | None = None
     memory_mb: int | None = None
     # ★ v0.26「续解」：上一次已经做过的动作（纪要行）。
@@ -5375,7 +5388,15 @@ def _initial_prompt(spec: SolveSpec) -> str:
                 "--timeout 8s -q` —— 比用 `http_request` 一个个猜快几个数量级。"
             )
     else:
-        lines.append("- 本题**没有**可访问的网络地址，全部信息在附件里。")
+        if spec.env_prompt.strip():
+            # ★ v1.73：平台给了靶机（但没给"URL 形状"的东西，比如 pwn 的
+            #   IP+端口）时，**不能**再说"没有可访问地址" —— 那是一句
+            #   会直接把模型引向错误方向的话（它会去翻附件找题，而题在远端）。
+            lines.append("- 可访问的靶机连接信息见下方（平台下发）。")
+        else:
+            lines.append("- 本题**没有**可访问的网络地址，全部信息在附件里。")
+    if spec.env_prompt.strip():
+        lines += ["", "### 平台下发的靶机连接信息", spec.env_prompt.strip()]
     lines.append("")
     if spec.attachments:
         lines.append("- 附件（用 read_attachment 读，或直接 `ls /work/attachments`）：")
@@ -8139,6 +8160,33 @@ def run_worker(
             logger.exception("回写失败状态时又出错了：%s", challenge_id)
 
 
+def _challenge_is_generic_platform_backed(challenge_id: str) -> bool:
+    """这道题的赛事平台是不是**配置驱动（GenericDriver）**、且声明了提交+环境。
+
+    v1.74：`_run_worker` 用它决定要不要把单题解题交给
+    `CompetitionRacer.solve_one`（赛跑那条已证明可用的链），从而绕开
+    只认 CTF2 `practice/...` 形状的 `KernelClient` 旧路径。
+
+    直接复用 `service._competition_backed_by_generic_driver` —— 保持与
+    「开始解题」放行闸（`_assert_submission_supported`）**同一个判据**，
+    避免两处各判一次、迟早判岔（放行了却在 worker 里又走老路）。
+    """
+    try:
+        with session_scope() as db:
+            challenge = db.get(KernelChallenge, challenge_id)
+            if challenge is None or challenge.competition_id is None:
+                return False
+            competition = db.get(KernelCompetition, challenge.competition_id)
+            if competition is None:
+                return False
+            from app.kernel import service as ctf2_service
+
+            return ctf2_service._competition_backed_by_generic_driver(db, competition)
+    except Exception:  # noqa: BLE001 —— 判不出来就用旧路径（fail-closed 到旧行为）
+        logger.exception("判定 generic 平台失败，退回旧路径：%s", challenge_id)
+        return False
+
+
 def _has_correct_submission(db: Session, challenge_id: str) -> bool:
     """这题在我们这边**有没有一条被平台判对的提交**。
 
@@ -8229,6 +8277,46 @@ async def _run_worker(
             _competition is not None
             and _competition.kind != KernelCompetitionKind.LOCAL
         )
+
+    # ── ★★ v1.74：配置驱动（GenericDriver）平台上的题，走**单题赛跑机制** ──
+    #
+    # 旧路径下面是 `KernelClient`（CTF2 专属）：起环境走
+    # `practice/{id}/challenges/{cid}/environment/start/`，提交走 CTF2 的
+    # practice 端点。接 slab-match 这类 GenericDriver 平台后，那条路会去请求
+    # **平台不存在**的端点，`/ctf/reset-endpoint` 收到的也不是平台要的整数
+    # `exerciseId` → `INVALID_ID` 400（真机实测）。
+    #
+    # 而赛跑（CompetitionRacer）早已把「起环境→给靶机地址→解题→提交」这条链
+    # 在 GenericDriver 上跑通。所以这里若判定这道题背后的平台是**配置驱动**，
+    # 就交给 `CompetitionRacer.solve_one` 复用同一条链，然后直接返回 ——
+    # 完全绕开下面的 CTF2 client 分支。
+    if platform_backed and _challenge_is_generic_platform_backed(challenge_id):
+        with session_scope() as _db:
+            _ch = _db.get(KernelChallenge, challenge_id)
+            _remote_id = _ch.remote_id if _ch is not None else None
+        if _remote_id:
+            from app.ctf_race.competition_racer import CompetitionRacer
+
+            racer = CompetitionRacer(lambda: session_scope())
+            try:
+                # ★ 这里**必须** await：`_run_worker` 本身是 async，
+                #   在运行中的事件循环里调 `asyncio.run` 会直接抛
+                #   RuntimeError（并把这题标成 failed）—— 那正是"改完
+                #   看起来还是 0 解"的来源。
+                await racer.solve_one(_remote_id, challenge_id=challenge_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("单题（GenericDriver）解题崩溃：%s", challenge_id)
+                with session_scope() as _db:
+                    _ch = _db.get(KernelChallenge, challenge_id)
+                    if _ch is not None and _ch.status not in (
+                        KernelChallengeStatus.SOLVED.value,
+                    ):
+                        _ch.status = KernelChallengeStatus.FAILED.value
+                        _ch.last_error = _safe_text(
+                            f"解题异常：{type(exc).__name__}: {exc}"
+                        )
+                    _db.commit()
+            return
 
     # ── ★★ 开跑前先问平台一句：这题本队伍是不是**已经被别人**解出了 ──
     #

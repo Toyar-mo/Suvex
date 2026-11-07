@@ -473,8 +473,13 @@ def test_environment_prompt_is_empty_without_endpoints() -> None:
     assert _run(scenario()) == ""
 
 
-def test_start_and_recover_hit_the_documented_paths() -> None:
-    """启动是 `POST /ctf/build-exercise-env`，回收是 `.../recover-exercise-env`。"""
+def test_start_hits_the_documented_reset_endpoint() -> None:
+    """启动/重置走 `POST /ctf/reset-endpoint`（api_doc §7）。
+
+    ★ v1.73 的修正：原来打的是 `/ctf/build-exercise-env` —— 那是 Web 控制台
+    那套接口的名字，官方 agent 文档里根本没有它。踩中时的症状极具误导性：
+    一个 404，而流程里看起来像"这道题没有靶机"。
+    """
     paths: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -490,8 +495,49 @@ def test_start_and_recover_hit_the_documented_paths() -> None:
             await driver.aclose()
 
     _run(scenario())
-    assert paths[0].endswith("/ctf/build-exercise-env")
+    assert paths[0].endswith("/ctf/reset-endpoint")
+    # 回收：官方 agent 文档**没有**这个端点，只是尽力而为（保留旧名字）。
     assert paths[1].endswith("/ctf/recover-exercise-env")
+
+
+def test_start_falls_back_to_legacy_env_endpoint_when_route_missing() -> None:
+    """老部署没有 `reset-endpoint` 时退回 `build-exercise-env`（只在这**一种**
+    情况下退回 —— 别的错误必须冒出来，比如"免费重置次数用完"）。"""
+    paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        if request.url.path.endswith("/ctf/reset-endpoint"):
+            return httpx.Response(200, json=_fail("404", "路由不存在"))
+        return httpx.Response(200, json=_ok(None))
+
+    async def scenario() -> None:
+        driver = _driver(handler)
+        try:
+            await driver.start_environment({"exerciseId": 1001})
+        finally:
+            await driver.aclose()
+
+    _run(scenario())
+    assert paths[0].endswith("/ctf/reset-endpoint")
+    assert paths[1].endswith("/ctf/build-exercise-env")
+
+
+def test_reset_info_reads_free_and_used_quota() -> None:
+    """`GET /ctf/endpoint-reset-info`（api_doc §6）：免费次数 / 已用次数。"""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/ctf/endpoint-reset-info")
+        return httpx.Response(200, json=_ok({"freeResetQty": 2, "resetQty": 1}))
+
+    async def scenario() -> dict:
+        driver = _driver(handler)
+        try:
+            return await driver.reset_info({"exerciseId": 1001})
+        finally:
+            await driver.aclose()
+
+    assert _run(scenario()) == {"freeResetQty": 2, "resetQty": 1}
 
 
 def test_recovering_an_environment_that_was_never_started_does_not_raise() -> None:
@@ -651,3 +697,68 @@ def test_this_platform_declares_environment_support() -> None:
             await driver.aclose()
 
     _run(scenario())
+
+
+# ══════════════════════════════════════════════════════════
+# 靶机连接信息 → 允许访问的 URL（v1.73）
+# ══════════════════════════════════════════════════════════
+
+
+def test_endpoint_access_urls_prefers_proxy_ports() -> None:
+    """`isProxy=true` 时用**代理 IP + 代理端口**，不用 exposeIps。
+
+    代理模式下的 `exposeIps` 往往在容器网段里根本不可达 —— 给它是
+    给一个"看起来能用、实际连不上"的地址，比不给更费时间。
+    """
+    from app.kernel.platform import RemoteEndpoint, RemoteEnvironment, endpoint_access_urls
+
+    env = RemoteEnvironment(
+        endpoints=[
+            RemoteEndpoint(
+                expose_ips=["10.0.0.10"],
+                ports=["80"],
+                is_proxy=True,
+                proxy_ips=["1.2.3.4"],
+                port_mappings=[{"type": "tcp", "port": "80", "proxy": "30080"}],
+            )
+        ],
+        ready=True,
+    )
+    assert endpoint_access_urls(env) == ("http://1.2.3.4:30080",)
+
+
+def test_endpoint_access_urls_uses_expose_ips_when_not_proxied() -> None:
+    from app.kernel.platform import RemoteEndpoint, RemoteEnvironment, endpoint_access_urls
+
+    env = RemoteEnvironment(
+        endpoints=[RemoteEndpoint(expose_ips=["10.0.0.10"], ports=["80", "22"])],
+        ready=True,
+    )
+    assert endpoint_access_urls(env) == ("http://10.0.0.10:80", "http://10.0.0.10:22")
+
+
+def test_endpoint_access_urls_does_not_cross_multiple_ips_with_ports() -> None:
+    """多 IP × 多端口**不交叉相乘** —— 会造出连不上的假地址。"""
+    from app.kernel.platform import RemoteEndpoint, RemoteEnvironment, endpoint_access_urls
+
+    env = RemoteEnvironment(
+        endpoints=[
+            RemoteEndpoint(expose_ips=["10.0.0.10", "10.0.0.11"], ports=["80", "22"])
+        ],
+        ready=True,
+    )
+    assert endpoint_access_urls(env) == ("http://10.0.0.10:80", "http://10.0.0.11:80")
+
+
+def test_endpoint_access_urls_keeps_ctf2_style_urls() -> None:
+    from app.kernel.platform import RemoteEnvironment, endpoint_access_urls
+
+    env = RemoteEnvironment(access_urls=["http://a.example/"], ready=True)
+    assert endpoint_access_urls(env) == ("http://a.example/",)
+
+
+def test_endpoint_access_urls_empty_when_no_environment() -> None:
+    """纯附件题：空元组（不是 None）—— 调用方可以无条件 `tuple(...)`。"""
+    from app.kernel.platform import RemoteEnvironment, endpoint_access_urls
+
+    assert endpoint_access_urls(RemoteEnvironment()) == ()
