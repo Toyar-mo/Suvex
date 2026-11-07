@@ -145,7 +145,9 @@ const STATUS_FILTERS: {
  *   才是可筛选的稳定集合。**归一的真值在服务端**，这里是投影。
  */
 const CATEGORY_FILTERS: { value: CanonicalCategory | 'all'; label: string }[] = [
-  { value: 'all', label: '全部类' },
+  // 曾经叫「全部类」—— 挨着来源那排的「全部来源」，两个「全部」看起来像同一个
+  // 控件的两种写法。现在两排各自有组名（状态 / 类型 / 来源），这里就用「全部」。
+  { value: 'all', label: '全部' },
   ...CANONICAL_CATEGORIES.map((value) => ({
     value,
     label: CANONICAL_CATEGORY_LABEL[value],
@@ -615,6 +617,11 @@ export function KernelPage() {
         {/* ── 工具条 ── */}
         <div className="mb-panel flex flex-wrap items-center gap-tight">
           <div role="group" aria-label="按状态筛选" className="flex flex-wrap items-center gap-1">
+            {/* 三排胶囊各有一个可见组名：没有它，「全部」会出现两次而看不出
+                它们属于不同维度。组名对读屏器是重复的（aria-label 已说），故 aria-hidden。 */}
+            <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
+              状态
+            </span>
             {STATUS_FILTERS.map((item) => {
               {/* ★ 计数与筛选**用同一份 `match`**：两处各写一遍必然漂移，
                   而漂移的表现就是"标签上的数字和点进去看到的条数不一致"。 */}
@@ -650,6 +657,9 @@ export function KernelPage() {
               显示 0 道题、但标签上写着 67"的错觉。
           */}
           <div role="group" aria-label="按分类筛选" className="flex flex-wrap items-center gap-1">
+            <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
+              类型
+            </span>
             {CATEGORY_FILTERS.map((item) => {
               const count = challengesInStatusBucket.filter((c) =>
                 item.value === 'all'
@@ -687,6 +697,9 @@ export function KernelPage() {
           */}
           {sourceOptions.length > 0 && (
             <div role="group" aria-label="按接入来源筛选" className="flex flex-wrap items-center gap-1">
+              <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
+                来源
+              </span>
               {[{ value: 'all', label: '全部来源' }, ...sourceOptions].map((item) => {
                 const count = challengesInStatusBucket.filter((c) =>
                   item.value === 'all' ? true : (c.platformSlug || '') === item.value,

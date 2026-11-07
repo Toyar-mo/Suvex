@@ -666,6 +666,12 @@ function ScanRow({
                     title={`${meta.label} ${scan.findings[sev]} 条`}
                   >
                     <span aria-hidden="true" className={cn('h-1.5 w-1.5 rounded-pill', meta.bg)} />
+                    {/*
+                      级别名必须写出来（2026-11 设计审查）：原来只有彩点 + 数字，
+                      触屏上 `title` 永不出现，色觉障碍用户也读不出"●1 ●2"。
+                      现在与漏洞页的筛选用同一个 `meta.label`，两页说法一致。
+                    */}
+                    <span className={meta.text}>{meta.label}</span>
                     <span className={cn('tabular', meta.text)} data-numeric>
                       {scan.findings[sev]}
                     </span>

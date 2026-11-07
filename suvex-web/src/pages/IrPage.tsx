@@ -374,6 +374,19 @@ export function IrPage() {
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
+                  {/*
+                    失败要看得出来（2026-11 设计审查）。
+
+                    原来它只写在灰色副标题里 ——「上一次复盘没跑完」和
+                    「已复盘（可重跑）」在扫视时几乎没有区别，而前者是
+                    需要处置的状态。给一个和扫描页同语言的徽标，
+                    副标题保留（它说的是"上一次"，不是"现在"）。
+                  */}
+                  {challenge.status === 'failed' && (
+                    <span className="rounded-pill border border-signal-risk/40 bg-signal-risk/10 px-2 py-0.5 text-2xs text-signal-risk">
+                      上次失败
+                    </span>
+                  )}
                   <Button
                     variant="ghost"
                     onClick={() => void onStart(challenge)}

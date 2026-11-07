@@ -845,23 +845,41 @@ export function ReportsPage() {
                   同步守卫（挡住"提交生效之前"的第二次点击）。手写
                   `{busy === 'generate' ? '正在生成…' : …}` 只有文字，后两样都拿不到。
                 */}
-                <Button
-                  variant="primary"
-                  size="md"
-                  onClick={handleGenerate}
-                  disabled={selectedCount === 0 || busy === 'download'}
-                  loading={busy === 'generate'}
-                  loadingLabel="正在生成…"
-                >
-                  <Download size={14} strokeWidth={2} aria-hidden="true" />
-                  生成并导出
-                </Button>
+                {/*
+                  主操作吸附在视口底部（2026-11 设计审查）。
 
-                {format === 'pdf' && (
-                  <p className="text-2xs text-ink-faint">
-                    将调用浏览器打印，在目标处选择「另存为 PDF」。生成的版本与右侧预览一致。
-                  </p>
-                )}
+                  原来它跟着配置区一路排到最后：1440×900 下实测 y=1002，
+                  首屏根本看不到 —— 而顶部 tab 恰好也叫「生成报告」，
+                  用户会以为那个 tab 就是动作本身。
+
+                  `bottom` 扣掉手机底栏高度，否则按钮会被固定底栏压住；
+                  `mt-auto` 让它在配置区较短时也贴着卡片底部，而不是浮在中间。
+                */}
+                <div
+                  className={cn(
+                    'sticky bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] z-10 md:bottom-2',
+                    '-mx-panel -mb-panel mt-auto flex flex-col gap-1.5',
+                    'rounded-b-md border-t border-line bg-surface/95 px-panel py-panel backdrop-blur-sm',
+                  )}
+                >
+                  <Button
+                    variant="primary"
+                    size="md"
+                    onClick={handleGenerate}
+                    disabled={selectedCount === 0 || busy === 'download'}
+                    loading={busy === 'generate'}
+                    loadingLabel="正在生成…"
+                  >
+                    <Download size={14} strokeWidth={2} aria-hidden="true" />
+                    生成并导出
+                  </Button>
+
+                  {format === 'pdf' && (
+                    <p className="text-2xs text-ink-faint">
+                      将调用浏览器打印，在目标处选择「另存为 PDF」。生成的版本与右侧预览一致。
+                    </p>
+                  )}
+                </div>
               </div>
               )
             ) : (
