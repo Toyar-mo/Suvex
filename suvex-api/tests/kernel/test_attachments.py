@@ -141,7 +141,9 @@ async def test_foreign_host_is_refused_without_any_request(monkeypatch) -> None:
 
     assert len(recorded) == 0, f"竟然发出了请求：{recorded.urls}"
     assert result.downloaded == 0
-    assert result.failed and "官方域名" in result.failed[0]
+    assert result.failed and "不在允许的域名下" in result.failed[0]
+    # 拒绝信息要**可操作**：告诉运维该往平台配置里加什么
+    assert "attachment_domains" in result.failed[0]
     assert not (attachments.attachment_root("chal_evil") / "meta").exists()
 
 

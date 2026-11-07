@@ -1017,6 +1017,16 @@ def _attachment_allowed_domains(db: Session) -> tuple[str, ...]:
     ★ 只取 base_url 的注册域，不取附件 URL 自己的域 —— 后者等于让出题人
       决定我们去访问哪台机器。CTF2 官方域名由 `assert_allowed_target`
       原生放行，这里补的是配置驱动平台（附件常在它自己的 OSS 上）。
+
+    ## 还有一条出路：平台自己声明（`spec.attachment_domains`）
+
+    有些平台的 API 与附件 CDN **不同域**（`api.foo.com` + `cdn.bar.net`），
+    靠 base_url 推不出来。那种情况在平台的配置里写一行：
+
+        "attachment_domains": ["bar.net"]
+
+    声明是**显式且可审计**的 —— 比"信任附件 URL 自己的域名"安全得多：
+    后者等于让出题人决定我们去访问哪台机器（SSRF）。
     """
     from urllib.parse import urlsplit
 
@@ -1026,6 +1036,11 @@ def _attachment_allowed_domains(db: Session) -> tuple[str, ...]:
         labels = host.split(".")
         if len(labels) >= 2:
             domains.add(".".join(labels[-2:]))
+        # 平台显式声明的附件域名（可写完整域，也可是注册域）
+        spec = row.spec if isinstance(row.spec, dict) else {}
+        for extra in spec.get("attachment_domains") or []:
+            if isinstance(extra, str) and extra.strip():
+                domains.add(extra.strip().lower().lstrip("."))
     return tuple(sorted(domains))
 
 

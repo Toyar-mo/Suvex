@@ -411,8 +411,13 @@ async def _download_one(
     if not _is_official(item.url, allowed_domains):
         # ★ 这是**拒绝**而不是"警告后继续"。见模块 docstring 第 1 条：
         #   不校验 host 等于让出题人决定我们去访问哪里。
+        host = urlsplit(item.url).hostname or ""
+        labels = host.split(".")
+        suggest = ".".join(labels[-2:]) if len(labels) >= 2 else host
         raise KernelError(
-            f"附件地址不在 CTF2 官方域名下，已拒绝下载：{urlsplit(item.url).hostname}"
+            f"附件地址不在允许的域名下，已拒绝下载：{host}。"
+            f'若这是本题平台的附件 CDN，在平台配置里加 "attachment_domains": ["{suggest}"]，'
+            "然后重新同步这题。"
         )
 
     target_dir = attachment_root(item.challenge_id)
