@@ -60,13 +60,18 @@ export function ActivityFeedItem({ event, href, className }: ActivityFeedItemPro
   const to =
     href ??
     `/activity?scan=${encodeURIComponent(event.scanId)}&agent=${encodeURIComponent(event.agentId)}`
+  const { toolName, body: summaryBody } = splitToolSummary(event)
+  const title =
+    event.subject && !event.summary.includes(event.subject)
+      ? `${event.summary}\n${event.subject}`
+      : event.summary
 
   return (
     <li className={cn('group', className)}>
       <Link
         to={to}
         className={cn(
-          'flex gap-tight rounded-sm px-2 py-2.5',
+          'flex gap-tight rounded-sm px-2 py-2',
           'transition-ui duration-fast hover:bg-surface-raised',
         )}
       >
@@ -78,45 +83,71 @@ export function ActivityFeedItem({ event, href, className }: ActivityFeedItemPro
         />
 
         <div className="min-w-0 flex-1">
-          {/* break-words：摘要里常带没有空格的长命令/URL，窄屏会被撑成整页横向滚动 */}
-          <p className="break-words text-sm leading-snug text-ink [overflow-wrap:anywhere]">
-            {event.summary}
+          {/*
+            工具名单独一列，后面才是参数。
+
+            ★ 2026-11-07 用户反馈「最近活动很乱」。乱的根源不是字多，是
+              每条都在同一行里塞两种东西：`run_shell B=http://...` 是
+              一条没有层级的长文本，扫视时看不出"它到底调了什么"。
+              拆开之后：动作名（等宽、固定位置）→ 参数（可截断）。
+
+            ★ 摘要限两行：活动流是**扫视**用的，不是读的。完整内容放
+              `title`，要深究可以悬停/进活动页。限行也让每条高度稳定，
+              列表不会因为一条超长命令就高低不齐。
+          */}
+          <p
+            className={cn(
+              'break-words text-sm leading-snug [overflow-wrap:anywhere]',
+              // 工具调用压成**一行**：参数是命令，给它两行就会把整块撑成一堵墙。
+              // 其余类型是给人读的一句话，留两行更完整。
+              toolName ? 'line-clamp-1' : 'line-clamp-2',
+            )}
+            title={title}
+          >
+            {toolName && (
+              <span className="mono-ui mr-1.5 font-medium text-ink">{toolName}</span>
+            )}
+            <span className={toolName ? 'text-ink-muted' : 'text-ink'}>{summaryBody}</span>
           </p>
 
-          <div className="mono-ui mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-faint">
-            <span className="text-ink-muted">{event.agentId}</span>
-            <span aria-hidden="true">·</span>
-            <span>{PHASE_LABEL[event.agentPhase]}</span>
-            <span aria-hidden="true">·</span>
-            <time dateTime={event.at} className="tabular">
+          <div className="mono-ui mt-1 flex min-w-0 items-center gap-x-2 gap-y-0.5 text-ink-faint">
+            <span className="shrink-0 text-ink-muted">{shortAgentId(event.agentId)}</span>
+            <span aria-hidden="true" className="shrink-0">·</span>
+            <span className="shrink-0">{PHASE_LABEL[event.agentPhase]}</span>
+            <span aria-hidden="true" className="shrink-0">·</span>
+            <time dateTime={event.at} className="shrink-0 tabular">
               {formatRelativeTime(event.at)}
             </time>
-            {event.subject && (
-              <>
-                <span aria-hidden="true">·</span>
-                {/* 端点/参数：等宽，超长时省略而不是换行 —— 换行会把每条挤成三行 */}
-                {/* max-w-full 是必须的：flex 项的 min-width 默认是 auto，
-                    只写 truncate 它仍会按内容宽度撑开（实测撑到 4846px）。 */}
-                <span className="min-w-0 max-w-full truncate text-ink-faint" title={event.subject}>
-                  {event.subject}
-                </span>
-              </>
-            )}
+            <span className="ml-auto shrink-0">{meta.label}</span>
           </div>
         </div>
-
-        {/*
-          事件类型的可见文字标签。图标+颜色对色觉障碍用户不够 —— 这里的文字
-          正是那个替代通道，所以必须可读：用 ink-muted(8.05:1) 而不是
-          ink-ghost(2.17:1)。它既然是信息，就不能待在装饰色里。
-          只在宽屏显示，因为窄屏宽度要留给 summary。
-        */}
-        <span className="mono-ui mt-0.5 hidden shrink-0 text-ink-faint xl:inline">
-          {meta.label}
-        </span>
       </Link>
     </li>
   )
+}
+
+/**
+ * 工具调用摘要拆成「动作名 + 参数」。
+ *
+ * `run_shell B=http://…` → `run_shell` + `B=http://…`。
+ * 只对 tool_call 拆：别的类型（扫描完成、发现）本来就是一句人话。
+ */
+function splitToolSummary(event: ActivityEvent): { toolName: string | null; body: string } {
+  if (event.type !== 'tool_call') return { toolName: null, body: event.summary }
+  const trimmed = event.summary.trim()
+  const space = trimmed.indexOf(' ')
+  if (space <= 0) return { toolName: null, body: trimmed }
+  return { toolName: trimmed.slice(0, space), body: trimmed.slice(space + 1) }
+}
+
+/**
+ * agent id 只留尾部。
+ *
+ * `agent_01M6QS0K57C8KWBBH0HV3T0EC` 有 32 个字符，整段摆出来会把
+ * 「阶段 · 时间」挤掉，而人真正用来对照的只是尾部几位。
+ */
+function shortAgentId(id: string): string {
+  return id.length <= 16 ? id : `…${id.slice(-10)}`
 }
 
 export default ActivityFeedItem
