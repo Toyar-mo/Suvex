@@ -1,6 +1,10 @@
 import { cn } from '@/lib/cn'
-import { SANDBOX_PROFILE_HINT, SANDBOX_PROFILE_LABEL, type KernelSandboxProfile } from '@/data/kernel'
-import { Boxes, Wrench } from 'lucide-react'
+import {
+  SANDBOX_PROFILE_HINT,
+  SANDBOX_PROFILE_LABEL,
+  type KernelSandboxProfile,
+} from '@/data/kernel'
+import { Boxes, ShieldAlert, Wrench } from 'lucide-react'
 
 /**
  * 沙箱镜像选择器。
@@ -29,17 +33,27 @@ export function SandboxProfileSelect({
   disabled = false,
   /** 紧凑模式：卡片上用，不带标题与底部说明 */
   compact = false,
+  hint,
   id = 'suvex-sandbox-profile',
 }: {
   value: KernelSandboxProfile
   onChange: (next: KernelSandboxProfile) => void
   disabled?: boolean
   compact?: boolean
+  /** 覆盖底下的说明（设置页里它的效力与「这次解题」不同，见调用点） */
+  hint?: string
   id?: string
 }) {
+  /*
+    ★ v1.78：补上 `suvex-sandbox-ir`。
+
+    类型与后端一直支持第三个镜像（应急响应专用），而这里只列了两个 ——
+    于是 IR 题只能靠"按分类自动推导"，用户无法手动指定。
+  */
   const options: { value: KernelSandboxProfile; icon: typeof Boxes }[] = [
     { value: 'suvex-sandbox', icon: Boxes },
     { value: 'suvex-sandbox-re', icon: Wrench },
+    { value: 'suvex-sandbox-ir', icon: ShieldAlert },
   ]
 
   return (
@@ -105,7 +119,8 @@ export function SandboxProfileSelect({
 
       {!compact && (
         <span className="text-2xs text-ink-faint">
-          题目同步时会按分类自动选一个，这里改成你想要的。
+          {hint ??
+            '它只影响从这里开始的那一次解题：题目会按分类自动选镜像，这里改的是"这次用哪个"，不会改动题目本身存的分类默认值。'}
         </span>
       )}
     </div>

@@ -684,7 +684,7 @@ export function KernelPage() {
             )}
             <span className="flex-1" />
             <Link
-              to="/settings#ctf2"
+              to="/settings#ctf"
               className="text-2xs text-accent-strong underline hover:text-accent"
             >
               提交策略设置
@@ -990,7 +990,7 @@ export function KernelPage() {
               flag 后会直接提交，不等确认。仍受每题错误提交次数上限约束，
               猜错会消耗不可再生的机会。可在
               <Link
-                to="/settings#ctf2"
+                to="/settings#ctf"
                 className="mx-1 text-accent-strong underline hover:text-accent"
               >
                 设置

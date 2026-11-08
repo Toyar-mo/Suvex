@@ -318,7 +318,7 @@ export const NAV_ITEMS: NavItem[] = [
     group: 'config',
     label: '设置',
     icon: Settings2,
-    blurb: '模型供应商、沙箱与工具策略、通知。',
+    blurb: '控制台怎么跑：模型、沙箱、解题、通知与权限。改哪一块存哪一块。',
     inMobileTabBar: false,
   },
 ]

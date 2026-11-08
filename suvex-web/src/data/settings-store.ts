@@ -473,7 +473,7 @@ export async function loadSettings(): Promise<void> {
   // 等 provider 那一路也落地，`loadSettings()` 的调用方拿到的才是完整快照。
   // ⚠️ 它的失败**不**抛出去：provider 失败的后果是状态条显示"读不到"，
   //    不该让设置页的 `loadSettings()` 调用方（`void loadSettings()`）
-    //    拿到一个 rejected promise 而在控制台留下 unhandled rejection。
+  //    拿到一个 rejected promise 而在控制台留下 unhandled rejection。
   await accountsTask
 }
 
@@ -527,7 +527,21 @@ export function useSettings(): SettingsSnapshot {
  * 结果是一个**可渲染、可停留**的数据结构，而不是一句提示语。
  */
 export type SaveResult =
-  { status: 'ok'; at: string } | { status: 'nochange' } | { status: 'failed'; error: string }
+  | {
+      status: 'ok'
+      at: string
+      /**
+       * 服务端那条的 id（只有模型服务会带）。
+       *
+       * ★ 新建时前端的 id 是临时生成的，而"验证凭据"要打
+       *   `/providers/{真 id}/verify` —— 拿临时 id 去验证必然 404，
+       *   而且下一次保存会因为查不到已有条目再 POST 一条（重复）。
+       *   只需要 id，所以不把整条 `ProviderOutShape` 塞进类型里。
+       */
+      account?: { id: string }
+    }
+  | { status: 'nochange' }
+  | { status: 'failed'; error: string }
 
 /**
  * **动作型**操作的结果 —— 没有 nochange 这一态。
@@ -559,8 +573,7 @@ export type SaveResult =
  * ⚠️ 这个字段是**可选**的，所以既有调用方（`verifyProvider`）不受影响。
  */
 export type ActionResult =
-  | { status: 'ok'; at: string; message?: string }
-  | { status: 'failed'; error: string }
+  { status: 'ok'; at: string; message?: string } | { status: 'failed'; error: string }
 
 // ─────────────────────────────────────────────
 // Provider 变更
@@ -662,6 +675,17 @@ export async function saveProviderAccount(next: ProviderAccount): Promise<SaveRe
     kind: next.kind,
     // 去尾斜杠，避免和 SDK 拼出 //v1
     baseUrl: next.baseUrl.trim().replace(/\/+$/, ''),
+    /*
+      ★ v1.78：`isDefault` 必须**跟着发**。
+
+      它原来只活在表单草稿里 —— 勾了"设为默认模型"，保存请求里却没有
+      这个字段，于是：后端默认模型不变；而且只改这一项时前端算出的
+      `dirty` 也是 true，界面显示"已保存"，实际什么都没发生。
+
+      后端 POST/PATCH 都接受这个字段（`ProviderCreate.isDefault` /
+      `ProviderUpdate.isDefault`），一直是前端漏发。
+    */
+    isDefault: next.isDefault,
   }
 
   try {
@@ -684,7 +708,9 @@ export async function saveProviderAccount(next: ProviderAccount): Promise<SaveRe
     // `nochange` 要如实传递：用户点了保存但什么都没改，报"已保存"
     // 是制造虚假的动作感（契约 §3.7 就是这么要求的）
     if (response.status === 'nochange') return { status: 'nochange' }
-    return { status: 'ok', at: response.at }
+    // ★ 把**服务端那一条**带回去：新建时前端只有临时 id，
+    //   而"验证凭据"要用真 id 才打得通（见 verifyProvider 的说明）。
+    return { status: 'ok', at: response.at, account: { id: response.provider.id } }
   } catch (error) {
     return { status: 'failed', error: messageOf(error) }
   }
@@ -765,7 +791,7 @@ export async function setDefaultProvider(id: string): Promise<SaveResult> {
  * 直接采用响应里回传的 `provider`（验证会写回 `verified`/`verifyError`），
  * 不再单独发一次查询 —— 那会取到"别人的验证结果"这种竞态。
  */
-export async function verifyProvider(account: ProviderAccount): Promise<ActionResult> {
+export async function verifyProvider(account: { id: string }): Promise<ActionResult> {
   try {
     const result = await api.post<ProviderVerifyResponse>(`/providers/${account.id}/verify`)
 
@@ -948,9 +974,7 @@ export async function removeNotifyChannel(id: string): Promise<SaveResult> {
  */
 export async function sendTestNotification(channel: NotifyChannel): Promise<ActionResult> {
   try {
-    const updated = await api.post<NotifyChannel>(
-      `/settings/notices/channels/${channel.id}/test`,
-    )
+    const updated = await api.post<NotifyChannel>(`/settings/notices/channels/${channel.id}/test`)
     notices = {
       ...notices,
       channels: notices.channels.map((c) => (c.id === channel.id ? updated : c)),

@@ -295,10 +295,16 @@ export function KernelPanel() {
   if (!draft) {
     return (
       <SettingsPanel
-        id="kernel"
+        id="ctf"
         title="CTF"
         description="对接 ctf2.dasctf.com，把题目交给沙箱里的模型去解。"
       >
+        {/*
+          ★ 加载/失败态也必须能被「内核通用能力」这个锚点找到：
+          导航 id 是 `ctf` 与 `kernel-core`，而这里原来只有一个 `kernel` ——
+          配置读不到时点这两个导航项会**落到空处**。
+        */}
+        <span id="kernel-core" aria-hidden="true" />
         <p className="text-xs text-ink-muted">
           {settingsError
             ? `读不到 CTF2 配置：${settingsError.message}。为避免误改，这里不显示表单。`
@@ -315,267 +321,273 @@ export function KernelPanel() {
         title="CTF 解题"
         description="对接 ctf2.dasctf.com，控制题目怎么排队、怎么提交、什么时候自动开跑。这里的设置只影响 CTF 解题。"
       >
-      {/* ── 提交策略 ── */}
-      <div className="flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-ink">提交策略</span>
+        {/* ── 提交策略 ── */}
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-ink">提交策略</span>
 
-        <div role="radiogroup" aria-label="提交策略" className="flex flex-col gap-1.5">
-          {(Object.keys(SUBMIT_MODE_LABEL) as KernelSubmitMode[]).map((mode) => {
-            const active = draft.submitMode === mode
-            const Icon = mode === 'safe' ? ShieldCheck : ShieldAlert
-            return (
-              <button
-                key={mode}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setDraft({ ...draft, submitMode: mode })}
-                className={cn(
-                  'flex items-start gap-2 rounded-sm border px-2.5 py-2 text-left',
-                  'transition-ui duration-fast',
-                  active ? 'border-accent/60 bg-accent/10' : 'border-line hover:border-line-strong',
-                )}
-              >
-                <Icon
-                  size={13}
-                  strokeWidth={1.75}
+          <div role="radiogroup" aria-label="提交策略" className="flex flex-col gap-1.5">
+            {(Object.keys(SUBMIT_MODE_LABEL) as KernelSubmitMode[]).map((mode) => {
+              const active = draft.submitMode === mode
+              const Icon = mode === 'safe' ? ShieldCheck : ShieldAlert
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={active}
+                  onClick={() => setDraft({ ...draft, submitMode: mode })}
                   className={cn(
-                    'mt-0.5 shrink-0',
+                    'flex items-start gap-2 rounded-sm border px-2.5 py-2 text-left',
+                    'transition-ui duration-fast',
                     active
-                      ? 'text-accent-strong'
-                      : mode === 'auto'
-                        ? 'text-signal-warn'
-                        : 'text-ink-ghost',
+                      ? 'border-accent/60 bg-accent/10'
+                      : 'border-line hover:border-line-strong',
                   )}
-                  aria-hidden="true"
-                />
-                <span className="flex min-w-0 flex-col gap-0.5">
-                  <span className={cn('text-xs', active ? 'text-ink' : 'text-ink-muted')}>
-                    {SUBMIT_MODE_LABEL[mode]}
+                >
+                  <Icon
+                    size={13}
+                    strokeWidth={1.75}
+                    className={cn(
+                      'mt-0.5 shrink-0',
+                      active
+                        ? 'text-accent-strong'
+                        : mode === 'auto'
+                          ? 'text-signal-warn'
+                          : 'text-ink-ghost',
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span className="flex min-w-0 flex-col gap-0.5">
+                    <span className={cn('text-xs', active ? 'text-ink' : 'text-ink-muted')}>
+                      {SUBMIT_MODE_LABEL[mode]}
+                    </span>
+                    <span className="text-2xs text-ink-faint">{SUBMIT_MODE_HINT[mode]}</span>
                   </span>
-                  <span className="text-2xs text-ink-faint">{SUBMIT_MODE_HINT[mode]}</span>
-                </span>
-              </button>
-            )
-          })}
-        </div>
+                </button>
+              )
+            })}
+          </div>
 
-        {/*
+          {/*
           ★ 选到 auto 时**必须**出现这段警告。
           它不是"再确认一次"，而是把代价写成具体的话：
           自动提交消耗的是**不可再生**的答题机会。
         */}
-        {draft.submitMode === 'auto' && (
-          <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
-            <ShieldAlert
-              size={12}
-              strokeWidth={2}
-              className="mt-0.5 shrink-0 text-signal-warn"
-              aria-hidden="true"
+          {draft.submitMode === 'auto' && (
+            <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
+              <ShieldAlert
+                size={12}
+                strokeWidth={2}
+                className="mt-0.5 shrink-0 text-signal-warn"
+                aria-hidden="true"
+              />
+              <span className="text-2xs text-ink-muted">
+                已开启自动提交：解题产出候选答案后会
+                <strong className="font-medium text-ink">直接</strong>
+                提交给平台，不再等你确认。平台对错误提交有次数上限（不可再生），
+                所以猜错会实打实地消耗这道题的机会。仍受下面那条上限约束。
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* ── 每题错误提交上限 ── */}
+        <Field
+          label="每题错误提交次数上限"
+          htmlFor="ctf2-max-wrong"
+          help="超过这个次数后，这道题不会再提交任何 flag（自动模式同样受它约束）。默认 3 次。"
+          error={touched ? error : null}
+        >
+          <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
+            <input
+              id="ctf2-max-wrong"
+              type="number"
+              value={draft.maxWrongSubmissions}
+              min={MIN_WRONG_SUBMISSIONS}
+              max={MAX_WRONG_SUBMISSIONS_CEILING}
+              onChange={(e) => {
+                const parsed = Number(e.target.value)
+                // 输入框清空时 Number('') 是 0 —— 保留 0 交给校验，
+                // 因为用户确实输入了一个（非法的）值。与 SandboxPanel 同一处理。
+                setDraft({
+                  ...draft,
+                  maxWrongSubmissions: Number.isFinite(parsed) ? parsed : 0,
+                })
+              }}
+              aria-invalid={error && touched ? true : undefined}
+              className={cn(
+                'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
+                'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                error && touched ? 'border-signal-risk' : 'border-line hover:border-line-strong',
+              )}
             />
-            <span className="text-2xs text-ink-muted">
-              已开启自动提交：解题产出候选答案后会
-              <strong className="font-medium text-ink">直接</strong>
-              提交给平台，不再等你确认。平台对错误提交有次数上限（不可再生），
-              所以猜错会实打实地消耗这道题的机会。仍受下面那条上限约束。
-            </span>
-          </div>
-        )}
-      </div>
+            <span className="shrink-0 text-2xs text-ink-faint">次</span>
+          </span>
+        </Field>
 
-      {/* ── 每题错误提交上限 ── */}
-      <Field
-        label="每题错误提交次数上限"
-        htmlFor="ctf2-max-wrong"
-        help="超过这个次数后，这道题不会再提交任何 flag（自动模式同样受它约束）。默认 3 次。"
-        error={touched ? error : null}
-      >
-        <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
-          <input
-            id="ctf2-max-wrong"
-            type="number"
-            value={draft.maxWrongSubmissions}
-            min={MIN_WRONG_SUBMISSIONS}
-            max={MAX_WRONG_SUBMISSIONS_CEILING}
-            onChange={(e) => {
-              const parsed = Number(e.target.value)
-              // 输入框清空时 Number('') 是 0 —— 保留 0 交给校验，
-              // 因为用户确实输入了一个（非法的）值。与 SandboxPanel 同一处理。
-              setDraft({
-                ...draft,
-                maxWrongSubmissions: Number.isFinite(parsed) ? parsed : 0,
-              })
-            }}
-            aria-invalid={error && touched ? true : undefined}
-            className={cn(
-              'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
-              'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
-              error && touched ? 'border-signal-risk' : 'border-line hover:border-line-strong',
-            )}
-          />
-          <span className="shrink-0 text-2xs text-ink-faint">次</span>
-        </span>
-      </Field>
-
-      {/* ── 解题并发配额（v0.22）── */}
-      <Field
-        label="同时解题的题目数"
-        htmlFor="ctf2-concurrent-solves"
-        /*
+        {/* ── 解题并发配额（v0.22）── */}
+        <Field
+          label="同时解题的题目数"
+          htmlFor="ctf2-concurrent-solves"
+          /*
           ★ 这段说明必须写清"它和沙箱那页的并发是两个数"。
           在改之前两者**共用同一个值**，而那个共用本身就是一处 bug
           （两个调度器各自数自己的名额，实际跑出两倍）。
           不说明的话，用户会以为这里和那里应该填一样的数。
         */
-        help={
-          '超过这个数的题目会排队等待，不会被拒绝。' +
-          '它与「沙箱」页的扫描并发是**两个独立配额**，' +
-          '总并发是两者之和 —— 比赛时把这里调大，扫描那边不会跟着变大。'
-        }
-        error={touched ? concurrencyError : null}
-      >
-        <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
-          <input
-            id="ctf2-concurrent-solves"
-            type="number"
-            value={draft.maxConcurrentSolves}
-            min={MIN_CONCURRENT_SOLVES}
-            max={MAX_CONCURRENT_SOLVES}
-            onChange={(e) => {
-              const parsed = Number(e.target.value)
-              setDraft({
-                ...draft,
-                maxConcurrentSolves: Number.isFinite(parsed) ? parsed : 0,
-              })
-            }}
-            aria-invalid={concurrencyError && touched ? true : undefined}
-            className={cn(
-              'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
-              'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
-              concurrencyError && touched
-                ? 'border-signal-risk'
-                : 'border-line hover:border-line-strong',
-            )}
-          />
-          <span className="shrink-0 text-2xs text-ink-faint">道</span>
-        </span>
-      </Field>
+          help={
+            '超过这个数的题目会排队等待，不会被拒绝。' +
+            '它与「沙箱」页的扫描并发是两个独立配额，' +
+            '总并发是两者之和 —— 比赛时把这里调大，扫描那边不会跟着变大。'
+          }
+          error={touched ? concurrencyError : null}
+        >
+          <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
+            <input
+              id="ctf2-concurrent-solves"
+              type="number"
+              value={draft.maxConcurrentSolves}
+              min={MIN_CONCURRENT_SOLVES}
+              max={MAX_CONCURRENT_SOLVES}
+              onChange={(e) => {
+                const parsed = Number(e.target.value)
+                setDraft({
+                  ...draft,
+                  maxConcurrentSolves: Number.isFinite(parsed) ? parsed : 0,
+                })
+              }}
+              aria-invalid={concurrencyError && touched ? true : undefined}
+              className={cn(
+                'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
+                'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                concurrencyError && touched
+                  ? 'border-signal-risk'
+                  : 'border-line hover:border-line-strong',
+              )}
+            />
+            <span className="shrink-0 text-2xs text-ink-faint">道</span>
+          </span>
+        </Field>
 
-      {/* ── 认领轮询间隔（v0.24）── */}
-      <Field
-        label="认领轮询间隔"
-        htmlFor="ctf2-solve-poll"
-        /*
+        {/* ── 认领轮询间隔（v0.24）── */}
+        <Field
+          label="认领轮询间隔"
+          htmlFor="ctf2-solve-poll"
+          /*
           ★ 这段说明必须点破"它和沙箱那页的轮询不是同一个数"。
           在改之前两者**共用** `scan_poll_seconds`，于是"把扫描轮询调大"
           会顺带把 CTF2 的认领延迟一起调大 —— 而界面上没有任何地方提示
           这两件事连着（与 v0.22 的配额超卖是同一类病）。
         */
-        help={
-          '一道题解完之后，调度器最多隔这么久就会把下一道从队列里领走。' +
-          '它与「沙箱」页的扫描轮询是**两个独立的旋钮** —— ' +
-          '调那边不会影响这里。比赛时保持 1 秒即可。'
-        }
-        error={touched ? pollError : null}
-      >
-        <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
-          <input
-            id="ctf2-solve-poll"
-            type="number"
-            step={0.5}
-            value={draft.solvePollSeconds}
-            min={MIN_SOLVE_POLL_SECONDS}
-            max={MAX_SOLVE_POLL_SECONDS}
-            onChange={(e) => {
-              const parsed = Number(e.target.value)
-              setDraft({
-                ...draft,
-                solvePollSeconds: Number.isFinite(parsed) ? parsed : 0,
-              })
-            }}
-            aria-invalid={pollError && touched ? true : undefined}
-            className={cn(
-              'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
-              'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
-              pollError && touched ? 'border-signal-risk' : 'border-line hover:border-line-strong',
-            )}
-          />
-          <span className="shrink-0 text-2xs text-ink-faint">秒</span>
-        </span>
-      </Field>
+          help={
+            '一道题解完之后，调度器最多隔这么久就会把下一道从队列里领走。' +
+            '它是解题自己的轮询，和扫描那边的轮询是两个独立的值 —— ' +
+            '这里只影响解题。比赛时保持 1 秒即可。'
+          }
+          error={touched ? pollError : null}
+        >
+          <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
+            <input
+              id="ctf2-solve-poll"
+              type="number"
+              step={0.5}
+              value={draft.solvePollSeconds}
+              min={MIN_SOLVE_POLL_SECONDS}
+              max={MAX_SOLVE_POLL_SECONDS}
+              onChange={(e) => {
+                const parsed = Number(e.target.value)
+                setDraft({
+                  ...draft,
+                  solvePollSeconds: Number.isFinite(parsed) ? parsed : 0,
+                })
+              }}
+              aria-invalid={pollError && touched ? true : undefined}
+              className={cn(
+                'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
+                'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                pollError && touched
+                  ? 'border-signal-risk'
+                  : 'border-line hover:border-line-strong',
+              )}
+            />
+            <span className="shrink-0 text-2xs text-ink-faint">秒</span>
+          </span>
+        </Field>
 
-      {/* ── 自动同步（v0.24：抢首杀）── */}
-      <Field
-        label="自动同步间隔"
-        htmlFor="ctf2-auto-sync"
-        /*
+        {/* ── 自动同步（v0.24：抢首杀）── */}
+        <Field
+          label="自动同步间隔"
+          htmlFor="ctf2-auto-sync"
+          /*
           ★ 这个值默认 30 秒而不是 1 秒，理由必须写在这里：
           请求预算和解题**共享同一个 PAT**，而"平台不会更快地出新题"。
           写清代价，用户才好自己决定要不要更激进。
         */
-        help={
-          '后台每隔这么久做一次**增量**同步（只拉新题，已在库的跳过），' +
-          '所以新题最晚隔这么久就会自动出现。填 0 表示关闭。' +
-          '不建议低于 15 秒：请求额度和解题共用同一个账号，' +
-          '打太密会挤到提交那一步去。'
-        }
-        error={touched ? autoSyncError : null}
-      >
-        <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
-          <input
-            id="ctf2-auto-sync"
-            type="number"
-            step={5}
-            value={draft.autoSyncSeconds}
-            min={MIN_AUTO_SYNC_SECONDS}
-            max={MAX_AUTO_SYNC_SECONDS}
-            onChange={(e) => {
-              const parsed = Number(e.target.value)
-              setDraft({
-                ...draft,
-                autoSyncSeconds: Number.isFinite(parsed) ? parsed : 0,
-              })
-            }}
-            aria-invalid={autoSyncError && touched ? true : undefined}
-            className={cn(
-              'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
-              'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
-              autoSyncError && touched
-                ? 'border-signal-risk'
-                : 'border-line hover:border-line-strong',
-            )}
+          help={
+            '后台每隔这么久做一次**增量**同步（只拉新题，已在库的跳过），' +
+            '所以新题最晚隔这么久就会自动出现。填 0 表示关闭。' +
+            '不建议低于 15 秒：请求额度和解题共用同一个账号，' +
+            '打太密会挤到提交那一步去。'
+          }
+          error={touched ? autoSyncError : null}
+        >
+          <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
+            <input
+              id="ctf2-auto-sync"
+              type="number"
+              step={5}
+              value={draft.autoSyncSeconds}
+              min={MIN_AUTO_SYNC_SECONDS}
+              max={MAX_AUTO_SYNC_SECONDS}
+              onChange={(e) => {
+                const parsed = Number(e.target.value)
+                setDraft({
+                  ...draft,
+                  autoSyncSeconds: Number.isFinite(parsed) ? parsed : 0,
+                })
+              }}
+              aria-invalid={autoSyncError && touched ? true : undefined}
+              className={cn(
+                'h-9 w-full min-w-0 rounded-sm border bg-surface-sunken px-2.5 text-sm tabular-nums text-ink',
+                'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
+                autoSyncError && touched
+                  ? 'border-signal-risk'
+                  : 'border-line hover:border-line-strong',
+              )}
+            />
+            <span className="shrink-0 text-2xs text-ink-faint">秒</span>
+          </span>
+        </Field>
+
+        {/* ── 自动作业的两个开关（v0.24）── */}
+        <div className="space-y-2">
+          <Toggle
+            id="ctf2-auto-priority"
+            label="新题自动优先"
+            hint={
+              '刚同步进来的题自动排到队首，新题之间按分值高的先做。' +
+              '只碰新题 —— 你手动调过的优先级不会被覆盖。' +
+              '只在「自动同步」跑的时候生效；间隔为 0 或手动点「同步题目」时不会触发。'
+            }
+            checked={draft.autoPriorityNew}
+            onChange={(value) => setDraft({ ...draft, autoPriorityNew: value })}
           />
-          <span className="shrink-0 text-2xs text-ink-faint">秒</span>
-        </span>
-      </Field>
+          <Toggle
+            id="ctf2-auto-start"
+            label="新题自动开始解题"
+            hint={
+              '发现新题就直接开跑，用来抢「前三名额外加分」的窗口。' +
+              '它会占用解题并发名额和模型额度，所以默认关闭 —— ' +
+              '开之前先确认并发上限和模型额度够用。' +
+              '同样只在「自动同步」跑的时候生效。'
+            }
+            checked={draft.autoStartNew}
+            onChange={(value) => setDraft({ ...draft, autoStartNew: value })}
+          />
+        </div>
 
-      {/* ── 自动作业的两个开关（v0.24）── */}
-      <div className="space-y-2">
-        <Toggle
-          id="ctf2-auto-priority"
-          label="新题自动优先"
-          hint={
-            '刚同步进来的题自动排到队首，新题之间按分值高的先做。' +
-            '只碰新题 —— 你手动调过的优先级不会被覆盖。'
-          }
-          checked={draft.autoPriorityNew}
-          onChange={(value) => setDraft({ ...draft, autoPriorityNew: value })}
-        />
-        <Toggle
-          id="ctf2-auto-start"
-          label="新题自动开始解题"
-          hint={
-            '发现新题就直接开跑，用来抢「前三名额外加分」的窗口。' +
-            '它会占用解题并发名额和模型额度，所以默认关闭 —— ' +
-            '开之前先确认并发上限和模型额度够用。'
-          }
-          checked={draft.autoStartNew}
-          onChange={(value) => setDraft({ ...draft, autoStartNew: value })}
-        />
-      </div>
-
-      {/* ── 两个场景包开关（v0.40 / v0.41）── */}
-      {/*
+        {/* ── 两个场景包开关（v0.40 / v0.41）── */}
+        {/*
         ★ 单独一组而不是并进上面那两个自动作业开关。
         那两个管的是"什么时候开跑"，这两个管的是"跑的时候按哪套纪律判定" ——
         混在一起会让人以为它们也是"省事"类的开关，而它们恰好相反：
@@ -590,41 +602,40 @@ export function KernelPanel() {
         另一族开着时通过校验，而对应的提示词块却不注入 —— 分类合法、
         纪律没注入，是静默失效。
       */}
-      <div className="space-y-2">
-        <Toggle
-          id="ctf2-agentsec"
-          label="启用智能体安全评测场景包"
-          hint={
-            '打开后，分类属于「提示词注入 / 越权工具调用 / 敏感信息泄露 / ' +
-            '多智能体协作」这四类的题，会额外拿到一段评测纪律：它的任务是' +
-            '判定某个安全考察点成不成立，并按「已命中 / 待跟进 / 已排除」' +
-            '三级给结论。' +
-            '★ 那四类题里**没有 flag** —— 打开它是换一套判定方式，' +
-            '不是多几种题型。其余五类题（pwn/web/reverse/crypto/misc）' +
-            '拿到的提示词与结论格式**完全不受影响**，逐字节相同。'
-          }
-          checked={draft.enableAgentsecScenarios}
-          onChange={(value) => setDraft({ ...draft, enableAgentsecScenarios: value })}
-        />
-      </div>
+        <div className="space-y-2">
+          <Toggle
+            id="ctf2-agentsec"
+            label="启用智能体安全评测场景包"
+            hint={
+              '打开后，分类属于「提示词注入 / 越权工具调用 / 敏感信息泄露 / ' +
+              '多智能体协作」这四类的题，会额外拿到一段评测纪律：它的任务是' +
+              '判定某个安全考察点成不成立，并按「已命中 / 待跟进 / 已排除」' +
+              '三级给结论。' +
+              '★ 那四类题里**没有 flag** —— 打开它是换一套判定方式，' +
+              '不是多几种题型。其余五类题（pwn/web/reverse/crypto/misc）' +
+              '拿到的提示词与结论格式**完全不受影响**，逐字节相同。'
+            }
+            checked={draft.enableAgentsecScenarios}
+            onChange={(value) => setDraft({ ...draft, enableAgentsecScenarios: value })}
+          />
+        </div>
 
-      <SaveBar
-        state={saveState}
-        dirty={dirty}
-        onSave={() => {
-          void handleSave()
-        }}
-        onReset={handleReset}
-        note={
-          <span className="text-2xs text-ink-muted">
-            保存后**立刻生效**（解题与调度每次都读生效值），不需要重启服务。
-            从「自动提交」切回「先确认再提交」也是即时的 —— 正在跑的那一轮
-            会在下一个提交决策点读到新值。
-            ★ 这条保存与「内核通用能力」那块是**同一次保存** —— 两块共用一个草稿，
-            在这里点保存等于把两块一起存下。
-          </span>
-        }
-      />
+        <SaveBar
+          state={saveState}
+          dirty={dirty}
+          onSave={() => {
+            void handleSave()
+          }}
+          onReset={handleReset}
+          note={
+            <span className="text-2xs text-ink-muted">
+              保存后立刻生效（解题与调度每次都读生效值），不需要重启服务。
+              从「自动提交」切回「先确认再提交」也是即时的 —— 正在跑的那一轮
+              会在下一个提交决策点读到新值。它与「内核通用能力」是同一次保存：
+              两块共用一个草稿，在这里点保存等于把两块一起存下。
+            </span>
+          }
+        />
       </SettingsPanel>
 
       <SettingsPanel
@@ -637,6 +648,14 @@ export function KernelPanel() {
           id="ctf2-default-profile"
           value={draft.defaultSandboxProfile}
           onChange={(next) => setDraft({ ...draft, defaultSandboxProfile: next })}
+          /*
+            ★ 这里的效力与「CTF」页那个选择器**不同**，必须分开说。
+
+            每道题真正的镜像在同步时按分类写死在题目行上（`sandbox_profile`），
+            解题读的是那一列；本设置只决定「CTF」页那个选择器的默认值。
+            照搬"只影响这次解题"会把这句说反。
+          */
+          hint="每道题的镜像在同步时按分类自动写定；这一项只决定「CTF」页那个选择器的默认值。"
         />
 
         {/* ── 回合预算（v0.26）── */}
@@ -819,9 +838,8 @@ export function KernelPanel() {
           onReset={handleReset}
           note={
             <span className="text-2xs text-ink-muted">
-              保存后**立刻生效**，不需要重启服务。
-              ★ 这条保存与「CTF 解题」那块是**同一次保存** —— 两块共用一个草稿，
-              在这里点保存等于把两块一起存下。
+              保存后立刻生效，不需要重启服务。它与「CTF 解题」是同一次保存：
+              两块共用一个草稿，在这里点保存等于把两块一起存下。
             </span>
           }
         />

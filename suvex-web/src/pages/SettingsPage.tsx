@@ -10,6 +10,7 @@ import UsersPanel from '@/components/settings/UsersPanel'
 import ErrorState from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { isAdmin, useAuth } from '@/data/auth-store'
+import { cn } from '@/lib/cn'
 import { loadSettings, useSettings } from '@/data/settings-store'
 import { loadUsers } from '@/data/users-store'
 import { Database, Lock, ShieldCheck } from 'lucide-react'
@@ -90,16 +91,31 @@ export function SettingsPage() {
           下面那个三分支渲染里，只有它走"渲染面板"那一支。
           传早了（面板还没进 DOM）观察器会空转，传晚了高亮开始得不及时。
         */}
-        <SectionNav sectionsReady={status === 'ready'} />
+        {/*
+          ★ v1.78 版面：两栏（左侧分区栏 + 右侧内容）。
 
-        <div className="mt-panel flex flex-col gap-bay">
-          {status === 'loading' ? (
-            /* 骨架而不是转圈：本机后端通常几十毫秒就回，转圈会一闪而过 */
-            <SkeletonRows rows={3} rowClassName="h-24" />
-          ) : status === 'error' ? (
-            <ErrorState
-              title="设置加载失败"
-              /*
+          原来是一条横向标签条压在内容上方。九个分区挤成一条之后：
+            · 每项只能写两三个字，"内核通用能力"被迫缩成"内核通用能力"；
+            · 它还要和顶部的状态条抢横向空间，窄屏直接横向滚动；
+            · 而设置页真正需要的"我现在在哪一节、还剩哪几节"反而看不出来。
+
+          左栏是竖向的，能容下完整名字，还能标出当前节；内容列因此
+          多出约 40px 的垂直空间（标签条那一条没了）。
+
+          ⚠️ 窄屏（<lg）仍然用横向条：竖栏会占掉三分之一宽度，
+             而这一页在小屏上本来就是"一节一节往下翻"的读法。
+        */}
+        <div className="mt-panel grid gap-bay lg:grid-cols-[168px_minmax(0,1fr)] lg:gap-bay">
+          <SectionNav sectionsReady={status === 'ready'} />
+
+          <div className="flex min-w-0 flex-col gap-bay">
+            {status === 'loading' ? (
+              /* 骨架而不是转圈：本机后端通常几十毫秒就回，转圈会一闪而过 */
+              <SkeletonRows rows={3} rowClassName="h-24" />
+            ) : status === 'error' ? (
+              <ErrorState
+                title="设置加载失败"
+                /*
                 ★ 直接传 store 里的 `ApiError`，**不要再包一层**。
                   早先这里写的是 `new ApiError('SETTINGS_LOAD_FAILED', error, 0)`
                   —— 那个 `0` 会让 `ErrorState` 把**所有**失败都判成网络错误
@@ -107,27 +123,27 @@ export function SettingsPage() {
                   用户看到的是"连接不上后端服务（http://…）"，
                   被引向"去启动服务"这条完全错误的路。
               */
-              error={error}
-              onRetry={() => void loadSettings()}
-            />
-          ) : (
-            <>
-              <ProviderPanel accounts={accounts} />
-              <SandboxPanel config={sandbox} />
-              {/*
+                error={error}
+                onRetry={() => void loadSettings()}
+              />
+            ) : (
+              <>
+                <ProviderPanel accounts={accounts} />
+                <SandboxPanel config={sandbox} />
+                {/*
                 CTF2 面板**自己读自己的 store**（`data/kernel.ts`），
                 与 `ScanRetentionPanel` 同一个做法 —— 它有独立的端点、
                 独立的加载状态与独立的失败原因，塞进上面那个聚合
                 store 会让它的失败与别的混在一起，面板也就无法知道
                 自己为什么是空的。
               */}
-              <KernelPanel />
-              <PlatformPanel />
-              <NotifyPanel rule={notices.rule} channels={notices.channels} />
-              {/* 保留规则：属于「系统行为」这一类，与沙箱/通知同类 */}
-              <ScanRetentionPanel />
-              <AccountPanel tokens={tokens} />
-              {/*
+                <KernelPanel />
+                <PlatformPanel />
+                <NotifyPanel rule={notices.rule} channels={notices.channels} />
+                {/* 保留规则：属于「系统行为」这一类，与沙箱/通知同类 */}
+                <ScanRetentionPanel />
+                <AccountPanel tokens={tokens} />
+                {/*
                 ★ 用户管理**只对管理员显示**（v0.24）。
 
                 与上面那些面板不同，它读的是**自己的 store**
@@ -140,9 +156,10 @@ export function SettingsPage() {
                 前端藏起来是为了避免"看到却点不动" —— 那不是安全边界，
                 而且不能当安全边界用（改个 DOM 就绕过去了）。
               */}
-              {isAdmin(user) && <UsersPanel />}
-            </>
-          )}
+                {isAdmin(user) && <UsersPanel />}
+              </>
+            )}
+          </div>
         </div>
 
         <DataBoundaryNote />
@@ -168,53 +185,41 @@ function TrustNote() {
   return (
     <section
       aria-label="凭据处理方式"
-      className="mb-panel flex flex-wrap items-start gap-x-panel gap-y-2 rounded-md border border-line bg-surface p-panel"
+      className="mb-panel flex items-start gap-3 rounded-md border border-line bg-surface px-4 py-3"
     >
-      <span className="bg-signal-ok/12 flex h-8 w-8 shrink-0 items-center justify-center rounded-pill text-signal-ok">
-        <ShieldCheck size={15} strokeWidth={1.75} aria-hidden="true" />
+      <span className="bg-signal-ok/12 flex h-7 w-7 shrink-0 items-center justify-center rounded-pill text-signal-ok">
+        <ShieldCheck size={14} strokeWidth={1.75} aria-hidden="true" />
       </span>
 
       <div className="flex min-w-0 flex-1 flex-col gap-1">
-        <h2 className="text-sm font-medium text-ink">凭据在这个界面里的处理方式</h2>
-        <ul className="flex flex-col gap-0.5 text-2xs text-ink-muted">
-          <li className="flex items-start gap-1.5">
-            <span
-              aria-hidden="true"
-              className="mt-1.5 h-1 w-1 shrink-0 rounded-pill bg-ink-ghost"
-            />
-            <span>
-              已保存的密钥<span className="text-ink">不会回填</span>
-              到输入框，界面任何位置都不会完整显示它。
-            </span>
-          </li>
-          <li className="flex items-start gap-1.5">
-            <span
-              aria-hidden="true"
-              className="mt-1.5 h-1 w-1 shrink-0 rounded-pill bg-ink-ghost"
-            />
-            <span>
-              密钥输入时即为遮蔽状态。填入内容后点眼睛图标可查看明文，明文会在
-              <span className="text-ink">20 秒后自动隐藏</span>，点到别处也会立即隐藏。
-            </span>
-          </li>
-          <li className="flex items-start gap-1.5">
-            <span
-              aria-hidden="true"
-              className="mt-1.5 h-1 w-1 shrink-0 rounded-pill bg-ink-ghost"
-            />
-            <span>
-              复制仅在明文状态下可用，且剪贴板会在
-              <span className="text-ink">2 秒后清空</span>。
-            </span>
-          </li>
-          <li className="flex items-start gap-1.5">
-            <span
-              aria-hidden="true"
-              className="mt-1.5 h-1 w-1 shrink-0 rounded-pill bg-ink-ghost"
-            />
-            <span>密钥与令牌不进入扫描记录、报告与通知内容。</span>
-          </li>
-        </ul>
+        {/*
+          ★ v1.78：四条要点压成一行，细节收进 <details>。
+
+          原来这里是四行项目符号，占掉首屏约 110px —— 而它回答的是
+          "我把 token 粘进来安全吗"这个**一次性**问题。第一次看完之后，
+          每次进设置页都要再滚过它一遍。压成一句结论 + 一个"细节"，
+          答案还在，代价从 110px 降到 44px。
+        */}
+        <p className="text-xs text-ink">
+          凭据只提交给服务端<span className="text-ink-muted">：界面不回显、不进报告、不写日志</span>
+        </p>
+        <p className="text-2xs text-ink-faint">
+          保存后输入框始终为空 · 明文只在你按住时显示，20 秒后自动隐藏 · 剪贴板 2 秒后清空
+        </p>
+
+        <details className="group mt-0.5">
+          <summary className="w-fit cursor-pointer list-none text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline">
+            这些承诺在这里怎么兑现
+          </summary>
+          <ul className="mt-1.5 flex flex-col gap-1 text-2xs text-ink-muted">
+            <li>已保存的密钥不会回填到输入框，界面任何位置都不会完整显示它。</li>
+            <li>
+              密钥输入时即为遮蔽状态；点眼睛图标可看明文，明文 20 秒后自动隐藏，点到别处立即隐藏。
+            </li>
+            <li>复制仅在明文状态下可用，且剪贴板会在 2 秒后清空。</li>
+            <li>密钥与令牌不进入扫描记录、报告与通知内容。</li>
+          </ul>
+        </details>
       </div>
     </section>
   )
@@ -245,10 +250,7 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
     ⚠️ 用 `useMemo` 而不是每次渲染 `.filter()`：下面那个 effect 的
        依赖里有 `sections`，每帧新建数组会让它反复重跑观察器。
   */
-  const sections = useMemo(
-    () => SECTIONS.filter((s) => s.id !== 'users' || isAdmin(user)),
-    [user],
-  )
+  const sections = useMemo(() => SECTIONS.filter((s) => s.id !== 'users' || isAdmin(user)), [user])
 
   useEffect(() => {
     /*
@@ -309,9 +311,14 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
   return (
     <nav
       aria-label="设置分区"
-      className="sticky top-[52px] z-10 -mx-gutter border-y border-line bg-canvas/85 px-gutter backdrop-blur-sm"
+      className={cn(
+        // 窄屏：顶部横向条（与改动前一致）
+        'sticky top-[52px] z-10 -mx-gutter border-y border-line bg-canvas/85 px-gutter backdrop-blur-sm',
+        // 宽屏：左侧竖栏，跟着滚动吸顶，只占 168px
+        'lg:sticky lg:top-[64px] lg:z-0 lg:mx-0 lg:self-start lg:border-0 lg:bg-transparent lg:px-0 lg:backdrop-blur-none',
+      )}
     >
-      <ul className="flex gap-1 overflow-x-auto py-1.5">
+      <ul className="flex gap-1 overflow-x-auto py-1.5 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:py-0">
         {sections.map((section) => {
           const isActive = active === section.id
           return (
@@ -319,11 +326,14 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
               <a
                 href={`#${section.id}`}
                 aria-current={isActive ? 'true' : undefined}
-                className={
+                className={cn(
+                  'flex h-7 shrink-0 items-center rounded-sm px-2.5 text-2xs transition-ui duration-fast',
+                  // 宽屏：左侧 2px 竖条标记当前项（比整块底色安静，也不抢内容）
+                  'lg:h-8 lg:rounded-none lg:border-l-2 lg:px-2.5',
                   isActive
-                    ? 'inline-flex h-7 items-center rounded-sm bg-surface-raised px-2.5 text-2xs text-ink'
-                    : 'inline-flex h-7 items-center rounded-sm px-2.5 text-2xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised/60 hover:text-ink'
-                }
+                    ? 'bg-surface-raised text-ink lg:border-accent lg:bg-transparent'
+                    : 'text-ink-muted hover:bg-surface-raised/60 hover:text-ink lg:border-transparent lg:hover:bg-transparent lg:hover:text-ink',
+                )}
               >
                 {section.label}
               </a>

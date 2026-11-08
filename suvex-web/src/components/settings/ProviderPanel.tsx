@@ -4,6 +4,7 @@ import RiskConfirm from './RiskConfirm'
 import SecretField from './SecretField'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
 import { isInsecureHttp } from '@/data/settings'
+import { showToast } from '@/data/toast-store'
 import {
   PROVIDER_PRESETS,
   validateApiKey,
@@ -582,6 +583,16 @@ function AccountEditor({
       return
     }
 
+    /*
+      ★★ v1.78：验证必须用**服务端那一条**的 id。
+
+      新建时前端只有一个临时 id，拿它去 `POST /providers/{id}/verify`
+      必然 404 —— 而那个 404 看起来和"key 不对"没什么区别，
+      用户会以为自己填错了。更糟的是下一次保存查不到已有条目，
+      会再 POST 一条，于是列表里出现两份同样的配置。
+    */
+    const target = saved.status === 'ok' && saved.account ? saved.account : payload
+
     // 同 handleSave：草稿里的 key 清回空，避免明文回填进输入框
     setDraft({ ...payload, apiKey: '' })
     setKeyEdited(false)
@@ -589,7 +600,27 @@ function AccountEditor({
     setVerifyResult({ kind: 'saving' })
 
     try {
-      const result = await verifyProvider(payload)
+      const result = await verifyProvider(target)
+
+      /*
+        新建的那一条：验证完就把编辑器收起来。
+
+        它此刻已经在列表里（保存成功），而编辑器绑的还是临时 id ——
+        继续留着它，下一次点保存/验证又会走一遍"查不到 → 新建"。
+        结果用 toast 说，因为它比编辑器活得久。
+      */
+      if (isNew) {
+        onDone()
+        showToast({
+          message:
+            result.status === 'ok'
+              ? '已保存，凭据验证通过。'
+              : `已保存，但凭据没通过验证：${result.error}`,
+          tone: result.status === 'ok' ? undefined : 'risk',
+        })
+        return
+      }
+
       setVerifyResult(
         result.status === 'ok'
           ? { kind: 'saved', at: result.at }
