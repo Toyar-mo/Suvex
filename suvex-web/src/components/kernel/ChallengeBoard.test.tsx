@@ -296,6 +296,90 @@ describe('ChallengeBoard：批量开始 / 停止（第 3 步）', () => {
   })
 })
 
+describe('ChallengeBoard：键盘 j/k/Enter/s（第 4 步）', () => {
+  const rows = [
+    makeChallenge({ id: 'a', title: '甲' }),
+    makeChallenge({ id: 'b', title: '乙', status: 'solved', confirmedFlag: 'flag{x}' }),
+    makeChallenge({ id: 'c', title: '丙' }),
+  ]
+
+  it('j 移到第一行，s 开始它', () => {
+    const onSolve = vi.fn()
+    renderBoard(rows, { onSolve })
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 's' })
+
+    expect(onSolve).toHaveBeenCalledWith(rows[0], false)
+  })
+
+  it('j j 移到第二行；已解出的题按 s 不开始（不给后端送 409）', () => {
+    const onSolve = vi.fn()
+    renderBoard(rows, { onSolve })
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 's' })
+
+    expect(onSolve).not.toHaveBeenCalled()
+  })
+
+  it('k 回到上一行', () => {
+    const onOpen = vi.fn()
+    renderBoard(rows, { onOpen })
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'k' })
+    fireEvent.keyDown(document.body, { key: 'Enter' })
+
+    expect(onOpen).toHaveBeenCalledWith(rows[0])
+  })
+
+  it('没有光标时 Enter 不会打开任何东西', () => {
+    const onOpen = vi.fn()
+    renderBoard(rows, { onOpen })
+
+    fireEvent.keyDown(document.body, { key: 'Enter' })
+
+    expect(onOpen).not.toHaveBeenCalled()
+  })
+
+  it('j 不会越界（底部停住）', () => {
+    const onOpen = vi.fn()
+    renderBoard(rows, { onOpen })
+
+    for (let i = 0; i < 10; i += 1) fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 'Enter' })
+
+    expect(onOpen).toHaveBeenCalledWith(rows[2])
+  })
+
+  it('★ 在输入框里按 s 是打字，不是开始解题', () => {
+    const onSolve = vi.fn()
+    renderBoard(rows, { onSolve })
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    // 模拟焦点在搜索框上（组件外的那一个，但判据是事件目标）
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    fireEvent.keyDown(input, { key: 's' })
+    input.remove()
+
+    expect(onSolve).not.toHaveBeenCalled()
+  })
+
+  it('带修饰键的 s 不算（Ctrl+S 是浏览器保存）', () => {
+    const onSolve = vi.fn()
+    renderBoard(rows, { onSolve })
+
+    fireEvent.keyDown(document.body, { key: 'j' })
+    fireEvent.keyDown(document.body, { key: 's', ctrlKey: true })
+
+    expect(onSolve).not.toHaveBeenCalled()
+  })
+})
+
 describe('ChallengeBoard：展开行的入口判据（与旧卡片一致）', () => {
   it('★★ 未解出但跑过一轮的题**有**「题解」', () => {
     renderBoard([makeChallenge({ status: 'unsolved', scanId: 'scan_1' })])

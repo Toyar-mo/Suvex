@@ -28,7 +28,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react'
-import { Fragment, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 /**
@@ -190,6 +190,90 @@ export function ChallengeBoard({
     setSelected(new Set())
   }
 
+  /**
+   * 键盘光标（第 4 步）：j/k 移动、Enter 打开会话、s 开始。
+   *
+   * ## 为什么是这三个键
+   *
+   * 比赛现场的手是放在键盘上的 —— 鼠标要移到某一行、点开、再移回来看
+   * 下一行，一轮下来眼睛已经跟丢了。`j/k` 是 vi 系的老习惯（也是
+   * Gmail/GitHub 列表的默认），`Enter` 是"打开"，`s` 是 start。
+   *
+   * ## 为什么挂在 window 上而不是表格上
+   *
+   * 表格本身不可聚焦（`<table>` 不能 tab 进去），挂 `onKeyDown` 到它上面
+   * 永远收不到事件。代价是要自己挡掉"正在输入框里打字"的那种情况 ——
+   * 否则用户按 s 搜索框里的字就变成了"开始解题"。
+   */
+  const [cursor, setCursor] = useState<number | null>(null)
+  const tableRef = useRef<HTMLTableElement | null>(null)
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      // 带修饰键的一律不管：那是浏览器/系统的快捷键（Ctrl+S 保存页面之类）
+      if (event.defaultPrevented || event.metaKey || event.ctrlKey || event.altKey) return
+
+      // ★ 正在输入框里打字时，j/k/s 是**文字**，不是命令。
+      //   搜索框就在这张表上方，用户十有八九会先在那里敲字。
+      const target = event.target as HTMLElement | null
+      const tag = target?.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target?.isContentEditable) {
+        return
+      }
+      /*
+        ★ 焦点在按钮上时，Enter/空格是**那个按钮自己的激活键**。
+          不挡的话，焦点停在「开始」上按回车会既开始解题、又打开会话 ——
+          两个动作同时发生，用户看到的是一个莫名其妙的跳转。
+      */
+      if (tag === 'BUTTON' && event.key !== 'j' && event.key !== 'k') return
+
+      // 有弹窗（确认提交、题解…）时让位：那些界面对键有自己的用法
+      if (document.querySelector('[role="dialog"]')) return
+
+      if (challenges.length === 0) return
+
+      if (event.key === 'j' || event.key === 'k') {
+        event.preventDefault()
+        setCursor((prev) => {
+          const base = prev ?? -1
+          const next = event.key === 'j' ? base + 1 : base - 1
+          return Math.max(0, Math.min(challenges.length - 1, next))
+        })
+        return
+      }
+
+      if (cursor === null) return
+      const current = challenges[Math.min(cursor, challenges.length - 1)]
+      if (!current) return
+
+      if (event.key === 'Enter' && onOpen) {
+        event.preventDefault()
+        onOpen(current)
+        return
+      }
+      if (event.key === 's' && canSolve(current) && !busy) {
+        event.preventDefault()
+        onSolve(current, false)
+      }
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [challenges, cursor, onOpen, onSolve, busy])
+
+  /*
+    光标移动后把那一行带进视野（`nearest` = 已经在视野里就不动）。
+    不用 `smooth`：与 App 的 ScrollToTop 同一条理由 —— 合成器没帧时
+    平滑滚动会静默 no-op，而"看不到光标在哪"正是这个功能要解决的问题。
+  */
+  useEffect(() => {
+    if (cursor === null) return
+    const id = challenges[cursor]?.id
+    if (!id) return
+    const row = tableRef.current?.querySelector<HTMLElement>(`tr[data-challenge-id="${id}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  }, [cursor, challenges])
+
   /*
     窄屏才允许横向滚动。⚠️ 不能让 `overflow-x-auto` 一直挂着：
     它会建出一个**滚动容器**，而 `position: sticky` 的表头只在这个
@@ -237,6 +321,19 @@ export function ChallengeBoard({
 
           <span className="flex-1" />
 
+          {/*
+            键盘提示。只在宽屏显示：窄屏上这条会被挤成两行，而窄屏用户
+            本来也没有物理键盘。`<kbd>` 的样式刻意低调 —— 它是一个"原来
+            还能这样"的提示，不是需要被读的主信息。
+          */}
+          <span className="hidden items-center gap-1 text-ink-faint lg:flex">
+            <kbd className="rounded-xs border border-line px-1 font-mono">j</kbd>
+            <kbd className="rounded-xs border border-line px-1 font-mono">k</kbd>
+            移动 ·<kbd className="rounded-xs border border-line px-1 font-mono">↵</kbd>
+            查看 ·<kbd className="rounded-xs border border-line px-1 font-mono">s</kbd>
+            开始
+          </span>
+
           {onBatch && selected.size > 0 && (
             <span className="flex flex-wrap items-center gap-1.5">
               <span className="text-ink-muted">已选 {selected.size} 道</span>
@@ -273,7 +370,7 @@ export function ChallengeBoard({
       )}
 
       <div className="overflow-x-auto rounded-md border border-line bg-surface md:overflow-visible">
-        <table className="w-full table-fixed border-collapse text-xs">
+        <table ref={tableRef} className="w-full table-fixed border-collapse text-xs">
           <caption className="sr-only">
             题目看板：一行一道题。展开某一行查看题面、候选答案与更多操作。
           </caption>
@@ -319,7 +416,7 @@ export function ChallengeBoard({
             </tr>
           </thead>
           <tbody className="divide-y divide-line">
-            {challenges.map((challenge) => {
+            {challenges.map((challenge, index) => {
               const open = openId === challenge.id
               const tone = CHALLENGE_STATUS_TONE[challenge.status]
               const flag =
@@ -333,10 +430,13 @@ export function ChallengeBoard({
               return (
                 <Fragment key={challenge.id}>
                   <tr
+                    data-challenge-id={challenge.id}
+                    onClick={() => setCursor(index)}
                     className={cn(
                       'transition-ui duration-fast hover:bg-surface-sunken',
                       open && 'bg-surface-sunken',
                       selected.has(challenge.id) && 'bg-accent-wash/60',
+                      cursor === index && 'ring-1 ring-inset ring-accent/50',
                     )}
                   >
                     {onBatch && (
