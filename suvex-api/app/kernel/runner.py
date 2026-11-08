@@ -176,47 +176,69 @@ RACE_SANDBOX_PREFIX = "race-"
 #: 同时存在的赛跑沙箱上限（安全阀）。
 #:
 #: ★ 实测 2026-11-08：一次跑飞在宿主上留下 **813 个** `race-*` 容器，
-#:   之后 `docker run` 直接 120 秒超时 —— 四道正在解的题一起失败，
-#:   而报错长这样："启动解题沙箱失败：命令超时（120 秒）"。
-#:   启动时的 sweep 只在**重启**发生，这类泄漏却发生在运行中，
-#:   所以需要一道运行期的阀：超过上限就删最旧的。
+#:   之后 `docker run` 直接 120 秒超时 —— 四道正在解的题一起失败。
 #:
-#: 12 = 并发上限（4~6）的两倍余量。正在跑的容器是"最新的"，
-#: 被删的永远是最旧的那批孤儿。
-MAX_RACE_SANDBOXES = 12
+#: ★ 上限 32 而不是并发数的两倍：**多智能体模式下每个 agent 一个沙箱**
+#:   （root + 子 agent），一道题同时有 2–4 个容器是正常的。上限压到 12
+#:   时会去删正在跑的沙箱 —— 那比泄漏更糟，而且症状（解题半路容器消失）
+#:   比泄漏隐蔽得多。
+MAX_RACE_SANDBOXES = 32
 
 
-def enforce_race_sandbox_cap(limit: int = MAX_RACE_SANDBOXES) -> int:
-    """删掉最旧的 `race-*` 容器，把总数压回 `limit` 以内。返回删了几个。"""
+def enforce_race_sandbox_cap(
+    limit: int = MAX_RACE_SANDBOXES, *, stale_after: str = "45m"
+) -> int:
+    """清理**陈旧**的 `race-*` 容器。返回删了几个。
+
+    ## 判据是年龄，不是数量顺序
+
+    总数超过 `limit` 时，只删创建时间早于 `stale_after` 的那些 ——
+    正在跑的容器永远是新的；而那次泄漏是 4.5 小时堆出来的，年龄判据
+    完全覆盖得住。没有陈旧容器可清时**什么都不做**，不动正在跑的。
+    """
     listed = _run(
+        ["docker", "ps", "-a", "--filter", f"name=^{RACE_SANDBOX_PREFIX}", "--format", "{{.ID}}"],
+        timeout=30,
+    )
+    if not listed.ok:
+        logger.warning("赛跑沙箱计数失败：%s", listed.stderr.strip())
+        return 0
+    total = len([line for line in listed.stdout.splitlines() if line.strip()])
+    if total <= limit:
+        return 0
+
+    stale = _run(
         [
             "docker",
             "ps",
             "-a",
             "--filter",
             f"name=^{RACE_SANDBOX_PREFIX}",
+            "--filter",
+            f"until={stale_after}",
             "--format",
-            "{{.ID}}\t{{.CreatedAt}}",
+            "{{.ID}}",
         ],
         timeout=30,
     )
-    if not listed.ok:
-        logger.warning("赛跑沙箱计数失败：%s", listed.stderr.strip())
+    if not stale.ok:
         return 0
-    rows = [line.split("\t") for line in listed.stdout.splitlines() if line.strip()]
-    if len(rows) <= limit:
+    victims = [line.strip() for line in stale.stdout.splitlines() if line.strip()]
+    if not victims:
+        logger.warning(
+            "赛跑沙箱 %d 个（上限 %d），但没有超过 %s 的陈旧容器 —— 不动正在跑的",
+            total,
+            limit,
+            stale_after,
+        )
         return 0
-    excess = len(rows) - limit
-    # `docker ps` 默认按创建时间**倒序**（新的在前）→ 末尾那批是最旧的
-    victims = [row[0] for row in rows[-excess:]]
     removed = _run(["docker", "rm", "-f", *victims], timeout=120)
     if not removed.ok:
-        logger.warning("删除超限赛跑沙箱失败：%s", removed.stderr.strip())
+        logger.warning("清理陈旧赛跑沙箱失败：%s", removed.stderr.strip())
         return 0
-    logger.warning(
-        "赛跑沙箱超过上限（%d > %d），已删除最旧的 %d 个", len(rows), limit, len(victims)
-    )
+    logger.warning("清理了 %d 个陈旧赛跑沙箱（总数 %d > 上限 %d）", len(victims), total, limit)
     return len(victims)
+
 
 # 沙箱所在的 Docker 网络。
 #
