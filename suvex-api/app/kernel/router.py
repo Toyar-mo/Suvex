@@ -606,6 +606,19 @@ def replace_mcp_servers(
     servers = [
         {
             "name": item.name,
+            # ★★ v1.79：这四个字段原来在这里被**丢掉**了。
+            #
+            #   `McpServerIn` 支持 http 传输（type/url/headers）与"保留已存
+            #   请求头"（preserveHeaders），`service.save_mcp_servers` 也全都
+            #   认 —— 唯独这个组装 dict 没带上它们。后果：
+            #     · 保存一条 http 连接 → 服务端拿到的是 type=stdio + 空 command
+            #       → 400「stdio 连接必须填 command」，而界面上明明填了 URL；
+            #     · 编辑一条已有连接只改 notes → headers 被当成 `{}` 写回，
+            #       已存凭据**静默清空**。
+            "type": item.type,
+            "url": item.url,
+            "headers": dict(item.headers),
+            "preserve_headers": bool(item.preserveHeaders),
             "command": item.command,
             "args": list(item.args),
             "env": dict(item.env),
@@ -665,6 +678,11 @@ async def test_mcp_server(
     result = await service.test_mcp_server(
         {
             "name": payload.server.name,
+            # ★ v1.79：试连同样要带上传输类型 —— 否则 http 连接会被当成
+            #   stdio 去校验 command，报的是「没有填 command」，而用户填的是 URL。
+            "type": payload.server.type,
+            "url": payload.server.url,
+            "headers": dict(payload.server.headers),
             "command": payload.server.command,
             "args": list(payload.server.args),
             "env": dict(payload.server.env),
