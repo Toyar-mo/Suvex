@@ -489,6 +489,9 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # 同步会改数据（写库）且发出去一串外部请求 —— 给 read 级的话，
     # 一个只读令牌就能反复触发同步，那是一条"用我们的凭据刷平台接口"的路。
     ("POST", "/api/v1/kernel/sync"): "scan",
+    # 比赛平台同步（slab-match）：与上面那条同类 —— 写库 + 一串外部请求。
+    # 它漏登记了一段时间，两个矩阵的"互相对照"用例就是抓这个的闸。
+    ("POST", "/api/v1/kernel/competition/sync"): "scan",
     # ★ v0.43 应急响应：建一个本地复盘任务。与 `POST /scans` 同级 ——
     # 它会消耗 LLM 额度、会起沙箱容器，所以不能给 read。
     # 同一判据在 `tests/kernel/test_router_auth_matrix.py` 里也有一份。

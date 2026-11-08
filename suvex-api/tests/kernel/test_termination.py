@@ -160,9 +160,16 @@ def test_root_final_is_rejected_when_coverage_is_thin() -> None:
         )
     )
 
-    # 门拦住了两次 FINAL，所以 summary 没有被写进 outcome
-    assert outcome.summary == ""
+    # ★ 2026-11-08 改：门不再无限拒。
+    #
+    # 实测：一道题被拒 75 次、55 分钟里一条 ACTION 都没有 —— 模型每次都
+    # 只再写一遍 FINAL。现在第 4 次连续拒收直接按"未解出"收口。
     assert gateway.calls >= 2
+    assert outcome.error and "连续拒绝" in outcome.error
+    assert outcome.summary.startswith("未能解出")
+    # 原来的口径（门把这一轮退回去、不写 summary）仍然成立的部分：
+    # 前三次拒收没有把 FINAL 当成结论落下来
+    assert outcome.candidates == []
 
 
 def test_root_final_passes_after_recording_enough_coverage() -> None:

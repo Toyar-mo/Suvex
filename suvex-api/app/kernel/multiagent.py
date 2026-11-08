@@ -2528,6 +2528,18 @@ async def run_agent_loop(
     #: ★ v0.77：同一个"打点形状"被撞了几次（见 `target_shape`）。
     shape_hits: dict[str, int] = {}
 
+    #: ★ 2026-11-08：收口门**连续**拒了几次。
+    #:
+    #: 实测：一道题被拒 75 次、55 分钟里一条 ACTION 都没有 —— 模型每次
+    #: 都只再写一遍 FINAL，而拒收消息它当没看见。门只拒不放，唯一的
+    #: 止损是"轮次用尽"，而那有 1350 轮。
+    #:
+    #: 计两条线：
+    #:   · 第 2 次拒收起，nudge 明确要求"下一次回复必须含 ACTION"；
+    #:   · 第 4 次拒收直接按"未解出"收口 —— 它已经不打算干活了，
+    #:     继续留着只是烧 token 占并发槽。
+    final_refusals = 0
+
     for turn in range(1, max_turns + 1):
         if coord.stop_requested:
             outcome.error = "编排被外部要求停止。"
@@ -2704,9 +2716,41 @@ async def run_agent_loop(
                         ),
                     )
                     if not gate.allow:
+                        final_refusals += 1
+                        # 连续拒到第 4 次：它已经不打算干活了。
+                        # 按"未解出"收口 —— 把 tried / ruled_out 留下，
+                        # 但不再给它继续烧轮次的机会。
+                        if final_refusals >= 4:
+                            outcome.candidates = []
+                            outcome.summary = "未能解出：多次只交结论、不执行动作，已中止。"
+                            outcome.tried, outcome.ruled_out = extract_final_analysis(final)[1:]
+                            outcome.error = (
+                                f"收口被连续拒绝 {final_refusals} 次，期间没有执行任何动作，"
+                                "判定为放弃推进，已中止本题。"
+                            )
+                            outcome.transcript = "\n\n".join(log)
+                            notify(
+                                "reasoning",
+                                f"连续 {final_refusals} 次交结论却不行动，已中止",
+                                {"text": gate.reason},
+                            )
+                            return AgentLoopResult(
+                                outcome=outcome, finished=True, final_payload=final
+                            )
+
                         # 不结束，把话塞回上下文继续跑。**不发 FINAL 事件** ——
                         # 它没有发生；发一条 reasoning 让界面能看见"被退回了"。
-                        recent.append({"role": "user", "content": gate.nudge})
+                        nudge = gate.nudge
+                        if final_refusals >= 2:
+                            # 只重复"还差什么"没有用（实测被无视 75 次）——
+                            # 第二次起把要求写成**必须执行的形状**。
+                            nudge = (
+                                "你刚刚又只写了 FINAL，没有执行任何动作。\n"
+                                "**下一次回复必须包含至少一条 ACTION**（真实执行一条命令、"
+                                "发一个请求或读一份文件），然后根据输出推进；"
+                                "在这之前不要再写 FINAL。\n\n" + nudge
+                            )
+                        recent.append({"role": "user", "content": nudge})
                         log.append(f"[{node.agent_id} t{turn}] 收口被拒：{gate.reason}")
                         notify("reasoning", f"还不能收口：{gate.reason}", {"text": gate.reason})
                         continue
@@ -2735,6 +2779,9 @@ async def run_agent_loop(
             reminder = _truncation_reminder(len(text)) if truncated else _format_reminder()
             recent.append({"role": "user", "content": reminder})
             continue
+
+        # 真的执行动作了 → 收口拒收计数清零（它已经在推进，不是死循环）
+        final_refusals = 0
 
         batch = actions[:MAX_ACTIONS_PER_TURN]
         dropped = len(actions) - len(batch)

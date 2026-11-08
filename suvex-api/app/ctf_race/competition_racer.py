@@ -489,6 +489,10 @@ class CompetitionRacer:
         if not spec.network_isolated:
             network_name = runner_mod.AGENT_NETWORK
 
+        # ★ 安全阀：先压一次总量（见 `enforce_race_sandbox_cap` 的事故记录）。
+        #   放在建容器之前 —— 容器建不出来时（docker run 超时）再清理已经晚了。
+        runner_mod.enforce_race_sandbox_cap()
+
         sb = SandboxContainer(
             name=f"race-{spec.challenge_id[-8:]}-{os.urandom(3).hex()}",
             image=runner_mod.image_for_profile(spec.profile),

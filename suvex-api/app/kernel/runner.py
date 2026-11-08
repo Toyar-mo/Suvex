@@ -173,6 +173,51 @@ SANDBOX_NAME_PREFIX = "ctf2-"
 #:    少同步一处就是一次泄漏。
 RACE_SANDBOX_PREFIX = "race-"
 
+#: 同时存在的赛跑沙箱上限（安全阀）。
+#:
+#: ★ 实测 2026-11-08：一次跑飞在宿主上留下 **813 个** `race-*` 容器，
+#:   之后 `docker run` 直接 120 秒超时 —— 四道正在解的题一起失败，
+#:   而报错长这样："启动解题沙箱失败：命令超时（120 秒）"。
+#:   启动时的 sweep 只在**重启**发生，这类泄漏却发生在运行中，
+#:   所以需要一道运行期的阀：超过上限就删最旧的。
+#:
+#: 12 = 并发上限（4~6）的两倍余量。正在跑的容器是"最新的"，
+#: 被删的永远是最旧的那批孤儿。
+MAX_RACE_SANDBOXES = 12
+
+
+def enforce_race_sandbox_cap(limit: int = MAX_RACE_SANDBOXES) -> int:
+    """删掉最旧的 `race-*` 容器，把总数压回 `limit` 以内。返回删了几个。"""
+    listed = _run(
+        [
+            "docker",
+            "ps",
+            "-a",
+            "--filter",
+            f"name=^{RACE_SANDBOX_PREFIX}",
+            "--format",
+            "{{.ID}}\t{{.CreatedAt}}",
+        ],
+        timeout=30,
+    )
+    if not listed.ok:
+        logger.warning("赛跑沙箱计数失败：%s", listed.stderr.strip())
+        return 0
+    rows = [line.split("\t") for line in listed.stdout.splitlines() if line.strip()]
+    if len(rows) <= limit:
+        return 0
+    excess = len(rows) - limit
+    # `docker ps` 默认按创建时间**倒序**（新的在前）→ 末尾那批是最旧的
+    victims = [row[0] for row in rows[-excess:]]
+    removed = _run(["docker", "rm", "-f", *victims], timeout=120)
+    if not removed.ok:
+        logger.warning("删除超限赛跑沙箱失败：%s", removed.stderr.strip())
+        return 0
+    logger.warning(
+        "赛跑沙箱超过上限（%d > %d），已删除最旧的 %d 个", len(rows), limit, len(victims)
+    )
+    return len(victims)
+
 # 沙箱所在的 Docker 网络。
 #
 # ## ★★ "独立网络"解决了什么、**没有**解决什么（2026-10-16 实测改正）
