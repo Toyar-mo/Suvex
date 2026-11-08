@@ -529,3 +529,102 @@
     display: none !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   画布氛围层（v1.75）
+   ═══════════════════════════════════════════════════════════
+
+   用户可以在右上角切换四档背景：点阵场 / 光晕 / 纸纹 / 纯色。
+   点阵场是 `AgentField`（canvas，见 AppShell），纯色不挂节点 ——
+   这里只负责另外两档的**纯 CSS** 背景。
+
+   ## 一条硬规矩：背景不能被"单独注意到"
+
+   design-system §5 已经写过这条，这里再守一次：内容区在它上面盖了一层
+   `bg-canvas/80`，所以下面这些渐变只有约 20% 会透出来。写的时候按
+   "透出来之后还要不要"来定浓度，而不是按最终想看到的样子写 ——
+   直接照最终观感写，实际会浓一倍。
+
+   ## 亮色要比暗色更淡
+
+   同一档在亮色下更刺眼：亮色画布接近白色，任何一点彩度都会变成"脏"。
+   所以亮色单独一档，浓度约为暗色的六成。
+*/
+
+.backdrop-aurora {
+  background-image:
+    radial-gradient(
+      70rem 46rem at 42% 2%,
+      color-mix(in oklab, rgb(var(--suvex-accent)) 72%, transparent),
+      transparent 66%
+    ),
+    radial-gradient(
+      60rem 44rem at 98% 92%,
+      color-mix(in oklab, rgb(var(--suvex-signal-info)) 52%, transparent),
+      transparent 70%
+    );
+}
+
+[data-theme='light'] .backdrop-aurora {
+  background-image:
+    radial-gradient(
+      70rem 46rem at 42% 2%,
+      color-mix(in oklab, rgb(var(--suvex-accent)) 40%, transparent),
+      transparent 66%
+    ),
+    radial-gradient(
+      60rem 44rem at 98% 92%,
+      color-mix(in oklab, rgb(var(--suvex-signal-info)) 28%, transparent),
+      transparent 70%
+    );
+}
+
+.backdrop-grain {
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E"),
+    linear-gradient(
+      180deg,
+      color-mix(in oklab, rgb(var(--suvex-accent)) 18%, transparent),
+      transparent 55%
+    );
+  background-size:
+    180px 180px,
+    100% 100%;
+  opacity: 0.55;
+}
+
+[data-theme='light'] .backdrop-grain {
+  opacity: 0.32;
+}
+
+/*
+  ★ 尊重"减少动态效果"：点阵场那一档的 canvas 自己会处理（见 AgentField），
+    这两档本来静止，不需要额外规则 —— 写在这里只是提醒下一个加档位的人：
+    新档位同样不能依赖动画。
+*/
+
+
+/* 菜单里的预览小样：28×10 的小窗，只表达"有没有噪点/光/点" */
+.backdrop-swatch {
+  background-color: rgb(var(--suvex-canvas));
+}
+
+.backdrop-swatch-field {
+  background-image: radial-gradient(rgb(var(--suvex-ink) / 0.42) 1px, transparent 1.2px);
+  background-size: 5px 5px;
+}
+
+.backdrop-swatch-aurora {
+  background-image:
+    radial-gradient(70% 90% at 18% 10%, color-mix(in oklab, rgb(var(--suvex-accent)) 70%, transparent), transparent 70%),
+    radial-gradient(70% 90% at 88% 96%, color-mix(in oklab, rgb(var(--suvex-signal-info)) 55%, transparent), transparent 72%);
+}
+
+.backdrop-swatch-grain {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='40' height='40'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='40' height='40' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
+  background-size: 40px 40px;
+}
+
+.backdrop-swatch-plain {
+  background-color: rgb(var(--suvex-canvas));
+}

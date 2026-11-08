@@ -10,6 +10,7 @@ import '@fontsource-variable/noto-sans-sc'
 
 import App from './App'
 import ErrorBoundary from './components/ui/ErrorBoundary'
+import { initBackdrop } from './data/backdrop-store'
 import { initTheme } from './data/theme-store'
 import './index.css'
 
@@ -33,6 +34,8 @@ import './index.css'
     两个 effect 都是"启动后干点什么"的语义，主题属于"启动前就对"的那一类。
 */
 initTheme()
+/* 氛围层同理：必须在首帧之前定好，否则整屏会先按默认档画一帧再跳一下 */
+initBackdrop()
 
 /*
   ★ 顶层错误边界（任务 10 P6 补）。

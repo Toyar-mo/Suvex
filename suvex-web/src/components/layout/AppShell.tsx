@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useBackdrop } from '@/data/backdrop-store'
 import { NAV_ITEMS } from '@/navigation'
 import { Suspense, lazy } from 'react'
 
@@ -21,7 +22,7 @@ import { Suspense, lazy } from 'react'
  *   用一个真实的视觉元素假装"内容正在来"。什么都不显示才对 ——
  *   首屏本来就只是一层底色，一点也不空。
  */
-const AgentField = lazy(() => import('@/components/effects/AgentField'))
+const Backdrop = lazy(() => import('@/components/layout/Backdrop'))
 
 /**
  * AppShell —— 全站骨架。
@@ -81,6 +82,10 @@ export function AppShell({
   fillsViewport = false,
   children,
 }: AppShellProps) {
+  const backdrop = useBackdrop()
+  /** 静止氛围（光晕 / 纸纹）：内容遮罩可以松一点，见 main 上的说明 */
+  const airyBackdrop = backdrop === 'aurora' || backdrop === 'grain'
+
   return (
     <div
       className={cn(
@@ -112,7 +117,7 @@ export function AppShell({
           懒加载（见文件头的说明）：背景不该出现在首屏关键路径上。 */}
       <div className="pointer-events-none fixed inset-0 z-0">
         <Suspense fallback={null}>
-          <AgentField />
+          <Backdrop />
         </Suspense>
       </div>
 
@@ -130,7 +135,22 @@ export function AppShell({
         <main
           id="main-content"
           tabIndex={-1}
-          className="flex min-h-0 flex-1 flex-col bg-canvas/80 focus:outline-none"
+          className={cn(
+            'flex min-h-0 flex-1 flex-col focus:outline-none',
+            /*
+              ★ 遮罩浓度跟着氛围走（v1.75）。
+
+              `bg-canvas/80` 是给**点阵场**定的：那层是动的、亮的线，必须压到
+              "能感觉到但读不到"，否则正文对比度会随动画起伏。
+
+              光晕与纸纹是**静止**的，不需要压那么狠 —— 照 80% 压下去，
+              这两种底几乎看不见（实测：光晕在暗色下只剩约 9% 的色，等于没切）。
+              55% 是实测的平衡点：底看得见，卡片上的文字仍然落在纯承载面上。
+
+              纯色档不挂氛围层，遮罩停在 80%，与今天完全一致。
+            */
+            airyBackdrop ? 'bg-canvas/55' : 'bg-canvas/80',
+          )}
         >
           {/*
             高度用 flex 链传递，而不是让页面自己写 `h-[calc(100dvh-44px-56px)]`。
