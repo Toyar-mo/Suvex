@@ -61,6 +61,7 @@ from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
 from app.chat import turn_runs as turn_run_store
 from app.chat.models import ChatMessage, ChatSession
+from app.core.errors import ApiError
 from app.chat.prompts import (
     CHAT_TOOL_NAMES,
     CONSEQUENTIAL_TOOL_NAMES,
@@ -1470,6 +1471,17 @@ async def _tool_start_ctf_solve(ctx: _ToolContext, args: dict[str, Any]) -> str:
 
     try:
         kernel_service.start_solve(ctx.db, challenge, mode=mode, brief=brief)
+    except ApiError as exc:
+        if exc.code == "CTF2_NOT_BOUND":
+            # ★ 明确告诉模型"重试无用"：这条错误来自**配置**，不是瞬时故障。
+            #   2026-11-08 实测：账号解绑后模型先重试了一次，接着从沙箱里
+            #   探测 fake-ip 端口想绕开平台 —— 整轮白跑。
+            return _err(
+                "受理失败：尚未绑定 CTF2 账号。**这不是重试能解决的** —— "
+                "请让用户在「CTF」页绑定 PAT，绑定后重新发起。"
+                "不要改用直连靶机或内网地址的方式绕过。"
+            )
+        return _err(f"受理失败：{exc}")
     except Exception as exc:  # noqa: BLE001
         return _err(f"受理失败：{exc}")
     return (
