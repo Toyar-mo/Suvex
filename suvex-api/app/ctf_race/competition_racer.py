@@ -600,9 +600,28 @@ class CompetitionRacer:
             challenge_id=challenge_id,
         )
 
+        # ★★ P2 骨架（2026-11-08）：同题 fan-out，先到先得。
+        #
+        # 默认 `SUPEX_CTF_FANOUT=1` —— **行为与之前逐字节一致**；配成 2/3
+        # 才会同时开多个 solver。骨架阶段刻意不默认开启：多 solver 同时
+        # 提交会共用平台的错误提交配额，而提交门的串行化还没做
+        # （见 ADR-010 P3）。先把并发通路跑通，再补提交侧。
+        models = list(self._models[: _fanout_count()]) or [model]
+        tasks: dict[Any, str] = {}
         try:
-            result = await adapter(model, hint=None)
+            if len(models) <= 1:
+                result = await adapter(model, hint=None)
+            else:
+                tasks = {
+                    asyncio.create_task(adapter(m, hint=None)): m for m in models
+                }
+                result = await _first_winner(tasks)
         finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             await self._aclose_driver()
 
         # 3) 把结果写回本地题目行（复用 runner 的状态机，避免两套口径）
@@ -656,3 +675,37 @@ class CompetitionRacer:
 
 
 __all__ = ["CompetitionRacer", "DEFAULT_RACE_MODELS"]
+
+def _fanout_count() -> int:
+    """同题并发 solver 数（环境变量 `SUPEX_CTF_FANOUT`，默认 1，上限 3）。
+
+    ★ 为什么默认 1：fan-out 的代价是**成本 ×N**（每个 solver 一个沙箱、
+      一份 token）。它应该在"比赛愿意用钱换时间"时才打开，而不是比赛
+      之外的日常也翻倍烧。上限 3 与调研一致：ctf-agent 用 5 个模型是
+      在有充足额度的前提下，3 个已经是"速度/成本"的常见折中。
+    """
+    try:
+        value = int(os.environ.get("SUPEX_CTF_FANOUT", "1"))
+    except ValueError:
+        return 1
+    return max(1, min(value, 3))
+
+
+async def _first_winner(tasks: dict[Any, Any]) -> Any:
+    """等第一个**带答案**的结果；全都失败时返回最后一个完成的。
+
+    为什么不是 `asyncio.wait(FIRST_COMPLETED)` 取第一个：先完成的很可能是
+    "没解出来、提前收口"的那个。要把"先到的失败"熬过去，等真正带 flag 的。
+    """
+    pending = set(tasks)
+    fallback: Any = None
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            if task.exception() is not None:
+                continue
+            result = task.result()
+            if getattr(result, "flag", None) or getattr(result, "candidate_flag", None):
+                return result
+            fallback = fallback or result
+    return fallback
