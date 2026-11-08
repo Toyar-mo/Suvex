@@ -704,16 +704,34 @@ class CompetitionRacer:
             if confirmed and flag:
                 _advance_challenge(ch, "correct", normalize_flag(flag))
             elif flag:
-                # 有候选但没被平台确认（或 noSubmit）：留作待确认，不判错。
+                # 有候选但没被平台确认（或 noSubmit）：留作**待确认**，不判错。
+                #
+                # ★★ 状态必须是 `candidate_ready`，不能是 `solving`
+                #   （2026-11-08 修，真库实测 5 道题受害）。
+                #
+                #   写 `solving` 时这一轮其实**已经结束**了，但界面会说
+                #   "解题中"，于是：
+                #     · 用户看到一道永远不会自己结束的题；
+                #     · 行内还挂着「取消」，一点就把这轮的结果判成 cancelled
+                #       —— 而 cancel 只改状态、**不清候选**，最后落成
+                #       "未开始 + 有一个候选 flag + 已取消。" 这种谁都读不懂的行。
+                #
+                #   `candidate_ready` 的语义正是"跑完了、有东西等你确认"，
+                #   与 `runner._handle_candidates` 的 safe 落点一致。
                 ch.candidate_flag = flag
-                if ch.status not in (
-                    KernelChallengeStatus.SOLVED.value,
-                ):
-                    ch.status = KernelChallengeStatus.SOLVING.value
+                if ch.status != KernelChallengeStatus.SOLVED.value:
+                    ch.status = KernelChallengeStatus.CANDIDATE_READY.value
                 ch.last_error = None
             else:
                 # 没拿到 flag：如实记一句，但不当成平台错。
-                if ch.status != KernelChallengeStatus.SOLVED.value:
+                #
+                # ⚠️ 不能盖掉**已经有候选**的题（fan-out 时兄弟 solver 先
+                #    落了一个候选，这一路空手而归）—— 那会把"等你确认"
+                #    降级成"未解出"，候选还在，界面却说没解出。
+                if ch.status not in (
+                    KernelChallengeStatus.SOLVED.value,
+                    KernelChallengeStatus.CANDIDATE_READY.value,
+                ):
                     ch.status = KernelChallengeStatus.FAILED.value
                     ch.last_error = (message or "解题未产出候选 flag")[:500]
             db.commit()

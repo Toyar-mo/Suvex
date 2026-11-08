@@ -3602,6 +3602,16 @@ def cancel_challenge(db: Session, challenge: KernelChallenge) -> KernelChallenge
 
     challenge.status = KernelChallengeStatus.UNSOLVED.value
     challenge.last_error = "已取消。"
+    # ★ 取消 = **放弃这一轮的产出**，候选也要一起作废（2026-11-08 补）。
+    #
+    #   不清的话会出现「未开始 + 有一个候选 flag + 已取消。」这种行：
+    #   状态说这道题什么都没发生，候选列里却摆着一个看起来像答案的字符串，
+    #   而它来自一次用户明确取消的运行。那正是 `models` 里那句
+    #   「`candidate_flag` 只在 `candidate_ready` 有意义」要防的形状。
+    #
+    #   （另有一条路径**刻意**保留候选：提交时平台回"本队伍已解出" ——
+    #     那里的候选没被判定过，不该丢。两者不冲突：那条不走 cancel。）
+    challenge.candidate_flag = None
     _abort_ctf2_scan(db, challenge, reason="解题被取消。", terminated_by="user")
     db.commit()
     return challenge
