@@ -1352,6 +1352,54 @@ class KernelSubmitOut(CamelModel):
 # ══════════════════════════════════════════════════════════
 
 
+class KernelBatchIn(StrictModel):
+    """`POST /ctf2/challenges/batch` —— 批量开始 / 取消（比赛现场用）。
+
+    ## 为什么要有批量端点，而不是前端循环调单题接口
+
+    ★ 一是**一致**：暂停时一次性发出 16 个请求，任何一个失败都只会在
+      某一张卡上闪一下 toast，用户根本来不及看清是哪几道没起来。
+      批量端点把逐条结果一起返回，界面能说"16 道里 14 道已受理，
+      2 道因为已经解出被跳过"。
+    ★ 二是**可控**：一次请求可以限流总量（见 `max_length`），
+      而循环调用没有这个上限 —— 误点「全选」时那是几百个并发请求。
+
+    ⚠️ `action` 只有两个值，刻意不合并成"设置状态"：开始解题和取消
+      不是对称操作（前者起环境、后者只是打标记，见
+      `service.cancel_challenge` 的说明）。合成一个"状态机迁移"接口
+      会让前端以为它们一样便宜。
+    """
+
+    action: Literal["solve", "cancel"]
+    #: 最多 200 道。够覆盖一整场比赛的题量，又不至于让一次误点打出上千个请求。
+    challengeIds: list[str] = Field(min_length=1, max_length=200)
+    #: 仅 `action=solve` 时生效，语义与单题接口一致。
+    mode: SubmitModeLiteral | None = None
+    sandboxProfile: SandboxProfileLiteral | None = None
+    resume: bool = False
+
+
+class KernelBatchItemOut(CamelModel):
+    """批量操作里的一道题的结果。
+
+    ★ 失败**不是**用 HTTP 4xx 表达：批量操作天然是部分成功的，
+      整体失败会让前端丢掉"哪些成功了"这个信息。
+    """
+
+    id: str
+    title: str = ""
+    ok: bool
+    #: 给人看的一句话（成功时也有一句，前端可以整段展示）
+    message: str
+
+
+class KernelBatchOut(CamelModel):
+    requested: int
+    succeeded: int
+    failed: int
+    results: list[KernelBatchItemOut]
+
+
 class KernelQueueOut(CamelModel):
     """`GET /ctf2/queue` —— 调度器状态。
 

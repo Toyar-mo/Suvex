@@ -405,7 +405,15 @@ export interface KernelChallenge {
 }
 
 /** 标准分类的固定顺序（筛选器的按钮顺序，也是「其它」永远排最后）。 */
-export const CANONICAL_CATEGORIES = ['web', 'crypto', 'reverse', 'pwn', 'misc', 'ir', 'other'] as const
+export const CANONICAL_CATEGORIES = [
+  'web',
+  'crypto',
+  'reverse',
+  'pwn',
+  'misc',
+  'ir',
+  'other',
+] as const
 
 export type CanonicalCategory = (typeof CANONICAL_CATEGORIES)[number]
 
@@ -430,7 +438,9 @@ export const CANONICAL_CATEGORY_LABEL: Record<CanonicalCategory, string> = {
  */
 export function canonicalCategoryOf(value: string | null | undefined): CanonicalCategory {
   const v = (value || '').trim().toLowerCase()
-  return (CANONICAL_CATEGORIES as readonly string[]).includes(v) ? (v as CanonicalCategory) : 'other'
+  return (CANONICAL_CATEGORIES as readonly string[]).includes(v)
+    ? (v as CanonicalCategory)
+    : 'other'
 }
 
 export interface KernelSettings {
@@ -803,9 +813,7 @@ export interface KernelWorkOrder {
  * 还是"还没跑完"，两者的下一步动作完全不同。
  */
 export async function loadKernelWorkOrder(challengeId: string): Promise<KernelWorkOrder> {
-  return api.get<KernelWorkOrder>(
-    `/kernel/challenges/${encodeURIComponent(challengeId)}/workorder`,
-  )
+  return api.get<KernelWorkOrder>(`/kernel/challenges/${encodeURIComponent(challengeId)}/workorder`)
 }
 
 /**
@@ -893,9 +901,7 @@ export async function loadKernelUsage(
 
 /** 读单道题的**逐次**消耗明细（按轮次升序）。 */
 export async function loadKernelChallengeUsage(challengeId: string): Promise<KernelUsageEntry[]> {
-  return api.get<KernelUsageEntry[]>(
-    `/kernel/challenges/${encodeURIComponent(challengeId)}/usage`,
-  )
+  return api.get<KernelUsageEntry[]>(`/kernel/challenges/${encodeURIComponent(challengeId)}/usage`)
 }
 
 /**
@@ -1043,7 +1049,6 @@ export function __resetKernelForTest(): void {
   settingsError = null
   commit()
 }
-
 
 let snapshot: KernelSnapshotState = {
   account,
@@ -1320,6 +1325,46 @@ export async function submitFlag(
   return result
 }
 
+/** 批量操作里一道题的结果（部分成功是常态，见后端 `KernelBatchOut`）。 */
+export interface KernelBatchResult {
+  requested: number
+  succeeded: number
+  failed: number
+  results: { id: string; title: string; ok: boolean; message: string }[]
+}
+
+/**
+ * 批量开始 / 取消（比赛现场）。
+ *
+ * ★ 为什么不用 `Promise.all(ids.map(solveChallenge))`：一次误点「全选」
+ *   会打出几百个并发请求，而且任何一条失败只会闪一下就没了 ——
+ *   用户看不到"到底是哪几道没起来"。批量端点把逐条结果一起返回。
+ *
+ * ★ 不在这里弹 toast：调用方要拼"16 道里 14 道成功"这句话，
+ *   而它比这个函数更清楚上下文。
+ */
+export async function batchChallenges(
+  action: 'solve' | 'cancel',
+  challengeIds: string[],
+  options: {
+    mode?: KernelSubmitMode
+    sandboxProfile?: KernelSandboxProfile
+    resume?: boolean
+  } = {},
+): Promise<KernelBatchResult> {
+  const result = await api.post<KernelBatchResult>('/kernel/challenges/batch', {
+    action,
+    challengeIds,
+    mode: options.mode,
+    sandboxProfile: options.sandboxProfile,
+    resume: options.resume ?? false,
+  })
+  // 状态变了（受理后是 solving、取消后是 unsolved）—— 让列表跟上，
+  // 否则用户会看到"点了开始但状态没动"。
+  await loadKernel({ silent: true })
+  return result
+}
+
 export async function cancelChallenge(challengeId: string): Promise<KernelChallenge> {
   const updated = await api.post<KernelChallenge>(
     `/kernel/challenges/${encodeURIComponent(challengeId)}/cancel`,
@@ -1367,9 +1412,7 @@ export async function setChallengePriority(
  *   `service.set_priorities_by_score` 的说明：高分题往往更难，
  *   "先做高分"还是"先做容易"是战术判断，取决于当前比分与剩余时间。
  */
-export async function prioritizeByScore(
-  competitionId?: string | null,
-): Promise<number> {
+export async function prioritizeByScore(competitionId?: string | null): Promise<number> {
   const result = await api.post<{ changed: number }>('/kernel/priorities/by-score', {
     competitionId: competitionId ?? null,
     limit: 50,

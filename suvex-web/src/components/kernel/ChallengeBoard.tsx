@@ -12,6 +12,7 @@ import {
   canHaveWriteup,
   canonicalCategoryOf,
   type KernelChallenge,
+  type KernelQueue,
 } from '@/data/kernel'
 import {
   Check,
@@ -27,7 +28,7 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react'
-import { Fragment, useState } from 'react'
+import { Fragment, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 /**
@@ -90,9 +91,7 @@ function nextPriorityDown(current: number): number {
 
 /** 能不能开始/接着解（与后端 `_assert_resolvable` 同一套判断，见旧卡片说明） */
 function canSolve(challenge: KernelChallenge): boolean {
-  return ['unsolved', 'failed', 'candidate_ready', 'environment_ready'].includes(
-    challenge.status,
-  )
+  return ['unsolved', 'failed', 'candidate_ready', 'environment_ready'].includes(challenge.status)
 }
 
 function canCancel(challenge: KernelChallenge): boolean {
@@ -126,6 +125,8 @@ export function ChallengeBoard({
   onWriteup,
   onWorkOrder,
   onOpen,
+  onBatch,
+  queue,
 }: {
   challenges: KernelChallenge[]
   busy?: boolean
@@ -144,9 +145,50 @@ export function ChallengeBoard({
   /** 不传时整项不渲染（按需能力） */
   onWriteup?: (challenge: KernelChallenge) => void
   onWorkOrder?: (challenge: KernelChallenge) => void
+  /**
+   * 批量开始 / 取消（第 3 步）。不传时整条批量操作栏不渲染。
+   *
+   * ★ 勾选状态留在**本组件**里，不提到页面：它是"这一屏上正在勾什么"，
+   *   换了筛选就该重来。提到页面反而要处理"筛掉之后还选着看不见的题"。
+   */
+  onBatch?: (action: 'solve' | 'cancel', ids: string[]) => void
+  /** 调度器状态：在跑 / 上限 / 排队。给了才画并发进度。 */
+  queue?: KernelQueue | null
 }) {
   /** 展开的行。同时只开一行 —— 看板的意义是不让详情挤占扫读。 */
   const [openId, setOpenId] = useState<string | null>(null)
+  /** 勾选中的题目 id（批量操作的对象）。 */
+  const [selected, setSelected] = useState<Set<string>>(() => new Set())
+
+  const toggleOne = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  /** 当前列表里**可以**开始 / 取消的那些（批量按钮据此禁用与计数）。 */
+  const startable = useMemo(
+    () => challenges.filter((item) => selected.has(item.id) && canSolve(item)),
+    [challenges, selected],
+  )
+  const cancelable = useMemo(
+    () => challenges.filter((item) => selected.has(item.id) && canCancel(item)),
+    [challenges, selected],
+  )
+  const allSelected = challenges.length > 0 && selected.size >= challenges.length
+
+  const runBatch = (action: 'solve' | 'cancel', ids: KernelChallenge[]) => {
+    if (!onBatch || ids.length === 0) return
+    onBatch(
+      action,
+      ids.map((item) => item.id),
+    )
+    // 选完就清空：留着勾选会让下一次点击"多带上"上一批的题
+    setSelected(new Set())
+  }
 
   /*
     窄屏才允许横向滚动。⚠️ 不能让 `overflow-x-auto` 一直挂着：
@@ -155,260 +197,366 @@ export function ChallengeBoard({
     （实测 `top` 变成 -256px）。桌面端表格放得下，就不需要它。
   */
   return (
-    <div className="overflow-x-auto rounded-md border border-line bg-surface md:overflow-visible">
-      <table className="w-full table-fixed border-collapse text-xs">
-        <caption className="sr-only">
-          题目看板：一行一道题。展开某一行查看题面、候选答案与更多操作。
-        </caption>
-        <thead>
-          {/*
+    <div className="flex flex-col gap-2">
+      {/*
+        批量操作栏 + 并发进度（第 3 步）。
+
+        ★ 并发进度常驻：比赛时要回答的是"为什么我点了 16 道却只跑 3 道"，
+          答案就在这个 `3/8 · 排队 13` 里。等用户去别处找，他会以为卡住了。
+        ★ 勾选后才出现的那些按钮排在右侧，没勾选时这一栏只有并发数字 ——
+          常态下不占注意力。
+      */}
+      {(queue || (onBatch && selected.size > 0)) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-2xs">
+          {queue && (
+            <span
+              className="flex items-center gap-1.5"
+              title="同时解题的题目数上限（在「设置 → CTF2」里调）"
+            >
+              <span className="text-ink-faint">并发</span>
+              <span className="tabular text-ink">
+                {queue.running}/{queue.limit}
+              </span>
+              <span
+                className="h-1 w-20 overflow-hidden rounded-pill bg-ink-ghost/30"
+                role="img"
+                aria-label={`并发占用 ${queue.running}/${queue.limit}`}
+              >
+                <span
+                  className="block h-full rounded-pill bg-accent"
+                  style={{
+                    width: `${
+                      queue.limit > 0 ? Math.min(100, (queue.running / queue.limit) * 100) : 0
+                    }%`,
+                  }}
+                />
+              </span>
+              {queue.queued > 0 && <span className="text-ink-faint">排队 {queue.queued}</span>}
+            </span>
+          )}
+
+          <span className="flex-1" />
+
+          {onBatch && selected.size > 0 && (
+            <span className="flex flex-wrap items-center gap-1.5">
+              <span className="text-ink-muted">已选 {selected.size} 道</span>
+              <button
+                type="button"
+                disabled={busy || startable.length === 0}
+                onClick={() => runBatch('solve', startable)}
+                title="对勾选的、还没解出的题发起解题（会起环境并消耗模型额度）"
+                className={cn(
+                  'press inline-flex h-6 items-center gap-1 rounded-sm bg-accent px-2 text-2xs font-medium text-canvas',
+                  'transition-ui duration-fast hover:bg-accent-strong',
+                  'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted',
+                )}
+              >
+                <Play size={10} strokeWidth={2.5} aria-hidden="true" />
+                开始所选{startable.length > 0 ? ` ${startable.length}` : ''}
+              </button>
+              <button
+                type="button"
+                disabled={busy || cancelable.length === 0}
+                onClick={() => runBatch('cancel', cancelable)}
+                title="取消勾选中的、正在排队或运行的题（已经在跑的那一轮会跑完，但不产出候选）"
+                className={OUTLINE_BUTTON}
+              >
+                <X size={10} strokeWidth={2} aria-hidden="true" />
+                停止所选{cancelable.length > 0 ? ` ${cancelable.length}` : ''}
+              </button>
+              <button type="button" onClick={() => setSelected(new Set())} className={QUIET_BUTTON}>
+                清除
+              </button>
+            </span>
+          )}
+        </div>
+      )}
+
+      <div className="overflow-x-auto rounded-md border border-line bg-surface md:overflow-visible">
+        <table className="w-full table-fixed border-collapse text-xs">
+          <caption className="sr-only">
+            题目看板：一行一道题。展开某一行查看题面、候选答案与更多操作。
+          </caption>
+          <thead>
+            {/*
             ★ 表头 sticky 在状态条下方（`top-11` = 状态条的高 h-11 = 44px）。
             562 道题的看板要滚很久，没有表头第二屏起就不知道哪列是什么 ——
             而"列对齐"正是这张表存在的理由。sticky 只能写在 `th` 上
             （写在 `tr` 上不生效），边框也得跟着 `th` 走。
           */}
-          <tr className="text-2xs font-normal text-ink-faint">
-            <th scope="col" className={STICKY_TH + ' w-[84px] text-left'}>
-              状态
-            </th>
-            <th scope="col" className={STICKY_TH + ' text-left'}>
-              题目
-            </th>
-            <th scope="col" className={STICKY_TH + ' hidden w-[68px] text-left md:table-cell'}>
-              类型
-            </th>
-            <th scope="col" className={STICKY_TH + ' w-[52px] text-right'}>
-              分值
-            </th>
-            <th scope="col" className={STICKY_TH + ' hidden w-[26%] text-left xl:table-cell'}>
-              候选 / 最后错误
-            </th>
-            <th scope="col" className={STICKY_TH + ' w-[190px] text-right'}>
-              操作
-            </th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-line">
-          {challenges.map((challenge) => {
-            const open = openId === challenge.id
-            const tone = CHALLENGE_STATUS_TONE[challenge.status]
-            const flag =
-              challenge.status === 'solved' ? challenge.confirmedFlag : challenge.candidateFlag
-            const canSubmit = Boolean(challenge.candidateFlag) && challenge.status !== 'solved'
-            const outOfQuota = challenge.remainingWrongSubmissions <= 0
-            const missingAttachments =
-              challenge.attachments.length > 0 && challenge.attachmentsReady === false
-            const queued = challenge.status === 'solving'
+            <tr className="text-2xs font-normal text-ink-faint">
+              {onBatch && (
+                <th scope="col" className={STICKY_TH + ' w-[34px] pl-2 pr-0'}>
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={() =>
+                      setSelected(allSelected ? new Set() : new Set(challenges.map((c) => c.id)))
+                    }
+                    aria-label="选择当前列表里的全部题目"
+                    className="h-3 w-3 cursor-pointer align-middle accent-accent"
+                  />
+                </th>
+              )}
+              <th scope="col" className={STICKY_TH + ' w-[84px] text-left'}>
+                状态
+              </th>
+              <th scope="col" className={STICKY_TH + ' text-left'}>
+                题目
+              </th>
+              <th scope="col" className={STICKY_TH + ' hidden w-[68px] text-left md:table-cell'}>
+                类型
+              </th>
+              <th scope="col" className={STICKY_TH + ' w-[52px] text-right'}>
+                分值
+              </th>
+              <th scope="col" className={STICKY_TH + ' hidden w-[26%] text-left xl:table-cell'}>
+                候选 / 最后错误
+              </th>
+              <th scope="col" className={STICKY_TH + ' w-[190px] text-right'}>
+                操作
+              </th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line">
+            {challenges.map((challenge) => {
+              const open = openId === challenge.id
+              const tone = CHALLENGE_STATUS_TONE[challenge.status]
+              const flag =
+                challenge.status === 'solved' ? challenge.confirmedFlag : challenge.candidateFlag
+              const canSubmit = Boolean(challenge.candidateFlag) && challenge.status !== 'solved'
+              const outOfQuota = challenge.remainingWrongSubmissions <= 0
+              const missingAttachments =
+                challenge.attachments.length > 0 && challenge.attachmentsReady === false
+              const queued = challenge.status === 'solving'
 
-            return (
-              <Fragment key={challenge.id}>
-                <tr
-                  className={cn(
-                    'transition-ui duration-fast hover:bg-surface-sunken',
-                    open && 'bg-surface-sunken',
-                  )}
-                >
-                  {/* ── 状态 ── */}
-                  <td className="px-2 py-1 align-middle">
-                    <span className="flex items-center gap-1.5">
-                      <span
-                        className={cn('h-1.5 w-1.5 shrink-0 rounded-pill', STATUS_DOT[tone])}
-                        aria-hidden="true"
-                      />
-                      <span className="truncate text-2xs text-ink-muted">
-                        {CHALLENGE_STATUS_LABEL[challenge.status]}
+              return (
+                <Fragment key={challenge.id}>
+                  <tr
+                    className={cn(
+                      'transition-ui duration-fast hover:bg-surface-sunken',
+                      open && 'bg-surface-sunken',
+                      selected.has(challenge.id) && 'bg-accent-wash/60',
+                    )}
+                  >
+                    {onBatch && (
+                      <td className="py-1 pl-2 pr-0 align-middle">
+                        <input
+                          type="checkbox"
+                          checked={selected.has(challenge.id)}
+                          onChange={() => toggleOne(challenge.id)}
+                          aria-label={`选择 ${challenge.title}`}
+                          className="h-3 w-3 cursor-pointer align-middle accent-accent"
+                        />
+                      </td>
+                    )}
+
+                    {/* ── 状态 ── */}
+                    <td className="px-2 py-1 align-middle">
+                      <span className="flex items-center gap-1.5">
+                        <span
+                          className={cn('h-1.5 w-1.5 shrink-0 rounded-pill', STATUS_DOT[tone])}
+                          aria-hidden="true"
+                        />
+                        <span className="truncate text-2xs text-ink-muted">
+                          {CHALLENGE_STATUS_LABEL[challenge.status]}
+                        </span>
                       </span>
-                    </span>
-                  </td>
+                    </td>
 
-                  {/* ── 题目（点标题展开详情） ── */}
-                  <td className="px-2 py-1 align-middle">
-                    <button
-                      type="button"
-                      onClick={() => setOpenId(open ? null : challenge.id)}
-                      aria-expanded={open}
-                      title={challenge.title}
-                      className="flex w-full min-w-0 items-center gap-1 text-left"
-                    >
-                      <ChevronRight
-                        size={12}
-                        strokeWidth={2}
-                        aria-hidden="true"
-                        className={cn(
-                          'shrink-0 text-ink-ghost transition-transform duration-fast',
-                          open && 'rotate-90',
-                        )}
-                      />
-                      <span className="truncate text-xs text-ink">{challenge.title}</span>
-                      {missingAttachments && (
-                        <TriangleAlert
-                          size={11}
+                    {/* ── 题目（点标题展开详情） ── */}
+                    <td className="px-2 py-1 align-middle">
+                      <button
+                        type="button"
+                        onClick={() => setOpenId(open ? null : challenge.id)}
+                        aria-expanded={open}
+                        title={challenge.title}
+                        className="flex w-full min-w-0 items-center gap-1 text-left"
+                      >
+                        <ChevronRight
+                          size={12}
                           strokeWidth={2}
                           aria-hidden="true"
-                          className="shrink-0 text-signal-warn"
+                          className={cn(
+                            'shrink-0 text-ink-ghost transition-transform duration-fast',
+                            open && 'rotate-90',
+                          )}
                         />
-                      )}
-                    </button>
-                  </td>
+                        <span className="truncate text-xs text-ink">{challenge.title}</span>
+                        {missingAttachments && (
+                          <TriangleAlert
+                            size={11}
+                            strokeWidth={2}
+                            aria-hidden="true"
+                            className="shrink-0 text-signal-warn"
+                          />
+                        )}
+                      </button>
+                    </td>
 
-                  {/* ── 类型 ── */}
-                  <td className="hidden px-2 py-1 align-middle md:table-cell">
-                    <span className="truncate text-2xs text-ink-faint">
-                      {CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)]}
-                    </span>
-                  </td>
+                    {/* ── 类型 ── */}
+                    <td className="hidden px-2 py-1 align-middle md:table-cell">
+                      <span className="truncate text-2xs text-ink-faint">
+                        {CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)]}
+                      </span>
+                    </td>
 
-                  {/* ── 分值 ── */}
-                  <td className="tabular px-2 py-1 text-right align-middle">
-                    <span
-                      className={cn('text-2xs', challenge.score === null ? 'text-ink-ghost' : 'text-ink-muted')}
-                      data-numeric
-                    >
-                      {challenge.score ?? '—'}
-                    </span>
-                  </td>
+                    {/* ── 分值 ── */}
+                    <td className="tabular px-2 py-1 text-right align-middle">
+                      <span
+                        className={cn(
+                          'text-2xs',
+                          challenge.score === null ? 'text-ink-ghost' : 'text-ink-muted',
+                        )}
+                        data-numeric
+                      >
+                        {challenge.score ?? '—'}
+                      </span>
+                    </td>
 
-                  {/* ── 候选 / 最后错误（最宽的一列信息） ── */}
-                  <td className="hidden px-2 py-1 align-middle xl:table-cell">
-                    <span className="flex min-w-0 items-center gap-1">
-                      {flag ? (
-                        <>
-                          {challenge.status === 'solved' ? (
-                            <ShieldCheck
-                              size={11}
-                              strokeWidth={2}
-                              aria-hidden="true"
-                              className="shrink-0 text-signal-ok"
-                            />
-                          ) : (
-                            <Flag
-                              size={11}
-                              strokeWidth={2}
-                              aria-hidden="true"
-                              className="shrink-0 text-signal-warn"
-                            />
-                          )}
-                          <code
-                            className={cn(
-                              'mono-ui truncate',
-                              challenge.status === 'solved'
-                                ? 'text-ink-muted'
-                                : 'text-ink',
+                    {/* ── 候选 / 最后错误（最宽的一列信息） ── */}
+                    <td className="hidden px-2 py-1 align-middle xl:table-cell">
+                      <span className="flex min-w-0 items-center gap-1">
+                        {flag ? (
+                          <>
+                            {challenge.status === 'solved' ? (
+                              <ShieldCheck
+                                size={11}
+                                strokeWidth={2}
+                                aria-hidden="true"
+                                className="shrink-0 text-signal-ok"
+                              />
+                            ) : (
+                              <Flag
+                                size={11}
+                                strokeWidth={2}
+                                aria-hidden="true"
+                                className="shrink-0 text-signal-warn"
+                              />
                             )}
-                            title={flag}
+                            <code
+                              className={cn(
+                                'mono-ui truncate',
+                                challenge.status === 'solved' ? 'text-ink-muted' : 'text-ink',
+                              )}
+                              title={flag}
+                            >
+                              {flag}
+                            </code>
+                          </>
+                        ) : challenge.lastError ? (
+                          <span
+                            className="truncate text-2xs text-ink-faint"
+                            title={challenge.lastError}
                           >
-                            {flag}
-                          </code>
-                        </>
-                      ) : challenge.lastError ? (
-                        <span className="truncate text-2xs text-ink-faint" title={challenge.lastError}>
-                          {challenge.lastError}
-                        </span>
-                      ) : (
-                        <span className="text-2xs text-ink-ghost">—</span>
-                      )}
-                    </span>
-                  </td>
+                            {challenge.lastError}
+                          </span>
+                        ) : (
+                          <span className="text-2xs text-ink-ghost">—</span>
+                        )}
+                      </span>
+                    </td>
 
-                  {/* ── 操作（主操作留在行内，其余进展开行） ── */}
-                  <td className="px-2 py-1 align-middle">
-                    <div className="flex items-center justify-end gap-1">
-                      {canSubmit && (
-                        <button
-                          type="button"
-                          disabled={busy || outOfQuota}
-                          onClick={() => onSubmit(challenge)}
-                          title={
-                            outOfQuota
-                              ? '错误提交次数已用尽'
-                              : '打开确认弹窗，核对候选答案后再提交（提交消耗平台额度）'
-                          }
-                          className={cn(
-                            'press inline-flex h-6 items-center gap-1 rounded-sm bg-ink px-2 text-2xs font-medium text-canvas',
-                            'transition-ui duration-fast hover:bg-ink/85',
-                            'disabled:cursor-not-allowed disabled:bg-ink-ghost/30 disabled:text-ink-faint',
-                          )}
-                        >
-                          <ShieldCheck size={11} strokeWidth={2} aria-hidden="true" />
-                          确认
-                        </button>
-                      )}
+                    {/* ── 操作（主操作留在行内，其余进展开行） ── */}
+                    <td className="px-2 py-1 align-middle">
+                      <div className="flex items-center justify-end gap-1">
+                        {canSubmit && (
+                          <button
+                            type="button"
+                            disabled={busy || outOfQuota}
+                            onClick={() => onSubmit(challenge)}
+                            title={
+                              outOfQuota
+                                ? '错误提交次数已用尽'
+                                : '打开确认弹窗，核对候选答案后再提交（提交消耗平台额度）'
+                            }
+                            className={cn(
+                              'press inline-flex h-6 items-center gap-1 rounded-sm bg-ink px-2 text-2xs font-medium text-canvas',
+                              'transition-ui duration-fast hover:bg-ink/85',
+                              'disabled:cursor-not-allowed disabled:bg-ink-ghost/30 disabled:text-ink-faint',
+                            )}
+                          >
+                            <ShieldCheck size={11} strokeWidth={2} aria-hidden="true" />
+                            确认
+                          </button>
+                        )}
 
-                      {canSolve(challenge) && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => onSolve(challenge, isResumable(challenge))}
-                          title={
-                            isResumable(challenge)
-                              ? '接着上一次的进度继续 —— 上次跑过的命令不会重跑'
-                              : '开始解这道题'
-                          }
-                          className={cn(
-                            'press inline-flex h-6 items-center gap-1 rounded-sm px-2 text-2xs font-medium',
-                            canSubmit
-                              ? 'border border-line text-ink-muted hover:border-line-strong hover:text-ink'
-                              : 'bg-accent text-canvas hover:bg-accent-strong',
-                            'transition-ui duration-fast',
-                            'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted',
-                          )}
-                        >
-                          <Play size={10} strokeWidth={2.5} aria-hidden="true" />
-                          {solveLabel(challenge)}
-                        </button>
-                      )}
+                        {canSolve(challenge) && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onSolve(challenge, isResumable(challenge))}
+                            title={
+                              isResumable(challenge)
+                                ? '接着上一次的进度继续 —— 上次跑过的命令不会重跑'
+                                : '开始解这道题'
+                            }
+                            className={cn(
+                              'press inline-flex h-6 items-center gap-1 rounded-sm px-2 text-2xs font-medium',
+                              canSubmit
+                                ? 'border border-line text-ink-muted hover:border-line-strong hover:text-ink'
+                                : 'bg-accent text-canvas hover:bg-accent-strong',
+                              'transition-ui duration-fast',
+                              'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted',
+                            )}
+                          >
+                            <Play size={10} strokeWidth={2.5} aria-hidden="true" />
+                            {solveLabel(challenge)}
+                          </button>
+                        )}
 
-                      {onOpen && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => onOpen(challenge)}
-                          title="打开这道题的对话：解题过程、工具调用与候选都在那里"
-                          className={QUIET_BUTTON}
-                        >
-                          <MessagesSquare size={11} strokeWidth={2} aria-hidden="true" />
-                          查看
-                        </button>
-                      )}
+                        {onOpen && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onOpen(challenge)}
+                            title="打开这道题的对话：解题过程、工具调用与候选都在那里"
+                            className={QUIET_BUTTON}
+                          >
+                            <MessagesSquare size={11} strokeWidth={2} aria-hidden="true" />
+                            查看
+                          </button>
+                        )}
 
-                      {canCancel(challenge) && (
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => onCancel(challenge)}
-                          title="取消这道题（已经在跑的那一轮会跑完，但不会产出候选）"
-                          className={QUIET_BUTTON}
-                        >
-                          <X size={11} strokeWidth={2} aria-hidden="true" />
-                          取消
-                        </button>
-                      )}
-                    </div>
-                  </td>
-                </tr>
-
-                {open && (
-                  <tr className="bg-surface-sunken">
-                    <td colSpan={6} className="px-3 py-2.5">
-                      <ChallengeRowDetail
-                        challenge={challenge}
-                        busy={busy}
-                        queued={queued}
-                        outOfQuota={outOfQuota}
-                        onSolve={onSolve}
-                        onRelease={onRelease}
-                        onSetPriority={onSetPriority}
-                        onWriteup={onWriteup}
-                        onWorkOrder={onWorkOrder}
-                      />
+                        {canCancel(challenge) && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onCancel(challenge)}
+                            title="取消这道题（已经在跑的那一轮会跑完，但不会产出候选）"
+                            className={QUIET_BUTTON}
+                          >
+                            <X size={11} strokeWidth={2} aria-hidden="true" />
+                            取消
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
-                )}
-              </Fragment>
-            )
-          })}
-        </tbody>
-      </table>
+
+                  {open && (
+                    <tr className="bg-surface-sunken">
+                      <td colSpan={onBatch ? 7 : 6} className="px-3 py-2.5">
+                        <ChallengeRowDetail
+                          challenge={challenge}
+                          busy={busy}
+                          queued={queued}
+                          outOfQuota={outOfQuota}
+                          onSolve={onSolve}
+                          onRelease={onRelease}
+                          onSetPriority={onSetPriority}
+                          onWriteup={onWriteup}
+                          onWorkOrder={onWorkOrder}
+                        />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
@@ -441,8 +589,7 @@ function ChallengeRowDetail({
   onWorkOrder?: (challenge: KernelChallenge) => void
 }) {
   const [copied, setCopied] = useState(false)
-  const flag =
-    challenge.status === 'solved' ? challenge.confirmedFlag : challenge.candidateFlag
+  const flag = challenge.status === 'solved' ? challenge.confirmedFlag : challenge.candidateFlag
 
   const copyFlag = () => {
     if (!flag) return
@@ -487,9 +634,19 @@ function ChallengeRowDetail({
           )}
         >
           {challenge.status === 'solved' ? (
-            <ShieldCheck size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-signal-ok" />
+            <ShieldCheck
+              size={12}
+              strokeWidth={2}
+              aria-hidden="true"
+              className="shrink-0 text-signal-ok"
+            />
           ) : (
-            <Flag size={12} strokeWidth={2} aria-hidden="true" className="shrink-0 text-signal-warn" />
+            <Flag
+              size={12}
+              strokeWidth={2}
+              aria-hidden="true"
+              className="shrink-0 text-signal-warn"
+            />
           )}
           <span className="shrink-0 text-2xs text-ink-muted">
             {challenge.status === 'solved' ? '已确认的答案' : '候选答案（待确认）'}

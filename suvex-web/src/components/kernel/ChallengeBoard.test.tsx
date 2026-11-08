@@ -77,6 +77,8 @@ function renderBoard(
     onWriteup?: (c: KernelChallenge) => void
     onWorkOrder?: (c: KernelChallenge) => void
     onOpen?: (c: KernelChallenge) => void
+    onBatch?: (action: 'solve' | 'cancel', ids: string[]) => void
+    queue?: { running: number; limit: number; queued: number; challenges: string[] }
   } = {},
 ) {
   return render(
@@ -91,6 +93,8 @@ function renderBoard(
         onWriteup={handlers.onWriteup ?? noop}
         onWorkOrder={handlers.onWorkOrder}
         onOpen={handlers.onOpen}
+        onBatch={handlers.onBatch}
+        queue={handlers.queue}
       />
     </MemoryRouter>,
   )
@@ -128,9 +132,7 @@ describe('ChallengeBoard：看板本身', () => {
   })
 
   it('附件没下载时行内就有警告（模型看不到题面文件）', () => {
-    renderBoard([
-      makeChallenge({ attachments: [{ name: 'a.zip' }], attachmentsReady: false }),
-    ])
+    renderBoard([makeChallenge({ attachments: [{ name: 'a.zip' }], attachmentsReady: false })])
 
     expand('示例题')
     expect(screen.getByText(/还没下载到服务器/)).not.toBeNull()
@@ -203,10 +205,7 @@ describe('ChallengeBoard：「查看」打开这道题的对话', () => {
   })
 
   it('★ 已解出的题也有 —— 回看过程正是解出之后最常做的事', () => {
-    renderBoard(
-      [makeChallenge({ status: 'solved', confirmedFlag: 'flag{x}' })],
-      { onOpen: noop },
-    )
+    renderBoard([makeChallenge({ status: 'solved', confirmedFlag: 'flag{x}' })], { onOpen: noop })
 
     const row = screen.getByRole('button', { name: '示例题' }).closest('tr')!
     expect(within(row).queryByRole('button', { name: '查看' })).not.toBeNull()
@@ -217,6 +216,83 @@ describe('ChallengeBoard：「查看」打开这道题的对话', () => {
 
     const row = screen.getByRole('button', { name: '示例题' }).closest('tr')!
     expect(within(row).queryByRole('button', { name: '查看' })).toBeNull()
+  })
+})
+
+describe('ChallengeBoard：批量开始 / 停止（第 3 步）', () => {
+  it('★ 只把**能开始的**那些交给批量开始（已解出的不计入）', () => {
+    const onBatch = vi.fn()
+    renderBoard(
+      [
+        makeChallenge({ id: 'a', title: '甲' }),
+        makeChallenge({ id: 'b', title: '乙' }),
+        makeChallenge({ id: 'c', title: '丙', status: 'solved', confirmedFlag: 'flag{x}' }),
+      ],
+      { onBatch },
+    )
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择当前列表里的全部题目' }))
+    // 3 道都勾上了，但只有 2 道可以开始
+    expect(screen.getByText(/已选 3 道/)).not.toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /开始所选/ }))
+
+    expect(onBatch).toHaveBeenCalledWith('solve', ['a', 'b'])
+  })
+
+  it('★ 只把**在跑的**交给批量停止', () => {
+    const onBatch = vi.fn()
+    renderBoard(
+      [
+        makeChallenge({ id: 'a', title: '甲', status: 'solving' }),
+        makeChallenge({ id: 'b', title: '乙', status: 'unsolved' }),
+      ],
+      { onBatch },
+    )
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择当前列表里的全部题目' }))
+    fireEvent.click(screen.getByRole('button', { name: /停止所选/ }))
+
+    expect(onBatch).toHaveBeenCalledWith('cancel', ['a'])
+  })
+
+  it('★ 操作完清空勾选 —— 否则下一次点击会带上上一批的题', () => {
+    const onBatch = vi.fn()
+    renderBoard([makeChallenge({ id: 'a', title: '甲' })], { onBatch })
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择 甲' }))
+    fireEvent.click(screen.getByRole('button', { name: /开始所选/ }))
+
+    expect(screen.queryByText(/已选/)).toBeNull()
+  })
+
+  it('全选按钮再点一次取消全选', () => {
+    renderBoard(
+      [makeChallenge({ id: 'a', title: '甲' }), makeChallenge({ id: 'b', title: '乙' })],
+      { onBatch: noop },
+    )
+
+    const all = screen.getByRole('checkbox', { name: '选择当前列表里的全部题目' })
+    fireEvent.click(all)
+    expect(screen.getByText(/已选 2 道/)).not.toBeNull()
+    fireEvent.click(all)
+    expect(screen.queryByText(/已选/)).toBeNull()
+  })
+
+  it('并发进度常驻：在跑 / 上限 / 排队', () => {
+    renderBoard([makeChallenge()], {
+      queue: { running: 3, limit: 8, queued: 5, challenges: [] },
+    })
+
+    expect(screen.getByText('3/8')).not.toBeNull()
+    expect(screen.getByText('排队 5')).not.toBeNull()
+  })
+
+  it('调用方不传 onBatch 时没有勾选框与批量栏（按需能力）', () => {
+    renderBoard([makeChallenge({ title: '甲' })])
+
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    expect(screen.queryByText(/已选/)).toBeNull()
   })
 })
 

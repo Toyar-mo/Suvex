@@ -81,6 +81,9 @@ from app.kernel.schemas import (
     KernelPriorityIn,
     KernelPullIn,
     KernelPullOut,
+    KernelBatchIn,
+    KernelBatchItemOut,
+    KernelBatchOut,
     KernelQueueOut,
     KernelRecipesOut,
     KernelRemoteCompetitionOut,
@@ -1141,6 +1144,98 @@ def read_queue(_identity: ReadDep, db: DbDep) -> KernelQueueOut:
         limit=stats.limit,
         queued=stats.queued,
         challenges=stats.challenges,
+    )
+
+
+# ══════════════════════════════════════════════════════════
+# 批量开始 / 取消（比赛现场）
+# ══════════════════════════════════════════════════════════
+
+
+@router.post(
+    "/challenges/batch", response_model=KernelBatchOut, summary="批量开始/取消解题"
+)
+def batch_challenges(
+    payload: KernelBatchIn, request: Request, identity: ScanDep, db: DbDep
+) -> KernelBatchOut:
+    """一次开始或取消多道题，**逐条返回结果**。
+
+    ## 为什么是「部分成功」
+
+    批量天然会部分失败：某道题已经解出、另一道正在跑。整体 4xx 会让
+    前端丢掉"哪些成功了"这个信息，而用户恰恰只需要知道那几道没起来
+    的是哪几道。
+
+    ## 为什么每条之后 commit / rollback
+
+    一条失败不该把前面已经受理的清单一并回滚 —— 那些 worker 已经在队列
+    里了，数据库里却当作没发生，会出现"界面上说没开始、实际在跑"的错位。
+
+    ## 留痕
+
+    只记**一条**审计（批量本身是一个动作），detail 里带上总数与题号。
+    逐条记会把审计表冲成一片噪声，复盘时反而看不出"是谁一次开了 16 道"。
+    """
+    results: list[KernelBatchItemOut] = []
+    seen: set[str] = set()
+    for challenge_id in payload.challengeIds:
+        if challenge_id in seen:
+            continue
+        seen.add(challenge_id)
+
+        title = ""
+        try:
+            challenge = service.get_challenge_or_404(db, challenge_id)
+            title = challenge.title
+            if payload.action == "solve":
+                service.start_solve(
+                    db,
+                    challenge,
+                    mode=payload.mode,
+                    sandbox_profile=payload.sandboxProfile,
+                    resume=payload.resume,
+                )
+                message = "已受理，排队等待开始"
+            else:
+                service.cancel_challenge(db, challenge)
+                message = "已取消"
+            db.commit()
+            results.append(
+                KernelBatchItemOut(id=challenge_id, title=title, ok=True, message=message)
+            )
+        except ApiError as exc:
+            db.rollback()
+            results.append(
+                KernelBatchItemOut(id=challenge_id, title=title, ok=False, message=exc.message)
+            )
+
+    succeeded = sum(1 for item in results if item.ok)
+    failed = len(results) - succeeded
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=(
+            AuditAction.CTF2_SOLVE_START
+            if payload.action == "solve"
+            else AuditAction.CTF2_SOLVE_CANCEL
+        ),
+        summary=(
+            f"批量{'发起解题' if payload.action == 'solve' else '取消'}："
+            f"{succeeded} 道成功 / {failed} 道失败"
+        ),
+        target=",".join(item.id for item in results if item.ok) or None,
+        detail={
+            "batch": True,
+            "action": payload.action,
+            "requested": len(results),
+            "succeeded": succeeded,
+            "failed": failed,
+            "sandboxProfile": payload.sandboxProfile,
+            "mode": payload.mode,
+        },
+    )
+    return KernelBatchOut(
+        requested=len(results), succeeded=succeeded, failed=failed, results=results
     )
 
 

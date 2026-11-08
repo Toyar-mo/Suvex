@@ -513,6 +513,9 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     # `read` 的定义是只读 —— 一个只读令牌能替用户扣掉答题机会，显然不成立。
     ("POST", "/api/v1/kernel/challenges/{challengeId}/submit"): "scan",
     ("POST", "/api/v1/kernel/challenges/{challengeId}/cancel"): "scan",
+    # 批量开始/取消：上面两条的批量形态，同一个判据。一次 200 道反而
+    # 更需要 scan 级 —— 只读令牌靠它一次就能点着整场题的额度。
+    ("POST", "/api/v1/kernel/challenges/batch"): "scan",
     # 释放平台环境：改状态 + 调平台接口。给 read 级的话，只读令牌就能把
     # 别人正在解题的环境停掉 —— 那会让解题在半路失败。
     ("DELETE", "/api/v1/kernel/challenges/{challengeId}/environment"): "scan",

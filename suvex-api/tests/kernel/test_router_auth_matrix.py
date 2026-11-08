@@ -146,6 +146,10 @@ SCOPE_GATED: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/kernel/competitions/remote"): "scan",
     # 起环境 + 调度 LLM 解题：**对外发包**（这正是 scan scope 存在的理由）。
     ("POST", "/api/v1/kernel/challenges/{challengeId}/solve"): "scan",
+    # 批量开始/取消：就是上面两条的批量形态，同样是"起环境 / 改状态 +
+    # 调度 LLM"。允许一批 200 道反而更需要 scan 级 —— read 令牌靠它
+    # 一次就能把整场题的额度点着。
+    ("POST", "/api/v1/kernel/challenges/batch"): "scan",
     # ★★ 提交 flag：**对外发出一个不可撤销的动作**，且有配额后果。
     #     `read` 的定义是只读 —— 一个只读令牌能替用户扣掉答题机会，
     #     显然不成立。

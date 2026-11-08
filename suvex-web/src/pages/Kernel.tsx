@@ -1,5 +1,13 @@
 import { PageHeader } from '@/components/layout/AppShell'
-import { ChallengeBoard, CompetitionPicker, FlagConfirmDialog, RacePanel, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/kernel'
+import {
+  ChallengeBoard,
+  CompetitionPicker,
+  FlagConfirmDialog,
+  RacePanel,
+  SandboxProfileSelect,
+  WorkOrderDialog,
+  WriteupDialog,
+} from '@/components/kernel'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button, IconButton } from '@/components/ui/Button'
@@ -10,6 +18,7 @@ import {
   CANONICAL_CATEGORIES,
   CANONICAL_CATEGORY_LABEL,
   canonicalCategoryOf,
+  batchChallenges,
   bindKernelAccount,
   pullKernelChallenge,
   unbindKernelAccount,
@@ -311,7 +320,10 @@ export function KernelPage() {
         return false
       }
       // 分类维度：与状态是「与」关系
-      if (categoryFilter !== 'all' && canonicalCategoryOf(item.canonicalCategory) !== categoryFilter) {
+      if (
+        categoryFilter !== 'all' &&
+        canonicalCategoryOf(item.canonicalCategory) !== categoryFilter
+      ) {
         return false
       }
       if (!text) return true
@@ -319,7 +331,9 @@ export function KernelPage() {
         item.title.toLowerCase().includes(text) ||
         item.category.toLowerCase().includes(text) ||
         // 也搜标准中文类名与来源 —— 用户按「逆向」或「DASCTF」搜时要搜得到
-        CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(item.canonicalCategory)].toLowerCase().includes(text) ||
+        CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(item.canonicalCategory)]
+          .toLowerCase()
+          .includes(text) ||
         (item.platformName || '').toLowerCase().includes(text) ||
         item.remoteId.includes(text)
       )
@@ -389,7 +403,9 @@ export function KernelPage() {
           tone: problems ? 'risk' : undefined,
         })
       })
-      .catch((err) => showToast({ message: `比赛平台同步失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({ message: `比赛平台同步失败：${errorMessage(err)}`, tone: 'risk' }),
+      )
       .finally(() => setBusy(false))
   }, [])
 
@@ -456,6 +472,40 @@ export function KernelPage() {
     [navigate],
   )
 
+  /**
+   * 批量开始 / 停止（第 3 步）。
+   *
+   * ★ toast 里带**第一条失败原因**：16 道里 2 道没起来时，"2 道失败"
+   *   不解决问题，用户要知道为什么（多数是"已经解出"或"正在跑"）。
+   * ★ `resume: false`：批量是"把这些题开起来"，不是逐题接着上次跑。
+   *   要继续某一道的进度，用行内那个「接着解」。
+   */
+  const runBatch = useCallback(
+    (action: 'solve' | 'cancel', ids: string[]) => {
+      if (ids.length === 0) return
+      setBusy(true)
+      void batchChallenges(action, ids, {
+        mode: (settings?.submitMode ?? 'safe') as KernelSubmitMode,
+        sandboxProfile: profile ?? undefined,
+        resume: false,
+      })
+        .then((result) => {
+          const firstFailure = result.results.find((item) => !item.ok)
+          showToast({
+            message:
+              `批量${action === 'solve' ? '开始' : '停止'}：${result.succeeded} 道成功` +
+              (result.failed > 0
+                ? `，${result.failed} 道失败（${firstFailure?.message ?? '原因未知'}）`
+                : ''),
+            tone: result.failed > 0 ? 'risk' : undefined,
+          })
+        })
+        .catch((err) => showToast({ message: `批量操作失败：${errorMessage(err)}`, tone: 'risk' }))
+        .finally(() => setBusy(false))
+    },
+    [profile, settings?.submitMode],
+  )
+
   const runSubmit = useCallback(
     (flag: string) => {
       if (!pending) return
@@ -511,15 +561,12 @@ export function KernelPage() {
    *   也不对外发任何东西。给一个可撤销的排序操作加确认框，会让
    *   "比赛现场连点几下调整顺序"变成一场点击马拉松。
    */
-  const runSetPriority = useCallback(
-    (challenge: KernelChallenge, priority: number) => {
-      setBusy(true)
-      void setChallengePriority(challenge.id, priority)
-        .catch((err) => showToast({ message: `调整失败：${errorMessage(err)}`, tone: 'risk' }))
-        .finally(() => setBusy(false))
-    },
-    [],
-  )
+  const runSetPriority = useCallback((challenge: KernelChallenge, priority: number) => {
+    setBusy(true)
+    void setChallengePriority(challenge.id, priority)
+      .catch((err) => showToast({ message: `调整失败：${errorMessage(err)}`, tone: 'risk' }))
+      .finally(() => setBusy(false))
+  }, [])
 
   /**
    * 按分值批量调整排队顺序。
@@ -647,8 +694,10 @@ export function KernelPage() {
               状态
             </span>
             {STATUS_FILTERS.map((item) => {
-              {/* ★ 计数与筛选**用同一份 `match`**：两处各写一遍必然漂移，
-                  而漂移的表现就是"标签上的数字和点进去看到的条数不一致"。 */}
+              {
+                /* ★ 计数与筛选**用同一份 `match`**：两处各写一遍必然漂移，
+                  而漂移的表现就是"标签上的数字和点进去看到的条数不一致"。 */
+              }
               const count = challenges.filter((c) => item.match.includes(c.status)).length
               const isActive = filter === item.value
               return (
@@ -699,7 +748,10 @@ export function KernelPage() {
                 >
                   {item.label}
                   <span
-                    className={cn('tabular text-2xs', isActive ? 'text-accent-strong' : 'text-ink-faint')}
+                    className={cn(
+                      'tabular text-2xs',
+                      isActive ? 'text-accent-strong' : 'text-ink-faint',
+                    )}
                     data-numeric
                   >
                     {count}
@@ -720,7 +772,11 @@ export function KernelPage() {
             ★ 计数同样按当前状态桶算，和列表口径一致。
           */}
           {sourceOptions.length > 0 && (
-            <div role="group" aria-label="按接入来源筛选" className="flex flex-wrap items-center gap-1">
+            <div
+              role="group"
+              aria-label="按接入来源筛选"
+              className="flex flex-wrap items-center gap-1"
+            >
               <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
                 来源
               </span>
@@ -737,7 +793,10 @@ export function KernelPage() {
                   >
                     {item.label}
                     <span
-                      className={cn('tabular text-2xs', isActive ? 'text-accent-strong' : 'text-ink-faint')}
+                      className={cn(
+                        'tabular text-2xs',
+                        isActive ? 'text-accent-strong' : 'text-ink-faint',
+                      )}
                       data-numeric
                     >
                       {count}
@@ -907,6 +966,8 @@ export function KernelPage() {
               onWriteup={setWriteupChallenge}
               onWorkOrder={setWorkOrderChallenge}
               onOpen={runOpen}
+              onBatch={runBatch}
+              queue={queue}
             />
 
             <p className="mt-panel text-2xs text-ink-faint">
@@ -933,7 +994,12 @@ export function KernelPage() {
         */}
         <div className="mt-bay max-w-md">
           <SandboxProfileSelect
-            value={profile ?? normalizeSandboxProfile(settings?.defaultSandboxProfile ?? 'suvex-sandbox') as KernelSandboxProfile}
+            value={
+              profile ??
+              (normalizeSandboxProfile(
+                settings?.defaultSandboxProfile ?? 'suvex-sandbox',
+              ) as KernelSandboxProfile)
+            }
             onChange={(next) => setProfile(next)}
           />
         </div>
@@ -957,10 +1023,7 @@ export function KernelPage() {
           "重置"（重置一旦漏写，打开第二道题时会先闪一眼上一道的题解）。
       */}
       {writeupChallenge && (
-        <WriteupDialog
-          challenge={writeupChallenge}
-          onClose={() => setWriteupChallenge(null)}
-        />
+        <WriteupDialog challenge={writeupChallenge} onClose={() => setWriteupChallenge(null)} />
       )}
 
       {/*
@@ -995,9 +1058,9 @@ export function KernelPage() {
                 按链接拉取一道题
               </h2>
               <p className="text-xs text-ink-muted">
-                把平台上那道题的页面地址<strong className="text-ink">整条</strong>粘进来即可
-                —— 服务端会自己从里面认出题目 id，并在已知的练习集里找出它属于哪一个。
-                只粘那段 UUID 也行。
+                把平台上那道题的页面地址<strong className="text-ink">整条</strong>粘进来即可 ——
+                服务端会自己从里面认出题目 id，并在已知的练习集里找出它属于哪一个。 只粘那段 UUID
+                也行。
               </p>
             </header>
 
@@ -1021,12 +1084,17 @@ export function KernelPage() {
             </label>
 
             <p className="rounded-sm border border-dashed border-line-strong px-2.5 py-2 text-2xs text-ink-muted">
-              为什么是一次一道：平台的开放接口没有「列出练习集题目」的接口，
-              所以没法批量拉；但「按 id 取单题详情」是可用的。重复拉同一道题只会更新它，不会重复插入。
+              为什么是一次一道：平台的开放接口没有「列出练习集题目」的接口， 所以没法批量拉；但「按
+              id 取单题详情」是可用的。重复拉同一道题只会更新它，不会重复插入。
             </p>
 
             <footer className="flex items-center justify-end gap-2">
-              <Button variant="secondary" size="sm" disabled={busy} onClick={() => setPulling(false)}>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={busy}
+                onClick={() => setPulling(false)}
+              >
                 取消
               </Button>
               <Button
