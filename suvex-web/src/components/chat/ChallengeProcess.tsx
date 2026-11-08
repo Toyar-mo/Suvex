@@ -80,7 +80,10 @@ export function ChallengeProcess({
     <section aria-label="解题过程" className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5 text-2xs text-ink-faint">
         <Terminal size={11} strokeWidth={2} aria-hidden="true" />
-        解题过程
+        {/* ★ 不在跑时**必须**说清这是旧记录：事件是绑定在这道题上一次
+            解题的 scan 上的，新一轮排队时它还没换 —— 不标注的话，用户会把
+            几小时前的工具调用当成"现在正在做的事"。 */}
+        {running ? '解题过程' : '上一次运行的过程'}
         {running && (
           <span className="flex items-center gap-1 text-accent-strong">
             <span className="h-1 w-1 animate-pulse rounded-pill bg-accent" aria-hidden="true" />
@@ -91,6 +94,10 @@ export function ChallengeProcess({
       </div>
 
       {error && <p className="text-2xs text-signal-risk">读不到过程事件：{error}</p>}
+
+      {!running && events.length > 0 && (
+        <p className="text-2xs text-ink-ghost">这道题当前没有在跑 —— 下面是上一次运行的记录。</p>
+      )}
 
       {!error && events.length === 0 && (
         <p className="text-2xs text-ink-faint">

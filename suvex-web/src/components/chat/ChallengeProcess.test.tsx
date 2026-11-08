@@ -81,6 +81,16 @@ describe('ChallengeProcess', () => {
     expect(screen.queryByText('进行中')).toBeNull()
   })
 
+  it('★ 不在跑时标明这是**上一次**运行的记录（别把旧事件当成现在）', async () => {
+    get.mockResolvedValue({ events: [event()], hasMore: false })
+
+    render(<ChallengeProcess scanId="scan_1" running={false} />)
+
+    await waitFor(() => expect(screen.getByText('上一次运行的过程')).not.toBeNull())
+    expect(screen.getByText(/这道题当前没有在跑/)).not.toBeNull()
+    expect(screen.queryByText('进行中')).toBeNull()
+  })
+
   it('读不到事件要出声，而不是显示 0 条装作正常', async () => {
     get.mockRejectedValue(new Error('502 Bad Gateway'))
 
