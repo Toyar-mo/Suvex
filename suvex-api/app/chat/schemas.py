@@ -263,6 +263,9 @@ class ChatChallengeRef(CamelModel):
     candidateFlag: str | None = None
     #: 平台判过对的 flag（`solved` 时非空）
     confirmedFlag: str | None = None
+    #: 这一轮解题的 scan id —— 对话页用它读**过程事件**（工具调用、推理）。
+    #: `None` = 还没开始解过，过程面板自然为空。
+    scanId: str | None = None
 
 
 class ChatSessionDetailOut(ChatSessionOut):

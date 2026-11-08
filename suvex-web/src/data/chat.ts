@@ -171,6 +171,8 @@ export interface ChatChallengeRef {
   platformName: string
   candidateFlag: string | null
   confirmedFlag: string | null
+  /** 这一轮解题的 scan id —— 对话页用它读过程事件；`null` = 还没开始解 */
+  scanId: string | null
 }
 
 export interface ChatSessionDetail extends ChatSession {

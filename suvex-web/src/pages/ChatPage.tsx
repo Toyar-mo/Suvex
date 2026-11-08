@@ -24,6 +24,7 @@ import { AssistantTurn } from '@/components/chat/AssistantTurn'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { ChallengeBar, MissingChallengeBar } from '@/components/chat/ChallengeBar'
+import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -1550,12 +1551,39 @@ export function ChatPage() {
                   用户点下发送的那 3 秒里，屏幕上会同时出现"这个对话还是空的"
                   和右侧自己刚发出去的那句话 —— 一句话既在又不在。
               */}
+              {/*
+                题目会话的第一屏：**先把过程摆出来**，再说"可以聊"。
+                没有这一段的话，用户看到的是「解题中」+「这个对话还是空的」
+                —— 两句话互相拆台，读起来就是"坏了"。
+              */}
+              {active?.challengeId && active.challenge && (
+                <div className="rounded-md border border-line bg-surface px-3 py-2.5">
+                  <ChallengeProcess
+                    scanId={active.challenge.scanId ?? null}
+                    running={[
+                      'environment_ready',
+                      'solving',
+                      'submitting',
+                    ].includes(active.challenge.status)}
+                  />
+                </div>
+              )}
+
               {messages.length === 0 &&
                 !(sendingHere && pendingUserContent !== null) && (
                 <>
                   <p className="py-4 text-center text-xs text-ink-faint">
-                    这个对话还是空的。说点什么，或者回到会话列表挑另一个。
+                    {active?.challengeId
+                      ? '这道题由平台在沙箱里解，过程在上面实时更新。也可以直接在下面问它。'
+                      : '这个对话还是空的。说点什么，或者回到会话列表挑另一个。'}
                   </p>
+                  {/*
+                    ★ 题目会话里不摆"可以这样问"那几条通用开场白：
+                      它们是给"我该拿这个对话框干什么"的人看的，而从看板
+                      点进来的人心里已经有一个具体问题（这道题怎样了）。
+                      摆在那儿只会把刚出现的解题过程挤下去。
+                  */}
+                  {!active?.challengeId && (
                   <div className="flex flex-col gap-1.5">
                     {STARTERS.map((text) => (
                       <button
@@ -1576,6 +1604,7 @@ export function ChatPage() {
                       </button>
                     ))}
                   </div>
+                  )}
                 </>
               )}
 

@@ -1299,6 +1299,7 @@ def _challenge_ref(db: Session, session: service.ChatSession) -> ChatChallengeRe
         platformName=platform_name,
         candidateFlag=challenge.candidate_flag,
         confirmedFlag=challenge.confirmed_flag,
+        scanId=challenge.scan_id,
     )
 
 
