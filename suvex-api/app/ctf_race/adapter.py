@@ -304,8 +304,14 @@ class SolveOneAdapter:
             # 抢同一批条目（sink 内部有锁，但那样会把顺序打乱）。
             if flusher is not None:
                 flusher.cancel()
-                with contextlib.suppress(Exception):
+                # ⚠️ `CancelledError` 在 3.8+ 是 BaseException，`suppress(Exception)`
+                # 抓不住 —— 而"await 一个已取消的 task"**必然**抛它。
+                # 实测 2026-11-08：这一行让每道题在 10 秒内以 CancelledError
+                # 退出，19 道题全灭，而堆栈看起来像"用户取消"。
+                try:
                     await flusher
+                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                    pass
             if sink is not None:
                 sink.flush()
             # ★ v1.73：`SandboxContainer` 的销毁方法叫 `destroy()`（docker rm -f，
