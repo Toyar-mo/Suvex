@@ -111,6 +111,18 @@ class CompetitionRacer:
         self._no_submit = no_submit
         self._max_bumps = max_bumps
 
+        # ★★ P3 提交门（2026-11-08）。fan-out 之后同一道题可能有 2–3 个
+        # solver 同时想提交，而错误提交次数是**不可再生**的。
+        #
+        # 三道闸，全部按 remote_id 记账：
+        #   1. **串行化**：同一时刻只允许一个提交在飞（`_submit_lock`）；
+        #   2. **去重**：同一个答案只送平台一次（`_submitted`）；
+        #   3. **递增冷却**：答错后 30 → 60 → 120 … 最多 600 秒才能再交
+        #      （`_wrong_at`），"平台未受理"不触发冷却（那不是答错）。
+        self._submit_lock = asyncio.Lock()
+        self._submitted: dict[str, set[str]] = {}
+        self._wrong_at: dict[str, list[float]] = {}
+
         #: 稳定的 remote_id → (KernelChallenge.id, RemoteChallenge 快照)
         self._challenge_ids: dict[str, str] = {}
         self._cost = CostTracker()
@@ -512,19 +524,47 @@ class CompetitionRacer:
         from app.chat import competition as competition_mod
 
         stripped = competition_mod.strip_flag_shell(flag)
-        with self._session_factory() as db:
-            try:
-                outcome = await competition_mod.submit(db, remote_id, stripped)
-            except Exception as exc:  # noqa: BLE001
-                return (f"提交异常：{exc}", False)
-        accepted = bool(_pick(outcome, "accepted", default=False))
-        solved = bool(_pick(outcome, "is_solved", "isSolved", default=False))
-        msg = _pick(outcome, "message", default="") or ""
-        if solved:
-            return (f"CORRECT：{msg}", True)
-        if not accepted:
-            return (f"平台未受理（不扣错误次数）：{msg}", False)
-        return (f"INCORRECT：{msg}", False)
+
+        async with self._submit_lock:
+            seen = self._submitted.setdefault(remote_id, set())
+            if stripped in seen:
+                # 去重：**不发请求**。fan-out 时两个 solver 常常同时想到同一个
+                # 答案，重复提交只会白白消耗配额。
+                return ("同一个答案已经提交过（去重，不消耗配额）。", False)
+
+            now = time.monotonic()
+            recent = [t for t in self._wrong_at.get(remote_id, []) if now - t < 600]
+            self._wrong_at[remote_id] = recent
+            if recent:
+                cooldown = min(30 * (2 ** (len(recent) - 1)), 600)
+                remaining = cooldown - (now - recent[-1])
+                if remaining > 0:
+                    return (
+                        f"冷却中：{int(remaining)} 秒后才能再次提交"
+                        f"（连续 {len(recent)} 次答错，冷却 {int(cooldown)} 秒）。",
+                        False,
+                    )
+
+            # ⚠️ 只在**平台真的收到**之后才登记去重（见下面的 add）：
+            #    请求抛异常时不能把它记成"已提交"，否则一次网络抖动
+            #    会让这个答案永远交不出去。
+            with self._session_factory() as db:
+                try:
+                    outcome = await competition_mod.submit(db, remote_id, stripped)
+                except Exception as exc:  # noqa: BLE001
+                    return (f"提交异常：{exc}", False)
+
+            accepted = bool(_pick(outcome, "accepted", default=False))
+            solved = bool(_pick(outcome, "is_solved", "isSolved", default=False))
+            msg = _pick(outcome, "message", default="") or ""
+            seen.add(stripped)
+            if solved:
+                return (f"CORRECT：{msg}", True)
+            if not accepted:
+                return (f"平台未受理（不扣错误次数）：{msg}", False)
+            # 真的答错了 → 记一次冷却
+            self._wrong_at.setdefault(remote_id, []).append(time.monotonic())
+            return (f"INCORRECT：{msg}", False)
 
     # ── 单题解题（给「开始解题」按钮 / 单题 worker 复用，v1.74）──────
     async def solve_one(self, remote_id: str, *, challenge_id: str | None = None) -> dict:
