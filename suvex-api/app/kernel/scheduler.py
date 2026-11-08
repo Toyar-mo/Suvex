@@ -362,7 +362,7 @@ class KernelScheduler:
             self._reap_finished()
             return self._claim()
 
-    def _note_worker_exit(self, challenge_id: str, duration: float) -> None:
+    def _note_worker_exit(self, challenge_id: str, duration: float, *, error: str = "") -> None:
         """worker 退出后的记账：连续「秒退」要停手。
 
         ★ 判据是**时长**而不是异常：worker 自己的异常已经兜住了（写在
@@ -392,9 +392,12 @@ class KernelScheduler:
                 if challenge is None or challenge.status != KernelChallengeStatus.SOLVING.value:
                     return
                 challenge.status = KernelChallengeStatus.FAILED.value
-                challenge.last_error = (
-                    f"连续 {streak} 次在 {int(duration)} 秒内退出（未产生进度），已停止重试。"
-                )
+                detail = f"连续 {streak} 次在 {int(duration)} 秒内退出（未产生进度），已停止重试。"
+                if error:
+                    detail += f" 最近一次错误：{error[:400]}"
+                elif challenge.last_error:
+                    detail += f" 上次记录：{challenge.last_error[:400]}"
+                challenge.last_error = detail
             with self._lock:
                 self._failure_streak.pop(challenge_id, None)
             logger.warning(
@@ -567,12 +570,20 @@ class KernelScheduler:
 
         def target() -> None:
             started = now_utc().timestamp()
+            #: 这次的异常原文 —— 要带进失败原因里。
+            #
+            # ★ 2026-11-08：原来只记"连续 N 次秒退"，把**真正的首因**盖掉了，
+            #   排查时只能去翻 journal。首因才是可操作的信息。
+            error = ""
             try:
                 runner.run_worker(challenge_id, resume=resume, attempt_id=attempt_id)
-            except Exception:  # noqa: BLE001 - runner 自己已经兜住了，这是双保险
+            except Exception as exc:  # noqa: BLE001 - runner 自己已经兜住了，这是双保险
+                error = f"{type(exc).__name__}: {exc}"
                 logger.exception("CTF2 worker 线程异常退出：%s", challenge_id)
             finally:
-                self._note_worker_exit(challenge_id, now_utc().timestamp() - started)
+                self._note_worker_exit(
+                    challenge_id, now_utc().timestamp() - started, error=error
+                )
 
 
 
