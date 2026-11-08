@@ -120,6 +120,13 @@ FINAL: {"candidates": [{"answer": "题目要的字符串", "evidence": "命令 +
 
 ## 五、按题型的第一步
 
+**开工前先拉一篇技能。** `load_skill` 里的 `ctf-pwn` / `ctf-reverse` / `ctf-crypto` / `ctf-misc` / `ctf-web` / `ctf-forensics` / `ctf-malware` / `ctf-osint` 是各题型的完整手册（工具清单、常见陷阱、可复制的命令），由领域作者维护。凭记忆做通常比查手册慢且更容易走偏；手册正文末尾还列着同目录的专题文件（如 `format-string.md`、`advanced-exploits.md`），需要时再拉。
+
+```
+ACTION: {"tool": "load_skill", "args": {"name": "ctf-reverse"}}
+```
+
+
 - **web**：先手工发几个请求看响应头与报错；再试目录探测与常见注入/越权/文件读取。有认证口先想"能不能不用密码进去"。
 - **crypto**：先判断是"算法用错"还是"参数太弱"。前者找数学缺陷，后者才谈计算。
 - **reverse**：`file` → `checksec` → 静态（`r2 -A`/`objdump`）→ 动态（`gdb`/`strace`）。**先静态后动态。**
