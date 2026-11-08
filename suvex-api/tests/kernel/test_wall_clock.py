@@ -79,9 +79,11 @@ def _restore(ready_client: TestClient) -> None:
     [
         # 80 轮 × 45s = 3600（一小时）—— 常见默认值。
         (80, 80 * DEFAULT_CTF2_SECONDS_PER_TURN),
-        # 难题提到 200 轮 → 9000s，随回合联动（不出现"界面给 200 轮、
-        # 实际 60 分钟就被砍"的错位）。
-        (200, 200 * DEFAULT_CTF2_SECONDS_PER_TURN),
+        # 难题提到 200 轮 → 9000s，但**被 90 分钟的成本闸夹住**。
+        # 2026-11-08 改：上界从 24 小时收紧到 90 分钟 —— 500 轮 × 45s
+        # 推出来是 6.25 小时，一道题能把并发槽占一整天，而调研里没有
+        # 一家这么做（Muteki 每题 4000s、Naptime 16–32 步）。
+        (200, 90 * 60),
     ],
 )
 def test_derivation_scales_with_turns(turns: int, expected: int) -> None:

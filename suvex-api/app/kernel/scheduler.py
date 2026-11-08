@@ -116,7 +116,40 @@ def max_concurrent(db: Session | None = None) -> int:
     from app.kernel import service as ctf2_service
 
     settings = ctf2_service.effective_ctf2_settings(db)
-    return max(1, int(settings.max_concurrent_solves))
+    return max(1, min(int(settings.max_concurrent_solves), _resource_concurrency_cap()))
+
+
+def _resource_concurrency_cap() -> int:
+    """按**宿主资源**算一个并发天花板（Linux；读不到就退回 32）。
+
+    ## 为什么设置里的数字不能直接信（2026-11-08）
+
+    比赛场景要"一题一任务、放肆开并行"，但设置里填 30 不等于能跑 30：
+    每个沙箱实测 100–200MB，8 核机器上 30 个容器同时跑会把 `docker run`
+    拖到超时（这天真发生过一次：813 个泄漏容器让四道题一起失败）。
+
+    判据取两条的上限：
+      · CPU：`核数 × 2` —— 解题是 LLM 等待为主，容器大部分时间是闲的；
+      · 内存：`可用内存 / 250MB`（每个沙箱留余量）。
+
+    与 SWE-bench 官方建议的 `min(0.75 × CPU, 24)` 同一个思路，
+    只是把 CPU 系数放宽到 2（等待型负载）。
+    """
+    import os
+    from pathlib import Path
+
+    try:
+        cpus = os.cpu_count() or 1
+        mem_mb = 0
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemAvailable:"):
+                mem_mb = int(line.split()[1]) // 1024
+                break
+        by_cpu = cpus * 2
+        by_mem = mem_mb // 250 if mem_mb else by_cpu
+        return max(1, min(by_cpu, by_mem, 32))
+    except Exception:  # noqa: BLE001 - 非 Linux / 读不到就退回保守值
+        return 32
 
 
 def solve_poll_seconds(db: Session | None = None) -> float:
@@ -205,6 +238,14 @@ class KernelScheduler:
         # ⚠️ 与 `_resume` 不同，它**必须**在启动时取走并清掉：
         #    留着会让下一次重排（用户点"再解一次"）误用上一次的快照。
         self._attempts: dict[str, str] = {}
+        # ★ 连续「启动即失败」的计数（2026-11-08）。
+        #
+        # 实测：一道题 worker 秒退、状态仍是 solving，调度器下一 tick 又认领
+        # —— 每次认领都新建一个沙箱。97 分钟里堆了 **750 个** `race-*` 容器，
+        # 把 docker 拖到 `run` 超时，四道题一起挂。
+        #
+        # 同一个挑战连续 3 次在 2 分钟内退出，就判它 failed 并停止重试。
+        self._failure_streak: dict[str, int] = {}
         self._lock = threading.Lock()
         # 让整个 tick 串行 —— 少了它，"数名额 + 认领"会与另一个
         # 触发点（比如接口里的 enqueue）交叉，于是并发上限失效。
@@ -320,6 +361,47 @@ class KernelScheduler:
         with self._tick_lock:
             self._reap_finished()
             return self._claim()
+
+    def _note_worker_exit(self, challenge_id: str, duration: float) -> None:
+        """worker 退出后的记账：连续「秒退」要停手。
+
+        ★ 判据是**时长**而不是异常：worker 自己的异常已经兜住了（写在
+          `last_error` 里），这里要抓的是"跑了几秒就退出、状态还留在
+          solving"那种 —— 调度器会立刻重新认领，每次认领起一个新沙箱。
+        """
+        quick = duration < 120
+        with self._lock:
+            if quick:
+                streak = self._failure_streak.get(challenge_id, 0) + 1
+                self._failure_streak[challenge_id] = streak
+            else:
+                self._failure_streak.pop(challenge_id, None)
+                streak = 0
+
+        if not quick or streak < 3:
+            return
+
+        # 连续三次秒退：判 failed，别再让它把沙箱堆起来。
+        try:
+            from app.core.db import session_scope
+            from app.core.vocab import KernelChallengeStatus
+            from app.kernel.models import KernelChallenge
+
+            with session_scope() as db:
+                challenge = db.get(KernelChallenge, challenge_id)
+                if challenge is None or challenge.status != KernelChallengeStatus.SOLVING.value:
+                    return
+                challenge.status = KernelChallengeStatus.FAILED.value
+                challenge.last_error = (
+                    f"连续 {streak} 次在 {int(duration)} 秒内退出（未产生进度），已停止重试。"
+                )
+            with self._lock:
+                self._failure_streak.pop(challenge_id, None)
+            logger.warning(
+                "CTF2 题目 %s 连续 %d 次秒退，已标记 failed 并停止重试", challenge_id, streak
+            )
+        except Exception:  # noqa: BLE001 - 记账失败不该把调度器带崩
+            logger.warning("记录连续失败时出错：%s", challenge_id, exc_info=True)
 
     def _reap_finished(self) -> None:
         """把已经结束的 worker 从在跑集合里摘掉。
@@ -484,10 +566,15 @@ class KernelScheduler:
             self._resume.discard(challenge_id)
 
         def target() -> None:
+            started = now_utc().timestamp()
             try:
                 runner.run_worker(challenge_id, resume=resume, attempt_id=attempt_id)
             except Exception:  # noqa: BLE001 - runner 自己已经兜住了，这是双保险
                 logger.exception("CTF2 worker 线程异常退出：%s", challenge_id)
+            finally:
+                self._note_worker_exit(challenge_id, now_utc().timestamp() - started)
+
+
 
         thread = threading.Thread(
             target=target, name=f"suvex-ctf2-solve-{challenge_id[-8:]}", daemon=True

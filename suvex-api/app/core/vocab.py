@@ -1424,8 +1424,13 @@ MAX_CTF2_MAX_TURNS: Final[int] = 500
 DEFAULT_CTF2_SECONDS_PER_TURN: Final[int] = 45
 # 下界：再小会打断正常求解（80 轮 × 45 秒 = 3600；别让它被配到几分钟）。
 MIN_CTF2_WALL_CLOCK_SECONDS: Final[int] = 120
-# 上界：只是"别手滑填 100000000"的护栏，不是成本闸（与 MAX_CTF2_MAX_TURNS 同理）。
-MAX_CTF2_WALL_CLOCK_SECONDS: Final[int] = 24 * 3600
+# 上界：**成本闸**，不只是防手滑（2026-11-08 按调研收紧）。
+#
+# 实测：500 轮 × 45 秒推出来的默认墙钟是 6.25 小时 —— 一道题能把并发槽占一整天。
+# 而公开实现里没有一家这么干：Naptime 16–32 步、EnIGMA 前 20 步定胜负、
+# Muteki 每题 4000 秒、RedAmon 一波 1800 秒。90 分钟是"足够解出难题、又不至于
+# 把槽占死"的折中，需要更长时可以在设置里显式写。
+MAX_CTF2_WALL_CLOCK_SECONDS: Final[int] = 90 * 60
 
 
 def default_ctf2_wall_clock_seconds(max_turns: int) -> int:
