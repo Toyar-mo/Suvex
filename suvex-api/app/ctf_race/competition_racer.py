@@ -646,7 +646,12 @@ class CompetitionRacer:
         # 才会同时开多个 solver。骨架阶段刻意不默认开启：多 solver 同时
         # 提交会共用平台的错误提交配额，而提交门的串行化还没做
         # （见 ADR-010 P3）。先把并发通路跑通，再补提交侧。
-        models = list(self._models[: _fanout_count()]) or [model]
+        _fanout = _fanout_count()
+        models = list(self._models[:_fanout]) or [model]
+        # 只配了一个模型但要求 fan-out > 1：**同模型双开**（不引入新成本，
+        # 靠采样多样性）。要异构就把第二个模型加进 `models` 配置。
+        while len(models) < _fanout:
+            models.append(models[0])
         tasks: dict[Any, str] = {}
         try:
             if len(models) <= 1:
