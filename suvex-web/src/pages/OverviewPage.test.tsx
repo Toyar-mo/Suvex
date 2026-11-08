@@ -2,7 +2,7 @@
  * `OverviewPage` 的渲染 smoke test。
  *
  * 为什么补这一层：`src/pages/` 此前**零测试文件**。组件级测试已经覆盖了
- * Button / ErrorState / ToggleChip / ChallengeCard 等叶子组件，但它们
+ * Button / ErrorState / ToggleChip / ChallengeBoard 等叶子组件，但它们
  * 保证不了"页面把 store 接错了、三态写反了"。渲染期崩掉的那类问题
  * （取 undefined 上的字段、条件分支打架）只有真挂载一次才暴露，
  * 而在此之前只能靠人工点开页面。

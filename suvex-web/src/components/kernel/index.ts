@@ -9,7 +9,14 @@
  * `settings/KernelPanel.tsx` 用到（默认镜像选择器），所以这里是
  * 它们唯一的出口，不要在页面里直接深引 `./kernel/Xxx`。
  */
-export { default as ChallengeCard } from './ChallengeCard'
+/**
+ * 题目看板（v1.74 起取代卡片网格）。
+ *
+ * 一行一道题、列对齐 —— 比赛时要扫的是「状态 + 分值」，卡片一屏
+ * 只放得下 6–9 道。次要操作（题解 / 工单 / 调优先级 / 释放环境）
+ * 收在展开行里。理由见文件头。
+ */
+export { default as ChallengeBoard } from './ChallengeBoard'
 export { default as CompetitionPicker } from './CompetitionPicker'
 export { default as EnvironmentStatus } from './EnvironmentStatus'
 export { default as FlagConfirmDialog } from './FlagConfirmDialog'

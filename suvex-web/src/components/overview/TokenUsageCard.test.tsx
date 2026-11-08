@@ -25,7 +25,7 @@ import type { KernelTokenUsage } from '@/data/kernel'
   所以下面按这三种情况分别断言**渲染出来的那句话**，而不是内部变量 ——
   用户看到的只有文案，"算对了但渲染时用错了"必须被抓住。
 
-  ## ⚠️ 三个坑（与 ErrorState.test.tsx / ChallengeCard.test.tsx 记录一致）
+  ## ⚠️ 三个坑（与 ErrorState.test.tsx / ChallengeBoard.test.tsx 记录一致）
 
   1. 必须手动 `cleanup`（本项目没开 vitest `globals`）；
   2. 不能用 `toHaveTextContent`（没装 jest-dom）；

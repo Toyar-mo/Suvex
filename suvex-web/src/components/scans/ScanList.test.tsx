@@ -24,7 +24,7 @@ import type { Scan } from '@/data/scan'
   · 普通行：**逐字节不变** —— 这条和上面同等重要。改展示层的
     风险从来不是"新东西没生效"，而是"顺手改了别处的字"。
 
-  ## ⚠️ 三个必须自己处理的坑（与 ChallengeCard.test.tsx 记录的一致）
+  ## ⚠️ 三个必须自己处理的坑（与 ChallengeBoard.test.tsx 记录的一致）
 
   1. **必须手动 `cleanup`** —— 本项目没开 vitest `globals`。
   2. **不能用 `toHaveTextContent`** —— 那是 `jest-dom`，本项目没装。

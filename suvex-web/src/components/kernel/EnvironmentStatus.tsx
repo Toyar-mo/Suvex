@@ -121,7 +121,7 @@ function StatusBadge({ status }: { status: KernelEnvironmentStatus }) {
         /*
           ★ 2026-10-16：`ready` 与 `expired` 两档的文字色从 tone 色改成 `text-ink`。
 
-          与 `ChallengeCard` 的徽标是**同一个问题、同一条修法**（那边有完整说明）。
+          与旧题目卡片的徽标是**同一个问题、同一条修法**（卡片已换成看板，原说明见 git 历史）。
           实测（亮色主题，对三种承载面取最差）：
             · ready   原 `text-signal-ok`   = 3.86:1
             · expired 原 `text-signal-warn` = 3.90:1

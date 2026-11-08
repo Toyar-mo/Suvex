@@ -1,5 +1,5 @@
 import { PageHeader } from '@/components/layout/AppShell'
-import { ChallengeCard, CompetitionPicker, FlagConfirmDialog, RacePanel, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/kernel'
+import { ChallengeBoard, CompetitionPicker, FlagConfirmDialog, RacePanel, SandboxProfileSelect, WorkOrderDialog, WriteupDialog } from '@/components/kernel'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button, IconButton } from '@/components/ui/Button'
@@ -52,7 +52,8 @@ import { Link } from 'react-router-dom'
  * CTF2 解题页。
  *
  * 骨架仿 Scans 页：**页面头 → 工具条 → 内容区 → 空/错误状态**。
- * 内容区按自己的数据形状用卡片网格（理由见 `ChallengeCard` 的 docstring）。
+ * 内容区是一张**一行一道题的看板表格**（见 `ChallengeBoard` 的说明：
+ *   比赛时要扫的是「状态 + 分值」，卡片网格一屏只放得下 6–9 道）。
  *
  * ## 这一页回答的问题
  *
@@ -861,29 +862,28 @@ export function KernelPage() {
 
         {/* ── 内容区（三态）── */}
         {status === 'idle' || status === 'loading' ? (
-          <SkeletonRows rows={3} rowClassName="h-40" />
+          <SkeletonRows rows={8} rowClassName="h-8" />
         ) : status === 'error' ? (
           <ErrorState title="CTF2 数据加载失败" error={error} onRetry={() => void loadKernel()} />
         ) : filtered.length === 0 ? (
           <KernelEmptyState hasAny={challenges.length > 0} onSync={() => runSync()} busy={busy} />
         ) : (
           <>
-            <div className="grid gap-panel sm:grid-cols-2 xl:grid-cols-3">
-              {filtered.map((challenge) => (
-                <ChallengeCard
-                  key={challenge.id}
-                  challenge={challenge}
-                  busy={busy}
-                  onSolve={runSolve}
-                  onSubmit={setPending}
-                  onCancel={setCanceling}
-                  onRelease={runRelease}
-                  onSetPriority={runSetPriority}
-                  onWriteup={setWriteupChallenge}
-                  onWorkOrder={setWorkOrderChallenge}
-                />
-              ))}
-            </div>
+            {/*
+              看板表格，不是卡片网格 —— 见 `ChallengeBoard` 的说明：
+              比赛时要扫的是「状态 + 分值」两列，而卡片一屏只放得下 6–9 道。
+            */}
+            <ChallengeBoard
+              challenges={filtered}
+              busy={busy}
+              onSolve={runSolve}
+              onSubmit={setPending}
+              onCancel={setCanceling}
+              onRelease={runRelease}
+              onSetPriority={runSetPriority}
+              onWriteup={setWriteupChallenge}
+              onWorkOrder={setWorkOrderChallenge}
+            />
 
             <p className="mt-panel text-2xs text-ink-faint">
               {/* ★ 三个筛选维度任一收窄都要报"筛选出 N 道" —— 只看 filter
