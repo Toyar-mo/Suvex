@@ -97,7 +97,12 @@ export function PersonaDialog({
                 <span className="flex w-full items-center gap-1">
                   <span className="text-xs font-medium text-ink">{persona.label}</span>
                   {isActive && (
-                    <Check size={12} strokeWidth={2.5} className="ml-auto text-accent" aria-hidden="true" />
+                    <Check
+                      size={12}
+                      strokeWidth={2.5}
+                      className="ml-auto text-accent"
+                      aria-hidden="true"
+                    />
                   )}
                 </span>
                 <span className="text-2xs leading-relaxed text-ink-faint">{persona.summary}</span>
@@ -139,6 +144,7 @@ export function ProviderSelect({
   onChange,
   disabled,
   align = 'left',
+  quiet = false,
 }: {
   providers: Array<{ id: string; label: string }>
   /** `null` = 用平台默认。 */
@@ -152,6 +158,14 @@ export function ProviderSelect({
    * 224px 的菜单从右侧溢出屏幕；那里传 `right`，菜单向左展开。
    */
   align?: 'left' | 'right'
+  /**
+   * 静音形态：不带边框与底色，只留文字与箭头。
+   *
+   * ★ 输入行里已经有三个控件（附件、齿轮、发送）—— 再给模型选择套一个
+   *   边框盒子，一排就是四种箱子，谁也不比谁重要。它是"偶尔改一次"的设置，
+   *   不该和发送按钮抢注意力。
+   */
+  quiet?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -189,13 +203,17 @@ export function ProviderSelect({
         disabled={disabled}
         title="用哪个模型接入点"
         className={cn(
-          'flex items-center gap-1 rounded-xs border px-1.5 py-1 text-2xs',
-          'transition-ui duration-fast',
+          'flex items-center gap-1 text-2xs transition-ui duration-fast',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
-          value
-            ? 'border-accent/50 bg-accent/5 text-ink'
-            : 'border-line bg-surface-sunken text-ink-muted hover:border-line-strong',
+          quiet
+            ? 'h-9 rounded-sm px-1.5 text-ink-muted hover:bg-ink-ghost/10 hover:text-ink'
+            : 'rounded-xs border px-1.5 py-1',
+          !quiet &&
+            (value
+              ? 'border-accent/50 bg-accent/5 text-ink'
+              : 'border-line bg-surface-sunken text-ink-muted hover:border-line-strong'),
+          quiet && value && 'text-ink',
         )}
         aria-expanded={open}
         aria-haspopup="listbox"
@@ -370,9 +388,7 @@ export function MultiSelect({
                       // ⚠️ 顺序要保持稳定：后端把 `skillNames` 当成有序列表
                       //   （挂载预算按挂载顺序截断），所以新勾的**追加到尾部**、
                       //   取消的从中间摘掉，不排序。
-                      onChange(
-                        checked ? selected.filter((n) => n !== name) : [...selected, name],
-                      )
+                      onChange(checked ? selected.filter((n) => n !== name) : [...selected, name])
                     }}
                     className="size-3 accent-[var(--accent)]"
                   />
@@ -564,13 +580,19 @@ export function AttachmentBar({
         disabled={disabled || uploading}
         aria-label={inline ? '附件' : undefined}
         className={cn(
-          'flex items-center gap-1 rounded-xs border border-line bg-surface-sunken',
-          inline
-            ? 'shrink-0 p-1.5 max-sm:min-h-10 max-sm:min-w-10 max-sm:justify-center'
-            : 'px-1.5 py-1',
-          'text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong',
+          'flex items-center gap-1 text-2xs transition-ui duration-fast',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
+          /*
+            ★ v1.77：inline（输入行里）时**不**画边框与底色。
+
+            输入行里三个控件对着一排边框盒子，看起来像三张争宠的卡片，
+            而附件是这里面最不该被注意到的动作。幽灵形态 + hover 才浮出来，
+            视线会自然落在输入框和发送上。非 inline（旧的横栏形态）保留原样。
+          */
+          inline
+            ? 'h-9 w-9 shrink-0 justify-center rounded-sm text-ink-faint hover:bg-ink-ghost/10 hover:text-ink max-sm:h-10 max-sm:w-10'
+            : 'rounded-xs border border-line bg-surface-sunken px-1.5 py-1 text-ink-muted hover:border-line-strong',
         )}
         title="传一个文件给它看（文本类，单个上限 5 MB）"
       >
@@ -594,7 +616,9 @@ export function AttachmentBar({
           <span className="max-w-40 truncate" title={attachment.name}>
             {attachment.name}
           </span>
-          <span className="text-ink-faint">{Math.max(1, Math.round(attachment.sizeBytes / 1024))}K</span>
+          <span className="text-ink-faint">
+            {Math.max(1, Math.round(attachment.sizeBytes / 1024))}K
+          </span>
           <button
             type="button"
             onClick={() => onRemove(attachment.id)}

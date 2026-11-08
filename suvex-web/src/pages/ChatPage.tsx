@@ -157,7 +157,19 @@ const STARTERS = [
  * `phase` 为 `null`（刚点发送、还没收到第一帧）时回落到原文案 ——
  * 那一刻确实没有更多信息可说，硬编一个"准备中"反而像卡住了。
  */
-export function phaseLabel(phase: PhasePayload | null | { phase: string; round: number; tool?: string; reason?: string; attempt?: number; maxAttempts?: number }): string {
+export function phaseLabel(
+  phase:
+    | PhasePayload
+    | null
+    | {
+        phase: string
+        round: number
+        tool?: string
+        reason?: string
+        attempt?: number
+        maxAttempts?: number
+      },
+): string {
   if (!phase) return '正在想…'
   const round = typeof phase.round === 'number' ? phase.round + 1 : 0
   if (phase.phase === 'resume') {
@@ -285,8 +297,7 @@ export function ChatPage() {
     就持续每 4 秒重拉列表，等服务端把 `running` 翻成 false，点自动灭掉 —— 自愈，
     不用刷新。等所有点都灭了才停轮询，不产生无谓开销。
   */
-  const anySessionRunning =
-    sendingSessionIds.length > 0 || sessions.some((s) => s.running)
+  const anySessionRunning = sendingSessionIds.length > 0 || sessions.some((s) => s.running)
   useEffect(() => {
     if (!anySessionRunning) return
     const timer = setInterval(() => void loadSessions(), 4000)
@@ -459,9 +470,7 @@ export function ChatPage() {
   */
   const streamingLength = streamingText?.length ?? 0
   const contentKey =
-    messageCount * 10_000_000 +
-    streamingLength +
-    (pendingUserContent !== null ? 5_000_000 : 0)
+    messageCount * 10_000_000 + streamingLength + (pendingUserContent !== null ? 5_000_000 : 0)
   const [autoFollow, setAutoFollow] = useState(true)
   const { attachContainer, isAtBottom, scrollToLatest } = useAutoScroll({
     follow: autoFollow,
@@ -675,8 +684,7 @@ export function ChatPage() {
    *
    * 取最近一条而不是全部：重试是按轮次的，一次只推一轮。
    */
-  const retryableRunId =
-    lastRuns.find((run) => run.status === 'failed')?.id ?? null
+  const retryableRunId = lastRuns.find((run) => run.status === 'failed')?.id ?? null
 
   /**
    * ★ v1.24：正在跑的那一轮是不是**当前这个会话**的。
@@ -930,7 +938,13 @@ export function ChatPage() {
   async function openAttackChain(session: { id: string; title: string }) {
     const complete = active?.id === session.id && !active.hasEarlier
     const cached = complete && active ? active.messages : null
-    setChainView({ open: true, title: session.title, loading: cached === null, error: null, messages: cached ?? [] })
+    setChainView({
+      open: true,
+      title: session.title,
+      loading: cached === null,
+      error: null,
+      messages: cached ?? [],
+    })
     if (cached !== null) return
     try {
       const messages = await fetchSessionMessages(session.id)
@@ -944,7 +958,14 @@ export function ChatPage() {
 
   /** 取关联漏洞。`sessionId` 单独存一份，重试时不用再问调用方要。 */
   async function loadFindings(sessionId: string, title: string) {
-    setFindingsView((view) => ({ ...view, open: true, title, loading: true, error: null, sessionId }))
+    setFindingsView((view) => ({
+      ...view,
+      open: true,
+      title,
+      loading: true,
+      error: null,
+      sessionId,
+    }))
     try {
       const { scanIds, items } = await fetchSessionFindings(sessionId)
       setFindingsView((view) =>
@@ -952,7 +973,9 @@ export function ChatPage() {
       )
     } catch (error) {
       setFindingsView((view) =>
-        view.sessionId === sessionId ? { ...view, loading: false, error: errorMessage(error) } : view,
+        view.sessionId === sessionId
+          ? { ...view, loading: false, error: errorMessage(error) }
+          : view,
       )
     }
   }
@@ -1110,8 +1133,7 @@ export function ChatPage() {
     它后面的回合就是正在进行的那一轮）。乐观气泡还在时用户消息还没进
     `messages`，没有"进行中的回合"可以复用，只能在流末尾另画一块。
   */
-  const liveTurnIndex =
-    sendingHere && pendingUserContent === null ? turns.length - 1 : -1
+  const liveTurnIndex = sendingHere && pendingUserContent === null ? turns.length - 1 : -1
 
   /*
     ★ v1.30：live 阶段行上的「已 N 次工具」计数。
@@ -1310,7 +1332,13 @@ export function ChatPage() {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
                         }}
-                        onArchive={() => setConfirmAction({ kind: 'archive', id: session.id, title: session.title })}
+                        onArchive={() =>
+                          setConfirmAction({
+                            kind: 'archive',
+                            id: session.id,
+                            title: session.title,
+                          })
+                        }
                         onContextMenu={(anchor) =>
                           setMenuAnchor({
                             ...anchor,
@@ -1348,7 +1376,13 @@ export function ChatPage() {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
                         }}
-                        onArchive={() => setConfirmAction({ kind: 'archive', id: session.id, title: session.title })}
+                        onArchive={() =>
+                          setConfirmAction({
+                            kind: 'archive',
+                            id: session.id,
+                            title: session.title,
+                          })
+                        }
                         onContextMenu={(anchor) =>
                           setMenuAnchor({
                             ...anchor,
@@ -1405,15 +1439,15 @@ export function ChatPage() {
                           }}
                           onArchive={() => undefined}
                           onContextMenu={(anchor) =>
-                          setMenuAnchor({
-                            ...anchor,
-                            sessionId: session.id,
-                            title: session.title,
-                            archived: Boolean(session.archived),
-                            pinned: Boolean(session.pinned),
-                            project: session.project ?? null,
-                          })
-                        }
+                            setMenuAnchor({
+                              ...anchor,
+                              sessionId: session.id,
+                              title: session.title,
+                              archived: Boolean(session.archived),
+                              pinned: Boolean(session.pinned),
+                              project: session.project ?? null,
+                            })
+                          }
                         />
                       ))}
                     </ul>
@@ -1438,9 +1472,7 @@ export function ChatPage() {
           >
             <MessagesSquare size={14} strokeWidth={2} aria-hidden="true" />
           </Button>
-          <h1 className="min-w-0 flex-1 truncate text-sm text-ink">
-            {active?.title ?? '对话'}
-          </h1>
+          <h1 className="min-w-0 flex-1 truncate text-sm text-ink">{active?.title ?? '对话'}</h1>
           {active && (
             <button
               type="button"
@@ -1495,137 +1527,136 @@ export function ChatPage() {
 
         {/* 消息流 */}
         <div className="relative flex min-h-0 flex-1 flex-col">
-          <div
-            ref={setScrollerRef}
-            className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
-          >
-          {!active ? (
-            <div className="mx-auto flex max-w-[62ch] flex-col items-start gap-bay py-6">
-              <EmptyState
-                icon={Sparkles}
-                title="有什么要查的、要做的？"
-                description={
-                  <>
-                    这个对话框里的模型能直接调用平台的能力：发起扫描、看扫描结果、
-                    翻技能库、试 MCP 连接。它做完会在下面贴出做了什么。
-                  </>
-                }
-                action={
-                  <Button onClick={() => void handleNew()} variant="primary" size="sm">
-                    <MessageSquarePlus size={14} strokeWidth={2} aria-hidden="true" />
-                    开始新对话
-                  </Button>
-                }
-              />
-              <div className="flex w-full flex-col gap-1.5">
-                <p className="text-2xs uppercase tracking-wide text-ink-faint">可以这样问</p>
-                {STARTERS.map((text) => (
-                  <button
-                    key={text}
-                    type="button"
-                    onClick={() => void handlePickStarter(text)}
-                    /*
+          <div ref={setScrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+            {!active ? (
+              <div className="mx-auto flex max-w-[62ch] flex-col items-start gap-bay py-6">
+                <EmptyState
+                  icon={Sparkles}
+                  title="有什么要查的、要做的？"
+                  description={
+                    <>
+                      这个对话框里的模型能直接调用平台的能力：发起扫描、看扫描结果、 翻技能库、试
+                      MCP 连接。它做完会在下面贴出做了什么。
+                    </>
+                  }
+                  action={
+                    <Button onClick={() => void handleNew()} variant="primary" size="sm">
+                      <MessageSquarePlus size={14} strokeWidth={2} aria-hidden="true" />
+                      开始新对话
+                    </Button>
+                  }
+                />
+                <div className="flex w-full flex-col gap-1.5">
+                  <p className="text-2xs uppercase tracking-wide text-ink-faint">可以这样问</p>
+                  {STARTERS.map((text) => (
+                    <button
+                      key={text}
+                      type="button"
+                      onClick={() => void handlePickStarter(text)}
+                      /*
                       ★ v0.102：`disabled` 是必须的。
                         点一下会**建一个会话 + 发一轮消息**，连着点两下
                         就是两个会话、两轮并发的模型调用 —— 而用户在界面上
                         只会看到一个（另一个在会话列表里躺着）。
                     */
-                    disabled={pickingStarter}
-                    className={cn(
-                      'w-full rounded-sm border border-line bg-surface-sunken px-2.5 py-2 text-left',
-                      'text-xs text-ink-muted transition-ui duration-fast',
-                      'hover:border-line-strong hover:text-ink',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                      'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-line disabled:hover:text-ink-muted',
-                    )}
-                  >
-                    {text}
-                  </button>
-                ))}
+                      disabled={pickingStarter}
+                      className={cn(
+                        'w-full rounded-sm border border-line bg-surface-sunken px-2.5 py-2 text-left',
+                        'text-xs text-ink-muted transition-ui duration-fast',
+                        'hover:border-line-strong hover:text-ink',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                        'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-line disabled:hover:text-ink-muted',
+                      )}
+                    >
+                      {text}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className="mx-auto flex w-full max-w-[880px] flex-col gap-5">
-              {/*
+            ) : (
+              <div className="mx-auto flex w-full max-w-[880px] flex-col gap-5">
+                {/*
                 ★ 空态必须把乐观气泡算进来。只看 messages.length 的话，
                   用户点下发送的那 3 秒里，屏幕上会同时出现"这个对话还是空的"
                   和右侧自己刚发出去的那句话 —— 一句话既在又不在。
               */}
-              {/*
+                {/*
                 题目会话的第一屏：**先把过程摆出来**，再说"可以聊"。
                 没有这一段的话，用户看到的是「解题中」+「这个对话还是空的」
                 —— 两句话互相拆台，读起来就是"坏了"。
               */}
-              {active?.challengeId && active.challenge && (
-                <div className="rounded-md border border-line bg-surface px-3 py-2.5">
-                  <ChallengeProcess
-                    scanId={active.challenge.scanId ?? null}
-                    running={[
-                      'environment_ready',
-                      'solving',
-                      'submitting',
-                    ].includes(active.challenge.status)}
-                  />
-                </div>
-              )}
+                {active?.challengeId && active.challenge && (
+                  <div className="rounded-md border border-line bg-surface px-3 py-2.5">
+                    <ChallengeProcess
+                      scanId={active.challenge.scanId ?? null}
+                      running={['environment_ready', 'solving', 'submitting'].includes(
+                        active.challenge.status,
+                      )}
+                    />
+                  </div>
+                )}
 
-              {messages.length === 0 &&
-                !(sendingHere && pendingUserContent !== null) && (
-                <>
-                  <p className="py-4 text-center text-xs text-ink-faint">
-                    {active?.challengeId
-                      ? '这道题由平台在沙箱里解，过程在上面实时更新。也可以直接在下面问它。'
-                      : '这个对话还是空的。说点什么，或者回到会话列表挑另一个。'}
-                  </p>
-                  {/*
+                {messages.length === 0 && !(sendingHere && pendingUserContent !== null) && (
+                  <>
+                    <p className="py-4 text-center text-xs text-ink-faint">
+                      {active?.challengeId
+                        ? '这道题由平台在沙箱里解，过程在上面实时更新。也可以直接在下面问它。'
+                        : '这个对话还是空的。说点什么，或者回到会话列表挑另一个。'}
+                    </p>
+                    {/*
                     ★ 题目会话里不摆"可以这样问"那几条通用开场白：
                       它们是给"我该拿这个对话框干什么"的人看的，而从看板
                       点进来的人心里已经有一个具体问题（这道题怎样了）。
                       摆在那儿只会把刚出现的解题过程挤下去。
                   */}
-                  {!active?.challengeId && (
-                  <div className="flex flex-col gap-1.5">
-                    {STARTERS.map((text) => (
-                      <button
-                        key={text}
-                        type="button"
-                        disabled={pickingStarter}
-                        onClick={() => setDraft(text)}
-                        className={cn(
-                          'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
-                          'text-xs text-ink-muted transition-ui duration-fast',
-                          'hover:border-line-strong hover:text-ink',
-                          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                          'disabled:cursor-not-allowed disabled:opacity-60',
-                        )}
-                      >
-                        <Sparkles size={12} strokeWidth={2} className="shrink-0 text-ink-faint" aria-hidden="true" />
-                        {text}
-                      </button>
-                    ))}
+                    {!active?.challengeId && (
+                      <div className="flex flex-col gap-1.5">
+                        {STARTERS.map((text) => (
+                          <button
+                            key={text}
+                            type="button"
+                            disabled={pickingStarter}
+                            onClick={() => setDraft(text)}
+                            className={cn(
+                              'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
+                              'text-xs text-ink-muted transition-ui duration-fast',
+                              'hover:border-line-strong hover:text-ink',
+                              'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                              'disabled:cursor-not-allowed disabled:opacity-60',
+                            )}
+                          >
+                            <Sparkles
+                              size={12}
+                              strokeWidth={2}
+                              className="shrink-0 text-ink-faint"
+                              aria-hidden="true"
+                            />
+                            {text}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {/* 长会话只加载最后一页；更早的从服务端按游标翻，见 loadEarlierMessages */}
+                {active?.hasEarlier && (
+                  <div className="flex justify-center" data-load-earlier>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={loadingEarlier}
+                      loadingLabel="加载中…"
+                      onClick={() => void handleLoadEarlier()}
+                    >
+                      加载更早的消息
+                    </Button>
                   </div>
-                  )}
-                </>
-              )}
+                )}
 
-              {/* 长会话只加载最后一页；更早的从服务端按游标翻，见 loadEarlierMessages */}
-              {active?.hasEarlier && (
-                <div className="flex justify-center" data-load-earlier>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    loading={loadingEarlier}
-                    loadingLabel="加载中…"
-                    onClick={() => void handleLoadEarlier()}
-                  >
-                    加载更早的消息
-                  </Button>
-                </div>
-              )}
-
-              {turns.map((turn, index) => {
-                const isLive = index === liveTurnIndex
-                /*
+                {turns.map((turn, index) => {
+                  const isLive = index === liveTurnIndex
+                  /*
                   ★ 人格标签只挂在**最新一回合**上。
 
                     数据契约里没有"这条消息是哪个人格说的"（人格存在
@@ -1634,36 +1665,36 @@ export function ChatPage() {
                     至少它是造出这一轮的那份配置（刚改人格、还没发新消息时
                     仍有误差，所以文案只说人格名，不说"这一轮用的"）。
                 */
-                const turnMeta = !isLive && index === turns.length - 1 ? sessionMeta : null
-                return (
-                  <section
-                    key={turn.user?.id ?? turn.items[0]?.id ?? `turn-${index}`}
-                    className="flex flex-col gap-2.5"
-                    data-conversation-turn
-                    data-turn-live={isLive || undefined}
-                  >
-                    {turn.user && <MessageRow message={turn.user} />}
-                    {(turn.items.length > 0 || isLive) && (
-                      <AssistantTurn
-                        items={turn.items}
-                        live={isLive}
-                        streamingText={isLive ? streamingText : null}
-                        phaseText={isLive ? phaseLabel(phase) : null}
-                        progress={isLive ? { tools: turnToolCount(turn.items) } : null}
-                        interjections={isLive ? interjections : []}
-                        meta={turnMeta}
-                        sessionId={active?.id}
-                        deciding={deciding}
-                        hideWork={answersOnly}
-                        startedAt={turn.user?.createdAt ?? null}
-                        onDecide={(messageId, approve) => void handleDecide(messageId, approve)}
-                      />
-                    )}
-                  </section>
-                )
-              })}
+                  const turnMeta = !isLive && index === turns.length - 1 ? sessionMeta : null
+                  return (
+                    <section
+                      key={turn.user?.id ?? turn.items[0]?.id ?? `turn-${index}`}
+                      className="flex flex-col gap-2.5"
+                      data-conversation-turn
+                      data-turn-live={isLive || undefined}
+                    >
+                      {turn.user && <MessageRow message={turn.user} />}
+                      {(turn.items.length > 0 || isLive) && (
+                        <AssistantTurn
+                          items={turn.items}
+                          live={isLive}
+                          streamingText={isLive ? streamingText : null}
+                          phaseText={isLive ? phaseLabel(phase) : null}
+                          progress={isLive ? { tools: turnToolCount(turn.items) } : null}
+                          interjections={isLive ? interjections : []}
+                          meta={turnMeta}
+                          sessionId={active?.id}
+                          deciding={deciding}
+                          hideWork={answersOnly}
+                          startedAt={turn.user?.createdAt ?? null}
+                          onDecide={(messageId, approve) => void handleDecide(messageId, approve)}
+                        />
+                      )}
+                    </section>
+                  )
+                })}
 
-              {/*
+                {/*
                 乐观气泡（v0.97）：用户刚发出去、服务端还没回的那句话。
 
                 ★ 位置固定在"已有消息之后、正在想之前"——那正是它在时间上
@@ -1675,17 +1706,17 @@ export function ChatPage() {
                   伪造那些字段就会引出"真消息回来后按 id 替换失败、
                   界面上留一条消不掉的假气泡"这个失败模式。
               */}
-              {sendingHere && pendingUserContent !== null && (
-                <div className="flex justify-end" data-pending-bubble="true">
-                  <div className="max-w-[520px] rounded-lg rounded-br-xs bg-accent/12 px-3.5 py-2">
-                    <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
-                      {pendingUserContent}
-                    </p>
+                {sendingHere && pendingUserContent !== null && (
+                  <div className="flex justify-end" data-pending-bubble="true">
+                    <div className="bg-accent/12 max-w-[520px] rounded-lg rounded-br-xs px-3.5 py-2">
+                      <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
+                        {pendingUserContent}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              )}
+                )}
 
-              {/*
+                {/*
                 ★ v0.100：跑的过程中用户插的话在**回合内部**画
                 （见 `AssistantTurn` 的 `interjections`）。
 
@@ -1694,7 +1725,7 @@ export function ChatPage() {
                 我没说过的话"。只有 `sendingHere` 时才属于本会话。
               */}
 
-              {/*
+                {/*
                 ★★ 正在跑、但还没有回合可归的那一段（用户消息还没落库，
                 或者会话里一条消息都没有）。
 
@@ -1703,18 +1734,18 @@ export function ChatPage() {
                 两者的差别只在 `live`：不画页脚、正文末尾带光标、
                 阶段文案用 `role="status"` 持续播报。
               */}
-              {sendingHere && liveTurnIndex < 0 && (
-                <AssistantTurn
-                  items={[]}
-                  live
-                  streamingText={streamingText}
-                  phaseText={phaseLabel(phase)}
-                  progress={{ tools: liveLooseToolCount }}
-                  interjections={interjections}
-                  hideWork={answersOnly}
-                />
-              )}
-              {/*
+                {sendingHere && liveTurnIndex < 0 && (
+                  <AssistantTurn
+                    items={[]}
+                    live
+                    streamingText={streamingText}
+                    phaseText={phaseLabel(phase)}
+                    progress={{ tools: liveLooseToolCount }}
+                    interjections={interjections}
+                    hideWork={answersOnly}
+                  />
+                )}
+                {/*
                 ★ v1.66：**已删除** v1.61 那条「服务端仍在后台推进这一轮：第 N 轮
                 · 已用 M 次工具…」的底部蓝条。
 
@@ -1730,24 +1761,24 @@ export function ChatPage() {
                      停在某个正在跑的会话里时，仍明确提示「这一轮还在跑…想停下用
                      中断」，但不再重复画那条带数字的蓝条。
               */}
-            </div>
-          )}
+              </div>
+            )}
 
-          {!isAtBottom && (
-            <button
-              type="button"
-              onClick={() => scrollToLatest()}
-              className={cn(
-                'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-md border border-line bg-surface px-3 py-1',
-                'text-2xs text-ink-muted shadow-sm transition-ui duration-fast hover:text-ink',
-                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-              )}
-              data-jump-to-bottom
-            >
-              <ArrowDown size={11} strokeWidth={2} aria-hidden="true" className="mr-1 inline" />
-              回到底部
-            </button>
-          )}
+            {!isAtBottom && (
+              <button
+                type="button"
+                onClick={() => scrollToLatest()}
+                className={cn(
+                  'absolute bottom-3 left-1/2 -translate-x-1/2 rounded-md border border-line bg-surface px-3 py-1',
+                  'text-2xs text-ink-muted shadow-sm transition-ui duration-fast hover:text-ink',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                )}
+                data-jump-to-bottom
+              >
+                <ArrowDown size={11} strokeWidth={2} aria-hidden="true" className="mr-1 inline" />
+                回到底部
+              </button>
+            )}
           </div>
         </div>
 
@@ -1807,7 +1838,10 @@ export function ChatPage() {
 
         {/* 输入卡（单行形态）：附件、输入、模型、设置、发送同一行 */}
         <div className="shrink-0 px-3 pb-3 pt-4" data-testid="composer-dock">
-          <div className="mx-auto w-full max-w-[880px] rounded-lg border border-line bg-surface shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)] transition-shadow duration-200 focus-within:border-line-strong focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]" data-testid="composer-card">
+          <div
+            className="mx-auto w-full max-w-[880px] rounded-lg border border-line bg-surface shadow-[0_6px_22px_-16px_rgba(15,23,42,0.28)] transition-shadow duration-200 focus-within:border-line-strong focus-within:shadow-[0_10px_30px_-18px_rgba(15,23,42,0.34)]"
+            data-testid="composer-card"
+          >
             {/*
               ★ v1.75：设置默认收进齿轮，输入区只占一行。
               项目/人格/审批/技能/MCP 不是每句话都要改的东西，常驻会
@@ -1818,94 +1852,92 @@ export function ChatPage() {
                 {settingsBar}
               </div>
             )}
-          {mention && (
-            <ToolMention
-              tools={tools}
-              query={mention}
-              onPick={handlePickMention}
-              onClose={() => setMention(null)}
-            />
-          )}
-          <div className="flex items-end gap-1.5 p-2">
-            {/*
+            {mention && (
+              <ToolMention
+                tools={tools}
+                query={mention}
+                onPick={handlePickMention}
+                onClose={() => setMention(null)}
+              />
+            )}
+            <div className="flex items-end gap-1 p-1.5">
+              {/*
               ★ v1.75：附件按钮收进输入行左侧（回形针图标）。
               旧形态是输入框上方一条「附件」横栏 —— 与设置条一起把
               输入区撑成三行。有附件时芯片仍在行内换行显示。
             */}
-            {active && (
-              <AttachmentBar
-                inline
-                attachments={stagedAttachments}
-                uploading={uploading}
-                onPick={(file) => void handleUpload(file)}
-                onRemove={dropStagedAttachment}
-                // ★ v1.65：只在本会话有轮次在跑时才禁用附件（跑着不能改附件）。
-                //   别的会话在跑不影响这里。
-                disabled={sendingHere}
-              />
-            )}
-            <textarea
-              ref={composerRef}
-              value={draft}
-              onChange={(e) => {
-                setDraft(e.target.value)
-                setMention(
-                  parseMentionQuery(e.target.value, e.target.selectionStart ?? 0),
-                )
-              }}
-              // 光标移动也要重算：用户可能把光标移到前面一个 `@` 后面继续敲。
-              // 只在 keyup/click 上做，不做 selectionchange 轮询 —— 后者
-              // 对每个字符都触发一次，而这里只需要"用户主动挪了光标"。
-              onKeyUp={(e) => {
-                if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+              {active && (
+                <AttachmentBar
+                  inline
+                  attachments={stagedAttachments}
+                  uploading={uploading}
+                  onPick={(file) => void handleUpload(file)}
+                  onRemove={dropStagedAttachment}
+                  // ★ v1.65：只在本会话有轮次在跑时才禁用附件（跑着不能改附件）。
+                  //   别的会话在跑不影响这里。
+                  disabled={sendingHere}
+                />
+              )}
+              <textarea
+                ref={composerRef}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value)
+                  setMention(parseMentionQuery(e.target.value, e.target.selectionStart ?? 0))
+                }}
+                // 光标移动也要重算：用户可能把光标移到前面一个 `@` 后面继续敲。
+                // 只在 keyup/click 上做，不做 selectionchange 轮询 —— 后者
+                // 对每个字符都触发一次，而这里只需要"用户主动挪了光标"。
+                onKeyUp={(e) => {
+                  if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+                    const el = e.currentTarget
+                    setMention(parseMentionQuery(el.value, el.selectionStart ?? 0))
+                  }
+                }}
+                onClick={(e) => {
                   const el = e.currentTarget
                   setMention(parseMentionQuery(el.value, el.selectionStart ?? 0))
-                }
-              }}
-              onClick={(e) => {
-                const el = e.currentTarget
-                setMention(parseMentionQuery(el.value, el.selectionStart ?? 0))
-              }}
-              onBlur={() => setMention(null)}
-              onKeyDown={(e) => {
-                /*
+                }}
+                onBlur={() => setMention(null)}
+                onKeyDown={(e) => {
+                  /*
                   Enter 发送、Shift+Enter 换行。
                   ⚠️ 必须同时排除输入法组合态（`e.nativeEvent.isComposing`）：
                     中文用户敲拼音时按 Enter 是"上屏候选词"，不是"发送"。
                     不排除的话，每打一个词就会把半截拼音发出去 —— 这是中文
                     界面上最常见也最恼人的一类 bug。
                 */
-                /*
+                  /*
                   Esc 先关补全层。不给这条的话，用户想放弃补全只能
                   按方向键把光标挪走，或者把 `@` 删掉。
                 */
-                if (e.key === 'Escape' && mention) {
-                  e.preventDefault()
-                  setMention(null)
-                  return
+                  if (e.key === 'Escape' && mention) {
+                    e.preventDefault()
+                    setMention(null)
+                    return
+                  }
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+                    e.preventDefault()
+                    void handleSend()
+                  }
+                }}
+                rows={1}
+                placeholder={
+                  !active
+                    ? '先新建或打开一个对话'
+                    : sendingHere
+                      ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
+                      : serverRunning
+                        ? stopRequested
+                          ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
+                          : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
+                        : sendingElsewhere
+                          ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
+                            //   并发）。这里只做一句轻提示，Enter 照常发送。
+                            '另一个对话正在后台跑（不影响这里）—— Enter 发送，可同时进行'
+                          : '说点什么…（Enter 发送 · @ 选工具）'
                 }
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-                  e.preventDefault()
-                  void handleSend()
-                }
-              }}
-              rows={1}
-              placeholder={
-                !active
-                  ? '先新建或打开一个对话'
-                  : sendingHere
-                    ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
-                    : serverRunning
-                      ? stopRequested
-                        ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
-                        : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
-                      : sendingElsewhere
-                        ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
-                          //   并发）。这里只做一句轻提示，Enter 照常发送。
-                          '另一个对话正在后台跑（不影响这里）—— Enter 发送，可同时进行'
-                        : '说点什么…（Enter 发送，Shift+Enter 换行，@ 选工具）'
-              }
-              /*
+                /*
                 ★★ v0.100：跑的时候**不再禁用**输入框。
 
                 改造前这里是 `disabled={!active || sending}` —— 而用户的原话
@@ -1919,82 +1951,83 @@ export function ChatPage() {
                 `handleSend`）：跑的时候 Enter 是"插话"，不是"发消息"。
                 文案必须跟着变，否则用户会以为自己在开第二轮。
               */
-              disabled={!active}
-              aria-label="输入消息"
-              className={cn(
-                'max-h-40 min-h-[2.5rem] flex-1 resize-none rounded-md bg-transparent px-1 py-1.5',
-                'text-base text-ink placeholder:text-ink-faint',
-                'focus:outline-none',
-                'disabled:cursor-not-allowed disabled:opacity-60',
-              )}
-            />
-            {active && (
-              <div className="hidden shrink-0 sm:block">
-                <ProviderSelect
-                  align="right"
-                  providers={usableProviders}
-                  value={active.providerId ?? null}
-                  onChange={(providerId) => void updateSettings(active.id, { providerId })}
-                />
-              </div>
-            )}
-            {active && (
-              <button
-                type="button"
-                onClick={() => setSettingsOpen((value) => !value)}
-                aria-expanded={settingsOpen}
-                aria-label="对话设置"
-                title="对话设置"
+                disabled={!active}
+                aria-label="输入消息"
                 className={cn(
-                  'shrink-0 rounded-md border border-line p-1.5',
-                  'max-sm:flex max-sm:min-h-10 max-sm:min-w-10 max-sm:items-center max-sm:justify-center',
-                  'text-ink-faint transition-ui duration-fast hover:text-ink',
-                  settingsOpen && 'border-accent/40 text-accent',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  'max-h-40 min-h-9 flex-1 resize-none rounded-md bg-transparent px-1.5 py-1.5',
+                  'text-base text-ink placeholder:text-ink-faint',
+                  'focus:outline-none',
+                  'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
-              >
-                <Settings2 size={14} strokeWidth={2} aria-hidden="true" />
-              </button>
-            )}
-            {/*
+              />
+              {active && (
+                <div className="hidden shrink-0 sm:block">
+                  <ProviderSelect
+                    align="right"
+                    quiet
+                    providers={usableProviders}
+                    value={active.providerId ?? null}
+                    onChange={(providerId) => void updateSettings(active.id, { providerId })}
+                  />
+                </div>
+              )}
+              {active && (
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen((value) => !value)}
+                  aria-expanded={settingsOpen}
+                  aria-label="对话设置"
+                  title="对话设置"
+                  className={cn(
+                    'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm',
+                    'max-sm:min-h-10 max-sm:min-w-10',
+                    'text-ink-faint transition-ui duration-fast hover:bg-ink-ghost/10 hover:text-ink',
+                    settingsOpen && 'bg-accent/10 text-accent',
+                    'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  )}
+                >
+                  <Settings2 size={14} strokeWidth={2} aria-hidden="true" />
+                </button>
+              )}
+              {/*
               ★ v1.25：「中断」入口。只在**当前会话**正在跑时出现 ——
                 跑在别的会话里时这里根本没有可中断的轮次（见 `sendingElsewhere`）。
               ★ v1.49：`turnRunningHere` 也包含服务端说还在跑（本地 done 帧
                 丢了）的情况 —— 那种时候用户更需要「中断」这个出口。
             */}
-            {turnRunningHere && (
+              {turnRunningHere && (
+                <Button
+                  onClick={() => {
+                    // ★ v1.68：每次打开清掉上一次回执，避免看到过时/别的会话的反馈。
+                    clearLastInterrupt()
+                    setInterruptOpen(true)
+                  }}
+                  variant="ghost"
+                  size="sm"
+                  disabled={interrupting}
+                  aria-label="中断"
+                  data-interrupt-open
+                >
+                  中断
+                </Button>
+              )}
               <Button
-                onClick={() => {
-                  // ★ v1.68：每次打开清掉上一次回执，避免看到过时/别的会话的反馈。
-                  clearLastInterrupt()
-                  setInterruptOpen(true)
-                }}
-                variant="ghost"
-                size="sm"
-                disabled={interrupting}
-                aria-label="中断"
-                data-interrupt-open
-              >
-                中断
-              </Button>
-            )}
-            <Button
-              onClick={() => void handleSend()}
-              disabled={!canSend}
-              /*
+                onClick={() => void handleSend()}
+                disabled={!canSend}
+                /*
                 ★ 跑着的时候这个按钮是「插话」，不该显示转圈：
                 转圈意味着"这个按钮正在忙、点不动"，而它此刻恰恰**能**点。
                 转圈只该出现在真正提交出去的那一下（`interjecting`）。
               */
-              loading={interjecting}
-              size="sm"
-              className="max-sm:min-h-10"
-              aria-label={turnRunningHere ? '插话' : '发送'}
-            >
-              <Send size={14} strokeWidth={2} aria-hidden="true" />
-              {turnRunningHere ? '插话' : '发送'}
-            </Button>
-          </div>
+                loading={interjecting}
+                size="sm"
+                className="h-9 shrink-0 max-sm:min-h-10"
+                aria-label={turnRunningHere ? '插话' : '发送'}
+              >
+                <Send size={14} strokeWidth={2} aria-hidden="true" />
+                {turnRunningHere ? '插话' : '发送'}
+              </Button>
+            </div>
           </div>
           {user?.role !== 'admin' && (
             <p className="mx-auto mt-2 w-full max-w-[880px] text-2xs text-ink-faint">
@@ -2034,13 +2067,15 @@ export function ChatPage() {
         onMoveToNew={() => menuSession && setNewGroupFor([menuSession.id])}
         onBatchManage={() => setBatchOpen(true)}
         onArchive={() =>
-          menuSession && setConfirmAction({ kind: 'archive', id: menuSession.id, title: menuSession.title })
+          menuSession &&
+          setConfirmAction({ kind: 'archive', id: menuSession.id, title: menuSession.title })
         }
         onUnarchive={() => {
           if (menuSession) void unarchiveSession(menuSession.id)
         }}
         onPurge={() =>
-          menuSession && setConfirmAction({ kind: 'purge', id: menuSession.id, title: menuSession.title })
+          menuSession &&
+          setConfirmAction({ kind: 'purge', id: menuSession.id, title: menuSession.title })
         }
         onClose={() => setMenuAnchor(null)}
       />
@@ -2104,7 +2139,8 @@ export function ChatPage() {
             你写的说明会并入上下文，然后他会接着做。中途改方向用这个。
           </p>
           <p>
-            <span className="font-medium text-ink">彻底停止</span>：这一轮就地结束，后台不会再自动接着跑。
+            <span className="font-medium text-ink">彻底停止</span>
+            ：这一轮就地结束，后台不会再自动接着跑。
           </p>
           <p className="text-2xs text-ink-faint">
             注意：如果当前正在执行一个工具命令，它要跑完才会停 —— 我们没法中断一个已经在跑的子进程。
@@ -2129,11 +2165,7 @@ export function ChatPage() {
           )}
           {!interrupting && lastInterrupt && (
             <p
-              className={
-                lastInterrupt.ok
-                  ? 'text-2xs text-accent'
-                  : 'text-2xs text-signal-risk'
-              }
+              className={lastInterrupt.ok ? 'text-2xs text-accent' : 'text-2xs text-signal-risk'}
               data-interrupt-feedback={lastInterrupt.ok ? 'ok' : 'err'}
               role="status"
             >
@@ -2153,7 +2185,12 @@ export function ChatPage() {
             <Button variant="ghost" size="sm" onClick={() => setRenameTarget(null)}>
               取消
             </Button>
-            <Button variant="primary" size="sm" disabled={renaming} onClick={() => void submitRename()}>
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={renaming}
+              onClick={() => void submitRename()}
+            >
               保存
             </Button>
           </div>
@@ -2353,6 +2390,5 @@ function SessionRow({
     </li>
   )
 }
-
 
 export default ChatPage

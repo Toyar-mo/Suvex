@@ -1770,11 +1770,11 @@ const CARD_CLASSES = [
   'border',
   'border-line',
   'bg-surface',
-  'shadow-[0_10px_30px_-14px_rgba(15,23,42,0.20)]',
+  'shadow-[0_6px_22px_-16px_rgba(15,23,42,0.28)]',
   'transition-shadow',
   'duration-200',
   'focus-within:border-line-strong',
-  'focus-within:shadow-[0_16px_44px_-18px_rgba(15,23,42,0.30)]',
+  'focus-within:shadow-[0_10px_30px_-18px_rgba(15,23,42,0.34)]',
 ]
 const TOOLBAR_CLASSES = [
   'flex',
