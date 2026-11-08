@@ -2692,7 +2692,25 @@ async def run_agent_loop(
             if is_root:
                 # `spec.min_coverage = 0` = 显式关掉这道门（测试用，见字段注释）。
                 _min_cov = getattr(spec, "min_coverage", None)
-                if _min_cov != 0:
+                # ★ 2026-11-08：**有交代就放行**。
+                #
+                # 这道门是为"别让渗透扫描只看了两个面就收工"设的，判据是
+                # 覆盖的 surface 数与 findings 数。但它被无条件套在了所有解题上
+                # （`min_coverage` 在 app 里从没人设过，恒为 None → 用 MIN_COVERAGE=5），
+                # 而 CTF 题**没有 surface 这个概念** —— 模型永远凑不满 5 个面，
+                # 于是每次写完 FINAL 都被拒。实测：CR7 4.5 小时被拒 100 次，
+                # 一条命令都没执行。
+                #
+                # 更糟的是它还**逼人编造**：要求"至少 1 条有证据的结论"才能收口，
+                # 而一道没解出来的题本来就没有结论 —— 模型要么继续空转，
+                # 要么写一条假发现。
+                #
+                # 所以现在只在"这次 FINAL 什么交代都没有"时才拦：
+                #   · 交了候选答案 → 放行（有答案就是有结论）；
+                #   · 写了 tried / ruled_out → 放行（诚实的未解出也是交代）。
+                _has_answer = bool(final.get("candidates"))
+                _reported = bool(final.get("tried") or final.get("ruled_out"))
+                if _min_cov != 0 and not _has_answer and not _reported:
                     # ⚠️ 先有鸡还是先有蛋：`finding_sink` 只在 FINAL **被放行之后**
                     #    才登记，所以直接拿 sink 长度当结论条数，会永远判 0 条、
                     #    永远拒绝收口 —— 实测连拒 5 轮直到轮次用尽（这一步
