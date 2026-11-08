@@ -29,6 +29,7 @@ import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
+import { loadKernel, useKernel } from '@/data/kernel'
 import {
   archiveSession,
   createSession,
@@ -238,6 +239,16 @@ export function ChatPage() {
   } = useChat()
   const { user } = useAuth()
   const [searchParams, setSearchParams] = useSearchParams()
+
+  /*
+    ★ v1.79：题目状态要**跟着服务端走**。
+
+    `active.challenge` 是打开会话那一刻的快照，之后消息刷新、轮询都不更新 ——
+    于是题解完了，题目条和过程面板仍然写着「解题中」，而过程事件每 3 秒
+    还在轮询（`running` 一直是 true）。这里订阅看板 store（它本来就是
+    题目状态的唯一前端真源），非终态时 5 秒刷一次，到终态立刻停。
+  */
+  const { challenges: kernelChallenges } = useKernel()
 
   const [draft, setDraft] = useState('')
   const [showList, setShowList] = useState(false)
@@ -552,26 +563,6 @@ export function ChatPage() {
 
     拿不到（网络错/接口 404）就当没有：`listTurns` 内部已经吞掉了异常。
   */
-  useEffect(() => {
-    const sessionId = active?.id
-    let alive = true
-    if (!sessionId) {
-      setStuckTurn(null)
-      setLastRuns([])
-      return () => {
-        alive = false
-      }
-    }
-    void listTurns(sessionId).then((runs) => {
-      if (!alive) return
-      setLastRuns(runs)
-      setStuckTurn(runs.find((run) => run.resumable) ?? null)
-    })
-    return () => {
-      alive = false
-    }
-  }, [active?.id, sending])
-
   /*
     ★ v1.61：**服务端在跑、本页看不见**时的兜底轮询（resumable polling）。
 
@@ -602,17 +593,42 @@ export function ChatPage() {
 
     const tick = async () => {
       if (!alive) return
-      const stillRunning = await pollTurnProgress(sessionId)
+      const result = await pollTurnProgress(sessionId)
       if (!alive) return
+      /*
+        ★ v1.79：轮次列表顺便当"能不能继续"的依据（原来这里有第二个
+        `listTurns` effect，同一端点一轮开始/结束各打一次）。请求失败时
+        `runs` 是 null —— 什么都不写，下一拍再试。
+      */
+      if (result.runs) {
+        setLastRuns(result.runs)
+        setStuckTurn(result.runs.find((run) => run.resumable) ?? null)
+      }
+      const stillRunning = result.status === 'running'
+      // 请求失败：保持现状（**不能**据此认为这一轮结束了），稍后重试。
+      if (result.status === 'unknown') {
+        timer = setTimeout(() => void tick(), 3000)
+        return
+      }
       // ★ v1.65：判"本会话这一轮在本浏览器里有没有 SSE 在跑"，要看**这个
       //   会话**是否在 `sendingSessionIds` 里 —— 不能再用全局 `sending`
       //   （它现在表示"任意会话在跑"，会把别的会话的跑算成本会话的跑）。
       const localRunning = () => getChatSnapshot().sendingSessionIds.includes(sessionId)
       if (stillRunning) {
         sawRunning = true
-        // 还在跑：把最新消息也拉一次（可能落了新工具结果/正文），再排下一拍。
-        if (!localRunning()) void refreshActiveMessages(sessionId)
-        timer = setTimeout(() => void tick(), 1500)
+        /*
+          ★ v1.79：SSE 正常流着的时候把轮询降到 5 秒。
+
+          流式期间每 1.5 秒还打一次 `/turns`，是同一份事实的第二条通道 ——
+          而它换来的只是"done 帧丢了也能收尾"这一层保险。流在的时候，
+          保险可以稀一点；流不在（刷新、断线）才需要 1.5 秒的密度。
+        */
+        if (!localRunning()) {
+          void refreshActiveMessages(sessionId)
+          timer = setTimeout(() => void tick(), 1500)
+        } else {
+          timer = setTimeout(() => void tick(), 5000)
+        }
         return
       }
       // 服务端说没在跑了。
@@ -670,6 +686,8 @@ export function ChatPage() {
     const runs = await listTurns(sessionId)
     // 只在用户还停在同一个会话时才写状态（请求是异步的，期间可能切走）。
     if (active?.id !== sessionId) return
+    // null = 请求失败：保持原状，不要把它当成"没有可继续的轮次"。
+    if (!runs) return
     setLastRuns(runs)
     setStuckTurn(runs.find((run) => run.resumable) ?? null)
   }
@@ -728,10 +746,40 @@ export function ChatPage() {
       serverTurn !== null)
 
   /** 当前会话这一轮正在跑（本地在跑，或服务端说还在跑）—— Enter 是插话。 */
+  /*
+    题目在服务端的**当前**状态：会话详情里那份是打开时的快照，看板 store
+    才是活的（见上面的订阅）。两者都没有时退回快照。
+  */
+  const liveChallenge = active?.challenge
+    ? (kernelChallenges.find((item) => item.id === active.challenge?.id) ?? null)
+    : null
+  const challengeStatus = liveChallenge?.status ?? active?.challenge?.status ?? null
+  const challengeRunning =
+    challengeStatus !== null &&
+    ['environment_ready', 'solving', 'submitting'].includes(challengeStatus)
+
+  /*
+    题目在跑 → 每 5 秒刷一次看板 store（它按需轮询自己的接口）。
+    到终态立刻停，不留一个永远转的定时器。
+  */
+  useEffect(() => {
+    if (!active?.challengeId || !challengeRunning) return
+    const timer = window.setInterval(() => {
+      void loadKernel({ silent: true })
+    }, 5000)
+    return () => window.clearInterval(timer)
+  }, [active?.challengeId, challengeRunning])
+
   const turnRunningHere = sendingHere || serverRunning
 
-  // ★ v1.65：能不能发只看**当前会话**能不能发 —— 别的会话在跑不该拦。
-  const canSend = draft.trim().length > 0 && active !== null
+  /*
+    ★ v1.79：归档的会话不能发。
+
+    从「已归档」里点开一个会话时，输入框照常可用、发送按钮照常亮 ——
+    一按发送后端固定回"这个对话已归档"。用户得到的是一个看起来能用、
+    实际必然失败的操作。
+  */
+  const canSend = draft.trim().length > 0 && active !== null && !active.archived
 
   async function handleNew() {
     const session = await createSession()
@@ -1588,10 +1636,8 @@ export function ChatPage() {
                 {active?.challengeId && active.challenge && (
                   <div className="rounded-md border border-line bg-surface px-3 py-2.5">
                     <ChallengeProcess
-                      scanId={active.challenge.scanId ?? null}
-                      running={['environment_ready', 'solving', 'submitting'].includes(
-                        active.challenge.status,
-                      )}
+                      scanId={(liveChallenge?.scanId ?? active.challenge.scanId) || null}
+                      running={challengeRunning}
                     />
                   </div>
                 )}
@@ -1925,17 +1971,19 @@ export function ChatPage() {
                 placeholder={
                   !active
                     ? '先新建或打开一个对话'
-                    : sendingHere
-                      ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
-                      : serverRunning
-                        ? stopRequested
-                          ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
-                          : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
-                        : sendingElsewhere
-                          ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
-                            //   并发）。这里只做一句轻提示，Enter 照常发送。
-                            '另一个对话正在后台跑（不影响这里）—— Enter 发送，可同时进行'
-                          : '说点什么…（Enter 发送 · @ 选工具）'
+                    : active.archived
+                      ? '这个对话已归档 —— 在会话列表里「恢复」之后才能继续'
+                      : sendingHere
+                        ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
+                        : serverRunning
+                          ? stopRequested
+                            ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
+                            : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
+                          : sendingElsewhere
+                            ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
+                              //   并发）。这里只做一句轻提示，Enter 照常发送。
+                              '另一个对话正在后台跑（不影响这里）—— Enter 发送，可同时进行'
+                            : '说点什么…（Enter 发送 · @ 选工具）'
                 }
                 /*
                 ★★ v0.100：跑的时候**不再禁用**输入框。
@@ -1951,7 +1999,7 @@ export function ChatPage() {
                 `handleSend`）：跑的时候 Enter 是"插话"，不是"发消息"。
                 文案必须跟着变，否则用户会以为自己在开第二轮。
               */
-                disabled={!active}
+                disabled={!active || Boolean(active.archived)}
                 aria-label="输入消息"
                 className={cn(
                   'max-h-40 min-h-9 flex-1 resize-none rounded-md bg-transparent px-1.5 py-1.5',

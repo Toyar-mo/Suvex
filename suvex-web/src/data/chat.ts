@@ -671,6 +671,47 @@ export async function loadTools(): Promise<void> {
  * 失败静默：这是一次补数据的机会，不是用户主动操作。报错会盖掉真正的
  * 错误（比如那一轮本身的失败原因），反而更糊涂。
  */
+/**
+ * 轮末**对账**：把当前打开的会话换成服务端的最后一页。
+ *
+ * ## ★ 为什么不能只用 `after` 游标（v1.79 修）
+ *
+ * `refreshActiveMessages` 只追加"比最后一条更新"的消息。可轮末有两类改动
+ * **落在旧 seq 上**：
+ *
+ *   1. **插话**：它是引擎外的写入，seq 往往比流式已经推给前端的结论小；
+ *   2. **结论降级**：引擎收尾时把"提前给出的结论"降级成过程面
+ *      （`_collapse_turn_answers`），改的也是**已有**的那几条。
+ *
+ * 用 after 游标，这两类改动永远取不回来 —— 而 `finally` 会把本地插话
+ * 气泡清掉，于是那句用户刚打的字在屏幕上直接消失（服务端有，界面没有）。
+ *
+ * 服务端列表是最终事实，所以轮末**整页替换**最后 200 条：代价是一次
+ * 有界的下载，换来的是"界面与服务端一致"这条不变量。
+ */
+export async function reconcileActiveMessages(sessionId: string): Promise<void> {
+  try {
+    const current = state.active
+    if (!current || current.id !== sessionId) return
+
+    const detail = await fetchSessionDetail(sessionId, { limit: MESSAGE_PAGE_SIZE })
+
+    const latest = state.active
+    if (!latest || latest.id !== sessionId) return
+
+    patch({
+      active: {
+        ...latest,
+        messages: detail.messages,
+        messageCount: detail.messageCount,
+        hasEarlier: detail.hasEarlier ?? false,
+      },
+    })
+  } catch {
+    // 对账失败不该打断这一轮的收尾：界面保持现状，用户下次刷新会校正。
+  }
+}
+
 export async function refreshActiveMessages(sessionId: string): Promise<void> {
   try {
     const current = state.active
@@ -702,12 +743,9 @@ export async function refreshActiveMessages(sessionId: string): Promise<void> {
       整段再拼一遍（界面上同一句话出现两次）。
     */
     const incoming =
-      lastSeq === undefined
-        ? detail.messages
-        : detail.messages.filter((m) => m.seq > lastSeq)
+      lastSeq === undefined ? detail.messages : detail.messages.filter((m) => m.seq > lastSeq)
     if (lastSeq !== undefined && incoming.length === 0) return
-    const merged =
-      lastSeq === undefined ? incoming : [...latest.messages, ...incoming]
+    const merged = lastSeq === undefined ? incoming : [...latest.messages, ...incoming]
 
     patch({
       active: {
@@ -792,7 +830,10 @@ interface DetailQuery {
   after?: number
 }
 
-function fetchSessionDetail(sessionId: string, query: DetailQuery = {}): Promise<ChatSessionDetail> {
+function fetchSessionDetail(
+  sessionId: string,
+  query: DetailQuery = {},
+): Promise<ChatSessionDetail> {
   const params = new URLSearchParams()
   if (query.limit !== undefined) params.set('limit', String(query.limit))
   if (query.before !== undefined) params.set('before', String(query.before))
@@ -853,14 +894,20 @@ export interface ChatTurnRun {
 /**
  * 列出一个会话最近的执行账目。
  *
- * 失败时返回空数组而不是抛：这是**辅助信息**（一条提示），拿不到就等于
- * "没有中断的轮次"，不该让整个会话打不开。
+ * ## ★ 失败返回 `null`，**不是**空数组（v1.79）
+ *
+ * "拿不到"和"没有中断的轮次"是两件事，而原来两者都表现为 `[]`：
+ * 轮询把网络失败当成"服务端没在跑"，接着 `clearStaleSending` 把**仍在跑**
+ * 的那一轮从本地状态里清掉 —— 界面显示已结束，实际后台还在干活。
+ *
+ * 辅助信息失败不该让整个会话打不开，所以不抛；但调用方必须能区分
+ * "空"与"未知"。
  */
-export async function listTurns(sessionId: string): Promise<ChatTurnRun[]> {
+export async function listTurns(sessionId: string): Promise<ChatTurnRun[] | null> {
   try {
     return await api.get<ChatTurnRun[]>(`/chat/sessions/${sessionId}/turns`)
   } catch {
-    return []
+    return null
   }
 }
 
@@ -890,10 +937,27 @@ export async function listTurns(sessionId: string): Promise<ChatTurnRun[]> {
  * ⚠️ 只读**当前打开的那个会话**：轮询是页面级行为，切走了就不该再往
  *    `serverTurn` 里写旧会话的进度。
  */
-export async function pollTurnProgress(sessionId: string): Promise<boolean> {
+export type TurnPollResult =
+  | { status: 'running'; runs: ChatTurnRun[] }
+  | { status: 'idle'; runs: ChatTurnRun[] }
+  /** 请求失败：**不能**据此认为这一轮结束了 */
+  | { status: 'unknown'; runs: null }
+
+export async function pollTurnProgress(sessionId: string): Promise<TurnPollResult> {
   const runs = await listTurns(sessionId)
   // 异步期间用户可能已经切走 —— 不往新会话里写旧数据。
-  if (state.active?.id !== sessionId) return false
+  if (state.active?.id !== sessionId) return { status: 'idle', runs: [] }
+  if (runs === null) {
+    /*
+      ★ v1.79：网络失败 ≠ 没在跑。
+
+      原来这里直接按"没有 running"处理：清 `serverTurn`、把会话从
+      `sendingSessionIds` 里摘掉、`sending` 置 false —— 一次抖动就能让
+      仍在跑的一轮在界面上"被结束"，而用户看到的是输入框突然从「插话」
+      变回「发送」。现在交给调用方：保持现状，下一拍再试。
+    */
+    return { status: 'unknown', runs: null }
+  }
   const running = runs.find((run) => run.status === 'running') ?? null
   if (running) {
     const next = {
@@ -911,7 +975,7 @@ export async function pollTurnProgress(sessionId: string): Promise<boolean> {
       prev.heartbeatAt !== next.heartbeatAt
     // 数值没变时不要再 patch：1.5s 一次的无意义更新会让整页重渲染。
     if (changed) patch({ serverTurn: next })
-    return true
+    return { status: 'running', runs }
   }
   // 没有在跑的了：清掉进度提示，也清掉「已请求停止」的标记
   // （v1.62：服务端真的停下来了，停止确认气泡该收了）。
@@ -924,7 +988,7 @@ export async function pollTurnProgress(sessionId: string): Promise<boolean> {
     sendingSessionIds: remaining,
     sending: state.sendingSessionId === sessionId && remaining.length > 0 ? true : false,
   })
-  return false
+  return { status: 'idle', runs }
 }
 
 /** 会话持久工作区（`/work/persist`）里的一个可下载产物。 */
@@ -957,10 +1021,7 @@ export async function listWorkspaceFiles(sessionId: string): Promise<ChatWorkspa
  *   就是"把这一轮跑完再返回"，服务端返回的就是**新落库的消息**。前端
  *   追加即可，不需要第二条渲染路径。
  */
-export async function resumeTurn(
-  sessionId: string,
-  runId: string,
-): Promise<ChatMessage[]> {
+export async function resumeTurn(sessionId: string, runId: string): Promise<ChatMessage[]> {
   // ★ v1.22：重试前先清掉上一次的错误条。用户点「重试」就是"我处理过了"，
   //   旧错误继续挂着会让人以为这次也是同一个错 —— 而这次可能成功了。
   patch({ error: null })
@@ -1287,7 +1348,7 @@ export async function sendMessage(
      * 不 await：气泡已经正确退场了（`finally` 里清），刷新只是校正列表，
      * await 它会让 `sending` 多挂一个往返，输入框白等。
      */
-    void refreshActiveMessages(sessionId)
+    void reconcileActiveMessages(sessionId)
 
     // 列表里的 updatedAt / messageCount 变了，静默刷新一次列表。
     // 不 await：它不影响这一轮的显示，慢了也不该让输入框卡住。
@@ -1400,10 +1461,10 @@ export async function interruptTurn(
   try {
     // ★ v1.68：接住服务端回执里的 `message`（"已请求中断…" / 具体原因），
     //   放进 `lastInterrupt` 让弹窗给用户一个明确的反馈，而不是"点了没反应"。
-    const body = await api.post<{ message?: string }>(
-      `/chat/sessions/${sessionId}/interrupt`,
-      { mode, note },
-    )
+    const body = await api.post<{ message?: string }>(`/chat/sessions/${sessionId}/interrupt`, {
+      mode,
+      note,
+    })
     /*
       ★ v1.61：点完中断，立刻做两件事，别等用户手动刷新网页。
       
@@ -1426,7 +1487,12 @@ export async function interruptTurn(
       const ids = state.sendingSessionIds.includes(sessionId)
         ? state.sendingSessionIds
         : [...state.sendingSessionIds, sessionId]
-      patch({ sending: true, sendingSessionId: sessionId, sendingSessionIds: ids, stopRequested: false })
+      patch({
+        sending: true,
+        sendingSessionId: sessionId,
+        sendingSessionIds: ids,
+        stopRequested: false,
+      })
     } else {
       // ★ v1.62：stop 的服务端语义是「下一个检查点停」——若正卡在一个
       //   跑着的工具里，它要等工具返回才停（子进程打断不了）。所以这里
@@ -1452,9 +1518,7 @@ export async function interruptTurn(
         ok: true,
         message:
           body?.message ||
-          (mode === 'continue'
-            ? '已请求中断并继续，正在等待模型响应…'
-            : '已请求彻底停止。'),
+          (mode === 'continue' ? '已请求中断并继续，正在等待模型响应…' : '已请求彻底停止。'),
       },
     })
     return true
@@ -1474,10 +1538,7 @@ export async function interruptTurn(
   }
 }
 
-export async function interject(
-  sessionId: string,
-  content: string,
-): Promise<InterjectOutcome> {
+export async function interject(sessionId: string, content: string): Promise<InterjectOutcome> {
   const trimmed = content.trim()
   if (!trimmed) return 'failed'
   try {
@@ -1519,12 +1580,7 @@ export function clearStaleSending(sessionId?: string): void {
   //   改成只要还有**任何**待清的痕迹就继续清。
   const target = sessionId ?? state.sendingSessionId
   const hasEntry = target ? state.sendingSessionIds.includes(target) : false
-  if (
-    !state.sending &&
-    state.sendingSessionIds.length === 0 &&
-    !state.stopRequested &&
-    !hasEntry
-  ) {
+  if (!state.sending && state.sendingSessionIds.length === 0 && !state.stopRequested && !hasEntry) {
     return
   }
   // ★ v1.62：清掉卡死的本地 sending 时，也一并收掉可能残留的「已请求停止」
@@ -1635,10 +1691,7 @@ export async function uploadAttachment(
   const form = new FormData()
   form.append('file', file)
   try {
-    const stored = await api.upload<ChatAttachment>(
-      `/chat/sessions/${sessionId}/attachments`,
-      form,
-    )
+    const stored = await api.upload<ChatAttachment>(`/chat/sessions/${sessionId}/attachments`, form)
     // 只在**还是同一个会话**时收进状态：上传是异步的，用户在等待期间
     // 可能已经切走了。收进去会让它在另一个会话的界面上出现。
     if (state.active?.id === sessionId) {
@@ -1690,10 +1743,7 @@ export async function updateSettings(
   partial: ChatSettingsPatch,
 ): Promise<boolean> {
   try {
-    const updated = await api.patch<ChatSession>(
-      `/chat/sessions/${sessionId}/settings`,
-      partial,
-    )
+    const updated = await api.patch<ChatSession>(`/chat/sessions/${sessionId}/settings`, partial)
     patch({
       sessions: state.sessions.map((s) => (s.id === sessionId ? updated : s)),
       active:
@@ -1776,7 +1826,8 @@ export async function renameSession(sessionId: string, title: string): Promise<b
     const updated = await api.patch<ChatSession>(`/chat/sessions/${sessionId}`, { title })
     patch({
       sessions: state.sessions.map((s) => (s.id === sessionId ? updated : s)),
-      active: state.active?.id === sessionId ? { ...state.active, title: updated.title } : state.active,
+      active:
+        state.active?.id === sessionId ? { ...state.active, title: updated.title } : state.active,
     })
     return true
   } catch (error) {
@@ -1807,7 +1858,9 @@ export async function archiveSession(sessionId: string): Promise<boolean> {
           用服务端返回的对象（带 `archived: true`），不要自己拼一个 ——
           拼的那份缺字段，渲染时会静默少一块。
       */
-      archivedSessions: moving ? [{ ...archived, archived: true }, ...state.archivedSessions] : state.archivedSessions,
+      archivedSessions: moving
+        ? [{ ...archived, archived: true }, ...state.archivedSessions]
+        : state.archivedSessions,
       active: state.active?.id === sessionId ? null : state.active,
     })
     return true

@@ -1441,7 +1441,7 @@ describe('服务端轮次进度轮询（v1.61）', () => {
       },
     ])
     const stillRunning = await p
-    expect(stillRunning).toBe(true)
+    expect(stillRunning.status).toBe('running')
     const turn = getChatSnapshot().serverTurn
     expect(turn).not.toBeNull()
     expect(turn?.roundIndex).toBe(3)
@@ -1466,7 +1466,7 @@ describe('服务端轮次进度轮询（v1.61）', () => {
       },
     ])
     const stillRunning = await p
-    expect(stillRunning).toBe(false)
+    expect(stillRunning.status).toBe('idle')
     expect(getChatSnapshot().serverTurn).toBeNull()
   })
 
@@ -1626,7 +1626,7 @@ describe('服务端轮次进度轮询（v1.61）', () => {
       },
     ])
     const stillRunning = await p2
-    expect(stillRunning).toBe(false)
+    expect(stillRunning.status).toBe('idle')
     expect(getChatSnapshot().stopRequested).toBe(false)
 
     await tick()
