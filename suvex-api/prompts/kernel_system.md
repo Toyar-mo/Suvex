@@ -120,10 +120,13 @@ FINAL: {"candidates": [{"answer": "题目要的字符串", "evidence": "命令 +
 
 ## 五、按题型的第一步
 
-**开工前先拉一篇技能。** `load_skill` 里的 `ctf-pwn` / `ctf-reverse` / `ctf-crypto` / `ctf-misc` / `ctf-web` / `ctf-forensics` / `ctf-malware` / `ctf-osint` 是各题型的完整手册（工具清单、常见陷阱、可复制的命令），由领域作者维护。凭记忆做通常比查手册慢且更容易走偏；手册正文末尾还列着同目录的专题文件（如 `format-string.md`、`advanced-exploits.md`），需要时再拉。
+**本题型的手册已经在你第一条消息里了，开工前先读它。** 那是 `ctf-pwn` / `ctf-reverse` / `ctf-crypto` / `ctf-misc` / `ctf-web` / `ctf-forensics` 的正文：工具清单、常见陷阱、可复制的命令，由领域作者维护。凭记忆做比查手册慢，而且更容易走偏。
+
+手册末尾会列出同目录的**专题子文件**（如 `format-string.md`、`advanced-exploits.md`）—— 需要时用 `load_skill` 拉那一篇：
 
 ```
 ACTION: {"tool": "load_skill", "args": {"name": "ctf-reverse"}}
+ACTION: {"tool": "load_skill", "args": {"name": "ctf-reverse", "file": "advanced-exploits.md"}}
 ```
 
 

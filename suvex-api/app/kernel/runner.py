@@ -5601,6 +5601,22 @@ def _initial_prompt(spec: SolveSpec) -> str:
         "先看清楚手上有什么（附件类型、服务响应），再决定方向。",
         f"你最多有 {spec.max_turns} 轮。每轮只做一件事，然后按协议输出。",
     ]
+    # ★ 2026-11-08：把**本题型的手册正文**直接放进第一条消息。
+    #
+    # 为什么不是"提示模型自己去 load_skill"：实测四道题里三道（29 分钟、
+    # 各 130–195 条事件）**一次都没拉**。软要求在这个位置没有约束力，而
+    # 手册正文正是它们最该先读的东西（工具清单、常见陷阱、可复制命令）。
+    #
+    # 代价是一次性 ~10KB 上下文；收益是"开工就知道该用什么工具、哪条路
+    # 是死路"。子文件（format-string.md 之类）仍然靠 load_skill 按需拉。
+    _manual = _preloaded_skill_section(spec)
+    if _manual:
+        lines += [
+            "",
+            "## 本题型手册（已为你加载，开工前先读它）",
+            "",
+            _manual,
+        ]
     # ★ v0.28：人工补充的线索。
     #
     # ## 位置很讲究：放在"现在开始"**之后**、"续解提示"**之前**
@@ -6849,6 +6865,46 @@ async def solve_in_sandbox(
     outcome.error = f"回合用尽（{spec.max_turns} 轮）仍未给出结论。"
     outcome.transcript = "\n\n".join(log)
     return outcome
+
+
+
+#: 题型 → 领域技能包名（ljagiello/ctf-skills，随 `prompts/skills/ctf/` 分发）。
+_SKILL_FOR_CATEGORY: dict[str, str] = {
+    "pwn": "ctf-pwn",
+    "reverse": "ctf-reverse",
+    "crypto": "ctf-crypto",
+    "misc": "ctf-misc",
+    "web": "ctf-web",
+    "forensics": "ctf-forensics",
+    "osint": "ctf-osint",
+    "ai-ml": "ctf-ai-ml",
+}
+
+#: 预载手册的字符上限。SKILL.md 实测 6–12KB；截断只为防个别超长文件。
+_PRELOADED_SKILL_MAX = 14000
+
+
+def _preloaded_skill_section(spec: Any) -> str:
+    """取本题型对应的技能手册正文；没有对应篇时返回空串。"""
+    from app.kernel.schemas import canonical_category
+
+    name = _SKILL_FOR_CATEGORY.get(canonical_category(getattr(spec, "category", "") or ""))
+    if not name:
+        return ""
+    try:
+        text = skills_mod.load_skill_text(name)
+    except Exception:  # noqa: BLE001 - 手册读不到不该挡住解题
+        logger.warning("预载技能手册失败：%s", name, exc_info=True)
+        return ""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    if len(text) > _PRELOADED_SKILL_MAX:
+        text = (
+            text[:_PRELOADED_SKILL_MAX]
+            + "\n\n……（手册过长，已截断；完整版用 load_skill 拉）"
+        )
+    return text
 
 
 def _narration_before_action(text: str) -> str:
