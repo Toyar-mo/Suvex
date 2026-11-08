@@ -76,6 +76,7 @@ function renderBoard(
     onCancel?: (c: KernelChallenge) => void
     onWriteup?: (c: KernelChallenge) => void
     onWorkOrder?: (c: KernelChallenge) => void
+    onOpen?: (c: KernelChallenge) => void
   } = {},
 ) {
   return render(
@@ -89,6 +90,7 @@ function renderBoard(
         onSetPriority={noop}
         onWriteup={handlers.onWriteup ?? noop}
         onWorkOrder={handlers.onWorkOrder}
+        onOpen={handlers.onOpen}
       />
     </MemoryRouter>,
   )
@@ -185,6 +187,36 @@ describe('ChallengeBoard：行内主操作', () => {
     within(row).getByRole('button', { name: '取消' }).click()
 
     expect(onCancel).toHaveBeenCalledWith(challenge)
+  })
+})
+
+describe('ChallengeBoard：「查看」打开这道题的对话', () => {
+  it('点了把**这道题**交给调用方（由它去 find-or-create 会话并跳转）', () => {
+    const onOpen = vi.fn()
+    const challenge = makeChallenge({ status: 'solved', confirmedFlag: 'flag{x}' })
+    renderBoard([challenge], { onOpen })
+
+    const row = screen.getByRole('button', { name: '示例题' }).closest('tr')!
+    within(row).getByRole('button', { name: '查看' }).click()
+
+    expect(onOpen).toHaveBeenCalledWith(challenge)
+  })
+
+  it('★ 已解出的题也有 —— 回看过程正是解出之后最常做的事', () => {
+    renderBoard(
+      [makeChallenge({ status: 'solved', confirmedFlag: 'flag{x}' })],
+      { onOpen: noop },
+    )
+
+    const row = screen.getByRole('button', { name: '示例题' }).closest('tr')!
+    expect(within(row).queryByRole('button', { name: '查看' })).not.toBeNull()
+  })
+
+  it('调用方不传 onOpen 时整项不渲染（按需能力）', () => {
+    renderBoard([makeChallenge()])
+
+    const row = screen.getByRole('button', { name: '示例题' }).closest('tr')!
+    expect(within(row).queryByRole('button', { name: '查看' })).toBeNull()
   })
 })
 

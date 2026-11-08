@@ -21,6 +21,7 @@ import {
   ExternalLink,
   FileText,
   Flag,
+  MessagesSquare,
   Play,
   ShieldCheck,
   TriangleAlert,
@@ -124,6 +125,7 @@ export function ChallengeBoard({
   onSetPriority,
   onWriteup,
   onWorkOrder,
+  onOpen,
 }: {
   challenges: KernelChallenge[]
   busy?: boolean
@@ -133,6 +135,12 @@ export function ChallengeBoard({
   onCancel: (challenge: KernelChallenge) => void
   onRelease: (challenge: KernelChallenge) => void
   onSetPriority: (challenge: KernelChallenge, priority: number) => void
+  /**
+   * 打开这道题的对话会话（CTF 页重做第 2 步）。
+   *
+   * 不传时整列不渲染 —— 与 `onWriteup` 同一条「按需能力」约定。
+   */
+  onOpen?: (challenge: KernelChallenge) => void
   /** 不传时整项不渲染（按需能力） */
   onWriteup?: (challenge: KernelChallenge) => void
   onWorkOrder?: (challenge: KernelChallenge) => void
@@ -175,7 +183,7 @@ export function ChallengeBoard({
             <th scope="col" className={STICKY_TH + ' hidden w-[26%] text-left xl:table-cell'}>
               候选 / 最后错误
             </th>
-            <th scope="col" className={STICKY_TH + ' w-[150px] text-right'}>
+            <th scope="col" className={STICKY_TH + ' w-[190px] text-right'}>
               操作
             </th>
           </tr>
@@ -347,6 +355,19 @@ export function ChallengeBoard({
                         >
                           <Play size={10} strokeWidth={2.5} aria-hidden="true" />
                           {solveLabel(challenge)}
+                        </button>
+                      )}
+
+                      {onOpen && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onOpen(challenge)}
+                          title="打开这道题的对话：解题过程、工具调用与候选都在那里"
+                          className={QUIET_BUTTON}
+                        >
+                          <MessagesSquare size={11} strokeWidth={2} aria-hidden="true" />
+                          查看
                         </button>
                       )}
 

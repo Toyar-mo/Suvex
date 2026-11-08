@@ -175,6 +175,10 @@ class ChatSession(Base):
         #   生成一条 `remove_index` —— 一条永远清不掉的噪音 diff，
         #   会训练人忽略 autogenerate 的输出。（这次正是这么发现的。）
         Index("ix_chat_sessions_owner_project", "created_by", "project"),
+        # ★ 看板「查看」要找回"这道题的那个会话"，判据是 (created_by, challenge_id)。
+        #   不加索引时那是一张全表扫 —— 现在几百条看不出来，几千条就是每次点击
+        #   都慢一拍。
+        Index("ix_chat_sessions_owner_challenge", "created_by", "challenge_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -235,6 +239,17 @@ class ChatSession(Base):
     #:   改个名不该让历史对话从分组里掉出去。而真建一张 projects 表
     #:   就要处理"删项目时那些对话怎么办"，那是与这一页无关的复杂度。
     project: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+    #: 关联的 CTF 题目 id。`None` = 普通对话。
+    #:
+    #: ★ 为什么关联的是**题目**而不是"看板上的那一行"：一道题只有一个
+    #:   会话（`get_or_create_challenge_session` 按它去重），这样"点查看"
+    #:   永远回到同一条时间线，而不是每点一次多出一个空对话。
+    #:
+    #: ⚠️ 不建外键：题目被删（重新同步、换接入）时，这段对话仍然是有价值
+    #:   的历史记录，不该跟着级联消失。悬空 id 的表现是题目条上的"题目已
+    #:   不存在"，那是看得见的。
+    challenge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     #: 角色（persona）id。见 `prompts.CHAT_ROLES`。`None` = 默认角色。
     #: ⚠️ 与 `models.CHAT_ROLES`（消息角色 user/assistant/tool）是**两件

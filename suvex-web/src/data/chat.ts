@@ -114,6 +114,14 @@ export interface ChatSession {
    */
   running?: boolean
 
+  /**
+   * 关联的 CTF 题目 id（从看板「查看」进来时写的）。`null`/缺失 = 普通对话。
+   *
+   * ★ 会话与题目是**一对一**：同一道题再点一次「查看」会拿回同一个会话
+   *   （服务端做 find-or-create），所以这个字段也是一个稳定的事实。
+   */
+  challengeId?: string | null
+
   // ── v0.94 的六项「对话设置」 ──────────────────────────────
   //
   // ★ 它们出现在**列表**响应里（不只是详情）：侧栏要按 `project` 分组、
@@ -148,6 +156,23 @@ export interface ChatAttachment {
 }
 
 /** `GET /chat/sessions/{id}` 的响应。 */
+/**
+ * 会话关联题目的只读投影（对话页顶部那条「题目条」用）。
+ *
+ * ★ 只给五项：标题 / 状态 / 分值 / 候选 / 已确认。题面不在这里 ——
+ *   题目条是一条常驻的窄条，塞题面只会把它撑高，而读题面该去看板或题解。
+ */
+export interface ChatChallengeRef {
+  id: string
+  title: string
+  status: string
+  score: number | null
+  remoteId: string
+  platformName: string
+  candidateFlag: string | null
+  confirmedFlag: string | null
+}
+
 export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
   /**
@@ -158,6 +183,14 @@ export interface ChatSessionDetail extends ChatSession {
    *   而算错的表现是「加载更早」要么永远出现、要么永远不出现。
    */
   hasEarlier?: boolean
+  /**
+   * 这道题（会话由看板「查看」打开时才有）。
+   *
+   * ⚠️ `null` 有两种意思：普通对话，**或者题目已被删**。题目条据此
+   *   前者不渲染、后者写一句"题目已不存在"—— 把后者的整条藏掉，
+   *   会让用户以为这段对话从来没关联过题目。
+   */
+  challenge?: ChatChallengeRef | null
 }
 
 /** 一页消息的条数。够填满几屏，又不至于让首屏下载几百 KB。 */
@@ -980,6 +1013,30 @@ export async function createSession(title?: string): Promise<ChatSession | null>
       active: { ...session, messages: [] },
       status: 'ready',
     })
+    return session
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return null
+  }
+}
+
+/**
+ * 打开「这道题的那个对话」（没有就建一个）。
+ *
+ * ★ 看板行上的「查看」调它。服务端是 find-or-create，所以连点两次
+ *   不会多出两个空会话 —— 见后端 `get_or_create_challenge_session`。
+ *
+ * 返回 `null` 表示失败（原因已写进 store 的 `error`）。
+ */
+export async function openChallengeSession(challengeId: string): Promise<ChatSession | null> {
+  patch({ error: null })
+  try {
+    const session = await api.post<ChatSession>(
+      `/chat/sessions/for-challenge/${encodeURIComponent(challengeId)}`,
+    )
+    // 侧栏里已经有就不要重复插入（点第二次查看时它就在列表里）
+    const exists = state.sessions.some((item) => item.id === session.id)
+    if (!exists) patch({ sessions: [session, ...state.sessions] })
     return session
   } catch (error) {
     patch({ error: messageOf(error) })

@@ -123,6 +123,12 @@ class ChatSessionOut(CamelModel):
     # ★ 它们出现在**列表**响应里（不只是详情），因为侧栏要按 `project`
     #   分组、要在条目上标出人格/审批状态。让列表也带这三个小字段，
     #   比让前端为每个会话再请求一次详情便宜得多。
+    #: 关联的 CTF 题目 id（从看板「查看」进来时写的）。`None` = 普通对话。
+    #:
+    #: ★ 它出现在**列表**里，因为侧栏将来要能把"某道题的对话"标出来；
+    #:   而让列表多一个短字段，比让前端逐条请求详情便宜得多。
+    challengeId: str | None = None
+
     project: str | None = None
     persona: str | None = None
     providerId: str | None = None
@@ -236,6 +242,29 @@ class ChatMessageOut(CamelModel):
         return strip_system_wrappers(value) if isinstance(value, str) else value
 
 
+class ChatChallengeRef(CamelModel):
+    """对话顶部「题目条」要的那几个字段。
+
+    ★ 只给只读投影，不给 `description` / `attachments`：题目条是一条
+      常驻的窄条，塞下题面只会让它变高，而看板与题解页才是读题面的地方。
+
+    ⚠️ 与 `KernelChallengeOut` 是**两套投影**，刻意不合并：那个是看板的
+      全量形状（七个状态、额度、环境、附件……），对话页只用到五项。
+      合并会让聊天接口被迫去算配额与环境，多出几次查询。
+    """
+
+    id: str
+    title: str
+    status: str
+    score: int | None = None
+    remoteId: str = ""
+    platformName: str = ""
+    #: 待确认的候选 flag（`candidate_ready` 时非空）
+    candidateFlag: str | None = None
+    #: 平台判过对的 flag（`solved` 时非空）
+    confirmedFlag: str | None = None
+
+
 class ChatSessionDetailOut(ChatSessionOut):
     """会话 + 消息。
 
@@ -249,6 +278,10 @@ class ChatSessionDetailOut(ChatSessionOut):
 
     messages: list[ChatMessageOut]
     hasEarlier: bool = False
+    #: 这个会话关联的题目（题目条用）。`None` = 普通对话，或题目已被删 ——
+    #: 后者前端显示"题目已不存在"，而不是把标题条整个藏掉（那会让人以为
+    #: 会话丢了上下文）。
+    challenge: ChatChallengeRef | None = None
 
 
 class ChatSettingsIn(StrictModel):

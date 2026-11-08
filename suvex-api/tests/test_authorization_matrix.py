@@ -268,6 +268,11 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         #   后者会把整个对话页拔到 scan/admin，让只读角色完全用不了它。
         ("GET", "/api/v1/chat/sessions"),
         ("POST", "/api/v1/chat/sessions"),
+        # 从 CTF 看板「查看」进来：取/建"这道题的那个对话"。它做的仍是
+        # 「在自己笔记本里翻到那一页」，与 POST /chat/sessions 同级 ——
+        # 端点本身不碰题目、不启动解题（真解题是 `start_ctf_solve` 工具，
+        # 在工具层按 scan scope 逐次校验）。
+        ("POST", "/api/v1/chat/sessions/for-challenge/{challenge_id}"),
         ("GET", "/api/v1/chat/sessions/{session_id}"),
         ("PATCH", "/api/v1/chat/sessions/{session_id}"),
         # 删除是自己笔记本里撕掉一页。归属校验（只能删自己的）在

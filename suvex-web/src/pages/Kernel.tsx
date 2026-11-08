@@ -32,6 +32,7 @@ import {
   type KernelSubmitMode,
   type CanonicalCategory,
 } from '@/data/kernel'
+import { openChallengeSession } from '@/data/chat'
 import { showToast } from '@/data/toast-store'
 import { errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
@@ -46,7 +47,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 /**
  * CTF2 解题页。
@@ -194,6 +195,7 @@ export function KernelPage() {
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>('all')
   const [query, setQuery] = useState('')
   const [busy, setBusy] = useState(false)
+  const navigate = useNavigate()
   /** 正在确认提交的那道题 —— 存**整个对象**而不是 id */
   const [pending, setPending] = useState<KernelChallenge | null>(null)
   /** 待取消的那道题（取消会丢进度，所以要确认） */
@@ -431,6 +433,27 @@ export function KernelPage() {
         .finally(() => setBusy(false))
     },
     [profile, settings?.submitMode],
+  )
+
+  /**
+   * 打开这道题的对话（CTF 页重做第 2 步）。
+   *
+   * ★ 会话是**服务端 find-or-create** 的：同一道题再点一次回到同一条
+   *   时间线，不会多出空对话（见 `openChallengeSession`）。
+   * ★ 不在这里 `setBusy`：它是一个跳转，不是"平台正忙"—— 按钮上
+   *   转圈只会让人以为页面卡住了。
+   */
+  const runOpen = useCallback(
+    (challenge: KernelChallenge) => {
+      void openChallengeSession(challenge.id).then((session) => {
+        if (!session) {
+          showToast({ message: '打开对话失败，请稍后重试', tone: 'risk' })
+          return
+        }
+        navigate(`/chat?session=${encodeURIComponent(session.id)}`)
+      })
+    },
+    [navigate],
   )
 
   const runSubmit = useCallback(
@@ -883,6 +906,7 @@ export function KernelPage() {
               onSetPriority={runSetPriority}
               onWriteup={setWriteupChallenge}
               onWorkOrder={setWorkOrderChallenge}
+              onOpen={runOpen}
             />
 
             <p className="mt-panel text-2xs text-ink-faint">

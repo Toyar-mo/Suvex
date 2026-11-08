@@ -23,6 +23,7 @@ import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
 import { AssistantTurn } from '@/components/chat/AssistantTurn'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { MessageRow } from '@/components/chat/MessageRow'
+import { ChallengeBar, MissingChallengeBar } from '@/components/chat/ChallengeBar'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -1473,6 +1474,23 @@ export function ChatPage() {
             </span>
           )}
         </div>
+
+        {/*
+          题目条（CTF 页重做第 2 步）：从看板「查看」进来的会话，顶部固定
+          一条题目状态 —— 进来的人带着「这题现在怎样了」的问题，翻回看板
+          找答案会把他从正在读的过程里拽走。
+
+          ★ 由**会话本身**的 challengeId 决定，不看来源页：刷新、换标签页
+            打开同一个会话，这条都还在。
+          ★ 题目被删时后端给 `challenge: null`，但 challengeId 仍有值 ——
+            那种情况要出声（见 MissingChallengeBar），不能静默消失。
+        */}
+        {active?.challengeId &&
+          (active.challenge ? (
+            <ChallengeBar challenge={active.challenge} />
+          ) : (
+            <MissingChallengeBar />
+          ))}
 
         {/* 消息流 */}
         <div className="relative flex min-h-0 flex-1 flex-col">

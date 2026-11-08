@@ -183,6 +183,55 @@ def create_session(db: Session, *, created_by: str, title: str | None = None) ->
     return session
 
 
+def get_or_create_challenge_session(
+    db: Session, *, created_by: str, challenge_id: str
+) -> tuple[ChatSession, bool]:
+    """取「这道题的那个会话」，没有就建一个。返回 `(会话, 是否新建)`。
+
+    ## 为什么是 find-or-create，而不是每次新建
+
+    看板上的「查看」是一个**回访式**入口：用户点它想看"这道题现在到哪一步
+    了"，而不是"再开一个空对话"。每次新建的话，点十次就有十条空会话，
+    侧栏被冲垮，而真正的历史还不一定在里面。
+
+    ## 为什么按 (created_by, challenge_id) 找，而不是按标题
+
+    标题可以被用户改名，也可能因为两道题同名而撞车。`challenge_id` 是
+    稳定的事实。
+
+    ## 已归档的会话也捞回来
+
+    归档只表示"从侧栏消失"，不代表这道题的对话不该再打开。用户从看板
+    点进来，期待的仍是**原来那条**时间线；给他一条新的空会话，等于把那
+    段记录藏了起来。所以找到已归档的那条时，顺手取消归档（`archived_at
+    = None`）—— 它此刻确实又回到了使用中。
+    """
+    from app.kernel.models import KernelChallenge
+
+    challenge = db.get(KernelChallenge, challenge_id)
+    if challenge is None:
+        raise ApiError.not_found("这道题")
+
+    existing = db.scalars(
+        select(ChatSession)
+        .where(
+            ChatSession.created_by == created_by,
+            ChatSession.challenge_id == challenge_id,
+        )
+        .order_by(ChatSession.updated_at.desc())
+        .limit(1)
+    ).first()
+    if existing is not None:
+        if existing.archived_at is not None:
+            existing.archived_at = None
+        return existing, False
+
+    session = create_session(db, created_by=created_by, title=challenge.title)
+    session.challenge_id = challenge_id
+    db.flush()
+    return session, True
+
+
 def list_sessions(
     db: Session, *, created_by: str, include_archived: bool = False
 ) -> list[ChatSession]:

@@ -57,6 +57,7 @@ from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_c
 from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
+    ChatChallengeRef,
     ChatFileItemOut,
     ChatFileOut,
     ChatFileUploadOut,
@@ -136,6 +137,27 @@ def create_session(
     return ChatSessionOut.model_validate(session)
 
 
+@router.post(
+    "/chat/sessions/for-challenge/{challenge_id}", response_model=ChatSessionOut
+)
+def open_challenge_session(
+    challenge_id: str, db: DbSession, identity: Reader
+) -> ChatSessionOut:
+    """取「这道题的对话」，没有就建一个（**幂等**）。
+
+    看板行上的「查看」调它：连点两次不应产生两条空会话 ——
+    见 `service.get_or_create_challenge_session` 的说明。
+
+    ⚠️ 用的是 POST 而不是 GET：第一次调用**会写库**。用 GET 的话浏览器
+      预取/刷新会静默建会话，而用户根本没打算打开它。
+    """
+    session, _created = service.get_or_create_challenge_session(
+        db, created_by=_owner(identity), challenge_id=challenge_id
+    )
+    db.commit()
+    return ChatSessionOut.model_validate(session)
+
+
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetailOut)
 def get_session(
     session_id: str,
@@ -176,6 +198,7 @@ def get_session(
         **ChatSessionOut.model_validate(session).model_dump(),
         messages=[ChatMessageOut.model_validate(m) for m in messages],
         hasEarlier=has_earlier,
+        challenge=_challenge_ref(db, session),
     )
 
 
@@ -1240,6 +1263,43 @@ async def resume_turn(
 
     fresh = [m for m in service.list_messages(db, session=session) if m.id not in before]
     return ChatSendOut(messages=[ChatMessageOut.model_validate(m) for m in fresh])
+
+
+def _challenge_ref(db: Session, session: service.ChatSession) -> ChatChallengeRef | None:
+    """会话关联题目的只读投影（题目条用）。
+
+    ★ 题目被删了（重新同步、换接入）就返回 `None` —— 前端据此说
+      "题目已不存在"，而不是把整条题目条藏掉：藏掉会让用户以为
+      这段对话从来没有关联过任何东西。
+    """
+    if not session.challenge_id:
+        return None
+    from app.kernel.models import KernelChallenge, KernelCompetition
+
+    challenge = db.get(KernelChallenge, session.challenge_id)
+    if challenge is None:
+        return None
+    # 来源取**题目真实出处**（competition 级），与看板 `_resolve_platform_info`
+    # 同一条口径：一个账号可能先后同步过多个练习集，按账号推会把老题全贴错标签。
+    platform_name = ""
+    if challenge.competition_id:
+        competition = db.get(KernelCompetition, challenge.competition_id)
+        if competition is not None:
+            platform_name = (
+                "本地案例"
+                if competition.kind == "local"
+                else (competition.name or "").strip() or "CTF2（内置）"
+            )
+    return ChatChallengeRef(
+        id=challenge.id,
+        title=challenge.title,
+        status=challenge.status,
+        score=challenge.score,
+        remoteId=challenge.remote_id,
+        platformName=platform_name,
+        candidateFlag=challenge.candidate_flag,
+        confirmedFlag=challenge.confirmed_flag,
+    )
 
 
 def _owner(identity: Identity) -> str:
