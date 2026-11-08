@@ -57,7 +57,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from sqlalchemy import select, text
+from sqlalchemy import case, select, text
 from sqlalchemy.orm import Session
 
 from app.core.db import get_session_factory, session_scope
@@ -499,7 +499,21 @@ class KernelScheduler:
                     #    一道三天前同步、刚才才点解题的题排到队首。
                     #    两条降序/升序都要显式写，否则会跟着主键序走。
                     .order_by(
+                        # ① 人的判断（提前/延后、按分值排队）
                         KernelChallenge.priority.desc(),
+                        # ② **临门一脚优先**（2026-11-08，照抄 Muteki 的 near-solve）
+                        #
+                        # 已经有候选、正在等确认的题，离"解出"只差一次提交；
+                        # 把它排在从零开始的题后面，等于让一次几乎到手的
+                        # 结果在队列里凉掉。`candidate_count > 0` 是现成信号。
+                        case((KernelChallenge.candidate_count > 0, 0), else_=1).asc(),
+                        # ③ **简单题优先**（easy-first）
+                        #
+                        # 比赛里分值≈难度。先做低分题能把"已解数量"快速抬上去，
+                        # 而解出数量本身会影响后续题的可达性（部分赛制按解锁阈值
+                        # 放题）。`score NULL` 放最后 —— 没分值的题不是"最简单"。
+                        KernelChallenge.score.asc().nulls_last(),
+                        # ④ FIFO：等得最久的先来（防止低分题一直插队造成饥饿）
                         KernelChallenge.updated_at.asc(),
                     )
                     .limit(min(slots, _MAX_CLAIMS_PER_TICK))
