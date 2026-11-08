@@ -127,6 +127,7 @@ export function ChallengeBoard({
   onOpen,
   onBatch,
   queue,
+  solveDisabledReason,
 }: {
   challenges: KernelChallenge[]
   busy?: boolean
@@ -154,6 +155,13 @@ export function ChallengeBoard({
   onBatch?: (action: 'solve' | 'cancel', ids: string[]) => void
   /** 调度器状态：在跑 / 上限 / 排队。给了才画并发进度。 */
   queue?: KernelQueue | null
+  /**
+   * 不能开始解题的原因（如"还没绑定账号"）。
+   *
+   * ★ 传了就**禁用**开始/再解与「开始所选」，并把原因放进 title ——
+   *   让按钮点下去才报错，用户会以为是坏了。
+   */
+  solveDisabledReason?: string | null
 }) {
   /** 展开的行。同时只开一行 —— 看板的意义是不让详情挤占扫读。 */
   const [openId, setOpenId] = useState<string | null>(null)
@@ -339,9 +347,11 @@ export function ChallengeBoard({
               <span className="text-ink-muted">已选 {selected.size} 道</span>
               <button
                 type="button"
-                disabled={busy || startable.length === 0}
+                disabled={busy || startable.length === 0 || Boolean(solveDisabledReason)}
                 onClick={() => runBatch('solve', startable)}
-                title="对勾选的、还没解出的题发起解题（会起环境并消耗模型额度）"
+                title={
+                  solveDisabledReason ?? '对勾选的、还没解出的题发起解题（会起环境并消耗模型额度）'
+                }
                 className={cn(
                   'press inline-flex h-6 items-center gap-1 rounded-sm bg-accent px-2 text-2xs font-medium text-canvas',
                   'transition-ui duration-fast hover:bg-accent-strong',
@@ -584,12 +594,13 @@ export function ChallengeBoard({
                         {canSolve(challenge) && (
                           <button
                             type="button"
-                            disabled={busy}
+                            disabled={busy || Boolean(solveDisabledReason)}
                             onClick={() => onSolve(challenge, isResumable(challenge))}
                             title={
-                              isResumable(challenge)
+                              solveDisabledReason ??
+                              (isResumable(challenge)
                                 ? '接着上一次的进度继续 —— 上次跑过的命令不会重跑'
-                                : '开始解这道题'
+                                : '开始解这道题')
                             }
                             className={cn(
                               'press inline-flex h-6 items-center gap-1 rounded-sm px-2 text-2xs font-medium',

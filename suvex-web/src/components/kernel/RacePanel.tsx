@@ -50,7 +50,13 @@ const STAGE_TONE: Record<RaceStage, string> = {
   skipped: 'text-ink-muted',
 }
 
-export function RacePanel() {
+/**
+ * @param startDisabledReason 传了就禁用「开始整场托管」并说明原因。
+ *
+ *   ★ 只在**开始**这一侧禁用，「停止」永远可用 —— 解绑账号不会让
+ *     已经在跑的整场托管停下来，那时把停止按钮一起藏掉才是真的控不住。
+ */
+export function RacePanel({ startDisabledReason = null }: { startDisabledReason?: string | null }) {
   const [status, setStatus] = useState<RaceStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -156,10 +162,7 @@ export function RacePanel() {
   const totalCost = status?.cost?.totalCostUsd
 
   return (
-    <section
-      className="rounded-lg border border-line bg-surface-raised p-4"
-      data-race-panel
-    >
+    <section className="rounded-lg border border-line bg-surface-raised p-4" data-race-panel>
       <header className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Trophy className="size-4 text-accent" aria-hidden />
@@ -226,7 +229,14 @@ export function RacePanel() {
             />
           </label>
           <div className="sm:col-span-3">
-            <Button variant="primary" size="sm" onClick={onStart} disabled={busy} data-race-start>
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={onStart}
+              disabled={busy || Boolean(startDisabledReason)}
+              title={startDisabledReason ?? undefined}
+              data-race-start
+            >
               <Play className="size-3.5" aria-hidden />
               {busy ? '启动中…' : '开始整场托管'}
             </Button>

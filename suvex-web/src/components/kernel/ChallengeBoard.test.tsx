@@ -78,6 +78,7 @@ function renderBoard(
     onWorkOrder?: (c: KernelChallenge) => void
     onOpen?: (c: KernelChallenge) => void
     onBatch?: (action: 'solve' | 'cancel', ids: string[]) => void
+    solveDisabledReason?: string | null
     queue?: { running: number; limit: number; queued: number; challenges: string[] }
   } = {},
 ) {
@@ -94,6 +95,7 @@ function renderBoard(
         onWorkOrder={handlers.onWorkOrder}
         onOpen={handlers.onOpen}
         onBatch={handlers.onBatch}
+        solveDisabledReason={handlers.solveDisabledReason}
         queue={handlers.queue}
       />
     </MemoryRouter>,
@@ -377,6 +379,43 @@ describe('ChallengeBoard：键盘 j/k/Enter/s（第 4 步）', () => {
     fireEvent.keyDown(document.body, { key: 's', ctrlKey: true })
 
     expect(onSolve).not.toHaveBeenCalled()
+  })
+})
+
+describe('ChallengeBoard：没有账号时不能开始解题', () => {
+  it('★ 开始按钮禁用，并把原因写在 title 上（而不是点了才报错）', () => {
+    const onSolve = vi.fn()
+    renderBoard([makeChallenge({ id: 'a', title: '甲' })], {
+      onSolve,
+      solveDisabledReason: '还没绑定 CTF2 账号',
+    })
+
+    const row = screen.getByRole('button', { name: '甲' }).closest('tr')!
+    const button = within(row).getByRole('button', { name: '开始' }) as HTMLButtonElement
+
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('title')).toContain('还没绑定')
+  })
+
+  it('★ 批量「开始所选」同样禁用 —— 否则一次点醒一整批', () => {
+    renderBoard([makeChallenge({ id: 'a', title: '甲' })], {
+      onBatch: noop,
+      solveDisabledReason: '还没绑定 CTF2 账号',
+    })
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '选择当前列表里的全部题目' }))
+    const batch = screen.getByRole('button', { name: /开始所选/ }) as HTMLButtonElement
+
+    expect(batch.disabled).toBe(true)
+  })
+
+  it('有账号（不传原因）时按钮可用', () => {
+    renderBoard([makeChallenge({ id: 'a', title: '甲' })])
+
+    const row = screen.getByRole('button', { name: '甲' }).closest('tr')!
+    const button = within(row).getByRole('button', { name: '开始' }) as HTMLButtonElement
+
+    expect(button.disabled).toBe(false)
   })
 })
 

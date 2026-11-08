@@ -222,6 +222,8 @@ export function KernelPage() {
    * 后端端点一直是好的，缺的就是这一个入口。
    */
   const [unbinding, setUnbinding] = useState(false)
+  /** 未绑定时，页内展开的绑定表单（不再整页顶掉题库） */
+  const [binding, setBinding] = useState(false)
   /**
    * 单题拉取。
    *
@@ -591,8 +593,18 @@ export function KernelPage() {
 
   // ── 渲染 ──────────────────────────────────────────────
 
-  // 没有绑定：整页换成引导（见文件头那段）
-  if (status === 'ready' && !account) {
+  /*
+    ★★ 没有账号时**不再**把整页顶掉（2026-11-08 用户反馈）。
+
+    解绑对话框自己写着"已经同步下来的赛事与题目会保留"，而这一页却把
+    题库整块藏了 —— 两句话互相拆台。更实际的是：题目可能来自**别的接入**
+    （DASCTF Pro / BUUCTF …），它们根本不依赖 CTF2 的 PAT；一条账号解绑，
+    不该连带把别人的题一起藏起来。
+
+    所以只在"什么题都没有"的首次使用场景里整页引导，其余情况在页内
+    挂一条提示 + 可展开的绑定表单。
+  */
+  if (status === 'ready' && !account && challenges.length === 0) {
     return (
       <>
         <PageHeader navId="kernel" />
@@ -608,9 +620,41 @@ export function KernelPage() {
       <PageHeader navId="kernel" />
 
       <div className="px-gutter py-bay">
-        {/* ── 赛事托管（整场自动跑：多模型赛跑） ── */}
+        {/*
+          ★ 未绑定时**不隐藏**整场托管面板：它可能正跑着（解绑不会让
+            已经起跑的赛跑停下），而停止按钮就在面板里 —— 藏掉它等于
+            让人没法收场。只在开始那一侧禁用并说明原因。
+        */}
+        {!account && (
+          <div className="mb-panel flex flex-col gap-2 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2.5">
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-2xs text-ink-muted">
+              <TriangleAlert
+                size={12}
+                strokeWidth={2}
+                className="shrink-0 text-signal-warn"
+                aria-hidden="true"
+              />
+              <span className="text-ink">还没绑定 CTF2 账号</span>
+              <span>
+                同步新题与发起解题需要它；下面这些题是之前同步下来的，仍可浏览、看题解与解题过程。
+              </span>
+              <span className="flex-1" />
+              <Button variant="secondary" size="sm" onClick={() => setBinding((value) => !value)}>
+                {binding ? '收起' : '绑定账号'}
+              </Button>
+              <Link
+                to="/settings#platform"
+                className="text-2xs text-accent-strong underline hover:text-accent"
+              >
+                平台接入
+              </Link>
+            </div>
+            {binding && <BindPrompt />}
+          </div>
+        )}
+
         <div className="mb-panel">
-          <RacePanel />
+          <RacePanel startDisabledReason={account ? null : '还没绑定 CTF2 账号'} />
         </div>
 
         {/* ── 账号状态条 ── */}
@@ -833,12 +877,16 @@ export function KernelPage() {
           <Button
             variant="secondary"
             size="sm"
-            disabled={busy}
+            disabled={busy || !account}
             onClick={() => {
               setPullInput('')
               setPulling(true)
             }}
-            title="把平台上的题目链接粘进来，按 id 精确拉取这一道题"
+            title={
+              account
+                ? '把平台上的题目链接粘进来，按 id 精确拉取这一道题'
+                : '还没绑定 CTF2 账号 —— 拉取单题要用它访问平台'
+            }
           >
             <Link2 size={12} strokeWidth={2} aria-hidden="true" />
             拉取单题
@@ -870,15 +918,25 @@ export function KernelPage() {
           <Button
             variant="secondary"
             size="sm"
-            disabled={busy}
+            disabled={busy || !account}
             onClick={() => setPicking(true)}
-            title="同步指定赛事的阶段与题目（赛事题目只能查看，不能在这里解题）"
+            title={
+              account
+                ? '同步指定赛事的阶段与题目（赛事题目只能查看，不能在这里解题）'
+                : '还没绑定 CTF2 账号 —— 同步赛事题目要用它访问平台'
+            }
           >
             <Trophy size={12} strokeWidth={2} aria-hidden="true" />
             同步赛事题目
           </Button>
 
-          <Button variant="secondary" size="sm" disabled={busy} onClick={() => runSync()}>
+          <Button
+            variant="secondary"
+            size="sm"
+            disabled={busy || !account}
+            onClick={() => runSync()}
+            title={account ? undefined : '还没绑定 CTF2 账号 —— 同步要用它访问平台'}
+          >
             <RefreshCw
               size={12}
               strokeWidth={2}
@@ -968,6 +1026,7 @@ export function KernelPage() {
               onOpen={runOpen}
               onBatch={runBatch}
               queue={queue}
+              solveDisabledReason={account ? null : '还没绑定 CTF2 账号'}
             />
 
             <p className="mt-panel text-2xs text-ink-faint">
