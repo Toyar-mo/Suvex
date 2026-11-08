@@ -61,6 +61,7 @@ from app.auth.deps import Identity, require_admin, require_read, require_scan
 from app.core.db import get_db, get_session_factory
 from app.core.errors import ApiError, ErrorCode
 from app.core.vocab import AuditAction
+from app.kernel import autosync as ctf2_autosync
 from app.kernel import platforms, service
 from app.kernel import workorder as workorder_mod
 from app.kernel import writeup as writeup_mod
@@ -848,6 +849,36 @@ def pull_challenge(
     )
 
 
+def _apply_new_challenge_automation(db, result) -> int:  # noqa: ANN001
+    """同步之后跑「新题自动优先 / 自动开解」。返回自动开跑了几道。
+
+    ## ★ v1.78：手动同步也走这条路
+
+    这两个开关原来**只**在自动同步线程里生效 —— 用户手动点「同步题目」
+    发现 20 道新题时，它们一道都不会被优先、一道都不会开跑，而界面上
+    没有任何地方解释。同一个开关在两处行为不同，是最难被信任的那类不一致。
+
+    ## 失败不影响同步结果
+
+    同步已经成功（题已经进库），自动作业只是个后续动作。这里吞掉异常
+    并记日志，而不是把一次成功的同步变成 500。
+    """
+    new_ids = list(getattr(result, "new_challenge_ids", []) or [])
+    if not new_ids:
+        return 0
+    settings = service.effective_ctf2_settings(db)
+    try:
+        _prioritized, started = ctf2_autosync.run_new_challenge_automation(
+            new_ids,
+            auto_priority=bool(settings.auto_priority_new),
+            auto_start=bool(settings.auto_start_new),
+        )
+        return started
+    except Exception:  # noqa: BLE001 - 见 docstring
+        logger.exception("新题自动作业失败（同步本身已成功）")
+        return 0
+
+
 @router.post("/sync", response_model=KernelSyncOut, summary="从 CTF2 同步赛事与题目")
 def sync_ctf2(payload: KernelSyncIn, request: Request, identity: ScanDep, db: DbDep) -> KernelSyncOut:
     """scan 级：它**改数据**（写库），且会发出去一串外部请求。
@@ -860,6 +891,7 @@ def sync_ctf2(payload: KernelSyncIn, request: Request, identity: ScanDep, db: Db
     灌满噪音，而噪音会让真正的记录难找）。
     """
     result = service.sync(db, competition_ids=payload.competitionIds)
+    auto_started = _apply_new_challenge_automation(db, result)
     audit.record(
         db,
         request=audit.from_http(request, identity),
@@ -882,7 +914,8 @@ def sync_ctf2(payload: KernelSyncIn, request: Request, identity: ScanDep, db: Db
         attachmentsDownloaded=result.attachments.downloaded,
         attachmentsSkipped=result.attachments.skipped,
         attachmentsFailed=len(result.attachments.failed),
-        message=result.message(),
+        message=result.message()
+        + (f"，其中 {auto_started} 道已按设置自动开始解题" if auto_started else ""),
     )
 
 
@@ -899,6 +932,7 @@ def sync_competition(request: Request, identity: ScanDep, db: DbDep) -> KernelSy
     因此能按真实来源显示这批题，而非把它们冒充成别的平台。
     """
     result = service.sync_competition(db)
+    auto_started = _apply_new_challenge_automation(db, result)
     audit.record(
         db,
         request=audit.from_http(request, identity),
@@ -920,7 +954,8 @@ def sync_competition(request: Request, identity: ScanDep, db: DbDep) -> KernelSy
         attachmentsDownloaded=0,
         attachmentsSkipped=0,
         attachmentsFailed=0,
-        message=result.message(),
+        message=result.message()
+        + (f"，其中 {auto_started} 道已按设置自动开始解题" if auto_started else ""),
     )
 
 

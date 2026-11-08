@@ -212,37 +212,71 @@ class KernelAutoSync:
             result.summary(),
         )
 
-        if auto_priority:
-            with factory() as session:
-                ctf2_service.apply_new_challenge_priority(session, new_ids)
-
-        if auto_start:
-            self._auto_start(new_ids)
+        run_new_challenge_automation(
+            new_ids, auto_priority=auto_priority, auto_start=auto_start
+        )
 
         return len(new_ids)
 
     def _auto_start(self, challenge_ids: list[str]) -> None:
-        """把新题推进解题队列。**逐题独立容错**。
+        auto_start_challenges(challenge_ids)
 
-        ⚠️ 一道题失败（没有可用的 LLM provider、题目当前不可解、平台不
-        支持提交）绝不能影响其余几道 —— "批量操作做到一半停住"是这类
-        代码最常见的失败形态，而且它失败得**很安静**：日志里只有一行
-        异常，界面上什么都没发生。
-        """
-        from app.kernel import service as ctf2_service
 
-        factory = get_session_factory()
-        started = 0
-        for challenge_id in challenge_ids:
-            try:
-                with factory() as session:
-                    challenge = ctf2_service.get_challenge_or_404(session, challenge_id)
-                    ctf2_service.start_solve(session, challenge)
-                started += 1
-            except Exception as exc:  # noqa: BLE001 - 见上
-                logger.info("CTF2 新题自动开解跳过 %s：%s", challenge_id, exc)
-        if started:
-            logger.info("CTF2 新题自动开解：%d 道进入队列", started)
+def run_new_challenge_automation(
+    new_ids: list[str], *, auto_priority: bool, auto_start: bool
+) -> tuple[int, int]:
+    """对新题执行「自动优先 / 自动开解」。返回 `(优先数, 开跑数)`。
+
+    ## ★ 为什么抽成模块级函数（v1.78）
+
+    这两个开关原来只在**自动同步**线程里生效：用户手动点「同步题目」
+    发现 20 道新题时，它们一道都不会被优先、一道都不会开跑 —— 而界面上
+    没有任何地方说这件事。用户以为开关坏了。
+
+    现在自动同步与手动同步都走这一个函数，行为只有一份。
+    开关的**读取**仍由调用方负责（自动同步要在同步**之前**读，见那里的
+    注释：用户按下按钮那一刻的意图说了算）。
+    """
+    if not new_ids:
+        return 0, 0
+
+    from app.kernel import service as ctf2_service
+
+    prioritized = 0
+    if auto_priority:
+        with get_session_factory()() as session:
+            prioritized = ctf2_service.apply_new_challenge_priority(session, new_ids)
+
+    started = 0
+    if auto_start:
+        started = auto_start_challenges(new_ids)
+
+    return prioritized, started
+
+
+def auto_start_challenges(challenge_ids: list[str]) -> int:
+    """把题推进解题队列，**逐题独立容错**。返回成功几道。
+
+    ⚠️ 一道题失败（没有可用的 LLM provider、题目当前不可解、平台不
+    支持提交）绝不能影响其余几道 —— "批量操作做到一半停住"是这类
+    代码最常见的失败形态，而且它失败得**很安静**：日志里只有一行
+    异常，界面上什么都没发生。
+    """
+    from app.kernel import service as ctf2_service
+
+    factory = get_session_factory()
+    started = 0
+    for challenge_id in challenge_ids:
+        try:
+            with factory() as session:
+                challenge = ctf2_service.get_challenge_or_404(session, challenge_id)
+                ctf2_service.start_solve(session, challenge)
+            started += 1
+        except Exception as exc:  # noqa: BLE001 - 见上
+            logger.info("CTF2 新题自动开解跳过 %s：%s", challenge_id, exc)
+    if started:
+        logger.info("CTF2 新题自动开解：%d 道进入队列", started)
+    return started
 
 
 # ── 单例（与 `scheduler.get_scheduler` 同一个模式）──────────

@@ -1493,26 +1493,49 @@ def _upsert_challenge(
         challenge.sub_flag_id = _pick(payload, "sub_flag_id", "subFlagId")
 
     if existing is None:
-        challenge.sandbox_profile = _profile_for(challenge.category)
+        challenge.sandbox_profile = _profile_for(challenge.category, db=db)
         challenge.max_wrong_submissions = DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS
 
     db.flush()
     return challenge, existing is None
 
 
-def _profile_for(category: str) -> str:
+def _profile_for(category: str, db: Session | None = None) -> str:
     """选沙箱镜像。**在同步时决定一次，不每次启动重算。**
 
     调用 `runner.profile_for_category` —— 那是**唯一**的分类→镜像规则
     （精确匹配，不是子串匹配；`forensics` 含 `re` 这个坑写在它的
     docstring 里）。这里再判一次等于第二份实现，而它们迟早会分叉。
 
+    ## ★ v1.78：分类认不出来时，用设置里的「默认沙箱镜像」
+
+    在此之前 `default_sandbox_profile` 是一张**空头支票**：解题读的是
+    题目行上的 `sandbox_profile`（同步时按分类写死），那个设置在
+    `start_solve` 里只是个永远走不到的兜底。用户在设置页把它改成
+    逆向镜像，一道题都不会改变。
+
+    现在它有了确切含义：**只有分类认不出来（归到「其它」）的新题**才用它。
+    认得出的题仍按分类走 —— 否则改一次设置就等于推翻所有历史题的镜像，
+    那是比"设置没生效"更糟的事。
+
     ⚠️ 延迟 import：`runner` 依赖本模块（在函数内 import），
     顶层互相 import 会得到一次循环导入。
     """
     from app.kernel import runner
 
-    return runner.profile_for_category(category)
+    profile = runner.profile_for_category(category)
+    if db is None or profile != KernelSandboxProfile.BASE.value:
+        return profile
+
+    # 落到 base 的题有两种：**认得出的通用类**（web/crypto/misc…）与
+    # **认不出的**。只有后者才该被设置接管。
+    from app.kernel.schemas import canonical_category
+
+    if canonical_category(category) != "other":
+        return profile
+
+    settings_row = effective_ctf2_settings(db)
+    return settings_row.default_sandbox_profile or profile
 
 
 def _pick(payload: Any, *keys: str) -> str | None:
