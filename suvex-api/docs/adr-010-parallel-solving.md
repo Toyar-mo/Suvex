@@ -1,72 +1,97 @@
-# ADR-010：并行解题升级（一题一任务、不限轮数、尽量快）
+# ADR-010：并行解题升级（一题一任务、尽量快）
 
-- 状态：草案（2026-11-08）
-- 背景：比赛场景下会**一次性放开大量题**，一题一个任务并行跑；目标是"更快解出"和"能解出更多"，而不是省资源。
+- 状态：草案（2026-11-08，依据 2026-11-08 的开源调研更新）
+- 背景：比赛会一次性放开大量题，一题一个任务并行跑；目标是**更快解出、解出更多**。
 
-## 1. 实测现状（2026-11-08，DASCTF Pro 四道纯附件题）
+## 0. 调研结论：赢家不靠"不限轮数"
 
-| 项 | 现状 | 问题 |
+查了腾讯系获奖项目（BreachWeave 第 2 届线上/线下第一、Cairn 54/54 唯一 AK、sapper-v2 第 3 届冠军 85 flags/8h、CHYing、SickHackShark、tinyctfer、Muteki）与研究系实现（Naptime、XBOW、EnIGMA、Cybench、D-CIPHER、ATLANTIS、RedAmon、Decepticon、ctf-agent）：
+
+- **没有一家靠无限轮数取胜**。Naptime 用 16–32 步 × 20–40 条独立轨迹；EnIGMA 多数解出现在前 ~20 步；RedAmon 每题 100 iter；Muteki 每题 4000s 上限并带四类预算。
+- **速度来自"并行采样 + 早停 + 提交即反馈"**，不是把一道题拖长。ctf-agent 一题同时跑 5 个模型，first verified wins；Muteki 用 easy-first + near-solve 排序。
+- **成本差主要来自模型分层**：sapper 1B token 打赢亚军 4.5B；Decepticon HIGH/MID/LOW 路由；XBOW 按任务选模型。
+- **验证是分水岭**：XBOW 独立 validator、Muteki provenance gate、ctf-agent 提交冷却；没有验证的高分不可信。
+
+所以本 ADR 把目标从"不限轮数"修正为：**一题一任务、每题多重预算、同题并行采样、先到先得**。
+
+## 1. 本轮实测（2026-11-08，DASCTF Pro 四道纯附件题）
+
+4 道题跑 60 分钟、0 候选；期间暴露并修复的工程阻塞：
+
+| 问题 | 影响 | 状态 |
 |---|---|---|
-| 并发上限 | `max_concurrent_solves = 4` | 比赛要一题一任务，4 个槽远远不够 |
-| 单题预算 | `max_turns = 500`，`wall_clock_seconds = null` | 没有墙钟上限；一道题可以跑几小时 |
-| 隔离 | 每题一个沙箱；多智能体时**每个 agent 一个** | 容器数 = 题数 × agent 数，`docker run` 会成为瓶颈 |
-| 实测产出 | 4 道题跑 60 分钟，0 个候选 | 难是客观的，但也有工程侧原因（见下） |
-| 数据集 | DASCTF Pro 30 道：19 道纯附件、5 道 PWN、5 道 WEB、1 道无附件 MISC | 纯附件题是最该先铺开的 |
+| 附件下载只认 CTF2 官方域名 | 题面文件根本没下发，白跑 20 分钟 | 已修（平台注册域 + `attachment_domains`） |
+| 单题链路不写活动事件 | "在跑但没记录" | 已修 |
+| 收口门要求覆盖 5 面 + 1 条发现 | CR7 4.5 小时被拒 100 次，逼模型编造 | 已修（有候选或有 tried 即放行） |
+| `race-*` 沙箱泄漏 813 个 | `docker run` 超时，四题一起失败 | 已修（启动清理 + 年龄清理） |
+| 并发写死 4 | 一题一任务铺不开 | 待改（P0） |
 
-已修复的阻塞（本轮）：
+## 2. 目标架构（照抄 + 适配）
 
-1. 附件下载只认 CTF2 官方域名 → 接入平台的 CDN 被拒，四道题**根本没有题面文件**；现在按平台 base_url 的注册域放行，并支持 `spec.attachment_domains` 显式声明。
-2. 单题解题链路从不写活动事件 → 界面上"在跑但没记录"；现在推理/工具/报错全部落库。
-3. 收口门无条件套在 CTF 上（要求覆盖 5 个面 + 1 条发现）→ CR7 4.5 小时被拒 100 次；现在"有候选或写了 tried/ruled_out"就放行。
-4. `race-*` 沙箱泄漏 813 个 → `docker run` 120 秒超时，四道题一起失败；现在启动时清理 + 运行期按年龄清理（上限 32，只删超 45 分钟的）。
+### A · 调度（照抄 Muteki `CompetitionScheduler`）
 
-## 2. 目标
+- 每题一行队列：`priority / enqueued_at / difficulty / points / solved_by / near_solve / attempt / state`
+- 1–5s tick，输出 `admit / hold / defer / observe`，每次决策落审计表
+- 排序键：`operator_priority → starvation → difficulty(easy first) → near_solve → points → enqueue_time`
+- 失败退避 300s；连续 stuck 换轨或放弃
 
-1. **并发**：一题一任务，可开到 20–40 并发（按宿主资源自动封顶）。
-2. **速度**：单题从"跑到轮次用尽"改成"尽早出候选"；同题可 fan-out 多策略，先到先得。
-3. **能力**：题型手册预载 + 工具完备 + 平台反馈闭环。
-4. **可观测**：每题有阶段、token、耗时，能据此做模型路由与早停。
+### B · 并发与沙箱（照抄 ctf-agent + SWE-bench 基线）
 
-## 3. 改造方案（分层）
+- 一 attempt 一沙箱；镜像预构建、启动走 semaphore
+- 并发上限 = `min(配置, 0.75×CPU, 内存/每沙箱内存, 容器上限)`；每沙箱实测 100–200MB
+- 孤儿清理按 label + 年龄（已实现年龄清理，补 label）
 
-### A · 调度层
+### C · 同题 fan-out（照抄 ctf-agent `ChallengeSwarm`）
 
-- 并发上限从"设置里的常量"改为**按宿主资源计算**：`min(配置值, (内存 - 预留) / 每沙箱内存, 容器数上限)`；每沙箱实测 100–200MB。
-- 队列公平：同一场比赛的题轮转，避免一道长题把槽占死（现在的 FIFO + 优先级会让长题饿死新题）。
-- 墙钟预算：`wall_clock_seconds` 默认给一个值（如 90 分钟），到点强制收口并交 `tried/ruled_out`——比烧完 500 轮诚实。
+- 每题默认 **2–3 个异构 solver**（不同模型/温度），`asyncio.wait(FIRST_COMPLETED)`
+- 任一 solver 产出**已验证**候选 → 立即取消其余
+- 每个 solver 独立预算；不共享可写容器
 
-### B · 执行层
+### D · 预算（照抄 Muteki `ExecutionBudget`）
 
-- **沙箱预热**：`docker create` 与 `start` 分离，提前把 2–4 个空沙箱备好；解题时只做 attach + 挂载。
-- 容器上限与并发联动：`MAX_RACE_SANDBOXES = 并发 × 每题材 agent 上限 + 余量`，而不是写死 32。
-- 镜像预拉：`suvex-sandbox` / `suvex-sandbox-re` 常驻本地，避免每题拉取。
+四类预算同时生效，**0 不等于无限**：
 
-### C · 策略层（速度的主要来源）
+1. 墙钟 deadline（monotonic + UTC 双记录；默认 60–90 分钟）
+2. 步数（默认 120）
+3. token / cost
+4. 提交次数（平台配额）
 
-- **同题 fan-out**：一道题同时开 2–3 个策略（不同温度/不同起点/不同模型），任一产出候选即停其他。成本换速度，比赛场景值得。
-- **模型路由**：粗活（`file`/`strings`/解包）用快模型；关键推理（格、逆算法）用强模型。按题型与阶段切换。
-- **早停信号**：连续 N 轮无新信息 / 工具连续失败 / 收口被拒 → 换策略或放弃（已有熔断，接到调度层）。
+执行/结论/收尾三段切分，最后 10% 预算强制收口。
 
-### D · 反馈层
+### E · 熔断（照抄 ctf-agent `LoopDetector` + RedAmon axis lock-in）
 
-- 提交返回码即反馈：`isCorrect=false` → 冷却并排除该候选族；平台错误（配额/权限）→ 立刻中止而不是重试。
-- 候选去重 + 冷却，避免同一错误答案在多个策略里重复提交。
+- 滚动窗口 12 步：warn 3、break 5（同一命令/同一路径/同一 CVE）
+- 状态无增量也算空转；触发后注入 sibling findings 并换轴
 
-### E · 观测层
+### F · 提交（照抄 Muteki provenance gate + ctf-agent 冷却）
 
-- 每题记录：阶段（侦察/理解/构造/验证/提交）、token、工具调用数、墙钟。
-- 用于两件事：比赛结束后复盘"卡在哪一层"；运行中给调度器提供"这道题还有没有希望"的信号。
+- 只有**执行输出 / 产物 / 运行事件**可成为候选；operator/chat/advisor 一律拒绝
+- 状态机：`candidate → awaiting_approval → approved → submitted`
+- 同题同槽同值只登记一次；错答冷却 30/120/300/600s 递增
+- `unknown/timeout` 只对账不重发；`wrong` 写回记忆，避免二次提交
 
-## 4. 分阶段落地
+### G · 记忆与交接（照抄 nvwabase / BreachWeave Observer）
+
+- 外置三层：`title / summary / evidence`；默认只读摘要，按需下钻
+- compact 或超时时生成 `compact_handoff.md`，由轻量 agent 写，不让做题 agent 自己写长笔记
+
+### H · 模型分层（照抄 sapper-v2 / Decepticon）
+
+- 强模型：规划、关键推理（格、逆算法）
+- 快模型：侦察、解包、日志摘要
+- 每 provider 一个 semaphore；429/quota 自动 fallback
+
+## 3. 分阶段
 
 | 阶段 | 内容 | 验收 |
 |---|---|---|
-| P0 | 并发按资源计算 + 墙钟预算 + 容器上限联动 | 20 道题同时起跑，无 `docker run` 超时 |
-| P1 | 沙箱预热 + 镜像预拉 | 单题从"起跑"到"第一个工具调用" < 15 秒 |
-| P2 | 同题 fan-out（2 策略）+ 先到先得 | 同一批题平均出候选时间下降 |
-| P3 | 模型路由 + 早停信号接调度 | 单题 token 成本下降而解决率不降 |
+| P0 | 并发按资源算 + 四类预算 + 容器上限联动 | 20 题同时起跑无 `docker run` 超时；单题不再跑到 500 轮 |
+| P1 | 调度器（easy-first/near-solve/starvation）+ 审计表 | 同批题平均首次提交时间下降 |
+| P2 | 同题 2–3 solver fan-out + first-wins | 同一批题解决率上升 |
+| P3 | 提交 provenance gate + 冷却 + 模型分层 | 错答提交次数下降、token/题下降 |
 
-## 5. 不做的事
+## 4. 不做
 
-- 不做"共享沙箱跨题复用"：题目之间必须隔离，跨题复用等于把 A 题的产物暴露给 B 题。
-- 不为并行而并行：并发上限由资源算出来，不是配置里写 64 就真能跑 64。
+- 不共享可写沙箱跨题复用（隔离）
+- 不用"无限轮数"当解法（调研无先例；拖长只增成本）
+- 不做无上限并发（CHYing 3 并发就撞 429；ctf-agent 50 容器已很重）
