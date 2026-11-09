@@ -1,6 +1,10 @@
 import {
+  ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
   Copy,
   Download,
+  Eye,
   FileDown,
   FolderOpen,
   Hash,
@@ -15,6 +19,7 @@ import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import Checkbox from '@/components/ui/Checkbox'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
+import Modal from '@/components/ui/Modal'
 import { Button, IconButton } from '@/components/ui/Button'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
@@ -25,7 +30,6 @@ import {
   deleteFile,
   exportFilesZip,
   formatBytes,
-  formatDate,
   formatTimestamp,
   listFiles,
   listUploadSessions,
@@ -64,6 +68,14 @@ import {
  */
 
 type GroupBy = 'none' | 'session' | 'project'
+
+/** 可排序的列。前三个是文本，后两个是数值。 */
+type SortKey = 'sessionTitle' | 'path' | 'name' | 'sizeBytes' | 'modifiedAt'
+
+interface FileSort {
+  key: SortKey
+  dir: 'asc' | 'desc'
+}
 
 interface FilterDraft {
   sessionId: string
@@ -178,6 +190,8 @@ export default function FilesPage() {
   const [pendingBulkDelete, setPendingBulkDelete] = useState<WorkspaceFileRow[] | null>(null)
   const [bulkDeleting, setBulkDeleting] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [sort, setSort] = useState<FileSort>({ key: 'modifiedAt', dir: 'desc' })
+  const [preview, setPreview] = useState<WorkspaceFileRow | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploading, setUploading] = useState(false)
   // v1.39：上传目标会话改成下拉选（会话 ID 不在这一页上，让用户手填看不到的东西是设计缺陷）。
@@ -251,11 +265,40 @@ export default function FilesPage() {
   }
   const refresh = () => void load(applied)
 
+  /**
+   * 排序在**前端**做：列表最多 5000 行，当前页只渲染 100 行；下推到后端
+   * 要多一套查询参数与索引，收益不成比例。默认与后端一致（修改时间倒序），
+   * 不点表头时行为完全不变。
+   */
+  const sortedRows = useMemo(() => {
+    const factor = sort.dir === 'asc' ? 1 : -1
+    return [...rows].sort((a, b) => {
+      if (sort.key === 'sizeBytes') return (a.sizeBytes - b.sizeBytes) * factor
+      if (sort.key === 'modifiedAt') return (a.modifiedAt - b.modifiedAt) * factor
+      if (sort.key === 'path') return a.path.localeCompare(b.path, 'zh') * factor
+      if (sort.key === 'name') return a.name.localeCompare(b.name, 'zh') * factor
+      // 剩下只有 sessionTitle；空标题回退到会话 ID，否则它们会全部并列。
+      const left = a.sessionTitle || a.sessionId
+      const right = b.sessionTitle || b.sessionId
+      return left.localeCompare(right, 'zh') * factor
+    })
+  }, [rows, sort])
+
+  const toggleSort = (key: SortKey) => {
+    setPage(0)
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' }
+        : // 数值列先给"大的在前"（与默认的最近修改一致），文本列给正序。
+          { key, dir: key === 'sizeBytes' || key === 'modifiedAt' ? 'desc' : 'asc' },
+    )
+  }
+
   /** 分组后的渲染单元。空组不渲染。 */
   const units = useMemo<RowGroup[]>(() => {
-    if (groupBy === 'none') return [{ key: 'all', label: '', rows }]
+    if (groupBy === 'none') return [{ key: 'all', label: '', rows: sortedRows }]
     const map = new Map<string, RowGroup>()
-    for (const row of rows) {
+    for (const row of sortedRows) {
       const key = groupBy === 'session' ? row.sessionId : (row.project ?? '(未标项目)')
       const label = groupBy === 'session' ? row.sessionTitle : (row.project ?? '(未标项目)')
       let bucket = map.get(key)
@@ -266,7 +309,7 @@ export default function FilesPage() {
       bucket.rows.push(row)
     }
     return [...map.values()]
-  }, [rows, groupBy])
+  }, [sortedRows, groupBy])
 
   const pages = useMemo(() => paginate(units, PAGE_SIZE), [units])
   const pageCount = Math.max(1, pages.length)
@@ -413,14 +456,14 @@ export default function FilesPage() {
   }
 
   const exportCsv = () => {
-    if (rows.length === 0) {
+    if (sortedRows.length === 0) {
       showToast({ tone: 'info', message: '当前没有可导出的结果。' })
       return
     }
-    const header = ['日期', '会话', '项目', '子路径', '文件名', '来源', '大小(字节)', '修改时间']
-    const lines = rows.map((row) =>
+    // 与界面同序（用户点了表头排序，导出的就是他看到的顺序）；不再单列「日期」。
+    const header = ['会话', '项目', '子路径', '文件名', '来源', '大小(字节)', '修改时间']
+    const lines = sortedRows.map((row) =>
       [
-        formatDate(row.modifiedAt),
         row.sessionTitle,
         row.project ?? '',
         subPathOf(row.path),
@@ -749,12 +792,23 @@ export default function FilesPage() {
                         label="全选当前页"
                       />
                     </th>
-                    <th className="px-3 py-2 font-medium">会话</th>
-                    <th className="px-3 py-2 font-medium">子路径</th>
-                    <th className="px-3 py-2 font-medium">文件名</th>
+                    <SortableTh label="会话" sortKey="sessionTitle" sort={sort} onSort={toggleSort} />
+                    <SortableTh label="子路径" sortKey="path" sort={sort} onSort={toggleSort} />
+                    <SortableTh label="文件名" sortKey="name" sort={sort} onSort={toggleSort} />
                     <th className="px-3 py-2 font-medium">来源</th>
-                    <th className="px-3 py-2 text-right font-medium">大小</th>
-                    <th className="px-3 py-2 font-medium">修改时间</th>
+                    <SortableTh
+                      label="大小"
+                      sortKey="sizeBytes"
+                      sort={sort}
+                      onSort={toggleSort}
+                      align="right"
+                    />
+                    <SortableTh
+                      label="修改时间"
+                      sortKey="modifiedAt"
+                      sort={sort}
+                      onSort={toggleSort}
+                    />
                     <th className="px-3 py-2 text-right font-medium">操作</th>
                   </tr>
                 </thead>
@@ -766,6 +820,7 @@ export default function FilesPage() {
                       rows={group.rows}
                       selected={selected}
                       onToggle={toggleRow}
+                      onPreview={setPreview}
                       onCopy={copyPath}
                       onCopySession={copySessionId}
                       onDelete={setPendingDelete}
@@ -827,16 +882,192 @@ export default function FilesPage() {
           if (!bulkDeleting) setPendingBulkDelete(null)
         }}
       />
+      <FilePreviewDialog
+        key={preview ? fileKeyOf(preview) : 'none'}
+        row={preview}
+        onClose={() => setPreview(null)}
+      />
     </div>
   )
 }
 
-/** 一个分组（平铺时只有一个，label 为空）。 */
+/** 表头里的一列：点一下切换排序，箭头表示当前方向。 */
+function SortableTh({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  align = 'left',
+}: {
+  label: string
+  sortKey: SortKey
+  sort: FileSort
+  onSort: (key: SortKey) => void
+  align?: 'left' | 'right'
+}) {
+  const active = sort.key === sortKey
+  return (
+    <th
+      className={cn('px-3 py-2 font-medium', align === 'right' && 'text-right')}
+      aria-sort={active ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}
+    >
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={cn(
+          'inline-flex items-center gap-1 transition-colors hover:text-ink',
+          active && 'text-ink',
+        )}
+      >
+        {label}
+        {active ? (
+          sort.dir === 'asc' ? (
+            <ChevronUp size={13} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={13} aria-hidden="true" />
+          )
+        ) : (
+          <ChevronsUpDown size={12} className="opacity-40" aria-hidden="true" />
+        )}
+      </button>
+    </th>
+  )
+}
+
+//: 在线预览的体积上限。超过就只给下载 —— 不能让一次点击读几百 MB 进浏览器。
+const PREVIEW_MAX_TEXT_BYTES = 1024 * 1024
+const PREVIEW_MAX_IMAGE_BYTES = 16 * 1024 * 1024
+const IMAGE_EXTENSIONS: Record<string, true> = {
+  png: true, jpg: true, jpeg: true, gif: true, webp: true, svg: true, bmp: true, ico: true, avif: true,
+}
+const TEXT_EXTENSIONS: Record<string, true> = {
+  txt: true, md: true, markdown: true, py: true, js: true, mjs: true, ts: true, tsx: true,
+  jsx: true, sh: true, bash: true, zsh: true, json: true, log: true, csv: true, tsv: true,
+  html: true, htm: true, css: true, scss: true, yml: true, yaml: true, xml: true, sql: true,
+  c: true, h: true, cpp: true, hpp: true, go: true, rs: true, java: true, kt: true, rb: true,
+  php: true, ini: true, conf: true, toml: true, env: true, diff: true, patch: true,
+}
+
+/**
+ * 预览一张工作区文件。
+ *
+ * 图片走 `<img src>`（同源、带 Cookie），文本用 fetch 读正文后放进 `<pre>`
+ * —— 都是只读操作，不新增后端端点。HTML/SVG 在这里不会执行脚本：
+ * HTML 是当纯文本渲染，SVG 由 `<img>` 加载（浏览器不会在其中跑脚本）。
+ */
+function FilePreviewDialog({
+  row,
+  onClose,
+}: {
+  row: WorkspaceFileRow | null
+  onClose: () => void
+}) {
+  const [text, setText] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const url = row ? workspaceFileUrl(row.sessionId, row.path) : ''
+  const ext = row?.name.includes('.') ? (row.name.split('.').pop() ?? '').toLowerCase() : ''
+  const isImage = IMAGE_EXTENSIONS[ext] === true
+  const isText = !isImage && (TEXT_EXTENSIONS[ext] === true || ext === '')
+  const tooBig =
+    row !== null &&
+    row.sizeBytes > (isImage ? PREVIEW_MAX_IMAGE_BYTES : PREVIEW_MAX_TEXT_BYTES)
+
+  useEffect(() => {
+    if (!row || !isText || tooBig) return
+    const controller = new AbortController()
+    // 放进宏任务：effect 体内同步 setState 会触发级联渲染告警（项目统一这样处理）。
+    const timer = window.setTimeout(() => {
+      setLoading(true)
+      fetch(url, { credentials: 'include', signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error(`读取失败（HTTP ${response.status}）`)
+          return response.text()
+        })
+        .then((body) => setText(body))
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return
+          setError(err instanceof Error ? err.message : '读取失败')
+        })
+        .finally(() => setLoading(false))
+    }, 0)
+    return () => {
+      window.clearTimeout(timer)
+      controller.abort()
+    }
+  }, [row, isText, tooBig, url])
+
+  return (
+    <Modal
+      open={row !== null}
+      onClose={onClose}
+      title={row?.name ?? '预览'}
+      titleAside={
+        row ? (
+          <span className="text-xs text-ink-muted">
+            {formatBytes(row.sizeBytes)}
+            {ext ? ` · ${ext}` : ''}
+          </span>
+        ) : null
+      }
+      widthClass="max-w-4xl"
+      footer={
+        row ? (
+          <div className="flex w-full items-center justify-between gap-2">
+            <span className="truncate font-mono text-xs text-ink-muted" title={row.path}>
+              {row.path}
+            </span>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                window.location.href = url
+              }}
+            >
+              <Download size={14} strokeWidth={2} aria-hidden="true" />
+              下载
+            </Button>
+          </div>
+        ) : null
+      }
+    >
+      <div className="min-h-[180px]">
+        {!row ? null : tooBig ? (
+          <p className="text-sm text-ink-muted">
+            文件 {formatBytes(row.sizeBytes)}，超过在线预览上限（
+            {formatBytes(isImage ? PREVIEW_MAX_IMAGE_BYTES : PREVIEW_MAX_TEXT_BYTES)}），
+            请下载后查看。
+          </p>
+        ) : isImage ? (
+          <div className="flex max-h-[65vh] items-center justify-center overflow-auto rounded-sm bg-sunken p-2">
+            <img src={url} alt={row.name} className="max-h-[62vh] max-w-full object-contain" />
+          </div>
+        ) : isText ? (
+          loading ? (
+            <p className="text-sm text-ink-muted">读取中…</p>
+          ) : error ? (
+            <p className="text-sm text-signal-risk">{error}</p>
+          ) : (
+            <pre className="max-h-[65vh] overflow-auto whitespace-pre-wrap break-words rounded-sm bg-sunken p-3 font-mono text-xs leading-relaxed text-ink">
+              {text ?? ''}
+            </pre>
+          )
+        ) : (
+          <p className="text-sm text-ink-muted">
+            这个类型不支持在线预览{ext ? `（.${ext}）` : ''}，请下载后查看。
+          </p>
+        )}
+      </div>
+    </Modal>
+  )
+}
+
 function FileGroupBody({
   label,
   rows,
   selected,
   onToggle,
+  onPreview,
   onCopy,
   onCopySession,
   onDelete,
@@ -845,6 +1076,7 @@ function FileGroupBody({
   rows: WorkspaceFileRow[]
   selected: ReadonlySet<string>
   onToggle: (row: WorkspaceFileRow) => void
+  onPreview: (row: WorkspaceFileRow) => void
   onCopy: (row: WorkspaceFileRow) => void
   onCopySession: (row: WorkspaceFileRow) => void
   onDelete: (row: WorkspaceFileRow) => void
@@ -923,6 +1155,9 @@ function FileGroupBody({
             </td>
             <td className="whitespace-nowrap px-3 py-2">
               <div className="flex items-center justify-end gap-1">
+                <IconButton label={`预览 ${row.name}`} onClick={() => onPreview(row)}>
+                  <Eye size={15} strokeWidth={1.75} aria-hidden="true" />
+                </IconButton>
                 <IconButton label={`复制 ${row.name} 的路径`} onClick={() => onCopy(row)}>
                   <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
                 </IconButton>
