@@ -635,7 +635,14 @@ const ScanRow = memo(function ScanRow({
         </div>
 
         {/* 发现摘要 */}
-        <div className="flex shrink-0 items-center gap-1.5 lg:w-40">
+        {/*
+          ★ 严重度徽标**不许按字折行**（2026-11-09 实测截图）：
+          原来的 `lg:w-40` + 默认可收缩让「高/中/低/提」被压成竖排单字，
+          一行读成四行。现在每个徽标 `shrink-0 whitespace-nowrap`，
+          容器允许**整枚**换行（`flex-wrap`）—— 宁可两行徽标，也不要
+          一个字一行。宽度同时放到 `lg:w-48`：四种严重度正好一行放下。
+        */}
+        <div className="flex shrink-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 lg:w-48">
           {found === 0 ? (
             /*
               ★ 零条目时的措辞要看**判据**，不能一律写"未发现漏洞"。
@@ -687,7 +694,7 @@ const ScanRow = memo(function ScanRow({
                 return (
                   <span
                     key={sev}
-                    className="flex items-center gap-1 text-2xs"
+                    className="flex shrink-0 items-center gap-1 whitespace-nowrap text-2xs"
                     title={`${meta.label} ${scan.findings[sev]} 条`}
                   >
                     <span aria-hidden="true" className={cn('h-1.5 w-1.5 rounded-pill', meta.bg)} />
@@ -710,7 +717,7 @@ const ScanRow = memo(function ScanRow({
               */}
               {(scan.status === 'aborted' || scan.status === 'failed') && (
                 <span
-                  className="text-2xs text-ink-faint"
+                  className="shrink-0 whitespace-nowrap text-2xs text-ink-faint"
                   title="扫描被中途终止，这个数字只是已跑完部分的结果，不代表全部"
                 >
                   · 不完整
