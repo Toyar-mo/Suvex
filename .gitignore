@@ -217,3 +217,21 @@ abase_wsl.txt
 
 # v1.74：本地临时工作目录（spec 调试稿等），不入库。
 suvex-api/tmpwork/
+
+# ── 2026-11-10 仓库过筛：过程产物与过程文档退出跟踪（本地留档）──────
+#
+# 理由与「过程性文档不入库」同一条：它们描述的是某次会话的中间状态，
+# 保质期和代码不同步，过期后却仍像权威。README 只引用下面 8 张截图。
+/artifacts/
+/docs/*.md
+/docs/evidence/
+/docs/screenshots/*
+!/docs/screenshots/hero.png
+!/docs/screenshots/hero.svg
+!/docs/screenshots/overview-20261110.png
+!/docs/screenshots/chat-20261110.png
+!/docs/screenshots/kernel-20261110.png
+!/docs/screenshots/files-20261110.png
+!/docs/screenshots/files-bulk-20261110.png
+!/docs/screenshots/tools-20261110.png
+!/docs/screenshots/skills-20261110.png

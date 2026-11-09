@@ -1,5 +1,0 @@
-   suvex-sandbox        命令 133/145 命中，包 119/125 已装（0.9s）
-   suvex-sandbox-ir     命令 138/150 命中，包 125/131 已装（0.8s）
-   suvex-sandbox-re     命令 154/166 命中，包 136/142 已装（0.9s）
-reverse      suvex-sandbox-re     12     ✅        —
-✅ 每个分类需要的工具，在它被路由到的镜像里都有声明（8 个分类）。
