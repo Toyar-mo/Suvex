@@ -199,6 +199,14 @@ export function ActivityPage() {
    * ⚠️ 它只按扫描取。全局流（没有 `scanId`）时**留空**，不伪造一份名册：
    *    名册回答的是"这一次扫描派了哪些 agent"，跨扫描混在一起就没有意义。
    *    那种情况下 agent 统计仍能从事件流派生（见 `useActivityStream`）。
+   *
+   * ⚠️ 依赖里带 `filteredScan?.status`：名册是**快照**，而 agent 的终态
+   *    （`done` / `failed`）只有服务端知道。只按 `scanFilter` 取一次的话，
+   *    扫描跑完、状态从 running 变成 failed，名册还停在拉取那一刻的
+   *    `running` —— 页面就一直写「运行中」，与后端的结论相反
+   *    （实测 2026-11-09：扫描已 failed，活动页仍显示运行中）。
+   *    状态在 running 期间被 2.5 秒轮询反复确认、值不变，所以这里不会
+   *    连带把请求打成轮询；只有真正跨过终态时多拉一次。
    */
   const [rosterState, setRosterState] = useState<{ scanId: string | null; agents: Agent[] }>({
     scanId: null,
@@ -224,7 +232,7 @@ export function ActivityPage() {
     return () => {
       cancelled = true
     }
-  }, [scanFilter])
+  }, [scanFilter, filteredScan?.status])
 
   /*
     ★ 用**派生**代替"在 effect 里清空名册"。
@@ -241,7 +249,7 @@ export function ActivityPage() {
   const roster = rosterState.scanId === scanFilter ? rosterState.agents : EMPTY_ROSTER
 
   const { events, agents, connection, isPaused, setPaused, newWhilePaused, latestBatchIds } =
-    useActivityStream(source, roster)
+    useActivityStream(source, roster, isRunning)
 
   /*
     ★ v1.80：认 `?agent=`（总览的活动项就带它）。

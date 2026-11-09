@@ -94,14 +94,14 @@ function makeSource() {
 describe('连接状态映射', () => {
   it('初始为 connecting —— 还没有收到任何状态回调时的默认值', () => {
     const { source } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     expect(result.current.connection).toBe('connecting')
   })
 
   it('live 映射为 live，disconnected 映射为 disconnected', () => {
     const { source, setStatus } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => setStatus('live'))
     expect(result.current.connection).toBe('live')
@@ -120,7 +120,7 @@ describe('连接状态映射', () => {
       然后去刷新页面 —— 而他其实只是往上翻了一下历史。
     */
     const { source, setStatus } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => setStatus('live'))
     act(() => setStatus('paused'))
@@ -135,7 +135,7 @@ describe('连接状态映射', () => {
     const { source, setStatus } = makeSource()
     setStatus('live')
 
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     expect(result.current.connection).toBe('live')
   })
@@ -148,7 +148,7 @@ describe('连接状态映射', () => {
 describe('按 id 去重', () => {
   it('同一条事件推两次只显示一条', async () => {
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     const event = makeEvent('evt_01')
     act(() => push(event, event))
@@ -171,7 +171,7 @@ describe('按 id 去重', () => {
     */
     const first = makeSource()
     const { result, rerender } = renderHook(
-      ({ source }) => useActivityStream(source, []),
+      ({ source }) => useActivityStream(source, [], true),
       { initialProps: { source: first.source } },
     )
 
@@ -203,7 +203,7 @@ describe('按 id 去重', () => {
     */
     const first = makeSource()
     const { result, rerender } = renderHook(
-      ({ source }) => useActivityStream(source, []),
+      ({ source }) => useActivityStream(source, [], true),
       { initialProps: { source: first.source } },
     )
 
@@ -238,7 +238,7 @@ describe('切换事件源', () => {
     */
     const first = makeSource()
     const { result, rerender } = renderHook(
-      ({ source }) => useActivityStream(source, []),
+      ({ source }) => useActivityStream(source, [], true),
       { initialProps: { source: first.source } },
     )
 
@@ -253,7 +253,7 @@ describe('切换事件源', () => {
   it('换源时旧源被 stop、新源被 start', async () => {
     const first = makeSource()
     const { rerender } = renderHook(
-      ({ source }) => useActivityStream(source, []),
+      ({ source }) => useActivityStream(source, [], true),
       { initialProps: { source: first.source } },
     )
 
@@ -269,7 +269,7 @@ describe('切换事件源', () => {
   it('换源时暂停计数清零 —— 它属于旧流', async () => {
     const first = makeSource()
     const { result, rerender } = renderHook(
-      ({ source }) => useActivityStream(source, []),
+      ({ source }) => useActivityStream(source, [], true),
       { initialProps: { source: first.source } },
     )
 
@@ -294,7 +294,7 @@ describe('排序与上限', () => {
       按到达顺序显示会让时间线前后颠倒 —— 而用户读的正是"先发生了什么"。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() =>
       push(
@@ -319,7 +319,7 @@ describe('排序与上限', () => {
       而最新的被挤掉了 —— 那比不截断更糟。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     const total = ACTIVITY_MAX_EVENTS + 5
     const events = Array.from({ length: total }, (_, i) =>
@@ -352,7 +352,7 @@ describe('暂停', () => {
       只断言计数会漏掉"计数涨了但事件没进来"这种半吊子实现。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => result.current.setPaused(true))
     act(() => push(makeEvent('evt_1'), makeEvent('evt_2'), makeEvent('evt_3')))
@@ -364,7 +364,7 @@ describe('暂停', () => {
 
   it('恢复时清零角标', async () => {
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => result.current.setPaused(true))
     act(() => push(makeEvent('evt_1')))
@@ -393,7 +393,7 @@ describe('agent 统计', () => {
       修法是把基准换成"事件流 ∪ 名册"。这条测试盯的就是那个并集。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() =>
       push(
@@ -424,7 +424,7 @@ describe('agent 统计', () => {
         lastActiveAt: '2026-10-10T09:00:00.000Z',
       },
     ]
-    const { result } = renderHook(() => useActivityStream(source, roster))
+    const { result } = renderHook(() => useActivityStream(source, roster, true))
 
     expect(result.current.agents.map((a) => a.id)).toEqual(['agent-idle'])
   })
@@ -442,12 +442,36 @@ describe('agent 统计', () => {
         lastActiveAt: '2026-10-10T09:00:00.000Z',
       },
     ]
-    const { result } = renderHook(() => useActivityStream(source, roster))
+    const { result } = renderHook(() => useActivityStream(source, roster, true))
 
     act(() => push(makeEvent('e1', { agentId: 'agent-01' })))
 
     await waitFor(() => expect(result.current.agents[0].status).toBe('running'))
     expect(result.current.agents[0].eventCount).toBe(1)
+  })
+
+  it('★ 扫描已结束时，名册里的终态不被事件覆盖成 running', async () => {
+    // 实测 2026-11-09（DASCTF CR6）：扫描已 `failed`、agent 已收尾，
+    // 活动页仍写「漏洞利用 · 运行中」—— 因为这里原来对任何有事件的 agent
+    // 都写死 running。事件只证明"它曾经动过"，不证明"它现在在跑"。
+    const { source, push } = makeSource()
+    const roster = [
+      {
+        id: 'agent-01',
+        role: 'exploiter' as const,
+        status: 'failed' as const,
+        target: 'example.com',
+        scanId: 'scan_a',
+        eventCount: 0,
+        lastActiveAt: '2026-10-10T09:00:00.000Z',
+      },
+    ]
+    const { result } = renderHook(() => useActivityStream(source, roster, false))
+
+    act(() => push(makeEvent('e1', { agentId: 'agent-01' })))
+
+    await waitFor(() => expect(result.current.agents[0].eventCount).toBe(1))
+    expect(result.current.agents[0].status).toBe('failed')
   })
 
   it('★ 派生出的 agent 角色是 unknown，不猜', () => {
@@ -459,7 +483,7 @@ describe('agent 统计', () => {
       而那是会改变处置优先级的判断。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => push(makeEvent('e1', { agentId: 'agent-99' })))
 
@@ -484,7 +508,7 @@ describe('批量合并', () => {
       `latestBatchIds` 记录的是**这一批**的 id，用它验证确实只分了一批。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     const batch = Array.from({ length: 50 }, (_, i) => makeEvent(`evt_${i}`))
     act(() => push(...batch))
@@ -500,7 +524,7 @@ describe('批量合并', () => {
       这里断言首批之后 `latestBatchIds` 为空。
     */
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => push(makeEvent('seed_1'), makeEvent('seed_2')))
     await waitFor(() => expect(result.current.events).toHaveLength(2))
@@ -510,7 +534,7 @@ describe('批量合并', () => {
 
   it('首批之后的新事件记入 latestBatchIds', async () => {
     const { source, push } = makeSource()
-    const { result } = renderHook(() => useActivityStream(source, []))
+    const { result } = renderHook(() => useActivityStream(source, [], true))
 
     act(() => push(makeEvent('seed_1')))
     await waitFor(() => expect(result.current.events).toHaveLength(1))

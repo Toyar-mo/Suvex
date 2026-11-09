@@ -66,6 +66,22 @@ export interface UseActivityStreamResult {
 export function useActivityStream(
   source: EventSourceHandle,
   roster: Agent[],
+  /**
+   * 这次扫描此刻是否**真的在跑**（`ActivityPage` 用 `scan.status === 'running'`）。
+   *
+   * ## 为什么需要它（2026-11-09 实测）
+   *
+   * 名册里的状态是服务端在拉取那一刻的真相。原来这里对"有事件的 agent"
+   * 一律写死 `status: 'running'` —— 于是扫描失败、agent 已收尾之后，
+   * 智能体活动页仍然写「漏洞利用 · 运行中」：用户看到一条永远不动的
+   * 假进度，而真实结论是"求解已结束，候选待确认"。
+   *
+   * 但反过来也不能完全信名册：名册只在挂载时拉一次，正在跑的那次扫描里
+   * agent 可能刚从 idle 变 running，而名册还是旧的。所以：
+   *   · 扫描在跑 → 有事件就是活跃的，覆盖成 running（当下的推断）；
+   *   · 扫描已结束 → **名册权威**，事件只更新计数与最近活跃时间。
+   */
+  live: boolean,
 ): UseActivityStreamResult {
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [connection, setConnection] = useState<'connecting' | 'live' | 'disconnected'>('connecting')
@@ -280,8 +296,14 @@ export function useActivityStream(
     const fromRoster = roster.map((agent) => {
       const s = stats.get(agent.id)
       if (!s) return agent
-      // 有事件进来的 agent 就是活跃的 —— 覆盖初始名册里的静态状态
-      return { ...agent, eventCount: s.count, lastActiveAt: s.lastAt, status: 'running' as const }
+      // 事件只更新计数与最近活跃时间。**状态**只在扫描确实在跑时才推断成
+      // running —— 扫描结束后名册是权威（见 `live` 的说明）。
+      return {
+        ...agent,
+        eventCount: s.count,
+        lastActiveAt: s.lastAt,
+        status: live ? ('running' as const) : agent.status,
+      }
     })
 
     /*
@@ -312,7 +334,7 @@ export function useActivityStream(
       })
 
     return [...fromRoster, ...derived]
-  }, [events, roster])
+  }, [events, roster, live])
 
   return { events, agents, connection, isPaused, setPaused, newWhilePaused, latestBatchIds }
 }
