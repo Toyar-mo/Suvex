@@ -21,7 +21,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.chat import resumer, service as chat_service, turn_runs
+from app.chat import resumer, turn_runs
+from app.chat import service as chat_service
 from app.chat.models import ChatSession
 from app.core.timeutil import now_utc
 
@@ -184,7 +185,7 @@ def test_resuming_an_interrupted_run_returns_its_new_messages(
     _age_and_interrupt(db_session, run.id)
 
     async def fake_resume_one(db: Session, target: object) -> bool:
-        row = turn_runs.get(db, run_id=getattr(target, "id"))
+        row = turn_runs.get(db, run_id=target.id)
         assert row is not None
         chat_session = db.get(ChatSession, row.session_id)
         chat_service.append_assistant_message(
@@ -231,7 +232,7 @@ def test_a_failed_run_can_be_retried_by_a_human(
     assert run.status == "failed"
 
     async def fake_resume_one(db: Session, target: object) -> bool:
-        row = turn_runs.get(db, run_id=getattr(target, "id"))
+        row = turn_runs.get(db, run_id=target.id)
         assert row is not None
         chat_session = db.get(ChatSession, row.session_id)
         chat_service.append_assistant_message(
@@ -371,6 +372,35 @@ def test_abandoned_interrupted_turn_does_not_block_a_new_message(
     db_session.expire_all()
     rows = turn_runs.list_runs(db_session, session_id=session_id, limit=10)
     assert rows[0].status == "failed", f"死轮应判 failed，实际 {rows[0].status}"
+
+
+def test_new_message_cancels_a_resumable_interrupted_turn(
+    ready_client: TestClient, db_session: Session
+) -> None:
+    """★ v1.80：用户主动发新消息 = 放弃旧轮，避免它和 resumer 并发。
+
+    场景：一轮 interrupted、额度还有、心跳已过期（resumer 随时会接手）。
+    用户不等了、直接发消息 —— 旧轮必须落 `cancelled`。若继续留给后台接手，
+    同一会话就会出现两个执行体，各自读历史、各自写结论。
+    """
+    session_id = _make_session_via_api(ready_client)
+    run = turn_runs.start(db_session, session_id=session_id)
+    run.status = "interrupted"
+    run.resume_attempts = 0
+    run.heartbeat_at = now_utc() - timedelta(seconds=turn_runs.STALE_SECONDS + 30)
+    db_session.commit()
+
+    # 空内容：越过 409 闸后会被 400 挡下 —— 400 即证明没被 TURN_ALREADY_RUNNING 拦。
+    response = ready_client.post(
+        f"/api/v1/chat/sessions/{session_id}/messages/stream",
+        json={"content": "   "},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["error"]["code"] != "TURN_ALREADY_RUNNING"
+
+    db_session.expire_all()
+    rows = turn_runs.list_runs(db_session, session_id=session_id, limit=10)
+    assert rows[0].status == "cancelled", f"旧轮应落 cancelled，实际 {rows[0].status}"
 
 
 def test_genuinely_running_turn_still_blocks_a_new_message(

@@ -567,6 +567,17 @@ def send_message_stream(
                     reason="上一轮已中断且自动接手次数用尽，放行新消息",
                 )
                 db.commit()
+            elif latest[0].status == "interrupted":
+                # ★ v1.80：用户主动发新消息 = 放弃旧轮。
+                #
+                # 之前这里只"放行"，旧轮仍留给 resumer 自动接手 —— 于是同一会话
+                # 出现**两个执行体**：新轮与旧轮各自读历史、各自写结论。实测表现
+                # 是回复重复、工具计数错乱、两股流互相覆盖，看起来像"老是断"。
+                #
+                # 主动发消息的语义就是"我不等了"；要保留旧轮就用「继续」按钮
+                # （`/turns/{id}/resume`，它接在同一轮上，不会新开一条）。
+                turn_runs.finish(db, latest[0], status="cancelled")
+                db.commit()
 
         content = payload.content.strip()
         if not content:

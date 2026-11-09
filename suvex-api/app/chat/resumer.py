@@ -37,6 +37,19 @@ _log = logging.getLogger(__name__)
 #: 用户能感觉到"自己接上了"，而 6 次/分钟的空查询代价可以忽略。
 POLL_SECONDS = 10.0
 
+#: 应用正在关闭（由 `app.main` 的 lifespan 在取消后台任务**之前**置位）。
+#:
+#: 取消协程是进程生命周期的一部分，不是这一轮的失败。接手逻辑据此把
+#: claim 用掉的额度还回去 —— 否则每次部署都消耗一次自动接手，三次重启
+#: 就能把一轮本身健康的长任务判死（2026-11-09 实测事故）。
+_shutting_down = False
+
+
+def mark_shutting_down() -> None:
+    """标记进程正在关闭。必须早于 `resume_task.cancel()` 调用。"""
+    global _shutting_down
+    _shutting_down = True
+
 #: 自动接手彻底放弃时补进对话的那句话（v1.79）。
 #:
 #: ★ 起因（2026-11-09 实测）：会话 `chat_01M6YYF7AQ8YR6B27F24C4BHRB` 的一轮
@@ -136,6 +149,18 @@ async def resume_one(db: Session, run: Any) -> bool:
             #   不在这里折叠，被接手的一轮就会留下多条结论气泡。
             engine._collapse_turn_answers(db, result)
         except BaseException as exc:  # noqa: BLE001 - 与 engine._run_guarded 同因
+            if _shutting_down and isinstance(exc, asyncio.CancelledError):
+                # 进程关闭不是这一轮的失败：退还 claim 用掉的额度，心跳置为过期，
+                # 重启后的接手循环立刻能捡起它 —— 而不是把三次部署当成三次失败。
+                try:
+                    db.rollback()
+                    turn_runs.release_for_restart(
+                        db, run, reason="服务重启，这一轮将在启动后自动接手。"
+                    )
+                    db.commit()
+                except Exception:  # noqa: BLE001
+                    _log.warning("关停时记录接手状态失败：%s", run.id, exc_info=True)
+                raise
             reason = turn_runs.redact(f"{type(exc).__name__}: {exc}")
             # ★ v1.22：凭证类失败（密钥无效）是**确定性**的 —— 再跑一百次都是
             #   同一个 401，而每一轮要白等 90 秒心跳窗口，用户只会看到同一条

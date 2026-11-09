@@ -399,11 +399,27 @@ def close_stale_on_startup(db: Session) -> int:
     为什么不在启动时直接 resume：启动阶段的数据库/网络/沙箱都还没就绪，
     在那时候跑模型调用会把"服务起不来"和"一轮跑失败"两件事混在一起。
     改判状态、让后台循环去接手，责任边界清楚。
+
+    ## ★ v1.80：重启不消耗接手额度
+
+    2026-11-09 实测事故：一轮 CTF 解题跑了 30+ 分钟后，因为部署重启被取消；
+    后台接手 3 次、每次都撞上下一次重启 —— `resume_attempts` 被这些**环境事件**
+    耗尽，最终 `failed`，用户看到「自动接手 3 次仍未成功」，只能自己发「继续」。
+    而这一轮本身没有任何确定性错误。
+
+    进程重启不是这一轮的失败：额度清零、心跳直接推到"已过期"，让后台循环
+    在启动后**立刻**接手，而不是再白等 90 秒。
     """
+    now = now_utc()
     result = db.execute(
         update(ChatTurnRun)
         .where(ChatTurnRun.status == "running")
-        .values(status="interrupted", updated_at=now_utc())
+        .values(
+            status="interrupted",
+            resume_attempts=0,
+            heartbeat_at=now - timedelta(seconds=STALE_SECONDS + 1),
+            updated_at=now,
+        )
     )
     db.commit()
     return int(result.rowcount or 0)
@@ -427,8 +443,26 @@ def finish_from_error(db: Session, run: ChatTurnRun, *, reason: str) -> None:
     db.flush()
 
 
+def release_for_restart(db: Session, run: ChatTurnRun, *, reason: str) -> None:
+    """进程关闭打断的一轮：落 `interrupted`，**退还**这次 claim 的额度。
+
+    与 `finish_from_error` 的区别只有两条：
+      · `resume_attempts -= 1` —— 取消是生命周期事件，不是这一轮的失败；
+      · 心跳直接置为过期，重启后的接手循环不必再等 90 秒。
+
+    ⚠️ 只在应用正在关闭时调用（`resumer` 的 `_shutting_down`）。正常异常
+    路径仍走 `finish_from_error`，额度只增不减 —— 否则确定性失败会无限重试。
+    """
+    now = now_utc()
+    run.status = "interrupted"
+    run.resume_attempts = max(0, run.resume_attempts - 1)
+    run.last_error = redact(reason)
+    run.heartbeat_at = now - timedelta(seconds=STALE_SECONDS + 1)
+    run.updated_at = now
+    db.flush()
+
+
 #: 一轮停在计划句上时的记账原因（v1.35）。
-#:
 #: 它同时是 `turn_run.last_error` 的内容与"后台接手时知道为什么又跑起来了"的
 #: 唯一线索 —— 与真实异常不同，这里没有栈，只有一句事实。
 NEEDS_CONTINUE_REASON = "本轮停在下一步计划上，尚未给出可交付结论"

@@ -61,7 +61,6 @@ from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
 from app.chat import turn_runs as turn_run_store
 from app.chat.models import ChatMessage, ChatSession
-from app.core.errors import ApiError
 from app.chat.prompts import (
     CHAT_TOOL_NAMES,
     CONSEQUENTIAL_TOOL_NAMES,
@@ -79,6 +78,7 @@ from app.chat.prompts import (
     render_turn_wall_note,
 )
 from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
+from app.core.errors import ApiError
 
 _log = logging.getLogger(__name__)
 
@@ -732,6 +732,13 @@ async def _call_model(
     #   会直接 `TypeError`，而那会被外层 `except` 误判成"流式坏了"，
     #   于是每次对话都白跑一次非流式重试。
     stream_fn = getattr(gateway, "chat_stream", None)
+    if stream_fn is None:
+        # 旧网关 / 测试里的假网关没有 `chat_stream`：退回非流式。
+        # 少了这一支，任何"只实现 chat()"的接入点在 emit 非空时都会直接
+        # AttributeError —— 而 docstring 里承诺的正是"最坏退化为非流式"。
+        return _with_native_actions(
+            await _gateway_chat(gateway, messages, system=system, tools=tools)
+        )
     if stream_fn is not None and _supports_tool_calls(stream_fn):
         stream_kwargs["tool_calls"] = tool_calls_out
     # ★ v1.64：原生工具调用。把 tools 定义透传给 chat_stream（若它认这个参数）。
@@ -757,7 +764,7 @@ async def _call_model(
                 )
             except StopAsyncIteration:
                 break
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 raise ChatEngineError(
                     f"模型流 {STREAM_IDLE_SECONDS}s 无正文增量（上游卡死）"
                 ) from None
@@ -1204,9 +1211,8 @@ def _trim_history_to_budget(out: list[dict[str, str]]) -> list[dict[str, str]]:
     def droppable(index: int) -> bool:
         if index == last:
             return False
-        if first_user is not None and index == first_user:
-            return False
-        return True
+        # 第一条 user 消息永远保留（它是这轮问题的锚点）。
+        return first_user is None or index != first_user
 
     # 第一轮：只丢工具结果，从最老的开始。
     for index in range(len(out)):
@@ -1228,7 +1234,7 @@ def _trim_history_to_budget(out: list[dict[str, str]]) -> list[dict[str, str]]:
     if dropped == 0:
         return out
 
-    trimmed = [m for m, k in zip(out, keep) if k]
+    trimmed = [m for m, k in zip(out, keep, strict=False) if k]
     note = "（上下文已省略较早的 " + str(dropped) + " 段内容以控制长度。如需要，可用工具重新读取。）"
     trimmed[0] = {
         "role": trimmed[0]["role"],
@@ -3527,6 +3533,7 @@ async def resume_approved(
     identity: Any,
     gateway: Any = None,
     turn_run: Any = None,
+    emit: Emit | None = None,
 ) -> ChatTurnResult:
     """执行一条刚刚被批准的工具调用，然后**接着跑这一轮**。
 
@@ -4073,12 +4080,12 @@ async def _run_guarded_active(
             db.rollback()
             if retryable:
                 turn_run_store.finish_from_error(db, run, reason=reason)
-                note = chat_service.append_assistant_message(
+                chat_service.append_assistant_message(
                     db, session=session, content=INTERRUPTED_NOTE.format(reason=reason)
                 )
             else:
                 turn_run_store.finish(db, run, status="failed", error=reason)
-                note = chat_service.append_assistant_message(
+                chat_service.append_assistant_message(
                     db, session=session, content=FAILED_NOTE.format(reason=reason)
                 )
             db.commit()

@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from contextlib import asynccontextmanager
 
@@ -39,11 +40,11 @@ from app.assets.router import router as assets_router
 from app.audit.router import router as audit_router
 from app.auth.router import router as auth_router
 from app.chat.router import router as chat_router
-from app.ctf_race.router import router as ctf_race_router
 from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.metrics_middleware import MetricsMiddleware
+from app.ctf_race.router import router as ctf_race_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
 from app.health import router as health_router
@@ -328,13 +329,16 @@ async def lifespan(_app: FastAPI):
         # 停止时**终止在跑的扫描** —— 见 `scheduler.stop` 的说明：
         # 留着它们会变成没有任何界面能终止的攻击进程。
         if resume_task is not None:
+            # 先标记"正在关闭"：接手循环据此把取消当成生命周期事件、
+            # 退还 claim 额度（见 `resumer.mark_shutting_down`）。
+            from app.chat import resumer as _resumer
+
+            _resumer.mark_shutting_down()
             # 先取消接手循环：它可能正在跑一轮模型调用，取消掉才能让下面的
             # 沙箱销毁不撞上一个还在用容器的轮次。
             resume_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):  # noqa: BLE001
                 await resume_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
         scheduler.stop()
         # ⚠️ CTF2 的停止语义不同：线程杀不掉，所以它只"不再启动新的 +
         #    等一会儿"。超时后残留的沙箱容器是**已知且无法在这里解决**的
