@@ -22,11 +22,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
   ④ 中文输入法敲拼音按 Enter 不能把半截拼音发出去。
 */
 
-// ── 桩：工具 store（技能 / MCP 下拉的选项来源） ──
+// ── 桩：工具 store（技能下拉的选项来源；MCP 下拉已在 v1.79 移除） ──
 //
 // ★ v1.18：对话页里有两个同名的 `loadTools`。`@/data/chat` 那个拉的是
 //   `/chat/tools`（说明文本），而 `@/data/tools` 的 `ensureToolsLoaded()`
-//   才是「技能」「MCP」两个下拉的选项来源。后者以前从来没被调用过，
+//   才是技能下拉的选项来源。这个 store 以前从来没被调用过，
 //   于是技能下拉永远显示"技能库是空的"。这里把它换成替身，就能直接
 //   断言"进页面有没有去加载"——这是那条缺陷唯一可靠的判据。
 vi.mock('@/data/tools', () => ({
@@ -78,7 +78,9 @@ vi.mock('@/data/chat', () => ({
   purgeSession: vi.fn(async () => true),
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
-  getChatSnapshot: vi.fn(() => ({ sending: false, sendingSessionIds: [], serverTurn: null }) as never),
+  getChatSnapshot: vi.fn(
+    () => ({ sending: false, sendingSessionIds: [], serverTurn: null }) as never,
+  ),
   // ★ v1.19：中断轮次的账目与「继续」。同样必须逐个列出 —— 漏一项就在
   //   页面渲染时炸 `No "listTurns" export is defined`，整组用例一起红。
   listTurns: vi.fn(async () => []),
@@ -188,11 +190,7 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
   // ★ v1.65 迁移：老夹具用 `sending:true + sendingSessionId:'x'` 表示"这个
   //   会话在跑"。新模型下 `sendingHere` 读的是 `sendingSessionIds`，所以
   //   这里把老写法自动补成集合，避免逐个改几十处夹具。若显式给了集合则以它为准。
-  if (
-    merged.sending &&
-    merged.sendingSessionId &&
-    (overrides.sendingSessionIds === undefined)
-  ) {
+  if (merged.sending && merged.sendingSessionId && overrides.sendingSessionIds === undefined) {
     merged.sendingSessionIds = [merged.sendingSessionId]
   }
   return merged
@@ -243,9 +241,7 @@ describe('ChatPage — 工具失败必须看得出来', () => {
       toolName: 'create_scan',
       toolFailed: true,
     })
-    mockedUseChat.mockReturnValue(
-      chatState({ active: { ...session(), messages: [failed] } }),
-    )
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [failed] } }))
 
     const { container } = renderPage('/chat?session=chat_1')
 
@@ -263,9 +259,7 @@ describe('ChatPage — 工具失败必须看得出来', () => {
       toolName: 'create_scan',
       toolFailed: true,
     })
-    mockedUseChat.mockReturnValue(
-      chatState({ active: { ...session(), messages: [failed] } }),
-    )
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [failed] } }))
     const { container } = renderPage('/chat?session=chat_1')
     const toggle = container.querySelector('[data-turn-work] button') as HTMLElement | null
     if (!toggle) throw new Error('没有工作过程摘要')
@@ -348,7 +342,7 @@ describe('ChatPage — 拿不到会话列表时给重试，而不是伪装成空
     await waitFor(() => expect(vi.mocked(loadSessions)).toHaveBeenCalled())
   })
 
-  it('★ v1.18：进对话页必须去加载技能/MCP 那份 store', () => {
+  it('★ v1.18：进对话页必须去加载技能那份 store', () => {
     /*
       症状是技能下拉里写着"技能库是空的"，而技能库其实有 77 篇。
 
@@ -617,7 +611,12 @@ describe('ChatPage — 新对话', () => {
 
   it('新建失败时不跳转、不留错误（store 已挂 error，页面底下那条会显示）', async () => {
     mockedCreateSession.mockResolvedValue(null)
-    mockedUseChat.mockReturnValue(chatState({ sessions: [session()], error: new ApiError('VALIDATION_FAILED', '建不出来', 400) }))
+    mockedUseChat.mockReturnValue(
+      chatState({
+        sessions: [session()],
+        error: new ApiError('VALIDATION_FAILED', '建不出来', 400),
+      }),
+    )
     renderPage()
 
     // ⚠️ 精确匹配 `新对话`：空状态里还有个「开始新对话」，`/新对话/` 会同时命中两个。
@@ -694,7 +693,10 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
     */
     let release: ((ok: boolean) => void) | undefined
     mockedSendMessage.mockImplementation(
-      () => new Promise<boolean>((resolve) => { release = resolve }),
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve
+        }),
     )
 
     mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
@@ -727,9 +729,7 @@ describe('ChatPage — 点发送立刻看见自己那句话（v0.97）', () => {
     fireEvent.keyDown(box, { key: 'Enter', shiftKey: false, isComposing: false })
 
     await waitFor(() => {
-      expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe(
-        '这段字不能丢',
-      )
+      expect((screen.getByLabelText('输入消息') as HTMLTextAreaElement).value).toBe('这段字不能丢')
     })
   })
 
@@ -937,10 +937,9 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
     renderPage('/chat?session=chat_1')
 
     const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
-    expect(
-      textarea.disabled,
-      '跑的时候输入框被禁用了 —— 用户就没法插话，这正是要修的问题',
-    ).toBe(false)
+    expect(textarea.disabled, '跑的时候输入框被禁用了 —— 用户就没法插话，这正是要修的问题').toBe(
+      false,
+    )
   })
 
   it('★★ 跑着的时候按发送 → 走 interject，而不是再开一轮 sendMessage', async () => {
@@ -1015,9 +1014,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
         active: { ...session(), messages: [] },
         sending: true,
         sendingSessionId: 'chat_1',
-        interjections: [
-          message({ id: 'ij1', seq: 9, role: 'user', content: '顺便看下 8080' }),
-        ],
+        interjections: [message({ id: 'ij1', seq: 9, role: 'user', content: '顺便看下 8080' })],
       }),
     )
     const { container } = renderPage('/chat?session=chat_1')
@@ -1094,9 +1091,9 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
     const work = container.querySelector('[data-turn-work]') as HTMLElement
     expect(work).not.toBeNull()
     expect(work.getAttribute('data-turn-work-tools')).toBe('1')
-    expect(
-      screen.getByRole('button', { name: /工作过程/ }).getAttribute('aria-expanded'),
-    ).toBe('false')
+    expect(screen.getByRole('button', { name: /工作过程/ }).getAttribute('aria-expanded')).toBe(
+      'false',
+    )
   })
 
   it('★ 收着时正文全文不在 DOM 里（只靠 CSS 藏 = 假折叠）', () => {
@@ -1265,9 +1262,7 @@ describe('ChatPage — 中断的一轮要能看见、能继续（v1.19）', () =
       用户看到的仍然是一片空白 —— 那就等于没修。判据用稳定的
       `data-stuck-turn`，不靠文案（文案会改，夹具不该跟着文案漂）。
     */
-    mockedUseChat.mockReturnValue(
-      chatState({ active: { ...session(), messages: [] } }),
-    )
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
     mockedListTurns.mockResolvedValue([
       {
         id: 'turn_1',
@@ -1291,9 +1286,7 @@ describe('ChatPage — 中断的一轮要能看见、能继续（v1.19）', () =
   })
 
   it('★ 没有可接手的轮次时不显示提示条', async () => {
-    mockedUseChat.mockReturnValue(
-      chatState({ active: { ...session(), messages: [] } }),
-    )
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
     mockedListTurns.mockResolvedValue([])
 
     const { container } = renderPage('/chat?session=chat_1')
@@ -1307,9 +1300,7 @@ describe('ChatPage — 中断的一轮要能看见、能继续（v1.19）', () =
       只验"点了有没有发出去"。真正跑一轮的语义在服务端测
       （`tests/chat/test_turns_api.py`）—— 前端不该假装能验模型说什么。
     */
-    mockedUseChat.mockReturnValue(
-      chatState({ active: { ...session(), messages: [] } }),
-    )
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
     mockedListTurns.mockResolvedValue([
       {
         id: 'turn_9',
@@ -1521,11 +1512,7 @@ describe('ChatPage — 中断当前步骤（v1.25）', () => {
     fireEvent.click(screen.getByRole('button', { name: '中断并继续' }))
 
     await waitFor(() => {
-      expect(mockedInterruptTurn).toHaveBeenCalledWith(
-        'chat_1',
-        'continue',
-        '别扫端口了，先看登录',
-      )
+      expect(mockedInterruptTurn).toHaveBeenCalledWith('chat_1', 'continue', '别扫端口了，先看登录')
     })
   })
 
@@ -1837,7 +1824,16 @@ const PAINT_ROOTS = [
 ]
 
 /** 能把绘制挪出自身盒子的写法。 */
-const ESCAPE_ROOTS = ['absolute', 'fixed', 'sticky', 'inset-', 'w-screen', 'h-screen', '100vw', '100vh']
+const ESCAPE_ROOTS = [
+  'absolute',
+  'fixed',
+  'sticky',
+  'inset-',
+  'w-screen',
+  'h-screen',
+  '100vw',
+  '100vh',
+]
 
 /**
  * 这些写法在输入区里**任何时候**都不合法，包括卡片内部：
@@ -1904,9 +1900,7 @@ function isInsideCard(el: Element, card: Element): boolean {
 
 describe('ChatPage — 输入区单行形态（v1.75）', () => {
   function renderComposerOnly() {
-    mockedUseChat.mockReturnValue(
-      chatState({ active: { ...session(), messages: [] } }),
-    )
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
     return renderPage('/chat?session=chat_1')
   }
 
@@ -2014,7 +2008,9 @@ describe('ChatPage — 输入区周围不许出现第二层底色（v1.30）', (
     expect(tokensOf(rest[1]).sort()).toEqual([...allowed[1].classes].sort())
     // 第三类只允许「带 data-* 的状态条」：错误条与中断条，其余一律红。
     for (const extra of rest.slice(2)) {
-      expect(extra.hasAttribute('data-error-code') || extra.hasAttribute('data-stuck-turn')).toBe(true)
+      expect(extra.hasAttribute('data-error-code') || extra.hasAttribute('data-stuck-turn')).toBe(
+        true,
+      )
       for (const hit of guardViolations(extra, true)) {
         throw new Error(`状态条上出现了额外绘制：${extra.tagName}.${hit}`)
       }
@@ -2045,4 +2041,3 @@ describe('ChatPage — 输入区周围不许出现第二层底色（v1.30）', (
     expect(document.styleSheets.length).toBe(0)
   })
 })
-

@@ -52,7 +52,7 @@ function renderModal(over: Partial<Parameters<typeof SessionBatchModal>[0]> = {}
     onClose: vi.fn(),
     onMoveTo: vi.fn(async () => {}),
     onCreateGroup: vi.fn(async () => {}),
-    onArchive: vi.fn(async () => 0),
+    onArchive: vi.fn(async () => [] as string[]),
     ...over,
   }
   render(<SessionBatchModal {...props} />)
@@ -107,7 +107,9 @@ describe('SessionBatchModal', () => {
     fireEvent.change(moveSelect(), { target: { value: '客户 A' } })
     fireEvent.click(screen.getByText('应用'))
     await vi.waitFor(() =>
-      expect((screen.getByLabelText('选择「客户 B 的排查」') as HTMLInputElement).checked).toBe(false),
+      expect((screen.getByLabelText('选择「客户 B 的排查」') as HTMLInputElement).checked).toBe(
+        false,
+      ),
     )
     expect(props.onMoveTo).toHaveBeenCalledTimes(1)
   })
@@ -152,6 +154,49 @@ describe('SessionBatchModal', () => {
     expect(screen.getByText('名字不能为空')).toBeTruthy()
     fireEvent.change(moveSelect(), { target: { value: '客户 A' } })
     expect(screen.queryByText('名字不能为空')).toBeNull()
+  })
+
+  /*
+    ★ v1.79：选「无分组」必须真的筛出未分组的会话。
+
+    原来直接把哨兵值 `__none__` 拿去和 `s.project` 比 —— 没有任何会话
+    的项目叫这个名字，于是永远 0 条。用户会以为"我没有未分组的对话"。
+  */
+  it('★「无分组」筛选出的是**项目为空**的会话，而不是 0 条', () => {
+    renderModal()
+    fireEvent.change(screen.getByLabelText('按分组筛选'), { target: { value: '__none__' } })
+
+    expect(screen.getByText('随手问的')).toBeTruthy()
+    expect(screen.queryByText('客户 A 的排查')).toBeNull()
+    expect(screen.queryByText('客户 B 的排查')).toBeNull()
+  })
+
+  /*
+    ★ v1.79：批量删除失败要逐条留下。
+
+    只报"3 条失败"时，用户不知道是哪 3 条 —— 下一步重试只能全选重来。
+    现在失败的 id 留在选中里，并且明说"仍在选中里，可以直接重试"。
+  */
+  it('★ 批量删除部分失败：失败的留在选中里并说清楚', async () => {
+    const props = renderModal({
+      onArchive: vi.fn(async () => ['chat_2']),
+    })
+    pick('客户 A 的排查')
+    pick('客户 B 的排查')
+    fireEvent.click(screen.getByText('删除选中的 2 条'))
+
+    await vi.waitFor(() => expect(screen.getByText(/已删除 1 条；1 条失败/)).toBeTruthy())
+    expect(props.onArchive).toHaveBeenCalledWith(['chat_1', 'chat_2'])
+    expect((screen.getByLabelText('选择「客户 B 的排查」') as HTMLInputElement).checked).toBe(true)
+    expect((screen.getByLabelText('选择「客户 A 的排查」') as HTMLInputElement).checked).toBe(false)
+  })
+
+  it('批量删除全部成功时给出删除条数', async () => {
+    renderModal()
+    pick('随手问的')
+    fireEvent.click(screen.getByText('删除选中的 1 条'))
+
+    await vi.waitFor(() => expect(screen.getByText('已删除 1 条对话。')).toBeTruthy())
   })
 
   it('全选只影响当前筛选结果（不能"看着 2 条却选了 3 条"）', () => {

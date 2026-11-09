@@ -75,6 +75,7 @@ import type { FindingListItem } from '@/data/finding'
 import { useProjectedProviders } from '@/data/settings-store'
 import { ensureToolsLoaded, useTools } from '@/data/tools'
 import { api, errorMessage } from '@/lib/api'
+import { showToast } from '@/data/toast-store'
 import { cn } from '@/lib/cn'
 import {
   Archive,
@@ -88,7 +89,6 @@ import {
   MessageSquarePlus,
   MessagesSquare,
   MoreHorizontal,
-  Plug,
   Send,
   Settings2,
   Sparkles,
@@ -271,7 +271,7 @@ export function ChatPage() {
     void loadSessions()
     // ⚠️ 这里有两个同名的 `loadTools`，它们拉的是**不同的东西**：
     //   · `@/data/chat` 的 `loadTools()` → `GET /chat/tools`，是给消息区做“这个模型能干什么”的说明文本；
-    //   · `@/data/tools` 的 `ensureToolsLoaded()` → `GET /kernel/{skills,mcp-servers}`，才是下面「技能」「MCP」两个下拉的选项来源。
+    //   · `@/data/tools` 的 `ensureToolsLoaded()` → `GET /kernel/{skills,mcp-servers}`，才是下面「技能」下拉的选项来源（MCP 下拉 v1.79 已移除，见挂载区注释）。
     //
     // ★ v1.18 修的是后者从来没被调用过：`skillOptions` / `mcpOptions` 读的是 `useTools()` 的快照，
     //   而那个 store 只有工具页会去加载。于是对话页的技能下拉永远是空的（显示“技能库是空的”），
@@ -323,15 +323,11 @@ export function ChatPage() {
     [providers],
   )
 
-  // 技能库与 MCP server 清单：挂载下拉的选项来源。
+  // 技能库：挂载下拉的选项来源。
   const toolsStore = useTools()
   const skillOptions = useMemo(
     () => toolsStore.skills.categories.flatMap((group) => group.skills.map((s) => s.name)),
     [toolsStore.skills],
-  )
-  const mcpOptions = useMemo(
-    () => toolsStore.mcp.servers.map((server) => server.name),
-    [toolsStore.mcp],
   )
 
   // 项目建议：从已有会话里取，去重。这样它自动反映用户实际用过的名字，
@@ -458,7 +454,7 @@ export function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   /** 只看回答：隐藏工作过程，只保留结论。 */
   const [answersOnly, setAnswersOnly] = useState(false)
-  /** 对话设置（项目/人格/审批/技能/MCP）收在齿轮后面，默认不占一行。 */
+  /** 对话设置（项目 / 人格 / 审批 / 技能）收在齿轮后面，默认不占一行。 */
   const [settingsOpen, setSettingsOpen] = useState(false)
   /**
    * 输入框里正在输入的 `@提及`。`null` = 不显示补全层。
@@ -957,14 +953,23 @@ export function ChatPage() {
   async function handleDownload(id: string, detail: MarkdownDetail) {
     try {
       const full = await api.get<ChatSessionDetail>(`/chat/sessions/${id}`)
-      downloadMarkdownFile(
-        buildConversationMarkdownFileName(full, detail),
-        buildConversationMarkdown(full, detail),
-      )
-    } catch {
-      // 导出失败**不**改全局 error 状态：那会把整页推进错误态，
-      // 而用户只是没下到一个文件。静默失败 + 控制台留痕已足够。
-      console.warn('导出对话 Markdown 失败')
+      const filename = buildConversationMarkdownFileName(full, detail)
+      downloadMarkdownFile(filename, buildConversationMarkdown(full, detail))
+      /*
+        ★ v1.79：下载成功要说一声。
+
+        浏览器对"下载"几乎没有可见反馈（有的浏览器完全不弹任何东西），
+        而这一次点击背后还有一次网络请求 —— 用户没有任何依据判断
+        "文件到底有没有下来"。原来成功分支完全静默。
+      */
+      showToast({ message: `已下载 ${filename}`, tone: 'ok' })
+    } catch (error) {
+      /*
+        导出失败**不**改全局 error 状态：那会把整页推进错误态，
+        而用户只是没下到一个文件。但也不能只在控制台留痕 ——
+        用户点了菜单项、什么都没发生，会以为菜单坏了。
+      */
+      showToast({ message: `导出 Markdown 失败：${errorMessage(error)}`, tone: 'risk' })
     }
   }
 
@@ -1080,13 +1085,19 @@ export function ChatPage() {
     setNewGroupFor(null)
   }
 
-  async function handleBatchArchive(ids: string[]): Promise<number> {
+  async function handleBatchArchive(ids: string[]): Promise<string[]> {
     setBatchBusy(true)
-    let failed = 0
+    const failed: string[] = []
     try {
       for (const id of ids) {
         const ok = await archiveSession(id)
-        if (!ok) failed += 1
+        /*
+          ★ 记下**哪几条**失败，而不只是失败条数（v1.79）。
+
+          批量弹窗会把失败的 id 留在选中里，用户可以直接重试；
+          只给一个数字的话，他得在一长串里重新找出是哪几条。
+        */
+        if (!ok) failed.push(id)
         if (wantedId === id) setSearchParams({}, { replace: true })
       }
       await loadSessions()
@@ -1285,14 +1296,22 @@ export function ChatPage() {
         onChange={(skillNames) => void updateSettings(active.id, { skillNames })}
       />
 
-      <MultiSelect
-        label="MCP"
-        icon={<Plug size={12} strokeWidth={2} aria-hidden="true" />}
-        options={mcpOptions}
-        selected={active.mcpServerNames ?? []}
-        emptyHint="还没配 MCP server（在工具页加）"
-        onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
-      />
+      {/*
+        ★ v1.79：**移除**了「MCP」挂载下拉。
+
+        它把选中的服务器名存进 `session.mcp_server_names`，而对话引擎
+        （`app/chat/engine.py` 的工具循环）**没有任何 MCP 客户端** ——
+        既不会列出它们的工具，也不会调用。勾选与不勾选，对话行为一模一样。
+
+        这不是"还没做完"的猜测：引擎里与 MCP 有关的只有
+        `list_mcp_servers` / `add_mcp_server` 两个**管理配置**的工具；
+        真正消费 MCP 配置的是扫描链路（`scans/service.py` → `SolveSpec`
+        → strix）。所以这个下拉是纯装饰 —— 而一个"勾了却什么都不发生"
+        的控件，比没有它更糟：用户会以为 agent 在用那些服务器。
+
+        保留后端字段（历史会话里可能存着），等对话引擎真的接入 MCP
+        再把入口加回来；那时它应该有"已挂载 N 台"的真实效果可验证。
+      */}
 
       {/*
         ★ 「完成」与上面几个控件**同一行**、右对齐。
@@ -2392,7 +2411,8 @@ function SessionRow({
           </span>
           <span className="block text-2xs text-ink-faint">
             {session.running ? '运行中 · ' : ''}
-            {session.messageCount} 条
+            {/* 「条」单独出现不知道数的是什么；这一列数的是消息（含工具调用记录） */}
+            {session.messageCount} 条消息
           </span>
         </button>
         {/*

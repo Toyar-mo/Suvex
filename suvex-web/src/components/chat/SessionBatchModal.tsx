@@ -38,8 +38,14 @@ export interface SessionBatchModalProps {
    * 校验在页面侧的 `GroupNameDialog`/行内校验里做。
    */
   onCreateGroup: (ids: string[], name: string) => Promise<void>
-  /** 批量删除（= 归档）。返回失败条数。 */
-  onArchive: (ids: string[]) => Promise<number>
+  /**
+   * 批量删除（= 归档）。返回**失败的那些 id**。
+   *
+   * ★ v1.79：从"失败条数"改成"失败 id 列表"。
+   *   只知道有几条失败时，界面只能笼统说"3 条失败"，而用户下一步
+   *   要重试 —— 他不知道该重新勾哪几条，只好把全部再删一遍。
+   */
+  onArchive: (ids: string[]) => Promise<string[]>
 }
 
 export function SessionBatchModal({
@@ -61,11 +67,25 @@ export function SessionBatchModal({
   const [newGroup, setNewGroup] = useState('')
   /** 行内校验的错误文案（只在用户点过"应用"之后才显示）。 */
   const [newGroupError, setNewGroupError] = useState('')
+  /** 上一次批量归档的结果 —— 成功几条、失败几条留在选中里 */
+  const [archiveResult, setArchiveResult] = useState<string | null>(null)
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return sessions.filter((s) => {
-      if (projectFilter && (s.project?.trim() || '') !== projectFilter) return false
+      /*
+        ★ v1.79：「无分组」是一个**哨兵值**，不是分组名。
+
+        下拉里 `value="__none__"` 表示"项目为空"。原来直接拿它去比
+        `s.project` —— 没有任何会话的项目叫 `__none__`，所以选「无分组」
+        永远得到 0 条。用户会以为"我根本没有未分组的对话"。
+      */
+      const project = s.project?.trim() || ''
+      if (projectFilter === '__none__') {
+        if (project !== '') return false
+      } else if (projectFilter && project !== projectFilter) {
+        return false
+      }
       if (!q) return true
       return (s.title || '').toLowerCase().includes(q)
     })
@@ -198,7 +218,24 @@ export function SessionBatchModal({
             variant="danger"
             size="sm"
             disabled={busy || pickedIds.length === 0}
-            onClick={() => void onArchive(pickedIds)}
+            onClick={() => {
+              void (async () => {
+                setArchiveResult(null)
+                const failedIds = await onArchive(pickedIds)
+                const okCount = pickedIds.length - failedIds.length
+                /*
+                  ★ 失败的那些**留在选中里**。用户下一步就是重试，
+                    而让他在一长串里重新找出哪几条挂了，等于把
+                    "逐条记下失败"这件事白做了。
+                */
+                setPicked(new Set(failedIds))
+                setArchiveResult(
+                  failedIds.length === 0
+                    ? `已删除 ${okCount} 条对话。`
+                    : `已删除 ${okCount} 条；${failedIds.length} 条失败，失败的仍在选中里，可以直接重试。`,
+                )
+              })()
+            }}
           >
             删除选中的 {pickedIds.length} 条
           </Button>
@@ -230,6 +267,14 @@ export function SessionBatchModal({
             <option value="__none__">无分组</option>
           </select>
         </div>
+        {archiveResult && (
+          <p
+            role="status"
+            className="rounded-sm border border-line bg-surface-sunken px-2 py-1.5 text-2xs text-ink-muted"
+          >
+            {archiveResult}
+          </p>
+        )}
         <div className="flex items-center gap-2 border-b border-line pb-1">
           <Checkbox
             id="batch-select-all"
@@ -260,9 +305,12 @@ export function SessionBatchModal({
                   onChange={() => toggleOne(session.id)}
                   label={`选择「${session.title || '未命名对话'}」`}
                 />
-                <span className="min-w-0 flex-1 truncate text-xs text-ink">{session.title || '未命名对话'}</span>
+                <span className="min-w-0 flex-1 truncate text-xs text-ink">
+                  {session.title || '未命名对话'}
+                </span>
                 <span className="shrink-0 text-2xs text-ink-faint">
-                  {session.project?.trim() || '无分组'} · {session.messageCount} 条
+                  {/* 「条」单独出现时不知道数的是什么 —— 这里是消息条数（含工具调用记录） */}
+                  {session.project?.trim() || '无分组'} · {session.messageCount} 条消息
                 </span>
               </label>
             </li>
