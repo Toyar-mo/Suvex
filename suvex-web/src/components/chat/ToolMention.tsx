@@ -38,6 +38,8 @@ export interface MentionQuery {
  * @param text 正文
  * @param caret 光标位置（`selectionStart`）
  */
+// 纯函数与组件同文件：它们共享同一套 @ 提及语法，拆开会让语法定义分裂。
+// eslint-disable-next-line react-refresh/only-export-components
 export function parseMentionQuery(text: string, caret: number): MentionQuery | null {
   // 只看光标之前。光标之后的内容不参与 —— 用户可能把光标移到中间补一个字，
   // 那时不该按"结尾的 @"去弹层。
@@ -71,6 +73,7 @@ export function parseMentionQuery(text: string, caret: number): MentionQuery | n
  * ★ 只认 `available === true` 的工具：点一个当前身份没权限的工具，
  *   在后端会被拦下来，前端还把它写进提示词，模型会以为自己能用。
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function resolveMentions(text: string, tools: ChatTool[]): string[] {
   const usable = tools.filter((tool) => tool.available).map((tool) => tool.name)
   if (usable.length === 0) return []

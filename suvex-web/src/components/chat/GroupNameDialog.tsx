@@ -55,16 +55,23 @@ export function GroupNameDialog({
   /*
     每次打开都重置。`open` 放进依赖而不是卸载重挂：`Modal` 自己控制挂载，
     这里只需要保证"上一次输了一半的名字"不会带进下一次。
+
+    ★ 在**渲染期**调整而不是放进 effect：一是 effect 体内同步 setState 会触发
+    级联渲染告警；二是用户点开弹窗的那一帧就必须是空的（测试也钉着这一点）。
+    这是 React 官方「根据 prop 调整 state」的写法：同组件立即重渲染，不提交中间态。
   */
+  const [prevOpen, setPrevOpen] = useState(open)
+  if (open !== prevOpen) {
+    setPrevOpen(open)
+    if (open) {
+      setName('')
+      setTouched(false)
+    }
+  }
+
   useEffect(() => {
     if (!open) return
-    setName('')
-    setTouched(false)
-    /*
-      焦点给输入框：用户点「新建分组…」的下一步必然是打字。
-      用 `requestAnimationFrame` 是因为 `Modal` 在同一个提交里挂载内容，
-      同步 `focus()` 会落在还没插进文档的节点上（焦点静默丢失）。
-    */
+    // 焦点必须等 `Modal` 把内容插进文档后再给，同步 `focus()` 会静默丢失。
     const id = window.requestAnimationFrame(() => inputRef.current?.focus())
     return () => window.cancelAnimationFrame(id)
   }, [open])

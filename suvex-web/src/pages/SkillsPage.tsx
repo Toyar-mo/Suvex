@@ -673,28 +673,32 @@ function SkillDetailPane({
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
-    setBodyError(null)
-    setBody('')
-    setLineCount(0)
+    // 重置与请求一起放进宏任务：effect 体内同步 setState 会触发级联渲染告警。
+    const timer = window.setTimeout(() => {
+      setLoading(true)
+      setBodyError(null)
+      setBody('')
+      setLineCount(0)
 
-    fetchSkill(skill.name)
-      .then((detail) => {
-        if (cancelled) return
-        setBody(detail.body)
-        setLineCount(detail.lineCount)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        setBodyError(err instanceof Error ? err.message : '拿不到正文。')
-      })
-      .finally(() => {
-        if (cancelled) return
-        setLoading(false)
-      })
+      fetchSkill(skill.name)
+        .then((detail) => {
+          if (cancelled) return
+          setBody(detail.body)
+          setLineCount(detail.lineCount)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          setBodyError(err instanceof Error ? err.message : '拿不到正文。')
+        })
+        .finally(() => {
+          if (cancelled) return
+          setLoading(false)
+        })
+    }, 0)
 
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [skill.name])
 

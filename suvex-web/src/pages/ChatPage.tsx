@@ -161,6 +161,8 @@ const STARTERS = [
  * `phase` 为 `null`（刚点发送、还没收到第一帧）时回落到原文案 ——
  * 那一刻确实没有更多信息可说，硬编一个"准备中"反而像卡住了。
  */
+// 纯函数与页面同文件：测试直接导入它；拆文件只会让"进度文案"的定义离开唯一使用者。
+// eslint-disable-next-line react-refresh/only-export-components
 export function phaseLabel(
   phase:
     | PhasePayload
@@ -206,6 +208,7 @@ export function phaseLabel(
  * 也代表"动过"，但每轮开头模型都会先写一句旁白 —— 把旁白算进去会让
  * 计数在真正执行第一个工具之前就从 1 开始，反而看不出工具的推进。
  */
+// eslint-disable-next-line react-refresh/only-export-components
 export function turnToolCount(items: ChatMessage[]): number {
   return items.filter((message) => message.role === 'tool').length
 }
