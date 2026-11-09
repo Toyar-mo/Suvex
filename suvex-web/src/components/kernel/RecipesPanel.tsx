@@ -155,6 +155,9 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
       <footer className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint">
         配方是<b>只读</b>的：它不是开关，只是把「该怎么调」与「默认会漏什么」写下来，
         让模型与你都看得到。要改调用方式，直接在任务里让它用不同的参数。
+        <br />
+        配方只讲参数；<b>坑在技能里</b> —— 每个工具都有对应的使用技能 （如
+        ghidra-headless、pcap-analysis、volatility3），模型动手前会按需 load_skill 拉那一篇。
       </footer>
     </section>
   )

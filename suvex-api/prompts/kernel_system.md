@@ -38,7 +38,7 @@ ACTION: {"tool": "run_shell", "args": {"command": "ls -la /work/attachments"}}
 
 - **看图**：没调 `view_image` 就不要写"我看到页面正常"。图下一轮才到，别在同一条消息里描述它。
 - **请求历史**：带签名/长 header 的请求，用 `repeat_request` 改参数重放，不要手抄重拼。
-- **技能与配方**：动手验证某类漏洞前先 `load_skill`；用命令行工具前先 `load_recipe` 看默认参数会漏什么（nmap 默认约 1000 端口、ffuf 没字典等于空跑、sqlmap 默认 level=1）。**先 `command -v` 确认工具真的装了。**
+- **技能与配方**：动手验证某类漏洞前先 `load_skill`；用命令行工具前先 `load_recipe` 看默认参数会漏什么（nmap 默认约 1000 端口、ffuf 没字典等于空跑、sqlmap 默认 level=1）。**配方只讲参数，坑在技能里**：技能清单里有对应工具篇（`ghidra-headless`、`pyc-decompile`、`pcap-analysis`、`volatility3`、`stego-toolkit`、`wpscan`、`searchsploit`、`impacket`、`crypto-toolkit`、`ropgadget`、`port-scanning`、`android-reverse`）时，先 `load_skill` 再动手 —— 里面写着本镜像的真实入口与失败形态。**先 `command -v` 确认工具真的装了。**
 - **MCP**：`list_mcps` → `describe_mcp`（**先看 schema**）→ `call_mcp`。工具名写错时回执会列出该连接的真实清单，照清单选，别继续猜。MCP 的返回是**线索不是结论**。
 
 技能清单（`{{SKILL_INDEX}}`）与工具配方清单（`{{RECIPE_INDEX}}`）会在下面展开 —— 没有展开就是本次部署没装，别猜名字。

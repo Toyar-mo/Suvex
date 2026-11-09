@@ -246,9 +246,12 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
             _p('rate', 'flag', '发包速率 packets/s。', flag='--rate', default='1000'),
         ),
         default_limitation=(
-            'masscan 只回答「这个端口开着」，**不做服务识别、不做版本判断**。'
-            '拿到开口之后必须再用 nmap -sV 或 curl 去看那是什么。'
-            '速率给太高会丢包并给出假阴性（看起来端口关着）。'
+            '★ 本镜像的沙箱是**非 root、无 NET_RAW**：masscan 实测直接 '
+            '`[-] FAIL: permission denied` 退出（2026-11-09）。'
+            '**这不是「目标端口关着」** —— 看到 FAIL 就换 `nmap -sT` 或 `rustscan`。'
+            '即便能跑，masscan 也只回答「端口开着」，不做服务识别/版本判断；'
+            '拿到开口后必须再用 nmap -sV 或 curl 看是什么。'
+            '速率给太高会丢包并给出假阴性。'
         ),
     ),
     ToolRecipe(
@@ -262,7 +265,9 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
         ),
         default_limitation=(
             '它默认会调高文件描述符上限并并发扫全部端口，在容器里可能'
-            '因为 ulimit 上限而中途报错（不是目标问题）。失败时退回 nmap。'
+            '因为 ulimit 上限而中途报错（不是目标问题）；部分扫描阶段需要 '
+            'raw socket，非 root 沙箱里也可能直接被拒。失败时退回 `nmap -sT`，'
+            '不要把「没出结果」读成「端口关着」。'
         ),
     ),
     # ── Web 探测 ──────────────────────────────────────────
@@ -273,7 +278,7 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
         command='ffuf',
         params=(
             _p('url', 'flag', '目标 URL，用 FUZZ 标注入点，如 http://t/FUZZ。', required=True, flag='-u'),
-            _p('wordlist', 'flag', '字典路径，如 /usr/share/wordlists/...。', required=True, flag='-w'),
+            _p('wordlist', 'flag', '字典路径，如 /usr/share/dirb/wordlists/common.txt（镜像自带）。', required=True, flag='-w'),
             _p('match_codes', 'flag', '匹配的状态码，如 200,301,403。', flag='-mc'),
             _p('filter_size', 'flag', '过滤掉这个响应长度（去掉默认页）。', flag='-fs'),
             _p('threads', 'flag', '并发数。', flag='-t', default='40'),
@@ -292,7 +297,7 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
         params=(
             _p('mode', 'positional', '模式：dir / dns / vhost。', required=True, position=1),
             _p('url', 'flag', '目标 URL（dir/vhost）或域名（dns）。', required=True, flag='-u'),
-            _p('wordlist', 'flag', '字典路径。', required=True, flag='-w'),
+            _p('wordlist', 'flag', '字典路径，如 /usr/share/dirb/wordlists/common.txt（镜像自带）。', required=True, flag='-w'),
             _p('extensions', 'flag', '追加扩展名，如 php,html,txt。', flag='-x'),
         ),
         default_limitation=(
@@ -308,7 +313,7 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
         command='feroxbuster',
         params=(
             _p('url', 'flag', '目标 URL。', required=True, flag='-u'),
-            _p('wordlist', 'flag', '字典路径。', flag='-w'),
+            _p('wordlist', 'flag', '字典路径，如 /usr/share/dirb/wordlists/common.txt（镜像自带）。', flag='-w'),
             _p('depth', 'flag', '递归深度。', flag='-d', default='4'),
         ),
         default_limitation=(
@@ -474,7 +479,7 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
             _p('threads', 'flag', '并发数。', flag='-t', default='16'),
         ),
         default_limitation=(
-            '**必须有字典**（`-P`）。它不做用户名枚举，也不做口令策略推断 ——'
+            '**必须有字典**（`-P`），而镜像**没有预装口令字典** —— 只能用题目给的。它不做用户名枚举，也不做口令策略推断 ——'
             '它就是把字典逐条打上去。字典里没有那个口令就永远爆破不出来，'
             '而回「0 valid passwords」会被误读成「口令很强」。'
             '另外 `http-post-form` 需要精确的失败特征串，写错会全部报成功。'

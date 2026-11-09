@@ -46,6 +46,21 @@ playbook**。把讲镜像里没有的命令的 skill 塞进来，等于教模型
 `prompts/skills/` 共 **76 篇**：原有 34 篇 + 从 strix 上游导入 42 篇
 （Apache-2.0，来源标注写在各文件 frontmatter **之后**的 HTML 注释里）。
 
+### 2026-11-09（v1.79）：工具级技能补齐
+
+镜像这一轮补了 wpscan / searchsploit / impacket / uncompyle6 / pycdc /
+ghidra / vol 等（见 `docker/suvex-sandbox/Dockerfile` 第 10 节）。对应新增
+12 篇 `tooling/` 技能：`ghidra-headless`、`pyc-decompile`、
+`android-reverse`、`pcap-analysis`、`volatility3`、`stego-toolkit`、
+`wpscan`、`searchsploit`、`impacket`、`crypto-toolkit`、`ropgadget`、
+`port-scanning`。
+
+它们只写**这个镜像里的**入口与坑（`ghidra-decompile` 包装器、
+`/usr/share/dirb/wordlists/common.txt`、masscan 无 NET_RAW 会 FAIL、
+`vol` 而不是 `volatility3`）—— 通用方法论在 `ctf-*` 系列里，不重复。
+`tests/kernel/test_tool_skills.py` 钉住"被发现的技能 = 清单里可见的技能"
+以及"不许再教镜像里没有的命令"。
+
 仍**未装**因而仍是缺口的两样（skill 里提到、镜像里没有）：
 
   · `semgrep` —— Kali 源返回 HTTP 404（实测），只能 pip 装；而 Kali 的
