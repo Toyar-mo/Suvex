@@ -85,7 +85,6 @@ from app.chat.schemas import (
 from app.chat.stream import (
     SSE_HEADERS,
     SSE_MEDIA_TYPE,
-    encode_frame,
     stream_turn,
 )
 from app.core.db import get_db, get_session_factory
