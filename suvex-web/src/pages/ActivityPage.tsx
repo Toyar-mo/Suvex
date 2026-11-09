@@ -70,7 +70,7 @@ export function ActivityPage() {
    * ★ 它必须在创建事件源**之前**读到 —— 源是按 `scanId` 订阅的。
    *   不带参数时订阅**全局流**（`/api/v1/events`），用于同时看多个扫描。
    */
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const scanFilter = searchParams.get('scan')
 
   /**
@@ -243,7 +243,27 @@ export function ActivityPage() {
   const { events, agents, connection, isPaused, setPaused, newWhilePaused, latestBatchIds } =
     useActivityStream(source, roster)
 
-  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
+  /*
+    ★ v1.80：认 `?agent=`（总览的活动项就带它）。
+
+    原来只读 `scan`，那个参数落地即被忽略 —— 用户点的是"某个智能体的活动"，
+    看到的却是整次扫描的流。
+  */
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(() =>
+    searchParams.get('agent'),
+  )
+
+  useEffect(() => {
+    if (searchParams.get('agent') === null) return
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('agent')
+        return next
+      },
+      { replace: true },
+    )
+  }, [searchParams, setSearchParams])
 
   /*
     ── 视角切换：事件流 / 时间线 ──
@@ -436,9 +456,7 @@ export function ActivityPage() {
                   aria-pressed={view === key}
                   className={cn(
                     'px-2 py-1 text-2xs transition-ui duration-fast',
-                    view === key
-                      ? 'bg-surface-overlay text-ink'
-                      : 'text-ink-muted hover:text-ink',
+                    view === key ? 'bg-surface-overlay text-ink' : 'text-ink-muted hover:text-ink',
                   )}
                 >
                   {label}
@@ -573,9 +591,7 @@ export function ActivityPage() {
                   当前这次扫描的状态（任务 12）。用来区分「正在启动」与
                   「已经结束但没事件」—— 后者要说的是另一句话。
                 */
-                currentScan={
-                  scanFilter ? (scans.find((s) => s.id === scanFilter) ?? null) : null
-                }
+                currentScan={scanFilter ? (scans.find((s) => s.id === scanFilter) ?? null) : null}
               />
             }
           />

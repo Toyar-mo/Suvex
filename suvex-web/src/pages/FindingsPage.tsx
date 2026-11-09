@@ -59,8 +59,25 @@ import {
   type FindingFilter,
   type FindingSortKey,
 } from '@/lib/finding-query'
-import { AlertTriangle, ArrowDownWideNarrow, Clock, Download, Filter, Search, ShieldCheck, UserCheck, X } from 'lucide-react'
-import { type Dispatch, type SetStateAction, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  AlertTriangle,
+  ArrowDownWideNarrow,
+  Clock,
+  Download,
+  Filter,
+  Search,
+  ShieldCheck,
+  UserCheck,
+  X,
+} from 'lucide-react'
+import {
+  type Dispatch,
+  type SetStateAction,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 
 /**
@@ -167,11 +184,29 @@ export function FindingsPage() {
     const statusParam = searchParams.get('status')
     const queryParam = searchParams.get('q')
     const findingParam = searchParams.get('finding')
-    if (statusParam === null && queryParam === null && findingParam === null) return null
+    /*
+      ★ v1.80：`severity` 也要认 —— 总览「该做什么」的严重/高危项就是
+      `/findings?severity=critical` / `?severity=high`。原来这里只解析
+      status/q/finding，那两条链接落到的是**全量列表**。
+    */
+    const severityParam = searchParams.get('severity')
+    const severities = (severityParam ?? '')
+      .split(/[|,]/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+    if (
+      statusParam === null &&
+      queryParam === null &&
+      findingParam === null &&
+      severities.length === 0
+    ) {
+      return null
+    }
     return {
       openOnly: statusParam === 'open',
       query: queryParam,
       finding: findingParam !== null && findingParam.length > 0 ? findingParam : null,
+      severities,
     }
   }, [searchParams])
 
@@ -180,12 +215,19 @@ export function FindingsPage() {
     const base = filterDraft ?? emptyFilter()
     if (filterDraft !== null || urlIntent === null) return base
     // 首帧（或刚从命令面板跳进来）：把 URL 指令叠在默认筛选上
-    if (!urlIntent.openOnly && urlIntent.query === null) return base
-    const next: FindingFilter = { ...base, statuses: new Set(base.statuses) }
+    if (!urlIntent.openOnly && urlIntent.query === null && urlIntent.severities.length === 0) {
+      return base
+    }
+    const next: FindingFilter = {
+      ...base,
+      statuses: new Set(base.statuses),
+      severities: new Set(base.severities),
+    }
     if (urlIntent.openOnly) {
       for (const s of OPEN_FINDING_STATUSES) next.statuses.add(s)
     }
     if (urlIntent.query !== null) next.query = urlIntent.query
+    for (const severity of urlIntent.severities) next.severities.add(severity)
     return next
   }, [filterDraft, urlIntent])
 
@@ -222,12 +264,36 @@ export function FindingsPage() {
   useEffect(() => {
     if (urlIntent === null) return
 
+    /*
+      ★★ v1.80：先落草稿再删参数（与 ScansPage 同一条）。
+
+      原来删完参数后 `urlIntent` 变成 null，`filterDraft` 仍是 null ——
+      筛选和详情抽屉在下一帧自己复位。命令面板的 `?status=open`、
+      `?q=…`、`?finding=…` 以及总览的 `?severity=…` 全都受影响。
+    */
+    setFilterDraft((prev) => {
+      if (prev !== null) return prev
+      const next: FindingFilter = {
+        ...emptyFilter(),
+        severities: new Set<string>(),
+        statuses: new Set<string>(),
+      }
+      if (urlIntent.openOnly) {
+        for (const status of OPEN_FINDING_STATUSES) next.statuses.add(status)
+      }
+      for (const severity of urlIntent.severities) next.severities.add(severity)
+      if (urlIntent.query !== null) next.query = urlIntent.query
+      return next
+    })
+    if (urlIntent.finding !== null) setOpenIdDraft(urlIntent.finding)
+
     setSearchParams(
       (prev) => {
         const next = new URLSearchParams(prev)
         next.delete('status')
         next.delete('q')
         next.delete('finding')
+        next.delete('severity')
         return next
       },
       { replace: true },
@@ -393,10 +459,7 @@ export function FindingsPage() {
    *    这也意味着 Map 的值会随列表刷新而整体换新，与 `findings` 同步。
    */
   const findingById = useMemo(() => new Map(findings.map((f) => [f.id, f])), [findings])
-  const findingOf = useCallback(
-    (id: string) => findingById.get(id) ?? null,
-    [findingById],
-  )
+  const findingOf = useCallback((id: string) => findingById.get(id) ?? null, [findingById])
 
   /** 选中整组 —— 把这一组的 id 并进选择集，之后就能用批量栏操作 */
   const handleSelectGroup = useCallback((group: FindingGroup) => {
@@ -502,9 +565,7 @@ export function FindingsPage() {
           **全部能回才给撤销按钮**。给一个点下去会 400 的撤销，
           比不给更糟 —— 用户会以为数据已经回退，而它没有。
         */
-        const undoable = targets.every((f) =>
-          FINDING_STATUS_TRANSITIONS[to]?.includes(f.status),
-        )
+        const undoable = targets.every((f) => FINDING_STATUS_TRANSITIONS[to]?.includes(f.status))
 
         showToast({
           message,
@@ -769,9 +830,7 @@ export function FindingsPage() {
     } else {
       // 被挡住的原因原样透传 —— 后端那句中文说清了是哪几份报告
       setActionError(
-        ok > 0
-          ? `已永久删除 ${ok} 条，另有 ${blocked.length} 条被拒绝：${blocked[0]}`
-          : blocked[0],
+        ok > 0 ? `已永久删除 ${ok} 条，另有 ${blocked.length} 条被拒绝：${blocked[0]}` : blocked[0],
       )
     }
   }, [purgeTargets])
@@ -874,7 +933,9 @@ export function FindingsPage() {
       downloadSarif(download.filename ?? sarifFallbackFilename(), download.text)
       showToast({
         message:
-          visible.length > 0 ? `已导出 ${visible.length} 条为 SARIF` : '已导出空的 SARIF（本轮无匹配条目）',
+          visible.length > 0
+            ? `已导出 ${visible.length} 条为 SARIF`
+            : '已导出空的 SARIF（本轮无匹配条目）',
       })
     } catch (err) {
       showToast({ message: `SARIF 导出失败：${errorMessage(err)}`, tone: 'risk' })
@@ -963,7 +1024,10 @@ export function FindingsPage() {
                       active={active}
                       disabled={count === 0}
                       onToggle={() =>
-                        setFilter((prev) => ({ ...prev, statuses: toggled(prev.statuses, status_) }))
+                        setFilter((prev) => ({
+                          ...prev,
+                          statuses: toggled(prev.statuses, status_),
+                        }))
                       }
                     >
                       {FINDING_STATUS_LABEL[status_]}
@@ -1076,14 +1140,24 @@ export function FindingsPage() {
                     }}
                     className="h-full bg-transparent text-xs text-ink-muted focus:outline-none"
                   >
-                    <option value="" className="bg-surface-overlay">全部时限</option>
-                    <option value="overdue" className="bg-surface-overlay">已超期</option>
-                    <option value="dueSoon" className="bg-surface-overlay">临期</option>
-                    <option value="onTrack" className="bg-surface-overlay">还早</option>
+                    <option value="" className="bg-surface-overlay">
+                      全部时限
+                    </option>
+                    <option value="overdue" className="bg-surface-overlay">
+                      已超期
+                    </option>
+                    <option value="dueSoon" className="bg-surface-overlay">
+                      临期
+                    </option>
+                    <option value="onTrack" className="bg-surface-overlay">
+                      还早
+                    </option>
                   </select>
                 </div>
               </FilterField>
-              <FilterField label="搜索" htmlFor="finding-search">                <div className="relative">
+              <FilterField label="搜索" htmlFor="finding-search">
+                {' '}
+                <div className="relative">
                   <Search
                     size={13}
                     strokeWidth={1.75}
@@ -1160,12 +1234,10 @@ export function FindingsPage() {
                   aria-label="列表或分组"
                   className="flex h-8 items-center rounded-sm border border-line p-0.5"
                 >
-                  {(
-                    [
-                      { key: 'list' as const, label: '列表' },
-                      { key: 'groups' as const, label: '分组' },
-                    ]
-                  ).map((option) => (
+                  {[
+                    { key: 'list' as const, label: '列表' },
+                    { key: 'groups' as const, label: '分组' },
+                  ].map((option) => (
                     <ToggleChip
                       key={option.key}
                       variant="segment"
@@ -1225,12 +1297,10 @@ export function FindingsPage() {
                   aria-label="默认视图或回收站"
                   className="flex h-8 items-center rounded-sm border border-line p-0.5"
                 >
-                  {(
-                    [
-                      { key: 'active' as const, label: '未删除' },
-                      { key: 'trash' as const, label: '回收站' },
-                    ]
-                  ).map((option) => (
+                  {[
+                    { key: 'active' as const, label: '未删除' },
+                    { key: 'trash' as const, label: '回收站' },
+                  ].map((option) => (
                     <ToggleChip
                       key={option.key}
                       variant="segment"
@@ -1347,8 +1417,7 @@ export function FindingsPage() {
                   <div className="flex flex-col items-center gap-tight px-panel py-bay text-center">
                     <p className="text-sm text-ink-muted">没有可分组的结果</p>
                     <p className="max-w-[46ch] text-xs text-ink-faint">
-                      分组按漏洞的标题归类。当前筛选下没有任何条目，
-                      或者它们还没被归类。
+                      分组按漏洞的标题归类。当前筛选下没有任何条目， 或者它们还没被归类。
                     </p>
                     {filterActive && (
                       <Button variant="link" size="sm" onClick={clearFilter}>
@@ -1369,23 +1438,23 @@ export function FindingsPage() {
               /* ── 列表 ── */
               <div className="rounded-md border border-line bg-surface">
                 <FindingsTable
-                findings={visible.slice(0, renderLimit)}
-                selectedIds={selectedIds}
-                onToggleSelect={toggleSelect}
-                onToggleSelectAll={toggleSelectAll}
-                onOpen={(finding) => setOpenId(finding.id)}
-                activeId={openId}
-                emptyState={
-                  findings.length > 0 ? (
-                    // 筛选后为空 —— 和"一条都没有"是两回事，提示必须不同
-                    <div className="flex flex-col items-center gap-tight text-center">
-                      <p className="text-sm text-ink-muted">没有符合条件的漏洞</p>
-                      <Button variant="link" size="sm" onClick={clearFilter}>
-                        清除筛选条件
-                      </Button>
-                    </div>
-                  ) : scansState.status === 'ready' && scansState.scans.length === 0 ? (
-                    /*
+                  findings={visible.slice(0, renderLimit)}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelect}
+                  onToggleSelectAll={toggleSelectAll}
+                  onOpen={(finding) => setOpenId(finding.id)}
+                  activeId={openId}
+                  emptyState={
+                    findings.length > 0 ? (
+                      // 筛选后为空 —— 和"一条都没有"是两回事，提示必须不同
+                      <div className="flex flex-col items-center gap-tight text-center">
+                        <p className="text-sm text-ink-muted">没有符合条件的漏洞</p>
+                        <Button variant="link" size="sm" onClick={clearFilter}>
+                          清除筛选条件
+                        </Button>
+                      </div>
+                    ) : scansState.status === 'ready' && scansState.scans.length === 0 ? (
+                      /*
                       从没扫过。**这是任务 7 特意回头验的那条路径** ——
                       新用户第一次打开系统时最可能先落在这一页
                       （"漏洞发现"在导航里比"扫描任务"更靠后，但它更吸引人点）。
@@ -1395,28 +1464,28 @@ export function FindingsPage() {
                         它听起来像"扫过了，很干净"，而那是一件让人放心地
                         关掉页面的事。真相是他还没开始。
                     */
-                    <NoScansYet
-                      bordered={false}
-                      title="还没有发现任何漏洞"
-                      description="发起第一次扫描之后，发现的问题会出现在这里 —— 每条都带有证据与可复现的验证脚本。"
-                    />
-                  ) : (
-                    <div className="flex flex-col items-center gap-tight text-center">
-                      <ShieldCheck
-                        size={20}
-                        strokeWidth={1.5}
-                        className="text-signal-ok"
-                        aria-hidden="true"
+                      <NoScansYet
+                        bordered={false}
+                        title="还没有发现任何漏洞"
+                        description="发起第一次扫描之后，发现的问题会出现在这里 —— 每条都带有证据与可复现的验证脚本。"
                       />
-                      {/* 跑过了、什么都没有 —— 这确实是"好消息"，不显示 0 值表格 */}
-                      <p className="text-sm text-ink-muted">还没有发现任何漏洞</p>
-                      <p className="max-w-[46ch] text-xs text-ink-faint">
-                        扫描发现的问题会出现在这里。每条都带有证据与可复现的验证脚本。
-                      </p>
-                    </div>
-                  )
-                }
-              />
+                    ) : (
+                      <div className="flex flex-col items-center gap-tight text-center">
+                        <ShieldCheck
+                          size={20}
+                          strokeWidth={1.5}
+                          className="text-signal-ok"
+                          aria-hidden="true"
+                        />
+                        {/* 跑过了、什么都没有 —— 这确实是"好消息"，不显示 0 值表格 */}
+                        <p className="text-sm text-ink-muted">还没有发现任何漏洞</p>
+                        <p className="max-w-[46ch] text-xs text-ink-faint">
+                          扫描发现的问题会出现在这里。每条都带有证据与可复现的验证脚本。
+                        </p>
+                      </div>
+                    )
+                  }
+                />
 
                 {visible.length > renderLimit && (
                   <div className="border-t border-line px-panel py-2 text-center">
@@ -1459,7 +1528,9 @@ export function FindingsPage() {
                 id 里有逗号之外的字符时，不编码会切错分段。
               */
               onExportReport={() =>
-                navigate(`/reports?findings=${encodeURIComponent(selectedFindings.map((f) => f.id).join(','))}`)
+                navigate(
+                  `/reports?findings=${encodeURIComponent(selectedFindings.map((f) => f.id).join(','))}`,
+                )
               }
               onDelete={() => void handleBulkDelete()}
               onRestore={() => void handleBulkRestore()}

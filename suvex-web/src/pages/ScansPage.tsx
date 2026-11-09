@@ -26,7 +26,6 @@ import {
   batchDelete,
   batchRerun,
   batchRestore,
-  hasActiveScans,
   isViewFresh,
   loadScans,
   purgeScan,
@@ -185,7 +184,7 @@ export function ScansPage() {
 
   const urlTarget = searchParams.get('target')
   const [targetQueryDraft, setTargetQueryDraft] = useState<string | null>(null)
-  const targetQuery = targetQueryDraft ?? (urlTarget ?? '')
+  const targetQuery = targetQueryDraft ?? urlTarget ?? ''
   const setTargetQuery = setTargetQueryDraft
 
   /*
@@ -198,6 +197,17 @@ export function ScansPage() {
     const wantsNew = searchParams.get('new') === '1'
     const targetFromUrl = searchParams.get('target')
     if (!wantsNew && targetFromUrl === null) return
+
+    /*
+      ★★ v1.80：**先把意图落进草稿，再删参数**。
+
+      反过来（先删、指望派生表达式继续读 URL）就是这次审计抓到的
+      "点了没反应"：参数被删掉之后 `searchParams.get('new')` 变 null，
+      而 draft 仍是 null —— 向导在下一帧自己关上了。命令面板、资产页
+      「查看扫描」的深链都受这条影响。
+    */
+    if (wantsNew) setWizardOpenDraft(true)
+    if (targetFromUrl !== null) setTargetQueryDraft(targetFromUrl)
 
     setSearchParams(
       (prev) => {
@@ -238,16 +248,11 @@ export function ScansPage() {
    * 归档与回收站里的记录都不会自己变化（归档不改变 status，
    * 而回收站里的更是已经删了）—— 为它们轮询是白烧请求。
    */
-  const hasActive = useMemo(() => hasActiveScans(scans), [scans])
-
-  useEffect(() => {
-    if (view !== 'default' || !hasActive) return
-    const timer = window.setInterval(() => {
-      // silent：轮询刷新不能把页面打回骨架态，失败也不该把列表换成错误页
-      void loadScans({ silent: true })
-    }, 2500)
-    return () => window.clearInterval(timer)
-  }, [hasActive, view])
+  /*
+    ★ v1.80：轮询已经下沉到 `Layout`（`useScansPolling`）—— 见那里的说明。
+      这里不再自己起定时器：同一端点两处同时轮询，翻倍的是请求，换来的
+      只是"另一处也能看到"（而它们本来就是同一份 store）。
+  */
 
   const filtered = useMemo(
     () =>
@@ -642,7 +647,6 @@ export function ScansPage() {
     return () => document.removeEventListener('keydown', listener)
   }, [])
 
-
   return (
     <>
       <PageHeader navId="scans" />
@@ -816,9 +820,7 @@ export function ScansPage() {
           天然是干净的初始值，不需要在 effect 里重置 —— 而"重置"这件事
           一旦漏写，打开第二条扫描时会先闪一眼上一条的题解。
         */}
-        {writeupScan && (
-          <WriteupDialog scan={writeupScan} onClose={() => setWriteupScan(null)} />
-        )}
+        {writeupScan && <WriteupDialog scan={writeupScan} onClose={() => setWriteupScan(null)} />}
 
         {/* ── 新建向导（内联面板） ── */}
         {wizardOpen && (

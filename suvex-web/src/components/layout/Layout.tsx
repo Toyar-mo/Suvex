@@ -1,4 +1,5 @@
 import Sidebar from './Sidebar'
+import { useScansPolling } from '@/hooks/useScansPolling'
 import { useSidebarCollapsed } from '@/hooks/useSidebarCollapsed'
 import TopStatusBar from './TopStatusBar'
 import AppShell from './AppShell'
@@ -44,6 +45,9 @@ export function Layout() {
   const { collapsed, toggle } = useSidebarCollapsed()
   const { pathname } = useLocation()
   const [paletteOpen, setPaletteOpen] = useState(false)
+
+  /* 有活跃扫描时全局每 2.5s 刷新 —— 见 useScansPolling 的说明 */
+  useScansPolling()
 
   useEffect(() => {
     ensureScansLoaded()
