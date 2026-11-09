@@ -5,7 +5,8 @@
 >
 > - 仓库：`https://github.com/Toyar-mo/Suvex.git`（私有）
 > - 分支：`main`
-> - 交接时的提交：`eee19de3 feat(overview): 实时活动改成 canvas 演出舞台`
+> - 交接时的**代码**提交：`eee19de3 feat(overview): 实时活动改成 canvas 演出舞台`
+> - 交接文档本身在其后的 `docs(handoff)` 提交里（仅文档，不改代码）
 > - 远端 `origin/main` 与本地一致（已 push）
 > - 真机：`http://192.168.44.128:8080`（Kali）
 > - 前端测试：**1257 个全部通过**（交接时）
