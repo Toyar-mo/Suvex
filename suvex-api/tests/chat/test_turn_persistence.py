@@ -1065,6 +1065,42 @@ async def test_resumer_gives_up_when_the_session_is_archived(
     assert "归档" in (run.last_error or "")
 
 
+async def test_resumer_appends_a_note_when_it_gives_up(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """★ 放弃接手时必须补一句话，不能停在「我在后台接着做」上。
+
+    2026-11-09 实测：一轮跑了 32 分钟 / 70 步，模型接入点连续 500。
+    首次失败时引擎写「我在后台接着做」，后台确实接手了 3 次，但三次都
+    失败后 `give_up` 只改了状态 —— **对话里最后一句永远是那句承诺**，
+    而实际上什么都不会再发生。这条钉住"放弃要说话"。
+    """
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    # 冲额度前一步：claim 会把它加到 MAX，随后失败就命中"放弃"分支
+    run.resume_attempts = turn_runs.MAX_RESUME_ATTEMPTS - 1
+    db_session.commit()
+    _make_stale(db_session, run)
+    monkeypatch.setattr(resumer, "_identity_for", lambda db, s: ADMIN)
+
+    async def boom(db: Session, **kwargs: Any) -> Any:
+        raise RuntimeError("LLM 拒绝了请求（HTTP 500）")
+
+    monkeypatch.setattr(engine, "run_turn", boom)
+
+    ran = await resumer.resume_one(db_session, run)
+    assert ran is False
+    db_session.refresh(run)
+    assert run.status == "failed"
+
+    messages = chat_service.list_messages(db_session, session=session)
+    last = messages[-1].content
+    assert "自动接手" in last
+    assert "发「继续」可以再试" in last
+    # 不能再出现"我在后台接着做"这种承诺（后台已经放弃了）
+    assert "我在后台接着做" not in last
+
+
 async def test_resumer_gives_up_when_the_owner_account_is_gone(
     db_session: Session,
 ) -> None:

@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.chat import engine, turn_runs
+from app.chat import service as chat_service
 from app.chat.models import ChatSession
 from app.core.timeutil import now_utc
 
@@ -35,6 +36,40 @@ _log = logging.getLogger(__name__)
 #: 扫描间隔。10 秒是刻意的：接手延迟 = 心跳阈值(90s) + 这个间隔，
 #: 用户能感觉到"自己接上了"，而 6 次/分钟的空查询代价可以忽略。
 POLL_SECONDS = 10.0
+
+#: 自动接手彻底放弃时补进对话的那句话（v1.79）。
+#:
+#: ★ 起因（2026-11-09 实测）：会话 `chat_01M6YYF7AQ8YR6B27F24C4BHRB` 的一轮
+#:   跑了 32 分钟 / 70 步 / 77 次工具后，模型接入点连续返回 500；首次失败时
+#:   引擎写了「我在后台接着做」，后台也确实接手了 3 次 —— 但三次都失败、
+#:   `give_up` 把状态落成 `failed`，**对话里却没有任何后续消息**。
+#:   于是最后一句永远停在那句承诺上，而实际上什么都不会再发生。
+#:
+#: 放弃时必须补一句：用户看到的是"到底还跑不跑、我下一步该做什么"。
+GIVE_UP_NOTE = (
+    "（自动接手 {attempts} 次仍未成功：{reason}。"
+    "这一轮先停在这里 —— 发「继续」可以再试；如果反复这样，先检查模型接入点的状态。）"
+)
+
+
+def _append_give_up_note(
+    db: Session, session: ChatSession | None, *, reason: str, attempts: int
+) -> None:
+    """在放弃接手后补一条说明。
+
+    失败不影响状态本身（`give_up` 已经落库）—— 记账失败只记 warning，
+    不能因为"多写一句话"把后台循环弄崩。
+    """
+    if session is None or getattr(session, "archived", False):
+        return
+    try:
+        chat_service.append_assistant_message(
+            db,
+            session=session,
+            content=GIVE_UP_NOTE.format(attempts=attempts, reason=reason),
+        )
+    except Exception:  # noqa: BLE001 - 见上
+        _log.warning("放弃接手后补说明失败：%s", getattr(session, "id", "?"), exc_info=True)
 
 
 def _identity_for(db: Session, session: Any) -> Any:
@@ -76,7 +111,9 @@ async def resume_one(db: Session, run: Any) -> bool:
 
     identity = _identity_for(db, session)
     if identity is None:
-        turn_runs.give_up(db, run, reason="会话所有者的账号已不存在，无法接手。")
+        reason = "会话所有者的账号已不存在，无法接手。"
+        turn_runs.give_up(db, run, reason=reason)
+        _append_give_up_note(db, session, reason=reason, attempts=run.resume_attempts)
         db.commit()
         return False
 
@@ -109,8 +146,15 @@ async def resume_one(db: Session, run: Any) -> bool:
                 if not retryable:
                     _log.warning("这一轮失败不可重试（凭证/权限），不再接手：%s", run.id)
                     turn_runs.give_up(db, run, reason=reason)
+                    # ★ 已经判死：最后一条消息还停在"我在后台接着做"就是假话
+                    _append_give_up_note(
+                        db, session, reason=reason, attempts=run.resume_attempts
+                    )
                 elif run.resume_attempts >= turn_runs.MAX_RESUME_ATTEMPTS:
                     turn_runs.give_up(db, run, reason=reason)
+                    _append_give_up_note(
+                        db, session, reason=reason, attempts=run.resume_attempts
+                    )
                 else:
                     turn_runs.finish_from_error(db, run, reason=reason)
                 db.commit()
