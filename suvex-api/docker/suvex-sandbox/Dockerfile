@@ -279,6 +279,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # `python3-bandit`（`bandit` 是其依赖别名），装 `bandit` 会连带 Python 版。
     gitleaks trufflehog gospider \
     bandit \
+    # Go 逆向（RE6 `ez_go` 实测：镜像里没有 go 工具链，`go tool nm/objdump`
+    # 用不了；模型只能靠 strings/objdump 硬猜函数边界）。
+    golang-go \
     # ── 交互式调试的常驻会话（2026-11-09）──
     #
     # gdb / nc / python REPL 在 `run_shell`（一次一个 sh）里留不住。
@@ -713,7 +716,9 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         #   两者在 Python 3.14 上都有预编译轮子，不会走源码构建。
         numpy scipy \
         # 取证 / misc：图像、二维码、常见编码
-        pillow pyzbar python-magic \
+        # ★ opencv 必须装进 venv：apt 的 python3-opencv 只服务系统
+        #   Python，而模型用的是 /opt/venv（实测 import cv2 失败）。
+        pillow pyzbar python-magic opencv-python-headless \
         # 数据与网络
         requests httpx beautifulsoup4 lxml \
         # 逆向题的脚本侧（re 镜像还会加 angr / capstone）

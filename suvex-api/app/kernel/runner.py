@@ -3164,6 +3164,32 @@ def build_system_prompt(
     它应当默认就享受到更全的手法，而不是因为没人记得同步而静默少一截。
     """
     base = load_system_prompt(categories=skill_categories)
+    # ★ v1.80：CTF 解题时把**本题型主技能正文**直接拼进系统提示。
+    #
+    # 实测 RE5/RE6：各跑满 500 轮，`load_skill` 调用 **0 次** —— 清单里
+    # 列了 `ctf-reverse`，模型就是不拉。Workstation 的做法是把技能
+    # symlink 进 agent 的技能目录（原生发现）；我们没有那层发现机制，
+    # 所以最可靠的是把正文直接给出。代价约 4k tokens/轮，与 42k/轮
+    # 的现状相比很小，且它是稳定前缀、可被 provider 缓存。
+    #
+    # 只在 `skill_categories` 非空（CTF 解题）时做，扫描路径不受影响。
+    if skill_categories is not None:
+        primary = skills_mod.primary_skill_for(category)
+        if primary:
+            text = skills_mod.load_skill_text(primary)
+            if text.lstrip().startswith("#"):
+                # 只注入开头：完整正文最大 42KB（crypto），全塞进去会让
+                # 提示词反而比全量清单更大。开头通常就是入口与坑；
+                # 需要细节时模型仍可 load_skill 拉全文。
+                excerpt = text[:8000]
+                if len(text) > len(excerpt):
+                    excerpt += "\n\n……（已截断；完整正文用 `load_skill` 拉取）"
+                base += (
+                    f"\n\n## 本题型手册：{primary}\n\n"
+                    "**开工前先读完这一节。** 它写的是本镜像里的入口与坑；"
+                    "不要凭记忆直接开跑。\n\n"
+                    f"{excerpt}"
+                )
     # ⚠️ 三个开关都关时**提前返回**，连 notes 都不 import —— 见上面
     # 第二条理由。这也是"关闭时逐字节相同"这条验收标准的实现方式。
     if not agentsec_enabled and not ir_enabled and not offensive_enabled and not pentest_enabled:

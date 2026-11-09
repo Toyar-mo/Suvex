@@ -130,3 +130,28 @@ def test_build_system_prompt_is_smaller_for_a_category() -> None:
     assert len(filtered) < len(full) * 0.75, (
         f"按题型裁剪后提示词应明显变小：full={len(full)} filtered={len(filtered)}"
     )
+
+
+def test_primary_skill_is_injected_for_ctf_solves() -> None:
+    """CTF 解题必须**直接拿到**题型手册正文，而不是只看到清单。
+
+    实测 RE5/RE6：各跑满 500 轮，`load_skill` 调用 0 次 —— 只列清单，
+    模型不会主动拉。这里钉住"正文真的进了系统提示"。
+    """
+    from app.kernel import runner
+
+    cats = skills_mod.skill_categories_for("REVRESE")
+    assert cats is not None, "拼写不规范的平台分类也要能映射（前缀兜底）"
+
+    prompt = runner.build_system_prompt(
+        "REVRESE", agentsec_enabled=False, skill_categories=cats
+    )
+    assert "本题型手册：ctf-reverse" in prompt
+    assert "# CTF Reverse Engineering" in prompt  # 正文标题，证明不是只拼了标题
+
+
+def test_scan_prompt_does_not_inject_a_ctf_handbook() -> None:
+    from app.kernel import runner
+
+    prompt = runner.build_system_prompt("web", agentsec_enabled=False)
+    assert "本题型手册" not in prompt

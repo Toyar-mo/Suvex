@@ -524,6 +524,13 @@ def skill_categories_for(challenge_category: str) -> frozenset[str] | None:
     key = (challenge_category or "").strip().lower()
     mapped = CATEGORY_SKILL_MAP.get(key)
     if not mapped:
+        # 平台分类拼写不规范（实测 `REVRESE`）：前缀匹配兜底，避免
+        # 因为一个拼写让"裁剪 + 主技能注入"同时失效。
+        for prefix, name in PRIMARY_SKILL_MAP:
+            if key.startswith(prefix):
+                mapped = name
+                break
+    if not mapped:
         return None
     return frozenset({mapped, *BASE_SKILL_CATEGORIES})
 
@@ -543,6 +550,40 @@ def _skill_group(skill: Skill) -> str:
     if len(parts) >= 3 and parts[0] == "ctf":
         return parts[1]
     return skill.category
+
+
+#: 题型前缀 → 首轮**强制读**的主技能名。
+#:
+#: 与 `CATEGORY_SKILL_MAP` 的区别：那个决定"清单里列哪些"，这个决定
+#: "把哪一篇正文直接塞进系统提示"。实测（RE5/RE6，各 500 轮）模型
+#: `load_skill` 调用次数为 **0** —— 只给清单，它不会主动拉。
+PRIMARY_SKILL_MAP: tuple[tuple[str, str], ...] = (
+    ("rev", "ctf-reverse"),
+    ("pwn", "ctf-pwn"),
+    ("crypto", "ctf-crypto"),
+    ("web", "ctf-web"),
+    ("forensic", "ctf-forensics"),
+    ("misc", "ctf-misc"),
+    ("osint", "ctf-osint"),
+    ("malware", "ctf-malware"),
+    ("ai", "ctf-ai-ml"),
+    ("ml", "ctf-ai-ml"),
+)
+
+
+def primary_skill_for(challenge_category: str) -> str | None:
+    """题型 → 首轮应注入正文的技能名（未知则 None）。
+
+    按前缀匹配而不是精确相等：平台分类拼写不规范（实测出现过
+    `REVRESE`），精确匹配会漏掉；`rev` 前缀能覆盖 reverse/rev/reverse。
+    """
+    key = (challenge_category or "").strip().lower()
+    if not key:
+        return None
+    for prefix, name in PRIMARY_SKILL_MAP:
+        if key.startswith(prefix):
+            return name
+    return None
 
 
 def render_index(
