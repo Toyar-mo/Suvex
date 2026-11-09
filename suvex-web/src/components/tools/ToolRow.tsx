@@ -1,5 +1,15 @@
 import { cn } from '@/lib/cn'
-import { Check, CircleSlash, CircleAlert, Plug, Power } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  CircleSlash,
+  CircleAlert,
+  Plug,
+  Power,
+} from 'lucide-react'
+import { useState } from 'react'
 
 import type { ToolHealth } from '@/data/tools'
 
@@ -96,6 +106,8 @@ export function ToolRow({
 }: ToolRowProps) {
   const meta = HEALTH_META[health]
   const StatusIcon = meta.icon
+  const [open, setOpen] = useState(false)
+  const hasDetail = Boolean(params) || Boolean(defaultLimitation)
 
   return (
     <li className="border-b border-line/60 last:border-b-0">
@@ -130,42 +142,23 @@ export function ToolRow({
                 主力
               </span>
             )}
+            {/*
+              ★ v1.79：局限折叠后仍要有**可见标记**。
+                全文收进展开区是为了让 13 行能一屏扫完；但把"默认会漏"
+                一起藏起来，用户就不会去展开它 —— 而那正是这个字段
+                存在的理由（见下方展开区）。
+            */}
+            {defaultLimitation && (
+              <span
+                className="rounded-sm border border-signal-warn/40 px-1 py-px text-2xs text-signal-warn"
+                title="用默认参数跑会静默漏掉东西 —— 展开看详情"
+              >
+                默认会漏
+              </span>
+            )}
           </div>
 
           <p className="mt-1 text-sm leading-relaxed text-ink-muted">{summary}</p>
-
-          {params && (
-            <p className="mt-1 break-words font-mono text-xs text-ink-faint [overflow-wrap:anywhere]">
-              参数：{params}
-            </p>
-          )}
-
-          {/*
-            ★ v0.99：「默认参数下它做不到什么」。
-
-            ## 为什么这一条此前是死的
-
-            `ToolSpec.default_limitation` 从 v0.86 就在后端写着，10 个工具里
-            有 6 个填了（`call_mcp` 那条直接讲「命中 0 可能是没查这一层」），
-            `GET /kernel/tools` 也一值在返回它 —— 而**这一行从来没渲染过**。
-            前端类型里有 `defaultLimitation` 字段，页面里零处引用。
-
-            这是本项目最贵的一类失真：数据写了、接口给了、界面上看不见。
-            用户看到「命中 0」只能自己猜是目标没有还是工具没查，
-            而那正是这条字段当初被写下来的原因。
-
-            ## 为什么用 warn 色而不是像 `reason` 那样用风险色
-
-            `reason` 是「这个工具现在用不了，去修」——那是故障，该醒目。
-            局限是「它能用，但会静默漏东西」——那不是故障，是**使用须知**。
-            用同一个红色会让 6 个正常工具看起来都坏了，用户会去修一个
-            根本不需要修的东西。所以用 warn 色 + 固定前缀「默认会漏」。
-          */}
-          {defaultLimitation && (
-            <p className="mt-1 text-xs leading-relaxed text-signal-warn">
-              <span className="font-medium">默认会漏</span>：{defaultLimitation}
-            </p>
-          )}
 
           {/*
             ★ 未就绪时**必须显示原因**，而且要说"去哪修"。
@@ -178,21 +171,64 @@ export function ToolRow({
               {requiresConnection && health === 'unconfigured' && (
                 <span className="text-ink-faint">
                   {' '}
-                  （在「MCP 连接」里加一条名为 <code className="font-mono">{requiresConnection}</code> 的连接）
+                  （在「MCP 连接」里加一条名为{' '}
+                  <code className="font-mono">{requiresConnection}</code> 的连接）
                 </span>
               )}
             </p>
           )}
+
+          {open && (
+            <div className="mt-2 flex flex-col gap-2 rounded-sm border border-line/60 bg-surface-raised/20 px-2.5 py-2">
+              {params && (
+                <p className="break-words font-mono text-xs text-ink-faint [overflow-wrap:anywhere]">
+                  参数：{params}
+                </p>
+              )}
+              {defaultLimitation && (
+                <div className="flex items-start gap-tight">
+                  <AlertTriangle
+                    className="mt-0.5 size-3.5 shrink-0 text-signal-warn"
+                    strokeWidth={1.75}
+                    aria-hidden="true"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-signal-warn">默认会漏什么</p>
+                    <p className="mt-0.5 whitespace-pre-line text-xs leading-relaxed text-ink-muted">
+                      {defaultLimitation}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
-        <span
-          className={cn('mt-0.5 flex shrink-0 items-center gap-1 text-xs', meta.className)}
-          title={meta.label}
-        >
-          <span className={cn('size-1.5 rounded-full', meta.dot)} aria-hidden />
-          <StatusIcon className="size-3" aria-hidden strokeWidth={1.75} />
-          {meta.label}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          {hasDetail && (
+            <button
+              type="button"
+              onClick={() => setOpen((value) => !value)}
+              aria-expanded={open}
+              aria-label={open ? `收起 ${label} 的详情` : `展开 ${label} 的详情`}
+              className="inline-flex size-6 items-center justify-center rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-overlay hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+            >
+              {open ? (
+                <ChevronDown className="size-3.5" strokeWidth={2} aria-hidden="true" />
+              ) : (
+                <ChevronRight className="size-3.5" strokeWidth={2} aria-hidden="true" />
+              )}
+            </button>
+          )}
+          <span
+            className={cn('flex items-center gap-1 text-xs', meta.className)}
+            title={meta.label}
+          >
+            <span className={cn('size-1.5 rounded-full', meta.dot)} aria-hidden />
+            <StatusIcon className="size-3" aria-hidden strokeWidth={1.75} />
+            {meta.label}
+          </span>
+        </div>
       </div>
     </li>
   )

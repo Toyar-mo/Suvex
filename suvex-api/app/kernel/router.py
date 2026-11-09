@@ -663,7 +663,7 @@ def replace_mcp_servers(
     summary="试连一条尚未保存的 MCP 连接",
 )
 async def test_mcp_server(
-    payload: McpServerTestIn, _identity: AdminDep
+    payload: McpServerTestIn, _identity: AdminDep, db: DbDep
 ) -> McpServerTestOut:
     """真拉起一次、握手一次、取一次工具清单。
 
@@ -678,6 +678,11 @@ async def test_mcp_server(
     result = await service.test_mcp_server(
         {
             "name": payload.server.name,
+            # ★ v1.79：编辑已保存的连接时试连，前端拿不到 env / headers
+            #   （只进不出），必须让后端用**已保存的那份**补上 ——
+            #   否则每次试连都按"没有凭据"去连，结果恒为 401/握手失败。
+            "preserve_env": payload.server.preserveEnv,
+            "preserve_headers": payload.server.preserveHeaders,
             # ★ v1.79：试连同样要带上传输类型 —— 否则 http 连接会被当成
             #   stdio 去校验 command，报的是「没有填 command」，而用户填的是 URL。
             "type": payload.server.type,
@@ -692,7 +697,8 @@ async def test_mcp_server(
             ),
             # ★ v0.83：试连也按这条连接自己的超时跑（见 `call_timeout` 的说明）。
             "call_timeout": payload.server.callTimeout,
-        }
+        },
+        db=db,
     )
     return McpServerTestOut(**result)
 

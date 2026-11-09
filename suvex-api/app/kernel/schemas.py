@@ -636,6 +636,11 @@ class KernelRecipeOut(CamelModel):
     name: str
     summary: str
     group: str
+    #: 主场景：`both` / `ctf` / `pentest`（v1.79）。
+    #:
+    #: 只用于界面筛选与覆盖统计，**不影响执行**。没有这一维时，
+    #: 用户只能逐条读说明判断"这条对我的场景有没有用"。
+    scenario: str = "both"
     #: 真正执行的命令。**与 `name` 不同的只有 `exec`**，但必须下发：
     #: 界面上写"exec → sh"比写"exec"更不容易让人误解。
     command: str

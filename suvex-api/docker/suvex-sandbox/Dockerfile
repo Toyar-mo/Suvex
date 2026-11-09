@@ -1198,5 +1198,59 @@ RUN set -eux; \
     if gdb --batch -ex 'quit' 2>&1 | grep -qi 'gef'; then echo "gef 已加载"; else echo "WARN gef 未加载（gdb 仍可用，见日志）"; fi; \
     echo "P0/P1 自检通过"
 
+# ══════════════════════════════════════════════════════════
+# 10) 渗透 / 逆向补齐（v1.79，2026-11-09）
+# ══════════════════════════════════════════════════════════
+#
+# 依据：对 `suvex-sandbox` 三个镜像逐条 `command -v` 实测后确认的缺口。
+# 这一档只装**体积可控、运行期不需要出网/数据库**的：
+#
+#   · `wpscan`      —— WordPress 专项（版本、插件、用户枚举）
+#   · `exploitdb`   —— 提供 `searchsploit`（公开 PoC 检索）
+#   · `impacket`    —— 内网协议与凭据导出（`secretsdump.py` 等）
+#   · `uncompyle6`  —— **旧版** .pyc 反编译（现代字节码仍可能不支持）
+#
+# ## 明确不装，以及原因（不要再当作"漏了"）
+#
+#   · `ghidra`      —— apt 装完 843 MB（另需 JDK 常驻）。反汇编已有
+#                     radare2 / objdump；伪代码级反编译留到 C 档单独决策。
+#   · `metasploit`  —— 616 MB，且依赖 postgresql 与 Oracle 客户端；
+#                     沙箱是无状态一次性容器，起数据库不划算。
+#                     公开 PoC 检索由 `searchsploit` 覆盖。
+#   · `zsteg`       —— gem 依赖在国内源取不到；LSB 穷举由
+#                     已装的 `stegoveritas -bruteLSB` 覆盖。
+#   · `ropper`      —— 依赖 `filebytes`（用了 Py3.12 已删除的 ast.Str）；
+#                     `ROPgadget` 已覆盖同一需求。
+#   · `pycdc` 已改为**vendor 预编译二进制**（见下面 COPY 段）：base 构建期
+#     连不上 GitHub，但逆向镜像里早已构建过；把同一份二进制取回来即可，
+#     不再让"只有逆向档能反编译 pyc"成为缺口。
+USER root
+# pycdc / pycdas：从**逆向镜像已构建好的二进制**取，放进 base ——
+# 否则「.pyc 反编译」只有逆向档有，而 crypto/misc 题里也常出现 pyc。
+# 二进制由 zrax/pycdc 源码在 2026-11-06 构建（见 vendor/SOURCES.md）。
+COPY vendor/pycdc/pycdc /usr/local/bin/pycdc
+COPY vendor/pycdc/pycdas /usr/local/bin/pycdas
+RUN set -eux; \
+    chmod 0755 /usr/local/bin/pycdc /usr/local/bin/pycdas; \
+    # 无参时打印「No input file specified」—— 用它证明二进制能执行（不依赖题目输入）
+    (pycdc 2>&1 || true) | grep -q 'No input file specified'; \
+    (pycdas 2>&1 || true) | grep -q 'No input file specified'; \
+    echo "pycdc/pycdas 可执行"
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends wpscan exploitdb \
+ && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
+        --retries 5 --timeout 60 impacket uncompyle6
+RUN set -eux; \
+    for c in wpscan searchsploit secretsdump.py uncompyle6 pycdc pycdas; do \
+        command -v "$c" >/dev/null || { echo "缺工具: $c" >&2; exit 1; }; \
+    done; \
+    wpscan --version; \
+    searchsploit -h >/dev/null 2>&1 || true; \
+    uncompyle6 --version; \
+    secretsdump.py -h >/dev/null 2>&1 || true; \
+    python3 -c 'import impacket; print("impacket ok")'; \
+    echo "渗透/逆向补齐自检通过"
+
 # 恢复非 root 用户：runner 依赖 uid=1000 才能写 /work（见上文 chown）。
 USER solver

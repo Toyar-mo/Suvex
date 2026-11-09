@@ -32,6 +32,7 @@ function recipe(over: Partial<KernelRecipe> = {}): KernelRecipe {
     name: 'nmap',
     summary: '端口与服务识别',
     group: '侦察',
+    scenario: 'both',
     command: 'nmap',
     args: ['-sT', '-sV'],
     params: [],
@@ -59,7 +60,30 @@ describe('RecipesPanel 渲染', () => {
       />,
     )
 
-    expect(screen.getByText('1 / 2 条写了局限')).toBeTruthy()
+    expect(screen.getByText('1 条写了局限')).toBeTruthy()
+  })
+
+  it('★ 场景筛选是**包含关系**：CTF 里也要留下 both 的工具', () => {
+    render(
+      <RecipesPanel
+        recipes={[
+          recipe({ name: 'nmap', scenario: 'both' }),
+          recipe({ name: 'z3', scenario: 'ctf' }),
+          recipe({ name: 'wafw00f', scenario: 'pentest' }),
+        ]}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'CTF' }))
+    // nmap 标的是 both —— 它在 CTF 里同样能用，不能筛掉
+    expect(screen.getByText('nmap')).toBeTruthy()
+    expect(screen.getByText('z3')).toBeTruthy()
+    expect(screen.queryByText('wafw00f')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '渗透' }))
+    expect(screen.getByText('nmap')).toBeTruthy()
+    expect(screen.getByText('wafw00f')).toBeTruthy()
+    expect(screen.queryByText('z3')).toBeNull()
   })
 
   it('有局限的工具在**折叠状态**就带标记，不必展开才发现', () => {
@@ -125,7 +149,9 @@ describe('RecipesPanel 展开', () => {
   it('退出码说明只在"多码都不算失败"时出现', () => {
     const { rerender } = render(
       <RecipesPanel
-        recipes={[recipe({ name: 'nmap', args: [], defaultLimitation: 'x', allowedExitCodes: [0] })]}
+        recipes={[
+          recipe({ name: 'nmap', args: [], defaultLimitation: 'x', allowedExitCodes: [0] }),
+        ]}
       />,
     )
     fireEvent.click(screen.getByText('nmap'))

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
 
 import { ToolRow, type ToolRowProps } from '@/components/tools/ToolRow'
@@ -42,8 +42,12 @@ function props(over: Partial<ToolRowProps> = {}): ToolRowProps {
   }
 }
 
+function expand(label: string) {
+  fireEvent.click(screen.getByRole('button', { name: `展开 ${label} 的详情` }))
+}
+
 describe('ToolRow：默认会漏什么', () => {
-  it('★ 有局限时必须显示出来', () => {
+  it('★ 有局限时必须显示出来（折叠时给标记，展开后给全文）', () => {
     render(
       <ToolRow
         {...props({
@@ -53,7 +57,10 @@ describe('ToolRow：默认会漏什么', () => {
         })}
       />,
     )
+    // 折叠时至少看得到「默认会漏」这个标记 —— 否则没人会去展开
     expect(screen.getByText(/默认会漏/)).toBeTruthy()
+    expect(screen.queryByText(/没查这一层/)).toBeNull()
+    expand('调用 MCP 工具')
     expect(screen.getByText(/没查这一层/)).toBeTruthy()
   })
 
@@ -79,6 +86,7 @@ describe('ToolRow：默认会漏什么', () => {
         })}
       />,
     )
+    expand('执行命令')
     const limitation = Array.from(container.querySelectorAll('p')).find((el) =>
       el.textContent?.includes('默认会漏'),
     )
@@ -102,6 +110,7 @@ describe('ToolRow：默认会漏什么', () => {
         })}
       />,
     )
+    expand('执行命令')
     const limitation = Array.from(container.querySelectorAll('p')).find((el) =>
       el.textContent?.includes('默认会漏'),
     )
@@ -114,11 +123,12 @@ describe('ToolRow：默认会漏什么', () => {
 })
 
 describe('ToolRow：既有契约不能被这次改动弄坏', () => {
-  it('仍显示工具名、中文名、用途、参数', () => {
+  it('仍显示工具名、中文名、用途；参数在展开区', () => {
     render(<ToolRow {...props({ defaultLimitation: '默认只扫一部分端口。' })} />)
     expect(screen.getByText('run_shell')).toBeTruthy()
     expect(screen.getByText('执行命令')).toBeTruthy()
     expect(screen.getByText('在沙箱里跑一条命令')).toBeTruthy()
+    expand('执行命令')
     expect(screen.getByText(/command/)).toBeTruthy()
   })
 

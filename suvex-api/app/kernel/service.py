@@ -4399,7 +4399,33 @@ def save_mcp_servers(db: Session, servers: list[dict]) -> list[dict]:
     return public_mcp_servers(db)
 
 
-async def test_mcp_server(item: dict) -> dict:
+def _with_preserved_secrets(item: dict, db: Session | None) -> dict:
+    """按 `preserve_env` / `preserve_headers` 用已保存的凭据补齐草稿。
+
+    只用于**试连**：它拿到的是一条还没写库的草稿，而编辑场景下前端
+    不可能把旧凭据带回来（后端只回 `hasEnv` / `hasHeaders`）。
+    语义与 `PUT` 的 preserve 完全一致：传了 preserve 就**忽略**本次提交的
+    那一项，改用库里的值；库里没有这条连接时保持原样。
+    """
+    if db is None:
+        return item
+    want_env = bool(item.get("preserve_env"))
+    want_headers = bool(item.get("preserve_headers"))
+    if not (want_env or want_headers):
+        return item
+    name = str(item.get("name") or "").strip()
+    saved = next((server for server in get_mcp_servers(db) if server.get("name") == name), None)
+    if saved is None:
+        return item
+    merged = dict(item)
+    if want_env:
+        merged["env"] = dict(saved.get("env") or {})
+    if want_headers:
+        merged["headers"] = dict(saved.get("headers") or {})
+    return merged
+
+
+async def test_mcp_server(item: dict, *, db: Session | None = None) -> dict:
     """试连**一条尚未保存**的配置，返回结构化结果。
 
     ## 为什么这个函数必须有
@@ -4417,6 +4443,12 @@ async def test_mcp_server(item: dict) -> dict:
     import time
 
     from app.kernel import mcp as mcp_mod
+
+    # ★ v1.79：编辑已保存连接时的试连要沿用**已保存的凭据**。
+    #   env / headers 只进不出，前端草稿里只能是空对象；不补的话，
+    #   一次"只改备注"的试连会按无凭据去连，结果恒为 401 —— 而用户会
+    #   以为连接坏了。
+    item = _with_preserved_secrets(item, db)
 
     started = time.monotonic()
     # ★ v0.83：试连也要带上 call_timeout —— 否则"配了 300 秒的连接"
@@ -4612,7 +4644,7 @@ def list_recipes() -> dict:
     与 `list_kernel_tools` 同一条纪律：服务层不管 HTTP 形状，
     `router` 用 `response_model` 收口。这样加一个字段不用改两处。
     """
-    from app.kernel.recipes import RECIPE_GROUPS, RECIPE_SPECS
+    from app.kernel.recipes import RECIPE_GROUPS, RECIPE_SPECS, scenario_of
 
     recipes: list[dict] = []
     for recipe in RECIPE_SPECS:
@@ -4621,6 +4653,8 @@ def list_recipes() -> dict:
                 "name": recipe.name,
                 "summary": recipe.summary,
                 "group": recipe.group,
+                # 主场景（both / ctf / pentest）—— 界面据此筛选与统计覆盖
+                "scenario": scenario_of(recipe.name),
                 "command": recipe.command,
                 "args": list(recipe.args),
                 "params": [

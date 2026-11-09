@@ -152,6 +152,7 @@ RECIPE_GROUPS: Final[tuple[str, ...]] = (
     'Web 探测',
     '漏洞验证',
     '凭据与破解',
+    '密码学',
     '逆向与取证',
 )
 
@@ -449,13 +450,14 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
         ),
         # ★★ 这条是整个模块里最要紧的一条 —— 实测过。
         default_limitation=(
-            '**默认参数下它连一个模板都没有**，会直接 '
+            '**默认参数下它不会自动加载模板**，会直接 '
             '`[FTL] Could not run nuclei: no templates provided for scan` 退出。'
-            '镜像里装了 nuclei 二进制但**没装模板库**（2026-10-25 实测 '
-            '/home/solver、/root、/usr/share、/opt 下都没有 nuclei-templates）。'
-            '所以：要么显式给 `templates=/path/to/templates`（那里必须真有 '
-            'yaml），要么别用它。★ 它「退出码 0 但什么都没扫」的样子与'
-            '「目标没有漏洞」无法区分 —— 看到没输出先确认模板加载了。'
+            '模板库**在镜像里**：`/opt/nuclei-templates`（2026-11-09 实测 '
+            '13,471 个 yaml），但不会自动被发现 —— 必须显式 '
+            '`templates=/opt/nuclei-templates`（或它的子目录）。'
+            '全量模板很慢，通常配合 `tags=` / `severity=` 收窄。'
+            '★ 它「退出码 0 但什么都没扫」的样子与「目标没有漏洞」无法区分 —— '
+            '看到没输出先确认模板加载了。'
         ),
     ),
     ToolRecipe(
@@ -601,11 +603,12 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
             _p('batch', 'flag', '批处理模式，跑完就退（`-batch`）。', flag='-batch', default='1'),
         ),
         default_limitation=(
-            '容器里**没有 pwndbg/gef 插件**（实测 `gdb -batch -ex checksec` 回 '
-            '「Undefined command」，因为 /etc/gdb/gdbinit 没加载任何插件），所以 '
-            'checksec/vmmap/cyclic 这些命令在 gdb 里不存在，别写。'
-            '★ 但 **pwntools 装了**（`pwn` 命令可用，`pwn cyclic 20` 实测正常）—— '
-            '要在 gdb 外用 `pwn checksec` 或写 pwntools 脚本，不要在 gdb 里找它们。'
+            '★ 镜像里**装了 GEF**（`/etc/gdb/gdbinit` 加载 `/opt/gef/gef.py`，'
+            '2026-11-09 实测 90 个命令）：`checksec` / `vmmap` / `pattern` 这些 '
+            'GEF 命令**在 gdb 里可用**（`gdb -batch -ex "checksec" ./bin` 实测有输出）。'
+            '⚠️ 用 `-nx`（不读 gdbinit）会把 GEF 一起关掉，那时这些命令才不存在。'
+            '不是 GEF 的命令仍会报 `Undefined command`。'
+            '★ **pwntools 也装了**（`pwn` 命令可用）—— 写利用脚本比硬拼命令行可靠。'
             '必须带 `-batch -ex`，否则进交互式挂住。'
             '没有 ptrace 权限时 attach 一个已在跑的进程会失败。'
         ),
@@ -801,11 +804,370 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
             '复杂利用请写脚本而不是硬拼命令行。'
         ),
     ),
+    ToolRecipe(
+        name='subfinder',
+        summary='子域名枚举（被动源：证书透明、搜索引擎、DNS 数据集）。',
+        group='侦察',
+        command='subfinder',
+        params=(
+            _p('domain', 'flag', '根域名，如 example.com。', required=True, flag='-d'),
+            _p('all', 'flag', '用全部源（更慢、更全）。', flag='-all', default='1'),
+            _p('silent', 'flag', '只输出结果，不打印日志。', flag='-silent', default='1'),
+        ),
+        default_limitation=(
+            '只做**被动收集**，不发包爆破、也不验证解析。结果是「互联网上有人见过这个子域」，'
+            '不等于现在活着 —— 必须再用 `httpx` 或 `nmap` 验证。'
+            '换网络/换源会得到不同结果，没查到不等于不存在。'
+        ),
+    ),
+    ToolRecipe(
+        name='httpx',
+        summary='批量 HTTP 探测：存活、状态码、标题、技术栈、CDN。',
+        group='侦察',
+        command='httpx',
+        params=(
+            _p('target', 'flag', '单个目标 URL / 主机。', flag='-u'),
+            _p('list', 'flag', '目标列表文件（每行一个）。', flag='-l'),
+            _p('status_code', 'flag', '显示状态码。', flag='-sc', default='1'),
+            _p('title', 'flag', '显示页面标题。', flag='-title', default='1'),
+            _p('tech', 'flag', '显示技术栈指纹。', flag='-td', default='1'),
+            _p('threads', 'flag', '并发数。', flag='-threads', default='50'),
+        ),
+        default_limitation=(
+            '只回答 **HTTP 层**：活着吗、什么框架、返回什么码 —— 不判断有没有漏洞。'
+            '默认跟随重定向，会掩盖 30x 链路；要紧跟原始跳转用 `-no-follow-redirects`。'
+            '非标准端口必须写成 `host:port`，只给域名会去连 80/443。'
+        ),
+    ),
+    ToolRecipe(
+        name='whatweb',
+        summary='Web 指纹识别：CMS、框架、中间件、JS 库、版本线索。',
+        group='Web 探测',
+        command='whatweb',
+        params=(
+            _p('url', 'positional', '目标 URL。', required=True, position=1),
+            _p('aggression', 'flag', '主动程度 1-4，越大请求越多。', flag='-a', default='1'),
+        ),
+        default_limitation=(
+            '默认 `-a 1` 只做**轻量/被动指纹**，插件覆盖有限；自研框架、内部系统经常识别不出 —— '
+            '「没识别出来」不等于没有框架。调高 `-a` 会发更多探测请求，对生产目标是明显噪音。'
+        ),
+    ),
+    ToolRecipe(
+        name='tshark',
+        summary='命令行 Wireshark：读 pcap、按显示过滤器筛、导出字段。',
+        group='逆向与取证',
+        command='tshark',
+        params=(
+            _p('file', 'flag', '要读取的 pcap 文件。', required=True, flag='-r'),
+            _p('display_filter', 'flag', '显示过滤器，如 `http.request` / `tcp.port==80`。', flag='-Y'),
+            _p('fields', 'flag', '导出字段名，如 `ip.src,http.host`（必须同时给 `format=fields`）。', flag='-e'),
+            _p('format', 'flag', '输出格式，用 `fields` 导出时填 `fields`。', flag='-T'),
+            _p('limit', 'flag', '最多处理多少个包。', flag='-c'),
+        ),
+        default_limitation=(
+            '只读**已经抓到的包** —— 没抓到的流量它变不出来。默认不做流重组/解密：'
+            'TLS 内容是密文；HTTP/2 要看头需要额外解析。'
+            '大 pcap 全量处理很慢，先 `-Y` 收窄或 `-c` 限制包数。'
+            '用 `fields=` 导出时必须同时给 `format=fields`（`-e` 单独用会报错）。'
+        ),
+    ),
+    ToolRecipe(
+        name='tcpdump',
+        summary='抓包/读包：先看流量概况，或把 pcap 存下来交给 tshark。',
+        group='逆向与取证',
+        command='tcpdump',
+        params=(
+            _p('read', 'flag', '读取已有 pcap。', flag='-r'),
+            _p('interface', 'flag', '网卡名（默认由工具选）。', flag='-i'),
+            _p('write', 'flag', '把抓到的包写入 pcap。', flag='-w'),
+            _p('count', 'flag', '抓够多少个包就停。', flag='-c'),
+            _p('filter', 'positional', 'BPF 过滤表达式，如 `tcp port 80`。', position=1),
+        ),
+        default_limitation=(
+            '能看到哪些流量**取决于容器网络与权限**：默认只看本容器网卡；没有 '
+            'NET_ADMIN/NET_RAW 时可能抓不到或看不到别的容器。它只给包级信息，'
+            '字段级分析交给 `tshark`。'
+        ),
+    ),
+    ToolRecipe(
+        name='zbarimg',
+        summary='识别图片里的二维码/条形码（QR、Code128 等）。',
+        group='逆向与取证',
+        command='zbarimg',
+        params=(
+            _p('image', 'positional', '图片路径。', required=True, position=1),
+            _p('quiet', 'flag', '只输出结果，不打印统计。', flag='-q', default='1'),
+        ),
+        default_limitation=(
+            '只认**标准编码**的条码，不是通用隐写工具。模糊、透视、低对比度的图会失败 —— '
+            '先放大/锐化再试。PNG LSB 隐写不是它（那需要 zsteg，镜像里**没有**）。'
+        ),
+    ),
+    ToolRecipe(
+        name='jadx',
+        summary='反编译 APK/DEX 到 Java 源码。',
+        group='逆向与取证',
+        command='jadx',
+        params=(
+            _p('file', 'positional', 'APK / DEX 文件。', required=True, position=1),
+            _p('output', 'flag', '输出目录。', flag='-d'),
+            _p('no_resources', 'flag', '只反编译代码，不导出资源。', flag='--no-resources'),
+        ),
+        default_limitation=(
+            '输出是**近似源码**：混淆过的类名仍是 `a/b/c`，控制流可能被优化得难以还原。'
+            '它只做静态反编译，不做动态分析；native `.so` 里的逻辑要用 `radare2` / `objdump` / `gdb`。'
+        ),
+    ),
+    ToolRecipe(
+        name='apktool',
+        summary='解包/重打包 APK：资源、manifest、smali。',
+        group='逆向与取证',
+        command='apktool',
+        params=(
+            _p('action', 'positional', '`d` 解包 / `b` 重打包。', required=True, position=1),
+            _p('file', 'positional', 'APK 文件或解包目录。', required=True, position=2),
+            _p('output', 'flag', '输出路径。', flag='-o'),
+        ),
+        default_limitation=(
+            'smali 是**汇编式字节码**，不是 Java —— 要读逻辑先用 `jadx`。'
+            '重打包后必须重新签名才能安装，签名不对会被系统直接拒绝（不是"包坏了"）。'
+        ),
+    ),
+    ToolRecipe(
+        name='z3',
+        summary='SMT 求解器：解约束方程、逆向校验逻辑、求满足条件的输入。',
+        group='密码学',
+        command='z3',
+        params=(
+            _p('file', 'positional', 'SMT-LIB 约束文件。', position=1),
+            # z3 的超时写法是 `-T:秒`（冒号），不是 `-T 秒`
+            _p('timeout', 'template', '硬超时（秒）。', template='-T:{value}'),
+        ),
+        default_limitation=(
+            '它解的是**你写出来的约束**，不会自动读懂程序逻辑 —— 建模少一个条件就会得到 '
+            '`unsat`，看起来像"无解"。位向量/大整数搜索空间仍可能超时，先用小规模验证模型。'
+        ),
+    ),
+    ToolRecipe(
+        name='RsaCtfTool',
+        summary='RSA 弱密钥攻击合集：小指数、共模、维纳、因数分解等。',
+        group='密码学',
+        command='RsaCtfTool',
+        params=(
+            _p('publickey', 'flag', '公钥文件（PEM/DER）或 `--key` 参数。', flag='--publickey'),
+            _p('attack', 'flag', '指定攻击名（不指定则逐个试）。', flag='--attack'),
+            _p('private', 'flag', '只输出私钥。', flag='--private'),
+        ),
+        default_limitation=(
+            '只对**弱实现/弱参数**有效（共用素数、小 e、已知高位、维纳条件等）。'
+            '正常 2048 位密钥它也无能为力；回 "no attack succeeded" 不代表题目无解 —— '
+            '可能缺参数（e/n/c）或需要换攻击类型。'
+        ),
+    ),
+    ToolRecipe(
+        name='ROPgadget',
+        summary='在 ELF/PE/Mach-O 里找 ROP gadgets。',
+        group='逆向与取证',
+        command='ROPgadget',
+        params=(
+            _p('binary', 'flag', '二进制路径。', required=True, flag='--binary'),
+            _p('only', 'flag', '只找指定指令，如 `pop|ret`。', flag='--only'),
+            _p('depth', 'flag', 'gadget 最大指令数。', flag='--depth', default='6'),
+        ),
+        default_limitation=(
+            '只给**候选 gadget**，不验证前置约束（寄存器/栈状态要自己核）—— '
+            '与 `one_gadget` 同类。大二进制全量搜索很慢，先用 `--only` 收窄。'
+            'ASLR/PIE 下地址不是静态的那一个，运行时基址要自己算。'
+        ),
+    ),
+    ToolRecipe(
+        name='wpscan',
+        summary='WordPress 专项扫描：版本、插件/主题、用户枚举。',
+        group='Web 探测',
+        command='wpscan',
+        params=(
+            _p('url', 'flag', '目标站点 URL。', required=True, flag='--url'),
+            _p('enumerate', 'flag', '枚举项，如 `vp,vt,u`（插件/主题/用户）。', flag='-e'),
+            _p('api_token', 'flag', 'WPScan API token（拿漏洞库数据）。', flag='--api-token'),
+            _p('random_agent', 'flag', '随机 User-Agent。', flag='--random-agent', default='1'),
+        ),
+        default_limitation=(
+            '**漏洞数据需要 WPScan API token**；没有 token 时只枚举版本/插件/用户，'
+            '不会告诉你哪些插件有 CVE。默认不枚举用户（要显式 `enumerate=u`），'
+            '口令爆破需要字典且受提示词的「不爆破」纪律约束。'
+        ),
+    ),
+    ToolRecipe(
+        name='searchsploit',
+        summary='在本地 ExploitDB 快照里搜公开 PoC / 利用代码。',
+        group='漏洞验证',
+        command='searchsploit',
+        params=(
+            _p('query', 'positional', '关键词，如 `apache 2.4.49`。', required=True, position=1),
+            _p('json', 'flag', '输出 JSON。', flag='-j'),
+            _p('exact', 'flag', '精确匹配。', flag='-e'),
+        ),
+        default_limitation=(
+            '只查**本地快照**（镜像构建时的 ExploitDB），不会联网更新；'
+            '结果里的路径要自己 `cat` 出来读。'
+            '「有 PoC」不等于目标可打 —— 版本、补丁、配置都要核对，'
+            '不要把搜索结果直接写成「可利用」。'
+        ),
+    ),
+    ToolRecipe(
+        name='secretsdump.py',
+        summary='Impacket：从 Windows 导出 SAM/LSA/NTDS 哈希（需凭据）。',
+        group='凭据与破解',
+        command='secretsdump.py',
+        params=(
+            _p('target', 'positional', '[domain/]user[:pass]@target，如 `CORP/a:p@10.0.0.5`。', required=True, position=1),
+            _p('hashes', 'flag', '用哈希代替口令（PtH）。', flag='-hashes'),
+            _p('just_dc', 'flag', '只做 DCSync（需域管权限）。', flag='-just-dc'),
+            _p('output', 'flag', '输出文件前缀。', flag='-outputfile'),
+        ),
+        default_limitation=(
+            '需要目标可达且凭据有效；它**只读导出**，不做提权或横向。'
+            'DCSync 需要域管/复制权限。输出包含口令哈希，属于敏感数据 —— '
+            '不要写进报告或对话结论里。'
+        ),
+    ),
+    ToolRecipe(
+        name='uncompyle6',
+        summary='旧版 Python 字节码（.pyc）反编译。',
+        group='逆向与取证',
+        command='uncompyle6',
+        params=(
+            _p('file', 'positional', '.pyc 文件。', required=True, position=1),
+            _p('output', 'flag', '输出文件（默认 stdout）。', flag='-o'),
+        ),
+        default_limitation=(
+            '只覆盖到 **Python 3.8 左右**的字节码；3.9+ 会报 Unsupported Python version。'
+            '现代 .pyc 需要 pycdc（镜像里没有）或手工读字节码。'
+            '反编译输出是近似源码，控制流/变量名可能与原文件不同。'
+        ),
+    ),
+    ToolRecipe(
+        name='vol',
+        summary='Volatility 3：内存镜像取证（进程、网络、注册表等）。',
+        group='逆向与取证',
+        command='vol',
+        params=(
+            _p('file', 'flag', '内存镜像路径。', required=True, flag='-f'),
+            _p('plugin', 'positional', '插件名，如 `windows.pslist` / `linux.bash`。', required=True, position=1),
+            _p('output', 'flag', '输出目录。', flag='-o'),
+        ),
+        default_limitation=(
+            'Windows 符号表默认会联网下载 —— 解题沙箱 `--network none` 时会失败，'
+            '需要预先放 symbols 或 `--offline`。Linux/mac 镜像需要 dwarf 符号。'
+            '它只读内存镜像，输出的是「当时可能发生了什么」，不是实时结论。'
+        ),
+    ),
+    ToolRecipe(
+        name='stegoveritas',
+        summary='一站式隐写分析：元数据、颜色通道、LSB 穷举。',
+        group='逆向与取证',
+        command='stegoveritas',
+        params=(
+            _p('image', 'positional', '图片路径。', required=True, position=1),
+            _p('brute_lsb', 'flag', '穷举 LSB 组合（补 zsteg 的空缺）。', flag='-bruteLSB'),
+            _p('out', 'flag', '输出目录（必须在 /work 下）。', flag='-out'),
+        ),
+        default_limitation=(
+            '`-bruteLSB` 很慢，大图可能跑很久；它覆盖常见 LSB/元数据/颜色分析，'
+            '不保证覆盖自定义隐写。输出目录必须可写（放 `/work`）。'
+        ),
+    ),
+    ToolRecipe(
+        name='pycdc',
+        summary='Python 字节码反编译（支持到 3.13；同仓库带 pycdas 反汇编）。',
+        group='逆向与取证',
+        command='pycdc',
+        params=(
+            _p('file', 'positional', '.pyc 文件。', required=True, position=1),
+            _p('output', 'flag', '输出文件（默认 stdout）。', flag='-o'),
+            _p('version', 'flag', '强制按某个 Python 版本读取（如 `3.11`）。', flag='-v'),
+        ),
+        default_limitation=(
+            '只支持到 **Python 3.13** 的 pyc；3.14 会报 `Bad MAGIC!`（可用 `pycdas` 看反汇编兜底）。'
+            '反编译结果是近似源码，控制流/变量名可能与原文件不同。'
+        ),
+    ),
 )
 
 
 #: 名字 → 配方。
 RECIPE_BY_NAME: Final[dict[str, ToolRecipe]] = {r.name: r for r in RECIPE_SPECS}
+
+#: 配方 → 主要服务哪个场景。
+#:
+#: `both` 表示两边都用得上；`ctf` / `pentest` 表示它是那一边的主力。
+#: 界面用它做「CTF / 渗透」筛选与覆盖统计 —— 没有这一维，用户只能
+#: 逐条读说明去判断"这条对我的场景有没有用"。
+#:
+#: ⚠️ 它**不是**"只能在这个场景用"：`sqlmap` 标 both，但 CTF 里当然也能用。
+#: 取值只在三种里选，避免出现"分析用 / 应急用 / 云上"这种越分越碎的标签。
+RECIPE_SCENARIOS: Final[dict[str, str]] = {
+    'exec': 'both',
+    'nmap': 'both',
+    'masscan': 'both',
+    'rustscan': 'both',
+    'ffuf': 'both',
+    'gobuster': 'both',
+    'feroxbuster': 'both',
+    'dirsearch': 'both',
+    'nikto': 'both',
+    'wafw00f': 'pentest',
+    'arjun': 'both',
+    'dalfox': 'both',
+    'xsser': 'both',
+    'sqlmap': 'both',
+    'nuclei': 'both',
+    'hydra': 'pentest',
+    'hashcat': 'both',
+    'john': 'both',
+    'binwalk': 'ctf',
+    'foremost': 'ctf',
+    'exiftool': 'both',
+    'steghide': 'ctf',
+    'strings': 'both',
+    'objdump': 'both',
+    'radare2': 'both',
+    'gdb': 'ctf',
+    'checksec': 'ctf',
+    'xxd': 'both',
+    'seccomp-tools': 'ctf',
+    'one_gadget': 'ctf',
+    'patchelf': 'ctf',
+    'socat': 'both',
+    'nc': 'both',
+    'pwn': 'ctf',
+    'subfinder': 'pentest',
+    'httpx': 'both',
+    'whatweb': 'both',
+    'tshark': 'both',
+    'tcpdump': 'both',
+    'zbarimg': 'ctf',
+    'jadx': 'ctf',
+    'apktool': 'ctf',
+    'z3': 'ctf',
+    'RsaCtfTool': 'ctf',
+    'ROPgadget': 'ctf',
+    'wpscan': 'pentest',
+    'searchsploit': 'pentest',
+    'secretsdump.py': 'pentest',
+    'uncompyle6': 'ctf',
+    'vol': 'both',
+    'stegoveritas': 'ctf',
+    'pycdc': 'ctf',
+}
+
+SCENARIO_VALUES: Final[tuple[str, ...]] = ('both', 'ctf', 'pentest')
+
+
+def scenario_of(name: str) -> str:
+    """取一条配方的主场景（缺省 `both`）。"""
+    return RECIPE_SCENARIOS.get(name, 'both')
 
 
 # ══════════════════════════════════════════════════════════
@@ -1205,6 +1567,20 @@ def _assert_recipes_consistent() -> None:
                     f'{param.template!r}'
                 )
 
+    # 场景映射必须与配方清单**完全对齐**：漏一条会让那个配方在界面上
+    # 消失于任何筛选（看起来像"没有这个工具"），多一条则是永远不生效的死数据。
+    unknown_scenarios = {
+        name: value for name, value in RECIPE_SCENARIOS.items() if value not in SCENARIO_VALUES
+    }
+    if unknown_scenarios:
+        raise AssertionError(f'有配方写了非法场景：{unknown_scenarios}（只支持 {SCENARIO_VALUES}）')
+    missing_scenarios = sorted(set(RECIPE_BY_NAME) - set(RECIPE_SCENARIOS))
+    if missing_scenarios:
+        raise AssertionError(f'这些配方没写场景：{missing_scenarios}（见 RECIPE_SCENARIOS）')
+    extra_scenarios = sorted(set(RECIPE_SCENARIOS) - set(RECIPE_BY_NAME))
+    if extra_scenarios:
+        raise AssertionError(f'RECIPE_SCENARIOS 里有不存在的配方：{extra_scenarios}')
+
     # 每一条都必须写 default_limitation？不强求 —— 有些工具默认就是全功能
     # （`exiftool` 就是全量读）。但「默认会缩水」的那几个必须有，否则
     # 这个模块就白建了。这里只钉最贵的几条。
@@ -1239,6 +1615,9 @@ __all__ = [
     'RECIPE_BY_NAME',
     'RECIPE_GROUPS',
     'RECIPE_SPECS',
+    'RECIPE_SCENARIOS',
+    'SCENARIO_VALUES',
+    'scenario_of',
     'RecipeParam',
     'ToolRecipe',
     'build_argv',

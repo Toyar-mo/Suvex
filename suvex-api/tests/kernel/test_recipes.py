@@ -311,22 +311,28 @@ def test_pwn_recipe_warns_that_the_disasm_subcommand_is_broken():
     )
 
 
-def test_gdb_recipe_does_not_claim_pwntools_is_missing():
-    """★ 这条钉的是一个**曾经写错的事实**。
+def test_gdb_recipe_reports_the_actual_plugin_state():
+    """★ 这条钉的是一个**两次写错的事实**。
 
-    gdb 配方最初写「容器里没有 pwndbg/gef 插件（实测 pwntools 也没装）」，
-    但在沙箱里实测：`pwn` 命令可用、`pwn cyclic 16` 正常、
-    `from pwn import *` 齐全。写错的代价是模型不会去用本可用的 pwntools。
+    最初写「没有 pwndbg/gef 插件（实测 pwntools 也没装）」—— pwntools
+    其实装了。改成「没有插件」之后，2026-11-09 的镜像实测又发现：
+    `/etc/gdb/gdbinit` **加载了 GEF**（`/opt/gef/gef.py`，90 个命令），
+    `gdb -batch -ex "checksec" ./bin` 有正常输出。再写「没有插件」会让
+    模型放弃一个本来能用的能力（GEF 的 checksec/vmmap/pattern）。
 
-    真正的限制是「gdb 里没有插件」（`gdb -batch -ex checksec` →
-    `Undefined command: "checksec"`），而不是「没有 pwntools」。
+    ⚠️ 唯一会让它失效的是 `-nx`：那会跳过 gdbinit，GEF 一起关掉 ——
+    局限说明里必须保留这个前提。
     """
     limitation = RECIPE_BY_NAME["gdb"].default_limitation
-    assert "没有 pwndbg" in limitation or "没有 pwndbg/gef" in limitation
-    assert "pwntools 也没装" not in limitation, (
-        "这句话是错的：沙箱里 pwntools 装好了（pwn 命令可用）。"
-        "写成「没装」会让模型放弃一个本来能用的工具"
+    assert "GEF" in limitation
+    assert "gdbinit" in limitation
+    assert "-nx" in limitation
+    assert "没有 pwndbg" not in limitation and "没有 pwndbg/gef" not in limitation, (
+        "当前镜像通过 gdbinit 加载了 GEF；再写「没有插件」会让模型放弃 "
+        "`checksec` / `vmmap` / `pattern` 这些本来可用的命令。"
     )
+    assert "pwntools 也没装" not in limitation, "pwntools 是可用的"
+    assert "pwntools" in limitation, "pwntools 仍然可用，不能漏掉"
 
 
 def test_checksec_recipe_is_documented_as_the_pwntools_one():
@@ -511,3 +517,56 @@ def test_recipes_module_imports_cleanly():
         cwd=".",
     )
     assert result.returncode == 0, f"recipes 模块导不进来：{result.stderr}"
+
+
+# ══════════════════════════════════════════════════════════
+# 场景覆盖与 2026-11-09 的镜像补全
+# ══════════════════════════════════════════════════════════
+
+
+def test_recipes_added_after_the_image_audit_are_present() -> None:
+    """这些二进制**在镜像里**（2026-11-09 逐条 `command -v` 实测），
+    但此前没有配方 —— 模型只能自己拼参数，默认行为的好坏全靠猜。
+    """
+    expected = {
+        'subfinder',
+        'httpx',
+        'whatweb',
+        'tshark',
+        'tcpdump',
+        'zbarimg',
+        'jadx',
+        'apktool',
+        'z3',
+        'RsaCtfTool',
+        'ROPgadget',
+        'wpscan',
+        'searchsploit',
+        'secretsdump.py',
+        'uncompyle6',
+        'vol',
+        'stegoveritas',
+        'pycdc',
+    }
+    missing = sorted(expected - set(RECIPE_BY_NAME))
+    assert not missing, f'这些已装二进制还没有配方：{missing}'
+
+
+def test_nuclei_tells_the_model_where_the_templates_are() -> None:
+    """模板库确实在镜像里（/opt/nuclei-templates，13k+ yaml），
+    但默认不加载。说明里必须给**确切路径**，否则模型只能猜。
+    """
+    limitation = RECIPE_BY_NAME['nuclei'].default_limitation
+    assert '/opt/nuclei-templates' in limitation
+    assert 'templates=' in limitation
+
+
+def test_scenario_metadata_covers_both_sides() -> None:
+    """场景是筛选项，不是执行语义 —— 至少两边都要有主力工具。"""
+    from app.kernel.recipes import scenario_of
+
+    assert scenario_of('z3') == 'ctf'
+    assert scenario_of('subfinder') == 'pentest'
+    assert scenario_of('sqlmap') == 'both'
+    # 未知名字给 both 而不是崩：新增配方漏登记时界面仍能显示
+    assert scenario_of('__missing__') == 'both'

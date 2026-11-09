@@ -93,13 +93,7 @@ function draftOf(server: McpServer): McpServerDraft {
   }
 }
 
-export function McpPanel({
-  servers,
-  saving,
-  error,
-  onSave,
-  onTest,
-}: McpPanelProps) {
+export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelProps) {
   /** 正在编辑的草稿；`null` = 没在编辑。 */
   const [draft, setDraft] = useState<McpServerDraft | null>(null)
   /** 编辑的是哪一条（`null` = 新增）。用名字标识，因为名字是唯一键。 */
@@ -121,6 +115,42 @@ export function McpPanel({
   const [formError, setFormError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<McpTestResult | null>(null)
+  /**
+   * 已保存连接的**逐条试连结果**（v1.79）。
+   *
+   * 以前「试连」只在编辑表单里：想确认一条旧连接还通不通，得先点编辑、
+   * 再点试连 —— 而编辑表单会把凭据输入框清空，用户会担心"我只是想测一下，
+   * 别把配置改了"。现在列表行上直接可以测。
+   */
+  const [rowTests, setRowTests] = useState<
+    Record<string, { status: 'testing' | 'ok' | 'fail'; text: string }>
+  >({})
+
+  async function testSaved(server: McpServer) {
+    setRowTests((prev) => ({ ...prev, [server.name]: { status: 'testing', text: '正在试连…' } }))
+    try {
+      const result = await onTest(draftOf(server))
+      setRowTests((prev) => ({
+        ...prev,
+        [server.name]: result.ok
+          ? {
+              status: 'ok',
+              text: `连通 · ${result.tools.length} 个工具${
+                result.elapsedMs ? ` · ${result.elapsedMs} ms` : ''
+              }`,
+            }
+          : { status: 'fail', text: result.reason || '连不上' },
+      }))
+    } catch (error) {
+      setRowTests((prev) => ({
+        ...prev,
+        [server.name]: {
+          status: 'fail',
+          text: error instanceof Error ? error.message : '试连请求失败。',
+        },
+      }))
+    }
+  }
 
   function startAdd() {
     const next = emptyDraft()
@@ -244,30 +274,44 @@ export function McpPanel({
       <header className="flex items-start justify-between gap-tight border-b border-line px-4 py-3">
         <div>
           <h2 className="text-sm font-medium text-ink">MCP 连接</h2>
-          <p className="mt-1 max-w-[60ch] text-sm leading-relaxed text-ink-muted">
-            外部工具服务。配一条之后，智能体就能通过{' '}
+          <p className="mt-1 max-w-[62ch] text-sm leading-relaxed text-ink-muted">
+            把外部 MCP 服务接进来。接上之后，模型除了沙箱里的命令，还能调用这些服务 提供的工具（通过{' '}
             <code className="font-mono">list_mcps</code> /{' '}
-            <code className="font-mono">call_mcp</code> 调到它提供的工具。
+            <code className="font-mono">call_mcp</code>）。不接也能正常跑。
           </p>
         </div>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={startAdd}
-          disabled={saving || draft !== null}
-        >
-          <Plus className="size-3.5" strokeWidth={1.75} />
-          添加连接
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* 一眼看清规模与凭据面：http/stdio 各几条、有没有带凭据的 */}
+          <span className="text-xs text-ink-faint">
+            {servers.length} 条
+            {servers.length > 0 && (
+              <>
+                {' · '}
+                {servers.filter((server) => server.type === 'http').length} HTTP
+                {' · '}
+                {servers.filter((server) => server.hasEnv || server.hasHeaders).length} 带凭据
+              </>
+            )}
+          </span>
+          <Button
+            size="sm"
+            variant="secondary"
+            onClick={startAdd}
+            disabled={saving || draft !== null}
+          >
+            <Plus className="size-3.5" strokeWidth={1.75} />
+            添加连接
+          </Button>
+        </div>
       </header>
 
       {/* 已保存的连接 */}
       {servers.length === 0 ? (
         <div className="px-4 py-6 text-sm text-ink-muted">
-          <p>还没有配置任何 MCP 连接。</p>
+          <p>还没有接外部工具。</p>
           <p className="mt-1 text-xs text-ink-faint">
-            不配也能正常跑 —— 沙箱里的 nmap / ffuf / curl 一直都在。
-            配了才会多出「外部工具」那一类能力。
+            不接也能正常跑 —— nmap / sqlmap / ffuf 这些都在沙箱镜像里。
+            接一条之后，模型才会多出「外部工具」这一类能力。
           </p>
         </div>
       ) : (
@@ -311,7 +355,15 @@ export function McpPanel({
                   : `${server.command} ${server.args.join(' ')}`}
               </p>
               {server.notes && <p className="mt-1 text-xs text-ink-faint">{server.notes}</p>}
-              <div className="mt-2 flex gap-tight">
+              <div className="mt-2 flex flex-wrap items-center gap-tight">
+                <button
+                  type="button"
+                  onClick={() => void testSaved(server)}
+                  disabled={saving || rowTests[server.name]?.status === 'testing'}
+                  className="text-xs text-ink-muted transition-ui duration-fast hover:text-ink disabled:opacity-50"
+                >
+                  {rowTests[server.name]?.status === 'testing' ? '试连中…' : '试连'}
+                </button>
                 <button
                   type="button"
                   onClick={() => startEdit(server)}
@@ -328,6 +380,17 @@ export function McpPanel({
                 >
                   删除
                 </button>
+                {rowTests[server.name] && rowTests[server.name].status !== 'testing' && (
+                  <span
+                    role="status"
+                    className={cn(
+                      'text-2xs',
+                      rowTests[server.name].status === 'ok' ? 'text-signal-ok' : 'text-signal-risk',
+                    )}
+                  >
+                    {rowTests[server.name].text}
+                  </span>
+                )}
               </div>
             </li>
           ))}

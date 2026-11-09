@@ -506,3 +506,83 @@ async def test_add_mcp_server_http_missing_url_errors(db_session):
     )
     assert out.startswith("失败")
     assert "url" in out
+
+
+# ══════════════════════════════════════════════════════════
+# 试连已保存的连接：凭据要沿用库里的那份（v1.79）
+# ══════════════════════════════════════════════════════════
+
+
+def test_test_connection_reuses_saved_secrets_when_preserved(db_session) -> None:  # noqa: ANN001
+    """★ 编辑态试连不能按"没有凭据"去连。
+
+    `env` / `headers` 只进不出，前端编辑时输入框必然为空；若试连直接拿
+    空对象去握手，一条**正常**的连接会稳定回 401 —— 而用户会以为连接坏了。
+    这与 `PUT` 的 preserve 语义必须完全一致。
+    """
+    from app.kernel import service as kernel_service
+
+    kernel_service.save_mcp_servers(
+        db_session,
+        [
+            {
+                "name": "saved",
+                "type": "http",
+                "url": "https://example.com/mcp",
+                "headers": {"Authorization": "Bearer t0ken"},
+                "env": {"API_BASE": "https://example.com"},
+                "command": "",
+                "args": [],
+                "notes": "",
+                "allowed_tools": None,
+                "call_timeout": None,
+            }
+        ],
+    )
+    db_session.commit()
+
+    merged = kernel_service._with_preserved_secrets(
+        {
+            "name": "saved",
+            "type": "http",
+            "url": "https://example.com/mcp",
+            "headers": {},
+            "env": {},
+            "preserve_env": True,
+            "preserve_headers": True,
+        },
+        db_session,
+    )
+
+    assert merged["headers"]["Authorization"] == "Bearer t0ken"
+    assert merged["env"]["API_BASE"] == "https://example.com"
+
+
+def test_test_connection_without_preserve_uses_the_draft(db_session) -> None:  # noqa: ANN001
+    """新建/显式改凭据时，不能被库里的旧值悄悄覆盖。"""
+    from app.kernel import service as kernel_service
+
+    kernel_service.save_mcp_servers(
+        db_session,
+        [
+            {
+                "name": "saved",
+                "type": "http",
+                "url": "https://example.com/mcp",
+                "headers": {"Authorization": "Bearer old"},
+                "command": "",
+                "args": [],
+                "notes": "",
+                "allowed_tools": None,
+                "call_timeout": None,
+            }
+        ],
+    )
+    db_session.commit()
+
+    merged = kernel_service._with_preserved_secrets(
+        {"name": "saved", "type": "http", "headers": {"Authorization": "Bearer new"}},
+        db_session,
+    )
+
+    assert merged["headers"] == {"Authorization": "Bearer new"}

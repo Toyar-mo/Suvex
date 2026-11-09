@@ -179,19 +179,25 @@ RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
 # ⚠️ 克隆用 --depth 1（只要最新）：完整历史对运行毫无用处，却要多拉几十 MB。
 # ⚠️ 这一步放在 pip 之后：pycdc 的构建与 python 包无关，万一它失败，
 #    前面 angr 等已装好的层能命中缓存，排查更快（Docker 分层从前到后）。
+# ★ v1.79：pycdc 已随 base 镜像分发（vendor 预编译二进制，见 base 的
+#   `vendor/pycdc`）。这里**先检查是否已有**，有就跳过源码构建 ——
+#   构建期连不上 GitHub，而重复构建只会让 re 镜像再次卡在 git clone 上。
 ARG PYCDC_REPO=https://github.com/zrax/pycdc.git
-RUN git clone --depth 1 "$PYCDC_REPO" /tmp/pycdc \
-    && cmake -S /tmp/pycdc -B /tmp/pycdc/build -DCMAKE_BUILD_TYPE=Release -G Ninja \
-    && cmake --build /tmp/pycdc/build \
-    && install -m 755 /tmp/pycdc/build/pycdc /usr/local/bin/pycdc \
-    && install -m 755 /tmp/pycdc/build/pycdas /usr/local/bin/pycdas \
-    # ── 自检（用仓库自带的**真 3.11 pyc**，不是"跑一下无参命令"）──
-    # 构建成功但二进制跑不起来（缺动态库等）是这条最怕的"静默坏掉"，
-    # 所以拿一份真 pyc 反编译一次、grep 出预期源码才算过。
-    && pycdas /tmp/pycdc/tests/compiled/binary_ops.3.11.pyc >/dev/null \
-    && pycdc /tmp/pycdc/tests/compiled/binary_ops.3.11.pyc | grep -q 'print(.Addition' \
-    && echo "pycdc/pycdas OK (3.11 pyc decompiled)" \
-    && rm -rf /tmp/pycdc
+RUN set -eux; \
+    if command -v pycdc >/dev/null 2>&1 && command -v pycdas >/dev/null 2>&1; then \
+        echo "pycdc/pycdas 已由 base 提供"; \
+        (pycdc 2>&1 || true) | grep -q 'No input file specified'; \
+    else \
+        git clone --depth 1 "$PYCDC_REPO" /tmp/pycdc; \
+        cmake -S /tmp/pycdc -B /tmp/pycdc/build -DCMAKE_BUILD_TYPE=Release -G Ninja; \
+        cmake --build /tmp/pycdc/build; \
+        install -m 755 /tmp/pycdc/build/pycdc /usr/local/bin/pycdc; \
+        install -m 755 /tmp/pycdc/build/pycdas /usr/local/bin/pycdas; \
+        pycdas /tmp/pycdc/tests/compiled/binary_ops.3.11.pyc >/dev/null; \
+        pycdc /tmp/pycdc/tests/compiled/binary_ops.3.11.pyc | grep -q 'print(.Addition'; \
+        echo "pycdc/pycdas OK (源码构建)"; \
+    fi; \
+    rm -rf /tmp/pycdc
 
 
 # ── 反调试相关的便利设置 ──────────────────────────────────

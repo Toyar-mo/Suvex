@@ -254,10 +254,15 @@ export interface KernelRecipeParam {
  * 它答"用默认参数跑会漏掉什么"。实测过同一目标、同一工具、只补一个参数
  * 就从 0 命中变 2 命中 —— 而模型看到那个 0，写下的是"目标没有这个漏洞"。
  */
+/** 配方的主场景 —— 只用于界面筛选与覆盖统计，不影响执行。 */
+export type RecipeScenario = 'both' | 'ctf' | 'pentest'
+
 export interface KernelRecipe {
   name: string
   summary: string
   group: string
+  /** 主场景：`both` 两边都用得上，`ctf` / `pentest` 是那一边的主力。 */
+  scenario: RecipeScenario
   /** 真正执行的命令。与 `name` 不同的只有 `exec`（→ `sh`）。 */
   command: string
   /** 无条件前置参数（如 nmap 的 `-sT -sV`）。 */
@@ -543,10 +548,7 @@ export function healthOf(tools: KernelTool[]): Record<string, ToolHealth> {
  *   会明显影响后续所有任务的改动，随手一点就生效不合适；
  *   而关掉 `list_requests` 只是个偏好，弹窗反而碍事。
  */
-export function disabledCoreTools(
-  tools: KernelTool[],
-  nextDisabled: string[],
-): KernelTool[] {
+export function disabledCoreTools(tools: KernelTool[], nextDisabled: string[]): KernelTool[] {
   const set = new Set(nextDisabled)
   return tools.filter((tool) => tool.core && set.has(tool.name))
 }
@@ -724,15 +726,89 @@ export function filterSkills(
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return categories
 
-  return categories
-    .map((group) => ({
-      category: group.category,
-      skills: group.skills.filter((skill) => {
-        const haystack = `${skill.name} ${skill.category} ${skill.description}`.toLowerCase()
-        return terms.every((term) => haystack.includes(term))
-      }),
-    }))
-    // 筛选后空分类**丢掉**（与"清单本身有空分类要保留"不同：
-    // 那是打包问题，这是筛选的必然结果，留着只会让界面空一片）
-    .filter((group) => group.skills.length > 0)
+  return (
+    categories
+      .map((group) => ({
+        category: group.category,
+        skills: group.skills.filter((skill) => {
+          const haystack = `${skill.name} ${skill.category} ${skill.description}`.toLowerCase()
+          return terms.every((term) => haystack.includes(term))
+        }),
+      }))
+      // 筛选后空分类**丢掉**（与"清单本身有空分类要保留"不同：
+      // 那是打包问题，这是筛选的必然结果，留着只会让界面空一片）
+      .filter((group) => group.skills.length > 0)
+  )
+}
+
+// ─────────────────────────────────────────────
+// 配方筛选与覆盖统计（v1.79）
+// ─────────────────────────────────────────────
+
+export type ScenarioFilter = 'all' | 'ctf' | 'pentest'
+
+/**
+ * 按关键词、场景与"是否有局限"筛配方。
+ *
+ * 场景是**包含关系**：选 CTF 时，`scenario='both'` 的也要留下 —— 它们
+ * 在 CTF 里同样能用。只留 `scenario==='ctf'` 会把 sqlmap / nmap 这些
+ * 最常用的工具筛掉，用户会以为"CTF 没有这些"。
+ */
+export function filterRecipes(
+  recipes: KernelRecipe[],
+  options: { query?: string; scenario?: ScenarioFilter; onlyLimited?: boolean } = {},
+): KernelRecipe[] {
+  const query = (options.query ?? '').trim().toLowerCase()
+  const terms = query ? query.split(/\s+/) : []
+  const scenario = options.scenario ?? 'all'
+
+  return recipes.filter((recipe) => {
+    if (scenario !== 'all' && recipe.scenario !== 'both' && recipe.scenario !== scenario) {
+      return false
+    }
+    if (options.onlyLimited && !recipe.defaultLimitation) return false
+    if (terms.length === 0) return true
+    const haystack =
+      `${recipe.name} ${recipe.summary} ${recipe.group} ${recipe.defaultLimitation}`.toLowerCase()
+    return terms.every((term) => haystack.includes(term))
+  })
+}
+
+/** 场景覆盖：CTF / 渗透各能用多少条（`both` 两边都算）。 */
+export function recipeCoverage(recipes: KernelRecipe[]): {
+  ctf: number
+  pentest: number
+  both: number
+  limited: number
+} {
+  let ctf = 0
+  let pentest = 0
+  let both = 0
+  let limited = 0
+  for (const recipe of recipes) {
+    if (recipe.scenario === 'both') both += 1
+    if (recipe.scenario === 'both' || recipe.scenario === 'ctf') ctf += 1
+    if (recipe.scenario === 'both' || recipe.scenario === 'pentest') pentest += 1
+    if (recipe.defaultLimitation) limited += 1
+  }
+  return { ctf, pentest, both, limited }
+}
+
+/** 内置工具的四种状态计数（顶部摘要与分组头共用）。 */
+export function toolHealthCounts(tools: KernelTool[]): {
+  total: number
+  ready: number
+  disabled: number
+  unconfigured: number
+  misconfigured: number
+} {
+  const counts = {
+    total: tools.length,
+    ready: 0,
+    disabled: 0,
+    unconfigured: 0,
+    misconfigured: 0,
+  }
+  for (const tool of tools) counts[toolHealth(tool)] += 1
+  return counts
 }

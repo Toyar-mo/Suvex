@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Search } from 'lucide-react'
 
 import { cn } from '@/lib/cn'
-import type { KernelRecipe } from '@/data/tools'
+import { filterRecipes, recipeCoverage, type KernelRecipe, type ScenarioFilter } from '@/data/tools'
 
 /**
  * 「命令行工具」面板 —— 沙箱镜像里装着的二进制**怎么调**。
@@ -35,25 +35,17 @@ import type { KernelRecipe } from '@/data/tools'
 export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
   const [query, setQuery] = useState('')
   const [onlyLimited, setOnlyLimited] = useState(false)
+  const [scenario, setScenario] = useState<ScenarioFilter>('all')
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  const visible = useMemo(() => {
-    const q = query.trim().toLowerCase()
-    return recipes.filter((recipe) => {
-      if (onlyLimited && !recipe.defaultLimitation) return false
-      if (!q) return true
-      // 搜名字、中文说明、**以及局限文本本身** —— 有人会记得
-      // 「有个工具默认只扫一千个端口」而不记得它叫 nmap。
-      return (
-        recipe.name.toLowerCase().includes(q) ||
-        recipe.summary.toLowerCase().includes(q) ||
-        recipe.group.toLowerCase().includes(q) ||
-        recipe.defaultLimitation.toLowerCase().includes(q)
-      )
-    })
-  }, [recipes, query, onlyLimited])
-
-  const withLimits = recipes.filter((recipe) => recipe.defaultLimitation).length
+  // 筛选逻辑在 `data/tools.ts`（纯函数、可单测），与「场景是包含关系」
+  // 那条语义放在一起 —— 放到组件里会让它只在这个组件里成立。
+  const visible = useMemo(
+    () => filterRecipes(recipes, { query, scenario, onlyLimited }),
+    [recipes, query, scenario, onlyLimited],
+  )
+  const coverage = useMemo(() => recipeCoverage(recipes), [recipes])
+  const withLimits = coverage.limited
 
   return (
     <section className="rounded-md border border-line bg-surface">
@@ -61,27 +53,54 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
         <div>
           <h2 className="text-sm font-medium text-ink">命令行工具</h2>
           <p className="mt-1 max-w-[64ch] text-sm leading-relaxed text-ink-muted">
-            沙箱镜像里装着的二进制<b>怎么调</b>，以及<b>用默认参数跑会漏掉什么</b>。
-            这些<b>没有开关</b> —— 装没装由镜像决定，不是由配置决定。
+            沙箱镜像里装着的二进制<b>怎么调</b>，以及<b>用默认参数跑会漏掉什么</b>。 这些
+            <b>没有开关</b> —— 装没装由镜像决定，不是由配置决定。
           </p>
         </div>
-        <span className="shrink-0 text-xs text-ink-faint">
-          {withLimits} / {recipes.length} 条写了局限
-        </span>
+        <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
+          <span>共 {recipes.length} 条</span>
+          <span className="text-ink-muted">CTF 覆盖 {coverage.ctf}</span>
+          <span className="text-ink-muted">渗透覆盖 {coverage.pentest}</span>
+          <span>{withLimits} 条写了局限</span>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-tight border-b border-line px-4 py-2">
         <div className="relative min-w-[220px] flex-1">
           <Search
-            className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-ink-faint"
+            className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-ink-faint"
             strokeWidth={1.75}
           />
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="搜索工具（名字 / 用途 / 局限）"
-            className="h-8 w-full rounded-sm border border-line bg-surface pr-2 pl-7 text-sm text-ink outline-none focus:border-line-accent"
+            className="h-8 w-full rounded-sm border border-line bg-surface pl-7 pr-2 text-sm text-ink outline-none focus:border-line-accent"
           />
+        </div>
+        <div className="flex items-center gap-1" role="group" aria-label="按场景筛选">
+          {(
+            [
+              ['all', '全部'],
+              ['ctf', 'CTF'],
+              ['pentest', '渗透'],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setScenario(value)}
+              aria-pressed={scenario === value}
+              className={cn(
+                'rounded-sm border px-2 py-1 text-xs transition-ui duration-fast',
+                scenario === value
+                  ? 'border-line-accent bg-accent-wash text-ink'
+                  : 'border-line text-ink-muted hover:border-line-strong',
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
         <button
           type="button"
@@ -95,12 +114,13 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
         >
           只看有局限的
         </button>
-        {(query || onlyLimited) && (
+        {(query || onlyLimited || scenario !== 'all') && (
           <button
             type="button"
             onClick={() => {
               setQuery('')
               setOnlyLimited(false)
+              setScenario('all')
             }}
             className="text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
           >
@@ -212,15 +232,11 @@ function RecipeRow({
                 <li key={param.name} className="flex flex-wrap items-baseline gap-tight text-xs">
                   <code className="font-mono text-ink">{param.name}</code>
                   {param.flag && <code className="font-mono text-ink-faint">{param.flag}</code>}
-                  {param.required && (
-                    <span className="text-2xs text-signal-risk">必填</span>
-                  )}
+                  {param.required && <span className="text-2xs text-signal-risk">必填</span>}
                   {param.default && (
                     <span className="text-2xs text-ink-faint">默认 {param.default}</span>
                   )}
-                  {param.description && (
-                    <span className="text-ink-muted">{param.description}</span>
-                  )}
+                  {param.description && <span className="text-ink-muted">{param.description}</span>}
                 </li>
               ))}
             </ul>
@@ -238,7 +254,7 @@ function RecipeRow({
                   ★ 保留换行：局限说明里有的是分点写的（`·` 开头）。
                     用普通 <p> 会把它们挤成一段，看不出是几条独立的边界。
                 */}
-                <p className="mt-0.5 text-xs leading-relaxed whitespace-pre-line text-ink-muted">
+                <p className="mt-0.5 whitespace-pre-line text-xs leading-relaxed text-ink-muted">
                   {recipe.defaultLimitation}
                 </p>
               </div>

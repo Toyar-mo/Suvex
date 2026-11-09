@@ -17,6 +17,8 @@
 | `gef/gef.py` | https://github.com/hugsy/gef | 2026-10-27 克隆的 main（单文件 451,120 字节） | MIT | GDB 增强（P0 · Pwn）。**只有 gef.py 一个文件**，由 `/etc/gdb/gdbinit` 用 try/except 包住加载：gef 挂了 gdb 仍可用，不会把 Pwn 全废掉。 |
 | `RsaCtfTool/` | https://github.com/RsaCtfTool/RsaCtfTool | 2026-10-27 克隆的 main（4.7 MB / 124 文件，去掉 .git/.venv/tests/docs） | MIT | RSA 全攻击面（P0 · Crypto）。**PyPI 上只有 1.0/1.1 且 Require-Python >=3.8,<3.9**，装不到镜像的 3.14 上，所以 vendor 源码本地 `pip install --no-deps`；依赖（cryptography/gmpy2/pycryptodome/z3-solver/psutil/tqdm/factordb-pycli）单独 pip 装。 |
 
+| `pycdc/` | https://github.com/zrax/pycdc | 2026-11-06 由逆向镜像源码构建出的二进制 | GPL-3.0 | `pycdc` / `pycdas` 两个可执行文件，从 `suvex-sandbox-re` 镜像取出后随 base 分发，避免 base 构建期联网克隆 GitHub。sha256 见文末。 |
+
 ## 许可合规说明
 - `bkcrack`（zlib）、`jwt_tool`（GPL-3.0）、`sstimap`（GPL-3.0）、
   `pcapfix`（GPL-2.0）的 LICENSE 文件随各自目录一并分发，未作修改。
@@ -30,3 +32,7 @@
 2. 更新上表的版本号与 sha256；
 3. 若是 `repak`，确认官网 `.sha256` 与本地 `Get-FileHash` 一致；
 4. 重新构建镜像并跑 Dockerfile 末尾那段自检。
+
+## pycdc 校验值
+- `pycdc/pycdc`  sha256 `be89c0c6040d6b3c6affdea429db2f8e2534ec8dfcae254736df574b4e05fb4d`
+- `pycdc/pycdas` sha256 `61820d7ca7a8486046b7b256e32874f4d2224118ebc566b3c944dc2712f0b3d6`
