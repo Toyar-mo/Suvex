@@ -104,7 +104,7 @@ export function ToggleChip({
         disabled
           ? 'cursor-not-allowed border-line/50 text-ink-faint'
           : active
-            ? ACTIVE
+            ? cn(ACTIVE, 'animate-chip-pop')
             : IDLE,
         className,
       )}

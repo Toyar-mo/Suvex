@@ -309,6 +309,12 @@ export default {
           from: { transform: 'translate3d(0, 6px, 0)' },
           to: { transform: 'none' },
         },
+        // 筛选 chip 选中时的一次性落定：只动 scale，不动 opacity ——
+        // 整排 chip 同时加载时若淡入会闪；scale 从 0.94 收到 1 全程可见。
+        'chip-pop': {
+          from: { transform: 'scale(0.94)' },
+          to: { transform: 'none' },
+        },
         // 微反馈：选中 / 成功 / 新出现的勾。从略小收到刚好，
         // 读起来是"落定"，而不是"弹出来"（弹跳是消费级 App 的语言，§4）。
         'settle-in': {
@@ -402,6 +408,7 @@ export default {
           这条动画没有 delay，所以 `both` 只带来了副作用。
         */
         'page-in': 'page-in 140ms cubic-bezier(0.16, 1, 0.3, 1)',
+        'chip-pop': 'chip-pop 160ms cubic-bezier(0.16, 1, 0.3, 1)',
         'fade-in': 'fade-in 420ms cubic-bezier(0.16, 1, 0.3, 1) both',
         'settle-in': 'settle-in 160ms cubic-bezier(0.16, 1, 0.3, 1) both',
         'flash-accent': 'flash-accent 900ms cubic-bezier(0.16, 1, 0.3, 1) both',
