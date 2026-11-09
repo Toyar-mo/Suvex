@@ -106,9 +106,15 @@ def ensure_workspace(session_id: str, *, create: bool = False) -> Path | None:
 
 @dataclass(frozen=True)
 class WorkspaceFile:
-    """工作区里的一个文件（相对路径，POSIX 分隔符）。"""
+    """工作区里的一个文件（相对路径，POSIX 分隔符）。
+
+    `path` 是**显示路径**（非 UTF-8 字节已替换成 `�`），前端列表用它展示、
+    下载时原样回传；`real_path` 是磁盘上的真实相对路径，只在
+    `resolve_file` 按显示名反查时使用 —— 两者混淆会让坏文件名永远 404。
+    """
 
     path: str
+    real_path: str
     name: str
     size_bytes: int
     modified_at: float
@@ -144,6 +150,7 @@ def list_files(session_id: str) -> list[WorkspaceFile]:
         out.append(
             WorkspaceFile(
                 path=_safe_display(path.relative_to(directory).as_posix()),
+                real_path=path.relative_to(directory).as_posix(),
                 name=_safe_display(path.name),
                 size_bytes=stat.st_size,
                 modified_at=stat.st_mtime,
@@ -193,7 +200,9 @@ def resolve_file(session_id: str, relpath: str) -> Path | None:
     #   结果里反查真实路径 —— 否则这类文件在界面上点下载/删除都会 404。
     for item in list_files(session_id):
         if item.path == raw:
-            real = directory.joinpath(*item.path.split("/"))
+            # 必须用 `real_path` 拼回去：`item.path` 是显示名（`�`），
+            # 拿它 joinpath 仍然对不上磁盘上的坏字节文件名。
+            real = directory.joinpath(*item.real_path.split("/"))
             try:
                 real_r = real.resolve()
                 if (real_r == base or base in real_r.parents) and real_r.is_file():
