@@ -22,6 +22,7 @@ import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
 import { AssistantTurn } from '@/components/chat/AssistantTurn'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
+import { useChatListCollapsed } from '@/hooks/useChatListCollapsed'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { ChallengeBar, MissingChallengeBar } from '@/components/chat/ChallengeBar'
 import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
@@ -89,6 +90,8 @@ import {
   MessageSquarePlus,
   MessagesSquare,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Send,
   Settings2,
   Sparkles,
@@ -252,6 +255,8 @@ export function ChatPage() {
 
   const [draft, setDraft] = useState('')
   const [showList, setShowList] = useState(false)
+  // 宽屏会话清单折叠（窄屏用 `showList` 的抽屉）；记忆到 localStorage。
+  const { collapsed: listCollapsed, toggle: toggleList } = useChatListCollapsed()
   // v1.19：服务端说"这一轮可以继续"时，把那个 run 存下来渲染提示条。
   const [stuckTurn, setStuckTurn] = useState<ChatTurnRun | null>(null)
   const [resuming, setResuming] = useState(false)
@@ -1336,7 +1341,11 @@ export function ChatPage() {
         className={cn(
           'flex w-60 shrink-0 flex-col border-r border-line bg-surface-sunken',
           // 窄屏：覆盖式浮层。`hidden` 而不是 `w-0` —— 后者仍会被读屏器读到
-          showList ? 'absolute inset-y-0 left-0 z-30 shadow-lg' : 'hidden md:flex',
+          showList
+            ? 'absolute inset-y-0 left-0 z-30 shadow-lg'
+            : listCollapsed
+              ? 'hidden'
+              : 'hidden md:flex',
         )}
       >
         <div className="flex items-center gap-tight border-b border-line px-3 py-2">
@@ -1538,6 +1547,21 @@ export function ChatPage() {
             aria-label="打开会话列表"
           >
             <MessagesSquare size={14} strokeWidth={2} aria-hidden="true" />
+          </Button>
+          {/* 宽屏折叠。折叠后按钮仍在工具条上，图标换成"展开"。 */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={toggleList}
+            className="hidden md:inline-flex"
+            aria-label={listCollapsed ? '展开会话列表' : '折叠会话列表'}
+            title={listCollapsed ? '展开会话列表' : '折叠会话列表'}
+          >
+            {listCollapsed ? (
+              <PanelLeftOpen size={14} strokeWidth={2} aria-hidden="true" />
+            ) : (
+              <PanelLeftClose size={14} strokeWidth={2} aria-hidden="true" />
+            )}
           </Button>
           <h1 className="min-w-0 flex-1 truncate text-sm text-ink">{active?.title ?? '对话'}</h1>
           {active && (
