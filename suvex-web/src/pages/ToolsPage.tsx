@@ -87,18 +87,17 @@ function tabFromHash(hash: string): TabId {
 const IMAGE_GAPS = {
   checkedAt: '2026-11-09',
   // 2026-11-09 这一轮把能装的都装进镜像了：wpscan / searchsploit /
-  // impacket / uncompyle6 / pycdc / ghidra。CTF 侧已无硬缺口（zsteg /
-  // ropper 有等价替代，见 caveats）。
+  // impacket / uncompyle6 / pycdc / ghidra。剩余两项是**明确不装**，
+  // 不是"待补"—— 用户已确认替代品够用（msfconsole），或依赖装不成
+  // （zsteg / ropper）。所以两栏缺口都为空，替代路径写在 caveats。
   ctf: [],
-  pentest: [
+  pentest: [],
+  caveats: [
     [
       'msfconsole',
-      '利用框架。依赖 postgresql / Oracle 客户端且体积大（616 MB），' +
-        '无状态沙箱里起数据库不划算；公开 PoC 检索已由 searchsploit 覆盖，' +
-        '内网协议由 impacket 覆盖。',
+      '明确不装（616 MB + postgresql/Oracle 客户端，无状态沙箱起库不划算）。' +
+        '公开 PoC 用 searchsploit，内网协议用 impacket。',
     ],
-  ],
-  caveats: [
     ['zsteg', '未装（gem 依赖取不到）。PNG LSB 用 stegoveritas -bruteLSB 覆盖。'],
     ['ropper', '未装（filebytes 用了 Py3.12 已删的 ast.Str）。ROPgadget 等价。'],
     ['vol', '已装，但 Windows 符号表默认联网下载；解题沙箱无网时要预放 symbols。'],
@@ -150,7 +149,7 @@ function CapabilityGaps() {
     <details className="group rounded-md border border-line bg-surface">
       <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm text-ink">
         <AlertTriangle className="size-3.5 shrink-0 text-signal-warn" strokeWidth={1.75} />
-        <span className="font-medium">场景能力缺口</span>
+        <span className="font-medium">场景覆盖与替代</span>
         <span className="text-xs text-ink-faint">
           镜像实测 {IMAGE_GAPS.checkedAt} ·{' '}
           {Number(IMAGE_GAPS.ctf.length) === 0 ? 'CTF 无硬缺口' : `CTF ${IMAGE_GAPS.ctf.length} 项`}{' '}
@@ -165,8 +164,17 @@ function CapabilityGaps() {
         />
       </summary>
       <div className="grid gap-panel border-t border-line px-4 py-3 lg:grid-cols-2">
-        <GapList title="CTF 还缺什么" items={IMAGE_GAPS.ctf} />
-        <GapList title="渗透还缺什么" items={IMAGE_GAPS.pentest} />
+        {Number(IMAGE_GAPS.ctf.length) + Number(IMAGE_GAPS.pentest.length) === 0 ? (
+          <p className="text-xs leading-relaxed text-ink-muted lg:col-span-2">
+            CTF 与渗透都没有硬缺口。下面这些是明确不装、但已有等价替代的工具 ——
+            模型按配方用替代品即可，不需要你额外配置。
+          </p>
+        ) : (
+          <>
+            <GapList title="CTF 还缺什么" items={IMAGE_GAPS.ctf} />
+            <GapList title="渗透还缺什么" items={IMAGE_GAPS.pentest} />
+          </>
+        )}
         <div className="lg:col-span-2">
           <p className="text-xs font-medium text-ink-muted">有，但默认会漏 / 容易误用</p>
           <ul className="mt-1 grid gap-x-panel gap-y-1 lg:grid-cols-2">
@@ -383,10 +391,9 @@ export function ToolsPage() {
                 icon={<Terminal className="size-3.5" />}
               />
               <SummaryCard
-                label="镜像缺口"
-                value={IMAGE_GAPS.ctf.length + IMAGE_GAPS.pentest.length}
-                detail={`CTF ${IMAGE_GAPS.ctf.length} · 渗透 ${IMAGE_GAPS.pentest.length}，展开下方清单`}
-                tone="warn"
+                label="硬缺口"
+                value={Number(IMAGE_GAPS.ctf.length) + Number(IMAGE_GAPS.pentest.length)}
+                detail={`CTF / 渗透均无硬缺口 · ${IMAGE_GAPS.caveats.length} 条替代路径见下方`}
                 icon={<AlertTriangle className="size-3.5" />}
               />
             </section>
