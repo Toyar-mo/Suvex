@@ -1093,6 +1093,21 @@ RECIPE_SPECS: Final[tuple[ToolRecipe, ...]] = (
             '反编译结果是近似源码，控制流/变量名可能与原文件不同。'
         ),
     ),
+    ToolRecipe(
+        name='ghidra-decompile',
+        summary='Ghidra 无头反编译：导入二进制并把所有函数的伪代码打印出来。',
+        group='逆向与取证',
+        command='ghidra-decompile',
+        params=(
+            _p('binary', 'positional', '要分析的二进制路径。', required=True, position=1),
+        ),
+        default_limitation=(
+            '无头模式：没有 GUI，输出的是自动分析后的 C 风格伪代码，函数名多为 `FUN_...`。'
+            '首次导入大二进制需要几十秒到几分钟（Java + 自动分析）；'
+            '加壳/反调试样本的分析可能不完整。'
+            '只做静态分析，不运行样本。'
+        ),
+    ),
 )
 
 
@@ -1160,6 +1175,7 @@ RECIPE_SCENARIOS: Final[dict[str, str]] = {
     'vol': 'both',
     'stegoveritas': 'ctf',
     'pycdc': 'ctf',
+    'ghidra-decompile': 'ctf',
 }
 
 SCENARIO_VALUES: Final[tuple[str, ...]] = ('both', 'ctf', 'pentest')

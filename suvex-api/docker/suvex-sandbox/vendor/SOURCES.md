@@ -19,6 +19,8 @@
 
 | `pycdc/` | https://github.com/zrax/pycdc | 2026-11-06 由逆向镜像源码构建出的二进制 | GPL-3.0 | `pycdc` / `pycdas` 两个可执行文件，从 `suvex-sandbox-re` 镜像取出后随 base 分发，避免 base 构建期联网克隆 GitHub。sha256 见文末。 |
 
+| `ghidra_scripts/` | 本项目自写 | 2026-11-09 | 与仓库同许可 | `DecompileAll.java`：Ghidra headless 反编译脚本（打印所有函数的伪代码）；`ghidra-decompile`：单参数包装器（自动建临时项目、清理）。Ghidra 本体走 apt，不在此目录。 |
+
 ## 许可合规说明
 - `bkcrack`（zlib）、`jwt_tool`（GPL-3.0）、`sstimap`（GPL-3.0）、
   `pcapfix`（GPL-2.0）的 LICENSE 文件随各自目录一并分发，未作修改。

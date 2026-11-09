@@ -547,6 +547,7 @@ def test_recipes_added_after_the_image_audit_are_present() -> None:
         'vol',
         'stegoveritas',
         'pycdc',
+        'ghidra-decompile',
     }
     missing = sorted(expected - set(RECIPE_BY_NAME))
     assert not missing, f'这些已装二进制还没有配方：{missing}'

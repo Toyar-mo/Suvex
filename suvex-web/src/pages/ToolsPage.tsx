@@ -86,13 +86,10 @@ function tabFromHash(hash: string): TabId {
  */
 const IMAGE_GAPS = {
   checkedAt: '2026-11-09',
-  ctf: [
-    [
-      'ghidra',
-      '伪代码级反编译。radare2 / objdump 只能反汇编，复杂样本读起来仍吃力；' +
-        '843 MB + JDK 常驻，暂未装入镜像。',
-    ],
-  ],
+  // 2026-11-09 这一轮把能装的都装进镜像了：wpscan / searchsploit /
+  // impacket / uncompyle6 / pycdc / ghidra。CTF 侧已无硬缺口（zsteg /
+  // ropper 有等价替代，见 caveats）。
+  ctf: [],
   pentest: [
     [
       'msfconsole',
@@ -155,8 +152,12 @@ function CapabilityGaps() {
         <AlertTriangle className="size-3.5 shrink-0 text-signal-warn" strokeWidth={1.75} />
         <span className="font-medium">场景能力缺口</span>
         <span className="text-xs text-ink-faint">
-          镜像实测 {IMAGE_GAPS.checkedAt} · CTF {IMAGE_GAPS.ctf.length} 项 · 渗透{' '}
-          {IMAGE_GAPS.pentest.length} 项
+          镜像实测 {IMAGE_GAPS.checkedAt} ·{' '}
+          {Number(IMAGE_GAPS.ctf.length) === 0 ? 'CTF 无硬缺口' : `CTF ${IMAGE_GAPS.ctf.length} 项`}{' '}
+          ·{' '}
+          {Number(IMAGE_GAPS.pentest.length) === 0
+            ? '渗透无硬缺口'
+            : `渗透 ${IMAGE_GAPS.pentest.length} 项`}
         </span>
         <ChevronDown
           className="ml-auto size-3.5 text-ink-faint transition-transform duration-fast group-open:rotate-180"
@@ -197,6 +198,7 @@ function GapList({
   return (
     <div>
       <p className="text-xs font-medium text-ink">{title}</p>
+      {items.length === 0 && <p className="mt-1 text-xs text-ink-faint">没有硬缺口。</p>}
       <ul className="mt-1 flex flex-col gap-1">
         {items.map(([name, why]) => (
           <li key={name} className="text-xs leading-relaxed text-ink-muted">

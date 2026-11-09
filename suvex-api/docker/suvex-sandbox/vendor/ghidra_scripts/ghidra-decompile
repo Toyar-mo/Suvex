@@ -1,0 +1,25 @@
+#!/bin/sh
+# One-shot headless decompiler: import a binary, decompile every function,
+# print the C-like pseudocode, clean up the temporary project.
+#
+# Why a wrapper instead of exposing analyzeHeadless directly:
+#   analyzeHeadless needs an *existing* project directory and a dozen flags
+#   (project dir, project name, -scriptPath, -postScript, -deleteProject).
+#   Making the model assemble that by hand is a reliable way to get
+#   "Directory not found" and burn a turn. This wrapper keeps one argument.
+#
+# Usage: ghidra-decompile /work/chall
+set -eu
+if [ "$#" -lt 1 ]; then
+  echo "usage: ghidra-decompile <binary>" >&2
+  exit 2
+fi
+binary="$1"
+shift
+workdir="${GHIDRA_WORKDIR:-/work}"
+mkdir -p "$workdir"
+proj="$(mktemp -d "$workdir/ghidra.XXXXXX")"
+trap 'rm -rf "$proj"' EXIT INT TERM
+analyzeHeadless "$proj" project -import "$binary" \
+  -scriptPath /opt/ghidra-scripts -postScript DecompileAll.java \
+  -deleteProject "$@"

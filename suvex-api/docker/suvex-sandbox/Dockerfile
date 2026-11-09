@@ -1212,8 +1212,9 @@ RUN set -eux; \
 #
 # ## 明确不装，以及原因（不要再当作"漏了"）
 #
-#   · `ghidra`      —— apt 装完 843 MB（另需 JDK 常驻）。反汇编已有
-#                     radare2 / objdump；伪代码级反编译留到 C 档单独决策。
+#   · `ghidra`      —— **已装**（843 MB）：反向题最大的缺口是伪代码级反编译，
+#                     radare2 只能反汇编。headless 入口链到
+#                     `/usr/local/bin/analyzeHeadless`（GUI 在无头容器里不可用）。
 #   · `metasploit`  —— 616 MB，且依赖 postgresql 与 Oracle 客户端；
 #                     沙箱是无状态一次性容器，起数据库不划算。
 #                     公开 PoC 检索由 `searchsploit` 覆盖。
@@ -1228,21 +1229,19 @@ USER root
 # pycdc / pycdas：从**逆向镜像已构建好的二进制**取，放进 base ——
 # 否则「.pyc 反编译」只有逆向档有，而 crypto/misc 题里也常出现 pyc。
 # 二进制由 zrax/pycdc 源码在 2026-11-06 构建（见 vendor/SOURCES.md）。
+COPY vendor/ghidra_scripts /opt/ghidra-scripts
+COPY vendor/ghidra_scripts/ghidra-decompile /usr/local/bin/ghidra-decompile
 COPY vendor/pycdc/pycdc /usr/local/bin/pycdc
 COPY vendor/pycdc/pycdas /usr/local/bin/pycdas
-RUN set -eux; \
-    chmod 0755 /usr/local/bin/pycdc /usr/local/bin/pycdas; \
-    # 无参时打印「No input file specified」—— 用它证明二进制能执行（不依赖题目输入）
-    (pycdc 2>&1 || true) | grep -q 'No input file specified'; \
-    (pycdas 2>&1 || true) | grep -q 'No input file specified'; \
-    echo "pycdc/pycdas 可执行"
 RUN apt-get update \
- && apt-get install -y --no-install-recommends wpscan exploitdb \
+ && apt-get install -y --no-install-recommends wpscan exploitdb ghidra \
  && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" \
         --retries 5 --timeout 60 impacket uncompyle6
 RUN set -eux; \
-    for c in wpscan searchsploit secretsdump.py uncompyle6 pycdc pycdas; do \
+    ln -sf /usr/share/ghidra/support/analyzeHeadless /usr/local/bin/analyzeHeadless; \
+    chmod 0755 /usr/local/bin/ghidra-decompile; \
+    for c in wpscan searchsploit secretsdump.py uncompyle6 pycdc pycdas analyzeHeadless ghidra-decompile; do \
         command -v "$c" >/dev/null || { echo "缺工具: $c" >&2; exit 1; }; \
     done; \
     wpscan --version; \
@@ -1250,6 +1249,10 @@ RUN set -eux; \
     uncompyle6 --version; \
     secretsdump.py -h >/dev/null 2>&1 || true; \
     python3 -c 'import impacket; print("impacket ok")'; \
+    ghidra-decompile /bin/ls > /tmp/ghidra_ls.txt 2>&1 \
+      || { echo 'FATAL: ghidra-decompile 跑不通' >&2; tail -20 /tmp/ghidra_ls.txt >&2; exit 1; }; \
+    grep -q 'decompiled' /tmp/ghidra_ls.txt; \
+    rm -f /tmp/ghidra_ls.txt; \
     echo "渗透/逆向补齐自检通过"
 
 # 恢复非 root 用户：runner 依赖 uid=1000 才能写 /work（见上文 chown）。
