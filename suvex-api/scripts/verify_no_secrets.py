@@ -54,6 +54,14 @@ SKIP_SUFFIX = {
     ".lock", ".map",
 }
 
+#: 第三方 vendor 目录：nuclei 的 CVE 模板里本来就带着公开的示例 key
+#: （`edd1c9…` 是 CVE-2020-13945 的默认口令、Symfony 的 `ThisIs…` 是
+#: 官方文档里的默认 secret）。它们不是本项目的凭据，也不是我们泄露的；
+#: 按路径整体跳过，比逐个值加白名单稳（模板更新会换值）。
+SKIP_PREFIXES = (
+    "suvex-api/docker/suvex-sandbox/vendor/",
+)
+
 #: (规则名, 正则, 掩码长度下限)。用 `group(1)` 取值；没有分组则取 `group(0)`。
 PATTERNS: list[tuple[str, re.Pattern[str], int]] = [
     ("OpenAI/DeepSeek 风格的 sk-", re.compile(r"\bsk-[A-Za-z0-9_-]{16,}"), 16),
@@ -202,6 +210,8 @@ def main() -> int:
     scanned = 0
     for rel in files:
         if Path(rel).suffix.lower() in SKIP_SUFFIX:
+            continue
+        if rel.startswith(SKIP_PREFIXES):
             continue
         path = REPO_ROOT / rel
         try:
