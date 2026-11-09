@@ -131,7 +131,7 @@ function Cover({ doc, format }: { doc: ReportDocument; format: ReportFormat }) {
              同一句话在标题上方再出现一次，读者先读到的是重复信息。
         视觉评审也独立指出了这一点（"眉标签与主标题文字重复，层级被削弱"）。
       */}
-      <h1 style={TYPE.docTitle}>{doc.meta.title}</h1>
+      <h1 style={{ ...TYPE.docTitle, overflowWrap: 'anywhere' }}>{doc.meta.title}</h1>
 
       {/* 元信息：6 个字段，13rem 下限在纸宽下正好落成 3 列 × 2 行 ——
           没有参差的尾行，也比两列时更省纵向空间 */}

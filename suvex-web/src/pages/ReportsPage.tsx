@@ -751,7 +751,7 @@ export function ReportsPage() {
 
         <div className="grid gap-bay lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
           {/* ══ 左栏：配置 或 历史详情信息 ══ */}
-          <div className="flex min-w-0 flex-col gap-bay">
+          <div className="flex min-w-0 flex-col gap-bay lg:sticky lg:top-4 lg:self-start">
             {mode === 'compose' ? (
               /*
                 ★ 配置区的三态（任务 7 要求）。
@@ -809,7 +809,7 @@ export function ReportsPage() {
                       type="text"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
-                      placeholder={defaultTitle(effectiveScope, scans)}
+                      title={title || defaultTitle(effectiveScope, scans)}
                       className="h-8 w-full rounded-sm border border-line bg-surface-sunken px-2 text-xs text-ink transition-ui duration-fast placeholder:text-ink-faint hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40"
                     />
                   </div>

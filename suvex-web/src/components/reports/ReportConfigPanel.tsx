@@ -60,6 +60,11 @@ export function ScopePicker({
   preset,
   onPresetChange,
 }: ScopePickerProps) {
+  // 原生 <select> 会把长扫描名截断，而扫描名常常就是完整域名/UUID。
+  // 在下方补一行可截断的全文，至少能悬停看到完整值并要求自己确认选对了。
+  const selectedScan =
+    scope.kind === 'scan' ? scans.find((scan) => scan.id === scope.scanId) : undefined
+
   return (
     <section aria-labelledby="scope-heading" className="flex flex-col gap-tight">
       <h3 id="scope-heading" className="text-xs font-medium text-ink">
@@ -138,6 +143,11 @@ export function ScopePicker({
               </option>
             ))}
           </select>
+          {selectedScan && (
+            <p className="truncate text-2xs text-ink-faint" title={selectedScan.name}>
+              {selectedScan.name}
+            </p>
+          )}
         </Field>
       )}
 
