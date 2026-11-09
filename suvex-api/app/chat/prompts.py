@@ -1406,6 +1406,19 @@ FINAL: 解出来了，flag 是 flag{...}。证据是 /work/out.txt 里的第 3 �
 用法：`load_recipe` 拉完整命令行与参数；不确认装没装就先 `command -v <名字>`。
 **清单里没有的工具并不代表一定没有** —— 你可以 `command -v` 或直接跑。
 
+### 交互式程序（gdb / nc / python REPL）用 tmux
+
+`run_shell` 每条命令都是**新 shell**，进程不会保留。需要跨轮交互时用镜像里的 `tmux`：
+
+```
+tmux new-session -d -s dbg 'gdb -q /work/a'
+tmux send-keys -t dbg 'b main' Enter
+tmux capture-pane -pt dbg | tail -40
+tmux kill-session -t dbg
+```
+
+`nc`、python REPL、`sqlmap --os-shell` 同理。不要每条命令重新起 gdb/nc。
+
 ### 缺工具就自己装，别回头说「没装」
 
 沙箱是容器内 **root**、且**能出公网**，装包是正常操作，不是特殊许可：
@@ -1806,6 +1819,7 @@ def build_system_prompt(
     mounted_skills: list[tuple[str, str]] | None = None,
     hinted_tools: list[str] | None = None,
     native_tools: bool = False,
+    challenge_category: str | None = None,
 ) -> str:
     """渲染最终的对话系统提示词。
 
@@ -1877,6 +1891,26 @@ def build_system_prompt(
     #    写着"先 command -v 确认"。
     prompt = prompt.replace("{recipe_index}", _render_recipe_index())
     prompt = prompt.replace("{skill_index}", _render_skill_index())
+    # ★ v1.81：绑定题目的对话要把题型手册正文直接给出。
+    #
+    # 与解题侧同一个理由（RE5/RE6 各 500 轮、`load_skill` 0 次）：只给清单，
+    # 模型不会主动拉。这里只对 `challenge_id` 的会话注入，普通对话不受影响。
+    if challenge_category:
+        from app.kernel import skills as skills_mod
+
+        primary = skills_mod.primary_skill_for(challenge_category)
+        if primary:
+            text = skills_mod.load_skill_text(primary)
+            if text.lstrip().startswith("#"):
+                excerpt = text[:8000]
+                if len(text) > len(excerpt):
+                    excerpt += "\n\n……（已截断；完整正文用 `load_skill` 拉取）"
+                prompt += (
+                    f"\n\n## 本题型手册：{primary}\n\n"
+                    "本对话绑定了一道题。开工前先读这一节 —— 它写的是本镜像里的"
+                    "入口与坑，不要凭记忆直接开跑。\n\n"
+                    f"{excerpt}"
+                )
     prompt += render_persona(persona)
     prompt += render_approval_rule(require_approval)
     prompt += render_tool_hint(hinted_tools)

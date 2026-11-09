@@ -2664,11 +2664,26 @@ def _gateway_supports_tools(gateway: Any) -> bool:
     return False
 
 
+def _challenge_category(db: Session, session: ChatSession) -> str | None:
+    """绑定题目的会话 → 题目分类；普通对话返回 None。
+
+    只用于把题型手册正文注入对话提示（见 `build_system_prompt`）。
+    题被删/分类为空都返回 None，提示词退回原样，不抛。
+    """
+    if not session.challenge_id:
+        return None
+    from app.kernel.models import KernelChallenge
+
+    challenge = db.get(KernelChallenge, session.challenge_id)
+    return challenge.category if challenge is not None else None
+
+
 def _system_prompt_for(
     session: ChatSession,
     hinted_tools: list[str] | None = None,
     *,
     native_tools: bool = False,
+    challenge_category: str | None = None,
 ) -> str:
     """按会话设置渲染系统提示词。
 
@@ -2696,6 +2711,7 @@ def _system_prompt_for(
         mounted_skills=mounted,
         hinted_tools=hinted_tools,
         native_tools=native_tools,
+        challenge_category=challenge_category,
     )
 
 
@@ -2813,7 +2829,10 @@ async def run_turn(
         gateway = _build_gateway(_resolve_provider(session, provider_id), db)
 
     system = _system_prompt_for(
-        session, explicit_tools, native_tools=_gateway_supports_tools(gateway)
+        session,
+        explicit_tools,
+        native_tools=_gateway_supports_tools(gateway),
+        challenge_category=_challenge_category(db, session),
     )
     ctx = _ToolContext(db=db, session=session, identity=identity)
 
@@ -3547,7 +3566,11 @@ async def resume_approved(
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, None), db)
 
-    system = _system_prompt_for(session, native_tools=_gateway_supports_tools(gateway))
+    system = _system_prompt_for(
+        session,
+        native_tools=_gateway_supports_tools(gateway),
+        challenge_category=_challenge_category(db, session),
+    )
     gate_on = bool(session.require_approval)
     ctx = _ToolContext(db=db, session=session, identity=identity)
 
