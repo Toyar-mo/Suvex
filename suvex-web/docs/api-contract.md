@@ -3605,6 +3605,83 @@ prompt 末尾追加一段场景块，产出从"flag"变成"带三级标注的结
 
 ---
 
+### 3.21 端点补录（v1.80，2026-11-10）
+
+> **触发点**：`npm run verify:endpoints` 反向对账发现 **39 个端点存在于后端代码、
+> 契约里却没有路径记录**（`assets` 1、`chat` 27、`ctf_race` 3、`kernel` 3、
+> `schedules` 5）。这不是"这些端点没有文档" —— 它们在此前各版本的实现说明里
+> 出现过，但从未以端点表的形式写进契约，而契约是唯一事实来源。
+>
+> 本节只补**路径与语义**；出入参细节以各模块 `schemas.py` 与对应章节为准。
+> 鉴权口径：`read` = 登录即可（受 `created_by` 归属过滤），`admin` = 管理员。
+
+#### 3.21.1 资产（Assets）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/assets` | read | 资产总览：按主机 / 服务 / 域名聚合的资产视图 |
+
+#### 3.21.2 对话（Chat）
+
+对话是**私有便签**：所有 `/chat/sessions/{id}` 端点都按 `created_by` 过滤，
+别人的会话一律 404。
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/chat/sessions` | read | 会话列表（含归档/回收站的可选视图）|
+| POST | `/chat/sessions` | read | 新建会话 |
+| POST | `/chat/sessions/for-challenge/{challenge_id}` | read | 为一道题建（或取回）解题会话 |
+| GET | `/chat/sessions/{session_id}` | read | 会话详情 + 消息历史 |
+| GET | `/chat/sessions/{session_id}/export` | read | 导出会话为 Markdown |
+| PATCH | `/chat/sessions/{session_id}` | read | 改名 / 项目 / 关联题目等部分更新 |
+| POST | `/chat/sessions/{session_id}/pin` | read | 置顶 / 取消置顶 |
+| DELETE | `/chat/sessions/{session_id}` | read | 归档（软删，可取消）|
+| POST | `/chat/sessions/{session_id}/unarchive` | read | 取消归档 |
+| POST | `/chat/sessions/{session_id}/purge` | read | 从回收站彻底删除（连同工作区）|
+| POST | `/chat/sessions/{session_id}/messages` | read | 发一条消息（非流式）|
+| POST | `/chat/sessions/{session_id}/messages/stream` | read | 发一条消息（SSE；durable 轮次）|
+| POST | `/chat/sessions/{session_id}/interject` | read | 插话：排队到当前轮结束后的下一轮开头 |
+| POST | `/chat/sessions/{session_id}/interrupt` | read | 中断 / 彻底停止当前轮（`stop` 与 `continue` 两种语义）|
+| GET | `/chat/tools` | read | 这个对话当前可用的工具（含权限与就绪状态）|
+| PATCH | `/chat/sessions/{session_id}/settings` | read | 会话级六项设置（部分提交）|
+| GET | `/chat/personas` | read | 人格列表 |
+| POST | `/chat/sessions/{session_id}/attachments` | read | 上传对话附件（暂存到沙箱前）|
+| GET | `/chat/sessions/{session_id}/files` | read | 会话持久工作区的产物清单 |
+| GET | `/chat/sessions/{session_id}/files/download` | read | 下载一个产物 |
+| POST | `/chat/files/export` | read | 把勾选的产物打成 ZIP（一次请求；条目名带会话前缀）|
+| POST | `/chat/sessions/{session_id}/files` | read | 往会话工作区上传文件 |
+| GET | `/chat/files` | read | 跨会话产物清单（会话 / 项目 / 文件名筛选，截断会明说）|
+| DELETE | `/chat/sessions/{session_id}/files` | read | 删除一个产物 |
+| POST | `/chat/sessions/{session_id}/messages/{message_id}/approval` | read + 该工具 scope | 审批一条挂起的工具调用（批准后接着跑）|
+| GET | `/chat/sessions/{session_id}/turns` | read | 轮次执行记录（状态 / 心跳 / 接手次数）|
+| POST | `/chat/sessions/{session_id}/turns/{run_id}/resume` | read | 手动接手一个中断的轮次（`failed` 也允许人工重试）|
+
+#### 3.21.3 赛事托管（ctf_race）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| POST | `/ctf-race/start` | read | 开始整场托管（多模型赛跑；并发与预算闸）|
+| POST | `/ctf-race/stop` | read | 停止托管 |
+| GET | `/ctf-race/status` | read | 托管快照（阶段 / 排名 / 每道题状态 / 成本）|
+
+#### 3.21.4 内核（Kernel）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/kernel/recipes` | read | 命令行配方清单（镜像里真实存在的工具）|
+| POST | `/kernel/competition/sync` | read | 从平台同步赛事与题目 |
+| POST | `/kernel/challenges/batch` | read | 批量操作题目（开始 / 重排 / 清候选等）|
+
+#### 3.21.5 定时复查（Schedules）
+
+| 方法 | 路径 | 鉴权 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/schedules` | read | 定时任务列表 |
+| POST | `/schedules` | read | 新建定时任务 |
+| PATCH | `/schedules/{schedule_id}` | read | 修改定时任务 |
+| POST | `/schedules/{schedule_id}/enabled` | read | 启用 / 停用 |
+| DELETE | `/schedules/{schedule_id}` | read | 删除 |
+
 ## 4. 实时事件流
 
 > **本节按 SSE 写**（见 §0.1）。若最终选 WebSocket，本节整体替换，
