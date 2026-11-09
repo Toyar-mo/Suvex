@@ -52,9 +52,14 @@ export interface ActivityFeedItemProps {
   /** 跳转目标构造函数，默认带 scanId query */
   href?: string
   className?: string
+  /**
+   * 是否刚由实时流到达（v1.81）。只有它为真时播 240ms / 4px 的入场，
+   * 历史种子与轮询刷新进来的旧事件都不播 —— 见 `stream-in` 的注释。
+   */
+  isNew?: boolean
 }
 
-export function ActivityFeedItem({ event, href, className }: ActivityFeedItemProps) {
+export function ActivityFeedItem({ event, href, className, isNew = false }: ActivityFeedItemProps) {
   const meta = EVENT_META[event.type]
   const Icon = meta.icon
   const to =
@@ -67,7 +72,7 @@ export function ActivityFeedItem({ event, href, className }: ActivityFeedItemPro
       : event.summary
 
   return (
-    <li className={cn('group', className)}>
+    <li className={cn('group', isNew && 'animate-stream-in', className)}>
       <Link
         to={to}
         className={cn(
@@ -104,18 +109,20 @@ export function ActivityFeedItem({ event, href, className }: ActivityFeedItemPro
             )}
             title={title}
           >
-            {toolName && (
-              <span className="mono-ui mr-1.5 font-medium text-ink">{toolName}</span>
-            )}
+            {toolName && <span className="mono-ui mr-1.5 font-medium text-ink">{toolName}</span>}
             <span className={toolName ? 'text-ink-muted' : 'text-ink'}>{summaryBody}</span>
           </p>
 
           <div className="mono-ui mt-1 flex min-w-0 items-center gap-x-2 gap-y-0.5 text-ink-faint">
             <span className="shrink-0 text-ink-muted">{shortAgentId(event.agentId)}</span>
-            <span aria-hidden="true" className="shrink-0">·</span>
+            <span aria-hidden="true" className="shrink-0">
+              ·
+            </span>
             <span className="shrink-0">{PHASE_LABEL[event.agentPhase]}</span>
-            <span aria-hidden="true" className="shrink-0">·</span>
-            <time dateTime={event.at} className="shrink-0 tabular">
+            <span aria-hidden="true" className="shrink-0">
+              ·
+            </span>
+            <time dateTime={event.at} className="tabular shrink-0">
               {formatRelativeTime(event.at)}
             </time>
             <span className="ml-auto shrink-0">{meta.label}</span>

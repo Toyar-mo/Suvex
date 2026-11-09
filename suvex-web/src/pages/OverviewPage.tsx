@@ -10,7 +10,9 @@ import ErrorState from '@/components/ui/ErrorState'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { useFleetStatus } from '@/data/fleet'
+import type { ActivityEvent } from '@/data/overview'
 import { loadOverview, useOverviewState } from '@/data/overview-store'
+import { useOverviewLiveActivity } from '@/hooks/useOverviewLiveActivity'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/datetime'
 import { ScanSearch, ShieldAlert, FlaskConical, Timer, Clock } from 'lucide-react'
@@ -229,6 +231,16 @@ function OverviewContent({
 }) {
   const { metrics, activity, severityBreakdown, attention, resources } = data
 
+  /**
+   * 「现在有没有事在跑」—— 以**扫描列表**为准，而不是 `metrics.activeScans`。
+   *
+   * `metrics` 来自 60 秒轮询的 `/overview`，而扫描列表有活跃任务时每 2.5 秒
+   * 刷新一次。刚创建的扫描要等最多一分钟才在 `activeScans` 里出现 ——
+   * 那段时间里界面会说「最近活动」、不连实时流，而其实任务已经在跑了。
+   * 两个来源取并集，只多不少；扫描结束后轮询也会把 `activeScans` 归零。
+   */
+  const isLive = metrics.activeScans > 0 || agents.running > 0 || agents.queued > 0
+
   return (
     <div className="flex flex-col gap-bay">
       {/*
@@ -245,12 +257,7 @@ function OverviewContent({
           再叫「实时」就是在骗人。
       */}
       <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <ActivityFeed
-          events={activity}
-          isLive={metrics.activeScans > 0}
-          limit={8}
-          title={metrics.activeScans > 0 ? '实时活动' : '最近活动'}
-        />
+        <OverviewActivityFeed seed={activity} isLive={isLive} />
 
         <div className="flex flex-col gap-bay self-start">
           <RiskScoreCard
@@ -368,6 +375,34 @@ function OverviewContent({
         since={metrics.ctf2UsageSince}
       />
     </div>
+  )
+}
+
+/**
+ * 实时活动卡片的**数据壳**（v1.81）。
+ *
+ * ★ 为什么把 SSE 状态放在这里，而不是 `OverviewContent` 里：
+ *
+ *   `useOverviewLiveActivity` 每收到一批事件就会 setState。若那段状态
+ *   长在页面正文里，每来一条事件都会把风险分、严重度图、指标卡、
+ *   token 卡全部重渲染一遍 —— 而它们和这条事件毫无关系。状态下沉到
+ *   这张卡片之后，变化只重渲染卡片自己的子树。
+ *
+ * 这也让「实时」的边界很明确：只有这一块会随事件流动，
+ * 其余数字仍然按 60 秒轮询更新（口径见页面顶部那段注释）。
+ */
+function OverviewActivityFeed({ seed, isLive }: { seed: ActivityEvent[]; isLive: boolean }) {
+  const { events, latestBatchIds, connection } = useOverviewLiveActivity(seed, isLive)
+
+  return (
+    <ActivityFeed
+      events={events}
+      isLive={isLive}
+      limit={6}
+      title={isLive ? '实时活动' : '最近活动'}
+      latestBatchIds={latestBatchIds}
+      connection={connection}
+    />
   )
 }
 

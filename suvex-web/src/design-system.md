@@ -673,6 +673,38 @@ Hero 的动效设计围绕这条展开，三点：
       （本节 D7/D9 两条都是"推理正确、一测就错"。结论要由对照实验支撑，
       不能由"改完看起来好了"支撑。）
 
+### 实时流程舞台（v1.82）
+
+总览页「实时活动」上方是一块 canvas 舞台（`ActivityFlowStage`），而不是
+一条静态轨道：
+
+- 粒子沿一条穿过五个阶段节点的正弦流线持续流动；
+- 每个智能体是一颗绕着自己的阶段节点公转的光点；
+- 新事件到达时，信号从左侧飞向目标节点，落地炸开一圈粒子；
+- 实时流连着时有一道很淡的扫描线缓慢掠过。
+
+**动效分成两类，触发源不同**，这是这张图不撒谎的关键：
+
+| 动效             | 触发源                         | 断线 / 无事件时      |
+| ---------------- | ------------------------------ | -------------------- |
+| 粒子流、扫描线   | 实时连接存活                   | 立即停止，粒子排空   |
+| 信号 + 爆炸      | **一条真实的新事件**           | 不动                 |
+| 智能体公转       | 智能体当前所处的阶段           | 冻结                 |
+
+首批历史（种子）不放信号。这与"不管有没有事件都循环播放的装饰动画"
+是两回事 —— 后者会让看板看起来永远活着，哪怕后端已经死了。
+
+三条实现约束：
+
+1. **表达分布，不表达进度。** 多 agent 并行，同一扫描里可能同时有 agent
+   在扫描、另一个在验证；画成"已完成 → 当前 → 未开始"会捏造一个不存在的
+   单线进度。计数窗口是**最近 12 条事件**，写进 `aria-label`。
+2. **DOM 层承载信息，canvas 只承载气氛。** 阶段名、计数、智能体签都是
+   DOM；canvas 拿不到 2D 上下文（或被 `prefers-reduced-motion` 关掉）时，
+   信息一个不少，只是没有粒子。
+3. **亮色主题压强度。** 同一个 accent 在浅底上叠 200 多颗粒子会糊成一条
+   实心带，canvas 里用 `strength = 0.45`（暗色为 1）统一缩放透明度。
+
 ---
 
 ## 6. 布局与响应式
@@ -985,7 +1017,8 @@ src/components/landing/     产品首页专用：HeroTitle（纯 CSS 逐词落�
 src/components/layout/      布局壳：AppShell / Layout / Sidebar / MobileNav / TopStatusBar / PageTransition
                             PageTransition 纯 CSS（★ 已去掉 gsap/ScrollTrigger 依赖）
                             PageFallback  懒加载兜底（★ 必须透传高度链，见「按路由分包」）
-src/components/overview/    Overview 组件：StatCard / ActivityFeed(+Item) / SeverityChart
+src/components/overview/    Overview 组件：StatCard / ActivityFeed(+Item) / ActivityFlowStage /
+                            stage-model（舞台的纯数据模型）/ SeverityChart
                             （空状态由 components/ui/NoScansYet 承担 —— 全站共用一份）
 src/components/activity/    Activity 组件：AgentRoster / EventStream(+Toolbar) / EventRow
 src/components/scans/       Scans 组件：NewScanWizard / WizardChrome / WizardSteps / ScanList
@@ -1029,6 +1062,7 @@ src/pages/                  页面（OverviewPage / ScansPage / ActivityPage / F
                             LandingPage 是产品首页，**同步引入**，见 §14）
 src/hooks/                  媒体查询 / 减少动效 / localStorage / 侧栏折叠
                             useActivityStream  事件流消费状态（批量合并、上限截断、暂停缓冲）
+                            useOverviewLiveActivity  总览活动流：/overview 种子 + 全局 SSE 增量合并
                             useAutoScroll      自动跟随 / 暂停 / 回到最新
                             useAfterPaint      首帧画完的信号（双重 rAF + 兜底），推迟背景挂载
                             useChangeSignal    状态变化信号；让"落定"反馈只在变化时播

@@ -91,6 +91,23 @@ if (typeof globalThis.ResizeObserver === 'undefined') {
 }
 
 /**
+ * `HTMLCanvasElement.prototype.getContext` —— jsdom 没有实现 2D 上下文，
+ * 调用会把 "Not implemented" 写到 stderr（用例照样通过，但输出被刷屏）。
+ *
+ * 本项目对 canvas 的验收靠**真机截图**，测试断言的是 DOM 层文本与结构；
+ * 所以这里统一返回 `null`，让所有画布组件走各自的"没有上下文就静默降级"
+ * 分支。组件必须能把 `null` 当作正常情况处理 —— `ActivityFlowStage`
+ * 就是这么写的（DOM 标签与签子仍然完整）。
+ */
+if (typeof window !== 'undefined' && typeof HTMLCanvasElement !== 'undefined') {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    writable: true,
+    configurable: true,
+    value: () => null,
+  })
+}
+
+/**
  * `Element.prototype.scrollIntoView` —— jsdom 同样没有实现它
  * （它属于"布局/滚动"一类，jsdom 一律不碰）。
  *
@@ -136,4 +153,3 @@ if (
 afterEach(() => {
   cleanup()
 })
-
