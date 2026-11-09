@@ -235,3 +235,6 @@ suvex-api/tmpwork/
 !/docs/screenshots/files-bulk-20261110.png
 !/docs/screenshots/tools-20261110.png
 !/docs/screenshots/skills-20261110.png
+
+# 浏览器 MCP 的本地缓存（2026-11-10）
+.playwright-mcp/
