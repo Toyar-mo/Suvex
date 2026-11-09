@@ -476,13 +476,90 @@ def skills_by_name(skills: list[Skill] | None = None) -> dict[str, Skill]:
     return out
 
 
-def render_index(skills: list[Skill] | None = None) -> str:
+#: 解题时**永远保留**的技能分类：入口方法、工具配方、方法论与结果纪律。
+#:
+#: 其余 `ctf-*` 分类只在题型匹配时列出 —— 见 `skill_categories_for`。
+BASE_SKILL_CATEGORIES: frozenset[str] = frozenset(
+    {"solve-challenge", "tooling", "methodology", "analysis", "ctf-similar-search"}
+)
+
+#: 题型 → 对应的 CTF 技能分类。键是 `challenge.category` 的小写形态。
+CATEGORY_SKILL_MAP: dict[str, str] = {
+    "crypto": "ctf-crypto",
+    "cryptography": "ctf-crypto",
+    "reverse": "ctf-reverse",
+    "rev": "ctf-reverse",
+    "re": "ctf-reverse",
+    "pwn": "ctf-pwn",
+    "binary": "ctf-pwn",
+    "web": "ctf-web",
+    "forensics": "ctf-forensics",
+    "forensic": "ctf-forensics",
+    "misc": "ctf-misc",
+    "osint": "ctf-osint",
+    "malware": "ctf-malware",
+    "ai": "ctf-ai-ml",
+    "ml": "ctf-ai-ml",
+    "ai-ml": "ctf-ai-ml",
+}
+
+
+def skill_categories_for(challenge_category: str) -> frozenset[str] | None:
+    """题型 → 系统提示词里要列出的技能分类。
+
+    ## 为什么要按题型裁剪（2026-11-09 实测）
+
+    全量清单 125 条 = 20,612 字符，占系统提示词（58,767 字符，
+    约 14.7k tokens）的 35%，而**每轮都要重发**。其中绝大多数与本题无关：
+    一道 crypto 题不需要 android-reverse / wpscan / cloud 那一摞。
+
+    `ctf-agent-workstation` 的做法是给每次运行只 symlink 选中的技能；
+    这里等价：清单按分类过滤，正文仍由 `load_skill` 按需拉。
+
+    ## 未知题型返回 None = **不过滤**
+
+    宁可多列，也不能因为分类拼写不同（`rev` / `reverse` / 平台自造值）
+    把 agent 要用的那一篇藏掉 —— 藏掉的代价是它根本不知道存在。
+    """
+    key = (challenge_category or "").strip().lower()
+    mapped = CATEGORY_SKILL_MAP.get(key)
+    if not mapped:
+        return None
+    return frozenset({mapped, *BASE_SKILL_CATEGORIES})
+
+
+def _skill_group(skill: Skill) -> str:
+    """技能所属的**过滤分组**。
+
+    不能用 `skill.category`：CTF 技能的 frontmatter 里常写题型
+    （`crypto` / `reverse`…），而清单的过滤键是目录名（`ctf-crypto`）。
+    按**路径**取第一个 ctf 子目录名，与目录结构（`ctf/ctf-crypto/…`）
+    一一对应；自定义技能不在 SKILLS_ROOT 下，退回 category。
+    """
+    try:
+        parts = skill.path.relative_to(SKILLS_ROOT).parts
+    except ValueError:
+        return skill.category
+    if len(parts) >= 3 and parts[0] == "ctf":
+        return parts[1]
+    return skill.category
+
+
+def render_index(
+    skills: list[Skill] | None = None, *, categories: frozenset[str] | set[str] | None = None
+) -> str:
     """渲染「可用技能清单」—— 进系统提示词，让模型知道有哪些可按需拉。
 
     只列 `name: 一句话描述`，按 category 分组。全文不进提示词 ——
     那是 `load_skill` 的活。清单太长时截断并如实说明。
+
+    `categories` 非空时只列这些分类（见 `skill_categories_for`）；
+    `None` = 全量（扫描/渗透路径的行为与之前逐字节一致）。
     """
     items = skills if skills is not None else all_skills()
+    if categories is not None:
+        wanted = set(categories)
+        items = [s for s in items if _skill_group(s) in wanted]
     if not items:
         return ""
 

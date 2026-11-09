@@ -567,7 +567,13 @@ class CompetitionRacer:
             return (f"INCORRECT：{msg}", False)
 
     # ── 单题解题（给「开始解题」按钮 / 单题 worker 复用，v1.74）──────
-    async def solve_one(self, remote_id: str, *, challenge_id: str | None = None) -> dict:
+    async def solve_one(
+        self,
+        remote_id: str,
+        *,
+        challenge_id: str | None = None,
+        resume_digest: tuple[str, ...] = (),
+    ) -> dict:
         """用**已证明可用**的赛跑机制解**一道**题，并把结果写回本地题目行。
 
         ## 为什么要有它
@@ -634,6 +640,9 @@ class CompetitionRacer:
             submit_fn=swarm.try_submit_flag,
             cost_tracker=self._cost,
             system_prompt_builder=system_prompt_builder,
+            # ★ v1.80：续跑的上次动作纪要 → `SolveSpec.resume_digest`
+            #   （首轮提示里会展开成"别重复做过的事"）。
+            resume_digest=tuple(resume_digest),
             # 过程写进活动流（推理 / 工具调用 / 工具报错）。
             # 不传它，单题解题在界面上只有"开始 / 结束"两条 —— 实测
             # 2026-11-08 用户看到一片空白，原话「没有记录啊」。

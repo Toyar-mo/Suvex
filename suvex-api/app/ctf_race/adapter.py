@@ -222,6 +222,7 @@ class SolveOneAdapter:
         cost_tracker: Any = None,
         system_prompt_builder: Callable[[Any], str] | None = None,
         challenge_id: str | None = None,
+        resume_digest: tuple[str, ...] = (),
     ) -> None:
         self._spec_factory = spec_factory
         self._sandbox_factory = sandbox_factory
@@ -231,6 +232,8 @@ class SolveOneAdapter:
         self._system_prompt_builder = system_prompt_builder
         #: 给了它才把过程写进活动流（见 `_EventSink`）
         self._challenge_id = challenge_id
+        #: ★ v1.80：续跑纪要（上一次做过的动作）。空 = 全新解题。
+        self._resume_digest = tuple(resume_digest)
 
     async def _run(
         self,
@@ -272,6 +275,15 @@ class SolveOneAdapter:
                 spec.brief = (existing_brief + "\n\n" + note).strip() if existing_brief else note
             except Exception:  # spec 可能是 frozen dataclass 之类
                 logger.debug("无法把 hint 写入 spec.brief（忽略）")
+
+        if self._resume_digest:
+            # 续跑：把上次的动作纪要挂到 spec 上，`solve_in_sandbox` 会
+            # 在首轮提示里展开成「别重复做过的事」。spec 是可变 dataclass；
+            # 万一将来改成 frozen，这里降级为从头开始（不阻断解题）。
+            try:
+                spec.resume_digest = tuple(self._resume_digest)
+            except Exception:  # noqa: BLE001
+                logger.debug("无法把续跑纪要写入 spec（按全新解题处理）")
 
         sink = _EventSink(self._challenge_id) if self._challenge_id else None
         flusher: asyncio.Task | None = None

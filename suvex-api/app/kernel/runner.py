@@ -2922,8 +2922,11 @@ PROMPT_PENTEST_PATH = PROJECT_ROOT / "prompts" / "kernel_pentest.md"
 #: （见 `build_system_prompt` 里那段说明）。
 
 
-def load_system_prompt() -> str:
+def load_system_prompt(*, categories: frozenset[str] | set[str] | None = None) -> str:
     """读 solver 的系统提示词。
+
+    `categories` 非空时只把那几个分类的技能列进清单（按题型裁剪，
+    见 `skills.skill_categories_for`）；`None` = 全量。
 
     ⚠️ 文件不在时**抛错**，不用内置兜底。
 
@@ -2943,7 +2946,11 @@ def load_system_prompt() -> str:
     # 按需拉）。技能目录缺失时清单为空串 —— 这时提示词里那段 `load_skill`
     # 说明仍保留（工具照样可用，只是无内容可拉），不会因缺目录而崩。
     if "{{SKILL_INDEX}}" in raw:
-        index = skills_mod.render_index() or "（本次部署没有附带技能包。）"
+        index = (
+            skills_mod.render_index(categories=categories)
+            if categories is not None
+            else skills_mod.render_index()
+        ) or "（本次部署没有附带技能包。）"
         raw = raw.replace("{{SKILL_INDEX}}", index)
     # ★ v0.99：命令行工具配方清单。
     #
@@ -3106,6 +3113,7 @@ def build_system_prompt(
     ir_enabled: bool = False,
     offensive_enabled: bool = False,
     pentest_enabled: bool = False,
+    skill_categories: frozenset[str] | set[str] | None = None,
 ) -> str:
     """拼出本题要用的 system prompt（v0.40 / v0.41 / v0.42）。
 
@@ -3155,7 +3163,7 @@ def build_system_prompt(
     ⚠️ 排除是**按前缀**而不是白名单：将来平台加新分类时，
     它应当默认就享受到更全的手法，而不是因为没人记得同步而静默少一截。
     """
-    base = load_system_prompt()
+    base = load_system_prompt(categories=skill_categories)
     # ⚠️ 三个开关都关时**提前返回**，连 notes 都不 import —— 见上面
     # 第二条理由。这也是"关闭时逐字节相同"这条验收标准的实现方式。
     if not agentsec_enabled and not ir_enabled and not offensive_enabled and not pentest_enabled:
@@ -3205,6 +3213,9 @@ def build_system_prompt_by_spec(spec: SolveSpec) -> str:
         ir_enabled=spec.ir,
         offensive_enabled=spec.offensive,
         pentest_enabled=spec.pentest,
+        # 按题型裁剪技能清单（见 `skills.skill_categories_for`）。
+        # 扫描/渗透路径的 spec 不带这个字段 → None → 全量，行为不变。
+        skill_categories=frozenset(spec.skill_categories) if spec.skill_categories else None,
     )
 
 
@@ -3625,6 +3636,19 @@ class SolveSpec:
     #
     # 所以这里给的不是"更多轮数"，而是**接着上次的起点**。
     resume_digest: tuple[str, ...] = ()
+
+    #: ★ v1.80：系统提示词里**要列出的技能分类**（按题型裁剪）。
+    #:
+    #: 空元组 = 全量（扫描/渗透路径的行为与之前逐字节一致）；
+    #: CTF 解题由 `build_spec` 用 `skills.skill_categories_for(category)` 填。
+    #: 理由见那个函数：全量清单 20,612 字符占系统提示词的 35%，而每轮重发。
+    skill_categories: tuple[str, ...] = ()
+
+    #: ★ v1.80：是否在首轮前做「文件里扫 flag」预检。
+    #:
+    #: 只给 CTF 解题打开：普通扫描一次 grep 20 秒是纯负优化，而且扫描的
+    #: 产物是漏洞条目、不是 flag。`build_spec` 设 True，扫描路径默认 False。
+    preflight_flags: bool = False
 
     #: ★ v0.73：**取消时也不丢发现**的活收集器（默认 `None` = 不收集）。
     #:
@@ -5657,6 +5681,62 @@ def _initial_prompt(spec: SolveSpec) -> str:
     return "\n".join(lines)
 
 
+#: 「形似 flag」的预检正则。与 `FLAG_PATTERN` 不同：那个用于**判定**提交，
+#: 这个只用于"先看看文件里有什么"，所以故意放宽（允许 200 字符的正文）。
+_PREFLIGHT_FLAG_RE = r"[A-Za-z0-9_]{2,32}\{[ -~]{4,200}\}"
+
+
+async def _preflight_flag_scan(
+    sandbox: SandboxContainer, *, limit: int = 8, timeout: float = 25.0
+) -> str:
+    """在沙箱文件里先扫一遍「像 flag」的字符串，返回给首轮提示。
+
+    ## 为什么值得（对照 `ctf-agent-workstation` 的 `ctfgrep` 预检）
+
+    很多题目把 flag 直接放在附件、配置、日志或解压产物里，一次 `grep`
+    就能拿到；而模型要先探索目录、逐个 `cat`，常常几十轮之后才看到它。
+    这一步用**沙箱本地 grep** 把候选摊到第一轮，模型只需要验证来源与
+    完整性 —— 简单题（misc / forensics）可能几轮就结束。
+
+    ## 为什么**不**自动提交
+
+    扫到的是**字符串**，不是"平台认的 flag"：模板、示例、上一轮的猜测
+    都可能长这样。自动提交会消耗不可再生的错误次数，而一次误报就是
+    真实配额。所以这里只给线索，判据仍是模型验证 + 平台确认。
+
+    ## 边界
+
+    · 只扫 `/work`，**排除 `/work/persist`**（那是历史运行的持久区，
+      里面可能有上一轮的猜测 —— 会误导这一轮）；
+    · `timeout 20` + `head`：大二进制上 `grep -a` 可能很慢，宁可少扫；
+    · 整段失败只记 debug，不影响解题（预检是加速项，不是判据）。
+    """
+    cmd = (
+        "timeout 20 grep -aEro --exclude-dir=persist "
+        f"'{_PREFLIGHT_FLAG_RE}' {WORK_DIR} 2>/dev/null | head -{limit}"
+    )
+    try:
+        result = await asyncio.to_thread(sandbox.shell, cmd, timeout=timeout)
+    except Exception:  # noqa: BLE001 - 预检失败不该毁掉解题
+        logger.debug("预检扫描失败（忽略）", exc_info=True)
+        return ""
+    if not getattr(result, "ok", False):
+        return ""
+    seen: set[str] = set()
+    lines: list[str] = []
+    for raw in (getattr(result, "stdout", "") or "").splitlines():
+        value = raw.strip()[:200]
+        # grep 已经按形状过滤过，但这一行也要自己再判一次：命令可能被换掉、
+        # 输出可能混入别的提示；模型看到的首轮文本不该出现无关内容。
+        if not value or not re.fullmatch(_PREFLIGHT_FLAG_RE, value) or value in seen:
+            continue
+        seen.add(value)
+        lines.append(f"- `{value}`")
+        if len(lines) >= limit:
+            break
+    return "\n".join(lines)
+
+
 def _digest_message(lines: list[str]) -> dict[str, str]:
     """把"做过什么"压成一条消息。
 
@@ -6168,7 +6248,19 @@ async def solve_in_sandbox(
     # 拆成三段，而不是继续用"砍掉最早的"：**砍掉就等于遗忘**，
     # 而模型遗忘的表现是重新跑一遍已经跑过的命令 —— 在日志上看起来
     # 像"模型太笨"，实际是我们把它的记忆删了。
-    base_message: dict[str, str] = {"role": "user", "content": _initial_prompt(spec)}
+    # ★ v1.80：先扫一遍文件里的 flag 候选（沙箱本地 grep，不花模型）
+    preflight_notes = await _preflight_flag_scan(sandbox) if spec.preflight_flags else ""
+    base_content = _initial_prompt(spec)
+    if preflight_notes:
+        base_content += (
+            "\n\n## 预检：文件里扫到的疑似 flag 字符串\n\n"
+            "以下片段是从 `/work` 里的文件**直接扫出来的**（已排除持久区）。"
+            "它们**未经平台确认**，也可能只是题面/代码里的样例或模板：\n\n"
+            f"{preflight_notes}\n\n"
+            "先用工具确认它确实来自本题产物、且**完整**（不要截断、不要改动大小写），"
+            "再决定是否作为 `FINAL` 的 flag。**不要**只凭这段文本直接提交。"
+        )
+    base_message: dict[str, str] = {"role": "user", "content": base_content}
     recent: list[dict[str, str]] = []
     # ★ 续解时，纪要从**上一次的动作**开始 —— 那是这次运行唯一"继承"的东西。
     digest: list[str] = list(spec.resume_digest)
@@ -7757,6 +7849,13 @@ def build_spec(
         ),
         network_isolated=not needs_raw_network(challenge.category),
         resume_digest=tuple(resume_digest),
+        # ★ v1.80：按题型裁剪技能清单（未知题型 → 空 = 全量，见
+        #   `skills.skill_categories_for` 的说明）。
+        skill_categories=tuple(
+            skills_mod.skill_categories_for(challenge.category or "") or ()
+        ),
+        # ★ v1.80：CTF 解题才做首轮 flag 预检（扫描路径保持原样）。
+        preflight_flags=True,
         # v0.36：持久区已有的产物清单（见 `persist_listing` 的说明）。
         persist_listing=tuple(persist_listing),
         max_turns=resolved_turns,
@@ -8399,6 +8498,59 @@ def _challenge_is_generic_platform_backed(challenge_id: str) -> bool:
         return False
 
 
+#: 赛跑路径续跑时，从活动流还原的步数上限。
+#:
+#: 内核路径的 `_digest_from_events` 用 60 行；这里 40 行足够 ——
+#: 赛跑路径的事件摘要比 agent 的 `scan.log` 短，而且续跑提示只是
+#: 「别重复上次」，不是完整回放。
+_RACE_RESUME_DIGEST_LINES = 40
+
+
+def _resume_digest_from_activity(
+    challenge_id: str, *, limit: int = _RACE_RESUME_DIGEST_LINES
+) -> tuple[str, ...]:
+    """从借来的 scan 壳的活动流里还原「上一次做过什么」。
+
+    ## 为什么赛跑路径需要单独一份
+
+    内核路径的续跑靠磁盘上的 `events.jsonl`（`scans.agent_runner.
+    _digest_from_events`）；而 GenericDriver 的赛跑路径**没有 run_dir**，
+    它的事件只落在 `activity_events`。没有这一步，`resume=True` 在
+    这条分支上等于「从头再来」—— 上一轮几十轮的验证全部作废。
+
+    ## 为什么只取摘要、不取完整 detail
+
+    续跑提示要小：40 行 × 160 字符 ≈ 6.4KB，塞进首轮足够让模型知道
+    "哪些路已经走过"；完整输出仍在持久区与事件流里，需要时自己去查。
+    """
+    from app.events.models import ActivityEvent
+
+    try:
+        with session_scope() as db:
+            challenge = db.get(KernelChallenge, challenge_id)
+            scan_id = getattr(challenge, "scan_id", None)
+            if not scan_id:
+                return ()
+            rows = list(
+                db.execute(
+                    select(ActivityEvent)
+                    .where(ActivityEvent.scan_id == scan_id)
+                    .order_by(ActivityEvent.at.desc())
+                    .limit(limit)
+                ).scalars()
+            )
+    except Exception:  # noqa: BLE001 - 续跑提示取不到就当全新解题
+        logger.debug("读取续跑纪要失败（按全新解题处理）：%s", challenge_id, exc_info=True)
+        return ()
+
+    lines: list[str] = []
+    for event in reversed(rows):
+        summary = _clip(" ".join((event.summary or "").split()), 160)
+        if summary:
+            lines.append(f"{event.type}: {summary}")
+    return tuple(lines)
+
+
 def _finish_generic_solve(
     challenge_id: str, *, attempt_id: str | None, outcome: Any
 ) -> None:
@@ -8584,7 +8736,15 @@ async def _run_worker(
                 #   在运行中的事件循环里调 `asyncio.run` 会直接抛
                 #   RuntimeError（并把这题标成 failed）—— 那正是"改完
                 #   看起来还是 0 解"的来源。
-                result = await racer.solve_one(_remote_id, challenge_id=challenge_id)
+                result = await racer.solve_one(
+                    _remote_id,
+                    challenge_id=challenge_id,
+                    # ★ v1.80：赛跑路径也有续跑 —— 从活动流还原上次的动作。
+                    #   `resume` 由调度器/受理快照决定；拿不到纪要就空元组。
+                    resume_digest=(
+                        _resume_digest_from_activity(challenge_id) if resume else ()
+                    ),
+                )
                 # 赛跑链路把原始 `SolveOutcome` 挂在 SolverResult.extra 上
                 # （见 `SolveOneAdapter.__call__`）—— 收尾要用它写遥测/用量/题解。
                 outcome = (result or {}).get("outcome")

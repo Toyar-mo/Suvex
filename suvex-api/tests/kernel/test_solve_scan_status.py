@@ -238,6 +238,51 @@ def test_restarting_the_shell_clears_the_previous_result(
     assert scan.failure_reason is None
 
 
+def test_resume_digest_reads_the_shell_activity(db_session: Session, _pair) -> None:
+    """赛跑路径的续跑纪要来自活动流，而不是磁盘 run_dir。
+
+    GenericDriver 的 `solve_one` 没有 run_dir；不从这里补，`resume=True`
+    在这条分支上等于从头再来。
+    """
+    from tests.factories import make_agent, make_event
+
+    challenge, scan = _pair(status=ScanStatus.RUNNING.value)
+    agent = make_agent(db_session, scan.id)
+    make_event(
+        db_session,
+        scan_id=scan.id,
+        agent_id=agent.id,
+        type="tool_call",
+        summary="run_shell ls -la",
+        at_offset_seconds=0,
+    )
+    make_event(
+        db_session,
+        scan_id=scan.id,
+        agent_id=agent.id,
+        type="reasoning",
+        summary="the key is in config",
+        at_offset_seconds=1,
+    )
+
+    digest = runner._resume_digest_from_activity(challenge.id)
+
+    assert digest == (
+        "tool_call: run_shell ls -la",
+        "reasoning: the key is in config",
+    ), "要按时间正序、并带上事件类型"
+
+
+def test_generic_branch_passes_the_resume_digest() -> None:
+    """源码级断言：赛跑分支真的把纪要传给了 `solve_one`。
+
+    上面那条只证明取数正确；没传进去一样全绿。
+    """
+    source = inspect.getsource(runner._run_worker)
+    assert "resume_digest" in source
+    assert "solve_one(" in source
+
+
 def test_generic_solve_finalizes_the_scan(db_session: Session, _pair) -> None:
     """★★ GenericDriver 单题路径（赛跑分支）结束时必须收尾 scan 壳。
 

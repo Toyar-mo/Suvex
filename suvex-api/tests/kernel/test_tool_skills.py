@@ -90,3 +90,43 @@ def test_tool_skill_does_not_teach_missing_tools(by_name, name: str) -> None:
             assert "没有" in line or "别" in line, f"{name} 把 rockyou 当已有字典：{line}"
         if "sox" in line:
             assert "没有" in line or "别" in line, f"{name} 把 sox 当可用工具：{line}"
+
+
+# ── v1.80：按题型裁剪技能清单 ──────────────────────────────
+
+
+def test_category_filter_keeps_domain_and_tooling() -> None:
+    cats = skills_mod.skill_categories_for("crypto")
+    assert cats is not None
+    assert "ctf-crypto" in cats, "crypto 题必须能看见 crypto 技能"
+    assert "tooling" in cats, "工具配方对任何题型都适用，不能裁掉"
+    assert "ctf-pwn" not in cats
+
+
+def test_unknown_category_does_not_filter() -> None:
+    # 平台自造分类拼错时宁可多列，也不能把要用的那篇藏掉。
+    assert skills_mod.skill_categories_for("some-new-platform-category") is None
+
+
+def test_render_index_filters_by_categories() -> None:
+    full = skills_mod.render_index()
+    filtered = skills_mod.render_index(
+        categories=skills_mod.skill_categories_for("crypto")
+    )
+    assert len(filtered) < len(full) * 0.6, "过滤没有生效，清单还是全量"
+    assert "`ctf-crypto`" in filtered
+    assert "`ctf-pwn`" not in filtered
+
+
+def test_build_system_prompt_is_smaller_for_a_category() -> None:
+    from app.kernel import runner
+
+    full = runner.build_system_prompt("crypto", agentsec_enabled=False)
+    filtered = runner.build_system_prompt(
+        "crypto",
+        agentsec_enabled=False,
+        skill_categories=skills_mod.skill_categories_for("crypto"),
+    )
+    assert len(filtered) < len(full) * 0.75, (
+        f"按题型裁剪后提示词应明显变小：full={len(full)} filtered={len(filtered)}"
+    )

@@ -279,6 +279,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # `python3-bandit`（`bandit` 是其依赖别名），装 `bandit` 会连带 Python 版。
     gitleaks trufflehog gospider \
     bandit \
+    # ── 交互式调试的常驻会话（2026-11-09）──
+    #
+    # gdb / nc / python REPL 在 `run_shell`（一次一个 sh）里留不住。
+    # 复用 **tmux**（成熟工具）而不是在后端自写进程管理：模型用
+    # `tmux new-session -d` / `send-keys` / `capture-pane` 跨轮保持会话。
+    tmux \
     # ── 取证 / misc 题 ──
     binwalk foremost sleuthkit exiftool p7zip-full unzip \
     tcpdump tshark imagemagick \

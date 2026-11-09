@@ -136,6 +136,19 @@ ACTION: {"tool": "load_skill", "args": {"name": "ctf-reverse", "file": "advanced
 - **pwn**：`file` + `checksec` 先看保护（NX/PIE/Canary/RELRO），再定攻击面；`cyclic` 定偏移，pwntools 拼链。题目给了 `libc.so.6`/`ld-linux` 就先 `patchelf` 让本地对齐，**本地通了再打远程**。
 - **misc/取证**：`file`、`binwalk`、`exiftool`、`7z l`、`tshark` —— 多数题是"藏在某个结构里"。
 
+### 交互式程序（gdb / nc / python REPL）用 tmux
+
+`run_shell` 每条命令都是**新 shell**，进程不会保留。需要跨轮交互时用镜像里的 `tmux`（已安装）：
+
+```
+ACTION: {"tool": "run_shell", "args": {"command": "tmux new-session -d -s dbg 'gdb -q /work/a'"}}
+ACTION: {"tool": "run_shell", "args": {"command": "tmux send-keys -t dbg 'b main' Enter"}}
+ACTION: {"tool": "run_shell", "args": {"command": "tmux capture-pane -pt dbg | tail -40"}}
+ACTION: {"tool": "run_shell", "args": {"command": "tmux kill-session -t dbg"}}
+```
+
+`nc`、`python3` 交互式 REPL、`sqlmap --os-shell` 同理。**不要每条命令重新起 gdb/nc** —— 那等于把初始化与前面几轮的上下文全部重做一遍。
+
 ---
 
 ## 六、你会看到的环境
