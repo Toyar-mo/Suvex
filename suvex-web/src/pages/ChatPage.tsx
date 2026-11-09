@@ -1915,7 +1915,7 @@ export function ChatPage() {
             <p className="text-2xs text-signal-warn">
               上一轮没有跑完
               {stuckTurn.lastError ? `（${stuckTurn.lastError}）` : ''}
-              ，可以接着做。
+              ，可以接着做。接手会从断点恢复沙箱与上下文，首条输出可能需要一会儿。
             </p>
             <button
               type="button"
@@ -1923,7 +1923,7 @@ export function ChatPage() {
               disabled={resuming || sendingHere}
               onClick={() => void handleResume()}
             >
-              {resuming ? '正在接着跑…' : '继续这一轮'}
+              {resuming ? '正在接手（恢复上下文）…' : '继续这一轮'}
             </button>
           </div>
         )}
