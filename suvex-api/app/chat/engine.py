@@ -1802,6 +1802,32 @@ async def _tool_list_skills(ctx: _ToolContext, args: dict[str, Any]) -> str:
         rows = [s for s in rows if s.category.lower() == category]
     if not rows:
         return "没有符合条件的技能包。"
+
+    # ★ v1.79：可选带出「被加载过几次」。
+    #
+    # 用户问「哪几篇没被用过」时，原来 `list_skills` 答不了（它只有清单），
+    # 模型只好用 `run_shell` 去翻沙箱目录、扫事件表 —— 实测一个这样的问题
+    # 跑了 70 轮 / 53 次 shell。这个参数把答案放进一次调用里。
+    #
+    # 默认关闭：清单本身是"我有哪些技能"，而统计要扫最多 2 万条事件；
+    # 每次列清单都顺带扫一遍是纯浪费。
+    include_usage = bool(args.get("includeUsage") or args.get("include_usage"))
+    usage_by_name: dict[str, Any] = {}
+    usage_note = ""
+    if include_usage:
+        from app.kernel.skill_usage import collect_skill_usage
+
+        report = collect_skill_usage(ctx.db)
+        usage_by_name = {row.name: row for row in report.rows}
+        loaded = sum(1 for skill in rows if usage_by_name.get(skill.name))
+        usage_note = (
+            f"\n统计口径：模型调用 `load_skill` 的次数（共扫描 {report.sampled} 条事件）。"
+            f"它证明「请过这一篇」，不证明「读进去了」或「照做了」。"
+            f"\n本清单里 {len(rows) - loaded} 篇从未被加载，{loaded} 篇至少被加载过一次。"
+        )
+        if report.truncated:
+            usage_note += f"\n⚠️ 只统计了最近 {report.limit} 条事件，更早的没算进来。"
+
     lines = [f"共 {len(rows)} 篇："]
     by_category: dict[str, list[Any]] = {}
     for skill in rows:
@@ -1812,7 +1838,13 @@ async def _tool_list_skills(ctx: _ToolContext, args: dict[str, Any]) -> str:
             tag = "内置" if skill.source == "builtin" else "自定义"
             files = len(skill.files) if skill.files else 0
             extra = f"，{files} 个附件" if files else ""
-            lines.append(f"- `{skill.name}`（{tag}{extra}）：{skill.description}")
+            loads = ""
+            if include_usage:
+                row = usage_by_name.get(skill.name)
+                loads = f"，被加载 {row.loads if row else 0} 次"
+            lines.append(f"- `{skill.name}`（{tag}{extra}{loads}）：{skill.description}")
+    if usage_note:
+        lines.append(usage_note)
     return "\n".join(lines)
 
 

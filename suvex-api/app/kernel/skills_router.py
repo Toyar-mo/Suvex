@@ -34,6 +34,7 @@ from app.auth.deps import Identity, require_admin, require_read
 from app.core.db import get_db
 from app.core.errors import ApiError
 from app.core.vocab import AuditAction
+from app.kernel.skill_usage import collect_skill_usage
 from app.kernel.schemas import (
     KernelSkillCategoryOut,
     KernelSkillOut,
@@ -155,58 +156,19 @@ def kernel_skills_usage(_identity: Identity = ReadDep, db: Session = DbDep) -> S
     解出名字 —— 不在 SQL 里解，因为 JSON 内层路径的写法在 PostgreSQL
     与 SQLite 上是两套语法，写在 SQL 里会让这段只在生产能跑、测试跑不了。
     """
-    import json
-
-    from app.events.models import ActivityEvent
-
-    tool = ActivityEvent.detail["tool"].as_string()
-    # ★ 多取一条用来**判定截断**：拿到的行数 > 上限，说明更早的还有。
-    #   原来靠前端拿 sampledEvents 与硬编码 20000 比 —— 正好 20000 条时
-    #   会误报"被截断"，而后端调大上限后前端会一直误报。
-    stmt = (
-        select(ActivityEvent.detail, ActivityEvent.at)
-        .where(ActivityEvent.type == "tool_call", tool == "load_skill")
-        .order_by(ActivityEvent.seq.desc())
-        .limit(MAX_USAGE_EVENTS + 1)
-    )
-    rows = db.execute(stmt).all()
-    truncated = len(rows) > MAX_USAGE_EVENTS
-    rows = rows[:MAX_USAGE_EVENTS]
-
-    loads: dict[str, int] = {}
-    last: dict[str, object] = {}
-    sampled = 0
-    for detail, at in rows:
-        sampled += 1
-        raw = (detail or {}).get("command") if isinstance(detail, dict) else None
-        name = ""
-        if isinstance(raw, str):
-            try:
-                parsed = json.loads(raw)
-            except (ValueError, TypeError):
-                parsed = None
-            if isinstance(parsed, dict):
-                name = str(parsed.get("name") or "").strip()
-        if not name:
-            # 解不出名字的行**跳过但不隐藏**：`sampledEvents` 里仍然计入它，
-            # 所以界面上的比例是诚实的。
-            continue
-        loads[name] = loads.get(name, 0) + 1
-        # 按 seq 降序遍历，第一次见到的就是这个技能最近的一次。
-        last.setdefault(name, at)
-
+    usage = collect_skill_usage(db, limit=MAX_USAGE_EVENTS)
     items = [
         SkillUsageOut(
-            name=name,
-            loads=count,
-            lastLoadedAt=last[name].isoformat() if last.get(name) else None,
+            name=row.name,
+            loads=row.loads,
+            lastLoadedAt=row.last_loaded_at.isoformat() if row.last_loaded_at else None,
         )
-        for name, count in sorted(loads.items(), key=lambda kv: (-kv[1], kv[0]))
+        for row in usage.rows
     ]
     return SkillUsageListOut(
-        sampledEvents=sampled,
-        truncated=truncated,
-        limit=MAX_USAGE_EVENTS,
+        sampledEvents=usage.sampled,
+        truncated=usage.truncated,
+        limit=usage.limit,
         since=None,
         items=items,
     )

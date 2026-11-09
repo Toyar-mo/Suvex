@@ -202,8 +202,12 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
     ChatToolSpec(
         name="list_skills",
         label="查看技能库",
-        description="列出技能包（含内置/自定义来源、描述）。改之前先看一遍。",
-        params="category（可选，按分类过滤）",
+        description=(
+            "列出技能包（含内置/自定义来源、描述）。改之前先看一遍。"
+            "加 includeUsage 会带出每篇被加载过几次 —— 回答"
+            "「哪些技能没被用过」时用这个，不要用 run_shell 去翻目录。"
+        ),
+        params="category（可选，按分类过滤）、includeUsage（可选，带出被加载次数）",
     ),
     ChatToolSpec(
         name="read_skill",
@@ -467,7 +471,13 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
     "stop_competition_race": {"type": "object", "properties": {}, "required": []},
     "list_skills": {
         "type": "object",
-        "properties": {"category": {"type": "string", "description": "按分类过滤（可选）"}},
+        "properties": {
+            "category": {"type": "string", "description": "按分类过滤（可选）"},
+            "includeUsage": {
+                "type": "boolean",
+                "description": "带出每篇被 load_skill 加载过几次（可选，默认 false）",
+            },
+        },
         "required": [],
     },
     "read_skill": {
@@ -1305,6 +1315,21 @@ SYSTEM_PROMPT_TEMPLATE = """\
 用户说"帮我写个脚本试试"、"搜一下 CVE-2024-XXXX"、"这个接口返回什么"时，
 **直接做**，不要回"我不能执行代码"。你不能做的是"替用户点他屏幕上的按钮"，
 不是"执行"。
+
+## 问事实，还是做任务
+
+先分清用户要的是**一句话**，还是一件**交付物**：
+
+- 问现状 / 事实（"我有哪些技能""哪几篇没被用过""上次扫描结果如何"
+  "这个配置是什么"）：用已有工具查到，就**用一段话回答**。不要为此创建文件、
+  写交接文档、产出报告或顺手改配置 —— 用户没有要那些东西。
+- 明确要交付物（"写份报告""把这个脚本存下来""生成证据包"）：才把东西写进
+  `/work/persist/`，并在结论里说清文件路径。
+
+不要把"回答一个问题"自动扩展成"替用户完成一个项目"：那会花掉几十轮模型调用
+和几十分钟，而用户等的是一句话。平台自己的数据优先用平台工具查
+（例如 `list_skills(includeUsage=true)`、`list_scans`），不要用 `run_shell`
+去翻内部目录冒充查询。
 
 ####
 ## 【必须遵守】怎么调用工具
