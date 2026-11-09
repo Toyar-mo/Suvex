@@ -169,6 +169,15 @@ def ensure_solve_scan(db: Session, challenge) -> Scan:  # noqa: ANN001
             # 「疑似卡死」判定 —— 那会让界面一直挂着一条假警报。
             if not was_running:
                 existing.started_at = now_utc()
+                # ★ 新一轮开始时清掉上一轮的结果标记。
+                #
+                # 不清的后果：上一轮留下了候选 flag，这一轮空手而归 ——
+                # 收尾写 failed 但 flag 还是旧值，扫描列表会把它读成
+                # 「候选待确认」，而这一轮其实没产出任何东西
+                # （`flag` 正是 `finalize_solve_scan` 区分这两种失败的依据）。
+                # `failure_reason` 同理：重跑失败时留着上一轮的原因会说谎。
+                existing.flag = None
+                existing.failure_reason = None
             existing.goal = ScanGoal.CAPTURE_FLAG.value
             return existing
 
@@ -694,6 +703,18 @@ def finalize_solve_scan(db: Session, challenge) -> None:  # noqa: ANN001
 
     solved = challenge.status == KernelChallengeStatus.SOLVED.value
     scan.status = ScanStatus.COMPLETED.value if solved else ScanStatus.FAILED.value
+    # ★ 把这一轮拿到的 flag 记在壳上（**候选也记**）。
+    #
+    # 扫描列表只有 completed/failed 两档，而 CTF2 的「跑完但没被平台确认」
+    # 也被映射成 failed —— 用户看到的是一句"失败"，与"进程挂了"无法区分
+    # （实测 2026-11-09，DASCTF RE7/CR3）。`scans.flag` 是这条记录里唯一
+    # 能表达"我们手上有一个答案"的列：前端据此把 failed 的壳写成
+    # 「候选待确认」而不是「未解出」，也不必再加一次迁移。
+    #
+    # ⚠️ 写的是 `confirmed or candidate`：前者是平台盖章的，后者只是候选。
+    #    两者的区别由 challenge.status 表达（solved vs candidate_ready），
+    #    这里只负责"这条记录有没有答案"。
+    scan.flag = challenge.confirmed_flag or challenge.candidate_flag
     scan.finished_at = now_utc()
     if scan.started_at is not None:
         delta = (scan.finished_at - scan.started_at).total_seconds()

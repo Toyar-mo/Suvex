@@ -4,9 +4,9 @@ import { FlagChip } from '@/components/ui/FlagChip'
 import { StatusDot, type StatusTone } from '@/components/ui/StatusDot'
 import { SEVERITY_META, SEVERITY_ORDER } from '@/data/findings'
 import {
-  SCAN_STATUS_LABEL,
   SCAN_STATUS_TONE,
   scanDisplay,
+  scanStatusLabel,
   stallInfo,
   totalFindings,
   type Scan,
@@ -71,6 +71,10 @@ function failureBadge(scan: Scan): { icon: typeof Ban; label: string } | null {
     return { icon: Ban, label: '已终止' }
   }
   if (scan.status === 'failed') {
+    // CTF2 的壳：failed 只表示"平台没确认 flag"，不是基础设施故障。
+    // 它的措辞由 `scanStatusLabel` 负责（候选待确认 / 未解出），
+    // 这里再贴一个「基础设施中断」就是在编原因。
+    if (scan.origin === 'ctf2') return null
     return { icon: AlertTriangle, label: '基础设施中断' }
   }
   return null
@@ -364,7 +368,23 @@ const ScanRow = memo(function ScanRow({
     }
   }, [menuOpen])
 
-  const tone = SCAN_STATUS_TONE[scan.status] as StatusTone
+  const isKernelShell = scan.origin === 'ctf2'
+  /*
+    ★ 壳的状态措辞（2026-11-09 实测反馈：用户原话「跑完为什么会显示失败」）。
+
+    `failed` 对这条壳只意味着"平台没确认 flag"，与"扫描进程挂了"是两件事。
+    再细分一档：手上还有候选 flag 时是「候选待确认」，什么也没有才是
+    「未解出」。判据与理由见 `data/scan.ts` 的 `scanStatusLabel`。
+  */
+  const pendingConfirmation = isKernelShell && scan.status === 'failed' && Boolean(scan.flag)
+  const unsolved = isKernelShell && scan.status === 'failed' && !scan.flag
+  const tone = (pendingConfirmation ? 'warn' : SCAN_STATUS_TONE[scan.status]) as StatusTone
+  // 候选待确认用 warn（还要人去确认），未解出用中性 —— 两者都不是故障色。
+  const pillClass = pendingConfirmation
+    ? 'bg-signal-warn/15 text-ink'
+    : unsolved
+      ? 'bg-ink-ghost/20 text-ink'
+      : STATUS_PILL[scan.status]
   /*
     ★ v0.27：CTF2 借来挂事件流的壳 —— 三个操作入口全部要藏掉。
 
@@ -380,7 +400,6 @@ const ScanRow = memo(function ScanRow({
     后端**同样**拦（`409 SCAN_IS_CTF2_SHELL`）—— 两层都要有，
     因为 API 可以被直接调。
   */
-  const isKernelShell = scan.origin === 'ctf2'
   const canAbort = !isKernelShell && (scan.status === 'running' || scan.status === 'queued')
   const found = totalFindings(scan.findings)
   const badge = failureBadge(scan)
@@ -503,11 +522,11 @@ const ScanRow = memo(function ScanRow({
                  EnvironmentStatus.tsx:120 的状态徽标）。
               */
               'inline-flex items-center gap-1 rounded-xs px-1.5 py-0.5',
-              STATUS_PILL[scan.status],
+              pillClass,
             )}
           >
             <StatusDot tone={tone} pulse={scan.status === 'running'} />
-            <span className="text-xs">{SCAN_STATUS_LABEL[scan.status]}</span>
+            <span className="text-xs">{scanStatusLabel(scan)}</span>
           </span>
         </span>
 

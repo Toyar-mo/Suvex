@@ -44,7 +44,12 @@ import inspect
 import pytest
 from sqlalchemy.orm import Session
 
-from app.core.vocab import TERMINAL_SCAN_STATUSES, AgentStatus, ScanStatus
+from app.core.vocab import (
+    TERMINAL_SCAN_STATUSES,
+    AgentStatus,
+    KernelChallengeStatus,
+    ScanStatus,
+)
 from app.kernel import events as ctf2_events
 from app.kernel import runner
 from tests.factories import make_scan
@@ -187,6 +192,50 @@ def test_terminal_set_covers_every_end_state() -> None:
         ScanStatus.FAILED.value,
         ScanStatus.ABORTED.value,
     }
+
+
+def test_finalize_records_the_candidate_flag_on_the_shell(
+    db_session: Session, _pair
+) -> None:
+    """★★ 收尾时把这一轮的 flag 记在壳上（候选也记）。
+
+    扫描列表只有 completed/failed 两档，而「候选待确认」与「未解出」都
+    落到 failed。`scans.flag` 是列表区分两者的唯一依据（前端
+    `scanStatusLabel`）—— 不写它，用户看到的永远是同一句「失败」。
+    """
+    challenge, scan = _pair(status=ScanStatus.RUNNING.value)
+    challenge.status = KernelChallengeStatus.CANDIDATE_READY.value
+    challenge.candidate_flag = "flag{candidate}"
+    db_session.commit()
+
+    ctf2_events.finalize_solve_scan(db_session, challenge)
+    db_session.commit()
+    db_session.refresh(scan)
+
+    assert scan.status == ScanStatus.FAILED.value, "候选未确认，壳仍是 failed"
+    assert scan.flag == "flag{candidate}", "候选必须落在壳上，否则列表只会说「失败」"
+
+
+def test_restarting_the_shell_clears_the_previous_result(
+    db_session: Session, _pair
+) -> None:
+    """★ 重跑时清掉上一轮的 flag 与原因。
+
+    不清的话，上一轮留下候选、这一轮空手而归 —— 收尾写 failed 但 flag
+    还是旧值，列表会把它读成「候选待确认」，而这一轮其实什么都没产出。
+    """
+    challenge, scan = _pair(status=ScanStatus.FAILED.value)
+    scan.flag = "flag{previous}"
+    scan.failure_reason = "上一轮的原因"
+    db_session.commit()
+
+    ctf2_events.ensure_solve_scan(db_session, challenge)
+    db_session.commit()
+    db_session.refresh(scan)
+
+    assert scan.status == ScanStatus.RUNNING.value
+    assert scan.flag is None
+    assert scan.failure_reason is None
 
 
 def test_generic_solve_finalizes_the_scan(db_session: Session, _pair) -> None:

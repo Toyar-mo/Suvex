@@ -190,3 +190,58 @@ describe('ScanList · 缺分类时降级', () => {
     expect(text).not.toContain('应急响应复盘')
   })
 })
+
+describe('ScanList · CTF2 壳的状态措辞', () => {
+  /*
+    用户原话：「跑完为什么会显示失败」（2026-11-09，DASCTF RE7/CR3）。
+    壳的 `failed` 只表示"平台没确认 flag"，与真扫描的"进程挂了"是两件事。
+    这里钉住三侧：有候选、没候选、以及普通扫描**逐字不变**。
+  */
+  it('有候选 flag → 「候选待确认」，不说失败、不编基础设施中断', () => {
+    const text = renderOne(
+      makeScan({
+        origin: 'ctf2',
+        status: 'failed',
+        flag: 'flag{candidate}',
+        // 上一轮留下的原因不该让这一行被贴成「基础设施中断」
+        failureReason: '求解已结束。',
+      }),
+    )
+
+    expect(text).toContain('候选待确认')
+    expect(text).not.toContain('未解出')
+    expect(text).not.toContain('失败')
+    expect(text).not.toContain('基础设施中断')
+  })
+
+  it('没有候选 → 「未解出」，同样不是失败/基础设施中断', () => {
+    const text = renderOne(
+      makeScan({
+        origin: 'ctf2',
+        status: 'failed',
+        flag: null,
+        failureReason: '求解已结束。',
+      }),
+    )
+
+    expect(text).toContain('未解出')
+    expect(text).not.toContain('失败')
+    expect(text).not.toContain('基础设施中断')
+  })
+
+  it('普通扫描的 failed 仍是「失败 + 基础设施中断」（不被这次改动波及）', () => {
+    const text = renderOne(
+      makeScan({
+        origin: 'agent',
+        status: 'failed',
+        goal: 'findVulns',
+        name: 'a.com',
+        target: 'a.com',
+        failureReason: 'Docker 不可用。',
+      }),
+    )
+
+    expect(text).toContain('失败')
+    expect(text).toContain('基础设施中断')
+  })
+})

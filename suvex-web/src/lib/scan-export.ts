@@ -1,5 +1,5 @@
 import type { Scan } from '@/data/scan'
-import { SCAN_STATUS_LABEL, totalFindings } from '@/data/scan'
+import { scanStatusLabel, totalFindings } from '@/data/scan'
 
 /**
  * 扫描列表导出（任务 9）。
@@ -39,7 +39,7 @@ export function scansToCsv(scans: Scan[]): string {
     return [
       scan.target,
       scan.targetKind,
-      SCAN_STATUS_LABEL[scan.status],
+      scanStatusLabel(scan),
       breakdown,
       String(found),
       scan.durationSec === null ? '' : String(scan.durationSec),

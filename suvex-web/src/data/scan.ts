@@ -295,6 +295,32 @@ export const SCAN_STATUS_LABEL: Record<ScanStatus, string> = {
 }
 
 /**
+ * 一行扫描记录该怎么写状态。
+ *
+ * ## 为什么 CTF2 的壳不能直接印 `SCAN_STATUS_LABEL`
+ *
+ * CTF2 的解题壳只有两个终态（见 `finalize_solve_scan`）：
+ * 平台确认 flag → `completed`，其余全部 → `failed`。于是「跑完了、没解出」
+ * 与「进程/环境出错」在列表里长得一模一样，而用户的原话是
+ * 「跑完为什么会显示失败」（实测 2026-11-09，DASCTF RE7/CR3）。
+ *
+ * 对这条壳来说，"失败"这个措辞本身就不对：它不是一次失败的扫描，
+ * 而是一道**没解出的题**。而 `scans.flag` 有值时，连"没解出"都不准确 ——
+ * 我们手上有一个候选，只是还没被平台确认。
+ *
+ * 所以：
+ *   · `ctf2` + `failed` + 有 flag → 「候选待确认」
+ *   · `ctf2` + `failed`          → 「未解出」
+ *   · 其余（含真扫描失败）        → 沿用 `SCAN_STATUS_LABEL`
+ */
+export function scanStatusLabel(scan: Pick<Scan, 'origin' | 'status' | 'flag'>): string {
+  if (scan.origin === 'ctf2' && scan.status === 'failed') {
+    return scan.flag ? '候选待确认' : '未解出'
+  }
+  return SCAN_STATUS_LABEL[scan.status]
+}
+
+/**
  * 状态的视觉色调。
  * 只有 running 用 accent 呼吸，failed/aborted 用 risk，其余中性或 ok。
  * 与 Activity 页的状态语言一致，不另立一套。
