@@ -1442,6 +1442,50 @@ def default_ctf2_wall_clock_seconds(max_turns: int) -> int:
     return max(MIN_CTF2_WALL_CLOCK_SECONDS, min(raw, MAX_CTF2_WALL_CLOCK_SECONDS))
 
 
+# ── 按题型的最低预算（2026-11-09）────────────────────────────
+#
+# 实测 RE5（二维码）/ RE6（Go 逆向）各跑满 500 轮仍未解出：
+#   · RE5 2623s / 500 轮 ≈ 5.2 秒/轮；
+#   · RE6 4370s / 500 轮 ≈ 8.7 秒/轮。
+# 500 轮对这两类题是先撞回合上限，不是先撞墙钟（RE6 已到 81% 墙钟）。
+#
+# 这里给的是**下限**：用户把全局 max_turns 配得更低时，reverse/crypto
+# 仍至少拿到 800 轮 —— 否则"调低全局预算"会静默地把难题变成必失败。
+# 想真正省成本，应该改题型或逐题取消，而不是让上限假小。
+CATEGORY_TURN_FLOORS: Final[tuple[tuple[str, int], ...]] = (
+    ("rev", 800),
+    ("crypto", 800),
+)
+
+#: 同题型的**最低墙钟**（秒）。800 轮按实测 5–9 秒/轮需要 70–120 分钟，
+#: 默认 90 分钟的闸会在回合耗尽前先截断，等于白提回合数。
+#: 只覆盖"自动推导"的路径；用户在设置里显式写了墙钟仍以用户为准。
+CATEGORY_WALL_CLOCK_FLOORS: Final[tuple[tuple[str, int], ...]] = (
+    ("rev", 7200),
+    ("crypto", 7200),
+)
+
+
+def _category_floor(category: str, floors: tuple[tuple[str, int], ...]) -> int:
+    key = (category or "").strip().lower()
+    if not key:
+        return 0
+    for prefix, value in floors:
+        if key.startswith(prefix):
+            return value
+    return 0
+
+
+def turn_budget_floor(category: str) -> int:
+    """题型的最低回合预算；没有特例返回 0。"""
+    return _category_floor(category, CATEGORY_TURN_FLOORS)
+
+
+def wall_clock_floor(category: str) -> int:
+    """题型的最低墙钟（秒）；没有特例返回 0。"""
+    return _category_floor(category, CATEGORY_WALL_CLOCK_FLOORS)
+
+
 # ── 优先级的取值分层（v0.24）────────────────────────────────
 #
 # `ctf2_challenges.priority` 现在有两个写入方：**人**（题目卡片上的

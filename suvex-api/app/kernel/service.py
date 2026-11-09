@@ -109,6 +109,7 @@ from app.core.vocab import (
     KernelSandboxProfile,
     KernelSubmitMode,
     normalize_sandbox_profile,
+    turn_budget_floor,
 )
 from app.kernel import events as ctf2_events
 from app.kernel import platforms
@@ -2206,7 +2207,11 @@ def start_solve(
     # 关键在于"取全局值"这件事**只发生在这里**（受理时刻），
     # 而不是在 worker 里 —— 那正是这条修复的全部意义。
     resolved_mode = mode or settings_row.submit_mode
-    resolved_turns = int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS)
+    resolved_turns = max(
+        int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS),
+        # ★ v1.81：reverse/crypto 至少 800 轮（实测 500 轮不够）。
+        turn_budget_floor(challenge.category),
+    )
     # brief 与 `scans.brief` 同一条口径：上限 8000，且不进命令行。
     # 空串归一成 None：`""` 与"没填"在语义上是同一件事，
     # 而存一个空串会让界面显示一个空白的"人工提示"区块。

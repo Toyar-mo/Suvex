@@ -97,6 +97,8 @@ from app.core.vocab import (
     KernelSubmissionStatus,
     KernelSubmitMode,
     default_ctf2_wall_clock_seconds,
+    turn_budget_floor,
+    wall_clock_floor,
 )
 from app.kernel import events as ctf2_events
 from app.kernel import mcp as mcp_mod
@@ -7684,7 +7686,10 @@ def build_spec(
             provider = _provider_from_snapshot(db, attempt, fallback=provider)
     else:
         resolved_mode = mode or settings_row.submit_mode
-        resolved_turns = int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS)
+        resolved_turns = max(
+            int(settings_row.max_turns or DEFAULT_CTF2_MAX_TURNS),
+            turn_budget_floor(challenge.category),
+        )
         resolved_brief = None
 
     # ★★ v1.61：墙钟预算（见 `SolveSpec.wall_clock_seconds` 的说明）。
@@ -7713,6 +7718,12 @@ def build_spec(
         resolved_wall_clock = int(_configured_wall)
     else:
         resolved_wall_clock = default_ctf2_wall_clock_seconds(resolved_turns)
+        # ★ v1.81：reverse/crypto 的 800 轮按实测 5–9 秒/轮需要 70–120 分钟，
+        #   默认 90 分钟的闸会在回合耗尽前先截断。只在"自动推导"时抬高；
+        #   用户显式配置的墙钟仍优先。
+        resolved_wall_clock = max(
+            resolved_wall_clock, wall_clock_floor(challenge.category)
+        )
 
     # ★ 沙箱配额（2026-10-10 补）。
     #
