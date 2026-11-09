@@ -82,11 +82,17 @@ export function SegmentedControl<T extends string>({
         className={cn(
           'pointer-events-none absolute rounded-sm bg-surface-raised shadow-panel',
           compact ? 'inset-y-0.5 left-0.5' : 'inset-y-1 left-1',
-          'transition-transform duration-base ease-state motion-reduce:transition-none',
+          'transition-transform motion-reduce:transition-none',
         )}
         style={{
           width: `calc((100% - ${compact ? '0.25rem' : '0.5rem'}) / ${count})`,
           transform: `translateX(${index * 100}%)`,
+          // 弹簧手感：`linear()` 能表达"过冲 3% 再回落"，cubic-bezier 不能。
+          // 采样点来自 motion-web 的 spring-default 等价曲线（数值，不复制代码）。
+          // reduced-motion 由全局规则压到 0.001ms。
+          transitionDuration: '320ms',
+          transitionTimingFunction:
+            'linear(0, 0.32 8%, 0.79 20%, 1.03 30%, 1.01 46%, 1)',
         }}
       />
       <div
