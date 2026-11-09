@@ -85,6 +85,16 @@ export interface SkillUsageSnapshot {
    *   否则用户会把"最近 2 万条里被加载 0 次"读成"从来没被加载过"。
    */
   sampledEvents: number
+  /**
+   * ★ v1.79：更早的事件**确实**没算进来。
+   *
+   * 由后端判定（它多取一条来确认还有下一条）。前端以前拿
+   * `sampledEvents >= 20000` 猜 —— 那个 20000 是后端常量的复制，
+   * 正好打满时误报，后端调上限后静默失效。
+   */
+  truncated?: boolean
+  /** 上限（后端 `MAX_USAGE_EVENTS`），界面用它说"只统计了最近 N 条"。 */
+  limit?: number
   since: string | null
   items: SkillUsage[]
 }
@@ -211,15 +221,15 @@ export async function loadSkills(): Promise<void> {
   if (usageResult.status === 'fulfilled') {
     usage = usageResult.value
     /*
-      截断判定：后端扫到的事件数正好等于它的上限，说明很可能还有更早的
-      没扫到。`>=` 而不是 `>`：正好打满时同样是截断的。
+      ★ v1.79：截断由**后端**判定并下发。
 
-      ⚠️ 这个 20000 是**后端的常量**（`skills_router.MAX_USAGE_EVENTS`）。
-      复制到这里是因为 HTTP 响应里没有它（只有 `sampledEvents`）。
-      如果后端调整了上限，这里也要改 —— 所以它是一处**已知的重复**，
-      注释留在两边。将来若要消除，应当让后端把上限也放进响应。
+      以前这里写的是 `usage.sampledEvents >= 20_000` —— 把后端的
+      `MAX_USAGE_EVENTS` 复制了一份到前端。两个问题：
+        · 正好扫到 20000 条（没有更早的了）会误报"被截断"；
+        · 后端调整上限后，这里不会有人记得改，界面从此一直误报。
+      后端多取一条就是为了分清这两种情况。
     */
-    truncated = usage.sampledEvents >= 20_000
+    truncated = usage.truncated === true
   } else {
     errors.push(messageOf(usageResult.reason))
   }
@@ -286,6 +296,30 @@ export interface SkillDraft {
 }
 
 /**
+ * 只重拉**清单**（写操作之后用）。
+ *
+ * ★ 为什么不是 `loadSkills()`：那会连调用统计一起重拉，而统计要
+ *   扫最多 20000 条工具调用事件 —— 用户只是改了一篇技能的正文，
+ *   却让页面在保存后卡几秒去数一遍"哪几篇被加载过"，而那个数
+ *   根本不会因为改正文而变化。
+ *
+ * 统计保持原样即可：它按技能名聚合，改正文/描述不影响名字；
+ * 新建的技能不在统计里 = 0 次，那正是事实。
+ */
+async function refreshSkillList(): Promise<void> {
+  try {
+    list = await api.get<SkillListSnapshot>('/kernel/skills')
+    status = 'ready'
+    loadError = null
+  } catch (error) {
+    // 写操作本身已经成功，刷新失败不该把它说成"保存失败"。
+    // 保留旧清单，把错误挂在页面上（下次刷新会补齐）。
+    loadError = messageOf(error)
+  }
+  commit()
+}
+
+/**
  * 新建一篇自定义技能。
  *
  * ★ 成功后**重新拉清单**，不把新技能手工拼进本地状态。
@@ -295,7 +329,7 @@ export interface SkillDraft {
  */
 export async function createSkill(draft: SkillDraft): Promise<SkillDetail> {
   const detail = await api.post<SkillDetail>('/kernel/skills', draft)
-  await loadSkills()
+  await refreshSkillList()
   return detail
 }
 
@@ -310,7 +344,7 @@ export async function updateSkill(
   draft: { description: string; body: string; files?: Record<string, string> },
 ): Promise<SkillDetail> {
   const detail = await api.put<SkillDetail>(`/kernel/skills/${encodeURIComponent(name)}`, draft)
-  await loadSkills()
+  await refreshSkillList()
   return detail
 }
 
@@ -336,7 +370,7 @@ export async function fetchSkillFiles(name: string): Promise<Record<string, stri
 /** 删一篇自定义技能。 */
 export async function deleteSkill(name: string): Promise<void> {
   await api.del<void>(`/kernel/skills/${encodeURIComponent(name)}`)
-  await loadSkills()
+  await refreshSkillList()
 }
 
 /** 读一篇技能的正文（编辑回填用）。 */
@@ -367,18 +401,19 @@ export function filterSkillGroups(
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
   if (terms.length === 0) return categories
 
-  return categories
-    .map((group) => ({
-      category: group.category,
-      skills: group.skills.filter((skill) => {
-        const haystack =
-          `${skill.name} ${group.category} ${skill.description}`.toLowerCase()
-        return terms.every((term) => haystack.includes(term))
-      }),
-    }))
-    // 筛选后空分类**丢掉**（与"清单本身有空分类要保留"不同：
-    // 那是打包问题，这是筛选的必然结果，留着只会让界面空一片）
-    .filter((group) => group.skills.length > 0)
+  return (
+    categories
+      .map((group) => ({
+        category: group.category,
+        skills: group.skills.filter((skill) => {
+          const haystack = `${skill.name} ${group.category} ${skill.description}`.toLowerCase()
+          return terms.every((term) => haystack.includes(term))
+        }),
+      }))
+      // 筛选后空分类**丢掉**（与"清单本身有空分类要保留"不同：
+      // 那是打包问题，这是筛选的必然结果，留着只会让界面空一片）
+      .filter((group) => group.skills.length > 0)
+  )
 }
 
 /** 把一个技能名对应到它的调用次数（没有记录 = 0 次）。 */

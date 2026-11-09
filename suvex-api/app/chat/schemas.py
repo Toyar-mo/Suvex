@@ -383,6 +383,26 @@ class ChatFileItemOut(CamelModel):
     modifiedAt: float
 
 
+class ChatFileListOut(CamelModel):
+    """「文件管理」页的跨会话清单（v1.79）。
+
+    ## 为什么不是裸数组
+
+    服务端有 `MAX_LISTED_FILES` 上限（5000）。原来的响应是一个 `list`，
+    截断时**没有任何字段**能告诉前端"还有更多"，界面于是把 5000 当成
+    "一共就这些"—— 而用户会据此判断"我的旧产物是不是丢了"。
+
+    `truncated` 与 `limit` 一起给：前者说"被截断了"，后者让界面能说
+    清"只显示了前 N 个"。`items` 仍是原来的行结构，下载/删除不受影响。
+    """
+
+    items: list[ChatFileItemOut]
+    #: 命中数超过上限，`items` 只是其中最近修改的一批。
+    truncated: bool = False
+    #: 服务端上限（当前 5000）。未截断时它没有显示意义。
+    limit: int
+
+
 class ChatApprovalIn(StrictModel):
     """对一条待审批的工具调用做决定。"""
 

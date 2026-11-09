@@ -149,6 +149,15 @@ export default function FilesPage() {
   const [rows, setRows] = useState<WorkspaceFileRow[]>([])
   const [status, setStatus] = useState<FilesStatus>('loading')
   const [error, setError] = useState<ApiError | null>(null)
+  /**
+   * 清单被服务端上限截断了。
+   *
+   * ★ v1.79：后端 `MAX_LISTED_FILES`（5000）截断时以前**什么都不说**
+   *   （响应是裸数组，标记算完就丢了）。界面于是把 5000 当成"一共就这些"。
+   *   现在顶部会说清"只显示了最近修改的前 N 个"，并指路到筛选。
+   */
+  const [truncated, setTruncated] = useState(false)
+  const [listLimit, setListLimit] = useState(0)
   const [draft, setDraft] = useState<FilterDraft>(EMPTY_DRAFT)
   const [applied, setApplied] = useState<FileFilters>({})
   const [groupBy, setGroupBy] = useState<GroupBy>('none')
@@ -161,30 +170,45 @@ export default function FilesPage() {
   // v1.39：上传目标会话改成下拉选（会话 ID 不在这一页上，让用户手填看不到的东西是设计缺陷）。
   const [uploadSessions, setUploadSessions] = useState<UploadSessionOption[]>([])
   const [uploadTarget, setUploadTarget] = useState('')
+  /**
+   * 可选会话的加载状态。
+   *
+   * ★ v1.79：以前失败**完全静默**，下拉显示「（没有会话）」并提示
+   *   "先去对话页开一个" —— 网络出错时这是一句假话，用户会跑去对话页
+   *   开一堆会话，回来发现还是空的。失败要能看见、能重试。
+   */
+  const [sessionsStatus, setSessionsStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  const [sessionsError, setSessionsError] = useState<ApiError | null>(null)
 
-  // 拉一次可选会话。失败不致命：上传按钮会提示"先选会话"（v1.40 起上传目标
-  // 只认下拉里的真实会话，不再回落到筛选栏的自由文本，见 resolveUploadTarget）。
-  useEffect(() => {
-    let alive = true
+  const loadUploadSessions = useCallback(() => {
+    setSessionsStatus('loading')
+    setSessionsError(null)
     void listUploadSessions()
       .then((items) => {
-        if (!alive) return
         setUploadSessions(items)
+        setSessionsStatus('ready')
       })
-      .catch(() => {
-        /* 吞掉：会话列表拿不到不该挡住「浏览/下载/删除」这些只读能力 */
+      .catch((err) => {
+        // 不挡住「浏览/下载/删除」这些只读能力，只让上传那一块说清原因
+        setSessionsError(toApiError(err))
+        setSessionsStatus('error')
       })
-    return () => {
-      alive = false
-    }
   }, [])
+
+  // 拉一次可选会话（失败可在下拉旁重试）
+  useEffect(() => {
+    const timer = window.setTimeout(() => loadUploadSessions(), 0)
+    return () => window.clearTimeout(timer)
+  }, [loadUploadSessions])
 
   const load = useCallback(async (filters: FileFilters) => {
     setStatus('loading')
     setError(null)
     try {
       const data = await listFiles(filters)
-      setRows(data)
+      setRows(data.items)
+      setTruncated(data.truncated)
+      setListLimit(data.limit)
       setStatus('ready')
     } catch (err) {
       setError(toApiError(err))
@@ -441,22 +465,32 @@ export default function FilesPage() {
             <div className="flex w-full flex-wrap items-center gap-2 sm:ml-auto sm:w-auto">
               {/* min-w-0 + 固定宽度：`<select>` 的固有宽度由最长选项决定，
                   不给宽度它会撑到 682px，整页横向滚动。 */}
-              <label className="flex min-w-0 max-w-full items-center gap-1.5 text-sm">
+              <div className="flex min-w-0 max-w-full items-center gap-1.5 text-sm">
                 <span className="whitespace-nowrap text-ink-muted">上传到会话</span>
                 <select
                   value={uploadTarget}
                   onChange={(e) => setUploadTarget(e.target.value)}
-                  disabled={uploading || uploadSessions.length === 0}
+                  disabled={uploading || sessionsStatus !== 'ready' || uploadSessions.length === 0}
                   title={
-                    uploadSessions.length === 0
-                      ? '还没有能上传的会话，先去对话页开一个'
-                      : undefined
+                    sessionsStatus === 'error'
+                      ? '会话列表加载失败 —— 点旁边的「重试」'
+                      : sessionsStatus === 'loading'
+                        ? '正在加载会话…'
+                        : uploadSessions.length === 0
+                          ? '还没有能上传的会话，先去对话页开一个'
+                          : undefined
                   }
                   className={cn(INPUT_CLASS, 'w-40 min-w-0 sm:w-60')}
                   data-testid="upload-target"
                 >
                   <option value="">
-                    {uploadSessions.length === 0 ? '（没有会话）' : '请选择会话…'}
+                    {sessionsStatus === 'loading'
+                      ? '（正在加载会话…）'
+                      : sessionsStatus === 'error'
+                        ? '（会话列表加载失败）'
+                        : uploadSessions.length === 0
+                          ? '（没有会话）'
+                          : '请选择会话…'}
                   </option>
                   {uploadSessions.map((s) => (
                     <option key={s.id} value={s.id}>
@@ -464,7 +498,21 @@ export default function FilesPage() {
                     </option>
                   ))}
                 </select>
-              </label>
+                {/*
+                  ★ 失败不能只写成「（没有会话）」—— 那是在说
+                  "你还没有会话"，而真相是"没问到"。旁边给重试。
+                */}
+                {sessionsStatus === 'error' && (
+                  <button
+                    type="button"
+                    onClick={loadUploadSessions}
+                    title={sessionsError?.message ?? '重新拉取会话列表'}
+                    className="whitespace-nowrap text-xs text-signal-risk underline-offset-2 hover:underline"
+                  >
+                    会话加载失败，重试
+                  </button>
+                )}
+              </div>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -492,9 +540,28 @@ export default function FilesPage() {
         {/* 结果表 */}
         <section className="overflow-hidden rounded-md border border-line bg-surface">
           <div className="flex items-center justify-between border-b border-line px-gutter py-2.5 text-sm text-ink-muted">
-            <span>共 {rows.length} 个文件</span>
+            <span>
+              {truncated
+                ? `显示最近修改的 ${rows.length} 个文件（服务端上限 ${listLimit} 个）`
+                : `共 ${rows.length} 个文件`}
+            </span>
             {status === 'loading' && <span>加载中…</span>}
           </div>
+
+          {/*
+            截断必须自己说出来。以前这里只写「共 5000 个文件」——
+            而 5000 恰好是服务端上限，用户会以为"我的旧产物丢了"。
+          */}
+          {truncated && (
+            <p
+              role="status"
+              className="bg-sunken border-b border-line px-gutter py-2 text-xs text-signal-warn"
+            >
+              命中文件超过服务端上限，这里只列出最近修改的前 {listLimit} 个，
+              更早的文件没有显示。用上面的「会话 ID / 项目 ID / 文件名」缩小范围，
+              或直接在对应会话的对话页里找。
+            </p>
+          )}
 
           {status === 'loading' && rows.length === 0 ? (
             <div className="p-gutter">
@@ -615,7 +682,9 @@ function FileGroupBody({
           key={`${row.sessionId}:${row.path}`}
           className="border-b border-line last:border-0 hover:bg-surface-raised"
         >
-          <td className="whitespace-nowrap px-3 py-2 text-ink-muted">{formatDate(row.modifiedAt)}</td>
+          <td className="whitespace-nowrap px-3 py-2 text-ink-muted">
+            {formatDate(row.modifiedAt)}
+          </td>
           <td className="max-w-[220px] px-3 py-2">
             <div className="flex flex-col leading-tight">
               <span className="truncate text-ink" title={row.sessionTitle}>
@@ -628,7 +697,10 @@ function FileGroupBody({
               </span>
             </div>
           </td>
-          <td className="max-w-[160px] truncate px-3 py-2 text-ink-muted" title={subPathOf(row.path)}>
+          <td
+            className="max-w-[160px] truncate px-3 py-2 text-ink-muted"
+            title={subPathOf(row.path)}
+          >
             {subPathOf(row.path)}
           </td>
           <td className="max-w-[240px] truncate px-3 py-2">

@@ -33,7 +33,15 @@ import type { Schedule } from '@/data/schedule'
 // （`vi.mock` 会被 vitest 提升到 import 之前，所以放在 import 之后写不影响。）
 vi.mock('@/data/providers', () => ({
   useProviders: () => [
-    { id: 'prov_default', label: 'DeepSeek', model: 'm', kind: 'remote', configured: true, missing: null, note: '' },
+    {
+      id: 'prov_default',
+      label: 'DeepSeek',
+      model: 'm',
+      kind: 'remote',
+      configured: true,
+      missing: null,
+      note: '',
+    },
   ],
   defaultProviderId: () => 'prov_default',
 }))
@@ -286,7 +294,10 @@ describe('SchedulesPage', () => {
     vi.stubGlobal('fetch', (input: RequestInfo, init?: RequestInit) => {
       const method = init?.method ?? 'GET'
       calls.push(`${method} ${String(input)}`)
-      const body = method === 'GET' ? response : makeSchedule('a-ok', { name: 'a-ok', enabled: false, nextRunAt: null })
+      const body =
+        method === 'GET'
+          ? response
+          : makeSchedule('a-ok', { name: 'a-ok', enabled: false, nextRunAt: null })
       return Promise.resolve(
         new Response(JSON.stringify(body), {
           status: 200,
@@ -426,5 +437,70 @@ describe('新建定时计划 — 目标形态的取舍', () => {
     })
     // 只是"能点了"，还没点 —— 编辑表单不该有任何副作用
     expect(calls.every((c) => c.startsWith('GET'))).toBe(true)
+  })
+})
+
+/*
+  ★ 行内编辑：`PATCH /schedules/{id}` 从 v0.88 就在 store 里，
+  但页面长期没有入口 —— 改间隔只能删了重建，而重建会丢掉失败计数
+  和下次执行相位。这条用例钉住"入口真的接到 PATCH 上了"。
+*/
+describe('SchedulesPage 行内编辑', () => {
+  it('改名与间隔走 PATCH，而不是删了重建', async () => {
+    response = { items: [makeSchedule('s1', { name: '旧名字' })], total: 1, dueCount: 0 }
+    const patches: string[] = []
+    vi.stubGlobal('fetch', (_input: RequestInfo | URL, init?: RequestInit) => {
+      const method = init?.method ?? 'GET'
+      if (method === 'PATCH') {
+        patches.push(String(init?.body ?? ''))
+        return Promise.resolve(
+          new Response(
+            JSON.stringify(makeSchedule('s1', { name: '新名字', intervalMinutes: 60 })),
+            { status: 200, headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      }
+      return Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+
+    renderPage()
+    await screen.findByRole('table')
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('计划名称'), { target: { value: '新名字' } })
+    fireEvent.change(screen.getByLabelText('间隔（分钟）'), { target: { value: '60' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(patches).toHaveLength(1))
+    const body = JSON.parse(patches[0]) as { name: string; intervalMinutes: number }
+    expect(body.name).toBe('新名字')
+    expect(body.intervalMinutes).toBe(60)
+  })
+
+  it('★ 间隔越界时拦下，不发请求（否则会得到一次莫名其妙的 400）', async () => {
+    response = { items: [makeSchedule('s1')], total: 1, dueCount: 0 }
+    const patches: string[] = []
+    vi.stubGlobal('fetch', (_input: RequestInfo | URL, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'PATCH') patches.push('PATCH')
+      return Promise.resolve(
+        new Response(JSON.stringify(response), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }),
+      )
+    })
+
+    renderPage()
+    await screen.findByRole('table')
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByLabelText('间隔（分钟）'), { target: { value: '0' } })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+
+    await waitFor(() => expect(patches).toHaveLength(0))
   })
 })

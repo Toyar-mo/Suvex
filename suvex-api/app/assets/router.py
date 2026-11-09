@@ -44,16 +44,19 @@ def list_assets(
     ] = service.MAX_ASSETS,
 ) -> AssetListOut:
     """资产视图（按风险排序：未修复 critical → high → 未修复总数 → 最近扫描）。"""
-    assets, truncated = service.list_assets(db, limit=limit)
-    # summary 用**全量**算还是用返回的这一页算？
+    assets, truncated, total = service.list_assets(db, limit=limit)
+    # ★ v1.79：`total` 与 `summary` 都是**全量**口径。
     #
-    # 用返回的这一页。理由是顶部统计条要和下面列表**对得上** ——
-    # 列表只显示 500 条，统计条却报"共 1200 个资产、高危机 30 台"，
-    # 用户会在列表里数不出那 30 台。`truncated` 已经说明了
-    # "还有更多没显示"，语义足够。
+    # 原来 `total=len(assets)`、summary 也只算返回的这一页。截断时
+    # 界面上的提示变成"只显示了前 500 个目标，共 500 个"——
+    # 两个数字相等，而它想表达的是"还有更多"。统计卡也会把
+    # "前 500 个里有多少"当成"全站有多少"。
+    #
+    # 全量口径下，卡片回答的是"这套资产现在的整体状况"，列表回答的是
+    # "打开这一页能看到哪些"，`truncated` 与 `total` 一起说明差多少。
     return AssetListOut(
         items=[AssetOut.model_validate(a) for a in assets],
-        total=len(assets),
+        total=total,
         truncated=truncated,
-        summary=AssetSummaryOut.model_validate(service.summary(assets)),
+        summary=AssetSummaryOut.model_validate(service.summary_all(db)),
     )

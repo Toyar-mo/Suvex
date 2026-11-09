@@ -846,6 +846,14 @@ class SkillUsageListOut(CamelModel):
 
     #: 统计覆盖的事件条数（用于说明"这个数是全量的还是截断的"）。
     sampledEvents: int = 0
+    #: ★ v1.79：更早的事件**确实**没算进来（扫到了上限还有下一条）。
+    #:
+    #: 以前前端只能拿 `sampledEvents` 与硬编码的 20000 比较来猜截断 ——
+    #: 那既会在"正好 20000 条"时误报，也会在后端调整上限后静默失效。
+    #: 截断与否是后端**知道的事实**，就由后端说。
+    truncated: bool = False
+    #: 上限（`MAX_USAGE_EVENTS`）。界面用它说"只统计了最近 N 条"。
+    limit: int = 0
     #: 被扫过的时间窗起点（ISO8601 UTC）。null = 不限时间。
     since: str | None = None
     #: 按加载次数降序。**只含被加载过的技能** —— 0 次的由前端用清单补齐，

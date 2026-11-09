@@ -160,17 +160,23 @@ def kernel_skills_usage(_identity: Identity = ReadDep, db: Session = DbDep) -> S
     from app.events.models import ActivityEvent
 
     tool = ActivityEvent.detail["tool"].as_string()
+    # ★ 多取一条用来**判定截断**：拿到的行数 > 上限，说明更早的还有。
+    #   原来靠前端拿 sampledEvents 与硬编码 20000 比 —— 正好 20000 条时
+    #   会误报"被截断"，而后端调大上限后前端会一直误报。
     stmt = (
         select(ActivityEvent.detail, ActivityEvent.at)
         .where(ActivityEvent.type == "tool_call", tool == "load_skill")
         .order_by(ActivityEvent.seq.desc())
-        .limit(MAX_USAGE_EVENTS)
+        .limit(MAX_USAGE_EVENTS + 1)
     )
+    rows = db.execute(stmt).all()
+    truncated = len(rows) > MAX_USAGE_EVENTS
+    rows = rows[:MAX_USAGE_EVENTS]
 
     loads: dict[str, int] = {}
     last: dict[str, object] = {}
     sampled = 0
-    for detail, at in db.execute(stmt).all():
+    for detail, at in rows:
         sampled += 1
         raw = (detail or {}).get("command") if isinstance(detail, dict) else None
         name = ""
@@ -197,7 +203,13 @@ def kernel_skills_usage(_identity: Identity = ReadDep, db: Session = DbDep) -> S
         )
         for name, count in sorted(loads.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
-    return SkillUsageListOut(sampledEvents=sampled, since=None, items=items)
+    return SkillUsageListOut(
+        sampledEvents=sampled,
+        truncated=truncated,
+        limit=MAX_USAGE_EVENTS,
+        since=None,
+        items=items,
+    )
 
 
 @router.get(

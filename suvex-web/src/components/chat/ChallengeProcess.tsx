@@ -36,6 +36,15 @@ export function ChallengeProcess({
 }) {
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [error, setError] = useState<string | null>(null)
+  /**
+   * 这次解题对应的扫描记录**已经不存在**（被清理/删除）。
+   *
+   * ★ 它和"读不到"是两件事：删除是不可逆的正常清理结果，而网络/权限
+   *   失败是"现在读不到、以后也许能读"。原来两者都渲染成红字
+   *   「读不到过程事件：扫描不存在」，看起来像系统坏了 —— 而应急响应页
+   *   的历史任务恰恰经常指向被清理掉的扫描。
+   */
+  const [missing, setMissing] = useState(false)
 
   useEffect(() => {
     if (!scanId) return
@@ -50,8 +59,13 @@ export function ChallengeProcess({
         if (cancelled) return
         setEvents(data.events)
         setError(null)
+        setMissing(false)
       } catch (err) {
-        if (!cancelled) setError(errorMessage(err))
+        if (cancelled) return
+        const message = errorMessage(err)
+        // 后端的 404 文案是「扫描不存在，可能已被删除」。
+        setMissing(message.includes('扫描不存在'))
+        setError(message)
       }
     }
 
@@ -93,13 +107,19 @@ export function ChallengeProcess({
         <span className="ml-auto">{events.length} 条</span>
       </div>
 
-      {error && <p className="text-2xs text-signal-risk">读不到过程事件：{error}</p>}
+      {missing ? (
+        <p className="text-2xs text-ink-faint">
+          这一轮对应的扫描记录已被清理，过程不再可读。结论与产物（题解、工单）不受影响。
+        </p>
+      ) : (
+        error && <p className="text-2xs text-signal-risk">读不到过程事件：{error}</p>
+      )}
 
-      {!running && events.length > 0 && (
+      {!missing && !running && events.length > 0 && (
         <p className="text-2xs text-ink-ghost">这道题当前没有在跑 —— 下面是上一次运行的记录。</p>
       )}
 
-      {!error && events.length === 0 && (
+      {!missing && !error && events.length === 0 && (
         <p className="text-2xs text-ink-faint">
           {running ? '刚开跑，还没有产生动作。' : '这一轮没有留下过程记录。'}
         </p>

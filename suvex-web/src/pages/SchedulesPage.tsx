@@ -29,6 +29,7 @@ import {
   deleteSchedule,
   loadSchedules,
   toggleSchedule,
+  updateSchedule,
   useSchedulesState,
 } from '@/data/schedules-store'
 import {
@@ -88,7 +89,10 @@ const FILTERS: ReadonlyArray<{ value: StateFilter; label: string }> = [
 function StateBadge({ state }: { state: ScheduleState }) {
   const meta = SCHEDULE_STATE_META[state]
   return (
-    <span className={cn('inline-flex items-center gap-1.5 text-xs', meta.className)} title={meta.hint}>
+    <span
+      className={cn('inline-flex items-center gap-1.5 text-xs', meta.className)}
+      title={meta.hint}
+    >
       <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', meta.dot)} aria-hidden="true" />
       {meta.label}
     </span>
@@ -206,7 +210,8 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
       footer={
         <div className="flex items-center justify-between gap-tight">
           <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">
-            {disabledReason ?? `每 ${formatInterval(intervalMinutes).replace('每 ', '')} 自动发起一次扫描`}
+            {disabledReason ??
+              `每 ${formatInterval(intervalMinutes).replace('每 ', '')} 自动发起一次扫描`}
           </p>
           <div className="flex shrink-0 gap-tight">
             <Button variant="secondary" size="sm" onClick={onClose} disabled={busy}>
@@ -285,9 +290,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
               </button>
             ))}
           </div>
-          {kindHint !== null && (
-            <p className="text-2xs text-ink-muted">例如 {kindHint.example}</p>
-          )}
+          {kindHint !== null && <p className="text-2xs text-ink-muted">例如 {kindHint.example}</p>}
         </div>
 
         <div className="flex flex-col gap-1">
@@ -361,7 +364,10 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
         </p>
 
         {error !== null && (
-          <p role="alert" className="rounded-sm border border-signal-risk/40 bg-signal-risk/10 px-2.5 py-2 text-xs text-signal-risk">
+          <p
+            role="alert"
+            className="rounded-sm border border-signal-risk/40 bg-signal-risk/10 px-2.5 py-2 text-xs text-signal-risk"
+          >
             {error}
           </p>
         )}
@@ -398,6 +404,19 @@ export default function SchedulesPage() {
   const [pendingDelete, setPendingDelete] = useState<Schedule | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  /**
+   * 行内编辑（改名 / 改间隔）。
+   *
+   * ★ `updateSchedule`（`PATCH /schedules/{id}`）从 v0.88 就在 store 里，
+   *   但页面一直没有入口 —— 一个"只能建、不能调整"的计划表，用户改个
+   *   间隔只能删了重建，而重建会丢掉失败计数与下次执行相位。
+   *   这里把它接上：只开两个字段（名字、间隔），因为改目标/判据相当于
+   *   换了一个任务（见文件头对新建表单的说明）。
+   */
+  const [editing, setEditing] = useState<{ id: string; name: string; interval: string } | null>(
+    null,
+  )
+  const [savingEdit, setSavingEdit] = useState(false)
 
   // 首次进入拉一次
   const loadedOnce = useRef(false)
@@ -426,7 +445,6 @@ export default function SchedulesPage() {
         const next = new URLSearchParams(prev)
         next.delete('new')
         return next
-
       },
       { replace: true },
     )
@@ -496,6 +514,54 @@ export default function SchedulesPage() {
       })
     } finally {
       setTogglingId(null)
+    }
+  }
+
+  const startEdit = (schedule: Schedule) => {
+    setEditing({
+      id: schedule.id,
+      name: schedule.name,
+      interval: String(schedule.intervalMinutes),
+    })
+  }
+
+  /**
+   * 保存行内编辑。
+   *
+   * 校验放在这里而不是禁用保存按钮：用户把间隔清空再点保存时，
+   * 需要的是"哪里不对"，而不是一个点不动的按钮（与向导同一条约定）。
+   */
+  const saveEdit = async () => {
+    if (editing === null) return
+    const name = editing.name.trim()
+    if (!name) {
+      showToast({ message: '计划名称不能为空。', tone: 'info' })
+      return
+    }
+    const minutes = Number(editing.interval)
+    if (
+      !Number.isInteger(minutes) ||
+      minutes < MIN_INTERVAL_MINUTES ||
+      minutes > MAX_INTERVAL_MINUTES
+    ) {
+      showToast({
+        message: `间隔要填 ${MIN_INTERVAL_MINUTES}–${MAX_INTERVAL_MINUTES} 分钟之间的整数。`,
+        tone: 'info',
+      })
+      return
+    }
+    setSavingEdit(true)
+    try {
+      const next = await updateSchedule(editing.id, { name, intervalMinutes: minutes })
+      showToast({ message: `已更新「${next.name}」`, tone: 'ok' })
+      setEditing(null)
+    } catch (caught) {
+      showToast({
+        message: caught instanceof Error ? caught.message : '保存失败',
+        tone: 'risk',
+      })
+    } finally {
+      setSavingEdit(false)
     }
   }
 
@@ -662,14 +728,17 @@ export default function SchedulesPage() {
                   <th className="px-3 py-2 font-medium">下次执行</th>
                   <th className="px-3 py-2 font-medium">上次执行</th>
                   <th className="px-3 py-2 font-medium">最近一次扫描</th>
-                  <th className="px-3 py-2 font-medium text-right">操作</th>
+                  <th className="px-3 py-2 text-right font-medium">操作</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map((schedule) => {
                   const value = scheduleState(schedule, now)
                   return (
-                    <tr key={schedule.id} className="border-b border-line last:border-0 hover:bg-surface/60">
+                    <tr
+                      key={schedule.id}
+                      className="border-b border-line last:border-0 hover:bg-surface/60"
+                    >
                       <td className="px-3 py-2 align-top">
                         <StateBadge state={value} />
                         {schedule.failureCount > 0 && (
@@ -678,19 +747,50 @@ export default function SchedulesPage() {
                           </p>
                         )}
                         {schedule.lastFailureReason !== null && (
-                          <p className="mt-0.5 max-w-[16rem] truncate text-2xs text-ink-muted" title={schedule.lastFailureReason}>
+                          <p
+                            className="mt-0.5 max-w-[16rem] truncate text-2xs text-ink-muted"
+                            title={schedule.lastFailureReason}
+                          >
                             {schedule.lastFailureReason}
                           </p>
                         )}
                       </td>
                       <td className="px-3 py-2 align-top">
-                        <p className="font-medium text-ink">{schedule.name}</p>
+                        {editing?.id === schedule.id ? (
+                          <input
+                            type="text"
+                            value={editing.name}
+                            onChange={(e) => setEditing({ ...editing, name: e.target.value })}
+                            aria-label="计划名称"
+                            maxLength={120}
+                            className="w-full max-w-[20rem] rounded-sm border border-line bg-surface-sunken px-2 py-1 text-sm text-ink focus:border-accent focus:outline-none"
+                          />
+                        ) : (
+                          <p className="font-medium text-ink">{schedule.name}</p>
+                        )}
                         <p className="mt-0.5 text-xs text-ink-muted">
-                          {TARGET_KIND_LABEL[schedule.targetKind as TargetKind] ?? schedule.targetKind} · {schedule.target}
+                          {TARGET_KIND_LABEL[schedule.targetKind as TargetKind] ??
+                            schedule.targetKind}{' '}
+                          · {schedule.target}
                         </p>
                       </td>
                       <td className="px-3 py-2 align-top text-xs text-ink-muted">
-                        {formatInterval(schedule.intervalMinutes)}
+                        {editing?.id === schedule.id ? (
+                          <span className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              value={editing.interval}
+                              onChange={(e) => setEditing({ ...editing, interval: e.target.value })}
+                              aria-label="间隔（分钟）"
+                              min={MIN_INTERVAL_MINUTES}
+                              max={MAX_INTERVAL_MINUTES}
+                              className="w-20 rounded-sm border border-line bg-surface-sunken px-2 py-1 text-sm text-ink focus:border-accent focus:outline-none"
+                            />
+                            分钟
+                          </span>
+                        ) : (
+                          formatInterval(schedule.intervalMinutes)
+                        )}
                       </td>
                       <td className="px-3 py-2 align-top text-xs text-ink-muted">
                         {formatRelative(schedule.nextRunAt, now)}
@@ -712,23 +812,54 @@ export default function SchedulesPage() {
                       </td>
                       <td className="px-3 py-2 align-top">
                         <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => void onToggle(schedule)}
-                            loading={togglingId === schedule.id}
-                            title={schedule.enabled ? '停用这条计划' : '启用这条计划'}
-                          >
-                            {schedule.enabled ? '停用' : '启用'}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setPendingDelete(schedule)}
-                            title="删除这条计划"
-                          >
-                            <Trash2 size={13} aria-hidden="true" />
-                          </Button>
+                          {editing?.id === schedule.id ? (
+                            <>
+                              <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={() => void saveEdit()}
+                                loading={savingEdit}
+                              >
+                                保存
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setEditing(null)}
+                                disabled={savingEdit}
+                              >
+                                取消
+                              </Button>
+                            </>
+                          ) : (
+                            <>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => startEdit(schedule)}
+                                title="改名字或执行间隔"
+                              >
+                                编辑
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => void onToggle(schedule)}
+                                loading={togglingId === schedule.id}
+                                title={schedule.enabled ? '停用这条计划' : '启用这条计划'}
+                              >
+                                {schedule.enabled ? '停用' : '启用'}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setPendingDelete(schedule)}
+                                title="删除这条计划"
+                              >
+                                <Trash2 size={13} aria-hidden="true" />
+                              </Button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>

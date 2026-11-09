@@ -150,9 +150,16 @@ describe('OverviewPage 三态', () => {
     expect(screen.getByText('还没有扫描记录')).toBeTruthy()
     // 空状态整块替换，所以正文区的关键指标不该出现。
     expect(screen.queryByLabelText('关键指标')).toBeNull()
+    /*
+      ★ 但「可用能力」三格要留着 —— 它回答"这套部署能干什么"，
+      与跑没跑过扫描无关（后端在 hasAnyScan=False 时也返回 resources）。
+      新装的系统恰恰最需要看到自己配了多少工具、多少技能。
+    */
+    expect(screen.getByText('可用工具')).toBeTruthy()
+    expect(screen.getByText('技能卡')).toBeTruthy()
   })
 
-  it('有数据时渲染关键指标区，并把 mock 的智能体数带进脚注', () => {
+  it('有数据时渲染关键指标区，并把运行/排队的扫描数带进脚注', () => {
     mockedUseFleetStatus.mockReturnValue({
       agents: { running: 3, queued: 1 },
     } as unknown as ReturnType<typeof useFleetStatus>)
@@ -162,8 +169,12 @@ describe('OverviewPage 三态', () => {
 
     expect(screen.getByLabelText('关键指标')).toBeTruthy()
     expect(screen.getByText('进行中的扫描')).toBeTruthy()
-    // 脚注里拼的是 agents 的两个数 —— 顺便证明 useFleetStatus 被真的用上了。
-    expect(screen.getByText(/1 个排队 · 3 个智能体在跑/)).toBeTruthy()
+    /*
+      脚注拼的是 agents 的两个数 —— 顺便证明 useFleetStatus 被真的用上了。
+      措辞用「扫描」而不是「智能体」：这两个数就是同一批扫描按状态分的，
+      叫成智能体会让人以为另有 3 个东西，和卡片上的数字对不上。
+    */
+    expect(screen.getByText(/3 个在执行 · 1 个排队/)).toBeTruthy()
     expect(screen.queryByText('还没有扫描记录')).toBeNull()
   })
 

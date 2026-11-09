@@ -52,7 +52,7 @@ class TestListAllFiles:
 
         rows = ready_client.get("/api/v1/chat/files")
         assert rows.status_code == 200, rows.text
-        data = rows.json()
+        data = rows.json()["items"]
         got = {(row["sessionId"], row["path"]) for row in data}
         assert got == {(a, "report.md"), (b, "out/flag.txt")}
         # 每条都带会话身份，前端表格才有「会话」列可显示。
@@ -60,13 +60,32 @@ class TestListAllFiles:
         assert titles[a] == "会话甲" and titles[b] == "会话乙"
         assert all(row["source"] == "workspace" for row in data)
 
+    def test_truncation_is_reported_not_silent(
+        self, ready_client: TestClient, ws_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """★ 超过上限时 `truncated=true` + `limit`，不能静默截断。
+
+        原来响应是裸数组，截断标记算完就丢了 —— 界面把 5000 当成
+        "一共就这些"，用户会以为旧产物丢了。
+        """
+        monkeypatch.setattr(chat_workspaces, "MAX_LISTED_FILES", 1)
+        session = _session(ready_client, "多文件")
+        _write(session, "a.txt")
+        _write(session, "b.txt")
+
+        body = ready_client.get("/api/v1/chat/files").json()
+
+        assert body["truncated"] is True
+        assert body["limit"] == 1
+        assert len(body["items"]) == 1
+
     def test_filters_by_session_id(self, ready_client: TestClient, ws_root: Path) -> None:
         a = _session(ready_client, "甲")
         b = _session(ready_client, "乙")
         _write(a, "a.txt")
         _write(b, "b.txt")
 
-        rows = ready_client.get("/api/v1/chat/files", params={"sessionId": a}).json()
+        rows = ready_client.get("/api/v1/chat/files", params={"sessionId": a}).json()["items"]
         assert [row["path"] for row in rows] == ["a.txt"]
 
     def test_filters_by_name_substring(self, ready_client: TestClient, ws_root: Path) -> None:
@@ -74,7 +93,7 @@ class TestListAllFiles:
         _write(session, "report-final.md")
         _write(session, "notes.md")
 
-        rows = ready_client.get("/api/v1/chat/files", params={"name": "REPORT"}).json()
+        rows = ready_client.get("/api/v1/chat/files", params={"name": "REPORT"}).json()["items"]
         assert [row["path"] for row in rows] == ["report-final.md"]
 
     def test_rejects_unknown_source(self, ready_client: TestClient, ws_root: Path) -> None:
@@ -86,12 +105,12 @@ class TestListAllFiles:
     ) -> None:
         session = _session(ready_client, "将被归档")
         _write(session, "keep.txt")
-        assert len(ready_client.get("/api/v1/chat/files").json()) == 1
+        assert len(ready_client.get("/api/v1/chat/files").json()["items"]) == 1
 
         archived = ready_client.delete(f"/api/v1/chat/sessions/{session}")
         assert archived.status_code == 200, archived.text
 
-        assert ready_client.get("/api/v1/chat/files").json() == []
+        assert ready_client.get("/api/v1/chat/files").json()["items"] == []
 
 
 class TestDeleteFile:
@@ -105,7 +124,7 @@ class TestDeleteFile:
             f"/api/v1/chat/sessions/{session}/files", params={"path": "tmp.txt"}
         )
         assert got.status_code == 204, got.text
-        assert ready_client.get("/api/v1/chat/files").json() == []
+        assert ready_client.get("/api/v1/chat/files").json()["items"] == []
 
     def test_delete_missing_is_404(self, ready_client: TestClient, ws_root: Path) -> None:
         session = _session(ready_client, "缺")
@@ -196,7 +215,7 @@ class TestUploadEndpoint:
         # 会话级列表和跨会话列表都能看到它。
         per_session = ready_client.get(f"/api/v1/chat/sessions/{session}/files").json()
         assert [row["path"] for row in per_session] == ["uploads/报告.md"]
-        cross = ready_client.get("/api/v1/chat/files").json()
+        cross = ready_client.get("/api/v1/chat/files").json()["items"]
         assert [row["path"] for row in cross] == ["uploads/报告.md"]
 
         # 下载回来字节一致。

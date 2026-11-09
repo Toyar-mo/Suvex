@@ -99,6 +99,19 @@ describe('ChallengeProcess', () => {
     await waitFor(() => expect(screen.getByText(/读不到过程事件/)).not.toBeNull())
   })
 
+  it('★ 扫描已被清理时说的是"过程不可读"，不是红字报警', async () => {
+    // 后端的 404 文案。应急响应页的历史任务经常指向被清理掉的扫描 ——
+    // 那是正常的保留期清理，不是故障。
+    get.mockRejectedValue(new Error('扫描不存在，可能已被删除。'))
+
+    render(<ChallengeProcess scanId="scan_1" running={false} />)
+
+    await waitFor(() =>
+      expect(screen.getByText(/扫描记录已被清理，过程不再可读/)).not.toBeNull(),
+    )
+    expect(screen.queryByText(/读不到过程事件/)).toBeNull()
+  })
+
   it('跑着的题没有事件时说"刚开跑"（而不是"这一轮没有记录"）', async () => {
     get.mockResolvedValue({ events: [], hasMore: false })
 

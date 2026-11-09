@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   filterSkillGroups,
@@ -299,13 +299,21 @@ describe('validateDraft', () => {
 
 describe('validateAttachmentName - same rules as backend', () => {
   it('accepts normal attachment names', () => {
-    for (const ok of ['a.md','checklist.md','scripts/probe.sh','a/b/c.txt','_x.md','form-1.json','a.b.c.md']) {
+    for (const ok of [
+      'a.md',
+      'checklist.md',
+      'scripts/probe.sh',
+      'a/b/c.txt',
+      '_x.md',
+      'form-1.json',
+      'a.b.c.md',
+    ]) {
       expect(validateAttachmentName(ok), 'should accept ' + ok).toBeNull()
     }
   })
 
   it('rejects absolute paths and traversal', () => {
-    for (const bad of ['/etc/passwd','a/../b.md','./a.md','../a.md']) {
+    for (const bad of ['/etc/passwd', 'a/../b.md', './a.md', '../a.md']) {
       expect(validateAttachmentName(bad), 'should reject ' + bad).not.toBeNull()
     }
   })
@@ -333,5 +341,77 @@ describe('validateAttachmentName - same rules as backend', () => {
   it('rejects segments starting with dot or hyphen', () => {
     expect(validateAttachmentName('.hidden')).not.toBeNull()
     expect(validateAttachmentName('-x.md')).not.toBeNull()
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 写操作后的刷新范围
+// ══════════════════════════════════════════════════════════════
+
+/*
+  ★ 为什么把 `@/lib/api` 整个换掉：这里要断言的是**发了哪些请求**，
+  而不是响应长什么样。用真 fetch 的话还得为清单与统计各造一份响应，
+  而断言点（"有没有请求统计端点"）会被这些噪音淹掉。
+*/
+vi.mock('@/lib/api', () => {
+  class FakeApiError extends Error {
+    code = 'FAKE'
+    status = 0
+    details = {}
+  }
+  return {
+    ApiError: FakeApiError,
+    toApiError: (error: unknown) =>
+      error instanceof FakeApiError
+        ? error
+        : Object.assign(new FakeApiError(String(error)), { status: 0 }),
+    api: {
+      get: vi.fn(async () => ({ total: 0, categories: [] })),
+      post: vi.fn(async () => ({
+        name: 'x',
+        category: 'c',
+        description: '',
+        source: 'custom',
+        body: '',
+        lineCount: 1,
+      })),
+      put: vi.fn(async () => ({
+        name: 'x',
+        category: 'c',
+        description: '',
+        source: 'custom',
+        body: '',
+        lineCount: 1,
+      })),
+      del: vi.fn(async () => undefined),
+    },
+  }
+})
+
+describe('写操作后的刷新范围', () => {
+  it('★ 保存技能只重拉清单，不重算调用统计', async () => {
+    const { api } = await import('@/lib/api')
+    const { updateSkill, resetSkillsStore } = await import('./skills')
+    resetSkillsStore()
+    vi.mocked(api.get).mockClear()
+
+    await updateSkill('demo', { description: 'd', body: 'b' })
+
+    const urls = vi.mocked(api.get).mock.calls.map((call) => String(call[0]))
+    expect(urls).toContain('/kernel/skills')
+    // 统计要扫最多 2 万条事件表 —— 改正文不影响它，不该附带重算
+    expect(urls).not.toContain('/kernel/skills/usage')
+  })
+
+  it('删除技能同样只重拉清单', async () => {
+    const { api } = await import('@/lib/api')
+    const { deleteSkill, resetSkillsStore } = await import('./skills')
+    resetSkillsStore()
+    vi.mocked(api.get).mockClear()
+
+    await deleteSkill('demo')
+
+    const urls = vi.mocked(api.get).mock.calls.map((call) => String(call[0]))
+    expect(urls).toEqual(['/kernel/skills'])
   })
 })

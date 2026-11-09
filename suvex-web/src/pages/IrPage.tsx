@@ -42,9 +42,10 @@
  * 找不到"，而不是"你挑错了"。
  */
 
-import { ClipboardList, FileText, Siren, Upload } from 'lucide-react'
+import { ClipboardList, FileText, Siren, Terminal, Upload } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
+import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
 import { PageHeader } from '@/components/layout/AppShell'
 import { WorkOrderDialog } from '@/components/kernel'
 import { WriteupDialog } from '@/components/kernel/WriteupDialog'
@@ -78,6 +79,11 @@ const IR_CATEGORY_PREFIX = 'ir-'
  */
 function isIrChallenge(challenge: KernelChallenge): boolean {
   return (challenge.category || '').trim().toLowerCase().startsWith(IR_CATEGORY_PREFIX)
+}
+
+/** 这道复盘正在跑（用于「过程」面板与列表轮询）。 */
+function isRunningStatus(challenge: KernelChallenge): boolean {
+  return challenge.status === 'solving' || challenge.status === 'environment_ready'
 }
 
 /**
@@ -167,7 +173,11 @@ export function IrPage() {
   const ranBeforeIds = useMemo(() => {
     const ran = new Set<string>()
     for (const challenge of snapshot.challenges) {
-      if (challenge.updatedAt && challenge.createdAt && challenge.updatedAt !== challenge.createdAt) {
+      if (
+        challenge.updatedAt &&
+        challenge.createdAt &&
+        challenge.updatedAt !== challenge.createdAt
+      ) {
         ran.add(challenge.id)
       }
     }
@@ -181,6 +191,15 @@ export function IrPage() {
       .sort((a, b) => (b.challenge.createdAt || '').localeCompare(a.challenge.createdAt || ''))
   }, [snapshot.challenges, ranBeforeIds])
 
+  /**
+   * 哪些任务的「过程」是展开的。
+   *
+   * ★ 复盘正在跑时**默认展开**（见渲染处），因为用户点「开始复盘」之后
+   *   留在这一页，能看到的只有一行"复盘中"—— 过程事件才是进度本身。
+   *   跑完之后可以收起；也可以手动展开看「上一次的过程」。
+   */
+  const [openProcessIds, setOpenProcessIds] = useState<Set<string>>(new Set())
+
   // 首次进入拉一次快照。⚠️ 只在 idle 时拉，避免每次渲染都发请求。
   const loaded = useRef(false)
   useEffect(() => {
@@ -189,6 +208,30 @@ export function IrPage() {
     if (snapshot.status !== 'idle') return
     void loadKernel()
   }, [snapshot.status])
+
+  /**
+   * 有复盘在跑 → 5 秒静默刷新一次快照。
+   *
+   * ★ 原来这一页**只拉一次**：点「开始复盘」后状态一直停在"复盘中"，
+   *   跑完了也不变，直到用户刷新整页。而 `solveChallenge` 本身是异步的
+   *   （后端排队、起容器），前端拿不到完成回调 —— 只能轮询。
+   *   与 CTF 看板 / 对话页同一条口径：终态就停。
+   */
+  const anyRunning = tasks.some(({ challenge }) => isRunningStatus(challenge))
+  useEffect(() => {
+    if (!anyRunning) return
+    const timer = window.setInterval(() => void loadKernel({ silent: true }), 5000)
+    return () => window.clearInterval(timer)
+  }, [anyRunning])
+
+  const toggleProcess = useCallback((id: string) => {
+    setOpenProcessIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }, [])
 
   const onPickFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
     const picked = Array.from(event.target.files ?? [])
@@ -245,20 +288,17 @@ export function IrPage() {
     }
   }, [brief, files, title])
 
-  const onStart = useCallback(
-    async (challenge: KernelChallenge) => {
-      setStarting(challenge.id)
-      try {
-        await solveChallenge(challenge.id, {})
-        showToast({ message: '已开跑，进度在下方条目的日志里。' })
-      } catch (error) {
-        showToast({ message: errorMessage(error) || '启动失败，请稍后重试。', tone: 'risk' })
-      } finally {
-        setStarting(null)
-      }
-    },
-    [],
-  )
+  const onStart = useCallback(async (challenge: KernelChallenge) => {
+    setStarting(challenge.id)
+    try {
+      await solveChallenge(challenge.id, {})
+      showToast({ message: '已开跑，过程会显示在这条任务下面。' })
+    } catch (error) {
+      showToast({ message: errorMessage(error) || '启动失败，请稍后重试。', tone: 'risk' })
+    } finally {
+      setStarting(null)
+    }
+  }, [])
 
   return (
     <div className="flex flex-col">
@@ -369,7 +409,7 @@ export function IrPage() {
                     证据包 {challenge.attachments.length} 份
                   </p>
                   {shouldShowCardError(challenge.lastError) && (
-                    <p className="mt-1 text-xs text-warn">{challenge.lastError}</p>
+                    <p className="text-warn mt-1 text-xs">{challenge.lastError}</p>
                   )}
                 </div>
 
@@ -406,8 +446,41 @@ export function IrPage() {
                       复盘报告
                     </Button>
                   )}
+                  {/*
+                    过程入口。★ 只在真的跑过（有 scanId）时给 ——
+                    从没开始过的任务点开只会说"还没有开始解题"，那是噪音。
+                  */}
+                  {challenge.scanId && (
+                    <Button
+                      variant="ghost"
+                      onClick={() => toggleProcess(challenge.id)}
+                      aria-expanded={isRunningStatus(challenge) || openProcessIds.has(challenge.id)}
+                    >
+                      <Terminal className="h-4 w-4" />
+                      {isRunningStatus(challenge) || openProcessIds.has(challenge.id)
+                        ? '收起过程'
+                        : '查看过程'}
+                    </Button>
+                  )}
                 </div>
               </div>
+
+              {/*
+                ★ 正在跑的任务**默认展开**过程。
+
+                点「开始复盘」后用户留在这页，本来只能看到一行"复盘中" ——
+                而过程事件才是"它现在在做什么"。跑完的任务默认收起，
+                需要时手动展开看上一次的记录。
+              */}
+              {challenge.scanId &&
+                (isRunningStatus(challenge) || openProcessIds.has(challenge.id)) && (
+                  <div className="mt-3 border-t border-line pt-3">
+                    <ChallengeProcess
+                      scanId={challenge.scanId}
+                      running={isRunningStatus(challenge)}
+                    />
+                  </div>
+                )}
             </article>
           ))}
         </section>
@@ -425,10 +498,7 @@ export function IrPage() {
         />
       )}
       {writeupChallenge && (
-        <WriteupDialog
-          challenge={writeupChallenge}
-          onClose={() => setWriteupChallenge(null)}
-        />
+        <WriteupDialog challenge={writeupChallenge} onClose={() => setWriteupChallenge(null)} />
       )}
     </div>
   )

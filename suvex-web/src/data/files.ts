@@ -32,12 +32,9 @@ export interface UploadSessionOption {
  * 与其让用户选中后再失败，不如干脆不列出来。
  */
 export async function listUploadSessions(): Promise<UploadSessionOption[]> {
-  const sessions = await api.get<Array<{ id: string; title: string; archived?: boolean }>>(
-    '/chat/sessions',
-  )
-  return sessions
-    .filter((s) => !s.archived)
-    .map((s) => ({ id: s.id, title: s.title }))
+  const sessions =
+    await api.get<Array<{ id: string; title: string; archived?: boolean }>>('/chat/sessions')
+  return sessions.filter((s) => !s.archived).map((s) => ({ id: s.id, title: s.title }))
 }
 
 /** 清单里的一行。 */
@@ -64,15 +61,43 @@ export interface FileFilters {
 
 export type FilesStatus = 'loading' | 'ready' | 'error'
 
+/**
+ * 跨会话文件清单。
+ *
+ * ★ v1.79 起后端返回对象而不是裸数组。服务端有 `MAX_LISTED_FILES`
+ *   （5000）上限，原来的裸数组在截断时**没有任何字段**能说出来 ——
+ *   界面把 5000 当成"一共就这些"，用户会以为旧产物丢了。
+ *   `truncated` + `limit` 让界面能说清"只显示了最近修改的前 N 个"。
+ */
+export interface FileListResult {
+  items: WorkspaceFileRow[]
+  truncated: boolean
+  /** 服务端上限（当前 5000）。未截断时没有显示意义。 */
+  limit: number
+}
+
 /** 拉取文件清单。过滤条件全部下推给后端（见后端 docstring 的说明）。 */
-export async function listFiles(filters: FileFilters = {}): Promise<WorkspaceFileRow[]> {
+export async function listFiles(filters: FileFilters = {}): Promise<FileListResult> {
   const qs = new URLSearchParams()
   if (filters.sessionId?.trim()) qs.set('sessionId', filters.sessionId.trim())
   if (filters.projectId?.trim()) qs.set('projectId', filters.projectId.trim())
   if (filters.name?.trim()) qs.set('name', filters.name.trim())
   if (filters.source && filters.source !== 'all') qs.set('source', filters.source)
   const suffix = qs.toString() ? `?${qs.toString()}` : ''
-  return api.get<WorkspaceFileRow[]>(`/chat/files${suffix}`)
+  const data = await api.get<FileListResult | WorkspaceFileRow[]>(`/chat/files${suffix}`)
+  /*
+    ⚠️ 兜底成数组形态：前后端一起换的契约没有"灰度期"，但开发时
+    可能只重建了其中一侧（本机 Vite 直连旧后端）。把数组当对象用
+    会静默渲染 0 行 —— 那看起来像"没有文件"，比一个错更难查。
+  */
+  if (Array.isArray(data)) {
+    return { items: data, truncated: false, limit: 0 }
+  }
+  return {
+    items: data.items ?? [],
+    truncated: data.truncated === true,
+    limit: typeof data.limit === 'number' ? data.limit : 0,
+  }
 }
 
 /** 删除工作区里的一个文件（不可恢复）。 */
@@ -105,10 +130,7 @@ export async function uploadFile(sessionId: string, file: File): Promise<Uploade
   // 字段名必须是 `file` —— 后端 `upload_workspace_file(file: UploadFile = File(...))`
   // 按这个名字取。写得不一样会得到 422「field required」，而不是"没传文件"。
   form.append('file', file, file.name)
-  return api.upload<UploadedFile>(
-    `/chat/sessions/${encodeURIComponent(sessionId)}/files`,
-    form,
-  )
+  return api.upload<UploadedFile>(`/chat/sessions/${encodeURIComponent(sessionId)}/files`, form)
 }
 
 /** 人类可读的文件大小。 */

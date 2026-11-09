@@ -190,8 +190,18 @@ function OverviewPage() {
             ★ 「一次都没跑过」时整块换掉，**不是**渲染四个 0 值卡片。
               `hasAnyScan` 由后端给出（它知道得比前端的任何推导都准）——
               前端不再需要那个"示例数据 / 空状态"的开发开关来假装空态。
+
+            ★ v1.79：空态也保留「可用能力」三格。
+
+              它回答的是"这套部署能干什么"（工具 / 技能 / 模型），
+              与"跑过没有"无关 —— 后端在 `hasAnyScan=False` 时同样返回
+              `resources`，就是为了让**新装的系统**也能看到自己的家底。
+              原来这里整块换成了 `NoScansYet`，那三格被一起藏掉了。
           */
-          <NoScansYet description="给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。整个过程会实时出现在这里。" />
+          <div className="flex flex-col gap-bay">
+            <NoScansYet description="给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。整个过程会实时出现在这里。" />
+            <ResourceStrip resources={data.resources} />
+          </div>
         ) : (
           <>
             <FreshnessNote lastLoadedAt={lastLoadedAt} />
@@ -265,8 +275,22 @@ function OverviewContent({
             value={metrics.activeScans}
             icon={ScanSearch}
             footnote={
+              /*
+                ★ 口径统一成"扫描"。
+
+                卡片的值 `activeScans` = 运行中 + 排队中（后端同一条查询）。
+                原来脚注写「N 个智能体在跑」，而 `agents` 就是同一批扫描
+                按状态分的两个数 —— 换了个名字却还是同一件事，读起来像
+                另有 N 个智能体，和左边的数字对不上。排队为 0 时也不该
+                硬写「0 个在跑」。
+              */
               metrics.activeScans > 0
-                ? `${agents.queued > 0 ? `${agents.queued} 个排队 · ` : ''}${agents.running} 个智能体在跑`
+                ? [
+                    agents.running > 0 ? `${agents.running} 个在执行` : null,
+                    agents.queued > 0 ? `${agents.queued} 个排队` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
                 : '当前没有任务在跑'
             }
           />
@@ -290,9 +314,7 @@ function OverviewContent({
           <StatCard
             label="平均扫描耗时"
             value={
-              metrics.avgScanDurationSec === null
-                ? '—'
-                : formatDuration(metrics.avgScanDurationSec)
+              metrics.avgScanDurationSec === null ? '—' : formatDuration(metrics.avgScanDurationSec)
             }
             icon={Timer}
             footnote="统计已完成的扫描"

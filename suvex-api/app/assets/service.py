@@ -85,29 +85,59 @@ def _open_condition():  # noqa: ANN202 - SQLAlchemy 表达式，类型没法直�
     return Finding.status.not_in(TERMINAL_FINDING_STATUSES)
 
 
-def list_assets(db: Session, *, limit: int = MAX_ASSETS) -> tuple[list[dict], bool]:
+def _target_union():  # noqa: ANN202 - SQLAlchemy 子查询，类型没法直接标注
+    """「有哪些资产」的唯一口径。
+
+    以 `scans.target` 的**并集**为准，再并上 `findings.target`：
+    正常情况下 findings 的 target 都来自某个 scan，但历史数据里
+    可能有 finding 的 target 与 scan 的不一致（导入时外部工具给的值）。
+    只取 scans 会漏掉那些；只取 findings 会漏掉"扫了但没发现"的目标。
+
+    单点定义：列表、真实总数、全量统计三处必须用同一个并集，
+    否则"卡上说 1200 个目标、列表却只能数出 1198 个"。
+    """
+    scan_targets = select(Scan.target).distinct()
+    finding_targets = select(Finding.target).distinct()
+    return scan_targets.union(finding_targets).subquery()
+
+
+def asset_count(db: Session) -> int:
+    """资产总数 —— **不受 `MAX_ASSETS` 截断影响**。
+
+    列表最多返回 500 个，但"一共多少个目标"是一个独立的事实。
+    拿返回页的长度冒充总数，会让截断提示说"只显示了前 500 个，共 500 个"。
+    """
+    union = _target_union()
+    return int(db.execute(select(func.count()).select_from(union)).scalar_one())
+
+
+def list_assets(db: Session, *, limit: int = MAX_ASSETS) -> tuple[list[dict], bool, int]:
     """按 `target` 聚合出资产清单。
 
-    返回 `(assets, truncated)`。`truncated=True` 表示还有更多目标没返回 ——
-    调用方必须把它告诉用户，否则用户会以为这就是全部。
+    返回 `(assets, truncated, total)`：
+
+      · `assets`     —— 最多 `limit` 条；
+      · `truncated`  —— 目标数超过 `limit`，还有更多没返回；
+      · `total`      —— **全量**目标数（不是 `len(assets)`）。
+
+    `total` 单独给，是因为它和 `truncated` 是一对：
+    只给布尔值的话，界面只能说"还有更多"，说不出"还有多少"。
     """
 
     # ── 1. 先确定"有哪些资产"──────────────────────────────
-    #
-    # 以 `scans.target` 的**并集**为准，再并上 `findings.target`：
-    # 正常情况下 findings 的 target 都来自某个 scan，但历史数据里
-    # 可能有 finding 的 target 与 scan 的不一致（导入时外部工具给的值）。
-    # 只取 scans 会漏掉那些；只取 findings 会漏掉"扫了但没发现"的目标。
-    scan_targets = select(Scan.target).distinct()
-    finding_targets = select(Finding.target).distinct()
-    union = scan_targets.union(finding_targets).subquery()
+    union = _target_union()
     all_targets = select(union.c.target).order_by(union.c.target)
 
     rows = list(db.execute(all_targets).scalars())
-    truncated = len(rows) > limit
+    # ⚠️ 变量名不能叫 `total`：下面按严重度聚合的循环里有一个
+    #    `total = int(row.total or 0)`，会把这里的值**静默覆盖**成
+    #    "最后一条严重度统计的条数" —— 症状是 total 随机变成 1/2/3，
+    #    而 items 是正常的。2026-11-09 实测踩到（total=1、items=3）。
+    target_total = len(rows)
+    truncated = target_total > limit
     targets = rows[:limit]
     if not targets:
-        return [], False
+        return [], False, 0
 
     # ── 2. 每个目标的扫描统计 ──────────────────────────────
     #
@@ -265,7 +295,79 @@ def list_assets(db: Session, *, limit: int = MAX_ASSETS) -> tuple[list[dict], bo
             a["target"],
         )
     )
-    return assets, truncated
+    return assets, truncated, target_total
+
+
+def summary_all(db: Session) -> dict:
+    """顶部统计条 —— **全量口径**，与列表是否截断无关。
+
+    ## 为什么不从返回的这一页累加
+
+    卡片写着「目标总数」「带开着的高危」。列表被 `MAX_ASSETS` 截断时，
+    从 500 条累加出来的数字会被当成全站事实，而它只是"前 500 个里有多少" ——
+    用户会在卡上和列表之间找不到对应关系，而他没有任何线索知道
+    差异来自截断。
+
+    这几条都是**聚合查询**，不随目标数增长取回行数：
+    总数、漏洞数、带高危的目标数（distinct target）、从未扫描、从未跑完。
+
+    与 `summary(assets)` 的关系：那个按传入的资产列表算，保留给
+    "只要这一页的画像"的调用方与测试；接口一律用全量这个。
+    """
+    union = _target_union()
+    open_findings = _open_condition()
+
+    target_count = int(db.execute(select(func.count()).select_from(union)).scalar_one())
+
+    finding_total = int(
+        db.execute(select(func.count()).select_from(Finding)).scalar_one()
+    )
+    open_total = int(
+        db.execute(
+            select(func.count()).select_from(Finding).where(open_findings)
+        ).scalar_one()
+    )
+
+    high_targets = int(
+        db.execute(
+            select(func.count(func.distinct(Finding.target))).where(
+                open_findings, Finding.severity.in_(RISK_SEVERITIES)
+            )
+        ).scalar_one()
+    )
+
+    # 只有 findings、一次扫描都没有的目标（历史导入造成的）
+    scan_targets = select(Scan.target).distinct()
+    never_scanned = int(
+        db.execute(
+            select(func.count(func.distinct(Finding.target))).where(
+                Finding.target.not_in(scan_targets)
+            )
+        ).scalar_one()
+    )
+
+    # 有扫描、但一次都没成功过的目标 —— "看起来干净"只是因为没被检查过
+    completed_targets = select(Scan.target).where(
+        Scan.status == ScanStatus.COMPLETED.value
+    ).distinct()
+    never_completed = int(
+        db.execute(
+            select(func.count(func.distinct(Scan.target))).where(
+                Scan.target.not_in(completed_targets)
+            )
+        ).scalar_one()
+    )
+
+    return {
+        "targetCount": target_count,
+        "findingCount": finding_total,
+        "openFindingCount": open_total,
+        "targetsWithOpenHigh": high_targets,
+        "neverScanned": never_scanned,
+        "neverCompleted": never_completed,
+        # 服务端时间：客户端算"多久之前"应该用自己的时钟
+        "generatedAt": datetime.now(tz=None),
+    }
 
 
 def summary(assets: list[dict]) -> dict:

@@ -11,7 +11,8 @@
 3. `lastScanAt` 取**全部状态**、`lastCompletedAt` 只取 `completed` ——
    两者相差很远本身就是信息。
 4. **排序是风险优先**：一个 A 开头、什么漏洞都没有的目标不能占住第一行。
-5. 目标数超上限时 `truncated=true`，且**统计条与返回的这一页对得上**。
+5. 目标数超上限时 `truncated=true`，`total` 与统计条仍是**全量** ——
+   列表是截断的，而卡片回答的是"这套资产整体的状况"。
 """
 
 from __future__ import annotations
@@ -399,11 +400,17 @@ def test_recent_scan_wins_when_risk_ties(client: TestClient, db_session: Session
 # ══════════════════════════════════════════════════════════
 
 
-def test_truncated_flag_and_summary_agree_with_page(client: TestClient, db_session: Session):
-    """超过 limit 时 `truncated=true`，且统计条只统计**返回的这一页**。
+def test_truncated_flag_total_and_summary_are_full_scope(
+    client: TestClient, db_session: Session
+):
+    """★ 超过 limit 时 `truncated=true`，但 `total` 与统计条都是**全量**。
 
-    统计条用全量算会让用户"数不出"—— 列表里 3 条，统计条说共 7 个，
-    用户会以为界面坏了。`truncated` 已经表达"还有更多没显示"。
+    原来 `total=len(assets)`、summary 只算返回的这一页。截断提示于是变成
+    「只显示了前 3 个目标，共 3 个」—— 两个数字相等，而它想说的是
+    "还有更多"。统计卡也会把"前 3 个里有多少"当成全站事实。
+
+    现在：`total` 是全量目标数，卡片回答"这套资产整体的状况"，
+    列表回答"这一页能看到哪些"，两者由 `truncated` + `total` 连接起来。
     """
     for i in range(5):
         _scan(db_session, target=f"h{i}.example")
@@ -412,8 +419,38 @@ def test_truncated_flag_and_summary_agree_with_page(client: TestClient, db_sessi
 
     assert body["truncated"] is True
     assert len(body["items"]) == 3
-    assert body["total"] == 3
-    assert body["summary"]["targetCount"] == 3
+    # 全量：5 个目标，不是返回的 3 个
+    assert body["total"] == 5
+    assert body["summary"]["targetCount"] == 5
+
+
+def test_summary_counts_findings_outside_the_truncated_page(
+    client: TestClient, db_session: Session
+):
+    """★ 统计条覆盖被截断掉的那些目标。
+
+    第 4、5 个目标不在列表里（limit=3），但它们贡献的漏洞数、带高危的
+    目标数必须出现在卡片上。否则用户会看到"目标总数 3、带高危 1"，
+    而实际有 5 个目标、2 台带高危 —— 一个没人能解释的差。
+    """
+    targets = [f"h{i}.example" for i in range(5)]
+    for target in targets:
+        _scan(db_session, target=target)
+    # 五个目标各有一条未修复的 critical —— 排序是风险优先，
+    # limit=3 时前三条就占满了，另外两个带高危的目标不在列表里
+    for target in targets:
+        _finding(db_session, target=target, severity="critical")
+    db_session.commit()
+
+    body = client.get(f"{API}/assets", params={"limit": 3}).json()
+
+    assert len(body["items"]) == 3
+    assert body["total"] == 5
+    # ★ 卡片说的是全量：5 台带高危，而不是列表里那 3 台
+    assert body["summary"]["targetCount"] == 5
+    assert body["summary"]["findingCount"] == 5
+    assert body["summary"]["openFindingCount"] == 5
+    assert body["summary"]["targetsWithOpenHigh"] == 5
 
 
 def test_not_truncated_when_within_limit(client: TestClient, db_session: Session):

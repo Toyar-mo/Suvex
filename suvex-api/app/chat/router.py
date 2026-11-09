@@ -59,6 +59,7 @@ from app.chat.schemas import (
     ChatAttachmentOut,
     ChatChallengeRef,
     ChatFileItemOut,
+    ChatFileListOut,
     ChatFileOut,
     ChatFileUploadOut,
     ChatInterjectIn,
@@ -983,7 +984,7 @@ async def upload_workspace_file(
     )
 
 
-@router.get("/chat/files", response_model=list[ChatFileItemOut])
+@router.get("/chat/files", response_model=ChatFileListOut)
 def list_all_workspace_files(
     db: DbSession,
     identity: Reader,
@@ -991,7 +992,7 @@ def list_all_workspace_files(
     project_id: Annotated[str | None, Query(alias="projectId", max_length=128)] = None,
     name: Annotated[str | None, Query(max_length=256)] = None,
     source: Annotated[str, Query(max_length=32)] = "all",
-) -> list[ChatFileItemOut]:
+) -> ChatFileListOut:
     """「文件管理」页：跨会话列出**我的**产物文件（v1.37）。
 
     数据来源与会话级 `/chat/sessions/{id}/files` 相同 —— 每个会话在宿主上
@@ -1049,7 +1050,13 @@ def list_all_workspace_files(
             break
     # 最近修改的排前面 —— 「文件管理」页第一眼要找的通常是刚产出的东西。
     out.sort(key=lambda row: row.modifiedAt, reverse=True)
-    return out
+    # ★ 截断必须说出来：`truncated` 以前算完就丢了（返回裸数组），
+    #   前端只能把 5000 当成"一共就这些"。
+    return ChatFileListOut(
+        items=out,
+        truncated=truncated,
+        limit=chat_workspaces.MAX_LISTED_FILES,
+    )
 
 
 @router.delete("/chat/sessions/{session_id}/files", status_code=204)

@@ -414,6 +414,43 @@ def test_usage_counts_only_load_skill(
     assert sum(counts.values()) == 2, f"有非 load_skill 的事件混进统计：{counts}"
 
 
+def test_usage_reports_truncation_from_the_server(
+    ready_client, db_session, ctf2_challenge, ctf2_provider, monkeypatch  # noqa: ANN001
+) -> None:
+    """★ 截断由**后端**判定并下发（`truncated` + `limit`）。
+
+    原来响应只有 `sampledEvents`，前端拿它与硬编码的 20000 比 ——
+    正好打满会误报，后端调上限后永远误报。后端多取一条就能分清
+    "扫满了"与"正好这么多"，所以这个事实必须由后端说。
+    """
+    from app.kernel import skills_router
+
+    monkeypatch.setattr(skills_router, "MAX_USAGE_EVENTS", 1)
+    skill_name = skills_mod.discover_skills()[0].name
+    _emit_load_skill(db_session, ctf2_challenge, skill_name)
+    _emit_load_skill(db_session, ctf2_challenge, skill_name)
+    db_session.commit()
+
+    body = ready_client.get(f"{API}/kernel/skills/usage").json()
+
+    assert body["truncated"] is True
+    assert body["limit"] == 1
+    # 只统计了上限内的那一条
+    assert body["sampledEvents"] == 1
+
+
+def test_usage_not_truncated_when_everything_fits(
+    ready_client, db_session, ctf2_challenge, ctf2_provider  # noqa: ANN001
+) -> None:
+    skill_name = skills_mod.discover_skills()[0].name
+    _emit_load_skill(db_session, ctf2_challenge, skill_name)
+    db_session.commit()
+
+    body = ready_client.get(f"{API}/kernel/skills/usage").json()
+    assert body["truncated"] is False
+    assert body["limit"] > 0
+
+
 def test_usage_reports_last_loaded_at(
     ready_client, db_session, ctf2_challenge, ctf2_provider  # noqa: ANN001
 ) -> None:
