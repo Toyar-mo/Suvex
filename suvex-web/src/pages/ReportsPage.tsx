@@ -91,6 +91,16 @@ export function ReportsPage() {
    */
   const [mode, setMode] = useState<'compose' | 'history'>('compose')
 
+  /**
+   * 历史视图且**确实一份报告都没有**。
+   *
+   * 之前这时会同时出现三块空：左栏空白、右栏「从下方列表中选择一份报告」、
+   * 下方列表「还没有生成过报告」—— 同一句话铺满一屏。折叠成列表里那一块空态。
+   * `status === 'ready'` 才算数：加载中/失败各有自己的状态，不能误判成"空"。
+   */
+  const historyHasNone =
+    mode === 'history' && status === 'ready' && reports.length === 0
+
   // ── 编排状态 ──
   /**
    * ★ 从 URL 读"手选的漏洞"（任务 10 P5）。
@@ -749,7 +759,12 @@ export function ReportsPage() {
           </div>
         )}
 
-        <div className="grid gap-bay lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]">
+        <div
+          className={cn(
+            'grid gap-bay lg:grid-cols-[minmax(17rem,22rem)_minmax(0,1fr)]',
+            historyHasNone && 'hidden',
+          )}
+        >
           {/* ══ 左栏：配置 或 历史详情信息 ══ */}
           <div className="flex min-w-0 flex-col gap-bay lg:sticky lg:top-4 lg:self-start">
             {mode === 'compose' ? (
@@ -1008,7 +1023,12 @@ export function ReportsPage() {
 
         {/* ══ 历史列表（历史模式下占满下方的整行）══ */}
         {mode === 'history' && (
-          <div className="mt-bay rounded-md border border-line bg-surface">
+          <div
+            className={cn(
+              'mt-bay rounded-md border border-line bg-surface',
+              historyHasNone && 'mt-0',
+            )}
+          >
             {/*
               历史列表的三态。与其它页一致：loading 必须先于空状态 ——
               反过来的话进页面会先闪一下「还没有生成过报告」，
