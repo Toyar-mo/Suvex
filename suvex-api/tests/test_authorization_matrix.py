@@ -102,8 +102,6 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
         ("POST", "/api/v1/chat/sessions/{session_id}/purge"),
         ("POST", "/api/v1/chat/sessions/{session_id}/turns/{run_id}/resume"),
         ("GET", "/api/v1/ctf-race/status"),
-        ("POST", "/api/v1/ctf-race/start"),
-        ("POST", "/api/v1/ctf-race/stop"),
         ("GET", "/api/v1/scans"),
         ("GET", "/api/v1/scans/queue"),
         # 对比是**只读**：它只读两条扫描的漏洞标题做集合差，不改任何状态。
@@ -356,6 +354,11 @@ READ_ONLY: frozenset[tuple[str, str]] = frozenset(
 # 需要 `scan` / `admin`：**只读令牌必须 403**。
 # 值 = 需要哪个 scope；用它同时做"理由"的载体。
 SCOPE_GATED: dict[tuple[str, str], str] = {
+    # ★ v1.80：起/停赛事托管 = 连平台、起容器、烧模型额度、可能提交 flag，
+    #   与 `/kernel/challenges/{id}/solve` 同级。给 read 的话，一个只读
+    #   令牌就能烧掉整场预算 —— 而且只读测试会**真的把托管跑起来**。
+    ("POST", "/api/v1/ctf-race/start"): "scan",
+    ("POST", "/api/v1/ctf-race/stop"): "scan",
     # 会对真实目标发包 —— 这正是 `scan` scope 存在的理由
     ("POST", "/api/v1/scans"): "scan",
     ("POST", "/api/v1/scans/{scanId}/abort"): "scan",
