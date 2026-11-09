@@ -23,7 +23,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.core.timeutil import now_utc
-from app.core.vocab import KernelChallengeStatus, ScanStatus
+from app.core.vocab import AgentStatus, KernelChallengeStatus, ScanStatus
 from app.kernel import events, service
 from tests.factories import make_provider, make_scan
 
@@ -98,6 +98,41 @@ def test_startup_sweep_aborts_only_orphan_ctf2_shells(
     assert orphan.status == ScanStatus.ABORTED.value
     assert orphan.finished_at is not None
     assert real.status == ScanStatus.RUNNING.value, "真扫描被误杀了"
+
+
+def test_cancel_closes_the_solver_agent(db_session: Session, ctf2_challenge) -> None:
+    """取消解题 → 壳上的 solver agent 也要收尾。
+
+    只收 scan 不收 agent 时，智能体页会永远转圈：实测生产库留下 **15 个**
+    `status='running'` 的 solver，全挂在 `aborted` 的扫描上（11-08 那批），
+    两个页面互相矛盾。
+    """
+    _ensure_provider(db_session)
+    shell = events.ensure_solve_scan(db_session, ctf2_challenge)
+    agent = events.ensure_solver_agent(db_session, shell.id)
+    ctf2_challenge.status = KernelChallengeStatus.SOLVING.value
+    db_session.commit()
+    assert agent.status == AgentStatus.RUNNING.value, "前置：agent 应是 running"
+
+    service.cancel_challenge(db_session, ctf2_challenge)
+
+    db_session.refresh(agent)
+    assert agent.status == AgentStatus.FAILED.value
+
+
+def test_startup_sweep_closes_orphan_solver_agents(
+    db_session: Session, ctf2_challenge
+) -> None:
+    """启动回收遗留壳时，挂在壳上的 solver agent 也不能留成 running。"""
+    _ensure_provider(db_session)
+    shell = events.ensure_solve_scan(db_session, ctf2_challenge)
+    agent = events.ensure_solver_agent(db_session, shell.id)
+    db_session.commit()
+
+    service.abort_orphan_ctf2_scans(db_session)
+
+    db_session.refresh(agent)
+    assert agent.status == AgentStatus.FAILED.value
 
 
 def test_startup_sweep_is_a_noop_when_nothing_is_stale(db_session: Session) -> None:

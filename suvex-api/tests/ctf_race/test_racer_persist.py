@@ -37,6 +37,8 @@ class _FakeChallenge:
         self.candidate_flag: str | None = None
         self.confirmed_flag: str | None = None
         self.last_error: str | None = None
+        #: 真模型上这一列是 NOT NULL —— 落库路径会读它来累加候选数。
+        self.candidate_count = 0
 
 
 class _FakeDB:
@@ -122,3 +124,20 @@ async def test_confirmed_flag_goes_through_advance(monkeypatch) -> None:
 
     assert calls == [("correct", "flag{ok}")]
     assert challenge.status == KernelChallengeStatus.SOLVED.value
+
+
+async def test_candidate_count_is_incremented() -> None:
+    """★ 候选计数要与 `runner._handle_candidates` 同口径。
+
+    这里原来完全不写 `candidate_count`，于是"候选待确认"的题在界面上
+    显示「候选 0」，而 `candidate_flag` 里躺着一个 flag —— 实测
+    2026-11-09 的 DASCTF CR6 就是这副形状。
+    """
+    challenge = _FakeChallenge()
+    racer = _racer_for(challenge)
+
+    await racer._persist_single_result(
+        "chal_1", flag="flag{x}", confirmed=False, message=""
+    )
+
+    assert challenge.candidate_count == 1

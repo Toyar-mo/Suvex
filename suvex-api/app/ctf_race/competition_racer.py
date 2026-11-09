@@ -682,6 +682,9 @@ class CompetitionRacer:
             "status": getattr(result, "status", "unknown"),
             "flag": getattr(result, "flag", None),
             "message": msg,
+            # ★ 原始 `SolveOutcome`（`SolveOneAdapter` 挂的）—— worker 的收尾段
+            #   靠它写遥测/用量/题解。没有它就只能收 scan 壳。
+            "outcome": (getattr(result, "extra", None) or {}).get("outcome"),
         }
 
     async def _persist_single_result(
@@ -701,6 +704,13 @@ class CompetitionRacer:
             if ch is None:
                 return
             from app.core.vocab import KernelChallengeStatus
+            # ★ 候选计数：与 `runner._handle_candidates` 同口径 —— 这一轮只要
+            #   给出了 flag 就记一次（确认、留候选、被丢弃都算一次尝试）。
+            #   这里原来完全不写，于是一道"候选待确认"的题在界面上显示
+            #   「候选 0」，而 `candidate_flag` 里明明躺着一个 flag
+            #   （实测 2026-11-09，`scan_01M6ZKXGWXENG1XH5MZ62B1P76`）。
+            if flag:
+                ch.candidate_count = int(ch.candidate_count or 0) + 1
             if confirmed and flag:
                 _advance_challenge(ch, "correct", normalize_flag(flag))
             elif flag:

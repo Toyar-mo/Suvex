@@ -289,7 +289,13 @@ class SolveOneAdapter:
             outcome = await self._run(
                 spec, sandbox, gateway, system_prompt, on_progress=sink
             )
-            return await self._translate(outcome, model)
+            result = await self._translate(outcome, model)
+            # ★ 原始 `SolveOutcome` 挂回结果：收尾段（`runner._finish_generic_solve`）
+            #   要用它写遥测 / 用量 / 题解 —— 那三样只有它带着（`SolverResult`
+            #   只剩回合数与花费，transcript 与 usages 都在 outcome 上）。
+            #   `extra` 的用途正是"后端附带的诊断信息"，不参与任何序列化。
+            result.extra["outcome"] = outcome
+            return result
         except Exception as exc:  # 单模型崩溃不该拖垮整场
             logger.warning("[ctf_race] model=%s 求解异常: %s", model, exc)
             err = str(exc)

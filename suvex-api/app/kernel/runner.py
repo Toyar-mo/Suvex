@@ -8399,6 +8399,74 @@ def _challenge_is_generic_platform_backed(challenge_id: str) -> bool:
         return False
 
 
+def _finish_generic_solve(
+    challenge_id: str, *, attempt_id: str | None, outcome: Any
+) -> None:
+    """GenericDriver 单题解题的收尾：scan 壳 + 遥测 + 用量 + 题解。
+
+    ## 为什么必须单独有它（2026-11-09 实测）
+
+    v1.74 把 GenericDriver 平台的题交给 `CompetitionRacer.solve_one` 之后
+    **直接 `return`**，而 ③ 同步段（`finalize_solve_scan` /
+    `record_solve_telemetry` / `record_solve_usages` / `save_writeup`）就在
+    那个 `return` 下面 —— 这条分支永远够不到。`solve_one` 自己又只写
+    `KernelChallenge`，不动借来的 scan 壳。
+
+    产出的是一条"看着还在跑、其实早就结束"的扫描（实测：DASCTF CR6，
+    候选 `DASCTF{...}` 已落库，而壳停在 `running`）：
+
+      · `scans.status='running'`、`finished_at` 空、`updated_at` 冻在受理时刻；
+      · `agents` 里 `<scan>:ctf2-solver` 永远 `running`；
+      · `candidate_count` 是 0，题解 / token 用量 / 遥测全缺；
+      · 扫描侧的卡死检测与孤儿回收都显式排除 `origin='ctf2'`，所以它
+        不会自愈 —— 只有重启服务才会被 `abort_orphan_ctf2_scans` 收掉，
+        而那时写的原因是"服务重启"，不是事实。
+
+    ## 顺序与 ③ 段一致
+
+    遥测 / 用量 → `finalize_solve_scan`（它算 `duration_sec`）→ 题解
+    （读那个值）。顺序反了题解会把耗时记成"未记录"。
+
+    ⚠️ 整段失败只记 warning：收尾是**附加产物**，不该把一次已经拿到候选的
+       解题变成报错 —— 与 ③ 段同一条纪律。
+    ⚠️ `outcome` 可能为 `None`（赛跑那一路抛异常/没产出）：那时只收 scan 壳，
+       遥测与题解跳过，`finalize_solve_scan` 会按题目当前状态映射终态。
+    """
+    from app.kernel import service as ctf2_service
+
+    try:
+        with session_scope() as db:
+            challenge = db.get(KernelChallenge, challenge_id)
+            if challenge is None:
+                return
+            if outcome is not None:
+                ctf2_service.record_solve_telemetry(
+                    db, attempt_id=attempt_id, challenge=challenge, outcome=outcome
+                )
+                ctf2_service.record_solve_usages(
+                    db,
+                    attempt_id=attempt_id,
+                    challenge_id=challenge_id,
+                    outcome=outcome,
+                )
+            ctf2_events.finalize_solve_scan(db, challenge)
+            if outcome is not None:
+                ctf2_service.save_writeup(
+                    db,
+                    challenge=challenge,
+                    outcome=outcome,
+                    attempt_id=attempt_id,
+                    elapsed_sec=_solve_elapsed_seconds(db, challenge),
+                )
+            db.commit()
+    except Exception:  # noqa: BLE001 - 收尾失败不该盖住解题结果
+        logger.warning(
+            "GenericDriver 解题收尾失败（不影响解题结果）：%s",
+            challenge_id,
+            exc_info=True,
+        )
+
+
 def _has_correct_submission(db: Session, challenge_id: str) -> bool:
     """这题在我们这边**有没有一条被平台判对的提交**。
 
@@ -8510,12 +8578,16 @@ async def _run_worker(
             from app.ctf_race.competition_racer import CompetitionRacer
 
             racer = CompetitionRacer(lambda: session_scope())
+            outcome = None
             try:
                 # ★ 这里**必须** await：`_run_worker` 本身是 async，
                 #   在运行中的事件循环里调 `asyncio.run` 会直接抛
                 #   RuntimeError（并把这题标成 failed）—— 那正是"改完
                 #   看起来还是 0 解"的来源。
-                await racer.solve_one(_remote_id, challenge_id=challenge_id)
+                result = await racer.solve_one(_remote_id, challenge_id=challenge_id)
+                # 赛跑链路把原始 `SolveOutcome` 挂在 SolverResult.extra 上
+                # （见 `SolveOneAdapter.__call__`）—— 收尾要用它写遥测/用量/题解。
+                outcome = (result or {}).get("outcome")
             except Exception as exc:  # noqa: BLE001
                 logger.exception("单题（GenericDriver）解题崩溃：%s", challenge_id)
                 with session_scope() as _db:
@@ -8528,6 +8600,19 @@ async def _run_worker(
                             f"解题异常：{type(exc).__name__}: {exc}"
                         )
                     _db.commit()
+            finally:
+                # ★★ 收尾放在 finally：上面那句 `return` 把下面的 ③ 同步段
+                #    整个绕开了，而 `solve_one` 只写题目状态、不碰它借来的
+                #    scan 壳（见 `CompetitionRacer._persist_single_result`）。
+                #
+                #    不补的后果实测（2026-11-09，DASCTF CR6）：候选 flag 落库
+                #    成功，而扫描壳永远停在 `running` —— 扫描列表说"运行中"、
+                #    智能体页一直转圈、总览的实时舞台对着一 条死流持续演出。
+                #    扫描侧的卡死检测又显式排除 `origin='ctf2'`
+                #    （`scans.scheduler._not_ctf2_shell`），所以它不会自愈。
+                _finish_generic_solve(
+                    challenge_id, attempt_id=attempt_id, outcome=outcome
+                )
             return
 
     # ── ★★ 开跑前先问平台一句：这题本队伍是不是**已经被别人**解出了 ──

@@ -3640,6 +3640,33 @@ def cancel_challenge(db: Session, challenge: KernelChallenge) -> KernelChallenge
     return challenge
 
 
+def _close_solver_agent(db: Session, scan_id: str) -> None:
+    """把这条壳上的 solver agent 置终态（失败）。
+
+    ## 为什么取消 / 启动回收时要顺手做（2026-11-09 实测）
+
+    `_abort_ctf2_scan` 与 `abort_orphan_ctf2_scans` 只改 `scans` 行，而
+    `agents` 里那条 `<scan>:ctf2-solver` 是 `ensure_solver_agent` 建出来的、
+    只有 `finalize_solve_scan` 会收它。于是生产库留下了 **15 个
+    `status='running'` 的 solver**，全挂在 `aborted` 的扫描上（11-08 那批）：
+
+      · 智能体页永远转圈；
+      · 扫描列表说"已中止"，两页互相矛盾。
+
+    这里不复用 `finalize_solve_scan`：它按题目状态映射 scan 终态，会把
+    `aborted` 改成 `failed` —— 而那会抹掉"用户主动取消"这个事实。
+
+    ⚠️ 只动 `running` 的：已 `done`/`failed` 的 agent 不该被取消改回去，
+       而那正是"先确认成功、再清理遗留"时会发生的事。
+    """
+    from app.core.vocab import AgentStatus
+    from app.events.models import Agent
+
+    agent = db.get(Agent, f"{scan_id}:{ctf2_events.SOLVER_AGENT_ID}"[:64])
+    if agent is not None and agent.status == AgentStatus.RUNNING.value:
+        agent.status = AgentStatus.FAILED.value
+
+
 def _abort_ctf2_scan(
     db: Session, challenge: Any, *, reason: str, terminated_by: str
 ) -> None:
@@ -3668,6 +3695,7 @@ def _abort_ctf2_scan(
     scan.failure_reason = reason
     scan.terminated_by = terminated_by
     scan.updated_at = now
+    _close_solver_agent(db, scan.id)
 
 
 def abort_orphan_ctf2_scans(db: Session) -> int:
@@ -3698,6 +3726,7 @@ def abort_orphan_ctf2_scans(db: Session) -> int:
         scan.failure_reason = "服务重启，解题进程已退出（启动时自动收尾）。"
         scan.terminated_by = "system"
         scan.updated_at = now
+        _close_solver_agent(db, scan.id)
     db.commit()
     return len(rows)
 

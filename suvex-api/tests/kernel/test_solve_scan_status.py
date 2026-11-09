@@ -189,6 +189,37 @@ def test_terminal_set_covers_every_end_state() -> None:
     }
 
 
+def test_generic_solve_finalizes_the_scan(db_session: Session, _pair) -> None:
+    """★★ GenericDriver 单题路径（赛跑分支）结束时必须收尾 scan 壳。
+
+    2026-11-09 实测（DASCTF CR6）：候选 `DASCTF{...}` 落库成功，而扫描壳
+    永远 `running`、solver agent 永远转圈 —— 因为 `_run_worker` 的赛跑分支
+    `return` 在 ③ 同步段之前，`finalize_solve_scan` 一次都够不到。
+    """
+    challenge, scan = _pair(status=ScanStatus.RUNNING.value)
+    agent = ctf2_events.ensure_solver_agent(db_session, scan.id)
+    db_session.commit()
+    assert agent.status == AgentStatus.RUNNING.value
+
+    runner._finish_generic_solve(challenge.id, attempt_id=None, outcome=None)
+
+    db_session.refresh(scan)
+    db_session.refresh(agent)
+    assert scan.status == ScanStatus.FAILED.value, "题没解出，壳就不该继续 running"
+    assert scan.finished_at is not None, "终态必须带结束时刻"
+    assert agent.status == AgentStatus.FAILED.value, "只收壳会让智能体页继续转圈"
+
+
+def test_generic_branch_calls_the_finalizer() -> None:
+    """源码级断言：赛跑分支确实调了收尾。
+
+    上面那条只证明 `_finish_generic_solve` 本身对 —— 它没被调用一样全绿，
+    而那正是这次事故的形状（函数存在，路径上没人调）。
+    """
+    source = inspect.getsource(runner._run_worker)
+    assert "_finish_generic_solve" in source
+
+
 def test_submit_candidate_promotes_on_correct() -> None:
     """源码级断言：`submit_candidate` 的「判对」分支确实调了 promote。
 
