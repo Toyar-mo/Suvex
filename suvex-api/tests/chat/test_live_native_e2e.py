@@ -4,21 +4,25 @@ r"""真实模型 E2E（手动运行，不进默认套件 —— 需要网络+密
 密钥从 C:\Users\Administrator\Desktop\新项目\abase_wsl.txt 读（base|model|key）。
 """
 from __future__ import annotations
-import json, os
+
+import os
+
 import pytest
 from sqlalchemy.orm import Session
 
-from app.chat import engine, service as chat_service
+from app.chat import engine
+from app.chat import service as chat_service
 from app.kernel.runner import LlmGateway
 from tests.test_chat import ADMIN
 
-KEYFILE = r"C:\Users\Administrator\Desktop\新项目\abase_wsl.txt"
+KEYFILE = os.environ.get("SUPEX_LIVE_KEYFILE", "")
 
 def _gw():
-    base, model, key = open(KEYFILE, encoding="utf-8").read().split("|")
+    with open(KEYFILE, encoding="utf-8") as handle:
+        base, model, key = handle.read().split("|")
     return LlmGateway(model=model, api_key=key, base_url=base)
 
-@pytest.mark.skipif(not os.path.exists(KEYFILE), reason="无本地密钥文件")
+@pytest.mark.skipif(not KEYFILE or not os.path.exists(KEYFILE), reason="未设置 SUPEX_LIVE_KEYFILE")
 async def test_live_run_turn_executes_native_tools_and_ends_cleanly(
     db_session: Session, monkeypatch: pytest.MonkeyPatch
 ) -> None:

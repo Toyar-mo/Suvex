@@ -101,13 +101,13 @@ from app.core.vocab import (
     MIN_CTF2_WALL_CLOCK_SECONDS,
     RESOLVABLE_CTF2_CHALLENGE_STATUSES,
     SCAN_ORIGIN_CTF2,
-    ScanStatus,
     IrCategory,
     KernelChallengeStatus,
     KernelCompetitionKind,
     KernelEnvironmentStatus,
     KernelSandboxProfile,
     KernelSubmitMode,
+    ScanStatus,
     normalize_sandbox_profile,
     turn_budget_floor,
 )
@@ -2422,9 +2422,7 @@ def _competition_backed_by_generic_driver(db: Session, competition: KernelCompet
     # 环境读取：要么从详情里读（from_detail），要么配了就绪判据（ready_path）。
     # 也接受声明了独立起环境端点（start_env）的平台。
     env = spec.environment
-    if not (env.from_detail or env.ready_path or spec.start_env is not None):
-        return False
-    return True
+    return bool(env.from_detail or env.ready_path or spec.start_env is not None)
 
 
 def _assert_submission_supported(db: Session, challenge: KernelChallenge) -> None:

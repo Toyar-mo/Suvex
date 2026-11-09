@@ -48,7 +48,6 @@ import pytest
 
 from app.scans import runner
 
-
 pytestmark = pytest.mark.skipif(
     __import__("os").name != "nt",
     reason="这条守的是 Windows 的 tasklist 分支；POSIX 走 os.kill，没有解码这一步",

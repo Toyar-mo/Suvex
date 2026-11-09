@@ -32,7 +32,6 @@ import base64
 
 import pytest
 
-from app.kernel import runner as runner_mod
 from app.kernel.runner import (
     IMAGE_MAX_EDGE,
     IMAGE_MEDIA_TYPES,

@@ -24,8 +24,8 @@ from fastapi import APIRouter, Body, Depends
 from pydantic import BaseModel, Field
 
 from app.auth.deps import Identity, require_read, require_scan
-from app.ctf_race.competition_racer import DEFAULT_RACE_MODELS
 from app.ctf_race import manager
+from app.ctf_race.competition_racer import DEFAULT_RACE_MODELS
 
 router = APIRouter(prefix="/ctf-race", tags=["CTF Race"])
 
@@ -57,8 +57,15 @@ class RaceStatusOut(BaseModel):
 
 
 @router.post("/start", response_model=RaceStatusOut)
-async def start_race(payload: RaceStartIn = Body(default_factory=RaceStartIn), _: ScanDep = None) -> RaceStatusOut:
+async def start_race(
+    payload: Annotated[RaceStartIn | None, Body()] = None,
+    _: ScanDep = None,
+) -> RaceStatusOut:
     from app.core.errors import ApiError
+
+    # 空 body 等价于"全部用默认值"；`Body(default_factory=...)` 会触发 B008，
+    # 而且 FastAPI 对 Annotated 的默认值处理更明确。
+    payload = payload or RaceStartIn()
 
     try:
         snap = await manager.start(
@@ -68,8 +75,10 @@ async def start_race(payload: RaceStartIn = Body(default_factory=RaceStartIn), _
             no_submit=payload.noSubmit,
             max_bumps=payload.maxBumps,
         )
-    except manager.RaceAlreadyRunning:
-        raise ApiError.conflict("RACE_ALREADY_RUNNING", "已经有一场赛事托管在跑，先停止再重新开始。")
+    except manager.RaceAlreadyRunning as exc:
+        raise ApiError.conflict(
+            "RACE_ALREADY_RUNNING", "已经有一场赛事托管在跑，先停止再重新开始。"
+        ) from exc
     return RaceStatusOut(**snap)
 
 

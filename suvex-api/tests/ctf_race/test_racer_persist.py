@@ -25,8 +25,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-import pytest
-
 from app.core.vocab import KernelChallengeStatus
 from app.ctf_race import competition_racer as cr
 

@@ -25,7 +25,8 @@ import json
 import pytest
 from sqlalchemy.orm import Session
 
-from app.chat import engine, service as chat_service
+from app.chat import engine
+from app.chat import service as chat_service
 from app.chat.prompts import build_system_prompt
 from app.core.ids import new_id
 from app.core.timeutil import now_utc

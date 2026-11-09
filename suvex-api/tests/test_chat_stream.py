@@ -32,18 +32,16 @@ from typing import Any
 import pytest
 from sqlalchemy.orm import Session
 
-from app.chat import engine, service as chat_service, stream
+from app.chat import engine
+from app.chat import service as chat_service
 from app.chat.stream import (
-    EVENT_AWAITING,
-    EVENT_DONE,
-    EVENT_ERROR,
     EVENT_MESSAGE,
     EVENT_PHASE,
     encode_frame,
     encode_keepalive,
     stream_turn,
 )
-from tests.test_chat import ADMIN, FakeGateway, _FakeReply
+from tests.test_chat import ADMIN, FakeGateway
 
 
 class Recorder:
@@ -616,7 +614,7 @@ async def test_a_streaming_truncated_reply_gets_the_truncation_reminder(
 # a_persisted_message` 专门钉这一点。
 
 
-def _resume_phases(rec: "Recorder") -> list[dict[str, Any]]:
+def _resume_phases(rec: Recorder) -> list[dict[str, Any]]:
     return [p for p in rec.of(EVENT_PHASE) if p.get("phase") == "resume"]
 
 

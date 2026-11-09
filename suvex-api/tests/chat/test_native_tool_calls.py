@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 from typing import Any
 
@@ -26,13 +27,12 @@ import httpx
 import pytest
 from sqlalchemy.orm import Session
 
-from app.chat import engine, service as chat_service
-from app.chat.prompts import render_native_tool_note
-from app.chat.prompts import build_tools_schema
+from app.chat import engine
+from app.chat import service as chat_service
+from app.chat.prompts import build_tools_schema, render_native_tool_note
 from app.kernel import runner
 from app.kernel.runner import LlmReply, parse_actions
 from tests.test_chat import ADMIN
-
 
 # ══════════════════════════════════════════════════════════
 # 夹具：把网络层换成 MockTransport，走**真** LlmGateway
@@ -948,12 +948,10 @@ async def test_run_turn_keeps_text_protocol_for_legacy_gateway(
             seen["has_text_protocol"] = 'ACTION: {"tool"' in system
             return LlmReply(text="FINAL: 完成。", source="content", raw={}, usage=None, finish_reason="stop")
 
-    try:
+    with contextlib.suppress(Exception):  # noqa: BLE001 - 只关心提示词构建，不关心收尾
         await engine.run_turn(
             db_session, session=session, content="你好", identity=ADMIN, gateway=_LegacyGateway()
         )
-    except Exception:  # noqa: BLE001 - 只关心提示词构建，不关心收尾
-        pass
 
     assert seen.get("has_text_protocol") is True
 

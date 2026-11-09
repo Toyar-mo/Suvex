@@ -43,14 +43,14 @@ import asyncio
 import logging
 import os
 import time
-
-from app.kernel.client import KernelRateLimited
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from app.ctf_race.adapter import SolveOneAdapter
 from app.ctf_race.coordinator import MatchCoordinator
-from app.ctf_race.swarm import ChallengeSwarm, SwarmConfig
 from app.ctf_race.cost_tracker import CostTracker
+from app.ctf_race.swarm import ChallengeSwarm, SwarmConfig
+from app.kernel.client import KernelRateLimited
 
 logger = logging.getLogger(__name__)
 
@@ -454,8 +454,8 @@ class CompetitionRacer:
 
     def _ensure_local_challenge(self, db: Any, remote_id: str):
         """把一道远程题 upsert 成 KernelChallenge（若不存在）。"""
-        from app.kernel.models import KernelChallenge, KernelCompetition
         from app.kernel import service as kernel_service
+        from app.kernel.models import KernelChallenge, KernelCompetition
 
         existing = (
             db.query(KernelChallenge)

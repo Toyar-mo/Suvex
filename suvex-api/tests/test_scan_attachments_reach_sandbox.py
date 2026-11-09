@@ -149,7 +149,8 @@ def test_scan_attachments_is_empty_when_folder_is_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """目录不存在 → 空元组（不是报错，也不是凭空造路径）。"""
-    from app.scans import agent_runner, runner as scans_runner
+    from app.scans import agent_runner
+    from app.scans import runner as scans_runner
 
     scan_root = tmp_path / "nope"
     scan_root.mkdir()

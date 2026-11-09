@@ -31,8 +31,8 @@ import asyncio
 import logging
 from typing import Any
 
-from app.ctf_race.competition_racer import CompetitionRacer, DEFAULT_RACE_MODELS
 from app.core.db import get_session_factory
+from app.ctf_race.competition_racer import DEFAULT_RACE_MODELS, CompetitionRacer
 
 logger = logging.getLogger(__name__)
 

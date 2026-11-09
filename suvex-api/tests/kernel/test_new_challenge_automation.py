@@ -17,7 +17,8 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session
 
-from app.core.vocab import CTF2_AUTO_PRIORITY_BASE as AUTO_PRIORITY_BASE, KernelChallengeStatus
+from app.core.vocab import CTF2_AUTO_PRIORITY_BASE as AUTO_PRIORITY_BASE
+from app.core.vocab import KernelChallengeStatus
 from app.kernel import autosync
 from app.kernel.models import KernelChallenge
 

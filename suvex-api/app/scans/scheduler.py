@@ -67,8 +67,8 @@ from app.scans.runner import (
     terminate_tree,
 )
 from app.schedules import service as schedules_service
-from app.settings import service as settings_service
 from app.settings import dispatch as dispatch_event
+from app.settings import service as settings_service
 
 logger = logging.getLogger("suvex.scheduler")
 
@@ -731,10 +731,13 @@ class ScanScheduler:
             #    （`should_notify_critical`）。在这里先读一次配置会让
             #    "规则改了但行为没变"多一处可能 —— 而且这条路径每 2 秒
             #    每扫描一次，多一次配置读就是多一次库查询。
-            if result is not None and result.created_max_severity == "critical":
-                if scan_id not in self._critical_alerted:
-                    self._critical_alerted.add(scan_id)
-                    self._enqueue_notice(dispatch_event.EVENT_SCAN_CRITICAL, scan_id)
+            if (
+                result is not None
+                and result.created_max_severity == "critical"
+                and scan_id not in self._critical_alerted
+            ):
+                self._critical_alerted.add(scan_id)
+                self._enqueue_notice(dispatch_event.EVENT_SCAN_CRITICAL, scan_id)
         except Exception:  # noqa: BLE001
             conn.rollback()
             logger.warning("导入扫描 %s 时出错（将在下一轮重试）", scan_id, exc_info=True)

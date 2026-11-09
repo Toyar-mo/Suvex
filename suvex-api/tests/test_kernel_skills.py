@@ -251,6 +251,8 @@ def test_real_skills_no_skill_for_uninstalled_tools():
 
     missing: list[str] = []
     for name in tooling_skills:
+        if name in _THEME_SKILLS:
+            continue
         package = _TOOL_PACKAGE_ALIASES.get(name, name)
         if package not in installed:
             missing.append(f"{name}（期望镜像安装 `{package}`）")
@@ -258,7 +260,7 @@ def test_real_skills_no_skill_for_uninstalled_tools():
     assert not missing, (
         "以下 tooling skill 教的工具，沙箱镜像里**没装** —— 提示词在教模型"
         "用一个不存在的命令，模型只会拿到 `command not found` 然后"
-        f"把排查方向带偏。请在 Dockerfile 里装上，或删掉这些 skill：\n  "
+        "把排查方向带偏。请在 Dockerfile 里装上，或删掉这些 skill：\n  "
         + "\n  ".join(missing)
     )
 
@@ -278,6 +280,27 @@ _TOOL_PACKAGE_ALIASES: dict[str, str] = {
     # npm 包本身叫 `agent-browser`（连字符），skill 名却是 `agent_browser`
     # —— 上游就是这么起的名，改文件名会让已加载过它的模型对不上。
     "agent_browser": "agent-browser",
+    # 由别的包提供的命令：
+    #   · `ROPgadget` 随 pwntools 装（`/opt/venv/bin/ROPgadget`，Dockerfile 注释
+    #     明确说"不要再单独装一份，否则两个版本报错时不知道该信哪个"）；
+    #   · `searchsploit` 是 exploitdb 包提供的命令；
+    #   · `ghidra-headless` 讲的是 ghidra 包里的 analyzeHeadless。
+    "ropgadget": "pwntools",
+    "searchsploit": "exploitdb",
+    "ghidra-headless": "ghidra",
+}
+
+#: tooling 里**不绑定单个二进制**的方法论卡：一篇讲的是"这一类活怎么选工具、
+#: 判据是什么"（例如端口扫描要先分清 nmap -sT 与 -sS 在非 root 沙箱里的差别），
+#: 没有可对账的单一包名。把它们塞进别名字典会撒一个谎（"它只需要一个包"），
+#: 所以显式列在这里。新增主题卡时加一行；新增**工具卡**不要加 —— 那正该对账。
+_THEME_SKILLS = {
+    "android-reverse",  # jadx / apktool / frida 的组合方法论
+    "crypto-toolkit",   # RsaCtfTool / pycryptodome / z3 的组合
+    "pcap-analysis",    # tshark / scapy / tcpdump 的组合
+    "port-scanning",    # nmap / rustscan / masscan 的选择与边界
+    "pyc-decompile",    # uncompyle6 / pycdc / dis 的组合
+    "stego-toolkit",    # binwalk / steghide / zsteg 的组合
 }
 
 
@@ -419,6 +442,9 @@ def test_system_prompt_advertises_load_skill():
 def test_system_prompt_survives_missing_skills_dir(monkeypatch, tmp_path: Path):
     """技能目录缺失时提示词仍可用（占位符换成一句说明，不是崩）。"""
     monkeypatch.setattr(runner.skills_mod, "SKILLS_ROOT", tmp_path / "nope")
+    # 目录缺失 ≠ 清单必然为空：自定义技能在数据目录里可能仍然存在。
+    # 这条测试要钉的是"清单为空时的兜底文案"，所以把发现结果也置空。
+    monkeypatch.setattr(runner.skills_mod, "all_skills", lambda **_kw: [])
     text = runner.load_system_prompt()
     assert "{{SKILL_INDEX}}" not in text
     assert "没有附带技能包" in text

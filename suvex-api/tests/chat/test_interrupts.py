@@ -125,7 +125,7 @@ async def test_continue_injects_the_note_and_keeps_running(db_session: Session) 
     interrupts.request_continue(session.id, "别扫端口了，先看登录")
     gateway = _Gateway(["我先扫一下端口。", "FINAL: 好，改看登录。"])
 
-    result = await engine.run_turn_durable(
+    await engine.run_turn_durable(
         db_session, session=session, content="解一下", identity=ADMIN, gateway=gateway
     )
 

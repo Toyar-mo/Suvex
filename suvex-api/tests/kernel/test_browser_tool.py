@@ -34,8 +34,7 @@ import pytest
 from app.kernel import browser as browser_mod
 from app.kernel.browser import BIN, HOME_ENV, SUBCOMMANDS, WORK_ROOT, run_browser
 from app.kernel.runner import TOOL_NAMES
-from app.kernel.tools import TOOL_BY_NAME, TOOL_SPECS
-
+from app.kernel.tools import TOOL_BY_NAME
 
 # ══════════════════════════════════════════════════════════
 # 假沙箱：只实现 browser.py 用到的那两个方法

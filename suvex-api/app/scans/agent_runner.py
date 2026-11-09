@@ -932,9 +932,7 @@ def _normalize_code_locations(value: object) -> list[dict[str, object]]:
     `file:line` 的拆分只认**最后一个**冒号且右侧全是数字，这样 Windows
     盘符（`C:\x\y.py:42`）和 URL（`https://h/p:80`）不会被切错。
     """
-    if isinstance(value, dict):
-        value = [value]
-    elif isinstance(value, str):
+    if isinstance(value, (dict, str)):
         value = [value]
     if not isinstance(value, list):
         return []

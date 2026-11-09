@@ -269,9 +269,13 @@ def test_migration_does_not_try_to_update_existing_rows(migration) -> None:
     #   讲清楚规矩的注释反而被判违规。）
     body = func_def.body
     docstring_node = None
-    if body and isinstance(body[0], ast.Expr) and isinstance(body[0].value, ast.Constant):
-        if isinstance(body[0].value.value, str):
-            docstring_node = body[0].value
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        docstring_node = body[0].value
     real_body = body[1:] if docstring_node is not None else body
 
     # 禁止的调用：op.execute(...) / connection.execute(...) / sa.text("UPDATE...")

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 
 from app.ctf_race import adapter as ad
 from app.ctf_race.solver_base import ERROR, FLAG_FOUND, GAVE_UP, QUOTA_ERROR

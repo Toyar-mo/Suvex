@@ -42,8 +42,9 @@ import contextlib
 import inspect
 import logging
 import threading
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from app.ctf_race.solver_base import (
     ERROR,
@@ -326,10 +327,8 @@ class SolveOneAdapter:
                 # 抓不住 —— 而"await 一个已取消的 task"**必然**抛它。
                 # 实测 2026-11-08：这一行让每道题在 10 秒内以 CancelledError
                 # 退出，19 道题全灭，而堆栈看起来像"用户取消"。
-                try:
+                with contextlib.suppress(asyncio.CancelledError, Exception):  # noqa: BLE001
                     await flusher
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                    pass
             if sink is not None:
                 sink.flush()
             # ★ v1.73：`SandboxContainer` 的销毁方法叫 `destroy()`（docker rm -f，
@@ -387,10 +386,7 @@ class SolveOneAdapter:
                 )
 
         # 没确认（或没候选）：按错误/正常判
-        if error:
-            status = QUOTA_ERROR if _looks_quota(str(error)) else ERROR
-        else:
-            status = GAVE_UP
+        status = (QUOTA_ERROR if _looks_quota(str(error)) else ERROR) if error else GAVE_UP
         return SolverResult(
             model=model,
             status=status,

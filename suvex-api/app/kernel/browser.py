@@ -162,7 +162,7 @@ def _shot_path() -> str:
     return f"{SHOTS_DIR}/shot-{next(_shot_counter)}.png"
 
 
-def _ensure_dirs(sandbox: "SandboxContainer") -> None:
+def _ensure_dirs(sandbox: SandboxContainer) -> None:
     """把 agent-browser 需要的可写目录建出来（幂等）。
 
     ★ 为什么每次都建：`/work` 是 tmpfs，镜像里 `mkdir` 出来的内容
@@ -208,7 +208,7 @@ def _ensure_dirs(sandbox: "SandboxContainer") -> None:
 
 
 def _invoke(
-    sandbox: "SandboxContainer",
+    sandbox: SandboxContainer,
     argv: list[str],
     *,
     timeout: int = DEFAULT_TIMEOUT,
@@ -277,7 +277,7 @@ def _hint_for(detail: str) -> str:
     return ""
 
 
-async def run_browser(args: dict[str, Any], *, sandbox: "SandboxContainer") -> str:
+async def run_browser(args: dict[str, Any], *, sandbox: SandboxContainer) -> str:
     """`browser` 工具的实现。
 
     ## 参数

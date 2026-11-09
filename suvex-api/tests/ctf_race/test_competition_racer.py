@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 
-import pytest
-
 from app.ctf_race import competition_racer as cr
 from app.ctf_race.swarm import SwarmResult
 
@@ -206,7 +204,7 @@ async def test_solve_one_translates_confirmed_flag_and_persists(monkeypatch):
     验证 ① 走的是 `_build_spec_for` ② 结果经 `_persist_single_result`
     以 `confirmed=True` 落库（即 `_advance_challenge(..., "correct", ...)`）。
     """
-    from app.ctf_race.solver_base import SolverResult, FLAG_FOUND
+    from app.ctf_race.solver_base import FLAG_FOUND, SolverResult
 
     racer = _make_racer(models=("m1",))
 

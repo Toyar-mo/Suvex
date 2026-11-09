@@ -39,14 +39,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable
 
 from app.ctf_race.message_bus import ChallengeMessageBus
 from app.ctf_race.solver_base import (
     CANCELLED,
     ERROR,
-    FLAG_FOUND,
     GAVE_UP,
     QUOTA_ERROR,
     SolverResult,
@@ -280,7 +279,7 @@ class ChallengeSwarm:
         try:
             await asyncio.wait_for(self.cancel_event.wait(), timeout=cooldown)
             return True  # 冷却期间被取消
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             return False
 
     # ── 整场 ───────────────────────────────────────────────────────────

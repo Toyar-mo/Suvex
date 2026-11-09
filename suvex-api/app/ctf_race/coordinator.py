@@ -30,11 +30,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Awaitable, Callable
+from enum import StrEnum
+from typing import Any
 
 from app.ctf_race.swarm import ChallengeSwarm, SwarmResult
 
@@ -46,7 +48,7 @@ ListChallengesFn = Callable[[], Awaitable[list[Any]]]
 MakeSwarmFn = Callable[[Any], ChallengeSwarm]
 
 
-class ChallengeStage(str, Enum):
+class ChallengeStage(StrEnum):
     """一道题在整场里的生命周期阶段。"""
 
     PENDING = "pending"      # 在池里，等并发名额
@@ -242,10 +244,8 @@ class MatchCoordinator:
             # 任务堆满轮次上限都还没跑完（0.03s 的解题在 30ms 内能空转上千轮）。
             await asyncio.sleep(0.001 if self._running else 0)
             return
-        try:
+        with contextlib.suppress(TimeoutError):
             await asyncio.wait_for(self._stop.wait(), timeout=seconds)
-        except asyncio.TimeoutError:
-            pass
 
     def _next_pending(self) -> str | None:
         """下一个该开的题：**先开"当前在跑最少的分类"**。

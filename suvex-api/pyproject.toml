@@ -57,7 +57,17 @@ target-version = "py312"
 #
 # ⚠️ 仍然检查 `alembic/env.py` 与 `alembic/script.py.mako` —— 那是**活代码**，
 #    env.py 甚至被 CI 的"建测试库并跑迁移"这一步直接执行。
-exclude = ["alembic/versions"]
+exclude = [
+    "alembic/versions",
+    # 沙箱镜像的 vendor/ 是第三方代码的**原样副本**（nuclei 模板、RsaCtfTool、
+    # 预编译二进制…），不是本项目的代码。用本项目的规则去改它们既没有意义，
+    # 也会让 `vendor/SOURCES.md` 里记录的 sha256 全部对不上。
+    "docker/suvex-sandbox/vendor",
+    # 技能库自带的示例脚本：它们是为了"一眼看懂一个技巧"而写的密集代码
+    # （单行 if、裸 except 是刻意的写法），不是产品代码。lint 它们只会
+    # 逼着把示例改得难读，或者得在每行加 noqa。
+    "prompts/skills/**/scripts",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]

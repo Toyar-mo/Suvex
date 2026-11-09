@@ -26,7 +26,6 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.audit import service as audit
@@ -34,7 +33,6 @@ from app.auth.deps import Identity, require_admin, require_read
 from app.core.db import get_db
 from app.core.errors import ApiError
 from app.core.vocab import AuditAction
-from app.kernel.skill_usage import collect_skill_usage
 from app.kernel.schemas import (
     KernelSkillCategoryOut,
     KernelSkillOut,
@@ -46,6 +44,7 @@ from app.kernel.schemas import (
     SkillUsageListOut,
     SkillUsageOut,
 )
+from app.kernel.skill_usage import collect_skill_usage
 
 router = APIRouter(prefix="/kernel", tags=["Kernel · Skills"])
 

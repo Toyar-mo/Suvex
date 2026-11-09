@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from app.ctf_race.coordinator import (
     ChallengeStage,
     MatchCoordinator,
@@ -166,8 +164,6 @@ async def test_failed_challenge_retried_then_gives_progress():
         if attempts["a"] == 1:
             return FakeSwarm(flag=None)
         return FakeSwarm(flag="flag{a}")
-
-    calls = {"n": 0}
 
     # 用一个会「阻塞一次」的 wrapper 保证第一次失败后能进下一轮 poll
     coord = MatchCoordinator(

@@ -386,8 +386,6 @@ def _import_with_result(sched: ScanScheduler, result: Any, scan_id: str = "scan_
     只打桩真正要验的那一处：其余（事件导入、汇总刷新）都替换成空操作，
     否则这条用例会因为无关的文件系统读取而变成"测环境"。
     """
-    from app.scans import importer
-    from app.findings import service as findings_service
 
     class _Conn:
         def get(self, _model: Any, sid: str) -> Any:
@@ -441,8 +439,9 @@ def patched_import(monkeypatch: pytest.MonkeyPatch) -> Any:
     所以下面统一走 `monkeypatch.setattr`，`install(result)` 返回一个装好
     返回值的替身。
     """
-    from app.scans import importer, service as scans_service
     from app.findings import service as findings_service
+    from app.scans import importer
+    from app.scans import service as scans_service
 
     monkeypatch.setattr(importer, "import_events", lambda *_a, **_k: None)
     monkeypatch.setattr(importer, "backfill_after_finish", lambda *_a, **_k: None)
