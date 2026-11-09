@@ -335,6 +335,63 @@
       transition-duration: 0.001ms !important;
     }
   }
+
+  /*
+    ─────────────────────────────────────────────────────────────
+    全站交互补全（2026-11-09）
+    ─────────────────────────────────────────────────────────────
+
+    现状里 Button/IconButton 有 `.press`，卡片/链接有 `transition-ui`，
+    但**没有走基元**的按钮（页面里的内联 `<button>`、第三方风格控件）
+    仍然"点了没反应"。这一层只补缺口，不替换既有类：
+
+      · 元素选择器 (0,0,1) 低于任意工具类，`transition-ui` / `.press`
+        仍然赢 —— 已经写好动效的控件行为逐字节不变；
+      · 只给**真实 button**加按压缩放，`[role=button]` 不加：
+        那类元素常是整张卡片，缩放会造成明显位移；
+      · 菜单/列表框入场用 120ms 的轻微下落，方向感只表达
+        "它从触发它的位置长出来"；
+      · `prefers-reduced-motion` 由上面的全局规则压到 0.001ms，
+        另外这里的规则整段不生效。
+
+    ⚠️ 不包含 `[role=dialog]`：多数对话框已带 `animate-rise-in`，
+       再加全局动画会互相覆盖。
+  */
+  @media (prefers-reduced-motion: no-preference) {
+    a,
+    button,
+    [role='button'],
+    [role='tab'],
+    summary,
+    input,
+    textarea,
+    select {
+      transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+      transition-duration: 120ms;
+      transition-timing-function: cubic-bezier(0.32, 0, 0.24, 1);
+    }
+
+    button:not(.press):not(.press-lg):not([role='tab']):not(:disabled):active {
+      transform: scale(0.97);
+    }
+
+    [role='menu'],
+    [role='listbox'] {
+      animation: surface-pop 120ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+  }
+}
+
+@keyframes surface-pop {
+  from {
+    opacity: 0;
+    /* 只动 2px：菜单紧贴触发点，位移大了会像"从远处飞来" */
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @layer utilities {
