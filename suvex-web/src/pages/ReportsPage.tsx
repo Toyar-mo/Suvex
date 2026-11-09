@@ -7,6 +7,7 @@ import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
+import { isAdmin, useAuth } from '@/data/auth-store'
 import { loadFindings, useFindingsState } from '@/data/findings-store'
 import { loadScans, useScansState } from '@/data/scans-store'
 import {
@@ -72,6 +73,12 @@ export function ReportsPage() {
   const findings = findingsState.findings
 
   const { reports, status, error: loadError } = useReportsState()
+  /*
+    删除报告要 admin（后端 `DELETE /reports/{id}`）。
+    只读用户不显示垃圾桶 —— 那是展示性判断，拦截仍在后端。
+  */
+  const { user } = useAuth()
+  const canDeleteReports = isAdmin(user)
 
   // ── 视图模式 ──
   /**
@@ -764,88 +771,88 @@ export function ReportsPage() {
                   <SkeletonRows rows={3} rowClassName="h-20" />
                 </div>
               ) : (
-              <div className="flex flex-col gap-panel rounded-md border border-line bg-surface p-panel">
-                <ScopePicker
-                  scope={effectiveScope}
-                  onChange={setScope}
-                  onKindChange={handleKindChange}
-                  scans={scanOptions}
-                  targets={targetOptions}
-                  preset={preset}
-                  onPresetChange={handlePresetChange}
-                />
-
-                <div className="h-px w-full bg-line" />
-
-                <ContentOptions
-                  options={options}
-                  onChange={setOptions}
-                  available={available}
-                  hitCount={inScope.length}
-                />
-
-                <div className="h-px w-full bg-line" />
-
-                {/* 报告标题可改，默认按范围给一个 —— 空着不写会让历史列表出现无名条目 */}
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor="report-title" className="text-2xs text-ink-faint">
-                    报告标题
-                  </label>
-                  <input
-                    id="report-title"
-                    type="text"
-                    value={title}
-                    onChange={(e) => setTitle(e.target.value)}
-                    placeholder={defaultTitle(effectiveScope, scans)}
-                    className="h-8 w-full rounded-sm border border-line bg-surface-sunken px-2 text-xs text-ink transition-ui duration-fast placeholder:text-ink-faint hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40"
+                <div className="flex flex-col gap-panel rounded-md border border-line bg-surface p-panel">
+                  <ScopePicker
+                    scope={effectiveScope}
+                    onChange={setScope}
+                    onKindChange={handleKindChange}
+                    scans={scanOptions}
+                    targets={targetOptions}
+                    preset={preset}
+                    onPresetChange={handlePresetChange}
                   />
-                </div>
 
-                <div className="flex flex-col gap-1.5">
-                  <span className="text-2xs text-ink-faint">导出格式</span>
-                  <div role="radiogroup" aria-label="导出格式" className="flex gap-1">
-                    {(['pdf', 'markdown'] as ReportFormat[]).map((key) => {
-                      const checked = format === key
-                      return (
-                        <Button
-                          key={key}
-                          variant="secondary"
-                          size="sm"
-                          role="radio"
-                          aria-checked={checked}
-                          onClick={() => setFormat(key)}
-                          /*
+                  <div className="h-px w-full bg-line" />
+
+                  <ContentOptions
+                    options={options}
+                    onChange={setOptions}
+                    available={available}
+                    hitCount={inScope.length}
+                  />
+
+                  <div className="h-px w-full bg-line" />
+
+                  {/* 报告标题可改，默认按范围给一个 —— 空着不写会让历史列表出现无名条目 */}
+                  <div className="flex flex-col gap-1.5">
+                    <label htmlFor="report-title" className="text-2xs text-ink-faint">
+                      报告标题
+                    </label>
+                    <input
+                      id="report-title"
+                      type="text"
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder={defaultTitle(effectiveScope, scans)}
+                      className="h-8 w-full rounded-sm border border-line bg-surface-sunken px-2 text-xs text-ink transition-ui duration-fast placeholder:text-ink-faint hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40"
+                    />
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <span className="text-2xs text-ink-faint">导出格式</span>
+                    <div role="radiogroup" aria-label="导出格式" className="flex gap-1">
+                      {(['pdf', 'markdown'] as ReportFormat[]).map((key) => {
+                        const checked = format === key
+                        return (
+                          <Button
+                            key={key}
+                            variant="secondary"
+                            size="sm"
+                            role="radio"
+                            aria-checked={checked}
+                            onClick={() => setFormat(key)}
+                            /*
                             `role="radio"` 的选中态不是按钮的禁用/启用二态，所以
                             基元不给它：`secondary` 的边框与文字色在这里被
                             tailwind-merge 覆盖成「选中泛紫」，未选中沿用基元的
                             灰底描边。`flex-1` 让两项平分列宽。
                           */
-                          className={cn(
-                            'flex-1',
-                            checked && 'border-accent/50 bg-accent-wash text-ink',
-                          )}
-                        >
-                          {key === 'pdf' ? 'PDF' : 'Markdown'}
-                        </Button>
-                      )
-                    })}
+                            className={cn(
+                              'flex-1',
+                              checked && 'border-accent/50 bg-accent-wash text-ink',
+                            )}
+                          >
+                            {key === 'pdf' ? 'PDF' : 'Markdown'}
+                          </Button>
+                        )
+                      })}
+                    </div>
                   </div>
-                </div>
 
-                <ScopePreview
-                  hitCount={inScope.length}
-                  severityCounts={countSeverities(applyOptions(inScope, options))}
-                  excludedCount={inScope.length - selectedCount}
-                />
+                  <ScopePreview
+                    hitCount={inScope.length}
+                    severityCounts={countSeverities(applyOptions(inScope, options))}
+                    excludedCount={inScope.length - selectedCount}
+                  />
 
-                {/*
+                  {/*
                   ★ 用 `loading` 而不是手写文案分支。
 
                   这样一次拿到三样东西：转圈图标、`aria-busy`、以及那个 `pendingRef`
                   同步守卫（挡住"提交生效之前"的第二次点击）。手写
                   `{busy === 'generate' ? '正在生成…' : …}` 只有文字，后两样都拿不到。
                 */}
-                {/*
+                  {/*
                   主操作吸附在视口底部（2026-11 设计审查）。
 
                   原来它跟着配置区一路排到最后：1440×900 下实测 y=1002，
@@ -855,32 +862,32 @@ export function ReportsPage() {
                   `bottom` 扣掉手机底栏高度，否则按钮会被固定底栏压住；
                   `mt-auto` 让它在配置区较短时也贴着卡片底部，而不是浮在中间。
                 */}
-                <div
-                  className={cn(
-                    'sticky bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] z-10 md:bottom-2',
-                    '-mx-panel -mb-panel mt-auto flex flex-col gap-1.5',
-                    'rounded-b-md border-t border-line bg-surface/95 px-panel py-panel backdrop-blur-sm',
-                  )}
-                >
-                  <Button
-                    variant="primary"
-                    size="md"
-                    onClick={handleGenerate}
-                    disabled={selectedCount === 0 || busy === 'download'}
-                    loading={busy === 'generate'}
-                    loadingLabel="正在生成…"
+                  <div
+                    className={cn(
+                      'sticky bottom-[calc(3.5rem+env(safe-area-inset-bottom)+0.5rem)] z-10 md:bottom-2',
+                      '-mx-panel -mb-panel mt-auto flex flex-col gap-1.5',
+                      'rounded-b-md border-t border-line bg-surface/95 px-panel py-panel backdrop-blur-sm',
+                    )}
                   >
-                    <Download size={14} strokeWidth={2} aria-hidden="true" />
-                    生成并导出
-                  </Button>
+                    <Button
+                      variant="primary"
+                      size="md"
+                      onClick={handleGenerate}
+                      disabled={selectedCount === 0 || busy === 'download'}
+                      loading={busy === 'generate'}
+                      loadingLabel="正在生成…"
+                    >
+                      <Download size={14} strokeWidth={2} aria-hidden="true" />
+                      生成并导出
+                    </Button>
 
-                  {format === 'pdf' && (
-                    <p className="text-2xs text-ink-faint">
-                      将调用浏览器打印，在目标处选择「另存为 PDF」。生成的版本与右侧预览一致。
-                    </p>
-                  )}
+                    {format === 'pdf' && (
+                      <p className="text-2xs text-ink-faint">
+                        将调用浏览器打印，在目标处选择「另存为 PDF」。生成的版本与右侧预览一致。
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
               )
             ) : (
               /* 历史模式下左栏显示这份报告的生成口径 —— 只读 */
@@ -933,10 +940,7 @@ export function ReportsPage() {
                     />
                   ) : documentState.status === 'ready' && documentState.doc ? (
                     <PaperSheet>
-                      <ReportSheet
-                        doc={documentState.doc}
-                        format={activeReport?.format ?? 'pdf'}
-                      />
+                      <ReportSheet doc={documentState.doc} format={activeReport?.format ?? 'pdf'} />
                     </PaperSheet>
                   ) : (
                     <ReportSheetSkeleton />
@@ -1023,6 +1027,7 @@ export function ReportsPage() {
                 onDownload={handleDownload}
                 onDelete={handleDelete}
                 downloadingId={downloadingId}
+                canDelete={canDeleteReports}
                 describeScopeOf={(report) => describeScopeOf(report, scans)}
                 emptyState={
                   <div className="flex flex-col items-center gap-tight text-center">

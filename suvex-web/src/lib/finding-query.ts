@@ -1,5 +1,6 @@
 import { SEVERITY_ORDER } from '@/data/findings'
 import type { Finding, FindingStatus } from '@/data/finding'
+import type { Severity } from '@/data/findings'
 
 /**
  * Findings 列表的筛选与排序 —— 纯函数，放 lib 便于独立验证。
@@ -252,10 +253,7 @@ export function facetCounts(findings: Finding[], filter: FindingFilter): FacetCo
     [skip]: skip === 'query' ? '' : new Set<string>(),
   })
 
-  const count = (
-    rows: Finding[],
-    pick: (finding: Finding) => string,
-  ): Record<string, number> => {
+  const count = (rows: Finding[], pick: (finding: Finding) => string): Record<string, number> => {
     const out: Record<string, number> = {}
     for (const finding of rows) {
       const key = pick(finding)
@@ -354,4 +352,97 @@ export function filterToExportQuery(filter: FindingFilter): ExportMapping {
   }
 
   return { query, unexpressableDimensions: blocked }
+}
+
+// ─────────────────────────────────────────────
+// 分组视图的本地收窄
+// ─────────────────────────────────────────────
+
+/**
+ * 分组的最小形状 —— 只要能从 `FindingGroup` 结构兼容即可。
+ *
+ * 不直接 import `FindingGroup`：那个类型住在 `data/findings-store`，
+ * 而 store 会 import 本文件的一部分工具。用结构约束避免循环依赖，
+ * 同时也让测试可以直接喂一个朴素对象。
+ */
+export interface FindingGroupLike {
+  title: string
+  severity: Severity
+  instanceCount: number
+  targetCount: number
+  targets: string[]
+  findingIds: string[]
+  byStatus: Record<string, number>
+}
+
+/**
+ * 把后端分组收窄到**当前列表真正显示的条目**，并按收窄后的结果重算统计。
+ *
+ * ## 为什么后端已经带了筛选，这里还要再收窄一次
+ *
+ * 后端 `/findings/groups` 能表达的筛选比前端筛选器少两处：
+ *
+ *   · **多选负责人** —— 后端只有 `assigneeId`（单人）与 `unassigned`，
+ *     逗号表达不了"张三的 **或** 没人管的"；
+ *   · **SLA 状态**（`slaState`）—— 分组端点没有这个参数。
+ *
+ * 直接渲染后端分组的话，用户勾了"超期"或两个负责人，切到分组视图
+ * 会看到**比列表宽**的范围 —— 而分组视图存在的全部意义就是
+ * "同一批数据换个切法"（见 `FindingsGroups` 文件头）。
+ *
+ * 收窄放在前端是因为这一页本来就握着完整列表：`visible` 已经按
+ * 全部筛选维度算好了，按 id 取交集是 O(条目数)，不必再让后端
+ * 支持一套只有前端会用的参数组合。
+ *
+ * ## 重算而不是只裁 id
+ *
+ * `instanceCount` / `targetCount` / `byStatus` / 组内最高严重度
+ * 都是**由成员推出来的**。只裁 `findingIds` 会留下"说 5 条、
+ * 展开只有 2 条"的自相矛盾。
+ */
+export function narrowGroupsToFindings<G extends FindingGroupLike>(
+  groups: G[],
+  findings: Finding[],
+): G[] {
+  const byId = new Map(findings.map((finding) => [finding.id, finding]))
+  const narrowed: G[] = []
+
+  for (const group of groups) {
+    const members: Finding[] = []
+    for (const id of group.findingIds) {
+      const finding = byId.get(id)
+      if (finding) members.push(finding)
+    }
+    if (members.length === 0) continue
+
+    const byStatus: Record<string, number> = {}
+    const targets = new Set<string>()
+    // 组内最高严重度：`SEVERITY_ORDER` 是严重在前，所以下标更小 = 更严重
+    let severity = members[0].severity
+    for (const finding of members) {
+      byStatus[finding.status] = (byStatus[finding.status] ?? 0) + 1
+      targets.add(finding.target)
+      if (SEVERITY_ORDER.indexOf(finding.severity) < SEVERITY_ORDER.indexOf(severity)) {
+        severity = finding.severity
+      }
+    }
+
+    narrowed.push({
+      ...group,
+      severity,
+      instanceCount: members.length,
+      targetCount: targets.size,
+      targets: [...targets],
+      findingIds: members.map((finding) => finding.id),
+      byStatus,
+    })
+  }
+
+  // 与后端同一个排序：严重度降序 → 影响面降序 → 标题
+  return narrowed.sort((a, b) => {
+    const sev = SEVERITY_ORDER.indexOf(a.severity) - SEVERITY_ORDER.indexOf(b.severity)
+    if (sev !== 0) return sev
+    if (a.targetCount !== b.targetCount) return b.targetCount - a.targetCount
+    return a.title.localeCompare(b.title, 'zh')
+  })
 }

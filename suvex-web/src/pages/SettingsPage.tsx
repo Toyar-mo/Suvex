@@ -1,6 +1,7 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import AccountPanel from '@/components/settings/AccountPanel'
 import KernelPanel from '@/components/settings/KernelPanel'
+import MembersPanel from '@/components/settings/MembersPanel'
 import PlatformPanel from '@/components/settings/PlatformPanel'
 import NotifyPanel from '@/components/settings/NotifyPanel'
 import ProviderPanel from '@/components/settings/ProviderPanel'
@@ -46,6 +47,18 @@ const SECTIONS = [
   { id: 'platform', label: '平台接入' },
   { id: 'notify', label: '通知' },
   { id: 'scan-retention', label: '扫描保留' },
+  /*
+    ★ v1.79：「处理人」补上。
+
+    后端 `/members` 的增删改从任务 10 就在，漏洞页的「指派」下拉与
+    筛选也在读它 —— 但设置页一直没有这一节。于是"一个处理人都没有"时，
+    指派对话框提示「去设置 → 处理人里加一个」，那个入口**不存在**。
+    这一节就是那个入口。
+
+    它与「用户」是两份名单：处理人可以是不登录的外包/对接人，
+    登录账号也不一定被指派漏洞（见 `MembersPanel` 文件头）。
+  */
+  { id: 'members', label: '处理人' },
   { id: 'account', label: '账号与安全' },
   // ★ v0.24：用户管理放在**最后**。
   //
@@ -142,6 +155,7 @@ export function SettingsPage() {
                 <NotifyPanel rule={notices.rule} channels={notices.channels} />
                 {/* 保留规则：属于「系统行为」这一类，与沙箱/通知同类 */}
                 <ScanRetentionPanel />
+                <MembersPanel />
                 <AccountPanel tokens={tokens} />
                 {/*
                 ★ 用户管理**只对管理员显示**（v0.24）。

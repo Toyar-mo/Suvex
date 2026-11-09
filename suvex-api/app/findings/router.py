@@ -318,6 +318,7 @@ def group_findings(
     scanId: Annotated[str | None, Query()] = None,  # noqa: N803
     assigneeId: Annotated[str | None, Query()] = None,  # noqa: N803
     unassigned: Annotated[bool, Query()] = False,
+    deleted: Annotated[bool, Query()] = False,
 ) -> list[FindingGroupOut]:
     """分组视图的数据（任务 10 P4）。
 
@@ -340,6 +341,7 @@ def group_findings(
             scan_id=scanId,
             assignee_id=assigneeId,
             unassigned=unassigned,
+            deleted=deleted,
         )
     ]
 

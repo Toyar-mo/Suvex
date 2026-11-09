@@ -7,7 +7,9 @@ import {
   filterFindings,
   filterToExportQuery,
   isFilterActive,
+  narrowGroupsToFindings,
   sortFindings,
+  type FindingGroupLike,
 } from './finding-query'
 
 /*
@@ -363,5 +365,62 @@ describe('filterToExportQuery', () => {
     expect(unexpressableDimensions).toHaveLength(0)
     // 除空的维度外不该有别的东西
     expect(Object.values(query).filter(Boolean)).toHaveLength(0)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 分组视图的本地收窄
+// ══════════════════════════════════════════════════════════════
+
+describe('narrowGroupsToFindings', () => {
+  const group = (overrides: Partial<FindingGroupLike> = {}): FindingGroupLike => ({
+    title: '一类问题',
+    severity: 'high',
+    instanceCount: 2,
+    targetCount: 2,
+    targets: ['a', 'b'],
+    findingIds: ['f1', 'f2'],
+    byStatus: { new: 2 },
+    ...overrides,
+  })
+
+  it('★ 只保留当前列表里的条目，并重算条数/影响面/状态分布', () => {
+    const findings = [
+      makeFinding({ id: 'f1', severity: 'low', status: 'confirmed', target: 'a' }),
+      // f2 被当前筛选排除掉了（不在 visible 里）
+    ]
+
+    const [narrowed] = narrowGroupsToFindings([group()], findings)
+
+    expect(narrowed.findingIds).toEqual(['f1'])
+    expect(narrowed.instanceCount).toBe(1)
+    expect(narrowed.targetCount).toBe(1)
+    expect(narrowed.targets).toEqual(['a'])
+    expect(narrowed.byStatus).toEqual({ confirmed: 1 })
+    // 组内最高严重度也要按收窄后的成员重算
+    expect(narrowed.severity).toBe('low')
+  })
+
+  it('★ 整组都不在列表里 → 这一组不出现（不能显示"说 2 条、展开 0 条"）', () => {
+    const narrowed = narrowGroupsToFindings([group()], [makeFinding({ id: 'other' })])
+    expect(narrowed).toEqual([])
+  })
+
+  it('收窄后按严重度、影响面重排', () => {
+    const findings = [
+      makeFinding({ id: 'f1', severity: 'low', target: 'a' }),
+      makeFinding({ id: 'f2', severity: 'critical', target: 'b' }),
+    ]
+    const narrowed = narrowGroupsToFindings(
+      [
+        // 第一组只含 f1（low）；第二组只含 f2（critical）——
+        // 组内最高严重度由成员重算，所以第二组必须排在前面
+        group({ findingIds: ['f1'], severity: 'low' }),
+        group({ title: '更严重的', findingIds: ['f2'], severity: 'critical' }),
+      ],
+      findings,
+    )
+
+    expect(narrowed.map((g) => g.title)).toEqual(['更严重的', '一类问题'])
   })
 })

@@ -40,6 +40,7 @@ import {
   useFindingGroups,
   useFindingsState,
   type FindingGroup,
+  type FindingGroupsQuery,
 } from '@/data/findings-store'
 import { loadMembers, useMembers } from '@/data/members-store'
 import { apiText, errorMessage } from '@/lib/api'
@@ -55,6 +56,7 @@ import {
   filterFindings,
   filterToExportQuery,
   isFilterActive,
+  narrowGroupsToFindings,
   sortFindings,
   type FindingFilter,
   type FindingSortKey,
@@ -104,6 +106,33 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
  *    会把「空描述 + 空证据」当成"这条漏洞没有内容"显示出来，
  *    而它和"还在加载"长得一模一样 —— 是最容易骗过验收的一种错。
  */
+
+/** 一条 URL 意图里的筛选部分（不含 `finding`，那是详情抽屉的事） */
+interface IntentFilter {
+  openOnly: boolean
+  query: string | null
+  severities: string[]
+}
+
+/**
+ * URL 意图 → 初始筛选器。
+ *
+ * 只在"用户还没碰过筛选"时用（`filterDraft === null`）：
+ * 命令面板的「处理未关闭的漏洞」、总览的严重/高危深链都靠它落到该有的视图。
+ */
+function filterFromIntent(intent: IntentFilter): FindingFilter {
+  const next: FindingFilter = {
+    ...emptyFilter(),
+    severities: new Set<string>(),
+    statuses: new Set<string>(),
+  }
+  if (intent.openOnly) {
+    for (const status of OPEN_FINDING_STATUSES) next.statuses.add(status)
+  }
+  for (const severity of intent.severities) next.severities.add(severity)
+  if (intent.query !== null) next.query = intent.query
+  return next
+}
 
 export function FindingsPage() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -211,6 +240,30 @@ export function FindingsPage() {
   }, [searchParams])
 
   const [filterDraft, setFilterDraft] = useState<FindingFilter | null>(null)
+  const [openIdDraft, setOpenIdDraft] = useState<string | null>(null)
+  const [consumedIntentKey, setConsumedIntentKey] = useState<string | null>(null)
+  /*
+    ── 把 URL 指令**在渲染期**落进草稿 ──
+
+    ★ 为什么不是 effect：`react-hooks/set-state-in-effect` 明确禁止
+      在 effect 体里同步 setState（会多一轮渲染，而且「参数删掉之后、
+      effect 还没跑完」那一帧里两份真相不一致）。
+
+    ★ 这里用的是 React 官方「渲染期根据 props 调整 state」的写法：
+      条件成立才 set，且 set 之后条件不再成立 —— 收敛，不会循环。
+      首次挂载、以及用户已经在这一页时从命令面板再次跳进来，都会命中。
+
+    ★ 先落草稿、effect 里才删参数。反过来（先删、指望派生表达式继续读
+      URL）就是审计抓到的"点了没反应"：参数一删 `urlIntent` 变 null，
+      而 draft 仍是 null —— 筛选和详情抽屉下一帧自己复位。
+  */
+  const intentKey = urlIntent === null ? null : JSON.stringify(urlIntent)
+  if (intentKey !== null && urlIntent !== null && intentKey !== consumedIntentKey) {
+    setConsumedIntentKey(intentKey)
+    setFilterDraft((prev) => prev ?? filterFromIntent(urlIntent))
+    if (urlIntent.finding !== null) setOpenIdDraft(urlIntent.finding)
+  }
+
   const filter = useMemo<FindingFilter>(() => {
     const base = filterDraft ?? emptyFilter()
     if (filterDraft !== null || urlIntent === null) return base
@@ -251,41 +304,19 @@ export function FindingsPage() {
     [filter],
   )
 
-  const [openIdDraft, setOpenIdDraft] = useState<string | null>(null)
   const openId = openIdDraft ?? urlIntent?.finding ?? null
   const setOpenId = setOpenIdDraft
 
   /*
     ── 把消费掉的参数从地址栏抹掉 ──
 
-    ★ 这里只有导航（`setSearchParams`），没有 setState ——
-      filter / openId 已由上面的派生表达式表达。
+    ★ 这里只有导航（`setSearchParams`），**没有 setState** ——
+      意图已经在上面渲染期落进草稿了。effect 里同步 setState 会被
+      `react-hooks/set-state-in-effect` 拦下，而那条规则挡的正是
+      "参数删掉、effect 还没跑完"那一帧里两份真相不一致的问题。
   */
   useEffect(() => {
     if (urlIntent === null) return
-
-    /*
-      ★★ v1.80：先落草稿再删参数（与 ScansPage 同一条）。
-
-      原来删完参数后 `urlIntent` 变成 null，`filterDraft` 仍是 null ——
-      筛选和详情抽屉在下一帧自己复位。命令面板的 `?status=open`、
-      `?q=…`、`?finding=…` 以及总览的 `?severity=…` 全都受影响。
-    */
-    setFilterDraft((prev) => {
-      if (prev !== null) return prev
-      const next: FindingFilter = {
-        ...emptyFilter(),
-        severities: new Set<string>(),
-        statuses: new Set<string>(),
-      }
-      if (urlIntent.openOnly) {
-        for (const status of OPEN_FINDING_STATUSES) next.statuses.add(status)
-      }
-      for (const severity of urlIntent.severities) next.severities.add(severity)
-      if (urlIntent.query !== null) next.query = urlIntent.query
-      return next
-    })
-    if (urlIntent.finding !== null) setOpenIdDraft(urlIntent.finding)
 
     setSearchParams(
       (prev) => {
@@ -414,15 +445,52 @@ export function FindingsPage() {
    *    `loading` / `ready` 两态都不会再次触发请求。依赖变化只发生在
    *    `idle`（标脏）与终态之间，是一次性的。
    */
+  /**
+   * 分组请求的参数 —— 与列表**同一套筛选**，外加当前视图范围。
+   *
+   * ★ 少了这一步，分组视图就是"筛了高危，却还列着低危组"：
+   *   后端分组端点支持与 `/findings` 相同的筛选参数，前端却一直
+   *   不带参数地拉全量。用户在分组视图里改筛选，看到的范围不会变。
+   *
+   * `deleted` 跟着回收站视图走 —— 否则回收站里切到分组，
+   * 看到的是活动列表的组，而列表此刻是空的。
+   *
+   * 多选负责人与 SLA 这两维后端表达不了，由 `narrowGroupsToFindings`
+   * 在渲染前按当前列表收窄（见那个函数的说明）。
+   */
+  const groupsQuery = useMemo<FindingGroupsQuery>(() => {
+    const { query } = filterToExportQuery(filter)
+    return {
+      severity: query.severity,
+      status: query.status,
+      category: query.category,
+      q: query.q,
+      assigneeId: query.assigneeId,
+      unassigned: query.unassigned,
+      deleted: scope === 'trash',
+    }
+  }, [filter, scope])
+
   useEffect(() => {
-    if (view === 'groups') void loadFindingGroups()
-  }, [view, groupsState.status])
+    if (view === 'groups') void loadFindingGroups(groupsQuery)
+  }, [view, groupsState.status, groupsQuery])
 
   const detailState = useFindingDetail(openId)
 
   const visible = useMemo(
     () => sortFindings(filterFindings(findings, filter), sortKey, sortDir),
     [findings, filter, sortKey, sortDir],
+  )
+
+  /**
+   * 分组视图真正渲染的数据 = 后端分组 ∩ 当前列表。
+   *
+   * 后端分组已经带了能表达的筛选，但多选负责人与 SLA 两维它表达不了。
+   * 按 `visible` 的 id 收窄并重算统计，两个视图才是"同一批数据"。
+   */
+  const groupsForView = useMemo(
+    () => narrowGroupsToFindings(groupsState.groups, visible),
+    [groupsState.groups, visible],
   )
 
   /** 选中的条目对象 —— 批量操作栏需要读它们的当前状态 */
@@ -851,6 +919,15 @@ export function FindingsPage() {
    */
   const handleExport = useCallback(async () => {
     const { query, unexpressableDimensions } = filterToExportQuery(filter)
+    /*
+      ★ 范围必须跟着视图走。
+
+      用户站在回收站里点「导出 CSV」，期望拿到的是眼前这些已删除的条目。
+      原来不带 `deleted` 的话，导出的是一份**活动漏洞**的表 ——
+      而列表里明明全是删掉的。那种文件会被当成"回收站导出"发出去，
+      错误的数据比没有数据更糟。
+    */
+    const exportQuery = { ...query, deleted: scope === 'trash' }
 
     if (unexpressableDimensions.length > 0) {
       showToast({
@@ -872,7 +949,7 @@ export function FindingsPage() {
         一个没下载的文件，而不知道是权限问题还是服务没起。
         `apiText` 会把后端那句中文错误带回来。
       */
-      const download = await apiText(findingsExportUrl(query))
+      const download = await apiText(findingsExportUrl(exportQuery))
       /*
         ★ 文件名优先用**后端给的那个**（`apiText` 从 `Content-Disposition`
         解析出来的），前端只做兜底。
@@ -892,7 +969,7 @@ export function FindingsPage() {
     } finally {
       setExporting(false)
     }
-  }, [filter, visible.length])
+  }, [filter, scope, visible.length])
 
   /**
    * 导出当前筛选结果为 SARIF 2.1.0（v0.85）。
@@ -918,6 +995,8 @@ export function FindingsPage() {
    */
   const handleExportSarif = useCallback(async () => {
     const { query, unexpressableDimensions } = filterToExportQuery(filter)
+    // 范围与 CSV 同一条纪律：回收站里导出的就是回收站里的那些
+    const exportQuery = { ...query, deleted: scope === 'trash' }
 
     if (unexpressableDimensions.length > 0) {
       showToast({
@@ -929,7 +1008,7 @@ export function FindingsPage() {
 
     setExportingSarif(true)
     try {
-      const download = await apiText(findingsSarifUrl(query))
+      const download = await apiText(findingsSarifUrl(exportQuery))
       downloadSarif(download.filename ?? sarifFallbackFilename(), download.text)
       showToast({
         message:
@@ -942,7 +1021,7 @@ export function FindingsPage() {
     } finally {
       setExportingSarif(false)
     }
-  }, [filter, visible.length])
+  }, [filter, scope, visible.length])
 
   return (
     <>
@@ -1405,10 +1484,10 @@ export function FindingsPage() {
                     <ErrorState
                       title="分组加载失败"
                       error={groupsState.error}
-                      onRetry={() => void loadFindingGroups({ force: true })}
+                      onRetry={() => void loadFindingGroups(groupsQuery, { force: true })}
                     />
                   </div>
-                ) : groupsState.groups.length === 0 ? (
+                ) : groupsForView.length === 0 ? (
                   /*
                     空态与列表视图**说不同的话**：
                     列表空是"没有符合条件的漏洞"，分组空是"没有可归类的实例"。
@@ -1427,7 +1506,7 @@ export function FindingsPage() {
                   </div>
                 ) : (
                   <FindingsGroups
-                    groups={groupsState.groups}
+                    groups={groupsForView}
                     findingOf={findingOf}
                     onGroupAction={handleGroupAction}
                     onSelectGroup={handleSelectGroup}

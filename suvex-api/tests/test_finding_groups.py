@@ -143,3 +143,30 @@ def test_group_by_status_reflects_per_instance_states(
     groups = ready_client.get(f"{API}/findings/groups").json()
     assert len(groups) == 1
     assert groups[0]["byStatus"] == {"new": 1, "confirmed": 2}
+
+
+def test_groups_follow_the_recycle_bin_scope(
+    ready_client: TestClient, scan, db_session: Session
+) -> None:
+    """★ 回收站视图的分组必须来自回收站，而不是活动列表。
+
+    界面上「分组」与「列表」是同一批数据的两种切法。用户在回收站里
+    切到分组视图，如果后端不看 `deleted`，他会看到一堆**已经删掉**的
+    条目标在"活动"分组里 —— 而列表视图此刻是空的。两个视图各说一套，
+    用户唯一的结论是"分组坏了"。
+
+    与 `/findings?deleted=true`、`/findings/export?deleted=true`
+    保持同一组语义（任务 10 P6-a）。
+    """
+    from app.core.timeutil import now_utc
+
+    active = _add(scan, db_session, id="live_1", title="还在的漏洞", target="a")
+    gone = _add(scan, db_session, id="gone_1", title="已删除的漏洞", target="b")
+    gone.deleted_at = now_utc()
+    db_session.commit()
+
+    active_groups = ready_client.get(f"{API}/findings/groups").json()
+    assert [g["title"] for g in active_groups] == [active.title]
+
+    trash_groups = ready_client.get(f"{API}/findings/groups?deleted=true").json()
+    assert [g["title"] for g in trash_groups] == [gone.title]

@@ -83,13 +83,15 @@ export async function loadMembers(options: { force?: boolean } = {}): Promise<vo
 }
 
 /**
- * 新增。
+ * 写操作的结果 —— 失败时带着后端那句中文原因，面板原样显示。
  *
- * 失败时**不改本地列表**并返回 false：调用方（面板）用它决定要不要显示
- * 错误。不把错误塞进 `error` 状态，因为那是"整块加载失败"的意思，
+ * 不把失败只塞进 `error` 快照：那是"整块加载失败"的意思，
  * 而这里是"这一次操作没成功"—— 两者在界面上的表现完全不同。
+ * 返回给调用方，才可能在表单旁边说清是哪一步没成。
  */
-export async function createMember(name: string, email: string | null): Promise<boolean> {
+export type MemberWriteResult = { ok: true } | { ok: false; error: string }
+
+export async function createMember(name: string, email: string | null): Promise<MemberWriteResult> {
   saving = true
   error = null
   commit()
@@ -99,10 +101,11 @@ export async function createMember(name: string, email: string | null): Promise<
     // 而列表看起来"没加上"
     members = [...members, created].sort((a, b) => a.name.localeCompare(b.name, 'zh'))
     status = 'ready'
-    return true
+    return { ok: true }
   } catch (err) {
-    error = toApiError(err)
-    return false
+    const apiError = toApiError(err)
+    error = apiError
+    return { ok: false, error: apiError.message }
   } finally {
     saving = false
     commit()
@@ -112,7 +115,7 @@ export async function createMember(name: string, email: string | null): Promise<
 export async function updateMember(
   id: string,
   patch: { name?: string; email?: string | null; active?: boolean },
-): Promise<boolean> {
+): Promise<MemberWriteResult> {
   saving = true
   error = null
   commit()
@@ -121,27 +124,39 @@ export async function updateMember(
     members = members
       .map((m) => (m.id === id ? updated : m))
       .sort((a, b) => a.name.localeCompare(b.name, 'zh'))
-    return true
+    return { ok: true }
   } catch (err) {
-    error = toApiError(err)
-    return false
+    const apiError = toApiError(err)
+    error = apiError
+    return { ok: false, error: apiError.message }
   } finally {
     saving = false
     commit()
   }
 }
 
-export async function deleteMember(id: string): Promise<boolean> {
+/**
+ * 硬删。
+ *
+ * ★ 返回值带着**被解除指派的漏洞条数** —— 后端 `DELETE` 会返回
+ *   `{unassigned: n}`（见 `MemberDeleteResult`）。调用方必须把这个数字
+ *   说出来：那些漏洞在无人知晓的情况下从"有负责人"变成了"未指派"。
+ *   想让名字留在历史里，应该用 `updateMember(id, {active:false})` 停用。
+ */
+export async function deleteMember(
+  id: string,
+): Promise<{ ok: true; unassigned: number } | { ok: false; error: string }> {
   saving = true
   error = null
   commit()
   try {
-    await api.del<void>(`/members/${id}`)
+    const result = await api.del<{ unassigned?: number }>(`/members/${id}`)
     members = members.filter((m) => m.id !== id)
-    return true
+    return { ok: true, unassigned: result?.unassigned ?? 0 }
   } catch (err) {
-    error = toApiError(err)
-    return false
+    const apiError = toApiError(err)
+    error = apiError
+    return { ok: false, error: apiError.message }
   } finally {
     saving = false
     commit()

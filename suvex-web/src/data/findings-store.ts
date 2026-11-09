@@ -369,7 +369,10 @@ async function fetchFindingDetail(id: string): Promise<void> {
     detailStates = { ...detailStates, [id]: { status: 'ready', finding, error: null } }
   } catch (error) {
     if (detailEpoch[id] !== epoch) return
-    detailStates = { ...detailStates, [id]: { status: 'error', finding: null, error: toApiError(error) } }
+    detailStates = {
+      ...detailStates,
+      [id]: { status: 'error', finding: null, error: toApiError(error) },
+    }
   }
   commitDetail()
 }
@@ -382,10 +385,7 @@ async function fetchFindingDetail(id: string): Promise<void> {
  */
 export function useFindingDetail(id: string | null): FindingDetailState {
   const subscribe = useCallback((listener: Listener) => subscribeFindingDetail(listener), [])
-  const getSnapshot = useCallback(
-    () => (id ? getFindingDetailSnapshot(id) : IDLE_DETAIL),
-    [id],
-  )
+  const getSnapshot = useCallback(() => (id ? getFindingDetailSnapshot(id) : IDLE_DETAIL), [id])
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
@@ -695,10 +695,7 @@ export async function uploadFindingAttachments(
   // 字段名 `files` 必须与后端 `File(...)` 参数名一致（契约 §3.15）
   for (const file of files) form.append('files', file)
 
-  const created = await api.upload<FindingAttachment[]>(
-    `/findings/${findingId}/attachments`,
-    form,
-  )
+  const created = await api.upload<FindingAttachment[]>(`/findings/${findingId}/attachments`, form)
   await loadFindingAttachments(findingId, { force: true })
   return created
 }
@@ -805,9 +802,35 @@ export interface FindingGroup {
 
 export type GroupsStatus = 'idle' | 'loading' | 'ready' | 'error'
 
+/**
+ * 分组请求的筛选参数 —— 与 `/findings/groups` 的查询参数同名。
+ *
+ * ★ 与导出共用同一份映射（`filterToExportQuery`）：分组和列表必须是
+ *   "同一批数据换个切法"，参数少传一个维度，分组就会比列表宽 ——
+ *   而用户看到的是"筛了高危，分组里却还有低危的组"。
+ *   `deleted` 单独传，因为它表达的是**视图范围**（回收站），不是筛选器。
+ */
+export interface FindingGroupsQuery {
+  severity?: string
+  status?: string
+  category?: string
+  q?: string
+  assigneeId?: string
+  unassigned?: boolean
+  deleted?: boolean
+}
+
 let groups: FindingGroup[] = []
 let groupsStatus: GroupsStatus = 'idle'
 let groupsError: ApiError | null = null
+/**
+ * 上一次请求的参数签名。
+ *
+ * 只靠 `status === 'ready'` 做幂等会让**筛选变化后不重拉**：
+ * 用户改了筛选、切到分组，看到的还是上一次的全量分组。
+ * 签名不同就必须重拉 —— 否则筛选在分组视图里是死的。
+ */
+let groupsKey = ''
 let groupsSnapshot: { groups: FindingGroup[]; status: GroupsStatus; error: ApiError | null } = {
   groups,
   status: groupsStatus,
@@ -829,14 +852,35 @@ export function getGroupsSnapshot() {
  * **按需加载**：只在用户切到分组视图时调。默认列表视图不需要它，
  * 而它是一次全量聚合 —— 每次进页面都拉等于让"最需要看全貌"的那个视图
  * 成为最慢的那个。
+ *
+ * ## 参数与幂等
+ *
+ * `query` 与 `/findings` 的筛选参数同名同义（外加 `deleted` 表示回收站）。
+ * 幂等判据是**参数签名**，不是单纯的 `ready`：筛选变了就必须重拉，
+ * 否则用户在分组视图里改筛选，看到的还是上一次的范围。
  */
-export async function loadFindingGroups(options: { force?: boolean } = {}): Promise<void> {
-  if (!options.force && groupsStatus === 'ready') return
+export async function loadFindingGroups(
+  query: FindingGroupsQuery = {},
+  options: { force?: boolean } = {},
+): Promise<void> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value === null || value === undefined || value === '' || value === false) continue
+    params.set(key, String(value))
+  }
+  const suffix = params.toString()
+  const key = suffix
+
+  // 同一参数的请求已经在飞 —— 别再发一次。
+  // 页面的 effect 依赖 `groupsState.status`，而它在 `loading` 时会重跑一次。
+  if (groupsStatus === 'loading' && groupsKey === key) return
+  if (!options.force && groupsStatus === 'ready' && groupsKey === key) return
   groupsStatus = 'loading'
+  groupsKey = key
   groupsError = null
   commitGroups()
   try {
-    groups = await api.get<FindingGroup[]>('/findings/groups')
+    groups = await api.get<FindingGroup[]>(`/findings/groups${suffix ? `?${suffix}` : ''}`)
     groupsStatus = 'ready'
     groupsError = null
   } catch (err) {
@@ -873,6 +917,7 @@ export function resetFindings(): void {
   // 视图切换后看到"列表是新的、分组是旧的"这种自相矛盾
   groups = []
   groupsStatus = 'idle'
+  groupsKey = ''
   groupsError = null
   commit()
   commitGroups()
@@ -890,11 +935,7 @@ export function resetFindings(): void {
  * 这是 getSnapshot 必须返回同一引用的原因（见文件头说明）。
  */
 export function useFindingsState(): FindingsSnapshot {
-  return useSyncExternalStore(
-    subscribeFindings,
-    getFindingsSnapshot,
-    getFindingsServerSnapshot,
-  )
+  return useSyncExternalStore(subscribeFindings, getFindingsSnapshot, getFindingsServerSnapshot)
 }
 
 /**

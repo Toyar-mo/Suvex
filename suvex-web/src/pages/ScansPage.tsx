@@ -179,35 +179,47 @@ export function ScansPage() {
       用户一打字 `draft` 接管。
   */
   const [wizardOpenDraft, setWizardOpenDraft] = useState<boolean | null>(null)
-  const wizardOpen = wizardOpenDraft ?? searchParams.get('new') === '1'
   const setWizardOpen = setWizardOpenDraft
 
-  const urlTarget = searchParams.get('target')
   const [targetQueryDraft, setTargetQueryDraft] = useState<string | null>(null)
-  const targetQuery = targetQueryDraft ?? urlTarget ?? ''
   const setTargetQuery = setTargetQueryDraft
+
+  const urlWantsNew = searchParams.get('new') === '1'
+  const urlTarget = searchParams.get('target')
+
+  /*
+    ── 把 URL 意图**在渲染期**落进草稿 ──
+
+    ★ v1.80：先落草稿，effect 才删参数。反过来（先删、指望派生表达式
+      继续读 URL）就是这次审计抓到的"点了没反应"：参数一删
+      `searchParams.get('new')` 变 null，而 draft 仍是 null ——
+      向导在下一帧自己关上了。命令面板、资产页「查看扫描」的深链都中招。
+
+    ★ 为什么不是 effect 里 setState：`react-hooks/set-state-in-effect`
+      明确禁止（多一轮渲染，而且"参数已删、effect 未跑完"那一帧里
+      两份真相不一致）。渲染期按 props 调整 state 是 React 官方写法：
+      条件成立才 set，set 后条件不再成立 —— 收敛，不会循环。
+  */
+  const urlParamsKey =
+    urlWantsNew || urlTarget !== null ? `${urlWantsNew}|${urlTarget ?? ''}` : null
+  const [consumedParamsKey, setConsumedParamsKey] = useState<string | null>(null)
+  if (urlParamsKey !== null && urlParamsKey !== consumedParamsKey) {
+    setConsumedParamsKey(urlParamsKey)
+    if (urlWantsNew) setWizardOpenDraft(true)
+    if (urlTarget !== null) setTargetQueryDraft(urlTarget)
+  }
+
+  const wizardOpen = wizardOpenDraft ?? urlWantsNew
+  const targetQuery = targetQueryDraft ?? urlTarget ?? ''
 
   /*
     ── 把消费掉的参数从地址栏抹掉 ──
 
     ★ 这里只有导航（`setSearchParams`），没有 setState ——
-      上面两个开关已经由派生的量表达，不需要在 effect 里纠正。
+      上面两个开关已经由渲染期那一步落进草稿了。
   */
   useEffect(() => {
-    const wantsNew = searchParams.get('new') === '1'
-    const targetFromUrl = searchParams.get('target')
-    if (!wantsNew && targetFromUrl === null) return
-
-    /*
-      ★★ v1.80：**先把意图落进草稿，再删参数**。
-
-      反过来（先删、指望派生表达式继续读 URL）就是这次审计抓到的
-      "点了没反应"：参数被删掉之后 `searchParams.get('new')` 变 null，
-      而 draft 仍是 null —— 向导在下一帧自己关上了。命令面板、资产页
-      「查看扫描」的深链都受这条影响。
-    */
-    if (wantsNew) setWizardOpenDraft(true)
-    if (targetFromUrl !== null) setTargetQueryDraft(targetFromUrl)
+    if (!urlWantsNew && urlTarget === null) return
 
     setSearchParams(
       (prev) => {
@@ -218,7 +230,7 @@ export function ScansPage() {
       },
       { replace: true },
     )
-  }, [searchParams, setSearchParams])
+  }, [searchParams, setSearchParams, urlWantsNew, urlTarget])
 
   /*
     按需加载：进页面、以及每次切换视图时都走这里。
@@ -825,7 +837,19 @@ export function ScansPage() {
         {/* ── 新建向导（内联面板） ── */}
         {wizardOpen && (
           <div className="mb-bay animate-stream-in">
-            <NewScanWizard onDone={handleCreated} onCancel={() => setWizardOpen(false)} />
+            <NewScanWizard
+              /*
+                ★ 深链里的 `?target=` 预填进向导第一步。
+
+                用 URL 原值而不是列表筛选值 `targetQuery`：后者是用户
+                看列表时的搜索词，拿它预填会把"我刚才搜过"误当成
+                "我要扫这个"。参数在 effect 里马上被抹掉，所以这里
+                读的是"到达时"的那一份。
+              */
+              initialTarget={urlTarget ?? ''}
+              onDone={handleCreated}
+              onCancel={() => setWizardOpen(false)}
+            />
           </div>
         )}
 

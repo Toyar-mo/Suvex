@@ -49,16 +49,22 @@ export function findingsInScope(findings: Finding[], scope: ReportScope): Findin
 /**
  * 应用内容选项。
  *
- * 「只含已确认」的语义要说清楚：它保留 **confirmed + fixed**。
- *   - confirmed = 已确认存在
- *   - fixed     = 曾经确认过、现在修了 —— 从交付角度它仍然发生并处理过，
- *                 把它剔掉会让报告显示"什么都没发现"，那是失真。
- *   - new（待确认）和 false_positive（误报）才是该排除的：
- *     前者还没定论，后者已判定不是问题。给客户的报告里放这两种是失职。
+ * 「只含已确认」排除的是**还没定论的两类**：`new`（待确认）与
+ * `false_positive`（误报）。其余状态全部保留：
+ *   - confirmed = 已确认存在；
+ *   - fixed     = 曾经确认过、现在修了 —— 从交付角度它仍然发生并处理过；
+ *   - retesting / closed = 只能从 confirmed 之后流转过来，同样确认过。
+ *
+ * ★ 必须写成**排除式**，不能写白名单 `confirmed + fixed`。
+ *   状态从 4 个涨到 6 个之后，白名单会静默漏掉 `retesting` 与 `closed`：
+ *   用户筛出 3 条去生成报告，界面上却算成 0 条、按钮直接禁用 ——
+ *   而报告里少放两条真问题，没有任何人会当场发现。
+ *   后端 `app/reports/document.py: apply_options` 用的也是排除式，
+ *   两处口径必须一致：前端算的条数要和导出的正文对得上。
  */
 export function applyOptions(findings: Finding[], options: ReportOptions): Finding[] {
   if (!options.onlyConfirmed) return findings
-  return findings.filter((f) => f.status === 'confirmed' || f.status === 'fixed')
+  return findings.filter((f) => f.status !== 'new' && f.status !== 'false_positive')
 }
 
 // ─────────────────────────────────────────────

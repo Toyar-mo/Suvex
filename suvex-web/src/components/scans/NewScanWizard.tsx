@@ -8,11 +8,7 @@ import {
   type TargetKind,
 } from '@/data/scan'
 import { useProviders } from '@/data/providers'
-import {
-  createScan,
-  stageScanAttachments,
-  type ScanAttachment,
-} from '@/data/scans-store'
+import { createScan, stageScanAttachments, type ScanAttachment } from '@/data/scans-store'
 import { showToast } from '@/data/toast-store'
 import { errorMessage } from '@/lib/api'
 import { ArrowLeft, ArrowRight, Check, X } from 'lucide-react'
@@ -52,12 +48,21 @@ const STEPS = [
 ]
 
 export interface NewScanWizardProps {
+  /**
+   * 打开时预填的目标。
+   *
+   * 给 `?new=1&target=…` 这类深链用（资产页「复查这个目标」、命令面板）。
+   * 它不是"列表筛选值" —— 那个值是用户在看列表时的搜索词，拿它预填
+   * 向导会把"我刚才搜过"误当成"我要扫这个"。
+   * 只在挂载时读一次：之后用户自己改，不再回写。
+   */
+  initialTarget?: string
   /** 完成后回调（关闭向导、跳转等） */
   onDone: (createdScanId: string | null) => void
   onCancel: () => void
 }
 
-export function NewScanWizard({ onDone, onCancel }: NewScanWizardProps) {
+export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizardProps) {
   const providers = useProviders()
 
   const [stepIndex, setStepIndex] = useState(0)
@@ -65,7 +70,8 @@ export function NewScanWizard({ onDone, onCancel }: NewScanWizardProps) {
 
   // 表单状态
   const [kind, setKind] = useState<TargetKind>('url')
-  const [target, setTarget] = useState('')
+  // 深链带来的目标只做初值（见 props.initialTarget）
+  const [target, setTarget] = useState(initialTarget ?? '')
   const [name, setName] = useState('')
   const [skills, setSkills] = useState<Set<string>>(new Set(['api']))
   const [providerId, setProviderId] = useState<string | null>(
@@ -139,10 +145,15 @@ export function NewScanWizard({ onDone, onCancel }: NewScanWizardProps) {
    */
   const handleKindChange = (next: TargetKind) => {
     setKind(next)
-    setSkills((prev) => new Set([...prev].filter((id) => {
-      const skill = SKILLS.find((s) => s.id === id)
-      return skill !== undefined && isApplicable(skill, next)
-    })))
+    setSkills(
+      (prev) =>
+        new Set(
+          [...prev].filter((id) => {
+            const skill = SKILLS.find((s) => s.id === id)
+            return skill !== undefined && isApplicable(skill, next)
+          }),
+        ),
+    )
   }
 
   /**

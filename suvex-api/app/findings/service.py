@@ -1520,6 +1520,7 @@ def group_findings(
     scan_id: str | None = None,
     assignee_id: str | None = None,
     unassigned: bool = False,
+    deleted: bool = False,
     limit: int = 500,
 ) -> list[dict]:
     """按**漏洞标题**分组（任务 10 P4）。
@@ -1559,6 +1560,10 @@ def group_findings(
         scan_id=scan_id,
         assignee_id=assignee_id,
         unassigned=unassigned,
+        # 与 `/findings` 的 `?deleted=true` 同一语义：回收站视图看回收站的分组。
+        # 不传的话，用户在回收站里切到分组视图会看到**活动列表**的数据 ——
+        # 而两个视图的筛选与范围必须一致（列表与分组是同一批数据换个切法）。
+        deleted=deleted,
         sort="severity",
         direction="desc",
     )

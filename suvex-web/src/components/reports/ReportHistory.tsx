@@ -33,6 +33,16 @@ export interface ReportHistoryProps {
    * 同一份报告在列表和预览里是两种说法。
    */
   describeScopeOf: (report: Report) => string
+  /**
+   * 能不能删除。
+   *
+   * 后端 `DELETE /reports/{id}` 要 **admin**（契约 §3.5 的 v0.10 修正），
+   * 而删除按钮原来对所有人显示 —— 只读用户点下去必然 403，
+   * 界面上却是一个完好的红色垃圾桶。**看得到却点不动**比看不到更糟。
+   *
+   * ⚠️ 这只是展示性的：真正的拦截在后端。
+   */
+  canDelete: boolean
   emptyState: React.ReactNode
 }
 
@@ -43,6 +53,7 @@ export function ReportHistory({
   onDelete,
   downloadingId,
   describeScopeOf,
+  canDelete,
   emptyState,
 }: ReportHistoryProps) {
   if (reports.length === 0) {
@@ -71,6 +82,7 @@ export function ReportHistory({
           onDelete={onDelete}
           downloading={downloadingId === report.id}
           scopeText={describeScopeOf(report)}
+          canDelete={canDelete}
         />
       ))}
     </ul>
@@ -84,6 +96,7 @@ function ReportRow({
   onDelete,
   downloading,
   scopeText,
+  canDelete,
 }: {
   report: Report
   onOpen: (report: Report) => void
@@ -91,6 +104,7 @@ function ReportRow({
   onDelete: (report: Report) => void
   downloading: boolean
   scopeText: string
+  canDelete: boolean
 }) {
   const [confirming, setConfirming] = useState(false)
 
@@ -211,7 +225,7 @@ function ReportRow({
             这里用就地确认而不是弹窗：报告列表本身不复杂，
             再叠一层模态只会打断。
           */}
-          {confirming ? (
+          {canDelete && confirming && (
             <span className="inline-flex items-center gap-1">
               <button
                 type="button"
@@ -228,7 +242,9 @@ function ReportRow({
                 取消
               </button>
             </span>
-          ) : (
+          )}
+
+          {canDelete && !confirming && (
             <button
               type="button"
               onClick={() => setConfirming(true)}
