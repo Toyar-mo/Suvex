@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
 import { SkillEditor, type SkillEditorState } from '@/components/kernel/SkillEditor'
@@ -811,40 +812,24 @@ function SkillDetailPane({
           */
           <div>
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-ink-faint">
-              <div
-                role="tablist"
-                aria-label="正文显示方式"
-                className="flex items-center gap-0.5 rounded-sm border border-line p-0.5"
-              >
-                <button
-                  role="tab"
-                  aria-selected={viewMode === 'rendered'}
-                  onClick={() => setViewMode('rendered')}
-                  className={cn(
-                    'flex items-center gap-1 rounded-xs px-2 py-1 transition-ui duration-fast',
-                    viewMode === 'rendered'
-                      ? 'bg-surface-raised text-ink'
-                      : 'text-ink-faint hover:text-ink-muted',
-                  )}
-                >
-                  <BookOpen className="size-3" strokeWidth={2} />
-                  排版
-                </button>
-                <button
-                  role="tab"
-                  aria-selected={viewMode === 'raw'}
-                  onClick={() => setViewMode('raw')}
-                  className={cn(
-                    'flex items-center gap-1 rounded-xs px-2 py-1 transition-ui duration-fast',
-                    viewMode === 'raw'
-                      ? 'bg-surface-raised text-ink'
-                      : 'text-ink-faint hover:text-ink-muted',
-                  )}
-                >
-                  <FileCode2 className="size-3" strokeWidth={2} />
-                  原文
-                </button>
-              </div>
+              <SegmentedControl
+                size="sm"
+                ariaLabel="正文显示方式"
+                value={viewMode}
+                onChange={(next) => setViewMode(next)}
+                options={[
+                  {
+                    id: 'rendered',
+                    label: '排版',
+                    icon: <BookOpen className="size-3" strokeWidth={2} />,
+                  },
+                  {
+                    id: 'raw',
+                    label: '原文',
+                    icon: <FileCode2 className="size-3" strokeWidth={2} />,
+                  },
+                ]}
+              />
 
               <span className="flex items-center gap-1">
                 <Eye className="size-3" strokeWidth={2} />

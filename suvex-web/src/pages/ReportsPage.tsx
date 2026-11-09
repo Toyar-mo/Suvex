@@ -5,6 +5,7 @@ import ReportHistory from '@/components/reports/ReportHistory'
 import { ContentOptions, ScopePicker, ScopePreview } from '@/components/reports/ReportConfigPanel'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { isAdmin, useAuth } from '@/data/auth-store'
@@ -698,18 +699,23 @@ export function ReportsPage() {
             两个视图是"编排"和"历史"两种任务，用 tab 明示当前在哪一侧。
             不做成"历史在下方另一个区块"：那样用户在编排时
             会被下方的历史干扰（这块页面本来就重）。 */}
-        <div role="tablist" aria-label="报告视图" className="mb-panel flex gap-1">
-          <ViewTab
-            active={mode === 'compose'}
-            onClick={() => setMode('compose')}
-            icon={<FileText size={13} strokeWidth={1.75} aria-hidden="true" />}
-            label="生成报告"
-          />
-          <ViewTab
-            active={mode === 'history'}
-            onClick={() => setMode('history')}
-            icon={<Eye size={13} strokeWidth={1.75} aria-hidden="true" />}
-            label={`历史报告${reports.length > 0 ? `（${reports.length}）` : ''}`}
+        <div className="mb-panel">
+          <SegmentedControl
+            ariaLabel="报告视图"
+            value={mode}
+            onChange={(next) => setMode(next)}
+            options={[
+              {
+                id: 'compose',
+                label: '生成报告',
+                icon: <FileText size={13} strokeWidth={1.75} aria-hidden="true" />,
+              },
+              {
+                id: 'history',
+                label: `历史报告${reports.length > 0 ? `（${reports.length}）` : ''}`,
+                icon: <Eye size={13} strokeWidth={1.75} aria-hidden="true" />,
+              },
+            ]}
           />
         </div>
 
@@ -1056,37 +1062,6 @@ export function ReportsPage() {
 // ─────────────────────────────────────────────
 // 小组件
 // ─────────────────────────────────────────────
-
-function ViewTab({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  label: string
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      /*
-        `role="tab"` 的选中态用「浮起底色」表达（与右侧预览区同一层级）。
-        基元 `ghost` 的默认文字色是 `ink-faint`（更淡），而这一排 tab 原来用的是
-        `ink-muted` —— 不改回去会整体变淡一档，所以用 className 覆盖回来。
-      */
-      className={cn('text-ink-muted', active && 'bg-surface-raised text-ink')}
-    >
-      {icon}
-      {label}
-    </Button>
-  )
-}
 
 /** 历史报告的口径卡片（只读）—— 回答"这份是怎么生成的" */
 function ReportMetaCard({
