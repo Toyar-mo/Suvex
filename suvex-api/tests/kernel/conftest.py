@@ -199,10 +199,12 @@ CTF2_CLIENT_MODULES: tuple[str, ...] = (
     # 覆盖，就会拿真 httpx 建 client 而**真的发外呼**。登记在这里让夹具
     # 把它的传输也换成 MockTransport。
     "app.kernel.multiagent",
-    # v1.80：`app.kernel.mcp` 自己建 client 去连 MCP server。它的测试
-    # 必须走 MockTransport，否则会尝试解析真实地址（看起来像网络问题）。
-    "app.kernel.mcp",
 )
+
+#: `app.kernel.mcp` **不在**上面的表里：它在 `_start_http()` 里**函数内**
+#: `import httpx`（惰性加载，见模块 docstring），模块级根本没有 `httpx` 名字。
+#: 本夹具的替换方式是 `setattr(module, "httpx", shim)`，对它只会 AttributeError。
+#: 它的测试自己注入 `_http_client_factory`（见 `test_mcp_*`），不需要这层。
 
 
 def _httpx_shim(**overrides: Any) -> Any:

@@ -1283,6 +1283,10 @@ def test_every_module_that_builds_a_client_is_covered(
         # 上语义就不对了（那个 handler 是平台形状的）。实测：只覆盖那 4 个
         # 平台模块时 `test_runner.py` 全绿。
         "app.kernel.runner",
+        # `app.kernel.mcp` 在函数内 `import httpx`（惰性加载），模块级没有
+        # `httpx` 名字 —— 夹具的 `setattr(module, "httpx", shim)` 会 AttributeError。
+        # 它的测试自己注入 `_http_client_factory`，不需要这层覆盖。
+        "app.kernel.mcp",
     }
 
     covered = set(CTF2_CLIENT_MODULES) | NOT_NEEDED
