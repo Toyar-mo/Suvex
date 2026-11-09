@@ -1028,6 +1028,11 @@ export async function resumeTurn(sessionId: string, runId: string): Promise<Chat
   try {
     const out = await api.post<{ messages: ChatMessage[] }>(
       `/chat/sessions/${sessionId}/turns/${runId}/resume`,
+      // 接手是**同步跑完整轮**才返回的（服务端 await resume_one）。用默认
+      // 20 秒超时的话，任何超过 20 秒的轮次都会在前端变成"点继续没反应"，
+      // 而服务端其实还在跑 —— 用户会反复点，越点越乱。
+      undefined,
+      { timeoutMs: 30 * 60_000 },
     )
     const active = state.active
     if (active && active.id === sessionId) {
