@@ -157,11 +157,18 @@ def test_no_endpoint_returns_501_anymore(ready_client: TestClient) -> None:
         import pathlib
 
         app_dir = pathlib.Path(__file__).resolve().parents[1] / "app"
-        callers = [
-            path
-            for path in app_dir.rglob("*.py")
-            if path.name != "stubs.py" and "pending(" in path.read_text(encoding="utf-8")
-        ]
+        callers = []
+        for path in app_dir.rglob("*.py"):
+            if path.name == "stubs.py":
+                continue
+            text = path.read_text(encoding="utf-8")
+            # 只认**真的调用了 stubs.pending** 的文件。原来写 `"pending(" in text`
+            # 会把 `_next_pending()` / `has_pending()` 这类无关函数也算成占位，
+            # 于是代码里一有"pending"这个词就红。
+            if "stubs.pending(" in text or (
+                "import pending" in text and "pending(" in text
+            ):
+                callers.append(path)
         assert not callers, (
             f"这些文件里还有 `pending()` 调用：{[str(p) for p in callers]} —— "
             "501 占位又出现了。若是有意为之，请更新本测试与契约 §9"

@@ -1109,9 +1109,10 @@ def test_the_system_prompt_warns_that_command_v_is_not_identity_proof() -> None:
     assert 'ACTION: {"tool":' in prompt, "提示词没给出 ACTION 协议的形状"
     assert '"args"' in prompt, "提示词没说明 args 这个键"
 
-    # 2) 协议必须排在工具清单**之前**：先教怎么调，再给清单。
-    #    顺序反了模型会先读到一串工具名、然后按自己的习惯去"描述"它们。
-    assert prompt.find('ACTION: {"tool":') < prompt.find("list_scans")
+    # 2) 协议必须排在**工具清单段**之前：先教怎么调，再给清单。
+    #    不能拿 `prompt.find("list_scans")` 当锚点 —— 协议段的示例句里
+    #    本身就会提到 `list_scans`，那会让断言比较到错误的位置。
+    assert prompt.find('ACTION: {"tool":') < prompt.find("## 你的工具清单")
 
     # 3) ★ 最关键的免责：显式告诉模型"叙述不是调用"。
     #    真机失败正是这一句缺失导致的。

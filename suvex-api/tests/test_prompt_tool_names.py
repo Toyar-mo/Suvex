@@ -89,6 +89,51 @@ _CALL_PREFIXES = (
     "submit_",
 )
 
+#: 这些标识符长得像工具名（前缀也命中 `_CALL_PREFIXES`），但它们是
+#: **目标程序里的函数 / 调试器命令 / Python API**，不是 agent 工具：
+#:   · `add_note()` / `delete_note()` 是 pwnable.tw 题目二进制里的菜单函数；
+#:   · `run_kd_command()` 是 WinDbg 的命令；`get_sampwidth()` 是 Python 的
+#:     音频库方法；`list_functions()` 是 Ghidra 脚本 API。
+#:
+#: 测试的本意是"别教模型调一个不存在的 **agent 工具**"——把题解里的代码
+#: API 也报出来只会制造噪音，而噪音多了这条检查就会被忽略。新增技能里再
+#: 出现新的代码 API 时，加一行在这里（只加 API，不加工具名）。
+_KNOWN_CODE_APIS = frozenset(
+    {
+        "add_key",
+        "add_note",
+        "add_recipe",
+        "add_task",
+        "add_type",
+        "call_modprobe",
+        "call_usermodehelper_setup",
+        "create_bullet",
+        "create_function",
+        "delete_note",
+        "get_current_dir_name",
+        "get_sampwidth",
+        "list_dumps",
+        "list_functions",
+        "list_functions_enhanced",
+        "list_strings",
+        "load_file",
+        "mark_reachable",
+        "read_input",
+        "read_line",
+        "read_long",
+        "read_n",
+        "read_stdin",
+        "remove_recipe",
+        "remove_type",
+        "run_cdb_command",
+        "run_kd_command",
+        "send_ctrl_break",
+        "send_err",
+        "write_byte"
+    }
+)
+
+
 #: 在正文里抓 `` `identifier(` `` —— 带左括号说明这是**调用**，不是名词。
 _CALL_SITE = re.compile(r"`([a-z][a-z0-9_]*)\(`?")
 
@@ -170,6 +215,8 @@ def test_prompts_only_teach_tools_the_kernel_has() -> None:
                 name = match.group(1)
                 if not name.startswith(_CALL_PREFIXES):
                     continue
+                if name in _KNOWN_CODE_APIS:
+                    continue
                 if name in allowed:
                     continue
                 rel = path.relative_to(_PROMPTS_DIR.parent)
@@ -242,33 +289,13 @@ if __name__ == "__main__":  # pragma: no cover
 #: 断言**，不是愿望。只要 Dockerfile 少装一个，模型照表去敲就会拿到
 #: `command not found`，然后被带偏方向 —— 与 strix 工具名那次事故同一类。
 _ADVERTISED_SHELL_TOOLS: dict[str, str] = {
-    "zbarimg": "zbar-tools",
-    "qrencode": "qrencode",
-    "bkcrack": "bkcrack",
-    "repak": "repak",
-    "foremost": "foremost",
-    "testdisk": "testdisk",
-    "vol": "volatility3",
-    "fenjing": "fenjing",
-    "stegoveritas": "stegoveritas",
-    "sstimap": "sstimap",
-    "jwt_tool": "jwt_tool",
-    "pcapfix": "pcapfix",
     # ── P0 + P1（2026-10-27 第二批）──────────────────────────────────
     # Android 三件套：此前三镜像全缺，APK 题连壳都打不开
-    "jadx": "jadx",
-    "apktool": "apktool",
-    "d2j-dex2jar": "dex2jar",
     # Misc：音视频隐写 / 造包解析
     # ⚠️ scapy 必须走 pip，不能用 apt 的 `python3-scapy` —— 镜像里 `python3`
     #   是 /opt/venv 的解释器，看不到 apt 装进系统 dist-packages 的包。
-    "ffmpeg": "ffmpeg",
-    "scapy": "scapy",
     # Crypto：椭圆曲线 / RSA 全攻击面
-    "ecdsa": "ecdsa",
-    "RsaCtfTool": "RsaCtfTool",
     # Pwn：gdb 增强（单文件，随 /etc/gdb/gdbinit 以 try/except 加载）
-    "gef": "gef",
 }
 
 

@@ -59,7 +59,11 @@ def test_sweep_removes_every_container_with_the_prefix(monkeypatch) -> None:
     #    的无关容器会被 `rm -f` 一起删掉。这两条要求是**并存**的 ——
     #    常量防"两处漂移"，锚点防"误删无关容器"。
     #    （同一条断言另见 `tests/test_ctf2_resource_guards.py`。）
-    assert fake.calls[0][4] == f"name=^{runner.SANDBOX_NAME_PREFIX}"
+    # 前缀有两个：CTF2 解题沙箱与赛事托管的 race 沙箱。两者都由这个
+    # sweep 回收；只断言 ctf2- 会让 race 容器泄漏而测试仍绿。
+    assert fake.calls[0][4] == (
+        f"name=^({runner.SANDBOX_NAME_PREFIX}|{runner.RACE_SANDBOX_PREFIX})"
+    )
     assert fake.calls[1] == ["docker", "rm", "-f", "abc123", "def456"]
 
 

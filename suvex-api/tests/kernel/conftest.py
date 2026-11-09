@@ -199,6 +199,9 @@ CTF2_CLIENT_MODULES: tuple[str, ...] = (
     # 覆盖，就会拿真 httpx 建 client 而**真的发外呼**。登记在这里让夹具
     # 把它的传输也换成 MockTransport。
     "app.kernel.multiagent",
+    # v1.80：`app.kernel.mcp` 自己建 client 去连 MCP server。它的测试
+    # 必须走 MockTransport，否则会尝试解析真实地址（看起来像网络问题）。
+    "app.kernel.mcp",
 )
 
 

@@ -85,6 +85,25 @@ PUBLIC: frozenset[tuple[str, str]] = frozenset(
 READ_ONLY: frozenset[tuple[str, str]] = frozenset(
     {
         ("GET", "/api/v1/auth/me"),
+        # ★ v1.80：对话工作区/导出/轮次与赛事托管。全部只需 read：
+        #   会话数据按 created_by 过滤，写操作（pin/purge/unarchive/上传/删除/
+        #   继续）也只碰自己的会话；工具真正的权限在 engine 里按 scope 判。
+        #   赛事托管不碰目标机器，它就是本机的编排循环。
+        ("GET", "/api/v1/chat/sessions/{session_id}/files"),
+        ("GET", "/api/v1/chat/sessions/{session_id}/files/download"),
+        ("GET", "/api/v1/chat/sessions/{session_id}/export"),
+        ("GET", "/api/v1/chat/sessions/{session_id}/turns"),
+        ("GET", "/api/v1/chat/files"),
+        ("POST", "/api/v1/chat/files/export"),
+        ("POST", "/api/v1/chat/sessions/{session_id}/files"),
+        ("DELETE", "/api/v1/chat/sessions/{session_id}/files"),
+        ("POST", "/api/v1/chat/sessions/{session_id}/pin"),
+        ("POST", "/api/v1/chat/sessions/{session_id}/unarchive"),
+        ("POST", "/api/v1/chat/sessions/{session_id}/purge"),
+        ("POST", "/api/v1/chat/sessions/{session_id}/turns/{run_id}/resume"),
+        ("GET", "/api/v1/ctf-race/status"),
+        ("POST", "/api/v1/ctf-race/start"),
+        ("POST", "/api/v1/ctf-race/stop"),
         ("GET", "/api/v1/scans"),
         ("GET", "/api/v1/scans/queue"),
         # 对比是**只读**：它只读两条扫描的漏洞标题做集合差，不改任何状态。
