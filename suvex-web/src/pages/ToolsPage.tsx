@@ -24,10 +24,8 @@ import {
 } from '@/data/tools'
 import {
   AlertCircle,
-  AlertTriangle,
   Boxes,
   Check,
-  ChevronDown,
   Loader2,
   Plug,
   RotateCcw,
@@ -84,30 +82,6 @@ function tabFromHash(hash: string): TabId {
  * ⚠️ 换镜像时**必须**同步这张表。顶部写了实测日期，就是为了让下一个
  *   改镜像的人知道这里会过期，而不是把它当成永远正确的清单。
  */
-const IMAGE_GAPS = {
-  checkedAt: '2026-11-09',
-  // 2026-11-09 这一轮把能装的都装进镜像了：wpscan / searchsploit /
-  // impacket / uncompyle6 / pycdc / ghidra。剩余两项是**明确不装**，
-  // 不是"待补"—— 用户已确认替代品够用（msfconsole），或依赖装不成
-  // （zsteg / ropper）。所以两栏缺口都为空，替代路径写在 caveats。
-  ctf: [],
-  pentest: [],
-  caveats: [
-    [
-      'msfconsole',
-      '明确不装（616 MB + postgresql/Oracle 客户端，无状态沙箱起库不划算）。' +
-        '公开 PoC 用 searchsploit，内网协议用 impacket。',
-    ],
-    ['zsteg', '未装（gem 依赖取不到）。PNG LSB 用 stegoveritas -bruteLSB 覆盖。'],
-    ['ropper', '未装（filebytes 用了 Py3.12 已删的 ast.Str）。ROPgadget 等价。'],
-    ['vol', '已装，但 Windows 符号表默认联网下载；解题沙箱无网时要预放 symbols。'],
-    ['xsser', 'payload 集偏老，现代 CSP 下多半无效。优先 dalfox。'],
-    ['nikto', '以已知特征库为准，对 SPA / 纯 API 基本无话可说。'],
-    ['wafw00f', '只认它内置的几十家指纹；"没 WAF"只是没匹配上。'],
-    ['nuclei', '模板在 /opt/nuclei-templates，但默认不加载 —— 必须显式给 templates。'],
-  ],
-} as const
-
 function SummaryCard({
   label,
   value,
@@ -140,82 +114,6 @@ function SummaryCard({
         {value}
       </p>
       <p className="mt-0.5 text-2xs leading-snug text-ink-faint">{detail}</p>
-    </div>
-  )
-}
-
-function CapabilityGaps() {
-  return (
-    <details className="group rounded-md border border-line bg-surface">
-      <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-2.5 text-sm text-ink">
-        <AlertTriangle className="size-3.5 shrink-0 text-signal-warn" strokeWidth={1.75} />
-        <span className="font-medium">场景覆盖与替代</span>
-        <span className="text-xs text-ink-faint">
-          镜像实测 {IMAGE_GAPS.checkedAt} ·{' '}
-          {Number(IMAGE_GAPS.ctf.length) === 0 ? 'CTF 无硬缺口' : `CTF ${IMAGE_GAPS.ctf.length} 项`}{' '}
-          ·{' '}
-          {Number(IMAGE_GAPS.pentest.length) === 0
-            ? '渗透无硬缺口'
-            : `渗透 ${IMAGE_GAPS.pentest.length} 项`}
-        </span>
-        <ChevronDown
-          className="ml-auto size-3.5 text-ink-faint transition-transform duration-fast group-open:rotate-180"
-          strokeWidth={2}
-        />
-      </summary>
-      <div className="grid gap-panel border-t border-line px-4 py-3 lg:grid-cols-2">
-        {Number(IMAGE_GAPS.ctf.length) + Number(IMAGE_GAPS.pentest.length) === 0 ? (
-          <p className="text-xs leading-relaxed text-ink-muted lg:col-span-2">
-            CTF 与渗透都没有硬缺口。下面这些是明确不装、但已有等价替代的工具 ——
-            模型按配方用替代品即可，不需要你额外配置。
-          </p>
-        ) : (
-          <>
-            <GapList title="CTF 还缺什么" items={IMAGE_GAPS.ctf} />
-            <GapList title="渗透还缺什么" items={IMAGE_GAPS.pentest} />
-          </>
-        )}
-        <div className="lg:col-span-2">
-          <p className="text-xs font-medium text-ink-muted">有，但默认会漏 / 容易误用</p>
-          <ul className="mt-1 grid gap-x-panel gap-y-1 lg:grid-cols-2">
-            {IMAGE_GAPS.caveats.map(([name, why]) => (
-              <li key={name} className="text-xs leading-relaxed text-ink-muted">
-                <code className="font-mono text-ink">{name}</code>
-                <span className="text-ink-faint"> —— </span>
-                {why}
-              </li>
-            ))}
-          </ul>
-        </div>
-        <p className="text-2xs leading-relaxed text-ink-faint lg:col-span-2">
-          这张表按 <code className="font-mono">suvex-sandbox</code> 系列镜像实测；
-          换镜像后需要同步。缺的工具不能用配方补 —— 配方只描述已装二进制怎么调。
-        </p>
-      </div>
-    </details>
-  )
-}
-
-function GapList({
-  title,
-  items,
-}: {
-  title: string
-  items: readonly (readonly [string, string])[]
-}) {
-  return (
-    <div>
-      <p className="text-xs font-medium text-ink">{title}</p>
-      {items.length === 0 && <p className="mt-1 text-xs text-ink-faint">没有硬缺口。</p>}
-      <ul className="mt-1 flex flex-col gap-1">
-        {items.map(([name, why]) => (
-          <li key={name} className="text-xs leading-relaxed text-ink-muted">
-            <code className="font-mono text-ink">{name}</code>
-            <span className="text-ink-faint"> —— </span>
-            {why}
-          </li>
-        ))}
-      </ul>
     </div>
   )
 }
@@ -362,7 +260,7 @@ export function ToolsPage() {
             )}
 
             {/* ── 摘要：三层能力一眼看清 ─────────────────────── */}
-            <section aria-label="能力概览" className="grid grid-cols-2 gap-panel xl:grid-cols-4">
+            <section aria-label="能力概览" className="grid grid-cols-2 gap-panel xl:grid-cols-3">
               <SummaryCard
                 label="内置工具"
                 value={counts.total}
@@ -390,15 +288,7 @@ export function ToolsPage() {
                 detail={`CTF 覆盖 ${coverage.ctf} · 渗透覆盖 ${coverage.pentest} · ${coverage.limited} 条写了局限`}
                 icon={<Terminal className="size-3.5" />}
               />
-              <SummaryCard
-                label="硬缺口"
-                value={Number(IMAGE_GAPS.ctf.length) + Number(IMAGE_GAPS.pentest.length)}
-                detail={`CTF / 渗透均无硬缺口 · ${IMAGE_GAPS.caveats.length} 条替代路径见下方`}
-                icon={<AlertTriangle className="size-3.5" />}
-              />
             </section>
-
-            <CapabilityGaps />
 
             {/* ── 页签 ────────────────────────────────────── */}
             <div role="tablist" aria-label="工具分层" className="flex flex-wrap gap-1">
