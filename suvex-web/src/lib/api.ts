@@ -453,6 +453,103 @@ export async function apiText(
 }
 
 /** 便捷方法。`path` 以 `/` 开头，不带 `/api/v1` 前缀。 */
+export interface BlobDownload {
+  blob: Blob
+  filename: string | null
+  mime: string
+}
+
+type BlobOptions = {
+  method?: 'GET' | 'POST'
+  body?: unknown
+  skipAuthRedirect?: boolean
+  timeoutMs?: number
+  signal?: AbortSignal
+}
+
+/**
+ * 下载类响应（ZIP 等二进制）。失败仍然抛 `ApiError`。
+ *
+ * 与 `apiText` 分开而不是返回 `Blob | string`：调用方要立刻
+ * `URL.createObjectURL(blob)`，多一个 union 判断只会让每个调用点都写
+ * 一次 `instanceof Blob`。错误分支读的是文本（后端信封是 JSON），
+ * 所以成功/失败不会互相污染。
+ *
+ * 默认超时 120 秒：打包 ZIP 要读盘、压缩，比普通接口慢一个量级；
+ * 20 秒会把"大文件正常导出"当成失败。
+ */
+export async function apiBlob(
+  path: string,
+  options: BlobOptions = {},
+): Promise<BlobDownload> {
+  const { method = 'GET', body, skipAuthRedirect = false, timeoutMs = 120_000, signal } = options
+
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  const onAbort = () => controller.abort()
+  signal?.addEventListener('abort', onAbort)
+
+  let response: Response
+  try {
+    response = await fetch(buildUrl(path), {
+      method,
+      credentials: 'include',
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    })
+  } catch (error) {
+    const aborted = error instanceof DOMException && error.name === 'AbortError'
+    throw new ApiError(
+      aborted ? 'REQUEST_ABORTED' : 'NETWORK_ERROR',
+      aborted
+        ? '请求超时或被取消，请重试。'
+        : `连接不上后端服务（${API_BASE_URL}）。请确认服务已启动。`,
+      0,
+    )
+  } finally {
+    window.clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+
+  if (!response.ok) {
+    // 失败时后端回的还是 JSON 错误信封，读取文本再解析 —— 与 apiText 同一口径，
+    // 让"导出失败"也能显示后端那句具体的中文。
+    const text = await response.text()
+    let envelope: { code?: string; message?: string; details?: unknown } | undefined
+    try {
+      const parsed: unknown = JSON.parse(text)
+      if (parsed && typeof parsed === 'object' && 'error' in parsed) {
+        const raw = parsed.error
+        if (raw && typeof raw === 'object') {
+          envelope = {
+            code: 'code' in raw && typeof raw.code === 'string' ? raw.code : undefined,
+            message: 'message' in raw && typeof raw.message === 'string' ? raw.message : undefined,
+            details: 'details' in raw ? raw.details : undefined,
+          }
+        }
+      }
+    } catch {
+      // 不是 JSON（反代错误页）：下面的兜底文案用状态码
+    }
+    const error = new ApiError(
+      envelope?.code ?? 'UNKNOWN_ERROR',
+      envelope?.message ?? `请求失败（HTTP ${response.status}）。`,
+      response.status,
+      toFieldErrors(envelope?.details),
+    )
+    if (response.status === 401 && !skipAuthRedirect) unauthorizedHandler?.()
+    throw error
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: filenameFrom(response.headers.get('Content-Disposition')),
+    mime: response.headers.get('Content-Type') ?? 'application/octet-stream',
+  }
+}
+
+/** 便捷方法。`path` 以 `/` 开头，不带 `/api/v1` 前缀。 */
 export const api = {
   get: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
     apiRequest<T>(path, { ...options, method: 'GET' }),
@@ -464,6 +561,9 @@ export const api = {
     apiRequest<T>(path, { ...options, method: 'PATCH', body }),
   del: <T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>) =>
     apiRequest<T>(path, { ...options, method: 'DELETE' }),
+  /** 一次请求拿回二进制（ZIP 导出用）；失败同样抛 `ApiError`。 */
+  postBlob: (path: string, body?: unknown, options?: Omit<BlobOptions, 'method' | 'body'>) =>
+    apiBlob(path, { ...options, method: 'POST', body }),
   /**
    * **multipart 上传**（任务 10 P6-d）。
    *

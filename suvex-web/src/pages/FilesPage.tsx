@@ -12,6 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageHeader } from '@/components/layout/AppShell'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
+import Checkbox from '@/components/ui/Checkbox'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button, IconButton } from '@/components/ui/Button'
@@ -22,6 +23,7 @@ import { PERSIST_PREFIX, workspaceFileUrl } from '@/lib/workFiles'
 import { showToast } from '@/data/toast-store'
 import {
   deleteFile,
+  exportFilesZip,
   formatBytes,
   formatDate,
   formatTimestamp,
@@ -46,7 +48,8 @@ import {
  * 会话里翻聊天记录找路径。
  *
  * 版式参照 CyberStrikeAI 的文件管理：一张带筛选的表格，列是
- * 日期 / 会话 / 子路径 / 文件名 / 来源 / 大小 / 修改时间 / 操作。
+ * 选择 / 会话 / 子路径 / 文件名 / 来源 / 大小 / 修改时间 / 操作。
+ * 「修改时间」已经包含日期，不再单列「日期」。
  *
  * ## 为什么筛选在服务端
  *
@@ -145,6 +148,11 @@ function shortSessionId(id: string): string {
   return `${id.slice(0, 12)}…${id.slice(-4)}`
 }
 
+/** 行标识：会话内 path 唯一，跨会话必须带上 sessionId。 */
+function fileKeyOf(row: WorkspaceFileRow): string {
+  return `${row.sessionId}:${row.path}`
+}
+
 export default function FilesPage() {
   const [rows, setRows] = useState<WorkspaceFileRow[]>([])
   const [status, setStatus] = useState<FilesStatus>('loading')
@@ -165,6 +173,11 @@ export default function FilesPage() {
   const [page, setPage] = useState(0)
   const [pendingDelete, setPendingDelete] = useState<WorkspaceFileRow | null>(null)
   const [deleting, setDeleting] = useState(false)
+  /** 批量选择：key = `${sessionId}:${path}`（path 在会话内唯一）。 */
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set())
+  const [pendingBulkDelete, setPendingBulkDelete] = useState<WorkspaceFileRow[] | null>(null)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [uploading, setUploading] = useState(false)
   // v1.39：上传目标会话改成下拉选（会话 ID 不在这一页上，让用户手填看不到的东西是设计缺陷）。
@@ -209,6 +222,13 @@ export default function FilesPage() {
       setRows(data.items)
       setTruncated(data.truncated)
       setListLimit(data.limit)
+      // 筛选/删除后，选择里可能留下已经不存在的行；清掉，避免批量操作打到幻影。
+      setSelected((prev) => {
+        if (prev.size === 0) return prev
+        const alive = new Set(data.items.map(fileKeyOf))
+        const next = new Set([...prev].filter((key) => alive.has(key)))
+        return next.size === prev.size ? prev : next
+      })
       setStatus('ready')
     } catch (err) {
       setError(toApiError(err))
@@ -252,7 +272,111 @@ export default function FilesPage() {
   const pageCount = Math.max(1, pages.length)
   // 数据变少（筛选、删除）后页码可能越界：夹一下，不要报错也不要空白页
   const currentPage = Math.min(page, pageCount - 1)
-  const groups = pages[currentPage] ?? []
+  const groups = useMemo(() => pages[currentPage] ?? [], [pages, currentPage])
+
+  /** 当前页的行。全选只作用于当前页——避免"点了全选，删掉看不见的 5000 个"。 */
+  const pageRows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
+  const allOnPageSelected =
+    pageRows.length > 0 && pageRows.every((row) => selected.has(fileKeyOf(row)))
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selected.has(fileKeyOf(row))),
+    [rows, selected],
+  )
+
+  const toggleRow = (row: WorkspaceFileRow) => {
+    const key = fileKeyOf(row)
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const toggleAllOnPage = () => {
+    setSelected((prev) => {
+      if (allOnPageSelected) {
+        const next = new Set(prev)
+        for (const row of pageRows) next.delete(fileKeyOf(row))
+        return next
+      }
+      return new Set([...prev, ...pageRows.map(fileKeyOf)])
+    })
+  }
+
+  const copySelectedPaths = async () => {
+    if (selectedRows.length === 0) return
+    const text = selectedRows.map((row) => `${PERSIST_PREFIX}${row.path}`).join('\n')
+    try {
+      await navigator.clipboard.writeText(text)
+      showToast({ tone: 'ok', message: `已复制 ${selectedRows.length} 条路径` })
+    } catch {
+      showToast({ tone: 'risk', message: '复制失败，请手动选择。' })
+    }
+  }
+
+  /**
+   * 批量删除。逐条串行：一次几十个并发 DELETE 会把后端与磁盘同时打满，
+   * 而这里本来就只处理当前页（≤100）的选择。失败项不静默——
+   * 逐个汇总进 toast，成功的照常删掉。
+   */
+  const confirmBulkDelete = async () => {
+    const files = pendingBulkDelete ?? []
+    if (files.length === 0) return
+    setBulkDeleting(true)
+    let ok = 0
+    const failures: string[] = []
+    for (const row of files) {
+      try {
+        await deleteFile(row.sessionId, row.path)
+        ok += 1
+      } catch (err) {
+        failures.push(`${row.name}：${toApiError(err).message}`)
+      }
+    }
+    setBulkDeleting(false)
+    setPendingBulkDelete(null)
+    setSelected(new Set())
+    if (ok > 0) showToast({ tone: 'ok', message: `已删除 ${ok} 个文件` })
+    if (failures.length > 0) {
+      showToast({
+        tone: 'risk',
+        message:
+          failures.length === 1 ? failures[0] : `${failures.length} 个文件删除失败`,
+      })
+    }
+    void load(applied)
+  }
+
+  /**
+   * 把勾选的文件一次性下载成 ZIP。
+   *
+   * 用 `URL.createObjectURL` + 临时 `<a download>`：ZIP 是刚生成的 blob，
+   * 没有可直接导航的 URL。`revokeObjectURL` 推迟 10 秒 —— 点完立刻 revoke
+   * 会让部分浏览器把已经开始下载的 blob 取消。
+   */
+  const exportSelected = async () => {
+    if (selectedRows.length === 0) return
+    setExporting(true)
+    try {
+      const { blob, filename } = await exportFilesZip(
+        selectedRows.map((row) => ({ sessionId: row.sessionId, path: row.path })),
+      )
+      const url = URL.createObjectURL(blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
+      showToast({ tone: 'ok', message: `已打包 ${selectedRows.length} 个文件` })
+    } catch (err) {
+      showToast({ tone: 'risk', message: toApiError(err).message })
+    } finally {
+      setExporting(false)
+    }
+  }
 
   const copyPath = async (row: WorkspaceFileRow) => {
     const value = `${PERSIST_PREFIX}${row.path}`
@@ -563,6 +687,38 @@ export default function FilesPage() {
             </p>
           )}
 
+          {selected.size > 0 && (
+            <div className="flex flex-wrap items-center gap-2 border-b border-line bg-accent-wash/40 px-gutter py-2 text-sm">
+              <span className="tabular text-ink" data-numeric>
+                已选 {selected.size} 个
+              </span>
+              <Button variant="secondary" size="sm" onClick={() => void copySelectedPaths()}>
+                <Copy size={14} strokeWidth={2} aria-hidden="true" />
+                复制路径
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={exporting}
+                onClick={() => void exportSelected()}
+              >
+                <Download size={14} strokeWidth={2} aria-hidden="true" />
+                {exporting ? '打包中…' : '下载 ZIP'}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => setPendingBulkDelete(selectedRows)}
+              >
+                <Trash2 size={14} strokeWidth={2} aria-hidden="true" />
+                删除选中
+              </Button>
+              <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
+                取消选择
+              </Button>
+            </div>
+          )}
+
           {status === 'loading' && rows.length === 0 ? (
             <div className="p-gutter">
               <SkeletonRows rows={6} rowClassName="h-10" />
@@ -584,7 +740,15 @@ export default function FilesPage() {
               <table className="w-full min-w-[880px] border-collapse text-sm">
                 <thead>
                   <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-ink-muted">
-                    <th className="px-3 py-2 font-medium">日期</th>
+                    <th className="w-10 px-3 py-2 font-medium">
+                      <Checkbox
+                        id="files-select-all"
+                        checked={allOnPageSelected}
+                        indeterminate={selected.size > 0 && !allOnPageSelected}
+                        onChange={toggleAllOnPage}
+                        label="全选当前页"
+                      />
+                    </th>
                     <th className="px-3 py-2 font-medium">会话</th>
                     <th className="px-3 py-2 font-medium">子路径</th>
                     <th className="px-3 py-2 font-medium">文件名</th>
@@ -600,6 +764,8 @@ export default function FilesPage() {
                       key={group.key}
                       label={group.label}
                       rows={group.rows}
+                      selected={selected}
+                      onToggle={toggleRow}
                       onCopy={copyPath}
                       onCopySession={copySessionId}
                       onDelete={setPendingDelete}
@@ -650,6 +816,17 @@ export default function FilesPage() {
         onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDelete(null)}
       />
+      <ConfirmDialog
+        open={pendingBulkDelete !== null}
+        title="批量删除文件"
+        description={`将删除选中的 ${pendingBulkDelete?.length ?? 0} 个文件。这是磁盘上的真实文件，删除后无法恢复。`}
+        confirmLabel="全部删除"
+        busy={bulkDeleting}
+        onConfirm={() => void confirmBulkDelete()}
+        onCancel={() => {
+          if (!bulkDeleting) setPendingBulkDelete(null)
+        }}
+      />
     </div>
   )
 }
@@ -658,12 +835,16 @@ export default function FilesPage() {
 function FileGroupBody({
   label,
   rows,
+  selected,
+  onToggle,
   onCopy,
   onCopySession,
   onDelete,
 }: {
   label: string
   rows: WorkspaceFileRow[]
+  selected: ReadonlySet<string>
+  onToggle: (row: WorkspaceFileRow) => void
   onCopy: (row: WorkspaceFileRow) => void
   onCopySession: (row: WorkspaceFileRow) => void
   onDelete: (row: WorkspaceFileRow) => void
@@ -672,80 +853,98 @@ function FileGroupBody({
     <>
       {label && (
         <tr className="bg-surface-raised">
-          <td colSpan={8} className="px-3 py-2 text-xs font-medium text-ink-muted">
+          <td colSpan={7} className="px-3 py-2 text-xs font-medium text-ink-muted">
             {label} · {rows.length}
           </td>
         </tr>
       )}
-      {rows.map((row) => (
-        <tr
-          key={`${row.sessionId}:${row.path}`}
-          className="border-b border-line last:border-0 hover:bg-surface-raised"
-        >
-          <td className="whitespace-nowrap px-3 py-2 text-ink-muted">
-            {formatDate(row.modifiedAt)}
-          </td>
-          <td className="max-w-[220px] px-3 py-2">
-            <div className="flex flex-col leading-tight">
-              <span className="truncate text-ink" title={row.sessionTitle}>
-                {row.sessionTitle || '(无标题)'}
-              </span>
-              {/* v1.39：会话 ID 直接显示在页面上、可一键复制 —— 之前这一页根本查不到它，
-                  「上传文件」却要求用户填会话 ID，等于让人填一个看不到的值。 */}
-              <span className="truncate font-mono text-2xs text-ink-muted" title={row.sessionId}>
-                {shortSessionId(row.sessionId)}
-              </span>
-            </div>
-          </td>
-          <td
-            className="max-w-[160px] truncate px-3 py-2 text-ink-muted"
-            title={subPathOf(row.path)}
+      {rows.map((row) => {
+        const key = fileKeyOf(row)
+        const isSelected = selected.has(key)
+        const title = (row.sessionTitle ?? '').trim()
+        // 会话标题常是首条消息（可能是 JSON）；这种标题当主行既难看又撑宽。
+        const titleIsJson = title.startsWith('{') || title.startsWith('[')
+        const shortId = shortSessionId(row.sessionId)
+        const primary = !title || titleIsJson ? shortId : title
+        return (
+          <tr
+            key={key}
+            className={cn(
+              'border-b border-line last:border-0 hover:bg-surface-raised',
+              isSelected && 'bg-accent-wash/30',
+            )}
           >
-            {subPathOf(row.path)}
-          </td>
-          <td className="max-w-[240px] truncate px-3 py-2">
-            <a
-              href={workspaceFileUrl(row.sessionId, row.path)}
-              className="text-ink hover:text-accent hover:underline"
-              title={`下载 ${row.path}`}
+            <td className="px-3 py-2">
+              <Checkbox
+                id={`files-pick-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`}
+                checked={isSelected}
+                onChange={() => onToggle(row)}
+                label={`选择 ${row.name}`}
+              />
+            </td>
+            <td className="max-w-[200px] px-3 py-2">
+              <div className="flex flex-col leading-tight">
+                <span className="truncate text-ink" title={title || row.sessionId}>
+                  {primary}
+                </span>
+                {/* 标题本身是短 ID 时不重复；是正常标题时副行给可复制的短 ID。 */}
+                {primary !== shortId && (
+                  <span className="truncate font-mono text-2xs text-ink-muted" title={row.sessionId}>
+                    {shortId}
+                  </span>
+                )}
+              </div>
+            </td>
+            <td
+              className="max-w-[160px] truncate px-3 py-2 text-ink-muted"
+              title={subPathOf(row.path)}
             >
-              {row.name}
-            </a>
-          </td>
-          <td className="whitespace-nowrap px-3 py-2">
-            <span className="rounded-xs border border-line px-1.5 py-0.5 text-xs text-ink-muted">
-              {row.source === 'workspace' ? '工作目录' : row.source}
-            </span>
-          </td>
-          <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ink-muted">
-            {formatBytes(row.sizeBytes)}
-          </td>
-          <td className="whitespace-nowrap px-3 py-2 text-ink-muted">
-            {formatTimestamp(row.modifiedAt)}
-          </td>
-          <td className="whitespace-nowrap px-3 py-2">
-            <div className="flex items-center justify-end gap-1">
-              <IconButton label={`复制 ${row.name} 的路径`} onClick={() => onCopy(row)}>
-                <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
-              </IconButton>
-              <IconButton label={`复制会话 ID ${row.sessionId}`} onClick={() => onCopySession(row)}>
-                <Hash size={15} strokeWidth={1.75} aria-hidden="true" />
-              </IconButton>
-              <IconButton
-                label={`下载 ${row.name}`}
-                onClick={() => {
-                  window.location.href = workspaceFileUrl(row.sessionId, row.path)
-                }}
+              {subPathOf(row.path)}
+            </td>
+            <td className="max-w-[240px] truncate px-3 py-2">
+              <a
+                href={workspaceFileUrl(row.sessionId, row.path)}
+                className="text-ink hover:text-accent hover:underline"
+                title={`下载 ${row.path}`}
               >
-                <Download size={15} strokeWidth={1.75} aria-hidden="true" />
-              </IconButton>
-              <IconButton label={`删除 ${row.name}`} onClick={() => onDelete(row)}>
-                <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
-              </IconButton>
-            </div>
-          </td>
-        </tr>
-      ))}
+                {row.name}
+              </a>
+            </td>
+            <td className="whitespace-nowrap px-3 py-2">
+              <span className="rounded-xs border border-line px-1.5 py-0.5 text-xs text-ink-muted">
+                {row.source === 'workspace' ? '工作目录' : row.source}
+              </span>
+            </td>
+            <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ink-muted">
+              {formatBytes(row.sizeBytes)}
+            </td>
+            <td className="whitespace-nowrap px-3 py-2 text-ink-muted">
+              {formatTimestamp(row.modifiedAt)}
+            </td>
+            <td className="whitespace-nowrap px-3 py-2">
+              <div className="flex items-center justify-end gap-1">
+                <IconButton label={`复制 ${row.name} 的路径`} onClick={() => onCopy(row)}>
+                  <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
+                </IconButton>
+                <IconButton label={`复制会话 ID ${row.sessionId}`} onClick={() => onCopySession(row)}>
+                  <Hash size={15} strokeWidth={1.75} aria-hidden="true" />
+                </IconButton>
+                <IconButton
+                  label={`下载 ${row.name}`}
+                  onClick={() => {
+                    window.location.href = workspaceFileUrl(row.sessionId, row.path)
+                  }}
+                >
+                  <Download size={15} strokeWidth={1.75} aria-hidden="true" />
+                </IconButton>
+                <IconButton label={`删除 ${row.name}`} onClick={() => onDelete(row)}>
+                  <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
+                </IconButton>
+              </div>
+            </td>
+          </tr>
+        )
+      })}
     </>
   )
 }

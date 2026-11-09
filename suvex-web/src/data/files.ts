@@ -107,6 +107,26 @@ export async function deleteFile(sessionId: string, path: string): Promise<void>
   )
 }
 
+/** 批量导出时指向一个文件的坐标（与列表行同一口径）。 */
+export interface FileRef {
+  sessionId: string
+  path: string
+}
+
+/**
+ * 把勾选的文件打成一个 ZIP（v1.80）。
+ *
+ * 为什么不让前端逐个触发下载：浏览器会拦截连续多个下载（弹"允许多个
+ * 下载吗"），用户勾十个就得点十次允许；服务端一次打包则只有一次下载。
+ * 后端条目名带会话前缀（`{sessionId}/{path}`），跨会话同名文件不会覆盖。
+ */
+export async function exportFilesZip(
+  items: FileRef[],
+): Promise<{ blob: Blob; filename: string }> {
+  const { blob, filename } = await api.postBlob('/chat/files/export', { items })
+  return { blob, filename: filename ?? 'suvex-files.zip' }
+}
+
 /** 上传回执。 */
 export interface UploadedFile {
   path: string

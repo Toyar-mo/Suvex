@@ -403,6 +403,30 @@ class ChatFileListOut(CamelModel):
     limit: int
 
 
+class ChatFileExportItemIn(StrictModel):
+    """批量导出 ZIP 时勾选的一个文件。"""
+
+    sessionId: str = Field(min_length=1, max_length=128)
+    #: 相对会话工作区根目录的 POSIX 路径（与列表/下载同一口径）。
+    path: str = Field(min_length=1, max_length=1024)
+
+
+class ChatFileExportIn(StrictModel):
+    """「文件管理」页的批量导出请求。
+
+    ## 为什么是 POST 而不是 GET + 查询串
+
+    勾选的文件路径可能上百条、每条又是最长 1024 字符的路径。拼进 URL
+    会轻松越过代理/服务器的请求行长度上限（常见 8 KB），症状是导出
+    偶发 414 —— 而且只在选得多的时候出现，最难查。
+
+    上限 200 与「全选当前页」的页大小（100）留了一倍余量：正常操作
+    不可能超；超了说明客户端在拼别的请求，校验层会直接拒（400）。
+    """
+
+    items: list[ChatFileExportItemIn] = Field(min_length=1, max_length=200)
+
+
 class ChatApprovalIn(StrictModel):
     """对一条待审批的工具调用做决定。"""
 

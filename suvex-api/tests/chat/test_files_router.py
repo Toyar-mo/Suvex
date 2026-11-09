@@ -13,6 +13,8 @@ v1.36 让单个会话的产物能从宿主工作区下载；v1.37 加了一个**
 
 from __future__ import annotations
 
+import io
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -148,6 +150,106 @@ class TestDeleteFile:
     ) -> None:
         got = viewer_client.delete(
             "/api/v1/chat/sessions/chat_does_not_exist/files", params={"path": "a.txt"}
+        )
+        assert got.status_code == 404, got.text
+
+
+class TestExportZip:
+    """批量导出（v1.80）：「文件管理」页的「下载 ZIP」。"""
+
+    def test_packs_selected_files_with_session_namespacing(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        a = _session(ready_client, "甲")
+        b = _session(ready_client, "乙")
+        _write(a, "report.md", b"ra")
+        _write(b, "out/report.md", b"rb")  # 跨会话同名，ZIP 里不能互相覆盖
+
+        got = ready_client.post(
+            "/api/v1/chat/files/export",
+            json={
+                "items": [
+                    {"sessionId": a, "path": "report.md"},
+                    {"sessionId": b, "path": "out/report.md"},
+                ]
+            },
+        )
+
+        assert got.status_code == 200, got.text
+        assert got.headers["content-type"] == "application/zip"
+        assert 'attachment; filename="suvex-files-' in got.headers["content-disposition"]
+        with zipfile.ZipFile(io.BytesIO(got.content)) as archive:
+            assert sorted(archive.namelist()) == sorted(
+                [f"{a}/report.md", f"{b}/out/report.md"]
+            )
+            assert archive.read(f"{a}/report.md") == b"ra"
+            assert archive.read(f"{b}/out/report.md") == b"rb"
+
+    def test_duplicate_items_are_packed_once(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        session = _session(ready_client, "重复")
+        _write(session, "a.txt", b"a")
+        item = {"sessionId": session, "path": "a.txt"}
+
+        got = ready_client.post(
+            "/api/v1/chat/files/export", json={"items": [item, item]}
+        )
+
+        assert got.status_code == 200, got.text
+        with zipfile.ZipFile(io.BytesIO(got.content)) as archive:
+            assert archive.namelist() == [f"{session}/a.txt"]
+
+    def test_missing_file_fails_the_whole_export(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        """不能"悄悄少一个"：勾选后文件被删，整包失败并说清有几个。"""
+        session = _session(ready_client, "缺")
+        _write(session, "keep.txt", b"k")
+        _write(session, "gone.txt", b"g")
+        base = chat_workspaces.ensure_workspace(session)
+        assert base is not None
+        (base / "gone.txt").unlink()
+
+        got = ready_client.post(
+            "/api/v1/chat/files/export",
+            json={
+                "items": [
+                    {"sessionId": session, "path": "keep.txt"},
+                    {"sessionId": session, "path": "gone.txt"},
+                ]
+            },
+        )
+
+        assert got.status_code == 404, got.text
+        assert "已不存在" in got.json()["error"]["message"]
+
+    def test_rejects_traversal(self, ready_client: TestClient, ws_root: Path) -> None:
+        session = _session(ready_client, "越界")
+        _write(session, "keep.txt", b"k")
+
+        got = ready_client.post(
+            "/api/v1/chat/files/export",
+            json={"items": [{"sessionId": session, "path": "../../../etc/passwd"}]},
+        )
+
+        assert got.status_code == 404, got.text
+
+    def test_rejects_empty_selection(
+        self, ready_client: TestClient, ws_root: Path
+    ) -> None:
+        got = ready_client.post("/api/v1/chat/files/export", json={"items": []})
+        # 请求体校验失败被统一翻成 400（`VALIDATION_FAILED`），不是裸 422。
+        assert got.status_code == 400, got.text
+
+    def test_other_users_session_is_not_found(
+        self, viewer_client: TestClient, ws_root: Path
+    ) -> None:
+        got = viewer_client.post(
+            "/api/v1/chat/files/export",
+            json={
+                "items": [{"sessionId": "chat_does_not_exist", "path": "a.txt"}]
+            },
         )
         assert got.status_code == 404, got.text
 

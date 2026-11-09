@@ -40,12 +40,17 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 import uuid
+import zipfile
+from datetime import datetime
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
+from starlette.background import BackgroundTask
 
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
@@ -58,6 +63,7 @@ from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
     ChatChallengeRef,
+    ChatFileExportIn,
     ChatFileItemOut,
     ChatFileListOut,
     ChatFileOut,
@@ -931,6 +937,103 @@ def download_workspace_file(
         path=str(target),
         filename=target.name,
         media_type="application/octet-stream",
+    )
+
+
+#: 批量导出 ZIP 的总大小上限。单文件上限由 `resolve_file` 把关（512 MB），
+#: 这里挡的是"一次勾 200 个 512 MB"。
+MAX_EXPORT_BYTES = 1024 * 1024 * 1024
+#: ZIP 先写内存，超过这个体积再落盘（`SpooledTemporaryFile`）。
+_EXPORT_SPOOL_BYTES = 64 * 1024 * 1024
+
+
+@router.post("/chat/files/export")
+def export_workspace_files(
+    payload: ChatFileExportIn,
+    db: DbSession,
+    identity: Reader,
+) -> StreamingResponse:
+    """把勾选的工作区文件打成一个 ZIP（v1.80）。
+
+    ## 为什么服务端打包
+
+    浏览器的多文件下载会被拦截/弹权限，而且勾十个就要发十个请求。
+    ZIP 是"一次请求、一个文件"，下载目录里也不会多出一堆散文件。
+
+    ## 安全边界完全复用 `resolve_file`
+
+    每条 `(sessionId, path)` 都先按会话鉴权（`get_session_or_404`
+    的 `created_by` 过滤），再交给 `resolve_file` 做目录穿越/符号链接/
+    大小检查。ZIP 里用 `{sessionId}/{path}` 作条目名：不同会话里同名
+    的 `report.md` 不会互相覆盖，解压后仍能看出属于哪个会话。
+
+    ## 缺一个就整体 404
+
+    勾选之后、导出之前文件被删/被归档是可能的。静默跳过会让用户
+    拿到一个"少了一个文件"的 ZIP 却毫无提示 —— 这比报错难查得多。
+    所以只要有一条解析不出来，就整体 404 并说清有几个，让前端刷新。
+
+    ## 为什么用 SpooledTemporaryFile
+
+    `BytesIO` 会把整个 ZIP 读进内存；一次导出几百 MB 时那是几个进程
+    的内存峰值。`SpooledTemporaryFile` 先写内存，超过 64 MB 自动落盘，
+    响应仍是流式的（`StreamingResponse` 按 1 MB 块读，不在内存里拼完）。
+    """
+    sessions: dict[str, Session] = {}
+    selected: list[tuple[str, str, Path]] = []
+    seen: set[tuple[str, str]] = set()
+    missing = 0
+    total_bytes = 0
+    for item in payload.items:
+        key = (item.sessionId, item.path)
+        if key in seen:  # 前端用 Set 去重，这里再挡一次（API 是公开契约）。
+            continue
+        seen.add(key)
+        session = sessions.get(item.sessionId)
+        if session is None:
+            session = service.get_session_or_404(
+                db, session_id=item.sessionId, created_by=_owner(identity)
+            )
+            sessions[item.sessionId] = session
+        target = chat_workspaces.resolve_file(session.id, item.path)
+        if target is None:
+            missing += 1
+            continue
+        try:
+            total_bytes += target.stat().st_size
+        except OSError:
+            missing += 1
+            continue
+        selected.append((session.id, item.path, target))
+
+    if missing:
+        raise ApiError.not_found(f"有 {missing} 个文件已不存在，请刷新列表后重试。")
+    if not selected:
+        raise ApiError.validation("没有可导出的文件。")
+    if total_bytes > MAX_EXPORT_BYTES:
+        raise ApiError.validation(
+            f"选中的文件合计超过 {MAX_EXPORT_BYTES // (1024 * 1024)} MB，"
+            "请分批导出。"
+        )
+
+    spool = tempfile.SpooledTemporaryFile(  # noqa: SIM115 - 响应流式读取期间必须保持打开
+        max_size=_EXPORT_SPOOL_BYTES
+    )
+    try:
+        with zipfile.ZipFile(spool, "w", zipfile.ZIP_DEFLATED) as archive:
+            for session_id, path, target in selected:
+                archive.write(target, arcname=f"{session_id}/{path.lstrip('/')}")
+        spool.seek(0)
+    except OSError as exc:
+        spool.close()
+        raise ApiError.validation("打包失败：文件可能刚被删除或占用。") from exc
+
+    filename = f"suvex-files-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+    return StreamingResponse(
+        iter(lambda: spool.read(1024 * 1024), b""),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        background=BackgroundTask(spool.close),
     )
 
 
