@@ -314,6 +314,59 @@ export function ScansPage() {
     [filtered],
   )
 
+  /*
+    ── 行内动作（终止 / 重跑 / 续跑）改成稳定回调 ──
+
+    ★ 它们原来写成内联箭头函数，每次渲染都是新引用。`ScanRow` 一旦
+      被 `memo` 包住，这个新引用会让**所有行**跟着重渲染 —— 而扫描列表
+      在有任务跑时每 2.5 秒刷新一次，等于 memo 完全失效。
+      数据层已经把没变化的行复用成同一个对象（见 `reconcileScans`），
+      这里再把回调稳定住，两者合起来才让"只有变化的那一行重渲染"成立。
+  */
+  const handleAbortScan = useCallback((scan: Scan) => {
+    void abortScan(scan.id).catch((err) =>
+      showToast({ message: `终止失败：${errorMessage(err)}`, tone: 'risk' }),
+    )
+  }, [])
+
+  const handleRerunScan = useCallback(
+    (scan: Scan) => {
+      // 重跑同样是"真的发包"，所以照样要带授权确认（契约 §5）
+      void rerunScan(scan.id, {
+        confirmed: true,
+        statement: SCAN_AUTHORIZATION_STATEMENT,
+      })
+        .then((created) => {
+          setView('default')
+          setSearchParams({ created: created.id }, { replace: true })
+        })
+        .catch((err) => showToast({ message: `重新扫描失败：${errorMessage(err)}`, tone: 'risk' }))
+    },
+    [setView, setSearchParams],
+  )
+
+  const handleResumeScan = useCallback(
+    (scan: Scan) => {
+      // 续跑同样会**继续对真实目标发包** —— 授权确认不能省。
+      void resumeScan(scan.id, {
+        confirmed: true,
+        statement: SCAN_AUTHORIZATION_STATEMENT,
+      })
+        .then(() => {
+          /*
+            ⚠️ 与重跑不同：这里**不跳转**。
+
+            重跑新建了一条记录，跳过去看它是合理的；续跑回来的是
+            **列表里原本那一条**（状态回到排队中），跳转会把用户从他
+            正在看的列表上拽走 —— 而他要看的就是那一行的状态变化。
+          */
+          setView('default')
+        })
+        .catch((err) => showToast({ message: `续跑失败：${errorMessage(err)}`, tone: 'risk' }))
+    },
+    [setView],
+  )
+
   /**
    * 切视图时清空选择。
    *
@@ -937,46 +990,9 @@ export function ScansPage() {
                 批量动作那边（见上面那段注释）本来就是 toast，
                 所以这不只是"换个提示方式"，是**把行内动作拉回同一个约定**。
               */
-              onAbort={(scan) => {
-                void abortScan(scan.id).catch((err) =>
-                  showToast({ message: `终止失败：${errorMessage(err)}`, tone: 'risk' }),
-                )
-              }}
-              onRerun={(scan) => {
-                // 重跑同样是"真的发包"，所以照样要带授权确认（契约 §5）
-                void rerunScan(scan.id, {
-                  confirmed: true,
-                  statement: SCAN_AUTHORIZATION_STATEMENT,
-                })
-                  .then((created) => {
-                    setView('default')
-                    setSearchParams({ created: created.id }, { replace: true })
-                  })
-                  .catch((err) =>
-                    showToast({ message: `重新扫描失败：${errorMessage(err)}`, tone: 'risk' }),
-                  )
-              }}
-              onResume={(scan) => {
-                // 续跑同样会**继续对真实目标发包** —— 授权确认不能省。
-                void resumeScan(scan.id, {
-                  confirmed: true,
-                  statement: SCAN_AUTHORIZATION_STATEMENT,
-                })
-                  .then(() => {
-                    /*
-                      ⚠️ 与重跑不同：这里**不跳转**。
-
-                      重跑新建了一条记录，跳过去看它是合理的；
-                      续跑回来的是**列表里原本那一条**（状态回到排队中），
-                      跳转会把用户从他正在看的列表上拽走 —— 而他要看的就是
-                      那一行的状态变化。
-                    */
-                    setView('default')
-                  })
-                  .catch((err) =>
-                    showToast({ message: `续跑失败：${errorMessage(err)}`, tone: 'risk' }),
-                  )
-              }}
+              onAbort={handleAbortScan}
+              onRerun={handleRerunScan}
+              onResume={handleResumeScan}
               emptyState={
                 view === 'archived' ? (
                   <EmptyHint

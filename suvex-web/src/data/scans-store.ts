@@ -251,12 +251,70 @@ const VIEW_QUERY: Record<ScanView, string> = {
  * 真正发请求并落进槽里。**只由 `loadScans` 调用** —— 去重那一层在它外面，
  * 这样"要不要发"与"发了怎么落"是两件事，各自只看自己那点逻辑。
  */
+/**
+ * 把新拉到的行与旧行对齐：**内容没变的行复用旧对象引用**。
+ *
+ * ## 为什么值得单独一层
+ *
+ * 有扫描在跑时 `useScansPolling` 每 2.5 秒刷一次。服务端每次返回的是
+ * 一整套新对象，但**多数行其实一个字都没变**（一次列表里通常只有
+ * 一两行在动）。直接替换的话：
+ *
+ *   · 侧栏 / 顶栏 / 总览的 `useFleetStatus` 每 2.5 秒重算一次；
+ *   · `ScanRow` 即便 `memo` 了也全部重渲染（每行 props 里的 `scan` 是新对象）；
+ *   · 列表长了以后，这 2.5 秒一次的整表重排是能感觉到的卡顿。
+ *
+ * 复用引用之后，`memo` 只让**真正变化的那几行**重渲染。
+ * 如果整页数据完全没变（例如一次轮询恰好没有新进度），连数组都返回
+ * 原来的引用，订阅方一次渲染都不会发生。
+ *
+ * ## 判据为什么用 JSON 而不是逐字段比
+ *
+ * `Scan` 有二十多个字段（含嵌套的 `findings`），逐字段写一遍就等于
+ * 在第二个地方维护响应形状 —— 后端加字段时这里会**静默地永远认为相等**。
+ * JSON 序列化对同一份响应是稳定的（键序来自服务端，本地更新用展开保留），
+ * 而 500 行以内的成本远低于一次整表重渲染。
+ */
+export function reconcileScans(prev: Scan[], next: Scan[]): Scan[] {
+  if (prev === next) return prev
+  if (prev.length !== next.length) return next
+
+  const byId = new Map(prev.map((scan) => [scan.id, scan]))
+  let sameOrder = true
+  const merged = next.map((scan, index) => {
+    const old = byId.get(scan.id)
+    if (old && JSON.stringify(old) === JSON.stringify(scan)) {
+      if (prev[index] !== old) sameOrder = false
+      return old
+    }
+    return scan
+  })
+
+  // 每一行都复用了旧对象、且顺序没变 → 整份数据与上一轮相同
+  const unchanged = sameOrder && merged.every((scan, index) => scan === prev[index])
+  return unchanged ? prev : merged
+}
+
 async function fetchScans(view: ScanView, silent: boolean): Promise<void> {
   if (!silent) commit(view, { status: 'loading', error: null })
 
   try {
     const rows = await api.get<Scan[]>(`/scans${VIEW_QUERY[view]}`)
-    commit(view, { scans: rows, status: 'ready', error: null, stale: false })
+    const merged = reconcileScans(slots[view].scans, rows)
+    /*
+      ★ 数据没变时**不 commit**：`commit` 会换掉快照对象的引用，
+      订阅方（侧栏、顶栏、总览、列表页）都会因此重渲染一轮 ——
+      而这一轮里没有任何一个像素会变。
+    */
+    if (
+      merged === slots[view].scans &&
+      slots[view].status === 'ready' &&
+      !slots[view].error &&
+      !slots[view].stale
+    ) {
+      return
+    }
+    commit(view, { scans: merged, status: 'ready', error: null, stale: false })
   } catch (error) {
     if (!silent) commit(view, { status: 'error', error: toApiError(error) })
   }
@@ -532,7 +590,10 @@ export async function loadWriteup(scanId: string): Promise<ScanWriteup> {
  */
 export async function abortScan(id: string): Promise<Scan> {
   const scan = await api.post<Scan>(`/scans/${id}/abort`)
-  setScans('default', slots.default.scans.map((s) => (s.id === id ? scan : s)))
+  setScans(
+    'default',
+    slots.default.scans.map((s) => (s.id === id ? scan : s)),
+  )
   return scan
 }
 
@@ -633,7 +694,10 @@ function rollback(view: ScanView, previous: Scan[]): void {
  * 而漏掉的表现是"记录消失得很顺，回来时却要等"或者
  * "取消了归档但它还在列表里"——两种都很难指认到这一行。
  */
-function leavesView(view: ScanView, kind: 'archive' | 'unarchive' | 'delete' | 'restore' | 'purge'): boolean {
+function leavesView(
+  view: ScanView,
+  kind: 'archive' | 'unarchive' | 'delete' | 'restore' | 'purge',
+): boolean {
   switch (kind) {
     // 删除与永久删除：记录离开**任何**视图
     case 'delete':

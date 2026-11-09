@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { loadScans, replaceScans, subscribeScans, getScansSnapshot, getViewSnapshot } from './scans-store'
+import {
+  loadScans,
+  reconcileScans,
+  replaceScans,
+  subscribeScans,
+  getScansSnapshot,
+  getViewSnapshot,
+} from './scans-store'
+import type { Scan } from '@/data/scan'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -30,7 +38,11 @@ import { loadScans, replaceScans, subscribeScans, getScansSnapshot, getViewSnaps
 /** 记录所有发出的请求 URL */
 let requested: string[] = []
 /** 手动控制 resolve 的挂起器 */
-let pending: Array<{ url: string; resolve: (rows: unknown[]) => void; reject: (e: unknown) => void }> = []
+let pending: Array<{
+  url: string
+  resolve: (rows: unknown[]) => void
+  reject: (e: unknown) => void
+}> = []
 
 function installFetchStub() {
   requested = []
@@ -286,5 +298,58 @@ describe('失败处理', () => {
     // 状态不应变成 error
     expect(getScansSnapshot().status).not.toBe('error')
     unsubscribe()
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 轮询时的行引用复用（v1.79）
+// ══════════════════════════════════════════════════════════════
+
+/*
+  ★ 为什么这条重要：有扫描在跑时每 2.5 秒拉一次列表。服务端每次返回
+  一整套新对象，而多数行一个字都没变。直接替换会让侧栏/顶栏/列表
+  每 2.5 秒整体重渲染一轮 —— 行 memo 也会因为 props 里的 scan 是新对象
+  而全部失效。复用引用是"只有变化的那一行重渲染"的前提。
+*/
+function row(id: string, status: string, progress: number | null = null): Scan {
+  return { id, target: `${id}.example`, status, progress } as unknown as Scan
+}
+
+describe('reconcileScans', () => {
+  it('内容没变 → 返回**同一个数组引用**（订阅方一次都不重渲染）', () => {
+    const prev = [row('a', 'running', 0.4), row('b', 'completed')]
+    const next = [row('a', 'running', 0.4), row('b', 'completed')]
+
+    const merged = reconcileScans(prev, next)
+
+    expect(merged).toBe(prev)
+  })
+
+  it('★ 只有变化的那一行换新对象，其余行保持旧引用', () => {
+    const prev = [row('a', 'running', 0.4), row('b', 'completed')]
+    const next = [row('a', 'running', 0.7), row('b', 'completed')]
+
+    const merged = reconcileScans(prev, next)
+
+    expect(merged).not.toBe(prev)
+    expect(merged[0]).not.toBe(prev[0]) // 进度变了
+    expect(merged[1]).toBe(prev[1]) // 没变，复用
+  })
+
+  it('行数变化时整份替换（增删行必须让数组变新）', () => {
+    const prev = [row('a', 'completed')]
+    const next = [row('a', 'completed'), row('b', 'queued')]
+
+    expect(reconcileScans(prev, next)).toBe(next)
+  })
+
+  it('顺序变化也算变化（不能让列表顺序停在旧的一份上）', () => {
+    const prev = [row('a', 'completed'), row('b', 'completed')]
+    const next = [row('b', 'completed'), row('a', 'completed')]
+
+    const merged = reconcileScans(prev, next)
+
+    expect(merged).not.toBe(prev)
+    expect(merged.map((scan) => scan.id)).toEqual(['b', 'a'])
   })
 })

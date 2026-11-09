@@ -24,7 +24,7 @@ import {
   Play,
   RotateCcw,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
 /**
@@ -266,7 +266,10 @@ export function ScanList({
           <span>严重度：</span>
           {SEVERITY_ORDER.map((sev) => (
             <span key={sev} className="flex items-center gap-1">
-              <span aria-hidden="true" className={cn('h-1.5 w-1.5 rounded-pill', SEVERITY_META[sev].bg)} />
+              <span
+                aria-hidden="true"
+                className={cn('h-1.5 w-1.5 rounded-pill', SEVERITY_META[sev].bg)}
+              />
               {SEVERITY_META[sev].label}
             </span>
           ))}
@@ -315,7 +318,7 @@ export function ScanList({
   )
 }
 
-function ScanRow({
+const ScanRow = memo(function ScanRow({
   scan,
   selected,
   focused,
@@ -600,7 +603,10 @@ function ScanRow({
             {stalled && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="inline-flex items-center gap-1 text-signal-warn" title={stalled.hint}>
+                <span
+                  className="inline-flex items-center gap-1 text-signal-warn"
+                  title={stalled.hint}
+                >
                   <AlertTriangle size={10} strokeWidth={2.25} aria-hidden="true" />
                   疑似卡死 · {stalled.silentLabel}
                 </span>
@@ -804,20 +810,20 @@ function ScanRow({
                 {!isKernelShell &&
                   onResume &&
                   (scan.status === 'failed' || scan.status === 'aborted') && (
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setMenuOpen(false)
-                      onResume(scan)
-                    }}
-                    className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
-                    title="接回上次的会话继续跑 —— 不重复已经做完的推理"
-                  >
-                    <Play size={12} strokeWidth={1.75} aria-hidden="true" />
-                    续跑（接着上次的会话）
-                  </button>
-                )}
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        onResume(scan)
+                      }}
+                      className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
+                      title="接回上次的会话继续跑 —— 不重复已经做完的推理"
+                    >
+                      <Play size={12} strokeWidth={1.75} aria-hidden="true" />
+                      续跑（接着上次的会话）
+                    </button>
+                  )}
 
                 {canAbort && (
                   <button
@@ -858,7 +864,12 @@ function ScanRow({
               'focus:outline-none focus:ring-2 focus:ring-accent/40',
             )}
           >
-            <badge.icon size={12} strokeWidth={2} className="shrink-0 text-signal-risk" aria-hidden="true" />
+            <badge.icon
+              size={12}
+              strokeWidth={2}
+              className="shrink-0 text-signal-risk"
+              aria-hidden="true"
+            />
             {badge.label}
             {reasonOpen ? (
               <ChevronUp size={11} strokeWidth={2} aria-hidden="true" />
@@ -877,6 +888,6 @@ function ScanRow({
       )}
     </li>
   )
-}
+})
 
 export default ScanList

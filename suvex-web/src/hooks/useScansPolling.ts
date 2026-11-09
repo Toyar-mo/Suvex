@@ -28,9 +28,26 @@ export function useScansPolling(intervalMs = 2500): void {
   useEffect(() => {
     if (!active) return
     const timer = window.setInterval(() => {
+      /*
+        ★ 后台标签页不轮询（v1.79）。
+
+        用户切走后页面还在，但没人看 —— 每 2.5 秒一次的请求 + store 提交
+        + 订阅方重渲染都是纯浪费（一个开着的后台标签页可以连跑几小时）。
+        切回来时立刻补一次，所以不会漏掉这段时间里的状态变化。
+      */
+      if (document.visibilityState !== 'visible') return
       // silent：轮询失败不该把列表打成错误页，也不该让页面闪骨架
       void loadScans({ silent: true })
     }, intervalMs)
-    return () => window.clearInterval(timer)
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void loadScans({ silent: true })
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [active, intervalMs])
 }

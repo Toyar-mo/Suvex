@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Layers, RefreshCw, Search } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppShell'
@@ -114,10 +114,7 @@ function HealthBadge({ health }: { health: AssetHealth }) {
   const meta = ASSET_HEALTH_META[health]
   return (
     <span className="inline-flex items-center gap-tight whitespace-nowrap text-sm">
-      <span
-        className={cn('h-1.5 w-1.5 shrink-0 rounded-pill', meta.dot)}
-        aria-hidden="true"
-      />
+      <span className={cn('h-1.5 w-1.5 shrink-0 rounded-pill', meta.dot)} aria-hidden="true" />
       <span className={meta.className} title={meta.hint}>
         {meta.label}
       </span>
@@ -153,11 +150,77 @@ function SummaryCard({
   )
 }
 
+/**
+ * 一行资产。
+ *
+ * ★ `memo` 在这里有实际收益：搜索框每敲一个字都会重渲染整张表，
+ *   而 `items` 里的对象引用是稳定的（拉取时整体替换一次，之后不变）——
+ *   没被筛掉的行 props 完全相同，可以整行跳过。页面 30 秒一次的时钟
+ *   也只把 `nowMinute` 传下来（按分钟取整），不会每分钟把所有行都作废。
+ */
+const AssetRow = memo(function AssetRow({
+  asset,
+  nowMinute,
+}: {
+  asset: Asset
+  /** 当前时刻按**分钟**取整 —— 相对时间本来就只到分钟粒度 */
+  nowMinute: number
+}) {
+  const now = nowMinute * 60_000
+  const health = assetHealth(asset, now)
+  return (
+    <tr className="hover:bg-sunken/60 border-b border-line last:border-b-0">
+      <td className="px-panel py-2">
+        <Link
+          to={`/scans?target=${encodeURIComponent(asset.target)}`}
+          className="break-all font-mono text-sm text-ink hover:text-accent"
+        >
+          {asset.target}
+        </Link>
+      </td>
+      <td className="px-panel py-2">
+        <HealthBadge health={health} />
+      </td>
+      <td className="px-panel py-2 text-right tabular-nums">
+        <span className={cn(asset.openFindingCount > 0 ? 'text-ink' : 'text-ink-muted')}>
+          {asset.openFindingCount}
+        </span>
+        {asset.findingCount > asset.openFindingCount && (
+          <span className="ml-1 text-xs text-ink-muted">/ {asset.findingCount}</span>
+        )}
+      </td>
+      <td className="px-panel py-2 text-right tabular-nums">
+        <span
+          className={cn(
+            asset.openCritical > 0 || asset.openHigh > 0 ? 'text-signal-risk' : 'text-ink-muted',
+          )}
+        >
+          {asset.openHigh + asset.openCritical}
+        </span>
+      </td>
+      <td className="px-panel py-2 text-ink-muted" title={asset.lastScanAt ?? '从未扫描'}>
+        {relativeTime(asset.lastScanAt, now)}
+        {asset.consecutiveFailures > 0 && (
+          <span className="ml-1 text-xs text-signal-risk">
+            连续失败 {asset.consecutiveFailures} 次
+          </span>
+        )}
+      </td>
+      <td className="px-panel py-2 text-ink-muted" title={asset.lastCompletedAt ?? '从未跑完'}>
+        {relativeTime(asset.lastCompletedAt, now)}
+      </td>
+      <td className="px-panel py-2 text-right tabular-nums text-ink-muted">{asset.scanCount}</td>
+    </tr>
+  )
+})
+
 export default function AssetsPage() {
   const state = useAssetsState()
   const [query, setQuery] = useState('')
   const [healthFilter, setHealthFilter] = useState<HealthFilter>('all')
   const [now, setNow] = useState(() => Date.now())
+  // 相对时间只到分钟粒度：把时钟按分钟取整传给行，行 memo 才不会每分钟全废
+  const nowMinute = Math.floor(now / 60_000)
 
   // 首次进入时拉一次；之后靠「刷新」按钮和切回页面时拉。
   const loadedOnce = useRef(false)
@@ -329,17 +392,23 @@ export default function AssetsPage() {
           <div className="overflow-x-auto rounded-md border border-line">
             <table className="w-full min-w-[52rem] border-collapse text-sm">
               <thead>
-                <tr className="border-b border-line bg-sunken text-left text-xs text-ink-muted">
+                <tr className="bg-sunken border-b border-line text-left text-xs text-ink-muted">
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     目标
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     状态
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
+                  <th
+                    scope="col"
+                    className="whitespace-nowrap px-panel py-2 text-right font-normal"
+                  >
                     未处置
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
+                  <th
+                    scope="col"
+                    className="whitespace-nowrap px-panel py-2 text-right font-normal"
+                  >
                     高危 / 中危+
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
@@ -348,75 +417,18 @@ export default function AssetsPage() {
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     上次拿到结论
                   </th>
-                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
+                  <th
+                    scope="col"
+                    className="whitespace-nowrap px-panel py-2 text-right font-normal"
+                  >
                     扫描次数
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((asset) => {
-                  const health = assetHealth(asset)
-                  return (
-                    <tr
-                      key={asset.target}
-                      className="border-b border-line last:border-b-0 hover:bg-sunken/60"
-                    >
-                      <td className="px-panel py-2">
-                        <Link
-                          to={`/scans?target=${encodeURIComponent(asset.target)}`}
-                          className="break-all font-mono text-sm text-ink hover:text-accent"
-                        >
-                          {asset.target}
-                        </Link>
-                      </td>
-                      <td className="px-panel py-2">
-                        <HealthBadge health={health} />
-                      </td>
-                      <td className="px-panel py-2 text-right tabular-nums">
-                        <span
-                          className={cn(
-                            asset.openFindingCount > 0 ? 'text-ink' : 'text-ink-muted',
-                          )}
-                        >
-                          {asset.openFindingCount}
-                        </span>
-                        {asset.findingCount > asset.openFindingCount && (
-                          <span className="ml-1 text-xs text-ink-muted">
-                            / {asset.findingCount}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-panel py-2 text-right tabular-nums">
-                        <span
-                          className={cn(
-                            asset.openCritical > 0 || asset.openHigh > 0
-                              ? 'text-signal-risk'
-                              : 'text-ink-muted',
-                          )}
-                        >
-                          {asset.openHigh + asset.openCritical}
-                        </span>
-                      </td>
-                      <td className="px-panel py-2 text-ink-muted" title={asset.lastScanAt ?? '从未扫描'}>
-                        {relativeTime(asset.lastScanAt, now)}
-                        {asset.consecutiveFailures > 0 && (
-                          <span className="ml-1 text-xs text-signal-risk">
-                            连续失败 {asset.consecutiveFailures} 次
-                          </span>
-                        )}
-                      </td>
-                      <td
-                        className="px-panel py-2 text-ink-muted"
-                        title={asset.lastCompletedAt ?? '从未跑完'}
-                      >
-                        {relativeTime(asset.lastCompletedAt, now)}
-                      </td>
-                      <td className="px-panel py-2 text-right tabular-nums text-ink-muted">
-                        {asset.scanCount}
-                      </td>
-                    </tr>
-                  )
-                })}
+                {filtered.map((asset) => (
+                  <AssetRow key={asset.target} asset={asset} nowMinute={nowMinute} />
+                ))}
               </tbody>
             </table>
           </div>
@@ -425,7 +437,8 @@ export default function AssetsPage() {
         {/* ── 排序口径说明：把规则写出来，否则用户不知道第一行为什么是它 ── */}
         {filtered.length > 0 && (
           <p className="mt-panel text-xs text-ink-muted">
-            按风险排序：带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；同档内越久没拿到结论越靠前。
+            按风险排序：带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 →
+            结论陈旧；同档内越久没拿到结论越靠前。
           </p>
         )}
       </div>

@@ -306,6 +306,8 @@ export function FindingsPage() {
 
   const openId = openIdDraft ?? urlIntent?.finding ?? null
   const setOpenId = setOpenIdDraft
+  /** 打开详情 —— 稳定引用，`FindingsTable` 的行 memo 靠它才不失效 */
+  const handleOpenFinding = useCallback((finding: Finding) => setOpenId(finding.id), [setOpenId])
 
   /*
     ── 把消费掉的参数从地址栏抹掉 ──
@@ -492,6 +494,11 @@ export function FindingsPage() {
     () => narrowGroupsToFindings(groupsState.groups, visible),
     [groupsState.groups, visible],
   )
+
+  // 列表只渲染前 `renderLimit` 条。切片放进 memo：否则每次勾选/开抽屉
+  // 都会产生一个新数组引用，`FindingsTable` 整表重渲染（行 memo 虽能兜住，
+  // 但没必要先白跑一遍 map）。
+  const renderedFindings = useMemo(() => visible.slice(0, renderLimit), [visible, renderLimit])
 
   /** 选中的条目对象 —— 批量操作栏需要读它们的当前状态 */
   const selectedFindings = useMemo(
@@ -1517,11 +1524,11 @@ export function FindingsPage() {
               /* ── 列表 ── */
               <div className="rounded-md border border-line bg-surface">
                 <FindingsTable
-                  findings={visible.slice(0, renderLimit)}
+                  findings={renderedFindings}
                   selectedIds={selectedIds}
                   onToggleSelect={toggleSelect}
                   onToggleSelectAll={toggleSelectAll}
-                  onOpen={(finding) => setOpenId(finding.id)}
+                  onOpen={handleOpenFinding}
                   activeId={openId}
                   emptyState={
                     findings.length > 0 ? (

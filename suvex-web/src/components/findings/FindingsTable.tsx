@@ -1,3 +1,5 @@
+import { memo } from 'react'
+
 import { cn } from '@/lib/cn'
 import { FINDING_CATEGORY_LABEL, type Finding } from '@/data/finding'
 import { formatRelativeTime } from '@/lib/datetime'
@@ -79,8 +81,8 @@ export function FindingsTable({
             finding={finding}
             selected={selectedIds.has(finding.id)}
             active={activeId === finding.id}
-            onToggleSelect={() => onToggleSelect(finding.id)}
-            onOpen={() => onOpen(finding)}
+            onToggleSelect={onToggleSelect}
+            onOpen={onOpen}
           />
         ))}
       </ul>
@@ -88,7 +90,18 @@ export function FindingsTable({
   )
 }
 
-function FindingRow({
+/**
+ * 一行漏洞。
+ *
+ * ★ `memo` 的前提是 props 稳定，所以回调用的是**父级那个稳定函数**
+ *   （`onToggleSelect(id)` / `onOpen(finding)`），而不是在 map 里现造
+ *   一个 `() => onToggleSelect(finding.id)` —— 后者每次渲染都是新引用，
+ *   会让 memo 对每一行都失效。
+ *
+ * 收益很具体：勾选一条、打开抽屉、切换筛选时，父级都会重渲染整张表，
+ * 但只有 `selected` / `active` 真的变了的那一行需要重画。
+ */
+const FindingRow = memo(function FindingRow({
   finding,
   selected,
   active,
@@ -98,8 +111,8 @@ function FindingRow({
   finding: Finding
   selected: boolean
   active: boolean
-  onToggleSelect: () => void
-  onOpen: () => void
+  onToggleSelect: (id: string) => void
+  onOpen: (finding: Finding) => void
 }) {
   return (
     <li className="border-b border-line/60 last:border-b-0">
@@ -116,7 +129,7 @@ function FindingRow({
         <div className="flex items-center gap-tight">
           <Checkbox
             checked={selected}
-            onChange={onToggleSelect}
+            onChange={() => onToggleSelect(finding.id)}
             label={`选择「${finding.title}」`}
           />
 
@@ -145,7 +158,7 @@ function FindingRow({
           */}
           <button
             type="button"
-            onClick={onOpen}
+            onClick={() => onOpen(finding)}
             className="block w-full truncate py-1 text-left text-sm text-ink transition-ui duration-fast hover:text-accent-strong"
           >
             {finding.title}
@@ -209,11 +222,7 @@ function FindingRow({
           红黄标记淹掉。
         */}
         <span className="flex shrink-0 lg:w-24">
-          <SlaBadge
-            state={finding.slaState}
-            daysLeft={finding.slaDaysLeft}
-            dueAt={finding.dueAt}
-          />
+          <SlaBadge state={finding.slaState} daysLeft={finding.slaDaysLeft} dueAt={finding.dueAt} />
         </span>
 
         {/* 发现时间 */}
@@ -234,7 +243,7 @@ function FindingRow({
       </div>
     </li>
   )
-}
+})
 
 /**
  * 三态选择框：未选 / 已选 / 部分选。
