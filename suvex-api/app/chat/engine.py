@@ -56,6 +56,7 @@ from sqlalchemy.orm import Session
 
 from app.chat import failure as failure_kind
 from app.chat import interrupts as interrupt_bus
+from app.chat import mcp_tools
 from app.chat import nudge as nudge_policy
 from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
@@ -1259,12 +1260,25 @@ class _ToolContext:
     取，只有一个来源。
     """
 
-    __slots__ = ("db", "session", "identity")
+    __slots__ = ("db", "session", "identity", "mcp")
 
-    def __init__(self, *, db: Session, session: ChatSession, identity: Any) -> None:
+    def __init__(
+        self,
+        *,
+        db: Session,
+        session: ChatSession,
+        identity: Any,
+        mcp: mcp_tools.McpToolCatalog | None = None,
+    ) -> None:
         self.db = db
         self.session = session
         self.identity = identity
+        #: 本轮从会话挂载的 MCP server 发现出来的工具目录。
+        #:
+        #: ★ 放在 ctx 上而不是全局缓存：用户随时可能在另一个标签页改了挂载，
+        #:   这一轮就应当按最新的来；而同一个会话的两轮之间也可能不同的
+        #:   server 掉线。每轮重新发现是"所见即所得"最便宜的实现。
+        self.mcp = mcp or mcp_tools.McpToolCatalog()
 
 
 def _need_scope(ctx: _ToolContext, tool_name: str) -> None:
@@ -2529,6 +2543,41 @@ def _default_provider_id(db: Session) -> str | None:
     return row.id if row is not None else None
 
 
+async def _build_tool_context(
+    db: Session, session: ChatSession, identity: Any
+) -> _ToolContext:
+    """建本轮的工具上下文，并发现会话挂载的 MCP 工具。
+
+    ★ 发现失败**不抛**：挂载的某个 server 连不上，只是这一轮少几个工具；
+      整轮对话必须照常开始。`discover_mounted` 已经把每台 server 的失败
+      收成状态（会进提示词，告诉模型"别调这些"）。
+    """
+    try:
+        catalog = await mcp_tools.discover_mounted(db, session)
+    except Exception:  # noqa: BLE001 - 连接发现不该毁掉整轮对话
+        _log.warning("发现会话挂载的 MCP 工具失败，本轮按未挂载处理", exc_info=True)
+        catalog = mcp_tools.McpToolCatalog()
+    return _ToolContext(db=db, session=session, identity=identity, mcp=catalog)
+
+
+def _tools_schema(ctx: _ToolContext) -> list[dict[str, object]]:
+    """本轮交给原生 tool-calling 的完整工具表：内置工具 + 挂载的 MCP 工具。"""
+    schema: list[dict[str, object]] = list(build_tools_schema())
+    schema.extend(ctx.mcp.tool_schema())
+    return schema
+
+
+def _needs_approval(name: str) -> bool:
+    """这个工具在开了「人工审批」时要不要先挂起。
+
+    ★ MCP 工具一律算"有副作用"：它们连接的是外部 server，模型能读什么、
+      写什么由 server 自己决定，平台无法像内置工具那样逐个标
+      `consequential`。默认拦住是唯一安全的方向 —— 漏拦一次就是一次
+      未经确认的外部动作。
+    """
+    return name in CONSEQUENTIAL_TOOL_NAMES or mcp_tools.is_mcp_tool_name(name)
+
+
 async def _execute_tool(ctx: _ToolContext, name: str, args: dict[str, Any]) -> tuple[str, bool]:
     """执行一个工具，返回 `(结果文本, 是否失败)`。
 
@@ -2542,10 +2591,24 @@ async def _execute_tool(ctx: _ToolContext, name: str, args: dict[str, Any]) -> t
     """
     impl = _TOOL_IMPLS.get(name)
     if impl is None:
-        return (
-            f"失败：没有叫 `{name}` 的工具。可用工具：{', '.join(sorted(CHAT_TOOL_NAMES))}。",
-            True,
-        )
+        # ★ v1.80：动态 MCP 工具。它们不在 `_TOOL_IMPLS` 里（名字来自本会话
+        #   挂载的 server），执行走 `McpToolCatalog` —— 失败只影响这一个工具。
+        binding = ctx.mcp.get(name)
+        if binding is None:
+            available = sorted(CHAT_TOOL_NAMES)
+            if ctx.mcp:
+                available += sorted(ctx.mcp.bindings)
+            return (
+                f"失败：没有叫 `{name}` 的工具。可用工具：{', '.join(available)}。",
+                True,
+            )
+        try:
+            text = await ctx.mcp.call(binding, args)
+        except mcp_tools.McpToolError as exc:
+            return f"失败：{exc}", True
+        # MCP 的 `isError=true` 由内核渲染成「MCP 工具返回错误：…」，
+        # 不是我们约定的「失败：」前缀。两者都算失败，界面上才会标红。
+        return text, text.startswith(("失败：", "MCP 工具返回错误："))
     try:
         text = await impl(ctx, args)
     except _ToolDenied as exc:
@@ -2637,6 +2700,7 @@ def _system_prompt_for(
     hinted_tools: list[str] | None = None,
     *,
     native_tools: bool = False,
+    mcp_catalog: mcp_tools.McpToolCatalog | None = None,
 ) -> str:
     """按会话设置渲染系统提示词。
 
@@ -2658,13 +2722,19 @@ def _system_prompt_for(
             budget -= len(text)
         mounted = trimmed
 
-    return build_system_prompt(
+    prompt = build_system_prompt(
         persona=session.persona,
         require_approval=bool(session.require_approval),
         mounted_skills=mounted,
         hinted_tools=hinted_tools,
         native_tools=native_tools,
     )
+    # ★ v1.80：会话挂载的 MCP 工具。放在最后 —— 它比骨架更"这个对话专属"。
+    #   原生模式下 schema 已在 `tools=` 里，这一段补的是"哪台连不上"；
+    #   文本协议模式下它还是模型唯一能看到的工具清单。
+    if mcp_catalog is not None:
+        prompt += mcp_catalog.prompt_section()
+    return prompt
 
 
 async def run_turn(
@@ -2780,10 +2850,15 @@ async def run_turn(
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, provider_id), db)
 
+    # ★ v1.80：先发现本会话挂载的 MCP 工具，再渲染提示词 —— 提示词要把
+    #   "已挂载但连不上"的 server 告诉模型（它会据此避免反复重试）。
+    ctx = await _build_tool_context(db, session, identity)
     system = _system_prompt_for(
-        session, explicit_tools, native_tools=_gateway_supports_tools(gateway)
+        session,
+        explicit_tools,
+        native_tools=_gateway_supports_tools(gateway),
+        mcp_catalog=ctx.mcp,
     )
-    ctx = _ToolContext(db=db, session=session, identity=identity)
 
     #: 打开审批时，这些工具不执行、只挂起。
     gate_on = bool(session.require_approval)
@@ -2958,7 +3033,7 @@ async def run_turn(
                 # ★ v1.64：原生工具调用。到本轮工具上限时**不再给 tools**
                 #   —— 那时系统提示已要求"直接用一段话总结"，再给它 tools
                 #   会让模型继续调工具，把「收尾」变成下一轮工具调用。
-                tools=None if at_limit else build_tools_schema(),
+                tools=None if at_limit else _tools_schema(ctx),
             )
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败", exc_info=True)
@@ -3408,7 +3483,7 @@ async def run_turn(
             #   工具会让界面上同时挂起多个确认框，而且它们的顺序取决于
             #   模型而不是用户。停下来，等用户决定，由 `resume_approved`
             #   接着跑。
-            if gate_on and name in CONSEQUENTIAL_TOOL_NAMES:
+            if gate_on and _needs_approval(name):
                 pending = chat_service.mark_awaiting_approval(
                     db, session=session, tool_name=name, tool_args=args
                 )
@@ -3501,8 +3576,13 @@ async def resume_approved(
 
     result = ChatTurnResult()
 
+    # ★ v1.80：审批后续跑也要重建 MCP 目录 —— 被批准的可能正是一个
+    #   `mcp__…` 动态工具，它不在 `_TOOL_IMPLS` 里，只能从目录执行。
+    #   后面那轮循环复用同一个 ctx，避免再试连一遍。
+    ctx = await _build_tool_context(db, session, identity)
+
     output, failed = await _execute_tool(
-        _ToolContext(db=db, session=session, identity=identity),
+        ctx,
         message.tool_name or "",
         message.tool_args or {},
     )
@@ -3515,9 +3595,12 @@ async def resume_approved(
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, None), db)
 
-    system = _system_prompt_for(session, native_tools=_gateway_supports_tools(gateway))
+    system = _system_prompt_for(
+        session,
+        native_tools=_gateway_supports_tools(gateway),
+        mcp_catalog=ctx.mcp,
+    )
     gate_on = bool(session.require_approval)
-    ctx = _ToolContext(db=db, session=session, identity=identity)
 
     # ★ v1.13：与 `run_turn` 同一套纠偏预算。
     #
@@ -3607,7 +3690,7 @@ async def resume_approved(
                     gateway,
                     messages,
                     system=system_this_round,
-                    tools=None if at_limit else build_tools_schema(),
+                    tools=None if at_limit else _tools_schema(ctx),
                 )
             )
         except Exception as exc:  # noqa: BLE001
@@ -3857,7 +3940,7 @@ async def resume_approved(
             return result
 
         for name, args in actions:
-            if gate_on and name in CONSEQUENTIAL_TOOL_NAMES:
+            if gate_on and _needs_approval(name):
                 pending = chat_service.mark_awaiting_approval(
                     db, session=session, tool_name=name, tool_args=args
                 )

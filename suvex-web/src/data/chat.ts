@@ -1760,6 +1760,41 @@ export async function updateSettings(
 }
 
 /**
+ * 本会话挂载的 MCP server 的**真实**试连结果（`GET …/mcp-status`）。
+ *
+ * ★ 为什么要一个接口而不只看 `mcpServerNames`：勾选只是"偏好"，真正
+ *   决定模型能不能用那些工具的是"server 现在连不连得上"。只把偏好
+ *   回显给用户，等于让他去猜有没有生效 —— 这个功能上一版就是因为
+ *   "勾了没效果"被移除的。
+ */
+export interface ChatMcpServerStatus {
+  name: string
+  connected: boolean
+  /** server 实际提供的工具数（发现成功时）。 */
+  toolCount: number
+  /** 连不上时的一句话原因；连上时为 null。 */
+  reason?: string | null
+}
+
+export interface ChatMcpStatus {
+  /** 会话设置里挂了几台（含已从平台删除的）。 */
+  mountedCount: number
+  /** 其中真正连上、并发现到工具的有几台。 */
+  connectedCount: number
+  servers: ChatMcpServerStatus[]
+}
+
+/**
+ * 试连本会话挂载的 MCP server。
+ *
+ * 每次调用都会真的拉起子进程 / 打远端 URL，可能花几秒 —— 调用方
+ * （对话设置的挂载区）只在面板打开或改完挂载后调它，不要放进渲染循环。
+ */
+export async function fetchMcpStatus(sessionId: string): Promise<ChatMcpStatus> {
+  return api.get<ChatMcpStatus>(`/chat/sessions/${sessionId}/mcp-status`)
+}
+
+/**
  * 对一条挂起的工具调用做决定。
  *
  * 批准 → 后端执行那个工具并**接着跑完这一轮**，返回新消息。

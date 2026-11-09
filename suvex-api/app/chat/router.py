@@ -10,6 +10,7 @@
 | POST   | `/chat/sessions/{id}/messages`  | read   | 发一条消息，跑一轮       |
 | GET    | `/chat/tools`                   | read   | 这个对话能做什么         |
 | PATCH  | `/chat/sessions/{id}/settings`  | read   | 改六项会话设置（部分提交）|
+| GET    | `/chat/sessions/{id}/mcp-status`| read   | 已挂载 MCP 的真实试连结果 |
 | GET    | `/chat/personas`                | read   | 人格列表                 |
 | POST   | `/chat/sessions/{id}/attachments` | read | 上传附件                 |
 | POST   | `/chat/sessions/{id}/messages/{mid}/approval` | read + 该工具所需 scope | 审批 |
@@ -51,6 +52,7 @@ from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
 from app.chat import engine, resumer, service, turn_runs
 from app.chat import interrupts as chat_interrupts
+from app.chat import mcp_tools as chat_mcp_tools
 from app.chat import sandbox as chat_sandbox
 from app.chat import workspaces as chat_workspaces
 from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
@@ -64,6 +66,7 @@ from app.chat.schemas import (
     ChatFileUploadOut,
     ChatInterjectIn,
     ChatInterruptIn,
+    ChatMcpStatusOut,
     ChatMessageOut,
     ChatPersonaOut,
     ChatPinIn,
@@ -799,6 +802,34 @@ def update_settings(
     return ChatSessionOut.model_validate(session)
 
 
+@router.get(
+    "/chat/sessions/{session_id}/mcp-status",
+    response_model=ChatMcpStatusOut,
+)
+async def mcp_status(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> ChatMcpStatusOut:
+    """本会话挂载的 MCP server **现在**能不能连上（逐个真试连）。
+
+    ## 为什么单独一个端点，而不是在会话详情里带一个字段
+
+    会话详情是"读库"，它是快的、可缓存的；而这里每次都要拉起子进程或
+    打远端 URL，慢且结果随时会变（server 挂了、PATH 变了）。把试连塞进
+    详情会让**打开任何一个对话**都可能卡十几秒 —— 用户只是想看历史。
+
+    前端在打开「对话设置」、以及改完 `mcpServerNames` 之后调它一次，
+    就能显示"已挂载 N 台 / 实际连通 M 台 / 失败原因"，而不是只存一个
+    偏好、让用户去猜到底有没有生效。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    catalog = await chat_mcp_tools.discover_mounted(db, session)
+    return ChatMcpStatusOut.model_validate(catalog.status_payload())
+
+
 @router.get("/chat/personas", response_model=list[ChatPersonaOut])
 def list_personas(identity: Reader) -> list[ChatPersonaOut]:
     """可选人格列表（弹窗画卡片、下拉画选项都要它）。
@@ -1121,20 +1152,35 @@ async def decide_approval(
 
     tool_name = message.tool_name or ""
     spec = TOOL_BY_NAME.get(tool_name)
+    # ★ v1.80：动态 MCP 工具（`mcp__<server>__<tool>`）不在 `CHAT_TOOLS` 里，
+    #   不能按内置工具的 scope 判。它们的安全判据有两条：
+    #     ① 会话是我的（上面 `get_session_or_404` 已经判了）；
+    #     ② 这台 server **现在仍挂在这个会话上** —— 用户可能在挂起之后
+    #        把它从设置里取消了，这时不该再执行。
+    #   其它超出"挂载名单"的工具名（拼错/旧版本残留）仍然拒绝。
     if spec is None:
-        # 挂起时记的工具名不在当前工具表里（改了代码/降了版本）。
-        # 这时候不能执行 —— 我们不知道它要什么权限。
-        raise ApiError.validation(
-            f"这个工具（`{tool_name}`）已经不在可用列表里了，不能执行。",
-            {"toolName": "未知工具"},
+        if not chat_mcp_tools.is_mcp_tool_name(tool_name):
+            # 挂起时记的工具名不在当前工具表里（改了代码/降了版本）。
+            # 这时候不能执行 —— 我们不知道它要什么权限。
+            raise ApiError.validation(
+                f"这个工具（`{tool_name}`）已经不在可用列表里了，不能执行。",
+                {"toolName": "未知工具"},
+            )
+        server = chat_mcp_tools.server_from_tool_name(
+            tool_name, session.mcp_server_names or []
         )
+        if server is None:
+            raise ApiError.validation(
+                f"这台 MCP server 已经不在本会话的挂载名单里了（`{tool_name}`），不能执行。",
+                {"toolName": "MCP 连接未挂载"},
+            )
     # ★ 与 `engine._need_scope` 用**同一个判据**（`prompts.may_call_tool`）。
     #
     #   两处各写一遍 `spec.scope is not None and not identity.can(...)` 的
     #   问题不是"今天会错"，而是"以后会漂"：给 `ChatToolSpec` 加一个
     #   多权限字段时，只会改其中一处，于是"审批放行、执行被拒"（用户点了
     #   确认，什么都没发生）或者反过来漏拦。判据只有一份，漂不了。
-    if not may_call_tool(tool_name, identity):
+    elif not may_call_tool(tool_name, identity):
         raise ApiError.validation(
             f"`{tool_name}` 需要「{spec.scope}」权限，当前账号没有。",
             {"scope": spec.scope},
