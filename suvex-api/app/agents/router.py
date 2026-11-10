@@ -26,6 +26,11 @@ def list_agents(_identity: ReadDep, db: DbDep) -> list[AgentProfileOut]:
     return [AgentProfileOut.from_row(row) for row in service.ensure_builtins(db)]
 
 
+@router.get("/templates", summary="角色模板（新建 Agent 时预填）")
+def list_templates(_identity: ReadDep) -> list[dict[str, str]]:
+    return service.list_templates()
+
+
 @router.post("", response_model=AgentProfileOut, status_code=201, summary="新建自定义 Agent")
 def create_agent(
     payload: AgentProfileIn,

@@ -16,6 +16,12 @@ export interface AgentProfile {
   updatedAt: string
 }
 
+export interface AgentTemplate {
+  key: string
+  name: string
+  description: string
+}
+
 export interface NewAgentProfile {
   key: string
   name: string
@@ -27,6 +33,10 @@ export interface NewAgentProfile {
 
 export async function loadAgents(): Promise<AgentProfile[]> {
   return api.get<AgentProfile[]>('/agents')
+}
+
+export async function loadAgentTemplates(): Promise<AgentTemplate[]> {
+  return api.get<AgentTemplate[]>('/agents/templates')
 }
 
 export async function createAgent(input: NewAgentProfile): Promise<AgentProfile> {

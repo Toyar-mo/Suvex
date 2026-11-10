@@ -25,6 +25,27 @@ BUILTINS: tuple[tuple[str, str, str], ...] = (
 )
 
 
+#: 角色模板（“选一个角色”对话框的选项）。只用于预填新建表单，
+#: 不自动改变执行器行为。
+ROLE_TEMPLATES: tuple[dict[str, str], ...] = (
+    {"key": "general", "name": "通用助手", "description": "不偏向任何方向，按你说的做。"},
+    {"key": "recon", "name": "信息收集", "description": "先把面摸清：资产、端口、指纹、可见的服务。"},
+    {"key": "pentest", "name": "渗透测试", "description": "按攻击路径推进：入口→授权→影响。"},
+    {"key": "reverse", "name": "二进制分析", "description": "逆向、漏洞点定位、利用原语。"},
+    {"key": "postexp", "name": "后渗透", "description": "拿到立足点之后：横向、持久化、凭据。"},
+    {"key": "container", "name": "容器安全", "description": "镜像、编排、逃逸面、供应链。"},
+    {"key": "forensics", "name": "数字取证", "description": "还原发生了什么：时间线、截图、证据链。"},
+    {"key": "api", "name": "API 安全", "description": "接口契约里哪里缺了检查：鉴权、越权、注入、批量赋值。"},
+    {"key": "cloud", "name": "云与控制面", "description": "元数据、IAM、编排 RBAC —— 身份能走多远。"},
+    {"key": "ctf", "name": "CTF 解题", "description": "先判题型、先拿稳的分、时间盒。"},
+    {"key": "ai", "name": "AI / LLM 应用", "description": "提示注入、工具滥用、RAG 投毒、系统提示词提取。"},
+)
+
+
+def list_templates() -> list[dict[str, str]]:
+    return [dict(item) for item in ROLE_TEMPLATES]
+
+
 def list_profiles(db: Session) -> list[AgentProfile]:
     return list(
         db.execute(

@@ -1,9 +1,16 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
-import { createAgent, deleteAgent, loadAgents, type AgentProfile } from '@/data/agents'
+import {
+  createAgent,
+  deleteAgent,
+  loadAgentTemplates,
+  loadAgents,
+  type AgentProfile,
+  type AgentTemplate,
+} from '@/data/agents'
 import { showToast } from '@/data/toast-store'
-import { Bot, Plus } from 'lucide-react'
+import { Bot, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 function splitList(value: string): string[] {
@@ -16,6 +23,8 @@ function splitList(value: string): string[] {
 export function AgentsPage() {
   const [items, setItems] = useState<AgentProfile[]>([])
   const [loading, setLoading] = useState(true)
+  const [templates, setTemplates] = useState<AgentTemplate[]>([])
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
@@ -29,7 +38,9 @@ export function AgentsPage() {
 
   async function reload() {
     try {
-      setItems(await loadAgents())
+      const [profiles, roles] = await Promise.all([loadAgents(), loadAgentTemplates()])
+      setItems(profiles)
+      setTemplates(roles)
     } catch {
       // 增值数据：失败静默
     } finally {
@@ -166,6 +177,61 @@ export function AgentsPage() {
           </div>
         )}
       </div>
+
+      {pickerOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label="选一个角色"
+        >
+          <div className="w-full max-w-3xl rounded-lg border border-line bg-surface p-panel shadow-xl">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-medium text-ink">选一个角色</h3>
+                <p className="mt-1 text-2xs text-ink-muted">
+                  角色只改「关注什么、怎么说」，不改变权限 —— 能调哪些工具仍由执行器决定。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPickerOpen(false)}
+                className="rounded-sm p-1 text-ink-faint hover:text-ink"
+                aria-label="关闭"
+              >
+                <X className="size-4" strokeWidth={1.75} />
+              </button>
+            </div>
+
+            <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
+              {templates.map((template) => (
+                <button
+                  key={template.key}
+                  type="button"
+                  onClick={() => {
+                    setForm({
+                      key: `role-${template.key}`,
+                      name: template.name,
+                      description: template.description,
+                      mcpServers: '',
+                      skills: '',
+                      tools: '',
+                    })
+                    setPickerOpen(false)
+                    setCreating(true)
+                  }}
+                  className="rounded-sm border border-line px-3 py-2 text-left transition-ui hover:border-line-strong hover:bg-surface-raised"
+                >
+                  <div className="text-sm text-ink">{template.name}</div>
+                  <div className="mt-0.5 text-2xs leading-relaxed text-ink-muted">
+                    {template.description}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
