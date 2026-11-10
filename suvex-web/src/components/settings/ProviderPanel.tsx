@@ -690,17 +690,20 @@ function AccountEditor({
         >
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-1.5">
-              <TextInput
-                id={`${account.id}-model`}
-                value={draft.model}
-                onChange={(v) => setDraft({ ...draft, model: v })}
-                mono
-                error={touched ? errors.model : null}
-              />
+              <div className="min-w-0 flex-1">
+                <TextInput
+                  id={`${account.id}-model`}
+                  value={draft.model}
+                  onChange={(v) => setDraft({ ...draft, model: v })}
+                  mono
+                  error={touched ? errors.model : null}
+                />
+              </div>
               <Button
                 type="button"
                 size="sm"
                 variant="secondary"
+                className="shrink-0 whitespace-nowrap"
                 onClick={() => void loadModels()}
                 disabled={loadingModels}
               >
