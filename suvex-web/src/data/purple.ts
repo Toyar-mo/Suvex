@@ -61,6 +61,8 @@ export async function evaluateRules(): Promise<EvaluateResult> {
   return api.post<EvaluateResult>('/purple/evaluate')
 }
 
-export async function exportHits(format: 'jsonl' | 'cef'): Promise<BlobDownload> {
+export type ExportFormat = 'jsonl' | 'cef' | 'attack' | 'misp' | 'sigma' | 'suricata'
+
+export async function exportHits(format: ExportFormat): Promise<BlobDownload> {
   return apiBlob(`/purple/export?format=${format}`)
 }

@@ -252,3 +252,10 @@ def test_openapi_declares_the_auth_schemes(client: TestClient) -> None:
     assert security, "顶层 security 不能为空"
     # 两项 = "Bearer 或 Cookie"，而不是一项里的两个（那是 AND）
     assert len(security) >= 2
+
+
+def test_deep_health_requires_admin(client: TestClient) -> None:
+    """深检会暴露 provider/磁盘等信息，不能匿名可读。"""
+    response = client.get("/api/v1/health/deep")
+
+    assert response.status_code in (401, 403)

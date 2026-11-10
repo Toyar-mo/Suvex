@@ -81,10 +81,18 @@ export function PurplePanel() {
     }
   }
 
-  const exportAs = async (format: 'jsonl' | 'cef') => {
+  const exportAs = async (format: 'jsonl' | 'cef' | 'attack' | 'misp' | 'sigma' | 'suricata') => {
     try {
       const out = await exportHits(format)
-      download(out.blob, `purple-hits.${format}`)
+      const ext =
+        format === 'attack' || format === 'misp'
+          ? 'json'
+          : format === 'sigma'
+            ? 'yaml'
+            : format === 'suricata'
+              ? 'rules'
+              : format
+      download(out.blob, `purple-${format}.${ext}`)
     } catch {
       showToast({ tone: 'risk', message: '导出失败' })
     }
@@ -143,6 +151,18 @@ export function PurplePanel() {
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('cef')}>
             导出 CEF
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => void exportAs('attack')}>
+            ATT&CK 层
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => void exportAs('misp')}>
+            MISP
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => void exportAs('sigma')}>
+            Sigma 草案
+          </Button>
+          <Button variant="secondary" size="sm" onClick={() => void exportAs('suricata')}>
+            Suricata 草案
           </Button>
         </div>
 

@@ -51,6 +51,7 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth.deps import Identity, require_admin
 from app.core import metrics
 from app.core.config import get_settings
 from app.core.db import get_db, ping
@@ -180,3 +181,72 @@ def prometheus_metrics(db: Annotated[Session, Depends(get_db)]) -> Response:
     return Response(
         content=body, media_type="text/plain; version=0.0.4; charset=utf-8"
     )
+
+
+class DeepCheckOut(BaseModel):
+    name: str
+    status: str  # ok | degraded
+    detail: str = ""
+
+
+@router.get(
+    "/health/deep",
+    response_model=list[DeepCheckOut],
+    summary="部署深检（需要管理员）",
+)
+def deep_health(
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[DeepCheckOut]:
+    """部署预检：数据库、迁移版本、provider、磁盘余量。
+
+    参考 artex-ymh 的 `artex doctor`：**只读、不发请求、FAIL 不阻断服务**。
+    每项都返回明确的 `detail`，缺什么就写什么，不猜。
+    """
+    import shutil
+
+    from sqlalchemy import text
+
+    from app.providers.models import ProviderAccount
+
+    checks: list[DeepCheckOut] = []
+
+    try:
+        db.execute(select(1))
+        checks.append(DeepCheckOut(name="database", status="ok", detail="连接正常"))
+    except Exception as exc:  # noqa: BLE001 - 预检要把异常变成可读状态
+        checks.append(DeepCheckOut(name="database", status="degraded", detail=str(exc)[:200]))
+        return checks
+
+    try:
+        revision = db.scalar(text("select version_num from alembic_version"))
+        checks.append(
+            DeepCheckOut(name="migration", status="ok", detail=str(revision or "unknown"))
+        )
+    except Exception as exc:  # noqa: BLE001
+        checks.append(DeepCheckOut(name="migration", status="degraded", detail=str(exc)[:200]))
+
+    providers = int(
+        db.scalar(select(func.count()).select_from(ProviderAccount)) or 0
+    )
+    default_id = db.scalar(
+        select(ProviderAccount.id).where(ProviderAccount.is_default).limit(1)
+    )
+    checks.append(
+        DeepCheckOut(
+            name="providers",
+            status="ok" if providers and default_id else "degraded",
+            detail=f"providers={providers} default={default_id or 'none'}",
+        )
+    )
+
+    usage = shutil.disk_usage("/")
+    free_gb = usage.free / (1024**3)
+    checks.append(
+        DeepCheckOut(
+            name="disk",
+            status="ok" if free_gb >= 2 else "degraded",
+            detail=f"free={free_gb:.1f}G",
+        )
+    )
+    return checks

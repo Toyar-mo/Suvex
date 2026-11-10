@@ -13,6 +13,7 @@ from app.auth.deps import Identity, require_read, require_scan
 from app.core.db import get_db
 from app.core.errors import ApiError
 from app.findings.models import Finding
+from app.purple import export as export_mod
 from app.purple import service
 from app.purple.schemas import EvaluateOut, PurpleHit, RuleIn, RuleOut
 
@@ -85,10 +86,21 @@ def evaluate(
 def export(
     _identity: Annotated[Identity, Depends(require_read)],
     db: Annotated[Session, Depends(get_db)],
-    format: Annotated[str, Query(pattern="^(jsonl|cef)$")] = "jsonl",
+    format: Annotated[
+        str, Query(pattern="^(jsonl|cef|attack|misp|sigma|suricata)$")
+    ] = "jsonl",
 ) -> PlainTextResponse:
-    body = service.export_events(db, format)
-    media = "application/x-ndjson" if format == "jsonl" else "text/plain"
+    if format in ("jsonl", "cef"):
+        body = service.export_events(db, format)
+    else:
+        body = export_mod.export_body(
+            db, service.list_rules(db, enabled_only=True), format
+        )
+    media = {
+        "jsonl": "application/x-ndjson",
+        "attack": "application/json",
+        "misp": "application/json",
+    }.get(format, "text/plain")
     return PlainTextResponse(
         body,
         media_type=media,
