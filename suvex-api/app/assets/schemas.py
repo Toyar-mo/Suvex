@@ -130,6 +130,15 @@ class SurfaceMapOut(CamelModel):
     truncated: bool = False
 
 
+class CoverageGapOut(CamelModel):
+    """预设类别的一条「有没有记录」标注（不是「测没测过」）。"""
+
+    key: str
+    label: str
+    recorded: bool
+    matches: list[str] = []
+
+
 class CoverageOut(CamelModel):
     """一个目标的覆盖度快照。
 
@@ -140,5 +149,6 @@ class CoverageOut(CamelModel):
     target: str
     tested: list[CoverageItemOut]
     ruledOut: list[CoverageItemOut]
+    gaps: list[CoverageGapOut] = []
     truncated: bool = False
     stats: CoverageStatsOut

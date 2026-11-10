@@ -90,6 +90,22 @@ export default function AssetCoverageDrawer({
                 {coverage?.stats.ruledOut ?? 0}
               </span>
             </div>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {(coverage?.gaps ?? []).map((gap) => (
+                <span
+                  key={gap.key}
+                  title={gap.recorded ? '有记录' : '没有记录（不等于没测过）'}
+                  className={
+                    gap.recorded
+                      ? 'rounded-pill border border-line bg-surface px-2 py-0.5 text-2xs text-ink'
+                      : 'rounded-pill border border-dashed border-line px-2 py-0.5 text-2xs text-ink-faint'
+                  }
+                >
+                  {gap.recorded ? '✓ ' : '· '}
+                  {gap.label}
+                </span>
+              ))}
+            </div>
             <ItemList
               title="测过的面"
               items={coverage?.tested ?? []}

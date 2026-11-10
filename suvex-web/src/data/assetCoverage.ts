@@ -19,10 +19,19 @@ export interface CoverageItem {
   version: number
 }
 
+export interface CoverageGap {
+  key: string
+  label: string
+  /** 只表示"有记录"，不表示"测过"。 */
+  recorded: boolean
+  matches: string[]
+}
+
 export interface CoverageSnapshot {
   target: string
   tested: CoverageItem[]
   ruledOut: CoverageItem[]
+  gaps: CoverageGap[]
   truncated: boolean
   stats: { tested: number; ruledOut: number }
 }

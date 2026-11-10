@@ -397,6 +397,46 @@ def summary(assets: list[dict]) -> dict:
     }
 
 
+#: 覆盖度缺口的预设类别（v1.82）。
+#:
+#: ⚠️ `recorded == False` 只表示"没有记录"，**不表示没测过**。界面必须
+#: 按这个措辞显示（见 CoverageOut 的说明）。
+SURFACE_CATEGORIES: tuple[dict[str, Any], ...] = (
+    {"key": "auth", "label": "认证 / 会话", "keywords": ("auth", "login", "session", "jwt", "token", "oauth")},
+    {"key": "input", "label": "输入 / 上传", "keywords": ("upload", "file", "form", "param", "graphql")},
+    {"key": "api", "label": "API", "keywords": ("api", "rest", "graphql", "openapi", "swagger")},
+    {"key": "admin", "label": "管理面", "keywords": ("admin", "manage", "dashboard", "console")},
+    {"key": "cloud", "label": "云 / 容器", "keywords": ("s3", "metadata", "iam", "bucket", "kubernetes", "k8s", "aws", "azure", "gcp")},
+    {"key": "ssrf", "label": "服务端请求", "keywords": ("url", "fetch", "proxy", "redirect", "callback")},
+    {"key": "deserialize", "label": "反序列化", "keywords": ("deserialize", "pickle", "yaml", "xml", "java")},
+    {"key": "secret", "label": "凭据 / 配置", "keywords": ("secret", "key", "credential", "env", "config")},
+)
+
+
+def coverage_gaps(tested: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按预设类别标注"有记录 / 没记录"。这是**认知缺口**，不是漏洞缺口。"""
+    blobs = [
+        f"{item.get('factKey', '')} {item.get('summary', '')} {item.get('detail', '')}".lower()
+        for item in tested
+    ]
+    gaps: list[dict[str, Any]] = []
+    for category in SURFACE_CATEGORIES:
+        matches = [
+            item.get("factKey", "")
+            for item, blob in zip(tested, blobs, strict=True)
+            if any(keyword in blob for keyword in category["keywords"])
+        ]
+        gaps.append(
+            {
+                "key": category["key"],
+                "label": category["label"],
+                "recorded": bool(matches),
+                "matches": matches[:5],
+            }
+        )
+    return gaps
+
+
 def coverage_for_target(
     db: Session, *, target: str, limit: int = 200
 ) -> dict[str, Any]:
@@ -451,6 +491,7 @@ def coverage_for_target(
         "target": key,
         "tested": tested,
         "ruledOut": ruled_out,
+        "gaps": coverage_gaps(tested),
         "truncated": len(rows) >= limit,
         "stats": {"tested": len(tested), "ruledOut": len(ruled_out)},
     }
