@@ -21,15 +21,29 @@ from app.providers.models import ProviderAccount
 from app.settings.models import SINGLETON_ID, ModelRoutes
 
 
-def route_for_goal(db: Session, goal: str, explicit: str | None = None) -> str | None:
+def route_for_goal(
+    db: Session,
+    goal: str,
+    explicit: str | None = None,
+    *,
+    skills: list[str] | tuple[str, ...] | None = None,
+) -> str | None:
     """解析这次扫描该用哪个 provider。"""
     value = (explicit or "").strip()
     if value and value != "auto":
         return value
 
     routes = db.get(ModelRoutes, SINGLETON_ID)
-    if routes is not None:
-        candidate = (routes.routes or {}).get(goal)
+    table = dict(routes.routes or {}) if routes is not None else {}
+
+    candidate = table.get(goal)
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+
+    # v1.82：按**扫描技能**路由（`skill:<id>`）。扫描没有显式的
+    # recon/exploit 阶段模型，技能集是库里真实存在的维度。
+    for skill in skills or ():
+        candidate = table.get(f"skill:{skill}")
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip()
 

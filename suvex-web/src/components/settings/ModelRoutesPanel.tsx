@@ -12,6 +12,16 @@ const GOALS = [
   { key: 'verifyFix', label: '复测已修（verifyFix）' },
 ] as const
 
+/** 扫描技能路由的键前缀是 `skill:<id>`（v1.82）。 */
+const SKILLS = [
+  { key: 'skill:web', label: 'Web' },
+  { key: 'skill:api', label: 'API' },
+  { key: 'skill:container', label: '容器' },
+  { key: 'skill:cloud', label: '云' },
+  { key: 'skill:dependencies', label: '依赖' },
+  { key: 'skill:secrets', label: '密钥' },
+] as const
+
 /**
  * 模型路由：不同成功判据用不同 provider。
  *
@@ -86,6 +96,34 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
                   className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
                 >
                   <option value="">平台默认</option>
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.label} · {account.model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+            {SKILLS.map((skill) => (
+              <label key={skill.key} className="flex flex-col gap-1.5 text-sm">
+                <span className="text-ink-muted">技能 · {skill.label}</span>
+                <select
+                  value={routes[skill.key] ?? ''}
+                  onChange={(event) => {
+                    const value = event.target.value
+                    setRoutes((prev) => {
+                      const next = { ...prev }
+                      if (value) next[skill.key] = value
+                      else delete next[skill.key]
+                      return next
+                    })
+                  }}
+                  className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
+                >
+                  <option value="">不单独路由</option>
                   {accounts.map((account) => (
                     <option key={account.id} value={account.id}>
                       {account.label} · {account.model}

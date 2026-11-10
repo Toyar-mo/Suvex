@@ -419,7 +419,9 @@ def create_scan(
     #   `model_routes`，再回退平台默认；显式 provider 仍然优先。
     from app.providers import routing
 
-    provider_id = routing.route_for_goal(db, payload.goal, payload.providerId)
+    provider_id = routing.route_for_goal(
+        db, payload.goal, payload.providerId, skills=payload.skills
+    )
     if not provider_id:
         raise ApiError.validation(
             "没有可用的模型接入点：请在设置里添加 provider，或为这个判据配置模型路由。",
