@@ -7,6 +7,7 @@ import NotifyPanel from '@/components/settings/NotifyPanel'
 import { BenchmarkCasesPanel } from '@/components/settings/BenchmarkCasesPanel'
 import { BenchmarkPanel } from '@/components/settings/BenchmarkPanel'
 import { ModelRoutesPanel } from '@/components/settings/ModelRoutesPanel'
+import { PurplePanel } from '@/components/settings/PurplePanel'
 import ProviderPanel from '@/components/settings/ProviderPanel'
 import SandboxPanel from '@/components/settings/SandboxPanel'
 import ScanRetentionPanel from '@/components/settings/ScanRetentionPanel'
@@ -53,6 +54,7 @@ const SECTIONS = [
   { id: 'scan-retention', label: '扫描保留' },
   { id: 'benchmark', label: '评测快照' },
   { id: 'benchmark-cases', label: '评测用例' },
+  { id: 'purple', label: '紫队规则' },
   /*
     ★ v1.79：「处理人」补上。
 
@@ -164,6 +166,7 @@ export function SettingsPage() {
                 <ScanRetentionPanel />
                 <BenchmarkPanel />
                 <BenchmarkCasesPanel />
+                <PurplePanel />
                 <MembersPanel />
                 <AccountPanel tokens={tokens} />
                 {/*
