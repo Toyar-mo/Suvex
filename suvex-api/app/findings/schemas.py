@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -368,6 +368,8 @@ class RemediationOut(CamelModel):
     title: str
     steps: list[str]
     verification: list[str]
+    #: 落 finding 前的反证清单：`{class, general[], specific[]}`。
+    verifierChecks: dict[str, Any] = {}
     note: str
 
 

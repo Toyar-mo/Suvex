@@ -25,6 +25,12 @@ export interface RemediationPlan {
   title: string
   steps: string[]
   verification: string[]
+  /** 落 finding 前的反证清单。类目未知时 specific 为空。 */
+  verifierChecks?: {
+    class: string
+    general: string[]
+    specific: string[]
+  }
   /** 已知 CWE 的结构示意；未知 CWE 为 null。 */
   patch?: RemediationPatch | null
   note: string

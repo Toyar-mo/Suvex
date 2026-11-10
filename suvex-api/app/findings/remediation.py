@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from app.findings import verifier
+
 #: 规则库。键是 CWE 编号（大写），值是"最小正确做法 + 验证方式"。
 #:
 #: 刻意只收**最常见、有确定做法**的几类；其余走通用四步，而不是编一条
@@ -203,6 +205,7 @@ def plan(finding: Any) -> dict[str, Any]:
         "title": rule.title,
         "steps": steps,
         "verification": list(rule.verification),
+        "verifierChecks": verifier.checks_for(cwe, category),
         "patch": (
             {
                 "format": "unified-diff-draft",

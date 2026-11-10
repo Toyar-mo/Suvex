@@ -411,6 +411,18 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
             <li key={index}>{step}</li>
           ))}
         </ol>
+        {plan.verifierChecks && (
+          <div className="flex flex-col gap-1">
+            <p className="text-2xs text-ink-muted">
+              反证清单（{plan.verifierChecks.class}）：确认这些对照都做过，再判 verified。
+            </p>
+            <ul className="flex list-disc flex-col gap-0.5 pl-4 text-2xs text-ink-muted">
+              {[...plan.verifierChecks.general, ...plan.verifierChecks.specific].map((check) => (
+                <li key={check}>{check}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {plan.patch && (
           <div className="flex flex-col gap-1">
             <pre className="overflow-x-auto rounded-sm border border-line bg-surface-raised p-2 text-2xs leading-relaxed text-ink">
