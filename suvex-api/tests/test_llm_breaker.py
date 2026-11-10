@@ -24,3 +24,14 @@ def test_success_resets_failures() -> None:
     breaker.record_success("p")
 
     assert breaker.allow("p", failures=2, cooldown_s=60) is True
+
+
+def test_retry_after_reports_remaining_cooldown() -> None:
+    now = [100.0]
+    breaker = Breaker(clock=lambda: now[0])
+    breaker.record_failure("p", failures=1, cooldown_s=60)
+    assert breaker.retry_after("p") == 60.0
+    now[0] += 20
+    assert 39.0 <= breaker.retry_after("p") <= 41.0
+    now[0] += 41
+    assert breaker.retry_after("p") == 0.0

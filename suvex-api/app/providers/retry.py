@@ -58,6 +58,11 @@ class Breaker:
             until = self._clock() + cooldown_s
         self._state[key] = (fails, until)
 
+    def retry_after(self, key: str) -> float:
+        """冷却还剩多久（秒）。不在冷却期返回 0。"""
+        fails, until = self._state.get(key, (0, 0.0))
+        return max(0.0, until - self._clock()) if fails > 0 else 0.0
+
     def record_success(self, key: str) -> None:
         self._state.pop(key, None)
 

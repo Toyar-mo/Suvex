@@ -2579,10 +2579,20 @@ class LlmGateway:
         if not breaker.allow(
             breaker_key, failures=policy_failures, cooldown_s=policy_cooldown
         ):
-            raise KernelError(
-                "模型接入点正在熔断冷却：最近连续调用失败，"
-                f"已跳过本次请求（{policy_cooldown} 秒后自动恢复）。"
-            )
+            # ★ v1.86：熔断打开时**等待冷却**，不要把整道题判死。
+            #
+            # 5 个子 agent 并发时，一次瞬时 429/断连就能把熔断打到阈值；
+            # 原实现直接抛 KernelError，scan 收尾为 failed，前面几十分钟的
+            # 工作白扔（2026-11-11 实测）。冷却本来就是自愈窗口，等它结束
+            # 再继续，与"重试瞬时错误"同一语义。
+            wait = min(breaker.retry_after(breaker_key), float(policy_cooldown))
+            if wait > 0:
+                logger.warning(
+                    "模型接入点熔断冷却中，等待 %.1fs 后继续（key=%s）",
+                    wait,
+                    breaker_key,
+                )
+                await asyncio.sleep(wait + 0.1)
 
         # ⚠️ 这里 import 了 `providers/llm.py` 的私有 `_extract_reply`。
         #
