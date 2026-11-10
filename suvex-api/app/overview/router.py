@@ -86,3 +86,15 @@ def read_quality(
     return QualityOut.model_validate(
         {**quality.quality_snapshot(db, since=since), "generatedAt": now_utc()}
     )
+
+
+@router.get("/overview/token-usage", summary="LLM token 按天序列（解题侧）")
+def read_token_usage(
+    _identity: ReadDep,
+    db: DbDep,
+    days: Annotated[int, Query(description="7/30/90/180/365")] = 30,
+) -> dict:
+    """按天聚合；缺失日期补 0。`cacheTracked=false` 表示没有缓存列。"""
+    from app.overview import token_usage
+
+    return token_usage.token_series(db, days=days)

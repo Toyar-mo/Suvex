@@ -3,20 +3,25 @@ import ActivityFeed from '@/components/overview/ActivityFeed'
 import AttentionList from '@/components/overview/AttentionList'
 import RiskScoreCard from '@/components/overview/RiskScoreCard'
 import ResourceStrip from '@/components/overview/ResourceStrip'
+import { OverviewTasks } from '@/components/overview/OverviewTasks'
 import SeverityChart from '@/components/overview/SeverityChart'
 import StatCard from '@/components/overview/StatCard'
-import TokenUsageCard from '@/components/overview/TokenUsageCard'
+import { RecentFindingsCard } from '@/components/overview/RecentFindingsCard'
+import { TokenUsagePanel } from '@/components/overview/TokenUsagePanel'
 import ErrorState from '@/components/ui/ErrorState'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { useFleetStatus } from '@/data/fleet'
+import { useScans } from '@/data/scans-store'
 import type { ActivityEvent, OverviewData } from '@/data/overview'
 import { loadOverview, useOverviewState } from '@/data/overview-store'
+import { loadFindings } from '@/data/findings-store'
+import { useFindings } from '@/data/findings-store'
 import { loadQuality, type QualitySnapshot } from '@/data/quality'
 import { useOverviewLiveActivity } from '@/hooks/useOverviewLiveActivity'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/datetime'
-import { ScanSearch, ShieldAlert, FlaskConical, Timer, Clock } from 'lucide-react'
+import { ScanSearch, ShieldAlert, FlaskConical, Timer, Clock, Boxes, Zap } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 /**
@@ -297,8 +302,72 @@ function OverviewContent({
    */
   const isLive = metrics.activeScans > 0 || agents.running > 0 || agents.queued > 0
 
+  const scans = useScans()
+  const findings = useFindings()
+  useEffect(() => {
+    void loadFindings({ silent: true })
+  }, [])
+  const findingTotal = severityBreakdown.reduce((sum, item) => sum + item.count, 0)
+  const tokens = metrics.ctf2TotalTokens
+  const tokenText =
+    tokens >= 1_000_000
+      ? `${(tokens / 1_000_000).toFixed(1)}M`
+      : tokens >= 1_000
+        ? `${(tokens / 1_000).toFixed(1)}k`
+        : String(tokens)
+
   return (
     <div className="flex flex-col gap-bay">
+      {/*
+        ── 0 · 顶部 KPI（学 ARTEX 总览的信息架构）────
+
+        五张卡回答「现在有什么」：任务、发现、资产、流量、token。
+        流量卡如实显示「未接入」——Suvex 没有流量捕获，不能编一个 0。
+      */}
+      <section aria-label="关键指标" className="grid grid-cols-2 gap-panel lg:grid-cols-5">
+        <StatCard
+          label="活跃任务"
+          value={metrics.activeScans}
+          icon={ScanSearch}
+          footnote={
+            metrics.activeScans > 0
+              ? [agents.running > 0 ? `${agents.running} 执行` : null, agents.queued > 0 ? `${agents.queued} 排队` : null]
+                  .filter(Boolean)
+                  .join(' · ')
+              : '暂无任务'
+          }
+        />
+        <StatCard
+          label="确认发现"
+          value={findingTotal}
+          icon={ShieldAlert}
+          footnote={severityBreakdown
+            .filter((item) => item.count > 0)
+            .map((item) => `${item.severity} ${item.count}`)
+            .join(' · ') || '暂无发现'}
+        />
+        <StatCard
+          label="资产节点"
+          value={quality ? quality.coverage.targets : '—'}
+          icon={Boxes}
+          footnote={quality ? `覆盖记录 ${quality.coverage.surfaces} 条` : '质量数据未加载'}
+        />
+        <StatCard
+          label="流量交互"
+          value="—"
+          icon={Clock}
+          footnote="流量捕获未接入"
+        />
+        <StatCard
+          label="Token 用量"
+          value={tokenText}
+          icon={Zap}
+          footnote={`${metrics.ctf2LlmCalls} 次调用 · ${metrics.ctf2RecordedCalls} 次有记录`}
+        />
+      </section>
+
+      <TokenUsagePanel cost={quality?.cost} />
+
       {/*
         ── 1 · 此刻在发生什么 + 留下了什么 ─────────────
 
@@ -325,6 +394,7 @@ function OverviewContent({
 
           <SeverityChart data={severityBreakdown} />
 
+          <RecentFindingsCard findings={findings} />
           <QualityPanel quality={quality} />
         </div>
       </div>
@@ -332,34 +402,10 @@ function OverviewContent({
       {/* ── 2 · 该做什么 ───────────────────────────── */}
       <AttentionList items={attention} />
 
-      {/* ── 3 · 关键指标 ───────────────────────────── */}
-      <section aria-label="关键指标">
-        <div className="grid grid-cols-1 gap-panel sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            label="进行中的扫描"
-            value={metrics.activeScans}
-            icon={ScanSearch}
-            footnote={
-              /*
-                ★ 口径统一成"扫描"。
-
-                卡片的值 `activeScans` = 运行中 + 排队中（后端同一条查询）。
-                原来脚注写「N 个智能体在跑」，而 `agents` 就是同一批扫描
-                按状态分的两个数 —— 换了个名字却还是同一件事，读起来像
-                另有 N 个智能体，和左边的数字对不上。排队为 0 时也不该
-                硬写「0 个在跑」。
-              */
-              metrics.activeScans > 0
-                ? [
-                    agents.running > 0 ? `${agents.running} 个在执行` : null,
-                    agents.queued > 0 ? `${agents.queued} 个排队` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')
-                : '当前没有任务在跑'
-            }
-          />
-
+      {/* ── 3 · 本周产出（与顶部 KPI 不重复）────────── */}
+      <section aria-label="本周产出">
+        <h2 className="mb-2 text-sm font-medium text-ink">本周产出</h2>
+        <div className="grid grid-cols-1 gap-panel sm:grid-cols-3">
           <StatCard
             label="本周新增高危及以上"
             value={metrics.newHighSeverityThisWeek}
@@ -412,6 +458,8 @@ function OverviewContent({
         ★ 它承担了「这系统能干什么」的回答：新装部署的活动流是空的，
           这一格告诉用户平台配了多少工具、多少技能。
       */}
+      <OverviewTasks scans={scans} />
+
       <ResourceStrip resources={resources} />
 
       {/*
@@ -426,12 +474,6 @@ function OverviewContent({
           首屏最上面那四张卡回答的是"现在怎么样"，这一块回答
           "我们为此付出了多少"。
       */}
-      <TokenUsageCard
-        calls={metrics.ctf2LlmCalls}
-        recordedCalls={metrics.ctf2RecordedCalls}
-        totalTokens={metrics.ctf2TotalTokens}
-        since={metrics.ctf2UsageSince}
-      />
     </div>
   )
 }
