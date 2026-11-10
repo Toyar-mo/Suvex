@@ -21,7 +21,7 @@ import { loadQuality, type QualitySnapshot } from '@/data/quality'
 import { useOverviewLiveActivity } from '@/hooks/useOverviewLiveActivity'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/datetime'
-import { ScanSearch, ShieldAlert, FlaskConical, Timer, Clock, Boxes, Zap } from 'lucide-react'
+import { ScanSearch, ShieldAlert, FlaskConical, Timer, Clock, Boxes } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 /**
@@ -308,14 +308,6 @@ function OverviewContent({
     void loadFindings({ silent: true })
   }, [])
   const findingTotal = severityBreakdown.reduce((sum, item) => sum + item.count, 0)
-  const tokens = metrics.ctf2TotalTokens
-  const tokenText =
-    tokens >= 1_000_000
-      ? `${(tokens / 1_000_000).toFixed(1)}M`
-      : tokens >= 1_000
-        ? `${(tokens / 1_000).toFixed(1)}k`
-        : String(tokens)
-
   return (
     <div className="flex flex-col gap-bay">
       {/*
@@ -324,7 +316,7 @@ function OverviewContent({
         五张卡回答「现在有什么」：任务、发现、资产、流量、token。
         流量卡如实显示「未接入」——Suvex 没有流量捕获，不能编一个 0。
       */}
-      <section aria-label="关键指标" className="grid grid-cols-2 gap-panel lg:grid-cols-5">
+      <section aria-label="关键指标" className="grid grid-cols-2 gap-panel lg:grid-cols-4">
         <StatCard
           label="活跃任务"
           value={metrics.activeScans}
@@ -357,12 +349,6 @@ function OverviewContent({
           value="—"
           icon={Clock}
           footnote="流量捕获未接入"
-        />
-        <StatCard
-          label="Token 用量"
-          value={tokenText}
-          icon={Zap}
-          footnote={`${metrics.ctf2LlmCalls} 次调用 · ${metrics.ctf2RecordedCalls} 次有记录`}
         />
       </section>
 
