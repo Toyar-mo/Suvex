@@ -361,6 +361,7 @@ function AccountRow({
       {editing && (
         <div className="border-t border-line/60 p-3">
           <AccountEditor
+            key={account.id}
             account={account}
             saveState={saveState}
             setSaveState={setSaveState}

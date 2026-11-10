@@ -18,7 +18,7 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
   const [busy, setBusy] = useState(false)
 
   if (running.length === 0) return null
-  const selected = scanId || running[0].id
+  const selected = running.some((scan) => scan.id === scanId) ? scanId : running[0].id
 
   async function submit() {
     if (!text.trim()) return

@@ -363,6 +363,9 @@ def fetch_models(*, base_url: str, label: str, kind: str, api_key: str) -> list[
     if not resolved:
         raise ValueError("没有可用的接入地址：baseUrl 为空且无法从名称推断。")
     endpoint = resolved.rstrip("/")
+    # 用户可能把完整的 chat endpoint 填进 baseUrl；列表要回到 base 再加 /models。
+    if endpoint.endswith("/chat/completions"):
+        endpoint = endpoint[: -len("/chat/completions")].rstrip("/")
     if not endpoint.endswith("/models"):
         endpoint += "/models"
     blocked = _local_address_guard(endpoint)

@@ -566,8 +566,6 @@ DEFAULT_LLM_TIMEOUT = 180.0
 # 反例也记一下，免得以后有人把"协议错误一律重试"当教条：
 # `httpx.UnsupportedProtocol`（URL 写错）、`httpx.LocalProtocolError`
 # （我们自己的请求体有问题）重试多少次都一样，**不该**进来。
-_LLM_RETRY_ATTEMPTS = 4
-_LLM_RETRY_BACKOFF = 1.5  # 秒，线性退避：1.5s / 3.0s / 4.5s
 #: 值得重试的连接层异常。**加新成员时要问一句"重试是否可能成功"** ——
 #: 这个元组是唯一的判据，改它等于改"哪些失败会作废整道题"。
 _LLM_RETRYABLE = (
