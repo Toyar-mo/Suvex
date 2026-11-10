@@ -11,6 +11,20 @@ from app.core.ids import new_id
 from app.core.timeutil import now_utc
 
 #: 内置角色（名称/描述）——只用于展示与后续编排，不自动改变执行器行为。
+PERSONAS: tuple[tuple[str, str, str], ...] = (
+    ("default", "通用助手", "不偏向任何方向，按你说的做。"),
+    ("recon", "信息收集", "先把面摸清：资产、端口、指纹、可见的服务。"),
+    ("pentest", "渗透测试", "按攻击路径推进：入口 → 提权 → 影响。"),
+    ("binary", "二进制分析", "逆向、漏洞点定位、利用原语。"),
+    ("postex", "后渗透", "拿到立足点之后：横向、持久化、凭据。"),
+    ("container", "容器安全", "镜像、编排、逃逸面、供应链。"),
+    ("forensics", "数字取证", "还原发生了什么：时间线、截图、证据链。"),
+    ("api", "API 安全", "接口契约里哪里缺了检查：鉴权、越权、注入、批量赋值。"),
+    ("cloud", "云与控制面", "元数据、IAM、编排 RBAC —— 身份能走多远。"),
+    ("ctf", "CTF 解题", "先判题型、先拿稳的分、时间盒。"),
+    ("aillm", "AI / LLM 应用", "提示注入、工具滥用、RAG 投毒、系统提示词提取。"),
+)
+
 BUILTINS: tuple[tuple[str, str, str], ...] = (
     ("goals", "目标拆解", "把渗透任务目标拆解成若干独立、可验证的子目标。"),
     ("planner", "规划", "读取态势、判定目标，只在确有未覆盖的新方向时补充探索意图。"),
@@ -18,7 +32,6 @@ BUILTINS: tuple[tuple[str, str, str], ...] = (
     ("worker", "执行", "领取一条意图执行，把发现的事实/漏洞写回知识图谱后停止。"),
     ("worker.intranet", "执行 · 内网", "内网阶段变体：有立足点/隧道时替代 worker 正文（需执行器接入）。"),
     ("auto", "Auto", "平台操作助手：管理任务、资产、技能、工具与 MCP。"),
-    ("pentest", "渗透测试", "独立渗透：侦察→找攻击面→深入利用→验证→收尾，形成完整链条。"),
     ("reporter", "报告撰写", "根据发现与执行过程撰写并回写 Markdown 报告。"),
     ("retester", "漏洞复测", "对已修复漏洞复测，保留独立复测结论。"),
     ("verifier", "漏洞验证", "上报后自动复核 PoC 证据并保存独立验证结论。"),
@@ -40,6 +53,23 @@ ROLE_TEMPLATES: tuple[dict[str, str], ...] = (
     {"key": "ctf", "name": "CTF 解题", "description": "先判题型、先拿稳的分、时间盒。"},
     {"key": "ai", "name": "AI / LLM 应用", "description": "提示注入、工具滥用、RAG 投毒、系统提示词提取。"},
 )
+
+
+def persona_catalog(db: Session) -> list[dict[str, str]]:
+    """聊天页角色列表：DB 提供名称/描述，代码提供 prompt guidance。"""
+    ensure_builtins(db)
+    rows = {row.key: row for row in list_profiles(db)}
+
+    from app.chat.prompts import CHAT_PERSONAS_SPEC
+
+    return [
+        {
+            "id": spec.id,
+            "label": rows[spec.id].name if spec.id in rows else spec.label,
+            "summary": rows[spec.id].description if spec.id in rows else spec.summary,
+        }
+        for spec in CHAT_PERSONAS_SPEC
+    ]
 
 
 def list_templates() -> list[dict[str, str]]:
@@ -71,7 +101,7 @@ def ensure_builtins(db: Session) -> list[AgentProfile]:
     """幂等播种内置角色；已存在的 key 不覆盖用户对描述/启用的修改。"""
     existing = {row.key for row in db.execute(select(AgentProfile)).scalars()}
     changed = False
-    for key, name, description in BUILTINS:
+    for key, name, description in BUILTINS + PERSONAS:
         if key in existing:
             continue
         db.add(
@@ -81,6 +111,7 @@ def ensure_builtins(db: Session) -> list[AgentProfile]:
                 name=name,
                 description=description,
                 builtin=True,
+                kind="persona" if key in {item[0] for item in PERSONAS} else "workflow",
                 enabled=True,
                 mcp_servers=[],
                 skills=[],

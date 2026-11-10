@@ -8,6 +8,7 @@ export interface AgentProfile {
   name: string
   description: string
   builtin: boolean
+  kind: 'workflow' | 'persona'
   enabled: boolean
   mcpServers: string[]
   skills: string[]

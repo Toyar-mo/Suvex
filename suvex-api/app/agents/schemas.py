@@ -32,6 +32,7 @@ class AgentProfileOut(CamelModel):
     name: str
     description: str
     builtin: bool
+    kind: str
     enabled: bool
     mcpServers: list[str]
     skills: list[str]
@@ -47,6 +48,7 @@ class AgentProfileOut(CamelModel):
             name=row.name,
             description=row.description,
             builtin=row.builtin,
+            kind=row.kind,
             enabled=row.enabled,
             mcpServers=list(row.mcp_servers or []),
             skills=list(row.skills or []),

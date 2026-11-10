@@ -154,6 +154,9 @@ export function AgentsPage() {
                   <span className="shrink-0 rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted">
                     {item.builtin ? '内置' : '自定义'}
                   </span>
+                  <span className="shrink-0 rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-faint">
+                    {item.kind === 'persona' ? '聊天角色' : '流程角色'}
+                  </span>
                 </div>
                 <p className="min-h-[2.5rem] text-2xs leading-relaxed text-ink-muted">
                   {item.description || '（没有写描述）'}

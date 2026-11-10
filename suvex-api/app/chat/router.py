@@ -53,6 +53,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
+from app.agents import service as agents_service
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
 from app.chat import engine, resumer, service, turn_runs
@@ -60,7 +61,7 @@ from app.chat import interrupts as chat_interrupts
 from app.chat import mcp_tools as chat_mcp_tools
 from app.chat import sandbox as chat_sandbox
 from app.chat import workspaces as chat_workspaces
-from app.chat.prompts import CHAT_PERSONAS_SPEC, CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
+from app.chat.prompts import CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
     ChatApprovalIn,
     ChatAttachmentOut,
@@ -847,17 +848,14 @@ async def mcp_status(
 
 
 @router.get("/chat/personas", response_model=list[ChatPersonaOut])
-def list_personas(identity: Reader) -> list[ChatPersonaOut]:
+def list_personas(identity: Reader, db: DbSession) -> list[ChatPersonaOut]:
     """可选人格列表（弹窗画卡片、下拉画选项都要它）。
 
     ★ 从 `CHAT_PERSONAS_SPEC` 读而不是前端硬编码：人格的 label 与 summary
       是**提示词的一部分**（`render_persona` 用同一份数据），两边各写一份
       迟早会漂成"界面上叫渗透测试、提示词里说 recon"。
     """
-    return [
-        ChatPersonaOut(id=spec.id, label=spec.label, summary=spec.summary)
-        for spec in CHAT_PERSONAS_SPEC
-    ]
+    return [ChatPersonaOut(**item) for item in agents_service.persona_catalog(db)]
 
 
 @router.post(

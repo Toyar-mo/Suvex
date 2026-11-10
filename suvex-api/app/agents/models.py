@@ -22,6 +22,7 @@ class AgentProfile(Base):
     __table_args__ = (
         Index("ix_agent_profiles_key", "key", unique=True),
         Index("ix_agent_profiles_builtin", "builtin"),
+        Index("ix_agent_profiles_kind", "kind"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -29,6 +30,8 @@ class AgentProfile(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: `workflow`（规划/执行等执行器角色）或 `persona`（聊天页可选角色）。
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="workflow")
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     mcp_servers: Mapped[list] = mapped_column(JsonColumn, nullable=False, default=list)
     skills: Mapped[list] = mapped_column(JsonColumn, nullable=False, default=list)
