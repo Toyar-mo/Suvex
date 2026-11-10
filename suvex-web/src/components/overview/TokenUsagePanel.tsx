@@ -1,7 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { TokenBreakdownCard } from './TokenBreakdownCard'
 import { loadTokenUsage, type TokenUsageSeries } from '@/data/tokenUsage'
-import type { QualityCostMetrics } from '@/data/quality'
 import { cn } from '@/lib/cn'
 
 const RANGES = [
@@ -24,14 +22,12 @@ function compact(value: number): string {
  * 左侧是分项与命中率，右侧是按天折线。**没有缓存列**时明确标注
  * `cacheTracked=false`：缓存读恒 0，命中率显示 `—`，不估算。
  */
-export function TokenUsagePanel({ cost }: { cost?: QualityCostMetrics }) {
-  const [tab, setTab] = useState<'old' | 'new'>('new')
+export function TokenUsagePanel() {
   const [days, setDays] = useState<number>(30)
   const [data, setData] = useState<TokenUsageSeries | null>(null)
   const [error, setError] = useState(false)
 
   useEffect(() => {
-    if (tab !== 'new') return
     let alive = true
     void loadTokenUsage(days)
       .then((value) => {
@@ -46,7 +42,7 @@ export function TokenUsagePanel({ cost }: { cost?: QualityCostMetrics }) {
     return () => {
       alive = false
     }
-  }, [days, tab])
+  }, [days])
 
   const chart = useMemo(() => {
     if (!data || data.totals.total === 0) return null
@@ -63,21 +59,6 @@ export function TokenUsagePanel({ cost }: { cost?: QualityCostMetrics }) {
     <section className="rounded-lg border border-line bg-surface p-panel">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium text-ink">⚡ LLM Token 消耗</h3>
-        <div className="flex rounded-sm border border-line p-0.5 text-2xs">
-          {(['old', 'new'] as const).map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setTab(key)}
-              className={cn(
-                'rounded-sm px-2 py-0.5',
-                tab === key ? 'bg-surface-raised text-ink' : 'text-ink-faint hover:text-ink',
-              )}
-            >
-              {key === 'old' ? '旧版' : '新版'}
-            </button>
-          ))}
-        </div>
         <span className="text-2xs text-ink-faint">activity</span>
         <a
           href="/ctf"
@@ -87,12 +68,7 @@ export function TokenUsagePanel({ cost }: { cost?: QualityCostMetrics }) {
         </a>
       </div>
 
-      {tab === 'old' ? (
-        <div className="mt-3">
-          <TokenBreakdownCard cost={cost} />
-        </div>
-      ) : (
-        <div className="mt-4 grid grid-cols-1 gap-panel lg:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className="mt-4 grid grid-cols-1 gap-panel lg:grid-cols-[18rem_minmax(0,1fr)]">
           <div className="flex flex-col gap-2 text-sm">
             <span className="text-2xs text-ink-muted">合计（输入+输出）</span>
             <span className="tabular text-3xl font-medium text-ink">
@@ -191,7 +167,6 @@ export function TokenUsagePanel({ cost }: { cost?: QualityCostMetrics }) {
             )}
           </div>
         </div>
-      )}
     </section>
   )
 }
