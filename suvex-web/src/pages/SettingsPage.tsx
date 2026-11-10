@@ -4,6 +4,7 @@ import KernelPanel from '@/components/settings/KernelPanel'
 import MembersPanel from '@/components/settings/MembersPanel'
 import PlatformPanel from '@/components/settings/PlatformPanel'
 import NotifyPanel from '@/components/settings/NotifyPanel'
+import { BenchmarkCasesPanel } from '@/components/settings/BenchmarkCasesPanel'
 import { BenchmarkPanel } from '@/components/settings/BenchmarkPanel'
 import { ModelRoutesPanel } from '@/components/settings/ModelRoutesPanel'
 import ProviderPanel from '@/components/settings/ProviderPanel'
@@ -51,6 +52,7 @@ const SECTIONS = [
   { id: 'notify', label: '通知' },
   { id: 'scan-retention', label: '扫描保留' },
   { id: 'benchmark', label: '评测快照' },
+  { id: 'benchmark-cases', label: '评测用例' },
   /*
     ★ v1.79：「处理人」补上。
 
@@ -161,6 +163,7 @@ export function SettingsPage() {
                 {/* 保留规则：属于「系统行为」这一类，与沙箱/通知同类 */}
                 <ScanRetentionPanel />
                 <BenchmarkPanel />
+                <BenchmarkCasesPanel />
                 <MembersPanel />
                 <AccountPanel tokens={tokens} />
                 {/*
