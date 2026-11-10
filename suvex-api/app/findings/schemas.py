@@ -357,6 +357,20 @@ def severity_counts_from(rows: list[tuple[str, int]]) -> SeverityCounts:
     return SeverityCounts(**{key: value for key, value in payload.items() if value})
 
 
+class RemediationOut(CamelModel):
+    """一条发现的修复方案（只给建议，不生成补丁）。"""
+
+    findingId: str
+    cwe: str
+    category: str
+    #: `ready` = L2 已独立验证；`needs_verification` = 先补验证再修。
+    readiness: str
+    title: str
+    steps: list[str]
+    verification: list[str]
+    note: str
+
+
 __all__ = [
     "FindingDetailOut",
     "FindingOut",
@@ -364,6 +378,7 @@ __all__ = [
     "FindingSummaryOut",
     "FindignStatusResponse",
     "PocOut",
+    "RemediationOut",
     "SeverityCounts",
     "StatusChangeRequest",
     "TimelineEntryOut",

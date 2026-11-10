@@ -30,6 +30,7 @@ from app.core.errors import ApiError
 from app.core.timeutil import now_utc
 from app.core.vocab import AuditAction, FindingCategory, FindingStatus, Severity, values
 from app.findings import attachments as attachments_mod
+from app.findings import remediation as remediation_mod
 from app.findings import sarif as sarif_mod
 from app.findings import service
 from app.findings.schemas import (
@@ -43,6 +44,7 @@ from app.findings.schemas import (
     FindingOut,
     FindingStatsOut,
     FindingSummaryOut,
+    RemediationOut,
     StatusChangeRequest,
 )
 
@@ -756,3 +758,23 @@ def _ascii_filename(name: str) -> str:
 def read_finding(findingId: str, _identity: ReadDep, db: DbDep) -> FindingOut:  # noqa: N803
     """详情。**时间线是倒序的**（最新在前）—— 契约 §2.2 明确要求。"""
     return service.to_detail(service.get_finding(db, findingId))
+
+
+@router.get(
+    "/{findingId}/remediation",
+    response_model=RemediationOut,
+    summary="一条发现的修复方案（只给建议，不生成补丁）",
+)
+def read_remediation(
+    findingId: str,  # noqa: N803
+    _identity: ReadDep,
+    db: DbDep,
+) -> RemediationOut:
+    """按 CWE 给最小正确修复做法 + 验证方式。
+
+    `readiness` 取决于证据强度：`verified`（L2）才 `ready`；否则先补
+    replay/differential 验证 —— 否则可能是在修一条误报。执行由人完成。
+    """
+    return RemediationOut.model_validate(
+        remediation_mod.plan(service.get_finding(db, findingId))
+    )
