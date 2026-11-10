@@ -238,6 +238,3 @@ suvex-api/tmpwork/
 
 # 浏览器 MCP 的本地缓存（2026-11-10）
 .playwright-mcp/
-
-# graphify 工具产物（本地索引，不入库）
-graphify-out/
