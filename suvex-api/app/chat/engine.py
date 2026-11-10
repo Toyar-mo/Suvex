@@ -164,7 +164,9 @@ HISTORY_MESSAGE_LIMIT = _env_int("SUPEX_CHAT_HISTORY_MESSAGE_LIMIT", 400)
 #: ★ 为什么既要条数上限又要总字符上限：条数管"记得多久"，字符管"一次调用
 #:   多贵"。一条 8000 字的工具输出和一条 3 字的消息在条数上是等价的，
 #:   在成本上差 2000 倍。只卡条数等于把成本交给运气。
-MAX_HISTORY_CHARS = _env_int("SUPEX_CHAT_MAX_HISTORY_CHARS", 400_000)
+# v1.85：400k → 150k。实测 232 条 / 228k 字符的会话每轮整包重发，
+# 首字延迟明显高于扫描 agent（每个 agent 只带自己的短上下文）。
+MAX_HISTORY_CHARS = _env_int("SUPEX_CHAT_MAX_HISTORY_CHARS", 150_000)
 
 #: 挂载技能正文的**总**预算（所有挂载技能加起来）。
 #:
