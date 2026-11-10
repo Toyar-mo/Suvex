@@ -71,6 +71,8 @@ from app.settings.schemas import (
     ExecutionSourceOut,
     FindingSlaIn,
     FindingSlaOut,
+    ModelRoutesIn,
+    ModelRoutesOut,
     NoticeRuleIn,
     NoticeRuleOut,
     NoticesOut,
@@ -791,3 +793,25 @@ def _target_shape_problem(kind: str, target: str) -> str | None:
         return None
 
     return f"未知的渠道类型：{kind}"
+
+
+@router.get("/model-routes", response_model=ModelRoutesOut, summary="按成功判据的模型路由")
+def read_model_routes(
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ModelRoutesOut:
+    """读单例路由。未配置时返回空对象（不是 404）—— 空 = 全部走默认。"""
+    row = settings_service.read_model_routes(db)
+    return ModelRoutesOut(routes=dict(row.routes or {}))
+
+
+@router.put("/model-routes", response_model=ModelRoutesOut, summary="改模型路由（覆盖式）")
+def write_model_routes(
+    payload: ModelRoutesIn,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ModelRoutesOut:
+    """`{goal: providerId}`。provider 是否存在由创建扫描时校验（避免此处
+    依赖 provider 表的当前状态 —— 路由可以先配、provider 后建）。"""
+    row = settings_service.write_model_routes(db, routes=payload.routes)
+    return ModelRoutesOut(routes=dict(row.routes or {}))

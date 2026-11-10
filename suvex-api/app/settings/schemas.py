@@ -378,3 +378,18 @@ class SettingsSnapshotOut(CamelModel):
     sandbox: SandboxOut
     notices: NoticesOut
     tokens: list[ApiTokenOut]
+
+
+class ModelRoutesOut(CamelModel):
+    """按扫描判据（findVulns / captureFlag / verifyFix）的 provider 路由。
+
+    未配置的 goal 回退到平台默认 provider；空对象 = 全部走默认。
+    """
+
+    routes: dict[str, str] = {}
+
+
+class ModelRoutesIn(StrictModel):
+    """覆盖式保存。空 key/value 会被丢弃（无法命中的路由没有意义）。"""
+
+    routes: dict[str, str] = {}

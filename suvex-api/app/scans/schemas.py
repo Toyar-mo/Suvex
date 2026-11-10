@@ -83,7 +83,7 @@ class ScanCreate(StrictModel):
     target: str = Field(default="", max_length=512)
     targetKind: TargetKindLiteral
     skills: list[str] = Field(min_length=1)
-    providerId: str = Field(min_length=1)
+    providerId: str = Field(default="auto", min_length=1, max_length=128)
     # ── 任务背景与成功判据（任务 12）──────────────────────
     #
     # `brief` 是**用户提供的任务上下文**：CTF 的题面与提示、

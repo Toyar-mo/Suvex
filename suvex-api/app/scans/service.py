@@ -415,7 +415,17 @@ def create_scan(
     ⚠️ 这条通道只给**已经落库的授权**用。它不做任何校验 ——
     传进来什么就写什么，所以调用方必须是"从 `scan_schedules` 原样搬"的代码。
     """
-    _require_provider(db, payload.providerId)
+    # ★ v1.81：按 goal 路由。`providerId="auto"`（或空）时查
+    #   `model_routes`，再回退平台默认；显式 provider 仍然优先。
+    from app.providers import routing
+
+    provider_id = routing.route_for_goal(db, payload.goal, payload.providerId)
+    if not provider_id:
+        raise ApiError.validation(
+            "没有可用的模型接入点：请在设置里添加 provider，或为这个判据配置模型路由。",
+            {"providerId": "必填"},
+        )
+    _require_provider(db, provider_id)
 
     normalized, check = targets.normalize_and_validate(payload.targetKind, payload.target)
     if not check.ok:
@@ -557,7 +567,7 @@ def create_scan(
         # ★ 初始必须是 queued —— 见模块 docstring。
         status=ScanStatus.QUEUED.value,
         skills=list(payload.skills),
-        provider_id=payload.providerId,
+        provider_id=provider_id,
         started_at=moment,
         # 终态列此刻必须为空：CHECK 约束会拦住"queued 却有 finished_at"。
         finished_at=None,

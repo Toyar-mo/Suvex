@@ -796,3 +796,27 @@ class KernelConfig(Base):
             f"<KernelConfig submit_mode={self.submit_mode!r} "
             f"max_wrong={self.max_wrong_submissions}>"
         )
+
+
+class ModelRoutes(Base):
+    """按扫描判据（`goal`）路由到不同 provider 的单例配置（v1.81）。
+
+    ## 为什么按 `goal` 而不是按"阶段"
+
+    `goal` 是**受理时就知道的**（findVulns / captureFlag / verifyFix），
+    而阶段（recon/exploit/report）只有模型跑到那一步才知道。按阶段路由
+    需要在循环内部换 gateway，当前扫描/对话都是一轮一个 gateway；按 goal
+    路由不改变循环结构，先解决"不同判据用不同模型"这个真实需求。
+
+    `routes` 是 `{goal: provider_id}`；未配置的 goal 回退到平台默认 provider。
+    """
+
+    __tablename__ = "model_routes"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=SINGLETON_ID)
+    routes: Mapped[dict[str, str]] = mapped_column(
+        JsonColumn, nullable=False, default=dict
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )

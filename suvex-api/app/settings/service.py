@@ -34,6 +34,7 @@ from app.core.vocab import ScanMode, values
 from app.settings.models import (
     SINGLETON_ID,
     KernelConfig,
+    ModelRoutes,
     NoticeRule,
     NotifyChannel,
     SandboxConfig,
@@ -334,3 +335,30 @@ def mark_channel_verified(
     db.commit()
     db.refresh(channel)
     return channel
+
+
+# ── 模型路由（v1.81）──────────────────────────────────────
+
+
+def read_model_routes(db: Session) -> ModelRoutes:
+    """读单例路由；不存在时建一行空配置（读接口不该 404）。"""
+    row = db.get(ModelRoutes, SINGLETON_ID)
+    if row is None:
+        row = ModelRoutes(id=SINGLETON_ID, routes={})
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+    return row
+
+
+def write_model_routes(db: Session, *, routes: dict[str, str]) -> ModelRoutes:
+    """覆盖式保存。空 key/value 直接丢弃，避免写入无法命中的路由。"""
+    row = read_model_routes(db)
+    row.routes = {
+        str(key).strip(): str(value).strip()
+        for key, value in routes.items()
+        if str(key).strip() and str(value).strip()
+    }
+    db.commit()
+    db.refresh(row)
+    return row
