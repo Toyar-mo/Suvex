@@ -398,7 +398,7 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
   const ready = plan.readiness === 'ready'
 
   return (
-    <Section title="修复方案" hint="按 CWE 生成 · 只给建议，不生成补丁">
+    <Section title="修复方案" hint="按 CWE 生成 · 建议与补丁草案，不能直接 apply">
       <div className="flex flex-col gap-2">
         <p className="text-sm text-ink">{plan.title}</p>
         <p className={cn('text-2xs', ready ? 'text-ink-muted' : 'text-signal-warn')}>
@@ -411,6 +411,19 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
             <li key={index}>{step}</li>
           ))}
         </ol>
+        {plan.patch && (
+          <div className="flex flex-col gap-1">
+            <pre className="overflow-x-auto rounded-sm border border-line bg-surface-raised p-2 text-2xs leading-relaxed text-ink">
+              {plan.patch.diff}
+            </pre>
+            <p className="text-2xs text-signal-warn">草案，不可直接 apply：</p>
+            <ul className="flex list-disc flex-col gap-0.5 pl-4 text-2xs text-ink-faint">
+              {plan.patch.caveats.map((caveat) => (
+                <li key={caveat}>{caveat}</li>
+              ))}
+            </ul>
+          </div>
+        )}
         {plan.verification.length > 0 && (
           <p className="text-2xs text-ink-faint">
             <span className="text-ink-muted">验证方式：</span>

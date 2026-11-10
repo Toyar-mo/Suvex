@@ -8,6 +8,14 @@
 
 import { api } from '@/lib/api'
 
+export interface RemediationPatch {
+  format: string
+  /** 恒为 false：草案不能直接 apply。 */
+  appliesDirectly: boolean
+  diff: string
+  caveats: string[]
+}
+
 export interface RemediationPlan {
   findingId: string
   cwe: string
@@ -17,6 +25,8 @@ export interface RemediationPlan {
   title: string
   steps: string[]
   verification: string[]
+  /** 已知 CWE 的结构示意；未知 CWE 为 null。 */
+  patch?: RemediationPatch | null
   note: string
 }
 
