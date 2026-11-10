@@ -22,7 +22,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
   ④ 中文输入法敲拼音按 Enter 不能把半截拼音发出去。
 */
 
-// ── 桩：工具 store（技能下拉的选项来源；MCP 下拉已在 v1.79 移除） ──
+// ── 桩：工具 store（技能 / MCP 挂载下拉的选项来源） ──
 //
 // ★ v1.18：对话页里有两个同名的 `loadTools`。`@/data/chat` 那个拉的是
 //   `/chat/tools`（说明文本），而 `@/data/tools` 的 `ensureToolsLoaded()`
@@ -32,7 +32,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('@/data/tools', () => ({
   ensureToolsLoaded: vi.fn(),
   useTools: vi.fn(() => ({
-    mcp: { servers: [] },
+    mcp: { servers: [{ name: 'fake-server' }, { name: 'team-mcp' }] },
     catalog: { tools: [] },
     skills: { total: 0, categories: [] },
     recipes: { total: 0, recipes: [] },
@@ -91,6 +91,9 @@ vi.mock('@/data/chat', () => ({
   refreshActiveMessages: vi.fn(async () => {}),
   // ★ v1.68：打开中断弹窗前清一次旧回执。工厂少导出 → 调用时炸，故必须列。
   clearLastInterrupt: vi.fn(),
+  // ★ v1.80：MCP 挂载区的真实试连结果。不导出就会在设置面板打开时炸
+  //   `No "fetchMcpStatus" export`。
+  fetchMcpStatus: vi.fn(async () => ({ mountedCount: 0, connectedCount: 0, servers: [] })),
 }))
 
 // `vi.mock` 会被提升，所以这里拿到的已是替身。
@@ -99,12 +102,14 @@ import {
   archiveSession,
   createSession,
   clearStaleSending,
+  fetchMcpStatus,
   interject,
   interruptTurn,
   listTurns,
   loadSessions,
   resumeTurn,
   sendMessage,
+  updateSettings,
   useChat,
 } from '@/data/chat'
 import type { ChatMessage, ChatSession, ChatState } from '@/data/chat'
@@ -354,6 +359,46 @@ describe('ChatPage — 拿不到会话列表时给重试，而不是伪装成空
     renderPage()
 
     expect(vi.mocked(ensureToolsLoaded)).toHaveBeenCalled()
+  })
+
+  it('★ v1.80：MCP 多选可勾选保存，并展示真实试连结果', async () => {
+    /*
+      上一版这个下拉被移除，原因是"勾了没效果"：引擎不认识
+      `mcpServerNames`，模型既看不到工具也调不了。现在恢复它之后，
+      界面必须同时做到两件事：
+        ① 勾选真的发 PATCH（不是只改本地）；
+        ② 旁边显示 `/mcp-status` 的真实结果 —— 只回显勾选等于让用户
+           继续猜"到底连上没有"。
+    */
+    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
+    vi.mocked(fetchMcpStatus).mockResolvedValue({
+      mountedCount: 2,
+      connectedCount: 1,
+      servers: [
+        { name: 'fake-server', connected: true, toolCount: 3 },
+        { name: 'team-mcp', connected: false, toolCount: 0, reason: '试连超时（>10 秒）' },
+      ],
+    })
+
+    renderPage('/chat?session=chat_1')
+    fireEvent.click(screen.getByRole('button', { name: '对话设置' }))
+    fireEvent.click(screen.getByRole('button', { name: 'MCP' }))
+
+    // 选项来自 `useTools()` 的 mcp 快照；这正是 v1.18 没接线的那份数据。
+    expect(screen.getByText('fake-server')).toBeTruthy()
+    expect(screen.getByText('team-mcp')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByRole('checkbox')[0])
+
+    await waitFor(() =>
+      expect(vi.mocked(updateSettings)).toHaveBeenCalledWith('chat_1', {
+        mcpServerNames: ['fake-server'],
+      }),
+    )
+    // 面板一打开就去真试连，并如实显示"挂了几台 / 通了几台 / 几台失败"。
+    await waitFor(() => expect(vi.mocked(fetchMcpStatus)).toHaveBeenCalledWith('chat_1'))
+    expect(screen.getByText(/已挂载 2 台 · 连通 1 台/)).toBeTruthy()
+    expect(screen.getByText(/1 台试连失败/)).toBeTruthy()
   })
 
   it('★ 已有列表时的失败**不抹掉列表**', () => {

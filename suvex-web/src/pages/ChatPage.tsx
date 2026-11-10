@@ -61,6 +61,8 @@ import {
   refreshActiveMessages,
   getChatSnapshot,
   clearLastInterrupt,
+  fetchMcpStatus,
+  type ChatMcpStatus,
   type ChatTurnRun,
 } from '@/data/chat'
 import type { PhasePayload } from '@/data/chat-stream'
@@ -92,6 +94,7 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Plug,
   Send,
   Settings2,
   Sparkles,
@@ -213,6 +216,50 @@ export function turnToolCount(items: ChatMessage[]): number {
   return items.filter((message) => message.role === 'tool').length
 }
 
+/**
+ * 「MCP 已挂载 N 台 · 连通 M 台」小字（v1.80）。
+ *
+ * ★ 为什么不能省：勾选本身只证明"存了一个偏好"。上一版这个下拉被移除，
+ *   原因正是"勾了没效果，用户无从判断"。这里把 `/mcp-status` 的**真实**
+ *   试连结果放在下拉旁边 —— 连上几台、哪台失败，一眼可见；失败原因在
+ *   `title` 里给全（鼠标悬停可读，不占版面）。
+ */
+function McpMountStatus({
+  status,
+  loading,
+}: {
+  status: ChatMcpStatus | null
+  loading: boolean
+}) {
+  if (loading) {
+    return <span className="text-2xs text-ink-faint">MCP 试连中…</span>
+  }
+  if (!status || status.mountedCount === 0) return null
+
+  const failed = status.servers.filter((server) => !server.connected)
+  const detail = failed.length
+    ? failed
+        .map((server) => `${server.name}：${server.reason ?? '连接失败'}`)
+        .join('\n')
+    : status.servers
+        .map((server) => `${server.name}：${server.toolCount} 个工具`)
+        .join('\n')
+
+  return (
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 text-2xs',
+        failed.length > 0 ? 'text-signal-risk' : 'text-ink-faint',
+      )}
+      title={detail}
+      data-mcp-status={failed.length > 0 ? 'failed' : 'ok'}
+    >
+      已挂载 {status.mountedCount} 台 · 连通 {status.connectedCount} 台
+      {failed.length > 0 && ` · ${failed.length} 台试连失败`}
+    </span>
+  )
+}
+
 export function ChatPage() {
   const {
     sessions,
@@ -279,7 +326,7 @@ export function ChatPage() {
     void loadSessions()
     // ⚠️ 这里有两个同名的 `loadTools`，它们拉的是**不同的东西**：
     //   · `@/data/chat` 的 `loadTools()` → `GET /chat/tools`，是给消息区做“这个模型能干什么”的说明文本；
-    //   · `@/data/tools` 的 `ensureToolsLoaded()` → `GET /kernel/{skills,mcp-servers}`，才是下面「技能」下拉的选项来源（MCP 下拉 v1.79 已移除，见挂载区注释）。
+    //   · `@/data/tools` 的 `ensureToolsLoaded()` → `GET /kernel/{skills,mcp-servers}`，才是下面「技能」「MCP」两个下拉的选项来源。
     //
     // ★ v1.18 修的是后者从来没被调用过：`skillOptions` / `mcpOptions` 读的是 `useTools()` 的快照，
     //   而那个 store 只有工具页会去加载。于是对话页的技能下拉永远是空的（显示“技能库是空的”），
@@ -331,11 +378,15 @@ export function ChatPage() {
     [providers],
   )
 
-  // 技能库：挂载下拉的选项来源。
+  // 技能库与 MCP 连接清单：挂载下拉的选项来源。
   const toolsStore = useTools()
   const skillOptions = useMemo(
     () => toolsStore.skills.categories.flatMap((group) => group.skills.map((s) => s.name)),
     [toolsStore.skills],
+  )
+  const mcpOptions = useMemo(
+    () => toolsStore.mcp.servers.map((server) => server.name),
+    [toolsStore.mcp],
   )
 
   // 项目建议：从已有会话里取，去重。这样它自动反映用户实际用过的名字，
@@ -462,8 +513,44 @@ export function ChatPage() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
   /** 只看回答：隐藏工作过程，只保留结论。 */
   const [answersOnly, setAnswersOnly] = useState(false)
-  /** 对话设置（项目 / 人格 / 审批 / 技能）收在齿轮后面，默认不占一行。 */
+  /** 对话设置（项目 / 人格 / 审批 / 技能 / MCP）收在齿轮后面，默认不占一行。 */
   const [settingsOpen, setSettingsOpen] = useState(false)
+  /**
+   * 本会话挂载的 MCP server 的**真实**试连结果。
+   *
+   * ★ 不能从 `active.mcpServerNames` 直接推：那只是偏好。真正决定模型能
+   *   不能调那些工具的是"此时此刻连不连得上"。所以面板打开、或改完挂载
+   *   之后都重新试连一次（见下面的 effect）。
+   */
+  const [mcpStatus, setMcpStatus] = useState<ChatMcpStatus | null>(null)
+  const [mcpStatusLoading, setMcpStatusLoading] = useState(false)
+  const activeId = active?.id
+  // 用字符串做依赖：数组每次会话刷新都是新引用，直接依赖会无谓重连。
+  const mountedMcpKey = (active?.mcpServerNames ?? []).join('\u0000')
+
+  useEffect(() => {
+    if (!settingsOpen || !activeId) {
+      setMcpStatus(null)
+      return
+    }
+    let cancelled = false
+    setMcpStatusLoading(true)
+    void fetchMcpStatus(activeId)
+      .then((next) => {
+        if (!cancelled) setMcpStatus(next)
+      })
+      .catch(() => {
+        // 试连失败是**正常结果**（server 挂了），不是页面错误。
+        // 具体原因由后端逐台返回；拿不到整个响应时才退化成"未知"。
+        if (!cancelled) setMcpStatus(null)
+      })
+      .finally(() => {
+        if (!cancelled) setMcpStatusLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [settingsOpen, activeId, mountedMcpKey])
   /**
    * 输入框里正在输入的 `@提及`。`null` = 不显示补全层。
    *
@@ -1305,21 +1392,27 @@ export function ChatPage() {
       />
 
       {/*
-        ★ v1.79：**移除**了「MCP」挂载下拉。
+        ★ v1.80：恢复「MCP」挂载下拉。
 
-        它把选中的服务器名存进 `session.mcp_server_names`，而对话引擎
-        （`app/chat/engine.py` 的工具循环）**没有任何 MCP 客户端** ——
-        既不会列出它们的工具，也不会调用。勾选与不勾选，对话行为一模一样。
+        v1.79 移除它的理由是真的：当时对话引擎没有任何 MCP 客户端，
+        勾选只存了一个偏好，模型既看不到工具也调不了。现在引擎在每轮
+        开始前按 `mcp_server_names` 并行试连、把工具以
+        `mcp__<server>__<tool>` 暴露给模型（见 `app/chat/mcp_tools.py`），
+        这个控件才第一次有真实效果。
 
-        这不是"还没做完"的猜测：引擎里与 MCP 有关的只有
-        `list_mcp_servers` / `add_mcp_server` 两个**管理配置**的工具；
-        真正消费 MCP 配置的是扫描链路（`scans/service.py` → `SolveSpec`
-        → strix）。所以这个下拉是纯装饰 —— 而一个"勾了却什么都不发生"
-        的控件，比没有它更糟：用户会以为 agent 在用那些服务器。
-
-        保留后端字段（历史会话里可能存着），等对话引擎真的接入 MCP
-        再把入口加回来；那时它应该有"已挂载 N 台"的真实效果可验证。
+        ★ 旁边那行状态是**必须**的：只把勾选回显出来，用户仍然无法判断
+          "它到底连上了没有"。`/mcp-status` 会真连一次，把已挂载/连通/
+          失败原因摆出来 —— 这样「勾了没效果」在界面上是可诊断的。
       */}
+      <MultiSelect
+        label="MCP"
+        icon={<Plug size={12} strokeWidth={2} aria-hidden="true" />}
+        options={mcpOptions}
+        selected={active.mcpServerNames ?? []}
+        emptyHint="还没配 MCP server（在工具页加）"
+        onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
+      />
+      <McpMountStatus status={mcpStatus} loading={mcpStatusLoading} />
 
       {/*
         ★ 「完成」与上面几个控件**同一行**、右对齐。

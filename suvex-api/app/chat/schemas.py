@@ -332,6 +332,31 @@ class ChatPersonaOut(CamelModel):
     summary: str
 
 
+class ChatMcpServerStatusOut(CamelModel):
+    """一台**已挂载** MCP server 在本会话里的真实试连结果。
+
+    ★ 与 `/kernel/mcp-servers` 的区别：那个是平台配置清单（部署者视角），
+      这个是"这个对话现在挂上了什么、连不连得上、有几个工具"——它必须
+      真连一次才有意义，所以单独一个端点，而不是把配置清单换个名字。
+    """
+
+    name: str
+    connected: bool
+    toolCount: int = 0
+    #: 连不上时的一句话原因；连上时为 `None`。
+    reason: str | None = None
+
+
+class ChatMcpStatusOut(CamelModel):
+    """`GET /chat/sessions/{id}/mcp-status` 的响应。"""
+
+    #: 会话设置里挂了几台（含已从平台删除的）。
+    mountedCount: int
+    #: 其中真正连上、并发现了工具的有几台。
+    connectedCount: int
+    servers: list[ChatMcpServerStatusOut]
+
+
 class ChatAttachmentOut(CamelModel):
     """一个已上传的对话附件。"""
 
