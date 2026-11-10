@@ -1,6 +1,6 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import ActivityFeed from '@/components/overview/ActivityFeed'
-import AttentionList from '@/components/overview/AttentionList'
+import { AttentionList } from '@/components/overview/AttentionList'
 import RiskScoreCard from '@/components/overview/RiskScoreCard'
 import ResourceStrip from '@/components/overview/ResourceStrip'
 import { OverviewTasks } from '@/components/overview/OverviewTasks'

@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { memo } from 'react'
 import { CalendarClock, Info, ShieldAlert, SquareCheckBig } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -92,7 +93,7 @@ export interface AttentionListProps {
   className?: string
 }
 
-export function AttentionList({ items, className }: AttentionListProps) {
+export const AttentionList = memo(function AttentionList({ items, className }: AttentionListProps) {
   /*
    * 过滤掉认不出的 kind —— 见文件头注释。
    *
@@ -200,6 +201,4 @@ export function AttentionList({ items, className }: AttentionListProps) {
       )}
     </section>
   )
-}
-
-export default AttentionList
+})

@@ -1,4 +1,5 @@
 import { scanStatusLabel } from '@/data/scan'
+import { memo, useMemo } from 'react'
 import type { Scan } from '@/data/scan'
 import { cn } from '@/lib/cn'
 
@@ -24,10 +25,11 @@ function formatWhen(iso: string | null): string {
  * 不额外发请求 —— 总览已经每 60 秒轮询一次 `/overview`，
  * 再单独拉一份任务列表会让两块数字在刷新窗口内互相打架。
  */
-export function OverviewTasks({ scans }: { scans: Scan[] }) {
-  const rows = [...scans]
-    .sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? ''))
-    .slice(0, 5)
+export const OverviewTasks = memo(function OverviewTasks({ scans }: { scans: Scan[] }) {
+  const rows = useMemo(
+    () => [...scans].sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, 5),
+    [scans],
+  )
 
   return (
     <section className="rounded-lg border border-line bg-surface">
@@ -93,4 +95,4 @@ export function OverviewTasks({ scans }: { scans: Scan[] }) {
       )}
     </section>
   )
-}
+})

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo,  useEffect, useMemo, useState } from 'react'
 import { loadTokenUsage, type TokenUsageSeries } from '@/data/tokenUsage'
 import { cn } from '@/lib/cn'
 
@@ -22,7 +22,7 @@ function compact(value: number): string {
  * 左侧是分项与命中率，右侧是按天折线。**没有缓存列**时明确标注
  * `cacheTracked=false`：缓存读恒 0，命中率显示 `—`，不估算。
  */
-export function TokenUsagePanel() {
+export const TokenUsagePanel = memo(function TokenUsagePanel() {
   const [days, setDays] = useState<number>(30)
   const [data, setData] = useState<TokenUsageSeries | null>(null)
   const [error, setError] = useState(false)
@@ -169,4 +169,4 @@ export function TokenUsagePanel() {
         </div>
     </section>
   )
-}
+})
