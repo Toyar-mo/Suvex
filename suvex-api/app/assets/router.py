@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.assets import service
-from app.assets.schemas import AssetListOut, AssetOut, AssetSummaryOut
+from app.assets.schemas import AssetListOut, AssetOut, AssetSummaryOut, CoverageOut
 from app.auth.deps import Identity, require_read
 from app.core.db import get_db
 
@@ -60,3 +60,24 @@ def list_assets(
         truncated=truncated,
         summary=AssetSummaryOut.model_validate(service.summary_all(db)),
     )
+
+
+@router.get(
+    "/assets/coverage",
+    response_model=CoverageOut,
+    summary="一个目标的覆盖度快照（测过什么 / 排除了什么）",
+)
+def asset_coverage(
+    _identity: ReadDep,
+    db: DbDep,
+    target: Annotated[
+        str,
+        Query(min_length=1, max_length=512, description="扫描目标（与 /assets 同一口径）"),
+    ],
+) -> CoverageOut:
+    """返回同一目标历史上 `record_coverage` 与 `ruled-out` 的记录。
+
+    只列**有记录**的面；没有记录不等于没测过，也不等于有缺口 —— 它是
+    "没有认知"。界面不要把两者混为一谈（见 `CoverageOut` 的说明）。
+    """
+    return CoverageOut.model_validate(service.coverage_for_target(db, target=target))

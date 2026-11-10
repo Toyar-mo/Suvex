@@ -77,3 +77,35 @@ class AssetListOut(CamelModel):
     #: 否则用户会把"只返回了前 500 个"当成"总共就 500 个"。
     truncated: bool
     summary: AssetSummaryOut
+
+
+class CoverageItemOut(CamelModel):
+    """覆盖度地图里的一条记录（一个测过的面 / 一条已排除方向）。"""
+
+    factKey: str
+    summary: str
+    detail: str = ""
+    confidence: str
+    trustLevel: str = ""
+    recordedBy: str = ""
+    updatedAt: str = ""
+    version: int = 1
+
+
+class CoverageStatsOut(CamelModel):
+    tested: int = 0
+    ruledOut: int = 0
+
+
+class CoverageOut(CamelModel):
+    """一个目标的覆盖度快照。
+
+    ⚠️ 只列**有记录**的面。没有记录不等于没测过，也不等于有缺口 ——
+    它是"没有认知"，界面不能把两者混为一谈。
+    """
+
+    target: str
+    tested: list[CoverageItemOut]
+    ruledOut: list[CoverageItemOut]
+    truncated: bool = False
+    stats: CoverageStatsOut

@@ -1116,6 +1116,10 @@ class SharedState:
     notes: dict[str, str] = field(default_factory=dict)
     #: 覆盖度：surface → {"risk": str, "outcome": str, "by": str}。
     coverage: dict[str, dict[str, str]] = field(default_factory=dict)
+    #: ★ v1.81：可选黑板书。有它时 `record_coverage` 把覆盖记录同步落库
+    #: （覆盖度地图的数据来源）。与 notes/threat_model 不同：覆盖记录是
+    #: "测过什么"的长期认知，跨扫描有价值，所以这里只把这一种落库。
+    fact_store: Any = None
     #: ★ v0.70：共享威胁模型（学 strix 的 get_threat_model / amend_threat_model）。
     #:
     #: 与 `notes` 的区别：notes 是**平铺的事实**（"发现 X 路径没鉴权"），
@@ -1301,6 +1305,24 @@ class SharedState:
         self.coverage[key] = {"risk": risk.strip(), "outcome": outcome.strip(), "by": by}
         if prev and prev.get("by") != by:
             self.coverage[key]["by"] = f"{prev.get('by')} → {by}"
+
+        # ★ v1.81：同步落库。内存态在扫描结束后就没了，覆盖度地图需要
+        #   "这个目标历史上测过什么" —— 写失败只 warn，不能打断编排。
+        store = self.fact_store
+        if store is None:
+            return
+        slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")[:120] or "unnamed"
+        try:
+            store.record(
+                fact_key=f"surface/{slug}",
+                summary=outcome.strip()[:300] or "（未写结论）",
+                category="surface",
+                confidence="tentative",
+                detail=risk.strip() or None,
+                recorded_by=by,
+            )
+        except Exception:  # noqa: BLE001 - 黑板写失败不影响覆盖记录的内存态
+            logger.warning("覆盖记录写黑板失败（不影响编排）", exc_info=True)
 
     def render_notes(self) -> str:
         if not self.notes:
@@ -1553,6 +1575,15 @@ class AgentCoordinator:
     """整场多智能体的图、状态、共享状态。**内存态，不碰 DB。**"""
 
     shared: SharedState = field(default_factory=SharedState)
+    #: ★ v1.81：可选黑板书（`app.facts.store.DbFactStore`）。有它时
+    #: `record_coverage` 会把覆盖记录同步落库，扫描结束后仍可查 ——
+    #: 这是「覆盖度地图」的数据来源。None = 纯逻辑测试/CTF 路径。
+    fact_store: Any = None
+
+    def __post_init__(self) -> None:
+        # `record_coverage` 在 `SharedState` 上；把同一个 store 挂过去，
+        # 避免 coordinator 与 shared 各存一份、某处漏传。
+        self.shared.fact_store = self.fact_store
     nodes: dict[str, AgentNode] = field(default_factory=dict)
     #: 本场总共已经花掉的 LLM 轮次（所有 agent 累计），受 `total_budget` 约束。
     turns_used: int = 0
@@ -3002,6 +3033,8 @@ async def run_multi_agent(
         # 子智能体 `agent_finish` 登记的东西必须与 `_timeout_outcome` 收割的
         # 是同一个 list，否则超时路径依然拿不到子智能体交出来的发现。
         finding_sink=getattr(spec, "finding_sink", None),
+        # ★ v1.81：覆盖记录同步落库（覆盖度地图的数据来源）。
+        fact_store=getattr(spec, "fact_store", None),
     )
     root = coord.add_root()
     root_outcome = SolveOutcome()

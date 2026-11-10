@@ -44,11 +44,14 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.vocab import FindingStatus, ScanStatus
+from app.facts.models import ScanFact
+from app.facts.service import normalize_target
 from app.findings.models import Finding
 from app.scans.models import Scan
 
@@ -391,4 +394,63 @@ def summary(assets: list[dict]) -> dict:
         # 只为让调用方知道这个字段不是随便给的：它是服务端时间，
         # 客户端要算"多久之前"应该用自己的时钟
         "generatedAt": now,
+    }
+
+
+def coverage_for_target(
+    db: Session, *, target: str, limit: int = 200
+) -> dict[str, Any]:
+    """同一目标的覆盖度快照（v1.81 覆盖度地图）。
+
+    ## 数据来源与边界
+
+    来自扫描期间 `record_coverage` 落库的 `surface/*` 事实与 `ruled-out`
+    事实。它回答的是"这个目标上测过什么、结论是什么、谁测的、什么时候"。
+
+    **不推断"哪些没测"**：没测的面没有任何记录，凭空补全等于编造。
+    真正的"缺口"要靠上一次扫描的 coverage 声明（`surface` 事实）与
+    端点清单的差集 —— 那需要扫描侧先声明"计划测什么"，是下一步。
+
+    `target` 在写入口已归一（`normalize_target`），这里同样归一后再比。
+    """
+    key = normalize_target(target)
+    if not key:
+        return {
+            "target": "",
+            "tested": [],
+            "ruledOut": [],
+            "truncated": False,
+            "stats": {"tested": 0, "ruledOut": 0},
+        }
+    rows = list(
+        db.execute(
+            select(ScanFact)
+            .where(
+                ScanFact.target == key,
+                ScanFact.category.in_(("surface", "ruled-out")),
+            )
+            .order_by(ScanFact.updated_at.desc())
+            .limit(limit)
+        ).scalars()
+    )
+    tested: list[dict[str, Any]] = []
+    ruled_out: list[dict[str, Any]] = []
+    for row in rows:
+        item = {
+            "factKey": row.fact_key,
+            "summary": row.summary,
+            "detail": row.detail or "",
+            "confidence": row.confidence,
+            "trustLevel": row.trust_level or "",
+            "recordedBy": row.recorded_by,
+            "updatedAt": row.updated_at.isoformat() if row.updated_at else "",
+            "version": row.version,
+        }
+        (ruled_out if row.category == "ruled-out" else tested).append(item)
+    return {
+        "target": key,
+        "tested": tested,
+        "ruledOut": ruled_out,
+        "truncated": len(rows) >= limit,
+        "stats": {"tested": len(tested), "ruledOut": len(ruled_out)},
     }
