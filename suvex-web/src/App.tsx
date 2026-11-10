@@ -27,6 +27,7 @@ import {
   SchedulesPage,
   SettingsPage,
   SkillsPage,
+  CredentialsPage,
   ToolsPage,
 } from '@/pages'
 import LoginPage from '@/pages/LoginPage'
@@ -77,6 +78,7 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   //   路由表照常生成，`if (!Page) return null` 静默返回空：
   //   侧栏点得动、页面全白，不报错也不警告。
   skills: SkillsPage,
+  credentials: CredentialsPage,
   settings: SettingsPage,
 }
 

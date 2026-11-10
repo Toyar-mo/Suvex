@@ -4,6 +4,7 @@ import {
   BookOpen,
   FileText,
   Flag,
+  KeyRound,
   FolderOpen,
   Layers,
   MessagesSquare,
@@ -244,6 +245,15 @@ export const NAV_ITEMS: NavItem[] = [
     label: '报告',
     icon: FileText,
     blurb: '把一次完成的扫描整理成可以直接交付给他人的报告。',
+    inMobileTabBar: false,
+  },
+  {
+    id: 'credentials',
+    path: '/credentials',
+    group: 'output',
+    label: '凭据',
+    icon: KeyRound,
+    blurb: '扫描中拿到的凭据：加密保存、脱敏展示、复用打分。',
     inMobileTabBar: false,
   },
   {
