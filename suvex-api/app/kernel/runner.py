@@ -2750,13 +2750,13 @@ class LlmGateway:
 
         from app.providers.retry import backoff_ms as _backoff_ms
 
-        attempts = max(1, int(getattr(self.retry_policy, "connect_retries", 3)) + 1)
+        attempts = max(1, int(getattr(self.retry_policy, "stream_retries", 2)) + 1)
         last_error: Exception | None = None
         response: httpx.Response | None = None
         client: httpx.AsyncClient | None = None
         for attempt in range(attempts):
             if attempt:
-                interval = int(getattr(self.retry_policy, "connect_interval_ms", 0))
+                interval = int(getattr(self.retry_policy, "stream_interval_ms", 0))
                 await asyncio.sleep(_backoff_ms(attempt - 1, interval) / 1000)
             client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout), trust_env=False)
             try:
