@@ -29,6 +29,7 @@ import {
   SkillsPage,
   AgentsPage,
   ModelsPage,
+  ApprovalsPage,
   CredentialsPage,
   ToolsPage,
 } from '@/pages'
@@ -82,6 +83,7 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   skills: SkillsPage,
   agents: AgentsPage,
   models: ModelsPage,
+  approvals: ApprovalsPage,
   credentials: CredentialsPage,
   settings: SettingsPage,
 }

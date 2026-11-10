@@ -64,6 +64,7 @@ from app.chat import workspaces as chat_workspaces
 from app.chat.prompts import CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
     ChatApprovalIn,
+    ChatApprovalOut,
     ChatAttachmentOut,
     ChatChallengeRef,
     ChatFileExportIn,
@@ -845,6 +846,23 @@ async def mcp_status(
     )
     catalog = await chat_mcp_tools.discover_mounted(db, session)
     return ChatMcpStatusOut.model_validate(catalog.status_payload())
+
+
+@router.get("/chat/approvals", response_model=list[ChatApprovalOut], summary="跨会话审批记录")
+def list_chat_approvals(
+    identity: Reader,
+    db: DbSession,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[ChatApprovalOut]:
+    from app.chat import approvals as approvals_mod
+
+    return [
+        ChatApprovalOut.model_validate(item)
+        for item in approvals_mod.list_approvals(
+            db, created_by=identity.user_id or "", limit=min(max(limit, 1), 200), status=status
+        )
+    ]
 
 
 @router.get("/chat/personas", response_model=list[ChatPersonaOut])

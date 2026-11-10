@@ -32,6 +32,7 @@ export const ToolsPage = lazy(() => import('./ToolsPage'))
 export const SkillsPage = lazy(() => import('./SkillsPage'))
 export const AgentsPage = lazy(() => import('./AgentsPage'))
 export const ModelsPage = lazy(() => import('./ModelsPage'))
+export const ApprovalsPage = lazy(() => import('./ApprovalsPage'))
 export const CredentialsPage = lazy(() => import('./CredentialsPage'))
 /**
  * ★ v0.93：对话页。

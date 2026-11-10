@@ -655,3 +655,15 @@ __all__ = [
     "ChatSessionOut",
     "ChatSettingsIn",
 ]
+
+
+class ChatApprovalOut(CamelModel):
+    id: str
+    sessionId: str
+    sessionTitle: str
+    toolName: str
+    toolArgs: dict[str, Any] = {}
+    status: str
+    decidedBy: str | None = None
+    decidedAt: str | None = None
+    createdAt: str

@@ -3,6 +3,7 @@ import {
   AlarmClock,
   BookOpen,
   Bot,
+  ClipboardCheck,
   Cpu,
   FileText,
   Flag,
@@ -295,6 +296,16 @@ export const NAV_ITEMS: NavItem[] = [
         而这一页回答"能力边界是什么、为什么有几个不可用"，
         它还要管外部进程的拉起与试连。塞进设置页只会让那一页更长更混。
     */
+    inMobileTabBar: false,
+  },
+  {
+    id: 'approvals',
+    path: '/approvals',
+    group: 'config',
+    label: '审批记录',
+    shortLabel: '审批',
+    icon: ClipboardCheck,
+    blurb: '跨会话查看工具调用的批准/拒绝记录：谁、什么工具、什么参数、何时。',
     inMobileTabBar: false,
   },
   {
