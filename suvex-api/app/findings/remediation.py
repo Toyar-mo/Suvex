@@ -33,10 +33,18 @@ class RemedyRule:
     title: str
     steps: tuple[str, ...]
     verification: tuple[str, ...]
+    #: 统一 diff **草案**（`-` 旧行 / `+` 新行）。空 = 该类没有可给出的
+    #: 示例；即使有，也永远不能直接 apply —— 见 `plan()` 的 caveats。
+    patch: tuple[str, ...] = ()
 
 
-def _rule(title: str, steps: tuple[str, ...], verification: tuple[str, ...]) -> RemedyRule:
-    return RemedyRule(title=title, steps=steps, verification=verification)
+def _rule(
+    title: str,
+    steps: tuple[str, ...],
+    verification: tuple[str, ...],
+    patch: tuple[str, ...] = (),
+) -> RemedyRule:
+    return RemedyRule(title=title, steps=steps, verification=verification, patch=patch)
 
 
 _RULES.update(
@@ -52,6 +60,10 @@ _RULES.update(
                 "用同一请求的 replay 验证：注入 payload 与正常值返回结构一致。",
                 "用 differential 对照：布尔/时间盲注的响应差异消失。",
             ),
+            (
+                '- cursor.execute("SELECT * FROM users WHERE id = " + user_id)',
+                '+ cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))',
+            ),
         ),
         "CWE-79": _rule(
             "XSS：上下文输出编码 + CSP",
@@ -63,6 +75,10 @@ _RULES.update(
             (
                 "用无头浏览器执行 payload，确认脚本不再执行（XBOW 同款 validator）。",
                 "replay 确认响应中的 payload 已被编码，而不是原样回显。",
+            ),
+            (
+                "- element.innerHTML = userInput",
+                "+ element.textContent = userInput  // 或按上下文做输出编码",
             ),
         ),
         "CWE-22": _rule(
@@ -76,6 +92,12 @@ _RULES.update(
                 "differential：`../`、编码变体、绝对路径都应返回拒绝，而不是文件内容。",
                 "replay 确认合法文件仍可正常读取（修复没有误伤功能）。",
             ),
+            (
+                "- path = os.path.join(base, user_path)",
+                "+ path = os.path.realpath(os.path.join(base, user_path))",
+                "+ if os.path.commonpath([os.path.realpath(base), path]) != os.path.realpath(base):",
+                '+     raise ValueError("outside root")',
+            ),
         ),
         "CWE-918": _rule(
             "SSRF：出站白名单 + 解析后校验",
@@ -87,6 +109,13 @@ _RULES.update(
             (
                 "differential：内网/metadata/等价 IP 写法都应被拒绝，公网白名单仍可用。",
                 "检查错误信息不回显内网地址或响应内容。",
+            ),
+            (
+                "- return requests.get(user_url)",
+                "+ ip = socket.gethostbyname(urlsplit(user_url).hostname)",
+                "+ if not is_public(ip) or host not in ALLOWED_HOSTS:",
+                '+     raise ValueError("blocked")',
+                "+ return requests.get(user_url, allow_redirects=False)",
             ),
         ),
         "CWE-306": _rule(
@@ -111,6 +140,10 @@ _RULES.update(
             (
                 "确认代码与镜像里不再出现该值；旧凭据已失效。",
                 "启动自检：缺少必要环境变量时明确失败，而不是回退到默认值。",
+            ),
+            (
+                '- API_KEY = "sk-live-..."',
+                '+ API_KEY = os.environ["API_KEY"]  # 缺失时启动失败',
             ),
         ),
         "CWE-200": _rule(
@@ -170,8 +203,22 @@ def plan(finding: Any) -> dict[str, Any]:
         "title": rule.title,
         "steps": steps,
         "verification": list(rule.verification),
+        "patch": (
+            {
+                "format": "unified-diff-draft",
+                "appliesDirectly": False,
+                "diff": "\n".join(rule.patch),
+                "caveats": [
+                    "这是结构示意，不是针对本仓库的补丁。",
+                    "应用前必须替换成真实的文件路径、框架与类型。",
+                    "改完必须跑仓库测试与该发现的 replay/differential。",
+                ],
+            }
+            if rule.patch
+            else None
+        ),
         "note": (
-            "本计划只给建议，不生成补丁、不改代码；执行由人完成。"
+            "补丁是草案，不能直接 apply；计划与代码修改都由人完成。"
             if verified
             else "先补验证：未达到 L2 的发现按建议修复，可能是在修一条误报。"
         ),

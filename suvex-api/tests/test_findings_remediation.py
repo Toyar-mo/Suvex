@@ -56,3 +56,18 @@ def test_cwe_is_normalized() -> None:
 
     assert out["cwe"] == "CWE-79"
     assert "XSS" in out["title"]
+
+
+def test_known_cwe_returns_diff_draft_that_is_not_applicable() -> None:
+    out = plan(_finding(cwe="CWE-89"))
+
+    patch = out["patch"]
+
+    assert patch["format"] == "unified-diff-draft"
+    assert patch["appliesDirectly"] is False
+    assert "cursor.execute" in patch["diff"]
+    assert any("仓库" in caveat for caveat in patch["caveats"])
+
+
+def test_unknown_cwe_has_no_patch_draft() -> None:
+    assert plan(_finding(cwe="CWE-9999"))["patch"] is None
