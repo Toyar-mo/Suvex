@@ -48,3 +48,8 @@ export async function revealCredential(id: string): Promise<{ secret: string }> 
 export async function loadReusePlan(id: string): Promise<ReusePlan> {
   return api.get<ReusePlan>(`/credentials/${encodeURIComponent(id)}/reuse-plan`)
 }
+
+
+export async function deleteCredential(id: string): Promise<{ deleted: boolean }> {
+  return api.del<{ deleted: boolean }>(`/credentials/${encodeURIComponent(id)}`)
+}

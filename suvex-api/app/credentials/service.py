@@ -63,6 +63,15 @@ def list_items(
     return list(db.execute(stmt).scalars())
 
 
+def delete(db: Session, credential_id: str) -> bool:
+    row = db.get(Credential, credential_id)
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
 def reveal(db: Session, credential_id: str) -> str:
     row = db.get(Credential, credential_id)
     if row is None:

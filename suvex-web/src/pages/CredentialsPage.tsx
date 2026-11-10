@@ -1,7 +1,13 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
-import { createCredential, loadCredentials, loadReusePlan, revealCredential } from '@/data/credentials'
+import {
+  createCredential,
+  deleteCredential,
+  loadCredentials,
+  loadReusePlan,
+  revealCredential,
+} from '@/data/credentials'
 import type { Credential, ReusePlan } from '@/data/credentials'
 import { showToast } from '@/data/toast-store'
 import { useEffect, useState } from 'react'
@@ -61,6 +67,16 @@ export function CredentialsPage() {
       )
     } catch (err) {
       showToast({ tone: 'risk', message: err instanceof Error ? err.message : '读取失败' })
+    }
+  }
+
+  async function remove(id: string) {
+    try {
+      await deleteCredential(id)
+      await reload()
+      showToast({ tone: 'ok', message: '已删除' })
+    } catch {
+      showToast({ tone: 'risk', message: '删除失败' })
     }
   }
 
@@ -177,13 +193,22 @@ export function CredentialsPage() {
                         {revealed[item.id] ? (
                           <code className="font-mono text-2xs text-signal-warn">{revealed[item.id]}</code>
                         ) : (
-                          <button
-                            type="button"
-                            className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
-                            onClick={() => void reveal(item.id)}
-                          >
-                            显示明文
-                          </button>
+                          <span className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
+                              onClick={() => void reveal(item.id)}
+                            >
+                              显示明文
+                            </button>
+                            <button
+                              type="button"
+                              className="text-2xs text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
+                              onClick={() => void remove(item.id)}
+                            >
+                              删除
+                            </button>
+                          </span>
                         )}
                       </td>
                     </tr>

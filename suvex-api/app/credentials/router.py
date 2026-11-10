@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.audit import service as audit
 from app.auth.deps import Identity, require_admin, require_read, require_scan
 from app.core.db import get_db
+from app.core.errors import ApiError
 from app.credentials import service
 from app.credentials.schemas import CredentialIn, CredentialOut, ReusePlanOut, RevealOut
 
@@ -92,3 +93,22 @@ def reuse_plan(
     db: DbDep,
 ) -> ReusePlanOut:
     return ReusePlanOut.model_validate(service.reuse_plan(db, credentialId))
+
+
+@router.delete("/{credentialId}", summary="删除一条凭据")
+def delete_credential(
+    credentialId: str,  # noqa: N803
+    identity: ScanDep,
+    request: Request,
+    db: DbDep,
+) -> dict[str, bool]:
+    if not service.delete(db, credentialId):
+        raise ApiError.not_found("凭据不存在")
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action="credential.delete",
+        summary="删除了一条凭据",
+        target=credentialId,
+    )
+    return {"deleted": True}

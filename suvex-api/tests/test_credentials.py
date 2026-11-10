@@ -56,3 +56,16 @@ def test_reuse_plan_is_low_for_unrelated_target(db_session: Session) -> None:
 
     assert plan["score"] <= 0.4
     assert plan["basis"]
+
+
+def test_delete_credential(db_session: Session) -> None:
+    row = service.create(
+        db_session,
+        kind="password",
+        username="admin",
+        secret="x",
+        target="http://a.test",
+    )
+
+    assert service.delete(db_session, row.id) is True
+    assert service.delete(db_session, row.id) is False
