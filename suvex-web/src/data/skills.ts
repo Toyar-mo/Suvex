@@ -522,3 +522,16 @@ export function validateDraft(draft: {
   }
   return null
 }
+
+
+/** 导入一个技能 zip（v1.83）。只接受文本附件。 */
+export async function importSkillZip(
+  file: File,
+): Promise<{ name: string; category: string; files: string }> {
+  const form = new FormData()
+  form.append('file', file, file.name)
+  return api.upload<{ name: string; category: string; files: string }>(
+    '/kernel/skills/import',
+    form,
+  )
+}

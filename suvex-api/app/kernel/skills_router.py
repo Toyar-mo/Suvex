@@ -25,7 +25,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request, status
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, File, Request, UploadFile, status
 from sqlalchemy.orm import Session
 
 from app.audit import service as audit
@@ -432,3 +434,29 @@ def delete_kernel_skill(
 
 
 __all__ = ["router"]
+
+
+@router.post("/skills/import", summary="导入技能压缩包（zip）")
+async def import_kernel_skill(
+    request: Request,
+    file: Annotated[UploadFile, File(description="包含 SKILL.md 的 zip")],
+    identity: Identity = AdminDep,
+    db: Session = DbDep,
+) -> dict[str, str]:
+    """只接受文本附件；路径穿越/超限由导入器拒绝。"""
+    from app.kernel import skill_import, skill_store
+
+    data = await file.read()
+    try:
+        result = skill_import.import_zip(data)
+    except skill_store.SkillWriteError as exc:
+        raise ApiError.validation(str(exc), {"detail": exc.message}) from exc
+
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_SKILL_CREATE,
+        summary=f"导入技能 {result['category']}/{result['name']}",
+        detail={"files": result["files"], "source": "zip"},
+    )
+    return result

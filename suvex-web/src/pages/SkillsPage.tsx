@@ -17,12 +17,14 @@ import {
   loadSkills,
   loadsOf,
   updateSkill,
+  importSkillZip,
   useSkills,
   usageSummary,
   validateDraft,
   type SkillSummary,
 } from '@/data/skills'
 import { cn } from '@/lib/cn'
+import { showToast } from '@/data/toast-store'
 import {
   AlertCircle,
   BookOpen,
@@ -338,6 +340,30 @@ export function SkillsPage() {
                     全部技能
                     <span className="ml-1.5 font-normal text-ink-faint">{list.total}</span>
                   </h2>
+                  <label className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-muted hover:border-line-strong hover:text-ink">
+                    <input
+                      type="file"
+                      accept=".zip,application/zip"
+                      className="hidden"
+                      onChange={(event) => {
+                        const file = event.target.files?.[0]
+                        if (!file) return
+                        void importSkillZip(file)
+                          .then(async () => {
+                            await loadSkills()
+                            showToast({ tone: 'ok', message: '技能包已导入' })
+                          })
+                          .catch((err: unknown) => {
+                            showToast({
+                              tone: 'risk',
+                              message: err instanceof Error ? err.message : '导入失败',
+                            })
+                          })
+                        event.target.value = ''
+                      }}
+                    />
+                    导入 zip
+                  </label>
                   <Button
                     size="sm"
                     onClick={openCreate}
