@@ -28,7 +28,7 @@ import { buildStageModel, PHASE_INDEX, PHASES, type StageModel } from './stage-m
  * | ---------------- | ------------------------------- | ------------------- |
  * | 粒子流、扫描光带 | 实时连接存活                    | 立即停止，粒子排空  |
  * | 信号 + 爆炸      | **一条真实的新事件**            | 不动                |
- * | 智能体公转       | 智能体在当前阶段（最近 12 条）  | 冻结                |
+ * | 智能体公转       | 智能体在当前阶段（最近 12 条）  | 降速为待机，不冻结  |
  *
  * 首次加载的历史（种子）不放信号；计数与签子都只取最近 12 条事件。
  *
@@ -261,7 +261,12 @@ export function ActivityFlowStage({
           背景亮度下的必要补偿。
       */
       const strength = palette.dark ? 1 : 0.45
-      if (live) orbitPhase += dt
+      /*
+        公转在断线时**降速待机**而不是冻结。
+        数据含义没变（智能体仍在那个阶段），冻结只会让整块舞台看起来
+        挂了；降速则明确表达"没有新事件，但画面还活着"。
+      */
+      orbitPhase += live ? dt : dt * 0.35
 
       // 背景点阵（很淡，只负责让舞台有"纵深"）
       ctx.clearRect(0, 0, width, height)
@@ -522,7 +527,10 @@ export function ActivityFlowStage({
         ctx.arc(node.x, node.y, 62, 0, Math.PI * 2)
         ctx.fill()
 
-        const pulse = live ? Math.sin(now * 0.0022) * 2 : 0
+        // 断线时呼吸继续，但更慢、更小 —— 待机，而不是"冻住"。
+        const pulse = live
+          ? Math.sin(now * 0.0022) * 2
+          : Math.sin(now * 0.0011) * 1.2
         ctx.strokeStyle = rgba(palette.accent, 0.18 * strength)
         ctx.lineWidth = 1
         ctx.beginPath()
