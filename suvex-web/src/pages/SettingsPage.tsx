@@ -6,9 +6,7 @@ import PlatformPanel from '@/components/settings/PlatformPanel'
 import NotifyPanel from '@/components/settings/NotifyPanel'
 import { BenchmarkCasesPanel } from '@/components/settings/BenchmarkCasesPanel'
 import { BenchmarkPanel } from '@/components/settings/BenchmarkPanel'
-import { ModelRoutesPanel } from '@/components/settings/ModelRoutesPanel'
 import { PurplePanel } from '@/components/settings/PurplePanel'
-import ProviderPanel from '@/components/settings/ProviderPanel'
 import SandboxPanel from '@/components/settings/SandboxPanel'
 import ScanRetentionPanel from '@/components/settings/ScanRetentionPanel'
 import UsersPanel from '@/components/settings/UsersPanel'
@@ -40,8 +38,6 @@ import { useEffect, useMemo, useState } from 'react'
 
 /** 面板清单 —— 导航与正文共用一份，避免加了面板忘了加导航 */
 const SECTIONS = [
-  { id: 'providers', label: '模型服务' },
-  { id: 'model-routes', label: '模型路由' },
   { id: 'sandbox', label: '沙箱' },
   // ★ v0.60：原来的一节「CTF」拆成两节 —— 「CTF 解题」只放只影响解题的设置，
   //   「内核通用能力」放对所有场景共用的设置（默认镜像 / 回合预算 / 备用模型 /
@@ -80,7 +76,7 @@ const SECTIONS = [
 ] as const
 
 export function SettingsPage() {
-  const { accounts, sandbox, notices, tokens, status, error } = useSettings()
+  const { sandbox, notices, tokens, status, error } = useSettings()
   const { user } = useAuth()
 
   /*
@@ -149,8 +145,6 @@ export function SettingsPage() {
               />
             ) : (
               <>
-                <ProviderPanel accounts={accounts} />
-                <ModelRoutesPanel accounts={accounts} />
                 <SandboxPanel config={sandbox} />
                 {/*
                 CTF2 面板**自己读自己的 store**（`data/kernel.ts`），

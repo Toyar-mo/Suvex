@@ -28,6 +28,7 @@ import {
   SettingsPage,
   SkillsPage,
   AgentsPage,
+  ModelsPage,
   CredentialsPage,
   ToolsPage,
 } from '@/pages'
@@ -80,6 +81,7 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   //   侧栏点得动、页面全白，不报错也不警告。
   skills: SkillsPage,
   agents: AgentsPage,
+  models: ModelsPage,
   credentials: CredentialsPage,
   settings: SettingsPage,
 }

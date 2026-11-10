@@ -3,6 +3,7 @@ import {
   AlarmClock,
   BookOpen,
   Bot,
+  Cpu,
   FileText,
   Flag,
   KeyRound,
@@ -294,6 +295,16 @@ export const NAV_ITEMS: NavItem[] = [
         而这一页回答"能力边界是什么、为什么有几个不可用"，
         它还要管外部进程的拉起与试连。塞进设置页只会让那一页更长更混。
     */
+    inMobileTabBar: false,
+  },
+  {
+    id: 'models',
+    path: '/models',
+    group: 'config',
+    label: '模型管理',
+    shortLabel: '模型',
+    icon: Cpu,
+    blurb: '模型接入点与按成功判据的路由：换模型、验证连通性、配置默认回退。',
     inMobileTabBar: false,
   },
   {
