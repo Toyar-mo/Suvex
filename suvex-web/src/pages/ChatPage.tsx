@@ -978,8 +978,15 @@ export function ChatPage() {
     try {
       await resumeTurn(active.id, stuckTurn.id)
       setStuckTurn(null)
-    } catch {
-      /* 保持提示条，让用户能重试 */
+    } catch (err) {
+      /*
+        不能只把异常吞掉。服务端拒绝接手时（轮次已经结束 / 还在跑）
+        原来界面毫无反馈，用户看到的就是「点了没反应」。
+        这里把原因弹出来，并按服务端最新状态重算黄条 —— 如果确实
+        已经不可接手，黄条应当消失，而不是继续挂着让人反复点。
+      */
+      showToast({ tone: 'risk', message: `继续失败：${errorMessage(err)}` })
+      await refreshStuckTurn(active.id)
     } finally {
       setResuming(false)
     }
@@ -2037,9 +2044,20 @@ export function ChatPage() {
               type="button"
               className="mt-1 rounded border border-signal-warn/40 px-2 py-0.5 text-2xs text-signal-warn hover:bg-signal-warn/10 disabled:opacity-50"
               disabled={resuming || sendingHere}
+              title={
+                sendingHere
+                  ? '这一轮还在跑，结束后才能接手'
+                  : resuming
+                    ? '正在恢复上下文'
+                    : '从断点恢复沙箱与上下文'
+              }
               onClick={() => void handleResume()}
             >
-              {resuming ? '正在接手（恢复上下文）…' : '继续这一轮'}
+              {sendingHere
+                ? '这一轮还在跑…'
+                : resuming
+                  ? '正在接手（恢复上下文）…'
+                  : '继续这一轮'}
             </button>
           </div>
         )}
