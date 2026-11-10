@@ -69,6 +69,7 @@ from app.chat.prompts import (
     build_system_prompt,
     build_tools_schema,
     may_call_tool,
+    render_brute_stop_reminder,
     render_final_confirm_reminder,
     render_format_reminder,
     render_native_tool_note,
@@ -852,6 +853,22 @@ async def _call_model(
 # ══════════════════════════════════════════════════════════
 # 截断判据（v1.13）
 # ══════════════════════════════════════════════════════════
+
+
+_AUTH_TOOL_PATTERN = re.compile(
+    r"(?i)(login|signin|password|passwd|brute|candidate|credential|auth)"
+)
+
+
+def _looks_like_auth_attempt(name: str, args: dict[str, Any]) -> bool:
+    """粗略判断这次工具调用是不是登录/口令尝试。
+
+    只用于**停损提醒**，不作为安全判据：误判的代价是多一句提醒，
+    漏判的代价是继续烧钱爆破，所以宁可宽一点。
+    """
+    if name not in {"run_shell", "verify_http"}:
+        return False
+    return bool(_AUTH_TOOL_PATTERN.search(f"{name} {args}"))
 
 
 def _action_signature(name: str, args: Any) -> str:
@@ -3141,6 +3158,10 @@ async def run_turn(
     #: ★ v1.49：这一轮是否已经因为"原地打转"提醒过一次 —— 只提醒一次，
     #:   不能每轮都喂同一句（那就成了新的死循环）。
     stall_warned = False
+    #: ★ v1.84：这一轮累计的登录/口令尝试次数。同一条命令检测抓不到
+    #:   "每次换个候选"的爆破，这里按策略族计数。
+    brute_attempts = 0
+    brute_warned = False
 
     if resume_from is not None:
         nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
@@ -3763,6 +3784,18 @@ async def run_turn(
                 _log.warning(
                     "chat.stall tool=%s repeated=%s", name, len(recent_action_sigs)
                 )
+
+            # ★ v1.84：登录/口令尝试的停损。与"完全相同命令"是两条判据：
+            #   爆破每次候选都不同，命令签名永远不重复，必须按策略族计数。
+            if _looks_like_auth_attempt(name, args):
+                brute_attempts += 1
+                if brute_attempts >= 6 and not brute_warned:
+                    if pending_reminder is None:
+                        pending_reminder = render_brute_stop_reminder(brute_attempts)
+                    brute_warned = True
+                    _log.warning(
+                        "chat.brute_stop attempts=%s session=%s", brute_attempts, session.id
+                    )
 
     return result
 

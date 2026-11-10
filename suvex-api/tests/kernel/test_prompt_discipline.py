@@ -30,6 +30,14 @@ def test_chat_prompt_has_task_discipline() -> None:
 def test_all_deliverable_tasks_must_end_with_a_result_block() -> None:
     """所有"做事"任务都必须先给可核对的结果块，不能只补登录场景。"""
     text = chat_prompts.SYSTEM_PROMPT_TEMPLATE
-    for token in ("交付结果怎么给（所有", "扫描 / 渗透", "文件 / 逆向 / 取证", "产物", "未完成"):
+    for token in (
+        "交付结果怎么给（所有",
+        "扫描 / 渗透",
+        "文件 / 逆向 / 取证",
+        "产物",
+        "未完成",
+        "口令 / 登录尝试的停损",
+        "rockyou",
+    ):
         assert token in text
 
