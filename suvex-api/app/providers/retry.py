@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
@@ -33,6 +34,32 @@ class RetryPolicy:
     breaker_failures: int = 5
     breaker_interval_ms: int = 0
     breaker_cooldown_s: int = 60
+
+
+class Breaker:
+    """进程级熔断器：按 key（provider 标签）累计连续失败。
+
+    失败到阈值后进入冷却；冷却期内的调用直接拒绝，冷却结束自动放行。
+    成功一次即清零（与 ARTEX 的轮询熔断同一语义）。
+    """
+
+    def __init__(self, clock=time.monotonic) -> None:
+        self._clock = clock
+        self._state: dict[str, tuple[int, float]] = {}
+
+    def allow(self, key: str, *, failures: int, cooldown_s: int) -> bool:
+        fails, until = self._state.get(key, (0, 0.0))
+        return not (fails >= failures and self._clock() < until)
+
+    def record_failure(self, key: str, *, failures: int, cooldown_s: int) -> None:
+        fails, until = self._state.get(key, (0, 0.0))
+        fails += 1
+        if fails >= failures:
+            until = self._clock() + cooldown_s
+        self._state[key] = (fails, until)
+
+    def record_success(self, key: str) -> None:
+        self._state.pop(key, None)
 
 
 def should_retry_status(status: int) -> bool:
@@ -98,6 +125,7 @@ def validate_policy(policy: RetryPolicy) -> None:
 
 
 __all__ = [
+    "Breaker",
     "MAX_BACKOFF_MS",
     "RETRYABLE_STATUSES",
     "RetryPolicy",

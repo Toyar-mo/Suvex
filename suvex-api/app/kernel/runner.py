@@ -2401,6 +2401,19 @@ class LlmReply:
     tool_calls: tuple[dict, ...] = ()
 
 
+_LLM_BREAKER = None
+
+
+def _llm_breaker():
+    """进程级熔断器单例（延迟构造，避免循环 import）。"""
+    global _LLM_BREAKER
+    if _LLM_BREAKER is None:
+        from app.providers.retry import Breaker
+
+        _LLM_BREAKER = Breaker()
+    return _LLM_BREAKER
+
+
 class LlmGateway:
     """解题循环用的对话客户端。**非流式**。"""
 
@@ -2554,6 +2567,18 @@ class LlmGateway:
             tool_calls_from_message,
         )
 
+        breaker = _llm_breaker()
+        breaker_key = (self.label or self.model or "default")[:120]
+        policy_failures = int(getattr(self.retry_policy, "breaker_failures", 5))
+        policy_cooldown = int(getattr(self.retry_policy, "breaker_cooldown_s", 60))
+        if not breaker.allow(
+            breaker_key, failures=policy_failures, cooldown_s=policy_cooldown
+        ):
+            raise KernelError(
+                "模型接入点正在熔断冷却：最近连续调用失败，"
+                f"已跳过本次请求（{policy_cooldown} 秒后自动恢复）。"
+            )
+
         # ⚠️ 这里 import 了 `providers/llm.py` 的私有 `_extract_reply`。
         #
         # 与 `_base_env` 那次 import 同一个理由，但要说准确：它编码的是
@@ -2611,6 +2636,9 @@ class LlmGateway:
                 break
             except _LLM_RETRYABLE as exc:
                 last_error = exc
+                breaker.record_failure(
+                    breaker_key, failures=policy_failures, cooldown_s=policy_cooldown
+                )
                 logger.warning(
                     "调用 LLM 连接失败（%s，第 %d/%d 次）：%s",
                     type(exc).__name__,
@@ -2634,6 +2662,9 @@ class LlmGateway:
             parsed = response.json()
         except ValueError:
             parsed = None
+
+        if response.status_code < 400:
+            breaker.record_success(breaker_key)
 
         if response.status_code >= 400:
             raise KernelError(

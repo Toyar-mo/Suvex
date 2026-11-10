@@ -21,6 +21,8 @@ const FIELDS: { key: keyof RetryPolicy; label: string; hint: string }[] = [
   { key: 'connectIntervalMs', label: '建连间隔 ms', hint: '0 = 立即重试；指数退避' },
   { key: 'emptyRetries', label: '空响应重试次数', hint: '2xx 但没有任何内容' },
   { key: 'emptyIntervalMs', label: '空响应间隔 ms', hint: '0 = 立即重试' },
+  { key: 'breakerFailures', label: '熔断阈值', hint: '连续失败多少次后冷却' },
+  { key: 'breakerCooldownS', label: '冷却秒数', hint: '熔断后跳过多久' },
 ]
 
 /**
@@ -88,7 +90,7 @@ export function RetryPolicyPanel() {
             ))}
           </div>
           <p className="text-2xs text-ink-faint">
-            安全窗口重试、轮询熔断与意图重跑需要执行器接入，参数已落库但暂不展示为可调项。
+            安全窗口重试与意图重跑需要执行器接入；熔断阈值与冷却已生效。
           </p>
           <div>
             <Button variant="primary" size="sm" onClick={() => void save()} disabled={saving}>
