@@ -62,6 +62,7 @@ from app.scans.router import router as scans_router
 from app.scans.scope_router import router as scope_router
 from app.schedules.router import router as schedules_router
 from app.settings.router import router as settings_router
+from app.stage.router import router as stage_router
 
 logger = logging.getLogger("suvex")
 
@@ -515,6 +516,7 @@ def create_app() -> FastAPI:
         credentials_router,
         purple_router,
         scope_router,
+        stage_router,
         overview_router,
         assets_router,
         schedules_router,
