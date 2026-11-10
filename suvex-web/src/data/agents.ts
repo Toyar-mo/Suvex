@@ -47,3 +47,11 @@ export async function createAgent(input: NewAgentProfile): Promise<AgentProfile>
 export async function deleteAgent(id: string): Promise<{ deleted: boolean }> {
   return api.del<{ deleted: boolean }>(`/agents/${encodeURIComponent(id)}`)
 }
+
+
+export async function updateAgent(
+  id: string,
+  patch: Partial<Pick<AgentProfile, 'name' | 'description' | 'enabled' | 'mcpServers' | 'skills' | 'tools'>>,
+): Promise<AgentProfile> {
+  return api.patch<AgentProfile>(`/agents/${encodeURIComponent(id)}`, patch)
+}

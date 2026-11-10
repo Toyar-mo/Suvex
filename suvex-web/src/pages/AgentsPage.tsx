@@ -6,6 +6,7 @@ import {
   deleteAgent,
   loadAgentTemplates,
   loadAgents,
+  updateAgent,
   type AgentProfile,
   type AgentTemplate,
 } from '@/data/agents'
@@ -25,6 +26,7 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true)
   const [templates, setTemplates] = useState<AgentTemplate[]>([])
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [editing, setEditing] = useState<AgentProfile | null>(null)
   const [creating, setCreating] = useState(false)
   const [saving, setSaving] = useState(false)
   const [form, setForm] = useState({
@@ -58,6 +60,16 @@ export function AgentsPage() {
     if (!form.key.trim() || !form.name.trim()) return
     setSaving(true)
     try {
+      if (editing) {
+        await updateAgent(editing.id, {
+          name: form.name.trim(),
+          description: form.description.trim(),
+          mcpServers: splitList(form.mcpServers),
+          skills: splitList(form.skills),
+          tools: splitList(form.tools),
+        })
+        setEditing(null)
+      } else {
       await createAgent({
         key: form.key.trim(),
         name: form.name.trim(),
@@ -66,10 +78,11 @@ export function AgentsPage() {
         skills: splitList(form.skills),
         tools: splitList(form.tools),
       })
+      }
       setForm({ key: '', name: '', description: '', mcpServers: '', skills: '', tools: '' })
       setCreating(false)
       await reload()
-      showToast({ tone: 'ok', message: 'Agent 已创建' })
+      showToast({ tone: 'ok', message: editing ? 'Agent 已更新' : 'Agent 已创建' })
     } catch (err) {
       showToast({ tone: 'risk', message: err instanceof Error ? err.message : '创建失败' })
     } finally {
@@ -166,13 +179,33 @@ export function AgentsPage() {
                   <span>Skill {item.skills.length}</span>
                   <span>工具 {item.tools.length}</span>
                   {!item.builtin && (
-                    <button
-                      type="button"
-                      onClick={() => void remove(item)}
-                      className="ml-auto text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
-                    >
-                      删除
-                    </button>
+                    <span className="ml-auto flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setEditing(item)
+                          setForm({
+                            key: item.key,
+                            name: item.name,
+                            description: item.description,
+                            mcpServers: item.mcpServers.join(', '),
+                            skills: item.skills.join(', '),
+                            tools: item.tools.join(', '),
+                          })
+                          setCreating(true)
+                        }}
+                        className="text-ink-faint underline-offset-2 hover:text-ink hover:underline"
+                      >
+                        编辑
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void remove(item)}
+                        className="text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
+                      >
+                        删除
+                      </button>
+                    </span>
                   )}
                 </div>
               </section>
