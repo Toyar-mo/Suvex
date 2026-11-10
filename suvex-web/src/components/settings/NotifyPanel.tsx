@@ -35,7 +35,7 @@ import { useMemo, useState } from 'react'
  *
  *   ⚠️ 这个目标目前只走到一半：v0.22 交付了测试端点，但它只做地址形状的
  *      本地校验，**不真的往外发**（真实发送要 SMTP / Webhook / Slack 三套
- *      协议实现）。所以按钮现在能回答的是"这条地址填对了吗"，
+ *      协议实现）。v1.84 起三套都已接上，按钮能回答"这条通道通不通"。
  *      而不是"出事时我收得到吗"。界面上必须如实说明这一点
  *      （见 `handleTest` 与按钮旁那句提示）—— 把"形状对"读成"通道通"，
  *      正是这个面板最该防住的那种误解。
@@ -49,7 +49,7 @@ const CHANNEL_META: Record<
     label: '邮件',
     icon: Mail,
     placeholder: 'security@example.com',
-    help: '邮件发送尚未接入；这里只能保留地址记录，不会发送。',
+    help: '通过服务端配置的 SMTP 发送；未配置时测试会指出缺哪一项。',
   },
   webhook: {
     label: 'Webhook',
@@ -65,9 +65,7 @@ const CHANNEL_META: Record<
   },
 }
 
-const ADDABLE_CHANNEL_KINDS = (Object.keys(CHANNEL_META) as NotifyChannelKind[]).filter(
-  (kind) => kind !== 'email',
-)
+const ADDABLE_CHANNEL_KINDS = Object.keys(CHANNEL_META) as NotifyChannelKind[]
 
 export interface NotifyPanelProps {
   rule: NoticeRule
@@ -339,11 +337,6 @@ function ChannelRow({ channel }: { channel: NotifyChannel }) {
           <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
             {meta.label}
           </span>
-          {channel.kind === 'email' && (
-            <span className="rounded-xs border border-signal-warn/40 px-1 text-2xs text-signal-warn">
-              不支持发送
-            </span>
-          )}
           {!channel.enabled && <span className="text-2xs text-ink-faint">已停用</span>}
         </span>
         <span className="flex flex-wrap items-center gap-x-2 text-2xs">
@@ -640,12 +633,11 @@ function ChannelEditor({
             ⚠️ `testState.kind === 'saved'` 那个分支要等后端接入真实发送
                才会第一次走到 —— 留着它就是为了那一天。
           */}
-          {draft.kind !== 'email' && (
           <button
             type="button"
             onClick={handleTest}
             disabled={testing}
-            title="会对 Webhook / Slack 真的发一条测试消息"
+            title="会对 Webhook / Slack / 邮件真的发一条测试消息"
             className={cn(
               'inline-flex h-9 items-center gap-1.5 rounded-sm border px-3 text-xs transition-ui duration-fast',
               testing
@@ -656,12 +648,9 @@ function ChannelEditor({
             <Send size={12} strokeWidth={2} aria-hidden="true" />
             {testing ? '正在发送…' : '发送测试消息'}
           </button>
-          )}
 
           <span className="text-2xs text-ink-faint">
-            {draft.kind === 'email'
-              ? '邮件渠道不支持发送；只能保留记录或删除。'
-              : 'Webhook / Slack 会真的收到一条测试消息。'}
+            Webhook / Slack / 邮件都会真的收到一条测试消息；邮件需先在服务端配置 SMTP。
           </span>
 
           {testState.kind === 'saved' && (

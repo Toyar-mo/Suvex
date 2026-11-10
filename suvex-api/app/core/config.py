@@ -64,6 +64,28 @@ class Settings(BaseSettings):
     # ⚠️ 丢了它 = 已存的 provider 凭据全部解不开，必须与数据库一起备份。
     secret_key: str = ""
 
+    # ── 邮件通知（SMTP）──────────────────────────────────
+    # 通知渠道里的 email 走这里。全部留空 = 未配置，测试发送会明确报出
+    # 缺哪一项，不会假装发出去。
+    #
+    # 环境变量：SUPEX_SMTP_HOST / SUPEX_SMTP_PORT / SUPEX_SMTP_USERNAME /
+    # SUPEX_SMTP_PASSWORD / SUPEX_SMTP_FROM / SUPEX_SMTP_STARTTLS /
+    # SUPEX_SMTP_SSL / SUPEX_SMTP_TIMEOUT_SECONDS
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    # 发件人；留空时回退到 smtp_username。多数 SMTP 服务要求 From 与登录账号一致。
+    smtp_from: str = ""
+    # 587 通常用 STARTTLS；465 用隐式 TLS（smtp_ssl=True）。
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    smtp_timeout_seconds: float = 8.0
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.smtp_host and (self.smtp_from or self.smtp_username))
+
     # ── LLM 连通性探测（POST /providers/{id}/verify）──────
     # 探测要真的发一次请求，所以必须有超时。20 秒是"云端慢模型也能答完
     # 一句问候"的量级；再长会让设置页的按钮转到用户以为卡死。

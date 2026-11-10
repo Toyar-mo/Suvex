@@ -4,7 +4,8 @@
 
 `NotifyChannel` / `NoticeRule` 两张表从 v0.22 起就只做了 CRUD：能存、能读、
 界面能配，但**没有任何代码在扫描结束时去发一条通知**。`POST
-/settings/notices/channels/{id}/test` 当时也诚实地说"真实发送尚未接入"。
+/settings/notices/channels/{id}/test` 当时也诚实地说"真实发送尚未接入"——
+那时 webhook / slack 也还没有出站实现。现在三种渠道都接上了。
 
 于是用户配好邮箱、配好阈值、看到"保存成功"，然后什么都不会发生 ——
 而且是**静默地**不发生。这类缺陷比崩溃更坏：崩溃会被发现，静默失效会
@@ -32,20 +33,18 @@
 
 | kind    | target 形态              | 协议                                  |
 | ------- | ------------------------ | ------------------------------------- |
-| email   | `a@b.c` 或 `a@b.c,d@e.f` | 本轮**不发**（见下）                  |
+| email   | `a@b.c` 或 `a@b.c,d@e.f` | SMTP（环境变量配置，见下）             |
 | webhook | `https://...`            | `POST` JSON，body 是扫见的结构         |
 | slack   | `https://hooks.slack.com/...` | `POST` JSON `{"text": ...}`      |
 
-### 为什么 email 这一轮仍然不发
+### email 走 SMTP
 
-发邮件要一个 SMTP 客户端、要证书信任策略（`smtplib` 默认校验对端，
-而内网邮件服务器常常是自签的）、要处理 TLS 与 AUTH 的组合、还要一个
-**异步化的线**（`smtplib` 是同步阻塞的，直接放进事件循环会卡住整个
-服务）。这几件事各有各的判断（信任谁的自签证书？用谁的凭据？），
-塞进这一轮只会得到一个半吊子实现。
+用标准库 `smtplib`，配置全部来自服务端环境变量（`SUPEX_SMTP_*`）。
+系统本身不存 SMTP 密码：它属于部署凭据，和数据库密钥同级，不该跟着
+一条通知渠道到处复制。未配置时 `/test` 会明确返回缺哪一项，不会假装发了。
 
-诚实的做法是：email 渠道被**选中**时，结果里写"未发送（邮件通道尚未
-接入）"，和 v0.22 里那句"尚未接入"是同一个口径。**不假装发了**。
+`dispatch_one`/`dispatch` 都由同步端点或后台线程调用，`smtplib` 的阻塞
+不会进入事件循环；单次超时由 `SUPEX_SMTP_TIMEOUT_SECONDS` 控制。
 
 ⚠️ webhook 与 slack 是**同一件事的两种载荷**（都是 POST JSON），所以
 这一轮能真做完。它们是用户最需要的两种（接 Jira / 泳道 / IM）。
@@ -68,14 +67,19 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import smtplib
+import ssl
 from dataclasses import dataclass, field
+from email.message import EmailMessage
 from typing import Any, Final, Protocol
 
 import httpx
 from sqlalchemy.orm import Session
 
 from app.core import netguard
+from app.core.config import get_settings
 from app.core.vocab import NotifyChannelKind, Severity
 from app.settings.models import NoticeRule, NotifyChannel
 
@@ -114,16 +118,10 @@ EVENT_SCAN_FINISHED: Final[str] = "scan.finished"
 #: 一条到了这一刻就完了，另一条后面还会有最终的收尾通知。
 EVENT_SCAN_CRITICAL: Final[str] = "scan.critical"
 
-#: 邮件渠道"这一轮不发"的标准说法。
-#:
-#: ★ 抽成常量而不是在两处各写一遍文案：`build_body`（批量投递路径）与
-#: `channel_problem`（`/test` 路径）都要说这句话，而**同一个问题在两条
-#: 路径上给出两种说法**是最容易让人困惑的事情之一 —— 用户会以为其中
-#: 一条是旧版本。
-#:
-#: 它写的是「本轮只实现了 webhook 与 slack」而不是「不支持邮件」：
-#: 后者听起来像产品的永久限制，前者才是实话，也顺带告诉用户现在能用什么。
-_EMAIL_UNSUPPORTED: Final[str] = "邮件通道尚未接入（本轮只实现了 webhook 与 slack）"
+#: 邮件未配置时的标准说法。两条路径（批量投递 / `/test`）共用一份。
+_SMTP_UNCONFIGURED: Final[str] = (
+    "SMTP 未配置：请在服务端设置 SUPEX_SMTP_HOST 与 SUPEX_SMTP_FROM（或 SUPEX_SMTP_USERNAME）"
+)
 
 
 class _ChannelLike(Protocol):
@@ -209,6 +207,25 @@ class NoticePayload:
     #:   什么事"就只有一处定义；拆成参数则两处都可能写错，且错的方式是
     #:   接收方收到 `scan.finished` 却带着 semi-live 的 summary。
     event: str = EVENT_SCAN_FINISHED
+
+    def as_email_text(self) -> str:
+        """邮件的纯文本正文。邮件客户端不需要 HTML 才能读。"""
+        lines = [
+            "[Suvex] 扫描通知",
+            "",
+            f"事件：{self.event}",
+            f"目标：{self.target}",
+            f"状态：{self.status}",
+            f"摘要：{self.summary}",
+            f"严重度：{self.severity}",
+        ]
+        if self.duration_sec is not None:
+            lines.append(f"耗时：{self.duration_sec} 秒")
+        if self.critical_count or self.high_count:
+            lines.append(f"高危：critical {self.critical_count} / high {self.high_count}")
+        if self.scan_url:
+            lines.append(f"详情：{self.scan_url}")
+        return "\n".join(lines)
 
     def as_webhook_body(self) -> dict[str, Any]:
         """webhook 的 JSON 载荷。
@@ -394,24 +411,92 @@ def build_body(kind: str, payload: NoticePayload) -> tuple[dict[str, Any], str]:
 
     ## ★ 两种"发不出去"要给不同的话
 
-    * **email**：一个**已知、已规划、但这一轮没做**的类型。用户配了邮箱却
-      收不到通知时，他要的是"为什么"，而不是"不支持" —— 后者听起来像
-      这个产品的永久限制。所以这条单独写清楚"本轮只实现了 webhook 与 slack"。
+    * **email**：正文由 `_send_email` 直接构造，不走 JSON body；未配置
+      SMTP 时由 `channel_problem` 在同一处给出缺项说明。
     * **未知类型**：`carrier-pigeon` 这种只可能是编程错误或手工改库，
       "这一轮不支持 X" 就够了。
-
-    这两句话都必须与 `channel_problem` 里那句**一模一样** —— 同一个问题
-    在"批量投递"和"/test"两条路径上不能给出两种说法，否则用户看到的是
-    "测试时说邮件尚未接入、扫描结束时说这一轮不支持 email"。
     """
     if kind == NotifyChannelKind.WEBHOOK.value:
         return payload.as_webhook_body(), "webhook JSON"
     if kind == NotifyChannelKind.SLACK.value:
         return {"text": payload.as_slack_text()}, "slack text"
     if kind == NotifyChannelKind.EMAIL.value:
-        # 与 `channel_problem` 同一个常量，保证两处说的是同一句话。
-        raise ValueError(_EMAIL_UNSUPPORTED)
+        # email 的正文由 `_send_email` 直接构造，不经过 JSON body。
+        raise ValueError("email 渠道走 SMTP 发送，不生成 JSON body")
     raise ValueError(f"这一轮不支持 {kind} 渠道的发送")
+
+
+def _send_email(channel: _ChannelLike, payload: NoticePayload) -> ChannelResult:
+    """通过部署方配置的 SMTP 发一封纯文本通知。"""
+    settings = get_settings()
+    if not settings.smtp_configured:
+        return ChannelResult(
+            channel_id=channel.id,
+            label=channel.label,
+            kind=channel.kind,
+            sent=False,
+            reason=_SMTP_UNCONFIGURED,
+        )
+
+    recipients = [part.strip() for part in channel.target.split(",") if part.strip()]
+    if not recipients:
+        return ChannelResult(
+            channel_id=channel.id,
+            label=channel.label,
+            kind=channel.kind,
+            sent=False,
+            reason="邮件渠道没有收件地址",
+        )
+
+    sender = settings.smtp_from or settings.smtp_username
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = ", ".join(recipients)
+    message["Subject"] = f"[Suvex] {payload.event} · {payload.target}"
+    message.set_content(payload.as_email_text())
+
+    client: smtplib.SMTP | smtplib.SMTP_SSL | None = None
+    try:
+        context = ssl.create_default_context()
+        if settings.smtp_ssl:
+            client = smtplib.SMTP_SSL(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=settings.smtp_timeout_seconds,
+                context=context,
+            )
+        else:
+            client = smtplib.SMTP(
+                settings.smtp_host,
+                settings.smtp_port,
+                timeout=settings.smtp_timeout_seconds,
+            )
+            client.ehlo()
+            if settings.smtp_starttls:
+                client.starttls(context=context)
+                client.ehlo()
+        if settings.smtp_username:
+            client.login(settings.smtp_username, settings.smtp_password)
+        client.send_message(message)
+    except (smtplib.SMTPException, OSError, ValueError) as exc:
+        return ChannelResult(
+            channel_id=channel.id,
+            label=channel.label,
+            kind=channel.kind,
+            sent=False,
+            reason=f"SMTP 发送失败：{exc}",
+        )
+    finally:
+        if client is not None:
+            with contextlib.suppress(smtplib.SMTPException, OSError):
+                client.quit()
+
+    return ChannelResult(
+        channel_id=channel.id,
+        label=channel.label,
+        kind=channel.kind,
+        sent=True,
+    )
 
 
 def _post(channel: _ChannelLike, payload: NoticePayload) -> ChannelResult:
@@ -425,6 +510,9 @@ def _post(channel: _ChannelLike, payload: NoticePayload) -> ChannelResult:
     `_ChannelView` 值快照（理由见那个类），单条试发路径传的是 ORM 对象。
     这里只用四个只读字段，两种都满足。
     """
+    if channel.kind == NotifyChannelKind.EMAIL.value:
+        return _send_email(channel, payload)
+
     try:
         body, _shape = build_body(channel.kind, payload)
     except ValueError as exc:
@@ -615,7 +703,7 @@ def channel_problem(kind: str, target: str) -> str | None:
     另一个问题：「即使地址是对的，这条渠道我们发得出去吗」。
     """
     if kind == NotifyChannelKind.EMAIL.value:
-        return _EMAIL_UNSUPPORTED
+        return None if get_settings().smtp_configured else _SMTP_UNCONFIGURED
     try:
         build_body(
             kind,

@@ -12,14 +12,14 @@ const rule: NoticeRule = {
 afterEach(() => cleanup())
 
 describe('NotifyPanel', () => {
-  it('不再提供「邮件」新增入口，只保留 Webhook / Slack', () => {
+  it('提供邮件 / Webhook / Slack 三种新增入口', () => {
     render(<NotifyPanel rule={rule} channels={[]} />)
     expect(screen.getByRole('button', { name: 'Webhook' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Slack' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: '邮件' })).toBeNull()
+    expect(screen.getByRole('button', { name: '邮件' })).toBeTruthy()
   })
 
-  it('历史邮件渠道仍可见，并明确标注不支持发送', () => {
+  it('邮件渠道正常显示，不再标注不支持', () => {
     const channel: NotifyChannel = {
       id: 'ntc_old',
       kind: 'email',
@@ -30,6 +30,6 @@ describe('NotifyPanel', () => {
       verifyError: null,
     }
     render(<NotifyPanel rule={rule} channels={[channel]} />)
-    expect(screen.getByText('不支持发送')).toBeTruthy()
+    expect(screen.queryByText('不支持发送')).toBeNull()
   })
 })

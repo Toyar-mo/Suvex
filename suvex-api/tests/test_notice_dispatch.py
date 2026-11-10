@@ -430,17 +430,17 @@ def test_three_channels_all_get_sent(db_session: Any, recorder: _Recorder) -> No
         assert not hasattr(channel, "_sa_instance_state"), "_post 收到了 ORM 实体：发送与事务被耦合在一起了"
 
 
-def test_email_channel_is_reported_as_unsupported(db_session: Any, recorder: _Recorder) -> None:
-    """邮件这一轮不发，而且**说清楚**为什么 —— 不假装发了。"""
+def test_email_without_smtp_is_reported(db_session: Any, recorder: _Recorder) -> None:
+    """邮件未配置 SMTP 时说清楚缺什么 —— 不假装发了。"""
     _rule(db_session, min_severity="high")
     _channel(db_session, kind="email", target="sec@example.com")
 
     outcome = dispatch.dispatch(db_session, _payload())
 
     assert outcome.failed == 1
-    # 没真的出站：`_build_request` 就在这一层拒绝了。
+    # 没真的出站：SMTP 未配置，连客户端都不建。
     assert recorder.calls == []
-    assert "邮件通道尚未接入" in outcome.results[0].reason
+    assert "SMTP 未配置" in outcome.results[0].reason
 
 
 # ══════════════════════════════════════════════════════════
@@ -493,8 +493,8 @@ def test_test_endpoint_reports_failure_with_reason(ready_client: TestClient, rec
     assert "503" in body["verifyError"]
 
 
-def test_test_endpoint_still_rejects_email(ready_client: TestClient) -> None:
-    """邮件渠道仍然报"未接入"，且**不出站**。"""
+def test_test_endpoint_reports_missing_smtp(ready_client: TestClient) -> None:
+    """邮件渠道在 SMTP 未配置时明确指出缺项，且**不出站**。"""
     created = ready_client.post(
         f"{API}/settings/notices/channels",
         json={
@@ -511,7 +511,7 @@ def test_test_endpoint_still_rejects_email(ready_client: TestClient) -> None:
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["verified"] is False
-    assert "邮件通道尚未接入" in body["verifyError"]
+    assert "SMTP 未配置" in body["verifyError"]
 
 
 def test_bad_target_shape_is_rejected_before_sending(ready_client: TestClient, recorder: _Recorder) -> None:

@@ -709,15 +709,15 @@ def test_channel(
     接入"——那时这是对的，因为假装发了会让界面显示一个绿勾、而真出事时
     一条通知都发不出去。
 
-    现在 webhook 与 slack 两条链路已经在 `app/settings/dispatch.py` 里接上
-    （同一件事的两种载荷，都是 `POST` JSON），所以这里改成：
+    现在 webhook / slack / email 三条链路都已经在 `app/settings/dispatch.py` 里接上
+    （前两者是 `POST` JSON，email 走 SMTP），所以这里改成：
 
         形状校验 → 真发一次 → 按**真实结果**写 verified / verifyError
 
     ## 三条边界
 
-    * **邮件仍然不发**：SMTP 需要凭据与证书信任策略，`smtplib` 还是同步
-      阻塞的。这一轮不做半吊子实现，`verifyError` 里照实写"尚未接入"。
+    * **邮件需要部署方配置 SMTP**：`SUPEX_SMTP_HOST` 等环境变量缺失时，
+      `verifyError` 会明确指出缺哪一项，而不是假装发送成功。
     * **测试通知不进业务规则**：它不看 `min_severity`、不看
       `notify_on_scan_complete` —— 用户点"发送测试"就是想现在收到一条。
     * **失败一定带原因**：`verified=False` 时 `verifyError` 不能为空，
