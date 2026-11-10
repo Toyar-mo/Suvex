@@ -19,7 +19,9 @@ def test_default_budgets_are_sized_for_hard_tasks() -> None:
     """默认值必须能撑住一道难题（否则就是"必然半路停"）。"""
     # 用户明确要求与 CyberStrikeAI 对齐（其 `max_iterations: 800`）。
     assert engine.MAX_TOOL_ROUNDS >= 800
-    assert engine.MAX_TOOL_NUDGES >= 200
+    # ★ 纠偏额度不是轮次预算：300 会让"只说不做"的模型白烧 300 次
+    #   （2026-11-09 线上会话正是 nudges=122 / 231 轮）。8 次足够跨过偶发抽风。
+    assert 8 <= engine.MAX_TOOL_NUDGES <= 20
     assert engine.HISTORY_MESSAGE_LIMIT >= 200
     assert engine.MAX_HISTORY_CHARS >= 100_000
 

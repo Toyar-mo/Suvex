@@ -103,6 +103,25 @@ def _env_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+
+def _turn_elapsed_seconds(turn_run: Any, fallback_start: float) -> float:
+    """这一轮已经跑了多少秒（跨 resume / 重启累计）。
+
+    `time.monotonic()` 的起点在每次接手时重置 —— 2026-11-09 的线上会话
+    因此跑了 5 小时（每次接手都 <1h，合计远超 1h 墙钟）。`turn_run.started_at`
+    是落库的，接手沿用同一个起点；没有 turn_run（普通问答）时才退回单调时钟。
+    """
+    started = getattr(turn_run, "started_at", None) if turn_run is not None else None
+    if started is not None:
+        try:
+            from app.core.timeutil import now_utc
+
+            return max(0.0, (now_utc() - started).total_seconds())
+        except TypeError:
+            pass
+    return time.monotonic() - fallback_start
+
+
 #: 一轮里最多几次**工具往返**。
 #:
 #: ★ v1.26：6 → 40 → **200** → **800**（与 CyberStrikeAI 的
@@ -115,7 +134,7 @@ def _env_int(name: str, default: int) -> int:
 #: 用户看到的就是「又中断了，不能一次性解出来吗」。
 #:
 #: 每次往返都是真金白银，所以默认可调（`SUPEX_CHAT_MAX_TOOL_ROUNDS`）。
-MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 100000)
+MAX_TOOL_ROUNDS = _env_int("SUPEX_CHAT_MAX_TOOL_ROUNDS", 800)
 
 #: 喂给模型的上下文里，最多带多少条历史消息。
 #:
@@ -188,7 +207,7 @@ MAX_NARRATION_NUDGES = 2
 #:   切断是**我们的上限**造成的，不是模型不听话，所以给大额度；"忘了写
 #:   ACTION"才是模型的问题，那个保持 2 次。6 次 × 每轮几千 token 仍是
 #:   可控成本，而用户不用再手打「继续」。
-MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
+MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 6)
 
 #: 「本轮跑过工具」的轮次最多被推几次（v1.23）。
 #:
@@ -201,7 +220,7 @@ MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 12)
 #:
 #: 8 次而不是无限：确定性失败（例如工具一直报同一个错）必须能收尾，
 #: 否则就是每轮烧一次模型调用而用户只看到同一个卡点。
-MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 300)
+MAX_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_TOOL_NUDGES", 8)
 
 #: ★ v1.49：同一条命令（工具+参数完全相同）连续执行多少次就判定"原地打转"。
 #:
@@ -329,7 +348,7 @@ MAX_FINAL_CONFIRMATIONS = _env_int("SUPEX_CHAT_MAX_FINAL_CONFIRMATIONS", 1)
 #: 计划句和"真的做完没有"是两件事：前者只说明**还没动手**，它的额度就该
 #: 按"还要推几步"算，而不是按"问没问过"算。4 次足够覆盖"分析→利用→打通"
 #: 这类多步任务；再多就是模型在绕圈，该停下来告诉用户实情。
-MAX_PLAN_BOUNCES = _env_int("SUPEX_CHAT_MAX_PLAN_BOUNCES", 100)
+MAX_PLAN_BOUNCES = _env_int("SUPEX_CHAT_MAX_PLAN_BOUNCES", 4)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
 #:
@@ -2932,7 +2951,7 @@ async def run_turn(
         if (
             TURN_WALL_SECONDS
             and tools_used > 0
-            and time.monotonic() - turn_wall_start >= TURN_WALL_SECONDS
+            and _turn_elapsed_seconds(turn_run, turn_wall_start) >= TURN_WALL_SECONDS
         ):
             exhausted = chat_service.append_assistant_message(
                 db,
@@ -3612,7 +3631,7 @@ async def resume_approved(
         if (
             TURN_WALL_SECONDS
             and tools_used > 0
-            and time.monotonic() - turn_wall_start >= TURN_WALL_SECONDS
+            and _turn_elapsed_seconds(turn_run, turn_wall_start) >= TURN_WALL_SECONDS
         ):
             exhausted = chat_service.append_assistant_message(
                 db,
