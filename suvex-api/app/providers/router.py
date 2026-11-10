@@ -34,10 +34,13 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_admin, require_read
 from app.core.db import get_db
+from app.core.errors import ApiError
 from app.core.timeutil import now_utc
 from app.providers import service
 from app.providers.schemas import (
     ProviderCreate,
+    ProviderModelsIn,
+    ProviderModelsOut,
     ProviderOut,
     ProviderSavedNoChange,
     ProviderSavedOk,
@@ -183,3 +186,28 @@ def set_default_provider(
     if not changed:
         return ProviderSavedNoChange(provider=out)
     return ProviderSavedOk(at=now_utc(), provider=out)
+
+
+@router.post("/models", response_model=ProviderModelsOut, summary="列出接入点可用模型")
+def list_provider_models(
+    payload: ProviderModelsIn, _identity: AdminDep, db: DbDep
+) -> ProviderModelsOut:
+    """用当前填写（或已保存）的凭据拉一次 `/models`。只读。"""
+    api_key = payload.apiKey.strip()
+    if not api_key and payload.providerId:
+        api_key = service.decrypt_provider_key(service.get_provider(db, payload.providerId))
+    if not api_key:
+        raise ApiError.validation("需要 API key 才能列出模型")
+
+    from app.providers.llm import fetch_models
+
+    try:
+        models = fetch_models(
+            base_url=payload.baseUrl,
+            label=payload.label,
+            kind=payload.kind,
+            api_key=api_key,
+        )
+    except ValueError as exc:
+        raise ApiError.validation(str(exc)) from None
+    return ProviderModelsOut(models=models)

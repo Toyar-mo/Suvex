@@ -188,3 +188,15 @@ class ProviderVerifyFailed(CamelModel):
 
 
 ProviderVerifyResult = ProviderVerifyOk | ProviderVerifyFailed
+
+
+class ProviderModelsIn(StrictModel):
+    baseUrl: str = ""
+    label: str = ""
+    kind: str = "cloud"
+    apiKey: str = ""
+    providerId: str | None = None
+
+
+class ProviderModelsOut(CamelModel):
+    models: list[str] = []

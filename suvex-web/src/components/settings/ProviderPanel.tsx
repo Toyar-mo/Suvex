@@ -1,9 +1,8 @@
 import { cn } from '@/lib/cn'
 import { DangerButton, Field, TextInput, Toggle } from './Field'
-import RiskConfirm from './RiskConfirm'
+import { Button } from '@/components/ui/Button'
 import SecretField from './SecretField'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
-import { isInsecureHttp } from '@/data/settings'
 import { showToast } from '@/data/toast-store'
 import {
   PROVIDER_PRESETS,
@@ -19,6 +18,7 @@ import {
   nextAccountId,
   removeProviderAccount,
   saveProviderAccount,
+  listProviderModels,
   setDefaultProvider,
   verifyProvider,
 } from '@/data/settings-store'
@@ -438,6 +438,8 @@ function AccountEditor({
   const [verifyResult, setVerifyResult] = useState<SaveState>({ kind: 'idle' })
   /** 用户是否输入了新 key（用于决定显示"已保存"还是格式提示） */
   const [keyEdited, setKeyEdited] = useState(isNew)
+  const [modelOptions, setModelOptions] = useState<string[]>([])
+  const [loadingModels, setLoadingModels] = useState(false)
 
   /**
    * 是否已确认"这个 http 地址的风险由我承担"（v0.12）。
@@ -449,7 +451,6 @@ function AccountEditor({
    *   · 换一个 provider 卡片时它天然重置（每个卡片有自己的 state），
    *     不会出现"确认过一个、所有卡片都放行"。
    */
-  const [httpAcknowledged, setHttpAcknowledged] = useState(false)
 
   /**
    * 校验。
@@ -461,7 +462,7 @@ function AccountEditor({
     const label = validateProviderLabel(draft.label)
     const model = validateModel(draft.model)
     // ★ 把"已确认"传进校验：确认前拦下，确认后放行（v0.12）
-    const baseUrl = validateBaseUrl(draft.baseUrl, httpAcknowledged)
+    const baseUrl = validateBaseUrl(draft.baseUrl, true)
     const apiKey = validateApiKey(draft.apiKey, draft.kind)
 
     return {
@@ -471,7 +472,7 @@ function AccountEditor({
       // 已保存的账号没动 key 时，不校验 key（空 = 沿用已存的那个）
       apiKey: !isNew && !keyEdited ? null : apiKey.ok ? null : apiKey.error,
     }
-  }, [draft, isNew, keyEdited, httpAcknowledged])
+  }, [draft, isNew, keyEdited])
 
   const hasError = Object.values(errors).some((e) => e !== null)
 
@@ -545,6 +546,28 @@ function AccountEditor({
     setKeyEdited(isNew)
     setSaveState({ kind: 'idle' })
     setVerifyResult({ kind: 'idle' })
+  }
+
+  const loadModels = async () => {
+    setLoadingModels(true)
+    try {
+      const models = await listProviderModels({
+        baseUrl: draft.baseUrl,
+        label: draft.label,
+        kind: draft.kind,
+        apiKey: keyEdited ? draft.apiKey : '',
+        providerId: isNew ? undefined : account.id,
+      })
+      setModelOptions(models)
+      if (models.length === 1) setDraft({ ...draft, model: models[0] })
+      if (models.length === 0) {
+        showToast({ tone: 'risk', message: '接入点没有返回任何模型' })
+      }
+    } catch (err) {
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '列出模型失败' })
+    } finally {
+      setLoadingModels(false)
+    }
   }
 
   const handleDelete = async () => {
@@ -665,13 +688,41 @@ function AccountEditor({
           help="与配置文件里的模型标识符一致，不要写中文别名。"
           error={touched ? errors.model : null}
         >
-          <TextInput
-            id={`${account.id}-model`}
-            value={draft.model}
-            onChange={(v) => setDraft({ ...draft, model: v })}
-            mono
-            error={touched ? errors.model : null}
-          />
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-1.5">
+              <TextInput
+                id={`${account.id}-model`}
+                value={draft.model}
+                onChange={(v) => setDraft({ ...draft, model: v })}
+                mono
+                error={touched ? errors.model : null}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                onClick={() => void loadModels()}
+                disabled={loadingModels}
+              >
+                {loadingModels ? '读取中…' : '列出模型'}
+              </Button>
+            </div>
+            {modelOptions.length > 0 && (
+              <select
+                value={draft.model}
+                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+                className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
+                aria-label="可用模型"
+              >
+                <option value="">从列表选择…</option>
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
         </Field>
       </div>
 
@@ -689,16 +740,6 @@ function AccountEditor({
           两处各写一遍必然漂移，而漂移的表现是
           "提示说不安全、但校验已经放行了"。
         */
-        footer={
-          isInsecureHttp(draft.baseUrl) ? (
-            <RiskConfirm
-              acknowledged={httpAcknowledged}
-              onAcknowledge={() => setHttpAcknowledged(true)}
-              risk="该地址使用 http —— API key 会以明文经过网络。内网自建网关可确认后继续。"
-              acknowledgedText="已确认使用 http，密钥将以明文传输到该地址。"
-            />
-          ) : null
-        }
       >
         <TextInput
           id={`${account.id}-baseurl`}
@@ -706,7 +747,7 @@ function AccountEditor({
           onChange={(v) => setDraft({ ...draft, baseUrl: v })}
           placeholder="留空使用默认地址"
           mono
-          error={touched && !isInsecureHttp(draft.baseUrl) ? errors.baseUrl : null}
+          error={touched ? errors.baseUrl : null}
         />
       </Field>
 

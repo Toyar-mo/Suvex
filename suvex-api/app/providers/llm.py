@@ -335,6 +335,56 @@ def _describe_http_error(status: int, reason: str) -> str:
     return f"请求被拒绝（HTTP {status}）。{suffix}"
 
 
+def parse_models(body: object) -> list[str]:
+    """OpenAI 兼容的 `{"data":[{"id": ...}]}` → 去重模型 id 列表。"""
+    if not isinstance(body, dict):
+        return []
+    data = body.get("data")
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if isinstance(model_id, str) and model_id and model_id not in seen:
+            seen.add(model_id)
+            out.append(model_id)
+    return out
+
+
+def fetch_models(*, base_url: str, label: str, kind: str, api_key: str) -> list[str]:
+    """拉取接入点的可用模型列表（只读 GET）。
+
+    与 `probe` 共用同一套 SSRF 防护与 `trust_env=False`。
+    """
+    resolved = resolve_base_url(base_url, label)
+    if not resolved:
+        raise ValueError("没有可用的接入地址：baseUrl 为空且无法从名称推断。")
+    endpoint = resolved.rstrip("/")
+    if not endpoint.endswith("/models"):
+        endpoint += "/models"
+    blocked = _local_address_guard(endpoint)
+    if blocked:
+        raise ValueError(blocked)
+    anthropic = is_anthropic(endpoint)
+    with httpx.Client(
+        timeout=httpx.Timeout(10.0),
+        trust_env=False,
+        transport=netguard.GuardedHTTPTransport(),
+    ) as client:
+        netguard.ensure_guarded(client)
+        response = client.get(endpoint, headers=_headers(anthropic=anthropic, api_key=api_key))
+    if response.status_code >= 400:
+        raise ValueError(f"接入点返回 HTTP {response.status_code}，无法列出模型。")
+    try:
+        body = response.json()
+    except ValueError as exc:
+        raise ValueError("接入点返回的不是 JSON，无法列出模型。") from exc
+    return parse_models(body)
+
+
 def probe(*, base_url: str, label: str, model: str, api_key: str, kind: str) -> ProbeOutcome:
     """发一次最小化请求。**任何异常都变成 `ProbeOutcome`，不往外抛。**
 

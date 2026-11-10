@@ -1167,3 +1167,21 @@ export function useProjectedProviders(): ProviderConfig[] {
 export function defaultAccount(list: ProviderAccount[]): ProviderAccount | null {
   return list.find((a) => a.isDefault) ?? list[0] ?? null
 }
+
+
+/**
+ * 拉取接入点的可用模型（v1.83）。
+ *
+ * `apiKey` 为空时后端会用 `providerId` 对应的已保存密钥；新建时两者都空
+ * 会返回可读错误。
+ */
+export async function listProviderModels(input: {
+  baseUrl: string
+  label: string
+  kind: string
+  apiKey: string
+  providerId?: string
+}): Promise<string[]> {
+  const out = await api.post<{ models: string[] }>('/providers/models', input)
+  return out.models
+}
