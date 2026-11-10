@@ -974,6 +974,89 @@ def _as_int_or_none(value: object) -> int | None:
         return None
 
 
+def _guarded_http_client() -> object:
+    """验证器用的出站客户端（带连接层 SSRF 防护）。"""
+    import httpx
+
+    from app.core.netguard import GuardedHTTPTransport, ensure_guarded
+    from app.scans import validators
+
+    client = httpx.Client(
+        transport=GuardedHTTPTransport(),
+        trust_env=False,
+        follow_redirects=False,
+        timeout=validators.DEFAULT_TIMEOUT_SECONDS,
+    )
+    ensure_guarded(client)
+    return client
+
+
+def _verification_spec(data: dict[str, object]) -> object:
+    from app.scans import validators
+
+    headers = data.get("headers") or {}
+    if not isinstance(headers, dict):
+        raise ValueError("headers 必须是对象")
+    body = data.get("body")
+    if body is not None and not isinstance(body, str):
+        raise ValueError("body 必须是字符串")
+    return validators.HttpRequestSpec(
+        method=str(data.get("method") or "GET").upper(),
+        url=str(data.get("url") or ""),
+        headers={str(key): str(value) for key, value in headers.items()},
+        body=body.encode("utf-8") if body else None,
+    )
+
+
+def _verify_item(item: dict[str, object]) -> object | None:
+    """模型在 finding 里声明了 `verify` 就真的跑一次验证器（v1.81）。
+
+    只在**模型给出结构化请求**时执行；没有这个字段、数据形状不对、
+    或验证器自身出错时返回 None —— 验证是增强项，不能因为它失败
+    把一条本来能入库的发现丢掉。
+    """
+    from app.scans import validators
+
+    spec = item.get("verify")
+    if not isinstance(spec, dict):
+        return None
+    kind = str(spec.get("kind") or "").strip().lower()
+    markers = tuple(str(marker) for marker in (spec.get("markers") or ()))
+    try:
+        if kind == "replay":
+            return validators.replay(
+                _verification_spec(spec),
+                attempts=max(2, int(spec.get("attempts") or 2)),
+                markers=markers,
+                client_factory=_guarded_http_client,
+            )
+        if kind == "differential":
+            control = spec.get("control")
+            experiment = spec.get("experiment")
+            if not isinstance(control, dict) or not isinstance(experiment, dict):
+                return None
+            return validators.differential(
+                _verification_spec(control),
+                _verification_spec(experiment),
+                markers=markers,
+                client_factory=_guarded_http_client,
+            )
+    except Exception:  # noqa: BLE001 - 验证失败不能连累 finding 入库
+        logger.warning("验证器执行失败（finding 仍按原级别处理）", exc_info=True)
+    return None
+
+
+def _level_with_verification(level: str, outcome: object | None) -> str:
+    """验证通过 → L2；验证不通过 → 最多 L1（不能保留模型自述的 L2）。"""
+    from app.scans import validators
+
+    if not isinstance(outcome, validators.ValidationOutcome):
+        return level
+    if outcome.passed:
+        return "L2"
+    return "L1" if level == "L2" else level
+
+
 def _normalize_grade(value: object) -> str:
     """工单可信度标签：只允许 `confirmed` / `needs_follow_up`。
 
@@ -1069,6 +1152,21 @@ def _write_vulnerabilities(spec: LaunchSpec, outcome: object) -> None:
             #   L0 = 纯推断，只进 observations，**不进** vulnerabilities ——
             #   漏洞统计是对外最常引用的数字，不能被未验证的推断污染。
             level = evidence_mod.level_for(item)
+            # ★ v1.81：模型给了结构化 `verify` 就真跑一次验证器。
+            #   通过 → L2（可进 findings 且标 verified）；不通过 → 最多 L1。
+            # ⚠️ 不能叫 `outcome`：那是本函数的参数（整个 SolveOutcome），
+            #   覆盖它会让后面的 workorders / observations 全部丢。
+            verified = _verify_item(item)
+            if verified is not None:
+                item = {
+                    **item,
+                    "evidence": (
+                        str(item.get("evidence") or "")
+                        + f"\n\n[validator:{verified.kind}] {verified.summary}\n"
+                        + verified.evidence
+                    ).strip(),
+                }
+            level = _level_with_verification(level, verified)
             if not evidence_mod.should_enter_findings(level):
                 continue
             verification = _normalize_verification(item.get("verification"))
