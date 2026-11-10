@@ -1852,6 +1852,18 @@ class SandboxContainer:
                 ensure_pentest_network()
             else:
                 ensure_ctf2_network()
+        # ★ 先清掉同名残留容器（2026-11-11）。
+        #
+        # 上一次 `start()` 失败（例如镜像入口秒退）时，容器可能已经创建
+        # 但没被销毁；下一次续跑用同一个 `--name` 会直接撞
+        # `Conflict. The container name ... is already in use`，于是
+        # 每次续跑都在第一秒失败，看起来像“续跑没反应”。
+        #
+        # 名字是按 scan/session 唯一的，开始前删掉旧的是安全且幂等的。
+        cleanup = _run(["docker", "rm", "-f", self.name], timeout=60)
+        if cleanup.ok and cleanup.stdout.strip():
+            logger.info("启动 %s 前清理了同名残留容器", self.name)
+
         result = _run(self._argv(), timeout=120)
         if not result.ok:
             raise KernelSandboxError(

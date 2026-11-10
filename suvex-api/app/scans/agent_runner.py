@@ -639,6 +639,9 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
         sandbox.start()
     except Exception:  # noqa: BLE001
         logger.exception("扫描 %s：沙箱启动失败", spec.scan_id)
+        # 启动失败也可能已经创建了半截容器；不销毁会让下一次续跑
+        # 撞同名 --name 冲突（2026-11-11 实测）。destroy 是幂等的。
+        sandbox.destroy()
         return EXIT_ERROR
 
     try:
