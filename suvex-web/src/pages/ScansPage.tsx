@@ -3,6 +3,7 @@ import { PageHeader } from '@/components/layout/AppShell'
 import BulkActionBar from '@/components/scans/BulkActionBar'
 import NewScanWizard from '@/components/scans/NewScanWizard'
 import ScanList from '@/components/scans/ScanList'
+import { ScanHintComposer } from '@/components/scans/ScanHintComposer'
 import CompareDialog from '@/components/scans/CompareDialog'
 import WriteupDialog from '@/components/scans/WriteupDialog'
 import ScanViewsMenu from '@/components/scans/ScanViewsMenu'
@@ -715,6 +716,7 @@ export function ScansPage() {
   return (
     <>
       <PageHeader navId="scans" />
+      <ScanHintComposer scans={scans} />
 
       <div className="px-gutter py-bay">
         {/* ── 工具条 ── */}
