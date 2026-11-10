@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import re
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import Field, field_validator
 
@@ -133,6 +133,7 @@ class ChatSessionOut(CamelModel):
     persona: str | None = None
     providerId: str | None = None
     requireApproval: bool = False
+    autoApproveUntil: IsoDateTime | None = None
     skillNames: list[str] | None = None
     mcpServerNames: list[str] | None = None
 
@@ -316,6 +317,9 @@ class ChatSettingsIn(StrictModel):
         None, max_length=64, description="模型接入点；显式 null 退回平台默认"
     )
     requireApproval: bool | None = Field(None, description="是否要求人工审批有副作用的操作")
+    autoApproveHours: int | None = Field(
+        None, ge=0, le=24, description="自动放行小时数；0 = 关闭"
+    )
     skillNames: list[str] | None = Field(
         None, max_length=20, description="挂载的技能名；显式 [] 表示全部取消"
     )

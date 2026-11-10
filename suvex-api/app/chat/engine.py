@@ -2743,6 +2743,14 @@ def _tools_schema(ctx: _ToolContext) -> list[dict[str, object]]:
     return schema
 
 
+def _auto_approve_active(session: Any) -> bool:
+    """会话是否在自动放行窗口内（v1.83）。"""
+    from app.core.timeutil import now_utc
+
+    until = getattr(session, "auto_approve_until", None)
+    return bool(until is not None and until > now_utc())
+
+
 def _needs_approval(name: str) -> bool:
     """这个工具在开了「人工审批」时要不要先挂起。
 
@@ -3057,7 +3065,7 @@ async def run_turn(
     )
 
     #: 打开审批时，这些工具不执行、只挂起。
-    gate_on = bool(session.require_approval)
+    gate_on = bool(session.require_approval) and not _auto_approve_active(session)
 
     #: 已经"提醒"过模型几次（见 `MAX_NARRATION_NUDGES`）。
     #:
@@ -3798,7 +3806,7 @@ async def resume_approved(
         challenge_category=_challenge_category(db, session),
         mcp_catalog=ctx.mcp,
     )
-    gate_on = bool(session.require_approval)
+    gate_on = bool(session.require_approval) and not _auto_approve_active(session)
 
     # ★ v1.13：与 `run_turn` 同一套纠偏预算。
     #

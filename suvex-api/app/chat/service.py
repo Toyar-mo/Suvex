@@ -38,6 +38,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy import delete, func, select
@@ -563,6 +564,12 @@ def update_settings(db: Session, *, session: ChatSession, payload: Any) -> ChatS
 
     if "requireApproval" in fields and payload.requireApproval is not None:
         session.require_approval = bool(payload.requireApproval)
+
+    if "autoApproveHours" in fields:
+        hours = int(payload.autoApproveHours or 0)
+        session.auto_approve_until = (
+            now_utc() + timedelta(hours=min(max(hours, 0), 24)) if hours > 0 else None
+        )
 
     if "skillNames" in fields:
         names = payload.skillNames

@@ -273,6 +273,9 @@ class ChatSession(Base):
         Boolean, nullable=False, default=False, server_default="0"
     )
 
+    #: 自动放行截止时间（v1.83）。None = 关闭；非空 = 该时刻前跳过审批。
+    auto_approve_until: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+
     #: 这个对话里额外挂载的技能名（会把它们的正文注入系统提示词）。
     #:
     #: ★ 与 `load_skill` 工具的区别：那个是模型**按需**读，这个是用户

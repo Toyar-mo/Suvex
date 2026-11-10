@@ -135,6 +135,8 @@ export interface ChatSession {
   providerId?: string | null
   /** 有副作用的工具是否要人工确认。 */
   requireApproval?: boolean
+  /** 自动放行截止时间；null/过去 = 关闭。 */
+  autoApproveUntil?: string | null
   /** 挂载的技能名。`null`/空 = 没挂。 */
   skillNames?: string[] | null
   /** 挂载的 MCP server 名。 */
@@ -1739,6 +1741,7 @@ export interface ChatSettingsPatch {
   persona?: string | null
   providerId?: string | null
   requireApproval?: boolean | null
+  autoApproveHours?: number | null
   skillNames?: string[] | null
   mcpServerNames?: string[] | null
 }
