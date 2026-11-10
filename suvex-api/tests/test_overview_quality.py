@@ -23,6 +23,16 @@ def test_empty_database_returns_nulls_not_zero_rates(db_session: Session) -> Non
     assert out["coverage"] == {"surfaces": 0, "targets": 0}
 
 
+def test_since_in_the_future_excludes_everything(db_session: Session) -> None:
+    from datetime import timedelta
+
+    out = quality_snapshot(db_session, since=now_utc() + timedelta(hours=1))
+
+    assert out["scans"]["total"] == 0
+    assert out["findings"]["total"] == 0
+    assert out["coverage"] == {"surfaces": 0, "targets": 0}
+
+
 def test_counts_scans_findings_and_coverage(db_session: Session) -> None:
     at = now_utc()
     db_session.add(

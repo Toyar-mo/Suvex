@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import distinct, func, select
@@ -46,11 +47,19 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4)
 
 
-def quality_snapshot(db: Session) -> dict[str, Any]:
-    """从现有表聚合一份质量快照。只读，不做任何写入。"""
-    scan_rows = db.execute(
-        select(Scan.status, func.count(), func.avg(Scan.duration_sec)).group_by(Scan.status)
-    ).all()
+def quality_snapshot(db: Session, *, since: datetime | None = None) -> dict[str, Any]:
+    """从现有表聚合一份质量快照。只读，不做任何写入。
+
+    `since` 非空时只统计该时刻之后产生的数据（扫描按 created_at、
+    发现按 discovered_at、覆盖记录按 updated_at）。CTF 题目是**全量**
+    口径 —— 题目表没有可靠的"这个时间之后解出"列，混入会撒谎。
+    """
+    scan_stmt = select(Scan.status, func.count(), func.avg(Scan.duration_sec)).group_by(
+        Scan.status
+    )
+    if since is not None:
+        scan_stmt = scan_stmt.where(Scan.created_at >= since)
+    scan_rows = db.execute(scan_stmt).all()
     scans_by_status = {status: count for status, count, _avg in scan_rows}
     total_scans = sum(scans_by_status.values())
     completed_avg = next(
@@ -58,17 +67,20 @@ def quality_snapshot(db: Session) -> dict[str, Any]:
         None,
     )
 
-    verification_rows = db.execute(
-        select(Finding.verification, func.count()).group_by(Finding.verification)
-    ).all()
+    verification_stmt = select(Finding.verification, func.count()).group_by(
+        Finding.verification
+    )
+    if since is not None:
+        verification_stmt = verification_stmt.where(Finding.discovered_at >= since)
+    verification_rows = db.execute(verification_stmt).all()
     by_verification = {value: count for value, count in verification_rows}
     total_findings = sum(by_verification.values())
-    false_positive = int(
-        db.scalar(
-            select(func.count()).select_from(Finding).where(Finding.status == "false_positive")
-        )
-        or 0
+    false_positive_stmt = select(func.count()).select_from(Finding).where(
+        Finding.status == "false_positive"
     )
+    if since is not None:
+        false_positive_stmt = false_positive_stmt.where(Finding.discovered_at >= since)
+    false_positive = int(db.scalar(false_positive_stmt) or 0)
 
     challenge_rows = db.execute(
         select(KernelChallenge.status, func.count()).group_by(KernelChallenge.status)
@@ -83,20 +95,18 @@ def quality_snapshot(db: Session) -> dict[str, Any]:
         db.scalar(select(func.coalesce(func.sum(KernelChallenge.wrong_submission_count), 0))) or 0
     )
 
-    surfaces = int(
-        db.scalar(
-            select(func.count()).select_from(ScanFact).where(ScanFact.category == "surface")
-        )
-        or 0
+    surface_stmt = select(func.count()).select_from(ScanFact).where(
+        ScanFact.category == "surface"
     )
-    coverage_targets = int(
-        db.scalar(
-            select(func.count(distinct(ScanFact.target))).select_from(ScanFact).where(
-                ScanFact.category == "surface"
-            )
-        )
-        or 0
+    if since is not None:
+        surface_stmt = surface_stmt.where(ScanFact.updated_at >= since)
+    surfaces = int(db.scalar(surface_stmt) or 0)
+    target_stmt = select(func.count(distinct(ScanFact.target))).select_from(ScanFact).where(
+        ScanFact.category == "surface"
     )
+    if since is not None:
+        target_stmt = target_stmt.where(ScanFact.updated_at >= since)
+    coverage_targets = int(db.scalar(target_stmt) or 0)
 
     return {
         "scans": {
