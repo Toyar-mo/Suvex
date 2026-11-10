@@ -30,6 +30,7 @@ export const KernelPage = lazy(() => import('./Kernel'))
 export const IrPage = lazy(() => import('./IrPage'))
 export const ToolsPage = lazy(() => import('./ToolsPage'))
 export const SkillsPage = lazy(() => import('./SkillsPage'))
+export const AgentsPage = lazy(() => import('./AgentsPage'))
 export const CredentialsPage = lazy(() => import('./CredentialsPage'))
 /**
  * ★ v0.93：对话页。

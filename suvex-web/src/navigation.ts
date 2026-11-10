@@ -2,6 +2,7 @@ import {
   Activity,
   AlarmClock,
   BookOpen,
+  Bot,
   FileText,
   Flag,
   KeyRound,
@@ -293,6 +294,16 @@ export const NAV_ITEMS: NavItem[] = [
         而这一页回答"能力边界是什么、为什么有几个不可用"，
         它还要管外部进程的拉起与试连。塞进设置页只会让那一页更长更混。
     */
+    inMobileTabBar: false,
+  },
+  {
+    id: 'agents',
+    path: '/agents',
+    group: 'config',
+    label: 'Agent',
+    shortLabel: 'Agent',
+    icon: Bot,
+    blurb: '可选角色清单：内置只读，自定义可增删；绑定当前是配置面，执行器接入后生效。',
     inMobileTabBar: false,
   },
   {
