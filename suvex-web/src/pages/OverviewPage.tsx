@@ -10,8 +10,9 @@ import ErrorState from '@/components/ui/ErrorState'
 import NoScansYet from '@/components/ui/NoScansYet'
 import { Skeleton, SkeletonRows } from '@/components/ui/Skeleton'
 import { useFleetStatus } from '@/data/fleet'
-import type { ActivityEvent } from '@/data/overview'
+import type { ActivityEvent, OverviewData } from '@/data/overview'
 import { loadOverview, useOverviewState } from '@/data/overview-store'
+import { loadQuality, type QualitySnapshot } from '@/data/quality'
 import { useOverviewLiveActivity } from '@/hooks/useOverviewLiveActivity'
 import { cn } from '@/lib/cn'
 import { formatDuration } from '@/lib/datetime'
@@ -124,9 +125,17 @@ function FreshnessNote({ lastLoadedAt }: { lastLoadedAt: number | null }) {
 
 function OverviewPage() {
   const { data, status, error, lastLoadedAt } = useOverviewState()
+  const [quality, setQuality] = useState<QualitySnapshot | null>(null)
 
   useEffect(() => {
     void loadOverview()
+  }, [])
+
+  useEffect(() => {
+    // 质量是增值信息：失败静默（保持 null），不拖累总览首屏。
+    void loadQuality()
+      .then(setQuality)
+      .catch(() => setQuality(null))
   }, [])
 
   /*
@@ -207,7 +216,7 @@ function OverviewPage() {
         ) : (
           <>
             <FreshnessNote lastLoadedAt={lastLoadedAt} />
-            <OverviewContent data={data} agents={agents} />
+            <OverviewContent data={data} agents={agents} quality={quality} />
           </>
         )}
       </div>
@@ -222,12 +231,49 @@ function OverviewPage() {
  * 一层 `data!` 或者把整块 JSX 塞进三元里，两者都会让"三态"
  * 这条主线淹没在缩进里。
  */
+function QualityPanel({ quality }: { quality: QualitySnapshot | null }) {
+  if (!quality) return null
+  const percent = (value: number | null) =>
+    value === null ? '—' : `${Math.round(value * 100)}%`
+  const verifiedShare =
+    quality.findings.total === 0 ? null : quality.findings.verified / quality.findings.total
+  const rows = [
+    { label: 'CTF 解题率', value: percent(quality.challenges.solveRate) },
+    { label: '发现误报率', value: percent(quality.findings.falsePositiveRate) },
+    { label: '已验证占比', value: percent(verifiedShare) },
+    { label: '覆盖的面', value: String(quality.coverage.surfaces) },
+  ]
+
+  return (
+    <section
+      aria-label="质量指标"
+      className="rounded-lg border border-line bg-surface p-panel"
+    >
+      <h3 className="text-sm font-medium text-ink">质量</h3>
+      <p className="mt-1 text-2xs text-ink-muted">
+        成功率 / 误报 / 覆盖度 —— 用来看“变好还是变差”，不只看数量。
+      </p>
+      <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
+        {rows.map((row) => (
+          <div key={row.label} className="flex flex-col">
+            <dt className="text-2xs text-ink-muted">{row.label}</dt>
+            <dd className="tabular text-sm text-ink">{row.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  )
+}
+
+
 function OverviewContent({
   data,
   agents,
+  quality,
 }: {
-  data: import('@/data/overview').OverviewData
+  data: OverviewData
   agents: { running: number; queued: number }
+  quality: QualitySnapshot | null
 }) {
   const { metrics, activity, severityBreakdown, attention, resources } = data
 
@@ -268,6 +314,8 @@ function OverviewContent({
           />
 
           <SeverityChart data={severityBreakdown} />
+
+          <QualityPanel quality={quality} />
         </div>
       </div>
 
