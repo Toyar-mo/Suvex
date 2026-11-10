@@ -267,6 +267,29 @@
     color: #fff;
   }
 
+  /* ── 原生下拉：收起态统一成自绘箭头 ──
+     展开层仍由系统绘制（Chrome 的蓝色选中条改不了），但收起时至少
+     和输入框/按钮是同一套边框、同一支箭头。`padding-right` 必须
+     `!important`：各页的 `px-*` 工具类在 utilities 层，优先级高于这里。 */
+  select {
+    appearance: none;
+    accent-color: rgb(var(--suvex-accent));
+    background-image:
+      linear-gradient(45deg, transparent 50%, currentColor 50%),
+      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+      calc(100% - 12px) calc(50% - 1px),
+      calc(100% - 8px) calc(50% - 1px);
+    background-size: 4px 4px, 4px 4px;
+    background-repeat: no-repeat;
+    padding-right: 1.5rem !important;
+    transition: border-color 120ms ease;
+  }
+
+  select:hover {
+    border-color: rgb(var(--suvex-line-strong));
+  }
+
   /* ── 插入光标：细 violet，比浏览器默认的粗线安静 ── */
   input,
   textarea,
