@@ -37,6 +37,13 @@ const DELTAS = [
       p.findings.total > 0 ? p.findings.verified / p.findings.total : null,
   },
   {
+    key: 'totalTokens',
+    label: 'token 总量',
+    scale: 1,
+    unit: '',
+    read: (p: QualityPayload) => p.cost?.totalTokens ?? null,
+  },
+  {
     key: 'coverageSurfaces',
     label: '覆盖记录',
     scale: 1,

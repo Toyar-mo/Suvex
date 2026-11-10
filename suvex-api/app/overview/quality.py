@@ -31,9 +31,10 @@ from typing import Any
 from sqlalchemy import distinct, func, select
 from sqlalchemy.orm import Session
 
+from app.ctf_race.cost_tracker import resolve_pricing
 from app.facts.models import ScanFact
 from app.findings.models import Finding
-from app.kernel.models import KernelChallenge
+from app.kernel.models import KernelChallenge, KernelSolveUsage
 from app.scans.models import Scan
 
 #: 终态扫描的三种状态（`running`/`queued` 不计入完成率的分母之外的桶）。
@@ -108,7 +109,55 @@ def quality_snapshot(db: Session, *, since: datetime | None = None) -> dict[str,
         target_stmt = target_stmt.where(ScanFact.updated_at >= since)
     coverage_targets = int(db.scalar(target_stmt) or 0)
 
+    # -- 成本(v1.81) ------------------------------------------
+    #
+    # token 只统计 `KernelSolveUsage`（解题侧）。扫描侧由 strix 自己记账，
+    # 当前没有可查询的用量列 —— 与其把扫描成本显示成 0，不如只报解题侧，
+    # 并在前端写明口径。
+    usage_stmt = select(
+        KernelSolveUsage.model,
+        func.count(),
+        func.coalesce(func.sum(KernelSolveUsage.prompt_tokens), 0),
+        func.coalesce(func.sum(KernelSolveUsage.completion_tokens), 0),
+        func.coalesce(func.sum(KernelSolveUsage.total_tokens), 0),
+    ).group_by(KernelSolveUsage.model)
+    if since is not None:
+        usage_stmt = usage_stmt.where(KernelSolveUsage.created_at >= since)
+    usage_rows = db.execute(usage_stmt).all()
+
+    unreported_stmt = select(func.count()).select_from(KernelSolveUsage).where(
+        KernelSolveUsage.usage_reported.is_(False)
+    )
+    if since is not None:
+        unreported_stmt = unreported_stmt.where(KernelSolveUsage.created_at >= since)
+    unreported_calls = int(db.scalar(unreported_stmt) or 0)
+
+    prompt_tokens = sum(int(row[2]) for row in usage_rows)
+    completion_tokens = sum(int(row[3]) for row in usage_rows)
+    total_tokens = sum(int(row[4]) for row in usage_rows)
+    calls = sum(int(row[1]) for row in usage_rows)
+    usd = 0.0
+    unpriced_tokens = 0
+    for _model, _count, prompt, completion, total in usage_rows:
+        price = resolve_pricing(_model)
+        if price is None:
+            unpriced_tokens += int(total)
+            continue
+        usd += (
+            int(prompt) * price.get("input", 0.0)
+            + int(completion) * price.get("output", 0.0)
+        ) / 1_000_000
+
     return {
+        "cost": {
+            "calls": calls,
+            "unreportedCalls": unreported_calls,
+            "promptTokens": prompt_tokens,
+            "completionTokens": completion_tokens,
+            "totalTokens": total_tokens,
+            "usd": round(usd, 4),
+            "unpricedTokens": unpriced_tokens,
+        },
         "scans": {
             "total": total_scans,
             "completed": scans_by_status.get("completed", 0),

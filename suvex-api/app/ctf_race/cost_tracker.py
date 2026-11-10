@@ -26,6 +26,24 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
 }
 
 
+def resolve_pricing(
+    model: str, pricing: dict[str, dict[str, float]] | None = None
+) -> dict[str, float] | None:
+    """按模型名找单价：先精确，再取最长子串匹配。
+
+    拿不到价返回 `None` —— 调用方必须把这种 token 记成"未定价"，
+    不能按 0 算（那会把未知成本伪装成免费）。
+    """
+    table = DEFAULT_PRICING if pricing is None else pricing
+    if model in table:
+        return table[model]
+    best_key = ""
+    for key in table:
+        if key and key in model and len(key) > len(best_key):
+            best_key = key
+    return table[best_key] if best_key else None
+
+
 def _fmt_tokens(n: int) -> str:
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M"
@@ -58,14 +76,7 @@ class CostTracker:
     unknown_models: set[str] = field(default_factory=set)
 
     def _resolve_price(self, model: str) -> dict[str, float] | None:
-        if model in self.pricing:
-            return self.pricing[model]
-        # 最长子串匹配
-        best_key = ""
-        for key in self.pricing:
-            if key and key in model and len(key) > len(best_key):
-                best_key = key
-        return self.pricing[best_key] if best_key else None
+        return resolve_pricing(model, self.pricing)
 
     def record(
         self,

@@ -8,6 +8,15 @@
 import { api } from '@/lib/api'
 
 export interface QualityPayload {
+  cost?: {
+    calls: number
+    unreportedCalls: number
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+    usd: number
+    unpricedTokens: number
+  }
   scans: {
     total: number
     completed: number
@@ -72,4 +81,65 @@ export async function compareSnapshots(
   return api.get<BenchmarkCompare>(
     `/benchmark/compare?before=${encodeURIComponent(before)}&after=${encodeURIComponent(after)}`,
   )
+}
+
+export interface BenchmarkCase {
+  id: string
+  suite: string
+  name: string
+  kind: 'ctf' | 'scan'
+  challengeId: string | null
+  scanId: string | null
+  expect: Record<string, unknown>
+  enabled: boolean
+  createdAt: string
+}
+
+export interface CaseRun {
+  id: string
+  caseId: string
+  status: 'passed' | 'failed' | 'pending' | 'error'
+  detail: Record<string, unknown>
+  collectedAt: string
+}
+
+export interface SuiteRun {
+  suite: string
+  runs: CaseRun[]
+  passed: number
+  failed: number
+  pending: number
+  error: number
+}
+
+export interface NewBenchmarkCase {
+  suite: string
+  name: string
+  kind: 'ctf' | 'scan'
+  challengeId?: string
+  scanId?: string
+  expect?: Record<string, unknown>
+  enabled?: boolean
+}
+
+export async function loadCases(suite?: string): Promise<BenchmarkCase[]> {
+  const query = suite ? `?suite=${encodeURIComponent(suite)}` : ''
+  return api.get<BenchmarkCase[]>(`/benchmark/cases${query}`)
+}
+
+export async function createCase(input: NewBenchmarkCase): Promise<BenchmarkCase> {
+  return api.post<BenchmarkCase>('/benchmark/cases', input)
+}
+
+export async function deleteCase(caseId: string): Promise<{ deleted: boolean }> {
+  return api.del<{ deleted: boolean }>(`/benchmark/cases/${encodeURIComponent(caseId)}`)
+}
+
+export async function runSuite(suite: string): Promise<SuiteRun> {
+  return api.post<SuiteRun>(`/benchmark/suites/${encodeURIComponent(suite)}/run`)
+}
+
+export async function loadRuns(suite?: string): Promise<CaseRun[]> {
+  const query = suite ? `?suite=${encodeURIComponent(suite)}` : ''
+  return api.get<CaseRun[]>(`/benchmark/runs${query}`)
 }

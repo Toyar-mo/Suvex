@@ -40,7 +40,19 @@ export interface QualityCoverageMetrics {
   targets: number
 }
 
+export interface QualityCostMetrics {
+  calls: number
+  unreportedCalls: number
+  promptTokens: number
+  completionTokens: number
+  totalTokens: number
+  usd: number
+  unpricedTokens: number
+}
+
 export interface QualitySnapshot {
+  /** 只统计解题侧 token；扫描侧暂无用量列（v1.81）。 */
+  cost?: QualityCostMetrics
   scans: QualityScanMetrics
   findings: QualityFindingMetrics
   challenges: QualityChallengeMetrics

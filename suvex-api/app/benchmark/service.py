@@ -107,6 +107,10 @@ def compare(before: QualitySnapshot, after: QualitySnapshot) -> dict[str, Any]:
                 if not b.get("coverage") or not a.get("coverage")
                 else a["coverage"].get("surfaces", 0) - b["coverage"].get("surfaces", 0)
             ),
+            "totalTokens": _rate_change(
+                b.get("cost", {}).get("totalTokens"),
+                a.get("cost", {}).get("totalTokens"),
+            ),
             "avgScanDurationSec": (
                 None
                 if b.get("scans", {}).get("avgDurationSec") is None

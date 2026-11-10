@@ -237,11 +237,21 @@ function QualityPanel({ quality }: { quality: QualitySnapshot | null }) {
     value === null ? '—' : `${Math.round(value * 100)}%`
   const verifiedShare =
     quality.findings.total === 0 ? null : quality.findings.verified / quality.findings.total
+  const tokens = quality.cost?.totalTokens ?? 0
+  const tokensText =
+    tokens >= 1_000_000
+      ? `${(tokens / 1_000_000).toFixed(1)}M`
+      : tokens >= 1_000
+        ? `${(tokens / 1_000).toFixed(1)}k`
+        : String(tokens)
+  const usd = quality.cost?.usd ?? 0
   const rows = [
     { label: 'CTF 解题率', value: percent(quality.challenges.solveRate) },
     { label: '发现误报率', value: percent(quality.findings.falsePositiveRate) },
     { label: '已验证占比', value: percent(verifiedShare) },
     { label: '覆盖的面', value: String(quality.coverage.surfaces) },
+    { label: '解题 token', value: tokensText },
+    { label: '估算成本', value: `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` },
   ]
 
   return (

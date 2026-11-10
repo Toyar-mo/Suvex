@@ -27,6 +27,7 @@ def test_compare_computes_metric_deltas() -> None:
             "findings": {"total": 10, "verified": 4, "falsePositiveRate": 0.2},
             "coverage": {"surfaces": 2},
             "scans": {"avgDurationSec": 100},
+            "cost": {"totalTokens": 100},
         },
     )
     after = _row(
@@ -36,6 +37,7 @@ def test_compare_computes_metric_deltas() -> None:
             "findings": {"total": 10, "verified": 5, "falsePositiveRate": 0.1},
             "coverage": {"surfaces": 4},
             "scans": {"avgDurationSec": 80},
+            "cost": {"totalTokens": 250},
         },
     )
 
@@ -46,6 +48,7 @@ def test_compare_computes_metric_deltas() -> None:
     assert delta["verifiedShare"] == 0.1
     assert delta["coverageSurfaces"] == 2
     assert delta["avgScanDurationSec"] == -20.0
+    assert delta["totalTokens"] == 150
 
 
 def test_capture_is_listed_newest_first(db_session: Session) -> None:
