@@ -53,3 +53,13 @@ export async function loadReusePlan(id: string): Promise<ReusePlan> {
 export async function deleteCredential(id: string): Promise<{ deleted: boolean }> {
   return api.del<{ deleted: boolean }>(`/credentials/${encodeURIComponent(id)}`)
 }
+
+
+export async function updateCredential(
+  id: string,
+  patch: Partial<Pick<Credential, 'kind' | 'username' | 'target' | 'source' | 'notes'>> & {
+    secret?: string
+  },
+): Promise<Credential> {
+  return api.patch<Credential>(`/credentials/${encodeURIComponent(id)}`, patch)
+}

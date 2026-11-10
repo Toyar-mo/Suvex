@@ -63,6 +63,43 @@ def list_items(
     return list(db.execute(stmt).scalars())
 
 
+def update(
+    db: Session,
+    credential_id: str,
+    *,
+    kind: str | None = None,
+    username: str | None = None,
+    target: str | None = None,
+    source: str | None = None,
+    notes: str | None = None,
+    secret: str | None = None,
+) -> Credential:
+    row = db.get(Credential, credential_id)
+    if row is None:
+        raise ApiError.not_found("凭据不存在")
+    if kind is not None:
+        if kind not in KINDS:
+            raise ApiError.validation(f"kind 只能是 {' / '.join(KINDS)}")
+        row.kind = kind
+    if target is not None:
+        if not target.strip():
+            raise ApiError.validation("target 不能为空")
+        row.target = target.strip()[:512]
+    if username is not None:
+        row.username = username.strip()[:200]
+    if source is not None:
+        row.source = source.strip()[:120]
+    if notes is not None:
+        row.notes = notes.strip()[:500]
+    if secret is not None:
+        if not secret.strip():
+            raise ApiError.validation("secret 不能为空；不想改就留空")
+        row.secret_token = encrypt_secret(secret)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def delete(db: Session, credential_id: str) -> bool:
     row = db.get(Credential, credential_id)
     if row is None:

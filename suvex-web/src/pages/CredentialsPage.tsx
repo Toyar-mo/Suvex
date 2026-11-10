@@ -7,6 +7,7 @@ import {
   loadCredentials,
   loadReusePlan,
   revealCredential,
+  updateCredential,
 } from '@/data/credentials'
 import type { Credential, ReusePlan } from '@/data/credentials'
 import { showToast } from '@/data/toast-store'
@@ -21,6 +22,7 @@ export function CredentialsPage() {
   const [saving, setSaving] = useState(false)
   const [revealed, setRevealed] = useState<Record<string, string>>({})
   const [plans, setPlans] = useState<Record<string, ReusePlan>>({})
+  const [editingId, setEditingId] = useState<string | null>(null)
 
   async function reload() {
     try {
@@ -42,10 +44,21 @@ export function CredentialsPage() {
     if (!form.target.trim() || !form.secret.trim()) return
     setSaving(true)
     try {
-      await createCredential(form)
+      if (editingId) {
+        await updateCredential(editingId, {
+          kind: form.kind,
+          username: form.username,
+          target: form.target,
+          source: form.source,
+          ...(form.secret ? { secret: form.secret } : {}),
+        })
+        setEditingId(null)
+      } else {
+        await createCredential(form)
+      }
       setForm({ kind: 'password', username: '', secret: '', target: '', source: '' })
       await reload()
-      showToast({ tone: 'ok', message: '凭据已保存（加密）' })
+      showToast({ tone: 'ok', message: editingId ? '凭据已更新' : '凭据已保存（加密）' })
     } catch (err) {
       showToast({ tone: 'risk', message: err instanceof Error ? err.message : '保存失败' })
     } finally {
@@ -137,8 +150,20 @@ export function CredentialsPage() {
           </div>
           <div className="mt-3">
             <Button variant="primary" size="sm" onClick={() => void submit()} disabled={saving}>
-              {saving ? '保存中…' : '保存凭据'}
+              {saving ? '保存中…' : editingId ? '保存修改' : '保存凭据'}
             </Button>
+            {editingId && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setEditingId(null)
+                  setForm({ kind: 'password', username: '', secret: '', target: '', source: '' })
+                }}
+              >
+                取消
+              </Button>
+            )}
           </div>
         </section>
 
@@ -200,6 +225,22 @@ export function CredentialsPage() {
                               onClick={() => void reveal(item.id)}
                             >
                               显示明文
+                            </button>
+                            <button
+                              type="button"
+                              className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
+                              onClick={() => {
+                                setEditingId(item.id)
+                                setForm({
+                                  kind: item.kind,
+                                  username: item.username,
+                                  secret: '',
+                                  target: item.target,
+                                  source: item.source,
+                                })
+                              }}
+                            >
+                              编辑
                             </button>
                             <button
                               type="button"

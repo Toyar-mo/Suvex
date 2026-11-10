@@ -69,3 +69,35 @@ def test_delete_credential(db_session: Session) -> None:
 
     assert service.delete(db_session, row.id) is True
     assert service.delete(db_session, row.id) is False
+
+
+def test_update_credential_can_change_fields_and_secret(db_session: Session) -> None:
+    row = service.create(
+        db_session,
+        kind="password",
+        username="admin",
+        secret="old",
+        target="http://a.test",
+    )
+
+    updated = service.update(
+        db_session, row.id, username="root", target="http://b.test", secret="new"
+    )
+
+    assert updated.username == "root"
+    assert updated.target == "http://b.test"
+    assert service.reveal(db_session, row.id) == "new"
+
+
+def test_update_without_secret_keeps_it(db_session: Session) -> None:
+    row = service.create(
+        db_session,
+        kind="password",
+        username="admin",
+        secret="keep",
+        target="http://a.test",
+    )
+
+    service.update(db_session, row.id, notes="只改备注")
+
+    assert service.reveal(db_session, row.id) == "keep"

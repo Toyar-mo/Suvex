@@ -57,3 +57,12 @@ class ReusePlanOut(CamelModel):
     sameTarget: int
     sameHost: int
     sameScan: int
+
+
+class CredentialPatch(StrictModel):
+    kind: str | None = None
+    username: str | None = None
+    target: str | None = None
+    source: str | None = None
+    notes: str | None = None
+    secret: str | None = None

@@ -20,7 +20,13 @@ from app.auth.deps import Identity, require_admin, require_read, require_scan
 from app.core.db import get_db
 from app.core.errors import ApiError
 from app.credentials import service
-from app.credentials.schemas import CredentialIn, CredentialOut, ReusePlanOut, RevealOut
+from app.credentials.schemas import (
+    CredentialIn,
+    CredentialOut,
+    CredentialPatch,
+    ReusePlanOut,
+    RevealOut,
+)
 
 router = APIRouter(prefix="/credentials", tags=["凭据"])
 
@@ -112,3 +118,32 @@ def delete_credential(
         target=credentialId,
     )
     return {"deleted": True}
+
+
+@router.patch("/{credentialId}", response_model=CredentialOut, summary="修改凭据（secret 留空则不变）")
+def update_credential(
+    credentialId: str,  # noqa: N803
+    payload: CredentialPatch,
+    identity: ScanDep,
+    request: Request,
+    db: DbDep,
+) -> CredentialOut:
+    row = service.update(
+        db,
+        credentialId,
+        kind=payload.kind,
+        username=payload.username,
+        target=payload.target,
+        source=payload.source,
+        notes=payload.notes,
+        secret=payload.secret,
+    )
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action="credential.update",
+        summary="修改了一条凭据",
+        target=credentialId,
+        detail={"fields": list(payload.model_dump(exclude_none=True))},
+    )
+    return CredentialOut.from_row(row)
