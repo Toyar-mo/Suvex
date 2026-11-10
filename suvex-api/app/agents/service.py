@@ -55,6 +55,28 @@ ROLE_TEMPLATES: tuple[dict[str, str], ...] = (
 )
 
 
+def allowed_tools_for_persona(db: Session, persona_id: str | None) -> set[str] | None:
+    """该人格绑定的聊天工具子集；None = 不限制。
+
+    绑定为空 = 不限制（兼容旧行为）；配置了但全是未知名字 = 空集
+    （模型将没有任何内置工具，这是显式配置的后果）。
+    """
+    if not persona_id:
+        return None
+    row = db.execute(
+        select(AgentProfile).where(AgentProfile.key == persona_id)
+    ).scalar_one_or_none()
+    if row is None:
+        return None
+    configured = [str(item).strip() for item in (row.tools or []) if str(item).strip()]
+    if not configured:
+        return None
+
+    from app.chat.prompts import CHAT_TOOL_NAMES
+
+    return {item for item in configured if item in CHAT_TOOL_NAMES}
+
+
 def persona_catalog(db: Session) -> list[dict[str, str]]:
     """聊天页角色列表：DB 提供名称/描述，代码提供 prompt guidance。"""
     ensure_builtins(db)

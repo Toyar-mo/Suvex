@@ -1300,7 +1300,7 @@ class _ToolContext:
     取，只有一个来源。
     """
 
-    __slots__ = ("db", "session", "identity", "mcp")
+    __slots__ = ("db", "session", "identity", "mcp", "allowed_tools")
 
     def __init__(
         self,
@@ -1309,6 +1309,7 @@ class _ToolContext:
         session: ChatSession,
         identity: Any,
         mcp: mcp_tools.McpToolCatalog | None = None,
+        allowed_tools: set[str] | None = None,
     ) -> None:
         self.db = db
         self.session = session
@@ -1319,6 +1320,8 @@ class _ToolContext:
         #:   这一轮就应当按最新的来；而同一个会话的两轮之间也可能不同的
         #:   server 掉线。每轮重新发现是"所见即所得"最便宜的实现。
         self.mcp = mcp or mcp_tools.McpToolCatalog()
+        #: None = 不限制；集合 = 只允许这些内置工具（v1.83）。
+        self.allowed_tools = allowed_tools
 
 
 def _need_scope(ctx: _ToolContext, tool_name: str) -> None:
@@ -2733,12 +2736,22 @@ async def _build_tool_context(
     except Exception:  # noqa: BLE001 - 连接发现不该毁掉整轮对话
         _log.warning("发现会话挂载的 MCP 工具失败，本轮按未挂载处理", exc_info=True)
         catalog = mcp_tools.McpToolCatalog()
-    return _ToolContext(db=db, session=session, identity=identity, mcp=catalog)
+    from app.agents import service as agents_service
+
+    allowed = agents_service.allowed_tools_for_persona(db, session.persona)
+    return _ToolContext(
+        db=db, session=session, identity=identity, mcp=catalog, allowed_tools=allowed
+    )
 
 
 def _tools_schema(ctx: _ToolContext) -> list[dict[str, object]]:
     """本轮交给原生 tool-calling 的完整工具表：内置工具 + 挂载的 MCP 工具。"""
-    schema: list[dict[str, object]] = list(build_tools_schema())
+    schema: list[dict[str, object]] = [
+        item
+        for item in build_tools_schema()
+        if ctx.allowed_tools is None
+        or item["function"]["name"] in ctx.allowed_tools
+    ]
     schema.extend(ctx.mcp.tool_schema())
     return schema
 
@@ -2773,6 +2786,13 @@ async def _execute_tool(ctx: _ToolContext, name: str, args: dict[str, Any]) -> t
        它内部自己 commit，因为扫描是**独立于对话**的实体 —— 建出来了就该
        存在，不该因为对话后面出错而被回滚）。
     """
+    if (
+        ctx.allowed_tools is not None
+        and name not in ctx.allowed_tools
+        and not mcp_tools.is_mcp_tool_name(name)
+    ):
+        return (f"该 Agent 未授权工具 `{name}`。", True)
+
     impl = _TOOL_IMPLS.get(name)
     if impl is None:
         # ★ v1.80：动态 MCP 工具。它们不在 `_TOOL_IMPLS` 里（名字来自本会话
