@@ -255,11 +255,58 @@ class OverviewOut(CamelModel):
     resources: list[ResourceCountOut] = []
 
 
+class QualityScanOut(CamelModel):
+    total: int = 0
+    completed: int = 0
+    failed: int = 0
+    aborted: int = 0
+    #: 只有已完成扫描参与平均；没有样本时为 `null`，不能显示成 0 秒。
+    avgDurationSec: float | None = None
+
+
+class QualityFindingOut(CamelModel):
+    total: int = 0
+    verified: int = 0
+    needsFollowUp: int = 0
+    none: int = 0
+    falsePositive: int = 0
+    #: 分母为 0 时为 `null`（无法计算 ≠ 0%）。
+    falsePositiveRate: float | None = None
+
+
+class QualityChallengeOut(CamelModel):
+    total: int = 0
+    solved: int = 0
+    solveRate: float | None = None
+    candidateCount: int = 0
+    wrongSubmissions: int = 0
+
+
+class QualityCoverageOut(CamelModel):
+    surfaces: int = 0
+    targets: int = 0
+
+
+class QualityOut(CamelModel):
+    """agent 质量指标快照（`GET /overview/quality`）。"""
+
+    scans: QualityScanOut
+    findings: QualityFindingOut
+    challenges: QualityChallengeOut
+    coverage: QualityCoverageOut
+    generatedAt: IsoDateTime
+
+
 __all__ = [
     "AttentionItemOut",
     "OverviewMetricsOut",
     "OverviewOut",
     "ProjectedActivityOut",
+    "QualityChallengeOut",
+    "QualityCoverageOut",
+    "QualityFindingOut",
+    "QualityOut",
+    "QualityScanOut",
     "ResourceCountOut",
     "SeverityBreakdownOut",
 ]

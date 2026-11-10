@@ -34,8 +34,9 @@ from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read
 from app.core.db import get_db
-from app.overview import service
-from app.overview.schemas import OverviewOut
+from app.core.timeutil import now_utc
+from app.overview import quality, service
+from app.overview.schemas import OverviewOut, QualityOut
 
 router = APIRouter(tags=["全局统计"])
 
@@ -61,3 +62,19 @@ def read_overview(
     if scanId is None:
         return service.build_overview(db)
     return service.build_overview(db, scan_id=scanId)
+
+
+@router.get(
+    "/overview/quality",
+    response_model=QualityOut,
+    summary="agent 质量指标快照（成功率 / 证据强度 / 误报率 / 覆盖度）",
+)
+def read_quality(_identity: ReadDep, db: DbDep) -> QualityOut:
+    """只读聚合：扫描、发现、CTF、覆盖度四组指标。
+
+    口径与「不推断」边界见 `app/overview/quality.py` 的模块说明：
+    分母为 0 的比率返回 `null`（无法计算 ≠ 0%）；未解出不等于失败。
+    """
+    return QualityOut.model_validate(
+        {**quality.quality_snapshot(db), "generatedAt": now_utc()}
+    )
