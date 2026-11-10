@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Layers, RefreshCw, Search } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppShell'
+import AssetCoverageDrawer from '@/components/assets/AssetCoverageDrawer'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
@@ -161,22 +162,34 @@ function SummaryCard({
 const AssetRow = memo(function AssetRow({
   asset,
   nowMinute,
+  onOpenCoverage,
 }: {
   asset: Asset
   /** 当前时刻按**分钟**取整 —— 相对时间本来就只到分钟粒度 */
   nowMinute: number
+  onOpenCoverage: (target: string) => void
 }) {
   const now = nowMinute * 60_000
   const health = assetHealth(asset, now)
   return (
     <tr className="hover:bg-sunken/60 border-b border-line last:border-b-0">
       <td className="px-panel py-2">
-        <Link
-          to={`/scans?target=${encodeURIComponent(asset.target)}`}
-          className="break-all font-mono text-sm text-ink hover:text-accent"
-        >
-          {asset.target}
-        </Link>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            to={`/scans?target=${encodeURIComponent(asset.target)}`}
+            className="break-all font-mono text-sm text-ink hover:text-accent"
+          >
+            {asset.target}
+          </Link>
+          <button
+            type="button"
+            onClick={() => onOpenCoverage(asset.target)}
+            className="rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted hover:border-line-strong hover:text-ink"
+            aria-label={`查看 ${asset.target} 的覆盖度与事实图`}
+          >
+            覆盖度
+          </button>
+        </div>
       </td>
       <td className="px-panel py-2">
         <HealthBadge health={health} />
@@ -216,6 +229,7 @@ const AssetRow = memo(function AssetRow({
 
 export default function AssetsPage() {
   const state = useAssetsState()
+  const [coverageTarget, setCoverageTarget] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [healthFilter, setHealthFilter] = useState<HealthFilter>('all')
   const [now, setNow] = useState(() => Date.now())
@@ -427,7 +441,12 @@ export default function AssetsPage() {
               </thead>
               <tbody>
                 {filtered.map((asset) => (
-                  <AssetRow key={asset.target} asset={asset} nowMinute={nowMinute} />
+                  <AssetRow
+                    key={asset.target}
+                    asset={asset}
+                    nowMinute={nowMinute}
+                    onOpenCoverage={setCoverageTarget}
+                  />
                 ))}
               </tbody>
             </table>
@@ -442,6 +461,11 @@ export default function AssetsPage() {
           </p>
         )}
       </div>
+      <AssetCoverageDrawer
+        key={coverageTarget ?? 'none'}
+        target={coverageTarget}
+        onClose={() => setCoverageTarget(null)}
+      />
     </>
   )
 }
