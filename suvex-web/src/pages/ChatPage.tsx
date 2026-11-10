@@ -1530,6 +1530,7 @@ export function ChatPage() {
                         key={session.id}
                         session={session}
                         active={active?.id === session.id}
+                        running={session.running || sendingSessionIds.includes(session.id)}
                         onOpen={() => {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
@@ -1574,6 +1575,7 @@ export function ChatPage() {
                         key={session.id}
                         session={session}
                         active={active?.id === session.id}
+                        running={session.running || sendingSessionIds.includes(session.id)}
                         onOpen={() => {
                           setSearchParams({ session: session.id }, { replace: true })
                           setShowList(false)
@@ -1635,6 +1637,7 @@ export function ChatPage() {
                           session={session}
                           archived
                           active={active?.id === session.id}
+                          running={session.running || sendingSessionIds.includes(session.id)}
                           onOpen={() => {
                             setSearchParams({ session: session.id }, { replace: true })
                             setShowList(false)
@@ -2501,6 +2504,7 @@ export function ChatPage() {
 function SessionRow({
   session,
   active,
+  running,
   onOpen,
   onArchive,
   onContextMenu,
@@ -2508,6 +2512,8 @@ function SessionRow({
 }: {
   session: ChatSession
   active: boolean
+  /** 服务端 running，或本浏览器刚发起、服务端列表还没刷新。 */
+  running: boolean
   onOpen: () => void
   onArchive: () => void
   /** 右键（以及"⋯"按钮）打开上下文菜单。 */
@@ -2546,7 +2552,7 @@ function SessionRow({
           aria-current={active ? 'page' : undefined}
         >
           <span className="flex items-center gap-1">
-            {session.running && (
+            {running && (
               // ★ v1.66：正在跑的会话在列表里画一个转圈点 + 「运行中」。
               //   这样一眼能看出哪个会话在跑（服务端事实，跨刷新权威），
               //   取代了聊天区底部那条常驻蓝条（用户不要它）。
@@ -2571,7 +2577,7 @@ function SessionRow({
             </span>
           </span>
           <span className="block text-2xs text-ink-faint">
-            {session.running ? '运行中 · ' : ''}
+            {running ? '运行中 · ' : ''}
             {/* 「条」单独出现不知道数的是什么；这一列数的是消息（含工具调用记录） */}
             {session.messageCount} 条消息
           </span>
