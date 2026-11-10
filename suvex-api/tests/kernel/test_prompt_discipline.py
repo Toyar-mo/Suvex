@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from app.chat import nudge
 from app.chat import prompts as chat_prompts
 from app.kernel import runner
 
@@ -42,4 +43,12 @@ def test_all_deliverable_tasks_must_end_with_a_result_block() -> None:
         assert token in text
     assert chat_prompts.BRUTE_HARD_LIMIT <= 20
     assert "已停止" in chat_prompts.render_brute_stop_limit_note(chat_prompts.BRUTE_HARD_LIMIT)
+    assert "只写一次" in text
+
+
+def test_result_block_is_final_even_with_limitations() -> None:
+    """「结果」块里的未完成/限制是边界，不是继续计划。"""
+    assert nudge.looks_like_result("结果\n- 目标：x\n- 未完成：y")
+    assert nudge.looks_like_result("  ## 结果\n- 结论：ok")
+    assert not nudge.looks_like_result("我先继续查一下")
 

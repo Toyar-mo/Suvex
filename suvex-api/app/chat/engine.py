@@ -3584,6 +3584,13 @@ async def run_turn(
         await _emit_message(emit, assistant_message)
 
         if not actions:
+            # ★ v1.84：已经按交付格式给出「结果」块 = 本轮交付完成。
+            #   结果块里的「未完成/限制」是边界说明，不是"还要继续"的计划；
+            #   不在这里截断，`should_nudge` 会把它当半句话反复打回，
+            #   模型于是重写同一份结论，界面上出现多条重复 answer。
+            if nudge_policy.looks_like_result(text):
+                return result
+
             # ★ v1.64.1：这一轮模型没调任何工具（只写了正文）。累计"连续没调
             #   工具"的轮数 —— 一旦它跑过工具又连续 N 轮不再动手，就认定它是在
             #   作答而非中停（见 `MAX_NO_TOOL_NUDGES`）。执行工具的分支会把它

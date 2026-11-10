@@ -541,6 +541,18 @@ def _tail_clauses(body: str, window: int = TRAILING_PLAN_CLAUSES) -> str:
     return "。".join(sentences[-window:])
 
 
+_RESULT_BLOCK = re.compile(r"^\s*(?:#+\s*)?结果(?:\s*[:：]|\s|$)")
+
+
+def looks_like_result(text: str) -> bool:
+    """是不是已经按交付格式给出了「结果」块。
+
+    只用于**收尾判定**：结果块里的「未完成/限制」是给用户看的边界，
+    不能因此把整条答复再打回成"计划"；否则模型会反复重写同一份结论。
+    """
+    return bool(_RESULT_BLOCK.match(text or ""))
+
+
 def looks_like_plan(text: str) -> bool:
     """这句 `FINAL:` 的内容是不是「接下来要做什么」（v1.29）。
 
