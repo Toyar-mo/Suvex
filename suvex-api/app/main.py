@@ -51,6 +51,7 @@ from app.ctf_race.router import router as ctf_race_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
 from app.health import router as health_router
+from app.intranet.router import router as intranet_router
 from app.kernel.router import router as ctf2_router
 from app.kernel.skills_router import router as kernel_skills_router
 from app.members.router import router as members_router
@@ -526,6 +527,7 @@ def create_app() -> FastAPI:
         audit_router,
         ctf2_router,
         kernel_skills_router,
+        intranet_router,
         chat_router,
         ctf_race_router,
     ):

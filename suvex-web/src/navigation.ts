@@ -5,6 +5,7 @@ import {
   Bot,
   ClipboardCheck,
   Cpu,
+  Network,
   FileText,
   Flag,
   KeyRound,
@@ -296,6 +297,16 @@ export const NAV_ITEMS: NavItem[] = [
         而这一页回答"能力边界是什么、为什么有几个不可用"，
         它还要管外部进程的拉起与试连。塞进设置页只会让那一页更长更混。
     */
+    inMobileTabBar: false,
+  },
+  {
+    id: 'intranet',
+    path: '/intranet',
+    group: 'run',
+    label: '内网会话',
+    shortLabel: '内网',
+    icon: Network,
+    blurb: '人工登记的立足点台账：webshell / 反弹 / ssh；只记录，不自动连接。',
     inMobileTabBar: false,
   },
   {

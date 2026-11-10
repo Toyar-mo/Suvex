@@ -30,6 +30,7 @@ import {
   AgentsPage,
   ModelsPage,
   ApprovalsPage,
+  IntranetPage,
   CredentialsPage,
   ToolsPage,
 } from '@/pages'
@@ -84,6 +85,7 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   agents: AgentsPage,
   models: ModelsPage,
   approvals: ApprovalsPage,
+  intranet: IntranetPage,
   credentials: CredentialsPage,
   settings: SettingsPage,
 }
