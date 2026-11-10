@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from app.core.schemas import CamelModel
+from app.core.schemas import CamelModel, StrictModel
 from app.core.timeutil import IsoDateTime
 
 
@@ -152,3 +152,33 @@ class CoverageOut(CamelModel):
     gaps: list[CoverageGapOut] = []
     truncated: bool = False
     stats: CoverageStatsOut
+
+
+class HoneypotMatchOut(CamelModel):
+    id: str
+    category: str
+    confidence: float
+    matched: str
+    source: str
+
+
+class HoneypotScoreIn(StrictModel):
+    banner: str = ""
+    title: str = ""
+    headers: dict[str, str] = {}
+    body: str = ""
+
+
+class HoneypotScoreOut(CamelModel):
+    score: float
+    verdict: str
+    matches: list[HoneypotMatchOut] = []
+    note: str
+
+
+class HoneypotSignatureOut(CamelModel):
+    id: str
+    category: str
+    confidence: float
+    patterns: list[str]
+    source: str

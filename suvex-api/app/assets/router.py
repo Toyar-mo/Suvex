@@ -29,6 +29,9 @@ from app.assets.schemas import (
     AssetOut,
     AssetSummaryOut,
     CoverageOut,
+    HoneypotScoreIn,
+    HoneypotScoreOut,
+    HoneypotSignatureOut,
     SurfaceMapOut,
 )
 from app.auth.deps import Identity, require_read
@@ -106,3 +109,36 @@ def asset_surface(
     from app.facts import service as facts_service
 
     return SurfaceMapOut.model_validate(facts_service.surface_map(db, target=target))
+
+
+# -- 蜜罐 / 反 AI 陷阱静态信号（v1.82）----------------------
+
+
+@router.get(
+    "/assets/honeypot/signatures",
+    response_model=list[HoneypotSignatureOut],
+    summary="蜜罐静态签名库",
+)
+def honeypot_signatures(_identity: ReadDep) -> list[HoneypotSignatureOut]:
+    from app.assets import honeypot
+
+    return [HoneypotSignatureOut.model_validate(item) for item in honeypot.list_signatures()]
+
+
+@router.post(
+    "/assets/honeypot/score",
+    response_model=HoneypotScoreOut,
+    summary="对 banner/title/响应做蜜罐打分",
+)
+def honeypot_score(payload: HoneypotScoreIn, _identity: ReadDep) -> HoneypotScoreOut:
+    """纯计算，不发包、不写库。"""
+    from app.assets import honeypot
+
+    return HoneypotScoreOut.model_validate(
+        honeypot.score(
+            banner=payload.banner,
+            title=payload.title,
+            headers=payload.headers,
+            body=payload.body,
+        )
+    )
