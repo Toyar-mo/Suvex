@@ -115,7 +115,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     #    链、或者有个镜像不再装 gcc，这里会立刻在检查里露馅。
     binutils \
     # ── 网络 / web 题 ──
-    netcat-traditional socat openssl dnsutils iputils-ping \
+    netcat-traditional socat sshpass openssl dnsutils iputils-ping \
     nmap whatweb ffuf gobuster dirb sqlmap nikto \
     # ── ★ v0.87：按 CyberStrikeAI 的工具清单补齐（13 个，全部 apt 可装）──
     #

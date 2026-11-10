@@ -117,7 +117,6 @@ from app.kernel.client import (
 # 所以不会与本文件撞环。
 from app.kernel.history import recall_for_challenge
 from app.kernel.models import (
-    CTF2_OFFICIAL_HOSTS,
     KernelChallenge,
     KernelCompetition,
     KernelEnvironment,
@@ -819,11 +818,7 @@ def image_for_profile(profile: str) -> str:
 
 
 def allowed_hosts(access_urls: Sequence[str]) -> frozenset[str]:
-    """本题允许访问的主机名集合。
-
-    ⚠️ **只从数据库里的 `access_urls` 取** —— 绝不要从题目文本、
-    题面附件、或 agent 的输出里取。见上面那段说明。
-    """
+    """保留给调用方展示/兼容；访问控制已不再使用它。"""
     hosts: set[str] = set()
     for url in access_urls or ():
         candidate = url if "://" in url else f"http://{url}"
@@ -834,27 +829,16 @@ def allowed_hosts(access_urls: Sequence[str]) -> frozenset[str]:
 
 
 def guard_tool_url(url: str, *, access_urls: Sequence[str]) -> None:
-    """`http_request` 工具发请求前的**唯一**校验点。越界直接抛。
+    """`http_request` 的唯一校验：只保证是 http/https 且带主机名。
 
-    抛而不是"返回一句拒绝"是刻意的：拒绝理由要**回到模型**（它会据此
-    换思路），而抛异常让调用点无法忽略它 —— 一个返回 `None` 的校验
-    会让"忘了判返回值"变成一次真实的越界请求，而那种 bug 不会报错。
+    ★ 2026-11-11：按用户要求移除主机白名单。CTF 题面常见的子域
+    （如 `20260818-atta.dasctf.com`）不再被官方域名列表挡住。
 
-    ## 为什么这里再叫一次 `client.assert_allowed_target`
-
-    同一份规则（官方域名 + 本题地址）在客户端那一层已经有一份实现。
-    这里**复用**而不是重写：两份白名单实现必然漂移，而漂移的方向
-    通常是"这一份记得加、那一份忘了"。
+    ⚠️ 该工具在宿主执行，移除后可以访问 127.0.0.1/内网/元数据地址。
+    `access_urls` 保留参数只为兼容调用点，不参与判断。
     """
-    try:
-        assert_allowed_target(url, allowed_extra=tuple(allowed_hosts(access_urls)))
-    except KernelError as exc:
-        # 包成同一个领域异常，但消息要能直接喂回模型 ——
-        # 它需要知道"为什么不行"才能换路子，而不是反复试同一个地址。
-        raise KernelError(
-            f"该地址不在允许范围内：{exc.message} 只允许访问本题的环境地址"
-            f"与 CTF2 官方域名（{', '.join(CTF2_OFFICIAL_HOSTS)}）。"
-        ) from exc
+    del access_urls
+    assert_allowed_target(url)
 
 
 # ══════════════════════════════════════════════════════════

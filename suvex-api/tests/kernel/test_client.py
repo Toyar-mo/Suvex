@@ -69,14 +69,10 @@ def test_client_refuses_to_start_without_a_token() -> None:
         ctf2.KernelClient(token="")
 
 
-def test_client_refuses_a_non_official_base_url() -> None:
-    """base_url 不是官方域名时**在构造时就炸**。
-
-    这是凭据边界：一个被配错的 base_url 会把 PAT 发到**每一次**请求上。
-    等到第一次 401 才发现，PAT 已经出去了。
-    """
-    with pytest.raises(ctf2.KernelError, match="不在允许范围"):
-        ctf2.KernelClient(token=TEST_PAT, base_url="https://ctf2-dasctf.evil.example")
+def test_client_accepts_any_http_base_url() -> None:
+    """2026-11-11：主机白名单移除，base_url 不再限制官方域名。"""
+    client = ctf2.KernelClient(token=TEST_PAT, base_url="https://ctf2-dasctf.evil.example")
+    assert client is not None
 
 
 def test_official_subdomain_is_allowed() -> None:
@@ -90,25 +86,18 @@ def test_official_subdomain_is_allowed() -> None:
     assert client is not None
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "https://evil-dasctf.com",  # 后缀匹配会错误放行的那一类
-        "https://dasctf.com.attacker.net",  # 同上，另一种写法
-        "http://169.254.169.254/latest",  # 云元数据
-        "ftp://ctf2.dasctf.com/x",  # 协议不对
-    ],
-)
-def test_target_whitelist_rejects_lookalikes(url: str) -> None:
-    with pytest.raises(ctf2.KernelError):
+def test_target_check_only_rejects_non_http_schemes() -> None:
+    """主机白名单已移除；只保留协议/主机名形状校验。"""
+    for url in (
+        "https://evil-dasctf.com",
+        "https://dasctf.com.attacker.net",
+        "http://169.254.169.254/latest",
+        "http://1.2.3.4:8080",
+        "http://5.6.7.8:8080",
+    ):
         ctf2.assert_allowed_target(url)
-
-
-def test_target_whitelist_accepts_the_challenge_environment() -> None:
-    """本题的 access_url 由调用方传进来 —— 而它必须**逐题**给。"""
-    ctf2.assert_allowed_target("http://1.2.3.4:8080", allowed_extra=("1.2.3.4:8080",))
     with pytest.raises(ctf2.KernelError):
-        ctf2.assert_allowed_target("http://5.6.7.8:8080", allowed_extra=("1.2.3.4:8080",))
+        ctf2.assert_allowed_target("ftp://ctf2.dasctf.com/x")
 
 
 async def test_token_is_only_in_the_header_never_in_the_url(

@@ -54,7 +54,7 @@ import httpx
 
 from app.core import netguard
 from app.core.crypto import mask_secret, redact
-from app.kernel.models import CTF2_API_PREFIX, CTF2_OFFICIAL_HOSTS
+from app.kernel.models import CTF2_API_PREFIX
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -274,46 +274,21 @@ def _as_host(value: str) -> str:
 
 
 def assert_allowed_target(url: str, *, allowed_extra: tuple[str, ...] = ()) -> None:
-    """校验一个 URL 是否落在允许的范围内。**给 runner 用**（不在这里调用）。
+    """只校验 URL 能构造出 http/https 请求，**不再限制主机**。
 
-    ## 边界是什么，以及为什么它必须硬编码
+    2026-11-11 起按用户要求移除官方域名/本题地址白名单：CTF 题面里的
+    子域、任意靶机地址都要能访问。`allowed_extra` 保留参数只是为了
+    兼容既有调用点，已经不参与判断。
 
-    允许的只有两类：
-
-    1. **CTF2 官方域名**（`ctf2.dasctf.com`）—— PAT 只准发往这里；
-    2. **本题的 access_url**（由调用方通过 `allowed_extra` 传入）。
-
-    ⚠️ "本题的 access_url" 是**逐题不同**的，所以它不能硬编码 ——
-    但它必须由调用方从**数据库里那一题的记录**取，而不是从"题目里
-    写着的一个地址"取。题面是参赛者可控的输入（题目本身就可能诱导
-    人去访问某个地址），拿它当白名单等于没有白名单。
-
-    ## 为什么用 host 精确匹配而不是后缀匹配
-
-    `endswith("dasctf.com")` 会放过 `evil-dasctf.com` 与
-    `dasctf.com.attacker.net`。两者都是有过的绕过手法，
-    而写后缀匹配的人当时想的都是"这样能覆盖子域名"——
-    子域名要用 `host == x or host.endswith("." + x)` 表达，不是 `endswith(x)`。
+    ⚠️ 代价是真实的：`http_request` 在宿主侧执行，现在可以访问
+    127.0.0.1、内网和云元数据地址。这是明确的产品选择，不再是安全边界。
     """
+    del allowed_extra
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise KernelError(f"不允许的目标协议：{parts.scheme or '（空）'}。只接受 http/https。")
-    host = (parts.hostname or "").lower()
-    if not host:
+    if not (parts.hostname or "").strip():
         raise KernelError("目标地址里没有主机名。")
-
-    # `allowed_extra` 里的项可能是 `1.2.3.4:8080` / `http://1.2.3.4:8080`
-    # 这种带端口的形状 —— 见 `_as_host` 的说明。
-    candidates = tuple(_as_host(item) for item in allowed_extra) + tuple(
-        h.lower() for h in CTF2_OFFICIAL_HOSTS
-    )
-    for allowed in candidates:
-        if allowed and (host == allowed or host.endswith("." + allowed)):
-            return
-    raise KernelError(
-        f"目标 {host} 不在允许范围内。只允许 CTF2 官方域名与本题的环境地址 —— "
-        "这条限制是硬编码的，见 app/kernel/client.py 的说明。"
-    )
 
 
 # ══════════════════════════════════════════════════════════

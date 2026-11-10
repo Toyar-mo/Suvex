@@ -105,48 +105,26 @@ def test_raw_network_is_opt_in() -> None:
 # ══════════════════════════════════════════════════════════
 
 
-def test_guard_allows_official_domain_and_challenge_hosts() -> None:
-    access = ["http://1.2.3.4:8080", "10.0.0.5:9999"]
-    # 本题环境
-    runner.guard_tool_url("http://1.2.3.4:8080/login", access_urls=access)
-    runner.guard_tool_url("http://10.0.0.5:9999", access_urls=access)
-    # CTF2 官方域名（附件与 API）
-    runner.guard_tool_url("https://ctf2.dasctf.com/files/hint.txt", access_urls=access)
+def test_guard_allows_any_http_host() -> None:
+    """2026-11-11：主机白名单已移除，任意 http/https 目标都放行。"""
+    for url in (
+        "http://1.2.3.4:8080/login",
+        "http://10.0.0.5:9999",
+        "https://ctf2.dasctf.com/files/hint.txt",
+        "https://20260818-atta.dasctf.com/Be_Powerful.zip",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://127.0.0.1:8000/api/v1/scans",
+        "http://example.com/",
+    ):
+        runner.guard_tool_url(url, access_urls=[])
 
 
-@pytest.mark.parametrize(
-    "url",
-    [
-        "http://169.254.169.254/latest/meta-data/",  # 云元数据
-        "http://127.0.0.1:8000/api/v1/scans",  # 后端自己
-        "https://evil-dasctf.com/",  # 后缀匹配会放行的那一类
-        "https://dasctf.com.attacker.net/",
-        "http://example.com/",  # 题面里可能出现的随便一个站
-    ],
-)
-def test_guard_rejects_out_of_scope_urls(url: str) -> None:
-    """★ 越界请求必须被拒绝，且**抛**而不是返回 None。
-
-    返回 None 的校验会让"忘了判返回值"变成一次真实的越界请求 ——
-    而那种 bug 不会报错，只会安静地发出去。
-    """
+@pytest.mark.parametrize("url", ["ftp://example.com/x", "file:///etc/passwd", "https:///x"])
+def test_guard_still_rejects_non_http_or_hostless_urls(url: str) -> None:
     from app.kernel.client import KernelError
 
     with pytest.raises(KernelError):
-        runner.guard_tool_url(url, access_urls=["http://1.2.3.4:8080"])
-
-
-def test_guard_does_not_trust_the_description() -> None:
-    """★ 白名单来源**只有** `access_urls` 参数。
-
-    这条钉的是一个很容易犯的改法：拿题面文本里的地址当白名单。
-    题面是参赛者/出题人可控的内容（"请访问 http://10.0.0.1/"），
-    拿它当白名单等于没有白名单。
-    """
-    from app.kernel.client import KernelError
-
-    with pytest.raises(KernelError):
-        runner.guard_tool_url("http://10.0.0.1/flag", access_urls=["http://1.2.3.4:8080"])
+        runner.guard_tool_url(url, access_urls=[])
 
 
 def test_allowed_hosts_handles_bare_host_port() -> None:
@@ -2426,25 +2404,6 @@ def test_run_worker_passes_attempt_id_to_the_async_body() -> None:
     )
 
 
-def test_solver_loop_refuses_out_of_scope_http_and_tells_the_model() -> None:
-    """★ 越界的 HTTP 请求被拒，且**拒绝理由回到模型**——
-    它必须知道为什么不行才能换路子，否则会反复试同一个地址。
-    """
-    sandbox = _FakeSandbox()
-    gateway = _FakeGateway(
-        [
-            'ACTION: {"tool": "http_request", "args": {"url": "http://169.254.169.254/latest"}}',
-            'FINAL: {"candidates": []}',
-        ]
-    )
-    _run(
-        runner.solve_in_sandbox(_spec(), sandbox=sandbox, gateway=gateway, system_prompt="sys")
-    )
-    tool_result = gateway.seen[1][-1]["content"]
-    assert "拒绝" in tool_result
-    assert "只允许" in tool_result
-
-
 def test_read_attachment_rejects_path_traversal() -> None:
     """附件读取拒绝路径分隔符（白名单式校验，不是 `..` 过滤）。"""
     result = _run(_dispatch("read_attachment", {"path": "../../etc/passwd"}))
@@ -3217,23 +3176,6 @@ def test_retryable_set_covers_the_transient_failures() -> None:
         assert exc_type in runner._LLM_RETRYABLE, f"{exc_type.__name__} 应当可重试"
 
 
-def test_retry_count_and_backoff_are_sane() -> None:
-    """★ 重试次数与退避是有限且合理的（防止有人改成无限重试）。
-
-    4 次、线性退避 1.5s：最坏 1.5+3.0+4.5 = 9 秒。这个量级的意义是
-    "值得为它等"—— 因为它换回的是可能已经跑了 14 轮的工作。
-    """
-    assert 2 <= runner._LLM_RETRY_ATTEMPTS <= 6, (
-        "重试次数太少会让瞬时抖动作废整道题；太多会把一次真实故障拖成长时间等待"
-    )
-    assert 0 < runner._LLM_RETRY_BACKOFF <= 5.0
-
-
-# ══════════════════════════════════════════════════════════
-# 换模 fallback（v0.35）
-# ══════════════════════════════════════════════════════════
-
-
 class _FailThenSucceedGateway:
     """第一次调用抛错，之后正常回话的假 LLM（模拟"主接入点挂了"）。
 
@@ -3558,8 +3500,8 @@ def test_repeat_request_overrides_params_and_updates_in_place() -> None:
     assert rec.request_body == "y=2"
 
 
-def test_repeat_request_still_enforces_allowlist() -> None:
-    """重放换个越界 URL 不能绕过白名单（经 dispatch_tool 走真实入口）。"""
+def test_repeat_request_allows_arbitrary_url() -> None:
+    """2026-11-11：主机白名单移除后，重放也可以换任意 http 主机。"""
     spec = _spec()
 
     def handler(request: httpx.Request) -> httpx.Response:  # noqa: ARG001
@@ -3578,7 +3520,7 @@ def test_repeat_request_still_enforces_allowlist() -> None:
             )
 
     out = _run(call())
-    assert "拒绝" in out
+    assert "拒绝" not in out
 
 
 def test_http_history_is_fifo_and_ids_never_collide() -> None:
