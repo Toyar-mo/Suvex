@@ -71,6 +71,8 @@ from app.settings.schemas import (
     ExecutionSourceOut,
     FindingSlaIn,
     FindingSlaOut,
+    LlmRetryIn,
+    LlmRetryOut,
     ModelRoutesIn,
     ModelRoutesOut,
     NoticeRuleIn,
@@ -815,3 +817,28 @@ def write_model_routes(
     依赖 provider 表的当前状态 —— 路由可以先配、provider 后建）。"""
     row = settings_service.write_model_routes(db, routes=payload.routes)
     return ModelRoutesOut(routes=dict(row.routes or {}))
+
+
+@router.get("/llm-retry", response_model=LlmRetryOut, summary="模型调用重试策略")
+def read_llm_retry(
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> LlmRetryOut:
+    from app.providers import retry
+
+    policy = retry.load_policy(db)
+    return LlmRetryOut.model_validate(policy, from_attributes=True)
+
+
+@router.put("/llm-retry", response_model=LlmRetryOut, summary="保存模型调用重试策略")
+def write_llm_retry(
+    payload: LlmRetryIn,
+    _identity: Annotated[Identity, Depends(require_admin)],
+    db: Annotated[Session, Depends(get_db)],
+) -> LlmRetryOut:
+    from app.providers import retry
+
+    policy = retry.RetryPolicy(**payload.model_dump())
+    retry.validate_policy(policy)
+    saved = retry.save_policy(db, policy)
+    return LlmRetryOut.model_validate(saved, from_attributes=True)

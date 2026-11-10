@@ -726,9 +726,24 @@ async def _call_model(
     界面上会出现"这句话写了两遍"。所以用 `pushed` 记着。
     """
     if emit is None:
-        return _with_native_actions(
-            await _gateway_chat(gateway, messages, system=system, tools=tools)
-        )
+        # v1.83：空响应重试。接入点回了 2xx 但没有任何内容时，重发一次
+        # 比让这一轮直接结束更划算；次数来自 `llm_retry_config`。
+        policy = getattr(gateway, "retry_policy", None)
+        empty_retries = int(getattr(policy, "empty_retries", 0) or 0)
+        interval = int(getattr(policy, "empty_interval_ms", 0) or 0)
+        reply = None
+        for attempt in range(empty_retries + 1):
+            reply = _with_native_actions(
+                await _gateway_chat(gateway, messages, system=system, tools=tools)
+            )
+            if reply.text.strip() or getattr(reply, "tool_calls", ()):
+                return reply
+            if attempt < empty_retries and interval > 0:
+                from app.providers.retry import backoff_ms
+
+                await asyncio.sleep(backoff_ms(attempt, interval) / 1000)
+        assert reply is not None
+        return reply
 
     from app.chat.holdback import HoldbackBuffer
     from app.kernel.runner import LlmReply, parse_usage  # 循环 import 规避
@@ -2816,6 +2831,8 @@ def _build_gateway(provider_id: str | None, db: Session):
         raise ChatEngineError(
             "平台上还没有配置模型接入点。请先在「设置 → 模型」里加一个，再回来对话。"
         )
+    from app.providers import retry
+
     return LlmGateway(
         model=provider.model,
         api_key=decrypt_provider_key(provider),
@@ -2823,6 +2840,7 @@ def _build_gateway(provider_id: str | None, db: Session):
         label=provider.label,
         kind=provider.kind,
         max_tokens=CHAT_MAX_TOKENS,
+        retry_policy=retry.load_policy(db),
     )
 
 

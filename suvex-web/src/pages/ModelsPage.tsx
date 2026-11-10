@@ -1,6 +1,7 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import ProviderPanel from '@/components/settings/ProviderPanel'
 import { ModelRoutesPanel } from '@/components/settings/ModelRoutesPanel'
+import { RetryPolicyPanel } from '@/components/settings/RetryPolicyPanel'
 import { loadSettings, useSettings } from '@/data/settings-store'
 import { useEffect } from 'react'
 
@@ -24,6 +25,7 @@ export function ModelsPage() {
       <div className="flex flex-col gap-bay p-panel">
         <ProviderPanel accounts={accounts} />
         <ModelRoutesPanel accounts={accounts} />
+        <RetryPolicyPanel />
       </div>
     </>
   )

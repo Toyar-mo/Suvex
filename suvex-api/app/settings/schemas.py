@@ -393,3 +393,27 @@ class ModelRoutesIn(StrictModel):
     """覆盖式保存。空 key/value 会被丢弃（无法命中的路由没有意义）。"""
 
     routes: dict[str, str] = {}
+
+
+class LlmRetryOut(CamelModel):
+    connectRetries: int
+    connectIntervalMs: int
+    emptyRetries: int
+    emptyIntervalMs: int
+    streamRetries: int
+    streamIntervalMs: int
+    breakerFailures: int
+    breakerIntervalMs: int
+    breakerCooldownS: int
+
+
+class LlmRetryIn(StrictModel):
+    connectRetries: int = 3
+    connectIntervalMs: int = 0
+    emptyRetries: int = 2
+    emptyIntervalMs: int = 0
+    streamRetries: int = 2
+    streamIntervalMs: int = 0
+    breakerFailures: int = 5
+    breakerIntervalMs: int = 0
+    breakerCooldownS: int = 60

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, Index, String, Text, text
+from sqlalchemy import Boolean, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.columns import UtcDateTime
@@ -122,3 +122,27 @@ class ProviderAccount(Base):
         # 密文不算明文，但它出现在日志里同样没有好处，而且会诱导别人
         # "反正只是密文" —— 那是一条会慢慢滑坡的边。
         return f"<ProviderAccount id={self.id!r} label={self.label!r} verified={self.verified}>"
+
+
+class LlmRetryConfig(Base):
+    """模型调用重试策略（v1.83，单例）。
+
+    ## 为什么单独一张表
+
+    它是**进程级语义**（轮询熔断/意图重跑全局一份），而不是某个 provider
+    的属性；塞进 provider 行会让"同一接入点的不同配置"各存一份，
+    换默认值时要改多行。
+    """
+
+    __tablename__ = "llm_retry_config"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="default")
+    connect_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=3)
+    connect_interval_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    empty_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    empty_interval_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    stream_retries: Mapped[int] = mapped_column(Integer, nullable=False, default=2)
+    stream_interval_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    breaker_failures: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    breaker_interval_ms: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    breaker_cooldown_s: Mapped[int] = mapped_column(Integer, nullable=False, default=60)

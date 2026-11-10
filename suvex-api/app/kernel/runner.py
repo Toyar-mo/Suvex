@@ -2414,6 +2414,7 @@ class LlmGateway:
         kind: str = "cloud",
         timeout: float = DEFAULT_LLM_TIMEOUT,
         max_tokens: int = 4096,
+        retry_policy: object | None = None,
     ) -> None:
         from app.providers.llm import build_endpoint, is_anthropic, resolve_base_url
 
@@ -2440,6 +2441,11 @@ class LlmGateway:
         self._api_key = api_key
         self.timeout = timeout
         self.max_tokens = max_tokens
+        if retry_policy is None:
+            from app.providers.retry import RetryPolicy
+
+            retry_policy = RetryPolicy()
+        self.retry_policy = retry_policy
 
     def _headers(self) -> dict[str, str]:
         from app.providers.llm import ANTHROPIC_VERSION
@@ -2569,11 +2575,15 @@ class LlmGateway:
         # ⚠️ 只重试**连接层**错误（连不上、超时、读中断）。
         #    4xx 不重试 —— 那是请求本身有问题，重试多少次都一样，
         #    而且会把一个"key 配错了"拖成几十秒的等待。
+        from app.providers.retry import RETRYABLE_STATUSES, backoff_ms
+
+        attempts = max(1, int(getattr(self.retry_policy, "connect_retries", 3)) + 1)
         last_error: Exception | None = None
         response: httpx.Response | None = None
-        for attempt in range(_LLM_RETRY_ATTEMPTS):
+        for attempt in range(attempts):
             if attempt:
-                await asyncio.sleep(_LLM_RETRY_BACKOFF * attempt)
+                interval = int(getattr(self.retry_policy, "connect_interval_ms", 0))
+                await asyncio.sleep(backoff_ms(attempt - 1, interval) / 1000)
             try:
                 # ★ `trust_env=False` —— 出站 SSRF 面。这个网关连着管理员填的
                 #   provider `baseUrl`（`LlmGateway` 由 `build_endpoint` 推出
@@ -2590,6 +2600,14 @@ class LlmGateway:
                         json=self._body(messages, system=system, tools=tools),
                         headers=self._headers(),
                     )
+                if response.status_code in RETRYABLE_STATUSES and attempt < attempts - 1:
+                    logger.warning(
+                        "调用 LLM 收到可重试状态 %s（第 %d/%d 次）",
+                        response.status_code,
+                        attempt + 1,
+                        attempts,
+                    )
+                    continue
                 break
             except _LLM_RETRYABLE as exc:
                 last_error = exc
@@ -2597,7 +2615,7 @@ class LlmGateway:
                     "调用 LLM 连接失败（%s，第 %d/%d 次）：%s",
                     type(exc).__name__,
                     attempt + 1,
-                    _LLM_RETRY_ATTEMPTS,
+                    attempts,
                     redact(str(exc))[:120],
                 )
             except httpx.HTTPError as exc:
@@ -2609,7 +2627,7 @@ class LlmGateway:
         if response is None:
             raise KernelError(
                 f"调用 LLM 失败（{type(last_error).__name__}）："
-                f"{redact(str(last_error))[:200]}（已重试 {_LLM_RETRY_ATTEMPTS} 次）"
+                f"{redact(str(last_error))[:200]}（已重试 {attempts} 次）"
             ) from last_error
 
         try:
@@ -2699,12 +2717,16 @@ class LlmGateway:
         body = self._body(messages, system=system, tools=tools)
         body["stream"] = True
 
+        from app.providers.retry import backoff_ms as _backoff_ms
+
+        attempts = max(1, int(getattr(self.retry_policy, "connect_retries", 3)) + 1)
         last_error: Exception | None = None
         response: httpx.Response | None = None
         client: httpx.AsyncClient | None = None
-        for attempt in range(_LLM_RETRY_ATTEMPTS):
+        for attempt in range(attempts):
             if attempt:
-                await asyncio.sleep(_LLM_RETRY_BACKOFF * attempt)
+                interval = int(getattr(self.retry_policy, "connect_interval_ms", 0))
+                await asyncio.sleep(_backoff_ms(attempt - 1, interval) / 1000)
             client = httpx.AsyncClient(timeout=httpx.Timeout(self.timeout), trust_env=False)
             try:
                 request = client.build_request(
@@ -2720,7 +2742,7 @@ class LlmGateway:
                     "流式调 LLM 连接失败（%s，第 %d/%d 次）：%s",
                     type(exc).__name__,
                     attempt + 1,
-                    _LLM_RETRY_ATTEMPTS,
+                    attempts,
                     redact(str(exc))[:120],
                 )
             except httpx.HTTPError as exc:
@@ -2732,7 +2754,7 @@ class LlmGateway:
         if response is None or client is None:
             raise KernelError(
                 f"调用 LLM 失败（{type(last_error).__name__}）："
-                f"{redact(str(last_error))[:200]}（已重试 {_LLM_RETRY_ATTEMPTS} 次）"
+                f"{redact(str(last_error))[:200]}（已重试 {attempts} 次）"
             ) from last_error
 
         try:
