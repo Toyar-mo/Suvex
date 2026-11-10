@@ -1268,3 +1268,24 @@ RUN set -eux; \
 
 # 恢复非 root 用户：runner 依赖 uid=1000 才能写 /work（见上文 chown）。
 USER solver
+
+# ── 云 / AD 工具（v1.82）────────────────────────────────────
+#
+# 为什么单独一个 venv：`certipy-ad` 把 `cryptography` 钉在 ~42，
+# 直接装进 `/opt/venv` 会把镜像里其它工具依赖的版本降下去（实测
+# 会顺带重装 requests / pycryptodome / pyOpenSSL）。独立 venv 只
+# 影响这三个新工具，不碰主解题环境。
+#
+# `kubectl` 走官方 release 二进制，不装 gcloud/az（体积过大，磁盘
+# 只有 ~3.4G 余量）；需要时用 `pip install azure-cli` 自行扩展。
+RUN set -eux; \
+    python3 -m venv /opt/osint-venv; \
+    /opt/osint-venv/bin/pip install --no-cache-dir certipy-ad awscli; \
+    ln -sf /opt/osint-venv/bin/certipy /usr/local/bin/certipy; \
+    ln -sf /opt/osint-venv/bin/aws /usr/local/bin/aws; \
+    curl -fsSL -o /usr/local/bin/kubectl \
+      "https://dl.k8s.io/release/$(curl -fsSL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"; \
+    chmod +x /usr/local/bin/kubectl; \
+    certipy -h >/dev/null; \
+    aws --version; \
+    kubectl version --client
