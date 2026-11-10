@@ -146,6 +146,14 @@ def ensure_solve_scan(db: Session, challenge) -> Scan:  # noqa: ANN001
     if challenge.scan_id:
         existing = db.get(Scan, challenge.scan_id)
         if existing is not None:
+            # ★ v1.84：复用的壳 scan 可能已经被放进回收站/归档。
+            #   只改 status=running 会让它在默认列表里继续被过滤掉：
+            #   库里有 3 条 running，界面只显示 2 条，还占着一个并发槽。
+            #   要解这道题就先把壳恢复出来。
+            if existing.deleted_at is not None:
+                existing.deleted_at = None
+            if existing.archived_at is not None:
+                existing.archived_at = None
             # ⚠️ 必须在改写状态**之前**读它 —— 下面那句会把 status 设成
             #    running，之后再看就永远是 running 了。
             was_running = existing.status == ScanStatus.RUNNING.value

@@ -44,6 +44,7 @@ import inspect
 import pytest
 from sqlalchemy.orm import Session
 
+from app.core.timeutil import now_utc
 from app.core.vocab import (
     TERMINAL_SCAN_STATUSES,
     AgentStatus,
@@ -333,3 +334,19 @@ def test_submit_candidate_promotes_on_correct() -> None:
     assert promote_idx > correct_idx, (
         "调用点出现在判对分支之前，那它对 failed/wrong 也会触发"
     )
+
+
+def test_ensure_solve_scan_restores_deleted_shell(db_session: Session, _pair) -> None:
+    """复用的壳 scan 在回收站里时，要恢复出来 —— 否则 running 但列表看不见。"""
+    challenge, scan = _pair(status=ScanStatus.FAILED.value)
+    scan.deleted_at = now_utc()
+    scan.archived_at = now_utc()
+    db_session.commit()
+
+    restored = ctf2_events.ensure_solve_scan(db_session, challenge)
+    db_session.commit()
+
+    assert restored.id == scan.id
+    assert restored.deleted_at is None
+    assert restored.archived_at is None
+    assert restored.status == ScanStatus.RUNNING.value
