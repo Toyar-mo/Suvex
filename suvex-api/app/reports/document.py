@@ -11,7 +11,7 @@
 排查方向会往网络/序列化上找。
 
 所以本模块里每个字段、每处措辞、每个排序都是照着
-`report-document.ts` / `report-build.ts` / `report-markdown.ts`
+`report-document.ts` / `report-build.ts`
 抄下来的，并且在有分歧风险的地方标了出处。
 
 ## 三条不能改的语义（都在前端有完整论证）

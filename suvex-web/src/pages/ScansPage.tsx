@@ -159,6 +159,7 @@ export function ScansPage() {
 
   // 新建完成后高亮新记录，让用户明确看到"它加进去了"（验收要求）
   const justCreatedId = searchParams.get('created')
+  const urlScan = searchParams.get('scan')
 
   /*
     ── 外部入口（命令面板 / 资产页 / 链接）传进来的意图 ──
@@ -276,16 +277,26 @@ export function ScansPage() {
       只是"另一处也能看到"（而它们本来就是同一份 store）。
   */
 
-  const filtered = useMemo(
-    () =>
-      sortScans(filterScans(scans, { status: statusFilter, query: targetQuery }), sortKey, sortDir),
-    [scans, statusFilter, targetQuery, sortKey, sortDir],
-  )
+  const filtered = useMemo(() => {
+    const sorted = sortScans(
+      filterScans(scans, { status: statusFilter, query: targetQuery }),
+      sortKey,
+      sortDir,
+    )
+    // `?scan=<id>` 来自「定时复查 → 查看上次扫描」；只留那一条。
+    return urlScan ? sorted.filter((scan) => scan.id === urlScan) : sorted
+  }, [scans, statusFilter, targetQuery, sortKey, sortDir, urlScan])
+
+  const clearScanFilter = useCallback(() => {
+    const next = new URLSearchParams(searchParams)
+    next.delete('scan')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, setSearchParams])
 
   const focusedId = focusIndex >= 0 && focusIndex < filtered.length ? filtered[focusIndex].id : null
 
   const hasAnyScan = scans.length > 0
-  const isFiltered = statusFilter !== 'all' || targetQuery.trim().length > 0
+  const isFiltered = statusFilter !== 'all' || targetQuery.trim().length > 0 || urlScan !== null
 
   /*
     ★ 只把**当前可见**的选中项算进去。
@@ -822,6 +833,18 @@ export function ScansPage() {
               )}
             />
           </div>
+
+          {urlScan && (
+            <button
+              type="button"
+              onClick={clearScanFilter}
+              title={`只看扫描 ${urlScan}`}
+              className="inline-flex h-8 items-center gap-1 rounded-sm border border-accent/50 bg-accent-wash px-2 text-2xs text-accent transition-ui hover:border-accent"
+            >
+              只看 <span className="max-w-24 truncate font-mono">{urlScan}</span>
+              <X size={11} strokeWidth={2} aria-hidden="true" />
+            </button>
+          )}
 
           {/* 排序 */}
           <label className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">

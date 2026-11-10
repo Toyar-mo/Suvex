@@ -1078,7 +1078,6 @@ src/lib/                    cn 合并 / 数字格式化 / 时间与时长格式�
   report-document.ts         报告 IR 的**权威类型定义** + 离线复现实现
                              ⚠️ 生产链路的预览/导出已改为后端渲染（见 report-api.ts）；
                                 这里保留是因为契约 §3.5.1 的对账脚本要拿它当参照物
-  report-markdown.ts         IR → Markdown（纯函数）—— 同为对账参照物
   report-api.ts              报告导出：Markdown 走 GET /reports/{id}/download，
                              PDF 走浏览器打印（契约 §3.5.1 的本轮决策）
   report-export.ts           下载与打印触发
@@ -1260,7 +1259,7 @@ rolldown 会自动把共享依赖提成独立 chunk（`findings-store` 同时被
    （`POST /reports/preview` / `GET /reports/{id}/download`），
    理由是 `GET /findings` 只给摘要，前端**拿不到**构建报告所需的 detail ——
    早期症状很隐蔽：预览照常出来，只有「问题描述」和「证据」两节是空的。
-   前端这两份实现（`report-document.ts` / `report-markdown.ts`）保留下来
+   前端这份实现（`report-document.ts`）保留下来
    作为**对账参照物**（契约 §3.5.1 要求那个脚本"对着 API 跑"）。
 
 ### 编号只在生成后出现

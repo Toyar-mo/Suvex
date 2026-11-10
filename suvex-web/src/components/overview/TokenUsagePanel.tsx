@@ -1,4 +1,5 @@
-import { memo,  useEffect, useMemo, useState } from 'react'
+import { memo, useEffect, useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { loadTokenUsage, type TokenUsageSeries } from '@/data/tokenUsage'
 import { cn } from '@/lib/cn'
 
@@ -60,12 +61,12 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium text-ink">⚡ LLM Token 消耗</h3>
         <span className="text-2xs text-ink-faint">activity</span>
-        <a
-          href="/ctf"
+        <Link
+          to="/kernel"
           className="ml-auto rounded-sm bg-ink px-2.5 py-1 text-2xs text-canvas"
         >
           全部
-        </a>
+        </Link>
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-panel lg:grid-cols-[18rem_minmax(0,1fr)]">

@@ -49,7 +49,7 @@ const CHANNEL_META: Record<
     label: '邮件',
     icon: Mail,
     placeholder: 'security@example.com',
-    help: '可以填邮件列表地址，通知会发给列表里的所有人。',
+    help: '邮件发送尚未接入；这里只能保留地址记录，不会发送。',
   },
   webhook: {
     label: 'Webhook',
@@ -64,6 +64,10 @@ const CHANNEL_META: Record<
     help: '在 Slack 里创建 Incoming Webhook 后把地址粘贴到这里。',
   },
 }
+
+const ADDABLE_CHANNEL_KINDS = (Object.keys(CHANNEL_META) as NotifyChannelKind[]).filter(
+  (kind) => kind !== 'email',
+)
 
 export interface NotifyPanelProps {
   rule: NoticeRule
@@ -245,7 +249,7 @@ function ChannelSection({ channels }: { channels: NotifyChannel[] }) {
         <span className="text-xs font-medium text-ink">通知渠道</span>
         {adding === null && (
           <div className="flex gap-1">
-            {(Object.keys(CHANNEL_META) as NotifyChannelKind[]).map((kind) => {
+            {ADDABLE_CHANNEL_KINDS.map((kind) => {
               const Icon = CHANNEL_META[kind].icon
               return (
                 <button
@@ -335,6 +339,11 @@ function ChannelRow({ channel }: { channel: NotifyChannel }) {
           <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
             {meta.label}
           </span>
+          {channel.kind === 'email' && (
+            <span className="rounded-xs border border-signal-warn/40 px-1 text-2xs text-signal-warn">
+              不支持发送
+            </span>
+          )}
           {!channel.enabled && <span className="text-2xs text-ink-faint">已停用</span>}
         </span>
         <span className="flex flex-wrap items-center gap-x-2 text-2xs">
@@ -631,11 +640,12 @@ function ChannelEditor({
             ⚠️ `testState.kind === 'saved'` 那个分支要等后端接入真实发送
                才会第一次走到 —— 留着它就是为了那一天。
           */}
+          {draft.kind !== 'email' && (
           <button
             type="button"
             onClick={handleTest}
             disabled={testing}
-            title="会对 Webhook / Slack 真的发一条测试消息；邮件尚未接入"
+            title="会对 Webhook / Slack 真的发一条测试消息"
             className={cn(
               'inline-flex h-9 items-center gap-1.5 rounded-sm border px-3 text-xs transition-ui duration-fast',
               testing
@@ -646,8 +656,13 @@ function ChannelEditor({
             <Send size={12} strokeWidth={2} aria-hidden="true" />
             {testing ? '正在发送…' : '发送测试消息'}
           </button>
+          )}
 
-          <span className="text-2xs text-ink-faint">Webhook / Slack 会真的收到一条测试消息；邮件渠道暂不支持</span>
+          <span className="text-2xs text-ink-faint">
+            {draft.kind === 'email'
+              ? '邮件渠道不支持发送；只能保留记录或删除。'
+              : 'Webhook / Slack 会真的收到一条测试消息。'}
+          </span>
 
           {testState.kind === 'saved' && (
             <span role="status" className="inline-flex items-center gap-1 text-2xs text-signal-ok">

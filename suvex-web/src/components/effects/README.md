@@ -17,7 +17,6 @@ ReactBits 采用 **MIT + Commons Clause v1.0**（`Copyright (c) 2026 David Haz`�
 | 文件               | 上游变体      | 上游路径                                                    | 额外依赖 |
 | ------------------ | ------------- | ----------------------------------------------------------- | -------- |
 | `Threads.tsx`      | `ts-tailwind` | `src/ts-tailwind/Backgrounds/Threads/Threads.tsx`           | `ogl`    |
-| `LetterGlitch.tsx` | `ts-tailwind` | `src/ts-tailwind/Backgrounds/LetterGlitch/LetterGlitch.tsx` | 无       |
 | `CountUp.tsx`      | `ts-tailwind` | `src/ts-tailwind/TextAnimations/CountUp/CountUp.tsx`        | `motion` |
 | `DotGrid.tsx`      | `ts-tailwind` | `src/ts-tailwind/Backgrounds/DotGrid/DotGrid.tsx`           | **无**   |
 
@@ -81,8 +80,7 @@ ReactBits 采用 **MIT + Commons Clause v1.0**（`Copyright (c) 2026 David Haz`�
 `CountUp.tsx` 由 `components/overview/StatCard.tsx` 使用（指标数字滚动）。
 `HeroBackdrop.tsx`（在 `components/landing/`）用 `Threads` + `DotGrid` 拼首页背景，
 同样是懒加载 + `useAfterPaint` 推迟挂载。
-`LetterGlitch.tsx` 目前**没有被挂载**，作为备选保留——它是纯文本噪点，
-适合放在"日志正在滚动"的区域做局部氛围，而不是整页背景。
+
 
 ## 两个必须知道的坑
 
