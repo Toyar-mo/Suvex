@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.benchmark.models import QualitySnapshot
+from app.benchmark.models import BenchmarkCase, BenchmarkRun, QualitySnapshot
 from app.core.ids import new_id
 from app.overview.quality import quality_snapshot
 
@@ -120,3 +120,160 @@ def compare(before: QualitySnapshot, after: QualitySnapshot) -> dict[str, Any]:
 
 
 __all__ = ["capture", "compare", "get_snapshot", "list_snapshots"]
+
+
+# -- 评测用例(v1.81) ------------------------------------------
+#
+# 这一层**不触发任何扫描/解题**。判定只读关联对象：一次"跑基准"=
+# 把每个用例的当前状态采集为一行结果。原因见用例模型与服务文件头：
+# 评测不该偷偷花掉用户的扫描额度。
+
+CASE_KINDS = ("ctf", "scan")
+
+
+def create_case(
+    db: Session,
+    *,
+    suite: str,
+    name: str,
+    kind: str,
+    challenge_id: str | None = None,
+    scan_id: str | None = None,
+    expect: dict[str, Any] | None = None,
+    enabled: bool = True,
+) -> BenchmarkCase:
+    """登记一条用例。缺关联对象时直接拒绝（否则永远判 error）。"""
+    from app.core.errors import ApiError
+
+    if kind not in CASE_KINDS:
+        raise ApiError.validation(f"kind 只能是 {' / '.join(CASE_KINDS)}")
+    if kind == "ctf" and not challenge_id:
+        raise ApiError.validation("ctf 用例需要 challengeId")
+    if kind == "scan" and not scan_id:
+        raise ApiError.validation("scan 用例需要 scanId")
+    row = BenchmarkCase(
+        id=new_id("case"),
+        suite=(suite or "default").strip()[:80],
+        name=name.strip()[:200],
+        kind=kind,
+        challenge_id=challenge_id,
+        scan_id=scan_id,
+        expect=expect or {},
+        enabled=enabled,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def list_cases(db: Session, *, suite: str | None = None) -> list[BenchmarkCase]:
+    stmt = select(BenchmarkCase).order_by(BenchmarkCase.created_at.desc())
+    if suite:
+        stmt = stmt.where(BenchmarkCase.suite == suite)
+    return list(db.execute(stmt).scalars())
+
+
+def delete_case(db: Session, case_id: str) -> bool:
+    row = db.get(BenchmarkCase, case_id)
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
+def _judge(db: Session, case: BenchmarkCase) -> tuple[str, dict[str, Any]]:
+    """读关联对象当前状态，给 `passed/failed/pending/error`。"""
+    if case.kind == "ctf":
+        from app.kernel.models import KernelChallenge
+
+        challenge = db.get(KernelChallenge, case.challenge_id) if case.challenge_id else None
+        if challenge is None:
+            return "error", {"reason": "challenge_missing", "challengeId": case.challenge_id}
+        status = {
+            "solved": "passed",
+            "failed": "failed",
+        }.get(challenge.status, "pending")
+        return status, {
+            "kind": "ctf",
+            "challengeId": challenge.id,
+            "challengeStatus": challenge.status,
+            "candidateCount": challenge.candidate_count,
+            "wrongSubmissions": challenge.wrong_submission_count,
+        }
+
+    from sqlalchemy import func
+
+    from app.findings.models import Finding
+    from app.scans.models import Scan
+
+    scan = db.get(Scan, case.scan_id) if case.scan_id else None
+    if scan is None:
+        return "error", {"reason": "scan_missing", "scanId": case.scan_id}
+    findings = int(
+        db.scalar(
+            select(func.count()).select_from(Finding).where(Finding.scan_id == scan.id)
+        )
+        or 0
+    )
+    detail = {
+        "kind": "scan",
+        "scanId": scan.id,
+        "scanStatus": scan.status,
+        "findings": findings,
+        "durationSec": scan.duration_sec,
+    }
+    if scan.status in ("failed", "aborted"):
+        return "failed", detail
+    if scan.status != "completed":
+        return "pending", detail
+    minimum = int((case.expect or {}).get("minFindings", 0) or 0)
+    return ("passed" if findings >= minimum else "failed"), detail
+
+
+def run_case(db: Session, case: BenchmarkCase) -> BenchmarkRun:
+    status, detail = _judge(db, case)
+    row = BenchmarkRun(
+        id=new_id("run"),
+        case_id=case.id,
+        status=status,
+        detail=detail,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def run_suite(db: Session, suite: str) -> list[BenchmarkRun]:
+    cases = list(
+        db.execute(
+            select(BenchmarkCase).where(
+                BenchmarkCase.suite == suite,
+                BenchmarkCase.enabled.is_(True),
+            )
+        ).scalars()
+    )
+    return [run_case(db, case) for case in cases]
+
+
+def latest_runs(db: Session, *, suite: str | None = None) -> list[BenchmarkRun]:
+    """每个用例最近一次结果（按用例 id 分组取最新）。"""
+    stmt = (
+        select(BenchmarkRun)
+        .order_by(BenchmarkRun.collected_at.desc())
+        .limit(500)
+    )
+    rows = list(db.execute(stmt).scalars())
+    if suite:
+        case_ids = {case.id for case in list_cases(db, suite=suite)}
+        rows = [row for row in rows if row.case_id in case_ids]
+    seen: set[str] = set()
+    latest: list[BenchmarkRun] = []
+    for row in rows:
+        if row.case_id in seen:
+            continue
+        seen.add(row.case_id)
+        latest.append(row)
+    return latest

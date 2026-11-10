@@ -15,9 +15,13 @@ from app.auth.deps import Identity, require_read, require_scan
 from app.benchmark import service
 from app.benchmark.schemas import (
     CaptureIn,
+    CaseIn,
+    CaseOut,
     CompareOut,
+    RunOut,
     SnapshotListOut,
     SnapshotOut,
+    SuiteRunOut,
 )
 from app.core.db import get_db
 from app.core.errors import ApiError
@@ -62,3 +66,72 @@ def compare_snapshots(
     if before_row is None or after_row is None:
         raise ApiError.not_found("快照不存在")
     return CompareOut(**service.compare(before_row, after_row))
+
+
+# -- 评测用例(v1.81) ------------------------------------------
+
+
+@router.post("/cases", response_model=CaseOut, status_code=201, summary="登记评测用例")
+def create_case(
+    payload: CaseIn,
+    _identity: Annotated[Identity, Depends(require_scan)],
+    db: Annotated[Session, Depends(get_db)],
+) -> CaseOut:
+    row = service.create_case(
+        db,
+        suite=payload.suite,
+        name=payload.name,
+        kind=payload.kind,
+        challenge_id=payload.challengeId,
+        scan_id=payload.scanId,
+        expect=payload.expect,
+        enabled=payload.enabled,
+    )
+    return CaseOut.from_row(row)
+
+
+@router.get("/cases", response_model=list[CaseOut], summary="列出评测用例")
+def list_cases(
+    _identity: Annotated[Identity, Depends(require_read)],
+    db: Annotated[Session, Depends(get_db)],
+    suite: Annotated[str | None, Query(max_length=80)] = None,
+) -> list[CaseOut]:
+    return [CaseOut.from_row(row) for row in service.list_cases(db, suite=suite)]
+
+
+@router.delete("/cases/{case_id}", summary="删除评测用例")
+def delete_case(
+    case_id: str,
+    _identity: Annotated[Identity, Depends(require_scan)],
+    db: Annotated[Session, Depends(get_db)],
+) -> dict[str, bool]:
+    if not service.delete_case(db, case_id):
+        raise ApiError.not_found("用例不存在")
+    return {"deleted": True}
+
+
+@router.post("/suites/{suite}/run", response_model=SuiteRunOut, summary="采集一套用例的结果")
+def run_suite(
+    suite: str,
+    _identity: Annotated[Identity, Depends(require_scan)],
+    db: Annotated[Session, Depends(get_db)],
+) -> SuiteRunOut:
+    """只读关联对象判定，不触发扫描/解题。"""
+    runs = [RunOut.from_row(row) for row in service.run_suite(db, suite)]
+    return SuiteRunOut(
+        suite=suite,
+        runs=runs,
+        passed=sum(1 for run in runs if run.status == "passed"),
+        failed=sum(1 for run in runs if run.status == "failed"),
+        pending=sum(1 for run in runs if run.status == "pending"),
+        error=sum(1 for run in runs if run.status == "error"),
+    )
+
+
+@router.get("/runs", response_model=list[RunOut], summary="最近一次评测结果")
+def latest_runs(
+    _identity: Annotated[Identity, Depends(require_read)],
+    db: Annotated[Session, Depends(get_db)],
+    suite: Annotated[str | None, Query(max_length=80)] = None,
+) -> list[RunOut]:
+    return [RunOut.from_row(row) for row in service.latest_runs(db, suite=suite)]
