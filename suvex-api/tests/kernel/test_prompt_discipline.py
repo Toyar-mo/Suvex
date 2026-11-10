@@ -27,10 +27,9 @@ def test_chat_prompt_has_task_discipline() -> None:
     assert "/work/persist" in text
 
 
-def test_login_tasks_must_end_with_a_result_block() -> None:
-    """登录/口令类任务的结论必须可复制、可核对，不能埋在过程里。"""
+def test_all_deliverable_tasks_must_end_with_a_result_block() -> None:
+    """所有"做事"任务都必须先给可核对的结果块，不能只补登录场景。"""
     text = chat_prompts.SYSTEM_PROMPT_TEMPLATE
-    assert "登录信息" in text
-    assert "用户名" in text
-    assert "密码" in text
-    assert "结果已经拿到时" in text
+    for token in ("交付结果怎么给（所有", "扫描 / 渗透", "文件 / 逆向 / 取证", "产物", "未完成"):
+        assert token in text
+
