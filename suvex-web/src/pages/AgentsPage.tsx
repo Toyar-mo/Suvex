@@ -120,28 +120,28 @@ export function AgentsPage() {
 
           {creating && (
             <div className="mt-3 grid grid-cols-1 gap-3 border-t border-line pt-3 md:grid-cols-3">
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">key</span>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+                <span>key</span>
                 <TextInput id="agent-key" value={form.key} onChange={(v) => setForm({ ...form, key: v })} />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">名称</span>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+                <span>名称</span>
                 <TextInput id="agent-name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">描述</span>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+                <span>描述</span>
                 <TextInput id="agent-desc" value={form.description} onChange={(v) => setForm({ ...form, description: v })} />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">MCP（逗号分隔）</span>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+                <span>MCP（逗号分隔）</span>
                 <TextInput id="agent-mcp" value={form.mcpServers} onChange={(v) => setForm({ ...form, mcpServers: v })} />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">Skill（逗号分隔）</span>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+                <span>Skill（逗号分隔）</span>
                 <TextInput id="agent-skills" value={form.skills} onChange={(v) => setForm({ ...form, skills: v })} />
               </label>
-              <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">工具（逗号分隔）</span>
+              <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+                <span>工具（逗号分隔）</span>
                 <TextInput id="agent-tools" value={form.tools} onChange={(v) => setForm({ ...form, tools: v })} />
               </label>
               <div className="md:col-span-3">

@@ -89,12 +89,12 @@ export function IntranetPage() {
             记录 webshell / 反弹 / ssh 会话。平台只做台账，不自动连接或执行命令。
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">类型</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>类型</span>
               <select
                 value={form.kind}
                 onChange={(event) => setForm({ ...form, kind: event.target.value })}
-                className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
+                className="h-9 rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast hover:border-line-strong"
               >
                 {KINDS.map((kind) => (
                   <option key={kind} value={kind}>
@@ -104,15 +104,15 @@ export function IntranetPage() {
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-2">
-              <span className="text-ink-muted">地址</span>
+              <span>地址</span>
               <TextInput id="isess-host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} />
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">用户名</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>用户名</span>
               <TextInput id="isess-user" value={form.username} onChange={(v) => setForm({ ...form, username: v })} />
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">凭据</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>凭据</span>
               <TextInput
                 id="isess-secret"
                 type="password"
@@ -120,12 +120,12 @@ export function IntranetPage() {
                 onChange={(v) => setForm({ ...form, secret: v })}
               />
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">状态</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>状态</span>
               <select
                 value={form.status}
                 onChange={(event) => setForm({ ...form, status: event.target.value })}
-                className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
+                className="h-9 rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast hover:border-line-strong"
               >
                 {STATUSES.map((status) => (
                   <option key={status} value={status}>
@@ -135,7 +135,7 @@ export function IntranetPage() {
               </select>
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-6">
-              <span className="text-ink-muted">备注</span>
+              <span>备注</span>
               <TextInput id="isess-notes" value={form.notes} onChange={(v) => setForm({ ...form, notes: v })} />
             </label>
           </div>

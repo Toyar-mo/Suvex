@@ -114,12 +114,12 @@ export function CredentialsPage() {
             明文只用于加密存储；列表不回显，读取由管理员触发并写审计。
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">类型</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>类型</span>
               <select
                 value={form.kind}
                 onChange={(event) => setForm({ ...form, kind: event.target.value })}
-                className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
+                className="h-9 rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast hover:border-line-strong"
               >
                 {KINDS.map((kind) => (
                   <option key={kind} value={kind}>
@@ -128,16 +128,16 @@ export function CredentialsPage() {
                 ))}
               </select>
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">用户名</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>用户名</span>
               <TextInput id="cred-user" value={form.username} onChange={(v) => setForm({ ...form, username: v })} />
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">目标</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>目标</span>
               <TextInput id="cred-target" value={form.target} onChange={(v) => setForm({ ...form, target: v })} />
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-2">
-              <span className="text-ink-muted">凭据</span>
+              <span>凭据</span>
               <TextInput
                 id="cred-secret"
                 type="password"
@@ -145,8 +145,8 @@ export function CredentialsPage() {
                 onChange={(v) => setForm({ ...form, secret: v })}
               />
             </label>
-            <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">来源</span>
+            <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
+              <span>来源</span>
               <TextInput id="cred-source" value={form.source} onChange={(v) => setForm({ ...form, source: v })} />
             </label>
           </div>
