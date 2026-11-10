@@ -22,6 +22,7 @@ import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import Modal from '@/components/ui/Modal'
 import { Button, IconButton } from '@/components/ui/Button'
+import { Select } from '@/components/ui/Select'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
 import { toApiError, type ApiError } from '@/lib/api'
@@ -597,34 +598,30 @@ export default function FilesPage() {
             </label>
             <label className="flex flex-col gap-1.5 text-sm">
               <span className="text-ink-muted">来源</span>
-              <select
+              <Select
                 value={draft.source}
-                onChange={(e) =>
-                  setDraft({ ...draft, source: e.target.value as FilterDraft['source'] })
+                options={[
+                  { value: 'all', label: '全部' },
+                  { value: 'workspace', label: '工作目录' },
+                ]}
+                onChange={(source) =>
+                  setDraft({ ...draft, source: source as FilterDraft['source'] })
                 }
                 className={INPUT_CLASS}
-              >
-                <option value="all">全部</option>
-                <option value="workspace">工作目录</option>
-              </select>
+              />
             </label>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
             <label className="text-sm text-ink-muted">分组方式</label>
-            <select
+            <Select
               value={groupBy}
-              onChange={(e) => {
+              options={GROUP_OPTIONS}
+              onChange={(value) => {
                 setPage(0)
-                setGroupBy(e.target.value as GroupBy)
+                setGroupBy(value as GroupBy)
               }}
               className={cn(INPUT_CLASS, 'w-auto')}
-            >
-              {GROUP_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+            />
             <Button variant="primary" size="sm" onClick={search}>
               <Search size={14} strokeWidth={2} aria-hidden="true" />
               搜索
@@ -636,9 +633,23 @@ export default function FilesPage() {
                   不给宽度它会撑到 682px，整页横向滚动。 */}
               <div className="flex min-w-0 max-w-full items-center gap-1.5 text-sm">
                 <span className="whitespace-nowrap text-ink-muted">上传到会话</span>
-                <select
+                <Select
+                  testId="upload-target"
                   value={uploadTarget}
-                  onChange={(e) => setUploadTarget(e.target.value)}
+                  placeholder={
+                    sessionsStatus === 'loading'
+                      ? '（正在加载会话…）'
+                      : sessionsStatus === 'error'
+                        ? '（会话列表加载失败）'
+                        : uploadSessions.length === 0
+                          ? '（没有会话）'
+                          : '请选择会话…'
+                  }
+                  options={uploadSessions.map((session) => ({
+                    value: session.id,
+                    label: `${session.title || '(无标题)'} · ${session.id}`,
+                  }))}
+                  onChange={setUploadTarget}
                   disabled={uploading || sessionsStatus !== 'ready' || uploadSessions.length === 0}
                   title={
                     sessionsStatus === 'error'
@@ -650,23 +661,7 @@ export default function FilesPage() {
                           : undefined
                   }
                   className={cn(INPUT_CLASS, 'w-40 min-w-0 sm:w-60')}
-                  data-testid="upload-target"
-                >
-                  <option value="">
-                    {sessionsStatus === 'loading'
-                      ? '（正在加载会话…）'
-                      : sessionsStatus === 'error'
-                        ? '（会话列表加载失败）'
-                        : uploadSessions.length === 0
-                          ? '（没有会话）'
-                          : '请选择会话…'}
-                  </option>
-                  {uploadSessions.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.title || '(无标题)'} · {s.id}
-                    </option>
-                  ))}
-                </select>
+                />
                 {/*
                   ★ 失败不能只写成「（没有会话）」—— 那是在说
                   "你还没有会话"，而真相是"没问到"。旁边给重试。

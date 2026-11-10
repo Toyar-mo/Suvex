@@ -4,6 +4,7 @@ import { SettingsPanel } from './SaveBar'
 import { showToast } from '@/data/toast-store'
 import { loadModelRoutes, saveModelRoutes } from '@/data/modelRoutes'
 import type { ProviderAccount } from '@/data/settings'
+import { Select } from '@/components/ui/Select'
 
 /** 三个成功判据。顺序与扫描创建向导一致。 */
 const GOALS = [
@@ -82,10 +83,16 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
             {GOALS.map((goal) => (
               <label key={goal.key} className="flex flex-col gap-1.5 text-sm">
                 <span className="text-ink-muted">{goal.label}</span>
-                <select
+                <Select
                   value={routes[goal.key] ?? ''}
-                  onChange={(event) => {
-                    const value = event.target.value
+                  options={[
+                    { value: '', label: '平台默认' },
+                    ...accounts.map((account) => ({
+                      value: account.id,
+                      label: `${account.label} · ${account.model}`,
+                    })),
+                  ]}
+                  onChange={(value) => {
                     setRoutes((prev) => {
                       const next = { ...prev }
                       if (value) next[goal.key] = value
@@ -93,15 +100,7 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
                       return next
                     })
                   }}
-                  className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
-                >
-                  <option value="">平台默认</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.label} · {account.model}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
             ))}
           </div>
@@ -110,10 +109,16 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
             {SKILLS.map((skill) => (
               <label key={skill.key} className="flex flex-col gap-1.5 text-sm">
                 <span className="text-ink-muted">技能 · {skill.label}</span>
-                <select
+                <Select
                   value={routes[skill.key] ?? ''}
-                  onChange={(event) => {
-                    const value = event.target.value
+                  options={[
+                    { value: '', label: '不单独路由' },
+                    ...accounts.map((account) => ({
+                      value: account.id,
+                      label: `${account.label} · ${account.model}`,
+                    })),
+                  ]}
+                  onChange={(value) => {
                     setRoutes((prev) => {
                       const next = { ...prev }
                       if (value) next[skill.key] = value
@@ -121,15 +126,7 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
                       return next
                     })
                   }}
-                  className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
-                >
-                  <option value="">不单独路由</option>
-                  {accounts.map((account) => (
-                    <option key={account.id} value={account.id}>
-                      {account.label} · {account.model}
-                    </option>
-                  ))}
-                </select>
+                />
               </label>
             ))}
           </div>

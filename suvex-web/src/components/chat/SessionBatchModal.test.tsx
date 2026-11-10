@@ -66,9 +66,10 @@ function pick(title: string) {
   fireEvent.click(box)
 }
 
-/** 底部「移动到」下拉（label 的 htmlFor 指向它）。 */
-function moveSelect() {
-  return screen.getByLabelText('移动到')
+/** 打开下拉并点选一项（自绘 Select，不再支持 fireEvent.change）。 */
+function choose(label: string, option: string) {
+  fireEvent.click(screen.getByLabelText(label))
+  fireEvent.click(screen.getByRole('option', { name: option }))
 }
 
 describe('SessionBatchModal', () => {
@@ -80,7 +81,7 @@ describe('SessionBatchModal', () => {
   it('按分组筛选：只剩该组的条目', () => {
     renderModal()
     expect(screen.getByText('客户 B 的排查')).toBeTruthy()
-    fireEvent.change(screen.getByLabelText('按分组筛选'), { target: { value: '客户 A' } })
+    choose('按分组筛选', '客户 A')
     expect(screen.getByText('客户 A 的排查')).toBeTruthy()
     expect(screen.queryByText('客户 B 的排查')).toBeNull()
     expect(screen.queryByText('随手问的')).toBeNull()
@@ -88,14 +89,14 @@ describe('SessionBatchModal', () => {
 
   it('没勾任何条目时「应用」禁用（避免对空集发请求）', () => {
     renderModal()
-    fireEvent.change(moveSelect(), { target: { value: '客户 A' } })
+    // 没勾条目时「移动到」本身也是禁用的，所以这里只看「应用」。
     expect((screen.getByText('应用') as HTMLButtonElement).disabled).toBe(true)
   })
 
   it('选已有分组 + 应用：把勾选的 id 交出去', async () => {
     const props = renderModal()
     pick('客户 B 的排查')
-    fireEvent.change(moveSelect(), { target: { value: '客户 A' } })
+    choose('移动到', '客户 A')
     fireEvent.click(screen.getByText('应用'))
     await vi.waitFor(() => expect(props.onMoveTo).toHaveBeenCalledWith(['chat_2'], '客户 A'))
     expect(props.onCreateGroup).not.toHaveBeenCalled()
@@ -104,7 +105,7 @@ describe('SessionBatchModal', () => {
   it('应用成功后清空勾选（否则用户以为没生效、再点一次重跑）', async () => {
     const props = renderModal()
     pick('客户 B 的排查')
-    fireEvent.change(moveSelect(), { target: { value: '客户 A' } })
+    choose('移动到', '客户 A')
     fireEvent.click(screen.getByText('应用'))
     await vi.waitFor(() =>
       expect((screen.getByLabelText('选择「客户 B 的排查」') as HTMLInputElement).checked).toBe(
@@ -118,7 +119,7 @@ describe('SessionBatchModal', () => {
     const props = renderModal()
     pick('客户 B 的排查')
     pick('随手问的')
-    fireEvent.change(moveSelect(), { target: { value: '__new__' } })
+    choose('移动到', '＋ 新建分组…')
     fireEvent.change(screen.getByLabelText('新分组名字'), { target: { value: 'HW2026' } })
     fireEvent.click(screen.getByText('应用'))
     await vi.waitFor(() =>
@@ -130,7 +131,7 @@ describe('SessionBatchModal', () => {
   it('新建分组时名字为空：不发请求，就地报错', () => {
     const props = renderModal()
     pick('客户 B 的排查')
-    fireEvent.change(moveSelect(), { target: { value: '__new__' } })
+    choose('移动到', '＋ 新建分组…')
     fireEvent.click(screen.getByText('应用'))
     expect(props.onCreateGroup).not.toHaveBeenCalled()
     expect(screen.getByText('名字不能为空')).toBeTruthy()
@@ -139,7 +140,7 @@ describe('SessionBatchModal', () => {
   it('新建分组重名：不发请求，并指向已有分组', () => {
     const props = renderModal()
     pick('客户 B 的排查')
-    fireEvent.change(moveSelect(), { target: { value: '__new__' } })
+    choose('移动到', '＋ 新建分组…')
     fireEvent.change(screen.getByLabelText('新分组名字'), { target: { value: '客户 A' } })
     fireEvent.click(screen.getByText('应用'))
     expect(props.onCreateGroup).not.toHaveBeenCalled()
@@ -149,10 +150,10 @@ describe('SessionBatchModal', () => {
   it('切换下拉会清掉上一次的「新分组」报错（否则换个组还挂着红字）', () => {
     renderModal()
     pick('客户 B 的排查')
-    fireEvent.change(moveSelect(), { target: { value: '__new__' } })
+    choose('移动到', '＋ 新建分组…')
     fireEvent.click(screen.getByText('应用'))
     expect(screen.getByText('名字不能为空')).toBeTruthy()
-    fireEvent.change(moveSelect(), { target: { value: '客户 A' } })
+    choose('移动到', '客户 A')
     expect(screen.queryByText('名字不能为空')).toBeNull()
   })
 
@@ -164,7 +165,7 @@ describe('SessionBatchModal', () => {
   */
   it('★「无分组」筛选出的是**项目为空**的会话，而不是 0 条', () => {
     renderModal()
-    fireEvent.change(screen.getByLabelText('按分组筛选'), { target: { value: '__none__' } })
+    choose('按分组筛选', '无分组')
 
     expect(screen.getByText('随手问的')).toBeTruthy()
     expect(screen.queryByText('客户 A 的排查')).toBeNull()
@@ -201,10 +202,10 @@ describe('SessionBatchModal', () => {
 
   it('全选只影响当前筛选结果（不能"看着 2 条却选了 3 条"）', () => {
     renderModal()
-    fireEvent.change(screen.getByLabelText('按分组筛选'), { target: { value: '客户 A' } })
+    choose('按分组筛选', '客户 A')
     const selectAll = screen.getByLabelText('全选') as HTMLInputElement
     fireEvent.click(selectAll)
-    fireEvent.change(screen.getByLabelText('按分组筛选'), { target: { value: '' } })
+    choose('按分组筛选', '全部分组')
     // 回到全部分组：只有原本在「客户 A」里的那条是选中的
     expect((screen.getByLabelText('选择「客户 A 的排查」') as HTMLInputElement).checked).toBe(true)
     expect((screen.getByLabelText('选择「客户 B 的排查」') as HTMLInputElement).checked).toBe(false)

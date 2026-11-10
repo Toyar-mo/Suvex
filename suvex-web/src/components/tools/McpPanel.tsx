@@ -13,6 +13,7 @@ import {
 } from '@/data/tools'
 import { AlertCircle, Check, Loader2, Plus, X } from 'lucide-react'
 import { useState } from 'react'
+import { Select } from '@/components/ui/Select'
 
 /**
  * MCP 连接的管理区块。
@@ -434,16 +435,15 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-muted">传输类型</span>
-              <select
+              <Select
+                size="sm"
                 value={draft.type}
-                onChange={(event) =>
-                  setDraft({ ...draft, type: event.target.value as 'stdio' | 'http' })
-                }
-                className="h-8 rounded-sm border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-line-accent"
-              >
-                <option value="stdio">stdio（拉起本地进程）</option>
-                <option value="http">http（连远端端点）</option>
-              </select>
+                options={[
+                  { value: 'stdio', label: 'stdio（拉起本地进程）' },
+                  { value: 'http', label: 'http（连远端端点）' },
+                ]}
+                onChange={(type) => setDraft({ ...draft, type })}
+              />
             </label>
           </div>
 

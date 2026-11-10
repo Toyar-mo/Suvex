@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
+import { Select } from '@/components/ui/Select'
 import { api } from '@/lib/api'
 import { showToast } from '@/data/toast-store'
 import type { Scan } from '@/data/scan'
@@ -38,17 +39,13 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
     <section className="mb-panel flex flex-wrap items-end gap-2 rounded-sm border border-line bg-surface px-panel py-2.5">
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-2xs text-ink-muted">运行中的扫描</span>
-        <select
+        <Select
           value={selected}
-          onChange={(event) => setScanId(event.target.value)}
-          className="h-9 max-w-[18rem] rounded-sm border border-line bg-surface px-2 text-sm"
-        >
-          {running.map((scan) => (
-            <option key={scan.id} value={scan.id}>
-              {scan.name || scan.target}
-            </option>
-          ))}
-        </select>
+          options={running.map((scan) => ({ value: scan.id, label: scan.name || scan.target }))}
+          onChange={setScanId}
+          placeholder="没有运行中的扫描"
+          className="max-w-[18rem]"
+        />
       </label>
       <label className="flex min-w-[16rem] flex-1 flex-col gap-1 text-sm">
         <span className="text-2xs text-ink-muted">补一条线索（下一轮生效）</span>

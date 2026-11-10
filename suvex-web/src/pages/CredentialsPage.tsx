@@ -13,6 +13,7 @@ import type { Credential, ReusePlan } from '@/data/credentials'
 import { showToast } from '@/data/toast-store'
 import { KeyRound } from 'lucide-react'
 import EmptyState from '@/components/ui/EmptyState'
+import { Select } from '@/components/ui/Select'
 import { useEffect, useState } from 'react'
 
 const KINDS = ['password', 'hash', 'ticket', 'key'] as const
@@ -116,17 +117,11 @@ export function CredentialsPage() {
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
               <span>类型</span>
-              <select
+              <Select
                 value={form.kind}
-                onChange={(event) => setForm({ ...form, kind: event.target.value })}
-                className="h-9 rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast hover:border-line-strong"
-              >
-                {KINDS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {kind}
-                  </option>
-                ))}
-              </select>
+                options={KINDS.map((kind) => ({ value: kind, label: kind }))}
+                onChange={(kind) => setForm({ ...form, kind })}
+              />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
               <span>用户名</span>

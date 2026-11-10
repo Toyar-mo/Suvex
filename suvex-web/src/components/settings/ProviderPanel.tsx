@@ -25,6 +25,7 @@ import {
 import { Check, Loader2, Plus, ShieldCheck, Star, TriangleAlert, X } from 'lucide-react'
 import { useCallback, useMemo, useState } from 'react'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
+import { Select } from '@/components/ui/Select'
 
 /**
  * 已有密钥时的输入框占位文案。
@@ -712,19 +713,15 @@ function AccountEditor({
               </Button>
             </div>
             {modelOptions.length > 0 && (
-              <select
+              <Select
                 value={draft.model}
-                onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
-                aria-label="可用模型"
-              >
-                <option value="">从列表选择…</option>
-                {modelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+                options={[
+                  { value: '', label: '从列表选择…' },
+                  ...modelOptions.map((model) => ({ value: model, label: model })),
+                ]}
+                onChange={(model) => setDraft({ ...draft, model })}
+                ariaLabel="可用模型"
+              />
             )}
           </div>
         </Field>

@@ -7,6 +7,7 @@ import { Modal } from '@/components/ui/Modal'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
+import { Select } from '@/components/ui/Select'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
 import { showToast } from '@/data/toast-store'
@@ -344,18 +345,16 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
 
         <label className="flex flex-col gap-1">
           <span className="text-xs text-ink-muted">使用哪个模型服务</span>
-          <select
+          <Select
             value={providerId ?? ''}
-            onChange={(event) => setPickedProviderId(event.target.value || null)}
-            className="rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink focus:border-accent focus:outline-none"
-          >
-            {providers.map((provider) => (
-              <option key={provider.id} value={provider.id} disabled={!provider.configured}>
-                {provider.label}
-                {provider.configured ? '' : '（未配置）'}
-              </option>
-            ))}
-          </select>
+            options={providers.map((provider) => ({
+              value: provider.id,
+              label: `${provider.label}${provider.configured ? '' : '（未配置）'}`,
+              disabled: !provider.configured,
+            }))}
+            onChange={(value) => setPickedProviderId(value || null)}
+            placeholder="请选择模型服务"
+          />
         </label>
 
         <p className="rounded-sm border border-line bg-canvas px-2.5 py-2 text-2xs leading-relaxed text-ink-muted">

@@ -12,6 +12,7 @@ import {
   type BenchmarkCase,
   type CaseRun,
 } from '@/data/benchmark'
+import { Select } from '@/components/ui/Select'
 
 const STATUS_LABEL: Record<CaseRun['status'], string> = {
   passed: '通过',
@@ -129,14 +130,14 @@ export function BenchmarkCasesPanel() {
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-ink-muted">类型</span>
-            <select
+            <Select
               value={kind}
-              onChange={(event) => setKind(event.target.value as 'ctf' | 'scan')}
-              className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
-            >
-              <option value="scan">扫描</option>
-              <option value="ctf">CTF 题目</option>
-            </select>
+              options={[
+                { value: 'scan', label: '扫描' },
+                { value: 'ctf', label: 'CTF 题目' },
+              ]}
+              onChange={(value) => setKind(value as 'ctf' | 'scan')}
+            />
           </label>
           <label className="flex flex-col gap-1 text-sm lg:col-span-2">
             <span className="text-ink-muted">{kind === 'ctf' ? '题目 id' : '扫描 id'}</span>

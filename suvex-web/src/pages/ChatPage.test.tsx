@@ -388,7 +388,7 @@ describe('ChatPage — 拿不到会话列表时给重试，而不是伪装成空
     expect(screen.getByText('fake-server')).toBeTruthy()
     expect(screen.getByText('team-mcp')).toBeTruthy()
 
-    fireEvent.click(screen.getAllByRole('checkbox')[0])
+    fireEvent.click(screen.getAllByRole('option')[0])
 
     await waitFor(() =>
       expect(vi.mocked(updateSettings)).toHaveBeenCalledWith('chat_1', {

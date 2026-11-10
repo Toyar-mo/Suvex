@@ -4,6 +4,7 @@ import { Modal } from '@/components/ui/Modal'
 import type { ChatSession } from '@/data/chat'
 import { cn } from '@/lib/cn'
 import { useMemo, useState } from 'react'
+import { Select } from '@/components/ui/Select'
 
 /**
  * 批量管理会话。
@@ -125,30 +126,23 @@ export function SessionBatchModal({
             <label htmlFor="batch-move-select" className="text-xs text-ink-muted">
               移动到
             </label>
-            <select
+            <Select
               id="batch-move-select"
+              size="sm"
               value={moveTo}
-              onChange={(event) => {
-                setMoveTo(event.target.value)
+              options={[
+                { value: '', label: '选择分组…' },
+                ...projects.map((name) => ({ value: name, label: name })),
+                { value: '__none__', label: '无分组' },
+                { value: '__new__', label: '＋ 新建分组…' },
+              ]}
+              onChange={(value) => {
+                setMoveTo(value)
                 setNewGroupError('')
               }}
               disabled={busy || pickedIds.length === 0}
-              className="h-7 rounded-sm border border-line bg-surface px-2 text-xs text-ink disabled:opacity-50"
-            >
-              <option value="">选择分组…</option>
-              {projects.map((name) => (
-                <option key={name} value={name}>
-                  {name}
-                </option>
-              ))}
-              <option value="__none__">无分组</option>
-              {/*
-                ★ v1.20：与右键菜单里的「新建分组…」是同一个能力。
-                  放在这里是为了"批量"这个场景 —— 一次勾 8 条再一条条
-                  去右键菜单新建分组，是把同一件事做 8 遍。
-              */}
-              <option value="__new__">＋ 新建分组…</option>
-            </select>
+              className="h-7 w-40"
+            />
             {moveTo === '__new__' && (
               <input
                 value={newGroup}
@@ -252,20 +246,18 @@ export function SessionBatchModal({
             aria-label="按标题搜索对话"
             className="h-8 min-w-0 flex-1 rounded-sm border border-line bg-surface px-2 text-xs text-ink"
           />
-          <select
+          <Select
+            size="sm"
             value={projectFilter}
-            onChange={(event) => setProjectFilter(event.target.value)}
-            aria-label="按分组筛选"
-            className="h-8 rounded-sm border border-line bg-surface px-2 text-xs text-ink"
-          >
-            <option value="">全部分组</option>
-            {projects.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-            <option value="__none__">无分组</option>
-          </select>
+            options={[
+              { value: '', label: '全部分组' },
+              ...projects.map((name) => ({ value: name, label: name })),
+              { value: '__none__', label: '无分组' },
+            ]}
+            onChange={setProjectFilter}
+            ariaLabel="按分组筛选"
+            className="w-36"
+          />
         </div>
         {archiveResult && (
           <p

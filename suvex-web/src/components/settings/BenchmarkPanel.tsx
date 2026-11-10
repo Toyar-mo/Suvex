@@ -11,6 +11,7 @@ import {
   type BenchmarkSnapshot,
   type QualityPayload,
 } from '@/data/benchmark'
+import { Select } from '@/components/ui/Select'
 
 /** 对比表里展示的指标（key 与后端 delta 一致）。 */
 const DELTAS = [
@@ -183,33 +184,31 @@ export function BenchmarkPanel() {
             <div className="flex flex-wrap items-end gap-2">
               <label className="flex flex-col gap-1 text-sm">
                 <span className="text-ink-muted">基线</span>
-                <select
+                <Select
                   value={beforeId}
-                  onChange={(event) => setBeforeId(event.target.value)}
-                  className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
-                >
-                  <option value="">选择…</option>
-                  {snapshots.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label || s.id}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: '选择…' },
+                    ...snapshots.map((snapshot) => ({
+                      value: snapshot.id,
+                      label: snapshot.label || snapshot.id,
+                    })),
+                  ]}
+                  onChange={setBeforeId}
+                />
               </label>
               <label className="flex flex-col gap-1 text-sm">
                 <span className="text-ink-muted">对比</span>
-                <select
+                <Select
                   value={afterId}
-                  onChange={(event) => setAfterId(event.target.value)}
-                  className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
-                >
-                  <option value="">选择…</option>
-                  {snapshots.map((s) => (
-                    <option key={s.id} value={s.id}>
-                      {s.label || s.id}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: '', label: '选择…' },
+                    ...snapshots.map((snapshot) => ({
+                      value: snapshot.id,
+                      label: snapshot.label || snapshot.id,
+                    })),
+                  ]}
+                  onChange={setAfterId}
+                />
               </label>
               <Button
                 variant="secondary"

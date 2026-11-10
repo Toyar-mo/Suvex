@@ -11,6 +11,7 @@ import {
 import { showToast } from '@/data/toast-store'
 import { Network } from 'lucide-react'
 import EmptyState from '@/components/ui/EmptyState'
+import { Select } from '@/components/ui/Select'
 import { useEffect, useState } from 'react'
 
 const KINDS = ['webshell', 'reverse', 'ssh'] as const
@@ -91,17 +92,11 @@ export function IntranetPage() {
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
               <span>类型</span>
-              <select
+              <Select
                 value={form.kind}
-                onChange={(event) => setForm({ ...form, kind: event.target.value })}
-                className="h-9 rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast hover:border-line-strong"
-              >
-                {KINDS.map((kind) => (
-                  <option key={kind} value={kind}>
-                    {kind}
-                  </option>
-                ))}
-              </select>
+                options={KINDS.map((kind) => ({ value: kind, label: kind }))}
+                onChange={(kind) => setForm({ ...form, kind })}
+              />
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-2">
               <span>地址</span>
@@ -122,17 +117,11 @@ export function IntranetPage() {
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
               <span>状态</span>
-              <select
+              <Select
                 value={form.status}
-                onChange={(event) => setForm({ ...form, status: event.target.value })}
-                className="h-9 rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast hover:border-line-strong"
-              >
-                {STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {STATUS_LABEL[status]}
-                  </option>
-                ))}
-              </select>
+                options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
+                onChange={(status) => setForm({ ...form, status })}
+              />
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-6">
               <span>备注</span>
@@ -174,17 +163,13 @@ export function IntranetPage() {
                     <td className="max-w-[18rem] truncate px-3 py-2 font-mono text-xs text-ink">{item.host}</td>
                     <td className="px-3 py-2 text-2xs text-ink-muted">{item.username || '—'}</td>
                     <td className="px-3 py-2 text-2xs">
-                      <select
+                      <Select
+                        size="sm"
                         value={item.status}
-                        onChange={(event) => void setStatus(item, event.target.value)}
-                        className="bg-transparent text-2xs text-ink transition-ui hover:text-accent-strong"
-                      >
-                        {STATUSES.map((status) => (
-                          <option key={status} value={status}>
-                            {STATUS_LABEL[status]}
-                          </option>
-                        ))}
-                      </select>
+                        options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
+                        onChange={(status) => void setStatus(item, status)}
+                        className="h-7 w-24 border-0 bg-transparent px-1 text-2xs hover:bg-surface-sunken"
+                      />
                     </td>
                     <td className="max-w-[18rem] truncate px-3 py-2 text-2xs text-ink-faint">{item.notes || '—'}</td>
                     <td className="px-3 py-2">

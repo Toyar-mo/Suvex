@@ -8,6 +8,8 @@ import {
 } from '@/data/report'
 import { RANGE_PRESET_LABEL, type RangePreset } from '@/lib/report-build'
 import { ListChecks, ScanSearch, Target, CalendarRange, Check, Minus } from 'lucide-react'
+import { DatePicker } from '@/components/ui/DatePicker'
+import { Select } from '@/components/ui/Select'
 
 /**
  * 报告配置区：选范围 + 选内容。
@@ -129,20 +131,17 @@ export function ScopePicker({
 
       {scope.kind === 'scan' && (
         <Field label="选择扫描任务" htmlFor="report-scan">
-          <select
+          <Select
             id="report-scan"
             value={scope.scanId}
-            onChange={(e) => onChange({ kind: 'scan', scanId: e.target.value })}
-            className={SELECT_CLASS}
+            options={scans.map((scan) => ({
+              value: scan.id,
+              label: `${scan.name}（${scan.count} 条）`,
+            }))}
+            onChange={(scanId) => onChange({ kind: 'scan', scanId })}
             disabled={scans.length === 0}
-          >
-            {scans.length === 0 && <option value="">没有可用的扫描结果</option>}
-            {scans.map((scan) => (
-              <option key={scan.id} value={scan.id} className="bg-surface-overlay">
-                {scan.name}（{scan.count} 条）
-              </option>
-            ))}
-          </select>
+            placeholder="没有可用的扫描结果"
+          />
           {selectedScan && (
             <p className="truncate text-2xs text-ink-faint" title={selectedScan.name}>
               {selectedScan.name}
@@ -153,20 +152,17 @@ export function ScopePicker({
 
       {scope.kind === 'target' && (
         <Field label="选择目标" htmlFor="report-target">
-          <select
+          <Select
             id="report-target"
             value={scope.target}
-            onChange={(e) => onChange({ kind: 'target', target: e.target.value })}
-            className={SELECT_CLASS}
+            options={targets.map((target) => ({
+              value: target.name,
+              label: `${target.name}（${target.count} 条）`,
+            }))}
+            onChange={(target) => onChange({ kind: 'target', target })}
             disabled={targets.length === 0}
-          >
-            {targets.length === 0 && <option value="">没有可用的目标</option>}
-            {targets.map((target) => (
-              <option key={target.name} value={target.name} className="bg-surface-overlay">
-                {target.name}（{target.count} 条）
-              </option>
-            ))}
-          </select>
+            placeholder="没有可用的目标"
+          />
         </Field>
       )}
 
@@ -198,23 +194,21 @@ export function ScopePicker({
 
           <div className="grid grid-cols-2 gap-tight">
             <Field label="开始日期" htmlFor="report-from">
-              <input
+              <DatePicker
                 id="report-from"
-                type="date"
                 value={scope.from.slice(0, 10)}
                 max={scope.to.slice(0, 10)}
-                onChange={(e) => onChange({ ...scope, from: toIso(e.target.value, scope.from) })}
-                className={INPUT_CLASS}
+                onChange={(value) => onChange({ ...scope, from: toIso(value, scope.from) })}
+                ariaLabel="开始日期"
               />
             </Field>
             <Field label="结束日期" htmlFor="report-to">
-              <input
+              <DatePicker
                 id="report-to"
-                type="date"
                 value={scope.to.slice(0, 10)}
                 min={scope.from.slice(0, 10)}
-                onChange={(e) => onChange({ ...scope, to: toIso(e.target.value, scope.to) })}
-                className={INPUT_CLASS}
+                onChange={(value) => onChange({ ...scope, to: toIso(value, scope.to) })}
+                ariaLabel="结束日期"
               />
             </Field>
           </div>
@@ -483,12 +477,6 @@ function Field({
     </div>
   )
 }
-
-const SELECT_CLASS =
-  'h-8 w-full rounded-sm border border-line bg-surface-sunken px-2 text-xs text-ink transition-ui duration-fast hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40'
-
-const INPUT_CLASS =
-  'h-8 w-full rounded-sm border border-line bg-surface-sunken px-2 text-xs text-ink transition-ui duration-fast hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40'
 
 /** 供页面复用的勾选标记（历史列表里表示"包含/不包含"） */
 export function IncludeMark({ included }: { included: boolean }) {

@@ -12,6 +12,7 @@ import {
   type EvaluateResult,
   type PurpleRule,
 } from '@/data/purple'
+import { Select } from '@/components/ui/Select'
 
 const SEVERITIES = ['low', 'medium', 'high', 'critical']
 
@@ -125,17 +126,11 @@ export function PurplePanel() {
           </label>
           <label className="flex flex-col gap-1 text-sm">
             <span className="text-ink-muted">严重度</span>
-            <select
+            <Select
               value={severity}
-              onChange={(event) => setSeverity(event.target.value)}
-              className="h-9 rounded-sm border border-line bg-surface px-2 text-sm"
-            >
-              {SEVERITIES.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
+              options={SEVERITIES.map((item) => ({ value: item, label: item }))}
+              onChange={setSeverity}
+            />
           </label>
         </div>
 

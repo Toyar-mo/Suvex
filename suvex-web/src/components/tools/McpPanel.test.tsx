@@ -63,8 +63,8 @@ describe('McpPanel v1.62：http 传输表单', () => {
   it('★ 切成 http → 出现 url 框 + 请求头框，command 框消失', () => {
     renderPanel()
     fireEvent.click(screen.getByRole('button', { name: /添加连接/ }))
-    const select = screen.getByRole('combobox')
-    fireEvent.change(select, { target: { value: 'http' } })
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(screen.getByRole('option', { name: 'http（连远端端点）' }))
     // url 框出现
     expect(screen.getByPlaceholderText(/example.com\/api\/mcp/)).toBeTruthy()
     // 请求头框出现
@@ -86,7 +86,8 @@ describe('McpPanel v1.62：http 传输表单', () => {
     fireEvent.click(screen.getByRole('button', { name: /添加连接/ }))
     // 填名字 + 切 http，但 url 留空
     fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: 'x' } })
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'http' } })
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(screen.getByRole('option', { name: 'http（连远端端点）' }))
     fireEvent.click(screen.getByRole('button', { name: /^添加$/ }))
     expect(onSave).not.toHaveBeenCalled()
     expect(screen.getByText(/http 连接要填 url/)).toBeTruthy()
@@ -96,7 +97,8 @@ describe('McpPanel v1.62：http 传输表单', () => {
     const onSave = renderPanel()
     fireEvent.click(screen.getByRole('button', { name: /添加连接/ }))
     fireEvent.change(screen.getAllByRole('textbox')[0], { target: { value: 'ctf2' } })
-    fireEvent.change(screen.getByRole('combobox'), { target: { value: 'http' } })
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(screen.getByRole('option', { name: 'http（连远端端点）' }))
     fireEvent.change(screen.getByPlaceholderText(/example.com\/api\/mcp/), {
       target: { value: 'https://ctf2.dasctf.com/api/ai/v1/mcp' },
     })

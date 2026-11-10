@@ -505,7 +505,7 @@ export function MultiSelect({
                   <span
                     className={cn(
                       'flex size-3 shrink-0 items-center justify-center rounded-[3px] border',
-                      checked ? 'border-accent bg-accent text-white' : 'border-line-strong',
+                      checked ? 'border-accent bg-accent text-canvas' : 'border-line-strong',
                     )}
                     aria-hidden="true"
                   >
@@ -568,10 +568,35 @@ export function ProjectInput({
     if (!editing) setDraft(value ?? '')
   }, [value, editing])
 
-  // datalist 需要一个稳定且在文档内唯一的 id。用 `useId()` 而不是
-  // `Math.random()`：后者在渲染期产生不确定值，会让并发渲染/严格模式
-  // 下同一组件前后两次渲染拿到不同 id，进而让 `list`→`datalist` 关联失效。
+  /*
+   * 建议列表自己画，不用 `<datalist>`：原生建议层同样是系统绘制
+   * （白底、系统字体、方角），和输入区其他浮层不是一套。
+   *
+   * 键盘行为保留：↑/↓ 移动候选、Enter 选中当前候选（没有候选时提交
+   * 自由文本）、Esc 取消。`committedRef` 防止「点击候选」与「失焦提交」
+   * 各提交一次。
+   */
   const listId = `projects-${useId()}`
+  const [suggestionIndex, setSuggestionIndex] = useState(-1)
+  const committedRef = useRef(false)
+  const filteredSuggestions = suggestions
+    .filter((name) => {
+      const query = draft.trim().toLowerCase()
+      return name !== draft.trim() && (!query || name.toLowerCase().includes(query))
+    })
+    .slice(0, 8)
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (editing) committedRef.current = false
+  }, [editing])
+
+  function commitProject(next: string | null) {
+    if (committedRef.current) return
+    committedRef.current = true
+    onCommit(next)
+    setEditing(false)
+  }
 
   if (!editing) {
     return (
@@ -595,23 +620,33 @@ export function ProjectInput({
   }
 
   return (
-    <>
+    <div className="relative">
       <input
         autoFocus
         value={draft}
-        list={listId}
-        onChange={(e) => setDraft(e.target.value)}
+        onChange={(e) => {
+          setDraft(e.target.value)
+          setSuggestionIndex(-1)
+        }}
         onBlur={() => {
-          setEditing(false)
           const cleaned = draft.trim()
-          onCommit(cleaned || null)
+          commitProject(cleaned || null)
         }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter') {
+          if (e.key === 'ArrowDown') {
             e.preventDefault()
-            e.currentTarget.blur()
-          }
-          if (e.key === 'Escape') {
+            setSuggestionIndex((index) =>
+              Math.min(index + 1, filteredSuggestions.length - 1),
+            )
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setSuggestionIndex((index) => Math.max(index - 1, 0))
+          } else if (e.key === 'Enter') {
+            e.preventDefault()
+            const picked = filteredSuggestions[suggestionIndex]
+            commitProject((picked ?? draft).trim() || null)
+          } else if (e.key === 'Escape') {
+            committedRef.current = true
             setDraft(value ?? '')
             // ⚠️ 先改草稿再退出编辑：直接 `setEditing(false)` 会让
             //   `useEffect` 里的同步逻辑读到**旧的** `value`，于是
@@ -621,18 +656,47 @@ export function ProjectInput({
         }}
         placeholder="项目名"
         aria-label="归属项目"
+        aria-autocomplete="list"
+        aria-controls={listId}
         className={cn(
           'w-28 rounded-sm border border-accent/60 bg-surface-sunken px-2 py-1',
           'text-2xs text-ink placeholder:text-ink-faint',
           'focus:outline-none focus:ring-2 focus:ring-accent/40',
         )}
       />
-      <datalist id={listId}>
-        {suggestions.map((name) => (
-          <option key={name} value={name} />
-        ))}
-      </datalist>
-    </>
+      {filteredSuggestions.length > 0 && (
+        <div
+          id={listId}
+          role="listbox"
+          className={cn(
+            'absolute bottom-full left-0 z-30 mb-1 w-40 overflow-y-auto overscroll-contain',
+            'rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
+          )}
+        >
+          {filteredSuggestions.map((name, index) => (
+            <button
+              key={name}
+              type="button"
+              role="option"
+              aria-selected={index === suggestionIndex}
+              onPointerDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setSuggestionIndex(index)}
+              onClick={() => commitProject(name)}
+              className={cn(
+                'flex w-full items-center gap-1.5 rounded-xs px-1.5 py-1 text-left',
+                'text-2xs transition-ui duration-fast',
+                index === suggestionIndex
+                  ? 'bg-surface-sunken text-ink'
+                  : 'text-ink-muted',
+              )}
+            >
+              <FolderPlus size={10} strokeWidth={2} aria-hidden="true" className="shrink-0" />
+              <span className="truncate">{name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

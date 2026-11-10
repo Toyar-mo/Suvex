@@ -168,13 +168,13 @@ describe('OverviewPage 三态', () => {
     renderPage()
 
     expect(screen.getByLabelText('关键指标')).toBeTruthy()
-    expect(screen.getByText('进行中的扫描')).toBeTruthy()
+    expect(screen.getByText('活跃任务')).toBeTruthy()
     /*
       脚注拼的是 agents 的两个数 —— 顺便证明 useFleetStatus 被真的用上了。
       措辞用「扫描」而不是「智能体」：这两个数就是同一批扫描按状态分的，
       叫成智能体会让人以为另有 3 个东西，和卡片上的数字对不上。
     */
-    expect(screen.getByText(/3 个在执行 · 1 个排队/)).toBeTruthy()
+    expect(screen.getByText(/3 执行 · 1 排队/)).toBeTruthy()
     expect(screen.queryByText('还没有扫描记录')).toBeNull()
   })
 

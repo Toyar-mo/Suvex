@@ -14,6 +14,7 @@ import {
 import { ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { useProviders } from '@/data/providers'
+import { Select } from '@/components/ui/Select'
 
 /**
  * CTF2 解题策略面板（设置页的一块）。
@@ -766,23 +767,18 @@ export function KernelPanel() {
             '⚠️ 若备用的是云端 provider，换模会消耗**那个** provider 的额度。'
           }
         >
-          <select
+          <Select
             id="ctf2-fallback-provider"
             value={draft.fallbackProviderId ?? ''}
-            onChange={(e) => setDraft({ ...draft, fallbackProviderId: e.target.value || null })}
-            className={cn(
-              'h-9 w-full max-w-[20rem] rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink',
-              'transition-ui duration-fast hover:border-line-strong',
-              'focus:outline-none focus:ring-2 focus:ring-accent/40',
-            )}
-          >
-            <option value="">不启用</option>
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: '', label: '不启用' },
+              ...providers.map((provider) => ({ value: provider.id, label: provider.label })),
+            ]}
+            onChange={(value) =>
+              setDraft({ ...draft, fallbackProviderId: value || null })
+            }
+            className="max-w-[20rem]"
+          />
         </Field>
 
         {/* ── 跨场景开关（v0.41 / v0.58）── */}

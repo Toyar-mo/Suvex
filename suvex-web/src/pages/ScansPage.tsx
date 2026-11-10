@@ -10,6 +10,7 @@ import WriteupDialog from '@/components/scans/WriteupDialog'
 import ScanViewsMenu from '@/components/scans/ScanViewsMenu'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import { Button, IconButton } from '@/components/ui/Button'
+import { Select } from '@/components/ui/Select'
 import ToggleChip from '@/components/ui/ToggleChip'
 import { SORT_LABEL, filterScans, sortScans, type SortDir, type SortKey } from '@/lib/scan-query'
 import { encodeViewQuery, type ScanViewParams } from '@/lib/scan-view-query'
@@ -826,17 +827,16 @@ export function ScansPage() {
           <label className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
             <ArrowDownWideNarrow size={13} strokeWidth={1.75} aria-hidden="true" />
             <span className="sr-only">排序方式</span>
-            <select
+            <Select
+              size="sm"
               value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as SortKey)}
-              className="bg-transparent text-xs text-ink-muted focus:outline-none"
-            >
-              {(Object.keys(SORT_LABEL) as SortKey[]).map((key) => (
-                <option key={key} value={key} className="bg-surface-overlay">
-                  {SORT_LABEL[key]}
-                </option>
-              ))}
-            </select>
+              options={(Object.keys(SORT_LABEL) as SortKey[]).map((key) => ({
+                value: key,
+                label: SORT_LABEL[key],
+              }))}
+              onChange={(value) => setSortKey(value as SortKey)}
+              className="h-full border-0 bg-transparent px-0"
+            />
             <IconButton
               label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
               /* 触摸目标：箭头字形只有 8px 宽，撑到 24px 见方。

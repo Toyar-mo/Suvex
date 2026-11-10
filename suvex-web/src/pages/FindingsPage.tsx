@@ -14,6 +14,7 @@ import ToggleChip from '@/components/ui/ToggleChip'
 import NoScansYet from '@/components/ui/NoScansYet'
 import ReasonDialog from '@/components/ui/ReasonDialog'
 import { Skeleton, SkeletonRows, SkeletonText } from '@/components/ui/Skeleton'
+import { Select } from '@/components/ui/Select'
 import {
   FINDING_CATEGORY_LABEL,
   FINDING_STATUS_LABEL,
@@ -1131,30 +1132,28 @@ export function FindingsPage() {
                     这里只负责边框和图标这些视觉外壳。 */}
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
                   <Filter size={13} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
-                  <select
+                  <Select
                     id="finding-category"
+                    size="sm"
                     value={[...filter.categories][0] ?? ''}
-                    onChange={(e) => {
-                      const value = e.target.value
+                    options={[
+                      { value: '', label: '全部类型' },
+                      ...(Object.keys(FINDING_CATEGORY_LABEL) as FindingCategory[])
+                        .filter((category) => (byCategory[category] ?? 0) > 0)
+                        .map((category) => ({
+                          value: category,
+                          label: `${FINDING_CATEGORY_LABEL[category]}（${byCategory[category]}）`,
+                        })),
+                    ]}
+                    onChange={(value) => {
                       setFilter((prev) => ({
                         ...prev,
                         // 单选下拉，所以集合里最多一个
                         categories: value ? new Set([value]) : new Set<string>(),
                       }))
                     }}
-                    className="h-full bg-transparent text-xs text-ink-muted focus:outline-none"
-                  >
-                    <option value="" className="bg-surface-overlay">
-                      全部类型
-                    </option>
-                    {(Object.keys(FINDING_CATEGORY_LABEL) as FindingCategory[])
-                      .filter((category) => (byCategory[category] ?? 0) > 0)
-                      .map((category) => (
-                        <option key={category} value={category} className="bg-surface-overlay">
-                          {FINDING_CATEGORY_LABEL[category]}（{byCategory[category]}）
-                        </option>
-                      ))}
-                  </select>
+                    className="h-full border-0 bg-transparent px-0 text-xs text-ink-muted"
+                  />
                 </div>
               </FilterField>
 
@@ -1172,35 +1171,26 @@ export function FindingsPage() {
               <FilterField label="负责人" htmlFor="finding-assignee">
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
                   <UserCheck size={13} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
-                  <select
+                  <Select
                     id="finding-assignee"
+                    size="sm"
                     value={[...filter.assignees][0] ?? ''}
-                    onChange={(e) => {
-                      const value = e.target.value
+                    options={[
+                      { value: '', label: '全部负责人' },
+                      { value: UNASSIGNED, label: '未指派' },
+                      ...members.map((member) => ({
+                        value: member.id,
+                        label: `${member.name}${member.active ? '' : '（已停用）'}`,
+                      })),
+                    ]}
+                    onChange={(value) => {
                       setFilter((prev) => ({
                         ...prev,
                         assignees: value ? new Set([value]) : new Set<string>(),
                       }))
                     }}
-                    className="h-full bg-transparent text-xs text-ink-muted focus:outline-none"
-                  >
-                    <option value="" className="bg-surface-overlay">
-                      全部负责人
-                    </option>
-                    <option value={UNASSIGNED} className="bg-surface-overlay">
-                      未指派
-                    </option>
-                    {/*
-                      名单按名字排（store 已经排好）。已停用的人**也列出来** ——
-                      他名下的漏洞还在，"这个人手上有几条"仍然是个有效问题。
-                    */}
-                    {members.map((member) => (
-                      <option key={member.id} value={member.id} className="bg-surface-overlay">
-                        {member.name}
-                        {member.active ? '' : '（已停用）'}
-                      </option>
-                    ))}
-                  </select>
+                    className="h-full border-0 bg-transparent px-0 text-xs text-ink-muted"
+                  />
                 </div>
               </FilterField>
 
@@ -1214,31 +1204,24 @@ export function FindingsPage() {
               <FilterField label="时限" htmlFor="finding-sla">
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
                   <Clock size={13} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
-                  <select
+                  <Select
                     id="finding-sla"
+                    size="sm"
                     value={[...filter.slaStates][0] ?? ''}
-                    onChange={(e) => {
-                      const value = e.target.value
+                    options={[
+                      { value: '', label: '全部时限' },
+                      { value: 'overdue', label: '已超期' },
+                      { value: 'dueSoon', label: '临期' },
+                      { value: 'onTrack', label: '还早' },
+                    ]}
+                    onChange={(value) => {
                       setFilter((prev) => ({
                         ...prev,
                         slaStates: value ? new Set([value]) : new Set<string>(),
                       }))
                     }}
-                    className="h-full bg-transparent text-xs text-ink-muted focus:outline-none"
-                  >
-                    <option value="" className="bg-surface-overlay">
-                      全部时限
-                    </option>
-                    <option value="overdue" className="bg-surface-overlay">
-                      已超期
-                    </option>
-                    <option value="dueSoon" className="bg-surface-overlay">
-                      临期
-                    </option>
-                    <option value="onTrack" className="bg-surface-overlay">
-                      还早
-                    </option>
-                  </select>
+                    className="h-full border-0 bg-transparent px-0 text-xs text-ink-muted"
+                  />
                 </div>
               </FilterField>
               <FilterField label="搜索" htmlFor="finding-search">
@@ -1271,18 +1254,17 @@ export function FindingsPage() {
                     若外壳是 label，点那个按钮会连带触发 label 的聚焦行为 —— 焦点会跳。 */}
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
                   <ArrowDownWideNarrow size={13} strokeWidth={1.75} aria-hidden="true" />
-                  <select
+                  <Select
                     id="finding-sort"
+                    size="sm"
                     value={sortKey}
-                    onChange={(e) => setSortKey(e.target.value as FindingSortKey)}
-                    className="h-full bg-transparent text-xs text-ink-muted focus:outline-none"
-                  >
-                    {(Object.keys(FINDING_SORT_LABEL) as FindingSortKey[]).map((key) => (
-                      <option key={key} value={key} className="bg-surface-overlay">
-                        {FINDING_SORT_LABEL[key]}
-                      </option>
-                    ))}
-                  </select>
+                    options={(Object.keys(FINDING_SORT_LABEL) as FindingSortKey[]).map((key) => ({
+                      value: key,
+                      label: FINDING_SORT_LABEL[key],
+                    }))}
+                    onChange={(value) => setSortKey(value as FindingSortKey)}
+                    className="h-full border-0 bg-transparent px-0 text-xs text-ink-muted"
+                  />
                   {/*
                     shrink-0 是必须的：父级是 flex，符号按钮只有 24px 宽，
                     实测被压缩到 **8.7×24** —— 基本点不中。外面这层固定 28px 见方。
