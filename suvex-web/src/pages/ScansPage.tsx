@@ -4,6 +4,7 @@ import BulkActionBar from '@/components/scans/BulkActionBar'
 import NewScanWizard from '@/components/scans/NewScanWizard'
 import ScanList from '@/components/scans/ScanList'
 import { ScanHintComposer } from '@/components/scans/ScanHintComposer'
+import { loadStalledScans, type StalledScan } from '@/data/stall'
 import CompareDialog from '@/components/scans/CompareDialog'
 import WriteupDialog from '@/components/scans/WriteupDialog'
 import ScanViewsMenu from '@/components/scans/ScanViewsMenu'
@@ -147,6 +148,13 @@ export function ScansPage() {
   const active =
     view === 'default' ? defaultState : view === 'archived' ? archivedState : deletedState
   const { scans, status, error } = active
+  const [stalls, setStalls] = useState<StalledScan[]>([])
+
+  useEffect(() => {
+    void loadStalledScans()
+      .then(setStalls)
+      .catch(() => {})
+  }, [scans.length])
 
   // 新建完成后高亮新记录，让用户明确看到"它加进去了"（验收要求）
   const justCreatedId = searchParams.get('created')
@@ -716,6 +724,25 @@ export function ScansPage() {
   return (
     <>
       <PageHeader navId="scans" />
+      {stalls.length > 0 && (
+        <section className="mb-panel rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] px-panel py-2.5">
+          <p className="text-sm text-ink">
+            {stalls.length} 个运行中扫描在重复同一动作（可能是原地打转）：
+          </p>
+          <ul className="mt-1 flex flex-col gap-0.5 text-2xs text-ink-muted">
+            {stalls.map((item) => (
+              <li key={item.scanId}>
+                <a href={`/scans/${item.scanId}`} className="text-ink hover:underline">
+                  {item.name || item.target}
+                </a>
+                <span className="ml-1.5">
+                  连续 {item.repeats} 次 · <code className="font-mono">{item.sample}</code>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       <ScanHintComposer scans={scans} />
 
       <div className="px-gutter py-bay">

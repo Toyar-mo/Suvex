@@ -361,6 +361,13 @@ def compare_scans(
     )
 
 
+@router.get("/stalled", summary="运行中扫描的重复动作（只读）")
+def list_stalled(_identity: ReadDep, db: DbDep) -> list[dict]:
+    from app.scans.stall import stalled_scans
+
+    return stalled_scans(db)
+
+
 @router.get("/{scanId}", response_model=ScanOut, summary="扫描详情")
 def read_scan(scanId: str, _identity: ReadDep, db: DbDep) -> ScanOut:
     scan = service.get_scan(db, scanId)
