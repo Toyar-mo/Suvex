@@ -728,3 +728,9 @@ def test_every_action_has_a_display_label() -> None:
         assert audit_service.action_label(member.value) != member.value, (
             f"{member.value} 的标签没生效（回退成了原始动作串）"
         )
+
+
+def test_audit_export_requires_admin(client: TestClient) -> None:
+    response = client.get("/api/v1/audit/export")
+
+    assert response.status_code in (401, 403)

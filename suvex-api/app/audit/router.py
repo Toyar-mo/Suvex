@@ -14,9 +14,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from app.audit import service
@@ -91,4 +92,94 @@ def list_audit(
         nextCursor=next_cursor,
         total=service.count(db),
         retentionDays=service.AUDIT_RETENTION_DAYS,
+    )
+
+
+@router.get("/export", summary="审计导出（jsonl/csv，admin）")
+def export_audit(
+    _identity: AdminDep,
+    db: DbDep,
+    format: Annotated[str, Query(pattern="^(jsonl|csv)$")] = "jsonl",
+    action: Annotated[str | None, Query()] = None,
+    since: Annotated[str | None, Query()] = None,
+) -> PlainTextResponse:
+    """导出审计记录（最多 5000 条，最新在前）。
+
+    只读、不可写：审计的可信度来自"只有服务端能追加"。导出是为了取证，
+    不是一条修改历史的入口。
+    """
+    import csv
+    import io
+    import json
+
+    since_dt = None
+    if since:
+        try:
+            since_dt = parse_iso(since)
+        except ValueError:
+            from app.core.errors import ApiError
+
+            raise ApiError.validation("since 不是合法的 ISO 8601 时间") from None
+
+    rows: list[Any] = []
+    cursor: str | None = None
+    while len(rows) < 5000:
+        batch = service.list_entries(
+            db, limit=200, cursor=cursor, action=action, since=since_dt
+        )
+        if not batch:
+            break
+        rows.extend(batch)
+        cursor = service.cursor_for(batch[-1])
+        if len(batch) < 200:
+            break
+
+    fields = [
+        "id",
+        "at",
+        "action",
+        "actorKind",
+        "actorLabel",
+        "actorId",
+        "target",
+        "summary",
+        "ip",
+        "userAgent",
+        "detail",
+    ]
+
+    def as_dict(entry: Any) -> dict[str, Any]:
+        return {
+            "id": entry.id,
+            "at": entry.at.isoformat() if entry.at else "",
+            "action": entry.action,
+            "actorKind": entry.actor_kind,
+            "actorLabel": entry.actor_label,
+            "actorId": entry.actor_id or "",
+            "target": entry.target or "",
+            "summary": entry.summary,
+            "ip": entry.ip or "",
+            "userAgent": entry.user_agent or "",
+            "detail": entry.detail or {},
+        }
+
+    if format == "csv":
+        buffer = io.StringIO()
+        writer = csv.DictWriter(buffer, fieldnames=fields)
+        writer.writeheader()
+        for entry in rows:
+            item = as_dict(entry)
+            item["detail"] = json.dumps(item["detail"], ensure_ascii=False)
+            writer.writerow(item)
+        body = buffer.getvalue()
+        media = "text/csv"
+    else:
+        body = "\n".join(json.dumps(as_dict(entry), ensure_ascii=False) for entry in rows)
+        body += "\n" if rows else ""
+        media = "application/x-ndjson"
+
+    return PlainTextResponse(
+        body,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="audit.{format}"'},
     )

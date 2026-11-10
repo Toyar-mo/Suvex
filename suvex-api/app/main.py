@@ -57,6 +57,7 @@ from app.providers.router import router as providers_router
 from app.purple.router import router as purple_router
 from app.reports.router import router as reports_router
 from app.scans.router import router as scans_router
+from app.scans.scope_router import router as scope_router
 from app.schedules.router import router as schedules_router
 from app.settings.router import router as settings_router
 
@@ -509,6 +510,7 @@ def create_app() -> FastAPI:
         reports_router,
         benchmark_router,
         purple_router,
+        scope_router,
         overview_router,
         assets_router,
         schedules_router,

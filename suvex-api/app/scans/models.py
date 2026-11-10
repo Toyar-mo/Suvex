@@ -365,3 +365,40 @@ class ScanHint(Base):
 
 
 __all__ = ["Scan", "ScanHint"]
+
+
+class PendingScope(Base):
+    """扫描中发现、但**尚未获授权**的新目标（v1.82）。
+
+    ## 为什么单独一张表
+
+    发现的资产 ≠ 有权测试的目标。把两者混在一起，就等于让"扫描器
+    看到了什么"自动变成"可以去打什么"——这是授权边界的塌陷。
+    本表只记录"待人工决定"，批准后也**不会**自动改变正在跑的扫描：
+    扩 scope 意味着新建一次带授权的扫描，而不是偷偷改旧任务的目标。
+
+    ## 状态
+
+    `pending` / `approved` / `rejected`。批准与拒绝都写审计。
+    """
+
+    __tablename__ = "pending_scope_items"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'rejected')",
+            name="status_valid",
+        ),
+        Index("ix_pending_scope_scan", "scan_id"),
+        Index("ix_pending_scope_status", "status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scan_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    target: Mapped[str] = mapped_column(String(512), nullable=False)
+    reason: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(UtcDateTime, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(120), nullable=True)
