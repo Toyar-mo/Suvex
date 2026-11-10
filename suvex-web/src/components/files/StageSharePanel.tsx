@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
-import { createStage, deleteStage, type StageResult } from '@/data/stage'
+import { createStage, deleteStage, loadStages, type StageResult } from '@/data/stage'
 import { showToast } from '@/data/toast-store'
 
 /**
@@ -16,6 +16,21 @@ export function StageSharePanel() {
   const [ttl, setTtl] = useState(15)
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<StageResult | null>(null)
+  const [items, setItems] = useState<StageResult[]>([])
+
+  async function reload() {
+    try {
+      setItems(await loadStages())
+    } catch {
+      // 列表是增值信息：失败静默
+    }
+  }
+
+  useEffect(() => {
+    // 异步读取后写状态：数据加载，不是从 props 派生的级联渲染。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void reload()
+  }, [])
 
   async function create() {
     if (!name.trim() || !content.trim()) return
@@ -24,6 +39,7 @@ export function StageSharePanel() {
       const row = await createStage({ name: name.trim(), content, ttlMinutes: ttl })
       setCreated(row)
       setContent('')
+      await reload()
       showToast({ tone: 'ok', message: `已投递，${ttl} 分钟后过期` })
     } catch (err) {
       showToast({ tone: 'risk', message: err instanceof Error ? err.message : '投递失败' })
@@ -37,6 +53,7 @@ export function StageSharePanel() {
     try {
       await deleteStage(created.id)
       setCreated(null)
+      await reload()
       showToast({ tone: 'ok', message: '已销毁' })
     } catch {
       showToast({ tone: 'risk', message: '销毁失败' })
@@ -106,6 +123,28 @@ export function StageSharePanel() {
           </>
         )}
       </div>
+
+      {items.length > 0 && (
+        <ul className="mt-3 flex flex-col gap-1 border-t border-line pt-2 text-2xs">
+          {items.map((item) => (
+            <li key={item.id} className="flex flex-wrap items-center gap-2 text-ink-muted">
+              <code className="font-mono text-ink">{item.name}</code>
+              <span className="truncate text-ink-faint">
+                {window.location.origin}
+                {item.url}
+              </span>
+              <span>到期 {new Date(item.expiresAt).toLocaleString('zh-CN', { hour12: false })}</span>
+              <button
+                type="button"
+                className="ml-auto text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
+                onClick={() => void deleteStage(item.id).then(reload)}
+              >
+                销毁
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   )
 }

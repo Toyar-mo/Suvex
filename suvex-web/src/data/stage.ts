@@ -21,3 +21,8 @@ export async function createStage(input: {
 export async function deleteStage(id: string): Promise<{ deleted: boolean }> {
   return api.del<{ deleted: boolean }>(`/stage/${encodeURIComponent(id)}`)
 }
+
+
+export async function loadStages(): Promise<StageResult[]> {
+  return api.get<StageResult[]>('/stage')
+}

@@ -52,6 +52,20 @@ def create_text(
     return row
 
 
+def list_active(db: Session, *, created_by: str, limit: int = 100) -> list[ManagedStage]:
+    return list(
+        db.execute(
+            select(ManagedStage)
+            .where(
+                ManagedStage.created_by == created_by,
+                ManagedStage.expires_at > now_utc(),
+            )
+            .order_by(ManagedStage.created_at.desc())
+            .limit(limit)
+        ).scalars()
+    )
+
+
 def resolve(db: Session, *, token: str, name: str) -> ManagedStage | None:
     row = db.execute(
         select(ManagedStage).where(

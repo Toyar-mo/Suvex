@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
-from app.auth.deps import Identity, require_scan
+from app.auth.deps import Identity, require_read, require_scan
 from app.core.db import get_db
 from app.core.errors import ApiError
 from app.stage import service
@@ -24,7 +24,16 @@ from app.stage.schemas import StageIn, StageOut
 router = APIRouter(prefix="/stage", tags=["受管暂存"])
 
 ScanDep = Annotated[Identity, Depends(require_scan)]
+ReadDep = Annotated[Identity, Depends(require_read)]
 DbDep = Annotated[Session, Depends(get_db)]
+
+
+@router.get("", response_model=list[StageOut], summary="我的活跃暂存")
+def list_stage(identity: ReadDep, db: DbDep) -> list[StageOut]:
+    return [
+        StageOut.from_row(row)
+        for row in service.list_active(db, created_by=identity.user_id or "")
+    ]
 
 
 @router.post("/text", response_model=StageOut, status_code=201, summary="投递一段临时文本")
