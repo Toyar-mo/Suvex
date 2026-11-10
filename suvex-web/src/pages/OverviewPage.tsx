@@ -352,7 +352,7 @@ function OverviewContent({
         />
       </section>
 
-      <TokenUsagePanel cost={quality?.cost} />
+      <TokenUsagePanel />
 
       {/*
         ── 1 · 此刻在发生什么 + 留下了什么 ─────────────
@@ -367,7 +367,7 @@ function OverviewContent({
         ★ 标题随状态切换「实时 / 最近」：没有任务在跑时，流里是历史事件，
           再叫「实时」就是在骗人。
       */}
-      <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid grid-cols-1 items-start gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
         <OverviewActivityFeed seed={activity} isLive={isLive} />
 
         <div className="flex flex-col gap-bay self-start">
@@ -506,7 +506,7 @@ function OverviewSkeleton() {
       <span className="sr-only">正在加载总览数据</span>
 
       {/* 骨架顺序跟着真实版面走：先是活动流 + 右栏，再是该做什么，最后才是指标卡。 */}
-      <div className="grid grid-cols-1 gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
+      <div className="grid grid-cols-1 items-start gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
         <SkeletonRows rows={6} rowClassName="h-11" />
         <Skeleton className="h-64 rounded-md bg-surface" />
       </div>
