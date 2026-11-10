@@ -369,11 +369,14 @@ export function ScansPage() {
   const handleResumeScan = useCallback(
     (scan: Scan) => {
       // 续跑同样会**继续对真实目标发包** —— 授权确认不能省。
+      // 先给一个即时回执：后端要读磁盘找 run_id，慢的时候几秒，
+      // 菜单已经收起，不给回执就是“点了没反应”。
+      showToast({ message: `正在续跑：${scan.name || scan.target}…` })
       void resumeScan(scan.id, {
         confirmed: true,
         statement: SCAN_AUTHORIZATION_STATEMENT,
       })
-        .then(() => {
+        .then((scan) => {
           /*
             ⚠️ 与重跑不同：这里**不跳转**。
 
@@ -382,6 +385,12 @@ export function ScansPage() {
             正在看的列表上拽走 —— 而他要看的就是那一行的状态变化。
           */
           setView('default')
+          // 成功也必须有回执：原来只有失败 toast，成功时行状态从
+          // 失败变排队中如果不显眼，用户会以为点击没反应。
+          showToast({
+            tone: 'ok',
+            message: `已续跑：${scan.name || scan.target}`,
+          })
         })
         .catch((err) => showToast({ message: `续跑失败：${errorMessage(err)}`, tone: 'risk' }))
     },
