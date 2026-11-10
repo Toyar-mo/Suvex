@@ -488,6 +488,8 @@ export function ToolsPage() {
                               requiresConnection={tool.requiresConnection}
                               reason={tool.reason}
                               defaultLimitation={tool.defaultLimitation}
+                              calls={tool.calls ?? 0}
+                              lastCallAt={tool.lastCallAt}
                               enabled={
                                 draftDisabled === null
                                   ? tool.enabled

@@ -143,6 +143,9 @@ export interface KernelTool {
   enabled: boolean
   /** 关掉它会明显废掉主力能力。 */
   core: boolean
+  /** 最近 2 万条 `tool_call` 事件里的调用次数（不是全量）。 */
+  calls?: number
+  lastCallAt?: string | null
   /** 依赖的 MCP 连接名（空串 = 无依赖）。 */
   requiresConnection: string
   /** 那条依赖是否**真的就绪**（与 `enabled` 是两个独立状态）。 */
@@ -172,6 +175,9 @@ export interface KernelToolsSnapshot {
   groups: string[]
   /** 被显式关掉的工具名。 */
   disabled: string[]
+  /** 统计实际扫过的事件条数；truncated 表示更早的没算进来。 */
+  usageSampled?: number
+  usageTruncated?: boolean
 }
 
 // ─────────────────────────────────────────────

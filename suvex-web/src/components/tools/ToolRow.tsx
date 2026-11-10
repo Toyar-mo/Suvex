@@ -88,6 +88,9 @@ export interface ToolRowProps {
    */
   defaultLimitation?: string
   enabled: boolean
+  /** 最近 2 万条工具调用事件里的次数。 */
+  calls?: number
+  lastCallAt?: string | null
   onToggle: (next: boolean) => void
 }
 
@@ -102,6 +105,8 @@ export function ToolRow({
   reason,
   defaultLimitation,
   enabled,
+  calls = 0,
+  lastCallAt,
   onToggle,
 }: ToolRowProps) {
   const meta = HEALTH_META[health]
@@ -148,6 +153,16 @@ export function ToolRow({
                 一起藏起来，用户就不会去展开它 —— 而那正是这个字段
                 存在的理由（见下方展开区）。
             */}
+            <span
+              className="ml-auto shrink-0 text-2xs text-ink-faint"
+              title={
+                lastCallAt
+                  ? `最近 2 万条工具调用事件内；最后一次 ${new Date(lastCallAt).toLocaleString('zh-CN', { hour12: false })}`
+                  : '最近 2 万条工具调用事件内'
+              }
+            >
+              调用 {calls}
+            </span>
             {defaultLimitation && (
               <span
                 className="rounded-sm border border-signal-warn/40 px-1 py-px text-2xs text-signal-warn"
@@ -185,7 +200,17 @@ export function ToolRow({
                   参数：{params}
                 </p>
               )}
-              {defaultLimitation && (
+              <span
+              className="ml-auto shrink-0 text-2xs text-ink-faint"
+              title={
+                lastCallAt
+                  ? `最近 2 万条工具调用事件内；最后一次 ${new Date(lastCallAt).toLocaleString('zh-CN', { hour12: false })}`
+                  : '最近 2 万条工具调用事件内'
+              }
+            >
+              调用 {calls}
+            </span>
+            {defaultLimitation && (
                 <div className="flex items-start gap-tight">
                   <AlertTriangle
                     className="mt-0.5 size-3.5 shrink-0 text-signal-warn"

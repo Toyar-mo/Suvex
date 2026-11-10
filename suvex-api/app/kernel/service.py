@@ -4611,8 +4611,10 @@ def tools_catalog(db: Session) -> dict:
     调用，而真连要拉起子进程。真正的连通性由 `POST /kernel/mcp-servers/test`
     回答 —— 界面上把"配置就绪"与"试连通过"分开显示，因为用户该做的事不同。
     """
+    from app.kernel.tool_usage import collect_tool_usage
     from app.kernel.tools import TOOL_GROUPS, TOOL_SPECS
 
+    usage = collect_tool_usage(db)
     disabled = set(get_disabled_tools(db))
     servers = public_mcp_servers(db)
     configured = {str(s.get("name") or "") for s in servers}
@@ -4646,6 +4648,9 @@ def tools_catalog(db: Session) -> dict:
                 "requires_connection": spec.requires_connection,
                 "ready": ready,
                 "reason": reason,
+                # v1.83：调用次数（最近 2 万条 tool_call 事件）。
+                "calls": usage.rows.get(spec.name, {}).get("calls", 0),
+                "last_call_at": usage.rows.get(spec.name, {}).get("lastCallAt"),
             }
         )
 
@@ -4653,6 +4658,8 @@ def tools_catalog(db: Session) -> dict:
         "tools": tools,
         "groups": list(TOOL_GROUPS),
         "disabled": sorted(disabled),
+        "usage_sampled": usage.sampled,
+        "usage_truncated": usage.truncated,
     }
 
 

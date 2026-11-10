@@ -728,6 +728,8 @@ def _tools_out(db: DbDep) -> KernelToolsOut:  # noqa: ARG001
         tools=[KernelToolOut(**item) for item in payload["tools"]],
         groups=list(payload["groups"]),
         disabled=list(payload["disabled"]),
+        usageSampled=payload.get("usage_sampled", 0),
+        usageTruncated=payload.get("usage_truncated", False),
     )
 
 

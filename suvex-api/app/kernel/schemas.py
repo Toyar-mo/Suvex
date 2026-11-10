@@ -567,6 +567,9 @@ class KernelToolOut(CamelModel):
     #:
     #: 所以这句话要给**模型**看（进提示词）也要给**人**看（进界面）。
     defaultLimitation: str = ""
+    #: v1.83：最近 2 万条 `tool_call` 事件里的调用次数（不是全量）。
+    calls: int = 0
+    lastCallAt: str | None = None
     #: 当前是否启用（= 不在 disabled_tools 里）。
     enabled: bool = True
     #: 关掉它会明显废掉主力能力。界面据此给出更重的提示。
@@ -592,6 +595,9 @@ class KernelToolsOut(CamelModel):
     groups: list[str] = []
     #: 被显式关掉的工具名（前端"重置为全开"要用它判断有没有改动）。
     disabled: list[str] = []
+    #: 统计实际扫过的事件条数；`usageTruncated` 表示更早的没算进来。
+    usageSampled: int = 0
+    usageTruncated: bool = False
 
 
 # ══════════════════════════════════════════════════════════
@@ -653,6 +659,9 @@ class KernelRecipeOut(CamelModel):
     #: 某个工具默认只扫 1000 个端口，返回"命中 0"，而人会把它读成
     #: "目标本来就没有"。实测过同一目标、只补一个参数就从 0 → 2 命中。
     defaultLimitation: str = ""
+    #: v1.83：最近 2 万条 `tool_call` 事件里的调用次数（不是全量）。
+    calls: int = 0
+    lastCallAt: str | None = None
     #: 这些退出码不算失败（如 ffuf 没命中时是 1）。
     #:
     #: 界面要据此把"没命中"与"命令出错"分开显示 —— 否则用户会去修一个
