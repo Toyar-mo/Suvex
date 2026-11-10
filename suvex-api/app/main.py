@@ -45,6 +45,7 @@ from app.core.bootstrap import verify_database
 from app.core.config import get_settings
 from app.core.errors import register_exception_handlers
 from app.core.metrics_middleware import MetricsMiddleware
+from app.credentials.router import router as credentials_router
 from app.ctf_race.router import router as ctf_race_router
 from app.events.router import router as events_router
 from app.findings.router import router as findings_router
@@ -509,6 +510,7 @@ def create_app() -> FastAPI:
         findings_router,
         reports_router,
         benchmark_router,
+        credentials_router,
         purple_router,
         scope_router,
         overview_router,
