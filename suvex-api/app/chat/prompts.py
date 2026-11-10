@@ -358,6 +358,25 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         ),
         scope="scan",
     ),
+    # ══════════════════════════════════════════════════════════
+    # v1.86：子 agent 扇出
+    # ══════════════════════════════════════════════════════════
+    ChatToolSpec(
+        name="spawn_subagents",
+        label="派子代理并行调查",
+        description=(
+            "把 **2–4 个相互独立**的调查任务并行交给子代理，每个子代理有独立沙箱、"
+            "独立短上下文和自己的工具循环；返回各自结论/证据，由你综合。"
+            "适合：同一目标的多条线索、多个端口/接口、多个独立假设同时验证。"
+            "不要用它做有先后依赖的步骤；不要嵌套派发（子代理不能再派子代理）。"
+            "每个任务的 prompt 必须自包含：目标、已知事实、要验证什么、期望输出。"
+        ),
+        params=(
+            "tasks（必填，1–4 个）：每项 {name, prompt, tools?}；"
+            "tools 可选，只能从 run_shell/http_request/read_attachment/view_image/"
+            "browser/list_requests/get_request/verify_http/list_scans 里选，默认全部安全工具"
+        ),
+    ),
 )
 
 #: 名字集合，供 engine 做"模型是不是在编工具名"的快速判断。
@@ -649,6 +668,33 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
             },
         },
         "required": [],
+    },
+    "spawn_subagents": {
+        "type": "object",
+        "properties": {
+            "tasks": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 4,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "description": "子任务短名"},
+                        "prompt": {
+                            "type": "string",
+                            "description": "自包含的任务说明：目标、已知事实、要验证什么、期望输出",
+                        },
+                        "tools": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "可选，只允许安全调查工具",
+                        },
+                    },
+                    "required": ["prompt"],
+                },
+            }
+        },
+        "required": ["tasks"],
     },
 }
 

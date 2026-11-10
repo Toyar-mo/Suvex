@@ -43,6 +43,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -1332,7 +1333,7 @@ class _ToolContext:
     取，只有一个来源。
     """
 
-    __slots__ = ("db", "session", "identity", "mcp", "allowed_tools")
+    __slots__ = ("db", "session", "identity", "mcp", "allowed_tools", "gateway")
 
     def __init__(
         self,
@@ -1342,6 +1343,7 @@ class _ToolContext:
         identity: Any,
         mcp: mcp_tools.McpToolCatalog | None = None,
         allowed_tools: set[str] | None = None,
+        gateway: Any = None,
     ) -> None:
         self.db = db
         self.session = session
@@ -1354,6 +1356,9 @@ class _ToolContext:
         self.mcp = mcp or mcp_tools.McpToolCatalog()
         #: None = 不限制；集合 = 只允许这些内置工具（v1.83）。
         self.allowed_tools = allowed_tools
+        #: 本轮使用的网关。`spawn_subagents` 要拿它启动子代理；
+        #: 其余工具不需要。
+        self.gateway = gateway
 
 
 def _need_scope(ctx: _ToolContext, tool_name: str) -> None:
@@ -2266,6 +2271,151 @@ async def _tool_add_mcp_server(ctx: _ToolContext, args: dict[str, Any]) -> str:
     )
 
 
+# ── 子 agent 扇出（v1.86）──────────────────────────────────
+#
+# 与 CyberStrikeAI 的 `task` 工具同一个边界：主代理把**自包含**的独立任务
+# 交给子代理并行做，子代理只返回证据/结论，最终由主代理综合。这里不搬
+# 它的角色文件与三种编排，只做最小可用的 fan-out。
+
+#: 子代理最多同时跑几个。超过 4 个时，模型供应商的并发限制/熔断反而会
+#: 把整轮拖慢；4 是"能明显提速、又不会把上游打爆"的折中。
+SUBAGENT_MAX_TASKS = 4
+
+#: 单个子代理的墙钟上限。到点就取消并如实返回超时。
+SUBAGENT_TIMEOUT_SECONDS = 600
+
+#: 子代理允许的工具：只读/侦察为主，避免一次扇出产生四份不受控的写操作。
+#: `spawn_subagents` 自己不在里面 —— 禁止嵌套委派（同 CyberStrikeAI 的
+#: no_nested_task 中间件）。
+SUBAGENT_SAFE_TOOLS: frozenset[str] = frozenset(
+    {
+        "run_shell",
+        "read_attachment",
+        "view_image",
+        "browser",
+        "http_request",
+        "list_requests",
+        "get_request",
+        "verify_http",
+        "list_scans",
+    }
+)
+
+#: 单个子代理结果回传给主代理的最大字符数。它是证据，不是转储。
+SUBAGENT_RESULT_CHARS = 6000
+
+
+async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """并行派发独立调查任务给子代理，汇总它们的结论。"""
+    if ctx.gateway is None:
+        return "失败：当前没有可用的模型网关，不能派子代理。"
+    if (ctx.session.title or "").startswith("[子代理]"):
+        return "失败：子代理不能继续派子代理（禁止嵌套委派）。"
+
+    raw_tasks = args.get("tasks")
+    if not isinstance(raw_tasks, list) or not raw_tasks:
+        return "失败：tasks 必须是非空数组，每项含 name 与 prompt。"
+    if len(raw_tasks) > SUBAGENT_MAX_TASKS:
+        return f"失败：一次最多派 {SUBAGENT_MAX_TASKS} 个子代理。"
+
+    prepared: list[tuple[str, str, set[str]]] = []
+    for index, item in enumerate(raw_tasks, start=1):
+        if not isinstance(item, dict):
+            return f"失败：第 {index} 项不是对象。"
+        name = str(item.get("name") or f"task-{index}").strip()[:80]
+        prompt = str(item.get("prompt") or "").strip()
+        if not prompt:
+            return f"失败：子代理 `{name}` 没有 prompt。"
+        requested = item.get("tools")
+        if isinstance(requested, list) and requested:
+            allowed = {str(t) for t in requested} & SUBAGENT_SAFE_TOOLS
+            if not allowed:
+                return f"失败：子代理 `{name}` 请求的工具都不在允许列表里。"
+        else:
+            allowed = set(SUBAGENT_SAFE_TOOLS)
+        prepared.append((name, prompt, allowed))
+
+    from app.chat import sandbox as chat_sandbox
+    from app.core.db import get_session_factory
+
+    async def run_one(name: str, prompt: str, allowed: set[str]) -> tuple[str, str | None]:
+        subdb = get_session_factory()()
+        sub = None
+        try:
+            sub = chat_service.create_session(
+                subdb,
+                created_by=ctx.session.created_by,
+                title=f"[子代理] {name}"[:120],
+            )
+            sub.provider_id = ctx.session.provider_id
+            sub.persona = ctx.session.persona
+            sub.require_approval = False
+            sub.archived = True
+            subdb.commit()
+
+            task_prompt = (
+                "你是主对话派出的子代理，只完成下面这项独立任务。\n"
+                "不要委派其他子代理；直接使用工具调查/验证。\n"
+                "完成后严格按以下格式给结论（主代理会综合你的结果）：\n"
+                "## 结论\n## 证据\n## 未完成/限制\n\n"
+                f"主对话背景：{(ctx.session.title or '').strip()}\n"
+                f"任务：{prompt}"
+            )
+            await asyncio.wait_for(
+                run_turn(
+                    subdb,
+                    session=sub,
+                    content=task_prompt,
+                    identity=ctx.identity,
+                    gateway=ctx.gateway,
+                    explicit_tools=sorted(allowed),
+                    allowed_tools=allowed,
+                    emit=None,
+                ),
+                timeout=SUBAGENT_TIMEOUT_SECONDS,
+            )
+            messages = chat_service.list_messages(subdb, session=sub)
+            answers = [
+                m
+                for m in messages
+                if getattr(m, "role", None) == "assistant"
+                and getattr(m, "surface", None) != "process"
+                and (getattr(m, "content", None) or "").strip()
+            ]
+            content = (answers[-1].content if answers else "").strip()
+            if not content:
+                return name, "子代理没有给出结论。"
+            return name, content[:SUBAGENT_RESULT_CHARS]
+        except TimeoutError:
+            return name, f"子代理超时（>{SUBAGENT_TIMEOUT_SECONDS}s）。"
+        except Exception as exc:  # noqa: BLE001 - 一个子代理失败不影响其他
+            _log.warning("子代理 %s 执行失败", name, exc_info=True)
+            return name, f"子代理失败：{type(exc).__name__}: {exc}"
+        finally:
+            if sub is not None:
+                with contextlib.suppress(Exception):
+                    subdb.rollback()
+                try:
+                    chat_sandbox.drop_sandbox(sub.id)
+                except Exception:  # noqa: BLE001
+                    _log.debug("回收子代理沙箱失败", exc_info=True)
+                try:
+                    chat_service.purge_session(subdb, session=sub)
+                    subdb.commit()
+                except Exception:  # noqa: BLE001
+                    subdb.rollback()
+                    _log.warning("清理子代理会话失败", exc_info=True)
+            subdb.close()
+
+    results = await asyncio.gather(
+        *(run_one(name, prompt, allowed) for name, prompt, allowed in prepared)
+    )
+    sections = []
+    for index, (name, content) in enumerate(results, start=1):
+        sections.append(f"## 子代理 {index}：{name}\n{content}")
+    return "\n\n".join(sections)
+
+
 #: 工具名 → 实现。**这是唯一的注册表** —— `prompts.CHAT_TOOLS` 里列了但这里
 #: 没有的名字，会在 `_execute_tool` 里被明确报出来（而不是静默变成"未知工具"）。
 #: 反过来，这里有而清单里没有的名字也会红
@@ -2300,6 +2450,7 @@ _TOOL_IMPLS: dict[str, Any] = {
     # ★ v1.81：可重放验证。对授权目标发真实请求，但只读、不改平台状态；
     #   安全边界是 GuardedHTTPTransport（SSRF）+ scope guard，不是审批。
     "verify_http": _tool_verify_http,
+    "spawn_subagents": _tool_spawn_subagents,
 }
 
 
@@ -2755,7 +2906,12 @@ def _default_provider_id(db: Session) -> str | None:
 
 
 async def _build_tool_context(
-    db: Session, session: ChatSession, identity: Any
+    db: Session,
+    session: ChatSession,
+    identity: Any,
+    *,
+    gateway: Any = None,
+    allowed_tools: set[str] | None = None,
 ) -> _ToolContext:
     """建本轮的工具上下文，并发现会话挂载的 MCP 工具。
 
@@ -2771,8 +2927,15 @@ async def _build_tool_context(
     from app.agents import service as agents_service
 
     allowed = agents_service.allowed_tools_for_persona(db, session.persona)
+    if allowed_tools is not None:
+        allowed = set(allowed_tools) if allowed is None else allowed & set(allowed_tools)
     return _ToolContext(
-        db=db, session=session, identity=identity, mcp=catalog, allowed_tools=allowed
+        db=db,
+        session=session,
+        identity=identity,
+        mcp=catalog,
+        allowed_tools=allowed,
+        gateway=gateway,
     )
 
 
@@ -3005,6 +3168,7 @@ async def run_turn(
     emit: Emit | None = None,
     turn_run: Any = None,
     resume_from: Any = None,
+    allowed_tools: set[str] | None = None,
 ) -> ChatTurnResult:
     """跑一轮对话。
 
@@ -3107,7 +3271,9 @@ async def run_turn(
 
     # ★ v1.80：先发现本会话挂载的 MCP 工具，再渲染提示词 —— 提示词要把
     #   "已挂载但连不上"的 server 告诉模型（它会据此避免反复重试）。
-    ctx = await _build_tool_context(db, session, identity)
+    ctx = await _build_tool_context(
+        db, session, identity, gateway=gateway, allowed_tools=allowed_tools
+    )
     system = _system_prompt_for(
         session,
         explicit_tools,
