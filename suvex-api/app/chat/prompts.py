@@ -333,6 +333,31 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         ),
         params="name（必填，配方名，见提示词里的配方清单）",
     ),
+    # ══════════════════════════════════════════════════════════
+    # v1.81：可重放验证 —— 提交发现前的硬证据
+    # ══════════════════════════════════════════════════════════
+    #
+    # 与 `create_scan` 同级（`scan`）：它会对**授权目标**发真实请求。
+    # 但不需要人工审批：它只读目标、不改平台状态；真正的边界是
+    # scope guard + GuardedHTTPTransport（SSRF），不是点同意。
+    ChatToolSpec(
+        name="verify_http",
+        label="验证一个 HTTP 发现",
+        description=(
+            "对**授权目标**重放请求，判断发现是否稳定、可复现，是提交前的硬证据："
+            "`replay` 检查同一请求多次响应是否一致；`differential` 比较对照组与"
+            "实验组的状态码/标记词/长度是否真的有差异。"
+            "不要用它替代思考：它只能证明「这次请求的结果稳不稳、有没有差异」，"
+            "不能证明差异一定是漏洞。"
+        ),
+        params=(
+            "kind（replay|differential，默认 replay）、url、method（默认 GET）、"
+            "headers（对象）、body（字符串）、markers（字符串列表，出现即算命中）、"
+            "attempts（replay 用，默认 2）；"
+            "differential 还要 control 与 experiment 两个 {url,method,headers,body} 对象"
+        ),
+        scope="scan",
+    ),
 )
 
 #: 名字集合，供 engine 做"模型是不是在编工具名"的快速判断。
@@ -573,6 +598,57 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
         "type": "object",
         "properties": {"name": {"type": "string", "description": "配方名（见提示词里的配方清单）"}},
         "required": ["name"],
+    },
+    # v1.81：可重放验证。differential 的 control / experiment 各是一组请求形状。
+    "verify_http": {
+        "type": "object",
+        "properties": {
+            "kind": {
+                "type": "string",
+                "enum": ["replay", "differential"],
+                "description": "默认 replay",
+            },
+            "url": {"type": "string", "description": "replay 的目标地址"},
+            "method": {"type": "string", "description": "默认 GET"},
+            "headers": {
+                "type": "object",
+                "additionalProperties": {"type": "string"},
+                "description": "请求头（可选）",
+            },
+            "body": {"type": "string", "description": "请求体（可选）"},
+            "markers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "出现即算命中的标记词",
+            },
+            "attempts": {
+                "type": "integer",
+                "minimum": 2,
+                "maximum": 10,
+                "description": "replay 重放次数，默认 2",
+            },
+            "control": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "method": {"type": "string"},
+                    "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "body": {"type": "string"},
+                },
+                "required": ["url"],
+            },
+            "experiment": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "method": {"type": "string"},
+                    "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "body": {"type": "string"},
+                },
+                "required": ["url"],
+            },
+        },
+        "required": [],
     },
 }
 

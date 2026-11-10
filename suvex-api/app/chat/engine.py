@@ -1926,6 +1926,107 @@ async def _tool_load_recipe(ctx: _ToolContext, args: dict[str, Any]) -> str:
     return recipes_mod.render_recipe(name)
 
 
+def _request_spec_from_args(data: dict[str, Any]) -> Any:
+    """把模型给的 `{url,method,headers,body}` 变成 `HttpRequestSpec`。
+
+    只做形状校验，不判断 URL 是否在授权范围内 —— 那是 scope guard 的事。
+    """
+    from app.scans import validators
+
+    url = str(data.get("url") or "").strip()
+    if not url:
+        raise ValueError("url 必填")
+    headers = data.get("headers") or {}
+    if not isinstance(headers, dict):
+        raise ValueError("headers 必须是对象")
+    body = data.get("body")
+    if body is not None and not isinstance(body, str):
+        raise ValueError("body 必须是字符串")
+    return validators.HttpRequestSpec(
+        method=str(data.get("method") or "GET").upper(),
+        url=url,
+        headers={str(key): str(value) for key, value in headers.items()},
+        body=body.encode("utf-8") if body else None,
+    )
+
+
+async def _tool_verify_http(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`verify_http`：对授权目标重放请求，给发现一份可复核的证据（v1.81）。
+
+    ## 为什么放在对话工具里，而不是让模型自己写 curl
+
+    模型写 curl 也能发请求，但它**看不到"稳不稳"**：一次 200 不代表复现，
+    一次回显也不代表差异。这个工具把两类确定性判据做在代码里：
+
+    * `replay`：同一请求 N 次，响应指纹（状态/长度/正文哈希/标记）一致；
+    * `differential`：对照组 vs 实验组，只认状态码/新增标记/长度差 ≥20%。
+
+    ## 安全
+
+    * 出站走 `GuardedHTTPTransport`（SSRF：DNS 重绑定/内网/metadata）；
+    * `trust_env=False`，不读环境代理；
+    * `scope="scan"`：只有具备 scan 权限的身份能调用。
+    """
+    import asyncio
+
+    import httpx
+
+    from app.core.netguard import GuardedHTTPTransport, ensure_guarded
+    from app.scans import validators
+
+    def factory() -> httpx.Client:
+        client = httpx.Client(
+            transport=GuardedHTTPTransport(),
+            trust_env=False,
+            follow_redirects=False,
+            timeout=validators.DEFAULT_TIMEOUT_SECONDS,
+        )
+        # 与所有出站客户端同一条纪律：装完 transport 再确认 guard 真在。
+        ensure_guarded(client)
+        return client
+
+    markers = tuple(str(marker) for marker in (args.get("markers") or ()))
+    kind = str(args.get("kind") or "replay").strip().lower()
+    try:
+        if kind == "replay":
+            spec = _request_spec_from_args(args)
+            outcome = await asyncio.to_thread(
+                validators.replay,
+                spec,
+                attempts=max(2, int(args.get("attempts") or 2)),
+                markers=markers,
+                client_factory=factory,
+            )
+        elif kind == "differential":
+            control = args.get("control") or {}
+            experiment = args.get("experiment") or args
+            if not isinstance(control, dict) or not isinstance(experiment, dict):
+                raise ValueError("control / experiment 必须是对象")
+            outcome = await asyncio.to_thread(
+                validators.differential,
+                _request_spec_from_args(control),
+                _request_spec_from_args(experiment),
+                markers=markers,
+                client_factory=factory,
+            )
+        else:
+            raise ValueError("kind 只支持 replay / differential")
+    except (ValueError, TypeError) as exc:
+        return _err(f"参数不对（{exc}）。kind=replay 需要 url；kind=differential 需要 control 与 experiment。")
+
+    return json.dumps(
+        {
+            "kind": outcome.kind,
+            "passed": outcome.passed,
+            "confidence": outcome.confidence,
+            "summary": outcome.summary,
+            "evidence": outcome.evidence,
+            "attempts": outcome.attempts,
+        },
+        ensure_ascii=False,
+    )
+
+
 async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
@@ -2132,6 +2233,9 @@ _TOOL_IMPLS: dict[str, Any] = {
     "browser": chat_sandbox.tool_browser,
     "load_skill": _tool_load_skill,
     "load_recipe": _tool_load_recipe,
+    # ★ v1.81：可重放验证。对授权目标发真实请求，但只读、不改平台状态；
+    #   安全边界是 GuardedHTTPTransport（SSRF）+ scope guard，不是审批。
+    "verify_http": _tool_verify_http,
 }
 
 
