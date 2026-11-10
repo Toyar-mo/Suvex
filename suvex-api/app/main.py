@@ -54,6 +54,7 @@ from app.kernel.skills_router import router as kernel_skills_router
 from app.members.router import router as members_router
 from app.overview.router import router as overview_router
 from app.providers.router import router as providers_router
+from app.purple.router import router as purple_router
 from app.reports.router import router as reports_router
 from app.scans.router import router as scans_router
 from app.schedules.router import router as schedules_router
@@ -507,6 +508,7 @@ def create_app() -> FastAPI:
         findings_router,
         reports_router,
         benchmark_router,
+        purple_router,
         overview_router,
         assets_router,
         schedules_router,
