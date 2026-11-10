@@ -1,11 +1,12 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Layers, RefreshCw, Search } from 'lucide-react'
+import { ChevronRight, Layers, RefreshCw, Search } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppShell'
 import AssetCoverageDrawer from '@/components/assets/AssetCoverageDrawer'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
+import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
 import {
@@ -15,42 +16,35 @@ import {
   type Asset,
   type AssetHealth,
 } from '@/data/asset'
+import { buildHostAssets, hostMatchesQuery, parseTargetParts, type HostAsset } from '@/data/asset-host'
 import { loadAssets, useAssetsState } from '@/data/assets-store'
 
 /**
- * 资产视图 —— 「我有哪些目标，每个现在能不能信」。
+ * 资产 —— 「我有哪些机器，每台暴露了什么、现在能不能信」。
  *
- * ## 为什么这一页必须存在（而不是把漏洞页按 target 分组就够了）
+ * ## 为什么默认是「主机」而不是「目标」
  *
- * 漏洞页回答的是「我发现了什么」。但渗透测试里有一类问题它**永远答不上来**：
- * 「有哪些机器我根本没检查过」「哪台机器上次跑完是三个月前」。
- * 这两个问题的答案不在任何一条漏洞里 —— 它们在**扫描记录**里。
+ * 后端 `/assets` 按 target 聚合：一个 URL/路径就是一个资产。那对扫描
+ * 统计是对的，但对"资产管理"不是 —— 同一台 `127.0.0.1:9001` 的
+ * `/.env`、`/api/users`、`/app.py.bak` 会各占一行，195 个目标里
+ * 真正的主机可能只有几十台。默认视图先回答"有几台机器"，展开再回答
+ * "这台机器暴露了哪些面"。
  *
- * 最危险的形态是「看起来干净」：一个目标扫了 5 次全挂，漏洞数是 0。
- * 在漏洞页它和「扫了 5 次确实什么都没发现」长得一模一样。
- * 这一页的主要职责就是把这两者分开（见 `assetHealth` 的档位）。
+ * 这里的主机聚合是**前端纯函数**（`buildHostAssets`），不改变后端口径；
+ * 「目标」视图仍然原样保留，扫描统计与漏洞归属不受影响。
  *
- * ## 排序：把「不能信」的排前面
+ * ## 健康度取最差
  *
- * 默认不按目标名字母序，按**风险**：
- *   带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧 → 其余
- * 同档内再按「上次拿结论的时间」升序（越久越靠前）。
- * 名字序只作为最后的确定性 tie-break。
- *
- * 「已修复」不参与提权：一个修干净了的目标不该和带病的排在一起。
+ * 一台主机下只要有一条路径"从未跑完"，整台机器就不能被当成已验证 ——
+ * 取最差档位，而不是平均值。平均值会把"一条扫完了、九条没跑"算成
+ * 看起来健康。
  */
 
 type HealthFilter = 'all' | AssetHealth
+type AssetView = 'host' | 'target'
 
-/**
- * 空列表的稳定常量。
- *
- * 写 `state.items ?? []` 每次渲染都会产生一个新数组，导致下游 `useMemo`
- * 的依赖恒变、每次重渲都重算排序。这里用一个模块级空数组把引用固定住。
- */
 const EMPTY_ASSETS: Asset[] = []
 
-/** 风险档位 —— 数字越小越靠前。 */
 const HEALTH_RANK: Record<AssetHealth, number> = {
   'never-completed': 0,
   failing: 1,
@@ -59,12 +53,6 @@ const HEALTH_RANK: Record<AssetHealth, number> = {
   ok: 4,
 }
 
-/**
- * 排序用的「上次拿结论」时间戳。
- *
- * 从未成功 → `-Infinity`（最靠前，因为它最需要被检查）。
- * 时间戳非法 → 同样按最靠前处理，不能静默沉底。
- */
 function lastConclusionTs(asset: Asset): number {
   if (asset.lastCompletedAt === null) return Number.NEGATIVE_INFINITY
   const ts = new Date(asset.lastCompletedAt).getTime()
@@ -72,22 +60,15 @@ function lastConclusionTs(asset: Asset): number {
 }
 
 function compareAssets(a: Asset, b: Asset): number {
-  // ① 带开着的高危永远排最前 —— 这是唯一"已经在出血"的那种
   const aBleeding = a.openCritical > 0 || a.openHigh > 0 ? 1 : 0
   const bBleeding = b.openCritical > 0 || b.openHigh > 0 ? 1 : 0
   if (aBleeding !== bBleeding) return bBleeding - aBleeding
-
-  // ② 健康度档位
   const aHealth = assetHealth(a)
   const bHealth = assetHealth(b)
   if (aHealth !== bHealth) return HEALTH_RANK[aHealth] - HEALTH_RANK[bHealth]
-
-  // ③ 同档内：越久没拿到结论越靠前
   const aTs = lastConclusionTs(a)
   const bTs = lastConclusionTs(b)
   if (aTs !== bTs) return aTs - bTs
-
-  // ④ 确定性 tie-break —— 没有它，同样两条数据每次刷新可能换位置
   return a.target.localeCompare(b.target)
 }
 
@@ -96,7 +77,6 @@ function relativeTime(iso: string | null, now: number): string {
   if (iso === null) return '从未'
   const ts = new Date(iso).getTime()
   if (!Number.isFinite(ts)) return '—'
-
   const diff = now - ts
   if (diff < 0) return '刚刚'
   const minutes = Math.floor(diff / 60000)
@@ -114,7 +94,7 @@ function relativeTime(iso: string | null, now: number): string {
 function HealthBadge({ health }: { health: AssetHealth }) {
   const meta = ASSET_HEALTH_META[health]
   return (
-    <span className="inline-flex items-center gap-tight whitespace-nowrap text-sm">
+    <span className="inline-flex items-center gap-tight whitespace-nowrap text-xs">
       <span className={cn('h-1.5 w-1.5 shrink-0 rounded-pill', meta.dot)} aria-hidden="true" />
       <span className={meta.className} title={meta.hint}>
         {meta.label}
@@ -123,23 +103,23 @@ function HealthBadge({ health }: { health: AssetHealth }) {
   )
 }
 
-function SummaryCard({
+function Stat({
   label,
   value,
   hint,
   tone = 'default',
 }: {
   label: string
-  value: number
+  value: number | string
   hint?: string
   tone?: 'default' | 'warn' | 'risk'
 }) {
   return (
-    <div className="rounded-md border border-line bg-surface p-panel" title={hint}>
-      <p className="text-xs text-ink-muted">{label}</p>
+    <div className="px-panel py-panel" title={hint}>
+      <p className="text-2xs text-ink-muted">{label}</p>
       <p
         className={cn(
-          'mt-tight text-xl font-medium tabular-nums',
+          'mt-tight text-lg font-medium tabular-nums',
           tone === 'default' && 'text-ink',
           tone === 'warn' && 'text-signal-warn',
           tone === 'risk' && 'text-signal-risk',
@@ -151,28 +131,155 @@ function SummaryCard({
   )
 }
 
+function PortChips({ ports }: { ports: string[] }) {
+  if (ports.length === 0) return <span className="text-2xs text-ink-faint">默认端口</span>
+  const visible = ports.slice(0, 3)
+  return (
+    <span className="flex flex-wrap gap-1">
+      {visible.map((port) => (
+        <span
+          key={port}
+          className="rounded-xs border border-line bg-surface-sunken px-1.5 py-0.5 font-mono text-2xs text-ink-muted tabular-nums"
+        >
+          :{port}
+        </span>
+      ))}
+      {ports.length > visible.length && (
+        <span className="text-2xs text-ink-faint">+{ports.length - visible.length}</span>
+      )}
+    </span>
+  )
+}
+
 /**
- * 一行资产。
+ * 主机行。展开后列出这台机器下的路径。
  *
- * ★ `memo` 在这里有实际收益：搜索框每敲一个字都会重渲染整张表，
- *   而 `items` 里的对象引用是稳定的（拉取时整体替换一次，之后不变）——
- *   没被筛掉的行 props 完全相同，可以整行跳过。页面 30 秒一次的时钟
- *   也只把 `nowMinute` 传下来（按分钟取整），不会每分钟把所有行都作废。
+ * `memo` 只对"没展开、props 不变"的行有效；展开态是页面级 Set，
+ * 切换时只有该行前后两行会重渲染。
  */
+const HostRow = memo(function HostRow({
+  host,
+  expanded,
+  nowMinute,
+  onToggle,
+  onOpenCoverage,
+}: {
+  host: HostAsset
+  expanded: boolean
+  nowMinute: number
+  onToggle: (host: string) => void
+  onOpenCoverage: (target: string) => void
+}) {
+  const now = nowMinute * 60_000
+  return (
+    <>
+      <tr className="border-b border-line last:border-b-0 hover:bg-sunken/60">
+        <td className="px-panel py-2.5">
+          <button
+            type="button"
+            onClick={() => onToggle(host.host)}
+            aria-expanded={expanded}
+            className="flex items-center gap-2 text-left"
+          >
+            <ChevronRight
+              size={14}
+              strokeWidth={2}
+              aria-hidden="true"
+              className={cn('shrink-0 text-ink-faint transition-transform duration-fast', expanded && 'rotate-90')}
+            />
+            <span className="break-all font-mono text-sm text-ink hover:text-accent">{host.host}</span>
+          </button>
+        </td>
+        <td className="px-panel py-2.5">
+          <PortChips ports={host.ports} />
+        </td>
+        <td className="px-panel py-2.5 text-right text-xs tabular-nums text-ink-muted">
+          {host.assets.length}
+        </td>
+        <td className="px-panel py-2.5">
+          <HealthBadge health={host.health} />
+        </td>
+        <td className="px-panel py-2.5 text-right tabular-nums">
+          <span className={cn(host.openFindingCount > 0 ? 'text-ink' : 'text-ink-muted')}>
+            {host.openFindingCount}
+          </span>
+        </td>
+        <td className="px-panel py-2.5 text-right tabular-nums">
+          <span className={cn(host.openCritical + host.openHigh > 0 ? 'text-signal-risk' : 'text-ink-muted')}>
+            {host.openCritical + host.openHigh}
+          </span>
+        </td>
+        <td className="px-panel py-2.5 text-xs text-ink-muted" title={host.lastCompletedAt ?? '从未跑完'}>
+          {relativeTime(host.lastCompletedAt, now)}
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="border-b border-line bg-sunken/40">
+          <td colSpan={7} className="px-panel py-2">
+            <div className="flex flex-col gap-1">
+              {host.assets.map((asset) => {
+                const health = assetHealth(asset, now)
+                const parts = parseTargetParts(asset.target)
+                return (
+                  <div
+                    key={asset.target}
+                    className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xs px-2 py-1.5 text-xs hover:bg-surface"
+                  >
+                    <Link
+                      to={`/scans?target=${encodeURIComponent(asset.target)}`}
+                      title={asset.target}
+                      className="min-w-0 flex-1 break-all font-mono text-ink-muted hover:text-accent"
+                    >
+                      {parts.port && <span className="text-ink-faint">:{parts.port} </span>}
+                      {parts.path && parts.path !== '/' ? parts.path : asset.target}
+                    </Link>
+                    <HealthBadge health={health} />
+                    <span className="w-16 text-right tabular-nums text-ink-muted">
+                      未处置 {asset.openFindingCount}
+                    </span>
+                    <span
+                      className={cn(
+                        'w-20 text-right tabular-nums',
+                        asset.openCritical + asset.openHigh > 0 ? 'text-signal-risk' : 'text-ink-muted',
+                      )}
+                    >
+                      高危 {asset.openCritical + asset.openHigh}
+                    </span>
+                    <span className="w-24 text-right text-ink-faint">
+                      {relativeTime(asset.lastCompletedAt, now)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onOpenCoverage(asset.target)}
+                      className="rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted transition-ui hover:border-line-strong hover:text-ink"
+                      aria-label={`查看 ${asset.target} 的覆盖度与事实图`}
+                    >
+                      覆盖度
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+          </td>
+        </tr>
+      )}
+    </>
+  )
+})
+
 const AssetRow = memo(function AssetRow({
   asset,
   nowMinute,
   onOpenCoverage,
 }: {
   asset: Asset
-  /** 当前时刻按**分钟**取整 —— 相对时间本来就只到分钟粒度 */
   nowMinute: number
   onOpenCoverage: (target: string) => void
 }) {
   const now = nowMinute * 60_000
   const health = assetHealth(asset, now)
   return (
-    <tr className="hover:bg-sunken/60 border-b border-line last:border-b-0">
+    <tr className="border-b border-line last:border-b-0 hover:bg-sunken/60">
       <td className="px-panel py-2">
         <div className="flex flex-wrap items-center gap-2">
           <Link
@@ -203,20 +310,14 @@ const AssetRow = memo(function AssetRow({
         )}
       </td>
       <td className="px-panel py-2 text-right tabular-nums">
-        <span
-          className={cn(
-            asset.openCritical > 0 || asset.openHigh > 0 ? 'text-signal-risk' : 'text-ink-muted',
-          )}
-        >
-          {asset.openHigh + asset.openCritical}
+        <span className={cn(asset.openCritical + asset.openHigh > 0 ? 'text-signal-risk' : 'text-ink-muted')}>
+          {asset.openCritical + asset.openHigh}
         </span>
       </td>
       <td className="px-panel py-2 text-ink-muted" title={asset.lastScanAt ?? '从未扫描'}>
         {relativeTime(asset.lastScanAt, now)}
         {asset.consecutiveFailures > 0 && (
-          <span className="ml-1 text-xs text-signal-risk">
-            连续失败 {asset.consecutiveFailures} 次
-          </span>
+          <span className="ml-1 text-xs text-signal-risk">连续失败 {asset.consecutiveFailures} 次</span>
         )}
       </td>
       <td className="px-panel py-2 text-ink-muted" title={asset.lastCompletedAt ?? '从未跑完'}>
@@ -232,11 +333,11 @@ export default function AssetsPage() {
   const [coverageTarget, setCoverageTarget] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [healthFilter, setHealthFilter] = useState<HealthFilter>('all')
+  const [view, setView] = useState<AssetView>('host')
+  const [expandedHosts, setExpandedHosts] = useState<Set<string>>(() => new Set())
   const [now, setNow] = useState(() => Date.now())
-  // 相对时间只到分钟粒度：把时钟按分钟取整传给行，行 memo 才不会每分钟全废
   const nowMinute = Math.floor(now / 60_000)
 
-  // 首次进入时拉一次；之后靠「刷新」按钮和切回页面时拉。
   const loadedOnce = useRef(false)
   useEffect(() => {
     if (loadedOnce.current) return
@@ -244,8 +345,6 @@ export default function AssetsPage() {
     if (state.status === 'idle') void loadAssets()
   }, [state.status])
 
-  // 相对时间要跟着走，但不是每秒重渲染：30 秒一次足够，
-  // 而且 `now` 只影响文案，不参与排序键（排序用绝对值）。
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(timer)
@@ -255,18 +354,36 @@ export default function AssetsPage() {
     void loadAssets({ silent: state.items !== null })
   }, [state.items])
 
-  // `state.items ?? []` 每次渲染都是新数组引用，会让下面 useMemo 的依赖恒变。
-  // 用常量兜底 + useMemo 把引用稳定住（`EMPTY_ASSETS` 是模块级单例）。
   const items = useMemo(() => state.items ?? EMPTY_ASSETS, [state.items])
 
-  const filtered = useMemo(() => {
-    return items
-      .filter((asset) => healthFilter === 'all' || assetHealth(asset) === healthFilter)
-      .filter((asset) => assetMatchesQuery(asset, query))
-      .sort(compareAssets)
-  }, [items, healthFilter, query])
+  const hosts = useMemo(() => buildHostAssets(items, nowMinute * 60_000), [items, nowMinute])
 
-  // 首次加载 —— 只有真的还没数据时才显示骨架屏
+  const filteredHosts = useMemo(
+    () =>
+      hosts
+        .filter((host) => healthFilter === 'all' || host.health === healthFilter)
+        .filter((host) => hostMatchesQuery(host, query)),
+    [hosts, healthFilter, query],
+  )
+
+  const filteredAssets = useMemo(
+    () =>
+      items
+        .filter((asset) => healthFilter === 'all' || assetHealth(asset) === healthFilter)
+        .filter((asset) => assetMatchesQuery(asset, query))
+        .sort(compareAssets),
+    [items, healthFilter, query],
+  )
+
+  const toggleHost = useCallback((host: string) => {
+    setExpandedHosts((current) => {
+      const next = new Set(current)
+      if (next.has(host)) next.delete(host)
+      else next.add(host)
+      return next
+    })
+  }, [])
+
   if (state.status === 'loading' && state.items === null) {
     return (
       <>
@@ -290,35 +407,38 @@ export default function AssetsPage() {
   }
 
   const summary = state.summary
+  const bleedingHosts = hosts.filter((host) => host.openCritical + host.openHigh > 0).length
+  const hostCount = state.truncated ? `≥${hosts.length}` : String(hosts.length)
+  const neverVerified = summary ? summary.neverScanned + summary.neverCompleted : 0
+  const visible = view === 'host' ? filteredHosts.length : filteredAssets.length
 
   return (
     <>
       <PageHeader navId="assets" />
 
       <div className="px-gutter py-bay">
-        {/* ── 统计条 ─────────────────────────────────────────── */}
+        {/* ── 统计条：一行读完，不占五张卡的垂直空间 ─────────── */}
         {summary && (
-          <div className="mb-bay grid grid-cols-2 gap-panel sm:grid-cols-3 lg:grid-cols-5">
-            <SummaryCard label="目标总数" value={summary.targetCount} />
-            <SummaryCard
-              label="带开着的高危"
-              value={summary.targetsWithOpenHigh}
-              hint="机器台数，不是漏洞条数"
-              tone={summary.targetsWithOpenHigh > 0 ? 'risk' : 'default'}
+          <div className="mb-bay grid grid-cols-2 divide-x divide-line overflow-hidden rounded-md border border-line bg-surface sm:grid-cols-3 lg:grid-cols-5">
+            <Stat
+              label="主机"
+              value={hostCount}
+              hint={state.truncated ? '列表被截断，这里只统计返回部分' : '按 host 聚合'}
             />
-            <SummaryCard
-              label="从未扫描"
-              value={summary.neverScanned}
-              hint="只有历史导入的漏洞，一次都没扫过"
-              tone={summary.neverScanned > 0 ? 'warn' : 'default'}
+            <Stat label="暴露面" value={summary.targetCount} hint="目标 / 路径数量" />
+            <Stat
+              label="带高危主机"
+              value={state.truncated ? `≥${bleedingHosts}` : bleedingHosts}
+              hint="有未处置 critical/high 的主机台数"
+              tone={bleedingHosts > 0 ? 'risk' : 'default'}
             />
-            <SummaryCard
-              label="从未跑完"
-              value={summary.neverCompleted}
-              hint="扫过但没有一次出结论 —— 「看起来干净」只是因为没被检查过"
-              tone={summary.neverCompleted > 0 ? 'risk' : 'default'}
+            <Stat
+              label="从未验证"
+              value={neverVerified}
+              hint={`从未扫描 ${summary.neverScanned} · 从未跑完 ${summary.neverCompleted}`}
+              tone={neverVerified > 0 ? 'warn' : 'default'}
             />
-            <SummaryCard label="未处置漏洞" value={summary.openFindingCount} />
+            <Stat label="未处置漏洞" value={summary.openFindingCount} />
           </div>
         )}
 
@@ -334,11 +454,22 @@ export default function AssetsPage() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按目标筛选…"
+              placeholder="按主机或路径筛选…"
               aria-label="按目标筛选资产"
               className="w-full rounded-sm border border-line bg-surface py-1.5 pl-8 pr-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
             />
           </div>
+
+          <SegmentedControl
+            size="sm"
+            ariaLabel="资产视图"
+            value={view}
+            onChange={setView}
+            options={[
+              { id: 'host', label: '主机' },
+              { id: 'target', label: '目标' },
+            ]}
+          />
 
           <div className="flex flex-wrap gap-tight">
             {(
@@ -380,7 +511,6 @@ export default function AssetsPage() {
           </Button>
         </div>
 
-        {/* ── 截断提示：不能让用户以为「总共就这些」 ──────────── */}
         {state.truncated && (
           <p
             role="status"
@@ -391,38 +521,75 @@ export default function AssetsPage() {
           </p>
         )}
 
-        {/* ── 表格 ───────────────────────────────────────────── */}
-        {filtered.length === 0 ? (
+        {/* ── 列表 ───────────────────────────────────────────── */}
+        <div role="tabpanel" aria-label="资产列表">
+        {visible === 0 ? (
           <EmptyState
             icon={Layers}
             title={items.length === 0 ? '还没有任何目标' : '没有符合条件的资产'}
             description={
               items.length === 0
-                ? '发起第一次扫描后，这里会按目标聚合出现在的情况。'
+                ? '发起第一次扫描后，这里会按主机聚合出现在的情况。'
                 : '换个关键词或切回「全部」看看。'
             }
           />
+        ) : view === 'host' ? (
+          <div className="overflow-x-auto rounded-md border border-line">
+            <table className="w-full min-w-[56rem] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-line bg-sunken text-left text-xs text-ink-muted">
+                  <th scope="col" className="px-panel py-2 font-normal">
+                    主机
+                  </th>
+                  <th scope="col" className="px-panel py-2 font-normal">
+                    端口
+                  </th>
+                  <th scope="col" className="px-panel py-2 text-right font-normal">
+                    暴露面
+                  </th>
+                  <th scope="col" className="px-panel py-2 font-normal">
+                    状态
+                  </th>
+                  <th scope="col" className="px-panel py-2 text-right font-normal">
+                    未处置
+                  </th>
+                  <th scope="col" className="px-panel py-2 text-right font-normal">
+                    高危
+                  </th>
+                  <th scope="col" className="px-panel py-2 font-normal">
+                    最近结论
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredHosts.map((host) => (
+                  <HostRow
+                    key={host.host}
+                    host={host}
+                    expanded={expandedHosts.has(host.host)}
+                    nowMinute={nowMinute}
+                    onToggle={toggleHost}
+                    onOpenCoverage={setCoverageTarget}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
         ) : (
           <div className="overflow-x-auto rounded-md border border-line">
             <table className="w-full min-w-[52rem] border-collapse text-sm">
               <thead>
-                <tr className="bg-sunken border-b border-line text-left text-xs text-ink-muted">
+                <tr className="border-b border-line bg-sunken text-left text-xs text-ink-muted">
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     目标
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     状态
                   </th>
-                  <th
-                    scope="col"
-                    className="whitespace-nowrap px-panel py-2 text-right font-normal"
-                  >
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
                     未处置
                   </th>
-                  <th
-                    scope="col"
-                    className="whitespace-nowrap px-panel py-2 text-right font-normal"
-                  >
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
                     高危 / 中危+
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
@@ -431,16 +598,13 @@ export default function AssetsPage() {
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
                     上次拿到结论
                   </th>
-                  <th
-                    scope="col"
-                    className="whitespace-nowrap px-panel py-2 text-right font-normal"
-                  >
+                  <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
                     扫描次数
                   </th>
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((asset) => (
+                {filteredAssets.map((asset) => (
                   <AssetRow
                     key={asset.target}
                     asset={asset}
@@ -452,12 +616,13 @@ export default function AssetsPage() {
             </table>
           </div>
         )}
+        </div>
 
-        {/* ── 排序口径说明：把规则写出来，否则用户不知道第一行为什么是它 ── */}
-        {filtered.length > 0 && (
+        {visible > 0 && (
           <p className="mt-panel text-xs text-ink-muted">
-            按风险排序：带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 →
-            结论陈旧；同档内越久没拿到结论越靠前。
+            {view === 'host'
+              ? '按风险排序：带高危主机 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；展开主机看具体路径。'
+              : '按风险排序：带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；同档内越久没拿到结论越靠前。'}
           </p>
         )}
       </div>

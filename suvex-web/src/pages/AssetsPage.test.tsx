@@ -83,12 +83,18 @@ afterEach(() => {
   resetAssets()
 })
 
-function renderPage() {
-  return render(
+async function renderPage(view: 'host' | 'target' = 'target', expectTabs = true) {
+  const result = render(
     <MemoryRouter>
       <AssetsPage />
     </MemoryRouter>,
   )
+  // 页面默认是主机视图；这一组用例断言的是「目标」行的风险排序。
+  // 首次渲染是骨架屏，等工具栏出现后再切换。
+  if (expectTabs && view === 'target') {
+    fireEvent.click(await screen.findByRole('tab', { name: '目标' }))
+  }
+  return result
 }
 
 /** 表格里所有数据行的目标名，按渲染顺序。 */
@@ -108,7 +114,7 @@ describe('AssetsPage', () => {
         consecutiveFailures: 3,
       }),
     ])
-    renderPage()
+    await renderPage()
 
     await screen.findByRole('table')
 
@@ -121,7 +127,7 @@ describe('AssetsPage', () => {
       makeAsset('a-failing.example', { lastCompletedAt: null, consecutiveFailures: 4 }),
       makeAsset('z-bleeding.example', { openHigh: 2, openFindingCount: 2, findingCount: 2 }),
     ])
-    renderPage()
+    await renderPage()
 
     await screen.findByRole('table')
 
@@ -141,7 +147,7 @@ describe('AssetsPage', () => {
       // 扫过但从未跑完 —— 「看起来干净」其实没检查过
       makeAsset('a-unchecked.example', { lastCompletedAt: null, lastScanStatus: 'failed' }),
     ])
-    renderPage()
+    await renderPage()
 
     await screen.findByRole('table')
 
@@ -158,7 +164,7 @@ describe('AssetsPage', () => {
       makeAsset('ok.example'),
       makeAsset('never-done.example', { lastCompletedAt: null, lastScanStatus: 'failed' }),
     ])
-    renderPage()
+    await renderPage()
 
     const table = await screen.findByRole('table')
     expect(within(table).getByText('从未跑完')).toBeTruthy()
@@ -167,7 +173,7 @@ describe('AssetsPage', () => {
 
   it('truncated 时必须明说「只显示了前 N 个」', async () => {
     response = makeList([makeAsset('a.example')], { truncated: true, total: 900 })
-    renderPage()
+    await renderPage()
 
     // ★ 不说的话用户会当成"总共就这些"
     await screen.findByRole('status')
@@ -182,7 +188,7 @@ describe('AssetsPage', () => {
       makeAsset('db.example.com'),
       makeAsset('other.test'),
     ])
-    renderPage()
+    await renderPage()
     await screen.findByRole('table')
 
     // 项目里没装 @testing-library/user-event，用 fireEvent 直接派发 input 事件
@@ -201,7 +207,7 @@ describe('AssetsPage', () => {
       makeAsset('ok.example'),
       makeAsset('never.example', { scanCount: 0, lastScanAt: null, lastCompletedAt: null }),
     ])
-    renderPage()
+    await renderPage()
     await screen.findByRole('table')
 
     fireEvent.click(screen.getByRole('button', { name: '从未扫描' }))
@@ -214,7 +220,7 @@ describe('AssetsPage', () => {
 
   it('空库时给的是"还没有任何目标"，不装一个空表格', async () => {
     response = makeList([])
-    renderPage()
+    await renderPage()
 
     expect(await screen.findByText('还没有任何目标')).toBeTruthy()
     expect(screen.queryByRole('table')).toBeNull()
@@ -222,9 +228,30 @@ describe('AssetsPage', () => {
 
   it('加载失败时给 ErrorState 与可用的重试，不是一片白', async () => {
     failWith = new TypeError('Failed to fetch')
-    renderPage()
+    await renderPage('target', false)
 
     expect(await screen.findByText(/资产列表加载失败/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /重试|重新加载/ })).toBeTruthy()
+  })
+
+  it('主机视图把同一 host 的路径合并，展开后列出路径', async () => {
+    response = makeList([
+      makeAsset('http://127.0.0.1:9001/.env'),
+      makeAsset('http://127.0.0.1:9001/api/users'),
+      makeAsset('http://other.example/'),
+    ])
+    renderPage('host')
+
+    const table = await screen.findByRole('table')
+    const rows = within(table).getAllByRole('row').slice(1)
+    expect(rows).toHaveLength(2)
+    expect(rows[0].textContent).toContain('127.0.0.1')
+    expect(rows[0].textContent).toContain('2')
+
+    fireEvent.click(within(rows[0]).getByRole('button', { name: /127\.0\.0\.1/ }))
+    await waitFor(() => {
+      expect(screen.getByTitle('http://127.0.0.1:9001/.env')).toBeTruthy()
+      expect(screen.getByTitle('http://127.0.0.1:9001/api/users')).toBeTruthy()
+    })
   })
 })
