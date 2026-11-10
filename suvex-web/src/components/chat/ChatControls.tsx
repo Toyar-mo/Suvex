@@ -116,6 +116,117 @@ export function PersonaDialog({
 }
 
 // ══════════════════════════════════════════════════════════════
+// 行内单选（自动放行时长等）
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * 输入行里的小单选。
+ *
+ * 与 `ProviderSelect` / `MultiSelect` 同一套按钮与浮层骨架：原生
+ * `<select>` 的展开层由系统绘制（蓝色选中条、系统字体、方角），放在
+ * 一排自绘控件中间会立刻显出"不是一套东西"。
+ *
+ * 浮层**向上**展开：这几个控件都贴着输入区底部，向下会被视口裁掉。
+ */
+export function InlineSelect<T extends number | string>({
+  label,
+  value,
+  options,
+  onChange,
+  disabled,
+  title,
+}: {
+  label: string
+  value: T
+  options: Array<{ value: T; label: string }>
+  onChange: (value: T) => void
+  disabled?: boolean
+  title?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const boxRef = useRef<HTMLSpanElement | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onDown(event: PointerEvent) {
+      if (!boxRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('pointerdown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const current = options.find((option) => option.value === value)?.label ?? String(value)
+  return (
+    <span ref={boxRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        title={title}
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={cn(
+          'inline-flex items-center gap-1 rounded-sm border border-line px-2 py-1',
+          'text-2xs text-ink-muted transition-ui duration-fast',
+          'hover:border-line-strong hover:text-ink',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+          'disabled:cursor-not-allowed disabled:opacity-50',
+        )}
+      >
+        {label}
+        <span className="text-ink">{current}</span>
+        <ChevronDown size={10} strokeWidth={2} aria-hidden="true" />
+      </button>
+      {open && (
+        <div
+          role="listbox"
+          className={cn(
+            'absolute bottom-full left-0 z-20 mb-1 w-32 overflow-y-auto',
+            'overscroll-contain rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
+          )}
+        >
+          {options.map((option) => {
+            const active = option.value === value
+            return (
+              <button
+                key={String(option.value)}
+                type="button"
+                role="option"
+                aria-selected={active}
+                onClick={() => {
+                  onChange(option.value)
+                  setOpen(false)
+                }}
+                className={cn(
+                  'flex w-full items-center gap-1.5 rounded-xs px-1.5 py-1 text-left',
+                  'text-2xs transition-ui duration-fast hover:bg-surface-sunken',
+                  active ? 'text-ink' : 'text-ink-muted',
+                )}
+              >
+                <Check
+                  size={10}
+                  strokeWidth={2.5}
+                  className={cn('shrink-0', active ? 'text-accent' : 'invisible')}
+                  aria-hidden="true"
+                />
+                <span>{option.label}</span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </span>
+  )
+}
+
+// ══════════════════════════════════════════════════════════════
 // 模型接入点下拉
 // ══════════════════════════════════════════════════════════════
 
@@ -237,7 +348,7 @@ export function ProviderSelect({
             */
             'absolute bottom-full z-20 mb-1 max-h-64 w-56 overflow-y-auto',
             align === 'right' ? 'right-0' : 'left-0',
-            'rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
+            'overscroll-contain rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
           )}
         >
           {items.map((item) => {
@@ -339,7 +450,7 @@ export function MultiSelect({
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
         className={cn(
-          'flex items-center gap-1 rounded-xs border px-1.5 py-1 text-2xs',
+          'flex items-center gap-1 rounded-sm border px-2 py-1 text-2xs',
           'transition-ui duration-fast',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
@@ -365,7 +476,7 @@ export function MultiSelect({
           className={cn(
             // v1.76：同样向上展开 —— 这个控件只出现在贴着页面底部的设置面板里。
             'absolute bottom-full left-0 z-20 mb-1 max-h-64 w-56 overflow-y-auto',
-            'rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
+            'overscroll-contain rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
           )}
         >
           {options.length === 0 ? (
@@ -374,26 +485,34 @@ export function MultiSelect({
             options.map((name) => {
               const checked = selected.includes(name)
               return (
-                <label
+                <button
                   key={name}
+                  type="button"
+                  role="option"
+                  aria-selected={checked}
+                  onClick={() => {
+                    // ⚠️ 顺序要保持稳定：后端把 `skillNames` 当成有序列表
+                    //   （挂载预算按挂载顺序截断），所以新勾的**追加到尾部**、
+                    //   取消的从中间摘掉，不排序。
+                    onChange(checked ? selected.filter((n) => n !== name) : [...selected, name])
+                  }}
                   className={cn(
-                    'flex cursor-pointer items-center gap-1.5 rounded-xs px-1.5 py-1',
-                    'text-2xs text-ink-muted transition-ui duration-fast hover:bg-surface-sunken',
+                    'flex w-full items-center gap-1.5 rounded-xs px-1.5 py-1 text-left',
+                    'text-2xs transition-ui duration-fast hover:bg-surface-sunken',
+                    checked ? 'text-ink' : 'text-ink-muted',
                   )}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => {
-                      // ⚠️ 顺序要保持稳定：后端把 `skillNames` 当成有序列表
-                      //   （挂载预算按挂载顺序截断），所以新勾的**追加到尾部**、
-                      //   取消的从中间摘掉，不排序。
-                      onChange(checked ? selected.filter((n) => n !== name) : [...selected, name])
-                    }}
-                    className="size-3 accent-[var(--accent)]"
-                  />
+                  <span
+                    className={cn(
+                      'flex size-3 shrink-0 items-center justify-center rounded-[3px] border',
+                      checked ? 'border-accent bg-accent text-white' : 'border-line-strong',
+                    )}
+                    aria-hidden="true"
+                  >
+                    {checked && <Check size={8} strokeWidth={3} />}
+                  </span>
                   <span className="truncate">{name}</span>
-                </label>
+                </button>
               )
             })
           )}
@@ -461,7 +580,7 @@ export function ProjectInput({
         onClick={() => setEditing(true)}
         disabled={disabled}
         className={cn(
-          'flex items-center gap-1 rounded-xs border border-line bg-surface-sunken px-1.5 py-1',
+          'flex items-center gap-1 rounded-sm border border-line bg-surface-sunken px-2 py-1',
           'text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           'disabled:cursor-not-allowed disabled:opacity-50',
@@ -503,7 +622,7 @@ export function ProjectInput({
         placeholder="项目名"
         aria-label="归属项目"
         className={cn(
-          'w-28 rounded-xs border border-accent/60 bg-surface-sunken px-1.5 py-1',
+          'w-28 rounded-sm border border-accent/60 bg-surface-sunken px-2 py-1',
           'text-2xs text-ink placeholder:text-ink-faint',
           'focus:outline-none focus:ring-2 focus:ring-accent/40',
         )}
@@ -663,7 +782,7 @@ export function ApprovalToggle({
       role="switch"
       aria-checked={enabled}
       className={cn(
-        'flex items-center gap-1 rounded-xs border px-1.5 py-1 text-2xs',
+        'flex items-center gap-1 rounded-sm border px-2 py-1 text-2xs',
         'transition-ui duration-fast',
         'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         'disabled:cursor-not-allowed disabled:opacity-50',

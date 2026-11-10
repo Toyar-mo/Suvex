@@ -1,6 +1,7 @@
 import {
   ApprovalToggle,
   AttachmentBar,
+  InlineSelect,
   MultiSelect,
   PersonaDialog,
   ProjectInput,
@@ -1366,7 +1367,7 @@ export function ChatPage() {
         type="button"
         onClick={() => setPersonaOpen(true)}
         className={cn(
-          'inline-flex items-center gap-1 rounded-md border border-line px-2 py-1',
+          'inline-flex items-center gap-1 rounded-sm border border-line px-2 py-1',
           'text-2xs text-ink-muted transition-ui duration-fast',
           'hover:border-accent/40 hover:text-ink',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
@@ -1382,33 +1383,27 @@ export function ChatPage() {
         onChange={(requireApproval) => void updateSettings(active.id, { requireApproval })}
       />
 
-      <label
-        className="inline-flex items-center gap-1 rounded-md border border-line px-2 py-1 text-2xs text-ink-muted"
+      <InlineSelect
+        label="自动放行"
         title="在所选时间内自动批准需要确认的工具调用；到期自动恢复。"
-      >
-        自动放行
-        <select
-          value={(() => {
-            const until = active.autoApproveUntil
-              ? new Date(active.autoApproveUntil).getTime()
-              : 0
-            if (!until || until <= Date.now()) return 0
-            const left = (until - Date.now()) / 3_600_000
-            return left <= 2 ? 2 : left <= 4 ? 4 : 8
-          })()}
-          onChange={(event) =>
-            void updateSettings(active.id, {
-              autoApproveHours: Number(event.target.value),
-            })
-          }
-          className="bg-transparent text-2xs text-ink"
-        >
-          <option value={0}>关闭</option>
-          <option value={2}>2h</option>
-          <option value={4}>4h</option>
-          <option value={8}>8h</option>
-        </select>
-      </label>
+        value={(() => {
+          const until = active.autoApproveUntil
+            ? new Date(active.autoApproveUntil).getTime()
+            : 0
+          if (!until || until <= Date.now()) return 0
+          const left = (until - Date.now()) / 3_600_000
+          return left <= 2 ? 2 : left <= 4 ? 4 : 8
+        })()}
+        options={[
+          { value: 0, label: '关闭' },
+          { value: 2, label: '2h' },
+          { value: 4, label: '4h' },
+          { value: 8, label: '8h' },
+        ]}
+        onChange={(hours) =>
+          void updateSettings(active.id, { autoApproveHours: hours })
+        }
+      />
 
       <MultiSelect
         label="技能"
@@ -1451,7 +1446,7 @@ export function ChatPage() {
       <button
         type="button"
         onClick={() => setSettingsOpen(false)}
-        className="ml-auto shrink-0 rounded-md border border-line px-2 py-1 text-2xs text-ink-muted transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        className="ml-auto shrink-0 rounded-sm border border-line px-2 py-1 text-2xs text-ink-muted transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
         完成
       </button>
