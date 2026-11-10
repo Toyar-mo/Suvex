@@ -4,6 +4,10 @@ import { FindingAttachments } from './FindingAttachments'
 import { useEffect, useState } from 'react'
 import { loadRemediation, type RemediationPlan } from '@/data/remediation'
 import {
+  loadVerificationContext,
+  type VerificationContext,
+} from '@/data/verificationContext'
+import {
   FINDING_CATEGORY_LABEL,
   FINDING_TRANSITION_INTENT,
   FINDING_TRANSITION_LABEL,
@@ -167,6 +171,7 @@ export function FindingDetail({ finding }: FindingDetailProps) {
       )}
 
       <RemediationPlanView findingId={finding.id} />
+      <VerificationContextView findingId={finding.id} />
 
       {/* ── 7 · 时间线 ── */}
       <Section title="操作记录">
@@ -377,6 +382,67 @@ const STATUS_SHORT: Record<FindingStatus, string> = {
 // ─────────────────────────────────────────────
 // 小组件
 // ─────────────────────────────────────────────
+
+function VerificationContextView({ findingId }: { findingId: string }) {
+  const [context, setContext] = useState<VerificationContext | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    // 增值信息：失败静默，不打断详情阅读。
+    void loadVerificationContext(findingId)
+      .then((next) => {
+        if (alive) setContext(next)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [findingId])
+
+  if (!context) return null
+
+  return (
+    <Section title="验证上下文" hint="同扫描事实 + 相关发现 · 只列已记录">
+      <div className="flex flex-col gap-2">
+        {context.facts.length > 0 ? (
+          <ul className="flex flex-col gap-1">
+            {context.facts.map((fact) => (
+              <li key={fact.factKey} className="text-xs leading-relaxed">
+                <code className="font-mono text-2xs text-ink-muted">{fact.factKey}</code>
+                <span className="ml-1.5 text-ink">{fact.summary}</span>
+                <span className="ml-1.5 text-2xs text-ink-faint">
+                  {fact.confidence} · {fact.trustLevel || '—'}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-2xs text-ink-faint">这次扫描没有记录事实。</p>
+        )}
+
+        {context.relatedFindings.length > 0 && (
+          <div className="flex flex-col gap-1">
+            <span className="text-2xs text-ink-muted">同扫描的其他发现</span>
+            <ul className="flex flex-col gap-0.5">
+              {context.relatedFindings.map((item) => (
+                <li key={item.id} className="text-xs">
+                  <a href={`/findings/${item.id}`} className="text-ink hover:underline">
+                    {item.title}
+                  </a>
+                  <span className="ml-1.5 text-2xs text-ink-faint">
+                    {item.severity} · {item.verification}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <p className="text-2xs text-ink-faint">{context.note}</p>
+      </div>
+    </Section>
+  )
+}
 
 function RemediationPlanView({ findingId }: { findingId: string }) {
   const [plan, setPlan] = useState<RemediationPlan | null>(null)

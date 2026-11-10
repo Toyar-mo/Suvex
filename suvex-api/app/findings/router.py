@@ -30,6 +30,7 @@ from app.core.errors import ApiError
 from app.core.timeutil import now_utc
 from app.core.vocab import AuditAction, FindingCategory, FindingStatus, Severity, values
 from app.findings import attachments as attachments_mod
+from app.findings import context as context_mod
 from app.findings import remediation as remediation_mod
 from app.findings import sarif as sarif_mod
 from app.findings import service
@@ -46,6 +47,7 @@ from app.findings.schemas import (
     FindingSummaryOut,
     RemediationOut,
     StatusChangeRequest,
+    VerificationContextOut,
 )
 
 router = APIRouter(prefix="/findings", tags=["漏洞"])
@@ -777,4 +779,20 @@ def read_remediation(
     """
     return RemediationOut.model_validate(
         remediation_mod.plan(service.get_finding(db, findingId))
+    )
+
+
+@router.get(
+    "/{findingId}/verification-context",
+    response_model=VerificationContextOut,
+    summary="验证上下文：同扫描事实 + 相关发现 + 反证清单",
+)
+def read_verification_context(
+    findingId: str,  # noqa: N803
+    _identity: ReadDep,
+    db: DbDep,
+) -> VerificationContextOut:
+    """只读；不推断缺失证据。"""
+    return VerificationContextOut.model_validate(
+        context_mod.verification_context(db, service.get_finding(db, findingId))
     )

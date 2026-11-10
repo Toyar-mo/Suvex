@@ -385,3 +385,13 @@ __all__ = [
     "StatusChangeRequest",
     "TimelineEntryOut",
 ]
+
+
+class VerificationContextOut(CamelModel):
+    """一条发现的验证上下文（对齐 ARTEX `get_finding_check_context`）。"""
+
+    finding: dict[str, Any]
+    facts: list[dict[str, Any]] = []
+    relatedFindings: list[dict[str, Any]] = []
+    checks: dict[str, Any] = {}
+    note: str
