@@ -368,22 +368,8 @@ function OverviewContent({
           再叫「实时」就是在骗人。
       */}
       <div className="grid grid-cols-1 items-start gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">
-        <OverviewActivityFeed seed={activity} isLive={isLive} />
-
-        <div className="flex flex-col gap-bay self-start">
-          <RiskScoreCard
-            score={metrics.riskScore}
-            level={metrics.riskLevel}
-            total={metrics.unresolvedTotal}
-            breakdown={metrics.unresolvedBreakdown}
-          />
-
-          <SeverityChart data={severityBreakdown} />
-
-          <RecentFindingsCard findings={findings} />
-          <QualityPanel quality={quality} />
-        </div>
-      </div>
+        <div className="flex min-w-0 flex-col gap-bay">
+          <OverviewActivityFeed seed={activity} isLive={isLive} />
 
       {/* ── 2 · 该做什么 ───────────────────────────── */}
       <AttentionList items={attention} />
@@ -447,6 +433,22 @@ function OverviewContent({
       <OverviewTasks scans={scans} />
 
       <ResourceStrip resources={resources} />
+        </div>
+
+        <div className="flex flex-col gap-bay self-start">
+          <RiskScoreCard
+            score={metrics.riskScore}
+            level={metrics.riskLevel}
+            total={metrics.unresolvedTotal}
+            breakdown={metrics.unresolvedBreakdown}
+          />
+
+          <SeverityChart data={severityBreakdown} />
+
+          <RecentFindingsCard findings={findings} />
+          <QualityPanel quality={quality} />
+        </div>
+      </div>
 
       {/*
         ── 4 · LLM 消耗（CTF2 解题，v0.36）─────────────
