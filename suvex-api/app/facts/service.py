@@ -379,6 +379,60 @@ def load_inherited_facts(
     return list(db.execute(stmt).scalars())
 
 
+def surface_map(db: Session, *, target: str, limit: int = 300) -> Any:
+    """把同一目标的黑板事实整理成**图**（nodes + edges，v1.81）。
+
+    `ScanFact.edges` 已经存了关系（`[{"type": "enables", "fact_key": ...}]`），
+    之前只有索引块会把边上的 key 列出来。这里把它变成可渲染的结构：
+    nodes 是全部分类的事实，edges 只保留**两端都在本次结果里**的边 ——
+    悬空边会让前端画出一个不存在的节点。
+
+    与 `coverage_for_target` 的分工：那个回答"测过什么/排除了什么"，
+    这个回答"这些认知之间怎么连起来"（攻击链/依赖/约束）。
+    """
+    key = normalize_target(target)
+    if not key:
+        return {"target": "", "nodes": [], "edges": [], "truncated": False}
+    rows = list(
+        db.execute(
+            select(ScanFact)
+            .where(ScanFact.target == key)
+            .order_by(ScanFact.updated_at.desc())
+            .limit(limit)
+        ).scalars()
+    )
+    nodes = [
+        {
+            "factKey": row.fact_key,
+            "category": row.category,
+            "summary": row.summary,
+            "detail": row.detail or "",
+            "confidence": row.confidence,
+            "trustLevel": row.trust_level or "",
+            "recordedBy": row.recorded_by,
+            "updatedAt": row.updated_at.isoformat() if row.updated_at else "",
+            "version": row.version,
+        }
+        for row in rows
+    ]
+    known = {row.fact_key for row in rows}
+    edges: list[dict[str, str]] = []
+    for row in rows:
+        for edge in row.edges or []:
+            if not isinstance(edge, dict):
+                continue
+            target_key = str(edge.get("fact_key") or "").strip()
+            edge_type = str(edge.get("type") or "").strip()
+            if edge_type and target_key in known:
+                edges.append({"from": row.fact_key, "type": edge_type, "to": target_key})
+    return {
+        "target": key,
+        "nodes": nodes,
+        "edges": edges,
+        "truncated": len(rows) >= limit,
+    }
+
+
 def _new_id() -> str:
     """与项目其它实体同形的时间有序 id。"""
     from app.core.ids import new_id

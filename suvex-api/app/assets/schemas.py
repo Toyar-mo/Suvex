@@ -19,6 +19,8 @@
 
 from __future__ import annotations
 
+from pydantic import Field
+
 from app.core.schemas import CamelModel
 from app.core.timeutil import IsoDateTime
 
@@ -95,6 +97,37 @@ class CoverageItemOut(CamelModel):
 class CoverageStatsOut(CamelModel):
     tested: int = 0
     ruledOut: int = 0
+
+
+class SurfaceNodeOut(CamelModel):
+    """黑板事实图的一个节点。"""
+
+    factKey: str
+    category: str
+    summary: str
+    detail: str = ""
+    confidence: str
+    trustLevel: str = ""
+    recordedBy: str = ""
+    updatedAt: str = ""
+    version: int = 1
+
+
+class SurfaceEdgeOut(CamelModel):
+    """一条边。`from` 是 Python 关键字，字段名用 `from_` + alias。"""
+
+    from_: str = Field("", alias="from")
+    type: str
+    to: str
+
+
+class SurfaceMapOut(CamelModel):
+    """一个目标的黑板事实图（nodes + edges）。"""
+
+    target: str
+    nodes: list[SurfaceNodeOut]
+    edges: list[SurfaceEdgeOut]
+    truncated: bool = False
 
 
 class CoverageOut(CamelModel):

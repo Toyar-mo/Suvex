@@ -24,7 +24,13 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.assets import service
-from app.assets.schemas import AssetListOut, AssetOut, AssetSummaryOut, CoverageOut
+from app.assets.schemas import (
+    AssetListOut,
+    AssetOut,
+    AssetSummaryOut,
+    CoverageOut,
+    SurfaceMapOut,
+)
 from app.auth.deps import Identity, require_read
 from app.core.db import get_db
 
@@ -81,3 +87,22 @@ def asset_coverage(
     "没有认知"。界面不要把两者混为一谈（见 `CoverageOut` 的说明）。
     """
     return CoverageOut.model_validate(service.coverage_for_target(db, target=target))
+
+
+@router.get(
+    "/assets/surface",
+    response_model=SurfaceMapOut,
+    summary="一个目标的黑板事实图（nodes + edges）",
+)
+def asset_surface(
+    _identity: ReadDep,
+    db: DbDep,
+    target: Annotated[str, Query(min_length=1, max_length=512)],
+) -> SurfaceMapOut:
+    """把同一目标的 `scan_facts` 整理成图：事实是节点，`edges` 是关系。
+
+    只保留两端都在结果里的边 —— 悬空边会让前端画出一个不存在的节点。
+    """
+    from app.facts import service as facts_service
+
+    return SurfaceMapOut.model_validate(facts_service.surface_map(db, target=target))
