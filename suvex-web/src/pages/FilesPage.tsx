@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PageHeader } from '@/components/layout/AppShell'
+import { StageSharePanel } from '@/components/files/StageSharePanel'
 import ConfirmDialog from '@/components/ui/ConfirmDialog'
 import Checkbox from '@/components/ui/Checkbox'
 import EmptyState from '@/components/ui/EmptyState'
@@ -556,6 +557,7 @@ export default function FilesPage() {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader navId="files" />
+      <StageSharePanel />
       <div className="flex flex-col gap-panel px-gutter py-bay">
         {/* 筛选条 —— 版式对齐 CyberStrikeAI：一行四个条件 + 两个动作 */}
         <section className="rounded-md border border-line bg-surface p-panel">
