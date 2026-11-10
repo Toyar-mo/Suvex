@@ -93,6 +93,7 @@ export function SkillsPage() {
   const isAdmin = user?.role === 'admin'
 
   const [query, setQuery] = useState('')
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<string | null>(null)
 
   /** 编辑器状态：`null` = 关闭；否则是正在编辑/新建的内容。 */
@@ -377,10 +378,27 @@ export function SkillsPage() {
                   <ul className="max-h-[60dvh] overflow-y-auto lg:max-h-[calc(100dvh-320px)]">
                     {filtered.map((group) => (
                       <li key={group.category}>
-                        <h3 className="border-b border-line/60 bg-surface-raised/30 px-3 py-1.5 text-2xs tracking-wide text-ink-faint uppercase">
-                          {categoryLabel(group.category)}
-                          <span className="ml-1 normal-case">（{group.skills.length}）</span>
+                        <h3 className="border-b border-line/60 bg-surface-raised/30 text-2xs tracking-wide text-ink-faint uppercase">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setCollapsed((prev) => {
+                                const next = new Set(prev)
+                                if (next.has(group.category)) next.delete(group.category)
+                                else next.add(group.category)
+                                return next
+                              })
+                            }
+                            className="flex w-full items-center justify-between px-3 py-1.5 hover:text-ink"
+                            aria-expanded={!collapsed.has(group.category)}
+                          >
+                            <span>
+                              {collapsed.has(group.category) ? '▸' : '▾'} {categoryLabel(group.category)}
+                              <span className="ml-1 normal-case">（{group.skills.length}）</span>
+                            </span>
+                          </button>
                         </h3>
+                        {!collapsed.has(group.category) && (
                         <ul>
                           {group.skills.map((skill) => (
                             <SkillRow
@@ -392,6 +410,7 @@ export function SkillsPage() {
                             />
                           ))}
                         </ul>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -704,6 +723,25 @@ function SkillDetailPane({
 
   return (
     <div className="flex h-full flex-col">
+      <div className="grid grid-cols-3 gap-2 border-b border-line px-4 py-2.5 text-sm">
+        <div>
+          <div className="text-2xs text-ink-faint">总调用次数</div>
+          <div className="tabular text-ink">{loads?.loads ?? 0}</div>
+        </div>
+        <div>
+          <div className="text-2xs text-ink-faint">最近调用</div>
+          <div className="text-ink">
+            {loads?.lastLoadedAt
+              ? new Date(loads.lastLoadedAt).toLocaleString('zh-CN', { hour12: false })
+              : '从未调用'}
+          </div>
+        </div>
+        <div>
+          <div className="text-2xs text-ink-faint">来源</div>
+          <div className="text-ink">{builtin ? '内置 · 随代码分发' : '自定义'}</div>
+        </div>
+      </div>
+
       <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
