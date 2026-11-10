@@ -1136,6 +1136,22 @@ def render_truncation_reminder(reply_chars: int) -> str:
     )
 
 
+BRUTE_HARD_LIMIT = 10
+
+
+def render_brute_stop_limit_note(attempts: int) -> str:
+    """达到硬上限时替模型收尾的话。
+
+    提醒可以被模型忽略，硬上限不能：本轮已经消耗了 {attempts} 次登录类工具
+    调用，再继续只是换候选烧钱。收尾时把已试范围说清楚，把"是否继续"交回用户。
+    """
+    return (
+        f"已停止：本轮累计 {attempts} 次登录/口令尝试，达到硬上限。"
+        "没有继续扩大字典。已经尝试过的候选与证据在上面的工具结果里；"
+        "如果要换策略，请先检查已有凭据/历史结论，或明确给出新的方向。"
+    )
+
+
 def render_brute_stop_reminder(attempts: int) -> str:
     """登录/口令尝试的停损提醒。
 

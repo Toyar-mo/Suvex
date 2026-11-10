@@ -40,4 +40,6 @@ def test_all_deliverable_tasks_must_end_with_a_result_block() -> None:
         "rockyou",
     ):
         assert token in text
+    assert chat_prompts.BRUTE_HARD_LIMIT <= 20
+    assert "已停止" in chat_prompts.render_brute_stop_limit_note(chat_prompts.BRUTE_HARD_LIMIT)
 

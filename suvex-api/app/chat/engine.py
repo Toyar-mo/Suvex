@@ -63,12 +63,14 @@ from app.chat import service as chat_service
 from app.chat import turn_runs as turn_run_store
 from app.chat.models import ChatMessage, ChatSession
 from app.chat.prompts import (
+    BRUTE_HARD_LIMIT,
     CHAT_TOOL_NAMES,
     CONSEQUENTIAL_TOOL_NAMES,
     TOOL_BY_NAME,
     build_system_prompt,
     build_tools_schema,
     may_call_tool,
+    render_brute_stop_limit_note,
     render_brute_stop_reminder,
     render_final_confirm_reminder,
     render_format_reminder,
@@ -3188,6 +3190,19 @@ async def run_turn(
         + MAX_TOOL_NUDGES
         + MAX_FINAL_CONFIRMATIONS
     ):
+        # ★ v1.84：口令爆破硬上限。提醒可能被模型忽略，硬上限不能：
+        #   本轮累计登录类工具调用达到 BRUTE_HARD_LIMIT 就收尾。
+        if brute_attempts >= BRUTE_HARD_LIMIT:
+            stopped = chat_service.append_assistant_message(
+                db,
+                session=session,
+                content=render_brute_stop_limit_note(brute_attempts),
+            )
+            db.commit()
+            result.messages.append(stopped)
+            result.hit_tool_limit = True
+            return result
+
         # ★ v1.68：墙钟预算闸。跑到超过 `TURN_WALL_SECONDS` 就地优雅收尾 ——
         #   不是让它接着烧，也不是硬砍，而是落一句"到点了、要继续再发继续"，
         #   本轮 marked interrupted（可接手/可续跑），沙箱释放。
