@@ -564,8 +564,17 @@ async def _run_engine(spec: LaunchSpec, stop_event: threading.Event) -> int:
     log_lines: list[str] = []
 
     # 结构化事件流的旁路状态：`seq` 只增不减（幂等键），文件句柄开一次。
+    #
+    # ★ v1.86：起始值用**纳秒时间戳**，不再从 0 开始。
+    #
+    # 续跑会重新进入本函数；`event_seq=0` 会把新事件重新编号成 1..N，而
+    # 导入器的游标是 `max(source_row_id)`（上一次可能已到 166）—— 新事件
+    # 全部小于游标，被静默跳过。表现是引擎在 scan.log 里正常跑、活动页
+    # 却停在旧事件不动（2026-11-11 实测）。
+    #
+    # 时间戳保证跨进程/跨续跑单调，且大于历史小序号；BIGINT 足够。
     events_path = spec.run_dir / "agent_run" / EVENTS_FILENAME
-    event_seq = 0
+    event_seq = time.time_ns()
 
     def on_progress(kind: str, summary: str, payload: dict[str, str]) -> None:
         """过程落盘。

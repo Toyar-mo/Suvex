@@ -173,7 +173,9 @@ class ActivityEvent(Base):
     # ⚠️ 它同时是**导入游标**：导入器用
     # `max(source_row_id) WHERE scan_id = ?` 决定从哪继续读，
     # 所以不需要再加一列 cursor —— 那会是同一件事的第二个来源。
-    source_row_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # ★ v1.86：INTEGER → BIGINT。自研引擎的 seq 用纳秒时间戳（跨续跑单调），
+    #   1.79e18 超出 32 位；导入器插入会 DataError，活动页永远停在旧事件。
+    source_row_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     def __repr__(self) -> str:  # pragma: no cover - 调试用
         return f"<ActivityEvent seq={self.seq} id={self.id!r} type={self.type!r}>"
