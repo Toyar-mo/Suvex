@@ -1,6 +1,8 @@
 import { cn } from '@/lib/cn'
 import CodeBlock from '@/components/ui/CodeBlock'
 import { FindingAttachments } from './FindingAttachments'
+import { useEffect, useState } from 'react'
+import { loadRemediation, type RemediationPlan } from '@/data/remediation'
 import {
   FINDING_CATEGORY_LABEL,
   FINDING_TRANSITION_INTENT,
@@ -163,6 +165,8 @@ export function FindingDetail({ finding }: FindingDetailProps) {
           </p>
         </Section>
       )}
+
+      <RemediationPlanView findingId={finding.id} />
 
       {/* ── 7 · 时间线 ── */}
       <Section title="操作记录">
@@ -373,6 +377,52 @@ const STATUS_SHORT: Record<FindingStatus, string> = {
 // ─────────────────────────────────────────────
 // 小组件
 // ─────────────────────────────────────────────
+
+function RemediationPlanView({ findingId }: { findingId: string }) {
+  const [plan, setPlan] = useState<RemediationPlan | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    // 修复方案是增值信息：失败静默，不打断详情阅读。
+    void loadRemediation(findingId)
+      .then((next) => {
+        if (alive) setPlan(next)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [findingId])
+
+  if (!plan) return null
+  const ready = plan.readiness === 'ready'
+
+  return (
+    <Section title="修复方案" hint="按 CWE 生成 · 只给建议，不生成补丁">
+      <div className="flex flex-col gap-2">
+        <p className="text-sm text-ink">{plan.title}</p>
+        <p className={cn('text-2xs', ready ? 'text-ink-muted' : 'text-signal-warn')}>
+          {ready
+            ? '证据已达 L2，可以直接按下面步骤修。'
+            : '证据未达 L2：先用 verify_http 做 replay/differential，再按下面步骤修 —— 否则可能是在修一条误报。'}
+        </p>
+        <ol className="flex list-decimal flex-col gap-1 pl-4 text-xs leading-relaxed text-ink-muted">
+          {plan.steps.map((step, index) => (
+            <li key={index}>{step}</li>
+          ))}
+        </ol>
+        {plan.verification.length > 0 && (
+          <p className="text-2xs text-ink-faint">
+            <span className="text-ink-muted">验证方式：</span>
+            {plan.verification.join('；')}
+          </p>
+        )}
+        <p className="text-2xs text-ink-faint">{plan.note}</p>
+      </div>
+    </Section>
+  )
+}
+
 
 function Section({
   title,
