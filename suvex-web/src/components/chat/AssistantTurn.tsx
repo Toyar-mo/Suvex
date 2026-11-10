@@ -113,6 +113,16 @@ function AssistantTurnImpl({
 }) {
   const answers = items.filter(isAnswer)
   const work = items.filter((message) => !isAnswer(message))
+  // 运行中主区没有正文时，至少显示模型最近一句过程旁白 ——
+  // 否则界面只剩工具卡片，看起来像“重启后不输出了”。
+  const latestNarration = [...items]
+    .reverse()
+    .find(
+      (message) =>
+        message.role === 'assistant' &&
+        message.surface === 'process' &&
+        (message.content ?? '').trim().length > 0,
+    )?.content
   // 待审批的永远单独拿出来画：它还没执行，折进过程里会让用户看不见"在等我点"。
   const approvals = work.filter((message) => message.approvalStatus === 'pending')
   const body = work.filter((message) => message.approvalStatus !== 'pending')
@@ -173,6 +183,15 @@ function AssistantTurnImpl({
             aria-hidden="true"
           />
         </div>
+      )}
+
+      {live && streamingText === null && latestNarration && (
+        <p
+          className="whitespace-pre-wrap break-words text-sm leading-6 text-ink-muted"
+          data-live-narration
+        >
+          {latestNarration}
+        </p>
       )}
 
       {live && (
