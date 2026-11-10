@@ -44,6 +44,7 @@ def test_all_deliverable_tasks_must_end_with_a_result_block() -> None:
     assert chat_prompts.BRUTE_HARD_LIMIT <= 20
     assert "已停止" in chat_prompts.render_brute_stop_limit_note(chat_prompts.BRUTE_HARD_LIMIT)
     assert "只写一次" in text
+    assert "继续 / 接着 / 往下" in text
 
 
 def test_result_block_is_final_even_with_limitations() -> None:

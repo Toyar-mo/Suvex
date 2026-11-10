@@ -77,6 +77,7 @@ from app.chat.prompts import (
     render_native_tool_note,
     render_plan_exhausted_note,
     render_repeated_conclusion_note,
+    render_result_continue_reminder,
     render_stall_reminder,
     render_truncation_reminder,
     render_turn_wall_note,
@@ -855,6 +856,16 @@ async def _call_model(
 # ══════════════════════════════════════════════════════════
 # 截断判据（v1.13）
 # ══════════════════════════════════════════════════════════
+
+
+def _last_user_asks_continue(history: list[Any]) -> bool:
+    """最近一条用户消息是不是明确要求继续。"""
+    for message in reversed(history):
+        if getattr(message, "role", None) != "user":
+            continue
+        content = getattr(message, "content", "") or ""
+        return any(word in content for word in ("继续", "接着", "往下", "渗透"))
+    return False
 
 
 _AUTH_TOOL_PATTERN = re.compile(
@@ -3164,6 +3175,9 @@ async def run_turn(
     #:   "每次换个候选"的爆破，这里按策略族计数。
     brute_attempts = 0
     brute_warned = False
+    #: ★ v1.84：用户说「继续」但模型只重贴结果的次数。允许打回一次，
+    #:   第二次才接受，避免无限循环。
+    result_bounces = 0
 
     if resume_from is not None:
         nudges_used = int(getattr(resume_from, "nudges_used", 0) or 0)
@@ -3561,6 +3575,13 @@ async def run_turn(
             and not _is_truncated(reply)
             and nudge_policy.looks_like_plan(text)
         )
+        result_block = bool(not actions and nudge_policy.looks_like_result(text))
+        user_continue = _last_user_asks_continue(history)
+        # 用户刚说继续、模型却只重贴结果：把它当过程，逼它执行下一步；
+        # 只打回一次，第二次接受，避免死循环。
+        force_continue_result = bool(
+            result_block and user_continue and result_bounces < 1
+        )
         premature_final = (
             plan_like_final and tools_used > 0 and plan_bounces < MAX_PLAN_BOUNCES
         )
@@ -3575,7 +3596,12 @@ async def run_turn(
             # ★ v1.30：额度用完的计划句也不能当 `answer` —— 它是计划，不是结果。
             surface=(
                 "answer"
-                if (not actions and not premature_final and not plan_like_final)
+                if (
+                    not actions
+                    and not premature_final
+                    and not plan_like_final
+                    and not force_continue_result
+                )
                 else "process"
             ),
         )
@@ -3588,7 +3614,19 @@ async def run_turn(
             #   结果块里的「未完成/限制」是边界说明，不是"还要继续"的计划；
             #   不在这里截断，`should_nudge` 会把它当半句话反复打回，
             #   模型于是重写同一份结论，界面上出现多条重复 answer。
-            if nudge_policy.looks_like_result(text):
+            if result_block:
+                if force_continue_result:
+                    result_bounces += 1
+                    pending_reminder = render_result_continue_reminder()
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="result-continue",
+                        attempt=result_bounces,
+                        maxAttempts=1,
+                    )
+                    continue
                 return result
 
             # ★ v1.64.1：这一轮模型没调任何工具（只写了正文）。累计"连续没调
