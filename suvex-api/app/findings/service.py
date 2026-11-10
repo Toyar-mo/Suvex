@@ -477,6 +477,7 @@ def list_findings(
     deleted: bool = False,
     sort: str = "recent",
     direction: str = "desc",
+    limit: int | None = None,
 ) -> list[Finding]:
     """列表 + 筛选 + 排序（契约 §3.4 的查询参数）。
 
@@ -515,7 +516,10 @@ def list_findings(
 
     # `Finding.id` 兜底：同一毫秒发现的记录如果只按时间排，
     # 两次查询的相对次序可能不同 —— 表现是翻页时看到重复项。
-    return list(db.execute(stmt.order_by(order, Finding.id)).scalars())
+    stmt = stmt.order_by(order, Finding.id)
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list(db.execute(stmt).scalars())
 
 
 def get_finding(db: Session, finding_id: str) -> Finding:

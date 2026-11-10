@@ -1,4 +1,6 @@
 import { PageHeader } from '@/components/layout/AppShell'
+import EmptyState from '@/components/ui/EmptyState'
+import { ClipboardCheck } from 'lucide-react'
 import { loadApprovals, type ChatApproval } from '@/data/approvals'
 import { useEffect, useState } from 'react'
 
@@ -39,7 +41,7 @@ export function ApprovalsPage() {
           {loading ? (
             <p className="px-4 py-6 text-sm text-ink-muted">读取中…</p>
           ) : items.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-ink-muted">还没有审批记录。</p>
+            <EmptyState icon={ClipboardCheck} title="还没有审批记录" description="开启人工审批后，需要确认的工具调用会出现在这里。" />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -54,7 +56,7 @@ export function ApprovalsPage() {
               </thead>
               <tbody>
                 {items.map((item) => (
-                  <tr key={item.id} className="border-t border-line align-top">
+                  <tr key={item.id} className="border-t border-line align-top transition-colors hover:bg-surface-raised/40">
                     <td className="max-w-[14rem] truncate px-4 py-2 text-ink">
                       <a href={`/chat/${item.sessionId}`} className="hover:underline">
                         {item.sessionTitle || item.sessionId}
@@ -62,7 +64,7 @@ export function ApprovalsPage() {
                     </td>
                     <td className="px-3 py-2 font-mono text-2xs text-ink-muted">{item.toolName}</td>
                     <td className="max-w-[22rem] truncate px-3 py-2 font-mono text-2xs text-ink-faint">
-                      {JSON.stringify(item.toolArgs)}
+                      {JSON.stringify(item.toolArgs).slice(0, 120)}
                     </td>
                     <td className="px-3 py-2 text-2xs text-ink">{STATUS_LABEL[item.status] ?? item.status}</td>
                     <td className="px-3 py-2 text-2xs text-ink-muted">{item.decidedBy || '—'}</td>

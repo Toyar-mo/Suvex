@@ -101,6 +101,7 @@ def list_findings(
     deleted: Annotated[bool, Query(description="只看回收站里的（P6-a）")] = False,
     sort: Annotated[Literal["recent", "severity"], Query()] = "recent",
     dir: Annotated[Literal["asc", "desc"], Query()] = "desc",
+    limit: Annotated[int | None, Query(ge=1, le=500)] = None,
 ) -> list[FindingSummaryOut]:
     """列表。
 

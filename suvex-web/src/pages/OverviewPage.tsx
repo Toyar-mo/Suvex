@@ -15,8 +15,7 @@ import { useFleetStatus } from '@/data/fleet'
 import { useScans } from '@/data/scans-store'
 import type { ActivityEvent, OverviewData } from '@/data/overview'
 import { loadOverview, useOverviewState } from '@/data/overview-store'
-import { loadFindings } from '@/data/findings-store'
-import { useFindings } from '@/data/findings-store'
+import { loadRecentFindings, type RecentFinding } from '@/data/recentFindings'
 import { loadQuality, type QualitySnapshot } from '@/data/quality'
 import { useOverviewLiveActivity } from '@/hooks/useOverviewLiveActivity'
 import { cn } from '@/lib/cn'
@@ -303,9 +302,11 @@ function OverviewContent({
   const isLive = metrics.activeScans > 0 || agents.running > 0 || agents.queued > 0
 
   const scans = useScans()
-  const findings = useFindings()
+  const [findings, setFindings] = useState<RecentFinding[]>([])
   useEffect(() => {
-    void loadFindings({ silent: true })
+    void loadRecentFindings(5)
+      .then(setFindings)
+      .catch(() => {})
   }, [])
   const findingTotal = severityBreakdown.reduce((sum, item) => sum + item.count, 0)
   return (

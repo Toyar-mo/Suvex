@@ -1,4 +1,4 @@
-import type { Finding } from '@/data/finding'
+import type { RecentFinding } from '@/data/recentFindings'
 
 const SEVERITY_CLASS: Record<string, string> = {
   critical: 'text-signal-risk',
@@ -14,7 +14,7 @@ const SEVERITY_CLASS: Record<string, string> = {
  * 只展示前 5 条；点击去 Findings 页。数据来自 findings-store，
  * 由总览页在挂载时静默加载一次。
  */
-export function RecentFindingsCard({ findings }: { findings: Finding[] }) {
+export function RecentFindingsCard({ findings }: { findings: RecentFinding[] }) {
   const rows = [...findings]
     .sort((a, b) => (b.discoveredAt ?? '').localeCompare(a.discoveredAt ?? ''))
     .slice(0, 5)

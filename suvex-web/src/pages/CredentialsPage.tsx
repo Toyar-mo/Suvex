@@ -11,6 +11,8 @@ import {
 } from '@/data/credentials'
 import type { Credential, ReusePlan } from '@/data/credentials'
 import { showToast } from '@/data/toast-store'
+import { KeyRound } from 'lucide-react'
+import EmptyState from '@/components/ui/EmptyState'
 import { useEffect, useState } from 'react'
 
 const KINDS = ['password', 'hash', 'ticket', 'key'] as const
@@ -175,7 +177,7 @@ export function CredentialsPage() {
           {loading ? (
             <p className="px-4 py-6 text-sm text-ink-muted">读取中…</p>
           ) : items.length === 0 ? (
-            <p className="px-4 py-6 text-sm text-ink-muted">还没有凭据。</p>
+            <EmptyState icon={KeyRound} title="还没有凭据" description="在上方登记一条；明文加密保存，列表不回显。" />
           ) : (
             <table className="w-full text-sm">
               <thead>
@@ -192,7 +194,7 @@ export function CredentialsPage() {
                 {items.map((item) => {
                   const itemPlan = plans[item.id]
                   return (
-                    <tr key={item.id} className="border-t border-line align-top">
+                    <tr key={item.id} className="border-t border-line align-top transition-colors hover:bg-surface-raised/40">
                       <td className="max-w-[18rem] truncate px-4 py-2 font-mono text-xs text-ink">
                         {item.target}
                       </td>

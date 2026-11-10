@@ -12,6 +12,7 @@ import {
 } from '@/data/agents'
 import { showToast } from '@/data/toast-store'
 import { Bot, Plus, X } from 'lucide-react'
+import EmptyState from '@/components/ui/EmptyState'
 import { useEffect, useState } from 'react'
 
 function splitList(value: string): string[] {
@@ -154,10 +155,12 @@ export function AgentsPage() {
 
         {loading ? (
           <p className="text-sm text-ink-muted">读取中…</p>
+        ) : items.length === 0 ? (
+          <EmptyState icon={Bot} title="没有 Agent" description="从右上角「新建 Agent」开始。" />
         ) : (
           <div className="grid grid-cols-1 gap-panel md:grid-cols-2 xl:grid-cols-3">
             {items.map((item) => (
-              <section key={item.id} className="flex flex-col gap-2 rounded-md border border-line bg-surface p-panel">
+              <section key={item.id} className="flex flex-col gap-2 rounded-md border border-line bg-surface p-panel transition-ui hover:border-line-strong">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <Bot className="size-4 shrink-0 text-ink-muted" strokeWidth={1.75} />
@@ -174,7 +177,7 @@ export function AgentsPage() {
                 <p className="min-h-[2.5rem] text-2xs leading-relaxed text-ink-muted">
                   {item.description || '（没有写描述）'}
                 </p>
-                <div className="mt-auto flex items-center gap-2 text-2xs text-ink-faint">
+                <div className="mt-auto flex items-center gap-2 text-2xs text-ink-faint tabular-nums">
                   <span>MCP {item.mcpServers.length}</span>
                   <span>Skill {item.skills.length}</span>
                   <span>工具 {item.tools.length}</span>
