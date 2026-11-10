@@ -1724,7 +1724,18 @@ class SandboxContainer:
             argv += ["-v", f"{self.workspace_dir}:{PERSIST_DIR}:{_mode}"]
         for key, value in self.extra_env.items():
             argv += ["-e", f"{key}={value}"]
-        argv += [self.image, "tail", "-f", "/dev/null"]
+        # ★★ 显式覆盖镜像 ENTRYPOINT（2026-11-10 修）。
+        #
+        # 实测 `suvex-sandbox:latest` 的 ENTRYPOINT 是 `["sh"]`、CMD 是一段
+        # 安装脚本（certipy/aws/kubectl）。不覆盖时，下面这组
+        # `[image, "tail", "-f", "/dev/null"]` 会变成 `sh tail -f ...` ——
+        # `sh` 把 `tail` 当成脚本路径，容器以 exit=2 秒退，而
+        # `docker run -d` 仍然返回 0，最终报"容器起来了但没在跑"。
+        #
+        # 覆盖成 `tail` 后，参数就是 `tail -f /dev/null`，与镜像原本的
+        # 入口无关。沙箱只需要一个常驻进程；任何镜像自带的入口脚本都不该
+        # 在这里执行（它可能做安装、也可能像这次一样直接失败）。
+        argv += ["--entrypoint", "tail", self.image, "-f", "/dev/null"]
         return argv
 
     def _restricted_argv(self) -> list[str]:
@@ -9095,7 +9106,7 @@ async def _run_worker(
         # 把它退回 `unsolved` —— 这正是应急响应复盘该有的终态：复盘做完了，
         # 产出在题解与工单文件里，而这道题本身没有"解出"这回事。
         if platform_backed:
-            await _handle_candidates(challenge_id, spec, outcome)
+            await _handle_candidates(challenge_id, spec, outcome, attempt_id=attempt_id)
     except KernelEnvironmentTimeout as exc:
         outcome.error = exc.message
         with session_scope() as db:
@@ -9246,6 +9257,8 @@ async def _handle_candidates(
     challenge_id: str,
     spec: SolveSpec,
     outcome: SolveOutcome,
+    *,
+    attempt_id: str | None = None,
 ) -> None:
     """把候选 flag 按 safe / auto 两条路径处理。
 
@@ -9309,6 +9322,27 @@ async def _handle_candidates(
             elif decision.action == "reject":
                 outcome.rejected.append(f"{candidate.flag}：{decision.reason}")
             db.commit()
+
+            # ★★ 候选刚落库就先生成一份题解（2026-11-10 修）。
+            #
+            # 实测：CR7 的状态是 `candidate_ready`，但没有 transcript、
+            # 没有 solve usage、也没有 writeup —— 说明 worker 在候选落库
+            # 之后、收尾的 `save_writeup` 之前被杀掉了（重启/人工停止/
+            # 线程被进程带走）。`finally` 里的 `_save_transcript` 同样没跑，
+            # 所以事后连回填的原料都没有。
+            #
+            # 收尾那份仍然保留（它会用最终 outcome 覆盖、补上耗时与
+            # turns）；这里只是保证"候选一旦确认存在，题解先落一份"，
+            # 后面无论怎么死都不会出现"有候选、无题解"。
+            if decision.action == "hold":
+                ctf2_service.save_writeup(
+                    db,
+                    challenge=challenge,
+                    outcome=outcome,
+                    attempt_id=attempt_id,
+                    elapsed_sec=None,
+                )
+                db.commit()
 
         if decision.action != "submit":
             continue

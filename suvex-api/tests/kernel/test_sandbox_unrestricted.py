@@ -93,7 +93,10 @@ def _from_name_to_image(argv: list[str], image: str) -> list[str]:
     多出两个与本题无关的元素。
     """
     start = argv.index("--name") + 2
-    end = argv.index(image, start)
+    # v1.84：镜像入口现在被显式覆盖成 `--entrypoint tail`；它不属于
+    # "沙箱参数"，切窗口时在哪出现就在哪结束。
+    candidates = [argv.index(token, start) for token in (image, "--entrypoint") if token in argv[start:]]
+    end = min(candidates)
     return argv[start:end]
 
 
