@@ -373,8 +373,8 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         ),
         params=(
             "tasks（必填，1–4 个）：每项 {name, prompt, tools?}；"
-            "tools 可选，只能从 run_shell/http_request/read_attachment/view_image/"
-            "browser/list_requests/get_request/verify_http/list_scans 里选，默认全部安全工具"
+            "tools 可选，只能从 run_shell/browser/verify_http/list_scans/"
+            "load_skill/load_recipe/list_skills 里选，默认全部安全工具"
         ),
     ),
 )

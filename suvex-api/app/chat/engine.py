@@ -2287,17 +2287,18 @@ SUBAGENT_TIMEOUT_SECONDS = 600
 #: 子代理允许的工具：只读/侦察为主，避免一次扇出产生四份不受控的写操作。
 #: `spawn_subagents` 自己不在里面 —— 禁止嵌套委派（同 CyberStrikeAI 的
 #: no_nested_task 中间件）。
+#: ⚠️ 只列**真实存在的聊天工具**（见 `prompts.CHAT_TOOL_NAMES`）。
+#: `http_request`/`read_attachment` 是解题引擎的工具，对话里没有；把不存在的
+#: 名字放进来，子代理会看到"工具不可用"并退回 shell —— 2026-11-11 实测。
 SUBAGENT_SAFE_TOOLS: frozenset[str] = frozenset(
     {
         "run_shell",
-        "read_attachment",
-        "view_image",
         "browser",
-        "http_request",
-        "list_requests",
-        "get_request",
         "verify_http",
         "list_scans",
+        "load_skill",
+        "load_recipe",
+        "list_skills",
     }
 )
 
@@ -2350,7 +2351,6 @@ async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
             sub.provider_id = ctx.session.provider_id
             sub.persona = ctx.session.persona
             sub.require_approval = False
-            sub.archived = True
             subdb.commit()
 
             task_prompt = (
@@ -2399,12 +2399,13 @@ async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
                     chat_sandbox.drop_sandbox(sub.id)
                 except Exception:  # noqa: BLE001
                     _log.debug("回收子代理沙箱失败", exc_info=True)
-                try:
-                    chat_service.purge_session(subdb, session=sub)
-                    subdb.commit()
-                except Exception:  # noqa: BLE001
-                    subdb.rollback()
-                    _log.warning("清理子代理会话失败", exc_info=True)
+                if sub in subdb:
+                    try:
+                        chat_service.purge_session(subdb, session=sub)
+                        subdb.commit()
+                    except Exception:  # noqa: BLE001
+                        subdb.rollback()
+                        _log.warning("清理子代理会话失败", exc_info=True)
             subdb.close()
 
     results = await asyncio.gather(
