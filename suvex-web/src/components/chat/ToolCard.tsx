@@ -15,6 +15,7 @@ import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { cn } from '@/lib/cn'
 import { useI18n } from '@/i18n'
 import { showToast } from '@/data/toast-store'
+import { copyText } from '@/lib/clipboard'
 import type { ChatMessage } from '@/data/chat'
 import { digestToolArgs } from './toolCardDigest'
 
@@ -55,13 +56,15 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
   const argDigest = digestToolArgs(message.toolArgs)
 
   const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(content)
+    if (await copyText(content)) {
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
-    } catch {
-      showToast({ message: t('tools.card.copyFailed', undefined, '复制失败，请手动选中后按 Ctrl+C'), tone: 'risk' })
+      return
     }
+    showToast({
+      message: t('tools.card.copyFailed', undefined, '复制失败，请手动选中后按 Ctrl+C'),
+      tone: 'risk',
+    })
   }
 
   const Duration = message.durationMs != null ? formatDuration(message.durationMs) : ''

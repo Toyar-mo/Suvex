@@ -1,6 +1,7 @@
 import { memo, useState } from 'react'
 
 import { useI18n } from '@/i18n'
+import { copyText } from '@/lib/clipboard'
 import { Check, ChevronDown, ChevronRight, Copy, Sparkles } from 'lucide-react'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
@@ -162,13 +163,11 @@ function CopyButton({ text }: { text: string }) {
     <button
       type="button"
       onClick={() => {
-        void navigator.clipboard
-          .writeText(text)
-          .then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1500)
-          })
-          .catch(() => {})
+        void copyText(text).then((ok) => {
+          if (!ok) return
+          setCopied(true)
+          window.setTimeout(() => setCopied(false), 1500)
+        })
       }}
       aria-label={t('chat.copyMessage', undefined, '复制消息')}
       title={t('chat.copyMessage', undefined, '复制消息')}

@@ -189,9 +189,10 @@ describe('AssistantTurn — 过程直接铺开（对齐 omp，v1.92）', () => {
 })
 
 describe('AssistantTurn — 只看回答', () => {
-  it('★ hideWork 时不渲染过程摘要，只留结论', () => {
+  it('★ hideWork 时不渲染任何过程，只留结论', () => {
     const { container } = render(<AssistantTurn items={fullTurn()} hideWork />)
-    expect(container.querySelector('[data-turn-work]')).toBeNull()
+    expect(container.querySelector('[data-message-row="tool"]')).toBeNull()
+    expect(container.querySelector('[data-narration-line]')).toBeNull()
     expect(screen.getByText('已清点完毕')).toBeTruthy()
   })
 

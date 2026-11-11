@@ -118,8 +118,6 @@ function AssistantTurnImpl({
   const { t } = useI18n()
   const answers = items.filter(isAnswer)
   const work = items.filter((message) => !isAnswer(message))
-  // 待审批的永远单独拿出来画：它还没执行，折进过程里会让用户看不见"在等我点"。
-  const approvals = work.filter((message) => message.approvalStatus === 'pending')
   const body = work.filter((message) => message.approvalStatus !== 'pending')
   const tools = items.filter((message) => message.role === 'tool')
   const failed = tools.filter((message) => message.toolFailed === true).length
@@ -129,26 +127,29 @@ function AssistantTurnImpl({
 
   return (
     <div className="flex flex-col gap-3" data-assistant-turn>
-      {!hideWork && body.length > 0 && (
-        /*
-          ★ v1.92：过程直接铺在转录里（对齐 omp），不再收进「工作过程 ·
-            N 步」的折叠行。折叠行会把每一次工具调用的结果都藏起来，
-            长任务里用户必须逐次点开确认；omp 的形态是每张工具卡自己
-            一行可展开，思考仍默认折叠。
-
-            `hideWork`（只看回答）保留：那是读者主动选择的降噪，与默认
-            把证据藏掉不是一回事。
-        */
-        <div
-          className="flex min-w-0 flex-col gap-1.5"
-          data-turn-work
-          data-turn-work-steps={body.length}
-          data-turn-work-tools={body.filter((message) => message.role === 'tool').length}
-        >
-          {body.map((message) =>
-            message.role === 'tool' ? (
-              <ToolCard key={message.id} message={message} />
-            ) : (
+      <div
+        className="flex min-w-0 flex-col gap-1.5"
+        data-turn-work
+        data-turn-work-steps={body.length}
+        data-turn-work-tools={tools.length}
+      >
+        {items.map((message) => {
+          if (message.approvalStatus === 'pending') {
+            return (
+              <ApprovalCard
+                key={message.id}
+                message={message}
+                onDecide={(approve) => onDecide?.(message.id, approve)}
+                disabled={deciding}
+              />
+            )
+          }
+          if (message.role === 'tool') {
+            /* 工具卡是证据：默认铺开；「只看回答」时才整体隐藏。 */
+            return hideWork ? null : <ToolCard key={message.id} message={message} />
+          }
+          if (message.role === 'assistant' && message.surface === 'process') {
+            return hideWork ? null : (
               <p
                 key={message.id}
                 className="whitespace-pre-wrap break-words px-0.5 text-sm leading-6 text-ink-muted"
@@ -156,33 +157,13 @@ function AssistantTurnImpl({
               >
                 {message.content}
               </p>
-            ),
-          )}
-        </div>
-      )}
-
-      {approvals.map((message) => (
-        <ApprovalCard
-          key={message.id}
-          message={message}
-          onDecide={(approve) => onDecide?.(message.id, approve)}
-          disabled={deciding}
-        />
-      ))}
-
-      {answers.map((message) => (
-        <MessageRow
-          key={message.id}
-          message={message}
-          sessionId={sessionId}
-          deciding={deciding}
-          onDecide={
-            message.approvalStatus === 'pending'
-              ? (approve) => onDecide?.(message.id, approve)
-              : undefined
+            )
           }
-        />
-      ))}
+          return (
+            <MessageRow key={message.id} message={message} sessionId={sessionId} />
+          )
+        })}
+      </div>
 
       {hideWork && items.length > 0 && !hasAnswer && !live && (
         <p className="text-2xs text-ink-faint" data-answers-only-placeholder>
