@@ -16,6 +16,7 @@ import ErrorState from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { isAdmin, useAuth } from '@/data/auth-store'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { loadSettings, useSettings } from '@/data/settings-store'
 import { loadUsers } from '@/data/users-store'
 import { Database, Lock, ShieldCheck } from 'lucide-react'
@@ -263,6 +264,7 @@ function TrustNote() {
  * 而且它天然处理"一屏里出现多个区块"这种情况。
  */
 function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
+  const { t } = useI18n()
   const { user } = useAuth()
   const [active, setActive] = useState<string>(SECTIONS[0].id)
 
@@ -361,7 +363,7 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
                     : 'text-ink-muted hover:bg-surface-raised/60 hover:text-ink lg:border-transparent lg:hover:bg-transparent lg:hover:text-ink',
                 )}
               >
-                {section.label}
+                {t(`settings.section.${section.id}`, undefined, section.label)}
               </a>
             </li>
           )

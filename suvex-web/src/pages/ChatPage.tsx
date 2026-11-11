@@ -2261,20 +2261,20 @@ export function ChatPage() {
                 autoComplete="off"
                 placeholder={
                   !active
-                    ? '先新建或打开一个对话'
+                    ? t('chat.ph.noConversation')
                     : active.archived
-                      ? '这个对话已归档 —— 在会话列表里「恢复」之后才能继续'
+                      ? t('chat.ph.archived')
                       : sendingHere
-                        ? '模型正在跑 —— 你现在打的字会在它下一轮开头被看到（Enter 插话）'
+                        ? t('chat.ph.sending')
                         : serverRunning
                           ? stopRequested
-                            ? '已请求停止 —— 等当前工具返回这一轮就结束；这期间打的字会插进它下一轮开头'
-                            : '这一轮还在跑（服务端）—— 打的字会插进它下一轮开头；想停下用「中断」'
+                            ? t('chat.ph.stopRequested')
+                            : t('chat.ph.serverRunning')
                           : sendingElsewhere
                             ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
                               //   并发）。这里只做一句轻提示，Enter 照常发送。
-                              '另一个对话正在后台跑（不影响这里）—— Enter 发送，可同时进行'
-                            : '说点什么…（Enter 发送 · @ 选工具）'
+                              t('chat.ph.elsewhere')
+                            : t('chat.ph.idle')
                 }
                 /*
                 ★★ v0.100：跑的时候**不再禁用**输入框。
