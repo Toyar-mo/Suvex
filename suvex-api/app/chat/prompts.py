@@ -369,6 +369,15 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         scope="scan",
     ),
     ChatToolSpec(
+        name="list_facts",
+        label="查黑板",
+        description=(
+            "读同一目标已知的事实与覆盖度（`record_fact` / `record_coverage` 写进去的，"
+            "跨会话累积）。**动手前先查一次** —— 已排除的方向再试一遍是纯浪费。"
+        ),
+        params="target（必填，与 create_scan 同一口径）、limit（可选，默认 30，上限 100）",
+    ),
+    ChatToolSpec(
         name="record_fact",
         label="记账：一条认知",
         description=(
@@ -444,6 +453,41 @@ TOOL_BY_NAME: dict[str, ChatToolSpec] = {t.name: t for t in CHAT_TOOLS}
 CONSEQUENTIAL_TOOL_NAMES: frozenset[str] = frozenset(
     t.name for t in CHAT_TOOLS if t.consequential
 )
+
+
+def approval_gated_names() -> frozenset[str]:
+    """开了「人工审批」时要挂起的工具名 = 内置的 consequential ∪ 运维追配的。
+
+    ## 为什么允许追配（v1.89）
+
+    内置判据是「改不改平台状态」（见 `ChatToolSpec.consequential` 的注释），
+    所以 `run_shell` / `browser` 被**故意**排除：沙箱里跑一条命令改不了
+    平台，真正的边界是容器隔离与出站守卫。
+
+    但"哪些动作要人点头"是**部署环境**的事：给不可信模型开对话、或者在
+    客户现场演示时，运维想连执行类工具一起拦。这不该靠改代码。
+    就一句话：`SUPEX_CHAT_APPROVAL_EXTRA_TOOLS=run_shell,browser`。
+
+    ⚠️ 只影响审批闸（`engine._needs_approval` 与本文件里那段清单），
+       **不改** `consequential` 本身 —— 那个字段还决定界面怎么标。
+       两个概念混在一起，就会出现"标了高危却不拦"或者"标了却从没拦过"。
+    """
+    from app.core.config import get_settings
+
+    base = set(CONSEQUENTIAL_TOOL_NAMES)
+    raw = get_settings().chat_approval_extra_tools
+    if not raw:
+        return frozenset(base)
+
+    names = {n.strip() for n in raw.replace(";", ",").split(",") if n.strip()}
+    unknown = names - CHAT_TOOL_NAMES
+    if unknown:
+        # ⚠️ 拼错一个名字不能让整条策略静默失效 —— 那是"配了却没用"的经典形态。
+        _log.warning(
+            "SUPEX_CHAT_APPROVAL_EXTRA_TOOLS 里有不存在的工具，已忽略：%s",
+            ", ".join(sorted(unknown)),
+        )
+    return frozenset(base | (names & CHAT_TOOL_NAMES))
 
 
 # ══════════════════════════════════════════════════════════
@@ -684,6 +728,14 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
             },
         },
         "required": ["target", "surface", "outcome"],
+    },
+    "list_facts": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "description": "目标，与 create_scan 同一口径"},
+            "limit": {"type": "integer", "description": "最多返回几条，默认 30，上限 100"},
+        },
+        "required": ["target"],
     },
     "record_fact": {
         "type": "object",
@@ -1114,8 +1166,9 @@ _PENTEST_PERSISTENCE = """
 
 必须遵守的循环：
 
-1. **每次失败先记账**：用 `record_coverage` / `record_fact` 写下入口、
-   候选范围、响应证据和反证。没有记录的“试过了”等于没试。
+1. **先读黑板，再动手**：`list_facts` 查同一目标已经记过什么；每次失败
+   用 `record_coverage` / `record_fact` 写下入口、候选范围、响应证据和反证。
+   没有记录的“试过了”等于没试。
 2. **认证/口令是一个策略族，不是整场任务**。最多 10 次尝试；到上限后
    系统会拒绝继续执行认证命令。先记账，再换方向，不要换字典硬堆。
 3. **至少覆盖 3 个不同策略族再考虑收口**：认证旁路/越权、注入（SQLi/
@@ -1176,7 +1229,7 @@ def render_approval_rule(require_approval: bool) -> str:
 - 用一句话告诉用户你在等什么被确认，然后停下。等他回话。
 
 其他工具（只读的那些）不受影响，照常直接执行。
-""".replace("{names}", "\n".join(f"- `{n}`" for n in sorted(CONSEQUENTIAL_TOOL_NAMES)))
+""".replace("{names}", "\n".join(f"- `{n}`" for n in sorted(approval_gated_names())))
 
 
 def render_tool_hint(hinted: list[str] | None) -> str:

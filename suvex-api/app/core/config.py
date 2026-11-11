@@ -301,6 +301,11 @@ class Settings(BaseSettings):
     # 额外放行的主机 / CIDR（逗号分隔）。只放"运维显式认可的固定设施"；
     # 业务目标走扫描授权，不要加到这里。
     chat_shell_allowed_hosts: str = ""
+    # 选择「人工审批」时要一起挂起的工具（逗号分隔，内置的 consequential
+    # 之外再追加）。`run_shell` / `browser` 被**故意**排除在内置判据外
+    # （理由见 `prompts.ChatToolSpec.consequential`），但在不可信模型或
+    # 演示环境里，运维可能想连执行类工具一起拦 —— 那是部署决策，不该改代码。
+    chat_approval_extra_tools: str = ""
 
     # ── 登录限流（契约 §3.1）──────────────────────────────
     login_limit_per_minute: int = 5

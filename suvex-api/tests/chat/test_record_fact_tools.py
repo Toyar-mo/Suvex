@@ -148,3 +148,36 @@ async def test_record_fact_requires_target(db_session: Session) -> None:
     assert out.startswith("失败")
     assert "target" in out
     assert _rows(db_session) == []
+
+
+async def test_list_facts_reads_back_only_its_own_target(db_session: Session) -> None:
+    """★ 写和读必须成对：记完要能在同一会话里读回来，且不串目标。"""
+    ctx = _ctx(db_session)
+    for target, summary in (
+        ("10.0.0.5:8080", "管理员会话可读 /settings"),
+        ("10.0.0.6:8080", "另一个目标上的同名事实"),
+    ):
+        await engine._execute_tool(
+            ctx,
+            "record_fact",
+            {
+                "target": target,
+                "fact_key": "credential/admin-session",
+                "summary": summary,
+            },
+        )
+
+    out, failed = await engine._execute_tool(ctx, "list_facts", {"target": "10.0.0.5:8080"})
+
+    assert not failed, out
+    assert "管理员会话可读 /settings" in out
+    assert "另一个目标上的同名事实" not in out
+    assert "record_fact" not in out or "credential/admin-session" in out
+
+
+async def test_list_facts_on_an_empty_target_says_so(db_session: Session) -> None:
+    ctx = _ctx(db_session)
+    out, failed = await engine._execute_tool(ctx, "list_facts", {"target": "10.9.9.9"})
+
+    assert not failed
+    assert "还是空的" in out

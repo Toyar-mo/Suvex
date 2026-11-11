@@ -65,8 +65,8 @@ from app.chat.models import ChatMessage, ChatSession
 from app.chat.prompts import (
     BRUTE_HARD_LIMIT,
     CHAT_TOOL_NAMES,
-    CONSEQUENTIAL_TOOL_NAMES,
     TOOL_BY_NAME,
+    approval_gated_names,
     build_system_prompt,
     build_tools_schema,
     may_call_tool,
@@ -2284,6 +2284,51 @@ async def _tool_record_fact(ctx: _ToolContext, args: dict[str, Any]) -> str:
     )
 
 
+async def _tool_list_facts(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`list_facts`：读同一目标的黑板（v1.89）。
+
+    ## 为什么写和读必须成对
+
+    v1.88 先补了 `record_coverage` / `record_fact`（提示词一直要求调用，
+    工具表里却没有）。但只写不读的黑板是个单向垃圾桶：模型每轮自己记
+    一遍，下一轮又不知道记过什么，还会把已排除的方向重试一遍 ——
+    而"防重复劳动"正是黑板存在的全部理由。
+
+    ## 输出口径
+
+    一行一条：`[confidence] fact_key：summary（谁写的）`，按 `updated_at`
+    倒序（最新的才是现状）。这里**不**照搬 `render_fact_index` 的
+    "ruled-out 置顶 + 40 条预算" —— 那是给 system prompt 的索引块
+    （每轮都要渲染，必须便宜且稳定）；工具结果是模型主动要看的一次性
+    输出，按时间倒序更符合"现在是什么情况"。
+    """
+    from app.facts import service as facts_service
+    from app.facts.models import ScanFact
+
+    target = facts_service.normalize_target(str(args.get("target") or ""))
+    if not target:
+        return _err("`target` 不能为空 —— 黑板按目标归档。")
+
+    limit = _int_arg(args, "limit", default=30, low=1, high=100)
+    rows = list(
+        ctx.db.execute(
+            select(ScanFact)
+            .where(ScanFact.target == target)
+            .order_by(ScanFact.updated_at.desc())
+            .limit(limit)
+        ).scalars()
+    )
+    if not rows:
+        return f"目标 {target} 的黑板还是空的：没有已记录的事实或覆盖度。"
+
+    lines = [
+        f"- [{row.confidence}] {row.fact_key}：{row.summary}"
+        + (f"（{row.recorded_by}）" if row.recorded_by else "")
+        for row in rows
+    ]
+    return f"目标 {target} 的黑板（最近 {len(rows)} 条）：\n" + "\n".join(lines)
+
+
 async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
@@ -2484,6 +2529,7 @@ SUBAGENT_SAFE_TOOLS: frozenset[str] = frozenset(
         "browser",
         "verify_http",
         "list_scans",
+        "list_facts",
         "load_skill",
         "load_recipe",
         "list_skills",
@@ -2634,6 +2680,7 @@ _TOOL_IMPLS: dict[str, Any] = {
     #   工具表里却没有，于是"记账"这条纪律在对话里从未执行过。
     "record_coverage": _tool_record_coverage,
     "record_fact": _tool_record_fact,
+    "list_facts": _tool_list_facts,
     # ★ v1.81：可重放验证。对授权目标发真实请求，但只读、不改平台状态；
     #   安全边界是 GuardedHTTPTransport（SSRF）+ scope guard，不是审批。
     "verify_http": _tool_verify_http,
@@ -3154,7 +3201,7 @@ def _needs_approval(name: str) -> bool:
       `consequential`。默认拦住是唯一安全的方向 —— 漏拦一次就是一次
       未经确认的外部动作。
     """
-    return name in CONSEQUENTIAL_TOOL_NAMES or mcp_tools.is_mcp_tool_name(name)
+    return name in approval_gated_names() or mcp_tools.is_mcp_tool_name(name)
 
 
 async def _execute_tool(ctx: _ToolContext, name: str, args: dict[str, Any]) -> tuple[str, bool]:
