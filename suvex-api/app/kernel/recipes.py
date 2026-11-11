@@ -1643,6 +1643,168 @@ __all__ = [
     'ToolRecipe',
     'build_argv',
     'parse_probe',
+    'parse_version_probe',
     'probe_command',
+    'version_probe_command',
     'render_argv',
+    'render_custom_index',
+    'render_custom_recipe',
 ]
+
+
+# ══════════════════════════════════════════════════════════
+# 版本探测（v1.91，工具管理页的「检测」按钮）
+# ══════════════════════════════════════════════════════════
+
+#: 版本探测输出的哨兵。与 `_PROBE_SENTINEL` 分开：两者可以同时出现在
+#: 同一段输出里（检测既问路径又问版本），混用会让解析把
+#: 「版本字符串里恰好含哨兵」误当成新记录。
+_VERSION_SENTINEL: Final[str] = '__SUPEX_VERSION__'
+
+#: 单个二进制跑 `--version` 的上限（秒）。
+#:
+#: 不能大：某些工具（`nc`、`socat`）根本不认 `--version`，会用「监听」
+#: 或「等待 stdin」的方式挂住；一批 50 条各挂 10 秒就是 8 分钟。
+#: 3 秒足够任何正常 `--version` 打印并退出。
+VERSION_PROBE_TIMEOUT_S: Final[int] = 3
+
+#: 版本字符串进库/界面前截断到多少字符。
+#:
+#: `sqlmap --version` 只有一行，但 `msfconsole --version` 会带一大段
+#: banner。数据库列是 200，这里留 180 给界面之外的空隙。
+VERSION_MAX_CHARS: Final[int] = 180
+
+
+def version_probe_command(names: list[str] | tuple[str, ...]) -> str:
+    """拼一条批量「路径 + 版本」探测脚本。
+
+    与 `probe_command()` 的区别：那条只答"在不在"，这条还要跑一次
+    `--version` 并取首行。**两者共用同一套名字白名单** —— 名字会被
+    原样拼进 shell，任何来自界面的字符串都必须先过 `[A-Za-z0-9._+-]`。
+
+    输出每行形如：
+
+        __SUPEX_VERSION__S<n>=<path>__SUPEX_VERSION__
+        __SUPEX_VERSION__V<n>=<first line>__SUPEX_VERSION__
+
+    `V` 行只在找到二进制时才写。版本为空时写空值，解析侧保留空串
+    （"问了、它没打印"与"没问"是两件事）。
+    """
+    if not names:
+        return 'true'
+    for name in names:
+        if not re.fullmatch(r'[A-Za-z0-9._+-]+', name):
+            raise ValueError(f'配方名里只能是字母数字与 ._+-（收到 {name!r}）')
+    parts: list[str] = []
+    for name in names:
+        parts.append(
+            f"p=$(command -v {name} 2>/dev/null); "
+            f"printf '{_VERSION_SENTINEL}S{name}=%s{_VERSION_SENTINEL}\\n' \"$p\"; "
+            f"if [ -n \"$p\" ]; then "
+            f"out=$(timeout {VERSION_PROBE_TIMEOUT_S} {name} --version 2>&1); rc=$?; "
+            f"if [ $rc -eq 0 ]; then v=$(printf '%s\\n' \"$out\" | head -n1 | tr -d '\\r'); "
+            f"else v=; fi; "
+            f"if [ -z \"$v\" ]; then "
+            f"out=$(timeout {VERSION_PROBE_TIMEOUT_S} {name} -V 2>&1); rc=$?; "
+            f"if [ $rc -eq 0 ]; then v=$(printf '%s\\n' \"$out\" | head -n1 | tr -d '\\r'); "
+            f"else v=; fi; "
+            f"fi; "
+            f"printf '{_VERSION_SENTINEL}V{name}=%s{_VERSION_SENTINEL}\\n' \"$v\"; "
+            f"fi"
+        )
+    return ' ; '.join(parts)
+
+
+def parse_version_probe(output: str) -> dict[str, dict[str, str]]:
+    """解析 `version_probe_command` 的输出。
+
+    返回 `{名字: {"path": ..., "version": ...}}`。**没找到的名字也出现**
+    （path 为空串、version 为空串）—— 与 `parse_probe` 同一条纪律：
+    调用方必须能区分"问过、没装"与"没问"。
+    """
+    found: dict[str, dict[str, str]] = {}
+    for line in output.splitlines():
+        start = line.find(_VERSION_SENTINEL)
+        if start < 0:
+            continue
+        end = line.find(_VERSION_SENTINEL, start + len(_VERSION_SENTINEL))
+        if end < 0:
+            continue
+        body = line[start + len(_VERSION_SENTINEL) : end]
+        if not body:
+            continue
+        kind = body[:1]
+        rest = body[1:]
+        name, _, value = rest.partition('=')
+        if not name or kind not in ('S', 'V'):
+            continue
+        entry = found.setdefault(name, {'path': '', 'version': ''})
+        if kind == 'S':
+            entry['path'] = value.strip()
+        else:
+            entry['version'] = value.strip()[:VERSION_MAX_CHARS]
+    return found
+
+
+# ══════════════════════════════════════════════════════════
+# 自定义配方渲染（v1.91）
+# ══════════════════════════════════════════════════════════
+
+def render_custom_index(items: list[dict]) -> str:
+    """把自定义配方渲染成与内置清单同形的段落（进系统提示词）。
+
+    `items` 的元素形状与 `KernelRecipeOut` 相同（camelCase），来自
+    `service.custom_recipes_for_prompt()`。**不做探测**：提示词在起容器
+    之前构建，这里没有"装没装"的真相；界面上的状态不冒充进提示词。
+    """
+    if not items:
+        return ''
+    lines = ['\n【自定义工具】']
+    for item in items:
+        name = str(item.get('name') or '')
+        summary = str(item.get('summary') or '')
+        limitation = str(item.get('defaultLimitation') or '')
+        line = f'- `{name}`：{summary}' if summary else f'- `{name}`'
+        if limitation:
+            clipped = limitation if len(limitation) <= INDEX_LIMITATION_CHARS else (
+                limitation[: INDEX_LIMITATION_CHARS - 1] + '…'
+            )
+            line += f'（默认参数下：{clipped}）'
+        lines.append(line)
+    return '\n'.join(lines)
+
+
+def render_custom_recipe(item: dict) -> str:
+    """渲染一条自定义配方的全文（给 `load_recipe` 用）。"""
+    name = str(item.get('name') or '')
+    out: list[str] = [
+        f'# `{name}`（{item.get("group") or "自定义"}）',
+        '',
+        str(item.get('summary') or ''),
+        '',
+        f'执行命令：`{item.get("command") or name}`',
+    ]
+    args = item.get('args') or []
+    if args:
+        out.append('固定参数：' + ' '.join(f'`{a}`' for a in args))
+    params = item.get('params') or []
+    if params:
+        out.extend(['', '## 参数', ''])
+        for param in params:
+            pname = str(param.get('name') or '')
+            fmt = str(param.get('format') or '')
+            flag = str(param.get('flag') or '')
+            desc = str(param.get('description') or '')
+            default = str(param.get('default') or '')
+            suffix = ''
+            if flag:
+                suffix += f' 开关 `{flag}`'
+            if default:
+                suffix += f' 默认 `{default}`'
+            if param.get('required'):
+                suffix += '（必填）'
+            out.append(f'- `{pname}`（{fmt}）{suffix}：{desc}')
+    limitation = str(item.get('defaultLimitation') or '')
+    if limitation:
+        out.extend(['', '## 默认参数下做不到什么', '', limitation])
+    return '\n'.join(out)

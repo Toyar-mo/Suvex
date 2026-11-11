@@ -631,6 +631,18 @@ class KernelRecipeParamOut(CamelModel):
     default: str = ""
 
 
+class KernelToolProbeOut(CamelModel):
+    """一条工具的检测结果（`POST /kernel/recipes/probe`）。"""
+
+    name: str = ""
+    found: bool = False
+    #: `command -v` 的路径；没装为空串。
+    path: str = ""
+    #: `--version` 首行；空串 = 找到了但没打印版本。
+    version: str = ""
+    probedAt: str | None = None
+
+
 class KernelRecipeOut(CamelModel):
     """一个命令行工具的调用配方。
 
@@ -667,6 +679,39 @@ class KernelRecipeOut(CamelModel):
     #: 界面要据此把"没命中"与"命令出错"分开显示 —— 否则用户会去修一个
     #: 本来正常工作的工具。
     allowedExitCodes: list[int] = []
+    #: ★ v1.91：这条配方从哪来。`builtin` = 随代码发布（只读）；
+    #: `custom` = 用户在工具管理页添加（可改可删）。
+    source: str = "builtin"
+    #: ★ v1.91：最近一次真实检测的结果（没测过为 `null`，界面显示「未检测」）。
+    probe: KernelToolProbeOut | None = None
+
+
+class KernelToolProbeIn(CamelModel):
+    """检测请求。`names` 省略 = 检测全部配方。"""
+
+    names: list[str] | None = None
+
+
+class KernelToolProbeResultOut(CamelModel):
+    """批量检测的返回。"""
+
+    results: list[KernelToolProbeOut] = []
+    #: 这次探测用的镜像 —— 让"结论对哪个镜像成立"成为可回答的问题。
+    image: str = ""
+    probedAt: str | None = None
+
+
+class KernelCustomRecipeIn(CamelModel):
+    """新增/编辑自定义配方的入参。"""
+
+    name: str
+    summary: str = ""
+    group: str = "自定义"
+    scenario: str = "both"
+    command: str = ""
+    args: list[str] = []
+    params: list[KernelRecipeParamOut] = []
+    defaultLimitation: str = ""
 
 
 class KernelRecipesOut(CamelModel):

@@ -3303,7 +3303,7 @@ def build_system_prompt_by_spec(spec: SolveSpec) -> str:
 
     参数化成 `SolveSpec` 之后，判据只有**一个**来源。
     """
-    return build_system_prompt(
+    base = build_system_prompt(
         spec.category,
         agentsec_enabled=spec.agentsec,
         ir_enabled=spec.ir,
@@ -3313,6 +3313,13 @@ def build_system_prompt_by_spec(spec: SolveSpec) -> str:
         # 扫描/渗透路径的 spec 不带这个字段 → None → 全量，行为不变。
         skill_categories=frozenset(spec.skill_categories) if spec.skill_categories else None,
     )
+    # ★ v1.91：自定义工具与内置配方**同一份清单语义**（名字 + 一句最贵的
+    #   局限），但不做探测 —— 提示词在起容器之前构建，那时没有真相。
+    if spec.custom_recipes:
+        from app.kernel import recipes as recipes_mod
+
+        base += recipes_mod.render_custom_index(list(spec.custom_recipes))
+    return base
 
 
 # ══════════════════════════════════════════════════════════
@@ -4038,6 +4045,11 @@ class SolveSpec:
     #: 默认为空元组：没配 MCP 时 `list_mcps` 会说"没有可用的连接"，
     #: 其余工具与提示词逐字节不变（与场景包开关同一条纪律：默认关）。
     mcp_servers: tuple[Any, ...] = ()
+    #: ★ v1.91：用户自定义的工具配方（`kernel_custom_recipes` 的无探针形状）。
+    #:
+    #: 进提示词的「自定义工具」段落，并让 `load_recipe` 能读到全文。
+    #: 空元组 = 没有自定义工具 —— 提示词与引入这个功能之前逐字节相同。
+    custom_recipes: tuple[Any, ...] = ()
     #: ★ v0.72：惰性建的 MCP 注册表（缓存工具清单、串起三条 MCP 工具）。
     #:
     #: 不用 `field(default_factory=...)` 主动建：多数解题没配 MCP，提前建一个
@@ -5212,7 +5224,11 @@ async def dispatch_tool(
             # 空串会让模型反复猜名字，每次猜都烧一个回合。
             from app.kernel import recipes as recipes_mod
 
-            return recipes_mod.render_recipe(str(args.get("name") or ""))
+            wanted = str(args.get("name") or "")
+            for item in spec.custom_recipes:
+                if str(item.get("name") or "") == wanted:
+                    return recipes_mod.render_custom_recipe(dict(item))
+            return recipes_mod.render_recipe(wanted)
         if name == "list_requests":
             return await _tool_list_requests(args, spec=spec)
         if name == "get_request":
@@ -8001,6 +8017,7 @@ def build_spec(
         # ★ v0.72：MCP server 配置（见 `SolveSpec.mcp_servers`）。空元组 =
         #   没配，三个 MCP 工具会如实说"没有可用的连接"。
         mcp_servers=mcp_server_cfgs,
+        custom_recipes=tuple(ctf2_service.custom_recipes_for_prompt(db)),
         # ★ v0.82：被关掉的内置工具（空元组 = 一件都没关，行为逐字节不变）。
         disabled_tools=disabled_tool_names,
         # ★ v0.42：手法块开关值（见 `SolveSpec.offensive` —— 它存的是

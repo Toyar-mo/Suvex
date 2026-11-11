@@ -55,10 +55,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import re
 import threading
-from collections.abc import Awaitable
+import uuid
+from collections.abc import Awaitable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, TypeVar
@@ -130,12 +132,14 @@ from app.kernel.client import (
     KernelScopeMissing,
 )
 from app.kernel.models import (
+    CustomToolRecipe,
     KernelAccount,
     KernelChallenge,
     KernelCompetition,
     KernelEnvironment,
     KernelPlatform,
     KernelSolveAttempt,
+    ToolProbeResult,
 )
 from app.settings.models import SINGLETON_ID, KernelConfig
 
@@ -4666,7 +4670,7 @@ def tools_catalog(db: Session) -> dict:
     }
 
 
-def list_recipes() -> dict:
+def _list_builtin_recipes() -> dict:
     """列出全部命令行工具配方（`GET /kernel/recipes`）。
 
     ## 与 `list_kernel_tools` 的分工
@@ -4850,3 +4854,352 @@ __all__ = [
     "update_ctf2_settings",
 ]
 
+
+
+# ══════════════════════════════════════════════════════════
+# 自定义工具配方 + 可用性检测（v1.91）
+# ══════════════════════════════════════════════════════════
+
+_CUSTOM_RECIPE_NAME_RE = re.compile(r'^[A-Za-z0-9._+-]{1,64}$')
+_CUSTOM_COMMAND_RE = re.compile(r'^[A-Za-z0-9._+-]{1,128}$')
+_CUSTOM_GROUPS = {'自定义', '侦察', '扫描', '漏洞利用', '逆向', '取证', '后渗透', '实用'}
+
+
+def _custom_recipe_out(row: CustomToolRecipe) -> dict:
+    """把数据库行转成与内置配方同形的 dict。"""
+
+    params = []
+    for raw in row.params or []:
+        if not isinstance(raw, dict):
+            continue
+        params.append(
+            {
+                'name': str(raw.get('name') or ''),
+                'format': str(raw.get('format') or 'flag'),
+                'description': str(raw.get('description') or ''),
+                'required': bool(raw.get('required')),
+                'flag': str(raw.get('flag') or ''),
+                'default': str(raw.get('default') or ''),
+            }
+        )
+    return {
+        'name': row.name,
+        'summary': row.summary,
+        'group': row.group_name,
+        'scenario': row.scenario,
+        'command': row.command or row.name,
+        'args': [str(a) for a in (row.args or [])],
+        'params': params,
+        'defaultLimitation': row.default_limitation,
+        'source': 'custom',
+        'calls': 0,
+        'lastCallAt': None,
+        'probe': _probe_out(row.name),
+    }
+
+
+def _probe_out(name: str) -> dict | None:
+    """读取缓存的检测结果（没有就返回 None，界面显示「未检测」）。"""
+    row = _probe_session().get(ToolProbeResult, name)
+    if row is None:
+        return None
+    return {
+        'found': bool(row.found),
+        'path': row.path,
+        'version': row.version,
+        'probedAt': row.probed_at.isoformat() if row.probed_at else None,
+    }
+
+
+# `_custom_recipe_out` 需要一个会话读探针缓存；参数显式传 session 会穿透
+# 整个序列化链（列表里每行都要读）。用 contextvar 太绕，而这里只有
+# `list_recipes(db)` 一个入口 —— 用模块级上下文变量把当前请求的 session
+# 借给它，作用域严格限制在 `_with_probe_session` 上下文内。
+_PROBE_SESSION: contextvars.ContextVar[Session | None] = contextvars.ContextVar(
+    'suvex_probe_session', default=None
+)
+
+
+def _probe_session() -> Session:
+    session = _PROBE_SESSION.get()
+    if session is None:
+        raise RuntimeError('探针缓存只能在 list_recipes 的请求作用域内读取')
+    return session
+
+
+@contextlib.contextmanager
+def _with_probe_session(db: Session) -> Iterator[None]:
+    token = _PROBE_SESSION.set(db)
+    try:
+        yield
+    finally:
+        _PROBE_SESSION.reset(token)
+
+
+def list_recipes(db: Session) -> dict:
+    """列出全部配方（内置 + 自定义），并附上最近一次检测结果。
+
+    ★ 与 v0.99 的差别只有两处：合并自定义配方、带上 `source` 与 `probe`。
+      内置配方的所有字段与顺序保持不变 —— 前端与测试都按那个形状解析。
+    """
+    with _with_probe_session(db):
+        base = _list_builtin_recipes()
+        for item in base['recipes']:
+            item['source'] = 'builtin'
+            item['probe'] = _probe_out(item['name'])
+
+        custom_rows = db.scalars(
+            select(CustomToolRecipe).order_by(CustomToolRecipe.created_at, CustomToolRecipe.name)
+        ).all()
+        for row in custom_rows:
+            base['recipes'].append(_custom_recipe_out(row))
+
+        base['total'] = len(base['recipes'])
+        if custom_rows:
+            groups = list(base['groups'])
+            for name in {row.group_name for row in custom_rows}:
+                if name not in groups:
+                    groups.append(name)
+            base['groups'] = groups
+        return base
+
+
+def _validate_custom_recipe(payload: dict, *, db: Session, current: str | None) -> dict:
+    """校验并规整自定义配方入参。返回可直接写库的字段。"""
+    from app.kernel.recipes import PARAM_FORMATS, RECIPE_BY_NAME, SCENARIO_VALUES
+
+    name = str(payload.get('name') or '').strip()
+    if not _CUSTOM_RECIPE_NAME_RE.fullmatch(name):
+        raise ApiError.validation('工具名只能包含字母、数字与 . _ + -，长度 1–64。')
+    if name in RECIPE_BY_NAME and name != current:
+        raise ApiError.conflict('RECIPE_NAME_TAKEN', f'内置工具 `{name}` 已存在，不能同名。')
+    duplicate = db.scalar(select(CustomToolRecipe).where(CustomToolRecipe.name == name))
+    if duplicate is not None and duplicate.name != current:
+        raise ApiError.conflict('RECIPE_NAME_TAKEN', f'自定义工具 `{name}` 已存在。')
+
+    command = str(payload.get('command') or name).strip()
+    if not _CUSTOM_COMMAND_RE.fullmatch(command):
+        raise ApiError.validation('执行命令只能是单个程序名（字母、数字与 . _ + -）。')
+
+    scenario = str(payload.get('scenario') or 'both')
+    if scenario not in SCENARIO_VALUES:
+        raise ApiError.validation(f'场景只能是 {sorted(SCENARIO_VALUES)} 之一。')
+
+    group = str(payload.get('group') or '自定义').strip() or '自定义'
+    if len(group) > 64:
+        raise ApiError.validation('分组名不能超过 64 个字符。')
+
+    summary = str(payload.get('summary') or '').strip()
+    if len(summary) > 500:
+        raise ApiError.validation('一句话说明不能超过 500 个字符。')
+
+    limitation = str(payload.get('defaultLimitation') or '').strip()
+    if len(limitation) > 2000:
+        raise ApiError.validation('能力边界说明不能超过 2000 个字符。')
+
+    args_raw = payload.get('args') or []
+    if not isinstance(args_raw, list) or len(args_raw) > 40:
+        raise ApiError.validation('args 必须是最多 40 项的字符串数组。')
+    args: list[str] = []
+    for item in args_raw:
+        text = str(item)
+        if len(text) > 200:
+            raise ApiError.validation('单个参数不能超过 200 个字符。')
+        args.append(text)
+
+    params_raw = payload.get('params') or []
+    if not isinstance(params_raw, list) or len(params_raw) > 60:
+        raise ApiError.validation('params 必须是最多 60 项的数组。')
+    params: list[dict] = []
+    for item in params_raw:
+        if not isinstance(item, dict):
+            raise ApiError.validation('params 里的每一项都必须是对象。')
+        pname = str(item.get('name') or '').strip()
+        if not pname or len(pname) > 64:
+            raise ApiError.validation('参数名不能为空且不超过 64 个字符。')
+        fmt = str(item.get('format') or 'flag')
+        if fmt not in PARAM_FORMATS:
+            raise ApiError.validation(f'参数 {pname} 的格式只能是 {sorted(PARAM_FORMATS)}。')
+        flag = str(item.get('flag') or '')
+        if fmt == 'flag' and not flag:
+            raise ApiError.validation(f'参数 {pname} 是 flag 形态，必须给开关名。')
+        params.append(
+            {
+                'name': pname,
+                'format': fmt,
+                'description': str(item.get('description') or ''),
+                'required': bool(item.get('required')),
+                'flag': flag,
+                'default': str(item.get('default') or ''),
+            }
+        )
+
+    return {
+        'name': name,
+        'summary': summary,
+        'group_name': group,
+        'scenario': scenario,
+        'command': command,
+        'args': args,
+        'params': params,
+        'default_limitation': limitation,
+    }
+
+
+def create_custom_recipe(db: Session, payload: dict) -> dict:
+    fields = _validate_custom_recipe(payload, db=db, current=None)
+    row = CustomToolRecipe(id=new_id('recipe'), **fields)
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+    with _with_probe_session(db):
+        return _custom_recipe_out(row)
+
+
+def update_custom_recipe(db: Session, name: str, payload: dict) -> dict:
+    row = db.scalar(select(CustomToolRecipe).where(CustomToolRecipe.name == name))
+    if row is None:
+        raise ApiError.not_found('自定义工具')
+    fields = _validate_custom_recipe(payload, db=db, current=name)
+    if fields['name'] != name:
+        raise ApiError.validation('自定义工具不支持改名；请删除后重新创建。')
+    for key, value in fields.items():
+        setattr(row, key, value)
+    row.updated_at = now_utc()
+    db.commit()
+    db.refresh(row)
+    with _with_probe_session(db):
+        return _custom_recipe_out(row)
+
+
+def delete_custom_recipe(db: Session, name: str) -> None:
+    row = db.scalar(select(CustomToolRecipe).where(CustomToolRecipe.name == name))
+    if row is None:
+        raise ApiError.not_found('自定义工具')
+    db.delete(row)
+    db.commit()
+
+
+def probe_recipe_tools(db: Session, names: list[str] | None = None) -> dict:
+    """真起一个沙箱容器，逐条探测二进制路径与版本，并把结果写回缓存。
+
+    ## 为什么必须起容器
+
+    「装没装」的真相在镜像里，不在代码里。静态标记（内置配方列表）只能
+    回答"我们希望它装过"；`command -v` + `--version` 才能回答"现在这个
+    镜像里它能不能被调起来"。
+
+    ## 为什么用与解题相同的镜像
+
+    换一个"检测专用镜像"会让探测结果与真实执行环境脱节 —— 那正是
+    CyberStrikeAI 被诟病的"已就绪只验了前置条件"。所以镜像取自
+    `sandbox_config.image`，与真正跑扫描/解题时一致。
+
+    ## 容器一定会被销毁
+
+    `finally` 里 `destroy()`；探测失败也不能留下容器（见
+    `SandboxContainer` 的生命周期注释）。
+    """
+    from app.kernel import recipes as recipes_mod
+    from app.kernel.runner import SandboxContainer, image_for_profile
+
+    available = set(recipes_mod.RECIPE_BY_NAME)
+    available.update(db.scalars(select(CustomToolRecipe.name)).all())
+
+    wanted = (
+        [str(n).strip() for n in names if str(n).strip()] if names else sorted(available)
+    )
+    unknown = sorted(set(wanted) - available)
+    if unknown:
+        raise ApiError.validation(f'这些工具不存在：{unknown}')
+    # 去重但保持顺序。
+    wanted = list(dict.fromkeys(wanted))
+    if not wanted:
+        raise ApiError.validation('至少要指定一个工具。')
+
+    # ★ 用**解题/扫描实际使用的镜像**，而不是 settings 里那个可编辑的
+    #   字符串：后者可能指向一个从未构建过的 tag（实测 `suvex/sandbox:1.4`，
+    #   而本机装的是 `suvex-sandbox:latest`），于是"检测"永远连不上，
+    #   而真正跑扫描时用的是 `image_for_profile`。
+    image = image_for_profile('suvex-sandbox')
+    container = SandboxContainer(
+        name=f"suvex-toolprobe-{uuid.uuid4().hex[:12]}",
+        image=image,
+        # 探测不访问目标；隔离网络避免"检测"顺手把版本请求发出去。
+        network_isolated=True,
+        cpus=1,
+        memory_mb=512,
+        volume_write=False,
+    )
+    script = recipes_mod.version_probe_command(wanted)
+    timeout = 10 + recipes_mod.VERSION_PROBE_TIMEOUT_S * 2 * len(wanted)
+    try:
+        container.start()
+        result = container.shell(script, timeout=min(timeout, 300))
+        parsed = recipes_mod.parse_version_probe(result.stdout)
+    except Exception as exc:  # noqa: BLE001 — 统一翻译成可操作的错误
+        raise ApiError(
+            503,
+            'TOOL_PROBE_UNAVAILABLE',
+            f'无法在沙箱镜像 `{image}` 里执行探测：{exc}',
+        ) from exc
+    finally:
+        with contextlib.suppress(Exception):
+            container.destroy()
+
+    probed_at = now_utc()
+    rows: list[ToolProbeResult] = []
+    for name in wanted:
+        entry = parsed.get(name, {'path': '', 'version': ''})
+        row = db.get(ToolProbeResult, name)
+        if row is None:
+            row = ToolProbeResult(name=name)
+            db.add(row)
+        row.found = bool(entry['path'])
+        row.path = entry['path'][:500]
+        row.version = entry['version'][:200]
+        row.probed_at = probed_at
+        rows.append(row)
+    db.commit()
+
+    return {
+        'results': [
+            {
+                'name': row.name,
+                'found': row.found,
+                'path': row.path,
+                'version': row.version,
+                'probedAt': probed_at.isoformat(),
+            }
+            for row in rows
+        ],
+        'image': image,
+        'probedAt': probed_at.isoformat(),
+    }
+
+
+def custom_recipes_for_prompt(db: Session) -> list[dict]:
+    """自定义配方的**无探针**形状，供系统提示词与 `load_recipe` 使用。
+
+    与 `_custom_recipe_out` 的差别：不读 `ToolProbeResult`（提示词在起
+    容器之前构建，那时没有探测结果；而把上次结果写进提示词会让模型
+    拿旧镜像的结论判断新任务）。
+    """
+    rows = db.scalars(
+        select(CustomToolRecipe).order_by(CustomToolRecipe.created_at, CustomToolRecipe.name)
+    ).all()
+    result: list[dict] = []
+    for row in rows:
+        result.append(
+            {
+                'name': row.name,
+                'summary': row.summary,
+                'group': row.group_name,
+                'scenario': row.scenario,
+                'command': row.command or row.name,
+                'args': [str(a) for a in (row.args or [])],
+                'params': list(row.params or []),
+                'defaultLimitation': row.default_limitation,
+            }
+        )
+    return result

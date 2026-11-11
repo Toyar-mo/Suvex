@@ -76,6 +76,7 @@ from app.kernel.schemas import (
     KernelBatchOut,
     KernelChallengeOut,
     KernelCompetitionOut,
+    KernelCustomRecipeIn,
     KernelEnvironmentOut,
     KernelPlatformActivateIn,
     KernelPlatformDraftIn,
@@ -86,6 +87,7 @@ from app.kernel.schemas import (
     KernelPullIn,
     KernelPullOut,
     KernelQueueOut,
+    KernelRecipeOut,
     KernelRecipesOut,
     KernelRemoteCompetitionOut,
     KernelSettingsIn,
@@ -99,6 +101,8 @@ from app.kernel.schemas import (
     KernelSyncOut,
     KernelTokenUsageOut,
     KernelToolOut,
+    KernelToolProbeIn,
+    KernelToolProbeResultOut,
     KernelToolsIn,
     KernelToolsOut,
     KernelUsageByAttemptOut,
@@ -783,7 +787,7 @@ def replace_kernel_tools(
     response_model=KernelRecipesOut,
     summary="命令行工具配方库（怎么调 + 默认参数下做不到什么）",
 )
-def list_kernel_recipes(_identity: ReadDep) -> KernelRecipesOut:
+def list_kernel_recipes(_identity: ReadDep, db: DbDep) -> KernelRecipesOut:
     """列全部命令行工具配方，每个带参数拼法与**默认参数下的能力边界**。
 
     ## 为什么这个端点没有开关、没有可写端点
@@ -802,7 +806,96 @@ def list_kernel_recipes(_identity: ReadDep) -> KernelRecipesOut:
     写下的是"目标没有这个漏洞"。这类失真**不报错，只让结论错**，
     所以它必须在界面上可见，而不是只躺在源码注释里。
     """
-    return KernelRecipesOut.model_validate(service.list_recipes())
+    return KernelRecipesOut.model_validate(service.list_recipes(db))
+
+
+@router.post(
+    "/recipes/probe",
+    response_model=KernelToolProbeResultOut,
+    summary="真跑一次版本探测（起沙箱容器，逐条 command -v + --version）",
+)
+def probe_kernel_recipes(
+    payload: KernelToolProbeIn, request: Request, identity: AdminDep, db: DbDep
+) -> KernelToolProbeResultOut:
+    """检测工具在**当前沙箱镜像**里是否可用，并缓存结果。
+
+    ## 为什么是 admin
+
+    它会起一个容器、在镜像里执行命令。虽然命令来自白名单拼装（不含用户
+    输入），但"能起容器"本身就是部署级权限 —— 与 MCP 试连同级。
+
+    ## 为什么 `names` 省略时检测全部
+
+    工具页的「工具可用性检测」按钮就是这个语义。逐条点 50 次不现实，
+    而只测"没装过的那几条"会让新旧结果的时间点混在一起，无法回答
+    "这个镜像我什么时候验过"。
+    """
+    result = service.probe_recipe_tools(db, list(payload.names or []) or None)
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_TOOL_PROBE,
+        summary=f"检测 {len(result['results'])} 个工具（镜像 {result['image']}）",
+        detail={"names": [r["name"] for r in result["results"]]},
+    )
+    return KernelToolProbeResultOut.model_validate(result)
+
+
+@router.post(
+    "/recipes",
+    response_model=KernelRecipeOut,
+    status_code=status.HTTP_201_CREATED,
+    summary="新增自定义工具配方",
+)
+def create_kernel_recipe(
+    payload: KernelCustomRecipeIn, request: Request, identity: AdminDep, db: DbDep
+) -> KernelRecipeOut:
+    data = service.create_custom_recipe(db, payload.model_dump())
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_RECIPE_CREATE,
+        summary=f"新增自定义工具 {data['name']}",
+        detail={"name": data["name"], "group": data["group"]},
+    )
+    return KernelRecipeOut.model_validate(data)
+
+
+@router.put(
+    "/recipes/{name}",
+    response_model=KernelRecipeOut,
+    summary="更新自定义工具配方",
+)
+def update_kernel_recipe(
+    name: str, payload: KernelCustomRecipeIn, request: Request, identity: AdminDep, db: DbDep
+) -> KernelRecipeOut:
+    data = service.update_custom_recipe(db, name, payload.model_dump())
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_RECIPE_UPDATE,
+        summary=f"更新自定义工具 {name}",
+        detail={"name": name},
+    )
+    return KernelRecipeOut.model_validate(data)
+
+
+@router.delete(
+    "/recipes/{name}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="删除自定义工具配方",
+)
+def delete_kernel_recipe(
+    name: str, request: Request, identity: AdminDep, db: DbDep
+) -> None:
+    service.delete_custom_recipe(db, name)
+    audit.record(
+        db,
+        request=audit.from_http(request, identity),
+        action=AuditAction.KERNEL_RECIPE_DELETE,
+        summary=f"删除自定义工具 {name}",
+        detail={"name": name},
+    )
 
 
 # ══════════════════════════════════════════════════════════

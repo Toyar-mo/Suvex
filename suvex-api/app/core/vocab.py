@@ -650,6 +650,10 @@ class AuditAction(StrEnum):
     #     · CREATE → "这个技能是谁加的、什么时候开始生效的"
     #     · UPDATE → "行为变过吗？变了哪一版是最初的"
     #     · DELETE → "为什么模型不再用那个方法了"
+    KERNEL_RECIPE_CREATE = "kernel.recipe_create"
+    KERNEL_RECIPE_UPDATE = "kernel.recipe_update"
+    KERNEL_RECIPE_DELETE = "kernel.recipe_delete"
+    KERNEL_TOOL_PROBE = "kernel.tool_probe"
     KERNEL_SKILL_CREATE = "kernel.skill_create"
     KERNEL_SKILL_UPDATE = "kernel.skill_update"
     KERNEL_SKILL_DELETE = "kernel.skill_delete"
@@ -729,6 +733,10 @@ AUDIT_ACTION_LABELS: Final[dict[str, str]] = {
     #    而 detail 不会显示在列表上。
     AuditAction.KERNEL_MCP_SERVERS_UPDATE: "更新 MCP 连接",
     AuditAction.KERNEL_TOOLS_UPDATE: "更新工具启用开关",
+    AuditAction.KERNEL_RECIPE_CREATE: "新增自定义工具配方",
+    AuditAction.KERNEL_RECIPE_UPDATE: "更新自定义工具配方",
+    AuditAction.KERNEL_RECIPE_DELETE: "删除自定义工具配方",
+    AuditAction.KERNEL_TOOL_PROBE: "检测工具可用性",
     # ── 技能库（v0.88）────────────────────────────────────
     # ⚠️ 措辞刻意点出"技能正文会进模型上下文"，因为审计列表的读者
     #    需要一眼看出"这条记录代表模型读到的文本变了"，而不是改了个配置。

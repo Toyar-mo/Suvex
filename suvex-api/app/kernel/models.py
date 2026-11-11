@@ -1360,4 +1360,78 @@ __all__ = [
     "KernelSolveUsage",
     "KernelSubmission",
     "KernelWriteup",
+    "CustomToolRecipe",
+    "ToolProbeResult",
 ]
+
+
+class CustomToolRecipe(Base):
+    """用户在工具管理页添加的**自定义命令行工具**（v1.91）。
+
+    ## 与内置配方的区别只有「谁维护」
+
+    内置配方随代码发布（`kernel/recipes.py`），升级时被替换；自定义配方
+    存在这张表里，可改可删。两者在提示词里的呈现、`load_recipe` 的读取、
+    探针的检测方式完全相同 —— 否则模型会拿到两套语义，而"为什么这个工具
+    能更新、那个不能"需要用户理解实现细节。
+
+    ## 为什么名字也存，而不是用 id 当主键
+
+    模型是按**名字**调 `load_recipe` 与写 `run_shell` 的。名字必须唯一且
+    稳定；用 id 会让"重命名"变成一次静默的破坏（历史对话里的名字再也
+    解析不到）。所以 `name` 唯一，重命名走"删旧建新"由界面明确确认。
+
+    ## `params` 与 `args` 用 JSONB
+
+    它们是配方的一部分、只被整体读写、没有任何查询按元素过滤。拆成子表
+    会让每次读取多两次 join，而收益是零 —— 与内置配方用 dataclass 一样，
+    这里要的是"一条配方是一个整体"。
+    """
+
+    __tablename__ = "kernel_custom_recipes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    #: 配方名 = 二进制名（`sh` 这类例外由 `command` 表达）。只允许 [A-Za-z0-9._+-]。
+    name: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    summary: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    group_name: Mapped[str] = mapped_column(String(64), nullable=False, default="自定义")
+    scenario: Mapped[str] = mapped_column(String(16), nullable=False, default="both")
+    command: Mapped[str] = mapped_column(String(128), nullable=False, default="")
+    args: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
+    params: Mapped[list | None] = mapped_column(JsonColumn, nullable=True)
+    default_limitation: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"<CustomToolRecipe {self.name!r}>"
+
+
+class ToolProbeResult(Base):
+    """最近一次工具可用性检测的结果（v1.91）。
+
+    ## 为什么落库而不是只放在内存
+
+    工具有没有装、版本是多少，在两次部署之间不会变（镜像不变）。把它
+    存下来之后，打开工具管理页就能看到上次结论，不必每次都起容器 ——
+    而"每次打开都探测"意味着每次刷新都多花几秒并占用一个容器名额。
+
+    ## 为什么没有"过期"判断
+
+    过期策略需要一个可信的"镜像变了"信号，而当前没有：镜像可以由用户
+    在设置里改、也可以被 `docker build` 覆盖。与其猜，不如让界面显示
+    `probedAt`，由用户自己决定要不要重测。检测按钮永远可用。
+    """
+
+    __tablename__ = "kernel_tool_probes"
+
+    #: 配方名（内置与自定义共用命名空间）。
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    found: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    #: `command -v` 解析到的路径；没装时为空串。
+    path: Mapped[str] = mapped_column(String(500), nullable=False, default="")
+    #: `--version` 首行（已截断）；拿不到时为空串。
+    version: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    probed_at: Mapped[datetime] = mapped_column(UtcDateTime, nullable=False, default=now_utc)

@@ -263,6 +263,28 @@ export interface KernelRecipeParam {
 /** 配方的主场景 —— 只用于界面筛选与覆盖统计，不影响执行。 */
 export type RecipeScenario = 'both' | 'ctf' | 'pentest'
 
+/** 一条工具的检测结果（v1.91）。`found=false` 表示镜像里没有这个二进制。 */
+export interface RecipeProbe {
+  found: boolean
+  /** `command -v` 解析到的路径（没装为空串）。 */
+  path: string
+  /** `--version` 首行（拿不到为空串）。 */
+  version: string
+  probedAt: string | null
+}
+
+/** 新增/编辑自定义配方的载荷。 */
+export interface CustomRecipeDraft {
+  name: string
+  summary: string
+  group: string
+  scenario: RecipeScenario
+  command: string
+  args: string[]
+  params: KernelRecipeParam[]
+  defaultLimitation: string
+}
+
 export interface KernelRecipe {
   name: string
   summary: string
@@ -283,6 +305,10 @@ export interface KernelRecipe {
    * 用户会去修一个本来正常工作的工具。
    */
   allowedExitCodes: number[]
+  /** `builtin` = 随代码发布（只读）；`custom` = 页面上添加（可改可删）。 */
+  source?: 'builtin' | 'custom'
+  /** 最近一次真实检测的结果；没测过为 null。 */
+  probe?: RecipeProbe | null
 }
 
 /** `GET /kernel/recipes` 的响应。 */
@@ -817,4 +843,55 @@ export function toolHealthCounts(tools: KernelTool[]): {
   }
   for (const tool of tools) counts[toolHealth(tool)] += 1
   return counts
+}
+
+// ─────────────────────────────────────────────
+// 自定义工具 + 检测（v1.91）
+// ─────────────────────────────────────────────
+
+/** 检测一批工具（省略 `names` = 检测全部）。结果直接写回本地快照。 */
+export async function probeRecipes(names?: string[]): Promise<RecipeProbe[]> {
+  const result = await api.post<{ results: (RecipeProbe & { name: string })[] }>(
+    '/kernel/recipes/probe',
+    names && names.length > 0 ? { names } : {},
+    // 全量检测要起容器、逐条跑 --version；最坏情况接近 3 分钟。
+    { timeoutMs: 300_000 },
+  )
+  const byName = new Map(result.results.map((item) => [item.name, item]))
+  recipes = {
+    ...recipes,
+    recipes: recipes.recipes.map((recipe) => {
+      const probe = byName.get(recipe.name)
+      return probe ? { ...recipe, probe } : recipe
+    }),
+  }
+  commit()
+  return result.results
+}
+
+async function refreshRecipes(): Promise<KernelRecipesSnapshot> {
+  const next = await api.get<KernelRecipesSnapshot>('/kernel/recipes')
+  recipes = next
+  commit()
+  return next
+}
+
+export async function createCustomRecipe(draft: CustomRecipeDraft): Promise<KernelRecipe> {
+  const created = await api.post<KernelRecipe>('/kernel/recipes', draft)
+  await refreshRecipes()
+  return created
+}
+
+export async function updateCustomRecipe(
+  name: string,
+  draft: CustomRecipeDraft,
+): Promise<KernelRecipe> {
+  const updated = await api.put<KernelRecipe>(`/kernel/recipes/${encodeURIComponent(name)}`, draft)
+  await refreshRecipes()
+  return updated
+}
+
+export async function deleteCustomRecipe(name: string): Promise<void> {
+  await api.del(`/kernel/recipes/${encodeURIComponent(name)}`)
+  await refreshRecipes()
 }

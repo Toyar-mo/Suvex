@@ -1,8 +1,31 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, Check, ChevronDown, ChevronRight, Search } from 'lucide-react'
+import {
+  AlertTriangle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Trash2,
+} from 'lucide-react'
 
 import { cn } from '@/lib/cn'
-import { filterRecipes, recipeCoverage, type KernelRecipe, type ScenarioFilter } from '@/data/tools'
+import {
+  createCustomRecipe,
+  deleteCustomRecipe,
+  filterRecipes,
+  probeRecipes,
+  recipeCoverage,
+  updateCustomRecipe,
+  type CustomRecipeDraft,
+  type KernelRecipe,
+  type ScenarioFilter,
+} from '@/data/tools'
+import { CustomRecipeDialog } from './CustomRecipeDialog'
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
+import { Button } from '@/components/ui/Button'
 import { useI18n } from '@/i18n'
 
 /**
@@ -39,6 +62,14 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
   const [onlyLimited, setOnlyLimited] = useState(false)
   const [scenario, setScenario] = useState<ScenarioFilter>('all')
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [probeAll, setProbeAll] = useState<'idle' | 'busy'>('idle')
+  const [probingName, setProbingName] = useState<string | null>(null)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [editing, setEditing] = useState<KernelRecipe | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<KernelRecipe | null>(null)
+  const [deleting, setDeleting] = useState(false)
 
   // 筛选逻辑在 `data/tools.ts`（纯函数、可单测），与「场景是包含关系」
   // 那条语义放在一起 —— 放到组件里会让它只在这个组件里成立。
@@ -63,6 +94,39 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
             <b>{t('tools.recipes.body.bold3')}</b>
             {t('tools.recipes.body.d')}
           </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Button
+            variant="ghost"
+            onClick={async () => {
+              setProbeAll('busy')
+              try {
+                await probeRecipes()
+              } finally {
+                setProbeAll('idle')
+              }
+            }}
+            disabled={probeAll === 'busy'}
+          >
+            <RefreshCw
+              className={cn('size-3.5', probeAll === 'busy' && 'animate-spin')}
+              strokeWidth={2}
+            />
+            {probeAll === 'busy'
+              ? t('tools.recipes.probingAll', undefined, '检测中…')
+              : t('tools.recipes.probeAll', undefined, '工具可用性检测')}
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setEditing(null)
+              setFormError(null)
+              setEditorOpen(true)
+            }}
+          >
+            <Plus className="size-3.5" strokeWidth={2} />
+            {t('tools.recipes.add', undefined, '新增工具')}
+          </Button>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
           <span>{t('tools.recipes.count', { n: recipes.length })}</span>
@@ -155,7 +219,22 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
               key={recipe.name}
               recipe={recipe}
               open={expanded === recipe.name}
+              probing={probingName === recipe.name}
               onToggle={() => setExpanded(expanded === recipe.name ? null : recipe.name)}
+              onProbe={async () => {
+                setProbingName(recipe.name)
+                try {
+                  await probeRecipes([recipe.name])
+                } finally {
+                  setProbingName(null)
+                }
+              }}
+              onEdit={() => {
+                setEditing(recipe)
+                setFormError(null)
+                setEditorOpen(true)
+              }}
+              onDelete={() => setPendingDelete(recipe)}
             />
           ))}
         </ul>
@@ -170,6 +249,50 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
         <b>{t('tools.recipes.footer2.bold')}</b>
         {t('tools.recipes.footer2.after')}
       </footer>
+
+      <CustomRecipeDialog
+        open={editorOpen}
+        initial={editing}
+        busy={saving}
+        error={formError}
+        onClose={() => setEditorOpen(false)}
+        onSubmit={async (draft: CustomRecipeDraft) => {
+          setSaving(true)
+          setFormError(null)
+          try {
+            if (editing) await updateCustomRecipe(editing.name, draft)
+            else await createCustomRecipe(draft)
+            setEditorOpen(false)
+          } catch (error) {
+            setFormError(error instanceof Error ? error.message : String(error))
+          } finally {
+            setSaving(false)
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title={t('tools.recipes.deleteTitle', undefined, '删除自定义工具')}
+        description={t(
+          'tools.recipes.deleteBody',
+          { name: pendingDelete?.name ?? '' },
+          `确定删除 \`${pendingDelete?.name ?? ''}\`？模型将不再看到这条配方。`,
+        )}
+        confirmLabel={t('common.delete', undefined, '删除')}
+        busy={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={async () => {
+          if (!pendingDelete) return
+          setDeleting(true)
+          try {
+            await deleteCustomRecipe(pendingDelete.name)
+            setPendingDelete(null)
+          } finally {
+            setDeleting(false)
+          }
+        }}
+      />
     </section>
   )
 }
@@ -177,61 +300,152 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
 function RecipeRow({
   recipe,
   open,
+  probing,
   onToggle,
+  onProbe,
+  onEdit,
+  onDelete,
 }: {
   recipe: KernelRecipe
   open: boolean
+  probing: boolean
   onToggle: () => void
+  onProbe: () => void
+  onEdit: () => void
+  onDelete: () => void
 }) {
   const { t } = useI18n()
   const hasDetail =
     recipe.params.length > 0 || recipe.args.length > 0 || Boolean(recipe.defaultLimitation)
+  const probe = recipe.probe
+  const custom = recipe.source === 'custom'
 
   return (
     <li className="border-b border-line/60 last:border-b-0">
-      <button
-        type="button"
-        onClick={onToggle}
-        aria-expanded={open}
-        className="flex w-full items-start gap-tight px-4 py-2.5 text-left transition-ui duration-fast hover:bg-surface-raised/30"
-      >
-        <span className="mt-0.5 shrink-0 text-ink-faint">
-          {hasDetail ? (
-            open ? (
-              <ChevronDown className="size-3.5" strokeWidth={2} />
+      <div className="flex items-start gap-tight px-4 py-2.5 transition-ui duration-fast hover:bg-surface-raised/30">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          className="flex min-w-0 flex-1 items-start gap-tight text-left"
+        >
+          <span className="mt-0.5 shrink-0 text-ink-faint">
+            {hasDetail ? (
+              open ? (
+                <ChevronDown className="size-3.5" strokeWidth={2} />
+              ) : (
+                <ChevronRight className="size-3.5" strokeWidth={2} />
+              )
             ) : (
-              <ChevronRight className="size-3.5" strokeWidth={2} />
-            )
-          ) : (
-            // 没有可展开内容时给一个占位，让左边对齐 —— 否则有细节和没细节的
-            // 两行会错开 14px，看起来像缩进层级不同。
-            <span className="block size-3.5" />
-          )}
-        </span>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-tight">
-            {/*
-              ★ 等宽字体：`name` 同时是配方名和二进制名，模型就是拿这个名字
-                去 `run_shell` 里敲的。用正文字体显示会让人以为它可以被翻译。
-            */}
-            <code className="font-mono text-sm text-ink">{recipe.name}</code>
-            {recipe.command !== recipe.name && (
-              <span className="text-2xs text-ink-faint">→ {recipe.command}</span>
+              <span className="block size-3.5" />
             )}
-            {recipe.defaultLimitation && (
+          </span>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-tight">
+              <code className="font-mono text-sm text-ink">{recipe.name}</code>
+              {recipe.command !== recipe.name && (
+                <span className="text-2xs text-ink-faint">→ {recipe.command}</span>
+              )}
+              {recipe.defaultLimitation && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-sm border border-signal-risk/40 px-1.5 py-px text-2xs text-signal-risk"
+                  title={t('tools.recipes.limitationTitle')}
+                >
+                  <AlertTriangle className="size-3" strokeWidth={2} />
+                  {t('tools.recipes.limitationBadge')}
+                </span>
+              )}
+            </div>
+            <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{recipe.summary}</p>
+          </div>
+        </button>
+
+        <div className="flex shrink-0 flex-col items-end gap-1 pl-2">
+          <div className="flex items-center gap-2 text-2xs">
+            <span
+              className={cn(
+                'rounded-sm border px-1.5 py-px',
+                custom
+                  ? 'border-line-accent/50 text-ink-muted'
+                  : 'border-line text-ink-faint',
+              )}
+            >
+              {custom
+                ? t('tools.recipes.source.custom', undefined, '自定义')
+                : t('tools.recipes.source.builtin', undefined, '内置')}
+            </span>
+            <span
+              className={cn(
+                'inline-flex items-center gap-1',
+                probe == null
+                  ? 'text-ink-faint'
+                  : probe.found
+                    ? 'text-signal-ok'
+                    : 'text-signal-risk',
+              )}
+            >
               <span
-                className="inline-flex items-center gap-1 rounded-sm border border-signal-risk/40 px-1.5 py-px text-2xs text-signal-risk"
-                title={t('tools.recipes.limitationTitle')}
-              >
-                <AlertTriangle className="size-3" strokeWidth={2} />
-                {t('tools.recipes.limitationBadge')}
-              </span>
+                className={cn(
+                  'size-1.5 rounded-full',
+                  probe == null
+                    ? 'bg-ink-faint'
+                    : probe.found
+                      ? 'bg-signal-ok'
+                      : 'bg-signal-risk',
+                )}
+              />
+              {probe == null
+                ? t('tools.recipes.status.unknown', undefined, '未检测')
+                : probe.found
+                  ? t('tools.recipes.status.ready', undefined, '已就绪')
+                  : t('tools.recipes.status.missing', undefined, '未就绪')}
+            </span>
+          </div>
+
+          {probe?.version && (
+            <code
+              className="max-w-[16rem] truncate text-2xs text-ink-faint"
+              title={probe.version}
+            >
+              {probe.version}
+            </code>
+          )}
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={onProbe}
+              disabled={probing}
+              className="rounded-sm border border-line px-1.5 py-px text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong disabled:opacity-50"
+            >
+              {probing
+                ? t('tools.recipes.probing', undefined, '检测中…')
+                : t('tools.recipes.probe', undefined, '检测')}
+            </button>
+            {custom && (
+              <>
+                <button
+                  type="button"
+                  onClick={onEdit}
+                  aria-label={t('tools.recipes.edit', undefined, '编辑')}
+                  className="rounded-sm border border-line p-1 text-ink-muted transition-ui duration-fast hover:border-line-strong"
+                >
+                  <Pencil className="size-3" strokeWidth={2} />
+                </button>
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  aria-label={t('tools.recipes.delete', undefined, '删除')}
+                  className="rounded-sm border border-line p-1 text-signal-risk/80 transition-ui duration-fast hover:border-signal-risk/50"
+                >
+                  <Trash2 className="size-3" strokeWidth={2} />
+                </button>
+              </>
             )}
           </div>
-          <p className="mt-0.5 text-xs leading-relaxed text-ink-muted">{recipe.summary}</p>
         </div>
-      </button>
+      </div>
 
       {open && hasDetail && (
         <div className="border-t border-line/40 bg-surface-raised/20 px-4 py-2.5 pl-[3.25rem]">
@@ -248,7 +462,9 @@ function RecipeRow({
                 <li key={param.name} className="flex flex-wrap items-baseline gap-tight text-xs">
                   <code className="font-mono text-ink">{param.name}</code>
                   {param.flag && <code className="font-mono text-ink-faint">{param.flag}</code>}
-                  {param.required && <span className="text-2xs text-signal-risk">{t('tools.recipes.required')}</span>}
+                  {param.required && (
+                    <span className="text-2xs text-signal-risk">{t('tools.recipes.required')}</span>
+                  )}
                   {param.default && (
                     <span className="text-2xs text-ink-faint">
                       {t('tools.recipes.defaultValue', { value: param.default })}
@@ -270,10 +486,6 @@ function RecipeRow({
                 <p className="text-xs font-medium text-signal-risk">
                   {t('tools.recipes.limitationHeading')}
                 </p>
-                {/*
-                  ★ 保留换行：局限说明里有的是分点写的（`·` 开头）。
-                    用普通 <p> 会把它们挤成一段，看不出是几条独立的边界。
-                */}
                 <p className="mt-0.5 whitespace-pre-line text-xs leading-relaxed text-ink-muted">
                   {recipe.defaultLimitation}
                 </p>

@@ -261,3 +261,49 @@ describe('RecipesPanel 不造假的权力', () => {
     expect(screen.getByText(/没有开关/)).toBeTruthy()
   })
 })
+
+describe('自定义工具与检测（v1.91）', () => {
+  it('未检测的内置工具：显示「未检测」，且没有编辑/删除（只读）', () => {
+    render(<RecipesPanel recipes={[recipe()]} />)
+
+    expect(screen.getByText('未检测')).toBeTruthy()
+    expect(screen.queryByLabelText('编辑')).toBeNull()
+    expect(screen.queryByLabelText('删除')).toBeNull()
+    // 检测按钮每条都有
+    expect(screen.getByRole('button', { name: '检测' })).toBeTruthy()
+  })
+
+  it('检测结果：已就绪同时显示版本，未就绪显示「未就绪」', () => {
+    render(
+      <RecipesPanel
+        recipes={[
+          recipe({ probe: { found: true, path: '/usr/bin/nmap', version: '7.94', probedAt: null } }),
+          recipe({
+            name: 'ghost',
+            probe: { found: false, path: '', version: '', probedAt: null },
+          }),
+        ]}
+      />,
+    )
+
+    expect(screen.getByText('已就绪')).toBeTruthy()
+    expect(screen.getByText('7.94')).toBeTruthy()
+    expect(screen.getByText('未就绪')).toBeTruthy()
+  })
+
+  it('自定义工具带编辑/删除入口，内置工具不带', () => {
+    render(
+      <RecipesPanel
+        recipes={[
+          recipe({ name: 'mytool', source: 'custom', command: 'mytool' }),
+          recipe(),
+        ]}
+      />,
+    )
+
+    expect(screen.getByText('自定义')).toBeTruthy()
+    expect(screen.getByText('内置')).toBeTruthy()
+    expect(screen.getByLabelText('编辑')).toBeTruthy()
+    expect(screen.getByLabelText('删除')).toBeTruthy()
+  })
+})
