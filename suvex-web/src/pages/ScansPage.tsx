@@ -1042,6 +1042,7 @@ export function ScansPage() {
               scans={filtered}
               selectedIds={selectedIds}
               focusedId={focusedId}
+              previewedId={previewId}
               onSelect={wide ? (scan) => setPreviewId(scan.id) : undefined}
               onToggleRow={toggleRow}
               onToggleAll={toggleAll}

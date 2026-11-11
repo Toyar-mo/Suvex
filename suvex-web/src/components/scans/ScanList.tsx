@@ -211,6 +211,8 @@ export interface ScanListProps {
    * 而那时点一下"删除"会删掉一整片。
    */
   focusedId?: string | null
+  /** 正在右栏预览的那一行（与批量勾选无关）。 */
+  previewedId?: string | null
   onToggleRow: (id: string, next: boolean) => void
   /**
    * 点标题/目标时**不跳走**，而是把这条交给调用方（任务页右栏预览）。
@@ -247,6 +249,7 @@ export function ScanList({
   scans,
   selectedIds,
   focusedId = null,
+  previewedId = null,
   onSelect,
   onToggleRow,
   onToggleAll,
@@ -317,6 +320,7 @@ export function ScanList({
           scan={scan}
           selected={selectedIds.has(scan.id)}
           focused={focusedId === scan.id}
+          previewed={previewedId === scan.id}
           onToggleRow={onToggleRow}
           onAbort={onAbort}
           onRerun={onRerun}
@@ -333,6 +337,7 @@ const ScanRow = memo(function ScanRow({
   scan,
   selected,
   focused,
+  previewed,
   onToggleRow,
   onAbort,
   onRerun,
@@ -343,6 +348,7 @@ const ScanRow = memo(function ScanRow({
   scan: Scan
   selected: boolean
   focused: boolean
+  previewed: boolean
   onToggleRow: (id: string, next: boolean) => void
   onAbort: (scan: Scan) => void
   onRerun: (scan: Scan) => void
@@ -488,13 +494,33 @@ const ScanRow = memo(function ScanRow({
         focused && 'shadow-[inset_2px_0_0_0_rgb(var(--suvex-accent))]',
       )}
       data-focused={focused || undefined}
+      data-previewed={previewed || undefined}
+      aria-current={previewed ? 'true' : undefined}
+      onClick={(event) => {
+        /*
+         * 整行都能选中。
+         *
+         * 只在标题/目标上挂 onClick 时，用户点状态、点发现数、点空白处都没反应 ——
+         * 右栏一直是空态，看起来就是"这个功能没接上"。复选框、菜单、按钮、链接
+         * 各有职责，交给它们自己处理。
+         */
+        if (!onSelect) return
+        const target = event.target as HTMLElement
+        if (target.closest('a,button,input,label,[role="menu"]')) return
+        onSelect(scan)
+      }}
     >
       <div
         className={cn(
           'group flex flex-col gap-tight px-panel py-3 transition-ui duration-fast',
           'lg:flex-row lg:items-center lg:gap-panel lg:py-2.5',
-          // 选中行给一层底色 —— 批量操作前必须能一眼看出选了什么
-          selected ? 'bg-accent/[0.07]' : 'hover:bg-surface-raised/50',
+          // 选中行给一层底色 —— 批量操作前必须能一眼看出选了什么；
+          // 预览中的行给更淡的一层：两者是不同的状态，不能共用一个底色。
+          selected
+            ? 'bg-accent/[0.07]'
+            : previewed
+              ? 'bg-accent/[0.04]'
+              : 'hover:bg-surface-raised/50',
         )}
       >
         {/* 选择框 */}
