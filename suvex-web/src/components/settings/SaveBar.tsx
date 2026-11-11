@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { AlertCircle, Check, Clock, Info } from 'lucide-react'
 import type { ReactNode } from 'react'
 
@@ -57,10 +58,11 @@ export function SaveBar({
   dirty,
   onSave,
   onReset,
-  saveLabel = '保存',
+  saveLabel,
   disabled = false,
   note,
 }: SaveBarProps) {
+  const { t } = useI18n()
   const saving = state.kind === 'saving'
 
   return (
@@ -79,7 +81,7 @@ export function SaveBar({
                 : 'border border-line text-ink-muted hover:border-line-strong hover:text-ink',
           )}
         >
-          {saving ? '正在保存…' : saveLabel}
+          {saving ? t('common.saving') : (saveLabel ?? t('common.save'))}
         </button>
 
         <button
@@ -93,7 +95,7 @@ export function SaveBar({
               : 'text-ink-muted hover:bg-surface-raised hover:text-ink',
           )}
         >
-          放弃改动
+          {t('common.discard')}
         </button>
 
         {/*
@@ -105,7 +107,7 @@ export function SaveBar({
         {dirty && !saving && (
           <span className="inline-flex items-center gap-1 text-2xs text-signal-warn">
             <span aria-hidden="true" className="h-1.5 w-1.5 rounded-pill bg-signal-warn" />
-            有未保存的改动
+            {t('common.dirty')}
           </span>
         )}
 
@@ -120,6 +122,7 @@ export function SaveBar({
 
 /** 保存结果的常驻标签 */
 function SaveStateLabel({ state }: { state: SaveState }) {
+  const { t } = useI18n()
   switch (state.kind) {
     case 'idle':
       return null
@@ -135,7 +138,7 @@ function SaveStateLabel({ state }: { state: SaveState }) {
             "正在进行的闪烁"—— 动效一致性检查要抓的正是这种游离值。
           */}
           <Clock size={11} strokeWidth={2} className="animate-breath" aria-hidden="true" />
-          正在写入…
+          {t('common.writing')}
         </span>
       )
 
@@ -145,10 +148,10 @@ function SaveStateLabel({ state }: { state: SaveState }) {
           role="status"
           className="inline-flex items-center gap-1 text-2xs text-signal-ok"
           // 精确到秒 —— 让用户能确认"这就是我刚才那次保存"
-          title={`保存于 ${formatClock(state.at)}`}
+          title={t('common.savedTitle', { time: formatClock(state.at) })}
         >
           <Check size={11} strokeWidth={2.5} aria-hidden="true" />
-          已保存 · {formatClock(state.at)}
+          {t('common.savedAt', { time: formatClock(state.at) })}
         </span>
       )
 
@@ -156,7 +159,7 @@ function SaveStateLabel({ state }: { state: SaveState }) {
       return (
         <span role="alert" className="inline-flex items-center gap-1 text-2xs text-signal-risk">
           <AlertCircle size={11} strokeWidth={2} aria-hidden="true" />
-          保存失败：{state.error}
+          {t('common.saveFailed', { error: state.error })}
         </span>
       )
 
@@ -178,6 +181,25 @@ function SaveStateLabel({ state }: { state: SaveState }) {
  *   一个全局保存会让用户改了一个开关却不敢点（怕连带提交别的）。
  *   分块保存同时让"哪一块没保存成功"变得明确。
  */
+//: 面板标题 → 字典键。过渡桥：面板仍传中文字面量（几十处），
+//: 这里按标题映射到 `settings.panel.*`；改造完后改成显式传 key。
+const PANEL_TITLE_KEYS: Record<string, string> = {
+  '沙箱与执行环境': 'settings.panel.sandbox',
+  '平台接入': 'settings.panel.platform',
+  '通知': 'settings.panel.notify',
+  '扫描保留': 'settings.panel.retention',
+  '评测快照': 'settings.panel.benchmark',
+  '评测用例': 'settings.panel.cases',
+  '处理人': 'settings.panel.members',
+  '账号与安全': 'settings.panel.account',
+  '模型服务': 'settings.panel.models',
+  '模型路由': 'settings.panel.routes',
+  '紫队检测规则': 'settings.panel.purple',
+  'CTF 解题': 'settings.panel.ctf',
+  'CTF': 'settings.panel.ctf',
+  '内核通用能力': 'settings.panel.kernel',
+}
+
 export function SettingsPanel({
   id,
   title,
@@ -191,6 +213,8 @@ export function SettingsPanel({
   children: ReactNode
   footer?: ReactNode
 }) {
+  const { t } = useI18n()
+
   return (
     <section
       /*
@@ -232,7 +256,7 @@ export function SettingsPanel({
     >
       <div className="flex flex-col gap-1">
         <h2 id={`${id}-heading`} className="text-sm font-medium text-ink">
-          {title}
+          {t(PANEL_TITLE_KEYS[title] ?? '', undefined, title)}
         </h2>
         <p className="max-w-[68ch] text-xs text-ink-faint">{description}</p>
       </div>
