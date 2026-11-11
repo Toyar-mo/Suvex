@@ -1,4 +1,5 @@
 import { BackdropToggle } from './BackdropToggle'
+import { LanguageMenu } from './LanguageMenu'
 import { ThemeToggle } from './ThemeToggle'
 import { StatusDot } from '@/components/ui/StatusDot'
 import { useFleetStatus } from '@/data/fleet'
@@ -187,6 +188,7 @@ export function TopStatusBar() {
         ⚠️ 它是 `shrink-0` 的：窄屏下优先压缩左侧可省略的文字，
           而不是把这个唯一的切换入口压变形。
       */}
+      <LanguageMenu />
       <BackdropToggle />
       <ThemeToggle />
     </div>

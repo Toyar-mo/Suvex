@@ -4,7 +4,7 @@ import { AttentionList } from '@/components/overview/AttentionList'
 import RiskScoreCard from '@/components/overview/RiskScoreCard'
 import ResourceStrip from '@/components/overview/ResourceStrip'
 import { OverviewTasks } from '@/components/overview/OverviewTasks'
-import SeverityChart from '@/components/overview/SeverityChart'
+import { PriorityBoard } from '@/components/overview/PriorityBoard'
 import StatCard from '@/components/overview/StatCard'
 import { RecentFindingsCard } from '@/components/overview/RecentFindingsCard'
 import { TokenUsagePanel } from '@/components/overview/TokenUsagePanel'
@@ -444,7 +444,7 @@ function OverviewContent({
             breakdown={metrics.unresolvedBreakdown}
           />
 
-          <SeverityChart data={severityBreakdown} />
+          <PriorityBoard data={severityBreakdown} />
 
           <RecentFindingsCard findings={findings} />
           <QualityPanel quality={quality} />
