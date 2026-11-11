@@ -334,6 +334,54 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         params="name（必填，配方名，见提示词里的配方清单）",
     ),
     # ══════════════════════════════════════════════════════════
+    # v1.88：黑板 —— 覆盖度与事实（对话侧）
+    # ══════════════════════════════════════════════════════════
+    #
+    # ★ 这两个工具在扫描侧一直存在（`kernel/multiagent.py` 的
+    #   `COVERAGE_RECORD` 与 `record_fact`），渗透提示词也一直在要求模型
+    #   用它们记账（见下面 `_PENTEST_PERSISTENCE` 与各人格正文）——
+    #   唯独 `CHAT_TOOLS` 里没有。模型照做只会拿到「没有叫 record_coverage
+    #   的工具」，于是"记账"这条纪律在对话里从未真正执行过。
+    #   2026-11-11 的评估把它列为必修缺口：记忆闭环断在"写"这一半。
+    #
+    # ⚠️ 落的是同一张 `scan_facts`（`scan_id=None`），所以资产页的
+    #   「覆盖度」与「事实图」直接看得到；`scan_facts` 的跨扫描继承
+    #   也按 `target` 归一键生效 —— 不需要第二套存储。
+    ChatToolSpec(
+        name="record_coverage",
+        label="记账：测过什么",
+        description=(
+            "把一个攻击面**测过什么、结论是什么**写进黑板（同一目标的历史覆盖度，"
+            "资产页的「覆盖度」看得到）。"
+            "`已排除：…` 与「成立 / 未测完」分开归类，所以**没测完的别写成已排除** —— "
+            "那会让下一个对同一目标干活的人跳过该测的地方。"
+        ),
+        params=(
+            "target（必填，目标，与 create_scan 同一口径）、"
+            "surface（必填，方法 + 路径 + 关键条件）、"
+            "risk（这个点理论上可能出什么问题）、"
+            "outcome（必填，形状：`成立：…` / `已排除：…` / `未测完：…`）"
+        ),
+        scope="scan",
+    ),
+    ChatToolSpec(
+        name="record_fact",
+        label="记账：一条认知",
+        description=(
+            "把一条认知写进黑板，按 `target` 归档：资产页的覆盖度/事实图看得到，"
+            "**后续对同一目标的扫描会继承它**。"
+            "`ruled-out/...` 是最值钱的一类 —— 记下走不通的路，省掉重复劳动。"
+        ),
+        params=(
+            "target（必填）、fact_key（必填，`category/slug`，category ∈ "
+            "endpoint|credential|surface|ruled-out|constraint|note）、"
+            "summary（必填，一句话结论，≤300 字）、"
+            "confidence（confirmed|tentative|deprecated，默认 tentative）、"
+            "evidence（你凭什么这么判断，一句话）、detail（可选，补充细节）"
+        ),
+        scope="scan",
+    ),
+    # ══════════════════════════════════════════════════════════
     # v1.81：可重放验证 —— 提交发现前的硬证据
     # ══════════════════════════════════════════════════════════
     #
@@ -617,6 +665,40 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
         "type": "object",
         "properties": {"name": {"type": "string", "description": "配方名（见提示词里的配方清单）"}},
         "required": ["name"],
+    },
+    # v1.88：黑板（覆盖度 / 事实）。`target` 是**必填** —— 跨扫描继承与
+    # 资产页的覆盖度都按它归一键，省掉它就等于写了一条孤儿记录。
+    "record_coverage": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "description": "目标，与 create_scan 同一口径"},
+            "surface": {"type": "string", "description": "方法 + 路径 + 关键条件"},
+            "risk": {"type": "string", "description": "这个点理论上可能出什么问题"},
+            "outcome": {
+                "type": "string",
+                "description": "`成立：…` / `已排除：…` / `未测完：…`（前缀决定分类）",
+            },
+        },
+        "required": ["target", "surface", "outcome"],
+    },
+    "record_fact": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string", "description": "目标，决定跨扫描继承的归档键"},
+            "fact_key": {
+                "type": "string",
+                "description": "`category/slug`，category ∈ endpoint|credential|surface|ruled-out|constraint|note",
+            },
+            "summary": {"type": "string", "description": "一句话结论（≤300 字）"},
+            "confidence": {
+                "type": "string",
+                "enum": ["confirmed", "tentative", "deprecated"],
+                "description": "默认 tentative",
+            },
+            "evidence": {"type": "string", "description": "凭什么这么判断，一句话"},
+            "detail": {"type": "string", "description": "补充细节（可选）"},
+        },
+        "required": ["target", "fact_key", "summary"],
     },
     # v1.81：可重放验证。differential 的 control / experiment 各是一组请求形状。
     "verify_http": {

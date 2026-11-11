@@ -246,9 +246,15 @@ def upsert_fact(
     # `load_inherited_facts` 只按归一形比字符串，两边都归一才会让
     # 「本次扫描写进去的」和「下次扫描要继承的」落在同一个键上。
     target_key = normalize_target(target)
-    existing = db.execute(
-        select(ScanFact).where(ScanFact.scan_id == scan_id, ScanFact.fact_key == key)
-    ).scalar_one_or_none()
+    stmt = select(ScanFact).where(ScanFact.scan_id == scan_id, ScanFact.fact_key == key)
+    # ★ 对话侧（`scan_id=None`）必须按目标收窄覆盖范围。
+    #   唯一约束是 `(scan_id, fact_key)`，而 SQL 里 `NULL` 彼此不相等 ——
+    #   所有对话写入的行在约束看来都是"不同行"。不补这一条，给 B 目标
+    #   记一条 `endpoint/login` 会把 A 目标那条覆盖掉（实测形态：
+    #   资产页里目标 A 的覆盖度凭空消失）。
+    if scan_id is None:
+        stmt = stmt.where(ScanFact.target == target_key)
+    existing = db.execute(stmt).scalar_one_or_none()
 
     if existing is None:
         fact = ScanFact(

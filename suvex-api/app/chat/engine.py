@@ -2115,6 +2115,175 @@ async def _tool_verify_http(ctx: _ToolContext, args: dict[str, Any]) -> str:
     )
 
 
+#: 对话侧写黑板时记在 `recorded_by` 上的作者前缀。
+#:
+#: ⚠️ 不能写 `human`：这句话是**模型**写的，不是人写的。资产页要能分开
+#:   「模型在对话里记的」与「扫描过程中 agent 记的」—— 两者吵起来时，
+#:   `recorded_by` 是唯一能判断"该信哪一条"的字段。
+_FACT_AUTHOR_PREFIX = "chat:"
+
+
+def _fact_author(ctx: _ToolContext) -> str:
+    """写黑板的作者。列宽 64，会话 id 是 `chat_<ULID>`，加前缀仍在界内。"""
+    return f"{_FACT_AUTHOR_PREFIX}{ctx.session.id}"[:64]
+
+
+def _coverage_slug(surface: str) -> str:
+    """把"方法 + 路径 + 关键条件"压成合法的 `fact_key` slug。
+
+    ## 为什么在本地压，而不是让 `normalize_fact_key` 报错
+
+    模型写的是人话（`POST /api/v1/login (form)`），而 `fact_key` 只允许
+    `[a-z0-9-/]`。把报错丢回去让它改写，是一次必然发生的额外回合；
+    而这里的压缩是**无损的选择**：原话仍留在 `summary` / `detail` 里，
+    key 只是归档用的地址。真正需要模型重新决定的只有"分类"，
+    而分类由 `outcome` 的前缀决定，不是它猜的。
+    """
+    return re.sub(r"[^a-z0-9]+", "-", surface.lower()).strip("-")[:120]
+
+
+async def _tool_record_coverage(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`record_coverage`：把"测过什么、结论是什么"写进黑板（v1.88）。
+
+    ## 为什么对话侧需要这个工具
+
+    扫描侧的 `record_coverage` 一直存在，渗透提示词也一直要求模型
+    "每次失败先记账"—— 但 `CHAT_TOOLS` 里没有这个名字，模型照做只会
+    拿到「没有叫 record_coverage 的工具」。于是那条纪律在对话里从未
+    真正执行过（2026-11-11 评估列为必修缺口：闭环断在"写"这一半）。
+
+    ## 落库形状
+
+    与扫描侧**同一张表**（`scan_facts`），`scan_id=None`：对话没有扫描，
+    但资产页按 `target` 查覆盖度（`assets.service.coverage_for_target`），
+    所以只要有 target 就能被看见。`已排除：…` 落 `ruled-out` 类，
+    其余落 `surface` 类 —— 正是那个读接口的分组依据。
+
+    ⚠️ 这条记录**不会**在同一轮里回喂给模型（对话没有黑板索引）。
+      它的读者是资产页与下一次对同一目标的扫描；想当场复核请用
+      `verify_http`。写清楚这一点，比让模型以为"我记了它就会记得"强。
+    """
+    from app.facts import service as facts_service
+
+    _need_scope(ctx, "record_coverage")
+
+    target = facts_service.normalize_target(str(args.get("target") or ""))
+    if not target:
+        return _err(
+            "`target` 不能为空 —— 黑板按目标归档，没有目标，这条记录谁也查不到。"
+        )
+
+    surface = str(args.get("surface") or "").strip()
+    outcome = str(args.get("outcome") or "").strip()
+    risk = str(args.get("risk") or "").strip()
+    if not surface:
+        return _err("`surface` 不能为空 —— 写清楚方法 + 路径 + 关键条件。")
+    if not outcome:
+        return _err("`outcome` 不能为空 —— 形状是 `成立：…` / `已排除：…` / `未测完：…`。")
+
+    slug = _coverage_slug(surface)
+    if not slug:
+        return _err("`surface` 里没有可用的字母/数字 —— 换个写法（例如 `GET /api/v1/health`）。")
+
+    # ★ 分类只看前缀，不让模型另填一个 category：两处判据必然漂移，
+    #   而这里的唯一目的是让"排除了什么"与"测过什么"能分开统计。
+    category = "ruled-out" if outcome.startswith("已排除") else "surface"
+    try:
+        fields = facts_service.validate_fact(
+            fact_key=f"{category}/{slug}",
+            summary=outcome[:300],
+            confidence="confirmed",
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+
+    try:
+        fact, created = facts_service.upsert_fact(
+            ctx.db,
+            scan_id=None,
+            target=target,
+            recorded_by=_fact_author(ctx),
+            fields=fields,
+            detail=f"风险：{risk}" if risk else None,
+            evidence_excerpt=outcome[:1000],
+        )
+        ctx.db.commit()
+    except Exception as exc:  # noqa: BLE001 - 写入失败要以工具结果回到模型
+        ctx.db.rollback()
+        return _err(f"写黑板失败：{exc}")
+
+    state = "新建" if created else f"覆盖（第 {fact.version} 版）"
+    return (
+        f"已记账：`{fact.fact_key}` → 目标 {target}（{category}，{state}）。"
+        "资产页的「覆盖度」能看到这条；同一目标的后续扫描会继承它。"
+    )
+
+
+async def _tool_record_fact(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`record_fact`：把一条认知写进黑板（v1.88）。
+
+    ## 与 `record_coverage` 的分工
+
+    `record_coverage` 回答"这个面测没测过"，`record_fact` 回答"我知道什么"。
+    两者落同一张表、靠 `category` 分开：`surface` / `ruled-out` 属于覆盖度，
+    `endpoint` / `credential` / `constraint` / `note` 属于事实。这不是
+    两个存储，而是**一个黑板的两种问法**。
+
+    ## 为什么要带 target
+
+    跨扫描继承（`facts.load_inherited_facts`）按 `normalize_target` 的键
+    比对 —— 没有 target 的那条记录永远继承不到。所以这里宁可报错，
+    也不写一条"看着成功、实际孤儿"的行。
+    """
+    from app.facts import service as facts_service
+
+    _need_scope(ctx, "record_fact")
+
+    target = facts_service.normalize_target(str(args.get("target") or ""))
+    if not target:
+        return _err("`target` 不能为空 —— 没有目标的事实继承不到，等于没记。")
+
+    fact_key = str(args.get("fact_key") or "").strip()
+    summary = str(args.get("summary") or "").strip()
+    if not fact_key:
+        return _err("`fact_key` 不能为空，形状是 `category/slug`，例如 `ruled-out/settings-token-is-mock`。")
+    if not summary:
+        return _err("`summary` 不能为空 —— 一句话结论。")
+
+    try:
+        fields = facts_service.validate_fact(
+            fact_key=fact_key,
+            summary=summary,
+            confidence=str(args.get("confidence") or "tentative"),
+            trust_level=args.get("trustLevel") or args.get("trust_level"),
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+
+    evidence = str(args.get("evidence") or "").strip()
+    detail = str(args.get("detail") or "").strip()
+    try:
+        fact, created = facts_service.upsert_fact(
+            ctx.db,
+            scan_id=None,
+            target=target,
+            recorded_by=_fact_author(ctx),
+            fields=fields,
+            detail=detail or None,
+            evidence_excerpt=evidence[:1000] or None,
+        )
+        ctx.db.commit()
+    except Exception as exc:  # noqa: BLE001 - 写入失败要以工具结果回到模型
+        ctx.db.rollback()
+        return _err(f"写黑板失败：{exc}")
+
+    state = "新建" if created else f"覆盖（第 {fact.version} 版）"
+    return (
+        f"已记账：`{fact.fact_key}` → 目标 {target}"
+        f"（{fact.category} / {fact.confidence}，{state}）。"
+    )
+
+
 async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
@@ -2461,6 +2630,10 @@ _TOOL_IMPLS: dict[str, Any] = {
     "browser": chat_sandbox.tool_browser,
     "load_skill": _tool_load_skill,
     "load_recipe": _tool_load_recipe,
+    # ★ v1.88：黑板（覆盖度 / 事实）—— 提示词一直要求模型记账，
+    #   工具表里却没有，于是"记账"这条纪律在对话里从未执行过。
+    "record_coverage": _tool_record_coverage,
+    "record_fact": _tool_record_fact,
     # ★ v1.81：可重放验证。对授权目标发真实请求，但只读、不改平台状态；
     #   安全边界是 GuardedHTTPTransport（SSRF）+ scope guard，不是审批。
     "verify_http": _tool_verify_http,

@@ -225,6 +225,7 @@ sudo bash suvex-api/deploy/install.sh
 * 认证停损器不再把 `Authorization` / `X-Auth-Token` 当成口令尝试
 * 资产页：静默刷新失败可见、覆盖度/事实图截断如实提示、健康筛选与展示同一时钟、切回页面自动刷新、抽屉有可访问名称
 * Vite 暴露面：dev server 固定 `127.0.0.1`、生产构建不产 sourcemap、补 `deploy/systemd/suvex-web.service` 模板与 README 警示
+* 对话侧补上 `record_coverage` / `record_fact`（落同一张 `scan_facts`，按 `target` 归档）：提示词一直在要求记账，工具表里却没有，闭环断在"写"那一半
 
 ### 还没有做到的
 
