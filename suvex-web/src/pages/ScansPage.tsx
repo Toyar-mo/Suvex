@@ -1158,7 +1158,7 @@ export function ScansPage() {
         </div>
         <ScanPreviewPane
           scan={scans.find((scan) => scan.id === previewId) ?? null}
-          className="hidden 2xl:flex 2xl:sticky 2xl:top-[64px]"
+          className="hidden 2xl:flex"
         />
         </div>
       </div>

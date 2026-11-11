@@ -74,7 +74,7 @@ export function BulkActionBar({
   return (
     <div
       className={cn(
-        'sticky top-0 z-30 -mx-gutter mb-panel border-y border-line',
+        'sticky top-0 z-30 -mx-gutter mb-panel border-y border-line 2xl:mx-0 2xl:rounded-sm 2xl:border',
         'bg-surface-overlay/95 px-gutter py-2 backdrop-blur-sm',
       )}
     >

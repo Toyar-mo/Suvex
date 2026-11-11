@@ -41,6 +41,9 @@ export function ScanPreviewPane({
       )}
       data-scan-preview=""
     >
+      <p className="mb-2 border-b border-line pb-1.5 text-2xs font-medium tracking-[0.06em] text-ink-muted">
+        {t('scanPreview.title')}
+      </p>
       {scan === null ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
           <MousePointerClick size={20} strokeWidth={1.5} className="text-ink-ghost" aria-hidden="true" />
