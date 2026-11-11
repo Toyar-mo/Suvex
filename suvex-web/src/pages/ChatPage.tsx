@@ -645,6 +645,7 @@ export function ChatPage() {
   }, [wantedId, active?.id])
 
   const composerRef = useRef<HTMLTextAreaElement | null>(null)
+
   /** 只看回答：隐藏工作过程，只保留结论。 */
   const [answersOnly, setAnswersOnly] = useState(false)
   /** 对话设置（项目 / 人格 / 审批 / 技能 / MCP）收在齿轮后面，默认不占一行。 */
@@ -2251,6 +2252,10 @@ export function ChatPage() {
                   }
                 }}
                 rows={1}
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                autoComplete="off"
                 placeholder={
                   !active
                     ? '先新建或打开一个对话'
@@ -2285,7 +2290,7 @@ export function ChatPage() {
                 disabled={!active || Boolean(active.archived)}
                 aria-label="输入消息"
                 className={cn(
-                  'max-h-40 min-h-9 flex-1 resize-none rounded-md bg-transparent px-1.5 py-1.5',
+                  'max-h-40 min-h-9 min-w-0 flex-1 resize-none overflow-y-auto rounded-md bg-transparent px-2 py-2 field-sizing-content',
                   'text-base text-ink placeholder:text-ink-faint',
                   'focus:outline-none',
                   'disabled:cursor-not-allowed disabled:opacity-60',

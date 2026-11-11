@@ -708,3 +708,11 @@
 .backdrop-swatch-plain {
   background-color: rgb(var(--suvex-canvas));
 }
+
+
+@layer utilities {
+  /* 输入框按内容自动增高；兼容 Chromium 123+。 */
+  .field-sizing-content {
+    field-sizing: content;
+  }
+}
