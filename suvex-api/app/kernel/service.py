@@ -5123,7 +5123,9 @@ def probe_recipe_tools(db: Session, names: list[str] | None = None) -> dict:
     #   而真正跑扫描时用的是 `image_for_profile`。
     image = image_for_profile('suvex-sandbox')
     container = SandboxContainer(
-        name=f"suvex-toolprobe-{uuid.uuid4().hex[:12]}",
+        # 用解题沙箱前缀，让 `sweep_orphan_sandboxes` 在服务重启后能认领
+        # 崩溃残留的探测容器 —— 否则它只有 `docker ps` 能看到。
+        name=f"ctf2-toolprobe-{uuid.uuid4().hex[:12]}",
         image=image,
         # 探测不访问目标；隔离网络避免"检测"顺手把版本请求发出去。
         network_isolated=True,
