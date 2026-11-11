@@ -2,6 +2,7 @@ import { useEffect, useId, useState } from 'react'
 import Drawer from '@/components/ui/Drawer'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { toApiError } from '@/lib/api'
+import { T } from '@/i18n/T'
 import {
   loadCoverage,
   loadSurfaceMap,
@@ -80,14 +81,14 @@ export default function AssetCoverageDrawer({
       ) : (
         <div className="flex flex-col gap-panel">
           <section>
-            <h3 className="text-sm font-medium text-ink">覆盖度</h3>
+            <h3 className="text-sm font-medium text-ink"><T k="assets.coverage"/></h3>
             <p className="mt-1 text-2xs text-ink-muted">
-              只列<strong>有记录</strong>的面；没有记录不等于没测过，也不等于没有缺口。
+              只列<strong><T k="assets.coverage.recorded"/></strong>的面；没有记录不等于没测过，也不等于没有缺口。
             </p>
             <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
-              <span className="text-ink-muted">测过的面</span>
+              <span className="text-ink-muted"><T k="assets.coverage.tested"/></span>
               <span className="tabular text-right text-ink">{coverage?.stats.tested ?? 0}</span>
-              <span className="text-ink-muted">已排除</span>
+              <span className="text-ink-muted"><T k="assets.coverage.ruledOut"/></span>
               <span className="tabular text-right text-ink">
                 {coverage?.stats.ruledOut ?? 0}
               </span>
@@ -126,7 +127,7 @@ export default function AssetCoverageDrawer({
           </section>
 
           <section>
-            <h3 className="text-sm font-medium text-ink">事实图</h3>
+            <h3 className="text-sm font-medium text-ink"><T k="assets.facts"/></h3>
             <p className="mt-1 text-2xs text-ink-muted">
               节点是事实，线是事实之间的关系（攻击链 / 依赖 / 约束）。
             </p>
@@ -162,7 +163,7 @@ export default function AssetCoverageDrawer({
                 )}
               </>
             ) : (
-              <p className="mt-2 text-sm text-ink-muted">还没有写成事实的认知</p>
+              <p className="mt-2 text-sm text-ink-muted"><T k="assets.facts.empty"/></p>
             )}
           </section>
         </div>

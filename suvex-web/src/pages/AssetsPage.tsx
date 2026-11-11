@@ -10,6 +10,8 @@ import { Button } from '@/components/ui/Button'
 import { SegmentedControl } from '@/components/ui/SegmentedControl'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import {
   ASSET_HEALTH_META,
   assetHealth,
@@ -133,7 +135,7 @@ function Stat({
 }
 
 function PortChips({ ports }: { ports: string[] }) {
-  if (ports.length === 0) return <span className="text-2xs text-ink-faint">默认端口</span>
+  if (ports.length === 0) return <span className="text-2xs text-ink-faint"><T k="assets.defaultPorts"/></span>
   const visible = ports.slice(0, 3)
   return (
     <span className="flex flex-wrap gap-1">
@@ -330,6 +332,7 @@ const AssetRow = memo(function AssetRow({
 })
 
 export default function AssetsPage() {
+  const { t } = useI18n()
   const state = useAssetsState()
   const [coverageTarget, setCoverageTarget] = useState<string | null>(null)
   const [query, setQuery] = useState('')
@@ -439,24 +442,24 @@ export default function AssetsPage() {
         {summary && (
           <div className="mb-bay grid grid-cols-2 divide-x divide-line overflow-hidden rounded-md border border-line bg-surface sm:grid-cols-3 lg:grid-cols-5">
             <Stat
-              label="主机"
+              label={t('assets.stats.hosts')}
               value={hostCount}
               hint={state.truncated ? '列表被截断，这里只统计返回部分' : '按 host 聚合'}
             />
-            <Stat label="暴露面" value={summary.targetCount} hint="目标 / 路径数量" />
+            <Stat label={t('assets.stats.exposure')} value={summary.targetCount} hint={t('assets.stats.exposureHint')} />
             <Stat
-              label="带高危主机"
+              label={t('assets.stats.bleeding')}
               value={state.truncated ? `≥${bleedingHosts}` : bleedingHosts}
-              hint="有未处置 critical/high 的主机台数"
+              hint={t('assets.stats.bleedingHint')}
               tone={bleedingHosts > 0 ? 'risk' : 'default'}
             />
             <Stat
-              label="从未验证"
+              label={t('assets.stats.unverified')}
               value={neverVerified}
               hint={`从未扫描 ${summary.neverScanned} · 从未跑完 ${summary.neverCompleted}`}
               tone={neverVerified > 0 ? 'warn' : 'default'}
             />
-            <Stat label="未处置漏洞" value={summary.openFindingCount} />
+            <Stat label={t('assets.stats.openFindings')} value={summary.openFindingCount} />
           </div>
         )}
 
@@ -472,7 +475,7 @@ export default function AssetsPage() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按主机或路径筛选…"
+              placeholder={t('assets.search.placeholder')}
               aria-label="按目标筛选资产"
               className="w-full rounded-sm border border-line bg-surface py-1.5 pl-8 pr-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
             />
@@ -484,9 +487,9 @@ export default function AssetsPage() {
             value={view}
             onChange={setView}
             options={[
-              { id: 'host', label: '主机' },
-              { id: 'target', label: '目标' },
-              { id: 'map', label: '图谱' },
+              { id: 'host', label: t('assets.view.host') },
+              { id: 'target', label: t('assets.view.target') },
+              { id: 'map', label: t('assets.view.map') },
             ]}
           />
 
