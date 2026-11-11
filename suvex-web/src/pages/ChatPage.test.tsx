@@ -459,6 +459,33 @@ describe('ChatPage — 侧栏标出「哪个会话在跑」、不再画底部蓝
     expect(screen.queryByText(/运行中/)).toBeNull()
   })
 
+  it('★ 子代理会话挂在父会话下面（缩进一级），不占顶层条目', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        sessions: [
+          session({ id: 'chat_parent', title: '父会话' }),
+          session({
+            id: 'chat_child',
+            title: '[子代理] web-vuln',
+            parentSessionId: 'chat_parent',
+            running: true,
+          }),
+        ],
+      }),
+    )
+    const { container } = renderPage()
+
+    const parentLi = screen.getByText('父会话').closest('li')
+    const childLi = screen.getByText('[子代理] web-vuln').closest('li')
+    expect(parentLi).not.toBeNull()
+    expect(childLi).not.toBeNull()
+    // 子行有分支缩进/左边线；顶层没有。
+    expect(childLi?.querySelector('.ml-3')).not.toBeNull()
+    expect(parentLi?.querySelector('.ml-3')).toBeNull()
+    // 子代理自己 running=true 时也照常画转圈点。
+    expect(container.querySelector('[data-session-running="true"]')).not.toBeNull()
+  })
+
   it('★ v1.68.2：侧栏还有会话 running=true 时，持续每 4s 重拉列表（自愈转圈点，无需刷新）', async () => {
     /*
       用户原话「结束了前端对话列还会打转，要刷新网页才行」。根因：轮询条件是

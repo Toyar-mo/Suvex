@@ -48,9 +48,7 @@ function makeList(items: Asset[], patch: Partial<AssetList> = {}): AssetList {
     truncated: false,
     summary: {
       targetCount: items.length,
-      findingCount: items.reduce((sum, a) => sum + a.findingCount, 0),
       openFindingCount,
-      targetsWithOpenHigh: items.filter((a) => a.openHigh > 0 || a.openCritical > 0).length,
       neverScanned: items.filter((a) => a.scanCount === 0).length,
       neverCompleted: items.filter((a) => a.scanCount > 0 && a.lastCompletedAt === null).length,
       generatedAt: '2026-10-20T00:00:00Z',
@@ -61,12 +59,15 @@ function makeList(items: Asset[], patch: Partial<AssetList> = {}): AssetList {
 
 let response: AssetList | null = null
 let failWith: unknown = null
+let fetchCount = 0
 
 beforeEach(() => {
   resetAssets()
   response = null
   failWith = null
+  fetchCount = 0
   vi.stubGlobal('fetch', () => {
+    fetchCount += 1
     if (failWith) return Promise.reject(failWith)
     return Promise.resolve(
       new Response(JSON.stringify(response), {
@@ -232,6 +233,33 @@ describe('AssetsPage', () => {
 
     expect(await screen.findByText(/资产列表加载失败/)).toBeTruthy()
     expect(screen.getByRole('button', { name: /重试|重新加载/ })).toBeTruthy()
+  })
+
+  it('窗口重新获得焦点时静默拉一次（扫描完回来不是旧台账）', async () => {
+    response = makeList([makeAsset('api.example.com')])
+    await renderPage()
+    await screen.findByRole('table')
+    const before = fetchCount
+
+    window.dispatchEvent(new Event('focus'))
+
+    await waitFor(() => {
+      expect(fetchCount).toBe(before + 1)
+    })
+    expect(screen.getByRole('table')).toBeTruthy()
+  })
+
+  it('已有数据时刷新失败：保留表格，并明确提示仍显示旧数据', async () => {
+    response = makeList([makeAsset('api.example.com')])
+    await renderPage()
+    await screen.findByRole('table')
+
+    failWith = new TypeError('Failed to fetch')
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+
+    expect(await screen.findByText(/刷新失败/)).toBeTruthy()
+    expect(screen.getByText(/仍显示上次数据/)).toBeTruthy()
+    expect(screen.getByRole('table')).toBeTruthy()
   })
 
   it('主机视图把同一 host 的路径合并，展开后列出路径', async () => {

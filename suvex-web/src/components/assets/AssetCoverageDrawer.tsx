@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import Drawer from '@/components/ui/Drawer'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { toApiError } from '@/lib/api'
@@ -24,6 +24,7 @@ export default function AssetCoverageDrawer({
   target: string | null
   onClose: () => void
 }) {
+  const titleId = useId()
   const [coverage, setCoverage] = useState<CoverageSnapshot | null>(null)
   const [surface, setSurface] = useState<SurfaceMap | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -64,6 +65,7 @@ export default function AssetCoverageDrawer({
     <Drawer
       open={target !== null}
       onClose={onClose}
+      labelledBy={titleId}
       title="覆盖度与事实图"
       titleAside={
         <span className="max-w-[18rem] truncate font-mono text-xs text-ink-muted" title={target ?? ''}>
@@ -90,6 +92,11 @@ export default function AssetCoverageDrawer({
                 {coverage?.stats.ruledOut ?? 0}
               </span>
             </div>
+            {coverage?.truncated && (
+              <p role="status" className="mt-2 text-2xs text-signal-warn">
+                覆盖度记录已截断：只显示服务端最近 200 条（上限 200）。
+              </p>
+            )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {(coverage?.gaps ?? []).map((gap) => (
                 <span
@@ -123,6 +130,11 @@ export default function AssetCoverageDrawer({
             <p className="mt-1 text-2xs text-ink-muted">
               节点是事实，线是事实之间的关系（攻击链 / 依赖 / 约束）。
             </p>
+            {surface?.truncated && (
+              <p role="status" className="mt-2 text-2xs text-signal-warn">
+                事实图已截断：只显示服务端最近 300 条（上限 300）。
+              </p>
+            )}
             {surface && surface.nodes.length > 0 ? (
               <>
                 <ul className="mt-2 flex flex-col gap-1.5">

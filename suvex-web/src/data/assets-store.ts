@@ -39,6 +39,8 @@ export interface AssetsSnapshot {
   status: AssetsStatus
   /** ★ 真的 `ApiError`，不是一句文案 —— `ErrorState` 要靠它区分失败种类。 */
   error: ApiError | null
+  /** 有旧数据时的后台刷新失败。单独放，避免页面正常数据被错误页顶掉。 */
+  lastRefreshError: ApiError | null
 }
 
 const listeners = new Set<Listener>()
@@ -50,6 +52,7 @@ let snapshot: AssetsSnapshot = {
   summary: null,
   status: 'idle',
   error: null,
+  lastRefreshError: null,
 }
 
 function emit() {
@@ -90,11 +93,15 @@ export async function loadAssets(options: { silent?: boolean } = {}): Promise<vo
         summary: data.summary,
         status: 'ready',
         error: null,
+        lastRefreshError: null,
       })
     } catch (error) {
       const apiError = toApiError(error)
-      if (!silent) {
-        setSnapshot({ status: 'error', error: apiError })
+      if (silent) {
+        // 保留旧表，但把失败单独暴露给页面；否则“刷新”看起来永远成功。
+        setSnapshot({ lastRefreshError: apiError })
+      } else {
+        setSnapshot({ status: 'error', error: apiError, lastRefreshError: null })
       }
     } finally {
       inFlight = null
@@ -114,6 +121,7 @@ export function resetAssets(): void {
     summary: null,
     status: 'idle',
     error: null,
+    lastRefreshError: null,
   }
   emit()
 }

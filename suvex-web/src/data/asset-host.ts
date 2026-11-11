@@ -63,17 +63,10 @@ export interface HostAsset {
   openFindingCount: number
   openCritical: number
   openHigh: number
-  findingCount: number
-  scanCount: number
-  /** 最近一次"动过"（任何状态）。 */
-  lastScanAt: string | null
   /** 最近一次真正拿到结论（任一端口）。 */
   lastCompletedAt: string | null
   /** 主机下最差的那档健康度。 */
   health: AssetHealth
-  /** 从未跑完 / 从未扫描的路径数，用来解释"为什么整台机器不能信"。 */
-  neverCompletedCount: number
-  neverScannedCount: number
 }
 
 function latest(a: string | null, b: string | null): string | null {
@@ -101,13 +94,8 @@ export function buildHostAssets(assets: readonly Asset[], now: number = Date.now
         openFindingCount: 0,
         openCritical: 0,
         openHigh: 0,
-        findingCount: 0,
-        scanCount: 0,
-        lastScanAt: null,
         lastCompletedAt: null,
         health: 'ok',
-        neverCompletedCount: 0,
-        neverScannedCount: 0,
       }
       groups.set(host, group)
     }
@@ -117,13 +105,8 @@ export function buildHostAssets(assets: readonly Asset[], now: number = Date.now
     group.openFindingCount += asset.openFindingCount
     group.openCritical += asset.openCritical
     group.openHigh += asset.openHigh
-    group.findingCount += asset.findingCount
-    group.scanCount += asset.scanCount
-    group.lastScanAt = latest(group.lastScanAt, asset.lastScanAt)
     group.lastCompletedAt = latest(group.lastCompletedAt, asset.lastCompletedAt)
     if (HEALTH_RANK[health] < HEALTH_RANK[group.health]) group.health = health
-    if (health === 'never-completed') group.neverCompletedCount += 1
-    if (health === 'never-scanned') group.neverScannedCount += 1
     if (port && !group.ports.includes(port)) group.ports.push(port)
   }
 

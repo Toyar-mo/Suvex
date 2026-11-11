@@ -56,7 +56,6 @@ describe('buildHostAssets', () => {
     expect(hosts[0].ports).toEqual(['8080', '9001'])
     expect(hosts[0].openHigh).toBe(1)
     expect(hosts[0].health).toBe('never-completed')
-    expect(hosts[0].neverCompletedCount).toBe(1)
   })
 
   it('orders bleeding hosts first, then worst health', () => {

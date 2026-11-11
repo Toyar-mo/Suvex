@@ -49,15 +49,7 @@ export interface Asset {
 /** 顶部统计条。 */
 export interface AssetSummary {
   targetCount: number
-  findingCount: number
   openFindingCount: number
-  /**
-   * 带着**开着的高危**的资产**个数**（不是漏洞条数）。
-   *
-   * 「高危漏洞有几条」在漏洞页的 stats，两个数不能互相冒充 ——
-   * 一个是"有几台机器现在带病"，一个是"病有几个"。
-   */
-  targetsWithOpenHigh: number
   /** 只有 findings、一次扫描都没有的目标数（历史导入造成的）。 */
   neverScanned: number
   /**

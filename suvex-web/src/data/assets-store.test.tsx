@@ -47,9 +47,7 @@ function makeList(targets: string[]): AssetList {
     truncated: false,
     summary: {
       targetCount: items.length,
-      findingCount: 0,
       openFindingCount: 0,
-      targetsWithOpenHigh: 0,
       neverScanned: 0,
       neverCompleted: 0,
       generatedAt: '2026-10-20T00:00:00Z',
@@ -150,6 +148,7 @@ describe('assets-store', () => {
     expect(snap.status).toBe('ready')
     expect(snap.items).toHaveLength(1)
     expect(snap.error).toBeNull()
+    expect(snap.lastRefreshError).not.toBeNull()
   })
 
   it('首次加载失败：status=error，且 error 是 ApiError（不是一句字符串）', async () => {

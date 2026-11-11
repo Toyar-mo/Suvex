@@ -1457,9 +1457,21 @@ export function ChatPage() {
       但历史数据里可能有 `""`。这里再挡一次 —— 一个看不见名字的
       分组会让人以为是渲染 bug。
   */
+  const childrenByParent = useMemo(() => {
+    const map = new Map<string, typeof sessions>()
+    for (const session of sessions) {
+      if (!session.parentSessionId) continue
+      const bucket = map.get(session.parentSessionId)
+      if (bucket) bucket.push(session)
+      else map.set(session.parentSessionId, [session])
+    }
+    return map
+  }, [sessions])
+
   const grouped = useMemo(() => {
     const buckets = new Map<string, typeof sessions>()
     for (const session of sessions) {
+      if (session.parentSessionId) continue
       const key = session.project?.trim() || ''
       const bucket = buckets.get(key)
       if (bucket) bucket.push(session)
@@ -1594,6 +1606,45 @@ export function ChatPage() {
     </div>
   ) : null
 
+  /**
+   * 渲染一个会话及其子代理分支。
+   *
+   * 子会话是普通会话行，只是缩进一级；父会话被删时数据库 CASCADE 会一起删。
+   */
+  const renderSession = (session: ChatSession, depth = 0): React.ReactNode[] => [
+    <SessionRow
+      key={session.id}
+      session={session}
+      active={active?.id === session.id}
+      depth={depth}
+      running={session.running || sendingSessionIds.includes(session.id)}
+      onOpen={() => {
+        setSearchParams({ session: session.id }, { replace: true })
+        setShowList(false)
+      }}
+      onArchive={() =>
+        setConfirmAction({
+          kind: 'archive',
+          id: session.id,
+          title: session.title,
+        })
+      }
+      onContextMenu={(anchor) =>
+        setMenuAnchor({
+          ...anchor,
+          sessionId: session.id,
+          title: session.title,
+          archived: Boolean(session.archived),
+          pinned: Boolean(session.pinned),
+          project: session.project ?? null,
+        })
+      }
+    />,
+    ...(childrenByParent.get(session.id) ?? []).flatMap((child) =>
+      renderSession(child, depth + 1),
+    ),
+  ]
+
   return (
     <div className="flex min-h-0 flex-1">
       {/* ── 左：会话清单（窄屏收进抽屉） ── */}
@@ -1659,35 +1710,7 @@ export function ChatPage() {
                     <span className="truncate">{project}</span>
                   </h2>
                   <ul className="flex flex-col gap-0.5">
-                    {items.map((session) => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        active={active?.id === session.id}
-                        running={session.running || sendingSessionIds.includes(session.id)}
-                        onOpen={() => {
-                          setSearchParams({ session: session.id }, { replace: true })
-                          setShowList(false)
-                        }}
-                        onArchive={() =>
-                          setConfirmAction({
-                            kind: 'archive',
-                            id: session.id,
-                            title: session.title,
-                          })
-                        }
-                        onContextMenu={(anchor) =>
-                          setMenuAnchor({
-                            ...anchor,
-                            sessionId: session.id,
-                            title: session.title,
-                            archived: Boolean(session.archived),
-                            pinned: Boolean(session.pinned),
-                            project: session.project ?? null,
-                          })
-                        }
-                      />
-                    ))}
+                    {items.map((session) => renderSession(session))}
                   </ul>
                 </section>
               ))}
@@ -1704,35 +1727,7 @@ export function ChatPage() {
                     </h2>
                   )}
                   <ul className="flex flex-col gap-0.5">
-                    {grouped.loose.map((session) => (
-                      <SessionRow
-                        key={session.id}
-                        session={session}
-                        active={active?.id === session.id}
-                        running={session.running || sendingSessionIds.includes(session.id)}
-                        onOpen={() => {
-                          setSearchParams({ session: session.id }, { replace: true })
-                          setShowList(false)
-                        }}
-                        onArchive={() =>
-                          setConfirmAction({
-                            kind: 'archive',
-                            id: session.id,
-                            title: session.title,
-                          })
-                        }
-                        onContextMenu={(anchor) =>
-                          setMenuAnchor({
-                            ...anchor,
-                            sessionId: session.id,
-                            title: session.title,
-                            archived: Boolean(session.archived),
-                            pinned: Boolean(session.pinned),
-                            project: session.project ?? null,
-                          })
-                        }
-                      />
-                    ))}
+                    {grouped.loose.map((session) => renderSession(session))}
                   </ul>
                 </section>
               )}
@@ -2610,6 +2605,7 @@ function SessionRow({
   session,
   active,
   running,
+  depth = 0,
   onOpen,
   onArchive,
   onContextMenu,
@@ -2619,6 +2615,8 @@ function SessionRow({
   active: boolean
   /** 服务端 running，或本浏览器刚发起、服务端列表还没刷新。 */
   running: boolean
+  /** 子代理分支缩进层级。 */
+  depth?: number
   onOpen: () => void
   onArchive: () => void
   /** 右键（以及"⋯"按钮）打开上下文菜单。 */
@@ -2642,6 +2640,7 @@ function SessionRow({
         className={cn(
           'group flex items-center gap-1 rounded-sm px-2 py-1.5',
           'transition-ui duration-fast',
+          depth > 0 && 'ml-3 border-l border-line/60 pl-3',
           active ? 'bg-surface-raised' : 'hover:bg-surface-raised/60',
         )}
         // 整行都可以右键 —— 目标越大会越好点，而"必须精确点到标题"很烦

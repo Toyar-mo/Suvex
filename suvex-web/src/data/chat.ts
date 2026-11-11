@@ -122,6 +122,9 @@ export interface ChatSession {
    */
   challengeId?: string | null
 
+  /** 子代理会话的父会话；null/缺失 = 顶层会话。 */
+  parentSessionId?: string | null
+
   // ── v0.94 的六项「对话设置」 ──────────────────────────────
   //
   // ★ 它们出现在**列表**响应里（不只是详情）：侧栏要按 `project` 分组、

@@ -59,12 +59,12 @@ function lastConclusionTs(asset: Asset): number {
   return Number.isFinite(ts) ? ts : Number.NEGATIVE_INFINITY
 }
 
-function compareAssets(a: Asset, b: Asset): number {
+function compareAssets(a: Asset, b: Asset, now: number = Date.now()): number {
   const aBleeding = a.openCritical > 0 || a.openHigh > 0 ? 1 : 0
   const bBleeding = b.openCritical > 0 || b.openHigh > 0 ? 1 : 0
   if (aBleeding !== bBleeding) return bBleeding - aBleeding
-  const aHealth = assetHealth(a)
-  const bHealth = assetHealth(b)
+  const aHealth = assetHealth(a, now)
+  const bHealth = assetHealth(b, now)
   if (aHealth !== bHealth) return HEALTH_RANK[aHealth] - HEALTH_RANK[bHealth]
   const aTs = lastConclusionTs(a)
   const bTs = lastConclusionTs(b)
@@ -345,6 +345,24 @@ export default function AssetsPage() {
     if (state.status === 'idle') void loadAssets()
   }, [state.status])
 
+  /*
+    切回标签页/窗口时补一次静默刷新：扫描完成后回资产页，用户不应该
+    只看到进页面那一刻的旧台账。失败由 store 的 lastRefreshError 显示，
+    不会把已有表格换成错误页。
+  */
+  useEffect(() => {
+    const refreshIfVisible = () => {
+      if (document.visibilityState === 'visible') void loadAssets({ silent: true })
+    }
+    const onFocus = () => void loadAssets({ silent: true })
+    document.addEventListener('visibilitychange', refreshIfVisible)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', refreshIfVisible)
+      window.removeEventListener('focus', onFocus)
+    }
+  }, [])
+
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30_000)
     return () => window.clearInterval(timer)
@@ -366,14 +384,13 @@ export default function AssetsPage() {
     [hosts, healthFilter, query],
   )
 
-  const filteredAssets = useMemo(
-    () =>
-      items
-        .filter((asset) => healthFilter === 'all' || assetHealth(asset) === healthFilter)
-        .filter((asset) => assetMatchesQuery(asset, query))
-        .sort(compareAssets),
-    [items, healthFilter, query],
-  )
+  const filteredAssets = useMemo(() => {
+    const now = nowMinute * 60_000
+    return items
+      .filter((asset) => healthFilter === 'all' || assetHealth(asset, now) === healthFilter)
+      .filter((asset) => assetMatchesQuery(asset, query))
+      .sort((a, b) => compareAssets(a, b, now))
+  }, [items, healthFilter, query, nowMinute])
 
   const toggleHost = useCallback((host: string) => {
     setExpandedHosts((current) => {
@@ -510,6 +527,15 @@ export default function AssetsPage() {
             刷新
           </Button>
         </div>
+
+        {state.lastRefreshError && (
+          <p
+            role="status"
+            className="mb-panel rounded-sm border border-line bg-surface px-3 py-2 text-xs text-signal-risk"
+          >
+            刷新失败：{state.lastRefreshError.message}。仍显示上次数据。
+          </p>
+        )}
 
         {state.truncated && (
           <p
