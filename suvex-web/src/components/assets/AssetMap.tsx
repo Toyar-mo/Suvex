@@ -94,6 +94,8 @@ export function AssetMap({
         <span>{hosts.length} {t('assetMap.hosts')}</span>
         <span aria-hidden="true">·</span>
         <span className={bleeding > 0 ? 'text-signal-risk' : undefined}>{bleeding} {t('assetMap.bleeding')}</span>
+        <span aria-hidden="true">·</span>
+        <span>{t('assetMap.zoomHint')}</span>
       </div>
 
       <div className="absolute right-3 top-3 z-10 flex items-center gap-1">
@@ -124,6 +126,13 @@ export function AssetMap({
         ref={hostRef}
         className="h-full w-full cursor-grab active:cursor-grabbing"
         onWheel={(event) => {
+          /*
+           * 只在按住 Ctrl/⌘ 时缩放。
+           *
+           * 无条件是缩放的话，图占了一屏大半，鼠标滚到它上面页面就滚不动了 ——
+           * 那是典型的滚动陷阱：用户以为页面卡住。缩放仍可用右上角的按钮。
+           */
+          if (!event.ctrlKey && !event.metaKey) return
           event.preventDefault()
           setZoom((value) => Math.min(2, Math.max(0.5, value + (event.deltaY < 0 ? 0.1 : -0.1))))
         }}
