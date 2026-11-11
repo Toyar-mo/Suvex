@@ -212,6 +212,11 @@ export interface ScanListProps {
    */
   focusedId?: string | null
   onToggleRow: (id: string, next: boolean) => void
+  /**
+   * 点标题/目标时**不跳走**，而是把这条交给调用方（任务页右栏预览）。
+   * 不传时保持原行为：链接直接去 `/activity?scan=…`。
+   */
+  onSelect?: (scan: Scan) => void
   /** 全选/取消全选**当前列表里的**记录 */
   onToggleAll: (next: boolean) => void
   onAbort: (scan: Scan) => void
@@ -242,6 +247,7 @@ export function ScanList({
   scans,
   selectedIds,
   focusedId = null,
+  onSelect,
   onToggleRow,
   onToggleAll,
   onAbort,
@@ -316,6 +322,7 @@ export function ScanList({
           onRerun={onRerun}
           onResume={onResume}
           onWriteup={onWriteup}
+          onSelect={onSelect}
         />
       ))}
     </ul>
@@ -331,6 +338,7 @@ const ScanRow = memo(function ScanRow({
   onRerun,
   onResume,
   onWriteup,
+  onSelect,
 }: {
   scan: Scan
   selected: boolean
@@ -340,6 +348,8 @@ const ScanRow = memo(function ScanRow({
   onRerun: (scan: Scan) => void
   onResume?: (scan: Scan) => void
   onWriteup?: (scan: Scan) => void
+  /** 传了就把"点标题/目标"改成选中，而不是跳去活动页（任务页右栏预览）。 */
+  onSelect?: (scan: Scan) => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const [reasonOpen, setReasonOpen] = useState(false)
@@ -536,6 +546,11 @@ const ScanRow = memo(function ScanRow({
           {named && (
             <Link
               to={activityHref}
+            onClick={(event) => {
+              if (!onSelect) return
+              event.preventDefault()
+              onSelect(scan)
+            }}
               className="block truncate text-ink transition-ui duration-fast hover:text-accent-strong"
               title={`查看 ${display.name} 的智能体活动`}
             >
@@ -545,6 +560,11 @@ const ScanRow = memo(function ScanRow({
 
           <Link
             to={activityHref}
+            onClick={(event) => {
+              if (!onSelect) return
+              event.preventDefault()
+              onSelect(scan)
+            }}
             className={cn(
               'mono-ui block truncate transition-ui duration-fast hover:text-accent-strong',
               /*
