@@ -37,14 +37,34 @@ def test_all_deliverable_tasks_must_end_with_a_result_block() -> None:
         "文件 / 逆向 / 取证",
         "产物",
         "未完成",
-        "口令 / 登录尝试的停损",
+        "口令 / 登录尝试不是整场任务",
+        "一个策略失败不是收工信号",
+        "至少完成 3 个不同方向",
+        "认证旁路/越权",
         "rockyou",
     ):
         assert token in text
     assert chat_prompts.BRUTE_HARD_LIMIT <= 20
-    assert "已停止" in chat_prompts.render_brute_stop_limit_note(chat_prompts.BRUTE_HARD_LIMIT)
+    blocked = chat_prompts.render_auth_attempt_blocked_note(chat_prompts.BRUTE_HARD_LIMIT)
+    assert "失败：" in blocked and "换一个策略族" in blocked
+    pivot = chat_prompts.render_strategy_pivot_reminder(chat_prompts.BRUTE_HARD_LIMIT)
+    assert "不是收工信号" in pivot
+    assert "已停止：本轮" not in pivot
     assert "只写一次" in text
     assert "继续 / 接着 / 往下" in text
+
+
+def test_pentest_persona_carries_persistence_discipline() -> None:
+    """专门渗透人格必须带上“失败不是收工”的循环，而不只是一句风格描述。"""
+    prompt = chat_prompts.build_system_prompt(persona="pentest")
+    for token in (
+        "失败是数据，不是收工信号",
+        "认证/口令是一个策略族",
+        "至少覆盖 3 个不同策略族",
+        "试到第三次就换",
+        "只试了认证，正确答案是继续",
+    ):
+        assert token in prompt
 
 
 def test_result_block_is_final_even_with_limitations() -> None:

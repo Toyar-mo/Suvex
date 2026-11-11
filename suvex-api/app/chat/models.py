@@ -251,6 +251,17 @@ class ChatSession(Base):
     #:   不存在"，那是看得见的。
     challenge_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
+    #: 子代理会话的父会话。`None` = 顶层会话。
+    #:
+    #: ★ v1.87：子代理不再当作顶层会话堆在侧栏，而是挂在父会话下面。
+    #:   自引用外键 + CASCADE：父会话被删，子代理会话一起删。
+    parent_session_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+
     #: 角色（persona）id。见 `prompts.CHAT_ROLES`。`None` = 默认角色。
     #: ⚠️ 与 `models.CHAT_ROLES`（消息角色 user/assistant/tool）是**两件
     #:   完全不同的事**，名字撞了纯属都叫"角色"。这个存的是"人格"。

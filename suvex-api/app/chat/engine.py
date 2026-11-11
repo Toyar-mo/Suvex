@@ -43,7 +43,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import inspect
 import json
 import logging
@@ -71,7 +70,7 @@ from app.chat.prompts import (
     build_system_prompt,
     build_tools_schema,
     may_call_tool,
-    render_brute_stop_limit_note,
+    render_auth_attempt_blocked_note,
     render_brute_stop_reminder,
     render_final_confirm_reminder,
     render_format_reminder,
@@ -80,6 +79,7 @@ from app.chat.prompts import (
     render_repeated_conclusion_note,
     render_result_continue_reminder,
     render_stall_reminder,
+    render_strategy_pivot_reminder,
     render_truncation_reminder,
     render_turn_wall_note,
 )
@@ -354,8 +354,10 @@ MAX_FINAL_CONFIRMATIONS = _env_int("SUPEX_CHAT_MAX_FINAL_CONFIRMATIONS", 1)
 #: 整轮 `done`。用户看到的仍是停一半。
 #:
 #: 计划句和"真的做完没有"是两件事：前者只说明**还没动手**，它的额度就该
-#: 按"还要推几步"算，而不是按"问没问过"算。4 次足够覆盖"分析→利用→打通"
-#: 这类多步任务；再多就是模型在绕圈，该停下来告诉用户实情。
+#: 按"还要推几步"算，而不是按"问没问过"算。这里数的是**连续**计划句：
+#: 模型真的执行了工具就清零（见 `run_turn`），只有连续 4 次只写计划不执行
+#: 才判定为绕圈。否则 100+ 步的长任务里正常出现的 4 句“接下来…”会把额度
+#: 吃光，最后落成「停在了下一步上」。
 MAX_PLAN_BOUNCES = _env_int("SUPEX_CHAT_MAX_PLAN_BOUNCES", 4)
 
 #: 对话侧一次模型调用的输出上限（v1.21）。
@@ -871,20 +873,37 @@ def _last_user_asks_continue(history: list[Any]) -> bool:
     return False
 
 
+#: 只认**真正的登录/口令尝试**，不认 `Authorization: Bearer ...`。
+#:
+#: ★ v1.87.1：旧正则包含 `auth`，于是任何带认证头的已授权请求（例如
+#:   `curl -H "Authorization: Bearer svx_..." /settings`）都会被算作口令尝试；
+#:   10 次后就触发硬上限，把认证后的 API 探测全部拦死。这不是目标行为，
+#:   是分类器误判。这里保留登录/爆破词，忽略 Authorization/credentials 这类
+#:   表示“已认证访问”的词。
 _AUTH_TOOL_PATTERN = re.compile(
-    r"(?i)(login|signin|password|passwd|brute|candidate|credential|auth)"
+    r"(?i)(\blogin\b|\bsignin\b|\bpassw(?:or)?d\b|brute|candidate|\bhydra\b|\bmedusa\b|\bpatator\b)"
 )
 
 
 def _looks_like_auth_attempt(name: str, args: dict[str, Any]) -> bool:
     """粗略判断这次工具调用是不是登录/口令尝试。
 
-    只用于**停损提醒**，不作为安全判据：误判的代价是多一句提醒，
-    漏判的代价是继续烧钱爆破，所以宁可宽一点。
+    只用于**爆破停损**，不作为安全判据。误判的代价是把认证后的正常 API
+    请求拦死（v1.87.1 实测：Authorization 头被 `auth` 命中，10 次就误停）；
+    漏判的代价是继续烧钱爆破。因此只认登录/口令词，不认认证头。
     """
     if name not in {"run_shell", "verify_http"}:
         return False
     return bool(_AUTH_TOOL_PATTERN.search(f"{name} {args}"))
+
+
+#: 会真正改变“测过什么”的工具。它们才算一次独立探测；
+#: `record_coverage` / `list_*` / `load_*` 是记账或读资料，不算。
+_PROBE_TOOL_NAMES = frozenset({"run_shell", "browser", "verify_http"})
+
+
+def _is_probe_action(name: str) -> bool:
+    return name in _PROBE_TOOL_NAMES
 
 
 def _action_signature(name: str, args: Any) -> str:
@@ -2351,6 +2370,7 @@ async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
             sub.provider_id = ctx.session.provider_id
             sub.persona = ctx.session.persona
             sub.require_approval = False
+            sub.parent_session_id = ctx.session.id
             subdb.commit()
 
             task_prompt = (
@@ -2362,7 +2382,7 @@ async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
                 f"任务：{prompt}"
             )
             await asyncio.wait_for(
-                run_turn(
+                run_turn_durable(
                     subdb,
                     session=sub,
                     content=task_prompt,
@@ -2393,19 +2413,12 @@ async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
             return name, f"子代理失败：{type(exc).__name__}: {exc}"
         finally:
             if sub is not None:
-                with contextlib.suppress(Exception):
-                    subdb.rollback()
+                # 子代理会话**保留**：它挂在父会话下面，供之后查看分支过程。
+                # 只回收容器；会话/消息是这次扇出的证据。
                 try:
                     chat_sandbox.drop_sandbox(sub.id)
                 except Exception:  # noqa: BLE001
                     _log.debug("回收子代理沙箱失败", exc_info=True)
-                if sub in subdb:
-                    try:
-                        chat_service.purge_session(subdb, session=sub)
-                        subdb.commit()
-                    except Exception:  # noqa: BLE001
-                        subdb.rollback()
-                        _log.warning("清理子代理会话失败", exc_info=True)
             subdb.close()
 
     results = await asyncio.gather(
@@ -3344,6 +3357,14 @@ async def run_turn(
     #:   "每次换个候选"的爆破，这里按策略族计数。
     brute_attempts = 0
     brute_warned = False
+    #: ★ v1.87：认证之外真正执行过的探测动作签名。交付前要求至少 3 个
+    #:   不同方向，防止“只试了登录就交卷”。
+    non_auth_probe_sigs: set[str] = set()
+    #: 把工作委派给子代理/扫描后，父代理可以直接汇总，不要求它自己再跑
+    #: 3 个探测 —— 子代理那边有同样的交付闸门。
+    delegated_work = False
+    #: 交付前因为“只有认证一条策略族”被打回的次数。只打回一次，避免死循环。
+    strategy_bounces = 0
     #: ★ v1.84：用户说「继续」但模型只重贴结果的次数。允许打回一次，
     #:   第二次才接受，避免无限循环。
     result_bounces = 0
@@ -3373,19 +3394,6 @@ async def run_turn(
         + MAX_TOOL_NUDGES
         + MAX_FINAL_CONFIRMATIONS
     ):
-        # ★ v1.84：口令爆破硬上限。提醒可能被模型忽略，硬上限不能：
-        #   本轮累计登录类工具调用达到 BRUTE_HARD_LIMIT 就收尾。
-        if brute_attempts >= BRUTE_HARD_LIMIT:
-            stopped = chat_service.append_assistant_message(
-                db,
-                session=session,
-                content=render_brute_stop_limit_note(brute_attempts),
-            )
-            db.commit()
-            result.messages.append(stopped)
-            result.hit_tool_limit = True
-            return result
-
         # ★ v1.68：墙钟预算闸。跑到超过 `TURN_WALL_SECONDS` 就地优雅收尾 ——
         #   不是让它接着烧，也不是硬砍，而是落一句"到点了、要继续再发继续"，
         #   本轮 marked interrupted（可接手/可续跑），沙箱释放。
@@ -3745,6 +3753,20 @@ async def run_turn(
             and nudge_policy.looks_like_plan(text)
         )
         result_block = bool(not actions and nudge_policy.looks_like_result(text))
+        # ★ v1.87：渗透任务只做过很少的真实探测就交结果块，不接受。
+        #   旧实现只在认证达到 6 次时才会触发；但“SQL 试一下、XSS 试一下”
+        #   同样可能只有 1~2 个方向。这里按**实际执行过的非认证动作**算，
+        #   至少 3 个不同方向才允许收口，打回一次。
+        is_pentest_task = (
+            (session.persona or "") == "pentest" or brute_attempts > 0
+        ) and tools_used > 0
+        thin_pentest_final = bool(
+            result_block
+            and is_pentest_task
+            and not delegated_work
+            and len(non_auth_probe_sigs) < 3
+            and strategy_bounces < 2
+        )
         user_continue = _last_user_asks_continue(history)
         # 用户刚说继续、模型却只重贴结果：把它当过程，逼它执行下一步；
         # 只打回一次，第二次接受，避免死循环。
@@ -3770,6 +3792,7 @@ async def run_turn(
                     and not premature_final
                     and not plan_like_final
                     and not force_continue_result
+                    and not thin_pentest_final
                 )
                 else "process"
             ),
@@ -3794,6 +3817,22 @@ async def run_turn(
                         reason="result-continue",
                         attempt=result_bounces,
                         maxAttempts=1,
+                    )
+                    continue
+                if thin_pentest_final:
+                    strategy_bounces += 1
+                    pending_reminder = render_strategy_pivot_reminder(
+                        brute_attempts,
+                        final_attempt=True,
+                        probes=len(non_auth_probe_sigs),
+                    )
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="strategy-pivot",
+                        attempt=strategy_bounces,
+                        maxAttempts=2,
                     )
                     continue
                 return result
@@ -3977,9 +4016,44 @@ async def run_turn(
             # 与改造前的体验一样。推一条"开始"帧，用户才知道它在干嘛。
             await _emit_phase(emit, "tool", round_index, tool=name)
 
+            # ★ v1.87：认证/口令尝试到上限后**不结束整轮**。旧实现直接落
+            #   “已停止”并 return，用户看到的是一次失败就交卷。现在只拒绝
+            #   这一类工具，把“换策略族”的指令喂回去，让模型继续做别的面。
+            if _looks_like_auth_attempt(name, args) and brute_attempts >= BRUTE_HARD_LIMIT:
+                output = render_auth_attempt_blocked_note(brute_attempts)
+                failed = True
+                tools_used += 1
+                no_tool_rounds = 0
+                tool_message = chat_service.append_tool_message(
+                    db,
+                    session=session,
+                    tool_name=name,
+                    tool_args=args,
+                    content=output,
+                    failed=True,
+                )
+                result.messages.append(tool_message)
+                db.commit()
+                await _emit_message(emit, tool_message)
+                if pending_reminder is None:
+                    pending_reminder = render_strategy_pivot_reminder(brute_attempts)
+                _log.warning(
+                    "chat.auth_blocked attempts=%s tool=%s session=%s",
+                    brute_attempts,
+                    name,
+                    session.id,
+                )
+                continue
+
             output, failed = await _execute_tool(ctx, name, args)
             tools_used += 1
             no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
+            # ★ v1.87：计划句的打回额度是**连续**额度，不是整轮总额。
+            #   101 步 / 48 次工具的长任务里，模型每隔几个工具就会说一句
+            #   “接下来查 X”；旧代码从不复位，4 句正常的计划就把额度吃光，
+            #   最后落成「停在了下一步上」。执行了真实工具 = 还在推进，
+            #   计划打回额度应当重新开始；连续 4 次只写计划不执行才是异常。
+            plan_bounces = 0
             tool_message = chat_service.append_tool_message(
                 db,
                 session=session,
@@ -4016,15 +4090,26 @@ async def run_turn(
 
             # ★ v1.84：登录/口令尝试的停损。与"完全相同命令"是两条判据：
             #   爆破每次候选都不同，命令签名永远不重复，必须按策略族计数。
+            # ★ v1.87：到上限只锁这一族，不再结束整轮；同时记录认证之外的
+            #   真实探测，交付闸门据此拒绝“只试了登录”的结果块。
             if _looks_like_auth_attempt(name, args):
                 brute_attempts += 1
-                if brute_attempts >= 6 and not brute_warned:
+                if brute_attempts >= BRUTE_HARD_LIMIT:
+                    pending_reminder = render_strategy_pivot_reminder(brute_attempts)
+                    _log.warning(
+                        "chat.auth_limit attempts=%s session=%s", brute_attempts, session.id
+                    )
+                elif brute_attempts >= 6 and not brute_warned:
                     if pending_reminder is None:
                         pending_reminder = render_brute_stop_reminder(brute_attempts)
                     brute_warned = True
                     _log.warning(
                         "chat.brute_stop attempts=%s session=%s", brute_attempts, session.id
                     )
+            elif _is_probe_action(name):
+                non_auth_probe_sigs.add(sig)
+            if name in {"spawn_subagents", "create_scan", "start_ctf_solve"}:
+                delegated_work = True
 
     return result
 
@@ -4630,6 +4715,7 @@ async def run_turn_durable(
     explicit_tools: list[str] | None = None,
     emit: Emit | None = None,
     resume_from: Any = None,
+    allowed_tools: set[str] | None = None,
 ) -> ChatTurnResult:
     """`run_turn` 的持久化外壳（生产路径都走这个）。"""
 
@@ -4646,6 +4732,7 @@ async def run_turn_durable(
             emit=emit,
             turn_run=run,
             resume_from=resume_from,
+            allowed_tools=allowed_tools,
         )
 
     return await _run_guarded(db, session=session, kind="turn", call=call)

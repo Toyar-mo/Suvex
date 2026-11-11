@@ -129,6 +129,9 @@ class ChatSessionOut(CamelModel):
     #:   而让列表多一个短字段，比让前端逐条请求详情便宜得多。
     challengeId: str | None = None
 
+    #: 子代理会话的父会话；`None` = 顶层会话。
+    parentSessionId: str | None = None
+
     project: str | None = None
     persona: str | None = None
     providerId: str | None = None
