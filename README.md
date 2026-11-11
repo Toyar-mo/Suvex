@@ -251,7 +251,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 * 资产页：静默刷新失败可见、覆盖度/事实图截断如实提示、健康筛选与展示同一时钟、切回页面自动刷新、抽屉有可访问名称
 * Vite 暴露面：dev server 固定 `127.0.0.1`、生产构建不产 sourcemap、补 `deploy/systemd/suvex-web.service` 模板与 README 警示
 * 对话侧补上黑板读写：`record_coverage` / `record_fact` 落同一张 `scan_facts`（按 `target` 归档），`list_facts` 读回同一目标的已知事实 —— 提示词一直要求记账、工具表里却没有，闭环断在"写"那一半
-* 对话沙箱出站守卫：`run_shell` / `browser open` 里的目标必须在「已建扫描的目标 ∪ 基础设施白名单 ∪ 环回」内，否则在执行前拒绝（`SUPEX_CHAT_SHELL_SCOPE_GUARD` 可整体关闭）
+* 对话沙箱出站守卫（**默认关闭**）：打开 `SUPEX_CHAT_SHELL_SCOPE_GUARD=1` 后，`run_shell` / `browser open` 的目标必须在「已建扫描的目标 ∪ 基础设施白名单 ∪ 环回」内，否则执行前拒绝。默认关是因为对话是通用工作台，按"已建扫描"判定会挡住正常排障
 * 人工审批的工具集合可配置：`SUPEX_CHAT_APPROVAL_EXTRA_TOOLS=run_shell,browser` 追配之后，开审批就连执行类工具一起挂起；拼错的名字会记 warning 并忽略
 * 基准可主动执行：用例登记 `target` 后 `POST /benchmark/cases/{id}/launch` 真的建扫描，`GET /benchmark/summary` 汇总通过率 / 未完成率 / 误报率 / 平均耗时（每个用例只取最近一次判定）
 * 对话侧结构化计划：`chat_todos` + `create_todo` / `list_todos` / `update_todo`，每轮从库里重读并渲染进系统提示词（不再靠"计划句"启发式判断）；对话页有只读计划条（完成数 + 每步状态）
@@ -267,7 +267,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 | 4 | **续解会丢"装到一半的工具"** | 镜像外 `pip install` / `apt` 装的包不在持久区，跨轮丢失。暴露面不大（史库里 38 次解题只续解过 1 次），但确实存在 |
 | 5 | **方法卡效果未经对照实验验证** | 首次 A/B 对照 n=1：两组都跑满 40 轮、都未解出，过程指标差异很小 —— 没有观察到正向信号，但 n=1 不构成结论 |
 | 6 | **依赖锁定靠 pip-tools，不是 uv** | 这是选型不是缺口。风险是"改了声明却忘记重新生成锁文件"，现在由 `verify_lockfiles.py` 在 CI 拦着 |
-| 7 | **出站边界是文本级，不是网络级** | 对话 `run_shell` / `browser open` 已按授权目标拦截（`app/chat/scope.py`：只放行已建扫描的目标 + 基础设施白名单），但目标藏在变量/base64 里、或域名解析到内网仍能绕过。真正的边界要 `DOCKER-USER` 按容器源 IP 下发白名单（需 Docker 侧实现与实测） |
+| 7 | **出站边界是文本级，且默认不启用** | 打开 `SUPEX_CHAT_SHELL_SCOPE_GUARD` 时按授权目标拦截（`app/chat/scope.py`）；目标藏在变量/base64 里、或域名解析到内网仍能绕过。真正的边界要 `DOCKER-USER` 按容器源 IP 下发白名单（需 Docker 侧实现与实测） |
 | 8 | **黑板不自动进提示词** | 对话侧现在有 `list_facts` 可以主动读；但不像扫描侧那样把事实索引渲染进 system prompt（`render_fact_index`），模型不查就看不到 —— 靠提示词纪律，不靠机制 |
 | 9 | **跨域基准还没有环境** | 机制已能主动执行并汇总（`launch` + `summary`），但任务集目前只有 Web/API 的本地容器；AD、云、内网、IR 仍无靶场，那几类"通用"依旧未验证 |
 | 10 | **计划视图只读、按消息数刷新** | 对话页有计划条（只读，`GET /chat/sessions/{id}/todos`）；一轮结束才按消息条数拉一次，用户不能在界面上改状态，模型也不知道用户看过 |

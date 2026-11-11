@@ -12,12 +12,35 @@
 
 from __future__ import annotations
 
+import pytest
 from sqlalchemy.orm import Session
+
+from app.core import config
 
 from app.chat import engine, scope
 from app.chat import service as chat_service
 from tests.factories import make_scan
 from tests.test_chat import ADMIN
+
+
+@pytest.fixture(autouse=True)
+def _guard_on() -> None:
+    """守卫默认已关（v1.90）；这组用例专门测守卫，用环境变量强制打开。
+
+    不替换 `get_settings` 整体：别的代码也要读同一份 Settings（secret_key 等），
+    用 SimpleNamespace 顶掉会让无关调用炸在 AttributeError 上。
+    """
+    import os
+
+    old = os.environ.get("SUPEX_CHAT_SHELL_SCOPE_GUARD")
+    os.environ["SUPEX_CHAT_SHELL_SCOPE_GUARD"] = "1"
+    config.get_settings.cache_clear()
+    yield
+    if old is None:
+        os.environ.pop("SUPEX_CHAT_SHELL_SCOPE_GUARD", None)
+    else:
+        os.environ["SUPEX_CHAT_SHELL_SCOPE_GUARD"] = old
+    config.get_settings.cache_clear()
 
 
 def _ctx(db: Session):  # noqa: ANN202 - 测试内部小工具

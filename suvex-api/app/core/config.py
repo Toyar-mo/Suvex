@@ -292,12 +292,16 @@ class Settings(BaseSettings):
     # 服务端逐字校验前端送来的 statement，防止「顺手勾一个默认值」。
     scan_authorization_statement: str = "我有权对此目标进行安全测试"
 
-    # ── 对话沙箱出站目标守卫（v1.89）──────────────────────
+    # ── 对话沙箱出站目标守卫（v1.89，v1.90 默认关闭）────
     # `run_shell` / `browser` 在无限制档沙箱里执行、可出网。打开它之后，
     # 命令里出现的目标必须落在「已建扫描的目标 ∪ 下面这份白名单」里，
-    # 否则拒绝执行。见 `app/chat/scope.py` 的模块 docstring
-    # （那里同时写明了它挡不住什么 —— 它是挡误操作的，不是网络层边界）。
-    chat_shell_scope_guard: bool = True
+    # 否则拒绝执行。见 `app/chat/scope.py` 的模块 docstring。
+    #
+    # ★ 默认**关**（2026-11-11 按用户要求）：对话是通用工作台，
+    #   按"已建扫描"判定会挡住正常排障（10.0.0.1 没建扫描就不能 curl），
+    #   而它本来只是文本级守卫、不是网络边界。要恢复拦截：
+    #   `SUPEX_CHAT_SHELL_SCOPE_GUARD=1`。
+    chat_shell_scope_guard: bool = False
     # 额外放行的主机 / CIDR（逗号分隔）。只放"运维显式认可的固定设施"；
     # 业务目标走扫描授权，不要加到这里。
     chat_shell_allowed_hosts: str = ""
