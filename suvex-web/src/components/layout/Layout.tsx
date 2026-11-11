@@ -6,6 +6,7 @@ import AppShell from './AppShell'
 import MobileNav from './MobileNav'
 import { CommandPalette } from './CommandPalette'
 import { findNavItem, isNavItemActive, NAV_ITEMS } from '@/navigation'
+import { useI18n } from '@/i18n'
 import { ensureOverviewLoaded } from '@/data/overview-store'
 import { ensureScansLoaded } from '@/data/scans-store'
 import { ensureSettingsLoaded } from '@/data/settings-store'
@@ -42,6 +43,7 @@ import { Outlet, useLocation } from 'react-router-dom'
  * 所以各页面自己的 effect 照常调用，不会变成重复请求。
  */
 export function Layout() {
+  const { t } = useI18n()
   const { collapsed, toggle } = useSidebarCollapsed()
   const { pathname } = useLocation()
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -64,8 +66,8 @@ export function Layout() {
   */
   useEffect(() => {
     const item = findNavItem(pathname)
-    document.title = item ? `${item.label} · Suvex` : 'Suvex'
-  }, [pathname])
+    document.title = item ? `${t(`nav.${item.id}`)} · Suvex` : 'Suvex'
+  }, [pathname, t])
 
   /*
     全局快捷键：Cmd/Ctrl+K 打开命令面板。

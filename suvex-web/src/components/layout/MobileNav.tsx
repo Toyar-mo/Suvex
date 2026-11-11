@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { groupNavItems, isNavItemActive, MOBILE_MORE_ITEMS, MOBILE_TAB_ITEMS } from '@/navigation'
 import { MoreHorizontal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -25,6 +26,7 @@ import { NavLink, useLocation } from 'react-router-dom'
  */
 
 export function MobileNav() {
+  const { t } = useI18n()
   const { pathname } = useLocation()
   const moreRef = useRef<HTMLDivElement>(null)
   const moreButtonRef = useRef<HTMLButtonElement>(null)
@@ -80,7 +82,7 @@ export function MobileNav() {
           {groupNavItems(MOBILE_MORE_ITEMS).map((group) => (
             <div key={group.id} className="flex flex-col" data-nav-group={group.id}>
               <h2 className="px-3 pb-0.5 pt-2 text-2xs font-medium tracking-[0.06em] text-ink-faint">
-                {group.label}
+                {t(`navGroup.${group.id}`)}
               </h2>
               {group.items.map((item) => {
                 const Icon = item.icon
@@ -97,7 +99,7 @@ export function MobileNav() {
                     )}
                   >
                     <Icon size={18} strokeWidth={1.75} aria-hidden="true" />
-                    <span className="truncate">{item.label}</span>
+                    <span className="truncate">{t(`nav.${item.id}`)}</span>
                   </NavLink>
                 )
               })}
@@ -136,7 +138,7 @@ export function MobileNav() {
                 />
                 <Icon size={20} strokeWidth={active ? 2 : 1.75} aria-hidden="true" />
                 {/* 底栏 5 格约每格 78px，"智能体活动" 会折行，用 shortLabel */}
-                <span className="max-w-full truncate px-0.5">{item.shortLabel ?? item.label}</span>
+                <span className="max-w-full truncate px-0.5">{t(item.shortLabel ? `navShort.${item.id}` : `nav.${item.id}`)}</span>
               </NavLink>
             )
           })}

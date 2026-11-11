@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { groupNavItems, isNavItemActive, type NavItem } from '@/navigation'
 import { NavLink, useLocation } from 'react-router-dom'
 
@@ -23,6 +24,7 @@ export interface SidebarNavItemProps {
 }
 
 export function SidebarNavItem({ item, collapsed, onNavigate }: SidebarNavItemProps) {
+  const { t } = useI18n()
   const { pathname } = useLocation()
   const active = isNavItemActive(item, pathname)
   const Icon = item.icon
@@ -34,8 +36,8 @@ export function SidebarNavItem({ item, collapsed, onNavigate }: SidebarNavItemPr
       aria-current={active ? 'page' : undefined}
       // 折叠时 aria-label 必须补上：图标本身不带可读文本，
       // 否则屏幕阅读器只会念出一个链接
-      aria-label={collapsed ? item.label : undefined}
-      title={collapsed ? item.label : undefined}
+      aria-label={collapsed ? t(`nav.${item.id}`) : undefined}
+      title={collapsed ? t(`nav.${item.id}`) : undefined}
       className={cn(
         'group relative flex items-center gap-tight rounded-sm py-2 text-sm transition-ui duration-fast',
         collapsed ? 'justify-center px-0' : 'pl-3 pr-2',
@@ -51,7 +53,7 @@ export function SidebarNavItem({ item, collapsed, onNavigate }: SidebarNavItemPr
         )}
       />
       <Icon size={18} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
-      {!collapsed && <span className="truncate">{item.label}</span>}
+      {!collapsed && <span className="truncate">{t(`nav.${item.id}`)}</span>}
 
       {/*
         折叠态的标签提示。自己画而不是靠原生 title：
@@ -71,7 +73,7 @@ export function SidebarNavItem({ item, collapsed, onNavigate }: SidebarNavItemPr
             'group-hover:opacity-100 group-focus-visible:opacity-100',
           )}
         >
-          {item.label}
+          {t(`nav.${item.id}`)}
         </span>
       )}
     </NavLink>
@@ -84,6 +86,7 @@ export interface SidebarNavProps {
 }
 
 export function SidebarNav({ collapsed, onNavigate }: SidebarNavProps) {
+  const { t } = useI18n()
   const groups = groupNavItems()
 
   return (
@@ -103,7 +106,7 @@ export function SidebarNav({ collapsed, onNavigate }: SidebarNavProps) {
             index > 0 && <span aria-hidden="true" className="mx-2 my-1.5 h-px shrink-0 bg-line" />
           ) : (
             <h2 className="px-3 pb-0.5 pt-2 text-2xs font-medium tracking-[0.06em] text-ink-faint">
-              {group.label}
+              {t(`navGroup.${group.id}`)}
             </h2>
           )}
           {group.items.map((item) => (

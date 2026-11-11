@@ -192,12 +192,84 @@ export function resolveLocale(setting: LocaleSetting): LocaleId {
   return 'en'
 }
 
+
+/**
+ * 导航文案（v1.90）。
+ *
+ * `id` 是标识符不翻译，只有显示名进字典 —— 与 `navigation.ts` 的约定一致。
+ * `navShort.*` 是窄屏底栏用的短名；缺这条时调用方回落到 `nav.*`。
+ *
+ * 非中英语言只翻「分组 + 高频入口」，其余回落英文（t 的回落链是
+ * 当前语言 → en → zh-CN）：宁可给一句英文，也不要把中文糊进德语界面。
+ */
+const NAV_LABELS: Record<LocaleId, Dict> = {
+  'zh-CN': {
+    'nav.overview': '总览', 'nav.chat': '对话', 'nav.scans': '扫描任务', 'nav.activity': '智能体活动',
+    'nav.findings': '漏洞发现', 'nav.assets': '资产总览', 'nav.schedules': '定时复查', 'nav.ir': '应急响应',
+    'nav.kernel': 'CTF', 'nav.reports': '报告', 'nav.credentials': '凭据', 'nav.files': '文件管理',
+    'nav.tools': '工具管理', 'nav.intranet': '内网会话', 'nav.approvals': '审批记录', 'nav.models': '模型管理',
+    'nav.agents': 'Agent', 'nav.skills': '技能库', 'nav.settings': '设置',
+    'navShort.activity': '活动', 'navShort.assets': '资产', 'navShort.schedules': '复查', 'navShort.kernel': 'CTF',
+    'navShort.files': '文件', 'navShort.tools': '工具', 'navShort.intranet': '内网', 'navShort.approvals': '审批',
+    'navShort.models': '模型', 'navShort.agents': 'Agent',
+    'navGroup.run': '运行', 'navGroup.output': '资产与产出', 'navGroup.automation': '自动化', 'navGroup.config': '能力与配置',
+  },
+  'zh-TW': {
+    'nav.overview': '總覽', 'nav.chat': '對話', 'nav.scans': '掃描任務', 'nav.activity': '智慧體活動',
+    'nav.findings': '漏洞發現', 'nav.assets': '資產總覽', 'nav.schedules': '定時複查', 'nav.ir': '應變處理',
+    'nav.kernel': 'CTF', 'nav.reports': '報告', 'nav.credentials': '憑證', 'nav.files': '檔案管理',
+    'nav.tools': '工具管理', 'nav.intranet': '內網工作階段', 'nav.approvals': '審批紀錄', 'nav.models': '模型管理',
+    'nav.agents': 'Agent', 'nav.skills': '技能庫', 'nav.settings': '設定',
+    'navShort.activity': '活動', 'navShort.assets': '資產', 'navShort.schedules': '複查', 'navShort.kernel': 'CTF',
+    'navShort.files': '檔案', 'navShort.tools': '工具', 'navShort.intranet': '內網', 'navShort.approvals': '審批',
+    'navShort.models': '模型', 'navShort.agents': 'Agent',
+    'navGroup.run': '執行', 'navGroup.output': '資產與產出', 'navGroup.automation': '自動化', 'navGroup.config': '能力與設定',
+  },
+  en: {
+    'nav.overview': 'Overview', 'nav.chat': 'Chat', 'nav.scans': 'Scans', 'nav.activity': 'Agent activity',
+    'nav.findings': 'Findings', 'nav.assets': 'Assets', 'nav.schedules': 'Schedules', 'nav.ir': 'Incident response',
+    'nav.kernel': 'CTF', 'nav.reports': 'Reports', 'nav.credentials': 'Credentials', 'nav.files': 'Files',
+    'nav.tools': 'Tools', 'nav.intranet': 'Intranet sessions', 'nav.approvals': 'Approvals', 'nav.models': 'Models',
+    'nav.agents': 'Agents', 'nav.skills': 'Skills', 'nav.settings': 'Settings',
+    'navShort.activity': 'Activity', 'navShort.assets': 'Assets', 'navShort.schedules': 'Schedules', 'navShort.kernel': 'CTF',
+    'navShort.files': 'Files', 'navShort.tools': 'Tools', 'navShort.intranet': 'Intranet', 'navShort.approvals': 'Approvals',
+    'navShort.models': 'Models', 'navShort.agents': 'Agents',
+    'navGroup.run': 'Run', 'navGroup.output': 'Output', 'navGroup.automation': 'Automation', 'navGroup.config': 'Config',
+  },
+  ru: {
+    'navGroup.run': 'Работа', 'navGroup.output': 'Результаты', 'navGroup.automation': 'Автоматизация', 'navGroup.config': 'Настройки',
+    'nav.overview': 'Обзор', 'nav.chat': 'Чат', 'nav.scans': 'Сканирования', 'nav.findings': 'Находки',
+    'nav.assets': 'Активы', 'nav.settings': 'Настройки',
+  },
+  fr: {
+    'navGroup.run': 'Exécution', 'navGroup.output': 'Résultats', 'navGroup.automation': 'Automatisation', 'navGroup.config': 'Configuration',
+    'nav.overview': 'Vue d’ensemble', 'nav.chat': 'Discussion', 'nav.scans': 'Analyses', 'nav.findings': 'Findings',
+    'nav.assets': 'Actifs', 'nav.settings': 'Paramètres',
+  },
+  ja: {
+    'navGroup.run': '実行', 'navGroup.output': '成果物', 'navGroup.automation': '自動化', 'navGroup.config': '設定',
+    'nav.overview': '概要', 'nav.chat': 'チャット', 'nav.scans': 'スキャン', 'nav.findings': '検出',
+    'nav.assets': '資産', 'nav.settings': '設定',
+  },
+  de: {
+    'navGroup.run': 'Betrieb', 'navGroup.output': 'Ergebnisse', 'navGroup.automation': 'Automatisierung', 'navGroup.config': 'Konfiguration',
+    'nav.overview': 'Übersicht', 'nav.chat': 'Chat', 'nav.scans': 'Scans', 'nav.findings': 'Findings',
+    'nav.assets': 'Assets', 'nav.settings': 'Einstellungen',
+  },
+}
+
+for (const [locale, labels] of Object.entries(NAV_LABELS)) {
+  Object.assign(DICTS[locale as LocaleId], labels)
+}
+
 function readSetting(): LocaleSetting {
-  if (typeof localStorage === 'undefined') return 'auto'
+  // 默认中文而不是 auto：这是中文优先的产品，老用户升级后界面不该突然变成英文；
+  // 想跟随系统的人可以在语言菜单里显式选「跟随浏览器」。
+  if (typeof localStorage === 'undefined') return 'zh-CN'
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored === 'auto') return 'auto'
   if (stored && stored in DICTS) return stored as LocaleId
-  return 'auto'
+  return 'zh-CN'
 }
 
 export interface I18nValue {
@@ -249,7 +321,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<I18nValue>(() => {
     const t = (key: string, vars?: Record<string, string | number>) => {
-      const raw = DICTS[locale][key] ?? zhCN[key] ?? key
+      const raw = DICTS[locale][key] ?? en[key] ?? zhCN[key] ?? key
       if (!vars) return raw
       return raw.replace(/\{(\w+)\}/g, (_, name: string) => String(vars[name] ?? `{${name}}`))
     }

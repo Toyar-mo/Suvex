@@ -1,6 +1,7 @@
 import { cn } from '@/lib/cn'
 import { useBackdrop } from '@/data/backdrop-store'
 import { NAV_ITEMS } from '@/navigation'
+import { useI18n } from '@/i18n'
 import { Suspense, lazy } from 'react'
 
 /**
@@ -186,12 +187,13 @@ export function AppShell({
  * 不在页面里另写一遍（写两遍就会开始漂移）。
  */
 export function PageHeader({ navId }: { navId: string }) {
+  const { t } = useI18n()
   const item = NAV_ITEMS.find((entry) => entry.id === navId)
   if (!item) return null
 
   return (
     <header className="border-b border-line px-gutter py-bay">
-      <h1 className="text-xl font-medium tracking-[-0.01em] text-ink">{item.label}</h1>
+      <h1 className="text-xl font-medium tracking-[-0.01em] text-ink">{t(`nav.${item.id}`)}</h1>
       <p className="mt-tight max-w-[68ch] text-sm text-ink-muted">{item.blurb}</p>
     </header>
   )

@@ -16,6 +16,7 @@ function Probe() {
       <span data-testid="setting">{setting}</span>
       <span data-testid="title">{t('priority.title')}</span>
       <span data-testid="total">{t('priority.total', { n: 7 })}</span>
+      <span data-testid="nav">{t('nav.overview')}</span>
       <button type="button" onClick={() => setSetting('en')}>
         to-en
       </button>
@@ -45,6 +46,7 @@ describe('i18n', () => {
 
     expect(screen.getByTestId('locale').textContent).toBe('en')
     expect(screen.getByTestId('title').textContent).toBe('Finding priority')
+    expect(screen.getByTestId('nav').textContent).toBe('Overview')
     expect(localStorage.getItem('suvex.locale')).toBe('en')
   })
 
