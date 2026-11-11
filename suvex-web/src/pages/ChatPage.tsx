@@ -187,13 +187,57 @@ const STARTER_GROUPS: Array<{ label: string; prompts: string[] }> = [
   },
 ]
 
+const PRIMARY_STARTERS = [
+  '我上次扫了什么？有没有失败的？',
+  '帮我对 example.com 发起一次 web 扫描',
+  '现在手上有哪些技能？哪几篇没被用过？',
+  '帮我加一个 MCP 工具连接',
+]
+
 function StarterPrompts({
   onPick,
   disabled,
+  expanded,
+  onToggle,
 }: {
   onPick: (prompt: string) => void
   disabled?: boolean
+  expanded: boolean
+  onToggle: () => void
 }) {
+  if (!expanded) {
+    return (
+      <div className="flex w-full flex-col gap-1.5">
+        {PRIMARY_STARTERS.map((prompt) => (
+          <button
+            key={prompt}
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(prompt)}
+            className={cn(
+              'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
+              'text-xs text-ink-muted transition-ui duration-fast',
+              'hover:border-line-strong hover:text-ink',
+              'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              'disabled:cursor-not-allowed disabled:opacity-60',
+            )}
+          >
+            <Sparkles size={12} strokeWidth={2} className="shrink-0 text-ink-faint" aria-hidden="true" />
+            {prompt}
+          </button>
+        ))}
+        <button
+          type="button"
+          onClick={onToggle}
+          disabled={disabled}
+          className="self-start px-1 pt-0.5 text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline disabled:opacity-50"
+        >
+          更多预设（{STARTER_GROUPS.reduce((sum, group) => sum + group.prompts.length, 0)}）
+        </button>
+      </div>
+    )
+  }
+
   return (
     <div className="flex w-full flex-col gap-3">
       {STARTER_GROUPS.map((group) => (
@@ -226,6 +270,13 @@ function StarterPrompts({
           </div>
         </section>
       ))}
+      <button
+        type="button"
+        onClick={onToggle}
+        className="self-start px-1 text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
+      >
+        收起预设
+      </button>
     </div>
   )
 }
@@ -387,6 +438,7 @@ export function ChatPage() {
 
   const [draft, setDraft] = useState('')
   const [showList, setShowList] = useState(false)
+  const [startersExpanded, setStartersExpanded] = useState(false)
   // 宽屏会话清单折叠（窄屏用 `showList` 的抽屉）；记忆到 localStorage。
   const { collapsed: listCollapsed, toggle: toggleList } = useChatListCollapsed()
   // v1.19：服务端说"这一轮可以继续"时，把那个 run 存下来渲染提示条。
@@ -1854,6 +1906,8 @@ export function ChatPage() {
                   {/* disabled：点一下会建会话 + 发一轮消息，连点会开两个并发会话。 */}
                   <StarterPrompts
                     disabled={pickingStarter}
+                    expanded={startersExpanded}
+                    onToggle={() => setStartersExpanded((value) => !value)}
                     onPick={(prompt) => void handlePickStarter(prompt)}
                   />
                 </div>
@@ -1895,6 +1949,8 @@ export function ChatPage() {
                     {!active?.challengeId && (
                       <StarterPrompts
                         disabled={pickingStarter}
+                        expanded={startersExpanded}
+                        onToggle={() => setStartersExpanded((value) => !value)}
                         onPick={(prompt) => setDraft(prompt)}
                       />
                     )}
