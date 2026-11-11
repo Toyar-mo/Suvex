@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { compareScans, type ScanComparison } from '@/data/scans-store'
 import { errorMessage } from '@/lib/api'
 import { AlertTriangle, Loader2, Minus, Plus, X } from 'lucide-react'
@@ -195,7 +196,7 @@ function Side({
       <p className="mt-0.5 text-2xs text-ink-faint">{hint}</p>
 
       {items.length === 0 ? (
-        <p className="mt-2 text-2xs text-ink-faint">没有</p>
+        <p className="mt-2 text-2xs text-ink-faint"><T k="scans.compare.none"/></p>
       ) : (
         <ul className="mt-2 flex flex-col gap-1">
           {items.map((item) => (

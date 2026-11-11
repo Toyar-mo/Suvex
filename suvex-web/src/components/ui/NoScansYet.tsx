@@ -1,4 +1,5 @@
 import { ArrowRight, Terminal } from 'lucide-react'
+import { T } from '@/i18n/T'
 import { Link } from 'react-router-dom'
 import { cn } from '@/lib/cn'
 
@@ -97,7 +98,7 @@ export function NoScansYet({
           他们大概率更愿意从 CLI 起手；而且这行字同时说明了
           "扫描需要指定目标"这件事 —— 是一句有用的说明，不是装饰。
         */}
-        <span className="mono-ui text-ink-faint">或在本地执行 suvex scan &lt;target&gt;</span>
+        <span className="mono-ui text-ink-faint"><T k="ui.noScans.title"/></span>
       </div>
     </div>
   )

@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { useEffect, useRef, useState } from 'react'
 
 /**
@@ -99,7 +100,7 @@ function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonD
         </p>
 
         <label htmlFor="reason-input" className="mt-panel block text-2xs text-ink-faint">
-          误报理由 <span className="text-signal-risk">（必填）</span>
+          误报理由 <span className="text-signal-risk"><T k="ui.required"/></span>
         </label>
         <textarea
           id="reason-input"

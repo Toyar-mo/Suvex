@@ -1,4 +1,5 @@
 import type { PasswordCheck } from '@/data/settings'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { Check } from 'lucide-react'
 
@@ -56,7 +57,7 @@ export function PasswordStrength({ check, className }: PasswordStrengthProps) {
       )}
     >
       <div className="flex items-center gap-tight">
-        <span className="text-2xs text-ink-muted">强度</span>
+        <span className="text-2xs text-ink-muted"><T k="ui.strength"/></span>
         <StrengthBar strength={check.strength} />
         {/*
           文字与颜色**同时**表达强度（design-system §7「颜色是冗余编码，

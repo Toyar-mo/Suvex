@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import type { ScanView } from '@/data/scans-store'
 import { Archive, ArchiveRestore, Download, GitCompare, RotateCcw, Trash2, Undo2, X } from 'lucide-react'
 
@@ -82,7 +83,7 @@ export function BulkActionBar({
         <span className="text-xs text-ink">
           已选 <span className="tabular font-medium text-accent-strong">{selectedCount}</span> 项
         </span>
-        {selectedCount === 2 && <span className="text-2xs text-ink-faint">可对比这两次扫描</span>}
+        {selectedCount === 2 && <span className="text-2xs text-ink-faint"><T k="scans.bulk.comparable"/></span>}
 
         <span aria-hidden="true" className="mx-1 h-4 w-px bg-line" />
 

@@ -1,4 +1,5 @@
 import Layout from '@/components/layout/Layout'
+import { T } from '@/i18n/T'
 import PageFallback from '@/components/layout/PageFallback'
 import PageTransition from '@/components/layout/PageTransition'
 import ErrorBoundary from '@/components/ui/ErrorBoundary'
@@ -138,7 +139,7 @@ function BootingFallback() {
       aria-live="polite"
       aria-busy="true"
     >
-      <span className="sr-only">正在检查登录状态</span>
+      <span className="sr-only"><T k="app.checkingAuth"/></span>
       <div className="h-4 w-40 animate-skeleton rounded-xs bg-surface-raised" />
     </div>
   )

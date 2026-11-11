@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { useI18n } from '@/i18n'
 import { groupNavItems, isNavItemActive, MOBILE_MORE_ITEMS, MOBILE_TAB_ITEMS } from '@/navigation'
 import { MoreHorizontal } from 'lucide-react'
@@ -170,7 +171,7 @@ export function MobileNav() {
               />
             )}
             <MoreHorizontal size={20} strokeWidth={moreOpen ? 2 : 1.75} aria-hidden="true" />
-            <span>更多</span>
+            <span><T k="layout.more"/></span>
           </button>
         </div>
       </nav>

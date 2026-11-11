@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { useI18n } from '@/i18n'
 
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
@@ -115,6 +116,7 @@ const FindingRow = memo(function FindingRow({
   onToggleSelect: (id: string) => void
   onOpen: (finding: Finding) => void
 }) {
+  const { t } = useI18n()
 
   return (
     <li className="border-b border-line/60 last:border-b-0">
@@ -203,12 +205,12 @@ const FindingRow = memo(function FindingRow({
         */}
         <span
           className="w-24 shrink-0 truncate text-2xs lg:w-24"
-          title={finding.assigneeName ? `负责人：${finding.assigneeName}` : '还没有指派负责人'}
+          title={finding.assigneeName ? t('findings.assignee', { name: finding.assigneeName }, `负责人：${finding.assigneeName}`) : t('findings.assigneeNone', undefined, '还没有指派负责人')}
         >
           {finding.assigneeName ? (
             <span className="text-ink-muted">{finding.assigneeName}</span>
           ) : (
-            <span className="text-ink-faint">未指派</span>
+            <span className="text-ink-faint"><T k="findings.unassigned"/></span>
           )}
         </span>
 

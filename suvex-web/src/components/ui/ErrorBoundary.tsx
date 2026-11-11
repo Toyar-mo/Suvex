@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react'
+import { T } from '@/i18n/T'
 
 /**
  * 顶层错误边界（任务 10 P6 补）。
@@ -79,7 +80,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     return (
       <div className="flex min-h-screen items-center justify-center bg-canvas px-gutter">
         <div className="w-full max-w-[52ch] rounded-md border border-line bg-surface p-panel">
-          <h1 className="text-sm font-medium text-ink">界面出错了</h1>
+          <h1 className="text-sm font-medium text-ink"><T k="ui.error"/></h1>
           <p className="mt-1.5 text-xs leading-relaxed text-ink-muted">
             这一页在渲染时遇到问题，已经停在这里，避免继续显示不完整的数据。
             你正在看的**数据没有丢** —— 后端与数据库都不受影响。

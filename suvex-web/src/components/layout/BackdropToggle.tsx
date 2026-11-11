@@ -1,4 +1,5 @@
 import { Check, Layers } from 'lucide-react'
+import { T } from '@/i18n/T'
 import { useEffect, useRef, useState } from 'react'
 
 import { setBackdrop, useBackdrop } from '@/data/backdrop-store'
@@ -71,7 +72,7 @@ export function BackdropToggle() {
         )}
       >
         <Layers size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className="hidden lg:inline">背景</span>
+        <span className="hidden lg:inline"><T k="layout.background"/></span>
       </button>
 
       {open && (

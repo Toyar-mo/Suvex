@@ -24,6 +24,7 @@
  *   都不在设计系统里（动效一致性检查要的就是这种游离值）。
  *   见 tailwind.config.js 的 skeleton keyframes。
  */
+import { T } from '@/i18n/T'
 export function PageFallback() {
   return (
     <div
@@ -32,7 +33,7 @@ export function PageFallback() {
       aria-live="polite"
       aria-busy="true"
     >
-      <span className="sr-only">正在加载页面</span>
+      <span className="sr-only"><T k="layout.loadingPage"/></span>
       {/* 页头占位：和 PageHeader 的高度节奏对齐，避免加载完成后内容整体跳动 */}
       <div className="mb-bay">
         <div className="h-6 w-32 animate-skeleton rounded-xs bg-surface-raised" />
