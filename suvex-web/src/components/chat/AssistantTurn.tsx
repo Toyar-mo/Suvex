@@ -1,11 +1,10 @@
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
-import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/data/chat'
 
 /**
@@ -42,6 +41,7 @@ export const AssistantTurn = memo(
     prev.streamingText === next.streamingText &&
     prev.phaseText === next.phaseText &&
     prev.liveTool === next.liveTool &&
+    prev.liveToolOutput === next.liveToolOutput &&
     prev.deciding === next.deciding &&
     prev.meta === next.meta &&
     prev.sessionId === next.sessionId &&
@@ -85,6 +85,7 @@ function AssistantTurnImpl({
   streamingText = null,
   phaseText = null,
   liveTool = null,
+  liveToolOutput = null,
   deciding,
   onDecide,
   interjections = [],
@@ -102,6 +103,8 @@ function AssistantTurnImpl({
   phaseText?: string | null
   /** 正在执行的工具名（phase=tool）—— 画一张运行中的卡片。 */
   liveTool?: string | null
+  /** 运行中工具已经吐出的输出（SSE 增量）。 */
+  liveToolOutput?: string | null
   deciding?: boolean
   onDecide?: (messageId: string, approve: boolean) => void
   /** 跑的过程中用户插的话（已落库、等下一轮被读到）。 */
@@ -115,7 +118,6 @@ function AssistantTurnImpl({
   hideWork?: boolean
   startedAt?: string | null
 }) {
-  const { t } = useI18n()
   const answers = items.filter(isAnswer)
   const work = items.filter((message) => !isAnswer(message))
   const body = work.filter((message) => message.approvalStatus !== 'pending')
@@ -192,19 +194,7 @@ function AssistantTurnImpl({
       )}
 
       {live && liveTool && (
-        <div
-          className="flex items-center gap-2 rounded-md border border-line/70 bg-surface-raised/30 px-2 py-1.5"
-          data-live-tool
-        >
-          <Loader2
-            size={12}
-            strokeWidth={2}
-            className="animate-spin text-ink-faint"
-            aria-hidden="true"
-          />
-          <span className="shrink-0 font-mono text-[11px] text-ink-muted">{liveTool}</span>
-          <span className="text-2xs text-ink-faint">{t('tools.card.running', undefined, '执行中…')}</span>
-        </div>
+        <LiveToolCard name={liveTool} output={liveToolOutput} elapsed={elapsed} />
       )}
 
       {live && (
@@ -260,6 +250,58 @@ function isAnswer(message: ChatMessage): boolean {
  * 长任务里最难受的是"看不出它还在不在动"：阶段文案可能几十秒不变，
  * 一个持续增长的秒数是最便宜、也最诚实的活着的证据。
  */
+/**
+ * 运行中的工具卡（v1.92）。
+ *
+ * omp 的工具卡在执行期间就能看到输出在涨；这里用 SSE 的 `tool_output`
+ * 增量画出同一件事。落库后由真正的 `ToolCard` 接管 —— 所以这张卡只需要
+ * "活着"的证据：工具名、秒数、最后几屏输出。
+ */
+function LiveToolCard({
+  name,
+  output,
+  elapsed,
+}: {
+  name: string
+  output: string | null
+  elapsed: number
+}) {
+  const ref = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [output])
+
+  return (
+    <div
+      className="overflow-hidden rounded-md border border-line/70 bg-surface-raised/20"
+      data-live-tool
+    >
+      <div className="flex items-center gap-2 px-2.5 py-1.5">
+        <Loader2
+          size={12}
+          strokeWidth={2}
+          className="animate-spin text-ink-faint"
+          aria-hidden="true"
+        />
+        <span className="shrink-0 font-mono text-[12px] text-ink-muted">{name}</span>
+        <span className="text-2xs text-ink-faint">
+          执行中…{elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
+        </span>
+      </div>
+      {output ? (
+        <pre
+          ref={ref}
+          className="max-h-[240px] overflow-auto border-t border-line/60 bg-surface-sunken/40 px-3 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap break-words text-ink-muted"
+        >
+          {output}
+          <span className="ml-0.5 inline-block h-3 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom" />
+        </pre>
+      ) : null}
+    </div>
+  )
+}
+
 function useElapsed(live: boolean, since: string | null): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {

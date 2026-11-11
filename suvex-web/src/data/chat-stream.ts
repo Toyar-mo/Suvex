@@ -65,6 +65,15 @@ export const TURN_ERROR = 'error'
  */
 export const TURN_DELTA = 'delta'
 
+/**
+ * ★ v1.92：工具执行期间的输出增量。`{ tool, chunk }`。
+ *
+ * 与 `delta` 的分工：`delta` 是模型正文，这个是沙箱里命令的 stdout。
+ * 它只用于「运行中的工具卡」；落库后的工具结果仍由 `message` 帧整体替换 ——
+ * 增量可能有解码替换字符，不能当成最终事实。
+ */
+export const TURN_TOOL_OUTPUT = 'tool_output'
+
 /** `delta.data` 的形态。 */
 export interface DeltaPayload {
   text: string

@@ -19,7 +19,14 @@ import {
   uploadAttachment,
 } from './chat'
 import { ApiError } from '@/lib/api'
-import { TURN_DELTA, TURN_DONE, TURN_ERROR, TURN_MESSAGE, TURN_PHASE } from './chat-stream'
+import {
+  TURN_DELTA,
+  TURN_DONE,
+  TURN_ERROR,
+  TURN_MESSAGE,
+  TURN_PHASE,
+  TURN_TOOL_OUTPUT,
+} from './chat-stream'
 
 /*
   ══════════════════════════════════════════════════════════════
@@ -1712,5 +1719,104 @@ describe('按会话独立并发（v1.65 对齐 CyberStrikeAI）', () => {
     expect(getChatSnapshot().sendingSessionIds).toEqual([])
     expect(getChatSnapshot().sending).toBe(false)
     if (pending[3]) pending[3].resolve([])
+  })
+})
+
+/*
+  ══════════════════════════════════════════════════════════════
+  工具输出增量（v1.92）
+  ══════════════════════════════════════════════════════════════
+
+  运行中的工具卡靠 `tool_output` 帧把 stdout 一段段填进去。失败模式同样
+  静默：换了工具还沿用上一段、落库后不清、无限输出吃内存。这里钉住：
+  append 而不是 replace；落库清空；换工具清空。
+*/
+describe('liveToolOutput — 工具输出增量（v1.92）', () => {
+  it('★ 同一工具的输出按到达顺序拼接', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '跑一下')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_PHASE, { phase: 'tool', round: 1, tool: 'run_shell' })),
+    )
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_TOOL_OUTPUT, { tool: 'run_shell', chunk: 'line 1\n' })),
+    )
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_TOOL_OUTPUT, { tool: 'run_shell', chunk: 'line 2\n' })),
+    )
+    await tick()
+
+    expect(getChatSnapshot().liveToolOutput).toEqual({
+      tool: 'run_shell',
+      text: 'line 1\nline 2\n',
+    })
+
+    finishStream()
+    await promise
+  })
+
+  it('★ 工具结果落库后运行输出退场（最终文本以 message 为准）', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '跑一下')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_PHASE, { phase: 'tool', round: 1, tool: 'run_shell' })),
+    )
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_TOOL_OUTPUT, { tool: 'run_shell', chunk: 'partial' })),
+    )
+    await tick()
+    expect(getChatSnapshot().liveToolOutput?.text).toBe('partial')
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(
+        sseFrame(TURN_MESSAGE, {
+          ...message({ id: 'msg_t1', role: 'tool', content: 'line 1\nline 2', toolName: 'run_shell' }),
+          seq: 2,
+        }),
+      ),
+    )
+    await tick()
+    expect(getChatSnapshot().liveToolOutput).toBeNull()
+
+    finishStream()
+    await promise
+  })
+
+  it('★ 换成另一个工具时不沿用上一段输出', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '跑一下')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_PHASE, { phase: 'tool', round: 1, tool: 'run_shell' })),
+    )
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_TOOL_OUTPUT, { tool: 'run_shell', chunk: 'old' })),
+    )
+    await tick()
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_PHASE, { phase: 'tool', round: 2, tool: 'verify_http' })),
+    )
+    await tick()
+    expect(getChatSnapshot().liveToolOutput).toBeNull()
+
+    finishStream()
+    await promise
   })
 })

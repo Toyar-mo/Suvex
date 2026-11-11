@@ -69,6 +69,7 @@ from typing import Any
 from app.events.stream import SSE_HEADERS, SSE_MEDIA_TYPE
 
 #: 帧的类型（= 界面上的时间线节点）。
+EVENT_TOOL_OUTPUT = "tool_output"
 EVENT_PHASE = "phase"
 EVENT_MESSAGE = "message"
 EVENT_AWAITING = "awaiting"
@@ -245,6 +246,7 @@ __all__ = [
     "EVENT_ERROR",
     "EVENT_MESSAGE",
     "EVENT_PHASE",
+    "EVENT_TOOL_OUTPUT",
     "Emit",
     "KEEPALIVE_SECONDS",
     "SSE_HEADERS",

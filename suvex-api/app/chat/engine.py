@@ -84,7 +84,14 @@ from app.chat.prompts import (
     render_truncation_reminder,
     render_turn_wall_note,
 )
-from app.chat.stream import EVENT_AWAITING, EVENT_DELTA, EVENT_MESSAGE, EVENT_PHASE, Emit
+from app.chat.stream import (
+    EVENT_AWAITING,
+    EVENT_DELTA,
+    EVENT_MESSAGE,
+    EVENT_PHASE,
+    EVENT_TOOL_OUTPUT,
+    Emit,
+)
 from app.core.errors import ApiError
 
 _log = logging.getLogger(__name__)
@@ -3272,7 +3279,24 @@ def _needs_approval(name: str) -> bool:
     return name in approval_gated_names() or mcp_tools.is_mcp_tool_name(name)
 
 
-async def _execute_tool(ctx: _ToolContext, name: str, args: dict[str, Any]) -> tuple[str, bool]:
+def _tool_output_emitter(emit: Emit | None, name: str) -> Any:
+    """把工具输出块转成 SSE 帧（没有 emit 时返回 None，走非流式路径）。"""
+    if emit is None:
+        return None
+
+    async def _send(chunk: str) -> None:
+        await emit(EVENT_TOOL_OUTPUT, {"tool": name, "chunk": chunk})
+
+    return _send
+
+
+async def _execute_tool(
+    ctx: _ToolContext,
+    name: str,
+    args: dict[str, Any],
+    *,
+    on_output: Any = None,
+) -> tuple[str, bool]:
     """执行一个工具，返回 `(结果文本, 是否失败)`。
 
     ★ 失败**不抛**，返回文本 + 布尔。原因见 `_err`。
@@ -3311,7 +3335,13 @@ async def _execute_tool(ctx: _ToolContext, name: str, args: dict[str, Any]) -> t
         # 不是我们约定的「失败：」前缀。两者都算失败，界面上才会标红。
         return text, text.startswith(("失败：", "MCP 工具返回错误："))
     try:
-        text = await impl(ctx, args)
+        # ★ v1.92：`run_shell` 走流式实现 —— 边跑边把 stdout 推到 SSE，
+        #   界面上的运行卡才有"输出在涨"可看。其余工具仍是整块返回。
+        #   最终文本与内核版逐字一致（同一套截断/超时说明）。
+        if name == "run_shell" and on_output is not None:
+            text = await chat_sandbox.stream_run_shell(ctx, args, on_output)
+        else:
+            text = await impl(ctx, args)
     except _ToolDenied as exc:
         return f"失败：{exc}", True
     except Exception as exc:  # noqa: BLE001 - 工具内部崩了不该毁掉整轮对话
@@ -4340,7 +4370,9 @@ async def run_turn(
                 continue
 
             tool_started = time.perf_counter()
-            output, failed = await _execute_tool(ctx, name, args)
+            output, failed = await _execute_tool(
+                ctx, name, args, on_output=_tool_output_emitter(emit, name)
+            )
             tool_elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
             tools_used += 1
             no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
@@ -4454,6 +4486,7 @@ async def resume_approved(
         ctx,
         message.tool_name or "",
         message.tool_args or {},
+        on_output=_tool_output_emitter(emit, message.tool_name or ""),
     )
     chat_service.finish_approved_tool(
         db, session=session, message=message, output=output, failed=failed

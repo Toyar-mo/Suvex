@@ -8,6 +8,7 @@ import {
   TURN_ERROR,
   TURN_MESSAGE,
   TURN_PHASE,
+  TURN_TOOL_OUTPUT,
   asChatMessage,
   streamTurn,
   type PhasePayload,
@@ -298,6 +299,8 @@ export interface ChatState {
    * `null` = 没有在跑。
    */
   phase: PhasePayload | null
+  /** ★ v1.92：运行中工具的输出增量（仅界面展示，不落库）。 */
+  liveToolOutput: { tool: string; text: string } | null
   /**
    * ★ v0.100：跑的过程中**用户插的话**（还没被模型看到的那几句）。
    *
@@ -447,6 +450,7 @@ const EMPTY: ChatState = {
   sending: false,
   sendingSessionId: null,
   phase: null,
+  liveToolOutput: null,
   interjections: [],
   streamingText: null,
   deciding: false,
@@ -1082,6 +1086,7 @@ export async function resumeTurn(sessionId: string, runId: string): Promise<Chat
       sendingSessionId: null,
       sendingSessionIds: remaining,
       phase: null,
+  liveToolOutput: null,
       stopRequested: false,
     })
     void pollTurnProgress(sessionId)
@@ -1177,6 +1182,7 @@ export async function sendMessage(
     error: null,
     pendingUserContent: content,
     phase: null,
+  liveToolOutput: null,
     interjections: [],
     // ★ v0.102：新的一轮从空缓冲开始。不清的话，上一轮异常退出时
     //   残留的半句话会拼在新一轮的开头（"这个对话还是空的"那种矛盾感）。
@@ -1239,7 +1245,33 @@ export async function sendMessage(
 
         if (frame.event === TURN_PHASE) {
           // 「正在想…」那一行现在能显示"第几轮 / 在跑哪个工具"
-          patch({ phase: frame.data as unknown as PhasePayload })
+          const phase = frame.data as unknown as PhasePayload
+          const previous = state.phase
+          patch({
+            phase,
+            // 换了一个工具 → 上一段输出不再属于当前卡；同一工具的新 phase
+            // （重试）也清空，避免把两次执行的输出拼成一段。
+            liveToolOutput:
+              phase.phase === 'tool' && previous?.tool === phase.tool
+                ? state.liveToolOutput
+                : null,
+          })
+          return
+        }
+
+        if (frame.event === TURN_TOOL_OUTPUT) {
+          const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
+          const chunk = typeof frame.data.chunk === 'string' ? frame.data.chunk : ''
+          if (!tool || !chunk) return
+          const previous = state.liveToolOutput
+          const text = (previous?.tool === tool ? previous.text : '') + chunk
+          patch({
+            liveToolOutput: {
+              tool,
+              // 上限 64 KiB：`yes` 之类的无限输出不该把浏览器内存吃光。
+              text: text.length > 65_536 ? text.slice(-65_536) : text,
+            },
+          })
           return
         }
 
@@ -1270,6 +1302,11 @@ export async function sendMessage(
                 而正文可能还在往里流）。
             */
             streamingText: message.role === 'assistant' ? null : state.streamingText,
+            // 工具结果已落库 → 运行卡退场（最终文本以 message 为准）。
+            liveToolOutput:
+              message.role === 'tool' && message.toolName === state.liveToolOutput?.tool
+                ? null
+                : state.liveToolOutput,
           })
           return
         }
@@ -1290,7 +1327,7 @@ export async function sendMessage(
 
         if (frame.event === TURN_AWAITING) {
           // 停下来等人工确认：清掉 phase，界面据此把输入框让出来并提示
-          patch({ phase: null })
+          patch({ phase: null, liveToolOutput: null })
           return
         }
 
@@ -1316,7 +1353,7 @@ export async function sendMessage(
         }
 
         if (frame.event === TURN_DONE) {
-          patch({ phase: null })
+          patch({ phase: null, liveToolOutput: null })
         }
       },
     })

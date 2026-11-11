@@ -415,6 +415,7 @@ export function ChatPage() {
     pendingUserContent,
     // ★ v0.100：流式过程中的两个状态 —— 现在在做什么、用户插了哪些话。
     phase,
+    liveToolOutput,
     interjections,
     // ★ v0.102：正在流入的正文（还没落库）。
     streamingText,
@@ -2001,6 +2002,13 @@ export function ChatPage() {
                           streamingText={isLive ? streamingText : null}
                           phaseText={isLive ? phaseLabel(phase) : null}
                           liveTool={isLive && phase?.phase === 'tool' ? (phase.tool ?? null) : null}
+                          liveToolOutput={
+                            isLive &&
+                            phase?.phase === 'tool' &&
+                            liveToolOutput?.tool === phase.tool
+                              ? (liveToolOutput?.text ?? null)
+                              : null
+                          }
                           progress={isLive ? { tools: turnToolCount(turn.items) } : null}
                           interjections={isLive ? interjections : []}
                           meta={turnMeta}

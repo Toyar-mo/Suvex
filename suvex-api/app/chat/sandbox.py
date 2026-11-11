@@ -70,10 +70,12 @@ keepalive、其他会话的轮次）全部卡死。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import threading
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.chat.models import ChatSession
@@ -702,3 +704,136 @@ __all__ = [
 #: 引擎注册表用的公开别名。定义在 `__all__` 之后，避免循环引用。
 tool_run_shell = _tool_run_shell
 tool_browser = _tool_browser
+
+
+# ══════════════════════════════════════════════════════════
+# 流式 run_shell（v1.92）
+# ══════════════════════════════════════════════════════════
+#
+# 为什么另起一条实现，而不是给 `SandboxContainer.shell()` 加回调：
+# 那个方法是**同步**的（subprocess.run + 完整捕获），它被解题、扫描等多处
+# 共用，改成流式会波及所有调用方。对话这条路径需要的只是"边跑边把字节
+# 推给 SSE"，用 `docker exec` + `asyncio.create_subprocess_exec` 单独实现
+# 更小、更可回滚。
+
+
+async def stream_run_shell(
+    ctx: Any,
+    args: dict[str, Any],
+    on_chunk: Callable[[str], Awaitable[None]] | None = None,
+) -> str:
+    """执行 `run_shell`，每读到一块输出就 `await on_chunk(text)`。
+
+    ## 与内核版必须逐字一致的部分
+
+    * `command` 必填、`cwd` 只允许 `/work` 之下、`timeout_seconds` 夹在
+      5..DEFAULT_SHELL_TIMEOUT；
+    * 容器内用 `timeout --signal=KILL` 真杀进程（客户端断开不会杀容器内进程）；
+    * 最终返回值走同一套截断（头尾保留 + 明示被截断）。
+
+    少了任何一条，同一条命令在"流式"和"非流式"下就会有两种行为 ——
+    模型看到的结论也会有两种。
+
+    ## 输出合并
+
+    `stderr` 并入 `stdout`：界面上一条命令的输出只有一块，分两色会让
+    "这条命令失败了吗"变成一个需要读细节才能回答的问题。失败与否仍由
+    退出码与 `失败：` 前缀决定（与内核版一致）。
+    """
+    import asyncio
+    import codecs
+    import shlex
+
+    from app.kernel import runner
+
+    command = str(args.get("command") or "").strip()
+    if not command:
+        return "参数错误：需要 `command`。"
+    timeout = int(args.get("timeout_seconds") or runner.DEFAULT_SHELL_TIMEOUT)
+    timeout = max(5, min(timeout, runner.DEFAULT_SHELL_TIMEOUT))
+
+    raw_cwd = str(args.get("cwd") or "").strip()
+    if raw_cwd:
+        if not raw_cwd.startswith("/work"):
+            return (
+                f"参数错误：`cwd` 只能是 `/work` 之下的路径（收到 {raw_cwd!r}）。\n"
+                "容器里只有 `/work` 可写，其余文件系统是只读的。"
+            )
+        command = f"cd {shlex.quote(raw_cwd)} && {command}"
+
+    from app.chat import scope as chat_scope
+
+    blocked = chat_scope.reject_reason(ctx, text=command, tool="run_shell")
+    if blocked:
+        return blocked
+
+    sandbox = await asyncio.to_thread(get_sandbox, ctx.session)
+    argv = [
+        "docker",
+        "exec",
+        "-i",
+        "-e",
+        "TERM=dumb",
+        sandbox.name,
+        "timeout",
+        "--signal=KILL",
+        str(timeout),
+        "bash",
+        "-lc",
+        command,
+    ]
+
+    proc = await asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    decoder = codecs.getincrementaldecoder("utf-8")("replace")
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout + 30
+    parts: list[str] = []
+    timed_out = False
+    emitted = 0
+
+    assert proc.stdout is not None  # create_subprocess_exec 已给 PIPE
+    try:
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                chunk = await asyncio.wait_for(proc.stdout.read(4096), remaining)
+            except TimeoutError:
+                timed_out = True
+                break
+            if not chunk:
+                break
+            text = decoder.decode(chunk)
+            if not text:
+                continue
+            parts.append(text)
+            # 每次 read 至多 4KB，已经天然分块；再设一个事件上限，
+            # 防止 `yes` 这类无限输出把 SSE 刷成一条瀑布。
+            if on_chunk is not None and emitted < 256:
+                emitted += 1
+                await on_chunk(text)
+    finally:
+        if timed_out:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+        with contextlib.suppress(Exception):
+            await proc.wait()
+
+    out = ''.join(parts)
+    if timed_out:
+        return f"命令超时（{timeout} 秒）已被容器内 timeout 终止。\n{out}"
+    if len(out) > runner.MAX_TOOL_OUTPUT_CHARS:
+        return (
+            runner._clip_both_ends(out, runner.MAX_TOOL_OUTPUT_CHARS)
+            + f"\n\n⚠️ 输出被截断：原长 {len(out)} 字符，上限 {runner.MAX_TOOL_OUTPUT_CHARS}。"
+            "\n**你看到的是头尾两段，中间被省略了。** 如果刚找的东西没出现，"
+            "它可能在中间 —— 用 `head`/`grep`/`sed -n 'X,Yp'` 缩小范围再看，"
+            "不要因为没看到就断定不存在。"
+        )
+    return out

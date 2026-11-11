@@ -174,6 +174,7 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     //   夹具不补它们，tsc 会报"缺属性" —— 那正是它该报的：
     //   少一个字段意味着页面读到 undefined，渲染逻辑会静默走错分支。
     phase: null,
+    liveToolOutput: null,
     interjections: [],
     // ★ v0.102：正在流入的正文。同上，必须显式给 —— 缺了 tsc 会报，
     //   而页面读到 undefined 时会走错分支（`!== null` 对 undefined 成立，
