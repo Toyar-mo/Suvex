@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { SCAN_STATUS_LABEL, SCAN_STATUS_TONE, totalFindings, type Scan } from '@/data/scan'
 import { formatDuration } from '@/lib/datetime'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { ExternalLink, MousePointerClick } from 'lucide-react'
 
 /**
@@ -27,9 +28,10 @@ export function ScanPreviewPane({
   scan: Scan | null
   className?: string
 }) {
+  const { t } = useI18n()
   return (
     <aside
-      aria-label="任务预览"
+      aria-label={t('scanPreview.aria')}
       className={cn(
         'flex min-h-[22rem] flex-col rounded-md border border-line bg-surface p-panel',
         className,
@@ -39,9 +41,9 @@ export function ScanPreviewPane({
       {scan === null ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 text-center">
           <MousePointerClick size={20} strokeWidth={1.5} className="text-ink-ghost" aria-hidden="true" />
-          <p className="text-sm text-ink-muted">从左侧选择一个任务</p>
+          <p className="text-sm text-ink-muted">{t('scanPreview.empty')}</p>
           <p className="max-w-[26ch] text-xs text-ink-faint">
-            这里会显示它的目标、进度与发现数；完整的执行步骤在「详情」里。
+            {t('scanPreview.emptyHint')}
           </p>
         </div>
       ) : (
@@ -63,13 +65,13 @@ export function ScanPreviewPane({
 
           <dl className="mt-panel flex flex-col gap-1.5 text-xs">
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-ink-faint">发现</dt>
+              <dt className="text-ink-faint">{t('scanPreview.findings')}</dt>
               <dd className="mono-ui tabular text-ink" data-numeric>
                 {totalFindings(scan.findings)}
               </dd>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-ink-faint">用时</dt>
+              <dt className="text-ink-faint">{t('scanPreview.duration')}</dt>
               <dd className="mono-ui tabular text-ink-muted">
                 {scan.durationSec === null || scan.durationSec === undefined
                   ? '—'
@@ -77,7 +79,7 @@ export function ScanPreviewPane({
               </dd>
             </div>
             <div className="flex items-center justify-between gap-2">
-              <dt className="text-ink-faint">目标类型</dt>
+              <dt className="text-ink-faint">{t('scanPreview.kind')}</dt>
               <dd className="text-ink-muted">{scan.targetKind}</dd>
             </div>
           </dl>
@@ -87,7 +89,7 @@ export function ScanPreviewPane({
               to={`/activity?scan=${encodeURIComponent(scan.id)}`}
               className="inline-flex h-8 w-full items-center justify-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted transition-colors hover:bg-surface-sunken hover:text-ink"
             >
-              查看执行详情
+              {t('scanPreview.open')}
               <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
             </Link>
           </div>

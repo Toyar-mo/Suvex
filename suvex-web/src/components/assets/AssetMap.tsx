@@ -4,6 +4,7 @@ import { Minus, Plus, RotateCcw } from 'lucide-react'
 import { ASSET_HEALTH_META } from '@/data/asset'
 import type { HostAsset } from '@/data/asset-host'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 
 /**
  * 资产测绘视图（v1.90，UI 移植阶段 3）。
@@ -41,6 +42,7 @@ export function AssetMap({
   onSelectHost?: (host: string) => void
   className?: string
 }) {
+  const { t } = useI18n()
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const dragRef = useRef<{ x: number; y: number } | null>(null)
@@ -66,21 +68,21 @@ export function AssetMap({
       data-asset-map=""
     >
       <div className="absolute left-3 top-3 z-10 flex items-center gap-2 text-2xs text-ink-faint">
-        <span>{hosts.length} 台主机</span>
+        <span>{hosts.length} {t('assetMap.hosts')}</span>
         <span aria-hidden="true">·</span>
-        <span className={bleeding > 0 ? 'text-signal-risk' : undefined}>{bleeding} 台有未处置高危</span>
+        <span className={bleeding > 0 ? 'text-signal-risk' : undefined}>{bleeding} {t('assetMap.bleeding')}</span>
       </div>
 
       <div className="absolute right-3 top-3 z-10 flex items-center gap-1">
-        <MapButton label="缩小" onClick={() => setZoom((value) => Math.max(0.5, value - 0.15))}>
+        <MapButton label={t('assetMap.zoomOut')} onClick={() => setZoom((value) => Math.max(0.5, value - 0.15))}>
           <Minus size={13} strokeWidth={2} aria-hidden="true" />
         </MapButton>
         <span className="mono-ui w-10 text-center text-2xs text-ink-faint">{Math.round(zoom * 100)}%</span>
-        <MapButton label="放大" onClick={() => setZoom((value) => Math.min(2, value + 0.15))}>
+        <MapButton label={t('assetMap.zoomIn')} onClick={() => setZoom((value) => Math.min(2, value + 0.15))}>
           <Plus size={13} strokeWidth={2} aria-hidden="true" />
         </MapButton>
         <MapButton
-          label="重置视图"
+          label={t('assetMap.reset')}
           onClick={() => {
             setZoom(1)
             setPan({ x: 0, y: 0 })
@@ -140,7 +142,7 @@ export function AssetMap({
             className="absolute flex -translate-x-1/2 -translate-y-1/2 items-center gap-2 rounded-full border border-line-strong bg-surface-overlay px-4 py-2 text-xs text-ink shadow-sm"
             style={{ left: CENTER.x, top: CENTER.y }}
           >
-            工作空间 · {hosts.length}
+            {t('assetMap.center')} · {hosts.length}
           </div>
 
           {nodes.map((node) => {
@@ -160,8 +162,8 @@ export function AssetMap({
                   <span className="truncate text-xs text-ink">{node.host.host}</span>
                 </span>
                 <span className="pl-3 text-2xs text-ink-faint">
-                  {node.host.ports.length} 个端口
-                  {danger > 0 && <span className="ml-1.5 text-signal-risk">{danger} 高危</span>}
+                  {node.host.ports.length} {t('assetMap.ports')}
+                  {danger > 0 && <span className="ml-1.5 text-signal-risk">{danger} {t('assetMap.high')}</span>}
                 </span>
               </button>
             )

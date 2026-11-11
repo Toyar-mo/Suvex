@@ -6,6 +6,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { loadNetworkRestrictions, type NetworkRestrictions } from '@/data/network'
 import { ApiError } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 
 /**
  * 网络限制（v1.90，UI 移植阶段 4）。
@@ -21,6 +22,7 @@ import { cn } from '@/lib/cn'
  * 部署后没人会回去翻。这一节补的就是"运行时可见"。
  */
 export function NetworkPanel() {
+  const { t } = useI18n()
   const [data, setData] = useState<NetworkRestrictions | null>(null)
   const [error, setError] = useState<ApiError | null>(null)
   const [loading, setLoading] = useState(true)
@@ -47,15 +49,15 @@ export function NetworkPanel() {
   return (
     <SettingsPanel
       id="network"
-      title="网络限制"
-      description="对话沙箱的出站目标守卫。命令里出现的目标必须落在这里列出的范围内，否则执行前就被拒绝。"
+      title={t('network.title')}
+      description={t('network.desc')}
     >
       {loading ? (
         <SkeletonRows rows={2} rowClassName="h-16" />
       ) : error ? (
         <ErrorState
           error={error}
-          title="网络限制加载失败"
+          title={t('network.loadFailed')}
           onRetry={() => window.location.reload()}
         />
       ) : data ? (
@@ -67,33 +69,30 @@ export function NetworkPanel() {
                 data.guardEnabled ? 'bg-signal-ok/10 text-signal-ok' : 'bg-signal-warn/10 text-signal-warn',
               )}
             >
-              {data.guardEnabled ? '守卫已启用' : '守卫已关闭'}
+              {data.guardEnabled ? t('network.enabled') : t('network.disabled')}
             </span>
             <span className="text-2xs text-ink-faint">
-              关闭方式：`SUPEX_CHAT_SHELL_SCOPE_GUARD=0`（改完重启 API）
+              {t('network.disableHint')}
             </span>
           </div>
 
           <div className="grid gap-panel lg:grid-cols-2">
             <RangeBlock
-              label="运维额外放行"
-              hint="来自 SUPEX_CHAT_SHELL_ALLOWED_HOSTS，只该放固定设施（镜像站、内部包仓）"
+              label={t('network.extra')}
+              hint={t('network.extraHint')}
               hosts={data.allowedHosts}
               cidrs={data.allowedCidrs}
-              empty="没有额外放行项"
+              empty={t('network.extraEmpty')}
             />
             <RangeBlock
-              label="内置基础设施"
-              hint="包管理镜像、代码托管、公共 DNS 与环回 —— 代码常量，不可在此修改"
+              label={t('network.builtin')}
+              hint={t('network.builtinHint')}
               hosts={data.builtinHosts}
               cidrs={data.builtinCidrs}
             />
           </div>
 
-          <p className="text-2xs text-ink-faint">
-            ⚠️ 这是**文本级**守卫：目标藏在变量/base64 里、或域名解析到内网仍能绕过。
-            网络层边界需要按容器源 IP 下发防火墙规则，尚未实现。
-          </p>
+          <p className="text-2xs text-ink-faint">{t('network.textLevel')}</p>
         </div>
       ) : null}
     </SettingsPanel>
