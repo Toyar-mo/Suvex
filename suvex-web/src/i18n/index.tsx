@@ -425,6 +425,76 @@ for (const [locale, labels] of Object.entries(UI_LABELS)) {
   Object.assign(DICTS[locale as LocaleId], labels)
 }
 
+
+/** 任务页文案（阶段 5）。 */
+const SCREEN_LABELS: Record<LocaleId, Dict> = {
+  'zh-CN': {
+    'scans.filter.all': '全部',
+    'scans.view.archived': '已归档',
+    'scans.view.deleted': '回收站',
+    'scans.search.placeholder': '筛选目标',
+    'scans.search.aria': '按目标筛选',
+    'scans.empty.filtered': '没有符合条件的扫描',
+    'scans.empty.clear': '清除筛选条件',
+    'scans.empty.none.title': '还没有扫描记录',
+    'scans.empty.none.body': '给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。',
+    'scans.empty.none.cta': '发起第一次扫描',
+    'scans.empty.status': '这个状态下没有扫描',
+    'scans.empty.viewAll': '查看全部',
+    'scans.footnote.filtered': '筛选出 {filtered} 条，共 {total} 次扫描 · 累计发现 {findings} 条漏洞',
+    'scans.footnote.all': '共 {total} 次扫描 · 累计发现 {findings} 条漏洞',
+    'scans.archived.title': '没有已归档的扫描',
+    'scans.archived.body': '归档把不再关注的记录从默认列表里移走 —— 数据不会删，随时可以取消归档。可在「设置 → 扫描保留规则」里让失败与已终止的扫描到期自动归档。',
+    'scans.trash.title': '回收站是空的',
+    'scans.trash.body': '从列表里删除的扫描会先到这里，保留期满后才会被真正清除 —— 保留天数在「设置 → 扫描保留规则」里可调。期间随时可以恢复。',
+  },
+  'zh-TW': {
+    'scans.filter.all': '全部',
+    'scans.view.archived': '已封存',
+    'scans.view.deleted': '回收筒',
+    'scans.search.placeholder': '篩選目標',
+    'scans.search.aria': '依目標篩選',
+    'scans.empty.filtered': '沒有符合條件的掃描',
+    'scans.empty.clear': '清除篩選條件',
+    'scans.empty.none.title': '還沒有掃描紀錄',
+    'scans.empty.none.body': '給它一個目標，它會先摸清攻擊面、尋找弱點，再逐一嘗試用可重現的方式證明。',
+    'scans.empty.none.cta': '發起第一次掃描',
+    'scans.empty.status': '這個狀態下沒有掃描',
+    'scans.empty.viewAll': '查看全部',
+    'scans.footnote.filtered': '篩選出 {filtered} 筆，共 {total} 次掃描 · 累計發現 {findings} 個漏洞',
+    'scans.footnote.all': '共 {total} 次掃描 · 累計發現 {findings} 個漏洞',
+    'scans.archived.title': '沒有已封存的掃描',
+    'scans.archived.body': '封存會把不再關注的紀錄從預設列表移走 —— 資料不會刪，隨時可以取消封存。可在「設定 → 掃描保留規則」裡讓失敗與已終止的掃描到期自動封存。',
+    'scans.trash.title': '回收筒是空的',
+    'scans.trash.body': '從列表刪除的掃描會先到這裡，保留期滿後才會真正清除 —— 保留天數在「設定 → 掃描保留規則」裡調整。期間隨時可以還原。',
+  },
+  en: {
+    'scans.filter.all': 'All',
+    'scans.view.archived': 'Archived',
+    'scans.view.deleted': 'Trash',
+    'scans.search.placeholder': 'Filter targets',
+    'scans.search.aria': 'Filter by target',
+    'scans.empty.filtered': 'No scans match the filters',
+    'scans.empty.clear': 'Clear filters',
+    'scans.empty.none.title': 'No scans yet',
+    'scans.empty.none.body': 'Give it a target: it maps the attack surface, looks for weak spots, then proves what it finds with reproducible evidence.',
+    'scans.empty.none.cta': 'Start the first scan',
+    'scans.empty.status': 'No scans in this state',
+    'scans.empty.viewAll': 'Show all',
+    'scans.footnote.filtered': '{filtered} of {total} scans · {findings} findings',
+    'scans.footnote.all': '{total} scans · {findings} findings',
+    'scans.archived.title': 'Nothing archived',
+    'scans.archived.body': 'Archiving hides a scan from the default list without deleting it — unarchive any time. Failure and aborted scans can auto-archive after a retention period in Settings → Scan retention.',
+    'scans.trash.title': 'Trash is empty',
+    'scans.trash.body': 'Deleted scans land here until retention expires, then they are removed for good. The retention window lives in Settings → Scan retention; restore any time before that.',
+  },
+  ru: {}, fr: {}, ja: {}, de: {},
+}
+
+for (const [locale, labels] of Object.entries(SCREEN_LABELS)) {
+  Object.assign(DICTS[locale as LocaleId], labels)
+}
+
 function readSetting(): LocaleSetting {
   // 默认中文而不是 auto：这是中文优先的产品，老用户升级后界面不该突然变成英文；
   // 想跟随系统的人可以在语言菜单里显式选「跟随浏览器」。

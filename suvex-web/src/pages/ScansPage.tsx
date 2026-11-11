@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { PageHeader } from '@/components/layout/AppShell'
 import BulkActionBar from '@/components/scans/BulkActionBar'
 import NewScanWizard from '@/components/scans/NewScanWizard'
@@ -90,6 +91,7 @@ const VIEW_TABS: { value: Exclude<ScanView, 'default'>; label: string; icon: typ
 ]
 
 export function ScansPage() {
+  const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   /*
     ⚠️ 这里原来有一个 `actionError` 状态，用来放"终止/重跑失败"的原因。
@@ -104,10 +106,10 @@ export function ScansPage() {
   const [previewId, setPreviewId] = useState<string | null>(null)
   /* 预览栏只在 lg 以上显示；窄屏继续走原来的"点标题去活动页"，否则点了没反应。 */
   const [wide, setWide] = useState(() =>
-    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1024px)').matches,
+    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1536px)').matches,
   )
   useEffect(() => {
-    const mq = window.matchMedia('(min-width: 1024px)')
+    const mq = window.matchMedia('(min-width: 1536px)')
     const onChange = () => setWide(mq.matches)
     mq.addEventListener('change', onChange)
     return () => mq.removeEventListener('change', onChange)
@@ -782,8 +784,8 @@ export function ScansPage() {
 
       <div className="px-gutter py-bay">
         {/* v1.90：两栏（列表 | 预览）。窄屏单栏，预览只在 lg 以上占位。 */}
-        <div className="flex flex-col gap-panel lg:flex-row lg:items-start">
-        <div className="min-w-0 flex-1">
+        <div className="flex flex-col gap-panel 2xl:flex-row 2xl:items-start">
+        <div className="min-w-0 flex-1 2xl:min-w-[600px]">
         {/* ── 工具条 ── */}
         <div className="mb-panel flex flex-wrap items-center gap-tight">
           <div role="group" aria-label="按状态筛选" className="flex flex-wrap items-center gap-1">
@@ -803,7 +805,7 @@ export function ScansPage() {
                     setStatusFilter(filter.value)
                   }}
                 >
-                  {filter.label}
+                  {filter.value === 'all' ? t('scans.filter.all') : t(`scanStatus.${filter.value}`)}
                   <span
                     className={cn(
                       'tabular text-2xs',
@@ -830,14 +832,15 @@ export function ScansPage() {
                   onToggle={() => switchView(tab.value)}
                 >
                   <Icon size={12} strokeWidth={1.75} aria-hidden="true" />
-                  {tab.label}
+                  {t(`scans.view.${tab.value}`)}
                 </ToggleChip>
               )
             })}
           </div>
 
-          <div className="flex-1" />
-
+          {/* 右侧控件组：搜索 / 排序 / 视图 / 新建 作为一个整体换行，
+              否则窄一点就会散成两行、主按钮跑到筛选条下面去。 */}
+          <div className="ml-auto flex flex-wrap items-center gap-tight">
           {/* 目标搜索 */}
           <div className="relative">
             <ScanSearch
@@ -850,11 +853,11 @@ export function ScansPage() {
               type="search"
               value={targetQuery}
               onChange={(e) => setTargetQuery(e.target.value)}
-              placeholder="筛选目标"
-              aria-label="按目标筛选"
+              placeholder={t('scans.search.placeholder')}
+              aria-label={t('scans.search.aria')}
               className={cn(
                 'h-8 w-40 rounded-sm border border-line bg-surface-sunken pl-7 pr-2 text-xs text-ink',
-                'transition-ui duration-fast placeholder:text-ink-faint',
+                'transition-ui duration-fast placeholder:text-ink-muted',
                 'hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40',
               )}
             />
@@ -904,6 +907,7 @@ export function ScansPage() {
             <Plus size={14} strokeWidth={2.5} aria-hidden="true" />
             新建扫描
           </Button>
+          </div>
         </div>
 
         {/* ── 批量操作栏（选中 ≥1 项时出现，sticky 跟随滚动） ── */}
@@ -1032,6 +1036,8 @@ export function ScansPage() {
           />
         ) : (
           <div className="rounded-md border border-line bg-surface">
+            <div className="overflow-x-auto">
+            <div className="min-w-[58rem]">
             <ScanList
               scans={filtered}
               selectedIds={selectedIds}
@@ -1088,7 +1094,7 @@ export function ScansPage() {
                 ) : isFiltered ? (
                   // 筛选后为空 —— 与"从来没跑过"是两回事，提示必须不同
                   <div className="flex flex-col items-center gap-tight text-center">
-                    <p className="text-sm text-ink-muted">没有符合条件的扫描</p>
+                    <p className="text-sm text-ink-muted">{t('scans.empty.filtered')}</p>
                     <Button
                       variant="link"
                       size="sm"
@@ -1097,7 +1103,7 @@ export function ScansPage() {
                         setTargetQuery('')
                       }}
                     >
-                      清除筛选条件
+                      {t('scans.empty.clear')}
                     </Button>
                   </div>
                 ) : !hasAnyScan ? (
@@ -1108,25 +1114,27 @@ export function ScansPage() {
                       className="text-ink-ghost"
                       aria-hidden="true"
                     />
-                    <p className="text-sm text-ink-muted">还没有扫描记录</p>
+                    <p className="text-sm text-ink-muted">{t('scans.empty.none.title')}</p>
                     <p className="max-w-[46ch] text-xs text-ink-faint">
-                      给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。
+                      {t('scans.empty.none.body')}
                     </p>
                     <Button variant="primary" size="lg" onClick={() => setWizardOpen(true)}>
                       <Plus size={15} strokeWidth={2.5} aria-hidden="true" />
-                      发起第一次扫描
+                      {t('scans.empty.none.cta')}
                     </Button>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center gap-tight text-center">
-                    <p className="text-sm text-ink-muted">这个状态下没有扫描</p>
+                    <p className="text-sm text-ink-muted">{t('scans.empty.status')}</p>
                     <Button variant="link" size="sm" onClick={() => setStatusFilter('all')}>
-                      查看全部
+                      {t('scans.empty.viewAll')}
                     </Button>
                   </div>
                 )
               }
             />
+            </div>
+            </div>
           </div>
         )}
 
@@ -1134,22 +1142,23 @@ export function ScansPage() {
         {hasAnyScan && (
           <p className="mt-panel text-2xs text-ink-faint">
             {isFiltered ? (
-              <>
-                筛选出 {filtered.length} 条，共 {scans.length} 次扫描 · 累计发现{' '}
-                {scans.reduce((sum, s) => sum + totalFindings(s.findings), 0)} 条漏洞
-              </>
+              t('scans.footnote.filtered', {
+                filtered: filtered.length,
+                total: scans.length,
+                findings: scans.reduce((sum, s) => sum + totalFindings(s.findings), 0),
+              })
             ) : (
-              <>
-                共 {scans.length} 次扫描 · 累计发现{' '}
-                {scans.reduce((sum, s) => sum + totalFindings(s.findings), 0)} 条漏洞
-              </>
+              t('scans.footnote.all', {
+                total: scans.length,
+                findings: scans.reduce((sum, s) => sum + totalFindings(s.findings), 0),
+              })
             )}
           </p>
         )}
         </div>
         <ScanPreviewPane
           scan={scans.find((scan) => scan.id === previewId) ?? null}
-          className="hidden w-[340px] shrink-0 lg:flex"
+          className="hidden w-[320px] shrink-0 2xl:flex"
         />
         </div>
       </div>

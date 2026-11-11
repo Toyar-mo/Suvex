@@ -105,7 +105,7 @@ export function SidebarNav({ collapsed, onNavigate }: SidebarNavProps) {
           {collapsed ? (
             index > 0 && <span aria-hidden="true" className="mx-2 my-1.5 h-px shrink-0 bg-line" />
           ) : (
-            <h2 className="px-3 pb-0.5 pt-2 text-2xs font-medium tracking-[0.06em] text-ink-faint">
+            <h2 className="px-3 pb-0.5 pt-2 text-[11px] font-medium tracking-[0.06em] text-ink-muted">
               {t(`navGroup.${group.id}`)}
             </h2>
           )}

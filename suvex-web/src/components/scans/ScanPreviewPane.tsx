@@ -33,7 +33,10 @@ export function ScanPreviewPane({
     <aside
       aria-label={t('scanPreview.aria')}
       className={cn(
-        'flex min-h-[22rem] flex-col rounded-md border border-line bg-surface p-panel',
+        'flex min-h-[14rem] flex-col rounded-md p-panel',
+        scan === null
+          ? 'border border-dashed border-line-strong bg-surface/40'
+          : 'border border-line bg-surface',
         className,
       )}
       data-scan-preview=""
