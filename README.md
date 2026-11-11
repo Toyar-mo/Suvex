@@ -84,7 +84,7 @@ Suvex 的取舍是：**让 agent 像人一样去验证，然后只交付它真�
 
 ### 技能库：模型手里那叠速查卡
 
-模型不是靠"知道更多"变强的，是靠**在正确的时刻读到正确的那一篇**。技能库是 89 篇随代码分发的 Markdown（另有自定义技能），模型用 `load_skill` 按需拉取，不需要全塞进上下文。
+模型不是靠"知道更多"变强的，是靠**在正确的时刻读到正确的那一篇**。技能库是 273 篇随代码分发的 Markdown（另有自定义技能），模型用 `load_skill` 按需拉取，不需要全塞进上下文。
 
 技能库页回答三个问题：**有哪些、写了什么、哪几篇真的被拉下来用过。**
 
@@ -129,7 +129,7 @@ flowchart LR
 ```
 
 - **控制面与执行面分离**：API 进程不跑目标；扫描在独立容器里，跑完即销毁。
-- **契约唯一事实来源**：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)，4,090 行。
+- **契约唯一事实来源**：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)，4,167 行。
 - **事件流**：SSE + 断线重放（`Last-Event-ID`），前端不轮询扫描详情。
 
 ## 快速开始
@@ -184,23 +184,23 @@ sudo bash suvex-api/deploy/install.sh
 
 > 这一节不是宣传文案。已做到的附数字与口径，没做到的如实列出。
 
-### 规模（2026-11-10 实测）
+### 规模（2026-11-11 实测）
 
 | 项 | 数字 |
 | --- | --- |
-| 后端代码 | **92,488 行** / 178 个文件（`suvex-api/app/`） |
-| 后端测试 | **208 个测试文件 / 3,423 个 `def test_`**（静态计数） |
-| 前端代码 | **90,783 行** / 307 个 `.ts`/`.tsx`（`suvex-web/src/`） |
-| 前端测试 | **87 个文件 / 1,263 passed**（`npm test`，32.9 秒） |
-| 数据库迁移 | 67 个 Alembic 版本 |
-| API 端点 | 171 个（按 `@router.*` 装饰器计） |
-| API 契约 | 4,090 行 |
+| 后端代码 | **99,643 行** / 226 个文件（`suvex-api/app/`） |
+| 后端测试 | **242 个测试文件 / 3,571 个 `def test_`**（静态计数，含 `async def`） |
+| 前端代码 | **94,909 行** / 347 个 `.ts`/`.tsx`（`suvex-web/src/`） |
+| 前端测试 | **99 个文件 / 1,274 passed**（`npx vitest run`，37.9 秒） |
+| 数据库迁移 | 81 个 Alembic 版本 |
+| API 端点 | 225 个（按 `@router.*` 装饰器计） |
+| API 契约 | 4,167 行 |
 | 决策记录 | 10 篇 ADR（`suvex-api/docs/adr-*.md`） |
-| 技能库 | 89 篇随仓库分发 |
-| 页面 | 26 个 |
+| 技能库 | 273 篇随仓库分发（`suvex-api/prompts/skills/`） |
+| 页面 | 23 个（`suvex-web/src/pages/*.tsx`，不含测试） |
 
 > [!WARNING]
-> **数字要带口径，否则不如不写。** 后端测试写的是**静态 `def test_` 数**；参数化展开后的执行数更多，最近一次全量执行记录是 2,432 passed / 3 skipped（2026-10-17，对真实 PostgreSQL，42 分 35 秒）。2026-11-10 没有重跑全量后端套件 —— 前端 1,263 是本次实测，后端 3,423 是静态计数，两者不是同一种量法。
+> **数字要带口径，否则不如不写。** 后端测试写的是**静态 `def test_` 数**；参数化展开后的执行数更多，最近一次全量执行记录是 2,432 passed / 3 skipped（2026-10-17，对真实 PostgreSQL，42 分 35 秒）。2026-11-11 在 Kali 上只跑了窄验证（`tests/chat/test_strategy_pivot_e2e.py` + `tests/kernel/test_prompt_discipline.py`，12 passed），**没有重跑全量后端套件** —— 前端 1,274 是本次实测，后端 3,571 是静态计数，两者不是同一种量法。
 
 ### 真机验证过的
 
@@ -220,6 +220,11 @@ sudo bash suvex-api/deploy/install.sh
 * 扫描产物保留策略（归档 → 回收站 → 过期清理）
 * 文件管理：跨会话清单、截断如实上报、批量删除、ZIP 导出
 * 后端 ruff 接进 CI
+* 子代理会话成为侧栏分支（`chat_sessions.parent_session_id` + `ChatTurnRun`）：运行中可见，结束后只回收沙箱、保留分支证据
+* 计划打回改为「连续 4 次只写计划不执行」才收尾，每次真实工具后额度归零；认证满 10 次改为换策略，不再终止整轮
+* 认证停损器不再把 `Authorization` / `X-Auth-Token` 当成口令尝试
+* 资产页：静默刷新失败可见、覆盖度/事实图截断如实提示、健康筛选与展示同一时钟、切回页面自动刷新、抽屉有可访问名称
+* Vite 暴露面：dev server 固定 `127.0.0.1`、生产构建不产 sourcemap、补 `deploy/systemd/suvex-web.service` 模板与 README 警示
 
 ### 还没有做到的
 
@@ -227,10 +232,13 @@ sudo bash suvex-api/deploy/install.sh
 | --- | --- | --- |
 | 1 | **多用户是单租户的** | 多个账号共享全部数据。真多租户要给每张业务表加 `tenant_id` 并改所有查询 —— 而且 Suvex 会对任意目标发包，做 SaaS 意味着要为**别人**的目标负责，那是合规问题 |
 | 2 | **`/metrics` 不覆盖依赖注入抛出的 401/403** | 路由层状态码都计数，鉴权失败经异常处理器生成的不计（见 `test_metrics.py` 里钉住局限的用例） |
-| 3 | **前端页面级测试仍然少** | 26 个页面，测试主要落在组件与纯逻辑；渲染期崩溃仍可能只有人工点开页面才发现 |
+| 3 | **前端页面级测试仍然少** | 23 个页面，测试主要落在组件与纯逻辑；渲染期崩溃仍可能只有人工点开页面才发现 |
 | 4 | **续解会丢"装到一半的工具"** | 镜像外 `pip install` / `apt` 装的包不在持久区，跨轮丢失。暴露面不大（史库里 38 次解题只续解过 1 次），但确实存在 |
 | 5 | **方法卡效果未经对照实验验证** | 首次 A/B 对照 n=1：两组都跑满 40 轮、都未解出，过程指标差异很小 —— 没有观察到正向信号，但 n=1 不构成结论 |
 | 6 | **依赖锁定靠 pip-tools，不是 uv** | 这是选型不是缺口。风险是"改了声明却忘记重新生成锁文件"，现在由 `verify_lockfiles.py` 在 CI 拦着 |
+| 7 | **`run_shell` / `browser` 没有目标授权守卫** | 对话 agent 能在 root 沙箱里对任意目标出网；`create_scan` 有授权声明与目标校验，这两条路径绕开。要做通用安全 agent，必须先补 target allowlist 与出网策略 |
+| 8 | **提示词要求的工具不存在** | 渗透提示词要求 `record_coverage` / `record_fact`，`CHAT_TOOLS` 里没有这两个；模型照做只会拿到"工具不存在"，自主记忆闭环不完整 |
+| 9 | **通用能力没有基准** | `/benchmark` 只做快照与对比，不主动执行评测；真实证据以 Web/CTF 为主，AD、云、内网、IR 没有同等级实测，"通用"尚未验证 |
 
 > [!NOTE]
 > 这份清单不粉饰，也不重复列已修项。缺过什么本身是信息，但已修的就不再占一行。
@@ -276,15 +284,15 @@ suvex-api/
   app/core/       跨领域公共件（依赖方向单向）
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,chat,ctf2,kernel}/
                   按领域拆分：模型 / 出入参 / 业务 / 路由
-  alembic/        67 个迁移
-  tests/          208 个测试文件，对真实 PostgreSQL 跑
+  alembic/        81 个迁移
+  tests/          242 个测试文件，对真实 PostgreSQL 跑
   docs/           10 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
-  prompts/skills/ 89 篇内置技能（只读）
+  prompts/skills/ 273 篇内置技能（只读）
 
 suvex-web/
   src/data/       数据模型与数据源（全部走真实 API）
-  src/pages/      26 个页面（Landing 同步引入，其余 lazy 分包）
+  src/pages/      23 个页面（Landing 同步引入，其余 lazy 分包）
   src/components/ 布局壳 / 各功能页组件 / 无状态基础件
   src/design-system.md   配色 / 字体 / 间距 / 动效的决策与理由
   docs/api-contract.md   ★ 契约，唯一事实来源
