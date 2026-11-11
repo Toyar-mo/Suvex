@@ -226,6 +226,7 @@ sudo bash suvex-api/deploy/install.sh
 * 资产页：静默刷新失败可见、覆盖度/事实图截断如实提示、健康筛选与展示同一时钟、切回页面自动刷新、抽屉有可访问名称
 * Vite 暴露面：dev server 固定 `127.0.0.1`、生产构建不产 sourcemap、补 `deploy/systemd/suvex-web.service` 模板与 README 警示
 * 对话侧补上 `record_coverage` / `record_fact`（落同一张 `scan_facts`，按 `target` 归档）：提示词一直在要求记账，工具表里却没有，闭环断在"写"那一半
+* 对话沙箱出站守卫：`run_shell` / `browser open` 里的目标必须在「已建扫描的目标 ∪ 基础设施白名单 ∪ 环回」内，否则在执行前拒绝（`SUPEX_CHAT_SHELL_SCOPE_GUARD` 可整体关闭）
 
 ### 还没有做到的
 
@@ -237,8 +238,8 @@ sudo bash suvex-api/deploy/install.sh
 | 4 | **续解会丢"装到一半的工具"** | 镜像外 `pip install` / `apt` 装的包不在持久区，跨轮丢失。暴露面不大（史库里 38 次解题只续解过 1 次），但确实存在 |
 | 5 | **方法卡效果未经对照实验验证** | 首次 A/B 对照 n=1：两组都跑满 40 轮、都未解出，过程指标差异很小 —— 没有观察到正向信号，但 n=1 不构成结论 |
 | 6 | **依赖锁定靠 pip-tools，不是 uv** | 这是选型不是缺口。风险是"改了声明却忘记重新生成锁文件"，现在由 `verify_lockfiles.py` 在 CI 拦着 |
-| 7 | **`run_shell` / `browser` 没有目标授权守卫** | 对话 agent 能在 root 沙箱里对任意目标出网；`create_scan` 有授权声明与目标校验，这两条路径绕开。要做通用安全 agent，必须先补 target allowlist 与出网策略 |
-| 8 | **提示词要求的工具不存在** | 渗透提示词要求 `record_coverage` / `record_fact`，`CHAT_TOOLS` 里没有这两个；模型照做只会拿到"工具不存在"，自主记忆闭环不完整 |
+| 7 | **出站边界是文本级，不是网络级** | 对话 `run_shell` / `browser open` 已按授权目标拦截（`app/chat/scope.py`：只放行已建扫描的目标 + 基础设施白名单），但目标藏在变量/base64 里、或域名解析到内网仍能绕过。真正的边界要 `DOCKER-USER` 按容器源 IP 下发白名单（需 Docker 侧实现与实测） |
+| 8 | **黑板只写不读（对话侧）** | `record_fact` / `record_coverage` 写进去的事实，资产页与后续扫描读得到；但对话本身没有回读（无 `list_facts`、也无黑板注入），同一会话里模型看不到自己记过什么 |
 | 9 | **通用能力没有基准** | `/benchmark` 只做快照与对比，不主动执行评测；真实证据以 Web/CTF 为主，AD、云、内网、IR 没有同等级实测，"通用"尚未验证 |
 
 > [!NOTE]

@@ -573,11 +573,19 @@ async def _tool_run_shell(ctx: Any, args: dict[str, Any]) -> str:
     提示词里教模型的就是内核那套用法 —— 两处参数名如果不一样，
     模型会把解题时的习惯带过来然后收到"参数错误"。
     """
+    from app.chat import scope as chat_scope
     from app.kernel import runner
 
     command = str(args.get("command") or "").strip()
     if not command:
         return "参数错误：需要 `command`。"
+
+    # ★ 出站目标守卫（v1.89）：命令里出现的目标必须已授权。
+    #   放在起沙箱之前 —— 拒绝不该付 1~3 秒的 `docker run` 成本，
+    #   更不该在拒绝时留下一个空容器。
+    blocked = chat_scope.reject_reason(ctx, text=command, tool="run_shell")
+    if blocked:
+        return blocked
 
     def _work() -> str:
         sandbox = get_sandbox(ctx.session)
@@ -627,7 +635,18 @@ async def _tool_browser(ctx: Any, args: dict[str, Any]) -> str:
     实现与 `run_shell` 同构：内核的 `run_browser` 也是 `async def`
     但没有 await 点，它内部 `_invoke` 走的是阻塞 subprocess。
     """
+    from app.chat import scope as chat_scope
     from app.kernel import browser as browser_mod
+
+    # ★ 只守 `open`：其余子命令操作的是已经打开的页面，不引入新目标。
+    #   `eval` 里再 fetch 是已知的漏，写在 `app/chat/scope.py` 的
+    #   模块 docstring「它挡不住什么」里，不在这里假装挡住了。
+    if str(args.get("command") or "").strip().lower() == "open":
+        url = str(args.get("url") or "").strip()
+        if url:
+            blocked = chat_scope.reject_reason(ctx, text=url, tool="browser")
+            if blocked:
+                return blocked
 
     def _work() -> str:
         sandbox = get_sandbox(ctx.session)

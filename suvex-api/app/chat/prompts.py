@@ -291,7 +291,10 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         label="执行命令",
         description=(
             "在你的专属沙箱容器里执行一条 shell 命令，返回输出。"
-            "**这是你干活的主力工具。**容器里可写、能出网、是 root。"
+            "**这是你干活的主力工具。**容器里可写、是 root。"
+            "出站有目标守卫：命令里的目标必须是**已建过扫描的目标**、"
+            "基础设施白名单（包管理镜像/代码托管）或环回地址，否则会被拒绝 —— "
+            "被拒时先建扫描或请用户确认授权，别换写法重试。"
         ),
         params=(
             "command（必填，shell 命令）、timeout_seconds（可选，默认 300，上限 300）、"
@@ -304,6 +307,7 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         description=(
             "在沙箱里用真实浏览器打开网页、看页面、点击填写。"
             "适合需要登录态或 JS 渲染的页面（`run_shell` 里的 curl 拿不到的那种）。"
+            "`open` 的目标与 `run_shell` 走同一条守卫。"
         ),
         params=(
             "command（必填，子命令名：open / snapshot / click / fill / type / "
