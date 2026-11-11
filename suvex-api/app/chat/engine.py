@@ -60,6 +60,7 @@ from app.chat import mcp_tools
 from app.chat import nudge as nudge_policy
 from app.chat import sandbox as chat_sandbox
 from app.chat import service as chat_service
+from app.chat import todos as todo_store
 from app.chat import turn_runs as turn_run_store
 from app.chat.models import ChatMessage, ChatSession
 from app.chat.prompts import (
@@ -2329,6 +2330,69 @@ async def _tool_list_facts(ctx: _ToolContext, args: dict[str, Any]) -> str:
     return f"目标 {target} 的黑板（最近 {len(rows)} 条）：\n" + "\n".join(lines)
 
 
+async def _tool_create_todo(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`create_todo`：给这次对话加一步计划（v1.89）。
+
+    ## 它和扫描侧的 `create_todo` 不是一回事
+
+    那个是**单次扫描**里的私有待办（内存态、进程重启就没了）；
+    这里落 `chat_todos` 表，跨轮、跨重启都在，而且每轮提示词里重新渲染。
+    合并成一套会让"计划"同时指两种生命周期，那是概念污染。
+    """
+    text = str(args.get("text") or "").strip()
+    if not text:
+        return _err("`text` 不能为空 —— 一句话写一步。")
+
+    row = todo_store.create_todo(ctx.db, session_id=ctx.session.id, text=text)
+    if row is None:
+        return _err(
+            f"这次对话的计划已经有 {todo_store.MAX_TODOS} 条了。"
+            "计划表不是日志：先用 `update_todo` 把已完成的收尾，或换一个新会话。"
+        )
+    return f"已加入计划 #{row.seq}：{row.text}"
+
+
+async def _tool_list_todos(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`list_todos`：读回当前计划（提示词里也有一份，这里用于确认）。"""
+    rows = todo_store.list_todos(ctx.db, ctx.session.id)
+    if not rows:
+        return "这次对话还没有计划。长任务可以先用 `create_todo` 写 3~7 步。"
+    return "当前计划：\n" + "\n".join(
+        f"- #{row.seq} [{row.status}] {row.text}" for row in rows
+    )
+
+
+async def _tool_update_todo(ctx: _ToolContext, args: dict[str, Any]) -> str:
+    """`update_todo`：按序号改状态/文字。
+
+    ## 为什么用序号而不是 id
+
+    模型在提示词里看到的是 `#3`，不是 `todo_01J...`。让它去引用一个它
+    从没见过的 ULID，就多了一次猜错的机会 —— 而序号是人也能读的。
+    """
+    try:
+        seq = int(args.get("seq"))
+    except (TypeError, ValueError):
+        return _err("`seq` 要填计划里的序号（`#3` 就填 3）。")
+
+    status = args.get("status")
+    text = args.get("text")
+    try:
+        row = todo_store.update_todo(
+            ctx.db,
+            session_id=ctx.session.id,
+            seq=seq,
+            status=str(status).strip() if status else None,
+            text=str(text) if text else None,
+        )
+    except ValueError as exc:
+        return _err(str(exc))
+
+    if row is None:
+        return _err(f"没有 #{seq} 这条计划。用 `list_todos` 看当前有哪些。")
+    return f"#{row.seq} → {row.status}：{row.text}"
+
+
 async def _tool_save_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import skill_store
 
@@ -2681,6 +2745,10 @@ _TOOL_IMPLS: dict[str, Any] = {
     "record_coverage": _tool_record_coverage,
     "record_fact": _tool_record_fact,
     "list_facts": _tool_list_facts,
+    # ★ v1.89：会话级计划（`chat_todos`）。与扫描侧的同名工具不是一回事。
+    "create_todo": _tool_create_todo,
+    "list_todos": _tool_list_todos,
+    "update_todo": _tool_update_todo,
     # ★ v1.81：可重放验证。对授权目标发真实请求，但只读、不改平台状态；
     #   安全边界是 GuardedHTTPTransport（SSRF）+ scope guard，不是审批。
     "verify_http": _tool_verify_http,
@@ -3352,6 +3420,7 @@ def _system_prompt_for(
     native_tools: bool = False,
     challenge_category: str | None = None,
     mcp_catalog: mcp_tools.McpToolCatalog | None = None,
+    db: Session | None = None,
 ) -> str:
     """按会话设置渲染系统提示词。
 
@@ -3380,6 +3449,9 @@ def _system_prompt_for(
         hinted_tools=hinted_tools,
         native_tools=native_tools,
         challenge_category=challenge_category,
+        # ★ v1.89：计划是**库里的状态**，不是上一轮说了什么。每轮重读，
+        #   所以窗口外（被截断）的旧计划依然在提示词里。
+        todos=todo_store.list_todos(db, session.id) if db is not None else None,
     )
     # ★ v1.80：会话挂载的 MCP 工具。放在最后 —— 它比骨架更"这个对话专属"。
     #   原生模式下 schema 已在 `tools=` 里，这一段补的是"哪台连不上"；
@@ -3514,6 +3586,7 @@ async def run_turn(
         native_tools=_gateway_supports_tools(gateway),
         challenge_category=_challenge_category(db, session),
         mcp_catalog=ctx.mcp,
+        db=db,
     )
 
     #: 打开审批时，这些工具不执行、只挂起。
@@ -4392,6 +4465,7 @@ async def resume_approved(
         native_tools=_gateway_supports_tools(gateway),
         challenge_category=_challenge_category(db, session),
         mcp_catalog=ctx.mcp,
+        db=db,
     )
     gate_on = bool(session.require_approval) and not _auto_approve_active(session)
 

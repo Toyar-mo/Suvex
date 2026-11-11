@@ -568,6 +568,73 @@ class ChatTurnRun(Base):
         )
 
 
+#: 计划条目的状态。三态而不是 bool：`in_progress` 是"正在做"，
+#: 与"还没开始"和"做完了"都不同 —— 只有两态时，模型无法表达"我正在这一步"，
+#: 而"下一步做什么"恰恰是长任务里最容易丢的信息。
+TODO_STATUSES = ("pending", "in_progress", "done")
+
+
+class ChatTodo(Base):
+    """会话级计划里的一条（v1.89）。
+
+    ## 为什么要有这张表
+
+    在此之前，"计划"只存在于模型的文本里：引擎用启发式句子判断
+    （"接下来我打算…"）来识别计划句、决定要不要打回。那是**猜**，
+    而且猜错的代价已经出现过（把阶段性计划当成收尾）。
+
+    这张表把计划变成**可查询的状态**：模型自己写、自己改状态，引擎每轮
+    把它渲染进系统提示词。于是"现在到哪一步"不再依赖上一轮说了什么。
+
+    ## 为什么不是一张通用的 task 表
+
+    它只服务对话：没有负责人、没有优先级、没有依赖关系。范围一旦放大，
+    就要处理"任务树""并发编辑""与扫描任务的对应关系" —— 那些都不是
+    对话侧现在的问题。需要更多结构时再加列，比先造一个通用模型便宜。
+    """
+
+    __tablename__ = "chat_todos"
+    __table_args__ = (
+        # 会话内序号唯一。模型用 `#3` 指代条目，序号重复就等于指代不明。
+        UniqueConstraint("session_id", "seq", name="chat_todo_session_seq"),
+        CheckConstraint(
+            f"status IN ({', '.join(repr(s) for s in TODO_STATUSES)})",
+            name="chat_todo_status_valid",
+        ),
+        Index("ix_chat_todos_session_seq", "session_id", "seq"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    #: 所属会话。CASCADE：会话被删，它的计划没有独立价值。
+    session_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+
+    #: 会话内从 1 开始的序号。**不复用**：删掉 #2 不会让 #3 变成 #2 ——
+    #: 模型与用户都可能还引用着旧编号。
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    #: 一步要做的事。一句话，≤500 字。
+    text: Mapped[str] = mapped_column(String(500), nullable=False)
+
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc, onupdate=now_utc
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<ChatTodo {self.session_id!r} #{self.seq} {self.status}>"
+
+
 __all__ = [
     "APPROVAL_STATUSES",
     "CHAT_PERSONAS",
@@ -576,8 +643,10 @@ __all__ = [
     "MAX_PROJECT_CHARS",
     "MAX_TOOL_NAME_CHARS",
     "MAX_TITLE_CHARS",
+    "TODO_STATUSES",
     "TURN_RUN_STATUSES",
     "ChatMessage",
     "ChatSession",
+    "ChatTodo",
     "ChatTurnRun",
 ]

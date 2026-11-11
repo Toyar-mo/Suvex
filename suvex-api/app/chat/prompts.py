@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Any
 
 from app.chat.models import CHAT_PERSONAS
 
@@ -351,6 +352,33 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
     # ⚠️ 落的是同一张 `scan_facts`（`scan_id=None`），所以资产页的
     #   「覆盖度」与「事实图」直接看得到；`scan_facts` 的跨扫描继承
     #   也按 `target` 归一键生效 —— 不需要第二套存储。
+    ChatToolSpec(
+        name="create_todo",
+        label="加一步计划",
+        description=(
+            "给这次对话加一步计划：持久化、跨轮保留、每轮提示词里都会重新渲染。"
+            "长任务先写 3~7 步；**不要**把每一步命令都写成一条计划 —— 那是日志，不是计划。"
+        ),
+        params="text（必填，一句话一步，≤500 字）",
+    ),
+    ChatToolSpec(
+        name="list_todos",
+        label="看当前计划",
+        description="读回这次对话的计划与状态（提示词里每轮也有一份，这里用于确认）。",
+        params="（无）",
+    ),
+    ChatToolSpec(
+        name="update_todo",
+        label="改计划状态",
+        description=(
+            "按序号改一步的状态或文字。开始动手 → `in_progress`；做完 → `done`。"
+            "状态不更新，计划表就会变成一张过期的清单。"
+        ),
+        params=(
+            "seq（必填，计划里的 #N）、"
+            "status（可选，pending|in_progress|done）、text（可选，改这一句）"
+        ),
+    ),
     ChatToolSpec(
         name="record_coverage",
         label="记账：测过什么",
@@ -716,6 +744,25 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
     },
     # v1.88：黑板（覆盖度 / 事实）。`target` 是**必填** —— 跨扫描继承与
     # 资产页的覆盖度都按它归一键，省掉它就等于写了一条孤儿记录。
+    "create_todo": {
+        "type": "object",
+        "properties": {"text": {"type": "string", "description": "一句话一步，≤500 字"}},
+        "required": ["text"],
+    },
+    "list_todos": {"type": "object", "properties": {}, "required": []},
+    "update_todo": {
+        "type": "object",
+        "properties": {
+            "seq": {"type": "integer", "description": "计划里的 #N"},
+            "status": {
+                "type": "string",
+                "enum": ["pending", "in_progress", "done"],
+                "description": "新状态（可选）",
+            },
+            "text": {"type": "string", "description": "改写这一句（可选）"},
+        },
+        "required": ["seq"],
+    },
     "record_coverage": {
         "type": "object",
         "properties": {
@@ -2284,6 +2331,7 @@ def build_system_prompt(
     hinted_tools: list[str] | None = None,
     native_tools: bool = False,
     challenge_category: str | None = None,
+    todos: list[Any] | None = None,
 ) -> str:
     """渲染最终的对话系统提示词。
 
@@ -2382,6 +2430,12 @@ def build_system_prompt(
     #   放在用户显式挂载之前，让「用户自己挂的」排更后面（更具体、更优先）。
     prompt += render_mounted_skills(persona_default_skill_texts(persona, mounted_skills))
     prompt += render_mounted_skills(mounted_skills or [])
+    # ★ v1.89：结构化计划。放在**最后** —— 它每轮都会变，是最"此刻"的信息，
+    #   而模型对上下文末尾更敏感。没有条目时不追加任何字符，所以
+    #   "没用过计划"的会话提示词逐字不变（提示词缓存命中率不受影响）。
+    from app.chat import todos as todo_store
+
+    prompt += todo_store.render_todos(todos or ())
     return prompt
 
 

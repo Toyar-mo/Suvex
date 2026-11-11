@@ -228,6 +228,7 @@ sudo bash suvex-api/deploy/install.sh
 * 对话侧补上黑板读写：`record_coverage` / `record_fact` 落同一张 `scan_facts`（按 `target` 归档），`list_facts` 读回同一目标的已知事实 —— 提示词一直要求记账、工具表里却没有，闭环断在"写"那一半
 * 对话沙箱出站守卫：`run_shell` / `browser open` 里的目标必须在「已建扫描的目标 ∪ 基础设施白名单 ∪ 环回」内，否则在执行前拒绝（`SUPEX_CHAT_SHELL_SCOPE_GUARD` 可整体关闭）
 * 人工审批的工具集合可配置：`SUPEX_CHAT_APPROVAL_EXTRA_TOOLS=run_shell,browser` 追配之后，开审批就连执行类工具一起挂起；拼错的名字会记 warning 并忽略
+* 对话侧结构化计划：`chat_todos` + `create_todo` / `list_todos` / `update_todo`，每轮从库里重读并渲染进系统提示词（不再靠"计划句"启发式判断）
 
 ### 还没有做到的
 
@@ -242,6 +243,7 @@ sudo bash suvex-api/deploy/install.sh
 | 7 | **出站边界是文本级，不是网络级** | 对话 `run_shell` / `browser open` 已按授权目标拦截（`app/chat/scope.py`：只放行已建扫描的目标 + 基础设施白名单），但目标藏在变量/base64 里、或域名解析到内网仍能绕过。真正的边界要 `DOCKER-USER` 按容器源 IP 下发白名单（需 Docker 侧实现与实测） |
 | 8 | **黑板不自动进提示词** | 对话侧现在有 `list_facts` 可以主动读；但不像扫描侧那样把事实索引渲染进 system prompt（`render_fact_index`），模型不查就看不到 —— 靠提示词纪律，不靠机制 |
 | 9 | **通用能力没有基准** | `/benchmark` 只做快照与对比，不主动执行评测；真实证据以 Web/CTF 为主，AD、云、内网、IR 没有同等级实测，"通用"尚未验证 |
+| 10 | **计划只有后端与提示词** | `chat_todos` 每轮进提示词、可查询；但前端没有计划视图，用户只能从消息流里看出模型做过计划 |
 
 > [!NOTE]
 > 这份清单不粉饰，也不重复列已修项。缺过什么本身是信息，但已修的就不再占一行。
