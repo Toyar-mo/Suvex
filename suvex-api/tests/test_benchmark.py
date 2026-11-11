@@ -180,3 +180,100 @@ def test_run_suite_counts_and_delete(db_session: Session) -> None:
     assert out[0].case_id == case.id
     assert service.delete_case(db_session, case.id) is True
     assert service.delete_case(db_session, case.id) is False
+
+
+# ══════════════════════════════════════════════════════════
+# 主动执行与汇总（v1.90）
+# ══════════════════════════════════════════════════════════
+
+
+def test_launch_case_really_creates_a_scan(db_session: Session, monkeypatch) -> None:  # noqa: ANN001
+    """★ 用例登记了 target 就真的建扫描 —— 而不是等别人跑完再来判定。"""
+    from types import SimpleNamespace
+
+    from app.benchmark import service as bench
+    from app.scans import service as scans_service
+    from tests.factories import make_provider, make_scan
+    from tests.test_chat import ADMIN
+
+    make_provider(db_session)
+    queued = make_scan(db_session, target="http://127.0.0.1:8081", status="queued")
+    case = bench.create_case(
+        db_session,
+        suite="bench",
+        name="dvwa",
+        kind="scan",
+        target="http://127.0.0.1:8081",
+        target_kind="url",
+        skills=["web"],
+    )
+
+    seen: dict[str, object] = {}
+
+    def fake_create_scan(db, payload, *, identity, ip, user_agent, forensic=None):  # noqa: ANN001
+        seen["payload"] = payload
+        return queued, SimpleNamespace(notice=None)
+
+    monkeypatch.setattr(scans_service, "create_scan", fake_create_scan)
+
+    scan, run = bench.launch_case(
+        db_session, case=case, identity=ADMIN, ip="127.0.0.1", user_agent="test"
+    )
+
+    assert scan.id == queued.id
+    assert case.scan_id == queued.id
+    payload = seen["payload"]
+    assert payload.target == "http://127.0.0.1:8081"
+    assert payload.skills == ["web"]
+    # 建完立刻有一条 pending：否则界面只能显示上一轮结果，看起来像没点动。
+    assert run.status == "pending"
+
+
+def test_summary_aggregates_rates(db_session: Session) -> None:
+    """通过率、未完成率、误报率、平均耗时 —— 分母口径都在 docstring 里。"""
+    from app.benchmark import service as bench
+    from app.benchmark.models import BenchmarkRun
+    from app.findings.models import Finding
+    from tests.factories import make_scan
+
+    scan = make_scan(db_session, status="completed")
+    first = bench.create_case(db_session, suite="s", name="a", kind="scan", scan_id=scan.id)
+    second = bench.create_case(db_session, suite="s", name="b", kind="scan", scan_id=scan.id)
+
+    db_session.add_all(
+        [
+            BenchmarkRun(
+                id="run_a", case_id=first.id, status="passed",
+                detail={"scanId": scan.id, "durationSec": 100},
+            ),
+            BenchmarkRun(
+                id="run_b", case_id=second.id, status="pending", detail={"scanId": scan.id}
+            ),
+        ]
+    )
+    for index, status in enumerate(("false_positive", "new"), start=1):
+        db_session.add(
+            Finding(
+                id=f"fnd_bench_{index}",
+                scan_id=scan.id,
+                title="t",
+                severity="medium",
+                category="misconfiguration",
+                verification="none",
+                status=status,
+                target=scan.target,
+                detail_description="d",
+            )
+        )
+    db_session.commit()
+
+    summary = bench.summary(db_session, suite="s")
+
+    assert summary["cases"] == 2
+    assert summary["passed"] == 1 and summary["pending"] == 1
+    assert summary["passRate"] == 1.0
+    assert summary["unfinishedRate"] == 0.5
+    assert summary["findings"] == 2
+    assert summary["falsePositives"] == 1
+    assert summary["falsePositiveRate"] == 0.5
+    assert summary["avgDurationSec"] == 100.0

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.benchmark.models import BenchmarkCase, BenchmarkRun, QualitySnapshot
@@ -123,7 +123,21 @@ def compare(before: QualitySnapshot, after: QualitySnapshot) -> dict[str, Any]:
     }
 
 
-__all__ = ["capture", "compare", "get_snapshot", "list_snapshots"]
+__all__ = [
+    "capture",
+    "compare",
+    "create_case",
+    "delete_case",
+    "get_case",
+    "get_snapshot",
+    "latest_runs",
+    "launch_case",
+    "list_cases",
+    "list_snapshots",
+    "run_case",
+    "run_suite",
+    "summary",
+]
 
 
 # -- 评测用例(v1.81) ------------------------------------------
@@ -145,6 +159,9 @@ def create_case(
     scan_id: str | None = None,
     expect: dict[str, Any] | None = None,
     enabled: bool = True,
+    target: str | None = None,
+    target_kind: str = "url",
+    skills: list[str] | None = None,
 ) -> BenchmarkCase:
     """登记一条用例。缺关联对象时直接拒绝（否则永远判 error）。"""
     from app.core.errors import ApiError
@@ -153,8 +170,10 @@ def create_case(
         raise ApiError.validation(f"kind 只能是 {' / '.join(CASE_KINDS)}")
     if kind == "ctf" and not challenge_id:
         raise ApiError.validation("ctf 用例需要 challengeId")
-    if kind == "scan" and not scan_id:
-        raise ApiError.validation("scan 用例需要 scanId")
+    # ★ v1.90：scan 用例有两种 —— 判已有扫描（scanId），或登记目标后由
+    #   `launch` 真的跑一次（target）。两者都没有就没法判定。
+    if kind == "scan" and not scan_id and not (target or "").strip():
+        raise ApiError.validation("scan 用例需要 scanId（判已有扫描）或 target（主动执行）")
     row = BenchmarkCase(
         id=new_id("case"),
         suite=(suite or "default").strip()[:80],
@@ -164,6 +183,9 @@ def create_case(
         scan_id=scan_id,
         expect=expect or {},
         enabled=enabled,
+        target=(target or "").strip() or None,
+        target_kind=(target_kind or "url").strip(),
+        skills=[str(item) for item in (skills or [])],
     )
     db.add(row)
     db.commit()
@@ -281,3 +303,133 @@ def latest_runs(db: Session, *, suite: str | None = None) -> list[BenchmarkRun]:
         seen.add(row.case_id)
         latest.append(row)
     return latest
+
+
+def get_case(db: Session, case_id: str) -> BenchmarkCase | None:
+    return db.get(BenchmarkCase, case_id)
+
+
+def _default_provider_id(db: Session) -> str | None:
+    """默认接入点。规则与 `kernel/service._snapshot_provider_id` 一致。"""
+    from app.providers.models import ProviderAccount
+
+    row = db.execute(
+        select(ProviderAccount).order_by(
+            ProviderAccount.is_default.desc(), ProviderAccount.created_at
+        )
+    ).scalars().first()
+    return row.id if row is not None else None
+
+
+def launch_case(
+    db: Session,
+    *,
+    case: BenchmarkCase,
+    identity: Any,
+    ip: str,
+    user_agent: str | None,
+) -> tuple[Any, BenchmarkRun]:
+    """真的建一次扫描，返回 `(scan, 初始判定)`。
+
+    ## 为什么判定在启动时也写一条 `pending`
+
+    有这条记录，"这一轮"才有起点：`latest_runs` 取每个用例最新一条，
+    而扫描跑完后再 `run_case` 会覆盖成 `passed/failed`。少了这条，
+    启动后的界面只能显示上一次的结果 —— 看起来像"点了没反应"。
+    """
+    from app.core.config import get_settings
+    from app.core.errors import ApiError
+    from app.scans import service as scans_service
+    from app.scans.schemas import AuthorizationIn, ScanCreate
+
+    if case.kind != "scan":
+        raise ApiError.validation("只有 scan 用例能主动执行（ctf 用例走解题调度）")
+    target = (case.target or "").strip()
+    if not target:
+        raise ApiError.validation("用例没有登记 target，无法主动执行")
+
+    provider_id = _default_provider_id(db)
+    if provider_id is None:
+        raise ApiError.validation("平台还没有配置任何模型接入点")
+
+    payload = ScanCreate(
+        name=f"benchmark:{case.suite}:{case.name}"[:200],
+        target=target,
+        targetKind=(case.target_kind or "url"),
+        skills=list(case.skills or []) or ["web"],
+        providerId=provider_id,
+        authorization=AuthorizationIn(
+            confirmed=True,
+            statement=get_settings().scan_authorization_statement,
+        ),
+    )
+    scan, _reach = scans_service.create_scan(
+        db,
+        payload,
+        identity=identity,
+        ip=ip,
+        user_agent=user_agent or "suvex-benchmark",
+    )
+    case.scan_id = scan.id
+    db.commit()
+    return scan, run_case(db, case)
+
+
+def summary(db: Session, *, suite: str | None = None) -> dict[str, Any]:
+    """一套用例的当前成绩：通过率、未完成率、误报率、平均耗时。
+
+    ## 口径
+
+    * 每个用例只取**最近一次**判定（`latest_runs`），否则重跑越多越吃亏；
+    * `passRate` 的分母是**已判定**（passed+failed），pending/error 单列；
+    * 误报率的分母是该批扫描的**全部 findings**，分子是人工标了
+      `false_positive` 的 —— 未标注的不算误报，也不算真。
+    """
+    from app.findings.models import Finding
+
+    runs = latest_runs(db, suite=suite)
+    counts = {
+        status: sum(1 for run in runs if run.status == status)
+        for status in ("passed", "failed", "pending", "error")
+    }
+    judged = counts["passed"] + counts["failed"]
+
+    scan_ids = [
+        str((run.detail or {}).get("scanId"))
+        for run in runs
+        if (run.detail or {}).get("scanId")
+    ]
+    by_status: dict[str, int] = {}
+    if scan_ids:
+        rows = db.execute(
+            select(Finding.status, func.count())
+            .where(Finding.scan_id.in_(scan_ids))
+            .group_by(Finding.status)
+        ).all()
+        by_status = {str(status): int(count) for status, count in rows}
+
+    findings = sum(by_status.values())
+    false_positives = by_status.get("false_positive", 0)
+
+    durations: list[float] = []
+    for run in runs:
+        value = (run.detail or {}).get("durationSec")
+        if isinstance(value, (int, float)):
+            durations.append(float(value))
+
+    total = len(runs)
+    return {
+        "suite": suite or "",
+        "cases": total,
+        **counts,
+        "passRate": round(counts["passed"] / judged, 4) if judged else None,
+        "unfinishedRate": (
+            round((counts["pending"] + counts["error"]) / total, 4) if total else None
+        ),
+        "findings": findings,
+        "falsePositives": false_positives,
+        "falsePositiveRate": round(false_positives / findings, 4) if findings else None,
+        "avgDurationSec": round(sum(durations) / len(durations), 1) if durations else None,
+    }
+
+

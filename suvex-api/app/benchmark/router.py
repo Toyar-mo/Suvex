@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.auth.deps import Identity, require_read, require_scan
@@ -18,10 +18,12 @@ from app.benchmark.schemas import (
     CaseIn,
     CaseOut,
     CompareOut,
+    LaunchOut,
     RunOut,
     SnapshotListOut,
     SnapshotOut,
     SuiteRunOut,
+    SummaryOut,
 )
 from app.core.db import get_db
 from app.core.errors import ApiError
@@ -135,3 +137,41 @@ def latest_runs(
     suite: Annotated[str | None, Query(max_length=80)] = None,
 ) -> list[RunOut]:
     return [RunOut.from_row(row) for row in service.latest_runs(db, suite=suite)]
+
+
+@router.post(
+    "/cases/{case_id}/launch",
+    response_model=LaunchOut,
+    status_code=201,
+    summary="主动执行一次用例（真的建扫描）",
+)
+def launch_case(
+    case_id: str,
+    request: Request,
+    identity: Annotated[Identity, Depends(require_scan)],
+    db: Annotated[Session, Depends(get_db)],
+) -> LaunchOut:
+    """登记了 target 的 scan 用例：建一次扫描，并立即写一条 `pending` 判定。
+
+    跑完之后调 `POST /suites/{suite}/run` 重新判定（只读），或直接看 `/summary`。
+    """
+    case = service.get_case(db, case_id)
+    if case is None:
+        raise ApiError.not_found("用例不存在")
+    scan, run = service.launch_case(
+        db,
+        case=case,
+        identity=identity,
+        ip=request.client.host if request.client else "benchmark",
+        user_agent=request.headers.get("user-agent"),
+    )
+    return LaunchOut(caseId=case.id, scanId=scan.id, status=run.status)
+
+
+@router.get("/summary", response_model=SummaryOut, summary="一套用例的成绩汇总")
+def summary(
+    _identity: Annotated[Identity, Depends(require_read)],
+    db: Annotated[Session, Depends(get_db)],
+    suite: Annotated[str | None, Query(max_length=80)] = None,
+) -> SummaryOut:
+    return SummaryOut(**service.summary(db, suite=suite))

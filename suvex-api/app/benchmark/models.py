@@ -56,6 +56,20 @@ class BenchmarkCase(Base):
     #: 判定阈值，例如 `{"minFindings": 1}`。
     expect: Mapped[dict] = mapped_column(JsonColumn, nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(nullable=False, default=True)
+
+    # ── 主动执行（v1.90）──────────────────────────────────
+    #
+    # ★ 这三列补的是评估里点名的"基准只会判别人跑过的扫描"。登记了目标
+    #   之后，`launch` 会真的建一次扫描；判定仍然是 `_judge`（跑完再看）。
+    #   为什么不用 `scan_id` 反推目标：那条路径只能复用**已经跑过**的扫描，
+    #   而基准要回答的正是"现在跑一次会不会过"。
+    target: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    target_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="url", server_default="url"
+    )
+    #: `create_scan` 的技能列表，例如 `["web"]` / `["api"]`。
+    skills: Mapped[list[str]] = mapped_column(JsonColumn, nullable=False, default=list)
+
     created_at: Mapped[datetime] = mapped_column(
         UtcDateTime, nullable=False, default=now_utc
     )
