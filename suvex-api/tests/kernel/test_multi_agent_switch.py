@@ -132,3 +132,35 @@ def test_scan_spec_carries_multi_agent_flag() -> None:
     base_off = dict(base, multi_agent=False)
     spec_off = build_solve_spec_from_scan(LaunchSpec(**base_off))
     assert getattr(spec_off, "multi_agent", None) is False
+
+
+# ══════════════════════════════════════════════════════════
+# 5. 默认值（v1.89：单循环改成显式选择）
+# ══════════════════════════════════════════════════════════
+
+
+def test_default_settings_have_multi_agent_on(ready_client) -> None:  # noqa: ANN001
+    """没有任何配置行时，`GET /kernel/settings` 必须报 true。
+
+    ★ 这条钉的是"代码默认值"与"接口默认值"一致 —— 两处各写一遍必然漂移，
+      而漂移的表现是"设置页显示关着，扫描却按开着跑"（或者反过来）。
+    """
+    resp = ready_client.get(f"{API}/kernel/settings")
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["enableMultiAgent"] is True
+
+
+def test_effective_settings_default_when_no_row(db_session: Session) -> None:
+    """没有配置行时 `effective_ctf2_settings` 也必须是 true（扫描侧读它）。"""
+    assert kernel_service.effective_ctf2_settings(db_session).enable_multi_agent is True
+
+
+def test_explicit_off_still_wins(ready_client, db_session: Session) -> None:  # noqa: ANN001
+    """默认开不等于关不掉：显式 false 之后，引擎侧必须跟着变回单循环。"""
+    resp = ready_client.put(
+        f"{API}/kernel/settings", json=_settings_body(enableMultiAgent=False)
+    )
+    assert resp.status_code == 200, resp.text
+
+    assert kernel_runner._multi_agent_enabled(db_session) is False

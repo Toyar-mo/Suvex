@@ -3873,13 +3873,16 @@ class KernelSettings:
     #: 共用开关会让一族的分类在另一族开关打开时通过校验，
     #: 而对应的 prompt 块不注入 —— 分类合法、纪律没注入。
     enable_ir_scenarios: bool = False
-    #: 是否启用多智能体编排（v0.58）。默认 **False**。
+    #: 是否启用多智能体编排（v0.58）。v1.89 起默认 **True**。
     #:
     #: 打开时 `SolveSpec.multi_agent=True`，解题走 root 调度 + 子 agent
     #: 并行执行；关着时单循环逐字节不变。它改变**执行拓扑**、
-    #: 不改变行为纪律（与两个场景包开关不同维），但会把一次任务的
-    #: LLM 调用量放大约 N 倍 —— 所以默认关、由人显式打开。
-    enable_multi_agent: bool = False
+    #: 不改变行为纪律（与两个场景包开关不同维）。
+    #:
+    #: ★ 默认值在 v1.89 从 False 翻成 True：单循环现在需要**显式**选择。
+    #:   成本与可预测性的代价仍在，但由并发上限、轮数上限、墙钟上限兜住；
+    #:   完整理由见 `settings.models.KernelConfig.enable_multi_agent`。
+    enable_multi_agent: bool = True
     #: ★ v0.72：可用的 MCP server 配置（学 strix 的 list_mcps 三件套）。
     #:
     #: 形状是"原样的 JSON 列表"（`None`/`[]` = 没配），解析成
@@ -3916,7 +3919,7 @@ def effective_ctf2_settings(db: Session) -> KernelSettings:
             fallback_provider_id=None,
             enable_agentsec_scenarios=False,
             enable_ir_scenarios=False,
-            enable_multi_agent=False,
+            enable_multi_agent=True,
             mcp_servers=None,
         )
     return KernelSettings(

@@ -231,12 +231,12 @@ class KernelSettingsOut(CamelModel):
     #   分类合法、纪律没注入。理由见 `settings/models.py` 的
     #   `KernelConfig.enable_ir_scenarios`。
     enableIrScenarios: bool = False
-    # ★ v0.58：多智能体编排开关。默认 **false**。打开后解题走
-    #   root 调度 + 子 agent 并行执行；关着时单循环逐字节不变。
+    # ★ v0.58：多智能体编排开关。v1.89 起默认 **true**（单循环改成显式选择）。
+    #   打开后解题走 root 调度 + 子 agent 并行执行；关着时单循环逐字节不变。
     #   ⚠️ 它改变**执行拓扑**、不改变行为纪律（与两个场景包开关不同维），
-    #   但会把一次任务的 LLM 调用量放大约 N 倍 —— 见
+    #   代价是 LLM 调用量按子 agent 数量放大 —— 完整理由见
     #   `settings/models.py` 的 `KernelConfig.enable_multi_agent`。
-    enableMultiAgent: bool = False
+    enableMultiAgent: bool = True
     updatedAt: IsoDateTime
 
 

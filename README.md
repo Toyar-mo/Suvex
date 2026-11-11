@@ -229,6 +229,7 @@ sudo bash suvex-api/deploy/install.sh
 * 对话沙箱出站守卫：`run_shell` / `browser open` 里的目标必须在「已建扫描的目标 ∪ 基础设施白名单 ∪ 环回」内，否则在执行前拒绝（`SUPEX_CHAT_SHELL_SCOPE_GUARD` 可整体关闭）
 * 人工审批的工具集合可配置：`SUPEX_CHAT_APPROVAL_EXTRA_TOOLS=run_shell,browser` 追配之后，开审批就连执行类工具一起挂起；拼错的名字会记 warning 并忽略
 * 对话侧结构化计划：`chat_todos` + `create_todo` / `list_todos` / `update_todo`，每轮从库里重读并渲染进系统提示词（不再靠"计划句"启发式判断）
+* 多智能体编排默认开启（`enable_multi_agent`，扫描与解题共用）：单循环改成**显式选择**；已有部署由迁移 `d4e5f6a7b8c9` 翻转存量配置行，设置页可随时关回
 
 ### 还没有做到的
 
