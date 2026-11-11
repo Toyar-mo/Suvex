@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Minus, Plus, RotateCcw } from 'lucide-react'
 
 import { ASSET_HEALTH_META } from '@/data/asset'
@@ -46,6 +46,30 @@ export function AssetMap({
   const [zoom, setZoom] = useState(1)
   const [pan, setPan] = useState({ x: 0, y: 0 })
   const dragRef = useRef<{ x: number; y: number } | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const [box, setBox] = useState({ w: MAP_WIDTH, h: MAP_HEIGHT })
+
+  /*
+   * 画布固定 900×560，容器却随视口变窄。不缩放的话窄屏只能看到图的一角，
+   * 而且节点被裁掉一半 —— 看起来像"图画坏了"。这里按容器尺寸等比缩到放得下，
+   * 再把缩放后的图居中；用户自己的 zoom/pan 叠加在这层之上。
+   */
+  useEffect(() => {
+    const el = hostRef.current
+    if (!el) return
+    const update = () => setBox({ w: el.clientWidth, h: el.clientHeight })
+    update()
+    const observer = new ResizeObserver(update)
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [])
+
+  // jsdom / 首次测量为 0 时按 1 处理，否则整张图会被缩成 0 宽。
+  const rawFit = Math.min(1, box.w / MAP_WIDTH, box.h / MAP_HEIGHT)
+  const fit = Number.isFinite(rawFit) && rawFit > 0 ? rawFit : 1
+  const scale = zoom * fit
+  const offsetX = (box.w - MAP_WIDTH * scale) / 2
+  const offsetY = (box.h - MAP_HEIGHT * scale) / 2
 
   const nodes = useMemo(() => {
     const radius = Math.max(190, Math.min(250, 90 + hosts.length * 14))
@@ -63,8 +87,7 @@ export function AssetMap({
 
   return (
     <section
-      className={cn('relative overflow-hidden rounded-md border border-line bg-surface', className)}
-      style={{ height: MAP_HEIGHT }}
+      className={cn('relative h-[380px] overflow-hidden rounded-md border border-line bg-surface sm:h-[460px] lg:h-[560px]', className)}
       data-asset-map=""
     >
       <div className="absolute left-3 top-3 z-10 flex items-center gap-2 text-2xs text-ink-faint">
@@ -77,7 +100,12 @@ export function AssetMap({
         <MapButton label={t('assetMap.zoomOut')} onClick={() => setZoom((value) => Math.max(0.5, value - 0.15))}>
           <Minus size={13} strokeWidth={2} aria-hidden="true" />
         </MapButton>
-        <span className="mono-ui w-10 text-center text-2xs text-ink-faint">{Math.round(zoom * 100)}%</span>
+        <span
+          className="mono-ui w-10 text-center text-2xs text-ink-faint"
+          title="相对「适应视图」的缩放"
+        >
+          {Math.round(zoom * 100)}%
+        </span>
         <MapButton label={t('assetMap.zoomIn')} onClick={() => setZoom((value) => Math.min(2, value + 0.15))}>
           <Plus size={13} strokeWidth={2} aria-hidden="true" />
         </MapButton>
@@ -93,6 +121,7 @@ export function AssetMap({
       </div>
 
       <div
+        ref={hostRef}
         className="h-full w-full cursor-grab active:cursor-grabbing"
         onWheel={(event) => {
           event.preventDefault()
@@ -115,7 +144,7 @@ export function AssetMap({
           style={{
             width: MAP_WIDTH,
             height: MAP_HEIGHT,
-            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transform: `translate(${offsetX + pan.x}px, ${offsetY + pan.y}px) scale(${scale})`,
           }}
         >
           <svg

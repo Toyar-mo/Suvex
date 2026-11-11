@@ -120,7 +120,7 @@ function RangeBlock({
       {total === 0 ? (
         <p className="mt-panel text-2xs text-ink-faint">{empty ?? '（空）'}</p>
       ) : (
-        <div className="mt-panel flex flex-wrap gap-1">
+        <div className="mt-panel flex max-h-40 flex-wrap gap-1 overflow-y-auto">
           {[...cidrs, ...hosts].map((item) => (
             <code
               key={item}

@@ -1,6 +1,5 @@
 import { Link } from 'react-router-dom'
 
-import { SEVERITY_META } from '@/data/findings'
 import type { SeverityBreakdownEntry } from '@/data/overview'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/cn'
@@ -64,7 +63,6 @@ export function PriorityBoard({
         <ul className="mt-panel flex flex-col">
           {PRIORITY_ROWS.map((row) => {
             const count = counts.get(row.severity) ?? 0
-            const meta = SEVERITY_META[row.severity]
             return (
               <li
                 key={row.level}
@@ -80,7 +78,7 @@ export function PriorityBoard({
                 </span>
                 <span className={cn('flex-1 truncate text-xs', count === 0 ? 'text-ink-faint' : row.tone)}>
                   {t(`priority.${row.level.toLowerCase()}`)}
-                  <span className="ml-1.5 text-ink-faint">{meta.label}</span>
+                  <span className="ml-1.5 text-ink-faint">{t(`severity.${row.severity}`)}</span>
                 </span>
                 <span className="mono-ui tabular text-xs text-ink" data-numeric>
                   {count}
@@ -88,7 +86,7 @@ export function PriorityBoard({
                 <Link
                   to={`/findings?severity=${row.severity}`}
                   className="shrink-0 rounded-xs px-1.5 py-0.5 text-2xs text-ink-faint transition-colors hover:bg-surface-sunken hover:text-ink"
-                  aria-label={`${row.level} ${meta.label}`}
+                  aria-label={`${row.level} ${t(`severity.${row.severity}`)}`}
                 >
                   {t('priority.open')}
                 </Link>

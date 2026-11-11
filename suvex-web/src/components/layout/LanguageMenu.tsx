@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, Languages } from 'lucide-react'
+import { Check, Globe, Languages } from 'lucide-react'
 
 import { cn } from '@/lib/cn'
 import { LOCALES, useI18n, type LocaleSetting } from '@/i18n'
@@ -80,7 +80,7 @@ export function LanguageMenu() {
                   active ? 'bg-accent/10 text-ink' : 'text-ink-muted hover:bg-surface-sunken',
                 )}
               >
-                <span aria-hidden="true">{item.flag}</span>
+                <span className="w-8 shrink-0 text-2xs text-ink-faint">{item.short}</span>
                 <span className="flex-1">{item.name}</span>
                 {active && <Check size={13} strokeWidth={2} aria-hidden="true" />}
               </button>
@@ -100,7 +100,7 @@ export function LanguageMenu() {
               setting === 'auto' ? 'bg-accent/10 text-ink' : 'text-ink-muted hover:bg-surface-sunken',
             )}
           >
-            <span aria-hidden="true">🌐</span>
+            <Globe size={14} strokeWidth={1.8} className="w-8 shrink-0 text-ink-faint" aria-hidden="true" />
             <span className="flex-1">{t('lang.auto')}</span>
             {setting === 'auto' && <Check size={13} strokeWidth={2} aria-hidden="true" />}
           </button>

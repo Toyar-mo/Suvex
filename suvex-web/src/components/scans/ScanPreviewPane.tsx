@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 
-import { SCAN_STATUS_LABEL, SCAN_STATUS_TONE, totalFindings, type Scan } from '@/data/scan'
+import { SCAN_STATUS_TONE, totalFindings, type Scan } from '@/data/scan'
 import { formatDuration } from '@/lib/datetime'
 import { cn } from '@/lib/cn'
 import { useI18n } from '@/i18n'
@@ -59,7 +59,7 @@ export function ScanPreviewPane({
                 SCAN_STATUS_TONE[scan.status],
               )}
             >
-              {SCAN_STATUS_LABEL[scan.status]}
+              {t(`scanStatus.${scan.status}`)}
             </span>
           </div>
 

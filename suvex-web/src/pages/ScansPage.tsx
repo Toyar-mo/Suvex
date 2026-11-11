@@ -102,6 +102,17 @@ export function ScansPage() {
   const [statusFilter, setStatusFilter] = useState<ScanStatus | 'all'>('all')
   // v1.90：右栏预览选中的那条。与批量勾选（selectedIds）是两件事。
   const [previewId, setPreviewId] = useState<string | null>(null)
+  /* 预览栏只在 lg 以上显示；窄屏继续走原来的"点标题去活动页"，否则点了没反应。 */
+  const [wide, setWide] = useState(() =>
+    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1024px)').matches,
+  )
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1024px)')
+    const onChange = () => setWide(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
   const [sortKey, setSortKey] = useState<SortKey>('recent')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
 
@@ -1025,7 +1036,7 @@ export function ScansPage() {
               scans={filtered}
               selectedIds={selectedIds}
               focusedId={focusedId}
-              onSelect={(scan) => setPreviewId(scan.id)}
+              onSelect={wide ? (scan) => setPreviewId(scan.id) : undefined}
               onToggleRow={toggleRow}
               onToggleAll={toggleAll}
               /*
