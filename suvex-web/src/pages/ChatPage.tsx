@@ -141,13 +141,94 @@ import { useSearchParams } from 'react-router-dom'
  * 逻辑必然会漂。见 `app/chat/engine.py::_narration_before_action`。
  */
 
-/** 首条未选中时显示的引导。写清楚它能干什么，而不是"开始对话吧"。 */
-const STARTERS = [
-  '我上次扫了什么？有没有失败的？',
-  '帮我对 example.com 发起一次 web 扫描',
-  '现在手上有哪些技能？哪几篇没被用过？',
-  '帮我加一个 MCP 工具连接',
+/** 空态预设：覆盖全部对话工具，按“我现在想干什么”分组。 */
+const STARTER_GROUPS: Array<{ label: string; prompts: string[] }> = [
+  {
+    label: '扫描与子代理',
+    prompts: [
+      '我上次扫了什么？有没有失败的？',
+      '帮我对 example.com 发起一次 web 扫描',
+      '现在有哪些扫描在跑？队列里还有吗？',
+      '用子代理并行检查 A、B、C 三个地址，分别返回状态码和响应长度',
+    ],
+  },
+  {
+    label: 'HTTP 验证与沙箱',
+    prompts: [
+      '验证这个 HTTP 发现是否稳定复现：GET http://example.com/path 返回 200 和关键词',
+      '在沙箱里看看 /work 里有什么、装了哪些工具',
+      '打开 http://example.com 并截图给我',
+    ],
+  },
+  {
+    label: 'CTF 与比赛',
+    prompts: [
+      '列出当前 CTF 看板上的题目和状态',
+      '解一下 CR7',
+      '从比赛平台拉取最新题目',
+      '把 flag{...} 提交到当前题目',
+      '查看比赛竞速进度',
+      '开始比赛竞速',
+      '停止比赛竞速',
+    ],
+  },
+  {
+    label: '技能与 MCP',
+    prompts: [
+      '现在手上有哪些技能？哪几篇没被用过？',
+      '读一下 pcap-analysis 技能',
+      '把 pcap-analysis 技能加载到本轮上下文',
+      '加载 nmap 配方，告诉我默认参数会漏什么',
+      '把这次方法保存成一个技能',
+      '删除技能 xxx',
+      '列出已挂载的 MCP 工具',
+      '帮我加一个 MCP 工具连接',
+    ],
+  },
 ]
+
+function StarterPrompts({
+  onPick,
+  disabled,
+}: {
+  onPick: (prompt: string) => void
+  disabled?: boolean
+}) {
+  return (
+    <div className="flex w-full flex-col gap-3">
+      {STARTER_GROUPS.map((group) => (
+        <section key={group.label} className="flex flex-col gap-1.5">
+          <p className="text-2xs uppercase tracking-wide text-ink-faint">{group.label}</p>
+          <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+            {group.prompts.map((prompt) => (
+              <button
+                key={prompt}
+                type="button"
+                disabled={disabled}
+                onClick={() => onPick(prompt)}
+                className={cn(
+                  'flex w-full items-start gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
+                  'text-xs text-ink-muted transition-ui duration-fast',
+                  'hover:border-line-strong hover:text-ink',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                  'disabled:cursor-not-allowed disabled:opacity-60',
+                )}
+              >
+                <Sparkles
+                  size={12}
+                  strokeWidth={2}
+                  className="mt-0.5 shrink-0 text-ink-faint"
+                  aria-hidden="true"
+                />
+                {prompt}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  )
+}
 
 /**
  * 「正在想…」那一行该显示什么（v0.100）。
@@ -1766,31 +1847,15 @@ export function ChatPage() {
                     </Button>
                   }
                 />
-                <div className="flex w-full flex-col gap-1.5">
-                  <p className="text-2xs uppercase tracking-wide text-ink-faint">可以这样问</p>
-                  {STARTERS.map((text) => (
-                    <button
-                      key={text}
-                      type="button"
-                      onClick={() => void handlePickStarter(text)}
-                      /*
-                      ★ v0.102：`disabled` 是必须的。
-                        点一下会**建一个会话 + 发一轮消息**，连着点两下
-                        就是两个会话、两轮并发的模型调用 —— 而用户在界面上
-                        只会看到一个（另一个在会话列表里躺着）。
-                    */
-                      disabled={pickingStarter}
-                      className={cn(
-                        'w-full rounded-sm border border-line bg-surface-sunken px-2.5 py-2 text-left',
-                        'text-xs text-ink-muted transition-ui duration-fast',
-                        'hover:border-line-strong hover:text-ink',
-                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                        'disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:border-line disabled:hover:text-ink-muted',
-                      )}
-                    >
-                      {text}
-                    </button>
-                  ))}
+                <div className="w-full">
+                  <p className="mb-1.5 text-2xs uppercase tracking-wide text-ink-faint">
+                    可以这样问
+                  </p>
+                  {/* disabled：点一下会建会话 + 发一轮消息，连点会开两个并发会话。 */}
+                  <StarterPrompts
+                    disabled={pickingStarter}
+                    onPick={(prompt) => void handlePickStarter(prompt)}
+                  />
                 </div>
               </div>
             ) : (
@@ -1828,31 +1893,10 @@ export function ChatPage() {
                       摆在那儿只会把刚出现的解题过程挤下去。
                   */}
                     {!active?.challengeId && (
-                      <div className="flex flex-col gap-1.5">
-                        {STARTERS.map((text) => (
-                          <button
-                            key={text}
-                            type="button"
-                            disabled={pickingStarter}
-                            onClick={() => setDraft(text)}
-                            className={cn(
-                              'flex w-full items-center gap-2 rounded-md border border-line bg-surface px-3 py-2 text-left',
-                              'text-xs text-ink-muted transition-ui duration-fast',
-                              'hover:border-line-strong hover:text-ink',
-                              'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                              'disabled:cursor-not-allowed disabled:opacity-60',
-                            )}
-                          >
-                            <Sparkles
-                              size={12}
-                              strokeWidth={2}
-                              className="shrink-0 text-ink-faint"
-                              aria-hidden="true"
-                            />
-                            {text}
-                          </button>
-                        ))}
-                      </div>
+                      <StarterPrompts
+                        disabled={pickingStarter}
+                        onPick={(prompt) => setDraft(prompt)}
+                      />
                     )}
                   </>
                 )}
