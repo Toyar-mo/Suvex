@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { Field, Toggle } from './Field'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
 import {
@@ -46,6 +47,7 @@ export interface SandboxPanelProps {
 }
 
 export function SandboxPanel({ config }: SandboxPanelProps) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState<SandboxConfig>(config)
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
   const [touched, setTouched] = useState(false)
@@ -131,7 +133,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
     <SettingsPanel
       id="sandbox"
       title="沙箱与执行环境"
-      description="扫描时的代码执行、PoC 验证都在隔离容器内完成，不会直接作用于你的机器。"
+      description={t('settings.sandbox.desc')}
     >
       {/* ── 运行方式（说明性，不是实时容器状态） ── */}
       {/*
@@ -167,9 +169,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
       {/* ── 资源限制 ── */}
       <div className="grid gap-panel sm:grid-cols-3">
         <Field
-          label="CPU 上限"
+          label={t('sandbox.cpu.label')}
           htmlFor="sandbox-cpu"
-          help="核数。超出的部分不会分配，扫描会变慢而不是失败。"
+          help={t('sandbox.cpu.help')}
           error={touched ? errors.cpu : null}
         >
           <div className="flex items-center gap-1.5">
@@ -192,9 +194,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         </Field>
 
         <Field
-          label="内存上限"
+          label={t('sandbox.mem.label')}
           htmlFor="sandbox-memory"
-          help="超出会被容器杀掉，扫描标记为失败。"
+          help={t('sandbox.mem.help')}
           error={touched ? errors.memory : null}
         >
           <div className="flex items-center gap-1.5">
@@ -218,9 +220,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         </Field>
 
         <Field
-          label="单次超时"
+          label={t('sandbox.timeout.label')}
           htmlFor="sandbox-timeout"
-          help="防止一次扫描无限跑下去。到点是按「超时收尾」结束，不是失败。"
+          help={t('sandbox.timeout.help')}
           error={touched ? errors.timeout : null}
         >
           <div className="flex items-center gap-1.5">
@@ -245,14 +247,14 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
 
       {/* ── 隔离策略 ── */}
       <div className="flex flex-col gap-panel">
-        <span className="text-xs font-medium text-ink">隔离策略</span>
+        <span className="text-xs font-medium text-ink">{t('sandbox.isolation')}</span>
 
         <div className="grid gap-panel sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Toggle
               id="sandbox-network"
-              label="禁止沙箱访问外网（仅本地代码目标）"
-              hint="只对本地形态的目标（repo / path / 附件）生效。url、service 这类要去连别人的目标会被强制开网 —— 否则镜像里的 nmap / ffuf / sqlmap 全连不上，扫描必然失败。"
+              label={t('sandbox.net.label')}
+              hint={t('sandbox.net.hint')}
               checked={draft.networkIsolated}
               onChange={(v) => setDraft({ ...draft, networkIsolated: v })}
             />
@@ -270,8 +272,8 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
           <div className="flex flex-col gap-1.5">
             <Toggle
               id="sandbox-write"
-              label="允许写入挂载卷"
-              hint="关闭时所有写入都在容器内，容器销毁即消失。开启会让 PoC 能改动宿主目录。"
+              label={t('sandbox.write.label')}
+              hint={t('sandbox.write.hint')}
               checked={draft.allowVolumeWrite}
               onChange={(v) => setDraft({ ...draft, allowVolumeWrite: v })}
             />
@@ -306,9 +308,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
 
         <div className="grid gap-panel sm:grid-cols-2">
           <Field
-            label="同时运行的扫描数"
+            label={t('sandbox.concurrent.label')}
             htmlFor="sandbox-concurrent"
-            help="超出的扫描会排队等待，不会被拒绝。上限受本机资源与模型服务并发额度限制。"
+            help={t('sandbox.concurrent.help')}
             error={touched ? errors.concurrent : null}
           >
             <div className="flex items-center gap-1.5">
@@ -331,9 +333,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
           </Field>
 
           <Field
-            label="单个 agent 回合上限"
+            label={t('sandbox.rounds.label')}
             htmlFor="sandbox-turns"
-            help="一次扫描最多跑多少轮。实际值取它与你选的「扫描深度」天花板中较小的那个（快速 40 / 标准 80 / 深度 150）。调小能缩短单次扫描，代价是复杂目标可能没跑完就被截断。"
+            help={t('sandbox.rounds.help')}
             error={touched ? errors.turns : null}
           >
             <NumberInput
@@ -448,6 +450,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
  * 环境默认值。标出来这件事才有确定答案。
  */
 function ExecutionSourceNote({ source }: { source: ExecutionSource }) {
+
   const keys = Object.keys(source) as (keyof ExecutionSource)[]
   const fromDefault = keys.filter((key) => source[key] === 'default')
   if (fromDefault.length === 0) return null
