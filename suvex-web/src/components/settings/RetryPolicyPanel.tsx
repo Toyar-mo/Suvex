@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/Button'
 import { SettingsPanel } from './SaveBar'
 import { showToast } from '@/data/toast-store'
 import { api } from '@/lib/api'
+import { useI18n } from '@/i18n'
 
 interface RetryPolicy {
   connectRetries: number
@@ -34,6 +35,7 @@ const FIELDS: { key: keyof RetryPolicy; label: string; hint: string }[] = [
  * 等没有实现的层画成可用开关。
  */
 export function RetryPolicyPanel() {
+  const { t } = useI18n()
   const [policy, setPolicy] = useState<RetryPolicy | null>(null)
   const [saving, setSaving] = useState(false)
 
@@ -58,7 +60,7 @@ export function RetryPolicyPanel() {
       setPolicy(saved)
       showToast({ tone: 'ok', message: '重试策略已保存' })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '保存失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('settings.retry.saveFailed', undefined, '保存失败') })
     } finally {
       setSaving(false)
     }
@@ -67,17 +69,17 @@ export function RetryPolicyPanel() {
   return (
     <SettingsPanel
       id="llm-retry"
-      title="重试与退避"
-      description="模型调用失败时的重试次数与间隔。留空/0 表示立即重试；参数范围由后端校验。"
+      title={t('settings.retry.title', undefined, '重试与退避')}
+      description={t('settings.retry.desc', undefined, '模型调用失败时的重试次数与间隔。留空/0 表示立即重试；参数范围由后端校验。')}
     >
       {!policy ? (
-        <p className="text-sm text-ink-muted">读取中…</p>
+        <p className="text-sm text-ink-muted">{t('settings.retry.reading', undefined, '读取中…')}</p>
       ) : (
         <div className="flex flex-col gap-panel">
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
             {FIELDS.map((field) => (
               <label key={field.key} className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">{field.label}</span>
+                <span className="text-ink-muted">{t(`settings.retry.field.${field.key}.label`, undefined, field.label)}</span>
                 <input
                   type="number"
                   min={0}
@@ -87,7 +89,7 @@ export function RetryPolicyPanel() {
                   }
                   className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
                 />
-                <span className="text-2xs text-ink-faint">{field.hint}</span>
+                <span className="text-2xs text-ink-faint">{t(`settings.retry.field.${field.key}.hint`, undefined, field.hint)}</span>
               </label>
             ))}
           </div>

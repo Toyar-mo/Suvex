@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import {
   attachmentDownloadUrl,
   deleteFindingAttachment,
@@ -84,7 +85,7 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
   return (
     <div className="flex flex-col gap-tight">
       {state.status === 'loading' && state.items.length === 0 ? (
-        <p className="text-xs text-ink-faint">加载附件…</p>
+        <p className="text-xs text-ink-faint"><T k="findings.attach.loading"/></p>
       ) : state.status === 'error' ? (
         <p className="text-xs text-signal-risk">
           附件加载失败：{state.error?.message ?? '未知错误'}
@@ -115,7 +116,7 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
 
               {confirmingId === item.id ? (
                 <>
-                  <span className="shrink-0 text-2xs text-signal-risk">删除？</span>
+                  <span className="shrink-0 text-2xs text-signal-risk"><T k="findings.attach.delete"/></span>
                   <button
                     type="button"
                     onClick={() => void handleDelete(item.id)}

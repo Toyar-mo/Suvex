@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from './Field'
 import { SettingsPanel } from './SaveBar'
@@ -14,13 +16,6 @@ import {
 } from '@/data/benchmark'
 import { Select } from '@/components/ui/Select'
 
-const STATUS_LABEL: Record<CaseRun['status'], string> = {
-  passed: '通过',
-  failed: '失败',
-  pending: '待定',
-  error: '错误',
-}
-
 const STATUS_CLASS: Record<CaseRun['status'], string> = {
   passed: 'text-signal-ok',
   failed: 'text-signal-risk',
@@ -35,6 +30,7 @@ const STATUS_CLASS: Record<CaseRun['status'], string> = {
  * 评测不该偷偷花掉扫描额度。
  */
 export function BenchmarkCasesPanel() {
+  const { t } = useI18n()
   const [cases, setCases] = useState<BenchmarkCase[]>([])
   const [runs, setRuns] = useState<Record<string, CaseRun>>({})
   const [loading, setLoading] = useState(true)
@@ -79,9 +75,12 @@ export function BenchmarkCasesPanel() {
       setName('')
       setRefId('')
       await load()
-      showToast({ tone: 'ok', message: '用例已登记' })
+      showToast({ tone: 'ok', message: t('settings.benchmarkCases.registered') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '登记失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.benchmarkCases.registerFailed'),
+      })
     } finally {
       setBusy(false)
     }
@@ -94,10 +93,18 @@ export function BenchmarkCasesPanel() {
       await load()
       showToast({
         tone: out.failed + out.error > 0 ? 'risk' : 'ok',
-        message: `采集完成：通过 ${out.passed} · 失败 ${out.failed} · 待定 ${out.pending} · 错误 ${out.error}`,
+        message: t('settings.benchmarkCases.collectDone', {
+          passed: out.passed,
+          failed: out.failed,
+          pending: out.pending,
+          error: out.error,
+        }),
       })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '采集失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.benchmarkCases.collectFailed'),
+      })
     } finally {
       setBusy(false)
     }
@@ -108,44 +115,58 @@ export function BenchmarkCasesPanel() {
       await deleteCase(caseId)
       await load()
     } catch {
-      showToast({ tone: 'risk', message: '删除失败' })
+      showToast({ tone: 'risk', message: t('settings.benchmarkCases.deleteFailed') })
     }
   }
 
   return (
     <SettingsPanel
       id="benchmark-cases"
-      title="评测用例"
-      description="登记固定用例（题目或扫描），一键采集当前判定。只读已有记录，不触发新扫描。"
+      title={t('settings.benchmarkCases.title')}
+      description={t('settings.benchmarkCases.description')}
     >
       <div className="flex flex-col gap-panel">
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-6">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-ink-muted">套件</span>
+            <span className="text-ink-muted">
+              <T k="settings.benchmarkCases.suite" />
+            </span>
             <TextInput id="bench-suite" value={suite} onChange={setSuite} />
           </label>
           <label className="flex flex-col gap-1 text-sm lg:col-span-2">
-            <span className="text-ink-muted">名称</span>
+            <span className="text-ink-muted">
+              <T k="settings.benchmarkCases.name" />
+            </span>
             <TextInput id="bench-name" value={name} onChange={setName} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-ink-muted">类型</span>
+            <span className="text-ink-muted">
+              <T k="settings.benchmarkCases.kind" />
+            </span>
             <Select
               value={kind}
               options={[
-                { value: 'scan', label: '扫描' },
-                { value: 'ctf', label: 'CTF 题目' },
+                { value: 'scan', label: t('settings.benchmarkCases.kindScan') },
+                { value: 'ctf', label: t('settings.benchmarkCases.kindCtf') },
               ]}
               onChange={(value) => setKind(value as 'ctf' | 'scan')}
             />
           </label>
           <label className="flex flex-col gap-1 text-sm lg:col-span-2">
-            <span className="text-ink-muted">{kind === 'ctf' ? '题目 id' : '扫描 id'}</span>
+            <span className="text-ink-muted">
+              {kind === 'ctf' ? (
+                <T k="settings.benchmarkCases.challengeId" />
+              ) : (
+                <T k="settings.benchmarkCases.scanId" />
+              )}
+            </span>
             <TextInput id="bench-ref" value={refId} onChange={setRefId} />
           </label>
           {kind === 'scan' && (
             <label className="flex flex-col gap-1 text-sm">
-              <span className="text-ink-muted">最少发现数</span>
+              <span className="text-ink-muted">
+                <T k="settings.benchmarkCases.minFindings" />
+              </span>
               <TextInput id="bench-min" value={minFindings} onChange={setMinFindings} type="number" />
             </label>
           )}
@@ -158,17 +179,24 @@ export function BenchmarkCasesPanel() {
             onClick={() => void register()}
             disabled={busy || !name.trim() || !refId.trim()}
           >
-            登记用例
+            <T k="settings.benchmarkCases.register" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void collect()} disabled={busy}>
-            采集「{suite.trim() || 'default'}」结果
+            <T
+              k="settings.benchmarkCases.collect"
+              vars={{ suite: suite.trim() || 'default' }}
+            />
           </Button>
         </div>
 
         {loading ? (
-          <p className="text-sm text-ink-muted">读取中…</p>
+          <p className="text-sm text-ink-muted">
+            <T k="settings.benchmarkCases.loading" />
+          </p>
         ) : cases.length === 0 ? (
-          <p className="text-sm text-ink-muted">还没有用例。先登记一条，再采集。</p>
+          <p className="text-sm text-ink-muted">
+            <T k="settings.benchmarkCases.empty" />
+          </p>
         ) : (
           <ul className="divide-y divide-line rounded-sm border border-line">
             {cases.map((item) => {
@@ -177,18 +205,27 @@ export function BenchmarkCasesPanel() {
                 <li key={item.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
                   <span className="min-w-0 flex-1 truncate text-ink">{item.name}</span>
                   <span className="text-2xs text-ink-faint">
-                    {item.suite} · {item.kind === 'ctf' ? '题目' : '扫描'} ·{' '}
-                    {item.challengeId ?? item.scanId ?? '—'}
+                    {item.suite} ·{' '}
+                    {item.kind === 'ctf' ? (
+                      <T k="settings.benchmarkCases.kindCtf" />
+                    ) : (
+                      <T k="settings.benchmarkCases.kindScan" />
+                    )}{' '}
+                    · {item.challengeId ?? item.scanId ?? '—'}
                   </span>
                   <span className={run ? STATUS_CLASS[run.status] : 'text-ink-faint'}>
-                    {run ? STATUS_LABEL[run.status] : '未采集'}
+                    {run ? (
+                      t(`settings.benchmarkCases.status.${run.status}`)
+                    ) : (
+                      <T k="settings.benchmarkCases.notCollected" />
+                    )}
                   </span>
                   <button
                     type="button"
                     className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
                     onClick={() => void remove(item.id)}
                   >
-                    删除
+                    <T k="settings.benchmarkCases.delete" />
                   </button>
                 </li>
               )

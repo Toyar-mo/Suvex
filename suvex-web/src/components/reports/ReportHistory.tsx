@@ -2,6 +2,7 @@ import { cn } from '@/lib/cn'
 import { SEVERITY_META, SEVERITY_ORDER } from '@/data/findings'
 import { formatDateTime, type Report } from '@/data/report'
 import { formatRelativeTime } from '@/lib/datetime'
+import { useI18n } from '@/i18n'
 import { FileCode2, FileText, Trash2, ArrowRight } from 'lucide-react'
 import { useState } from 'react'
 
@@ -56,6 +57,7 @@ export function ReportHistory({
   canDelete,
   emptyState,
 }: ReportHistoryProps) {
+  const { t } = useI18n()
   if (reports.length === 0) {
     return <div className="px-panel py-bay">{emptyState}</div>
   }
@@ -67,10 +69,12 @@ export function ReportHistory({
         aria-hidden="true"
         className="hidden items-center gap-panel border-b border-line px-panel py-2 text-2xs text-ink-faint lg:flex"
       >
-        <span className="min-w-0 flex-1">报告</span>
-        <span className="w-44 shrink-0">发现</span>
-        <span className="w-36 shrink-0">生成于</span>
-        <span className="w-40 shrink-0 text-right">操作</span>
+        <span className="min-w-0 flex-1">{t('report.history.table.report', undefined, '报告')}</span>
+        <span className="w-44 shrink-0">{t('report.history.table.findings', undefined, '发现')}</span>
+        <span className="w-36 shrink-0">{t('report.history.table.created', undefined, '生成于')}</span>
+        <span className="w-40 shrink-0 text-right">
+          {t('report.history.table.actions', undefined, '操作')}
+        </span>
       </li>
 
       {reports.map((report) => (
@@ -107,6 +111,7 @@ function ReportRow({
   canDelete: boolean
 }) {
   const [confirming, setConfirming] = useState(false)
+  const { t } = useI18n()
 
   const total = report.findingCount
   const FormatIcon = report.format === 'pdf' ? FileText : FileCode2
@@ -126,7 +131,11 @@ function ReportRow({
             type="button"
             onClick={() => onOpen(report)}
             className="block max-w-full truncate text-left text-sm text-ink transition-ui duration-fast hover:text-accent-strong"
-            title={`打开「${report.title}」的预览`}
+            title={t(
+              'report.history.openPreviewTitle',
+              { title: report.title },
+              `打开「${report.title}」的预览`,
+            )}
           >
             {report.title}
           </button>
@@ -156,7 +165,13 @@ function ReportRow({
               混成一句"未包含条目"，会让读者以为这次扫描什么都没查到。
             */
             <span className="text-2xs text-ink-faint">
-              {report.excludedCount > 0 ? `0 条（排除 ${report.excludedCount} 条）` : '未发现问题'}
+              {report.excludedCount > 0
+                ? t(
+                    'report.history.zeroExcluded',
+                    { n: report.excludedCount },
+                    `0 条（排除 ${report.excludedCount} 条）`,
+                  )
+                : t('report.history.none', undefined, '未发现问题')}
             </span>
           ) : (
             <>
@@ -164,7 +179,7 @@ function ReportRow({
                 <span
                   key={sev}
                   className="flex items-center gap-1 text-2xs"
-                  title={`${SEVERITY_META[sev].label} ${report.severityCounts[sev]}`}
+                  title={`${t(`severity.${sev}`, undefined, SEVERITY_META[sev].label)} ${report.severityCounts[sev]}`}
                 >
                   <span
                     aria-hidden="true"
@@ -177,7 +192,9 @@ function ReportRow({
               ))}
               {/* 有排除时补一句，避免"列表 3 条、报告正文说命中 5 条"的困惑 */}
               {report.excludedCount > 0 && (
-                <span className="text-2xs text-ink-faint">排除 {report.excludedCount} 条</span>
+                <span className="text-2xs text-ink-faint">
+                  {t('report.history.excluded', { n: report.excludedCount }, `排除 ${report.excludedCount} 条`)}
+                </span>
               )}
             </>
           )}
@@ -205,7 +222,9 @@ function ReportRow({
                 : 'text-ink-muted hover:bg-surface-overlay hover:text-accent-strong',
             )}
           >
-            {downloading ? '生成中…' : '下载'}
+            {downloading
+              ? t('report.history.generating', undefined, '生成中…')
+              : t('report.history.download', undefined, '下载')}
           </button>
 
           <button
@@ -213,7 +232,7 @@ function ReportRow({
             onClick={() => onOpen(report)}
             className="inline-flex h-8 items-center gap-1 rounded-sm px-2 text-2xs text-ink-muted transition-ui duration-fast hover:bg-surface-overlay hover:text-accent-strong"
           >
-            打开
+            {t('report.history.open', undefined, '打开')}
             <ArrowRight size={11} strokeWidth={2} aria-hidden="true" />
           </button>
 
@@ -232,14 +251,14 @@ function ReportRow({
                 onClick={() => onDelete(report)}
                 className="inline-flex h-8 items-center rounded-sm bg-signal-risk/15 px-2 text-2xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/25"
               >
-                确认删除
+                {t('report.history.confirmDelete', undefined, '确认删除')}
               </button>
               <button
                 type="button"
                 onClick={() => setConfirming(false)}
                 className="inline-flex h-8 items-center rounded-sm px-2 text-2xs text-ink-faint transition-ui duration-fast hover:text-ink"
               >
-                取消
+                {t('report.history.cancel', undefined, '取消')}
               </button>
             </span>
           )}
@@ -248,7 +267,11 @@ function ReportRow({
             <button
               type="button"
               onClick={() => setConfirming(true)}
-              aria-label={`删除「${report.title}」`}
+              aria-label={t(
+                'report.history.deleteAria',
+                { title: report.title },
+                `删除「${report.title}」`,
+              )}
               className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-overlay hover:text-signal-risk"
             >
               <Trash2 size={13} strokeWidth={1.75} aria-hidden="true" />

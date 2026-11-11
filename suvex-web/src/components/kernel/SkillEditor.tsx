@@ -15,6 +15,8 @@ import {
 } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 技能编辑器（v0.90）：一个技能 = 一个目录包。
  *
@@ -79,6 +81,7 @@ export function SkillEditor({
   onSave: () => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const open = state !== null
   const isCreate = state?.mode === 'create'
 
@@ -144,7 +147,7 @@ export function SkillEditor({
       heightClass="max-h-[88vh] h-[88vh]"
       title={
         isCreate ? (
-          '新建技能'
+          t('skills.editor.createTitle')
         ) : (
           <span className="font-mono text-sm">{state?.name}</span>
         )
@@ -152,19 +155,22 @@ export function SkillEditor({
       titleAside={
         state && !state.loading ? (
           <span className="rounded-sm border border-line px-1.5 py-0.5 text-2xs text-ink-faint">
-            {fileCount === 0 ? '单文件' : `1 篇正文 + ${fileCount} 个附件`}
+            {fileCount === 0
+              ? t('skills.editor.singleFile')
+              : t('skills.editor.withFiles', { n: fileCount })}
           </span>
         ) : null
       }
       footer={
         <div className="flex items-center justify-between gap-tight">
           <span className="text-2xs text-ink-faint">
-            保存后模型可用 <code className="font-mono">load_skill</code> 按名加载，
-            附件按相对路径读。
+            {t('skills.editor.footerBefore')}{' '}
+            <code className="font-mono">load_skill</code>
+            {t('skills.editor.footerAfter')}
           </span>
           <div className="flex items-center gap-tight">
             <Button variant="ghost" onClick={onClose} disabled={saving}>
-              取消
+              {t('skills.editor.cancel')}
             </Button>
             <Button onClick={onSave} disabled={saving || state?.loading}>
               {saving ? (
@@ -172,7 +178,7 @@ export function SkillEditor({
               ) : (
                 <Check className="size-3.5" />
               )}
-              保存
+              {t('skills.editor.save')}
             </Button>
           </div>
         </div>
@@ -191,28 +197,29 @@ export function SkillEditor({
           <div className="grid shrink-0 gap-panel sm:grid-cols-2">
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-muted">
-                技能名{' '}
-                <span className="text-ink-faint">（模型 load_skill 时写的就是它）</span>
+                {t('skills.editor.nameLabel')}{' '}
+                <span className="text-ink-faint">{t('skills.editor.nameHint')}</span>
               </span>
               <input
                 value={state.name}
                 onChange={(event) => onChange({ ...state, name: event.target.value })}
                 /* ★ 编辑时名字不可改：它同时是目录名和模型调用标识，改名等于删一个建一个 */
                 disabled={!isCreate}
-                placeholder="例如 kerberos-preauth"
+                placeholder={t('skills.editor.namePlaceholder')}
                 className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent disabled:opacity-60"
               />
             </label>
 
             <label className="flex flex-col gap-1">
               <span className="text-xs text-ink-muted">
-                分类 <span className="text-ink-faint">（会变成目录名，编辑时不可改）</span>
+                {t('skills.editor.categoryLabel')}{' '}
+                <span className="text-ink-faint">{t('skills.editor.categoryHint')}</span>
               </span>
               <input
                 value={state.category}
                 onChange={(event) => onChange({ ...state, category: event.target.value })}
                 disabled={!isCreate}
-                placeholder="例如 vulnerabilities"
+                placeholder={t('skills.editor.categoryPlaceholder')}
                 className="h-9 rounded-sm border border-line bg-surface px-2 font-mono text-sm text-ink outline-none focus:border-line-accent disabled:opacity-60"
               />
             </label>
@@ -220,13 +227,13 @@ export function SkillEditor({
 
           <label className="flex shrink-0 flex-col gap-1">
             <span className="text-xs text-ink-muted">
-              一句话描述{' '}
-              <span className="text-ink-faint">（进「可用技能清单」，模型据此判断该不该加载）</span>
+              {t('skills.editor.descLabel')}{' '}
+              <span className="text-ink-faint">{t('skills.editor.descHint')}</span>
             </span>
             <input
               value={state.description}
               onChange={(event) => onChange({ ...state, description: event.target.value })}
-              placeholder="什么时候该拉这一篇"
+              placeholder={t('skills.editor.descPlaceholder')}
               className="h-9 rounded-sm border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-line-accent"
             />
           </label>
@@ -237,7 +244,7 @@ export function SkillEditor({
             <div className="flex min-h-0 flex-col rounded-sm border border-line">
               <div className="flex shrink-0 items-center justify-between border-b border-line px-2 py-1.5">
                 <span className="text-2xs font-medium uppercase tracking-wide text-ink-faint">
-                  包内文件
+                  {t('skills.editor.files')}
                 </span>
                 <button
                   type="button"
@@ -248,8 +255,8 @@ export function SkillEditor({
                     requestAnimationFrame(() => newFileRef.current?.focus())
                   }}
                   className="rounded-sm p-0.5 text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
-                  aria-label="新建附件文件"
-                  title="新建附件文件"
+                  aria-label={t('skills.editor.newFileAria')}
+                  title={t('skills.editor.newFileAria')}
                 >
                   <Plus size={13} strokeWidth={2} />
                 </button>
@@ -258,7 +265,7 @@ export function SkillEditor({
               <div className="min-h-0 flex-1 overflow-y-auto py-1">
                 {state.loading ? (
                   <div className="flex items-center gap-1 px-2 py-1 text-xs text-ink-faint">
-                    <Loader2 className="size-3 animate-spin" /> 正在读…
+                    <Loader2 className="size-3 animate-spin" /> {t('skills.editor.reading')}
                   </div>
                 ) : (
                   tree.map((row) => {
@@ -305,8 +312,8 @@ export function SkillEditor({
                             type="button"
                             onClick={() => removeFile(row.path as string)}
                             className="shrink-0 rounded-sm p-0.5 text-ink-faint opacity-0 transition-ui duration-fast hover:text-signal-risk group-hover:opacity-100 focus-visible:opacity-100"
-                            aria-label={`删除 ${row.path}`}
-                            title={`删除 ${row.path}`}
+                            aria-label={t('skills.editor.deleteAria', { path: row.path ?? '' })}
+                            title={t('skills.editor.deleteAria', { path: row.path ?? '' })}
                           >
                             <Trash2 size={11} strokeWidth={1.75} />
                           </button>
@@ -347,14 +354,14 @@ export function SkillEditor({
                         disabled={!!newNameError || !newFileName.trim()}
                         className="rounded-sm border border-line px-1.5 py-0.5 text-[10px] text-ink-muted hover:text-ink disabled:opacity-50"
                       >
-                        添加
+                        {t('skills.editor.add')}
                       </button>
                       <button
                         type="button"
                         onClick={() => setAddingFile(false)}
                         className="rounded-sm px-1.5 py-0.5 text-[10px] text-ink-faint hover:text-ink"
                       >
-                        取消
+                        {t('skills.editor.cancel')}
                       </button>
                     </div>
                   </div>
@@ -362,7 +369,7 @@ export function SkillEditor({
 
                 {!addingFile && fileCount === 0 && !state.loading && (
                   <p className="px-2 py-2 text-[10px] leading-relaxed text-ink-faint">
-                    这一篇只有正文。需要检查表、可复制脚本或表单时，点上面的 ＋ 加附件。
+                    {t('skills.editor.emptyHint')}
                   </p>
                 )}
               </div>
@@ -373,16 +380,14 @@ export function SkillEditor({
               <span className="shrink-0 text-xs text-ink-muted">
                 {activePath === null ? (
                   <>
-                    正文（Markdown）
-                    <span className="ml-1 text-ink-faint">
-                      —— 这一段进模型的上下文
-                    </span>
+                    {t('skills.editor.bodyLabel')}
+                    <span className="ml-1 text-ink-faint">{t('skills.editor.bodyHint')}</span>
                   </>
                 ) : (
                   <span className="font-mono">
                     {activePath}
                     <span className="ml-1 font-sans text-ink-faint">
-                      —— 模型按相对路径读，不进上下文
+                      {t('skills.editor.attachmentHint')}
                     </span>
                   </span>
                 )}
@@ -394,13 +399,13 @@ export function SkillEditor({
                 disabled={state.loading}
                 placeholder={
                   activePath === null
-                    ? '# 标题\n\n这里写清步骤、判据、常见坑。模型会照它做。'
-                    : '附件内容'
+                    ? t('skills.editor.bodyPlaceholder')
+                    : t('skills.editor.attachmentPlaceholder')
                 }
                 className="min-h-[240px] flex-1 resize-none rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-xs leading-relaxed text-ink outline-none focus:border-line-accent disabled:opacity-60"
               />
               <span className="shrink-0 text-2xs text-ink-faint">
-                {activeValue.length.toLocaleString('zh-CN')} 字符
+                {t('skills.editor.chars', { n: activeValue.length.toLocaleString('zh-CN') })}
               </span>
             </label>
           </div>

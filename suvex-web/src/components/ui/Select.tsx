@@ -1,4 +1,5 @@
 import { Check, ChevronDown } from 'lucide-react'
+import { T } from '@/i18n/T'
 import {
   useCallback,
   useEffect,
@@ -240,7 +241,7 @@ export function Select<T extends string | number>({
             )}
           >
             {options.length === 0 ? (
-              <p className="px-2 py-3 text-2xs text-ink-faint">无可选项</p>
+              <p className="px-2 py-3 text-2xs text-ink-faint"><T k="ui.noOptions"/></p>
             ) : (
               options.map((option, index) => {
                 const selected = option.value === value

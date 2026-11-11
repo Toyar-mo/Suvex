@@ -41,6 +41,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
+import { useI18n } from '@/i18n'
 
 /**
  * 技能库页（v0.88）。
@@ -78,11 +79,11 @@ import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
  */
 
 const CATEGORY_LABEL: Record<string, string> = {
-  analysis: '分析方法',
-  protocols: '协议',
-  reconnaissance: '信息收集',
-  tooling: '工具用法',
-  vulnerabilities: '漏洞类型',
+  analysis: 'skills.category.analysis',
+  protocols: 'skills.category.protocols',
+  reconnaissance: 'skills.category.reconnaissance',
+  tooling: 'skills.category.tooling',
+  vulnerabilities: 'skills.category.vulnerabilities',
 }
 
 function categoryLabel(category: string): string {
@@ -90,6 +91,7 @@ function categoryLabel(category: string): string {
 }
 
 export function SkillsPage() {
+  const { t } = useI18n()
   const { list, usage, status, error, usageTruncated } = useSkills()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -178,7 +180,7 @@ export function SkillsPage() {
           ? { ...prev, loading: false, body: '' }
           : prev,
       )
-      setEditorError(err instanceof Error ? err.message : '拿不到正文，没法复制。')
+      setEditorError(err instanceof Error ? err.message : t('skills.duplicate.error'))
     }
   }
 
@@ -216,7 +218,7 @@ export function SkillsPage() {
           ? { ...prev, loading: false, body: '', files: {} }
           : prev,
       )
-      setEditorError(err instanceof Error ? err.message : '拿不到正文。')
+      setEditorError(err instanceof Error ? err.message : t('skills.bodyError'))
     }
   }
 
@@ -259,7 +261,7 @@ export function SkillsPage() {
       }
       setEditor(null)
     } catch (err) {
-      setEditorError(err instanceof Error ? err.message : '保存失败。')
+      setEditorError(err instanceof Error ? err.message : t('skills.saveFailed'))
     } finally {
       setSaving(false)
     }
@@ -273,7 +275,7 @@ export function SkillsPage() {
       if (selected === pendingDelete.name) setSelected(null)
       setPendingDelete(null)
     } catch (err) {
-      setEditorError(err instanceof Error ? err.message : '删除失败。')
+      setEditorError(err instanceof Error ? err.message : t('skills.deleteFailed'))
       setPendingDelete(null)
     } finally {
       setDeleting(false)
@@ -292,8 +294,8 @@ export function SkillsPage() {
           </div>
         ) : status === 'error' ? (
           <ErrorState
-            title="拿不到技能库"
-            error={error ?? new Error('后端没有响应。')}
+            title={t('skills.error.title')}
+            error={error ?? new Error(t('skills.error.noResponse'))}
             onRetry={() => void loadSkills()}
           />
         ) : (
@@ -315,8 +317,9 @@ export function SkillsPage() {
               <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-sm text-ink-muted">
                 <Eye className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
                 <span>
-                  你现在的角色是<b>只读</b>：能看全部技能与调用统计，但改不了。
-                  需要新增或编辑请找管理员。
+                  {t('skills.readonly.before')}
+                  <b>{t('skills.readonly.bold')}</b>
+                  {t('skills.readonly.after')}
                 </span>
               </div>
             )}
@@ -337,7 +340,7 @@ export function SkillsPage() {
               <section className="flex min-w-0 flex-col rounded-md border border-line bg-surface">
                 <header className="flex items-center justify-between gap-tight border-b border-line px-3 py-2">
                   <h2 className="text-sm font-medium text-ink">
-                    全部技能
+                    {t('skills.list.heading')}
                     <span className="ml-1.5 font-normal text-ink-faint">{list.total}</span>
                   </h2>
                   <label className="inline-flex h-8 cursor-pointer items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-muted hover:border-line-strong hover:text-ink">
@@ -351,27 +354,27 @@ export function SkillsPage() {
                         void importSkillZip(file)
                           .then(async () => {
                             await loadSkills()
-                            showToast({ tone: 'ok', message: '技能包已导入' })
+                            showToast({ tone: 'ok', message: t('skills.importOk') })
                           })
                           .catch((err: unknown) => {
                             showToast({
                               tone: 'risk',
-                              message: err instanceof Error ? err.message : '导入失败',
+                              message: err instanceof Error ? err.message : t('skills.importFailed'),
                             })
                           })
                         event.target.value = ''
                       }}
                     />
-                    导入 zip
+                    {t('skills.import')}
                   </label>
                   <Button
                     size="sm"
                     onClick={openCreate}
                     disabled={!isAdmin}
-                    title={isAdmin ? '新建一篇自定义技能' : '只读角色不能新建'}
+                    title={isAdmin ? t('skills.new.adminTitle') : t('skills.new.readonlyTitle')}
                   >
                     <Plus className="size-3.5" strokeWidth={2} />
-                    新建
+                    {t('skills.new.button')}
                   </Button>
                 </header>
 
@@ -384,7 +387,7 @@ export function SkillsPage() {
                     <input
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
-                      placeholder="搜索名字 / 分类 / 描述"
+                      placeholder={t('skills.searchPlaceholder')}
                       className="h-8 w-full rounded-sm border border-line bg-surface pr-2 pl-7 text-sm text-ink outline-none focus:border-line-accent"
                     />
                   </div>
@@ -393,12 +396,12 @@ export function SkillsPage() {
                 {list.total === 0 ? (
                   <EmptyState
                     icon={BookOpen}
-                    title="没有技能"
-                    description="技能包随代码分发在 prompts/skills/ 下。这里是空的，说明打包时漏了 —— 不影响工具可用。"
+                    title={t('skills.empty.title')}
+                    description={t('skills.empty.desc')}
                   />
                 ) : visibleSkills.length === 0 ? (
                   <p className="px-3 py-6 text-sm text-ink-muted">
-                    没有匹配「{query}」的技能。
+                    {t('skills.noMatch', { query })}
                   </p>
                 ) : (
                   <ul className="max-h-[60dvh] overflow-y-auto lg:max-h-[calc(100dvh-320px)]">
@@ -419,7 +422,7 @@ export function SkillsPage() {
                             aria-expanded={!collapsed.has(group.category)}
                           >
                             <span>
-                              {collapsed.has(group.category) ? '▸' : '▾'} {categoryLabel(group.category)}
+                              {collapsed.has(group.category) ? '▸' : '▾'} {t(categoryLabel(group.category))}
                               <span className="ml-1 normal-case">（{group.skills.length}）</span>
                             </span>
                           </button>
@@ -461,8 +464,8 @@ export function SkillsPage() {
                 ) : (
                   <EmptyState
                     icon={MousePointerClick}
-                    title="选一篇技能看详情"
-                    description="左边是全部技能。内置技能随代码分发、只读；自定义的可以改、可以删。"
+                    title={t('skills.detail.emptyTitle')}
+                    description={t('skills.detail.emptyDesc')}
                   />
                 )}
               </section>
@@ -485,13 +488,13 @@ export function SkillsPage() {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除这篇技能？"
+        title={t('skills.delete.title')}
         description={
           pendingDelete
-            ? `将删除「${pendingDelete.name}」的正文文件。删掉之后模型再也加载不到它 —— 如果它正在被某个提示词引用，那个引用会变成"没有这个技能"。`
+            ? t('skills.delete.desc', { name: pendingDelete.name })
             : ''
         }
-        confirmLabel="删除"
+        confirmLabel={t('skills.delete.confirm')}
         busy={deleting}
         onConfirm={() => void handleDelete()}
         onCancel={() => setPendingDelete(null)}
@@ -525,22 +528,23 @@ function StatsBar({
   usageMissing: boolean
   usageMessage?: string
 }) {
+  const { t } = useI18n()
   return (
     <section className="rounded-md border border-line bg-surface px-4 py-3">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-        <Metric label="技能总数" value={total} />
+        <Metric label={t('skills.metric.total')} value={total} />
         <Metric
-          label="被加载过"
+          label={t('skills.metric.used')}
           value={usedCount}
           hint={total > 0 ? `${Math.round((usedCount / total) * 100)}%` : undefined}
         />
-        <Metric label="累计加载" value={totalLoads} />
+        <Metric label={t('skills.metric.loads')} value={totalLoads} />
         {topName && (
           <div className="flex items-center gap-1.5 text-sm">
             <TrendingUp className="size-3.5 text-ink-faint" strokeWidth={1.75} />
-            <span className="text-ink-muted">最常用</span>
+            <span className="text-ink-muted">{t('skills.stats.topUsed')}</span>
             <code className="font-mono text-ink">{topName}</code>
-            <span className="text-ink-faint">{topLoads} 次</span>
+            <span className="text-ink-faint">{t('skills.stats.times', { n: topLoads })}</span>
           </div>
         )}
       </div>
@@ -551,19 +555,24 @@ function StatsBar({
           把它写大一点很好看，但它就是编的。
       */}
       <p className="mt-2 max-w-[80ch] text-xs leading-relaxed text-ink-faint">
-        统计口径：模型调用 <code className="font-mono">load_skill</code> 的次数。
-        它证明「请过这一篇」，不证明「读进去了」或「照做了」。
+        {t('skills.stats.scopeBefore')} <code className="font-mono">load_skill</code>
+        {t('skills.stats.scopeAfter')}
         {truncated && (
           <>
             {' '}
-            ⚠️ 只统计了最近 {sampledEvents.toLocaleString('zh-CN')} 条事件，
-            <b>更早的可能没算进去</b>。
+            {t('skills.stats.truncatedBefore', {
+              n: sampledEvents.toLocaleString('zh-CN'),
+            })}
+            <b>{t('skills.stats.truncatedBold')}</b>
+            {t('skills.stats.truncatedAfter')}
           </>
         )}
         {usageMissing && (
           <span className="text-signal-risk">
             {' '}
-            统计没拿到{usageMessage ? `（${usageMessage}）` : ''} —— 清单是准的，只有这里的数缺失。
+            {t('skills.stats.missing')}
+            {usageMessage ? t('skills.stats.missingDetail', { msg: usageMessage }) : ''}
+            {t('skills.stats.missingAfter')}
           </span>
         )}
       </p>
@@ -596,6 +605,7 @@ function SkillRow({
   active: boolean
   onSelect: () => void
 }) {
+  const { t } = useI18n()
   return (
     <li className="border-b border-line/60 last:border-b-0">
       <button
@@ -618,11 +628,11 @@ function SkillRow({
                 className="size-3 shrink-0 text-ink-faint"
                 strokeWidth={2}
                 role="img"
-                aria-label="内置技能，只读"
+                aria-label={t('skills.builtinAria')}
               />
             ) : (
               <span className="shrink-0 rounded-xs border border-line-accent px-1 text-[10px] text-ink-muted">
-                自定义
+                {t('skills.custom')}
               </span>
             )}
             {/*
@@ -632,14 +642,14 @@ function SkillRow({
             {(skill.fileCount ?? 0) > 0 && (
               <span
                 className="shrink-0 rounded-xs border border-line px-1 text-[10px] text-ink-faint"
-                title={`这一篇带 ${skill.fileCount} 个附件文件`}
+                title={t('skills.attachmentsTitle', { n: skill.fileCount ?? 0 })}
               >
                 +{skill.fileCount}
               </span>
             )}
           </div>
           <p className="mt-0.5 line-clamp-2 text-xs leading-relaxed text-ink-muted">
-            {skill.description || '（没有写描述）'}
+            {skill.description || t('skills.noDesc')}
           </p>
         </div>
 
@@ -653,7 +663,7 @@ function SkillRow({
             'shrink-0 font-mono text-2xs',
             loads > 0 ? 'text-ink-muted' : 'text-ink-faint',
           )}
-          title={loads > 0 ? `被加载 ${loads} 次` : '从没被加载过'}
+          title={loads > 0 ? t('skills.loadedTitle', { n: loads }) : t('skills.neverLoaded')}
         >
           {loads}
         </span>
@@ -683,6 +693,7 @@ function SkillDetailPane({
   onDelete: () => void
   error: string | null
 }) {
+  const { t } = useI18n()
   const builtin = skill.source === 'builtin'
 
   /*
@@ -733,7 +744,7 @@ function SkillDetailPane({
         })
         .catch((err: unknown) => {
           if (cancelled) return
-          setBodyError(err instanceof Error ? err.message : '拿不到正文。')
+          setBodyError(err instanceof Error ? err.message : t('skills.bodyError'))
         })
         .finally(() => {
           if (cancelled) return
@@ -751,20 +762,22 @@ function SkillDetailPane({
     <div className="flex h-full flex-col">
       <div className="grid grid-cols-3 gap-2 border-b border-line px-4 py-2.5 text-sm">
         <div>
-          <div className="text-2xs text-ink-faint">总调用次数</div>
+          <div className="text-2xs text-ink-faint">{t('skills.totalCalls')}</div>
           <div className="tabular text-ink">{loads?.loads ?? 0}</div>
         </div>
         <div>
-          <div className="text-2xs text-ink-faint">最近调用</div>
+          <div className="text-2xs text-ink-faint">{t('skills.lastCall')}</div>
           <div className="text-ink">
             {loads?.lastLoadedAt
               ? new Date(loads.lastLoadedAt).toLocaleString('zh-CN', { hour12: false })
-              : '从未调用'}
+              : t('skills.neverCalled')}
           </div>
         </div>
         <div>
-          <div className="text-2xs text-ink-faint">来源</div>
-          <div className="text-ink">{builtin ? '内置 · 随代码分发' : '自定义'}</div>
+          <div className="text-2xs text-ink-faint">{t('skills.source')}</div>
+          <div className="text-ink">
+            {builtin ? t('skills.sourceBuiltin') : t('skills.custom')}
+          </div>
         </div>
       </div>
 
@@ -773,11 +786,11 @@ function SkillDetailPane({
           <div className="flex items-center gap-2">
             <code className="font-mono text-base text-ink">{skill.name}</code>
             <span className="rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted">
-              {categoryLabel(skill.category)}
+              {t(categoryLabel(skill.category))}
             </span>
           </div>
           <p className="mt-1 max-w-[68ch] text-sm leading-relaxed text-ink-muted">
-            {skill.description || '（没有写描述）'}
+            {skill.description || t('skills.noDesc')}
           </p>
         </div>
 
@@ -797,18 +810,18 @@ function SkillDetailPane({
             <>
               <span className="flex items-center gap-1 text-xs text-ink-faint">
                 <Lock className="size-3" strokeWidth={2} />
-                内置 · 只读
+                {t('skills.builtinReadonly')}
               </span>
               <Button size="sm" variant="ghost" onClick={onDuplicate} disabled={!isAdmin}>
                 <Copy className="size-3.5" strokeWidth={1.75} />
-                复制为自定义
+                {t('skills.duplicate')}
               </Button>
             </>
           ) : (
             <>
               <Button size="sm" variant="ghost" onClick={onEdit} disabled={!isAdmin}>
                 <Pencil className="size-3.5" strokeWidth={1.75} />
-                编辑
+                {t('skills.edit')}
               </Button>
               <Button
                 size="sm"
@@ -818,7 +831,7 @@ function SkillDetailPane({
                 className="text-signal-risk"
               >
                 <Trash2 className="size-3.5" strokeWidth={1.75} />
-                删除
+                {t('skills.deleteAction')}
               </Button>
             </>
           )}
@@ -827,14 +840,18 @@ function SkillDetailPane({
 
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1 border-b border-line px-4 py-2 text-xs text-ink-muted">
         <span>
-          被加载 <b className="font-mono text-ink">{loads?.loads ?? 0}</b> 次
+          {t('skills.loadedPrefix')}{' '}
+          <b className="font-mono text-ink">{loads?.loads ?? 0}</b>
+          {t('skills.loadedSuffix')}
         </span>
         {loads?.lastLoadedAt ? (
           <span>
-            最近一次 {new Date(loads.lastLoadedAt).toLocaleString('zh-CN')}
+            {t('skills.lastLoadedAt', {
+              time: new Date(loads.lastLoadedAt).toLocaleString('zh-CN'),
+            })}
           </span>
         ) : (
-          <span className="text-ink-faint">从没被加载过 —— 这一篇目前是死文本</span>
+          <span className="text-ink-faint">{t('skills.deadText')}</span>
         )}
       </div>
 
@@ -882,18 +899,18 @@ function SkillDetailPane({
             <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-ink-faint">
               <SegmentedControl
                 size="sm"
-                ariaLabel="正文显示方式"
+                ariaLabel={t('skills.view.aria')}
                 value={viewMode}
                 onChange={(next) => setViewMode(next)}
                 options={[
                   {
                     id: 'rendered',
-                    label: '排版',
+                    label: t('skills.view.rendered'),
                     icon: <BookOpen className="size-3" strokeWidth={2} />,
                   },
                   {
                     id: 'raw',
-                    label: '原文',
+                    label: t('skills.view.raw'),
                     icon: <FileCode2 className="size-3" strokeWidth={2} />,
                   },
                 ]}
@@ -902,13 +919,11 @@ function SkillDetailPane({
               <span className="flex items-center gap-1">
                 <Eye className="size-3" strokeWidth={2} />
                 {viewMode === 'raw'
-                  ? `逐字符保真 · ${lineCount} 行 · ${body.length} 字符`
-                  : `已排版 · 原文 ${lineCount} 行 · ${body.length} 字符`}
+                  ? t('skills.view.fidelity', { lines: lineCount, chars: body.length })
+                  : t('skills.view.renderedInfo', { lines: lineCount, chars: body.length })}
               </span>
               {viewMode === 'raw' && (
-                <span className="text-ink-faint/80">
-                  这里才看得到 HTML 注释与原始缩进
-                </span>
+                <span className="text-ink-faint/80">{t('skills.view.rawHint')}</span>
               )}
             </div>
 
@@ -929,14 +944,17 @@ function SkillDetailPane({
           </div>
         ) : (
           <p className="max-w-[72ch] text-sm leading-relaxed text-ink-muted">
-            读不到这一篇的正文。它可能没随部署包分发 —— 检查{' '}
-            <code className="font-mono">prompts/skills/</code> 下有没有这个文件。
+            {t('skills.bodyMissing.before')}{' '}
+            <code className="font-mono">prompts/skills/</code>
+            {t('skills.bodyMissing.after')}
           </p>
         )}
       </div>
 
       <footer className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint">
-        改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的技能库。
+        {t('skills.footer.before')}
+        <b>{t('skills.footer.bold')}</b>
+        {t('skills.footer.after')}
       </footer>
     </div>
   )

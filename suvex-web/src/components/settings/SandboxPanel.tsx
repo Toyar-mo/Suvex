@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { useI18n } from '@/i18n'
 import { Field, Toggle } from './Field'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
@@ -159,7 +160,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         </span>
 
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="text-xs text-ink">每次扫描按需起一个隔离容器，跑完即销毁</span>
+          <span className="text-xs text-ink"><T k="settings.sandbox.lifecycle"/></span>
           <span className="text-2xs text-ink-faint">
             内核镜像 <span className="mono-ui">suvex-sandbox</span> 系列；下面的 CPU / 内存上限作用于这个临时容器。
           </span>
@@ -262,7 +263,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
                 <TriangleAlert size={12} strokeWidth={2} className="mt-0.5 shrink-0 text-signal-warn" aria-hidden="true" />
                 <span className="text-2xs text-ink-muted">
-                  已开启。注意它<span className="text-ink">管不住网络目标</span>：https 与 host:port 的扫描仍会联网。
+                  已开启。注意它<span className="text-ink"><T k="settings.sandbox.netTargets"/></span>：https 与 host:port 的扫描仍会联网。
                   真正的出站边界在宿主机的 iptables DOCKER-USER 白名单。
                 </span>
               </div>
@@ -298,9 +299,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
       */}
       <div className="flex flex-col gap-panel">
         <div className="flex flex-col gap-0.5">
-          <span className="text-xs font-medium text-ink">执行</span>
+          <span className="text-xs font-medium text-ink"><T k="settings.sandbox.exec"/></span>
           <span className="text-2xs text-ink-faint">
-            这三项<strong className="font-medium text-ink-muted">真的生效</strong>：
+            这三项<strong className="font-medium text-ink-muted"><T k="settings.sandbox.really"/></strong>：
             并发几秒内生效；「扫描深度」决定回合的天花板（快速 40 / 标准 80 / 深度 150 轮），
             「回合上限」在其下再收细 —— 两者取较小值；对之后新发起的扫描生效。都不需要重启服务。
           </span>
@@ -389,9 +390,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
       */}
       <div className="flex flex-col gap-panel">
         <div className="flex flex-col gap-0.5">
-          <span className="text-xs font-medium text-ink">评测强度</span>
+          <span className="text-xs font-medium text-ink"><T k="settings.sandbox.intensity"/></span>
           <span className="text-2xs text-ink-faint">
-            下面这一项会改变 agent 的<strong className="font-medium text-ink-muted">行为</strong>，
+            下面这一项会改变 agent 的<strong className="font-medium text-ink-muted"><T k="settings.sandbox.behavior"/></strong>，
             不是资源配额。全局生效，不按题目分类设置。
           </span>
         </div>

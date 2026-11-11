@@ -1,9 +1,10 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { Field, Toggle } from './Field'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
 import SandboxProfileSelect from '@/components/kernel/SandboxProfileSelect'
 import {
-  SUBMIT_MODE_HINT,
   SUBMIT_MODE_LABEL,
   loadKernel,
   saveKernelSettings,
@@ -103,6 +104,7 @@ const MIN_WALL_CLOCK_SECONDS = 120
 const MAX_WALL_CLOCK_SECONDS = 24 * 3600
 
 export function KernelPanel() {
+  const { t } = useI18n()
   const { settings, status, settingsError } = useKernel()
 
   /*
@@ -165,10 +167,13 @@ export function KernelPanel() {
       draft.maxWrongSubmissions < MIN_WRONG_SUBMISSIONS ||
       draft.maxWrongSubmissions > MAX_WRONG_SUBMISSIONS_CEILING
     ) {
-      return `应在 ${MIN_WRONG_SUBMISSIONS}-${MAX_WRONG_SUBMISSIONS_CEILING} 之间`
+      return t('settings.kernel.errorRange', {
+        min: MIN_WRONG_SUBMISSIONS,
+        max: MAX_WRONG_SUBMISSIONS_CEILING,
+      })
     }
     return null
-  }, [draft])
+  }, [draft, t])
 
   const concurrencyError = useMemo(() => {
     if (!draft) return null
@@ -176,10 +181,13 @@ export function KernelPanel() {
       draft.maxConcurrentSolves < MIN_CONCURRENT_SOLVES ||
       draft.maxConcurrentSolves > MAX_CONCURRENT_SOLVES
     ) {
-      return `应在 ${MIN_CONCURRENT_SOLVES}-${MAX_CONCURRENT_SOLVES} 之间`
+      return t('settings.kernel.errorRange', {
+        min: MIN_CONCURRENT_SOLVES,
+        max: MAX_CONCURRENT_SOLVES,
+      })
     }
     return null
-  }, [draft])
+  }, [draft, t])
 
   /*
     ★ 校验继续**逐项分开**（同 `error` / `concurrencyError` 那条理由）：
@@ -192,10 +200,13 @@ export function KernelPanel() {
       draft.solvePollSeconds < MIN_SOLVE_POLL_SECONDS ||
       draft.solvePollSeconds > MAX_SOLVE_POLL_SECONDS
     ) {
-      return `应在 ${MIN_SOLVE_POLL_SECONDS}-${MAX_SOLVE_POLL_SECONDS} 秒之间`
+      return t('settings.kernel.errorRangeSeconds', {
+        min: MIN_SOLVE_POLL_SECONDS,
+        max: MAX_SOLVE_POLL_SECONDS,
+      })
     }
     return null
-  }, [draft])
+  }, [draft, t])
 
   const autoSyncError = useMemo(() => {
     if (!draft) return null
@@ -203,18 +214,24 @@ export function KernelPanel() {
       draft.autoSyncSeconds < MIN_AUTO_SYNC_SECONDS ||
       draft.autoSyncSeconds > MAX_AUTO_SYNC_SECONDS
     ) {
-      return `应在 ${MIN_AUTO_SYNC_SECONDS}-${MAX_AUTO_SYNC_SECONDS} 秒之间（0 表示关闭）`
+      return t('settings.kernel.errorRangeSecondsZero', {
+        min: MIN_AUTO_SYNC_SECONDS,
+        max: MAX_AUTO_SYNC_SECONDS,
+      })
     }
     return null
-  }, [draft])
+  }, [draft, t])
 
   const maxTurnsError = useMemo(() => {
     if (!draft) return null
     if (draft.maxTurns < MIN_MAX_TURNS || draft.maxTurns > MAX_MAX_TURNS) {
-      return `应在 ${MIN_MAX_TURNS}-${MAX_MAX_TURNS} 轮之间`
+      return t('settings.kernel.errorRangeTurns', {
+        min: MIN_MAX_TURNS,
+        max: MAX_MAX_TURNS,
+      })
     }
     return null
-  }, [draft])
+  }, [draft, t])
 
   /*
     墙钟预算校验：**只有填了数才校验**（`null` = 自动，合法）。
@@ -229,10 +246,13 @@ export function KernelPanel() {
       draft.wallClockSeconds < MIN_WALL_CLOCK_SECONDS ||
       draft.wallClockSeconds > MAX_WALL_CLOCK_SECONDS
     ) {
-      return `应在 ${MIN_WALL_CLOCK_SECONDS}-${MAX_WALL_CLOCK_SECONDS} 秒之间（留空 = 按回合自动）`
+      return t('settings.kernel.errorWallClock', {
+        min: MIN_WALL_CLOCK_SECONDS,
+        max: MAX_WALL_CLOCK_SECONDS,
+      })
     }
     return null
-  }, [draft])
+  }, [draft, t])
 
   const handleSave = async () => {
     setTouched(true)
@@ -245,7 +265,7 @@ export function KernelPanel() {
       wallClockError ||
       !draft
     ) {
-      setSaveState({ kind: 'failed', error: '有配置项超出允许范围，请先修正' })
+      setSaveState({ kind: 'failed', error: t('settings.kernel.invalidSave') })
       return
     }
     if (!dirty) {
@@ -275,7 +295,7 @@ export function KernelPanel() {
     } catch (err) {
       setSaveState({
         kind: 'failed',
-        error: err instanceof Error ? err.message : '保存失败',
+        error: err instanceof Error ? err.message : t('settings.kernel.saveFailed'),
       })
     }
   }
@@ -297,8 +317,8 @@ export function KernelPanel() {
     return (
       <SettingsPanel
         id="ctf"
-        title="CTF"
-        description="对接 ctf2.dasctf.com，把题目交给沙箱里的模型去解。"
+        title={t('settings.kernel.panelTitleFallback')}
+        description={t('settings.kernel.descFallback')}
       >
         {/*
           ★ 加载/失败态也必须能被「内核通用能力」这个锚点找到：
@@ -307,9 +327,14 @@ export function KernelPanel() {
         */}
         <span id="kernel-core" aria-hidden="true" />
         <p className="text-xs text-ink-muted">
-          {settingsError
-            ? `读不到 CTF2 配置：${settingsError.message}。为避免误改，这里不显示表单。`
-            : '正在加载…'}
+          {settingsError ? (
+            <T
+              k="settings.kernel.loadError"
+              vars={{ message: settingsError.message }}
+            />
+          ) : (
+            <T k="settings.kernel.loading" />
+          )}
         </p>
       </SettingsPanel>
     )
@@ -319,14 +344,20 @@ export function KernelPanel() {
     <>
       <SettingsPanel
         id="ctf"
-        title="CTF 解题"
-        description="对接 ctf2.dasctf.com，控制题目怎么排队、怎么提交、什么时候自动开跑。这里的设置只影响 CTF 解题。"
+        title={t('settings.kernel.title')}
+        description={t('settings.kernel.description')}
       >
         {/* ── 提交策略 ── */}
         <div className="flex flex-col gap-1.5">
-          <span className="text-xs font-medium text-ink">提交策略</span>
+          <span className="text-xs font-medium text-ink">
+            <T k="settings.kernel.submitStrategy" />
+          </span>
 
-          <div role="radiogroup" aria-label="提交策略" className="flex flex-col gap-1.5">
+          <div
+            role="radiogroup"
+            aria-label={t('settings.kernel.submitStrategy')}
+            className="flex flex-col gap-1.5"
+          >
             {(Object.keys(SUBMIT_MODE_LABEL) as KernelSubmitMode[]).map((mode) => {
               const active = draft.submitMode === mode
               const Icon = mode === 'safe' ? ShieldCheck : ShieldAlert
@@ -360,9 +391,11 @@ export function KernelPanel() {
                   />
                   <span className="flex min-w-0 flex-col gap-0.5">
                     <span className={cn('text-xs', active ? 'text-ink' : 'text-ink-muted')}>
-                      {SUBMIT_MODE_LABEL[mode]}
+                      {t(`settings.kernel.submit.${mode}.label`)}
                     </span>
-                    <span className="text-2xs text-ink-faint">{SUBMIT_MODE_HINT[mode]}</span>
+                    <span className="text-2xs text-ink-faint">
+                      {t(`settings.kernel.submit.${mode}.hint`)}
+                    </span>
                   </span>
                 </button>
               )
@@ -383,10 +416,11 @@ export function KernelPanel() {
                 aria-hidden="true"
               />
               <span className="text-2xs text-ink-muted">
-                已开启自动提交：解题产出候选答案后会
-                <strong className="font-medium text-ink">直接</strong>
-                提交给平台，不再等你确认。平台对错误提交有次数上限（不可再生），
-                所以猜错会实打实地消耗这道题的机会。仍受下面那条上限约束。
+                <T k="settings.kernel.autoWarningBefore" />
+                <strong className="font-medium text-ink">
+                  <T k="settings.kernel.autoWarningStrong" />
+                </strong>
+                <T k="settings.kernel.autoWarningAfter" />
               </span>
             </div>
           )}
@@ -394,9 +428,9 @@ export function KernelPanel() {
 
         {/* ── 每题错误提交上限 ── */}
         <Field
-          label="每题错误提交次数上限"
+          label={t('settings.kernel.maxWrongLabel')}
           htmlFor="ctf2-max-wrong"
-          help="超过这个次数后，这道题不会再提交任何 flag（自动模式同样受它约束）。默认 3 次。"
+          help={t('settings.kernel.maxWrongHelp')}
           error={touched ? error : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -422,13 +456,15 @@ export function KernelPanel() {
                 error && touched ? 'border-signal-risk' : 'border-line hover:border-line-strong',
               )}
             />
-            <span className="shrink-0 text-2xs text-ink-faint">次</span>
+            <span className="shrink-0 text-2xs text-ink-faint">
+              <T k="settings.kernel.unitTimes" />
+            </span>
           </span>
         </Field>
 
         {/* ── 解题并发配额（v0.22）── */}
         <Field
-          label="同时解题的题目数"
+          label={t('settings.kernel.concurrentLabel')}
           htmlFor="ctf2-concurrent-solves"
           /*
           ★ 这段说明必须写清"它和沙箱那页的并发是两个数"。
@@ -436,11 +472,7 @@ export function KernelPanel() {
           （两个调度器各自数自己的名额，实际跑出两倍）。
           不说明的话，用户会以为这里和那里应该填一样的数。
         */
-          help={
-            '超过这个数的题目会排队等待，不会被拒绝。' +
-            '它与「沙箱」页的扫描并发是两个独立配额，' +
-            '总并发是两者之和 —— 比赛时把这里调大，扫描那边不会跟着变大。'
-          }
+          help={t('settings.kernel.concurrentHelp')}
           error={touched ? concurrencyError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -466,13 +498,15 @@ export function KernelPanel() {
                   : 'border-line hover:border-line-strong',
               )}
             />
-            <span className="shrink-0 text-2xs text-ink-faint">道</span>
+            <span className="shrink-0 text-2xs text-ink-faint">
+              <T k="settings.kernel.unitChallenges" />
+            </span>
           </span>
         </Field>
 
         {/* ── 认领轮询间隔（v0.24）── */}
         <Field
-          label="认领轮询间隔"
+          label={t('settings.kernel.pollLabel')}
           htmlFor="ctf2-solve-poll"
           /*
           ★ 这段说明必须点破"它和沙箱那页的轮询不是同一个数"。
@@ -480,11 +514,7 @@ export function KernelPanel() {
           会顺带把 CTF2 的认领延迟一起调大 —— 而界面上没有任何地方提示
           这两件事连着（与 v0.22 的配额超卖是同一类病）。
         */
-          help={
-            '一道题解完之后，调度器最多隔这么久就会把下一道从队列里领走。' +
-            '它是解题自己的轮询，和扫描那边的轮询是两个独立的值 —— ' +
-            '这里只影响解题。比赛时保持 1 秒即可。'
-          }
+          help={t('settings.kernel.pollHelp')}
           error={touched ? pollError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -511,25 +541,22 @@ export function KernelPanel() {
                   : 'border-line hover:border-line-strong',
               )}
             />
-            <span className="shrink-0 text-2xs text-ink-faint">秒</span>
+            <span className="shrink-0 text-2xs text-ink-faint">
+              <T k="settings.kernel.unitSeconds" />
+            </span>
           </span>
         </Field>
 
         {/* ── 自动同步（v0.24：抢首杀）── */}
         <Field
-          label="自动同步间隔"
+          label={t('settings.kernel.autoSyncLabel')}
           htmlFor="ctf2-auto-sync"
           /*
           ★ 这个值默认 30 秒而不是 1 秒，理由必须写在这里：
           请求预算和解题**共享同一个 PAT**，而"平台不会更快地出新题"。
           写清代价，用户才好自己决定要不要更激进。
         */
-          help={
-            '后台每隔这么久做一次**增量**同步（只拉新题，已在库的跳过），' +
-            '所以新题最晚隔这么久就会自动出现。填 0 表示关闭。' +
-            '不建议低于 15 秒：请求额度和解题共用同一个账号，' +
-            '打太密会挤到提交那一步去。'
-          }
+          help={t('settings.kernel.autoSyncHelp')}
           error={touched ? autoSyncError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -556,7 +583,9 @@ export function KernelPanel() {
                   : 'border-line hover:border-line-strong',
               )}
             />
-            <span className="shrink-0 text-2xs text-ink-faint">秒</span>
+            <span className="shrink-0 text-2xs text-ink-faint">
+              <T k="settings.kernel.unitSeconds" />
+            </span>
           </span>
         </Field>
 
@@ -564,24 +593,15 @@ export function KernelPanel() {
         <div className="space-y-2">
           <Toggle
             id="ctf2-auto-priority"
-            label="新题自动优先"
-            hint={
-              '刚同步进来的题自动排到队首，新题之间按分值高的先做。' +
-              '只碰新题 —— 你手动调过的优先级不会被覆盖。' +
-              '只在「自动同步」跑的时候生效；间隔为 0 或手动点「同步题目」时不会触发。'
-            }
+            label={t('settings.kernel.autoPriorityLabel')}
+            hint={t('settings.kernel.autoPriorityHint')}
             checked={draft.autoPriorityNew}
             onChange={(value) => setDraft({ ...draft, autoPriorityNew: value })}
           />
           <Toggle
             id="ctf2-auto-start"
-            label="新题自动开始解题"
-            hint={
-              '发现新题就直接开跑，用来抢「前三名额外加分」的窗口。' +
-              '它会占用解题并发名额和模型额度，所以默认关闭 —— ' +
-              '开之前先确认并发上限和模型额度够用。' +
-              '同样只在「自动同步」跑的时候生效。'
-            }
+            label={t('settings.kernel.autoStartLabel')}
+            hint={t('settings.kernel.autoStartHint')}
             checked={draft.autoStartNew}
             onChange={(value) => setDraft({ ...draft, autoStartNew: value })}
           />
@@ -606,16 +626,8 @@ export function KernelPanel() {
         <div className="space-y-2">
           <Toggle
             id="ctf2-agentsec"
-            label="启用智能体安全评测场景包"
-            hint={
-              '打开后，分类属于「提示词注入 / 越权工具调用 / 敏感信息泄露 / ' +
-              '多智能体协作」这四类的题，会额外拿到一段评测纪律：它的任务是' +
-              '判定某个安全考察点成不成立，并按「已命中 / 待跟进 / 已排除」' +
-              '三级给结论。' +
-              '★ 那四类题里**没有 flag** —— 打开它是换一套判定方式，' +
-              '不是多几种题型。其余五类题（pwn/web/reverse/crypto/misc）' +
-              '拿到的提示词与结论格式**完全不受影响**，逐字节相同。'
-            }
+            label={t('settings.kernel.agentsecLabel')}
+            hint={t('settings.kernel.agentsecHint')}
             checked={draft.enableAgentsecScenarios}
             onChange={(value) => setDraft({ ...draft, enableAgentsecScenarios: value })}
           />
@@ -630,10 +642,7 @@ export function KernelPanel() {
           onReset={handleReset}
           note={
             <span className="text-2xs text-ink-muted">
-              保存后立刻生效（解题与调度每次都读生效值），不需要重启服务。
-              从「自动提交」切回「先确认再提交」也是即时的 —— 正在跑的那一轮
-              会在下一个提交决策点读到新值。它与「内核通用能力」是同一次保存：
-              两块共用一个草稿，在这里点保存等于把两块一起存下。
+              <T k="settings.kernel.saveNote" />
             </span>
           }
         />
@@ -641,8 +650,8 @@ export function KernelPanel() {
 
       <SettingsPanel
         id="kernel-core"
-        title="内核通用能力"
-        description="这些设置对所有场景（CTF 解题 / 渗透评估 / 应急响应复盘）共用，不单属于 CTF。改动后同样点上一块底部的保存。"
+        title={t('settings.kernel.coreTitle')}
+        description={t('settings.kernel.coreDescription')}
       >
         {/* ── 默认沙箱镜像 ── */}
         <SandboxProfileSelect
@@ -656,24 +665,19 @@ export function KernelPanel() {
             解题读的是那一列；本设置只决定「CTF」页那个选择器的默认值。
             照搬"只影响这次解题"会把这句说反。
           */
-          hint="分类认不出来（归到「其它」）的新题用它；认得出的题仍按分类走。它也是「CTF」页那个选择器的默认值。"
+          hint={t('settings.kernel.defaultProfileHint')}
         />
 
         {/* ── 回合预算（v0.26）── */}
         <Field
-          label="每题最多跑多少回合"
+          label={t('settings.kernel.maxTurnsLabel')}
           htmlFor="ctf2-max-turns"
           /*
             ★ 这段说明给的是**怎么填**的判据，不是一句"越大越好"。
             判据来自实测数据 —— 用户看到"6 轮 vs 37 条命令"这两组数，
             自己就知道该往哪调。
           */
-          help={
-            '一次解题最多让模型跑多少轮。同一批实测里：一道命令注入题 6 轮就出结果，' +
-            '而一道 .NET 逆向题跑满 40 轮、发出 37 条**各不相同**的命令仍未做完 —— ' +
-            '它不是卡住了，是真的需要更多轮。' +
-            '调大只花模型额度（每轮一次调用），不占解题并发；调小省钱但可能中途放弃。'
-          }
+          help={t('settings.kernel.maxTurnsHelp')}
           error={touched ? maxTurnsError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -697,23 +701,24 @@ export function KernelPanel() {
                   : 'border-line hover:border-line-strong',
               )}
             />
-            <span className="shrink-0 text-2xs text-ink-faint">轮</span>
+            <span className="shrink-0 text-2xs text-ink-faint">
+              <T k="settings.kernel.unitTurns" />
+            </span>
           </span>
         </Field>
 
         {/* ── 墙钟预算（v1.61）── */}
         <Field
-          label="每题墙钟预算（秒）"
+          label={t('settings.kernel.wallClockLabel')}
           htmlFor="ctf2-wall-clock"
           /*
             ★ 说明必须点破"留空 = 自动"，否则用户会以为空着是"没设=不限时"。
             它恰恰相反：空着是"按回合自动给一个合理值"，而**这**才是推荐用法。
           */
-          help={
-            '一次解题最多允许跑多久（墙钟）。到 60%/80%/92% 会提醒模型整理已有证据收尾。' +
-            '留空 = 按回合预算自动推导（回合 × 45 秒，如 80 轮 → 60 分钟），推荐留空。' +
-            `填数则覆盖自动值，区间 ${MIN_WALL_CLOCK_SECONDS}-${MAX_WALL_CLOCK_SECONDS} 秒。`
-          }
+          help={t('settings.kernel.wallClockHelp', {
+            min: MIN_WALL_CLOCK_SECONDS,
+            max: MAX_WALL_CLOCK_SECONDS,
+          })}
           error={touched ? wallClockError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -725,7 +730,9 @@ export function KernelPanel() {
               value={draft.wallClockSeconds === null ? '' : draft.wallClockSeconds}
               min={MIN_WALL_CLOCK_SECONDS}
               max={MAX_WALL_CLOCK_SECONDS}
-              placeholder={`自动（${draft.maxTurns * 45}s）`}
+              placeholder={t('settings.kernel.wallClockPlaceholder', {
+                seconds: draft.maxTurns * 45,
+              })}
               onChange={(e) => {
                 const raw = e.target.value
                 if (raw === '') {
@@ -747,31 +754,26 @@ export function KernelPanel() {
                   : 'border-line hover:border-line-strong',
               )}
             />
-            <span className="shrink-0 text-2xs text-ink-faint">秒</span>
+            <span className="shrink-0 text-2xs text-ink-faint">
+              <T k="settings.kernel.unitSeconds" />
+            </span>
           </span>
         </Field>
 
         <Field
-          label="备用模型（换模兜底）"
+          label={t('settings.kernel.fallbackLabel')}
           htmlFor="ctf2-fallback-provider"
           /*
             ★ 这一段必须把"什么时候会换"讲清楚，否则用户会以为它是负载均衡。
             它不是 —— 主接入点**调不动**时才换，正常情况下永远用主模型。
           */
-          help={
-            '主 provider 调用失败（key 失效 / 限流 / 服务端错误 / 长时间过载）时，' +
-            '改用这里选定的 provider 继续解题，而不是让整道题作废 —— ' +
-            '那时可能已经跑了三十多轮、在沙箱里做完了大量分析。' +
-            '★ 它是**兜底**不是负载均衡：正常情况下永远用主模型。' +
-            '留空（默认）= 不启用，行为与之前完全一致。' +
-            '⚠️ 若备用的是云端 provider，换模会消耗**那个** provider 的额度。'
-          }
+          help={t('settings.kernel.fallbackHelp')}
         >
           <Select
             id="ctf2-fallback-provider"
             value={draft.fallbackProviderId ?? ''}
             options={[
-              { value: '', label: '不启用' },
+              { value: '', label: t('settings.kernel.fallbackDisabled') },
               ...providers.map((provider) => ({ value: provider.id, label: provider.label })),
             ]}
             onChange={(value) =>
@@ -790,30 +792,15 @@ export function KernelPanel() {
         <div className="space-y-2">
           <Toggle
             id="ctf2-ir"
-            label="启用应急响应场景包"
-            hint={
-              '打开后，分类属于「根因定位 / 时间线重建 / 影响范围」这' +
-              '三类的题，会额外拿到一段复盘纪律：它的产出是时间线、根因链、' +
-              '影响范围，每条结论按「已命中 / 待跟进 / 已排除」三级标注。' +
-              '★ 与「智能体安全评测」开关**互相独立** —— 两个都打开时，' +
-              '一道题也只会命中其中一族（`agentsec-*` 与 `ir-*` 是互斥的两组前缀）。'
-            }
+            label={t('settings.kernel.irLabel')}
+            hint={t('settings.kernel.irHint')}
             checked={draft.enableIrScenarios}
             onChange={(value) => setDraft({ ...draft, enableIrScenarios: value })}
           />
           <Toggle
             id="ctf2-multi-agent"
-            label="启用多智能体编排"
-            hint={
-              '打开后，一次解题（CTF 题 / 渗透评估 / 应急响应复盘）走' +
-              '「主控智能体调度 + 多个子智能体并行执行」的完整编排，' +
-              '而不是单条循环。关着时单条循环逐字节不变。' +
-              '★ 它改变的是**执行方式**，与上面那些开关（改变判定纪律）' +
-              '互相独立 —— 任何题型都能跑单条循环或编排。' +
-              '⚠️ 一次任务的模型调用量会按子智能体数量放大约数倍，' +
-              '成本更高、耗时更难预估 —— 但 v1.89 起默认开启：' +
-              '复杂目标（多入口、多假设）靠它并行，简单目标可以关掉换回单循环。'
-            }
+            label={t('settings.kernel.multiAgentLabel')}
+            hint={t('settings.kernel.multiAgentHint')}
             checked={draft.enableMultiAgent}
             onChange={(value) => setDraft({ ...draft, enableMultiAgent: value })}
           />
@@ -835,8 +822,7 @@ export function KernelPanel() {
           onReset={handleReset}
           note={
             <span className="text-2xs text-ink-muted">
-              保存后立刻生效，不需要重启服务。它与「CTF 解题」是同一次保存：
-              两块共用一个草稿，在这里点保存等于把两块一起存下。
+              <T k="settings.kernel.coreSaveNote" />
             </span>
           }
         />

@@ -3,6 +3,7 @@ import { AlertTriangle, Check, ChevronDown, ChevronRight, Search } from 'lucide-
 
 import { cn } from '@/lib/cn'
 import { filterRecipes, recipeCoverage, type KernelRecipe, type ScenarioFilter } from '@/data/tools'
+import { useI18n } from '@/i18n'
 
 /**
  * 「命令行工具」面板 —— 沙箱镜像里装着的二进制**怎么调**。
@@ -33,6 +34,7 @@ import { filterRecipes, recipeCoverage, type KernelRecipe, type ScenarioFilter }
  * 用灰色小字写，等于承认它「可以不看」。
  */
 export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [onlyLimited, setOnlyLimited] = useState(false)
   const [scenario, setScenario] = useState<ScenarioFilter>('all')
@@ -51,17 +53,24 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
     <section className="rounded-md border border-line bg-surface">
       <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
         <div>
-          <h2 className="text-sm font-medium text-ink">命令行工具</h2>
+          <h2 className="text-sm font-medium text-ink">{t('tools.recipes.heading')}</h2>
           <p className="mt-1 max-w-[64ch] text-sm leading-relaxed text-ink-muted">
-            沙箱镜像里装着的二进制<b>怎么调</b>，以及<b>用默认参数跑会漏掉什么</b>。 这些
-            <b>没有开关</b> —— 装没装由镜像决定，不是由配置决定。
+            {t('tools.recipes.body.a')}
+            <b>{t('tools.recipes.body.bold1')}</b>
+            {t('tools.recipes.body.b')}
+            <b>{t('tools.recipes.body.bold2')}</b>
+            {t('tools.recipes.body.c')}
+            <b>{t('tools.recipes.body.bold3')}</b>
+            {t('tools.recipes.body.d')}
           </p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-faint">
-          <span>共 {recipes.length} 条</span>
-          <span className="text-ink-muted">CTF 覆盖 {coverage.ctf}</span>
-          <span className="text-ink-muted">渗透覆盖 {coverage.pentest}</span>
-          <span>{withLimits} 条写了局限</span>
+          <span>{t('tools.recipes.count', { n: recipes.length })}</span>
+          <span className="text-ink-muted">{t('tools.recipes.ctf', { n: coverage.ctf })}</span>
+          <span className="text-ink-muted">
+            {t('tools.recipes.pentest', { n: coverage.pentest })}
+          </span>
+          <span>{t('tools.recipes.limited', { n: withLimits })}</span>
         </div>
       </header>
 
@@ -74,16 +83,16 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
           <input
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索工具（名字 / 用途 / 局限）"
+            placeholder={t('tools.recipes.searchPlaceholder')}
             className="h-8 w-full rounded-sm border border-line bg-surface pl-7 pr-2 text-sm text-ink outline-none focus:border-line-accent"
           />
         </div>
-        <div className="flex items-center gap-1" role="group" aria-label="按场景筛选">
+        <div className="flex items-center gap-1" role="group" aria-label={t('tools.recipes.filterAria')}>
           {(
             [
-              ['all', '全部'],
+              ['all', t('tools.recipes.all')],
               ['ctf', 'CTF'],
-              ['pentest', '渗透'],
+              ['pentest', t('tools.recipes.pentestChip')],
             ] as const
           ).map(([value, label]) => (
             <button
@@ -112,7 +121,7 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
               : 'border-line text-ink-muted hover:border-line-strong',
           )}
         >
-          只看有局限的
+          {t('tools.recipes.onlyLimited')}
         </button>
         {(query || onlyLimited || scenario !== 'all') && (
           <button
@@ -124,7 +133,7 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
             }}
             className="text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
           >
-            清除筛选
+            {t('tools.recipes.clear')}
           </button>
         )}
         <span className="text-xs text-ink-faint">
@@ -134,9 +143,9 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
 
       {visible.length === 0 ? (
         <p className="px-4 py-6 text-center text-sm text-ink-muted">
-          没有匹配的工具。
+          {t('tools.recipes.empty')}
           {onlyLimited && recipes.length > 0 && withLimits === 0
-            ? '（这一版还没有任何一条写了局限说明）'
+            ? t('tools.recipes.emptyLimited')
             : ''}
         </p>
       ) : (
@@ -153,11 +162,13 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
       )}
 
       <footer className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint">
-        配方是<b>只读</b>的：它不是开关，只是把「该怎么调」与「默认会漏什么」写下来，
-        让模型与你都看得到。要改调用方式，直接在任务里让它用不同的参数。
+        {t('tools.recipes.footer.before')}
+        <b>{t('tools.recipes.footer.bold')}</b>
+        {t('tools.recipes.footer.after')}
         <br />
-        配方只讲参数；<b>坑在技能里</b> —— 每个工具都有对应的使用技能 （如
-        ghidra-headless、pcap-analysis、volatility3），模型动手前会按需 load_skill 拉那一篇。
+        {t('tools.recipes.footer2.before')}
+        <b>{t('tools.recipes.footer2.bold')}</b>
+        {t('tools.recipes.footer2.after')}
       </footer>
     </section>
   )
@@ -172,6 +183,7 @@ function RecipeRow({
   open: boolean
   onToggle: () => void
 }) {
+  const { t } = useI18n()
   const hasDetail =
     recipe.params.length > 0 || recipe.args.length > 0 || Boolean(recipe.defaultLimitation)
 
@@ -210,10 +222,10 @@ function RecipeRow({
             {recipe.defaultLimitation && (
               <span
                 className="inline-flex items-center gap-1 rounded-sm border border-signal-risk/40 px-1.5 py-px text-2xs text-signal-risk"
-                title="用默认参数跑会漏掉东西"
+                title={t('tools.recipes.limitationTitle')}
               >
                 <AlertTriangle className="size-3" strokeWidth={2} />
-                默认会漏
+                {t('tools.recipes.limitationBadge')}
               </span>
             )}
           </div>
@@ -225,7 +237,8 @@ function RecipeRow({
         <div className="border-t border-line/40 bg-surface-raised/20 px-4 py-2.5 pl-[3.25rem]">
           {recipe.args.length > 0 && (
             <p className="text-xs text-ink-muted">
-              默认就带：<code className="font-mono text-ink">{recipe.args.join(' ')}</code>
+              {t('tools.recipes.defaultArgs')}
+              <code className="font-mono text-ink">{recipe.args.join(' ')}</code>
             </p>
           )}
 
@@ -235,9 +248,11 @@ function RecipeRow({
                 <li key={param.name} className="flex flex-wrap items-baseline gap-tight text-xs">
                   <code className="font-mono text-ink">{param.name}</code>
                   {param.flag && <code className="font-mono text-ink-faint">{param.flag}</code>}
-                  {param.required && <span className="text-2xs text-signal-risk">必填</span>}
+                  {param.required && <span className="text-2xs text-signal-risk">{t('tools.recipes.required')}</span>}
                   {param.default && (
-                    <span className="text-2xs text-ink-faint">默认 {param.default}</span>
+                    <span className="text-2xs text-ink-faint">
+                      {t('tools.recipes.defaultValue', { value: param.default })}
+                    </span>
                   )}
                   {param.description && <span className="text-ink-muted">{param.description}</span>}
                 </li>
@@ -252,7 +267,9 @@ function RecipeRow({
                 strokeWidth={1.75}
               />
               <div className="min-w-0">
-                <p className="text-xs font-medium text-signal-risk">默认参数下做不到什么</p>
+                <p className="text-xs font-medium text-signal-risk">
+                  {t('tools.recipes.limitationHeading')}
+                </p>
                 {/*
                   ★ 保留换行：局限说明里有的是分点写的（`·` 开头）。
                     用普通 <p> 会把它们挤成一段，看不出是几条独立的边界。
@@ -267,8 +284,9 @@ function RecipeRow({
           {recipe.allowedExitCodes.length > 1 && (
             <p className="mt-1.5 flex items-center gap-1 text-xs text-ink-muted">
               <Check className="size-3 shrink-0 text-ink-faint" strokeWidth={2} />
-              退出码 <code className="font-mono">{recipe.allowedExitCodes.join(' / ')}</code>{' '}
-              都不算失败 —— 包括「没命中」。
+              {t('tools.recipes.exitCodes.before')}{' '}
+              <code className="font-mono">{recipe.allowedExitCodes.join(' / ')}</code>
+              {t('tools.recipes.exitCodes.after')}
             </p>
           )}
         </div>

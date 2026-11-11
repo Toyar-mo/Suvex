@@ -1,4 +1,5 @@
 import { StatusDot } from '@/components/ui/StatusDot'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { isAdmin, logout, useAuth } from '@/data/auth-store'
 import { useFleetStatus } from '@/data/fleet'
@@ -60,7 +61,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
           Suvex
           <span className="text-accent">.</span>
         </span>
-        {!collapsed && <span className="text-2xs text-ink-faint">控制台</span>}
+        {!collapsed && <span className="text-2xs text-ink-faint"><T k="sidebar.console"/></span>}
       </div>
 
       <SidebarNav collapsed={collapsed} />
@@ -144,7 +145,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
           )}
         >
           <LogOut size={16} strokeWidth={1.75} aria-hidden="true" />
-          {!collapsed && <span>登出</span>}
+          {!collapsed && <span><T k="sidebar.logout"/></span>}
         </button>
 
         <button
@@ -164,7 +165,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
           ) : (
             <>
               <PanelLeftClose size={16} strokeWidth={1.75} aria-hidden="true" />
-              <span>收起</span>
+              <span><T k="sidebar.collapse"/></span>
             </>
           )}
         </button>

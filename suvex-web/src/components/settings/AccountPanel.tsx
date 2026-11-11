@@ -1,12 +1,11 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { copyText } from '@/lib/clipboard'
 import { DangerButton, Field, TextInput, Toggle } from './Field'
 import SecretField from './SecretField'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
 import {
-  TOKEN_EXPIRY_LABEL,
-  TOKEN_SCOPE_LABEL,
-  TOKEN_SCOPE_NOTE,
   checkPassword,
   expiryToIso,
   validatePasswordChange,
@@ -51,11 +50,12 @@ export interface AccountPanelProps {
 }
 
 export function AccountPanel({ tokens }: AccountPanelProps) {
+  const { t } = useI18n()
   return (
     <SettingsPanel
       id="account"
-      title="账号与安全"
-      description="登录密码与用于自动化集成的 API 令牌。令牌拥有你授予的权限，请按最小必要授予。"
+      title={t('settings.account.title')}
+      description={t('settings.account.description')}
     >
       <PasswordSection />
       <TokenSection tokens={tokens} />
@@ -68,6 +68,7 @@ export function AccountPanel({ tokens }: AccountPanelProps) {
 // ─────────────────────────────────────────────
 
 function PasswordSection() {
+  const { t } = useI18n()
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -104,7 +105,7 @@ function PasswordSection() {
         setState({ kind: 'unchanged' })
       }
     } catch {
-      setState({ kind: 'failed', error: '请求失败，请稍后重试' })
+      setState({ kind: 'failed', error: t('settings.account.requestFailed') })
     }
   }
 
@@ -114,7 +115,9 @@ function PasswordSection() {
     <div className="flex flex-col gap-panel">
       <div className="flex items-center gap-1.5">
         <KeyRound size={13} strokeWidth={1.75} className="text-ink-faint" aria-hidden="true" />
-        <span className="text-xs font-medium text-ink">登录密码</span>
+        <span className="text-xs font-medium text-ink">
+          <T k="settings.account.passwordHeading" />
+        </span>
       </div>
 
       <div className="grid gap-panel sm:grid-cols-3">
@@ -122,29 +125,31 @@ function PasswordSection() {
             不给"当前密码"任何例外：输错时也不该把明文摊在屏幕上 */}
         <SecretField
           id="pwd-current"
-          label="当前密码"
+          label={t('settings.account.currentPassword')}
           value={current}
           onChange={setCurrent}
           required
-          placeholder="输入当前密码"
+          placeholder={t('settings.account.currentPasswordPlaceholder')}
         />
         <SecretField
           id="pwd-next"
-          label="新密码"
+          label={t('settings.account.newPassword')}
           value={next}
           onChange={setNext}
           required
-          placeholder="至少 12 个字符"
+          placeholder={t('settings.account.newPasswordPlaceholder')}
           error={touched && !validation.ok && next.length > 0 ? validation.error : null}
         />
         <SecretField
           id="pwd-confirm"
-          label="确认新密码"
+          label={t('settings.account.confirmPassword')}
           value={confirm}
           onChange={setConfirm}
           required
-          placeholder="再输入一次"
-          error={confirm.length > 0 && confirm !== next ? '两次输入不一致' : null}
+          placeholder={t('settings.account.confirmPasswordPlaceholder')}
+          error={
+            confirm.length > 0 && confirm !== next ? t('settings.account.passwordMismatch') : null
+          }
         />
       </div>
 
@@ -152,7 +157,9 @@ function PasswordSection() {
       {next.length > 0 && (
         <div className="flex flex-col gap-tight rounded-sm border border-line bg-surface-sunken p-3">
           <div className="flex items-center gap-tight">
-            <span className="text-2xs text-ink-muted">强度</span>
+            <span className="text-2xs text-ink-muted">
+              <T k="settings.account.strength" />
+            </span>
             <div className="flex gap-0.5" aria-hidden="true">
               {[0, 1, 2].map((i) => {
                 const reached =
@@ -174,7 +181,13 @@ function PasswordSection() {
               })}
             </div>
             <span className="text-2xs text-ink-muted">
-              {strength.strength === 'strong' ? '强' : strength.strength === 'fair' ? '中' : '弱'}
+              {strength.strength === 'strong' ? (
+                <T k="settings.account.strengthStrong" />
+              ) : strength.strength === 'fair' ? (
+                <T k="settings.account.strengthFair" />
+              ) : (
+                <T k="settings.account.strengthWeak" />
+              )}
             </span>
           </div>
 
@@ -214,8 +227,12 @@ function PasswordSection() {
           setTouched(false)
           setState({ kind: 'idle' })
         }}
-        saveLabel="修改密码"
-        note={<span>修改后其它设备上的登录会话会失效，需要重新登录。</span>}
+        saveLabel={t('settings.account.changePassword')}
+        note={
+          <span>
+            <T k="settings.account.passwordNote" />
+          </span>
+        }
       />
     </div>
   )
@@ -245,7 +262,9 @@ function TokenSection({ tokens }: { tokens: ApiToken[] }) {
       <div className="flex flex-wrap items-center justify-between gap-tight">
         <div className="flex items-center gap-1.5">
           <ShieldCheck size={13} strokeWidth={1.75} className="text-ink-faint" aria-hidden="true" />
-          <span className="text-xs font-medium text-ink">API 令牌</span>
+          <span className="text-xs font-medium text-ink">
+            <T k="settings.account.tokenHeading" />
+          </span>
         </div>
         {!creating && revealed === null && (
           <button
@@ -254,13 +273,13 @@ function TokenSection({ tokens }: { tokens: ApiToken[] }) {
             className="inline-flex h-7 items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-muted transition-ui duration-fast hover:border-accent/50 hover:bg-accent-wash hover:text-ink"
           >
             <Plus size={10} strokeWidth={2} aria-hidden="true" />
-            创建令牌
+            <T k="settings.account.createToken" />
           </button>
         )}
       </div>
 
       <p className="text-2xs text-ink-faint">
-        用于 CI、脚本等自动化场景。令牌等同于账号凭据，请只授予必要权限并妥善保存。
+        <T k="settings.account.tokenNote" />
       </p>
 
       {/* 一次性明文展示：放在列表上方抢占注意力，且必须先处理掉才能继续 */}
@@ -278,7 +297,7 @@ function TokenSection({ tokens }: { tokens: ApiToken[] }) {
 
       {tokens.length === 0 && !creating && revealed === null ? (
         <p className="rounded-sm border border-dashed border-line-strong p-3 text-center text-2xs text-ink-faint">
-          还没有创建过令牌。
+          <T k="settings.account.tokensEmpty" />
         </p>
       ) : (
         tokens.length > 0 && (
@@ -288,11 +307,21 @@ function TokenSection({ tokens }: { tokens: ApiToken[] }) {
               aria-hidden="true"
               className="hidden items-center gap-panel border-b border-line py-2 text-2xs text-ink-faint lg:flex"
             >
-              <span className="min-w-0 flex-1">用途</span>
-              <span className="w-40 shrink-0">权限</span>
-              <span className="w-28 shrink-0">最后使用</span>
-              <span className="w-28 shrink-0">有效期至</span>
-              <span className="w-16 shrink-0 text-right">操作</span>
+              <span className="min-w-0 flex-1">
+                <T k="settings.account.colPurpose" />
+              </span>
+              <span className="w-40 shrink-0">
+                <T k="settings.account.colScopes" />
+              </span>
+              <span className="w-28 shrink-0">
+                <T k="settings.account.colLastUsed" />
+              </span>
+              <span className="w-28 shrink-0">
+                <T k="settings.account.colExpires" />
+              </span>
+              <span className="w-16 shrink-0 text-right">
+                <T k="settings.account.colActions" />
+              </span>
             </li>
             {tokens.map((token) => (
               <TokenRow key={token.id} token={token} now={now} />
@@ -305,6 +334,7 @@ function TokenSection({ tokens }: { tokens: ApiToken[] }) {
 }
 
 function TokenRow({ token, now }: { token: ApiToken; now: number }) {
+  const { t } = useI18n()
   const [confirming, setConfirming] = useState(false)
   const [revoking, setRevoking] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -331,17 +361,20 @@ function TokenRow({ token, now }: { token: ApiToken; now: number }) {
             <span className="mono-ui text-ink-faint">{token.prefix}…</span>
             {expired && (
               <span className="rounded-xs border border-signal-risk/40 px-1 text-2xs text-signal-risk">
-                已过期
+                <T k="settings.account.expired" />
               </span>
             )}
             {stale && !expired && (
               <span className="rounded-xs border border-signal-warn/40 px-1 text-2xs text-signal-warn">
-                建议轮换
+                <T k="settings.account.rotateSuggested" />
               </span>
             )}
           </span>
           <span className="text-2xs text-ink-faint lg:hidden">
-            创建于 {formatRelativeTime(token.createdAt)}
+            <T
+              k="settings.account.createdRelative"
+              vars={{ time: formatRelativeTime(token.createdAt) }}
+            />
           </span>
         </div>
 
@@ -349,20 +382,28 @@ function TokenRow({ token, now }: { token: ApiToken; now: number }) {
           {token.scopes.map((scope) => (
             <span
               key={scope}
-              title={TOKEN_SCOPE_NOTE[scope]}
+              title={t(`settings.account.scopeNote.${scope}`)}
               className="rounded-xs border border-line px-1 text-2xs text-ink-muted"
             >
-              {TOKEN_SCOPE_LABEL[scope]}
+              {t(`settings.account.scopeLabel.${scope}`)}
             </span>
           ))}
         </span>
 
         <span className="shrink-0 text-2xs text-ink-faint lg:w-28">
-          {token.lastUsedAt ? formatRelativeTime(token.lastUsedAt) : '从未使用'}
+          {token.lastUsedAt ? (
+            formatRelativeTime(token.lastUsedAt)
+          ) : (
+            <T k="settings.account.neverUsed" />
+          )}
         </span>
 
         <span className="shrink-0 text-2xs text-ink-faint lg:w-28">
-          {token.expiresAt ? new Date(token.expiresAt).toLocaleDateString('zh-CN') : '永不过期'}
+          {token.expiresAt ? (
+            new Date(token.expiresAt).toLocaleDateString('zh-CN')
+          ) : (
+            <T k="settings.account.neverExpires" />
+          )}
         </span>
 
         <span className="flex shrink-0 items-center justify-end gap-1 lg:w-16">
@@ -384,18 +425,24 @@ function TokenRow({ token, now }: { token: ApiToken; now: number }) {
                 */
                 className="inline-flex h-7 items-center rounded-sm bg-signal-risk/15 px-2 text-2xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/25 disabled:cursor-not-allowed disabled:bg-transparent disabled:text-ink-faint disabled:hover:bg-transparent"
               >
-                {revoking ? '吊销中…' : '确认吊销'}
+                {revoking ? (
+                  <T k="settings.account.revoking" />
+                ) : (
+                  <T k="settings.account.confirmRevoke" />
+                )}
               </button>
               <button
                 type="button"
                 onClick={() => setConfirming(false)}
                 className="inline-flex h-7 items-center rounded-sm px-1.5 text-2xs text-ink-faint transition-ui duration-fast hover:text-ink"
               >
-                取消
+                <T k="settings.account.cancel" />
               </button>
             </>
           ) : (
-            <DangerButton onClick={() => setConfirming(true)}>吊销</DangerButton>
+            <DangerButton onClick={() => setConfirming(true)}>
+              <T k="settings.account.revoke" />
+            </DangerButton>
           )}
         </span>
       </div>
@@ -403,7 +450,7 @@ function TokenRow({ token, now }: { token: ApiToken; now: number }) {
       {/* 吊销不可逆，后果要写在按钮旁边 */}
       {confirming && (
         <p className="pb-2.5 text-2xs text-signal-warn">
-          吊销后使用这个令牌的集成会立即开始失败，且无法恢复。
+          <T k="settings.account.revokeWarning" />
         </p>
       )}
 
@@ -427,6 +474,7 @@ function TokenCreator({
   onCreated: (plaintext: string) => void
   onCancel: () => void
 }) {
+  const { t } = useI18n()
   const [label, setLabel] = useState('')
   const [scopes, setScopes] = useState<Set<TokenScope>>(new Set(['read']))
   const [expiry, setExpiry] = useState<TokenExpiry>('90d')
@@ -437,8 +485,9 @@ function TokenCreator({
   // 挂载即展开，带进视野（同 provider / 通知渠道编辑器）
   const creatorRef = useRevealOnExpand<HTMLDivElement>(true)
 
-  const labelError = label.trim().length === 0 ? '请填写用途，将来要靠它辨认是哪一个令牌' : null
-  const scopeError = scopes.size === 0 ? '至少选择一项权限' : null
+  const labelError =
+    label.trim().length === 0 ? t('settings.account.labelRequired') : null
+  const scopeError = scopes.size === 0 ? t('settings.account.scopeRequired') : null
   const hasError = labelError !== null || scopeError !== null
 
   const handleCreate = async () => {
@@ -458,7 +507,9 @@ function TokenCreator({
       onCreated(plaintext)
     } catch (error) {
       // 草稿保留：用户填的用途和权限不该因为一次网络失败被清空
-      setCreateError(error instanceof Error ? error.message : '创建令牌失败，请稍后重试。')
+      setCreateError(
+        error instanceof Error ? error.message : t('settings.account.createTokenFailed'),
+      )
     } finally {
       setCreating(false)
     }
@@ -470,30 +521,37 @@ function TokenCreator({
       ref={creatorRef}
     >
       <div className="flex items-center justify-between gap-tight">
-        <span className="text-xs text-ink">创建 API 令牌</span>
+        <span className="text-xs text-ink">
+          <T k="settings.account.createTokenHeading" />
+        </span>
         <button
           type="button"
           onClick={onCancel}
-          aria-label="取消"
+          aria-label={t('settings.account.cancel')}
           className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
         >
           <X size={13} strokeWidth={2} aria-hidden="true" />
         </button>
       </div>
 
-      <Field label="用途" htmlFor="token-label" required error={touched ? labelError : null}>
+      <Field
+        label={t('settings.account.purposeLabel')}
+        htmlFor="token-label"
+        required
+        error={touched ? labelError : null}
+      >
         <TextInput
           id="token-label"
           value={label}
           onChange={setLabel}
-          placeholder="如：CI 流水线"
+          placeholder={t('settings.account.purposePlaceholder')}
           error={touched ? labelError : null}
         />
       </Field>
 
       <Field
-        label="权限范围"
-        help="按最小必要授予 —— 令牌能做的事，等于拿到它的人能做的事。"
+        label={t('settings.account.scopesLabel')}
+        help={t('settings.account.scopesHelp')}
         error={touched ? scopeError : null}
       >
         <div className="flex flex-col gap-1.5">
@@ -501,8 +559,8 @@ function TokenCreator({
             <Toggle
               key={scope}
               id={`scope-${scope}`}
-              label={TOKEN_SCOPE_LABEL[scope]}
-              hint={TOKEN_SCOPE_NOTE[scope]}
+              label={t(`settings.account.scopeLabel.${scope}`)}
+              hint={t(`settings.account.scopeNote.${scope}`)}
               checked={scopes.has(scope)}
               onChange={(checked) => {
                 setScopes((prev) => {
@@ -517,7 +575,11 @@ function TokenCreator({
         </div>
       </Field>
 
-      <Field label="有效期" htmlFor="token-expiry" help="短期令牌泄露后的暴露窗口更小。">
+      <Field
+        label={t('settings.account.expiryLabel')}
+        htmlFor="token-expiry"
+        help={t('settings.account.expiryHelp')}
+      >
         <div className="flex flex-wrap gap-1" id="token-expiry">
           {(['30d', '90d', '1y', 'never'] as TokenExpiry[]).map((key) => (
             <button
@@ -532,7 +594,7 @@ function TokenCreator({
                   : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
               )}
             >
-              {TOKEN_EXPIRY_LABEL[key]}
+              {t(`settings.account.expiry.${key}`)}
             </button>
           ))}
         </div>
@@ -541,7 +603,7 @@ function TokenCreator({
       {expiry === 'never' && (
         <p className="flex items-start gap-1.5 text-2xs text-signal-warn">
           <AlertTriangle size={11} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden="true" />
-          永不过期的令牌一旦泄露就长期有效，且往往会被遗忘。仅在自动化流水线无法处理轮换时使用。
+          <T k="settings.account.neverExpiryWarning" />
         </p>
       )}
 
@@ -571,14 +633,18 @@ function TokenCreator({
           */
           className="press inline-flex h-9 items-center rounded-sm bg-accent px-3.5 text-sm text-canvas transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim"
         >
-          {creating ? '正在创建…' : '创建令牌'}
+          {creating ? (
+            <T k="settings.account.creating" />
+          ) : (
+            <T k="settings.account.createToken" />
+          )}
         </button>
         <button
           type="button"
           onClick={onCancel}
           className="inline-flex h-9 items-center rounded-sm px-2.5 text-sm text-ink-muted transition-ui duration-fast hover:text-ink"
         >
-          取消
+          <T k="settings.account.cancel" />
         </button>
       </div>
     </div>
@@ -652,10 +718,10 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
         />
         <div className="flex flex-col gap-0.5">
           <h3 id="token-reveal-title" className="text-xs font-medium text-ink">
-            令牌已创建 —— 这是唯一一次显示完整值
+            <T k="settings.account.revealTitle" />
           </h3>
           <p className="text-2xs text-ink-muted">
-            离开这个面板后就无法再次查看。请现在复制并保存到安全的地方；若遗失，只能吊销后重新创建。
+            <T k="settings.account.revealNote" />
           </p>
         </div>
       </div>
@@ -672,7 +738,7 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
           /* 二次确认：说清后果，给两条出路 */
           <div className="flex flex-col gap-tight rounded-sm border border-signal-risk/40 bg-signal-risk/[0.06] p-2.5">
             <p className="text-2xs text-ink">
-              尚未确认已保存。关闭后这个令牌无法再次查看，只能吊销后重新创建。
+              <T k="settings.account.closeConfirmNote" />
             </p>
             <div className="flex flex-wrap items-center gap-tight">
               <button
@@ -680,14 +746,14 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
                 onClick={() => setConfirmingClose(false)}
                 className="press inline-flex h-8 items-center rounded-sm bg-accent px-3 text-xs text-canvas transition-ui duration-fast hover:bg-accent-strong"
               >
-                返回，我先复制
+                <T k="settings.account.backToCopy" />
               </button>
               <button
                 type="button"
                 onClick={onDone}
                 className="inline-flex h-8 items-center rounded-sm px-2.5 text-xs text-ink-muted transition-ui duration-fast hover:text-ink"
               >
-                我知道，仍要关闭
+                <T k="settings.account.closeAnyway" />
               </button>
             </div>
           </div>
@@ -701,12 +767,12 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
               {copied ? (
                 <>
                   <Check size={12} strokeWidth={2.5} aria-hidden="true" />
-                  已复制
+                  <T k="settings.account.copied" />
                 </>
               ) : (
                 <>
                   <Copy size={12} strokeWidth={2} aria-hidden="true" />
-                  复制令牌
+                  <T k="settings.account.copyToken" />
                 </>
               )}
             </button>
@@ -716,7 +782,7 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
               onClick={handleCloseClick}
               className="inline-flex h-8 items-center rounded-sm border border-line px-3 text-xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink"
             >
-              我已保存，关闭
+              <T k="settings.account.savedClose" />
             </button>
           </div>
         )}
@@ -724,7 +790,7 @@ function TokenReveal({ plaintext, onDone }: { plaintext: string; onDone: () => v
         {copyFailed && !confirmingClose && (
           /* 复制失败时必须给出下一步动作，否则用户只会反复点按钮 */
           <p role="alert" className="text-2xs text-signal-warn">
-            浏览器拒绝了剪贴板访问。请在上方文字上三击选中，用 Ctrl/Cmd + C 手动复制。
+            <T k="settings.account.copyFailed" />
           </p>
         )}
       </div>

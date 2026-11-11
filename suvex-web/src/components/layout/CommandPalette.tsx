@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { T } from '@/i18n/T'
 import { createPortal } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
 import { CornerDownLeft, Search } from 'lucide-react'
@@ -336,9 +337,9 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
         )}
 
         <div className="flex items-center gap-3 border-t border-line px-3 py-1.5 text-[10px] text-ink-muted">
-          <span>↑↓ 选择</span>
-          <span>↵ 执行</span>
-          <span>Esc 关闭</span>
+          <span><T k="palette.select"/></span>
+          <span><T k="palette.run"/></span>
+          <span><T k="palette.close"/></span>
         </div>
       </div>
     </div>,

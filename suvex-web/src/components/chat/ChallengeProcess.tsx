@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { api, errorMessage } from '@/lib/api'
 import { EVENT_TYPE_LABEL, type ActivityEvent } from '@/data/activity'
 import { useEffect, useState } from 'react'
@@ -116,7 +117,7 @@ export function ChallengeProcess({
       )}
 
       {!missing && !running && events.length > 0 && (
-        <p className="text-2xs text-ink-ghost">这道题当前没有在跑 —— 下面是上一次运行的记录。</p>
+        <p className="text-2xs text-ink-ghost"><T k="chatmsg.challengeIdle"/></p>
       )}
 
       {!missing && !error && events.length === 0 && (

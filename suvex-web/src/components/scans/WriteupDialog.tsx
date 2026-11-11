@@ -2,6 +2,7 @@ import { loadWriteup } from '@/data/scans-store'
 import type { Scan } from '@/data/scan'
 import { useEffect, useState } from 'react'
 import { writeupErrorMessage } from '@/lib/writeup'
+import { useI18n } from '@/i18n'
 import {
   WriteupDialogShell,
   type WriteupDialogState,
@@ -43,6 +44,7 @@ export interface WriteupDialogProps {
 }
 
 export function WriteupDialog({ scan, onClose }: WriteupDialogProps) {
+  const { t } = useI18n()
   const [state, setState] = useState<WriteupDialogState>({ phase: 'loading' })
 
   /*
@@ -83,7 +85,7 @@ export function WriteupDialog({ scan, onClose }: WriteupDialogProps) {
     名称也可能为空 —— 那时显示的是一句"未命名题目"，而不是一个空标题。
   */
   const displayName = scan.name && scan.name !== scan.target ? scan.name : scan.target
-  const title = displayName || '未命名题目'
+  const title = displayName || t('report.writeup.untitled', undefined, '未命名题目')
 
   return (
     <WriteupDialogShell

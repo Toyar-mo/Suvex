@@ -10,6 +10,8 @@ import { RANGE_PRESET_LABEL, type RangePreset } from '@/lib/report-build'
 import { ListChecks, ScanSearch, Target, CalendarRange, Check, Minus } from 'lucide-react'
 import { DatePicker } from '@/components/ui/DatePicker'
 import { Select } from '@/components/ui/Select'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 
 /**
  * 报告配置区：选范围 + 选内容。
@@ -62,6 +64,7 @@ export function ScopePicker({
   preset,
   onPresetChange,
 }: ScopePickerProps) {
+  const { t } = useI18n()
   // 原生 <select> 会把长扫描名截断，而扫描名常常就是完整域名/UUID。
   // 在下方补一行可截断的全文，至少能悬停看到完整值并要求自己确认选对了。
   const selectedScan =
@@ -70,7 +73,7 @@ export function ScopePicker({
   return (
     <section aria-labelledby="scope-heading" className="flex flex-col gap-tight">
       <h3 id="scope-heading" className="text-xs font-medium text-ink">
-        数据范围
+        <T k="report.scope.heading" fallback="数据范围" />
       </h3>
 
       {/* ── 三种范围类型（单选）──
@@ -81,7 +84,11 @@ export function ScopePicker({
           它不是用户能在报告页"选出来"的东西：勾选发生在漏洞页，
           在这里点它只会得到一个没有 id 的空范围。让它作为可选 tab 常驻，
           等于摆一个点了必然空的按钮。 */}
-      <div role="radiogroup" aria-label="数据范围类型" className="flex gap-1">
+      <div
+        role="radiogroup"
+        aria-label={t('report.scope.typeAria', undefined, '数据范围类型')}
+        className="flex gap-1"
+      >
         {(Object.keys(REPORT_SCOPE_LABEL) as ReportScopeKind[])
           .filter((kind) => kind !== 'findings' || scope.kind === 'findings')
           .map((kind) => {
@@ -103,7 +110,7 @@ export function ScopePicker({
               )}
             >
               <Icon size={13} strokeWidth={1.75} aria-hidden="true" />
-              {REPORT_SCOPE_LABEL[kind]}
+              {t(`report.scopeKind.${kind}`, undefined, REPORT_SCOPE_LABEL[kind])}
             </button>
           )
         })}
@@ -121,26 +128,35 @@ export function ScopePicker({
       {scope.kind === 'findings' && (
         <div className="rounded-sm border border-line bg-surface-raised px-panel py-2.5">
           <p className="text-xs text-ink">
-            已接收 <span className="tabular" data-numeric>{scope.findingIds.length}</span> 条手选的漏洞。
+            <T k="report.findings.receivedPrefix" fallback="已接收" />{' '}
+            <span className="tabular" data-numeric>{scope.findingIds.length}</span>{' '}
+            <T k="report.findings.receivedSuffix" fallback="条手选的漏洞。" />
           </p>
           <p className="mt-0.5 text-2xs text-ink-faint">
-            想换一批，回「漏洞发现」勾选后重新点「生成报告」。
+            <T
+              k="report.findings.receivedHint"
+              fallback="想换一批，回「漏洞发现」勾选后重新点「生成报告」。"
+            />
           </p>
         </div>
       )}
 
       {scope.kind === 'scan' && (
-        <Field label="选择扫描任务" htmlFor="report-scan">
+        <Field label={t('report.scope.selectScan', undefined, '选择扫描任务')} htmlFor="report-scan">
           <Select
             id="report-scan"
             value={scope.scanId}
             options={scans.map((scan) => ({
               value: scan.id,
-              label: `${scan.name}（${scan.count} 条）`,
+              label: t(
+                'report.scope.scanOption',
+                { name: scan.name, count: scan.count },
+                `${scan.name}（${scan.count} 条）`,
+              ),
             }))}
             onChange={(scanId) => onChange({ kind: 'scan', scanId })}
             disabled={scans.length === 0}
-            placeholder="没有可用的扫描结果"
+            placeholder={t('report.scope.noScans', undefined, '没有可用的扫描结果')}
           />
           {selectedScan && (
             <p className="truncate text-2xs text-ink-faint" title={selectedScan.name}>
@@ -151,17 +167,21 @@ export function ScopePicker({
       )}
 
       {scope.kind === 'target' && (
-        <Field label="选择目标" htmlFor="report-target">
+        <Field label={t('report.scope.selectTarget', undefined, '选择目标')} htmlFor="report-target">
           <Select
             id="report-target"
             value={scope.target}
             options={targets.map((target) => ({
               value: target.name,
-              label: `${target.name}（${target.count} 条）`,
+              label: t(
+                'report.scope.targetOption',
+                { name: target.name, count: target.count },
+                `${target.name}（${target.count} 条）`,
+              ),
             }))}
             onChange={(target) => onChange({ kind: 'target', target })}
             disabled={targets.length === 0}
-            placeholder="没有可用的目标"
+            placeholder={t('report.scope.noTargets', undefined, '没有可用的目标')}
           />
         </Field>
       )}
@@ -170,8 +190,12 @@ export function ScopePicker({
         <div className="flex flex-col gap-tight">
           {/* 预设在前、精确日期在后：多数人只想选"最近 7 天"，
               精确区间是少数场景。把日期输入放前面会让常见路径变长。 */}
-          <Field label="时间范围" htmlFor="report-preset">
-            <div className="flex gap-1" role="radiogroup" aria-label="时间范围预设">
+          <Field label={t('report.scope.timeRange', undefined, '时间范围')} htmlFor="report-preset">
+            <div
+              className="flex gap-1"
+              role="radiogroup"
+              aria-label={t('report.scope.presetAria', undefined, '时间范围预设')}
+            >
               {(Object.keys(RANGE_PRESET_LABEL) as RangePreset[]).map((key) => (
                 <button
                   key={key}
@@ -186,29 +210,29 @@ export function ScopePicker({
                       : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
                   )}
                 >
-                  {RANGE_PRESET_LABEL[key]}
+                  {t(`report.preset.${key}`, undefined, RANGE_PRESET_LABEL[key])}
                 </button>
               ))}
             </div>
           </Field>
 
           <div className="grid grid-cols-2 gap-tight">
-            <Field label="开始日期" htmlFor="report-from">
+            <Field label={t('report.scope.from', undefined, '开始日期')} htmlFor="report-from">
               <DatePicker
                 id="report-from"
                 value={scope.from.slice(0, 10)}
                 max={scope.to.slice(0, 10)}
                 onChange={(value) => onChange({ ...scope, from: toIso(value, scope.from) })}
-                ariaLabel="开始日期"
+                ariaLabel={t('report.scope.from', undefined, '开始日期')}
               />
             </Field>
-            <Field label="结束日期" htmlFor="report-to">
+            <Field label={t('report.scope.to', undefined, '结束日期')} htmlFor="report-to">
               <DatePicker
                 id="report-to"
                 value={scope.to.slice(0, 10)}
                 min={scope.from.slice(0, 10)}
                 onChange={(value) => onChange({ ...scope, to: toIso(value, scope.to) })}
-                ariaLabel="结束日期"
+                ariaLabel={t('report.scope.to', undefined, '结束日期')}
               />
             </Field>
           </div>
@@ -255,37 +279,38 @@ export interface ContentOptionsProps {
 }
 
 export function ContentOptions({ options, onChange, available, hitCount }: ContentOptionsProps) {
+  const { t } = useI18n()
   return (
     <section aria-labelledby="content-heading" className="flex flex-col gap-tight">
       <h3 id="content-heading" className="text-xs font-medium text-ink">
-        包含内容
+        <T k="report.content.heading" fallback="包含内容" />
       </h3>
 
       <div className="flex flex-col gap-1.5">
         <Toggle
           id="opt-remediation"
-          label="修复建议"
-          hint="每条问题附上可执行的修复方向"
+          label={t('report.content.remediation', undefined, '修复建议')}
+          hint={t('report.content.remediationHint', undefined, '每条问题附上可执行的修复方向')}
           checked={options.includeRemediation}
           disabled={!available.remediation}
-          disabledHint="本范围内没有可用的修复建议"
+          disabledHint={t('report.content.remediationEmpty', undefined, '本范围内没有可用的修复建议')}
           onChange={(v) => onChange({ ...options, includeRemediation: v })}
         />
 
         <Toggle
           id="opt-poc"
-          label="验证脚本（PoC）"
-          hint="附上可复现问题的脚本与请求原文"
+          label={t('report.content.poc', undefined, '验证脚本（PoC）')}
+          hint={t('report.content.pocHint', undefined, '附上可复现问题的脚本与请求原文')}
           checked={options.includePoc}
           disabled={!available.poc}
-          disabledHint="本范围内没有可复现的验证脚本"
+          disabledHint={t('report.content.pocEmpty', undefined, '本范围内没有可复现的验证脚本')}
           onChange={(v) => onChange({ ...options, includePoc: v })}
         />
 
         <Toggle
           id="opt-reasoning"
-          label="判断依据"
-          hint="智能体判定该问题存在的过程说明"
+          label={t('report.content.reasoning', undefined, '判断依据')}
+          hint={t('report.content.reasoningHint', undefined, '智能体判定该问题存在的过程说明')}
           /*
             推理过程的措辞刻意不用"推理过程"作为标签名。
             「推理」会让非技术读者以为里面是模型的思考噪音；
@@ -295,19 +320,25 @@ export function ContentOptions({ options, onChange, available, hitCount }: Conte
           */
           checked={options.includeReasoning}
           disabled={!available.reasoning}
-          disabledHint="本范围内没有可用的判断依据"
+          disabledHint={t('report.content.reasoningEmpty', undefined, '本范围内没有可用的判断依据')}
           onChange={(v) => onChange({ ...options, includeReasoning: v })}
         />
 
         <Toggle
           id="opt-confirmed"
-          label="只导出已确认的问题"
-          hint="排除待确认与已判定为误报的条目"
+          label={t('report.content.confirmed', undefined, '只导出已确认的问题')}
+          hint={t('report.content.confirmedHint', undefined, '排除待确认与已判定为误报的条目')}
           checked={options.onlyConfirmed}
           disabled={!available.unconfirmed}
           disabledHint={
             // 两种"禁用"的原因不同，文案必须分开
-            hitCount === 0 ? '本范围内没有可导出的条目' : '本范围内没有待确认或误报的条目'
+            hitCount === 0
+              ? t('report.content.noEntries', undefined, '本范围内没有可导出的条目')
+              : t(
+                  'report.content.confirmedEmpty',
+                  undefined,
+                  '本范围内没有待确认或误报的条目',
+                )
           }
           onChange={(v) => onChange({ ...options, onlyConfirmed: v })}
         />
@@ -402,6 +433,7 @@ export function ScopePreview({
   excludedCount: number
 }) {
   const shown = hitCount - excludedCount
+  const { t } = useI18n()
 
   return (
     <div
@@ -410,11 +442,15 @@ export function ScopePreview({
       className="flex flex-col gap-tight rounded-sm border border-line bg-surface-sunken p-2.5"
     >
       <div className="flex items-baseline gap-1.5">
-        <span className="text-xs text-ink-muted">报告将包含</span>
+        <span className="text-xs text-ink-muted">
+          <T k="report.preview.containsPrefix" fallback="报告将包含" />
+        </span>
         <span className="tabular text-sm font-medium text-ink" data-numeric>
           {shown}
         </span>
-        <span className="text-xs text-ink-muted">条发现</span>
+        <span className="text-xs text-ink-muted">
+          <T k="report.preview.findingSuffix" fallback="条发现" />
+        </span>
       </div>
 
       {/* 严重度分布预览。有排除时同时显示原始命中数，避免"数字对不上" */}
@@ -426,7 +462,9 @@ export function ScopePreview({
                 aria-hidden="true"
                 className={cn('h-1.5 w-1.5 rounded-pill', SEVERITY_META[sev].bg)}
               />
-              <span className={SEVERITY_META[sev].text}>{SEVERITY_META[sev].label}</span>
+              <span className={SEVERITY_META[sev].text}>
+                {t(`severity.${sev}`, undefined, SEVERITY_META[sev].label)}
+              </span>
               <span className="tabular text-ink-faint" data-numeric>
                 {severityCounts[sev]}
               </span>
@@ -437,7 +475,11 @@ export function ScopePreview({
 
       {excludedCount > 0 && (
         <p className="text-2xs text-ink-faint">
-          已按「只导出已确认」排除 {excludedCount} 条（命中 {hitCount} 条）
+          {t(
+            'report.preview.excluded',
+            { excluded: excludedCount, hits: hitCount },
+            `已按「只导出已确认」排除 ${excludedCount} 条（命中 ${hitCount} 条）`,
+          )}
         </p>
       )}
 
@@ -446,8 +488,16 @@ export function ScopePreview({
           {/* 空报告是可生成的（"本次未发现问题"本身是有效结论），
               但用户要能分清"确实没问题"和"筛错了"。 */}
           {hitCount === 0
-            ? '该范围内没有发现，报告将说明「本次未发现问题」。'
-            : '当前条件下没有条目会被包含，请检查上面的选项。'}
+            ? t(
+                'report.preview.emptyScope',
+                undefined,
+                '该范围内没有发现，报告将说明「本次未发现问题」。',
+              )
+            : t(
+                'report.preview.emptyFiltered',
+                undefined,
+                '当前条件下没有条目会被包含，请检查上面的选项。',
+              )}
         </p>
       )}
     </div>
@@ -480,10 +530,21 @@ function Field({
 
 /** 供页面复用的勾选标记（历史列表里表示"包含/不包含"） */
 export function IncludeMark({ included }: { included: boolean }) {
+  const { t } = useI18n()
   return included ? (
-    <Check size={11} strokeWidth={2.5} className="text-signal-ok" aria-label="包含" />
+    <Check
+      size={11}
+      strokeWidth={2.5}
+      className="text-signal-ok"
+      aria-label={t('report.include.aria', undefined, '包含')}
+    />
   ) : (
-    <Minus size={11} strokeWidth={2.5} className="text-ink-ghost" aria-label="不包含" />
+    <Minus
+      size={11}
+      strokeWidth={2.5}
+      className="text-ink-ghost"
+      aria-label={t('report.exclude.aria', undefined, '不包含')}
+    />
   )
 }
 

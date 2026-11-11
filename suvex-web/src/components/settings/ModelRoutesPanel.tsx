@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { Button } from '@/components/ui/Button'
 import { SettingsPanel } from './SaveBar'
 import { showToast } from '@/data/toast-store'
@@ -8,19 +10,19 @@ import { Select } from '@/components/ui/Select'
 
 /** 三个成功判据。顺序与扫描创建向导一致。 */
 const GOALS = [
-  { key: 'findVulns', label: '渗透评估（findVulns）' },
-  { key: 'captureFlag', label: 'CTF 夺旗（captureFlag）' },
-  { key: 'verifyFix', label: '复测已修（verifyFix）' },
+  { key: 'findVulns' },
+  { key: 'captureFlag' },
+  { key: 'verifyFix' },
 ] as const
 
 /** 扫描技能路由的键前缀是 `skill:<id>`（v1.82）。 */
 const SKILLS = [
-  { key: 'skill:web', label: 'Web' },
-  { key: 'skill:api', label: 'API' },
-  { key: 'skill:container', label: '容器' },
-  { key: 'skill:cloud', label: '云' },
-  { key: 'skill:dependencies', label: '依赖' },
-  { key: 'skill:secrets', label: '密钥' },
+  { key: 'skill:web' },
+  { key: 'skill:api' },
+  { key: 'skill:container' },
+  { key: 'skill:cloud' },
+  { key: 'skill:dependencies' },
+  { key: 'skill:secrets' },
 ] as const
 
 /**
@@ -29,6 +31,7 @@ const SKILLS = [
  * 未配置的判据回退平台默认。保存是覆盖式：空值会被后端丢弃。
  */
 export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) {
+  const { t } = useI18n()
   const [routes, setRoutes] = useState<Record<string, string>>({})
   const [saved, setSaved] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
@@ -61,9 +64,12 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
       const snapshot = await saveModelRoutes(routes)
       setRoutes(snapshot.routes ?? {})
       setSaved(snapshot.routes ?? {})
-      showToast({ tone: 'ok', message: '模型路由已保存' })
+      showToast({ tone: 'ok', message: t('settings.modelRoutes.saved') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '保存失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.modelRoutes.saveFailed'),
+      })
     } finally {
       setSaving(false)
     }
@@ -72,21 +78,25 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
   return (
     <SettingsPanel
       id="model-routes"
-      title="模型路由"
-      description="不同成功判据可以用不同模型：未配置的判据回退平台默认 provider。显式选择模型的扫描仍然优先。"
+      title={t('settings.modelRoutes.title')}
+      description={t('settings.modelRoutes.description')}
     >
       {loading ? (
-        <p className="text-sm text-ink-muted">读取中…</p>
+        <p className="text-sm text-ink-muted">
+          <T k="settings.modelRoutes.loading" />
+        </p>
       ) : (
         <div className="flex flex-col gap-panel">
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             {GOALS.map((goal) => (
               <label key={goal.key} className="flex flex-col gap-1.5 text-sm">
-                <span className="text-ink-muted">{goal.label}</span>
+                <span className="text-ink-muted">
+                  {t(`settings.modelRoutes.goal.${goal.key}`)}
+                </span>
                 <Select
                   value={routes[goal.key] ?? ''}
                   options={[
-                    { value: '', label: '平台默认' },
+                    { value: '', label: t('settings.modelRoutes.platformDefault') },
                     ...accounts.map((account) => ({
                       value: account.id,
                       label: `${account.label} · ${account.model}`,
@@ -108,11 +118,16 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             {SKILLS.map((skill) => (
               <label key={skill.key} className="flex flex-col gap-1.5 text-sm">
-                <span className="text-ink-muted">技能 · {skill.label}</span>
+                <span className="text-ink-muted">
+                  <T
+                    k="settings.modelRoutes.skillLabel"
+                    vars={{ skill: t(`settings.modelRoutes.skill.${skill.key}`) }}
+                  />
+                </span>
                 <Select
                   value={routes[skill.key] ?? ''}
                   options={[
-                    { value: '', label: '不单独路由' },
+                    { value: '', label: t('settings.modelRoutes.noRoute') },
                     ...accounts.map((account) => ({
                       value: account.id,
                       label: `${account.label} · ${account.model}`,
@@ -138,9 +153,17 @@ export function ModelRoutesPanel({ accounts }: { accounts: ProviderAccount[] }) 
               onClick={() => void onSave()}
               disabled={!dirty || saving}
             >
-              {saving ? '保存中…' : '保存路由'}
+              {saving ? (
+                <T k="settings.modelRoutes.saving" />
+              ) : (
+                <T k="settings.modelRoutes.save" />
+              )}
             </Button>
-            {!dirty && <span className="text-2xs text-ink-faint">没有未保存的修改</span>}
+            {!dirty && (
+              <span className="text-2xs text-ink-faint">
+                <T k="settings.modelRoutes.noChanges" />
+              </span>
+            )}
           </div>
         </div>
       )}

@@ -3,6 +3,8 @@ import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
 import { createStage, deleteStage, loadStages, type StageResult } from '@/data/stage'
 import { showToast } from '@/data/toast-store'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 
 /**
  * 受管临时投递（v1.83）。
@@ -11,6 +13,7 @@ import { showToast } from '@/data/toast-store'
  * 用完即毁；不写工作区、不进下载中心。
  */
 export function StageSharePanel() {
+  const { t, locale } = useI18n()
   const [name, setName] = useState('tool.sh')
   const [content, setContent] = useState('')
   const [ttl, setTtl] = useState(15)
@@ -40,9 +43,15 @@ export function StageSharePanel() {
       setCreated(row)
       setContent('')
       await reload()
-      showToast({ tone: 'ok', message: `已投递，${ttl} 分钟后过期` })
+      showToast({
+        tone: 'ok',
+        message: t('files.stage.created', { n: ttl }, `已投递，${ttl} 分钟后过期`),
+      })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '投递失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('files.stage.createFailed', undefined, '投递失败'),
+      })
     } finally {
       setBusy(false)
     }
@@ -54,9 +63,9 @@ export function StageSharePanel() {
       await deleteStage(created.id)
       setCreated(null)
       await reload()
-      showToast({ tone: 'ok', message: '已销毁' })
+      showToast({ tone: 'ok', message: t('files.stage.destroyed', undefined, '已销毁') })
     } catch {
-      showToast({ tone: 'risk', message: '销毁失败' })
+      showToast({ tone: 'risk', message: t('files.stage.destroyFailed', undefined, '销毁失败') })
     }
   }
 
@@ -64,27 +73,27 @@ export function StageSharePanel() {
 
   return (
     <section className="rounded-md border border-line bg-surface p-panel">
-      <h2 className="text-sm font-medium text-ink">临时投递</h2>
+      <h2 className="text-sm font-medium text-ink"><T k="files.stage.title" fallback="临时投递" /></h2>
       <p className="mt-1 text-2xs text-ink-muted">
-        给目标机器临时拉取的文件。随机 token、到期即 404，不进工作区。
+        <T k="files.stage.desc" fallback="给目标机器临时拉取的文件。随机 token、到期即 404，不进工作区。" />
       </p>
       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[12rem_1fr_6rem]">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-ink-muted">文件名</span>
+          <span className="text-ink-muted"><T k="files.stage.name" fallback="文件名" /></span>
           <TextInput id="stage-name" value={name} onChange={setName} />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-ink-muted">内容</span>
+          <span className="text-ink-muted"><T k="files.stage.content" fallback="内容" /></span>
           <textarea
             value={content}
             onChange={(event) => setContent(event.target.value)}
             rows={3}
             className="w-full rounded-sm border border-line bg-surface px-2 py-1.5 font-mono text-sm text-ink"
-            placeholder="粘贴脚本或文本"
+            placeholder={t('files.stage.contentPlaceholder', undefined, '粘贴脚本或文本')}
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-ink-muted">TTL 分钟</span>
+          <span className="text-ink-muted"><T k="files.stage.ttl" fallback="TTL 分钟" /></span>
           <input
             type="number"
             min={1}
@@ -97,7 +106,9 @@ export function StageSharePanel() {
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-2">
         <Button variant="primary" size="sm" onClick={() => void create()} disabled={busy || !content.trim()}>
-          {busy ? '投递中…' : '创建临时投递'}
+          {busy
+            ? t('files.stage.busy', undefined, '投递中…')
+            : t('files.stage.create', undefined, '创建临时投递')}
         </Button>
         {created && (
           <>
@@ -109,16 +120,20 @@ export function StageSharePanel() {
               size="sm"
               onClick={() => {
                 void navigator.clipboard?.writeText(absoluteUrl)
-                showToast({ tone: 'ok', message: '链接已复制' })
+                showToast({ tone: 'ok', message: t('files.stage.linkCopied', undefined, '链接已复制') })
               }}
             >
-              复制
+              <T k="files.stage.copy" fallback="复制" />
             </Button>
             <Button variant="ghost" size="sm" onClick={() => void destroy()}>
-              销毁
+              <T k="files.stage.destroy" fallback="销毁" />
             </Button>
             <span className="text-2xs text-ink-faint">
-              到期 {new Date(created.expiresAt).toLocaleString('zh-CN', { hour12: false })}
+              {t(
+                'files.stage.expiresAt',
+                { time: new Date(created.expiresAt).toLocaleString(locale, { hour12: false }) },
+                `到期 ${new Date(created.expiresAt).toLocaleString(locale, { hour12: false })}`,
+              )}
             </span>
           </>
         )}
@@ -133,13 +148,19 @@ export function StageSharePanel() {
                 {window.location.origin}
                 {item.url}
               </span>
-              <span>到期 {new Date(item.expiresAt).toLocaleString('zh-CN', { hour12: false })}</span>
+              <span>
+                {t(
+                  'files.stage.expiresAt',
+                  { time: new Date(item.expiresAt).toLocaleString(locale, { hour12: false }) },
+                  `到期 ${new Date(item.expiresAt).toLocaleString(locale, { hour12: false })}`,
+                )}
+              </span>
               <button
                 type="button"
                 className="ml-auto text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
                 onClick={() => void deleteStage(item.id).then(reload)}
               >
-                销毁
+                <T k="files.stage.destroy" fallback="销毁" />
               </button>
             </li>
           ))}

@@ -13,6 +13,7 @@ import {
   type RaceStage,
   type RaceStatus,
 } from '@/data/ctf-race'
+import { useI18n } from '@/i18n'
 
 /**
  * 「赛事托管」面板 —— 一整场比赛交给系统自动跑。
@@ -57,6 +58,7 @@ const STAGE_TONE: Record<RaceStage, string> = {
  *     已经在跑的整场托管停下来，那时把停止按钮一起藏掉才是真的控不住。
  */
 export function RacePanel({ startDisabledReason = null }: { startDisabledReason?: string | null }) {
+  const { t } = useI18n()
   const [status, setStatus] = useState<RaceStatus | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -119,7 +121,7 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
         .filter(Boolean)
       const budget = maxBudget.trim() === '' ? null : Number(maxBudget)
       if (budget !== null && (!Number.isFinite(budget) || budget < 0)) {
-        setError('预算必须是 ≥0 的数字（留空=不限）')
+        setError(t('tools.kernel.race.budgetError'))
         return
       }
       const s = await startRace({
@@ -166,10 +168,8 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
       <header className="mb-3 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Trophy className="size-4 text-accent" aria-hidden />
-          <h2 className="text-sm font-semibold">赛事托管</h2>
-          <span className="text-xs text-ink-muted">
-            整场比赛自动跑：多模型赛跑 · 卡住自动重试 · 成本可见
-          </span>
+          <h2 className="text-sm font-semibold">{t('tools.kernel.race.title')}</h2>
+          <span className="text-xs text-ink-muted">{t('tools.kernel.race.subtitle')}</span>
         </div>
         {running ? (
           <Button
@@ -182,12 +182,12 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
             {effectiveStopRequested ? (
               <>
                 <Loader2 className="size-3.5 animate-spin" aria-hidden />
-                正在停止…
+                {t('tools.kernel.race.stopping')}
               </>
             ) : (
               <>
                 <Square className="size-3.5" aria-hidden />
-                请求停止
+                {t('tools.kernel.race.requestStop')}
               </>
             )}
           </Button>
@@ -198,7 +198,7 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
       {!running ? (
         <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3" data-race-form>
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-ink-muted">赛跑模型（逗号分隔，同 provider 换 model 名）</span>
+            <span className="text-ink-muted">{t('tools.kernel.race.modelsLabel')}</span>
             <input
               className="rounded border border-line bg-surface px-2 py-1 text-sm"
               value={models}
@@ -207,7 +207,7 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
             />
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-ink-muted">并发题数</span>
+            <span className="text-ink-muted">{t('tools.kernel.race.concurrencyLabel')}</span>
             <input
               type="number"
               min={1}
@@ -219,7 +219,7 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
             />
           </label>
           <label className="flex flex-col gap-1 text-xs">
-            <span className="text-ink-muted">预算上限 USD（留空=不限）</span>
+            <span className="text-ink-muted">{t('tools.kernel.race.budgetLabel')}</span>
             <input
               inputMode="decimal"
               className="rounded border border-line bg-surface px-2 py-1 text-sm"
@@ -238,7 +238,7 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
               data-race-start
             >
               <Play className="size-3.5" aria-hidden />
-              {busy ? '启动中…' : '开始整场托管'}
+              {busy ? t('tools.kernel.race.starting') : t('tools.kernel.race.startAll')}
             </Button>
           </div>
         </div>
@@ -253,8 +253,12 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
           data-race-running
         >
           {effectiveStopRequested
-            ? '已请求停止：当前正在跑的步骤没法中途打断，等它返回后这一整场就会收手。不用再点停止。'
-            : `赛事托管进行中（第 ${report?.rounds ?? 0} 轮）· 已解出 ${report?.solved ?? 0}/${report?.total ?? 0}`}
+            ? t('tools.kernel.race.stopRequested')
+            : t('tools.kernel.race.progress', {
+                rounds: report?.rounds ?? 0,
+                solved: report?.solved ?? 0,
+                total: report?.total ?? 0,
+              })}
         </div>
       )}
 
@@ -270,10 +274,14 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
           <table className="w-full text-xs">
             <thead className="bg-surface text-ink-muted">
               <tr>
-                <th className="px-2 py-1 text-left font-medium">题目</th>
-                <th className="px-2 py-1 text-left font-medium">状态</th>
-                <th className="px-2 py-1 text-left font-medium">模型</th>
-                <th className="px-2 py-1 text-left font-medium">Flag / 备注</th>
+                <th className="px-2 py-1 text-left font-medium">
+                  {t('tools.kernel.race.col.challenge')}
+                </th>
+                <th className="px-2 py-1 text-left font-medium">
+                  {t('tools.kernel.race.col.status')}
+                </th>
+                <th className="px-2 py-1 text-left font-medium">{t('tools.kernel.race.col.model')}</th>
+                <th className="px-2 py-1 text-left font-medium">{t('tools.kernel.race.col.flag')}</th>
               </tr>
             </thead>
             <tbody data-race-rows>
@@ -307,16 +315,18 @@ export function RacePanel({ startDisabledReason = null }: { startDisabledReason?
       <footer className="mt-2 flex flex-wrap items-center gap-3 text-xs text-ink-muted">
         {typeof totalCost === 'number' ? (
           <span data-race-cost>
-            累计成本 ${totalCost.toFixed(4)}
+            {t('tools.kernel.race.cost', { cost: totalCost.toFixed(4) })}
             {typeof status?.cost?.totalTokens === 'number'
-              ? ` · ${status.cost.totalTokens} tokens`
+              ? t('tools.kernel.race.tokens', { n: status.cost.totalTokens })
               : ''}
           </span>
         ) : null}
         {report?.stopped_reason ? (
-          <span data-race-stopped>收场原因：{report.stopped_reason}</span>
+          <span data-race-stopped>
+            {t('tools.kernel.race.stoppedReason', { reason: report.stopped_reason })}
+          </span>
         ) : null}
-        {report?.elapsed_seconds ? <span>用时 {Math.round(report.elapsed_seconds)}s</span> : null}
+        {report?.elapsed_seconds ? <span>{t('tools.kernel.race.elapsed', { n: Math.round(report.elapsed_seconds) })}</span> : null}
       </footer>
     </section>
   )

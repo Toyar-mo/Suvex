@@ -1,7 +1,9 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { PRINT_INK, PRINT_SEVERITY, PRINT_SYNTAX, type ReportFormat } from '@/data/report'
 import { tokenize, type TokenKind } from '@/lib/highlight'
 import { coverageNote, type ReportDocument, type ReportEntry } from '@/lib/report-document'
+import { useI18n } from '@/i18n'
 import { type CSSProperties, type ReactNode } from 'react'
 
 /**
@@ -73,6 +75,7 @@ export interface ReportSheetProps {
 }
 
 export function ReportSheet({ doc, format = 'pdf' }: ReportSheetProps) {
+  const { t } = useI18n()
   return (
     <article
       /*
@@ -83,7 +86,7 @@ export function ReportSheet({ doc, format = 'pdf' }: ReportSheetProps) {
       */
       className="report-sheet mx-auto w-full max-w-[52rem] rounded-md border border-[#D9DDE3] bg-white"
       style={{ color: PRINT_INK.body }}
-      aria-label={`${doc.meta.title} 预览`}
+      aria-label={t('report.sheet.previewAria', { title: doc.meta.title }, `${doc.meta.title} 预览`)}
     >
       <Cover doc={doc} format={format} />
       <Divider />
@@ -98,8 +101,16 @@ export function ReportSheet({ doc, format = 'pdf' }: ReportSheetProps) {
             {/* 草稿说"草稿"、不提"编号"：编号还没被分配，
                 而"生成"二字用在尚未生成的稿子上自相矛盾 */}
             {doc.meta.provisional
-              ? `Suvex · 草稿预览 · 编制于 ${doc.meta.generatedAt.slice(0, 10)}`
-              : `本报告由 Suvex 自动生成 · 报告编号 ${doc.meta.code} · 生成于 ${doc.meta.generatedAt.slice(0, 10)}`}
+              ? t(
+                  'report.sheet.footerDraft',
+                  { date: doc.meta.generatedAt.slice(0, 10) },
+                  `Suvex · 草稿预览 · 编制于 ${doc.meta.generatedAt.slice(0, 10)}`,
+                )
+              : t(
+                  'report.sheet.footerFinal',
+                  { code: doc.meta.code, date: doc.meta.generatedAt.slice(0, 10) },
+                  `本报告由 Suvex 自动生成 · 报告编号 ${doc.meta.code} · 生成于 ${doc.meta.generatedAt.slice(0, 10)}`,
+                )}
           </span>
         </div>
       </footer>
@@ -119,6 +130,7 @@ export function ReportSheet({ doc, format = 'pdf' }: ReportSheetProps) {
  * 所以它是一张信息表，不是一个视觉海报。
  */
 function Cover({ doc, format }: { doc: ReportDocument; format: ReportFormat }) {
+  const { t } = useI18n()
   return (
     <header className="px-[2.2rem] pb-[1.6rem] pt-[2.4rem]">
       {/*
@@ -145,21 +157,41 @@ function Cover({ doc, format }: { doc: ReportDocument; format: ReportFormat }) {
         {/* 草稿没有编号 —— 如实说"生成后分配"，不编一个将来会变的出来。
             见 ReportDocument.meta.provisional 的说明。 */}
         <MetaItem
-          label="报告编号"
-          value={doc.meta.provisional ? '生成后分配' : doc.meta.code}
+          label={t('report.sheet.reportCode', undefined, '报告编号')}
+          value={
+            doc.meta.provisional
+              ? t('report.sheet.assignedOnGenerate', undefined, '生成后分配')
+              : doc.meta.code
+          }
           mono={!doc.meta.provisional}
         />
-        <MetaItem label="覆盖范围" value={doc.meta.scope} />
-        <MetaItem label="生成时间" value={doc.meta.generatedAt.slice(0, 10)} />
-        <MetaItem label="导出格式" value={format === 'pdf' ? 'PDF' : 'Markdown'} />
         <MetaItem
-          label="发现总数"
-          value={doc.stats.total === 0 ? '未发现问题' : `${doc.stats.total} 条`}
+          label={t('report.sheet.scope', undefined, '覆盖范围')}
+          value={doc.meta.scope}
+        />
+        <MetaItem
+          label={t('report.sheet.generatedAt', undefined, '生成时间')}
+          value={doc.meta.generatedAt.slice(0, 10)}
+        />
+        <MetaItem
+          label={t('report.sheet.format', undefined, '导出格式')}
+          value={format === 'pdf' ? 'PDF' : 'Markdown'}
+        />
+        <MetaItem
+          label={t('report.sheet.totalFindings', undefined, '发现总数')}
+          value={
+            doc.stats.total === 0
+              ? t('report.sheet.noFindings', undefined, '未发现问题')
+              : t('report.sheet.count', { n: doc.stats.total }, `${doc.stats.total} 条`)
+          }
         />
         {/* 用 method.targets（覆盖了哪些目标）而不是 stats.targets（发现了问题的目标）：
             没有收录条目时后者是 0，会写成"涉及目标 0 个" ——
             那读起来像"这次什么都没测"，与事实相反 */}
-        <MetaItem label="涉及目标" value={`${doc.method.targets.length} 个`} />
+        <MetaItem
+          label={t('report.sheet.targets', undefined, '涉及目标')}
+          value={t('report.sheet.targetCount', { n: doc.method.targets.length }, `${doc.method.targets.length} 个`)}
+        />
       </dl>
     </header>
   )
@@ -190,20 +222,29 @@ function MetaItem({ label, value, mono }: { label: string; value: string; mono?:
  *   - 被排除的条目数必须写出来（见下方 excludedCount）。
  */
 function Summary({ doc }: { doc: ReportDocument }) {
+  const { t } = useI18n()
   return (
-    <Section title="一、摘要">
+    <Section title={t('report.section.summary', undefined, '一、摘要')}>
       <p style={TYPE.body}>{doc.verdict}</p>
 
       {doc.stats.urgent > 0 && (
         <p className="mt-[0.7rem]" style={TYPE.body}>
-          其中 <Num>{doc.stats.urgent}</Num> 条为严重或高危，建议在下一轮迭代前完成处置。
+          <T k="report.summary.urgentPrefix" fallback="其中" /> <Num>{doc.stats.urgent}</Num>{' '}
+          <T
+            k="report.summary.urgentSuffix"
+            fallback="条为严重或高危，建议在下一轮迭代前完成处置。"
+          />
         </p>
       )}
 
       {doc.stats.verified > 0 && (
         <p className="mt-[0.7rem]" style={TYPE.body}>
-          本次共 <Num>{doc.stats.verified}</Num>{' '}
-          条通过可复现的验证脚本确认。报告中的证据与复现步骤均取自 实际执行结果，未做推测性描述。
+          <T k="report.summary.verifiedPrefix" fallback="本次共" />{' '}
+          <Num>{doc.stats.verified}</Num>{' '}
+          <T
+            k="report.summary.verifiedSuffix"
+            fallback="条通过可复现的验证脚本确认。报告中的证据与复现步骤均取自 实际执行结果，未做推测性描述。"
+          />
         </p>
       )}
 
@@ -215,8 +256,15 @@ function Summary({ doc }: { doc: ReportDocument }) {
       */}
       {doc.meta.excludedCount > 0 && (
         <p className="mt-[0.7rem]" style={{ ...TYPE.body, color: PRINT_INK.muted }}>
-          本报告仅收录已确认的问题，另有 <Num>{doc.meta.excludedCount}</Num>{' '}
-          条待确认或已判定为误报的条目未纳入。
+          <T
+            k="report.summary.excludedPrefix"
+            fallback="本报告仅收录已确认的问题，另有"
+          />{' '}
+          <Num>{doc.meta.excludedCount}</Num>{' '}
+          <T
+            k="report.summary.excludedSuffix"
+            fallback="条待确认或已判定为误报的条目未纳入。"
+          />
         </p>
       )}
     </Section>
@@ -248,10 +296,16 @@ function Num({ children }: { children: ReactNode }) {
  * 色觉障碍读者靠标签能完整读到信息。
  */
 function Overview({ doc }: { doc: ReportDocument }) {
+  const { t } = useI18n()
   if (doc.stats.total === 0) {
     return (
-      <Section title="二、风险总览">
-        <p style={TYPE.body}>本次范围内未发现需要报告的安全问题。</p>
+      <Section title={t('report.section.overview', undefined, '二、风险总览')}>
+        <p style={TYPE.body}>
+          <T
+            k="report.overview.none"
+            fallback="本次范围内未发现需要报告的安全问题。"
+          />
+        </p>
       </Section>
     )
   }
@@ -259,22 +313,26 @@ function Overview({ doc }: { doc: ReportDocument }) {
   const max = Math.max(...doc.distribution.map((d) => d.count), 1)
 
   return (
-    <Section title="二、风险总览">
+    <Section title={t('report.section.overview', undefined, '二、风险总览')}>
       {/* ── 严重程度分布 ── */}
-      <h3 style={TYPE.subTitle}>严重程度分布</h3>
+      <h3 style={TYPE.subTitle}>
+        <T k="report.overview.distribution" fallback="严重程度分布" />
+      </h3>
 
       <table className="mt-[0.7rem] w-full border-collapse" style={TYPE.meta}>
         <thead>
           <tr>
             <Th align="left" width="5.5rem">
-              严重程度
+              <T k="report.sheet.severity" fallback="严重程度" />
             </Th>
-            <Th align="left">分布</Th>
-            <Th align="right" width="3.5rem">
-              数量
+            <Th align="left">
+              <T k="report.sheet.distribution" fallback="分布" />
             </Th>
             <Th align="right" width="3.5rem">
-              占比
+              <T k="report.sheet.countLabel" fallback="数量" />
+            </Th>
+            <Th align="right" width="3.5rem">
+              <T k="report.sheet.share" fallback="占比" />
             </Th>
           </tr>
         </thead>
@@ -292,7 +350,7 @@ function Overview({ doc }: { doc: ReportDocument }) {
                       className="inline-block h-[0.5rem] w-[0.5rem] rounded-full"
                       style={{ backgroundColor: ink }}
                     />
-                    {row.label}
+                    {t(`severity.${row.severity}`, undefined, row.label)}
                   </span>
                 </Td>
                 <Td>
@@ -317,7 +375,9 @@ function Overview({ doc }: { doc: ReportDocument }) {
           })}
           <tr>
             <Td>
-              <span style={{ fontWeight: 600 }}>合计</span>
+              <span style={{ fontWeight: 600 }}>
+                <T k="report.sheet.total" fallback="合计" />
+              </span>
             </Td>
             <Td />
             <Td align="right">
@@ -334,13 +394,19 @@ function Overview({ doc }: { doc: ReportDocument }) {
 
       {/* ── 处置情况 ── */}
       <h3 className="mt-[1.6rem]" style={TYPE.subTitle}>
-        处置情况
+        <T k="report.overview.disposition" fallback="处置情况" />
       </h3>
       <table className="mt-[0.7rem] w-full border-collapse" style={TYPE.meta}>
         <tbody>
-          <StatRow label="已通过验证脚本确认" value={doc.stats.verified} />
-          <StatRow label="已修复" value={doc.stats.fixed} />
-          <StatRow label="待处置" value={doc.stats.total - doc.stats.fixed} />
+          <StatRow
+            label={t('report.overview.verified', undefined, '已通过验证脚本确认')}
+            value={doc.stats.verified}
+          />
+          <StatRow label={t('report.overview.fixed', undefined, '已修复')} value={doc.stats.fixed} />
+          <StatRow
+            label={t('report.overview.pending', undefined, '待处置')}
+            value={doc.stats.total - doc.stats.fixed}
+          />
         </tbody>
       </table>
     </Section>
@@ -363,21 +429,32 @@ function StatRow({ label, value }: { label: string; value: number }) {
 // ─────────────────────────────────────────────
 
 function Entries({ doc }: { doc: ReportDocument }) {
+  const { t } = useI18n()
   if (doc.entries.length === 0) {
     return (
-      <Section title="三、漏洞详情">
-        <p style={{ ...TYPE.body, color: PRINT_INK.muted }}>无。</p>
+      <Section title={t('report.section.entries', undefined, '三、漏洞详情')}>
+        <p style={{ ...TYPE.body, color: PRINT_INK.muted }}>
+          <T k="report.entries.none" fallback="无。" />
+        </p>
       </Section>
     )
   }
 
   return (
-    <Section title="三、漏洞详情">
+    <Section title={t('report.section.entries', undefined, '三、漏洞详情')}>
       <p className="mb-[1.4rem]" style={{ ...TYPE.meta, color: PRINT_INK.muted }}>
-        以下 {doc.entries.length} 条按严重程度从高到低排列。
+        {t(
+          'report.entries.intro',
+          { n: doc.entries.length },
+          `以下 ${doc.entries.length} 条按严重程度从高到低排列。`,
+        )}
         {doc.meta.options.includeRemediation
-          ? '每条附修复建议。'
-          : '本报告未包含修复建议，可在系统中查看。'}
+          ? t('report.entries.withRemediation', undefined, '每条附修复建议。')
+          : t(
+              'report.entries.withoutRemediation',
+              undefined,
+              '本报告未包含修复建议，可在系统中查看。',
+            )}
       </p>
 
       <div className="flex flex-col gap-[2rem]">
@@ -410,6 +487,7 @@ function Entries({ doc }: { doc: ReportDocument }) {
  */
 function Entry({ entry }: { entry: ReportEntry }) {
   const meta = PRINT_SEVERITY[entry.severity]
+  const { t } = useI18n()
 
   return (
     /*
@@ -448,23 +526,29 @@ function Entry({ entry }: { entry: ReportEntry }) {
             fontWeight: 600,
           }}
         >
-          {entry.severityLabel}
+          {t(`severity.${entry.severity}`, undefined, entry.severityLabel)}
         </span>
 
-        <Attr label="类型" value={entry.categoryLabel} />
-        <Attr label="目标" value={entry.target} mono />
-        <Attr label="验证程度" value={entry.verificationLabel} />
-        <Attr label="处置状态" value={entry.statusLabel} />
-        <Attr label="发现时间" value={entry.discoveredAt} />
+        <Attr label={t('report.entry.type', undefined, '类型')} value={entry.categoryLabel} />
+        <Attr label={t('report.entry.target', undefined, '目标')} value={entry.target} mono />
+        <Attr
+          label={t('report.entry.verification', undefined, '验证程度')}
+          value={entry.verificationLabel}
+        />
+        <Attr label={t('report.entry.status', undefined, '处置状态')} value={entry.statusLabel} />
+        <Attr
+          label={t('report.entry.discoveredAt', undefined, '发现时间')}
+          value={entry.discoveredAt}
+        />
       </div>
 
       <div className="mt-[1rem] flex flex-col gap-[1.1rem] pl-[1.4rem]">
-        <Field label="问题描述">
+        <Field label={t('report.entry.description', undefined, '问题描述')}>
           <p style={TYPE.body}>{entry.description}</p>
         </Field>
 
         {entry.affected.length > 0 && (
-          <Field label="受影响位置">
+          <Field label={t('report.entry.affected', undefined, '受影响位置')}>
             <ul className="m-0 flex list-none flex-col gap-[0.2rem] p-0">
               {entry.affected.map((location) => (
                 <li key={location} className="font-mono" style={TYPE.mono}>
@@ -477,25 +561,25 @@ function Entry({ entry }: { entry: ReportEntry }) {
 
         {/* 判断依据是可选项 —— 关掉时整段不出现，不留空标题 */}
         {entry.reasoning && (
-          <Field label="判断依据">
+          <Field label={t('report.entry.reasoning', undefined, '判断依据')}>
             <p className="whitespace-pre-line" style={{ ...TYPE.body, color: PRINT_INK.muted }}>
               {entry.reasoning}
             </p>
           </Field>
         )}
 
-        <Field label="证据">
+        <Field label={t('report.entry.evidence', undefined, '证据')}>
           <CodePanel code={entry.evidence} language="http" />
         </Field>
 
         {entry.poc && (
-          <Field label="复现方式">
+          <Field label={t('report.entry.poc', undefined, '复现方式')}>
             <CodePanel code={entry.poc.code} language={entry.poc.language} />
           </Field>
         )}
 
         {entry.remediation && (
-          <Field label="修复建议">
+          <Field label={t('report.entry.remediation', undefined, '修复建议')}>
             <p className="whitespace-pre-line" style={TYPE.body}>
               {entry.remediation}
             </p>
@@ -503,7 +587,7 @@ function Entry({ entry }: { entry: ReportEntry }) {
         )}
 
         {entry.dispositions.length > 0 && (
-          <Field label="处置记录">
+          <Field label={t('report.entry.dispositions', undefined, '处置记录')}>
             <ul className="m-0 flex list-none flex-col gap-[0.25rem] p-0" style={TYPE.meta}>
               {entry.dispositions.map((item, i) => (
                 <li key={i} className="flex gap-[0.6rem]">
@@ -628,12 +712,13 @@ function Appendix({ doc }: { doc: ReportDocument }) {
 /** 附录 A：范围与方法 —— 交代覆盖边界，让结论的分量可被判断 */
 function Method({ doc }: { doc: ReportDocument }) {
   const m = doc.method
+  const { t } = useI18n()
 
   return (
-    <Section title="附录 A　检测范围与方法">
+    <Section title={t('report.appendix.method', undefined, '附录 A　检测范围与方法')}>
       <dl className="flex flex-col gap-[0.7rem]">
         {m.targets.length > 0 && (
-          <AppendixItem label="覆盖目标">
+          <AppendixItem label={t('report.appendix.targets', undefined, '覆盖目标')}>
             <ul className="m-0 flex list-none flex-col gap-[0.15rem] p-0">
               {m.targets.map((target) => (
                 <li key={target} className="font-mono" style={TYPE.mono}>
@@ -645,21 +730,24 @@ function Method({ doc }: { doc: ReportDocument }) {
         )}
 
         {m.span && (
-          <AppendixItem label="发现时间跨度">
+          <AppendixItem label={t('report.appendix.span', undefined, '发现时间跨度')}>
             <span style={TYPE.meta}>
-              {m.span.from} 至 {m.span.to}
+              {m.span.from}{' '}
+              <T k="report.appendix.spanTo" fallback="至" /> {m.span.to}
             </span>
           </AppendixItem>
         )}
 
         {m.skills.length > 0 && (
-          <AppendixItem label="启用的检测能力">
-            <span style={TYPE.meta}>{m.skills.join('、')}</span>
+          <AppendixItem label={t('report.appendix.skills', undefined, '启用的检测能力')}>
+            <span style={TYPE.meta}>
+              {m.skills.join(t('report.listSeparator', undefined, '、'))}
+            </span>
           </AppendixItem>
         )}
 
         {m.scans.length > 0 && (
-          <AppendixItem label="关联的扫描任务">
+          <AppendixItem label={t('report.appendix.scans', undefined, '关联的扫描任务')}>
             <div style={TYPE.meta}>
               {m.scans.map((scan) => (
                 <div key={scan.id} className="flex flex-wrap gap-x-[0.6rem]">
@@ -668,7 +756,9 @@ function Method({ doc }: { doc: ReportDocument }) {
                     {scan.target}
                   </span>
                   <span className="tabular-nums" style={{ color: PRINT_INK.muted }} data-numeric>
-                    {scan.finishedAt ? scan.finishedAt.slice(0, 10) : '未完成'}
+                    {scan.finishedAt
+                      ? scan.finishedAt.slice(0, 10)
+                      : t('report.appendix.incomplete', undefined, '未完成')}
                   </span>
                   {/* 覆盖完整性：未跑完的扫描必须显式标出，否则读者会
                       以为整个目标都测过了 —— 那是把漏报伪装成"没问题" */}
@@ -678,7 +768,11 @@ function Method({ doc }: { doc: ReportDocument }) {
                         scan.status === 'completed' ? PRINT_INK.muted : PRINT_SEVERITY.high.ink,
                     }}
                   >
-                    {coverageNote(scan.status)}
+                    {t(
+                      `report.coverage.${scan.status}`,
+                      undefined,
+                      coverageNote(scan.status),
+                    )}
                   </span>
                 </div>
               ))}
@@ -694,8 +788,12 @@ function Method({ doc }: { doc: ReportDocument }) {
       */}
       {m.scans.some((s) => s.status === 'aborted') && (
         <p className="mt-[0.9rem]" style={{ ...TYPE.meta, color: PRINT_SEVERITY.high.ink }}>
-          其中 {m.scans.filter((s) => s.status === 'aborted').length}{' '}
-          次扫描被提前终止，对应目标的检测覆盖不完整，相关结论仅代表已执行范围内的结果。
+          <T k="report.appendix.abortedPrefix" fallback="其中" />{' '}
+          {m.scans.filter((s) => s.status === 'aborted').length}{' '}
+          <T
+            k="report.appendix.abortedSuffix"
+            fallback="次扫描被提前终止，对应目标的检测覆盖不完整，相关结论仅代表已执行范围内的结果。"
+          />
         </p>
       )}
 
@@ -705,8 +803,10 @@ function Method({ doc }: { doc: ReportDocument }) {
         是安全报告可信度的边界所在，缺失会让报告显得比实际更权威。
       */}
       <p className="mt-[1rem]" style={{ ...TYPE.meta, color: PRINT_INK.muted }}>
-        本报告覆盖上述目标在指定范围内的检测结果。检测以自动化的黑盒与灰盒方式为主，未覆盖的目标、
-        未启用的检测能力以及业务逻辑层面的复杂组合场景不在此次范围内。
+        <T
+          k="report.appendix.boundary"
+          fallback="本报告覆盖上述目标在指定范围内的检测结果。检测以自动化的黑盒与灰盒方式为主，未覆盖的目标、未启用的检测能力以及业务逻辑层面的复杂组合场景不在此次范围内。"
+        />
       </p>
     </Section>
   )
@@ -723,15 +823,18 @@ function AppendixItem({ label, children }: { label: string; children: ReactNode 
 
 /** 附录 B：严重程度说明 —— 让"高危"对非技术读者是可解释的 */
 function SeverityKey({ doc }: { doc: ReportDocument }) {
+  const { t } = useI18n()
   return (
-    <Section title="附录 B　严重程度说明">
+    <Section title={t('report.appendix.severity', undefined, '附录 B　严重程度说明')}>
       <table className="w-full border-collapse" style={TYPE.meta}>
         <thead>
           <tr>
             <Th align="left" width="6rem">
-              严重程度
+              <T k="report.sheet.severity" fallback="严重程度" />
             </Th>
-            <Th align="left">判定含义</Th>
+            <Th align="left">
+              <T k="report.appendix.meaning" fallback="判定含义" />
+            </Th>
           </tr>
         </thead>
         <tbody>
@@ -744,7 +847,7 @@ function SeverityKey({ doc }: { doc: ReportDocument }) {
                     className="inline-block h-[0.5rem] w-[0.5rem] rounded-full"
                     style={{ backgroundColor: PRINT_SEVERITY[item.severity].ink }}
                   />
-                  {item.label}
+                  {t(`severity.${item.severity}`, undefined, item.label)}
                 </span>
               </Td>
               <Td>{item.definition}</Td>
@@ -754,8 +857,10 @@ function SeverityKey({ doc }: { doc: ReportDocument }) {
       </table>
 
       <p className="mt-[0.9rem]" style={{ ...TYPE.meta, color: PRINT_INK.muted }}>
-        严重程度描述问题被利用的难易与影响面，不等同于业务优先级。
-        实际处置顺序建议结合资产重要性与业务影响一并判断。
+        <T
+          k="report.appendix.severityNote"
+          fallback="严重程度描述问题被利用的难易与影响面，不等同于业务优先级。实际处置顺序建议结合资产重要性与业务影响一并判断。"
+        />
       </p>
     </Section>
   )
@@ -764,23 +869,38 @@ function SeverityKey({ doc }: { doc: ReportDocument }) {
 /** 附录 C：内容范围 —— 报告自称包含什么，必须写清楚且与实际一致 */
 function ContentScope({ doc }: { doc: ReportDocument }) {
   const o = doc.meta.options
+  const { t } = useI18n()
+  const included = (value: boolean) =>
+    value
+      ? t('report.meta.included', undefined, '包含')
+      : t('report.meta.notIncluded', undefined, '未包含')
 
   return (
-    <Section title="附录 C　内容范围">
+    <Section title={t('report.appendix.content', undefined, '附录 C　内容范围')}>
       <dl className="flex flex-col gap-[0.4rem]" style={TYPE.meta}>
-        <AppendixItem label="修复建议">{o.includeRemediation ? '包含' : '未包含'}</AppendixItem>
-        <AppendixItem label="验证脚本（PoC）">{o.includePoc ? '包含' : '未包含'}</AppendixItem>
-        <AppendixItem label="判断依据（智能体推理过程）">
-          {o.includeReasoning ? '包含' : '未包含'}
+        <AppendixItem label={t('report.appendix.remediation', undefined, '修复建议')}>
+          {included(o.includeRemediation)}
         </AppendixItem>
-        <AppendixItem label="条目筛选">
-          {o.onlyConfirmed ? '仅已确认的问题' : '全部状态的问题'}
+        <AppendixItem label={t('report.appendix.poc', undefined, '验证脚本（PoC）')}>
+          {included(o.includePoc)}
+        </AppendixItem>
+        <AppendixItem
+          label={t('report.appendix.reasoning', undefined, '判断依据（智能体推理过程）')}
+        >
+          {included(o.includeReasoning)}
+        </AppendixItem>
+        <AppendixItem label={t('report.appendix.filter', undefined, '条目筛选')}>
+          {o.onlyConfirmed
+            ? t('report.appendix.confirmedOnly', undefined, '仅已确认的问题')
+            : t('report.appendix.allStatuses', undefined, '全部状态的问题')}
         </AppendixItem>
       </dl>
 
       <p className="mt-[0.9rem]" style={{ ...TYPE.meta, color: PRINT_INK.muted }}>
-        未包含的内容可在系统内的漏洞发现页面查看，或重新生成包含这些内容的报告。
-        报告内容在生成时固定，不随漏洞处置状态的变化而改变。
+        <T
+          k="report.appendix.contentNote"
+          fallback="未包含的内容可在系统内的漏洞发现页面查看，或重新生成包含这些内容的报告。报告内容在生成时固定，不随漏洞处置状态的变化而改变。"
+        />
       </p>
     </Section>
   )

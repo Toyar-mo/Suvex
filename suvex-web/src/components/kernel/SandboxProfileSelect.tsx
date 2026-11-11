@@ -6,6 +6,8 @@ import {
 } from '@/data/kernel'
 import { Boxes, ShieldAlert, Wrench } from 'lucide-react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 沙箱镜像选择器。
  *
@@ -44,6 +46,7 @@ export function SandboxProfileSelect({
   hint?: string
   id?: string
 }) {
+  const { t } = useI18n()
   /*
     ★ v1.78：补上 `suvex-sandbox-ir`。
 
@@ -60,14 +63,14 @@ export function SandboxProfileSelect({
     <div className="flex flex-col gap-1.5">
       {!compact && (
         <span id={`${id}-label`} className="text-2xs font-medium text-ink">
-          解题沙箱
+          {t('tools.kernel.sandbox.label')}
         </span>
       )}
 
       <div
         id={id}
         role="radiogroup"
-        aria-label="解题沙箱镜像"
+        aria-label={t('tools.kernel.sandbox.aria')}
         aria-labelledby={compact ? undefined : `${id}-label`}
         className="flex flex-col gap-1"
       >
@@ -106,10 +109,18 @@ export function SandboxProfileSelect({
               />
               <span className="flex min-w-0 flex-col gap-0.5">
                 <span className={cn('text-xs', active ? 'text-ink' : 'text-ink-muted')}>
-                  {SANDBOX_PROFILE_LABEL[option.value]}
+                  {t(
+                    `tools.kernel.sandbox.profile.${option.value}`,
+                    undefined,
+                    SANDBOX_PROFILE_LABEL[option.value],
+                  )}
                 </span>
                 <span className="text-2xs text-ink-faint">
-                  {SANDBOX_PROFILE_HINT[option.value]}
+                  {t(
+                    `tools.kernel.sandbox.hint.${option.value}`,
+                    undefined,
+                    SANDBOX_PROFILE_HINT[option.value],
+                  )}
                 </span>
               </span>
             </button>
@@ -119,8 +130,7 @@ export function SandboxProfileSelect({
 
       {!compact && (
         <span className="text-2xs text-ink-faint">
-          {hint ??
-            '它只影响从这里开始的那一次解题：题目会按分类自动选镜像，这里改的是"这次用哪个"，不会改动题目本身存的分类默认值。'}
+          {hint ?? t('tools.kernel.sandbox.defaultHint')}
         </span>
       )}
     </div>

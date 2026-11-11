@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import {
   Archive,
   Bug,
@@ -83,6 +84,7 @@ const SUBMENU_WIDTH = 176
 const EDGE = 8
 
 export function SessionContextMenu(props: SessionContextMenuProps) {
+  const { t } = useI18n()
   const { anchor, archived, pinned, projects, currentProject, onClose } = props
   const menuRef = useRef<HTMLDivElement>(null)
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null)
@@ -248,7 +250,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
     <div
       ref={menuRef}
       role="menu"
-      aria-label="对话操作"
+      aria-label={t('chat.a11y.chatActions', undefined, '对话操作')}
       data-session-context-menu=""
       className="fixed z-50 flex min-w-[200px] flex-col gap-0.5 rounded-md border border-line bg-surface-raised p-1 shadow-xl"
       style={{ left: position?.left ?? anchor.x, top: position?.top ?? anchor.y }}

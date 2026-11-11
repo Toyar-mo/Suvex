@@ -20,6 +20,8 @@ import {
 } from 'lucide-react'
 import { memo, useId, useState } from 'react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 一条事件。这是整页的核心单元，也是"结构化日志"与"原始日志"的分界线。
  *
@@ -99,6 +101,7 @@ function EventRowImpl({
   measureRef,
   highlighted = false,
 }: EventRowProps) {
+  const { t } = useI18n()
   const [expanded, setExpanded] = useState(false)
   const detailId = useId()
 
@@ -150,7 +153,7 @@ function EventRowImpl({
                 TONE_CLASS[tone],
               )}
             >
-              {EVENT_TYPE_LABEL[event.type]}
+              {t(`activity.type.${event.type}`, undefined, EVENT_TYPE_LABEL[event.type])}
             </span>
 
             <p className="min-w-0 flex-1 break-words text-sm leading-snug text-ink [overflow-wrap:anywhere]">
@@ -205,7 +208,7 @@ function EventRowImpl({
                   className={cn('transition-transform duration-fast', expanded && 'rotate-90')}
                   aria-hidden="true"
                 />
-                {expanded ? '收起详情' : '展开详情'}
+                {expanded ? t('activity.event.collapse') : t('activity.event.expand')}
               </button>
 
               {expanded && (
@@ -238,6 +241,7 @@ function Sep() {
  * 而那些"只有展开了才有用"的内容（完整输出、源码）不进这里。
  */
 function InlineFacts({ detail }: { detail: EventDetail | null }) {
+  const { t } = useI18n()
   if (!detail) return null
 
   switch (detail.kind) {
@@ -296,7 +300,10 @@ function InlineFacts({ detail }: { detail: EventDetail | null }) {
           <Sep />
           <span className={meta.text}>{meta.label}</span>
           <Sep />
-          <span>置信度 {CONFIDENCE_LABEL[detail.confidence]}</span>
+          <span>
+            {t('activity.event.confidence')}{' '}
+            {t(`activity.confidence.${detail.confidence}`, undefined, CONFIDENCE_LABEL[detail.confidence])}
+          </span>
         </>
       )
     }
@@ -317,7 +324,7 @@ function InlineFacts({ detail }: { detail: EventDetail | null }) {
       return (
         <>
           <Sep />
-          <span className="text-signal-ok">已复现</span>
+          <span className="text-signal-ok">{t('activity.event.reproduced')}</span>
         </>
       )
 
@@ -354,15 +361,16 @@ const CONFIDENCE_LABEL = { low: '低', medium: '中', high: '高' } as const
  *     它们是给人读的句子，不是机器输出。
  */
 function EventDetailView({ detail }: { detail: EventDetail }) {
+  const { t } = useI18n()
   switch (detail.kind) {
     case 'tool_call':
       return (
         <div className="flex flex-col gap-2">
-          <Field label="命令">
+          <Field label={t('activity.field.command')}>
             <CodeBlock>{detail.command}</CodeBlock>
           </Field>
           {detail.output && (
-            <Field label="输出">
+            <Field label={t('activity.field.output')}>
               <CodeBlock muted>{detail.output}</CodeBlock>
             </Field>
           )}
@@ -371,7 +379,7 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
 
     case 'reasoning':
       return (
-        <Field label="推理">
+        <Field label={t('activity.field.reasoning')}>
           {/* 推理是给人读的散文，用普通字体与正常行高，不用等宽 */}
           <p className="max-w-[72ch] whitespace-pre-wrap text-sm leading-relaxed text-ink-muted">
             {detail.text}
@@ -382,7 +390,7 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
     case 'discovery':
       return (
         <div className="flex flex-col gap-2">
-          <Field label="证据">
+          <Field label={t('activity.field.evidence')}>
             <CodeBlock>{detail.evidence}</CodeBlock>
           </Field>
           <p className="text-xs text-ink-faint">
@@ -393,7 +401,7 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
 
     case 'poc_generated':
       return (
-        <Field label={`验证脚本 · ${detail.language}`}>
+        <Field label={`${t('activity.field.verifyScript')} · ${detail.language}`}>
           <CodeBlock>{detail.code}</CodeBlock>
         </Field>
       )
@@ -401,10 +409,10 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
     case 'verified':
       return (
         <div className="flex flex-col gap-2">
-          <Field label="复现方式">
+          <Field label={t('activity.field.reproduction')}>
             <p className="text-sm text-ink-muted">{detail.method}</p>
           </Field>
-          <Field label="复现证据">
+          <Field label={t('activity.field.reproductionEvidence')}>
             <CodeBlock>{detail.evidence}</CodeBlock>
           </Field>
         </div>
@@ -413,10 +421,10 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
     case 'blocked':
       return (
         <div className="flex flex-col gap-2">
-          <Field label="被拦下的动作">
+          <Field label={t('activity.field.blockedAction')}>
             <CodeBlock>{detail.attempted}</CodeBlock>
           </Field>
-          <Field label="触发策略">
+          <Field label={t('activity.field.triggerPolicy')}>
             <span className="mono-ui text-ink-muted">{detail.policy}</span>
           </Field>
           <p className="max-w-[72ch] text-sm leading-relaxed text-ink-muted">{detail.reason}</p>
@@ -426,10 +434,10 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
     case 'failed':
       return (
         <div className="flex flex-col gap-2">
-          <Field label="尝试的动作">
+          <Field label={t('activity.field.attemptedAction')}>
             <p className="text-sm text-ink-muted">{detail.attempted}</p>
           </Field>
-          <Field label="错误">
+          <Field label={t('activity.field.error')}>
             <CodeBlock>{detail.error}</CodeBlock>
           </Field>
         </div>
@@ -437,7 +445,7 @@ function EventDetailView({ detail }: { detail: EventDetail }) {
 
     case 'completed':
       return (
-        <Field label="结果">
+        <Field label={t('activity.field.result')}>
           <p className="max-w-[72ch] whitespace-pre-wrap text-sm leading-relaxed text-ink-muted">
             {detail.result}
           </p>

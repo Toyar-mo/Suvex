@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { SCAN_GOAL_HINT, SCAN_GOAL_LABEL, type ScanGoal } from '@/data/scan'
 import type { ScanAttachment } from '@/data/scans-store'
 import { AlertTriangle, Check, FileUp, Loader2, Paperclip, X } from 'lucide-react'
@@ -75,19 +76,19 @@ export function BriefStep({
   return (
     <div className="flex flex-col gap-panel">
       <header className="flex flex-col gap-1">
-        <h3 className="text-sm text-ink">告诉它这次任务是什么</h3>
+        <h3 className="text-sm text-ink"><T k="scans.brief.title"/></h3>
         <p className="max-w-[62ch] text-xs leading-relaxed text-ink-faint">
-          这一段会<strong className="font-normal text-ink-muted">原样</strong>交给智能体
+          这一段会<strong className="font-normal text-ink-muted"><T k="scans.brief.raw"/></strong>交给智能体
           作为任务背景。题目描述、考点提示、测试范围、测试账号都可以写在这里 ——
           它比任何扫描参数都更能决定结果。
-          <span className="text-ink-muted"> 不写也行</span>，但只给一个网址时，
+          <span className="text-ink-muted"><T k="scans.brief.optional"/></span>，但只给一个网址时，
           智能体只能盲扫。
         </p>
       </header>
 
       {/* ── 成功判据 ── */}
       <fieldset className="flex flex-col gap-tight">
-        <legend className="mb-1 text-2xs text-ink-faint">怎样算成功</legend>
+        <legend className="mb-1 text-2xs text-ink-faint"><T k="scans.brief.success"/></legend>
         <div role="radiogroup" className="flex flex-wrap gap-tight">
           {(Object.keys(SCAN_GOAL_LABEL) as ScanGoal[]).map((value) => {
             const active = goal === value

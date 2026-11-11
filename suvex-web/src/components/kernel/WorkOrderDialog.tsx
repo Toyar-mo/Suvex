@@ -1,5 +1,6 @@
 import { loadKernelWorkOrder, type KernelChallenge } from '@/data/kernel'
 import { writeupErrorMessage } from '@/lib/writeup'
+import { useI18n } from '@/i18n'
 import { ClipboardList } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
@@ -46,6 +47,7 @@ export interface WorkOrderDialogProps {
 }
 
 export function WorkOrderDialog({ challenge, onClose }: WorkOrderDialogProps) {
+  const { t } = useI18n()
   const [state, setState] = useState<WriteupDialogState>({ phase: 'loading' })
 
   useEffect(() => {
@@ -65,13 +67,13 @@ export function WorkOrderDialog({ challenge, onClose }: WorkOrderDialogProps) {
 
   return (
     <WriteupDialogShell
-      title={challenge.title || '未命名题目'}
+      title={challenge.title || t('tools.kernel.dialog.untitled')}
       fallbackFilename={`IR-WorkOrders-${challenge.id}.md`}
       icon={ClipboardList}
       state={state}
       // ★ 与题解的「这道题还没有题解」刻意不同：工单缺失是**正常**的
       //   （绝大多数题不是应急响应任务），措辞不能像出错了。
-      errorTitle="这次复盘没有产出工单"
+      errorTitle={t('tools.kernel.workorder.errorTitle')}
       onClose={onClose}
     />
   )

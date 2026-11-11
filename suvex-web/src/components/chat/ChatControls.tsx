@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react'
+import { T } from '@/i18n/T'
 import {
   Bot,
   Check,
@@ -13,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import type { ChatAttachment, ChatPersona } from '@/data/chat'
@@ -61,8 +63,9 @@ export function PersonaDialog({
   onPick: (personaId: string | null) => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   return (
-    <Modal open={open} onClose={onClose} title="选一个角色" widthClass="max-w-3xl">
+    <Modal open={open} onClose={onClose} title={t('chat.a11y.pickRole', undefined, '选一个角色')} widthClass="max-w-3xl">
       <p className="mb-3 text-xs text-ink-muted">
         角色只改变它**关注什么、怎么说**，不会改变它能做什么 ——
         能调哪些工具由你的权限决定，与选谁无关。
@@ -278,6 +281,7 @@ export function ProviderSelect({
    */
   quiet?: boolean
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const boxRef = useRef<HTMLDivElement | null>(null)
 
@@ -312,7 +316,7 @@ export function ProviderSelect({
         type="button"
         onClick={() => setOpen((v) => !v)}
         disabled={disabled}
-        title="用哪个模型接入点"
+        title={t('chat.a11y.modelEndpoint', undefined, '用哪个模型接入点')}
         className={cn(
           'flex items-center gap-1 text-2xs transition-ui duration-fast',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
@@ -550,6 +554,7 @@ export function ProjectInput({
   onCommit: (project: string | null) => void
   disabled?: boolean
 }) {
+  const { t } = useI18n()
   // ⚠️ 本地草稿 + 失焦提交，而不是每次按键提交：
   //   每次按键都发一个 PATCH，会把用户打字过程逐字符写进库，
   //   而且网络慢时响应乱序会让最终值不可预测。
@@ -654,8 +659,8 @@ export function ProjectInput({
             setEditing(false)
           }
         }}
-        placeholder="项目名"
-        aria-label="归属项目"
+        placeholder={t('chat.a11y.projectName', undefined, '项目名')}
+        aria-label={t('chat.a11y.projectAria', undefined, '归属项目')}
         aria-autocomplete="list"
         aria-controls={listId}
         className={cn(
@@ -735,6 +740,7 @@ export function AttachmentBar({
    */
   inline?: boolean
 }) {
+  const { t } = useI18n()
   const inputRef = useRef<HTMLInputElement | null>(null)
 
   return (
@@ -755,7 +761,7 @@ export function AttachmentBar({
           //   （值没变）。用户会以为"点了没反应"。
           e.target.value = ''
         }}
-        aria-label="选择附件"
+        aria-label={t('chat.a11y.attachment', undefined, '选择附件')}
       />
       <button
         type="button"
@@ -777,7 +783,7 @@ export function AttachmentBar({
             ? 'h-9 w-9 shrink-0 justify-center rounded-sm text-ink-faint hover:bg-ink-ghost/10 hover:text-ink max-sm:h-10 max-sm:w-10'
             : 'rounded-xs border border-line bg-surface-sunken px-1.5 py-1 text-ink-muted hover:border-line-strong',
         )}
-        title="传一个文件给它看（文本类，单个上限 5 MB）"
+        title={t('chat.a11y.attachHint', undefined, '传一个文件给它看（文本类，单个上限 5 MB）')}
       >
         {uploading ? (
           <Loader2 size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />
@@ -903,10 +909,10 @@ export function ApprovalCard({
     <div className="flex flex-col gap-1.5 rounded-sm border border-accent/40 bg-accent/5 px-2.5 py-2">
       <div className="flex items-center gap-1.5">
         <Sparkles size={12} strokeWidth={2} className="text-accent" aria-hidden="true" />
-        <span className="text-xs font-medium text-ink">要执行一个操作，等你确认</span>
+        <span className="text-xs font-medium text-ink"><T k="chatmsg.approvalPending"/></span>
       </div>
       <div className="text-2xs text-ink-muted">
-        <span className="text-ink-faint">工具：</span>
+        <span className="text-ink-faint"><T k="chatmsg.tool"/></span>
         <code className="font-mono text-ink">{message.toolName ?? '（未知）'}</code>
       </div>
       {hint && <p className="text-2xs leading-relaxed text-ink-muted">{hint}</p>}
@@ -927,7 +933,7 @@ export function ApprovalCard({
         <Button size="sm" variant="secondary" onClick={() => onDecide(false)} disabled={disabled}>
           拒绝
         </Button>
-        {disabled && <span className="text-2xs text-ink-faint">处理中…</span>}
+        {disabled && <span className="text-2xs text-ink-faint"><T k="chatmsg.processing"/></span>}
       </div>
     </div>
   )

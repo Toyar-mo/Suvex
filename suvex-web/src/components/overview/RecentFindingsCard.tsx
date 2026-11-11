@@ -1,4 +1,5 @@
 import type { RecentFinding } from '@/data/recentFindings'
+import { T } from '@/i18n/T'
 
 const SEVERITY_CLASS: Record<string, string> = {
   critical: 'text-signal-risk',
@@ -22,7 +23,7 @@ export function RecentFindingsCard({ findings }: { findings: RecentFinding[] }) 
   return (
     <section className="rounded-lg border border-line bg-surface">
       <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
-        <h3 className="text-sm font-medium text-ink">发现</h3>
+        <h3 className="text-sm font-medium text-ink"><T k="overview.findings.title"/></h3>
         <a
           href="/findings"
           className="text-2xs text-ink-muted underline-offset-2 hover:text-ink hover:underline"
@@ -32,7 +33,7 @@ export function RecentFindingsCard({ findings }: { findings: RecentFinding[] }) 
       </div>
 
       {rows.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-ink-muted">暂无发现</p>
+        <p className="px-4 py-8 text-center text-sm text-ink-muted"><T k="overview.findings.none"/></p>
       ) : (
         <ul className="divide-y divide-line">
           {rows.map((finding) => (

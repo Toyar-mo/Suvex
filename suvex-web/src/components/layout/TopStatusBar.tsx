@@ -1,4 +1,5 @@
 import { BackdropToggle } from './BackdropToggle'
+import { T } from '@/i18n/T'
 import { LanguageMenu } from './LanguageMenu'
 import { ThemeToggle } from './ThemeToggle'
 import { StatusDot } from '@/components/ui/StatusDot'
@@ -68,8 +69,8 @@ export function TopStatusBar() {
               "智能体"，一个 0 一个 6，看起来就像状态没同步。
               补上"扫描"两个字，歧义就没了。
             */}
-            <span className="hidden sm:inline">个扫描运行中</span>
-            <span className="sm:hidden">扫描运行中</span>
+            <span className="hidden sm:inline"><T k="layout.scansRunningSuffix"/></span>
+            <span className="sm:hidden"><T k="layout.scansRunning"/></span>
           </span>
           {agents.queued > 0 && (
             <span className="tabular hidden text-xs text-ink-faint sm:inline" data-numeric>
@@ -82,7 +83,7 @@ export function TopStatusBar() {
 
         {/* 2 · provider */}
         <div className="flex shrink-0 items-center gap-tight">
-          <span className="hidden text-xs text-ink-muted sm:inline">模型</span>
+          <span className="hidden text-xs text-ink-muted sm:inline"><T k="layout.model"/></span>
           {provider ? (
             <>
               <span className="text-xs font-medium text-ink">{provider.label}</span>
@@ -110,18 +111,18 @@ export function TopStatusBar() {
             <span className="text-xs text-ink-faint">
               {providerStatus === 'loading' ? (
                 <>
-                  <span className="hidden sm:inline">读取中</span>
+                  <span className="hidden sm:inline"><T k="layout.reading"/></span>
                   <span className="sm:hidden">—</span>
                 </>
               ) : providerStatus === 'error' ? (
                 <>
-                  <span className="hidden sm:inline">读不到模型配置</span>
-                  <span className="sm:hidden">读不到</span>
+                  <span className="hidden sm:inline"><T k="layout.modelError"/></span>
+                  <span className="sm:hidden"><T k="layout.modelErrorShort"/></span>
                 </>
               ) : (
                 <>
-                  <span className="hidden sm:inline">未配置 · 去「设置」添加模型服务</span>
-                  <span className="sm:hidden">未配置</span>
+                  <span className="hidden sm:inline"><T k="layout.modelMissing"/></span>
+                  <span className="sm:hidden"><T k="layout.modelMissingShort"/></span>
                 </>
               )}
             </span>
@@ -168,8 +169,8 @@ export function TopStatusBar() {
               而它其实从 10-15 就在了。
             */
             <span className="text-xs text-ink-faint">
-              <span className="hidden sm:inline">用量暂无数据</span>
-              <span className="sm:hidden">用量 —</span>
+              <span className="hidden sm:inline"><T k="layout.usageEmpty"/></span>
+              <span className="sm:hidden"><T k="layout.usageDash"/></span>
             </span>
           )}
         </div>

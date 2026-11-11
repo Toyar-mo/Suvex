@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { DangerButton, Field, TextInput } from './Field'
 import { SettingsPanel } from './SaveBar'
 import {
@@ -44,14 +46,15 @@ import { useState, useSyncExternalStore } from 'react'
  *   真要支持得先想清楚"历史记录里那个名字要不要跟着变"。
  */
 export default function UsersPanel() {
+  const { t } = useI18n()
   const { user } = useAuth()
   const [adding, setAdding] = useState(false)
 
   return (
     <SettingsPanel
       id="users"
-      title="用户"
-      description="能登录这个系统的人。管理员能改设置与发起扫描，只读用户只能查看。"
+      title={t('settings.users.title')}
+      description={t('settings.users.description')}
     >
       <UserList currentUserId={user?.id ?? null} currentUserIsAdmin={isAdmin(user)} />
 
@@ -68,7 +71,7 @@ export default function UsersPanel() {
           )}
         >
           <Plus size={14} aria-hidden="true" />
-          新增用户
+          <T k="settings.users.add" />
         </button>
       )}
     </SettingsPanel>
@@ -86,6 +89,7 @@ function UserList({
   currentUserId: string | null
   currentUserIsAdmin: boolean
 }) {
+  const { t } = useI18n()
   /*
     直接订阅 store，而不是从 props 拿。
 
@@ -103,11 +107,17 @@ function UserList({
   )
 
   if (status === 'loading' || status === 'idle') {
-    return <p className="text-xs text-ink-muted">正在加载用户…</p>
+    return (
+      <p className="text-xs text-ink-muted">
+        <T k="settings.users.loading" />
+      </p>
+    )
   }
   if (status === 'error') {
     return (
-      <p className="text-xs text-signal-risk">{error?.message ?? '用户列表加载失败。'}</p>
+      <p className="text-xs text-signal-risk">
+        {error?.message ?? t('settings.users.loadFailed')}
+      </p>
     )
   }
 
@@ -137,6 +147,7 @@ function UserRow({
   currentUserId: string | null
   currentUserIsAdmin: boolean
 }) {
+  const { t } = useI18n()
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState<string | null>(null)
 
@@ -170,10 +181,14 @@ function UserRow({
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-xs text-ink">
             {user.username}
-            {isSelf && <span className="ml-1.5 text-2xs text-ink-faint">（你）</span>}
+            {isSelf && (
+              <span className="ml-1.5 text-2xs text-ink-faint">
+                <T k="settings.users.you" />
+              </span>
+            )}
           </span>
           <span className="text-2xs text-ink-faint">
-            创建于 {formatRelativeTime(user.createdAt)}
+            <T k="settings.users.createdAt" vars={{ time: formatRelativeTime(user.createdAt) }} />
           </span>
         </span>
 
@@ -191,28 +206,28 @@ function UserRow({
                 <button
                   type="button"
                   disabled={busy || demoteBlocked !== null}
-                  title={demoteBlocked ?? '降级为只读'}
+                  title={demoteBlocked ?? t('settings.users.demoteTitle')}
                   onClick={() => void run(() => updateUserRole(user.id, 'viewer'))}
                   className={actionClass}
                 >
-                  降为只读
+                  <T k="settings.users.demote" />
                 </button>
               ) : (
                 <button
                   type="button"
                   disabled={busy}
-                  title="提升为管理员"
+                  title={t('settings.users.promoteTitle')}
                   onClick={() => void run(() => updateUserRole(user.id, 'admin'))}
                   className={actionClass}
                 >
-                  升为管理员
+                  <T k="settings.users.promote" />
                 </button>
               )}
 
               <button
                 type="button"
                 disabled={busy || deleteBlocked !== null}
-                title={deleteBlocked ?? '删除这个用户'}
+                title={deleteBlocked ?? t('settings.users.deleteTitle')}
                 onClick={() => void run(() => deleteUser(user.id))}
                 className={cn(actionClass, 'hover:border-signal-risk/50 hover:text-signal-risk')}
               >
@@ -261,7 +276,7 @@ function RoleBadge({ role }: { role: UserRole }) {
         role === 'admin' ? 'bg-accent-wash text-accent' : 'bg-surface-sunken text-ink-muted',
       )}
     >
-      {role === 'admin' ? '管理员' : '只读'}
+      {role === 'admin' ? <T k="settings.users.roleAdmin" /> : <T k="settings.users.roleViewer" />}
     </span>
   )
 }
@@ -271,6 +286,7 @@ function RoleBadge({ role }: { role: UserRole }) {
 // ─────────────────────────────────────────────
 
 function AddUserForm({ onDone }: { onDone: () => void }) {
+  const { t } = useI18n()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [role, setRole] = useState<UserRole>('viewer')
@@ -283,7 +299,7 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
     // 前端先挡一道明显的（空用户名、弱口令），但**真正的校验在后端** ——
     // 这里只是为了少一次往返，不是为了替代它。
     if (!username.trim()) {
-      setProblem('请填写用户名。')
+      setProblem(t('settings.users.usernameRequired'))
       return
     }
     /*
@@ -299,7 +315,7 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
     const check = checkPassword(password)
     if (!check.acceptable) {
       const unmet = check.requirements.filter((r) => !r.met).map((r) => r.label)
-      setProblem(`口令强度不足：${unmet.join('、')}`)
+      setProblem(t('settings.users.weakPassword', { unmet: unmet.join(t('settings.users.listSeparator')) }))
       return
     }
 
@@ -316,7 +332,11 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
 
   return (
     <div className="flex flex-col gap-3 rounded-control border border-line bg-surface-raised p-3">
-      <Field label="用户名" htmlFor="new-user-name" help="登录时用。大小写不敏感。">
+      <Field
+        label={t('settings.users.usernameLabel')}
+        htmlFor="new-user-name"
+        help={t('settings.users.usernameHelp')}
+      >
         <TextInput
           id="new-user-name"
           value={username}
@@ -325,14 +345,14 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
           //    会在运行时抛 `e.target is undefined`（typecheck 会先拦住）。
           onChange={setUsername}
           autoComplete="off"
-          placeholder="例如 zhangsan"
+          placeholder={t('settings.users.usernamePlaceholder')}
         />
       </Field>
 
       <Field
-        label="初始口令"
+        label={t('settings.users.passwordLabel')}
         htmlFor="new-user-pass"
-        help="至少 12 位，含大小写字母与数字。告诉本人后请让他自己改。"
+        help={t('settings.users.passwordHelp')}
       >
         <TextInput
           id="new-user-pass"
@@ -343,7 +363,7 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
         />
       </Field>
 
-      <Field label="角色" htmlFor="new-user-role">
+      <Field label={t('settings.users.roleLabel')} htmlFor="new-user-role">
         <div className="flex gap-1">
           {(['viewer', 'admin'] as const).map((r) => (
             <button
@@ -358,16 +378,22 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
                   : 'border-line text-ink-muted hover:border-line-strong hover:text-ink',
               )}
             >
-              {r === 'admin' ? '管理员' : '只读'}
+              {r === 'admin' ? (
+                <T k="settings.users.roleAdmin" />
+              ) : (
+                <T k="settings.users.roleViewer" />
+              )}
             </button>
           ))}
         </div>
       </Field>
 
       <p className="text-2xs text-ink-faint">
-        {role === 'admin'
-          ? '管理员能改设置、管模型服务、发起扫描 —— 包括对真实目标发包。'
-          : '只读用户能看扫描记录、漏洞与报告，但不能发起扫描或改任何配置。'}
+        {role === 'admin' ? (
+          <T k="settings.users.roleAdminHint" />
+        ) : (
+          <T k="settings.users.roleViewerHint" />
+        )}
       </p>
 
       {problem && <p className="text-2xs text-signal-risk">{problem}</p>}
@@ -388,9 +414,11 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
             'transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
           )}
         >
-          {busy ? '正在创建…' : '创建'}
+          {busy ? <T k="settings.users.creating" /> : <T k="settings.users.create" />}
         </button>
-        <DangerButton onClick={onDone}>取消</DangerButton>
+        <DangerButton onClick={onDone}>
+          <T k="settings.users.cancel" />
+        </DangerButton>
       </div>
     </div>
   )

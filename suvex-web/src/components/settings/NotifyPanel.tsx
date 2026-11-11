@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { DangerButton, Field, TextInput, Toggle } from './Field'
 import { SaveBar, SettingsPanel, type SaveState } from './SaveBar'
 import {
@@ -15,7 +17,7 @@ import {
   sendTestNotification,
   updateNotifyChannel,
 } from '@/data/settings-store'
-import { SEVERITY_META, SEVERITY_ORDER, type Severity } from '@/data/findings'
+import { SEVERITY_META, SEVERITY_ORDER } from '@/data/findings'
 import { formatRelativeTime } from '@/lib/datetime'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { Check, Mail, Send, TriangleAlert, Webhook, X, MessageSquare } from 'lucide-react'
@@ -43,25 +45,19 @@ import { useMemo, useState } from 'react'
 
 const CHANNEL_META: Record<
   NotifyChannelKind,
-  { label: string; icon: typeof Mail; placeholder: string; help: string }
+  { icon: typeof Mail; placeholder: string }
 > = {
   email: {
-    label: '邮件',
     icon: Mail,
     placeholder: 'security@example.com',
-    help: '通过服务端配置的 SMTP 发送；未配置时测试会指出缺哪一项。',
   },
   webhook: {
-    label: 'Webhook',
     icon: Webhook,
     placeholder: 'https://hooks.example.com/security',
-    help: '以 POST 发送 JSON，含漏洞标题、严重度与目标。接收端需要支持 https。',
   },
   slack: {
-    label: 'Slack',
     icon: MessageSquare,
     placeholder: 'https://hooks.slack.com/services/…',
-    help: '在 Slack 里创建 Incoming Webhook 后把地址粘贴到这里。',
   },
 }
 
@@ -73,11 +69,12 @@ export interface NotifyPanelProps {
 }
 
 export function NotifyPanel({ rule, channels }: NotifyPanelProps) {
+  const { t } = useI18n()
   return (
     <SettingsPanel
       id="notify"
-      title="通知"
-      description="发现问题时推送到团队正在看的地方。通知内容包含漏洞标题与目标地址，请确认渠道是可信的。"
+      title={t('settings.notify.title')}
+      description={t('settings.notify.description')}
     >
       <RuleSection rule={rule} />
       <ChannelSection channels={channels} />
@@ -90,6 +87,7 @@ export function NotifyPanel({ rule, channels }: NotifyPanelProps) {
 // ─────────────────────────────────────────────
 
 function RuleSection({ rule }: { rule: NoticeRule }) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState<NoticeRule>(rule)
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
 
@@ -129,12 +127,14 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
   return (
     <div className="flex flex-col gap-panel">
       <div className="flex flex-col gap-2">
-        <span className="text-xs font-medium text-ink">触发条件</span>
+        <span className="text-xs font-medium text-ink">
+          <T k="settings.notify.rulesHeading" />
+        </span>
 
         <Field
-          label="最低通知级别"
+          label={t('settings.notify.minSeverityLabel')}
           htmlFor="notice-severity"
-          help="达到或高于这一级才会推送。级别越低，打扰越多。"
+          help={t('settings.notify.minSeverityHelp')}
         >
           <div className="flex flex-wrap gap-1">
             {SEVERITY_ORDER.map((severity) => {
@@ -156,7 +156,7 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
                     aria-hidden="true"
                     className={cn('h-1.5 w-1.5 rounded-pill', SEVERITY_META[severity].bg)}
                   />
-                  {SEVERITY_META[severity].label}
+                  {t(`severity.${severity}`)}
                 </button>
               )
             })}
@@ -165,28 +165,25 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
 
         {/* 当前阈值的人话复述 —— 让用户确认自己选对了 */}
         <p className="text-2xs text-ink-faint">
-          当前会在发现
+          <T k="settings.notify.thresholdBefore" />
           <span className="text-ink">
-            「{SEVERITY_META[draft.minSeverity as Severity].label}」及以上{' '}
+            <T
+              k="settings.notify.thresholdSeverity"
+              vars={{ severity: t(`severity.${draft.minSeverity}`) }}
+            />{' '}
           </span>
-          的问题时通知。
+          <T k="settings.notify.thresholdAfter" />
         </p>
 
         <Toggle
           id="notice-complete"
-          label="扫描结束时通知"
+          label={t('settings.notify.scanCompleteLabel')}
           hint={
-            // ⚠️ 这里原写「即使没有发现问题也发一条」——只有在阈值选到
-            //    「信息」时才成立。干净扫描的 severity 是 `info`（rank 0），
-            //    而 `dispatch._passes_severity` 在 `notify_on_scan_complete`
-            //    之后还要过一遍阈值：默认 `min_severity=high`（rank 3），
-            //    `0 >= 3` 为假 ⇒ **不发**。而"确认扫描确实跑完了"正是
-            //    用户打开这个开关的全部目的 —— 所以必须把前提说出来。
             draft.minSeverity === 'info'
-              ? '扫描结束时发一条，包括没有发现任何问题的情况（阈值已选到「信息」）。'
-              : `扫描结束时发一条，但仍受上面的阈值约束：没有发现问题、或问题都低于「${
-                  SEVERITY_META[draft.minSeverity as Severity].label
-                }」时不会发。想每次都收到回执，把阈值选到「信息」。`
+              ? t('settings.notify.scanCompleteHintInfo')
+              : t('settings.notify.scanCompleteHint', {
+                  severity: t(`severity.${draft.minSeverity}`),
+                })
           }
           checked={draft.notifyOnScanComplete}
           onChange={(v) => setDraft({ ...draft, notifyOnScanComplete: v })}
@@ -194,21 +191,8 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
 
         <Toggle
           id="notice-critical"
-          label="发现严重问题时立即通知"
-          hint={
-            // ★ v0.90 起真的生效了：`scheduler._import_for` 在**新建**出
-            //    critical 记录时入队一条 `scan.critical`，`dispatch` 按
-            //    `payload.event` 分派到 `should_notify_critical`。
-            //
-            // 三件用户需要知道的事，都写进来（少写哪一条都会让他误解）：
-            //   · 它不受上面的阈值约束（阈值是收尾判断，这条路上事件本身就是
-            //     critical）—— 不写的话，把阈值调到 critical 的人会以为
-            //     "那这个开关就没用了"；
-            //   · 它跟「扫描结束时通知」是两个开关，关掉回执不影响它；
-            //   · 每条扫描最多叫一次，不是每条漏洞都叫一次。
-            '扫描过程中一旦发现「严重」级问题就立即发一条，不需要等扫描跑完。不受上面的阈值约束，' +
-            '也与「扫描结束时通知」互不影响。同一次扫描只发一条，后续再出现严重问题不会重复打扰。'
-          }
+          label={t('settings.notify.criticalLabel')}
+          hint={t('settings.notify.criticalHint')}
           checked={draft.notifyOnCriticalImmediate}
           onChange={(v) => setDraft({ ...draft, notifyOnCriticalImmediate: v })}
         />
@@ -239,12 +223,15 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
 // ─────────────────────────────────────────────
 
 function ChannelSection({ channels }: { channels: NotifyChannel[] }) {
+  const { t } = useI18n()
   const [adding, setAdding] = useState<NotifyChannelKind | null>(null)
 
   return (
     <div className="flex flex-col gap-2 border-t border-line pt-panel">
       <div className="flex flex-wrap items-center justify-between gap-tight">
-        <span className="text-xs font-medium text-ink">通知渠道</span>
+        <span className="text-xs font-medium text-ink">
+          <T k="settings.notify.channelsHeading" />
+        </span>
         {adding === null && (
           <div className="flex gap-1">
             {ADDABLE_CHANNEL_KINDS.map((kind) => {
@@ -258,7 +245,7 @@ function ChannelSection({ channels }: { channels: NotifyChannel[] }) {
                 >
                   {/* 用渠道自己的图标而不是统一加号：三种渠道一眼可分 */}
                   <Icon size={11} strokeWidth={1.75} aria-hidden="true" />
-                  {CHANNEL_META[kind].label}
+                  {t(`settings.notify.channel.${kind}.label`)}
                 </button>
               )
             })}
@@ -268,7 +255,7 @@ function ChannelSection({ channels }: { channels: NotifyChannel[] }) {
 
       {channels.length === 0 && adding === null && (
         <p className="rounded-sm border border-dashed border-line-strong p-3 text-center text-2xs text-ink-faint">
-          还没有配置任何渠道。不配也能用，只是发现问题时没有人会收到通知。
+          <T k="settings.notify.channelsEmpty" />
         </p>
       )}
 
@@ -309,6 +296,7 @@ function ChannelSection({ channels }: { channels: NotifyChannel[] }) {
 }
 
 function ChannelRow({ channel }: { channel: NotifyChannel }) {
+  const { t } = useI18n()
   const [editing, setEditing] = useState(false)
   const meta = CHANNEL_META[channel.kind]
   const Icon = meta.icon
@@ -326,23 +314,35 @@ function ChannelRow({ channel }: { channel: NotifyChannel }) {
             ? 'bg-signal-ok/15 text-signal-ok'
             : 'bg-signal-warn/15 text-signal-warn',
         )}
-        title={channel.verified ? '已通过测试' : (channel.verifyError ?? '尚未测试')}
+        title={
+          channel.verified
+            ? t('settings.notify.verified')
+            : (channel.verifyError ?? t('settings.notify.untested'))
+        }
       >
         <Icon size={13} strokeWidth={1.75} aria-hidden="true" />
       </span>
 
       <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex flex-wrap items-center gap-1.5">
-          <span className="text-sm text-ink">{channel.label || meta.label}</span>
-          <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
-            {meta.label}
+          <span className="text-sm text-ink">
+            {channel.label || t(`settings.notify.channel.${channel.kind}.label`)}
           </span>
-          {!channel.enabled && <span className="text-2xs text-ink-faint">已停用</span>}
+          <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
+            {t(`settings.notify.channel.${channel.kind}.label`)}
+          </span>
+          {!channel.enabled && (
+            <span className="text-2xs text-ink-faint">
+              <T k="settings.notify.disabled" />
+            </span>
+          )}
         </span>
         <span className="flex flex-wrap items-center gap-x-2 text-2xs">
           <span className="mono-ui truncate text-ink-faint">{channel.target}</span>
           {!channel.verified && (
-            <span className="text-signal-warn">{channel.verifyError ?? '尚未测试'}</span>
+            <span className="text-signal-warn">
+              {channel.verifyError ?? t('settings.notify.untested')}
+            </span>
           )}
         </span>
       </div>
@@ -352,7 +352,7 @@ function ChannelRow({ channel }: { channel: NotifyChannel }) {
         onClick={() => setEditing(true)}
         className="inline-flex h-7 shrink-0 items-center rounded-sm px-2 text-2xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
       >
-        编辑
+        <T k="settings.notify.edit" />
       </button>
     </div>
   )
@@ -367,6 +367,7 @@ function ChannelEditor({
   isNew?: boolean
   onDone: () => void
 }) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState<NotifyChannel>(channel)
   const [touched, setTouched] = useState(false)
   const [saveState, setSaveState] = useState<SaveState>({ kind: 'idle' })
@@ -392,12 +393,12 @@ function ChannelEditor({
   const errors = useMemo(() => {
     const target =
       draft.kind === 'email' ? validateEmail(draft.target) : validateWebhookUrl(draft.target)
-    const label = draft.label.trim().length === 0 ? '请填写名称（用于区分多个渠道）' : null
+    const label = draft.label.trim().length === 0 ? t('settings.notify.labelRequired') : null
     return {
       target: target.ok ? null : target.error,
       label,
     }
-  }, [draft])
+  }, [draft, t])
 
   const hasError = Object.values(errors).some((e) => e !== null)
 
@@ -451,7 +452,7 @@ function ChannelEditor({
   const handleSave = async () => {
     setTouched(true)
     if (hasError) {
-      setSaveState({ kind: 'failed', error: '有字段未通过校验，请先修正' })
+      setSaveState({ kind: 'failed', error: t('settings.notify.fieldsInvalid') })
       return
     }
     if (!dirty) {
@@ -500,7 +501,7 @@ function ChannelEditor({
   const handleTest = async () => {
     setTouched(true)
     if (hasError) {
-      setTestState({ kind: 'failed', error: '请先修正标红的字段' })
+      setTestState({ kind: 'failed', error: t('settings.notify.fixMarkedFields') })
       return
     }
 
@@ -525,7 +526,7 @@ function ChannelEditor({
           : { kind: 'failed', error: result.error },
       )
     } catch {
-      setTestState({ kind: 'failed', error: '测试请求失败，请检查网络后重试' })
+      setTestState({ kind: 'failed', error: t('settings.notify.testRequestFailed') })
     }
 
     /*
@@ -560,12 +561,18 @@ function ChannelEditor({
     >
       <div className="flex items-center justify-between gap-tight">
         <span className="text-xs text-ink">
-          {isNew ? `新增 · ${meta.label}` : `编辑 · ${meta.label}`}
+          {isNew
+            ? t('settings.notify.editorNew', {
+                kind: t(`settings.notify.channel.${draft.kind}.label`),
+              })
+            : t('settings.notify.editorEdit', {
+                kind: t(`settings.notify.channel.${draft.kind}.label`),
+              })}
         </span>
         <button
           type="button"
           onClick={onDone}
-          aria-label="收起"
+          aria-label={t('settings.notify.collapse')}
           className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
         >
           <X size={13} strokeWidth={2} aria-hidden="true" />
@@ -574,7 +581,7 @@ function ChannelEditor({
 
       <div className="grid gap-panel sm:grid-cols-2">
         <Field
-          label="名称"
+          label={t('settings.notify.nameLabel')}
           htmlFor={`${channel.id}-label`}
           required
           error={touched ? errors.label : null}
@@ -583,16 +590,20 @@ function ChannelEditor({
             id={`${channel.id}-label`}
             value={draft.label}
             onChange={(v) => setDraft({ ...draft, label: v })}
-            placeholder="如：安全组邮件列表"
+            placeholder={t('settings.notify.namePlaceholder')}
             error={touched ? errors.label : null}
           />
         </Field>
 
         <Field
-          label={draft.kind === 'email' ? '收件地址' : 'Webhook 地址'}
+          label={
+            draft.kind === 'email'
+              ? t('settings.notify.targetEmailLabel')
+              : t('settings.notify.targetWebhookLabel')
+          }
           htmlFor={`${channel.id}-target`}
           required
-          help={meta.help}
+          help={t(`settings.notify.channel.${draft.kind}.help`)}
           error={touched ? errors.target : null}
         >
           <TextInput
@@ -608,8 +619,8 @@ function ChannelEditor({
 
       <Toggle
         id={`${channel.id}-enabled`}
-        label="启用这个渠道"
-        hint="停用后保留配置但不再发送，方便临时静音。"
+        label={t('settings.notify.enableLabel')}
+        hint={t('settings.notify.enableHint')}
         checked={draft.enabled}
         onChange={(v) => setDraft({ ...draft, enabled: v })}
       />
@@ -637,7 +648,7 @@ function ChannelEditor({
             type="button"
             onClick={handleTest}
             disabled={testing}
-            title="会对 Webhook / Slack / 邮件真的发一条测试消息"
+            title={t('settings.notify.testTitle')}
             className={cn(
               'inline-flex h-9 items-center gap-1.5 rounded-sm border px-3 text-xs transition-ui duration-fast',
               testing
@@ -646,17 +657,24 @@ function ChannelEditor({
             )}
           >
             <Send size={12} strokeWidth={2} aria-hidden="true" />
-            {testing ? '正在发送…' : '发送测试消息'}
+            {testing ? (
+              <T k="settings.notify.sending" />
+            ) : (
+              <T k="settings.notify.sendTest" />
+            )}
           </button>
 
           <span className="text-2xs text-ink-faint">
-            Webhook / Slack / 邮件都会真的收到一条测试消息；邮件需先在服务端配置 SMTP。
+            <T k="settings.notify.testNote" />
           </span>
 
           {testState.kind === 'saved' && (
             <span role="status" className="inline-flex items-center gap-1 text-2xs text-signal-ok">
               <Check size={11} strokeWidth={2.5} aria-hidden="true" />
-              测试消息已送达 · {formatRelativeTime(testState.at)}
+              <T
+                k="settings.notify.testDelivered"
+                vars={{ time: formatRelativeTime(testState.at) }}
+              />
             </span>
           )}
           {testState.kind === 'failed' && (
@@ -676,7 +694,7 @@ function ChannelEditor({
             setTouched(false)
             setSaveState({ kind: 'idle' })
           }}
-          saveLabel={isNew ? '添加渠道' : '保存'}
+          saveLabel={isNew ? t('settings.notify.addChannel') : t('settings.notify.save')}
           note={
             /*
               ⚠️ 这里原来第一行是 `BACKEND_PENDING_NOTE`（"后端未交付，
@@ -685,8 +703,12 @@ function ChannelEditor({
             */
             !isNew ? (
               <span className="flex flex-wrap items-center gap-tight">
-                <span>删除后不会再收到这个渠道的通知。</span>
-                <DangerButton onClick={handleDelete}>删除渠道</DangerButton>
+                <span>
+                  <T k="settings.notify.deleteNote" />
+                </span>
+                <DangerButton onClick={handleDelete}>
+                  <T k="settings.notify.deleteChannel" />
+                </DangerButton>
               </span>
             ) : null
           }

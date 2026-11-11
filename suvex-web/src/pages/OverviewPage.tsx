@@ -1,4 +1,5 @@
 import { PageHeader } from '@/components/layout/AppShell'
+import { T } from '@/i18n/T'
 import ActivityFeed from '@/components/overview/ActivityFeed'
 import { AttentionList } from '@/components/overview/AttentionList'
 import RiskScoreCard from '@/components/overview/RiskScoreCard'
@@ -263,7 +264,7 @@ function QualityPanel({ quality }: { quality: QualitySnapshot | null }) {
       aria-label="质量指标"
       className="rounded-lg border border-line bg-surface p-panel"
     >
-      <h3 className="text-sm font-medium text-ink">质量</h3>
+      <h3 className="text-sm font-medium text-ink"><T k="overview.quality"/></h3>
       <p className="mt-1 text-2xs text-ink-muted">
         成功率 / 误报 / 覆盖度 —— 用来看“变好还是变差”，不只看数量。
       </p>
@@ -377,7 +378,7 @@ function OverviewContent({
 
       {/* ── 3 · 本周产出（与顶部 KPI 不重复）────────── */}
       <section aria-label="本周产出">
-        <h2 className="mb-2 text-sm font-medium text-ink">本周产出</h2>
+        <h2 className="mb-2 text-sm font-medium text-ink"><T k="overview.weeklyOutput"/></h2>
         <div className="grid grid-cols-1 gap-panel sm:grid-cols-3">
           <StatCard
             label="本周新增高危及以上"
@@ -506,7 +507,7 @@ function OverviewActivityFeed({ seed, isLive }: { seed: ActivityEvent[]; isLive:
 function OverviewSkeleton() {
   return (
     <div className="flex flex-col gap-bay" role="status" aria-live="polite" aria-busy="true">
-      <span className="sr-only">正在加载总览数据</span>
+      <span className="sr-only"><T k="overview.loading"/></span>
 
       {/* 骨架顺序跟着真实版面走：先是活动流 + 右栏，再是该做什么，最后才是指标卡。 */}
       <div className="grid grid-cols-1 items-start gap-bay lg:grid-cols-[minmax(0,1fr)_20rem]">

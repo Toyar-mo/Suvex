@@ -12,6 +12,7 @@ import {
 import { useState } from 'react'
 
 import type { ToolHealth } from '@/data/tools'
+import { useI18n } from '@/i18n'
 
 /**
  * 工具清单的一行。
@@ -41,7 +42,7 @@ const HEALTH_META: Record<
   { label: string; icon: typeof Check; className: string; dot: string }
 > = {
   ready: {
-    label: '可用',
+    label: 'tools.health.ready',
     icon: Check,
     // 用 ink-muted 而不是 signal-ok：这一页大部分工具本来就该是"可用"，
     // 全绿会让真正需要注意的那几行淹掉（design-system §2：语义色少量使用）
@@ -49,19 +50,19 @@ const HEALTH_META: Record<
     dot: 'bg-signal-ok',
   },
   disabled: {
-    label: '已关闭',
+    label: 'tools.health.disabled',
     icon: Power,
     className: 'text-ink-faint',
     dot: 'bg-ink-faint',
   },
   unconfigured: {
-    label: '待配置',
+    label: 'tools.health.unconfigured',
     icon: Plug,
     className: 'text-signal-warn',
     dot: 'bg-signal-warn',
   },
   misconfigured: {
-    label: '配置有误',
+    label: 'tools.health.misconfigured',
     icon: CircleAlert,
     className: 'text-signal-risk',
     dot: 'bg-signal-risk',
@@ -109,6 +110,7 @@ export function ToolRow({
   lastCallAt,
   onToggle,
 }: ToolRowProps) {
+  const { t } = useI18n()
   const meta = HEALTH_META[health]
   const StatusIcon = meta.icon
   const [open, setOpen] = useState(false)
@@ -127,7 +129,7 @@ export function ToolRow({
             checked={enabled}
             onChange={(event) => onToggle(event.target.checked)}
             className="size-3.5 accent-accent"
-            aria-label={`启用 ${label}`}
+            aria-label={t('tools.enableAria', { label })}
           />
         </label>
 
@@ -142,9 +144,9 @@ export function ToolRow({
             {core && (
               <span
                 className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint"
-                title="关掉它会让绝大多数任务基本做不了"
+                title={t('tools.coreTitle')}
               >
-                主力
+                {t('tools.coreBadge')}
               </span>
             )}
             {/*
@@ -157,18 +159,20 @@ export function ToolRow({
               className="ml-auto shrink-0 text-2xs text-ink-faint"
               title={
                 lastCallAt
-                  ? `最近 2 万条工具调用事件内；最后一次 ${new Date(lastCallAt).toLocaleString('zh-CN', { hour12: false })}`
-                  : '最近 2 万条工具调用事件内'
+                  ? t('tools.recentCallsLast', {
+                      time: new Date(lastCallAt).toLocaleString('zh-CN', { hour12: false }),
+                    })
+                  : t('tools.recentCalls')
               }
             >
-              调用 {calls}
+              {t('tools.calls', { n: calls })}
             </span>
             {defaultLimitation && (
               <span
                 className="rounded-sm border border-signal-warn/40 px-1 py-px text-2xs text-signal-warn"
-                title="用默认参数跑会静默漏掉东西 —— 展开看详情"
+                title={t('tools.limitationTitle')}
               >
-                默认会漏
+                {t('tools.limitationBadge')}
               </span>
             )}
           </div>
@@ -186,8 +190,9 @@ export function ToolRow({
               {requiresConnection && health === 'unconfigured' && (
                 <span className="text-ink-faint">
                   {' '}
-                  （在「MCP 连接」里加一条名为{' '}
-                  <code className="font-mono">{requiresConnection}</code> 的连接）
+                  {t('tools.requires.before')}{' '}
+                  <code className="font-mono">{requiresConnection}</code>
+                  {t('tools.requires.after')}
                 </span>
               )}
             </p>
@@ -197,18 +202,20 @@ export function ToolRow({
             <div className="mt-2 flex flex-col gap-2 rounded-sm border border-line/60 bg-surface-raised/20 px-2.5 py-2">
               {params && (
                 <p className="break-words font-mono text-xs text-ink-faint [overflow-wrap:anywhere]">
-                  参数：{params}
+                  {t('tools.params', { params })}
                 </p>
               )}
               <span
               className="ml-auto shrink-0 text-2xs text-ink-faint"
               title={
                 lastCallAt
-                  ? `最近 2 万条工具调用事件内；最后一次 ${new Date(lastCallAt).toLocaleString('zh-CN', { hour12: false })}`
-                  : '最近 2 万条工具调用事件内'
+                  ? t('tools.recentCallsLast', {
+                      time: new Date(lastCallAt).toLocaleString('zh-CN', { hour12: false }),
+                    })
+                  : t('tools.recentCalls')
               }
             >
-              调用 {calls}
+              {t('tools.calls', { n: calls })}
             </span>
             {defaultLimitation && (
                 <div className="flex items-start gap-tight">
@@ -218,7 +225,9 @@ export function ToolRow({
                     aria-hidden="true"
                   />
                   <div className="min-w-0">
-                    <p className="text-xs font-medium text-signal-warn">默认会漏什么</p>
+                    <p className="text-xs font-medium text-signal-warn">
+                      {t('tools.limitationHeading')}
+                    </p>
                     <p className="mt-0.5 whitespace-pre-line text-xs leading-relaxed text-ink-muted">
                       {defaultLimitation}
                     </p>
@@ -235,7 +244,7 @@ export function ToolRow({
               type="button"
               onClick={() => setOpen((value) => !value)}
               aria-expanded={open}
-              aria-label={open ? `收起 ${label} 的详情` : `展开 ${label} 的详情`}
+              aria-label={open ? t('tools.collapseAria', { label }) : t('tools.expandAria', { label })}
               className="inline-flex size-6 items-center justify-center rounded-sm text-ink-faint transition-ui duration-fast hover:bg-surface-overlay hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
             >
               {open ? (
@@ -247,11 +256,11 @@ export function ToolRow({
           )}
           <span
             className={cn('flex items-center gap-1 text-xs', meta.className)}
-            title={meta.label}
+            title={t(meta.label)}
           >
             <span className={cn('size-1.5 rounded-full', meta.dot)} aria-hidden />
             <StatusIcon className="size-3" aria-hidden strokeWidth={1.75} />
-            {meta.label}
+            {t(meta.label)}
           </span>
         </div>
       </div>
@@ -261,11 +270,12 @@ export function ToolRow({
 
 /** 空状态：清单没拿到（后端不可达或返回空）。 */
 export function ToolListEmpty({ reason }: { reason?: string }) {
+  const { t } = useI18n()
   return (
     <div className="flex items-start gap-tight px-3 py-6 text-sm text-ink-muted">
       <CircleSlash className="mt-0.5 size-4 shrink-0 text-ink-faint" strokeWidth={1.75} />
       <div>
-        <p>没拿到工具清单。</p>
+        <p>{t('tools.empty.title')}</p>
         {reason && <p className="mt-1 text-xs text-ink-faint">{reason}</p>}
       </div>
     </div>

@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import {
   loadScanRetention,
   saveScanRetention,
@@ -36,6 +38,7 @@ import { useEffect, useState } from 'react'
  * 猜错的后果是记录被意外归档或规则形同虚设，两种都值得用一行字防住。
  */
 export function ScanRetentionPanel() {
+  const { t } = useI18n()
   const { config, status, error } = useScanRetention()
   /*
     ★ 只存**用户改过的**值，显示值由它和服务端的 config 派生。
@@ -80,7 +83,7 @@ export function ScanRetentionPanel() {
   const artifactValue = parse(artifactDays)
   const invalid =
     archiveValue === null || trashValue === null || artifactValue === null
-      ? '请填写 0 或正整数（0 表示关闭）'
+      ? t('settings.scanRetention.invalid')
       : null
 
   const dirty =
@@ -96,7 +99,7 @@ export function ScanRetentionPanel() {
       trashValue === null ||
       artifactValue === null
     ) {
-      setSaveState({ kind: 'failed', error: invalid ?? '取值不合法' })
+      setSaveState({ kind: 'failed', error: invalid ?? t('settings.scanRetention.invalidFallback') })
       return
     }
     if (!dirty) {
@@ -120,31 +123,36 @@ export function ScanRetentionPanel() {
   return (
     <SettingsPanel
       id="scan-retention"
-      title="扫描保留"
-      description="让扫描列表自己保持清爽：到期的记录自动归档，回收站里的按保留期清除，归档的产物到点清理磁盘。"
+      title={t('settings.scanRetention.title')}
+      description={t('settings.scanRetention.description')}
     >
       {status === 'loading' || status === 'idle' ? (
-        <p className="text-2xs text-ink-faint">正在读取…</p>
+        <p className="text-2xs text-ink-faint">
+          <T k="settings.scanRetention.loading" />
+        </p>
       ) : status === 'error' ? (
         <div className="flex flex-col gap-2">
           <p role="alert" className="text-2xs text-signal-risk">
-            读取保留规则失败：{errorMessage(error)}
+            <T
+              k="settings.scanRetention.loadFailed"
+              vars={{ message: errorMessage(error) }}
+            />
           </p>
           <button
             type="button"
             onClick={() => void loadScanRetention()}
             className="w-fit text-xs text-accent-strong underline hover:text-accent"
           >
-            重试
+            <T k="settings.scanRetention.retry" />
           </button>
         </div>
       ) : (
         <>
           <div className="grid gap-panel sm:grid-cols-2">
             <Field
-              label="自动归档"
+              label={t('settings.scanRetention.archiveLabel')}
               htmlFor="retention-archive-days"
-              help="失败 / 已终止的扫描，过了这么多天自动归档。填 0 关闭这条规则。"
+              help={t('settings.scanRetention.archiveHelp')}
               error={invalid}
             >
               <TextInput
@@ -157,9 +165,9 @@ export function ScanRetentionPanel() {
             </Field>
 
             <Field
-              label="回收站保留期"
+              label={t('settings.scanRetention.trashLabel')}
               htmlFor="retention-trash-days"
-              help="回收站里的扫描过这么多天会被永久删除。填 0 表示不自动清除。"
+              help={t('settings.scanRetention.trashHelp')}
             >
               <TextInput
                 id="retention-trash-days"
@@ -188,9 +196,9 @@ export function ScanRetentionPanel() {
               是界面文案写反了。
             */}
             <Field
-              label="归档产物保留期"
+              label={t('settings.scanRetention.artifactLabel')}
               htmlFor="retention-artifact-days"
-              help="已归档的扫描，产物目录（扫描日志、报告素材、challenge/ 里解开的题目素材）再留这么多天就清理掉，释放磁盘。附件原件不受影响——它在 _uploads/ 下，重跑同一道题还要用。填 0 表示不自动清理。"
+              help={t('settings.scanRetention.artifactHelp')}
             >
               <TextInput
                 id="retention-artifact-days"
@@ -203,9 +211,14 @@ export function ScanRetentionPanel() {
           </div>
 
           <p className={cn('text-2xs', config?.lastSweepAt ? 'text-ink-faint' : 'text-ink-ghost')}>
-            {config?.lastSweepAt
-              ? `上次清理：${new Date(config.lastSweepAt).toLocaleString()}（保存后也会立刻清理一次）`
-              : '还没执行过清理。保存一次即可立刻生效。'}
+            {config?.lastSweepAt ? (
+              <T
+                k="settings.scanRetention.lastSweep"
+                vars={{ time: new Date(config.lastSweepAt).toLocaleString() }}
+              />
+            ) : (
+              <T k="settings.scanRetention.neverSwept" />
+            )}
           </p>
 
           <SaveBar

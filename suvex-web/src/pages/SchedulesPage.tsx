@@ -9,6 +9,8 @@ import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { showToast } from '@/data/toast-store'
 import {
@@ -88,14 +90,15 @@ const FILTERS: ReadonlyArray<{ value: StateFilter; label: string }> = [
 ]
 
 function StateBadge({ state }: { state: ScheduleState }) {
+  const { t } = useI18n()
   const meta = SCHEDULE_STATE_META[state]
   return (
     <span
       className={cn('inline-flex items-center gap-1.5 text-xs', meta.className)}
-      title={meta.hint}
+      title={t(`schedules.state.hint.${state}`, undefined, meta.hint)}
     >
       <span className={cn('h-1.5 w-1.5 shrink-0 rounded-full', meta.dot)} aria-hidden="true" />
-      {meta.label}
+      {t(`schedules.state.${state}`, undefined, meta.label)}
     </span>
   )
 }
@@ -146,6 +149,7 @@ function SummaryCard({
  *   遮断列表反而更对 —— 判据与 `components/ui/Modal.tsx` 顶部注释一致。
  */
 function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
+  const { t } = useI18n()
   const providers = useProviders()
   const [name, setName] = useState('')
   const [target, setTarget] = useState('')
@@ -168,9 +172,9 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
   const trimmedTarget = target.trim()
   const disabledReason =
     trimmedTarget === ''
-      ? '请先填写要定期复查的目标'
+      ? t('schedules.dialog.needTarget', undefined, '请先填写要定期复查的目标')
       : providerId === null
-        ? '还没有可用的模型服务，请先在设置里配置'
+        ? t('schedules.dialog.needProvider', undefined, '还没有可用的模型服务，请先在设置里配置')
         : null
 
   const submit = async () => {
@@ -189,11 +193,11 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
         brief: null,
         authorizationStatement: SCAN_AUTHORIZATION_STATEMENT,
       })
-      showToast({ message: '定时计划已创建' })
+      showToast({ message: t('schedules.toast.created', undefined, '定时计划已创建') })
       onClose()
     } catch (caught) {
       // 不关抽屉：用户填的东西还在，改一处再提交比重新填一遍省事
-      setError(caught instanceof Error ? caught.message : '创建失败')
+      setError(caught instanceof Error ? caught.message : t('schedules.toast.createFailed', undefined, '创建失败'))
     } finally {
       setBusy(false)
     }
@@ -207,16 +211,20 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
       open
       onClose={onClose}
       widthClass="max-w-3xl"
-      title="新建定时计划"
+      title={t('schedules.dialog.title', undefined, '新建定时计划')}
       footer={
         <div className="flex items-center justify-between gap-tight">
           <p className="min-w-0 flex-1 truncate text-xs text-ink-muted">
             {disabledReason ??
-              `每 ${formatInterval(intervalMinutes).replace('每 ', '')} 自动发起一次扫描`}
+              t(
+                'schedules.dialog.every',
+                { interval: formatInterval(intervalMinutes).replace('每 ', '') },
+                `每 ${formatInterval(intervalMinutes).replace('每 ', '')} 自动发起一次扫描`,
+              )}
           </p>
           <div className="flex shrink-0 gap-tight">
             <Button variant="secondary" size="sm" onClick={onClose} disabled={busy}>
-              取消
+              <T k="schedules.dialog.cancel" fallback="取消" />
             </Button>
             <Button
               variant="primary"
@@ -225,7 +233,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
               loading={busy}
               disabled={disabledReason !== null}
             >
-              创建
+              <T k="schedules.dialog.create" fallback="创建" />
             </Button>
           </div>
         </div>
@@ -241,18 +249,18 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
       <div className="flex flex-col gap-panel">
         <div className="grid grid-cols-1 gap-panel sm:grid-cols-2">
           <label className="flex min-w-0 flex-col gap-1">
-            <span className="text-xs text-ink-muted">名称</span>
+            <span className="text-xs text-ink-muted"><T k="schedules.dialog.name" fallback="名称" /></span>
             <input
               type="text"
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="留空则用目标名"
+              placeholder={t('schedules.dialog.namePlaceholder', undefined, '留空则用目标名')}
               className="rounded-sm border border-line bg-canvas px-2.5 py-1.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
             />
           </label>
 
           <label className="flex min-w-0 flex-col gap-1">
-            <span className="text-xs text-ink-muted">目标</span>
+            <span className="text-xs text-ink-muted"><T k="schedules.dialog.target" fallback="目标" /></span>
             <input
               type="text"
               value={target}
@@ -264,7 +272,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
         </div>
 
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-ink-muted">目标形态</span>
+          <span className="text-xs text-ink-muted"><T k="schedules.dialog.targetKind" fallback="目标形态" /></span>
           <div className="flex flex-wrap gap-tight">
             {/*
               ★ 遍历 `SCHEDULE_TARGET_KINDS` 而不是 `TARGET_KIND_LABEL` 的全部键。
@@ -287,15 +295,19 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
                     : 'border-line text-ink-muted hover:text-ink',
                 )}
               >
-                {TARGET_KIND_LABEL[value]}
+                {t(`schedules.targetKind.${value}`, undefined, TARGET_KIND_LABEL[value])}
               </button>
             ))}
           </div>
-          {kindHint !== null && <p className="text-2xs text-ink-muted">例如 {kindHint.example}</p>}
+          {kindHint !== null && (
+            <p className="text-2xs text-ink-muted">
+              {t('schedules.dialog.example', { example: kindHint.example }, `例如 ${kindHint.example}`)}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-ink-muted">这次复查要达成什么</span>
+          <span className="text-xs text-ink-muted"><T k="schedules.dialog.goal" fallback="这次复查要达成什么" /></span>
           <div className="grid grid-cols-1 gap-1 sm:grid-cols-3">
             {Object.entries(SCAN_GOAL_LABEL).map(([value, label]) => (
               <button
@@ -310,15 +322,19 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
                     : 'border-line text-ink-muted hover:text-ink',
                 )}
               >
-                {label}
+                {t(`schedules.goal.${value}`, undefined, label)}
               </button>
             ))}
           </div>
-          {goalHint !== null && <p className="text-2xs text-ink-muted">{goalHint}</p>}
+          {goalHint !== null && (
+            <p className="text-2xs text-ink-muted">
+              {t(`schedules.goalHint.${goal}`, undefined, goalHint)}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1">
-          <span className="text-xs text-ink-muted">复查间隔</span>
+          <span className="text-xs text-ink-muted"><T k="schedules.dialog.interval" fallback="复查间隔" /></span>
           <div className="flex flex-wrap gap-tight">
             {INTERVAL_PRESETS.map((preset) => (
               <button
@@ -338,28 +354,35 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
             ))}
           </div>
           <p className="text-2xs text-ink-muted">
-            允许范围 {MIN_INTERVAL_MINUTES} 分钟 ~ {Math.round(MAX_INTERVAL_MINUTES / 1440)} 天。
-            再密就不是定期复查，而是持续压测了。
+            {t(
+              'schedules.dialog.range',
+              {
+                min: MIN_INTERVAL_MINUTES,
+                max: Math.round(MAX_INTERVAL_MINUTES / 1440),
+              },
+              `允许范围 ${MIN_INTERVAL_MINUTES} 分钟 ~ ${Math.round(MAX_INTERVAL_MINUTES / 1440)} 天。再密就不是定期复查，而是持续压测了。`,
+            )}
           </p>
         </div>
 
         <label className="flex flex-col gap-1">
-          <span className="text-xs text-ink-muted">使用哪个模型服务</span>
+          <span className="text-xs text-ink-muted"><T k="schedules.dialog.provider" fallback="使用哪个模型服务" /></span>
           <Select
             value={providerId ?? ''}
             options={providers.map((provider) => ({
               value: provider.id,
-              label: `${provider.label}${provider.configured ? '' : '（未配置）'}`,
+              label: `${provider.label}${provider.configured ? '' : t('schedules.dialog.unconfigured', undefined, '（未配置）')}`,
               disabled: !provider.configured,
             }))}
             onChange={(value) => setPickedProviderId(value || null)}
-            placeholder="请选择模型服务"
+            placeholder={t('schedules.dialog.providerPlaceholder', undefined, '请选择模型服务')}
           />
         </label>
 
         <p className="rounded-sm border border-line bg-canvas px-2.5 py-2 text-2xs leading-relaxed text-ink-muted">
-          创建即表示你确认：{SCAN_AUTHORIZATION_STATEMENT}。每到一个周期，系统会以你的身份
-          对上述目标发起一次真实扫描 —— 它会发包、会尝试利用，可能触发目标侧的告警。
+          {t('schedules.dialog.consent', undefined, '创建即表示你确认：')}
+          {SCAN_AUTHORIZATION_STATEMENT}
+          {t('schedules.dialog.consentTail', undefined, '。每到一个周期，系统会以你的身份对上述目标发起一次真实扫描 —— 它会发包、会尝试利用，可能触发目标侧的告警。')}
         </p>
 
         {error !== null && (
@@ -376,6 +399,7 @@ function CreateScheduleDialog({ onClose }: { onClose: () => void }) {
 }
 
 export default function SchedulesPage() {
+  const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const state = useSchedulesState()
   const [query, setQuery] = useState('')
@@ -503,12 +527,14 @@ export default function SchedulesPage() {
     try {
       const next = await toggleSchedule(schedule.id, !schedule.enabled)
       showToast({
-        message: next.enabled ? `已启用「${next.name}」` : `已停用「${next.name}」`,
+        message: next.enabled
+          ? t('schedules.toast.enabled', { name: next.name }, `已启用「${next.name}」`)
+          : t('schedules.toast.disabled', { name: next.name }, `已停用「${next.name}」`),
         tone: 'ok',
       })
     } catch (caught) {
       showToast({
-        message: caught instanceof Error ? caught.message : '启停失败',
+        message: caught instanceof Error ? caught.message : t('schedules.toast.toggleFailed', undefined, '启停失败'),
         tone: 'risk',
       })
     } finally {
@@ -534,7 +560,7 @@ export default function SchedulesPage() {
     if (editing === null) return
     const name = editing.name.trim()
     if (!name) {
-      showToast({ message: '计划名称不能为空。', tone: 'info' })
+      showToast({ message: t('schedules.toast.nameRequired', undefined, '计划名称不能为空。'), tone: 'info' })
       return
     }
     const minutes = Number(editing.interval)
@@ -544,7 +570,11 @@ export default function SchedulesPage() {
       minutes > MAX_INTERVAL_MINUTES
     ) {
       showToast({
-        message: `间隔要填 ${MIN_INTERVAL_MINUTES}–${MAX_INTERVAL_MINUTES} 分钟之间的整数。`,
+        message: t(
+          'schedules.toast.intervalInvalid',
+          { min: MIN_INTERVAL_MINUTES, max: MAX_INTERVAL_MINUTES },
+          `间隔要填 ${MIN_INTERVAL_MINUTES}–${MAX_INTERVAL_MINUTES} 分钟之间的整数。`,
+        ),
         tone: 'info',
       })
       return
@@ -552,11 +582,11 @@ export default function SchedulesPage() {
     setSavingEdit(true)
     try {
       const next = await updateSchedule(editing.id, { name, intervalMinutes: minutes })
-      showToast({ message: `已更新「${next.name}」`, tone: 'ok' })
+      showToast({ message: t('schedules.toast.updated', { name: next.name }, `已更新「${next.name}」`), tone: 'ok' })
       setEditing(null)
     } catch (caught) {
       showToast({
-        message: caught instanceof Error ? caught.message : '保存失败',
+        message: caught instanceof Error ? caught.message : t('schedules.toast.saveFailed', undefined, '保存失败'),
         tone: 'risk',
       })
     } finally {
@@ -569,11 +599,11 @@ export default function SchedulesPage() {
     setDeleting(true)
     try {
       await deleteSchedule(pendingDelete.id)
-      showToast({ message: `已删除「${pendingDelete.name}」` })
+      showToast({ message: t('schedules.toast.deleted', { name: pendingDelete.name }, `已删除「${pendingDelete.name}」`) })
       setPendingDelete(null)
     } catch (caught) {
       showToast({
-        message: caught instanceof Error ? caught.message : '删除失败',
+        message: caught instanceof Error ? caught.message : t('schedules.toast.deleteFailed', undefined, '删除失败'),
         tone: 'risk',
       })
     } finally {
@@ -597,7 +627,11 @@ export default function SchedulesPage() {
       <>
         <PageHeader navId="schedules" />
         <div className="px-gutter py-bay">
-          <ErrorState error={state.error} onRetry={refresh} title="定时计划加载失败" />
+          <ErrorState
+            error={state.error}
+            onRetry={refresh}
+            title={t('schedules.loadFailed', undefined, '定时计划加载失败')}
+          />
         </div>
       </>
     )
@@ -611,23 +645,23 @@ export default function SchedulesPage() {
         {/* ── 统计条 ─────────────────────────────────────────── */}
         {items.length > 0 && (
           <div className="mb-bay grid grid-cols-2 gap-panel sm:grid-cols-4">
-            <SummaryCard label="计划总数" value={summary.total} />
+            <SummaryCard label={t('schedules.summary.total', undefined, '计划总数')} value={summary.total} />
             <SummaryCard
-              label="已经不工作了"
+              label={t('schedules.summary.failing', undefined, '已经不工作了')}
               value={summary.failing}
-              hint="到点在跑，但每次都建不出扫描 —— 它没在帮你复查"
+              hint={t('schedules.summary.failingHint', undefined, '到点在跑，但每次都建不出扫描 —— 它没在帮你复查')}
               tone={summary.failing > 0 ? 'risk' : 'default'}
             />
             <SummaryCard
-              label="已到点未派发"
+              label={t('schedules.summary.due', undefined, '已到点未派发')}
               value={summary.due}
-              hint="超过下次执行时间还没发起 —— 调度器可能没在运行"
+              hint={t('schedules.summary.dueHint', undefined, '超过下次执行时间还没发起 —— 调度器可能没在运行')}
               tone={summary.due > 0 ? 'warn' : 'default'}
             />
             <SummaryCard
-              label="已停用"
+              label={t('schedules.summary.paused', undefined, '已停用')}
               value={summary.paused}
-              hint="确认过不用再自动复查，还是三个月前随手关掉忘了"
+              hint={t('schedules.summary.pausedHint', undefined, '确认过不用再自动复查，还是三个月前随手关掉忘了')}
             />
           </div>
         )}
@@ -644,8 +678,8 @@ export default function SchedulesPage() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="按名称或目标筛选…"
-              aria-label="按名称或目标筛选定时计划"
+              placeholder={t('schedules.search.placeholder', undefined, '按名称或目标筛选…')}
+              aria-label={t('schedules.search.aria', undefined, '按名称或目标筛选定时计划')}
               className="w-full rounded-sm border border-line bg-surface py-1.5 pl-8 pr-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
             />
           </div>
@@ -664,7 +698,7 @@ export default function SchedulesPage() {
                     : 'border-line text-ink-muted hover:text-ink',
                 )}
               >
-                {filter.label}
+                {t(`schedules.filter.${filter.value}`, undefined, filter.label)}
               </button>
             ))}
           </div>
@@ -674,15 +708,15 @@ export default function SchedulesPage() {
             size="sm"
             onClick={refresh}
             disabled={state.status === 'loading'}
-            title="重新拉取定时计划"
+            title={t('schedules.refresh.title', undefined, '重新拉取定时计划')}
           >
             <RefreshCw size={13} aria-hidden="true" />
-            刷新
+            <T k="schedules.refresh" fallback="刷新" />
           </Button>
 
           <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
             <Plus size={13} aria-hidden="true" />
-            新建计划
+            <T k="schedules.new" fallback="新建计划" />
           </Button>
         </div>
 
@@ -692,8 +726,11 @@ export default function SchedulesPage() {
             role="status"
             className="mb-panel rounded-sm border border-signal-warn/40 bg-signal-warn/10 px-3 py-2 text-xs text-signal-warn"
           >
-            有 {summary.due} 条计划已经过了下次执行时间却还没派发出去。
-            如果这个数字持续不降，说明扫描调度器没在运行 —— 定期复查此时是停摆的。
+            {t(
+              'schedules.dueBanner',
+              { n: summary.due },
+              `有 ${summary.due} 条计划已经过了下次执行时间却还没派发出去。如果这个数字持续不降，说明扫描调度器没在运行 —— 定期复查此时是停摆的。`,
+            )}
           </p>
         )}
 
@@ -701,17 +738,21 @@ export default function SchedulesPage() {
         {filtered.length === 0 ? (
           <EmptyState
             icon={AlarmClock}
-            title={items.length === 0 ? '还没有定时计划' : '没有符合条件的计划'}
+            title={
+              items.length === 0
+                ? t('schedules.empty.title', undefined, '还没有定时计划')
+                : t('schedules.empty.filteredTitle', undefined, '没有符合条件的计划')
+            }
             description={
               items.length === 0
-                ? '定期复查让「上次扫描是三个月前」这种事不会悄悄发生。先给最重要的目标排一条。'
-                : '换个关键词或切回「全部」看看。'
+                ? t('schedules.empty.desc', undefined, '定期复查让「上次扫描是三个月前」这种事不会悄悄发生。先给最重要的目标排一条。')
+                : t('schedules.empty.filteredDesc', undefined, '换个关键词或切回「全部」看看。')
             }
             action={
               items.length === 0 ? (
                 <Button variant="primary" size="sm" onClick={() => setCreating(true)}>
                   <Plus size={13} aria-hidden="true" />
-                  新建计划
+                  <T k="schedules.new" fallback="新建计划" />
                 </Button>
               ) : undefined
             }
@@ -721,13 +762,13 @@ export default function SchedulesPage() {
             <table className="w-full min-w-[54rem] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-line bg-surface text-left text-xs text-ink-muted">
-                  <th className="px-3 py-2 font-medium">状态</th>
-                  <th className="px-3 py-2 font-medium">名称 / 目标</th>
-                  <th className="px-3 py-2 font-medium">间隔</th>
-                  <th className="px-3 py-2 font-medium">下次执行</th>
-                  <th className="px-3 py-2 font-medium">上次执行</th>
-                  <th className="px-3 py-2 font-medium">最近一次扫描</th>
-                  <th className="px-3 py-2 text-right font-medium">操作</th>
+                  <th className="px-3 py-2 font-medium"><T k="schedules.table.state" fallback="状态" /></th>
+                  <th className="px-3 py-2 font-medium"><T k="schedules.table.name" fallback="名称 / 目标" /></th>
+                  <th className="px-3 py-2 font-medium"><T k="schedules.table.interval" fallback="间隔" /></th>
+                  <th className="px-3 py-2 font-medium"><T k="schedules.table.next" fallback="下次执行" /></th>
+                  <th className="px-3 py-2 font-medium"><T k="schedules.table.last" fallback="上次执行" /></th>
+                  <th className="px-3 py-2 font-medium"><T k="schedules.table.lastScan" fallback="最近一次扫描" /></th>
+                  <th className="px-3 py-2 text-right font-medium"><T k="schedules.actions" fallback="操作" /></th>
                 </tr>
               </thead>
               <tbody>
@@ -742,7 +783,7 @@ export default function SchedulesPage() {
                         <StateBadge state={value} />
                         {schedule.failureCount > 0 && (
                           <p className="mt-0.5 text-2xs text-signal-risk">
-                            连续 {schedule.failureCount} 次失败
+                            {t('schedules.card.failures', { n: schedule.failureCount }, `连续 ${schedule.failureCount} 次失败`)}
                           </p>
                         )}
                         {schedule.lastFailureReason !== null && (
@@ -760,7 +801,7 @@ export default function SchedulesPage() {
                             type="text"
                             value={editing.name}
                             onChange={(e) => setEditing({ ...editing, name: e.target.value })}
-                            aria-label="计划名称"
+                            aria-label={t('schedules.card.nameAria', undefined, '计划名称')}
                             maxLength={120}
                             className="w-full max-w-[20rem] rounded-sm border border-line bg-surface-sunken px-2 py-1 text-sm text-ink focus:border-accent focus:outline-none"
                           />
@@ -768,8 +809,11 @@ export default function SchedulesPage() {
                           <p className="font-medium text-ink">{schedule.name}</p>
                         )}
                         <p className="mt-0.5 text-xs text-ink-muted">
-                          {TARGET_KIND_LABEL[schedule.targetKind as TargetKind] ??
-                            schedule.targetKind}{' '}
+                          {t(
+                            `schedules.targetKind.${schedule.targetKind}`,
+                            undefined,
+                            TARGET_KIND_LABEL[schedule.targetKind as TargetKind] ?? schedule.targetKind,
+                          )}{' '}
                           · {schedule.target}
                         </p>
                       </td>
@@ -780,12 +824,12 @@ export default function SchedulesPage() {
                               type="number"
                               value={editing.interval}
                               onChange={(e) => setEditing({ ...editing, interval: e.target.value })}
-                              aria-label="间隔（分钟）"
+                              aria-label={t('schedules.card.intervalAria', undefined, '间隔（分钟）')}
                               min={MIN_INTERVAL_MINUTES}
                               max={MAX_INTERVAL_MINUTES}
                               className="w-20 rounded-sm border border-line bg-surface-sunken px-2 py-1 text-sm text-ink focus:border-accent focus:outline-none"
                             />
-                            分钟
+                            <T k="schedules.minutes" fallback="分钟" />
                           </span>
                         ) : (
                           formatInterval(schedule.intervalMinutes)
@@ -805,7 +849,7 @@ export default function SchedulesPage() {
                             to={`/scans?scan=${encodeURIComponent(schedule.lastScanId)}`}
                             className="text-accent hover:underline"
                           >
-                            查看
+                            <T k="schedules.card.view" fallback="查看" />
                           </Link>
                         )}
                       </td>
@@ -819,7 +863,7 @@ export default function SchedulesPage() {
                                 onClick={() => void saveEdit()}
                                 loading={savingEdit}
                               >
-                                保存
+                                <T k="schedules.card.save" fallback="保存" />
                               </Button>
                               <Button
                                 variant="ghost"
@@ -827,7 +871,7 @@ export default function SchedulesPage() {
                                 onClick={() => setEditing(null)}
                                 disabled={savingEdit}
                               >
-                                取消
+                                <T k="schedules.card.cancel" fallback="取消" />
                               </Button>
                             </>
                           ) : (
@@ -836,24 +880,30 @@ export default function SchedulesPage() {
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => startEdit(schedule)}
-                                title="改名字或执行间隔"
+                                title={t('schedules.card.editTitle', undefined, '改名字或执行间隔')}
                               >
-                                编辑
+                                <T k="schedules.card.edit" fallback="编辑" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => void onToggle(schedule)}
                                 loading={togglingId === schedule.id}
-                                title={schedule.enabled ? '停用这条计划' : '启用这条计划'}
+                                title={
+                                  schedule.enabled
+                                    ? t('schedules.card.disableTitle', undefined, '停用这条计划')
+                                    : t('schedules.card.enableTitle', undefined, '启用这条计划')
+                                }
                               >
-                                {schedule.enabled ? '停用' : '启用'}
+                                {schedule.enabled
+                                  ? t('schedules.card.disable', undefined, '停用')
+                                  : t('schedules.card.enable', undefined, '启用')}
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
                                 onClick={() => setPendingDelete(schedule)}
-                                title="删除这条计划"
+                                title={t('schedules.card.deleteTitle', undefined, '删除这条计划')}
                               >
                                 <Trash2 size={13} aria-hidden="true" />
                               </Button>
@@ -870,10 +920,15 @@ export default function SchedulesPage() {
         )}
 
         <p className="mt-3 text-2xs leading-relaxed text-ink-muted">
-          排序口径：数据异常 → 连续失败 → 已到点 → 待首次执行 → 正常 → 已停用，
-          同档内按下次执行时间从近到远。
+          <T
+            k="schedules.footer.sort"
+            fallback="排序口径：数据异常 → 连续失败 → 已到点 → 待首次执行 → 正常 → 已停用，同档内按下次执行时间从近到远。"
+          />
           <Play size={10} className="mx-1 inline align-baseline" aria-hidden="true" />
-          计划本身不会自动停用 —— 连续失败会一直重试，直到你决定修它还是关掉它。
+          <T
+            k="schedules.footer.note"
+            fallback="计划本身不会自动停用 —— 连续失败会一直重试，直到你决定修它还是关掉它。"
+          />
         </p>
       </div>
 
@@ -882,13 +937,17 @@ export default function SchedulesPage() {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除这条定时计划？"
+        title={t('schedules.delete.title', undefined, '删除这条定时计划？')}
         description={
           pendingDelete === null
             ? ''
-            : `「${pendingDelete.name}」（${pendingDelete.target}）将不再自动复查。已经跑过的扫描记录会保留。`
+            : t(
+                'schedules.delete.desc',
+                { name: pendingDelete.name, target: pendingDelete.target },
+                `「${pendingDelete.name}」（${pendingDelete.target}）将不再自动复查。已经跑过的扫描记录会保留。`,
+              )
         }
-        confirmLabel="删除"
+        confirmLabel={t('schedules.delete.confirm', undefined, '删除')}
         onConfirm={() => void onConfirmDelete()}
         onCancel={() => setPendingDelete(null)}
         busy={deleting}

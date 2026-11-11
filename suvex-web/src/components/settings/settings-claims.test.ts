@@ -47,6 +47,15 @@ function source(name: string): string {
 }
 
 /**
+ * 已本地化的文案搬进了字典文件，面板源码里只剩 key。
+ * 断言用户可见措辞时要把 zh-CN 字典一起读进来。
+ */
+const localizedDict = readFileSync(
+  resolve(SETTINGS_DIR, '..', '..', 'i18n', 'extras', 'settings-rest.ts'),
+  'utf8',
+)
+
+/**
  * 去掉注释，只留真正会渲染出去的部分。
  *
  * 这一步是必须的：这个仓库的注释里**如实记录着**曾经的错话
@@ -95,7 +104,7 @@ describe('SandboxPanel 的隔离文案', () => {
 })
 
 describe('NotifyPanel 的即时通知与测试发送文案', () => {
-  const visible = userVisible(source('NotifyPanel.tsx'))
+  const visible = userVisible(source('NotifyPanel.tsx')) + userVisible(localizedDict)
 
   it('「立即通知」不得再声称不生效（v0.90 起它真的生效了）', () => {
     /**
@@ -171,7 +180,7 @@ describe('NotifyPanel 的即时通知与测试发送文案', () => {
 })
 
 describe('ScanRetentionPanel 的产物清理文案', () => {
-  const visible = userVisible(source('ScanRetentionPanel.tsx'))
+  const visible = userVisible(source('ScanRetentionPanel.tsx')) + userVisible(localizedDict)
 
   it('产物清理不得声称 challenge 目录不受影响（它会跟着删）', () => {
     /**

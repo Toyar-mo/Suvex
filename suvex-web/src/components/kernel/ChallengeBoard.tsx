@@ -31,6 +31,8 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 题目**看板**：一行一道题。
  *
@@ -110,8 +112,8 @@ function isResumable(challenge: KernelChallenge): boolean {
 }
 
 function solveLabel(challenge: KernelChallenge): string {
-  if (isResumable(challenge)) return '接着解'
-  return challenge.status === 'failed' ? '再解' : '开始'
+  if (isResumable(challenge)) return 'tools.kernel.board.solve.resume'
+  return challenge.status === 'failed' ? 'tools.kernel.board.solve.again' : 'tools.kernel.board.solve.start'
 }
 
 export function ChallengeBoard({
@@ -163,6 +165,7 @@ export function ChallengeBoard({
    */
   solveDisabledReason?: string | null
 }) {
+  const { t } = useI18n()
   /** 展开的行。同时只开一行 —— 看板的意义是不让详情挤占扫读。 */
   const [openId, setOpenId] = useState<string | null>(null)
   /** 勾选中的题目 id（批量操作的对象）。 */
@@ -303,16 +306,19 @@ export function ChallengeBoard({
           {queue && (
             <span
               className="flex items-center gap-1.5"
-              title="同时解题的题目数上限（在「设置 → CTF2」里调）"
+              title={t('tools.kernel.board.concurrency.title')}
             >
-              <span className="text-ink-faint">并发</span>
+              <span className="text-ink-faint">{t('tools.kernel.board.concurrency')}</span>
               <span className="tabular text-ink">
                 {queue.running}/{queue.limit}
               </span>
               <span
                 className="h-1 w-20 overflow-hidden rounded-pill bg-ink-ghost/30"
                 role="img"
-                aria-label={`并发占用 ${queue.running}/${queue.limit}`}
+                aria-label={t('tools.kernel.board.concurrency.aria', {
+                  running: queue.running,
+                  limit: queue.limit,
+                })}
               >
                 <span
                   className="block h-full rounded-pill bg-accent"
@@ -323,7 +329,11 @@ export function ChallengeBoard({
                   }}
                 />
               </span>
-              {queue.queued > 0 && <span className="text-ink-faint">排队 {queue.queued}</span>}
+              {queue.queued > 0 && (
+                <span className="text-ink-faint">
+                  {t('tools.kernel.board.queued', { n: queue.queued })}
+                </span>
+              )}
             </span>
           )}
 
@@ -337,21 +347,21 @@ export function ChallengeBoard({
           <span className="hidden items-center gap-1 text-ink-faint lg:flex">
             <kbd className="rounded-xs border border-line px-1 font-mono">j</kbd>
             <kbd className="rounded-xs border border-line px-1 font-mono">k</kbd>
-            移动 ·<kbd className="rounded-xs border border-line px-1 font-mono">↵</kbd>
-            查看 ·<kbd className="rounded-xs border border-line px-1 font-mono">s</kbd>
-            开始
+            {t('tools.kernel.board.kb.move')} ·<kbd className="rounded-xs border border-line px-1 font-mono">↵</kbd>
+            {t('tools.kernel.board.kb.view')} ·<kbd className="rounded-xs border border-line px-1 font-mono">s</kbd>
+            {t('tools.kernel.board.kb.start')}
           </span>
 
           {onBatch && selected.size > 0 && (
             <span className="flex flex-wrap items-center gap-1.5">
-              <span className="text-ink-muted">已选 {selected.size} 道</span>
+              <span className="text-ink-muted">
+                {t('tools.kernel.board.selected', { n: selected.size })}
+              </span>
               <button
                 type="button"
                 disabled={busy || startable.length === 0 || Boolean(solveDisabledReason)}
                 onClick={() => runBatch('solve', startable)}
-                title={
-                  solveDisabledReason ?? '对勾选的、还没解出的题发起解题（会起环境并消耗模型额度）'
-                }
+                title={solveDisabledReason ?? t('tools.kernel.board.batch.solveTitle')}
                 className={cn(
                   'press inline-flex h-6 items-center gap-1 rounded-sm bg-accent px-2 text-2xs font-medium text-canvas',
                   'transition-ui duration-fast hover:bg-accent-strong',
@@ -359,20 +369,22 @@ export function ChallengeBoard({
                 )}
               >
                 <Play size={10} strokeWidth={2.5} aria-hidden="true" />
-                开始所选{startable.length > 0 ? ` ${startable.length}` : ''}
+                {t('tools.kernel.board.batch.start')}
+                {startable.length > 0 ? ` ${startable.length}` : ''}
               </button>
               <button
                 type="button"
                 disabled={busy || cancelable.length === 0}
                 onClick={() => runBatch('cancel', cancelable)}
-                title="取消勾选中的、正在排队或运行的题（已经在跑的那一轮会跑完，但不产出候选）"
+                title={t('tools.kernel.board.batch.stopTitle')}
                 className={OUTLINE_BUTTON}
               >
                 <X size={10} strokeWidth={2} aria-hidden="true" />
-                停止所选{cancelable.length > 0 ? ` ${cancelable.length}` : ''}
+                {t('tools.kernel.board.batch.stop')}
+                {cancelable.length > 0 ? ` ${cancelable.length}` : ''}
               </button>
               <button type="button" onClick={() => setSelected(new Set())} className={QUIET_BUTTON}>
-                清除
+                {t('tools.kernel.board.batch.clear')}
               </button>
             </span>
           )}
@@ -382,7 +394,7 @@ export function ChallengeBoard({
       <div className="overflow-x-auto rounded-md border border-line bg-surface md:overflow-visible">
         <table ref={tableRef} className="w-full table-fixed border-collapse text-xs">
           <caption className="sr-only">
-            题目看板：一行一道题。展开某一行查看题面、候选答案与更多操作。
+            {t('tools.kernel.board.caption')}
           </caption>
           <thead>
             {/*
@@ -400,28 +412,28 @@ export function ChallengeBoard({
                     onChange={() =>
                       setSelected(allSelected ? new Set() : new Set(challenges.map((c) => c.id)))
                     }
-                    aria-label="选择当前列表里的全部题目"
+                    aria-label={t('tools.kernel.board.selectAllAria')}
                     className="h-3 w-3 cursor-pointer align-middle accent-accent"
                   />
                 </th>
               )}
               <th scope="col" className={STICKY_TH + ' w-[84px] text-left'}>
-                状态
+                {t('tools.kernel.board.col.status')}
               </th>
               <th scope="col" className={STICKY_TH + ' text-left'}>
-                题目
+                {t('tools.kernel.board.col.challenge')}
               </th>
               <th scope="col" className={STICKY_TH + ' hidden w-[68px] text-left md:table-cell'}>
-                类型
+                {t('tools.kernel.board.col.type')}
               </th>
               <th scope="col" className={STICKY_TH + ' w-[52px] text-right'}>
-                分值
+                {t('tools.kernel.board.col.score')}
               </th>
               <th scope="col" className={STICKY_TH + ' hidden w-[26%] text-left xl:table-cell'}>
-                候选 / 最后错误
+                {t('tools.kernel.board.col.candidate')}
               </th>
               <th scope="col" className={STICKY_TH + ' w-[190px] text-right'}>
-                操作
+                {t('tools.kernel.board.col.actions')}
               </th>
             </tr>
           </thead>
@@ -455,7 +467,7 @@ export function ChallengeBoard({
                           type="checkbox"
                           checked={selected.has(challenge.id)}
                           onChange={() => toggleOne(challenge.id)}
-                          aria-label={`选择 ${challenge.title}`}
+                          aria-label={t('tools.kernel.board.selectAria', { title: challenge.title })}
                           className="h-3 w-3 cursor-pointer align-middle accent-accent"
                         />
                       </td>
@@ -469,7 +481,11 @@ export function ChallengeBoard({
                           aria-hidden="true"
                         />
                         <span className="truncate text-2xs text-ink-muted">
-                          {CHALLENGE_STATUS_LABEL[challenge.status]}
+                          {t(
+                            `tools.kernel.board.status.${challenge.status}`,
+                            undefined,
+                            CHALLENGE_STATUS_LABEL[challenge.status],
+                          )}
                         </span>
                       </span>
                     </td>
@@ -507,7 +523,11 @@ export function ChallengeBoard({
                     {/* ── 类型 ── */}
                     <td className="hidden px-2 py-1 align-middle md:table-cell">
                       <span className="truncate text-2xs text-ink-faint">
-                        {CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)]}
+                        {t(
+                          `tools.kernel.board.category.${canonicalCategoryOf(challenge.canonicalCategory)}`,
+                          undefined,
+                          CANONICAL_CATEGORY_LABEL[canonicalCategoryOf(challenge.canonicalCategory)],
+                        )}
                       </span>
                     </td>
 
@@ -577,8 +597,8 @@ export function ChallengeBoard({
                             onClick={() => onSubmit(challenge)}
                             title={
                               outOfQuota
-                                ? '错误提交次数已用尽'
-                                : '打开确认弹窗，核对候选答案后再提交（提交消耗平台额度）'
+                                ? t('tools.kernel.board.submit.disabledTitle')
+                                : t('tools.kernel.board.submit.title')
                             }
                             className={cn(
                               'press inline-flex h-6 items-center gap-1 rounded-sm bg-ink px-2 text-2xs font-medium text-canvas',
@@ -587,7 +607,7 @@ export function ChallengeBoard({
                             )}
                           >
                             <ShieldCheck size={11} strokeWidth={2} aria-hidden="true" />
-                            确认
+                            {t('tools.kernel.board.submit')}
                           </button>
                         )}
 
@@ -599,8 +619,8 @@ export function ChallengeBoard({
                             title={
                               solveDisabledReason ??
                               (isResumable(challenge)
-                                ? '接着上一次的进度继续 —— 上次跑过的命令不会重跑'
-                                : '开始解这道题')
+                                ? t('tools.kernel.board.solve.resumeTitle')
+                                : t('tools.kernel.board.solve.title'))
                             }
                             className={cn(
                               'press inline-flex h-6 items-center gap-1 rounded-sm px-2 text-2xs font-medium',
@@ -612,7 +632,7 @@ export function ChallengeBoard({
                             )}
                           >
                             <Play size={10} strokeWidth={2.5} aria-hidden="true" />
-                            {solveLabel(challenge)}
+                            {t(solveLabel(challenge))}
                           </button>
                         )}
 
@@ -621,11 +641,11 @@ export function ChallengeBoard({
                             type="button"
                             disabled={busy}
                             onClick={() => onOpen(challenge)}
-                            title="打开这道题的对话：解题过程、工具调用与候选都在那里"
+                            title={t('tools.kernel.board.openTitle')}
                             className={QUIET_BUTTON}
                           >
                             <MessagesSquare size={11} strokeWidth={2} aria-hidden="true" />
-                            查看
+                            {t('tools.kernel.board.view')}
                           </button>
                         )}
 
@@ -634,11 +654,11 @@ export function ChallengeBoard({
                             type="button"
                             disabled={busy}
                             onClick={() => onCancel(challenge)}
-                            title="取消这道题（已经在跑的那一轮会跑完，但不会产出候选）"
+                            title={t('tools.kernel.board.cancelTitle')}
                             className={QUIET_BUTTON}
                           >
                             <X size={11} strokeWidth={2} aria-hidden="true" />
-                            取消
+                            {t('tools.kernel.board.cancel')}
                           </button>
                         )}
                       </div>
@@ -699,6 +719,7 @@ function ChallengeRowDetail({
   onWriteup?: (challenge: KernelChallenge) => void
   onWorkOrder?: (challenge: KernelChallenge) => void
 }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const flag = challenge.status === 'solved' ? challenge.confirmedFlag : challenge.candidateFlag
 
@@ -706,7 +727,7 @@ function ChallengeRowDetail({
     if (!flag) return
     void copyText(flag).then((ok) => {
       if (!ok) {
-        showToast({ message: '复制失败，请手动选中后按 Ctrl+C', tone: 'risk' })
+        showToast({ message: t('tools.kernel.board.copyFailed'), tone: 'risk' })
         return
       }
       setCopied(true)
@@ -730,8 +751,9 @@ function ChallengeRowDetail({
           {challenge.attachmentsReady === false && (
             <TriangleAlert size={11} strokeWidth={2} aria-hidden="true" />
           )}
-          附件 {challenge.attachments.length} 个
-          {challenge.attachmentsReady === false && ' · 还没下载到服务器，模型看不到这些文件'}
+          {t('tools.kernel.board.attachments', { n: challenge.attachments.length })}
+          {challenge.attachmentsReady === false &&
+            t('tools.kernel.board.attachmentsPending')}
         </p>
       )}
 
@@ -760,13 +782,15 @@ function ChallengeRowDetail({
             />
           )}
           <span className="shrink-0 text-2xs text-ink-muted">
-            {challenge.status === 'solved' ? '已确认的答案' : '候选答案（待确认）'}
+            {challenge.status === 'solved'
+              ? t('tools.kernel.board.confirmedAnswer')
+              : t('tools.kernel.board.candidateAnswer')}
           </span>
           <code className="mono-ui min-w-0 flex-1 break-all text-xs text-ink">{flag}</code>
           <button
             type="button"
             onClick={copyFlag}
-            aria-label="复制答案"
+            aria-label={t('tools.kernel.board.copyAnswerAria')}
             className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink"
           >
             {copied ? (
@@ -780,19 +804,29 @@ function ChallengeRowDetail({
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-ink-faint">
         <span>
-          错误提交 {challenge.wrongSubmissionCount}/{challenge.maxWrongSubmissions}
-          {outOfQuota && <span className="ml-1 text-signal-risk">已用尽</span>}
+          {t('tools.kernel.board.wrongSubmissions', {
+            used: challenge.wrongSubmissionCount,
+            max: challenge.maxWrongSubmissions,
+          })}
+          {outOfQuota && (
+            <span className="ml-1 text-signal-risk">{t('tools.kernel.board.usedUp')}</span>
+          )}
         </span>
         {challenge.environment && (
           <span className="flex items-center gap-1">
-            环境 {ENVIRONMENT_STATUS_LABEL[challenge.environment.status]}
+            {t('tools.kernel.board.environment')}{' '}
+            {t(
+              `tools.kernel.env.status.${challenge.environment.status}`,
+              undefined,
+              ENVIRONMENT_STATUS_LABEL[challenge.environment.status],
+            )}
             <button
               type="button"
               disabled={busy}
               onClick={() => onRelease(challenge)}
               className="text-ink-muted underline hover:text-ink disabled:cursor-not-allowed disabled:text-ink-faint"
             >
-              释放
+              {t('tools.kernel.board.release')}
             </button>
           </span>
         )}
@@ -806,11 +840,11 @@ function ChallengeRowDetail({
             type="button"
             disabled={busy}
             onClick={() => onWriteup(challenge)}
-            title="查看这道题的题解（Markdown）：关键步骤、过程纪要、token 消耗"
+            title={t('tools.kernel.board.writeupTitle')}
             className={OUTLINE_BUTTON}
           >
             <FileText size={11} strokeWidth={1.75} aria-hidden="true" />
-            题解
+            {t('tools.kernel.board.writeup')}
           </button>
         )}
 
@@ -819,11 +853,11 @@ function ChallengeRowDetail({
             type="button"
             disabled={busy}
             onClick={() => onWorkOrder(challenge)}
-            title="查看这次复盘产出的处置建议工单：动作、依据、风险、需要的权限"
+            title={t('tools.kernel.board.workOrderTitle')}
             className={OUTLINE_BUTTON}
           >
             <ClipboardList size={11} strokeWidth={1.75} aria-hidden="true" />
-            处置工单
+            {t('tools.kernel.board.workOrder')}
           </button>
         )}
 
@@ -833,10 +867,10 @@ function ChallengeRowDetail({
             type="button"
             disabled={busy}
             onClick={() => onSolve(challenge, false)}
-            title="丢掉上次的进度，从头开始（比如你想让它换个思路）"
+            title={t('tools.kernel.board.restartTitle')}
             className={OUTLINE_BUTTON}
           >
-            重新开始
+            {t('tools.kernel.board.restart')}
           </button>
         )}
 
@@ -850,19 +884,19 @@ function ChallengeRowDetail({
               type="button"
               disabled={busy}
               onClick={() => onSetPriority(challenge, nextPriorityUp(challenge.priority))}
-              title="让这道题在队列里更靠前。低于自动档时一步插到最前 —— 不影响正在跑的"
+              title={t('tools.kernel.board.priorityUpTitle')}
               className={OUTLINE_BUTTON}
             >
-              提前
+              {t('tools.kernel.board.priority.up')}
             </button>
             <button
               type="button"
               disabled={busy}
               onClick={() => onSetPriority(challenge, nextPriorityDown(challenge.priority))}
-              title="让这道题在队列里更靠后"
+              title={t('tools.kernel.board.priorityDownTitle')}
               className={OUTLINE_BUTTON}
             >
-              延后
+              {t('tools.kernel.board.priority.down')}
             </button>
             {challenge.priority !== 0 && (
               <span
@@ -870,13 +904,15 @@ function ChallengeRowDetail({
                 title={
                   challenge.priority >= AUTO_PRIORITY_BASE &&
                   challenge.priority < PRIORITY_MANUAL_BASE
-                    ? '「新题自动优先」给的排队加成（数值 = 1000 + 题目分值）。点「提前」可以插到所有自动题前面。'
-                    : '调度优先级，越大越先做。同优先级按先入先出。'
+                    ? t('tools.kernel.board.priority.autoTitle')
+                    : t('tools.kernel.board.priority.manualTitle')
                 }
               >
                 {challenge.priority >= AUTO_PRIORITY_BASE &&
                 challenge.priority < PRIORITY_MANUAL_BASE
-                  ? `自动 +${challenge.priority - AUTO_PRIORITY_BASE}`
+                  ? t('tools.kernel.board.priority.auto', {
+                      n: challenge.priority - AUTO_PRIORITY_BASE,
+                    })
                   : `+${challenge.priority}`}
               </span>
             )}
@@ -888,7 +924,7 @@ function ChallengeRowDetail({
             to={`/activity?scan=${encodeURIComponent(challenge.scanId)}`}
             className="ml-auto inline-flex items-center gap-1 text-2xs text-accent-strong underline hover:text-accent"
           >
-            查看解题过程
+            {t('tools.kernel.board.viewProcess')}
             <ExternalLink size={10} strokeWidth={2} aria-hidden="true" />
           </Link>
         )}

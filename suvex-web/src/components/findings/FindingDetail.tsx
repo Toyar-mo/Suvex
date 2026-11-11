@@ -496,7 +496,7 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
             <pre className="overflow-x-auto rounded-sm border border-line bg-surface-raised p-2 text-2xs leading-relaxed text-ink">
               {plan.patch.diff}
             </pre>
-            <p className="text-2xs text-signal-warn">草案，不可直接 apply：</p>
+            <p className="text-2xs text-signal-warn"><T k="findings.detail.draft"/></p>
             <ul className="flex list-disc flex-col gap-0.5 pl-4 text-2xs text-ink-faint">
               {plan.patch.caveats.map((caveat) => (
                 <li key={caveat}>{caveat}</li>
@@ -506,7 +506,7 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
         )}
         {plan.verification.length > 0 && (
           <p className="text-2xs text-ink-faint">
-            <span className="text-ink-muted">验证方式：</span>
+            <span className="text-ink-muted"><T k="findings.detail.verify"/></span>
             {plan.verification.join('；')}
           </p>
         )}

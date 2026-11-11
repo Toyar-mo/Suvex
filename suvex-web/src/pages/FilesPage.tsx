@@ -24,6 +24,8 @@ import Modal from '@/components/ui/Modal'
 import { Button, IconButton } from '@/components/ui/Button'
 import { Select } from '@/components/ui/Select'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { toApiError, type ApiError } from '@/lib/api'
 import { PERSIST_PREFIX, workspaceFileUrl } from '@/lib/workFiles'
@@ -124,7 +126,7 @@ interface RowGroup {
  * 一个组可能大于一页（5000 个文件全在同一个会话里），所以不能简单地
  * "每页 N 个组"：组要能在页边界处断开，断开的第二段标「（续）」。
  */
-function paginate(units: RowGroup[], pageSize: number): RowGroup[][] {
+function paginate(units: RowGroup[], pageSize: number, continuedSuffix: string): RowGroup[][] {
   const pages: RowGroup[][] = []
   let current: RowGroup[] = []
   let count = 0
@@ -137,7 +139,7 @@ function paginate(units: RowGroup[], pageSize: number): RowGroup[][] {
       const take = rest.slice(0, room)
       current.push({
         key: `${unit.key}#${part}`,
-        label: part === 0 ? unit.label : `${unit.label}（续）`,
+        label: part === 0 ? unit.label : `${unit.label}${continuedSuffix}`,
         rows: take,
       })
       count += take.length
@@ -168,6 +170,7 @@ function fileKeyOf(row: WorkspaceFileRow): string {
 }
 
 export default function FilesPage() {
+  const { t } = useI18n()
   const [rows, setRows] = useState<WorkspaceFileRow[]>([])
   const [status, setStatus] = useState<FilesStatus>('loading')
   const [error, setError] = useState<ApiError | null>(null)
@@ -301,8 +304,9 @@ export default function FilesPage() {
     if (groupBy === 'none') return [{ key: 'all', label: '', rows: sortedRows }]
     const map = new Map<string, RowGroup>()
     for (const row of sortedRows) {
-      const key = groupBy === 'session' ? row.sessionId : (row.project ?? '(未标项目)')
-      const label = groupBy === 'session' ? row.sessionTitle : (row.project ?? '(未标项目)')
+      const noProject = t('files.group.noProject', undefined, '(未标项目)')
+      const key = groupBy === 'session' ? row.sessionId : (row.project ?? noProject)
+      const label = groupBy === 'session' ? row.sessionTitle : (row.project ?? noProject)
       let bucket = map.get(key)
       if (!bucket) {
         bucket = { key, label, rows: [] }
@@ -311,9 +315,12 @@ export default function FilesPage() {
       bucket.rows.push(row)
     }
     return [...map.values()]
-  }, [sortedRows, groupBy])
+  }, [sortedRows, groupBy, t])
 
-  const pages = useMemo(() => paginate(units, PAGE_SIZE), [units])
+  const pages = useMemo(
+    () => paginate(units, PAGE_SIZE, t('files.group.continued', undefined, '（续）')),
+    [units, t],
+  )
   const pageCount = Math.max(1, pages.length)
   // 数据变少（筛选、删除）后页码可能越界：夹一下，不要报错也不要空白页
   const currentPage = Math.min(page, pageCount - 1)
@@ -354,9 +361,12 @@ export default function FilesPage() {
     const text = selectedRows.map((row) => `${PERSIST_PREFIX}${row.path}`).join('\n')
     try {
       await navigator.clipboard.writeText(text)
-      showToast({ tone: 'ok', message: `已复制 ${selectedRows.length} 条路径` })
+      showToast({
+        tone: 'ok',
+        message: t('files.toast.copiedPaths', { n: selectedRows.length }, `已复制 ${selectedRows.length} 条路径`),
+      })
     } catch {
-      showToast({ tone: 'risk', message: '复制失败，请手动选择。' })
+      showToast({ tone: 'risk', message: t('files.toast.copyFailed', undefined, '复制失败，请手动选择。') })
     }
   }
 
@@ -382,12 +392,19 @@ export default function FilesPage() {
     setBulkDeleting(false)
     setPendingBulkDelete(null)
     setSelected(new Set())
-    if (ok > 0) showToast({ tone: 'ok', message: `已删除 ${ok} 个文件` })
+    if (ok > 0) {
+      showToast({
+        tone: 'ok',
+        message: t('files.toast.deletedMany', { n: ok }, `已删除 ${ok} 个文件`),
+      })
+    }
     if (failures.length > 0) {
       showToast({
         tone: 'risk',
         message:
-          failures.length === 1 ? failures[0] : `${failures.length} 个文件删除失败`,
+          failures.length === 1
+            ? failures[0]
+            : t('files.toast.deleteManyFailed', { n: failures.length }, `${failures.length} 个文件删除失败`),
       })
     }
     void load(applied)
@@ -415,7 +432,10 @@ export default function FilesPage() {
       anchor.click()
       anchor.remove()
       window.setTimeout(() => URL.revokeObjectURL(url), 10_000)
-      showToast({ tone: 'ok', message: `已打包 ${selectedRows.length} 个文件` })
+      showToast({
+        tone: 'ok',
+        message: t('files.toast.zipped', { n: selectedRows.length }, `已打包 ${selectedRows.length} 个文件`),
+      })
     } catch (err) {
       showToast({ tone: 'risk', message: toApiError(err).message })
     } finally {
@@ -427,18 +447,27 @@ export default function FilesPage() {
     const value = `${PERSIST_PREFIX}${row.path}`
     try {
       await navigator.clipboard.writeText(value)
-      showToast({ tone: 'ok', message: `已复制路径：${value}` })
+      showToast({
+        tone: 'ok',
+        message: t('files.toast.copiedPath', { value }, `已复制路径：${value}`),
+      })
     } catch {
-      showToast({ tone: 'risk', message: '复制失败，请手动选择路径。' })
+      showToast({ tone: 'risk', message: t('files.toast.copyPathFailed', undefined, '复制失败，请手动选择路径。') })
     }
   }
 
   const copySessionId = async (row: WorkspaceFileRow) => {
     try {
       await navigator.clipboard.writeText(row.sessionId)
-      showToast({ tone: 'ok', message: `已复制会话 ID：${row.sessionId}` })
+      showToast({
+        tone: 'ok',
+        message: t('files.toast.copiedSession', { id: row.sessionId }, `已复制会话 ID：${row.sessionId}`),
+      })
     } catch {
-      showToast({ tone: 'risk', message: '复制失败，请手动选择会话 ID。' })
+      showToast({
+        tone: 'risk',
+        message: t('files.toast.copySessionFailed', undefined, '复制失败，请手动选择会话 ID。'),
+      })
     }
   }
 
@@ -447,7 +476,10 @@ export default function FilesPage() {
     setDeleting(true)
     try {
       await deleteFile(pendingDelete.sessionId, pendingDelete.path)
-      showToast({ tone: 'ok', message: `已删除 ${pendingDelete.name}` })
+      showToast({
+        tone: 'ok',
+        message: t('files.toast.deleted', { name: pendingDelete.name }, `已删除 ${pendingDelete.name}`),
+      })
       setPendingDelete(null)
       void load(applied)
     } catch (err) {
@@ -459,18 +491,27 @@ export default function FilesPage() {
 
   const exportCsv = () => {
     if (sortedRows.length === 0) {
-      showToast({ tone: 'info', message: '当前没有可导出的结果。' })
+      showToast({ tone: 'info', message: t('files.toast.nothingToExport', undefined, '当前没有可导出的结果。') })
       return
     }
     // 与界面同序（用户点了表头排序，导出的就是他看到的顺序）；不再单列「日期」。
-    const header = ['会话', '项目', '子路径', '文件名', '来源', '大小(字节)', '修改时间']
+    const header = [
+      t('files.csv.session', undefined, '会话'),
+      t('files.csv.project', undefined, '项目'),
+      t('files.csv.subPath', undefined, '子路径'),
+      t('files.csv.name', undefined, '文件名'),
+      t('files.csv.source', undefined, '来源'),
+      t('files.csv.size', undefined, '大小(字节)'),
+      t('files.csv.modified', undefined, '修改时间'),
+    ]
+    const workspaceLabel = t('files.source.workspace', undefined, '工作目录')
     const lines = sortedRows.map((row) =>
       [
         row.sessionTitle,
         row.project ?? '',
         subPathOf(row.path),
         row.name,
-        row.source === 'workspace' ? '工作目录' : row.source,
+        row.source === 'workspace' ? workspaceLabel : row.source,
         String(row.sizeBytes),
         formatTimestamp(row.modifiedAt),
       ]
@@ -507,7 +548,10 @@ export default function FilesPage() {
     // 工作区是按会话隔离的，这一页没有"当前会话"——必须让用户先指定一个。
     const target = resolveUploadTarget()
     if (!target) {
-      showToast({ tone: 'info', message: '先在「上传到会话」里选一个会话，再上传。' })
+      showToast({
+        tone: 'info',
+        message: t('files.toast.pickSession', undefined, '先在「上传到会话」里选一个会话，再上传。'),
+      })
       return
     }
     fileInputRef.current?.click()
@@ -543,14 +587,21 @@ export default function FilesPage() {
       setApplied(nextFilters)
       showToast({
         tone: 'ok',
-        message: `已上传 ${ok} 个文件到「${target.title || target.id}」`,
+        message: t(
+          'files.toast.uploaded',
+          { n: ok, title: target.title || target.id },
+          `已上传 ${ok} 个文件到「${target.title || target.id}」`,
+        ),
       })
       void load(nextFilters)
     }
     if (failures.length > 0) {
       showToast({
         tone: 'risk',
-        message: failures.length === 1 ? failures[0] : `${failures.length} 个文件上传失败`,
+        message:
+          failures.length === 1
+            ? failures[0]
+            : t('files.toast.uploadFailed', { n: failures.length }, `${failures.length} 个文件上传失败`),
       })
     }
   }
@@ -564,27 +615,27 @@ export default function FilesPage() {
         <section className="rounded-md border border-line bg-surface p-panel">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="flex flex-col gap-1.5 text-sm">
-              <span className="text-ink-muted">会话 ID</span>
+              <span className="text-ink-muted"><T k="files.filter.sessionId" fallback="会话 ID" /></span>
               <input
                 type="text"
                 value={draft.sessionId}
                 onChange={(e) => setDraft({ ...draft, sessionId: e.target.value })}
-                placeholder="留空表示全部"
+                placeholder={t('files.filter.anyPlaceholder', undefined, '留空表示全部')}
                 className={INPUT_CLASS}
               />
             </label>
             <label className="flex flex-col gap-1.5 text-sm">
-              <span className="text-ink-muted">项目 ID</span>
+              <span className="text-ink-muted"><T k="files.filter.projectId" fallback="项目 ID" /></span>
               <input
                 type="text"
                 value={draft.projectId}
                 onChange={(e) => setDraft({ ...draft, projectId: e.target.value })}
-                placeholder="留空表示全部"
+                placeholder={t('files.filter.anyPlaceholder', undefined, '留空表示全部')}
                 className={INPUT_CLASS}
               />
             </label>
             <label className="flex flex-col gap-1.5 text-sm">
-              <span className="text-ink-muted">文件名</span>
+              <span className="text-ink-muted"><T k="files.filter.name" fallback="文件名" /></span>
               <input
                 type="text"
                 value={draft.name}
@@ -592,17 +643,17 @@ export default function FilesPage() {
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') search()
                 }}
-                placeholder="筛选文件名"
+                placeholder={t('files.filter.namePlaceholder', undefined, '筛选文件名')}
                 className={INPUT_CLASS}
               />
             </label>
             <label className="flex flex-col gap-1.5 text-sm">
-              <span className="text-ink-muted">来源</span>
+              <span className="text-ink-muted"><T k="files.filter.source" fallback="来源" /></span>
               <Select
                 value={draft.source}
                 options={[
-                  { value: 'all', label: '全部' },
-                  { value: 'workspace', label: '工作目录' },
+                  { value: 'all', label: t('files.filter.all', undefined, '全部') },
+                  { value: 'workspace', label: t('files.source.workspace', undefined, '工作目录') },
                 ]}
                 onChange={(source) =>
                   setDraft({ ...draft, source: source as FilterDraft['source'] })
@@ -612,10 +663,13 @@ export default function FilesPage() {
             </label>
           </div>
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <label className="text-sm text-ink-muted">分组方式</label>
+            <label className="text-sm text-ink-muted"><T k="files.filter.groupBy" fallback="分组方式" /></label>
             <Select
               value={groupBy}
-              options={GROUP_OPTIONS}
+              options={GROUP_OPTIONS.map((option) => ({
+                value: option.value,
+                label: t(`files.group.${option.value}`, undefined, option.label),
+              }))}
               onChange={(value) => {
                 setPage(0)
                 setGroupBy(value as GroupBy)
@@ -624,7 +678,7 @@ export default function FilesPage() {
             />
             <Button variant="primary" size="sm" onClick={search}>
               <Search size={14} strokeWidth={2} aria-hidden="true" />
-              搜索
+              <T k="files.search" fallback="搜索" />
             </Button>
             {/* 窄屏必须换行：这一组（上传目标 + 三个按钮）在 390px 下宽 507px，
                 不换行就把整页撑出 168px 的横向滚动。宽屏才靠 ml-auto 靠右。 */}
@@ -632,32 +686,38 @@ export default function FilesPage() {
               {/* min-w-0 + 固定宽度：`<select>` 的固有宽度由最长选项决定，
                   不给宽度它会撑到 682px，整页横向滚动。 */}
               <div className="flex min-w-0 max-w-full items-center gap-1.5 text-sm">
-                <span className="whitespace-nowrap text-ink-muted">上传到会话</span>
+                <span className="whitespace-nowrap text-ink-muted">
+                  <T k="files.upload.target" fallback="上传到会话" />
+                </span>
                 <Select
                   testId="upload-target"
                   value={uploadTarget}
                   placeholder={
                     sessionsStatus === 'loading'
-                      ? '（正在加载会话…）'
+                      ? t('files.upload.loadingSessions', undefined, '（正在加载会话…）')
                       : sessionsStatus === 'error'
-                        ? '（会话列表加载失败）'
+                        ? t('files.upload.sessionsError', undefined, '（会话列表加载失败）')
                         : uploadSessions.length === 0
-                          ? '（没有会话）'
-                          : '请选择会话…'
+                          ? t('files.upload.noSessions', undefined, '（没有会话）')
+                          : t('files.upload.chooseSession', undefined, '请选择会话…')
                   }
                   options={uploadSessions.map((session) => ({
                     value: session.id,
-                    label: `${session.title || '(无标题)'} · ${session.id}`,
+                    label: `${session.title || t('files.upload.untitled', undefined, '(无标题)')} · ${session.id}`,
                   }))}
                   onChange={setUploadTarget}
                   disabled={uploading || sessionsStatus !== 'ready' || uploadSessions.length === 0}
                   title={
                     sessionsStatus === 'error'
-                      ? '会话列表加载失败 —— 点旁边的「重试」'
+                      ? t('files.upload.sessionsErrorTitle', undefined, '会话列表加载失败 —— 点旁边的「重试」')
                       : sessionsStatus === 'loading'
-                        ? '正在加载会话…'
+                        ? t('files.upload.loadingSessionsTitle', undefined, '正在加载会话…')
                         : uploadSessions.length === 0
-                          ? '还没有能上传的会话，先去对话页开一个'
+                          ? t(
+                              'files.upload.noSessionsTitle',
+                              undefined,
+                              '还没有能上传的会话，先去对话页开一个',
+                            )
                           : undefined
                   }
                   className={cn(INPUT_CLASS, 'w-40 min-w-0 sm:w-60')}
@@ -670,10 +730,10 @@ export default function FilesPage() {
                   <button
                     type="button"
                     onClick={loadUploadSessions}
-                    title={sessionsError?.message ?? '重新拉取会话列表'}
+                    title={sessionsError?.message ?? t('files.upload.retryTitle', undefined, '重新拉取会话列表')}
                     className="whitespace-nowrap text-xs text-signal-risk underline-offset-2 hover:underline"
                   >
-                    会话加载失败，重试
+                    <T k="files.upload.retry" fallback="会话加载失败，重试" />
                   </button>
                 )}
               </div>
@@ -687,15 +747,17 @@ export default function FilesPage() {
               />
               <Button variant="primary" size="sm" onClick={pickUpload} disabled={uploading}>
                 <Upload size={14} strokeWidth={2} aria-hidden="true" />
-                {uploading ? '上传中…' : '上传文件'}
+                {uploading
+                  ? t('files.upload.uploading', undefined, '上传中…')
+                  : t('files.upload.upload', undefined, '上传文件')}
               </Button>
               <Button variant="secondary" size="sm" onClick={exportCsv}>
                 <FileDown size={14} strokeWidth={2} aria-hidden="true" />
-                导出当前结果
+                <T k="files.exportCsv" fallback="导出当前结果" />
               </Button>
               <Button variant="secondary" size="sm" onClick={refresh}>
                 <RefreshCw size={14} strokeWidth={2} aria-hidden="true" />
-                刷新
+                <T k="files.refresh" fallback="刷新" />
               </Button>
             </div>
           </div>
@@ -706,10 +768,18 @@ export default function FilesPage() {
           <div className="flex items-center justify-between border-b border-line px-gutter py-2.5 text-sm text-ink-muted">
             <span>
               {truncated
-                ? `显示最近修改的 ${rows.length} 个文件（服务端上限 ${listLimit} 个）`
-                : `共 ${rows.length} 个文件`}
+                ? t(
+                    'files.summary.truncated',
+                    { n: rows.length, limit: listLimit },
+                    `显示最近修改的 ${rows.length} 个文件（服务端上限 ${listLimit} 个）`,
+                  )
+                : t('files.summary.total', { n: rows.length }, `共 ${rows.length} 个文件`)}
             </span>
-            {status === 'loading' && <span>加载中…</span>}
+            {status === 'loading' && (
+              <span>
+                <T k="files.summary.loading" fallback="加载中…" />
+              </span>
+            )}
           </div>
 
           {/*
@@ -721,20 +791,22 @@ export default function FilesPage() {
               role="status"
               className="bg-sunken border-b border-line px-gutter py-2 text-xs text-signal-warn"
             >
-              命中文件超过服务端上限，这里只列出最近修改的前 {listLimit} 个，
-              更早的文件没有显示。用上面的「会话 ID / 项目 ID / 文件名」缩小范围，
-              或直接在对应会话的对话页里找。
+              <T
+                k="files.truncatedBanner"
+                vars={{ limit: listLimit }}
+                fallback="命中文件超过服务端上限，这里只列出最近修改的前 {limit} 个，更早的文件没有显示。用上面的「会话 ID / 项目 ID / 文件名」缩小范围，或直接在对应会话的对话页里找。"
+              />
             </p>
           )}
 
           {selected.size > 0 && (
             <div className="flex flex-wrap items-center gap-2 border-b border-line bg-accent-wash/40 px-gutter py-2 text-sm">
               <span className="tabular text-ink" data-numeric>
-                已选 {selected.size} 个
+                {t('files.selected', { n: selected.size }, `已选 ${selected.size} 个`)}
               </span>
               <Button variant="secondary" size="sm" onClick={() => void copySelectedPaths()}>
                 <Copy size={14} strokeWidth={2} aria-hidden="true" />
-                复制路径
+                <T k="files.copyPaths" fallback="复制路径" />
               </Button>
               <Button
                 variant="secondary"
@@ -743,7 +815,9 @@ export default function FilesPage() {
                 onClick={() => void exportSelected()}
               >
                 <Download size={14} strokeWidth={2} aria-hidden="true" />
-                {exporting ? '打包中…' : '下载 ZIP'}
+                {exporting
+                  ? t('files.zipping', undefined, '打包中…')
+                  : t('files.downloadZip', undefined, '下载 ZIP')}
               </Button>
               <Button
                 variant="danger"
@@ -751,10 +825,10 @@ export default function FilesPage() {
                 onClick={() => setPendingBulkDelete(selectedRows)}
               >
                 <Trash2 size={14} strokeWidth={2} aria-hidden="true" />
-                删除选中
+                <T k="files.deleteSelected" fallback="删除选中" />
               </Button>
               <Button variant="ghost" size="sm" onClick={() => setSelected(new Set())}>
-                取消选择
+                <T k="files.clearSelection" fallback="取消选择" />
               </Button>
             </div>
           )}
@@ -771,8 +845,12 @@ export default function FilesPage() {
             <div className="p-gutter">
               <EmptyState
                 icon={FolderOpen}
-                title="还没有文件"
-                description="模型在对话里写进 /work/persist/ 的报告、脚本、证据会出现在这里。让它在对话里把产物写进 /work/persist/ 即可。"
+                title={t('files.empty.title', undefined, '还没有文件')}
+                description={t(
+                  'files.empty.desc',
+                  undefined,
+                  '模型在对话里写进 /work/persist/ 的报告、脚本、证据会出现在这里。让它在对话里把产物写进 /work/persist/ 即可。',
+                )}
               />
             </div>
           ) : (
@@ -786,27 +864,44 @@ export default function FilesPage() {
                         checked={allOnPageSelected}
                         indeterminate={selected.size > 0 && !allOnPageSelected}
                         onChange={toggleAllOnPage}
-                        label="全选当前页"
+                        label={t('files.selectAllPage', undefined, '全选当前页')}
                       />
                     </th>
-                    <SortableTh label="会话" sortKey="sessionTitle" sort={sort} onSort={toggleSort} />
-                    <SortableTh label="子路径" sortKey="path" sort={sort} onSort={toggleSort} />
-                    <SortableTh label="文件名" sortKey="name" sort={sort} onSort={toggleSort} />
-                    <th className="px-3 py-2 font-medium">来源</th>
                     <SortableTh
-                      label="大小"
+                      label={t('files.col.session', undefined, '会话')}
+                      sortKey="sessionTitle"
+                      sort={sort}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label={t('files.col.subPath', undefined, '子路径')}
+                      sortKey="path"
+                      sort={sort}
+                      onSort={toggleSort}
+                    />
+                    <SortableTh
+                      label={t('files.col.name', undefined, '文件名')}
+                      sortKey="name"
+                      sort={sort}
+                      onSort={toggleSort}
+                    />
+                    <th className="px-3 py-2 font-medium"><T k="files.col.source" fallback="来源" /></th>
+                    <SortableTh
+                      label={t('files.col.size', undefined, '大小')}
                       sortKey="sizeBytes"
                       sort={sort}
                       onSort={toggleSort}
                       align="right"
                     />
                     <SortableTh
-                      label="修改时间"
+                      label={t('files.col.modified', undefined, '修改时间')}
                       sortKey="modifiedAt"
                       sort={sort}
                       onSort={toggleSort}
                     />
-                    <th className="px-3 py-2 text-right font-medium">操作</th>
+                    <th className="px-3 py-2 text-right font-medium">
+                      <T k="files.actions" fallback="操作" />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -834,7 +929,11 @@ export default function FilesPage() {
               data-pagination
             >
               <span className="tabular" data-numeric>
-                第 {currentPage + 1} / {pageCount} 页 · 每页 {PAGE_SIZE} 条
+                {t(
+                  'files.pagination.status',
+                  { page: currentPage + 1, total: pageCount, size: PAGE_SIZE },
+                  `第 ${currentPage + 1} / ${pageCount} 页 · 每页 ${PAGE_SIZE} 条`,
+                )}
               </span>
               <div className="flex items-center gap-2">
                 <Button
@@ -843,7 +942,7 @@ export default function FilesPage() {
                   onClick={() => setPage(Math.max(0, currentPage - 1))}
                   disabled={currentPage === 0}
                 >
-                  上一页
+                  <T k="files.pagination.prev" fallback="上一页" />
                 </Button>
                 <Button
                   variant="secondary"
@@ -851,7 +950,7 @@ export default function FilesPage() {
                   onClick={() => setPage(Math.min(pageCount - 1, currentPage + 1))}
                   disabled={currentPage >= pageCount - 1}
                 >
-                  下一页
+                  <T k="files.pagination.next" fallback="下一页" />
                 </Button>
               </div>
             </div>
@@ -861,18 +960,26 @@ export default function FilesPage() {
 
       <ConfirmDialog
         open={pendingDelete !== null}
-        title="删除文件"
-        description={`将删除「${pendingDelete?.name ?? ''}」。这是磁盘上的真实文件，删除后无法恢复。`}
-        confirmLabel="删除"
+        title={t('files.delete.title', undefined, '删除文件')}
+        description={t(
+          'files.delete.desc',
+          { name: pendingDelete?.name ?? '' },
+          `将删除「${pendingDelete?.name ?? ''}」。这是磁盘上的真实文件，删除后无法恢复。`,
+        )}
+        confirmLabel={t('files.delete.confirm', undefined, '删除')}
         busy={deleting}
         onConfirm={() => void confirmDelete()}
         onCancel={() => setPendingDelete(null)}
       />
       <ConfirmDialog
         open={pendingBulkDelete !== null}
-        title="批量删除文件"
-        description={`将删除选中的 ${pendingBulkDelete?.length ?? 0} 个文件。这是磁盘上的真实文件，删除后无法恢复。`}
-        confirmLabel="全部删除"
+        title={t('files.bulkDelete.title', undefined, '批量删除文件')}
+        description={t(
+          'files.bulkDelete.desc',
+          { n: pendingBulkDelete?.length ?? 0 },
+          `将删除选中的 ${pendingBulkDelete?.length ?? 0} 个文件。这是磁盘上的真实文件，删除后无法恢复。`,
+        )}
+        confirmLabel={t('files.bulkDelete.confirm', undefined, '全部删除')}
         busy={bulkDeleting}
         onConfirm={() => void confirmBulkDelete()}
         onCancel={() => {
@@ -959,6 +1066,7 @@ function FilePreviewDialog({
   row: WorkspaceFileRow | null
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const [text, setText] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -978,13 +1086,17 @@ function FilePreviewDialog({
       setLoading(true)
       fetch(url, { credentials: 'include', signal: controller.signal })
         .then(async (response) => {
-          if (!response.ok) throw new Error(`读取失败（HTTP ${response.status}）`)
+          if (!response.ok) {
+            throw new Error(
+              t('files.preview.httpError', { status: response.status }, `读取失败（HTTP ${response.status}）`),
+            )
+          }
           return response.text()
         })
         .then((body) => setText(body))
         .catch((err: unknown) => {
           if (err instanceof DOMException && err.name === 'AbortError') return
-          setError(err instanceof Error ? err.message : '读取失败')
+          setError(err instanceof Error ? err.message : t('files.preview.readFailed', undefined, '读取失败'))
         })
         .finally(() => setLoading(false))
     }, 0)
@@ -992,13 +1104,13 @@ function FilePreviewDialog({
       window.clearTimeout(timer)
       controller.abort()
     }
-  }, [row, isText, tooBig, url])
+  }, [row, isText, tooBig, url, t])
 
   return (
     <Modal
       open={row !== null}
       onClose={onClose}
-      title={row?.name ?? '预览'}
+      title={row?.name ?? t('files.preview.title', undefined, '预览')}
       titleAside={
         row ? (
           <span className="text-xs text-ink-muted">
@@ -1022,7 +1134,7 @@ function FilePreviewDialog({
               }}
             >
               <Download size={14} strokeWidth={2} aria-hidden="true" />
-              下载
+              <T k="files.preview.download" fallback="下载" />
             </Button>
           </div>
         ) : null
@@ -1031,9 +1143,16 @@ function FilePreviewDialog({
       <div className="min-h-[180px]">
         {!row ? null : tooBig ? (
           <p className="text-sm text-ink-muted">
-            文件 {formatBytes(row.sizeBytes)}，超过在线预览上限（
-            {formatBytes(isImage ? PREVIEW_MAX_IMAGE_BYTES : PREVIEW_MAX_TEXT_BYTES)}），
-            请下载后查看。
+            {t(
+              'files.preview.tooBig',
+              {
+                size: formatBytes(row.sizeBytes),
+                limit: formatBytes(isImage ? PREVIEW_MAX_IMAGE_BYTES : PREVIEW_MAX_TEXT_BYTES),
+              },
+              `文件 ${formatBytes(row.sizeBytes)}，超过在线预览上限（${formatBytes(
+                isImage ? PREVIEW_MAX_IMAGE_BYTES : PREVIEW_MAX_TEXT_BYTES,
+              )}），请下载后查看。`,
+            )}
           </p>
         ) : isImage ? (
           <div className="flex max-h-[65vh] items-center justify-center overflow-auto rounded-sm bg-sunken p-2">
@@ -1041,7 +1160,9 @@ function FilePreviewDialog({
           </div>
         ) : isText ? (
           loading ? (
-            <p className="text-sm text-ink-muted">读取中…</p>
+            <p className="text-sm text-ink-muted">
+              <T k="files.preview.loading" fallback="读取中…" />
+            </p>
           ) : error ? (
             <p className="text-sm text-signal-risk">{error}</p>
           ) : (
@@ -1051,7 +1172,11 @@ function FilePreviewDialog({
           )
         ) : (
           <p className="text-sm text-ink-muted">
-            这个类型不支持在线预览{ext ? `（.${ext}）` : ''}，请下载后查看。
+            {t(
+              'files.preview.unsupported',
+              { ext: ext ? t('files.preview.ext', { ext }, `（.${ext}）`) : '' },
+              `这个类型不支持在线预览${ext ? `（.${ext}）` : ''}，请下载后查看。`,
+            )}
           </p>
         )}
       </div>
@@ -1078,6 +1203,7 @@ function FileGroupBody({
   onCopySession: (row: WorkspaceFileRow) => void
   onDelete: (row: WorkspaceFileRow) => void
 }) {
+  const { t } = useI18n()
   return (
     <>
       {label && (
@@ -1108,7 +1234,7 @@ function FileGroupBody({
                 id={`files-pick-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}`}
                 checked={isSelected}
                 onChange={() => onToggle(row)}
-                label={`选择 ${row.name}`}
+                label={t('files.row.selectLabel', { name: row.name }, `选择 ${row.name}`)}
               />
             </td>
             <td className="max-w-[200px] px-3 py-2">
@@ -1134,14 +1260,14 @@ function FileGroupBody({
               <a
                 href={workspaceFileUrl(row.sessionId, row.path)}
                 className="text-ink hover:text-accent hover:underline"
-                title={`下载 ${row.path}`}
+                title={t('files.row.downloadTitle', { path: row.path }, `下载 ${row.path}`)}
               >
                 {row.name}
               </a>
             </td>
             <td className="whitespace-nowrap px-3 py-2">
               <span className="rounded-xs border border-line px-1.5 py-0.5 text-xs text-ink-muted">
-                {row.source === 'workspace' ? '工作目录' : row.source}
+                {row.source === 'workspace' ? t('files.source.workspace', undefined, '工作目录') : row.source}
               </span>
             </td>
             <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-ink-muted">
@@ -1152,24 +1278,40 @@ function FileGroupBody({
             </td>
             <td className="whitespace-nowrap px-3 py-2">
               <div className="flex items-center justify-end gap-1">
-                <IconButton label={`预览 ${row.name}`} onClick={() => onPreview(row)}>
+                <IconButton
+                  label={t('files.row.preview', { name: row.name }, `预览 ${row.name}`)}
+                  onClick={() => onPreview(row)}
+                >
                   <Eye size={15} strokeWidth={1.75} aria-hidden="true" />
                 </IconButton>
-                <IconButton label={`复制 ${row.name} 的路径`} onClick={() => onCopy(row)}>
+                <IconButton
+                  label={t('files.row.copyPath', { name: row.name }, `复制 ${row.name} 的路径`)}
+                  onClick={() => onCopy(row)}
+                >
                   <Copy size={15} strokeWidth={1.75} aria-hidden="true" />
                 </IconButton>
-                <IconButton label={`复制会话 ID ${row.sessionId}`} onClick={() => onCopySession(row)}>
+                <IconButton
+                  label={t(
+                    'files.row.copySession',
+                    { id: row.sessionId },
+                    `复制会话 ID ${row.sessionId}`,
+                  )}
+                  onClick={() => onCopySession(row)}
+                >
                   <Hash size={15} strokeWidth={1.75} aria-hidden="true" />
                 </IconButton>
                 <IconButton
-                  label={`下载 ${row.name}`}
+                  label={t('files.row.download', { name: row.name }, `下载 ${row.name}`)}
                   onClick={() => {
                     window.location.href = workspaceFileUrl(row.sessionId, row.path)
                   }}
                 >
                   <Download size={15} strokeWidth={1.75} aria-hidden="true" />
                 </IconButton>
-                <IconButton label={`删除 ${row.name}`} onClick={() => onDelete(row)}>
+                <IconButton
+                  label={t('files.row.delete', { name: row.name }, `删除 ${row.name}`)}
+                  onClick={() => onDelete(row)}
+                >
                   <Trash2 size={15} strokeWidth={1.75} aria-hidden="true" />
                 </IconButton>
               </div>

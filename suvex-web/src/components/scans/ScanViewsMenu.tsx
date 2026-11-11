@@ -1,4 +1,5 @@
 import { Bookmark, ChevronDown, Plus, Trash2 } from 'lucide-react'
+import { T } from '@/i18n/T'
 import { useEffect, useRef, useState } from 'react'
 
 import {
@@ -191,7 +192,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
               只把按钮置灰而不说原因，用户会反复点它。
             */}
             {!hasFilter && (
-              <p className="mt-1 text-2xs text-ink-ghost">当前没有筛选条件，存下来等于没存。</p>
+              <p className="mt-1 text-2xs text-ink-ghost"><T k="scans.views.empty"/></p>
             )}
             {hasFilter && atLimit && (
               <p className="mt-1 text-2xs text-signal-warn">
@@ -199,7 +200,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
               </p>
             )}
             {hasFilter && duplicate && (
-              <p className="mt-1 text-2xs text-signal-warn">已有同名视图。</p>
+              <p className="mt-1 text-2xs text-signal-warn"><T k="scans.views.duplicate"/></p>
             )}
             {error && status === 'ready' && (
               <p className="mt-1 text-2xs text-signal-risk">{error.message}</p>
@@ -209,7 +210,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
           {/* ── 已存视图 ── */}
           <div className="max-h-72 overflow-y-auto pt-1">
             {status === 'loading' || status === 'idle' ? (
-              <p className="px-2 py-3 text-2xs text-ink-faint">加载中…</p>
+              <p className="px-2 py-3 text-2xs text-ink-faint"><T k="scans.views.loading"/></p>
             ) : status === 'error' ? (
               <div className="px-2 py-3">
                 <p className="text-2xs text-signal-risk">{error?.message ?? '加载失败'}</p>

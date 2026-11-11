@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { DangerButton, Field, TextInput } from './Field'
 import { SettingsPanel } from './SaveBar'
 import { isAdmin, useAuth } from '@/data/auth-store'
@@ -41,6 +43,7 @@ import { useEffect, useState } from 'react'
  * 删除放在次要位置、两步确认，并把被解除指派的条数回给用户。
  */
 export default function MembersPanel() {
+  const { t } = useI18n()
   const { user } = useAuth()
   const canManage = isAdmin(user)
   const { members, status, error } = useMembers()
@@ -57,16 +60,18 @@ export default function MembersPanel() {
   return (
     <SettingsPanel
       id="members"
-      title="处理人"
-      description="漏洞可以指派给这些人，并按负责人筛选。他们不是登录账号 —— 谁能登录在「用户」里管。"
+      title={t('settings.members.title')}
+      description={t('settings.members.description')}
     >
       <div className="flex flex-col gap-panel">
         {status === 'error' ? (
           <p role="alert" className="text-xs text-signal-risk">
-            {error?.message ?? '处理人名单加载失败。'}
+            {error?.message ?? t('settings.members.loadFailed')}
           </p>
         ) : status !== 'ready' ? (
-          <p className="text-xs text-ink-muted">正在加载处理人…</p>
+          <p className="text-xs text-ink-muted">
+            <T k="settings.members.loading" />
+          </p>
         ) : members.length === 0 ? (
           <div className="rounded-control border border-dashed border-line-strong px-panel py-panel text-center">
             <UserRound
@@ -75,9 +80,11 @@ export default function MembersPanel() {
               className="mx-auto text-ink-faint"
               aria-hidden="true"
             />
-            <p className="mt-1.5 text-sm text-ink-muted">还没有处理人</p>
+            <p className="mt-1.5 text-sm text-ink-muted">
+              <T k="settings.members.empty" />
+            </p>
             <p className="mt-0.5 text-xs text-ink-faint">
-              加上之后，漏洞就能指派到人，指派记录也会出现在漏洞的时间线里。
+              <T k="settings.members.emptyHint" />
             </p>
           </div>
         ) : (
@@ -88,9 +95,19 @@ export default function MembersPanel() {
               ))}
             </ul>
             <p className="text-2xs text-ink-faint">
-              共 {members.length} 人，其中 {activeCount} 人可被指派
-              {members.length >= MAX_MEMBERS && `（已达上限 ${MAX_MEMBERS} 人）`}。
-              停用的人不会出现在指派下拉里，但历史指派仍显示他们的名字。
+              <T
+                k="settings.members.countSummary"
+                vars={{
+                  total: members.length,
+                  active: activeCount,
+                  limit:
+                    members.length >= MAX_MEMBERS
+                      ? t('settings.members.limitSuffix', { max: MAX_MEMBERS })
+                      : '',
+                }}
+              />
+              {' '}
+              <T k="settings.members.countNote" />
             </p>
           </>
         )}
@@ -103,7 +120,11 @@ export default function MembersPanel() {
               type="button"
               onClick={() => setAdding(true)}
               disabled={members.length >= MAX_MEMBERS}
-              title={members.length >= MAX_MEMBERS ? `最多 ${MAX_MEMBERS} 个处理人` : '新增处理人'}
+              title={
+                members.length >= MAX_MEMBERS
+                  ? t('settings.members.limitTitle', { max: MAX_MEMBERS })
+                  : t('settings.members.addTitle')
+              }
               className={cn(
                 'rounded-control inline-flex h-9 items-center gap-1.5 self-start border border-line',
                 'px-3 text-xs text-ink-muted transition-ui duration-fast',
@@ -112,7 +133,7 @@ export default function MembersPanel() {
               )}
             >
               <Plus size={14} aria-hidden="true" />
-              新增处理人
+              <T k="settings.members.add" />
             </button>
           ))}
       </div>
@@ -125,6 +146,7 @@ export default function MembersPanel() {
 // ─────────────────────────────────────────────
 
 function MemberRow({ member, canManage }: { member: Member; canManage: boolean }) {
+  const { t } = useI18n()
   const [editing, setEditing] = useState(false)
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -138,7 +160,7 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
     const result = await action()
     setBusy(false)
     if (result.ok) done?.()
-    else setProblem(result.error ?? '操作没有成功，请稍后再试。')
+    else setProblem(result.error ?? t('settings.members.actionFailed'))
   }
 
   if (editing) {
@@ -149,7 +171,7 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
           onCancel={() => setEditing(false)}
           onSaved={() => {
             setEditing(false)
-            setNotice('已保存')
+            setNotice(t('settings.members.saved'))
           }}
         />
       </li>
@@ -176,7 +198,7 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
           {member.email && <span className="truncate text-2xs text-ink-faint">{member.email}</span>}
           {!member.active && (
             <span className="rounded-pill bg-surface-sunken px-2 py-0.5 text-2xs text-ink-faint">
-              已停用
+              <T k="settings.members.inactive" />
             </span>
           )}
         </span>
@@ -187,11 +209,11 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
               type="button"
               disabled={busy}
               onClick={() => setEditing(true)}
-              title="修改姓名或邮箱"
+              title={t('settings.members.editTitle')}
               className={rowAction}
             >
               <Pencil size={12} aria-hidden="true" />
-              编辑
+              <T k="settings.members.edit" />
             </button>
             <button
               type="button"
@@ -199,7 +221,12 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
               onClick={() =>
                 void run(
                   () => updateMember(member.id, { active: !member.active }),
-                  () => setNotice(member.active ? '已停用，历史指派保留' : '已重新启用'),
+                  () =>
+                    setNotice(
+                      member.active
+                        ? t('settings.members.deactivatedNotice')
+                        : t('settings.members.activatedNotice'),
+                    ),
                 )
               }
               className={rowAction}
@@ -209,15 +236,19 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
               ) : (
                 <Check size={12} aria-hidden="true" />
               )}
-              {member.active ? '停用' : '启用'}
+              {member.active ? (
+                <T k="settings.members.deactivate" />
+              ) : (
+                <T k="settings.members.activate" />
+              )}
             </button>
             {!confirming && (
               <button
                 type="button"
                 disabled={busy}
                 onClick={() => setConfirming(true)}
-                aria-label={`删除「${member.name}」`}
-                title="永久删除（会解除名下漏洞的指派）"
+                aria-label={t('settings.members.deleteAria', { name: member.name })}
+                title={t('settings.members.deleteTitle')}
                 className={cn(rowAction, 'hover:border-signal-risk/50 hover:text-signal-risk')}
               >
                 <Trash2 size={12} aria-hidden="true" />
@@ -234,7 +265,9 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
       */}
       {confirming && (
         <div className="flex flex-wrap items-center gap-2 pl-10 text-2xs text-ink-muted">
-          <span>删除后名下漏洞会变回「未指派」。只想让人从下拉里消失，用「停用」。</span>
+          <span>
+            <T k="settings.members.deleteWarn" />
+          </span>
           <button
             type="button"
             disabled={busy}
@@ -246,14 +279,18 @@ function MemberRow({ member, canManage }: { member: Member; canManage: boolean }
               setConfirming(false)
               if (!result.ok) setProblem(result.error)
               else if (result.unassigned > 0)
-                setNotice(`已删除，${result.unassigned} 条漏洞被解除指派`)
-              else setNotice('已删除')
+                setNotice(
+                  t('settings.members.deletedUnassigned', { n: result.unassigned }),
+                )
+              else setNotice(t('settings.members.deleted'))
             }}
             className="rounded-control inline-flex h-7 items-center bg-signal-risk/15 px-2 text-signal-risk transition-ui duration-fast hover:bg-signal-risk/25 disabled:cursor-not-allowed disabled:text-ink-faint"
           >
-            确认删除
+            <T k="settings.members.confirmDelete" />
           </button>
-          <DangerButton onClick={() => setConfirming(false)}>取消</DangerButton>
+          <DangerButton onClick={() => setConfirming(false)}>
+            <T k="settings.members.cancel" />
+          </DangerButton>
         </div>
       )}
 
@@ -275,6 +312,7 @@ const rowAction = cn(
 // ─────────────────────────────────────────────
 
 function AddMemberForm({ onDone, full }: { onDone: () => void; full: boolean }) {
+  const { t } = useI18n()
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
@@ -283,7 +321,7 @@ function AddMemberForm({ onDone, full }: { onDone: () => void; full: boolean }) 
   const submit = async () => {
     setProblem(null)
     if (!name.trim()) {
-      setProblem('请填写姓名。')
+      setProblem(t('settings.members.nameRequired'))
       return
     }
     setBusy(true)
@@ -299,23 +337,23 @@ function AddMemberForm({ onDone, full }: { onDone: () => void; full: boolean }) 
   return (
     <div className="rounded-control flex flex-col gap-3 border border-line bg-surface-raised p-3">
       <Field
-        label="姓名"
+        label={t('settings.members.nameLabel')}
         htmlFor="new-member-name"
-        help="指派下拉里显示的就是它，不能与已有的人重名。"
+        help={t('settings.members.nameHelp')}
       >
         <TextInput
           id="new-member-name"
           value={name}
           onChange={setName}
           autoComplete="off"
-          placeholder="例如 张三"
+          placeholder={t('settings.members.namePlaceholder')}
         />
       </Field>
 
       <Field
-        label="邮箱"
+        label={t('settings.members.emailLabel')}
         htmlFor="new-member-email"
-        help="可选。只用于名单里辨认同名或联系，不会发邮件。"
+        help={t('settings.members.emailHelp')}
       >
         <TextInput
           id="new-member-email"
@@ -327,7 +365,11 @@ function AddMemberForm({ onDone, full }: { onDone: () => void; full: boolean }) 
         />
       </Field>
 
-      {full && <p className="text-2xs text-signal-warn">处理人数量已达上限，先停用一些再新增。</p>}
+      {full && (
+        <p className="text-2xs text-signal-warn">
+          <T k="settings.members.full" />
+        </p>
+      )}
       {problem && <p className="text-2xs text-signal-risk">{problem}</p>}
 
       <div className="flex gap-2">
@@ -340,9 +382,11 @@ function AddMemberForm({ onDone, full }: { onDone: () => void; full: boolean }) 
             'transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
           )}
         >
-          {busy ? '正在创建…' : '创建'}
+          {busy ? <T k="settings.members.creating" /> : <T k="settings.members.create" />}
         </button>
-        <DangerButton onClick={onDone}>取消</DangerButton>
+        <DangerButton onClick={onDone}>
+          <T k="settings.members.cancel" />
+        </DangerButton>
       </div>
     </div>
   )
@@ -357,6 +401,7 @@ function EditMemberForm({
   onCancel: () => void
   onSaved: () => void
 }) {
+  const { t } = useI18n()
   const [name, setName] = useState(member.name)
   const [email, setEmail] = useState(member.email ?? '')
   const [busy, setBusy] = useState(false)
@@ -365,7 +410,7 @@ function EditMemberForm({
   const submit = async () => {
     setProblem(null)
     if (!name.trim()) {
-      setProblem('姓名不能为空。')
+      setProblem(t('settings.members.nameEmpty'))
       return
     }
     setBusy(true)
@@ -384,7 +429,7 @@ function EditMemberForm({
   return (
     <div className="flex flex-col gap-2">
       <div className="grid gap-2 sm:grid-cols-2">
-        <Field label="姓名" htmlFor={`member-name-${member.id}`}>
+        <Field label={t('settings.members.nameLabel')} htmlFor={`member-name-${member.id}`}>
           <TextInput
             id={`member-name-${member.id}`}
             value={name}
@@ -392,7 +437,11 @@ function EditMemberForm({
             autoComplete="off"
           />
         </Field>
-        <Field label="邮箱" htmlFor={`member-email-${member.id}`} help="可留空">
+        <Field
+          label={t('settings.members.emailLabel')}
+          htmlFor={`member-email-${member.id}`}
+          help={t('settings.members.emailOptional')}
+        >
           <TextInput
             id={`member-email-${member.id}`}
             type="email"
@@ -415,9 +464,11 @@ function EditMemberForm({
             'transition-ui duration-fast hover:bg-accent-strong disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
           )}
         >
-          {busy ? '正在保存…' : '保存'}
+          {busy ? <T k="settings.members.saving" /> : <T k="settings.members.save" />}
         </button>
-        <DangerButton onClick={onCancel}>取消</DangerButton>
+        <DangerButton onClick={onCancel}>
+          <T k="settings.members.cancel" />
+        </DangerButton>
       </div>
     </div>
   )

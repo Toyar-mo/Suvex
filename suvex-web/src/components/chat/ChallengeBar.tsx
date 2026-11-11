@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { copyText } from '@/lib/clipboard'
 import {
   CHALLENGE_STATUS_LABEL,
@@ -40,6 +41,7 @@ import { Link } from 'react-router-dom'
  * `submitFlag` 自己会再刷新一次 store，所以提交完这条的状态会跟着变。
  */
 export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
+  const { t } = useI18n()
   const { challenges, settings } = useKernel()
   const [pending, setPending] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -135,7 +137,7 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
             <button
               type="button"
               onClick={copyFlag}
-              aria-label="复制答案"
+              aria-label={t('chat.a11y.copyAnswer', undefined, '复制答案')}
               className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink"
             >
               {copied ? (
@@ -152,7 +154,7 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
             type="button"
             disabled={busy}
             onClick={() => setPending(true)}
-            title="打开确认弹窗，核对候选答案后再提交（提交消耗平台额度）"
+            title={t('chat.a11y.confirmHint', undefined, '打开确认弹窗，核对候选答案后再提交（提交消耗平台额度）')}
             className={cn(
               'press inline-flex h-6 shrink-0 items-center gap-1 rounded-sm bg-ink px-2 text-2xs font-medium text-canvas',
               'transition-ui duration-fast hover:bg-ink/85',

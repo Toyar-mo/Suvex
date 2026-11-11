@@ -4,6 +4,8 @@ import PasswordStrength from '@/components/ui/PasswordStrength'
 import { Button } from '@/components/ui/Button'
 import { checkPassword } from '@/data/settings'
 import { clearAuthError, setupAdmin, useAuth } from '@/data/auth-store'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { ShieldCheck } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
@@ -37,6 +39,7 @@ import type { FormEvent } from 'react'
  * 那**唯一一处实现**，这里不重写规则。
  */
 export function SetupPage() {
+  const { t } = useI18n()
   const { error, pending } = useAuth()
   const [username, setUsername] = useState('admin')
   const [password, setPassword] = useState('')
@@ -61,17 +64,17 @@ export function SetupPage() {
 
   /** 按钮为什么点不了 —— 这个项目要求禁用必须给出原因（见 WizardChrome） */
   const disabledReason = pending
-    ? '正在提交…'
+    ? t('setup.submitting')
     : username.length === 0
-      ? '请输入用户名'
+      ? t('setup.needUsername')
       : password.length === 0
-        ? '请输入口令'
+        ? t('setup.needPassword')
         : !check.acceptable
-          ? '口令强度不足，见下方要求'
+          ? t('setup.weakPassword')
           : confirm.length === 0
-            ? '请再输入一次确认'
+            ? t('setup.needConfirm')
             : mismatch
-              ? '两次输入不一致'
+              ? t('setup.mismatch')
               : null
 
   const handleSubmit = async (event: FormEvent) => {
@@ -85,8 +88,8 @@ export function SetupPage() {
 
   return (
     <AuthShell
-      title="创建管理员账号"
-      description="这是系统的第一个账号，固定是管理员 —— 它有全部权限，也可以再创建别的账号。请当作生产密码来设。"
+      title={t('setup.title')}
+      description={t('setup.desc')}
     >
       <div ref={formRef}>
         <form onSubmit={handleSubmit} className="flex flex-col gap-panel">
@@ -94,7 +97,7 @@ export function SetupPage() {
             用户名排在口令前面，与登录页同一个顺序 —— 两页的字段次序不一致
             会让"先填哪个"变成每次都要重新判断的事。
           */}
-          <Field label="用户名" htmlFor="setup-username" required help="登录时用。大小写不敏感。">
+          <Field label={t('setup.username')} htmlFor="setup-username" required help={t('setup.usernameHelp')}>
             <TextInput
               id="setup-username"
               value={username}
@@ -107,17 +110,17 @@ export function SetupPage() {
           </Field>
 
           <Field
-            label="口令"
+            label={t('setup.password')}
             htmlFor="setup-password"
             required
-            error={showHint && !check.acceptable && password.length > 0 ? '口令未满足要求' : null}
+            error={showHint && !check.acceptable && password.length > 0 ? t('setup.passwordError') : null}
           >
             <TextInput
               id="setup-password"
               type="password"
               value={password}
               onChange={setPassword}
-              placeholder="至少 12 个字符"
+              placeholder={t('setup.passwordPlaceholder')}
               autoComplete="new-password"
             />
           </Field>
@@ -126,17 +129,17 @@ export function SetupPage() {
           {password.length > 0 && <PasswordStrength check={check} />}
 
           <Field
-            label="确认口令"
+            label={t('setup.confirm')}
             htmlFor="setup-confirm"
             required
-            error={mismatch ? '两次输入不一致' : null}
+            error={mismatch ? t('setup.mismatch') : null}
           >
             <TextInput
               id="setup-confirm"
               type="password"
               value={confirm}
               onChange={setConfirm}
-              placeholder="再输入一次"
+              placeholder={t('setup.confirmPlaceholder')}
               autoComplete="new-password"
             />
           </Field>
@@ -154,11 +157,11 @@ export function SetupPage() {
               size="md"
               disabled={!canSubmit}
               loading={pending}
-              loadingLabel="正在设置…"
+              loadingLabel={t('setup.loadingLabel')}
               title={disabledReason ?? undefined}
             >
               <ShieldCheck size={14} strokeWidth={2} aria-hidden="true" />
-              设置并进入
+              <T k="setup.submit" />
             </Button>
 
             {/* 禁用必须给原因：`title` 在触屏上读不到，所以另有一行文字 */}
@@ -170,7 +173,7 @@ export function SetupPage() {
       </div>
 
       <p className="mt-panel text-2xs text-ink-faint">
-        这一步只会出现一次。设置完成后，初始化入口会自动关闭 —— 否则任何人都能重设管理员的凭据。
+        <T k="setup.footer" />
       </p>
     </AuthShell>
   )

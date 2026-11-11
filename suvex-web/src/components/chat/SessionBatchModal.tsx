@@ -1,8 +1,10 @@
 import { Button } from '@/components/ui/Button'
+import { T } from '@/i18n/T'
 import { Checkbox } from '@/components/ui/Checkbox'
 import { Modal } from '@/components/ui/Modal'
 import type { ChatSession } from '@/data/chat'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { useMemo, useState } from 'react'
 import { Select } from '@/components/ui/Select'
 
@@ -59,6 +61,7 @@ export function SessionBatchModal({
   onCreateGroup,
   onArchive,
 }: SessionBatchModalProps) {
+  const { t } = useI18n()
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [moveTo, setMoveTo] = useState<string>('')
@@ -150,8 +153,8 @@ export function SessionBatchModal({
                   setNewGroup(event.target.value)
                   setNewGroupError('')
                 }}
-                placeholder="新分组名字"
-                aria-label="新分组名字"
+                placeholder={t('chat.a11y.batchGroupPlaceholder', undefined, '新分组名字')}
+                aria-label={t('chat.a11y.batchGroupAria', undefined, '新分组名字')}
                 aria-invalid={newGroupError !== ''}
                 className={cn(
                   'h-7 w-32 rounded-sm border bg-surface px-2 text-xs text-ink',
@@ -242,8 +245,8 @@ export function SessionBatchModal({
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="按标题搜索"
-            aria-label="按标题搜索对话"
+            placeholder={t('chat.a11y.searchByTitle', undefined, '按标题搜索')}
+            aria-label={t('chat.a11y.searchTitleAria', undefined, '按标题搜索对话')}
             className="h-8 min-w-0 flex-1 rounded-sm border border-line bg-surface px-2 text-xs text-ink"
           />
           <Select
@@ -273,7 +276,7 @@ export function SessionBatchModal({
             checked={allPicked}
             indeterminate={pickedIds.length > 0 && !allPicked}
             onChange={() => toggleAll()}
-            label="全选"
+            label={t('chat.a11y.selectAll', undefined, '全选')}
           />
           <span className="text-xs text-ink-muted">
             共 {filtered.length} 条{query.trim() ? '（已过滤）' : ''}
@@ -281,7 +284,7 @@ export function SessionBatchModal({
         </div>
         <ul className="flex max-h-[46vh] flex-col gap-0.5 overflow-y-auto">
           {filtered.length === 0 && (
-            <li className="px-2 py-6 text-center text-xs text-ink-faint">没有匹配的对话。</li>
+            <li className="px-2 py-6 text-center text-xs text-ink-faint"><T k="chatmsg.noMatch"/></li>
           )}
           {filtered.map((session) => (
             <li key={session.id}>

@@ -10,6 +10,7 @@ import { loadScanHints, type ScanHint } from '@/data/scan-hints'
 import { stallInfo, type Scan } from '@/data/scan'
 import { loadScans, useScansState } from '@/data/scans-store'
 import { useActivityStream } from '@/hooks/useActivityStream'
+import { useI18n } from '@/i18n'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/cn'
 import { useEffect, useMemo, useState } from 'react'
@@ -64,6 +65,7 @@ const EMPTY_HINTS: ScanHint[] = []
 const FOCUS_HIGHLIGHT_MS = 2600
 
 export function ActivityPage() {
+  const { t } = useI18n()
   /**
    * 从 URL 读要看的扫描（Scans 页「查看活动」的落点是 `/activity?scan=<id>`）。
    *
@@ -418,7 +420,7 @@ export function ActivityPage() {
             <Link
               to="/scans"
               className="mono-ui inline-flex items-center gap-1 rounded-xs border border-line px-1.5 py-0.5 text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink"
-              title="返回扫描列表"
+              title={t('activity.toolbar.backScans')}
             >
               {scanFilter}
             </Link>
@@ -453,8 +455,8 @@ export function ActivityPage() {
             <div className="inline-flex items-center overflow-hidden rounded-xs border border-line">
               {(
                 [
-                  ['stream', '事件流'],
-                  ['timeline', '时间线'],
+                  ['stream', t('activity.view.stream')],
+                  ['timeline', t('activity.view.timeline')],
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -486,7 +488,7 @@ export function ActivityPage() {
               title={stalledScan.hint}
             >
               <AlertTriangle size={11} strokeWidth={2.25} aria-hidden="true" />
-              疑似卡死 · {stalledScan.silentLabel}
+              {t('activity.toolbar.stalled')} · {stalledScan.silentLabel}
             </span>
           )}
         </StreamToolbar>
@@ -523,7 +525,9 @@ export function ActivityPage() {
         */}
         {scanFilter && hints.length > 0 && (
           <div className="flex flex-wrap items-center gap-1 border-b border-line px-panel py-1">
-            <span className="text-2xs text-ink-faint">已补线索 {hints.length} 条：</span>
+            <span className="text-2xs text-ink-faint">
+              {t('activity.hints.summary', { n: hints.length })}
+            </span>
             {hints.slice(-4).map((h) => (
               <span
                 key={h.id}
@@ -535,11 +539,12 @@ export function ActivityPage() {
                 )}
                 title={
                   h.consumed
-                    ? `已送达模型（第 ${h.consumedTurn ?? '?'} 轮）`
-                    : '还在排队，等智能体下一轮开始时会看到'
+                    ? t('activity.hints.delivered', { n: h.consumedTurn ?? '?' })
+                    : t('activity.hints.queuedTitle')
                 }
               >
-                {h.consumed ? '已送达' : '排队中'} · {h.text}
+                {h.consumed ? t('activity.hints.deliveredShort') : t('activity.hints.queuedShort')} ·{' '}
+                {h.text}
               </span>
             ))}
           </div>
@@ -660,6 +665,7 @@ export function ActivityPage() {
  * 那个函数 60 秒以上会转成"分钟"，而这里最需要看清的恰恰是前 60 秒。
  */
 function StartupNotice({ scanId, startedAt }: { scanId: string; startedAt: string | null }) {
+  const { t } = useI18n()
   const [now, setNow] = useState(() => Date.now())
 
   useEffect(() => {
@@ -690,21 +696,21 @@ function StartupNotice({ scanId, startedAt }: { scanId: string; startedAt: strin
       </span>
 
       <p className="text-sm text-ink-muted">
-        正在启动
+        {t('activity.startup.title')}
         {elapsedSec !== null && (
           <>
             <span aria-hidden="true"> · </span>
             <span className="tabular" data-numeric>
-              已等待 {elapsedSec} 秒
+              {t('activity.startup.waited', { n: elapsedSec })}
             </span>
           </>
         )}
       </p>
 
       <p className="text-xs leading-relaxed text-ink-faint">
-        扫描进程已就绪，正在准备沙箱与第一轮分析。通常需要
-        <strong className="font-normal text-ink-muted"> 1–2 分钟 </strong>
-        才会出现第一条事件，这段时间里没有输出是正常的。
+        {t('activity.startup.bodyBefore')}
+        <strong className="font-normal text-ink-muted"> {t('activity.startup.bodyBold')} </strong>
+        {t('activity.startup.bodyAfter')}
       </p>
 
       {/*
@@ -716,7 +722,7 @@ function StartupNotice({ scanId, startedAt }: { scanId: string; startedAt: strin
       */}
       {overdue && (
         <p className="mt-tight max-w-[50ch] text-2xs leading-relaxed text-signal-warn">
-          启动超过 3 分钟仍无输出，可能不正常。可在「扫描任务」页查看这次扫描的详情与失败原因。
+          {t('activity.startup.overdue')}
         </p>
       )}
 
@@ -724,7 +730,7 @@ function StartupNotice({ scanId, startedAt }: { scanId: string; startedAt: strin
         to={`/scans?created=${encodeURIComponent(scanId)}`}
         className="mt-tight text-xs text-accent-strong underline hover:text-accent"
       >
-        查看这次扫描的状态
+        {t('activity.startup.viewStatus')}
       </Link>
     </div>
   )
@@ -744,6 +750,7 @@ function EmptyStream({
   /** 指定了扫描时，那一条的最新状态（用来区分「启动中」与「已结束」） */
   currentScan: Scan | null
 }) {
+  const { t } = useI18n()
   /*
     ★ 启动中：`running` 但一条事件都还没有。
 
@@ -758,7 +765,7 @@ function EmptyStream({
     return (
       <NoScansYet
         bordered={false}
-        description="扫描一开始，智能体的每一次工具调用、推理和发现都会实时出现在这里。"
+        description={t('activity.empty.noScansDesc')}
       />
     )
   }
@@ -768,26 +775,24 @@ function EmptyStream({
   }
 
   const headline = selectedAgentId
-    ? `${selectedAgentId} 还没有产生事件。`
+    ? t('activity.empty.agent', { id: selectedAgentId })
     : scanFilter
-      ? '这次扫描还没有产生事件。'
-      : '还没有事件。'
+      ? t('activity.empty.scan')
+      : t('activity.empty.none')
 
   return (
     <div className="flex max-w-[52ch] flex-col items-center gap-tight text-center">
       <Radio size={20} strokeWidth={1.5} className="text-ink-ghost" aria-hidden="true" />
       <p className="text-sm text-ink-muted">{headline}</p>
       <p className="text-xs text-ink-faint">
-        {scanFilter
-          ? '扫描排队结束、智能体开始工作后，事件会实时出现在这里。'
-          : '扫描一开始，智能体的每一次工具调用、推理和发现都会实时出现在这里。'}
+        {scanFilter ? t('activity.empty.scanHint') : t('activity.empty.noneHint')}
       </p>
       {scanFilter && (
         <Link
           to="/activity"
           className="mt-tight text-xs text-accent-strong underline hover:text-accent"
         >
-          查看全部扫描的活动
+          {t('activity.empty.viewAll')}
         </Link>
       )}
 
@@ -805,13 +810,13 @@ function EmptyStream({
               这里说的是"为什么这一栏是空的"，那是用户此刻唯一需要知道的事。
           */}
           <p className="mt-tight max-w-[46ch] text-2xs text-ink-faint">
-            这一栏只推送此刻起发生的事件，不重放历史。
+            {t('activity.empty.noReplay')}
           </p>
           <Link
             to={`/activity?scan=${encodeURIComponent(latestScanId)}`}
             className="text-xs text-accent-strong underline hover:text-accent"
           >
-            查看最近一次扫描的活动记录
+            {t('activity.empty.latestScan')}
           </Link>
         </>
       )}

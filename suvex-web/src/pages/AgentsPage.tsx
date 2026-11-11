@@ -13,6 +13,8 @@ import {
 import { showToast } from '@/data/toast-store'
 import { Bot, Plus, X } from 'lucide-react'
 import EmptyState from '@/components/ui/EmptyState'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { useEffect, useState } from 'react'
 
 function splitList(value: string): string[] {
@@ -23,6 +25,7 @@ function splitList(value: string): string[] {
 }
 
 export function AgentsPage() {
+  const { t } = useI18n()
   const [items, setItems] = useState<AgentProfile[]>([])
   const [loading, setLoading] = useState(true)
   const [templates, setTemplates] = useState<AgentTemplate[]>([])
@@ -83,9 +86,9 @@ export function AgentsPage() {
       setForm({ key: '', name: '', description: '', mcpServers: '', skills: '', tools: '' })
       setCreating(false)
       await reload()
-      showToast({ tone: 'ok', message: editing ? 'Agent 已更新' : 'Agent 已创建' })
+      showToast({ tone: 'ok', message: editing ? t('agents.toast.updated') : t('agents.toast.created') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '创建失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('agents.toast.createFailed') })
     } finally {
       setSaving(false)
     }
@@ -96,7 +99,7 @@ export function AgentsPage() {
       await deleteAgent(item.id)
       await reload()
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '删除失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('agents.toast.deleteFailed') })
     }
   }
 
@@ -107,14 +110,14 @@ export function AgentsPage() {
         <section className="rounded-md border border-line bg-surface p-panel">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h2 className="text-sm font-medium text-ink">Agent 清单</h2>
+              <h2 className="text-sm font-medium text-ink"><T k="agents.title" /></h2>
               <p className="mt-0.5 text-2xs text-ink-muted">
-                共 {items.length} 个 · 内置只读，自定义可增删
+                {t('agents.count', { n: items.length })}
               </p>
             </div>
             <Button variant="primary" size="sm" onClick={() => setCreating((v) => !v)}>
               <Plus className="size-3.5" strokeWidth={2} />
-              新建 Agent
+              <T k="agents.new" />
             </Button>
           </div>
 
@@ -125,28 +128,28 @@ export function AgentsPage() {
                 <TextInput id="agent-key" value={form.key} onChange={(v) => setForm({ ...form, key: v })} />
               </label>
               <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-                <span>名称</span>
+                <span><T k="agents.field.name" /></span>
                 <TextInput id="agent-name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} />
               </label>
               <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-                <span>描述</span>
+                <span><T k="agents.field.description" /></span>
                 <TextInput id="agent-desc" value={form.description} onChange={(v) => setForm({ ...form, description: v })} />
               </label>
               <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-                <span>MCP（逗号分隔）</span>
+                <span><T k="agents.field.mcp" /></span>
                 <TextInput id="agent-mcp" value={form.mcpServers} onChange={(v) => setForm({ ...form, mcpServers: v })} />
               </label>
               <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-                <span>Skill（逗号分隔）</span>
+                <span><T k="agents.field.skills" /></span>
                 <TextInput id="agent-skills" value={form.skills} onChange={(v) => setForm({ ...form, skills: v })} />
               </label>
               <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-                <span>工具（逗号分隔）</span>
+                <span><T k="agents.field.tools" /></span>
                 <TextInput id="agent-tools" value={form.tools} onChange={(v) => setForm({ ...form, tools: v })} />
               </label>
               <div className="md:col-span-3">
                 <Button variant="primary" size="sm" onClick={() => void submit()} disabled={saving}>
-                  {saving ? '保存中…' : '保存'}
+                  {saving ? t('agents.saving') : t('agents.save')}
                 </Button>
               </div>
             </div>
@@ -154,9 +157,9 @@ export function AgentsPage() {
         </section>
 
         {loading ? (
-          <p className="text-sm text-ink-muted">读取中…</p>
+          <p className="text-sm text-ink-muted"><T k="agents.loading" /></p>
         ) : items.length === 0 ? (
-          <EmptyState icon={Bot} title="没有 Agent" description="从右上角「新建 Agent」开始。" />
+          <EmptyState icon={Bot} title={t('agents.empty.title')} description={t('agents.empty.desc')} />
         ) : (
           <div className="grid grid-cols-1 gap-panel md:grid-cols-2 xl:grid-cols-3">
             {items.map((item) => (
@@ -168,19 +171,19 @@ export function AgentsPage() {
                     <code className="truncate font-mono text-2xs text-ink-faint">{item.key}</code>
                   </div>
                   <span className="shrink-0 rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted">
-                    {item.builtin ? '内置' : '自定义'}
+                    {item.builtin ? t('agents.builtin') : t('agents.custom')}
                   </span>
                   <span className="shrink-0 rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-faint">
-                    {item.kind === 'persona' ? '聊天角色' : '流程角色'}
+                    {item.kind === 'persona' ? t('agents.kind.persona') : t('agents.kind.flow')}
                   </span>
                 </div>
                 <p className="min-h-[2.5rem] text-2xs leading-relaxed text-ink-muted">
-                  {item.description || '（没有写描述）'}
+                  {item.description || t('agents.noDescription')}
                 </p>
                 <div className="mt-auto flex items-center gap-2 text-2xs text-ink-faint tabular-nums">
                   <span>MCP {item.mcpServers.length}</span>
                   <span>Skill {item.skills.length}</span>
-                  <span>工具 {item.tools.length}</span>
+                  <span>{t('agents.toolsCount', { n: item.tools.length })}</span>
                   {!item.builtin && (
                     <span className="ml-auto flex items-center gap-2">
                       <button
@@ -199,14 +202,14 @@ export function AgentsPage() {
                         }}
                         className="text-ink-faint underline-offset-2 hover:text-ink hover:underline"
                       >
-                        编辑
+                        <T k="agents.edit" />
                       </button>
                       <button
                         type="button"
                         onClick={() => void remove(item)}
                         className="text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
                       >
-                        删除
+                        <T k="agents.delete" />
                       </button>
                     </span>
                   )}
@@ -222,21 +225,21 @@ export function AgentsPage() {
           className="fixed inset-0 z-50 flex items-center justify-center bg-canvas/80 p-4"
           role="dialog"
           aria-modal="true"
-          aria-label="选一个角色"
+          aria-label={t('agents.picker.title')}
         >
           <div className="w-full max-w-3xl rounded-lg border border-line bg-surface p-panel shadow-xl">
             <div className="flex items-start justify-between gap-2">
               <div>
-                <h3 className="text-sm font-medium text-ink">选一个角色</h3>
+                <h3 className="text-sm font-medium text-ink"><T k="agents.picker.title" /></h3>
                 <p className="mt-1 text-2xs text-ink-muted">
-                  角色只改「关注什么、怎么说」，不改变权限 —— 能调哪些工具仍由执行器决定。
+                  <T k="agents.picker.desc" />
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setPickerOpen(false)}
                 className="rounded-sm p-1 text-ink-faint hover:text-ink"
-                aria-label="关闭"
+                aria-label={t('agents.close')}
               >
                 <X className="size-4" strokeWidth={1.75} />
               </button>

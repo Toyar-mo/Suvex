@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { useI18n } from '@/i18n'
 import Checkbox from '@/components/ui/Checkbox'
 import { FlagChip } from '@/components/ui/FlagChip'
@@ -656,13 +657,13 @@ const ScanRow = memo(function ScanRow({
             {scan.archivedAt && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="text-ink-muted">已归档</span>
+                <span className="text-ink-muted"><T k="scans.archived"/></span>
               </>
             )}
             {scan.deletedAt && (
               <>
                 <span aria-hidden="true">·</span>
-                <span className="text-signal-risk/80">在回收站</span>
+                <span className="text-signal-risk/80"><T k="scans.trash"/></span>
               </>
             )}
             {/* 终止方（仅在确实有值时显示） */}

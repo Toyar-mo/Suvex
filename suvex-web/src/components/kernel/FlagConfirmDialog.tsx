@@ -3,6 +3,8 @@ import { normalizeFlag, validateFlag, type KernelChallenge, type KernelSubmitMod
 import { AlertTriangle, ChevronLeft, Flag, ShieldCheck } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * ★★ 提交 flag 的确认弹窗 —— **这是整个前端最要紧的一处交互。**
  *
@@ -123,6 +125,7 @@ function FlagConfirmBody({
   onConfirm: (flag: string) => void
   onCancel: () => void
 }) {
+  const { t } = useI18n()
   const [step, setStep] = useState<'review' | 'confirm'>('review')
   /*
     ⚠️ 初始值取 `challenge.candidateFlag`（**候选**那一列，不是已确认的），
@@ -184,7 +187,7 @@ function FlagConfirmBody({
           </span>
           <div className="flex min-w-0 flex-col gap-0.5">
             <h2 id="flag-confirm-title" className="text-sm font-medium text-ink">
-              {step === 'review' ? '核对要提交的答案' : '确认提交'}
+              {step === 'review' ? t('tools.kernel.flag.reviewTitle') : t('tools.kernel.flag.confirmTitle')}
             </h2>
             {/*
               ★ 题目名必须出现。用户可能同时开着好几道题，
@@ -203,14 +206,14 @@ function FlagConfirmBody({
             {/* ── flag 输入（可编辑，默认填当前候选）── */}
             <div className="flex flex-col gap-1.5">
               <label htmlFor="flag-input" className="text-2xs font-medium text-ink">
-                要提交的答案
+                {t('tools.kernel.flag.answerLabel')}
               </label>
               {/*
                 ⚠️ 提示里**不能只提 flag**：比赛允许提交命令行 / 文件名 /
                    时间戳 / IP，而用户看到"flag"就会以为自己贴错了。
               */}
               <p className="text-2xs text-ink-faint">
-                题目要什么就填什么 —— flag、命令行、文件名、时间戳、IP 都可以。
+                {t('tools.kernel.flag.answerHint')}
               </p>
               <input
                 id="flag-input"
@@ -232,7 +235,9 @@ function FlagConfirmBody({
               {formatError && <span className="text-2xs text-signal-risk">{formatError}</span>}
               {!formatError && cleaned !== flag && flag.length > 0 && (
                 <span className="text-2xs text-ink-faint">
-                  会按 <code className="mono-ui">{cleaned}</code> 提交（去掉了包裹的引号）。
+                  {t('tools.kernel.flag.normalized.before')}{' '}
+                  <code className="mono-ui">{cleaned}</code>
+                  {t('tools.kernel.flag.normalized.after')}
                 </span>
               )}
             </div>
@@ -269,27 +274,31 @@ function FlagConfirmBody({
               />
               <div className="flex min-w-0 flex-col gap-1 text-2xs text-ink-muted">
                 <span className="text-xs text-ink">
-                  即将向 CTF2 提交 <code className="mono-ui break-all">{cleaned}</code>
+                  {t('tools.kernel.flag.step2.submitting')}{' '}
+                  <code className="mono-ui break-all">{cleaned}</code>
                 </span>
                 <span>
-                  这一步<strong className="font-medium text-ink">不可撤销</strong>。
-                  若平台判定错误，这道题的错误提交机会会从{' '}
-                  <span className="tabular text-ink">{remaining}</span> 变成{' '}
-                  <span className="tabular text-ink">{Math.max(0, remaining - 1)}</span> 次。
+                  {t('tools.kernel.flag.cost.before')}
+                  <strong className="font-medium text-ink">{t('tools.kernel.flag.cost.bold')}</strong>
+                  {t('tools.kernel.flag.cost.after')}{' '}
+                  <span className="tabular text-ink">{remaining}</span>{' '}
+                  {t('tools.kernel.flag.cost.mid')}{' '}
+                  <span className="tabular text-ink">{Math.max(0, remaining - 1)}</span>{' '}
+                  {t('tools.kernel.flag.cost.end')}
                 </span>
                 {mode === 'auto' && (
                   <span className="text-ink-faint">
-                    （当前策略是自动提交，但这次是你手工发起的。）
+                    {t('tools.kernel.flag.autoNote')}
                   </span>
                 )}
                 {outOfQuota && (
-                  <span className="text-signal-risk">机会已经用尽，后端会拒绝这次提交。</span>
+                  <span className="text-signal-risk">{t('tools.kernel.flag.quotaExhausted')}</span>
                 )}
               </div>
             </div>
 
             <details className="rounded-sm border border-line bg-surface-sunken p-2.5">
-              <summary className="cursor-pointer text-2xs text-ink-muted">再核对一遍答案</summary>
+              <summary className="cursor-pointer text-2xs text-ink-muted">{t('tools.kernel.flag.recheck')}</summary>
               <code className="mono-ui mt-1.5 block break-all text-xs text-ink">{cleaned}</code>
             </details>
           </>
@@ -307,7 +316,7 @@ function FlagConfirmBody({
               'focus:outline-none focus:ring-2 focus:ring-accent/40',
             )}
           >
-            取消
+            {t('tools.kernel.flag.cancel')}
           </button>
 
           {step === 'review' ? (
@@ -323,7 +332,7 @@ function FlagConfirmBody({
                 'disabled:cursor-not-allowed disabled:bg-accent-dim disabled:text-ink-muted disabled:hover:bg-accent-dim',
               )}
             >
-              下一步
+              {t('tools.kernel.flag.next')}
             </button>
           ) : (
             <>
@@ -333,7 +342,7 @@ function FlagConfirmBody({
                 className="inline-flex h-8 items-center gap-1 rounded-sm px-2 text-xs text-ink-muted transition-ui duration-fast hover:text-ink"
               >
                 <ChevronLeft size={12} strokeWidth={2} aria-hidden="true" />
-                返回
+                {t('tools.kernel.flag.back')}
               </button>
               <button
                 type="button"
@@ -358,7 +367,7 @@ function FlagConfirmBody({
                 )}
               >
                 <ShieldCheck size={12} strokeWidth={2} aria-hidden="true" />
-                {busy ? '提交中…' : '确认提交'}
+                {busy ? t('tools.kernel.flag.submitting') : t('tools.kernel.flag.confirm')}
               </button>
             </>
           )}
@@ -377,21 +386,24 @@ function FlagConfirmBody({
  * 真正要看的那个 flag 被淹掉。
  */
 function EvidenceSummary({ challenge }: { challenge: KernelChallenge }) {
+  const { t } = useI18n()
   const description = challenge.description?.trim()
   return (
     <div className="flex flex-col gap-1 rounded-sm border border-line bg-surface-sunken p-2.5">
-      <span className="text-2xs font-medium text-ink">这道题在说什么</span>
+      <span className="text-2xs font-medium text-ink">{t('tools.kernel.flag.evidence.heading')}</span>
       {description ? (
         <p className="line-clamp-3 text-2xs text-ink-muted">{description}</p>
       ) : (
-        <p className="text-2xs text-ink-faint">（平台没有给题面。）</p>
+        <p className="text-2xs text-ink-faint">{t('tools.kernel.flag.evidence.noDescription')}</p>
       )}
       {challenge.attachments.length > 0 && (
-        <span className="text-2xs text-ink-faint">{challenge.attachments.length} 个附件</span>
+        <span className="text-2xs text-ink-faint">
+          {t('tools.kernel.flag.evidence.attachments', { n: challenge.attachments.length })}
+        </span>
       )}
       {challenge.candidateCount > 1 && (
         <span className="text-2xs text-ink-faint">
-          本次解题共产出 {challenge.candidateCount} 个候选，这里显示的是其中一个。
+          {t('tools.kernel.flag.evidence.candidates', { n: challenge.candidateCount })}
         </span>
       )}
     </div>
@@ -400,6 +412,7 @@ function EvidenceSummary({ challenge }: { challenge: KernelChallenge }) {
 
 /** 额度提示。数字用 `tabular` 对齐，因为它是这一屏里最需要被读准的东西。 */
 function QuotaLine({ remaining, max }: { remaining: number; max: number }) {
+  const { t } = useI18n()
   const out = remaining <= 0
   return (
     <p
@@ -415,12 +428,13 @@ function QuotaLine({ remaining, max }: { remaining: number; max: number }) {
         aria-hidden="true"
       />
       {out ? (
-        <span>错误提交机会已用尽（上限 {max} 次）—— 后端会拒绝这次提交。</span>
+        <span>{t('tools.kernel.flag.quota.out', { max })}</span>
       ) : (
         <span>
-          提交后若判定错误，还剩{' '}
+          {t('tools.kernel.flag.quota.left.before')}{' '}
           <span className="tabular text-ink">{Math.max(0, remaining - 1)}</span>/
-          <span className="tabular">{max}</span> 次机会。
+          <span className="tabular">{max}</span>
+          {t('tools.kernel.flag.quota.left.after')}
         </span>
       )}
     </p>

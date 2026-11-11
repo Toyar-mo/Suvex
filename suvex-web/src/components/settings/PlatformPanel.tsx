@@ -1,7 +1,8 @@
 import { Modal } from '@/components/ui/Modal'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import {
-  PLATFORM_STATUS_LABEL,
   PLATFORM_STATUS_TONE,
   activateKernelPlatform,
   deleteKernelPlatform,
@@ -48,6 +49,7 @@ const TONE_CLASS: Record<string, string> = {
 }
 
 export function PlatformPanel() {
+  const { t } = useI18n()
   const [platforms, setPlatforms] = useState<KernelPlatform[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -61,9 +63,9 @@ export function PlatformPanel() {
       setPlatforms(await listKernelPlatforms())
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '读取平台列表失败')
+      setError(err instanceof Error ? err.message : t('settings.platform.readFailed'))
     }
-  }, [])
+  }, [t])
 
   /*
     ★ 首次加载**内联**在 effect 里，而不是调用 `refresh`。
@@ -84,23 +86,23 @@ export function PlatformPanel() {
           setError(null)
         }
       } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : '读取平台列表失败')
+        if (!cancelled) setError(err instanceof Error ? err.message : t('settings.platform.readFailed'))
       }
     })()
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [t])
 
   const handleUseBuiltin = async () => {
     setBusy(true)
     try {
       await switchToBuiltinPlatform()
       await refresh()
-      showToast({ message: '已切回内置的 CTF2 驱动', tone: 'ok' })
+      showToast({ message: t('settings.platform.builtinToast'), tone: 'ok' })
     } catch (err) {
       showToast({
-        message: err instanceof Error ? err.message : '切换失败',
+        message: err instanceof Error ? err.message : t('settings.platform.switchFailed'),
         tone: 'risk',
       })
     } finally {
@@ -114,10 +116,10 @@ export function PlatformPanel() {
     try {
       await deleteKernelPlatform(item.id)
       await refresh()
-      showToast({ message: '已删除这份平台配置', tone: 'ok' })
+      showToast({ message: t('settings.platform.deletedToast'), tone: 'ok' })
     } catch (err) {
       showToast({
-        message: err instanceof Error ? err.message : '删除失败',
+        message: err instanceof Error ? err.message : t('settings.platform.deleteFailed'),
         tone: 'risk',
       })
     } finally {
@@ -135,7 +137,7 @@ export function PlatformPanel() {
       })
     } catch (err) {
       showToast({
-        message: err instanceof Error ? err.message : '同步题目失败',
+        message: err instanceof Error ? err.message : t('settings.platform.syncFailed'),
         tone: 'risk',
       })
     } finally {
@@ -146,8 +148,8 @@ export function PlatformPanel() {
   return (
     <SettingsPanel
       id="platform"
-      title="平台接入"
-      description="CTF2 是内置的。比赛用别的 API 时，在这里填地址、凭据和接口文档，agent 会自己识别端点与字段并试跑验证。"
+      title={t('settings.platform.title')}
+      description={t('settings.platform.description')}
     >
       {error && (
         <p className="text-xs text-signal-risk">{error}</p>
@@ -156,7 +158,7 @@ export function PlatformPanel() {
       {platforms === null && !error && (
         <p className="flex items-center gap-1.5 text-xs text-ink-muted">
           <Loader2 size={12} className="animate-spin" aria-hidden="true" />
-          正在读取…
+          <T k="settings.platform.loading" />
         </p>
       )}
 
@@ -179,16 +181,18 @@ export function PlatformPanel() {
                       TONE_CLASS[PLATFORM_STATUS_TONE[item.status]],
                     )}
                   >
-                    {PLATFORM_STATUS_LABEL[item.status]}
+                    {t(`settings.platform.status.${item.status}`)}
                   </span>
                   {item.active && (
                     <span className="inline-flex items-center gap-0.5 rounded-xs border border-accent/40 px-1 text-2xs text-accent-strong">
                       <Check size={10} strokeWidth={3} aria-hidden="true" />
-                      使用中
+                      <T k="settings.platform.inUse" />
                     </span>
                   )}
                   {item.attempts > 1 && (
-                    <span className="text-2xs text-ink-faint">试了 {item.attempts} 次</span>
+                    <span className="text-2xs text-ink-faint">
+                      <T k="settings.platform.attemptCount" vars={{ n: item.attempts }} />
+                    </span>
                   )}
                 </div>
                 {item.baseUrl && (
@@ -214,7 +218,11 @@ export function PlatformPanel() {
                       'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
                     )}
                   >
-                    {item.active ? '当前使用' : '切回这个'}
+                    {item.active ? (
+                      <T k="settings.platform.current" />
+                    ) : (
+                      <T k="settings.platform.switchBack" />
+                    )}
                   </button>
                 )}
 
@@ -229,7 +237,7 @@ export function PlatformPanel() {
                       'disabled:cursor-not-allowed disabled:border-accent/20 disabled:text-ink-faint disabled:hover:border-accent/20 disabled:hover:text-ink-faint',
                     )}
                   >
-                    启用
+                    <T k="settings.platform.enable" />
                   </button>
                 )}
 
@@ -254,7 +262,7 @@ export function PlatformPanel() {
                     )}
                   >
                     <RotateCw size={11} aria-hidden="true" />
-                    同步题目
+                    <T k="settings.platform.syncChallenges" />
                   </button>
                 )}
 
@@ -265,7 +273,7 @@ export function PlatformPanel() {
                     onClick={() => {
                       void handleDelete(item)
                     }}
-                    title="删除这份配置（不影响账号里的凭据）"
+                    title={t('settings.platform.deleteTitle')}
                     className={cn(
                       'inline-flex h-7 items-center gap-1 rounded-sm border border-line px-2 text-2xs text-ink-faint',
                       'transition-ui duration-fast hover:border-signal-risk hover:text-signal-risk',
@@ -274,7 +282,7 @@ export function PlatformPanel() {
                     )}
                   >
                     <Trash2 size={11} aria-hidden="true" />
-                    删除
+                    <T k="settings.platform.delete" />
                   </button>
                 )}
               </div>
@@ -292,7 +300,7 @@ export function PlatformPanel() {
         )}
       >
         <Plus size={12} strokeWidth={2.4} aria-hidden="true" />
-        识别一个新平台
+        <T k="settings.platform.addPlatform" />
       </button>
 
       {dialog !== null && (
@@ -341,6 +349,7 @@ function PlatformDialog({
   onClose: () => void
   onDone: () => void
 }) {
+  const { t } = useI18n()
   const [baseUrl, setBaseUrl] = useState('')
   const [accessKey, setAccessKey] = useState('')
   const [document, setDocument] = useState('')
@@ -376,7 +385,7 @@ function PlatformDialog({
       const created = await draftKernelPlatform({ baseUrl, accessKey, document })
       setDraft(created)
     } catch (err) {
-      setError(err instanceof Error ? err.message : '发起识别失败')
+      setError(err instanceof Error ? err.message : t('settings.platform.startFailed'))
     } finally {
       setBusy(false)
     }
@@ -389,10 +398,10 @@ function PlatformDialog({
     setError(null)
     try {
       await activateKernelPlatform(id, { accessKey })
-      showToast({ message: '已启用这个平台', tone: 'ok' })
+      showToast({ message: t('settings.platform.activateToast'), tone: 'ok' })
       onDone()
     } catch (err) {
-      setError(err instanceof Error ? err.message : '启用失败')
+      setError(err instanceof Error ? err.message : t('settings.platform.activateFailed'))
     } finally {
       setBusy(false)
     }
@@ -405,7 +414,13 @@ function PlatformDialog({
     <Modal
       open
       onClose={onClose}
-      title={mode === 'draft' ? '识别一个新平台' : `启用「${platform?.displayName ?? ''}」`}
+      title={
+        mode === 'draft'
+          ? t('settings.platform.dialogTitleDraft')
+          : t('settings.platform.dialogTitleActivate', {
+              name: platform?.displayName ?? '',
+            })
+      }
       widthClass="max-w-2xl"
       footer={
         <div className="flex items-center justify-end gap-2">
@@ -414,7 +429,7 @@ function PlatformDialog({
             onClick={onClose}
             className="h-8 rounded-sm border border-line px-3 text-xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink"
           >
-            关闭
+            <T k="settings.platform.close" />
           </button>
           {mode === 'draft' && !draft && (
             <button
@@ -435,7 +450,7 @@ function PlatformDialog({
               ) : (
                 <RotateCw size={12} aria-hidden="true" />
               )}
-              开始识别
+              <T k="settings.platform.start" />
             </button>
           )}
           {(mode === 'activate' || draft) && (
@@ -452,7 +467,7 @@ function PlatformDialog({
               )}
             >
               {busy && <Loader2 size={12} className="animate-spin" aria-hidden="true" />}
-              启用并保存凭据
+              <T k="settings.platform.activateSave" />
             </button>
           )}
         </div>
@@ -462,26 +477,31 @@ function PlatformDialog({
         {mode === 'draft' && (
           <>
             <label className="block" htmlFor="platform-base-url">
-              <span className="mb-1 block text-xs text-ink">平台地址</span>
+              <span className="mb-1 block text-xs text-ink">
+                <T k="settings.platform.baseUrlLabel" />
+              </span>
               <input
                 id="platform-base-url"
                 value={baseUrl}
                 onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="https://比赛平台（只填域名也行，路径前缀 agent 会自己补）"
+                placeholder={t('settings.platform.baseUrlPlaceholder')}
                 className="h-9 w-full rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40"
               />
             </label>
 
             <label className="block" htmlFor="platform-doc">
               <span className="mb-1 block text-xs text-ink">
-                接口文档<span className="ml-1 text-2xs text-ink-faint">（可选，但强烈建议）</span>
+                <T k="settings.platform.docLabel" />
+                <span className="ml-1 text-2xs text-ink-faint">
+                  <T k="settings.platform.docOptional" />
+                </span>
               </span>
               <textarea
                 id="platform-doc"
                 value={document}
                 onChange={(e) => setDocument(e.target.value)}
                 rows={8}
-                placeholder="把赛事方给的 API 文档整段粘进来（Markdown / OpenAPI / curl 示例都行）。没有文档时 agent 只能靠实测推断，成功率会低一些。"
+                placeholder={t('settings.platform.docPlaceholder')}
                 className="w-full rounded-sm border border-line bg-surface-sunken p-2.5 font-mono text-2xs text-ink transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40"
               />
             </label>
@@ -492,7 +512,7 @@ function PlatformDialog({
           <span className="mb-1 block text-xs text-ink">
             AccessKey
             <span className="ml-1 text-2xs text-ink-faint">
-              （只在内存里过一遍，识别阶段不落库）
+              <T k="settings.platform.accessKeyHint" />
             </span>
           </span>
           <input
@@ -513,9 +533,11 @@ function PlatformDialog({
                 <Loader2 size={12} className="animate-spin text-ink-muted" aria-hidden="true" />
               )}
               <span className="text-xs text-ink">
-                {draft.isBuilding
-                  ? '正在识别…（探测端点 → 生成配置 → 试跑取题，最坏两分钟）'
-                  : draft.displayName}
+                {draft.isBuilding ? (
+                  <T k="settings.platform.building" />
+                ) : (
+                  draft.displayName
+                )}
               </span>
               <span
                 className={cn(
@@ -523,13 +545,13 @@ function PlatformDialog({
                   TONE_CLASS[PLATFORM_STATUS_TONE[draft.status]],
                 )}
               >
-                {PLATFORM_STATUS_LABEL[draft.status]}
+                {t(`settings.platform.status.${draft.status}`)}
               </span>
             </div>
 
             {draft.status === 'verified' && (
               <p className="text-2xs text-ink-muted">
-                已经试跑通过：这份配置**真的取到过题目**。点下面的按钮启用它。
+                <T k="settings.platform.verifiedNote" />
               </p>
             )}
 
@@ -537,7 +559,7 @@ function PlatformDialog({
               <div className="space-y-1">
                 <p className="text-2xs text-signal-risk">{draft.lastError}</p>
                 <p className="text-2xs text-ink-faint">
-                  配置生成过程中的每次失败都会带着原因重试；上面是最后一次的原因。
+                  <T k="settings.platform.lastErrorHint" />
                 </p>
               </div>
             )}

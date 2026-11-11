@@ -1,6 +1,7 @@
 import { Button } from '@/components/ui/Button'
 import { Modal } from '@/components/ui/Modal'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { useEffect, useRef, useState } from 'react'
 
 /**
@@ -48,6 +49,7 @@ export function GroupNameDialog({
   onConfirm,
   onCancel,
 }: GroupNameDialogProps) {
+  const { t } = useI18n()
   const [name, setName] = useState('')
   const [touched, setTouched] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -91,7 +93,7 @@ export function GroupNameDialog({
     <Modal
       open={open}
       onClose={onCancel}
-      title="新建分组"
+      title={t('chat.a11y.groupNew', undefined, '新建分组')}
       widthClass="max-w-sm"
       footer={
         <div className="flex items-center justify-end gap-2">
@@ -121,8 +123,8 @@ export function GroupNameDialog({
               submit()
             }
           }}
-          placeholder="例如：客户 A、HW2026、内部演练"
-          aria-label="分组名字"
+          placeholder={t('chat.a11y.groupNewPlaceholder', undefined, '例如：客户 A、HW2026、内部演练')}
+          aria-label={t('chat.a11y.groupNameAria', undefined, '分组名字')}
           aria-invalid={touched && invalid}
           className={cn(
             'h-8 rounded-sm border bg-surface px-2 text-xs text-ink',

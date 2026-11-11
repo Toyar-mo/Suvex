@@ -2,6 +2,7 @@ import { cn } from '@/lib/cn'
 import { StatusDot, type StatusTone } from '@/components/ui/StatusDot'
 import { AGENT_ROLE_LABEL, AGENT_STATUS_LABEL, type Agent, type AgentStatus } from '@/data/activity'
 import { formatRelativeTime } from '@/lib/datetime'
+import { useI18n } from '@/i18n'
 
 /**
  * 左侧的智能体名册。
@@ -44,6 +45,7 @@ export function AgentRoster({
   totalEvents,
   className,
 }: AgentRosterProps) {
+  const { t } = useI18n()
   const running = agents.filter((a) => a.status === 'running').length
 
   return (
@@ -62,7 +64,7 @@ export function AgentRoster({
     */
     <div className={cn('flex min-h-0 flex-col', className)}>
       <div className="hidden items-baseline justify-between gap-tight px-panel py-3 md:flex">
-        <h2 className="text-sm font-medium text-ink">智能体</h2>
+        <h2 className="text-sm font-medium text-ink">{t('activity.roster.title')}</h2>
         <span className="mono-ui tabular text-ink-faint" data-numeric>
           {running}/{agents.length}
         </span>
@@ -84,7 +86,7 @@ export function AgentRoster({
         />
 
         <nav
-          aria-label="智能体过滤"
+          aria-label={t('activity.roster.filterAria')}
           // 窄屏：隐藏横向滚动条（已有渐隐提示，滚动条还会占高度）
           className={cn(
             'flex gap-1.5 px-2 pb-2',
@@ -95,8 +97,8 @@ export function AgentRoster({
         >
           {/* 「全部」项 —— 默认视图，一次看完整队的交错流 */}
           <RosterRow
-            label="全部活动"
-            sublabel={`${totalEvents} 条`}
+            label={t('activity.roster.all')}
+            sublabel={t('activity.roster.count', { n: totalEvents })}
             active={selectedAgentId === null}
             onClick={() => onSelect(null)}
             tone="idle"
@@ -112,7 +114,7 @@ export function AgentRoster({
               <RosterRow
                 key={agent.id}
                 label={agent.id}
-                sublabel={`${AGENT_ROLE_LABEL[agent.role]} · ${AGENT_STATUS_LABEL[agent.status]}`}
+                sublabel={`${t(`activity.role.${agent.role}`, undefined, AGENT_ROLE_LABEL[agent.role])} · ${t(`activity.status.${agent.status}`, undefined, AGENT_STATUS_LABEL[agent.status])}`}
                 meta={agent.eventCount > 0 ? String(agent.eventCount) : undefined}
                 time={agent.eventCount > 0 ? formatRelativeTime(agent.lastActiveAt) : undefined}
                 active={selectedAgentId === agent.id}

@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { PageHeader } from '@/components/layout/AppShell'
 import { RecipesPanel } from '@/components/kernel/RecipesPanel'
 import { McpPanel } from '@/components/tools/McpPanel'
@@ -62,9 +63,9 @@ import { useEffect, useMemo, useState } from 'react'
 type TabId = 'builtin' | 'mcp' | 'recipes'
 
 const TABS: { id: TabId; label: string; hint: string }[] = [
-  { id: 'builtin', label: '内置工具', hint: '引擎能调的动作 · 可开关' },
-  { id: 'mcp', label: 'MCP 连接', hint: '外部工具服务 · 可增删' },
-  { id: 'recipes', label: '命令行配方', hint: '镜像里的二进制 · 只读' },
+  { id: 'builtin', label: 'tools.tab.builtin', hint: 'tools.tab.builtinHint' },
+  { id: 'mcp', label: 'tools.tab.mcp', hint: 'tools.tab.mcpHint' },
+  { id: 'recipes', label: 'tools.tab.recipes', hint: 'tools.tab.recipesHint' },
 ]
 
 function tabFromHash(hash: string): TabId {
@@ -119,6 +120,7 @@ function SummaryCard({
 }
 
 export function ToolsPage() {
+  const { t } = useI18n()
   const { mcp, catalog, recipes, status, error } = useTools()
   const { user } = useAuth()
   const isAdmin = user?.role === 'admin'
@@ -197,10 +199,9 @@ export function ToolsPage() {
     if (core.length > 0) {
       const names = core.map((tool) => tool.label).join('、')
       const ok = window.confirm(
-        `要关掉「${names}」？\n\n` +
-          '这些是主力工具：关掉之后，之后每一次扫描/解题的能力都会明显下降，' +
-          '而失败现场看起来会像"模型变笨了"，不容易联想到是这里关掉的。\n\n' +
-          '确定要关吗？',
+        `${t('tools.confirm.core.title', { names })}\n\n` +
+          t('tools.confirm.core.body') +
+          `\n\n${t('tools.confirm.core.question')}`,
       )
       if (!ok) return
     }
@@ -212,7 +213,7 @@ export function ToolsPage() {
       setDraftDisabled(null)
       setSavedAt(new Date().toISOString())
     } catch (err) {
-      setToolsError(err instanceof Error ? err.message : '保存失败。')
+      setToolsError(err instanceof Error ? err.message : t('tools.saveFailed'))
     } finally {
       setSavingTools(false)
     }
@@ -224,7 +225,7 @@ export function ToolsPage() {
     try {
       await saveMcpServers(servers)
     } catch (err) {
-      setMcpError(err instanceof Error ? err.message : '保存失败。')
+      setMcpError(err instanceof Error ? err.message : t('tools.saveFailed'))
     } finally {
       setSavingMcp(false)
     }
@@ -244,8 +245,8 @@ export function ToolsPage() {
           </div>
         ) : status === 'error' ? (
           <ErrorState
-            title="拿不到工具清单"
-            error={error ?? new Error('后端没有响应。')}
+            title={t('tools.error.title')}
+            error={error ?? new Error(t('tools.error.noResponse'))}
             onRetry={() => void loadTools()}
           />
         ) : (
@@ -254,44 +255,56 @@ export function ToolsPage() {
               <div className="flex items-start gap-tight rounded-sm border border-line px-3 py-2 text-sm text-ink-muted">
                 <ShieldQuestion className="mt-0.5 size-3.5 shrink-0" strokeWidth={1.75} />
                 <span>
-                  你现在的角色是<b>只读</b>：能看清单，但改不了开关。 需要调整请找管理员。
+                  {t('tools.readonly.before')}
+                  <b>{t('tools.readonly.bold')}</b>
+                  {t('tools.readonly.after')}
                 </span>
               </div>
             )}
 
             {/* ── 摘要：三层能力一眼看清 ─────────────────────── */}
-            <section aria-label="能力概览" className="grid grid-cols-2 gap-panel xl:grid-cols-3">
+            <section aria-label={t('tools.summary.aria')} className="grid grid-cols-2 gap-panel xl:grid-cols-3">
               <SummaryCard
-                label="内置工具"
+                label={t('tools.summary.builtin')}
                 value={counts.total}
-                detail={`${counts.ready} 可用 · ${counts.disabled} 已关闭${
-                  problemCount > 0 ? ` · ${problemCount} 待处理` : ''
+                detail={`${t('tools.summary.builtinDetail', {
+                  ready: counts.ready,
+                  disabled: counts.disabled,
+                })}${
+                  problemCount > 0
+                    ? ` · ${t('tools.summary.builtinProblem', { n: problemCount })}`
+                    : ''
                 }`}
                 tone={problemCount > 0 ? 'warn' : 'default'}
                 icon={<Boxes className="size-3.5" />}
               />
               <SummaryCard
-                label="MCP 连接"
+                label={t('tools.summary.mcp')}
                 value={mcp.servers.length}
                 detail={
                   mcp.servers.length === 0
-                    ? '未接外部工具'
-                    : `${mcp.servers.filter((s) => s.type === 'http').length} HTTP · ${
-                        mcp.servers.filter((s) => s.hasEnv || s.hasHeaders).length
-                      } 带凭据`
+                    ? t('tools.summary.mcpNone')
+                    : t('tools.summary.mcpDetail', {
+                        http: mcp.servers.filter((s) => s.type === 'http').length,
+                        cred: mcp.servers.filter((s) => s.hasEnv || s.hasHeaders).length,
+                      })
                 }
                 icon={<Plug className="size-3.5" />}
               />
               <SummaryCard
-                label="命令行配方"
+                label={t('tools.summary.recipes')}
                 value={recipes.recipes.length}
-                detail={`CTF 覆盖 ${coverage.ctf} · 渗透覆盖 ${coverage.pentest} · ${coverage.limited} 条写了局限`}
+                detail={t('tools.summary.recipesDetail', {
+                  ctf: coverage.ctf,
+                  pentest: coverage.pentest,
+                  limited: coverage.limited,
+                })}
                 icon={<Terminal className="size-3.5" />}
               />
             </section>
 
             {/* ── 页签 ────────────────────────────────────── */}
-            <div role="tablist" aria-label="工具分层" className="flex flex-wrap gap-1">
+            <div role="tablist" aria-label={t('tools.tablistAria')} className="flex flex-wrap gap-1">
               {TABS.map((item) => {
                 const selected = tab === item.id
                 return (
@@ -309,16 +322,16 @@ export function ToolsPage() {
                     )}
                   >
                     <span className="flex items-center gap-1.5 text-sm">
-                      {item.label}
+                      {t(item.label)}
                       {item.id === 'builtin' && dirty && (
                         <span
                           className="size-1.5 rounded-pill bg-signal-warn"
-                          title="有未保存的开关改动"
-                          aria-label="有未保存的改动"
+                          title={t('tools.dirtyTitle')}
+                          aria-label={t('tools.dirtyAria')}
                         />
                       )}
                     </span>
-                    <span className="text-2xs text-ink-faint">{item.hint}</span>
+                    <span className="text-2xs text-ink-faint">{t(item.hint)}</span>
                   </button>
                 )
               })}
@@ -338,10 +351,9 @@ export function ToolsPage() {
               <section className="rounded-md border border-line bg-surface">
                 <header className="flex flex-wrap items-start justify-between gap-tight border-b border-line px-4 py-3">
                   <div>
-                    <h2 className="text-sm font-medium text-ink">内置工具</h2>
+                    <h2 className="text-sm font-medium text-ink">{t('tools.builtin.heading')}</h2>
                     <p className="mt-1 max-w-[64ch] text-sm leading-relaxed text-ink-muted">
-                      引擎在沙箱里能调的全部动作。关掉之后，模型就真的调不动它。
-                      这里的开关不改变进程边界 —— 隔离在沙箱、URL 白名单与 hostguard 里。
+                      {t('tools.builtin.body')}
                     </p>
                   </div>
 
@@ -357,13 +369,15 @@ export function ToolsPage() {
                         disabled={!isAdmin || savingTools}
                       >
                         <RotateCcw className="size-3.5" strokeWidth={1.75} />
-                        全部开启
+                        {t('tools.enableAll')}
                       </Button>
                     )}
                     {savedAt && !dirty && (
                       <span className="flex items-center gap-1 text-xs text-ink-muted">
                         <Check className="size-3" strokeWidth={2} />
-                        已保存 · {new Date(savedAt).toLocaleTimeString('zh-CN')}
+                        {t('tools.savedAt', {
+                          time: new Date(savedAt).toLocaleTimeString('zh-CN'),
+                        })}
                       </span>
                     )}
                     <Button
@@ -372,7 +386,9 @@ export function ToolsPage() {
                       disabled={!dirty || savingTools || !isAdmin}
                     >
                       {savingTools ? <Loader2 className="size-3.5 animate-spin" /> : null}
-                      {dirty ? `保存 ${effectiveDisabled.length} 项改动` : '保存'}
+                      {dirty
+                        ? t('tools.saveCount', { n: effectiveDisabled.length })
+                        : t('tools.save')}
                     </Button>
                   </div>
                 </header>
@@ -381,7 +397,7 @@ export function ToolsPage() {
                   <input
                     value={toolQuery}
                     onChange={(event) => setToolQuery(event.target.value)}
-                    placeholder="搜索工具（名字 / 中文名 / 用途 / 默认会漏什么）"
+                    placeholder={t('tools.searchPlaceholder')}
                     className="h-8 min-w-[220px] flex-1 rounded-sm border border-line bg-surface px-2 text-sm text-ink outline-none focus:border-line-accent"
                   />
                   <button
@@ -395,7 +411,7 @@ export function ToolsPage() {
                         : 'border-line text-ink-muted hover:border-line-strong',
                     )}
                   >
-                    只看有问题的
+                    {t('tools.filterProblems')}
                     {problemCount > 0 && (
                       <span className="ml-1 text-ink-faint">{problemCount}</span>
                     )}
@@ -411,7 +427,7 @@ export function ToolsPage() {
                         : 'border-line text-ink-muted hover:border-line-strong',
                     )}
                   >
-                    只看会漏的
+                    {t('tools.filterLimited')}
                   </button>
                   {(toolQuery || onlyProblems || onlyLimited) && (
                     <button
@@ -423,7 +439,7 @@ export function ToolsPage() {
                       }}
                       className="text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
                     >
-                      清除筛选
+                      {t('tools.clearFilters')}
                     </button>
                   )}
                   <span className="text-xs text-ink-faint">
@@ -440,7 +456,7 @@ export function ToolsPage() {
 
                 {error && (
                   <div className="border-b border-line px-4 py-2 text-xs text-ink-faint">
-                    一部分数据没加载出来：{error.message}
+                    {t('tools.partialError', { message: error.message })}
                   </div>
                 )}
 
@@ -459,7 +475,7 @@ export function ToolsPage() {
                               disabled={!isAdmin || savingTools}
                               className="text-ink-faint transition-ui duration-fast hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                              全开
+                              {t('tools.groupAllOn')}
                             </button>
                             <button
                               type="button"
@@ -467,13 +483,15 @@ export function ToolsPage() {
                               disabled={!isAdmin || savingTools}
                               className="text-ink-faint transition-ui duration-fast hover:text-ink disabled:cursor-not-allowed disabled:opacity-40"
                             >
-                              全关
+                              {t('tools.groupAllOff')}
                             </button>
                           </div>
                         )}
                       </div>
                       {tools.length === 0 ? (
-                        <p className="px-4 py-2 text-xs text-ink-faint">这一栏是空的。</p>
+                        <p className="px-4 py-2 text-xs text-ink-faint">
+                          {t('tools.groupEmpty')}
+                        </p>
                       ) : (
                         <ul>
                           {tools.map((tool) => (
@@ -505,7 +523,9 @@ export function ToolsPage() {
                 )}
 
                 <footer className="border-t border-line px-4 py-2.5 text-xs leading-relaxed text-ink-faint">
-                  改动在<b>下一次任务启动时</b>生效 —— 已经跑起来的任务用的是它启动那一刻的配置。
+                  {t('tools.footer.before')}
+                  <b>{t('tools.footer.bold')}</b>
+                  {t('tools.footer.after')}
                 </footer>
               </section>
             )}

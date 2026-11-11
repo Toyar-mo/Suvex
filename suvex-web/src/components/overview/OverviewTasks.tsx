@@ -1,4 +1,5 @@
 import { scanStatusLabel } from '@/data/scan'
+import { T } from '@/i18n/T'
 import { memo, useMemo } from 'react'
 import type { Scan } from '@/data/scan'
 import { cn } from '@/lib/cn'
@@ -46,15 +47,15 @@ export const OverviewTasks = memo(function OverviewTasks({ scans }: { scans: Sca
       </div>
 
       {rows.length === 0 ? (
-        <p className="px-4 py-8 text-center text-sm text-ink-muted">暂无任务</p>
+        <p className="px-4 py-8 text-center text-sm text-ink-muted"><T k="overview.tasks.none"/></p>
       ) : (
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-2xs text-ink-faint">
-              <th className="px-4 py-2 font-normal">任务</th>
-              <th className="px-3 py-2 font-normal">状态</th>
-              <th className="px-3 py-2 font-normal">目标进度</th>
-              <th className="px-3 py-2 font-normal">最近活动</th>
+              <th className="px-4 py-2 font-normal"><T k="overview.tasks.task"/></th>
+              <th className="px-3 py-2 font-normal"><T k="overview.tasks.status"/></th>
+              <th className="px-3 py-2 font-normal"><T k="overview.tasks.progress"/></th>
+              <th className="px-3 py-2 font-normal"><T k="overview.tasks.recent"/></th>
             </tr>
           </thead>
           <tbody>

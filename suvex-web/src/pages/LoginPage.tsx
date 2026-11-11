@@ -3,6 +3,8 @@ import { Field, TextInput } from '@/components/settings/Field'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
 import { bootstrapAuth, clearAuthError, login, useAuth } from '@/data/auth-store'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { ApiError } from '@/lib/api'
 import { LogIn } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -29,6 +31,7 @@ import type { FormEvent } from 'react'
  * 排查方向会被完全带偏 —— 这也是 `auth-store` 单独给它一个 phase 的原因。
  */
 export function LoginPage() {
+  const { t } = useI18n()
   const { phase, error, pending } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -63,7 +66,7 @@ export function LoginPage() {
 
   if (phase === 'offline') {
     return (
-      <AuthShell title="连不上后端服务" description="界面已经就绪，但它需要 Suvex 后端在运行。">
+      <AuthShell title={t('login.offline.title', undefined, '连不上后端服务')} description={t('login.offline.desc', undefined, '界面已经就绪，但它需要 Suvex 后端在运行。')}>
         {/*
           ★ 这里要传一个**真的 ApiError**（`status: 0`），不能用普通 Error：
             `ErrorState` 靠 `isNetworkError` 区分"连不上"与"后端说不行"，
@@ -71,7 +74,7 @@ export function LoginPage() {
             「加载失败」+ 一个对解决问题毫无帮助的重试按钮。
         */}
         <ErrorState
-          error={new ApiError('NETWORK_ERROR', error ?? '连接不上后端服务。', 0)}
+          error={new ApiError('NETWORK_ERROR', error ?? t('login.offline.fallback', undefined, '连接不上后端服务。'), 0)}
           onRetry={() => void bootstrapAuth()}
         />
       </AuthShell>
@@ -79,7 +82,7 @@ export function LoginPage() {
   }
 
   return (
-    <AuthShell title="登录" description="输入用户名与口令继续。">
+    <AuthShell title={t('login.title', undefined, '登录')} description={t('login.desc', undefined, '输入用户名与口令继续。')}>
       <div ref={formRef}>
         <form onSubmit={handleSubmit} className="flex flex-col gap-panel">
           {/*
@@ -87,24 +90,24 @@ export function LoginPage() {
             反过来会让人先答一个身份都还没确定的问题；而且浏览器与密码管理器
             都按 username → password 的顺序自动填充，顺序反了自动填充会对不上号。
           */}
-          <Field label="用户名" htmlFor="login-username" required>
+          <Field label={t('login.username', undefined, '用户名')} htmlFor="login-username" required>
             <TextInput
               id="login-username"
               value={username}
               onChange={setUsername}
-              placeholder="输入用户名"
+              placeholder={t('login.usernamePlaceholder', undefined, '输入用户名')}
               // `username` 让密码管理器把这一栏与已存的账号关联起来
               autoComplete="username"
             />
           </Field>
 
-          <Field label="口令" htmlFor="login-password" required>
+          <Field label={t('login.password', undefined, '口令')} htmlFor="login-password" required>
             <TextInput
               id="login-password"
               type="password"
               value={password}
               onChange={setPassword}
-              placeholder="输入口令"
+              placeholder={t('login.passwordPlaceholder', undefined, '输入口令')}
               // `current-password` 而不是 `new-password`：这是登录，
               // 让密码管理器正确地"填入已存的口令"而不是"提议生成一个新的"
               autoComplete="current-password"
@@ -133,10 +136,10 @@ export function LoginPage() {
             size="md"
             disabled={!canSubmit}
             loading={pending}
-            loadingLabel="正在登录…"
+            loadingLabel={t('login.loadingLabel', undefined, '正在登录…')}
           >
             <LogIn size={14} strokeWidth={2} aria-hidden="true" />
-            登录
+            <T k="login.submit" fallback="登录" />
           </Button>
         </form>
       </div>
@@ -146,7 +149,7 @@ export function LoginPage() {
         而**被限流时用户会看到 429**。提前说一句，那条错误才不像故障。
       */}
       <p className="mt-panel text-2xs text-ink-faint">
-        连续输错会被限流（每分钟 5 次），这是防止口令被在线爆破。
+        <T k="login.rateHint" fallback="连续输错会被限流（每分钟 5 次），这是防止口令被在线爆破。" />
       </p>
     </AuthShell>
   )

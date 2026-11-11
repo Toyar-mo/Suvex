@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { DangerButton, Field, TextInput, Toggle } from './Field'
 import { Button } from '@/components/ui/Button'
 import SecretField from './SecretField'
@@ -41,9 +43,6 @@ import { Select } from '@/components/ui/Select'
  *   下方还有一行"已保存（sk-dem…0000）"把实情说全。
  *   这与主流控制台对"已保存密钥"的处理一致。
  */
-const STORED_KEY_PLACEHOLDER =
-  '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022（已保存，留空则保持不变）'
-
 /**
  * LLM Provider 配置面板。
  *
@@ -66,6 +65,7 @@ export interface ProviderPanelProps {
 }
 
 export function ProviderPanel({ accounts }: ProviderPanelProps) {
+  const { t } = useI18n()
   /** 正在编辑的账号 id。null = 没有在编辑 */
   const [editingId, setEditingId] = useState<string | null>(null)
   /** 正在新增时，用户选了哪个预设。非空表示"新增流程"处于打开状态 */
@@ -82,8 +82,8 @@ export function ProviderPanel({ accounts }: ProviderPanelProps) {
   return (
     <SettingsPanel
       id="providers"
-      title="模型服务"
-      description="扫描时的推理由这里配置的模型完成。凭据只用于服务端调用，界面不会完整回显已保存的密钥。"
+      title={t('settings.provider.title')}
+      description={t('settings.provider.description')}
     >
       <div className="flex flex-col gap-2">
         {accounts.map((account) => (
@@ -107,11 +107,13 @@ export function ProviderPanel({ accounts }: ProviderPanelProps) {
         {addingPreset ? (
           <div className="rounded-sm border border-accent/40 bg-accent-wash/40 p-3">
             <div className="mb-2 flex items-center justify-between gap-tight">
-              <span className="text-xs text-ink">新增 · {addingPreset.label}</span>
+              <span className="text-xs text-ink">
+                {t('settings.provider.addingHeader', { name: addingPreset.label })}
+              </span>
               <button
                 type="button"
                 onClick={closeAll}
-                aria-label="取消新增"
+                aria-label={t('settings.provider.cancelAdd')}
                 className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
               >
                 <X size={13} strokeWidth={2} aria-hidden="true" />
@@ -167,7 +169,7 @@ function AddProviderPicker({ onPick }: { onPick: (preset: ProviderPreset) => voi
         className="inline-flex h-9 w-fit items-center gap-1.5 rounded-sm border border-line px-3 text-xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink"
       >
         <Plus size={13} strokeWidth={2} aria-hidden="true" />
-        添加模型服务
+        <T k="settings.provider.addProvider" />
       </button>
     )
   }
@@ -175,7 +177,7 @@ function AddProviderPicker({ onPick }: { onPick: (preset: ProviderPreset) => voi
   return (
     <div className="flex flex-col gap-2 rounded-sm border border-line p-3">
       <p className="text-2xs text-ink-faint">
-        选择服务商后，模型名与接入点会自动填好，通常只需要补一个 API key。
+        <T k="settings.provider.pickerHint" />
       </p>
       <div className="flex flex-wrap gap-1.5">
         {PROVIDER_PRESETS.map((preset) => (
@@ -188,7 +190,7 @@ function AddProviderPicker({ onPick }: { onPick: (preset: ProviderPreset) => voi
             {preset.label}
             {preset.kind === 'local' && (
               <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
-                本地
+                <T k="settings.provider.local" />
               </span>
             )}
           </button>
@@ -199,7 +201,7 @@ function AddProviderPicker({ onPick }: { onPick: (preset: ProviderPreset) => voi
         onClick={() => setOpen(false)}
         className="w-fit text-2xs text-ink-faint transition-ui duration-fast hover:text-ink"
       >
-        取消
+        <T k="settings.provider.cancel" />
       </button>
     </div>
   )
@@ -226,6 +228,7 @@ function AccountRow({
   setSaveState: (state: SaveState) => void
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const [defaultState, setDefaultState] = useState<SaveState>({ kind: 'idle' })
   /**
    * 展开后把整行带进视野。
@@ -266,7 +269,11 @@ function AccountRow({
               ? 'bg-signal-ok/15 text-signal-ok'
               : 'bg-signal-warn/15 text-signal-warn',
           )}
-          title={account.verified ? '已验证可用' : (account.verifyError ?? '尚未验证')}
+          title={
+            account.verified
+              ? t('settings.provider.verifiedAvailable')
+              : (account.verifyError ?? t('settings.provider.unverified'))
+          }
         >
           {account.verified ? (
             <Check size={11} strokeWidth={2.5} aria-hidden="true" />
@@ -284,24 +291,28 @@ function AccountRow({
             )}
             {account.kind === 'local' && (
               <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
-                本地
+                <T k="settings.provider.local" />
               </span>
             )}
             {/* 默认标记 —— 总览状态条显示的就是这个模型 */}
             {account.isDefault && (
               <span className="inline-flex items-center gap-1 rounded-xs border border-accent/40 px-1 text-2xs text-accent-strong">
                 <Star size={9} strokeWidth={2.5} aria-hidden="true" />
-                默认
+                <T k="settings.provider.default" />
               </span>
             )}
           </span>
 
           <span className="flex flex-wrap items-center gap-x-2 text-2xs text-ink-faint">
             {account.verified ? (
-              <span>已验证可用</span>
+              <span>
+                <T k="settings.provider.verifiedAvailable" />
+              </span>
             ) : (
               // 未验证的原因要具体，不能只说"未验证"
-              <span className="text-signal-warn">{account.verifyError ?? '尚未验证'}</span>
+              <span className="text-signal-warn">
+                {account.verifyError ?? t('settings.provider.unverified')}
+              </span>
             )}
             {/* 凭据掩码回显 —— 直接用**服务端给的成品掩码**（如 `sk-****abcd`）。
                 它是"这里有一份凭据"的证据，而不是凭据本身。
@@ -331,7 +342,7 @@ function AccountRow({
               className="inline-flex h-7 items-center gap-1 rounded-sm px-2 text-2xs text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
             >
               <Star size={11} strokeWidth={1.75} aria-hidden="true" />
-              设为默认
+              <T k="settings.provider.setDefault" />
             </button>
           )}
 
@@ -346,7 +357,7 @@ function AccountRow({
                 : 'text-ink-muted hover:bg-surface-raised hover:text-ink',
             )}
           >
-            {editing ? '收起' : '编辑'}
+            {editing ? <T k="settings.provider.collapse" /> : <T k="settings.provider.edit" />}
           </button>
         </div>
       </div>
@@ -377,17 +388,25 @@ function AccountRow({
 /** 行内保存结果 —— 复用 SaveBar 的措辞逻辑，但形态更轻 */
 function SaveStateInline({ state }: { state: SaveState }) {
   if (state.kind === 'saved') {
-    return <span className="text-2xs text-signal-ok">已设为默认</span>
+    return (
+      <span className="text-2xs text-signal-ok">
+        <T k="settings.provider.setDefaultDone" />
+      </span>
+    )
   }
   if (state.kind === 'failed') {
     return (
       <span role="alert" className="text-2xs text-signal-risk">
-        操作失败：{state.error}
+        <T k="settings.provider.actionFailed" vars={{ message: state.error }} />
       </span>
     )
   }
   if (state.kind === 'unchanged') {
-    return <span className="text-2xs text-ink-faint">它已经是默认了</span>
+    return (
+      <span className="text-2xs text-ink-faint">
+        <T k="settings.provider.alreadyDefault" />
+      </span>
+    )
   }
   return null
 }
@@ -417,6 +436,7 @@ function AccountEditor({
   setSaveState: (state: SaveState) => void
   onDone: () => void
 }) {
+  const { t } = useI18n()
   /**
    * 草稿。
    *
@@ -493,7 +513,7 @@ function AccountEditor({
   const handleSave = async () => {
     setTouched(true)
     if (hasError) {
-      setSaveState({ kind: 'failed', error: '有字段未通过校验，请先修正' })
+      setSaveState({ kind: 'failed', error: t('settings.provider.fieldsInvalid') })
       return
     }
     if (!dirty) {
@@ -563,10 +583,13 @@ function AccountEditor({
       setModelOptions(models)
       if (models.length === 1) setDraft({ ...draft, model: models[0] })
       if (models.length === 0) {
-        showToast({ tone: 'risk', message: '接入点没有返回任何模型' })
+        showToast({ tone: 'risk', message: t('settings.provider.noModels') })
       }
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '列出模型失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.provider.listModelsFailed'),
+      })
     } finally {
       setLoadingModels(false)
     }
@@ -593,7 +616,7 @@ function AccountEditor({
   const handleVerify = async () => {
     setTouched(true)
     if (errors.apiKey || errors.baseUrl || errors.model) {
-      setVerifyResult({ kind: 'failed', error: '请先修正标红的字段' })
+      setVerifyResult({ kind: 'failed', error: t('settings.provider.fixMarkedFields') })
       return
     }
 
@@ -639,8 +662,8 @@ function AccountEditor({
         showToast({
           message:
             result.status === 'ok'
-              ? '已保存，凭据验证通过。'
-              : `已保存，但凭据没通过验证：${result.error}`,
+              ? t('settings.provider.savedVerified')
+              : t('settings.provider.savedVerifyFailed', { message: result.error }),
           tone: result.status === 'ok' ? undefined : 'risk',
         })
         return
@@ -652,7 +675,7 @@ function AccountEditor({
           : { kind: 'failed', error: result.error },
       )
     } catch {
-      setVerifyResult({ kind: 'failed', error: '验证请求失败，请检查网络后重试' })
+      setVerifyResult({ kind: 'failed', error: t('settings.provider.verifyRequestFailed') })
     } finally {
       setVerifying(false)
     }
@@ -662,7 +685,7 @@ function AccountEditor({
     <div className="flex flex-col gap-panel">
       <div className="grid gap-panel sm:grid-cols-2">
         <Field
-          label="显示名称"
+          label={t('settings.provider.labelField')}
           htmlFor={`${account.id}-label`}
           required
           /*
@@ -672,7 +695,7 @@ function AccountEditor({
             看起来像没对齐的表格。给两列同样的「标签 + 说明 + 控件」结构，
             它们自然落在同一条基线上。
           */
-          help="用于在列表与扫描配置里辨认这一条。"
+          help={t('settings.provider.labelHelp')}
           error={touched ? errors.label : null}
         >
           <TextInput
@@ -684,10 +707,10 @@ function AccountEditor({
         </Field>
 
         <Field
-          label="模型名称"
+          label={t('settings.provider.modelLabel')}
           htmlFor={`${account.id}-model`}
           required
-          help="与配置文件里的模型标识符一致，不要写中文别名。"
+          help={t('settings.provider.modelHelp')}
           error={touched ? errors.model : null}
         >
           <div className="flex flex-col gap-1.5">
@@ -709,18 +732,22 @@ function AccountEditor({
                 onClick={() => void loadModels()}
                 disabled={loadingModels}
               >
-                {loadingModels ? '读取中…' : '列出模型'}
+                {loadingModels ? (
+                  <T k="settings.provider.loadingModels" />
+                ) : (
+                  <T k="settings.provider.listModels" />
+                )}
               </Button>
             </div>
             {modelOptions.length > 0 && (
               <Select
                 value={draft.model}
                 options={[
-                  { value: '', label: '从列表选择…' },
+                  { value: '', label: t('settings.provider.selectFromList') },
                   ...modelOptions.map((model) => ({ value: model, label: model })),
                 ]}
                 onChange={(model) => setDraft({ ...draft, model })}
-                ariaLabel="可用模型"
+                ariaLabel={t('settings.provider.availableModels')}
               />
             )}
           </div>
@@ -728,9 +755,9 @@ function AccountEditor({
       </div>
 
       <Field
-        label="接入地址"
+        label={t('settings.provider.baseUrlLabel')}
         htmlFor={`${account.id}-baseurl`}
-        help="留空则使用官方默认地址。自建网关或代理时填写。"
+        help={t('settings.provider.baseUrlHelp')}
         error={touched ? errors.baseUrl : null}
         /*
           ★ 风险提示与"我已知晓风险"按钮放在**错误位置**（v0.12）。
@@ -746,7 +773,7 @@ function AccountEditor({
           id={`${account.id}-baseurl`}
           value={draft.baseUrl}
           onChange={(v) => setDraft({ ...draft, baseUrl: v })}
-          placeholder="留空使用默认地址"
+          placeholder={t('settings.provider.baseUrlPlaceholder')}
           mono
           error={touched ? errors.baseUrl : null}
         />
@@ -768,15 +795,15 @@ function AccountEditor({
         savedHint={
           // 同上一处：判据是 `hasKey`，掩码用服务端的成品
           !keyEdited && !isNew && account.hasKey
-            ? `已保存（${account.apiKeyMask}）· 如需更换请直接输入新值`
+            ? t('settings.provider.savedKeyHint', { mask: account.apiKeyMask })
             : null
         }
         placeholder={
           isNew || keyEdited
-            ? '粘贴 API key'
+            ? t('settings.provider.pasteApiKey')
             : account.hasKey
-              ? STORED_KEY_PLACEHOLDER
-              : '粘贴 API key'
+              ? t('settings.provider.storedKeyPlaceholder')
+              : t('settings.provider.pasteApiKey')
         }
         hint={
           PROVIDER_PRESETS.find((p) => p.id.startsWith(account.id.split('_')[1] ?? ''))?.keyHint
@@ -784,15 +811,15 @@ function AccountEditor({
         error={touched ? errors.apiKey : null}
         help={
           draft.kind === 'local'
-            ? '本地服务通常不需要 API key，留空即可。'
-            : '密钥只用于服务端调用，保存后不再完整回显。'
+            ? t('settings.provider.keyHelpLocal')
+            : t('settings.provider.keyHelpRemote')
         }
       />
 
       <Toggle
         id={`${account.id}-default`}
-        label="设为默认模型"
-        hint="总览状态条与未指定模型的扫描会使用它。全部账号中只有一个默认。"
+        label={t('settings.provider.setDefaultLabel')}
+        hint={t('settings.provider.setDefaultHint')}
         checked={draft.isDefault}
         onChange={(v) => setDraft({ ...draft, isDefault: v })}
       />
@@ -816,13 +843,17 @@ function AccountEditor({
             ) : (
               <ShieldCheck size={12} strokeWidth={2} aria-hidden="true" />
             )}
-            {verifying ? '正在验证…' : '验证凭据'}
+            {verifying ? (
+              <T k="settings.provider.verifying" />
+            ) : (
+              <T k="settings.provider.verify" />
+            )}
           </button>
 
           {/* 验证结果与保存结果分开展示 —— 它们失败的含义不同 */}
           {verifyResult.kind === 'saved' && (
             <span role="status" className="text-2xs text-signal-ok">
-              凭据可用，验证通过
+              <T k="settings.provider.verifyPassed" />
             </span>
           )}
           {verifyResult.kind === 'failed' && (
@@ -837,12 +868,16 @@ function AccountEditor({
           dirty={dirty}
           onSave={handleSave}
           onReset={handleReset}
-          saveLabel={isNew ? '添加' : '保存'}
+          saveLabel={isNew ? t('settings.provider.add') : t('settings.provider.save')}
           note={
             !isNew ? (
               <span className="flex flex-wrap items-center gap-tight">
-                <span>删除这个 provider 不会影响已完成的扫描记录。</span>
-                <DangerButton onClick={handleDelete}>删除此配置</DangerButton>
+                <span>
+                  <T k="settings.provider.deleteNote" />
+                </span>
+                <DangerButton onClick={handleDelete}>
+                  <T k="settings.provider.deleteConfig" />
+                </DangerButton>
               </span>
             ) : null
           }

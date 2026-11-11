@@ -9,6 +9,8 @@ import { copyText } from '@/lib/clipboard'
 import { Check, Copy, ExternalLink, Loader2, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 题目环境的状态徽标 + 访问入口。
  *
@@ -41,11 +43,12 @@ export function EnvironmentStatus({
   /** 卡片上的紧凑形态：只显示徽标 + 入口，不套外框 */
   compact?: boolean
 }) {
+  const { t } = useI18n()
   if (!environment) {
     return (
       <span className="inline-flex items-center gap-1.5 text-2xs text-ink-faint">
         <span className="h-1.5 w-1.5 shrink-0 rounded-pill bg-ink-ghost" aria-hidden="true" />
-        环境未启动
+        {t('tools.kernel.env.notStarted')}
       </span>
     )
   }
@@ -67,10 +70,14 @@ export function EnvironmentStatus({
       <div className="flex flex-wrap items-center gap-x-tight gap-y-1">
         <StatusBadge status={status} />
         {environment.pollCount > 0 && (
-          <span className="tabular text-2xs text-ink-faint">轮询 {environment.pollCount} 次</span>
+          <span className="tabular text-2xs text-ink-faint">
+            {t('tools.kernel.env.polling', { n: environment.pollCount })}
+          </span>
         )}
         {urls.length > 1 && (
-          <span className="tabular text-2xs text-ink-faint">{urls.length} 个入口</span>
+          <span className="tabular text-2xs text-ink-faint">
+            {t('tools.kernel.env.entries', { n: urls.length })}
+          </span>
         )}
         {onRelease && status === 'ready' && (
           <button
@@ -78,7 +85,7 @@ export function EnvironmentStatus({
             onClick={onRelease}
             className="ml-auto text-2xs text-ink-muted underline transition-ui duration-fast hover:text-ink"
           >
-            释放环境
+            {t('tools.kernel.env.release')}
           </button>
         )}
       </div>
@@ -113,6 +120,7 @@ export function EnvironmentStatus({
 }
 
 function StatusBadge({ status }: { status: KernelEnvironmentStatus }) {
+  const { t } = useI18n()
   const spinning = status === 'starting'
   return (
     <span
@@ -141,7 +149,7 @@ function StatusBadge({ status }: { status: KernelEnvironmentStatus }) {
       {spinning ? (
         <Loader2 size={10} strokeWidth={2} className="animate-spin" aria-hidden="true" />
       ) : null}
-      {ENVIRONMENT_STATUS_LABEL[status]}
+      {t(`tools.kernel.env.status.${status}`, undefined, ENVIRONMENT_STATUS_LABEL[status])}
     </span>
   )
 }
@@ -155,6 +163,7 @@ function StatusBadge({ status }: { status: KernelEnvironmentStatus }) {
  * Referer 也去掉 —— 我们这一页的 URL 里可能有 query（比如题目 id）。
  */
 function AccessUrl({ url }: { url: string }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
 
   const copy = () => {
@@ -163,7 +172,7 @@ function AccessUrl({ url }: { url: string }) {
     // 见 `@/lib/clipboard` 的说明。
     void copyText(url).then((ok) => {
       if (!ok) {
-        showToast({ message: '复制失败，请手动选中后按 Ctrl+C', tone: 'risk' })
+        showToast({ message: t('tools.kernel.env.copyFailed'), tone: 'risk' })
         return
       }
       setCopied(true)
@@ -179,7 +188,7 @@ function AccessUrl({ url }: { url: string }) {
       <button
         type="button"
         onClick={copy}
-        aria-label={`复制 ${url}`}
+        aria-label={t('tools.kernel.env.copyAria', { url })}
         className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink"
       >
         {copied ? (
@@ -192,7 +201,7 @@ function AccessUrl({ url }: { url: string }) {
         href={url}
         target="_blank"
         rel="noreferrer noopener"
-        aria-label={`在新标签打开 ${url}`}
+        aria-label={t('tools.kernel.env.openAria', { url })}
         className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-accent-strong"
       >
         <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />

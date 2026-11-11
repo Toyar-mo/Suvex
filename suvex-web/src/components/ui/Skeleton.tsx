@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 
 /**
  * 骨架块 —— 加载态的统一积木。
@@ -53,7 +54,7 @@ export function SkeletonRows({ rows = 3, rowClassName = 'h-16', className }: Ske
       aria-live="polite"
       aria-busy="true"
     >
-      <span className="sr-only">正在加载</span>
+      <span className="sr-only"><T k="ui.loading"/></span>
       {Array.from({ length: rows }, (_, index) => (
         <Skeleton key={index} className={cn('rounded-md bg-surface', rowClassName)} />
       ))}

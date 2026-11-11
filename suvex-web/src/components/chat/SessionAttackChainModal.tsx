@@ -9,6 +9,7 @@
  */
 
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { Modal } from '@/components/ui/Modal'
 import { buildAttackChain, summarizeChain, type AttackStep } from '@/lib/attackChain'
 import type { ChatMessage } from '@/data/chat'
@@ -38,6 +39,7 @@ export function SessionAttackChainModal({
   loading = false,
   error = null,
 }: SessionAttackChainModalProps) {
+  const { t } = useI18n()
   const steps = buildAttackChain(messages)
   const summary = summarizeChain(steps)
 
@@ -99,7 +101,7 @@ export function SessionAttackChainModal({
                     </span>
                     <span className={cn('text-xs font-medium', tone.text)}>{step.label}</span>
                     {step.failed && (
-                      <span className="text-2xs text-signal-risk" title="这一步失败了">
+                      <span className="text-2xs text-signal-risk" title={t('chat.a11y.stepFailed', undefined, '这一步失败了')}>
                         失败
                       </span>
                     )}

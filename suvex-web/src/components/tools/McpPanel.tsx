@@ -14,6 +14,7 @@ import {
 import { AlertCircle, Check, Loader2, Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import { Select } from '@/components/ui/Select'
+import { useI18n } from '@/i18n'
 
 /**
  * MCP 连接的管理区块。
@@ -95,6 +96,7 @@ function draftOf(server: McpServer): McpServerDraft {
 }
 
 export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelProps) {
+  const { t } = useI18n()
   /** 正在编辑的草稿；`null` = 没在编辑。 */
   const [draft, setDraft] = useState<McpServerDraft | null>(null)
   /** 编辑的是哪一条（`null` = 新增）。用名字标识，因为名字是唯一键。 */
@@ -128,7 +130,10 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
   >({})
 
   async function testSaved(server: McpServer) {
-    setRowTests((prev) => ({ ...prev, [server.name]: { status: 'testing', text: '正在试连…' } }))
+    setRowTests((prev) => ({
+      ...prev,
+      [server.name]: { status: 'testing', text: t('tools.mcp.testConnecting') },
+    }))
     try {
       const result = await onTest(draftOf(server))
       setRowTests((prev) => ({
@@ -136,18 +141,18 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
         [server.name]: result.ok
           ? {
               status: 'ok',
-              text: `连通 · ${result.tools.length} 个工具${
-                result.elapsedMs ? ` · ${result.elapsedMs} ms` : ''
-              }`,
+              text:
+                t('tools.mcp.testOkTools', { n: result.tools.length }) +
+                (result.elapsedMs ? t('tools.mcp.testOkMs', { ms: result.elapsedMs }) : ''),
             }
-          : { status: 'fail', text: result.reason || '连不上' },
+          : { status: 'fail', text: result.reason || t('tools.mcp.testFail') },
       }))
     } catch (error) {
       setRowTests((prev) => ({
         ...prev,
         [server.name]: {
           status: 'fail',
-          text: error instanceof Error ? error.message : '试连请求失败。',
+          text: error instanceof Error ? error.message : t('tools.mcp.testRequestFailed'),
         },
       }))
     }
@@ -224,7 +229,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
     } catch (error) {
       setTestResult({
         ok: false,
-        reason: error instanceof Error ? error.message : '试连请求失败。',
+        reason: error instanceof Error ? error.message : t('tools.mcp.testRequestFailed'),
         tools: [],
         serverName: '',
         serverVersion: '',
@@ -274,23 +279,26 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
     <section className="rounded-md border border-line bg-surface">
       <header className="flex items-start justify-between gap-tight border-b border-line px-4 py-3">
         <div>
-          <h2 className="text-sm font-medium text-ink">MCP 连接</h2>
+          <h2 className="text-sm font-medium text-ink">{t('tools.mcp.heading')}</h2>
           <p className="mt-1 max-w-[62ch] text-sm leading-relaxed text-ink-muted">
-            把外部 MCP 服务接进来。接上之后，模型除了沙箱里的命令，还能调用这些服务 提供的工具（通过{' '}
+            {t('tools.mcp.body.before')}{' '}
             <code className="font-mono">list_mcps</code> /{' '}
-            <code className="font-mono">call_mcp</code>）。不接也能正常跑。
+            <code className="font-mono">call_mcp</code>
+            {t('tools.mcp.body.after')}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {/* 一眼看清规模与凭据面：http/stdio 各几条、有没有带凭据的 */}
           <span className="text-xs text-ink-faint">
-            {servers.length} 条
+            {t('tools.mcp.count', { n: servers.length })}
             {servers.length > 0 && (
               <>
                 {' · '}
                 {servers.filter((server) => server.type === 'http').length} HTTP
                 {' · '}
-                {servers.filter((server) => server.hasEnv || server.hasHeaders).length} 带凭据
+                {t('tools.mcp.withCred', {
+                  n: servers.filter((server) => server.hasEnv || server.hasHeaders).length,
+                })}
               </>
             )}
           </span>
@@ -301,7 +309,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
             disabled={saving || draft !== null}
           >
             <Plus className="size-3.5" strokeWidth={1.75} />
-            添加连接
+            {t('tools.mcp.add')}
           </Button>
         </div>
       </header>
@@ -309,11 +317,8 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
       {/* 已保存的连接 */}
       {servers.length === 0 ? (
         <div className="px-4 py-6 text-sm text-ink-muted">
-          <p>还没有接外部工具。</p>
-          <p className="mt-1 text-xs text-ink-faint">
-            不接也能正常跑 —— nmap / sqlmap / ffuf 这些都在沙箱镜像里。
-            接一条之后，模型才会多出「外部工具」这一类能力。
-          </p>
+          <p>{t('tools.mcp.emptyTitle')}</p>
+          <p className="mt-1 text-xs text-ink-faint">{t('tools.mcp.emptyHint')}</p>
         </div>
       ) : (
         <ul className="divide-y divide-line/60">
@@ -327,17 +332,17 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                 </span>
                 {server.hasEnv && (
                   <span className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint">
-                    带环境变量
+                    {t('tools.mcp.hasEnv')}
                   </span>
                 )}
                 {server.hasHeaders && (
                   <span className="rounded-sm border border-line px-1 py-px text-2xs text-ink-faint">
-                    带请求头
+                    {t('tools.mcp.hasHeaders')}
                   </span>
                 )}
                 {server.allowedTools && (
                   <span className="text-2xs text-ink-faint">
-                    白名单 {server.allowedTools.length} 项
+                    {t('tools.mcp.allowlist', { n: server.allowedTools.length })}
                   </span>
                 )}
                 {/*
@@ -347,7 +352,12 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                     没配时显示内核默认值，让人知道它确实是 60 而不是"没限制"。
                 */}
                 <span className="text-2xs text-ink-faint">
-                  超时 {server.callTimeout == null ? '默认 60' : server.callTimeout} 秒
+                  {t('tools.mcp.timeout', {
+                    value:
+                      server.callTimeout == null
+                        ? t('tools.mcp.timeoutDefault')
+                        : server.callTimeout,
+                  })}
                 </span>
               </div>
               <p className="mt-1 break-all font-mono text-xs text-ink-muted">
@@ -363,7 +373,9 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                   disabled={saving || rowTests[server.name]?.status === 'testing'}
                   className="text-xs text-ink-muted transition-ui duration-fast hover:text-ink disabled:opacity-50"
                 >
-                  {rowTests[server.name]?.status === 'testing' ? '试连中…' : '试连'}
+                  {rowTests[server.name]?.status === 'testing'
+                    ? t('tools.mcp.testing')
+                    : t('tools.mcp.test')}
                 </button>
                 <button
                   type="button"
@@ -371,7 +383,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                   disabled={saving}
                   className="text-xs text-ink-muted transition-ui duration-fast hover:text-ink disabled:opacity-50"
                 >
-                  编辑
+                  {t('tools.mcp.edit')}
                 </button>
                 <button
                   type="button"
@@ -379,7 +391,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                   disabled={saving}
                   className="text-xs text-ink-muted transition-ui duration-fast hover:text-signal-risk disabled:opacity-50"
                 >
-                  删除
+                  {t('tools.mcp.delete')}
                 </button>
                 {rowTests[server.name] && rowTests[server.name].status !== 'testing' && (
                   <span
@@ -411,13 +423,13 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
         <div className="border-t border-line bg-surface-raised/40 px-4 py-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-medium text-ink">
-              {editingName ? `编辑 ${editingName}` : '添加连接'}
+              {editingName ? t('tools.mcp.editTitle', { name: editingName }) : t('tools.mcp.add')}
             </h3>
             <button
               type="button"
               onClick={cancel}
               className="text-ink-faint transition-ui duration-fast hover:text-ink"
-              aria-label="取消"
+              aria-label={t('tools.mcp.cancelAria')}
             >
               <X className="size-4" strokeWidth={1.75} />
             </button>
@@ -425,7 +437,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
 
           <div className="mt-2 grid gap-2 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-ink-muted">连接名（模型用它指认）</span>
+              <span className="text-xs text-ink-muted">{t('tools.mcp.nameLabel')}</span>
               <input
                 value={draft.name}
                 onChange={(event) => setDraft({ ...draft, name: event.target.value })}
@@ -434,13 +446,13 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-ink-muted">传输类型</span>
+              <span className="text-xs text-ink-muted">{t('tools.mcp.typeLabel')}</span>
               <Select
                 size="sm"
                 value={draft.type}
                 options={[
-                  { value: 'stdio', label: 'stdio（拉起本地进程）' },
-                  { value: 'http', label: 'http（连远端端点）' },
+                  { value: 'stdio', label: t('tools.mcp.typeStdio') },
+                  { value: 'http', label: t('tools.mcp.typeHttp') },
                 ]}
                 onChange={(type) => setDraft({ ...draft, type })}
               />
@@ -450,7 +462,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
           {/* ★ v1.62：按类型切换 url / command 输入框。 */}
           {draft.type === 'http' ? (
             <label className="mt-2 flex flex-col gap-1">
-              <span className="text-xs text-ink-muted">端点 URL</span>
+              <span className="text-xs text-ink-muted">{t('tools.mcp.urlLabel')}</span>
               <input
                 value={draft.url}
                 onChange={(event) => setDraft({ ...draft, url: event.target.value })}
@@ -461,7 +473,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
           ) : (
             <>
               <label className="mt-2 flex flex-col gap-1">
-                <span className="text-xs text-ink-muted">命令（可执行文件）</span>
+                <span className="text-xs text-ink-muted">{t('tools.mcp.commandLabel')}</span>
                 <input
                   value={draft.command}
                   onChange={(event) => setDraft({ ...draft, command: event.target.value })}
@@ -471,7 +483,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
               </label>
 
               <label className="mt-2 flex flex-col gap-1">
-                <span className="text-xs text-ink-muted">参数（空格分隔）</span>
+                <span className="text-xs text-ink-muted">{t('tools.mcp.argsLabel')}</span>
                 <input
                   value={argsText}
                   onChange={(event) => setArgsText(event.target.value)}
@@ -486,11 +498,9 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
           {draft.type === 'http' && (
             <label className="mt-2 flex flex-col gap-1">
               <span className="text-xs text-ink-muted">
-                请求头（每行 KEY: VALUE）
+                {t('tools.mcp.headersLabel')}
                 {editingName && !headersText && (
-                  <span className="ml-1 text-ink-faint">
-                    · 留空 = 保留原值（已保存的不回显，所以这里看不到它）
-                  </span>
+                  <span className="ml-1 text-ink-faint">{t('tools.mcp.keepNote')}</span>
                 )}
               </span>
               <textarea
@@ -505,11 +515,9 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
 
           <label className="mt-2 flex flex-col gap-1">
             <span className="text-xs text-ink-muted">
-              环境变量（每行 KEY=VALUE）
+              {t('tools.mcp.envLabel')}
               {editingName && !envText && (
-                <span className="ml-1 text-ink-faint">
-                  · 留空 = 保留原值（已保存的不回显，所以这里看不到它）
-                </span>
+                <span className="ml-1 text-ink-faint">{t('tools.mcp.keepNote')}</span>
               )}
             </span>
             <textarea
@@ -523,7 +531,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
 
           <label className="mt-2 flex flex-col gap-1">
             <span className="text-xs text-ink-muted">
-              白名单（逗号分隔，留空 = 允许这条连接的全部工具）
+              {t('tools.mcp.allowLabel')}
             </span>
             <input
               value={toolsText}
@@ -540,10 +548,8 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
           */}
           <label className="mt-2 flex flex-col gap-1">
             <span className="text-xs text-ink-muted">
-              单次调用超时（秒）
-              <span className="ml-1 text-ink-faint">
-                · 留空 = 用内核默认 60 秒；慢工具（资产测绘 / 跑 POC）建议 300
-              </span>
+              {t('tools.mcp.timeoutLabel')}
+              <span className="ml-1 text-ink-faint">{t('tools.mcp.timeoutHint')}</span>
             </span>
             <input
               value={timeoutText}
@@ -575,14 +581,14 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                 <>
                   <p className="flex items-center gap-1 text-ink">
                     <Check className="size-3" strokeWidth={2} />
-                    连上了 · {testResult.elapsedMs} ms
+                    {t('tools.mcp.connected', { ms: testResult.elapsedMs })}
                     {testResult.serverName && ` · ${testResult.serverName}`}
                     {testResult.serverVersion && ` ${testResult.serverVersion}`}
                   </p>
                   <p className="mt-0.5 font-mono text-ink-faint">
                     {testResult.tools.length > 0
                       ? testResult.tools.join(', ')
-                      : '（这个 server 没有报任何工具）'}
+                      : t('tools.mcp.noTools')}
                   </p>
                 </>
               ) : (
@@ -594,13 +600,13 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
           <div className="mt-2.5 flex items-center gap-2">
             <Button size="sm" onClick={handleCommit} disabled={saving}>
               {saving ? <Loader2 className="size-3.5 animate-spin" /> : null}
-              {editingName ? '保存修改' : '添加'}
+              {editingName ? t('tools.mcp.saveEdit') : t('tools.mcp.addShort')}
             </Button>
             <Button size="sm" variant="secondary" onClick={handleTest} disabled={testing || saving}>
               {testing ? <Loader2 className="size-3.5 animate-spin" /> : null}
-              试连
+              {t('tools.mcp.test')}
             </Button>
-            <span className="text-2xs text-ink-faint">试连不会保存 —— 先确认能通，再保存。</span>
+            <span className="text-2xs text-ink-faint">{t('tools.mcp.testNoSave')}</span>
           </div>
         </div>
       )}

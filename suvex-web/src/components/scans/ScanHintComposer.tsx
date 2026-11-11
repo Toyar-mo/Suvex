@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { T } from '@/i18n/T'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
 import { Select } from '@/components/ui/Select'
@@ -38,7 +39,7 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
   return (
     <section className="mb-panel flex flex-wrap items-end gap-2 rounded-sm border border-line bg-surface px-panel py-2.5">
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-2xs text-ink-muted">运行中的扫描</span>
+        <span className="text-2xs text-ink-muted"><T k="scans.hint.running"/></span>
         <Select
           value={selected}
           options={running.map((scan) => ({ value: scan.id, label: scan.name || scan.target }))}
@@ -48,7 +49,7 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
         />
       </label>
       <label className="flex min-w-[16rem] flex-1 flex-col gap-1 text-sm">
-        <span className="text-2xs text-ink-muted">补一条线索（下一轮生效）</span>
+        <span className="text-2xs text-ink-muted"><T k="scans.hint.add"/></span>
         <TextInput
           id="scan-hint"
           value={text}

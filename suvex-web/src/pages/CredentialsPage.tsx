@@ -14,11 +14,14 @@ import { showToast } from '@/data/toast-store'
 import { KeyRound } from 'lucide-react'
 import EmptyState from '@/components/ui/EmptyState'
 import { Select } from '@/components/ui/Select'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { useEffect, useState } from 'react'
 
 const KINDS = ['password', 'hash', 'ticket', 'key'] as const
 
 export function CredentialsPage() {
+  const { t } = useI18n()
   const [items, setItems] = useState<Credential[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({ kind: 'password', username: '', secret: '', target: '', source: '' })
@@ -61,9 +64,9 @@ export function CredentialsPage() {
       }
       setForm({ kind: 'password', username: '', secret: '', target: '', source: '' })
       await reload()
-      showToast({ tone: 'ok', message: editingId ? '凭据已更新' : '凭据已保存（加密）' })
+      showToast({ tone: 'ok', message: editingId ? t('credentials.toast.updated') : t('credentials.toast.created') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '保存失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('credentials.toast.saveFailed') })
     } finally {
       setSaving(false)
     }
@@ -82,7 +85,7 @@ export function CredentialsPage() {
         20_000,
       )
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '读取失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('credentials.toast.readFailed') })
     }
   }
 
@@ -90,9 +93,9 @@ export function CredentialsPage() {
     try {
       await deleteCredential(id)
       await reload()
-      showToast({ tone: 'ok', message: '已删除' })
+      showToast({ tone: 'ok', message: t('credentials.toast.deleted') })
     } catch {
-      showToast({ tone: 'risk', message: '删除失败' })
+      showToast({ tone: 'risk', message: t('credentials.toast.deleteFailed') })
     }
   }
 
@@ -101,7 +104,7 @@ export function CredentialsPage() {
       const out = await loadReusePlan(id)
       setPlans((prev) => ({ ...prev, [id]: out }))
     } catch {
-      showToast({ tone: 'risk', message: '评分失败' })
+      showToast({ tone: 'risk', message: t('credentials.toast.planFailed') })
     }
   }
 
@@ -110,13 +113,13 @@ export function CredentialsPage() {
       <PageHeader navId="credentials" />
       <div className="flex flex-col gap-panel p-panel">
         <section className="rounded-md border border-line bg-surface p-panel">
-          <h2 className="text-sm font-medium text-ink">登记凭据</h2>
+          <h2 className="text-sm font-medium text-ink"><T k="credentials.form.title" /></h2>
           <p className="mt-1 text-2xs text-ink-muted">
-            明文只用于加密存储；列表不回显，读取由管理员触发并写审计。
+            <T k="credentials.form.desc" />
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>类型</span>
+              <span><T k="credentials.field.kind" /></span>
               <Select
                 value={form.kind}
                 options={KINDS.map((kind) => ({ value: kind, label: kind }))}
@@ -124,15 +127,15 @@ export function CredentialsPage() {
               />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>用户名</span>
+              <span><T k="credentials.field.username" /></span>
               <TextInput id="cred-user" value={form.username} onChange={(v) => setForm({ ...form, username: v })} />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>目标</span>
+              <span><T k="credentials.field.target" /></span>
               <TextInput id="cred-target" value={form.target} onChange={(v) => setForm({ ...form, target: v })} />
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-2">
-              <span>凭据</span>
+              <span><T k="credentials.field.secret" /></span>
               <TextInput
                 id="cred-secret"
                 type="password"
@@ -141,13 +144,13 @@ export function CredentialsPage() {
               />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>来源</span>
+              <span><T k="credentials.field.source" /></span>
               <TextInput id="cred-source" value={form.source} onChange={(v) => setForm({ ...form, source: v })} />
             </label>
           </div>
           <div className="mt-3">
             <Button variant="primary" size="sm" onClick={() => void submit()} disabled={saving}>
-              {saving ? '保存中…' : editingId ? '保存修改' : '保存凭据'}
+              {saving ? t('credentials.saving') : editingId ? t('credentials.saveChanges') : t('credentials.save')}
             </Button>
             {editingId && (
               <Button
@@ -158,7 +161,7 @@ export function CredentialsPage() {
                   setForm({ kind: 'password', username: '', secret: '', target: '', source: '' })
                 }}
               >
-                取消
+                <T k="credentials.cancel" />
               </Button>
             )}
           </div>
@@ -166,23 +169,23 @@ export function CredentialsPage() {
 
         <section className="rounded-md border border-line bg-surface">
           <header className="flex items-center justify-between border-b border-line px-4 py-2.5">
-            <h2 className="text-sm font-medium text-ink">凭据台账</h2>
-            <span className="text-2xs text-ink-faint">{items.length} 条</span>
+            <h2 className="text-sm font-medium text-ink"><T k="credentials.table.title" /></h2>
+            <span className="text-2xs text-ink-faint">{t('credentials.table.count', { n: items.length })}</span>
           </header>
           {loading ? (
-            <p className="px-4 py-6 text-sm text-ink-muted">读取中…</p>
+            <p className="px-4 py-6 text-sm text-ink-muted"><T k="credentials.loading" /></p>
           ) : items.length === 0 ? (
-            <EmptyState icon={KeyRound} title="还没有凭据" description="在上方登记一条；明文加密保存，列表不回显。" />
+            <EmptyState icon={KeyRound} title={t('credentials.empty.title')} description={t('credentials.empty.desc')} />
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-2xs text-ink-faint">
-                  <th className="px-4 py-2 font-normal">目标</th>
-                  <th className="px-3 py-2 font-normal">类型</th>
-                  <th className="px-3 py-2 font-normal">用户名</th>
-                  <th className="px-3 py-2 font-normal">来源</th>
-                  <th className="px-3 py-2 font-normal">复用</th>
-                  <th className="px-3 py-2 font-normal">操作</th>
+                  <th className="px-4 py-2 font-normal"><T k="credentials.field.target" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="credentials.field.kind" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="credentials.field.username" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="credentials.field.source" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="credentials.table.reuse" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="credentials.actions" /></th>
                 </tr>
               </thead>
               <tbody>
@@ -207,7 +210,7 @@ export function CredentialsPage() {
                             className="text-ink-faint underline-offset-2 hover:text-ink hover:underline"
                             onClick={() => void plan(item.id)}
                           >
-                            评分
+                            <T k="credentials.score" />
                           </button>
                         )}
                       </td>
@@ -221,7 +224,7 @@ export function CredentialsPage() {
                               className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
                               onClick={() => void reveal(item.id)}
                             >
-                              显示明文
+                              <T k="credentials.reveal" />
                             </button>
                             <button
                               type="button"
@@ -237,14 +240,14 @@ export function CredentialsPage() {
                                 })
                               }}
                             >
-                              编辑
+                              <T k="credentials.edit" />
                             </button>
                             <button
                               type="button"
                               className="text-2xs text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
                               onClick={() => void remove(item.id)}
                             >
-                              删除
+                              <T k="credentials.delete" />
                             </button>
                           </span>
                         )}

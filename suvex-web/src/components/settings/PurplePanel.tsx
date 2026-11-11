@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from './Field'
 import { SettingsPanel } from './SaveBar'
@@ -31,6 +33,7 @@ function download(blob: Blob, filename: string) {
  * 这是"如果这条漏洞发生在你的环境，哪些检测会响"的显式回答。
  */
 export function PurplePanel() {
+  const { t } = useI18n()
   const [rules, setRules] = useState<PurpleRule[]>([])
   const [result, setResult] = useState<EvaluateResult | null>(null)
   const [loading, setLoading] = useState(true)
@@ -63,9 +66,12 @@ export function PurplePanel() {
       setName('')
       setCwe('')
       await load()
-      showToast({ tone: 'ok', message: '规则已添加' })
+      showToast({ tone: 'ok', message: t('settings.purple.ruleAdded') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '添加失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.purple.addFailed'),
+      })
     } finally {
       setBusy(false)
     }
@@ -76,7 +82,10 @@ export function PurplePanel() {
     try {
       setResult(await evaluateRules())
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '评估失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.purple.evaluateFailed'),
+      })
     } finally {
       setBusy(false)
     }
@@ -95,7 +104,7 @@ export function PurplePanel() {
               : format
       download(out.blob, `purple-${format}.${ext}`)
     } catch {
-      showToast({ tone: 'risk', message: '导出失败' })
+      showToast({ tone: 'risk', message: t('settings.purple.exportFailed') })
     }
   }
 
@@ -104,31 +113,40 @@ export function PurplePanel() {
       await deleteRule(ruleId)
       await load()
     } catch {
-      showToast({ tone: 'risk', message: '删除失败' })
+      showToast({ tone: 'risk', message: t('settings.purple.deleteFailed') })
     }
   }
 
   return (
     <SettingsPanel
       id="purple"
-      title="紫队检测规则"
-      description="用规则评估现有发现：哪些 CWE / 标题会被检测到。可导出 JSONL 或 CEF 给 SIEM。"
+      title={t('settings.purple.title')}
+      description={t('settings.purple.description')}
     >
       <div className="flex flex-col gap-panel">
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
           <label className="flex flex-col gap-1 text-sm lg:col-span-2">
-            <span className="text-ink-muted">规则名</span>
+            <span className="text-ink-muted">
+              <T k="settings.purple.ruleName" />
+            </span>
             <TextInput id="purple-name" value={name} onChange={setName} />
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-ink-muted">CWE（可空）</span>
+            <span className="text-ink-muted">
+              <T k="settings.purple.cwe" />
+            </span>
             <TextInput id="purple-cwe" value={cwe} onChange={setCwe} placeholder="CWE-89" />
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-ink-muted">严重度</span>
+            <span className="text-ink-muted">
+              <T k="settings.purple.severity" />
+            </span>
             <Select
               value={severity}
-              options={SEVERITIES.map((item) => ({ value: item, label: item }))}
+              options={SEVERITIES.map((item) => ({
+                value: item,
+                label: t(`severity.${item}`),
+              }))}
               onChange={setSeverity}
             />
           </label>
@@ -136,41 +154,44 @@ export function PurplePanel() {
 
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="primary" size="sm" onClick={() => void add()} disabled={busy || !name.trim()}>
-            添加规则
+            <T k="settings.purple.addRule" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void evaluate()} disabled={busy}>
-            评估现有发现
+            <T k="settings.purple.evaluate" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('jsonl')}>
-            导出 JSONL
+            <T k="settings.purple.exportJsonl" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('cef')}>
-            导出 CEF
+            <T k="settings.purple.exportCef" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('attack')}>
-            ATT&CK 层
+            <T k="settings.purple.exportAttack" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('misp')}>
             MISP
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('sigma')}>
-            Sigma 草案
+            <T k="settings.purple.exportSigma" />
           </Button>
           <Button variant="secondary" size="sm" onClick={() => void exportAs('suricata')}>
-            Suricata 草案
+            <T k="settings.purple.exportSuricata" />
           </Button>
         </div>
 
         {result && (
           <div className="rounded-sm border border-line px-3 py-2 text-sm">
             <p className="text-ink">
-              共 {result.totalFindings} 条发现，命中 {result.hits.length} 条规则
+              <T
+                k="settings.purple.resultSummary"
+                vars={{ total: result.totalFindings, hits: result.hits.length }}
+              />
             </p>
             {result.hits.length > 0 && (
               <ul className="mt-1 flex flex-col gap-0.5 text-2xs text-ink-muted">
                 {result.hits.map((hit) => (
                   <li key={hit.rule.id}>
-                    {hit.rule.name} · {hit.count} 条
+                    <T k="settings.purple.hitCount" vars={{ name: hit.rule.name, count: hit.count }} />
                   </li>
                 ))}
               </ul>
@@ -179,9 +200,13 @@ export function PurplePanel() {
         )}
 
         {loading ? (
-          <p className="text-sm text-ink-muted">读取中…</p>
+          <p className="text-sm text-ink-muted">
+            <T k="settings.purple.loading" />
+          </p>
         ) : rules.length === 0 ? (
-          <p className="text-sm text-ink-muted">还没有规则。</p>
+          <p className="text-sm text-ink-muted">
+            <T k="settings.purple.empty" />
+          </p>
         ) : (
           <ul className="divide-y divide-line rounded-sm border border-line">
             {rules.map((rule) => (
@@ -195,7 +220,7 @@ export function PurplePanel() {
                   className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
                   onClick={() => void remove(rule.id)}
                 >
-                  删除
+                  <T k="settings.purple.delete" />
                 </button>
               </li>
             ))}

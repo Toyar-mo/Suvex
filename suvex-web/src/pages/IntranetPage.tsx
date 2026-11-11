@@ -12,13 +12,16 @@ import { showToast } from '@/data/toast-store'
 import { Network } from 'lucide-react'
 import EmptyState from '@/components/ui/EmptyState'
 import { Select } from '@/components/ui/Select'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { useEffect, useState } from 'react'
 
 const KINDS = ['webshell', 'reverse', 'ssh'] as const
 const STATUSES = ['alive', 'dead', 'unknown'] as const
-const STATUS_LABEL = { alive: '存活', dead: '失效', unknown: '未知' }
 
 export function IntranetPage() {
+  const { t } = useI18n()
+  const statusLabel = (status: string) => t(`intranet.status.${status}`)
   const [items, setItems] = useState<IntranetSession[]>([])
   const [loading, setLoading] = useState(true)
   const [form, setForm] = useState({
@@ -54,9 +57,9 @@ export function IntranetPage() {
       await createIntranetSession(form)
       setForm({ kind: 'ssh', host: '', username: '', secret: '', notes: '', status: 'unknown' })
       await reload()
-      showToast({ tone: 'ok', message: '会话已登记（凭据加密）' })
+      showToast({ tone: 'ok', message: t('intranet.toast.created') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '登记失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('intranet.toast.createFailed') })
     } finally {
       setSaving(false)
     }
@@ -67,7 +70,7 @@ export function IntranetPage() {
       await patchIntranetSession(item.id, { status })
       await reload()
     } catch {
-      showToast({ tone: 'risk', message: '更新失败' })
+      showToast({ tone: 'risk', message: t('intranet.toast.updateFailed') })
     }
   }
 
@@ -76,7 +79,7 @@ export function IntranetPage() {
       await deleteIntranetSession(id)
       await reload()
     } catch {
-      showToast({ tone: 'risk', message: '删除失败' })
+      showToast({ tone: 'risk', message: t('intranet.toast.deleteFailed') })
     }
   }
 
@@ -85,13 +88,13 @@ export function IntranetPage() {
       <PageHeader navId="intranet" />
       <div className="flex flex-col gap-panel p-panel">
         <section className="rounded-md border border-line bg-surface p-panel">
-          <h2 className="text-sm font-medium text-ink">登记立足点</h2>
+          <h2 className="text-sm font-medium text-ink"><T k="intranet.form.title" /></h2>
           <p className="mt-1 text-2xs text-ink-muted">
-            记录 webshell / 反弹 / ssh 会话。平台只做台账，不自动连接或执行命令。
+            <T k="intranet.form.desc" />
           </p>
           <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-6">
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>类型</span>
+              <span><T k="intranet.field.kind" /></span>
               <Select
                 value={form.kind}
                 options={KINDS.map((kind) => ({ value: kind, label: kind }))}
@@ -99,15 +102,15 @@ export function IntranetPage() {
               />
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-2">
-              <span>地址</span>
+              <span><T k="intranet.field.host" /></span>
               <TextInput id="isess-host" value={form.host} onChange={(v) => setForm({ ...form, host: v })} />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>用户名</span>
+              <span><T k="intranet.field.username" /></span>
               <TextInput id="isess-user" value={form.username} onChange={(v) => setForm({ ...form, username: v })} />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>凭据</span>
+              <span><T k="intranet.field.secret" /></span>
               <TextInput
                 id="isess-secret"
                 type="password"
@@ -116,44 +119,44 @@ export function IntranetPage() {
               />
             </label>
             <label className="flex flex-col gap-1.5 text-xs font-medium text-ink">
-              <span>状态</span>
+              <span><T k="intranet.field.status" /></span>
               <Select
                 value={form.status}
-                options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
+                options={STATUSES.map((status) => ({ value: status, label: statusLabel(status) }))}
                 onChange={(status) => setForm({ ...form, status })}
               />
             </label>
             <label className="flex flex-col gap-1 text-sm md:col-span-6">
-              <span>备注</span>
+              <span><T k="intranet.field.notes" /></span>
               <TextInput id="isess-notes" value={form.notes} onChange={(v) => setForm({ ...form, notes: v })} />
             </label>
           </div>
           <div className="mt-3">
             <Button variant="primary" size="sm" onClick={() => void create()} disabled={saving}>
-              {saving ? '保存中…' : '登记会话'}
+              {saving ? t('intranet.saving') : t('intranet.create')}
             </Button>
           </div>
         </section>
 
         <section className="rounded-md border border-line bg-surface">
           <header className="flex items-center justify-between border-b border-line px-4 py-2.5">
-            <h2 className="text-sm font-medium text-ink">会话台账</h2>
-            <span className="text-2xs text-ink-faint">{items.length} 条</span>
+            <h2 className="text-sm font-medium text-ink"><T k="intranet.table.title" /></h2>
+            <span className="text-2xs text-ink-faint">{t('intranet.table.count', { n: items.length })}</span>
           </header>
           {loading ? (
-            <p className="px-4 py-6 text-sm text-ink-muted">读取中…</p>
+            <p className="px-4 py-6 text-sm text-ink-muted"><T k="intranet.loading" /></p>
           ) : items.length === 0 ? (
-            <EmptyState icon={Network} title="还没有登记会话" description="在上方登记 webshell / 反弹 / ssh 立足点。" />
+            <EmptyState icon={Network} title={t('intranet.empty.title')} description={t('intranet.empty.desc')} />
           ) : (
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-2xs text-ink-faint">
-                  <th className="px-4 py-2 font-normal">类型</th>
-                  <th className="px-3 py-2 font-normal">地址</th>
-                  <th className="px-3 py-2 font-normal">用户名</th>
-                  <th className="px-3 py-2 font-normal">状态</th>
-                  <th className="px-3 py-2 font-normal">备注</th>
-                  <th className="px-3 py-2 font-normal">操作</th>
+                  <th className="px-4 py-2 font-normal"><T k="intranet.field.kind" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="intranet.field.host" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="intranet.field.username" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="intranet.field.status" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="intranet.field.notes" /></th>
+                  <th className="px-3 py-2 font-normal"><T k="intranet.actions" /></th>
                 </tr>
               </thead>
               <tbody>
@@ -166,7 +169,7 @@ export function IntranetPage() {
                       <Select
                         size="sm"
                         value={item.status}
-                        options={STATUSES.map((status) => ({ value: status, label: STATUS_LABEL[status] }))}
+                        options={STATUSES.map((status) => ({ value: status, label: statusLabel(status) }))}
                         onChange={(status) => void setStatus(item, status)}
                         className="h-7 w-24 border-0 bg-transparent px-1 text-2xs hover:bg-surface-sunken"
                       />
@@ -178,7 +181,7 @@ export function IntranetPage() {
                         className="text-2xs text-ink-faint underline-offset-2 hover:text-signal-risk hover:underline"
                         onClick={() => void remove(item.id)}
                       >
-                        删除
+                        <T k="intranet.delete" />
                       </button>
                     </td>
                   </tr>

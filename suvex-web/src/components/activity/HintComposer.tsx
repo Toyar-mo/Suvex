@@ -4,6 +4,8 @@ import { addScanHint, type ScanHint } from '@/data/scan-hints'
 import { Lightbulb, Send } from 'lucide-react'
 import { useState } from 'react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 运行中给智能体补线索的输入框（P2 人机协同，v0.57）。
  *
@@ -34,6 +36,7 @@ export function HintComposer({
   onAdded?: (hint: ScanHint) => void
   className?: string
 }) {
+  const { t } = useI18n()
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -50,7 +53,7 @@ export function HintComposer({
       setText('')
       onAdded?.(hint)
     } catch (err) {
-      setError(errorMessage(err) || '线索没能送出，请稍后重试。')
+      setError(errorMessage(err) || t('activity.hint.error'))
     } finally {
       setSending(false)
     }
@@ -76,15 +79,15 @@ export function HintComposer({
             value={text}
             onChange={(e) => setText(e.target.value)}
             maxLength={500}
-            placeholder="给智能体补一条线索（它会在下一轮看到，例如「试试 /admin 后台」）"
-            aria-label="给智能体补线索"
+            placeholder={t('activity.hint.placeholder')}
+            aria-label={t('activity.hint.aria')}
             className="min-w-0 flex-1 rounded-xs border border-line bg-surface px-2 py-1 text-xs text-ink placeholder:text-ink-ghost focus:border-accent focus:outline-none"
             disabled={sending}
           />
           <button
             type="submit"
             disabled={!canSend}
-            title={sending ? '发送中…' : '把这条线索交给智能体'}
+            title={sending ? t('activity.hint.sending') : t('activity.hint.title')}
             className={cn(
               'inline-flex shrink-0 items-center gap-1 rounded-xs border px-2 py-1 text-xs transition-ui duration-fast',
               canSend
@@ -93,7 +96,7 @@ export function HintComposer({
             )}
           >
             <Send size={12} aria-hidden="true" />
-            送出
+            {t('activity.hint.send')}
           </button>
         </form>
       </div>
@@ -107,7 +110,7 @@ export function HintComposer({
         </p>
       )}
       {trimmed.length > 450 && (
-        <p className="text-2xs text-ink-faint">已 {trimmed.length} / 500 字</p>
+        <p className="text-2xs text-ink-faint">{t('activity.hint.counter', { n: trimmed.length })}</p>
       )}
     </div>
   )

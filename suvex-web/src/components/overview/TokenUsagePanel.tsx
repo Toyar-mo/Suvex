@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useState } from 'react'
+import { T } from '@/i18n/T'
 import { Link } from 'react-router-dom'
 import { loadTokenUsage, type TokenUsageSeries } from '@/data/tokenUsage'
 import { cn } from '@/lib/cn'
@@ -59,7 +60,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
   return (
     <section className="rounded-lg border border-line bg-surface p-panel">
       <div className="flex flex-wrap items-center gap-2">
-        <h3 className="text-sm font-medium text-ink">⚡ LLM Token 消耗</h3>
+        <h3 className="text-sm font-medium text-ink"><T k="overview.token.trend"/></h3>
         <span className="text-2xs text-ink-faint">activity</span>
         <Link
           to="/kernel"
@@ -71,7 +72,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
 
       <div className="mt-4 grid grid-cols-1 gap-panel lg:grid-cols-[18rem_minmax(0,1fr)]">
           <div className="flex flex-col gap-2 text-sm">
-            <span className="text-2xs text-ink-muted">合计（输入+输出）</span>
+            <span className="text-2xs text-ink-muted"><T k="overview.token.total"/></span>
             <span className="tabular text-3xl font-medium text-ink">
               {compact(data?.totals.total ?? 0)}
             </span>
@@ -107,7 +108,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
             })}
 
             <div className="mt-1 flex items-center justify-between rounded-sm border border-line px-2 py-1.5 text-2xs">
-              <span className="text-ink-muted">缓存命中率</span>
+              <span className="text-ink-muted"><T k="overview.token.cache"/></span>
               <span className="tabular text-signal-warn">
                 {data?.cacheRate === null || data?.cacheRate === undefined
                   ? '—'

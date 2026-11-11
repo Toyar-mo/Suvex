@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import type { Skill, TargetKind } from '@/data/scan'
 import {
   SCAN_AUTHORIZATION_STATEMENT,
@@ -123,7 +124,7 @@ export function TargetStep({
         */
         <Field label="目标地址">
           <div className="flex flex-col gap-1.5 rounded-sm border border-line bg-surface-sunken p-3">
-            <p className="text-sm text-ink">这类题目不需要目标地址。</p>
+            <p className="text-sm text-ink"><T k="scanWizard.noTarget"/></p>
             <p className="max-w-[62ch] text-xs leading-relaxed text-ink-faint">
               {/*
                 ⚠️ 这段必须是**一个字符串字面量**，不能写成跨行的裸 JSX 文本。
@@ -378,7 +379,7 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
           <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
         </Link>
 
-        <p className="text-xs text-ink-faint">配置完成后回到这里，新配置的模型会自动出现。</p>
+        <p className="text-xs text-ink-faint"><T k="scanWizard.modelHint"/></p>
       </div>
     )
   }
@@ -424,7 +425,7 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
       {/* 未配置的也列出来，说明缺什么 —— 用户可以判断要不要去配 */}
       {unconfigured.length > 0 && (
         <div className="flex flex-col gap-2">
-          <p className="text-2xs text-ink-faint">尚未配置：</p>
+          <p className="text-2xs text-ink-faint"><T k="scanWizard.unconfigured"/></p>
           {unconfigured.map((provider) => (
             <div
               key={provider.id}

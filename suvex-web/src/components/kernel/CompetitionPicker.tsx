@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { listRemoteCompetitions, type KernelRemoteCompetition } from '@/data/kernel'
 import { errorMessage } from '@/lib/api'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 
 /*
   ─────────────────────────────────────────────────────────────
@@ -39,6 +40,7 @@ export function CompetitionPicker({
   onConfirm: (remoteIds: string[]) => void
   onCancel: () => void
 }) {
+  const { t } = useI18n()
   const [items, setItems] = useState<KernelRemoteCompetition[] | null>(null)
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
@@ -122,11 +124,12 @@ export function CompetitionPicker({
       >
         <header className="flex flex-col gap-1">
           <h2 id="competition-picker-title" className="text-sm text-ink">
-            同步赛事题目
+            {t('tools.kernel.comp.title')}
           </h2>
           <p className="text-xs text-ink-muted">
-            这里列出的是<strong className="text-ink">平台上</strong>的赛事（即时查询，不是本地已有的）。
-            勾选后会把该赛事的阶段与题目同步到本地。
+            {t('tools.kernel.comp.intro.before')}
+            <strong className="text-ink">{t('tools.kernel.comp.intro.bold')}</strong>
+            {t('tools.kernel.comp.intro.after')}
           </p>
         </header>
 
@@ -139,9 +142,11 @@ export function CompetitionPicker({
             aria-hidden="true"
           />
           <span>
-            赛事题目同步回来后<strong className="text-ink">只能查看题面与附件，不能在这里解题和提交</strong>
-            —— CTF2 的开放接口没有提供赛事侧的提交与起环境接口。另外，团队赛还要求你的账号
-            <strong className="text-ink">先加入对应战队</strong>，否则那场会同步失败（失败原因会写在结果里）。
+            {t('tools.kernel.comp.warn.before')}
+            <strong className="text-ink">{t('tools.kernel.comp.warn.bold1')}</strong>
+            {t('tools.kernel.comp.warn.mid')}
+            <strong className="text-ink">{t('tools.kernel.comp.warn.bold2')}</strong>
+            {t('tools.kernel.comp.warn.after')}
           </span>
         </p>
 
@@ -150,13 +155,15 @@ export function CompetitionPicker({
           {loading && (
             <p className="flex items-center justify-center gap-2 p-6 text-xs text-ink-muted">
               <Loader2 size={13} strokeWidth={2} className="animate-spin" aria-hidden="true" />
-              正在向 CTF2 查询赛事…
+              {t('tools.kernel.comp.loading')}
             </p>
           )}
 
           {!loading && error && (
             <div className="flex flex-col items-center gap-2 p-6">
-              <p className="text-xs text-signal-risk">读取失败：{error}</p>
+              <p className="text-xs text-signal-risk">
+                {t('tools.kernel.comp.readFailed', { msg: error })}
+              </p>
               <button
                 type="button"
                 onClick={() => {
@@ -170,14 +177,14 @@ export function CompetitionPicker({
                 className="inline-flex h-7 items-center gap-1.5 rounded-sm border border-line px-2.5 text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink"
               >
                 <RefreshCw size={11} strokeWidth={2} aria-hidden="true" />
-                重试
+                {t('tools.kernel.comp.retry')}
               </button>
             </div>
           )}
 
           {empty && (
             <p className="p-6 text-center text-xs text-ink-muted">
-              平台上没有这场账号可见的赛事。
+              {t('tools.kernel.comp.empty')}
             </p>
           )}
 
@@ -217,7 +224,7 @@ export function CompetitionPicker({
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="truncate text-xs text-ink">{item.name}</span>
                   <span className="text-2xs text-ink-faint">
-                    {item.startAt ? item.startAt.slice(0, 10) : '时间未知'}
+                    {item.startAt ? item.startAt.slice(0, 10) : t('tools.kernel.comp.timeUnknown')}
                     {item.endAt ? ` → ${item.endAt.slice(0, 10)}` : ''}
                     {item.status ? ` · ${item.status}` : ''}
                   </span>
@@ -243,7 +250,9 @@ export function CompetitionPicker({
               'disabled:cursor-not-allowed disabled:text-ink-faint disabled:no-underline disabled:hover:text-ink-faint',
             )}
           >
-            {selected.size === (items ?? []).length && selected.size > 0 ? '取消全选' : '全选'}
+            {selected.size === (items ?? []).length && selected.size > 0
+              ? t('tools.kernel.comp.deselectAll')
+              : t('tools.kernel.comp.selectAll')}
           </button>
 
           <div className="flex items-center gap-2">
@@ -258,7 +267,7 @@ export function CompetitionPicker({
                 'disabled:cursor-not-allowed disabled:border-line/50 disabled:text-ink-faint disabled:hover:border-line/50 disabled:hover:text-ink-faint',
               )}
             >
-              取消
+              {t('tools.kernel.comp.cancel')}
             </button>
             <button
               type="button"
@@ -272,7 +281,7 @@ export function CompetitionPicker({
               )}
             >
               {busy && <Loader2 size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />}
-              同步选中的 {selected.size} 场
+              {t('tools.kernel.comp.syncSelected', { n: selected.size })}
             </button>
           </div>
         </footer>

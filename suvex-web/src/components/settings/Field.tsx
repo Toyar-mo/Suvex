@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import type { ReactNode } from 'react'
 
 /**
@@ -36,6 +38,7 @@ export interface FieldProps {
 }
 
 export function Field({ label, htmlFor, required, help, error, footer, children }: FieldProps) {
+  const { t } = useI18n()
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-baseline gap-1.5">
@@ -48,8 +51,8 @@ export function Field({ label, htmlFor, required, help, error, footer, children 
           <span className="text-xs font-medium text-ink">{label}</span>
         )}
         {required && (
-          <span className="text-2xs text-signal-risk" aria-label="必填">
-            必填
+          <span className="text-2xs text-signal-risk" aria-label={t('settings.field.required')}>
+            <T k="settings.field.required" />
           </span>
         )}
       </div>

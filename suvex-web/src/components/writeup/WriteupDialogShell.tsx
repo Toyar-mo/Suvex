@@ -4,6 +4,8 @@ import { downloadMarkdown } from '@/lib/writeup'
 import { AlertTriangle, Check, Copy, Download, Loader2, X, type LucideIcon } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 
 /*
   ─────────────────────────────────────────────────────────────
@@ -73,9 +75,11 @@ export function WriteupDialogShell({
   fallbackFilename,
   state,
   onClose,
-  errorTitle = '这次没有可看的题解',
+  errorTitle,
   icon: Icon,
 }: WriteupDialogShellProps) {
+  const { t } = useI18n()
+  const resolvedErrorTitle = errorTitle ?? t('report.writeup.errorTitle', undefined, '这次没有可看的题解')
   const [copied, setCopied] = useState(false)
   /** 复制态的定时器。要能取消 —— 用户在 2 秒内关掉弹窗时它还在跑 */
   const copyTimer = useRef<number | null>(null)
@@ -140,7 +144,7 @@ export function WriteupDialogShell({
           <div className="min-w-0">
             <h2 id="writeup-title" className="flex items-center gap-1.5 text-sm font-medium text-ink">
               {Icon && <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-faint" aria-hidden="true" />}
-              题解
+              <T k="report.writeup.title" fallback="题解" />
             </h2>
             {/* 题目名可能很长（CTF 题目名有时带一长串后缀），单行截断 + 悬停给全文 */}
             <p className="mt-0.5 truncate text-xs text-ink-muted" title={title}>
@@ -168,12 +172,12 @@ export function WriteupDialogShell({
                   {copied ? (
                     <>
                       <Check size={12} strokeWidth={2.5} aria-hidden="true" />
-                      已复制
+                      <T k="report.writeup.copied" fallback="已复制" />
                     </>
                   ) : (
                     <>
                       <Copy size={12} strokeWidth={1.75} aria-hidden="true" />
-                      复制全文
+                      <T k="report.writeup.copy" fallback="复制全文" />
                     </>
                   )}
                 </button>
@@ -188,7 +192,7 @@ export function WriteupDialogShell({
                   )}
                 >
                   <Download size={12} strokeWidth={2.25} aria-hidden="true" />
-                  下载 .md
+                  <T k="report.writeup.download" fallback="下载 .md" />
                 </button>
               </>
             )}
@@ -196,7 +200,7 @@ export function WriteupDialogShell({
             <button
               type="button"
               onClick={onClose}
-              aria-label="关闭"
+              aria-label={t('report.writeup.close', undefined, '关闭')}
               className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
             >
               <X size={14} strokeWidth={2} aria-hidden="true" />
@@ -209,7 +213,7 @@ export function WriteupDialogShell({
           {state.phase === 'loading' ? (
             <p className="flex items-center gap-2 text-xs text-ink-faint">
               <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-              正在读取题解…
+              <T k="report.writeup.loading" fallback="正在读取题解…" />
             </p>
           ) : state.phase === 'error' ? (
             /*
@@ -230,7 +234,7 @@ export function WriteupDialogShell({
                 aria-hidden="true"
               />
               <div className="min-w-0">
-                <p className="text-xs text-signal-warn">{errorTitle}</p>
+                <p className="text-xs text-signal-warn">{resolvedErrorTitle}</p>
                 {/* 后端那句中文原样显示 —— 它区分了三种处境，是用户唯一能据以行动的线索 */}
                 <p className="mt-1 max-w-[64ch] text-2xs text-ink-muted">{state.message}</p>
               </div>

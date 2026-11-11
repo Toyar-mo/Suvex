@@ -53,6 +53,8 @@ import { Button } from '@/components/ui/Button'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
 import { SkeletonRows } from '@/components/ui/Skeleton'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { showToast } from '@/data/toast-store'
 import {
   canHaveWorkOrder,
@@ -97,16 +99,20 @@ function isRunningStatus(challenge: KernelChallenge): boolean {
  *
  * 判据只能落在"有没有产物"上：有工单或有题解 = 跑过了。
  */
-function irStatusText(challenge: KernelChallenge, ranBefore: boolean): string {
+function irStatusText(
+  challenge: KernelChallenge,
+  ranBefore: boolean,
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string {
   if (challenge.status === 'solving' || challenge.status === 'environment_ready') {
-    return '复盘中'
+    return t('ir.status.running', undefined, '复盘中')
   }
   if (challenge.status === 'failed') {
-    return '上一次复盘没跑完'
+    return t('ir.status.failed', undefined, '上一次复盘没跑完')
   }
   // ★ 关键分支：`unsolved` 对复盘任务有两种意思。
-  if (ranBefore) return '已复盘（可重跑）'
-  return '待复盘'
+  if (ranBefore) return t('ir.status.ranBefore', undefined, '已复盘（可重跑）')
+  return t('ir.status.pending', undefined, '待复盘')
 }
 
 /**
@@ -138,6 +144,7 @@ interface IrTaskView {
 }
 
 export function IrPage() {
+  const { t } = useI18n()
   // ★ 复用 CTF2 的 store，而不是新建一个。
   //
   // 复盘任务与 CTF2 题目在数据库里**是同一张表同一行**
@@ -243,7 +250,7 @@ export function IrPage() {
   const onCreate = useCallback(async () => {
     const cleanTitle = title.trim()
     if (!cleanTitle) {
-      setNotice('先给这次复盘起个名字 —— 它会出现在报告标题和工单文件名里。')
+      setNotice(t('ir.notice.needTitle', undefined, '先给这次复盘起个名字 —— 它会出现在报告标题和工单文件名里。'))
       return
     }
 
@@ -270,10 +277,13 @@ export function IrPage() {
       else {
         setNotice(
           task.attachments.length > 0
-            ? `已建好，证据包 ${task.attachments.length} 份：${task.attachments
+            ? t('ir.notice.createdWithFiles', {
+                n: task.attachments.length,
+                list: task.attachments.map((item) => item.name).join('、'),
+              }, `已建好，证据包 ${task.attachments.length} 份：${task.attachments
                 .map((item) => item.name)
-                .join('、')}`
-            : '已建好，但这次没有证据包 —— 没有证据的复盘只能给出方法建议，不能给出结论。',
+                .join('、')}`)
+            : t('ir.notice.createdNoFiles', undefined, '已建好，但这次没有证据包 —— 没有证据的复盘只能给出方法建议，不能给出结论。'),
         )
       }
 
@@ -282,23 +292,23 @@ export function IrPage() {
       setFiles([])
       await loadKernel({ silent: true })
     } catch (error) {
-      setNotice(errorMessage(error) || '建任务失败，请稍后重试。')
+      setNotice(errorMessage(error) || t('ir.notice.createFailed', undefined, '建任务失败，请稍后重试。'))
     } finally {
       setCreating(false)
     }
-  }, [brief, files, title])
+  }, [brief, files, title, t])
 
   const onStart = useCallback(async (challenge: KernelChallenge) => {
     setStarting(challenge.id)
     try {
       await solveChallenge(challenge.id, {})
-      showToast({ message: '已开跑，过程会显示在这条任务下面。' })
+      showToast({ message: t('ir.toast.started', undefined, '已开跑，过程会显示在这条任务下面。') })
     } catch (error) {
-      showToast({ message: errorMessage(error) || '启动失败，请稍后重试。', tone: 'risk' })
+      showToast({ message: errorMessage(error) || t('ir.toast.startFailed', undefined, '启动失败，请稍后重试。'), tone: 'risk' })
     } finally {
       setStarting(null)
     }
-  }, [])
+  }, [t])
 
   return (
     <div className="flex flex-col">
@@ -307,31 +317,30 @@ export function IrPage() {
       <div className="flex flex-col gap-bay px-gutter py-bay">
         {/* ── 建任务 ────────────────────────────────────── */}
         <section className="rounded-lg border border-line bg-surface p-5">
-          <h2 className="mb-1 text-sm font-medium text-ink">开始一次复盘</h2>
+          <h2 className="mb-1 text-sm font-medium text-ink"><T k="ir.form.title" fallback="开始一次复盘" /></h2>
           <p className="mb-4 text-xs text-ink-muted">
-            把出事那台机器上能拿到的日志、命令历史、导出文件放进来。证据包里有什么，
-            智能体就只能看什么 —— 它不会替你上机去取。
+            <T k="ir.form.desc" fallback="把出事那台机器上能拿到的日志、命令历史、导出文件放进来。证据包里有什么， 智能体就只能看什么 —— 它不会替你上机去取。" />
           </p>
 
           <div className="flex flex-col gap-3">
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-ink-muted">这次复盘叫什么</span>
+              <span className="text-xs text-ink-muted"><T k="ir.form.titleLabel" fallback="这次复盘叫什么" /></span>
               <input
                 type="text"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                placeholder="例：web-01 入侵事件（10 月 19 日）"
+                placeholder={t('ir.form.titlePlaceholder', undefined, '例：web-01 入侵事件（10 月 19 日）')}
                 maxLength={200}
                 className="rounded border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:border-accent"
               />
             </label>
 
             <label className="flex flex-col gap-1">
-              <span className="text-xs text-ink-muted">想查什么（可空）</span>
+              <span className="text-xs text-ink-muted"><T k="ir.form.briefLabel" fallback="想查什么（可空）" /></span>
               <textarea
                 value={brief}
                 onChange={(event) => setBrief(event.target.value)}
-                placeholder="例：这台机器昨晚疑似被人登进来了，想知道他是怎么进来的、动了什么。"
+                placeholder={t('ir.form.briefPlaceholder', undefined, '例：这台机器昨晚疑似被人登进来了，想知道他是怎么进来的、动了什么。')}
                 maxLength={2000}
                 rows={3}
                 className="resize-y rounded border border-line bg-canvas px-3 py-2 text-sm text-ink outline-none focus:border-accent"
@@ -341,13 +350,13 @@ export function IrPage() {
             <div className="flex flex-wrap items-center gap-3">
               <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-line px-3 py-2 text-xs text-ink hover:border-accent">
                 <Upload className="h-4 w-4" />
-                选择证据包
+                <T k="ir.form.pickFiles" fallback="选择证据包" />
                 <input type="file" multiple className="hidden" onChange={onPickFiles} />
               </label>
               <span className="text-xs text-ink-muted">
                 {files.length === 0
-                  ? '还没选文件'
-                  : `${files.length} 个文件：${files.map((file) => file.name).join('、')}`}
+                  ? t('ir.form.noFiles', undefined, '还没选文件')
+                  : t('ir.form.fileList', { n: files.length, list: files.map((file) => file.name).join('、') }, `${files.length} 个文件：${files.map((file) => file.name).join('、')}`)}
               </span>
             </div>
 
@@ -359,10 +368,10 @@ export function IrPage() {
 
             <div className="flex items-center gap-2">
               <Button onClick={onCreate} disabled={creating}>
-                {creating ? '正在建…' : '建复盘任务'}
+                {creating ? t('ir.form.creating', undefined, '正在建…') : t('ir.form.create', undefined, '建复盘任务')}
               </Button>
               <span className="text-xs text-ink-muted">
-                建完之后还要点一次「开始复盘」—— 传错包是最常见的错误，所以中间留一步给你看一眼。
+                <T k="ir.form.hint" fallback="建完之后还要点一次「开始复盘」—— 传错包是最常见的错误，所以中间留一步给你看一眼。" />
               </span>
             </div>
           </div>
@@ -370,7 +379,7 @@ export function IrPage() {
 
         {/* ── 任务列表 ──────────────────────────────────── */}
         <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium text-ink">复盘任务</h2>
+          <h2 className="text-sm font-medium text-ink"><T k="ir.list.title" fallback="复盘任务" /></h2>
 
           {snapshot.status === 'loading' && <SkeletonRows rows={2} rowClassName="h-20" />}
 
@@ -378,15 +387,15 @@ export function IrPage() {
             <ErrorState
               error={snapshot.error}
               onRetry={() => void loadKernel()}
-              title="复盘任务列表加载失败"
+              title={t('ir.list.loadFailed', undefined, '复盘任务列表加载失败')}
             />
           )}
 
           {snapshot.status === 'ready' && tasks.length === 0 && (
             <EmptyState
               icon={Siren}
-              title="还没有复盘任务"
-              description="复盘任务与扫描任务是两件事：扫描回答「这个目标有没有漏洞」，复盘回答「已经发生了什么」。上面填个名字、选一批日志就能开始。"
+              title={t('ir.list.emptyTitle', undefined, '还没有复盘任务')}
+              description={t('ir.list.emptyDesc', undefined, '复盘任务与扫描任务是两件事：扫描回答「这个目标有没有漏洞」，复盘回答「已经发生了什么」。上面填个名字、选一批日志就能开始。')}
             />
           )}
 
@@ -399,14 +408,14 @@ export function IrPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0">
                   <h3 className="truncate text-sm font-medium text-ink">
-                    {challenge.title || '未命名复盘'}
+                    {challenge.title || t('ir.card.untitled', undefined, '未命名复盘')}
                   </h3>
                   <p className="mt-1 text-xs text-ink-muted">
-                    {irStatusText(challenge, ranBefore)}
+                    {irStatusText(challenge, ranBefore, t)}
                     {' · '}
                     {challenge.category}
                     {' · '}
-                    证据包 {challenge.attachments.length} 份
+                    {t('ir.card.attachments', { n: challenge.attachments.length }, `证据包 ${challenge.attachments.length} 份`)}
                   </p>
                   {shouldShowCardError(challenge.lastError) && (
                     <p className="text-warn mt-1 text-xs">{challenge.lastError}</p>
@@ -424,7 +433,7 @@ export function IrPage() {
                   */}
                   {challenge.status === 'failed' && (
                     <span className="rounded-pill border border-signal-risk/40 bg-signal-risk/10 px-2 py-0.5 text-2xs text-signal-risk">
-                      上次失败
+                      <T k="ir.card.lastFailed" fallback="上次失败" />
                     </span>
                   )}
                   <Button
@@ -432,18 +441,22 @@ export function IrPage() {
                     onClick={() => void onStart(challenge)}
                     disabled={starting === challenge.id || challenge.status === 'solving'}
                   >
-                    {starting === challenge.id ? '正在启动…' : ranBefore ? '重新复盘' : '开始复盘'}
+                    {starting === challenge.id
+                      ? t('ir.card.starting', undefined, '正在启动…')
+                      : ranBefore
+                        ? t('ir.card.restart', undefined, '重新复盘')
+                        : t('ir.card.start', undefined, '开始复盘')}
                   </Button>
                   {canHaveWorkOrder(challenge) && (
                     <Button variant="ghost" onClick={() => setWorkOrderChallenge(challenge)}>
                       <ClipboardList className="h-4 w-4" />
-                      处置工单
+                      <T k="ir.card.workOrder" fallback="处置工单" />
                     </Button>
                   )}
                   {canHaveWriteup(challenge) && (
                     <Button variant="ghost" onClick={() => setWriteupChallenge(challenge)}>
                       <FileText className="h-4 w-4" />
-                      复盘报告
+                      <T k="ir.card.writeup" fallback="复盘报告" />
                     </Button>
                   )}
                   {/*
@@ -458,8 +471,8 @@ export function IrPage() {
                     >
                       <Terminal className="h-4 w-4" />
                       {isRunningStatus(challenge) || openProcessIds.has(challenge.id)
-                        ? '收起过程'
-                        : '查看过程'}
+                        ? t('ir.card.hideProcess', undefined, '收起过程')
+                        : t('ir.card.showProcess', undefined, '查看过程')}
                     </Button>
                   )}
                 </div>

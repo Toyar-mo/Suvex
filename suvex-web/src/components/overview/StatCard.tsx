@@ -1,4 +1,5 @@
 import CountUp from '@/components/effects/CountUp'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { usePrefersReducedMotion } from '@/hooks/usePrefersReducedMotion'
 import { ArrowDownRight, ArrowUpRight, Minus, type LucideIcon } from 'lucide-react'
@@ -108,7 +109,7 @@ export function StatCard({
           // 之前这里会拼出 "No prior week to comparevs last week" —— 两个 span
           // 之间没有分隔符，少一个空格。语义上也不该拼：没有可比数据时，
           // "vs last week" 是句废话。
-          <span className="text-ink-faint">暂无对比数据</span>
+          <span className="text-ink-faint"><T k="overview.stat.noCompare"/></span>
         ) : (
           <>
             <DeltaBadge delta={delta} intent={deltaIntent} />

@@ -1,4 +1,5 @@
 import type { ChatMessage } from '@/data/chat'
+import { T } from '@/i18n/T'
 
 /**
  * 跑的过程中用户插的一句话。
@@ -12,7 +13,7 @@ export function InterjectionNote({ message }: { message: ChatMessage }) {
   return (
     <div className="flex justify-end" data-interjection="true">
       <div className="max-w-[520px] rounded-lg rounded-br-xs bg-accent/8 px-3.5 py-2">
-        <p className="mb-0.5 text-2xs text-ink-faint">插话 · 模型下一轮会看到</p>
+        <p className="mb-0.5 text-2xs text-ink-faint"><T k="chatmsg.interjection"/></p>
         <p className="whitespace-pre-wrap break-words text-sm leading-[1.5] text-ink">
           {message.content}
         </p>

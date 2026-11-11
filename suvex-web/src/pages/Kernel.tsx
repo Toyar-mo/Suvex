@@ -44,6 +44,8 @@ import {
 import { openChallengeSession } from '@/data/chat'
 import { showToast } from '@/data/toast-store'
 import { errorMessage } from '@/lib/api'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import {
   CheckCircle2,
@@ -197,6 +199,7 @@ if (import.meta.env.DEV) {
 }
 
 export function KernelPage() {
+  const { t, locale } = useI18n()
   const { account, challenges, settings, settingsError, queue, status, error, notice } = useKernel()
 
   const [filter, setFilter] = useState<KernelChallengeStatus | 'all'>('all')
@@ -379,14 +382,23 @@ export function KernelPage() {
         showToast({
           message:
             failed > 0
-              ? `同步完成，但有 ${failed} 个附件没下下来（解题时 agent 会拿不到它们）。${result.message}`
-              : `同步完成：${result.message}${suffix}`,
+              ? t(
+                  'kernel.toast.syncPartial',
+                  { n: failed, msg: result.message },
+                  `同步完成，但有 ${failed} 个附件没下下来（解题时 agent 会拿不到它们）。${result.message}`,
+                )
+              : t('kernel.toast.syncOk', { msg: result.message, suffix }, `同步完成：${result.message}${suffix}`),
           tone: failed > 0 || problems ? 'risk' : undefined,
         })
       })
-      .catch((err) => showToast({ message: `同步失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('kernel.toast.syncFailed', { msg: errorMessage(err) }, `同步失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
-  }, [])
+  }, [t])
 
   /**
    * 从**比赛平台**同步题目。与 `runSync` 分开一个函数：失败口径不同 ——
@@ -400,16 +412,27 @@ export function KernelPage() {
         const problems = result.errors[0] ?? ''
         showToast({
           message: problems
-            ? `比赛平台同步：${result.message} ${problems}`
-            : `比赛平台同步完成：${result.message}`,
+            ? t(
+                'kernel.toast.competitionPartial',
+                { msg: result.message, problems },
+                `比赛平台同步：${result.message} ${problems}`,
+              )
+            : t('kernel.toast.competitionOk', { msg: result.message }, `比赛平台同步完成：${result.message}`),
           tone: problems ? 'risk' : undefined,
         })
       })
       .catch((err) =>
-        showToast({ message: `比赛平台同步失败：${errorMessage(err)}`, tone: 'risk' }),
+        showToast({
+          message: t(
+            'kernel.toast.competitionFailed',
+            { msg: errorMessage(err) },
+            `比赛平台同步失败：${errorMessage(err)}`,
+          ),
+          tone: 'risk',
+        }),
       )
       .finally(() => setBusy(false))
-  }, [])
+  }, [t])
 
   /**
    * 按链接拉取一道题。
@@ -425,14 +448,27 @@ export function KernelPage() {
       const result = await pullKernelChallenge(raw)
       setPulling(false)
       showToast({
-        message: `已${result.created ? '拉取' : '更新'}「${result.challenge.title}」（${result.competitionName}）`,
+        message: t(
+          'kernel.toast.pulled',
+          {
+            action: result.created
+              ? t('kernel.action.pulled', undefined, '拉取')
+              : t('kernel.action.updated', undefined, '更新'),
+            title: result.challenge.title,
+            competition: result.competitionName,
+          },
+          `已${result.created ? '拉取' : '更新'}「${result.challenge.title}」（${result.competitionName}）`,
+        ),
       })
     } catch (err) {
-      showToast({ message: `拉取失败：${errorMessage(err)}`, tone: 'risk' })
+      showToast({
+        message: t('kernel.toast.pullFailed', { msg: errorMessage(err) }, `拉取失败：${errorMessage(err)}`),
+        tone: 'risk',
+      })
     } finally {
       setBusy(false)
     }
-  }, [pullInput])
+  }, [pullInput, t])
 
   const runSolve = useCallback(
     (challenge: KernelChallenge, resume = false) => {
@@ -447,10 +483,15 @@ export function KernelPage() {
         resume,
       })
         .then((result) => showToast({ message: result.message }))
-        .catch((err) => showToast({ message: `启动失败：${errorMessage(err)}`, tone: 'risk' }))
+        .catch((err) =>
+          showToast({
+            message: t('kernel.toast.solveFailed', { msg: errorMessage(err) }, `启动失败：${errorMessage(err)}`),
+            tone: 'risk',
+          }),
+        )
         .finally(() => setBusy(false))
     },
-    [profile, settings?.submitMode],
+    [profile, settings?.submitMode, t],
   )
 
   /**
@@ -465,13 +506,16 @@ export function KernelPage() {
     (challenge: KernelChallenge) => {
       void openChallengeSession(challenge.id).then((session) => {
         if (!session) {
-          showToast({ message: '打开对话失败，请稍后重试', tone: 'risk' })
+          showToast({
+            message: t('kernel.toast.openFailed', undefined, '打开对话失败，请稍后重试'),
+            tone: 'risk',
+          })
           return
         }
         navigate(`/chat?session=${encodeURIComponent(session.id)}`)
       })
     },
-    [navigate],
+    [navigate, t],
   )
 
   /**
@@ -495,17 +539,34 @@ export function KernelPage() {
           const firstFailure = result.results.find((item) => !item.ok)
           showToast({
             message:
-              `批量${action === 'solve' ? '开始' : '停止'}：${result.succeeded} 道成功` +
+              t(
+                action === 'solve' ? 'kernel.toast.batchSolve' : 'kernel.toast.batchStop',
+                { n: result.succeeded },
+                `批量${action === 'solve' ? '开始' : '停止'}：${result.succeeded} 道成功`,
+              ) +
               (result.failed > 0
-                ? `，${result.failed} 道失败（${firstFailure?.message ?? '原因未知'}）`
+                ? t(
+                    'kernel.toast.batchFailedTail',
+                    {
+                      n: result.failed,
+                      reason:
+                        firstFailure?.message ?? t('kernel.reasonUnknown', undefined, '原因未知'),
+                    },
+                    `，${result.failed} 道失败（${firstFailure?.message ?? '原因未知'}）`,
+                  )
                 : ''),
             tone: result.failed > 0 ? 'risk' : undefined,
           })
         })
-        .catch((err) => showToast({ message: `批量操作失败：${errorMessage(err)}`, tone: 'risk' }))
+        .catch((err) =>
+          showToast({
+            message: t('kernel.toast.batchFailed', { msg: errorMessage(err) }, `批量操作失败：${errorMessage(err)}`),
+            tone: 'risk',
+          }),
+        )
         .finally(() => setBusy(false))
     },
-    [profile, settings?.submitMode],
+    [profile, settings?.submitMode, t],
   )
 
   const runSubmit = useCallback(
@@ -523,10 +584,15 @@ export function KernelPage() {
               result.status === 'correct' ? 'ok' : result.status === 'wrong' ? undefined : 'risk',
           })
         })
-        .catch((err) => showToast({ message: `提交失败：${errorMessage(err)}`, tone: 'risk' }))
+        .catch((err) =>
+          showToast({
+            message: t('kernel.toast.submitFailed', { msg: errorMessage(err) }, `提交失败：${errorMessage(err)}`),
+            tone: 'risk',
+          }),
+        )
         .finally(() => setBusy(false))
     },
-    [pending, settings?.submitMode],
+    [pending, settings?.submitMode, t],
   )
 
   const runCancel = useCallback(() => {
@@ -540,18 +606,30 @@ export function KernelPage() {
             那一轮会跑完。不说的话，用户点完取消看到进度还在动，
             会以为按钮坏了（见后端 `cancel_challenge` 的说明）。
         */
-        showToast({ message: '已取消。若它已经在跑，那一轮会跑完但不会产出候选。' })
+        showToast({
+          message: t('kernel.toast.canceled', undefined, '已取消。若它已经在跑，那一轮会跑完但不会产出候选。'),
+        })
       })
-      .catch((err) => showToast({ message: `取消失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('kernel.toast.cancelFailed', { msg: errorMessage(err) }, `取消失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
-  }, [canceling])
+  }, [canceling, t])
 
   const runRelease = useCallback((challenge: KernelChallenge) => {
     setBusy(true)
     void releaseEnvironment(challenge.id)
-      .catch((err) => showToast({ message: `释放失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('kernel.toast.releaseFailed', { msg: errorMessage(err) }, `释放失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
-  }, [])
+  }, [t])
 
   /**
    * 调整排队顺序（v0.23）。
@@ -566,9 +644,14 @@ export function KernelPage() {
   const runSetPriority = useCallback((challenge: KernelChallenge, priority: number) => {
     setBusy(true)
     void setChallengePriority(challenge.id, priority)
-      .catch((err) => showToast({ message: `调整失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('kernel.toast.priorityFailed', { msg: errorMessage(err) }, `调整失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
-  }, [])
+  }, [t])
 
   /**
    * 按分值批量调整排队顺序。
@@ -585,11 +668,24 @@ export function KernelPage() {
     setBusy(true)
     void prioritizeByScore()
       .then((changed) => {
-        if (changed > 0) showToast({ message: `已按分值调整 ${changed} 道排队题的优先级。` })
+        if (changed > 0) {
+          showToast({
+            message: t(
+              'kernel.toast.priorityChanged',
+              { n: changed },
+              `已按分值调整 ${changed} 道排队题的优先级。`,
+            ),
+          })
+        }
       })
-      .catch((err) => showToast({ message: `调整失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('kernel.toast.priorityFailed', { msg: errorMessage(err) }, `调整失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
-  }, [])
+  }, [t])
 
   // ── 渲染 ──────────────────────────────────────────────
 
@@ -634,19 +730,24 @@ export function KernelPage() {
                 className="shrink-0 text-signal-warn"
                 aria-hidden="true"
               />
-              <span className="text-ink">还没绑定 CTF2 账号</span>
+              <span className="text-ink"><T k="kernel.unbound" fallback="还没绑定 CTF2 账号" /></span>
               <span>
-                同步新题与发起解题需要它；下面这些题是之前同步下来的，仍可浏览、看题解与解题过程。
+                <T
+                  k="kernel.unbound.desc"
+                  fallback="同步新题与发起解题需要它；下面这些题是之前同步下来的，仍可浏览、看题解与解题过程。"
+                />
               </span>
               <span className="flex-1" />
               <Button variant="secondary" size="sm" onClick={() => setBinding((value) => !value)}>
-                {binding ? '收起' : '绑定账号'}
+                {binding
+                  ? t('kernel.unbound.collapse', undefined, '收起')
+                  : t('kernel.unbound.expand', undefined, '绑定账号')}
               </Button>
               <Link
                 to="/settings#platform"
                 className="text-2xs text-accent-strong underline hover:text-accent"
               >
-                平台接入
+                <T k="kernel.platformLink" fallback="平台接入" />
               </Link>
             </div>
             {binding && <BindPrompt />}
@@ -654,7 +755,7 @@ export function KernelPage() {
         )}
 
         <div className="mb-panel">
-          <RacePanel startDisabledReason={account ? null : '还没绑定 CTF2 账号'} />
+          <RacePanel startDisabledReason={account ? null : t('kernel.unbound', undefined, '还没绑定 CTF2 账号')} />
         </div>
 
         {/* ── 账号状态条 ── */}
@@ -664,7 +765,11 @@ export function KernelPage() {
             <span className="mono-ui text-2xs text-ink-faint">{account.tokenMask}</span>
             {account.lastSyncedAt && (
               <span className="text-2xs text-ink-faint">
-                上次同步 {new Date(account.lastSyncedAt).toLocaleString('zh-CN')}
+                {t(
+                  'kernel.account.lastSync',
+                  { time: new Date(account.lastSyncedAt).toLocaleString(locale) },
+                  `上次同步 ${new Date(account.lastSyncedAt).toLocaleString(locale)}`,
+                )}
               </span>
             )}
             {queue && (
@@ -676,10 +781,20 @@ export function KernelPage() {
               */
               <span
                 className="tabular text-2xs text-ink-faint"
-                title="同时解题的题目数上限（在「设置 → CTF2」里调）。它与扫描并发是两个独立配额。"
+                title={t(
+                  'kernel.account.queueTitle',
+                  undefined,
+                  '同时解题的题目数上限（在「设置 → CTF2」里调）。它与扫描并发是两个独立配额。',
+                )}
               >
-                在跑 {queue.running}/{queue.limit}
-                {queue.queued > 0 ? ` · 排队 ${queue.queued}` : ''}
+                {t(
+                  'kernel.account.running',
+                  { running: queue.running, limit: queue.limit },
+                  `在跑 ${queue.running}/${queue.limit}`,
+                )}
+                {queue.queued > 0
+                  ? t('kernel.account.queued', { n: queue.queued }, ` · 排队 ${queue.queued}`)
+                  : ''}
               </span>
             )}
             <span className="flex-1" />
@@ -687,7 +802,7 @@ export function KernelPage() {
               to="/settings#ctf"
               className="text-2xs text-accent-strong underline hover:text-accent"
             >
-              提交策略设置
+              <T k="kernel.account.submitSettings" fallback="提交策略设置" />
             </Link>
             <Button
               variant="link-muted"
@@ -703,7 +818,7 @@ export function KernelPage() {
               className={busy ? 'cursor-not-allowed text-ink-faint' : undefined}
               onClick={() => setUnbinding(true)}
             >
-              解绑 / 换绑
+              <T k="kernel.account.unbind" fallback="解绑 / 换绑" />
             </Button>
           </div>
         )}
@@ -723,19 +838,26 @@ export function KernelPage() {
               aria-hidden="true"
             />
             <span className="text-2xs text-ink-muted">
-              读不到 CTF2 策略设置（{settingsError.message}），
-              界面按默认值「先确认再提交」显示。当前凭据可能没有配置读取权限。
+              {t(
+                'kernel.settingsError',
+                { msg: settingsError.message },
+                `读不到 CTF2 策略设置（${settingsError.message}），界面按默认值「先确认再提交」显示。当前凭据可能没有配置读取权限。`,
+              )}
             </span>
           </div>
         )}
 
         {/* ── 工具条 ── */}
         <div className="mb-panel flex flex-wrap items-center gap-tight">
-          <div role="group" aria-label="按状态筛选" className="flex flex-wrap items-center gap-1">
+          <div
+            role="group"
+            aria-label={t('kernel.group.statusAria', undefined, '按状态筛选')}
+            className="flex flex-wrap items-center gap-1"
+          >
             {/* 三排胶囊各有一个可见组名：没有它，「全部」会出现两次而看不出
                 它们属于不同维度。组名对读屏器是重复的（aria-label 已说），故 aria-hidden。 */}
             <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
-              状态
+              <T k="kernel.group.status" fallback="状态" />
             </span>
             {STATUS_FILTERS.map((item) => {
               {
@@ -750,7 +872,7 @@ export function KernelPage() {
                   active={isActive}
                   onToggle={() => setFilter(item.value)}
                 >
-                  {item.label}
+                  {t(`kernel.status.${item.value}`, undefined, item.label)}
                   <span
                     className={cn(
                       'tabular text-2xs',
@@ -773,9 +895,13 @@ export function KernelPage() {
             ★ 计数按**当前状态筛选后**的集合算 —— 否则会出现"点了逆向
               显示 0 道题、但标签上写着 67"的错觉。
           */}
-          <div role="group" aria-label="按分类筛选" className="flex flex-wrap items-center gap-1">
+          <div
+            role="group"
+            aria-label={t('kernel.group.categoryAria', undefined, '按分类筛选')}
+            className="flex flex-wrap items-center gap-1"
+          >
             <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
-              类型
+              <T k="kernel.group.category" fallback="类型" />
             </span>
             {CATEGORY_FILTERS.map((item) => {
               const count = challengesInStatusBucket.filter((c) =>
@@ -790,7 +916,7 @@ export function KernelPage() {
                   active={isActive}
                   onToggle={() => setCategoryFilter(item.value)}
                 >
-                  {item.label}
+                  {t(`kernel.category.${item.value}`, undefined, item.label)}
                   <span
                     className={cn(
                       'tabular text-2xs',
@@ -818,13 +944,16 @@ export function KernelPage() {
           {sourceOptions.length > 0 && (
             <div
               role="group"
-              aria-label="按接入来源筛选"
+              aria-label={t('kernel.group.sourceAria', undefined, '按接入来源筛选')}
               className="flex flex-wrap items-center gap-1"
             >
               <span aria-hidden="true" className="mr-0.5 shrink-0 text-2xs text-ink-faint">
-                来源
+                <T k="kernel.group.source" fallback="来源" />
               </span>
-              {[{ value: 'all', label: '全部来源' }, ...sourceOptions].map((item) => {
+              {[
+                { value: 'all', label: t('kernel.source.all', undefined, '全部来源') },
+                ...sourceOptions,
+              ].map((item) => {
                 const count = challengesInStatusBucket.filter((c) =>
                   item.value === 'all' ? true : (c.platformSlug || '') === item.value,
                 ).length
@@ -864,8 +993,8 @@ export function KernelPage() {
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="筛选题目"
-              aria-label="按标题、分类或编号筛选"
+              placeholder={t('kernel.search.placeholder', undefined, '筛选题目')}
+              aria-label={t('kernel.search.aria', undefined, '按标题、分类或编号筛选')}
               className={cn(
                 'h-8 w-40 rounded-sm border border-line bg-surface-sunken pl-7 pr-2 text-xs text-ink',
                 'transition-ui duration-fast placeholder:text-ink-faint',
@@ -884,12 +1013,20 @@ export function KernelPage() {
             }}
             title={
               account
-                ? '把平台上的题目链接粘进来，按 id 精确拉取这一道题'
-                : '还没绑定 CTF2 账号 —— 拉取单题要用它访问平台'
+                ? t(
+                    'kernel.pull.titleEnabled',
+                    undefined,
+                    '把平台上的题目链接粘进来，按 id 精确拉取这一道题',
+                  )
+                : t(
+                    'kernel.pull.titleDisabled',
+                    undefined,
+                    '还没绑定 CTF2 账号 —— 拉取单题要用它访问平台',
+                  )
             }
           >
             <Link2 size={12} strokeWidth={2} aria-hidden="true" />
-            拉取单题
+            <T k="kernel.pull" fallback="拉取单题" />
           </Button>
 
           <Button
@@ -905,14 +1042,16 @@ export function KernelPage() {
             */
             title={
               queue?.queued === 0
-                ? '当前没有排队中的题'
-                : '把排队中的题按分值从高到低重排优先级。' +
-                  '它不会自动执行 —— 先做高分题还是先做容易题是战术选择，' +
-                  '取决于当前比分与剩余时间，由你决定。'
+                ? t('kernel.prioritize.titleEmpty', undefined, '当前没有排队中的题')
+                : t(
+                    'kernel.prioritize.title',
+                    undefined,
+                    '把排队中的题按分值从高到低重排优先级。它不会自动执行 —— 先做高分题还是先做容易题是战术选择，取决于当前比分与剩余时间，由你决定。',
+                  )
             }
           >
             <ListOrdered size={12} strokeWidth={2} aria-hidden="true" />
-            按分值排队
+            <T k="kernel.prioritize" fallback="按分值排队" />
           </Button>
 
           <Button
@@ -922,12 +1061,20 @@ export function KernelPage() {
             onClick={() => setPicking(true)}
             title={
               account
-                ? '同步指定赛事的阶段与题目（赛事题目只能查看，不能在这里解题）'
-                : '还没绑定 CTF2 账号 —— 同步赛事题目要用它访问平台'
+                ? t(
+                    'kernel.sync.competitionTitle',
+                    undefined,
+                    '同步指定赛事的阶段与题目（赛事题目只能查看，不能在这里解题）',
+                  )
+                : t(
+                    'kernel.sync.competitionTitleDisabled',
+                    undefined,
+                    '还没绑定 CTF2 账号 —— 同步赛事题目要用它访问平台',
+                  )
             }
           >
             <Trophy size={12} strokeWidth={2} aria-hidden="true" />
-            同步赛事题目
+            <T k="kernel.sync.competition" fallback="同步赛事题目" />
           </Button>
 
           <Button
@@ -935,7 +1082,11 @@ export function KernelPage() {
             size="sm"
             disabled={busy || !account}
             onClick={() => runSync()}
-            title={account ? undefined : '还没绑定 CTF2 账号 —— 同步要用它访问平台'}
+            title={
+              account
+                ? undefined
+                : t('kernel.sync.allTitleDisabled', undefined, '还没绑定 CTF2 账号 —— 同步要用它访问平台')
+            }
           >
             <RefreshCw
               size={12}
@@ -943,7 +1094,7 @@ export function KernelPage() {
               className={busy ? 'animate-spin' : undefined}
               aria-hidden="true"
             />
-            同步题目
+            <T k="kernel.sync.all" fallback="同步题目" />
           </Button>
 
           <Button
@@ -951,10 +1102,14 @@ export function KernelPage() {
             size="sm"
             disabled={busy}
             onClick={() => runSyncCompetition()}
-            title="从比赛平台（羊城杯这类 slab-match 平台）把题目拉进本地库"
+            title={t(
+              'kernel.sync.matchTitle',
+              undefined,
+              '从比赛平台（羊城杯这类 slab-match 平台）把题目拉进本地库',
+            )}
           >
             <Trophy size={12} strokeWidth={2} aria-hidden="true" />
-            同步比赛题
+            <T k="kernel.sync.match" fallback="同步比赛题" />
           </Button>
         </div>
 
@@ -970,7 +1125,10 @@ export function KernelPage() {
               />
               {notice}
             </p>
-            <IconButton label="关闭提示" onClick={clearKernelNotice}>
+            <IconButton
+              label={t('kernel.notice.close', undefined, '关闭提示')}
+              onClick={clearKernelNotice}
+            >
               <X size={13} strokeWidth={2} aria-hidden="true" />
             </IconButton>
           </div>
@@ -986,16 +1144,19 @@ export function KernelPage() {
               aria-hidden="true"
             />
             <span className="text-2xs text-ink-muted">
-              当前是<strong className="font-medium text-ink">自动提交</strong>策略： 解题产出候选
-              flag 后会直接提交，不等确认。仍受每题错误提交次数上限约束，
-              猜错会消耗不可再生的机会。可在
+              <T k="kernel.auto.prefix" fallback="当前是" />
+              <strong className="font-medium text-ink"><T k="kernel.auto.strong" fallback="自动提交" /></strong>
+              <T
+                k="kernel.auto.mid"
+                fallback="策略： 解题产出候选 flag 后会直接提交，不等确认。仍受每题错误提交次数上限约束，猜错会消耗不可再生的机会。可在"
+              />
               <Link
                 to="/settings#ctf"
                 className="mx-1 text-accent-strong underline hover:text-accent"
               >
-                设置
+                <T k="kernel.auto.settings" fallback="设置" />
               </Link>
-              里改回「先确认再提交」。
+              <T k="kernel.auto.suffix" fallback="里改回「先确认再提交」。" />
             </span>
           </div>
         )}
@@ -1004,7 +1165,11 @@ export function KernelPage() {
         {status === 'idle' || status === 'loading' ? (
           <SkeletonRows rows={8} rowClassName="h-8" />
         ) : status === 'error' ? (
-          <ErrorState title="CTF2 数据加载失败" error={error} onRetry={() => void loadKernel()} />
+          <ErrorState
+            title={t('kernel.loadFailed', undefined, 'CTF2 数据加载失败')}
+            error={error}
+            onRetry={() => void loadKernel()}
+          />
         ) : filtered.length === 0 ? (
           <KernelEmptyState hasAny={challenges.length > 0} onSync={() => runSync()} busy={busy} />
         ) : (
@@ -1026,7 +1191,7 @@ export function KernelPage() {
               onOpen={runOpen}
               onBatch={runBatch}
               queue={queue}
-              solveDisabledReason={account ? null : '还没绑定 CTF2 账号'}
+              solveDisabledReason={account ? null : t('kernel.unbound', undefined, '还没绑定 CTF2 账号')}
             />
 
             <p className="mt-panel text-2xs text-ink-faint">
@@ -1034,12 +1199,19 @@ export function KernelPage() {
                   （状态）会漏掉只按分类/来源筛的情形（此时 tag 上写 67、页脚却
                   写"共 423"），用户会以为筛选没生效。 */}
               {filter === 'all' && categoryFilter === 'all' && sourceFilter === 'all'
-                ? `共 ${challenges.length} 道题`
-                : `筛选出 ${filtered.length} 道，共 ${challenges.length} 道`}
+                ? t('kernel.footer.countAll', { n: challenges.length }, `共 ${challenges.length} 道题`)
+                : t(
+                    'kernel.footer.countFiltered',
+                    { n: filtered.length, total: challenges.length },
+                    `筛选出 ${filtered.length} 道，共 ${challenges.length} 道`,
+                  )}
               {challenges.some((c) => c.status === 'candidate_ready') && (
                 <span className="ml-2 text-signal-warn">
-                  有 {challenges.filter((c) => c.status === 'candidate_ready').length}{' '}
-                  道题在等你确认
+                  {t(
+                    'kernel.footer.candidates',
+                    { n: challenges.filter((c) => c.status === 'candidate_ready').length },
+                    `有 ${challenges.filter((c) => c.status === 'candidate_ready').length} 道题在等你确认`,
+                  )}
                 </span>
               )}
             </p>
@@ -1114,17 +1286,22 @@ export function KernelPage() {
           >
             <header className="flex flex-col gap-1">
               <h2 id="pull-challenge-title" className="text-sm text-ink">
-                按链接拉取一道题
+                <T k="kernel.pullDialog.title" fallback="按链接拉取一道题" />
               </h2>
               <p className="text-xs text-ink-muted">
-                把平台上那道题的页面地址<strong className="text-ink">整条</strong>粘进来即可 ——
-                服务端会自己从里面认出题目 id，并在已知的练习集里找出它属于哪一个。 只粘那段 UUID
-                也行。
+                <T k="kernel.pullDialog.descPrefix" fallback="把平台上那道题的页面地址" />
+                <strong className="text-ink"><T k="kernel.pullDialog.descStrong" fallback="整条" /></strong>
+                <T
+                  k="kernel.pullDialog.descSuffix"
+                  fallback="粘进来即可 —— 服务端会自己从里面认出题目 id，并在已知的练习集里找出它属于哪一个。 只粘那段 UUID 也行。"
+                />
               </p>
             </header>
 
             <label htmlFor="pull-challenge-input" className="flex flex-col gap-1">
-              <span className="text-2xs font-medium text-ink">题目链接或 id</span>
+              <span className="text-2xs font-medium text-ink">
+                <T k="kernel.pullDialog.label" fallback="题目链接或 id" />
+              </span>
               <input
                 id="pull-challenge-input"
                 autoFocus
@@ -1143,8 +1320,10 @@ export function KernelPage() {
             </label>
 
             <p className="rounded-sm border border-dashed border-line-strong px-2.5 py-2 text-2xs text-ink-muted">
-              为什么是一次一道：平台的开放接口没有「列出练习集题目」的接口， 所以没法批量拉；但「按
-              id 取单题详情」是可用的。重复拉同一道题只会更新它，不会重复插入。
+              <T
+                k="kernel.pullDialog.why"
+                fallback="为什么是一次一道：平台的开放接口没有「列出练习集题目」的接口， 所以没法批量拉；但「按 id 取单题详情」是可用的。重复拉同一道题只会更新它，不会重复插入。"
+              />
             </p>
 
             <footer className="flex items-center justify-end gap-2">
@@ -1154,7 +1333,7 @@ export function KernelPage() {
                 disabled={busy}
                 onClick={() => setPulling(false)}
               >
-                取消
+                <T k="kernel.pullDialog.cancel" fallback="取消" />
               </Button>
               <Button
                 variant="primary"
@@ -1162,7 +1341,7 @@ export function KernelPage() {
                 disabled={busy || !pullInput.trim()}
                 onClick={() => void runPull()}
               >
-                拉取
+                <T k="kernel.pullDialog.submit" fallback="拉取" />
               </Button>
             </footer>
           </div>
@@ -1172,9 +1351,13 @@ export function KernelPage() {
       {/* ── 解绑 / 换绑 ── */}
       <ConfirmDialog
         open={unbinding}
-        title="解绑这个 CTF2 账号？"
-        description="解绑会清空服务端保存的 PAT（密文与掩码一起置空），之后可以绑定另一个账号。已经同步下来的赛事与题目会保留 —— 它们挂在这次绑定下面，不会因为换绑而消失。"
-        confirmLabel="解绑"
+        title={t('kernel.unbind.title', undefined, '解绑这个 CTF2 账号？')}
+        description={t(
+          'kernel.unbind.desc',
+          undefined,
+          '解绑会清空服务端保存的 PAT（密文与掩码一起置空），之后可以绑定另一个账号。已经同步下来的赛事与题目会保留 —— 它们挂在这次绑定下面，不会因为换绑而消失。',
+        )}
+        confirmLabel={t('kernel.unbind.confirm', undefined, '解绑')}
         busy={busy}
         onConfirm={() => {
           if (!account) return
@@ -1182,9 +1365,16 @@ export function KernelPage() {
           void unbindKernelAccount(account.id)
             .then(() => {
               setUnbinding(false)
-              showToast({ message: '已解绑。现在可以绑定另一个账号了。' })
+              showToast({
+                message: t('kernel.toast.unbound', undefined, '已解绑。现在可以绑定另一个账号了。'),
+              })
             })
-            .catch((err) => showToast({ message: `解绑失败：${errorMessage(err)}`, tone: 'risk' }))
+            .catch((err) =>
+              showToast({
+                message: t('kernel.toast.unbindFailed', { msg: errorMessage(err) }, `解绑失败：${errorMessage(err)}`),
+                tone: 'risk',
+              }),
+            )
             .finally(() => setBusy(false))
         }}
         onCancel={() => setUnbinding(false)}
@@ -1206,9 +1396,17 @@ export function KernelPage() {
       {/* ── 取消确认 ── */}
       <ConfirmDialog
         open={canceling !== null}
-        title={`取消「${canceling?.title ?? ''}」的解题？`}
-        description="队列里还没开始的会真正取消；已经在跑的那一轮会跑完，但不会产出候选答案。已经消耗的平台环境不会因此释放。"
-        confirmLabel="取消解题"
+        title={t(
+          'kernel.cancel.title',
+          { title: canceling?.title ?? '' },
+          `取消「${canceling?.title ?? ''}」的解题？`,
+        )}
+        description={t(
+          'kernel.cancel.desc',
+          undefined,
+          '队列里还没开始的会真正取消；已经在跑的那一轮会跑完，但不会产出候选答案。已经消耗的平台环境不会因此释放。',
+        )}
+        confirmLabel={t('kernel.cancel.confirm', undefined, '取消解题')}
         busy={busy}
         onConfirm={runCancel}
         onCancel={() => setCanceling(null)}
@@ -1231,6 +1429,7 @@ export function KernelPage() {
  * 同源的任何脚本都能读 localStorage，而这是平台的凭据。
  */
 function BindPrompt() {
+  const { t } = useI18n()
   const [token, setToken] = useState('')
   const [label, setLabel] = useState('')
   const [busy, setBusy] = useState(false)
@@ -1242,19 +1441,26 @@ function BindPrompt() {
       .then(() => {
         // ★ 立刻清空本地状态：这个字符串没有理由在组件里多留一秒。
         setToken('')
-        showToast({ message: '绑定成功。' })
+        showToast({ message: t('kernel.toast.bindOk', undefined, '绑定成功。') })
       })
-      .catch((err) => showToast({ message: `绑定失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('kernel.toast.bindFailed', { msg: errorMessage(err) }, `绑定失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
   }
 
   return (
     <div className="mx-auto flex max-w-lg flex-col gap-panel rounded-md border border-line bg-surface p-panel">
       <div className="flex flex-col gap-1">
-        <h2 className="text-sm font-medium text-ink">绑定 CTF2 账号</h2>
+        <h2 className="text-sm font-medium text-ink"><T k="kernel.bind.title" fallback="绑定 CTF2 账号" /></h2>
         <p className="text-xs text-ink-muted">
-          需要一个 CTF2 的 Personal Access Token（PAT）。它会以**加密形式**存在服务端，
-          界面任何位置都不会完整显示它。
+          <T
+            k="kernel.bind.desc"
+            fallback="需要一个 CTF2 的 Personal Access Token（PAT）。它会以**加密形式**存在服务端，界面任何位置都不会完整显示它。"
+          />
         </p>
       </div>
 
@@ -1272,7 +1478,7 @@ function BindPrompt() {
           }}
           autoComplete="off"
           spellCheck={false}
-          placeholder="粘贴平台的访问令牌"
+          placeholder={t('kernel.bind.tokenPlaceholder', undefined, '粘贴平台的访问令牌')}
           className={cn(
             'mono-ui h-9 w-full rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink',
             'transition-ui duration-fast placeholder:text-ink-faint',
@@ -1283,13 +1489,13 @@ function BindPrompt() {
 
       <div className="flex flex-col gap-1.5">
         <label htmlFor="ctf2-label" className="text-2xs font-medium text-ink">
-          备注（可空）
+          <T k="kernel.bind.note" fallback="备注（可空）" />
         </label>
         <input
           id="ctf2-label"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
-          placeholder="例如「我的号」"
+          placeholder={t('kernel.bind.notePlaceholder', undefined, '例如「我的号」')}
           className={cn(
             'h-9 w-full rounded-sm border border-line bg-surface-sunken px-2.5 text-sm text-ink',
             'transition-ui duration-fast placeholder:text-ink-faint',
@@ -1303,15 +1509,17 @@ function BindPrompt() {
         size="md"
         disabled={busy || !token.trim()}
         loading={busy}
-        loadingLabel="验证中…"
+        loadingLabel={t('kernel.bind.loadingLabel', undefined, '验证中…')}
         onClick={submit}
       >
-        绑定并验证
+        <T k="kernel.bind.submit" fallback="绑定并验证" />
       </Button>
 
       <p className="text-2xs text-ink-faint">
-        绑定时会真的调一次 CTF2 验证这个令牌 —— 验证不通过就不会保存，
-        避免出现一个"显示已绑定但什么都做不了"的状态。
+        <T
+          k="kernel.bind.footer"
+          fallback={'绑定时会真的调一次 CTF2 验证这个令牌 —— 验证不通过就不会保存，避免出现一个"显示已绑定但什么都做不了"的状态。'}
+        />
       </p>
     </div>
   )
@@ -1339,22 +1547,24 @@ function KernelEmptyState({
   if (hasAny) {
     return (
       <div className="flex flex-col items-center gap-tight rounded-md border border-line bg-surface py-bay text-center">
-        <p className="text-sm text-ink-muted">这个状态下没有题目</p>
-        <p className="text-xs text-ink-faint">换个筛选条件看看。</p>
+        <p className="text-sm text-ink-muted"><T k="kernel.empty.filtered" fallback="这个状态下没有题目" /></p>
+        <p className="text-xs text-ink-faint"><T k="kernel.empty.filteredHint" fallback="换个筛选条件看看。" /></p>
       </div>
     )
   }
   return (
     <div className="flex flex-col items-center gap-tight rounded-md border border-line bg-surface py-bay text-center">
-      <p className="text-sm text-ink-muted">还没有从 CTF2 同步到题目</p>
+      <p className="text-sm text-ink-muted"><T k="kernel.empty.none" fallback="还没有从 CTF2 同步到题目" /></p>
       <p className="max-w-[46ch] text-xs text-ink-faint">
-        点「同步题目」把平台上的练习集与赛事拉下来。同步是一次外部请求， 会真的访问 CTF2 ——
-        所以它需要扫描级权限。
+        <T
+          k="kernel.empty.noneDesc"
+          fallback="点「同步题目」把平台上的练习集与赛事拉下来。同步是一次外部请求， 会真的访问 CTF2 —— 所以它需要扫描级权限。"
+        />
       </p>
       <Button variant="primary" size="md" disabled={busy} loading={busy} onClick={onSync}>
         {/* busy 时由 `loading` 自己渲染转圈，这里再画一个就有两个圈了 */}
         {!busy && <RefreshCw size={14} strokeWidth={2.5} aria-hidden="true" />}
-        同步题目
+        <T k="kernel.sync.all" fallback="同步题目" />
       </Button>
     </div>
   )

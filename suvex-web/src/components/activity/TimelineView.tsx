@@ -12,6 +12,8 @@ import {
 } from '@/data/timeline'
 import { AlertTriangle } from 'lucide-react'
 
+import { useI18n } from '@/i18n'
+
 /**
  * 时间线视图 —— 一条按**真实时间**摆开的事件轴。
  *
@@ -81,6 +83,7 @@ export function TimelineView({
   onSelectGap,
   className,
 }: TimelineViewProps) {
+  const { t } = useI18n()
   const model = useMemo(
     () => buildTimeline(events, now === undefined ? {} : { now }),
     [events, now],
@@ -114,10 +117,10 @@ export function TimelineView({
       >
         <p className="max-w-prose text-sm text-ink-muted">
           {emptyKind === 'no-scan'
-            ? '没有指定扫描 —— 时间线要对着一次扫描的时间跨度画，先在上面选一次。'
+            ? t('activity.timeline.empty.noScan')
             : emptyKind === 'starting'
-              ? '扫描刚开始，还没有事件。时间线会随着事件到达自己长出来。'
-              : '这次扫描没有任何事件产出。这不是"还在等"——它已经结束了，而整段时间是空的。'}
+              ? t('activity.timeline.empty.starting')
+              : t('activity.timeline.empty.none')}
         </p>
       </div>
     )
@@ -142,22 +145,23 @@ export function TimelineView({
             <span className="inline-flex items-center gap-1 text-sm text-signal-risk">
               <AlertTriangle size={13} strokeWidth={2.25} aria-hidden="true" />
               {suspicious.length === 1
-                ? `有一段 ${formatGap(longest.durationMs)} 没有产出`
-                : `${suspicious.length} 段静默，最长 ${formatGap(longest.durationMs)}`}
+                ? t('activity.timeline.singleGap', { gap: formatGap(longest.durationMs) })
+                : t('activity.timeline.multiGap', {
+                    n: suspicious.length,
+                    gap: formatGap(longest.durationMs),
+                  })}
             </span>
-            <span className="text-xs text-ink-muted">
-              而扫描当时在跑 —— 判断一下是深扫工具在跑，还是 agent 卡住了。
-            </span>
+            <span className="text-xs text-ink-muted">{t('activity.timeline.runningHint')}</span>
           </>
         ) : (
           <span className="text-sm text-ink-muted">
-            没有超过 {formatGap(SILENCE_HINT_MS)} 的静默
-            {scanStatus === 'running' ? '' : '（扫描已结束，之后的安静是正常的）'}
+            {t('activity.timeline.noSilence', { gap: formatGap(SILENCE_HINT_MS) })}
+            {scanStatus === 'running' ? '' : t('activity.timeline.endedSuffix')}
           </span>
         )}
         <div className="flex-1" />
         <span className="mono-ui tabular text-2xs text-ink-faint" data-numeric>
-          共 {events.length} 条 · {formatGap(model.durationMs)}
+          {t('activity.timeline.total', { n: events.length, gap: formatGap(model.durationMs) })}
         </span>
       </div>
 
@@ -188,12 +192,15 @@ export function TimelineView({
                     {formatGap(gap.startMs)} → {formatGap(gap.endMs)}
                   </span>
                   <span className="shrink-0">
-                    {isSuspicious ? '静默' : '间隔'} {formatGap(gap.durationMs)}
+                    {isSuspicious ? t('activity.timeline.silence') : t('activity.timeline.interval')}{' '}
+                    {formatGap(gap.durationMs)}
                   </span>
                   <span className="min-w-0 flex-1 truncate text-ink-faint">
                     {gap.afterIndex >= model.points.length
-                      ? '最后一条事件之后，一直到现在'
-                      : `之后的第一条：${model.points[gap.afterIndex]?.event.summary ?? ''}`}
+                      ? t('activity.timeline.untilNow')
+                      : t('activity.timeline.nextEvent', {
+                          summary: model.points[gap.afterIndex]?.event.summary ?? '',
+                        })}
                   </span>
                 </button>
               </li>
@@ -219,6 +226,7 @@ interface TimelineAxisProps {
 }
 
 function TimelineAxis({ model, scanStatus, onSelectGap }: TimelineAxisProps) {
+  const { t } = useI18n()
   return (
     <div className="relative">
       {/*
@@ -238,8 +246,13 @@ function TimelineAxis({ model, scanStatus, onSelectGap }: TimelineAxisProps) {
               type="button"
               onClick={() => onSelectGap?.(gap)}
               disabled={!onSelectGap}
-              title={`${formatGap(gap.startMs)} → ${formatGap(gap.endMs)}，${isSuspicious ? '静默' : '间隔'} ${formatGap(gap.durationMs)}`}
-              aria-label={`${isSuspicious ? '静默' : '间隔'} ${formatGap(gap.durationMs)}`}
+              title={t('activity.timeline.gapTitle', {
+                start: formatGap(gap.startMs),
+                end: formatGap(gap.endMs),
+                kind: isSuspicious ? t('activity.timeline.silence') : t('activity.timeline.interval'),
+                gap: formatGap(gap.durationMs),
+              })}
+              aria-label={`${isSuspicious ? t('activity.timeline.silence') : t('activity.timeline.interval')} ${formatGap(gap.durationMs)}`}
               className={cn(
                 'absolute top-1/2 h-6 -translate-y-1/2 rounded-xs border',
                 isSuspicious
@@ -292,22 +305,22 @@ function TimelineAxis({ model, scanStatus, onSelectGap }: TimelineAxisProps) {
       <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-ink-faint">
         <span className="inline-flex items-center gap-1">
           <span className="h-1.5 w-1.5 rounded-pill bg-accent" aria-hidden="true" />
-          有价值产出
+          {t('activity.timeline.legend.valuable')}
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-1.5 w-1.5 rounded-pill bg-ink-faint" aria-hidden="true" />
-          日常动作
+          {t('activity.timeline.legend.routine')}
         </span>
         <span className="inline-flex items-center gap-1">
           <span className="h-1.5 w-1.5 rounded-pill bg-signal-risk" aria-hidden="true" />
-          告警 / 失败
+          {t('activity.timeline.legend.alert')}
         </span>
         <span className="inline-flex items-center gap-1">
           <span
             className="h-2 w-3 rounded-xs border border-signal-risk/40 bg-signal-risk/15"
             aria-hidden="true"
           />
-          运行中的静默
+          {t('activity.timeline.legend.silenceRunning')}
         </span>
       </div>
     </div>

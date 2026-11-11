@@ -24,7 +24,6 @@ import {
 } from '@/data/reports-store'
 import {
   DEFAULT_REPORT_OPTIONS,
-  describeScope,
   type Report,
   type ReportFormat,
   type ReportOptions,
@@ -35,6 +34,8 @@ import { applyOptions, findingsInScope, presetToRange, type RangePreset } from '
 import { generateReportArtifact } from '@/lib/report-api'
 import { downloadTextFile, printReport } from '@/lib/report-export'
 import { errorMessage } from '@/lib/api'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { AlertCircle, Download, Eye, FileText, Printer } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -68,6 +69,7 @@ export function ReportsPage() {
 
       所以这一页必须自己触发加载，并且**显示它们的三态**（见下面的左栏）。
   */
+  const { t, locale } = useI18n()
   const scansState = useScansState()
   const findingsState = useFindingsState()
   const scans = scansState.scans
@@ -192,7 +194,13 @@ export function ReportsPage() {
     if (documentState.status === 'error') {
       const timer = window.setTimeout(() => {
         setPendingPrint(false)
-        setError('报告已生成，但预览内容没能加载出来，请在历史列表里重新下载。')
+        setError(
+          t(
+            'report.error.pendingPrint',
+            undefined,
+            '报告已生成，但预览内容没能加载出来，请在历史列表里重新下载。',
+          ),
+        )
       }, 0)
       return () => window.clearTimeout(timer)
     }
@@ -215,7 +223,7 @@ export function ReportsPage() {
       printReport()
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [pendingPrint, documentState])
+  }, [pendingPrint, documentState, t])
 
   /**
    * 本次会话的参考时刻。
@@ -459,9 +467,9 @@ export function ReportsPage() {
     () => ({
       scope: effectiveScope,
       options,
-      title: title.trim() || defaultTitle(effectiveScope, scans),
+      title: title.trim() || defaultTitle(effectiveScope, scans, t),
     }),
-    [effectiveScope, options, title, scans],
+    [effectiveScope, options, title, scans, t],
   )
 
   /*
@@ -558,7 +566,13 @@ export function ReportsPage() {
    */
   const handleGenerate = useCallback(async () => {
     if (selectedCount === 0) {
-      setError('当前范围与选项下没有可导出的条目，请调整后再生成。')
+      setError(
+        t(
+          'report.error.emptySelection',
+          undefined,
+          '当前范围与选项下没有可导出的条目，请调整后再生成。',
+        ),
+      )
       return
     }
 
@@ -566,7 +580,7 @@ export function ReportsPage() {
     setBusy('generate')
 
     try {
-      const reportTitle = title.trim() || defaultTitle(effectiveScope, scans)
+      const reportTitle = title.trim() || defaultTitle(effectiveScope, scans, t)
 
       /*
         ★ 顺序是**先落库、再据它导出**，不能反过来。
@@ -605,7 +619,9 @@ export function ReportsPage() {
 
       if (artifact.kind === 'file') {
         downloadTextFile(artifact.filename, artifact.content, artifact.mime)
-        showNotice(`已生成并下载 ${artifact.filename}`)
+        showNotice(
+          t('report.notice.generatedDownloaded', { filename: artifact.filename }, `已生成并下载 ${artifact.filename}`),
+        )
       } else {
         /*
           打印分支。⚠️ 两件事必须做对：
@@ -618,7 +634,13 @@ export function ReportsPage() {
              交给 pendingPrint，由它盯着文档状态就绪后再动手。
         */
         setPendingPrint(true)
-        showNotice('已打开打印窗口 —— 在目标处选择「另存为 PDF」即可导出。')
+        showNotice(
+          t(
+            'report.notice.printOpened',
+            undefined,
+            '已打开打印窗口 —— 在目标处选择「另存为 PDF」即可导出。',
+          ),
+        )
       }
     } catch (err) {
       // 真实接口会超时、会被限流。错误必须落到界面上 ——
@@ -627,7 +649,7 @@ export function ReportsPage() {
     } finally {
       setBusy(null)
     }
-  }, [selectedCount, title, effectiveScope, scans, options, format, showNotice])
+  }, [selectedCount, title, effectiveScope, scans, options, format, showNotice, t])
 
   /**
    * 重新下载历史报告。
@@ -652,14 +674,22 @@ export function ReportsPage() {
 
         if (artifact.kind === 'file') {
           downloadTextFile(artifact.filename, artifact.content, artifact.mime)
-          showNotice(`已下载 ${artifact.filename}`)
+          showNotice(
+            t('report.notice.downloaded', { filename: artifact.filename }, `已下载 ${artifact.filename}`),
+          )
         } else {
           // 打印前先把预览切到这份报告 —— 否则打印出来的是当前编排的那份。
           // 真正的打印交给 pendingPrint：等这份报告的文档加载完再动手。
           setOpenedId(report.id)
           setMode('history')
           setPendingPrint(true)
-          showNotice('已打开打印窗口 —— 在目标处选择「另存为 PDF」即可导出。')
+          showNotice(
+            t(
+              'report.notice.printOpened',
+              undefined,
+              '已打开打印窗口 —— 在目标处选择「另存为 PDF」即可导出。',
+            ),
+          )
         }
       } catch (err) {
         setError(errorMessage(err))
@@ -667,7 +697,7 @@ export function ReportsPage() {
         setDownloadingId(null)
       }
     },
-    [showNotice],
+    [showNotice, t],
   )
 
   /**
@@ -686,12 +716,12 @@ export function ReportsPage() {
         // 删掉的正是当前预览的那份时，退出历史预览 ——
         // 否则会停留在一份已经不存在的报告上
         setOpenedId((current) => (current === report.id ? null : current))
-        showNotice(`已删除「${report.title}」`)
+        showNotice(t('report.notice.deleted', { title: report.title }, `已删除「${report.title}」`))
       } catch (err) {
         setError(errorMessage(err))
       }
     },
-    [showNotice],
+    [showNotice, t],
   )
 
   // ─────────────────────────────────────────────
@@ -711,18 +741,21 @@ export function ReportsPage() {
             会被下方的历史干扰（这块页面本来就重）。 */}
         <div className="mb-panel">
           <SegmentedControl
-            ariaLabel="报告视图"
+            ariaLabel={t('report.view.aria', undefined, '报告视图')}
             value={mode}
             onChange={(next) => setMode(next)}
             options={[
               {
                 id: 'compose',
-                label: '生成报告',
+                label: t('report.view.compose', undefined, '生成报告'),
                 icon: <FileText size={13} strokeWidth={1.75} aria-hidden="true" />,
               },
               {
                 id: 'history',
-                label: `历史报告${reports.length > 0 ? `（${reports.length}）` : ''}`,
+                label:
+                  reports.length > 0
+                    ? t('report.view.historyCount', { n: reports.length }, `历史报告（${reports.length}）`)
+                    : t('report.view.history', undefined, '历史报告'),
                 icon: <Eye size={13} strokeWidth={1.75} aria-hidden="true" />,
               },
             ]}
@@ -779,7 +812,7 @@ export function ReportsPage() {
               scopeDataStatus === 'error' ? (
                 <div className="rounded-md border border-line bg-surface p-panel">
                   <ErrorState
-                    title="数据范围加载失败"
+                    title={t('report.error.scopeLoad', undefined, '数据范围加载失败')}
                     error={scopeDataError}
                     onRetry={() => {
                       void loadScans()
@@ -817,21 +850,27 @@ export function ReportsPage() {
                   {/* 报告标题可改，默认按范围给一个 —— 空着不写会让历史列表出现无名条目 */}
                   <div className="flex flex-col gap-1.5">
                     <label htmlFor="report-title" className="text-2xs text-ink-faint">
-                      报告标题
+                      <T k="report.title.label" fallback="报告标题" />
                     </label>
                     <input
                       id="report-title"
                       type="text"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
-                      title={title || defaultTitle(effectiveScope, scans)}
+                      title={title || defaultTitle(effectiveScope, scans, t)}
                       className="h-8 w-full rounded-sm border border-line bg-surface-sunken px-2 text-xs text-ink transition-ui duration-fast placeholder:text-ink-faint hover:border-line-strong focus:outline-none focus:ring-2 focus:ring-accent/40"
                     />
                   </div>
 
                   <div className="flex flex-col gap-1.5">
-                    <span className="text-2xs text-ink-faint">导出格式</span>
-                    <div role="radiogroup" aria-label="导出格式" className="flex gap-1">
+                    <span className="text-2xs text-ink-faint">
+                      <T k="report.format.label" fallback="导出格式" />
+                    </span>
+                    <div
+                      role="radiogroup"
+                      aria-label={t('report.format.label', undefined, '导出格式')}
+                      className="flex gap-1"
+                    >
                       {(['pdf', 'markdown'] as ReportFormat[]).map((key) => {
                         const checked = format === key
                         return (
@@ -896,15 +935,18 @@ export function ReportsPage() {
                       onClick={handleGenerate}
                       disabled={selectedCount === 0 || busy === 'download'}
                       loading={busy === 'generate'}
-                      loadingLabel="正在生成…"
+                      loadingLabel={t('report.generate.loading', undefined, '正在生成…')}
                     >
                       <Download size={14} strokeWidth={2} aria-hidden="true" />
-                      生成并导出
+                      <T k="report.generate.action" fallback="生成并导出" />
                     </Button>
 
                     {format === 'pdf' && (
                       <p className="text-2xs text-ink-faint">
-                        将调用浏览器打印，在目标处选择「另存为 PDF」。生成的版本与右侧预览一致。
+                        <T
+                          k="report.generate.pdfHint"
+                          fallback="将调用浏览器打印，在目标处选择「另存为 PDF」。生成的版本与右侧预览一致。"
+                        />
                       </p>
                     )}
                   </div>
@@ -953,7 +995,7 @@ export function ReportsPage() {
                   */}
                   {documentState.status === 'error' ? (
                     <ErrorState
-                      title="报告内容加载失败"
+                      title={t('report.error.previewLoad', undefined, '报告内容加载失败')}
                       error={documentState.error}
                       onRetry={() => {
                         if (openedId) void refreshReportDocument(openedId)
@@ -971,7 +1013,7 @@ export function ReportsPage() {
             ) : preview.status === 'error' ? (
               <div className="rounded-md border border-line bg-surface p-panel">
                 <ErrorState
-                  title="报告预览生成失败"
+                  title={t('report.error.previewGenerate', undefined, '报告预览生成失败')}
                   error={preview.error}
                   onRetry={() => void loadReportPreview(previewInput)}
                 />
@@ -991,7 +1033,7 @@ export function ReportsPage() {
                       role="status"
                       className="absolute right-2 top-2 z-10 rounded-pill border border-line bg-surface-overlay/90 px-2 py-0.5 text-2xs text-ink-muted"
                     >
-                      正在更新…
+                      <T k="report.preview.updating" fallback="正在更新…" />
                     </span>
                   )}
                   <PaperSheet>
@@ -1007,8 +1049,12 @@ export function ReportsPage() {
               */
               <NoScansYet
                 bordered={false}
-                title="还没有可出报告的扫描"
-                description="报告来自已经跑完的扫描。发起并完成一次扫描之后，就能在这里把它整理成可交付的报告。"
+                title={t('report.empty.noScans.title', undefined, '还没有可出报告的扫描')}
+                description={t(
+                  'report.empty.noScans.body',
+                  undefined,
+                  '报告来自已经跑完的扫描。发起并完成一次扫描之后，就能在这里把它整理成可交付的报告。',
+                )}
               />
             ) : preview.status === 'loading' ? (
               <>
@@ -1041,7 +1087,7 @@ export function ReportsPage() {
             ) : status === 'error' ? (
               <div className="p-panel">
                 <ErrorState
-                  title="报告历史加载失败"
+                  title={t('report.error.historyLoad', undefined, '报告历史加载失败')}
                   error={loadError}
                   onRetry={() => void loadReports()}
                 />
@@ -1054,7 +1100,7 @@ export function ReportsPage() {
                 onDelete={handleDelete}
                 downloadingId={downloadingId}
                 canDelete={canDeleteReports}
-                describeScopeOf={(report) => describeScopeOf(report, scans)}
+                describeScopeOf={(report) => describeScopeOf(report, scans, t, locale)}
                 emptyState={
                   <div className="flex flex-col items-center gap-tight text-center">
                     <FileText
@@ -1063,10 +1109,14 @@ export function ReportsPage() {
                       className="text-ink-faint"
                       aria-hidden="true"
                     />
-                    <p className="text-sm text-ink-muted">还没有生成过报告</p>
+                    <p className="text-sm text-ink-muted">
+                      <T k="report.history.empty.title" fallback="还没有生成过报告" />
+                    </p>
                     <p className="max-w-[46ch] text-xs text-ink-faint">
-                      在「生成报告」里选择范围与内容即可产出第一份。已生成的报告会保留当时的条目与口径，
-                      不会随漏洞状态的变化而改变。
+                      <T
+                        k="report.history.empty.body"
+                        fallback="在「生成报告」里选择范围与内容即可产出第一份。已生成的报告会保留当时的条目与口径，不会随漏洞状态的变化而改变。"
+                      />
                     </p>
                   </div>
                 }
@@ -1095,26 +1145,70 @@ function ReportMetaCard({
   onDownload: (report: Report) => void
   downloadingId: string | null
 }) {
+  const { t, locale } = useI18n()
   const o = report.options
   return (
     <div className="flex flex-col gap-tight rounded-md border border-line bg-surface p-panel">
-      <h3 className="text-xs font-medium text-ink">生成口径</h3>
+      <h3 className="text-xs font-medium text-ink">
+        <T k="report.meta.title" fallback="生成口径" />
+      </h3>
       <p className="text-2xs text-ink-faint">
-        这份报告在生成时固定了条目与选项，之后不会改变。重新下载得到的是当初那一份。
+        <T
+          k="report.meta.desc"
+          fallback="这份报告在生成时固定了条目与选项，之后不会改变。重新下载得到的是当初那一份。"
+        />
       </p>
 
       <dl className="mt-1 flex flex-col gap-1.5 text-2xs">
-        <MetaRow label="覆盖范围" value={describeScopeOf(report, scans)} />
-        <MetaRow label="条目数" value={`${report.findingCount} 条`} />
+        <MetaRow label={t('report.meta.scope', undefined, '覆盖范围')} value={describeScopeOf(report, scans, t, locale)} />
+        <MetaRow
+          label={t('report.meta.count', undefined, '条目数')}
+          value={t('report.meta.findingCount', { n: report.findingCount }, `${report.findingCount} 条`)}
+        />
         {/* 有排除就写出来 —— 与报告正文摘要里的那句话同源同口径 */}
         {report.excludedCount > 0 && (
-          <MetaRow label="已排除" value={`${report.excludedCount} 条（按当时的选项）`} />
+          <MetaRow
+            label={t('report.meta.excluded', undefined, '已排除')}
+            value={t(
+              'report.meta.excludedValue',
+              { n: report.excludedCount },
+              `${report.excludedCount} 条（按当时的选项）`,
+            )}
+          />
         )}
-        <MetaRow label="导出格式" value={report.format === 'pdf' ? 'PDF' : 'Markdown'} />
-        <MetaRow label="修复建议" value={o.includeRemediation ? '包含' : '未包含'} />
-        <MetaRow label="验证脚本" value={o.includePoc ? '包含' : '未包含'} />
-        <MetaRow label="判断依据" value={o.includeReasoning ? '包含' : '未包含'} />
-        <MetaRow label="条目筛选" value={o.onlyConfirmed ? '仅已确认' : '全部状态'} />
+        <MetaRow label={t('report.meta.format', undefined, '导出格式')} value={report.format === 'pdf' ? 'PDF' : 'Markdown'} />
+        <MetaRow
+          label={t('report.meta.remediation', undefined, '修复建议')}
+          value={
+            o.includeRemediation
+              ? t('report.meta.included', undefined, '包含')
+              : t('report.meta.notIncluded', undefined, '未包含')
+          }
+        />
+        <MetaRow
+          label={t('report.meta.poc', undefined, '验证脚本')}
+          value={
+            o.includePoc
+              ? t('report.meta.included', undefined, '包含')
+              : t('report.meta.notIncluded', undefined, '未包含')
+          }
+        />
+        <MetaRow
+          label={t('report.meta.reasoning', undefined, '判断依据')}
+          value={
+            o.includeReasoning
+              ? t('report.meta.included', undefined, '包含')
+              : t('report.meta.notIncluded', undefined, '未包含')
+          }
+        />
+        <MetaRow
+          label={t('report.meta.filter', undefined, '条目筛选')}
+          value={
+            o.onlyConfirmed
+              ? t('report.meta.confirmedOnly', undefined, '仅已确认')
+              : t('report.meta.allStatuses', undefined, '全部状态')
+          }
+        />
       </dl>
 
       {/*
@@ -1134,7 +1228,9 @@ function ReportMetaCard({
         className="mt-1"
       >
         <Download size={12} strokeWidth={2} aria-hidden="true" />
-        {downloadingId === report.id ? '正在生成…' : '重新下载'}
+        {downloadingId === report.id
+          ? t('report.generate.loading', undefined, '正在生成…')
+          : t('report.meta.redownload', undefined, '重新下载')}
       </Button>
     </div>
   )
@@ -1154,12 +1250,21 @@ function EmptyPreview({ mode }: { mode: 'compose' | 'history' }) {
     <div className="flex flex-col items-center justify-center gap-tight rounded-md border border-dashed border-line-strong px-panel py-bay text-center">
       <FileText size={20} strokeWidth={1.5} className="text-ink-faint" aria-hidden="true" />
       <p className="text-sm text-ink-muted">
-        {mode === 'history' ? '从下方列表中选择一份报告' : '当前范围下没有可预览的内容'}
+        {mode === 'history' ? (
+          <T k="report.emptyPreview.select" fallback="从下方列表中选择一份报告" />
+        ) : (
+          <T k="report.emptyPreview.noContent" fallback="当前范围下没有可预览的内容" />
+        )}
       </p>
       <p className="max-w-[46ch] text-xs text-ink-faint">
-        {mode === 'history'
-          ? '选中后会在这里显示它与当初生成时一致的内容。'
-          : '换一个数据范围，或减少筛选条件。'}
+        {mode === 'history' ? (
+          <T
+            k="report.emptyPreview.selectHint"
+            fallback="选中后会在这里显示它与当初生成时一致的内容。"
+          />
+        ) : (
+          <T k="report.emptyPreview.noContentHint" fallback="换一个数据范围，或减少筛选条件。" />
+        )}
       </p>
     </div>
   )
@@ -1192,9 +1297,19 @@ function PreviewCaption({ mode }: { mode: 'compose' | 'history' }) {
         )}
       />
       {mode === 'history' ? (
-        <span>历史报告预览 · 内容在生成时固定，不随漏洞状态变化</span>
+        <span>
+          <T
+            k="report.caption.history"
+            fallback="历史报告预览 · 内容在生成时固定，不随漏洞状态变化"
+          />
+        </span>
       ) : (
-        <span>草稿预览 · 与导出的 PDF / Markdown 内容一致；报告编号在生成时分配</span>
+        <span>
+          <T
+            k="report.caption.compose"
+            fallback="草稿预览 · 与导出的 PDF / Markdown 内容一致；报告编号在生成时分配"
+          />
+        </span>
       )}
     </div>
   )
@@ -1221,7 +1336,9 @@ function ReportSheetSkeleton() {
         aria-live="polite"
         aria-busy="true"
       >
-        <span className="sr-only">正在加载报告内容</span>
+        <span className="sr-only">
+          <T k="report.loadingContent" fallback="正在加载报告内容" />
+        </span>
         <Skeleton className={cn('h-5 w-1/3', bar)} />
         <Skeleton className={cn('h-3.5 w-1/5', bar)} />
         <div className="flex flex-col gap-tight">
@@ -1251,23 +1368,35 @@ function ReportSheetSkeleton() {
  * 历史列表里一屏可能出现多份，标题必须能区分它们。
  * 用户不填时也不该出现一串无法辨认的名字。
  */
-function defaultTitle(scope: ReportScope, scans: { id: string; name: string }[]): string {
+function defaultTitle(
+  scope: ReportScope,
+  scans: { id: string; name: string }[],
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string {
   switch (scope.kind) {
     case 'scan': {
       const name = scans.find((s) => s.id === scope.scanId)?.name
-      return name ? `${name} 安全检测报告` : '安全检测报告'
+      return name
+        ? t('report.title.scan', { name }, `${name} 安全检测报告`)
+        : t('report.title.default', undefined, '安全检测报告')
     }
     case 'target':
-      return scope.target ? `${scope.target} 安全检测报告` : '安全检测报告'
+      return scope.target
+        ? t('report.title.scan', { name: scope.target }, `${scope.target} 安全检测报告`)
+        : t('report.title.default', undefined, '安全检测报告')
     case 'range': {
       // 范围报告用日期区间命名 —— 它没有单一目标可指
       const from = scope.from.slice(0, 10)
       const to = scope.to.slice(0, 10)
-      return `${from} 至 ${to} 安全检测报告`
+      return t('report.title.range', { from, to }, `${from} 至 ${to} 安全检测报告`)
     }
     case 'findings':
       // 手选的没有单一目标或日期可指，用条数 —— 它正好说明这份报告的规模
-      return `手选 ${scope.findingIds.length} 条漏洞的安全报告`
+      return t(
+        'report.title.findings',
+        { n: scope.findingIds.length },
+        `手选 ${scope.findingIds.length} 条漏洞的安全报告`,
+      )
   }
 }
 
@@ -1282,12 +1411,44 @@ function defaultTitle(scope: ReportScope, scans: { id: string; name: string }[])
  *   现在两处都走 describeScope，并统一喂入扫描名。
  *   一份实现、一个口径，这类不一致才不会重新长出来。
  */
-function describeScopeOf(report: Report, scans: { id: string; name: string }[]): string {
+function describeScopeOf(
+  report: Report,
+  scans: { id: string; name: string }[],
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+  locale: string,
+): string {
   const scope = report.scope
   // 先取出 scope 再判断：在闭包里 TS 会丢失对 report.scope 的联合类型收窄
   const scanName =
     scope.kind === 'scan' ? scans.find((s) => s.id === scope.scanId)?.name : undefined
-  return describeScope(scope, { scanName })
+  switch (scope.kind) {
+    case 'scan':
+      return t('report.scope.scan', { name: scanName ?? scope.scanId }, `扫描任务「${scanName ?? scope.scanId}」`)
+    case 'findings':
+      return t('report.scope.findings', { n: scope.findingIds.length }, `手选的 ${scope.findingIds.length} 条漏洞`)
+    case 'target':
+      return t('report.scope.target', { target: scope.target }, `目标 ${scope.target}`)
+    case 'range':
+      return t(
+        'report.scope.range',
+        { from: formatScopeDate(scope.from, locale), to: formatScopeDate(scope.to, locale) },
+        `${formatScopeDate(scope.from, locale)} 至 ${formatScopeDate(scope.to, locale)}`,
+      )
+  }
+}
+
+/** 范围日期：中文保持「2026年2月14日」，其它语言交给 Intl */
+function formatScopeDate(iso: string, locale: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  if (locale === 'zh-CN' || locale === 'zh-TW') {
+    return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
+  }
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(d)
 }
 
 /** 严重度计数投影，供配置区的实时反馈用 */

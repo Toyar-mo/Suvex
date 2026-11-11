@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import type { ChatTool } from '@/data/chat'
 import { useMemo } from 'react'
 
@@ -134,6 +135,7 @@ interface ToolMentionProps {
 
 /** 补全弹层本体。没有匹配项时渲染一行"没有匹配的工具"，而不是什么都不显示。 */
 export function ToolMention({ tools, query, onPick }: ToolMentionProps) {
+  const { t } = useI18n()
   const matches = useMemo(() => {
     const lower = query.query.toLowerCase()
     return tools
@@ -146,7 +148,7 @@ export function ToolMention({ tools, query, onPick }: ToolMentionProps) {
     return (
       <div
         role="listbox"
-        aria-label="可用工具"
+        aria-label={t('chat.a11y.availableTools', undefined, '可用工具')}
         className="mx-2 mb-1 rounded-sm border border-line bg-surface px-2.5 py-2 text-xs text-ink-faint"
       >
         没有匹配的工具
@@ -157,7 +159,7 @@ export function ToolMention({ tools, query, onPick }: ToolMentionProps) {
   return (
     <div
       role="listbox"
-      aria-label="可用工具"
+      aria-label={t('chat.a11y.availableTools', undefined, '可用工具')}
       className="mx-2 mb-1 max-h-56 overflow-y-auto rounded-sm border border-line bg-surface shadow-pop"
     >
       {matches.map((tool) => (

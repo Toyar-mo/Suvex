@@ -1,5 +1,6 @@
 import { loadKernelWriteup, type KernelChallenge } from '@/data/kernel'
 import { writeupErrorMessage } from '@/lib/writeup'
+import { useI18n } from '@/i18n'
 import { FileText } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import {
@@ -43,6 +44,7 @@ export interface WriteupDialogProps {
 }
 
 export function WriteupDialog({ challenge, onClose }: WriteupDialogProps) {
+  const { t } = useI18n()
   const [state, setState] = useState<WriteupDialogState>({ phase: 'loading' })
 
   /*
@@ -77,14 +79,14 @@ export function WriteupDialog({ challenge, onClose }: WriteupDialogProps) {
   */
   return (
     <WriteupDialogShell
-      title={challenge.title || '未命名题目'}
+      title={challenge.title || t('tools.kernel.dialog.untitled')}
       // 后端一定会给 `filename`；这个兜底只在它为空时生效（不该发生）。
       fallbackFilename={`CTF-Writeup-${challenge.id}.md`}
       icon={FileText}
       state={state}
       // ★ 失败态标题与扫描侧**刻意不同**：这里的两种失败都是"这道题本身
       //   还没产出题解"，而不是"这次扫描没有可看的题解"。
-      errorTitle="这道题还没有题解"
+      errorTitle={t('tools.kernel.writeup.errorTitle')}
       onClose={onClose}
     />
   )

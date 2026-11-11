@@ -14,6 +14,7 @@ import {
   type MentionQuery,
 } from '@/components/chat/ToolMention'
 import { Button } from '@/components/ui/Button'
+import { T } from '@/i18n/T'
 import { ConfirmDialog } from '@/components/ui/ConfirmDialog'
 import { EmptyState } from '@/components/ui/EmptyState'
 import { ErrorState } from '@/components/ui/ErrorState'
@@ -367,7 +368,7 @@ function McpMountStatus({
   loading: boolean
 }) {
   if (loading) {
-    return <span className="text-2xs text-ink-faint">MCP 试连中…</span>
+    return <span className="text-2xs text-ink-faint"><T k="chatmsg.mcpTesting"/></span>
   }
   if (!status || status.mountedCount === 0) return null
 
@@ -1528,7 +1529,7 @@ export function ChatPage() {
           'hover:border-accent/40 hover:text-ink',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
         )}
-        title="这个人格决定模型扮演什么角色"
+        title={t('chat.a11y.persona', undefined, '这个人格决定模型扮演什么角色')}
       >
         <UserRound size={11} strokeWidth={2} aria-hidden="true" />
         {personas.find((p) => p.id === (active.persona ?? null))?.label ?? '默认'}
@@ -1540,8 +1541,8 @@ export function ChatPage() {
       />
 
       <InlineSelect
-        label="自动放行"
-        title="在所选时间内自动批准需要确认的工具调用；到期自动恢复。"
+        label={t('chat.a11y.autoApprove', undefined, '自动放行')}
+        title={t('chat.a11y.autoApproveHint', undefined, '在所选时间内自动批准需要确认的工具调用；到期自动恢复。')}
         value={(() => {
           const until = active.autoApproveUntil
             ? new Date(active.autoApproveUntil).getTime()
@@ -1562,7 +1563,7 @@ export function ChatPage() {
       />
 
       <MultiSelect
-        label="技能"
+        label={t('chat.a11y.skills', undefined, '技能')}
         icon={<BookOpen size={12} strokeWidth={2} aria-hidden="true" />}
         options={skillOptions}
         selected={active.skillNames ?? []}
@@ -1696,7 +1697,7 @@ export function ChatPage() {
               <ErrorState
                 error={error}
                 onRetry={() => void loadSessions()}
-                title="拿不到会话列表"
+                title={t('chat.a11y.noSessions', undefined, '拿不到会话列表')}
                 compact
               />
             </div>
@@ -1805,7 +1806,7 @@ export function ChatPage() {
             size="sm"
             onClick={() => setShowList(true)}
             className="md:hidden"
-            aria-label="打开会话列表"
+            aria-label={t('chat.a11y.openList', undefined, '打开会话列表')}
           >
             <MessagesSquare size={14} strokeWidth={2} aria-hidden="true" />
           </Button>
@@ -1830,7 +1831,7 @@ export function ChatPage() {
               type="button"
               onClick={() => setAnswersOnly((value) => !value)}
               aria-pressed={answersOnly}
-              aria-label="只看回答"
+              aria-label={t('chat.a11y.onlyAnswers', undefined, '只看回答')}
               title={answersOnly ? '显示工具与过程' : '隐藏工具与过程，只看结论'}
               className={cn(
                 'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs',
@@ -1886,7 +1887,7 @@ export function ChatPage() {
               <div className="mx-auto flex max-w-[62ch] flex-col items-start gap-bay py-6">
                 <EmptyState
                   icon={Sparkles}
-                  title="有什么要查的、要做的？"
+                  title={t('chat.a11y.askHint', undefined, '有什么要查的、要做的？')}
                   description={
                     <>
                       这个对话框里的模型能直接调用平台的能力：发起扫描、看扫描结果、 翻技能库、试
@@ -2291,7 +2292,7 @@ export function ChatPage() {
                 文案必须跟着变，否则用户会以为自己在开第二轮。
               */
                 disabled={!active || Boolean(active.archived)}
-                aria-label="输入消息"
+                aria-label={t('chat.a11y.input', undefined, '输入消息')}
                 className={cn(
                   'max-h-40 min-h-9 min-w-0 flex-1 resize-none overflow-y-auto rounded-md bg-transparent px-2 py-2 field-sizing-content',
                   'text-base text-ink placeholder:text-ink-faint',
@@ -2315,8 +2316,8 @@ export function ChatPage() {
                   type="button"
                   onClick={() => setSettingsOpen((value) => !value)}
                   aria-expanded={settingsOpen}
-                  aria-label="对话设置"
-                  title="对话设置"
+                  aria-label={t('chat.a11y.settings', undefined, '对话设置')}
+                  title={t('chat.a11y.settings', undefined, '对话设置')}
                   className={cn(
                     'flex h-9 w-9 shrink-0 items-center justify-center rounded-sm',
                     'max-sm:min-h-10 max-sm:min-w-10',
@@ -2344,7 +2345,7 @@ export function ChatPage() {
                   variant="ghost"
                   size="sm"
                   disabled={interrupting}
-                  aria-label="中断"
+                  aria-label={t('chat.a11y.interrupt', undefined, '中断')}
                   data-interrupt-open
                 >
                   中断
@@ -2444,7 +2445,7 @@ export function ChatPage() {
       <Modal
         open={interruptOpen}
         onClose={() => setInterruptOpen(false)}
-        title="中断当前步骤"
+        title={t('chat.a11y.interruptHint', undefined, '中断当前步骤')}
         widthClass="max-w-xl"
         footer={
           <div className="flex flex-wrap justify-end gap-2">
@@ -2474,24 +2475,24 @@ export function ChatPage() {
       >
         <div className="flex flex-col gap-3 text-xs leading-relaxed text-ink-muted">
           <p>
-            <span className="font-medium text-ink">中断并继续</span>：他上一条输出会立刻停下，
+            <span className="font-medium text-ink"><T k="chatmsg.interruptContinue"/></span>：他上一条输出会立刻停下，
             你写的说明会并入上下文，然后他会接着做。中途改方向用这个。
           </p>
           <p>
-            <span className="font-medium text-ink">彻底停止</span>
+            <span className="font-medium text-ink"><T k="chatmsg.interruptStop"/></span>
             ：这一轮就地结束，后台不会再自动接着跑。
           </p>
           <p className="text-2xs text-ink-faint">
             注意：如果当前正在执行一个工具命令，它要跑完才会停 —— 我们没法中断一个已经在跑的子进程。
           </p>
           <label className="flex flex-col gap-1">
-            <span className="text-2xs text-ink-faint">中断说明（可留空）</span>
+            <span className="text-2xs text-ink-faint"><T k="chatmsg.interruptNote"/></span>
             <textarea
               value={interruptNote}
               onChange={(event) => setInterruptNote(event.target.value)}
               rows={4}
-              aria-label="中断说明"
-              placeholder="例如：别扫端口了，先去看 /api/login 的鉴权逻辑"
+              aria-label={t('chat.a11y.interruptNote', undefined, '中断说明')}
+              placeholder={t('chat.a11y.interruptNotePlaceholder', undefined, '例如：别扫端口了，先去看 /api/login 的鉴权逻辑')}
               className="w-full resize-y rounded-sm border border-line bg-surface px-2.5 py-2 text-sm text-ink placeholder:text-ink-faint focus:outline-none focus:ring-2 focus:ring-accent/40"
             />
           </label>
@@ -2517,7 +2518,7 @@ export function ChatPage() {
       <Modal
         open={renameTarget !== null}
         onClose={() => setRenameTarget(null)}
-        title="重命名对话"
+        title={t('chat.a11y.rename', undefined, '重命名对话')}
         widthClass="max-w-md"
         footer={
           <div className="flex justify-end gap-2">
@@ -2541,7 +2542,7 @@ export function ChatPage() {
           onKeyDown={(event) => {
             if (event.key === 'Enter') void submitRename()
           }}
-          aria-label="对话标题"
+          aria-label={t('chat.a11y.title', undefined, '对话标题')}
           className="h-9 w-full rounded-sm border border-line bg-surface px-2 text-sm text-ink"
           // 打开就把光标放进输入框、并全选 —— 重命名十次有九次要整条换掉
           autoFocus
@@ -2671,15 +2672,15 @@ function SessionRow({
               //   取代了聊天区底部那条常驻蓝条（用户不要它）。
               <span
                 className="inline-block h-2.5 w-2.5 shrink-0 animate-spin rounded-full border-[1.5px] border-accent/30 border-t-accent"
-                title="运行中"
-                aria-label="运行中"
+                title={t('chat.a11y.running', undefined, '运行中')}
+                aria-label={t('chat.a11y.running', undefined, '运行中')}
                 data-session-running="true"
               />
             )}
             {session.pinned && (
               // 📌 用 Unicode 而不是 SVG：它是**状态标记**，不需要跟主题变色，
               // 而一个 12px 的图标会跟标题抢注意力。与 CyberStrikeAI 一致。
-              <span className="shrink-0 text-2xs" title="已置顶" aria-label="已置顶">
+              <span className="shrink-0 text-2xs" title={t('chat.a11y.pinned', undefined, '已置顶')} aria-label={t('chat.a11y.pinned', undefined, '已置顶')}>
                 📌
               </span>
             )}
@@ -2711,7 +2712,7 @@ function SessionRow({
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             )}
             aria-label={`归档对话「${session.title.trim() || '未命名对话'}」`}
-            title="归档这个对话"
+            title={t('chat.a11y.archive', undefined, '归档这个对话')}
           >
             <Archive size={12} strokeWidth={2} aria-hidden="true" />
           </button>
@@ -2730,7 +2731,7 @@ function SessionRow({
           )}
           aria-label={`打开对话「${session.title.trim() || '未命名对话'}」的菜单`}
           aria-haspopup="menu"
-          title="更多操作"
+          title={t('chat.a11y.more', undefined, '更多操作')}
         >
           <MoreHorizontal size={12} strokeWidth={2} aria-hidden="true" />
         </button>

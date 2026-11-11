@@ -17,6 +17,7 @@ import { SkeletonRows } from '@/components/ui/Skeleton'
 import { isAdmin, useAuth } from '@/data/auth-store'
 import { cn } from '@/lib/cn'
 import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { loadSettings, useSettings } from '@/data/settings-store'
 import { loadUsers } from '@/data/users-store'
 import { Database, Lock, ShieldCheck } from 'lucide-react'
@@ -228,7 +229,7 @@ function TrustNote() {
           答案还在，代价从 110px 降到 44px。
         */}
         <p className="text-xs text-ink">
-          凭据只提交给服务端<span className="text-ink-muted">：界面不回显、不进报告、不写日志</span>
+          凭据只提交给服务端<span className="text-ink-muted"><T k="settings.security.muted"/></span>
         </p>
         <p className="text-2xs text-ink-faint">
           保存后输入框始终为空 · 明文只在你按住时显示，20 秒后自动隐藏 · 剪贴板 2 秒后清空
@@ -239,12 +240,12 @@ function TrustNote() {
             这些承诺在这里怎么兑现
           </summary>
           <ul className="mt-1.5 flex flex-col gap-1 text-2xs text-ink-muted">
-            <li>已保存的密钥不会回填到输入框，界面任何位置都不会完整显示它。</li>
+            <li><T k="settings.security.noRefill"/></li>
             <li>
               密钥输入时即为遮蔽状态；点眼睛图标可看明文，明文 20 秒后自动隐藏，点到别处立即隐藏。
             </li>
-            <li>复制仅在明文状态下可用，且剪贴板会在 2 秒后清空。</li>
-            <li>密钥与令牌不进入扫描记录、报告与通知内容。</li>
+            <li><T k="settings.security.clipboard"/></li>
+            <li><T k="settings.security.noLeak"/></li>
           </ul>
         </details>
       </div>
@@ -405,7 +406,7 @@ function DataBoundaryNote() {
       <p className="flex items-start gap-1.5">
         <Database size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
-          <span className="text-ink-muted">已接入服务端：</span>
+          <span className="text-ink-muted"><T k="settings.security.backend"/></span>
           模型服务、沙箱与执行、通知规则与渠道、扫描保留、访问令牌与登录口令
           都会真正写到后端并持久化，刷新、换浏览器都还在。
         </span>
@@ -414,7 +415,7 @@ function DataBoundaryNote() {
       <p className="flex items-start gap-1.5">
         <Lock size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
-          密钥与令牌<span className="text-ink-muted">不会写入浏览器存储</span>
+          密钥与令牌<span className="text-ink-muted"><T k="settings.security.noStorage"/></span>
           （localStorage / Cookie 里都没有）。浏览器存储同源的任何脚本都能读，
           凭据只应提交给服务端保存。
         </span>

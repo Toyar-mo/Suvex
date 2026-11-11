@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { T } from '@/i18n/T'
 import { BookOpen, Cable, Wrench } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/cn'
@@ -83,7 +84,7 @@ export function ResourceStrip({ resources, className }: ResourceStripProps) {
         <h2 id="resource-strip-title" className="text-sm font-medium text-ink">
           可用能力
         </h2>
-        <span className="text-2xs text-ink-faint">部署时定，与扫描无关</span>
+        <span className="text-2xs text-ink-faint"><T k="overview.resource.fixed"/></span>
       </div>
 
       {/*

@@ -4,6 +4,8 @@ import { useVirtualRows } from '@/hooks/useVirtualRows'
 import type { ActivityEvent } from '@/data/activity'
 import { ArrowDown, Pause, Play } from 'lucide-react'
 import { useCallback, useEffect, useMemo } from 'react'
+
+import { useI18n } from '@/i18n'
 import EventRow from './EventRow'
 
 /**
@@ -57,6 +59,7 @@ export function EventStream({
   emptyState,
   className,
 }: EventStreamProps) {
+  const { t } = useI18n()
   const { attachContainer: attachAutoScroll, isAtBottom, scrollToLatest } = useAutoScroll({
     follow: !isPaused,
     contentKey: events.length,
@@ -209,7 +212,7 @@ export function EventStream({
           )}
         >
           <ArrowDown size={13} strokeWidth={2} aria-hidden="true" />
-          回到最新
+          {t('activity.stream.jumpLatest')}
           {newWhilePaused > 0 && (
             <span className="tabular text-accent-strong" data-numeric>
               +{newWhilePaused}
@@ -241,13 +244,14 @@ export function StreamToolbar({
   connection,
   children,
 }: StreamToolbarProps) {
+  const { t } = useI18n()
   const statusLabel = isPaused
-    ? '已暂停'
+    ? t('activity.stream.paused')
     : connection === 'live'
-      ? '实时'
+      ? t('activity.stream.live')
       : connection === 'connecting'
-        ? '连接中'
-        : '已断开'
+        ? t('activity.stream.connecting')
+        : t('activity.stream.disconnected')
 
   const dotClass = isPaused
     ? 'bg-ink-ghost'
@@ -285,9 +289,9 @@ export function StreamToolbar({
       <span
         className="mono-ui tabular text-ink-faint"
         data-numeric
-        title="本次会话已接收的事件条数（与连接状态无关）"
+        title={t('activity.stream.countTitle')}
       >
-        {eventCount} 条
+        {t('activity.stream.count', { n: eventCount })}
       </span>
 
       <div className="flex-1" />
@@ -315,12 +319,12 @@ export function StreamToolbar({
         {isPaused ? (
           <>
             <Play size={12} strokeWidth={2} aria-hidden="true" />
-            继续
+            {t('activity.stream.resume')}
           </>
         ) : (
           <>
             <Pause size={12} strokeWidth={2} aria-hidden="true" />
-            暂停
+            {t('activity.stream.pause')}
           </>
         )}
       </button>

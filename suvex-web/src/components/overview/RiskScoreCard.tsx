@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import type { RiskLevel, SeverityBreakdownEntry } from '@/data/overview'
 import type { Severity } from '@/data/findings'
 
@@ -129,7 +130,7 @@ export function RiskScoreCard({
         </span>
         <span className={cn('text-sm font-medium', meta?.text ?? 'text-ink-muted')}>{label}</span>
         {/* 270.5 配一条满格的条，读起来像"图表坏了"。说清楚刻度是 100 就自洽了。 */}
-        {score > 100 && <span className="text-2xs text-ink-faint">超出 100 分刻度</span>}
+        {score > 100 && <span className="text-2xs text-ink-faint"><T k="overview.risk.overflow"/></span>}
       </div>
 
       {/* 进度条。aria-hidden —— 上面的数字已经说完了，读屏器不需要再听一遍百分比 */}

@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from './Field'
 import { SettingsPanel } from './SaveBar'
@@ -17,21 +19,18 @@ import { Select } from '@/components/ui/Select'
 const DELTAS = [
   {
     key: 'solveRate',
-    label: '解题率',
     scale: 100,
     unit: '%',
     read: (p: QualityPayload) => p.challenges.solveRate,
   },
   {
     key: 'falsePositiveRate',
-    label: '误报率',
     scale: 100,
     unit: '%',
     read: (p: QualityPayload) => p.findings.falsePositiveRate,
   },
   {
     key: 'verifiedShare',
-    label: '验证占比',
     scale: 100,
     unit: '%',
     read: (p: QualityPayload) =>
@@ -39,21 +38,19 @@ const DELTAS = [
   },
   {
     key: 'totalTokens',
-    label: 'token 总量',
     scale: 1,
     unit: '',
     read: (p: QualityPayload) => p.cost?.totalTokens ?? null,
   },
   {
     key: 'coverageSurfaces',
-    label: '覆盖记录',
     scale: 1,
-    unit: '条',
+    unit: '',
+    unitKey: 'settings.benchmark.unitRecords',
     read: (p: QualityPayload) => p.coverage.surfaces,
   },
   {
     key: 'avgScanDurationSec',
-    label: '平均耗时',
     scale: 1,
     unit: 's',
     read: (p: QualityPayload) => p.scans.avgDurationSec,
@@ -79,6 +76,7 @@ function formatRate(value: number | null | undefined): string {
 }
 
 export function BenchmarkPanel() {
+  const { t } = useI18n()
   const [snapshots, setSnapshots] = useState<BenchmarkSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [label, setLabel] = useState('')
@@ -110,9 +108,12 @@ export function BenchmarkPanel() {
       await captureSnapshot(label)
       setLabel('')
       await load()
-      showToast({ tone: 'ok', message: '已捕获当前快照' })
+      showToast({ tone: 'ok', message: t('settings.benchmark.captured') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '捕获失败' })
+      showToast({
+        tone: 'risk',
+        message: err instanceof Error ? err.message : t('settings.benchmark.captureFailed'),
+      })
     } finally {
       setSaving(false)
     }
@@ -124,7 +125,7 @@ export function BenchmarkPanel() {
     try {
       setCompare(await compareSnapshots(beforeId, afterId))
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '对比失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('settings.benchmark.compareFailed') })
     } finally {
       setComparing(false)
     }
@@ -133,18 +134,20 @@ export function BenchmarkPanel() {
   return (
     <SettingsPanel
       id="benchmark"
-      title="评测快照"
-      description="把当前质量指标留成基线，之后再捕获一份就能比较「变好还是变差」。只记录指标，不触发扫描。"
+      title={t('settings.benchmark.title')}
+      description={t('settings.benchmark.description')}
     >
       <div className="flex flex-col gap-panel">
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex min-w-[220px] flex-1 flex-col gap-1 text-sm">
-            <span className="text-ink-muted">标签（可空）</span>
+            <span className="text-ink-muted">
+              <T k="settings.benchmark.labelField" />
+            </span>
             <TextInput
               id="benchmark-label"
               value={label}
               onChange={(value) => setLabel(value)}
-              placeholder="例如：换模型前"
+              placeholder={t('settings.benchmark.labelPlaceholder')}
             />
           </label>
           <Button
@@ -153,29 +156,42 @@ export function BenchmarkPanel() {
             onClick={() => void capture()}
             disabled={saving}
           >
-            {saving ? '捕获中…' : '捕获当前快照'}
+            {saving ? (
+              <T k="settings.benchmark.capturing" />
+            ) : (
+              <T k="settings.benchmark.capture" />
+            )}
           </Button>
         </div>
 
         {loading ? (
-          <p className="text-sm text-ink-muted">读取中…</p>
+          <p className="text-sm text-ink-muted">
+            <T k="settings.benchmark.loading" />
+          </p>
         ) : snapshots.length === 0 ? (
-          <p className="text-sm text-ink-muted">还没有快照。先捕获一份作为基线。</p>
+          <p className="text-sm text-ink-muted">
+            <T k="settings.benchmark.empty" />
+          </p>
         ) : (
           <>
             <ul className="divide-y divide-line rounded-sm border border-line">
               {snapshots.map((snapshot) => (
                 <li key={snapshot.id} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
                   <span className="min-w-0 flex-1 truncate text-ink">
-                    {snapshot.label || '未命名'}
+                    {snapshot.label || t('settings.benchmark.untitled')}
                   </span>
                   <span className="text-2xs text-ink-faint">
                     {new Date(snapshot.capturedAt).toLocaleString()}
                   </span>
                   <span className="text-2xs text-ink-muted">
-                    解题 {formatRate(snapshot.payload.challenges.solveRate)} · 误报{' '}
-                    {formatRate(snapshot.payload.findings.falsePositiveRate)} · 覆盖{' '}
-                    {snapshot.payload.coverage.surfaces}
+                    <T
+                      k="settings.benchmark.summary"
+                      vars={{
+                        solve: formatRate(snapshot.payload.challenges.solveRate),
+                        fp: formatRate(snapshot.payload.findings.falsePositiveRate),
+                        coverage: snapshot.payload.coverage.surfaces,
+                      }}
+                    />
                   </span>
                 </li>
               ))}
@@ -183,11 +199,13 @@ export function BenchmarkPanel() {
 
             <div className="flex flex-wrap items-end gap-2">
               <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">基线</span>
+                <span className="text-ink-muted">
+                  <T k="settings.benchmark.baseline" />
+                </span>
                 <Select
                   value={beforeId}
                   options={[
-                    { value: '', label: '选择…' },
+                    { value: '', label: t('settings.benchmark.selectPlaceholder') },
                     ...snapshots.map((snapshot) => ({
                       value: snapshot.id,
                       label: snapshot.label || snapshot.id,
@@ -197,11 +215,13 @@ export function BenchmarkPanel() {
                 />
               </label>
               <label className="flex flex-col gap-1 text-sm">
-                <span className="text-ink-muted">对比</span>
+                <span className="text-ink-muted">
+                  <T k="settings.benchmark.compare" />
+                </span>
                 <Select
                   value={afterId}
                   options={[
-                    { value: '', label: '选择…' },
+                    { value: '', label: t('settings.benchmark.selectPlaceholder') },
                     ...snapshots.map((snapshot) => ({
                       value: snapshot.id,
                       label: snapshot.label || snapshot.id,
@@ -216,7 +236,11 @@ export function BenchmarkPanel() {
                 onClick={() => void runCompare()}
                 disabled={!beforeId || !afterId || comparing}
               >
-                {comparing ? '对比中…' : '对比'}
+                {comparing ? (
+                  <T k="settings.benchmark.comparing" />
+                ) : (
+                  <T k="settings.benchmark.compareAction" />
+                )}
               </Button>
             </div>
 
@@ -224,24 +248,46 @@ export function BenchmarkPanel() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-2xs text-ink-faint">
-                    <th className="py-1 font-normal">指标</th>
-                    <th className="py-1 font-normal">基线</th>
-                    <th className="py-1 font-normal">对比</th>
-                    <th className="py-1 font-normal">差值</th>
+                    <th className="py-1 font-normal">
+                      <T k="settings.benchmark.metric" />
+                    </th>
+                    <th className="py-1 font-normal">
+                      <T k="settings.benchmark.baseline" />
+                    </th>
+                    <th className="py-1 font-normal">
+                      <T k="settings.benchmark.compare" />
+                    </th>
+                    <th className="py-1 font-normal">
+                      <T k="settings.benchmark.delta" />
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {DELTAS.map((item) => (
                     <tr key={item.key} className="border-t border-line">
-                      <td className="py-1.5 text-ink-muted">{item.label}</td>
-                      <td className="py-1.5 tabular-nums">
-                        {formatValue(item.read(compare.before.metrics), item.scale, item.unit)}
+                      <td className="py-1.5 text-ink-muted">
+                        {t(`settings.benchmark.metric.${item.key}`)}
                       </td>
                       <td className="py-1.5 tabular-nums">
-                        {formatValue(item.read(compare.after.metrics), item.scale, item.unit)}
+                        {formatValue(
+                          item.read(compare.before.metrics),
+                          item.scale,
+                          'unitKey' in item ? t(item.unitKey) : item.unit,
+                        )}
                       </td>
                       <td className="py-1.5 tabular-nums">
-                        {formatDelta(compare.delta[item.key], item.scale, item.unit)}
+                        {formatValue(
+                          item.read(compare.after.metrics),
+                          item.scale,
+                          'unitKey' in item ? t(item.unitKey) : item.unit,
+                        )}
+                      </td>
+                      <td className="py-1.5 tabular-nums">
+                        {formatDelta(
+                          compare.delta[item.key],
+                          item.scale,
+                          'unitKey' in item ? t(item.unitKey) : item.unit,
+                        )}
                       </td>
                     </tr>
                   ))}

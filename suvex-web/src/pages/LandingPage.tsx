@@ -2,6 +2,8 @@ import { HeroBackdrop } from '@/components/landing/HeroBackdrop'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { HeroTitle } from '@/components/landing/HeroTitle'
 import { useFleetStatus } from '@/data/fleet'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { ArrowRight, Container, Gauge, ShieldCheck, Terminal, Wrench } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -86,30 +88,35 @@ import type { LucideIcon } from 'lucide-react'
  * （不收集信息就无从判断，不判断就无从验证），
  * 所以用带连接线的序列 —— 连接线本身携带信息。
  */
-const LOOP_STEPS: { icon: LucideIcon; title: string; body: string }[] = [
+const LOOP_STEPS: { icon: LucideIcon; key: string; title: string; body: string }[] = [
   {
     icon: Terminal,
+    key: 'collect',
     title: '收集',
     body: '对目标做端口、服务与路径探测，把结果留在上下文里，不重复跑同一条命令。',
   },
   {
     icon: Wrench,
+    key: 'decide',
     title: '判断与利用',
     body: '按探测结果选下一个工具，构造针对性的请求并读取真实响应，而不是套一份固定的检查清单。',
   },
   {
     icon: ShieldCheck,
+    key: 'verify',
     title: '验证',
     body: '为每条疑似漏洞生成可独立运行的最小 PoC，实际复现一遍。没跑通的不写进报告。',
   },
   {
     icon: Gauge,
+    key: 'report',
     title: '整理与汇报',
     body: '把证据、复现步骤、影响与修复建议整理成可直接交付给客户或研发的报告。',
   },
 ]
 
 export function LandingPage() {
+  const { t } = useI18n()
   const { agents } = useFleetStatus()
 
   return (
@@ -145,7 +152,7 @@ export function LandingPage() {
               'press transition-ui duration-fast hover:border-line-strong hover:text-ink',
             )}
           >
-            进入控制台
+            <T k="landing.enterConsole" />
             <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
           </Link>
         </div>
@@ -179,8 +186,8 @@ export function LandingPage() {
                   说错主语等于给出一个不准确的数字 —— 而访客没有别的地方
                   可以核对它。
                 */
-                ? `${agents.running} 个扫描正在目标上运行`
-                : '随时可以开始第一次扫描'}
+                ? t('landing.fleet.running', { n: agents.running })
+                : t('landing.fleet.idle')}
             </span>
           </div>
 
@@ -190,14 +197,10 @@ export function LandingPage() {
             两句话之间用换行分隔 —— HeroTitle 按空格/换行分词，
             每行整体落定，读起来是两段陈述而不是一串碎片。
           */}
-          <HeroTitle className="max-w-[22ch]">
-            一个能自己决定下一枪打哪里的 AI 安全测试 agent
-          </HeroTitle>
+          <HeroTitle className="max-w-[22ch]">{t('landing.hero.title')}</HeroTitle>
 
           <p className="mt-panel max-w-[62ch] text-base text-ink-muted">
-            Suvex
-            在一个沙箱里持续运行：自己规划步骤、调用工具、读取真实响应，为发现的每条漏洞实际复现一遍，
-            然后把证据整理成报告。你看到的是它每一步在想什么、发了什么包、拿到了什么。
+            <T k="landing.hero.body" />
           </p>
 
           {/* 主 CTA。全站唯一的高饱和主色实心按钮 —— §2 的自律条款：
@@ -210,7 +213,7 @@ export function LandingPage() {
                 'press-lg transition-ui duration-fast hover:bg-accent-strong',
               )}
             >
-              进入控制台
+              <T k="landing.enterConsole" />
               <ArrowRight size={15} strokeWidth={1.75} aria-hidden="true" />
             </Link>
             <Link
@@ -220,7 +223,7 @@ export function LandingPage() {
                 'press-lg transition-ui duration-fast hover:border-line-strong hover:text-ink',
               )}
             >
-              对目标发起扫描
+              <T k="landing.scanTarget" />
             </Link>
           </div>
         </div>
@@ -233,10 +236,10 @@ export function LandingPage() {
       >
         <div className="mx-auto w-full max-w-3xl">
           <h2 id="loop-heading" className="text-lg font-medium text-ink">
-            它自己做的一个循环
+            <T k="landing.loop.title" />
           </h2>
           <p className="mt-tight max-w-[62ch] text-sm text-ink-muted">
-            没有"先扫描再报告"的两段式。四步是同一个循环，每一步的结论决定下一步做什么。
+            <T k="landing.loop.desc" />
           </p>
 
           <ol className="mt-panel flex flex-col">
@@ -244,7 +247,7 @@ export function LandingPage() {
               const Icon = step.icon
               const isLast = index === LOOP_STEPS.length - 1
               return (
-                <li key={step.title} className="flex gap-panel">
+                <li key={step.key} className="flex gap-panel">
                   {/*
                     左轨道：图标 + 连接线。连接线用 trace-y 自上而下画一次 ——
                     它表达"顺序"这个信息，所以不循环、不呼吸。
@@ -264,9 +267,9 @@ export function LandingPage() {
                       <span className="tabular text-2xs text-ink-faint" data-numeric>
                         {String(index + 1).padStart(2, '0')}
                       </span>
-                      {step.title}
+                      {t(`landing.loop.${step.key}.title`, undefined, step.title)}
                     </h3>
-                    <p className="mt-1 max-w-[58ch] text-sm text-ink-muted">{step.body}</p>
+                    <p className="mt-1 max-w-[58ch] text-sm text-ink-muted">{t(`landing.loop.${step.key}.body`, undefined, step.body)}</p>
                   </div>
                 </li>
               )
@@ -282,7 +285,7 @@ export function LandingPage() {
       >
         <div className="mx-auto w-full max-w-3xl">
           <h2 id="boundary-heading" className="text-lg font-medium text-ink">
-            它做什么、不做什么
+            <T k="landing.boundary.title" />
           </h2>
 
           {/*
@@ -299,17 +302,17 @@ export function LandingPage() {
                   className="text-accent"
                   aria-hidden="true"
                 />
-                在沙箱里做
+                <T k="landing.boundary.inside" />
               </h3>
               <ul className="mt-tight flex flex-col gap-2 text-sm text-ink-muted">
-                <li>主动向目标发包：端口探测、目录枚举、针对性利用尝试。</li>
-                <li>执行它自己写出来的验证脚本，读取真实响应作为证据。</li>
-                <li>为每条发现生成最小 PoC，让结论可以被独立复核。</li>
+                <li><T k="landing.boundary.inside1" /></li>
+                <li><T k="landing.boundary.inside2" /></li>
+                <li><T k="landing.boundary.inside3" /></li>
               </ul>
             </div>
 
             <div>
-              <h3 className="text-sm font-medium text-ink">需要你决定的事</h3>
+              <h3 className="text-sm font-medium text-ink"><T k="landing.boundary.outside" /></h3>
               <ul className="mt-tight flex flex-col gap-2 text-sm text-ink-muted">
                 {/*
                   signal-warn 只落在"需要你决定"这一栏的标记点上 ——
@@ -321,8 +324,9 @@ export function LandingPage() {
                     className="mt-2 h-1 w-1 shrink-0 rounded-pill bg-signal-warn"
                   />
                   <span>
-                    <strong className="font-normal text-ink">授权的目标。</strong>
-                    它会真的发包。对未授权资产使用属于你自己要承担的责任。
+                    <strong className="font-normal text-ink"><T k="landing.boundary.outside1.label" /></strong>
+                    {' '}
+                    <T k="landing.boundary.outside1.body" />
                   </span>
                 </li>
                 <li className="flex gap-tight">
@@ -331,8 +335,9 @@ export function LandingPage() {
                     className="mt-2 h-1 w-1 shrink-0 rounded-pill bg-signal-warn"
                   />
                   <span>
-                    <strong className="font-normal text-ink">写入类验证。</strong>
-                    部分 PoC 会修改目标上的文件，默认只在确信目标可丢弃时开启。
+                    <strong className="font-normal text-ink"><T k="landing.boundary.outside2.label" /></strong>
+                    {' '}
+                    <T k="landing.boundary.outside2.body" />
                   </span>
                 </li>
                 <li className="flex gap-tight">
@@ -341,8 +346,9 @@ export function LandingPage() {
                     className="mt-2 h-1 w-1 shrink-0 rounded-pill bg-signal-warn"
                   />
                   <span>
-                    <strong className="font-normal text-ink">模型供应商。</strong>
-                    需要你配置一个能用的 key；用哪个模型由你决定。
+                    <strong className="font-normal text-ink"><T k="landing.boundary.outside3.label" /></strong>
+                    {' '}
+                    <T k="landing.boundary.outside3.body" />
                   </span>
                 </li>
               </ul>
@@ -365,8 +371,7 @@ export function LandingPage() {
       */}
       <footer className="relative z-10 border-t border-line px-gutter py-panel">
         <p className="mx-auto max-w-3xl text-2xs text-ink-faint">
-          本页提到的工具与产出（nmap、sqlmap、PoC、退出码）都是 Suvex 真实会做的。
-          控制台内的指标来自后端；本页未登录，因此不读取任何运行数据。
+          <T k="landing.footer" />
         </p>
       </footer>
     </div>
