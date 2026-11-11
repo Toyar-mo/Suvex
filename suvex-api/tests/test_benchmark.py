@@ -277,3 +277,41 @@ def test_summary_aggregates_rates(db_session: Session) -> None:
     assert summary["falsePositives"] == 1
     assert summary["falsePositiveRate"] == 0.5
     assert summary["avgDurationSec"] == 100.0
+
+
+def test_launch_endpoint_returns_the_scan_id(ready_client, db_session: Session, monkeypatch) -> None:  # noqa: ANN001
+    """路由层接线：`POST /benchmark/cases/{id}/launch` 把用例交给 service。
+
+    service 在本机已经测过（会真建扫描）；这里只钉"端点和参数没接反"。
+    """
+    from types import SimpleNamespace
+
+    from app.benchmark import service as bench
+
+    case = bench.create_case(
+        db_session, suite="route", name="n", kind="scan", target="http://10.0.0.5/"
+    )
+    monkeypatch.setattr(
+        bench,
+        "launch_case",
+        lambda *args, **kwargs: (
+            SimpleNamespace(id="scan_route"),
+            SimpleNamespace(status="pending"),
+        ),
+    )
+
+    resp = ready_client.post(f"/api/v1/benchmark/cases/{case.id}/launch")
+
+    assert resp.status_code == 201, resp.text
+    assert resp.json() == {"caseId": case.id, "scanId": "scan_route", "status": "pending"}
+
+
+def test_summary_endpoint_handles_an_empty_suite(ready_client) -> None:  # noqa: ANN001
+    """空套也要 200 + 分母为 None，而不是 0 或 500。"""
+    resp = ready_client.get("/api/v1/benchmark/summary?suite=empty")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["cases"] == 0
+    assert body["passRate"] is None
+    assert body["falsePositiveRate"] is None
