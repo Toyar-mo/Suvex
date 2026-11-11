@@ -140,3 +140,35 @@ async def test_browser_open_is_guarded(db_session: Session) -> None:
 
     assert failed
     assert "不在授权范围" in out
+
+
+def test_shell_variable_after_url_is_not_part_of_the_host() -> None:
+    """`http://10.0.0.5:8080$r` —— shell 变量不是主机名的一部分。
+
+    线上实测：模型写 `cd /tmp && ... http://192.168.1.121:8080$r`，
+    提取出的目标变成 `192.168.1.121:8080$r`，授权过的目标反而被拒。
+    """
+    hosts, _cidrs = scope.extract_targets('curl "http://192.168.1.121:8080$r"')
+
+    assert hosts == {"192.168.1.121"}
+
+
+def test_python_attribute_chains_are_not_targets() -> None:
+    """`urllib.request.urlopen` / `resp.status` 不是域名。
+
+    线上实测：一条 `python3 -c ...` 被列出八个"目标"并整条拒绝执行。
+    """
+    hosts, _cidrs = scope.extract_targets(
+        "python3 -c \"import urllib.request; r = urllib.request.urlopen(u); "
+        "print(r.status, e.code, e.read, out.append)\""
+    )
+
+    assert hosts == set()
+
+
+def test_real_domains_and_lab_suffixes_still_count() -> None:
+    hosts, _cidrs = scope.extract_targets(
+        "curl https://example.com/ && ssh user@target.local && nmap internal.lan"
+    )
+
+    assert {"example.com", "target.local", "internal.lan"} <= hosts

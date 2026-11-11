@@ -111,10 +111,30 @@ _FILE_EXTS: frozenset[str] = frozenset(
 )
 
 #: URL 里的 host 段（含端口）：`https://host:8080/path` → `host:8080`。
-_URL_HOST_RE = re.compile(r"(?i)\bhttps?://([^/?#\s'\"`<>]+)")
+_URL_HOST_RE = re.compile(r"(?i)\bhttps?://([^/?#\s'\"`<>$;|&(){}\\,]+)")
 
 #: 裸 IPv4（可带 /mask 或 :port）。
 _IPV4_RE = re.compile(r"(?<![\d.])(\d{1,3}(?:\.\d{1,3}){3})(?:/(\d{1,2}))?(?::(\d{1,5}))?(?![\d.])")
+
+#: 认得出的 TLD。**白名单而不是"看起来像域名"**：
+#:
+#: 代码里到处是点号标识符（`urllib.request.urlopen`、`resp.status`、
+#: `e.code`），只按"最后一段是 2–24 个字母"判域名，会把整段 Python
+#: 当成一串目标 —— 实测一次命令能列出八个"目标"并整条拒绝执行。
+#: 白名单会漏掉生僻 TLD，但漏掉的后果是"少拦一次"，
+#: 误判的后果是"正常命令直接不能跑"，后者严重得多。
+_TLDS: frozenset[str] = frozenset(
+    {
+        "com", "net", "org", "edu", "gov", "mil", "int", "info", "biz", "name",
+        "io", "co", "dev", "app", "ai", "cloud", "tech", "site", "online", "shop",
+        "xyz", "top", "me", "cc", "tv", "pro", "mobi", "asia", "club", "store",
+        "local", "internal", "intranet", "corp", "home", "lan", "lab", "test", "arpa",
+        "cn", "hk", "tw", "jp", "kr", "sg", "my", "th", "vn", "id", "ph", "in",
+        "ru", "su", "de", "fr", "uk", "nl", "se", "no", "fi", "pl", "it", "es",
+        "pt", "gr", "tr", "il", "ch", "at", "be", "cz", "dk", "ie", "ro", "hu",
+        "us", "ca", "mx", "br", "ar", "cl", "pe", "au", "nz", "za", "eu",
+    }
+)
 
 #: 裸域名（可带 :port）。`@` 在 lookbehind 里**不排除** —— `ssh user@host`
 #: 是最常见的写法之一，排除它等于把那类命令整条漏掉。
@@ -287,7 +307,8 @@ def extract_targets(text: str) -> tuple[set[str], set[str]]:
 
     for match in _HOST_RE.finditer(text):
         host, tld = match.group(1).lower(), match.group(2).lower()
-        if tld in _FILE_EXTS:
+        # 文件扩展名与"不是 TLD"的点号标识符都不算目标（见 `_TLDS` 的说明）。
+        if tld in _FILE_EXTS or tld not in _TLDS:
             continue
         hosts.add(host)
 

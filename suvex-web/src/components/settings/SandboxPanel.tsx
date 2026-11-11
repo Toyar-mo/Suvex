@@ -157,13 +157,9 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         </span>
 
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex flex-wrap items-center gap-1.5">
-            <span className="text-sm text-ink">沙箱与执行环境 · 每次扫描按需启动</span>
-            <span className="mono-ui text-ink-faint">内核镜像 suvex-sandbox 系列</span>
-          </span>
+          <span className="text-xs text-ink">每次扫描按需起一个隔离容器，跑完即销毁</span>
           <span className="text-2xs text-ink-faint">
-            每条扫描任务开跑时起一个隔离容器（本地镜像），跑完即销毁，不在宿主机上长期驻留。
-            下面的 CPU / 内存上限作用于这个临时容器。
+            内核镜像 <span className="mono-ui">suvex-sandbox</span> 系列；下面的 CPU / 内存上限作用于这个临时容器。
           </span>
         </div>
       </div>
@@ -248,60 +244,47 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
       </div>
 
       {/* ── 隔离策略 ── */}
-      <div className="flex flex-col gap-1.5">
+      <div className="flex flex-col gap-panel">
         <span className="text-xs font-medium text-ink">隔离策略</span>
 
-        <Toggle
-          id="sandbox-network"
-          label="禁止沙箱访问外网（仅本地代码目标）"
-          hint="只对本地形态的目标（repo / path / 附件）生效。url、service 这类要去连别人的目标会被强制开网 —— 否则镜像里的 nmap / ffuf / sqlmap 全连不上，扫描必然失败。"
-          checked={draft.networkIsolated}
-          onChange={(v) => setDraft({ ...draft, networkIsolated: v })}
-        />
-
-        {/*
-          这一条解释必须出现：用户很容易把"禁止外网"理解成"更安全所以应该开"，
-          然后困惑于扫描为什么跑不动。取舍写在开关下面，比放在文档里有用。
-        */}
-        {draft.networkIsolated && (
-          <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
-            <TriangleAlert
-              size={12}
-              strokeWidth={2}
-              className="mt-0.5 shrink-0 text-signal-warn"
-              aria-hidden="true"
+        <div className="grid gap-panel sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Toggle
+              id="sandbox-network"
+              label="禁止沙箱访问外网（仅本地代码目标）"
+              hint="只对本地形态的目标（repo / path / 附件）生效。url、service 这类要去连别人的目标会被强制开网 —— 否则镜像里的 nmap / ffuf / sqlmap 全连不上，扫描必然失败。"
+              checked={draft.networkIsolated}
+              onChange={(v) => setDraft({ ...draft, networkIsolated: v })}
             />
-            <span className="text-2xs text-ink-muted">
-              已开启。注意它<span className="text-ink">管不住网络目标</span>：
-              针对 <code className="mono-ui">https://</code> 与 host:port 的扫描仍会联网
-              （否则沙箱里的工具一个都连不上目标）。真正的出站边界在宿主机 ——
-              iptables 的 <code className="mono-ui">DOCKER-USER</code> 白名单，
-              与这个开关无关。
-            </span>
+            {draft.networkIsolated && (
+              <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
+                <TriangleAlert size={12} strokeWidth={2} className="mt-0.5 shrink-0 text-signal-warn" aria-hidden="true" />
+                <span className="text-2xs text-ink-muted">
+                  已开启。注意它<span className="text-ink">管不住网络目标</span>：https 与 host:port 的扫描仍会联网。
+                  真正的出站边界在宿主机的 iptables DOCKER-USER 白名单。
+                </span>
+              </div>
+            )}
           </div>
-        )}
 
-        <Toggle
-          id="sandbox-write"
-          label="允许写入挂载卷"
-          hint="关闭时所有写入都在容器内，容器销毁即消失。开启会让 PoC 能改动宿主目录。"
-          checked={draft.allowVolumeWrite}
-          onChange={(v) => setDraft({ ...draft, allowVolumeWrite: v })}
-        />
-
-        {draft.allowVolumeWrite && (
-          <div className="flex items-start gap-1.5 rounded-sm border border-signal-risk/40 bg-signal-risk/[0.06] p-2">
-            <ShieldOff
-              size={12}
-              strokeWidth={2}
-              className="mt-0.5 shrink-0 text-signal-risk"
-              aria-hidden="true"
+          <div className="flex flex-col gap-1.5">
+            <Toggle
+              id="sandbox-write"
+              label="允许写入挂载卷"
+              hint="关闭时所有写入都在容器内，容器销毁即消失。开启会让 PoC 能改动宿主目录。"
+              checked={draft.allowVolumeWrite}
+              onChange={(v) => setDraft({ ...draft, allowVolumeWrite: v })}
             />
-            <span className="text-2xs text-ink-muted">
-              写入已放行。验证脚本可能修改宿主上的文件，仅在你确信目标代码可丢弃时开启。
-            </span>
+            {draft.allowVolumeWrite && (
+              <div className="flex items-start gap-1.5 rounded-sm border border-signal-risk/40 bg-signal-risk/[0.06] p-2">
+                <ShieldOff size={12} strokeWidth={2} className="mt-0.5 shrink-0 text-signal-risk" aria-hidden="true" />
+                <span className="text-2xs text-ink-muted">
+                  写入已放行。验证脚本可能修改宿主上的文件，仅在你确信目标代码可丢弃时开启。
+                </span>
+              </div>
+            )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* ── 执行（任务 13）────────────────────────────── */}

@@ -784,7 +784,7 @@ export function ScansPage() {
 
       <div className="px-gutter py-bay">
         {/* v1.90：两栏（列表 | 预览）。窄屏单栏，预览只在 lg 以上占位。 */}
-        <div className="flex flex-col gap-panel 2xl:flex-row 2xl:items-start">
+        <div className="flex min-w-0 flex-col gap-panel overflow-hidden 2xl:grid 2xl:grid-cols-[minmax(0,1fr)_320px] 2xl:items-start 2xl:gap-6">
         <div className="min-w-0 flex-1 2xl:min-w-[600px]">
         {/* ── 工具条 ── */}
         <div className="mb-panel flex flex-wrap items-center gap-tight">
@@ -1158,7 +1158,7 @@ export function ScansPage() {
         </div>
         <ScanPreviewPane
           scan={scans.find((scan) => scan.id === previewId) ?? null}
-          className="hidden w-[320px] shrink-0 2xl:flex"
+          className="hidden 2xl:flex 2xl:sticky 2xl:top-[64px]"
         />
         </div>
       </div>

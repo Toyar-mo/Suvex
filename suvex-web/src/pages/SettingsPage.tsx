@@ -129,7 +129,7 @@ export function SettingsPage() {
         <div className="mt-panel grid gap-bay lg:grid-cols-[168px_minmax(0,1fr)] lg:gap-bay">
           <SectionNav sectionsReady={status === 'ready'} />
 
-          <div className="flex min-w-0 flex-col gap-bay">
+          <div className="flex min-w-0 max-w-[1040px] flex-col gap-bay">
             {status === 'loading' ? (
               /* 骨架而不是转圈：本机后端通常几十毫秒就回，转圈会一闪而过 */
               <SkeletonRows rows={3} rowClassName="h-24" />
