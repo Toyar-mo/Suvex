@@ -535,7 +535,7 @@ export interface KernelSettings {
    */
   enableIrScenarios: boolean
   /**
-   * 多智能体编排（v0.58）。**默认关闭。**
+   * 多智能体编排（v0.58）。**v1.89 起默认开启**（单循环改为显式选择）。
    *
    * 打开后一次解题（CTF 题 / 渗透评估 / 应急响应复盘）走 root 调度 +
    * 子 agent 并行执行的完整编排，而不是单条 ReAct 循环。关着时单循环
