@@ -93,6 +93,8 @@ export interface PhasePayload {
   round: number
   /** `phase === 'tool'` 时是工具名。 */
   tool?: string
+  /** `phase === 'tool'` 时的浅层参数摘要（只含标量，已截断）。 */
+  args?: Record<string, string>
   /** `phase === 'resume'` 时：为什么会续跑。 */
   reason?: 'truncation' | 'format' | 'final-check'
   /** `phase === 'resume'` 时：这是第几次纠偏（从 1 起）。 */

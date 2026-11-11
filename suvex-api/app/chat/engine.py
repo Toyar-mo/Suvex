@@ -532,6 +532,22 @@ async def _emit_message(emit: Emit | None, message: Any) -> None:
     )
 
 
+def _phase_args_preview(args: dict[str, Any] | None) -> dict[str, str]:
+    """phase 帧里带一份**浅层**参数摘要（v1.92）。
+
+    只取标量并截断到 200 字符：完整 args 可能是整份文件内容或附件正文，
+    每 1.5 秒推一次会把 SSE 变成传输大对象。嵌套结构一律跳过 —— 界面
+    只需要"这条命令大概是什么"，详情在落库的工具消息里。
+    """
+    if not args:
+        return {}
+    preview: dict[str, str] = {}
+    for key, value in list(args.items())[:12]:
+        if isinstance(value, (str, int, float, bool)):
+            preview[str(key)] = str(value)[:200]
+    return preview
+
+
 async def _emit_phase(
     emit: Emit | None, phase: str, round_index: int, **extra: Any
 ) -> None:
@@ -4337,7 +4353,9 @@ async def run_turn(
             # 理由：`_execute_tool` 可能跑几十秒（一个扫描、一次模型调用的
             # 代理）。只在结束时推结果的话，界面上那段时间是空的 ——
             # 与改造前的体验一样。推一条"开始"帧，用户才知道它在干嘛。
-            await _emit_phase(emit, "tool", round_index, tool=name)
+            await _emit_phase(
+                emit, "tool", round_index, tool=name, args=_phase_args_preview(args)
+            )
 
             # ★ v1.87：认证/口令尝试到上限后**不结束整轮**。旧实现直接落
             #   “已停止”并 return，用户看到的是一次失败就交卷。现在只拒绝

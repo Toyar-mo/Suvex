@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { MessageRow } from '@/components/chat/MessageRow'
+import { digestToolArgs } from '@/components/chat/toolCardDigest'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
@@ -42,6 +43,7 @@ export const AssistantTurn = memo(
     prev.phaseText === next.phaseText &&
     prev.liveTool === next.liveTool &&
     prev.liveToolOutput === next.liveToolOutput &&
+    prev.liveToolArgs === next.liveToolArgs &&
     prev.deciding === next.deciding &&
     prev.meta === next.meta &&
     prev.sessionId === next.sessionId &&
@@ -86,6 +88,7 @@ function AssistantTurnImpl({
   phaseText = null,
   liveTool = null,
   liveToolOutput = null,
+  liveToolArgs = null,
   deciding,
   onDecide,
   interjections = [],
@@ -105,6 +108,8 @@ function AssistantTurnImpl({
   liveTool?: string | null
   /** 运行中工具已经吐出的输出（SSE 增量）。 */
   liveToolOutput?: string | null
+  /** 运行中工具的浅层参数摘要（phase 帧带下来的）。 */
+  liveToolArgs?: Record<string, string> | null
   deciding?: boolean
   onDecide?: (messageId: string, approve: boolean) => void
   /** 跑的过程中用户插的话（已落库、等下一轮被读到）。 */
@@ -194,7 +199,12 @@ function AssistantTurnImpl({
       )}
 
       {live && liveTool && (
-        <LiveToolCard name={liveTool} output={liveToolOutput} elapsed={elapsed} />
+        <LiveToolCard
+          name={liveTool}
+          args={liveToolArgs}
+          output={liveToolOutput}
+          elapsed={elapsed}
+        />
       )}
 
       {live && (
@@ -259,14 +269,17 @@ function isAnswer(message: ChatMessage): boolean {
  */
 function LiveToolCard({
   name,
+  args,
   output,
   elapsed,
 }: {
   name: string
+  args: Record<string, string> | null
   output: string | null
   elapsed: number
 }) {
   const ref = useRef<HTMLPreElement>(null)
+  const digest = digestToolArgs(args)
   useEffect(() => {
     const el = ref.current
     if (el) el.scrollTop = el.scrollHeight
@@ -285,7 +298,12 @@ function LiveToolCard({
           aria-hidden="true"
         />
         <span className="shrink-0 font-mono text-[12px] text-ink-muted">{name}</span>
-        <span className="text-2xs text-ink-faint">
+        {digest && (
+          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-ink-faint">
+            {digest}
+          </span>
+        )}
+        <span className="shrink-0 text-2xs text-ink-faint">
           执行中…{elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
         </span>
       </div>

@@ -2002,6 +2002,7 @@ export function ChatPage() {
                           streamingText={isLive ? streamingText : null}
                           phaseText={isLive ? phaseLabel(phase) : null}
                           liveTool={isLive && phase?.phase === 'tool' ? (phase.tool ?? null) : null}
+                          liveToolArgs={isLive && phase?.phase === 'tool' ? (phase.args ?? null) : null}
                           liveToolOutput={
                             isLive &&
                             phase?.phase === 'tool' &&
