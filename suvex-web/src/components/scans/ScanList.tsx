@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import Checkbox from '@/components/ui/Checkbox'
 import { FlagChip } from '@/components/ui/FlagChip'
 import { StatusDot, type StatusTone } from '@/components/ui/StatusDot'
@@ -259,6 +260,7 @@ export function ScanList({
   onWriteup,
   emptyState,
 }: ScanListProps) {
+  const { t } = useI18n()
   if (scans.length === 0) {
     return <div className="px-panel py-bay">{emptyState}</div>
   }
@@ -276,14 +278,14 @@ export function ScanList({
       {/* 严重度图例 —— 圆点本身不带文字，没有图例时用户只能猜 */}
       {anyFindings && (
         <li className="flex flex-wrap items-center gap-x-panel gap-y-1 border-b border-line px-panel py-1.5 text-2xs text-ink-faint">
-          <span>严重度：</span>
+          <span>{t('scan.severityLegend')}</span>
           {SEVERITY_ORDER.map((sev) => (
             <span key={sev} className="flex items-center gap-1">
               <span
                 aria-hidden="true"
                 className={cn('h-1.5 w-1.5 rounded-pill', SEVERITY_META[sev].bg)}
               />
-              {SEVERITY_META[sev].label}
+              {t(`severity.${sev}`, undefined, SEVERITY_META[sev].label)}
             </span>
           ))}
         </li>
@@ -303,15 +305,15 @@ export function ScanList({
             // 那是在撒谎，而用户会据此以为全选没生效。
             indeterminate={selectedCount > 0 && !allSelected}
             onChange={onToggleAll}
-            label={allSelected ? '取消全选' : '全选当前列表'}
+            label={allSelected ? t('scan.unselectAll') : t('scan.selectAll')}
           />
         </span>
-        <span className="w-24 shrink-0">状态</span>
-        <span className="min-w-0 flex-1">目标</span>
-        <span className="w-40 shrink-0">发现</span>
-        <span className="w-20 shrink-0 text-right">耗时</span>
-        <span className="w-24 shrink-0 text-right">开始于</span>
-        <span className="w-28 shrink-0 text-right">操作</span>
+        <span className="w-24 shrink-0">{t('scan.table.status')}</span>
+        <span className="min-w-0 flex-1">{t('scan.table.target')}</span>
+        <span className="w-40 shrink-0">{t('scan.table.findings')}</span>
+        <span className="w-20 shrink-0 text-right">{t('scan.table.duration')}</span>
+        <span className="w-24 shrink-0 text-right">{t('scan.table.started')}</span>
+        <span className="w-28 shrink-0 text-right">{t('scan.table.actions')}</span>
       </li>
 
       {scans.map((scan) => (
@@ -357,6 +359,7 @@ const ScanRow = memo(function ScanRow({
   /** 传了就把"点标题/目标"改成选中，而不是跳去活动页（任务页右栏预览）。 */
   onSelect?: (scan: Scan) => void
 }) {
+  const { t } = useI18n()
   const [menuOpen, setMenuOpen] = useState(false)
   const [reasonOpen, setReasonOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -562,7 +565,7 @@ const ScanRow = memo(function ScanRow({
             )}
           >
             <StatusDot tone={tone} pulse={scan.status === 'running'} />
-            <span className="text-xs">{scanStatusLabel(scan)}</span>
+            <span className="text-xs">{t(`scanStatus.${scan.status}`, undefined, scanStatusLabel(scan))}</span>
           </span>
         </span>
 
@@ -622,13 +625,13 @@ const ScanRow = memo(function ScanRow({
                 <span aria-hidden="true">·</span>
               </>
             )}
-            <span>{display.kindLabel}</span>
+            <span>{display.isIr ? t('scan.kind.ir') : t(`targetKind.${scan.targetKind}`, undefined, display.kindLabel)}</span>
             <span aria-hidden="true">·</span>
-            <span>{scan.agentCount} 个智能体</span>
+            <span>{t('scan.meta.agents', { n: scan.agentCount })}</span>
             {scan.skills.length > 0 && (
               <>
                 <span aria-hidden="true">·</span>
-                <span>{scan.skills.length} 项检测</span>
+                <span>{t('scan.meta.checks', { n: scan.skills.length })}</span>
               </>
             )}
             {/* running 时给进度百分比 —— 比光转个圈有信息量 */}
@@ -725,8 +728,8 @@ const ScanRow = memo(function ScanRow({
                 : display.isIr
                   ? '结论见复盘报告'
                   : scan.goal === 'captureFlag' || scan.goal === 'verifyFix'
-                    ? '无漏洞条目'
-                    : '未发现漏洞'}
+                    ? t('scan.noEntries')
+                    : t('scan.noFindings')}
             </span>
           ) : (
             <>
@@ -749,7 +752,7 @@ const ScanRow = memo(function ScanRow({
                       触屏上 `title` 永不出现，色觉障碍用户也读不出"●1 ●2"。
                       现在与漏洞页的筛选用同一个 `meta.label`，两页说法一致。
                     */}
-                    <span className={meta.text}>{meta.label}</span>
+                    <span className={meta.text}>{t(`severity.${sev}`, undefined, meta.label)}</span>
                     <span className={cn('tabular', meta.text)} data-numeric>
                       {scan.findings[sev]}
                     </span>
@@ -800,7 +803,7 @@ const ScanRow = memo(function ScanRow({
             title="查看该扫描的智能体活动"
           >
             <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
-            详情
+            {t('scan.detail')}
           </Link>
 
           <div className="relative">
@@ -810,7 +813,7 @@ const ScanRow = memo(function ScanRow({
               onClick={() => setMenuOpen((v) => !v)}
               aria-expanded={menuOpen}
               aria-haspopup="menu"
-              aria-label={`${scan.target} 的更多操作`}
+              aria-label={t('scan.moreActions', { target: scan.target })}
               className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-ink-muted transition-ui duration-fast hover:bg-surface-overlay hover:text-ink"
             >
               <MoreHorizontal size={14} strokeWidth={2} aria-hidden="true" />

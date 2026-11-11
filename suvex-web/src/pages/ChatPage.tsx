@@ -82,6 +82,7 @@ import { ensureToolsLoaded, useTools } from '@/data/tools'
 import { api, errorMessage } from '@/lib/api'
 import { showToast } from '@/data/toast-store'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import {
   Archive,
   ArrowDown,
@@ -395,6 +396,7 @@ function McpMountStatus({
 }
 
 export function ChatPage() {
+  const { t } = useI18n()
   const {
     sessions,
     archivedSessions,
@@ -1670,7 +1672,7 @@ export function ChatPage() {
             size="sm"
             onClick={() => setShowList(false)}
             className="md:hidden"
-            aria-label="收起会话列表"
+            aria-label={t('chat.collapseList')}
           >
             <X size={14} strokeWidth={2} aria-hidden="true" />
           </Button>
@@ -1843,7 +1845,7 @@ export function ChatPage() {
               ) : (
                 <Eye size={12} strokeWidth={2} aria-hidden="true" />
               )}
-              <span className="hidden sm:inline">只看回答</span>
+              <span className="hidden sm:inline">{t('chat.onlyAnswers')}</span>
             </button>
           )}
           {active && (
@@ -1853,7 +1855,9 @@ export function ChatPage() {
                   右侧明明已经有一句话，右上角却还是「0 条消息」——
                   与空态文案是同一个形状的谎报（数字说没有，画面说已有）。
               */}
-              {messages.length + (sendingHere && pendingUserContent !== null ? 1 : 0)} 条消息
+              {t('chat.messageCount', {
+                n: messages.length + (sendingHere && pendingUserContent !== null ? 1 : 0),
+              })}
             </span>
           )}
         </div>
@@ -2628,6 +2632,7 @@ function SessionRow({
   /** 已归档的行：不显示归档按钮，改由菜单里的「恢复/彻底删除」处理。 */
   archived?: boolean
 }) {
+  const { t } = useI18n()
   /*
     ★ 菜单按钮给出锚点坐标时，用**按钮自己**的位置而不是 (0,0)：
       键盘用户（Tab 到"⋯"再回车）没有鼠标坐标，用 (0,0) 会让菜单
@@ -2681,13 +2686,13 @@ function SessionRow({
             {/* 空标题没有兜底时，列表里会出现只有「0 条」没有名字的一行 ——
                 看起来像渲染坏了。未命名也要能被指认。 */}
             <span className="truncate text-xs text-ink">
-              {session.title.trim() || '未命名对话'}
+              {session.title.trim() || t('chat.untitled')}
             </span>
           </span>
           <span className="block text-2xs text-ink-faint">
-            {running ? '运行中 · ' : ''}
+            {running ? `${t('chat.running')} · ` : ''}
             {/* 「条」单独出现不知道数的是什么；这一列数的是消息（含工具调用记录） */}
-            {session.messageCount} 条消息
+            {t('chat.messageCount', { n: session.messageCount })}
           </span>
         </button>
         {/*

@@ -1,23 +1,26 @@
-/** 把 ISO 时间转成"3 分钟前"这种扫视友好的人话。 */
+import { getActiveLocale } from '@/i18n/locale-store'
+
+/** 把 ISO 时间转成"3 分钟前"这种扫视友好的人话（跟随界面语言）。 */
 export function formatRelativeTime(iso: string, now: number = Date.now()): string {
   const then = new Date(iso).getTime()
   if (!Number.isFinite(then)) return '—'
 
+  const locale = getActiveLocale()
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto', style: 'short' })
   const diffSec = Math.round((now - then) / 1000)
-  if (diffSec < 10) return '刚刚'
-  if (diffSec < 60) return `${diffSec} 秒前`
 
+  // 用 Intl 而不是手写单位表：7 种语言的复数、词序、空格规则都在平台里，
+  // 手写一张表只会漏掉某一种语言的格变化。
+  if (diffSec < 60) return diffSec < 10 ? rtf.format(0, 'second') : rtf.format(-diffSec, 'second')
   const diffMin = Math.floor(diffSec / 60)
-  if (diffMin < 60) return `${diffMin} 分钟前`
-
+  if (diffMin < 60) return rtf.format(-diffMin, 'minute')
   const diffHour = Math.floor(diffMin / 60)
-  if (diffHour < 24) return `${diffHour} 小时前`
-
+  if (diffHour < 24) return rtf.format(-diffHour, 'hour')
   const diffDay = Math.floor(diffHour / 24)
-  if (diffDay < 7) return `${diffDay} 天前`
+  if (diffDay < 7) return rtf.format(-diffDay, 'day')
 
   // 超过一周给绝对日期，相对时间在那一档已经没有信息量
-  return new Date(iso).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  return new Date(iso).toLocaleDateString(locale, { month: 'numeric', day: 'numeric' })
 }
 
 /**
@@ -33,19 +36,28 @@ export function formatRelativeTime(iso: string, now: number = Date.now()): strin
 export function formatDuration(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds) || seconds < 0) return '—'
 
+  const locale = getActiveLocale()
+  const unit = (value: number, name: 'second' | 'minute' | 'hour') =>
+    new Intl.NumberFormat(locale, { style: 'unit', unit: name, unitDisplay: 'short' }).format(value)
+  // 中日文单位紧贴数字，拉丁文字需要一个空格（"50m 24s"）
+  const sep = locale.startsWith('zh') || locale.startsWith('ja') ? '' : ' '
+
   const total = Math.round(seconds)
-  if (total < 60) return `${total} 秒`
+  if (total < 60) return unit(total, 'second')
 
   const minutes = Math.floor(total / 60)
   const remainderSec = total % 60
-
   if (minutes < 60) {
-    return remainderSec === 0 ? `${minutes} 分` : `${minutes} 分 ${remainderSec} 秒`
+    return remainderSec === 0
+      ? unit(minutes, 'minute')
+      : `${unit(minutes, 'minute')}${sep}${unit(remainderSec, 'second')}`
   }
 
   const hours = Math.floor(minutes / 60)
   const remainderMin = minutes % 60
-  return remainderMin === 0 ? `${hours} 小时` : `${hours} 小时 ${remainderMin} 分`
+  return remainderMin === 0
+    ? unit(hours, 'hour')
+    : `${unit(hours, 'hour')}${sep}${unit(remainderMin, 'minute')}`
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   useScanViews,
 } from '@/data/scan-views'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import {
   decodeViewQuery,
   describeViewQuery,
@@ -45,6 +46,7 @@ interface Props {
  * `status === 'ready'` 时不重复拉，避免每次展开都闪一下骨架。
  */
 export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
+  const { t } = useI18n()
   const { views, status, saving, error } = useScanViews()
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
@@ -113,7 +115,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
         }
       >
         <Bookmark size={12} strokeWidth={1.75} aria-hidden="true" />
-        {activeView ? activeView.name : '我的视图'}
+        {activeView ? activeView.name : t('scans.views')}
         <ChevronDown
           size={11}
           strokeWidth={2}
@@ -170,7 +172,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
                 type="button"
                 onClick={() => void handleSave()}
                 disabled={!canSave}
-                aria-label="保存为我的视图"
+                aria-label={t('scans.saveView')}
                 className={cn(
                   'inline-flex h-7 shrink-0 items-center gap-1 rounded-sm border border-line px-2 text-2xs',
                   'transition-ui duration-fast',

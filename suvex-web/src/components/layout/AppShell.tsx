@@ -194,7 +194,9 @@ export function PageHeader({ navId }: { navId: string }) {
   return (
     <header className="border-b border-line px-gutter py-bay">
       <h1 className="text-xl font-medium tracking-[-0.01em] text-ink">{t(`nav.${item.id}`)}</h1>
-      <p className="mt-tight max-w-[68ch] text-sm text-ink-muted">{item.blurb}</p>
+      <p className="mt-tight max-w-[68ch] text-sm text-ink-muted">
+        {t(`nav.${item.id}.blurb`, undefined, item.blurb)}
+      </p>
     </header>
   )
 }

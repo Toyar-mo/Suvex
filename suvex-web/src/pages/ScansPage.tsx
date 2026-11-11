@@ -878,13 +878,13 @@ export function ScansPage() {
           {/* 排序 */}
           <label className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
             <ArrowDownWideNarrow size={13} strokeWidth={1.75} aria-hidden="true" />
-            <span className="sr-only">排序方式</span>
+            <span className="sr-only">{t('scans.sortBy')}</span>
             <Select
               size="sm"
               value={sortKey}
               options={(Object.keys(SORT_LABEL) as SortKey[]).map((key) => ({
                 value: key,
-                label: SORT_LABEL[key],
+                label: t(`sort.${key}`, undefined, SORT_LABEL[key]),
               }))}
               onChange={(value) => setSortKey(value as SortKey)}
               className="h-full border-0 bg-transparent px-0"
@@ -905,7 +905,7 @@ export function ScansPage() {
 
           <Button variant="primary" size="sm" onClick={() => setWizardOpen(true)}>
             <Plus size={14} strokeWidth={2.5} aria-hidden="true" />
-            新建扫描
+            {t('scans.new')}
           </Button>
           </div>
         </div>
