@@ -60,6 +60,7 @@ from app.chat import engine, resumer, service, turn_runs
 from app.chat import interrupts as chat_interrupts
 from app.chat import mcp_tools as chat_mcp_tools
 from app.chat import sandbox as chat_sandbox
+from app.chat import todos as chat_todos
 from app.chat import workspaces as chat_workspaces
 from app.chat.prompts import CHAT_TOOLS, TOOL_BY_NAME, may_call_tool
 from app.chat.schemas import (
@@ -85,6 +86,7 @@ from app.chat.schemas import (
     ChatSessionIn,
     ChatSessionOut,
     ChatSettingsIn,
+    ChatTodoOut,
     ChatTurnRunOut,
 )
 from app.chat.stream import (
@@ -951,6 +953,25 @@ async def upload_attachment(
         raise ApiError.validation(str(exc), {"file": "不符合要求"}) from exc
 
     return ChatAttachmentOut(id=staged.id, name=staged.name, sizeBytes=staged.size_bytes)
+
+
+@router.get("/chat/sessions/{session_id}/todos", response_model=list[ChatTodoOut])
+def list_session_todos(
+    session_id: str, db: DbSession, identity: Reader
+) -> list[ChatTodoOut]:
+    """这个会话的结构化计划（`chat_todos`，v1.89）。
+
+    ★ 只读：计划由模型在对话里用 `create_todo` / `update_todo` 维护，
+      前端只负责显示。没有计划时返回空数组（不是 404 —— "没有计划"
+      是正常状态，不是资源不存在）。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    return [
+        ChatTodoOut(seq=row.seq, text=row.text, status=row.status)
+        for row in chat_todos.list_todos(db, session.id)
+    ]
 
 
 @router.get("/chat/sessions/{session_id}/files", response_model=list[ChatFileOut])

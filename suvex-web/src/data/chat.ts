@@ -896,6 +896,27 @@ export interface ChatTurnRun {
   heartbeatAt?: string | null
 }
 
+export interface ChatTodoItem {
+  seq: number
+  text: string
+  status: 'pending' | 'in_progress' | 'done'
+}
+
+/**
+ * 读这次对话的结构化计划（`chat_todos`，v1.89）。
+ *
+ * ★ 失败返回 `[]` 而不是抛：计划是辅助信息，拿不到它不该让对话页打不开。
+ *   与 `listTurns` 的 `null` 不同 —— 那里"拿不到"会让界面误判"后台没在跑"，
+ *   这里只是少显示一条进度条。
+ */
+export async function listTodos(sessionId: string): Promise<ChatTodoItem[]> {
+  try {
+    return await api.get<ChatTodoItem[]>(`/chat/sessions/${sessionId}/todos`)
+  } catch {
+    return []
+  }
+}
+
 /**
  * 列出一个会话最近的执行账目。
  *

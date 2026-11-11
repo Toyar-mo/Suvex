@@ -664,6 +664,19 @@ __all__ = [
 ]
 
 
+class ChatTodoOut(CamelModel):
+    """会话计划里的一步（`chat_todos`，v1.89）。
+
+    `seq` 是会话内从 1 开始、**不复用**的序号 —— 模型与用户都用它指代
+    "第几步"，所以它不随删除重排。
+    """
+
+    seq: int
+    text: str
+    #: pending | in_progress | done
+    status: str
+
+
 class ChatApprovalOut(CamelModel):
     id: str
     sessionId: str

@@ -27,6 +27,7 @@ import { useChatListCollapsed } from '@/hooks/useChatListCollapsed'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { ChallengeBar, MissingChallengeBar } from '@/components/chat/ChallengeBar'
 import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
+import { ChatPlanStrip } from '@/components/chat/ChatPlanStrip'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
 import { Skeleton } from '@/components/ui/Skeleton'
@@ -2160,6 +2161,9 @@ export function ChatPage() {
             </button>
           </div>
         )}
+
+        {/* 计划条（v1.89）：模型写进 chat_todos 的步骤，只读展示 */}
+        {active && <ChatPlanStrip sessionId={active.id} refreshKey={messages.length} />}
 
         {/* 输入卡（单行形态）：附件、输入、模型、设置、发送同一行 */}
         <div className="shrink-0 px-3 pb-3 pt-4" data-testid="composer-dock">

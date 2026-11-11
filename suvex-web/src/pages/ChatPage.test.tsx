@@ -94,6 +94,8 @@ vi.mock('@/data/chat', () => ({
   // ★ v1.80：MCP 挂载区的真实试连结果。不导出就会在设置面板打开时炸
   //   `No "fetchMcpStatus" export`。
   fetchMcpStatus: vi.fn(async () => ({ mountedCount: 0, connectedCount: 0, servers: [] })),
+  // v1.89：计划条读 chat_todos。工厂少导出 → 组件调用时炸 No "listTodos" export。
+  listTodos: vi.fn(async () => []),
 }))
 
 // `vi.mock` 会被提升，所以这里拿到的已是替身。

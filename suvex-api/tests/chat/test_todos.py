@@ -109,3 +109,26 @@ def test_create_todo_refuses_past_the_cap(db_session: Session) -> None:
     db_session.commit()
 
     assert todo_store.create_todo(db_session, session_id=session.id, text="overflow") is None
+
+
+def test_todo_endpoint_lists_the_plan(ready_client, db_session: Session) -> None:  # noqa: ANN001
+    """前端唯一的数据来源：`GET /chat/sessions/{id}/todos`。
+
+    ★ 没有计划时必须返回 `[]` 而不是 404 —— "还没写计划"是正常状态。
+    """
+    # 走端点建会话：`created_by` 由登录身份写入，直接造行容易和 `_owner` 对不上。
+    created = ready_client.post("/api/v1/chat/sessions", json={"title": "计划页"})
+    assert created.status_code == 201, created.text
+    session_id = created.json()["id"]
+
+    empty = ready_client.get(f"/api/v1/chat/sessions/{session_id}/todos")
+    assert empty.status_code == 200, empty.text
+    assert empty.json() == []
+
+    todo_store.create_todo(db_session, session_id=session_id, text="先枚举端点")
+    db_session.commit()
+
+    listed = ready_client.get(f"/api/v1/chat/sessions/{session_id}/todos")
+    body = listed.json()
+    assert listed.status_code == 200, listed.text
+    assert body == [{"seq": 1, "text": "先枚举端点", "status": "pending"}]
