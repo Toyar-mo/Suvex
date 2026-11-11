@@ -4324,6 +4324,7 @@ async def run_turn(
                     tool_args=args,
                     content=output,
                     failed=True,
+                    duration_ms=0,
                 )
                 result.messages.append(tool_message)
                 db.commit()
@@ -4338,7 +4339,9 @@ async def run_turn(
                 )
                 continue
 
+            tool_started = time.perf_counter()
             output, failed = await _execute_tool(ctx, name, args)
+            tool_elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
             tools_used += 1
             no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
             # ★ v1.87：计划句的打回额度是**连续**额度，不是整轮总额。
@@ -4354,6 +4357,7 @@ async def run_turn(
                 tool_args=args,
                 content=output,
                 failed=failed,
+                duration_ms=tool_elapsed_ms,
             )
             result.messages.append(tool_message)
             db.commit()
@@ -4816,7 +4820,9 @@ async def resume_approved(
                 db.commit()
                 return result
 
+            tool_started = time.perf_counter()
             tool_output, tool_failed = await _execute_tool(ctx, name, args)
+            tool_elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
             tools_used += 1
             no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
             tool_message = chat_service.append_tool_message(
@@ -4826,6 +4832,7 @@ async def resume_approved(
                 tool_args=args,
                 content=tool_output,
                 failed=tool_failed,
+                duration_ms=tool_elapsed_ms,
             )
             result.messages.append(tool_message)
             db.commit()

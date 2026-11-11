@@ -82,7 +82,7 @@ describe('AssistantTurn — 最终答复是纯文本', () => {
     expect(work.compareDocumentPosition(answerRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     // 思考过程跟着正文那条消息，默认折叠、点开才出现
-    const reasoning = screen.getByRole('button', { name: '思考过程' })
+    const reasoning = screen.getByRole('button', { name: /思考过程/ })
     expect(reasoning.getAttribute('aria-expanded')).toBe('false')
     expect(container.textContent).not.toContain('先看端口，再下结论')
     fireEvent.click(reasoning)
@@ -102,12 +102,12 @@ describe('AssistantTurn — 回合页脚', () => {
     // 真实失败数照旧挂在 data 属性上（事实不藏）
     expect(footer.getAttribute('data-turn-failures')).toBe('1')
 
-    expect(footer.textContent).toContain('4 步')
-    expect(footer.textContent).toContain('2 个工具')
-    // ★ v1.59：这一轮**给出了最终答复**，中途一次工具报错是过程挫折、已恢复。
-    //   页脚如实报「1 次工具报错（已恢复）」，不再用会让人以为整轮失败的红字「1 个失败」。
-    expect(footer.textContent).toContain('1 次工具报错（已恢复）')
-    expect(footer.textContent).not.toContain('1 个失败')
+    // v1.92：页脚只留时间与人格标签；步数/工具数在 data 属性里（供端到端
+    // 断言），不再用一行密集文字重复工具卡已有的信息。
+    expect(footer.textContent).not.toContain('步')
+    expect(footer.textContent).not.toContain('个工具')
+    // 已交付答复：过程中的一次工具报错不再在页脚重复标红。
+    expect(footer.textContent).not.toContain('失败')
 
     // 时间来自最后一条消息（03:07），不是第一条
     const time = footer.querySelector('time') as HTMLTimeElement
@@ -125,8 +125,7 @@ describe('AssistantTurn — 回合页脚', () => {
     const footer = container.querySelector('[data-turn-footer]') as HTMLElement
     expect(footer).not.toBeNull()
     expect(footer.getAttribute('data-turn-failures')).toBe('1')
-    expect(footer.textContent).toContain('1 个失败')
-    expect(footer.textContent).not.toContain('已恢复')
+    expect(footer.textContent).toContain('1 个工具失败')
   })
 
   it('★ 时间戳解析不了时退成空串，而不是渲染「Invalid Date」', () => {
@@ -140,51 +139,39 @@ describe('AssistantTurn — 回合页脚', () => {
   })
 })
 
-describe('AssistantTurn — 工作过程收成一条摘要（对标成熟客户端）', () => {
-  it('★ 默认收起：结论可见，工具与旁白不占版面', () => {
-    /*
-      生产会话里 92% 的消息是过程/工具，逐条铺开会把结论顶到几屏之外。
-      成熟客户端（ChatGPT / Claude）的做法是一回合只有一条「工作过程」
-      摘要，点开才看细节 —— 这里钉住这个默认形态。
-    */
+describe('AssistantTurn — 过程直接铺开（对齐 omp，v1.92）', () => {
+  it('★ 默认就能看到每一次工具调用与旁白，而不是一条折叠摘要', () => {
     const { container } = render(<AssistantTurn items={fullTurn()} />)
 
     const work = container.querySelector('[data-turn-work]') as HTMLElement
     expect(work).not.toBeNull()
     expect(work.getAttribute('data-turn-work-steps')).toBe('3')
     expect(work.getAttribute('data-turn-work-tools')).toBe('2')
-    expect(
-      screen.getByRole('button', { name: /工作过程/ }).getAttribute('aria-expanded'),
-    ).toBe('false')
 
-    // 收起时原始记录不在 DOM 里，版面只有摘要 + 结论
-    expect(container.querySelector('[data-message-row="tool"]')).toBeNull()
-    expect(container.textContent).not.toContain('我先跑一遍端口扫描')
-    expect(screen.getByText('已清点完毕')).toBeTruthy()
-  })
+    // 没有「工作过程」折叠按钮：过程本身就在转录里
+    expect(screen.queryByRole('button', { name: /工作过程/ })).toBeNull()
 
-  it('★ 失败数冒到收起态摘要行上（收起时也要看得见工具挂了）', () => {
-    const { container } = render(<AssistantTurn items={[toolFailed]} />)
-    const work = container.querySelector('[data-turn-work]') as HTMLElement
-    expect(work.textContent).toContain('1 个失败')
-  })
-
-  it('★ 点开摘要后按发生顺序铺出旁白与工具', () => {
-    const { container } = render(<AssistantTurn items={fullTurn()} />)
-    fireEvent.click(screen.getByRole('button', { name: /工作过程/ }))
-
+    // 两条工具都在 DOM 里，且旁白在第一条工具之前（真实发生顺序）
     const toolRows = Array.from(
       container.querySelectorAll('[data-message-row="tool"]'),
     ) as HTMLElement[]
     expect(toolRows.length).toBe(2)
-
     const narrationLine = container.querySelector('[data-narration-line]') as HTMLElement
     expect(narrationLine.textContent).toContain('我先跑一遍端口扫描')
-    // 旁白在第一条工具之前 —— 展开后仍是真实发生顺序
     expect(
       narrationLine.compareDocumentPosition(toolRows[0]) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy()
-    // 工具参数摘要仍在折叠行上
+  })
+
+  it('★ 失败在折叠/展开两种状态下都看得出来', () => {
+    const { container } = render(<AssistantTurn items={[toolFailed]} />)
+    const row = container.querySelector('[data-message-row="tool"]') as HTMLElement
+    expect(row.textContent).toContain('失败')
+    expect(row.querySelector('.text-signal-risk')).not.toBeNull()
+  })
+
+  it('★ 工具参数摘要始终在标题行上', () => {
+    const { container } = render(<AssistantTurn items={[toolOk]} />)
     expect(container.textContent).toContain('nmap -sV example.com')
   })
 
@@ -196,7 +183,6 @@ describe('AssistantTurn — 工作过程收成一条摘要（对标成熟客户�
       createdAt: '2026-10-25T03:05:30Z',
     })
     render(<AssistantTurn items={[narration, toolOk, midAnswer, toolFailed, answer]} />)
-    // 两条结论都不被收进「工作过程」，始终可见
     expect(screen.getByText('端口扫完了，接着看服务')).toBeTruthy()
     expect(screen.getByText('已清点完毕')).toBeTruthy()
   })
@@ -330,5 +316,20 @@ describe('AssistantTurn — 待审批的消息透传回调', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '拒绝' }))
     expect(onDecide).toHaveBeenCalledWith('p1', false)
+  })
+})
+
+describe('AssistantTurn — 运行中的工具（v1.92）', () => {
+  it('live + liveTool 时画一张「执行中」的卡片', () => {
+    const { container } = render(<AssistantTurn items={[]} live liveTool="run_shell" />)
+    const running = container.querySelector('[data-live-tool]') as HTMLElement
+    expect(running).not.toBeNull()
+    expect(running.textContent).toContain('run_shell')
+    expect(running.textContent).toContain('执行中')
+  })
+
+  it('live 但没有正在执行的工具时不画运行卡', () => {
+    const { container } = render(<AssistantTurn items={[]} live />)
+    expect(container.querySelector('[data-live-tool]')).toBeNull()
   })
 })

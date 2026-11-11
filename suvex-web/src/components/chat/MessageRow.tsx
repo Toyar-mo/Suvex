@@ -1,8 +1,9 @@
 import { memo, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+
+import { useI18n } from '@/i18n'
+import { Check, ChevronDown, ChevronRight, Copy, Sparkles } from 'lucide-react'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
-import { cn } from '@/lib/cn'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 import type { ChatMessage } from '@/data/chat'
 
@@ -76,10 +77,18 @@ function MessageRowImpl({
         data-message-row="user"
         data-seq={message.seq}
       >
-        <div className="max-w-[520px] rounded-lg rounded-br-xs border border-line bg-surface px-3.5 py-2">
-          <p className="whitespace-pre-wrap break-words text-base leading-[1.5] text-ink">
-            {message.content}
-          </p>
+        <div className="flex max-w-[520px] flex-col items-end gap-1">
+          <div className="rounded-lg rounded-br-xs border border-line bg-surface px-3.5 py-2">
+            <p className="whitespace-pre-wrap break-words text-base leading-[1.5] text-ink">
+              {message.content}
+            </p>
+          </div>
+          <div className="flex items-center gap-2 pr-0.5 text-2xs text-ink-faint/80">
+            <time className="tabular-nums" dateTime={message.createdAt}>
+              {formatClock(message.createdAt)}
+            </time>
+            <CopyButton text={message.content} />
+          </div>
         </div>
       </div>
     )
@@ -92,7 +101,10 @@ function MessageRowImpl({
   return (
     <div className="flex flex-col gap-1.5" data-message-row="assistant" data-seq={message.seq}>
       {message.reasoning && <ReasoningBlock text={message.reasoning} />}
-      <div className="break-words text-base leading-7 text-ink" data-markdown-answer>
+      <div className="group/answer relative break-words text-base leading-7 text-ink" data-markdown-answer>
+        <div className="absolute -top-1 right-0 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/answer:opacity-100">
+          <CopyButton text={message.content} />
+        </div>
         <WriteupMarkdown markdown={message.content} sessionId={sessionId} />
       </div>
     </div>
@@ -106,17 +118,14 @@ function MessageRowImpl({
  *   都变成两屏，而用户大多数时候只关心结论。
  */
 export function ReasoningBlock({ text }: { text: string }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   return (
-    <div className="rounded-md border border-line/70 bg-surface-sunken/40">
+    <div className="flex flex-col" data-reasoning>
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          'flex w-full items-center gap-1 px-2 py-1 text-left text-2xs text-ink-faint',
-          'transition-colors duration-150 hover:text-ink-muted',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-        )}
+        onClick={() => setOpen((value) => !value)}
+        className="group flex w-max items-center gap-1.5 rounded-sm py-0.5 text-left text-2xs italic text-ink-faint transition-colors duration-150 hover:text-ink-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
         aria-expanded={open}
       >
         {open ? (
@@ -124,13 +133,52 @@ export function ReasoningBlock({ text }: { text: string }) {
         ) : (
           <ChevronRight size={11} strokeWidth={2} aria-hidden="true" />
         )}
-        思考过程
+        <Sparkles size={11} strokeWidth={2} aria-hidden="true" className="opacity-70" />
+        <span>{t('chat.thinking', undefined, '思考过程')}</span>
       </button>
       {open && (
-        <p className="whitespace-pre-wrap break-words border-t border-line/60 px-2 py-1.5 text-2xs leading-relaxed text-ink-muted">
+        /* omp 的形态：折叠时只是一行 "Thought for 1s ›"，展开才读全文。
+           不套卡片边框 —— 思考不是证据卡片，它是正文的附注。 */
+        <p className="mt-1 whitespace-pre-wrap break-words border-l border-line/80 pl-2.5 text-xs leading-relaxed text-ink-muted">
           {text}
         </p>
       )}
     </div>
+  )
+}
+
+/** 与 AssistantTurn 的时钟格式一致（HH:MM），用户消息下方用。 */
+function formatClock(value: string): string {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
+
+/** 复制一条消息的原文（markdown 源文，不是渲染后的纯文本）。 */
+function CopyButton({ text }: { text: string }) {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard
+          .writeText(text)
+          .then(() => {
+            setCopied(true)
+            window.setTimeout(() => setCopied(false), 1500)
+          })
+          .catch(() => {})
+      }}
+      aria-label={t('chat.copyMessage', undefined, '复制消息')}
+      title={t('chat.copyMessage', undefined, '复制消息')}
+      className="rounded-sm p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      {copied ? (
+        <Check size={11} strokeWidth={2.25} aria-hidden="true" />
+      ) : (
+        <Copy size={11} strokeWidth={2} aria-hidden="true" />
+      )}
+    </button>
   )
 }

@@ -43,7 +43,8 @@ describe('MessageRow — 用户消息', () => {
     expect(row.className).toContain('justify-end')
     expect(row.textContent).toContain('扫一下 10.0.0.5')
     // 气泡皮只在这一支上出现
-    const bubble = row.firstElementChild as HTMLElement
+    const bubble = row.querySelector('.rounded-lg') as HTMLElement
+    expect(bubble).not.toBeNull()
     expect(bubble.className).toContain('rounded-lg')
     expect(bubble.className).toContain('bg-surface')
   })
@@ -61,7 +62,7 @@ describe('MessageRow — 助手正文', () => {
     expect(row.className).not.toContain('rounded-lg')
     expect(row.className).not.toContain('bg-surface')
     // 没有 reasoning 就不该冒出「思考过程」按钮
-    expect(screen.queryByRole('button', { name: '思考过程' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /思考过程/ })).toBeNull()
   })
 
   it('★ 有 reasoning 时「思考过程」默认折叠，点开才看到全文', () => {
@@ -71,7 +72,7 @@ describe('MessageRow — 助手正文', () => {
       />,
     )
 
-    const toggle = screen.getByRole('button', { name: '思考过程' })
+    const toggle = screen.getByRole('button', { name: /思考过程/ })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(container.textContent).not.toContain('先看端口，再下结论')
 
@@ -83,7 +84,7 @@ describe('MessageRow — 助手正文', () => {
   it('★ 独立的 ReasoningBlock 也能自己开合（导出给别处用）', () => {
     const { container } = render(<ReasoningBlock text="先跑 passive 扫描" />)
     expect(container.textContent).not.toContain('先跑 passive 扫描')
-    fireEvent.click(screen.getByRole('button', { name: '思考过程' }))
+    fireEvent.click(screen.getByRole('button', { name: /思考过程/ }))
     expect(container.textContent).toContain('先跑 passive 扫描')
   })
 })

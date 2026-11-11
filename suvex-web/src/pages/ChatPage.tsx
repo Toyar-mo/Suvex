@@ -2000,6 +2000,7 @@ export function ChatPage() {
                           live={isLive}
                           streamingText={isLive ? streamingText : null}
                           phaseText={isLive ? phaseLabel(phase) : null}
+                          liveTool={isLive && phase?.phase === 'tool' ? (phase.tool ?? null) : null}
                           progress={isLive ? { tools: turnToolCount(turn.items) } : null}
                           interjections={isLive ? interjections : []}
                           meta={turnMeta}

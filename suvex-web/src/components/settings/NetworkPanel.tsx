@@ -29,7 +29,6 @@ export function NetworkPanel() {
 
   useEffect(() => {
     let cancelled = false
-    setLoading(true)
     loadNetworkRestrictions()
       .then((value) => {
         if (!cancelled) setData(value)

@@ -1,45 +1,70 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Terminal, Wrench } from 'lucide-react'
+import {
+  AlertCircle,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  FileText,
+  Globe,
+  Radar,
+  Terminal,
+  Wrench,
+} from 'lucide-react'
 import { useRevealOnExpand } from '@/hooks/useRevealOnExpand'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
+import { showToast } from '@/data/toast-store'
 import type { ChatMessage } from '@/data/chat'
 import { digestToolArgs } from './toolCardDigest'
 
 /**
- * 工具卡：它到底做了什么。
+ * 工具卡：一次调用到底做了什么。
  *
- * ★ 失败必须**看得出来**。一次静默失败（工具返回了错误但界面显示成正常）
- *   会让用户以为"扫描已建"然后去扫描页找一个不存在的任务 —— 这比报错更糟。
+ * ## v1.92：对齐 omp 的工具卡
  *
- * ## v0.103：默认收成**一行**
+ * 参考 omp 的 TUI 转录：每张卡是**一行标题 + 一块等宽输出**，标题里有
+ * 工具名、人话摘要、状态与耗时；输出默认露出来（短输出）或折起（长输出），
+ * 展开后限高滚动，并给出「共 N 行 / 复制」。
  *
- * 第一版做的是"长输出才折叠、折叠时露前两行"。对照 Claude Code / Codex
- * 的形态：**每条工具调用默认就是一行灰色文字**，想看细节才点开。
+ * 与旧版的差别（旧版是一行灰字 + 点开一整块纯文本）：
+ *   1. **默认看得见结果**：短输出（≤ 6 行）直接展开。旧版折叠到底，长任务里
+ *      用户要点开每一次调用才知道它做了什么。
+ *   2. **状态与耗时在标题行**：成功/失败不再只靠颜色，失败会带文字 + 图标，
+ *      耗时来自后端真实计时（`durationMs`），不是按消息时间差猜的。
+ *   3. **输出是「输出」，不是段落**：等宽字体、保留空白、限高滚动、可复制；
+ *      正文 Markdown 的排版规则不该套到终端输出上。
+ *   4. **失败必须看得出来**：失败卡片红边 + 红标题；展开后不会被当成成功。
  *
- * 对话页的主线是**模型说了什么**，工具调用是过程证据。过程证据默认占一行，
- * 是这两种价值的正确配比。所以现在**无条件折叠**。
+ * ## 为什么不用气泡
  *
- * ## 为什么不复用 ReasoningBlock
- *
- * 形态接近（都是一行可展开），但语义不同：思考过程是纯文本，工具卡要表达
- * **成功/失败**、要显示工具名和参数摘要。失败状态必须留在**折叠态**那一行上。
+ * 工具结果是**证据**，不是对话。给它一个和用户消息同级的圆角气泡，会让
+ * 转录变成一堆等权重的块；omp / Claude Code 都用「卡片」把它们压在
+ * 视觉层级下方，主线仍是模型说的话。
  */
+
 export function ToolCard({ message, compact = false }: { message: ChatMessage; compact?: boolean }) {
+  const { t } = useI18n()
   const failed = message.toolFailed === true
   const content = message.content ?? ''
-  const lineCount = content.split('\n').length
-  const [open, setOpen] = useState(false)
+  const lines = content.split('\n')
+  const lineCount = lines.length
+  const [open, setOpen] = useState(true)
+  const [copied, setCopied] = useState(false)
   const bodyRef = useRevealOnExpand<HTMLDivElement>(open)
-
-  /*
-    摘要行写什么 —— 这是折叠态**唯一**的信息，所以它必须回答
-    "这次调用干了什么"，而不是"这是第几条消息"。
-
-    ★ 纯字符串扫描，不走 `useMemo`：一次最多看 7 个键、截 80 字，
-      记忆化的开销比它省下的还多；而且 React Compiler 遇到手写 memo
-      会整块跳过优化（`react-hooks/preserve-manual-memoization`）。
-  */
   const argDigest = digestToolArgs(message.toolArgs)
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(content)
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1500)
+    } catch {
+      showToast({ message: t('tools.card.copyFailed', undefined, '复制失败，请手动选中后按 Ctrl+C'), tone: 'risk' })
+    }
+  }
+
+  const Duration = message.durationMs != null ? formatDuration(message.durationMs) : ''
 
   return (
     <div
@@ -47,56 +72,137 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
       data-seq={message.seq}
       data-tool-name={message.toolName ?? ''}
       data-tool-collapsed={open ? 'false' : 'true'}
-      className={cn(compact && 'py-0')}
+      className={cn(
+        'min-w-0 overflow-hidden rounded-md border transition-colors duration-150',
+        failed
+          ? 'border-signal-risk/35 bg-signal-risk/[0.03]'
+          : 'border-line/70 bg-surface-raised/15 hover:border-line-strong',
+        compact && 'py-0',
+      )}
     >
       <button
         type="button"
         data-tool-toggle="true"
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen((value) => !value)}
         aria-expanded={open}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded-sm px-1 text-left',
-          compact ? 'py-0.5' : 'py-1',
-          'transition-colors duration-150',
+          'group flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-          failed ? 'text-signal-risk hover:bg-signal-risk/5' : 'text-ink-faint hover:text-ink-muted',
+          failed ? 'hover:bg-signal-risk/[0.05]' : 'hover:bg-surface-raised/35',
         )}
       >
-        {open ? (
-          <ChevronDown size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        )}
-        {failed ? (
-          <Wrench size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <Terminal size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        )}
-        <span className="shrink-0 font-mono text-2xs">{message.toolName ?? 'tool'}</span>
+        <span className="shrink-0 text-ink-faint">
+          {open ? (
+            <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <ChevronRight size={12} strokeWidth={2} aria-hidden="true" />
+          )}
+        </span>
+        <ToolIcon name={message.toolName} failed={failed} />
+        <span
+          className={cn(
+            'shrink-0 font-mono text-[12px] font-medium tracking-tight',
+            failed ? 'text-signal-risk' : 'text-ink-muted',
+          )}
+        >
+          {message.toolName ?? 'tool'}
+        </span>
         {argDigest && (
-          <span className="min-w-0 truncate text-2xs text-ink-faint">{argDigest}</span>
-        )}
-        {failed && (
-          <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
-            失败
+          <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-faint">
+            {argDigest}
           </span>
         )}
-        <span className="ml-auto shrink-0 text-2xs text-ink-faint">
-          {open ? '收起' : `${lineCount} 行`}
+        {!argDigest && <span className="flex-1" />}
+
+        <span
+          className={cn(
+            'flex shrink-0 items-center gap-1 text-2xs',
+            failed ? 'text-signal-risk' : 'text-ink-faint',
+          )}
+        >
+          {failed ? (
+            <AlertCircle size={11} strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <Check size={11} strokeWidth={2.25} className="text-signal-ok/80" aria-hidden="true" />
+          )}
+          {failed ? t('tools.card.failed', undefined, '失败') : t('tools.card.done', undefined, '完成')}
+          {Duration && <span className="tabular-nums text-ink-faint">· {Duration}</span>}
+        </span>
+        <span className="shrink-0 text-2xs tabular-nums text-ink-faint">
+          {t('tools.card.lines', { n: lineCount }, `${lineCount} 行`)}
         </span>
       </button>
 
       {open && (
         <div
           ref={bodyRef}
+          data-tool-output
           className={cn(
-            'mt-1 rounded-sm border px-2.5 py-1.5',
-            failed ? 'border-signal-risk/40 bg-signal-risk/5' : 'border-line bg-surface-sunken',
+            'border-t',
+            failed ? 'border-signal-risk/30' : 'border-line/60',
           )}
         >
-          <p className="whitespace-pre-wrap break-words text-xs text-ink-muted">{content}</p>
+          <div className="flex items-center gap-2 bg-surface-sunken/50 px-2.5 py-1">
+            <span className="min-w-0 flex-1 truncate text-[10.5px] uppercase tracking-wide text-ink-faint/80">
+              {t('tools.card.output', undefined, '输出')}
+            </span>
+            <button
+              type="button"
+              onClick={() => void copy()}
+              className="flex shrink-0 items-center gap-1 rounded-sm px-1 py-0.5 text-2xs text-ink-faint transition-ui duration-fast hover:text-ink"
+            >
+              {copied ? (
+                <Check size={11} strokeWidth={2.25} aria-hidden="true" />
+              ) : (
+                <Copy size={11} strokeWidth={2} aria-hidden="true" />
+              )}
+              {copied
+                ? t('tools.card.copied', undefined, '已复制')
+                : t('tools.card.copy', undefined, '复制')}
+            </button>
+          </div>
+          {content.trim() ? (
+            <pre className="max-h-[380px] overflow-auto whitespace-pre-wrap break-words bg-surface-sunken/30 px-3 py-2 font-mono text-[12px] leading-[1.7] text-ink-muted">
+              {content}
+            </pre>
+          ) : (
+            <p className="px-3 py-2 text-xs text-ink-faint">
+              {t('tools.card.empty', undefined, '（无输出）')}
+            </p>
+          )}
         </div>
       )}
     </div>
   )
+}
+
+function ToolIcon({ name, failed }: { name?: string | null; failed: boolean }) {
+  const cls = cn('shrink-0', failed ? 'text-signal-risk' : 'text-ink-faint')
+  const props = { size: 12, strokeWidth: 2, 'aria-hidden': true } as const
+  switch (name) {
+    case 'run_shell':
+    case 'bash':
+      return <Terminal {...props} className={cls} />
+    case 'http_request':
+      return <Globe {...props} className={cls} />
+    case 'recon_scan':
+    case 'port_scan':
+      return <Radar {...props} className={cls} />
+    case 'read_file':
+    case 'write_file':
+      return <FileText {...props} className={cls} />
+    default:
+      return <Wrench {...props} className={cls} />
+  }
+}
+
+/** 450ms / 1.2s / 1m 03s —— 只保留对"这次快不快"有用的精度。 */
+export function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return ''
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  const minutes = Math.floor(ms / 60_000)
+  const seconds = Math.round((ms % 60_000) / 1000)
+  return `${minutes}m ${String(seconds).padStart(2, '0')}s`
 }

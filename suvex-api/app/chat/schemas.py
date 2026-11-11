@@ -221,6 +221,8 @@ class ChatMessageOut(CamelModel):
     toolName: str | None = None
     toolArgs: dict | None = None
     toolFailed: bool | None = None
+    #: 工具执行耗时（毫秒）。老数据为 None —— 界面不显示，而不是显示 0ms。
+    durationMs: int | None = None
     createdAt: IsoDateTime
     #: `answer`（对话内容，页面画气泡）/ `process`（过程证据，收进折叠块）。
     #: 默认 `answer`：老客户端/老数据不用改。

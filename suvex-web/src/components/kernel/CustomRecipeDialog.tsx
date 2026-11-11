@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 
 import { Modal } from '@/components/ui/Modal'
 import { Button } from '@/components/ui/Button'
@@ -42,21 +42,8 @@ export function CustomRecipeDialog({
   const [limitation, setLimitation] = useState('')
   const [localError, setLocalError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!open) return
-    setName(initial?.name ?? '')
-    setSummary(initial?.summary ?? '')
-    setGroup(initial?.group ?? '自定义')
-    setScenario((initial?.scenario as RecipeScenario) ?? 'both')
-    setCommand(initial?.command ?? '')
-    setArgs((initial?.args ?? []).join('\n'))
-    setParams(JSON.stringify(initial?.params ?? [], null, 2))
-    setLimitation(initial?.defaultLimitation ?? '')
-    setLocalError(null)
-  }, [open, initial])
-
   const submit = () => {
-    let parsedParams: KernelRecipeParam[] = []
+    let parsedParams: KernelRecipeParam[]
     try {
       const raw = JSON.parse(params || '[]')
       if (!Array.isArray(raw)) throw new Error('params must be an array')

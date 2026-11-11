@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { digestToolArgs } from './toolCardDigest'
+import { formatDuration } from './ToolCard'
 
 /*
   digestToolArgs：折叠态那行工具参数摘要（v1.30）
@@ -59,5 +60,24 @@ describe('digestToolArgs：折叠态参数摘要（v1.30）', () => {
     expect(digestToolArgs({})).toBe('')
     expect(digestToolArgs({ command: '   ' })).toBe('')
     expect(digestToolArgs({ unrelated: 'x' })).toBe('')
+  })
+})
+
+describe('formatDuration：工具卡耗时（v1.92）', () => {
+  it('毫秒级保留整数 ms，秒级保留一位小数', () => {
+    expect(formatDuration(0)).toBe('0ms')
+    expect(formatDuration(450)).toBe('450ms')
+    expect(formatDuration(1200)).toBe('1.2s')
+    expect(formatDuration(6420)).toBe('6.4s')
+  })
+
+  it('十秒以上不再带小数；一分钟以上用 m ss', () => {
+    expect(formatDuration(12_400)).toBe('12s')
+    expect(formatDuration(65_000)).toBe('1m 05s')
+  })
+
+  it('非法值返回空串（界面据此不显示，而不是显示 NaN）', () => {
+    expect(formatDuration(Number.NaN)).toBe('')
+    expect(formatDuration(-1)).toBe('')
   })
 })

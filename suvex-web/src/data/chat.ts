@@ -62,6 +62,8 @@ export interface ChatMessage {
   toolArgs?: Record<string, unknown> | null
   /** 工具是否失败。`null`/缺省 = 成功或不是工具消息。 */
   toolFailed?: boolean | null
+  /** 工具执行耗时（毫秒）。老数据为 null —— 不显示，而不是显示 0ms。 */
+  durationMs?: number | null
   createdAt: string
   /**
    * ★ v1.25：这条消息属于哪一面。

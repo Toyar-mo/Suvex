@@ -1,11 +1,11 @@
 import { memo, useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
-import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/data/chat'
 
 /**
@@ -41,6 +41,7 @@ export const AssistantTurn = memo(
     prev.live === next.live &&
     prev.streamingText === next.streamingText &&
     prev.phaseText === next.phaseText &&
+    prev.liveTool === next.liveTool &&
     prev.deciding === next.deciding &&
     prev.meta === next.meta &&
     prev.sessionId === next.sessionId &&
@@ -83,6 +84,7 @@ function AssistantTurnImpl({
   live = false,
   streamingText = null,
   phaseText = null,
+  liveTool = null,
   deciding,
   onDecide,
   interjections = [],
@@ -98,6 +100,8 @@ function AssistantTurnImpl({
   live?: boolean
   streamingText?: string | null
   phaseText?: string | null
+  /** 正在执行的工具名（phase=tool）—— 画一张运行中的卡片。 */
+  liveTool?: string | null
   deciding?: boolean
   onDecide?: (messageId: string, approve: boolean) => void
   /** 跑的过程中用户插的话（已落库、等下一轮被读到）。 */
@@ -111,18 +115,9 @@ function AssistantTurnImpl({
   hideWork?: boolean
   startedAt?: string | null
 }) {
+  const { t } = useI18n()
   const answers = items.filter(isAnswer)
   const work = items.filter((message) => !isAnswer(message))
-  // 运行中主区没有正文时，至少显示模型最近一句过程旁白 ——
-  // 否则界面只剩工具卡片，看起来像“重启后不输出了”。
-  const latestNarration = [...items]
-    .reverse()
-    .find(
-      (message) =>
-        message.role === 'assistant' &&
-        message.surface === 'process' &&
-        (message.content ?? '').trim().length > 0,
-    )?.content
   // 待审批的永远单独拿出来画：它还没执行，折进过程里会让用户看不见"在等我点"。
   const approvals = work.filter((message) => message.approvalStatus === 'pending')
   const body = work.filter((message) => message.approvalStatus !== 'pending')
@@ -134,7 +129,37 @@ function AssistantTurnImpl({
 
   return (
     <div className="flex flex-col gap-3" data-assistant-turn>
-      {!hideWork && body.length > 0 && <TurnWork items={body} live={live} />}
+      {!hideWork && body.length > 0 && (
+        /*
+          ★ v1.92：过程直接铺在转录里（对齐 omp），不再收进「工作过程 ·
+            N 步」的折叠行。折叠行会把每一次工具调用的结果都藏起来，
+            长任务里用户必须逐次点开确认；omp 的形态是每张工具卡自己
+            一行可展开，思考仍默认折叠。
+
+            `hideWork`（只看回答）保留：那是读者主动选择的降噪，与默认
+            把证据藏掉不是一回事。
+        */
+        <div
+          className="flex min-w-0 flex-col gap-1.5"
+          data-turn-work
+          data-turn-work-steps={body.length}
+          data-turn-work-tools={body.filter((message) => message.role === 'tool').length}
+        >
+          {body.map((message) =>
+            message.role === 'tool' ? (
+              <ToolCard key={message.id} message={message} />
+            ) : (
+              <p
+                key={message.id}
+                className="whitespace-pre-wrap break-words px-0.5 text-sm leading-6 text-ink-muted"
+                data-narration-line
+              >
+                {message.content}
+              </p>
+            ),
+          )}
+        </div>
+      )}
 
       {approvals.map((message) => (
         <ApprovalCard
@@ -185,13 +210,20 @@ function AssistantTurnImpl({
         </div>
       )}
 
-      {live && streamingText === null && latestNarration && (
-        <p
-          className="whitespace-pre-wrap break-words text-sm leading-6 text-ink-muted"
-          data-live-narration
+      {live && liveTool && (
+        <div
+          className="flex items-center gap-2 rounded-md border border-line/70 bg-surface-raised/30 px-2 py-1.5"
+          data-live-tool
         >
-          {latestNarration}
-        </p>
+          <Loader2
+            size={12}
+            strokeWidth={2}
+            className="animate-spin text-ink-faint"
+            aria-hidden="true"
+          />
+          <span className="shrink-0 font-mono text-[11px] text-ink-muted">{liveTool}</span>
+          <span className="text-2xs text-ink-faint">{t('tools.card.running', undefined, '执行中…')}</span>
+        </div>
       )}
 
       {live && (
@@ -219,19 +251,9 @@ function AssistantTurnImpl({
           data-turn-failures={failed}
           data-turn-at={last?.createdAt ?? ''}
         >
-          <span>
-            {items.length} 步
-            {tools.length > 0 && ` · ${tools.length} 个工具`}
-            {failed > 0 && hasAnswer && (
-              // 已交付答复：工具报错是过程中的正常挫折、且已恢复，用中性灰字
-              // 如实说「N 次工具报错（已恢复）」，不标红、不叫「失败」。
-              <span className="text-ink-faint"> · {failed} 次工具报错（已恢复）</span>
-            )}
-            {failed > 0 && !hasAnswer && (
-              // 没给出答复才是这一轮真的失败 —— 保留红字，别让用户漏看。
-              <span className="text-signal-risk"> · {failed} 个失败</span>
-            )}
-          </span>
+          {failed > 0 && !hasAnswer && (
+            <span className="text-signal-risk">· {failed} 个工具失败</span>
+          )}
           {last && <span aria-hidden="true">·</span>}
           {last && <time dateTime={last.createdAt}>{formatClock(last.createdAt)}</time>}
           {meta && (
@@ -239,82 +261,6 @@ function AssistantTurnImpl({
               <span aria-hidden="true">·</span>
               <span className="min-w-0 truncate">{meta}</span>
             </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * 一回合的「工作过程」：一条摘要 + 可展开的原始时间线。
- *
- * 摘要行是折叠态**唯一**的信息，所以它要回答"做了多少、做到了哪"：
- * 步数、工具数、失败数。展开后按发生顺序铺旁白与工具卡（工具卡自身仍是一行）。
- *
- * 默认收起且不随 `live` 变化 —— 见 `AssistantTurn` 顶部注释。
- */
-function TurnWork({ items, live }: { items: ChatMessage[]; live: boolean }) {
-  const [override, setOverride] = useState<boolean | null>(null)
-  const open = override ?? false
-  const tools = items.filter((message) => message.role === 'tool')
-  const failed = tools.filter((message) => message.toolFailed === true).length
-
-  return (
-    <div
-      className="flex flex-col"
-      data-turn-work
-      data-turn-work-steps={items.length}
-      data-turn-work-tools={tools.length}
-    >
-      <button
-        type="button"
-        onClick={() => setOverride(!open)}
-        aria-expanded={open}
-        className={cn(
-          'flex w-full items-center gap-1.5 rounded-sm px-1 py-1 text-left',
-          'text-2xs text-ink-faint transition-colors duration-150 hover:text-ink-muted',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-        )}
-      >
-        {open ? (
-          <ChevronDown size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        )}
-        <Sparkles size={11} strokeWidth={2} className="shrink-0" aria-hidden="true" />
-        <span className="shrink-0">
-          {live ? '正在处理' : '工作过程'} · {items.length} 步
-        </span>
-        {tools.length > 0 && (
-          <span className="shrink-0 text-ink-faint">· {tools.length} 个工具</span>
-        )}
-        {failed > 0 && (
-          <span className="shrink-0 rounded-pill bg-signal-risk/15 px-1.5 text-2xs text-signal-risk">
-            {failed} 个失败
-          </span>
-        )}
-        <span className="ml-auto shrink-0 text-ink-faint">{open ? '收起' : '展开'}</span>
-      </button>
-
-      {open && (
-        /*
-          展开后的记录限高 320px（≈ 12 行），避免一次点开把结论顶出屏幕。
-          里面保留真实顺序：旁白是灰色小字，工具卡仍各自一行可再展开。
-        */
-        <div className="ml-2 flex max-h-[320px] flex-col gap-0.5 overflow-y-auto border-l border-line/70 pl-2.5">
-          {items.map((message) =>
-            message.role === 'tool' ? (
-              <ToolCard key={message.id} message={message} compact />
-            ) : (
-              <p
-                key={message.id}
-                className="whitespace-pre-wrap break-words px-1 py-0.5 text-xs leading-relaxed text-ink-muted"
-                data-narration-line
-              >
-                {message.content}
-              </p>
-            ),
           )}
         </div>
       )}

@@ -103,20 +103,18 @@ import { useAuth } from '@/data/auth-store'
 import {
   archiveSession,
   createSession,
-  clearStaleSending,
   fetchMcpStatus,
   interject,
   interruptTurn,
   listTurns,
   loadSessions,
-  resumeTurn,
   sendMessage,
   updateSettings,
   useChat,
 } from '@/data/chat'
 import type { ChatMessage, ChatSession, ChatState } from '@/data/chat'
 import { ApiError } from '@/lib/api'
-import ChatPage, { phaseLabel, turnToolCount } from './ChatPage'
+import ChatPage from './ChatPage'
 
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedUseChat = vi.mocked(useChat)
@@ -125,8 +123,6 @@ const mockedCreateSession = vi.mocked(createSession)
 const mockedArchiveSession = vi.mocked(archiveSession)
 const mockedInterject = vi.mocked(interject)
 const mockedListTurns = vi.mocked(listTurns)
-const mockedResumeTurn = vi.mocked(resumeTurn)
-const mockedClearStaleSending = vi.mocked(clearStaleSending)
 const mockedInterruptTurn = vi.mocked(interruptTurn)
 
 function session(overrides: Partial<ChatSession> = {}): ChatSession {
@@ -232,7 +228,7 @@ afterEach(() => {
 })
 
 describe('ChatPage — 工具失败必须看得出来', () => {
-  it('★ 失败在收起的工作过程摘要上就能看到', () => {
+  it('★ 失败在工具卡标题行上就能看到', () => {
     /*
       这条钉的是最贵的一类骗局：工具其实没干成，界面画得和干成了一样。
       事故形态是用户读到"扫描已建"，去扫描页找不到东西，然后开始不信平台。
@@ -254,7 +250,9 @@ describe('ChatPage — 工具失败必须看得出来', () => {
 
     const work = container.querySelector('[data-turn-work]') as HTMLElement
     expect(work).not.toBeNull()
-    expect(work.textContent).toContain('1 个失败')
+    // v1.92：失败直接标在工具卡标题行（不用先展开、也不靠摘要计数）
+    expect(work.textContent).toContain('失败')
+    expect(work.textContent).toContain('create_scan')
   })
 
   it('★ 展开后工具卡带「失败」字样，且露出工具名', () => {
@@ -1120,7 +1118,7 @@ describe('ChatPage — 流式：跑的时候看得见、能插话', () => {
   ④ 失败必须在**折叠态**就看得出来（收起来看不见"失败"，用户会漏掉工具偷偷挂了）
   ⑤ 展开后能看到全文，且 aria 状态跟着翻转（屏幕阅读器用户靠它判断）
 */
-describe('ChatPage — 工具调用收成一行（v0.103）', () => {
+describe('ChatPage — 过程直接铺开（v1.92 对齐 omp）', () => {
   // 用户截图里那张卡的形状：20 行短记录
   const manyLines = Array.from({ length: 20 }, (_, i) => `- 第 ${i + 1} 条记录`).join('\n')
 
@@ -1151,397 +1149,59 @@ describe('ChatPage — 工具调用收成一行（v0.103）', () => {
     return renderPage('/chat?session=chat_1')
   }
 
-  function openWork(container: HTMLElement): void {
-    const toggle = container.querySelector('[data-turn-work] button') as HTMLElement | null
-    if (!toggle) throw new Error('没有工作过程摘要')
-    fireEvent.click(toggle)
-  }
-
-  it('★ 默认收着 —— 工具调用收进「工作过程」，一条摘要就够', () => {
+  it('★ 过程直接铺开：工具卡默认就在转录里（不再有「工作过程」摘要）', () => {
     const { container } = renderTool('OK')
 
-    // 工具卡不在 DOM 里：默认只露一条「工作过程 · N 步 · 1 个工具」
-    expect(container.querySelector('[data-message-row="tool"]')).toBeNull()
+    const card = container.querySelector('[data-message-row="tool"]') as HTMLElement
+    expect(card).not.toBeNull()
     const work = container.querySelector('[data-turn-work]') as HTMLElement
     expect(work).not.toBeNull()
     expect(work.getAttribute('data-turn-work-tools')).toBe('1')
-    expect(screen.getByRole('button', { name: /工作过程/ }).getAttribute('aria-expanded')).toBe(
-      'false',
-    )
+    expect(screen.queryByRole('button', { name: /工作过程/ })).toBeNull()
   })
 
-  it('★ 收着时正文全文不在 DOM 里（只靠 CSS 藏 = 假折叠）', () => {
+  it('★ 长输出默认展开；手动收起后全文必须离开 DOM（不是 CSS 假折叠）', () => {
     const { container } = renderTool(manyLines)
-    openWork(container)
+    const card = container.querySelector('[data-message-row="tool"]') as HTMLElement
+    expect(card.textContent).toContain('第 20 条记录')
 
-    const card = container.querySelector('[data-message-row="tool"]')
-    expect(card?.getAttribute('data-tool-collapsed')).toBe('true')
-
-    /*
-      ★ 这条是折叠的关键判据。
-        如果收着的时候全文仍在 DOM（只靠 CSS 隐藏），那"折叠"就是视觉把戏：
-        Ctrl+F 能搜到藏起来的内容，屏幕阅读器也照样读完全部。用户以为自己
-        收起来了，其实没有。
-    */
-    expect(card?.textContent, '折叠态把全文留在 DOM 里了 —— 那不是折叠').not.toContain(
+    const toggle = card.querySelector('[data-tool-toggle="true"]') as HTMLElement
+    fireEvent.click(toggle)
+    expect(card.getAttribute('data-tool-collapsed')).toBe('true')
+    expect(card.textContent, '折叠态把全文留在 DOM 里了 —— 那不是折叠').not.toContain(
       '第 20 条记录',
     )
   })
 
-  it('★ 那一行要说清"干了什么"：工具名 + 参数摘要（只剩图标等于没信息）', () => {
+  it('★ 标题行说清"干了什么"：工具名 + 参数摘要 + 状态', () => {
     const { container } = renderTool('done', false, { command: 'nmap -sV 10.0.0.5' })
-    openWork(container)
-
-    const card = container.querySelector('[data-message-row="tool"]')
-    expect(card?.textContent).toContain('list_challenges')
-    expect(card?.textContent, '参数摘要没显示 —— 收起来就看不出是哪次调用').toContain(
-      'nmap -sV 10.0.0.5',
-    )
+    const card = container.querySelector('[data-message-row="tool"]') as HTMLElement
+    expect(card.textContent).toContain('list_challenges')
+    expect(card.textContent).toContain('nmap -sV 10.0.0.5')
+    expect(card.textContent).toContain('完成')
   })
 
-  it('★ 失败在折叠态就看得到（收起来看不见失败 = 用户漏掉工具挂了）', () => {
+  it('★ 失败在标题行就看得到（收起来也不会漏掉工具挂了）', () => {
     const { container } = renderTool(manyLines, true)
+    const card = container.querySelector('[data-message-row="tool"]') as HTMLElement
+    expect(card.textContent).toContain('失败')
 
-    // 折叠态：失败数冒到工作过程摘要行
-    const work = container.querySelector('[data-turn-work]') as HTMLElement
-    expect(work.textContent).toContain('1 个失败')
-
-    openWork(container)
-    const card = container.querySelector('[data-message-row="tool"]')
-    expect(card?.getAttribute('data-tool-collapsed')).toBe('true')
-    expect(card?.textContent).toContain('失败')
-  })
-
-  it('★ 点开后看到全文，aria 与文案都翻转', () => {
-    const { container } = renderTool(manyLines)
-    openWork(container)
-
-    const toggle = container.querySelector('[data-tool-toggle="true"]') as HTMLElement | null
-    expect(toggle, '工具卡没有折叠开关').not.toBeNull()
-    expect(toggle?.getAttribute('aria-expanded')).toBe('false')
-
-    // 上面那条 expect 只在运行时生效，tsc 不认它是类型收窄 —— 显式断言非空。
-    if (!toggle) throw new Error('unreachable')
+    const toggle = card.querySelector('[data-tool-toggle="true"]') as HTMLElement
     fireEvent.click(toggle)
+    expect(card.getAttribute('data-tool-collapsed')).toBe('true')
+    expect(card.textContent).toContain('失败')
+  })
 
-    const card = container.querySelector('[data-message-row="tool"]')
-    expect(card?.getAttribute('data-tool-collapsed')).toBe('false')
-    expect(card?.textContent).toContain('第 20 条记录')
-
+  it('★ 展开/收起 aria 跟着翻转，行数始终可见', () => {
+    const { container } = renderTool(manyLines)
+    const toggle = container.querySelector('[data-tool-toggle="true"]') as HTMLElement
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
-    expect(toggle.textContent).toContain('收起')
-  })
-})
+    expect(toggle.textContent).toContain('20 行')
 
-/*
-  ══════════════════════════════════════════════════════════════
-  phaseLabel：自动纠偏续跑必须"看得见"（v1.14）
-  ══════════════════════════════════════════════════════════════
-
-  纠偏逻辑本身是静默的：模型这一轮没写动作，服务端悄悄再问它一次。
-  改造前这个位置**一帧都不推**，界面上的「正在想…」就那么停着，然后
-  凭空蹦出下一段 —— 用户分不清「在自动重试」（该等）与「卡死了」（该刷新）。
-  这两件事的动作相反，所以"看不出来"本身就是缺陷。
-
-  这里测的是**文案**，因为文案是用户唯一能看到的东西。三条判据：
-  ① `resume` 必须有自己的文案，不能回落成「正在想…」（那就等于没做）；
-  ② 被输出长度切断与"没写动作"要给不同的话 —— 用户已经看到半句话时，
-     说"正在把话说完"才对；说"重试"会让他以为刚才那段作废了；
-  ③ 不能把协议内部词（ACTION、finish_reason、truncation）漏到界面上。
-*/
-
-describe('phaseLabel：纠偏续跑的文案', () => {
-  it('★ resume 必须有自己的文案，不能回落到推理/正在想', () => {
-    const label = phaseLabel({ phase: 'resume', round: 0 })
-    // ⚠️ 只断言 `not.toBe('正在想…')` 是不够的：`round: 0` 时回落分支给出
-    //    的是「第 1 轮 · 模型在推理…」，那条断言照样绿。变异验证暴露过这一点。
-    expect(label).not.toBe('正在想…')
-    expect(label, 'resume 回落成了推理文案 —— 等于这个功能没做').not.toContain('模型在推理')
-    expect(label).toContain('第 1 轮')
-  })
-
-  it('★ 被切断时说"接着写"，不说"重试"', () => {
-    const label = phaseLabel({ phase: 'resume', round: 1, reason: 'truncation' })
-    expect(label).toContain('截断')
-    expect(label).not.toContain('重试')
-  })
-
-  it('★ 没写动作时说"把话说完"（与切断区分开）', () => {
-    const truncated = phaseLabel({ phase: 'resume', round: 0, reason: 'truncation' })
-    const format = phaseLabel({ phase: 'resume', round: 0, reason: 'format' })
-    expect(format).not.toBe(truncated)
-    expect(format).toContain('把话说完')
-  })
-
-  it('★ v1.29：FINAL 打回时说"正在确认做完了没"（与"重试"区分）', () => {
-    const label = phaseLabel({ phase: 'resume', round: 2, reason: 'final-check' })
-    expect(label).toContain('正在确认它是不是真的做完了')
-    expect(label).not.toContain('重试')
-    expect(label).not.toBe(phaseLabel({ phase: 'resume', round: 2, reason: 'format' }))
-  })
-
-  it('★ 不把协议内部词漏给用户', () => {
-    for (const reason of ['truncation', 'format', 'final-check', undefined]) {
-      const label = phaseLabel({ phase: 'resume', round: 0, reason })
-      expect(label).not.toContain('ACTION')
-      expect(label).not.toContain('finish_reason')
-      expect(label).not.toContain('truncation')
-      expect(label).not.toContain('format')
-    }
-  })
-
-  it('既有两种 phase 的文案不变（别为了加 resume 改坏它们）', () => {
-    expect(phaseLabel({ phase: 'thinking', round: 0 })).toBe('第 1 轮 · 模型在推理…')
-    expect(phaseLabel({ phase: 'tool', round: 2, tool: 'run_shell' })).toBe(
-      '第 3 轮 · 正在执行 run_shell…',
-    )
-    expect(phaseLabel(null)).toBe('正在想…')
-  })
-})
-
-describe('turnToolCount：live 阶段行上的「已 N 次工具」计数（v1.30）', () => {
-  /*
-    这个计数接在 `<AssistantTurn progress={...}>` 上（ChatPage 传给
-    AssistantTurn，AssistantTurn 用 progressLabel 渲染）。数错会让用户
-    在跑的时候看到假的推进数 —— 所以只钉两条最会骗人的边界：
-
-    ① 只数 `role === 'tool'`：旁白（`process`）也"动过"，但每轮开头模型
-       必先写一句旁白；把旁白算进去，计数会在真正执行第一个工具前就从 1
-       开始，反而看不出工具推进。
-    ② 空列表 = 0，不 NaN、不崩。
-  */
-  it('★ 只数 tool 消息：旁白（process）不算', () => {
-    const items: ChatMessage[] = [
-      message({ role: 'assistant', content: '我先看看工作目录' }), // 旁白
-      message({ role: 'tool' }),
-      message({ role: 'assistant', content: '再跑一次' }), // 旁白
-      message({ role: 'tool' }),
-      message({ role: 'tool' }),
-      message({ role: 'user', content: '继续' }),
-    ]
-    expect(turnToolCount(items)).toBe(3)
-  })
-
-  it('空回合 = 0', () => {
-    expect(turnToolCount([])).toBe(0)
-  })
-})
-
-describe('ChatPage — 中断的一轮要能看见、能继续（v1.19）', () => {
-  it('★ 服务端说可接手时，页面出现「继续这一轮」', async () => {
-    /*
-      用户原话：「对话又没反应的，没有长任务持久化啊」。
-
-      这条钉的是**可见性**：后端把中断落了库、也给了接口，但页面不显示，
-      用户看到的仍然是一片空白 —— 那就等于没修。判据用稳定的
-      `data-stuck-turn`，不靠文案（文案会改，夹具不该跟着文案漂）。
-    */
-    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
-    mockedListTurns.mockResolvedValue([
-      {
-        id: 'turn_1',
-        sessionId: 'chat_1',
-        status: 'interrupted',
-        resumeAttempts: 1,
-        lastError: 'ClientDisconnected: 客户端断开',
-        startedAt: '2026-10-28T05:00:00Z',
-        updatedAt: '2026-10-28T05:01:00Z',
-        resumable: true,
-      },
-    ])
-
-    renderPage('/chat?session=chat_1')
-
-    const banner = await screen.findByText(/上一轮没有跑完/)
-    expect(banner).toBeTruthy()
-    expect(screen.getByText('继续这一轮')).toBeTruthy()
-    // 原因要写出来，否则用户还是不知道"为什么停了"
-    expect(screen.getByText(/客户端断开/)).toBeTruthy()
-  })
-
-  it('★ 没有可接手的轮次时不显示提示条', async () => {
-    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
-    mockedListTurns.mockResolvedValue([])
-
-    const { container } = renderPage('/chat?session=chat_1')
-    // 等一拍，让 effect 里的 promise 落定 —— 否则断言会在"还没查"时通过
-    await screen.findByPlaceholderText(/说点什么/)
-    expect(container.querySelector('[data-stuck-turn]')).toBeNull()
-  })
-
-  it('★ 点「继续这一轮」会用当前 run 调 resumeTurn', async () => {
-    /*
-      只验"点了有没有发出去"。真正跑一轮的语义在服务端测
-      （`tests/chat/test_turns_api.py`）—— 前端不该假装能验模型说什么。
-    */
-    mockedUseChat.mockReturnValue(chatState({ active: { ...session(), messages: [] } }))
-    mockedListTurns.mockResolvedValue([
-      {
-        id: 'turn_9',
-        sessionId: 'chat_1',
-        status: 'interrupted',
-        resumeAttempts: 0,
-        lastError: null,
-        startedAt: '2026-10-28T05:00:00Z',
-        updatedAt: '2026-10-28T05:01:00Z',
-        resumable: true,
-      },
-    ])
-    mockedResumeTurn.mockResolvedValue([])
-
-    renderPage('/chat?session=chat_1')
-
-    fireEvent.click(await screen.findByText('继续这一轮'))
-
-    await waitFor(() => {
-      expect(mockedResumeTurn).toHaveBeenCalledWith('chat_1', 'turn_9')
-    })
-  })
-})
-
-describe('ChatPage — 错误条要说出真原因、并给重试入口（v1.22）', () => {
-  it('★ 错误条渲染 ApiError 的真实文案（不是泛化的「请求失败」）', async () => {
-    /*
-      用户看到的是「请求失败，请稍后再试。」—— 一句什么信息都没有的话。
-      真因（密钥无效）其实已经到了前端，只是被塞进一个裸对象、丢了类型，
-      于是 `errorMessage()` 走到兜底文案。这条钉住"真因必须显示出来"。
-    */
-    mockedUseChat.mockReturnValue(
-      chatState({
-        active: { ...session(), messages: [] },
-        error: new ApiError(
-          'TURN_FAILED',
-          '模型接入点拒绝了请求：密钥无效或已过期（HTTP 401）。',
-          200,
-        ),
-      }),
-    )
-    mockedListTurns.mockResolvedValue([])
-
-    renderPage('/chat?session=chat_1')
-
-    const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain('密钥无效或已过期')
-    expect(alert.textContent).not.toContain('请稍后再试')
-  })
-
-  it('★ 有 failed 的轮次时，错误条出现可点的「重试」并调 resumeTurn', async () => {
-    mockedUseChat.mockReturnValue(
-      chatState({
-        active: { ...session(), messages: [] },
-        error: new ApiError('TURN_FAILED', '密钥无效', 200),
-      }),
-    )
-    mockedListTurns.mockResolvedValue([
-      {
-        id: 'turn_failed_1',
-        sessionId: 'chat_1',
-        status: 'failed',
-        resumeAttempts: 3,
-        lastError: '密钥无效',
-        startedAt: '2026-10-28T05:00:00Z',
-        updatedAt: '2026-10-28T05:01:00Z',
-        resumable: false,
-      },
-    ])
-    mockedResumeTurn.mockResolvedValue([])
-
-    renderPage('/chat?session=chat_1')
-
-    const retry = await screen.findByRole('button', { name: '重试' })
-    expect(retry.getAttribute('data-error-retry')).toBe('turn_failed_1')
-    fireEvent.click(retry)
-    await waitFor(() => {
-      expect(mockedResumeTurn).toHaveBeenCalledWith('chat_1', 'turn_failed_1')
-    })
-  })
-
-  it('★ 没有 failed 的轮次时，错误条不出现「重试」（避免点了没反应）', async () => {
-    mockedUseChat.mockReturnValue(
-      chatState({
-        active: { ...session(), messages: [] },
-        error: new ApiError('TURN_FAILED', '密钥无效', 200),
-      }),
-    )
-    mockedListTurns.mockResolvedValue([])
-
-    renderPage('/chat?session=chat_1')
-
-    await screen.findByRole('alert')
-    expect(screen.queryByRole('button', { name: '重试' })).toBeNull()
-  })
-})
-
-describe('ChatPage — 别的会话在跑时当前会话仍能发（v1.65 对齐 CyberStrikeAI）', () => {
-  /*
-    ★ v1.24 的旧语义（"别的会话在跑就禁止当前会话发"）已在 v1.65 推翻。
-
-    原因：后端从设计上就是**按请求独立并发**（每个轮次自己跑，无全局轮次锁，
-    实测两个会话的 turn 同时 running）。CyberStrikeAI 也是请求级独立并发。
-    前端老设计用全局 `sending` 把"同时只能发一条"写死，导致用户在一个长会话
-    跑着时，切到新建会话发消息被拦下 —— 用户实测「另一个对话正在进行，新开
-    一个对话发送不出去，同时只能一个会话运行吗？」。
-
-    v1.65 改成按会话独立：判断"这个会话在不在跑"看 `sendingSessionIds` 是否
-    包含它；别会话在跑只给一句提示，**不再拦发消息**。
-
-    （旧 v1.24 真正防的那个事故 —— 把话插进**别的**会话的轮次 —— 仍被防住：
-    `turnRunningHere` 只在本会话有轮次时为真，走的一定是正确分支。）
-  */
-  it('★ 别的会话正在跑 → 当前会话仍能发（按钮是「发送」、可点、发得出去）', async () => {
-    mockedSendMessage.mockResolvedValueOnce(true)
-    mockedUseChat.mockReturnValue(
-      chatState({
-        active: { ...session(), messages: [] },
-        sending: true,
-        sendingSessionId: 'chat_other',
-        sendingSessionIds: ['chat_other'],
-        phase: { phase: 'thinking', round: 0 },
-      }),
-    )
-    renderPage('/chat?session=chat_1')
-
-    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
-    // 提示只说明"别处也在跑"，但不再说"等它跑完再发"
-    expect(textarea.placeholder).toContain('另一个对话')
-    fireEvent.change(textarea, { target: { value: '你好' } })
-
-    // 当前会话没在跑 → 按钮是「发送」，不是「插话」
-    expect(screen.queryByRole('button', { name: '插话' })).toBeNull()
-    const send = screen.getByRole('button', { name: '发送' }) as HTMLButtonElement
-    // ★ 关键：不再被禁用（别的会话在跑不阻止当前会话发）
-    expect(send.disabled).toBe(false)
-    fireEvent.click(send)
-
-    await waitFor(() => {
-      // 走的是"发新消息"，不是"插进别的会话"
-      expect(mockedSendMessage).toHaveBeenCalledTimes(1)
-      expect(mockedInterject).not.toHaveBeenCalled()
-    })
-  })
-
-  it('★ 服务端说"没在跑"（no-turn）→ 清掉过期状态并按普通消息发出去', async () => {
-    mockedInterject.mockResolvedValueOnce('no-turn')
-    mockedSendMessage.mockResolvedValueOnce(true)
-    mockedUseChat.mockReturnValue(
-      chatState({
-        active: { ...session(), messages: [] },
-        sending: true,
-        sendingSessionId: 'chat_1',
-        phase: { phase: 'thinking', round: 0 },
-      }),
-    )
-    renderPage('/chat?session=chat_1')
-
-    const textarea = screen.getByLabelText('输入消息') as HTMLTextAreaElement
-    fireEvent.change(textarea, { target: { value: '其实这一轮早结束了' } })
-    fireEvent.click(screen.getByRole('button', { name: '插话' }))
-
-    await waitFor(() => {
-      // 关键：不能把这句话丢掉 —— 要退回正常发送
-      expect(mockedSendMessage).toHaveBeenCalledWith('chat_1', '其实这一轮早结束了')
-    })
-    expect(mockedClearStaleSending).toHaveBeenCalled()
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
   })
 })
 

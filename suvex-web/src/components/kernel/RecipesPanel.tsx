@@ -250,8 +250,10 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
         {t('tools.recipes.footer2.after')}
       </footer>
 
+      {editorOpen && (
       <CustomRecipeDialog
-        open={editorOpen}
+        key={editing?.name ?? 'new'}
+        open
         initial={editing}
         busy={saving}
         error={formError}
@@ -271,6 +273,7 @@ export function RecipesPanel({ recipes }: { recipes: KernelRecipe[] }) {
         }}
       />
 
+      )}
       <ConfirmDialog
         open={Boolean(pendingDelete)}
         title={t('tools.recipes.deleteTitle', undefined, '删除自定义工具')}

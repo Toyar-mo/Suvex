@@ -374,6 +374,15 @@ class ChatMessage(Base):
     #: 会话内单调递增。见模块 docstring「为什么要 seq」。
     seq: Mapped[int] = mapped_column(Integer, nullable=False)
 
+    #: 工具卡耗时（毫秒）。`role='tool'` 时才有值；NULL = 老数据/未计时。
+    #:
+    #: ## 为什么后端记，而不是前端按相邻消息时间差算
+    #:
+    #: 相邻两条消息的 `created_at` 差 = 工具执行 + 模型下一段输出 + 落库排队。
+    #: 把它显示成"工具耗时"会让一个 0.2 秒的 `pwd` 看起来跑了 30 秒（模型
+    #: 下一轮推理的时间被算进去了），而这种失真没有任何信号提示。
+    #: 计时器必须包住 `_execute_tool` 本身。
+    duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)
     #: 这条消息属于**哪一面**（v1.25）。
     #:

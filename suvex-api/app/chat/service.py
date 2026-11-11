@@ -397,6 +397,7 @@ def _append(
     tool_name: str | None = None,
     tool_args: dict | None = None,
     tool_failed: bool | None = None,
+    duration_ms: int | None = None,
     model_extra: str | None = None,
     surface: str = "answer",
 ) -> ChatMessage:
@@ -426,6 +427,7 @@ def _append(
         tool_name=_clip_tool_name(tool_name),
         tool_args=_scrub_nul_json(tool_args),
         tool_failed=tool_failed,
+        duration_ms=duration_ms,
         surface=surface,
     )
     db.add(message)
@@ -502,6 +504,7 @@ def append_tool_message(
     tool_args: dict | None,
     content: str,
     failed: bool = False,
+    duration_ms: int | None = None,
 ) -> ChatMessage:
     """落一条工具执行记录。工具结果永远属于**过程面**（v1.25）。"""
     return _append(
@@ -512,6 +515,7 @@ def append_tool_message(
         tool_name=tool_name,
         tool_args=tool_args,
         tool_failed=failed,
+        duration_ms=duration_ms,
         surface="process",
     )
 
