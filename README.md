@@ -178,6 +178,31 @@ sudo bash suvex-api/deploy/install.sh
 
 覆盖专用用户、docker 组、锁文件安装、systemd、nginx 反代、日志与备份。装完按部署文档验收。
 
+### 本地跑一轮基准（v1.90）
+
+用例登记了 `target` 之后，基准不再只判“已经跑过的扫描”：
+
+```bash
+# 1) 登记用例（scanId 与 target 二选一；给了 target 就能主动执行）
+curl -X POST http://127.0.0.1:8080/api/v1/benchmark/cases \
+  -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"suite":"local","name":"dvwa","kind":"scan","target":"http://192.168.44.128:8082/","skills":["web"],"expect":{"minFindings":1}}'
+
+# 2) 主动跑一次（真建扫描，授权留痕照 check_authorization）
+curl -X POST http://127.0.0.1:8080/api/v1/benchmark/cases/$CASE_ID/launch \
+  -H "Authorization: Bearer $TOKEN"
+
+# 3) 扫描跑完后判定（只读；不重复发包）
+curl -X POST http://127.0.0.1:8080/api/v1/benchmark/suites/local/run \
+  -H "Authorization: Bearer $TOKEN"
+
+# 4) 汇总：通过率 / 未完成率 / 误报率 / 平均耗时
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://127.0.0.1:8080/api/v1/benchmark/summary?suite=local"
+```
+
+目标必须能从**扫描沙箱**访问到（容器发布在宿主端口即可；`suvex-pentest` / `suvex-ctf2` 实测都能连宿主 LAN IP 的发布端口）。误报率只统计人工标了 `false_positive` 的发现 —— 没标的既不算真也不算误报。
+
 ---
 
 ## 当前状态（如实说）
