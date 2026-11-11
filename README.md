@@ -158,6 +158,15 @@ npm run dev                          # http://localhost:5173
 
 前端默认请求**当前页面的 origin**，由 Vite 的 `server.proxy` 把 `/api` 转发到后端。换地址、换机器都不需要改配置；同源请求，没有 CORS 问题，Cookie 也一定带得上。
 
+> [!WARNING]
+> **Vite 开发服务器只能监听 `127.0.0.1`，不要用 `--host 0.0.0.0`。**
+> `vite.config.ts` 的 `server.host` 已固定为环回地址；但命令行/SYSTEMD 的
+> `--host 0.0.0.0` 会覆盖它。5173 没有鉴权，且会把 `/src/`、`/docs/`、
+> `vite.config.ts`、sourcemap 直接暴露给访问者。对外请只暴露 nginx 托管的
+> `dist/`（生产构建），不要把这个 dev server 写进默认服务单元。
+> 需要本机开发服务时，用仓库里的 `deploy/systemd/suvex-web.service` 模板
+> （已固定 `--host 127.0.0.1`），不要手写 `0.0.0.0`。
+
 ### 真机部署（要真跑扫描，只有这一条路）
 
 `docker compose` 起的是**控制面**，跑不了扫描（镜像里没有 `strix` 与 docker CLI）。要执行扫描，用一台装了 Docker 的 Linux 宿主机：

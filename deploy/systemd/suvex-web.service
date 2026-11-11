@@ -1,0 +1,26 @@
+# Suvex 前端开发服务器（仅本机开发用；生产请用 nginx + dist/）。
+#
+# ⚠️ 不要把这个单元当成生产入口。Vite dev server 没有鉴权，会把
+#    /src/、/docs/、vite.config.ts 与 sourcemap 直接暴露给访问者。
+#    它必须只监听 127.0.0.1；对外只暴露 nginx 托管的 dist/。
+#
+# 部署到 /etc/systemd/system/suvex-web.service 后：
+#   systemctl daemon-reload && systemctl enable --now suvex-web
+#
+# 生产机通常不需要启用它；install.sh 也不会安装这个单元。
+[Unit]
+Description=Suvex Web (Vite dev server, loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=suvex
+WorkingDirectory=/opt/suvex/suvex-web
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/bin/npx vite --host 127.0.0.1 --port 5173
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

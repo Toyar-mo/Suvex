@@ -19,8 +19,9 @@ const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 
 
   有了它，前端代码里**不出现后端的主机名和端口**：页面请求自己所在的
   那个 origin（`window.location.origin` + `/api/v1/...`），由这里转发出去。
-  所以无论用 `127.0.0.1:5173`、`192.168.44.128:5173` 还是别的地址打开，
-  都能正确找到后端 —— 换台机器不需要改任何文件。
+  所以本机用 `127.0.0.1:5173` 打开时能正确找到后端 —— 换台机器不需要改
+  任何文件。⚠️ 开发服务器只监听 `127.0.0.1`（见下面 `server.host`）；
+  不要再从局域网 IP 直接访问 5173，对外只暴露 nginx 的 `dist/`。
 
   三个附带好处，都是"写死地址"做不到的：
 
@@ -158,12 +159,23 @@ export default defineConfig(({ mode }) => {
     define: {
       __APP_VERSION__: JSON.stringify(pkg.version),
     },
+    // 生产构建不生成 sourcemap：dist/ 会由 nginx 直接对外提供，
+    // `.map` 等于把源码结构免费送给访问者。Vite 默认已是 false，这里显式钉住。
+    build: {
+      sourcemap: false,
+    },
     resolve: {
       alias: {
         '@': fileURLToPath(new URL('./src', import.meta.url)),
       },
     },
     server: {
+      // ★ 安全默认：开发服务器只监听环回地址，绝不对局域网/公网开 5173。
+      //   源码目录包含完整 TS、docs/、scripts/，Vite dev server 不做鉴权；
+      //   对外只应暴露 nginx 托管的 `dist/` 生产产物。
+      //   本机开发仍然可用；需要临时跨机调试时，必须显式 `npm run dev -- --host <ip>`，
+      //   并自行承担源码暴露风险，不能把它写进 systemd 的默认 ExecStart。
+      host: '127.0.0.1',
       // 只在**配了**的时候才覆盖，否则保持 Vite 默认的防护（见上面的长注释）
       ...(allowedHosts.length > 0 ? { allowedHosts } : {}),
       // 隧道上必须关（见上面 disableHmr 的长注释）
