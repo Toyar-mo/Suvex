@@ -59,7 +59,10 @@ function userVisible(src: string): string {
 }
 
 describe('SandboxPanel 的隔离文案', () => {
-  const visible = userVisible(source('SandboxPanel.tsx'))
+  // v1.90：这些文案已迁进 i18n 字典，源码里只剩 t('…')；断言同时看两边。
+  const visible =
+    userVisible(source('SandboxPanel.tsx')) +
+    readFileSync(resolve(SETTINGS_DIR, '..', '..', 'i18n', 'index.tsx'), 'utf8')
 
   it('禁止出网必须写明只对本地目标生效', () => {
     // 代码：network_isolated = settings and not is_network_target

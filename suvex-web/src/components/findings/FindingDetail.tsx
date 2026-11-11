@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import CodeBlock from '@/components/ui/CodeBlock'
 import { FindingAttachments } from './FindingAttachments'
 import { useEffect, useState } from 'react'
@@ -78,11 +79,11 @@ export function FindingDetail({ finding }: FindingDetailProps) {
         {/* 影响位置。等宽、可多行 —— 这是要拿去复现的 */}
         <dl className="flex flex-col gap-1.5">
           <div className="flex gap-tight">
-            <dt className="w-16 shrink-0 text-2xs text-ink-faint">目标</dt>
+            <dt className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.detail.target"/></dt>
             <dd className="mono-ui min-w-0 break-all text-ink-muted">{finding.target}</dd>
           </div>
           <div className="flex gap-tight">
-            <dt className="w-16 shrink-0 text-2xs text-ink-faint">受影响</dt>
+            <dt className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.detail.affected"/></dt>
             <dd className="flex min-w-0 flex-col gap-0.5">
               {detail.affected.map((location) => (
                 <span key={location} className="mono-ui break-all text-ink-muted">
@@ -92,11 +93,11 @@ export function FindingDetail({ finding }: FindingDetailProps) {
             </dd>
           </div>
           <div className="flex gap-tight">
-            <dt className="w-16 shrink-0 text-2xs text-ink-faint">类型</dt>
+            <dt className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.detail.type"/></dt>
             <dd className="text-2xs text-ink-muted">{FINDING_CATEGORY_LABEL[finding.category]}</dd>
           </div>
           <div className="flex gap-tight">
-            <dt className="w-16 shrink-0 text-2xs text-ink-faint">发现于</dt>
+            <dt className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.detail.foundAt"/></dt>
             <dd className="text-2xs text-ink-muted">
               <time dateTime={finding.discoveredAt}>
                 {formatRelativeTime(finding.discoveredAt)}
@@ -209,11 +210,12 @@ export function FindingTransitionBar({
   finding: Finding
   onTransition: (to: FindingStatus) => void
 }) {
+
   const targets = FINDING_STATUS_TRANSITIONS[finding.status]
 
   return (
     <div className="flex flex-wrap items-center gap-tight">
-      <span className="mr-1 text-2xs text-ink-faint">标记为</span>
+      <span className="mr-1 text-2xs text-ink-faint"><T k="findings.detail.markAs"/></span>
 
       {targets.map((target) => {
         const intent = FINDING_TRANSITION_INTENT[target]
@@ -314,7 +316,7 @@ function timelineTone(kind: string): string {
  */
 function Timeline({ entries }: { entries: FindingTimelineEntry[] }) {
   if (entries.length === 0) {
-    return <p className="text-xs text-ink-faint">暂无操作记录。</p>
+    return <p className="text-xs text-ink-faint"><T k="findings.detail.noTimeline"/></p>
   }
 
   return (
@@ -417,12 +419,12 @@ function VerificationContextView({ findingId }: { findingId: string }) {
             ))}
           </ul>
         ) : (
-          <p className="text-2xs text-ink-faint">这次扫描没有记录事实。</p>
+          <p className="text-2xs text-ink-faint"><T k="findings.detail.noFacts"/></p>
         )}
 
         {context.relatedFindings.length > 0 && (
           <div className="flex flex-col gap-1">
-            <span className="text-2xs text-ink-muted">同扫描的其他发现</span>
+            <span className="text-2xs text-ink-muted"><T k="findings.detail.related"/></span>
             <ul className="flex flex-col gap-0.5">
               {context.relatedFindings.map((item) => (
                 <li key={item.id} className="text-xs">

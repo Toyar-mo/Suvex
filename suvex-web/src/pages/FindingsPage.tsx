@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { PageHeader } from '@/components/layout/AppShell'
 import BulkActionBar from '@/components/findings/BulkActionBar'
 import AssignDialog from '@/components/findings/AssignDialog'
@@ -1296,7 +1297,7 @@ export function FindingsPage() {
                 所以标签用纯文本，分组语义交给内层的 `role="group"`。
               */}
               <div className="flex flex-col gap-1">
-                <span className="text-2xs text-ink-faint">视图</span>
+                <span className="text-2xs text-ink-faint"><T k="findings.view"/></span>
                 <div
                   role="group"
                   aria-label="列表或分组"
@@ -1359,7 +1360,7 @@ export function FindingsPage() {
                 那一瞬间看到"回收站里有 13 条"（其实是默认视图那些）。
               */}
               <div className="flex flex-col gap-1">
-                <span className="text-2xs text-ink-faint">范围</span>
+                <span className="text-2xs text-ink-faint"><T k="findings.scope"/></span>
                 <div
                   role="group"
                   aria-label="默认视图或回收站"
@@ -1483,7 +1484,7 @@ export function FindingsPage() {
                     后者在同一批数据下几乎总是因为筛选 —— 所以直接给清除入口。
                   */
                   <div className="flex flex-col items-center gap-tight px-panel py-bay text-center">
-                    <p className="text-sm text-ink-muted">没有可分组的结果</p>
+                    <p className="text-sm text-ink-muted"><T k="findings.empty.grouped"/></p>
                     <p className="max-w-[46ch] text-xs text-ink-faint">
                       分组按漏洞的标题归类。当前筛选下没有任何条目， 或者它们还没被归类。
                     </p>
@@ -1516,7 +1517,7 @@ export function FindingsPage() {
                     findings.length > 0 ? (
                       // 筛选后为空 —— 和"一条都没有"是两回事，提示必须不同
                       <div className="flex flex-col items-center gap-tight text-center">
-                        <p className="text-sm text-ink-muted">没有符合条件的漏洞</p>
+                        <p className="text-sm text-ink-muted"><T k="findings.empty.filtered"/></p>
                         <Button variant="link" size="sm" onClick={clearFilter}>
                           清除筛选条件
                         </Button>
@@ -1546,7 +1547,7 @@ export function FindingsPage() {
                           aria-hidden="true"
                         />
                         {/* 跑过了、什么都没有 —— 这确实是"好消息"，不显示 0 值表格 */}
-                        <p className="text-sm text-ink-muted">还没有发现任何漏洞</p>
+                        <p className="text-sm text-ink-muted"><T k="findings.empty.none"/></p>
                         <p className="max-w-[46ch] text-xs text-ink-faint">
                           扫描发现的问题会出现在这里。每条都带有证据与可复现的验证脚本。
                         </p>
@@ -1738,7 +1739,7 @@ export function FindingsPage() {
 function DetailSkeleton() {
   return (
     <div className="flex flex-col gap-bay px-panel py-bay" role="status" aria-live="polite">
-      <span className="sr-only">正在加载漏洞详情</span>
+      <span className="sr-only"><T k="findings.detail.loading"/></span>
 
       {/* 结论栏：四行「标签 + 值」 */}
       <div className="flex flex-col gap-1.5">
@@ -1800,6 +1801,7 @@ function toggled(set: Set<string>, value: string): Set<string> {
  * 代价是多占一行高度 —— 值得，筛选区本来就是"扫一眼就懂"比"省一行"重要。
  */
 function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) {
+
   return (
     <div
       role="group"

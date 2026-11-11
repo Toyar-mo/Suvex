@@ -1,6 +1,7 @@
 import { memo } from 'react'
 
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { FINDING_CATEGORY_LABEL, type Finding } from '@/data/finding'
 import { formatRelativeTime } from '@/lib/datetime'
 import { SeverityBadge, StatusBadge, VerificationBadge } from './FindingBadges'
@@ -57,19 +58,19 @@ export function FindingsTable({
           label={allSelected ? '取消全选' : '全选当前列表'}
         />
 
-        <span className="w-16 shrink-0 text-2xs text-ink-faint">严重度</span>
-        <span className="w-28 shrink-0 text-2xs text-ink-faint">类型</span>
-        <span className="min-w-0 flex-1 text-2xs text-ink-faint">漏洞 / 目标</span>
-        <span className="w-32 shrink-0 text-2xs text-ink-faint">状态</span>
+        <span className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.table.severity"/></span>
+        <span className="w-28 shrink-0 text-2xs text-ink-faint"><T k="findings.table.type"/></span>
+        <span className="min-w-0 flex-1 text-2xs text-ink-faint"><T k="findings.table.title"/></span>
+        <span className="w-32 shrink-0 text-2xs text-ink-faint"><T k="findings.table.status"/></span>
         {/*
           负责人（任务 10 P2）。
           放在"状态"之后、"发现于"之前：它和状态一样是**处置属性**
           （"这条现在归谁管"），而不是漏洞本身的性质。
         */}
-        <span className="w-24 shrink-0 text-2xs text-ink-faint">负责人</span>
+        <span className="w-24 shrink-0 text-2xs text-ink-faint"><T k="findings.table.assignee"/></span>
         {/* 修复时限（任务 10 P3）—— 与负责人同类：都是"这条该谁管、急不急" */}
-        <span className="w-24 shrink-0 text-2xs text-ink-faint">时限</span>
-        <span className="w-20 shrink-0 text-right text-2xs text-ink-faint">发现于</span>
+        <span className="w-24 shrink-0 text-2xs text-ink-faint"><T k="findings.table.sla"/></span>
+        <span className="w-20 shrink-0 text-right text-2xs text-ink-faint"><T k="findings.table.foundAt"/></span>
         <span className="w-4 shrink-0" aria-hidden="true" />
       </div>
 
@@ -114,6 +115,7 @@ const FindingRow = memo(function FindingRow({
   onToggleSelect: (id: string) => void
   onOpen: (finding: Finding) => void
 }) {
+
   return (
     <li className="border-b border-line/60 last:border-b-0">
       <div

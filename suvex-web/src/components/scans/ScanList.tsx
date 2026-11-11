@@ -5,6 +5,7 @@ import { FlagChip } from '@/components/ui/FlagChip'
 import { StatusDot, type StatusTone } from '@/components/ui/StatusDot'
 import { SEVERITY_META, SEVERITY_ORDER } from '@/data/findings'
 import {
+  SCAN_STATUS_LABEL,
   SCAN_STATUS_TONE,
   scanDisplay,
   scanStatusLabel,
@@ -565,7 +566,15 @@ const ScanRow = memo(function ScanRow({
             )}
           >
             <StatusDot tone={tone} pulse={scan.status === 'running'} />
-            <span className="text-xs">{t(`scanStatus.${scan.status}`, undefined, scanStatusLabel(scan))}</span>
+            <span className="text-xs">
+              {(() => {
+                /* CTF2 的壳有专门措辞（候选待确认 / 未解出）；只有通用状态才翻译。 */
+                const label = scanStatusLabel(scan)
+                return label === SCAN_STATUS_LABEL[scan.status]
+                  ? t(`scanStatus.${scan.status}`, undefined, label)
+                  : label
+              })()}
+            </span>
           </span>
         </span>
 
