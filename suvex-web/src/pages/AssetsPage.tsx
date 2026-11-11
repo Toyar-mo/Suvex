@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { ChevronRight, Layers, RefreshCw, Search } from 'lucide-react'
 import { PageHeader } from '@/components/layout/AppShell'
 import AssetCoverageDrawer from '@/components/assets/AssetCoverageDrawer'
+import { AssetMap } from '@/components/assets/AssetMap'
 import EmptyState from '@/components/ui/EmptyState'
 import ErrorState from '@/components/ui/ErrorState'
 import { Button } from '@/components/ui/Button'
@@ -41,7 +42,7 @@ import { loadAssets, useAssetsState } from '@/data/assets-store'
  */
 
 type HealthFilter = 'all' | AssetHealth
-type AssetView = 'host' | 'target'
+type AssetView = 'host' | 'target' | 'map'
 
 const EMPTY_ASSETS: Asset[] = []
 
@@ -427,7 +428,7 @@ export default function AssetsPage() {
   const bleedingHosts = hosts.filter((host) => host.openCritical + host.openHigh > 0).length
   const hostCount = state.truncated ? `≥${hosts.length}` : String(hosts.length)
   const neverVerified = summary ? summary.neverScanned + summary.neverCompleted : 0
-  const visible = view === 'host' ? filteredHosts.length : filteredAssets.length
+  const visible = view === 'target' ? filteredAssets.length : filteredHosts.length
 
   return (
     <>
@@ -485,6 +486,7 @@ export default function AssetsPage() {
             options={[
               { id: 'host', label: '主机' },
               { id: 'target', label: '目标' },
+              { id: 'map', label: '图谱' },
             ]}
           />
 
@@ -558,6 +560,14 @@ export default function AssetsPage() {
                 ? '发起第一次扫描后，这里会按主机聚合出现在的情况。'
                 : '换个关键词或切回「全部」看看。'
             }
+          />
+        ) : view === 'map' ? (
+          <AssetMap
+            hosts={filteredHosts}
+            onSelectHost={(host) => {
+              setView('host')
+              setQuery(host)
+            }}
           />
         ) : view === 'host' ? (
           <div className="overflow-x-auto rounded-md border border-line">

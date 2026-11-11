@@ -417,3 +417,25 @@ class LlmRetryIn(StrictModel):
     breakerFailures: int = 5
     breakerIntervalMs: int = 0
     breakerCooldownS: int = 60
+
+
+class NetworkRestrictionsOut(CamelModel):
+    """`GET /settings/network` —— 对话沙箱的出站白名单（v1.90）。
+
+    ## 为什么只读
+
+    白名单来自两处：内置基础设施（代码常量）与运维在
+    `SUPEX_CHAT_SHELL_ALLOWED_HOSTS` 里写的额外项。后者**刻意不走界面编辑** ——
+    改它等于改"谁能被访问"，属于部署决策，应该和别的环境变量一起审阅，
+    而不是在网页上点一下就生效。所以这里只把当前生效值摊开，
+    让用户能回答"为什么这个目标能访问 / 为什么不能"。
+    """
+
+    #: 守卫是否开启（`SUPEX_CHAT_SHELL_SCOPE_GUARD`）。
+    guardEnabled: bool
+    #: 运维额外放行的主机 / 网段。
+    allowedHosts: list[str]
+    allowedCidrs: list[str]
+    #: 内置放行的基础设施（包管理镜像、代码托管、公共 DNS）与环回。
+    builtinHosts: list[str]
+    builtinCidrs: list[str]

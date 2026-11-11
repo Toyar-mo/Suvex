@@ -75,6 +75,7 @@ from app.settings.schemas import (
     LlmRetryOut,
     ModelRoutesIn,
     ModelRoutesOut,
+    NetworkRestrictionsOut,
     NoticeRuleIn,
     NoticeRuleOut,
     NoticesOut,
@@ -480,6 +481,29 @@ def _sandbox_out(db: Session, *, config=None) -> SandboxOut:  # noqa: ANN001
         # 而这一列只有 DB 一个来源，标它反而会暗示存在另一个。
         enableOffensivePrompt=config.enable_offensive_prompt,
         updatedAt=config.updated_at,
+    )
+
+
+@router.get(
+    "/network",
+    response_model=NetworkRestrictionsOut,
+    summary="对话沙箱出站白名单",
+)
+def read_network_restrictions(
+    _identity: Annotated[Identity, Depends(require_admin)],
+) -> NetworkRestrictionsOut:
+    """当前生效的出站白名单（只读，见 schema 里的理由）。"""
+    from app.chat import scope
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    extra_hosts, extra_cidrs = scope.settings_allowlist()
+    return NetworkRestrictionsOut(
+        guardEnabled=bool(settings.chat_shell_scope_guard),
+        allowedHosts=sorted(extra_hosts),
+        allowedCidrs=sorted(extra_cidrs),
+        builtinHosts=sorted(scope.DEFAULT_ALLOWED_HOSTS),
+        builtinCidrs=sorted(scope.DEFAULT_ALLOWED_CIDRS),
     )
 
 
