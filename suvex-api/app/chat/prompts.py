@@ -507,6 +507,18 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         params="intent_id（必填）、status（必填）、result（证据与结论）",
     ),
     ChatToolSpec(
+        name="list_findings",
+        label="查漏洞",
+        description="按关键字/严重度/状态查平台漏洞，用于任务图里判断已有结果。",
+        params="q、severity、status、limit（默认 20）",
+    ),
+    ChatToolSpec(
+        name="list_assets",
+        label="查资产",
+        description="按目标聚合的资产清单，含漏洞数与未处置数。",
+        params="limit（默认 30）",
+    ),
+    ChatToolSpec(
         name="get_finding_context",
         label="读漏洞上下文",
         description="读取一条漏洞的完整证据、PoC、时间线与处置状态；复测/验证先读它。",

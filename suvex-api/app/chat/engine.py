@@ -55,7 +55,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agents import finding_tools, graph_tools
+from app.agents import finding_tools, graph_tools, platform_tools
 from app.chat import failure as failure_kind
 from app.chat import interrupts as interrupt_bus
 from app.chat import mcp_tools
@@ -2792,6 +2792,8 @@ _TOOL_IMPLS: dict[str, Any] = {
     # ★ P2c：复测/验证角色的漏洞上下文与结论写回。
     "get_finding_context": finding_tools.get_finding_context,
     "record_finding_result": finding_tools.record_finding_result,
+    "list_findings": platform_tools.list_findings,
+    "list_assets": platform_tools.list_assets,
 }
 
 

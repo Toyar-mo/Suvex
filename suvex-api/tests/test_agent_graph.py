@@ -44,6 +44,8 @@ def test_graph_tools_are_registered() -> None:
         "claim_agent_intent",
         "finish_agent_intent",
         "prove_agent_goal",
+        "list_findings",
+        "list_assets",
     } <= CHAT_TOOL_NAMES
 
 

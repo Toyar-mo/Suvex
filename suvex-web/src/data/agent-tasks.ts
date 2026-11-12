@@ -69,3 +69,22 @@ export async function runAgentTask(taskId: string): Promise<number> {
   const result = await api.post<{ queued: number }>(`/agent-tasks/${taskId}/run`, {})
   return result.queued
 }
+
+export async function addAgentGoal(taskId: string, text: string): Promise<AgentGoal> {
+  return api.post<AgentGoal>(`/agent-tasks/${taskId}/goals`, { text })
+}
+
+export async function addAgentIntent(
+  taskId: string,
+  summary: string,
+  goalId?: string | null,
+): Promise<AgentIntent> {
+  return api.post<AgentIntent>(`/agent-tasks/${taskId}/intents`, {
+    summary,
+    goalId: goalId ?? null,
+  })
+}
+
+export async function proveAgentGoal(goalId: string, taskId: string, evidence: string): Promise<AgentGoal> {
+  return api.post<AgentGoal>(`/agent-tasks/${taskId}/goals/${goalId}/prove`, { evidence })
+}

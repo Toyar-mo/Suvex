@@ -6,7 +6,10 @@ import {
   cancelAgentTask,
   createAgentTask,
   loadAgentGraph,
+  addAgentGoal,
+  addAgentIntent,
   loadAgentTasks,
+  proveAgentGoal,
   runAgentTask,
   type AgentGraph,
   type AgentTask,
@@ -33,6 +36,9 @@ export default function AgentTasksPage() {
   const [creating, setCreating] = useState(false)
   const [form, setForm] = useState({ title: '', objective: '', scope: '' })
   const [busy, setBusy] = useState(false)
+  const [goalDraft, setGoalDraft] = useState('')
+  const [intentDraft, setIntentDraft] = useState('')
+  const [proving, setProving] = useState<{ id: string; evidence: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   async function reload() {
@@ -74,6 +80,51 @@ export default function AgentTasksPage() {
       setSelected(await loadAgentGraph(task.id))
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
+    }
+  }
+
+  async function addGoal() {
+    if (!selected || !goalDraft.trim()) return
+    setBusy(true)
+    try {
+      await addAgentGoal(selected.task.id, goalDraft.trim())
+      setGoalDraft('')
+      setSelected(await loadAgentGraph(selected.task.id))
+      setTasks(await loadAgentTasks())
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function addIntent() {
+    if (!selected || !intentDraft.trim()) return
+    setBusy(true)
+    try {
+      await addAgentIntent(selected.task.id, intentDraft.trim())
+      setIntentDraft('')
+      setSelected(await loadAgentGraph(selected.task.id))
+      setTasks(await loadAgentTasks())
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function confirmProve() {
+    if (!selected || !proving || !proving.evidence.trim()) return
+    setBusy(true)
+    try {
+      await proveAgentGoal(proving.id, selected.task.id, proving.evidence.trim())
+      setProving(null)
+      setSelected(await loadAgentGraph(selected.task.id))
+      setTasks(await loadAgentTasks())
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -257,7 +308,29 @@ export default function AgentTasksPage() {
                         <span className="tabular text-ink-faint">#{goal.seq}</span>
                         <span className="text-ink">{goal.text}</span>
                         <span className="ml-auto text-2xs text-ink-muted">{goal.status}</span>
+                        {goal.status === 'open' && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setProving({ id: goal.id, evidence: '' })}
+                          >
+                            {t('agentTasks.prove', undefined, '标完成')}
+                          </Button>
+                        )}
                       </div>
+                      {proving?.id === goal.id && (
+                        <div className="mt-2 flex gap-2">
+                          <TextInput
+                            id={`prove-${goal.id}`}
+                            value={proving.evidence}
+                            onChange={(value) => setProving({ ...proving, evidence: value })}
+                            placeholder={t('agentTasks.evidence', undefined, '证据')}
+                          />
+                          <Button size="sm" disabled={busy || !proving.evidence.trim()} onClick={() => void confirmProve()}>
+                            {t('agentTasks.confirm', undefined, '确认')}
+                          </Button>
+                        </div>
+                      )}
                       {goal.evidence && (
                         <p className="mt-1 whitespace-pre-wrap text-2xs text-ink-faint">{goal.evidence}</p>
                       )}
@@ -266,6 +339,17 @@ export default function AgentTasksPage() {
                   {selected.goals.length === 0 && (
                     <p className="text-xs text-ink-faint">{t('agentTasks.noGoals', undefined, '还没有目标。')}</p>
                   )}
+                  <li className="flex gap-2">
+                    <TextInput
+                      id="agent-task-goal"
+                      value={goalDraft}
+                      onChange={setGoalDraft}
+                      placeholder={t('agentTasks.goalPlaceholder', undefined, '新的可验证目标')}
+                    />
+                    <Button size="sm" disabled={busy || !goalDraft.trim()} onClick={() => void addGoal()}>
+                      {t('agentTasks.addGoal', undefined, '加目标')}
+                    </Button>
+                  </li>
                 </ul>
               </div>
 
@@ -294,6 +378,17 @@ export default function AgentTasksPage() {
                   {selected.intents.length === 0 && (
                     <p className="text-xs text-ink-faint">{t('agentTasks.noIntents', undefined, '还没有意图。')}</p>
                   )}
+                  <li className="flex gap-2">
+                    <TextInput
+                      id="agent-task-intent"
+                      value={intentDraft}
+                      onChange={setIntentDraft}
+                      placeholder={t('agentTasks.intentPlaceholder', undefined, '新的探索方向')}
+                    />
+                    <Button size="sm" disabled={busy || !intentDraft.trim()} onClick={() => void addIntent()}>
+                      {t('agentTasks.addIntent', undefined, '加意图')}
+                    </Button>
+                  </li>
                 </ul>
               </div>
 
