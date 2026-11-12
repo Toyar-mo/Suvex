@@ -23,6 +23,7 @@ import { SessionAttackChainModal } from '@/components/chat/SessionAttackChainMod
 import { SessionBatchModal } from '@/components/chat/SessionBatchModal'
 import { GroupNameDialog } from '@/components/chat/GroupNameDialog'
 import { AssistantTurn } from '@/components/chat/AssistantTurn'
+import { AgentHub } from '@/components/chat/AgentHub'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { useChatListCollapsed } from '@/hooks/useChatListCollapsed'
 import { MessageRow } from '@/components/chat/MessageRow'
@@ -105,6 +106,7 @@ import {
   Sparkles,
   UserRound,
   X,
+  Users,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
@@ -655,6 +657,8 @@ export function ChatPage() {
 
   /** 只看回答：隐藏工作过程，只保留结论。 */
   const [answersOnly, setAnswersOnly] = useState(false)
+  /** 子代理面板（Web Agent Hub）。 */
+  const [agentHubOpen, setAgentHubOpen] = useState(false)
   /** 对话设置（项目 / 人格 / 审批 / 技能 / MCP）收在齿轮后面，默认不占一行。 */
   const [settingsOpen, setSettingsOpen] = useState(false)
   /**
@@ -1517,6 +1521,14 @@ export function ChatPage() {
   const sessionMeta = active
     ? (personas.find((p) => p.id === (active.persona ?? null))?.label ?? null)
     : null
+  /* 子代理面板的数据：主对话 → 它的直接子代理；当前在子代理里时，
+     面板展示同一主对话下的兄弟，并给出返回主线。 */
+  const parentSession =
+    active && active.parentSessionId
+      ? (sessions.find((item) => item.id === active.parentSessionId) ?? null)
+      : null
+  const mainSession = active && active.parentSessionId ? parentSession : active
+  const hubChildren = mainSession ? (childrenByParent.get(mainSession.id) ?? []) : []
 
   /*
     设置控件放在输入卡工具栏里（CyberStrikeAI 的形态）。
@@ -1851,6 +1863,25 @@ export function ChatPage() {
             )}
           </Button>
           <h1 className="min-w-0 flex-1 truncate text-sm text-ink">{active?.title ?? '对话'}</h1>
+          {active && hubChildren.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setAgentHubOpen(true)}
+              aria-label={t('chat.agentHub.openPanel', undefined, '子代理')}
+              title={t('chat.agentHub.openPanel', undefined, '子代理')}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs',
+                'max-sm:min-h-9 max-sm:min-w-9 max-sm:justify-center',
+                'text-ink-faint transition-ui duration-fast hover:text-ink-muted',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              )}
+            >
+              <Users size={12} strokeWidth={2} aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {t('chat.agentHub.button', { n: hubChildren.length }, `子代理 ${hubChildren.length}`)}
+              </span>
+            </button>
+          )}
           {active && (
             <button
               type="button"
@@ -1951,6 +1982,29 @@ export function ChatPage() {
                 没有这一段的话，用户看到的是「解题中」+「这个对话还是空的」
                 —— 两句话互相拆台，读起来就是"坏了"。
               */}
+                {parentSession && (
+                  <div
+                    className="flex items-center gap-2 rounded-md border border-line/70 bg-surface-raised/20 px-3 py-2 text-xs text-ink-muted"
+                    data-agent-breadcrumb
+                  >
+                    <Users size={12} strokeWidth={2} aria-hidden="true" className="text-ink-faint" />
+                    <span className="min-w-0 truncate">
+                      {t(
+                        'chat.agentHub.childOf',
+                        { title: parentSession.title },
+                        `子代理 · 由「${parentSession.title}」派出`,
+                      )}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSearchParams({ session: parentSession.id }, { replace: true })}
+                      className="ml-auto shrink-0 text-2xs text-ink-faint transition-ui duration-fast hover:text-ink"
+                    >
+                      {t('chat.agentHub.backToMain', undefined, '返回主线')}
+                    </button>
+                  </div>
+                )}
+
                 {active?.challengeId && active.challenge && (
                   <div className="rounded-md border border-line bg-surface px-3 py-2.5">
                     <ChallengeProcess
@@ -2639,6 +2693,22 @@ export function ChatPage() {
           } else {
             void handleArchive(action.id)
           }
+        }}
+      />
+      <AgentHub
+        open={agentHubOpen}
+        onClose={() => setAgentHubOpen(false)}
+        parent={parentSession}
+        children={hubChildren}
+        runningIds={sendingSessionIds}
+        onOpen={(session) => {
+          setSearchParams({ session: session.id }, { replace: true })
+          setShowList(false)
+          setAgentHubOpen(false)
+        }}
+        onGuide={(id, text) => interject(id, text)}
+        onStop={(id) => {
+          void interruptTurn(id, 'stop')
         }}
       />
     </div>

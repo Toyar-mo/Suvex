@@ -1793,3 +1793,40 @@ describe('ChatPage — Ctrl+O 展开全部工具输出（v1.92）', () => {
     expect(mod.getToolExpansion()).toBe('auto')
   })
 })
+
+describe('ChatPage — 子代理入口与子会话面包屑（v1.92）', () => {
+  it('主对话有子代理时出现入口，点开列出子代理', () => {
+    const main = session({ id: 'chat_1', title: '主线调查' })
+    const kid = session({
+      id: 'chat_child',
+      title: '[子代理] port-scan',
+      parentSessionId: 'chat_1',
+    })
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...main, messages: [] }, sessions: [main, kid] }),
+    )
+    renderPage('/chat?session=chat_1')
+
+    const trigger = screen.getByRole('button', { name: '子代理' })
+    fireEvent.click(trigger)
+    expect(screen.getByText('port-scan')).toBeTruthy()
+  })
+
+  it('打开子代理时显示「由主对话派出」的返回路径', () => {
+    const main = session({ id: 'chat_1', title: '主线调查' })
+    const kid = session({
+      id: 'chat_child',
+      title: '[子代理] port-scan',
+      parentSessionId: 'chat_1',
+    })
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...kid, messages: [] }, sessions: [main, kid] }),
+    )
+    const { container } = renderPage('/chat?session=chat_child')
+
+    const crumb = container.querySelector('[data-agent-breadcrumb]') as HTMLElement
+    expect(crumb).not.toBeNull()
+    expect(crumb.textContent).toContain('主线调查')
+    expect(crumb.textContent).toContain('返回主线')
+  })
+})
