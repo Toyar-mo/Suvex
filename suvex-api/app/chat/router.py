@@ -469,11 +469,14 @@ async def send_message(
     session = service.get_session_or_404(
         db, session_id=session_id, created_by=_owner(identity)
     )
+    # ★ v1.92：归档会话不挡发送 —— **发消息即恢复**。
+    #
+    # 归档的语义是"从默认列表收起来"，不是"只读"。用户点进已归档会话
+    # 接着问，最合理的动作是恢复它并继续；回一句"先恢复"多了一次跳转，
+    # 而那条提示本身也说明这个输入框看起来能用却不能用。
     if session.archived:
-        raise ApiError.validation(
-            "这个会话已归档，不能再发消息。新建一个会话继续。",
-            {"sessionId": "已归档"},
-        )
+        session.archived_at = None
+        db.commit()
 
     content = payload.content.strip()
     if not content:
@@ -551,10 +554,9 @@ def send_message_stream(
             db, session_id=session_id, created_by=_owner(identity)
         )
         if session.archived:
-            raise ApiError.validation(
-                "这个会话已归档，不能再发消息。新建一个会话继续。",
-                {"sessionId": "已归档"},
-            )
+            # 同非流式端点：发送即恢复，不再让用户先绕去列表点「恢复」。
+            session.archived_at = None
+            db.commit()
 
         # ★ v1.49：这个会话**已经有一轮在跑**时，不许再起一轮。
         #

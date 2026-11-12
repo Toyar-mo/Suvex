@@ -1869,3 +1869,20 @@ describe('ChatPage — 角色可见性（v1.92）', () => {
     expect(screen.getByRole('button', { name: '渗透测试' })).toBeTruthy()
   })
 })
+
+describe('ChatPage — 归档会话可直接继续（v1.92）', () => {
+  it('输入框不再禁用，提示发送后会恢复', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: {
+          ...session({ archived: true }),
+          messages: [],
+        },
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+    const input = screen.getByLabelText('输入消息') as HTMLTextAreaElement
+    expect(input.disabled).toBe(false)
+    expect(input.placeholder).toContain('发送后会恢复')
+  })
+})

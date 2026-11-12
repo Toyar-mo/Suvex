@@ -62,13 +62,13 @@ describe('SessionContextMenu', () => {
       '置顶此对话',
       '批量管理',
       '移动到分组',
-      '删除此对话',
+      '归档此对话',
+      '彻底删除',
     ]) {
       expect(screen.getByText(label)).toBeTruthy()
     }
-    // 普通会话不该出现"恢复"或"彻底删除"
+    // 普通会话不该出现"恢复"；彻底删除必须出现（否则真要删得先归档再找回来）
     expect(screen.queryByText('恢复此对话')).toBeNull()
-    expect(screen.queryByText('彻底删除')).toBeNull()
   })
 
   it('已归档的会话换成恢复 / 彻底删除（否则归档就是单向黑洞）', () => {
@@ -77,7 +77,7 @@ describe('SessionContextMenu', () => {
     expect(screen.getByText('彻底删除')).toBeTruthy()
     // 这些对已归档的会话没有意义
     expect(screen.queryByText('置顶此对话')).toBeNull()
-    expect(screen.queryByText('删除此对话')).toBeNull()
+    expect(screen.queryByText('归档此对话')).toBeNull()
   })
 
   it('置顶状态改变文案（用户要能看出现在是什么状态）', () => {
@@ -97,7 +97,7 @@ describe('SessionContextMenu', () => {
   it('点危险项 → 也只"请求删除"，菜单照样关；最终删除由确认框再问一次', () => {
     const props = makeProps()
     render(<SessionContextMenu {...props} />)
-    fireEvent.click(screen.getByText('删除此对话'))
+    fireEvent.click(screen.getByText('归档此对话'))
     expect(props.onArchive).toHaveBeenCalledTimes(1)
     expect(props.onClose).toHaveBeenCalledTimes(1)
   })
@@ -296,6 +296,16 @@ describe('SessionContextMenu — 从树里创建分支（v1.92）', () => {
     render(<SessionContextMenu {...props} />)
     fireEvent.click(screen.getByText('创建分支'))
     expect(props.onFork).toHaveBeenCalledTimes(1)
+    expect(props.onClose).toHaveBeenCalled()
+  })
+})
+
+describe('SessionContextMenu — 一步彻底删除（v1.92）', () => {
+  it('普通会话也能直接请求彻底删除，不必先归档', () => {
+    const props = makeProps()
+    render(<SessionContextMenu {...props} />)
+    fireEvent.click(screen.getByText('彻底删除'))
+    expect(props.onPurge).toHaveBeenCalledTimes(1)
     expect(props.onClose).toHaveBeenCalled()
   })
 })

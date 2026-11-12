@@ -247,7 +247,8 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
             },
           ],
         },
-        { key: 'archive', label: '删除此对话', icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onArchive },
+        { key: 'archive', label: '归档此对话', icon: <Archive size={14} strokeWidth={2} />, onSelect: props.onArchive },
+        { key: 'purge', label: '彻底删除', icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onPurge },
       ]
 
   return createPortal(

@@ -1039,7 +1039,8 @@ export function ChatPage() {
     一按发送后端固定回"这个对话已归档"。用户得到的是一个看起来能用、
     实际必然失败的操作。
   */
-  const canSend = draft.trim().length > 0 && active !== null && !active.archived
+  // v1.92：归档会话也可以直接发 —— 后端会在发送时自动恢复。
+  const canSend = draft.trim().length > 0 && active !== null
 
   async function handleNew() {
     const session = await createSession()
@@ -2417,7 +2418,7 @@ export function ChatPage() {
                 `handleSend`）：跑的时候 Enter 是"插话"，不是"发消息"。
                 文案必须跟着变，否则用户会以为自己在开第二轮。
               */
-                disabled={!active || Boolean(active.archived)}
+                disabled={!active}
                 aria-label={t('chat.a11y.input', undefined, '输入消息')}
                 className={cn(
                   'max-h-40 min-h-9 min-w-0 flex-1 resize-none overflow-y-auto rounded-md bg-transparent px-2 py-2 field-sizing-content',
