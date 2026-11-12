@@ -25,6 +25,7 @@ import { chat_b } from './chat-b'
 import { chat_c } from './chat-c'
 import { zh_tw_full } from './zh-tw-full'
 import { missing_trilingual } from './missing-trilingual'
+import { artex_roles } from './artex-roles'
 
 
 
@@ -44,4 +45,4 @@ const jaExtra: ExtraLocaleMap = {
   de: {},
 }
 
-export const EXTRAS: ExtraLocaleMap[] = [settings_rest, reports, activity_tools, inventory, jaExtra, hardcoded_a, hardcoded_b, hardcoded_c, hardcoded_d, chat_a, chat_b, chat_c, zh_tw_full, missing_trilingual]
+export const EXTRAS: ExtraLocaleMap[] = [settings_rest, reports, activity_tools, inventory, jaExtra, hardcoded_a, hardcoded_b, hardcoded_c, hardcoded_d, chat_a, chat_b, chat_c, zh_tw_full, missing_trilingual, artex_roles]

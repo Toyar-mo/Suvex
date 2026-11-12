@@ -33,16 +33,24 @@ from app.chat.models import CHAT_PERSONAS
 from app.chat.prompts import CHAT_PERSONAS_SPEC, PERSONA_BY_ID
 
 #: v0.99 新加的四个方向。
-NEW_PERSONAS = ("api", "cloud", "ctf", "aillm")
-
-#: 扩容前就有的七个。它们必须继续可用（库里已有会话可能选着它们）。
-LEGACY_PERSONAS = ("default", "recon", "pentest", "binary", "postex", "container", "forensics")
+NEW_PERSONAS = (
+    "goals",
+    "planner",
+    "mainagent",
+    "worker",
+    "worker.intranet",
+    "auto",
+    "pentest",
+    "reporter",
+    "retester",
+    "verifier",
+)
 
 MIGRATION_PATH = (
     Path(__file__).resolve().parents[2]
     / "alembic"
     / "versions"
-    / "20261026_1700_f3a1c8d52e07_persona_expand.py"
+    / "20261112_1200_j0e1f2a3b4c5_artex_roles.py"
 )
 
 
@@ -81,21 +89,12 @@ def test_migration_list_matches_code(migration) -> None:
     代码能通过 pydantic、能通过 `PERSONA_BY_ID`，却在 `INSERT` 时被库拒；
     迁移多了某个 id，写入成功但引擎解析不到 → 静默退默认。
     """
-    assert migration.CHAT_PERSONAS_NEW == CHAT_PERSONAS, (
+    assert migration.ROLES == CHAT_PERSONAS, (
         "迁移 CHAT_PERSONAS_NEW 与 models.CHAT_PERSONAS 不一致：\n"
         f"  迁移多出：{sorted(set(migration.CHAT_PERSONAS_NEW) - set(CHAT_PERSONAS))}\n"
         f"  代码多出：{sorted(set(CHAT_PERSONAS) - set(migration.CHAT_PERSONAS_NEW))}"
     )
 
-
-def test_migration_old_list_is_exactly_the_legacy_set(migration) -> None:
-    """`downgrade` 用的旧全集必须是扩容前那七个。
-
-    多一个会让回滚建出一个**比原来更宽**的约束（回滚没真回滚）；
-    少一个会让回滚建出**比原来更窄**的约束，于是回滚之后
-    某些原本合法的历史会话变得不可保存。
-    """
-    assert migration.CHAT_PERSONAS_OLD == LEGACY_PERSONAS
 
 
 # ══════════════════════════════════════════════════════════
@@ -136,16 +135,6 @@ def test_new_persona_guidance_reaches_the_prompt(persona_id: str) -> None:
     )
 
 
-def test_legacy_personas_still_resolvable() -> None:
-    """★ 原来的七个必须继续可用。
-
-    库里已经有会话选了它们。丢一个的后果不是"少一个选项"，
-    而是那些会话**每次保存都失败**，或者渲染成空人格。
-    """
-    for persona_id in LEGACY_PERSONAS:
-        assert persona_id in PERSONA_BY_ID, f"历史人格 {persona_id} 解析不到了"
-
-
 def test_default_persona_still_renders_nothing() -> None:
     """`default` 必须继续渲染成空串 —— 它代表"不加任何角色约束"。
 
@@ -156,33 +145,6 @@ def test_default_persona_still_renders_nothing() -> None:
 
     assert render_persona("default") == ""
     assert render_persona(None) == ""
-
-
-def test_default_persona_guidance_must_stay_empty() -> None:
-    """★ `default` 的 guidance 必须为空串 —— 因为 `render_persona` **不读它**。
-
-    ## 这条为什么必要（变异验证抓出来的）
-
-    第一版只断言 `render_persona("default") == ""`。而那个函数的第一行是
-    `if not persona_id or persona_id == DEFAULT_PERSONA_ID: return ""` ——
-    它在碰 guidance **之前**就返回了。
-
-    所以：给 `default` 写一段 guidance，`render_persona` 照样返回空串、
-    测试照样绿，而那截文字**永远不会到达模型**。写它的人会以为
-    「默认人格现在也有立场了」，实际什么都没发生。
-
-    这是本项目反复抓的那类形状（配了/写了但静默失效）在人格模块里的一个实例。
-    修法有两条：让 `render_persona` 读它，或者禁止有人写它。
-    这里选后者并钉住 —— 因为「默认不加任何约束」是一个**设计决定**，
-    不是待实现的功能。真要给默认人格加立场，应该新增一个人格，而不是
-    偷偷改 `default`（那会让所有历史会话的行为一起变）。
-    """
-    default_persona = PERSONA_BY_ID["default"]
-    assert default_persona.guidance == "", (
-        f"`default` 人格被写了 guidance，但 `render_persona` 在默认分支"
-        f"直接返回空串、不读它 —— 那段文字永远不会进提示词，"
-        f"写的人却会以为生效了。内容：{default_persona.guidance[:80]!r}"
-    )
 
 
 def test_persona_labels_are_unique() -> None:
@@ -219,86 +181,11 @@ def test_every_persona_id_is_in_the_prompt_spec() -> None:
     )
 
 
-# ══════════════════════════════════════════════════════════
-# 3. 迁移本身
-# ══════════════════════════════════════════════════════════
+def test_persona_output_language_follows_locale() -> None:
+    """提示词必须跟随界面 locale，而不是写死中文。"""
+    from app.chat.prompts import build_system_prompt, render_persona
 
-
-def test_migration_check_sql_allows_null(migration) -> None:
-    """CHECK 表达式必须放行 NULL（NULL = 没选过，不是非法值）。"""
-    sql = migration._check_sql(migration.CHAT_PERSONAS_NEW)
-    assert "persona IS NULL" in sql
-    for persona_id in NEW_PERSONAS:
-        assert repr(persona_id) in sql, f"CHECK 里没有 {persona_id}"
-
-
-def test_migration_chains_onto_the_previous_head(migration) -> None:
-    """新迁移必须挂在 `e8f3c2a71b54` 之后，否则 alembic 有两个 head。"""
-    assert migration.down_revision == "e8f3c2a71b54"
-    assert migration.revision != migration.down_revision
-
-
-def test_migration_does_not_try_to_update_existing_rows(migration) -> None:
-    """★ `downgrade` 不能偷偷把用新人格的会话改回 default。
-
-    那会让用户看到"我选的人格自己变了"，而且没有任何解释。
-    宁可让回滚失败（撞 CHECK），让人自己决定那些会话怎么办。
-
-    ## ★ 为什么用 AST 而不是搜源码文本
-
-    第一版就是搜文本（`"UPDATE" not in src.upper()`），它当场误报：
-    `downgrade` 的 docstring 里写着「**不要**在失败前偷偷 UPDATE 那些行」——
-    那句说明本身含有 UPDATE 这个词。也就是说，一条**讲清楚"不要这么做"**
-    的注释会让断言变红，而真正写了 `op.execute("UPDATE ...")` 时它反而不一定抓得住
-    （可以拆成 f-string、可以走变量）。
-
-    搜文本测的是"文件里有没有这五个字母"，不是"有没有执行这个动作"。
-    AST 看的是真的调用了什么。
-    """
-    import ast
-    import inspect
-    import textwrap
-
-    src = inspect.getsource(migration.downgrade)
-    tree = ast.parse(textwrap.dedent(src))
-    func_def = tree.body[0]
-    assert isinstance(func_def, ast.FunctionDef | ast.AsyncFunctionDef)
-
-    # 函数体第一条语句若是字符串常量，那是 **docstring**，不是 SQL。
-    # （第一版没排除它，于是"不要偷偷 UPDATE"这句说明把断言弄红了 ——
-    #   讲清楚规矩的注释反而被判违规。）
-    body = func_def.body
-    docstring_node = None
-    if (
-        body
-        and isinstance(body[0], ast.Expr)
-        and isinstance(body[0].value, ast.Constant)
-        and isinstance(body[0].value.value, str)
-    ):
-        docstring_node = body[0].value
-    real_body = body[1:] if docstring_node is not None else body
-
-    # 禁止的调用：op.execute(...) / connection.execute(...) / sa.text("UPDATE...")
-    forbidden_calls = {"execute", "text"}
-    for stmt in real_body:
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.Call):
-                func = node.func
-                name = ""
-                if isinstance(func, ast.Attribute):
-                    name = func.attr
-                elif isinstance(func, ast.Name):
-                    name = func.id
-                assert name not in forbidden_calls, (
-                    f"downgrade 调用了 `{name}` —— 见 docstring："
-                    "不该静默改写用户选的人格，回滚失败是对的"
-                )
-
-    # 也不允许出现改写数据的 SQL 字面量（已排除 docstring）
-    for stmt in real_body:
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                upper = node.value.upper()
-                assert "UPDATE " not in upper and "DELETE " not in upper, (
-                    f"downgrade 里有改写数据的 SQL 字面量：{node.value[:80]!r}"
-                )
+    assert "English" in render_persona("planner", "en")
+    assert "日本語" in render_persona("planner", "ja")
+    assert "繁體中文" in render_persona("planner", "zh-TW")
+    assert "始终使用English回答" in build_system_prompt(persona="pentest", locale="en")

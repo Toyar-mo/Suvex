@@ -94,7 +94,7 @@ def test_settings_are_partial_so_renaming_does_not_wipe_them(
     service.update_settings(
         db_session,
         session=chat_session,
-        payload=ChatSettingsIn(skillNames=["analysis-triage"], persona="recon"),
+        payload=ChatSettingsIn(skillNames=["analysis-triage"], persona="pentest"),
     )
     db_session.commit()
 
@@ -106,7 +106,7 @@ def test_settings_are_partial_so_renaming_does_not_wipe_them(
     db_session.commit()
     db_session.refresh(chat_session)
 
-    assert chat_session.persona == "recon", "只改 provider 不该把人格清掉"
+    assert chat_session.persona == "pentest", "只改 provider 不该把人格清掉"
     assert chat_session.skill_names == ["analysis-triage"], "只改 provider 不该把技能清掉"
     assert chat_session.provider_id == "prov_1"
 

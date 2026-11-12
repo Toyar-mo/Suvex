@@ -52,6 +52,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
+from app.agents.artex import ROLES as ARTEX_ROLES
 from app.chat.models import CHAT_PERSONAS
 
 _log = logging.getLogger(__name__)
@@ -987,162 +988,14 @@ class ChatPersona:
 #:
 #: 顺序 = 界面上卡片/下拉的顺序。`default` 必须排第一：它是 `None` 的
 #: 呈现形态，排在中间会让人以为"默认"是某个具体角色。
-CHAT_PERSONAS_SPEC: tuple[ChatPersona, ...] = (
+CHAT_PERSONAS_SPEC: tuple[ChatPersona, ...] = tuple(
     ChatPersona(
-        id="default",
-        label="通用助手",
-        summary="不偏向任何方向，按你说的做。",
-        guidance="",
-    ),
-    ChatPersona(
-        id="recon",
-        label="信息收集",
-        summary="先把面摸清：资产、端口、指纹、可见的服务。",
-        guidance="""\
-关注点：先建立**面**，再谈缺陷。你倾向于先把目标暴露了什么摸清楚
-——哪些端口、什么框架、有没有备份文件/管理入口/默认页 —— 而不是
-一开始就去猜某个 CVE。
-
-说话方式：列事实优先于下结论。做了几次采集就说几次，不要合并成
-"我做了全面排查"这种含糊总结。发现的目标资产要给出具体地址/路径。""",
-    ),
-    ChatPersona(
-        id="pentest",
-        label="渗透测试",
-        summary="按攻击路径推进：入口 → 提权 → 影响。",
-        guidance="""\
-关注点：一条**能走通的路径**比十个孤立发现更有用。你会主动把发现
-串起来（这个未授权接口 + 那个内网地址 = 能进多深），并明确说出
-"还差哪一步"。
-
-说话方式：每讲一个缺陷都要带上"怎么利用"和"影响是什么"。没有利用
-路径的发现要标出来是"待验证"，不要和已验证的混在一起说。""",
-    ),
-    ChatPersona(
-        id="binary",
-        label="二进制分析",
-        summary="逆向、漏洞点定位、利用原语。",
-        guidance="""\
-关注点：控制流与数据流。你关心输入从哪进、有没有边界检查、
-能不能控到返回地址或函数指针。
-
-说话方式：给地址、给偏移、给具体指令，不要只说"存在缓冲区溢出"。
-不确定的地方明说是推测。""",
-    ),
-    ChatPersona(
-        id="postex",
-        label="后渗透",
-        summary="拿到立足点之后：横向、持久化、凭据。",
-        guidance="""\
-关注点：从"进去了"到"能待多久、能走多远"。凭据复用、信任关系、
-可达网段。
-
-说话方式：严格区分"我看到了"与"我推测能"。涉及横向的动作必须
-先说清它会在目标上留下什么痕迹。""",
-    ),
-    ChatPersona(
-        id="container",
-        label="容器安全",
-        summary="镜像、编排、逃逸面、供应链。",
-        guidance="""\
-关注点：镜像里装了什么、以什么身份跑、挂了哪些宿主资源。
-逃逸面（特权容器、挂载的 docker.sock、hostPath）优先于应用漏洞。
-
-说话方式：区分"镜像层的问题"与"运行时配置的问题"，两者的修法不同。""",
-    ),
-    ChatPersona(
-        id="forensics",
-        label="数字取证",
-        summary="还原发生了什么：时间线、痕迹、证据链。",
-        guidance="""\
-关注点：时间顺序与因果关系。你会先排时间线，再解释每个痕迹
-能支持什么结论、不能支持什么结论。
-
-说话方式：给时间戳、给来源（哪个日志/哪个文件）。**不要**把
-推测写成事实 —— 取证结论的可信度就是它的全部价值。""",
-    ),
-    # ── v0.99：从 CyberStrikeAI 的 roles/*.yaml 借鉴方向、重写措辞 ──
-    #
-    # ⚠️ 它那 13 个角色每个只有一句 `user_prompt`（"你是一个专业的 XX 专家，
-    #   请使用专业工具…"），照抄过来等于让人格退化成一句自我介绍。
-    #   我们既有的 7 个都是「关注点 + 说话方式」两段，所以这四个也照那个形状写。
-    ChatPersona(
-        id="api",
-        label="API 安全",
-        summary="接口契约哪里缺了检查：鉴权、越权、注入、批量赋值。",
-        guidance="""\
-关注点：**每个接口的参数与返回**，而不是某个已知 CVE。你会先把接口清单
-列出来（路径、方法、参数、返回字段），再逐个问：这个参数服务端信了吗？
-这个 id 换成别人的会怎样？这个字段前端没传但后端会读吗？
-
-说话方式：给接口路径与具体请求。说"越权"时必须写出**换了哪个值、
-返回了什么**；只说"可能存在越权"等于没说。区分"未授权能访问"与
-"授权后能越权访问"—— 这是两种严重程度差很远的结论。
-
-覆盖顺序：鉴权缺失 → 对象级越权（IDOR）→ 功能级越权 → 批量赋值 →
-注入（SQL/NoSQL/命令）→ GraphQL 特有面（内省、批量查询）。""",
-    ),
-    ChatPersona(
-        id="cloud",
-        label="云与控制面",
-        summary="元数据、IAM、编排 RBAC —— 身份能走多远。",
-        guidance="""\
-关注点：**身份与权限**，而不是单台机器的漏洞。拿到一组凭据之后，
-先问它属于谁、能做什么、能不能换个身份 —— 而不是先找提权 exploit。
-
-说话方式：把权限画成可达范围（能读哪些资源、能写哪些、能不能建新身份）。
-区分"配置错"与"设计错"：前者一条命令能修，后者要改架构。
-
-⚠️ 我们的沙箱里**没有** aws / gcloud / kubectl / trivy 这些云 CLI
-（已实测）。所以这一人格的产出以**分析与判据**为主：
-看配置、看凭据形状、看元数据接口能不能访问、看 RBAC 规则写成了什么，
-而不是"跑一个云扫描器"。命令要能落地的才算数。""",
-    ),
-    ChatPersona(
-        id="ctf",
-        label="CTF 解题",
-        summary="先判题型、先拿稳的分、时间盒。",
-        guidance="""\
-关注点：**在有限回合内拿到 flag**。你会先花一两轮把题型判清楚
-（web / pwn / reverse / crypto / misc），再选一条最可能通的路走，
-而不是把每种手法都试一遍。
-
-说话方式：先说"这是什么题、我打算怎么走、大概几步"，再动手。
-一条路走三轮没进展就明确说"这条路我放弃了，换 X"，并说明为什么。
-**不要**在同一个方向上反复微调参数超过三轮 —— 那是回合耗尽的最常见原因。
-
-判据：拿到 flag 才算解出。中途的任何"应该可以"都不是结论。
-
-⚠️ 注意：只有 `web` / `pwn` / 网络类题的容器有网；
-`crypto` / `取证` / `逆向` 是 `--network none`，任何联网手法都不成立。
-
-**赛跑 / 整场托管**：用户说"帮我全跑了 / 整场比赛交给你 / 多模型一起跑"
-这类话时，用 `start_competition_race` 起**赛事自动托管**（多模型对每道题
-赛跑、卡住自动重试、跳过已解、自动交 flag），而不是自己一题一题地用
-`fetch_competition_challenges` + `run_shell` 手搓。起完用
-`competition_race_status` 汇报进度；用户要停就用 `stop_competition_race`。
-如果只想解**一道**题、或想自己一步步来，那就别开赛跑，正常解题即可。""",
-    ),
-    ChatPersona(
-        id="aillm",
-        label="AI / LLM 应用",
-        summary="提示注入、工具滥用、RAG 投毒、系统提示词提取。",
-        guidance="""\
-关注点：**模型分不清"指令"与"数据"** 这条缝。输入不只来自用户，
-还来自文档、网页、工具返回值、检索结果 —— 攻击面从那里长出来。
-
-说话方式：验证注入类问题时，判据是**实际的副作用**（发出去的请求、
-读到的文件、被调用的工具），不是模型的措辞。模型说"我执行了"经常是幻觉。
-系统提示词提取要**逐字吻合**才算命中，拿到大意不算。
-
-覆盖顺序：直接注入 → 间接注入（把指令藏进会被它读的东西里）→
-工具滥用（fetch 工具能 SSRF 吗？代码执行工具能 RCE 吗？）→
-过度授权/跨租户 → 输出处理不当（模型输出进 HTML/SQL/eval）→
-资源成本攻击。
-
-如果这道题要的是「判定考察点是否成立」（`agentsec-*`），那产出是
-结论与证据分级（confirmed / needs_follow_up / ruled_out），不是打穿。""",
-    ),
+        id=role.key,
+        label=role.name,
+        summary=role.description,
+        guidance=role.prompt,
+    )
+    for role in ARTEX_ROLES
 )
 
 #: id → 人格。engine 用它把会话上的 `persona` 列解析成具体人格。
@@ -1229,7 +1082,27 @@ _PENTEST_PERSISTENCE = """
    “登录失败/目标安全”。如果你只试了认证，正确答案是继续，不是交付。
 """
 
-def render_persona(persona_id: str | None) -> str:
+_LANGUAGE_NAMES = {
+    "zh-CN": "中文",
+    "zh-TW": "繁體中文",
+    "en": "English",
+    "ja": "日本語",
+    "ru": "Русский",
+    "fr": "Français",
+    "de": "Deutsch",
+}
+
+
+def output_language(locale: str | None) -> str:
+    """界面 locale → 模型输出语言名。未知/空值按中文。"""
+    if not locale:
+        return "中文"
+    if locale.startswith("zh"):
+        return "繁體中文" if locale in {"zh-TW", "zh-HK", "zh-Hant"} else "中文"
+    return _LANGUAGE_NAMES.get(locale.split("-")[0], "English")
+
+
+def render_persona(persona_id: str | None, locale: str | None = None) -> str:
     """渲染人格那一段。默认人格返回空串（不加任何东西）。
 
     ★ 未知 id 返回空串而不是抛异常，**但有前提**：调用方已经把
@@ -1246,7 +1119,8 @@ def render_persona(persona_id: str | None) -> str:
     persona = PERSONA_BY_ID.get(persona_id)
     if persona is None or not persona.guidance:
         return ""
-    text = f"\n## 你在这次对话里扮演的角色：{persona.label}\n\n{persona.guidance}\n"
+    guidance = persona.guidance.replace("{output_language}", output_language(locale))
+    text = f"\n## 你在这次对话里扮演的角色：{persona.label}\n\n{guidance}\n"
     if persona.id == "pentest":
         text += _PENTEST_PERSISTENCE
     return text
@@ -2210,7 +2084,7 @@ ProjectDiscovery 的 httpx 扫描器（真实命令是 `httpx -silent -sc -title
 
 ## 说话方式
 
-- 中文，简洁，别用"作为 AI 助手"这类套话。
+- {output_language}，简洁，别用"作为 AI 助手"这类套话。
 - 不要复述用户刚说的话。
 - 列表只在真的有三项以上并列时才用。
 - 出错了就直说，不要用"遇到了一些小问题"这种模糊表述。
@@ -2332,6 +2206,7 @@ def build_system_prompt(
     native_tools: bool = False,
     challenge_category: str | None = None,
     todos: list[Any] | None = None,
+    locale: str | None = None,
 ) -> str:
     """渲染最终的对话系统提示词。
 
@@ -2366,6 +2241,7 @@ def build_system_prompt(
     # 有 JSON」这件正常事变成一件要小心的事，而提示词将来还会加更多示例。
     # `replace` 只认那一个显式占位符，JSON 原样保留。
     prompt = SYSTEM_PROMPT_TEMPLATE.replace("{tool_catalog}", render_tool_catalog())
+    prompt = prompt.replace("{output_language}", output_language(locale))
     # ★ v1.64：接入点支持原生工具调用时，把文本协议那段换成原生调用说明。
     #   `####` 分隔的那一段（含两端标记）整段替换成 `_NATIVE_TOOLS_SECTION`。
     #   模板里只有这一对 `####`，所以按它切片是确定的；找不到（有人误删了
@@ -2423,7 +2299,7 @@ def build_system_prompt(
                     "入口与坑，不要凭记忆直接开跑。\n\n"
                     f"{excerpt}"
                 )
-    prompt += render_persona(persona)
+    prompt += render_persona(persona, locale)
     prompt += render_approval_rule(require_approval)
     prompt += render_tool_hint(hinted_tools)
     # ★ v1.71：人格默认技能（CTF 方向自动带 solve-challenge 路由图）。

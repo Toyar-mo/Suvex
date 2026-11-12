@@ -1,4 +1,5 @@
 import { API_BASE_URL, API_PREFIX } from '@/lib/api'
+import { activeLocale } from '@/i18n'
 
 import type { ChatMessage } from './chat'
 
@@ -175,7 +176,7 @@ export interface StreamTurnOptions {
 export async function streamTurn(options: StreamTurnOptions): Promise<boolean> {
   const { sessionId, content, providerId, attachmentIds, explicitTools, onEvent, signal } = options
 
-  const body: Record<string, unknown> = { content }
+  const body: Record<string, unknown> = { content, locale: activeLocale() }
   if (providerId) body.providerId = providerId
   if (attachmentIds && attachmentIds.length > 0) body.attachmentIds = attachmentIds
   if (explicitTools && explicitTools.length > 0) body.explicitTools = explicitTools

@@ -5,53 +5,24 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents.artex import ROLES as ARTEX_ROLES
 from app.agents.models import AgentProfile
 from app.core.errors import ApiError
 from app.core.ids import new_id
 from app.core.timeutil import now_utc
 
-#: 内置角色（名称/描述）——只用于展示与后续编排，不自动改变执行器行为。
-PERSONAS: tuple[tuple[str, str, str], ...] = (
-    ("default", "通用助手", "不偏向任何方向，按你说的做。"),
-    ("recon", "信息收集", "先把面摸清：资产、端口、指纹、可见的服务。"),
-    ("pentest", "渗透测试", "按攻击路径推进：入口 → 提权 → 影响。"),
-    ("binary", "二进制分析", "逆向、漏洞点定位、利用原语。"),
-    ("postex", "后渗透", "拿到立足点之后：横向、持久化、凭据。"),
-    ("container", "容器安全", "镜像、编排、逃逸面、供应链。"),
-    ("forensics", "数字取证", "还原发生了什么：时间线、截图、证据链。"),
-    ("api", "API 安全", "接口契约里哪里缺了检查：鉴权、越权、注入、批量赋值。"),
-    ("cloud", "云与控制面", "元数据、IAM、编排 RBAC —— 身份能走多远。"),
-    ("ctf", "CTF 解题", "先判题型、先拿稳的分、时间盒。"),
-    ("aillm", "AI / LLM 应用", "提示注入、工具滥用、RAG 投毒、系统提示词提取。"),
+#: 兼容旧的引用点：persona / workflow 两组的 (key, name, description)。
+PERSONAS: tuple[tuple[str, str, str], ...] = tuple(
+    (role.key, role.name, role.description) for role in ARTEX_ROLES if role.kind == "persona"
+)
+BUILTINS: tuple[tuple[str, str, str], ...] = tuple(
+    (role.key, role.name, role.description) for role in ARTEX_ROLES if role.kind != "persona"
 )
 
-BUILTINS: tuple[tuple[str, str, str], ...] = (
-    ("goals", "目标拆解", "把渗透任务目标拆解成若干独立、可验证的子目标。"),
-    ("planner", "规划", "读取态势、判定目标，只在确有未覆盖的新方向时补充探索意图。"),
-    ("mainagent", "主", "人机接口：观察进展，把人的意图落成 hint 或更高优先级意图。"),
-    ("worker", "执行", "领取一条意图执行，把发现的事实/漏洞写回知识图谱后停止。"),
-    ("worker.intranet", "执行 · 内网", "内网阶段变体：有立足点/隧道时替代 worker 正文（需执行器接入）。"),
-    ("auto", "Auto", "平台操作助手：管理任务、资产、技能、工具与 MCP。"),
-    ("reporter", "报告撰写", "根据发现与执行过程撰写并回写 Markdown 报告。"),
-    ("retester", "漏洞复测", "对已修复漏洞复测，保留独立复测结论。"),
-    ("verifier", "漏洞验证", "上报后自动复核 PoC 证据并保存独立验证结论。"),
-)
-
-
-#: 角色模板（“选一个角色”对话框的选项）。只用于预填新建表单，
-#: 不自动改变执行器行为。
-ROLE_TEMPLATES: tuple[dict[str, str], ...] = (
-    {"key": "general", "name": "通用助手", "description": "不偏向任何方向，按你说的做。"},
-    {"key": "recon", "name": "信息收集", "description": "先把面摸清：资产、端口、指纹、可见的服务。"},
-    {"key": "pentest", "name": "渗透测试", "description": "按攻击路径推进：入口→授权→影响。"},
-    {"key": "reverse", "name": "二进制分析", "description": "逆向、漏洞点定位、利用原语。"},
-    {"key": "postexp", "name": "后渗透", "description": "拿到立足点之后：横向、持久化、凭据。"},
-    {"key": "container", "name": "容器安全", "description": "镜像、编排、逃逸面、供应链。"},
-    {"key": "forensics", "name": "数字取证", "description": "还原发生了什么：时间线、截图、证据链。"},
-    {"key": "api", "name": "API 安全", "description": "接口契约里哪里缺了检查：鉴权、越权、注入、批量赋值。"},
-    {"key": "cloud", "name": "云与控制面", "description": "元数据、IAM、编排 RBAC —— 身份能走多远。"},
-    {"key": "ctf", "name": "CTF 解题", "description": "先判题型、先拿稳的分、时间盒。"},
-    {"key": "ai", "name": "AI / LLM 应用", "description": "提示注入、工具滥用、RAG 投毒、系统提示词提取。"},
+#: 角色模板（“选一个角色”对话框的选项）。
+ROLE_TEMPLATES: tuple[dict[str, str], ...] = tuple(
+    {"key": role.key, "name": role.name, "description": role.description}
+    for role in ARTEX_ROLES
 )
 
 
@@ -121,7 +92,13 @@ def get_by_key(db: Session, key: str) -> AgentProfile:
 
 def ensure_builtins(db: Session) -> list[AgentProfile]:
     """幂等播种内置角色；已存在的 key 不覆盖用户对描述/启用的修改。"""
-    existing = {row.key for row in db.execute(select(AgentProfile)).scalars()}
+    rows = list(db.execute(select(AgentProfile)).scalars())
+    valid = {role.key for role in ARTEX_ROLES}
+    # ARTeX 角色替换旧的领域人格：删掉不再存在的内置行，用户自建行不动。
+    for row in rows:
+        if row.builtin and row.key not in valid:
+            db.delete(row)
+    existing = {row.key for row in rows if row.key in valid}
     changed = False
     for key, name, description in BUILTINS + PERSONAS:
         if key in existing:

@@ -493,6 +493,7 @@ async def send_message(
             provider_id=payload.providerId,
             attachment_ids=payload.attachmentIds,
             explicit_tools=payload.explicitTools,
+            locale=payload.locale,
         )
     except engine.ChatEngineError as exc:
         # ★ 把引擎的可读错误翻成 4xx 而不是 500：`ChatEngineError` 的两条
@@ -638,6 +639,7 @@ def send_message_stream(
                 attachment_ids=payload.attachmentIds,
                 explicit_tools=payload.explicitTools,
                 emit=emit,
+                locale=payload.locale,
             )
         finally:
             turn_db.close()
@@ -1379,7 +1381,11 @@ async def decide_approval(
 
     try:
         result = await engine.resume_approved_durable(
-            db, session=session, message=message, identity=identity
+            db,
+            session=session,
+            message=message,
+            identity=identity,
+            locale=payload.locale,
         )
     except engine.ChatEngineError as exc:
         db.rollback()

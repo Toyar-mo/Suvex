@@ -3531,6 +3531,7 @@ def _system_prompt_for(
     challenge_category: str | None = None,
     mcp_catalog: mcp_tools.McpToolCatalog | None = None,
     db: Session | None = None,
+    locale: str | None = None,
 ) -> str:
     """按会话设置渲染系统提示词。
 
@@ -3562,6 +3563,7 @@ def _system_prompt_for(
         # ★ v1.89：计划是**库里的状态**，不是上一轮说了什么。每轮重读，
         #   所以窗口外（被截断）的旧计划依然在提示词里。
         todos=todo_store.list_todos(db, session.id) if db is not None else None,
+        locale=locale,
     )
     # ★ v1.80：会话挂载的 MCP 工具。放在最后 —— 它比骨架更"这个对话专属"。
     #   原生模式下 schema 已在 `tools=` 里，这一段补的是"哪台连不上"；
@@ -3585,6 +3587,7 @@ async def run_turn(
     turn_run: Any = None,
     resume_from: Any = None,
     allowed_tools: set[str] | None = None,
+    locale: str | None = None,
 ) -> ChatTurnResult:
     """跑一轮对话。
 
@@ -3697,6 +3700,7 @@ async def run_turn(
         challenge_category=_challenge_category(db, session),
         mcp_catalog=ctx.mcp,
         db=db,
+        locale=locale,
     )
 
     #: 打开审批时，这些工具不执行、只挂起。
@@ -4539,6 +4543,7 @@ async def resume_approved(
     gateway: Any = None,
     turn_run: Any = None,
     emit: Emit | None = None,
+    locale: str | None = None,
 ) -> ChatTurnResult:
     """执行一条刚刚被批准的工具调用，然后**接着跑这一轮**。
 
@@ -4591,6 +4596,7 @@ async def resume_approved(
         challenge_category=_challenge_category(db, session),
         mcp_catalog=ctx.mcp,
         db=db,
+        locale=locale,
     )
     gate_on = bool(session.require_approval) and not _auto_approve_active(session)
 
@@ -5138,6 +5144,7 @@ async def run_turn_durable(
     emit: Emit | None = None,
     resume_from: Any = None,
     allowed_tools: set[str] | None = None,
+    locale: str | None = None,
 ) -> ChatTurnResult:
     """`run_turn` 的持久化外壳（生产路径都走这个）。"""
 
@@ -5155,6 +5162,7 @@ async def run_turn_durable(
             turn_run=run,
             resume_from=resume_from,
             allowed_tools=allowed_tools,
+            locale=locale,
         )
 
     return await _run_guarded(db, session=session, kind="turn", call=call)
@@ -5167,6 +5175,7 @@ async def resume_approved_durable(
     message: Any,
     identity: Any,
     gateway: Any = None,
+    locale: str | None = None,
 ) -> ChatTurnResult:
     """`resume_approved` 的持久化外壳。"""
 
@@ -5178,6 +5187,7 @@ async def resume_approved_durable(
             identity=identity,
             gateway=gateway,
             turn_run=run,
+            locale=locale,
         )
 
     return await _run_guarded(db, session=session, kind="resume", call=call)

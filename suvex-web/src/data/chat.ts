@@ -1,4 +1,5 @@
 import { ApiError, api, toApiError } from '@/lib/api'
+import { activeLocale } from '@/i18n'
 import { useSyncExternalStore } from 'react'
 
 import {
@@ -1941,7 +1942,7 @@ export async function decideApproval(
       awaitingApproval?: string | null
     }>(
       `/chat/sessions/${sessionId}/messages/${messageId}/approval`,
-      { approve },
+      { approve, locale: activeLocale() },
       // 批准之后要执行工具 + 再调一轮模型，与 sendMessage 同量级。
       { timeoutMs: 180_000 },
     )

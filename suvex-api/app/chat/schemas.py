@@ -61,19 +61,16 @@ ChatRole = Literal["user", "assistant", "tool"]
 #:   被拒，而不是写进库、再被数据库 CHECK 拒（后者报的是英文约束名，
 #:   用户看不懂）。但数据库那条 CHECK 仍然保留 —— 它挡的是不经 API 的写入。
 ChatPersonaId = Literal[
-    "default",
-    "recon",
+    "goals",
+    "planner",
+    "mainagent",
+    "worker",
+    "worker.intranet",
+    "auto",
     "pentest",
-    "binary",
-    "postex",
-    "container",
-    "forensics",
-    # ★ v0.99：与 `models.CHAT_PERSONAS` / `prompts.CHAT_PERSONAS_SPEC` /
-    #   迁移 `f3a1c8d52e07` 同源。文件末尾那条断言钉住这里不能漏。
-    "api",
-    "cloud",
-    "ctf",
-    "aillm",
+    "reporter",
+    "retester",
+    "verifier",
 ]
 
 #: 审批状态。与 `models.APPROVAL_STATUSES` 同源。
@@ -477,11 +474,18 @@ class ChatApprovalIn(StrictModel):
 
     approve: bool = Field(..., description="true = 执行，false = 拒绝")
 
+    #: 当前界面语言；恢复这一轮时继续用它决定答复语言。
+    locale: str | None = Field(None, max_length=16, description="界面 locale")
+
 
 class ChatSendIn(StrictModel):
     """发一条用户消息。"""
 
     content: MessageBody = Field(..., description="用户说的话")
+
+    #: 当前界面语言。系统提示词用它决定模型用哪种语言答复；
+    #: 不传按中文（兼容老客户端）。
+    locale: str | None = Field(None, max_length=16, description="界面 locale")
 
     #: 模型接入点。不传就用**会话上的**设置，会话也没设就用平台默认。
     #:
@@ -636,17 +640,16 @@ class ChatPinIn(StrictModel):
 #:   这条断言正是为了让"只改一处"在 import 期就炸 —— 而它这次真的
 #:   在人格扩容时炸了一次（加四个新人格时漏了这个元组）。
 _PERSONA_LITERALS = (
-    "default",
-    "recon",
+    "goals",
+    "planner",
+    "mainagent",
+    "worker",
+    "worker.intranet",
+    "auto",
     "pentest",
-    "binary",
-    "postex",
-    "container",
-    "forensics",
-    "api",
-    "cloud",
-    "ctf",
-    "aillm",
+    "reporter",
+    "retester",
+    "verifier",
 )
 assert set(CHAT_PERSONAS) == set(_PERSONA_LITERALS), (
     f"models.CHAT_PERSONAS 与 schemas 的 ChatPersonaId 不一致：{CHAT_PERSONAS}"
