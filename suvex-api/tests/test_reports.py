@@ -644,6 +644,38 @@ def test_generate_then_download(ready_client: TestClient, scan, loaded) -> None:
     assert "下载测试" in download.text
 
 
+def test_report_locale_localizes_document_and_download(
+    ready_client: TestClient, scan, loaded
+) -> None:  # noqa: ANN001
+    """`?locale=` 必须同时作用于预览文档和下载的 Markdown。"""
+    preview_body = {
+        "title": "Localized",
+        "scope": {"kind": "scan", "scanId": scan.id},
+        "options": {},
+    }
+    en = ready_client.post("/api/v1/reports/preview?locale=en", json=preview_body)
+    assert en.status_code == 200
+    en_doc = en.json()
+    assert en_doc["entries"][0]["severityLabel"] == "Critical"
+    assert en_doc["meta"]["scope"].startswith("Scan task")
+    assert en_doc["verdict"].startswith("Found")
+
+    ja = ready_client.post("/api/v1/reports/preview?locale=ja", json=preview_body)
+    assert ja.status_code == 200
+    assert ja.json()["entries"][0]["severityLabel"] == "重大"
+
+    created = ready_client.post(
+        "/api/v1/reports",
+        json={**preview_body, "format": "markdown"},
+    )
+    assert created.status_code == 201
+    report = created.json()
+    download = ready_client.get(f"/api/v1/reports/{report['id']}/download?locale=ja")
+    assert download.status_code == 200
+    assert "レポート番号" in download.text
+    assert "报告编号" not in download.text
+
+
 def test_download_of_a_pdf_report_explains_instead_of_404(
     ready_client: TestClient, scan, loaded
 ) -> None:  # noqa: ANN001
