@@ -30,6 +30,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
   const [days, setDays] = useState<number>(30)
   const [data, setData] = useState<TokenUsageSeries | null>(null)
   const [error, setError] = useState(false)
+  const [hover, setHover] = useState<number | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -51,12 +52,21 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
   const chart = useMemo(() => {
     if (!data || data.totals.total === 0) return null
     const points = data.series
-    const max = Math.max(1, ...points.map((point) => Math.max(point.prompt, point.completion)))
+    const max = Math.max(
+      1,
+      ...points.map((point) =>
+        Math.max(
+          point.prompt,
+          point.completion,
+          data.cacheTracked ? point.cacheRead : 0,
+        ),
+      ),
+    )
     const x = (index: number) => 12 + (index * 576) / Math.max(1, points.length - 1)
     const y = (value: number) => 188 - (value / max) * 168
-    const line = (key: 'prompt' | 'completion') =>
+    const line = (key: 'prompt' | 'completion' | 'cacheRead') =>
       points.map((point, index) => `${x(index)},${y(point[key])}`).join(' ')
-    return { line, count: points.length }
+    return { line, count: points.length, x, y }
   }, [data])
 
   return (
@@ -152,20 +162,99 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
             </div>
 
             {chart ? (
-              <svg viewBox="0 0 600 200" className="h-[200px] w-full" role="img" aria-label={t('overview.token.trendAria', undefined, 'token 趋势')}>
-                <polyline
-                  points={chart.line('prompt')}
-                  fill="none"
-                  stroke="rgb(var(--suvex-accent))"
-                  strokeWidth="2"
-                />
-                <polyline
-                  points={chart.line('completion')}
-                  fill="none"
-                  stroke="rgb(var(--suvex-signal-warn))"
-                  strokeWidth="2"
-                />
-              </svg>
+              <div className="relative">
+                <svg
+                  viewBox="0 0 600 200"
+                  className="h-[200px] w-full touch-none"
+                  role="img"
+                  aria-label={t('overview.token.trendAria', undefined, 'token 趋势')}
+                  onMouseMove={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect()
+                    const ratio = (event.clientX - rect.left) / Math.max(1, rect.width)
+                    const plotX = ((ratio * 600 - 12) / 576) * (chart.count - 1)
+                    const raw = Math.round(plotX)
+                    setHover(Math.min(chart.count - 1, Math.max(0, raw)))
+                  }}
+                  onMouseLeave={() => setHover(null)}
+                >
+                  <polyline
+                    points={chart.line('prompt')}
+                    fill="none"
+                    stroke="rgb(var(--suvex-accent))"
+                    strokeWidth="2"
+                  />
+                  <polyline
+                    points={chart.line('completion')}
+                    fill="none"
+                    stroke="rgb(var(--suvex-signal-warn))"
+                    strokeWidth="2"
+                  />
+                  {data?.cacheTracked && (
+                    <polyline
+                      points={chart.line('cacheRead')}
+                      fill="none"
+                      stroke="rgb(var(--suvex-signal-ok))"
+                      strokeWidth="2"
+                    />
+                  )}
+                  {hover !== null && data && (
+                    <>
+                      <line
+                        x1={chart.x(hover)}
+                        x2={chart.x(hover)}
+                        y1="20"
+                        y2="188"
+                        stroke="rgb(var(--suvex-line-strong))"
+                        strokeDasharray="3 3"
+                      />
+                      <circle
+                        cx={chart.x(hover)}
+                        cy={chart.y(data.series[hover].prompt)}
+                        r="3"
+                        fill="rgb(var(--suvex-accent))"
+                      />
+                      <circle
+                        cx={chart.x(hover)}
+                        cy={chart.y(data.series[hover].completion)}
+                        r="3"
+                        fill="rgb(var(--suvex-signal-warn))"
+                      />
+                    </>
+                  )}
+                </svg>
+                {hover !== null && data && (
+                  <div
+                    className="pointer-events-none absolute top-2 z-10 w-44 rounded-md border border-line bg-surface-raised px-2.5 py-2 text-2xs shadow-lg"
+                    style={{
+                      left: `${Math.min(78, Math.max(22, (chart.x(hover) / 600) * 100))}%`,
+                      transform: 'translateX(-50%)',
+                    }}
+                  >
+                    <div className="mb-1 text-ink-muted">{data.series[hover].date}</div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-ink-faint">{t('overview.token.legendInput', undefined, '输入')}</span>
+                      <span className="tabular text-ink">{compact(data.series[hover].prompt)}</span>
+                    </div>
+                    <div className="flex justify-between gap-3">
+                      <span className="text-ink-faint">{t('overview.token.legendOutput', undefined, '输出')}</span>
+                      <span className="tabular text-ink">{compact(data.series[hover].completion)}</span>
+                    </div>
+                    {data.cacheTracked && (
+                      <div className="flex justify-between gap-3">
+                        <span className="text-ink-faint">{t('overview.token.legendCache', undefined, '缓存读')}</span>
+                        <span className="tabular text-ink">{compact(data.series[hover].cacheRead)}</span>
+                      </div>
+                    )}
+                    <div className="mt-1 flex justify-between gap-3 border-t border-line pt-1">
+                      <span className="text-ink-faint">{t('overview.token.total', undefined, '合计')}</span>
+                      <span className="tabular text-ink">{compact(data.series[hover].total)}</span>
+                    </div>
+                    <div className="mt-0.5 text-ink-faint">
+                      {t('overview.token.calls', { n: data.series[hover].calls }, `${data.series[hover].calls} 个任务`)}
+                    </div>
+                  </div>
+                )}
+              </div>
             ) : (
               <p className="flex h-[200px] items-center justify-center text-sm text-ink-muted">
                 {error ? '加载失败' : '暂无数据'}
