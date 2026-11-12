@@ -1589,6 +1589,20 @@ def render_final_confirm_reminder(narration: str) -> str:
         f"可用工具：{'、'.join(sorted(CHAT_TOOL_NAMES))}",
     ]
     return "\n".join(lines)
+def render_unfinished_plan_reminder(open_steps: list[str]) -> str:
+    """计划还有未完成步骤时，把“这不是结论”说清楚。"""
+    steps = "、".join(f"#{i}" for i in range(1, len(open_steps) + 1))
+    return (
+        "## ⚠️ 计划尚未完成\n\n"
+        f"结构化计划里仍有未完成步骤（{steps}）。你这次没有调用任何工具，"
+        "但正文看起来是要继续工作，而不是最终结论。\n\n"
+        "请二选一：\n"
+        "1. 还没做完 → 直接写 `ACTION:` 执行下一步；\n"
+        "2. 已经做完 → 先用 `update_todo` 把完成项标为 `done`，再给最终答复。\n\n"
+        "如果确实被阻塞，明确写出阻塞原因，并把对应步骤标成 `pending` 或说明无法继续。"
+    )
+
+
 def render_plan_exhausted_note() -> str:
     """打回额度用尽时，替模型给用户的一句实话（v1.30）。
 

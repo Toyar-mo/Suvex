@@ -79,6 +79,7 @@ from app.chat.prompts import (
     render_format_reminder,
     render_native_tool_note,
     render_plan_exhausted_note,
+    render_unfinished_plan_reminder,
     render_repeated_conclusion_note,
     render_result_continue_reminder,
     render_stall_reminder,
@@ -4187,6 +4188,11 @@ async def run_turn(
             and nudge_policy.looks_like_plan(text)
         )
         result_block = bool(not actions and nudge_policy.looks_like_result(text))
+        todos_now = todo_store.list_todos(db, session.id)
+        open_steps = [row.text for row in todos_now if row.status != "done"]
+        unfinished_plan = bool(
+            not actions and not result_block and open_steps and tools_used > 0
+        )
         # ★ v1.87：渗透任务只做过很少的真实探测就交结果块，不接受。
         #   旧实现只在认证达到 6 次时才会触发；但“SQL 试一下、XSS 试一下”
         #   同样可能只有 1~2 个方向。这里按**实际执行过的非认证动作**算，
@@ -4208,7 +4214,9 @@ async def run_turn(
             result_block and user_continue and result_bounces < 1
         )
         premature_final = (
-            plan_like_final and tools_used > 0 and plan_bounces < MAX_PLAN_BOUNCES
+            (plan_like_final or unfinished_plan)
+            and tools_used > 0
+            and plan_bounces < MAX_PLAN_BOUNCES
         )
         assistant_message = chat_service.append_assistant_message(
             db,
@@ -4284,9 +4292,13 @@ async def run_turn(
                 plan_bounces += 1
                 final_confirmations += 1
                 pending_reminder = (
-                    render_final_confirm_reminder(text)
-                    if said_final
-                    else render_format_reminder()
+                    render_unfinished_plan_reminder(open_steps)
+                    if unfinished_plan
+                    else (
+                        render_final_confirm_reminder(text)
+                        if said_final
+                        else render_format_reminder()
+                    )
                 )
                 await _emit_phase(
                     emit,
@@ -4324,6 +4336,20 @@ async def run_turn(
             #   "说要去做却没写 ACTION"，走下面的纠偏通道（`format`，
             #   额度 `MAX_NARRATION_NUDGES`）更准：它既不该当成答复，
             #   也不该占用"提前宣告结论"的预算。
+            if unfinished_plan:
+                # 计划还有未完成步骤，但这句话既不像计划、也没结果块：
+                # 仍然不能当结论交出去；给用户一句明确的可继续说明。
+                exhausted = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=render_plan_exhausted_note(),
+                )
+                db.commit()
+                result.messages.append(exhausted)
+                result.needs_continue = True
+                await _emit_message(emit, exhausted)
+                return result
+
             if plan_like_final and tools_used > 0:
                 # ★ v1.30：打回额度用完，但这句话仍然是计划 —— **不能当结论
                 #   交出去**。补一句实话，用户才知道该说「继续」。
