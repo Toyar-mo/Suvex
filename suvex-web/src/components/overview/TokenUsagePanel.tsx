@@ -124,13 +124,13 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
           <div className="relative min-h-[220px] rounded-sm border border-line">
             <div className="flex items-center gap-3 px-3 pt-2 text-2xs text-ink-muted">
               <span className="flex items-center gap-1">
-                <span className="size-1.5 rounded-full bg-accent" /> 输入
+                <span className="size-1.5 rounded-full bg-accent" /> {t('overview.token.legendInput', undefined, '输入')}
               </span>
               <span className="flex items-center gap-1">
-                <span className="size-1.5 rounded-full bg-signal-warn" /> 输出
+                <span className="size-1.5 rounded-full bg-signal-warn" /> {t('overview.token.legendOutput', undefined, '输出')}
               </span>
               <span className="flex items-center gap-1">
-                <span className="size-1.5 rounded-full bg-signal-ok" /> 缓存读
+                <span className="size-1.5 rounded-full bg-signal-ok" /> {t('overview.token.legendCache', undefined, '缓存读')}
               </span>
               <span className="ml-auto flex gap-1">
                 {RANGES.map((range) => (

@@ -20,6 +20,9 @@ import { hardcoded_a } from './hardcoded-a'
 import { hardcoded_b } from './hardcoded-b'
 import { hardcoded_c } from './hardcoded-c'
 import { hardcoded_d } from './hardcoded-d'
+import { chat_a } from './chat-a'
+import { chat_b } from './chat-b'
+import { chat_c } from './chat-c'
 
 
 
@@ -39,4 +42,4 @@ const jaExtra: ExtraLocaleMap = {
   de: {},
 }
 
-export const EXTRAS: ExtraLocaleMap[] = [settings_rest, reports, activity_tools, inventory, jaExtra, hardcoded_a, hardcoded_b, hardcoded_c, hardcoded_d]
+export const EXTRAS: ExtraLocaleMap[] = [settings_rest, reports, activity_tools, inventory, jaExtra, hardcoded_a, hardcoded_b, hardcoded_c, hardcoded_d, chat_a, chat_b, chat_c]

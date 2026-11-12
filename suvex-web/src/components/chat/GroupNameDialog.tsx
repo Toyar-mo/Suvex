@@ -98,17 +98,17 @@ export function GroupNameDialog({
       footer={
         <div className="flex items-center justify-end gap-2">
           <Button variant="secondary" size="sm" onClick={onCancel} disabled={busy}>
-            取消
+            {t('chat.c.cancel', undefined, '取消')}
           </Button>
           <Button size="sm" onClick={submit} disabled={busy || (touched && invalid)}>
-            {busy ? '正在移动…' : '新建并移动'}
+            {busy ? t('chat.c.moving', undefined, '正在移动…') : t('chat.c.createAndMove', undefined, '新建并移动')}
           </Button>
         </div>
       }
     >
       <div className="flex flex-col gap-2">
         <label htmlFor="group-name-input" className="text-xs text-ink-muted">
-          分组名字
+          {t('chat.c.groupName', undefined, '分组名字')}
         </label>
         <input
           ref={inputRef}
@@ -133,21 +133,21 @@ export function GroupNameDialog({
         />
         {touched && duplicated && (
           <p role="alert" className="text-2xs text-signal-risk">
-            「{trimmed}」已经是一个分组了，直接在那个分组上点一下就能移过去。
+            {t('chat.c.groupDuplicate', { name: trimmed }, '「{name}」已经是一个分组了，直接在那个分组上点一下就能移过去。')}
           </p>
         )}
         {touched && tooLong && (
           <p role="alert" className="text-2xs text-signal-risk">
-            名字最多 {MAX_LENGTH} 个字符，现在 {trimmed.length} 个。
+            {t('chat.c.groupTooLong', { max: MAX_LENGTH, len: trimmed.length }, '名字最多 {max} 个字符，现在 {len} 个。')}
           </p>
         )}
         {touched && trimmed === '' && (
           <p role="alert" className="text-2xs text-signal-risk">
-            名字不能为空。
+            {t('chat.c.groupRequired', undefined, '名字不能为空。')}
           </p>
         )}
         <p className="text-2xs text-ink-faint">
-          分组不是文件夹：一条对话只在一个分组里，移动会覆盖原来的分组。
+          {t('chat.c.groupHint', undefined, '分组不是文件夹：一条对话只在一个分组里，移动会覆盖原来的分组。')}
         </p>
       </div>
     </Modal>

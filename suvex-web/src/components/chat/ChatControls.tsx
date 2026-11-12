@@ -67,9 +67,15 @@ export function PersonaDialog({
   return (
     <Modal open={open} onClose={onClose} title={t('chat.a11y.pickRole', undefined, '选一个角色')} widthClass="max-w-3xl">
       <p className="mb-3 text-xs text-ink-muted">
-        角色会改变它<b className="font-medium text-ink-muted">关注什么、怎么说</b>；
-        如果这个角色在 Agent 配置里限定了工具，可用工具也会相应收窄。
-        选中后，这段角色说明会进入本轮系统提示词。
+        {t('chat.b.personaIntroLead', undefined, '角色会改变它')}
+        <b className="font-medium text-ink-muted">
+          {t('chat.b.personaIntroFocus', undefined, '关注什么、怎么说')}
+        </b>
+        {t(
+          'chat.b.personaIntroTail',
+          undefined,
+          '；如果这个角色在 Agent 配置里限定了工具，可用工具也会相应收窄。选中后，这段角色说明会进入本轮系统提示词。',
+        )}
       </p>
       <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {personas.map((persona) => {
@@ -307,11 +313,12 @@ export function ProviderSelect({
     }
   }, [open])
 
+  const defaultLabel = t('chat.b.providerDefault', undefined, '平台默认模型')
   const items = [
-    { id: '', label: '平台默认模型' },
+    { id: '', label: defaultLabel },
     ...providers.map((provider) => ({ id: provider.id, label: provider.label })),
   ]
-  const current = items.find((item) => item.id === (value ?? ''))?.label ?? '平台默认模型'
+  const current = items.find((item) => item.id === (value ?? ''))?.label ?? defaultLabel
 
   return (
     <div ref={boxRef} className="relative">
@@ -619,10 +626,14 @@ export function ProjectInput({
           'disabled:cursor-not-allowed disabled:opacity-50',
           value ? 'text-ink' : '',
         )}
-        title={value ? `项目：${value}` : '归到一个项目里（侧栏会分组）'}
+        title={
+          value
+            ? t('chat.b.projectTitle', { name: value }, `项目：${value}`)
+            : t('chat.b.projectHint', undefined, '归到一个项目里（侧栏会分组）')
+        }
       >
         <FolderPlus size={12} strokeWidth={2} className="text-ink-faint" aria-hidden="true" />
-        <span className="max-w-24 truncate">{value || '无项目'}</span>
+        <span className="max-w-24 truncate">{value || t('chat.b.noProject', undefined, '无项目')}</span>
       </button>
     )
   }
@@ -770,7 +781,7 @@ export function AttachmentBar({
         type="button"
         onClick={() => inputRef.current?.click()}
         disabled={disabled || uploading}
-        aria-label={inline ? '附件' : undefined}
+        aria-label={inline ? t('chat.b.attachment', undefined, '附件') : undefined}
         className={cn(
           'flex items-center gap-1 text-2xs transition-ui duration-fast',
           'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
@@ -793,7 +804,10 @@ export function AttachmentBar({
         ) : (
           <Paperclip size={13} strokeWidth={2} aria-hidden="true" />
         )}
-        {!inline && (uploading ? '上传中…' : '附件')}
+        {!inline &&
+          (uploading
+            ? t('chat.b.uploading', undefined, '上传中…')
+            : t('chat.b.attachment', undefined, '附件'))}
       </button>
 
       {attachments.map((attachment) => (
@@ -818,7 +832,11 @@ export function AttachmentBar({
               'rounded-xs p-0.5 text-ink-faint transition-ui duration-fast',
               'hover:text-signal-risk focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             )}
-            aria-label={`移除附件 ${attachment.name}`}
+            aria-label={t(
+              'chat.b.removeAttachment',
+              { name: attachment.name },
+              `移除附件 ${attachment.name}`,
+            )}
           >
             <X size={10} strokeWidth={2.5} aria-hidden="true" />
           </button>
@@ -847,6 +865,7 @@ export function ApprovalToggle({
   onChange: (enabled: boolean) => void
   disabled?: boolean
 }) {
+  const { t } = useI18n()
   return (
     <button
       type="button"
@@ -865,8 +884,16 @@ export function ApprovalToggle({
       )}
       title={
         enabled
-          ? '有副作用的操作（建扫描、改技能库、加 MCP）会先停下来等你确认'
-          : '它可以直接执行有副作用的操作，不再问你'
+          ? t(
+              'chat.b.approvalOnHint',
+              undefined,
+              '有副作用的操作（建扫描、改技能库、加 MCP）会先停下来等你确认',
+            )
+          : t(
+              'chat.b.approvalOffHint',
+              undefined,
+              '它可以直接执行有副作用的操作，不再问你',
+            )
       }
     >
       {enabled ? (
@@ -874,7 +901,9 @@ export function ApprovalToggle({
       ) : (
         <Shield size={12} strokeWidth={2} aria-hidden="true" />
       )}
-      {enabled ? '执行前确认' : '直接执行'}
+      {enabled
+        ? t('chat.b.approvalOnLabel', undefined, '执行前确认')
+        : t('chat.b.approvalOffLabel', undefined, '直接执行')}
     </button>
   )
 }
@@ -891,10 +920,16 @@ export function ApprovalToggle({
  * 只看到 `{"models":[...],"maxConcurrent":2}` 用户没法判断该不该点「执行」。
  * 这里补一句直白的说明；没登记的工具照旧只显示名字 + 参数。
  */
-const APPROVAL_TOOL_HINTS: Record<string, string> = {
-  start_competition_race:
-    '赛事自动托管：自动拉取整场比赛的题，用多个模型对每道题赛跑解题，先解出的模型胜出，并会把 flag 自动提交（每题有提交次数上限）。会消耗较多算力/费用。',
-  stop_competition_race: '停止正在进行的赛事自动托管（正在跑的那道题会在工具返回后结束）。',
+const APPROVAL_TOOL_HINTS: Record<string, { key: string; fallback: string }> = {
+  start_competition_race: {
+    key: 'chat.b.approvalHint.startCompetitionRace',
+    fallback:
+      '赛事自动托管：自动拉取整场比赛的题，用多个模型对每道题赛跑解题，先解出的模型胜出，并会把 flag 自动提交（每题有提交次数上限）。会消耗较多算力/费用。',
+  },
+  stop_competition_race: {
+    key: 'chat.b.approvalHint.stopCompetitionRace',
+    fallback: '停止正在进行的赛事自动托管（正在跑的那道题会在工具返回后结束）。',
+  },
 }
 
 export function ApprovalCard({
@@ -906,8 +941,10 @@ export function ApprovalCard({
   onDecide: (approve: boolean) => void
   disabled?: boolean
 }) {
+  const { t } = useI18n()
   const args = message.toolArgs
-  const hint = message.toolName ? APPROVAL_TOOL_HINTS[message.toolName] : undefined
+  const hintEntry = message.toolName ? APPROVAL_TOOL_HINTS[message.toolName] : undefined
+  const hint = hintEntry ? t(hintEntry.key, undefined, hintEntry.fallback) : undefined
   return (
     <div className="flex flex-col gap-1.5 rounded-sm border border-accent/40 bg-accent/5 px-2.5 py-2">
       <div className="flex items-center gap-1.5">
@@ -916,7 +953,9 @@ export function ApprovalCard({
       </div>
       <div className="text-2xs text-ink-muted">
         <span className="text-ink-faint"><T k="chatmsg.tool"/></span>
-        <code className="font-mono text-ink">{message.toolName ?? '（未知）'}</code>
+        <code className="font-mono text-ink">
+          {message.toolName ?? t('chat.b.unknownTool', undefined, '（未知）')}
+        </code>
       </div>
       {hint && <p className="text-2xs leading-relaxed text-ink-muted">{hint}</p>}
       {args && Object.keys(args).length > 0 && (
@@ -931,10 +970,10 @@ export function ApprovalCard({
       )}
       <div className="flex items-center gap-1.5">
         <Button size="sm" variant="primary" onClick={() => onDecide(true)} disabled={disabled}>
-          执行
+          {t('chat.b.approve', undefined, '执行')}
         </Button>
         <Button size="sm" variant="secondary" onClick={() => onDecide(false)} disabled={disabled}>
-          拒绝
+          {t('chat.b.reject', undefined, '拒绝')}
         </Button>
         {disabled && <span className="text-2xs text-ink-faint"><T k="chatmsg.processing"/></span>}
       </div>

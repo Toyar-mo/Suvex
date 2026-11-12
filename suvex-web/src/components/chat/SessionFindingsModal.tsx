@@ -16,6 +16,7 @@ import { Modal } from '@/components/ui/Modal'
 import { SeverityBadge, StatusBadge } from '@/components/findings/FindingBadges'
 import type { FindingListItem } from '@/data/finding'
 import { scanFindingsHref } from '@/data/session-insight'
+import { useI18n } from '@/i18n'
 
 export interface SessionFindingsModalProps {
   open: boolean
@@ -38,35 +39,42 @@ export function SessionFindingsModal({
   error,
   onRetry,
 }: SessionFindingsModalProps) {
+  const { t } = useI18n()
   return (
     <Modal
       open={open}
       onClose={onClose}
       widthClass="max-w-2xl"
       /* 同理保持纯字符串，弹窗才有可访问名。 */
-      title={`关联漏洞（${loading ? '载入中…' : `${items.length} 条 · ${scanIds.length} 个扫描`}）`}
+      title={
+        loading
+          ? t('chat.c.findingsTitleLoading', undefined, '关联漏洞（载入中…）')
+          : t('chat.c.findingsTitle', { count: items.length, scans: scanIds.length }, '关联漏洞（{count} 条 · {scans} 个扫描）')
+      }
     >
       <div className="space-y-3">
         <p className="text-2xs text-ink-faint">
-          会话「{sessionTitle}」里创建或提到过的扫描，所产生的漏洞结论。
+          {t('chat.c.findingsDesc', { title: sessionTitle }, '会话「{title}」里创建或提到过的扫描，所产生的漏洞结论。')}
         </p>
 
         {loading && (
           <p data-findings-loading className="py-8 text-center text-xs text-ink-faint">
-            正在取关联漏洞…
+            {t('chat.c.findingsLoading', undefined, '正在取关联漏洞…')}
           </p>
         )}
 
         {!loading && error && (
           <div data-findings-error className="space-y-2 rounded-sm bg-surface-raised p-3">
-            <p className="text-xs text-signal-risk">取关联漏洞失败：{error}</p>
+            <p className="text-xs text-signal-risk">
+              {t('chat.c.findingsError', { error: error ?? '' }, '取关联漏洞失败：{error}')}
+            </p>
             {onRetry && (
               <button
                 type="button"
                 onClick={onRetry}
                 className="rounded-xs border border-line px-2 py-1 text-2xs text-ink hover:bg-surface-raised"
               >
-                重试
+                {t('chat.c.retry', undefined, '重试')}
               </button>
             )}
           </div>
@@ -74,13 +82,13 @@ export function SessionFindingsModal({
 
         {!loading && !error && scanIds.length === 0 && (
           <p data-findings-empty="no-scan" className="py-8 text-center text-xs text-ink-faint">
-            这个对话里还没有创建过扫描，所以没有可关联的漏洞。
+            {t('chat.c.findingsNoScan', undefined, '这个对话里还没有创建过扫描，所以没有可关联的漏洞。')}
           </p>
         )}
 
         {!loading && !error && scanIds.length > 0 && items.length === 0 && (
           <p data-findings-empty="no-finding" className="py-8 text-center text-xs text-ink-faint">
-            关联的 {scanIds.length} 个扫描还没有产出漏洞结论。
+            {t('chat.c.findingsNoFinding', { n: scanIds.length }, '关联的 {n} 个扫描还没有产出漏洞结论。')}
           </p>
         )}
 
@@ -95,7 +103,7 @@ export function SessionFindingsModal({
                     to={scanFindingsHref(item.scanId)}
                     className="ml-auto text-2xs text-accent hover:underline"
                   >
-                    查看
+                    {t('chat.c.view', undefined, '查看')}
                   </Link>
                 </div>
                 <p className="mt-1 break-words text-xs text-ink">{item.title}</p>

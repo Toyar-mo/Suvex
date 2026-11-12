@@ -4,7 +4,25 @@ import { PRINT_INK, PRINT_SEVERITY, PRINT_SYNTAX, type ReportFormat } from '@/da
 import { tokenize, type TokenKind } from '@/lib/highlight'
 import { coverageNote, type ReportDocument, type ReportEntry } from '@/lib/report-document'
 import { useI18n } from '@/i18n'
+import { FINDING_CATEGORY_LABEL, FINDING_STATUS_LABEL, VERIFICATION_LABEL } from '@/data/finding'
 import { type CSSProperties, type ReactNode } from 'react'
+
+// 后端文档只给了本地化标签，反查枚举才能按界面语言重渲染
+const CATEGORY_BY_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(FINDING_CATEGORY_LABEL).map(([k, v]) => [v, k]),
+)
+const STATUS_BY_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(FINDING_STATUS_LABEL).map(([k, v]) => [v, k]),
+)
+const VERIFICATION_BY_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(VERIFICATION_LABEL).map(([k, v]) => [v, k]),
+)
+const localizedLabel = (
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+  prefix: string,
+  lookup: Record<string, string>,
+  label: string,
+) => (lookup[label] ? t(`${prefix}.${lookup[label]}`, undefined, label) : label)
 
 /**
  * 报告纸 —— 报告的**唯一渲染源**。
@@ -529,13 +547,16 @@ function Entry({ entry }: { entry: ReportEntry }) {
           {t(`severity.${entry.severity}`, undefined, entry.severityLabel)}
         </span>
 
-        <Attr label={t('report.entry.type', undefined, '类型')} value={entry.categoryLabel} />
+        <Attr
+          label={t('report.entry.type', undefined, '类型')}
+          value={localizedLabel(t, 'findings.category', CATEGORY_BY_LABEL, entry.categoryLabel)}
+        />
         <Attr label={t('report.entry.target', undefined, '目标')} value={entry.target} mono />
         <Attr
           label={t('report.entry.verification', undefined, '验证程度')}
-          value={entry.verificationLabel}
+          value={localizedLabel(t, 'findings2.verification', VERIFICATION_BY_LABEL, entry.verificationLabel)}
         />
-        <Attr label={t('report.entry.status', undefined, '处置状态')} value={entry.statusLabel} />
+        <Attr label={t('report.entry.status', undefined, '处置状态')} value={localizedLabel(t, 'findings.status', STATUS_BY_LABEL, entry.statusLabel)} />
         <Attr
           label={t('report.entry.discoveredAt', undefined, '发现时间')}
           value={entry.discoveredAt}
@@ -850,7 +871,7 @@ function SeverityKey({ doc }: { doc: ReportDocument }) {
                   {t(`severity.${item.severity}`, undefined, item.label)}
                 </span>
               </Td>
-              <Td>{item.definition}</Td>
+              <Td>{t(`severity.${item.severity}.definition`, undefined, item.definition)}</Td>
             </tr>
           ))}
         </tbody>

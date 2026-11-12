@@ -24,11 +24,11 @@ export interface SessionAttackChainModalProps {
   error?: string | null
 }
 
-const KIND_TONE: Record<AttackStep['kind'], { dot: string; text: string; label: string }> = {
-  ask: { dot: 'bg-accent', text: 'text-ink', label: '提问' },
-  plan: { dot: 'bg-ink-faint', text: 'text-ink-muted', label: '决策' },
-  tool: { dot: 'bg-signal-info', text: 'text-ink', label: '工具' },
-  answer: { dot: 'bg-signal-ok', text: 'text-ink', label: '回答' },
+const KIND_TONE: Record<AttackStep['kind'], { dot: string; text: string; key: string; fallback: string }> = {
+  ask: { dot: 'bg-accent', text: 'text-ink', key: 'chat.c.kindAsk', fallback: '提问' },
+  plan: { dot: 'bg-ink-faint', text: 'text-ink-muted', key: 'chat.c.kindDecision', fallback: '决策' },
+  tool: { dot: 'bg-signal-info', text: 'text-ink', key: 'chat.c.kindTool', fallback: '工具' },
+  answer: { dot: 'bg-signal-ok', text: 'text-ink', key: 'chat.c.kindAnswer', fallback: '回答' },
 }
 
 export function SessionAttackChainModal({
@@ -53,24 +53,28 @@ export function SessionAttackChainModal({
           `aria-label`，换成 ReactNode 会让弹窗失去可访问名（读屏器读不出
           "这是什么弹窗"）。摘要就写在括号里，一行说清。
       */
-      title={`攻击链（${summary.asks} 问 · ${summary.tools} 次工具${summary.failed > 0 ? ` · ${summary.failed} 次失败` : ''}）`}
+      title={
+        summary.failed > 0
+          ? t('chat.c.chainTitleFailed', { asks: summary.asks, tools: summary.tools, failed: summary.failed }, '攻击链（{asks} 问 · {tools} 次工具 · {failed} 次失败）')
+          : t('chat.c.chainTitle', { asks: summary.asks, tools: summary.tools }, '攻击链（{asks} 问 · {tools} 次工具）')
+      }
     >
       <div className="space-y-3">
         <p className="text-2xs text-ink-faint">
-          会话「{sessionTitle}」的步骤序列。按时间顺序，从聊天记录还原 —— 不做语义推断。
+          {t('chat.c.chainDesc', { title: sessionTitle }, '会话「{title}」的步骤序列。按时间顺序，从聊天记录还原 —— 不做语义推断。')}
         </p>
 
         {loading ? (
           <p data-chain-loading className="py-8 text-center text-xs text-ink-faint">
-            正在取这个会话的消息…
+            {t('chat.c.chainLoading', undefined, '正在取这个会话的消息…')}
           </p>
         ) : error ? (
           <p data-chain-error className="py-8 text-center text-xs text-signal-risk">
-            取消息失败：{error}
+            {t('chat.c.chainError', { error }, '取消息失败：{error}')}
           </p>
         ) : steps.length === 0 ? (
           <p className="py-8 text-center text-xs text-ink-faint">
-            这个对话还没有内容，没有可展示的步骤。
+            {t('chat.c.chainEmpty', undefined, '这个对话还没有内容，没有可展示的步骤。')}
           </p>
         ) : (
           <ol data-attack-chain className="relative space-y-0 border-l border-line pl-4">
@@ -97,17 +101,17 @@ export function SessionAttackChainModal({
                         step.failed ? 'text-signal-risk' : 'text-ink-faint',
                       )}
                     >
-                      {tone.label}
+                      {t(tone.key, undefined, tone.fallback)}
                     </span>
                     <span className={cn('text-xs font-medium', tone.text)}>{step.label}</span>
                     {step.failed && (
                       <span className="text-2xs text-signal-risk" title={t('chat.a11y.stepFailed', undefined, '这一步失败了')}>
-                        失败
+                        {t('chat.c.failed', undefined, '失败')}
                       </span>
                     )}
                   </div>
                   <p className="mt-1 break-words text-2xs leading-relaxed text-ink-muted">
-                    {step.detail || '（无内容）'}
+                    {step.detail || t('chat.c.noContent', undefined, '（无内容）')}
                   </p>
                 </li>
               )
@@ -116,7 +120,9 @@ export function SessionAttackChainModal({
         )}
 
         {summary.toolNames.length > 0 && (
-          <p className="text-2xs text-ink-faint">用到的工具：{summary.toolNames.join('、')}</p>
+          <p className="text-2xs text-ink-faint">
+            {t('chat.c.toolsUsed', { tools: summary.toolNames.join(t('chat.c.listSeparator', undefined, '、')) }, '用到的工具：{tools}')}
+          </p>
         )}
       </div>
     </Modal>

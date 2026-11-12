@@ -73,7 +73,10 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
     if (!flag) return
     void copyText(flag).then((ok) => {
       if (!ok) {
-        showToast({ message: '复制失败，请手动选中后按 Ctrl+C', tone: 'risk' })
+        showToast({
+          message: t('chat.a.copyFailed', undefined, '复制失败，请手动选中后按 Ctrl+C'),
+          tone: 'risk',
+        })
         return
       }
       setCopied(true)
@@ -93,7 +96,12 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
             result.status === 'correct' ? 'ok' : result.status === 'wrong' ? undefined : 'risk',
         })
       })
-      .catch((err) => showToast({ message: `提交失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) =>
+        showToast({
+          message: t('chat.a.submitFailed', { error: errorMessage(err) }, `提交失败：${errorMessage(err)}`),
+          tone: 'risk',
+        }),
+      )
       .finally(() => setBusy(false))
   }
 
@@ -113,7 +121,9 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
             )}
             aria-hidden="true"
           />
-          <span className="text-2xs text-ink-muted">{CHALLENGE_STATUS_LABEL[status]}</span>
+          <span className="text-2xs text-ink-muted">
+            {t(`chat.a.challengeStatus.${status}`, undefined, CHALLENGE_STATUS_LABEL[status])}
+          </span>
         </span>
 
         <span className="min-w-0 flex-1 truncate text-xs text-ink" title={challenge.title}>
@@ -121,7 +131,9 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
         </span>
 
         {score !== null && (
-          <span className="tabular shrink-0 text-2xs text-ink-faint">{score} 分</span>
+          <span className="tabular shrink-0 text-2xs text-ink-faint">
+            {t('chat.a.score', { score }, `${score} 分`)}
+          </span>
         )}
 
         {flag && (
@@ -162,7 +174,7 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
             )}
           >
             <ShieldCheck size={11} strokeWidth={2} aria-hidden="true" />
-            确认提交
+            {t('chat.a.confirmSubmit', undefined, '确认提交')}
           </button>
         )}
 
@@ -170,7 +182,7 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
           to="/kernel"
           className="shrink-0 text-2xs text-accent-strong underline hover:text-accent"
         >
-          看板
+          {t('chat.a.board', undefined, '看板')}
         </Link>
       </div>
 
@@ -195,12 +207,17 @@ export function ChallengeBar({ challenge }: { challenge: ChatChallengeRef }) {
  *   而用户记得自己是从某道题点进来的。"题目已不存在"至少解释了这个落差。
  */
 export function MissingChallengeBar() {
+  const { t } = useI18n()
   return (
     <div className="flex shrink-0 items-center gap-2 border-b border-line bg-surface-sunken px-3 py-1.5 text-2xs text-ink-faint">
       <TriangleAlert size={12} strokeWidth={2} aria-hidden="true" />
-      关联的题目已不存在（可能已重新同步或换了接入）—— 这段对话仍然保留。
+      {t(
+        'chat.a.missingChallenge',
+        undefined,
+        '关联的题目已不存在（可能已重新同步或换了接入）—— 这段对话仍然保留。',
+      )}
       <Link to="/kernel" className="ml-auto text-accent-strong underline hover:text-accent">
-        看板
+        {t('chat.a.board', undefined, '看板')}
       </Link>
     </div>
   )

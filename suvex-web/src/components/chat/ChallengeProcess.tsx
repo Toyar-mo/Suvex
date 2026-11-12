@@ -36,7 +36,7 @@ export function ChallengeProcess({
   /** 题还在解 → 持续刷新；终态只拉一次 */
   running: boolean
 }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [error, setError] = useState<string | null>(null)
   /**
@@ -88,7 +88,11 @@ export function ChallengeProcess({
   if (!scanId) {
     return (
       <p className="text-2xs text-ink-faint">
-        这道题还没有开始解题 —— 点题目条右侧的「看板」回去，用「开始」或「再解」发起。
+        {t(
+          'chat.a.processNoStart',
+          undefined,
+          '这道题还没有开始解题 —— 点题目条右侧的「看板」回去，用「开始」或「再解」发起。',
+        )}
       </p>
     )
   }
@@ -100,22 +104,34 @@ export function ChallengeProcess({
         {/* ★ 不在跑时**必须**说清这是旧记录：事件是绑定在这道题上一次
             解题的 scan 上的，新一轮排队时它还没换 —— 不标注的话，用户会把
             几小时前的工具调用当成"现在正在做的事"。 */}
-        {running ? '解题过程' : '上一次运行的过程'}
+        {running
+          ? t('chat.a.processTitle', undefined, '解题过程')
+          : t('chat.a.processLastRun', undefined, '上一次运行的过程')}
         {running && (
           <span className="flex items-center gap-1 text-accent-strong">
             <span className="h-1 w-1 animate-pulse rounded-pill bg-accent" aria-hidden="true" />
-            进行中
+            {t('chat.a.processInProgress', undefined, '进行中')}
           </span>
         )}
-        <span className="ml-auto">{events.length} 条</span>
+        <span className="ml-auto">
+          {t('chat.a.processEventCount', { n: events.length }, `${events.length} 条`)}
+        </span>
       </div>
 
       {missing ? (
         <p className="text-2xs text-ink-faint">
-          这一轮对应的扫描记录已被清理，过程不再可读。结论与产物（题解、工单）不受影响。
+          {t(
+            'chat.a.processMissing',
+            undefined,
+            '这一轮对应的扫描记录已被清理，过程不再可读。结论与产物（题解、工单）不受影响。',
+          )}
         </p>
       ) : (
-        error && <p className="text-2xs text-signal-risk">读不到过程事件：{error}</p>
+        error && (
+          <p className="text-2xs text-signal-risk">
+            {t('chat.a.processReadError', { error }, `读不到过程事件：${error}`)}
+          </p>
+        )
       )}
 
       {!missing && !running && events.length > 0 && (
@@ -124,7 +140,9 @@ export function ChallengeProcess({
 
       {!missing && !error && events.length === 0 && (
         <p className="text-2xs text-ink-faint">
-          {running ? '刚开跑，还没有产生动作。' : '这一轮没有留下过程记录。'}
+          {running
+            ? t('chat.a.processEmptyRunning', undefined, '刚开跑，还没有产生动作。')
+            : t('chat.a.processEmptyIdle', undefined, '这一轮没有留下过程记录。')}
         </p>
       )}
 
@@ -138,7 +156,7 @@ export function ChallengeProcess({
               className="flex min-w-0 items-baseline gap-2 rounded-sm px-1.5 py-0.5 text-2xs hover:bg-surface-sunken"
             >
               <span className="tabular shrink-0 text-ink-ghost">
-                {new Date(event.at).toLocaleTimeString('zh-CN', { hour12: false })}
+                {new Date(event.at).toLocaleTimeString(locale, { hour12: false })}
               </span>
               <span
                 className={cn(
@@ -150,7 +168,7 @@ export function ChallengeProcess({
                       : 'text-ink-faint',
                 )}
               >
-                {EVENT_TYPE_LABEL[event.type]}
+                {t(`chat.a.eventType.${event.type}`, undefined, EVENT_TYPE_LABEL[event.type])}
               </span>
               <span
                 className="min-w-0 flex-1 truncate text-ink-muted"

@@ -121,23 +121,27 @@ export function SessionBatchModal({
     <Modal
       open={open}
       onClose={onClose}
-      title={`批量管理对话${pickedIds.length > 0 ? `（已选 ${pickedIds.length} 条）` : ''}`}
+      title={
+        pickedIds.length > 0
+          ? t('chat.c.batchTitleSelected', { n: pickedIds.length }, '批量管理对话（已选 {n} 条）')
+          : t('chat.c.batchTitle', undefined, '批量管理对话')
+      }
       widthClass="max-w-2xl"
       footer={
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <label htmlFor="batch-move-select" className="text-xs text-ink-muted">
-              移动到
+              {t('chat.c.moveTo', undefined, '移动到')}
             </label>
             <Select
               id="batch-move-select"
               size="sm"
               value={moveTo}
               options={[
-                { value: '', label: '选择分组…' },
+                { value: '', label: t('chat.c.selectGroup', undefined, '选择分组…') },
                 ...projects.map((name) => ({ value: name, label: name })),
-                { value: '__none__', label: '无分组' },
-                { value: '__new__', label: '＋ 新建分组…' },
+                { value: '__none__', label: t('chat.c.noGroup', undefined, '无分组') },
+                { value: '__new__', label: t('chat.c.createGroupOption', undefined, '＋ 新建分组…') },
               ]}
               onChange={(value) => {
                 setMoveTo(value)
@@ -181,15 +185,15 @@ export function SessionBatchModal({
                   if (moveTo === '__new__') {
                     const name = newGroup.trim()
                     if (!name) {
-                      setNewGroupError('名字不能为空')
+                      setNewGroupError(t('chat.c.nameRequired', undefined, '名字不能为空'))
                       return
                     }
                     if (name.length > 24) {
-                      setNewGroupError('最多 24 个字符')
+                      setNewGroupError(t('chat.c.nameTooLong', { max: 24 }, '最多 {max} 个字符'))
                       return
                     }
                     if (projects.includes(name)) {
-                      setNewGroupError(`「${name}」已存在，直接选它即可`)
+                      setNewGroupError(t('chat.c.groupExists', { name }, '「{name}」已存在，直接选它即可'))
                       return
                     }
                     await onCreateGroup(pickedIds, name)
@@ -208,7 +212,7 @@ export function SessionBatchModal({
                 })()
               }}
             >
-              应用
+              {t('chat.c.apply', undefined, '应用')}
             </Button>
           </div>
           <Button
@@ -228,13 +232,13 @@ export function SessionBatchModal({
                 setPicked(new Set(failedIds))
                 setArchiveResult(
                   failedIds.length === 0
-                    ? `已删除 ${okCount} 条对话。`
-                    : `已删除 ${okCount} 条；${failedIds.length} 条失败，失败的仍在选中里，可以直接重试。`,
+                    ? t('chat.c.deleteDone', { ok: okCount }, '已删除 {ok} 条对话。')
+                    : t('chat.c.deletePartial', { ok: okCount, failed: failedIds.length }, '已删除 {ok} 条；{failed} 条失败，失败的仍在选中里，可以直接重试。'),
                 )
               })()
             }}
           >
-            删除选中的 {pickedIds.length} 条
+            {t('chat.c.deleteSelected', { n: pickedIds.length }, '删除选中的 {n} 条')}
           </Button>
         </div>
       }
@@ -253,9 +257,9 @@ export function SessionBatchModal({
             size="sm"
             value={projectFilter}
             options={[
-              { value: '', label: '全部分组' },
+              { value: '', label: t('chat.c.allGroups', undefined, '全部分组') },
               ...projects.map((name) => ({ value: name, label: name })),
-              { value: '__none__', label: '无分组' },
+              { value: '__none__', label: t('chat.c.noGroup', undefined, '无分组') },
             ]}
             onChange={setProjectFilter}
             ariaLabel={t('chat.a11y.filterGroup', undefined, '按分组筛选')}
@@ -279,7 +283,9 @@ export function SessionBatchModal({
             label={t('chat.a11y.selectAll', undefined, '全选')}
           />
           <span className="text-xs text-ink-muted">
-            共 {filtered.length} 条{query.trim() ? '（已过滤）' : ''}
+            {query.trim()
+              ? t('chat.c.totalCountFiltered', { n: filtered.length }, '共 {n} 条（已过滤）')
+              : t('chat.c.totalCount', { n: filtered.length }, '共 {n} 条')}
           </span>
         </div>
         <ul className="flex max-h-[46vh] flex-col gap-0.5 overflow-y-auto">
@@ -298,14 +304,15 @@ export function SessionBatchModal({
                   id={`batch-pick-${session.id}`}
                   checked={picked.has(session.id)}
                   onChange={() => toggleOne(session.id)}
-                  label={`选择「${session.title || '未命名对话'}」`}
+                  label={t('chat.c.selectSession', { title: session.title || t('chat.c.untitled', undefined, '未命名对话') }, '选择「{title}」')}
                 />
                 <span className="min-w-0 flex-1 truncate text-xs text-ink">
-                  {session.title || '未命名对话'}
+                  {session.title || t('chat.c.untitled', undefined, '未命名对话')}
                 </span>
                 <span className="shrink-0 text-2xs text-ink-faint">
                   {/* 「条」单独出现时不知道数的是什么 —— 这里是消息条数（含工具调用记录） */}
-                  {session.project?.trim() || '无分组'} · {session.messageCount} 条消息
+                  {session.project?.trim() || t('chat.c.noGroup', undefined, '无分组')} ·{' '}
+                  {t('chat.c.messageCount', { n: session.messageCount }, '{n} 条消息')}
                 </span>
               </label>
             </li>

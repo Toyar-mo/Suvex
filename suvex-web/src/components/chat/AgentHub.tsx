@@ -254,7 +254,9 @@ export function AgentHub({
                                 )}
                               >
                                 {message.toolName ?? 'tool'}
-                                {message.toolFailed ? ' · 失败' : ''}
+                                {message.toolFailed
+                                  ? t('chat.b.toolFailedSuffix', undefined, ' · 失败')
+                                  : ''}
                               </p>
                             ) : message.surface === 'process' ? (
                               <p className="whitespace-pre-wrap break-words text-ink-faint">

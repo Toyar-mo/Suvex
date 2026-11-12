@@ -165,13 +165,13 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
   const insightItems: MenuItem[] = [
     {
       key: 'chain',
-      label: '查看攻击链',
+      label: t('chat.c.viewAttackChain', undefined, '查看攻击链'),
       icon: <Network size={14} strokeWidth={2} />,
       onSelect: props.onViewAttackChain,
     },
     {
       key: 'vulns',
-      label: '查看漏洞',
+      label: t('chat.c.viewFindings', undefined, '查看漏洞'),
       icon: <Bug size={14} strokeWidth={2} />,
       onSelect: props.onViewFindings,
     },
@@ -180,41 +180,41 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
   const items: MenuItem[] = archived
     ? [
         ...insightItems,
-        { key: 'unarchive', label: '恢复此对话', icon: <RotateCcw size={14} strokeWidth={2} />, onSelect: props.onUnarchive },
+        { key: 'unarchive', label: t('chat.c.restore', undefined, '恢复此对话'), icon: <RotateCcw size={14} strokeWidth={2} />, onSelect: props.onUnarchive },
         {
           key: 'download',
-          label: '下载 Markdown',
+          label: t('chat.c.downloadMarkdown', undefined, '下载 Markdown'),
           icon: <Download size={14} strokeWidth={2} />,
           submenu: [
-            { key: 'md-summary', label: '精简', onSelect: () => props.onDownload('summary') },
-            { key: 'md-full', label: '完整（含工具详情）', onSelect: () => props.onDownload('full') },
+            { key: 'md-summary', label: t('chat.c.downloadSummary', undefined, '精简'), onSelect: () => props.onDownload('summary') },
+            { key: 'md-full', label: t('chat.c.downloadFull', undefined, '完整（含工具详情）'), onSelect: () => props.onDownload('full') },
           ],
         },
-        { key: 'purge', label: '彻底删除', icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onPurge },
+        { key: 'purge', label: t('chat.c.purge', undefined, '彻底删除'), icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onPurge },
       ]
     : [
         ...insightItems,
         {
           key: 'download',
-          label: '下载 Markdown',
+          label: t('chat.c.downloadMarkdown', undefined, '下载 Markdown'),
           icon: <Download size={14} strokeWidth={2} />,
           submenu: [
-            { key: 'md-summary', label: '精简', onSelect: () => props.onDownload('summary') },
-            { key: 'md-full', label: '完整（含工具详情）', onSelect: () => props.onDownload('full') },
+            { key: 'md-summary', label: t('chat.c.downloadSummary', undefined, '精简'), onSelect: () => props.onDownload('summary') },
+            { key: 'md-full', label: t('chat.c.downloadFull', undefined, '完整（含工具详情）'), onSelect: () => props.onDownload('full') },
           ],
         },
-        { key: 'fork', label: '创建分支', icon: <GitBranch size={14} strokeWidth={2} />, onSelect: props.onFork },
-        { key: 'rename', label: '重命名', icon: <Type size={14} strokeWidth={2} />, onSelect: props.onRename },
+        { key: 'fork', label: t('chat.c.fork', undefined, '创建分支'), icon: <GitBranch size={14} strokeWidth={2} />, onSelect: props.onFork },
+        { key: 'rename', label: t('chat.c.rename', undefined, '重命名'), icon: <Type size={14} strokeWidth={2} />, onSelect: props.onRename },
         {
           key: 'pin',
-          label: pinned ? '取消置顶' : '置顶此对话',
+          label: pinned ? t('chat.c.unpin', undefined, '取消置顶') : t('chat.c.pin', undefined, '置顶此对话'),
           icon: pinned ? <PinOff size={14} strokeWidth={2} /> : <Pin size={14} strokeWidth={2} />,
           onSelect: props.onTogglePin,
         },
-        { key: 'batch', label: '批量管理', icon: <MoreHorizontal size={14} strokeWidth={2} />, onSelect: props.onBatchManage },
+        { key: 'batch', label: t('chat.c.batchManage', undefined, '批量管理'), icon: <MoreHorizontal size={14} strokeWidth={2} />, onSelect: props.onBatchManage },
         {
           key: 'move',
-          label: '移动到分组',
+          label: t('chat.c.moveToGroup', undefined, '移动到分组'),
           icon: <Archive size={14} strokeWidth={2} />,
           /*
             ★ 分组就是 `project` 字段，没有独立的 project 表（见 ChatPage 的注释）。
@@ -232,7 +232,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
             */
             {
               key: 'mv-new',
-              label: '新建分组…',
+              label: t('chat.c.newGroup', undefined, '新建分组…'),
               onSelect: props.onMoveToNew,
             },
             ...projects.map((name) => ({
@@ -242,13 +242,13 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
             })),
             {
               key: 'mv-none',
-              label: currentProject ? '无分组' : '✓ 无分组',
+              label: currentProject ? t('chat.c.noGroup', undefined, '无分组') : t('chat.c.noGroupChecked', undefined, '✓ 无分组'),
               onSelect: () => props.onMoveTo(null),
             },
           ],
         },
-        { key: 'archive', label: '归档此对话', icon: <Archive size={14} strokeWidth={2} />, onSelect: props.onArchive },
-        { key: 'purge', label: '彻底删除', icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onPurge },
+        { key: 'archive', label: t('chat.c.archive', undefined, '归档此对话'), icon: <Archive size={14} strokeWidth={2} />, onSelect: props.onArchive },
+        { key: 'purge', label: t('chat.c.purge', undefined, '彻底删除'), icon: <Trash2 size={14} strokeWidth={2} />, danger: true, onSelect: props.onPurge },
       ]
 
   return createPortal(

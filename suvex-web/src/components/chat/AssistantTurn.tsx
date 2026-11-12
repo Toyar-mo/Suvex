@@ -6,7 +6,10 @@ import { InterjectionNote } from '@/components/chat/InterjectionNote'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
+import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/data/chat'
+
+type Translate = (key: string, vars?: Record<string, string | number>, fallback?: string) => string
 
 /**
  * 一个助手回合。
@@ -136,6 +139,7 @@ function AssistantTurnImpl({
   hideWork?: boolean
   startedAt?: string | null
 }) {
+  const { t, locale } = useI18n()
   const answers = items.filter(isAnswer)
   const work = items.filter((message) => !isAnswer(message))
   const body = work.filter((message) => message.approvalStatus !== 'pending')
@@ -192,7 +196,7 @@ function AssistantTurnImpl({
 
       {hideWork && items.length > 0 && !hasAnswer && !live && (
         <p className="text-2xs text-ink-faint" data-answers-only-placeholder>
-          本轮没有给出回答（工具与过程已隐藏）。
+          {t('chat.a.answersHiddenEmpty', undefined, '本轮没有给出回答（工具与过程已隐藏）。')}
         </p>
       )}
 
@@ -233,10 +237,16 @@ function AssistantTurnImpl({
             <span className="relative inline-flex h-1.5 w-1.5 rounded-pill bg-accent" />
           </span>
           <span className="text-2xs text-ink-faint">
-            {phaseText ?? '正在想…'}
-            {progressLabel(progress)}
+            {phaseText ?? t('chat.a.thinking', undefined, '正在想…')}
+            {progressLabel(progress, t)}
             {elapsed > 0 && (
-              <span className="text-ink-faint"> · 已 {formatElapsed(elapsed)}</span>
+              <span className="text-ink-faint">
+                {t(
+                  'chat.a.elapsedSuffix',
+                  { elapsed: formatElapsed(elapsed, t) },
+                  ` · 已 ${formatElapsed(elapsed, t)}`,
+                )}
+              </span>
             )}
           </span>
         </div>
@@ -252,10 +262,12 @@ function AssistantTurnImpl({
           data-turn-at={last?.createdAt ?? ''}
         >
           {failed > 0 && !hasAnswer && (
-            <span className="text-signal-risk">· {failed} 个工具失败</span>
+            <span className="text-signal-risk">
+              {t('chat.a.toolsFailed', { n: failed }, `· ${failed} 个工具失败`)}
+            </span>
           )}
           {last && <span aria-hidden="true">·</span>}
-          {last && <time dateTime={last.createdAt}>{formatClock(last.createdAt)}</time>}
+          {last && <time dateTime={last.createdAt}>{formatClock(last.createdAt, locale)}</time>}
           {meta && (
             <>
               <span aria-hidden="true">·</span>
@@ -299,6 +311,7 @@ function LiveToolCard({
   elapsed: number
   heartbeat: { seconds: number; message?: string; progress?: number; total?: number } | null
 }) {
+  const { t } = useI18n()
   const ref = useRef<HTMLPreElement>(null)
   const digest = digestToolArgs(args)
   useEffect(() => {
@@ -325,7 +338,8 @@ function LiveToolCard({
           </span>
         )}
         <span className="shrink-0 text-2xs text-ink-faint">
-          执行中…{heartbeat ? progressLabelOf(heartbeat) : elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
+          {t('chat.a.liveToolRunning', undefined, '执行中…')}
+          {heartbeat ? progressLabelOf(heartbeat, t) : elapsed > 0 ? ` · ${formatElapsed(elapsed, t)}` : ''}
         </span>
       </div>
       {output ? (
@@ -342,17 +356,20 @@ function LiveToolCard({
 }
 
 /** 运行卡状态行：服务端给了 progress/total 就显示真实百分比，否则退成秒数。 */
-function progressLabelOf(p: {
-  seconds: number
-  message?: string
-  progress?: number
-  total?: number
-}): string {
+function progressLabelOf(
+  p: {
+    seconds: number
+    message?: string
+    progress?: number
+    total?: number
+  },
+  t: Translate,
+): string {
   if (p.progress !== undefined && p.total && p.total > 0) {
     const pct = Math.max(0, Math.min(100, Math.round((p.progress / p.total) * 100)))
     return ` · ${pct}%${p.message ? ` · ${p.message}` : ''}`
   }
-  const base = p.seconds > 0 ? ` · 已等待 ${p.seconds} 秒` : ''
+  const base = p.seconds > 0 ? t('chat.a.waitedSuffix', { seconds: p.seconds }, ` · 已等待 ${p.seconds} 秒`) : ''
   return p.message ? `${base} · ${p.message}` : base
 }
 
@@ -370,17 +387,19 @@ function useElapsed(live: boolean, since: string | null): number {
   return Math.max(0, Math.floor((now - start) / 1000))
 }
 
-function formatElapsed(seconds: number): string {
-  if (seconds < 60) return `${seconds} 秒`
+function formatElapsed(seconds: number, t: Translate): string {
+  if (seconds < 60) return t('chat.a.elapsedSeconds', { seconds }, `${seconds} 秒`)
   const minutes = Math.floor(seconds / 60)
   const rest = seconds % 60
-  return rest > 0 ? `${minutes} 分 ${rest} 秒` : `${minutes} 分`
+  return rest > 0
+    ? t('chat.a.elapsedMinutesSeconds', { minutes, rest }, `${minutes} 分 ${rest} 秒`)
+    : t('chat.a.elapsedMinutes', { minutes }, `${minutes} 分`)
 }
 
-function formatClock(value: string): string {
+function formatClock(value: string, locale: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
-  return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  return date.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
 }
 
 /**
@@ -389,9 +408,9 @@ function formatClock(value: string): string {
  * 只在「真的积累了一点东西」时才出现：0 次工具的时候写「（已 0 次工具）」
  * 是噪音，第一轮开始前那几秒本来也没有进度可言。
  */
-function progressLabel(progress: { steps?: number; tools?: number } | null): string {
+function progressLabel(progress: { steps?: number; tools?: number } | null, t: Translate): string {
   if (!progress) return ''
   const tools = progress.tools ?? 0
   if (tools <= 0) return ''
-  return `（已 ${tools} 次工具）`
+  return t('chat.a.toolCountSuffix', { n: tools }, `（已 ${tools} 次工具）`)
 }

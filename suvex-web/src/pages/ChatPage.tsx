@@ -194,6 +194,60 @@ const STARTER_GROUPS: Array<{ label: string; prompts: string[] }> = [
   },
 ]
 
+
+/** 日本語プリセット。例文そのものがユーザーの入力になるので、UI の訳とは別に持つ。 */
+const STARTER_GROUPS_JA: Array<{ label: string; prompts: string[] }> = [
+  {
+    label: 'スキャンとサブエージェント',
+    prompts: [
+      '前回のスキャン結果は？失敗はあった？',
+      'example.com に対して Web スキャンを開始して',
+      '今実行中のスキャンは？キューに残っている？',
+      'サブエージェントで A・B・C を並行チェックし、ステータスコードと応答長を返して',
+    ],
+  },
+  {
+    label: 'HTTP 検証とサンドボックス',
+    prompts: [
+      'この HTTP 所見が再現するか確認して：GET http://example.com/path が 200 とキーワードを返す',
+      'サンドボックスの /work の中身と、入っているツールを確認して',
+      'http://example.com を開いてスクリーンショットを撮って',
+    ],
+  },
+  {
+    label: 'CTF と競技',
+    prompts: [
+      '現在の CTF ボードの課題と状態を一覧して',
+      'CR7 を解いて',
+      '競技プラットフォームから最新の課題を取得して',
+      'flag{...} を現在の課題に提出して',
+      '競技レースの進捗を確認して',
+      '競技レースを開始して',
+      '競技レースを停止して',
+    ],
+  },
+  {
+    label: 'スキルと MCP',
+    prompts: [
+      '利用できるスキルは？未使用のものは？',
+      'pcap-analysis スキルを読んで',
+      'pcap-analysis スキルを今回のコンテキストに読み込んで',
+      'nmap レシピを読み込み、デフォルト設定の抜けを教えて',
+      '今回の手法をスキルとして保存して',
+      'スキル xxx を削除して',
+      'マウント済みの MCP ツールを一覧して',
+      'MCP ツール接続を追加して',
+    ],
+  },
+]
+
+const PRIMARY_STARTERS_JA = [
+  '前回のスキャン結果は？失敗はあった？',
+  'example.com に対して Web スキャンを開始して',
+  '利用できるスキルは？未使用のものは？',
+  'MCP ツール接続を追加して',
+]
+
 /** 英文预设（其他非中文语言先回退英文；示例消息本身就是给用户点的）。 */
 const STARTER_GROUPS_EN: Array<{ label: string; prompts: string[] }> = [
   {
@@ -266,9 +320,14 @@ function StarterPrompts({
   onToggle: () => void
 }) {
   const { t, locale } = useI18n()
+  const useJa = locale.startsWith('ja')
   const useEn = !locale.startsWith('zh')
-  const groups = useEn ? STARTER_GROUPS_EN : STARTER_GROUPS
-  const primary = useEn ? PRIMARY_STARTERS_EN : PRIMARY_STARTERS
+  const groups = useJa ? STARTER_GROUPS_JA : useEn ? STARTER_GROUPS_EN : STARTER_GROUPS
+  const primary = useJa
+    ? PRIMARY_STARTERS_JA
+    : useEn
+      ? PRIMARY_STARTERS_EN
+      : PRIMARY_STARTERS
   if (!expanded) {
     return (
       <div className="flex w-full flex-col gap-1.5">
@@ -375,8 +434,14 @@ export function phaseLabel(
         attempt?: number
         maxAttempts?: number
       },
+  t?: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
 ): string {
-  if (!phase) return '正在想…'
+  const tr = (
+    key: string,
+    vars: Record<string, string | number> | undefined,
+    fallback: string,
+  ) => (t ? t(key, vars, fallback) : fallback)
+  if (!phase) return tr('chat.a.thinking', undefined, '正在想…')
   const round = typeof phase.round === 'number' ? phase.round + 1 : 0
   if (phase.phase === 'resume') {
     // ★ v1.14：模型这一轮没写动作（或交了白卷），服务端正在自动续跑。
@@ -388,17 +453,19 @@ export function phaseLabel(
     if (phase.reason === 'final-check') {
       // ★ v1.29：模型写了 FINAL 但那像是「接下来要做什么」，服务端正在
       // 让它确认一次。用户看到的是「已经停下」，所以要明确说在核实。
-      return `第 ${round} 轮 · 正在确认它是不是真的做完了…`
+      return tr('chat.a.phase.finalCheck', { round }, `第 ${round} 轮 · 正在确认它是不是真的做完了…`)
     }
     if (phase.reason === 'truncation') {
-      return `第 ${round} 轮 · 回复太长被截断了，正在接着写…`
+      return tr('chat.a.phase.truncation', { round }, `第 ${round} 轮 · 回复太长被截断了，正在接着写…`)
     }
-    return `第 ${round} 轮 · 正在让它把话说完…`
+    return tr('chat.a.phase.finish', { round }, `第 ${round} 轮 · 正在让它把话说完…`)
   }
   if (phase.phase === 'tool' && phase.tool) {
-    return `第 ${round} 轮 · 正在执行 ${phase.tool}…`
+    return tr('chat.a.phase.tool', { round, tool: phase.tool }, `第 ${round} 轮 · 正在执行 ${phase.tool}…`)
   }
-  return round > 0 ? `第 ${round} 轮 · 模型在推理…` : '正在想…'
+  return round > 0
+    ? tr('chat.a.phase.round', { round }, `第 ${round} 轮 · 模型在推理…`)
+    : tr('chat.a.thinking', undefined, '正在想…')
 }
 
 /**
@@ -428,6 +495,7 @@ function McpMountStatus({
   status: ChatMcpStatus | null
   loading: boolean
 }) {
+  const { t } = useI18n()
   if (loading) {
     return <span className="text-2xs text-ink-faint"><T k="chatmsg.mcpTesting"/></span>
   }
@@ -436,10 +504,22 @@ function McpMountStatus({
   const failed = status.servers.filter((server) => !server.connected)
   const detail = failed.length
     ? failed
-        .map((server) => `${server.name}：${server.reason ?? '连接失败'}`)
+        .map((server) =>
+          t(
+            'chat.a.mcp.serverFailed',
+            { name: server.name, reason: server.reason ?? t('chat.a.mcp.connectFailed', undefined, '连接失败') },
+            `${server.name}：${server.reason ?? '连接失败'}`,
+          ),
+        )
         .join('\n')
     : status.servers
-        .map((server) => `${server.name}：${server.toolCount} 个工具`)
+        .map((server) =>
+          t(
+            'chat.a.mcp.serverTools',
+            { name: server.name, count: server.toolCount },
+            `${server.name}：${server.toolCount} 个工具`,
+          ),
+        )
         .join('\n')
 
   return (
@@ -451,8 +531,13 @@ function McpMountStatus({
       title={detail}
       data-mcp-status={failed.length > 0 ? 'failed' : 'ok'}
     >
-      已挂载 {status.mountedCount} 台 · 连通 {status.connectedCount} 台
-      {failed.length > 0 && ` · ${failed.length} 台试连失败`}
+      {t(
+        'chat.a.mcp.mounted',
+        { mounted: status.mountedCount, connected: status.connectedCount },
+        `已挂载 ${status.mountedCount} 台 · 连通 ${status.connectedCount} 台`,
+      )}
+      {failed.length > 0 &&
+        t('chat.a.mcp.failedSuffix', { n: failed.length }, ` · ${failed.length} 台试连失败`)}
     </span>
   )
 }
@@ -1211,7 +1296,10 @@ export function ChatPage() {
         这里把原因弹出来，并按服务端最新状态重算黄条 —— 如果确实
         已经不可接手，黄条应当消失，而不是继续挂着让人反复点。
       */
-      showToast({ tone: 'risk', message: `继续失败：${errorMessage(err)}` })
+      showToast({
+        tone: 'risk',
+        message: t('chat.a.resumeFailed', { error: errorMessage(err) }, `继续失败：${errorMessage(err)}`),
+      })
       await refreshStuckTurn(active.id)
     } finally {
       setResuming(false)
@@ -1291,14 +1379,24 @@ export function ChatPage() {
         而这一次点击背后还有一次网络请求 —— 用户没有任何依据判断
         "文件到底有没有下来"。原来成功分支完全静默。
       */
-      showToast({ message: `已下载 ${filename}`, tone: 'ok' })
+      showToast({
+        message: t('chat.a.downloaded', { filename }, `已下载 ${filename}`),
+        tone: 'ok',
+      })
     } catch (error) {
       /*
         导出失败**不**改全局 error 状态：那会把整页推进错误态，
         而用户只是没下到一个文件。但也不能只在控制台留痕 ——
         用户点了菜单项、什么都没发生，会以为菜单坏了。
       */
-      showToast({ message: `导出 Markdown 失败：${errorMessage(error)}`, tone: 'risk' })
+      showToast({
+        message: t(
+          'chat.a.exportFailed',
+          { error: errorMessage(error) },
+          `导出 Markdown 失败：${errorMessage(error)}`,
+        ),
+        tone: 'risk',
+      })
     }
   }
 
@@ -1507,9 +1605,12 @@ export function ChatPage() {
       if (!created) return
       setSearchParams({ session: created.id }, { replace: true })
       setShowList(false)
-      showToast({ message: '已创建分支，可以从这里换一条路继续。', tone: 'ok' })
+      showToast({
+        message: t('chat.a.forkedContinue', undefined, '已创建分支，可以从这里换一条路继续。'),
+        tone: 'ok',
+      })
     },
-    [active, setSearchParams],
+    [active, setSearchParams, t],
   )
 
   async function handleDecide(messageId: string, approve: boolean) {
@@ -1668,7 +1769,7 @@ export function ChatPage() {
           return left <= 2 ? 2 : left <= 4 ? 4 : 8
         })()}
         options={[
-          { value: 0, label: '关闭' },
+          { value: 0, label: t('chat.a.autoApproveOff', undefined, '关闭') },
           { value: 2, label: '2h' },
           { value: 4, label: '4h' },
           { value: 8, label: '8h' },
@@ -1683,7 +1784,7 @@ export function ChatPage() {
         icon={<BookOpen size={12} strokeWidth={2} aria-hidden="true" />}
         options={skillOptions}
         selected={active.skillNames ?? []}
-        emptyHint="技能库是空的"
+        emptyHint={t('chat.a.skillsEmpty', undefined, '技能库是空的')}
         onChange={(skillNames) => void updateSettings(active.id, { skillNames })}
       />
 
@@ -1705,7 +1806,7 @@ export function ChatPage() {
         icon={<Plug size={12} strokeWidth={2} aria-hidden="true" />}
         options={mcpOptions}
         selected={active.mcpServerNames ?? []}
-        emptyHint="还没配 MCP server（在工具页加）"
+        emptyHint={t('chat.a.mcpEmpty', undefined, '还没配 MCP server（在工具页加）')}
         onChange={(mcpServerNames) => void updateSettings(active.id, { mcpServerNames })}
       />
       <McpMountStatus status={mcpStatus} loading={mcpStatusLoading} />
@@ -1721,7 +1822,7 @@ export function ChatPage() {
         onClick={() => setSettingsOpen(false)}
         className="ml-auto shrink-0 rounded-sm border border-line px-2 py-1 text-2xs text-ink-muted transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       >
-        完成
+        {t('chat.a.settingsDone', undefined, '完成')}
       </button>
     </div>
   ) : null
@@ -1782,7 +1883,7 @@ export function ChatPage() {
         <div className="flex items-center gap-tight border-b border-line px-3 py-2">
           <Button variant="secondary" size="sm" onClick={handleNew} className="flex-1">
             <MessageSquarePlus size={14} strokeWidth={2} aria-hidden="true" />
-            新对话
+            {t('chat.a.newChat', undefined, '新对话')}
           </Button>
           <Button
             variant="ghost"
@@ -1819,7 +1920,7 @@ export function ChatPage() {
             </div>
           ) : grouped.named.length === 0 && grouped.loose.length === 0 ? (
             <p className="px-2 py-6 text-center text-xs text-ink-faint">
-              还没有对话。点上面的「新对话」开始。
+              {t('chat.a.noSessions', undefined, '还没有对话。点上面的「新对话」开始。')}
             </p>
           ) : (
             <div className="flex flex-col gap-2">
@@ -1843,7 +1944,7 @@ export function ChatPage() {
                   */}
                   {grouped.named.length > 0 && (
                     <h2 className="px-2 py-1 text-2xs uppercase tracking-wide text-ink-faint">
-                      无项目
+                      {t('chat.a.noProject', undefined, '无项目')}
                     </h2>
                   )}
                   <ul className="flex flex-col gap-0.5">
@@ -1876,7 +1977,11 @@ export function ChatPage() {
                     ) : (
                       <ChevronRight size={10} strokeWidth={2} aria-hidden="true" />
                     )}
-                    已归档（{archivedSessions.length}）
+                    {t(
+                      'chat.a.archived',
+                      { n: archivedSessions.length },
+                      `已归档（${archivedSessions.length}）`,
+                    )}
                   </button>
                   {archivedOpen && (
                     <ul className="mt-0.5 flex flex-col gap-0.5">
@@ -1932,8 +2037,16 @@ export function ChatPage() {
             size="sm"
             onClick={toggleList}
             className="hidden md:inline-flex"
-            aria-label={listCollapsed ? '展开会话列表' : '折叠会话列表'}
-            title={listCollapsed ? '展开会话列表' : '折叠会话列表'}
+            aria-label={
+              listCollapsed
+                ? t('chat.a.expandList', undefined, '展开会话列表')
+                : t('chat.a.collapseList', undefined, '折叠会话列表')
+            }
+            title={
+              listCollapsed
+                ? t('chat.a.expandList', undefined, '展开会话列表')
+                : t('chat.a.collapseList', undefined, '折叠会话列表')
+            }
           >
             {listCollapsed ? (
               <PanelLeftOpen size={14} strokeWidth={2} aria-hidden="true" />
@@ -1941,12 +2054,18 @@ export function ChatPage() {
               <PanelLeftClose size={14} strokeWidth={2} aria-hidden="true" />
             )}
           </Button>
-          <h1 className="min-w-0 flex-1 truncate text-sm text-ink">{active?.title ?? '对话'}</h1>
+          <h1 className="min-w-0 flex-1 truncate text-sm text-ink">
+            {active?.title ?? t('chat.a.untitledChat', undefined, '对话')}
+          </h1>
           {activePersona && (
             <button
               type="button"
               onClick={() => setPersonaOpen(true)}
-              title={`${activePersona.summary}（角色说明已进入系统提示词）`}
+              title={t(
+                'chat.a.personaPromptHint',
+                { summary: activePersona.summary },
+                `${activePersona.summary}（角色说明已进入系统提示词）`,
+              )}
               className="hidden shrink-0 rounded-sm border border-line px-1.5 py-0.5 text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink sm:inline-flex"
             >
               {activePersona.label}
@@ -1977,7 +2096,11 @@ export function ChatPage() {
               onClick={() => setAnswersOnly((value) => !value)}
               aria-pressed={answersOnly}
               aria-label={t('chat.a11y.onlyAnswers', undefined, '只看回答')}
-              title={answersOnly ? '显示工具与过程' : '隐藏工具与过程，只看结论'}
+              title={
+                answersOnly
+                  ? t('chat.a.showWork', undefined, '显示工具与过程')
+                  : t('chat.a.hideWork', undefined, '隐藏工具与过程，只看结论')
+              }
               className={cn(
                 'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs',
                 'max-sm:min-h-9 max-sm:min-w-9 max-sm:justify-center',
@@ -2035,20 +2158,23 @@ export function ChatPage() {
                   title={t('chat.a11y.askHint', undefined, '有什么要查的、要做的？')}
                   description={
                     <>
-                      这个对话框里的模型能直接调用平台的能力：发起扫描、看扫描结果、 翻技能库、试
-                      MCP 连接。它做完会在下面贴出做了什么。
+                      {t(
+                        'chat.a.emptyDescription',
+                        undefined,
+                        '这个对话框里的模型能直接调用平台的能力：发起扫描、看扫描结果、 翻技能库、试 MCP 连接。它做完会在下面贴出做了什么。',
+                      )}
                     </>
                   }
                   action={
                     <Button onClick={() => void handleNew()} variant="primary" size="sm">
                       <MessageSquarePlus size={14} strokeWidth={2} aria-hidden="true" />
-                      开始新对话
+                      {t('chat.a.startChat', undefined, '开始新对话')}
                     </Button>
                   }
                 />
                 <div className="w-full">
                   <p className="mb-1.5 text-2xs uppercase tracking-wide text-ink-faint">
-                    可以这样问
+                    {t('chat.a.canAsk', undefined, '可以这样问')}
                   </p>
                   {/* disabled：点一下会建会话 + 发一轮消息，连点会开两个并发会话。 */}
                   <StarterPrompts
@@ -2107,8 +2233,16 @@ export function ChatPage() {
                   <>
                     <p className="py-4 text-center text-xs text-ink-faint">
                       {active?.challengeId
-                        ? '这道题由平台在沙箱里解，过程在上面实时更新。也可以直接在下面问它。'
-                        : '这个对话还是空的。说点什么，或者回到会话列表挑另一个。'}
+                        ? t(
+                            'chat.a.emptyChallenge',
+                            undefined,
+                            '这道题由平台在沙箱里解，过程在上面实时更新。也可以直接在下面问它。',
+                          )
+                        : t(
+                            'chat.a.emptyConversation',
+                            undefined,
+                            '这个对话还是空的。说点什么，或者回到会话列表挑另一个。',
+                          )}
                     </p>
                     {/*
                     ★ 题目会话里不摆"可以这样问"那几条通用开场白：
@@ -2134,10 +2268,10 @@ export function ChatPage() {
                       variant="ghost"
                       size="sm"
                       loading={loadingEarlier}
-                      loadingLabel="加载中…"
+                      loadingLabel={t('chat.a.loading', undefined, '加载中…')}
                       onClick={() => void handleLoadEarlier()}
                     >
-                      加载更早的消息
+                      {t('chat.a.loadEarlier', undefined, '加载更早的消息')}
                     </Button>
                   </div>
                 )}
@@ -2167,7 +2301,7 @@ export function ChatPage() {
                           items={turn.items}
                           live={isLive}
                           streamingText={isLive ? streamingText : null}
-                          phaseText={isLive ? phaseLabel(phase) : null}
+                          phaseText={isLive ? phaseLabel(phase, t) : null}
                           liveTool={isLive && phase?.phase === 'tool' ? (phase.tool ?? null) : null}
                           liveToolArgs={isLive && phase?.phase === 'tool' ? (phase.args ?? null) : null}
                           liveToolProgress={
@@ -2244,7 +2378,7 @@ export function ChatPage() {
                     items={[]}
                     live
                     streamingText={streamingText}
-                    phaseText={phaseLabel(phase)}
+                    phaseText={phaseLabel(phase, t)}
                     progress={{ tools: liveLooseToolCount }}
                     interjections={interjections}
                     hideWork={answersOnly}
@@ -2281,7 +2415,7 @@ export function ChatPage() {
                 data-jump-to-bottom
               >
                 <ArrowDown size={11} strokeWidth={2} aria-hidden="true" className="mr-1 inline" />
-                回到底部
+                {t('chat.a.backToBottom', undefined, '回到底部')}
               </button>
             )}
           </div>
@@ -2312,7 +2446,9 @@ export function ChatPage() {
                   disabled={resuming || sendingHere}
                   onClick={() => void handleRetryError()}
                 >
-                  {resuming ? '正在重试…' : '重试'}
+                  {resuming
+                    ? t('chat.a.retrying', undefined, '正在重试…')
+                    : t('chat.a.retry', undefined, '重试')}
                 </button>
               )}
             </div>
@@ -2326,9 +2462,13 @@ export function ChatPage() {
             data-stuck-turn={stuckTurn.id}
           >
             <p className="text-2xs text-signal-warn">
-              上一轮没有跑完
+              {t('chat.a.stuckPrefix', undefined, '上一轮没有跑完')}
               {stuckTurn.lastError ? `（${stuckTurn.lastError}）` : ''}
-              ，可以接着做。接手会从断点恢复沙箱与上下文，首条输出可能需要一会儿。
+              {t(
+                'chat.a.stuckSuffix',
+                undefined,
+                '，可以接着做。接手会从断点恢复沙箱与上下文，首条输出可能需要一会儿。',
+              )}
             </p>
             <button
               type="button"
@@ -2336,18 +2476,18 @@ export function ChatPage() {
               disabled={resuming || sendingHere}
               title={
                 sendingHere
-                  ? '这一轮还在跑，结束后才能接手'
+                  ? t('chat.a.stuckRunningTitle', undefined, '这一轮还在跑，结束后才能接手')
                   : resuming
-                    ? '正在恢复上下文'
-                    : '从断点恢复沙箱与上下文'
+                    ? t('chat.a.stuckResumingTitle', undefined, '正在恢复上下文')
+                    : t('chat.a.stuckResumeTitle', undefined, '从断点恢复沙箱与上下文')
               }
               onClick={() => void handleResume()}
             >
               {sendingHere
-                ? '这一轮还在跑…'
+                ? t('chat.a.stuckRunning', undefined, '这一轮还在跑…')
                 : resuming
-                  ? '正在接手（恢复上下文）…'
-                  : '继续这一轮'}
+                  ? t('chat.a.stuckResuming', undefined, '正在接手（恢复上下文）…')
+                  : t('chat.a.stuckResume', undefined, '继续这一轮')}
             </button>
           </div>
         )}
@@ -2533,7 +2673,7 @@ export function ChatPage() {
                   aria-label={t('chat.a11y.interrupt', undefined, '中断')}
                   data-interrupt-open
                 >
-                  中断
+                  {t('chat.a.interrupt', undefined, '中断')}
                 </Button>
               )}
               <Button
@@ -2547,16 +2687,26 @@ export function ChatPage() {
                 loading={interjecting}
                 size="sm"
                 className="h-9 shrink-0 max-sm:min-h-10"
-                aria-label={turnRunningHere ? '插话' : '发送'}
+                aria-label={
+                  turnRunningHere
+                    ? t('chat.a.interject', undefined, '插话')
+                    : t('chat.a.send', undefined, '发送')
+                }
               >
                 <Send size={14} strokeWidth={2} aria-hidden="true" />
-                {turnRunningHere ? '插话' : '发送'}
+                {turnRunningHere
+                  ? t('chat.a.interject', undefined, '插话')
+                  : t('chat.a.send', undefined, '发送')}
               </Button>
             </div>
           </div>
           {user?.role !== 'admin' && (
             <p className="mx-auto mt-2 w-full max-w-[880px] text-2xs text-ink-faint">
-              你是只读角色：可以查询和看结果，但不能让它建扫描或改技能库。
+              {t(
+                'chat.a.readonlyNotice',
+                undefined,
+                '你是只读角色：可以查询和看结果，但不能让它建扫描或改技能库。',
+              )}
             </p>
           )}
         </div>
@@ -2584,7 +2734,7 @@ export function ChatPage() {
             if (!created) return
             setSearchParams({ session: created.id }, { replace: true })
             setShowList(false)
-            showToast({ message: '已创建分支。', tone: 'ok' })
+            showToast({ message: t('chat.a.forked', undefined, '已创建分支。'), tone: 'ok' })
           })
         }}
         onViewAttackChain={() => menuSession && void openAttackChain(menuSession)}
@@ -2644,7 +2794,7 @@ export function ChatPage() {
         footer={
           <div className="flex flex-wrap justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setInterruptOpen(false)}>
-              关闭
+              {t('chat.a.close', undefined, '关闭')}
             </Button>
             <Button
               variant="danger"
@@ -2653,7 +2803,7 @@ export function ChatPage() {
               data-interrupt-stop
               onClick={() => void submitInterrupt('stop')}
             >
-              彻底停止
+              {t('chat.a.stopAll', undefined, '彻底停止')}
             </Button>
             <Button
               variant="primary"
@@ -2662,22 +2812,30 @@ export function ChatPage() {
               data-interrupt-continue
               onClick={() => void submitInterrupt('continue')}
             >
-              中断并继续
+              {t('chat.a.interruptContinueBtn', undefined, '中断并继续')}
             </Button>
           </div>
         }
       >
         <div className="flex flex-col gap-3 text-xs leading-relaxed text-ink-muted">
           <p>
-            <span className="font-medium text-ink"><T k="chatmsg.interruptContinue"/></span>：他上一条输出会立刻停下，
-            你写的说明会并入上下文，然后他会接着做。中途改方向用这个。
+            <span className="font-medium text-ink"><T k="chatmsg.interruptContinue"/></span>
+            {t(
+              'chat.a.interruptContinueDesc',
+              undefined,
+              '：他上一条输出会立刻停下，你写的说明会并入上下文，然后他会接着做。中途改方向用这个。',
+            )}
           </p>
           <p>
             <span className="font-medium text-ink"><T k="chatmsg.interruptStop"/></span>
-            ：这一轮就地结束，后台不会再自动接着跑。
+            {t('chat.a.interruptStopDesc', undefined, '：这一轮就地结束，后台不会再自动接着跑。')}
           </p>
           <p className="text-2xs text-ink-faint">
-            注意：如果当前正在执行一个工具命令，它要跑完才会停 —— 我们没法中断一个已经在跑的子进程。
+            {t(
+              'chat.a.interruptProcessNote',
+              undefined,
+              '注意：如果当前正在执行一个工具命令，它要跑完才会停 —— 我们没法中断一个已经在跑的子进程。',
+            )}
           </p>
           <label className="flex flex-col gap-1">
             <span className="text-2xs text-ink-faint"><T k="chatmsg.interruptNote"/></span>
@@ -2694,7 +2852,7 @@ export function ChatPage() {
               而不是"点了没反应"。409「当前没有在跑的回复」等失败也原样显示。 */}
           {interrupting && (
             <p className="text-2xs text-ink-faint" data-interrupt-feedback="pending">
-              正在发送中断请求…
+              {t('chat.a.interruptSending', undefined, '正在发送中断请求…')}
             </p>
           )}
           {!interrupting && lastInterrupt && (
@@ -2717,7 +2875,7 @@ export function ChatPage() {
         footer={
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => setRenameTarget(null)}>
-              取消
+              {t('chat.a.cancel', undefined, '取消')}
             </Button>
             <Button
               variant="primary"
@@ -2725,7 +2883,7 @@ export function ChatPage() {
               disabled={renaming}
               onClick={() => void submitRename()}
             >
-              保存
+              {t('chat.a.save', undefined, '保存')}
             </Button>
           </div>
         }
@@ -2775,13 +2933,29 @@ export function ChatPage() {
       */}
       <ConfirmDialog
         open={confirmAction !== null}
-        title={confirmAction?.kind === 'purge' ? '彻底删除这个对话？' : '删除这个对话？'}
+        title={
+          confirmAction?.kind === 'purge'
+            ? t('chat.a.confirmPurgeTitle', undefined, '彻底删除这个对话？')
+            : t('chat.a.confirmDeleteTitle', undefined, '删除这个对话？')
+        }
         description={
           confirmAction?.kind === 'purge'
-            ? `「${confirmAction.title}」及其全部消息将被**永久删除**，无法恢复。`
-            : `「${confirmAction?.title ?? ''}」会移入「已归档」，对话里的沙箱文件与上传的附件会被立即清理。`
+            ? t(
+                'chat.a.confirmPurgeBody',
+                { title: confirmAction.title },
+                `「${confirmAction.title}」及其全部消息将被**永久删除**，无法恢复。`,
+              )
+            : t(
+                'chat.a.confirmArchiveBody',
+                { title: confirmAction?.title ?? '' },
+                `「${confirmAction?.title ?? ''}」会移入「已归档」，对话里的沙箱文件与上传的附件会被立即清理。`,
+              )
         }
-        confirmLabel={confirmAction?.kind === 'purge' ? '永久删除' : '删除'}
+        confirmLabel={
+          confirmAction?.kind === 'purge'
+            ? t('chat.a.purge', undefined, '永久删除')
+            : t('chat.a.delete', undefined, '删除')
+        }
         onCancel={() => setConfirmAction(null)}
         onConfirm={() => {
           const action = confirmAction
@@ -2921,7 +3095,11 @@ function SessionRow({
               'hover:text-signal-risk focus:opacity-100 group-hover:opacity-100',
               'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
             )}
-            aria-label={`归档对话「${session.title.trim() || '未命名对话'}」`}
+            aria-label={t(
+              'chat.a.archiveAria',
+              { title: session.title.trim() || t('chat.a.unnamedChat', undefined, '未命名对话') },
+              `归档对话「${session.title.trim() || '未命名对话'}」`,
+            )}
             title={t('chat.a11y.archive', undefined, '归档这个对话')}
           >
             <Archive size={12} strokeWidth={2} aria-hidden="true" />
@@ -2939,7 +3117,11 @@ function SessionRow({
             'hover:text-ink focus:opacity-100 group-hover:opacity-100',
             'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
           )}
-          aria-label={`打开对话「${session.title.trim() || '未命名对话'}」的菜单`}
+          aria-label={t(
+            'chat.a.menuAria',
+            { title: session.title.trim() || t('chat.a.unnamedChat', undefined, '未命名对话') },
+            `打开对话「${session.title.trim() || '未命名对话'}」的菜单`,
+          )}
           aria-haspopup="menu"
           title={t('chat.a11y.more', undefined, '更多操作')}
         >
