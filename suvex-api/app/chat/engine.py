@@ -792,6 +792,8 @@ async def _call_model(
     #: ★ 2026-10-30：`chat_stream` 按 `index` 累积原生工具调用，收流后写进来。
     #:   这里不合成文本 —— 合成在 `_with_native_actions` 里做（只此一处）。
     tool_calls_out: list[dict] = []
+    #: ★ v1.92：收尾帧里的 usage（可能多帧，取最后一个）。
+    usage_frames: list[dict] = []
     pushed = False
     stream_kwargs: dict[str, Any] = {
         "system": system,
@@ -875,7 +877,7 @@ async def _call_model(
             text=raw_text,
             source="content",
             raw={},
-            usage=parse_usage({}),
+            usage=parse_usage(usage_frames[-1] if usage_frames else {}),
             # ★ 取最后一个取值：正常只有一帧带它，但代理/网关吐多帧时，
             #   以最后那个为准（更接近真实收尾原因）。
             finish_reason=finish_reasons[-1] if finish_reasons else "",
@@ -3875,6 +3877,10 @@ async def run_turn(
                 #   会让模型继续调工具，把「收尾」变成下一轮工具调用。
                 tools=None if at_limit else _tools_schema(ctx),
             )
+            # ★ v1.92：把这一轮的 token 累加进执行记录（流式与非流式都带
+            #   usage；接入点没给时 add_usage 自己不写，不制造假 0）。
+            if turn_run is not None:
+                turn_run_store.add_usage(db, turn_run, reply.usage)
         except Exception as exc:  # noqa: BLE001
             _log.warning("对话调模型失败", exc_info=True)
             raise _wrap_model_failure(exc) from exc

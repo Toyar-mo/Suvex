@@ -4,7 +4,12 @@ import { ArrowUpRight, CircleDot, Send, Square, Users } from 'lucide-react'
 import { Drawer } from '@/components/ui/Drawer'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/cn'
-import { loadSessionPreview, type ChatMessage, type ChatSession } from '@/data/chat'
+import {
+  listTurns,
+  loadSessionPreview,
+  type ChatMessage,
+  type ChatSession,
+} from '@/data/chat'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 
 /**
@@ -52,6 +57,7 @@ export function AgentHub({
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [previews, setPreviews] = useState<Record<string, ChatMessage[]>>({})
   const [previewLoading, setPreviewLoading] = useState<string | null>(null)
+  const [usage, setUsage] = useState<Record<string, { tokens: number; reported: boolean }>>({})
 
   const runningCount = children.filter(
     (child) => child.running || runningIds.includes(child.id),
@@ -69,8 +75,17 @@ export function AgentHub({
     const load = async () => {
       setPreviewLoading(expandedId)
       try {
-        const detail = await loadSessionPreview(expandedId)
-        if (alive) setPreviews((prev) => ({ ...prev, [expandedId]: detail.messages }))
+        const [detail, runs] = await Promise.all([
+          loadSessionPreview(expandedId),
+          listTurns(expandedId),
+        ])
+        if (!alive) return
+        setPreviews((prev) => ({ ...prev, [expandedId]: detail.messages }))
+        if (runs) {
+          const reported = runs.some((run) => run.usageReported)
+          const tokens = runs.reduce((sum, run) => sum + (run.totalTokens ?? 0), 0)
+          setUsage((prev) => ({ ...prev, [expandedId]: { tokens, reported } }))
+        }
       } catch {
         // 预览失败不弹错：打开完整对话仍可用。留空态即可。
       } finally {
@@ -192,6 +207,15 @@ export function AgentHub({
                         { n: child.messageCount, at: clock(child.updatedAt) },
                         `${child.messageCount} 条消息 · ${clock(child.updatedAt)}`,
                       )}
+                      {expandedId === child.id && usage[child.id]?.reported && (
+                        <span className="tabular-nums">
+                          {t(
+                            'chat.agentHub.tokens',
+                            { n: formatTokens(usage[child.id].tokens) },
+                            `${formatTokens(usage[child.id].tokens)} tokens`,
+                          )}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <button
@@ -312,6 +336,14 @@ export function AgentHub({
 /** 子代理标题统一是 `[子代理] name`；展示时去掉前缀。 */
 function displayName(session: ChatSession): string {
   return session.title.replace(/^\[子代理\]\s*/, '') || session.title
+}
+
+/** 1234 → 1.2k；1234567 → 1.2M。token 只要量级，不要精确到个位。 */
+function formatTokens(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
+  if (value >= 10_000) return `${Math.round(value / 1000)}k`
+  if (value >= 1000) return `${(value / 1000).toFixed(1)}k`
+  return String(value)
 }
 
 function clock(value: string): string {

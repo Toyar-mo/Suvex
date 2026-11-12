@@ -131,6 +131,9 @@ class ChatSessionOut(CamelModel):
 
     #: 子代理会话的父会话；`None` = 顶层会话。
     parentSessionId: str | None = None
+    #: ★ v1.92：从哪个会话的哪条消息分叉（与子代理的 parentSessionId 不同）。
+    forkedFromSessionId: str | None = None
+    forkedFromSeq: int | None = None
 
     project: str | None = None
     persona: str | None = None
@@ -272,6 +275,14 @@ class ChatChallengeRef(CamelModel):
     #: 这一轮解题的 scan id —— 对话页用它读**过程事件**（工具调用、推理）。
     #: `None` = 还没开始解过，过程面板自然为空。
     scanId: str | None = None
+
+
+class ChatForkIn(CamelModel):
+    """分叉请求（v1.92）。"""
+
+    #: 截至这条消息（含）；省略 = 整段历史。
+    messageSeq: int | None = None
+    title: str | None = None
 
 
 class ChatSessionDetailOut(ChatSessionOut):
@@ -573,6 +584,10 @@ class ChatTurnRunOut(CamelModel):
     status: str
     resumeAttempts: int
     lastError: str | None = None
+    promptTokens: int = 0
+    completionTokens: int = 0
+    totalTokens: int = 0
+    usageReported: bool = False
     startedAt: IsoDateTime
     updatedAt: IsoDateTime
 

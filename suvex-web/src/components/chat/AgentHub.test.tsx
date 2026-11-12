@@ -7,6 +7,9 @@ vi.mock('@/data/chat', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/data/chat')>()
   return {
     ...actual,
+    listTurns: vi.fn(async () => [
+      { usageReported: true, totalTokens: 1234, promptTokens: 1000, completionTokens: 234 },
+    ]),
     loadSessionPreview: vi.fn(async () => ({
       messages: [
         {
@@ -111,5 +114,14 @@ describe('AgentHub — 转录预览（v1.92）', () => {
     await screen.findByText(/已确认 443/)
     // 仍然在面板里；没有触发 onOpen（那是「打开」按钮的职责）
     expect(screen.getByText(/已确认 443/)).toBeTruthy()
+  })
+})
+
+describe('AgentHub — 子代理 token（v1.92）', () => {
+  it('展开后显示该子会话累计 tokens（只有接入点报过才显示）', async () => {
+    renderHub()
+    fireEvent.click(screen.getByText('port-scan'))
+    await screen.findByText(/1\.2k tokens/)
+    expect(screen.getByText(/1\.2k tokens/)).toBeTruthy()
   })
 })

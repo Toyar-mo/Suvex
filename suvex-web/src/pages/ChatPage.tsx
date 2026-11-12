@@ -41,6 +41,7 @@ import {
   decideApproval,
   dropStagedAttachment,
   clearStaleSending,
+  forkSession,
   interject,
   interruptTurn,
   loadEarlierMessages,
@@ -1437,6 +1438,22 @@ export function ChatPage() {
     }
   }
 
+  /**
+   * 从某条消息分叉：复制截至它的历史到新会话，然后直接切过去。
+   * 失败由 store 写进 error 条，这里只负责导航。
+   */
+  const handleFork = useCallback(
+    async (seq: number) => {
+      if (!active) return
+      const created = await forkSession(active.id, seq)
+      if (!created) return
+      setSearchParams({ session: created.id }, { replace: true })
+      setShowList(false)
+      showToast({ message: '已创建分支，可以从这里换一条路继续。', tone: 'ok' })
+    },
+    [active, setSearchParams],
+  )
+
   async function handleDecide(messageId: string, approve: boolean) {
     if (!active) return
     await decideApproval(active.id, messageId, approve)
@@ -2103,6 +2120,7 @@ export function ChatPage() {
                           hideWork={answersOnly}
                           startedAt={turn.user?.createdAt ?? null}
                           onDecide={(messageId, approve) => void handleDecide(messageId, approve)}
+                          onFork={(seq) => void handleFork(seq)}
                         />
                       )}
                     </section>

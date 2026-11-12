@@ -904,6 +904,11 @@ export interface ChatTurnRun {
   roundIndex?: number
   toolsUsed?: number
   heartbeatAt?: string | null
+  /** v1.92：这一轮累计 token；usageReported=false 时 0 不代表没消耗。 */
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+  usageReported?: boolean
 }
 
 export interface ChatTodoItem {
@@ -2067,4 +2072,29 @@ export async function loadSessionPreview(
   limit = 12,
 ): Promise<ChatSessionDetail> {
   return api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}?limit=${limit}`)
+}
+
+/**
+ * 从某条消息处分叉：复制截至该消息的历史到新会话（v1.92）。
+ *
+ * 成功后刷新侧栏列表并返回新会话；调用方负责切过去。失败写进 `error`
+ * 并返回 null —— 分叉是显式动作，失败不能静默。
+ */
+export async function forkSession(
+  sessionId: string,
+  messageSeq?: number,
+  title?: string,
+): Promise<ChatSession | null> {
+  try {
+    const created = await api.post<ChatSession>(
+      `/chat/sessions/${sessionId}/fork`,
+      { messageSeq, title },
+      { timeoutMs: 30_000 },
+    )
+    await loadSessions()
+    return created
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return null
+  }
 }

@@ -822,3 +822,112 @@ __all__ = [
     "to_wire",
     "update_settings",
 ]
+
+
+# ══════════════════════════════════════════════════════════
+# 会话分叉（v1.92）
+# ══════════════════════════════════════════════════════════
+
+
+def fork_session(
+    db: Session,
+    *,
+    source: ChatSession,
+    upto_seq: int | None = None,
+    title: str | None = None,
+) -> ChatSession:
+    """把源会话截至 `upto_seq` 的历史复制成一个新会话。
+
+    ## 语义
+
+    * 复制**消息**（含工具卡、思考、耗时），seq 从 1 重新编号；
+    * 不复制「等待确认」的工具消息：那条消息代表一个**还没发生**的动作，
+      带过去会变成一条永远不会被执行的幽灵卡；
+    * 复制会话设置（项目/人格/接入点/审批偏好/技能/MCP），但**不复制**
+      自动放行截止时间 —— 那是"我此刻在盯着"的临时授权，不该随分支
+      静默延长；
+    * 复制计划（`chat_todos`），因为分支意味着"从这里换条路继续"，
+      当前进度是上下文的一部分；
+    * 不复制 `challenge_id`：一道题只对应一条时间线（看板「查看」按它
+      find-or-create），把题目挂到分支上会让那个入口指向不确定的一条。
+
+    `forked_from_*` 记录来源，与子代理的 `parent_session_id` 是两件事。
+    """
+    from app.chat.models import ChatMessage, ChatTodo
+
+    max_seq = (
+        db.scalar(select(func.max(ChatMessage.seq)).where(ChatMessage.session_id == source.id))
+        or 0
+    )
+    cutoff = max_seq if upto_seq is None else int(upto_seq)
+    if cutoff < 1 or cutoff > max_seq:
+        raise ApiError.validation(f'分叉点必须在 1..{max_seq} 之间（收到 {cutoff}）。')
+
+    raw_title = (title or '').strip()
+    if not raw_title:
+        base = (source.title or '未命名对话').strip() or '未命名对话'
+        raw_title = f'{base} · 分支'
+
+    child = create_session(
+        db,
+        created_by=source.created_by,
+        title=raw_title[:MAX_TITLE_CHARS],
+    )
+    child.project = source.project
+    child.persona = source.persona
+    child.provider_id = source.provider_id
+    child.require_approval = source.require_approval
+    child.skill_names = list(source.skill_names) if source.skill_names else None
+    child.mcp_server_names = list(source.mcp_server_names) if source.mcp_server_names else None
+    child.forked_from_session_id = source.id
+    child.forked_from_seq = cutoff
+
+    rows = db.scalars(
+        select(ChatMessage)
+        .where(ChatMessage.session_id == source.id, ChatMessage.seq <= cutoff)
+        .order_by(ChatMessage.seq)
+    ).all()
+
+    copied = 0
+    for row in rows:
+        # 待审批的工具调用从未执行过，带过去就是一张永远不会动的卡。
+        if row.approval_status == 'pending':
+            continue
+        copied += 1
+        db.add(
+            ChatMessage(
+                id=new_id('msg'),
+                session_id=child.id,
+                seq=copied,
+                role=row.role,
+                content=row.content,
+                reasoning=row.reasoning,
+                model_extra=row.model_extra,
+                tool_name=row.tool_name,
+                tool_args=row.tool_args,
+                tool_failed=row.tool_failed,
+                duration_ms=row.duration_ms,
+                surface=row.surface,
+                approval_status=row.approval_status,
+                approval_decided_by=row.approval_decided_by,
+                approval_decided_at=row.approval_decided_at,
+            )
+        )
+    child.message_count = copied
+
+    todos = db.scalars(
+        select(ChatTodo).where(ChatTodo.session_id == source.id).order_by(ChatTodo.seq)
+    ).all()
+    for todo in todos:
+        db.add(
+            ChatTodo(
+                id=new_id('todo'),
+                session_id=child.id,
+                seq=todo.seq,
+                text=todo.text,
+                status=todo.status,
+            )
+        )
+
+    db.flush()
+    return child

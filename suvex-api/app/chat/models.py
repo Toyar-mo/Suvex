@@ -262,6 +262,20 @@ class ChatSession(Base):
         index=True,
     )
 
+    #: 从哪个会话的哪条消息分叉出来（v1.92）。
+    #:
+    #: ## 为什么不用 `parent_session_id`
+    #:
+    #: 那是**子代理**的父子关系：侧栏把它画成缩进分支，Agent Hub 把直接
+    #: 子会话当子代理列出来。分叉是"在同一段历史上另开一条时间线"，不是
+    #: 委派任务 —— 混用会让用户的分支出现在子代理名册里，语义直接错。
+    #:
+    #: 不建外键：源会话被彻底删除后，分支仍应保留并可继续，只是"来自
+    #: 哪里"变成一条历史事实。
+    forked_from_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    #: 分叉点（源会话的 seq，含）。`None` = 整段复制。
+    forked_from_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     #: 角色（persona）id。见 `prompts.CHAT_ROLES`。`None` = 默认角色。
     #: ⚠️ 与 `models.CHAT_ROLES`（消息角色 user/assistant/tool）是**两件
     #:   完全不同的事**，名字撞了纯属都叫"角色"。这个存的是"人格"。
@@ -556,6 +570,22 @@ class ChatTurnRun(Base):
     tools_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     #: 已经被 resume 过几次。到上限就放弃，避免一个坏会话反复重跑烧钱。
     resume_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    #: ★ v1.92：这一轮累计 token（多轮模型调用相加）。
+    #:
+    #: `usage_reported=False` 表示接入点全程没给 usage —— 三个 0 不代表
+    #: 没消耗。与 `TokenUsage.reported` 同一条纪律。
+    prompt_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    completion_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    total_tokens: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    usage_reported: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="0"
+    )
 
     #: 死掉的原因（异常类型 + 一句话）。对用户可见，所以要脱敏。
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

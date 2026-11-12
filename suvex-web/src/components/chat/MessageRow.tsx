@@ -2,7 +2,7 @@ import { memo, useState } from 'react'
 
 import { useI18n } from '@/i18n'
 import { copyText } from '@/lib/clipboard'
-import { Check, ChevronDown, ChevronRight, Copy, Sparkles } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, GitBranch, Sparkles } from 'lucide-react'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
@@ -42,6 +42,7 @@ export const MessageRow = memo(
     prev.message === next.message &&
     prev.sessionId === next.sessionId &&
     prev.deciding === next.deciding &&
+    prev.onFork === next.onFork &&
     // 待审批的那一行必须跟着回调用最新的（理由见 AssistantTurn 的比较函数）
     (prev.message.approvalStatus !== 'pending' || prev.onDecide === next.onDecide),
 ) as typeof MessageRowImpl
@@ -51,11 +52,14 @@ function MessageRowImpl({
   deciding,
   onDecide,
   sessionId,
+  onFork,
 }: {
   message: ChatMessage
   /** 有一条审批正在提交 —— 禁用按钮防重复点。 */
   deciding?: boolean
   onDecide?: (approve: boolean) => void
+  /** 从这里分叉出一条新时间线。 */
+  onFork?: (seq: number) => void
   /** 当前会话 id。给了才把正文里的 `/work/persist/...` 渲染成下载链接。 */
   sessionId?: string
 }) {
@@ -89,6 +93,7 @@ function MessageRowImpl({
               {formatClock(message.createdAt)}
             </time>
             <CopyButton text={message.content} />
+            {onFork && <ForkButton seq={message.seq} onFork={onFork} />}
           </div>
         </div>
       </div>
@@ -103,8 +108,9 @@ function MessageRowImpl({
     <div className="flex flex-col gap-1.5" data-message-row="assistant" data-seq={message.seq}>
       {message.reasoning && <ReasoningBlock text={message.reasoning} />}
       <div className="group/answer relative break-words text-base leading-7 text-ink" data-markdown-answer>
-        <div className="absolute -top-1 right-0 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/answer:opacity-100">
+        <div className="absolute -top-1 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/answer:opacity-100">
           <CopyButton text={message.content} />
+          {onFork && <ForkButton seq={message.seq} onFork={onFork} />}
         </div>
         <WriteupMarkdown markdown={message.content} sessionId={sessionId} />
       </div>
@@ -178,6 +184,22 @@ function CopyButton({ text }: { text: string }) {
       ) : (
         <Copy size={11} strokeWidth={2} aria-hidden="true" />
       )}
+    </button>
+  )
+}
+
+/** 从这条消息分叉：复制截至它的历史，另开一条时间线。 */
+function ForkButton({ seq, onFork }: { seq: number; onFork: (seq: number) => void }) {
+  const { t } = useI18n()
+  return (
+    <button
+      type="button"
+      onClick={() => onFork(seq)}
+      aria-label={t('chat.fork', undefined, '从这里分叉')}
+      title={t('chat.fork', undefined, '从这里分叉')}
+      className="rounded-sm p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+    >
+      <GitBranch size={11} strokeWidth={2} aria-hidden="true" />
     </button>
   )
 }

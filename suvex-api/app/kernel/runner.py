@@ -2796,6 +2796,7 @@ class LlmGateway:
         finish_reason: list[str] | None = None,
         tool_calls: list[dict] | None = None,
         tools: list[dict[str, Any]] | None = None,
+        usage_out: list[dict] | None = None,
     ) -> AsyncIterator[str]:
         """流式调模型，逐块产出**正文增量**（v0.102）。
 
@@ -2938,6 +2939,16 @@ class LlmGateway:
                 #   所以不能用 `delta` 是否为空来门控，否则这类网关的收尾原因
                 #   会被丢掉，v1.13 的截断检测随之静默失效。
                 #   多解析一帧正文的成本可以接受（每帧只有一次字典取值）。
+                # ★ v1.92：流式用量通常在收尾帧（choices=[] + usage）。
+                #   与 finish_reason 同一条"可选 list 出口"的纪律：不改返回类型。
+                if usage_out is not None:
+                    try:
+                        frame = json.loads(sse_data) if sse_data else None
+                    except (TypeError, ValueError):
+                        frame = None
+                    usage = frame.get("usage") if isinstance(frame, dict) else None
+                    if isinstance(usage, dict) and usage:
+                        usage_out.append(usage)
                 if finish_reason is not None:
                     reason = stream_finish_reason(self.anthropic, sse_event, sse_data)
                     if reason:

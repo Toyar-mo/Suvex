@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -489,4 +490,26 @@ def give_up(db: Session, run: ChatTurnRun, *, reason: str) -> None:
     run.status = "failed"
     run.last_error = redact(reason)
     run.heartbeat_at = now_utc()
+    db.flush()
+
+
+def add_usage(db: Session, run: ChatTurnRun, usage: Any) -> None:
+    """把一次模型调用的用量累加进这一轮（v1.92）。
+
+    只累加接入点**真的给了**的字段；`usage.reported=False` 时只把
+    `usage_reported` 保持原状 —— 三个 0 与"没记录"必须分开。
+    """
+    if usage is None:
+        return
+    reported = bool(getattr(usage, "reported", False))
+    if not reported:
+        return
+    run.prompt_tokens = (run.prompt_tokens or 0) + int(getattr(usage, "prompt_tokens", 0) or 0)
+    run.completion_tokens = (run.completion_tokens or 0) + int(
+        getattr(usage, "completion_tokens", 0) or 0
+    )
+    run.total_tokens = (run.total_tokens or 0) + int(
+        getattr(usage, "billable_total", 0) or 0
+    )
+    run.usage_reported = True
     db.flush()

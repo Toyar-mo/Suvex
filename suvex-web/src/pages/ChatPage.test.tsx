@@ -50,6 +50,7 @@ vi.mock('@/data/auth-store', () => ({
 vi.mock('@/data/chat', () => ({
   useChat: vi.fn(),
   loadSessions: vi.fn(async () => {}),
+  forkSession: vi.fn(async () => null),
   loadTools: vi.fn(async () => {}),
   openSession: vi.fn(async () => {}),
   createSession: vi.fn(async () => null),
@@ -104,6 +105,7 @@ import {
   archiveSession,
   createSession,
   fetchMcpStatus,
+  forkSession,
   interject,
   interruptTurn,
   listTurns,
@@ -118,6 +120,7 @@ import ChatPage from './ChatPage'
 
 const mockedUseAuth = vi.mocked(useAuth)
 const mockedUseChat = vi.mocked(useChat)
+const mockedForkSession = vi.mocked(forkSession)
 const mockedSendMessage = vi.mocked(sendMessage)
 const mockedCreateSession = vi.mocked(createSession)
 const mockedArchiveSession = vi.mocked(archiveSession)
@@ -1828,5 +1831,25 @@ describe('ChatPage — 子代理入口与子会话面包屑（v1.92）', () => {
     expect(crumb).not.toBeNull()
     expect(crumb.textContent).toContain('主线调查')
     expect(crumb.textContent).toContain('返回主线')
+  })
+})
+
+describe('ChatPage — 从消息分叉（v1.92）', () => {
+  it('助手答复上的 GitBranch 按钮把消息 seq 交给 forkSession', async () => {
+    const answer = message({
+      id: 'm_answer',
+      seq: 7,
+      role: 'assistant',
+      content: '这是结论',
+      surface: 'answer',
+    })
+    mockedUseChat.mockReturnValue(
+      chatState({ active: { ...session(), messages: [answer] } }),
+    )
+    mockedForkSession.mockResolvedValueOnce(null)
+    renderPage('/chat?session=chat_1')
+
+    fireEvent.click(screen.getByRole('button', { name: '从这里分叉' }))
+    expect(mockedForkSession).toHaveBeenCalledWith('chat_1', 7)
   })
 })

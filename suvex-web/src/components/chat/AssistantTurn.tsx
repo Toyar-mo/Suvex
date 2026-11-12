@@ -45,6 +45,7 @@ export const AssistantTurn = memo(
     prev.liveToolOutput === next.liveToolOutput &&
     prev.liveToolArgs === next.liveToolArgs &&
     prev.liveToolProgress === next.liveToolProgress &&
+    prev.onFork === next.onFork &&
     prev.deciding === next.deciding &&
     prev.meta === next.meta &&
     prev.sessionId === next.sessionId &&
@@ -93,6 +94,7 @@ function AssistantTurnImpl({
   liveToolProgress = null,
   deciding,
   onDecide,
+  onFork,
   interjections = [],
   meta,
   progress = null,
@@ -116,6 +118,8 @@ function AssistantTurnImpl({
   liveToolProgress?: number | null
   deciding?: boolean
   onDecide?: (messageId: string, approve: boolean) => void
+  /** 从某条消息分叉（GitBranch 按钮）。 */
+  onFork?: (seq: number) => void
   /** 跑的过程中用户插的话（已落库、等下一轮被读到）。 */
   interjections?: ChatMessage[]
   /** 页脚右侧的附加信息（例如人格 / 接入点）。 */
@@ -171,7 +175,12 @@ function AssistantTurnImpl({
             )
           }
           return (
-            <MessageRow key={message.id} message={message} sessionId={sessionId} />
+            <MessageRow
+              key={message.id}
+              message={message}
+              sessionId={sessionId}
+              onFork={onFork}
+            />
           )
         })}
       </div>

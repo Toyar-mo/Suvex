@@ -73,6 +73,7 @@ from app.chat.schemas import (
     ChatFileListOut,
     ChatFileOut,
     ChatFileUploadOut,
+    ChatForkIn,
     ChatInterjectIn,
     ChatInterruptIn,
     ChatMcpStatusOut,
@@ -169,6 +170,31 @@ def open_challenge_session(
     )
     db.commit()
     return ChatSessionOut.model_validate(session)
+
+
+@router.post(
+    "/chat/sessions/{session_id}/fork",
+    response_model=ChatSessionOut,
+    status_code=201,
+    summary="从某条消息处复制一段历史，另开一条时间线",
+)
+def fork_chat_session(
+    session_id: str,
+    payload: ChatForkIn,
+    db: DbSession,
+    identity: Reader,
+) -> ChatSessionOut:
+    source = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    child = service.fork_session(
+        db,
+        source=source,
+        upto_seq=payload.messageSeq,
+        title=payload.title,
+    )
+    db.commit()
+    return ChatSessionOut.model_validate(child)
 
 
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetailOut)
