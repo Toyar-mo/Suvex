@@ -680,7 +680,9 @@ export function ConfirmStep({
           className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
         />
         <span className="flex flex-col gap-1">
-          <span className="text-sm text-ink">{SCAN_AUTHORIZATION_STATEMENT}</span>
+          <span className="text-sm text-ink">
+            {t('scans.authorization.statement', undefined, SCAN_AUTHORIZATION_STATEMENT)}
+          </span>
           <span className="text-2xs text-ink-muted">
             <T
               k="scans2.confirm.authNote"
@@ -773,13 +775,23 @@ function ValidationFeedback({
   show: boolean
   validation: TargetValidation
 }) {
+  const { t } = useI18n()
   if (show && validation.error) {
     return (
       <p id={id} role="alert" className="mt-1.5 flex items-start gap-1 text-xs text-signal-risk">
         <Info size={12} strokeWidth={2} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
-          {validation.error}
-          {validation.hint && <span className="text-ink-faint"> —— {validation.hint}</span>}
+          {validation.errorKey
+            ? t(validation.errorKey, undefined, validation.error ?? '')
+            : validation.error}
+          {validation.hint && (
+            <span className="text-ink-faint">
+              {' —— '}
+              {validation.hintKey
+                ? t(validation.hintKey, validation.hintVars, validation.hint)
+                : validation.hint}
+            </span>
+          )}
         </span>
       </p>
     )
@@ -788,7 +800,9 @@ function ValidationFeedback({
   if (validation.hint) {
     return (
       <p id={id} className="mt-1.5 text-xs text-ink-faint">
-        {validation.hint}
+        {validation.hintKey
+          ? t(validation.hintKey, validation.hintVars, validation.hint)
+          : validation.hint}
       </p>
     )
   }

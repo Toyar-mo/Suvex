@@ -51,8 +51,13 @@ export interface CommandItem {
   kind: CommandKind
   /** 主文案。用户就是靠它找东西 */
   title: string
+  /** 可选 i18n key；没有时直接用 title（用户数据）。 */
+  titleKey?: string
+  titleVars?: Record<string, string | number>
   /** 副文案。补充区分度（目标、状态、时间） */
   subtitle: string
+  subtitleKey?: string
+  subtitleVars?: Record<string, string | number>
   /** 跳转路径 */
   to: string
   /**
@@ -292,6 +297,8 @@ export function scheduleCommands(schedules: readonly ScheduleLike[]): CommandIte
     kind: 'schedule' as const,
     title: schedule.name,
     subtitle: `${schedule.enabled ? '启用中' : '已停用'} · ${schedule.target}`,
+    subtitleKey: schedule.enabled ? 'command.schedule.enabled' : 'command.schedule.disabled',
+    subtitleVars: { target: schedule.target },
     to: '/schedules',
     keywords: `${schedule.name} ${schedule.target} ${schedule.id}`,
   }))

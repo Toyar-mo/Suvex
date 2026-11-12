@@ -22,6 +22,10 @@ export interface TargetValidation {
   error: string | null
   /** 即时提示（不是错误）—— 帮助用户理解格式，或预告会发生什么 */
   hint: string | null
+  /** i18n keys：界面优先用它们，字符串本身保留为兼容/测试兜底。 */
+  errorKey?: string
+  hintKey?: string
+  hintVars?: Record<string, string | number>
 }
 
 export function validateTarget(kind: TargetKind, raw: string): TargetValidation {
@@ -38,13 +42,13 @@ export function validateTarget(kind: TargetKind, raw: string): TargetValidation 
     那一块的下方，正好用来回答"为什么不用填"。
   */
   if (kind === 'artifact') {
-    return { ok: true, error: null, hint: '这类题目只用附件，不需要目标地址。' }
+    return { ok: true, error: null, hint: '这类题目只用附件，不需要目标地址。', hintKey: 'target.hint.artifact' }
   }
 
   const value = raw.trim()
 
   if (value.length === 0) {
-    return { ok: false, error: '请填写目标', hint: null }
+    return { ok: false, error: '请填写目标', hint: null, errorKey: 'target.error.required' }
   }
 
   switch (kind) {
@@ -107,19 +111,25 @@ function validateService(value: string): TargetValidation {
     return {
       ok: false,
       error: '不是合法的 TCP 目标',
+      errorKey: 'target.error.service',
       hint: `格式应为 ${TARGET_KIND_HINT.service.example}，也可以直接粘贴平台的连接命令（openssl s_client / nc / socat）`,
+      hintKey: 'target.hint.service',
+      hintVars: { example: TARGET_KIND_HINT.service.example },
     }
   }
 
   if (found.port < 1 || found.port > 65535) {
-    return { ok: false, error: `端口 ${found.port} 超出范围`, hint: '端口应在 1-65535 之间' }
+    return { ok: false, error: `端口 ${found.port} 超出范围`, errorKey: 'target.error.portOut', hint: '端口应在 1-65535 之间', hintKey: 'target.hint.portRange' }
   }
 
   if (!found.host.includes('.') && found.host !== 'localhost') {
     return {
       ok: false,
       error: '主机名看起来不完整',
+      errorKey: 'target.error.host',
       hint: `需要可解析的域名或 IP，例如 ${TARGET_KIND_HINT.service.example}`,
+      hintKey: 'target.hint.hostService',
+      hintVars: { example: TARGET_KIND_HINT.service.example },
     }
   }
 
@@ -129,9 +139,11 @@ function validateService(value: string): TargetValidation {
       ok: true,
       error: null,
       hint: `已从粘贴的命令里提取 ${canonical}；将按原始 TCP 连接（不是 HTTP）。`,
+      hintKey: 'target.hint.serviceExtracted',
+      hintVars: { canonical },
     }
   }
-  return { ok: true, error: null, hint: '将按原始 TCP 连接（不是 HTTP）。' }
+  return { ok: true, error: null, hint: '将按原始 TCP 连接（不是 HTTP）。', hintKey: 'target.hint.serviceTcp' }
 }
 
 function validateUrl(value: string): TargetValidation {
@@ -146,7 +158,10 @@ function validateUrl(value: string): TargetValidation {
     return {
       ok: false,
       error: '不是合法的 URL',
+      errorKey: 'target.error.url',
       hint: `格式应为 ${TARGET_KIND_HINT.url.example}`,
+      hintKey: 'target.hint.url',
+      hintVars: { example: TARGET_KIND_HINT.url.example },
     }
   }
 
@@ -154,7 +169,9 @@ function validateUrl(value: string): TargetValidation {
     return {
       ok: false,
       error: '主机名看起来不完整',
+      errorKey: 'target.error.host',
       hint: '需要可解析的域名或 IP，例如 api.example.com',
+      hintKey: 'target.hint.hostUrl',
     }
   }
 
@@ -163,6 +180,8 @@ function validateUrl(value: string): TargetValidation {
     ok: true,
     error: null,
     hint: hasScheme ? null : `将按 ${parsed.protocol}// 访问`,
+    hintKey: hasScheme ? undefined : 'target.hint.scheme',
+    hintVars: hasScheme ? undefined : { scheme: `${parsed.protocol}//` },
   }
 }
 
@@ -173,10 +192,13 @@ function validateRepo(value: string): TargetValidation {
     return {
       ok: false,
       error: '不是合法的仓库地址',
+      errorKey: 'target.error.repo',
       hint: `支持 https 或 git@ 形式，例如 ${TARGET_KIND_HINT.repo.example}`,
+      hintKey: 'target.hint.repo',
+      hintVars: { example: TARGET_KIND_HINT.repo.example },
     }
   }
-  return { ok: true, error: null, hint: '将以只读方式克隆到沙箱。' }
+  return { ok: true, error: null, hint: '将以只读方式克隆到沙箱。', hintKey: 'target.hint.repoClone' }
 }
 
 function validatePath(value: string): TargetValidation {
@@ -186,11 +208,14 @@ function validatePath(value: string): TargetValidation {
     return {
       ok: false,
       error: '需要绝对路径',
+      errorKey: 'target.error.path',
       hint: `相对路径无法确定指向哪里，例如 ${TARGET_KIND_HINT.path.example}`,
+      hintKey: 'target.hint.path',
+      hintVars: { example: TARGET_KIND_HINT.path.example },
     }
   }
   // 说明"不会修改文件" —— 这是用户在选择本地路径时最关心的事
-  return { ok: true, error: null, hint: '将直接读取该目录，不会修改文件。' }
+  return { ok: true, error: null, hint: '将直接读取该目录，不会修改文件。', hintKey: 'target.hint.pathRead' }
 }
 
 /**
