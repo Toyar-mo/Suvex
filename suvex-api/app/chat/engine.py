@@ -43,6 +43,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
 import json
 import logging
@@ -90,6 +91,7 @@ from app.chat.stream import (
     EVENT_MESSAGE,
     EVENT_PHASE,
     EVENT_TOOL_OUTPUT,
+    EVENT_TOOL_PROGRESS,
     Emit,
 )
 from app.core.errors import ApiError
@@ -3295,6 +3297,51 @@ def _needs_approval(name: str) -> bool:
     return name in approval_gated_names() or mcp_tools.is_mcp_tool_name(name)
 
 
+def _tool_progress_emitter(emit: Emit | None, name: str) -> Any:
+    """每 5 秒报一次"还在跑"的心跳（没有 emit 时为 None）。"""
+    if emit is None:
+        return None
+
+    async def _send(seconds: int) -> None:
+        await emit(EVENT_TOOL_PROGRESS, {"tool": name, "seconds": seconds})
+
+    return _send
+
+
+async def _with_heartbeat(
+    awaitable: Any,
+    on_progress: Any,
+) -> Any:
+    """等待一个工具结果，同时每 5 秒推一次心跳。
+
+    ★ 只对**可能慢**且没有可读输出的工具（MCP / verify_http / 建扫描…）
+      挂在外面；`run_shell` / `browser` 自己会推输出，不再叠加心跳。
+      心跳不写进工具输出，避免把"等了多少秒"伪装成命令结果。
+    """
+    import asyncio
+    import time
+
+    if on_progress is None:
+        return await awaitable
+
+    async def _tick() -> None:
+        started = time.monotonic()
+        while True:
+            await asyncio.sleep(5)
+            try:
+                await on_progress(int(time.monotonic() - started))
+            except Exception:  # noqa: BLE001 - 心跳失败不该影响工具
+                _log.debug("工具心跳发送失败", exc_info=True)
+
+    task = asyncio.create_task(_tick())
+    try:
+        return await awaitable
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+
 def _tool_output_emitter(emit: Emit | None, name: str) -> Any:
     """把工具输出块转成 SSE 帧（没有 emit 时返回 None，走非流式路径）。"""
     if emit is None:
@@ -3312,6 +3359,7 @@ async def _execute_tool(
     args: dict[str, Any],
     *,
     on_output: Any = None,
+    on_progress: Any = None,
 ) -> tuple[str, bool]:
     """执行一个工具，返回 `(结果文本, 是否失败)`。
 
@@ -3356,8 +3404,10 @@ async def _execute_tool(
         #   最终文本与内核版逐字一致（同一套截断/超时说明）。
         if name == "run_shell" and on_output is not None:
             text = await chat_sandbox.stream_run_shell(ctx, args, on_output)
+        elif name == "browser" and on_output is not None:
+            text = await chat_sandbox.tool_browser(ctx, args, on_output)
         else:
-            text = await impl(ctx, args)
+            text = await _with_heartbeat(impl(ctx, args), on_progress)
     except _ToolDenied as exc:
         return f"失败：{exc}", True
     except Exception as exc:  # noqa: BLE001 - 工具内部崩了不该毁掉整轮对话
@@ -4389,7 +4439,8 @@ async def run_turn(
 
             tool_started = time.perf_counter()
             output, failed = await _execute_tool(
-                ctx, name, args, on_output=_tool_output_emitter(emit, name)
+                ctx, name, args, on_output=_tool_output_emitter(emit, name),
+                on_progress=_tool_progress_emitter(emit, name),
             )
             tool_elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
             tools_used += 1
@@ -4505,6 +4556,7 @@ async def resume_approved(
         message.tool_name or "",
         message.tool_args or {},
         on_output=_tool_output_emitter(emit, message.tool_name or ""),
+        on_progress=_tool_progress_emitter(emit, message.tool_name or ""),
     )
     chat_service.finish_approved_tool(
         db, session=session, message=message, output=output, failed=failed

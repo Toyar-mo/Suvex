@@ -505,6 +505,8 @@ for (const [locale, labels] of Object.entries(SCREEN_LABELS)) {
 const FRAME_LABELS: Record<LocaleId, Dict> = {
   'zh-CN': {
     "chat.new": "新对话",
+    "chat.expandAll": "已展开全部工具输出",
+    "chat.collapseAll": "已收起全部工具输出",
     "tools.card.output": "输出",
     "chat.copyMessage": "复制消息",
     "chat.thinking": "思考过程",
@@ -844,6 +846,8 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   'zh-TW': {
     "chat.new": "新對話",
+    "chat.expandAll": "已展開全部工具輸出",
+    "chat.collapseAll": "已收起全部工具輸出",
     "tools.card.output": "輸出",
     "chat.copyMessage": "複製訊息",
     "chat.thinking": "思考過程",
@@ -1035,6 +1039,8 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   en: {
     "chat.new": "New chat",
+    "chat.expandAll": "Expanded all tool output",
+    "chat.collapseAll": "Collapsed all tool output",
     "tools.card.output": "Output",
     "chat.copyMessage": "Copy message",
     "chat.thinking": "Thought process",
@@ -1393,6 +1399,8 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   ja: {
     "chat.new": "新しい会話",
+    "chat.expandAll": "すべてのツール出力を展開しました",
+    "chat.collapseAll": "すべてのツール出力を折りたたみました",
     "tools.card.output": "出力",
     "chat.copyMessage": "メッセージをコピー",
     "chat.thinking": "思考プロセス",

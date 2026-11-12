@@ -18,6 +18,7 @@ import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
 import type { ChatMessage } from '@/data/chat'
 import { digestToolArgs } from './toolCardDigest'
+import { setToolExpansion, useToolExpansion } from './toolExpansion'
 
 /**
  * 工具卡：一次调用到底做了什么。
@@ -50,7 +51,10 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
   const content = message.content ?? ''
   const lines = content.split('\n')
   const lineCount = lines.length
-  const [open, setOpen] = useState(true)
+  const [localOpen, setLocalOpen] = useState(true)
+  const expansion = useToolExpansion()
+  // Ctrl+O 的全局覆盖优先于单卡状态；点任意一张卡会回到 auto。
+  const open = expansion === 'expanded' ? true : expansion === 'collapsed' ? false : localOpen
   const [copied, setCopied] = useState(false)
   const bodyRef = useRevealOnExpand<HTMLDivElement>(open)
   const argDigest = digestToolArgs(message.toolArgs)
@@ -86,7 +90,10 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
       <button
         type="button"
         data-tool-toggle="true"
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (expansion !== 'auto') setToolExpansion('auto')
+          setLocalOpen((value) => !value)
+        }}
         aria-expanded={open}
         className={cn(
           'group flex w-full min-w-0 items-center gap-2 px-2.5 py-1.5 text-left',

@@ -70,7 +70,6 @@ keepalive、其他会话的轮次）全部卡死。
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
 import threading
@@ -631,18 +630,19 @@ async def _tool_run_shell(ctx: Any, args: dict[str, Any]) -> str:
         )
 
 
-async def _tool_browser(ctx: Any, args: dict[str, Any]) -> str:
+async def _tool_browser(
+    ctx: Any,
+    args: dict[str, Any],
+    on_chunk: Any = None,
+) -> str:
     """在对话沙箱里操作浏览器（agent-browser）。
 
-    实现与 `run_shell` 同构：内核的 `run_browser` 也是 `async def`
-    但没有 await 点，它内部 `_invoke` 走的是阻塞 subprocess。
+    v1.92 起支持流式：`agent-browser` 的原始输出边跑边推给界面。
+    目标守卫只守 `open`（其余子命令操作已打开的页面）。
     """
     from app.chat import scope as chat_scope
     from app.kernel import browser as browser_mod
 
-    # ★ 只守 `open`：其余子命令操作的是已经打开的页面，不引入新目标。
-    #   `eval` 里再 fetch 是已知的漏，写在 `app/chat/scope.py` 的
-    #   模块 docstring「它挡不住什么」里，不在这里假装挡住了。
     if str(args.get("command") or "").strip().lower() == "open":
         url = str(args.get("url") or "").strip()
         if url:
@@ -650,26 +650,10 @@ async def _tool_browser(ctx: Any, args: dict[str, Any]) -> str:
             if blocked:
                 return blocked
 
-    def _work() -> str:
-        sandbox = get_sandbox(ctx.session)
-        return asyncio.run(browser_mod.run_browser(args, sandbox=sandbox))
-
+    sandbox = await asyncio.to_thread(get_sandbox, ctx.session)
     try:
-        return await asyncio.to_thread(_work)
-    except RuntimeError as exc:
-        # 同 `run_shell`：这是代码缺陷，不是浏览器/环境问题。
-        if "running event loop" in str(exc):
-            _log.error(
-                "对话 browser 在事件循环里跑了阻塞代码 —— `asyncio.to_thread` 被绕过了。",
-                exc_info=True,
-            )
-            raise
-        _log.warning("对话 browser 失败", exc_info=True)
-        return (
-            f"失败：浏览器不可用（{type(exc).__name__}: {exc}）。\n"
-            "这通常是沙箱起不来，不是选择器写错了。"
-        )
-    except Exception as exc:  # noqa: BLE001
+        return await browser_mod.run_browser(args, sandbox=sandbox, on_chunk=on_chunk)
+    except Exception as exc:  # noqa: BLE001 - 浏览器起不来不该毁掉整轮
         _log.warning("对话 browser 失败", exc_info=True)
         return (
             f"失败：浏览器不可用（{type(exc).__name__}: {exc}）。\n"
@@ -741,7 +725,6 @@ async def stream_run_shell(
     退出码与 `失败：` 前缀决定（与内核版一致）。
     """
     import asyncio
-    import codecs
     import shlex
 
     from app.kernel import runner
@@ -768,66 +751,12 @@ async def stream_run_shell(
         return blocked
 
     sandbox = await asyncio.to_thread(get_sandbox, ctx.session)
-    argv = [
-        "docker",
-        "exec",
-        "-i",
-        "-e",
-        "TERM=dumb",
-        sandbox.name,
-        "timeout",
-        "--signal=KILL",
-        str(timeout),
-        "bash",
-        "-lc",
-        command,
-    ]
-
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    decoder = codecs.getincrementaldecoder("utf-8")("replace")
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout + 30
-    parts: list[str] = []
-    timed_out = False
-    emitted = 0
-
-    assert proc.stdout is not None  # create_subprocess_exec 已给 PIPE
-    try:
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                timed_out = True
-                break
-            try:
-                chunk = await asyncio.wait_for(proc.stdout.read(4096), remaining)
-            except TimeoutError:
-                timed_out = True
-                break
-            if not chunk:
-                break
-            text = decoder.decode(chunk)
-            if not text:
-                continue
-            parts.append(text)
-            # 每次 read 至多 4KB，已经天然分块；再设一个事件上限，
-            # 防止 `yes` 这类无限输出把 SSE 刷成一条瀑布。
-            if on_chunk is not None and emitted < 256:
-                emitted += 1
-                await on_chunk(text)
-    finally:
-        if timed_out:
-            with contextlib.suppress(ProcessLookupError):
-                proc.kill()
-        with contextlib.suppress(Exception):
-            await proc.wait()
-
-    out = ''.join(parts)
-    if timed_out:
-        return f"命令超时（{timeout} 秒）已被容器内 timeout 终止。\n{out}"
+    # ★ 真正的执行与分块在 `SandboxContainer.stream_shell`：浏览器复用
+    #   同一个方法，两条路径的输出口径不会漂。
+    result = await sandbox.stream_shell(command, timeout=timeout, on_chunk=on_chunk)
+    if result.exit_code == 124:
+        return f"命令超时（{timeout} 秒）已被容器内 timeout 终止。\n{result.stdout}"
+    out = result.stdout
     if len(out) > runner.MAX_TOOL_OUTPUT_CHARS:
         return (
             runner._clip_both_ends(out, runner.MAX_TOOL_OUTPUT_CHARS)

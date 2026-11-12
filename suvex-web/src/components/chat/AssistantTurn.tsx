@@ -44,6 +44,7 @@ export const AssistantTurn = memo(
     prev.liveTool === next.liveTool &&
     prev.liveToolOutput === next.liveToolOutput &&
     prev.liveToolArgs === next.liveToolArgs &&
+    prev.liveToolProgress === next.liveToolProgress &&
     prev.deciding === next.deciding &&
     prev.meta === next.meta &&
     prev.sessionId === next.sessionId &&
@@ -89,6 +90,7 @@ function AssistantTurnImpl({
   liveTool = null,
   liveToolOutput = null,
   liveToolArgs = null,
+  liveToolProgress = null,
   deciding,
   onDecide,
   interjections = [],
@@ -110,6 +112,8 @@ function AssistantTurnImpl({
   liveToolOutput?: string | null
   /** 运行中工具的浅层参数摘要（phase 帧带下来的）。 */
   liveToolArgs?: Record<string, string> | null
+  /** 长工具心跳（秒）；没有可读输出时用它证明还活着。 */
+  liveToolProgress?: number | null
   deciding?: boolean
   onDecide?: (messageId: string, approve: boolean) => void
   /** 跑的过程中用户插的话（已落库、等下一轮被读到）。 */
@@ -204,6 +208,7 @@ function AssistantTurnImpl({
           args={liveToolArgs}
           output={liveToolOutput}
           elapsed={elapsed}
+          heartbeat={liveToolProgress}
         />
       )}
 
@@ -272,11 +277,13 @@ function LiveToolCard({
   args,
   output,
   elapsed,
+  heartbeat,
 }: {
   name: string
   args: Record<string, string> | null
   output: string | null
   elapsed: number
+  heartbeat: number | null
 }) {
   const ref = useRef<HTMLPreElement>(null)
   const digest = digestToolArgs(args)
@@ -304,7 +311,7 @@ function LiveToolCard({
           </span>
         )}
         <span className="shrink-0 text-2xs text-ink-faint">
-          执行中…{elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
+          执行中…{heartbeat != null ? ` · 已等待 ${heartbeat} 秒` : elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
         </span>
       </div>
       {output ? (

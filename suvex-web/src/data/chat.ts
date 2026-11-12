@@ -9,6 +9,7 @@ import {
   TURN_MESSAGE,
   TURN_PHASE,
   TURN_TOOL_OUTPUT,
+  TURN_TOOL_PROGRESS,
   asChatMessage,
   streamTurn,
   type PhasePayload,
@@ -301,6 +302,8 @@ export interface ChatState {
   phase: PhasePayload | null
   /** ★ v1.92：运行中工具的输出增量（仅界面展示，不落库）。 */
   liveToolOutput: { tool: string; text: string } | null
+  /** ★ v1.92：长工具心跳（MCP / verify_http …），用于运行卡的状态行。 */
+  liveToolProgress: { tool: string; seconds: number } | null
   /**
    * ★ v0.100：跑的过程中**用户插的话**（还没被模型看到的那几句）。
    *
@@ -451,6 +454,7 @@ const EMPTY: ChatState = {
   sendingSessionId: null,
   phase: null,
   liveToolOutput: null,
+  liveToolProgress: null,
   interjections: [],
   streamingText: null,
   deciding: false,
@@ -1087,6 +1091,7 @@ export async function resumeTurn(sessionId: string, runId: string): Promise<Chat
       sendingSessionIds: remaining,
       phase: null,
   liveToolOutput: null,
+  liveToolProgress: null,
       stopRequested: false,
     })
     void pollTurnProgress(sessionId)
@@ -1183,6 +1188,7 @@ export async function sendMessage(
     pendingUserContent: content,
     phase: null,
   liveToolOutput: null,
+  liveToolProgress: null,
     interjections: [],
     // ★ v0.102：新的一轮从空缓冲开始。不清的话，上一轮异常退出时
     //   残留的半句话会拼在新一轮的开头（"这个对话还是空的"那种矛盾感）。
@@ -1255,6 +1261,10 @@ export async function sendMessage(
               phase.phase === 'tool' && previous?.tool === phase.tool
                 ? state.liveToolOutput
                 : null,
+            liveToolProgress:
+              phase.phase === 'tool' && previous?.tool === phase.tool
+                ? state.liveToolProgress
+                : null,
           })
           return
         }
@@ -1272,6 +1282,14 @@ export async function sendMessage(
               text: text.length > 65_536 ? text.slice(-65_536) : text,
             },
           })
+          return
+        }
+
+        if (frame.event === TURN_TOOL_PROGRESS) {
+          const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
+          const seconds = typeof frame.data.seconds === 'number' ? frame.data.seconds : 0
+          if (!tool || seconds <= 0) return
+          patch({ liveToolProgress: { tool, seconds } })
           return
         }
 
@@ -1307,6 +1325,10 @@ export async function sendMessage(
               message.role === 'tool' && message.toolName === state.liveToolOutput?.tool
                 ? null
                 : state.liveToolOutput,
+            liveToolProgress:
+              message.role === 'tool' && message.toolName === state.liveToolProgress?.tool
+                ? null
+                : state.liveToolProgress,
           })
           return
         }
@@ -1327,7 +1349,7 @@ export async function sendMessage(
 
         if (frame.event === TURN_AWAITING) {
           // 停下来等人工确认：清掉 phase，界面据此把输入框让出来并提示
-          patch({ phase: null, liveToolOutput: null })
+          patch({ phase: null, liveToolOutput: null, liveToolProgress: null })
           return
         }
 
@@ -1353,7 +1375,7 @@ export async function sendMessage(
         }
 
         if (frame.event === TURN_DONE) {
-          patch({ phase: null, liveToolOutput: null })
+          patch({ phase: null, liveToolOutput: null, liveToolProgress: null })
         }
       },
     })

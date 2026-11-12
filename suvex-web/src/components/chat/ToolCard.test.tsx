@@ -81,3 +81,17 @@ describe('formatDuration：工具卡耗时（v1.92）', () => {
     expect(formatDuration(-1)).toBe('')
   })
 })
+
+describe('toolExpansion — Ctrl+O 全局展开（v1.92）', () => {
+  it('三种状态可切换，reset 回到 auto', async () => {
+    const mod = await import('./toolExpansion')
+    mod.resetToolExpansion()
+    expect(mod.getToolExpansion()).toBe('auto')
+    mod.setToolExpansion('expanded')
+    expect(mod.getToolExpansion()).toBe('expanded')
+    mod.setToolExpansion('collapsed')
+    expect(mod.getToolExpansion()).toBe('collapsed')
+    mod.resetToolExpansion()
+    expect(mod.getToolExpansion()).toBe('auto')
+  })
+})

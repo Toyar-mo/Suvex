@@ -82,6 +82,7 @@ import { useProjectedProviders } from '@/data/settings-store'
 import { ensureToolsLoaded, useTools } from '@/data/tools'
 import { api, errorMessage } from '@/lib/api'
 import { showToast } from '@/data/toast-store'
+import { getToolExpansion, setToolExpansion } from '@/components/chat/toolExpansion'
 import { cn } from '@/lib/cn'
 import { useI18n } from '@/i18n'
 import {
@@ -416,6 +417,7 @@ export function ChatPage() {
     // ★ v0.100：流式过程中的两个状态 —— 现在在做什么、用户插了哪些话。
     phase,
     liveToolOutput,
+    liveToolProgress,
     interjections,
     // ★ v0.102：正在流入的正文（还没落库）。
     streamingText,
@@ -710,6 +712,28 @@ export function ChatPage() {
     旧实现只监听「消息条数」：token 在视口下方增长时页面不动，落一条
     消息又无条件跳到底 —— 正是"卡一下、猛跳一下"的来源。
   */
+  /*
+    Ctrl/Cmd+O：展开/收起**全部**工具输出（omp 的 Ctrl+O）。
+    单卡仍可独立开合；按一次快捷键进入全局模式，点任意卡退出该模式。
+  */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'o') return
+      event.preventDefault()
+      const next = getToolExpansion() === 'expanded' ? 'collapsed' : 'expanded'
+      setToolExpansion(next)
+      showToast({
+        message:
+          next === 'expanded'
+            ? t('chat.expandAll', undefined, '已展开全部工具输出')
+            : t('chat.collapseAll', undefined, '已收起全部工具输出'),
+        tone: 'ok',
+      })
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [t])
+
   const streamingLength = streamingText?.length ?? 0
   const contentKey =
     messageCount * 10_000_000 + streamingLength + (pendingUserContent !== null ? 5_000_000 : 0)
@@ -2003,6 +2027,13 @@ export function ChatPage() {
                           phaseText={isLive ? phaseLabel(phase) : null}
                           liveTool={isLive && phase?.phase === 'tool' ? (phase.tool ?? null) : null}
                           liveToolArgs={isLive && phase?.phase === 'tool' ? (phase.args ?? null) : null}
+                          liveToolProgress={
+                            isLive &&
+                            phase?.phase === 'tool' &&
+                            liveToolProgress?.tool === phase.tool
+                              ? (liveToolProgress?.seconds ?? null)
+                              : null
+                          }
                           liveToolOutput={
                             isLive &&
                             phase?.phase === 'tool' &&

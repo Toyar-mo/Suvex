@@ -175,6 +175,7 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     //   少一个字段意味着页面读到 undefined，渲染逻辑会静默走错分支。
     phase: null,
     liveToolOutput: null,
+    liveToolProgress: null,
     interjections: [],
     // ★ v0.102：正在流入的正文。同上，必须显式给 —— 缺了 tsc 会报，
     //   而页面读到 undefined 时会走错分支（`!== null` 对 undefined 成立，
@@ -1774,5 +1775,21 @@ describe('ChatPage — 输入区周围不许出现第二层底色（v1.30）', (
     expect(document.querySelectorAll('style').length).toBe(0)
     expect(document.querySelectorAll('link[rel="stylesheet"]').length).toBe(0)
     expect(document.styleSheets.length).toBe(0)
+  })
+})
+
+describe('ChatPage — Ctrl+O 展开全部工具输出（v1.92）', () => {
+  it('按一次展开、再按一次收起；单卡点击回到 auto', async () => {
+    const mod = await import('@/components/chat/toolExpansion')
+    mod.resetToolExpansion()
+    renderPage('/chat?session=chat_1')
+
+    fireEvent.keyDown(window, { key: 'o', ctrlKey: true })
+    expect(mod.getToolExpansion()).toBe('expanded')
+    fireEvent.keyDown(window, { key: 'o', ctrlKey: true })
+    expect(mod.getToolExpansion()).toBe('collapsed')
+
+    mod.resetToolExpansion()
+    expect(mod.getToolExpansion()).toBe('auto')
   })
 })

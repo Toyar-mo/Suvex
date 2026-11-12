@@ -61,8 +61,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import contextlib
 import hashlib
 import html
+import inspect
 import json
 import logging
 import os
@@ -2070,6 +2072,88 @@ class SandboxContainer:
             ["timeout", "--signal=KILL", str(int(timeout)), "bash", "-lc", command],
             timeout=timeout + 30,
         )
+
+    async def stream_shell(
+        self,
+        command: str,
+        *,
+        timeout: float = DEFAULT_SHELL_TIMEOUT,
+        on_chunk: Any = None,
+    ) -> CommandResult:
+        """与 `shell()` 同一条命令语义，但**边跑边把输出交给 `on_chunk`**。
+
+        `on_chunk` 可以是同步或异步函数；每读到一块（≤4 KB）调用一次。
+        返回值仍是完整的 `CommandResult`（`stderr` 合并在 `stdout` 里，
+        因为流式只有一条管道）—— 调用方拿它做最终截断与错误判断，
+        与 `shell()` 的结果口径一致。
+
+        ## 为什么单独一个方法，而不是把 `shell()` 改成流式
+
+        `shell()` 被解题、扫描、工具链大量复用；给它加异步回调会把每个
+        调用点都拖进异步世界。对话与浏览器的"实时感"是新增需求，用新方法
+        承接，旧路径零改动。
+
+        ## 超时
+
+        容器内 `timeout --signal=KILL` 是**真实**的终止机制（客户端断开
+        不会杀容器内进程）。外层再设 `timeout+30` 只是兜底：容器里没有
+        `timeout` 二进制时才会走到。
+        """
+        import asyncio
+
+        argv = [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            "TERM=dumb",
+            self.name,
+            "timeout",
+            "--signal=KILL",
+            str(int(timeout)),
+            "bash",
+            "-lc",
+            command,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        assert proc.stdout is not None
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout + 30
+        parts: list[str] = []
+        timed_out = False
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                timed_out = True
+                break
+            try:
+                chunk = await asyncio.wait_for(proc.stdout.read(4096), remaining)
+            except TimeoutError:
+                timed_out = True
+                break
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", "replace")
+            if not text:
+                continue
+            parts.append(text)
+            if on_chunk is not None:
+                maybe = on_chunk(text)
+                if inspect.isawaitable(maybe):
+                    await maybe
+        if timed_out:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+        code = await proc.wait()
+        out = "".join(parts)
+        # 外层兜底超时：用 124 与容器内 timeout 的退出码对齐。
+        if timed_out and code == 0:
+            code = 124
+        return CommandResult(exit_code=code, stdout=out, stderr="")
 
     def copy_in(self, host_path: Path, container_path: str) -> CommandResult:
         """把宿主上的文件送进容器（题目附件）。

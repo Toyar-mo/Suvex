@@ -74,6 +74,12 @@ export const TURN_DELTA = 'delta'
  */
 export const TURN_TOOL_OUTPUT = 'tool_output'
 
+/**
+ * 长工具的心跳：`{ tool, seconds }`。不是输出，只证明它还活着。
+ * 用于 MCP / verify_http 这类没有可读 stdout 的工具。
+ */
+export const TURN_TOOL_PROGRESS = 'tool_progress'
+
 /** `delta.data` 的形态。 */
 export interface DeltaPayload {
   text: string

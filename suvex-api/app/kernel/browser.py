@@ -75,9 +75,11 @@ profile 一起消失。所以每次调用都 `mkdir -p` 那几个目录（幂等
 
 from __future__ import annotations
 
+import asyncio
 import itertools
 import logging
 import shlex
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -207,11 +209,12 @@ def _ensure_dirs(sandbox: SandboxContainer) -> None:
     )
 
 
-def _invoke(
+async def _invoke(
     sandbox: SandboxContainer,
     argv: list[str],
     *,
     timeout: int = DEFAULT_TIMEOUT,
+    on_chunk: Callable[[str], Awaitable[None]] | None = None,
 ):
     """在容器里跑一条 `agent-browser <argv>`。
 
@@ -236,7 +239,13 @@ def _invoke(
     把它们拆开，而症状是"选择器写对了却找不到元素"。
     """
     quoted = " ".join(shlex.quote(a) for a in argv)
-    return sandbox.shell(f"{HOME_ENV} {BIN} {quoted}", timeout=timeout)
+    command = f"{HOME_ENV} {BIN} {quoted}"
+    if on_chunk is None:
+        # 既有路径：整块返回。放进线程，避免 blocker 冻住调用方的事件循环。
+        return await asyncio.to_thread(sandbox.shell, command, timeout=timeout)
+    # 对话路径：边跑边把 CLI 的原始输出推给界面；最终结果仍由调用方
+    # 解析（JSON/人类可读文本），流式只负责"看得见在动"。
+    return await sandbox.stream_shell(command, timeout=timeout, on_chunk=on_chunk)
 
 
 def _hint_for(detail: str) -> str:
@@ -277,7 +286,12 @@ def _hint_for(detail: str) -> str:
     return ""
 
 
-async def run_browser(args: dict[str, Any], *, sandbox: SandboxContainer) -> str:
+async def run_browser(
+    args: dict[str, Any],
+    *,
+    sandbox: SandboxContainer,
+    on_chunk: Callable[[str], Awaitable[None]] | None = None,
+) -> str:
     """`browser` 工具的实现。
 
     ## 参数
@@ -352,10 +366,12 @@ async def run_browser(args: dict[str, Any], *, sandbox: SandboxContainer) -> str
         ).strip()
         full = bool(args.get("full"))
         argv = ["skills", "get", name] + (["--full"] if full else [])
-        result = _invoke(sandbox, argv, timeout=30)
+        result = await _invoke(sandbox, argv, timeout=30, on_chunk=on_chunk)
         if result.ok:
             return result.combined(limit=MAX_OUTPUT)
-        available = _invoke(sandbox, ["skills", "list"], timeout=20)
+        available = await _invoke(
+            sandbox, ["skills", "list"], timeout=20, on_chunk=on_chunk
+        )
         return (
             f"读不到内置技能 `{name}`：{result.combined(limit=600)}\n"
             f"可用清单：\n{available.combined(limit=800)}"
@@ -376,7 +392,7 @@ async def run_browser(args: dict[str, Any], *, sandbox: SandboxContainer) -> str
     # 调用超时被 SIGKILL），它自己关不掉 —— 那时 pkill 兜住。
     # 用的是 `--all`：它会关掉所有 session，而我们的容器里只有一个。
     if command == "close":
-        _invoke(sandbox, ["close", "--all"], timeout=25)
+        await _invoke(sandbox, ["close", "--all"], timeout=25, on_chunk=on_chunk)
         sandbox.shell(
             "pkill -f 'remote-debugging-port' >/dev/null 2>&1; "
             f"rm -rf {WORK_ROOT}/profile {WORK_ROOT}/sock; echo done",
@@ -517,7 +533,7 @@ async def run_browser(args: dict[str, Any], *, sandbox: SandboxContainer) -> str
     if command == "open":
         timeout = max(timeout, OPEN_TIMEOUT)
 
-    result = _invoke(sandbox, argv, timeout=timeout)
+    result = await _invoke(sandbox, argv, timeout=timeout, on_chunk=on_chunk)
 
     # ── 成功 ──────────────────────────────────────────────
     if result.ok:
