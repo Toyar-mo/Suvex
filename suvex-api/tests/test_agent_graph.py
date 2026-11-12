@@ -140,3 +140,20 @@ def test_planner_auto_adds_intent_when_queue_empty(db_session: Session) -> None:
     assert started == 1
     db_session.expire_all()
     assert added
+
+
+def test_finding_tools_are_registered_and_validate_verdict() -> None:
+    from types import SimpleNamespace
+
+    from app.agents import finding_tools
+
+    assert {"get_finding_context", "record_finding_result"} <= CHAT_TOOL_NAMES
+    import asyncio
+
+    out = asyncio.run(
+        finding_tools.record_finding_result(
+            SimpleNamespace(db=None, identity=None),
+            {"finding_id": "f1", "verdict": "maybe", "evidence": "x"},
+        )
+    )
+    assert out.startswith("失败：verdict")

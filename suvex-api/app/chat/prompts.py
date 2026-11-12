@@ -507,6 +507,18 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         params="intent_id（必填）、status（必填）、result（证据与结论）",
     ),
     ChatToolSpec(
+        name="get_finding_context",
+        label="读漏洞上下文",
+        description="读取一条漏洞的完整证据、PoC、时间线与处置状态；复测/验证先读它。",
+        params="finding_id（必填）",
+    ),
+    ChatToolSpec(
+        name="record_finding_result",
+        label="写回复测/验证结论",
+        description="按 verdict 写回结论并留痕：reproduced/verified→已确认，fixed→已修复，false_positive→误报，inconclusive 不改状态。",
+        params="finding_id（必填）、verdict（必填）、evidence（必填，真实证据）",
+    ),
+    ChatToolSpec(
         name="prove_agent_goal",
         label="标目标完成",
         description="有证据时把目标标为 met；最后一个目标完成时任务自动结束。",
