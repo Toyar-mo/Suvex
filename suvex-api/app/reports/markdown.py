@@ -24,21 +24,22 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.reports import l10n
 from app.reports.document import coverage_note
 
 
-def render_markdown(doc: dict[str, Any]) -> str:
+def render_markdown(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     """主渲染。对应 `renderReportMarkdown`。
 
     五段之间用 `\\n\\n---\\n\\n` 分隔，尾部只留一个换行 ——
     有些 Markdown 渲染器会把尾随空行当真。
     """
     parts = [
-        _header(doc),
-        _summary(doc),
-        _overview(doc),
-        _entries(doc),
-        _appendix(doc),
+        _header(doc, locale),
+        _summary(doc, locale),
+        _overview(doc, locale),
+        _entries(doc, locale),
+        _appendix(doc, locale),
     ]
     return ("\n\n---\n\n".join(parts)).rstrip() + "\n"
 
@@ -81,22 +82,26 @@ def _fenced(code: str, language: str) -> str:
 # ══════════════════════════════════════════════════════════
 
 
-def _header(doc: dict[str, Any]) -> str:
+def _header(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     meta = doc["meta"]
     # 草稿没有编号（生成时才分配）。正常链路下 Markdown 只在生成后产出，
     # 所以这里通常走不到；但真走到了也要给出"生成后分配"，
     # 而不是渲染成一对空的反引号。
-    code_line = "生成后分配" if meta["provisional"] else f"`{meta['code']}`"
+    code_line = (
+        l10n.t(locale, "md.codePending")
+        if meta["provisional"]
+        else f"`{meta['code']}`"
+    )
     stats = doc["stats"]
     return f"""# {meta['title']}
 
 |  |  |
 | --- | --- |
-| 报告编号 | {code_line} |
-| 覆盖范围 | {_cell(meta['scope'])} |
-| 生成时间 | {meta['generatedAt'][:10]} |
-| 发现总数 | {stats['total']} 条 |
-| 涉及目标 | {len(doc['method']['targets'])} 个 |"""
+| {l10n.t(locale, "md.reportCode")} | {code_line} |
+| {l10n.t(locale, "md.scope")} | {_cell(meta['scope'])} |
+| {l10n.t(locale, "md.generatedAt")} | {meta['generatedAt'][:10]} |
+| {l10n.t(locale, "md.total")} | {l10n.t(locale, "md.countUnit", n=stats['total'])} |
+| {l10n.t(locale, "md.targetCount")} | {l10n.t(locale, "md.targetUnit", n=len(doc['method']['targets']))} |"""
 
 
 # ══════════════════════════════════════════════════════════
@@ -104,30 +109,28 @@ def _header(doc: dict[str, Any]) -> str:
 # ══════════════════════════════════════════════════════════
 
 
-def _summary(doc: dict[str, Any]) -> str:
+def _summary(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     stats = doc["stats"]
     meta = doc["meta"]
-    lines = ["## 一、摘要", "", doc["verdict"]]
+    lines = [l10n.t(locale, "md.summary"), "", doc["verdict"]]
 
     # 处置建议只在高危存在时说 —— 没有高危时喊"立即修复"是狼来了
     if stats["urgent"] > 0:
         lines += [
             "",
-            f"其中 {stats['urgent']} 条为严重或高危，建议在下一轮迭代前完成处置。",
+            l10n.t(locale, "md.urgent", n=stats["urgent"]),
         ]
 
     if stats["verified"] > 0:
         lines += [
             "",
-            f"本次共 {stats['verified']} 条通过可复现的验证脚本确认。"
-            "报告中的证据与复现步骤均来自实际执行结果，未做推测性描述。",
+            l10n.t(locale, "md.verified", n=stats["verified"]),
         ]
 
     if meta["excludedCount"] > 0:
         lines += [
             "",
-            f"本报告仅收录已确认的问题，另有 {meta['excludedCount']} 条"
-            "待确认或已判定为误报的条目未纳入。",
+            l10n.t(locale, "md.excluded", n=meta["excludedCount"]),
         ]
 
     return "\n".join(lines)
@@ -138,24 +141,35 @@ def _summary(doc: dict[str, Any]) -> str:
 # ══════════════════════════════════════════════════════════
 
 
-def _overview(doc: dict[str, Any]) -> str:
+def _overview(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     stats = doc["stats"]
-    lines = ["## 二、风险总览", ""]
+    lines = [l10n.t(locale, "md.overview"), ""]
 
     if stats["total"] == 0:
-        lines.append("本次范围内未发现需要报告的安全问题。")
+        lines.append(l10n.t(locale, "md.noFindings"))
         return "\n".join(lines)
 
-    lines += ["### 严重程度分布", "", "| 严重程度 | 数量 | 占比 |", "| --- | --- | --- |"]
+    lines += [
+        l10n.t(locale, "md.severityDist"),
+        "",
+        f"| {l10n.t(locale, 'md.severityCol')} | {l10n.t(locale, 'md.countCol')} | {l10n.t(locale, 'md.shareCol')} |",
+        "| --- | --- | --- |",
+    ]
     for row in doc["distribution"]:
         share = round((row["count"] / stats["total"]) * 100) if stats["total"] > 0 else 0
         lines.append(f"| {row['label']} | {row['count']} | {share}% |")
-    lines.append(f"| **合计** | **{stats['total']}** | 100% |")
+    lines.append(f"| **{l10n.t(locale, 'md.totalRow')}** | **{stats['total']}** | 100% |")
 
-    lines += ["", "### 处置情况", "", "| 指标 | 数量 |", "| --- | --- |"]
-    lines.append(f"| 已通过验证脚本确认 | {stats['verified']} |")
-    lines.append(f"| 已修复 | {stats['fixed']} |")
-    lines.append(f"| 待处置 | {stats['total'] - stats['fixed']} |")
+    lines += [
+        "",
+        l10n.t(locale, "md.handling"),
+        "",
+        f"| {l10n.t(locale, 'md.metricCol')} | {l10n.t(locale, 'md.countCol')} |",
+        "| --- | --- |",
+    ]
+    lines.append(f"| {l10n.t(locale, 'md.verifiedCount')} | {stats['verified']} |")
+    lines.append(f"| {l10n.t(locale, 'md.fixed')} | {stats['fixed']} |")
+    lines.append(f"| {l10n.t(locale, 'md.pending')} | {stats['total'] - stats['fixed']} |")
 
     return "\n".join(lines)
 
@@ -165,15 +179,15 @@ def _overview(doc: dict[str, Any]) -> str:
 # ══════════════════════════════════════════════════════════
 
 
-def _entries(doc: dict[str, Any]) -> str:
+def _entries(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     entries = doc["entries"]
     if not entries:
-        return "## 三、漏洞详情\n\n无。"
-    blocks = [_entry(entry) for entry in entries]
-    return "## 三、漏洞详情\n\n" + "\n\n".join(blocks)
+        return f"{l10n.t(locale, 'md.entries')}\n\n{l10n.t(locale, 'md.noEntries')}"
+    blocks = [_entry(entry, locale) for entry in entries]
+    return f"{l10n.t(locale, 'md.entries')}\n\n" + "\n\n".join(blocks)
 
 
-def _entry(entry: dict[str, Any]) -> str:
+def _entry(entry: dict[str, Any], locale: str = "zh-CN") -> str:
     """单条漏洞。
 
     小节顺序是刻意的，按读者**决策所需**排列，不按数据字段顺序：
@@ -186,35 +200,42 @@ def _entry(entry: dict[str, Any]) -> str:
     lines.append(f"### {entry['index']}. {entry['title']}")
     lines.append("")
     lines.append(
-        f"**严重程度：**{entry['severityLabel']} · **类型：**{entry['categoryLabel']} · "
-        f"**目标：**`{entry['target']}`"
+        f"**{l10n.t(locale, 'md.severity')}:** {entry['severityLabel']} · "
+        f"**{l10n.t(locale, 'md.category')}:** {entry['categoryLabel']} · "
+        f"**{l10n.t(locale, 'md.target')}:** `{entry['target']}`"
     )
     lines.append("")
     lines.append(
-        f"**验证程度：**{entry['verificationLabel']} · **处置状态：**{entry['statusLabel']} · "
-        f"**发现时间：**{entry['discoveredAt']}"
+        f"**{l10n.t(locale, 'md.verification')}:** {entry['verificationLabel']} · "
+        f"**{l10n.t(locale, 'md.status')}:** {entry['statusLabel']} · "
+        f"**{l10n.t(locale, 'md.discoveredAt')}:** {entry['discoveredAt']}"
     )
 
-    lines += ["", "#### 问题描述", "", _inline(entry["description"])]
+    lines += ["", l10n.t(locale, "md.description"), "", _inline(entry["description"])]
 
     if entry["affected"]:
-        lines += ["", "#### 受影响位置", ""]
+        lines += ["", l10n.t(locale, "md.affected"), ""]
         lines += [f"- `{location}`" for location in entry["affected"]]
 
     # 推理过程是可选项 —— 关掉时**整个小节不出现**，而不是留个空标题
     if entry["reasoning"]:
-        lines += ["", "#### 判断依据", "", _inline(entry["reasoning"])]
+        lines += ["", l10n.t(locale, "md.reasoning"), "", _inline(entry["reasoning"])]
 
-    lines += ["", "#### 证据", "", _fenced(entry["evidence"], "http")]
+    lines += ["", l10n.t(locale, "md.evidence"), "", _fenced(entry["evidence"], "http")]
 
     if entry["poc"]:
-        lines += ["", "#### 复现方式", "", _fenced(entry["poc"]["code"], entry["poc"]["language"])]
+        lines += [
+            "",
+            l10n.t(locale, "md.poc"),
+            "",
+            _fenced(entry["poc"]["code"], entry["poc"]["language"]),
+        ]
 
     if entry["remediation"]:
-        lines += ["", "#### 修复建议", "", _inline(entry["remediation"])]
+        lines += ["", l10n.t(locale, "md.remediation"), "", _inline(entry["remediation"])]
 
     if entry["dispositions"]:
-        lines += ["", "#### 处置记录", ""]
+        lines += ["", l10n.t(locale, "md.dispositions"), ""]
         lines += [f"- {item['at']} · {item['summary']}" for item in entry["dispositions"]]
 
     return "\n".join(lines)
@@ -225,43 +246,64 @@ def _entry(entry: dict[str, Any]) -> str:
 # ══════════════════════════════════════════════════════════
 
 
-def _appendix(doc: dict[str, Any]) -> str:
+def _appendix(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     """附录三节。
 
     为什么报告一定要有附录：
       正文回答"发现了什么"，附录回答"这个报告可信到什么程度、该怎么读"。
     缺了它，读者只能全盘接受结论 —— 而安全报告的结论恰恰是有条件成立的。
     """
-    return "\n\n".join([_method(doc), _severity_key(doc), _content_scope(doc)])
+    return "\n\n".join(
+        [_method(doc, locale), _severity_key(doc, locale), _content_scope(doc, locale)]
+    )
 
 
-def _method(doc: dict[str, Any]) -> str:
+def _method(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     """附录 A：范围与方法 —— 交代覆盖边界。"""
     method = doc["method"]
-    lines = ["## 附录 A · 检测范围与方法", ""]
+    lines = [l10n.t(locale, "md.method"), ""]
 
     if method["targets"]:
-        lines += ["**覆盖目标**", ""]
+        lines += [l10n.t(locale, "md.coverageTargets"), ""]
         lines += [f"- `{target}`" for target in method["targets"]]
         lines.append("")
 
     if method["span"]:
         lines += [
-            f"**发现时间跨度**：{method['span']['from']} 至 {method['span']['to']}",
+            l10n.t(
+                locale,
+                "md.span",
+                **{"from": method["span"]["from"], "to": method["span"]["to"]},
+            ),
             "",
         ]
 
     if method["skills"]:
-        lines += [f"**启用的检测能力**：{'、'.join(method['skills'])}", ""]
+        lines += [
+            l10n.t(
+                locale,
+                "md.skills",
+                skills=l10n.t(locale, "md.listSep").join(method["skills"]),
+            ),
+            "",
+        ]
 
     if method["scans"]:
-        lines += ["**关联的扫描任务**", ""]
-        lines += ["| 扫描名称 | 目标 | 完成时间 | 覆盖完整性 |", "| --- | --- | --- | --- |"]
+        lines += [l10n.t(locale, "md.scans"), ""]
+        lines += [
+            f"| {l10n.t(locale, 'md.scanName')} | {l10n.t(locale, 'md.target')} | "
+            f"{l10n.t(locale, 'md.finishedAt')} | {l10n.t(locale, 'md.completeness')} |",
+            "| --- | --- | --- | --- |",
+        ]
         for scan in method["scans"]:
-            finished = scan["finishedAt"][:10] if scan["finishedAt"] else "未完成"
+            finished = (
+                scan["finishedAt"][:10]
+                if scan["finishedAt"]
+                else l10n.t(locale, "md.notFinished")
+            )
             lines.append(
                 f"| {_cell(scan['name'])} | `{_cell(scan['target'])}` | {finished} | "
-                f"{coverage_note(scan['status'])} |"
+                f"{coverage_note(scan['status'], locale)} |"
             )
         lines.append("")
 
@@ -269,8 +311,7 @@ def _method(doc: dict[str, Any]) -> str:
     interrupted = [scan for scan in method["scans"] if scan["status"] == "aborted"]
     if interrupted:
         lines += [
-            f"其中 {len(interrupted)} 次扫描被提前终止，对应目标的检测覆盖不完整，"
-            "相关结论仅代表已执行范围内的结果。",
+            l10n.t(locale, "md.interrupted", n=len(interrupted)),
             "",
         ]
 
@@ -282,9 +323,14 @@ def _method(doc: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _severity_key(doc: dict[str, Any]) -> str:
+def _severity_key(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     """附录 B：严重程度说明 —— 让"高危"对读者是可解释的。"""
-    lines = ["## 附录 B · 严重程度说明", "", "| 严重程度 | 判定含义 |", "| --- | --- |"]
+    lines = [
+        l10n.t(locale, "md.severityKey"),
+        "",
+        f"| {l10n.t(locale, 'md.severityCol')} | {l10n.t(locale, 'md.severityMeaning')} |",
+        "| --- | --- |",
+    ]
     for item in doc["severityDefinitions"]:
         lines.append(f"| {item['label']} | {_cell(item['definition'])} |")
     lines.append("")
@@ -295,16 +341,28 @@ def _severity_key(doc: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _content_scope(doc: dict[str, Any]) -> str:
+def _content_scope(doc: dict[str, Any], locale: str = "zh-CN") -> str:
     """附录 C：内容范围 —— 报告自称包含什么，必须写清楚。"""
     options = doc["meta"]["options"]
-    lines = ["## 附录 C · 内容范围", "", "本报告包含以下内容：", ""]
-    lines.append(f"- 修复建议：{'包含' if options['includeRemediation'] else '未包含'}")
-    lines.append(f"- 验证脚本（PoC）：{'包含' if options['includePoc'] else '未包含'}")
+    lines = [l10n.t(locale, "md.contentScope"), "", l10n.t(locale, "md.contentIntro"), ""]
+    included = l10n.t(locale, "md.included")
+    excluded = l10n.t(locale, "md.excludedOption")
     lines.append(
-        f"- 判断依据（智能体推理过程）：{'包含' if options['includeReasoning'] else '未包含'}"
+        f"- {l10n.t(locale, 'md.includeRemediation')}: "
+        f"{included if options['includeRemediation'] else excluded}"
     )
-    lines.append(f"- 条目筛选：{'仅已确认的问题' if options['onlyConfirmed'] else '全部状态的问题'}")
+    lines.append(
+        f"- {l10n.t(locale, 'md.includePoc')}: "
+        f"{included if options['includePoc'] else excluded}"
+    )
+    lines.append(
+        f"- {l10n.t(locale, 'md.includeReasoning')}: "
+        f"{included if options['includeReasoning'] else excluded}"
+    )
+    lines.append(
+        f"- {l10n.t(locale, 'md.filter')}: "
+        f"{l10n.t(locale, 'md.onlyConfirmed') if options['onlyConfirmed'] else l10n.t(locale, 'md.allStatuses')}"
+    )
     lines.append("")
     lines.append(
         "未包含的内容可在系统内的漏洞发现页面查看，或重新生成包含这些内容的报告。"

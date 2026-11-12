@@ -1,4 +1,5 @@
 import { ApiError, api, toApiError } from '@/lib/api'
+import { activeLocale } from '@/i18n'
 import type { ReportDocument } from '@/lib/report-document'
 import { useCallback, useSyncExternalStore } from 'react'
 import type { Report, ReportFormat, ReportOptions, ReportScope } from './report'
@@ -274,13 +275,13 @@ export async function loadReportPreview(input: LoadReportPreviewInput): Promise<
 
   try {
     const [doc, probeDoc] = await Promise.all([
-      api.post<ReportDocument>('/reports/preview', {
+      api.post<ReportDocument>(`/reports/preview?locale=${encodeURIComponent(activeLocale())}`, {
         title: input.title,
         scope: input.scope,
         options: input.options,
       }),
       needProbe
-        ? api.post<ReportDocument>('/reports/preview', {
+        ? api.post<ReportDocument>(`/reports/preview?locale=${encodeURIComponent(activeLocale())}`, {
             title: input.title,
             scope: input.scope,
             options: PROBE_OPTIONS,
@@ -406,7 +407,9 @@ async function fetchReportDocument(id: string): Promise<void> {
   commitDocument()
 
   try {
-    const doc = await api.get<ReportDocument>(`/reports/${id}/document`)
+    const doc = await api.get<ReportDocument>(
+      `/reports/${id}/document?locale=${encodeURIComponent(activeLocale())}`,
+    )
     if (documentEpoch[id] !== epoch) return
     documentStates = { ...documentStates, [id]: { status: 'ready', doc, error: null } }
   } catch (error) {

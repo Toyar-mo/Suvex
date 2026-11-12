@@ -218,6 +218,11 @@ const DICTS: Record<LocaleId, Dict> = {
 }
 
 /** 浏览器语言 → 支持的语言；非中文一律回落英文（不猜）。 */
+/** 当前生效语言。给非 React 的请求层用（报告文档/导出都要带 locale）。 */
+export function activeLocale(): LocaleId {
+  return resolveLocale(readSetting())
+}
+
 export function resolveLocale(setting: LocaleSetting): LocaleId {
   if (setting !== 'auto') return setting
   const nav = typeof navigator === 'undefined' ? 'en' : navigator.language || 'en'

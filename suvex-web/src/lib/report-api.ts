@@ -1,4 +1,5 @@
 import { apiText } from './api'
+import { activeLocale } from '@/i18n'
 import type { ReportFormat } from '@/data/report'
 
 /**
@@ -76,7 +77,9 @@ export async function generateReportArtifact(input: GenerateReportInput): Promis
     return { kind: 'browser-print', filename: `${code}.pdf`, serverReady: null }
   }
 
-  const download = await apiText(`/reports/${reportId}/download`)
+  const download = await apiText(
+    `/reports/${reportId}/download?locale=${encodeURIComponent(activeLocale())}`,
+  )
 
   return {
     kind: 'file',

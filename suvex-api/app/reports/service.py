@@ -206,6 +206,7 @@ def preview(
     title: str,
     scope: Scope,
     options: ir.ReportOptions,
+    locale: str = "zh-CN",
 ) -> dict[str, Any]:
     """预览：**不落库**，返回 ReportDocument IR。
 
@@ -224,6 +225,7 @@ def preview(
         title=title,
         now=now_utc(),
         provisional=True,
+        locale=locale,
     )
 
 
@@ -299,7 +301,9 @@ def generate(
     return report
 
 
-def document_for(db: Session, report: Report) -> dict[str, Any]:
+def document_for(
+    db: Session, report: Report, locale: str = "zh-CN"
+) -> dict[str, Any]:
     """复现一份报告 —— 对应前端 `rebuildReportDocument`。
 
     ★ **用冻结的 `findingIds` 重建，而不是按 scope 重新过滤。**
@@ -345,11 +349,14 @@ def document_for(db: Session, report: Report) -> dict[str, Any]:
         # 用**冻结的编号**重建 —— 不是重新分配一个
         report_id=report.code,
         excluded_count=report.excluded_count,
+        locale=locale,
     )
     return doc
 
 
-def render_for_download(db: Session, report: Report) -> tuple[str, str]:
+def render_for_download(
+    db: Session, report: Report, locale: str = "zh-CN"
+) -> tuple[str, str]:
     """下载用：返回 `(文件名, 内容)`。
 
     ⚠️ **文件名用报告编号，不是标题**（契约 §3.5）。
@@ -357,8 +364,8 @@ def render_for_download(db: Session, report: Report) -> tuple[str, str]:
     直接当文件名会出现编码差异甚至被截断。编号是 ASCII 且天然唯一，
     客户拿到文件后也能和正文里的编号对上。
     """
-    doc = document_for(db, report)
-    return f"{report.code}.md", render_markdown(doc)
+    doc = document_for(db, report, locale)
+    return f"{report.code}.md", render_markdown(doc, locale)
 
 
 # ══════════════════════════════════════════════════════════

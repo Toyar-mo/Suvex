@@ -33,7 +33,7 @@ from app.audit import service as audit
 from app.auth.deps import Identity, require_admin, require_read
 from app.core.db import get_db
 from app.core.vocab import AuditAction
-from app.reports import service
+from app.reports import l10n, service
 from app.reports.schemas import (
     ReportDocumentOut,
     ReportGenerateRequest,
@@ -88,7 +88,10 @@ def create_report(
 # ⚠️ 必须在 `/{reportId}` **之前**声明。
 @router.post("/preview", response_model=ReportDocumentOut, summary="预览（不落库）")
 def preview_report(
-    payload: ReportPreviewRequest, _identity: ReadDep, db: DbDep
+    payload: ReportPreviewRequest,
+    _identity: ReadDep,
+    db: DbDep,
+    locale: str = "zh-CN",
 ) -> dict[str, Any]:
     """预览：返回 `ReportDocument` IR，**不落库**。
 
@@ -108,6 +111,7 @@ def preview_report(
         title=payload.title,
         scope=payload.scope.to_domain(),
         options=payload.options.to_domain(),
+        locale=l10n.normalize(locale),
     )
 
 
@@ -121,7 +125,12 @@ def read_report(reportId: str, _identity: ReadDep, db: DbDep) -> dict[str, Any]:
     response_model=ReportDocumentOut,
     summary="复现报告文档（用冻结的快照重建）",
 )
-def read_document(reportId: str, _identity: ReadDep, db: DbDep) -> dict[str, Any]:  # noqa: N803
+def read_document(
+    reportId: str,  # noqa: N803
+    _identity: ReadDep,
+    db: DbDep,
+    locale: str = "zh-CN",
+) -> dict[str, Any]:
     """按**冻结的 `findingIds`** 重建文档，而不是按 scope 重新过滤。
 
     按 scope 重算的话，三个月后回看会看到"和当初不一样"的内容 ——
@@ -129,12 +138,18 @@ def read_document(reportId: str, _identity: ReadDep, db: DbDep) -> dict[str, Any
 
     这个端点给前端的"查看历史报告预览"用；下载走 `/{id}/download`。
     """
-    return service.document_for(db, service.get_report(db, reportId))
+    return service.document_for(
+        db, service.get_report(db, reportId), l10n.normalize(locale)
+    )
 
 
 @router.get("/{reportId}/download", summary="下载（本轮只支持 format=markdown）")
 def download_report(  # noqa: N803
-    reportId: str, request: Request, identity: ReadDep, db: DbDep
+    reportId: str,
+    request: Request,
+    identity: ReadDep,
+    db: DbDep,
+    locale: str = "zh-CN",
 ) -> Response:
     """下载。
 
@@ -162,7 +177,9 @@ def download_report(  # noqa: N803
             headers={"X-Suvex-Note": "pdf-via-browser-print"},
         )
 
-    filename, content = service.render_for_download(db, report)
+    filename, content = service.render_for_download(
+        db, report, l10n.normalize(locale)
+    )
     # ★ 审计留痕（契约 §3.9）：报告一旦被下载就不受控了，
     # "谁把哪一份带出去了"是事后必须能回答的问题。
     # 只在**真的产出了文件**时记 —— 上面 PDF 那条分支只回一句说明，

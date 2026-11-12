@@ -42,6 +42,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from app.core.vocab import FindingCategory, FindingStatus, Severity, Verification
+from app.reports import l10n
 
 # ══════════════════════════════════════════════════════════
 # 常量表 —— 逐字对齐前端
@@ -155,6 +156,7 @@ def build_document(
     report_id: str | None = None,
     provisional: bool = False,
     excluded_count: int | None = None,
+    locale: str = "zh-CN",
 ) -> dict[str, Any]:
     """组装报告文档 —— 对应前端 `buildReportDocument`。
 
@@ -170,7 +172,10 @@ def build_document(
     selected = _apply_options(in_scope, options)
     excluded = excluded_count if excluded_count is not None else len(in_scope) - len(selected)
     ordered = sort_for_report(selected)
-    entries = [_to_entry(finding, index, options) for index, finding in enumerate(ordered, start=1)]
+    entries = [
+        _to_entry(finding, index, options, locale)
+        for index, finding in enumerate(ordered, start=1)
+    ]
     stats = summarize(selected)
 
     return {
@@ -180,7 +185,7 @@ def build_document(
             "code": "" if provisional else (report_code(now) if report_id is None else report_id),
             "provisional": provisional,
             "title": title,
-            "scope": describe_scope(scope, scans),
+            "scope": describe_scope(scope, scans, locale),
             "generatedAt": _iso(now),
             "options": {
                 "includePoc": options.include_poc,
@@ -190,17 +195,21 @@ def build_document(
             },
             "excludedCount": excluded,
         },
-        "verdict": risk_verdict(stats),
+        "verdict": risk_verdict(stats, locale),
         "stats": stats,
         # 只含有值的档，且按 SEVERITY_ORDER 排好（对应前端
         # `.filter(s => (stats.bySeverity[s] ?? 0) > 0)`）
         "distribution": [
-            {"severity": severity, "label": SEVERITY_LABEL[severity], "count": stats["bySeverity"][severity]}
+            {
+                "severity": severity,
+                "label": l10n.t(locale, f"severity.{severity}"),
+                "count": stats["bySeverity"][severity],
+            }
             for severity in SEVERITY_ORDER
             if stats["bySeverity"].get(severity)
         ],
         "entries": entries,
-        "method": _build_method(selected, scans, scope),
+        "method": _build_method(selected, scans, scope, locale),
         "severityDefinitions": [
             {
                 "severity": severity,
@@ -309,7 +318,7 @@ def summarize(findings: list[Any]) -> dict[str, Any]:
     }
 
 
-def risk_verdict(stats: dict[str, Any]) -> str:
+def risk_verdict(stats: dict[str, Any], locale: str = "zh-CN") -> str:
     """对应 `report-build.ts: riskVerdict` —— 措辞逐字一致。
 
     报告开头需要一句**能被直接引用**的判断，而不是让读者自己对数字。
@@ -317,21 +326,18 @@ def risk_verdict(stats: dict[str, Any]) -> str:
     有 PoC 就说有，没有就说没有。
     """
     if stats["total"] == 0:
-        return "本次范围内未发现安全问题。"
+        return l10n.t(locale, "verdict.none")
     if stats["urgent"] == 0:
-        return (
-            f"本次范围内共发现 {stats['total']} 个问题，均不构成直接可利用风险，"
-            "建议按常规加固计划处理。"
-        )
+        return l10n.t(locale, "verdict.noUrgent", total=stats["total"])
     if stats["verified"] > 0:
-        return (
-            f"本次范围内共发现 {stats['total']} 个安全问题，其中 {stats['urgent']} 个为"
-            f"严重或高危，已通过可复现的验证脚本确认其中 {stats['verified']} 个，建议优先处置。"
+        return l10n.t(
+            locale,
+            "verdict.verified",
+            total=stats["total"],
+            urgent=stats["urgent"],
+            verified=stats["verified"],
         )
-    return (
-        f"本次范围内共发现 {stats['total']} 个安全问题，其中 {stats['urgent']} 个为"
-        "严重或高危，建议优先处置。"
-    )
+    return l10n.t(locale, "verdict.urgent", total=stats["total"], urgent=stats["urgent"])
 
 
 # ══════════════════════════════════════════════════════════
@@ -339,7 +345,9 @@ def risk_verdict(stats: dict[str, Any]) -> str:
 # ══════════════════════════════════════════════════════════
 
 
-def _to_entry(finding: Any, index: int, options: ReportOptions) -> dict[str, Any]:
+def _to_entry(
+    finding: Any, index: int, options: ReportOptions, locale: str = "zh-CN"
+) -> dict[str, Any]:
     """对应 `report-document.ts: toEntry`。
 
     ★ 两个开关的行为差异容易会被做成同一个（前端注释专门写了）：
@@ -355,13 +363,13 @@ def _to_entry(finding: Any, index: int, options: ReportOptions) -> dict[str, Any
         "findingId": finding.id,
         "title": finding.title,
         "severity": finding.severity,
-        "severityLabel": SEVERITY_LABEL.get(finding.severity, finding.severity),
-        "categoryLabel": CATEGORY_LABEL.get(finding.category, finding.category),
+        "severityLabel": l10n.t(locale, f"severity.{finding.severity}"),
+        "categoryLabel": l10n.t(locale, f"category.{finding.category}"),
         "target": finding.target,
         "affected": list(finding.detail_affected or []),
-        "statusLabel": STATUS_LABEL.get(finding.status, finding.status),
-        "verificationLabel": VERIFICATION_LABEL.get(finding.verification, finding.verification),
-        "discoveredAt": format_date(finding.discovered_at),
+        "statusLabel": l10n.t(locale, f"status.{finding.status}"),
+        "verificationLabel": l10n.t(locale, f"verification.{finding.verification}"),
+        "discoveredAt": format_date(finding.discovered_at, locale),
         "description": finding.detail_description,
         "reasoning": finding.detail_reasoning if options.include_reasoning else None,
         "evidence": finding.detail_evidence,
@@ -370,14 +378,14 @@ def _to_entry(finding: Any, index: int, options: ReportOptions) -> dict[str, Any
         # 只收**人工**动作，不收 agent 的过程事件：
         # 这里回答的是「这个结论被人怎么处理过」，那是交付报告里客户真正要看的一栏。
         "dispositions": [
-            {"at": format_date(entry.at), "summary": _disposition_summary(entry)}
+            {"at": format_date(entry.at, locale), "summary": _disposition_summary(entry, locale)}
             for entry in timeline
             if entry.actor == "user"
         ],
     }
 
 
-def _disposition_summary(entry: Any) -> str:
+def _disposition_summary(entry: Any, locale: str = "zh-CN") -> str:
     """对应 `report-document.ts: dispoSummary`。
 
     时间线里的 summary 是站内用的（"管理员会话：待确认 → 已确认"），
@@ -385,11 +393,17 @@ def _disposition_summary(entry: Any) -> str:
     这里改写成报告口吻的完整句。
     """
     if entry.kind == "status_changed" and entry.to_status:
-        return f"处置状态更新为「{STATUS_LABEL.get(entry.to_status, entry.to_status)}」"
+        return l10n.t(
+            locale,
+            "disposition.status",
+            status=l10n.t(locale, f"status.{entry.to_status}"),
+        )
     return entry.summary
 
 
-def _build_method(findings: list[Any], scans: list[Any], scope: dict[str, Any]) -> dict[str, Any]:
+def _build_method(
+    findings: list[Any], scans: list[Any], scope: dict[str, Any], locale: str = "zh-CN"
+) -> dict[str, Any]:
     """对应 `report-document.ts: buildMethod`（附录 A）。
 
     为什么必须有一节：报告里全是结论，读者无从判断这些结论的分量。
@@ -438,27 +452,34 @@ def _build_method(findings: list[Any], scans: list[Any], scope: dict[str, Any]) 
             for scan in relevant
         ],
         "skills": [
-            SKILL_LABEL[skill] for skill in SKILL_LABEL if skill in skill_ids
+            l10n.t(locale, f"skill.{skill}") for skill in SKILL_LABEL if skill in skill_ids
         ],
-        "span": {"from": format_date(times[0]), "to": format_date(times[-1])} if times else None,
+        "span": (
+            {"from": format_date(times[0], locale), "to": format_date(times[-1], locale)}
+            if times
+            else None
+        ),
     }
 
 
-def coverage_note(status: str) -> str:
+def coverage_note(status: str, locale: str = "zh-CN") -> str:
     """对应 `report-document.ts: coverageNote` —— 措辞逐字一致。
 
     放在 IR 层而不是各渲染器里：预览与 Markdown 必须给出**同一句话**，
     各写一份就是两个事实来源的起点。
     """
-    return {
-        "completed": "完整",
-        "aborted": "不完整（已终止）",
-        "running": "不完整（进行中）",
-        "failed": "未产出结果",
-    }.get(status, "未知")
+    key = {
+        "completed": "coverage.completed",
+        "aborted": "coverage.aborted",
+        "running": "coverage.running",
+        "failed": "coverage.failed",
+    }.get(status, "coverage.unknown")
+    return l10n.t(locale, key)
 
 
-def describe_scope(scope: dict[str, Any], scans: list[Any]) -> str:
+def describe_scope(
+    scope: dict[str, Any], scans: list[Any], locale: str = "zh-CN"
+) -> str:
     """对应 `data/report.ts: describeScope`。"""
     kind = scope.get("kind")
     if kind == "scan":
@@ -466,31 +487,37 @@ def describe_scope(scope: dict[str, Any], scans: list[Any]) -> str:
             (scan.name for scan in scans if scan.id == scope.get("scanId")),
             scope.get("scanId"),
         )
-        return f"扫描任务「{name}」"
+        return l10n.t(locale, "scope.scan", name=name)
     if kind == "target":
-        return f"目标 {scope.get('target')}"
+        return l10n.t(locale, "scope.target", target=scope.get("target"))
     if kind == "range":
-        return f"{format_date(scope.get('from'))} 至 {format_date(scope.get('to'))}"
+        return l10n.t(
+            locale,
+            "scope.range",
+            **{
+                "from": format_date(scope.get("from"), locale),
+                "to": format_date(scope.get("to"), locale),
+            },
+        )
+    if kind == "findings":
+        return l10n.t(locale, "scope.findings", n=len(scope.get("findingIds") or []))
     return ""
 
 
-def format_date(value: Any) -> str:
+def format_date(value: Any, locale: str = "zh-CN") -> str:
     """对应 `data/report.ts: formatDate` —— 「2026年2月14日」。
 
     报告里不用 `2026-02-14`：那是机器格式。
     """
-    parsed = _parse(value)
-    if parsed is None:
-        return str(value or "")
-    return f"{parsed.year}年{parsed.month}月{parsed.day}日"
+    return l10n.format_date(value, locale)
 
 
-def format_datetime(value: Any) -> str:
+def format_datetime(value: Any, locale: str = "zh-CN") -> str:
     """对应 `data/report.ts: formatDateTime` —— 「2026年2月14日 15:30」。"""
     parsed = _parse(value)
     if parsed is None:
         return str(value or "")
-    return f"{format_date(value)} {parsed.hour:02d}:{parsed.minute:02d}"
+    return f"{format_date(value, locale)} {parsed.hour:02d}:{parsed.minute:02d}"
 
 
 def _parse(value: Any) -> datetime | None:
