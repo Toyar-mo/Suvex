@@ -87,13 +87,17 @@ async def record_finding_result(ctx: Any, args: dict[str, Any]) -> str:
     if finding.status == target:
         return f"漏洞 `{finding_id}` 已经是 {target}，结论已记录（状态未变）：{evidence[:500]}"
 
-    changed, _ = finding_service.change_status(
-        ctx.db,
-        ids=[finding_id],
-        target=target,
-        note=f"[{verdict}] {evidence}",
-        identity=ctx.identity,
-    )
+    try:
+        changed, _ = finding_service.change_status(
+            ctx.db,
+            ids=[finding_id],
+            target=target,
+            note=f"[{verdict}] {evidence}",
+            identity=ctx.identity,
+        )
+    except Exception as exc:  # noqa: BLE001 - 把业务校验原因交回模型
+        ctx.db.rollback()
+        return f"失败：{exc}"
     return f"漏洞 `{finding_id}` 已写回：{verdict} → {target}（{len(changed)} 条变更）。"
 
 
