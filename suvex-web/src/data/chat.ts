@@ -2055,3 +2055,16 @@ export async function purgeSession(sessionId: string): Promise<boolean> {
     return false
   }
 }
+
+/**
+ * 只读取一个会话的最近消息，**不切换当前会话**（v1.92，Agent Hub 预览用）。
+ *
+ * 与 `openSession` 的分工：那个会把 `state.active` 换掉（导航语义）；
+ * 子代理面板需要在主对话旁边看一小段转录，不能因此丢掉主线。
+ */
+export async function loadSessionPreview(
+  sessionId: string,
+  limit = 12,
+): Promise<ChatSessionDetail> {
+  return api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}?limit=${limit}`)
+}

@@ -1,10 +1,11 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ArrowUpRight, CircleDot, Send, Square, Users } from 'lucide-react'
 
 import { Drawer } from '@/components/ui/Drawer'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/cn'
-import type { ChatSession } from '@/data/chat'
+import { loadSessionPreview, type ChatMessage, type ChatSession } from '@/data/chat'
+import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 
 /**
  * 子代理面板（v1.92）—— Web 端的 Agent Hub。
@@ -48,10 +49,45 @@ export function AgentHub({
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [previews, setPreviews] = useState<Record<string, ChatMessage[]>>({})
+  const [previewLoading, setPreviewLoading] = useState<string | null>(null)
 
   const runningCount = children.filter(
     (child) => child.running || runningIds.includes(child.id),
   ).length
+
+  /*
+    展开某个子代理时拉最近 12 条；运行中每 3 秒刷新一次。
+    只在面板打开且确实展开时拉 —— 不受"面板常驻但不看"的消耗。
+  */
+  useEffect(() => {
+    if (!open || !expandedId) return
+    let alive = true
+    const child = children.find((item) => item.id === expandedId)
+    const running = Boolean(child?.running || runningIds.includes(expandedId))
+    const load = async () => {
+      setPreviewLoading(expandedId)
+      try {
+        const detail = await loadSessionPreview(expandedId)
+        if (alive) setPreviews((prev) => ({ ...prev, [expandedId]: detail.messages }))
+      } catch {
+        // 预览失败不弹错：打开完整对话仍可用。留空态即可。
+      } finally {
+        if (alive) setPreviewLoading(null)
+      }
+    }
+    void load()
+    if (!running) return () => {
+      alive = false
+    }
+    const timer = window.setInterval(() => void load(), 3000)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+    }
+  }, [open, expandedId, children, runningIds])
+
 
   const sendGuide = async (session: ChatSession) => {
     const text = (drafts[session.id] ?? '').trim()
@@ -129,9 +165,15 @@ export function AgentHub({
                   />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="min-w-0 truncate text-sm text-ink" title={child.title}>
+                      <button
+                        type="button"
+                        onClick={() => setExpandedId(expandedId === child.id ? null : child.id)}
+                        className="min-w-0 truncate text-left text-sm text-ink hover:text-accent"
+                        aria-expanded={expandedId === child.id}
+                        title={child.title}
+                      >
                         {displayName(child)}
-                      </p>
+                      </button>
                       <span
                         className={cn(
                           'shrink-0 text-2xs',
@@ -161,6 +203,48 @@ export function AgentHub({
                     {t('chat.agentHub.open', undefined, '打开')}
                   </button>
                 </div>
+
+                {expandedId === child.id && (
+                  <div className="mt-2 max-h-[260px] overflow-auto rounded-sm border border-line/60 bg-surface-sunken/30 px-2.5 py-2">
+                    {previewLoading === child.id && !previews[child.id] ? (
+                      <p className="text-2xs text-ink-faint">
+                        {t('chat.agentHub.loading', undefined, '读取转录…')}
+                      </p>
+                    ) : (previews[child.id]?.length ?? 0) === 0 ? (
+                      <p className="text-2xs text-ink-faint">
+                        {t('chat.agentHub.noMessages', undefined, '还没有消息。')}
+                      </p>
+                    ) : (
+                      <ul className="flex flex-col gap-1.5">
+                        {previews[child.id]?.map((message) => (
+                          <li key={message.id} className="text-xs leading-relaxed">
+                            {message.role === 'user' ? (
+                              <p className="whitespace-pre-wrap break-words text-ink">
+                                {message.content}
+                              </p>
+                            ) : message.role === 'tool' ? (
+                              <p
+                                className={cn(
+                                  'font-mono text-[11px]',
+                                  message.toolFailed ? 'text-signal-risk' : 'text-ink-faint',
+                                )}
+                              >
+                                {message.toolName ?? 'tool'}
+                                {message.toolFailed ? ' · 失败' : ''}
+                              </p>
+                            ) : message.surface === 'process' ? (
+                              <p className="whitespace-pre-wrap break-words text-ink-faint">
+                                {message.content}
+                              </p>
+                            ) : (
+                              <WriteupMarkdown markdown={message.content} />
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
 
                 {running && (
                   <form

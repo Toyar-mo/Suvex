@@ -505,6 +505,8 @@ for (const [locale, labels] of Object.entries(SCREEN_LABELS)) {
 const FRAME_LABELS: Record<LocaleId, Dict> = {
   'zh-CN': {
     "chat.new": "新对话",
+    "chat.agentHub.loading": "读取转录…",
+    "chat.agentHub.noMessages": "还没有消息。",
     "chat.agentHub.title": "子代理",
     "chat.agentHub.openPanel": "子代理",
     "chat.agentHub.button": "子代理 {n}",
@@ -864,6 +866,8 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   'zh-TW': {
     "chat.new": "新對話",
+    "chat.agentHub.loading": "讀取轉錄…",
+    "chat.agentHub.noMessages": "還沒有訊息。",
     "chat.agentHub.title": "子代理",
     "chat.agentHub.button": "子代理 {n}",
     "chat.agentHub.running": "執行中",
@@ -1063,6 +1067,8 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   en: {
     "chat.new": "New chat",
+    "chat.agentHub.loading": "Loading transcript…",
+    "chat.agentHub.noMessages": "No messages yet.",
     "chat.agentHub.title": "Subagents",
     "chat.agentHub.openPanel": "Subagents",
     "chat.agentHub.button": "Subagents {n}",
@@ -1441,6 +1447,8 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   ja: {
     "chat.new": "新しい会話",
+    "chat.agentHub.loading": "トランスクリプトを読み込み中…",
+    "chat.agentHub.noMessages": "まだメッセージはありません。",
     "chat.agentHub.title": "サブエージェント",
     "chat.agentHub.button": "サブエージェント {n}",
     "chat.agentHub.running": "実行中",

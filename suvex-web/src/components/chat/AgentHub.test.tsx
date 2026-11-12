@@ -2,6 +2,25 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 
 import { AgentHub } from './AgentHub'
+
+vi.mock('@/data/chat', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/data/chat')>()
+  return {
+    ...actual,
+    loadSessionPreview: vi.fn(async () => ({
+      messages: [
+        {
+          id: 'm1',
+          seq: 1,
+          role: 'assistant',
+          content: '已确认 443 暴露在 nginx 1.24.0 上。',
+          createdAt: '2026-11-12T01:01:00Z',
+          surface: 'answer',
+        },
+      ],
+    })),
+  }
+})
 import type { ChatSession } from '@/data/chat'
 
 function child(over: Partial<ChatSession> = {}): ChatSession {
@@ -82,5 +101,15 @@ describe('AgentHub — 子代理面板（v1.92）', () => {
     const props = renderHub({ parent, children: [child()] })
     fireEvent.click(screen.getByText(/返回主对话/))
     expect(props.onOpen).toHaveBeenCalledWith(parent)
+  })
+})
+
+describe('AgentHub — 转录预览（v1.92）', () => {
+  it('点名字展开最近转录，不离开主对话', async () => {
+    renderHub()
+    fireEvent.click(screen.getByText('port-scan'))
+    await screen.findByText(/已确认 443/)
+    // 仍然在面板里；没有触发 onOpen（那是「打开」按钮的职责）
+    expect(screen.getByText(/已确认 443/)).toBeTruthy()
   })
 })
