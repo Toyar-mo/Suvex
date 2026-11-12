@@ -405,13 +405,13 @@ def allowlist(ctx: Any) -> tuple[set[str], set[str]]:
         from app.agents.graph_models import AgentTask
 
         task = db.get(AgentTask, task_id)
-        if task is not None and (task.scope or "").strip():
-            scoped_hosts, scoped_cidrs = extract_targets(task.scope)
-            if scoped_hosts or scoped_cidrs:
-                return (
-                    scoped_hosts | set(DEFAULT_ALLOWED_HOSTS),
-                    scoped_cidrs | set(DEFAULT_ALLOWED_CIDRS),
-                )
+        scoped_hosts, scoped_cidrs = extract_targets(task.scope or "") if task else (set(), set())
+        # 任务会话**失败关闭**：任务不存在、scope 为空、或 scope 里没有可解析
+        # 目标时，只留内置基础设施；绝不回退到“平台所有已建扫描”或全网。
+        return (
+            scoped_hosts | set(DEFAULT_ALLOWED_HOSTS),
+            scoped_cidrs | set(DEFAULT_ALLOWED_CIDRS),
+        )
 
     hosts, cidrs = authorized_targets(db)
     extra_hosts, extra_cidrs = settings_allowlist()

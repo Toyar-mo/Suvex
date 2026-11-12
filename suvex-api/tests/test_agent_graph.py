@@ -247,3 +247,20 @@ def test_every_chat_tool_has_native_schema() -> None:
 
     names = {item["function"]["name"] for item in build_tools_schema()}
     assert names == set(CHAT_TOOL_NAMES)
+
+
+def test_empty_task_scope_fails_closed(db_session: Session) -> None:
+    """任务会话没有 scope 时只留内置设施，不继承全局扫描授权。"""
+    from types import SimpleNamespace
+
+    from app.chat import scope
+    from app.chat import service as chat_service
+
+    task = service.create_task(db_session, created_by="u1", title="空范围", objective="x")
+    session = chat_service.create_session(
+        db_session, created_by="u1", title="worker", agent_task_id=task.id
+    )
+    db_session.commit()
+    hosts, cidrs = scope.allowlist(SimpleNamespace(db=db_session, session=session))
+    assert hosts == set(scope.DEFAULT_ALLOWED_HOSTS)
+    assert cidrs == set(scope.DEFAULT_ALLOWED_CIDRS)

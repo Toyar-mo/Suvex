@@ -323,6 +323,20 @@ def _add_timeline(
     return entry
 
 
+def record_verification_note(db: Session, *, finding_id: str, note: str) -> None:
+    """把复测/验证结论写成时间线备注（状态不变时也要留证据）。"""
+    finding = get_finding(db, finding_id)
+    _add_timeline(
+        db,
+        finding,
+        actor=TimelineActor.USER.value,
+        kind=TimelineKind.NOTE.value,
+        summary=(note or "").strip()[:2000],
+    )
+    finding.updated_at = now_utc()
+    db.commit()
+
+
 # ══════════════════════════════════════════════════════════
 # 查询
 # ══════════════════════════════════════════════════════════

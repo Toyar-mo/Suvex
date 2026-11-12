@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 MAX_INTENTS_PER_ROUND = 4
 MAX_INTENTS_PER_RUN = 12
 MAX_PLANNER_ROUNDS = 3
+_ACTIVE: set[str] = set()
 WORKER_TOOLS = (
     "run_shell",
     "browser",
@@ -258,12 +259,19 @@ async def run_task(
     """后台执行整个任务；返回实际启动的 worker 数。"""
     from app.core.db import get_session_factory
 
+    if task_id in _ACTIVE:
+        return 0
+    _ACTIVE.add(task_id)
     db = get_session_factory()()
     started = 0
     try:
         task = db.get(AgentTask, task_id)
         if task is None:
             return 0
+        # 新建任务只有 objective、还没有目标时，先把 objective 作为首个目标；
+        # 否则队列空 + 无 open goal 会让“执行”什么都不做。
+        if not list(graph_service.graph(db, task=task)["goals"]) and task.objective.strip():
+            graph_service.add_goal(db, task=task, text=task.objective[:2000])
         for _ in range(MAX_PLANNER_ROUNDS):
             task = db.get(AgentTask, task_id)
             if task is None or task.status in {"completed", "cancelled"}:
@@ -288,6 +296,7 @@ async def run_task(
                 break
         return started
     finally:
+        _ACTIVE.discard(task_id)
         db.close()
 
 

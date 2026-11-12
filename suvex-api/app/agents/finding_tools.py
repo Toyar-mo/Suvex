@@ -47,7 +47,10 @@ async def get_finding_context(ctx: Any, args: dict[str, Any]) -> str:
     finding_id = str(args.get("finding_id") or "").strip()
     if not finding_id:
         return "失败：需要 finding_id。"
-    finding = finding_service.get_finding(ctx.db, finding_id)
+    try:
+        finding = finding_service.get_finding(ctx.db, finding_id)
+    except Exception as exc:  # noqa: BLE001 - 把业务原因交回模型
+        return f"失败：{exc}"
     return json.dumps(_finding_payload(finding), ensure_ascii=False, indent=2)
 
 
@@ -70,13 +73,16 @@ async def record_finding_result(ctx: Any, args: dict[str, Any]) -> str:
         return "失败：verdict 必须是 reproduced / fixed / verified / false_positive / inconclusive。"
     if not evidence:
         return "失败：必须提供 evidence（实际请求/响应/命令输出）。"
-    finding = finding_service.get_finding(ctx.db, finding_id)
+    try:
+        finding = finding_service.get_finding(ctx.db, finding_id)
+    except Exception as exc:  # noqa: BLE001
+        return f"失败：{exc}"
 
     if verdict == "inconclusive":
-        return (
-            f"漏洞 `{finding_id}` 结论记为 inconclusive（未改变状态）。\n"
-            f"证据：{evidence[:2000]}"
+        finding_service.record_verification_note(
+            ctx.db, finding_id=finding_id, note=f"[inconclusive] {evidence}"
         )
+        return f"漏洞 `{finding_id}` 结论记为 inconclusive（未改变状态），证据已写入时间线。"
 
     target = {
         "reproduced": FindingStatus.CONFIRMED.value,
@@ -85,7 +91,10 @@ async def record_finding_result(ctx: Any, args: dict[str, Any]) -> str:
         "false_positive": FindingStatus.FALSE_POSITIVE.value,
     }[verdict]
     if finding.status == target:
-        return f"漏洞 `{finding_id}` 已经是 {target}，结论已记录（状态未变）：{evidence[:500]}"
+        finding_service.record_verification_note(
+            ctx.db, finding_id=finding_id, note=f"[{verdict}] {evidence}"
+        )
+        return f"漏洞 `{finding_id}` 已经是 {target}，本次证据已写入时间线。"
 
     try:
         changed, _ = finding_service.change_status(
