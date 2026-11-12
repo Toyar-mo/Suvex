@@ -115,8 +115,15 @@ class TaskOut(CamelModel):
         )
 
 
+class ScanLinkOut(CamelModel):
+    id: str
+    target: str
+    status: str
+
+
 class GraphOut(CamelModel):
     task: TaskOut
     goals: list[GoalOut]
     intents: list[IntentOut]
     runs: list[RunOut]
+    scans: list[ScanLinkOut] = []

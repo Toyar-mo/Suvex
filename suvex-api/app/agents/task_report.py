@@ -31,6 +31,7 @@ def render_task_report(data: dict[str, Any]) -> str:
     goals = data["goals"]
     intents = data["intents"]
     runs = data["runs"]
+    scans = data.get("scans", [])
 
     lines = [
         f"# {task.title}",
@@ -80,6 +81,16 @@ def render_task_report(data: dict[str, Any]) -> str:
             )
     else:
         lines.append("（无）")
+    lines += ["", "## 关联扫描", ""]
+    if scans:
+        lines += ["| 扫描 | 目标 | 状态 |", "| --- | --- | --- |"]
+        for scan in scans:
+            lines.append(
+                f"| `{scan.id}` | {_cell(scan.target)} | {_STATUS.get(scan.status, scan.status)} |"
+            )
+    else:
+        lines.append("（无）")
+
     lines += ["", "---", "", "由 Suvex 执行图生成。结果来自 worker 写回，未写回的方向不代表已排除。", ""]
     return "\n".join(lines)
 

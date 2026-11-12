@@ -22,6 +22,7 @@ from app.agents.graph_schemas import (
     IntentFinishIn,
     IntentOut,
     RunOut,
+    ScanLinkOut,
     TaskOut,
 )
 from app.auth.deps import Identity, require_admin, require_read
@@ -44,6 +45,10 @@ def _graph_out(db: Session, task) -> GraphOut:  # noqa: ANN001
         goals=[GoalOut.from_row(row) for row in data["goals"]],
         intents=[IntentOut.from_row(row) for row in data["intents"]],
         runs=[RunOut.from_row(row) for row in data["runs"]],
+        scans=[
+            ScanLinkOut(id=row.id, target=row.target, status=row.status)
+            for row in data.get("scans", [])
+        ],
     )
 
 

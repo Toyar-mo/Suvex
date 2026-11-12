@@ -1565,6 +1565,7 @@ async def _tool_create_scan(ctx: _ToolContext, args: dict[str, Any]) -> str:
             # 这是谁从哪授权的"，编一个假 IP 比承认拿不到更糟。
             ip="chat",
             user_agent="suvex-chat",
+            agent_task_id=getattr(ctx.session, "agent_task_id", None),
         )
     except Exception as exc:  # noqa: BLE001 - 任何业务拒绝都要变成可读的工具结果
         return _err(f"建扫描被拒：{exc}")

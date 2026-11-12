@@ -264,7 +264,20 @@ def graph(db: Session, *, task: AgentTask) -> dict[str, Any]:
             select(AgentRun).where(AgentRun.task_id == task.id).order_by(AgentRun.created_at)
         ).scalars()
     )
-    return {"task": task, "goals": goals, "intents": intents, "runs": runs}
+    from app.scans.models import Scan
+
+    scans = list(
+        db.execute(
+            select(Scan).where(Scan.agent_task_id == task.id).order_by(Scan.created_at)
+        ).scalars()
+    )
+    return {
+        "task": task,
+        "goals": goals,
+        "intents": intents,
+        "runs": runs,
+        "scans": scans,
+    }
 
 
 __all__ = [

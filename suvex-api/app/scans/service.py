@@ -393,6 +393,7 @@ def create_scan(
     ip: str,
     user_agent: str | None,
     forensic: dict | None = None,
+    agent_task_id: str | None = None,
 ) -> tuple[Scan, Reachability]:
     """新建扫描（契约 §3.3）。**初始状态 `queued`。**
 
@@ -566,6 +567,7 @@ def create_scan(
         # 两列分开，才不会有"补了协议导致同一目标被当成两个"的问题。
         probed_target=reach.effective_target,
         target_kind=payload.targetKind,
+        agent_task_id=agent_task_id,
         # ★ 初始必须是 queued —— 见模块 docstring。
         status=ScanStatus.QUEUED.value,
         skills=list(payload.skills),

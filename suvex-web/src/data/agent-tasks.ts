@@ -38,11 +38,18 @@ export interface AgentRun {
   output: string
 }
 
+export interface AgentScanLink {
+  id: string
+  target: string
+  status: string
+}
+
 export interface AgentGraph {
   task: AgentTask
   goals: AgentGoal[]
   intents: AgentIntent[]
   runs: AgentRun[]
+  scans: AgentScanLink[]
 }
 
 export async function loadAgentTasks(): Promise<AgentTask[]> {

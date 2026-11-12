@@ -411,6 +411,28 @@ export default function AgentTasksPage() {
                 </ul>
               </div>
 
+              {selected.scans.length > 0 && (
+                <div className="rounded-md border border-line bg-surface p-4">
+                  <h3 className="text-sm font-medium text-ink">
+                    {t('agentTasks.scans', undefined, '关联扫描')}
+                  </h3>
+                  <ul className="mt-2 flex flex-col gap-1 text-2xs">
+                    {selected.scans.map((scan) => (
+                      <li key={scan.id} className="flex items-center gap-2">
+                        <Link
+                          to={`/scans?scan=${encodeURIComponent(scan.id)}`}
+                          className="mono-ui text-accent-strong hover:underline"
+                        >
+                          {scan.id}
+                        </Link>
+                        <span className="min-w-0 truncate text-ink-muted">{scan.target}</span>
+                        <span className="ml-auto text-ink-faint">{scan.status}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {selected.runs.length > 0 && (
                 <div className="rounded-md border border-line bg-surface p-4">
                   <h3 className="text-sm font-medium text-ink">

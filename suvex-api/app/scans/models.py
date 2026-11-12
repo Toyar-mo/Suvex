@@ -58,6 +58,7 @@ class Scan(Base):
         ),
         Index("ix_scans_status_created_at", "status", "created_at"),
         Index("ix_scans_target", "target"),
+        Index("ix_scans_agent_task", "agent_task_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -271,6 +272,10 @@ class Scan(Base):
     # "谁授权的"，而 CTF2 建壳时也会填一个用户 id（重跑时更是用户本人），
     # 两者在那一列上长得一模一样。
     origin: Mapped[str | None] = mapped_column(String(16), nullable=True)
+
+    #: 由哪个执行图任务创建。普通页面/定时/CTF 为 NULL；worker 通过
+    #: `create_scan` 建的扫描会带上，任务报告与任务页据此关联。
+    agent_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     # 谁终止的（仅 aborted/failed 可能有值）。
     #
