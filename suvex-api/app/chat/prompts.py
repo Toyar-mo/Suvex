@@ -951,6 +951,91 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
         },
         "required": ["tasks"],
     },
+    "create_agent_task": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string"},
+            "objective": {"type": "string"},
+            "scope": {"type": "string"},
+        },
+        "required": ["title"],
+    },
+    "add_agent_goal": {
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}, "text": {"type": "string"}},
+        "required": ["task_id", "text"],
+    },
+    "add_agent_intent": {
+        "type": "object",
+        "properties": {
+            "task_id": {"type": "string"},
+            "summary": {"type": "string"},
+            "goal_id": {"type": "string"},
+            "priority": {"type": "integer", "minimum": 0, "maximum": 10},
+        },
+        "required": ["task_id", "summary"],
+    },
+    "list_agent_graph": {
+        "type": "object",
+        "properties": {"task_id": {"type": "string"}},
+        "required": ["task_id"],
+    },
+    "claim_agent_intent": {
+        "type": "object",
+        "properties": {"intent_id": {"type": "string"}},
+        "required": ["intent_id"],
+    },
+    "finish_agent_intent": {
+        "type": "object",
+        "properties": {
+            "intent_id": {"type": "string"},
+            "status": {
+                "type": "string",
+                "enum": ["done", "exhausted", "blocked", "stopped"],
+            },
+            "result": {"type": "string"},
+        },
+        "required": ["intent_id", "status"],
+    },
+    "prove_agent_goal": {
+        "type": "object",
+        "properties": {"goal_id": {"type": "string"}, "evidence": {"type": "string"}},
+        "required": ["goal_id", "evidence"],
+    },
+    "list_findings": {
+        "type": "object",
+        "properties": {
+            "q": {"type": "string"},
+            "severity": {"type": "string"},
+            "status": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "required": [],
+    },
+    "list_assets": {
+        "type": "object",
+        "properties": {"limit": {"type": "integer", "minimum": 1, "maximum": 100}},
+        "required": [],
+    },
+    "get_finding_context": {
+        "type": "object",
+        "properties": {"finding_id": {"type": "string"}},
+        "required": ["finding_id"],
+    },
+    "record_finding_result": {
+        "type": "object",
+        "properties": {
+            "finding_id": {"type": "string"},
+            "verdict": {
+                "type": "string",
+                "enum": [
+                    "reproduced", "fixed", "verified", "false_positive", "inconclusive"
+                ],
+            },
+            "evidence": {"type": "string"},
+        },
+        "required": ["finding_id", "verdict", "evidence"],
+    },
 }
 
 

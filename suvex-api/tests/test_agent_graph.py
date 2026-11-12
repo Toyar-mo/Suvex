@@ -239,3 +239,11 @@ def test_task_report_contains_goals_intents_and_results() -> None:
     assert "证据" in text
     assert "结果" in text
     assert "chat_1" in text
+
+
+def test_every_chat_tool_has_native_schema() -> None:
+    """模型走原生工具调用时按 CHAT_TOOLS 逐个查 schema；漏一个就是 KeyError。"""
+    from app.chat.prompts import CHAT_TOOL_NAMES, build_tools_schema
+
+    names = {item["function"]["name"] for item in build_tools_schema()}
+    assert names == set(CHAT_TOOL_NAMES)
