@@ -2,8 +2,12 @@ import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
 import { useI18n } from '@/i18n'
 import CodeBlock from '@/components/ui/CodeBlock'
+import { Button } from '@/components/ui/Button'
+import { api } from '@/lib/api'
+import { showToast } from '@/data/toast-store'
 import { FindingAttachments } from './FindingAttachments'
 import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { loadRemediation, type RemediationPlan } from '@/data/remediation'
 import {
   loadVerificationContext,
@@ -24,6 +28,7 @@ import {
   CheckCircle2,
   CircleDashed,
   FlaskConical,
+  RefreshCw,
   Lightbulb,
   ShieldCheck,
   ShieldX,
@@ -64,6 +69,33 @@ export function FindingDetail({ finding }: FindingDetailProps) {
   const { t } = useI18n()
   const meta = SEVERITY_META[finding.severity]
   const { detail } = finding
+  const navigate = useNavigate()
+  const [agentBusy, setAgentBusy] = useState<'retest' | 'verify' | null>(null)
+
+  async function launchAgent(mode: 'retest' | 'verify') {
+    setAgentBusy(mode)
+    try {
+      const result = await api.post<{ taskId: string }>(
+        `/findings/${encodeURIComponent(finding.id)}/agent-run?mode=${mode}`,
+        {},
+      )
+      showToast({
+        message:
+          mode === 'retest'
+            ? t('findings2.detail.retestStarted', undefined, '已发起复测任务')
+            : t('findings2.detail.verifyStarted', undefined, '已发起验证任务'),
+        tone: 'ok',
+      })
+      navigate(`/tasks?task=${encodeURIComponent(result.taskId)}`)
+    } catch (exc) {
+      showToast({
+        message: exc instanceof Error ? exc.message : String(exc),
+        tone: 'risk',
+      })
+    } finally {
+      setAgentBusy(null)
+    }
+  }
 
   return (
     <div className="flex flex-col gap-bay px-panel py-bay">
@@ -114,6 +146,27 @@ export function FindingDetail({ finding }: FindingDetailProps) {
           {t(`severity.${finding.severity}.definition`, undefined, meta.definition)}
         </p>
       </section>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={agentBusy !== null}
+          onClick={() => void launchAgent('retest')}
+        >
+          <RefreshCw size={13} strokeWidth={2} aria-hidden="true" />
+          {t('findings2.detail.retest', undefined, '发起复测')}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={agentBusy !== null}
+          onClick={() => void launchAgent('verify')}
+        >
+          <ShieldCheck size={13} strokeWidth={2} aria-hidden="true" />
+          {t('findings2.detail.verify', undefined, '发起验证')}
+        </Button>
+      </div>
 
       {/* ── 2 · 描述 ── */}
       <Section title={t('findings2.detail.description', undefined, '漏洞描述')}>

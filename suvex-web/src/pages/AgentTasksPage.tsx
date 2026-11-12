@@ -15,6 +15,7 @@ import { showToast } from '@/data/toast-store'
 import { useI18n } from '@/i18n'
 import { ListTree, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 const STATUS_TONE: Record<string, string> = {
   planning: 'text-ink-muted',
@@ -26,6 +27,7 @@ const STATUS_TONE: Record<string, string> = {
 
 export default function AgentTasksPage() {
   const { t } = useI18n()
+  const [params] = useSearchParams()
   const [tasks, setTasks] = useState<AgentTask[]>([])
   const [selected, setSelected] = useState<AgentGraph | null>(null)
   const [creating, setCreating] = useState(false)
@@ -35,7 +37,13 @@ export default function AgentTasksPage() {
 
   async function reload() {
     try {
-      setTasks(await loadAgentTasks())
+      const rows = await loadAgentTasks()
+      setTasks(rows)
+      const wanted = params.get('task')
+      if (wanted) {
+        const graph = await loadAgentGraph(wanted)
+        setSelected(graph)
+      }
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     }

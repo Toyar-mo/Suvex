@@ -255,6 +255,48 @@ def change_status(
     )
 
 
+@router.post("/{findingId}/agent-run", summary="从漏洞发起复测/验证任务")
+async def start_agent_run(
+    findingId: str,  # noqa: N803
+    identity: ScanDep,
+    db: DbDep,
+    mode: Literal["retest", "verify"] = Query("retest"),
+) -> dict[str, str]:
+    """一键建执行图任务并启动 worker。
+
+    `retest` → retester，`verify` → verifier；任务 scope 固定为这条漏洞的
+    target，worker 的网络边界因此收窄到该目标。
+    """
+    import asyncio
+
+    from app.agents import graph_service, runner_service
+
+    finding = service.get_finding(db, findingId)
+    if finding.deleted_at is not None:
+        raise ApiError.not_found("漏洞不存在")
+    label = "复测" if mode == "retest" else "验证"
+    task = graph_service.create_task(
+        db,
+        created_by=identity.user_id or identity.label,
+        title=f"[{label}] {finding.title}"[:200],
+        objective=f"{label}漏洞 {finding.id}，给出独立结论并写回。",
+        scope=finding.target,
+    )
+    graph_service.add_goal(
+        db, task=task, text=f"给出 {finding.id} 的{label}结论并写回证据"
+    )
+    graph_service.add_intent(
+        db,
+        task=task,
+        summary=f"{label}漏洞 {finding.id}（{finding.target}）",
+        priority=9,
+    )
+    asyncio.create_task(
+        runner_service.run_task(task_id=task.id, identity=identity)
+    )
+    return {"taskId": task.id}
+
+
 @router.post("/assign", response_model=AssignResponse, summary="批量指派负责人")
 def assign(
     payload: AssignRequest,

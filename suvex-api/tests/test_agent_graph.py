@@ -177,3 +177,41 @@ def test_task_scope_narrows_allowlist(db_session: Session) -> None:
     hosts, cidrs = scope.allowlist(ctx)
     assert "example.com" in hosts
     assert "127.0.0.0/8" in cidrs
+
+
+def test_over_http_start_agent_run_from_finding(
+    ready_client: TestClient, db_session: Session, monkeypatch
+) -> None:  # noqa: ANN001
+    """从漏洞详情发起复测：建任务/目标/意图，并禁止真的调模型。"""
+    from app.agents import runner_service
+    from app.core.timeutil import now_utc
+    from app.findings.models import Finding
+    from tests.factories import make_scan
+
+    async def noop(**kwargs):  # noqa: ANN003
+        return 0
+
+    monkeypatch.setattr(runner_service, "run_task", noop)
+    scan = make_scan(db_session, status="completed", target="api.example.com")
+    finding = Finding(
+        id="f_agent_run",
+        scan_id=scan.id,
+        source_ref="f_agent_run",
+        severity="high",
+        category="misconfiguration",
+        title="测试漏洞",
+        target="api.example.com",
+        verification="verified",
+        status="confirmed",
+        discovered_at=now_utc(),
+    )
+    db_session.add(finding)
+    db_session.commit()
+
+    resp = ready_client.post("/api/v1/findings/f_agent_run/agent-run?mode=retest")
+    assert resp.status_code == 200, resp.text
+    task_id = resp.json()["taskId"]
+    graph = service.graph(db_session, task=db_session.get(service.AgentTask, task_id))
+    assert graph["task"].scope == "api.example.com"
+    assert len(graph["goals"]) == 1
+    assert len(graph["intents"]) == 1
