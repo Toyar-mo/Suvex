@@ -1,15 +1,13 @@
-"""任务执行器（P2a）：一键把 open 意图交给 worker 会话。
+"""任务执行器（P2b）：worker 队列 + planner 自动补意图。
 
-P1 只到图；这里补上"点一下真的跑"。仍然是**受控队列**：不自动唤醒
-planner、不自动加意图，只执行当前已经存在的 open 意图，最多 4 条。
-每条意图：
+一轮执行的循环：
 
-1. 先原子领取（写 worker_session_id）；
-2. 起一个 persona=worker 的独立会话，限制工具；
-3. 跑一轮，worker 通过 `finish_agent_intent` 写回；
-4. 异常时把意图标 blocked，而不是留下永远 running 的僵尸。
+1. 有 open 意图 → 交给 worker 会话执行（最多 4 条/轮）；
+2. 队列空了但还有 open goal → 起 planner 会话补意图；
+3. planner 没补出新意图，或任务已完成/取消 → 结束。
 
-自动 planner 唤醒是 P2b；在此之前，planner 仍由人在对话里跑。
+这是 ARTeX "planner 被图变化唤醒" 的最小版本：没有事件总线，但队列一空
+就同步问一次 planner。planner 仍然只做规划，不执行；worker 只执行一条。
 """
 
 from __future__ import annotations
@@ -18,15 +16,17 @@ import asyncio
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.agents import graph_service
-from app.agents.graph_models import AgentIntent, AgentTask
+from app.agents.graph_models import AgentGoal, AgentIntent, AgentTask
 
 log = logging.getLogger(__name__)
 
-MAX_INTENTS_PER_RUN = 4
+MAX_INTENTS_PER_ROUND = 4
+MAX_INTENTS_PER_RUN = 12
+MAX_PLANNER_ROUNDS = 3
 WORKER_TOOLS = (
     "run_shell",
     "browser",
@@ -44,9 +44,21 @@ WORKER_TOOLS = (
     "finish_agent_intent",
     "prove_agent_goal",
 )
+PLANNER_TOOLS = (
+    "list_agent_graph",
+    "add_agent_intent",
+    "prove_agent_goal",
+    "list_scans",
+    "list_facts",
+    "list_todos",
+    "create_todo",
+    "update_todo",
+)
 
 
-def open_intents(db: Session, task: AgentTask, limit: int = MAX_INTENTS_PER_RUN) -> list[AgentIntent]:
+def open_intents(
+    db: Session, task: AgentTask, limit: int = MAX_INTENTS_PER_ROUND
+) -> list[AgentIntent]:
     return list(
         db.execute(
             select(AgentIntent)
@@ -57,107 +69,217 @@ def open_intents(db: Session, task: AgentTask, limit: int = MAX_INTENTS_PER_RUN)
     )
 
 
-async def run_open_intents(
+def _has_open_goals(db: Session, task: AgentTask) -> bool:
+    count = db.scalar(
+        select(func.count())
+        .select_from(AgentGoal)
+        .where(AgentGoal.task_id == task.id, AgentGoal.status == "open")
+    )
+    return bool(count)
+
+
+def _graph_text(db: Session, task: AgentTask) -> str:
+    data = graph_service.graph(db, task=task)
+    goals = "\n".join(f"- {g.id} [{g.status}] {g.text}" for g in data["goals"]) or "（无）"
+    intents = "\n".join(
+        f"- {i.id} [{i.status}] p{i.priority} {i.summary}" for i in data["intents"]
+    ) or "（无）"
+    return f"目标：\n{goals}\n意图：\n{intents}"
+
+
+async def _run_planner(
+    db: Session,
+    task: AgentTask,
+    identity: Any,
+    turn_runner: Any,
+) -> int:
+    """让 planner 补意图；返回新增的 open 意图数。"""
+    from app.chat import engine
+    from app.chat import service as chat_service
+
+    before = db.scalar(
+        select(func.count())
+        .select_from(AgentIntent)
+        .where(AgentIntent.task_id == task.id, AgentIntent.status == "open")
+    ) or 0
+    planner = chat_service.create_session(
+        db,
+        created_by=task.created_by,
+        title=f"[planner] {task.title[:80]}",
+    )
+    planner.persona = "planner"
+    planner.require_approval = False
+    db.commit()
+
+    prompt = (
+        "你是任务执行器的规划轮，**不要执行**，只读图并补意图。\n"
+        f"任务 id：`{task.id}`\n"
+        f"目标：{task.objective or '—'}\n"
+        f"范围/约束：{task.scope or '—'}\n\n"
+        f"当前图：\n{_graph_text(db, task)}\n\n"
+        "要求：\n"
+        "1. 已有 open/running 意图覆盖的方向不要重复加；\n"
+        "2. 只补真正未覆盖、能推进目标的新方向，最多 4 条；\n"
+        "3. 用 `add_agent_intent` 写入 task_id；summary 写具体目标和做法；\n"
+        "4. 若已有证据足以证明某个目标达成，用 `prove_agent_goal` 标 met；\n"
+        "5. 若所有目标都已覆盖且无新方向，不要加意图，直接结束。"
+    )
+
+    async def default_runner(session: Any) -> None:
+        await engine.run_turn_durable(
+            db,
+            session=session,
+            content=prompt,
+            identity=identity,
+            explicit_tools=list(PLANNER_TOOLS),
+            allowed_tools=set(PLANNER_TOOLS),
+        )
+
+    if turn_runner is None:
+        await default_runner(planner)
+    else:
+        await turn_runner(planner, prompt)
+
+    db.expire_all()
+    after = db.scalar(
+        select(func.count())
+        .select_from(AgentIntent)
+        .where(AgentIntent.task_id == task.id, AgentIntent.status == "open")
+    ) or 0
+    return max(0, int(after - before))
+
+
+async def _run_worker(
+    db: Session,
+    task: AgentTask,
+    intent: AgentIntent,
+    identity: Any,
+    turn_runner: Any,
+) -> bool:
+    """执行一条意图；返回是否成功启动。"""
+    from app.chat import engine
+    from app.chat import service as chat_service
+
+    worker_session_id: str | None = None
+    try:
+        worker = chat_service.create_session(
+            db,
+            created_by=task.created_by,
+            title=f"[worker] {intent.summary[:80]}",
+        )
+        worker.persona = "worker"
+        worker.require_approval = False
+        db.commit()
+        worker_session_id = worker.id
+
+        graph_service.claim_intent(db, intent_id=intent.id, worker_session_id=worker.id)
+
+        prompt = (
+            "你已经被任务执行器分配了这一条意图，**不要再次 claim**。\n"
+            f"任务：{task.title}\n"
+            f"最终目标：{task.objective or '—'}\n"
+            f"范围/约束：{task.scope or '—'}\n"
+            f"意图 `{intent.id}`：{intent.summary}\n\n"
+            "直接执行这一条意图。结束时必须调用 `finish_agent_intent` 写回：\n"
+            "- done：完成，result 写真实证据与结论；\n"
+            "- exhausted：合理手段走完仍无结果；\n"
+            "- blocked：环境/工具/权限阻塞，说明缺什么；\n"
+            "- stopped：被人工停止。\n"
+            "不要领取第二条意图，不要修改任务/目标状态。"
+        )
+
+        if turn_runner is None:
+            async def default_runner(session: Any) -> None:
+                await engine.run_turn_durable(
+                    db,
+                    session=session,
+                    content=prompt,
+                    identity=identity,
+                    explicit_tools=list(WORKER_TOOLS),
+                    allowed_tools=set(WORKER_TOOLS),
+                )
+
+            await default_runner(worker)
+        else:
+            await turn_runner(worker, prompt)
+        return True
+    except asyncio.CancelledError:
+        if worker_session_id:
+            try:
+                graph_service.finish_intent(
+                    db,
+                    intent_id=intent.id,
+                    status="stopped",
+                    result="任务执行器被取消",
+                    worker_session_id=worker_session_id,
+                )
+            except Exception:  # noqa: BLE001
+                db.rollback()
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("worker 执行意图 %s 失败", intent.id, exc_info=True)
+        db.rollback()
+        try:
+            graph_service.finish_intent(
+                db,
+                intent_id=intent.id,
+                status="blocked",
+                result=f"执行器失败：{type(exc).__name__}: {exc}",
+                worker_session_id=worker_session_id,
+            )
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        return False
+    finally:
+        try:
+            db.expire_all()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def run_task(
     *,
     task_id: str,
     identity: Any,
     turn_runner: Any = None,
 ) -> int:
-    """后台执行：返回实际启动的意图数。调用方负责 `create_task`。"""
+    """后台执行整个任务；返回实际启动的 worker 数。"""
     from app.core.db import get_session_factory
 
     db = get_session_factory()()
     started = 0
     try:
         task = db.get(AgentTask, task_id)
-        if task is None or task.status in {"completed", "cancelled"}:
+        if task is None:
             return 0
-        intents = open_intents(db, task)
-        for intent in intents:
-            worker_session_id: str | None = None
-            try:
-                # 先建会话再领取：领取要求有 worker 归属，失败时会话可归档。
-                from app.chat import service as chat_service
+        for _ in range(MAX_PLANNER_ROUNDS):
+            task = db.get(AgentTask, task_id)
+            if task is None or task.status in {"completed", "cancelled"}:
+                break
 
-                worker = chat_service.create_session(
-                    db,
-                    created_by=task.created_by,
-                    title=f"[worker] {intent.summary[:80]}",
-                )
-                worker.persona = "worker"
-                worker.require_approval = False
-                db.commit()
-                worker_session_id = worker.id
+            intents = open_intents(db, task)
+            if not intents:
+                if not _has_open_goals(db, task):
+                    break
+                added = await _run_planner(db, task, identity, turn_runner)
+                if added == 0:
+                    break
+                intents = open_intents(db, task)
 
-                graph_service.claim_intent(
-                    db,
-                    intent_id=intent.id,
-                    worker_session_id=worker.id,
-                )
-                started += 1
+            for intent in intents:
+                if started >= MAX_INTENTS_PER_RUN:
+                    break
+                if await _run_worker(db, task, intent, identity, turn_runner):
+                    started += 1
 
-                prompt = (
-                    "你已经被任务执行器分配了这一条意图，**不要再次 claim**。\n"
-                    f"任务：{task.title}\n"
-                    f"最终目标：{task.objective or '—'}\n"
-                    f"范围/约束：{task.scope or '—'}\n"
-                    f"意图 `{intent.id}`：{intent.summary}\n\n"
-                    "直接执行这一条意图。结束时必须调用 `finish_agent_intent` 写回：\n"
-                    "- done：完成，result 写真实证据与结论；\n"
-                    "- exhausted：合理手段走完仍无结果；\n"
-                    "- blocked：环境/工具/权限阻塞，说明缺什么；\n"
-                    "- stopped：被人工停止。\n"
-                    "不要领取第二条意图，不要修改任务/目标状态。"
-                )
-
-                from app.chat import engine
-
-                runner = turn_runner
-                if runner is None:
-                    async def runner(session: Any) -> None:  # type: ignore[misc]
-                        await engine.run_turn_durable(
-                            db,
-                            session=session,
-                            content=prompt,
-                            identity=identity,
-                            explicit_tools=list(WORKER_TOOLS),
-                            allowed_tools=set(WORKER_TOOLS),
-                        )
-
-                    await runner(worker)
-                else:
-                    await runner(worker, prompt)
-            except asyncio.CancelledError:
-                if worker_session_id:
-                    try:
-                        graph_service.finish_intent(
-                            db,
-                            intent_id=intent.id,
-                            status="stopped",
-                            result="任务执行器被取消",
-                            worker_session_id=worker_session_id,
-                        )
-                    except Exception:  # noqa: BLE001
-                        db.rollback()
-                raise
-            except Exception as exc:  # noqa: BLE001 - 单条失败不影响后续
-                log.warning("worker 执行意图 %s 失败", intent.id, exc_info=True)
-                db.rollback()
-                try:
-                    graph_service.finish_intent(
-                        db,
-                        intent_id=intent.id,
-                        status="blocked",
-                        result=f"执行器失败：{type(exc).__name__}: {exc}",
-                        worker_session_id=worker_session_id,
-                    )
-                except Exception:  # noqa: BLE001
-                    db.rollback()
-            finally:
-                try:
-                    db.expire_all()
-                except Exception:  # noqa: BLE001
-                    pass
+            if started >= MAX_INTENTS_PER_RUN:
+                break
+        return started
     finally:
         db.close()
-    return started
+
+
+#: 兼容 P2a 的公开名字。
+run_open_intents = run_task
+
+__all__ = ["PLANNER_TOOLS", "WORKER_TOOLS", "open_intents", "run_open_intents", "run_task"]

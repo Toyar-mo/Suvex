@@ -124,10 +124,9 @@ async def run_task(task_id: str, identity: AdminDep, db: DbDep) -> dict[str, int
     """
     task = service.get_task(db, task_id=task_id, created_by=_owner(identity))
     queued = len(runner_service.open_intents(db, task))
-    if queued:
-        asyncio.create_task(
-            runner_service.run_open_intents(task_id=task.id, identity=identity)
-        )
+    has_goals = any(row.status == "open" for row in service.graph(db, task=task)["goals"])
+    if queued or has_goals:
+        asyncio.create_task(runner_service.run_task(task_id=task.id, identity=identity))
     return {"queued": queued}
 
 

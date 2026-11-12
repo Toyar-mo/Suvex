@@ -207,7 +207,8 @@ export default function AgentTasksPage() {
                     <span className={`text-2xs ${STATUS_TONE[selected.task.status] ?? ''}`}>
                       {t(`agentTasks.status.${selected.task.status}`, undefined, selected.task.status)}
                     </span>
-                    {selected.intents.some((intent) => intent.status === 'open') ? (
+                    {selected.intents.some((intent) => intent.status === 'open') ||
+                    selected.goals.some((goal) => goal.status === 'open') ? (
                       <Button size="sm" disabled={busy} onClick={() => void runCurrent()}>
                         {t('agentTasks.run', undefined, '执行待办')}
                       </Button>

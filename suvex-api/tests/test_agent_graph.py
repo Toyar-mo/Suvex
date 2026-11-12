@@ -84,6 +84,8 @@ def test_runner_executes_open_intents(db_session: Session) -> None:
     intent = service.add_intent(db_session, task=task, summary="跑一条命令")
 
     async def fake_runner(worker, prompt):  # noqa: ANN001
+        if worker.persona == "planner":
+            return  # 没有新方向，队列结束
         with get_session_factory()() as sub:
             service.finish_intent(
                 sub,
@@ -94,9 +96,47 @@ def test_runner_executes_open_intents(db_session: Session) -> None:
             )
 
     started = asyncio.run(
-        runner_service.run_open_intents(task_id=task.id, identity=None, turn_runner=fake_runner)
+        runner_service.run_task(task_id=task.id, identity=None, turn_runner=fake_runner)
     )
     assert started == 1
     db_session.expire_all()
     assert db_session.get(service.AgentIntent, intent.id).status == "done"
     assert db_session.get(service.AgentGoal, goal.id).status == "open"
+
+
+def test_planner_auto_adds_intent_when_queue_empty(db_session: Session) -> None:
+    """队列空、目标未完成时自动跑 planner，并把新意图交给 worker。"""
+    import asyncio
+
+    from app.agents import runner_service
+    from app.core.db import get_session_factory
+
+    task = service.create_task(db_session, created_by="u1", title="自动规划", objective="验证")
+    goal = service.add_goal(db_session, task=task, text="完成")
+    added: list[str] = []
+
+    async def fake_runner(session, prompt):  # noqa: ANN001
+        if session.persona == "planner":
+            with get_session_factory()() as sub:
+                if added:
+                    service.prove_goal(sub, goal_id=goal.id, evidence="fake done")
+                else:
+                    row = service.add_intent(
+                        sub, task=sub.get(service.AgentTask, task.id), summary="planner 补的"
+                    )
+                    added.append(row.id)
+            return
+        with get_session_factory()() as sub:
+            for iid in added:
+                row = sub.get(service.AgentIntent, iid)
+                if row is not None and row.status == "running":
+                    service.finish_intent(
+                        sub, intent_id=iid, status="done", result="ok", worker_session_id=session.id
+                    )
+
+    started = asyncio.run(
+        runner_service.run_task(task_id=task.id, identity=None, turn_runner=fake_runner)
+    )
+    assert started == 1
+    db_session.expire_all()
+    assert added
