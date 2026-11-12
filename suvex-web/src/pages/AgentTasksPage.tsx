@@ -42,8 +42,24 @@ export default function AgentTasksPage() {
   }
 
   useEffect(() => {
+    // 数据加载，不是从 props 派生的级联渲染；与其它页面同一处理。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void reload()
   }, [])
+
+  // 执行中的任务自动刷新：worker/planner 是后台会话，页面不轮询就会
+  // 一直停在“运行中”的旧图上。
+  useEffect(() => {
+    if (!selected) return
+    if (selected.task.status !== 'running' && selected.task.status !== 'planning') return
+    const taskId = selected.task.id
+    const timer = window.setInterval(() => {
+      void loadAgentGraph(taskId)
+        .then((graph) => setSelected(graph))
+        .catch(() => undefined)
+    }, 3000)
+    return () => window.clearInterval(timer)
+  }, [selected?.task.id, selected?.task.status])
 
   async function open(task: AgentTask) {
     try {

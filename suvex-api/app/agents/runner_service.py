@@ -106,6 +106,7 @@ async def _run_planner(
         db,
         created_by=task.created_by,
         title=f"[planner] {task.title[:80]}",
+        agent_task_id=task.id,
     )
     planner.persona = "planner"
     planner.require_approval = False
@@ -166,6 +167,7 @@ async def _run_worker(
             db,
             created_by=task.created_by,
             title=f"[worker] {intent.summary[:80]}",
+            agent_task_id=task.id,
         )
         worker.persona = "worker"
         worker.require_approval = False

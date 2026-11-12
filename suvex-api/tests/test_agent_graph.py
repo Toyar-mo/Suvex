@@ -157,3 +157,23 @@ def test_finding_tools_are_registered_and_validate_verdict() -> None:
         )
     )
     assert out.startswith("失败：verdict")
+
+
+def test_task_scope_narrows_allowlist(db_session: Session) -> None:
+    """worker 会话的 scope 守卫只认任务 scope，不再继承全部扫描授权。"""
+    from types import SimpleNamespace
+
+    from app.chat import scope
+    from app.chat import service as chat_service
+
+    task = service.create_task(
+        db_session, created_by="u1", title="范围", objective="x", scope="只测 example.com"
+    )
+    session = chat_service.create_session(
+        db_session, created_by="u1", title="worker", agent_task_id=task.id
+    )
+    db_session.commit()
+    ctx = SimpleNamespace(db=db_session, session=session)
+    hosts, cidrs = scope.allowlist(ctx)
+    assert "example.com" in hosts
+    assert "127.0.0.0/8" in cidrs

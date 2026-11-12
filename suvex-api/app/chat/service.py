@@ -168,7 +168,13 @@ def _clip_tool_name(name: str | None) -> str | None:
     return cleaned[:MAX_TOOL_NAME_CHARS]
 
 
-def create_session(db: Session, *, created_by: str, title: str | None = None) -> ChatSession:
+def create_session(
+    db: Session,
+    *,
+    created_by: str,
+    title: str | None = None,
+    agent_task_id: str | None = None,
+) -> ChatSession:
     """新建一个空会话。"""
     session = ChatSession(
         id=new_id("chat"),
@@ -177,6 +183,7 @@ def create_session(db: Session, *, created_by: str, title: str | None = None) ->
         #   统一清洗，而不是假设调用方守规矩。
         title=_scrub_nul((title or "")[:MAX_TITLE_CHARS]),
         created_by=created_by,
+        agent_task_id=agent_task_id,
         message_count=0,
     )
     db.add(session)

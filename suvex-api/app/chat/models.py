@@ -153,6 +153,7 @@ class ChatSession(Base):
         #   不加索引时那是一张全表扫 —— 现在几百条看不出来，几千条就是每次点击
         #   都慢一拍。
         Index("ix_chat_sessions_owner_challenge", "created_by", "challenge_id"),
+        Index("ix_chat_sessions_agent_task", "agent_task_id"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -164,6 +165,10 @@ class ChatSession(Base):
     #: 创建者。与其它领域的 `created_by` 同一口径（存 username，不做外键 ——
     #: 账号被删后历史记录仍要能回答"这是谁建的"）。
     created_by: Mapped[str] = mapped_column(String(64), nullable=False)
+
+    #: 执行图任务 id。worker/planner 会话带上它，scope 守卫据此使用任务范围；
+    #: 普通聊天为 NULL。
+    agent_task_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     #: 软归档。**不物理删除**：对话里可能有"我是怎么定位到这个漏洞的"这种
     #: 事后价值极高的记录，而删掉是不可逆的。归档 = 从默认列表里消失。

@@ -392,11 +392,28 @@ def evaluate(
 
 
 def allowlist(ctx: Any) -> tuple[set[str], set[str]]:
-    """本次调用允许的主机/CIDR（扫描授权 ∪ 运维放行 ∪ 内置设施）。
+    """本次调用允许的主机/CIDR。
 
-    文本守卫与网络层守卫共用这一份，避免两处各拼一遍后悄悄分叉。
+    普通聊天：扫描授权 ∪ 运维放行 ∪ 内置设施。
+    执行图的 worker/planner 会话（`session.agent_task_id`）：**任务 scope
+    里明确列出的目标** ∪ 内置设施 —— 不再自动继承"平台上所有已建扫描"，
+    否则任务级范围只是提示词里的一句话。
     """
-    hosts, cidrs = authorized_targets(getattr(ctx, "db", None))
+    db = getattr(ctx, "db", None)
+    task_id = getattr(getattr(ctx, "session", None), "agent_task_id", None)
+    if db is not None and task_id:
+        from app.agents.graph_models import AgentTask
+
+        task = db.get(AgentTask, task_id)
+        if task is not None and (task.scope or "").strip():
+            scoped_hosts, scoped_cidrs = extract_targets(task.scope)
+            if scoped_hosts or scoped_cidrs:
+                return (
+                    scoped_hosts | set(DEFAULT_ALLOWED_HOSTS),
+                    scoped_cidrs | set(DEFAULT_ALLOWED_CIDRS),
+                )
+
+    hosts, cidrs = authorized_targets(db)
     extra_hosts, extra_cidrs = settings_allowlist()
     return (
         hosts | extra_hosts | set(DEFAULT_ALLOWED_HOSTS),
