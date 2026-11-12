@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app.agents import graph_service as service
+from app.agents import runner_service
 from app.agents.graph_schemas import (
     AgentGoalIn,
     AgentIntentIn,
@@ -112,6 +114,21 @@ def cancel_intent(
 ) -> IntentOut:
     service.get_task(db, task_id=task_id, created_by=_owner(identity))
     return IntentOut.from_row(service.cancel_intent(db, intent_id=intent_id, reason=payload.reason))
+
+
+@router.post("/{task_id}/run", summary="执行当前 open 意图")
+async def run_task(task_id: str, identity: AdminDep, db: DbDep) -> dict[str, int]:
+    """把当前 open 意图交给 worker 会话执行（后台，最多 4 条）。
+
+    P2a：不自动生成意图、不自动唤醒 planner；只消费已经排好的队列。
+    """
+    task = service.get_task(db, task_id=task_id, created_by=_owner(identity))
+    queued = len(runner_service.open_intents(db, task))
+    if queued:
+        asyncio.create_task(
+            runner_service.run_open_intents(task_id=task.id, identity=identity)
+        )
+    return {"queued": queued}
 
 
 @router.post("/{task_id}/cancel", response_model=TaskOut, summary="取消任务")

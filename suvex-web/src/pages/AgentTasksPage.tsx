@@ -7,9 +7,11 @@ import {
   createAgentTask,
   loadAgentGraph,
   loadAgentTasks,
+  runAgentTask,
   type AgentGraph,
   type AgentTask,
 } from '@/data/agent-tasks'
+import { showToast } from '@/data/toast-store'
 import { useI18n } from '@/i18n'
 import { ListTree, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -61,6 +63,25 @@ export default function AgentTasksPage() {
       setSelected(graph)
       setForm({ title: '', objective: '', scope: '' })
       setCreating(false)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function runCurrent() {
+    if (!selected) return
+    setBusy(true)
+    try {
+      const queued = await runAgentTask(selected.task.id)
+      showToast({
+        message:
+          queued > 0
+            ? t('agentTasks.started', { n: queued }, `已开始执行 ${queued} 条意图`)
+            : t('agentTasks.nothingToRun', undefined, '没有待执行的意图'),
+        tone: 'ok',
+      })
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
@@ -186,6 +207,11 @@ export default function AgentTasksPage() {
                     <span className={`text-2xs ${STATUS_TONE[selected.task.status] ?? ''}`}>
                       {t(`agentTasks.status.${selected.task.status}`, undefined, selected.task.status)}
                     </span>
+                    {selected.intents.some((intent) => intent.status === 'open') ? (
+                      <Button size="sm" disabled={busy} onClick={() => void runCurrent()}>
+                        {t('agentTasks.run', undefined, '执行待办')}
+                      </Button>
+                    ) : null}
                     {selected.task.status === 'running' || selected.task.status === 'planning' ? (
                       <Button size="sm" variant="ghost" disabled={busy} onClick={() => void cancelCurrent()}>
                         {t('agentTasks.cancel', undefined, '取消任务')}

@@ -70,3 +70,33 @@ def test_over_http_create_and_read_graph(ready_client: TestClient) -> None:
     assert graph.status_code == 200
     assert graph.json()["task"]["status"] == "running"
     assert len(graph.json()["intents"]) == 1
+
+
+def test_runner_executes_open_intents(db_session: Session) -> None:
+    """一键执行：领取 → worker 轮次 → 写回；假 runner 不调模型。"""
+    import asyncio
+
+    from app.agents import runner_service
+    from app.core.db import get_session_factory
+
+    task = service.create_task(db_session, created_by="u1", title="执行器", objective="验证")
+    goal = service.add_goal(db_session, task=task, text="完成")
+    intent = service.add_intent(db_session, task=task, summary="跑一条命令")
+
+    async def fake_runner(worker, prompt):  # noqa: ANN001
+        with get_session_factory()() as sub:
+            service.finish_intent(
+                sub,
+                intent_id=intent.id,
+                status="done",
+                result="fake done",
+                worker_session_id=worker.id,
+            )
+
+    started = asyncio.run(
+        runner_service.run_open_intents(task_id=task.id, identity=None, turn_runner=fake_runner)
+    )
+    assert started == 1
+    db_session.expire_all()
+    assert db_session.get(service.AgentIntent, intent.id).status == "done"
+    assert db_session.get(service.AgentGoal, goal.id).status == "open"

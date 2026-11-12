@@ -64,3 +64,8 @@ export async function createAgentTask(input: {
 export async function cancelAgentTask(taskId: string): Promise<AgentTask> {
   return api.post<AgentTask>(`/agent-tasks/${taskId}/cancel`, {})
 }
+
+export async function runAgentTask(taskId: string): Promise<number> {
+  const result = await api.post<{ queued: number }>(`/agent-tasks/${taskId}/run`, {})
+  return result.queued
+}
