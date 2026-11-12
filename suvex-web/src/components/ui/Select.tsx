@@ -233,7 +233,15 @@ export function Select<T extends string | number>({
             id={listId}
             role="listbox"
             aria-label={ariaLabel}
-            style={{ left: position.left, top: position.top, width: position.width }}
+            style={{
+              left: position.left,
+              top: position.top,
+              width: position.width,
+              /* ★ v1.92：必须给 maxHeight，否则选项一多菜单会长到视口外：
+                 页面上没有可滚的区域，滚轮滚的是文档 —— 而文档滚动会
+                 触发下面的"页面滚动即关闭"，表现就是"一翻就消失"。 */
+              maxHeight: MENU_MAX_HEIGHT,
+            }}
             className={cn(
               'fixed z-50 overflow-y-auto overscroll-contain rounded-sm border border-line',
               'bg-surface-raised p-1 shadow-lg',

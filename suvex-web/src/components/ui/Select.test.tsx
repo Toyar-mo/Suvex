@@ -42,3 +42,21 @@ describe('Select', () => {
     expect(screen.queryByRole('listbox')).toBeNull()
   })
 })
+
+it('选项很多时菜单自身限高可滚，滚动菜单不会把它关掉（v1.92）', async () => {
+  const many = Array.from({ length: 40 }, (_, i) => ({ value: `v${i}`, label: `选项 ${i}` }))
+  render(
+    <Select
+      value="v0"
+      options={many}
+      onChange={() => {}}
+      ariaLabel="长列表"
+    />,
+  )
+  fireEvent.click(screen.getByRole('combobox', { name: '长列表' }))
+  const listbox = screen.getByRole('listbox')
+  expect(listbox.style.maxHeight).toBe('256px')
+  // 菜单内部滚动被 is-inside 判据忽略，不应关闭
+  fireEvent.scroll(listbox)
+  expect(screen.getByRole('listbox')).toBeTruthy()
+})
