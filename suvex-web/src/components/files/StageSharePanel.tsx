@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
 import { createStage, deleteStage, loadStages, type StageResult } from '@/data/stage'
@@ -20,6 +21,8 @@ export function StageSharePanel() {
   const [busy, setBusy] = useState(false)
   const [created, setCreated] = useState<StageResult | null>(null)
   const [items, setItems] = useState<StageResult[]>([])
+  /* 低频次要动作：默认收起，给文件和筛选让出首屏。 */
+  const [open, setOpen] = useState(false)
 
   async function reload() {
     try {
@@ -73,10 +76,33 @@ export function StageSharePanel() {
 
   return (
     <section className="rounded-md border border-line bg-surface p-panel">
-      <h2 className="text-sm font-medium text-ink"><T k="files.stage.title" fallback="临时投递" /></h2>
-      <p className="mt-1 text-2xs text-ink-muted">
-        <T k="files.stage.desc" fallback="给目标机器临时拉取的文件。随机 token、到期即 404，不进工作区。" />
-      </p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-sm font-medium text-ink">
+            <T k="files.stage.title" fallback="临时投递" />
+          </h2>
+          <p className="mt-1 text-2xs text-ink-muted">
+            <T k="files.stage.desc" fallback="给目标机器临时拉取的文件。随机 token、到期即 404，不进工作区。" />
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className="flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs text-ink-faint transition-ui duration-fast hover:text-ink"
+        >
+          {open
+            ? t('files.stage.collapse', undefined, '收起')
+            : t('files.stage.expand', undefined, '展开')}
+          {open ? (
+            <ChevronUp size={12} strokeWidth={2} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={12} strokeWidth={2} aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      {open && (
+        <>
       <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-[12rem_1fr_6rem]">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-ink-muted"><T k="files.stage.name" fallback="文件名" /></span>
@@ -165,6 +191,8 @@ export function StageSharePanel() {
             </li>
           ))}
         </ul>
+      )}
+        </>
       )}
     </section>
   )
