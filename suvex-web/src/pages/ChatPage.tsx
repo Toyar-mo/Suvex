@@ -1538,6 +1538,9 @@ export function ChatPage() {
   const sessionMeta = active
     ? (personas.find((p) => p.id === (active.persona ?? null))?.label ?? null)
     : null
+  const activePersona = active?.persona
+    ? (personas.find((p) => p.id === active.persona) ?? null)
+    : null
   /* 子代理面板的数据：主对话 → 它的直接子代理；当前在子代理里时，
      面板展示同一主对话下的兄弟，并给出返回主线。 */
   const parentSession =
@@ -1880,6 +1883,16 @@ export function ChatPage() {
             )}
           </Button>
           <h1 className="min-w-0 flex-1 truncate text-sm text-ink">{active?.title ?? '对话'}</h1>
+          {activePersona && (
+            <button
+              type="button"
+              onClick={() => setPersonaOpen(true)}
+              title={`${activePersona.summary}（角色说明已进入系统提示词）`}
+              className="hidden shrink-0 rounded-sm border border-line px-1.5 py-0.5 text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink sm:inline-flex"
+            >
+              {activePersona.label}
+            </button>
+          )}
           {active && hubChildren.length > 0 && (
             <button
               type="button"

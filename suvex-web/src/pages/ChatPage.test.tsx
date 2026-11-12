@@ -1853,3 +1853,19 @@ describe('ChatPage — 从消息分叉（v1.92）', () => {
     expect(mockedForkSession).toHaveBeenCalledWith('chat_1', 7)
   })
 })
+
+describe('ChatPage — 角色可见性（v1.92）', () => {
+  it('选了非默认角色时，标题旁显示角色名字（点开可换）', () => {
+    mockedUseChat.mockReturnValue(
+      chatState({
+        active: { ...session({ persona: 'pentest' }), messages: [] },
+        personas: [
+          { id: 'default', label: '通用助手', summary: '默认' },
+          { id: 'pentest', label: '渗透测试', summary: '按攻击路径推进' },
+        ],
+      }),
+    )
+    renderPage('/chat?session=chat_1')
+    expect(screen.getByRole('button', { name: '渗透测试' })).toBeTruthy()
+  })
+})

@@ -67,8 +67,9 @@ export function PersonaDialog({
   return (
     <Modal open={open} onClose={onClose} title={t('chat.a11y.pickRole', undefined, '选一个角色')} widthClass="max-w-3xl">
       <p className="mb-3 text-xs text-ink-muted">
-        角色只改变它**关注什么、怎么说**，不会改变它能做什么 ——
-        能调哪些工具由你的权限决定，与选谁无关。
+        角色会改变它<b className="font-medium text-ink-muted">关注什么、怎么说</b>；
+        如果这个角色在 Agent 配置里限定了工具，可用工具也会相应收窄。
+        选中后，这段角色说明会进入本轮系统提示词。
       </p>
       <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {personas.map((persona) => {
