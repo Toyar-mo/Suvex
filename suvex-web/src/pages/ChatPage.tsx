@@ -2611,7 +2611,16 @@ export function ChatPage() {
                         : serverRunning
                           ? stopRequested
                             ? t('chat.ph.stopRequested')
-                            : t('chat.ph.serverRunning')
+                            : serverTurn
+                              ? t(
+                                  'chat.ph.serverRunningProgress',
+                                  {
+                                    round: serverTurn.roundIndex + 1,
+                                    tools: serverTurn.toolsUsed,
+                                  },
+                                  '这一轮还在跑（服务端）',
+                                )
+                              : t('chat.ph.serverRunning')
                           : sendingElsewhere
                             ? // v1.65：别的会话在跑**不再阻止**发消息（后端支持多会话
                               //   并发）。这里只做一句轻提示，Enter 照常发送。
