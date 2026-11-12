@@ -151,7 +151,7 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
       ...assetCommands(assetsState.items ?? []),
       ...scheduleCommands(schedulesState.items ?? []),
     ]
-  }, [scans, findings, assetsState.items, schedulesState.items])
+  }, [scans, findings, assetsState.items, schedulesState.items, t])
 
   const results = useMemo(() => {
     const matched = searchCommands(allItems, query)
@@ -326,9 +326,15 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
                     {t(`command.kind.${item.kind}`, undefined, COMMAND_KIND_META[item.kind].label)}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm text-ink">{item.title}</span>
+                    <span className="block truncate text-sm text-ink">
+                      {item.titleKey
+                        ? t(item.titleKey, item.titleVars ?? undefined, item.title)
+                        : item.title}
+                    </span>
                     <span className="block truncate text-2xs text-ink-muted">
-                      {item.subtitle}
+                      {item.subtitleKey
+                        ? t(item.subtitleKey, item.subtitleVars ?? undefined, item.subtitle)
+                        : item.subtitle}
                     </span>
                   </span>
                   {active && (
