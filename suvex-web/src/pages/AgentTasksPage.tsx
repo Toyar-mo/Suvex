@@ -19,7 +19,7 @@ import { showToast } from '@/data/toast-store'
 import { useI18n } from '@/i18n'
 import { ListTree, Plus, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 const STATUS_TONE: Record<string, string> = {
   planning: 'text-ink-muted',
@@ -418,10 +418,19 @@ export default function AgentTasksPage() {
                   </h3>
                   <ul className="mt-2 flex flex-col gap-1 text-2xs text-ink-muted">
                     {selected.runs.map((run) => (
-                      <li key={run.id} className="flex gap-2">
-                        <span className="text-ink-faint">{run.role}</span>
-                        <span>{run.status}</span>
-                        {run.sessionId && <span className="truncate">{run.sessionId}</span>}
+                      <li key={run.id} className="flex items-center gap-2">
+                        <span className="w-16 shrink-0 text-ink-faint">{run.role}</span>
+                        <span className="shrink-0">{run.status}</span>
+                        {run.sessionId ? (
+                          <Link
+                            to={`/chat?session=${encodeURIComponent(run.sessionId)}`}
+                            className="min-w-0 truncate text-accent-strong hover:underline"
+                          >
+                            {run.sessionId}
+                          </Link>
+                        ) : (
+                          <span className="text-ink-faint">—</span>
+                        )}
                       </li>
                     ))}
                   </ul>
