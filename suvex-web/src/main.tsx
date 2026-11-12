@@ -54,6 +54,27 @@ initBackdrop()
   ⚠️ 它**必须在 `StrictMode` 里面**，否则它自己不受严格模式的检查；
   而且要在 `App` 外面，才能接住 `App` 内部的一切。
 */
+/*
+  ★ 部署后的旧标签页：动态 chunk 已被新构建清掉，`lazy()` 会 404。
+
+  Vite 在预加载失败时派发 `vite:preloadError`。这里**只自动刷新一次**
+  （10 秒窗口，sessionStorage 去重）：刷新后拿到新 `index.html` 与新的
+  hashed chunk；如果 chunk 仍然不存在（部署没保留旧文件），就交给页面
+  错误边界，绝不让 reload 死循环。
+*/
+const CHUNK_RELOAD_KEY = 'suvex:chunk-reload-at'
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault()
+  try {
+    const last = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY) ?? 0)
+    if (Date.now() - last < 10_000) return
+    sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()))
+  } catch {
+    // 隐私模式禁 storage 时仍然刷新一次；没有去重键最多多刷一次。
+  }
+  window.location.reload()
+})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <ErrorBoundary>
