@@ -55,6 +55,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agents import graph_tools
 from app.chat import failure as failure_kind
 from app.chat import interrupts as interrupt_bus
 from app.chat import mcp_tools
@@ -2780,6 +2781,14 @@ _TOOL_IMPLS: dict[str, Any] = {
     #   安全边界是 GuardedHTTPTransport（SSRF）+ scope guard，不是审批。
     "verify_http": _tool_verify_http,
     "spawn_subagents": _tool_spawn_subagents,
+    # ★ P1 执行图：角色通过这组工具真正创建/领取/写回任务。
+    "create_agent_task": graph_tools.create_agent_task,
+    "add_agent_goal": graph_tools.add_agent_goal,
+    "add_agent_intent": graph_tools.add_agent_intent,
+    "list_agent_graph": graph_tools.list_agent_graph,
+    "claim_agent_intent": graph_tools.claim_agent_intent,
+    "finish_agent_intent": graph_tools.finish_agent_intent,
+    "prove_agent_goal": graph_tools.prove_agent_goal,
 }
 
 

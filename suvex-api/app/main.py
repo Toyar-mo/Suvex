@@ -36,6 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 # 缺了它，metadata 是空的 —— 测试里的建表、以及 alembic 的 autogenerate
 # 都会看到一张表都没有的世界。
 import app.models  # noqa: F401
+from app.agents.graph_router import router as agent_tasks_router
 from app.agents.router import router as agents_router
 from app.assets.router import router as assets_router
 from app.audit.router import router as audit_router
@@ -514,6 +515,7 @@ def create_app() -> FastAPI:
         reports_router,
         benchmark_router,
         agents_router,
+        agent_tasks_router,
         credentials_router,
         purple_router,
         scope_router,

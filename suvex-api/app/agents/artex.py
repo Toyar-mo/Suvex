@@ -42,7 +42,7 @@ ROLES: tuple[ArtexRole, ...] = (
 **目标 = 最终可交付/可核验的结果**
 以下**不是**目标：信息收集、侦察、端点扫描、漏洞分析与验证过程、攻击步骤、利用手段。
 拆分原则：一个最终目标就输出一个；多个相互独立的交付物分别列出；不臆造用户没提过的目标。
-用 `create_todo` 把子目标登记成本轮计划（一条一个），然后说明你拆出了什么。"""+_LANG,
+先用 `create_agent_task` 建任务，再用 `add_agent_goal` 把每个子目标写进执行图（一条一个），然后说明你拆出了什么。"""+_LANG,
     ),
     ArtexRole(
         key="planner",
@@ -54,12 +54,12 @@ ROLES: tuple[ArtexRole, ...] = (
 **硬底线**：只要目标未达成且当前没有任何待办/在跑方向，必须至少产出一个向目标推进的方向；产出 0 个方向只在“已覆盖”或“等待依赖”时成立，不能当成偷懒的默认。
 
 **决策流程**
-1. 先读态势：`list_scans` 看目标与进展，`list_facts` 看已确认/待复核的事实，`list_todos` 看已有计划。把“已覆盖”“待复核”“失败/阻塞”分开。
-2. 判目标：证据足够的目标标完成（`update_todo` 标 completed）；量化目标必须核对实际覆盖，未达标不得提前收口。
+1. 先读态势：`list_agent_graph` 看目标/意图/写回，`list_scans` 看扫描进展，`list_facts` 看已确认/待复核的事实。把“已覆盖”“待复核”“失败/阻塞”分开。
+2. 判目标：证据足够的目标用 `prove_agent_goal` 标 met；量化目标必须核对实际覆盖，未达标不得提前收口。
 3. 只补未覆盖的新方向：和已有待办/事实逐条比对；同一方向不换措辞重派。只有出现材料性新机理（新入口、新参数、新证据）才重开，并写清“这次和上次不同在哪”。
 4. 深度优先于铺广：发现高价值入口时，优先把那条路走透；保持 2–3 条机理不同的路线，但多样性服从操作约束。
-5. 串行链分步派：后一步依赖前一步实际产出的，先用 `create_todo` 记整条链，本轮只推进前置已满足的一步。
-6. 真正需要并行调查时用 `spawn_subagents`；每条子任务写清目标、范围、要带回的证据。不要为凑数派活。
+5. 串行链分步派：后一步依赖前一步实际产出的，先用 `add_agent_intent` 记整条链（或按优先级逐条加），本轮只推进前置已满足的一步。
+6. 真正需要并行调查时用 `spawn_subagents`；每个 worker 子会话先用 `claim_agent_intent` 领取再执行。每条子任务写清目标、范围、要带回的证据。不要为凑数派活。
 
 简洁、聚焦、高效，不重复、不硬凑。"""+_LANG,
     ),
@@ -71,13 +71,13 @@ ROLES: tuple[ArtexRole, ...] = (
         prompt="""你是授权渗透测试系统的主 agent，是人类操作员的接口。你不亲自探索，也不自主连续生成方向。
 
 **职责**
-1. 观察：用 `list_scans`、`list_facts`、`list_todos` 回答“现在到哪了、发现了什么、还缺什么”。
+1. 观察：用 `list_agent_graph`、`list_scans`、`list_facts` 回答“现在到哪了、发现了什么、还缺什么”。
 2. 操舵：把人话落成系统动作——
-   - 想强调某类漏洞/某片区域 → 用 `record_fact` 记一条提示，或调整相关 `create_todo`；
-   - 想立刻查一个具体目标 → 用 `create_todo` 建高优先级一步，必要时 `spawn_subagents`；
-   - 想纠正正在跑的方向 → 先看事实与计划，再更新对应 todo 的描述/状态；
-   - 想作废过期方向 → `update_todo` 标 dropped 并写原因。
-3. 人想新增最终目标 → 先复述你理解的目标，确认后再拆成 todo。
+   - 想强调某类漏洞/某片区域 → 用 `add_agent_intent` 加一条高优先级意图；
+   - 想立刻查一个具体目标 → 加意图，必要时 `spawn_subagents` 派 worker；
+   - 想纠正正在跑的方向 → 先读图与事实，再作废旧意图、加新意图；
+   - 想作废过期方向 → 用对应意图的取消动作（由任务页/规划者处理）并写原因。
+3. 人想新增最终目标 → 先复述你理解的目标，确认后用 `add_agent_goal` 登记。
 
 只根据工具真实返回回答；不编造发现，不替执行者动手。"""+_LANG,
     ),
@@ -94,6 +94,7 @@ ROLES: tuple[ArtexRole, ...] = (
 3. 只在授权范围内操作；操作约束是最高优先级，违反即不做。
 
 **边发现边写回**
+- 开工先 `claim_agent_intent` 领取这一条意图；结束用 `finish_agent_intent` 写回 done/exhausted/blocked/stopped。
 - 新事实/结论 → `record_fact`（传 intent/方向、evidence、confidence；多个观察汇总成一条，只写增量）。
 - 覆盖与否定证据 → `record_coverage`，让规划者知道哪些方向已试过、证据是什么。
 - 需要真实命令/HTTP 复现 → `run_shell` / `browser` / `verify_http`；不要把“版本/CVE 命中”当已确认。
@@ -115,7 +116,7 @@ ROLES: tuple[ArtexRole, ...] = (
 4. 经立足点访问内网优先走隧道/代理；不要从平台侧盲目直连。
 5. 注意 OPSEC：目标侧日志、进程、网络留痕；避免大批量高噪声动作。
 
-**写回**：新事实 → `record_fact`，覆盖/否定证据 → `record_coverage`，命令用 `run_shell`，计划用 `update_todo`；只写真实看到的。"""+_LANG,
+**写回**：先 `claim_agent_intent` 领取，结束用 `finish_agent_intent`；新事实 → `record_fact`，覆盖/否定证据 → `record_coverage`，命令用 `run_shell`；只写真实看到的。"""+_LANG,
     ),
     ArtexRole(
         key="auto",

@@ -467,6 +467,51 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
             "load_skill/load_recipe/list_skills 里选，默认全部安全工具"
         ),
     ),
+    # ══════════════════════════════════════════════════════════
+    # P1 执行图：角色不是"人设"，而是任务图上的状态机
+    # ══════════════════════════════════════════════════════════
+    ChatToolSpec(
+        name="create_agent_task",
+        label="创建 Agent 任务",
+        description="创建一个有目标/意图/运行记录的任务。planner 先建任务，再拆目标。",
+        params="title（必填）、objective（任务目标）、scope（授权范围/禁止项）",
+    ),
+    ChatToolSpec(
+        name="add_agent_goal",
+        label="加任务目标",
+        description="给任务增加一个可验证的最终目标；目标不是攻击步骤。",
+        params="task_id（必填）、text（必填）",
+    ),
+    ChatToolSpec(
+        name="add_agent_intent",
+        label="加探索意图",
+        description="给任务增加一条方向/意图，worker 会领取它执行。同一方向不要重复加。",
+        params="task_id（必填）、summary（必填）、goal_id（可选）、priority（0-10，默认 5）",
+    ),
+    ChatToolSpec(
+        name="list_agent_graph",
+        label="读任务图",
+        description="读任务的目标、意图与写回结果；规划/主 agent 用它判断下一步。",
+        params="task_id（必填）",
+    ),
+    ChatToolSpec(
+        name="claim_agent_intent",
+        label="领取意图",
+        description="worker 领取一条 open 意图；同一意图只能被一个 worker 领取。",
+        params="intent_id（必填）",
+    ),
+    ChatToolSpec(
+        name="finish_agent_intent",
+        label="写回意图结果",
+        description="worker 完成后写回：done / exhausted / blocked / stopped，并附真实结果。",
+        params="intent_id（必填）、status（必填）、result（证据与结论）",
+    ),
+    ChatToolSpec(
+        name="prove_agent_goal",
+        label="标目标完成",
+        description="有证据时把目标标为 met；最后一个目标完成时任务自动结束。",
+        params="goal_id（必填）、evidence（必填，真实证据）",
+    ),
 )
 
 #: 名字集合，供 engine 做"模型是不是在编工具名"的快速判断。

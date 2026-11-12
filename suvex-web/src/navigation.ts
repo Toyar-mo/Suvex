@@ -11,6 +11,7 @@ import {
   KeyRound,
   FolderOpen,
   Layers,
+  ListTree,
   MessagesSquare,
   Radar,
   ScanSearch,
@@ -125,6 +126,16 @@ export const NAV_ITEMS: NavItem[] = [
     */
     inMobileTabBar: true,
     fillsViewport: true,
+  },
+  {
+    id: 'tasks',
+    path: '/tasks',
+    group: 'run',
+    label: '执行任务',
+    shortLabel: '任务',
+    icon: ListTree,
+    blurb: '任务 → 目标 → 意图 → 执行记录，角色在图上领取和写回。',
+    inMobileTabBar: false,
   },
   {
     id: 'scans',
