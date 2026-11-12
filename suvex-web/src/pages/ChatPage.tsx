@@ -544,6 +544,18 @@ function McpMountStatus({
   )
 }
 
+function runningProgressText(
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+  round: number,
+  tools: number,
+): string {
+  // 不用 t 的 vars 插值：线上出现过 `{round}` 原样显示；这里显式替换，
+  // 保证任何 locale 下数字都会落到文案里。
+  return t('chat.ph.serverRunningProgress', undefined, '这一轮还在跑（服务端）')
+    .replace('{round}', String(round))
+    .replace('{tools}', String(tools))
+}
+
 export function ChatPage() {
   const { t } = useI18n()
   const {
@@ -2612,13 +2624,10 @@ export function ChatPage() {
                           ? stopRequested
                             ? t('chat.ph.stopRequested')
                             : serverTurn
-                              ? t(
-                                  'chat.ph.serverRunningProgress',
-                                  {
-                                    round: serverTurn.roundIndex + 1,
-                                    tools: serverTurn.toolsUsed,
-                                  },
-                                  '这一轮还在跑（服务端）',
+                              ? runningProgressText(
+                                  t,
+                                  (serverTurn.roundIndex ?? 0) + 1,
+                                  serverTurn.toolsUsed ?? 0,
                                 )
                               : t('chat.ph.serverRunning')
                           : sendingElsewhere
