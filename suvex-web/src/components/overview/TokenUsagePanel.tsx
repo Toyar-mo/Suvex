@@ -1,5 +1,6 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { Link } from 'react-router-dom'
 import { loadTokenUsage, type TokenUsageSeries } from '@/data/tokenUsage'
 import { cn } from '@/lib/cn'
@@ -25,6 +26,7 @@ function compact(value: number): string {
  * `cacheTracked=false`：缓存读恒 0，命中率显示 `—`，不估算。
  */
 export const TokenUsagePanel = memo(function TokenUsagePanel() {
+  const { t } = useI18n()
   const [days, setDays] = useState<number>(30)
   const [data, setData] = useState<TokenUsageSeries | null>(null)
   const [error, setError] = useState(false)
@@ -61,7 +63,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
     <section className="rounded-lg border border-line bg-surface p-panel">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium text-ink"><T k="overview.token.trend"/></h3>
-        <span className="text-2xs text-ink-faint">activity</span>
+        <span className="text-2xs text-ink-faint">{t('overview.token.activity', undefined, 'activity')}</span>
         <Link
           to="/kernel"
           className="ml-auto rounded-sm bg-ink px-2.5 py-1 text-2xs text-canvas"
@@ -77,20 +79,22 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
               {compact(data?.totals.total ?? 0)}
             </span>
             <span className="text-2xs text-ink-faint">
-              {data?.totals.calls ?? 0} 个任务
+              {t('overview.token.calls', { n: data?.totals.calls ?? 0 }, `${data?.totals.calls ?? 0} 个任务`)}
               {data && data.totals.unreportedCalls > 0
-                ? ` · ${data.totals.unreportedCalls} 次未上报`
+                ? ` · ${t('overview.token.unreported', { n: data.totals.unreportedCalls }, `${data.totals.unreportedCalls} 次未上报`)}`
                 : ''}
             </span>
 
             {([
-              ['输入（未命中）', data?.totals.prompt ?? 0, 'bg-accent'],
+              [t('overview.token.prompt', undefined, '输入（未命中）'), data?.totals.prompt ?? 0, 'bg-accent'],
               [
-                data?.cacheTracked ? '缓存命中' : '缓存命中（未记录）',
+                data?.cacheTracked
+                  ? t('overview.token.cacheHit', undefined, '缓存命中')
+                  : t('overview.token.cacheMiss', undefined, '缓存命中（未记录）'),
                 data?.cacheRead ?? 0,
                 'bg-signal-ok',
               ],
-              ['输出', data?.totals.completion ?? 0, 'bg-signal-warn'],
+              [t('overview.token.output', undefined, '输出'), data?.totals.completion ?? 0, 'bg-signal-warn'],
             ] as const).map(([label, value, tone]) => {
               const total = data?.totals.total ?? 0
               const width = total > 0 ? Math.min(100, (value / total) * 100) : 0
@@ -141,7 +145,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
                         : 'border-line text-ink-faint hover:text-ink',
                     )}
                   >
-                    {range.label}
+                    {t(`overview.token.range.${range.days}`, undefined, range.label)}
                   </button>
                 ))}
               </span>

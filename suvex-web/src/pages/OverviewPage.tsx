@@ -1,5 +1,6 @@
 import { PageHeader } from '@/components/layout/AppShell'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import ActivityFeed from '@/components/overview/ActivityFeed'
 import { AttentionList } from '@/components/overview/AttentionList'
 import RiskScoreCard from '@/components/overview/RiskScoreCard'
@@ -290,6 +291,7 @@ function OverviewContent({
   agents: { running: number; queued: number }
   quality: QualitySnapshot | null
 }) {
+  const { t } = useI18n()
   const { metrics, activity, severityBreakdown, attention, resources } = data
 
   /**
@@ -320,7 +322,7 @@ function OverviewContent({
       */}
       <section aria-label="关键指标" className="grid grid-cols-2 gap-panel lg:grid-cols-4">
         <StatCard
-          label="活跃任务"
+          label={t('overview.stats.active', undefined, '活跃任务')}
           value={metrics.activeScans}
           icon={ScanSearch}
           footnote={
@@ -328,29 +330,29 @@ function OverviewContent({
               ? [agents.running > 0 ? `${agents.running} 执行` : null, agents.queued > 0 ? `${agents.queued} 排队` : null]
                   .filter(Boolean)
                   .join(' · ')
-              : '暂无任务'
+              : t('overview.stats.noTasks', undefined, '暂无任务')
           }
         />
         <StatCard
-          label="确认发现"
+          label={t('overview.stats.findings', undefined, '确认发现')}
           value={findingTotal}
           icon={ShieldAlert}
           footnote={severityBreakdown
             .filter((item) => item.count > 0)
-            .map((item) => `${item.severity} ${item.count}`)
-            .join(' · ') || '暂无发现'}
+            .map((item) => `${t(`severity.${item.severity}`, undefined, item.severity)} ${item.count}`)
+            .join(' · ') || t('overview.stats.noFindings', undefined, '暂无发现')}
         />
         <StatCard
-          label="资产节点"
+          label={t('overview.stats.assets', undefined, '资产节点')}
           value={quality ? quality.coverage.targets : '—'}
           icon={Boxes}
-          footnote={quality ? `覆盖记录 ${quality.coverage.surfaces} 条` : '质量数据未加载'}
+          footnote={quality ? t('overview.stats.coverage', { n: quality.coverage.surfaces }, `覆盖记录 ${quality.coverage.surfaces} 条`) : t('overview.stats.qualityMissing', undefined, '质量数据未加载')}
         />
         <StatCard
-          label="流量交互"
+          label={t('overview.stats.traffic', undefined, '流量交互')}
           value="—"
           icon={Clock}
-          footnote="流量捕获未接入"
+          footnote={t('overview.stats.trafficMissing', undefined, '流量捕获未接入')}
         />
       </section>
 
@@ -482,6 +484,7 @@ function OverviewContent({
  * 其余数字仍然按 60 秒轮询更新（口径见页面顶部那段注释）。
  */
 function OverviewActivityFeed({ seed, isLive }: { seed: ActivityEvent[]; isLive: boolean }) {
+  const { t } = useI18n()
   const { events, latestBatchIds, connection } = useOverviewLiveActivity(seed, isLive)
 
   return (
@@ -489,7 +492,7 @@ function OverviewActivityFeed({ seed, isLive }: { seed: ActivityEvent[]; isLive:
       events={events}
       isLive={isLive}
       limit={6}
-      title={isLive ? '实时活动' : '最近活动'}
+      title={isLive ? t('overview.activity.live', undefined, '实时活动') : t('overview.activity.recent', undefined, '最近活动')}
       latestBatchIds={latestBatchIds}
       connection={connection}
     />

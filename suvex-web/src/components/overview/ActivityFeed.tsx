@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import type { ActivityEvent } from '@/data/overview'
 import { ArrowRight, WifiOff } from 'lucide-react'
 import { Link } from 'react-router-dom'
@@ -55,6 +56,7 @@ export function ActivityFeed({
   latestBatchIds = EMPTY_BATCH,
   connection = null,
 }: ActivityFeedProps) {
+  const { t } = useI18n()
   const visible = events.slice(0, limit)
   const hasMore = events.length > limit
 
@@ -81,7 +83,7 @@ export function ActivityFeed({
           to="/activity"
           className="group inline-flex items-center gap-1 text-xs text-ink-muted transition-ui duration-fast hover:text-accent-strong"
         >
-          查看全部
+          {t('overview.activity.viewAll', undefined, '查看全部')}
           <ArrowRight
             size={13}
             strokeWidth={1.75}

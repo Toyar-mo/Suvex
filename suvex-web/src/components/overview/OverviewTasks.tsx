@@ -1,5 +1,6 @@
 import { scanStatusLabel } from '@/data/scan'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { memo, useMemo } from 'react'
 import type { Scan } from '@/data/scan'
 import { cn } from '@/lib/cn'
@@ -27,6 +28,7 @@ function formatWhen(iso: string | null): string {
  * 再单独拉一份任务列表会让两块数字在刷新窗口内互相打架。
  */
 export const OverviewTasks = memo(function OverviewTasks({ scans }: { scans: Scan[] }) {
+  const { t } = useI18n()
   const rows = useMemo(
     () => [...scans].sort((a, b) => (b.startedAt ?? '').localeCompare(a.startedAt ?? '')).slice(0, 5),
     [scans],
@@ -39,10 +41,10 @@ export const OverviewTasks = memo(function OverviewTasks({ scans }: { scans: Sca
           <span aria-hidden="true" className="text-ink-muted">
             ◷
           </span>
-          任务
+          {t('overview.tasks.title', undefined, '任务')}
         </h3>
         <a href="/scans" className="text-2xs text-ink-muted underline-offset-2 hover:text-ink hover:underline">
-          {scans.length} 个任务 · 全部 ↗
+          {t('overview.tasks.all', { n: scans.length }, `${scans.length} 个任务 · 全部 ↗`)}
         </a>
       </div>
 

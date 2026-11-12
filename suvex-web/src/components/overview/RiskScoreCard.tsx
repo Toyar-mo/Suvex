@@ -119,10 +119,10 @@ export function RiskScoreCard({
     >
       <div className="flex items-baseline justify-between gap-tight">
         <h2 id="risk-score-title" className="text-sm font-medium text-ink">
-          待处置风险
+          {t('overview.risk.title', undefined, '待处置风险')}
         </h2>
         <span className="mono-ui tabular text-ink-faint" data-numeric>
-          {total} 项
+          {t('overview.risk.count', { n: total }, `${total} 项`)}
         </span>
       </div>
 
@@ -146,7 +146,7 @@ export function RiskScoreCard({
         />
       </div>
       <p className="mt-1 text-2xs text-ink-faint">
-        分数按严重度加权累计；进度条以 100 分为满格，超出部分按满格显示。
+        {t('overview.risk.caption', undefined, '分数按严重度加权累计；进度条以 100 分为满格，超出部分按满格显示。')}
       </p>
 
       {present.length > 0 ? (
