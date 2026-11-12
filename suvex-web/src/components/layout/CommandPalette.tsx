@@ -1,3 +1,4 @@
+import { useI18n } from '@/i18n'
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { T } from '@/i18n/T'
 import { createPortal } from 'react-dom'
@@ -91,6 +92,7 @@ interface PaletteBodyProps {
 }
 
 function PaletteBody({ onClose }: PaletteBodyProps) {
+  const { t } = useI18n()
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [rawActive, setRawActive] = useState(0)
@@ -319,7 +321,7 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
                   )}
                 >
                   <span className="w-12 shrink-0 text-[10px] uppercase tracking-wide text-ink-muted">
-                    {COMMAND_KIND_META[item.kind].label}
+                    {t(`command.kind.${item.kind}`, undefined, COMMAND_KIND_META[item.kind].label)}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm text-ink">{item.title}</span>

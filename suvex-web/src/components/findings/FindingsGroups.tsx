@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { FINDING_STATUS_LABEL, type FindingStatus } from '@/data/finding'
+import { useI18n } from '@/i18n'
 import type { FindingGroup } from '@/data/findings-store'
 import { SeverityBadge } from '@/components/findings/FindingBadges'
 import { ChevronRight, Layers, Target } from 'lucide-react'
@@ -74,6 +75,7 @@ function GroupRow({
   onGroupAction: (group: FindingGroup, status: FindingStatus) => void
   onSelectGroup: (group: FindingGroup) => void
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
 
   // 全组状态一致时可以直接一键处置；否则只显示分布，让用户展开看。
@@ -130,7 +132,7 @@ function GroupRow({
               key={status}
               className="rounded-xs border border-line px-1 text-2xs text-ink-muted"
             >
-              {FINDING_STATUS_LABEL[status as FindingStatus] ?? status} {count}
+              {t(`findings.status.${status}`, undefined, FINDING_STATUS_LABEL[status as FindingStatus] ?? status)} {count}
             </span>
           ))}
         </span>
@@ -193,7 +195,7 @@ function GroupRow({
                     {item?.target ?? '（这条不在当前列表里）'}
                   </span>
                   <span className="shrink-0 rounded-xs border border-line px-1">
-                    {item ? (FINDING_STATUS_LABEL[item.status] ?? item.status) : '未知'}
+                    {item ? t(`findings.status.${item.status}`, undefined, FINDING_STATUS_LABEL[item.status] ?? item.status) : t('findings.unknown', undefined, '未知')}
                   </span>
                 </li>
               )

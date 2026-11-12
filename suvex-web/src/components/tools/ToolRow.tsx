@@ -177,7 +177,7 @@ export function ToolRow({
             )}
           </div>
 
-          <p className="mt-1 text-sm leading-relaxed text-ink-muted">{summary}</p>
+          <p className="mt-1 text-sm leading-relaxed text-ink-muted">{t(`tools.summary.${name}`, undefined, summary)}</p>
 
           {/*
             ★ 未就绪时**必须显示原因**，而且要说"去哪修"。

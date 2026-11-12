@@ -73,6 +73,8 @@ export function PersonaDialog({
       </p>
       <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
         {personas.map((persona) => {
+          const personaLabel = t(`persona.${persona.id}.label`, undefined, persona.label)
+          const personaSummary = t(`persona.${persona.id}.summary`, undefined, persona.summary)
           // `null` 与 `'default'` 是同一件事（见后端 `update_settings`
           // 那条注释），所以两者都算"选中"。
           const isActive =
@@ -99,7 +101,7 @@ export function PersonaDialog({
                 aria-pressed={isActive}
               >
                 <span className="flex w-full items-center gap-1">
-                  <span className="text-xs font-medium text-ink">{persona.label}</span>
+                  <span className="text-xs font-medium text-ink">{personaLabel}</span>
                   {isActive && (
                     <Check
                       size={12}
@@ -109,7 +111,7 @@ export function PersonaDialog({
                     />
                   )}
                 </span>
-                <span className="text-2xs leading-relaxed text-ink-faint">{persona.summary}</span>
+                <span className="text-2xs leading-relaxed text-ink-faint">{personaSummary}</span>
               </button>
             </li>
           )

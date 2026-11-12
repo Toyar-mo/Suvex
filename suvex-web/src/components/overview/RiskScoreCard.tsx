@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { T } from '@/i18n/T'
 import type { RiskLevel, SeverityBreakdownEntry } from '@/data/overview'
 import type { Severity } from '@/data/findings'
@@ -95,10 +96,11 @@ export function RiskScoreCard({
   breakdown,
   className,
 }: RiskScoreCardProps) {
+  const { t } = useI18n()
   // ★ 认不出的等级**退回 safe 的视觉、但文案不撒谎**：显示原始等级字符串。
   //   兜底到 high 会让一次后端新增档位变成一次"全站告警"。
   const meta = LEVEL_META[level]
-  const label = meta?.label ?? level
+  const label = meta ? t(`risk.level.${level}.label`, undefined, meta.label) : level
 
   // 进度条宽度：分数直接当百分比（后端权重设计成 100 分以内）。
   // ⚠️ `Math.min(100, ...)` 是必需的：分数可以超过 100（比如 20 个严重），
@@ -166,7 +168,7 @@ export function RiskScoreCard({
                   className={cn('size-1.5 rounded-full', SEVERITY_BAR[entry.severity] ?? 'bg-line-strong')}
                   aria-hidden="true"
                 />
-                {SEVERITY_LABEL[entry.severity] ?? entry.severity}
+                {t(`severity.${entry.severity}`, undefined, SEVERITY_LABEL[entry.severity] ?? entry.severity)}
                 <span className="tabular text-ink-faint" data-numeric>
                   {entry.count}
                 </span>
@@ -176,7 +178,7 @@ export function RiskScoreCard({
         </>
       ) : null}
 
-      <p className="mt-tight text-2xs leading-relaxed text-ink-faint">{meta?.note ?? ''}</p>
+      <p className="mt-tight text-2xs leading-relaxed text-ink-faint">{meta ? t(`risk.level.${level}.note`, undefined, meta.note) : ''}</p>
     </section>
   )
 }

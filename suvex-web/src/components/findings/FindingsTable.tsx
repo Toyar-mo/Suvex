@@ -150,7 +150,7 @@ const FindingRow = memo(function FindingRow({
 
         {/* 类型 */}
         <span className="w-28 shrink-0 truncate text-2xs text-ink-muted">
-          {FINDING_CATEGORY_LABEL[finding.category]}
+          {t(`findings.category.${finding.category}`, undefined, FINDING_CATEGORY_LABEL[finding.category])}
         </span>
 
         {/* 主信息：标题 + 目标 */}

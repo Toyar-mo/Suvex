@@ -194,6 +194,59 @@ const STARTER_GROUPS: Array<{ label: string; prompts: string[] }> = [
   },
 ]
 
+/** 英文预设（其他非中文语言先回退英文；示例消息本身就是给用户点的）。 */
+const STARTER_GROUPS_EN: Array<{ label: string; prompts: string[] }> = [
+  {
+    label: 'Scans & subagents',
+    prompts: [
+      'What did I scan last time? Any failures?',
+      'Start a web scan against example.com',
+      'Which scans are running now? Anything queued?',
+      'Check A, B and C in parallel with subagents; return status code and response length',
+    ],
+  },
+  {
+    label: 'HTTP verification & sandbox',
+    prompts: [
+      'Verify this HTTP finding reproduces: GET http://example.com/path returns 200 with a keyword',
+      'Look inside /work and list the tools installed in the sandbox',
+      'Open http://example.com and screenshot it for me',
+    ],
+  },
+  {
+    label: 'CTF & competitions',
+    prompts: [
+      'List the challenges and states on the current CTF board',
+      'Solve CR7',
+      'Pull the latest challenges from the competition platform',
+      'Submit flag{...} to the current challenge',
+      'Show race progress',
+      'Start the competition race',
+      'Stop the competition race',
+    ],
+  },
+  {
+    label: 'Skills & MCP',
+    prompts: [
+      'Which skills do I have? Which ones were never used?',
+      'Read the pcap-analysis skill',
+      'Load the pcap-analysis skill into this turn',
+      'Load the nmap recipe and tell me what the defaults miss',
+      'Save this method as a skill',
+      'Delete skill xxx',
+      'List the mounted MCP tools',
+      'Help me add an MCP tool connection',
+    ],
+  },
+]
+
+const PRIMARY_STARTERS_EN = [
+  'What did I scan last time? Any failures?',
+  'Start a web scan against example.com',
+  'Which skills do I have? Which ones were never used?',
+  'Help me add an MCP tool connection',
+]
+
 const PRIMARY_STARTERS = [
   '我上次扫了什么？有没有失败的？',
   '帮我对 example.com 发起一次 web 扫描',
@@ -212,10 +265,14 @@ function StarterPrompts({
   expanded: boolean
   onToggle: () => void
 }) {
+  const { t, locale } = useI18n()
+  const useEn = !locale.startsWith('zh')
+  const groups = useEn ? STARTER_GROUPS_EN : STARTER_GROUPS
+  const primary = useEn ? PRIMARY_STARTERS_EN : PRIMARY_STARTERS
   if (!expanded) {
     return (
       <div className="flex w-full flex-col gap-1.5">
-        {PRIMARY_STARTERS.map((prompt) => (
+        {primary.map((prompt) => (
           <button
             key={prompt}
             type="button"
@@ -239,7 +296,7 @@ function StarterPrompts({
           disabled={disabled}
           className="self-start px-1 pt-0.5 text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline disabled:opacity-50"
         >
-          更多预设（{STARTER_GROUPS.reduce((sum, group) => sum + group.prompts.length, 0)}）
+          {t('chat.moreStarters', { n: groups.reduce((sum, group) => sum + group.prompts.length, 0) }, `更多预设（${groups.reduce((sum, group) => sum + group.prompts.length, 0)}）`)}
         </button>
       </div>
     )
@@ -247,7 +304,7 @@ function StarterPrompts({
 
   return (
     <div className="flex w-full flex-col gap-3">
-      {STARTER_GROUPS.map((group) => (
+      {groups.map((group) => (
         <section key={group.label} className="flex flex-col gap-1.5">
           <p className="text-2xs uppercase tracking-wide text-ink-faint">{group.label}</p>
           <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
@@ -282,7 +339,7 @@ function StarterPrompts({
         onClick={onToggle}
         className="self-start px-1 text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
       >
-        收起预设
+        {t('chat.collapseStarters', undefined, '收起预设')}
       </button>
     </div>
   )
@@ -1536,11 +1593,12 @@ export function ChatPage() {
   }, [sessions])
 
   /* 回合页脚右侧那点元信息：模型现在是谁。 */
-  const sessionMeta = active
-    ? (personas.find((p) => p.id === (active.persona ?? null))?.label ?? null)
-    : null
-  const activePersona = active?.persona
+  const activePersonaEntry = active?.persona
     ? (personas.find((p) => p.id === active.persona) ?? null)
+    : null
+  const activePersona = activePersonaEntry
+  const sessionMeta = activePersonaEntry
+    ? t(`persona.${activePersonaEntry.id}.label`, undefined, activePersonaEntry.label)
     : null
   /* 子代理面板的数据：主对话 → 它的直接子代理；当前在子代理里时，
      面板展示同一主对话下的兄弟，并给出返回主线。 */
@@ -1590,7 +1648,7 @@ export function ChatPage() {
         title={t('chat.a11y.persona', undefined, '这个人格决定模型扮演什么角色')}
       >
         <UserRound size={11} strokeWidth={2} aria-hidden="true" />
-        {personas.find((p) => p.id === (active.persona ?? null))?.label ?? '默认'}
+        {activePersona ? t(`persona.${activePersona.id}.label`, undefined, activePersona.label) : t('persona.default.label', undefined, '默认')}
       </button>
 
       <ApprovalToggle

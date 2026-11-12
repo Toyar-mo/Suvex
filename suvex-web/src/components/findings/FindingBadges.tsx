@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { useChangeSignal } from '@/hooks/useChangeSignal'
+import { useI18n } from '@/i18n'
 import { SEVERITY_META } from '@/data/findings'
 import type { Severity } from '@/data/findings'
 import {
@@ -131,6 +132,7 @@ export interface StatusBadgeProps {
  *   减少动效偏好下由 index.css 的全局兜底压到 0.001ms —— 不动。
  */
 export function StatusBadge({ status, withIcon = true, className }: StatusBadgeProps) {
+  const { t } = useI18n()
   const Icon = STATUS_ICON[status]
   const tone = FINDING_STATUS_TONE[status]
   const [revision, changed] = useChangeSignal(status)
@@ -147,7 +149,7 @@ export function StatusBadge({ status, withIcon = true, className }: StatusBadgeP
       )}
     >
       {withIcon && <Icon size={10} strokeWidth={2} aria-hidden="true" />}
-      {FINDING_STATUS_LABEL[status]}
+      {t(`findings.status.${status}`, undefined, FINDING_STATUS_LABEL[status])}
     </span>
   )
 }

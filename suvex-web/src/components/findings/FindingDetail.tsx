@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import CodeBlock from '@/components/ui/CodeBlock'
 import { FindingAttachments } from './FindingAttachments'
 import { useEffect, useState } from 'react'
@@ -60,6 +61,7 @@ export interface FindingDetailProps {
 }
 
 export function FindingDetail({ finding }: FindingDetailProps) {
+  const { t } = useI18n()
   const meta = SEVERITY_META[finding.severity]
   const { detail } = finding
 
@@ -94,7 +96,7 @@ export function FindingDetail({ finding }: FindingDetailProps) {
           </div>
           <div className="flex gap-tight">
             <dt className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.detail.type"/></dt>
-            <dd className="text-2xs text-ink-muted">{FINDING_CATEGORY_LABEL[finding.category]}</dd>
+            <dd className="text-2xs text-ink-muted">{t(`findings.category.${finding.category}`, undefined, FINDING_CATEGORY_LABEL[finding.category])}</dd>
           </div>
           <div className="flex gap-tight">
             <dt className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.detail.foundAt"/></dt>

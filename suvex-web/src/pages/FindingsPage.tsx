@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { PageHeader } from '@/components/layout/AppShell'
 import BulkActionBar from '@/components/findings/BulkActionBar'
 import AssignDialog from '@/components/findings/AssignDialog'
@@ -137,6 +138,7 @@ function filterFromIntent(intent: IntentFilter): FindingFilter {
 }
 
 export function FindingsPage() {
+  const { t } = useI18n()
   const [searchParams, setSearchParams] = useSearchParams()
   const { findings, status, error, scope } = useFindingsState()
   /*
@@ -1091,7 +1093,7 @@ export function FindingsPage() {
                     >
                       <SeverityBadge severity={severity} variant="dot" />
                       <span className={SEVERITY_META[severity].text}>
-                        {SEVERITY_META[severity].label}
+                        {t(`severity.${severity}`, undefined, SEVERITY_META[severity].label)}
                       </span>
                       <span className="tabular text-ink-faint" data-numeric>
                         {count}
@@ -1118,7 +1120,7 @@ export function FindingsPage() {
                         }))
                       }
                     >
-                      {FINDING_STATUS_LABEL[status_]}
+                      {t(`findings.status.${status_}`, undefined, FINDING_STATUS_LABEL[status_])}
                       <span className="tabular text-ink-faint" data-numeric>
                         {count}
                       </span>
@@ -1138,12 +1140,12 @@ export function FindingsPage() {
                     size="sm"
                     value={[...filter.categories][0] ?? ''}
                     options={[
-                      { value: '', label: '全部类型' },
+                      { value: '', label: t('findings.allCategories', undefined, '全部类型') },
                       ...(Object.keys(FINDING_CATEGORY_LABEL) as FindingCategory[])
                         .filter((category) => (byCategory[category] ?? 0) > 0)
                         .map((category) => ({
                           value: category,
-                          label: `${FINDING_CATEGORY_LABEL[category]}（${byCategory[category]}）`,
+                          label: `${t(`findings.category.${category}`, undefined, FINDING_CATEGORY_LABEL[category])}（${byCategory[category]}）`,
                         })),
                     ]}
                     onChange={(value) => {

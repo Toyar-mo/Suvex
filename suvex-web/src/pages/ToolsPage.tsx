@@ -464,7 +464,7 @@ export function ToolsPage() {
                   <ToolListEmpty reason={error?.message} />
                 ) : (
                   grouped.map(({ group, tools }) => (
-                    <div key={group}>
+                    <div key={t(`tools.group.${group}`, undefined, group)}>
                       <div className="flex items-center justify-between border-b border-line/60 bg-surface-raised/30 px-4 py-1.5">
                         <h3 className="text-2xs uppercase tracking-wide text-ink-faint">{group}</h3>
                         {tools.length > 0 && (

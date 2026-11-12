@@ -24,6 +24,24 @@ function splitList(value: string): string[] {
     .filter(Boolean)
 }
 
+/**
+ * 内置 Agent 的名字/描述来自后端数据库（中文）。界面语言切到 EN 时，
+ * 不能把这些**运维写的展示文案**直接留给中文；内置项按 key 走字典，
+ * 自定义项保留用户原文（那是用户写的，不该被翻译）。
+ */
+function builtinName(item: AgentProfile, t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string): string {
+  return item.builtin ? t(`agents.builtin.${item.key}.name`, undefined, item.name) : item.name
+}
+
+function builtinDescription(
+  item: AgentProfile,
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string {
+  return item.builtin
+    ? t(`agents.builtin.${item.key}.description`, undefined, item.description)
+    : item.description
+}
+
 export function AgentsPage() {
   const { t } = useI18n()
   const [items, setItems] = useState<AgentProfile[]>([])
@@ -167,7 +185,7 @@ export function AgentsPage() {
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex min-w-0 items-center gap-1.5">
                     <Bot className="size-4 shrink-0 text-ink-muted" strokeWidth={1.75} />
-                    <span className="truncate text-sm text-ink">{item.name}</span>
+                    <span className="truncate text-sm text-ink">{builtinName(item, t)}</span>
                     <code className="truncate font-mono text-2xs text-ink-faint">{item.key}</code>
                   </div>
                   <span className="shrink-0 rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted">
@@ -178,7 +196,7 @@ export function AgentsPage() {
                   </span>
                 </div>
                 <p className="min-h-[2.5rem] text-2xs leading-relaxed text-ink-muted">
-                  {item.description || t('agents.noDescription')}
+                  {builtinDescription(item, t) || t('agents.noDescription')}
                 </p>
                 <div className="mt-auto flex items-center gap-2 text-2xs text-ink-faint tabular-nums">
                   <span>MCP {item.mcpServers.length}</span>
