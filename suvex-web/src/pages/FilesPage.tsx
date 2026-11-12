@@ -610,7 +610,7 @@ export default function FilesPage() {
     <div className="flex min-h-0 flex-1 flex-col">
       <PageHeader navId="files" />
       <StageSharePanel />
-      <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-panel px-gutter py-bay">
+      <div className="flex flex-col gap-panel px-gutter py-bay">
         {/* 筛选条 —— 版式对齐 CyberStrikeAI：一行四个条件 + 两个动作 */}
         <section className="rounded-md border border-line bg-surface p-panel">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
