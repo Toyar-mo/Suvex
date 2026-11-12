@@ -165,6 +165,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
               <div className="relative">
                 <svg
                   viewBox="0 0 600 200"
+                  preserveAspectRatio="none"
                   className="h-[200px] w-full touch-none"
                   role="img"
                   aria-label={t('overview.token.trendAria', undefined, 'token 趋势')}
@@ -182,12 +183,14 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
                     fill="none"
                     stroke="rgb(var(--suvex-accent))"
                     strokeWidth="2"
+                    vectorEffect="non-scaling-stroke"
                   />
                   <polyline
                     points={chart.line('completion')}
                     fill="none"
                     stroke="rgb(var(--suvex-signal-warn))"
                     strokeWidth="2"
+                    vectorEffect="non-scaling-stroke"
                   />
                   {data?.cacheTracked && (
                     <polyline
@@ -195,6 +198,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
                       fill="none"
                       stroke="rgb(var(--suvex-signal-ok))"
                       strokeWidth="2"
+                      vectorEffect="non-scaling-stroke"
                     />
                   )}
                   {hover !== null && data && (
@@ -206,6 +210,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
                         y2="188"
                         stroke="rgb(var(--suvex-line-strong))"
                         strokeDasharray="3 3"
+                        vectorEffect="non-scaling-stroke"
                       />
                       <circle
                         cx={chart.x(hover)}
