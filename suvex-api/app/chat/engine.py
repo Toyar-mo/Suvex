@@ -915,14 +915,27 @@ _AUTH_TOOL_PATTERN = re.compile(
 )
 
 
+_CODE_WRITE_RE = re.compile(
+    r"(?is)(<<\s*['\"]?[A-Za-z_][\w-]*|(?:^|[;&|]\s*)(?:cat|tee|printf|echo)\s+[^\n|]*>)"
+)
+
+
 def _looks_like_auth_attempt(name: str, args: dict[str, Any]) -> bool:
     """粗略判断这次工具调用是不是登录/口令尝试。
 
     只用于**爆破停损**，不作为安全判据。误判的代价是把认证后的正常 API
     请求拦死（v1.87.1 实测：Authorization 头被 `auth` 命中，10 次就误停）；
     漏判的代价是继续烧钱爆破。因此只认登录/口令词，不认认证头。
+
+    ★ 2026-11-13：**写脚本不算尝试登录**。线上把
+      `cat > dev.py <<'PY' ... login/password ... PY` 连续算成 10 次口令
+      尝试，随后把所有 run_shell 都拦死。命令正文里出现 login 只是代码
+      内容，不是这次动作在发认证请求。heredoc / 重定向写文件先排除。
     """
     if name not in {"run_shell", "verify_http"}:
+        return False
+    command = str(args.get("command") or "")
+    if name == "run_shell" and _CODE_WRITE_RE.search(command):
         return False
     return bool(_AUTH_TOOL_PATTERN.search(f"{name} {args}"))
 
