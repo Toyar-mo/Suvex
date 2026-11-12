@@ -438,7 +438,11 @@ describe('IrPage：开跑与产物', () => {
   })
 
   it('ir-* 分类都有「处置工单」入口', () => {
-    setStore({ challenges: [makeChallenge({ category: 'ir-timeline' })] })
+    setStore({
+      challenges: [
+        makeChallenge({ category: 'ir-timeline', updatedAt: '2026-10-21T11:00:00Z' }),
+      ],
+    })
 
     renderPage()
 
@@ -454,7 +458,11 @@ describe('IrPage：开跑与产物', () => {
   })
 
   it('有 scanId 时露出「复盘报告」', () => {
-    setStore({ challenges: [makeChallenge({ scanId: 'scan_abc' })] })
+    setStore({
+      challenges: [
+        makeChallenge({ scanId: 'scan_abc', updatedAt: '2026-10-21T11:00:00Z' }),
+      ],
+    })
 
     renderPage()
 
@@ -548,5 +556,20 @@ describe('IrPage：空态与错误', () => {
     )
 
     expect(mockedLoadKernel).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('IrPage — 打磨后的列表（v1.92）', () => {
+  it('没跑过的复盘不显示「处置工单」——那时后端没有工单可看', () => {
+    setStore({ challenges: [makeChallenge({ category: 'ir-timeline' })] })
+    renderPage()
+    expect(screen.queryByRole('button', { name: /处置工单/ })).toBeNull()
+  })
+
+  it('分类显示人话，不露 ir-root-cause', () => {
+    setStore({ challenges: [makeChallenge()] })
+    renderPage()
+    expect(screen.getByText(/根因分析/)).toBeTruthy()
+    expect(screen.queryByText(/ir-root-cause/)).toBeNull()
   })
 })

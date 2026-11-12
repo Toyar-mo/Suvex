@@ -42,7 +42,7 @@
  * 找不到"，而不是"你挑错了"。
  */
 
-import { ClipboardList, FileText, Siren, Terminal, Upload } from 'lucide-react'
+import { ClipboardList, FileText, Siren, Terminal, Upload, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
@@ -66,10 +66,29 @@ import {
   type KernelChallenge,
 } from '@/data/kernel'
 import { stageScanAttachments } from '@/data/scans-store'
+import { formatBytes } from '@/data/files'
+import { cn } from '@/lib/cn'
 import { errorMessage } from '@/lib/api'
 
 /** 应急响应的分类前缀（与后端 `IR_CATEGORY_PREFIX` 逐字一致）。 */
 const IR_CATEGORY_PREFIX = 'ir-'
+/** 三类复盘的人话名字。界面不要直接显示 `ir-root-cause`。 */
+const IR_CATEGORY_LABEL: Record<string, string> = {
+  'ir-root-cause': '根因分析',
+  'ir-timeline': '时间线还原',
+  'ir-scope': '影响范围',
+}
+
+function categoryLabel(
+  category: string,
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string {
+  const key = (category || '').trim().toLowerCase()
+  return IR_CATEGORY_LABEL[key]
+    ? t(`ir.category.${key}`, undefined, IR_CATEGORY_LABEL[key])
+    : category
+}
+
 
 /**
  * 这道题是不是一次应急响应复盘。
@@ -159,6 +178,7 @@ export function IrPage() {
   const [creating, setCreating] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [starting, setStarting] = useState<string | null>(null)
+  const [dragging, setDragging] = useState(false)
 
   /** 点开的是哪一道题的哪个产物（两个独立 state，刻意不合并 —— 它们是两件事）。 */
   const [workOrderChallenge, setWorkOrderChallenge] = useState<KernelChallenge | null>(null)
@@ -240,12 +260,21 @@ export function IrPage() {
     })
   }, [])
 
-  const onPickFiles = useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
-    const picked = Array.from(event.target.files ?? [])
-    if (picked.length > 0) setFiles(picked)
-    // 清空 input.value：否则选同一个文件第二次不触发 change。
-    event.target.value = ''
+  const addFiles = useCallback((incoming: File[]) => {
+    setFiles((previous) => {
+      const seen = new Set(previous.map((file) => `${file.name}:${file.size}`))
+      return [...previous, ...incoming.filter((file) => !seen.has(`${file.name}:${file.size}`))]
+    })
   }, [])
+
+  const onPickFiles = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      addFiles(Array.from(event.target.files ?? []))
+      // 清空 input.value：否则选同一个文件第二次不触发 change。
+      event.target.value = ''
+    },
+    [addFiles],
+  )
 
   const onCreate = useCallback(async () => {
     const cleanTitle = title.trim()
@@ -347,17 +376,75 @@ export function IrPage() {
               />
             </label>
 
-            <div className="flex flex-wrap items-center gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-line px-3 py-2 text-xs text-ink hover:border-accent">
-                <Upload className="h-4 w-4" />
-                <T k="ir.form.pickFiles" fallback="选择证据包" />
-                <input type="file" multiple className="hidden" onChange={onPickFiles} />
-              </label>
-              <span className="text-xs text-ink-muted">
-                {files.length === 0
-                  ? t('ir.form.noFiles', undefined, '还没选文件')
-                  : t('ir.form.fileList', { n: files.length, list: files.map((file) => file.name).join('、') }, `${files.length} 个文件：${files.map((file) => file.name).join('、')}`)}
-              </span>
+            <div
+              onDragOver={(event) => {
+                event.preventDefault()
+                setDragging(true)
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault()
+                setDragging(false)
+                addFiles(Array.from(event.dataTransfer.files))
+              }}
+              className={cn(
+                'flex flex-col gap-2 rounded-md border border-dashed px-3 py-3 transition-colors duration-150',
+                dragging
+                  ? 'border-accent bg-accent/5'
+                  : 'border-line bg-canvas hover:border-line-strong',
+              )}
+            >
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="inline-flex cursor-pointer items-center gap-2 rounded border border-line bg-surface px-3 py-1.5 text-xs text-ink hover:border-accent">
+                  <Upload className="h-3.5 w-3.5" />
+                  <T k="ir.form.pickFiles" fallback="选择证据包" />
+                  <input type="file" multiple className="hidden" onChange={onPickFiles} />
+                </label>
+                <span className="text-xs text-ink-muted">
+                  {files.length === 0
+                    ? t('ir.form.noFiles', undefined, '拖进来，或点左侧选择文件')
+                    : t(
+                        'ir.form.fileSummary',
+                        { n: files.length, size: formatBytes(files.reduce((sum, file) => sum + file.size, 0)) },
+                        `${files.length} 个文件 · ${formatBytes(files.reduce((sum, file) => sum + file.size, 0))}`,
+                      )}
+                </span>
+                {files.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setFiles([])}
+                    className="text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline"
+                  >
+                    {t('ir.form.clearFiles', undefined, '清空')}
+                  </button>
+                )}
+              </div>
+              {files.length > 0 && (
+                <ul className="flex flex-wrap gap-1.5">
+                  {files.map((file) => (
+                    <li
+                      key={`${file.name}:${file.size}`}
+                      className="inline-flex max-w-full items-center gap-1 rounded-sm border border-line bg-surface px-1.5 py-0.5 text-2xs text-ink-muted"
+                    >
+                      <span className="truncate" title={file.name}>{file.name}</span>
+                      <button
+                        type="button"
+                        aria-label={t('ir.form.removeFile', { name: file.name }, `移除 ${file.name}`)}
+                        onClick={() =>
+                          setFiles((previous) =>
+                            previous.filter(
+                              (item) => !(item.name === file.name && item.size === file.size),
+                            ),
+                          )
+                        }
+                        className="shrink-0 text-ink-faint hover:text-signal-risk"
+                      >
+                        <X size={10} strokeWidth={2} aria-hidden="true" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </div>
 
             {notice && (
@@ -413,7 +500,7 @@ export function IrPage() {
                   <p className="mt-1 text-xs text-ink-muted">
                     {irStatusText(challenge, ranBefore, t)}
                     {' · '}
-                    {challenge.category}
+                    {categoryLabel(challenge.category, t)}
                     {' · '}
                     {t('ir.card.attachments', { n: challenge.attachments.length }, `证据包 ${challenge.attachments.length} 份`)}
                   </p>
@@ -439,7 +526,7 @@ export function IrPage() {
                   <Button
                     variant="ghost"
                     onClick={() => void onStart(challenge)}
-                    disabled={starting === challenge.id || challenge.status === 'solving'}
+                    disabled={starting === challenge.id || isRunningStatus(challenge)}
                   >
                     {starting === challenge.id
                       ? t('ir.card.starting', undefined, '正在启动…')
@@ -447,13 +534,13 @@ export function IrPage() {
                         ? t('ir.card.restart', undefined, '重新复盘')
                         : t('ir.card.start', undefined, '开始复盘')}
                   </Button>
-                  {canHaveWorkOrder(challenge) && (
+                  {ranBefore && canHaveWorkOrder(challenge) && (
                     <Button variant="ghost" onClick={() => setWorkOrderChallenge(challenge)}>
                       <ClipboardList className="h-4 w-4" />
                       <T k="ir.card.workOrder" fallback="处置工单" />
                     </Button>
                   )}
-                  {canHaveWriteup(challenge) && (
+                  {ranBefore && canHaveWriteup(challenge) && (
                     <Button variant="ghost" onClick={() => setWriteupChallenge(challenge)}>
                       <FileText className="h-4 w-4" />
                       <T k="ir.card.writeup" fallback="复盘报告" />

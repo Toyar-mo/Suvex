@@ -244,6 +244,7 @@ const NAV_LABELS: Record<LocaleId, Dict> = {
   'zh-CN': {
     'nav.overview': '总览', 'nav.chat': '对话', 'nav.scans': '扫描任务', 'nav.activity': '智能体活动',
     'nav.findings': '漏洞发现', 'nav.assets': '资产总览', 'nav.schedules': '定时复查', 'nav.ir': '应急响应',
+    'nav.ir.blurb': '把日志、命令历史与证据包交给智能体，换回入侵时间线与处置动作。',
     'nav.kernel': 'CTF', 'nav.reports': '报告', 'nav.credentials': '凭据', 'nav.files': '文件管理',
     'nav.tools': '工具管理', 'nav.intranet': '内网会话', 'nav.approvals': '审批记录', 'nav.models': '模型管理',
     'nav.agents': 'Agent', 'nav.skills': '技能库', 'nav.settings': '设置',
@@ -255,6 +256,7 @@ const NAV_LABELS: Record<LocaleId, Dict> = {
   'zh-TW': {
     'nav.overview': '總覽', 'nav.chat': '對話', 'nav.scans': '掃描任務', 'nav.activity': '智慧體活動',
     'nav.findings': '漏洞發現', 'nav.assets': '資產總覽', 'nav.schedules': '定時複查', 'nav.ir': '應變處理',
+    'nav.ir.blurb': '把日誌、命令歷史與證據包交給智能體，換回入侵時間線與處置動作。',
     'nav.kernel': 'CTF', 'nav.reports': '報告', 'nav.credentials': '憑證', 'nav.files': '檔案管理',
     'nav.tools': '工具管理', 'nav.intranet': '內網工作階段', 'nav.approvals': '審批紀錄', 'nav.models': '模型管理',
     'nav.agents': 'Agent', 'nav.skills': '技能庫', 'nav.settings': '設定',
@@ -505,6 +507,12 @@ for (const [locale, labels] of Object.entries(SCREEN_LABELS)) {
 const FRAME_LABELS: Record<LocaleId, Dict> = {
   'zh-CN': {
     "chat.new": "新对话",
+    "ir.category.ir-root-cause": "根因分析",
+    "ir.category.ir-timeline": "时间线还原",
+    "ir.category.ir-scope": "影响范围",
+    "ir.form.fileSummary": "{n} 个文件 · {size}",
+    "ir.form.clearFiles": "清空",
+    "ir.form.removeFile": "移除 {name}",
     "chat.agentHub.tokens": "{n} tokens",
     "chat.agentHub.loading": "读取转录…",
     "chat.agentHub.noMessages": "还没有消息。",
@@ -867,6 +875,12 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   'zh-TW': {
     "chat.new": "新對話",
+    "ir.category.ir-root-cause": "根因分析",
+    "ir.category.ir-timeline": "時間線還原",
+    "ir.category.ir-scope": "影響範圍",
+    "ir.form.fileSummary": "{n} 個檔案 · {size}",
+    "ir.form.clearFiles": "清空",
+    "ir.form.removeFile": "移除 {name}",
     "chat.agentHub.tokens": "{n} tokens",
     "chat.agentHub.loading": "讀取轉錄…",
     "chat.agentHub.noMessages": "還沒有訊息。",
@@ -1069,6 +1083,12 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   en: {
     "chat.new": "New chat",
+    "ir.category.ir-root-cause": "Root cause",
+    "ir.category.ir-timeline": "Timeline",
+    "ir.category.ir-scope": "Scope",
+    "ir.form.fileSummary": "{n} files · {size}",
+    "ir.form.clearFiles": "Clear",
+    "ir.form.removeFile": "Remove {name}",
     "chat.agentHub.tokens": "{n} tokens",
     "chat.agentHub.loading": "Loading transcript…",
     "chat.agentHub.noMessages": "No messages yet.",
@@ -1450,6 +1470,12 @@ const FRAME_LABELS: Record<LocaleId, Dict> = {
   },
   ja: {
     "chat.new": "新しい会話",
+    "ir.category.ir-root-cause": "根本原因分析",
+    "ir.category.ir-timeline": "タイムライン復元",
+    "ir.category.ir-scope": "影響範囲",
+    "ir.form.fileSummary": "{n} ファイル · {size}",
+    "ir.form.clearFiles": "クリア",
+    "ir.form.removeFile": "{name} を削除",
     "chat.agentHub.tokens": "{n} tokens",
     "chat.agentHub.loading": "トランスクリプトを読み込み中…",
     "chat.agentHub.noMessages": "まだメッセージはありません。",
