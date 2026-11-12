@@ -127,7 +127,7 @@ export const ja_chunk3: Record<string,string> = {
   "network.extraEmpty": "追加エントリなし",
   "network.extraHint": "SUPEX_CHAT_SHELL_ALLOWED_HOSTS より — 固定インフラ（ミラー、内部レジストリ）のみ",
   "network.loadFailed": "ネットワーク制限の読み込みに失敗しました",
-  "network.textLevel": "⚠️ テキストレベルのガードのみ: 変数や base64 に隠された対象、内部アドレスに解決されるドメインは通過します。ネットワーク境界にはコンテナごとのファイアウォールルールが必要で、実装されていません。",
+  "network.textLevel": "⚠️ ガードを有効にするとネットワーク層の境界も有効になります。ホストのファイアウォールはコンテナ送信元 IP から上記アドレス（ドメインは現在の解決結果）だけを許可し、それ以外の外向き通信を破棄します。ドメインの IP が変わった場合は再同期が必要です。",
   "network.title": "ネットワーク制限",
   "palette.close": "Esc 閉じる",
   "palette.run": "↵ 実行",

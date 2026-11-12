@@ -1040,6 +1040,16 @@ def sweep_orphan_sandboxes() -> int:
     # 同一条纪律在别处也有：`_network_icc_disabled` 判"网络配置对不对"
     # 时按**名字**查（`docker network inspect suvex-ctf2`），
     # 而 `docker network create` 也是名字精确匹配 —— 都不经过子串匹配。
+
+    # 上一次进程被杀时，对话沙箱的 DOCKER-USER 出站规则也会留下。
+    # 容器马上要被删，规则先清掉，免得旧 IP 复用到无关容器上。
+    try:
+        from app.chat import egress
+
+        egress.sweep()
+    except Exception:  # noqa: BLE001 - 清理规则失败不该阻止容器清理
+        logger.warning("清理遗留沙箱出站规则失败", exc_info=True)
+
     listed = _run(
         [
             "docker",
@@ -2267,6 +2277,14 @@ class SandboxContainer:
         # 而真实原因是模型跑挂了。
         if not result.ok and "No such container" not in (result.stderr or ""):
             logger.warning("销毁 CTF2 沙箱 %s 时出错：%s", self.name, result.stderr.strip())
+        # 对话沙箱可能挂着网络层出站规则；容器没了规则还在，改天 IP 复用
+        # 就会套到一个无关容器上。清理失败只记日志，不盖住销毁结果。
+        try:
+            from app.chat import egress
+
+            egress.clear(self.name)
+        except Exception:  # noqa: BLE001 - 清理规则不该让销毁失败
+            logger.warning("清理沙箱出站规则失败：%s", self.name, exc_info=True)
 
 
 # ══════════════════════════════════════════════════════════

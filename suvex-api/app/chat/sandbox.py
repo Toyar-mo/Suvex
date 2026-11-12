@@ -559,6 +559,32 @@ def reaper_is_running() -> bool:
 # 只碰沙箱 —— 因为执行结果不需要落库（工具输出会由引擎写成消息）。
 
 
+def _apply_network_guard(ctx: Any, sandbox: Any) -> str | None:
+    """守卫开启时，把同一份授权集合下发为容器级出站规则。
+
+    失败关闭：返回错误文案而不是继续执行。网络层守卫不可用却继续跑，
+    界面会显示"已开启"而实际只有文本检查 —— 那比没开更危险。
+    """
+    from app.chat import egress
+    from app.chat import scope as chat_scope
+    from app.core.config import get_settings
+
+    if not get_settings().chat_shell_scope_guard:
+        return None
+    hosts, cidrs = chat_scope.allowlist(ctx)
+    try:
+        egress.apply(sandbox.name, hosts, cidrs)
+    except egress.EgressError as exc:
+        _log.warning("对话沙箱网络层守卫不可用：%s", exc)
+        return (
+            "失败：网络层出站守卫不可用，命令没有执行。\n"
+            f"原因：{exc}\n"
+            "这通常是宿主缺少 iptables 权限或 docker 不可用，不是命令写错了。"
+            "把这条错误告诉用户，不要换命令重试。"
+        )
+    return None
+
+
 async def _tool_run_shell(ctx: Any, args: dict[str, Any]) -> str:
     """在对话沙箱里执行 shell 命令。
 
@@ -590,6 +616,9 @@ async def _tool_run_shell(ctx: Any, args: dict[str, Any]) -> str:
 
     def _work() -> str:
         sandbox = get_sandbox(ctx.session)
+        blocked_net = _apply_network_guard(ctx, sandbox)
+        if blocked_net:
+            return blocked_net
         # 注意：这里调的是**内核的 async 函数**，但因为没有 await 点，
         # 在线程里用 `asyncio.run` 跑它是安全的（它内部不碰事件循环）。
         return asyncio.run(runner._tool_run_shell(args, sandbox=sandbox))
@@ -650,8 +679,11 @@ async def _tool_browser(
             if blocked:
                 return blocked
 
-    sandbox = await asyncio.to_thread(get_sandbox, ctx.session)
     try:
+        sandbox = await asyncio.to_thread(get_sandbox, ctx.session)
+        blocked_net = await asyncio.to_thread(_apply_network_guard, ctx, sandbox)
+        if blocked_net:
+            return blocked_net
         return await browser_mod.run_browser(args, sandbox=sandbox, on_chunk=on_chunk)
     except Exception as exc:  # noqa: BLE001 - 浏览器起不来不该毁掉整轮
         _log.warning("对话 browser 失败", exc_info=True)

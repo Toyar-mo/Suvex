@@ -1232,7 +1232,7 @@ export const zh_tw_full: ExtraLocaleMap = {
     "network.extraEmpty": "沒有額外放行項",
     "network.extraHint": "來自 SUPEX_CHAT_SHELL_ALLOWED_HOSTS，只該放固定設施（映象站、內部包倉）",
     "network.loadFailed": "網路限制載入失敗",
-    "network.textLevel": "⚠️ 這是文字級守衛：目標藏在變數/base64 裡、或域名解析到內網仍能繞過。網路層邊界需要按容器源 IP 下發防火牆規則，尚未實現。",
+    "network.textLevel": "⚠️ 守衛開啟時同時啟用網路層邊界：依容器來源 IP 在宿主防火牆只放行上表位址（網域依目前解析結果），其餘對外流量丟棄。網域後續換 IP 需重新觸發規則同步。",
     "network.title": "網路限制",
     "overview.activity.live": "實時活動",
     "overview.activity.recent": "最近活動",

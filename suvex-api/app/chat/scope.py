@@ -22,17 +22,19 @@
 
 ## ⚠️ 它挡不住什么（如实写在这里，不要读成"出站已经封死"）
 
-* 把目标藏进变量、base64、循环生成 —— 这里是**文本级**提取，
-  不是网络层强制。真正的边界是容器级出站白名单（`DOCKER-USER` 按
-  容器源 IP 下发），那需要 Docker 侧实现与实测，见交接文档 §7.1；
-* 域名解析出来的内网地址：这里**不做 DNS 解析**（解析本身要出网，
-  而且守卫会变成一次 SSRF 探针）；
+* 把目标藏进变量、base64、循环生成 —— 本模块的文本提取看不见它们；
+  但守卫开启时 `egress.py` 会按容器源 IP 在 `DOCKER-USER` 上只放行
+  本模块算出的授权集合（域名按下发时的解析结果），其余出站流量 DROP；
+* 域名解析出来的内网地址：文本层不做 DNS 解析；网络层在下发规则时
+  由宿主解析授权域名，因此它放行的是**当前解析结果**，域名换 IP 后
+  要等下一次工具调用重新同步；
 * `browser` 除了 `open` 之外的子命令（点击跳转、`eval` 里的 fetch）——
   它们不经过这里；
 * `verify_http` 仍只做 SSRF 守卫（`GuardedHTTPTransport`）。它没有 target
   绑定，要补得先回答"验证对象算不算授权" —— 那是产品语义，不是这里能猜的。
+* 规则下发前已经建立的连接不会被追溯切断；它挡的是新的出站连接。
 
-所以它的定位是：**挡误操作与顺手扫描，不挡恶意 agent**。
+所以它的定位是：**文本层挡误操作，网络层挡藏起来的地址；两者一起才构成边界**。
 整体关掉：`SUPEX_CHAT_SHELL_SCOPE_GUARD=0`。
 """
 
@@ -389,6 +391,19 @@ def evaluate(
     )
 
 
+def allowlist(ctx: Any) -> tuple[set[str], set[str]]:
+    """本次调用允许的主机/CIDR（扫描授权 ∪ 运维放行 ∪ 内置设施）。
+
+    文本守卫与网络层守卫共用这一份，避免两处各拼一遍后悄悄分叉。
+    """
+    hosts, cidrs = authorized_targets(getattr(ctx, "db", None))
+    extra_hosts, extra_cidrs = settings_allowlist()
+    return (
+        hosts | extra_hosts | set(DEFAULT_ALLOWED_HOSTS),
+        cidrs | extra_cidrs | set(DEFAULT_ALLOWED_CIDRS),
+    )
+
+
 def reject_reason(ctx: Any, *, text: str, tool: str) -> str | None:
     """守卫的对外入口：`None` = 放行，否则返回给模型的失败结果。
 
@@ -403,11 +418,7 @@ def reject_reason(ctx: Any, *, text: str, tool: str) -> str | None:
     if not get_settings().chat_shell_scope_guard:
         return None
 
-    hosts, cidrs = authorized_targets(getattr(ctx, "db", None))
-    extra_hosts, extra_cidrs = settings_allowlist()
-    allowed_hosts = hosts | extra_hosts | set(DEFAULT_ALLOWED_HOSTS)
-    allowed_cidrs = cidrs | extra_cidrs | set(DEFAULT_ALLOWED_CIDRS)
-
+    allowed_hosts, allowed_cidrs = allowlist(ctx)
     decision = evaluate(text, hosts=allowed_hosts, cidrs=allowed_cidrs)
     if decision.allowed:
         return None
@@ -426,6 +437,7 @@ __all__ = [
     "DEFAULT_ALLOWED_CIDRS",
     "DEFAULT_ALLOWED_HOSTS",
     "Decision",
+    "allowlist",
     "authorized_targets",
     "evaluate",
     "extract_targets",
