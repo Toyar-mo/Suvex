@@ -2102,7 +2102,7 @@ export function ChatPage() {
                             isLive &&
                             phase?.phase === 'tool' &&
                             liveToolProgress?.tool === phase.tool
-                              ? (liveToolProgress?.seconds ?? null)
+                              ? liveToolProgress
                               : null
                           }
                           liveToolOutput={
@@ -2506,6 +2506,15 @@ export function ChatPage() {
         projects={projectSuggestions}
         currentProject={menuSession?.project ?? null}
         onRename={() => menuSession && openRename({ id: menuSession.id, title: menuSession.title })}
+        onFork={() => {
+          if (!menuSession) return
+          void forkSession(menuSession.id).then((created) => {
+            if (!created) return
+            setSearchParams({ session: created.id }, { replace: true })
+            setShowList(false)
+            showToast({ message: '已创建分支。', tone: 'ok' })
+          })
+        }}
         onViewAttackChain={() => menuSession && void openAttackChain(menuSession)}
         onViewFindings={() => menuSession && openFindings(menuSession)}
         onTogglePin={() => {

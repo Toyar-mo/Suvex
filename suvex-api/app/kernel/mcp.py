@@ -67,6 +67,7 @@ import contextlib
 import json
 import logging
 import os
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -300,6 +301,28 @@ def _safe_excerpt(resp: Any, limit: int = 300) -> str:
     return text[:limit] + ("…" if len(text) > limit else "")
 
 
+def _safe_excerpt_text(text: str, limit: int = 300) -> str:
+    """与 `_safe_excerpt` 同口径，但接受已读出的文本（流式路径用）。"""
+    text = (text or "").strip().replace("\n", " ")
+    return text[:limit] + ("…" if len(text) > limit else "")
+
+
+def _json_messages(raw: str) -> list[dict[str, Any]]:
+    """把一段 SSE data 解析成 JSON-RPC 消息列表（单条/批量/坏 JSON）。"""
+    data = (raw or "").strip()
+    if not data or data == "[DONE]":
+        return []
+    try:
+        obj = json.loads(data)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(obj, dict):
+        return [obj]
+    if isinstance(obj, list):
+        return [item for item in obj if isinstance(item, dict)]
+    return []
+
+
 def _parse_sse_messages(body: str) -> list[dict[str, Any]]:
     """从 SSE（text/event-stream）body 里抽出所有 JSON-RPC 消息对象。
 
@@ -526,72 +549,126 @@ class McpClient:
         headers.update(self.cfg.headers)
         return headers
 
+    async def _http_post_messages(
+        self, payload: dict[str, Any], *, timeout: float
+    ) -> AsyncIterator[dict[str, Any]]:
+        """POST 一条 JSON-RPC 消息，**逐条**产出响应里的 JSON-RPC 消息。
+
+        与 `_http_post` 的区别：这个在 SSE 响应上边读边产，于是
+        `notifications/progress` 能在请求还没结束时就送到界面；
+        `_http_post` 只是把它收成 list，行为与改造前一致。
+
+        分帧规则与 stdio 相同：空行结束一帧，`data:` 多行拼接；
+        非 JSON 的注释/日志行跳过。
+        """
+        assert self._http is not None
+
+        async with self._http.stream(
+            "POST",
+            self.cfg.url,
+            json=payload,
+            headers=self._http_headers(),
+            timeout=timeout,
+        ) as resp:
+            sid = resp.headers.get("Mcp-Session-Id") or resp.headers.get("mcp-session-id")
+            if sid:
+                self._session_id = sid
+            pver = resp.headers.get("MCP-Protocol-Version") or resp.headers.get(
+                "mcp-protocol-version"
+            )
+            if pver:
+                self._protocol_version = pver
+
+            if resp.status_code == 202:
+                return
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                raise McpError(
+                    f"MCP 连接 `{self.cfg.name}` 返回 HTTP {resp.status_code}："
+                    f"{_safe_excerpt_text(body.decode('utf-8', 'replace'))}",
+                )
+            ctype = (resp.headers.get("content-type") or "").lower()
+            if "text/event-stream" in ctype:
+                data_lines: list[str] = []
+                async for line in resp.aiter_lines():
+                    if line == "":
+                        if not data_lines:
+                            continue
+                        raw = "\n".join(data_lines)
+                        data_lines = []
+                        parsed = _json_messages(raw)
+                        for message in parsed:
+                            yield message
+                        continue
+                    if line.startswith("data:"):
+                        data_lines.append(line[5:].lstrip())
+                    elif line.startswith(":"):
+                        continue
+                if data_lines:
+                    for message in _json_messages("\n".join(data_lines)):
+                        yield message
+                return
+            body = await resp.aread()
+            if not body:
+                return
+            try:
+                data = json.loads(body.decode("utf-8", "replace"))
+            except (ValueError, json.JSONDecodeError) as exc:
+                raise McpError(
+                    f"MCP 连接 `{self.cfg.name}` 返回的不是合法 JSON："
+                    f"{_safe_excerpt_text(body.decode('utf-8', 'replace'))}",
+                    detail=str(exc),
+                ) from exc
+            if isinstance(data, list):
+                for message in data:
+                    if isinstance(message, dict):
+                        yield message
+            elif isinstance(data, dict):
+                yield data
+
     async def _http_post(
         self, payload: dict[str, Any], *, timeout: float
     ) -> list[dict[str, Any]]:
-        """POST 一条 JSON-RPC 消息，返回响应里的全部 JSON-RPC 消息对象。
-
-        streamable-HTTP 的响应可能是：
-          · `application/json`：body 直接就是一（或多）条 JSON-RPC 消息；
-          · `text/event-stream`：SSE，逐行 `data: {...}`，取其中的 JSON 消息。
-        通知（无 id）服务端回 202/无 body —— 返回空列表。
-        """
-        assert self._http is not None
-        import httpx
-
-        try:
-            resp = await self._http.post(
-                self.cfg.url, json=payload, headers=self._http_headers(), timeout=timeout
-            )
-        except httpx.TimeoutException as exc:
-            raise McpError(
-                f"MCP 连接 `{self.cfg.name}` 请求超时（{timeout:.0f} 秒）。", detail=str(exc)
-            ) from exc
-        except httpx.HTTPError as exc:
-            raise McpError(
-                f"MCP 连接 `{self.cfg.name}` 请求失败：{exc}", detail=str(exc)
-            ) from exc
-
-        # initialize 的响应头里带会话/协议版本，记下来供后续请求。
-        sid = resp.headers.get("Mcp-Session-Id") or resp.headers.get("mcp-session-id")
-        if sid:
-            self._session_id = sid
-        pver = resp.headers.get("MCP-Protocol-Version") or resp.headers.get(
-            "mcp-protocol-version"
-        )
-        if pver:
-            self._protocol_version = pver
-
-        if resp.status_code == 202 or not resp.content:
-            # 通知被接受（202 Accepted）—— 没有要读的消息。
-            return []
-        if resp.status_code >= 400:
-            raise McpError(
-                f"MCP 连接 `{self.cfg.name}` 返回 HTTP {resp.status_code}："
-                f"{_safe_excerpt(resp)}",
-            )
-        ctype = (resp.headers.get("content-type") or "").lower()
-        if "text/event-stream" in ctype:
-            return _parse_sse_messages(resp.text)
-        # application/json：body 可能是单条，也可能是批量数组。
-        try:
-            data = resp.json()
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise McpError(
-                f"MCP 连接 `{self.cfg.name}` 返回的不是合法 JSON：{_safe_excerpt(resp)}",
-                detail=str(exc),
-            ) from exc
-        if isinstance(data, list):
-            return [m for m in data if isinstance(m, dict)]
-        return [data] if isinstance(data, dict) else []
+        """POST 并收集全部消息（兼容既有调用方）。"""
+        return [message async for message in self._http_post_messages(payload, timeout=timeout)]
 
     async def _http_request(
-        self, method: str, params: dict[str, Any], *, timeout: float
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        progress_token: str | None = None,
     ) -> dict[str, Any]:
         """HTTP 上发一条**请求**（有 id）并取回对应的 result。"""
         self._next_id += 1
         msg_id = self._next_id
         payload = {"jsonrpc": "2.0", "id": msg_id, "method": method, "params": params}
+        if on_progress is not None:
+            async for msg in self._http_post_messages(payload, timeout=timeout):
+                if msg.get("id") != msg_id:
+                    if (
+                        msg.get("method") == "notifications/progress"
+                        and isinstance(msg.get("params"), dict)
+                        and progress_token is not None
+                        and str(msg["params"].get("progressToken")) == progress_token
+                    ):
+                        await on_progress(msg["params"])
+                    continue
+                if "error" in msg:
+                    err = msg["error"]
+                    message = err.get("message") if isinstance(err, dict) else str(err)
+                    raise McpError(
+                        f"MCP 连接 `{self.cfg.name}` 报了错误：{message}",
+                        detail=json.dumps(err, ensure_ascii=False),
+                    )
+                result = msg.get("result")
+                return result if isinstance(result, dict) else {"result": result}
+            raise McpError(
+                f"MCP 连接 `{self.cfg.name}` 的响应里没有 id={msg_id} 的结果。"
+                "server 可能没有按 JSON-RPC 回复。"
+            )
         messages = await self._http_post(payload, timeout=timeout)
         for msg in messages:
             if msg.get("id") != msg_id:
@@ -639,7 +716,14 @@ class McpClient:
         self._proc.stdin.write(data)
         await self._proc.stdin.drain()
 
-    async def _read_response(self, msg_id: int, *, timeout: float) -> dict[str, Any]:
+    async def _read_response(
+        self,
+        msg_id: int,
+        *,
+        timeout: float,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+        progress_token: str | None = None,
+    ) -> dict[str, Any]:
         """读到 id==msg_id 的那条响应为止（跳过无关的通知/别的响应）。"""
         assert self._proc is not None and self._proc.stdout is not None
         deadline = asyncio.get_event_loop().time() + timeout
@@ -675,8 +759,20 @@ class McpClient:
                 continue
             if not isinstance(msg, dict):
                 continue
-            # 通知（没有 id）跳过；别的 id 的响应也跳过（并发调用时用）。
+            # 通知（没有 id）：只有带匹配 progressToken 的
+            # `notifications/progress` 要分发给界面，其余照旧跳过。
             if "id" not in msg:
+                if (
+                    on_progress is not None
+                    and msg.get("method") == "notifications/progress"
+                ):
+                    params = msg.get("params")
+                    if (
+                        isinstance(params, dict)
+                        and progress_token is not None
+                        and str(params.get("progressToken")) == progress_token
+                    ):
+                        await on_progress(params)
                 continue
             if msg.get("id") != msg_id:
                 continue
@@ -690,12 +786,35 @@ class McpClient:
             result = msg.get("result")
             return result if isinstance(result, dict) else {"result": result}
 
-    async def _request(self, method: str, params: dict[str, Any], *, timeout: float) -> dict[str, Any]:
+    async def _request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout: float,
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> dict[str, Any]:
         # ★ v1.62：http 传输走独立的 POST 路径（stdio 的 send/read 是管道行协议）。
+        token: str | None = None
+        if on_progress is not None:
+            # `_meta.progressToken` 由客户端选。用下一个 id 派生，保证
+            # 与本请求一一对应；server 回 `notifications/progress` 时必须
+            # 带同一个 token，否则是别的调用的进度，忽略。
+            token = f"suvex-progress-{self._next_id + 1}"
+            meta = dict(params.get("_meta") or {})
+            meta["progressToken"] = token
+            params = {**params, "_meta": meta}
         if self.cfg.is_http():
-            return await self._http_request(method, params, timeout=timeout)
+            return await self._http_request(
+                method, params, timeout=timeout, on_progress=on_progress, progress_token=token
+            )
         msg_id = await self._send(method, params)
-        return await self._read_response(msg_id, timeout=timeout)
+        return await self._read_response(
+            msg_id,
+            timeout=timeout,
+            on_progress=on_progress,
+            progress_token=token,
+        )
 
     # ---- MCP 方法 ---------------------------------------------------
     async def _initialize(self) -> None:
@@ -719,7 +838,12 @@ class McpClient:
         tools = result.get("tools")
         return tools if isinstance(tools, list) else []
 
-    async def call_tool(self, tool: str, arguments: dict[str, Any]) -> Any:
+    async def call_tool(
+        self,
+        tool: str,
+        arguments: dict[str, Any],
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> Any:
         """调一个 MCP 工具。
 
         ★ v0.83：超时取**这条连接自己的** `call_timeout`，没配才回落到
@@ -735,6 +859,7 @@ class McpClient:
             "tools/call",
             {"name": tool, "arguments": arguments},
             timeout=timeout,
+            on_progress=on_progress,
         )
         return result
 
@@ -819,7 +944,13 @@ class McpRegistry:
             text = text[:MAX_DESCRIBE_CHARS] + f"\n\n……（已截断，原文 {len(text)} 字符）"
         return text
 
-    async def call(self, name: str, tool: str, arguments: dict[str, Any]) -> str:
+    async def call(
+        self,
+        name: str,
+        tool: str,
+        arguments: dict[str, Any],
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> str:
         """调一个工具（给 `call_mcp` 工具用），结果渲染成文本。"""
         cfg = self.get(name)
         if cfg is None:
@@ -834,7 +965,7 @@ class McpRegistry:
             )
         async with McpClient(cfg) as client:
             try:
-                result = await client.call_tool(tool, arguments)
+                result = await client.call_tool(tool, arguments, on_progress=on_progress)
             except McpError as exc:
                 hint = await _unknown_tool_hint(client, cfg, tool, exc)
                 if hint is not None:

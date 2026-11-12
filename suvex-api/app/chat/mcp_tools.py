@@ -39,6 +39,7 @@ import asyncio
 import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -221,7 +222,12 @@ class McpToolCatalog:
                 lines.append(f"- `{status.name}`：{status.reason or '连接失败'}")
         return "\n".join(lines) + "\n"
 
-    async def call(self, binding: McpToolBinding, arguments: dict[str, Any]) -> str:
+    async def call(
+        self,
+        binding: McpToolBinding,
+        arguments: dict[str, Any],
+        on_progress: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> str:
         """执行一个暴露工具，失败转成 `McpToolError`。
 
         ⚠️ 失败**只影响这一次调用**：调用方把它渲染成一条失败的工具结果，
@@ -232,7 +238,9 @@ class McpToolCatalog:
         timeout = (binding.call_timeout or mcp_mod.DEFAULT_MCP_TIMEOUT) + MCP_CALL_CONNECT_GRACE
         try:
             return await asyncio.wait_for(
-                self.registry.call(binding.server, binding.tool, arguments),
+                self.registry.call(
+                    binding.server, binding.tool, arguments, on_progress=on_progress
+                ),
                 timeout=timeout,
             )
         except TimeoutError as exc:

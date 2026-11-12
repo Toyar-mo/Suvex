@@ -303,7 +303,13 @@ export interface ChatState {
   /** ★ v1.92：运行中工具的输出增量（仅界面展示，不落库）。 */
   liveToolOutput: { tool: string; text: string } | null
   /** ★ v1.92：长工具心跳（MCP / verify_http …），用于运行卡的状态行。 */
-  liveToolProgress: { tool: string; seconds: number } | null
+  liveToolProgress: {
+    tool: string
+    seconds: number
+    message?: string
+    progress?: number
+    total?: number
+  } | null
   /**
    * ★ v0.100：跑的过程中**用户插的话**（还没被模型看到的那几句）。
    *
@@ -1292,9 +1298,30 @@ export async function sendMessage(
 
         if (frame.event === TURN_TOOL_PROGRESS) {
           const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
-          const seconds = typeof frame.data.seconds === 'number' ? frame.data.seconds : 0
-          if (!tool || seconds <= 0) return
-          patch({ liveToolProgress: { tool, seconds } })
+          if (!tool) return
+          const previous = state.liveToolProgress
+          const sameTool = previous?.tool === tool
+          const seconds =
+            typeof frame.data.seconds === 'number'
+              ? frame.data.seconds
+              : sameTool
+                ? previous.seconds
+                : 0
+          const progress =
+            typeof frame.data.progress === 'number' ? frame.data.progress : undefined
+          const total = typeof frame.data.total === 'number' ? frame.data.total : undefined
+          const message = typeof frame.data.message === 'string' ? frame.data.message : undefined
+          // 既没有秒数也没有服务端进度 = 无效帧（旧服务端/空 payload）。
+          if (seconds <= 0 && progress === undefined && !message) return
+          patch({
+            liveToolProgress: {
+              tool,
+              seconds,
+              ...(message ? { message } : {}),
+              ...(progress !== undefined ? { progress } : {}),
+              ...(total !== undefined ? { total } : {}),
+            },
+          })
           return
         }
 

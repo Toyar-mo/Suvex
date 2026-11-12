@@ -3304,8 +3304,8 @@ def _tool_progress_emitter(emit: Emit | None, name: str) -> Any:
     if emit is None:
         return None
 
-    async def _send(seconds: int) -> None:
-        await emit(EVENT_TOOL_PROGRESS, {"tool": name, "seconds": seconds})
+    async def _send(payload: dict[str, Any]) -> None:
+        await emit(EVENT_TOOL_PROGRESS, {"tool": name, **payload})
 
     return _send
 
@@ -3331,7 +3331,7 @@ async def _with_heartbeat(
         while True:
             await asyncio.sleep(5)
             try:
-                await on_progress(int(time.monotonic() - started))
+                await on_progress({'seconds': int(time.monotonic() - started)})
             except Exception:  # noqa: BLE001 - 心跳失败不该影响工具
                 _log.debug("工具心跳发送失败", exc_info=True)
 
@@ -3394,7 +3394,19 @@ async def _execute_tool(
                 True,
             )
         try:
-            text = await ctx.mcp.call(binding, args)
+            # ★ v1.92：MCP 的 `notifications/progress` 转成 tool_progress
+            #   帧；与心跳同一个事件，界面只需要一条状态行。
+            async def _mcp_progress(params: dict[str, Any]) -> None:
+                if on_progress is None:
+                    return
+                payload: dict[str, Any] = {}
+                for key in ("progress", "total", "message"):
+                    if params.get(key) is not None:
+                        payload[key] = params[key]
+                if payload:
+                    await on_progress(payload)
+
+            text = await ctx.mcp.call(binding, args, on_progress=_mcp_progress)
         except mcp_tools.McpToolError as exc:
             return f"失败：{exc}", True
         # MCP 的 `isError=true` 由内核渲染成「MCP 工具返回错误：…」，

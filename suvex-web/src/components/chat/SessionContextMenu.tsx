@@ -2,6 +2,7 @@ import { cn } from '@/lib/cn'
 import { useI18n } from '@/i18n'
 import {
   Archive,
+  GitBranch,
   Bug,
   ChevronRight,
   Download,
@@ -63,6 +64,8 @@ export interface SessionContextMenuProps {
   projects: string[]
   currentProject: string | null
   onRename: () => void
+  /** 从整个会话建一条分支（复制全部历史）。 */
+  onFork: () => void
   onTogglePin: () => void
   /** 只读的洞察视图：从这条对话的消息里还原步骤 / 汇总关联漏洞。 */
   onViewAttackChain: () => void
@@ -200,6 +203,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
             { key: 'md-full', label: '完整（含工具详情）', onSelect: () => props.onDownload('full') },
           ],
         },
+        { key: 'fork', label: '创建分支', icon: <GitBranch size={14} strokeWidth={2} />, onSelect: props.onFork },
         { key: 'rename', label: '重命名', icon: <Type size={14} strokeWidth={2} />, onSelect: props.onRename },
         {
           key: 'pin',

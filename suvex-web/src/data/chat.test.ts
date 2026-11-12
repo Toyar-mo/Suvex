@@ -26,6 +26,7 @@ import {
   TURN_MESSAGE,
   TURN_PHASE,
   TURN_TOOL_OUTPUT,
+  TURN_TOOL_PROGRESS,
 } from './chat-stream'
 
 /*
@@ -1815,6 +1816,44 @@ describe('liveToolOutput — 工具输出增量（v1.92）', () => {
     )
     await tick()
     expect(getChatSnapshot().liveToolOutput).toBeNull()
+
+    finishStream()
+    await promise
+  })
+})
+
+describe('liveToolProgress — MCP 协议进度（v1.92）', () => {
+  it('notifications/progress 的 progress/total/message 进状态', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '跑 MCP')
+    await tick()
+    openManualStream()
+    chatStreamController.enqueue(
+      new TextEncoder().encode(
+        sseFrame(TURN_PHASE, { phase: 'tool', round: 1, tool: 'mcp__x__scan' }),
+      ),
+    )
+    chatStreamController.enqueue(
+      new TextEncoder().encode(
+        sseFrame(TURN_TOOL_PROGRESS, {
+          tool: 'mcp__x__scan',
+          progress: 3,
+          total: 10,
+          message: '30%',
+        }),
+      ),
+    )
+    await tick()
+    expect(getChatSnapshot().liveToolProgress).toEqual({
+      tool: 'mcp__x__scan',
+      seconds: 0,
+      progress: 3,
+      total: 10,
+      message: '30%',
+    })
 
     finishStream()
     await promise

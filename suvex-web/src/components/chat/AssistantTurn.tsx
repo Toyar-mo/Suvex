@@ -115,7 +115,12 @@ function AssistantTurnImpl({
   /** 运行中工具的浅层参数摘要（phase 帧带下来的）。 */
   liveToolArgs?: Record<string, string> | null
   /** 长工具心跳（秒）；没有可读输出时用它证明还活着。 */
-  liveToolProgress?: number | null
+  liveToolProgress?: {
+    seconds: number
+    message?: string
+    progress?: number
+    total?: number
+  } | null
   deciding?: boolean
   onDecide?: (messageId: string, approve: boolean) => void
   /** 从某条消息分叉（GitBranch 按钮）。 */
@@ -292,7 +297,7 @@ function LiveToolCard({
   args: Record<string, string> | null
   output: string | null
   elapsed: number
-  heartbeat: number | null
+  heartbeat: { seconds: number; message?: string; progress?: number; total?: number } | null
 }) {
   const ref = useRef<HTMLPreElement>(null)
   const digest = digestToolArgs(args)
@@ -320,7 +325,7 @@ function LiveToolCard({
           </span>
         )}
         <span className="shrink-0 text-2xs text-ink-faint">
-          执行中…{heartbeat != null ? ` · 已等待 ${heartbeat} 秒` : elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
+          执行中…{heartbeat ? progressLabelOf(heartbeat) : elapsed > 0 ? ` · ${formatElapsed(elapsed)}` : ''}
         </span>
       </div>
       {output ? (
@@ -334,6 +339,21 @@ function LiveToolCard({
       ) : null}
     </div>
   )
+}
+
+/** 运行卡状态行：服务端给了 progress/total 就显示真实百分比，否则退成秒数。 */
+function progressLabelOf(p: {
+  seconds: number
+  message?: string
+  progress?: number
+  total?: number
+}): string {
+  if (p.progress !== undefined && p.total && p.total > 0) {
+    const pct = Math.max(0, Math.min(100, Math.round((p.progress / p.total) * 100)))
+    return ` · ${pct}%${p.message ? ` · ${p.message}` : ''}`
+  }
+  const base = p.seconds > 0 ? ` · 已等待 ${p.seconds} 秒` : ''
+  return p.message ? `${base} · ${p.message}` : base
 }
 
 function useElapsed(live: boolean, since: string | null): number {

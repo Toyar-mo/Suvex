@@ -26,6 +26,7 @@ function makeProps(over: Partial<SessionContextMenuProps> = {}): SessionContextM
     projects: ['项目甲'],
     currentProject: null,
     onRename: vi.fn(),
+    onFork: vi.fn(),
     onTogglePin: vi.fn(),
     onViewAttackChain: vi.fn(),
     onViewFindings: vi.fn(),
@@ -286,5 +287,15 @@ describe('SessionContextMenu · 子菜单过桥', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe('SessionContextMenu — 从树里创建分支（v1.92）', () => {
+  it('菜单里「创建分支」可点，执行后关闭菜单', () => {
+    const props = makeProps()
+    render(<SessionContextMenu {...props} />)
+    fireEvent.click(screen.getByText('创建分支'))
+    expect(props.onFork).toHaveBeenCalledTimes(1)
+    expect(props.onClose).toHaveBeenCalled()
   })
 })

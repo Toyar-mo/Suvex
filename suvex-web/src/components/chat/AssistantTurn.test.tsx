@@ -334,3 +334,19 @@ describe('AssistantTurn — 运行中的工具（v1.92）', () => {
     expect(container.querySelector('[data-live-tool]')).toBeNull()
   })
 })
+
+describe('AssistantTurn — MCP 真实进度（v1.92）', () => {
+  it('有 progress/total 时显示百分比而不是秒数', () => {
+    const { container } = render(
+      <AssistantTurn
+        items={[]}
+        live
+        liveTool="mcp__x__scan"
+        liveToolProgress={{ seconds: 0, progress: 3, total: 10, message: '扫描中' }}
+      />,
+    )
+    const running = container.querySelector('[data-live-tool]') as HTMLElement
+    expect(running.textContent).toContain('30%')
+    expect(running.textContent).toContain('扫描中')
+  })
+})
