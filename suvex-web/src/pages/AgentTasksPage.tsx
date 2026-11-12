@@ -9,6 +9,7 @@ import {
   addAgentGoal,
   addAgentIntent,
   loadAgentTasks,
+  loadTaskReport,
   proveAgentGoal,
   runAgentTask,
   type AgentGraph,
@@ -142,6 +143,21 @@ export default function AgentTasksPage() {
       setError(exc instanceof Error ? exc.message : String(exc))
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function downloadReport() {
+    if (!selected) return
+    try {
+      const { filename, text } = await loadTaskReport(selected.task.id)
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = filename ?? `${selected.task.id}.md`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : String(exc))
     }
   }
 
@@ -282,6 +298,9 @@ export default function AgentTasksPage() {
                     <span className={`text-2xs ${STATUS_TONE[selected.task.status] ?? ''}`}>
                       {t(`agentTasks.status.${selected.task.status}`, undefined, selected.task.status)}
                     </span>
+                    <Button size="sm" variant="ghost" onClick={() => void downloadReport()}>
+                      {t('agentTasks.export', undefined, '导出报告')}
+                    </Button>
                     {selected.intents.some((intent) => intent.status === 'open') ||
                     selected.goals.some((goal) => goal.status === 'open') ? (
                       <Button size="sm" disabled={busy} onClick={() => void runCurrent()}>

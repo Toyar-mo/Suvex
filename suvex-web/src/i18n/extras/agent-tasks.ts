@@ -43,6 +43,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addGoal': '加目标',
     'agentTasks.intentPlaceholder': '新的探索方向',
     'agentTasks.addIntent': '加意图',
+    'agentTasks.export': '导出报告',
   },
   'zh-TW': {
     'nav.tasks': '執行任務',
@@ -85,6 +86,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addGoal': '加目標',
     'agentTasks.intentPlaceholder': '新的探索方向',
     'agentTasks.addIntent': '加意圖',
+    'agentTasks.export': '匯出報告',
   },
   en: {
     'nav.tasks': 'Agent tasks',
@@ -127,6 +129,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addGoal': 'Add goal',
     'agentTasks.intentPlaceholder': 'New exploration direction',
     'agentTasks.addIntent': 'Add intent',
+    'agentTasks.export': 'Export report',
   },
   ru: {},
   fr: {},
@@ -171,6 +174,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addGoal': '目標を追加',
     'agentTasks.intentPlaceholder': '新しい探索方向',
     'agentTasks.addIntent': '意図を追加',
+    'agentTasks.export': 'レポートを出力',
   },
   de: {},
 }

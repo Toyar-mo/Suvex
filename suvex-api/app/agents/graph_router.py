@@ -5,10 +5,11 @@ from __future__ import annotations
 import asyncio
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.orm import Session
 
 from app.agents import graph_service as service
+from app.agents.task_report import render_task_report
 from app.agents import runner_service
 from app.agents.graph_schemas import (
     AgentGoalIn,
@@ -114,6 +115,17 @@ def cancel_intent(
 ) -> IntentOut:
     service.get_task(db, task_id=task_id, created_by=_owner(identity))
     return IntentOut.from_row(service.cancel_intent(db, intent_id=intent_id, reason=payload.reason))
+
+
+@router.get("/{task_id}/report", summary="导出任务 Markdown 报告")
+def task_report(task_id: str, identity: ReadDep, db: DbDep) -> Response:
+    task = service.get_task(db, task_id=task_id, created_by=_owner(identity))
+    text = render_task_report(service.graph(db, task=task))
+    return Response(
+        content=text,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{task.id}.md"'},
+    )
 
 
 @router.post("/{task_id}/run", summary="执行当前 open 意图")

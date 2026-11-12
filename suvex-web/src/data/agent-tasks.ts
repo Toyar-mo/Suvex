@@ -1,4 +1,4 @@
-import { api } from '@/lib/api'
+import { api, apiText } from '@/lib/api'
 
 export interface AgentTask {
   id: string
@@ -87,4 +87,8 @@ export async function addAgentIntent(
 
 export async function proveAgentGoal(goalId: string, taskId: string, evidence: string): Promise<AgentGoal> {
   return api.post<AgentGoal>(`/agent-tasks/${taskId}/goals/${goalId}/prove`, { evidence })
+}
+
+export async function loadTaskReport(taskId: string) {
+  return apiText(`/agent-tasks/${taskId}/report`)
 }

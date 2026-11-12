@@ -217,3 +217,25 @@ def test_over_http_start_agent_run_from_finding(
     assert graph["task"].scope == "api.example.com"
     assert len(graph["goals"]) == 1
     assert len(graph["intents"]) == 1
+
+
+def test_task_report_contains_goals_intents_and_results() -> None:
+    from types import SimpleNamespace
+
+    from app.agents.task_report import render_task_report
+
+    task = SimpleNamespace(
+        id="tsk_1", title="报告", objective="目标", scope="example.com", status="completed"
+    )
+    goal = SimpleNamespace(seq=1, text="完成", status="met", evidence="证据")
+    intent = SimpleNamespace(
+        seq=1, summary="方向", status="done", priority=5, worker_session_id="chat_1", result="结果"
+    )
+    run = SimpleNamespace(role="worker", status="done", session_id="chat_1")
+    text = render_task_report(
+        {"task": task, "goals": [goal], "intents": [intent], "runs": [run]}
+    )
+    assert "# 报告" in text
+    assert "证据" in text
+    assert "结果" in text
+    assert "chat_1" in text
