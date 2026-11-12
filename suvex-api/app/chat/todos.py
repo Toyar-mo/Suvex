@@ -111,6 +111,13 @@ def render_todos(todos: Iterable[Any]) -> str:
     done = sum(1 for row in rows if row.status == "done")
     doing = sum(1 for row in rows if row.status == "in_progress")
     lines = [f"- #{row.seq} [{row.status}] {row.text}" for row in rows]
+    all_done = done == len(rows)
+    tail = (
+        "\n**计划已全部完成。** 不要再开新的动作：要么用 `create_todo` 明确开始"
+        "一个新计划，要么直接给用户最终答复。不要在旧计划完成后默默接着做别的活。\n"
+        if all_done
+        else ""
+    )
     return (
         "\n## 本次对话的计划（结构化，跨轮保留）\n\n"
         "干活前先看这里；完成后用 `update_todo` 把状态改成 `done`，"
@@ -119,6 +126,7 @@ def render_todos(todos: Iterable[Any]) -> str:
         + "\n".join(lines)
         + f"\n\n（{len(rows)} 步：{done} done / {doing} in_progress / "
         f"{len(rows) - done - doing} pending）\n"
+        + tail
     )
 
 

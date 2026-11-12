@@ -132,3 +132,13 @@ def test_todo_endpoint_lists_the_plan(ready_client, db_session: Session) -> None
     body = listed.json()
     assert listed.status_code == 200, listed.text
     assert body == [{"seq": 1, "text": "先枚举端点", "status": "pending"}]
+
+
+def test_completed_plan_tells_model_to_stop_or_start_a_new_one() -> None:
+    plan = [
+        SimpleNamespace(seq=1, status="done", text="第一步"),
+        SimpleNamespace(seq=2, status="done", text="第二步"),
+    ]
+    text = todo_store.render_todos(plan)
+    assert "计划已全部完成" in text
+    assert "create_todo" in text

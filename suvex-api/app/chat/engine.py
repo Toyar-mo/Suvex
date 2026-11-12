@@ -3708,15 +3708,23 @@ async def run_turn(
     ctx = await _build_tool_context(
         db, session, identity, gateway=gateway, allowed_tools=allowed_tools
     )
-    system = _system_prompt_for(
-        session,
-        explicit_tools,
-        native_tools=_gateway_supports_tools(gateway),
-        challenge_category=_challenge_category(db, session),
-        mcp_catalog=ctx.mcp,
-        db=db,
-        locale=locale,
-    )
+    native_tools = _gateway_supports_tools(gateway)
+    challenge_category = _challenge_category(db, session)
+
+    def system_now() -> str:
+        # 每轮重读计划：模型在同一轮里会 create/update todo；只在轮次开始时
+        # 渲染一次的话，“3/3 完成”要等下一轮才被看到，而它已经接着干别的了。
+        return _system_prompt_for(
+            session,
+            explicit_tools,
+            native_tools=native_tools,
+            challenge_category=challenge_category,
+            mcp_catalog=ctx.mcp,
+            db=db,
+            locale=locale,
+        )
+
+    system = system_now()
 
     #: 打开审批时，这些工具不执行、只挂起。
     gate_on = bool(session.require_approval) and not _auto_approve_active(session)
@@ -3886,7 +3894,7 @@ async def run_turn(
 
         # ★ v1.13：`round_index - nudges_used` —— 纠偏轮不消耗工具预算。
         at_limit = (round_index - nudges_used) >= MAX_TOOL_ROUNDS
-        system_this_round = system
+        system_this_round = system_now()
         if at_limit:
             result.hit_tool_limit = True
             system_this_round = (

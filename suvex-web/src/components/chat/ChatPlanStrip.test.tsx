@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
 
 import { ChatPlanStrip } from './ChatPlanStrip'
@@ -34,4 +34,19 @@ it('没有计划时什么都不渲染', async () => {
   await Promise.resolve()
 
   expect(container.querySelector('[data-testid="chat-plan"]')).toBeNull()
+})
+
+it('全部完成后默认折叠，点击才展开', async () => {
+  vi.mocked(listTodos).mockResolvedValue([
+    { seq: 1, text: '枚举端点', status: 'done' },
+    { seq: 2, text: '验证越权', status: 'done' },
+    { seq: 3, text: '写报告', status: 'done' },
+  ])
+
+  render(<ChatPlanStrip sessionId="chat_1" refreshKey={0} />)
+
+  expect(await screen.findByText('计划 · 3/3 完成')).toBeTruthy()
+  expect(screen.queryByText('枚举端点')).toBeNull()
+  fireEvent.click(screen.getByText('计划 · 3/3 完成'))
+  expect(screen.getByText('枚举端点')).toBeTruthy()
 })
