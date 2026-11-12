@@ -2,6 +2,7 @@ import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 
 /**
  * 日期输入 + 自绘日历。
@@ -57,6 +58,8 @@ export function DatePicker({
   ariaLabel?: string
   placeholder?: string
 }) {
+  const { t } = useI18n()
+  const weekdays = t('ui2.datePicker.weekdays', undefined, WEEKDAYS.join(',')).split(',')
   const [open, setOpen] = useState(false)
   const [position, setPosition] = useState({ left: 0, top: 0 })
   const [month, setMonth] = useState(() => {
@@ -157,7 +160,7 @@ export function DatePicker({
         <button
           type="button"
           onClick={openCalendar}
-          aria-label="打开日历"
+          aria-label={t('ui2.datePicker.open', undefined, '打开日历')}
           aria-expanded={open}
           className={cn(
             'absolute right-1 top-1/2 -translate-y-1/2 rounded-xs p-1',
@@ -174,7 +177,7 @@ export function DatePicker({
           <div
             ref={panelRef}
             role="dialog"
-            aria-label="选择日期"
+            aria-label={t('ui2.datePicker.choose', undefined, '选择日期')}
             style={{ left: position.left, top: position.top, width: PANEL_WIDTH }}
             className={cn(
               'fixed z-50 rounded-sm border border-line bg-surface-raised p-2 shadow-lg',
@@ -183,18 +186,18 @@ export function DatePicker({
             <div className="mb-1 flex items-center justify-between">
               <button
                 type="button"
-                aria-label="上个月"
+                aria-label={t('ui2.datePicker.prevMonth', undefined, '上个月')}
                 onClick={() => moveMonth(-1)}
                 className="rounded-xs p-1 text-ink-muted transition-ui duration-fast hover:bg-surface-sunken hover:text-ink"
               >
                 <ChevronLeft size={13} strokeWidth={2} aria-hidden="true" />
               </button>
               <span className="text-xs font-medium text-ink">
-                {month.year} 年 {month.month + 1} 月
+                {t('ui2.datePicker.monthYear', { year: month.year, month: month.month + 1 }, `${month.year} 年 ${month.month + 1} 月`)}
               </span>
               <button
                 type="button"
-                aria-label="下个月"
+                aria-label={t('ui2.datePicker.nextMonth', undefined, '下个月')}
                 onClick={() => moveMonth(1)}
                 className="rounded-xs p-1 text-ink-muted transition-ui duration-fast hover:bg-surface-sunken hover:text-ink"
               >
@@ -202,7 +205,7 @@ export function DatePicker({
               </button>
             </div>
             <div className="grid grid-cols-7 gap-0.5 text-center">
-              {WEEKDAYS.map((weekday) => (
+              {weekdays.map((weekday) => (
                 <span key={weekday} className="py-1 text-2xs text-ink-faint">
                   {weekday}
                 </span>

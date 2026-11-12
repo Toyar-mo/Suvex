@@ -630,8 +630,12 @@ export function FindingsPage() {
         const label = FINDING_STATUS_LABEL[to]
         const message =
           skipped === 0
-            ? `已把 ${changed} 条标记为「${label}」`
-            : `已把 ${changed} 条标记为「${label}」，${skipped} 条本就是这个状态`
+            ? t('findings2.toast.statusChanged', { changed, label }, `已把 ${changed} 条标记为「${label}」`)
+            : t(
+                'findings2.toast.statusChangedSkipped',
+                { changed, label, skipped },
+                `已把 ${changed} 条标记为「${label}」，${skipped} 条本就是这个状态`,
+              )
 
         /*
           ★ 撤销**不是总能提供的** —— 状态机不对称（任务 10 定的流转表）。
@@ -650,7 +654,7 @@ export function FindingsPage() {
           message,
           action: undoable
             ? {
-                label: '撤销',
+                label: t('findings2.toast.undo', undefined, '撤销'),
                 onAction: () => {
                   /*
                     按**原状态分组**提交：同一批里各条的来源状态常常不同
@@ -666,7 +670,14 @@ export function FindingsPage() {
                   void Promise.all(
                     [...groups].map(([status, ids]) => changeFindingStatus(ids, status)),
                   ).catch((err) =>
-                    showToast({ message: `撤销失败：${errorMessage(err)}`, tone: 'risk' }),
+                    showToast({
+                      message: t(
+                        'findings2.toast.undoFailed',
+                        { msg: errorMessage(err) },
+                        `撤销失败：${errorMessage(err)}`,
+                      ),
+                      tone: 'risk',
+                    }),
                   )
                 },
               }
@@ -676,7 +687,7 @@ export function FindingsPage() {
         setActionError(errorMessage(err))
       }
     },
-    [],
+    [t],
   )
 
   /**
@@ -754,15 +765,20 @@ export function FindingsPage() {
           setSelectedIds(new Set())
           setAssignTargets(null)
           const name = assigneeId ? members.find((m) => m.id === assigneeId)?.name : null
-          const head = name ? `已把 ${changed} 条指派给「${name}」` : `已取消 ${changed} 条的指派`
+          const head = name
+            ? t('findings2.toast.assigned', { changed, name }, `已把 ${changed} 条指派给「${name}」`)
+            : t('findings2.toast.unassigned', { changed }, `已取消 ${changed} 条的指派`)
           showToast({
-            message: skipped === 0 ? head : `${head}，${skipped} 条本就是这个人`,
+            message:
+              skipped === 0
+                ? head
+                : t('findings2.toast.assignSkipped', { head, skipped }, `${head}，${skipped} 条本就是这个人`),
           })
         })
         .catch((err) => setActionError(errorMessage(err)))
         .finally(() => setSubmitting(false))
     },
-    [assignTargets, members],
+    [assignTargets, members, t],
   )
 
   /**
@@ -837,18 +853,31 @@ export function FindingsPage() {
       showToast({
         message:
           result.skipped > 0
-            ? `已移入回收站 ${result.changed} 条（${result.skipped} 条本来就在里面）`
-            : `已移入回收站 ${result.changed} 条`,
+            ? t(
+                'findings2.toast.trashedSkipped',
+                { changed: result.changed, skipped: result.skipped },
+                `已移入回收站 ${result.changed} 条（${result.skipped} 条本来就在里面）`,
+              )
+            : t('findings2.toast.trashed', { changed: result.changed }, `已移入回收站 ${result.changed} 条`),
         action: {
-          label: '撤销',
+          label: t('findings2.toast.undo', undefined, '撤销'),
           onAction: () => {
             void restoreFindings(ids)
               .then(() => {
                 void loadFindings({ silent: true, scope: 'active' })
-                showToast({ message: `已恢复 ${result.changed} 条` })
+                showToast({
+                  message: t('findings2.toast.restored', { changed: result.changed }, `已恢复 ${result.changed} 条`),
+                })
               })
               .catch((err) =>
-                showToast({ message: `撤销失败：${errorMessage(err)}`, tone: 'risk' }),
+                showToast({
+                  message: t(
+                    'findings2.toast.undoFailed',
+                    { msg: errorMessage(err) },
+                    `撤销失败：${errorMessage(err)}`,
+                  ),
+                  tone: 'risk',
+                }),
               )
           },
         },
@@ -856,7 +885,7 @@ export function FindingsPage() {
     } catch (err) {
       setActionError(errorMessage(err))
     }
-  }, [selectedIds])
+  }, [selectedIds, t])
 
   /** 从回收站恢复 */
   const handleBulkRestore = useCallback(async () => {
@@ -869,13 +898,17 @@ export function FindingsPage() {
       showToast({
         message:
           result.skipped > 0
-            ? `已恢复 ${result.changed} 条（${result.skipped} 条本来就不在回收站）`
-            : `已恢复 ${result.changed} 条`,
+            ? t(
+                'findings2.toast.restoredSkipped',
+                { changed: result.changed, skipped: result.skipped },
+                `已恢复 ${result.changed} 条（${result.skipped} 条本来就不在回收站）`,
+              )
+            : t('findings2.toast.restored', { changed: result.changed }, `已恢复 ${result.changed} 条`),
       })
     } catch (err) {
       setActionError(errorMessage(err))
     }
-  }, [selectedIds])
+  }, [selectedIds, t])
 
   /**
    * 永久删除（确认之后调用）。
@@ -905,14 +938,20 @@ export function FindingsPage() {
     setSelectedIds(new Set())
 
     if (blocked.length === 0) {
-      showToast({ message: `已永久删除 ${ok} 条` })
+      showToast({ message: t('findings2.toast.purged', { ok }, `已永久删除 ${ok} 条`) })
     } else {
       // 被挡住的原因原样透传 —— 后端那句中文说清了是哪几份报告
       setActionError(
-        ok > 0 ? `已永久删除 ${ok} 条，另有 ${blocked.length} 条被拒绝：${blocked[0]}` : blocked[0],
+        ok > 0
+          ? t(
+              'findings2.toast.purgedPartial',
+              { ok, blocked: blocked.length, reason: blocked[0] },
+              `已永久删除 ${ok} 条，另有 ${blocked.length} 条被拒绝：${blocked[0]}`,
+            )
+          : blocked[0],
       )
     }
-  }, [purgeTargets])
+  }, [purgeTargets, t])
 
   /**
    * 导出当前筛选结果为 CSV（任务 10 P6-c）。
@@ -942,13 +981,17 @@ export function FindingsPage() {
 
     if (unexpressableDimensions.length > 0) {
       showToast({
-        message: `导出一次只能筛选一个${unexpressableDimensions.join('、')}，请先缩小选择。`,
+        message: t(
+          'findings2.toast.exportOneDimension',
+          { dimensions: unexpressableDimensions.join(t('findings2.sep.list', undefined, '、')) },
+          `导出一次只能筛选一个${unexpressableDimensions.join('、')}，请先缩小选择。`,
+        ),
         tone: 'info',
       })
       return
     }
     if (visible.length === 0) {
-      showToast({ message: '当前筛选下没有可导出的条目。', tone: 'info' })
+      showToast({ message: t('findings2.toast.exportEmpty', undefined, '当前筛选下没有可导出的条目。'), tone: 'info' })
       return
     }
 
@@ -974,13 +1017,18 @@ export function FindingsPage() {
         告诉我们它想叫什么了，有个名字总比 `download` 强）。
       */
       downloadCsv(download.filename ?? 'suvex-findings.csv', download.text)
-      showToast({ message: `已导出 ${visible.length} 条漏洞` })
+      showToast({
+        message: t('findings2.toast.exported', { n: visible.length }, `已导出 ${visible.length} 条漏洞`),
+      })
     } catch (err) {
-      showToast({ message: `导出失败：${errorMessage(err)}`, tone: 'risk' })
+      showToast({
+        message: t('findings2.toast.exportFailed', { msg: errorMessage(err) }, `导出失败：${errorMessage(err)}`),
+        tone: 'risk',
+      })
     } finally {
       setExporting(false)
     }
-  }, [filter, scope, visible.length])
+  }, [filter, scope, visible.length, t])
 
   /**
    * 导出当前筛选结果为 SARIF 2.1.0（v0.85）。
@@ -1011,7 +1059,11 @@ export function FindingsPage() {
 
     if (unexpressableDimensions.length > 0) {
       showToast({
-        message: `导出一次只能筛选一个${unexpressableDimensions.join('、')}，请先缩小选择。`,
+        message: t(
+          'findings2.toast.exportOneDimension',
+          { dimensions: unexpressableDimensions.join(t('findings2.sep.list', undefined, '、')) },
+          `导出一次只能筛选一个${unexpressableDimensions.join('、')}，请先缩小选择。`,
+        ),
         tone: 'info',
       })
       return
@@ -1024,15 +1076,22 @@ export function FindingsPage() {
       showToast({
         message:
           visible.length > 0
-            ? `已导出 ${visible.length} 条为 SARIF`
-            : '已导出空的 SARIF（本轮无匹配条目）',
+            ? t('findings2.toast.sarifExported', { n: visible.length }, `已导出 ${visible.length} 条为 SARIF`)
+            : t('findings2.toast.sarifEmpty', undefined, '已导出空的 SARIF（本轮无匹配条目）'),
       })
     } catch (err) {
-      showToast({ message: `SARIF 导出失败：${errorMessage(err)}`, tone: 'risk' })
+      showToast({
+        message: t(
+          'findings2.toast.sarifFailed',
+          { msg: errorMessage(err) },
+          `SARIF 导出失败：${errorMessage(err)}`,
+        ),
+        tone: 'risk',
+      })
     } finally {
       setExportingSarif(false)
     }
-  }, [filter, scope, visible.length])
+  }, [filter, scope, visible.length, t])
 
   return (
     <>
@@ -1060,7 +1119,11 @@ export function FindingsPage() {
             <SkeletonRows rows={5} rowClassName="h-14" />
           </div>
         ) : status === 'error' ? (
-          <ErrorState title="漏洞列表加载失败" error={error} onRetry={() => void loadFindings()} />
+          <ErrorState
+            title={t('findings2.error.list', undefined, '漏洞列表加载失败')}
+            error={error}
+            onRetry={() => void loadFindings()}
+          />
         ) : (
           <>
             {/* ── 筛选工具条 ──
@@ -1074,7 +1137,7 @@ export function FindingsPage() {
                   高度立刻减半，且所有字段天然共享同一条左基准（这正是重构的目的）。
                   宽屏字段总宽放得下，才换回 flex-wrap 让它自然流动。 */}
             <div className="grid grid-cols-2 items-start gap-x-tight gap-y-tight min-[380px]:grid-cols-3 sm:flex sm:flex-wrap">
-              <FilterGroup label="严重度">
+              <FilterGroup label={t('findings2.filter.severity', undefined, '严重度')}>
                 {SEVERITY_ORDER.map((severity) => {
                   const count = bySeverity[severity] ?? 0
                   const active = filter.severities.has(severity)
@@ -1103,7 +1166,7 @@ export function FindingsPage() {
                 })}
               </FilterGroup>
 
-              <FilterGroup label="状态">
+              <FilterGroup label={t('findings2.filter.status', undefined, '状态')}>
                 {FINDING_STATUS_ORDER.map((status_) => {
                   const count = byStatus[status_] ?? 0
                   const active = filter.statuses.has(status_)
@@ -1129,7 +1192,7 @@ export function FindingsPage() {
                 })}
               </FilterGroup>
 
-              <FilterField label="漏洞类型" htmlFor="finding-category">
+              <FilterField label={t('findings2.filter.category', undefined, '漏洞类型')} htmlFor="finding-category">
                 {/* 内层用 div 不用 label：外层 FilterField 的 label[htmlFor] 已经
                     关联到这个 select 了，再套一层 label 会形成 label 嵌套（无效 HTML）。
                     这里只负责边框和图标这些视觉外壳。 */}
@@ -1145,7 +1208,14 @@ export function FindingsPage() {
                         .filter((category) => (byCategory[category] ?? 0) > 0)
                         .map((category) => ({
                           value: category,
-                          label: `${t(`findings.category.${category}`, undefined, FINDING_CATEGORY_LABEL[category])}（${byCategory[category]}）`,
+                          label: t(
+                            'findings2.filter.categoryOption',
+                            {
+                              name: t(`findings.category.${category}`, undefined, FINDING_CATEGORY_LABEL[category]),
+                              count: byCategory[category],
+                            },
+                            `${t(`findings.category.${category}`, undefined, FINDING_CATEGORY_LABEL[category])}（${byCategory[category]}）`,
+                          ),
                         })),
                     ]}
                     onChange={(value) => {
@@ -1171,7 +1241,7 @@ export function FindingsPage() {
                 （"还没人认领"），而不是"没有筛选"。少了它，
                 用户没法回答"还有哪些没人管"—— 而那是最该被问的问题。
               */}
-              <FilterField label="负责人" htmlFor="finding-assignee">
+              <FilterField label={t('findings2.filter.assignee', undefined, '负责人')} htmlFor="finding-assignee">
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
                   <UserCheck size={13} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
                   <Select
@@ -1179,11 +1249,13 @@ export function FindingsPage() {
                     size="sm"
                     value={[...filter.assignees][0] ?? ''}
                     options={[
-                      { value: '', label: '全部负责人' },
-                      { value: UNASSIGNED, label: '未指派' },
+                      { value: '', label: t('findings2.filter.allAssignees', undefined, '全部负责人') },
+                      { value: UNASSIGNED, label: t('findings.unassigned', undefined, '未指派') },
                       ...members.map((member) => ({
                         value: member.id,
-                        label: `${member.name}${member.active ? '' : '（已停用）'}`,
+                        label: member.active
+                          ? member.name
+                          : t('findings2.filter.inactive', { name: member.name }, `${member.name}（已停用）`),
                       })),
                     ]}
                     onChange={(value) => {
@@ -1204,7 +1276,7 @@ export function FindingsPage() {
                 不含"不计时"—— 那是"这个档位不设时限"或"已终结"，
                 用户不会想专门筛出它们（而且它们本来就没有标记可看）。
               */}
-              <FilterField label="时限" htmlFor="finding-sla">
+              <FilterField label={t('findings2.filter.sla', undefined, '时限')} htmlFor="finding-sla">
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
                   <Clock size={13} strokeWidth={1.75} className="shrink-0" aria-hidden="true" />
                   <Select
@@ -1212,10 +1284,10 @@ export function FindingsPage() {
                     size="sm"
                     value={[...filter.slaStates][0] ?? ''}
                     options={[
-                      { value: '', label: '全部时限' },
-                      { value: 'overdue', label: '已超期' },
-                      { value: 'dueSoon', label: '临期' },
-                      { value: 'onTrack', label: '还早' },
+                      { value: '', label: t('findings2.filter.allSla', undefined, '全部时限') },
+                      { value: 'overdue', label: t('findings2.sla.overdueShort', undefined, '已超期') },
+                      { value: 'dueSoon', label: t('findings2.sla.dueSoon', undefined, '临期') },
+                      { value: 'onTrack', label: t('findings2.sla.onTrack', undefined, '还早') },
                     ]}
                     onChange={(value) => {
                       setFilter((prev) => ({
@@ -1227,7 +1299,7 @@ export function FindingsPage() {
                   />
                 </div>
               </FilterField>
-              <FilterField label="搜索" htmlFor="finding-search">
+              <FilterField label={t('findings2.filter.search', undefined, '搜索')} htmlFor="finding-search">
                 {' '}
                 <div className="relative">
                   <Search
@@ -1241,7 +1313,7 @@ export function FindingsPage() {
                     type="search"
                     value={filter.query}
                     onChange={(e) => setFilter((prev) => ({ ...prev, query: e.target.value }))}
-                    placeholder="标题 / 目标"
+                    placeholder={t('findings2.filter.searchPlaceholder', undefined, '标题 / 目标')}
                     className={cn(
                       // w-full 只在窄屏网格下生效（宽屏回到固定 w-52，避免输入框被拉得过宽）
                       'h-8 w-full rounded-sm border border-line bg-surface-sunken pl-7 pr-2 text-xs text-ink sm:w-52',
@@ -1252,7 +1324,7 @@ export function FindingsPage() {
                 </div>
               </FilterField>
 
-              <FilterField label="排序" htmlFor="finding-sort">
+              <FilterField label={t('findings2.filter.sort', undefined, '排序')} htmlFor="finding-sort">
                 {/* 内层同样用 div。里面还嵌着方向切换按钮，
                     若外壳是 label，点那个按钮会连带触发 label 的聚焦行为 —— 焦点会跳。 */}
                 <div className="flex h-8 items-center gap-1.5 rounded-sm border border-line px-2 text-xs text-ink-muted">
@@ -1263,7 +1335,7 @@ export function FindingsPage() {
                     value={sortKey}
                     options={(Object.keys(FINDING_SORT_LABEL) as FindingSortKey[]).map((key) => ({
                       value: key,
-                      label: FINDING_SORT_LABEL[key],
+                      label: t(`findings2.sort.${key}`, undefined, FINDING_SORT_LABEL[key]),
                     }))}
                     onChange={(value) => setSortKey(value as FindingSortKey)}
                     className="h-full border-0 bg-transparent px-0 text-xs text-ink-muted"
@@ -1273,7 +1345,11 @@ export function FindingsPage() {
                     实测被压缩到 **8.7×24** —— 基本点不中。外面这层固定 28px 见方。
                   */}
                   <IconButton
-                    label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
+                    label={
+                      sortDir === 'desc'
+                        ? t('findings2.sort.descHint', undefined, '当前降序，点击切换升序')
+                        : t('findings2.sort.ascHint', undefined, '当前升序，点击切换降序')
+                    }
                     className="ml-0.5 h-7 w-7 shrink-0"
                     onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
                   >
@@ -1302,12 +1378,12 @@ export function FindingsPage() {
                 <span className="text-2xs text-ink-faint"><T k="findings.view"/></span>
                 <div
                   role="group"
-                  aria-label="列表或分组"
+                  aria-label={t('findings2.filter.viewRegion', undefined, '列表或分组')}
                   className="flex h-8 items-center rounded-sm border border-line p-0.5"
                 >
                   {[
-                    { key: 'list' as const, label: '列表' },
-                    { key: 'groups' as const, label: '分组' },
+                    { key: 'list' as const, label: t('findings2.view.list', undefined, '列表') },
+                    { key: 'groups' as const, label: t('findings2.view.groups', undefined, '分组') },
                   ].map((option) => (
                     <ToggleChip
                       key={option.key}
@@ -1333,7 +1409,7 @@ export function FindingsPage() {
                   className="self-end px-2"
                 >
                   <X size={12} strokeWidth={2} aria-hidden="true" />
-                  清除筛选
+                  {t('findings2.filter.clear', undefined, '清除筛选')}
                 </Button>
               )}
             </div>
@@ -1365,12 +1441,12 @@ export function FindingsPage() {
                 <span className="text-2xs text-ink-faint"><T k="findings.scope"/></span>
                 <div
                   role="group"
-                  aria-label="默认视图或回收站"
+                  aria-label={t('findings2.filter.scopeRegion', undefined, '默认视图或回收站')}
                   className="flex h-8 items-center rounded-sm border border-line p-0.5"
                 >
                   {[
-                    { key: 'active' as const, label: '未删除' },
-                    { key: 'trash' as const, label: '回收站' },
+                    { key: 'active' as const, label: t('findings2.scope.active', undefined, '未删除') },
+                    { key: 'trash' as const, label: t('findings2.scope.trash', undefined, '回收站') },
                   ].map((option) => (
                     <ToggleChip
                       key={option.key}
@@ -1412,11 +1488,19 @@ export function FindingsPage() {
                   size="sm"
                   onClick={() => void handleExport()}
                   disabled={exporting}
-                  title={filterActive ? '导出当前筛选结果（与列表一致）' : '导出全部漏洞'}
+                  title={
+                    filterActive
+                      ? t('findings2.export.titleFiltered', undefined, '导出当前筛选结果（与列表一致）')
+                      : t('findings2.export.titleAll', undefined, '导出全部漏洞')
+                  }
                   className="px-2"
                 >
                   <Download size={12} strokeWidth={2} aria-hidden="true" />
-                  {exporting ? '导出中…' : filterActive ? '导出筛选结果' : '导出全部'}
+                  {exporting
+                    ? t('findings2.export.busy', undefined, '导出中…')
+                    : filterActive
+                      ? t('findings2.export.filtered', undefined, '导出筛选结果')
+                      : t('findings2.export.all', undefined, '导出全部')}
                 </Button>
                 <Button
                   variant="secondary"
@@ -1425,13 +1509,21 @@ export function FindingsPage() {
                   disabled={exportingSarif}
                   title={
                     filterActive
-                      ? '导出当前筛选结果为 SARIF 2.1.0（CI / 代码扫描平台可读）'
-                      : '导出全部漏洞为 SARIF 2.1.0（CI / 代码扫描平台可读）'
+                      ? t(
+                          'findings2.export.sarifTitleFiltered',
+                          undefined,
+                          '导出当前筛选结果为 SARIF 2.1.0（CI / 代码扫描平台可读）',
+                        )
+                      : t(
+                          'findings2.export.sarifTitleAll',
+                          undefined,
+                          '导出全部漏洞为 SARIF 2.1.0（CI / 代码扫描平台可读）',
+                        )
                   }
                   className="px-2"
                 >
                   <Download size={12} strokeWidth={2} aria-hidden="true" />
-                  {exportingSarif ? '导出中…' : 'SARIF'}
+                  {exportingSarif ? t('findings2.export.busy', undefined, '导出中…') : 'SARIF'}
                 </Button>
               </div>
             </div>
@@ -1474,7 +1566,7 @@ export function FindingsPage() {
                 ) : groupsState.status === 'error' ? (
                   <div className="px-panel py-bay">
                     <ErrorState
-                      title="分组加载失败"
+                      title={t('findings2.error.groups', undefined, '分组加载失败')}
                       error={groupsState.error}
                       onRetry={() => void loadFindingGroups(groupsQuery, { force: true })}
                     />
@@ -1488,11 +1580,14 @@ export function FindingsPage() {
                   <div className="flex flex-col items-center gap-tight px-panel py-bay text-center">
                     <p className="text-sm text-ink-muted"><T k="findings.empty.grouped"/></p>
                     <p className="max-w-[46ch] text-xs text-ink-faint">
-                      分组按漏洞的标题归类。当前筛选下没有任何条目， 或者它们还没被归类。
+                      <T
+                        k="findings2.empty.groupedHint"
+                        fallback="分组按漏洞的标题归类。当前筛选下没有任何条目，或者它们还没被归类。"
+                      />
                     </p>
                     {filterActive && (
                       <Button variant="link" size="sm" onClick={clearFilter}>
-                        清除筛选条件
+                        {t('findings2.empty.clear', undefined, '清除筛选条件')}
                       </Button>
                     )}
                   </div>
@@ -1521,7 +1616,7 @@ export function FindingsPage() {
                       <div className="flex flex-col items-center gap-tight text-center">
                         <p className="text-sm text-ink-muted"><T k="findings.empty.filtered"/></p>
                         <Button variant="link" size="sm" onClick={clearFilter}>
-                          清除筛选条件
+                          {t('findings2.empty.clear', undefined, '清除筛选条件')}
                         </Button>
                       </div>
                     ) : scansState.status === 'ready' && scansState.scans.length === 0 ? (
@@ -1537,8 +1632,12 @@ export function FindingsPage() {
                     */
                       <NoScansYet
                         bordered={false}
-                        title="还没有发现任何漏洞"
-                        description="发起第一次扫描之后，发现的问题会出现在这里 —— 每条都带有证据与可复现的验证脚本。"
+                        title={t('findings.empty.none', undefined, '还没有发现任何漏洞')}
+                        description={t(
+                          'findings2.empty.noScansDescription',
+                          undefined,
+                          '发起第一次扫描之后，发现的问题会出现在这里 —— 每条都带有证据与可复现的验证脚本。',
+                        )}
                       />
                     ) : (
                       <div className="flex flex-col items-center gap-tight text-center">
@@ -1551,7 +1650,10 @@ export function FindingsPage() {
                         {/* 跑过了、什么都没有 —— 这确实是"好消息"，不显示 0 值表格 */}
                         <p className="text-sm text-ink-muted"><T k="findings.empty.none"/></p>
                         <p className="max-w-[46ch] text-xs text-ink-faint">
-                          扫描发现的问题会出现在这里。每条都带有证据与可复现的验证脚本。
+                          <T
+                            k="findings2.empty.noneHint"
+                            fallback="扫描发现的问题会出现在这里。每条都带有证据与可复现的验证脚本。"
+                          />
                         </p>
                       </div>
                     )
@@ -1565,7 +1667,11 @@ export function FindingsPage() {
                       size="sm"
                       onClick={() => setRenderLimit((n) => n + 60)}
                     >
-                      显示更多（还有 {visible.length - renderLimit} 条）
+                      {t(
+                        'findings2.list.more',
+                        { n: visible.length - renderLimit },
+                        `显示更多（还有 ${visible.length - renderLimit} 条）`,
+                      )}
                     </Button>
                   </div>
                 )}
@@ -1576,9 +1682,14 @@ export function FindingsPage() {
             {findings.length > 0 && (
               <p className="mt-panel text-2xs text-ink-faint">
                 {filterActive
-                  ? `筛选出 ${visible.length} 条，共 ${findings.length} 条`
-                  : `共 ${findings.length} 条漏洞`}
-                {byStatus.new > 0 && ` · ${byStatus.new} 条待确认`}
+                  ? t(
+                      'findings2.stats.filtered',
+                      { visible: visible.length, total: findings.length },
+                      `筛选出 ${visible.length} 条，共 ${findings.length} 条`,
+                    )
+                  : t('findings2.stats.total', { total: findings.length }, `共 ${findings.length} 条漏洞`)}
+                {byStatus.new > 0 &&
+                  t('findings2.stats.pending', { n: byStatus.new }, ` · ${byStatus.new} 条待确认`)}
               </p>
             )}
 
@@ -1650,7 +1761,7 @@ export function FindingsPage() {
         {openId === null ? null : detailState.status === 'error' ? (
           <div className="px-panel py-bay">
             <ErrorState
-              title="漏洞详情加载失败"
+              title={t('findings2.error.detail', undefined, '漏洞详情加载失败')}
               error={detailState.error}
               onRetry={() => void refreshFindingDetail(openId)}
             />
@@ -1673,12 +1784,13 @@ export function FindingsPage() {
       */}
       <ConfirmDialog
         open={purgeTargets !== null}
-        title="永久删除这些漏洞？"
-        description={
-          `将永久删除 ${purgeTargets?.length ?? 0} 条漏洞，此操作**不可撤销**。` +
-          '被报告引用的条目会被拒绝，并提示是哪几份报告引用了它。'
-        }
-        confirmLabel="永久删除"
+        title={t('findings2.purge.title', undefined, '永久删除这些漏洞？')}
+        description={t(
+          'findings2.purge.description',
+          { n: purgeTargets?.length ?? 0 },
+          `将永久删除 ${purgeTargets?.length ?? 0} 条漏洞，此操作**不可撤销**。被报告引用的条目会被拒绝，并提示是哪几份报告引用了它。`,
+        )}
+        confirmLabel={t('findings2.bulk.purge', undefined, '永久删除')}
         danger
         onConfirm={() => void handlePurge()}
         onCancel={() => setPurgeTargets(null)}

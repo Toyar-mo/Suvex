@@ -4,6 +4,7 @@ import { SCAN_GOAL_HINT, SCAN_GOAL_LABEL, type ScanGoal } from '@/data/scan'
 import type { ScanAttachment } from '@/data/scans-store'
 import { AlertTriangle, Check, FileUp, Loader2, Paperclip, X } from 'lucide-react'
 import { useRef } from 'react'
+import { useI18n } from '@/i18n'
 
 /**
  * 第 4 步：任务背景（任务 12）。
@@ -71,6 +72,7 @@ export function BriefStep({
   /** 是否已尝试过提交 —— 决定要不要把"缺附件"显示成错误 */
   showError?: boolean
 }) {
+  const { t } = useI18n()
   const inputRef = useRef<HTMLInputElement>(null)
 
   return (
@@ -78,11 +80,21 @@ export function BriefStep({
       <header className="flex flex-col gap-1">
         <h3 className="text-sm text-ink"><T k="scans.brief.title"/></h3>
         <p className="max-w-[62ch] text-xs leading-relaxed text-ink-faint">
-          这一段会<strong className="font-normal text-ink-muted"><T k="scans.brief.raw"/></strong>交给智能体
-          作为任务背景。题目描述、考点提示、测试范围、测试账号都可以写在这里 ——
-          它比任何扫描参数都更能决定结果。
-          <span className="text-ink-muted"><T k="scans.brief.optional"/></span>，但只给一个网址时，
-          智能体只能盲扫。
+          <T k="scans2.brief.introBefore" fallback="这一段会" />
+          <strong className="font-normal text-ink-muted">
+            <T k="scans.brief.raw" />
+          </strong>
+          <T
+            k="scans2.brief.introAfter"
+            fallback="交给智能体作为任务背景。题目描述、考点提示、测试范围、测试账号都可以写在这里 —— 它比任何扫描参数都更能决定结果。"
+          />
+          <span className="text-ink-muted">
+            <T k="scans.brief.optional" />
+          </span>
+          <T
+            k="scans2.brief.introOptional"
+            fallback="，但只给一个网址时，智能体只能盲扫。"
+          />
         </p>
       </header>
 
@@ -99,7 +111,7 @@ export function BriefStep({
                 role="radio"
                 aria-checked={active}
                 onClick={() => onGoalChange(value)}
-                title={SCAN_GOAL_HINT[value]}
+                title={t(`scans2.goal.${value}.hint`, undefined, SCAN_GOAL_HINT[value])}
                 className={cn(
                   'inline-flex h-9 items-center gap-1.5 rounded-sm border px-3 text-xs',
                   'transition-ui duration-fast',
@@ -109,7 +121,7 @@ export function BriefStep({
                 )}
               >
                 {active && <Check size={12} strokeWidth={2.5} aria-hidden="true" />}
-                {SCAN_GOAL_LABEL[value]}
+                {t(`scans2.goal.${value}.label`, undefined, SCAN_GOAL_LABEL[value])}
               </button>
             )
           })}
@@ -120,14 +132,14 @@ export function BriefStep({
           唯一需要知道的事 —— 藏在悬停提示里等于没写。
         */}
         <p className="max-w-[62ch] text-2xs leading-relaxed text-ink-faint">
-          {SCAN_GOAL_HINT[goal]}
+          {t(`scans2.goal.${goal}.hint`, undefined, SCAN_GOAL_HINT[goal])}
         </p>
       </fieldset>
 
       {/* ── 任务背景正文 ── */}
       <div className="flex flex-col gap-1">
         <label htmlFor="scan-brief" className="text-2xs text-ink-faint">
-          任务背景
+          <T k="scans2.brief.label" fallback="任务背景" />
         </label>
         <textarea
           id="scan-brief"
@@ -135,13 +147,11 @@ export function BriefStep({
           onChange={(e) => onBriefChange(e.target.value)}
           rows={8}
           maxLength={8000}
-          placeholder={
-            '例如：\n' +
-            '题目：LogVault —— 日志模板引擎的污染数据流（PWN，500 分）\n' +
-            '提示：关注 %hhn 与 varargs 的边界条件；题面里那段"安全备注"是诱饵。\n' +
-            '目标：拿到 flag，格式 flag{...}\n' +
-            '附件见下（二进制 chall）。'
-          }
+          placeholder={t(
+            'scans2.brief.placeholder',
+            undefined,
+            '例如：\n题目：LogVault —— 日志模板引擎的污染数据流（PWN，500 分）\n提示：关注 %hhn 与 varargs 的边界条件；题面里那段"安全备注"是诱饵。\n目标：拿到 flag，格式 flag{...}\n附件见下（二进制 chall）。',
+          )}
           className={cn(
             'w-full resize-y rounded-sm border border-line bg-surface-sunken px-2.5 py-2',
             'text-xs leading-relaxed text-ink',
@@ -156,7 +166,10 @@ export function BriefStep({
             "这段不进程列表"，他会自己去删掉最关键的那一行。
           */}
           <p className="text-2xs text-ink-faint">
-            含口令也可以写：它不会出现在进程列表里（保存在指令文件中，仅本机可读）。
+            <T
+              k="scans2.brief.credentialsNote"
+              fallback="含口令也可以写：它不会出现在进程列表里（保存在指令文件中，仅本机可读）。"
+            />
           </p>
           <span
             className={cn(
@@ -179,7 +192,10 @@ export function BriefStep({
           他已经填完后面所有步骤了。
         */}
         <span className="text-2xs text-ink-faint">
-          题目附件{attachmentsRequired ? '（这类题目必须上传）' : '（可选）'}
+          {t('scans2.brief.attachments', undefined, '题目附件')}
+          {attachmentsRequired
+            ? t('scans2.brief.attachmentsRequired', undefined, '（这类题目必须上传）')
+            : t('scans2.brief.attachmentsOptional', undefined, '（可选）')}
         </span>
 
         {attachments.length > 0 && (
@@ -200,7 +216,7 @@ export function BriefStep({
                   type="button"
                   onClick={() => onRemoveAttachment(file.name)}
                   disabled={staging.busy}
-                  aria-label={`移除 ${file.name}`}
+                  aria-label={t('scans2.brief.remove', { name: file.name }, '移除 {name}')}
                   /*
                     纯图标：禁用降到 `ink-ghost`（token 的约定用途就是「仅装饰 / 禁用」）。
                     不用 `opacity-50` —— 12px 的图标压一半会糊成一团，看不出形状。
@@ -252,18 +268,28 @@ export function BriefStep({
             ) : (
               <FileUp size={12} strokeWidth={2} aria-hidden="true" />
             )}
-            {staging.busy ? '上传中…' : '选择文件'}
+            {staging.busy
+              ? t('scans2.brief.uploading', undefined, '上传中…')
+              : t('scans2.brief.chooseFile', undefined, '选择文件')}
           </label>
           <p className="mt-1 text-2xs text-ink-faint">
-            任意类型（二进制、源码、字典、流量包）。它们会被放进沙箱工作区的
+            <T
+              k="scans2.brief.uploadBefore"
+              fallback="任意类型（二进制、源码、字典、流量包）。它们会被放进沙箱工作区的"
+            />
             <code className="mono-ui mx-0.5">attachments/</code>
-            目录，智能体可以直接读。
+            <T k="scans2.brief.uploadAfter" fallback="目录，智能体可以直接读。" />
             {/*
               ★ 这一句在「题目附件」下不是补充说明，而是**功能说明的一半**：
               那类题目没有目标地址，附件解压后的目录就是被分析的东西本身。
               不写清楚，用户会以为附件和别处一样只是"顺手带上的材料"。
             */}
-            {attachmentsRequired && ' 这类题目没有目标地址，附件就是被测对象本身。'}
+            {attachmentsRequired && (
+              <T
+                k="scans2.brief.requiredNote"
+                fallback=" 这类题目没有目标地址，附件就是被测对象本身。"
+              />
+            )}
           </p>
         </div>
 
@@ -283,7 +309,10 @@ export function BriefStep({
         {showError && attachmentsRequired && attachments.length === 0 && (
           <p className="flex items-center gap-1 text-2xs text-signal-risk" role="alert">
             <AlertTriangle size={11} strokeWidth={2} aria-hidden="true" />
-            这类题目必须至少上传一个附件 —— 没有附件就没有可分析的东西。请点上面的「选择文件」。
+            <T
+              k="scans2.brief.missingAttachment"
+              fallback="这类题目必须至少上传一个附件 —— 没有附件就没有可分析的东西。请点上面的「选择文件」。"
+            />
           </p>
         )}
       </div>

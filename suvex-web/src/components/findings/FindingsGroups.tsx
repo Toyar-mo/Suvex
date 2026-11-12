@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
 import { FINDING_STATUS_LABEL, type FindingStatus } from '@/data/finding'
 import { useI18n } from '@/i18n'
 import type { FindingGroup } from '@/data/findings-store'
@@ -49,8 +50,10 @@ export function FindingsGroups({
   onGroupAction,
   onSelectGroup,
 }: FindingsGroupsProps) {
+  const { t } = useI18n()
+
   return (
-    <ul aria-label="按漏洞类型分组">
+    <ul aria-label={t('findings2.groups.region', undefined, '按漏洞类型分组')}>
       {groups.map((group) => (
         <GroupRow
           key={group.title}
@@ -114,7 +117,7 @@ function GroupRow({
         {/* 影响面 —— 分组视图存在的理由，所以它是仅次于标题的信息 */}
         <span className="flex shrink-0 items-center gap-1 text-2xs text-ink-muted lg:w-32">
           <Target size={11} strokeWidth={2} aria-hidden="true" className="text-ink-ghost" />
-          影响 {group.targetCount} 个目标
+          {t('findings2.groups.targets', { n: group.targetCount }, `影响 ${group.targetCount} 个目标`)}
         </span>
 
         <span className="shrink-0 lg:w-20">
@@ -146,10 +149,14 @@ function GroupRow({
               'border border-line text-ink-muted transition-ui duration-fast',
               'hover:border-accent/50 hover:bg-accent-wash hover:text-ink',
             )}
-            title={`把这一组的 ${group.instanceCount} 条全部选中`}
+            title={t(
+              'findings2.groups.selectTitle',
+              { n: group.instanceCount },
+              `把这一组的 ${group.instanceCount} 条全部选中`,
+            )}
           >
             <Layers size={11} strokeWidth={2} aria-hidden="true" />
-            选中整组
+            <T k="findings2.groups.select" fallback="选中整组" />
           </button>
           {/*
             一键确认只在**全组状态一致**时给。
@@ -166,9 +173,13 @@ function GroupRow({
                 'border border-line text-ink-muted transition-ui duration-fast',
                 'hover:border-accent/50 hover:bg-accent-wash hover:text-ink',
               )}
-              title={`把这一组的 ${group.instanceCount} 条一起标为已确认`}
+              title={t(
+                'findings2.groups.confirmTitle',
+                { n: group.instanceCount },
+                `把这一组的 ${group.instanceCount} 条一起标为已确认`,
+              )}
             >
-              整组确认
+              <T k="findings2.groups.confirm" fallback="整组确认" />
             </button>
           )}
         </span>
@@ -192,7 +203,7 @@ function GroupRow({
               return (
                 <li key={id} className="flex items-center gap-1.5 text-2xs text-ink-muted">
                   <span className="mono-ui min-w-0 flex-1 truncate">
-                    {item?.target ?? '（这条不在当前列表里）'}
+                    {item?.target ?? t('findings2.groups.notInList', undefined, '（这条不在当前列表里）')}
                   </span>
                   <span className="shrink-0 rounded-xs border border-line px-1">
                     {item ? t(`findings.status.${item.status}`, undefined, FINDING_STATUS_LABEL[item.status] ?? item.status) : t('findings.unknown', undefined, '未知')}
@@ -202,8 +213,11 @@ function GroupRow({
             })}
           </ul>
           <p className="mt-1.5 text-2xs text-ink-faint">
-            这一组共 {group.instanceCount} 条，分布在 {group.targetCount} 个目标上。
-            它们的处置状态各自独立 —— 修好一个目标不会自动改掉其余的。
+            {t(
+              'findings2.groups.footer',
+              { instances: group.instanceCount, targets: group.targetCount },
+              `这一组共 ${group.instanceCount} 条，分布在 ${group.targetCount} 个目标上。它们的处置状态各自独立 —— 修好一个目标不会自动改掉其余的。`,
+            )}
           </p>
         </div>
       )}

@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import type { ScanView } from '@/data/scans-store'
 import { Archive, ArchiveRestore, Download, GitCompare, RotateCcw, Trash2, Undo2, X } from 'lucide-react'
 
@@ -70,6 +71,7 @@ export function BulkActionBar({
   onPurge,
   onClear,
 }: BulkActionBarProps) {
+  const { t } = useI18n()
   if (selectedCount === 0) return null
 
   return (
@@ -81,7 +83,7 @@ export function BulkActionBar({
     >
       <div className="flex flex-wrap items-center gap-tight">
         <span className="text-xs text-ink">
-          已选 <span className="tabular font-medium text-accent-strong">{selectedCount}</span> 项
+          <T k="scans2.bulk.selected" vars={{ n: selectedCount }} fallback="已选 {n} 项" />
         </span>
         {selectedCount === 2 && <span className="text-2xs text-ink-faint"><T k="scans.bulk.comparable"/></span>}
 
@@ -94,17 +96,17 @@ export function BulkActionBar({
         */}
         {canCompare && onCompare && (
           <>
-            <BulkButton icon={GitCompare} label="对比" onClick={onCompare} disabled={busy} />
+            <BulkButton icon={GitCompare} label={t('scans2.bulk.compare', undefined, '对比')} onClick={onCompare} disabled={busy} />
             <span aria-hidden="true" className="mx-1 h-4 w-px bg-line" />
           </>
         )}
 
         {view === 'default' && (
           <>
-            <BulkButton icon={Archive} label="归档" onClick={onArchive} disabled={busy} />
-            <BulkButton icon={RotateCcw} label="重新扫描" onClick={onRerun} disabled={busy} />
-            <BulkButton icon={Download} label="导出" onClick={onExport} disabled={busy} />
-            <BulkButton icon={Trash2} label="删除" onClick={onDelete} disabled={busy} danger />
+            <BulkButton icon={Archive} label={t('scans2.bulk.archive', undefined, '归档')} onClick={onArchive} disabled={busy} />
+            <BulkButton icon={RotateCcw} label={t('scans2.bulk.rerun', undefined, '重新扫描')} onClick={onRerun} disabled={busy} />
+            <BulkButton icon={Download} label={t('scans2.bulk.export', undefined, '导出')} onClick={onExport} disabled={busy} />
+            <BulkButton icon={Trash2} label={t('scans2.bulk.delete', undefined, '删除')} onClick={onDelete} disabled={busy} danger />
           </>
         )}
 
@@ -112,25 +114,25 @@ export function BulkActionBar({
           <>
             <BulkButton
               icon={ArchiveRestore}
-              label="取消归档"
+              label={t('scans2.bulk.unarchive', undefined, '取消归档')}
               onClick={onUnarchive}
               disabled={busy}
             />
-            <BulkButton icon={RotateCcw} label="重新扫描" onClick={onRerun} disabled={busy} />
-            <BulkButton icon={Download} label="导出" onClick={onExport} disabled={busy} />
-            <BulkButton icon={Trash2} label="删除" onClick={onDelete} disabled={busy} danger />
+            <BulkButton icon={RotateCcw} label={t('scans2.bulk.rerun', undefined, '重新扫描')} onClick={onRerun} disabled={busy} />
+            <BulkButton icon={Download} label={t('scans2.bulk.export', undefined, '导出')} onClick={onExport} disabled={busy} />
+            <BulkButton icon={Trash2} label={t('scans2.bulk.delete', undefined, '删除')} onClick={onDelete} disabled={busy} danger />
           </>
         )}
 
         {view === 'deleted' && (
           <>
-            <BulkButton icon={Undo2} label="恢复" onClick={onRestore} disabled={busy} />
+            <BulkButton icon={Undo2} label={t('scans2.bulk.restore', undefined, '恢复')} onClick={onRestore} disabled={busy} />
             {/*
               ★ 永久删除用实心危险色，其余批量按钮都是描边。
               它是整页唯一**不可逆**的动作，视觉权重必须不同 ——
               与"删除（进回收站，可恢复）"长得一样是不可接受的。
             */}
-            <BulkButton icon={Trash2} label="永久删除" onClick={onPurge} disabled={busy} solidDanger />
+            <BulkButton icon={Trash2} label={t('scans2.bulk.purge', undefined, '永久删除')} onClick={onPurge} disabled={busy} solidDanger />
           </>
         )}
 
@@ -144,7 +146,7 @@ export function BulkActionBar({
           )}
         >
           <X size={12} strokeWidth={2} aria-hidden="true" />
-          取消选择
+          <T k="scans2.bulk.clear" fallback="取消选择" />
         </button>
       </div>
     </div>

@@ -130,6 +130,7 @@ function FreshnessNote({ lastLoadedAt }: { lastLoadedAt: number | null }) {
 }
 
 function OverviewPage() {
+  const { t } = useI18n()
   const { data, status, error, lastLoadedAt } = useOverviewState()
   const [quality, setQuality] = useState<QualitySnapshot | null>(null)
 
@@ -198,7 +199,7 @@ function OverviewPage() {
           <OverviewSkeleton />
         ) : status === 'error' || !data ? (
           <ErrorState
-            title="总览数据加载失败"
+            title={t('overview.loadFailed', undefined, '总览数据加载失败')}
             error={error}
             onRetry={() => void loadOverview({ silent: false })}
           />
@@ -216,7 +217,7 @@ function OverviewPage() {
               原来这里整块换成了 `NoScansYet`，那三格被一起藏掉了。
           */
           <div className="flex flex-col gap-bay">
-            <NoScansYet description="给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。整个过程会实时出现在这里。" />
+            <NoScansYet description={t('overview.empty.desc2', undefined, '给它一个目标，它会先摸清攻击面、寻找薄弱点，再逐一尝试用可复现的利用方式证明。整个过程会实时出现在这里。')} />
             <ResourceStrip resources={data.resources} />
           </div>
         ) : (
@@ -238,6 +239,7 @@ function OverviewPage() {
  * 这条主线淹没在缩进里。
  */
 function QualityPanel({ quality }: { quality: QualitySnapshot | null }) {
+  const { t } = useI18n()
   if (!quality) return null
   const percent = (value: number | null) =>
     value === null ? '—' : `${Math.round(value * 100)}%`
@@ -252,22 +254,22 @@ function QualityPanel({ quality }: { quality: QualitySnapshot | null }) {
         : String(tokens)
   const usd = quality.cost?.usd ?? 0
   const rows = [
-    { label: 'CTF 解题率', value: percent(quality.challenges.solveRate) },
-    { label: '发现误报率', value: percent(quality.findings.falsePositiveRate) },
-    { label: '已验证占比', value: percent(verifiedShare) },
-    { label: '覆盖的面', value: String(quality.coverage.surfaces) },
-    { label: '解题 token', value: tokensText },
-    { label: '估算成本', value: `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` },
+    { label: t('overview.quality.solveRate', undefined, 'CTF 解题率'), value: percent(quality.challenges.solveRate) },
+    { label: t('overview.quality.falsePositive', undefined, '发现误报率'), value: percent(quality.findings.falsePositiveRate) },
+    { label: t('overview.quality.verifiedShare', undefined, '已验证占比'), value: percent(verifiedShare) },
+    { label: t('overview.quality.coverage', undefined, '覆盖的面'), value: String(quality.coverage.surfaces) },
+    { label: t('overview.quality.tokens', undefined, '解题 token'), value: tokensText },
+    { label: t('overview.quality.cost', undefined, '估算成本'), value: `$${usd < 0.01 ? usd.toFixed(4) : usd.toFixed(2)}` },
   ]
 
   return (
     <section
-      aria-label="质量指标"
+      aria-label={t('overview.quality.aria', undefined, '质量指标')}
       className="rounded-lg border border-line bg-surface p-panel"
     >
       <h3 className="text-sm font-medium text-ink"><T k="overview.quality"/></h3>
       <p className="mt-1 text-2xs text-ink-muted">
-        成功率 / 误报 / 覆盖度 —— 用来看“变好还是变差”，不只看数量。
+        {t('overview.quality.caption', undefined, '成功率 / 误报 / 覆盖度 —— 用来看“变好还是变差”，不只看数量。')}
       </p>
       <dl className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2">
         {rows.map((row) => (
@@ -320,7 +322,7 @@ function OverviewContent({
         五张卡回答「现在有什么」：任务、发现、资产、流量、token。
         流量卡如实显示「未接入」——Suvex 没有流量捕获，不能编一个 0。
       */}
-      <section aria-label="关键指标" className="grid grid-cols-2 gap-panel lg:grid-cols-4">
+      <section aria-label={t('overview.kpi.aria', undefined, '关键指标')} className="grid grid-cols-2 gap-panel lg:grid-cols-4">
         <StatCard
           label={t('overview.stats.active', undefined, '活跃任务')}
           value={metrics.activeScans}
@@ -379,32 +381,32 @@ function OverviewContent({
       <AttentionList items={attention} />
 
       {/* ── 3 · 本周产出（与顶部 KPI 不重复）────────── */}
-      <section aria-label="本周产出">
+      <section aria-label={t('overview.weekly.aria', undefined, '本周产出')}>
         <h2 className="mb-2 text-sm font-medium text-ink"><T k="overview.weeklyOutput"/></h2>
         <div className="grid grid-cols-1 gap-panel sm:grid-cols-3">
           <StatCard
-            label="本周新增高危及以上"
+            label={t('overview.weekly.newHigh', undefined, '本周新增高危及以上')}
             value={metrics.newHighSeverityThisWeek}
             icon={ShieldAlert}
             delta={metrics.newHighSeverityDelta}
             deltaIntent="negative-when-up"
-            deltaLabel="较上周"
+            deltaLabel={t('overview.weekly.vsLastWeek', undefined, '较上周')}
           />
 
           <StatCard
-            label="已验证的 PoC"
+            label={t('overview.weekly.verifiedPoc', undefined, '已验证的 PoC')}
             value={metrics.verifiedPocCount}
             icon={FlaskConical}
-            footnote="由智能体实际复现，而非仅报告"
+            footnote={t('overview.weekly.verifiedPocHint', undefined, '由智能体实际复现，而非仅报告')}
           />
 
           <StatCard
-            label="平均扫描耗时"
+            label={t('overview.weekly.avgDuration', undefined, '平均扫描耗时')}
             value={
               metrics.avgScanDurationSec === null ? '—' : formatDuration(metrics.avgScanDurationSec)
             }
             icon={Timer}
-            footnote="统计已完成的扫描"
+            footnote={t('overview.weekly.avgDurationHint', undefined, '统计已完成的扫描')}
           />
         </div>
 

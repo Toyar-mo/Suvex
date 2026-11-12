@@ -9,7 +9,6 @@ import {
   SCAN_STATUS_LABEL,
   SCAN_STATUS_TONE,
   scanDisplay,
-  scanStatusLabel,
   stallInfo,
   totalFindings,
   type Scan,
@@ -66,19 +65,19 @@ import { Link } from 'react-router-dom'
  */
 
 /** 失败 / 终止原因的类别。图标 + 短标签，点开看全文。 */
-function failureBadge(scan: Scan): { icon: typeof Ban; label: string } | null {
+function failureBadge(scan: Scan, t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string): { icon: typeof Ban; label: string } | null {
   if (scan.status === 'aborted') {
-    if (scan.terminatedBy === 'user') return { icon: Ban, label: '用户终止' }
-    if (scan.terminatedBy === 'system') return { icon: AlertTriangle, label: '系统中断' }
+    if (scan.terminatedBy === 'user') return { icon: Ban, label: t('scans2.list.fail.userStopped', undefined, '用户终止') }
+    if (scan.terminatedBy === 'system') return { icon: AlertTriangle, label: t('scans2.list.fail.systemStopped', undefined, '系统中断') }
     // 判不出来就说"已终止"，不编一个原因
-    return { icon: Ban, label: '已终止' }
+    return { icon: Ban, label: t('scans2.list.fail.stopped', undefined, '已终止') }
   }
   if (scan.status === 'failed') {
     // CTF2 的壳：failed 只表示"平台没确认 flag"，不是基础设施故障。
     // 它的措辞由 `scanStatusLabel` 负责（候选待确认 / 未解出），
     // 这里再贴一个「基础设施中断」就是在编原因。
     if (scan.origin === 'ctf2') return null
-    return { icon: AlertTriangle, label: '基础设施中断' }
+    return { icon: AlertTriangle, label: t('scans2.list.fail.infra', undefined, '基础设施中断') }
   }
   return null
 }
@@ -100,16 +99,19 @@ function failureBadge(scan: Scan): { icon: typeof Ban; label: string } | null {
  * `terminated_by_user_id`）—— 那是一次带迁移的改动，而不是前端
  * 能单独完成的事。
  */
-function terminatedByLabel(value: Scan['terminatedBy']): string | null {
+function terminatedByLabel(
+  value: Scan['terminatedBy'],
+  t: (key: string, vars?: Record<string, string | number>, fallback?: string) => string,
+): string | null {
   switch (value) {
     case 'user':
-      return '用户本人'
+      return t('scans2.list.terminated.user', undefined, '用户本人')
     case 'system':
-      return '系统'
+      return t('scans2.list.terminated.system', undefined, '系统')
     case 'unknown':
       // 如实说"无法判定"，不猜成用户本人 —— 一个看起来确定的错值
       // 在追责时比一个诚实的空白危险得多。
-      return '无法判定'
+      return t('scans2.list.terminated.unknown', undefined, '无法判定')
     default:
       return null
   }
@@ -423,7 +425,7 @@ const ScanRow = memo(function ScanRow({
   */
   const canAbort = !isKernelShell && (scan.status === 'running' || scan.status === 'queued')
   const found = totalFindings(scan.findings)
-  const badge = failureBadge(scan)
+  const badge = failureBadge(scan, t)
   /*
     ★「终止方」只在 **aborted** 下才有意义。
 
@@ -435,7 +437,8 @@ const ScanRow = memo(function ScanRow({
     这与 `terminatedBy` 那个字段本身不冲突：它记录的是"这次运行是怎么结束的"，
     而"终止方"这个**标签**只在真的有人终止时才该出现。
   */
-  const byWhom = scan.status === 'aborted' ? terminatedByLabel(scan.terminatedBy) : null
+  const byWhom =
+    scan.status === 'aborted' ? terminatedByLabel(scan.terminatedBy, t) : null
 
   /*
     ★「疑似卡死」（任务 11）。判定（含"必须还在跑"）都在 `stallInfo` 里，
@@ -534,7 +537,7 @@ const ScanRow = memo(function ScanRow({
             id={`scan-select-${scan.id}`}
             checked={selected}
             onChange={(next) => onToggleRow(scan.id, next)}
-            label={`选择 ${scan.target}`}
+            label={t('scans2.list.select', { target: scan.target }, '选择 {target}')}
           />
         </span>
 
@@ -568,13 +571,11 @@ const ScanRow = memo(function ScanRow({
           >
             <StatusDot tone={tone} pulse={scan.status === 'running'} />
             <span className="text-xs">
-              {(() => {
-                /* CTF2 的壳有专门措辞（候选待确认 / 未解出）；只有通用状态才翻译。 */
-                const label = scanStatusLabel(scan)
-                return label === SCAN_STATUS_LABEL[scan.status]
-                  ? t(`scanStatus.${scan.status}`, undefined, label)
-                  : label
-              })()}
+              {pendingConfirmation
+                ? t('scans2.list.status.pendingConfirmation', undefined, '候选待确认')
+                : unsolved
+                  ? t('scans2.list.status.unsolved', undefined, '未解出')
+                  : t(`scanStatus.${scan.status}`, undefined, SCAN_STATUS_LABEL[scan.status])}
             </span>
           </span>
         </span>
@@ -591,7 +592,7 @@ const ScanRow = memo(function ScanRow({
               onSelect(scan)
             }}
               className="block truncate text-ink transition-ui duration-fast hover:text-accent-strong"
-              title={`查看 ${display.name} 的智能体活动`}
+              title={t('scans2.list.viewActivity', { name: display.name }, '查看 {name} 的智能体活动')}
             >
               {display.name}
             </Link>
@@ -615,7 +616,11 @@ const ScanRow = memo(function ScanRow({
             )}
             // 没起名时目标就是主行，悬停提示给"去处"；
             // 起名时目标可能被截断，提示改成它的全文，更实用。
-            title={named ? scan.target : `查看 ${display.name} 的智能体活动`}
+            title={
+              named
+                ? scan.target
+                : t('scans2.list.viewActivity', { name: display.name }, '查看 {name} 的智能体活动')
+            }
           >
             {scan.target}
           </Link>
@@ -670,7 +675,9 @@ const ScanRow = memo(function ScanRow({
             {byWhom && (
               <>
                 <span aria-hidden="true">·</span>
-                <span title="谁终止了这次扫描">终止方：{byWhom}</span>
+                <span title={t('scans2.list.terminatedByTitle', undefined, '谁终止了这次扫描')}>
+                  {t('scans2.list.terminatedBy', { by: byWhom }, '终止方：{by}')}
+                </span>
               </>
             )}
             {/*
@@ -683,10 +690,10 @@ const ScanRow = memo(function ScanRow({
                 <span aria-hidden="true">·</span>
                 <span
                   className="inline-flex items-center gap-1 text-signal-warn"
-                  title={stalled.hint}
+                  title={t('scans2.list.stalledHint', undefined, stalled.hint)}
                 >
                   <AlertTriangle size={10} strokeWidth={2.25} aria-hidden="true" />
-                  疑似卡死 · {stalled.silentLabel}
+                  {t('scans2.list.stalled', { silent: stalled.silentLabel }, '疑似卡死 · {silent}')}
                 </span>
               </>
             )}
@@ -725,18 +732,30 @@ const ScanRow = memo(function ScanRow({
                   : display.isIr
                     ? /* v0.44：复盘不产出漏洞条目，产出的是处置建议 ——
                          说成"无漏洞条目"会让用户以为这次跑空了。 */
-                      '这次复盘没有产出漏洞条目。它的产物是入侵时间线与处置建议，不以漏洞条数衡量。'
+                      t(
+                        'scans2.list.noEntriesHint.ir',
+                        undefined,
+                        '这次复盘没有产出漏洞条目。它的产物是入侵时间线与处置建议，不以漏洞条数衡量。',
+                      )
                     : scan.goal === 'captureFlag'
-                      ? '这次扫描没有产出漏洞条目。夺旗任务的成败看是否拿到 flag，不以漏洞条数衡量。'
+                      ? t(
+                          'scans2.list.noEntriesHint.flag',
+                          undefined,
+                          '这次扫描没有产出漏洞条目。夺旗任务的成败看是否拿到 flag，不以漏洞条数衡量。',
+                        )
                       : scan.goal === 'verifyFix'
-                        ? '这次复测没有产出新的漏洞条目。复测的结论看已知问题是否已修复，不以漏洞条数衡量。'
+                        ? t(
+                            'scans2.list.noEntriesHint.verify',
+                            undefined,
+                            '这次复测没有产出新的漏洞条目。复测的结论看已知问题是否已修复，不以漏洞条数衡量。',
+                          )
                         : undefined
               }
             >
               {scan.status !== 'completed'
                 ? '—'
                 : display.isIr
-                  ? '结论见复盘报告'
+                  ? t('scans2.list.irConclusion', undefined, '结论见复盘报告')
                   : scan.goal === 'captureFlag' || scan.goal === 'verifyFix'
                     ? t('scan.noEntries')
                     : t('scan.noFindings')}
@@ -754,7 +773,14 @@ const ScanRow = memo(function ScanRow({
                   <span
                     key={sev}
                     className="flex shrink-0 items-center gap-1 whitespace-nowrap text-2xs"
-                    title={`${meta.label} ${scan.findings[sev]} 条`}
+                    title={t(
+                      'scans2.list.severityCount',
+                      {
+                        severity: t(`severity.${sev}`, undefined, meta.label),
+                        n: scan.findings[sev] ?? 0,
+                      },
+                      '{severity} {n} 条',
+                    )}
                   >
                     <span aria-hidden="true" className={cn('h-1.5 w-1.5 rounded-pill', meta.bg)} />
                     {/*
@@ -777,9 +803,13 @@ const ScanRow = memo(function ScanRow({
               {(scan.status === 'aborted' || scan.status === 'failed') && (
                 <span
                   className="shrink-0 whitespace-nowrap text-2xs text-ink-faint"
-                  title="扫描被中途终止，这个数字只是已跑完部分的结果，不代表全部"
+                  title={t(
+                    'scans2.list.incompleteTitle',
+                    undefined,
+                    '扫描被中途终止，这个数字只是已跑完部分的结果，不代表全部',
+                  )}
                 >
-                  · 不完整
+                  {t('scans2.list.incomplete', undefined, '· 不完整')}
                 </span>
               )}
             </>
@@ -791,7 +821,9 @@ const ScanRow = memo(function ScanRow({
           className="tabular shrink-0 text-2xs text-ink-muted lg:w-20 lg:text-right"
           data-numeric
         >
-          {scan.status === 'running' ? '进行中' : formatDuration(scan.durationSec)}
+          {scan.status === 'running'
+            ? t('scans2.list.running', undefined, '进行中')
+            : formatDuration(scan.durationSec)}
         </span>
 
         {/* 开始时间 */}
@@ -810,7 +842,7 @@ const ScanRow = memo(function ScanRow({
           <Link
             to={`/activity?scan=${encodeURIComponent(scan.id)}`}
             className="inline-flex h-8 items-center gap-1 rounded-sm px-2 text-2xs text-ink-muted transition-ui duration-fast hover:bg-surface-overlay hover:text-accent-strong"
-            title="查看该扫描的智能体活动"
+            title={t('scans2.list.viewScanActivity', undefined, '查看该扫描的智能体活动')}
           >
             <ExternalLink size={12} strokeWidth={2} aria-hidden="true" />
             {t('scan.detail')}
@@ -864,10 +896,10 @@ const ScanRow = memo(function ScanRow({
                       onWriteup(scan)
                     }}
                     className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
-                    title="查看这次夺旗的题解（Markdown）"
+                    title={t('scans2.list.writeupTitle', undefined, '查看这次夺旗的题解（Markdown）')}
                   >
                     <FileText size={12} strokeWidth={1.75} aria-hidden="true" />
-                    题解
+                    <T k="scans2.list.writeup" fallback="题解" />
                   </button>
                 )}
 
@@ -882,7 +914,7 @@ const ScanRow = memo(function ScanRow({
                     className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
                   >
                     <RotateCcw size={12} strokeWidth={1.75} aria-hidden="true" />
-                    重跑（新建一条记录）
+                    <T k="scans2.list.rerun" fallback="重跑（新建一条记录）" />
                   </button>
                 )}
                 {/*
@@ -903,10 +935,14 @@ const ScanRow = memo(function ScanRow({
                         onResume(scan)
                       }}
                       className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-xs text-ink-muted transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
-                      title="接回上次的会话继续跑 —— 不重复已经做完的推理"
+                      title={t(
+                        'scans2.list.resumeTitle',
+                        undefined,
+                        '接回上次的会话继续跑 —— 不重复已经做完的推理',
+                      )}
                     >
                       <Play size={12} strokeWidth={1.75} aria-hidden="true" />
-                      续跑（接着上次的会话）
+                      <T k="scans2.list.resume" fallback="续跑（接着上次的会话）" />
                     </button>
                   )}
 
@@ -921,7 +957,7 @@ const ScanRow = memo(function ScanRow({
                     className="flex w-full items-center gap-2 rounded-sm px-2.5 py-1.5 text-left text-xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/10"
                   >
                     <Ban size={12} strokeWidth={1.75} aria-hidden="true" />
-                    终止扫描
+                    <T k="scans2.list.abort" fallback="终止扫描" />
                   </button>
                 )}
               </div>
@@ -966,7 +1002,11 @@ const ScanRow = memo(function ScanRow({
           {reasonOpen && (
             <div className="mt-1 flex flex-col gap-0.5 text-2xs text-ink-muted">
               {scan.failureReason && <p className="max-w-[92ch]">{scan.failureReason}</p>}
-              {byWhom && <p className="text-ink-faint">终止方：{byWhom}</p>}
+              {byWhom && (
+                <p className="text-ink-faint">
+                  {t('scans2.list.terminatedBy', { by: byWhom }, '终止方：{by}')}
+                </p>
+              )}
             </div>
           )}
         </div>

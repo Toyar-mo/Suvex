@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import type { SlaState } from '@/data/finding'
+import { useI18n } from '@/i18n'
 import { Clock } from 'lucide-react'
 
 /**
@@ -45,14 +46,16 @@ export function SlaBadge({
   dueAt?: string | null
   className?: string
 }) {
+  const { t, locale } = useI18n()
+
   if (state === 'none' || daysLeft === null) return null
 
   const label =
     state === 'overdue'
-      ? `超期 ${Math.abs(daysLeft)} 天`
+      ? t('findings2.sla.overdue', { n: Math.abs(daysLeft) }, `超期 ${Math.abs(daysLeft)} 天`)
       : daysLeft === 0
-        ? '今天到期'
-        : `还剩 ${daysLeft} 天`
+        ? t('findings2.sla.today', undefined, '今天到期')
+        : t('findings2.sla.remaining', { n: daysLeft }, `还剩 ${daysLeft} 天`)
 
   const tone =
     state === 'overdue'
@@ -64,7 +67,9 @@ export function SlaBadge({
   // 精确时刻放 title —— 悬停能看到，但它不占列表的视觉重量
   const exact = dueAt ? new Date(dueAt) : null
   const title = exact
-    ? `${state === 'overdue' ? '已于' : '到期于'} ${exact.toLocaleString('zh-CN')}`
+    ? state === 'overdue'
+      ? t('findings2.sla.dueOverdue', { date: exact.toLocaleString(locale) }, `已于 ${exact.toLocaleString('zh-CN')}`)
+      : t('findings2.sla.dueAt', { date: exact.toLocaleString(locale) }, `到期于 ${exact.toLocaleString('zh-CN')}`)
     : undefined
 
   return (

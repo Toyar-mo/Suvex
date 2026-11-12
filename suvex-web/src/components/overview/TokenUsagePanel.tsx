@@ -152,7 +152,7 @@ export const TokenUsagePanel = memo(function TokenUsagePanel() {
             </div>
 
             {chart ? (
-              <svg viewBox="0 0 600 200" className="h-[200px] w-full" role="img" aria-label="token 趋势">
+              <svg viewBox="0 0 600 200" className="h-[200px] w-full" role="img" aria-label={t('overview.token.trendAria', undefined, 'token 趋势')}>
                 <polyline
                   points={chart.line('prompt')}
                   fill="none"

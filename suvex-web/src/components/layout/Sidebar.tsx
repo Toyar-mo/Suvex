@@ -1,5 +1,6 @@
 import { StatusDot } from '@/components/ui/StatusDot'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { cn } from '@/lib/cn'
 import { isAdmin, logout, useAuth } from '@/data/auth-store'
 import { useFleetStatus } from '@/data/fleet'
@@ -23,10 +24,14 @@ export interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProps) {
+  const { t } = useI18n()
   const { agents } = useFleetStatus()
   const { user } = useAuth()
   /** 角色徽标上的字。`admin` → 管理员，其余（含未登录）→ 只读。 */
-  const roleLabel = isAdmin(user) ? '管理员' : '只读'
+  const roleLabel = isAdmin(user)
+    ? t('layout2.role.admin', undefined, '管理员')
+    : t('layout2.role.readonly', undefined, '只读')
+  const userName = user?.username ?? t('layout2.user.anonymous', undefined, '未登录')
 
   return (
     <aside
@@ -98,7 +103,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
             'flex items-center gap-tight py-1.5 text-xs',
             collapsed ? 'justify-center px-0' : 'px-3',
           )}
-          title={`${user?.username ?? '未登录'} · ${roleLabel}`}
+          title={`${userName} · ${roleLabel}`}
         >
           {isAdmin(user) ? (
             <ShieldCheck size={15} strokeWidth={1.75} className="shrink-0 text-accent" aria-hidden="true" />
@@ -107,7 +112,7 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
           )}
           {!collapsed && (
             <>
-              <span className="truncate text-ink-muted">{user?.username ?? '未登录'}</span>
+              <span className="truncate text-ink-muted">{userName}</span>
               <span
                 className={cn(
                   'ml-auto shrink-0 rounded-pill px-1.5 py-0.5 text-2xs',
@@ -136,8 +141,8 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
         <button
           type="button"
           onClick={() => void logout()}
-          aria-label="登出"
-          title="登出"
+          aria-label={t('sidebar.logout')}
+          title={t('sidebar.logout')}
           className={cn(
             'flex w-full items-center gap-tight rounded-sm py-1.5 text-xs text-ink-muted',
             'transition-ui duration-fast hover:bg-surface-raised hover:text-ink',
@@ -152,8 +157,8 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
           type="button"
           onClick={onToggleCollapsed}
           aria-expanded={!collapsed}
-          aria-label={collapsed ? '展开导航' : '收起导航'}
-          title={collapsed ? '展开导航' : '收起导航'}
+          aria-label={collapsed ? t('layout2.nav.expand', undefined, '展开导航') : t('layout2.nav.collapse', undefined, '收起导航')}
+          title={collapsed ? t('layout2.nav.expand', undefined, '展开导航') : t('layout2.nav.collapse', undefined, '收起导航')}
           className={cn(
             'flex w-full items-center gap-tight rounded-sm py-1.5 text-xs text-ink-muted',
             'transition-ui duration-fast hover:bg-surface-raised hover:text-ink',
@@ -184,12 +189,12 @@ export function Sidebar({ collapsed, onToggleCollapsed, className }: SidebarProp
             悬停提示是用户唯一能看到完整句子的地方，说错比不显示更糟 ——
             他会据此以为系统里有 N 个智能体在跑，而去活动页一数发现对不上。
           */
-          title={`${agents.running} 个扫描运行中`}
+          title={t('layout2.agents.runningTitle', { n: agents.running }, `${agents.running} 个扫描运行中`)}
         >
           <StatusDot tone={agents.running > 0 ? 'accent' : 'idle'} pulse={agents.running > 0} />
           {!collapsed && (
             <span className="tabular" data-numeric>
-              {agents.running} 运行中
+              {t('layout2.agents.running', { n: agents.running }, `${agents.running} 运行中`)}
             </span>
           )}
         </div>

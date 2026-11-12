@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import type { Skill, TargetKind } from '@/data/scan'
 import {
   SCAN_AUTHORIZATION_STATEMENT,
@@ -66,6 +67,7 @@ export function TargetStep({
   onNameChange,
   attachmentNames = [],
 }: TargetStepProps) {
+  const { t } = useI18n()
   const validation = validateTarget(kind, value)
   const hint = TARGET_KIND_HINT[kind]
 
@@ -80,7 +82,14 @@ export function TargetStep({
 
   return (
     <div className="flex flex-col gap-bay">
-      <Field label="要测什么" help="Suvex 可以直接测已部署的应用，也可以读代码库做白盒分析。">
+      <Field
+        label={t('scans2.target.whatLabel', undefined, '要测什么')}
+        help={t(
+          'scans2.target.whatHelp',
+          undefined,
+          'Suvex 可以直接测已部署的应用，也可以读代码库做白盒分析。',
+        )}
+      >
         {/* 用 radio 而不是 select：每个选项各有说明，下拉里塞不下 */}
         <div className="flex flex-col gap-2">
           {(Object.keys(TARGET_KIND_LABEL) as TargetKind[]).map((k) => (
@@ -102,8 +111,12 @@ export function TargetStep({
                 className="mt-0.5 h-3.5 w-3.5 shrink-0 accent-accent"
               />
               <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="text-sm text-ink">{TARGET_KIND_LABEL[k]}</span>
-                <span className="text-xs text-ink-faint">{KIND_DESCRIPTION[k]}</span>
+                <span className="text-sm text-ink">
+                  {t(`scans2.kind.${k}`, undefined, TARGET_KIND_LABEL[k])}
+                </span>
+                <span className="text-xs text-ink-faint">
+                  {t(`scans2.kind.${k}.desc`, undefined, KIND_DESCRIPTION[k])}
+                </span>
               </span>
             </label>
           ))}
@@ -122,7 +135,7 @@ export function TargetStep({
           外框沿用 Field + surface-sunken + border-line，读起来要和
           一个字段一样 —— 换成一条突兀的提示条会让这个位置显得"缺了点什么"。
         */
-        <Field label="目标地址">
+        <Field label={t('scans2.target.address', undefined, '目标地址')}>
           <div className="flex flex-col gap-1.5 rounded-sm border border-line bg-surface-sunken p-3">
             <p className="text-sm text-ink"><T k="scanWizard.noTarget"/></p>
             <p className="max-w-[62ch] text-xs leading-relaxed text-ink-faint">
@@ -133,32 +146,45 @@ export function TargetStep({
                 在界面上就是一处显眼的排版错误，而源码里看不出来。
                 字符串字面量 prettier 不会折行，所以它是稳定的。
               */}
-              {
-                '请到下一步「任务背景」上传题目文件（zip / ELF / 流量包都行）。附件会被解压成一个工作目录，直接当作代码目录来分析 —— 全程没有网络请求要发。'
-              }
+              {t(
+                'scans2.target.artifactBody',
+                undefined,
+                '请到下一步「任务背景」上传题目文件（zip / ELF / 流量包都行）。附件会被解压成一个工作目录，直接当作代码目录来分析 —— 全程没有网络请求要发。',
+              )}
             </p>
             {attachmentNames.length > 0 ? (
               // 有附件就说清楚是哪些：用户没法在这一步看到文件列表，
               // 而他可能刚从「任务背景」退回来改类型，正想确认那些文件还在。
               <p className="text-xs text-signal-ok">
-                已上传 {attachmentNames.length} 个附件：{attachmentNames.join('、')}
+                {t(
+                  'scans2.target.uploaded',
+                  { n: attachmentNames.length, names: attachmentNames.join('、') },
+                  '已上传 {n} 个附件：{names}',
+                )}
               </p>
             ) : (
               // 只写"还没有附件"不够 —— 要说清后果（没有附件就提交不了），
               // 否则用户以为它和别的可选字段一样
               <p className="text-xs text-signal-warn">
-                还没有附件。这类题目必须至少上传一个，否则不能提交。
+                <T
+                  k="scans2.target.noAttachment"
+                  fallback="还没有附件。这类题目必须至少上传一个，否则不能提交。"
+                />
               </p>
             )}
           </div>
         </Field>
       ) : (
-        <Field label="目标地址" required help={hint.example}>
+        <Field
+          label={t('scans2.target.address', undefined, '目标地址')}
+          required
+          help={t(`scans2.kindHint.${kind}.example`, undefined, hint.example)}
+        >
           <input
             type="text"
             value={value}
             onChange={(e) => onValueChange(e.target.value)}
-            placeholder={hint.placeholder}
+            placeholder={t(`scans2.kindHint.${kind}.placeholder`, undefined, hint.placeholder)}
             aria-invalid={showError && !validation.ok}
             aria-describedby="target-feedback"
             // 等宽：地址是要精确输入的东西，不是散文
@@ -176,8 +202,12 @@ export function TargetStep({
       )}
 
       <Field
-        label="扫描名称"
-        help={isArtifact ? '留空则用题目附件名作为名称。' : '留空则用目标地址作为名称。'}
+        label={t('scans2.name.label', undefined, '扫描名称')}
+        help={
+          isArtifact
+            ? t('scans2.name.artifactHelp', undefined, '留空则用题目附件名作为名称。')
+            : t('scans2.name.help', undefined, '留空则用目标地址作为名称。')
+        }
       >
         <input
           type="text"
@@ -188,7 +218,11 @@ export function TargetStep({
             与后端同口径），而不是含糊的「可选」—— 后者回答不了
             "留空会叫什么"，而这个名字会出现在扫描列表里。
           */
-          placeholder={isArtifact ? derivedName || '上传附件后自动命名' : value.trim() || '可选'}
+          placeholder={
+            isArtifact
+              ? derivedName || t('scans2.name.autoFromAttachment', undefined, '上传附件后自动命名')
+              : value.trim() || t('scans2.name.optional', undefined, '可选')
+          }
           className={cn(
             'h-10 w-full rounded-sm border border-line bg-surface-sunken px-3 text-sm text-ink',
             'transition-ui duration-fast placeholder:text-ink-faint hover:border-line-strong',
@@ -225,15 +259,20 @@ export interface SkillsStepProps {
 }
 
 export function SkillsStep({ selected, onToggle, kind, showError }: SkillsStepProps) {
+  const { t } = useI18n()
   const applicable = SKILLS.filter((s) => isApplicable(s, kind))
   const inapplicable = SKILLS.filter((s) => !isApplicable(s, kind))
 
   return (
     <div className="flex flex-col gap-bay">
       <Field
-        label="检测范围"
+        label={t('scans2.skills.scope', undefined, '检测范围')}
         required
-        help="勾选得越多，扫描越慢、消耗的 token 越多。建议先跑一轮核心项。"
+        help={t(
+          'scans2.skills.scopeHelp',
+          undefined,
+          '勾选得越多，扫描越慢、消耗的 token 越多。建议先跑一轮核心项。',
+        )}
       >
         <div className="flex flex-col gap-2">
           {applicable.map((skill) => (
@@ -253,7 +292,13 @@ export function SkillsStep({ selected, onToggle, kind, showError }: SkillsStepPr
         */}
         {inapplicable.length > 0 && (
           <div className="mt-panel flex flex-col gap-2">
-            <p className="text-2xs text-ink-faint">以下技能不适用于{TARGET_KIND_LABEL[kind]}：</p>
+            <p className="text-2xs text-ink-faint">
+              {t(
+                'scans2.skills.inapplicable',
+                { kind: t(`scans2.kind.${kind}`, undefined, TARGET_KIND_LABEL[kind]) },
+                '以下技能不适用于{kind}：',
+              )}
+            </p>
             {inapplicable.map((skill) => (
               <SkillRow key={skill.id} skill={skill} checked={false} onToggle={() => {}} disabled />
             ))}
@@ -263,7 +308,10 @@ export function SkillsStep({ selected, onToggle, kind, showError }: SkillsStepPr
         {showError && selected.size === 0 && (
           <p className="mt-2 flex items-center gap-1 text-xs text-signal-risk" role="alert">
             <Info size={12} strokeWidth={2} aria-hidden="true" />
-            至少勾选一项，否则扫描没有可用的检测能力
+            <T
+              k="scans2.skills.selectOne"
+              fallback="至少勾选一项，否则扫描没有可用的检测能力"
+            />
           </p>
         )}
       </Field>
@@ -292,6 +340,7 @@ function SkillRow({
   onToggle: () => void
   disabled?: boolean
 }) {
+  const { t } = useI18n()
   return (
     <label
       className={cn(
@@ -329,7 +378,7 @@ function SkillRow({
       <span className="flex min-w-0 flex-col gap-0.5">
         <span className="flex flex-wrap items-center gap-1.5">
           <span className={cn('text-sm', disabled ? 'text-ink-muted' : 'text-ink')}>
-            {skill.label}
+            {t(`scans2.skill.${skill.id}.label`, undefined, skill.label)}
           </span>
           {skill.needsCredentials && (
             // 需要凭据的技能要提前说 —— 否则用户跑到一半才发现缺配置
@@ -339,11 +388,13 @@ function SkillRow({
                 disabled && 'border-signal-warn/25 text-signal-warn/80',
               )}
             >
-              需要凭据
+              <T k="scans2.skill.needsCredentials" fallback="需要凭据" />
             </span>
           )}
         </span>
-        <span className="text-xs text-ink-faint">{skill.description}</span>
+        <span className="text-xs text-ink-faint">
+          {t(`scans2.skill.${skill.id}.desc`, undefined, skill.description)}
+        </span>
       </span>
     </label>
   )
@@ -360,6 +411,7 @@ export interface ProviderStepProps {
 }
 
 export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepProps) {
+  const { t } = useI18n()
   const configured = providers.filter((p) => p.configured)
   const unconfigured = providers.filter((p) => !p.configured)
 
@@ -368,14 +420,17 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
     return (
       <div className="flex flex-col items-start gap-panel">
         <p className="max-w-[52ch] text-sm text-ink-muted">
-          还没有配置任何可用的模型。扫描需要一个能用的 LLM 才能规划步骤和判断结果。
+          <T
+            k="scans2.provider.none"
+            fallback="还没有配置任何可用的模型。扫描需要一个能用的 LLM 才能规划步骤和判断结果。"
+          />
         </p>
 
         <Link
           to="/settings"
           className="press inline-flex h-10 items-center gap-2 rounded-sm bg-accent px-3 text-sm font-medium text-canvas transition-ui duration-fast hover:bg-accent-strong"
         >
-          前往设置配置模型
+          <T k="scans2.provider.goSettings" fallback="前往设置配置模型" />
           <ExternalLink size={14} strokeWidth={2} aria-hidden="true" />
         </Link>
 
@@ -386,7 +441,11 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
 
   return (
     <div className="flex flex-col gap-bay">
-      <Field label="使用哪个模型" required help="决定扫描时的推理质量与成本。">
+      <Field
+        label={t('scans2.provider.label', undefined, '使用哪个模型')}
+        required
+        help={t('scans2.provider.help', undefined, '决定扫描时的推理质量与成本。')}
+      >
         <div className="flex flex-col gap-2">
           {configured.map((provider) => (
             <label
@@ -411,7 +470,7 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
                   <span className="mono-ui text-ink-faint">{provider.model}</span>
                   {provider.kind === 'local' && (
                     <span className="rounded-xs border border-line px-1 text-2xs text-ink-faint">
-                      本地
+                      <T k="scans2.provider.local" fallback="本地" />
                     </span>
                   )}
                 </span>
@@ -442,7 +501,7 @@ export function ProviderStep({ providers, selectedId, onSelect }: ProviderStepPr
                 to="/settings"
                 className="shrink-0 text-xs text-accent-strong underline hover:text-accent"
               >
-                去配置
+                <T k="scans2.provider.configure" fallback="去配置" />
               </Link>
             </div>
           ))}
@@ -493,6 +552,7 @@ export function ConfirmStep({
   onJump,
   attachmentNames = [],
 }: ConfirmStepProps) {
+  const { t } = useI18n()
   const isArtifact = kind === 'artifact'
   /*
     artifact 下显示什么代替"目标"：
@@ -502,7 +562,7 @@ export function ConfirmStep({
         所以这里不需要也不该编一个名字。
   */
   const targetLabel = isArtifact
-    ? (attachmentNames[0] ?? TARGET_KIND_LABEL.artifact)
+    ? (attachmentNames[0] ?? t('scans2.kind.artifact', undefined, TARGET_KIND_LABEL.artifact))
     : normalizeTarget(kind, target)
 
   return (
@@ -516,17 +576,29 @@ export function ConfirmStep({
         <p className="text-sm leading-relaxed text-ink">
           {isArtifact ? (
             <>
-              将对上传的题目附件 <Mono>{targetLabel}</Mono> 做一次白盒分析，使用{' '}
-              <Mono>{provider?.label ?? '未选择'}</Mono>，启用{' '}
-              <Mono>{skills.map((s) => s.label).join(' · ') || '未选择'}</Mono> 等{skills.length}{' '}
-              项检测能力。
+               {t('scans2.confirm.artifactBefore', undefined, '将对上传的题目附件 ')}
+              <Mono>{targetLabel}</Mono>
+              {t('scans2.confirm.artifactAfter', undefined, ' 做一次白盒分析，使用 ')}
+              <Mono>{provider?.label ?? t('scans2.common.unselected', undefined, '未选择')}</Mono>
+              {t('scans2.confirm.beforeSkills', undefined, '，启用 ')}
+              <Mono>
+                {skills.map((s) => t(`scans2.skill.${s.id}.label`, undefined, s.label)).join(' · ') ||
+                  t('scans2.common.unselected', undefined, '未选择')}
+              </Mono>
+              <T k="scans2.confirm.capabilities" vars={{ n: skills.length }} fallback=" 等{n} 项检测能力。" />
             </>
           ) : (
             <>
-              将对 <Mono>{targetLabel}</Mono> 发起一次主动扫描，使用{' '}
-              <Mono>{provider?.label ?? '未选择'}</Mono>，启用{' '}
-              <Mono>{skills.map((s) => s.label).join(' · ') || '未选择'}</Mono> 等{skills.length}{' '}
-              项检测能力。
+              {t('scans2.confirm.targetBefore', undefined, '将对 ')}
+              <Mono>{targetLabel}</Mono>
+              {t('scans2.confirm.targetAfter', undefined, ' 发起一次主动扫描，使用 ')}
+              <Mono>{provider?.label ?? t('scans2.common.unselected', undefined, '未选择')}</Mono>
+              {t('scans2.confirm.beforeSkills', undefined, '，启用 ')}
+              <Mono>
+                {skills.map((s) => t(`scans2.skill.${s.id}.label`, undefined, s.label)).join(' · ') ||
+                  t('scans2.common.unselected', undefined, '未选择')}
+              </Mono>
+              <T k="scans2.confirm.capabilities" vars={{ n: skills.length }} fallback=" 等{n} 项检测能力。" />
             </>
           )}
         </p>
@@ -535,27 +607,45 @@ export function ConfirmStep({
             ? // ★ 不能照抄下面那句"会向目标发送真实请求" —— artifact 下**没有**目标，
               //   一个字的网络请求都不会发。照抄会让用户以为要额外授权一个外部地址，
               //   而这里真正需要他确认的是"这些文件我有权看"。
-              '附件会解压到沙箱工作目录里分析，不会向任何地址发包。请确认这些文件你有权查看。'
-            : '扫描会向目标发送真实请求，可能触发对方的告警或日志记录。确认这个目标是你有权测试的。'}
+              t(
+                'scans2.confirm.artifactNote',
+                undefined,
+                '附件会解压到沙箱工作目录里分析，不会向任何地址发包。请确认这些文件你有权查看。',
+              )
+            : t(
+                'scans2.confirm.networkNote',
+                undefined,
+                '扫描会向目标发送真实请求，可能触发对方的告警或日志记录。确认这个目标是你有权测试的。',
+              )}
         </p>
       </div>
 
       <dl className="flex flex-col gap-0">
         <SummaryRow
-          label="扫描名称"
+          label={t('scans2.name.label', undefined, '扫描名称')}
           value={name || defaultNameFrom(kind, target, attachmentNames[0])}
           onEdit={() => onJump(0)}
         />
-        <SummaryRow label="目标类型" value={TARGET_KIND_LABEL[kind]} onEdit={() => onJump(0)} />
-        <SummaryRow label="目标" value={targetLabel} mono />
         <SummaryRow
-          label="检测范围"
-          value={skills.map((s) => s.label).join('、')}
+          label={t('scans2.confirm.kind', undefined, '目标类型')}
+          value={t(`scans2.kind.${kind}`, undefined, TARGET_KIND_LABEL[kind])}
+          onEdit={() => onJump(0)}
+        />
+        <SummaryRow label={t('scans2.confirm.target', undefined, '目标')} value={targetLabel} mono />
+        <SummaryRow
+          label={t('scans2.skills.scope', undefined, '检测范围')}
+          value={skills
+            .map((s) => t(`scans2.skill.${s.id}.label`, undefined, s.label))
+            .join(t('scans2.common.listSep', undefined, '、'))}
           onEdit={() => onJump(1)}
         />
         <SummaryRow
-          label="模型"
-          value={provider ? `${provider.label} · ${provider.model}` : '未选择'}
+          label={t('scans2.confirm.model', undefined, '模型')}
+          value={
+            provider
+              ? `${provider.label} · ${provider.model}`
+              : t('scans2.common.unselected', undefined, '未选择')
+          }
           onEdit={() => onJump(2)}
         />
       </dl>
@@ -592,8 +682,10 @@ export function ConfirmStep({
         <span className="flex flex-col gap-1">
           <span className="text-sm text-ink">{SCAN_AUTHORIZATION_STATEMENT}</span>
           <span className="text-2xs text-ink-muted">
-            对未授权目标发起扫描在很多司法管辖区是违法行为。这次确认会连同服务端时间与来源
-            一起记录在这条扫描的历史里 —— 它不是一个只在界面上出现的勾。
+            <T
+              k="scans2.confirm.authNote"
+              fallback="对未授权目标发起扫描在很多司法管辖区是违法行为。这次确认会连同服务端时间与来源一起记录在这条扫描的历史里 —— 它不是一个只在界面上出现的勾。"
+            />
           </span>
         </span>
       </label>
@@ -623,7 +715,7 @@ function SummaryRow({
             onClick={onEdit}
             className="shrink-0 text-xs text-accent-strong hover:text-accent hover:underline"
           >
-            修改
+            <T k="scans2.common.edit" fallback="修改" />
           </button>
         )}
       </dd>
@@ -646,13 +738,17 @@ function Field({
   required?: boolean
   children: ReactNode
 }) {
+  const { t } = useI18n()
   return (
     <div className="flex flex-col gap-tight">
       <div className="flex items-baseline gap-1.5">
         <span className="text-sm font-medium text-ink">{label}</span>
         {required && (
-          <span className="text-2xs text-signal-risk" aria-label="必填">
-            必填
+          <span
+            className="text-2xs text-signal-risk"
+            aria-label={t('scans2.common.required', undefined, '必填')}
+          >
+            <T k="scans2.common.required" fallback="必填" />
           </span>
         )}
       </div>

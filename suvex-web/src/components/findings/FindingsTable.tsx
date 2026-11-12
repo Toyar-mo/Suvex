@@ -41,6 +41,8 @@ export function FindingsTable({
   activeId,
   emptyState,
 }: FindingsTableProps) {
+  const { t } = useI18n()
+
   if (findings.length === 0) {
     return <div className="px-panel py-bay">{emptyState}</div>
   }
@@ -56,7 +58,11 @@ export function FindingsTable({
           checked={allSelected}
           indeterminate={someSelected}
           onChange={onToggleSelectAll}
-          label={allSelected ? '取消全选' : '全选当前列表'}
+          label={
+            allSelected
+              ? t('findings2.table.unselectAll', undefined, '取消全选')
+              : t('findings2.table.selectAll', undefined, '全选当前列表')
+          }
         />
 
         <span className="w-16 shrink-0 text-2xs text-ink-faint"><T k="findings.table.severity"/></span>
@@ -76,7 +82,7 @@ export function FindingsTable({
       </div>
 
       {/* ── 行 ── */}
-      <ul aria-label="漏洞列表">
+      <ul aria-label={t('findings2.table.region', undefined, '漏洞列表')}>
         {findings.map((finding) => (
           <FindingRow
             key={finding.id}
@@ -134,7 +140,7 @@ const FindingRow = memo(function FindingRow({
           <Checkbox
             checked={selected}
             onChange={() => onToggleSelect(finding.id)}
-            label={`选择「${finding.title}」`}
+            label={t('findings2.table.selectOne', { title: finding.title }, `选择「${finding.title}」`)}
           />
 
           {/* 窄屏：严重度就地显示在选择框旁 */}

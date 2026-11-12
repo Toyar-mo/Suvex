@@ -240,7 +240,7 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
       <button
         type="button"
         onClick={onClose}
-        aria-label="关闭命令面板"
+        aria-label={t('layout2.palette.closeBackdrop', undefined, '关闭命令面板')}
         className="absolute inset-0 cursor-default bg-canvas/70 backdrop-blur-[2px]"
       />
       {/*
@@ -252,7 +252,7 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="命令面板"
+        aria-label={t('layout2.palette.title', undefined, '命令面板')}
         className="relative flex w-full max-w-xl flex-col overflow-hidden rounded-md border border-line bg-surface-overlay shadow-overlay"
       >
         <div className="flex items-center gap-2 border-b border-line px-3">
@@ -265,9 +265,9 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
             aria-controls={listId}
             aria-activedescendant={activeId}
             aria-autocomplete="list"
-            aria-label="搜索页面、扫描、漏洞、资产、定时计划"
+            aria-label={t('layout2.palette.searchLabel', undefined, '搜索页面、扫描、漏洞、资产、定时计划')}
             autoComplete="off"
-            placeholder="搜索，或输入要执行的操作…"
+            placeholder={t('layout2.palette.placeholder', undefined, '搜索，或输入要执行的操作…')}
             value={query}
             onChange={(event) => {
               setQuery(event.target.value)
@@ -286,14 +286,16 @@ function PaletteBody({ onClose }: PaletteBodyProps) {
 
         {results.length === 0 ? (
           <p className="px-3 py-6 text-center text-xs text-ink-muted">
-            {query.trim().length === 0 ? '输入关键字开始搜索' : '没有匹配的页面或记录'}
+            {query.trim().length === 0
+              ? t('layout2.palette.emptyStart', undefined, '输入关键字开始搜索')
+              : t('layout2.palette.emptyNone', undefined, '没有匹配的页面或记录')}
           </p>
         ) : (
           <div
             ref={listRef}
             id={listId}
             role="listbox"
-            aria-label="搜索结果"
+            aria-label={t('layout2.palette.results', undefined, '搜索结果')}
             className="max-h-[52vh] overflow-y-auto p-1"
           >
             {results.map((item, index) => {

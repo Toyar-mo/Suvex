@@ -85,7 +85,7 @@ function categoryLabel(
 ): string {
   const key = (category || '').trim().toLowerCase()
   return IR_CATEGORY_LABEL[key]
-    ? t(`ir.category.${key}`, undefined, IR_CATEGORY_LABEL[key])
+    ? t(`kernel2.irCategory.${key}`, undefined, IR_CATEGORY_LABEL[key])
     : category
 }
 

@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { useEffect, useRef, useState } from 'react'
 
 /**
@@ -57,6 +58,7 @@ export function ReasonDialog(props: ReasonDialogProps) {
 }
 
 function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonDialogProps) {
+  const { t } = useI18n()
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const [reason, setReason] = useState('')
 
@@ -91,16 +93,20 @@ function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonD
         className="w-full max-w-md animate-rise-in rounded-md border border-line bg-surface-overlay p-panel shadow-overlay"
       >
         <h2 id="reason-title" className="text-sm font-medium text-ink">
-          标记为误报
+          {t('ui2.reason.title', undefined, '标记为误报')}
         </h2>
         <p className="mt-1.5 text-xs text-ink-muted">
           {count > 1
-            ? `这一句会写进所选 ${count} 条的处置记录里 —— 填一次即可，不必逐条填写。`
-            : '这一句会写进这条漏洞的处置记录里。'}
+            ? t(
+                'ui2.reason.descMany',
+                { n: count },
+                `这一句会写进所选 ${count} 条的处置记录里 —— 填一次即可，不必逐条填写。`,
+              )
+            : t('ui2.reason.descOne', undefined, '这一句会写进这条漏洞的处置记录里。')}
         </p>
 
         <label htmlFor="reason-input" className="mt-panel block text-2xs text-ink-faint">
-          误报理由 <span className="text-signal-risk"><T k="ui.required"/></span>
+          {t('ui2.reason.label', undefined, '误报理由')} <span className="text-signal-risk"><T k="ui.required"/></span>
         </label>
         <textarea
           id="reason-input"
@@ -122,7 +128,7 @@ function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonD
           }}
           maxLength={500}
           rows={3}
-          placeholder="例如：该接口仅在内网可达，且返回的是占位符而非真实凭据"
+          placeholder={t('ui2.reason.placeholder', undefined, '例如：该接口仅在内网可达，且返回的是占位符而非真实凭据')}
           className={cn(
             'mt-1 w-full resize-y rounded-sm border bg-surface px-2.5 py-2 text-xs text-ink',
             'placeholder:text-ink-ghost',
@@ -133,7 +139,7 @@ function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonD
 
         <div className="mt-1 flex items-center justify-between text-2xs text-ink-faint">
           <span>
-            写清"为什么它不是漏洞"，便于日后复盘规则误报率。
+            {t('ui2.reason.help', undefined, '写清"为什么它不是漏洞"，便于日后复盘规则误报率。')}
           </span>
           <span className="tabular" data-numeric>
             {reason.length}/500
@@ -150,14 +156,14 @@ function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonD
               'focus:outline-none focus:ring-2 focus:ring-accent/40',
             )}
           >
-            取消
+            {t('ui2.reason.cancel', undefined, '取消')}
           </button>
           <button
             type="button"
             onClick={submit}
             disabled={!canSubmit}
             // 禁用原因放在 title 里 —— 只置灰不说原因，用户会反复点它
-            title={trimmed.length === 0 ? '请先填写理由' : undefined}
+            title={trimmed.length === 0 ? t('ui2.reason.needReason', undefined, '请先填写理由') : undefined}
             className={cn(
               'inline-flex h-8 items-center rounded-sm px-3 text-xs font-medium',
               'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
@@ -166,7 +172,9 @@ function ReasonDialogInner({ count, busy = false, onConfirm, onCancel }: ReasonD
                 : 'cursor-not-allowed bg-surface-raised text-ink-faint',
             )}
           >
-            {busy ? '提交中…' : '确认标记误报'}
+            {busy
+              ? t('ui2.reason.submitting', undefined, '提交中…')
+              : t('ui2.reason.confirm', undefined, '确认标记误报')}
           </button>
         </div>
       </div>

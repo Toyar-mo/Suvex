@@ -110,7 +110,7 @@ export function MobileNav() {
       )}
 
       <nav
-        aria-label="主导航（移动端）"
+        aria-label={t('layout2.nav.mobile', undefined, '主导航（移动端）')}
         data-mobile-nav=""
         className="fixed inset-x-0 bottom-0 z-30 border-t border-line bg-surface/95 backdrop-blur-md md:hidden"
         style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
@@ -150,7 +150,7 @@ export function MobileNav() {
             onClick={() => setOpenForPath(moreOpen ? null : pathname)}
             aria-expanded={moreOpen}
             aria-controls="mobile-more-panel"
-            aria-label="更多导航"
+            aria-label={t('layout2.nav.more', undefined, '更多导航')}
             className={cn(
               'relative flex flex-1 flex-col items-center justify-center gap-1 text-2xs transition-ui duration-fast',
               moreActive || moreOpen ? 'text-accent-strong' : 'text-ink-muted',

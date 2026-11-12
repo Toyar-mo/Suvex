@@ -2,6 +2,7 @@ import { Check, Monitor, Moon, Sun } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { LucideIcon } from 'lucide-react'
 
+import { useI18n } from '@/i18n'
 import { setThemePreference, useTheme } from '@/data/theme-store'
 import { cn } from '@/lib/cn'
 import type { ResolvedTheme, ThemePreference } from '@/lib/theme'
@@ -34,6 +35,7 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: LucideIcon }
 const RESOLVED_ICON: Record<ResolvedTheme, LucideIcon> = { light: Sun, dark: Moon }
 
 export function ThemeToggle() {
+  const { t } = useI18n()
   const { preference, resolved } = useTheme()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -63,9 +65,11 @@ export function ThemeToggle() {
   }, [open])
 
   const current = THEME_OPTIONS.find((option) => option.value === preference)
-  const currentLabel = current?.label ?? '跟随系统'
+  const currentLabel = t(`layout2.theme.${preference}`, undefined, current?.label ?? '跟随系统')
   const Icon = preference === 'system' ? Monitor : RESOLVED_ICON[resolved]
-  const resolvedLabel = resolved === 'light' ? '亮色' : '暗色'
+  const resolvedLabel = resolved === 'light'
+    ? t('layout2.theme.light', undefined, '亮色')
+    : t('layout2.theme.dark', undefined, '暗色')
 
   return (
     <div ref={wrapRef} className="relative shrink-0">
@@ -80,11 +84,11 @@ export function ThemeToggle() {
           只写"切换主题"的话，屏幕阅读器用户听不出当前处于哪一态 ——
           而这个按钮的图标恰好是纯视觉的，读屏念不到。
         */
-        aria-label={`当前：${currentLabel}，点击切换主题`}
+        aria-label={t('layout2.theme.current', { label: currentLabel }, `当前：${currentLabel}，点击切换主题`)}
         title={
           preference === 'system'
-            ? `跟随系统（当前为${resolvedLabel}）`
-            : `当前：${currentLabel}`
+            ? t('layout2.theme.systemTitle', { resolved: resolvedLabel }, `跟随系统（当前为${resolvedLabel}）`)
+            : t('layout2.theme.currentTitle', { label: currentLabel }, `当前：${currentLabel}`)
         }
         className={cn(
           'inline-flex h-8 w-8 items-center justify-center rounded-sm border border-line',
@@ -98,7 +102,7 @@ export function ThemeToggle() {
       {open && (
         <div
           role="menu"
-          aria-label="主题"
+          aria-label={t('layout2.theme.menu', undefined, '主题')}
           className="absolute right-0 top-full z-30 mt-1 w-36 animate-stream-in rounded-md border border-line bg-surface-overlay p-1 shadow-overlay"
         >
           {THEME_OPTIONS.map(({ value, label, icon: OptionIcon }) => {
@@ -127,7 +131,7 @@ export function ThemeToggle() {
                 )}
               >
                 <OptionIcon size={13} strokeWidth={1.75} aria-hidden="true" className="shrink-0" />
-                <span className="flex-1">{label}</span>
+                <span className="flex-1">{t(`layout2.theme.${value}`, undefined, label)}</span>
                 {/* 勾既是"选中"，也是这一行唯一需要被一眼扫到的信息 */}
                 {checked && (
                   <Check

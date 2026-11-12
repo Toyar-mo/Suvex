@@ -104,7 +104,7 @@ export function AssetMap({
         </MapButton>
         <span
           className="mono-ui w-10 text-center text-2xs text-ink-faint"
-          title="相对「适应视图」的缩放"
+          title={t('assets2.map.zoomTitle', undefined, '相对「适应视图」的缩放')}
         >
           {Math.round(zoom * 100)}%
         </span>
@@ -191,7 +191,7 @@ export function AssetMap({
                 key={node.host.host}
                 type="button"
                 onClick={() => onSelectHost?.(node.host.host)}
-                title={`${node.host.host} · ${meta.label} · ${node.host.openFindingCount} 条未处置`}
+                title={`${node.host.host} · ${t(`assets2.health.${node.host.health}.label`, undefined, meta.label)} · ${t('assets2.map.openFindings', { n: node.host.openFindingCount }, `${node.host.openFindingCount} 条未处置`)}`}
                 className="absolute flex flex-col justify-center gap-0.5 rounded-md border border-line bg-surface px-2.5 py-1.5 text-left transition-colors hover:border-line-strong hover:bg-surface-overlay"
                 style={{ left: node.x, top: node.y, width: NODE_W, height: NODE_H }}
               >

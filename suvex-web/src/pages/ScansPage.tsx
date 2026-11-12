@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { PageHeader } from '@/components/layout/AppShell'
 import BulkActionBar from '@/components/scans/BulkActionBar'
 import NewScanWizard from '@/components/scans/NewScanWizard'
@@ -362,9 +363,12 @@ export function ScansPage() {
   */
   const handleAbortScan = useCallback((scan: Scan) => {
     void abortScan(scan.id).catch((err) =>
-      showToast({ message: `终止失败：${errorMessage(err)}`, tone: 'risk' }),
+      showToast({
+        message: t('scans2.page.toast.abortFailed', { error: errorMessage(err) }, '终止失败：{error}'),
+        tone: 'risk',
+      }),
     )
-  }, [])
+  }, [t])
 
   const handleRerunScan = useCallback(
     (scan: Scan) => {
@@ -377,9 +381,16 @@ export function ScansPage() {
           setView('default')
           setSearchParams({ created: created.id }, { replace: true })
         })
-        .catch((err) => showToast({ message: `重新扫描失败：${errorMessage(err)}`, tone: 'risk' }))
+        .catch((err) => showToast({
+          message: t(
+            'scans2.page.toast.rerunFailed',
+            { error: errorMessage(err) },
+            '重新扫描失败：{error}',
+          ),
+          tone: 'risk',
+        }))
     },
-    [setView, setSearchParams],
+    [setView, setSearchParams, t],
   )
 
   const handleResumeScan = useCallback(
@@ -387,7 +398,13 @@ export function ScansPage() {
       // 续跑同样会**继续对真实目标发包** —— 授权确认不能省。
       // 先给一个即时回执：后端要读磁盘找 run_id，慢的时候几秒，
       // 菜单已经收起，不给回执就是“点了没反应”。
-      showToast({ message: `正在续跑：${scan.name || scan.target}…` })
+      showToast({
+        message: t(
+          'scans2.page.toast.resuming',
+          { name: scan.name || scan.target },
+          '正在续跑：{name}…',
+        ),
+      })
       void resumeScan(scan.id, {
         confirmed: true,
         statement: SCAN_AUTHORIZATION_STATEMENT,
@@ -405,12 +422,23 @@ export function ScansPage() {
           // 失败变排队中如果不显眼，用户会以为点击没反应。
           showToast({
             tone: 'ok',
-            message: `已续跑：${scan.name || scan.target}`,
+            message: t(
+              'scans2.page.toast.resumed',
+              { name: scan.name || scan.target },
+              '已续跑：{name}',
+            ),
           })
         })
-        .catch((err) => showToast({ message: `续跑失败：${errorMessage(err)}`, tone: 'risk' }))
+        .catch((err) => showToast({
+          message: t(
+            'scans2.page.toast.resumeFailed',
+            { error: errorMessage(err) },
+            '续跑失败：{error}',
+          ),
+          tone: 'risk',
+        }))
     },
-    [setView],
+    [setView, t],
   )
 
   /**
@@ -504,10 +532,17 @@ export function ScansPage() {
           message: messages.done,
           action: undo
             ? {
-                label: '撤销',
+                label: t('scans2.page.toast.undo', undefined, '撤销'),
                 onAction: () => {
                   void Promise.resolve(undo()).catch((err) =>
-                    showToast({ message: `撤销失败：${errorMessage(err)}`, tone: 'risk' }),
+                    showToast({
+                      message: t(
+                        'scans2.page.toast.undoFailed',
+                        { error: errorMessage(err) },
+                        '撤销失败：{error}',
+                      ),
+                      tone: 'risk',
+                    }),
                   )
                 },
               }
@@ -528,7 +563,7 @@ export function ScansPage() {
     runBulk(
       ids,
       (list) => batchArchive(list, true, 'default'),
-      { done: `已归档 ${ids.length} 项`, failed: '归档失败' },
+      { done: t('scans2.page.bulk.archived', { n: ids.length }, '已归档 {n} 项'), failed: t('scans2.page.bulk.archiveFailed', undefined, '归档失败') },
       () => batchArchive(ids, false, 'default'),
     )
   }
@@ -539,7 +574,7 @@ export function ScansPage() {
     runBulk(
       ids,
       (list) => batchArchive(list, false, 'archived'),
-      { done: `已取消归档 ${ids.length} 项`, failed: '取消归档失败' },
+      { done: t('scans2.page.bulk.unarchived', { n: ids.length }, '已取消归档 {n} 项'), failed: t('scans2.page.bulk.unarchiveFailed', undefined, '取消归档失败') },
       () => batchArchive(ids, true, 'archived'),
     )
   }
@@ -551,7 +586,7 @@ export function ScansPage() {
     runBulk(
       ids,
       (list) => batchDelete(list, view),
-      { done: `已移入回收站 ${ids.length} 项`, failed: '删除失败' },
+      { done: t('scans2.page.bulk.trashed', { n: ids.length }, '已移入回收站 {n} 项'), failed: t('scans2.page.bulk.deleteFailed', undefined, '删除失败') },
       () => batchRestore(ids, 'default'),
     )
   }
@@ -562,7 +597,7 @@ export function ScansPage() {
     runBulk(
       ids,
       (list) => batchRestore(list, 'deleted'),
-      { done: `已恢复 ${ids.length} 项`, failed: '恢复失败' },
+      { done: t('scans2.page.bulk.restored', { n: ids.length }, '已恢复 {n} 项'), failed: t('scans2.page.bulk.restoreFailed', undefined, '恢复失败') },
       () => batchDelete(ids, 'deleted'),
     )
   }
@@ -583,14 +618,18 @@ export function ScansPage() {
         const okCount = results.length - failed.length
         setSelectedIds(new Set())
         if (failed.length === 0) {
-          showToast({ message: `已永久删除 ${okCount} 项` })
+          showToast({ message: t('scans2.page.bulk.purged', { n: okCount }, '已永久删除 {n} 项') })
           return
         }
         // 把后端那句中文原样带出来 —— 它指名了是哪份报告挡住的，
         // 而那是用户唯一能采取行动的线索。
         const first = (failed[0] as PromiseRejectedResult).reason
         showToast({
-          message: `已删除 ${okCount} 项，${failed.length} 项被拒绝：${errorMessage(first)}`,
+          message: t(
+            'scans2.page.bulk.purgePartial',
+            { ok: okCount, failed: failed.length, error: errorMessage(first) },
+            '已删除 {ok} 项，{failed} 项被拒绝：{error}',
+          ),
           tone: 'risk',
           // 这段文字通常比 5 秒能读完的长，给多一点时间
           durationMs: 9000,
@@ -606,15 +645,25 @@ export function ScansPage() {
     void batchRerun(ids, { confirmed: true, statement: SCAN_AUTHORIZATION_STATEMENT })
       .then((result) => {
         setSelectedIds(new Set())
-        const parts = [`已重新发起 ${result.created.length} 项`]
-        if (result.failed.length > 0) parts.push(`${result.failed.length} 项失败`)
+        const parts = [
+          t('scans2.page.bulk.rerunCreated', { n: result.created.length }, '已重新发起 {n} 项'),
+        ]
+        if (result.failed.length > 0)
+          parts.push(t('scans2.page.bulk.rerunFailedCount', { n: result.failed.length }, '{n} 项失败'))
         showToast({
           message: parts.join(' · '),
           // 有失败时用 risk 色 —— 只说"成功 N 项"会掩盖掉那几条没起来的
           tone: result.failed.length > 0 ? 'risk' : 'ok',
         })
       })
-      .catch((err) => showToast({ message: `重新扫描失败：${errorMessage(err)}`, tone: 'risk' }))
+      .catch((err) => showToast({
+          message: t(
+            'scans2.page.toast.rerunFailed',
+            { error: errorMessage(err) },
+            '重新扫描失败：{error}',
+          ),
+          tone: 'risk',
+        }))
       .finally(() => setBulkBusy(false))
   }
 
@@ -622,7 +671,9 @@ export function ScansPage() {
     if (selectedVisible.length === 0) return
     // 前端生成，不新增后端端点 —— 理由见 lib/scan-export.ts
     downloadCsv(exportFilename(), scansToCsv(selectedVisible))
-    showToast({ message: `已导出 ${selectedVisible.length} 项为 CSV` })
+    showToast({
+      message: t('scans2.page.bulk.exported', { n: selectedVisible.length }, '已导出 {n} 项为 CSV'),
+    })
   }
 
   /*
@@ -764,7 +815,11 @@ export function ScansPage() {
       {stalls.length > 0 && (
         <section className="mb-panel rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] px-panel py-2.5">
           <p className="text-sm text-ink">
-            {stalls.length} 个运行中扫描在重复同一动作（可能是原地打转）：
+            {t(
+              'scans2.page.stall.title',
+              { n: stalls.length },
+              '{n} 个运行中扫描在重复同一动作（可能是原地打转）：',
+            )}
           </p>
           <ul className="mt-1 flex flex-col gap-0.5 text-2xs text-ink-muted">
             {stalls.map((item) => (
@@ -773,7 +828,8 @@ export function ScansPage() {
                   {item.name || item.target}
                 </a>
                 <span className="ml-1.5">
-                  连续 {item.repeats} 次 · <code className="font-mono">{item.sample}</code>
+                  {t('scans2.page.stall.repeats', { n: item.repeats }, '连续 {n} 次 · ')}
+                  <code className="font-mono">{item.sample}</code>
                 </span>
               </li>
             ))}
@@ -788,7 +844,7 @@ export function ScansPage() {
         <div className="min-w-0 flex-1 2xl:min-w-[600px]">
         {/* ── 工具条 ── */}
         <div className="mb-panel flex flex-wrap items-center gap-tight">
-          <div role="group" aria-label="按状态筛选" className="flex flex-wrap items-center gap-1">
+          <div role="group" aria-label={t('scans2.page.filterAria', undefined, '按状态筛选')} className="flex flex-wrap items-center gap-1">
             {STATUS_FILTERS.map((filter) => {
               const count =
                 filter.value === 'all'
@@ -867,10 +923,11 @@ export function ScansPage() {
             <button
               type="button"
               onClick={clearScanFilter}
-              title={`只看扫描 ${urlScan}`}
+              title={t('scans2.page.onlyScan', { id: urlScan }, '只看扫描 {id}')}
               className="inline-flex h-8 items-center gap-1 rounded-sm border border-accent/50 bg-accent-wash px-2 text-2xs text-accent transition-ui hover:border-accent"
             >
-              只看 <span className="max-w-24 truncate font-mono">{urlScan}</span>
+              <T k="scans2.page.only" fallback="只看 " />
+              <span className="max-w-24 truncate font-mono">{urlScan}</span>
               <X size={11} strokeWidth={2} aria-hidden="true" />
             </button>
           )}
@@ -890,7 +947,11 @@ export function ScansPage() {
               className="h-full border-0 bg-transparent px-0"
             />
             <IconButton
-              label={sortDir === 'desc' ? '当前降序，点击切换升序' : '当前升序，点击切换降序'}
+              label={
+                sortDir === 'desc'
+                  ? t('scans2.page.sort.desc', undefined, '当前降序，点击切换升序')
+                  : t('scans2.page.sort.asc', undefined, '当前升序，点击切换降序')
+              }
               /* 触摸目标：箭头字形只有 8px 宽，撑到 24px 见方。
                  它是工具条里唯一的纯图标按钮，太小会误触。 */
               className="ml-0.5"
@@ -932,18 +993,30 @@ export function ScansPage() {
         {/* ── 二次确认。删除与永久删除的话术**必须不同** ── */}
         <ConfirmDialog
           open={confirm === 'delete'}
-          title={`删除 ${selectedIdList.length} 次扫描？`}
-          description="它们会被移入回收站，可以随时恢复；只有「永久删除」才会真正抹掉数据。保留天数在设置里可调。"
-          confirmLabel="移入回收站"
+          title={t('scans2.page.confirm.deleteTitle', { n: selectedIdList.length }, '删除 {n} 次扫描？')}
+          description={t(
+            'scans2.page.confirm.deleteBody',
+            undefined,
+            '它们会被移入回收站，可以随时恢复；只有「永久删除」才会真正抹掉数据。保留天数在设置里可调。',
+          )}
+          confirmLabel={t('scans2.page.confirm.trash', undefined, '移入回收站')}
           busy={bulkBusy}
           onConfirm={bulkDelete}
           onCancel={() => setConfirm(null)}
         />
         <ConfirmDialog
           open={confirm === 'purge'}
-          title={`永久删除 ${selectedIdList.length} 次扫描？`}
-          description="这一步不可撤销。相关的漏洞、事件与智能体记录会一并删除；若某份报告引用了它们，该条会被拒绝并告诉你具体是哪份报告。"
-          confirmLabel="永久删除"
+          title={t(
+            'scans2.page.confirm.purgeTitle',
+            { n: selectedIdList.length },
+            '永久删除 {n} 次扫描？',
+          )}
+          description={t(
+            'scans2.page.confirm.purgeBody',
+            undefined,
+            '这一步不可撤销。相关的漏洞、事件与智能体记录会一并删除；若某份报告引用了它们，该条会被拒绝并告诉你具体是哪份报告。',
+          )}
+          confirmLabel={t('scans2.page.confirm.purge', undefined, '永久删除')}
           busy={bulkBusy}
           onConfirm={bulkPurge}
           onCancel={() => setConfirm(null)}
@@ -999,7 +1072,7 @@ export function ScansPage() {
                 aria-hidden="true"
               />
               <span>
-                扫描已加入队列
+                <T k="scans2.page.created.title" fallback="扫描已加入队列" />
                 <span className="mono-ui ml-2 text-ink-muted">{justCreatedId}</span>
               </span>
             </p>
@@ -1008,9 +1081,9 @@ export function ScansPage() {
                 to={`/activity?scan=${encodeURIComponent(justCreatedId)}`}
                 className="text-xs text-accent-strong underline hover:text-accent"
               >
-                查看活动
+                <T k="scans2.page.created.viewActivity" fallback="查看活动" />
               </Link>
-              <IconButton label="关闭提示" onClick={() => setSearchParams({}, { replace: true })}>
+              <IconButton label={t('scans2.page.created.dismiss', undefined, '关闭提示')} onClick={() => setSearchParams({}, { replace: true })}>
                 <X size={13} strokeWidth={2} aria-hidden="true" />
               </IconButton>
             </div>
@@ -1030,7 +1103,11 @@ export function ScansPage() {
           <SkeletonRows rows={4} rowClassName="h-20" />
         ) : status === 'error' ? (
           <ErrorState
-            title={view === 'default' ? '扫描列表加载失败' : '加载失败'}
+            title={
+              view === 'default'
+                ? t('scans2.page.error.loadList', undefined, '扫描列表加载失败')
+                : t('scans2.page.error.load', undefined, '加载失败')
+            }
             error={error}
             onRetry={() => void loadScans({ view })}
           />
@@ -1083,14 +1160,22 @@ export function ScansPage() {
                 view === 'archived' ? (
                   <EmptyHint
                     icon={Archive}
-                    title="没有已归档的扫描"
-                    body="归档把不再关注的记录从默认列表里移走 —— 数据不会删，随时可以取消归档。可在「设置 → 扫描保留规则」里让失败与已终止的扫描到期自动归档。"
+                    title={t('scans2.page.empty.archived.title', undefined, '没有已归档的扫描')}
+                    body={t(
+                      'scans2.page.empty.archived.body',
+                      undefined,
+                      '归档把不再关注的记录从默认列表里移走 —— 数据不会删，随时可以取消归档。可在「设置 → 扫描保留规则」里让失败与已终止的扫描到期自动归档。',
+                    )}
                   />
                 ) : view === 'deleted' ? (
                   <EmptyHint
                     icon={Trash2}
-                    title="回收站是空的"
-                    body="从列表里删除的扫描会先到这里，保留期满后才会被真正清除 —— 保留天数在「设置 → 扫描保留规则」里可调。期间随时可以恢复。"
+                    title={t('scans2.page.empty.deleted.title', undefined, '回收站是空的')}
+                    body={t(
+                      'scans2.page.empty.deleted.body',
+                      undefined,
+                      '从列表里删除的扫描会先到这里，保留期满后才会被真正清除 —— 保留天数在「设置 → 扫描保留规则」里可调。期间随时可以恢复。',
+                    )}
                   />
                 ) : isFiltered ? (
                   // 筛选后为空 —— 与"从来没跑过"是两回事，提示必须不同

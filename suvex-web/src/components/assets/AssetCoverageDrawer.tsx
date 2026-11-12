@@ -3,6 +3,7 @@ import Drawer from '@/components/ui/Drawer'
 import { SkeletonRows } from '@/components/ui/Skeleton'
 import { toApiError } from '@/lib/api'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import {
   loadCoverage,
   loadSurfaceMap,
@@ -25,6 +26,7 @@ export default function AssetCoverageDrawer({
   target: string | null
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const titleId = useId()
   const [coverage, setCoverage] = useState<CoverageSnapshot | null>(null)
   const [surface, setSurface] = useState<SurfaceMap | null>(null)
@@ -67,7 +69,7 @@ export default function AssetCoverageDrawer({
       open={target !== null}
       onClose={onClose}
       labelledBy={titleId}
-      title="覆盖度与事实图"
+      title={t('assets2.coverage.title', undefined, '覆盖度与事实图')}
       titleAside={
         <span className="max-w-[18rem] truncate font-mono text-xs text-ink-muted" title={target ?? ''}>
           {target ?? ''}
@@ -83,7 +85,9 @@ export default function AssetCoverageDrawer({
           <section>
             <h3 className="text-sm font-medium text-ink"><T k="assets.coverage"/></h3>
             <p className="mt-1 text-2xs text-ink-muted">
-              只列<strong><T k="assets.coverage.recorded"/></strong>的面；没有记录不等于没测过，也不等于没有缺口。
+              {t('assets2.coverage.notePre', undefined, '只列 ')}
+              <strong><T k="assets.coverage.recorded"/></strong>
+              {t('assets2.coverage.notePost', undefined, ' 的面；没有记录不等于没测过，也不等于没有缺口。')}
             </p>
             <div className="mt-2 grid grid-cols-2 gap-2 text-sm">
               <span className="text-ink-muted"><T k="assets.coverage.tested"/></span>
@@ -95,14 +99,18 @@ export default function AssetCoverageDrawer({
             </div>
             {coverage?.truncated && (
               <p role="status" className="mt-2 text-2xs text-signal-warn">
-                覆盖度记录已截断：只显示服务端最近 200 条（上限 200）。
+                {t('assets2.coverage.truncated', undefined, '覆盖度记录已截断：只显示服务端最近 200 条（上限 200）。')}
               </p>
             )}
             <div className="mt-2 flex flex-wrap gap-1.5">
               {(coverage?.gaps ?? []).map((gap) => (
                 <span
                   key={gap.key}
-                  title={gap.recorded ? '有记录' : '没有记录（不等于没测过）'}
+                  title={
+                    gap.recorded
+                      ? t('assets2.coverage.recorded', undefined, '有记录')
+                      : t('assets2.coverage.notRecorded', undefined, '没有记录（不等于没测过）')
+                  }
                   className={
                     gap.recorded
                       ? 'rounded-pill border border-line bg-surface px-2 py-0.5 text-2xs text-ink'
@@ -115,25 +123,25 @@ export default function AssetCoverageDrawer({
               ))}
             </div>
             <ItemList
-              title="测过的面"
+              title={t('assets.coverage.tested')}
               items={coverage?.tested ?? []}
-              empty="还没有测过的面"
+              empty={t('assets2.coverage.testedEmpty', undefined, '还没有测过的面')}
             />
             <ItemList
-              title="已排除"
+              title={t('assets.coverage.ruledOut')}
               items={coverage?.ruledOut ?? []}
-              empty="还没有排除记录"
+              empty={t('assets2.coverage.ruledOutEmpty', undefined, '还没有排除记录')}
             />
           </section>
 
           <section>
             <h3 className="text-sm font-medium text-ink"><T k="assets.facts"/></h3>
             <p className="mt-1 text-2xs text-ink-muted">
-              节点是事实，线是事实之间的关系（攻击链 / 依赖 / 约束）。
+              {t('assets2.facts.note', undefined, '节点是事实，线是事实之间的关系（攻击链 / 依赖 / 约束）。')}
             </p>
             {surface?.truncated && (
               <p role="status" className="mt-2 text-2xs text-signal-warn">
-                事实图已截断：只显示服务端最近 300 条（上限 300）。
+                {t('assets2.facts.truncated', undefined, '事实图已截断：只显示服务端最近 300 条（上限 300）。')}
               </p>
             )}
             {surface && surface.nodes.length > 0 ? (

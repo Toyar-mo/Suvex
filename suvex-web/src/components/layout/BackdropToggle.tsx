@@ -1,5 +1,6 @@
 import { Check, Layers } from 'lucide-react'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { useEffect, useRef, useState } from 'react'
 
 import { setBackdrop, useBackdrop } from '@/data/backdrop-store'
@@ -27,6 +28,7 @@ import { cn } from '@/lib/cn'
  * 不一致，比少一种关闭方式更烦人。
  */
 export function BackdropToggle() {
+  const { t } = useI18n()
   const current = useBackdrop()
   const [open, setOpen] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -51,7 +53,8 @@ export function BackdropToggle() {
     }
   }, [open])
 
-  const currentLabel = BACKDROPS.find((item) => item.id === current)?.label ?? '点阵场'
+  const currentItem = BACKDROPS.find((item) => item.id === current)
+  const currentLabel = t(`layout2.backdrop.${current}`, undefined, currentItem?.label ?? '点阵场')
 
   return (
     <div ref={wrapRef} className="relative shrink-0">
@@ -61,8 +64,8 @@ export function BackdropToggle() {
         onClick={() => setOpen((value) => !value)}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`背景：${currentLabel}，点击切换`}
-        title={`背景：${currentLabel}`}
+        aria-label={t('layout2.backdrop.current', { name: currentLabel }, `背景：${currentLabel}，点击切换`)}
+        title={t('layout2.backdrop.currentTitle', { name: currentLabel }, `背景：${currentLabel}`)}
         className={cn(
           'flex h-7 items-center gap-1 rounded-sm px-1.5 text-2xs text-ink-faint',
           'max-sm:min-h-9 max-sm:min-w-9 max-sm:justify-center',
@@ -78,7 +81,7 @@ export function BackdropToggle() {
       {open && (
         <div
           role="menu"
-          aria-label="选择背景"
+          aria-label={t('layout2.backdrop.menu', undefined, '选择背景')}
           className={cn(
             'absolute right-0 top-full z-30 mt-1 w-64 rounded-md border border-line bg-surface p-1',
             'shadow-[0_10px_30px_-12px_rgb(0_0_0/0.45)]',
@@ -112,9 +115,9 @@ export function BackdropToggle() {
                 />
                 <span className="flex min-w-0 flex-col">
                   <span className={cn('text-xs', active ? 'text-ink' : 'text-ink-muted')}>
-                    {item.label}
+                    {t(`layout2.backdrop.${item.id}`, undefined, item.label)}
                   </span>
-                  <span className="truncate text-2xs text-ink-faint">{item.hint}</span>
+                  <span className="truncate text-2xs text-ink-faint">{t(`layout2.backdrop.${item.id}.hint`, undefined, item.hint)}</span>
                 </span>
                 {active && (
                   <Check

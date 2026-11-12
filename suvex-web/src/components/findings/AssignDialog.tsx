@@ -1,5 +1,7 @@
 import { cn } from '@/lib/cn'
 import { activeMembers, type Member } from '@/data/members-store'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { UserCheck } from 'lucide-react'
 
@@ -51,6 +53,7 @@ function AssignDialogInner({
   onConfirm,
   onCancel,
 }: AssignDialogProps) {
+  const { t } = useI18n()
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState('')
   const [picked, setPicked] = useState<string | null>(null)
@@ -91,15 +94,24 @@ function AssignDialogInner({
         className="w-full max-w-sm animate-rise-in rounded-md border border-line bg-surface-overlay p-panel shadow-overlay"
       >
         <h2 id="assign-title" className="text-sm font-medium text-ink">
-          指派处理人
+          {t('findings2.assign.title', undefined, '指派处理人')}
         </h2>
         <p className="mt-1.5 text-xs text-ink-muted">
-          {count > 1 ? `${count} 条漏洞会一起改负责人。` : '这条漏洞的负责人会变。'}
+          {count > 1
+            ? t('findings2.assign.multi', { count }, `${count} 条漏洞会一起改负责人。`)
+            : t('findings2.assign.single', undefined, '这条漏洞的负责人会变。')}
           {currentNames.length > 0 && (
             // 覆盖是常见操作（换人接手），但必须让用户知道自己在覆盖什么
             <span className="ml-1 text-ink-faint">
-              当前的负责人是 {currentNames.slice(0, 3).join('、')}
-              {currentNames.length > 3 ? ` 等 ${currentNames.length} 人` : ''}。
+              {t(
+                'findings2.assign.currentPrefix',
+                { names: currentNames.slice(0, 3).join(t('findings2.sep.list', undefined, '、')) },
+                `当前的负责人是 ${currentNames.slice(0, 3).join('、')}`,
+              )}
+              {currentNames.length > 3
+                ? t('findings2.assign.currentMore', { n: currentNames.length }, ` 等 ${currentNames.length} 人`)
+                : ''}
+              {t('findings2.assign.sentenceEnd', undefined, '。')}
             </span>
           )}
         </p>
@@ -122,7 +134,7 @@ function AssignDialogInner({
                 if (picked) submit(picked)
                 else if (candidates.length > 0) submit(candidates[0].id)
               }}
-              placeholder="搜索名字或邮箱"
+              placeholder={t('findings2.assign.searchPlaceholder', undefined, '搜索名字或邮箱')}
               className={cn(
                 'mt-panel h-8 w-full rounded-sm border border-line bg-surface px-2.5 text-xs text-ink',
                 'placeholder:text-ink-ghost focus:outline-none focus:ring-2 focus:ring-accent/40',
@@ -131,12 +143,12 @@ function AssignDialogInner({
 
             <ul
               role="listbox"
-              aria-label="处理人候选"
+              aria-label={t('findings2.assign.candidates', undefined, '处理人候选')}
               className="mt-1.5 max-h-56 overflow-y-auto rounded-sm border border-line"
             >
               {candidates.length === 0 ? (
                 <li className="px-2.5 py-3 text-2xs text-ink-faint">
-                  没有匹配的处理人。去「设置 → 处理人」里加一个。
+                  <T k="findings2.assign.noMatch" fallback="没有匹配的处理人。去「设置 → 处理人」里加一个。" />
                 </li>
               ) : (
                 candidates.map((member) => {
@@ -176,8 +188,10 @@ function AssignDialogInner({
         ) : (
           /* 一个处理人都没有时，不显示空下拉 —— 直接说怎么办 */
           <p className="mt-panel rounded-sm border border-line bg-surface px-2.5 py-2.5 text-2xs text-ink-faint">
-            还没有可指派的处理人。先在「设置 → 处理人」里添加一个，
-            或者直接确认下面的「取消指派」。
+            <T
+              k="findings2.assign.noMembers"
+              fallback="还没有可指派的处理人。先在「设置 → 处理人」里添加一个，或者直接确认下面的「取消指派」。"
+            />
           </p>
         )}
 
@@ -190,7 +204,7 @@ function AssignDialogInner({
             type="button"
             onClick={() => submit(null)}
             disabled={busy}
-            title="清空这一批的负责人，回到「未指派」"
+            title={t('findings2.assign.clearTitle', undefined, '清空这一批的负责人，回到「未指派」')}
             className={cn(
               'inline-flex h-8 items-center rounded-sm px-2 text-2xs text-ink-faint',
               'transition-ui duration-fast hover:text-ink',
@@ -198,7 +212,7 @@ function AssignDialogInner({
               'disabled:cursor-not-allowed disabled:hover:text-ink-faint',
             )}
           >
-            取消指派
+            <T k="findings2.assign.unassign" fallback="取消指派" />
           </button>
 
           <div className="flex gap-tight">
@@ -211,13 +225,13 @@ function AssignDialogInner({
                 'focus:outline-none focus:ring-2 focus:ring-accent/40',
               )}
             >
-              取消
+              <T k="findings2.assign.cancel" fallback="取消" />
             </button>
             <button
               type="button"
               onClick={() => picked && submit(picked)}
               disabled={!picked || busy}
-              title={!picked ? '先选一个处理人' : undefined}
+              title={!picked ? t('findings2.assign.pickFirst', undefined, '先选一个处理人') : undefined}
               className={cn(
                 'inline-flex h-8 items-center rounded-sm px-3 text-xs font-medium',
                 'transition-ui duration-fast focus:outline-none focus:ring-2 focus:ring-accent/40',
@@ -226,7 +240,9 @@ function AssignDialogInner({
                   : 'cursor-not-allowed bg-surface-raised text-ink-faint',
               )}
             >
-              {busy ? '指派中…' : '确认指派'}
+              {busy
+                ? t('findings2.assign.busy', undefined, '指派中…')
+                : t('findings2.assign.confirm', undefined, '确认指派')}
             </button>
           </div>
         </div>

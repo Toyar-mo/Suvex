@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { Button } from '@/components/ui/Button'
 import { TextInput } from '@/components/settings/Field'
 import { Select } from '@/components/ui/Select'
@@ -14,6 +15,7 @@ import type { Scan } from '@/data/scan'
  * 只在存在 running 扫描时出现 —— 对没有运行中任务的页面不加装饰。
  */
 export function ScanHintComposer({ scans }: { scans: Scan[] }) {
+  const { t } = useI18n()
   const running = scans.filter((scan) => scan.status === 'running')
   const [scanId, setScanId] = useState('')
   const [text, setText] = useState('')
@@ -28,9 +30,9 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
     try {
       await api.post(`/scans/${encodeURIComponent(selected)}/hints`, { text: text.trim() })
       setText('')
-      showToast({ tone: 'ok', message: '线索已送出，下一轮生效' })
+      showToast({ tone: 'ok', message: t('scans2.hint.sent', undefined, '线索已送出，下一轮生效') })
     } catch (err) {
-      showToast({ tone: 'risk', message: err instanceof Error ? err.message : '发送失败' })
+      showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('scans2.hint.failed', undefined, '发送失败') })
     } finally {
       setBusy(false)
     }
@@ -44,7 +46,7 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
           value={selected}
           options={running.map((scan) => ({ value: scan.id, label: scan.name || scan.target }))}
           onChange={setScanId}
-          placeholder="没有运行中的扫描"
+          placeholder={t('scans2.hint.noneRunning', undefined, '没有运行中的扫描')}
           className="max-w-[18rem]"
         />
       </label>
@@ -54,11 +56,15 @@ export function ScanHintComposer({ scans }: { scans: Scan[] }) {
           id="scan-hint"
           value={text}
           onChange={setText}
-          placeholder="例如：登录接口在 /api/v2，不要在 /index.php 上继续"
+          placeholder={t(
+            'scans2.hint.placeholder',
+            undefined,
+            '例如：登录接口在 /api/v2，不要在 /index.php 上继续',
+          )}
         />
       </label>
       <Button variant="secondary" size="sm" onClick={() => void submit()} disabled={busy || !text.trim()}>
-        {busy ? '发送中…' : '发送线索'}
+        {busy ? t('scans2.hint.sending', undefined, '发送中…') : t('scans2.hint.send', undefined, '发送线索')}
       </Button>
     </section>
   )

@@ -258,7 +258,7 @@ export function SessionBatchModal({
               { value: '__none__', label: '无分组' },
             ]}
             onChange={setProjectFilter}
-            ariaLabel="按分组筛选"
+            ariaLabel={t('chat.a11y.filterGroup', undefined, '按分组筛选')}
             className="w-36"
           />
         </div>

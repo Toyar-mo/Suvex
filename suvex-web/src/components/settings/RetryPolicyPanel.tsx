@@ -58,7 +58,7 @@ export function RetryPolicyPanel() {
     try {
       const saved = await api.put<RetryPolicy>('/settings/llm-retry', policy)
       setPolicy(saved)
-      showToast({ tone: 'ok', message: '重试策略已保存' })
+      showToast({ tone: 'ok', message: t('settings2.retry.saved', undefined, '重试策略已保存') })
     } catch (err) {
       showToast({ tone: 'risk', message: err instanceof Error ? err.message : t('settings.retry.saveFailed', undefined, '保存失败') })
     } finally {
@@ -94,11 +94,11 @@ export function RetryPolicyPanel() {
             ))}
           </div>
           <p className="text-2xs text-ink-faint">
-            安全窗口（首帧前断流）仍由“未推送则回退非流式”兜底；意图重跑未接入。
+            {t('settings2.retry.note', undefined, '安全窗口（首帧前断流）仍由「未推送则回退非流式」兜底；意图重跑未接入。')}
           </p>
           <div>
             <Button variant="primary" size="sm" onClick={() => void save()} disabled={saving}>
-              {saving ? '保存中…' : '保存'}
+              {saving ? t('settings2.retry.saving', undefined, '保存中…') : t('settings2.retry.save', undefined, '保存')}
             </Button>
           </div>
         </div>

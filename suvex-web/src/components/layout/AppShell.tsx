@@ -2,6 +2,7 @@ import { cn } from '@/lib/cn'
 import { useBackdrop } from '@/data/backdrop-store'
 import { NAV_ITEMS } from '@/navigation'
 import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 import { Suspense, lazy } from 'react'
 
 /**
@@ -111,7 +112,7 @@ export function AppShell({
           'focus:text-sm focus:text-ink',
         )}
       >
-        跳到主要内容
+        <T k="layout2.skipToContent" fallback="跳到主要内容" />
       </a>
 
       {/* 全站氛围底。固定定位，不随内容滚动 —— 它表达的是"这个系统一直在跑"。

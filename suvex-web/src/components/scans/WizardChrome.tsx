@@ -1,5 +1,7 @@
 import { cn } from '@/lib/cn'
 import { AlertTriangle, Check, Loader2, Rocket } from 'lucide-react'
+import { useI18n } from '@/i18n'
+import { T } from '@/i18n/T'
 
 /**
  * 启动扫描按钮 —— 这是全站**风险最高**的一个操作。
@@ -34,8 +36,10 @@ export function LaunchButton({
   disabledReason,
   loading = false,
   onClick,
-  label = '启动扫描',
+  label,
 }: LaunchButtonProps) {
+  const { t } = useI18n()
+  const displayLabel = label ?? t('scans2.launch.start', undefined, '启动扫描')
   const disabled = disabledReason !== null || loading
 
   return (
@@ -79,12 +83,12 @@ export function LaunchButton({
         {loading ? (
           <>
             <Loader2 size={15} strokeWidth={2} className="animate-spin" aria-hidden="true" />
-            正在启动…
+            <T k="scans2.launch.starting" fallback="正在启动…" />
           </>
         ) : (
           <>
             <Rocket size={15} strokeWidth={1.75} aria-hidden="true" />
-            {label}
+            {displayLabel}
           </>
         )}
       </button>
@@ -119,8 +123,12 @@ export interface StepIndicatorProps {
 }
 
 export function StepIndicator({ steps, currentIndex, completed, onJump }: StepIndicatorProps) {
+  const { t } = useI18n()
   return (
-    <ol className="flex items-center gap-1" aria-label="新建扫描步骤">
+    <ol
+      className="flex items-center gap-1"
+      aria-label={t('scans2.wizard.stepsAria', undefined, '新建扫描步骤')}
+    >
       {steps.map((step, index) => {
         const isCurrent = index === currentIndex
         const isDone = completed.has(index)

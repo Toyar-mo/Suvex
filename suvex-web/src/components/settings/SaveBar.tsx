@@ -167,7 +167,7 @@ function SaveStateLabel({ state }: { state: SaveState }) {
       return (
         <span className="inline-flex items-center gap-1 text-2xs text-ink-faint">
           <Info size={11} strokeWidth={2} aria-hidden="true" />
-          没有需要保存的改动
+          {t('settings2.saveBar.unchanged', undefined, '没有需要保存的改动')}
         </span>
       )
   }
@@ -178,27 +178,9 @@ function SaveStateLabel({ state }: { state: SaveState }) {
  *
  * 每个面板自带保存条，而不是全页一个"保存全部"：
  *   provider、沙箱、通知、令牌是**四件独立的事**，
- *   一个全局保存会让用户改了一个开关却不敢点（怕连带提交别的）。
+ *
  *   分块保存同时让"哪一块没保存成功"变得明确。
  */
-//: 面板标题 → 字典键。过渡桥：面板仍传中文字面量（几十处），
-//: 这里按标题映射到 `settings.panel.*`；改造完后改成显式传 key。
-const PANEL_TITLE_KEYS: Record<string, string> = {
-  '沙箱与执行环境': 'settings.panel.sandbox',
-  '平台接入': 'settings.panel.platform',
-  '通知': 'settings.panel.notify',
-  '扫描保留': 'settings.panel.retention',
-  '评测快照': 'settings.panel.benchmark',
-  '评测用例': 'settings.panel.cases',
-  '处理人': 'settings.panel.members',
-  '账号与安全': 'settings.panel.account',
-  '模型服务': 'settings.panel.models',
-  '模型路由': 'settings.panel.routes',
-  '紫队检测规则': 'settings.panel.purple',
-  'CTF 解题': 'settings.panel.ctf',
-  'CTF': 'settings.panel.ctf',
-  '内核通用能力': 'settings.panel.kernel',
-}
 
 export function SettingsPanel({
   id,
@@ -213,8 +195,6 @@ export function SettingsPanel({
   children: ReactNode
   footer?: ReactNode
 }) {
-  const { t } = useI18n()
-
   return (
     <section
       /*
@@ -256,7 +236,7 @@ export function SettingsPanel({
     >
       <div className="flex flex-col gap-1">
         <h2 id={`${id}-heading`} className="text-sm font-medium text-ink">
-          {t(PANEL_TITLE_KEYS[title] ?? '', undefined, title)}
+          {title}
         </h2>
         <p className="max-w-[68ch] text-xs text-ink-faint">{description}</p>
       </div>

@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import {
   attachmentDownloadUrl,
   deleteFindingAttachment,
@@ -39,6 +40,7 @@ import { useEffect, useRef, useState } from 'react'
  * 没有意义（撤销的那一刻它已经被别的流程引用过了）。
  */
 export function FindingAttachments({ findingId }: { findingId: string }) {
+  const { t } = useI18n()
   const state = useFindingAttachments(findingId)
   const [busy, setBusy] = useState(false)
   /** 正在确认删除的那个附件 id。非空 = 显示二次确认 */
@@ -58,10 +60,15 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
     setBusy(true)
     try {
       const created = await uploadFindingAttachments(findingId, [...files])
-      showToast({ message: `已上传 ${created.length} 个附件` })
+      showToast({
+        message: t('findings2.attach.uploaded', { n: created.length }, `已上传 ${created.length} 个附件`),
+      })
     } catch (err) {
       // 后端的错误消息是可直接展示的中文（含大小上限的具体数字）
-      showToast({ message: `上传失败：${errorMessage(err)}`, tone: 'risk' })
+      showToast({
+        message: t('findings2.attach.uploadFailed', { msg: errorMessage(err) }, `上传失败：${errorMessage(err)}`),
+        tone: 'risk',
+      })
     } finally {
       setBusy(false)
       // 清空 input：不清的话选同一个文件第二次不会触发 change
@@ -74,9 +81,12 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
     setBusy(true)
     try {
       await deleteFindingAttachment(findingId, attachmentId)
-      showToast({ message: '附件已删除' })
+      showToast({ message: t('findings2.attach.deleted', undefined, '附件已删除') })
     } catch (err) {
-      showToast({ message: `删除失败：${errorMessage(err)}`, tone: 'risk' })
+      showToast({
+        message: t('findings2.attach.deleteFailed', { msg: errorMessage(err) }, `删除失败：${errorMessage(err)}`),
+        tone: 'risk',
+      })
     } finally {
       setBusy(false)
     }
@@ -88,7 +98,11 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
         <p className="text-xs text-ink-faint"><T k="findings.attach.loading"/></p>
       ) : state.status === 'error' ? (
         <p className="text-xs text-signal-risk">
-          附件加载失败：{state.error?.message ?? '未知错误'}
+          {t(
+            'findings2.attach.loadFailed',
+            { msg: state.error?.message ?? t('findings2.attach.unknownError', undefined, '未知错误') },
+            `附件加载失败：${state.error?.message ?? '未知错误'}`,
+          )}
         </p>
       ) : state.items.length === 0 ? (
         /*
@@ -97,7 +111,10 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
           （处置证据）恰恰不是自明的。
         */
         <p className="rounded-sm border border-dashed border-line-strong px-3 py-2.5 text-xs text-ink-faint">
-          还没有附件。可以上传修复前后的截图、复测报告或抓包文件，作为处置证据。
+          <T
+            k="findings2.attach.empty"
+            fallback="还没有附件。可以上传修复前后的截图、复测报告或抓包文件，作为处置证据。"
+          />
         </p>
       ) : (
         <ul className="flex flex-col gap-1">
@@ -128,14 +145,14 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
                     */
                     className="shrink-0 rounded-xs px-1.5 py-0.5 text-2xs text-signal-risk transition-ui duration-fast hover:bg-signal-risk/10 disabled:cursor-not-allowed disabled:bg-transparent disabled:text-ink-faint disabled:hover:bg-transparent"
                   >
-                    确认
+                    <T k="findings2.attach.confirm" fallback="确认" />
                   </button>
                   <button
                     type="button"
                     onClick={() => setConfirmingId(null)}
                     className="shrink-0 rounded-xs px-1.5 py-0.5 text-2xs text-ink-faint hover:text-ink"
                   >
-                    取消
+                    <T k="findings2.attach.cancel" fallback="取消" />
                   </button>
                 </>
               ) : (
@@ -150,7 +167,7 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
                   <a
                     href={attachmentDownloadUrl(findingId, item.id)}
                     download={item.filename}
-                    title={`下载 ${item.filename}`}
+                    title={t('findings2.attach.downloadTitle', { name: item.filename }, `下载 ${item.filename}`)}
                     className="shrink-0 rounded-xs p-1 text-ink-faint transition-ui duration-fast hover:text-accent-strong"
                   >
                     <Download size={12} strokeWidth={2} aria-hidden="true" />
@@ -159,7 +176,7 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
                     type="button"
                     onClick={() => setConfirmingId(item.id)}
                     disabled={busy}
-                    title={`删除 ${item.filename}`}
+                    title={t('findings2.attach.deleteTitle', { name: item.filename }, `删除 ${item.filename}`)}
                     /*
                       图标按钮：禁用降到 `ink-ghost`。token 注释写明它「仅装饰 / 禁用，
                       禁止承载信息」—— 这里是唯一符合该约定的用法（纯图标，无文字）。
@@ -211,7 +228,9 @@ export function FindingAttachments({ findingId }: { findingId: string }) {
           ) : (
             <Upload size={12} strokeWidth={2} aria-hidden="true" />
           )}
-          {busy ? '处理中…' : '上传附件'}
+          {busy
+            ? t('findings2.attach.uploading', undefined, '处理中…')
+            : t('findings2.attach.upload', undefined, '上传附件')}
         </label>
       </div>
     </div>

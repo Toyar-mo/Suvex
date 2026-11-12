@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { compareScans, type ScanComparison } from '@/data/scans-store'
 import { errorMessage } from '@/lib/api'
 import { AlertTriangle, Loader2, Minus, Plus, X } from 'lucide-react'
@@ -33,6 +34,7 @@ export function CompareDialog({
   bId: string
   onClose: () => void
 }) {
+  const { t } = useI18n()
   const [data, setData] = useState<ScanComparison | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -73,21 +75,23 @@ export function CompareDialog({
         <div className="flex items-start justify-between gap-2">
           <div>
             <h2 id="compare-title" className="text-sm font-medium text-ink">
-              扫描对比
+              <T k="scans2.compare.title" fallback="扫描对比" />
             </h2>
             {data && (
               <p className="mt-1 text-xs text-ink-muted">
                 <span className="mono-ui">{data.a.startedAt.slice(0, 16).replace('T', ' ')}</span>
                 {' → '}
                 <span className="mono-ui">{data.b.startedAt.slice(0, 16).replace('T', ' ')}</span>
-                <span className="ml-2 text-ink-faint">目标 {data.b.target}</span>
+                <span className="ml-2 text-ink-faint">
+                  {t('scans2.compare.target', { target: data.b.target }, '目标 {target}')}
+                </span>
               </p>
             )}
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭"
+            aria-label={t('scans2.compare.close', undefined, '关闭')}
             className="rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-ink"
           >
             <X size={14} strokeWidth={2} aria-hidden="true" />
@@ -96,12 +100,12 @@ export function CompareDialog({
 
         {error ? (
           <p role="alert" className="mt-panel text-xs text-signal-risk">
-            对比失败：{error}
+            {t('scans2.compare.failed', { error }, '对比失败：{error}')}
           </p>
         ) : !data ? (
           <p className="mt-panel flex items-center gap-2 text-xs text-ink-faint">
             <Loader2 size={13} className="animate-spin" aria-hidden="true" />
-            正在对比…
+            <T k="scans2.compare.loading" fallback="正在对比…" />
           </p>
         ) : (
           <>
@@ -127,24 +131,28 @@ export function CompareDialog({
                   aria-hidden="true"
                 />
                 <p className="text-2xs text-signal-warn">
-                  这两次扫描的目标不同（
-                  <span className="mono-ui">{data.a.target}</span> 与{' '}
-                  <span className="mono-ui">{data.b.target}</span>）—— 下面的「新增 / 消失」
-                  是按漏洞标题比出来的，跨目标时通常不能当作"问题变多 / 已修好"的证据。
+                  <T k="scans2.compare.diffTargetsPrefix" fallback="这两次扫描的目标不同（" />
+                  <span className="mono-ui">{data.a.target}</span>{' '}
+                  <T k="scans2.compare.diffTargetsMid" fallback=" 与 " />{' '}
+                  <span className="mono-ui">{data.b.target}</span>
+                  <T
+                    k="scans2.compare.diffTargetsSuffix"
+                    fallback='）—— 下面的「新增 / 消失」是按漏洞标题比出来的，跨目标时通常不能当作"问题变多 / 已修好"的证据。'
+                  />
                 </p>
               </div>
             )}
 
             <div className="mt-panel grid gap-panel sm:grid-cols-2">
               <Side
-                title="新增"
-                hint="这次才出现 —— 可能是新引入的问题"
+                title={t('scans2.compare.added', undefined, '新增')}
+                hint={t('scans2.compare.addedHint', undefined, '这次才出现 —— 可能是新引入的问题')}
                 items={data.onlyInB}
                 tone="risk"
               />
               <Side
-                title="消失"
-                hint="上次有、这次没有 —— 可能是已经修好了"
+                title={t('scans2.compare.removed', undefined, '消失')}
+                hint={t('scans2.compare.removedHint', undefined, '上次有、这次没有 —— 可能是已经修好了')}
                 items={data.onlyInA}
                 tone="ok"
               />
@@ -153,7 +161,7 @@ export function CompareDialog({
             {data.common.length > 0 && (
               <div className="mt-panel">
                 <h3 className="text-xs font-medium text-ink-muted">
-                  两次都有（{data.common.length}）
+                  {t('scans2.compare.common', { n: data.common.length }, '两次都有（{n}）')}
                 </h3>
                 <ul className="mt-1 flex flex-col gap-0.5">
                   {data.common.map((item) => (

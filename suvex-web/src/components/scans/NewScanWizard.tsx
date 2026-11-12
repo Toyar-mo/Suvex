@@ -10,8 +10,10 @@ import {
 import { useProviders } from '@/data/providers'
 import { createScan, stageScanAttachments, type ScanAttachment } from '@/data/scans-store'
 import { showToast } from '@/data/toast-store'
+import { useI18n } from '@/i18n'
 import { errorMessage } from '@/lib/api'
 import { ArrowLeft, ArrowRight, Check, X } from 'lucide-react'
+import { T } from '@/i18n/T'
 import { useMemo, useState } from 'react'
 import { LaunchButton, StepIndicator } from './WizardChrome'
 import { BriefStep } from './BriefStep'
@@ -63,7 +65,12 @@ export interface NewScanWizardProps {
 }
 
 export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizardProps) {
+  const { t } = useI18n()
   const providers = useProviders()
+  const steps = STEPS.map((step) => ({
+    ...step,
+    label: t(`scans2.step.${step.id}`, undefined, step.label),
+  }))
 
   const [stepIndex, setStepIndex] = useState(0)
   const [completed, setCompleted] = useState<Set<number>>(new Set())
@@ -301,13 +308,19 @@ export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizard
       400，而那条报错里不会说"去哪补附件"。
     */
     if (kind === 'artifact' && staged.files.length === 0) {
-      return '这类题目必须上传题目附件，请回到「任务背景」一步上传'
+      return t(
+        'scans2.launch.needAttachment',
+        undefined,
+        '这类题目必须上传题目附件，请回到「任务背景」一步上传',
+      )
     }
-    if (!validateTarget(kind, target).ok) return '目标地址无效，请返回第一步修正'
-    if (skills.size === 0) return '未选择任何检测能力'
-    if (!selectedProvider?.configured) return '未选择可用的模型'
+    if (!validateTarget(kind, target).ok)
+      return t('scans2.launch.invalidTarget', undefined, '目标地址无效，请返回第一步修正')
+    if (skills.size === 0) return t('scans2.launch.noSkills', undefined, '未选择任何检测能力')
+    if (!selectedProvider?.configured)
+      return t('scans2.launch.noProvider', undefined, '未选择可用的模型')
     // 契约 §5.5 指定的措辞，逐字使用
-    if (!authorized) return '请先确认你有权测试该目标'
+    if (!authorized) return t('scans2.launch.needAuthorization', undefined, '请先确认你有权测试该目标')
     return null
   })()
 
@@ -320,12 +333,12 @@ export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizard
       {/* ── 头部：标题 + 进度 + 关闭 ── */}
       <div className="flex flex-wrap items-center gap-panel border-b border-line px-panel py-3">
         <h2 id="wizard-title" className="text-sm font-medium text-ink">
-          新建扫描
+          <T k="scans2.wizard.title" fallback="新建扫描" />
         </h2>
 
         <div className="min-w-0 flex-1">
           <StepIndicator
-            steps={STEPS}
+            steps={steps}
             currentIndex={stepIndex}
             completed={completed}
             onJump={jumpTo}
@@ -335,7 +348,7 @@ export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizard
         <button
           type="button"
           onClick={onCancel}
-          aria-label="关闭"
+          aria-label={t('scans2.wizard.close', undefined, '关闭')}
           className="shrink-0 rounded-sm p-1.5 text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
         >
           <X size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -418,7 +431,9 @@ export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizard
           )}
         >
           <ArrowLeft size={14} strokeWidth={1.75} aria-hidden="true" />
-          {stepIndex === 0 ? '取消' : '上一步'}
+          {stepIndex === 0
+            ? t('scans2.wizard.cancel', undefined, '取消')
+            : t('scans2.wizard.back', undefined, '上一步')}
         </button>
 
         {stepIndex < STEPS.length - 1 ? (
@@ -452,7 +467,7 @@ export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizard
               'bg-accent text-canvas transition-ui duration-fast hover:bg-accent-strong',
             )}
           >
-            下一步
+            <T k="scans2.wizard.next" fallback="下一步" />
             <ArrowRight size={14} strokeWidth={1.75} aria-hidden="true" />
           </button>
         ) : (
@@ -479,7 +494,11 @@ export function NewScanWizard({ onDone, onCancel, initialTarget }: NewScanWizard
 
       {/* 每一步都提示当前进度，读屏器也能感知 */}
       <p className="sr-only" aria-live="polite">
-        第 {stepIndex + 1} 步，共 {STEPS.length} 步：{STEPS[stepIndex].label}
+        {t(
+          'scans2.wizard.progress',
+          { current: stepIndex + 1, total: steps.length, step: steps[stepIndex].label },
+          '第 {current} 步，共 {total} 步：{step}',
+        )}
       </p>
     </div>
   )

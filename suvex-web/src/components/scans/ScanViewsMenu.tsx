@@ -111,8 +111,12 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
         )}
         title={
           activeView
-            ? `当前视图：${activeView.name}（${describeViewQuery(activeView.query)}）`
-            : '把当前筛选条件存下来，下次一键套用'
+            ? t(
+                'scans2.views.activeTitle',
+                { name: activeView.name, desc: describeViewQuery(activeView.query) },
+                '当前视图：{name}（{desc}）',
+              )
+            : t('scans2.views.saveHint', undefined, '把当前筛选条件存下来，下次一键套用')
         }
       >
         <Bookmark size={12} strokeWidth={1.75} aria-hidden="true" />
@@ -136,7 +140,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
               htmlFor="scan-view-name"
               className="mb-1 block text-2xs text-ink-faint"
             >
-              保存当前筛选
+              <T k="scans2.views.saveCurrent" fallback="保存当前筛选" />
             </label>
             <div className="flex items-center gap-1.5">
               <input
@@ -151,7 +155,11 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
                   void handleSave()
                 }}
                 maxLength={MAX_SCAN_VIEW_NAME}
-                placeholder={hasFilter ? '例如：内网高危未修' : '先设置筛选条件'}
+                placeholder={
+                  hasFilter
+                    ? t('scans2.views.namePlaceholder', undefined, '例如：内网高危未修')
+                    : t('scans2.views.filterFirst', undefined, '先设置筛选条件')
+                }
                 disabled={!hasFilter}
                 className={cn(
                   'h-7 min-w-0 flex-1 rounded-sm border border-line bg-surface px-2 text-xs text-ink',
@@ -183,7 +191,7 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
                 )}
               >
                 <Plus size={11} strokeWidth={2} aria-hidden="true" />
-                保存
+                <T k="scans2.views.save" fallback="保存" />
               </button>
             </div>
 
@@ -196,7 +204,11 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
             )}
             {hasFilter && atLimit && (
               <p className="mt-1 text-2xs text-signal-warn">
-                最多 {MAX_SCAN_VIEWS} 个视图，先删掉不用的。
+                {t(
+                  'scans2.views.limit',
+                  { n: MAX_SCAN_VIEWS },
+                  '最多 {n} 个视图，先删掉不用的。',
+                )}
               </p>
             )}
             {hasFilter && duplicate && (
@@ -213,18 +225,21 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
               <p className="px-2 py-3 text-2xs text-ink-faint"><T k="scans.views.loading"/></p>
             ) : status === 'error' ? (
               <div className="px-2 py-3">
-                <p className="text-2xs text-signal-risk">{error?.message ?? '加载失败'}</p>
+                <p className="text-2xs text-signal-risk">{error?.message ?? t('scans2.views.loadFailed', undefined, '加载失败')}</p>
                 <button
                   type="button"
                   onClick={() => void loadScanViews()}
                   className="mt-1 text-2xs text-accent-strong hover:underline"
                 >
-                  重试
+                  <T k="scans2.views.retry" fallback="重试" />
                 </button>
               </div>
             ) : views.length === 0 ? (
               <p className="px-2 py-3 text-2xs text-ink-faint">
-                还没有保存的视图。设好筛选条件后在上面起个名字即可。
+                <T
+                  k="scans2.views.empty"
+                  fallback="还没有保存的视图。设好筛选条件后在上面起个名字即可。"
+                />
               </p>
             ) : (
               views.map((view) => {
@@ -269,8 +284,8 @@ export default function ScanViewsMenu({ currentQuery, onApply }: Props) {
                       type="button"
                       onClick={() => void removeScanView(view.id)}
                       disabled={saving}
-                      aria-label={`删除视图 ${view.name}`}
-                      title="删除这个视图（不影响扫描数据）"
+                      aria-label={t('scans2.views.remove', { name: view.name }, '删除视图 {name}')}
+                      title={t('scans2.views.removeTitle', undefined, '删除这个视图（不影响扫描数据）')}
                       className={cn(
                         'inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm',
                         'text-ink-ghost transition-ui duration-fast',

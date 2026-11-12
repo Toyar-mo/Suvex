@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import { api, errorMessage } from '@/lib/api'
 import { EVENT_TYPE_LABEL, type ActivityEvent } from '@/data/activity'
 import { useEffect, useState } from 'react'
@@ -35,6 +36,7 @@ export function ChallengeProcess({
   /** 题还在解 → 持续刷新；终态只拉一次 */
   running: boolean
 }) {
+  const { t } = useI18n()
   const [events, setEvents] = useState<ActivityEvent[]>([])
   const [error, setError] = useState<string | null>(null)
   /**
@@ -92,7 +94,7 @@ export function ChallengeProcess({
   }
 
   return (
-    <section aria-label="解题过程" className="flex flex-col gap-1.5">
+    <section aria-label={t('chat.challengeProcessAria', undefined, '解题过程')} className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1.5 text-2xs text-ink-faint">
         <Terminal size={11} strokeWidth={2} aria-hidden="true" />
         {/* ★ 不在跑时**必须**说清这是旧记录：事件是绑定在这道题上一次

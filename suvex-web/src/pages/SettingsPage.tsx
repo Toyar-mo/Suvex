@@ -84,6 +84,7 @@ const SECTIONS = [
 export function SettingsPage() {
   const { sandbox, notices, tokens, status, error } = useSettings()
   const { user } = useAuth()
+  const { t } = useI18n()
 
   /*
     进页面拉一次真实设置（任务 7）。
@@ -137,7 +138,7 @@ export function SettingsPage() {
               <SkeletonRows rows={3} rowClassName="h-24" />
             ) : status === 'error' ? (
               <ErrorState
-                title="设置加载失败"
+                title={t('settings2.loadFailed', undefined, '设置加载失败')}
                 /*
                 ★ 直接传 store 里的 `ApiError`，**不要再包一层**。
                   早先这里写的是 `new ApiError('SETTINGS_LOAD_FAILED', error, 0)`
@@ -210,9 +211,10 @@ export function SettingsPage() {
  *   能被当场验证的承诺才是承诺。
  */
 function TrustNote() {
+  const { t } = useI18n()
   return (
     <section
-      aria-label="凭据处理方式"
+      aria-label={t('settings2.trust.aria', undefined, '凭据处理方式')}
       className="mb-panel flex items-start gap-3 rounded-md border border-line bg-surface px-4 py-3"
     >
       <span className="bg-signal-ok/12 flex h-7 w-7 shrink-0 items-center justify-center rounded-pill text-signal-ok">
@@ -229,20 +231,20 @@ function TrustNote() {
           答案还在，代价从 110px 降到 44px。
         */}
         <p className="text-xs text-ink">
-          凭据只提交给服务端<span className="text-ink-muted"><T k="settings.security.muted"/></span>
+          {t('settings2.trust.lead', undefined, '凭据只提交给服务端')}<span className="text-ink-muted"><T k="settings.security.muted"/></span>
         </p>
         <p className="text-2xs text-ink-faint">
-          保存后输入框始终为空 · 明文只在你按住时显示，20 秒后自动隐藏 · 剪贴板 2 秒后清空
+          {t('settings2.trust.summary', undefined, '保存后输入框始终为空 · 明文只在你按住时显示，20 秒后自动隐藏 · 剪贴板 2 秒后清空')}
         </p>
 
         <details className="group mt-0.5">
           <summary className="w-fit cursor-pointer list-none text-2xs text-ink-faint underline-offset-2 hover:text-ink hover:underline">
-            这些承诺在这里怎么兑现
+            {t('settings2.trust.details', undefined, '这些承诺在这里怎么兑现')}
           </summary>
           <ul className="mt-1.5 flex flex-col gap-1 text-2xs text-ink-muted">
             <li><T k="settings.security.noRefill"/></li>
             <li>
-              密钥输入时即为遮蔽状态；点眼睛图标可看明文，明文 20 秒后自动隐藏，点到别处立即隐藏。
+              {t('settings2.trust.masked', undefined, '密钥输入时即为遮蔽状态；点眼睛图标可看明文，明文 20 秒后自动隐藏，点到别处立即隐藏。')}
             </li>
             <li><T k="settings.security.clipboard"/></li>
             <li><T k="settings.security.noLeak"/></li>
@@ -339,7 +341,7 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
 
   return (
     <nav
-      aria-label="设置分区"
+      aria-label={t('settings2.nav.aria', undefined, '设置分区')}
       className={cn(
         // 窄屏：顶部横向条（与改动前一致）
         'sticky top-[52px] z-10 -mx-gutter border-y border-line bg-canvas/85 px-gutter backdrop-blur-sm',
@@ -364,7 +366,7 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
                     : 'text-ink-muted hover:bg-surface-raised/60 hover:text-ink lg:border-transparent lg:hover:bg-transparent lg:hover:text-ink',
                 )}
               >
-                {t(`settings.section.${section.id}`, undefined, section.label)}
+                {t(`settings2.section.${section.id}`, undefined, section.label)}
               </a>
             </li>
           )
@@ -401,23 +403,22 @@ function SectionNav({ sectionsReady }: { sectionsReady: boolean }) {
  *   **不伪造不存在的持久化能力，也不否认已经存在的。**
  */
 function DataBoundaryNote() {
+  const { t } = useI18n()
   return (
     <div className="mt-bay flex flex-col gap-1 rounded-sm border border-dashed border-line-strong p-3 text-2xs text-ink-faint">
       <p className="flex items-start gap-1.5">
         <Database size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
           <span className="text-ink-muted"><T k="settings.security.backend"/></span>
-          模型服务、沙箱与执行、通知规则与渠道、扫描保留、访问令牌与登录口令
-          都会真正写到后端并持久化，刷新、换浏览器都还在。
+          {t('settings2.dataBoundary.body', undefined, '模型服务、沙箱与执行、通知规则与渠道、扫描保留、访问令牌与登录口令都会真正写到后端并持久化，刷新、换浏览器都还在。')}
         </span>
       </p>
 
       <p className="flex items-start gap-1.5">
         <Lock size={12} strokeWidth={1.75} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>
-          密钥与令牌<span className="text-ink-muted"><T k="settings.security.noStorage"/></span>
-          （localStorage / Cookie 里都没有）。浏览器存储同源的任何脚本都能读，
-          凭据只应提交给服务端保存。
+          {t('settings2.dataBoundary.secrets', undefined, '密钥与令牌')}<span className="text-ink-muted"><T k="settings.security.noStorage"/></span>
+          {t('settings2.dataBoundary.storage', undefined, '（localStorage / Cookie 里都没有）。浏览器存储同源的任何脚本都能读，凭据只应提交给服务端保存。')}
         </span>
       </p>
     </div>

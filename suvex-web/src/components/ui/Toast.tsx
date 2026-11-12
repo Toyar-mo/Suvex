@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { dismissToast, useToasts, type Toast } from '@/data/toast-store'
 import { AlertTriangle, Check, Info, Undo2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -17,6 +18,7 @@ const TONE_STYLE = {
 } as const
 
 function ToastRow({ toast }: { toast: Toast }) {
+  const { t } = useI18n()
   const [paused, setPaused] = useState(false)
   const Icon = TONE_ICON[toast.tone]
   const style = TONE_STYLE[toast.tone]
@@ -75,7 +77,7 @@ function ToastRow({ toast }: { toast: Toast }) {
       <button
         type="button"
         onClick={() => dismissToast(toast.id)}
-        aria-label="关闭提示"
+        aria-label={t('ui.closeToast', undefined, '关闭提示')}
         className="shrink-0 rounded-sm p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink"
       >
         <X size={12} strokeWidth={2} aria-hidden="true" />

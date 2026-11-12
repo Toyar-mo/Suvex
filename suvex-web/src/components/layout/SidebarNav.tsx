@@ -91,7 +91,7 @@ export function SidebarNav({ collapsed, onNavigate }: SidebarNavProps) {
 
   return (
     <nav
-      aria-label="主导航"
+      aria-label={t('layout2.nav.main', undefined, '主导航')}
       data-sidebar-nav=""
       className="flex min-h-0 flex-col gap-0.5 overflow-y-auto px-2"
     >

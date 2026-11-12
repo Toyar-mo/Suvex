@@ -16,6 +16,10 @@ import { ja_chunk5 } from './ja-chunk5'
 import { ja_chunk6 } from './ja-chunk6'
 import { ja_chunk7 } from './ja-chunk7'
 import { ja_chunk8 } from './ja-chunk8'
+import { hardcoded_a } from './hardcoded-a'
+import { hardcoded_b } from './hardcoded-b'
+import { hardcoded_c } from './hardcoded-c'
+import { hardcoded_d } from './hardcoded-d'
 
 
 
@@ -35,4 +39,4 @@ const jaExtra: ExtraLocaleMap = {
   de: {},
 }
 
-export const EXTRAS: ExtraLocaleMap[] = [settings_rest, reports, activity_tools, inventory, jaExtra]
+export const EXTRAS: ExtraLocaleMap[] = [settings_rest, reports, activity_tools, inventory, jaExtra, hardcoded_a, hardcoded_b, hardcoded_c, hardcoded_d]

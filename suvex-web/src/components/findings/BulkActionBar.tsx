@@ -1,4 +1,6 @@
 import { cn } from '@/lib/cn'
+import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import {
   FINDING_STATUS_LABEL,
   FINDING_STATUS_ORDER,
@@ -75,6 +77,8 @@ export function BulkActionBar({
   inTrash = false,
   onClear,
 }: BulkActionBarProps) {
+  const { t } = useI18n()
+
   if (selected.length === 0) return null
 
   const count = selected.length
@@ -87,7 +91,7 @@ export function BulkActionBar({
   return (
     <div
       role="region"
-      aria-label="批量操作"
+      aria-label={t('findings2.bulk.region', undefined, '批量操作')}
       className={cn(
         'animate-rise-in',
         /*
@@ -116,10 +120,12 @@ export function BulkActionBar({
     >
       <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-tight">
         <span className="tabular text-sm text-ink" data-numeric>
-          已选 {count} 条
+          {t('findings2.bulk.selected', { count }, `已选 ${count} 条`)}
         </span>
         {pendingCount > 0 && (
-          <span className="text-2xs text-signal-warn">其中 {pendingCount} 条待确认</span>
+          <span className="text-2xs text-signal-warn">
+            {t('findings2.bulk.pending', { n: pendingCount }, `其中 ${pendingCount} 条待确认`)}
+          </span>
         )}
 
         <div className="flex-1" />
@@ -144,10 +150,10 @@ export function BulkActionBar({
                 'transition-ui duration-fast',
                 'border border-line text-ink-muted hover:border-accent/50 hover:bg-accent-wash hover:text-ink',
               )}
-              title="把这些漏洞恢复到默认列表"
+              title={t('findings2.bulk.restoreTitle', undefined, '把这些漏洞恢复到默认列表')}
             >
               <ArchiveRestore size={13} strokeWidth={2} aria-hidden="true" />
-              恢复
+              <T k="findings2.bulk.restore" fallback="恢复" />
             </button>
 
             {/*
@@ -162,10 +168,14 @@ export function BulkActionBar({
                 'transition-ui duration-fast',
                 'border border-signal-risk/40 text-signal-risk hover:bg-signal-risk/10',
               )}
-              title="永久删除，不可撤销。被报告引用的条目会被拒绝。"
+              title={t(
+                'findings2.bulk.purgeTitle',
+                undefined,
+                '永久删除，不可撤销。被报告引用的条目会被拒绝。',
+              )}
             >
               <Trash2 size={13} strokeWidth={2} aria-hidden="true" />
-              永久删除
+              <T k="findings2.bulk.purge" fallback="永久删除" />
             </button>
           </>
         ) : (
@@ -178,10 +188,14 @@ export function BulkActionBar({
                 'transition-ui duration-fast',
                 'border border-line text-ink-muted hover:border-accent/50 hover:bg-accent-wash hover:text-ink',
               )}
-              title="带着选中的这些漏洞去报告页（在那边可以预览、改标题、下载）"
+              title={t(
+                'findings2.bulk.reportTitle',
+                undefined,
+                '带着选中的这些漏洞去报告页（在那边可以预览、改标题、下载）',
+              )}
             >
               <FileText size={13} strokeWidth={2} aria-hidden="true" />
-              生成报告
+              <T k="findings2.bulk.report" fallback="生成报告" />
             </button>
 
             {/*
@@ -204,7 +218,7 @@ export function BulkActionBar({
               )}
             >
               <UserCheck size={13} strokeWidth={2} aria-hidden="true" />
-              指派处理人
+              <T k="findings2.bulk.assign" fallback="指派处理人" />
             </button>
 
             {/* 竖线：左边是"归谁管"，右边是"什么状态" —— 两类不是一回事 */}
@@ -219,7 +233,15 @@ export function BulkActionBar({
                   onClick={() => onApply(status)}
                   disabled={disabled}
                   // 禁用的原因放在 title 里，而不是让用户猜
-                  title={disabled ? `选中的条目都已是「${FINDING_STATUS_LABEL[status]}」` : undefined}
+                  title={
+                    disabled
+                      ? t(
+                          'findings2.bulk.alreadyStatus',
+                          { status: FINDING_STATUS_LABEL[status] },
+                          `选中的条目都已是「${FINDING_STATUS_LABEL[status]}」`,
+                        )
+                      : undefined
+                  }
                   className={cn(
                     'press inline-flex h-9 items-center rounded-sm px-3 text-xs font-medium',
                     'transition-ui duration-fast',
@@ -232,7 +254,7 @@ export function BulkActionBar({
                       : 'border border-line text-ink-muted hover:border-accent/50 hover:bg-accent-wash hover:text-ink',
                   )}
                 >
-                  {FINDING_TRANSITION_LABEL[status]}
+                  {t(`findings2.transition.${status}`, undefined, FINDING_TRANSITION_LABEL[status])}
                 </button>
               )
             })}
@@ -252,10 +274,10 @@ export function BulkActionBar({
                 'transition-ui duration-fast',
                 'border border-line text-ink-muted hover:border-signal-warn/50 hover:bg-signal-warn/10 hover:text-ink',
               )}
-              title="移入回收站（可以再恢复）"
+              title={t('findings2.bulk.deleteTitle', undefined, '移入回收站（可以再恢复）')}
             >
               <Trash2 size={13} strokeWidth={2} aria-hidden="true" />
-              删除
+              <T k="findings2.bulk.delete" fallback="删除" />
             </button>
           </>
         )}
@@ -263,11 +285,11 @@ export function BulkActionBar({
         <button
           type="button"
           onClick={onClear}
-          aria-label="清除选择"
+          aria-label={t('findings2.bulk.clearAria', undefined, '清除选择')}
           className="ml-1 inline-flex h-9 items-center gap-1 rounded-sm px-2 text-xs text-ink-faint transition-ui duration-fast hover:text-ink"
         >
           <X size={13} strokeWidth={2} aria-hidden="true" />
-          取消选择
+          <T k="findings2.bulk.clear" fallback="取消选择" />
         </button>
       </div>
     </div>

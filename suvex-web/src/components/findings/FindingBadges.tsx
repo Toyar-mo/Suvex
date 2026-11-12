@@ -34,14 +34,16 @@ export interface SeverityBadgeProps {
 }
 
 export function SeverityBadge({ severity, variant = 'text', className }: SeverityBadgeProps) {
+  const { t } = useI18n()
   const meta = SEVERITY_META[severity]
+  const label = t(`severity.${severity}`, undefined, meta.label)
 
   if (variant === 'dot') {
     return (
       <span
         className={cn('inline-block h-2 w-2 shrink-0 rounded-pill', meta.bg, className)}
-        title={meta.label}
-        aria-label={meta.label}
+        title={label}
+        aria-label={label}
         role="img"
       />
     )
@@ -56,10 +58,10 @@ export function SeverityBadge({ severity, variant = 'text', className }: Severit
         className,
       )}
       // title 给完整定义 —— 界面上只放级别名，但悬停能看到"这意味着什么"
-      title={meta.definition}
+      title={t(`severity.${severity}.definition`, undefined, meta.definition)}
     >
       <span aria-hidden="true" className={cn('h-1.5 w-1.5 rounded-pill', meta.bg)} />
-      {meta.label}
+      {label}
     </span>
   )
 }
@@ -180,9 +182,10 @@ export interface VerificationBadgeProps {
 }
 
 export function VerificationBadge({ verification, className }: VerificationBadgeProps) {
+  const { t } = useI18n()
   return (
     <span className={cn('shrink-0 text-2xs', VERIFICATION_CLASS[verification], className)}>
-      {VERIFICATION_LABEL[verification]}
+      {t(`findings2.verification.${verification}`, undefined, VERIFICATION_LABEL[verification])}
     </span>
   )
 }

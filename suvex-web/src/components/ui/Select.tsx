@@ -1,5 +1,6 @@
 import { Check, ChevronDown } from 'lucide-react'
 import { T } from '@/i18n/T'
+import { useI18n } from '@/i18n'
 import {
   useCallback,
   useEffect,
@@ -65,13 +66,15 @@ export function Select<T extends string | number>({
   id,
   ariaLabel,
   disabled,
-  placeholder = '无可选项',
+  placeholder,
   size = 'md',
   className,
   menuClassName,
   title,
   testId,
 }: SelectProps<T>) {
+  const { t } = useI18n()
+  const placeholderText = placeholder ?? t('ui2.select.empty', undefined, '无可选项')
   const [open, setOpen] = useState(false)
   const [active, setActive] = useState(0)
   const [position, setPosition] = useState({ left: 0, top: 0, width: 0 })
@@ -213,7 +216,7 @@ export function Select<T extends string | number>({
         )}
       >
         <span className={cn('truncate', current ? 'text-ink' : 'text-ink-faint')}>
-          {current?.label ?? placeholder}
+          {current?.label ?? placeholderText}
         </span>
         <ChevronDown
           size={12}

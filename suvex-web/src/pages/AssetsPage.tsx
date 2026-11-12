@@ -76,31 +76,37 @@ function compareAssets(a: Asset, b: Asset, now: number = Date.now()): number {
 }
 
 /** 「3 天前」「刚刚」。 */
-function relativeTime(iso: string | null, now: number): string {
-  if (iso === null) return '从未'
+type Translate = (key: string, vars?: Record<string, string | number>, fallback?: string) => string
+
+function relativeTime(iso: string | null, now: number, t: Translate): string {
+  if (iso === null) return t('assets2.time.never', undefined, '从未')
   const ts = new Date(iso).getTime()
   if (!Number.isFinite(ts)) return '—'
   const diff = now - ts
-  if (diff < 0) return '刚刚'
+  if (diff < 0) return t('assets2.time.justNow', undefined, '刚刚')
   const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟前`
+  if (minutes < 1) return t('assets2.time.justNow', undefined, '刚刚')
+  if (minutes < 60) return t('assets2.time.minutes', { n: minutes }, `${minutes} 分钟前`)
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t('assets2.time.hours', { n: hours }, `${hours} 小时前`)
   const days = Math.floor(hours / 24)
-  if (days < 30) return `${days} 天前`
+  if (days < 30) return t('assets2.time.days', { n: days }, `${days} 天前`)
   const months = Math.floor(days / 30)
-  if (months < 12) return `${months} 个月前`
-  return `${Math.floor(months / 12)} 年前`
+  if (months < 12) return t('assets2.time.months', { n: months }, `${months} 个月前`)
+  return t('assets2.time.years', { n: Math.floor(months / 12) }, `${Math.floor(months / 12)} 年前`)
 }
 
 function HealthBadge({ health }: { health: AssetHealth }) {
+  const { t } = useI18n()
   const meta = ASSET_HEALTH_META[health]
   return (
     <span className="inline-flex items-center gap-tight whitespace-nowrap text-xs">
       <span className={cn('h-1.5 w-1.5 shrink-0 rounded-pill', meta.dot)} aria-hidden="true" />
-      <span className={meta.className} title={meta.hint}>
-        {meta.label}
+      <span
+        className={meta.className}
+        title={t(`assets2.health.${health}.hint`, undefined, meta.hint)}
+      >
+        {t(`assets2.health.${health}.label`, undefined, meta.label)}
       </span>
     </span>
   )
@@ -173,6 +179,7 @@ const HostRow = memo(function HostRow({
   onToggle: (host: string) => void
   onOpenCoverage: (target: string) => void
 }) {
+  const { t } = useI18n()
   const now = nowMinute * 60_000
   return (
     <>
@@ -212,8 +219,8 @@ const HostRow = memo(function HostRow({
             {host.openCritical + host.openHigh}
           </span>
         </td>
-        <td className="px-panel py-2.5 text-xs text-ink-muted" title={host.lastCompletedAt ?? '从未跑完'}>
-          {relativeTime(host.lastCompletedAt, now)}
+        <td className="px-panel py-2.5 text-xs text-ink-muted" title={host.lastCompletedAt ?? t('assets2.neverCompleted', undefined, '从未跑完')}>
+          {relativeTime(host.lastCompletedAt, now, t)}
         </td>
       </tr>
       {expanded && (
@@ -238,7 +245,7 @@ const HostRow = memo(function HostRow({
                     </Link>
                     <HealthBadge health={health} />
                     <span className="w-16 text-right tabular-nums text-ink-muted">
-                      未处置 {asset.openFindingCount}
+                      {t('assets2.row.open', { n: asset.openFindingCount }, `未处置 ${asset.openFindingCount}`)}
                     </span>
                     <span
                       className={cn(
@@ -246,18 +253,18 @@ const HostRow = memo(function HostRow({
                         asset.openCritical + asset.openHigh > 0 ? 'text-signal-risk' : 'text-ink-muted',
                       )}
                     >
-                      高危 {asset.openCritical + asset.openHigh}
+                      {t('assets2.row.high', { n: asset.openCritical + asset.openHigh }, `高危 ${asset.openCritical + asset.openHigh}`)}
                     </span>
                     <span className="w-24 text-right text-ink-faint">
-                      {relativeTime(asset.lastCompletedAt, now)}
+                      {relativeTime(asset.lastCompletedAt, now, t)}
                     </span>
                     <button
                       type="button"
                       onClick={() => onOpenCoverage(asset.target)}
                       className="rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted transition-ui hover:border-line-strong hover:text-ink"
-                      aria-label={`查看 ${asset.target} 的覆盖度与事实图`}
+                      aria-label={t('assets2.coverage.viewAria', { target: asset.target }, `查看 ${asset.target} 的覆盖度与事实图`)}
                     >
-                      覆盖度
+                      {t('assets.coverage')}
                     </button>
                   </div>
                 )
@@ -279,6 +286,7 @@ const AssetRow = memo(function AssetRow({
   nowMinute: number
   onOpenCoverage: (target: string) => void
 }) {
+  const { t } = useI18n()
   const now = nowMinute * 60_000
   const health = assetHealth(asset, now)
   return (
@@ -295,9 +303,9 @@ const AssetRow = memo(function AssetRow({
             type="button"
             onClick={() => onOpenCoverage(asset.target)}
             className="rounded-xs border border-line px-1.5 py-0.5 text-2xs text-ink-muted hover:border-line-strong hover:text-ink"
-            aria-label={`查看 ${asset.target} 的覆盖度与事实图`}
+            aria-label={t('assets2.coverage.viewAria', { target: asset.target }, `查看 ${asset.target} 的覆盖度与事实图`)}
           >
-            覆盖度
+            {t('assets.coverage')}
           </button>
         </div>
       </td>
@@ -317,14 +325,14 @@ const AssetRow = memo(function AssetRow({
           {asset.openCritical + asset.openHigh}
         </span>
       </td>
-      <td className="px-panel py-2 text-ink-muted" title={asset.lastScanAt ?? '从未扫描'}>
-        {relativeTime(asset.lastScanAt, now)}
+      <td className="px-panel py-2 text-ink-muted" title={asset.lastScanAt ?? t('assets2.neverScanned', undefined, '从未扫描')}>
+        {relativeTime(asset.lastScanAt, now, t)}
         {asset.consecutiveFailures > 0 && (
-          <span className="ml-1 text-xs text-signal-risk">连续失败 {asset.consecutiveFailures} 次</span>
+          <span className="ml-1 text-xs text-signal-risk">{t('assets2.row.failing', { n: asset.consecutiveFailures }, `连续失败 ${asset.consecutiveFailures} 次`)}</span>
         )}
       </td>
-      <td className="px-panel py-2 text-ink-muted" title={asset.lastCompletedAt ?? '从未跑完'}>
-        {relativeTime(asset.lastCompletedAt, now)}
+      <td className="px-panel py-2 text-ink-muted" title={asset.lastCompletedAt ?? t('assets2.neverCompleted', undefined, '从未跑完')}>
+        {relativeTime(asset.lastCompletedAt, now, t)}
       </td>
       <td className="px-panel py-2 text-right tabular-nums text-ink-muted">{asset.scanCount}</td>
     </tr>
@@ -421,7 +429,7 @@ export default function AssetsPage() {
       <>
         <PageHeader navId="assets" />
         <div className="px-gutter py-bay">
-          <ErrorState error={state.error} onRetry={refresh} title="资产列表加载失败" />
+          <ErrorState error={state.error} onRetry={refresh} title={t('assets2.error.load', undefined, '资产列表加载失败')} />
         </div>
       </>
     )
@@ -444,7 +452,11 @@ export default function AssetsPage() {
             <Stat
               label={t('assets.stats.hosts')}
               value={hostCount}
-              hint={state.truncated ? '列表被截断，这里只统计返回部分' : '按 host 聚合'}
+              hint={
+                state.truncated
+                  ? t('assets2.list.truncatedHint', undefined, '列表被截断，这里只统计返回部分')
+                  : t('assets2.list.groupedByHost', undefined, '按 host 聚合')
+              }
             />
             <Stat label={t('assets.stats.exposure')} value={summary.targetCount} hint={t('assets.stats.exposureHint')} />
             <Stat
@@ -456,7 +468,11 @@ export default function AssetsPage() {
             <Stat
               label={t('assets.stats.unverified')}
               value={neverVerified}
-              hint={`从未扫描 ${summary.neverScanned} · 从未跑完 ${summary.neverCompleted}`}
+              hint={t(
+                'assets2.stats.unverifiedHint',
+                { neverScanned: summary.neverScanned, neverCompleted: summary.neverCompleted },
+                `从未扫描 ${summary.neverScanned} · 从未跑完 ${summary.neverCompleted}`,
+              )}
               tone={neverVerified > 0 ? 'warn' : 'default'}
             />
             <Stat label={t('assets.stats.openFindings')} value={summary.openFindingCount} />
@@ -476,14 +492,14 @@ export default function AssetsPage() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={t('assets.search.placeholder')}
-              aria-label="按目标筛选资产"
+              aria-label={t('assets2.search.aria', undefined, '按目标筛选资产')}
               className="w-full rounded-sm border border-line bg-surface py-1.5 pl-8 pr-2.5 text-sm text-ink placeholder:text-ink-muted focus:border-accent focus:outline-none"
             />
           </div>
 
           <SegmentedControl
             size="sm"
-            ariaLabel="资产视图"
+            ariaLabel={t('assets2.view.aria', undefined, '资产视图')}
             value={view}
             onChange={setView}
             options={[
@@ -496,14 +512,14 @@ export default function AssetsPage() {
           <div className="flex flex-wrap gap-tight">
             {(
               [
-                ['all', '全部'],
-                ['never-completed', '从未跑完'],
-                ['failing', '连续失败'],
-                ['never-scanned', '从未扫描'],
-                ['stale', '结论陈旧'],
-                ['ok', '正常'],
+                ['all', 'assets2.filter.all', '全部'],
+                ['never-completed', 'assets2.neverCompleted', '从未跑完'],
+                ['failing', 'assets2.health.failing.label', '连续失败'],
+                ['never-scanned', 'assets2.neverScanned', '从未扫描'],
+                ['stale', 'assets2.health.stale.label', '结论陈旧'],
+                ['ok', 'assets2.health.ok.label', '正常'],
               ] as const
-            ).map(([value, label]) => (
+            ).map(([value, label, fallback]) => (
               <button
                 key={value}
                 type="button"
@@ -516,7 +532,7 @@ export default function AssetsPage() {
                     : 'border-line text-ink-muted hover:text-ink',
                 )}
               >
-                {label}
+                {t(label, undefined, fallback)}
               </button>
             ))}
           </div>
@@ -526,10 +542,10 @@ export default function AssetsPage() {
             size="sm"
             onClick={refresh}
             disabled={state.status === 'loading'}
-            title="重新拉取资产列表"
+            title={t('assets2.refresh.title', undefined, '重新拉取资产列表')}
           >
             <RefreshCw size={13} aria-hidden="true" />
-            刷新
+            {t('assets2.refresh', undefined, '刷新')}
           </Button>
         </div>
 
@@ -538,7 +554,11 @@ export default function AssetsPage() {
             role="status"
             className="mb-panel rounded-sm border border-line bg-surface px-3 py-2 text-xs text-signal-risk"
           >
-            刷新失败：{state.lastRefreshError.message}。仍显示上次数据。
+            {t(
+              'assets2.refreshFailed',
+              { message: state.lastRefreshError.message },
+              `刷新失败：${state.lastRefreshError.message}。仍显示上次数据。`,
+            )}
           </p>
         )}
 
@@ -547,21 +567,28 @@ export default function AssetsPage() {
             role="status"
             className="mb-panel rounded-sm border border-line bg-surface px-3 py-2 text-xs text-signal-warn"
           >
-            只显示了前 {state.items?.length ?? 0} 个目标，共 {state.total} 个。
-            统计数字覆盖全量，但列表是截断的。
+            {t(
+              'assets2.truncated',
+              { shown: state.items?.length ?? 0, total: state.total },
+              `只显示了前 ${state.items?.length ?? 0} 个目标，共 ${state.total} 个。统计数字覆盖全量，但列表是截断的。`,
+            )}
           </p>
         )}
 
         {/* ── 列表 ───────────────────────────────────────────── */}
-        <div role="tabpanel" aria-label="资产列表">
+        <div role="tabpanel" aria-label={t('assets2.list.aria', undefined, '资产列表')}>
         {visible === 0 ? (
           <EmptyState
             icon={Layers}
-            title={items.length === 0 ? '还没有任何目标' : '没有符合条件的资产'}
+            title={
+              items.length === 0
+                ? t('assets2.empty.none', undefined, '还没有任何目标')
+                : t('assets2.empty.noMatch', undefined, '没有符合条件的资产')
+            }
             description={
               items.length === 0
-                ? '发起第一次扫描后，这里会按主机聚合出现在的情况。'
-                : '换个关键词或切回「全部」看看。'
+                ? t('assets2.empty.noneDesc', undefined, '发起第一次扫描后，这里会按主机聚合出现在的情况。')
+                : t('assets2.empty.noMatchDesc', undefined, '换个关键词或切回「全部」看看。')
             }
           />
         ) : view === 'map' ? (
@@ -578,25 +605,25 @@ export default function AssetsPage() {
               <thead>
                 <tr className="border-b border-line bg-sunken text-left text-xs text-ink-muted">
                   <th scope="col" className="px-panel py-2 font-normal">
-                    主机
+                    {t('assets2.col.host', undefined, '主机')}
                   </th>
                   <th scope="col" className="px-panel py-2 font-normal">
-                    端口
+                    {t('assets2.col.ports', undefined, '端口')}
                   </th>
                   <th scope="col" className="px-panel py-2 text-right font-normal">
-                    暴露面
+                    {t('assets2.col.exposure', undefined, '暴露面')}
                   </th>
                   <th scope="col" className="px-panel py-2 font-normal">
-                    状态
+                    {t('assets2.col.status', undefined, '状态')}
                   </th>
                   <th scope="col" className="px-panel py-2 text-right font-normal">
-                    未处置
+                    {t('assets2.col.open', undefined, '未处置')}
                   </th>
                   <th scope="col" className="px-panel py-2 text-right font-normal">
-                    高危
+                    {t('assets2.col.high', undefined, '高危')}
                   </th>
                   <th scope="col" className="px-panel py-2 font-normal">
-                    最近结论
+                    {t('assets2.col.lastConclusion', undefined, '最近结论')}
                   </th>
                 </tr>
               </thead>
@@ -620,25 +647,25 @@ export default function AssetsPage() {
               <thead>
                 <tr className="border-b border-line bg-sunken text-left text-xs text-ink-muted">
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
-                    目标
+                    {t('assets2.col.target', undefined, '目标')}
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
-                    状态
+                    {t('assets2.col.status', undefined, '状态')}
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
-                    未处置
+                    {t('assets2.col.open', undefined, '未处置')}
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
-                    高危 / 中危+
+                    {t('assets2.col.highPlus', undefined, '高危 / 中危+')}
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
-                    上次扫描
+                    {t('assets2.col.lastScan', undefined, '上次扫描')}
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 font-normal">
-                    上次拿到结论
+                    {t('assets2.col.lastCompleted', undefined, '上次拿到结论')}
                   </th>
                   <th scope="col" className="whitespace-nowrap px-panel py-2 text-right font-normal">
-                    扫描次数
+                    {t('assets2.col.scanCount', undefined, '扫描次数')}
                   </th>
                 </tr>
               </thead>
@@ -660,8 +687,16 @@ export default function AssetsPage() {
         {visible > 0 && (
           <p className="mt-panel text-xs text-ink-muted">
             {view === 'host'
-              ? '按风险排序：带高危主机 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；展开主机看具体路径。'
-              : '按风险排序：带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；同档内越久没拿到结论越靠前。'}
+              ? t(
+                  'assets2.sort.host',
+                  undefined,
+                  '按风险排序：带高危主机 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；展开主机看具体路径。',
+                )
+              : t(
+                  'assets2.sort.target',
+                  undefined,
+                  '按风险排序：带开着的高危 → 从未跑完 → 连续失败 → 从未扫描 → 结论陈旧；同档内越久没拿到结论越靠前。',
+                )}
           </p>
         )}
       </div>

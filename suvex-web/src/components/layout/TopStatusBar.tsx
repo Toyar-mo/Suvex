@@ -74,7 +74,7 @@ export function TopStatusBar() {
           </span>
           {agents.queued > 0 && (
             <span className="tabular hidden text-xs text-ink-faint sm:inline" data-numeric>
-              · {agents.queued} 排队
+              <T k="layout2.queued" vars={{ n: agents.queued }} fallback={`· ${agents.queued} 排队`} />
             </span>
           )}
         </div>

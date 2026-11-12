@@ -69,13 +69,16 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
 
   const errors = useMemo(() => {
     return {
-      cpu: draft.cpuLimit < 1 ? 'CPU 至少 1 核' : null,
-      memory: draft.memoryLimitMb < 512 ? '内存至少 512 MB' : null,
+      cpu: draft.cpuLimit < 1 ? t('settings2.sandbox.err.cpu', undefined, 'CPU 至少 1 核') : null,
+      memory:
+        draft.memoryLimitMb < 512
+          ? t('settings2.sandbox.err.memory', undefined, '内存至少 512 MB')
+          : null,
       timeout:
         draft.timeoutMinutes < 1
-          ? '超时至少 1 分钟'
+          ? t('settings2.sandbox.err.timeoutMin', undefined, '超时至少 1 分钟')
           : draft.timeoutMinutes > 24 * 60
-            ? '超时不应超过 24 小时'
+            ? t('settings2.sandbox.err.timeoutMax', undefined, '超时不应超过 24 小时')
             : null,
       /*
         ⚠️ 下面两条区间与后端 `settings/service.py` 的常量**必须一致**。
@@ -87,21 +90,21 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
       */
       concurrent:
         draft.maxConcurrentScans < 1 || draft.maxConcurrentScans > 8
-          ? '并发应在 1-8 之间'
+          ? t('settings2.sandbox.err.concurrent', undefined, '并发应在 1-8 之间')
           : null,
       turns:
         draft.scanMaxTurns < 10 || draft.scanMaxTurns > 2000
-          ? '回合上限应在 10-2000 之间'
+          ? t('settings2.sandbox.err.turns', undefined, '回合上限应在 10-2000 之间')
           : null,
     }
-  }, [draft])
+  }, [draft, t])
 
   const hasError = Object.values(errors).some((e) => e !== null)
 
   const handleSave = async () => {
     setTouched(true)
     if (hasError) {
-      setSaveState({ kind: 'failed', error: '有配置项超出允许范围，请先修正' })
+      setSaveState({ kind: 'failed', error: t('settings2.sandbox.err.invalid', undefined, '有配置项超出允许范围，请先修正') })
       return
     }
     if (!dirty) {
@@ -133,7 +136,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
   return (
     <SettingsPanel
       id="sandbox"
-      title="沙箱与执行环境"
+      title={t('settings2.sandbox.title', undefined, '沙箱与执行环境')}
       description={t('settings.sandbox.desc')}
     >
       {/* ── 运行方式（说明性，不是实时容器状态） ── */}
@@ -162,7 +165,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <span className="text-xs text-ink"><T k="settings.sandbox.lifecycle"/></span>
           <span className="text-2xs text-ink-faint">
-            内核镜像 <span className="mono-ui">suvex-sandbox</span> 系列；下面的 CPU / 内存上限作用于这个临时容器。
+            {t('settings2.sandbox.lifecyclePrefix', undefined, '内核镜像 ')}<span className="mono-ui">suvex-sandbox</span>{t('settings2.sandbox.lifecycleSuffix', undefined, ' 系列；下面的 CPU / 内存上限作用于这个临时容器。')}
           </span>
         </div>
       </div>
@@ -188,7 +191,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               min={1}
               max={64}
               onChange={(v) => setDraft({ ...draft, cpuLimit: v })}
-              suffix="核"
+              suffix={t('settings2.sandbox.unitCore', undefined, '核')}
               error={touched ? errors.cpu : null}
             />
           </div>
@@ -239,7 +242,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               min={1}
               max={1440}
               onChange={(v) => setDraft({ ...draft, timeoutMinutes: v })}
-              suffix="分钟"
+              suffix={t('settings2.sandbox.unitMinute', undefined, '分钟')}
               error={touched ? errors.timeout : null}
             />
           </div>
@@ -263,8 +266,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               <div className="flex items-start gap-1.5 rounded-sm border border-signal-warn/40 bg-signal-warn/[0.06] p-2">
                 <TriangleAlert size={12} strokeWidth={2} className="mt-0.5 shrink-0 text-signal-warn" aria-hidden="true" />
                 <span className="text-2xs text-ink-muted">
-                  已开启。注意它<span className="text-ink"><T k="settings.sandbox.netTargets"/></span>：https 与 host:port 的扫描仍会联网。
-                  真正的出站边界在宿主机的 iptables DOCKER-USER 白名单。
+                  {t('settings2.sandbox.netWarnBefore', undefined, '已开启。注意它')}<span className="text-ink"><T k="settings.sandbox.netTargets"/></span>{t('settings2.sandbox.netWarnAfter', undefined, '：https 与 host:port 的扫描仍会联网。真正的出站边界在宿主机的 iptables DOCKER-USER 白名单。')}
                 </span>
               </div>
             )}
@@ -282,7 +284,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               <div className="flex items-start gap-1.5 rounded-sm border border-signal-risk/40 bg-signal-risk/[0.06] p-2">
                 <ShieldOff size={12} strokeWidth={2} className="mt-0.5 shrink-0 text-signal-risk" aria-hidden="true" />
                 <span className="text-2xs text-ink-muted">
-                  写入已放行。验证脚本可能修改宿主上的文件，仅在你确信目标代码可丢弃时开启。
+                  {t('settings2.sandbox.writeWarn', undefined, '写入已放行。验证脚本可能修改宿主上的文件，仅在你确信目标代码可丢弃时开启。')}
                 </span>
               </div>
             )}
@@ -301,9 +303,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <div className="flex flex-col gap-0.5">
           <span className="text-xs font-medium text-ink"><T k="settings.sandbox.exec"/></span>
           <span className="text-2xs text-ink-faint">
-            这三项<strong className="font-medium text-ink-muted"><T k="settings.sandbox.really"/></strong>：
-            并发几秒内生效；「扫描深度」决定回合的天花板（快速 40 / 标准 80 / 深度 150 轮），
-            「回合上限」在其下再收细 —— 两者取较小值；对之后新发起的扫描生效。都不需要重启服务。
+            {t('settings2.sandbox.execIntroBefore', undefined, '这三项')}<strong className="font-medium text-ink-muted"><T k="settings.sandbox.really"/></strong>{t('settings2.sandbox.execIntroAfter', undefined, '：并发几秒内生效；「扫描深度」决定回合的天花板（快速 40 / 标准 80 / 深度 150 轮），「回合上限」在其下再收细 —— 两者取较小值；对之后新发起的扫描生效。都不需要重启服务。')}
           </span>
         </div>
 
@@ -327,7 +327,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
                 min={1}
                 max={8}
                 onChange={(v) => setDraft({ ...draft, maxConcurrentScans: v })}
-                suffix="个"
+                suffix={t('settings2.sandbox.unitScans', undefined, '个')}
                 error={touched ? errors.concurrent : null}
               />
             </div>
@@ -346,13 +346,13 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               max={2000}
               step={10}
               onChange={(v) => setDraft({ ...draft, scanMaxTurns: v })}
-              suffix="轮"
+              suffix={t('settings2.sandbox.unitTurns', undefined, '轮')}
               error={touched ? errors.turns : null}
             />
           </Field>
         </div>
 
-        <Field label="扫描深度" htmlFor="sandbox-mode" help={SCAN_MODE_HINT[draft.scanMode]}>
+        <Field label={t('settings2.sandbox.scanDepth', undefined, '扫描深度')} htmlFor="sandbox-mode" help={SCAN_MODE_HINT[draft.scanMode]}>
           <div id="sandbox-mode" className="flex flex-wrap gap-1.5">
             {(Object.keys(SCAN_MODE_LABEL) as ScanMode[]).map((mode) => (
               <button
@@ -392,15 +392,14 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <div className="flex flex-col gap-0.5">
           <span className="text-xs font-medium text-ink"><T k="settings.sandbox.intensity"/></span>
           <span className="text-2xs text-ink-faint">
-            下面这一项会改变 agent 的<strong className="font-medium text-ink-muted"><T k="settings.sandbox.behavior"/></strong>，
-            不是资源配额。全局生效，不按题目分类设置。
+            {t('settings2.sandbox.intensityBefore', undefined, '下面这一项会改变 agent 的')}<strong className="font-medium text-ink-muted"><T k="settings.sandbox.behavior"/></strong>{t('settings2.sandbox.intensityAfter', undefined, '，不是资源配额。全局生效，不按题目分类设置。')}
           </span>
         </div>
 
         <Toggle
           id="sandbox-offensive"
-          label="启用越权与注入强化手法"
-          hint="打开后，解题与渗透扫描的提示词末尾都会追加一份手法矩阵（注入、越权、文件读取、SSRF、竞态的具体换形写法）。它只扩大试探的覆盖面，不放松任何判定纪律 —— 「不越界访问」「禁止口令爆破与压力测试」照旧成立。"
+          label={t('settings2.sandbox.offensive.label', undefined, '启用越权与注入强化手法')}
+          hint={t('settings2.sandbox.offensive.hint', undefined, '打开后，解题与渗透扫描的提示词末尾都会追加一份手法矩阵（注入、越权、文件读取、SSRF、竞态的具体换形写法）。它只扩大试探的覆盖面，不放松任何判定纪律 —— 「不越界访问」「禁止口令爆破与压力测试」照旧成立。')}
           checked={draft.enableOffensivePrompt}
           onChange={(v) => setDraft({ ...draft, enableOffensivePrompt: v })}
         />
@@ -414,8 +413,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
               aria-hidden="true"
             />
             <span className="text-2xs text-ink-muted">
-              已启用。agent 会更系统地尝试注入与越权路径，耗时与回合消耗也会相应上升。
-              它不影响判定标准：拿不到证据的结论仍然是「待跟进」，不会因为「打过一遍」就变成「已命中」。
+              {t('settings2.sandbox.offensive.warn', undefined, '已启用。agent 会更系统地尝试注入与越权路径，耗时与回合消耗也会相应上升。它不影响判定标准：拿不到证据的结论仍然是「待跟进」，不会因为「打过一遍」就变成「已命中」。')}
             </span>
           </div>
         )}
@@ -430,9 +428,7 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         onReset={handleReset}
         note={
           <span className="text-2xs text-ink-muted">
-            CPU、内存会下发给沙箱容器；扫描深度决定回合天花板、回合上限再收细；
-            单次超时到点会停掉本次扫描；允许写入挂载卷控制工作区是读写还是只读。
-            禁止出网对 url/服务类目标会被强制放开（否则连不上目标）。
+            {t('settings2.sandbox.footnote', undefined, 'CPU、内存会下发给沙箱容器；扫描深度决定回合天花板、回合上限再收细；单次超时到点会停掉本次扫描；允许写入挂载卷控制工作区是读写还是只读。禁止出网对 url/服务类目标会被强制放开（否则连不上目标）。')}
           </span>
         }
       />
@@ -451,21 +447,20 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
  * 环境默认值。标出来这件事才有确定答案。
  */
 function ExecutionSourceNote({ source }: { source: ExecutionSource }) {
-
+  const { t } = useI18n()
   const keys = Object.keys(source) as (keyof ExecutionSource)[]
   const fromDefault = keys.filter((key) => source[key] === 'default')
   if (fromDefault.length === 0) return null
 
   const labels: Record<keyof ExecutionSource, string> = {
-    maxConcurrentScans: '并发',
-    scanMaxTurns: '回合上限',
-    scanMode: '扫描深度',
+    maxConcurrentScans: t('settings2.sandbox.source.concurrent', undefined, '并发'),
+    scanMaxTurns: t('settings2.sandbox.source.rounds', undefined, '回合上限'),
+    scanMode: t('settings2.sandbox.source.depth', undefined, '扫描深度'),
   }
 
   return (
     <span className="text-2xs text-ink-faint">
-      其中 {fromDefault.map((key) => labels[key]).join('、')} 取自服务端环境变量（部署基线），
-      不是你在此处设过的值。保存一次后即以这里为准。
+      {t('settings2.sandbox.execSource', { labels: fromDefault.map((key) => labels[key]).join('、') }, '其中 {labels} 取自服务端环境变量（部署基线），不是你在此处设过的值。保存一次后即以这里为准。')}
     </span>
   )
 }

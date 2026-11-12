@@ -1,5 +1,6 @@
 import { cn } from '@/lib/cn'
 import { copyText } from '@/lib/clipboard'
+import { useI18n } from '@/i18n'
 import { Eye, EyeOff, Lock } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
@@ -84,6 +85,7 @@ export function SecretField({
   help,
   hint,
 }: SecretFieldProps) {
+  const { t } = useI18n()
   const [revealed, setRevealed] = useState(false)
   const [copied, setCopied] = useState(false)
   const groupRef = useRef<HTMLDivElement>(null)
@@ -131,8 +133,8 @@ export function SecretField({
           {label}
         </label>
         {required && (
-          <span className="text-2xs text-signal-risk" aria-label="必填">
-            必填
+          <span className="text-2xs text-signal-risk" aria-label={t('settings2.secret.required', undefined, '必填')}>
+            {t('settings2.secret.required', undefined, '必填')}
           </span>
         )}
       </div>
@@ -202,9 +204,9 @@ export function SecretField({
           <button
             type="button"
             onClick={() => setRevealed((v) => !v)}
-            aria-label={revealed ? '隐藏密钥' : '显示密钥'}
+            aria-label={revealed ? t('settings2.secret.hide', undefined, '隐藏密钥') : t('settings2.secret.show', undefined, '显示密钥')}
             aria-pressed={revealed}
-            title={revealed ? '隐藏（20 秒后也会自动隐藏）' : '显示明文'}
+            title={revealed ? t('settings2.secret.hideTitle', undefined, '隐藏（20 秒后也会自动隐藏）') : t('settings2.secret.showTitle', undefined, '显示明文')}
             className={cn(
               'inline-flex w-9 shrink-0 items-center justify-center rounded-sm border transition-ui duration-fast',
               revealed
@@ -227,7 +229,7 @@ export function SecretField({
             onClick={handleCopy}
             className="inline-flex h-9 shrink-0 items-center rounded-sm border border-line px-2 text-2xs text-ink-muted transition-ui duration-fast hover:border-line-strong hover:text-ink"
           >
-            {copied ? '已复制' : '复制'}
+            {copied ? t('settings2.secret.copied', undefined, '已复制') : t('settings2.secret.copy', undefined, '复制')}
           </button>
         )}
       </div>
@@ -235,7 +237,7 @@ export function SecretField({
       {/* 明文态提示自动收回 —— 否则用户会以为它会一直亮着 */}
       {revealed && (
         <p className="text-2xs text-signal-warn" role="status">
-          明文将在 20 秒后自动隐藏，点击别处也会立即隐藏。
+          {t('settings2.secret.autoHide', undefined, '明文将在 20 秒后自动隐藏，点击别处也会立即隐藏。')}
         </p>
       )}
 

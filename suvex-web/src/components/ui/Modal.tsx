@@ -1,4 +1,5 @@
 import { cn } from '@/lib/cn'
+import { useI18n } from '@/i18n'
 import { X } from 'lucide-react'
 import { useEffect, useRef, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
@@ -64,6 +65,7 @@ export function Modal({
   widthClass = 'max-w-2xl',
   heightClass = 'max-h-[85vh]',
 }: ModalProps) {
+  const { t } = useI18n()
   const panelRef = useRef<HTMLDivElement>(null)
   const previousFocusRef = useRef<HTMLElement | null>(null)
 
@@ -106,7 +108,7 @@ export function Modal({
       <button
         type="button"
         onClick={onClose}
-        aria-label="关闭"
+        aria-label={t('ui2.close', undefined, '关闭')}
         className="absolute inset-0 cursor-default bg-canvas/70 backdrop-blur-[2px]"
       />
 
@@ -131,7 +133,7 @@ export function Modal({
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭"
+            aria-label={t('ui2.close', undefined, '关闭')}
             className="shrink-0 rounded-sm p-1.5 text-ink-faint transition-ui duration-fast hover:bg-surface-raised hover:text-ink"
           >
             <X size={16} strokeWidth={1.75} aria-hidden="true" />

@@ -77,7 +77,7 @@ export function FindingDetail({ finding }: FindingDetailProps) {
 
         正文的结论区因此只回答**下一个问题**：具体打在哪儿。
       */}
-      <section aria-label="结论">
+      <section aria-label={t('findings2.detail.summary', undefined, '结论')}>
         {/* 影响位置。等宽、可多行 —— 这是要拿去复现的 */}
         <dl className="flex flex-col gap-1.5">
           <div className="flex gap-tight">
@@ -111,17 +111,21 @@ export function FindingDetail({ finding }: FindingDetailProps) {
 
         {/* 严重度的定义 —— 界面上只放级别名，但新人需要知道这一级意味着什么 */}
         <p className="mt-panel rounded-sm border border-line bg-surface-sunken px-3 py-2 text-xs leading-relaxed text-ink-muted">
-          {meta.definition}
+          {t(`severity.${finding.severity}.definition`, undefined, meta.definition)}
         </p>
       </section>
 
       {/* ── 2 · 描述 ── */}
-      <Section title="漏洞描述">
+      <Section title={t('findings2.detail.description', undefined, '漏洞描述')}>
         <p className="text-sm leading-relaxed text-ink-muted">{detail.description}</p>
       </Section>
 
       {/* ── 3 · 推理（Suvex 的分水岭）── */}
-      <Section title="为什么判断有问题" icon={Sparkles} hint="智能体的推理过程">
+      <Section
+        title={t('findings2.detail.reasoning', undefined, '为什么判断有问题')}
+        icon={Sparkles}
+        hint={t('findings2.detail.reasoningHint', undefined, '智能体的推理过程')}
+      >
         {/*
           推理用普通字体而不是等宽：它是散文，是给人读的论证过程。
           用等宽会让它看起来像日志，而日志是跳读的 —— 这段需要真读。
@@ -134,13 +138,23 @@ export function FindingDetail({ finding }: FindingDetailProps) {
       </Section>
 
       {/* ── 4 · 证据 ── */}
-      <Section title="证据" hint="原始响应，未经修改">
-        <CodeBlock code={detail.evidence} language="http" title="原始响应" />
+      <Section
+        title={t('findings2.detail.evidence', undefined, '证据')}
+        hint={t('findings2.detail.evidenceHint', undefined, '原始响应，未经修改')}
+      >
+        <CodeBlock
+          code={detail.evidence}
+          language="http"
+          title={t('findings2.detail.evidenceTitle', undefined, '原始响应')}
+        />
       </Section>
 
       {/* ── 5 · PoC ── */}
       {detail.poc ? (
-        <Section title="验证脚本" hint="可直接运行以复现">
+        <Section
+          title={t('findings2.detail.poc', undefined, '验证脚本')}
+          hint={t('findings2.detail.pocHint', undefined, '可直接运行以复现')}
+        >
           <CodeBlock
             code={detail.poc.code}
             language={detail.poc.language}
@@ -154,19 +168,26 @@ export function FindingDetail({ finding }: FindingDetailProps) {
           用户看到"这个漏洞没有验证脚本"会想知道为什么 ——
           通常是因为证据已足够、或环境不允许执行。
         */
-        <Section title="验证脚本">
+        <Section title={t('findings2.detail.poc', undefined, '验证脚本')}>
           <p className="rounded-sm border border-dashed border-line-strong px-3 py-2.5 text-xs text-ink-faint">
-            这条发现没有附带可执行脚本
             {finding.verification === 'verified'
-              ? '（证据已足以确认，无需脚本复现）。'
-              : '。智能体尚未写出可复现的脚本，或当前环境不允许执行。'}
+              ? t(
+                  'findings2.detail.noPocVerified',
+                  undefined,
+                  '这条发现没有附带可执行脚本（证据已足以确认，无需脚本复现）。',
+                )
+              : t(
+                  'findings2.detail.noPocMissing',
+                  undefined,
+                  '这条发现没有附带可执行脚本。智能体尚未写出可复现的脚本，或当前环境不允许执行。',
+                )}
           </p>
         </Section>
       )}
 
       {/* ── 6 · 修复建议 ── */}
       {detail.remediation && (
-        <Section title="修复建议">
+        <Section title={t('findings2.detail.remediation', undefined, '修复建议')}>
           <p className="whitespace-pre-wrap text-sm leading-relaxed text-ink-muted">
             {detail.remediation}
           </p>
@@ -177,7 +198,7 @@ export function FindingDetail({ finding }: FindingDetailProps) {
       <VerificationContextView findingId={finding.id} />
 
       {/* ── 7 · 时间线 ── */}
-      <Section title="操作记录">
+      <Section title={t('findings2.detail.timeline', undefined, '操作记录')}>
         <Timeline entries={finding.timeline} />
       </Section>
 
@@ -192,7 +213,7 @@ export function FindingDetail({ finding }: FindingDetailProps) {
         会去请求一条可能不存在的记录 —— 而列表项本来也不该出现在
         详情抽屉里（见 `FindingsPage` 的说明：正文永远不用列表项渲染）。
       */}
-      <Section title="处置证据">
+      <Section title={t('findings2.detail.attachments', undefined, '处置证据')}>
         <FindingAttachments findingId={finding.id} />
       </Section>
     </div>
@@ -212,7 +233,7 @@ export function FindingTransitionBar({
   finding: Finding
   onTransition: (to: FindingStatus) => void
 }) {
-
+  const { t } = useI18n()
   const targets = FINDING_STATUS_TRANSITIONS[finding.status]
 
   return (
@@ -237,7 +258,7 @@ export function FindingTransitionBar({
                 'border border-signal-warn/40 text-signal-warn hover:bg-signal-warn/10',
             )}
           >
-            {FINDING_TRANSITION_LABEL[target]}
+            {t(`findings2.transition.${target}`, undefined, FINDING_TRANSITION_LABEL[target])}
           </button>
         )
       })}
@@ -317,6 +338,7 @@ function timelineTone(kind: string): string {
  * 审计场景里"从什么改成什么"和"改成了什么"是两个不同的问题。
  */
 function Timeline({ entries }: { entries: FindingTimelineEntry[] }) {
+  const { t } = useI18n()
   if (entries.length === 0) {
     return <p className="text-xs text-ink-faint"><T k="findings.detail.noTimeline"/></p>
   }
@@ -346,7 +368,9 @@ function Timeline({ entries }: { entries: FindingTimelineEntry[] }) {
               <div className="mono-ui mt-1 flex flex-wrap items-center gap-x-2 text-ink-faint">
                 {/* 谁做的 —— 审计信息，必须有 */}
                 <span className={entry.actor === 'user' ? 'text-accent-strong' : 'text-ink-muted'}>
-                  {entry.actor === 'agent' ? '智能体' : '人工'}
+                  {entry.actor === 'agent'
+                    ? t('findings2.detail.actorAgent', undefined, '智能体')
+                    : t('findings2.detail.actorHuman', undefined, '人工')}
                 </span>
                 <span aria-hidden="true">·</span>
                 <time dateTime={entry.at} className="tabular">
@@ -358,9 +382,13 @@ function Timeline({ entries }: { entries: FindingTimelineEntry[] }) {
                   <>
                     <span aria-hidden="true">·</span>
                     <span className="flex items-center gap-1">
-                      <span>{STATUS_SHORT[entry.from]}</span>
+                      <span>
+                        {t(`findings.status.${entry.from}`, undefined, STATUS_SHORT[entry.from])}
+                      </span>
                       <span aria-hidden="true">→</span>
-                      <span className="text-ink-muted">{STATUS_SHORT[entry.to]}</span>
+                      <span className="text-ink-muted">
+                        {t(`findings.status.${entry.to}`, undefined, STATUS_SHORT[entry.to])}
+                      </span>
                     </span>
                   </>
                 )}
@@ -388,6 +416,7 @@ const STATUS_SHORT: Record<FindingStatus, string> = {
 // ─────────────────────────────────────────────
 
 function VerificationContextView({ findingId }: { findingId: string }) {
+  const { t } = useI18n()
   const [context, setContext] = useState<VerificationContext | null>(null)
 
   useEffect(() => {
@@ -406,7 +435,10 @@ function VerificationContextView({ findingId }: { findingId: string }) {
   if (!context) return null
 
   return (
-    <Section title="验证上下文" hint="同扫描事实 + 相关发现 · 只列已记录">
+    <Section
+      title={t('findings2.detail.verificationContext', undefined, '验证上下文')}
+      hint={t('findings2.detail.verificationContextHint', undefined, '同扫描事实 + 相关发现 · 只列已记录')}
+    >
       <div className="flex flex-col gap-2">
         {context.facts.length > 0 ? (
           <ul className="flex flex-col gap-1">
@@ -449,6 +481,7 @@ function VerificationContextView({ findingId }: { findingId: string }) {
 }
 
 function RemediationPlanView({ findingId }: { findingId: string }) {
+  const { t } = useI18n()
   const [plan, setPlan] = useState<RemediationPlan | null>(null)
 
   useEffect(() => {
@@ -468,13 +501,20 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
   const ready = plan.readiness === 'ready'
 
   return (
-    <Section title="修复方案" hint="按 CWE 生成 · 建议与补丁草案，不能直接 apply">
+    <Section
+      title={t('findings2.detail.plan', undefined, '修复方案')}
+      hint={t('findings2.detail.planHint', undefined, '按 CWE 生成 · 建议与补丁草案，不能直接 apply')}
+    >
       <div className="flex flex-col gap-2">
         <p className="text-sm text-ink">{plan.title}</p>
         <p className={cn('text-2xs', ready ? 'text-ink-muted' : 'text-signal-warn')}>
           {ready
-            ? '证据已达 L2，可以直接按下面步骤修。'
-            : '证据未达 L2：先用 verify_http 做 replay/differential，再按下面步骤修 —— 否则可能是在修一条误报。'}
+            ? t('findings2.detail.planReady', undefined, '证据已达 L2，可以直接按下面步骤修。')
+            : t(
+                'findings2.detail.planNotReady',
+                undefined,
+                '证据未达 L2：先用 verify_http 做 replay/differential，再按下面步骤修 —— 否则可能是在修一条误报。',
+              )}
         </p>
         <ol className="flex list-decimal flex-col gap-1 pl-4 text-xs leading-relaxed text-ink-muted">
           {plan.steps.map((step, index) => (
@@ -484,7 +524,11 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
         {plan.verifierChecks && (
           <div className="flex flex-col gap-1">
             <p className="text-2xs text-ink-muted">
-              反证清单（{plan.verifierChecks.class}）：确认这些对照都做过，再判 verified。
+              {t(
+                'findings2.detail.counterChecks',
+                { class: plan.verifierChecks.class },
+                `反证清单（${plan.verifierChecks.class}）：确认这些对照都做过，再判 verified。`,
+              )}
             </p>
             <ul className="flex list-disc flex-col gap-0.5 pl-4 text-2xs text-ink-muted">
               {[...plan.verifierChecks.general, ...plan.verifierChecks.specific].map((check) => (
@@ -509,7 +553,7 @@ function RemediationPlanView({ findingId }: { findingId: string }) {
         {plan.verification.length > 0 && (
           <p className="text-2xs text-ink-faint">
             <span className="text-ink-muted"><T k="findings.detail.verify"/></span>
-            {plan.verification.join('；')}
+            {plan.verification.join(t('findings2.sep.verification', undefined, '；'))}
           </p>
         )}
         <p className="text-2xs text-ink-faint">{plan.note}</p>
