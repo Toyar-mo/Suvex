@@ -50,6 +50,7 @@ import {
   loadTools,
   openSession,
   pinSession,
+  purgeArchivedSessions,
   purgeSession,
   renameSession,
   sendMessage,
@@ -105,6 +106,7 @@ import {
   Send,
   Settings2,
   Sparkles,
+  Trash2,
   UserRound,
   X,
   Users,
@@ -734,6 +736,7 @@ export function ChatPage() {
   const [confirmAction, setConfirmAction] = useState<
     | { kind: 'archive'; id: string; title: string }
     | { kind: 'purge'; id: string; title: string }
+    | { kind: 'purgeAll'; n: number }
     | null
   >(null)
   const [batchOpen, setBatchOpen] = useState(false)
@@ -1962,27 +1965,40 @@ export function ChatPage() {
               */}
               {archivedSessions.length > 0 && (
                 <section className="mt-1 border-t border-line pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setArchivedOpen((open) => !open)}
-                    aria-expanded={archivedOpen}
-                    className={cn(
-                      'flex w-full items-center gap-1 rounded-sm px-2 py-1 text-2xs text-ink-faint',
-                      'transition-ui duration-fast hover:text-ink',
-                      'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
-                    )}
-                  >
-                    {archivedOpen ? (
-                      <ChevronDown size={10} strokeWidth={2} aria-hidden="true" />
-                    ) : (
-                      <ChevronRight size={10} strokeWidth={2} aria-hidden="true" />
-                    )}
-                    {t(
-                      'chat.a.archived',
-                      { n: archivedSessions.length },
-                      `已归档（${archivedSessions.length}）`,
-                    )}
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setArchivedOpen((open) => !open)}
+                      aria-expanded={archivedOpen}
+                      className={cn(
+                        'flex min-w-0 flex-1 items-center gap-1 rounded-sm px-2 py-1 text-2xs text-ink-faint',
+                        'transition-ui duration-fast hover:text-ink',
+                        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+                      )}
+                    >
+                      {archivedOpen ? (
+                        <ChevronDown size={10} strokeWidth={2} aria-hidden="true" />
+                      ) : (
+                        <ChevronRight size={10} strokeWidth={2} aria-hidden="true" />
+                      )}
+                      {t(
+                        'chat.a.archived',
+                        { n: archivedSessions.length },
+                        `已归档（${archivedSessions.length}）`,
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setConfirmAction({ kind: 'purgeAll', n: archivedSessions.length })
+                      }
+                      aria-label={t('chat.a.purgeArchivedAria', undefined, '彻底删除全部已归档对话')}
+                      title={t('chat.a.purgeArchived', undefined, '清空归档')}
+                      className="shrink-0 rounded-sm p-1 text-ink-faint transition-ui duration-fast hover:text-signal-risk focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+                    >
+                      <Trash2 size={11} strokeWidth={2} aria-hidden="true" />
+                    </button>
+                  </div>
                   {archivedOpen && (
                     <ul className="mt-0.5 flex flex-col gap-0.5">
                       {archivedSessions.map((session) => (
@@ -2934,17 +2950,25 @@ export function ChatPage() {
       <ConfirmDialog
         open={confirmAction !== null}
         title={
-          confirmAction?.kind === 'purge'
-            ? t('chat.a.confirmPurgeTitle', undefined, '彻底删除这个对话？')
-            : t('chat.a.confirmDeleteTitle', undefined, '删除这个对话？')
+          confirmAction?.kind === 'purgeAll'
+            ? t('chat.a.confirmPurgeAllTitle', { n: confirmAction.n }, '清空已归档对话？')
+            : confirmAction?.kind === 'purge'
+              ? t('chat.a.confirmPurgeTitle', undefined, '彻底删除这个对话？')
+              : t('chat.a.confirmDeleteTitle', undefined, '删除这个对话？')
         }
         description={
-          confirmAction?.kind === 'purge'
+          confirmAction?.kind === 'purgeAll'
             ? t(
-                'chat.a.confirmPurgeBody',
-                { title: confirmAction.title },
-                `「${confirmAction.title}」及其全部消息将被**永久删除**，无法恢复。`,
+                'chat.a.confirmPurgeAllBody',
+                { n: confirmAction.n },
+                `已归档的 ${confirmAction.n} 个对话及其全部消息将被**永久删除**，无法恢复。`,
               )
+            : confirmAction?.kind === 'purge'
+              ? t(
+                  'chat.a.confirmPurgeBody',
+                  { title: confirmAction.title },
+                  `「${confirmAction.title}」及其全部消息将被**永久删除**，无法恢复。`,
+                )
             : t(
                 'chat.a.confirmArchiveBody',
                 { title: confirmAction?.title ?? '' },
@@ -2952,16 +2976,31 @@ export function ChatPage() {
               )
         }
         confirmLabel={
-          confirmAction?.kind === 'purge'
-            ? t('chat.a.purge', undefined, '永久删除')
-            : t('chat.a.delete', undefined, '删除')
+          confirmAction?.kind === 'purgeAll'
+            ? t('chat.a.purgeArchived', undefined, '清空归档')
+            : confirmAction?.kind === 'purge'
+              ? t('chat.a.purge', undefined, '永久删除')
+              : t('chat.a.delete', undefined, '删除')
         }
         onCancel={() => setConfirmAction(null)}
         onConfirm={() => {
           const action = confirmAction
           setConfirmAction(null)
           if (!action) return
-          if (action.kind === 'purge') {
+          if (action.kind === 'purgeAll') {
+            void purgeArchivedSessions().then((deleted) => {
+              if (deleted !== null) {
+                showToast({
+                  message: t(
+                    'chat.a.purgedAll',
+                    { n: deleted },
+                    `已删除 ${deleted} 个已归档对话`,
+                  ),
+                  tone: 'ok',
+                })
+              }
+            })
+          } else if (action.kind === 'purge') {
             void purgeSession(action.id)
           } else {
             void handleArchive(action.id)

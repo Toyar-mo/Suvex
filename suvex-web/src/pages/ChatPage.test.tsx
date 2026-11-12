@@ -77,6 +77,7 @@ vi.mock('@/data/chat', () => ({
   pinSession: vi.fn(async () => true),
   unarchiveSession: vi.fn(async () => true),
   purgeSession: vi.fn(async () => true),
+  purgeArchivedSessions: vi.fn(async () => 0),
   resetChatStore: vi.fn(),
   subscribeChat: vi.fn(() => () => {}),
   getChatSnapshot: vi.fn(

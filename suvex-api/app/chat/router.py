@@ -450,6 +450,41 @@ def purge_session(session_id: str, db: DbSession, identity: Reader) -> ChatSessi
     return snapshot
 
 
+@router.post("/chat/sessions/purge-archived", summary="清空已归档会话")
+def purge_archived_sessions(db: DbSession, identity: Reader) -> dict[str, int]:
+    """一键彻底删除当前用户的全部已归档会话。
+
+    与单条彻底删除同样的顺序：先落库，再清理沙箱/附件/工作区。已归档是
+    唯一入口（列表里只能看到归档会话），所以这里不需要额外的"必须先归档"闸。
+    """
+    sessions = [
+        session
+        for session in service.list_sessions(
+            db, created_by=_owner(identity), include_archived=True
+        )
+        if session.archived_at is not None
+    ]
+    ids = [session.id for session in sessions]
+    messages = 0
+    for session in sessions:
+        messages += service.purge_session(db, session=session)
+    db.commit()
+
+    for session_id in ids:
+        try:
+            chat_sandbox.drop_sandbox(session_id)
+        except Exception:  # noqa: BLE001 - 清理失败不该让已落库的删除报错
+            logger.warning("清空归档时销毁会话 %s 的沙箱失败", session_id, exc_info=True)
+        try:
+            chat_attachments.drop_session(session_id=session_id)
+            chat_attachments.drop_handed_over(session_id=session_id)
+            chat_workspaces.drop_workspace(session_id)
+        except Exception:  # noqa: BLE001 - 同上
+            logger.warning("清空归档时清理会话 %s 的附件失败", session_id, exc_info=True)
+    logger.info("清空归档：删除 %d 个会话 / %d 条消息", len(ids), messages)
+    return {"deleted": len(ids), "messages": messages}
+
+
 @router.post("/chat/sessions/{session_id}/messages", response_model=ChatSendOut)
 async def send_message(
     session_id: str, payload: ChatSendIn, db: DbSession, identity: Reader

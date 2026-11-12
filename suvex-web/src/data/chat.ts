@@ -2090,6 +2090,30 @@ export async function purgeSession(sessionId: string): Promise<boolean> {
 }
 
 /**
+ * 一键彻底删除全部已归档会话（不可恢复）。
+ *
+ * 后端在同一事务里删完再清理文件；这里只把本地归档列表清空。当前会话
+ * 若恰好在归档里，也要一起退出 —— 否则右侧会停在一个已经不存在的会话上。
+ */
+export async function purgeArchivedSessions(): Promise<number | null> {
+  try {
+    const result = await api.post<{ deleted: number; messages: number }>(
+      '/chat/sessions/purge-archived',
+      {},
+    )
+    const archivedIds = new Set(state.archivedSessions.map((s) => s.id))
+    patch({
+      archivedSessions: [],
+      active: state.active && archivedIds.has(state.active.id) ? null : state.active,
+    })
+    return result.deleted
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return null
+  }
+}
+
+/**
  * 只读取一个会话的最近消息，**不切换当前会话**（v1.92，Agent Hub 预览用）。
  *
  * 与 `openSession` 的分工：那个会把 `state.active` 换掉（导航语义）；

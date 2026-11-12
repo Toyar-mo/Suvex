@@ -679,3 +679,23 @@ def test_archiving_succeeds_even_if_sandbox_destruction_fails(
     # 这里的期望：删除动作本身仍然成功。
     assert resp.status_code == 200, resp.text
     assert resp.json()["archived"] is True
+
+
+def test_over_http_purge_archived_deletes_all_archived_only(
+    ready_client: TestClient,
+) -> None:
+    """一键清空归档：只删归档，未归档会话必须留着。"""
+    keep = ready_client.post(f"{API}/chat/sessions", json={"title": "保留"}).json()
+    a = ready_client.post(f"{API}/chat/sessions", json={"title": "归档 A"}).json()
+    b = ready_client.post(f"{API}/chat/sessions", json={"title": "归档 B"}).json()
+    for session in (a, b):
+        assert ready_client.delete(f"{API}/chat/sessions/{session['id']}").status_code == 200
+
+    resp = ready_client.post(f"{API}/chat/sessions/purge-archived")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] == 2
+
+    # 未归档的还在；归档的两条查不到。
+    assert ready_client.get(f"{API}/chat/sessions/{keep['id']}").status_code == 200
+    for session in (a, b):
+        assert ready_client.get(f"{API}/chat/sessions/{session['id']}").status_code == 404
