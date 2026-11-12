@@ -45,6 +45,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addIntent': '加意图',
     'agentTasks.export': '导出报告',
     'agentTasks.scans': '关联扫描',
+    'persona.none': '未选择角色',
   },
   'zh-TW': {
     'nav.tasks': '執行任務',
@@ -89,6 +90,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addIntent': '加意圖',
     'agentTasks.export': '匯出報告',
     'agentTasks.scans': '關聯掃描',
+    'persona.none': '未選擇角色',
   },
   en: {
     'nav.tasks': 'Agent tasks',
@@ -133,6 +135,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addIntent': 'Add intent',
     'agentTasks.export': 'Export report',
     'agentTasks.scans': 'Linked scans',
+    'persona.none': 'No role selected',
   },
   ru: {},
   fr: {},
@@ -179,6 +182,7 @@ export const agent_tasks: ExtraLocaleMap = {
     'agentTasks.addIntent': '意図を追加',
     'agentTasks.export': 'レポートを出力',
     'agentTasks.scans': '関連スキャン',
+    'persona.none': '役割未選択',
   },
   de: {},
 }

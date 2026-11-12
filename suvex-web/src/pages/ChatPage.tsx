@@ -1764,7 +1764,7 @@ export function ChatPage() {
         title={t('chat.a11y.persona', undefined, '这个人格决定模型扮演什么角色')}
       >
         <UserRound size={11} strokeWidth={2} aria-hidden="true" />
-        {activePersona ? t(`persona.${activePersona.id}.label`, undefined, activePersona.label) : t('persona.default.label', undefined, '默认')}
+        {activePersona ? t(`persona.${activePersona.id}.label`, undefined, activePersona.label) : t('persona.none', undefined, '未选择角色')}
       </button>
 
       <ApprovalToggle
