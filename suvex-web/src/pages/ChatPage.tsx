@@ -428,7 +428,19 @@ function StarterPrompts({
  */
 // 纯函数与页面同文件：测试直接导入它；拆文件只会让"进度文案"的定义离开唯一使用者。
 // eslint-disable-next-line react-refresh/only-export-components
-export function phaseLabel(
+export /** Token 数按 OMP 习惯显示为 K / M，而不是 24,000 / 1,000,000。 */
+function formatTokenCount(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0'
+  if (value >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`
+  }
+  if (value >= 1_000) {
+    return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}K`
+  }
+  return String(Math.round(value))
+}
+
+function phaseLabel(
   phase:
     | PhasePayload
     | null
@@ -2842,8 +2854,8 @@ export function ChatPage() {
                   data-context-usage
                   title={`${
                     contextUsage.source === 'provider'
-                      ? `${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.windowTokens.toLocaleString()} tokens（最近一次调用上报）`
-                      : `${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.windowTokens.toLocaleString()} tokens（字符估算，含系统提示词与工具 schema）`
+                      ? `${formatTokenCount(contextUsage.usedTokens)} / ${formatTokenCount(contextUsage.windowTokens)} tokens（最近一次调用上报）`
+                      : `${formatTokenCount(contextUsage.usedTokens)} / ${formatTokenCount(contextUsage.windowTokens)} tokens（字符估算，含系统提示词与工具 schema）`
                   }${contextUsage.compactionCount > 0 ? ` · 已压缩 ${contextUsage.compactionCount} 次` : ''}`}
                 >
                   {t(
