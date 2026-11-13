@@ -867,6 +867,29 @@ class McpClient:
 # ── 注册表：一次解题持有的全部 MCP 连接配置 ──────────────────────────
 
 
+#: 客户端合成的“按标题搜索练习题”工具。远端 MCP 只提供
+#: `ctf2_list_practice_challenges`（按 ground 列题，无关键词），模型却会
+#: 猜 `ctf2_search_practice_challenges`。这里把别名暴露给模型，调用时
+#: 转成 list 再在本地按标题过滤 —— 不修改远端，也不让模型再猜。
+SEARCH_TOOL = "ctf2_search_practice_challenges"
+_SEARCH_SCHEMA: dict[str, Any] = {
+    "name": SEARCH_TOOL,
+    "description": "按关键词搜索练习题：先调 ctf2_list_practice_challenges 取题，再按标题过滤。",
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "practice_ground_id": {"type": "string", "description": "练习题场 id"},
+            "query": {"type": "string", "description": "标题关键词（大小写不敏感）"},
+            "category": {"type": "string"},
+            "difficulty": {"type": "string"},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+        },
+        "required": ["practice_ground_id", "query"],
+        "additionalProperties": True,
+    },
+}
+
+
 class McpRegistry:
     """一次解题持有的 MCP 连接集合（按配置，非按连接）。
 
@@ -925,6 +948,14 @@ class McpRegistry:
             return self._tools_cache[name]
         async with McpClient(cfg) as client:
             tools = await client.list_tools()
+        if any(
+            isinstance(tool, dict)
+            and tool.get("name") == "ctf2_list_practice_challenges"
+            for tool in tools
+        ) and not any(
+            isinstance(tool, dict) and tool.get("name") == SEARCH_TOOL for tool in tools
+        ):
+            tools = [*tools, _SEARCH_SCHEMA]
         self._tools_cache[name] = tools
         return tools
 
@@ -957,13 +988,47 @@ class McpRegistry:
             available = ", ".join(self.names()) or "（无）"
             return f"没有名为 `{name}` 的 MCP 连接。可用的连接：{available}"
         # 部署者白名单：只允许调这些工具名。
-        if cfg.allowed_tools is not None and tool not in cfg.allowed_tools:
+        allowed_search = (
+            tool == SEARCH_TOOL
+            and cfg.allowed_tools is not None
+            and "ctf2_list_practice_challenges" in cfg.allowed_tools
+        )
+        if cfg.allowed_tools is not None and tool not in cfg.allowed_tools and not allowed_search:
             allowed = ", ".join(cfg.allowed_tools) or "（无）"
             return (
                 f"拒绝：连接 `{name}` 的配置不允许调用工具 `{tool}`。"
                 f"允许的工具：{allowed}"
             )
         async with McpClient(cfg) as client:
+            # 合成搜索工具：转成 list_practice_challenges，再本地过滤。
+            if tool == SEARCH_TOOL:
+                query = str(arguments.get("query") or "").strip().lower()
+                upstream_args = {k: v for k, v in arguments.items() if k != "query"}
+                raw = await client.call_tool(
+                    "ctf2_list_practice_challenges", upstream_args, on_progress=on_progress
+                )
+                text = ""
+                content = raw.get("content") if isinstance(raw, dict) else None
+                if isinstance(content, list):
+                    for item in content:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            text += str(item.get("text") or "")
+                try:
+                    payload = json.loads(text)
+                except (TypeError, ValueError):
+                    return _render_call_result(raw)
+                if query and isinstance(payload, dict) and isinstance(payload.get("items"), list):
+                    matched = [
+                        item
+                        for item in payload["items"]
+                        if isinstance(item, dict)
+                        and query
+                        in f"{item.get('title', '')} {item.get('name', '')} {item.get('slug', '')}".lower()
+                    ]
+                    payload = {**payload, "items": matched, "total": len(matched)}
+                    text = json.dumps(payload, ensure_ascii=False)
+                    return text
+                return _render_call_result(raw)
             try:
                 result = await client.call_tool(tool, arguments, on_progress=on_progress)
             except McpError as exc:
