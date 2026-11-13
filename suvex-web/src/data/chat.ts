@@ -12,6 +12,7 @@ import {
   TURN_TOOL_OUTPUT,
   TURN_TOOL_PROGRESS,
   asChatMessage,
+  attachTurnStream,
   streamTurn,
   type PhasePayload,
 } from './chat-stream'
@@ -1729,6 +1730,81 @@ export async function interject(sessionId: string, content: string): Promise<Int
     if (api_error.code === 'NO_RUNNING_TURN') return 'no-turn'
     patch({ error: api_error })
     return 'failed'
+  }
+}
+
+/**
+ * 接上一个已经在服务端跑的轮次（刷新/后开标签页）。
+ *
+ * 只负责把总线里的 delta/phase/tool/message 帧接进当前页面；不发起新一轮，
+ * 也不把会话登记成本地 sending。消息落库时仍以 `refreshActiveMessages`
+ * 的服务端列表为准。
+ */
+export async function attachLiveTurn(sessionId: string, signal?: AbortSignal): Promise<void> {
+  if (state.active?.id !== sessionId) return
+  if (state.sendingSessionIds.includes(sessionId)) return
+
+  const ok = await attachTurnStream(
+    sessionId,
+    (frame) => {
+      if (state.active?.id !== sessionId) return
+      if (frame.event === TURN_DELTA) {
+        const piece = typeof frame.data.text === 'string' ? frame.data.text : ''
+        if (piece) queueDelta(piece)
+        return
+      }
+      if (frame.event === TURN_PHASE) {
+        const phase = frame.data as unknown as PhasePayload
+        patch({ phase })
+        return
+      }
+      if (frame.event === TURN_TOOL_OUTPUT) {
+        const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
+        const chunk = typeof frame.data.chunk === 'string' ? frame.data.chunk : ''
+        if (!tool || !chunk) return
+        const text = (state.liveToolOutput?.tool === tool ? state.liveToolOutput.text : '') + chunk
+        patch({ liveToolOutput: { tool, text: text.length > 65_536 ? text.slice(-65_536) : text } })
+        return
+      }
+      if (frame.event === TURN_TOOL_PROGRESS) {
+        const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
+        const seconds = typeof frame.data.seconds === 'number' ? frame.data.seconds : 0
+        if (!tool) return
+        patch({ liveToolProgress: { tool, seconds } })
+        return
+      }
+      if (frame.event === TURN_MESSAGE) {
+        const message = asChatMessage(frame.data)
+        if (message?.role === 'assistant') patch({ streamingText: null })
+        // 工具结果/正文以服务端列表为准；增量只负责过程。
+        void refreshActiveMessages(sessionId)
+        return
+      }
+      if (frame.event === TURN_ERROR) {
+        const detail =
+          typeof frame.data.message === 'string' && frame.data.message.trim()
+            ? frame.data.message
+            : '这一轮失败了，但没有给出原因。'
+        patch({ error: new ApiError('TURN_FAILED', humanizeDetail(detail), 200) })
+        return
+      }
+      if (frame.event === TURN_DONE) {
+        flushDelta()
+        patch({
+          ...sessionRunningPatch(sessionId, false),
+          phase: null,
+          liveToolOutput: null,
+          liveToolProgress: null,
+        })
+        void refreshActiveMessages(sessionId)
+        void loadSessions()
+      }
+    },
+    signal,
+  )
+  if (!ok && !signal?.aborted) {
+    // 没有可接的轮次（另一个 worker/已完成）：保持轮询兜底，不报错。
+    patch({ phase: null })
   }
 }
 

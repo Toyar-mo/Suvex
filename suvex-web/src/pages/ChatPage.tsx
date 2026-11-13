@@ -71,6 +71,7 @@ import {
   clearLastInterrupt,
   fetchMcpStatus,
   fetchContextUsage,
+  attachLiveTurn,
   type ChatContextUsage,
   type ChatMcpStatus,
   type ChatTurnRun,
@@ -1678,6 +1679,15 @@ export function ChatPage() {
     if (!active) return
     await decideApproval(active.id, messageId, approve)
   }
+
+  // 刷新/后开页面：如果服务端说这一轮在跑、而本页没有 SSE，接上事件总线。
+  useEffect(() => {
+    const sessionId = active?.id
+    if (!sessionId || !serverTurn || sendingSessionIds.includes(sessionId)) return
+    const controller = new AbortController()
+    void attachLiveTurn(sessionId, controller.signal)
+    return () => controller.abort()
+  }, [active?.id, serverTurn?.runId, sendingSessionIds])
 
   // 上下文占用：会话打开、消息数变化、压缩边界变化时刷新；失败就不显示。
   useEffect(() => {

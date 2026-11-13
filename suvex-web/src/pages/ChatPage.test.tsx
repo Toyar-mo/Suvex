@@ -68,6 +68,7 @@ vi.mock('@/data/chat', () => ({
   updateSettings: vi.fn(async () => true),
   uploadAttachment: vi.fn(async () => null),
   fetchContextUsage: vi.fn(async () => null),
+  attachLiveTurn: vi.fn(async () => {}),
   compactSession: vi.fn(async () => null),
   dropStagedAttachment: vi.fn(async () => true),
   decideApproval: vi.fn(async () => true),

@@ -39,6 +39,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import tempfile
@@ -59,6 +60,7 @@ from app.chat import attachments as chat_attachments
 from app.chat import compaction as chat_compaction
 from app.chat import engine, resumer, service, turn_runs
 from app.chat import interrupts as chat_interrupts
+from app.chat import live as chat_live
 from app.chat import mcp_tools as chat_mcp_tools
 from app.chat import sandbox as chat_sandbox
 from app.chat import todos as chat_todos
@@ -94,8 +96,11 @@ from app.chat.schemas import (
     ChatTurnRunOut,
 )
 from app.chat.stream import (
+    KEEPALIVE_SECONDS,
     SSE_HEADERS,
     SSE_MEDIA_TYPE,
+    encode_frame,
+    encode_keepalive,
     stream_turn,
 )
 from app.core.db import get_db, get_session_factory
@@ -621,6 +626,37 @@ async def send_message(
     )
 
 
+@router.get("/chat/sessions/{session_id}/stream", summary="接上一个正在跑的对话轮次（SSE）")
+async def attach_message_stream(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> StreamingResponse:
+    """订阅当前轮次的事件总线：先回放已产生的帧，再接实时增量。
+
+    刷新页面 / 后打开的标签页用它接上 SSE，不必只靠轮询已落库消息。
+    单进程部署有效；多 worker 需要跨进程总线。
+    """
+    service.get_session_or_404(db, session_id=session_id, created_by=_owner(identity))
+
+    async def gen():
+        iterator = chat_live.hub.subscribe(session_id).__aiter__()
+        while True:
+            try:
+                item = await asyncio.wait_for(
+                    iterator.__anext__(), timeout=KEEPALIVE_SECONDS
+                )
+            except TimeoutError:
+                yield encode_keepalive()
+                continue
+            except StopAsyncIteration:
+                return
+            event, payload = item
+            yield encode_frame(event, payload)
+
+    return StreamingResponse(gen(), media_type=SSE_MEDIA_TYPE, headers=SSE_HEADERS)
+
+
 @router.post(
     "/chat/sessions/{session_id}/messages/stream",
     summary="发一条消息，边跑边推（SSE）",
@@ -739,11 +775,18 @@ def send_message_stream(
     async def run(emit):
         """真正跑一轮。自己开会话、自己关。"""
         turn_db = get_session_factory()()
+        await chat_live.hub.begin(session_id)
+
+        async def teed(event, payload):
+            # 先写总线：刷新后的页面/别的标签页能接上同一轮；再写当前请求。
+            await chat_live.hub.publish(session_id, event, payload)
+            await emit(event, payload)
+
         try:
             turn_session = service.get_session_or_404(
                 turn_db, session_id=session_id, created_by=_owner(identity)
             )
-            return await engine.run_turn_durable(
+            result = await engine.run_turn_durable(
                 turn_db,
                 session=turn_session,
                 content=content,
@@ -751,10 +794,27 @@ def send_message_stream(
                 provider_id=payload.providerId,
                 attachment_ids=payload.attachmentIds,
                 explicit_tools=payload.explicitTools,
-                emit=emit,
+                emit=teed,
                 locale=payload.locale,
             )
+            # 终态也要进总线：后连上的页面否则只看到 delta，不知道已经结束。
+            await chat_live.hub.publish(
+                session_id,
+                "done",
+                {
+                    "messageCount": len(result.messages),
+                    "awaitingApproval": result.awaiting_approval,
+                    "hitToolLimit": result.hit_tool_limit,
+                },
+            )
+            return result
+        except Exception as exc:  # noqa: BLE001
+            await chat_live.hub.publish(
+                session_id, "error", {"message": str(exc) or "这一轮失败了。"}
+            )
+            raise
         finally:
+            await chat_live.hub.finish(session_id)
             turn_db.close()
 
     return StreamingResponse(

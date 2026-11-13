@@ -261,3 +261,47 @@ export function asChatMessage(data: Record<string, unknown>): ChatMessage | null
   if (typeof data.id !== 'string' || typeof data.role !== 'string') return null
   return data as unknown as ChatMessage
 }
+
+/**
+ * 接上一个**已经在跑**的轮次（OMP resumable stream 的最小版）。
+ *
+ * 与 `streamTurn` 的区别：它不发送新消息，只读取服务端事件总线；
+ * 先回放已经产生的帧，再接实时帧。刷新后的页面/另一个标签页用它，
+ * 才不会只靠轮询整条消息（那样正文是一段一段蹦出来的）。
+ */
+export async function attachTurnStream(
+  sessionId: string,
+  onEvent: (event: TurnEvent) => void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const response = await fetch(
+    `${API_BASE_URL}${API_PREFIX}/chat/sessions/${sessionId}/stream`,
+    { method: 'GET', credentials: 'include', signal },
+  )
+  if (!response.ok || !response.body) return false
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let sawDone = false
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      const parsed = parseSseChunk(buffer)
+      buffer = parsed.rest
+      for (const frame of parsed.frames) {
+        if (frame.event === TURN_DONE) sawDone = true
+        onEvent(frame)
+      }
+    }
+    const tail = parseSseChunk(buffer + '\n\n')
+    for (const frame of tail.frames) {
+      if (frame.event === TURN_DONE) sawDone = true
+      onEvent(frame)
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return sawDone
+}
