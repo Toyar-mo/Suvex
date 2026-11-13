@@ -395,7 +395,9 @@ _PLAN_BARE_VERB = re.compile(
     #   于是真结论被多问一轮，用户多等一次模型调用。
     # ★ v1.32：`起` —— 「看起来」是结论式开场（「看起来 flag 在 /flag 里」），
     #   不是下一步动作；没有它，`看` 会被当成裸动词计划。
-    r"(?!了|到|出|过|完|通过|入|即|成|好|起)"
+    # ★ 2026-11-13：`扫描完成：…` 是结论，不是下一步。`扫描` 被拆成
+    #   `扫` + `描` 后命中了裸动词计划，导致一份完整汇总被当成计划反复打回。
+    r"(?!了|到|出|过|完|通过|入|即|成|好|起|描)"
     # ★ v1.34：`我先把 gadget … 确认下来` 是计划；「把」不在动词表里，
     #   分句边界后又被「我」挡住，所以单独认「（我）先把」。
     + r"|"
@@ -600,6 +602,7 @@ def should_nudge(
     max_tool_nudges: int = 8,
     no_tool_rounds: int = 0,
     max_no_tool_rounds: int = 5,
+    native_tools: bool = False,
 ) -> bool:
     """要不要为这一轮"没有动作"的回复再推一次模型。
 
@@ -635,6 +638,14 @@ def should_nudge(
     # 「任务中途不许推进」的。跑过工具的轮次本来就该继续，给它一个独立
     # 且更大的额度（`max_tool_nudges`），花的是钱，省的是用户手打「继续」。
     if tools_used > 0:
+        # ★ 2026-11-13：原生 tool-calling 下，"没有 tool_calls" 就是协议的
+        # **正常终止**（OpenAI / Anthropic 都如此）。没有未完成意图时不再
+        # 用文字启发式推一轮 —— 否则完整汇总会被反复重写。文本 ACTION 协议
+        # 仍保留安全网，因为它没有可靠的终止信号。
+        if native_tools and not (
+            has_unactioned_command(text) or looks_unfinished(text) or looks_like_plan(text)
+        ):
+            return False
         # ★ v1.25：仍然"跑过工具就推"（防"输出一次就停"的安全网不能松），
         #   但**重复气泡的问题改在引擎层解决**：被推掉的那句如果是提前给出的
         #   结论，就地降级成 `process`（见 `engine` 的 nudge 分支）。

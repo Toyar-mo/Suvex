@@ -4601,6 +4601,7 @@ async def run_turn(
                 max_tool_nudges=MAX_TOOL_NUDGES,
                 no_tool_rounds=no_tool_rounds,
                 max_no_tool_rounds=MAX_NO_TOOL_NUDGES,
+                native_tools=native_tools,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
@@ -4862,9 +4863,10 @@ async def resume_approved(
     if gateway is None:
         gateway = _build_gateway(_resolve_provider(session, None), db)
 
+    native_tools = _gateway_supports_tools(gateway)
     system = _system_prompt_for(
         session,
-        native_tools=_gateway_supports_tools(gateway),
+        native_tools=native_tools,
         challenge_category=_challenge_category(db, session),
         mcp_catalog=ctx.mcp,
         db=db,
@@ -5258,6 +5260,7 @@ async def resume_approved(
                 max_tool_nudges=MAX_TOOL_NUDGES,
                 no_tool_rounds=no_tool_rounds,
                 max_no_tool_rounds=MAX_NO_TOOL_NUDGES,
+                native_tools=native_tools,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):

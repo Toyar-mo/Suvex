@@ -103,6 +103,16 @@ class _Reply:
             False,
         ),
         (
+            "native_tool_complete_answer_stops_immediately",
+            {
+                "tools_used": 2,
+                "no_tool_rounds": 1,
+                "native_tools": True,
+                "text": "扫描完成：5 个完成，14 个失败。",
+            },
+            False,
+        ),
+        (
             "tool_round_with_intent_still_nudges",
             {
                 "tools_used": 2,
