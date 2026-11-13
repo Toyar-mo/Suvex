@@ -131,6 +131,7 @@ class ChatSessionOut(CamelModel):
     #: ★ v1.92：从哪个会话的哪条消息分叉（与子代理的 parentSessionId 不同）。
     forkedFromSessionId: str | None = None
     forkedFromSeq: int | None = None
+    branchSummary: str | None = None
 
     project: str | None = None
     persona: str | None = None

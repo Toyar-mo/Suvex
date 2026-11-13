@@ -142,18 +142,20 @@ def trigger_chars(model: str | None = None, context_window: int | None = None) -
     return min(COMPACT_TRIGGER_CHARS, max(8_000, int(window * 0.7 * 4)))
 
 
-def estimate_context_tokens(db: Session, *, session: Any) -> int:
-    """估算当前会喂给模型的上下文 token 数（字符/4）。
+def estimate_context_tokens(db: Session, *, session: Any, model: str | None = None) -> int:
+    """估算当前会喂给模型的上下文 token 数。
 
-    这是给界面显示“上下文百分比”的近似值：按压缩边界后的摘要 + 最近原文
-    计算，不包含系统提示词与工具 schema。真实计费以 provider usage 为准。
+    DeepSeek 用内置的离线 tokenizer；其他模型/依赖缺失时退回字符/4。
+    按压缩边界后的摘要 + 最近原文计算，不包含系统提示词与工具 schema。
+    真实计费仍以 provider usage 为准。
     """
+    from app.chat.tokens import count_tokens
+
     comp, rows = load_context(db, session=session)
-    chars = len(comp.summary) if comp is not None else 0
-    chars += sum(
-        len(m.content or "") + len(m.model_extra or "") for m in rows
-    )
-    return max(1, chars // 4)
+    total = count_tokens(comp.summary if comp is not None else "", model)[0]
+    for m in rows:
+        total += count_tokens((m.content or "") + (m.model_extra or ""), model)[0]
+    return max(1, total)
 
 
 def needs_compaction(

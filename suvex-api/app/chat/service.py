@@ -836,12 +836,29 @@ __all__ = [
 # ══════════════════════════════════════════════════════════
 
 
+def branch_cutoff(
+    db: Session, *, source: ChatSession, upto_seq: int | None = None
+) -> int:
+    """分叉点的唯一解析处；摘要生成与复制必须用同一个 cutoff。"""
+    from app.chat.models import ChatMessage
+
+    max_seq = (
+        db.scalar(select(func.max(ChatMessage.seq)).where(ChatMessage.session_id == source.id))
+        or 0
+    )
+    cutoff = max_seq if upto_seq is None else int(upto_seq)
+    if cutoff < 1 or cutoff > max_seq:
+        raise ApiError.validation(f'分叉点必须在 1..{max_seq} 之间（收到 {cutoff}）。')
+    return cutoff
+
+
 def fork_session(
     db: Session,
     *,
     source: ChatSession,
     upto_seq: int | None = None,
     title: str | None = None,
+    branch_summary: str | None = None,
 ) -> ChatSession:
     """把源会话截至 `upto_seq` 的历史复制成一个新会话。
 
@@ -862,13 +879,7 @@ def fork_session(
     """
     from app.chat.models import ChatMessage, ChatTodo
 
-    max_seq = (
-        db.scalar(select(func.max(ChatMessage.seq)).where(ChatMessage.session_id == source.id))
-        or 0
-    )
-    cutoff = max_seq if upto_seq is None else int(upto_seq)
-    if cutoff < 1 or cutoff > max_seq:
-        raise ApiError.validation(f'分叉点必须在 1..{max_seq} 之间（收到 {cutoff}）。')
+    cutoff = branch_cutoff(db, source=source, upto_seq=upto_seq)
 
     raw_title = (title or '').strip()
     if not raw_title:
@@ -888,6 +899,7 @@ def fork_session(
     child.mcp_server_names = list(source.mcp_server_names) if source.mcp_server_names else None
     child.forked_from_session_id = source.id
     child.forked_from_seq = cutoff
+    child.branch_summary = branch_summary
 
     rows = db.scalars(
         select(ChatMessage)
@@ -934,6 +946,12 @@ def fork_session(
                 text=todo.text,
                 status=todo.status,
             )
+        )
+
+    db.flush()
+    if branch_summary:
+        append_user_message(
+            db, session=child, content=branch_summary, surface="process"
         )
 
     db.flush()

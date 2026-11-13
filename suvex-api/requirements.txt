@@ -92,3 +92,7 @@ idna>=3.6,<4.0
 
 # 多 worker 的对话流事件总线（可选；留空 SUPEX_REDIS_URL 时不需要）
 redis>=5,<6
+
+# DeepSeek 离线 tokenizer（app/chat/tokens.py）
+regex>=2024.11
+zstandard>=0.23

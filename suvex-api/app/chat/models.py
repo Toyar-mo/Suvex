@@ -254,6 +254,8 @@ class ChatSession(Base):
     forked_from_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: 分叉点（源会话的 seq，含）。`None` = 整段复制。
     forked_from_seq: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: 被放弃分支的结构化摘要（分叉时生成）。同时会作为 process 消息注入。
+    branch_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     #: 角色（persona）id。见 `prompts.CHAT_ROLES`。`None` = 默认角色。
     #: ⚠️ 与 `models.CHAT_ROLES`（消息角色 user/assistant/tool）是**两件

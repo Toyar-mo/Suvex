@@ -186,20 +186,25 @@ def open_challenge_session(
     status_code=201,
     summary="从某条消息处复制一段历史，另开一条时间线",
 )
-def fork_chat_session(
+async def fork_chat_session(
     session_id: str,
     payload: ChatForkIn,
     db: DbSession,
     identity: Reader,
 ) -> ChatSessionOut:
+    from app.chat import branch_summary
+
     source = service.get_session_or_404(
         db, session_id=session_id, created_by=_owner(identity)
     )
+    cutoff = service.branch_cutoff(db, source=source, upto_seq=payload.messageSeq)
+    summary = await branch_summary.generate(db, source=source, cutoff=cutoff)
     child = service.fork_session(
         db,
         source=source,
-        upto_seq=payload.messageSeq,
+        upto_seq=cutoff,
         title=payload.title,
+        branch_summary=summary,
     )
     db.commit()
     return ChatSessionOut.model_validate(child)
@@ -253,18 +258,23 @@ def get_context_usage(
         if measured > 0 and latest is not None and latest[0].usage_reported and fresh
         else "estimate"
     )
-    used = measured if source == "provider" else chat_compaction.estimate_context_tokens(db, session=session)
+    used = (
+        measured
+        if source == "provider"
+        else chat_compaction.estimate_context_tokens(
+            db, session=session, model=provider.model if provider is not None else None
+        )
+    )
     if source == "estimate":
         # OMP 的 breakdown 还包含 system prompt / 工具 schema / 技能。
         # 没有 provider usage 时把它们也按字符估进来，至少不要让比例偏低。
         try:
-            system_chars = len(
-                engine._system_prompt_for(session, native_tools=True, db=db)
-            )
-            tools_chars = len(
-                json.dumps(engine.build_tools_schema(), ensure_ascii=False)
-            )
-            used += (system_chars + tools_chars) // 4
+            from app.chat.tokens import count_tokens
+
+            model = provider.model if provider is not None else None
+            system_text = engine._system_prompt_for(session, native_tools=True, db=db)
+            tools_text = json.dumps(engine.build_tools_schema(), ensure_ascii=False)
+            used += count_tokens(system_text, model)[0] + count_tokens(tools_text, model)[0]
         except Exception:  # noqa: BLE001 - 辅助显示，失败就只算消息
             pass
     return ChatContextOut(
