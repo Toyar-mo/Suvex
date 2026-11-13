@@ -3657,6 +3657,7 @@ prompt 末尾追加一段场景块，产出从"flag"变成"带三级标注的结
 | POST | `/chat/sessions/{session_id}/turns/{run_id}/resume` | read | 手动接手一个中断的轮次（`failed` 也允许人工重试）|
 | POST | `/chat/sessions/{session_id}/compact` | read | 立即压缩上下文：旧消息落摘要、原文保留（手动 `/compact`）|
 | GET | `/chat/sessions/{session_id}/context` | read | 当前上下文占用估算（百分比 / 窗口 / 压缩次数）|
+| GET | `/chat/sessions/{session_id}/tree` | read | 当前会话所属的会话级分叉树（根 / 分支点 / 分支摘要）|
 
 #### 3.21.3 赛事托管（ctf_race）
 
