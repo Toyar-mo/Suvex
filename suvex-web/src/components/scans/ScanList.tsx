@@ -556,6 +556,21 @@ const ScanRow = memo(function ScanRow({
         */}
         <span className="flex shrink-0 items-center lg:w-24">
           <span
+            title={
+              pendingConfirmation
+                ? t(
+                    'scans2.list.status.pendingTitle',
+                    undefined,
+                    'CTF2 题目已有候选 flag，等待确认；底层扫描记录状态为失败',
+                  )
+                : unsolved
+                  ? t(
+                      'scans2.list.status.unsolvedTitle',
+                      undefined,
+                      'CTF2 题目未解出；底层扫描记录状态为失败',
+                    )
+                  : undefined
+            }
             className={cn(
               /*
                 `rounded-xs` 而不是 `rounded-pill`：design-system §4 明确写

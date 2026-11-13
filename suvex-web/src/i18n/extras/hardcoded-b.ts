@@ -280,9 +280,14 @@ export const hardcoded_b: ExtraLocaleMap = {
     'scans2.page.empty.deleted.title': '回收站是空的',
     'scans2.page.empty.deleted.body':
       '从列表里删除的扫描会先到这里，保留期满后才会被真正清除 —— 保留天数在「设置 → 扫描保留规则」里可调。期间随时可以恢复。',
+    'scans2.list.status.pendingTitle': 'CTF2 题目已有候选 flag，等待确认；底层扫描记录状态为失败',
+    'scans2.list.status.unsolvedTitle': 'CTF2 题目未解出；底层扫描记录状态为失败',
   },
 
-  'zh-TW': {},
+  'zh-TW': {
+    'scans2.list.status.pendingTitle': 'CTF2 題目已有候選 flag，等待確認；底層掃描記錄狀態為失敗',
+    'scans2.list.status.unsolvedTitle': 'CTF2 題目未解出；底層掃描記錄狀態為失敗',
+  },
 
   en: {
     // Target kinds
@@ -581,6 +586,8 @@ export const hardcoded_b: ExtraLocaleMap = {
     'scans2.page.empty.deleted.title': 'Trash is empty',
     'scans2.page.empty.deleted.body':
       'Scans deleted from the list land here first and are only erased after the retention period — adjustable in Settings → Scan retention. You can restore them anytime before then.',
+    'scans2.list.status.pendingTitle': 'CTF2 challenge has a candidate flag awaiting confirmation; the underlying scan is marked failed',
+    'scans2.list.status.unsolvedTitle': 'CTF2 challenge unsolved; the underlying scan is marked failed',
   },
 
   ja: {
@@ -879,6 +886,8 @@ export const hardcoded_b: ExtraLocaleMap = {
     'scans2.page.empty.deleted.title': 'ごみ箱は空です',
     'scans2.page.empty.deleted.body':
       '一覧から削除したスキャンはまずここに来て、保持期間が過ぎてから実際に消去されます — 保持日数は「設定 → スキャン保持ルール」で変更できます。それまではいつでも復元できます。',
+    'scans2.list.status.pendingTitle': 'CTF2 の課題に候補 flag があり確認待ちです。基盤のスキャン状態は失敗です',
+    'scans2.list.status.unsolvedTitle': 'CTF2 の課題は未解決です。基盤のスキャン状態は失敗です',
   },
 
   ru: {},
