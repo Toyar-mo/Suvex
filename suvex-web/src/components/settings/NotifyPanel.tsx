@@ -134,7 +134,6 @@ function RuleSection({ rule }: { rule: NoticeRule }) {
         <Field
           label={t('settings.notify.minSeverityLabel')}
           htmlFor="notice-severity"
-          help={t('settings.notify.minSeverityHelp')}
         >
           <div className="flex flex-wrap gap-1">
             {SEVERITY_ORDER.map((severity) => {

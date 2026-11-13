@@ -335,7 +335,6 @@ function AddUserForm({ onDone }: { onDone: () => void }) {
       <Field
         label={t('settings.users.usernameLabel')}
         htmlFor="new-user-name"
-        help={t('settings.users.usernameHelp')}
       >
         <TextInput
           id="new-user-name"

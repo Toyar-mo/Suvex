@@ -339,7 +339,6 @@ function AddMemberForm({ onDone, full }: { onDone: () => void; full: boolean }) 
       <Field
         label={t('settings.members.nameLabel')}
         htmlFor="new-member-name"
-        help={t('settings.members.nameHelp')}
       >
         <TextInput
           id="new-member-name"

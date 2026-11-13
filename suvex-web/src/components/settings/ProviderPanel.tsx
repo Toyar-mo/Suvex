@@ -689,14 +689,6 @@ function AccountEditor({
           label={t('settings.provider.labelField')}
           htmlFor={`${account.id}-label`}
           required
-          /*
-            这一行 help 不只是补充说明 —— 它让同一行两列的结构**对齐**。
-            实测：隔壁「模型名称」有 help 而这里没有时，两列输入框的
-            顶部相差 24px（help 行的高度），并排的输入框一个上一个下，
-            看起来像没对齐的表格。给两列同样的「标签 + 说明 + 控件」结构，
-            它们自然落在同一条基线上。
-          */
-          help={t('settings.provider.labelHelp')}
           error={touched ? errors.label : null}
         >
           <TextInput
@@ -711,7 +703,6 @@ function AccountEditor({
           label={t('settings.provider.modelLabel')}
           htmlFor={`${account.id}-model`}
           required
-          help={t('settings.provider.modelHelp')}
           error={touched ? errors.model : null}
         >
           <div className="flex flex-col gap-1.5">
