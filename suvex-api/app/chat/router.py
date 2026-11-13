@@ -235,8 +235,19 @@ def get_context_usage(
         window = provider.context_window_tokens
     # OMP 的顺序：provider 报的当前上下文占用优先；没有才退回 tokenizer/字符估算。
     latest = turn_runs.list_runs(db, session_id=session.id, limit=1)
+    compactions = chat_compaction.list_for_session(db, session_id=session.id)
+    latest_compaction = compactions[-1] if compactions else None
     measured = latest[0].last_prompt_tokens if latest else 0
-    source = "provider" if measured > 0 and latest and latest[0].usage_reported else "estimate"
+    # 手动/自动压缩之后，上一次调用的 prompt tokens 已经不代表当前上下文；
+    # 先退回压缩后的估算，等下一次真实调用再恢复 provider 值。
+    fresh = latest is not None and (
+        latest_compaction is None or latest_compaction.created_at <= latest[0].updated_at
+    )
+    source = (
+        "provider"
+        if measured > 0 and latest is not None and latest[0].usage_reported and fresh
+        else "estimate"
+    )
     used = measured if source == "provider" else chat_compaction.estimate_context_tokens(db, session=session)
     if source == "estimate":
         # OMP 的 breakdown 还包含 system prompt / 工具 schema / 技能。
@@ -251,7 +262,6 @@ def get_context_usage(
             used += (system_chars + tools_chars) // 4
         except Exception:  # noqa: BLE001 - 辅助显示，失败就只算消息
             pass
-    compactions = chat_compaction.list_for_session(db, session_id=session.id)
     return ChatContextOut(
         usedTokens=used,
         windowTokens=window,
