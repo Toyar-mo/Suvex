@@ -98,6 +98,10 @@ def test_raw_network_is_opt_in() -> None:
     assert runner.needs_raw_network("WEB") is True
     assert runner.needs_raw_network(None) is False
     assert runner.needs_raw_network("未知分类") is False
+    # 平台偶发缺 category：用标题兜底，PWN 必须联网；RE 仍隔离。
+    assert runner.needs_raw_network(None, "PWN3") is True
+    assert runner.needs_raw_network("", "PWN5") is True
+    assert runner.needs_raw_network(None, "RE5") is False
 
 
 # ══════════════════════════════════════════════════════════

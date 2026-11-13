@@ -4418,7 +4418,7 @@ class SolveOutcome:
     findings: object | None = None
 
 
-def needs_raw_network(category: str | None) -> bool:
+def needs_raw_network(category: str | None, title: str | None = None) -> bool:
     """这道题是否需要**容器内**的原始网络。
 
     pwn / 网络类题要直连 TCP 服务，所以不能把容器关进 `none`。
@@ -4450,6 +4450,13 @@ def needs_raw_network(category: str | None) -> bool:
     而反向猜错的代价是"一个本可以完全断网的容器被放开了网络"。
     """
     normalized = (category or "").strip().lower()
+    # 平台偶尔不给 category（PWN3/PWN5 实测为空）。空分类会被当成
+    # "不需要网络" -> --network none -> 连靶机都连不上。标题含 pwn
+    # 是可靠的兜底判据；仍保留"认不出来按隔离"的安全方向。
+    if not normalized and title:
+        normalized = title.strip().lower()
+    if "pwn" in normalized:
+        return True
     return normalized in {
         "pwn",
         "pwning",
@@ -8081,7 +8088,7 @@ def build_spec(
         max_wrong_submissions=int(
             challenge.max_wrong_submissions or DEFAULT_CTF2_MAX_WRONG_SUBMISSIONS
         ),
-        network_isolated=not needs_raw_network(challenge.category),
+        network_isolated=not needs_raw_network(challenge.category, challenge.title),
         resume_digest=tuple(resume_digest),
         # ★ v1.80：按题型裁剪技能清单（未知题型 → 空 = 全量，见
         #   `skills.skill_categories_for` 的说明）。
