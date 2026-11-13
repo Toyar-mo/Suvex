@@ -244,6 +244,7 @@ def test_close_stale_on_startup_marks_running_as_interrupted(
     session = _new_session(db_session)
     run = turn_runs.start(db_session, session_id=session.id)
     run.resume_attempts = 2
+    run.heartbeat_at = now_utc() - timedelta(seconds=turn_runs.STALE_SECONDS + 1)
     db_session.commit()
 
     changed = turn_runs.close_stale_on_startup(db_session)
@@ -253,6 +254,19 @@ def test_close_stale_on_startup_marks_running_as_interrupted(
     # ★ v1.80：进程重启不是这一轮的失败 —— 额度清零、心跳立即过期。
     assert run.resume_attempts == 0
     assert run.heartbeat_at <= now_utc() - timedelta(seconds=turn_runs.STALE_SECONDS)
+
+
+def test_close_stale_on_startup_does_not_touch_a_live_worker(
+    db_session: Session,
+) -> None:
+    session = _new_session(db_session)
+    run = turn_runs.start(db_session, session_id=session.id)
+    db_session.commit()
+
+    changed = turn_runs.close_stale_on_startup(db_session)
+    db_session.refresh(run)
+    assert changed == 0
+    assert run.status == "running", "新 worker 启动不能改判别的 worker 正在跑的轮次"
 
 
 def test_claim_bumps_attempts_and_keeps_it_running(db_session: Session) -> None:

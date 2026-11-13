@@ -395,7 +395,7 @@ def claim(
 
 
 def close_stale_on_startup(db: Session) -> int:
-    """进程启动时把遗留的 `running` 改判 `interrupted`。
+    """进程启动时把**心跳已经过期**的 `running` 改判 `interrupted`。
 
     为什么不在启动时直接 resume：启动阶段的数据库/网络/沙箱都还没就绪，
     在那时候跑模型调用会把"服务起不来"和"一轮跑失败"两件事混在一起。
@@ -410,11 +410,18 @@ def close_stale_on_startup(db: Session) -> int:
 
     进程重启不是这一轮的失败：额度清零、心跳直接推到"已过期"，让后台循环
     在启动后**立刻**接手，而不是再白等 90 秒。
+
+    ★ 多 worker：只改判心跳已过期的行。新 worker 启动时，别的 worker 手里
+    正常跑着的轮次心跳是新的；旧实现把它们也改成 `interrupted`，会让另一个
+    worker 的 `claim()` 看到可接手状态并重复执行同一轮。
     """
     now = now_utc()
     result = db.execute(
         update(ChatTurnRun)
-        .where(ChatTurnRun.status == "running")
+        .where(
+            ChatTurnRun.status == "running",
+            ChatTurnRun.heartbeat_at <= now - timedelta(seconds=STALE_SECONDS),
+        )
         .values(
             status="interrupted",
             resume_attempts=0,
