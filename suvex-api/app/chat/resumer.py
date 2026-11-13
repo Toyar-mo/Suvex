@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.chat import engine, turn_runs
+from app.chat import live as chat_live
 from app.chat import service as chat_service
 from app.chat.models import ChatSession
 from app.core.timeutil import now_utc
@@ -141,6 +142,11 @@ async def resume_one(db: Session, run: Any, *, auto_continue: bool = True) -> bo
     #   它跑长工具时心跳过期，前端会看到「可继续」黄条；用户一点，
     #   `claim()` 因为看不到活跃租约而放行，同进程就出现两个执行体。
     turn_runs.mark_active(run.id)
+    await chat_live.hub.begin(session.id)
+
+    async def emit(event, payload):
+        await chat_live.hub.publish(session.id, event, payload)
+
     try:
         try:
             result = await engine.run_turn(
@@ -148,6 +154,7 @@ async def resume_one(db: Session, run: Any, *, auto_continue: bool = True) -> bo
                 session=session,
                 content="",
                 identity=identity,
+                emit=emit,
                 turn_run=run,
                 resume_from=run,
             )
@@ -214,9 +221,19 @@ async def resume_one(db: Session, run: Any, *, auto_continue: bool = True) -> bo
             turn_runs.finish_incomplete(db, run)
         else:
             turn_runs.finish(db, run, status="done")
+        await chat_live.hub.publish(
+            session.id,
+            "done",
+            {
+                "messageCount": len(result.messages),
+                "awaitingApproval": result.awaiting_approval,
+                "hitToolLimit": result.hit_tool_limit,
+            },
+        )
         db.commit()
         return True
     finally:
+        await chat_live.hub.finish(session.id)
         turn_runs.unmark_active(run.id)
 
 

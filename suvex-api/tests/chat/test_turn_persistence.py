@@ -1543,7 +1543,7 @@ async def test_approved_resume_bounces_its_plan_and_survives_empty_replies(
     message.approval_status = "approved"
     db_session.commit()
 
-    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202
         return "scans: 3", False
 
     monkeypatch.setattr(engine, "_execute_tool", fake_execute)
@@ -1594,7 +1594,7 @@ async def test_approved_resume_without_actions_uses_the_old_budgets(
     message.approval_status = "approved"
     db_session.commit()
 
-    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202
         return "scans: 0", False
 
     monkeypatch.setattr(engine, "_execute_tool", fake_execute)
@@ -1632,7 +1632,7 @@ async def test_approved_resume_stops_on_a_plan_when_bounces_run_out(
     message.approval_status = "approved"
     db_session.commit()
 
-    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202
         return "scans: 1", False
 
     monkeypatch.setattr(engine, "_execute_tool", fake_execute)
