@@ -238,6 +238,19 @@ def get_context_usage(
     measured = latest[0].last_prompt_tokens if latest else 0
     source = "provider" if measured > 0 and latest and latest[0].usage_reported else "estimate"
     used = measured if source == "provider" else chat_compaction.estimate_context_tokens(db, session=session)
+    if source == "estimate":
+        # OMP 的 breakdown 还包含 system prompt / 工具 schema / 技能。
+        # 没有 provider usage 时把它们也按字符估进来，至少不要让比例偏低。
+        try:
+            system_chars = len(
+                engine._system_prompt_for(session, native_tools=True, db=db)
+            )
+            tools_chars = len(
+                json.dumps(engine.build_tools_schema(), ensure_ascii=False)
+            )
+            used += (system_chars + tools_chars) // 4
+        except Exception:  # noqa: BLE001 - 辅助显示，失败就只算消息
+            pass
     compactions = chat_compaction.list_for_session(db, session_id=session.id)
     return ChatContextOut(
         usedTokens=used,

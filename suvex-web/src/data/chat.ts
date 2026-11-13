@@ -942,6 +942,8 @@ export interface ChatTurnRun {
   heartbeatAt?: string | null
   /** v1.92：这一轮累计 token；usageReported=false 时 0 不代表没消耗。 */
   promptTokens?: number
+  /** 最近一次真实调用的 prompt tokens；与累计 `promptTokens` 不同。 */
+  lastPromptTokens?: number
   completionTokens?: number
   totalTokens?: number
   usageReported?: boolean
