@@ -1698,6 +1698,11 @@ class SandboxContainer:
         #    普通目录（可写容器层），子挂载行为不变。
         if self.attachments_dir is not None and self.attachments_dir.is_dir():
             argv += ["-v", f"{self.attachments_dir}:{ATTACHMENT_DIR}:ro"]
+            # PWN/RE 附件常把运行路径硬编码为 /home/ctf（switchyard 实测）。
+            # 只挂到 /work/attachments 时，二进制在、路径不对，模型会误判
+            # “服务没部署”。同一个只读目录再挂一份到 /home/ctf，保持文件
+            # 权限，不复制、不占额外空间。
+            argv += ["-v", f"{self.attachments_dir}:/home/ctf:ro"]
         # ★★ 持久工作区（读写）。见 `workspace_dir` 的说明。
         #
         # ⚠️ 挂到 `/work/persist`（**不是** `/work` 本身）：
@@ -4449,24 +4454,11 @@ def needs_raw_network(category: str | None, title: str | None = None) -> bool:
     "某个 TCP 题连不上"（可见的失败，agent 会报告连接被拒），
     而反向猜错的代价是"一个本可以完全断网的容器被放开了网络"。
     """
-    normalized = (category or "").strip().lower()
-    # 平台偶尔不给 category（PWN3/PWN5 实测为空）。空分类会被当成
-    # "不需要网络" -> --network none -> 连靶机都连不上。标题含 pwn
-    # 是可靠的兜底判据；仍保留"认不出来按隔离"的安全方向。
-    if not normalized and title:
-        normalized = title.strip().lower()
-    if "pwn" in normalized:
-        return True
-    return normalized in {
-        "pwn",
-        "pwning",
-        "exploit",
-        "network",
-        "net",
-        "misc-net",
-        "pwnable",
-        "web",  # ★ 2026-10-18：目录探测要靠容器内的 gobuster/ffuf
-    }
+    # ★ 2026-11-13 用户要求：CTF 解题不要靠 --network none 干扰。
+    # CTF2 网络本身由 DOCKER-USER 白名单收窄，RE/CRYPTO 也可能需要查
+    # 资料/拉依赖/访问靶机；分类缺失（PWN3/PWN5 实测为空）时更不能
+    # 因为猜不到就把容器断网。统一允许容器网络，隔离交给网桥规则。
+    return True
 
 
 # ══════════════════════════════════════════════════════════

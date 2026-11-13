@@ -96,12 +96,13 @@ def test_raw_network_is_opt_in() -> None:
     assert runner.needs_raw_network("network") is True
     assert runner.needs_raw_network("web") is True
     assert runner.needs_raw_network("WEB") is True
-    assert runner.needs_raw_network(None) is False
-    assert runner.needs_raw_network("未知分类") is False
-    # 平台偶发缺 category：用标题兜底，PWN 必须联网；RE 仍隔离。
+    # 2026-11-13：CTF 解题不再用 --network none 干扰，所有分类都给网卡；
+    # 真正的出站边界由 DOCKER-USER/网桥规则负责。
+    assert runner.needs_raw_network(None) is True
+    assert runner.needs_raw_network("未知分类") is True
     assert runner.needs_raw_network(None, "PWN3") is True
     assert runner.needs_raw_network("", "PWN5") is True
-    assert runner.needs_raw_network(None, "RE5") is False
+    assert runner.needs_raw_network(None, "RE5") is True
 
 
 # ══════════════════════════════════════════════════════════
