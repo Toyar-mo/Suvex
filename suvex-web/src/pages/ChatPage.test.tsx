@@ -67,6 +67,8 @@ vi.mock('@/data/chat', () => ({
   loadPersonas: vi.fn(async () => {}),
   updateSettings: vi.fn(async () => true),
   uploadAttachment: vi.fn(async () => null),
+  fetchContextUsage: vi.fn(async () => null),
+  compactSession: vi.fn(async () => null),
   dropStagedAttachment: vi.fn(async () => true),
   decideApproval: vi.fn(async () => true),
   // ★ v0.100：插话。跑着的时候 Enter 走这条路径（见 `handleSend`）。

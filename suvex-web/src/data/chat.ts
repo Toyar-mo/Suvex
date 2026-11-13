@@ -2033,6 +2033,24 @@ export interface ChatCompactionResult {
   tokensAfter: number
 }
 
+/** 对话页状态条上的上下文占用（后端估算值）。 */
+export interface ChatContextUsage {
+  usedTokens: number
+  windowTokens: number
+  percent: number
+  compactionCount: number
+}
+
+/** 读取当前会话的上下文占用（不含系统提示词/工具 schema，按字符估算）。 */
+export async function fetchContextUsage(sessionId: string): Promise<ChatContextUsage | null> {
+  try {
+    return await api.get<ChatContextUsage>(`/chat/sessions/${sessionId}/context`)
+  } catch {
+    // 辅助信息：读不到就不显示，不把对话页打成错误态。
+    return null
+  }
+}
+
 /** 手动压缩上下文；成功返回压缩结果，失败只写 store.error。 */
 export async function compactSession(sessionId: string): Promise<ChatCompactionResult | null> {
   try {

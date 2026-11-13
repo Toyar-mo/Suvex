@@ -142,6 +142,20 @@ def trigger_chars(model: str | None = None, context_window: int | None = None) -
     return min(COMPACT_TRIGGER_CHARS, max(8_000, int(window * 0.7 * 4)))
 
 
+def estimate_context_tokens(db: Session, *, session: Any) -> int:
+    """估算当前会喂给模型的上下文 token 数（字符/4）。
+
+    这是给界面显示“上下文百分比”的近似值：按压缩边界后的摘要 + 最近原文
+    计算，不包含系统提示词与工具 schema。真实计费以 provider usage 为准。
+    """
+    comp, rows = load_context(db, session=session)
+    chars = len(comp.summary) if comp is not None else 0
+    chars += sum(
+        len(m.content or "") + len(m.model_extra or "") for m in rows
+    )
+    return max(1, chars // 4)
+
+
 def needs_compaction(
     rendered_chars: int,
     model: str | None = None,

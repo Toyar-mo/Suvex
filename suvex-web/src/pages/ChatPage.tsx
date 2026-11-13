@@ -70,6 +70,8 @@ import {
   getChatSnapshot,
   clearLastInterrupt,
   fetchMcpStatus,
+  fetchContextUsage,
+  type ChatContextUsage,
   type ChatMcpStatus,
   type ChatTurnRun,
 } from '@/data/chat'
@@ -617,6 +619,7 @@ export function ChatPage() {
   const [resuming, setResuming] = useState(false)
   //: 最近一次 `listTurns` 的结果。错误条要从中取「最近一条 failed 的 run」做重试。
   const [lastRuns, setLastRuns] = useState<ChatTurnRun[]>([])
+  const [contextUsage, setContextUsage] = useState<ChatContextUsage | null>(null)
 
   /*
     ★ 从 URL 派生"要打开哪个会话"，而不是在 effect 里 setState。
@@ -1663,6 +1666,21 @@ export function ChatPage() {
     if (!active) return
     await decideApproval(active.id, messageId, approve)
   }
+
+  // 上下文占用：会话打开、消息数变化、压缩边界变化时刷新；失败就不显示。
+  useEffect(() => {
+    if (!active) {
+      setContextUsage(null)
+      return
+    }
+    let alive = true
+    void fetchContextUsage(active.id).then((usage) => {
+      if (alive) setContextUsage(usage)
+    })
+    return () => {
+      alive = false
+    }
+  }, [active?.id, active?.messageCount, active?.compactions?.length])
 
   /*
     ★ `messages` 自己也要 memo：`active?.messages ?? []` 在没有会话时每次
@@ -2817,14 +2835,32 @@ export function ChatPage() {
               </Button>
             </div>
           </div>
-          {user?.role !== 'admin' && (
-            <p className="mx-auto mt-2 w-full max-w-[880px] text-2xs text-ink-faint">
-              {t(
-                'chat.a.readonlyNotice',
-                undefined,
-                '你是只读角色：可以查询和看结果，但不能让它建扫描或改技能库。',
+          {(contextUsage || user?.role !== 'admin') && (
+            <div className="mx-auto mt-1 flex w-full max-w-[880px] items-center justify-between gap-2 text-2xs text-ink-faint">
+              {contextUsage ? (
+                <span
+                  data-context-usage
+                  title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.windowTokens.toLocaleString()} tokens（估算，不含系统提示词与工具 schema）`}
+                >
+                  {t(
+                    'chat.a.contextUsage',
+                    { percent: String(contextUsage.percent) },
+                    `上下文 ${contextUsage.percent}%`,
+                  )}
+                </span>
+              ) : (
+                <span />
               )}
-            </p>
+              {user?.role !== 'admin' && (
+                <span className="text-right">
+                  {t(
+                    'chat.a.readonlyNotice',
+                    undefined,
+                    '你是只读角色：可以查询和看结果，但不能让它建扫描或改技能库。',
+                  )}
+                </span>
+              )}
+            </div>
           )}
         </div>
       </div>

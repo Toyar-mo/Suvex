@@ -152,3 +152,8 @@ def test_compaction_wire_schema_uses_camel_case() -> None:
 
 def test_trigger_is_tighter_for_small_context_models() -> None:
     assert compaction.trigger_chars("gpt-3.5-turbo") < compaction.trigger_chars("deepseek-v4")
+
+
+def test_context_usage_estimate_is_nonzero(db_session: Session) -> None:
+    session = _seed(db_session, count=6)
+    assert compaction.estimate_context_tokens(db_session, session=session) > 0

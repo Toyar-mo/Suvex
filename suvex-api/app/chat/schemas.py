@@ -312,6 +312,15 @@ class ChatSessionDetailOut(ChatSessionOut):
     compactions: list[ChatCompactionOut] = []
 
 
+class ChatContextOut(CamelModel):
+    """当前会话的上下文占用（估算）。"""
+
+    usedTokens: int
+    windowTokens: int
+    percent: int
+    compactionCount: int = 0
+
+
 class ChatSettingsIn(StrictModel):
     """改会话的六项设置（**部分提交**：只传要改的）。
 

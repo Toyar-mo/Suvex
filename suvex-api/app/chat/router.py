@@ -70,6 +70,7 @@ from app.chat.schemas import (
     ChatAttachmentOut,
     ChatChallengeRef,
     ChatCompactionOut,
+    ChatContextOut,
     ChatFileExportIn,
     ChatFileItemOut,
     ChatFileListOut,
@@ -197,6 +198,49 @@ def fork_chat_session(
     )
     db.commit()
     return ChatSessionOut.model_validate(child)
+
+
+@router.get("/chat/sessions/{session_id}/context", response_model=ChatContextOut)
+def get_context_usage(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> ChatContextOut:
+    """当前上下文占用的近似值（供对话页显示百分比）。
+
+    `usedTokens` 是摘要 + 保留原文的字符/4，不含系统提示词和工具 schema；
+    `windowTokens` 取 provider 上配置的窗口，没配则按模型名推断。
+    真实计费仍以 provider 的 usage 为准。
+    """
+    from sqlalchemy import select
+
+    from app.providers.models import ProviderAccount
+
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    provider = None
+    if session.provider_id:
+        provider = db.get(ProviderAccount, session.provider_id)
+    if provider is None:
+        provider = db.scalars(
+            select(ProviderAccount).order_by(
+                ProviderAccount.is_default.desc(), ProviderAccount.created_at
+            )
+        ).first()
+    window = chat_compaction.context_window_tokens(
+        provider.model if provider is not None else None
+    )
+    if provider is not None and provider.context_window_tokens:
+        window = provider.context_window_tokens
+    used = chat_compaction.estimate_context_tokens(db, session=session)
+    compactions = chat_compaction.list_for_session(db, session_id=session.id)
+    return ChatContextOut(
+        usedTokens=used,
+        windowTokens=window,
+        percent=max(0, min(100, round(used / max(1, window) * 100))),
+        compactionCount=len(compactions),
+    )
 
 
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetailOut)
