@@ -28,7 +28,7 @@ class _Gateway:
 
     async def chat(self, messages, *, system):  # noqa: ANN001, ANN201
         self.calls += 1
-        assert "压缩" in system
+        assert "Summarize" in system
         return _Reply()
 
 

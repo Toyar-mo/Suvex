@@ -1419,12 +1419,21 @@ async def _model_context(
     """
     comp, rows = chat_compaction.load_context(db, session=session)
     messages = _render_compacted(comp, rows)
+    model = getattr(gateway, "model", None)
     chars = sum(len(m.get("content") or "") for m in messages)
+    from app.chat.tokens import count_tokens
+
+    used_tokens = sum(count_tokens(m.get("content") or "", model)[0] for m in messages)
     if not (
         force
         or chat_compaction.needs_compaction(
             chars,
-            getattr(gateway, "model", None),
+            model,
+            getattr(gateway, "context_window_tokens", None),
+        )
+        or chat_compaction.needs_compaction_tokens(
+            used_tokens,
+            model,
             getattr(gateway, "context_window_tokens", None),
         )
     ):

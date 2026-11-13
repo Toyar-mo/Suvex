@@ -673,7 +673,7 @@ class ChatCompaction(Base):
 
     - `summary`：被压缩掉那段的摘要，重建上下文时作为最前面的 user 消息；
     - `first_kept_seq`：从这条消息（含）开始保留原文；更早的消息只以摘要形式进入模型；
-    - `tokens_before/after`：估算值（字符数 / 4）。只用于观测压缩收益，不做计费。
+    - `tokens_before/after`：DeepSeek 走离线精确 tokenizer，其他模型字符/4。只用于观测压缩收益，不做计费。
     """
 
     __tablename__ = "chat_compactions"
