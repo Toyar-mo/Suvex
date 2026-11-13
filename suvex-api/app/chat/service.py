@@ -836,6 +836,37 @@ __all__ = [
 # ══════════════════════════════════════════════════════════
 
 
+def session_tree(
+    db: Session, *, current: ChatSession
+) -> tuple[ChatSession, list[ChatSession]]:
+    """返回当前会话所属的根与整棵分叉树。
+
+    当前模型是「分叉时复制前缀」，所以树是**会话级**的：每个子会话
+    记住 `forked_from_session_id/seq`。这里按 owner 取全部会话，
+    沿父指针找根，避免递归 SQL；会话数量是用户级的，几十到几百条。
+    """
+    rows = db.scalars(
+        select(ChatSession).where(ChatSession.created_by == current.created_by)
+    ).all()
+    by_id = {row.id: row for row in rows}
+
+    def root_of(session: ChatSession) -> ChatSession:
+        seen: set[str] = set()
+        node = session
+        while node.forked_from_session_id and node.id not in seen:
+            seen.add(node.id)
+            parent = by_id.get(node.forked_from_session_id)
+            if parent is None:
+                break
+            node = parent
+        return node
+
+    root = root_of(current)
+    nodes = [row for row in rows if root_of(row).id == root.id]
+    nodes.sort(key=lambda row: (row.created_at, row.id))
+    return root, nodes
+
+
 def branch_cutoff(
     db: Session, *, source: ChatSession, upto_seq: int | None = None
 ) -> int:

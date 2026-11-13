@@ -142,6 +142,25 @@ class ChatSessionOut(CamelModel):
     mcpServerNames: list[str] | None = None
 
 
+class ChatSessionTreeNode(CamelModel):
+    """会话树的一行：分叉关系是会话级的，不是消息级的。"""
+
+    id: str
+    title: str
+    forkedFromSessionId: str | None = None
+    forkedFromSeq: int | None = None
+    branchSummary: str | None = None
+    messageCount: int
+    createdAt: IsoDateTime
+    current: bool = False
+
+
+class ChatSessionTreeOut(CamelModel):
+    rootSessionId: str
+    currentSessionId: str
+    nodes: list[ChatSessionTreeNode]
+
+
 #: ★ v1.56：历史消息里残留的自创 XML 包装 `<system>…</system>` 的**显示期**清洗。
 #:
 #:   泄漏是在 v1.56 之前就写进库的（那次线上会话 146 条正文带 `<system>`），

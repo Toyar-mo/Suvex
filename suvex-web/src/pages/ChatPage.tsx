@@ -33,6 +33,7 @@ import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
 import { ChatPlanStrip } from '@/components/chat/ChatPlanStrip'
 import { SessionContextMenu } from '@/components/chat/SessionContextMenu'
 import { SessionFindingsModal } from '@/components/chat/SessionFindingsModal'
+import { SessionTreeModal } from '@/components/chat/SessionTreeModal'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { useAuth } from '@/data/auth-store'
 import { loadKernel, useKernel } from '@/data/kernel'
@@ -71,6 +72,7 @@ import {
   clearLastInterrupt,
   fetchMcpStatus,
   fetchContextUsage,
+  fetchSessionTree,
   attachLiveTurn,
   type ChatContextUsage,
   type ChatMcpStatus,
@@ -102,6 +104,7 @@ import {
   Eye,
   EyeOff,
   Folder,
+  GitBranch,
   MessageSquarePlus,
   MessagesSquare,
   MoreHorizontal,
@@ -812,6 +815,12 @@ export function ChatPage() {
     scanIds: string[]
     items: FindingListItem[]
   }>({ open: false, title: '', loading: false, error: null, sessionId: '', scanIds: [], items: [] })
+  const [treeView, setTreeView] = useState<{
+    open: boolean
+    loading: boolean
+    error: string | null
+    nodes: ChatSessionTreeNode[]
+  }>({ open: false, loading: false, error: null, nodes: [] })
 
   /** 右键时被点的那条会话。找不到时退回右键那一刻的快照，**不返回 null**。 */
   const menuSession = useMemo(() => {
@@ -1493,6 +1502,24 @@ export function ChatPage() {
       setChainView((view) => (view.open ? { ...view, loading: false, messages } : view))
     } catch (error) {
       setChainView((view) =>
+        view.open ? { ...view, loading: false, error: errorMessage(error) } : view,
+      )
+    }
+  }
+
+  /** 打开分叉树：树是会话级的，取当前会话所在整棵树。 */
+  async function openTree() {
+    if (!active) return
+    setTreeView({ open: true, loading: true, error: null, nodes: [] })
+    try {
+      const tree = await fetchSessionTree(active.id)
+      setTreeView((view) =>
+        view.open
+          ? { ...view, loading: false, nodes: tree.nodes }
+          : view,
+      )
+    } catch (error) {
+      setTreeView((view) =>
         view.open ? { ...view, loading: false, error: errorMessage(error) } : view,
       )
     }
@@ -2200,6 +2227,23 @@ export function ChatPage() {
               <span className="hidden sm:inline">
                 {t('chat.agentHub.button', { n: hubChildren.length }, `子代理 ${hubChildren.length}`)}
               </span>
+            </button>
+          )}
+          {active && (
+            <button
+              type="button"
+              onClick={() => void openTree()}
+              aria-label={t('chat.tree.open', undefined, '分支树')}
+              title={t('chat.tree.open', undefined, '分支树')}
+              className={cn(
+                'flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-1 text-2xs',
+                'max-sm:min-h-9 max-sm:min-w-9 max-sm:justify-center',
+                'text-ink-faint transition-ui duration-fast hover:text-ink-muted',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              )}
+            >
+              <GitBranch size={12} strokeWidth={2} aria-hidden="true" />
+              <span className="hidden sm:inline">{t('chat.tree.button', undefined, '分支')}</span>
             </button>
           )}
           {active && (
@@ -2965,6 +3009,18 @@ export function ChatPage() {
         messages={chainView.messages}
         loading={chainView.loading}
         error={chainView.error}
+      />
+      <SessionTreeModal
+        open={treeView.open}
+        onClose={() => setTreeView((view) => ({ ...view, open: false }))}
+        nodes={treeView.nodes}
+        loading={treeView.loading}
+        error={treeView.error}
+        onSelect={(sessionId) => {
+          setTreeView((view) => ({ ...view, open: false }))
+          setSearchParams({ session: sessionId }, { replace: true })
+          setShowList(false)
+        }}
       />
       <SessionFindingsModal
         open={findingsView.open}

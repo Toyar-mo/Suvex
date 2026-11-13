@@ -130,6 +130,11 @@ export interface ChatSession {
 
   /** 子代理会话的父会话；null/缺失 = 顶层会话。 */
   parentSessionId?: string | null
+  /** 从哪个会话的哪条消息分叉。 */
+  forkedFromSessionId?: string | null
+  forkedFromSeq?: number | null
+  /** 分叉时生成、注入子会话的分支摘要。 */
+  branchSummary?: string | null
 
   // ── v0.94 的六项「对话设置」 ──────────────────────────────
   //
@@ -2292,6 +2297,28 @@ export async function loadSessionPreview(
   limit = 12,
 ): Promise<ChatSessionDetail> {
   return api.get<ChatSessionDetail>(`/chat/sessions/${sessionId}?limit=${limit}`)
+}
+
+export interface ChatSessionTreeNode {
+  id: string
+  title: string
+  forkedFromSessionId?: string | null
+  forkedFromSeq?: number | null
+  branchSummary?: string | null
+  messageCount: number
+  createdAt: string
+  current: boolean
+}
+
+export interface ChatSessionTree {
+  rootSessionId: string
+  currentSessionId: string
+  nodes: ChatSessionTreeNode[]
+}
+
+/** 读当前会话所属的分叉树（会话级，不是消息级）。 */
+export async function fetchSessionTree(sessionId: string): Promise<ChatSessionTree> {
+  return api.get<ChatSessionTree>(`/chat/sessions/${sessionId}/tree`)
 }
 
 /**

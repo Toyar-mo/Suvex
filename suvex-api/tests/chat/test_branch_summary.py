@@ -22,3 +22,17 @@ def test_fork_injects_branch_summary_as_process_message(db_session: Session) -> 
     summary_rows = [r for r in rows if r.surface == "process"]
     assert len(summary_rows) == 1
     assert "另一个分支" in summary_rows[0].content
+
+
+def test_session_tree_returns_root_and_forks(db_session: Session) -> None:
+    root = service.create_session(db_session, created_by="admin", title="根")
+    service.append_user_message(db_session, session=root, content="一")
+    service.append_user_message(db_session, session=root, content="二")
+    db_session.commit()
+
+    child = service.fork_session(db_session, source=root, upto_seq=1)
+    db_session.commit()
+    found_root, nodes = service.session_tree(db_session, current=child)
+
+    assert found_root.id == root.id
+    assert [n.id for n in nodes] == [root.id, child.id]

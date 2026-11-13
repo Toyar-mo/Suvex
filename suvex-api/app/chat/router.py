@@ -91,6 +91,8 @@ from app.chat.schemas import (
     ChatSessionDetailOut,
     ChatSessionIn,
     ChatSessionOut,
+    ChatSessionTreeNode,
+    ChatSessionTreeOut,
     ChatSettingsIn,
     ChatTodoOut,
     ChatTurnRunOut,
@@ -208,6 +210,35 @@ async def fork_chat_session(
     )
     db.commit()
     return ChatSessionOut.model_validate(child)
+
+
+@router.get("/chat/sessions/{session_id}/tree", response_model=ChatSessionTreeOut)
+def get_session_tree(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> ChatSessionTreeOut:
+    current = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    root, nodes = service.session_tree(db, current=current)
+    return ChatSessionTreeOut(
+        rootSessionId=root.id,
+        currentSessionId=current.id,
+        nodes=[
+            ChatSessionTreeNode(
+                id=node.id,
+                title=node.title,
+                forkedFromSessionId=node.forked_from_session_id,
+                forkedFromSeq=node.forked_from_seq,
+                branchSummary=node.branch_summary,
+                messageCount=node.message_count,
+                createdAt=node.created_at,
+                current=node.id == current.id,
+            )
+            for node in nodes
+        ],
+    )
 
 
 @router.get("/chat/sessions/{session_id}/context", response_model=ChatContextOut)
