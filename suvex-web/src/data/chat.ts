@@ -2039,6 +2039,8 @@ export interface ChatContextUsage {
   windowTokens: number
   percent: number
   compactionCount: number
+  /** provider = 最近一次调用上报；estimate = 字符估算。 */
+  source: 'provider' | 'estimate'
 }
 
 /** 读取当前会话的上下文占用（不含系统提示词/工具 schema，按字符估算）。 */

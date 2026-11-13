@@ -2840,7 +2840,11 @@ export function ChatPage() {
               {contextUsage ? (
                 <span
                   data-context-usage
-                  title={`${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.windowTokens.toLocaleString()} tokens（估算，不含系统提示词与工具 schema）`}
+                  title={`${
+                    contextUsage.source === 'provider'
+                      ? `${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.windowTokens.toLocaleString()} tokens（最近一次调用上报）`
+                      : `${contextUsage.usedTokens.toLocaleString()} / ${contextUsage.windowTokens.toLocaleString()} tokens（字符估算，不含系统提示词与工具 schema）`
+                  }${contextUsage.compactionCount > 0 ? ` · 已压缩 ${contextUsage.compactionCount} 次` : ''}`}
                 >
                   {t(
                     'chat.a.contextUsage',

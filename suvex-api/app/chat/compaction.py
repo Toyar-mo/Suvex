@@ -287,7 +287,7 @@ async def compact(
     if turn_run is not None and reply is not None and getattr(reply, "usage", None) is not None:
         from app.chat import turn_runs as turn_run_store
 
-        turn_run_store.add_usage(db, turn_run, reply.usage)
+        turn_run_store.add_usage(db, turn_run, reply.usage, track_context=False)
 
     summary = str(
         getattr(reply, "text", "") or (reply if isinstance(reply, str) else "")

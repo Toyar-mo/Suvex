@@ -493,7 +493,7 @@ def give_up(db: Session, run: ChatTurnRun, *, reason: str) -> None:
     db.flush()
 
 
-def add_usage(db: Session, run: ChatTurnRun, usage: Any) -> None:
+def add_usage(db: Session, run: ChatTurnRun, usage: Any, *, track_context: bool = True) -> None:
     """把一次模型调用的用量累加进这一轮（v1.92）。
 
     只累加接入点**真的给了**的字段；`usage.reported=False` 时只把
@@ -504,7 +504,12 @@ def add_usage(db: Session, run: ChatTurnRun, usage: Any) -> None:
     reported = bool(getattr(usage, "reported", False))
     if not reported:
         return
-    run.prompt_tokens = (run.prompt_tokens or 0) + int(getattr(usage, "prompt_tokens", 0) or 0)
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    run.prompt_tokens = (run.prompt_tokens or 0) + prompt
+    if track_context:
+        # OMP 的上下文占用优先取 provider 报的**当前** prompt tokens；
+        # 累计值会把多轮相加，不能当百分比分子。
+        run.last_prompt_tokens = prompt
     run.completion_tokens = (run.completion_tokens or 0) + int(
         getattr(usage, "completion_tokens", 0) or 0
     )

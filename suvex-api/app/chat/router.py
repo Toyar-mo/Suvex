@@ -233,13 +233,18 @@ def get_context_usage(
     )
     if provider is not None and provider.context_window_tokens:
         window = provider.context_window_tokens
-    used = chat_compaction.estimate_context_tokens(db, session=session)
+    # OMP 的顺序：provider 报的当前上下文占用优先；没有才退回 tokenizer/字符估算。
+    latest = turn_runs.list_runs(db, session_id=session.id, limit=1)
+    measured = latest[0].last_prompt_tokens if latest else 0
+    source = "provider" if measured > 0 and latest and latest[0].usage_reported else "estimate"
+    used = measured if source == "provider" else chat_compaction.estimate_context_tokens(db, session=session)
     compactions = chat_compaction.list_for_session(db, session_id=session.id)
     return ChatContextOut(
         usedTokens=used,
         windowTokens=window,
         percent=max(0, min(100, round(used / max(1, window) * 100))),
         compactionCount=len(compactions),
+        source=source,
     )
 
 

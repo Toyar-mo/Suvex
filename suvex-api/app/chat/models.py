@@ -562,6 +562,10 @@ class ChatTurnRun(Base):
     total_tokens: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default="0"
     )
+    #: 最近一次真实模型调用的 prompt token 数（不是累计值）。
+    #: OMP 的上下文百分比优先用 provider 报的当前占用；这里存最近一次，
+    #: 供对话页显示，累计值仍看 `prompt_tokens`。
+    last_prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     usage_reported: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="0"
     )

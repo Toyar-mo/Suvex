@@ -319,6 +319,8 @@ class ChatContextOut(CamelModel):
     windowTokens: int
     percent: int
     compactionCount: int = 0
+    #: `provider` = 最近一次调用上报的 prompt tokens；`estimate` = 字符估算。
+    source: str = "estimate"
 
 
 class ChatSettingsIn(StrictModel):
@@ -609,6 +611,8 @@ class ChatTurnRunOut(CamelModel):
     resumeAttempts: int
     lastError: str | None = None
     promptTokens: int = 0
+    #: 最近一次真实调用的 prompt token 数（不是累计值）。
+    lastPromptTokens: int = 0
     completionTokens: int = 0
     totalTokens: int = 0
     usageReported: bool = False
