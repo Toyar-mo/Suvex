@@ -688,6 +688,7 @@ class ChatCompaction(Base):
         nullable=False,
     )
     summary: Mapped[str] = mapped_column(Text, nullable=False)
+    short_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     first_kept_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     tokens_before: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     tokens_after: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

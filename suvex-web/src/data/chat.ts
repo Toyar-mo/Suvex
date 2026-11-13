@@ -193,6 +193,7 @@ export interface ChatChallengeRef {
 
 export interface ChatCompactionBoundary {
   summary: string
+  shortSummary?: string | null
   firstKeptSeq: number
   tokensBefore: number
   tokensAfter: number
@@ -2111,6 +2112,7 @@ function deriveTitle(currentTitle: string, content: string): string {
 /** 改标题。 */
 export interface ChatCompactionResult {
   summary: string
+  shortSummary?: string | null
   firstKeptSeq: number
   tokensBefore: number
   tokensAfter: number

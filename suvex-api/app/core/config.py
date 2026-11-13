@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     #: 进行中对话事件总线。留空 = 单进程内存实现；填 `redis://...` 后
     #: 多个 uvicorn worker 共享缓冲与实时帧。
     redis_url: str = ""
+    #: OMP 的 generic remote compaction 端点。留空 = 本地摘要。
+    #: 请求体 `{systemPrompt, prompt}`，响应 `{summary, shortSummary?}`。
+    compaction_remote_url: str = ""
+    compaction_remote_token: str = ""
+    compaction_remote_timeout_seconds: float = 300.0
 
     # ── 凭据加密（provider 的 API key）────────────────────
     # ★ 单独的密钥，**不复用任何其他密钥**。

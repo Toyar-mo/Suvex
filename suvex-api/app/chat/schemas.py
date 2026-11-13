@@ -306,6 +306,7 @@ class ChatCompactionOut(CamelModel):
     """手动压缩的结果（v2.0）。"""
 
     summary: str
+    shortSummary: str | None = None
     firstKeptSeq: int
     tokensBefore: int
     tokensAfter: int

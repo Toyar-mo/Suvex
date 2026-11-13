@@ -388,27 +388,62 @@ async def compact(
     else:
         prompt = f"<conversation>\n{old_text}\n</conversation>\n\n{_SUMMARY_PROMPT}"
 
-    try:
+    summary = ""
+    short_summary: str | None = None
+
+    # OMP generic remote compaction：`{systemPrompt, prompt}` →
+    # `{summary, shortSummary?}`。配置了端点就优先走它；失败退回本地摘要。
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    if settings.compaction_remote_url:
         try:
-            reply = await gateway.chat(
-                [{"role": "user", "content": prompt}],
-                system=_SUMMARY_SYSTEM,
-            )
-        except TypeError:
-            # 老网关/测试假网关不收 `system` 形参；摘要仍能跑，只是没有角色约束。
-            reply = await gateway.chat([{"role": "user", "content": prompt}])
-    except Exception:  # noqa: BLE001 - 压缩失败不能毁掉这一轮
-        logger.warning("上下文压缩调用失败，尝试机械降级", exc_info=True)
-        reply = None
+            import httpx
 
-    if turn_run is not None and reply is not None and getattr(reply, "usage", None) is not None:
-        from app.chat import turn_runs as turn_run_store
+            headers = {"Content-Type": "application/json"}
+            if settings.compaction_remote_token:
+                headers["Authorization"] = f"Bearer {settings.compaction_remote_token}"
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(settings.compaction_remote_timeout_seconds),
+                trust_env=False,
+            ) as client:
+                response = await client.post(
+                    settings.compaction_remote_url,
+                    json={"systemPrompt": _SUMMARY_SYSTEM, "prompt": prompt},
+                    headers=headers,
+                )
+                response.raise_for_status()
+                body = response.json()
+            summary = str(body.get("summary") or "").strip()
+            short_summary = str(body.get("shortSummary") or "").strip() or None
+            if summary:
+                logger.info("chat.compact remote session=%s", session.id)
+        except Exception:  # noqa: BLE001 - 远程失败必须退回本地
+            logger.warning("远程压缩失败，退回本地摘要", exc_info=True)
 
-        turn_run_store.add_usage(db, turn_run, reply.usage, track_context=False)
+    reply = None
+    if not summary:
+        try:
+            try:
+                reply = await gateway.chat(
+                    [{"role": "user", "content": prompt}],
+                    system=_SUMMARY_SYSTEM,
+                )
+            except TypeError:
+                # 老网关/测试假网关不收 `system` 形参；摘要仍能跑，只是没有角色约束。
+                reply = await gateway.chat([{"role": "user", "content": prompt}])
+        except Exception:  # noqa: BLE001 - 压缩失败不能毁掉这一轮
+            logger.warning("上下文压缩调用失败，尝试机械降级", exc_info=True)
+            reply = None
 
-    summary = str(
-        getattr(reply, "text", "") or (reply if isinstance(reply, str) else "")
-    ).strip()
+        if turn_run is not None and reply is not None and getattr(reply, "usage", None) is not None:
+            from app.chat import turn_runs as turn_run_store
+
+            turn_run_store.add_usage(db, turn_run, reply.usage, track_context=False)
+
+        summary = str(
+            getattr(reply, "text", "") or (reply if isinstance(reply, str) else "")
+        ).strip()
     if not summary:
         if not force:
             logger.warning("上下文压缩返回空摘要，继续用原历史")
@@ -438,6 +473,7 @@ async def compact(
         id=new_id("cmp"),
         session_id=session.id,
         summary=summary,
+        short_summary=short_summary,
         first_kept_seq=keep[0].seq,
         tokens_before=max(0, before),
         tokens_after=max(0, after),

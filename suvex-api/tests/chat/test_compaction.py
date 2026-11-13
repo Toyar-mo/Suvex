@@ -157,3 +157,57 @@ def test_trigger_is_tighter_for_small_context_models() -> None:
 def test_context_usage_estimate_is_nonzero(db_session: Session) -> None:
     session = _seed(db_session, count=6)
     assert compaction.estimate_context_tokens(db_session, session=session) > 0
+
+
+async def test_remote_compaction_uses_omp_generic_protocol(
+    db_session: Session, monkeypatch
+) -> None:
+    from types import SimpleNamespace
+
+    import httpx
+
+    from app.core import config
+
+    session = _seed(db_session)
+    calls: list[dict] = []
+
+    class _Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"summary": "REMOTE SUMMARY", "shortSummary": "short"}
+
+    class _Client:
+        def __init__(self, **kwargs):  # noqa: ANN003
+            pass
+
+        async def __aenter__(self):  # noqa: ANN204
+            return self
+
+        async def __aexit__(self, *args):  # noqa: ANN002
+            return False
+
+        async def post(self, url, *, json, headers):  # noqa: ANN001
+            calls.append({"url": url, "json": json, "headers": headers})
+            return _Response()
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: SimpleNamespace(
+            compaction_remote_url="http://compact.example",
+            compaction_remote_token="t",
+            compaction_remote_timeout_seconds=5.0,
+        ),
+    )
+
+    row = await compaction.compact(
+        db_session, session=session, gateway=_Gateway(), force=True
+    )
+    assert row is not None
+    assert row.summary == "REMOTE SUMMARY"
+    assert row.short_summary == "short"
+    assert calls and calls[0]["json"]["systemPrompt"]
+    assert calls[0]["headers"]["Authorization"] == "Bearer t"
