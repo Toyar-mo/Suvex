@@ -175,7 +175,6 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <Field
           label={t('sandbox.cpu.label')}
           htmlFor="sandbox-cpu"
-          help={t('sandbox.cpu.help')}
           error={touched ? errors.cpu : null}
         >
           <div className="flex items-center gap-1.5">
@@ -200,7 +199,6 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <Field
           label={t('sandbox.mem.label')}
           htmlFor="sandbox-memory"
-          help={t('sandbox.mem.help')}
           error={touched ? errors.memory : null}
         >
           <div className="flex items-center gap-1.5">
@@ -226,7 +224,6 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
         <Field
           label={t('sandbox.timeout.label')}
           htmlFor="sandbox-timeout"
-          help={t('sandbox.timeout.help')}
           error={touched ? errors.timeout : null}
         >
           <div className="flex items-center gap-1.5">
@@ -276,7 +273,6 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
             <Toggle
               id="sandbox-write"
               label={t('sandbox.write.label')}
-              hint={t('sandbox.write.hint')}
               checked={draft.allowVolumeWrite}
               onChange={(v) => setDraft({ ...draft, allowVolumeWrite: v })}
             />
@@ -311,7 +307,6 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
           <Field
             label={t('sandbox.concurrent.label')}
             htmlFor="sandbox-concurrent"
-            help={t('sandbox.concurrent.help')}
             error={touched ? errors.concurrent : null}
           >
             <div className="flex items-center gap-1.5">
@@ -336,7 +331,6 @@ export function SandboxPanel({ config }: SandboxPanelProps) {
           <Field
             label={t('sandbox.rounds.label')}
             htmlFor="sandbox-turns"
-            help={t('sandbox.rounds.help')}
             error={touched ? errors.turns : null}
           >
             <NumberInput

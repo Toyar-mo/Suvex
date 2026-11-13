@@ -835,7 +835,6 @@ function AccountEditor({
       <Toggle
         id={`${account.id}-default`}
         label={t('settings.provider.setDefaultLabel')}
-        hint={t('settings.provider.setDefaultHint')}
         checked={draft.isDefault}
         onChange={(v) => setDraft({ ...draft, isDefault: v })}
       />

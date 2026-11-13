@@ -430,7 +430,6 @@ export function KernelPanel() {
         <Field
           label={t('settings.kernel.maxWrongLabel')}
           htmlFor="ctf2-max-wrong"
-          help={t('settings.kernel.maxWrongHelp')}
           error={touched ? error : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -472,7 +471,6 @@ export function KernelPanel() {
           （两个调度器各自数自己的名额，实际跑出两倍）。
           不说明的话，用户会以为这里和那里应该填一样的数。
         */
-          help={t('settings.kernel.concurrentHelp')}
           error={touched ? concurrencyError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -514,7 +512,6 @@ export function KernelPanel() {
           会顺带把 CTF2 的认领延迟一起调大 —— 而界面上没有任何地方提示
           这两件事连着（与 v0.22 的配额超卖是同一类病）。
         */
-          help={t('settings.kernel.pollHelp')}
           error={touched ? pollError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -556,7 +553,6 @@ export function KernelPanel() {
           请求预算和解题**共享同一个 PAT**，而"平台不会更快地出新题"。
           写清代价，用户才好自己决定要不要更激进。
         */
-          help={t('settings.kernel.autoSyncHelp')}
           error={touched ? autoSyncError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -640,11 +636,6 @@ export function KernelPanel() {
             void handleSave()
           }}
           onReset={handleReset}
-          note={
-            <span className="text-2xs text-ink-muted">
-              <T k="settings.kernel.saveNote" />
-            </span>
-          }
         />
       </SettingsPanel>
 
@@ -665,7 +656,6 @@ export function KernelPanel() {
             解题读的是那一列；本设置只决定「CTF」页那个选择器的默认值。
             照搬"只影响这次解题"会把这句说反。
           */
-          hint={t('settings.kernel.defaultProfileHint')}
         />
 
         {/* ── 回合预算（v0.26）── */}
@@ -677,7 +667,6 @@ export function KernelPanel() {
             判据来自实测数据 —— 用户看到"6 轮 vs 37 条命令"这两组数，
             自己就知道该往哪调。
           */
-          help={t('settings.kernel.maxTurnsHelp')}
           error={touched ? maxTurnsError : null}
         >
           <span className="flex min-w-0 max-w-[10rem] items-center gap-1">
@@ -767,7 +756,6 @@ export function KernelPanel() {
             ★ 这一段必须把"什么时候会换"讲清楚，否则用户会以为它是负载均衡。
             它不是 —— 主接入点**调不动**时才换，正常情况下永远用主模型。
           */
-          help={t('settings.kernel.fallbackHelp')}
         >
           <Select
             id="ctf2-fallback-provider"
@@ -820,11 +808,6 @@ export function KernelPanel() {
             void handleSave()
           }}
           onReset={handleReset}
-          note={
-            <span className="text-2xs text-ink-muted">
-              <T k="settings.kernel.coreSaveNote" />
-            </span>
-          }
         />
       </SettingsPanel>
     </>

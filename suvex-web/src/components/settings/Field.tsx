@@ -137,8 +137,11 @@ export function Toggle({
   disabledHint?: string
   onChange: (value: boolean) => void
 }) {
+  const hintId = `${id}-hint`
   return (
     <div
+      // 非禁用时，说明只在 hover tooltip 与读屏器里出现；常驻小字不再复述控件。
+      title={!disabled ? hint : undefined}
       className={cn(
         'flex items-start gap-tight rounded-sm border p-2.5 transition-ui duration-fast',
         disabled ? 'border-line/50' : 'border-line hover:border-line-strong',
@@ -160,15 +163,20 @@ export function Toggle({
       />
       <label
         htmlFor={id}
+        aria-describedby={!disabled && hint ? hintId : undefined}
         className={cn('min-w-0 flex-1', disabled ? 'cursor-not-allowed' : 'cursor-pointer')}
       >
         <span className={cn('block text-xs', disabled ? 'text-ink-faint' : 'text-ink')}>
           {label}
         </span>
-        {(hint || disabledHint) && (
+        {!disabled && hint && (
+          // sr-only 仍在 DOM 里，读屏器可用；视觉上不占一行。
+          <span id={hintId} className="sr-only">{hint}</span>
+        )}
+        {disabled && disabledHint && (
           <span className="mt-0.5 block text-2xs text-ink-faint">
             {/* 禁用时换成禁用原因 —— 用户此刻的问题是"为什么点不了" */}
-            {disabled ? disabledHint : hint}
+            {disabledHint}
           </span>
         )}
       </label>
