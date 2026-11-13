@@ -8,6 +8,7 @@ import {
   FolderPlus,
   Loader2,
   Paperclip,
+  Search,
   Shield,
   ShieldCheck,
   Sparkles,
@@ -435,7 +436,9 @@ export function MultiSelect({
   emptyHint: string
   disabled?: boolean
 }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
   const boxRef = useRef<HTMLDivElement | null>(null)
 
   // 点外面 / Esc 关掉。用 `pointerdown` 而不是 `click`：click 在
@@ -456,7 +459,16 @@ export function MultiSelect({
     }
   }, [open])
 
+  // 关闭即清空：下次打开时不应该还停在上一次的筛选里。
+  useEffect(() => {
+    if (!open) setQuery('')
+  }, [open])
+
   const count = selected.length
+  const needle = query.trim().toLowerCase()
+  const filtered = needle
+    ? options.filter((name) => name.toLowerCase().includes(needle))
+    : options
   return (
     <div ref={boxRef} className="relative">
       <button
@@ -493,10 +505,39 @@ export function MultiSelect({
             'overscroll-contain rounded-sm border border-line bg-surface-raised p-1 shadow-lg',
           )}
         >
+          {options.length > 0 && (
+            <div className="sticky top-0 z-10 -mx-1 mb-1 border-b border-line/60 bg-surface-raised px-1 pb-1">
+              <div className="flex items-center gap-1.5 rounded-xs border border-line bg-surface-sunken px-1.5">
+                <Search size={11} strokeWidth={2} className="shrink-0 text-ink-faint" aria-hidden="true" />
+                <input
+                  autoFocus
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder={t('chat.a.searchOptions', undefined, '搜索…')}
+                  aria-label={t('chat.a.searchOptions', undefined, '搜索…')}
+                  className="h-7 min-w-0 flex-1 bg-transparent text-2xs text-ink placeholder:text-ink-faint focus:outline-none"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    onClick={() => setQuery('')}
+                    aria-label={t('chat.a.clearSearch', undefined, '清空搜索')}
+                    className="rounded-xs p-0.5 text-ink-faint hover:text-ink"
+                  >
+                    <X size={10} strokeWidth={2} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
           {options.length === 0 ? (
             <p className="px-2 py-3 text-2xs text-ink-faint">{emptyHint}</p>
+          ) : filtered.length === 0 ? (
+            <p className="px-2 py-3 text-2xs text-ink-faint">
+              {t('chat.a.noSearchResults', undefined, '没有匹配项')}
+            </p>
           ) : (
-            options.map((name) => {
+            filtered.map((name) => {
               const checked = selected.includes(name)
               return (
                 <button
@@ -797,7 +838,7 @@ export function AttachmentBar({
             ? 'h-9 w-9 shrink-0 justify-center rounded-sm text-ink-faint hover:bg-ink-ghost/10 hover:text-ink max-sm:h-10 max-sm:w-10'
             : 'rounded-xs border border-line bg-surface-sunken px-1.5 py-1 text-ink-muted hover:border-line-strong',
         )}
-        title={t('chat.a11y.attachHint', undefined, '传一个文件给它看（文本类，单个上限 5 MB）')}
+        title={t('chat.a11y.attachHint', undefined, '传一个文件或图片给它看（单个上限 50 MB）')}
       >
         {uploading ? (
           <Loader2 size={12} strokeWidth={2} className="animate-spin" aria-hidden="true" />

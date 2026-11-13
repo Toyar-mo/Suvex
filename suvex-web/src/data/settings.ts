@@ -68,6 +68,8 @@ export interface ProviderAccount {
   apiKeyMask: string
   /** 自定义接入点。空串 = 用官方默认地址 */
   baseUrl: string
+  /** 模型上下文窗口（token）。空 = 按模型名推断。 */
+  contextWindowTokens?: number | null
   /** 是否设为默认 provider。全部账号里至多一个为 true */
   isDefault: boolean
   /**

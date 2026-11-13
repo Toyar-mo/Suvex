@@ -216,12 +216,9 @@ export interface ScanListProps {
    * 而那时点一下"删除"会删掉一整片。
    */
   focusedId?: string | null
-  /** 正在右栏预览的那一行（与批量勾选无关）。 */
-  previewedId?: string | null
   onToggleRow: (id: string, next: boolean) => void
   /**
-   * 点标题/目标时**不跳走**，而是把这条交给调用方（任务页右栏预览）。
-   * 不传时保持原行为：链接直接去 `/activity?scan=…`。
+   * 点标题/目标时交给调用方（可选）。不传时链接直接去 `/activity?scan=…`。
    */
   onSelect?: (scan: Scan) => void
   /** 全选/取消全选**当前列表里的**记录 */
@@ -254,7 +251,6 @@ export function ScanList({
   scans,
   selectedIds,
   focusedId = null,
-  previewedId = null,
   onSelect,
   onToggleRow,
   onToggleAll,
@@ -326,7 +322,6 @@ export function ScanList({
           scan={scan}
           selected={selectedIds.has(scan.id)}
           focused={focusedId === scan.id}
-          previewed={previewedId === scan.id}
           onToggleRow={onToggleRow}
           onAbort={onAbort}
           onRerun={onRerun}
@@ -343,7 +338,6 @@ const ScanRow = memo(function ScanRow({
   scan,
   selected,
   focused,
-  previewed,
   onToggleRow,
   onAbort,
   onRerun,
@@ -354,13 +348,12 @@ const ScanRow = memo(function ScanRow({
   scan: Scan
   selected: boolean
   focused: boolean
-  previewed: boolean
   onToggleRow: (id: string, next: boolean) => void
   onAbort: (scan: Scan) => void
   onRerun: (scan: Scan) => void
   onResume?: (scan: Scan) => void
   onWriteup?: (scan: Scan) => void
-  /** 传了就把"点标题/目标"改成选中，而不是跳去活动页（任务页右栏预览）。 */
+  /** 传了就把"点标题/目标"改成回调，而不是跳去活动页。 */
   onSelect?: (scan: Scan) => void
 }) {
   const { t } = useI18n()
@@ -502,8 +495,6 @@ const ScanRow = memo(function ScanRow({
         focused && 'shadow-[inset_2px_0_0_0_rgb(var(--suvex-accent))]',
       )}
       data-focused={focused || undefined}
-      data-previewed={previewed || undefined}
-      aria-current={previewed ? 'true' : undefined}
       onClick={(event) => {
         /*
          * 整行都能选中。
@@ -522,13 +513,8 @@ const ScanRow = memo(function ScanRow({
         className={cn(
           'group flex flex-col gap-tight px-panel py-3 transition-ui duration-fast',
           'lg:flex-row lg:items-center lg:gap-panel lg:py-2.5',
-          // 选中行给一层底色 —— 批量操作前必须能一眼看出选了什么；
-          // 预览中的行给更淡的一层：两者是不同的状态，不能共用一个底色。
-          selected
-            ? 'bg-accent/[0.07]'
-            : previewed
-              ? 'bg-accent/[0.04]'
-              : 'hover:bg-surface-raised/50',
+          // 选中行给一层底色：批量操作前必须能一眼看出选了什么。
+          selected ? 'bg-accent/[0.07]' : 'hover:bg-surface-raised/50',
         )}
       >
         {/* 选择框 */}

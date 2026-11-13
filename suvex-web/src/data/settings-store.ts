@@ -675,6 +675,8 @@ export async function saveProviderAccount(next: ProviderAccount): Promise<SaveRe
     kind: next.kind,
     // 去尾斜杠，避免和 SDK 拼出 //v1
     baseUrl: next.baseUrl.trim().replace(/\/+$/, ''),
+    // 显式 null = 回到“按模型名推断”；PATCH 据此清空旧值。
+    contextWindowTokens: next.contextWindowTokens ?? null,
     /*
       ★ v1.78：`isDefault` 必须**跟着发**。
 

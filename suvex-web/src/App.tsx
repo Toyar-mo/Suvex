@@ -29,7 +29,6 @@ import {
   SettingsPage,
   SkillsPage,
   AgentsPage,
-  AgentTasksPage,
   ModelsPage,
   ApprovalsPage,
   IntranetPage,
@@ -85,7 +84,6 @@ const PAGE_COMPONENTS: Record<string, ComponentType> = {
   //   侧栏点得动、页面全白，不报错也不警告。
   skills: SkillsPage,
   agents: AgentsPage,
-  tasks: AgentTasksPage,
   models: ModelsPage,
   approvals: ApprovalsPage,
   intranet: IntranetPage,

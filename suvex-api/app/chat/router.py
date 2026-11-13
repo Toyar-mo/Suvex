@@ -56,6 +56,7 @@ from starlette.background import BackgroundTask
 from app.agents import service as agents_service
 from app.auth.deps import Identity, require_read
 from app.chat import attachments as chat_attachments
+from app.chat import compaction as chat_compaction
 from app.chat import engine, resumer, service, turn_runs
 from app.chat import interrupts as chat_interrupts
 from app.chat import mcp_tools as chat_mcp_tools
@@ -68,6 +69,7 @@ from app.chat.schemas import (
     ChatApprovalOut,
     ChatAttachmentOut,
     ChatChallengeRef,
+    ChatCompactionOut,
     ChatFileExportIn,
     ChatFileItemOut,
     ChatFileListOut,
@@ -238,6 +240,10 @@ def get_session(
         messages=[ChatMessageOut.model_validate(m) for m in messages],
         hasEarlier=has_earlier,
         challenge=_challenge_ref(db, session),
+        compactions=[
+            ChatCompactionOut.model_validate(row)
+            for row in chat_compaction.list_for_session(db, session_id=session.id)
+        ],
     )
 
 
@@ -1006,6 +1012,16 @@ async def upload_attachment(
     chat_attachments.sweep(session_id=session.id)
 
     content = await file.read()
+    if (
+        sum(item.size_bytes for item in staged_now) + len(content)
+        > chat_attachments.MAX_STAGED_BYTES_PER_SESSION
+    ):
+        raise ApiError.validation(
+            "这个会话暂存的附件总量太大。"
+            f"上限 {chat_attachments.MAX_STAGED_BYTES_PER_SESSION // 1024 // 1024} MB，"
+            "先发一条消息把这些用掉。",
+            {"attachments": "暂存总量已满"},
+        )
     try:
         staged = chat_attachments.store(
             session_id=session.id,
@@ -1474,6 +1490,51 @@ def list_turns(
 
 
 @router.post(
+    "/chat/sessions/{session_id}/compact",
+    response_model=ChatCompactionOut,
+    summary="立即压缩这个会话的上下文（手动 /compact）",
+)
+async def compact_session(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+) -> ChatCompactionOut:
+    """不跑模型，只把旧历史压成摘要并落库。
+
+    与自动压缩共用 `compaction.compact`：原始消息不删，只是后续喂模型的
+    视图从 `first_kept_seq` 开始。正在跑一轮时拒绝 —— 否则轮次读到的
+    边界会在中途变化，模型会看到一份前后不一致的历史。
+    """
+    session = service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    latest = turn_runs.list_runs(db, session_id=session.id, limit=1)
+    if latest and latest[0].status == "running" and not turn_runs.is_abandoned_open(
+        latest[0], now=now_utc()
+    ):
+        raise ApiError.conflict(
+            "TURN_ALREADY_RUNNING", "这一轮还在跑，等它结束再手动压缩。"
+        )
+    try:
+        gateway = engine._build_gateway(engine._resolve_provider(session, None), db)
+    except engine.ChatEngineError as exc:
+        raise ApiError.validation(str(exc)) from exc
+    row = await chat_compaction.compact(
+        db, session=session, gateway=gateway, force=True
+    )
+    if row is None:
+        raise ApiError.validation(
+            "没有可压缩的旧历史（消息太少，或摘要调用失败）。"
+        )
+    return ChatCompactionOut(
+        summary=row.summary,
+        firstKeptSeq=row.first_kept_seq,
+        tokensBefore=row.tokens_before,
+        tokensAfter=row.tokens_after,
+    )
+
+
+@router.post(
     "/chat/sessions/{session_id}/turns/{run_id}/resume",
     response_model=ChatSendOut,
 )
@@ -1525,8 +1586,14 @@ async def resume_turn(
             {"runId": f"当前状态：{run.status}，重试 {run.resume_attempts} 次"},
         )
 
+    # ★ v2.0：用户显式点「继续」= 重新给一段总预算。自动续跑的总时长
+    #   用 `started_at` 判；不重置的话，跑到 4 小时后的手动继续会被
+    #   第一轮检查直接判 failed，用户没有任何补救路径。
+    run.started_at = now_utc()
+    db.commit()
+
     before = {m.id for m in service.list_messages(db, session=session)}
-    ran = await resumer.resume_one(db, run)
+    ran = await resumer.resume_one(db, run, auto_continue=False)
     if not ran:
         raise ApiError.validation(
             "没能接手这一轮（可能已被后台接手）。",

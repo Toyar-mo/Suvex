@@ -26,6 +26,7 @@ import { AssistantTurn } from '@/components/chat/AssistantTurn'
 import { AgentHub } from '@/components/chat/AgentHub'
 import { useAutoScroll } from '@/hooks/useAutoScroll'
 import { useChatListCollapsed } from '@/hooks/useChatListCollapsed'
+import { useLocalStorage } from '@/hooks/useLocalStorage'
 import { MessageRow } from '@/components/chat/MessageRow'
 import { ChallengeBar, MissingChallengeBar } from '@/components/chat/ChallengeBar'
 import { ChallengeProcess } from '@/components/chat/ChallengeProcess'
@@ -41,6 +42,7 @@ import {
   decideApproval,
   dropStagedAttachment,
   clearStaleSending,
+  compactSession,
   forkSession,
   interject,
   interruptTurn,
@@ -460,6 +462,9 @@ export function phaseLabel(
     if (phase.reason === 'truncation') {
       return tr('chat.a.phase.truncation', { round }, `第 ${round} 轮 · 回复太长被截断了，正在接着写…`)
     }
+    if (phase.reason === 'compaction') {
+      return tr('chat.a.phase.compaction', { round }, `第 ${round} 轮 · 上下文过长，正在压缩后继续…`)
+    }
     return tr('chat.a.phase.finish', { round }, `第 ${round} 轮 · 正在让它把话说完…`)
   }
   if (phase.phase === 'tool' && phase.tool) {
@@ -757,6 +762,15 @@ export function ChatPage() {
   const [batchBusy, setBatchBusy] = useState(false)
   /** 「已归档」区是否展开。默认收起 —— 它是低频的"回收站"。 */
   const [archivedOpen, setArchivedOpen] = useState(false)
+  /** 已收起的父会话 id。默认展开；记住到 localStorage，刷新后不反复找。 */
+  const [collapsedParentList, setCollapsedParentList] = useLocalStorage<string[]>(
+    'suvex.chat.collapsedParents',
+    [],
+  )
+  const collapsedParents = useMemo(
+    () => new Set(collapsedParentList),
+    [collapsedParentList],
+  )
 
   /*
     ── v1.16 两个只读洞察视图 ────────────────────────────────────
@@ -1238,6 +1252,23 @@ export function ChatPage() {
   async function handleSend() {
     if (!canSend || !active) return
     const content = draft.trim()
+
+    // OMP 的 /compact：不发起模型轮次，只压当前会话上下文。
+    if (content === '/compact') {
+      setDraft('')
+      const result = await compactSession(active.id)
+      if (result) {
+        showToast({
+          message: t(
+            'chat.a.compacted',
+            { before: String(result.tokensBefore), after: String(result.tokensAfter) },
+            `已压缩上下文：约 ${result.tokensBefore} → ${result.tokensAfter} tokens。`,
+          ),
+          tone: 'ok',
+        })
+      }
+      return
+    }
 
     // ★★ v0.100：跑着的时候，这一下是**插话**，不是发消息。
     //
@@ -1847,13 +1878,25 @@ export function ChatPage() {
    *
    * 子会话是普通会话行，只是缩进一级；父会话被删时数据库 CASCADE 会一起删。
    */
-  const renderSession = (session: ChatSession, depth = 0): React.ReactNode[] => [
+  const renderSession = (session: ChatSession, depth = 0): React.ReactNode[] => {
+    const children = childrenByParent.get(session.id) ?? []
+    const collapsed = collapsedParents.has(session.id)
+    return [
     <SessionRow
       key={session.id}
       session={session}
       active={active?.id === session.id}
       depth={depth}
-      running={session.running || sendingSessionIds.includes(session.id)}
+      running={Boolean(session.running)}
+      hasChildren={children.length > 0}
+      collapsed={collapsed}
+      onToggleChildren={() =>
+        setCollapsedParentList((prev) =>
+          prev.includes(session.id)
+            ? prev.filter((id) => id !== session.id)
+            : [...prev, session.id],
+        )
+      }
       onOpen={() => {
         setSearchParams({ session: session.id }, { replace: true })
         setShowList(false)
@@ -1876,10 +1919,11 @@ export function ChatPage() {
         })
       }
     />,
-    ...(childrenByParent.get(session.id) ?? []).flatMap((child) =>
-      renderSession(child, depth + 1),
-    ),
-  ]
+    ...(collapsed
+      ? []
+      : children.flatMap((child) => renderSession(child, depth + 1))),
+    ]
+  }
 
   return (
     <div className="flex min-h-0 flex-1">
@@ -2019,7 +2063,7 @@ export function ChatPage() {
                           session={session}
                           archived
                           active={active?.id === session.id}
-                          running={session.running || sendingSessionIds.includes(session.id)}
+                          running={Boolean(session.running)}
                           onOpen={() => {
                             setSearchParams({ session: session.id }, { replace: true })
                             setShowList(false)
@@ -2304,6 +2348,21 @@ export function ChatPage() {
                   </div>
                 )}
 
+                {(active?.compactions ?? []).some(
+                  (c) => c.firstKeptSeq < (messages[0]?.seq ?? Number.POSITIVE_INFINITY),
+                ) && (
+                  <div
+                    data-context-compaction
+                    className="rounded-lg border border-border bg-surface-raised/40 px-3 py-2 text-xs text-muted"
+                  >
+                    {t(
+                      'chat.a.compactedBanner',
+                      undefined,
+                      '上下文已压缩：更早的消息只以摘要供模型使用，原始记录仍保留。',
+                    )}
+                  </div>
+                )}
+
                 {turns.map((turn, index) => {
                   const isLive = index === liveTurnIndex
                   /*
@@ -2316,6 +2375,11 @@ export function ChatPage() {
                     仍有误差，所以文案只说人格名，不说"这一轮用的"）。
                 */
                   const turnMeta = !isLive && index === turns.length - 1 ? sessionMeta : null
+                  const startSeq = turn.user?.seq ?? turn.items[0]?.seq ?? 0
+                  const nextSeq = turns[index + 1]?.user?.seq ?? Number.POSITIVE_INFINITY
+                  const boundary = active?.compactions?.find(
+                    (c) => c.firstKeptSeq >= startSeq && c.firstKeptSeq < nextSeq,
+                  )
                   return (
                     <section
                       key={turn.user?.id ?? turn.items[0]?.id ?? `turn-${index}`}
@@ -2323,6 +2387,18 @@ export function ChatPage() {
                       data-conversation-turn
                       data-turn-live={isLive || undefined}
                     >
+                      {boundary && (
+                        <div
+                          data-context-compaction
+                          className="rounded-lg border border-border bg-surface-raised/40 px-3 py-2 text-xs text-muted"
+                        >
+                          {t(
+                            'chat.a.compactedDivider',
+                            { seq: String(boundary.firstKeptSeq) },
+                            `上下文压缩边界：从 #${boundary.firstKeptSeq} 起保留原文；更早消息只以摘要参与。`,
+                          )}
+                        </div>
+                      )}
                       {turn.user && <MessageRow message={turn.user} />}
                       {(turn.items.length > 0 || isLive) && (
                         <AssistantTurn
@@ -2585,6 +2661,13 @@ export function ChatPage() {
                   const el = e.currentTarget
                   setMention(parseMentionQuery(el.value, el.selectionStart ?? 0))
                 }}
+                onPaste={(e) => {
+                  const pasted = Array.from(e.clipboardData.files)
+                  if (pasted.length === 0 || sendingHere) return
+                  // 粘贴图片/文件：不再把文件名当文本插进输入框。
+                  e.preventDefault()
+                  void handleUpload(pasted[0])
+                }}
                 onBlur={() => setMention(null)}
                 onKeyDown={(e) => {
                   /*
@@ -2778,6 +2861,20 @@ export function ChatPage() {
         }}
         onDownload={(detail) => {
           if (menuSession) void handleDownload(menuSession.id, detail)
+        }}
+        onCompact={() => {
+          if (!menuSession) return
+          void compactSession(menuSession.id).then((result) => {
+            if (!result) return
+            showToast({
+              message: t(
+                'chat.a.compacted',
+                { before: String(result.tokensBefore), after: String(result.tokensAfter) },
+                `已压缩上下文：约 ${result.tokensBefore} → ${result.tokensAfter} tokens。`,
+              ),
+              tone: 'ok',
+            })
+          })
         }}
         onMoveTo={(project) => {
           if (menuSession) void handleMoveTo(menuSession.id, project)
@@ -3060,6 +3157,9 @@ function SessionRow({
   onArchive,
   onContextMenu,
   archived = false,
+  hasChildren = false,
+  collapsed = false,
+  onToggleChildren,
 }: {
   session: ChatSession
   active: boolean
@@ -3073,6 +3173,10 @@ function SessionRow({
   onContextMenu: (anchor: { x: number; y: number }) => void
   /** 已归档的行：不显示归档按钮，改由菜单里的「恢复/彻底删除」处理。 */
   archived?: boolean
+  /** 有子代理时显示折叠箭头。 */
+  hasChildren?: boolean
+  collapsed?: boolean
+  onToggleChildren?: () => void
 }) {
   const { t } = useI18n()
   /*
@@ -3100,6 +3204,30 @@ function SessionRow({
           onContextMenu({ x: event.clientX, y: event.clientY })
         }}
       >
+        {hasChildren && (
+          <button
+            type="button"
+            onClick={onToggleChildren}
+            aria-expanded={!collapsed}
+            aria-label={
+              collapsed
+                ? t('chat.a.expandChildren', undefined, '展开子代理')
+                : t('chat.a.collapseChildren', undefined, '收起子代理')
+            }
+            title={
+              collapsed
+                ? t('chat.a.expandChildren', undefined, '展开子代理')
+                : t('chat.a.collapseChildren', undefined, '收起子代理')
+            }
+            className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+          >
+            {collapsed ? (
+              <ChevronRight size={11} strokeWidth={2} aria-hidden="true" />
+            ) : (
+              <ChevronDown size={11} strokeWidth={2} aria-hidden="true" />
+            )}
+          </button>
+        )}
         <button
           type="button"
           onClick={onOpen}

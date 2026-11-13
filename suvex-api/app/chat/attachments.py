@@ -62,10 +62,13 @@ logger = logging.getLogger(__name__)
 
 #: 单个附件的上限。
 #:
-#: 5MB 的纯文本约等于 5M 字符 ≈ 200 万 token —— 远超任何模型的上下文。
-#: 所以这个上限**不是**"上下文能装下"的保证，只是"别让人误传一个
-#: 数据库备份"的护栏。真正进上下文的那一段在 `read_text` 里二次截断。
-MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
+#: 这个上限是**上传/磁盘护栏**，不是"模型上下文能装下"的保证：
+#: 文本真正进上下文时还会在 `read_text` 里二次截断到 `MAX_ATTACHMENT_CHARS`；
+#: 二进制/图片则原样挂进沙箱的 `/work/attachments`，由工具去分析。
+#:
+#: 5MB 对 pcap、图片、小型二进制都偏紧；文件管理页上限 512MB。
+#: 这里取 50MB，留出 multipart 开销，低于 nginx 的 `client_max_body_size 64m`。
+MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024
 
 #: 一次消息里最多带几个附件。与 `ChatSendIn.attachmentIds` 的 max_length 同源。
 MAX_ATTACHMENTS_PER_MESSAGE = 10
@@ -75,6 +78,10 @@ MAX_ATTACHMENTS_PER_MESSAGE = 10
 #: 与上一条不同：那个限制"一条消息用几个"，这个限制"磁盘上堆几个"。
 #: 用户可能连着传十几次都没发出去。
 MAX_STAGED_PER_SESSION = 30
+
+#: 一个会话暂存附件的**总字节**上限。只卡单个 50MB 不够：30 个就是 1.5GB。
+#: 取 200MB，足够传几个大 pcap/镜像类附件，又不会把临时盘吃满。
+MAX_STAGED_BYTES_PER_SESSION = 200 * 1024 * 1024
 
 #: 暂存多久算过期（秒）。一小时足够"传完、想一下、发出去"。
 STAGED_TTL_SECONDS = 3600
@@ -429,6 +436,7 @@ __all__ = [
     "MAX_ATTACHMENT_BYTES",
     "MAX_ATTACHMENT_CHARS",
     "MAX_ATTACHMENTS_PER_MESSAGE",
+    "MAX_STAGED_BYTES_PER_SESSION",
     "MAX_STAGED_PER_SESSION",
     "STAGED_TTL_SECONDS",
     "Staged",

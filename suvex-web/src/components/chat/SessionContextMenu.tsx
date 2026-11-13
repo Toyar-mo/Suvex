@@ -6,6 +6,7 @@ import {
   Bug,
   ChevronRight,
   Download,
+  Minimize2,
   MoreHorizontal,
   Network,
   Pin,
@@ -71,6 +72,8 @@ export interface SessionContextMenuProps {
   onViewAttackChain: () => void
   onViewFindings: () => void
   onDownload: (detail: 'summary' | 'full') => void
+  /** 手动压缩上下文（OMP 的 /compact）。测试/嵌入场景可以不给。 */
+  onCompact?: () => void
   onMoveTo: (project: string | null) => void
   /** 新建一个分组并把这条对话放进去（子菜单里的「新建分组…」）。 */
   onMoveToNew: () => void
@@ -180,6 +183,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
   const items: MenuItem[] = archived
     ? [
         ...insightItems,
+        { key: 'compact', label: t('chat.c.compact', undefined, '压缩上下文'), icon: <Minimize2 size={14} strokeWidth={2} />, onSelect: () => props.onCompact?.() },
         { key: 'unarchive', label: t('chat.c.restore', undefined, '恢复此对话'), icon: <RotateCcw size={14} strokeWidth={2} />, onSelect: props.onUnarchive },
         {
           key: 'download',
@@ -194,6 +198,7 @@ export function SessionContextMenu(props: SessionContextMenuProps) {
       ]
     : [
         ...insightItems,
+        { key: 'compact', label: t('chat.c.compact', undefined, '压缩上下文'), icon: <Minimize2 size={14} strokeWidth={2} />, onSelect: () => props.onCompact?.() },
         {
           key: 'download',
           label: t('chat.c.downloadMarkdown', undefined, '下载 Markdown'),

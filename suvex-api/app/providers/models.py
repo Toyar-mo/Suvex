@@ -79,6 +79,8 @@ class ProviderAccount(Base):
     # 空串 = 用官方默认地址（契约 §2.9）。刻意不用 NULL 表示「未配置」——
     # 前端类型是 `string`，空串有确切含义，混入 NULL 会多出一种「空」。
     base_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    #: 这个接入点模型的上下文窗口（token）。NULL = 由模型名启发式推断。
+    context_window_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_default: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
     # ★ 改 key 必须把这两列重置（契约 §3.2）。

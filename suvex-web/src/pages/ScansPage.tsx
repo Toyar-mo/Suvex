@@ -5,7 +5,6 @@ import { PageHeader } from '@/components/layout/AppShell'
 import BulkActionBar from '@/components/scans/BulkActionBar'
 import NewScanWizard from '@/components/scans/NewScanWizard'
 import ScanList from '@/components/scans/ScanList'
-import { ScanPreviewPane } from '@/components/scans/ScanPreviewPane'
 import { ScanHintComposer } from '@/components/scans/ScanHintComposer'
 import { loadStalledScans, type StalledScan } from '@/data/stall'
 import CompareDialog from '@/components/scans/CompareDialog'
@@ -103,18 +102,6 @@ export function ScansPage() {
 
   const [view, setView] = useState<ScanView>('default')
   const [statusFilter, setStatusFilter] = useState<ScanStatus | 'all'>('all')
-  // v1.90：右栏预览选中的那条。与批量勾选（selectedIds）是两件事。
-  const [previewId, setPreviewId] = useState<string | null>(null)
-  /* 预览栏只在 lg 以上显示；窄屏继续走原来的"点标题去活动页"，否则点了没反应。 */
-  const [wide, setWide] = useState(() =>
-    typeof window === 'undefined' ? true : window.matchMedia('(min-width: 1536px)').matches,
-  )
-  useEffect(() => {
-    const mq = window.matchMedia('(min-width: 1536px)')
-    const onChange = () => setWide(mq.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
 
   const [sortKey, setSortKey] = useState<SortKey>('recent')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
@@ -839,9 +826,8 @@ export function ScansPage() {
       <ScanHintComposer scans={scans} />
 
       <div className="px-gutter py-bay">
-        {/* v1.90：两栏（列表 | 预览）。窄屏单栏，预览只在 lg 以上占位。 */}
-        <div className="flex min-w-0 flex-col gap-panel overflow-hidden 2xl:grid 2xl:grid-cols-[minmax(0,1fr)_320px] 2xl:items-start 2xl:gap-6">
-        <div className="min-w-0 flex-1 2xl:min-w-[600px]">
+        <div className="flex min-w-0 flex-col gap-panel overflow-hidden">
+        <div className="min-w-0 flex-1">
         {/* ── 工具条 ── */}
         <div className="mb-panel flex flex-wrap items-center gap-tight">
           <div role="group" aria-label={t('scans2.page.filterAria', undefined, '按状态筛选')} className="flex flex-wrap items-center gap-1">
@@ -1119,8 +1105,6 @@ export function ScansPage() {
               scans={filtered}
               selectedIds={selectedIds}
               focusedId={focusedId}
-              previewedId={previewId}
-              onSelect={wide ? (scan) => setPreviewId(scan.id) : undefined}
               onToggleRow={toggleRow}
               onToggleAll={toggleAll}
               /*
@@ -1242,10 +1226,6 @@ export function ScansPage() {
           </p>
         )}
         </div>
-        <ScanPreviewPane
-          scan={scans.find((scan) => scan.id === previewId) ?? null}
-          className="hidden 2xl:flex"
-        />
         </div>
       </div>
     </>

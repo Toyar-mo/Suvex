@@ -127,7 +127,7 @@ export const ja_chunk1: Record<string, string> = {
   "assets.stats.exposureHint": "ターゲット / パス",
   "chat.a11y.archive": "このチャットをアーカイブ",
   "chat.a11y.askHint": "何を確認・実行しますか？",
-  "chat.a11y.attachHint": "読み取らせるファイルを送信（テキスト、各最大 5 MB）",
+  "chat.a11y.attachHint": "読み取らせるファイルや画像を送信（各最大 50 MB）",
   "chat.a11y.attachment": "添付ファイルを選択",
   "chat.a11y.autoApprove": "自動承認",
   "chat.a11y.autoApproveHint": "選択した時間の間、確認が必要なツール呼び出しを自動承認します。期限が切れると元に戻ります。",

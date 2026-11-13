@@ -111,7 +111,6 @@ export const ja_chunk4: Record<string, string> = {
   "sandbox.net.label": "サンドボックスの外向き通信をブロック（ローカルコードターゲットのみ）",
   "sandbox.write.hint": "オフ：すべての書き込みはコンテナ内に留まり、コンテナと共に消えます。オン：PoC がホストのファイルを変更できる可能性があります。",
   "sandbox.write.label": "マウントされたボリュームへの書き込みを許可",
-  "scanPreview.aria": "タスクプレビュー",
   "scanWizard.modelHint": "設定後にここへ戻ってください。新しいモデルは自動的に表示されます。",
   "scanWizard.noTarget": "このチャレンジタイプにはターゲットアドレスが不要です。",
   "scanWizard.unconfigured": "未設定：",

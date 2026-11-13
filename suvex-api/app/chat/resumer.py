@@ -37,6 +37,12 @@ _log = logging.getLogger(__name__)
 #: 用户能感觉到"自己接上了"，而 6 次/分钟的空查询代价可以忽略。
 POLL_SECONDS = 10.0
 
+#: 后台同时接手几轮。以前 `resume_stale_once` 串行 await，一轮自动续跑
+#: 最多占 4 小时，其余 stale 轮次全排在后面 —— 表现为"别的对话也卡住"。
+#: 每轮自己开 DB session，互不共享事务；上限防止一次拉起太多模型调用。
+MAX_CONCURRENT_RESUMES = 3
+_RESUME_TASKS: dict[str, asyncio.Task] = {}
+
 #: 应用正在关闭（由 `app.main` 的 lifespan 在取消后台任务**之前**置位）。
 #:
 #: 取消协程是进程生命周期的一部分，不是这一轮的失败。接手逻辑据此把
@@ -111,7 +117,7 @@ def _identity_for(db: Session, session: Any) -> Any:
     )
 
 
-async def resume_one(db: Session, run: Any) -> bool:
+async def resume_one(db: Session, run: Any, *, auto_continue: bool = True) -> bool:
     """接手一轮。返回是否真的跑了。"""
     if not turn_runs.claim(db, run, now=now_utc()):
         return False
@@ -192,7 +198,17 @@ async def resume_one(db: Session, run: Any) -> bool:
         #   所以「停在计划句上」的分流必须在这里再做一次 —— 否则被接手
         #   的一轮即使又一次停在计划上也会被记成 `done`，用户看到的仍是
         #   「没解出又结束」（G1-review P1_RESUMER_MARKS_DONE）。
-        if result.stopped:
+        if result.fatal:
+            chat_service.append_assistant_message(
+                db,
+                session=session,
+                content=(
+                    "（自动续跑达到总预算或连续无输出上限，已停止。"
+                    "这不是正常完成；需要时点「继续」会重新给一段预算。）"
+                ),
+            )
+            turn_runs.give_up(db, run, reason="自动续跑达到总预算/连续无输出上限")
+        elif result.stopped:
             turn_runs.finish(db, run, status="cancelled")
         elif result.needs_continue:
             turn_runs.finish_incomplete(db, run)
@@ -211,6 +227,22 @@ async def resume_stale_once(db: Session) -> int:
         if await resume_one(db, run):
             done += 1
     return done
+
+
+async def _resume_in_task(session_factory: Any, run_id: str) -> None:
+    """一个并发接手任务：自己拿 session，跑完自己关。"""
+    db = session_factory()
+    try:
+        run = turn_runs.get(db, run_id=run_id)
+        if run is not None:
+            await resume_one(db, run)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - 单轮失败不能影响其他接手
+        _log.warning("并发接手失败：%s", run_id, exc_info=True)
+    finally:
+        db.close()
+        _RESUME_TASKS.pop(run_id, None)
 
 
 async def run_forever(
@@ -238,10 +270,19 @@ async def run_forever(
             await asyncio.sleep(poll_seconds)
             db = session_factory()
             try:
-                await resume_stale_once(db)
+                stale_ids = [run.id for run in turn_runs.stale_runs(db, now=now_utc())]
             finally:
                 db.close()
+            for run_id in stale_ids:
+                if run_id in _RESUME_TASKS:
+                    continue
+                if len(_RESUME_TASKS) >= MAX_CONCURRENT_RESUMES:
+                    break
+                task = asyncio.create_task(_resume_in_task(session_factory, run_id))
+                _RESUME_TASKS[run_id] = task
         except asyncio.CancelledError:
+            for task in list(_RESUME_TASKS.values()):
+                task.cancel()
             raise
         except Exception:  # noqa: BLE001 - 单次扫描失败不能打死整个循环
             _log.warning("接手扫描失败（下一轮继续）", exc_info=True)

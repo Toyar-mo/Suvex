@@ -419,6 +419,8 @@ export const settings_rest: ExtraLocaleMap = {
     'settings.provider.selectFromList': '从列表选择…',
     'settings.provider.availableModels': '可用模型',
     'settings.provider.baseUrlLabel': '接入地址',
+    'settings.provider.contextWindowLabel': '上下文窗口（token）',
+    'settings.provider.contextWindowHelp': '留空按模型名推断；自定义模型可手填，例如 128000。',
     'settings.provider.baseUrlHelp': '留空则使用官方默认地址。自建网关或代理时填写。',
     'settings.provider.baseUrlPlaceholder': '留空使用默认地址',
     'settings.provider.savedKeyHint': '已保存（{mask}）· 如需更换请直接输入新值',
@@ -951,6 +953,8 @@ export const settings_rest: ExtraLocaleMap = {
     'settings.provider.selectFromList': 'Select from list…',
     'settings.provider.availableModels': 'Available models',
     'settings.provider.baseUrlLabel': 'Endpoint URL',
+    'settings.provider.contextWindowLabel': 'Context window (tokens)',
+    'settings.provider.contextWindowHelp': 'Leave empty to infer from the model name; set it for custom models, e.g. 128000.',
     'settings.provider.baseUrlHelp':
       'Empty uses the official default. Fill in for a self-hosted gateway or proxy.',
     'settings.provider.baseUrlPlaceholder': 'Empty uses the default URL',

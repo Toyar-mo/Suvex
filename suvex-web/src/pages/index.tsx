@@ -49,7 +49,6 @@ export const SettingsPage = lazy(() => import('./SettingsPage'))
  *   它带一张可能上千行的表，不该进首屏包。
  */
 export const FilesPage = lazy(() => import('./FilesPage'))
-export const AgentTasksPage = lazy(() => import('./AgentTasksPage'))
 
 /**
  * ★ 首页**不走 lazy**，是全站唯一同步引入的页面。

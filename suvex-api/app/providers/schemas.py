@@ -62,6 +62,7 @@ class ProviderOut(CamelModel):
     hasKey: bool
     apiKeyMask: str
     baseUrl: str
+    contextWindowTokens: int | None = None
     isDefault: bool
     verified: bool
     verifyError: str | None
@@ -79,6 +80,7 @@ class ProviderOut(CamelModel):
             hasKey=provider.has_key,
             apiKeyMask=provider.api_key_mask,
             baseUrl=provider.base_url,
+            contextWindowTokens=provider.context_window_tokens,
             isDefault=provider.is_default,
             verified=provider.verified,
             verifyError=provider.verify_error,
@@ -101,6 +103,7 @@ class ProviderCreate(StrictModel):
     # 空串 = 没配凭据。合法状态（本地模型本来就不需要；云端也可以先建条目后补 key）。
     apiKey: str = ""
     baseUrl: str = ""
+    contextWindowTokens: int | None = None
     note: str = ""
     isDefault: bool = False
 
@@ -119,6 +122,7 @@ class ProviderUpdate(StrictModel):
     kind: ProviderKindLiteral | None = None
     apiKey: str | None = None
     baseUrl: str | None = None
+    contextWindowTokens: int | None = None
     note: str | None = None
     isDefault: bool | None = None
 

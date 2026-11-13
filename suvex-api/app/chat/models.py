@@ -653,6 +653,46 @@ class ChatTodo(Base):
         return f"<ChatTodo {self.session_id!r} #{self.seq} {self.status}>"
 
 
+class ChatCompaction(Base):
+    """一次上下文压缩的**持久化边界**（v2.0，对齐 OMP 的 CompactionEntry）。
+
+    ## 为什么单独一张表，而不是往 `chat_messages` 塞一条 system 消息
+
+    压缩是「喂给模型的视图」变了，不是「用户历史」多了/少了。原始消息必须
+    一条不删：报告、复核、证据链都要能追到原话。把摘要写成一条普通消息会
+    让界面把它画成一个气泡，也会让 `seq` 语义从"用户可见事件"变成"内部
+    维护操作"。
+
+    ## 字段含义
+
+    - `summary`：被压缩掉那段的摘要，重建上下文时作为最前面的 user 消息；
+    - `first_kept_seq`：从这条消息（含）开始保留原文；更早的消息只以摘要形式进入模型；
+    - `tokens_before/after`：估算值（字符数 / 4）。只用于观测压缩收益，不做计费。
+    """
+
+    __tablename__ = "chat_compactions"
+    __table_args__ = (
+        Index("ix_chat_compactions_session_created", "session_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("chat_sessions.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    first_kept_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    tokens_before: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    tokens_after: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        UtcDateTime, nullable=False, default=now_utc
+    )
+
+    def __repr__(self) -> str:  # pragma: no cover - 调试用
+        return f"<ChatCompaction {self.session_id!r} keep={self.first_kept_seq}>"
+
+
 __all__ = [
     "APPROVAL_STATUSES",
     "CHAT_PERSONAS",
@@ -663,6 +703,7 @@ __all__ = [
     "MAX_TITLE_CHARS",
     "TODO_STATUSES",
     "TURN_RUN_STATUSES",
+    "ChatCompaction",
     "ChatMessage",
     "ChatSession",
     "ChatTodo",

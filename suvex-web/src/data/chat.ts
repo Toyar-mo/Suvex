@@ -185,8 +185,17 @@ export interface ChatChallengeRef {
   scanId: string | null
 }
 
+export interface ChatCompactionBoundary {
+  summary: string
+  firstKeptSeq: number
+  tokensBefore: number
+  tokensAfter: number
+}
+
 export interface ChatSessionDetail extends ChatSession {
   messages: ChatMessage[]
+  /** 压缩边界；界面据此显示“上下文已压缩”。 */
+  compactions?: ChatCompactionBoundary[]
   /**
    * 这份消息是不是"最后一页"（前面还有更早的）。
    *
@@ -489,6 +498,26 @@ function emit() {
 function patch(next: Partial<ChatState>) {
   state = { ...state, ...next }
   emit()
+}
+
+/**
+ * 把某个会话在侧栏的转圈点直接改掉，不等下一次列表请求。
+ *
+ * 服务端已经确认这一轮结束时（done 帧 / `/turns` 返回 idle），列表接口可能
+ * 还差一拍；只靠 4 秒轮询会让转圈点多留几秒，用户以为"又要刷新网页"。
+ */
+function sessionRunningPatch(
+  sessionId: string,
+  running: boolean,
+): Pick<ChatState, 'sessions' | 'archivedSessions'> {
+  const update = (list: ChatSession[]) =>
+    list.some((s) => s.id === sessionId && Boolean(s.running) !== running)
+      ? list.map((s) => (s.id === sessionId ? { ...s, running } : s))
+      : list
+  return {
+    sessions: update(state.sessions),
+    archivedSessions: update(state.archivedSessions),
+  }
 }
 
 function getSnapshot(): ChatState {
@@ -1022,7 +1051,10 @@ export async function pollTurnProgress(sessionId: string): Promise<TurnPollResul
       prev.toolsUsed !== next.toolsUsed ||
       prev.heartbeatAt !== next.heartbeatAt
     // 数值没变时不要再 patch：1.5s 一次的无意义更新会让整页重渲染。
-    if (changed) patch({ serverTurn: next })
+    // 侧栏的 running 与进度共用这一份服务端事实，不另开布尔。
+    if (changed || !state.sessions.find((s) => s.id === sessionId)?.running) {
+      patch({ ...sessionRunningPatch(sessionId, true), serverTurn: next })
+    }
     return { status: 'running', runs }
   }
   // 没有在跑的了：清掉进度提示，也清掉「已请求停止」的标记
@@ -1031,6 +1063,7 @@ export async function pollTurnProgress(sessionId: string): Promise<TurnPollResul
   //   本地若还挂着它会导致 `sendingHere` 一直为真、输入框一直是"插话"。
   const remaining = state.sendingSessionIds.filter((id) => id !== sessionId)
   patch({
+    ...sessionRunningPatch(sessionId, false),
     serverTurn: null,
     stopRequested: false,
     sendingSessionIds: remaining,
@@ -1192,6 +1225,7 @@ export async function sendMessage(
   // 上一轮异常退出时可能还有未落帧的增量，先清掉再开新一轮。
   clearDelta()
   patch({
+    ...sessionRunningPatch(sessionId, true),
     sending: true,
     sendingSessionId: sessionId,
     // ★ v1.65：登记进"本浏览器在跑的会话集合"（按会话独立并发的唯一事实来源）。
@@ -1408,7 +1442,12 @@ export async function sendMessage(
         }
 
         if (frame.event === TURN_DONE) {
-          patch({ phase: null, liveToolOutput: null, liveToolProgress: null })
+          patch({
+            ...sessionRunningPatch(sessionId, false),
+            phase: null,
+            liveToolOutput: null,
+            liveToolProgress: null,
+          })
         }
       },
     })
@@ -1613,6 +1652,7 @@ export async function interruptTurn(
         ? state.sendingSessionIds
         : [...state.sendingSessionIds, sessionId]
       patch({
+        ...sessionRunningPatch(sessionId, true),
         sending: true,
         sendingSessionId: sessionId,
         sendingSessionIds: ids,
@@ -1635,7 +1675,10 @@ export async function interruptTurn(
       })
     }
     void refreshActiveMessages(sessionId)
-    void pollTurnProgress(sessionId)
+    // continue 不要立刻轮询：服务端还没把 running 行续上时，这一拍会返回
+    // idle，把刚拉起的 sending 又清掉（表现为点了继续、侧栏却不转圈）。
+    // 页面自身的 tick 会带 sawRunning 判断，1.5 秒后再接手。
+    if (mode === 'stop') void pollTurnProgress(sessionId)
     // ★ v1.68：给弹窗一个明确回执（用户在等"到底点没点上"）。
     patch({
       lastInterrupt: {
@@ -1720,6 +1763,7 @@ export function clearStaleSending(sessionId?: string): void {
   // 只有被观看的会话被清掉时，才清它的展示字段（别的会话在跑不该被误清）。
   const wasWatched = target === state.sendingSessionId || target === undefined
   patch({
+    ...(target ? sessionRunningPatch(target, false) : {}),
     sendingSessionIds: remaining,
     sending: remaining.length > 0,
     ...(wasWatched
@@ -1769,21 +1813,21 @@ function clearStagedAttachments(): void {
  *
  * ## 为什么用 `FormData` 而不是 base64
  *
- * 一个 5 MB 的文件 base64 之后是 6.7 MB，而 JSON 里还要再套一层字符串。
+ * 一个 50 MB 的文件 base64 之后约 67 MB，而 JSON 里还要再套一层字符串。
  * 而且后端 `attachments.store` 收的是 `bytes`，走 multipart 能让 Starlette
  * 直接流式交给它，不必先整段解码。
  *
  * ## 为什么前端也判大小
  *
  * 后端会拒（`MAX_ATTACHMENT_BYTES`），但那是**传完之后**才拒 ——
- * 5 MB 的文件已经上传完了。在这里先判一次，用户立刻知道不行。
+ * 50 MB 的文件已经上传完了。在这里先判一次，用户立刻知道不行。
  * ⚠️ 两个数必须一致：这里用的是同一个常量值，改后端要同步改这里。
  */
 export async function uploadAttachment(
   sessionId: string,
   file: File,
 ): Promise<ChatAttachment | null> {
-  const MAX_BYTES = 5 * 1024 * 1024
+  const MAX_BYTES = 50 * 1024 * 1024
   if (file.size > MAX_BYTES) {
     /*
       ★ 必须是 **真的** `ApiError` 实例，不能 `{...} as ApiError`。
@@ -1793,14 +1837,14 @@ export async function uploadAttachment(
         传一个 96.9 MB 的 zip 时看到的就是这句（v1.38.1 修复）。这和 `TURN_ERROR`
         （v1.22）踩过的是同一个坑，只是这里漏改了。
 
-      文案要给出**下一步**：对话附件是"给模型看"的一次性附件，上限 5 MB；
-      真要放大文件（几十上百 MB）应当去「文件管理」页，那里上限 512 MB。
+      文案要给出**下一步**：对话附件上限 50 MB；
+      真要放更大的文件应当去「文件管理」页，那里上限 512 MB。
     */
     patch({
       error: new ApiError(
         'VALIDATION_FAILED',
         `文件太大（${(file.size / 1024 / 1024).toFixed(1)} MB）。对话附件是给模型看的一次性文件，` +
-          `单个上限 5 MB。若想传大文件，请到左侧「文件管理」页上传（上限 512 MB）。`,
+          `单个上限 50 MB。若想传更大的文件，请到左侧「文件管理」页上传（上限 512 MB）。`,
         400,
       ),
     })
@@ -1982,6 +2026,32 @@ function deriveTitle(currentTitle: string, content: string): string {
 }
 
 /** 改标题。 */
+export interface ChatCompactionResult {
+  summary: string
+  firstKeptSeq: number
+  tokensBefore: number
+  tokensAfter: number
+}
+
+/** 手动压缩上下文；成功返回压缩结果，失败只写 store.error。 */
+export async function compactSession(sessionId: string): Promise<ChatCompactionResult | null> {
+  try {
+    const result = await api.post<ChatCompactionResult>(`/chat/sessions/${sessionId}/compact`, {})
+    if (state.active?.id === sessionId) {
+      patch({
+        active: {
+          ...state.active,
+          compactions: [...(state.active.compactions ?? []), result],
+        },
+      })
+    }
+    return result
+  } catch (error) {
+    patch({ error: messageOf(error) })
+    return null
+  }
+}
+
 export async function renameSession(sessionId: string, title: string): Promise<boolean> {
   try {
     const updated = await api.patch<ChatSession>(`/chat/sessions/${sessionId}`, { title })

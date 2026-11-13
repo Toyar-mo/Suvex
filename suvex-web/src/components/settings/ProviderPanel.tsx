@@ -505,6 +505,7 @@ function AccountEditor({
       draft.label !== account.label ||
       draft.model !== account.model ||
       draft.baseUrl !== account.baseUrl ||
+      (draft.contextWindowTokens ?? null) !== (account.contextWindowTokens ?? null) ||
       draft.isDefault !== account.isDefault ||
       keyEdited
     )
@@ -751,6 +752,30 @@ function AccountEditor({
               />
             )}
           </div>
+        </Field>
+
+        <Field
+          label={t('settings.provider.contextWindowLabel', undefined, '上下文窗口（token）')}
+          htmlFor={`${account.id}-context-window`}
+          help={t(
+            'settings.provider.contextWindowHelp',
+            undefined,
+            '留空按模型名推断；自定义模型可手填，例如 128000。',
+          )}
+        >
+          <TextInput
+            id={`${account.id}-context-window`}
+            type="number"
+            value={
+              draft.contextWindowTokens == null ? '' : String(draft.contextWindowTokens)
+            }
+            onChange={(v) =>
+              setDraft({
+                ...draft,
+                contextWindowTokens: v.trim() === '' ? null : Number(v),
+              })
+            }
+          />
         </Field>
       </div>
 

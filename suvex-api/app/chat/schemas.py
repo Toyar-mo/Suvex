@@ -282,6 +282,15 @@ class ChatForkIn(CamelModel):
     title: str | None = None
 
 
+class ChatCompactionOut(CamelModel):
+    """手动压缩的结果（v2.0）。"""
+
+    summary: str
+    firstKeptSeq: int
+    tokensBefore: int
+    tokensAfter: int
+
+
 class ChatSessionDetailOut(ChatSessionOut):
     """会话 + 消息。
 
@@ -299,6 +308,8 @@ class ChatSessionDetailOut(ChatSessionOut):
     #: 后者前端显示"题目已不存在"，而不是把标题条整个藏掉（那会让人以为
     #: 会话丢了上下文）。
     challenge: ChatChallengeRef | None = None
+    #: 这个会话的压缩边界（旧消息不删，界面画分界线/展示摘要）。
+    compactions: list[ChatCompactionOut] = []
 
 
 class ChatSettingsIn(StrictModel):

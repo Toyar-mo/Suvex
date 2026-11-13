@@ -1204,7 +1204,7 @@ describe('上传预判的报错必须是真 ApiError（v1.38.1）', () => {
   /*
     ★ 用户原话（截图）：传一个 96.9 MB 的 zip，看到「请求失败，请稍后重试。」
 
-      这不是网络失败 —— 是 `uploadAttachment` 的 5 MB 前端预判在 `patch` 里
+      这不是网络失败 —— 是 `uploadAttachment` 的 50 MB 前端预判在 `patch` 里
       塞了 `{...} as ApiError`（裸对象，类型断言不等于实例）。页面渲染走
       `errorMessage()`，第一步 `error instanceof ApiError` 为假 → 落到
       `api.ts:338` 的兜底「请求失败，请稍后重试。」。
@@ -1212,13 +1212,13 @@ describe('上传预判的报错必须是真 ApiError（v1.38.1）', () => {
       这和 `TURN_ERROR`（v1.22）踩过的是同一个坑，只是这里漏改了。
       下面钉住两件事：预判不发起网络请求、error 是带真实文案的 ApiError 实例。
   */
-  it('★ 超过 5 MB 不发请求，且 error 是 ApiError、文案说清「上限 5 MB」', async () => {
+  it('★ 超过 50 MB 不发请求，且 error 是 ApiError、文案说清「上限 50 MB」', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
     await open
 
-    // 6 MB 的 File（size 是只读属性，构造一个足够大的 Blob）
-    const big = new File([new Uint8Array(6 * 1024 * 1024)], 'big.zip')
+    // 51 MB 的 File（size 是只读属性，构造一个足够大的 Blob）
+    const big = new File([new Uint8Array(51 * 1024 * 1024)], 'big.zip')
     const result = await uploadAttachment('chat_1', big)
 
     expect(result).toBeNull()
@@ -1226,7 +1226,7 @@ describe('上传预判的报错必须是真 ApiError（v1.38.1）', () => {
     // 关键 1：是 ApiError 实例，`errorMessage()` 才不会走兜底
     expect(err).toBeInstanceOf(ApiError)
     // 关键 2：文案说清上限，不是泛化的「请求失败」
-    expect(err?.message).toContain('5 MB')
+    expect(err?.message).toContain('50 MB')
     expect(err?.message).not.toContain('请求失败')
     // 关键 3：没有发起任何上传请求（预判在网络之前短路）
     expect(calls.some((c) => c.url.includes('/attachments'))).toBe(false)
@@ -1456,6 +1456,32 @@ describe('服务端轮次进度轮询（v1.61）', () => {
     expect(turn?.toolsUsed).toBe(5)
   })
 
+  it('pollTurnProgress 发现已结束时顺手灭掉侧栏转圈点', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const list = loadSessions()
+    pending[pending.length - 1].resolve([{ ...session(), running: true }])
+    await list
+    expect(getChatSnapshot().sessions[0]?.running).toBe(true)
+
+    const p = pollTurnProgress('chat_1')
+    pending[pending.length - 1].resolve([
+      {
+        id: 'turn_run_1',
+        sessionId: 'chat_1',
+        status: 'done',
+        resumeAttempts: 0,
+        startedAt: '2026-11-04T00:00:00Z',
+        updatedAt: '2026-11-04T00:00:00Z',
+        resumable: false,
+      },
+    ])
+    expect((await p).status).toBe('idle')
+    expect(getChatSnapshot().sessions[0]?.running).toBe(false)
+  })
+
   it('pollTurnProgress 没有 running 轮次时清空 serverTurn 并返回 false', async () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
@@ -1482,6 +1508,9 @@ describe('服务端轮次进度轮询（v1.61）', () => {
     const open = openSession('chat_1')
     pending[0].resolve({ ...session(), messages: [] })
     await open
+    const list = loadSessions()
+    pending[pending.length - 1].resolve([{ ...session(), running: false }])
+    await list
     // 先把 sending 置成 true（模拟正在跑），再「继续」
     const p0 = sendMessage('chat_1', '开始')
     expect(getChatSnapshot().sending).toBe(true)
@@ -1494,6 +1523,8 @@ describe('服务端轮次进度轮询（v1.61）', () => {
     // ★ 关键断言：不用刷新网页，本地状态就已经"还在跑"
     expect(getChatSnapshot().sending).toBe(true)
     expect(getChatSnapshot().sendingSessionId).toBe('chat_1')
+    // 侧栏唯一事实：继续后会话行必须立刻回到 running
+    expect(getChatSnapshot().sessions[0]?.running).toBe(true)
 
     // interruptTurn 内部触发的 pollTurnProgress / refreshActiveMessages 会各发一个
     // 请求；连同 sendMessage 悬挂的流请求一起收尾，别留悬挂（否则用例结束时

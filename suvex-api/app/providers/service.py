@@ -267,6 +267,7 @@ def _snapshot(provider: ProviderAccount) -> tuple:
         provider.model,
         provider.kind,
         provider.base_url,
+        provider.context_window_tokens,
         provider.note,
         provider.is_default,
         provider.api_key_encrypted,
@@ -282,6 +283,7 @@ def create_provider(db: Session, payload: ProviderCreate) -> ProviderAccount:
         model=payload.model.strip(),
         kind=payload.kind,
         base_url=payload.baseUrl.strip().rstrip("/"),
+        context_window_tokens=payload.contextWindowTokens,
         note=payload.note.strip(),
         is_default=False,  # 先建出来，默认交给 _switch_default / _ensure_default 处理
         verified=False,
@@ -325,6 +327,9 @@ def update_provider(
     if payload.baseUrl is not None:
         # 去尾斜杠，避免拼出 `//v1`（前端 `saveProviderAccount` 同样处理）
         provider.base_url = payload.baseUrl.strip().rstrip("/")
+    # 显式 null 表示清空（回到按模型名推断），所以看“传没传”，不是看值。
+    if "contextWindowTokens" in getattr(payload, "model_fields_set", set()):
+        provider.context_window_tokens = payload.contextWindowTokens
     if payload.note is not None:
         provider.note = payload.note.strip()
 

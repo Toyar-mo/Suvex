@@ -7,7 +7,6 @@ import { api } from '@/lib/api'
 import { showToast } from '@/data/toast-store'
 import { FindingAttachments } from './FindingAttachments'
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { loadRemediation, type RemediationPlan } from '@/data/remediation'
 import {
   loadVerificationContext,
@@ -69,13 +68,12 @@ export function FindingDetail({ finding }: FindingDetailProps) {
   const { t } = useI18n()
   const meta = SEVERITY_META[finding.severity]
   const { detail } = finding
-  const navigate = useNavigate()
   const [agentBusy, setAgentBusy] = useState<'retest' | 'verify' | null>(null)
 
   async function launchAgent(mode: 'retest' | 'verify') {
     setAgentBusy(mode)
     try {
-      const result = await api.post<{ taskId: string }>(
+      await api.post<{ taskId: string }>(
         `/findings/${encodeURIComponent(finding.id)}/agent-run?mode=${mode}`,
         {},
       )
@@ -86,7 +84,6 @@ export function FindingDetail({ finding }: FindingDetailProps) {
             : t('findings2.detail.verifyStarted', undefined, '已发起验证任务'),
         tone: 'ok',
       })
-      navigate(`/tasks?task=${encodeURIComponent(result.taskId)}`)
     } catch (exc) {
       showToast({
         message: exc instanceof Error ? exc.message : String(exc),

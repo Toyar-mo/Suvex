@@ -56,6 +56,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.agents import finding_tools, graph_tools, platform_tools
+from app.chat import compaction as chat_compaction
 from app.chat import failure as failure_kind
 from app.chat import interrupts as interrupt_bus
 from app.chat import mcp_tools
@@ -79,13 +80,13 @@ from app.chat.prompts import (
     render_format_reminder,
     render_native_tool_note,
     render_plan_exhausted_note,
-    render_unfinished_plan_reminder,
     render_repeated_conclusion_note,
     render_result_continue_reminder,
     render_stall_reminder,
     render_strategy_pivot_reminder,
     render_truncation_reminder,
     render_turn_wall_note,
+    render_unfinished_plan_reminder,
 )
 from app.chat.stream import (
     EVENT_AWAITING,
@@ -229,6 +230,22 @@ MAX_NARRATION_NUDGES = 2
 #:   可控成本，而用户不用再手打「继续」。
 MAX_TRUNCATION_CONTINUES = _env_int("SUPEX_CHAT_MAX_TRUNCATION_CONTINUES", 6)
 
+#: 输出被截断且**一个字都没吐出来**时，最多做几次「压缩上下文后重试」。
+#:
+#: 与 `MAX_TRUNCATION_CONTINUES` 不同：那个是同一轮内接着写；这里是
+#: 上下文可能已经退化（工具输出把模型带偏），压掉旧历史再重新请求。
+#: 取 3 与 OMP 的「连续无输出恢复上限 3」一致；到上限必须给明确失败。
+MAX_OUTPUT_RECOVERIES = _env_int("SUPEX_CHAT_MAX_OUTPUT_RECOVERIES", 3)
+
+#: 截断且**正文为空**时，同一轮内先重试几次再压缩。正文为空的截断
+#: 几乎没有“接着写”的价值（没有半句话可接），2 次足够跨过上游抖动。
+MAX_EMPTY_TRUNCATION_CONTINUES = _env_int(
+    "SUPEX_CHAT_MAX_EMPTY_TRUNCATION_CONTINUES", 2
+)
+
+#: 上游报 context overflow 时，压缩后最多重试几次。
+MAX_CONTEXT_OVERFLOWS = _env_int("SUPEX_CHAT_MAX_CONTEXT_OVERFLOWS", 3)
+
 #: 「本轮跑过工具」的轮次最多被推几次（v1.23）。
 #:
 #: ★ 独立于 `MAX_NARRATION_NUDGES`(2)。那 2 次是给**纯问答**的成本闸，
@@ -330,6 +347,17 @@ STREAM_IDLE_SECONDS = _env_int("SUPEX_CHAT_STREAM_IDLE_SECONDS", 180)
 #: 用户点「继续」即可再拿一整段预算，既不失控、也不一刀切死长任务。
 #: 设 0 关闭（仅供测试/特殊部署），生产绝不置 0。
 TURN_WALL_SECONDS = _env_int("SUPEX_CHAT_TURN_WALL_SECONDS", 3600)
+
+#: ★ v2.0：自动续跑的总预算。单段墙钟到点后会先压缩再开下一段，但整轮
+#: 不能无限续 —— OMP 用总 token/上下文预算，这里先给一个总时长上界。
+#: 默认 4 小时；设 0 表示只受 `MAX_AUTO_CONTINUE_SEGMENTS` 限制。
+TOTAL_TURN_WALL_SECONDS = _env_int("SUPEX_CHAT_TOTAL_TURN_WALL_SECONDS", 4 * 3600)
+
+#: 自动续跑最多几段。防止「压缩成功 → 再跑 1 小时 → 再压缩」无限循环。
+MAX_AUTO_CONTINUE_SEGMENTS = _env_int("SUPEX_CHAT_MAX_AUTO_CONTINUE_SEGMENTS", 8)
+
+#: 整轮总 token 上限（依赖 provider 上报 usage）。0 = 不启用。
+TOTAL_TURN_TOKENS = _env_int("SUPEX_CHAT_TOTAL_TURN_TOKENS", 2_000_000)
 
 #: 「同一结论复读闸」（v1.69）的两个上下文门槛。
 #:
@@ -453,6 +481,24 @@ class ChatProviderAuthError(ChatEngineError):
     retryable = False
 
 
+_CONTEXT_OVERFLOW_MARKERS = (
+    "context_length_exceeded",
+    "maximum context length",
+    "context window",
+    "too many tokens",
+    "prompt is too long",
+    "reduce the length",
+    "input is too long",
+)
+
+
+def _is_context_overflow(exc: BaseException) -> bool:
+    """上游是否明确说"上下文太长"。只认文本，不靠 HTTP 状态码 ——
+    413 既可能是 token 超限，也可能是图片/请求体超限。"""
+    text = str(exc).lower()
+    return any(marker in text for marker in _CONTEXT_OVERFLOW_MARKERS)
+
+
 def _wrap_model_failure(exc: BaseException) -> ChatEngineError:
     """把底层异常翻译成用户能照着做的失败。
 
@@ -501,6 +547,11 @@ class ChatTurnResult:
     #: `done` 会被界面和后台都当成"这一问已经答完"，而实际上下一步还没执行。
     #: 不落 `cancelled` —— 那是用户主动停，与"模型自己停在半路"是两件事。
     needs_continue: bool = False
+    #: 这一轮因为「输出被截断且一个字没吐出来」收尾。自动续跑据此计数；
+    #: 连续多次仍无输出就落 `failed`，不再静默 `done`。
+    no_output: bool = False
+    #: 自动恢复次数用尽 / 总预算用尽。`_run_guarded` 据此落 `failed`。
+    fatal: bool = False
 
 
 # ══════════════════════════════════════════════════════════
@@ -1309,6 +1360,67 @@ def _render_history(rows: list[Any]) -> list[dict[str, str]]:
     while out and out[0]["role"] != "user":
         out.pop(0)
     return _trim_history_to_budget(out)
+
+
+def _render_compacted(comp: Any, rows: list[Any]) -> list[dict[str, str]]:
+    """把「压缩摘要 + 最近原文」拼成模型上下文。
+
+    摘要用 user 角色：多数 provider 要求首条是 user，且 OMP 的
+    `compactionSummary` 也是按 user 消息重建的。开头明确写"不是新指令"，
+    避免模型把摘要里的旧请求当成用户刚说的话。
+    """
+    messages = _render_history(rows)
+    if comp is not None:
+        messages.insert(
+            0,
+            {
+                "role": "user",
+                "content": (
+                    "（以下是较早对话的压缩摘要，不是新的指令。"
+                    "继续完成用户最初的任务；需要原始细节时用工具重新读取。）\n\n"
+                    + comp.summary
+                ),
+            },
+        )
+        # 摘要本身也占预算：插入后再收一道，避免 150k 原文 + 12k 摘要
+        # 反而超过硬上限。`_trim_history_to_budget` 会保留首条 user（摘要）。
+        messages = _trim_history_to_budget(messages)
+    return messages
+
+
+async def _model_context(
+    db: Session,
+    session: ChatSession,
+    gateway: Any,
+    *,
+    force: bool = False,
+    turn_run: Any = None,
+) -> tuple[list[dict[str, str]], list[Any]]:
+    """读取上下文；超过阈值（或调用方要求）时先压缩再重建。
+
+    返回 `(messages, 原始行)`。压缩失败时仍返回未压缩上下文 —— 调用方
+    不能把"摘要失败"当成"没上下文"，只能当成"这次没压成"。
+    """
+    comp, rows = chat_compaction.load_context(db, session=session)
+    messages = _render_compacted(comp, rows)
+    chars = sum(len(m.get("content") or "") for m in messages)
+    if not (
+        force
+        or chat_compaction.needs_compaction(
+            chars,
+            getattr(gateway, "model", None),
+            getattr(gateway, "context_window_tokens", None),
+        )
+    ):
+        return messages, rows
+
+    new_comp = await chat_compaction.compact(
+        db, session=session, gateway=gateway, force=force, turn_run=turn_run
+    )
+    if new_comp is None:
+        return messages, rows
+    comp, rows = chat_compaction.load_context(db, session=session)
+    return _render_compacted(comp, rows), rows
 
 
 def _trim_history_to_budget(out: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -3497,7 +3609,7 @@ def _build_gateway(provider_id: str | None, db: Session):
         )
     from app.providers import retry
 
-    return LlmGateway(
+    gateway = LlmGateway(
         model=provider.model,
         api_key=decrypt_provider_key(provider),
         base_url=provider.base_url or "",
@@ -3506,6 +3618,9 @@ def _build_gateway(provider_id: str | None, db: Session):
         max_tokens=CHAT_MAX_TOKENS,
         retry_policy=retry.load_policy(db),
     )
+    # 压缩阈值用 provider 上显式配置的窗口；NULL 时按模型名推断。
+    gateway.context_window_tokens = provider.context_window_tokens
+    return gateway
 
 
 def _resolve_provider(session: ChatSession, explicit: str | None) -> str | None:
@@ -3761,6 +3876,11 @@ async def run_turn(
     #: 只是它的子集，用来判断截断额度还剩多少。格式错的次数 = 前者减后者。
     truncations_used = 0
 
+    #: 输出被截断且无正文时，已经压缩重试过几次（见 MAX_OUTPUT_RECOVERIES）。
+    output_recoveries = 0
+    #: 上游明确报 context overflow 后，已经压缩重试过几次。
+    overflow_recoveries = 0
+
     #: 这一轮**真正执行过**几次工具（v1.19）。
     #:
     #: 它是纠偏判据里最重要的一条结构信号：跑过工具的轮次突然"只写一句
@@ -3838,6 +3958,19 @@ async def run_turn(
         + MAX_TOOL_NUDGES
         + MAX_FINAL_CONFIRMATIONS
     ):
+        # ★ v2.0：总预算先于单段墙钟判。单段到点会压缩后自动续，
+        #   但整轮不能超过 `TOTAL_TURN_WALL_SECONDS`（跨 resume 从
+        #   `run.started_at` 算，不能用本次调用的单调时钟）。
+        if (
+            TOTAL_TURN_WALL_SECONDS
+            and tools_used > 0
+            and _turn_elapsed_seconds(turn_run, turn_wall_start) >= TOTAL_TURN_WALL_SECONDS
+        ):
+            # 说明由 `_run_guarded_active` 统一追加：那张表同时覆盖正常
+            # 路径和后台接手路径，避免这里与 wrapper 各写一条重复提示。
+            result.fatal = True
+            return result
+
         # ★ v1.68：墙钟预算闸。跑到超过 `TURN_WALL_SECONDS` 就地优雅收尾 ——
         #   不是让它接着烧，也不是硬砍，而是落一句"到点了、要继续再发继续"，
         #   本轮 marked interrupted（可接手/可续跑），沙箱释放。
@@ -3845,7 +3978,7 @@ async def run_turn(
         if (
             TURN_WALL_SECONDS
             and tools_used > 0
-            and _turn_elapsed_seconds(turn_run, turn_wall_start) >= TURN_WALL_SECONDS
+            and (time.monotonic() - turn_wall_start) >= TURN_WALL_SECONDS
         ):
             exhausted = chat_service.append_assistant_message(
                 db,
@@ -3871,9 +4004,7 @@ async def run_turn(
             emit, "thinking", round_index - nudges_used, budget=MAX_TOOL_ROUNDS
         )
 
-        history = chat_service.list_messages(
-            db, session=session, limit=HISTORY_MESSAGE_LIMIT
-        )
+        messages, history = await _model_context(db, session, gateway, turn_run=turn_run)
         # ★ v1.69：同一结论复读闸。模型连续多次给出几乎同一句结论（"没拿到、
         #   做不下去"）时，判定它已经到底，收尾并讲清是阻塞、不是没试够 ——
         #   避免像 chat_01M6P1TAYTASS6P64P85PED8MB 那样换个算法反复穷尽 12 小时。
@@ -3893,7 +4024,6 @@ async def run_turn(
             db.commit()
             result.messages.append(exhausted)
             return result
-        messages = _render_history(history)
         # ★ v1.53 兜底：`_render_history` 会把开头的非 user 消息丢掉（保证首条
         #   是 user，见其文档）。极端情况下（小窗口里全是 assistant/tool 残句）
         #   可能把窗口清空 —— 直接拿空数组调模型必然 400。给一条最小 user 占位，
@@ -3935,6 +4065,21 @@ async def run_turn(
             if turn_run is not None:
                 turn_run_store.add_usage(db, turn_run, reply.usage)
         except Exception as exc:  # noqa: BLE001
+            if _is_context_overflow(exc) and overflow_recoveries < MAX_CONTEXT_OVERFLOWS:
+                compacted = await chat_compaction.compact(
+                    db, session=session, gateway=gateway, force=True, turn_run=turn_run
+                )
+                if compacted is not None:
+                    overflow_recoveries += 1
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="compaction",
+                        attempt=overflow_recoveries,
+                        maxAttempts=MAX_CONTEXT_OVERFLOWS,
+                    )
+                    continue
             _log.warning("对话调模型失败", exc_info=True)
             raise _wrap_model_failure(exc) from exc
 
@@ -4058,13 +4203,78 @@ async def run_turn(
             #   纠偏之后，第一个空回复当场判「用完」，又停在半句计划上。
             nudge_truncated = _is_truncated(reply)
             if nudge_truncated:
-                nudge_allowed = truncations_used < MAX_TRUNCATION_CONTINUES
+                nudge_allowed = truncations_used < (
+                    MAX_EMPTY_TRUNCATION_CONTINUES if not text else MAX_TRUNCATION_CONTINUES
+                )
             elif tools_used > 0:
                 nudge_allowed = empty_nudges_used < MAX_EMPTY_NUDGES
             else:
                 nudge_allowed = (
                     nudges_used - truncations_used
                 ) < MAX_NARRATION_NUDGES
+
+            # ★ v2.0：截断额度用完、且这次**一个字都没有**。这是上下文
+            #   已经退化的信号，不是「模型还想接着写」。先压掉旧历史，
+            #   再重新请求一次；连续 3 次仍无输出就交给上层落 failed。
+            if (
+                not at_limit
+                and nudge_truncated
+                and not nudge_allowed
+                and output_recoveries < MAX_OUTPUT_RECOVERIES
+            ):
+                compacted = await chat_compaction.compact(
+                    db, session=session, gateway=gateway, force=True, turn_run=turn_run
+                )
+                if compacted is not None:
+                    output_recoveries += 1
+                    # 截断额度归零，但保留其它纠偏额度 —— 这次是换了上下文，
+                    # 不是让模型在同一份历史里继续磨。
+                    nudges_used = max(0, nudges_used - truncations_used)
+                    truncations_used = 0
+                    pending_reminder = render_truncation_reminder(len(raw_text))
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="compaction",
+                        attempt=output_recoveries,
+                        maxAttempts=MAX_OUTPUT_RECOVERIES,
+                    )
+                    continue
+
+                # 压缩失败：不能假装还能继续。给明确失败 + 可继续状态。
+                result.no_output = True
+                result.needs_continue = True
+                note = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=(
+                        "（模型输出被截断且没有返回任何正文；上下文压缩没有成功，"
+                        "这一轮停在原地。可以点「继续」重试。）"
+                    ),
+                )
+                db.commit()
+                result.messages.append(note)
+                await _emit_message(emit, note)
+                return result
+
+            # 压缩重试次数用尽：明确失败，不让界面停在空回复上。
+            if not at_limit and nudge_truncated and not nudge_allowed:
+                result.no_output = True
+                result.needs_continue = True
+                note = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=(
+                        "（模型连续多次返回空内容，自动压缩重试已用尽。"
+                        "这不是正常结束；请点「继续」或换个接入点。）"
+                    ),
+                )
+                db.commit()
+                result.messages.append(note)
+                await _emit_message(emit, note)
+                return result
+
             if not at_limit and nudge_allowed:
                 nudges_used += 1
                 if nudge_truncated:
@@ -4670,6 +4880,9 @@ async def resume_approved(
     nudges_used = 0
     truncations_used = 0
     tool_nudges_used = 0
+    #: 上下文 overflow / 空截断的压缩重试计数（v2.0）。
+    overflow_recoveries = 0
+    output_recoveries = 0
     #: 「模型一个字没写」被推了几次（v1.32，见 `MAX_EMPTY_NUDGES`）。
     empty_nudges_used = 0
     tools_used = 0
@@ -4689,11 +4902,24 @@ async def resume_approved(
         + MAX_TOOL_NUDGES
         + MAX_FINAL_CONFIRMATIONS
     ):
+        # ★ v2.0：总预算先于单段墙钟判。单段到点会压缩后自动续，
+        #   但整轮不能超过 `TOTAL_TURN_WALL_SECONDS`（跨 resume 从
+        #   `run.started_at` 算，不能用本次调用的单调时钟）。
+        if (
+            TOTAL_TURN_WALL_SECONDS
+            and tools_used > 0
+            and _turn_elapsed_seconds(turn_run, turn_wall_start) >= TOTAL_TURN_WALL_SECONDS
+        ):
+            # 说明由 `_run_guarded_active` 统一追加：那张表同时覆盖正常
+            # 路径和后台接手路径，避免这里与 wrapper 各写一条重复提示。
+            result.fatal = True
+            return result
+
         # ★ v1.68：墙钟预算闸（同 run_turn）。
         if (
             TURN_WALL_SECONDS
             and tools_used > 0
-            and _turn_elapsed_seconds(turn_run, turn_wall_start) >= TURN_WALL_SECONDS
+            and (time.monotonic() - turn_wall_start) >= TURN_WALL_SECONDS
         ):
             exhausted = chat_service.append_assistant_message(
                 db,
@@ -4706,9 +4932,7 @@ async def resume_approved(
             result.needs_continue = True
             return result
 
-        history = chat_service.list_messages(
-            db, session=session, limit=HISTORY_MESSAGE_LIMIT
-        )
+        messages, history = await _model_context(db, session, gateway, turn_run=turn_run)
         # ★ v1.69：同一结论复读闸（与 run_turn 同一判据/门槛，见那里的长注释）。
         if (
             tools_used >= REPEATED_CONCLUSION_MIN_TOOLS
@@ -4723,7 +4947,6 @@ async def resume_approved(
             db.commit()
             result.messages.append(exhausted)
             return result
-        messages = _render_history(history)
         if not messages:
             messages = [{"role": "user", "content": "（继续之前的工作。）"}]
         if pending_reminder is not None:
@@ -4754,6 +4977,21 @@ async def resume_approved(
                 )
             )
         except Exception as exc:  # noqa: BLE001
+            if _is_context_overflow(exc) and overflow_recoveries < MAX_CONTEXT_OVERFLOWS:
+                compacted = await chat_compaction.compact(
+                    db, session=session, gateway=gateway, force=True, turn_run=turn_run
+                )
+                if compacted is not None:
+                    overflow_recoveries += 1
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="compaction",
+                        attempt=overflow_recoveries,
+                        maxAttempts=MAX_CONTEXT_OVERFLOWS,
+                    )
+                    continue
             _log.warning("对话调模型失败（审批后）", exc_info=True)
             raise _wrap_model_failure(exc) from exc
 
@@ -4840,13 +5078,69 @@ async def resume_approved(
             # ★ v1.31：与 `run_turn` 同一条额度分级（空回复走 `MAX_EMPTY_NUDGES`）。
             # ★ v1.32：空回复单独计数，不被叙述纠偏吃额度。
             if nudge_truncated:
-                nudge_allowed = truncations_used < MAX_TRUNCATION_CONTINUES
+                nudge_allowed = truncations_used < (
+                    MAX_EMPTY_TRUNCATION_CONTINUES if not text else MAX_TRUNCATION_CONTINUES
+                )
             elif tools_used > 0:
                 nudge_allowed = empty_nudges_used < MAX_EMPTY_NUDGES
             else:
                 nudge_allowed = (
                     nudges_used - truncations_used
                 ) < MAX_NARRATION_NUDGES
+
+            if (
+                not at_limit
+                and nudge_truncated
+                and not nudge_allowed
+                and output_recoveries < MAX_OUTPUT_RECOVERIES
+            ):
+                compacted = await chat_compaction.compact(
+                    db, session=session, gateway=gateway, force=True, turn_run=turn_run
+                )
+                if compacted is not None:
+                    output_recoveries += 1
+                    nudges_used = max(0, nudges_used - truncations_used)
+                    truncations_used = 0
+                    pending_reminder = render_truncation_reminder(len(raw_text))
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="compaction",
+                        attempt=output_recoveries,
+                        maxAttempts=MAX_OUTPUT_RECOVERIES,
+                    )
+                    continue
+                result.no_output = True
+                result.needs_continue = True
+                note = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=(
+                        "（模型输出被截断且没有返回任何正文；上下文压缩没有成功，"
+                        "这一轮停在原地。可以点「继续」重试。）"
+                    ),
+                )
+                db.commit()
+                result.messages.append(note)
+                await _emit_message(emit, note)
+                return result
+            if not at_limit and nudge_truncated and not nudge_allowed:
+                result.no_output = True
+                result.needs_continue = True
+                note = chat_service.append_assistant_message(
+                    db,
+                    session=session,
+                    content=(
+                        "（模型连续多次返回空内容，自动压缩重试已用尽。"
+                        "这不是正常结束；请点「继续」或换个接入点。）"
+                    ),
+                )
+                db.commit()
+                result.messages.append(note)
+                await _emit_message(emit, note)
+                return result
+
             if not at_limit and nudge_allowed:
                 nudges_used += 1
                 if nudge_truncated:
@@ -5183,13 +5477,134 @@ async def _run_guarded_active(
     #   跑完了），也不能落 `interrupted`（后台 resumer 会自动接手，与"别再跑"相反）。
     # ★ v1.35：停在计划句上的轮次落 `interrupted` —— 它还没给出结论，落 `done`
     #   会让界面和后台都以为"答完了"。
-    if result.stopped:
+    if result.fatal:
+        note = chat_service.append_assistant_message(
+            db,
+            session=session,
+            content=(
+                "（自动续跑达到总预算或连续无输出上限，已停止。"
+                "这不是正常完成；需要时点「继续」会重新给一段预算。）"
+            ),
+        )
+        result.messages.append(note)
+        turn_run_store.finish(
+            db, run, status="failed", error="自动续跑达到总预算/连续无输出上限"
+        )
+    elif result.stopped:
         turn_run_store.finish(db, run, status="cancelled")
     elif result.needs_continue:
         turn_run_store.finish_incomplete(db, run)
     else:
         turn_run_store.finish(db, run, status="done")
     db.commit()
+    return result
+
+
+def _estimated_run_tokens(db: Session, session: ChatSession, run: Any) -> int:
+    """provider 不上报 usage 时的下限估算（字符/4）。
+
+    只统计本次 turn 开始之后的消息；不用 `total_tokens` 覆盖真实值，
+    仅在 `usage_reported=False` 时用于总预算判断。
+    """
+    started = getattr(run, "started_at", None)
+    if started is None:
+        return 0
+    try:
+        rows = chat_service.list_messages(db, session=session)
+    except Exception:  # noqa: BLE001 - 估算失败不能影响续跑
+        return 0
+    chars = 0
+    for row in rows:
+        created = getattr(row, "created_at", None)
+        if created is not None and created < started:
+            continue
+        chars += len(getattr(row, "content", "") or "")
+        chars += len(getattr(row, "model_extra", "") or "")
+    return chars // 4
+
+
+async def _continue_after_result(
+    db: Session,
+    *,
+    session: ChatSession,
+    run: Any,
+    result: ChatTurnResult,
+    content: str,
+    identity: Any,
+    provider_id: str | None,
+    gateway: Any,
+    attachment_ids: list[str] | None,
+    explicit_tools: list[str] | None,
+    emit: Emit | None,
+    allowed_tools: set[str] | None,
+    locale: str | None,
+) -> ChatTurnResult:
+    """OMP 的 autoContinue：预算/截断停下 → 压缩 → 同一 turn_run 续跑。
+
+    抽成模块函数是因为两条路径都要用：
+    - 新消息（`run_turn_durable`）；
+    - 用户点「继续」/后台接手（`resumer.resume_one`）。
+    只写在 wrapper 里的话，手动继续仍然每 60 分钟把决定推回给用户。
+    """
+    segments = 0
+    no_output = 0
+    while result.needs_continue and not result.stopped and not result.fatal:
+        if segments >= MAX_AUTO_CONTINUE_SEGMENTS:
+            result.fatal = True
+            break
+        elapsed = _turn_elapsed_seconds(run, time.monotonic())
+        if TOTAL_TURN_WALL_SECONDS and elapsed >= TOTAL_TURN_WALL_SECONDS:
+            result.fatal = True
+            break
+        tokens_used = int(getattr(run, "total_tokens", 0) or 0)
+        if not getattr(run, "usage_reported", False):
+            tokens_used = max(tokens_used, _estimated_run_tokens(db, session, run))
+        if TOTAL_TURN_TOKENS and tokens_used >= TOTAL_TURN_TOKENS:
+            result.fatal = True
+            break
+
+        compacted = await chat_compaction.compact(
+            db, session=session, gateway=gateway, force=True, turn_run=run
+        )
+        if compacted is None:
+            # 压缩没成功就不能自动继续 —— 下一段还是同一份超长上下文。
+            break
+
+        if result.no_output:
+            no_output += 1
+            if no_output >= MAX_OUTPUT_RECOVERIES:
+                result.fatal = True
+                break
+
+        # 新的一段重新拿工具/纠偏预算；`tools_used` 保留（它是任务总进度）。
+        run.nudges_used = 0
+        run.truncations_used = 0
+        run.tool_nudges_used = 0
+        run.round_index = 0
+        db.commit()
+        segments += 1
+        await _emit_phase(
+            emit, "resume", 0, reason="compaction",
+            attempt=segments, maxAttempts=MAX_AUTO_CONTINUE_SEGMENTS,
+        )
+        result = await run_turn(
+            db,
+            session=session,
+            content=content,
+            identity=identity,
+            provider_id=provider_id,
+            gateway=gateway,
+            attachment_ids=attachment_ids,
+            explicit_tools=explicit_tools,
+            emit=emit,
+            turn_run=run,
+            resume_from=run,
+            allowed_tools=allowed_tools,
+            locale=locale,
+        )
+
+    if result.fatal:
+        result.needs_continue = False
     return result
 
 
@@ -5211,7 +5626,7 @@ async def run_turn_durable(
     """`run_turn` 的持久化外壳（生产路径都走这个）。"""
 
     async def call(run: Any) -> ChatTurnResult:
-        return await run_turn(
+        result = await run_turn(
             db,
             session=session,
             content=content,
@@ -5223,6 +5638,32 @@ async def run_turn_durable(
             emit=emit,
             turn_run=run,
             resume_from=resume_from,
+            allowed_tools=allowed_tools,
+            locale=locale,
+        )
+        # `run_turn` 在 gateway=None 时会自己构造一个；这里拿不到那个
+        # 对象，自动续跑前必须再构造一次，否则压缩永远拿不到 gateway，
+        # 生产路径的 autoContinue 会静默失效。
+        continue_gateway = gateway
+        if (result.needs_continue or result.hit_tool_limit) and continue_gateway is None:
+            try:
+                continue_gateway = _build_gateway(
+                    _resolve_provider(session, provider_id), db
+                )
+            except Exception:  # noqa: BLE001 - 没配接入点时保持旧行为
+                continue_gateway = None
+        return await _continue_after_result(
+            db,
+            session=session,
+            run=run,
+            result=result,
+            content=content,
+            identity=identity,
+            provider_id=provider_id,
+            gateway=continue_gateway,
+            attachment_ids=attachment_ids,
+            explicit_tools=explicit_tools,
+            emit=emit,
             allowed_tools=allowed_tools,
             locale=locale,
         )
@@ -5242,13 +5683,35 @@ async def resume_approved_durable(
     """`resume_approved` 的持久化外壳。"""
 
     async def call(run: Any) -> ChatTurnResult:
-        return await resume_approved(
+        result = await resume_approved(
             db,
             session=session,
             message=message,
             identity=identity,
             gateway=gateway,
             turn_run=run,
+            locale=locale,
+        )
+        # 审批后续跑也可能撞墙钟/截断；与新消息走同一套压缩 + 自动续跑。
+        resume_gateway = gateway
+        if resume_gateway is None:
+            try:
+                resume_gateway = _build_gateway(_resolve_provider(session, None), db)
+            except Exception:  # noqa: BLE001 - 没配接入点时保持旧行为
+                resume_gateway = None
+        return await _continue_after_result(
+            db,
+            session=session,
+            run=run,
+            result=result,
+            content="",
+            identity=identity,
+            provider_id=None,
+            gateway=resume_gateway,
+            attachment_ids=None,
+            explicit_tools=None,
+            emit=None,
+            allowed_tools=None,
             locale=locale,
         )
 
