@@ -653,6 +653,14 @@ def should_nudge(
         if has_unactioned_command(text):
             # 正文里贴了命令却没执行 = 最强的"还要动手"信号，照推。
             return tool_nudges_used < max_tool_nudges
+        # ★ 2026-11-13：第一条完整回答仍推一次（保留“跑过工具就推”的安全网），
+        # 但如果第二次仍是完整回答、没有“接下来/我先/下一步”的意图，就停。
+        # 用户实测问「上次扫了什么」，模型调完 list_scans 给出完整汇总后，
+        # 被推到第 5 次，同一份结论反复刷屏。
+        if no_tool_rounds >= 2 and not (
+            looks_unfinished(text) or looks_like_plan(text)
+        ):
+            return False
         if no_tool_rounds >= max_no_tool_rounds:
             # 连续多轮只写正文、不动手：这是在作答，不是中停。收尾。
             return False

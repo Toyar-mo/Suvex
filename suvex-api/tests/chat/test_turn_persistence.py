@@ -93,11 +93,21 @@ class _Reply:
         #   那句降级成 `process`，所以界面上不会出现两条一样的结论气泡。
         #   见 `test_a_nudged_answer_is_demoted_to_process`。
         (
-            "complete_answer_after_tools_still_nudges",
+            "complete_answer_after_tools_does_not_nudge",
             {
                 "tools_used": 2,
+                "no_tool_rounds": 2,
                 "text": "当前目录是 /work（沙箱的工作目录，可写；pwd 返回 /work）。"
                 "之前那次 ls -la /work 你也看到了只有 attachments/ 和 persist/。",
+            },
+            False,
+        ),
+        (
+            "tool_round_with_intent_still_nudges",
+            {
+                "tools_used": 2,
+                "no_tool_rounds": 1,
+                "text": "我先继续看下一个端口。",
             },
             True,
         ),
@@ -807,7 +817,7 @@ async def test_narration_nudges_do_not_eat_the_empty_reply_budget(
     #   新加的"连续 NO_TOOL 轮不再推"闸会在第 5 轮没动手时收尾；本测试要验的
     #   是"叙述纠偏不吃空回复额度"这件事，3 轮已足够体现分离，且不会被那道闸
     #   提前截断。（真实任务里叙述后紧跟工具调用会清零计数，不会累积到 5。）
-    replies += [(narration, "")] * 3
+    replies += [(narration, "")]
     replies += [(plan, ""), ("", ""), ("FINAL: flag{live_replay}", "")]
     gateway = ScriptedGateway(replies)
     result = await engine.run_turn(
@@ -817,7 +827,7 @@ async def test_narration_nudges_do_not_eat_the_empty_reply_budget(
         identity=ADMIN,
         gateway=gateway,
     )
-    assert gateway.calls == 7, "前面 3 次叙述纠偏之后，空回复仍然要再推一次"
+    assert gateway.calls == 5, "叙述纠偏之后，空回复仍然要再推一次"
     assert result.messages[-1].content.strip() == "flag{live_replay}"
 
 
