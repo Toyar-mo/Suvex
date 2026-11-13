@@ -291,7 +291,6 @@ MAX_REPEATED_ACTIONS = _env_int("SUPEX_CHAT_MAX_REPEATED_ACTIONS", 5)
 #: 写一句不调工具"的偶发情况，但连 5 轮都不调工具还在被推，只可能是它其实
 #: 已经答完了。必须 ≤ `MAX_NARRATION_NUDGES`(2) 之上的合理值、且远小于
 #: `MAX_TOOL_NUDGES`(300)，否则等于没设。
-MAX_NO_TOOL_NUDGES = _env_int("SUPEX_CHAT_MAX_NO_TOOL_NUDGES", 5)
 
 #: 跑过工具的轮次里，模型回了**空回复**时最多再推几次（v1.31）。
 #:
@@ -550,8 +549,10 @@ class ChatTurnResult:
     #: 这一轮因为「输出被截断且一个字没吐出来」收尾。自动续跑据此计数；
     #: 连续多次仍无输出就落 `failed`，不再静默 `done`。
     no_output: bool = False
-    #: 自动恢复次数用尽 / 总预算用尽。`_run_guarded` 据此落 `failed`。
+    #: 自动恢复次数用尽 / 总预算用尽 / 文本协议缺 FINAL。`_run_guarded` 据此落 `failed`。
     fatal: bool = False
+    #: `fatal` 的可读原因；为空时用历史默认的预算文案。
+    failure_reason: str | None = None
 
 
 # ══════════════════════════════════════════════════════════
@@ -1049,6 +1050,21 @@ def _looks_unfinished(text: str) -> bool:
     if not body or len(body) >= MAX_NARRATION_ONLY_CHARS:
         return False
     return bool(_NARRATION_INTENT.search(body))
+
+
+def _text_protocol_incomplete(
+    *, native_tools: bool, tools_used: int, said_final: bool, at_limit: bool,
+    actions: list[Any], reply: Any,
+) -> bool:
+    """文本 ACTION 协议严格收尾：跑过工具却没有 FINAL，就不算完成。"""
+    return (
+        not native_tools
+        and tools_used > 0
+        and not said_final
+        and not at_limit
+        and not actions
+        and not _is_truncated(reply)
+    )
 
 
 def _is_truncated(reply: Any) -> bool:
@@ -3893,8 +3909,6 @@ async def run_turn(
     tools_used = 0
 
     #: ★ v1.64.1：连续多少轮"跑过工具但这一轮没再调任何工具"（只写了正文）。
-    #:   见 `MAX_NO_TOOL_NUDGES`。执行工具时清零。
-    no_tool_rounds = 0
 
     #: 本轮 FINAL 被"打回"过几次（v1.29）。见 `MAX_FINAL_CONFIRMATIONS`。
     final_confirmations = 0
@@ -4502,11 +4516,6 @@ async def run_turn(
                     continue
                 return result
 
-            # ★ v1.64.1：这一轮模型没调任何工具（只写了正文）。累计"连续没调
-            #   工具"的轮数 —— 一旦它跑过工具又连续 N 轮不再动手，就认定它是在
-            #   作答而非中停（见 `MAX_NO_TOOL_NUDGES`）。执行工具的分支会把它
-            #   清零。
-            no_tool_rounds += 1
             # ★ v1.29：`FINAL:` 是模型自己宣告"做完了"。实测它会把这句话用在
             #   **进度播报**上（线上原文：`FINAL: 现在查 libc 版本。`），于是
             #   这一轮在跑完一个工具后就结束了。所以任务型轮次第一次收到
@@ -4599,9 +4608,6 @@ async def run_turn(
                 max_truncations=MAX_TRUNCATION_CONTINUES,
                 tool_nudges_used=tool_nudges_used,
                 max_tool_nudges=MAX_TOOL_NUDGES,
-                no_tool_rounds=no_tool_rounds,
-                max_no_tool_rounds=MAX_NO_TOOL_NUDGES,
-                native_tools=native_tools,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
@@ -4652,6 +4658,20 @@ async def run_turn(
                 result.messages.append(exhausted)
                 result.needs_continue = True
                 await _emit_message(emit, exhausted)
+                return result
+
+            if _text_protocol_incomplete(
+                native_tools=native_tools,
+                tools_used=tools_used,
+                said_final=said_final,
+                at_limit=at_limit,
+                actions=actions,
+                reply=reply,
+            ):
+                result.fatal = True
+                result.failure_reason = (
+                    "文本协议模型跑过工具后没有给出 FINAL，无法确认这一轮已经完成。"
+                )
                 return result
 
             _log.warning(
@@ -4709,7 +4729,6 @@ async def run_turn(
                 output = render_auth_attempt_blocked_note(brute_attempts)
                 failed = True
                 tools_used += 1
-                no_tool_rounds = 0
                 tool_message = chat_service.append_tool_message(
                     db,
                     session=session,
@@ -4739,7 +4758,6 @@ async def run_turn(
             )
             tool_elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
             tools_used += 1
-            no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
             # ★ v1.87：计划句的打回额度是**连续**额度，不是整轮总额。
             #   101 步 / 48 次工具的长任务里，模型每隔几个工具就会说一句
             #   “接下来查 X”；旧代码从不复位，4 句正常的计划就把额度吃光，
@@ -4888,8 +4906,6 @@ async def resume_approved(
     #: 「模型一个字没写」被推了几次（v1.32，见 `MAX_EMPTY_NUDGES`）。
     empty_nudges_used = 0
     tools_used = 0
-    #: ★ v1.64.1：见 `MAX_NO_TOOL_NUDGES`（run_turn 同名计数）。
-    no_tool_rounds = 0
     final_confirmations = 0
     plan_bounces = 0
     pending_reminder: str | None = None
@@ -5258,9 +5274,6 @@ async def resume_approved(
                 max_truncations=MAX_TRUNCATION_CONTINUES,
                 tool_nudges_used=tool_nudges_used,
                 max_tool_nudges=MAX_TOOL_NUDGES,
-                no_tool_rounds=no_tool_rounds,
-                max_no_tool_rounds=MAX_NO_TOOL_NUDGES,
-                native_tools=native_tools,
             ):
                 nudges_used += 1
                 if _is_truncated(reply):
@@ -5294,6 +5307,18 @@ async def resume_approved(
                 result.messages.append(exhausted)
                 result.needs_continue = True
                 return result
+            if _text_protocol_incomplete(
+                native_tools=native_tools,
+                tools_used=tools_used,
+                said_final=said_final,
+                at_limit=at_limit,
+                actions=actions,
+                reply=reply,
+            ):
+                result.fatal = True
+                result.failure_reason = (
+                    "文本协议模型跑过工具后没有给出 FINAL，无法确认这一轮已经完成。"
+                )
             return result
 
         for name, args in actions:
@@ -5310,7 +5335,6 @@ async def resume_approved(
             tool_output, tool_failed = await _execute_tool(ctx, name, args)
             tool_elapsed_ms = int((time.perf_counter() - tool_started) * 1000)
             tools_used += 1
-            no_tool_rounds = 0  # v1.64.1：真的动了手，连续没动手计数清零。
             tool_message = chat_service.append_tool_message(
                 db,
                 session=session,
@@ -5474,25 +5498,24 @@ async def _run_guarded_active(
             _log.warning("记录中断状态失败（%s）", kind, exc_info=True)
         raise
     # ★ v1.25：一轮只留最后一条 assistant 作为对话内容（见 `_collapse_turn_answers`）。
-    _collapse_turn_answers(db, result)
+    #   fatal 例外：保留模型已写出的结论，再补一条失败说明；折叠掉它会让用户
+    #   只看到“失败了”，看不到模型到底答了什么。
+    if not result.fatal or not result.failure_reason:
+        _collapse_turn_answers(db, result)
 
     # ★ v1.25：用户主动停掉的这一轮落 `cancelled` —— 不能落 `done`（会被当成
     #   跑完了），也不能落 `interrupted`（后台 resumer 会自动接手，与"别再跑"相反）。
     # ★ v1.35：停在计划句上的轮次落 `interrupted` —— 它还没给出结论，落 `done`
     #   会让界面和后台都以为"答完了"。
     if result.fatal:
+        reason = result.failure_reason or "自动续跑达到总预算/连续无输出上限"
         note = chat_service.append_assistant_message(
             db,
             session=session,
-            content=(
-                "（自动续跑达到总预算或连续无输出上限，已停止。"
-                "这不是正常完成；需要时点「继续」会重新给一段预算。）"
-            ),
+            content=f"（{reason} 这不是正常完成；需要时点「继续」会重新给一段预算。）",
         )
         result.messages.append(note)
-        turn_run_store.finish(
-            db, run, status="failed", error="自动续跑达到总预算/连续无输出上限"
-        )
+        turn_run_store.finish(db, run, status="failed", error=reason)
     elif result.stopped:
         turn_run_store.finish(db, run, status="cancelled")
     elif result.needs_continue:

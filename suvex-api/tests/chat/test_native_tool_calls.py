@@ -961,51 +961,6 @@ async def test_run_turn_keeps_text_protocol_for_legacy_gateway(
 # ══════════════════════════════════════════════════════════
 
 
-def test_should_nudge_stops_when_no_tool_for_many_rounds() -> None:
-    """跑过工具、但连续 5 轮只写正文不动手 → 认定作答，不再推。"""
-    from app.chat import nudge as np
-
-    base = dict(
-        at_limit=False,
-        said_final=False,
-        actions=[],
-        truncated=False,
-        tools_used=2,
-        text="两步都完成了：hello.txt 已创建（30 字节），cat 读回内容原样是 原生工具调用测试成功。",
-        nudges_used=0,
-        max_nudges=2,
-        tool_nudges_used=3,  # 远未到 300 上限
-    )
-    # 连续没动工具 5 轮 → 不推
-    assert np.should_nudge(**base, no_tool_rounds=5, max_no_tool_rounds=5) is False
-    # 才第 1 轮没动工具 → 仍然推（给"工具返回后想再确认一下"留余地）
-    assert np.should_nudge(**base, no_tool_rounds=1, max_no_tool_rounds=5) is True
-    # 第 4 轮 → 还没到上限，仍推
-    assert np.should_nudge(**base, no_tool_rounds=4, max_no_tool_rounds=5) is True
-
-
-def test_should_nudge_still_nudges_unactioned_command_even_past_no_tool_cap() -> None:
-    """正文里夹着要跑的 shell 命令 → 无论连续多少轮没动手都要推（还想动手）。"""
-    from app.chat import nudge as np
-
-    assert (
-        np.should_nudge(
-            at_limit=False,
-            said_final=False,
-            actions=[],
-            truncated=False,
-            tools_used=2,
-            text="接下来我跑一下：\n```\ncat hello.txt\n```",
-            nudges_used=0,
-            max_nudges=2,
-            tool_nudges_used=3,
-            no_tool_rounds=99,
-            max_no_tool_rounds=5,
-        )
-        is True
-    )
-
-
 def test_should_nudge_no_tool_cap_does_not_affect_when_no_tools_used() -> None:
     """从没跑过工具（纯问答）→ 走 narration 通道，不受 no_tool 计数影响。"""
     from app.chat import nudge as np
@@ -1021,8 +976,6 @@ def test_should_nudge_no_tool_cap_does_not_affect_when_no_tools_used() -> None:
             text="当前工作目录是 /work。",
             nudges_used=0,
             max_nudges=2,
-            no_tool_rounds=99,
-            max_no_tool_rounds=5,
         )
         is False
     )

@@ -96,7 +96,6 @@ class _Reply:
             "complete_answer_after_tools_does_not_nudge",
             {
                 "tools_used": 2,
-                "no_tool_rounds": 2,
                 "text": "当前目录是 /work（沙箱的工作目录，可写；pwd 返回 /work）。"
                 "之前那次 ls -la /work 你也看到了只有 attachments/ 和 persist/。",
             },
@@ -106,8 +105,6 @@ class _Reply:
             "native_tool_complete_answer_stops_immediately",
             {
                 "tools_used": 2,
-                "no_tool_rounds": 1,
-                "native_tools": True,
                 "text": "扫描完成：5 个完成，14 个失败。",
             },
             False,
@@ -116,7 +113,6 @@ class _Reply:
             "tool_round_with_intent_still_nudges",
             {
                 "tools_used": 2,
-                "no_tool_rounds": 1,
                 "text": "我先继续看下一个端口。",
             },
             True,
@@ -1314,10 +1310,9 @@ async def test_a_nudged_answer_is_demoted_to_process(db_session: Session) -> Non
     gateway = ScriptedGateway(
         [
             ('ACTION: {"tool": "list_scans", "args": {}}', ""),
-            # 第一次给出"完整结论" → 降级为 process，再问一次
-            ("`pwd` 输出是 `/work`。", ""),
-            # 又是完整结论 → 已经降级过一次，**接受**它作为最终答复
-            ("当前工作目录是 `/work`。", ""),
+            # 带继续意图 → 降级为 process，再问一次
+            ("我先看一下：`pwd` 输出是 `/work`。", ""),
+            ("FINAL: 当前工作目录是 `/work`。", ""),
         ]
     )
     await engine.run_turn_durable(
@@ -1326,10 +1321,10 @@ async def test_a_nudged_answer_is_demoted_to_process(db_session: Session) -> Non
 
     rows = list_messages(db_session, session=session, limit=50)
     answers = [r for r in rows if r.role == "assistant" and (r.content or "").strip()]
-    assert [r.surface for r in answers] == ["answer"], (
-        "完整回答直接结束，不再制造一条被推掉的 process"
+    assert [r.surface for r in answers] == ["process", "answer"], (
+        "带继续意图的那次回答要降级为 process，FINAL 的那次才是 answer"
     )
-    assert gateway.calls == 2
+    assert gateway.calls == 3
 
 
 # ══════════════════════════════════════════════════════════
@@ -1459,7 +1454,7 @@ async def test_a_resumed_turn_keeps_its_tool_count(db_session: Session) -> None:
     )
     db_session.commit()
 
-    gateway = ScriptedGateway([("输出都在上面了。", ""), ("FINAL: 好了。", "")])
+    gateway = ScriptedGateway([("我先继续看输出。", ""), ("FINAL: 好了。", "")])
     await engine.run_turn(
         db_session,
         session=session,
@@ -1688,3 +1683,27 @@ async def test_repeated_prose_plans_are_bounded(
     )
     assert gateway.calls == 3, "额度用尽后必须立刻收尾，不能再走 tool nudge"
     assert result.messages[-1].content == engine.render_plan_exhausted_note()
+
+
+async def test_text_protocol_tool_round_without_final_is_fatal(
+    db_session: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """文本 ACTION 模型跑过工具后不给 FINAL → 明确失败，不再当 done。"""
+    from app.chat import engine
+
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202
+        return "scans: 3", False
+
+    monkeypatch.setattr(engine, "_execute_tool", fake_execute)
+    session = _new_session(db_session)
+    gateway = ScriptedGateway(
+        [
+            ('ACTION: {"tool": "list_scans", "args": {}}', ""),
+            ("扫描完成：3 个结果，没有更多可看。", ""),
+        ]
+    )
+    result = await engine.run_turn(
+        db_session, session=session, content="查扫描", identity=ADMIN, gateway=gateway
+    )
+    assert result.fatal is True
+    assert "FINAL" in (result.failure_reason or "")

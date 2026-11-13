@@ -160,7 +160,8 @@ async def resume_one(db: Session, run: Any, *, auto_continue: bool = True) -> bo
             )
             # ★ v1.32：后台接手走的是 `run_turn` 本身，不经过 `_run_guarded`；
             #   不在这里折叠，被接手的一轮就会留下多条结论气泡。
-            engine._collapse_turn_answers(db, result)
+            if not result.fatal or not result.failure_reason:
+                engine._collapse_turn_answers(db, result)
         except BaseException as exc:  # noqa: BLE001 - 与 engine._run_guarded 同因
             if _shutting_down and isinstance(exc, asyncio.CancelledError):
                 # 进程关闭不是这一轮的失败：退还 claim 用掉的额度，心跳置为过期，
@@ -206,15 +207,13 @@ async def resume_one(db: Session, run: Any, *, auto_continue: bool = True) -> bo
         #   的一轮即使又一次停在计划上也会被记成 `done`，用户看到的仍是
         #   「没解出又结束」（G1-review P1_RESUMER_MARKS_DONE）。
         if result.fatal:
+            reason = result.failure_reason or "自动续跑达到总预算/连续无输出上限"
             chat_service.append_assistant_message(
                 db,
                 session=session,
-                content=(
-                    "（自动续跑达到总预算或连续无输出上限，已停止。"
-                    "这不是正常完成；需要时点「继续」会重新给一段预算。）"
-                ),
+                content=f"（{reason} 这不是正常完成；需要时点「继续」会重新给一段预算。）",
             )
-            turn_runs.give_up(db, run, reason="自动续跑达到总预算/连续无输出上限")
+            turn_runs.give_up(db, run, reason=reason)
         elif result.stopped:
             turn_runs.finish(db, run, status="cancelled")
         elif result.needs_continue:
