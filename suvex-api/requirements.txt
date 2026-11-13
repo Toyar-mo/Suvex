@@ -89,3 +89,6 @@ httpx>=0.27,<1.0
 # `idna.IDNAError`；它不是 `httpx.InvalidURL` 的子类，也不是
 # `httpx.HTTPError` 的子类，所以传输层的判据必须自己收它。
 idna>=3.6,<4.0
+
+# 多 worker 的对话流事件总线（可选；留空 SUPEX_REDIS_URL 时不需要）
+redis>=5,<6

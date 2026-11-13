@@ -55,6 +55,9 @@ class Settings(BaseSettings):
     db_echo: bool = False
     db_pool_size: int = 5
     db_max_overflow: int = 10
+    #: 进行中对话事件总线。留空 = 单进程内存实现；填 `redis://...` 后
+    #: 多个 uvicorn worker 共享缓冲与实时帧。
+    redis_url: str = ""
 
     # ── 凭据加密（provider 的 API key）────────────────────
     # ★ 单独的密钥，**不复用任何其他密钥**。
