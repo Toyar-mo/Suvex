@@ -64,6 +64,7 @@ class GenericDriver:
         timeout: float = 15.0,
         min_interval: float = 0.2,
         transport: httpx.AsyncBaseTransport | None = None,
+        verify: bool = True,
     ) -> None:
         self.spec = spec
         self.slug = spec.slug_hint()
@@ -76,6 +77,7 @@ class GenericDriver:
             timeout=timeout,
             min_interval=min_interval,
             transport=transport,
+            verify=verify,
         )
 
     async def aclose(self) -> None:

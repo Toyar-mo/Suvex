@@ -68,6 +68,7 @@ class JsonPlatformTransport:
         timeout: float = 15.0,
         min_interval: float = 0.2,
         transport: httpx.AsyncBaseTransport | None = None,
+        verify: bool = True,
     ) -> None:
         self._base = (base_url or "").rstrip("/")
         self._key = access_key
@@ -102,8 +103,13 @@ class JsonPlatformTransport:
         self._client = httpx.AsyncClient(
             timeout=timeout,
             follow_redirects=False,
-            transport=transport if transport is not None else netguard.GuardedAsyncTransport(),
+            transport=(
+                transport
+                if transport is not None
+                else netguard.GuardedAsyncTransport(verify=verify)
+            ),
             trust_env=False,
+            verify=verify,
         )
         # ★ 再确认一次"guard 真的装在所有池上"（含 `_mounts` 里的代理池）。
         #   代理路径下连接层看不见目标主机 → 防护结构性失效，所以这里

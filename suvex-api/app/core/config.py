@@ -302,6 +302,10 @@ class Settings(BaseSettings):
     #   打开后**同时**启用文本守卫与网络层边界（`app/chat/egress.py` 按
     #   容器源 IP 下发 DOCKER-USER 规则）：`SUPEX_CHAT_SHELL_SCOPE_GUARD=1`。
     chat_shell_scope_guard: bool = False
+    # CTF 比赛平台 TLS 校验。默认开启；某些赛事测试域名证书配错
+    # （如 ycb-test.dasctf.com 返回 *.cdn.myqcloud.com），只能显式关闭来取 flag。
+    # 关闭后 access key 仍加密传输，但无法防中间人；仅限测试环境。
+    ctf_insecure_tls: bool = False
     # 额外放行的主机 / CIDR（逗号分隔）。只放"运维显式认可的固定设施"；
     # 业务目标走扫描授权，不要加到这里。
     chat_shell_allowed_hosts: str = ""

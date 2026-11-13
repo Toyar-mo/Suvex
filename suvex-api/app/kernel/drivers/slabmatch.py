@@ -103,6 +103,7 @@ class SlabMatchDriver:
         timeout: float = 15.0,
         min_interval: float = 0.2,
         transport: httpx.AsyncBaseTransport | None = None,
+        verify: bool = True,
     ) -> None:
         self._base = normalize_base_url(base_url)
         # ★ 传输层（认证 + 统一响应包装 + 限速 + 429/401 映射）与
@@ -125,6 +126,7 @@ class SlabMatchDriver:
             timeout=timeout,
             min_interval=min_interval,
             transport=transport,
+            verify=verify,
         )
 
     # ══════════════════════════════════════════════════════

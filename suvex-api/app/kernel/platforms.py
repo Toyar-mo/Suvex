@@ -485,8 +485,10 @@ def driver_for(db: Session, account: KernelAccount | None) -> Any:
             "CTF2_PLATFORM_NOT_READY",
             "当前账号指向的平台配置不可用，请在设置里重新生成或切回内置驱动。",
         )
+    from app.core.config import get_settings
+
     key = ctf2_service.decrypt_account_token(account)
-    return GenericDriver(spec, key)
+    return GenericDriver(spec, key, verify=not get_settings().ctf_insecure_tls)
 
 
 __all__ = [

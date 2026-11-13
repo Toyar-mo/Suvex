@@ -163,8 +163,14 @@ def resolve_driver(db: Session) -> PlatformDriver | None:
     from app.kernel.drivers.slabmatch import SlabMatchDriver
 
     token = kernel_service.decrypt_account_token(account)
+    from app.core.config import get_settings
+
     base_url = _account_base_url(db, account)
-    return SlabMatchDriver(base_url, token)
+    return SlabMatchDriver(
+        base_url,
+        token,
+        verify=not get_settings().ctf_insecure_tls,
+    )
 
 
 def _account_base_url(db: Session, account: Any) -> str:
