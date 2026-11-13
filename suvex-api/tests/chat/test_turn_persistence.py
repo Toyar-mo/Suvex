@@ -567,8 +567,8 @@ async def test_narration_after_a_tool_call_does_not_end_the_turn(
     assert result.messages[-1].content.strip() == "全部做完了。"
 
 
-async def test_tool_rounds_alone_are_enough_to_nudge(db_session: Session) -> None:
-    """跑过工具之后，哪怕那句叙述里**一个"要动手"的词都没有**，也要推一次。
+async def test_tool_rounds_alone_do_not_force_a_nudge(db_session: Session) -> None:
+    """没有动作、没有继续意图的完整回答，就是本轮结束。
 
     ★ 这条专门隔离**结构信号**（`tools_used`）：上一版靠中文意图词表，
       而「输出都在上面了。」这种句子词表抓不到 —— 它却是真实存在的形态
@@ -592,7 +592,7 @@ async def test_tool_rounds_alone_are_enough_to_nudge(db_session: Session) -> Non
         identity=ADMIN,
         gateway=gateway,
     )
-    assert gateway.calls == 3, "跑过工具后停住，必须推一次再收尾"
+    assert gateway.calls == 2, "完整回答不再被文字启发式多推一次"
 
 
 async def test_plan_like_final_with_bare_verb_is_bounced(
@@ -820,7 +820,7 @@ async def test_narration_nudges_do_not_eat_the_empty_reply_budget(
     空回复是「它一个字没写」——后者才是需要单独兜底的故障。
     """
     session = _new_session(db_session)
-    narration = "这是一个 64 位 ELF，保护很弱。"
+    narration = "我先继续查看 main 和 read_input。"
     plan = "接下来查看 main、read_input 等函数。"
     replies = [('ACTION: {"tool": "list_scans", "args": {}}', "")]
     # ★ v1.64.1：叙述轮数从 6 降到 3 —— 必须**小于** `MAX_NO_TOOL_NUDGES`(5)。
@@ -1326,11 +1326,10 @@ async def test_a_nudged_answer_is_demoted_to_process(db_session: Session) -> Non
 
     rows = list_messages(db_session, session=session, limit=50)
     answers = [r for r in rows if r.role == "assistant" and (r.content or "").strip()]
-    assert [r.surface for r in answers] == ["process", "answer"], (
-        "只有最后一句才是对话内容；被推掉的提前结论要收进过程详情"
+    assert [r.surface for r in answers] == ["answer"], (
+        "完整回答直接结束，不再制造一条被推掉的 process"
     )
-    # 允许为"可能没说完"多问一次（安全网），但界面上只有一句结论
-    assert gateway.calls >= 3
+    assert gateway.calls == 2
 
 
 # ══════════════════════════════════════════════════════════

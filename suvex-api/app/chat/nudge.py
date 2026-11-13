@@ -638,48 +638,17 @@ def should_nudge(
     # 「任务中途不许推进」的。跑过工具的轮次本来就该继续，给它一个独立
     # 且更大的额度（`max_tool_nudges`），花的是钱，省的是用户手打「继续」。
     if tools_used > 0:
-        # ★ 2026-11-13：原生 tool-calling 下，"没有 tool_calls" 就是协议的
-        # **正常终止**（OpenAI / Anthropic 都如此）。没有未完成意图时不再
-        # 用文字启发式推一轮 —— 否则完整汇总会被反复重写。文本 ACTION 协议
-        # 仍保留安全网，因为它没有可靠的终止信号。
-        if native_tools and not (
-            has_unactioned_command(text) or looks_unfinished(text) or looks_like_plan(text)
+        # ★ 2026-11-13：终止只看**结构**。完整回答没有“接下来/我先/下一步”
+        # 这类意图，也没有贴未执行的命令，就直接结束 —— 与 OMP/Agents SDK/
+        # LangGraph 的“没有 tool call 就是 final”一致。文本 ACTION 协议也不再
+        # 靠“跑过工具就推”反复重写同一份结论。
+        if not (
+            looks_unfinished(text)
+            or looks_like_plan(text)
+            or has_unactioned_command(text)
         ):
-            return False
-        # ★ v1.25：仍然"跑过工具就推"（防"输出一次就停"的安全网不能松），
-        #   但**重复气泡的问题改在引擎层解决**：被推掉的那句如果是提前给出的
-        #   结论，就地降级成 `process`（见 `engine` 的 nudge 分支）。
-        #
-        #   为什么不在这里加"像不像半句"的判据：实测「`pwd` 输出是 `/work`。」
-        #   这种 18 字的**完整**回答，任何长度/标点启发式都会误判；而误判成
-        #   "说完了"就等于放行一次半路停 —— 那是更贵的错。
-        #
-        # ★ v1.64.1：**但这张安全网不能无条件张开**。原生工具调用之后，模型
-        #   干完活就不再调工具、只写结论（没有 FINAL/ACTION 终止信号），
-        #   "跑过工具就推"会把完整结论当"没说完"反复推，模型只好反复复述，
-        #   一路烧到 `max_tool_nudges`(300)。所以：若它已连续 `no_tool_rounds`
-        #   轮**没再调任何工具**（`no_tool_rounds >= max_no_tool_rounds`），
-        #   且这一轮正文也没夹着"想跑但没跑的 shell 命令"，就认定它在作答，
-        #   **不再推**——让它落成答案收尾。执行了工具的分支会把计数清零。
-        if has_unactioned_command(text):
-            # 正文里贴了命令却没执行 = 最强的"还要动手"信号，照推。
-            return tool_nudges_used < max_tool_nudges
-        # ★ 2026-11-13：第一条完整回答仍推一次（保留“跑过工具就推”的安全网），
-        # 但如果第二次仍是完整回答、没有“接下来/我先/下一步”的意图，就停。
-        # 用户实测问「上次扫了什么」，模型调完 list_scans 给出完整汇总后，
-        # 被推到第 5 次，同一份结论反复刷屏。
-        if no_tool_rounds >= 2 and not (
-            looks_unfinished(text) or looks_like_plan(text)
-        ):
-            return False
-        if no_tool_rounds >= max_no_tool_rounds:
-            # 连续多轮只写正文、不动手：这是在作答，不是中停。收尾。
             return False
         return tool_nudges_used < max_tool_nudges
-    # ★ v1.50：正文里塞了一段 shell 命令却没走 `ACTION:` —— 想执行但没走对
-    #   协议。这是最强的\"要动手\"信号，**与长度无关**地推一次（否则 666 字的
-    #   这类回复会被 `looks_unfinished` 的长度闸挡掉，直接 giveup = 用户看到
-    #   \"还是会停\"）。给它独立且更大的额度，别被\"纯问答\"那 2 次预算卡死。
     if has_unactioned_command(text):
         return tool_nudges_used < max_tool_nudges
     if nudges_used >= max_nudges:
