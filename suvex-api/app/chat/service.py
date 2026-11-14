@@ -490,6 +490,7 @@ def append_assistant_message(
     content: str,
     reasoning: str | None = None,
     surface: str = "answer",
+    duration_ms: int | None = None,
 ) -> ChatMessage:
     """落一条模型回复。
 
@@ -504,6 +505,7 @@ def append_assistant_message(
         content=content,
         reasoning=reasoning,
         surface=surface,
+        duration_ms=duration_ms,
     )
 
 

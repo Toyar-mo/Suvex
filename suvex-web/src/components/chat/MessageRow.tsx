@@ -106,7 +106,9 @@ function MessageRowImpl({
 
   return (
     <div className="flex flex-col gap-1.5" data-message-row="assistant" data-seq={message.seq}>
-      {message.reasoning && <ReasoningBlock text={message.reasoning} />}
+      {message.reasoning && (
+        <ReasoningBlock text={message.reasoning} durationMs={message.durationMs} />
+      )}
       <div className="group/answer relative break-words text-base leading-7 text-ink" data-markdown-answer>
         <div className="absolute -top-1 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/answer:opacity-100">
           <CopyButton text={message.content} />
@@ -124,9 +126,19 @@ function MessageRowImpl({
  * ★ 默认折叠。它是"我要看才展开"的东西，不是正文；默认铺开会让每条回复
  *   都变成两屏，而用户大多数时候只关心结论。
  */
-export function ReasoningBlock({ text }: { text: string }) {
+export function ReasoningBlock({
+  text,
+  durationMs,
+}: {
+  text: string
+  durationMs?: number | null
+}) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const seconds =
+    typeof durationMs === 'number' && durationMs > 0
+      ? Math.max(1, Math.round(durationMs / 1000))
+      : null
   return (
     <div className="flex flex-col" data-reasoning>
       <button
@@ -141,7 +153,11 @@ export function ReasoningBlock({ text }: { text: string }) {
           <ChevronRight size={11} strokeWidth={2} aria-hidden="true" />
         )}
         <Sparkles size={11} strokeWidth={2} aria-hidden="true" className="opacity-70" />
-        <span>{t('chat.thinking', undefined, '思考过程')}</span>
+        <span>
+          {seconds
+            ? t('chat.thoughtFor', { seconds }, `Thought for ${seconds}s`)
+            : t('chat.thinking', undefined, '思考过程')}
+        </span>
       </button>
       {open && (
         /* omp 的形态：折叠时只是一行 "Thought for 1s ›"，展开才读全文。

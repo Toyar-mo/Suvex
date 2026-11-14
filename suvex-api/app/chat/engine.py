@@ -4092,6 +4092,7 @@ async def run_turn(
             )
 
         try:
+            model_started = time.monotonic()
             reply = await _call_model(
                 gateway,
                 messages,
@@ -4103,6 +4104,7 @@ async def run_turn(
                 #   会让模型继续调工具，把「收尾」变成下一轮工具调用。
                 tools=None if at_limit else _tools_schema(ctx),
             )
+            model_ms = int((time.monotonic() - model_started) * 1000)
             # ★ v1.92：把这一轮的 token 累加进执行记录（流式与非流式都带
             #   usage；接入点没给时 add_usage 自己不写，不制造假 0）。
             if turn_run is not None:
@@ -4504,6 +4506,7 @@ async def run_turn(
             session=session,
             content=text,
             reasoning=reasoning,
+            duration_ms=model_ms,
             # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
             #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
             #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。
@@ -5030,6 +5033,7 @@ async def resume_approved(
             #   并把回复过一遍 `_with_native_actions` 合成回 `ACTION:` 文本，
             #   这样下面 `parse_actions`/`_narration_before_action` 那段
             #   （本就为文本协议写的）原样能用，不出现"审批后续跑不会执行工具"。
+            model_started = time.monotonic()
             reply = _with_native_actions(
                 await _gateway_chat(
                     gateway,
@@ -5038,6 +5042,7 @@ async def resume_approved(
                     tools=None if at_limit else _tools_schema(ctx),
                 )
             )
+            model_ms = int((time.monotonic() - model_started) * 1000)
         except Exception as exc:  # noqa: BLE001
             if _is_context_overflow(exc) and overflow_recoveries < MAX_CONTEXT_OVERFLOWS:
                 compacted = await chat_compaction.compact(
@@ -5276,6 +5281,7 @@ async def resume_approved(
             session=session,
             content=text,
             reasoning=reasoning,
+            duration_ms=model_ms,
             # ★ v1.25：**带动作的叙述是过程面**（"我先把附件解出来"），不画气泡。
             #   只有这一轮真的给出结论（没有 ACTION）时才算 `answer`。
             #   这样主对话流只剩：用户的话 + 最终答复 + 一个折叠的「过程详情」。

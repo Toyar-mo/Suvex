@@ -51,7 +51,11 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
   const content = message.content ?? ''
   const lines = content.split('\n')
   const lineCount = lines.length
-  const [localOpen, setLocalOpen] = useState(true)
+  /*
+    Tern 的转录默认只展开短输出；几十行的 nmap/ffuf 结果先收成一行，
+    需要时再展开。判断放在首次渲染，之后由用户点击接管。
+  */
+  const [localOpen, setLocalOpen] = useState(lineCount <= 12)
   const expansion = useToolExpansion()
   // Ctrl+O 的全局覆盖优先于单卡状态；点任意一张卡会回到 auto。
   const open = expansion === 'expanded' ? true : expansion === 'collapsed' ? false : localOpen
@@ -142,6 +146,17 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
           {t('tools.card.lines', { n: lineCount }, `${lineCount} 行`)}
         </span>
       </button>
+
+      {!open && lineCount > 12 && (
+        <button
+          type="button"
+          data-tool-expand="true"
+          onClick={() => setLocalOpen(true)}
+          className="w-full border-t border-line/50 px-2.5 py-1 text-left text-2xs text-ink-faint transition-colors duration-150 hover:bg-surface-raised/30 hover:text-ink-muted focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+        >
+          {t('tools.card.expand', undefined, '展开输出')} · {lineCount} 行
+        </button>
+      )}
 
       {open && (
         <div

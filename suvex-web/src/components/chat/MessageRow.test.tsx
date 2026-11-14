@@ -81,6 +81,21 @@ describe('MessageRow — 助手正文', () => {
     expect(container.textContent).toContain('先看端口，再下结论')
   })
 
+  it('★ 有模型耗时时按 Tern 的 Thought for Ns 显示', () => {
+    render(
+      <MessageRow
+        message={msg({
+          id: 'a3',
+          content: '结论',
+          reasoning: '先看端口',
+          durationMs: 1400,
+        })}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: /思考了 1 秒|Thought for 1s/ })).toBeTruthy()
+  })
+
   it('★ 独立的 ReasoningBlock 也能自己开合（导出给别处用）', () => {
     const { container } = render(<ReasoningBlock text="先跑 passive 扫描" />)
     expect(container.textContent).not.toContain('先跑 passive 扫描')
@@ -148,6 +163,23 @@ describe('MessageRow — 工具消息', () => {
     expect(row).not.toBeNull()
     expect(row.getAttribute('data-tool-name')).toBe('run_shell')
     expect(container.querySelector('[data-message-row="assistant"]')).toBeNull()
+  })
+})
+
+describe('MessageRow — 工具输出折叠', () => {
+  it('★ 长输出默认收起，点击「展开输出」才铺开', () => {
+    const long = Array.from({ length: 20 }, (_, i) => `line ${i}`).join('\n')
+    const { container } = render(
+      <MessageRow
+        message={msg({ id: 't-long', role: 'tool', toolName: 'run_shell', content: long })}
+      />,
+    )
+
+    const card = container.querySelector('[data-message-row="tool"]') as HTMLElement
+    expect(card.getAttribute('data-tool-collapsed')).toBe('true')
+    const expand = screen.getByRole('button', { name: /展开输出/ })
+    fireEvent.click(expand)
+    expect(card.getAttribute('data-tool-collapsed')).toBe('false')
   })
 })
 
