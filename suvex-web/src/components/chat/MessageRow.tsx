@@ -109,7 +109,7 @@ function MessageRowImpl({
       {message.reasoning && (
         <ReasoningBlock text={message.reasoning} durationMs={message.durationMs} />
       )}
-      <div className="group/answer relative break-words text-base leading-7 text-white [&_p]:!text-white [&_li]:!text-white [&_h1]:!text-white [&_h2]:!text-white [&_h3]:!text-white [&_h4]:!text-white [&_h5]:!text-white [&_h6]:!text-white" data-markdown-answer>
+      <div className="group/answer relative break-words text-base leading-7 text-[rgb(var(--suvex-answer-ink))] [&_p]:!text-[rgb(var(--suvex-answer-ink))] [&_li]:!text-[rgb(var(--suvex-answer-ink))] [&_h1]:!text-[rgb(var(--suvex-answer-ink))] [&_h2]:!text-[rgb(var(--suvex-answer-ink))] [&_h3]:!text-[rgb(var(--suvex-answer-ink))] [&_h4]:!text-[rgb(var(--suvex-answer-ink))] [&_h5]:!text-[rgb(var(--suvex-answer-ink))] [&_h6]:!text-[rgb(var(--suvex-answer-ink))]" data-markdown-answer>
         <div className="absolute -top-1 right-0 flex items-center gap-1 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/answer:opacity-100">
           <CopyButton text={message.content} />
           {onFork && <ForkButton seq={message.seq} onFork={onFork} />}
@@ -168,7 +168,7 @@ export function ReasoningBlock({
       {open && (
         /* omp 的形态：折叠时只是一行 "Thought for 1s ›"，展开才读全文。
            不套卡片边框 —— 思考不是证据卡片，它是正文的附注。 */
-        <p className="mt-1 animate-stream-in whitespace-pre-wrap break-words border-l border-line/80 pl-2.5 text-xs leading-relaxed text-white">
+        <p className="mt-1 animate-stream-in whitespace-pre-wrap break-words border-l border-line/80 pl-2.5 text-xs leading-relaxed text-[rgb(var(--suvex-answer-ink))]">
           {text}
         </p>
       )}

@@ -190,7 +190,7 @@ function AssistantTurnImpl({
             return hideWork ? null : (
               <p
                 key={message.id}
-                className="whitespace-pre-wrap break-words px-0.5 text-sm leading-6 text-white"
+                className="whitespace-pre-wrap break-words px-0.5 text-sm leading-6 text-[rgb(var(--suvex-answer-ink))]"
                 data-narration-line
               >
                 {message.content}
@@ -225,7 +225,7 @@ function AssistantTurnImpl({
 
       {live && streamingText !== null && !streamingAlreadyPersisted && (
         <div
-          className="w-full animate-stream-in break-words text-base leading-7 text-white [&_p]:!text-white [&_li]:!text-white [&_h1]:!text-white [&_h2]:!text-white [&_h3]:!text-white [&_h4]:!text-white [&_h5]:!text-white [&_h6]:!text-white"
+          className="w-full animate-stream-in break-words text-base leading-7 text-[rgb(var(--suvex-answer-ink))] [&_p]:!text-[rgb(var(--suvex-answer-ink))] [&_li]:!text-[rgb(var(--suvex-answer-ink))] [&_h1]:!text-[rgb(var(--suvex-answer-ink))] [&_h2]:!text-[rgb(var(--suvex-answer-ink))] [&_h3]:!text-[rgb(var(--suvex-answer-ink))] [&_h4]:!text-[rgb(var(--suvex-answer-ink))] [&_h5]:!text-[rgb(var(--suvex-answer-ink))] [&_h6]:!text-[rgb(var(--suvex-answer-ink))]"
           data-streaming-bubble="true"
           data-message-row="assistant"
         >
