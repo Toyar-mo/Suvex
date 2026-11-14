@@ -9,7 +9,7 @@ describe('scansToCsv', () => {
       targetKind: 'web',
       status: 'completed',
       findings: {},
-      durationSec: 1,
+      durationSec: -12.5,
       startedAt: '2026-01-01T00:00:00Z',
       failureReason: '+1+1',
       origin: 'scan',
@@ -19,5 +19,6 @@ describe('scansToCsv', () => {
     const csv = scansToCsv([scan])
     expect(csv).toContain("'=HYPERLINK")
     expect(csv).toContain("'+1+1")
+    expect(csv).toContain('-12.5')
   })
 })

@@ -934,3 +934,10 @@ def test_export_neutralizes_spreadsheet_formulas(db_session: Session, scan) -> N
     body = service.export_csv(db_session, rows=[row])
     assert """'=HYPERLINK""" in body
     assert "'+1+1" in body
+
+
+def test_csv_keeps_real_numbers_but_escapes_formulas() -> None:
+    assert service._csv_cell("-12.5") == "-12.5"
+    assert service._csv_cell("+7") == "+7"
+    assert service._csv_cell("-2+3").startswith("'")
+    assert service._csv_cell("=1+1").startswith("'")
