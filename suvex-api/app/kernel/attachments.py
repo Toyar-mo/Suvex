@@ -129,6 +129,8 @@ class PendingDownload:
     challenge_id: str
     url: str
     name: str
+    #: 平台声明的大小；未知时是 None，不能当 0。
+    size: int | None = None
 
 
 def attachment_root(challenge_id: str) -> Path:
@@ -233,11 +235,16 @@ def plan_downloads(
                     break
         if not url:
             continue
+        raw_size = None
+        if isinstance(item, dict):
+            raw_size = item.get("size") or item.get("file_size") or item.get("bytes")
+        size = int(raw_size) if isinstance(raw_size, int) and raw_size >= 0 else None
         planned.append(
             PendingDownload(
                 challenge_id=challenge_id,
                 url=url,
                 name=sanitize_filename(name) if name else name_from_url(url, index=index),
+                size=size,
             )
         )
     return planned
@@ -413,6 +420,11 @@ async def download_all(
     result = DownloadResult()
     if not pending:
         return result
+    # 小附件先下，未知大小排最后；大附件不会先占满带宽。
+    pending = sorted(
+        pending,
+        key=lambda item: (0 if item.size is not None else 1, item.size or 0),
+    )
 
     owns_client = client is None
     # ★ `trust_env=False` —— 这里**不是** SSRF 面（每条 URL 先过

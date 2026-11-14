@@ -781,3 +781,19 @@ async def test_dns_rebinding_to_metadata_is_refused(monkeypatch) -> None:
     )
     assert len(recorded) == 0
     assert result.failed and "解析到了被拒绝的地址" in result.failed[0]
+
+
+async def test_attachments_download_smaller_first(monkeypatch) -> None:
+    recorded: list[str] = []
+
+    async def fake_download(http, token, item, result, allowed_domains=()):  # noqa: ANN001
+        recorded.append(item.name)
+
+    monkeypatch.setattr(attachments, "_download_one", fake_download)
+    pending = [
+        attachments.PendingDownload("c", "https://ctf2.dasctf.com/big", "big", 10_000_000),
+        attachments.PendingDownload("c", "https://ctf2.dasctf.com/small", "small", 10),
+        attachments.PendingDownload("c", "https://ctf2.dasctf.com/unknown", "unknown", None),
+    ]
+    await attachments.download_all("", pending, client=object())
+    assert recorded == ["small", "big", "unknown"]
