@@ -486,7 +486,22 @@ async def _download_one(
     if target.resolve().parent != target_dir.resolve():
         raise KernelError(f"附件名净化后仍然跳出了目录：{item.name!r}")
 
-    headers = {"Authorization": f"Bearer {token}"} if token else {}
+    # 平台/CDN 会按 UA / Referer 做基础 bot 过滤。python-httpx 的默认 UA
+    # 在部分网关上是直接 403 的；这里用浏览器形状，仍然只请求已校验的官方域名。
+    origin = urlsplit(item.url)
+    referer = f"{origin.scheme}://{origin.netloc}/" if origin.scheme and origin.netloc else ""
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        **({"Referer": referer} if referer else {}),
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
     async with http.stream("GET", item.url, headers=headers) as response:
         if response.status_code >= 400:
             raise KernelError(f"平台返回 {response.status_code}")
