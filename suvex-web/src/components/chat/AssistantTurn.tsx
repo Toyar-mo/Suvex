@@ -147,6 +147,17 @@ function AssistantTurnImpl({
   const failed = tools.filter((message) => message.toolFailed === true).length
   const hasAnswer = answers.length > 0
   const last = items.at(-1)
+  const lastAnswer = answers.at(-1)
+  /*
+    防止“流式气泡 + 落库气泡”短暂同屏：正常路径下 message 帧会清
+    streamingText；但如果帧重放/旧标签页晚到，这里再做一次内容判重。
+    只要落库的最终答复已经包含当前流式前缀，就不再画流式那一块。
+  */
+  const streamingAlreadyPersisted =
+    streamingText !== null &&
+    lastAnswer !== undefined &&
+    (lastAnswer.content === streamingText ||
+      (streamingText.length > 0 && lastAnswer.content.startsWith(streamingText)))
   const elapsed = useElapsed(live, startedAt ?? items[0]?.createdAt ?? null)
 
   return (
@@ -205,7 +216,7 @@ function AssistantTurnImpl({
           <InterjectionNote key={message.id} message={message} />
         ))}
 
-      {live && streamingText !== null && (
+      {live && streamingText !== null && !streamingAlreadyPersisted && (
         <div
           className="w-full break-words text-base leading-7 text-ink"
           data-streaming-bubble="true"
