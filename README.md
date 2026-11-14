@@ -30,7 +30,7 @@ Suvex 的取舍是：**让 agent 像人一样去验证，然后只交付它真�
 | **执行留痕** | 每一次工具调用、推理、发现都进事件流并落库，报告的每条结论都能追到过程 |
 | **证据分级** | 区分"确证"与"启发式"，拿不准的标 `needs_follow_up`，**不把猜测写成结论** |
 | **判据可配** | `findVulns` / `captureFlag` / `verifyFix`，决定"怎样算成功" |
-| **过程可见** | 扫描现场用 SSE 推到前端：舞台、工具卡、逐 token 输出，断线会明说断线 |
+| **过程可见** | 扫描与对话现场用 SSE 推到前端：舞台、工具卡、逐 token 输出、思考增量与语义高亮；内嵌 WebView 可切长轮询，断线会明说断线 |
 
 ## 界面
 
@@ -41,7 +41,7 @@ Suvex 的取舍是：**让 agent 像人一样去验证，然后只交付它真�
 
 <div align="center">
 <img src="docs/screenshots/chat-20261110.png" alt="对话 · 工具过程与技能调用" width="900">
-<p><sub>对话：模型的每一步工具调用、参数、输出都在这里；技能库统计回答"哪几篇被真正拉下来用过"</sub></p>
+<p><sub>对话：Tern 主题、逐 token 正文、思考增量、工具参数与语义高亮输出；技能库统计回答"哪几篇被真正拉下来用过"</sub></p>
 </div>
 
 ## 两个入口
@@ -84,7 +84,7 @@ Suvex 的取舍是：**让 agent 像人一样去验证，然后只交付它真�
 
 ### 技能库：模型手里那叠速查卡
 
-模型不是靠"知道更多"变强的，是靠**在正确的时刻读到正确的那一篇**。技能库是 273 篇随代码分发的 Markdown（另有自定义技能），模型用 `load_skill` 按需拉取，不需要全塞进上下文。
+模型不是靠"知道更多"变强的，是靠**在正确的时刻读到正确的那一篇**。技能库是 94 篇随代码分发的 Markdown（282 个文件含附件）（另有自定义技能），模型用 `load_skill` 按需拉取，不需要全塞进上下文。
 
 技能库页回答三个问题：**有哪些、写了什么、哪几篇真的被拉下来用过。**
 
@@ -129,7 +129,7 @@ flowchart LR
 ```
 
 - **控制面与执行面分离**：API 进程不跑目标；扫描在独立容器里，跑完即销毁。
-- **契约唯一事实来源**：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)，4,167 行。
+- **契约唯一事实来源**：[`suvex-web/docs/api-contract.md`](suvex-web/docs/api-contract.md)，4,170 行。
 - **事件流**：SSE + 断线重放（`Last-Event-ID`），前端不轮询扫描详情。
 
 ## 快速开始
@@ -209,23 +209,23 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 > 这一节不是宣传文案。已做到的附数字与口径，没做到的如实列出。
 
-### 规模（2026-11-11 实测）
+### 规模（2026-11-14 实测）
 
 | 项 | 数字 |
 | --- | --- |
-| 后端代码 | **99,643 行** / 226 个文件（`suvex-api/app/`） |
-| 后端测试 | **242 个测试文件 / 3,571 个 `def test_`**（静态计数，含 `async def`） |
-| 前端代码 | **94,909 行** / 347 个 `.ts`/`.tsx`（`suvex-web/src/`） |
-| 前端测试 | **99 个文件 / 1,274 passed**（`npx vitest run`，37.9 秒） |
-| 数据库迁移 | 81 个 Alembic 版本 |
-| API 端点 | 225 个（按 `@router.*` 装饰器计） |
-| API 契约 | 4,167 行 |
+| 后端代码 | **109,088 行** / 248 个文件（`suvex-api/app/`） |
+| 后端测试 | **258 个测试文件 / 3,674 个 `def test_`**（静态计数，含 `async def`） |
+| 前端代码 | **117,004 行** / 396 个 `.ts`/`.tsx`（`suvex-web/src/`） |
+| 前端测试 | **110 个文件 / 1,318 passed**（`npx vitest run`，29.0 秒） |
+| 数据库迁移 | 97 个 Alembic 版本 |
+| API 端点 | 252 个（按 `@router.*` 装饰器计） |
+| API 契约 | 4,170 行 |
 | 决策记录 | 10 篇 ADR（`suvex-api/docs/adr-*.md`） |
-| 技能库 | 273 篇随仓库分发（`suvex-api/prompts/skills/`） |
+| 技能库 | 94 篇 / 282 个文件（含附件；`suvex-api/prompts/skills/`） |
 | 页面 | 23 个（`suvex-web/src/pages/*.tsx`，不含测试） |
 
 > [!WARNING]
-> **数字要带口径，否则不如不写。** 后端测试写的是**静态 `def test_` 数**；参数化展开后的执行数更多，最近一次全量执行记录是 2,432 passed / 3 skipped（2026-10-17，对真实 PostgreSQL，42 分 35 秒）。2026-11-11 在 Kali 上只跑了窄验证（`tests/chat/test_strategy_pivot_e2e.py` + `tests/kernel/test_prompt_discipline.py`，12 passed），**没有重跑全量后端套件** —— 前端 1,274 是本次实测，后端 3,571 是静态计数，两者不是同一种量法。
+> **数字要带口径，否则不如不写。** 后端测试写的是**静态 `def test_` 数**；参数化展开后的执行数更多，最近一次全量执行记录是 2,432 passed / 3 skipped（2026-10-17，对真实 PostgreSQL，42 分 35 秒）。2026-11-14 在 Kali 上重跑了前端全量与后端窄验证（`tests/chat/test_strategy_pivot_e2e.py` + `tests/kernel/test_prompt_discipline.py`，12 passed），**没有重跑全量后端套件** —— 前端 1,318 是本次实测，后端 3,674 是静态计数，两者不是同一种量法。
 
 ### 真机验证过的
 
@@ -257,6 +257,12 @@ curl -H "Authorization: Bearer $TOKEN" \
 * 对话侧结构化计划：`chat_todos` + `create_todo` / `list_todos` / `update_todo`，每轮从库里重读并渲染进系统提示词（不再靠"计划句"启发式判断）；对话页有只读计划条（完成数 + 每步状态）
 * 多智能体编排默认开启（`enable_multi_agent`，扫描与解题共用）：单循环改成**显式选择**；已有部署由迁移 `d4e5f6a7b8c9` 翻转存量配置行，设置页可随时关回
 
+* Tern 主题与转录细节：中性近黑 + 蓝色 accent；对话正文/思考纯白；`Thought for Ns`；工具卡 `Bash/HTTP` 标题与长输出折叠
+* 流式体验：思考增量独立通道、正文 Markdown 稳定块渲染、工具输出 rAF 合并；Tern/Edge WebView 增加 `/chat/.../live` 长轮询回退
+* 工具输出语义高亮：JSON 键/字符串/数字/布尔、`key=value`、URL/IP、HTTP 状态、错误/成功/flag、diff 行
+* 漏洞闭环补齐：`save_report` 落库报告、`request_scope_approval` 内网扩面审批、新漏洞自动验证（默认每次扫描最多 3 条）
+* 对话执行图：`worker/planner/main/verifier/retester` 角色拥有对应工具；自动放行窗口现在覆盖 `add_mcp_server`
+
 ### 还没有做到的
 
 | # | 缺口 | 影响 |
@@ -267,7 +273,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 | 4 | **续解会丢"装到一半的工具"** | 镜像外 `pip install` / `apt` 装的包不在持久区，跨轮丢失。暴露面不大（史库里 38 次解题只续解过 1 次），但确实存在 |
 | 5 | **方法卡效果未经对照实验验证** | 首次 A/B 对照 n=1：两组都跑满 40 轮、都未解出，过程指标差异很小 —— 没有观察到正向信号，但 n=1 不构成结论 |
 | 6 | **依赖锁定靠 pip-tools，不是 uv** | 这是选型不是缺口。风险是"改了声明却忘记重新生成锁文件"，现在由 `verify_lockfiles.py` 在 CI 拦着 |
-| 7 | **出站边界是文本级，且默认不启用** | 打开 `SUPEX_CHAT_SHELL_SCOPE_GUARD` 时按授权目标拦截（`app/chat/scope.py`）；目标藏在变量/base64 里、或域名解析到内网仍能绕过。真正的边界要 `DOCKER-USER` 按容器源 IP 下发白名单（需 Docker 侧实现与实测） |
+| 7 | **出站边界默认不启用，且 TCP 源 IP 不可伪造** | 打开 `SUPEX_CHAT_SHELL_SCOPE_GUARD` 时按授权目标做文本与 `DOCKER-USER` 网络层拦截（`app/chat/scope.py` + `egress.py`）；目标藏在变量/base64 里仍可能绕过。目标若要求“真实来源 IP”，HTTP 头无效，必须走平台代理或出口 IP 白名单 |
 | 8 | **黑板不自动进提示词** | 对话侧现在有 `list_facts` 可以主动读；但不像扫描侧那样把事实索引渲染进 system prompt（`render_fact_index`），模型不查就看不到 —— 靠提示词纪律，不靠机制 |
 | 9 | **跨域基准还没有环境** | 机制已能主动执行并汇总（`launch` + `summary`），但任务集目前只有 Web/API 的本地容器；AD、云、内网、IR 仍无靶场，那几类"通用"依旧未验证 |
 | 10 | **计划视图只读、按消息数刷新** | 对话页有计划条（只读，`GET /chat/sessions/{id}/todos`）；一轮结束才按消息条数拉一次，用户不能在界面上改状态，模型也不知道用户看过 |
@@ -316,11 +322,11 @@ suvex-api/
   app/core/       跨领域公共件（依赖方向单向）
   app/{auth,providers,scans,findings,reports,events,settings,members,audit,overview,chat,ctf2,kernel}/
                   按领域拆分：模型 / 出入参 / 业务 / 路由
-  alembic/        81 个迁移
-  tests/          242 个测试文件，对真实 PostgreSQL 跑
+  alembic/        97 个迁移
+  tests/          258 个测试文件，对真实 PostgreSQL 跑
   docs/           10 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
-  prompts/skills/ 273 篇内置技能（只读）
+  prompts/skills/ 94 篇内置技能 / 282 个文件（只读）
 
 suvex-web/
   src/data/       数据模型与数据源（全部走真实 API）
