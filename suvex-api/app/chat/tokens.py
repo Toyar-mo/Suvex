@@ -120,6 +120,9 @@ def _piece_count(piece: str, ranks: dict[bytes, int]) -> int:
         if best < 0:
             break
         symbols[best : best + 2] = [symbols[best] + symbols[best + 1]]
+    # 单进程长期运行时，工具输出会带来海量唯一片段；无界 dict 是内存泄漏。
+    if len(_PIECE_CACHE) >= 65_536:
+        _PIECE_CACHE.clear()
     _PIECE_CACHE[data] = len(symbols)
     return len(symbols)
 

@@ -178,7 +178,12 @@ def _make_hub() -> LiveTurnHub | RedisLiveTurnHub:
     url = (get_settings().redis_url or "").strip()
     if not url:
         return LiveTurnHub()
-    _log.info("对话事件总线使用 Redis：%s", url)
+    # Redis URL 可能带密码；日志只保留 scheme/host，不打印 userinfo。
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    safe = f"{parts.scheme}://{parts.hostname or 'redis'}:{parts.port or 6379}"
+    _log.info("对话事件总线使用 Redis：%s", safe)
     return RedisLiveTurnHub(url)
 
 

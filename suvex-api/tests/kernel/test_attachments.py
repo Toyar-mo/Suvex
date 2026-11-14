@@ -737,3 +737,21 @@ def test_a_failing_competition_does_not_sink_the_whole_sync(
     assert any("战队" in item for item in result.errors), (
         f"错误文案没有告诉用户该做什么：{result.errors}"
     )
+
+
+def test_attachment_host_requires_official_or_platform_domain() -> None:
+    assert attachments._is_official("https://ctf2-files.dasctf.com/f/a.zip")
+    assert attachments._is_official(
+        "https://pro-resource.dasctf.com/f/a.zip", ("dasctf.com",)
+    )
+    assert not attachments._is_official("https://evil.example/a.zip", ("dasctf.com",))
+    assert not attachments._is_official("http://169.254.169.254/latest/meta-data/")
+    assert not attachments._is_official("http://127.0.0.1:8000/api")
+
+
+def test_attachment_log_url_drops_query_and_userinfo() -> None:
+    safe = attachments._safe_url(
+        "https://user:secret@ctf2-files.dasctf.com/a.zip?token=SECRET#frag"
+    )
+    assert safe == "https://ctf2-files.dasctf.com/a.zip"
+    assert "secret" not in safe and "SECRET" not in safe

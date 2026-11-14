@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from sqlalchemy import select
@@ -103,14 +104,18 @@ async def generate(
         from app.chat import engine
 
         gateway = engine._build_gateway(source.provider_id, db)
-        reply = await gateway.chat(
-            [
-                {
-                    "role": "user",
-                    "content": f"<conversation>\n{_render_messages(list(rows))}\n</conversation>\n\n{PROMPT}",
-                }
-            ],
-            system=SYSTEM_PROMPT,
+        # 分叉是用户交互动作；摘要模型慢不能把整个请求拖过前端 30s 超时。
+        reply = await asyncio.wait_for(
+            gateway.chat(
+                [
+                    {
+                        "role": "user",
+                        "content": f"<conversation>\n{_render_messages(list(rows))}\n</conversation>\n\n{PROMPT}",
+                    }
+                ],
+                system=SYSTEM_PROMPT,
+            ),
+            timeout=20.0,
         )
     except Exception:  # noqa: BLE001 - 分支摘要失败不能阻塞分叉
         _log.warning("生成分支摘要失败：%s", source.id, exc_info=True)

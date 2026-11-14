@@ -51,7 +51,9 @@ from urllib.parse import unquote, urlsplit
 
 import httpx
 
+from app.core import hostguard
 from app.kernel.client import KernelError, assert_allowed_target
+from app.kernel.models import CTF2_OFFICIAL_HOSTS
 
 logger = logging.getLogger("suvex.ctf2")
 
@@ -330,6 +332,15 @@ def _write_fingerprint(target: Path, digest: str) -> None:
         logger.warning("写附件指纹失败（不影响本次下载）：%s", exc)
 
 
+def _safe_url(url: str) -> str:
+    """日志用的 URL：去掉 query/fragment 和 userinfo，避免把签名/凭据打出来。"""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = f":{parts.port}" if parts.port else ""
+    path = parts.path or ""
+    return f"{parts.scheme}://{host}{port}{path}"
+
+
 def _is_official(url: str, allowed_domains: Collection[str] = ()) -> bool:
     """附件 URL 必须落在 CTF2 官方域名下，**或**当前接入平台的域名下。
 
@@ -347,14 +358,18 @@ def _is_official(url: str, allowed_domains: Collection[str] = ()) -> bool:
     调用方传的是**当前平台 base_url 的域名**（如 `dasctf.com`），
     不是附件 URL 自己的域名 —— 后者等于让出题人决定我们访问哪。
     """
+    # `assert_allowed_target` 现在只校验 scheme/host 形状（它被 `http_request`
+    # 复用，那里是用户显式目标，不能套附件白名单）。附件来源必须在这里
+    # 自己校验，否则出题人可以把附件 URL 指向云元数据/内网。
     try:
         assert_allowed_target(url)
-        return True
     except KernelError:
-        host = (urlsplit(url).hostname or "").lower()
-        return bool(host) and any(
-            host == domain or host.endswith("." + domain) for domain in allowed_domains
-        )
+        return False
+    host = (urlsplit(url).hostname or "").lower().rstrip(".")
+    if not host or hostguard.is_blocked_host(host):
+        return False
+    official = (*CTF2_OFFICIAL_HOSTS, *allowed_domains)
+    return any(host == domain or host.endswith("." + domain) for domain in official)
 
 
 async def download_all(
@@ -393,7 +408,7 @@ async def download_all(
             try:
                 await _download_one(http, token, item, result, allowed_domains)
             except Exception as exc:  # noqa: BLE001 - 一条失败不该中断整批
-                logger.warning("下载附件失败 %s：%s", item.url, exc)
+                logger.warning("下载附件失败 %s：%s", _safe_url(item.url), exc)
                 result.failed.append(f"{item.name}：{exc}")
     finally:
         if owns_client:
