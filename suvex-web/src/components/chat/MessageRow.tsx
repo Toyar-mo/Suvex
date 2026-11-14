@@ -144,7 +144,7 @@ export function ReasoningBlock({
       ? Math.max(1, Math.round(durationMs / 1000))
       : null
   return (
-    <div className="flex flex-col" data-reasoning>
+    <div className="flex animate-stream-in flex-col" data-reasoning>
       <button
         type="button"
         onClick={() => setOpen((value) => !value)}
@@ -168,7 +168,7 @@ export function ReasoningBlock({
       {open && (
         /* omp 的形态：折叠时只是一行 "Thought for 1s ›"，展开才读全文。
            不套卡片边框 —— 思考不是证据卡片，它是正文的附注。 */
-        <p className="mt-1 whitespace-pre-wrap break-words border-l border-line/80 pl-2.5 text-xs leading-relaxed text-ink-muted">
+        <p className="mt-1 animate-stream-in whitespace-pre-wrap break-words border-l border-line/80 pl-2.5 text-xs leading-relaxed text-ink-muted">
           {text}
         </p>
       )}

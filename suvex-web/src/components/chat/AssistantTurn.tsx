@@ -224,7 +224,7 @@ function AssistantTurnImpl({
 
       {live && streamingText !== null && !streamingAlreadyPersisted && (
         <div
-          className="w-full break-words text-base leading-7 text-ink"
+          className="w-full animate-stream-in break-words text-base leading-7 text-ink"
           data-streaming-bubble="true"
           data-message-row="assistant"
         >
@@ -332,7 +332,7 @@ function LiveToolCard({
 
   return (
     <div
-      className="overflow-hidden rounded-md border border-line/70 bg-surface-raised/20"
+      className="animate-stream-in overflow-hidden rounded-md border border-line/70 bg-surface-raised/20"
       data-live-tool
     >
       <div className="flex items-center gap-2 px-2.5 py-1.5">
@@ -389,7 +389,7 @@ function LiveStatus({
   return (
     <div className="flex flex-col gap-1" data-live-status>
       <div className="flex min-w-0 items-center gap-2" role="status" aria-live="polite">
-        <span className="flex h-3 shrink-0 items-end gap-[2px]" aria-hidden="true">
+        <span className="flex h-3 shrink-0 animate-stream-in items-end gap-[2px]" aria-hidden="true">
           <i className="live-bar" />
           <i className="live-bar" />
           <i className="live-bar" />

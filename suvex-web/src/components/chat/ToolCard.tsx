@@ -85,7 +85,7 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
       data-tool-name={message.toolName ?? ''}
       data-tool-collapsed={open ? 'false' : 'true'}
       className={cn(
-        'min-w-0 overflow-hidden rounded-md border transition-colors duration-150',
+        'min-w-0 overflow-hidden rounded-md border animate-stream-in transition-colors duration-150',
         failed
           ? 'border-signal-risk/35 bg-signal-risk/[0.03]'
           : 'border-line/70 bg-surface-raised/15 hover:border-line-strong',
@@ -164,7 +164,7 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
           ref={bodyRef}
           data-tool-output
           className={cn(
-            'border-t',
+            'animate-stream-in border-t',
             failed ? 'border-signal-risk/30' : 'border-line/60',
           )}
         >
