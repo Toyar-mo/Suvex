@@ -98,3 +98,37 @@ def test_http_test_connection_does_not_demand_command(ready_client: TestClient) 
     payload = resp.json()
     reason = f"{payload.get('reason') or ''} {payload.get('message') or ''}"
     assert "command" not in reason.lower(), reason
+
+
+async def test_mcp_stdio_does_not_inherit_host_secrets(monkeypatch) -> None:
+    """MCP 子进程只能拿白名单环境，不能把 SUPEX_SECRET_KEY 交出去。"""
+    import asyncio
+
+    import pytest
+
+    from app.kernel import mcp as mcp_mod
+
+    captured: dict[str, str] = {}
+
+    async def fake_exec(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        captured.update(kwargs.get("env") or {})
+        raise RuntimeError("stop before protocol handshake")
+
+    monkeypatch.setenv("SUPEX_SECRET_KEY", "must-not-leak")
+    monkeypatch.setenv("SUPEX_DATABASE_URL", "postgresql://secret")
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
+    client = mcp_mod.McpClient(
+        mcp_mod.McpServerConfig(
+            name="probe",
+            command="python3",
+            args=["-c", "pass"],
+            env={"MCP_TOKEN": "allowed"},
+        )
+    )
+    with pytest.raises(RuntimeError):
+        await client._start()
+
+    assert "SUPEX_SECRET_KEY" not in captured
+    assert "SUPEX_DATABASE_URL" not in captured
+    assert captured.get("MCP_TOKEN") == "allowed"
+    assert "PATH" in captured

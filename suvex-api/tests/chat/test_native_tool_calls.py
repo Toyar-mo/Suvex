@@ -684,7 +684,7 @@ async def test_resume_approved_never_returns_silently_on_native_only_replies(
     message.approval_status = "approved"
     db_session.commit()
 
-    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202, ARG001
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202, ARG001
         return "scans: 0", False
 
     monkeypatch.setattr(engine, "_execute_tool", fake_execute)
@@ -1172,7 +1172,7 @@ async def test_run_turn_stops_gracefully_when_wall_budget_exceeded(
 
     monkeypatch.setattr(engine.time, "monotonic", _fake_monotonic)
 
-    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202, ARG001
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202, ARG001
         return "ok", False
 
     monkeypatch.setattr(engine, "_execute_tool", fake_execute)
@@ -1283,7 +1283,7 @@ async def test_run_turn_stops_when_conclusion_repeats(
     session = chat_service.create_session(db_session, created_by="user_admin")
     db_session.commit()
 
-    async def fake_execute(ctx, name, args):  # noqa: ANN001, ANN202, ARG001
+    async def fake_execute(ctx, name, args, **kwargs):  # noqa: ANN001, ANN202, ARG001
         return "ok", False
 
     monkeypatch.setattr(engine, "_execute_tool", fake_execute)

@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.audit import service
 from app.audit.schemas import AuditEntryOut, AuditPageOut
 from app.auth.deps import Identity, require_admin
+from app.core.csv import guard_formula
 from app.core.db import get_db
 from app.core.timeutil import parse_iso
 
@@ -170,7 +171,7 @@ def export_audit(
         for entry in rows:
             item = as_dict(entry)
             item["detail"] = json.dumps(item["detail"], ensure_ascii=False)
-            writer.writerow(item)
+            writer.writerow({key: guard_formula(str(value)) for key, value in item.items()})
         body = buffer.getvalue()
         media = "text/csv"
     else:

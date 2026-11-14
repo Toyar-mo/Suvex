@@ -246,6 +246,7 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         label="查看 MCP 连接",
         description="列出已配置的 MCP 服务器（凭据不回显，只告诉你有几个环境变量）。",
         params="（无）",
+        scope="admin",
     ),
     ChatToolSpec(
         name="add_mcp_server",
@@ -531,6 +532,7 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         label="写回复测/验证结论",
         description="按 verdict 写回结论并留痕：reproduced/verified→已确认，fixed→已修复，false_positive→误报，inconclusive 不改状态。",
         params="finding_id（必填）、verdict（必填）、evidence（必填，真实证据）",
+        scope="scan",
     ),
     ChatToolSpec(
         name="prove_agent_goal",

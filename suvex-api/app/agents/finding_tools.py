@@ -73,6 +73,9 @@ async def record_finding_result(ctx: Any, args: dict[str, Any]) -> str:
         return "失败：verdict 必须是 reproduced / fixed / verified / false_positive / inconclusive。"
     if not evidence:
         return "失败：必须提供 evidence（实际请求/响应/命令输出）。"
+    from app.chat.engine import _need_scope
+
+    _need_scope(ctx, "record_finding_result")
     try:
         finding = finding_service.get_finding(ctx.db, finding_id)
     except Exception as exc:  # noqa: BLE001

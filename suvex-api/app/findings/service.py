@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import logging
 import math
-import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -723,22 +722,10 @@ EXPORT_COLUMNS = (
 
 
 def _csv_cell(value: str) -> str:
-    """CSV 转义 + 公式注入防护。
+    """CSV 转义 + 公式注入防护（实现收在 `app.core.csv`）。"""
+    from app.core.csv import csv_cell
 
-    ⚠️ 与 `lib/scan-export.ts` 的 `cell()` 是同一套规则 ——
-    前端生成的 CSV 也走它，两边口径必须一致（否则同一个单元格
-    在两种导出里长得不一样）。
-
-    Excel/Sheets 会把以 `= + - @` 或制表符开头的单元格当公式执行。
-    漏洞标题、目标、扫描摘要都来自外部扫描结果，不能被当成公式。
-    """
-    # 合法的负数/正数是数字，不是公式；别为了安全把数值列变成文本。
-    numeric = re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", value) is not None
-    if value[:1] in ("=", "+", "-", "@", "\t", "\r", "\n") and not numeric:
-        value = "'" + value
-    if any(ch in value for ch in (",", '"', "\n", "\r")):
-        return '"' + value.replace('"', '""') + '"'
-    return value
+    return csv_cell(value)
 
 
 def export_csv(db: Session, *, rows: list[Finding]) -> str:

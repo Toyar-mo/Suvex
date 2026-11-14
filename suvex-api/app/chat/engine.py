@@ -2628,6 +2628,7 @@ async def _tool_delete_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
 async def _tool_list_mcp_servers(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import service as kernel_service
 
+    _need_scope(ctx, "list_mcp_servers")
     rows = kernel_service.public_mcp_servers(ctx.db)
     if not rows:
         return "还没有配置任何 MCP 服务器。"
@@ -3454,6 +3455,12 @@ def _auto_approve_active(session: Any) -> bool:
     return bool(until is not None and until > now_utc())
 
 
+#: 即使会话没开「人工审批」也强制挂起的工具。MCP 的 `add_mcp_server` 会
+#: 用模型给的 command 直接 spawn 宿主子进程，不能让不可信附件/工具输出
+#: 一句话就把它执行掉。
+ALWAYS_APPROVAL_TOOLS: frozenset[str] = frozenset({"add_mcp_server"})
+
+
 def _needs_approval(name: str) -> bool:
     """这个工具在开了「人工审批」时要不要先挂起。
 
@@ -3559,6 +3566,8 @@ async def _execute_tool(
                 f"失败：没有叫 `{name}` 的工具。可用工具：{', '.join(available)}。",
                 True,
             )
+        if ctx.identity is None or not ctx.identity.can("admin"):
+            return "失败：调用 MCP 工具需要 admin 权限。", True
         try:
             # ★ v1.92：MCP 的 `notifications/progress` 转成 tool_progress
             #   帧；与心跳同一个事件，界面只需要一条状态行。
@@ -4709,7 +4718,7 @@ async def run_turn(
             #   工具会让界面上同时挂起多个确认框，而且它们的顺序取决于
             #   模型而不是用户。停下来，等用户决定，由 `resume_approved`
             #   接着跑。
-            if gate_on and _needs_approval(name):
+            if (gate_on and _needs_approval(name)) or name in ALWAYS_APPROVAL_TOOLS:
                 pending = chat_service.mark_awaiting_approval(
                     db, session=session, tool_name=name, tool_args=args
                 )
@@ -5331,7 +5340,7 @@ async def resume_approved(
             return result
 
         for name, args in actions:
-            if gate_on and _needs_approval(name):
+            if (gate_on and _needs_approval(name)) or name in ALWAYS_APPROVAL_TOOLS:
                 pending = chat_service.mark_awaiting_approval(
                     db, session=session, tool_name=name, tool_args=args
                 )

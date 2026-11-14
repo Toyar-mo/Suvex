@@ -66,7 +66,6 @@ import asyncio
 import contextlib
 import json
 import logging
-import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -404,7 +403,11 @@ class McpClient:
         if self.cfg.is_http():
             await self._start_http()
             return
-        env = dict(os.environ)
+        # ★ 绝不把宿主全部环境交给 MCP 子进程：那里面有 SUPEX_SECRET_KEY、
+        #   SUPEX_DATABASE_URL、provider 凭据等。与扫描 runner 共用白名单。
+        from app.scans.runner import _base_env
+
+        env = _base_env()
         # 配置里的 env 覆盖/追加进来（可含 token）。只进子进程。
         env.update(self.cfg.env)
         try:

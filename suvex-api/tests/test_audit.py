@@ -734,3 +734,12 @@ def test_audit_export_requires_admin(client: TestClient) -> None:
     response = client.get("/api/v1/audit/export")
 
     assert response.status_code in (401, 403)
+
+
+def test_audit_csv_neutralizes_formula_cells() -> None:
+    from app.core.csv import guard_formula
+
+    assert guard_formula("=HYPERLINK(\"http://evil\",\"x\")").startswith("'")
+    assert guard_formula("+1+1").startswith("'")
+    assert guard_formula("-1+1").startswith("'")
+    assert guard_formula("-12.5") == "-12.5"
