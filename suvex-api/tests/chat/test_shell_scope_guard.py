@@ -15,10 +15,9 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.orm import Session
 
-from app.core import config
-
 from app.chat import engine, scope
 from app.chat import service as chat_service
+from app.core import config
 from tests.factories import make_scan
 from tests.test_chat import ADMIN
 
@@ -195,3 +194,12 @@ def test_real_domains_and_lab_suffixes_still_count() -> None:
     )
 
     assert {"example.com", "target.local", "internal.lan"} <= hosts
+
+
+def test_source_ip_header_probe_is_detected() -> None:
+    """`X-Forwarded-For` 穷举要先被识别出来，才能在工具层止损。"""
+    assert engine._is_source_ip_probe(
+        {"command": "curl -H 'X-Forwarded-For: 127.0.0.1' http://target"}
+    )
+    assert engine._is_source_ip_probe({"headers": {"X-Real-IP": "127.0.0.1"}})
+    assert not engine._is_source_ip_probe({"command": "curl http://target"})

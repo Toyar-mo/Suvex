@@ -1545,7 +1545,15 @@ class _ToolContext:
     取，只有一个来源。
     """
 
-    __slots__ = ("db", "session", "identity", "mcp", "allowed_tools", "gateway")
+    __slots__ = (
+        "db",
+        "session",
+        "identity",
+        "mcp",
+        "allowed_tools",
+        "gateway",
+        "gateway_probes",
+    )
 
     def __init__(
         self,
@@ -1571,6 +1579,9 @@ class _ToolContext:
         #: 本轮使用的网关。`spawn_subagents` 要拿它启动子代理；
         #: 其余工具不需要。
         self.gateway = gateway
+        #: 本回合里已经尝试过几次「伪造来源 IP 头」。第一次允许用于诊断，
+        #: 之后直接拒绝 —— 网关看的是 TCP 源 IP，穷举头部是白费时间。
+        self.gateway_probes = 0
 
 
 def _need_scope(ctx: _ToolContext, tool_name: str) -> None:
@@ -3498,6 +3509,19 @@ def _must_approve(session: Any, name: str, gate_on: bool) -> bool:
     return gate_on and _needs_approval(name)
 
 
+_SOURCE_IP_HEADER = re.compile(
+    r"(?i)\b(?:x-forwarded-for|x-real-ip|forwarded|true-client-ip|cf-connecting-ip)\b"
+)
+
+
+def _is_source_ip_probe(args: dict[str, Any]) -> bool:
+    """命令/参数里是否在伪造“真实来源 IP”头。"""
+    try:
+        return bool(_SOURCE_IP_HEADER.search(json.dumps(args, ensure_ascii=False)))
+    except (TypeError, ValueError):
+        return False
+
+
 def _needs_approval(name: str) -> bool:
     """这个工具在开了「人工审批」时要不要先挂起。
 
@@ -3589,6 +3613,16 @@ async def _execute_tool(
         and not mcp_tools.is_mcp_tool_name(name)
     ):
         return (f"该 Agent 未授权工具 `{name}`。", True)
+
+    if name in {"run_shell", "verify_http"} and _is_source_ip_probe(args):
+        ctx.gateway_probes += 1
+        if ctx.gateway_probes > 1:
+            return (
+                "失败：本回合已经试过一次伪造来源 IP 头。网关校验的是 TCP 源 IP，"
+                "X-Forwarded-For / X-Real-IP / Forwarded 不会改变它；继续穷举只是浪费时间。"
+                "改用平台代理/附件通道，或停下来说明「目标要求真实来源 IP」。",
+                True,
+            )
 
     impl = _TOOL_IMPLS.get(name)
     if impl is None:
