@@ -2954,6 +2954,8 @@ _TOOL_IMPLS: dict[str, Any] = {
     "record_finding_result": finding_tools.record_finding_result,
     "list_findings": platform_tools.list_findings,
     "list_assets": platform_tools.list_assets,
+    "save_report": platform_tools.save_report,
+    "request_scope_approval": platform_tools.request_scope_approval,
 }
 
 

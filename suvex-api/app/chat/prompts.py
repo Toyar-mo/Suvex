@@ -534,6 +534,31 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
         scope="scan",
     ),
     ChatToolSpec(
+        name="save_report",
+        label="生成平台报告",
+        description=(
+            "把已有漏洞冻结成一份平台报告（写入历史报告列表，分配 RPT 编号）。"
+            "范围三选一：`finding_ids`（手选漏洞）/ `scan_id`（整次扫描）/ "
+            "`target`（同一目标）。它是交付物，不是对话里的临时 Markdown。"
+        ),
+        params=(
+            "title（必填）、finding_ids（漏洞 id 列表，可选）、"
+            "scan_id（可选）、target（可选）、only_confirmed（可选，默认 false）"
+        ),
+    ),
+    ChatToolSpec(
+        name="request_scope_approval",
+        label="登记待批准目标",
+        description=(
+            "内网阶段扩到新网段前，先把目标登记为「待批准」并说明理由；"
+            "人工在扫描页批准前不得主动探测。"
+            "不传 `scan_id` 时尝试用当前会话挂的执行图任务关联的扫描。"
+        ),
+        params="target（必填）、reason（可选）、scan_id（可选）",
+        scope="scan",
+        consequential=True,
+    ),
+    ChatToolSpec(
         name="prove_agent_goal",
         label="标目标完成",
         description="有证据时把目标标为 met；最后一个目标完成时任务自动结束。",
@@ -1039,6 +1064,30 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
             "evidence": {"type": "string"},
         },
         "required": ["finding_id", "verdict", "evidence"],
+    },
+    "save_report": {
+        "type": "object",
+        "properties": {
+            "title": {"type": "string", "minLength": 1, "maxLength": 300},
+            "finding_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "minItems": 1,
+            },
+            "scan_id": {"type": "string"},
+            "target": {"type": "string"},
+            "only_confirmed": {"type": "boolean"},
+        },
+        "required": ["title"],
+    },
+    "request_scope_approval": {
+        "type": "object",
+        "properties": {
+            "target": {"type": "string"},
+            "reason": {"type": "string"},
+            "scan_id": {"type": "string"},
+        },
+        "required": ["target"],
     },
 }
 

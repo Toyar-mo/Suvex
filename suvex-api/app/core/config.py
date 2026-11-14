@@ -213,6 +213,15 @@ class Settings(BaseSettings):
     # 2 秒是一个折中：再小会让空转查询变密，再大会让界面上的状态明显发顿。
     scan_poll_seconds: float = 2.0
 
+    # 新发现的漏洞是否自动起一轮独立验证（verifier）。
+    #
+    # 默认开：这是「漏洞验证」角色存在的意义；关掉后新漏洞只剩详情页的
+    # 手动「发起验证」按钮。自动验证只对带 PoC/证据的新记录触发，
+    # 且每次扫描最多 `findings_auto_verify_limit` 条，避免一次扫描
+    # 新出几十条时把模型预算打穿。
+    findings_auto_verify: bool = True
+    findings_auto_verify_limit: int = 3
+
     # 等 strix 创建 `strix_runs/<run_name>/` 的时间上限（秒）。
     # 超过就先把 run 标识留空 —— 它只是诊断信息，不该拦住扫描启动。
     scan_run_detect_seconds: float = 20.0

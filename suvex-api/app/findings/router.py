@@ -291,8 +291,19 @@ async def start_agent_run(
         summary=f"{label}漏洞 {finding.id}（{finding.target}）",
         priority=9,
     )
+    persona = "retester" if mode == "retest" else "verifier"
+    tools = (
+        runner_service.RETESTER_TOOLS
+        if mode == "retest"
+        else runner_service.VERIFIER_TOOLS
+    )
     asyncio.create_task(
-        runner_service.run_task(task_id=task.id, identity=identity)
+        runner_service.run_task(
+            task_id=task.id,
+            identity=identity,
+            worker_persona=persona,
+            worker_tools=tools,
+        )
     )
     return {"taskId": task.id}
 

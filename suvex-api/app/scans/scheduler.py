@@ -731,6 +731,28 @@ class ScanScheduler:
             #    （`should_notify_critical`）。在这里先读一次配置会让
             #    "规则改了但行为没变"多一处可能 —— 而且这条路径每 2 秒
             #    每扫描一次，多一次配置读就是多一次库查询。
+            # ★ 新漏洞自动验证：只对带 PoC/证据的新建记录触发，
+            #   每扫描上限见配置；失败不影响导入与告警。
+            if result is not None and result.created_ids:
+                settings = get_settings()
+                if settings.findings_auto_verify:
+                    try:
+                        from app.findings import auto_verify
+
+                        auto_verify.schedule(
+                            conn,
+                            scan,
+                            result.created_ids,
+                            limit=settings.findings_auto_verify_limit,
+                        )
+                    except Exception:  # noqa: BLE001
+                        conn.rollback()
+                        logger.warning(
+                            "扫描 %s 自动验证登记失败（下一轮不会重试）",
+                            scan_id,
+                            exc_info=True,
+                        )
+
             if (
                 result is not None
                 and result.created_max_severity == "critical"

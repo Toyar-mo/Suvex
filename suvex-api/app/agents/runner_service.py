@@ -53,6 +53,11 @@ WORKER_TOOLS = (
     "finish_agent_intent",
     "prove_agent_goal",
 )
+#: 复测/验证任务额外需要的工具。worker 默认工具里没有它们，而这两种角色
+#: 的提示词明确要求“先读漏洞、再写回结论”—— 不补进来，按钮能点、活干不了。
+FINDING_TOOLS = ("get_finding_context", "record_finding_result")
+RETESTER_TOOLS = WORKER_TOOLS + FINDING_TOOLS
+VERIFIER_TOOLS = WORKER_TOOLS + FINDING_TOOLS
 PLANNER_TOOLS = (
     "list_agent_graph",
     "add_agent_intent",
@@ -167,6 +172,9 @@ async def _run_worker(
     intent: AgentIntent,
     identity: Any,
     turn_runner: Any,
+    *,
+    persona: str = "worker",
+    tools: tuple[str, ...] = WORKER_TOOLS,
 ) -> bool:
     """执行一条意图；返回是否成功启动。"""
     from app.chat import engine
@@ -180,7 +188,7 @@ async def _run_worker(
             title=f"[worker] {intent.summary[:80]}",
             agent_task_id=task.id,
         )
-        worker.persona = "worker"
+        worker.persona = persona
         worker.require_approval = False
         db.commit()
         worker_session_id = worker.id
@@ -208,8 +216,8 @@ async def _run_worker(
                     session=session,
                     content=prompt,
                     identity=identity,
-                    explicit_tools=list(WORKER_TOOLS),
-                    allowed_tools=set(WORKER_TOOLS),
+                    explicit_tools=list(tools),
+                    allowed_tools=set(tools),
                 )
 
             await default_runner(worker)
@@ -255,6 +263,8 @@ async def run_task(
     task_id: str,
     identity: Any,
     turn_runner: Any = None,
+    worker_persona: str = "worker",
+    worker_tools: tuple[str, ...] = WORKER_TOOLS,
 ) -> int:
     """后台执行整个任务；返回实际启动的 worker 数。"""
     from app.core.db import get_session_factory
@@ -289,7 +299,15 @@ async def run_task(
             for intent in intents:
                 if started >= MAX_INTENTS_PER_RUN:
                     break
-                if await _run_worker(db, task, intent, identity, turn_runner):
+                if await _run_worker(
+                    db,
+                    task,
+                    intent,
+                    identity,
+                    turn_runner,
+                    persona=worker_persona,
+                    tools=worker_tools,
+                ):
                     started += 1
 
             if started >= MAX_INTENTS_PER_RUN:
@@ -303,4 +321,13 @@ async def run_task(
 #: 兼容 P2a 的公开名字。
 run_open_intents = run_task
 
-__all__ = ["PLANNER_TOOLS", "WORKER_TOOLS", "open_intents", "run_open_intents", "run_task"]
+__all__ = [
+    "FINDING_TOOLS",
+    "PLANNER_TOOLS",
+    "RETESTER_TOOLS",
+    "VERIFIER_TOOLS",
+    "WORKER_TOOLS",
+    "open_intents",
+    "run_open_intents",
+    "run_task",
+]

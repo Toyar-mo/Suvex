@@ -89,6 +89,10 @@ class ImportResult:
     updated: int
     skipped: int
 
+    #: 本轮新建记录的 id。自动验证与调用方据此知道“哪些是新的”，
+    #: 不必再按时间反查。
+    created_ids: tuple[str, ...] = ()
+
     #: 本轮**新建**记录里最高的那一档严重度（`Severity` 的值），没有新建时为 `None`。
     #:
     #: ★ 为什么放在返回值里，而不是让调用方再查一次库：
@@ -128,6 +132,7 @@ def import_from_run(db: Session, scan: Scan) -> ImportResult:
 
     parsed = strix_vulns.parse(records, default_target=scan.target)
     created = updated = skipped = 0
+    created_ids: list[str] = []
     created_max_severity: str | None = None
 
     for item in parsed:
@@ -141,6 +146,7 @@ def import_from_run(db: Session, scan: Scan) -> ImportResult:
             finding = _new_finding(scan, item)
             db.add(finding)
             db.flush()
+            created_ids.append(finding.id)
             _add_timeline(
                 db,
                 finding,
@@ -198,7 +204,13 @@ def import_from_run(db: Session, scan: Scan) -> ImportResult:
             updated,
             skipped,
         )
-    return ImportResult(created, updated, skipped, created_max_severity)
+    return ImportResult(
+        created=created,
+        updated=updated,
+        skipped=skipped,
+        created_ids=tuple(created_ids),
+        created_max_severity=created_max_severity,
+    )
 
 
 def _new_finding(scan: Scan, item: strix_vulns.ParsedFinding) -> Finding:
