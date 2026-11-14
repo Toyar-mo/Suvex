@@ -182,6 +182,53 @@
     color-scheme: light;
   }
 
+  /*
+    ── Tern 主题 ────────────────────────────────────────────────
+    中性近黑 + 蓝色强调。不是把暗色换个色相：表面梯度更平、描边更冷，
+    强调色取 Tern 下载页的主蓝。亮色主题不受影响。
+  */
+  [data-theme='tern'] {
+    --suvex-canvas: 10 11 14; /* #0A0B0E */
+    --suvex-surface: 14 16 20; /* #0E1014 */
+    --suvex-surface-raised: 19 22 28; /* #13161C */
+    --suvex-surface-overlay: 23 27 34; /* #171B22 */
+    --suvex-surface-sunken: 7 8 10; /* #07080A */
+
+    --suvex-line: 30 34 42; /* #1E222A */
+    --suvex-line-strong: 45 51 62; /* #2D333E */
+    --suvex-line-accent: 40 79 153; /* #284F99 */
+
+    --suvex-ink: 230 233 239; /* #E6E9EF */
+    --suvex-ink-muted: 156 163 176; /* #9CA3B0 */
+    --suvex-ink-faint: 125 133 147; /* #7D8593 */
+    --suvex-ink-ghost: 67 73 84; /* #434954 */
+
+    --suvex-accent: 59 130 246; /* #3B82F6 */
+    --suvex-accent-strong: 107 165 255; /* #6BA5FF */
+    --suvex-accent-deep: 37 99 235; /* #2563EB */
+    --suvex-accent-dim: 30 58 102; /* #1E3A66 */
+    --suvex-accent-wash: 14 27 48; /* #0E1B30 */
+
+    --suvex-signal-ok: 74 222 155;
+    --suvex-signal-warn: 232 180 84;
+    --suvex-signal-risk: 240 122 106;
+    --suvex-signal-high: 224 140 130;
+    --suvex-signal-high-solid: 194 84 74;
+    --suvex-signal-info: 111 168 245;
+
+    --suvex-syntax-plain: 230 237 243;
+    --suvex-syntax-comment: 107 114 128;
+    --suvex-syntax-keyword: 199 146 234;
+    --suvex-syntax-string: 126 231 135;
+    --suvex-syntax-number: 242 204 96;
+    --suvex-syntax-function: 121 192 255;
+    --suvex-syntax-property: 86 182 194;
+    --suvex-syntax-variable: 255 166 87;
+    --suvex-syntax-operator: 165 180 196;
+
+    color-scheme: dark;
+  }
+
   html,
   body,
   #root {

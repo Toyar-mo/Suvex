@@ -30,10 +30,10 @@
 export const THEME_STORAGE_KEY = 'suvex-theme'
 
 /** 用户在菜单里选的那个东西。`system` 是缺省，也是"我不打算管这件事" */
-export type ThemePreference = 'system' | 'light' | 'dark'
+export type ThemePreference = 'system' | 'light' | 'dark' | 'tern'
 
 /** 真正生效的主题。它才是写到 `<html data-theme>` 上的值 */
-export type ResolvedTheme = 'light' | 'dark'
+export type ResolvedTheme = 'light' | 'dark' | 'tern'
 
 /**
  * 深色偏好查询串。
@@ -45,10 +45,15 @@ export type ResolvedTheme = 'light' | 'dark'
 export const DARK_MODE_QUERY = '(prefers-color-scheme: dark)'
 
 /** 菜单顺序：从"最不管事"到"最明确"。跟随系统在前，因为它是缺省 */
-export const THEME_PREFERENCES: readonly ThemePreference[] = ['system', 'light', 'dark']
+export const THEME_PREFERENCES: readonly ThemePreference[] = [
+  'system',
+  'light',
+  'dark',
+  'tern',
+]
 
 export function isThemePreference(value: unknown): value is ThemePreference {
-  return value === 'system' || value === 'light' || value === 'dark'
+  return value === 'system' || value === 'light' || value === 'dark' || value === 'tern'
 }
 
 /**

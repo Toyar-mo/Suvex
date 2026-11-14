@@ -1,4 +1,4 @@
-import { Check, Monitor, Moon, Sun } from 'lucide-react'
+import { Check, Monitor, Moon, Sun, Terminal } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -29,10 +29,15 @@ const THEME_OPTIONS: { value: ThemePreference; label: string; icon: LucideIcon }
   { value: 'system', label: '跟随系统', icon: Monitor },
   { value: 'light', label: '亮色', icon: Sun },
   { value: 'dark', label: '暗色', icon: Moon },
+  { value: 'tern', label: 'Tern', icon: Terminal },
 ]
 
 /** 显式偏好下的按钮图标。解析结果只有两个值，所以这里一定能取到 */
-const RESOLVED_ICON: Record<ResolvedTheme, LucideIcon> = { light: Sun, dark: Moon }
+const RESOLVED_ICON: Record<ResolvedTheme, LucideIcon> = {
+  light: Sun,
+  dark: Moon,
+  tern: Terminal,
+}
 
 export function ThemeToggle() {
   const { t } = useI18n()
@@ -67,9 +72,12 @@ export function ThemeToggle() {
   const current = THEME_OPTIONS.find((option) => option.value === preference)
   const currentLabel = t(`layout2.theme.${preference}`, undefined, current?.label ?? '跟随系统')
   const Icon = preference === 'system' ? Monitor : RESOLVED_ICON[resolved]
-  const resolvedLabel = resolved === 'light'
-    ? t('layout2.theme.light', undefined, '亮色')
-    : t('layout2.theme.dark', undefined, '暗色')
+  const resolvedLabel =
+    resolved === 'light'
+      ? t('layout2.theme.light', undefined, '亮色')
+      : resolved === 'tern'
+        ? t('layout2.theme.tern', undefined, 'Tern')
+        : t('layout2.theme.dark', undefined, '暗色')
 
   return (
     <div ref={wrapRef} className="relative shrink-0">

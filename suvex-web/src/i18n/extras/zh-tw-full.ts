@@ -1153,6 +1153,7 @@ export const zh_tw_full: ExtraLocaleMap = {
     "layout2.theme.current": "當前：{label}，點選切換主題",
     "layout2.theme.currentTitle": "當前：{label}",
     "layout2.theme.dark": "暗色",
+    "layout2.theme.tern": "Tern",
     "layout2.theme.light": "亮色",
     "layout2.theme.menu": "主題",
     "layout2.theme.system": "跟隨系統",
