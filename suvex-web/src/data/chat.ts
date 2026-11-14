@@ -9,6 +9,7 @@ import {
   TURN_ERROR,
   TURN_MESSAGE,
   TURN_PHASE,
+  TURN_REASONING,
   TURN_TOOL_OUTPUT,
   TURN_TOOL_PROGRESS,
   asChatMessage,
@@ -319,6 +320,8 @@ export interface ChatState {
   phase: PhasePayload | null
   /** ★ v1.92：运行中工具的输出增量（仅界面展示，不落库）。 */
   liveToolOutput: { tool: string; text: string } | null
+  /** 模型思考增量（只在 live 时显示；落库后由 reasoning 字段接管）。 */
+  liveReasoning: string | null
   /** ★ v1.92：长工具心跳（MCP / verify_http …），用于运行卡的状态行。 */
   liveToolProgress: {
     tool: string
@@ -477,6 +480,7 @@ const EMPTY: ChatState = {
   sendingSessionId: null,
   phase: null,
   liveToolOutput: null,
+  liveReasoning: null,
   liveToolProgress: null,
   interjections: [],
   streamingText: null,
@@ -1290,6 +1294,7 @@ export async function sendMessage(
     pendingUserContent: content,
     phase: null,
   liveToolOutput: null,
+  liveReasoning: null,
   liveToolProgress: null,
     interjections: [],
     // ★ v0.102：新的一轮从空缓冲开始。不清的话，上一轮异常退出时
@@ -1374,6 +1379,13 @@ export async function sendMessage(
           return
         }
 
+        if (frame.event === TURN_REASONING) {
+          const piece = typeof frame.data.text === 'string' ? frame.data.text : ''
+          if (!piece) return
+          patch({ liveReasoning: (state.liveReasoning ?? '') + piece })
+          return
+        }
+
         if (frame.event === TURN_TOOL_OUTPUT) {
           const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
           const chunk = typeof frame.data.chunk === 'string' ? frame.data.chunk : ''
@@ -1439,6 +1451,7 @@ export async function sendMessage(
                 而正文可能还在往里流）。
             */
             streamingText: message.role === 'assistant' ? null : state.streamingText,
+            liveReasoning: message.role === 'assistant' ? null : state.liveReasoning,
             // 工具结果已落库 → 运行卡退场（最终文本以 message 为准）。
             liveToolOutput:
               message.role === 'tool' && message.toolName === state.liveToolOutput?.tool
@@ -1468,7 +1481,12 @@ export async function sendMessage(
 
         if (frame.event === TURN_AWAITING) {
           // 停下来等人工确认：清掉 phase，界面据此把输入框让出来并提示
-          patch({ phase: null, liveToolOutput: null, liveToolProgress: null })
+          patch({
+            phase: null,
+            liveToolOutput: null,
+            liveReasoning: null,
+            liveToolProgress: null,
+          })
           return
         }
 
@@ -1498,6 +1516,7 @@ export async function sendMessage(
             ...sessionRunningPatch(sessionId, false),
             phase: null,
             liveToolOutput: null,
+            liveReasoning: null,
             liveToolProgress: null,
           })
         }
@@ -1808,6 +1827,11 @@ export async function attachLiveTurn(sessionId: string, signal?: AbortSignal): P
         patch({ phase })
         return
       }
+      if (frame.event === TURN_REASONING) {
+        const piece = typeof frame.data.text === 'string' ? frame.data.text : ''
+        if (piece) patch({ liveReasoning: (state.liveReasoning ?? '') + piece })
+        return
+      }
       if (frame.event === TURN_TOOL_OUTPUT) {
         const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
         const chunk = typeof frame.data.chunk === 'string' ? frame.data.chunk : ''
@@ -1825,7 +1849,7 @@ export async function attachLiveTurn(sessionId: string, signal?: AbortSignal): P
       }
       if (frame.event === TURN_MESSAGE) {
         const message = asChatMessage(frame.data)
-        if (message?.role === 'assistant') patch({ streamingText: null })
+        if (message?.role === 'assistant') patch({ streamingText: null, liveReasoning: null })
         // 工具结果/正文以服务端列表为准；增量只负责过程。
         void refreshActiveMessages(sessionId)
         return
@@ -1844,6 +1868,7 @@ export async function attachLiveTurn(sessionId: string, signal?: AbortSignal): P
           ...sessionRunningPatch(sessionId, false),
           phase: null,
           liveToolOutput: null,
+          liveReasoning: null,
           liveToolProgress: null,
         })
         void refreshActiveMessages(sessionId)

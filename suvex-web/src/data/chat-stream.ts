@@ -66,6 +66,9 @@ export const TURN_ERROR = 'error'
  */
 export const TURN_DELTA = 'delta'
 
+/** 模型思考增量；与正文分开，避免思考混进回答。 */
+export const TURN_REASONING = 'reasoning'
+
 /**
  * ★ v1.92：工具执行期间的输出增量。`{ tool, chunk }`。
  *

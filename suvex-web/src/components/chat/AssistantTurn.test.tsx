@@ -352,3 +352,15 @@ describe('AssistantTurn — MCP 真实进度（v1.92）', () => {
     expect(running.textContent).toContain('扫描中')
   })
 })
+
+describe('AssistantTurn — 思考增量', () => {
+  it('live 时把模型 reasoning 增量显示出来', () => {
+    const { container } = render(
+      <AssistantTurn items={[]} live liveReasoning="先看端口，再决定下一步" />,
+    )
+
+    const reasoning = container.querySelector('[data-reasoning]') as HTMLElement
+    expect(reasoning).not.toBeNull()
+    expect(reasoning.textContent).toContain('先看端口，再决定下一步')
+  })
+})

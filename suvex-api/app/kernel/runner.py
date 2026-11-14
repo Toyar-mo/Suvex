@@ -2820,6 +2820,7 @@ class LlmGateway:
         tool_calls: list[dict] | None = None,
         tools: list[dict[str, Any]] | None = None,
         usage_out: list[dict] | None = None,
+        on_reasoning: Callable[[str], Any] | None = None,
     ) -> AsyncIterator[str]:
         """流式调模型，逐块产出**正文增量**（v0.102）。
 
@@ -2865,6 +2866,7 @@ class LlmGateway:
         from app.providers.llm import (  # noqa: PLC2701 - 见 chat() 的说明
             stream_delta,
             stream_finish_reason,
+            stream_reasoning_delta,
             tool_calls_delta,
         )
 
@@ -2930,6 +2932,11 @@ class LlmGateway:
             complete: set[int] = set()
 
             async for sse_event, sse_data in _iter_sse(response):
+                reasoning_piece = stream_reasoning_delta(
+                    self.anthropic, sse_event, sse_data
+                )
+                if reasoning_piece and on_reasoning is not None:
+                    await on_reasoning(reasoning_piece)
                 delta = stream_delta(self.anthropic, sse_event, sse_data)
                 if delta:
                     yield delta

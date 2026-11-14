@@ -129,12 +129,16 @@ function MessageRowImpl({
 export function ReasoningBlock({
   text,
   durationMs,
+  live = false,
+  defaultOpen = false,
 }: {
   text: string
   durationMs?: number | null
+  live?: boolean
+  defaultOpen?: boolean
 }) {
   const { t } = useI18n()
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(defaultOpen)
   const seconds =
     typeof durationMs === 'number' && durationMs > 0
       ? Math.max(1, Math.round(durationMs / 1000))
@@ -154,9 +158,11 @@ export function ReasoningBlock({
         )}
         <Sparkles size={11} strokeWidth={2} aria-hidden="true" className="opacity-70" />
         <span>
-          {seconds
-            ? t('chat.thoughtFor', { seconds }, `Thought for ${seconds}s`)
-            : t('chat.thinking', undefined, '思考过程')}
+          {live
+            ? t('chat.a.thinking', undefined, '正在想…')
+            : seconds
+              ? t('chat.thoughtFor', { seconds }, `Thought for ${seconds}s`)
+              : t('chat.thinking', undefined, '思考过程')}
         </span>
       </button>
       {open && (

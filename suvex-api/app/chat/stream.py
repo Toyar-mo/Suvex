@@ -110,6 +110,9 @@ EVENT_ERROR = "error"
 #: `tests/chat/test_holdback.py` 钉住。
 EVENT_DELTA = "delta"
 
+#: 模型思考增量（`reasoning_content` / Anthropic thinking）。
+EVENT_REASONING = "reasoning"
+
 #: 推一帧的回调：`(event_name, payload)`。
 #:
 #: `engine.run_turn` 拿到的就是它。**它必须是可选的** —— 非流式路径
@@ -248,6 +251,7 @@ __all__ = [
     "EVENT_ERROR",
     "EVENT_MESSAGE",
     "EVENT_PHASE",
+    "EVENT_REASONING",
     "EVENT_TOOL_OUTPUT",
     "EVENT_TOOL_PROGRESS",
     "Emit",

@@ -594,6 +594,7 @@ export function ChatPage() {
     // ★ v0.100：流式过程中的两个状态 —— 现在在做什么、用户插了哪些话。
     phase,
     liveToolOutput,
+    liveReasoning,
     liveToolProgress,
     interjections,
     // ★ v0.102：正在流入的正文（还没落库）。
@@ -2509,6 +2510,7 @@ export function ChatPage() {
                               ? (liveToolOutput?.text ?? null)
                               : null
                           }
+                          liveReasoning={isLive ? liveReasoning : null}
                           progress={isLive ? { tools: turnToolCount(turn.items) } : null}
                           interjections={isLive ? interjections : []}
                           meta={turnMeta}

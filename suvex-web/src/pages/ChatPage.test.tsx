@@ -182,6 +182,7 @@ function chatState(overrides: Partial<ChatState> = {}): ChatState {
     //   少一个字段意味着页面读到 undefined，渲染逻辑会静默走错分支。
     phase: null,
     liveToolOutput: null,
+    liveReasoning: null,
     liveToolProgress: null,
     interjections: [],
     // ★ v0.102：正在流入的正文。同上，必须显式给 —— 缺了 tsc 会报，
@@ -261,7 +262,7 @@ describe('ChatPage — 工具失败必须看得出来', () => {
     expect(work).not.toBeNull()
     // v1.92：失败直接标在工具卡标题行（不用先展开、也不靠摘要计数）
     expect(work.textContent).toContain('失败')
-    expect(work.textContent).toContain('create_scan')
+    expect(work.textContent).toContain('Scan')
   })
 
   it('★ 展开后工具卡带「失败」字样，且露出工具名', () => {
@@ -281,7 +282,7 @@ describe('ChatPage — 工具失败必须看得出来', () => {
 
     expect(screen.getByText('失败')).toBeTruthy()
     // 工具名也要露出来 —— 只说"失败"不告诉用户是哪个动作失败，等于没说。
-    expect(screen.getByText('create_scan')).toBeTruthy()
+    expect(screen.getByText('Scan')).toBeTruthy()
   })
 
   it('成功的工具卡**不该**出现「失败」', () => {
@@ -302,7 +303,7 @@ describe('ChatPage — 工具失败必须看得出来', () => {
     if (!toggle) throw new Error('没有工作过程摘要')
     fireEvent.click(toggle)
 
-    expect(screen.getByText('create_scan')).toBeTruthy()
+    expect(screen.getByText('Scan')).toBeTruthy()
     expect(screen.queryByText('失败')).toBeNull()
   })
 })
@@ -1169,17 +1170,16 @@ describe('ChatPage — 过程直接铺开（v1.92 对齐 omp）', () => {
     expect(screen.queryByRole('button', { name: /工作过程/ })).toBeNull()
   })
 
-  it('★ 长输出默认展开；手动收起后全文必须离开 DOM（不是 CSS 假折叠）', () => {
+  it('★ 长输出默认收起；展开后全文进入 DOM（Tern 的折叠形态）', () => {
     const { container } = renderTool(manyLines)
     const card = container.querySelector('[data-message-row="tool"]') as HTMLElement
-    expect(card.textContent).toContain('第 20 条记录')
+    expect(card.getAttribute('data-tool-collapsed')).toBe('true')
+    expect(card.textContent).not.toContain('第 20 条记录')
 
     const toggle = card.querySelector('[data-tool-toggle="true"]') as HTMLElement
     fireEvent.click(toggle)
-    expect(card.getAttribute('data-tool-collapsed')).toBe('true')
-    expect(card.textContent, '折叠态把全文留在 DOM 里了 —— 那不是折叠').not.toContain(
-      '第 20 条记录',
-    )
+    expect(card.getAttribute('data-tool-collapsed')).toBe('false')
+    expect(card.textContent).toContain('第 20 条记录')
   })
 
   it('★ 标题行说清"干了什么"：工具名 + 参数摘要 + 状态', () => {
@@ -1197,20 +1197,20 @@ describe('ChatPage — 过程直接铺开（v1.92 对齐 omp）', () => {
 
     const toggle = card.querySelector('[data-tool-toggle="true"]') as HTMLElement
     fireEvent.click(toggle)
-    expect(card.getAttribute('data-tool-collapsed')).toBe('true')
+    expect(card.getAttribute('data-tool-collapsed')).toBe('false')
     expect(card.textContent).toContain('失败')
   })
 
   it('★ 展开/收起 aria 跟着翻转，行数始终可见', () => {
     const { container } = renderTool(manyLines)
     const toggle = container.querySelector('[data-tool-toggle="true"]') as HTMLElement
-    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
     expect(toggle.textContent).toContain('20 行')
 
     fireEvent.click(toggle)
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
   })
 })
 

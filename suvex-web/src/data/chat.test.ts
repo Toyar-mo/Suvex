@@ -25,6 +25,7 @@ import {
   TURN_ERROR,
   TURN_MESSAGE,
   TURN_PHASE,
+  TURN_REASONING,
   TURN_TOOL_OUTPUT,
   TURN_TOOL_PROGRESS,
 } from './chat-stream'
@@ -1763,6 +1764,32 @@ describe('按会话独立并发（v1.65 对齐 CyberStrikeAI）', () => {
   静默：换了工具还沿用上一段、落库后不清、无限输出吃内存。这里钉住：
   append 而不是 replace；落库清空；换工具清空。
 */
+describe('liveReasoning — 思考增量', () => {
+  it('★ reasoning 帧只进思考缓冲，不进正文', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({ ...session(), messages: [] })
+    await open
+
+    const promise = sendMessage('chat_1', '想一下')
+    await tick()
+    openManualStream()
+
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_REASONING, { text: '先看端口，' })),
+    )
+    chatStreamController.enqueue(
+      new TextEncoder().encode(sseFrame(TURN_REASONING, { text: '再下结论' })),
+    )
+    await tick()
+
+    expect(getChatSnapshot().liveReasoning).toBe('先看端口，再下结论')
+    expect(getChatSnapshot().streamingText).toBeNull()
+
+    finishStream()
+    await promise
+  })
+})
+
 describe('liveToolOutput — 工具输出增量（v1.92）', () => {
   it('★ 同一工具的输出按到达顺序拼接', async () => {
     const open = openSession('chat_1')

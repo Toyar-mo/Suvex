@@ -1,6 +1,6 @@
 import { memo, useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
-import { MessageRow } from '@/components/chat/MessageRow'
+import { MessageRow, ReasoningBlock } from '@/components/chat/MessageRow'
 import { digestToolArgs } from '@/components/chat/toolCardDigest'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
 import { ApprovalCard } from '@/components/chat/ChatControls'
@@ -46,6 +46,7 @@ export const AssistantTurn = memo(
     prev.phaseText === next.phaseText &&
     prev.liveTool === next.liveTool &&
     prev.liveToolOutput === next.liveToolOutput &&
+    prev.liveReasoning === next.liveReasoning &&
     prev.liveToolArgs === next.liveToolArgs &&
     prev.liveToolProgress === next.liveToolProgress &&
     prev.onFork === next.onFork &&
@@ -93,6 +94,7 @@ function AssistantTurnImpl({
   phaseText = null,
   liveTool = null,
   liveToolOutput = null,
+  liveReasoning = null,
   liveToolArgs = null,
   liveToolProgress = null,
   deciding,
@@ -115,6 +117,8 @@ function AssistantTurnImpl({
   liveTool?: string | null
   /** 运行中工具已经吐出的输出（SSE 增量）。 */
   liveToolOutput?: string | null
+  /** 运行中的模型思考增量。 */
+  liveReasoning?: string | null
   /** 运行中工具的浅层参数摘要（phase 帧带下来的）。 */
   liveToolArgs?: Record<string, string> | null
   /** 长工具心跳（秒）；没有可读输出时用它证明还活着。 */
@@ -213,6 +217,10 @@ function AssistantTurnImpl({
         interjections.map((message) => (
           <InterjectionNote key={message.id} message={message} />
         ))}
+
+      {live && liveReasoning !== null && liveReasoning.length > 0 && (
+        <ReasoningBlock text={liveReasoning} live defaultOpen />
+      )}
 
       {live && streamingText !== null && !streamingAlreadyPersisted && (
         <div

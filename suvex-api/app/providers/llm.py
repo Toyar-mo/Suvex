@@ -864,3 +864,37 @@ def tool_calls_from_message(anthropic: bool, body: object) -> list[dict]:
             }
         )
     return calls
+
+
+def stream_reasoning_delta(anthropic: bool, event: str | None, data: str) -> str:
+    """从流式帧里取**思考增量**。取不到返回空串。
+
+    与 `stream_delta` 分开：思考不能混进正文（会直接显示给用户）。
+    OpenAI 兼容用 `delta.reasoning_content`；Anthropic 用
+    `content_block_delta` 里的 `thinking_delta.thinking`。
+    """
+    if not data or data.strip() == STREAM_DONE_PAYLOAD:
+        return ""
+    try:
+        parsed = json.loads(data)
+    except ValueError:
+        return ""
+    if not isinstance(parsed, dict):
+        return ""
+    if anthropic:
+        delta = parsed.get("delta")
+        if isinstance(delta, dict) and delta.get("type") == "thinking_delta":
+            text = delta.get("thinking")
+            return text if isinstance(text, str) else ""
+        return ""
+    choices = parsed.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    first = choices[0]
+    if not isinstance(first, dict):
+        return ""
+    delta = first.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+    text = delta.get("reasoning_content") or delta.get("reasoning")
+    return text if isinstance(text, str) else ""

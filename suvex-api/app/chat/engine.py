@@ -853,6 +853,19 @@ async def _call_model(
         "system": system,
         "finish_reason": finish_reasons,
     }
+    if emit is not None:
+        async def _emit_reasoning(piece: str) -> None:
+            await emit("reasoning", {"text": piece})
+
+        # 测试里的假网关没有这个方法/参数；有才传，避免把流式路径打成 TypeError。
+        stream_method = getattr(gateway, "chat_stream", None)
+        try:
+            if stream_method is not None and "on_reasoning" in inspect.signature(
+                stream_method
+            ).parameters:
+                stream_kwargs["on_reasoning"] = _emit_reasoning
+        except (TypeError, ValueError):
+            pass
     # ★ `tool_calls` 是新增的可选输出通道。旧实现（以及大量测试里的
     #   假网关）只接受 `system` / `finish_reason` —— 不看签名就传 kwarg
     #   会直接 `TypeError`，而那会被外层 `except` 误判成"流式坏了"，
