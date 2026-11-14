@@ -489,18 +489,19 @@ export const activity_tools: ExtraLocaleMap = {
     'tools.kernel.env.status.ready': '就绪',
     'tools.kernel.env.status.error': '启动失败',
     'tools.kernel.env.status.expired': '已到期',
-    'tools.kernel.sandbox.label': '解题沙箱',
-    'tools.kernel.sandbox.aria': '解题沙箱镜像',
-    'tools.kernel.sandbox.profile.suvex-sandbox': '通用（web / crypto / misc / 取证）',
-    'tools.kernel.sandbox.profile.suvex-sandbox-re': '逆向专用',
-    'tools.kernel.sandbox.profile.suvex-sandbox-ir': '应急响应专用',
-    'tools.kernel.sandbox.hint.suvex-sandbox': '预装 web、密码学、取证与 Misc 常用工具。',
+    'tools.kernel.sandbox.label': '执行沙箱',
+    'tools.kernel.sandbox.aria': '执行沙箱镜像',
+    'tools.kernel.sandbox.profile.suvex-sandbox': '通用执行环境',
+    'tools.kernel.sandbox.profile.suvex-sandbox-re': '二进制分析增强',
+    'tools.kernel.sandbox.profile.suvex-sandbox-ir': '应急响应增强',
+    'tools.kernel.sandbox.hint.suvex-sandbox':
+      '通用 CLI、网络、脚本、取证与数据处理工具；服务 CTF、渗透、应急响应和日常自动化，不绑定单一题型。',
     'tools.kernel.sandbox.hint.suvex-sandbox-re':
-      '在通用镜像之上加逆向工具（radare2 / gdb / angr）。逆向是唯一一类会主动执行题目给的代码的题型，所以单独收窄。',
+      '在通用环境之上加 radare2 / gdb / angr 等二进制分析工具；它是能力增强，不是另一套内核。',
     'tools.kernel.sandbox.hint.suvex-sandbox-ir':
-      '在通用镜像之上加时间线重建工具（mactime / log2timeline），但不含攻击工具 —— 复盘要读过去发生了什么，不是再打一遍。',
+      '在通用环境之上加 mactime / log2timeline 等时间线工具，不含攻击工具 —— 复盘要读过去发生了什么，不是再打一遍。',
     'tools.kernel.sandbox.defaultHint':
-      '它只影响从这里开始的那一次解题：题目会按分类自动选镜像，这里改的是"这次用哪个"，不会改动题目本身存的分类默认值。',
+      '它只影响从这里开始的那次任务；题目/任务仍可按分类自动选环境，这里改的是“这次用哪个”，不会改题目本身存的默认值。',
     'tools.kernel.dialog.untitled': '未命名题目',
     'tools.kernel.workorder.errorTitle': '这次复盘没有产出工单',
     'tools.kernel.writeup.errorTitle': '这道题还没有题解',

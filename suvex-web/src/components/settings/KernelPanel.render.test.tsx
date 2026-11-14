@@ -72,13 +72,13 @@ function stubKernelFetch(settings: Record<string, unknown>) {
 }
 
 describe('KernelPanel 墙钟预算字段渲染（v1.61）', () => {
-  it('★ 字段渲染出来：label「每题墙钟预算（秒）」+ help 点破「留空 = 自动」', async () => {
+  it('★ 字段渲染出来：label「单次任务墙钟预算（秒）」+ help 点破「留空 = 自动」', async () => {
     stubKernelFetch(baseSettings())
     await loadKernel()
     render(<KernelPanel />)
 
     // label 真的渲染（getByLabelText 会经 htmlFor↔id 关联到 input）
-    const input = screen.getByLabelText('每题墙钟预算（秒）') as HTMLInputElement
+    const input = screen.getByLabelText('单次任务墙钟预算（秒）') as HTMLInputElement
     expect(input).toBeTruthy()
     expect(input.id).toBe('ctf2-wall-clock')
 
@@ -91,7 +91,7 @@ describe('KernelPanel 墙钟预算字段渲染（v1.61）', () => {
     await loadKernel()
     render(<KernelPanel />)
 
-    const input = screen.getByLabelText('每题墙钟预算（秒）') as HTMLInputElement
+    const input = screen.getByLabelText('单次任务墙钟预算（秒）') as HTMLInputElement
     // null 必须是空串，绝不能渲染成 "null" 或 "0"
     expect(input.value).toBe('')
     // placeholder 提示自动推导值：80×45=3600
@@ -103,7 +103,7 @@ describe('KernelPanel 墙钟预算字段渲染（v1.61）', () => {
     await loadKernel()
     render(<KernelPanel />)
 
-    const input = screen.getByLabelText('每题墙钟预算（秒）') as HTMLInputElement
+    const input = screen.getByLabelText('单次任务墙钟预算（秒）') as HTMLInputElement
     expect(input.value).toBe('1800')
   })
 
@@ -112,7 +112,7 @@ describe('KernelPanel 墙钟预算字段渲染（v1.61）', () => {
     await loadKernel()
     render(<KernelPanel />)
 
-    const input = screen.getByLabelText('每题墙钟预算（秒）') as HTMLInputElement
+    const input = screen.getByLabelText('单次任务墙钟预算（秒）') as HTMLInputElement
     expect(input.placeholder).toBe('自动（9000s）')
   })
 })

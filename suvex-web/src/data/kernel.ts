@@ -139,24 +139,25 @@ export const SUBMIT_MODE_HINT: Record<KernelSubmitMode, string> = {
 export type KernelSandboxProfile = 'suvex-sandbox' | 'suvex-sandbox-re' | 'suvex-sandbox-ir'
 
 export const SANDBOX_PROFILE_LABEL: Record<KernelSandboxProfile, string> = {
-  'suvex-sandbox': '通用（web / crypto / misc / 取证）',
-  'suvex-sandbox-re': '逆向专用',
-  'suvex-sandbox-ir': '应急响应专用',
+  'suvex-sandbox': '通用执行环境',
+  'suvex-sandbox-re': '二进制分析增强',
+  'suvex-sandbox-ir': '应急响应增强',
 }
 
 export const SANDBOX_PROFILE_HINT: Record<KernelSandboxProfile, string> = {
-  'suvex-sandbox': '预装 web、密码学、取证与 Misc 常用工具。',
+  'suvex-sandbox':
+    '通用 CLI、网络、脚本、取证与数据处理工具；服务 CTF、渗透、应急响应和日常自动化，不绑定单一题型。',
   // ★ 这里要写清"为什么逆向要单独一个镜像"，否则用户会问
   //   "多一个镜像是不是多余"。
   'suvex-sandbox-re':
-    '在通用镜像之上加逆向工具（radare2 / gdb / angr）。' +
-    '逆向是唯一一类会主动执行题目给的代码的题型，所以单独收窄。',
+    '在通用环境之上加 radare2 / gdb / angr 等二进制分析工具。' +
+    '它是能力增强，不是另一套内核。',
   // ★ 同理：IR 单独一个镜像的理由不是"工具更多"，而是**方向相反** ——
   //   它要能读时间线（`mactime` / `log2timeline` 那一路），
   //   但**不该装攻击工具**：复盘题里给 agent 一把刀，它就会去砍。
   'suvex-sandbox-ir':
-    '在通用镜像之上加时间线重建工具（mactime / log2timeline），' +
-    '但不含攻击工具 —— 复盘要读过去发生了什么，不是再打一遍。',
+    '在通用环境之上加 mactime / log2timeline 等时间线工具，' +
+    '不含攻击工具 —— 复盘要读过去发生了什么，不是再打一遍。',
 }
 
 /** 旧镜像名 → 新镜像名。只用于把历史响应体里的旧名归一，不对外暴露。 */

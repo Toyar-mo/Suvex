@@ -49,16 +49,16 @@ export const settings_rest: ExtraLocaleMap = {
       '保存后立刻生效（解题与调度每次都读生效值），不需要重启服务。从「自动提交」切回「先确认再提交」也是即时的 —— 正在跑的那一轮会在下一个提交决策点读到新值。它与「内核通用能力」是同一次保存：两块共用一个草稿，在这里点保存等于把两块一起存下。',
     'settings.kernel.coreTitle': '内核通用能力',
     'settings.kernel.coreDescription':
-      '这些设置对所有场景（CTF 解题 / 渗透评估 / 应急响应复盘）共用，不单属于 CTF。改动后同样点上一块底部的保存。',
+      '同一套执行内核，服务 CTF、渗透评估、应急响应和日常自动化：共用的模型循环、工具调用、沙箱、预算与断点恢复。场景只改变提示词和判定包，不改变底座。',
     'settings.kernel.defaultProfileHint':
-      '分类认不出来（归到「其它」）的新题用它；认得出的题仍按分类走。它也是「CTF」页那个选择器的默认值。',
-    'settings.kernel.maxTurnsLabel': '每题最多跑多少回合',
+      '这是新任务的默认执行环境；题目/任务仍可按自身类型选择。它不把内核限定为 CTF。',
+    'settings.kernel.maxTurnsLabel': '单次任务最多跑多少回合',
     'settings.kernel.maxTurnsHelp':
-      '一次解题最多让模型跑多少轮。同一批实测里：一道命令注入题 6 轮就出结果，而一道 .NET 逆向题跑满 40 轮、发出 37 条**各不相同**的命令仍未做完 —— 它不是卡住了，是真的需要更多轮。调大只花模型额度（每轮一次调用），不占解题并发；调小省钱但可能中途放弃。',
+      '一次任务（CTF 题 / 渗透评估 / 应急响应复盘 / 自动化）最多让模型跑多少轮。同一批实测里：一道命令注入题 6 轮就出结果，而一道 .NET 逆向题跑满 40 轮、发出 37 条**各不相同**的命令仍未做完 —— 它不是卡住了，是真的需要更多轮。调大只花模型额度（每轮一次调用），不占并发；调小省钱但可能中途放弃。',
     'settings.kernel.unitTurns': '轮',
-    'settings.kernel.wallClockLabel': '每题墙钟预算（秒）',
+    'settings.kernel.wallClockLabel': '单次任务墙钟预算（秒）',
     'settings.kernel.wallClockHelp':
-      '一次解题最多允许跑多久（墙钟）。到 60%/80%/92% 会提醒模型整理已有证据收尾。留空 = 按回合预算自动推导（回合 × 45 秒，如 80 轮 → 60 分钟），推荐留空。填数则覆盖自动值，区间 {min}-{max} 秒。',
+      '一次任务最多允许跑多久（墙钟）。到 60%/80%/92% 会提醒模型整理已有证据收尾。留空 = 按回合预算自动推导（回合 × 45 秒，如 80 轮 → 60 分钟），推荐留空。填数则覆盖自动值，区间 {min}-{max} 秒。',
     'settings.kernel.wallClockPlaceholder': '自动（{seconds}s）',
     'settings.kernel.unitSeconds': '秒',
     'settings.kernel.fallbackLabel': '备用模型（换模兜底）',
@@ -569,14 +569,14 @@ export const settings_rest: ExtraLocaleMap = {
       'Takes effect immediately (solving and scheduling read the live values); no restart needed. Switching from auto submit back to confirm-first is also immediate — a running round sees the new value at its next submission decision. It is the same save as Kernel capabilities: both sections share one draft, so saving here saves both.',
     'settings.kernel.coreTitle': 'Kernel capabilities',
     'settings.kernel.coreDescription':
-      'These settings are shared by all scenarios (CTF solving / penetration assessment / incident response review), not just CTF. After changes, use the save bar at the bottom of the previous section too.',
+      'One execution kernel for CTF, penetration assessment, incident response and everyday automation: shared model loop, tool calls, sandbox, budgets and recovery. A scenario changes prompts and judgment packs, not the underlying engine.',
     'settings.kernel.defaultProfileHint':
-      'Used for new challenges whose class cannot be recognized (classified as Other); recognized ones still follow their class. It is also the default of the selector on the CTF page.',
-    'settings.kernel.maxTurnsLabel': 'Max turns per challenge',
+      'Default execution environment for new tasks; each challenge/task can still choose its own. This does not make the kernel CTF-only.',
+    'settings.kernel.maxTurnsLabel': 'Max turns per task',
     'settings.kernel.maxTurnsHelp':
       'How many turns a model may run per solve. In the same measurements: a command-injection challenge finished in 6 turns, while a .NET reversing challenge used all 40 turns and issued 37 **distinct** commands without finishing — it was not stuck, it genuinely needed more. Raising it only costs model quota (one call per turn), not solve concurrency; lowering it saves money but may abandon a solve midway.',
     'settings.kernel.unitTurns': 'turns',
-    'settings.kernel.wallClockLabel': 'Wall-clock budget per challenge (s)',
+    'settings.kernel.wallClockLabel': 'Wall-clock budget per task (s)',
     'settings.kernel.wallClockHelp':
       'Maximum wall-clock time per solve. At 60%/80%/92% the model is reminded to wrap up with existing evidence. Empty = derive automatically from the turn budget (turns × 45 s, e.g. 80 turns → 60 min), recommended. A number overrides it; range {min}-{max} seconds.',
     'settings.kernel.wallClockPlaceholder': 'Auto ({seconds}s)',
