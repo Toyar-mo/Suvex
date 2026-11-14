@@ -572,6 +572,52 @@ function clearDelta(): void {
   deltaBuffer = ''
 }
 
+/*
+  工具输出也按帧合并。`run_shell` / `ffuf` 一次可能吐几千个 SSE 分片，
+  每个分片都换整份 store 快照、重排一个几百行的 `<pre>`，主线程会直接卡住。
+  与正文增量同一条纪律：非 tool_output 帧进入前先 flush，保证顺序。
+*/
+let toolOutputBuffer = ''
+let toolOutputTool = ''
+let toolOutputFrame: number | null = null
+
+function flushToolOutput(): void {
+  toolOutputFrame = null
+  if (!toolOutputBuffer || !toolOutputTool) return
+  const tool = toolOutputTool
+  const chunk = toolOutputBuffer
+  toolOutputBuffer = ''
+  const previous = state.liveToolOutput
+  const text = (previous?.tool === tool ? previous.text : '') + chunk
+  patch({
+    liveToolOutput: {
+      tool,
+      text: text.length > 65_536 ? text.slice(-65_536) : text,
+    },
+  })
+}
+
+function queueToolOutput(tool: string, chunk: string): void {
+  if (toolOutputTool && toolOutputTool !== tool) flushToolOutput()
+  toolOutputTool = tool
+  toolOutputBuffer += chunk
+  if (toolOutputFrame !== null) return
+  const raf: (cb: FrameRequestCallback) => number =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb) => window.setTimeout(() => cb(performance.now()), 16)
+  toolOutputFrame = raf(flushToolOutput)
+}
+
+function clearToolOutput(): void {
+  if (toolOutputFrame !== null && typeof cancelAnimationFrame === 'function') {
+    cancelAnimationFrame(toolOutputFrame)
+  }
+  toolOutputFrame = null
+  toolOutputBuffer = ''
+  toolOutputTool = ''
+}
+
 /** SSR 快照。本项目是纯 CSR，但 `useSyncExternalStore` 要求给一个。 */
 const SERVER_SNAPSHOT: ChatState = EMPTY
 function getServerSnapshot(): ChatState {
@@ -1233,6 +1279,7 @@ export async function sendMessage(
   //   而不是一整轮模型推理。
   // 上一轮异常退出时可能还有未落帧的增量，先清掉再开新一轮。
   clearDelta()
+  clearToolOutput()
   patch({
     ...sessionRunningPatch(sessionId, true),
     sending: true,
@@ -1302,7 +1349,10 @@ export async function sendMessage(
         const current = state.active
         if (!current || current.id !== sessionId) return
         // 任何非增量帧进入前，先把还没渲染的正文增量落下去，保持顺序。
-        if (frame.event !== TURN_DELTA) flushDelta()
+        if (frame.event !== TURN_DELTA) {
+          flushDelta()
+          if (frame.event !== TURN_TOOL_OUTPUT) flushToolOutput()
+        }
 
         if (frame.event === TURN_PHASE) {
           // 「正在想…」那一行现在能显示"第几轮 / 在跑哪个工具"
@@ -1328,15 +1378,8 @@ export async function sendMessage(
           const tool = typeof frame.data.tool === 'string' ? frame.data.tool : ''
           const chunk = typeof frame.data.chunk === 'string' ? frame.data.chunk : ''
           if (!tool || !chunk) return
-          const previous = state.liveToolOutput
-          const text = (previous?.tool === tool ? previous.text : '') + chunk
-          patch({
-            liveToolOutput: {
-              tool,
-              // 上限 64 KiB：`yes` 之类的无限输出不该把浏览器内存吃光。
-              text: text.length > 65_536 ? text.slice(-65_536) : text,
-            },
-          })
+          // 按渲染帧合并；上限 64 KiB 在 flush 里统一处理。
+          queueToolOutput(tool, chunk)
           return
         }
 
@@ -1468,6 +1511,7 @@ export async function sendMessage(
         观感就是卡死。这里补一条明确的连接中断错误（有 error 帧时不动它）。
       */
       flushDelta()
+      clearToolOutput()
       const next: Partial<ChatState> = { phase: null }
       if (!sawErrorFrame && state.error === null) {
         next.error = new ApiError(

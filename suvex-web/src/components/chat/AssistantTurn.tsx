@@ -158,8 +158,6 @@ function AssistantTurnImpl({
     lastAnswer !== undefined &&
     (lastAnswer.content === streamingText ||
       (streamingText.length > 0 && lastAnswer.content.startsWith(streamingText)))
-  const elapsed = useElapsed(live, startedAt ?? items[0]?.createdAt ?? null)
-
   return (
     <div className="flex flex-col gap-3" data-assistant-turn>
       <div
@@ -223,7 +221,7 @@ function AssistantTurnImpl({
           data-message-row="assistant"
         >
           {/* 流式正文也走 Markdown：否则落库那一刻会从「星号原文」跳成「加粗」。 */}
-          <WriteupMarkdown markdown={streamingText} sessionId={sessionId} />
+          <WriteupMarkdown markdown={streamingText} sessionId={sessionId} streaming />
           <span
             className="ml-0.5 inline-block h-3.5 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom"
             aria-hidden="true"
@@ -236,7 +234,7 @@ function AssistantTurnImpl({
           name={liveTool}
           args={liveToolArgs}
           output={liveToolOutput}
-          elapsed={elapsed}
+          startedAt={startedAt}
           heartbeat={liveToolProgress}
         />
       )}
@@ -244,7 +242,7 @@ function AssistantTurnImpl({
       {live && (
         <LiveStatus
           phaseText={phaseText}
-          elapsed={elapsed}
+          startedAt={startedAt}
           progress={progress}
           heartbeat={liveToolProgress}
           t={t}
@@ -301,22 +299,28 @@ function LiveToolCard({
   name,
   args,
   output,
-  elapsed,
+  startedAt,
   heartbeat,
 }: {
   name: string
   args: Record<string, string> | null
   output: string | null
-  elapsed: number
+  startedAt: string | null
   heartbeat: { seconds: number; message?: string; progress?: number; total?: number } | null
 }) {
   const { t } = useI18n()
+  const elapsed = useElapsed(true, startedAt)
+  /*
+    工具输出可能很长（nmap/ffuf）。只把尾部交给 DOM：完整缓冲仍保留在
+    store 的 64 KiB 里，但每帧重排几千行会把主线程拖垮。
+  */
+  const visibleOutput = output && output.length > 16_384 ? output.slice(-16_384) : output
   const ref = useRef<HTMLPreElement>(null)
   const digest = digestToolArgs(args)
   useEffect(() => {
     const el = ref.current
     if (el) el.scrollTop = el.scrollHeight
-  }, [output])
+  }, [visibleOutput])
 
   return (
     <div
@@ -341,12 +345,12 @@ function LiveToolCard({
           {heartbeat ? progressLabelOf(heartbeat, t) : elapsed > 0 ? ` · ${formatElapsed(elapsed, t)}` : ''}
         </span>
       </div>
-      {output ? (
+      {visibleOutput ? (
         <pre
           ref={ref}
           className="max-h-[240px] overflow-auto border-t border-line/60 bg-surface-sunken/40 px-3 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap break-words text-ink-muted"
         >
-          {output}
+          {visibleOutput}
           <span className="ml-0.5 inline-block h-3 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom" />
         </pre>
       ) : null}
@@ -357,17 +361,18 @@ function LiveToolCard({
 /** 运行卡状态行：服务端给了 progress/total 就显示真实百分比，否则退成秒数。 */
 function LiveStatus({
   phaseText,
-  elapsed,
+  startedAt,
   progress,
   heartbeat,
   t,
 }: {
   phaseText: string | null
-  elapsed: number
+  startedAt: string | null
   progress: { steps?: number; tools?: number } | null
   heartbeat: { seconds: number; message?: string; progress?: number; total?: number } | null
   t: Translate
 }) {
+  const elapsed = useElapsed(true, startedAt)
   const total = heartbeat?.total ?? 0
   const pct =
     heartbeat?.progress !== undefined && total > 0

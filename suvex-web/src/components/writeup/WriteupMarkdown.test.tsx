@@ -238,3 +238,34 @@ describe('WriteupMarkdown：安全与稳健', () => {
     expect(ms, `渲染 ${markdown.split('\n').length} 行耗时 ${ms}ms`).toBeLessThan(3000)
   })
 })
+
+describe('WriteupMarkdown：流式尾部', () => {
+  it('★ 已闭合的块先定型，未闭合的尾部保留原文', () => {
+    const out = renderToStaticMarkup(
+      <WriteupMarkdown markdown={'## 已完成\n\n正文 **还没闭合'} streaming />,
+    )
+
+    expect(out).toContain('<h2')
+    expect(out).toContain('data-streaming-tail')
+    expect(out).toContain('**还没闭合')
+    expect(out).not.toContain('<strong>还没闭合')
+  })
+
+  it('★ 代码围栏里的空行不切分（尾部仍完整）', () => {
+    const out = renderToStaticMarkup(
+      <WriteupMarkdown markdown={'```bash\necho a\n\necho b'} streaming />,
+    )
+
+    expect(out).toContain('data-streaming-tail')
+    expect(out).not.toContain('<pre')
+  })
+
+  it('★ 最终落库渲染不保留尾部标记', () => {
+    const out = renderToStaticMarkup(
+      <WriteupMarkdown markdown={'## 已完成\n\n正文 **已闭合**'} />,
+    )
+
+    expect(out).toContain('<strong class="font-semibold text-ink">已闭合</strong>')
+    expect(out).not.toContain('data-streaming-tail')
+  })
+})

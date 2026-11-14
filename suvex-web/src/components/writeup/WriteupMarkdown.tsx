@@ -340,9 +340,12 @@ const REMARK_PLUGINS = [remarkGfm]
 export function WriteupMarkdown({
   markdown,
   sessionId,
+  streaming = false,
 }: {
   markdown: string
   sessionId?: string
+  /** 流式正文：已完成的块走 Markdown，未闭合的尾部走纯文本。 */
+  streaming?: boolean
 }) {
   /*
     plugins 也要引用稳定：react-markdown 把它作为记忆化依赖。
@@ -352,9 +355,52 @@ export function WriteupMarkdown({
     () => (sessionId ? [remarkGfm, remarkWorkLinks(sessionId)] : REMARK_PLUGINS),
     [sessionId],
   )
-  return (
-    <Markdown remarkPlugins={plugins} components={WRITEUP_MARKDOWN_COMPONENTS}>
-      {markdown}
-    </Markdown>
+  const { stable, tail } = useMemo(
+    () => (streaming ? splitStreamingMarkdown(markdown) : { stable: markdown, tail: '' }),
+    [markdown, streaming],
   )
+  return (
+    <>
+      {stable && (
+        <Markdown remarkPlugins={plugins} components={WRITEUP_MARKDOWN_COMPONENTS}>
+          {stable}
+        </Markdown>
+      )}
+      {tail && (
+        /*
+          未完成的尾部不做 Markdown 解析：每来一个 token 重解析整段正文，
+          长回答会掉帧；而 Tern 的终端输出本来也是"先出原文，块结束后定型"。
+          尾部的 `**`/反引号在块闭合后会由上面的 Markdown 接管。
+        */
+        <div
+          data-streaming-tail
+          className="whitespace-pre-wrap break-words text-ink [line-height:1.85]"
+        >
+          {tail}
+        </div>
+      )}
+    </>
+  )
+}
+
+/** 找到最后一个不在代码围栏里的空行；它之前的内容已经稳定。 */
+function splitStreamingMarkdown(text: string): { stable: string; tail: string } {
+  if (!text) return { stable: '', tail: '' }
+  const lines = text.split('\n')
+  let offset = 0
+  let stableEnd = 0
+  let fence: string | null = null
+  for (const line of lines) {
+    const trimmed = line.trimStart()
+    if (fence !== null) {
+      if (trimmed.startsWith(fence)) fence = null
+    } else if (trimmed.startsWith('```') || trimmed.startsWith('~~~')) {
+      fence = trimmed.startsWith('~~~') ? '~~~' : '```'
+    } else if (trimmed.trim() === '') {
+      stableEnd = Math.min(text.length, offset + line.length + 1)
+    }
+    offset += line.length + 1
+  }
+  if (stableEnd <= 0) return { stable: '', tail: text }
+  return { stable: text.slice(0, stableEnd), tail: text.slice(stableEnd) }
 }
