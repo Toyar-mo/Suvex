@@ -62,6 +62,7 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
   const [copied, setCopied] = useState(false)
   const bodyRef = useRevealOnExpand<HTMLDivElement>(open)
   const argDigest = digestToolArgs(message.toolArgs)
+  const displayName = toolDisplayName(message.toolName)
 
   const copy = async () => {
     if (await copyText(content)) {
@@ -119,7 +120,7 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
             failed ? 'text-signal-risk' : 'text-ink-muted',
           )}
         >
-          {message.toolName ?? 'tool'}
+          {displayName}
         </span>
         {argDigest && (
           <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-ink-faint">
@@ -198,6 +199,20 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
         </div>
       )}
     </div>
+  )
+}
+
+/** Tern 用短标题（Bash / HTTP），内部协议名只留在 data 属性里。 */
+function toolDisplayName(name: string | null | undefined): string {
+  if (!name) return 'tool'
+  return (
+    {
+      run_shell: 'Bash',
+      browser: 'Browser',
+      verify_http: 'HTTP',
+      create_scan: 'Scan',
+      start_ctf_solve: 'CTF',
+    }[name] ?? name
   )
 }
 
