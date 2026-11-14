@@ -59,6 +59,11 @@ def test_should_break_sees_both_signals() -> None:
     interrupts.reset_all()
     interrupts.request_stop("s1")
     assert interrupts.should_break("s1") is True
+    interrupts.reset_all()
+    interrupts.request_steer("s1")
+    assert interrupts.should_break("s1") is True
+    assert interrupts.take_steer("s1") is True
+    assert interrupts.should_break("s1") is False
 
 
 # ══════════════════════════════════════════════════════════
@@ -142,6 +147,29 @@ async def test_continue_injects_the_note_and_keeps_running(db_session: Session) 
     assert injected[0].surface == "process", (
         "它是我们替用户写的注入模板，不能画成用户自己的气泡"
     )
+
+
+async def test_steer_stops_the_current_reply_and_reads_the_new_message(
+    db_session: Session,
+) -> None:
+    """插话：停在当前模型输出，不注入模板，下一轮从库里读到用户消息。"""
+    session = _new_session(db_session)
+    interrupts.request_steer(session.id)
+    gateway = _Gateway(["半句被打断的回复", "FINAL: 按新要求继续。"])
+
+    await engine.run_turn_durable(
+        db_session, session=session, content="先这样", identity=ADMIN, gateway=gateway
+    )
+
+    assert gateway.calls == 2, "插话后必须继续跑下一轮"
+    rows = (
+        db_session.query(ChatMessage)
+        .filter(ChatMessage.session_id == session.id)
+        .order_by(ChatMessage.seq)
+        .all()
+    )
+    partial = [r for r in rows if "半句被打断" in (r.content or "")]
+    assert partial and partial[0].surface == "process"
 
 
 async def test_narration_before_a_tool_call_is_process_not_answer(

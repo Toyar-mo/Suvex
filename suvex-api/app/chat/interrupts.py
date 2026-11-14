@@ -2,8 +2,8 @@
 
 ## 为什么不能靠"插话"（`interject`）
 
-`interject` 只是往库里写一条 user 消息，**当前这一轮不会停下来看它** ——
-模型已经把这一轮的输出想完了，那条话要等下一轮才被读到。用户看到的
+`interject` 现在写入 user 消息后还会发 `steer` 信号：流式输出处会停，
+工具执行中仍等工具返回（不砍断已产生副作用的命令）。用户看到的
 是「我让它停，它还在那儿写」。（CyberStrikeAI 把这两件事分得很清楚：
 插话 = 排队；中断并继续 = 真的按停当前输出再合并上下文。）
 
@@ -39,6 +39,8 @@ _LOCK = threading.Lock()
 _NOTES: dict[str, str] = {}
 #: 要求停止的会话集合。
 _STOPS: set[str] = set()
+#: 要求“停在当前模型输出、下一轮读新消息”的会话（插话用）。
+_STEERS: set[str] = set()
 
 
 def request_continue(session_id: str, note: str) -> None:
@@ -48,11 +50,30 @@ def request_continue(session_id: str, note: str) -> None:
         _STOPS.discard(session_id)
 
 
+def request_steer(session_id: str) -> None:
+    """插话：停在当前模型输出处，但**不注入额外模板**。
+
+    用户消息已经由 `/interject` 写进历史；下一轮重建上下文时自然读到。
+    与 `request_continue` 的区别是：不把「用户补充：…」再写一条过程消息。
+    """
+    with _LOCK:
+        _STEERS.add(session_id)
+
+
+def take_steer(session_id: str) -> bool:
+    with _LOCK:
+        if session_id not in _STEERS:
+            return False
+        _STEERS.discard(session_id)
+        return True
+
+
 def request_stop(session_id: str) -> None:
     """请求「彻底停止」。同时清掉可能挂着的说明（停止优先）。"""
     with _LOCK:
         _STOPS.add(session_id)
         _NOTES.pop(session_id, None)
+        _STEERS.discard(session_id)
 
 
 def stop_requested(session_id: str) -> bool:
@@ -70,7 +91,7 @@ def take_note(session_id: str) -> str | None:
 
 def has_pending(session_id: str) -> bool:
     with _LOCK:
-        return session_id in _STOPS or session_id in _NOTES
+        return session_id in _STOPS or session_id in _NOTES or session_id in _STEERS
 
 
 def should_break(session_id: str) -> bool:
@@ -83,6 +104,7 @@ def clear(session_id: str) -> None:
     with _LOCK:
         _STOPS.discard(session_id)
         _NOTES.pop(session_id, None)
+        _STEERS.discard(session_id)
 
 
 def reset_all() -> None:
@@ -90,3 +112,4 @@ def reset_all() -> None:
     with _LOCK:
         _STOPS.clear()
         _NOTES.clear()
+        _STEERS.clear()

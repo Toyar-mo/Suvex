@@ -883,7 +883,7 @@ def interject(
     db: DbSession,
     identity: Reader,
 ) -> ChatMessageOut:
-    """把用户的一句话写进会话，**让它出现在正在跑的那一轮的下一轮开头**。
+    """把用户的一句话写进会话，并让正在跑的那一轮**先停在当前模型输出**。
 
     ## 为什么这是可行的（而不是需要打断循环）
 
@@ -892,8 +892,10 @@ def interject(
     过程中往库里写一条 user 消息，**下一轮模型自然就看到它了** ——
     不需要中断、不需要往运行中的协程里塞东西。
 
-    这也是为什么它做成**独立端点**而不是一个 WebSocket：
-    一次 HTTP 写入就够，没有任何长连接状态要维护。
+    ★ v1.93：写入后额外发一个进程内 `steer` 信号。流式输出中的模型会在
+    下一个增量处停下，把已产出的半句落成 process，再从库里读到这条新消息，
+    不必等整个模型调用自然结束。工具执行中仍然要等工具返回 —— 不能把
+    已经产生副作用的命令从中间砍断。
 
     ## ★ 为什么不做"立即中断当前工具"
 
@@ -936,6 +938,9 @@ def interject(
 
     message = service.append_user_message(db, session=session, content=content)
     db.commit()
+    # 不只是排队：若这一轮正在流式输出，停在当前句；工具执行中则等工具
+    # 返回再停。下一轮从库里读到这句话，不再额外注入模板。
+    chat_interrupts.request_steer(session_id)
     return ChatMessageOut.model_validate(message)
 
 

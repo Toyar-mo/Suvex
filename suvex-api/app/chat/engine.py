@@ -4192,6 +4192,21 @@ async def run_turn(
         # 为什么不抛异常：抛异常会被 `_run_guarded` 当成"中途断了"记成
         # `interrupted`，而 `interrupted` 会被后台 `resumer` 自动接手 ——
         # 与"用户明确要停"完全相反。所以这里正常返回 + `stopped` 标志。
+        # 插话：停当前模型输出，下一轮从库里读用户刚写的那条消息。
+        # 不注入模板，避免和用户原话重复。
+        _steer = interrupt_bus.take_steer(session.id)
+        if _steer:
+            if text:
+                _m = chat_service.append_assistant_message(
+                    db, session=session, content=text, reasoning=reasoning,
+                    surface="process",
+                )
+                result.messages.append(_m)
+                db.commit()
+                await _emit_message(emit, _m)
+            await _emit_phase(emit, "resume", round_index, reason="user")
+            continue
+
         _stop = interrupt_bus.stop_requested(session.id)
         _note = None if _stop else interrupt_bus.take_note(session.id)
         if _stop or _note is not None:
@@ -5086,6 +5101,21 @@ async def resume_approved(
         # 为什么不抛异常：抛异常会被 `_run_guarded` 当成"中途断了"记成
         # `interrupted`，而 `interrupted` 会被后台 `resumer` 自动接手 ——
         # 与"用户明确要停"完全相反。所以这里正常返回 + `stopped` 标志。
+        # 插话：停当前模型输出，下一轮从库里读用户刚写的那条消息。
+        # 不注入模板，避免和用户原话重复。
+        _steer = interrupt_bus.take_steer(session.id)
+        if _steer:
+            if text:
+                _m = chat_service.append_assistant_message(
+                    db, session=session, content=text, reasoning=reasoning,
+                    surface="process",
+                )
+                result.messages.append(_m)
+                db.commit()
+                await _emit_message(emit, _m)
+            await _emit_phase(emit, "resume", round_index, reason="user")
+            continue
+
         _stop = interrupt_bus.stop_requested(session.id)
         _note = None if _stop else interrupt_bus.take_note(session.id)
         if _stop or _note is not None:
@@ -5547,6 +5577,8 @@ async def _run_guarded_active(
         turn_run_store.finish_incomplete(db, run)
     else:
         turn_run_store.finish(db, run, status="done")
+    # 插话/中断信号不能泄漏到下一轮。
+    interrupt_bus.clear(session.id)
     db.commit()
     return result
 

@@ -1309,7 +1309,7 @@ export function ChatPage() {
         const outcome = await interject(active.id, content)
         if (outcome === 'ok') {
           showToast({
-            message: t('chat.a.interjected', undefined, '已插话；正在跑的轮次到下一轮会读到'),
+            message: t('chat.a.interjected', undefined, '已插话：当前输出会停一下，按新要求继续'),
             tone: 'ok',
           })
         }
