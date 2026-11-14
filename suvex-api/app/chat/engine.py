@@ -3485,6 +3485,19 @@ def _auto_approve_active(session: Any) -> bool:
 ALWAYS_APPROVAL_TOOLS: frozenset[str] = frozenset({"add_mcp_server"})
 
 
+def _must_approve(session: Any, name: str, gate_on: bool) -> bool:
+    """这一条工具调用现在要不要挂起等确认。
+
+    `add_mcp_server` 仍受「自动放行」窗口约束：用户显式选了 1/4/8 小时
+    自动放行，就是授权这段时间内的有副作用动作。否则那个下拉对这条
+    工具永远无效 —— 界面上写着“自动放行”，点了却还是弹确认。
+    窗口外仍然强制确认，不因为“直接执行”而放行 spawn 子进程。
+    """
+    if name in ALWAYS_APPROVAL_TOOLS and not _auto_approve_active(session):
+        return True
+    return gate_on and _needs_approval(name)
+
+
 def _needs_approval(name: str) -> bool:
     """这个工具在开了「人工审批」时要不要先挂起。
 
@@ -4760,7 +4773,7 @@ async def run_turn(
             #   工具会让界面上同时挂起多个确认框，而且它们的顺序取决于
             #   模型而不是用户。停下来，等用户决定，由 `resume_approved`
             #   接着跑。
-            if (gate_on and _needs_approval(name)) or name in ALWAYS_APPROVAL_TOOLS:
+            if _must_approve(session, name, gate_on):
                 pending = chat_service.mark_awaiting_approval(
                     db, session=session, tool_name=name, tool_args=args
                 )
@@ -5400,7 +5413,7 @@ async def resume_approved(
             return result
 
         for name, args in actions:
-            if (gate_on and _needs_approval(name)) or name in ALWAYS_APPROVAL_TOOLS:
+            if _must_approve(session, name, gate_on):
                 pending = chat_service.mark_awaiting_approval(
                     db, session=session, tool_name=name, tool_args=args
                 )
