@@ -274,6 +274,7 @@ class SlabMatchDriver:
                 name=str(item.get("name") or ""),
                 url=str(item.get("url") or ""),
                 ext=str(item.get("ext") or ""),
+                size=_as_int(item.get("size") or item.get("file_size") or item.get("bytes")),
             )
             for item in files
             if isinstance(item, dict) and item.get("url")

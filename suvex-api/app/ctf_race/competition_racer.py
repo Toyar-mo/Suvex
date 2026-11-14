@@ -258,6 +258,33 @@ class CompetitionRacer:
         for t in tasks:
             rid = _pick(t, "remote_id", "remoteId")
             self._remote_cache[str(rid)] = t        # 缓存原始快照
+            attachments = _pick(t, "attachments", default=[]) or []
+            known = [getattr(a, "size", None) for a in attachments]
+            attachment_bytes = (
+                sum(v for v in known if isinstance(v, int) and v >= 0)
+                if any(isinstance(v, int) and v >= 0 for v in known)
+                else None
+            )
+            if attachment_bytes is None and attachments:
+                # 平台没报大小时，用同步已经落盘的文件大小；还没下载就保持
+                # unknown（调度器会把它排到最后，而不是误当 0 塞到最前）。
+                try:
+                    from app.kernel import service as kernel_service
+                    from app.kernel.attachments import attachment_root
+
+                    with self._session_factory() as db:
+                        local = kernel_service.get_challenge_by_remote_id(db, str(rid))
+                    if local is not None:
+                        root = attachment_root(local.id)
+                        if root.is_dir():
+                            total = sum(
+                                p.stat().st_size
+                                for p in root.iterdir()
+                                if p.is_file() and not p.name.endswith(".sha256")
+                            )
+                            attachment_bytes = total if total > 0 else None
+                except Exception:  # noqa: BLE001 - 大小只影响排序，不能影响拉题
+                    attachment_bytes = None
             out.append(
                 {
                     "remote_id": rid,
@@ -266,6 +293,7 @@ class CompetitionRacer:
                     "is_open": bool(_pick(t, "is_open", "isOpen", default=True)),
                     "category": _pick(t, "category", default=""),
                     "description": _pick(t, "description", default=""),
+                    "attachment_bytes": attachment_bytes,
                     "_remote": t,
                 }
             )

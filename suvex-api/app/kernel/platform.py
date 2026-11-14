@@ -61,11 +61,15 @@ from typing import Any, Protocol, runtime_checkable
 
 @dataclass(frozen=True, slots=True)
 class RemoteAttachment:
-    """一个附件。字段名照抄比赛平台文档（`name` / `url` / `ext`）。"""
+    """一个附件。字段名照抄比赛平台文档（`name` / `url` / `ext`）。
+
+    `size` 不是所有平台都有；没有时保持 `None`，调度器不能把它当作 0。
+    """
 
     name: str
     url: str
     ext: str = ""
+    size: int | None = None
 
 
 @dataclass(frozen=True, slots=True)

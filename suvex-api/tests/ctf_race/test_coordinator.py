@@ -277,3 +277,31 @@ async def test_snapshot_shape():
     snap = coord.snapshot()
     assert "a" in snap and snap["a"]["stage"] == "solved"
     assert snap["a"]["running"] is False
+
+
+async def test_small_attachments_are_solved_before_large_ones():
+    """MISC 353MB 不能和几 KB 的题抢同一波并发；小附件先解。"""
+    launched: list[str] = []
+
+    async def list_fn():
+        return [
+            {"remote_id": "big", "title": "big", "attachment_bytes": 353_000_000},
+            {"remote_id": "small", "title": "small", "attachment_bytes": 12_000},
+            {"remote_id": "unknown", "title": "unknown"},
+        ]
+
+    def make_fn(state):
+        launched.append(state.remote_id)
+
+        class SlowSwarm:
+            async def run(self_inner):
+                await asyncio.sleep(0.01)
+                return SwarmResult(challenge="c", winner_model="m", flag="flag{x}")
+
+        return SlowSwarm()
+
+    coord = MatchCoordinator(
+        list_challenges=list_fn, make_swarm=make_fn, max_concurrent=1, poll_interval=0
+    )
+    await coord.run_until_idle()
+    assert launched == ["small", "big", "unknown"], launched

@@ -66,6 +66,9 @@ class ChallengeState:
     #:
     #: ★ v1.73：它决定**并发出发的顺序**，不只是显示用。见 `_next_pending`。
     category: str = ""
+    #: 附件总字节数；`None` = 平台没给且本地还没下载，不能当 0。
+    #: 小的先解，未知的排最后，避免 353MB 的包占住并发名额。
+    attachment_bytes: int | None = None
     stage: ChallengeStage = ChallengeStage.PENDING
     winner_model: str | None = None
     flag: str | None = None
@@ -158,6 +161,7 @@ class MatchCoordinator:
                 "remoteId": cid,
                 "title": st.title,
                 "category": st.category,
+                "attachmentBytes": st.attachment_bytes,
                 "stage": st.stage.value,
                 "winnerModel": st.winner_model,
                 "flag": st.flag,
@@ -275,7 +279,15 @@ class MatchCoordinator:
                     running_by_category.get(st.category, 0) + 1
                 )
 
-        pending.sort(key=lambda item: running_by_category.get(item[1].category, 0))
+        # 小附件优先；大小未知的排最后。同大小再按“当前分类在跑的数量”
+        # 分散，保留 v1.73 的跨分类覆盖。
+        pending.sort(
+            key=lambda item: (
+                0 if item[1].attachment_bytes is not None else 1,
+                item[1].attachment_bytes or 0,
+                running_by_category.get(item[1].category, 0),
+            )
+        )
         return pending[0][0]
 
     def _launch(self, cid: str) -> None:
@@ -332,6 +344,11 @@ class MatchCoordinator:
             st = self._states.setdefault(cid, ChallengeState(remote_id=cid))
             st.title = _field(ch, "title", default=st.title) or st.title
             st.category = _field(ch, "category", default=st.category) or st.category
+            raw_bytes = _field(ch, "attachment_bytes", "attachmentBytes", default=None)
+            if isinstance(raw_bytes, int) and raw_bytes >= 0:
+                st.attachment_bytes = raw_bytes
+            elif st.attachment_bytes is None:
+                st.attachment_bytes = None
             if _is_solved(ch):
                 # 平台已解（可能网页手交/别的实例解的）→ 跳过，别浪费额度
                 if st.stage not in (ChallengeStage.SOLVED,):
