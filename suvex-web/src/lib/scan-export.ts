@@ -21,7 +21,7 @@ import { scanStatusLabel, totalFindings } from '@/data/scan'
 /** CSV 字段转义：含逗号/引号/换行的值必须用引号包起来，内部引号翻倍。 */
 function cell(value: string): string {
   // Excel/Sheets 会把 = + - @ 开头的单元格当公式执行；目标名来自外部扫描。
-  const safe = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value
+  const safe = /^[=+\-@\t\r\n]/.test(value) ? `'${value}` : value
   if (/[",\n\r]/.test(safe)) {
     return `"${safe.replace(/"/g, '""')}"`
   }

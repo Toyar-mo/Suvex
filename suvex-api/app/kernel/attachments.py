@@ -336,7 +336,10 @@ def _safe_url(url: str) -> str:
     """日志用的 URL：去掉 query/fragment 和 userinfo，避免把签名/凭据打出来。"""
     parts = urlsplit(url)
     host = parts.hostname or ""
-    port = f":{parts.port}" if parts.port else ""
+    try:
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:  # 端口不是数字时不要因为日志辅助函数把整批下载打断
+        port = ""
     path = parts.path or ""
     return f"{parts.scheme}://{host}{port}{path}"
 
@@ -363,9 +366,11 @@ def _is_official(url: str, allowed_domains: Collection[str] = ()) -> bool:
     # 自己校验，否则出题人可以把附件 URL 指向云元数据/内网。
     try:
         assert_allowed_target(url)
-    except KernelError:
+        parts = urlsplit(url)
+        _ = parts.port  # 非法端口（`:bad`）在这里抛 ValueError
+        host = (parts.hostname or "").lower().rstrip(".")
+    except (KernelError, ValueError):
         return False
-    host = (urlsplit(url).hostname or "").lower().rstrip(".")
     if not host or hostguard.is_blocked_host(host):
         return False
     official = (*CTF2_OFFICIAL_HOSTS, *allowed_domains)

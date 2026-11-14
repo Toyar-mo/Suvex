@@ -731,7 +731,7 @@ def _csv_cell(value: str) -> str:
     Excel/Sheets 会把以 `= + - @` 或制表符开头的单元格当公式执行。
     漏洞标题、目标、扫描摘要都来自外部扫描结果，不能被当成公式。
     """
-    if value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+    if value[:1] in ("=", "+", "-", "@", "\t", "\r", "\n"):
         value = "'" + value
     if any(ch in value for ch in (",", '"', "\n", "\r")):
         return '"' + value.replace('"', '""') + '"'

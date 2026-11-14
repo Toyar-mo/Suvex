@@ -755,3 +755,8 @@ def test_attachment_log_url_drops_query_and_userinfo() -> None:
     )
     assert safe == "https://ctf2-files.dasctf.com/a.zip"
     assert "secret" not in safe and "SECRET" not in safe
+
+
+def test_malformed_port_cannot_crash_the_attachment_guard() -> None:
+    assert attachments._is_official("http://ctf2.dasctf.com:bad/a.zip") is False
+    assert attachments._safe_url("http://ctf2.dasctf.com:bad/a.zip") == "http://ctf2.dasctf.com/a.zip"
