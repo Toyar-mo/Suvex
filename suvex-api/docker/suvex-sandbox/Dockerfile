@@ -1210,6 +1210,25 @@ RUN set -eux; \
     echo "P0/P1 自检通过"
 
 # ══════════════════════════════════════════════════════════
+# 9.1) Node / protoc（2026-11-15）
+# ══════════════════════════════════════════════════════════
+#
+# 逆向技能里有两类常用入口：
+#   · js-reverse —— 本地补环境复现；没有 node 时只能退回 Python。
+#   · protocol-reverse —— `protoc --decode_raw` 是最快的未知 protobuf 分诊。
+#
+# 都是 apt 包，放在靠后的一层，避免改这一层时把前面的工具缓存全部打掉。
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nodejs npm protobuf-compiler \
+ && rm -rf /var/lib/apt/lists/*
+RUN set -eux; \
+    node --version; \
+    npm --version; \
+    protoc --version; \
+    echo "Node/protoc 自检通过"
+
+# ══════════════════════════════════════════════════════════
 # 10) 渗透 / 逆向补齐（v1.79，2026-11-09）
 # ══════════════════════════════════════════════════════════
 #

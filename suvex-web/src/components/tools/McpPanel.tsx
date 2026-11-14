@@ -73,6 +73,66 @@ function emptyDraft(): McpServerDraft {
   }
 }
 
+/**
+ * 常用 MCP 模板只负责**预填**，不自动保存。
+ *
+ * 端口/启动方式因插件版本而异，所以 `notes` 必须写清“以实际监听为准”；
+ * 直接保存一条没验证过的连接，会制造“配了但不生效”的假象。
+ */
+interface McpPreset {
+  id: string
+  label: string
+  name: string
+  type: McpServer['type']
+  command: string
+  args: string[]
+  url: string
+  notes: string
+}
+
+const MCP_PRESETS: readonly McpPreset[] = [
+  {
+    id: 'burp',
+    label: 'Burp Suite',
+    name: 'burp',
+    type: 'http',
+    command: '',
+    args: [],
+    url: 'http://127.0.0.1:9876/sse',
+    notes: '需在 Burp 安装 MCP 插件并启用 HTTP/SSE；端口以插件实际监听为准。',
+  },
+  {
+    id: 'ida',
+    label: 'IDA Pro',
+    name: 'ida',
+    type: 'http',
+    command: '',
+    args: [],
+    url: 'http://127.0.0.1:13337/mcp',
+    notes: '需在 IDA 中启动 ida-pro-mcp / IDA MCP 服务；端口以其实际监听为准。',
+  },
+  {
+    id: 'ghidra',
+    label: 'Ghidra',
+    name: 'ghidra',
+    type: 'http',
+    command: '',
+    args: [],
+    url: 'http://127.0.0.1:8080/mcp',
+    notes: '需启动 GhidraMCP 插件；不同插件默认端口不同，以实际监听为准。',
+  },
+  {
+    id: 'chrome-devtools',
+    label: 'Chrome DevTools',
+    name: 'chrome-devtools',
+    type: 'stdio',
+    command: 'npx',
+    args: ['-y', 'chrome-devtools-mcp@latest'],
+    url: '',
+    notes: 'stdio 模板；需要宿主有 Node/npx 和 Chromium。首次 npx 会下载包。',
+  },
+]
+
 /** 已保存的连接 → 编辑用草稿。`env`/`headers` 恒为空、`preserve*` 恒为真。 */
 function draftOf(server: McpServer): McpServerDraft {
   return {
@@ -117,6 +177,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
   const [timeoutText, setTimeoutText] = useState('')
   const [formError, setFormError] = useState<string | null>(null)
   const [testing, setTesting] = useState(false)
+  const [preset, setPreset] = useState('')
   const [testResult, setTestResult] = useState<McpTestResult | null>(null)
   /**
    * 已保存连接的**逐条试连结果**（v1.79）。
@@ -169,6 +230,28 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
     setTimeoutText('')
     setFormError(null)
     setTestResult(null)
+  }
+
+  function startPreset(presetId: string) {
+    const item = MCP_PRESETS.find((entry) => entry.id === presetId)
+    if (!item) return
+    const next = emptyDraft()
+    next.name = item.name
+    next.type = item.type
+    next.command = item.command
+    next.args = [...item.args]
+    next.url = item.url
+    next.notes = item.notes
+    setDraft(next)
+    setEditingName(null)
+    setArgsText(item.args.join(' '))
+    setEnvText('')
+    setHeadersText('')
+    setToolsText('')
+    setTimeoutText('')
+    setFormError(null)
+    setTestResult(null)
+    setPreset('')
   }
 
   function startEdit(server: McpServer) {
@@ -302,6 +385,18 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
               </>
             )}
           </span>
+          <Select
+            value={preset}
+            options={[
+              { value: '', label: t('tools.mcp.preset', undefined, '从模板添加') },
+              ...MCP_PRESETS.map((item) => ({ value: item.id, label: item.label })),
+            ]}
+            onChange={startPreset}
+            disabled={saving || draft !== null}
+            size="sm"
+            ariaLabel={t('tools.mcp.preset', undefined, '从模板添加')}
+            className="w-36"
+          />
           <Button
             size="sm"
             variant="secondary"
@@ -455,6 +550,7 @@ export function McpPanel({ servers, saving, error, onSave, onTest }: McpPanelPro
                   { value: 'http', label: t('tools.mcp.typeHttp') },
                 ]}
                 onChange={(type) => setDraft({ ...draft, type })}
+                ariaLabel={t('tools.mcp.typeLabel')}
               />
             </label>
           </div>
