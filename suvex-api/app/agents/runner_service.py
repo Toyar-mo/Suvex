@@ -52,6 +52,7 @@ WORKER_TOOLS = (
     "claim_agent_intent",
     "finish_agent_intent",
     "prove_agent_goal",
+    "request_scope_approval",
 )
 #: 复测/验证任务额外需要的工具。worker 默认工具里没有它们，而这两种角色
 #: 的提示词明确要求“先读漏洞、再写回结论”—— 不补进来，按钮能点、活干不了。
