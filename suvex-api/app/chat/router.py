@@ -721,7 +721,24 @@ async def live_snapshot(
     service.get_session_or_404(
         db, session_id=session_id, created_by=_owner(identity)
     )
-    frames, next_cursor, ended = await chat_live.hub.snapshot(session_id, after=after)
+    # 长轮询：没有新帧时在服务端等，最多 20 秒。
+    #
+    # ★ 为什么服务端等，而不是前端 setTimeout 循环：Tern 的 WebView 会
+    #   把后台标签的定时器压到很晚，表现为「接口请求了、界面几秒不动」。
+    #   网络请求本身不受这个节流影响；让等待发生在服务端，响应一到就
+    #   立刻发下一次请求，前端不需要定时器。
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 20.0
+    frames: list[tuple[str, dict[str, object]]] = []
+    next_cursor = after
+    ended = False
+    while True:
+        frames, next_cursor, ended = await chat_live.hub.snapshot(
+            session_id, after=after
+        )
+        if frames or ended or loop.time() >= deadline:
+            break
+        await asyncio.sleep(0.1)
     return {
         "frames": [{"event": event, "data": payload} for event, payload in frames],
         "next": next_cursor,

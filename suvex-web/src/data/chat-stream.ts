@@ -247,35 +247,47 @@ function pollLiveFrames(
     }
     const onAbort = () => stop(false)
     const tick = async () => {
-      if (stopped) return
-      try {
-        const response = await fetch(
-          `${API_BASE_URL}${API_PREFIX}/chat/sessions/${sessionId}/live?after=${after}`,
-          { credentials: 'include', signal },
-        )
-        if (!response.ok) {
-          stop(false)
-          return
+      while (!stopped) {
+        try {
+          // 服务端会在这里等新帧（长轮询），所以下一次请求紧接着发，
+          // 不依赖 setTimeout —— 内嵌 WebView 的定时器节流打不到它。
+          const response = await fetch(
+            `${API_BASE_URL}${API_PREFIX}/chat/sessions/${sessionId}/live?after=${after}`,
+            { credentials: 'include', signal },
+          )
+          if (!response.ok) {
+            stop(false)
+            return
+          }
+          const payload = (await response.json()) as {
+            frames?: Array<{ event?: string; data?: Record<string, unknown> }>
+            next?: number
+            ended?: boolean
+          }
+          let took = 0
+          for (const frame of payload.frames ?? []) {
+            if (!frame.event || !frame.data) continue
+            took += 1
+            onEvent({ event: frame.event, data: frame.data })
+          }
+          after = typeof payload.next === 'number' ? payload.next : after
+          if (payload.ended) {
+            stop(true)
+            return
+          }
+          // 老后端/空帧时避免忙等；新后端几乎不会走到这里。
+          if (took === 0) {
+            await new Promise((resolve) => {
+              timer = window.setTimeout(resolve, 80)
+            })
+          }
+        } catch {
+          if (stopped) return
+          await new Promise((resolve) => {
+            timer = window.setTimeout(resolve, 200)
+          })
         }
-        const payload = (await response.json()) as {
-          frames?: Array<{ event?: string; data?: Record<string, unknown> }>
-          next?: number
-          ended?: boolean
-        }
-        for (const frame of payload.frames ?? []) {
-          if (!frame.event || !frame.data) continue
-          onEvent({ event: frame.event, data: frame.data })
-        }
-        after = typeof payload.next === 'number' ? payload.next : after
-        if (payload.ended) {
-          stop(true)
-          return
-        }
-      } catch {
-        if (!stopped) timer = window.setTimeout(tick, 150)
-        return
       }
-      if (!stopped) timer = window.setTimeout(tick, 120)
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     void tick()
@@ -351,22 +363,16 @@ export async function streamTurn(options: StreamTurnOptions): Promise<boolean> {
   }
 
   if (prefersPolling()) {
-    try {
-      await response.body.cancel()
-    } catch {
-      // 已经结束/不可取消都无妨
-    }
+    // 不要 await：部分 WebView 的 cancel 会等到响应体结束，
+    // 那正好把「立即开始轮询」拖到结束之后。
+    void response.body.cancel().catch(() => {})
     return pollLiveFrames(sessionId, onEvent, signal)
   }
 
   if (prefersEventSource()) {
     // POST 只负责启动轮次；响应体不再读取（服务器在客户端断开后仍继续跑）。
     // 真正的逐帧通道改走 GET EventSource，绕开 WebKit 的 fetch 缓冲。
-    try {
-      await response.body.cancel()
-    } catch {
-      // 已经结束/不可取消都无妨
-    }
+    void response.body.cancel().catch(() => {})
     return readEventSource(sessionId, onEvent, signal)
   }
 
