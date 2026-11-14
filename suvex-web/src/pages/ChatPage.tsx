@@ -2691,26 +2691,16 @@ export function ChatPage() {
           否则长工具（几分钟）期间界面完全静止，用户会以为卡死；底部虽然
           有「中断」，但它不解释“还在推进”。
         */}
-        {active && serverRunning && !sendingHere && (
+        {active && turnRunningHere && (
           <div className="shrink-0 px-3 pb-1" data-server-running-status>
             <div className="mx-auto flex w-full max-w-[880px] items-center gap-2 rounded-md border border-line/60 bg-surface-raised/25 px-3 py-1.5 text-2xs text-ink-muted">
               <Loader2 size={12} strokeWidth={2} className="animate-spin text-accent" aria-hidden="true" />
               <span className="shrink-0 font-medium text-ink">
-                {t('chat.a.serverRunning', undefined, '服务端仍在执行这一轮')}
+                {t('chat.a.serverRunning', undefined, '这一轮仍在执行')}
               </span>
-              {serverTurn && (
-                <>
-                  <span aria-hidden="true" className="text-ink-ghost">|</span>
-                  <span className="shrink-0 tabular-nums">
-                    {t('chat.a.serverRound', { n: serverTurn.roundIndex + 1 }, `第 ${serverTurn.roundIndex + 1} 轮`)}
-                  </span>
-                  <span className="shrink-0 tabular-nums text-ink-faint">
-                    {t('chat.a.serverTools', { n: serverTurn.toolsUsed }, `· ${serverTurn.toolsUsed} 次工具`)}
-                  </span>
-                </>
-              )}
+              <span aria-hidden="true" className="text-ink-ghost">|</span>
               <span className="min-w-0 flex-1 truncate text-ink-faint">
-                {t('chat.a.serverWait', undefined, '工具返回后会继续输出，可点「中断」停下')}
+                {t('chat.a.serverWait', undefined, '工具返回后会继续输出；可点「中断」停下')}
               </span>
             </div>
           </div>

@@ -109,6 +109,8 @@ function AssistantTurnImpl({
   hideWork = false,
   /** 回合开始时刻：live 时用来显示「已等待 N 秒」。 */
   startedAt = null,
+  /** 是否在回合内部画 LiveStatus；ChatPage 用底部常驻状态时关掉它。 */
+  showLiveStatus = true,
 }: {
   items: ChatMessage[]
   live?: boolean
@@ -143,6 +145,7 @@ function AssistantTurnImpl({
   sessionId?: string
   hideWork?: boolean
   startedAt?: string | null
+  showLiveStatus?: boolean
 }) {
   const { t, locale } = useI18n()
   const answers = items.filter(isAnswer)
@@ -248,7 +251,7 @@ function AssistantTurnImpl({
         />
       )}
 
-      {live && (
+      {live && showLiveStatus && (
         <LiveStatus
           phaseText={phaseText}
           startedAt={startedAt}
