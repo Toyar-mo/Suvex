@@ -1285,8 +1285,8 @@ RUN set -eux; \
     rm -f /tmp/ghidra_ls.txt; \
     echo "渗透/逆向补齐自检通过"
 
-# 恢复非 root 用户：runner 依赖 uid=1000 才能写 /work（见上文 chown）。
-USER solver
+# OSINT venv 要写 /opt，仍用 root；装完再切回 solver。
+USER root
 
 # ── 云 / AD 工具（v1.82）────────────────────────────────────
 #
@@ -1308,3 +1308,6 @@ RUN set -eux; \
     certipy -h >/dev/null; \
     aws --version; \
     kubectl version --client
+
+# 恢复非 root：runner 依赖 uid=1000 才能写 /work。
+USER solver

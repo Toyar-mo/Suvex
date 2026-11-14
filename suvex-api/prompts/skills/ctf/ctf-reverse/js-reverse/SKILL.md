@@ -16,7 +16,7 @@ description: 前端 JavaScript 签名/加密参数逆向：浏览器观察、运
 
 - 定位登录/接口签名、加密参数、风控字段；
 - 找出某个 XHR/fetch/WebSocket 的触发点与参数来源；
-- 把浏览器里观察到的算法带回 Python（或安装后的 Node）做本地复现；
+- 把浏览器里观察到的算法带回 Node 做本地复现；
 - 处理 source map、压缩/混淆代码、WASM 或 worker 中的算法。
 
 不适用：纯二进制/APK 反编译（转 `ctf-reverse`、`apk-reverse`、`ghidra-reverse`）。
@@ -26,12 +26,11 @@ description: 前端 JavaScript 签名/加密参数逆向：浏览器观察、运
 Suvex 沙箱只有：
 
 - `browser`：真实 Chromium，`open / snapshot / eval / get / wait / screenshot`；
-- `run_shell`：Python、curl、文件读写；
+- `run_shell`：Node、npm、Python、curl、文件读写；
 - `/work/persist`：跨容器回收的产物目录。
 
-**没有**外部 JS MCP、CDP 断点服务；标准镜像也**没有 Node**。需要运行时
-观察时用 `browser eval` 注入 hook；本地复现优先用 Python 重写，确实需要
-Node 时先在沙箱里 `apt-get install -y nodejs`，不要假设 `node` 已存在。
+**没有**外部 JS MCP、CDP 断点服务。需要运行时观察时用 `browser eval`
+注入 hook；本地复现优先用 Node/Python。
 
 ## 工作流
 
@@ -72,14 +71,14 @@ window.fetch = async (...args) => {
 ### 3. Rebuild：把算法带回本地
 
 - 从 source map / 格式化后的脚本提取纯函数，优先复制最小依赖闭包；
-- 用 Python 或（安装后的）Node 补环境：只补实际用到的字段；
+- 用 Node 补环境：`window`、`document`、`location`、`navigator`、
+  `crypto`、`TextEncoder` 只补实际用到的字段；
 - 先用固定输入对齐浏览器输出，再逐步替换环境；
 - 产物写到 `/work/persist/js-reverse/`：脚本、输入样本、运行命令、输出摘要。
 
 ```bash
 mkdir -p /work/persist/js-reverse
-# 默认用 Python 复现；没有 node 时不要直接写 node repro.js
-python3 /work/persist/js-reverse/repro.py
+node /work/persist/js-reverse/repro.js
 ```
 
 ### 4. Verify：证据闭环
@@ -94,7 +93,7 @@ python3 /work/persist/js-reverse/repro.py
 
 - **只看到 minified 名字**：先找 source map，再看调用栈；不要凭变量名猜。
 - **签名只在 worker / WASM 里**：先定位 worker 脚本或 `.wasm` 加载点，
-  再决定是否用 Python/WASI 或安装 Node 后复现。
+  再决定是否用 Node/WASI 复现。
 - **反调试**：页面可能检测 devtools/函数 toString；用最小 hook，
   不要整页替换。
 - **时间/随机数**：把可变量固定，分别验证算法与随机源。

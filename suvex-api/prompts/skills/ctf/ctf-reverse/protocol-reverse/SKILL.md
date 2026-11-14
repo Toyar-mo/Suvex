@@ -55,8 +55,7 @@ magic, ver, n = struct.unpack(">4sBH", frame[:7])
 
 ### 3. 序列化与加密
 
-- Protobuf：先 `protoc --decode_raw`（镜像没有该命令时用 Python protobuf
-  或手工 varint 解析；不要假装命令存在）；
+- Protobuf：先 `protoc --decode_raw`；需要 .proto 时再用 protoc 生成；
 - gRPC：HTTP/2 headers + protobuf body，先看 status/trailer；
 - 加密：找密钥派生（客户端 so/dll/JS）→ 联合 `ghidra-reverse`、
   `js-reverse`、`apk-reverse`；
@@ -81,5 +80,5 @@ MUST 产出：
 | `ghidra-decompile` | 客户端序列化函数 | 见 `ghidra-reverse` |
 | `browser` | WebSocket/HTTP 观察 | 需要真实页面时 |
 
-不要依赖 `protoc`、ImHex、010 Editor 或 IDA MCP；需要时先确认命令存在，
-不存在就写 Python 解析或在报告里明确缺失。
+`protoc` 已装；ImHex、010 Editor、IDA MCP 没有，需要时用 Python/tshark
+或明确说明缺失。
