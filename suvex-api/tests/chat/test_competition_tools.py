@@ -317,3 +317,22 @@ def test_friendly_error_keeps_generic_failure_generic() -> None:
     assert "拉比赛平台题库失败" in msg
     assert "connect timed out" in msg
     assert "accesskey" not in msg
+
+
+def test_friendly_error_tls_failure_tells_model_not_to_retry() -> None:
+    exc = RuntimeError(
+        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+        "Hostname mismatch, certificate is not valid for 'ycb-test.dasctf.com'."
+    )
+    msg = competition.friendly_driver_error(exc, "拉比赛平台题库")
+    assert "证书" in msg
+    assert "不要重试" in msg
+    assert "curl" in msg
+
+
+def test_prompt_only_uses_competition_tools_on_explicit_request() -> None:
+    from app.chat.prompts import build_system_prompt
+
+    text = build_system_prompt(persona=None, require_approval=False)
+    assert "默认不要碰比赛平台" in text
+    assert "不要重试" in text

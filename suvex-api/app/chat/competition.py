@@ -120,6 +120,21 @@ def friendly_driver_error(exc: Exception, action: str) -> str:
             "的比赛账号发的、且已在平台上启用 agent 访问。平台原话："
             f"{text}"
         )
+    if any(
+        k in lowered
+        for k in (
+            "certificate verify failed",
+            "hostname mismatch",
+            "certificate is not valid",
+            "ssl:",
+        )
+    ):
+        return (
+            f"{action}失败：比赛平台的 TLS 证书校验失败（域名不匹配或证书无效）。"
+            "这是平台地址/证书配置问题，**不要重试，也不要用 curl 绕过证书**；"
+            "请管理员检查平台 base URL 与证书。平台原话："
+            f"{text}"
+        )
     return f"{action}失败：{text}"
 
 

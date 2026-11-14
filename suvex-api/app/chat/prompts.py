@@ -150,7 +150,9 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
             "列出**比赛平台**（羊城杯那类 CTF 比赛平台）上的题目：题号、标题、"
             "分值、分类、是否已解、是否已开放。给 `remoteId` 就顺带查那道题的"
             "靶机连接信息（IP/端口/账号密码）。"
-            "⚠️ 比赛当天刷题用**这个**，不是 `list_challenges`（那个是我们自己库里的题）。"
+            "⚠️ **只在用户明确要求看比赛平台/交比赛 flag/比赛托管时调用**。"
+            "普通 CTF、附件题、本地题库、代码审计题不要调用它；"
+            "第一次失败（证书/权限/网络）就停止，不要重试，也不要用 curl 绕过证书。"
         ),
         params="remoteId（可选，给了就查这道题的靶机环境）",
     ),
@@ -175,7 +177,7 @@ CHAT_TOOLS: tuple[ChatToolSpec, ...] = (
             "它在后台跑（一场可能几十分钟），起完立即返回，进度用 `competition_race_status` 查、"
             "要停用 `stop_competition_race`。"
             "⚠️ 只处理**比赛平台**的题（与 `fetch_competition_challenges` 同一个平台），"
-            "不是本地题库。同一时刻只能有一场，已在跑会告诉你。"
+            "不是本地题库。只有用户明确要求整场比赛托管时才调用。同一时刻只能有一场，已在跑会告诉你。"
         ),
         params=(
             "models（可选，模型名列表，默认就用当前默认模型）、"
@@ -674,6 +676,7 @@ _TOOL_PARAM_SCHEMAS: dict[str, dict[str, object]] = {
     },
     "fetch_competition_challenges": {
         "type": "object",
+        "description": "仅当用户明确要求看比赛平台时调用；普通 CTF/附件题/本地题库不要用。失败一次就停，不要重试或用 curl 绕过证书。",
         "properties": {
             "remoteId": {"type": "string", "description": "给这道题的 id 就顺带查靶机环境（可选）"},
         },
@@ -2183,9 +2186,17 @@ ProjectDiscovery 的 httpx 扫描器（真实命令是 `httpx -silent -sc -title
 - 会改平台数据的：`save_skill`、`delete_skill`、`add_mcp_server`
 - 目标不明确："扫一下内网" 但没说哪个网段 —— 别猜。
 
-## 打比赛（羊城杯这类平台）
+## 比赛平台（仅限用户明确要求时）
 
-比赛当天你在对话页里刷题。有两条路，**优先用原生工具**：
+**默认不要碰比赛平台。** 普通 CTF、附件题、本地题库、代码审计题都不调用
+`fetch_competition_challenges` / `submit_flag` / `start_competition_race`。
+只有用户明确说“看比赛平台的题 / 交这个 flag / 整场比赛托管”时才用。
+
+平台工具一旦返回**证书校验失败、域名不匹配、权限不足、网络错误**：
+立刻停止调用，把错误告诉用户并指向「设置 → 解题 / 比赛平台」。
+**不要重试，不要用 `curl` 绕过证书，也不要改参数碰运气。**
+
+如果用户明确要求刷比赛平台，优先用原生工具：
 
 1. **首选（原生工具）**：`fetch_competition_challenges` 看题 → 记下题号
    （`remoteId`）和靶机信息 → 解题 → `submit_flag` 交答案。
