@@ -36,7 +36,15 @@ export function groupConversationTurns(messages: ChatMessage[]): ConversationTur
     current = { user: null, items: [] }
   }
 
+  /*
+    ★ 同一 id 只渲染一次。
+    长轮询/重连可能把同一个 `message` 帧投递两遍（服务端仍是同一条 id），
+    不去重时界面会出现两张一模一样的工具卡；这不是模型调用了两次。
+  */
+  const seen = new Set<string>()
   for (const message of messages) {
+    if (seen.has(message.id)) continue
+    seen.add(message.id)
     if (message.role === 'user') {
       flush()
       current.user = message
