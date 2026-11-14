@@ -18,6 +18,7 @@ import { showToast } from '@/data/toast-store'
 import { copyText } from '@/lib/clipboard'
 import type { ChatMessage } from '@/data/chat'
 import { digestToolArgs } from './toolCardDigest'
+import { TerminalOutput } from './TerminalOutput'
 import { setToolExpansion, useToolExpansion } from './toolExpansion'
 
 /**
@@ -189,7 +190,7 @@ export function ToolCard({ message, compact = false }: { message: ChatMessage; c
           </div>
           {content.trim() ? (
             <pre className="max-h-[380px] overflow-auto whitespace-pre-wrap break-words bg-surface-sunken/30 px-3 py-2 font-mono text-[12px] leading-[1.7] text-ink-muted">
-              {content}
+              <TerminalOutput text={content} />
             </pre>
           ) : (
             <p className="px-3 py-2 text-xs text-ink-faint">

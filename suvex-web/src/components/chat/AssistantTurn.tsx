@@ -5,6 +5,7 @@ import { digestToolArgs } from '@/components/chat/toolCardDigest'
 import { InterjectionNote } from '@/components/chat/InterjectionNote'
 import { ApprovalCard } from '@/components/chat/ChatControls'
 import { ToolCard } from '@/components/chat/ToolCard'
+import { TerminalOutput } from '@/components/chat/TerminalOutput'
 import { WriteupMarkdown } from '@/components/writeup/WriteupMarkdown'
 import { useI18n } from '@/i18n'
 import type { ChatMessage } from '@/data/chat'
@@ -358,7 +359,7 @@ function LiveToolCard({
           ref={ref}
           className="max-h-[240px] overflow-auto border-t border-line/60 bg-surface-sunken/40 px-3 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap break-words text-ink-muted"
         >
-          {visibleOutput}
+          <TerminalOutput text={visibleOutput} />
           <span className="ml-0.5 inline-block h-3 w-[0.125rem] animate-cursor-pulse bg-ink-muted align-text-bottom" />
         </pre>
       ) : null}
