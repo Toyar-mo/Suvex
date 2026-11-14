@@ -82,11 +82,10 @@ export function PersonaDialog({
         {personas.map((persona) => {
           const personaLabel = t(`persona.${persona.id}.label`, undefined, persona.label)
           const personaSummary = t(`persona.${persona.id}.summary`, undefined, persona.summary)
-          // `null` 与 `'default'` 是同一件事（见后端 `update_settings`
-          // 那条注释），所以两者都算"选中"。
+          // 未显式选择时默认选中 Auto；旧会话的 null 也按 Auto 解释。
           const isActive =
-            persona.id === 'default'
-              ? current === null || current === 'default'
+            persona.id === 'auto'
+              ? current === null || current === 'default' || current === 'auto'
               : current === persona.id
           return (
             <li key={persona.id}>

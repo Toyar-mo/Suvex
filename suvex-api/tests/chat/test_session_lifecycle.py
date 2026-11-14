@@ -355,3 +355,10 @@ def test_unarchive_brings_it_back_with_its_messages(
     db_session.expire_all()
     rows = db_session.scalars(select(ChatMessage).where(ChatMessage.session_id == session_id)).all()
     assert len(rows) == 1
+
+
+def test_new_session_defaults_to_auto_persona(db_session: Session) -> None:
+    """未显式选择角色时，新会话默认 Auto，而不是 NULL/未选择。"""
+    session = service.create_session(db_session, created_by="user_admin")
+    db_session.commit()
+    assert session.persona == "auto"

@@ -1808,9 +1808,9 @@ export function ChatPage() {
   }, [sessions])
 
   /* 回合页脚右侧那点元信息：模型现在是谁。 */
-  const activePersonaEntry = active?.persona
-    ? (personas.find((p) => p.id === active.persona) ?? null)
-    : null
+  // 未显式选择时默认 Auto（后端也按 Auto 解释旧会话的 NULL）。
+  const activePersonaEntry =
+    personas.find((p) => p.id === (active?.persona ?? 'auto')) ?? null
   const activePersona = activePersonaEntry
   const sessionMeta = activePersonaEntry
     ? t(`persona.${activePersonaEntry.id}.label`, undefined, activePersonaEntry.label)
@@ -1863,7 +1863,9 @@ export function ChatPage() {
         title={t('chat.a11y.persona', undefined, '这个人格决定模型扮演什么角色')}
       >
         <UserRound size={11} strokeWidth={2} aria-hidden="true" />
-        {activePersona ? t(`persona.${activePersona.id}.label`, undefined, activePersona.label) : t('persona.none', undefined, '未选择角色')}
+        {activePersona
+          ? t(`persona.${activePersona.id}.label`, undefined, activePersona.label)
+          : t('persona.auto.label', undefined, 'Auto')}
       </button>
 
       <ApprovalToggle

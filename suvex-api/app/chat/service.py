@@ -174,8 +174,11 @@ def create_session(
     created_by: str,
     title: str | None = None,
     agent_task_id: str | None = None,
+    persona: str | None = None,
 ) -> ChatSession:
-    """新建一个空会话。"""
+    """新建一个空会话。未指定人格时默认 Auto。"""
+    from app.chat.prompts import DEFAULT_SESSION_PERSONA_ID
+
     session = ChatSession(
         id=new_id("chat"),
         # ★ 标题落 PostgreSQL 的 VARCHAR —— 同样存不了 NUL。前端不会传
@@ -184,6 +187,7 @@ def create_session(
         title=_scrub_nul((title or "")[:MAX_TITLE_CHARS]),
         created_by=created_by,
         agent_task_id=agent_task_id,
+        persona=persona or DEFAULT_SESSION_PERSONA_ID,
         message_count=0,
     )
     db.add(session)

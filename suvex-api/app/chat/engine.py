@@ -3429,7 +3429,9 @@ async def _build_tool_context(
         catalog = mcp_tools.McpToolCatalog()
     from app.agents import service as agents_service
 
-    allowed = agents_service.allowed_tools_for_persona(db, session.persona)
+    allowed = agents_service.allowed_tools_for_persona(
+        db, session.persona or "auto"
+    )
     if allowed_tools is not None:
         allowed = set(allowed_tools) if allowed is None else allowed & set(allowed_tools)
     return _ToolContext(
@@ -3739,7 +3741,7 @@ def _system_prompt_for(
         mounted = trimmed
 
     prompt = build_system_prompt(
-        persona=session.persona,
+        persona=session.persona or "auto",
         require_approval=bool(session.require_approval),
         mounted_skills=mounted,
         hinted_tools=hinted_tools,

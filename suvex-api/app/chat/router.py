@@ -156,7 +156,12 @@ def list_sessions(
 def create_session(
     payload: ChatSessionIn, db: DbSession, identity: Reader
 ) -> ChatSessionOut:
-    session = service.create_session(db, created_by=_owner(identity), title=payload.title)
+    session = service.create_session(
+        db,
+        created_by=_owner(identity),
+        title=payload.title,
+        persona=payload.persona,
+    )
     db.commit()
     return ChatSessionOut.model_validate(session)
 

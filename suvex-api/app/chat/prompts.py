@@ -1162,6 +1162,13 @@ PERSONA_BY_ID: dict[str, ChatPersona] = {p.id: p for p in CHAT_PERSONAS_SPEC}
 #: 没有选人格时用哪个。
 DEFAULT_PERSONA_ID = "default"
 
+#: 会话未显式选择人格时的**默认角色**。
+#:
+#: 与 `DEFAULT_PERSONA_ID` 区分：后者是 `render_persona` 的"空人格"哨兵，
+#: 这个才是用户在新建对话里看到的默认选中的角色。NULL 仍可存库（兼容旧
+#: 会话），但读取时按 Auto 解释。
+DEFAULT_SESSION_PERSONA_ID = "auto"
+
 #: ★ v1.71：人格 → 默认注入的技能包名字。
 #:
 #: 「默认调用」的含义：用户选了某个人格，就自动把对应技能包的正文塞进
