@@ -19,7 +19,7 @@ import { scanStatusLabel, totalFindings } from '@/data/scan'
  */
 
 /** CSV 字段转义：含逗号/引号/换行的值必须用引号包起来，内部引号翻倍。 */
-function cell(value: string): string {
+export function csvCell(value: string): string {
   // Excel/Sheets 会把 = + - @ 开头的单元格当公式执行；目标名来自外部扫描。
   const numeric = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)
   const safe = /^[=+\-@\t\r\n]/.test(value) && !numeric ? `'${value}` : value
@@ -49,13 +49,13 @@ export function scansToCsv(scans: Scan[]): string {
       scan.startedAt,
       scan.failureReason ?? '',
     ]
-      .map(cell)
+      .map(csvCell)
       .join(',')
   })
 
   // ★ 前缀 BOM。少了它 Excel 会用本地代码页解 UTF-8，
   //   中文列名与目标名全变成乱码 —— 而用户会以为是导出坏了。
-  return '\uFEFF' + [HEADERS.map(cell).join(','), ...rows].join('\r\n') + '\r\n'
+  return '\uFEFF' + [HEADERS.map(csvCell).join(','), ...rows].join('\r\n') + '\r\n'
 }
 
 /**

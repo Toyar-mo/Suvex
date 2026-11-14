@@ -197,15 +197,17 @@ function AccessUrl({ url }: { url: string }) {
           <Copy size={11} strokeWidth={2} aria-hidden="true" />
         )}
       </button>
-      <a
-        href={url}
-        target="_blank"
-        rel="noreferrer noopener"
-        aria-label={t('tools.kernel.env.openAria', { url })}
-        className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-accent-strong"
-      >
-        <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
-      </a>
+      {/^https?:\/\//i.test(url) && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label={t('tools.kernel.env.openAria', { url })}
+          className="shrink-0 rounded-xs p-0.5 text-ink-faint transition-ui duration-fast hover:text-accent-strong"
+        >
+          <ExternalLink size={11} strokeWidth={2} aria-hidden="true" />
+        </a>
+      )}
     </span>
   )
 }

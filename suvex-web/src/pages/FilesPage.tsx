@@ -29,6 +29,7 @@ import { T } from '@/i18n/T'
 import { cn } from '@/lib/cn'
 import { toApiError, type ApiError } from '@/lib/api'
 import { PERSIST_PREFIX, workspaceFileUrl } from '@/lib/workFiles'
+import { csvCell } from '@/lib/scan-export'
 import { showToast } from '@/data/toast-store'
 import {
   deleteFile,
@@ -515,10 +516,10 @@ export default function FilesPage() {
         String(row.sizeBytes),
         formatTimestamp(row.modifiedAt),
       ]
-        .map((cell) => `"${cell.replace(/"/g, '""')}"`)
+        .map(csvCell)
         .join(','),
     )
-    const blob = new Blob([`\uFEFF${[header.join(','), ...lines].join('\n')}`], {
+    const blob = new Blob([`\uFEFF${[header.map(csvCell).join(','), ...lines].join('\n')}`], {
       type: 'text/csv;charset=utf-8',
     })
     const url = URL.createObjectURL(blob)
