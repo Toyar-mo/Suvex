@@ -72,6 +72,15 @@ class LiveTurnHub:
         for queue in subscribers:
             queue.put_nowait(None)
 
+    async def snapshot(
+        self, session_id: str, *, after: int = 0
+    ) -> tuple[list[tuple[str, dict[str, Any]]], int, bool]:
+        """给长轮询用：返回 `(after 之后的帧, 下一个游标, 是否已结束)`。"""
+        async with self._lock:
+            frames = list(self._buffer.get(session_id, ()))
+            ended = session_id in self._ended
+        return frames[max(0, after) :], len(frames), ended
+
     async def subscribe(self, session_id: str):
         """先回放当前缓冲，再持续产出实时帧；结束/断开时退出。"""
         async with self._lock:
@@ -144,6 +153,16 @@ class RedisLiveTurnHub:
         frames, _, ended = self._keys(session_id)
         await redis.set(ended, "1", ex=REDIS_TTL_SECONDS)
         await redis.publish(f"{frames}:events", REDIS_END)
+
+    async def snapshot(
+        self, session_id: str, *, after: int = 0
+    ) -> tuple[list[tuple[str, dict[str, Any]]], int, bool]:
+        redis = await self._client()
+        frames, _, ended_key = self._keys(session_id)
+        rows = await redis.lrange(frames, 0, -1)
+        parsed = [json.loads(row) for row in rows]
+        items = [(event, payload) for _, event, payload in parsed]
+        return items[max(0, after) :], len(items), bool(await redis.get(ended_key))
 
     async def subscribe(self, session_id: str):
         redis = await self._client()

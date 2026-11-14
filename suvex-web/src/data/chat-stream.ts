@@ -156,6 +156,132 @@ export function parseSseChunk(buffer: string): { frames: TurnEvent[]; rest: stri
   return { frames, rest }
 }
 
+/**
+ * WebKit（Safari / Tern 内嵌 WKWebView）对 `fetch` 的 ReadableStream
+ * 存在缓冲：SSE 帧会攒到连接结束才交给 JS。`EventSource` 走浏览器原生
+ * SSE 实现，能逐帧回调，所以只在这种浏览器上切过去。Chromium 继续用
+ * POST 流，避免多一次连接。
+ */
+function prefersPolling(): boolean {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent
+  // Tern 的 WebView 会缓冲 fetch SSE；普通 JSON 轮询不受影响。
+  return /Edg\//i.test(ua)
+}
+
+function prefersEventSource(): boolean {
+  if (typeof EventSource === 'undefined') return false
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent
+  return /Edg\//i.test(ua) || (/AppleWebKit/i.test(ua) && !/Chrome|Chromium/i.test(ua))
+}
+
+const EVENT_NAMES = [
+  'phase',
+  'message',
+  'delta',
+  'reasoning',
+  'tool_output',
+  'tool_progress',
+  'awaiting',
+  'done',
+  'error',
+] as const
+
+function readEventSource(
+  sessionId: string,
+  onEvent: (event: TurnEvent) => void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const source = new EventSource(
+      `${API_BASE_URL}${API_PREFIX}/chat/sessions/${sessionId}/stream`,
+      { withCredentials: true },
+    )
+    let settled = false
+    let sawDone = false
+    const finish = (value: boolean) => {
+      if (settled) return
+      settled = true
+      source.close()
+      signal?.removeEventListener('abort', onAbort)
+      resolve(value)
+    }
+    const onAbort = () => finish(false)
+    const handle = (event: MessageEvent<string>, name: string) => {
+      let data: Record<string, unknown>
+      try {
+        data = JSON.parse(event.data) as Record<string, unknown>
+      } catch {
+        return
+      }
+      if (name === 'done') sawDone = true
+      onEvent({ event: name, data })
+      if (name === 'done' || name === 'error') finish(name === 'done')
+    }
+    for (const name of EVENT_NAMES) {
+      source.addEventListener(name, (event) => handle(event as MessageEvent<string>, name))
+    }
+    source.onerror = () => {
+      // `error` 既可能是服务端的自定义 error 帧，也可能是连接错误；
+      // 有 data 的已经由 addEventListener 处理。网络错误直接收尾。
+      if (!sawDone) finish(false)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
+function pollLiveFrames(
+  sessionId: string,
+  onEvent: (event: TurnEvent) => void,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  let after = 0
+  return new Promise((resolve) => {
+    let stopped = false
+    let timer: number | null = null
+    const stop = (value: boolean) => {
+      if (stopped) return
+      stopped = true
+      if (timer !== null) window.clearTimeout(timer)
+      signal?.removeEventListener('abort', onAbort)
+      resolve(value)
+    }
+    const onAbort = () => stop(false)
+    const tick = async () => {
+      if (stopped) return
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}${API_PREFIX}/chat/sessions/${sessionId}/live?after=${after}`,
+          { credentials: 'include', signal },
+        )
+        if (!response.ok) {
+          stop(false)
+          return
+        }
+        const payload = (await response.json()) as {
+          frames?: Array<{ event?: string; data?: Record<string, unknown> }>
+          next?: number
+          ended?: boolean
+        }
+        for (const frame of payload.frames ?? []) {
+          if (!frame.event || !frame.data) continue
+          onEvent({ event: frame.event, data: frame.data })
+        }
+        after = typeof payload.next === 'number' ? payload.next : after
+        if (payload.ended) {
+          stop(true)
+          return
+        }
+      } catch {
+        if (!stopped) timer = window.setTimeout(tick, 150)
+        return
+      }
+      if (!stopped) timer = window.setTimeout(tick, 120)
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    void tick()
+  })
+}
+
 export interface StreamTurnOptions {
   sessionId: string
   content: string
@@ -224,6 +350,26 @@ export async function streamTurn(options: StreamTurnOptions): Promise<boolean> {
     throw new Error('这个浏览器不支持读取流式响应。')
   }
 
+  if (prefersPolling()) {
+    try {
+      await response.body.cancel()
+    } catch {
+      // 已经结束/不可取消都无妨
+    }
+    return pollLiveFrames(sessionId, onEvent, signal)
+  }
+
+  if (prefersEventSource()) {
+    // POST 只负责启动轮次；响应体不再读取（服务器在客户端断开后仍继续跑）。
+    // 真正的逐帧通道改走 GET EventSource，绕开 WebKit 的 fetch 缓冲。
+    try {
+      await response.body.cancel()
+    } catch {
+      // 已经结束/不可取消都无妨
+    }
+    return readEventSource(sessionId, onEvent, signal)
+  }
+
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -277,6 +423,13 @@ export async function attachTurnStream(
   onEvent: (event: TurnEvent) => void,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  if (prefersPolling()) {
+    return pollLiveFrames(sessionId, onEvent, signal)
+  }
+  if (prefersEventSource()) {
+    return readEventSource(sessionId, onEvent, signal)
+  }
+
   const response = await fetch(
     `${API_BASE_URL}${API_PREFIX}/chat/sessions/${sessionId}/stream`,
     { method: 'GET', credentials: 'include', signal },

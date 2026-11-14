@@ -703,6 +703,32 @@ async def attach_message_stream(
     return StreamingResponse(gen(), media_type=SSE_MEDIA_TYPE, headers=SSE_HEADERS)
 
 
+@router.get(
+    "/chat/sessions/{session_id}/live",
+    summary="长轮询读取当前轮次的增量（给 SSE 被缓冲的浏览器）",
+)
+async def live_snapshot(
+    session_id: str,
+    db: DbSession,
+    identity: Reader,
+    after: int = 0,
+) -> dict[str, object]:
+    """返回 hub 里 `after` 之后的帧。
+
+    某些内嵌浏览器（Tern 的 WebView）会把 `text/event-stream` 缓冲到结束；
+    轮询小 JSON 不受这个行为影响。帧形状与 SSE 一致，前端复用同一个事件处理。
+    """
+    service.get_session_or_404(
+        db, session_id=session_id, created_by=_owner(identity)
+    )
+    frames, next_cursor, ended = await chat_live.hub.snapshot(session_id, after=after)
+    return {
+        "frames": [{"event": event, "data": payload} for event, payload in frames],
+        "next": next_cursor,
+        "ended": ended,
+    }
+
+
 @router.post(
     "/chat/sessions/{session_id}/messages/stream",
     summary="发一条消息，边跑边推（SSE）",
