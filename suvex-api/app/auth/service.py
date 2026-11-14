@@ -425,12 +425,17 @@ def touch_session(db: Session, session: AuthSession, *, ttl_hours: int) -> None:
 
     节流：只在距上次记录超过 60 秒时才写库。否则每个请求一次 UPDATE，
     一个开着活动页的浏览器会每秒写好几行 —— 那是纯粹的写放大。
+
+    ★ 续期有**绝对上限**：从会话创建时刻起最多 `ttl_hours`。否则一个
+      被盗的 Cookie 只要持续使用就能永久续命，"绝对过期"只是一句注释。
+      空闲过期仍然由每次使用向后推；两者取较早者。
     """
     moment = now_utc()
     if session.last_seen_at and (moment - session.last_seen_at) < timedelta(seconds=60):
         return
+    absolute_deadline = session.created_at + timedelta(hours=ttl_hours)
     session.last_seen_at = moment
-    session.expires_at = moment + timedelta(hours=ttl_hours)
+    session.expires_at = min(moment + timedelta(hours=ttl_hours), absolute_deadline)
     db.commit()
 
 

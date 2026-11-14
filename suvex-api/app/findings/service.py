@@ -722,12 +722,17 @@ EXPORT_COLUMNS = (
 
 
 def _csv_cell(value: str) -> str:
-    """CSV 转义：含逗号/引号/换行的值用引号包起来，内部引号翻倍。
+    """CSV 转义 + 公式注入防护。
 
     ⚠️ 与 `lib/scan-export.ts` 的 `cell()` 是同一套规则 ——
     前端生成的 CSV 也走它，两边口径必须一致（否则同一个单元格
     在两种导出里长得不一样）。
+
+    Excel/Sheets 会把以 `= + - @` 或制表符开头的单元格当公式执行。
+    漏洞标题、目标、扫描摘要都来自外部扫描结果，不能被当成公式。
     """
+    if value[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        value = "'" + value
     if any(ch in value for ch in (",", '"', "\n", "\r")):
         return '"' + value.replace('"', '""') + '"'
     return value

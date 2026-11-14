@@ -911,3 +911,26 @@ def test_attachments_survive_soft_delete(
     remaining = db_session.execute(select(FindingAttachment)).scalars().all()
     assert len(remaining) == 1
     assert Path(attachments_mod.absolute_path(remaining[0])).exists()
+
+
+def test_export_neutralizes_spreadsheet_formulas(db_session: Session, scan) -> None:
+    """标题/目标来自扫描结果，不能被 Excel 当公式执行（CSV injection）。"""
+    from app.core.timeutil import now_utc
+
+    row = Finding(
+        id="finding_csv_formula",
+        scan_id=scan.id,
+        severity="high",
+        category="injection",
+        title='=HYPERLINK("http://evil.example","click")',
+        target="+1+1",
+        verification="verified",
+        status="confirmed",
+        discovered_at=now_utc(),
+    )
+    db_session.add(row)
+    db_session.commit()
+
+    body = service.export_csv(db_session, rows=[row])
+    assert """'=HYPERLINK""" in body
+    assert "'+1+1" in body
