@@ -231,25 +231,13 @@ function AssistantTurnImpl({
       )}
 
       {live && (
-        <div className="flex items-center gap-2" role="status" aria-live="polite">
-          <span className="relative flex h-1.5 w-1.5" aria-hidden="true">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-pill bg-accent opacity-60" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-pill bg-accent" />
-          </span>
-          <span className="text-2xs text-ink-faint">
-            {phaseText ?? t('chat.a.thinking', undefined, '正在想…')}
-            {progressLabel(progress, t)}
-            {elapsed > 0 && (
-              <span className="text-ink-faint">
-                {t(
-                  'chat.a.elapsedSuffix',
-                  { elapsed: formatElapsed(elapsed, t) },
-                  ` · 已 ${formatElapsed(elapsed, t)}`,
-                )}
-              </span>
-            )}
-          </span>
-        </div>
+        <LiveStatus
+          phaseText={phaseText}
+          elapsed={elapsed}
+          progress={progress}
+          heartbeat={liveToolProgress}
+          t={t}
+        />
       )}
 
       {!live && items.length > 0 && (
@@ -356,6 +344,54 @@ function LiveToolCard({
 }
 
 /** 运行卡状态行：服务端给了 progress/total 就显示真实百分比，否则退成秒数。 */
+function LiveStatus({
+  phaseText,
+  elapsed,
+  progress,
+  heartbeat,
+  t,
+}: {
+  phaseText: string | null
+  elapsed: number
+  progress: { steps?: number; tools?: number } | null
+  heartbeat: { seconds: number; message?: string; progress?: number; total?: number } | null
+  t: Translate
+}) {
+  const total = heartbeat?.total ?? 0
+  const pct =
+    heartbeat?.progress !== undefined && total > 0
+      ? Math.max(0, Math.min(100, Math.round((heartbeat.progress / total) * 100)))
+      : null
+  return (
+    <div className="flex flex-col gap-1" data-live-status>
+      <div className="flex min-w-0 items-center gap-2" role="status" aria-live="polite">
+        <span className="flex h-3 shrink-0 items-end gap-[2px]" aria-hidden="true">
+          <i className="live-bar" />
+          <i className="live-bar" />
+          <i className="live-bar" />
+        </span>
+        <span className="shrink-0 tabular-nums text-2xs text-ink-muted">
+          {formatElapsedPrecise(elapsed)}
+        </span>
+        <span className="shrink-0 text-2xs text-ink-ghost" aria-hidden="true">
+          |
+        </span>
+        <span className="min-w-0 truncate text-2xs text-ink-faint">
+          {phaseText ?? t('chat.a.thinking', undefined, '正在想…')}
+          {progressLabel(progress, t)}
+          {heartbeat?.message && pct === null ? ` · ${heartbeat.message}` : ''}
+        </span>
+      </div>
+      <div className="h-0.5 w-full overflow-hidden rounded-pill bg-line/60" aria-hidden="true">
+        <div
+          className={pct === null ? 'live-progress h-full rounded-pill bg-accent/70' : 'h-full rounded-pill bg-accent/70 transition-[width] duration-300'}
+          style={pct === null ? undefined : { width: `${pct}%` }}
+        />
+      </div>
+    </div>
+  )
+}
+
 function progressLabelOf(
   p: {
     seconds: number
@@ -377,14 +413,21 @@ function useElapsed(live: boolean, since: string | null): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
     if (!live) return
-    const timer = window.setInterval(() => setNow(Date.now()), 1000)
+    const timer = window.setInterval(() => setNow(Date.now()), 100)
     return () => window.clearInterval(timer)
   }, [live])
 
   if (!live || !since) return 0
   const start = new Date(since).getTime()
   if (Number.isNaN(start)) return 0
-  return Math.max(0, Math.floor((now - start) / 1000))
+  return Math.max(0, (now - start) / 1000)
+}
+
+function formatElapsedPrecise(seconds: number): string {
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.floor(seconds % 60)
+  return `${minutes}m ${String(rest).padStart(2, '0')}s`
 }
 
 function formatElapsed(seconds: number, t: Translate): string {

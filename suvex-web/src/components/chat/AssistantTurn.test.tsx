@@ -236,6 +236,8 @@ describe('AssistantTurn — 跑着的时候', () => {
     const status = container.querySelector('[role="status"]') as HTMLElement
     expect(status).not.toBeNull()
     expect(status.textContent).toContain('第 7 轮')
+    expect(status.textContent).toMatch(/\d+m \d+s|\d+\.\d+s/)
+    expect(container.querySelector('[data-live-status]')).not.toBeNull()
 
     // 这一轮还没结束，页脚（步数/时间）现在出现就是在说谎
     expect(container.querySelector('[data-turn-footer]')).toBeNull()

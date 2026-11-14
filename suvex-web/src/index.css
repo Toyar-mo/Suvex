@@ -716,3 +716,33 @@
     field-sizing: content;
   }
 }
+
+/* OMP 风格的运行状态：三根竖条 + 细进度条，不改变布局高度。 */
+@keyframes live-bar {
+  0%, 100% { transform: scaleY(0.35); opacity: 0.45; }
+  50% { transform: scaleY(1); opacity: 0.9; }
+}
+@keyframes live-progress {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(320%); }
+}
+.live-bar {
+  display: block;
+  width: 2px;
+  height: 12px;
+  border-radius: 9999px;
+  background: var(--accent);
+  transform-origin: center;
+  animation: live-bar 1.1s ease-in-out infinite;
+}
+.live-bar:nth-child(2) { animation-delay: 0.14s; }
+.live-bar:nth-child(3) { animation-delay: 0.28s; }
+.live-progress {
+  width: 30%;
+  min-width: 32px;
+  animation: live-progress 1.3s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .live-bar, .live-progress { animation: none; }
+  .live-progress { width: 100%; opacity: 0.45; }
+}
