@@ -43,6 +43,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import socket
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -332,6 +333,26 @@ def _write_fingerprint(target: Path, digest: str) -> None:
         logger.warning("写附件指纹失败（不影响本次下载）：%s", exc)
 
 
+def _ensure_resolved_not_blocked(host: str) -> None:
+    """解析点的第二道 SSRF 检查：域名不能解析到云元数据/link-local。
+
+    静态域名白名单挡不住攻击者控制的域名 DNS 指向 `169.254.169.254`；
+    这里只拦明确拒绝对网段，不拦内网（平台可能部署在内网）。DNS 失败
+    不在这里判死——真正的请求会给出网络错误；解析成功但命中危险段则
+    拒绝，避免把 token 发过去。
+    """
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return
+    for info in infos:
+        ip = str(info[4][0])
+        if hostguard.is_blocked_host(ip):
+            raise KernelError(
+                f"附件域名解析到了被拒绝的地址，已拦截：{host} -> {ip}"
+            )
+
+
 def _safe_url(url: str) -> str:
     """日志用的 URL：去掉 query/fragment 和 userinfo，避免把签名/凭据打出来。"""
     parts = urlsplit(url)
@@ -441,6 +462,7 @@ async def _download_one(
             "然后重新同步这题。"
         )
 
+    _ensure_resolved_not_blocked(urlsplit(item.url).hostname or "")
     target_dir = attachment_root(item.challenge_id)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / item.name

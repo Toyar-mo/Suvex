@@ -760,3 +760,24 @@ def test_attachment_log_url_drops_query_and_userinfo() -> None:
 def test_malformed_port_cannot_crash_the_attachment_guard() -> None:
     assert attachments._is_official("http://ctf2.dasctf.com:bad/a.zip") is False
     assert attachments._safe_url("http://ctf2.dasctf.com:bad/a.zip") == "http://ctf2.dasctf.com/a.zip"
+
+
+async def test_dns_rebinding_to_metadata_is_refused(monkeypatch) -> None:
+    recorded = patch_ctf2_transport(monkeypatch, lambda request: httpx.Response(200))
+
+    def fake_getaddrinfo(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return [(2, 1, 6, "", ("169.254.169.254", 0))]
+
+    monkeypatch.setattr(attachments.socket, "getaddrinfo", fake_getaddrinfo)
+    result = await attachments.download_all(
+        "pat_x",
+        [
+            attachments.PendingDownload(
+                challenge_id="chal_dns",
+                url="https://ctf2-files.dasctf.com/f/a.zip",
+                name="a.zip",
+            )
+        ],
+    )
+    assert len(recorded) == 0
+    assert result.failed and "解析到了被拒绝的地址" in result.failed[0]
