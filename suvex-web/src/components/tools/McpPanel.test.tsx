@@ -50,6 +50,19 @@ function renderPanel(servers: McpServer[] = [], onSave = vi.fn()) {
   return onSave
 }
 
+describe('McpPanel：连接模板', () => {
+  it('从模板添加 Burp 会预填 http 与端点', () => {
+    renderPanel()
+    fireEvent.click(screen.getByRole('combobox', { name: '从模板添加' }))
+    fireEvent.click(screen.getByRole('option', { name: 'Burp Suite' }))
+
+    expect(screen.getByDisplayValue('burp')).toBeTruthy()
+    expect(
+      screen.getByDisplayValue('http://127.0.0.1:9876/sse'),
+    ).toBeTruthy()
+  })
+})
+
 describe('McpPanel v1.62：http 传输表单', () => {
   it('新增连接默认 stdio：有 command 框、没有 url 框', () => {
     renderPanel()
