@@ -2632,7 +2632,11 @@ async def _tool_list_mcp_servers(ctx: _ToolContext, args: dict[str, Any]) -> str
     if not rows:
         return "还没有配置任何 MCP 服务器。"
     lines = [f"已配置 {len(rows)} 个 MCP 服务器："]
+    is_admin = ctx.identity is not None and ctx.identity.can("admin")
     for item in rows:
+        if not is_admin:
+            lines.append(f"- `{item['name']}`：{item.get('notes') or '（无说明）'}")
+            continue
         env_note = "，带凭据" if item.get("has_env") else ""
         tools = item.get("allowed_tools")
         allow = f"，白名单 {len(tools)} 个工具" if tools else "，不限制工具"
