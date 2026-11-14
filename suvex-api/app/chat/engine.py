@@ -2628,7 +2628,6 @@ async def _tool_delete_skill(ctx: _ToolContext, args: dict[str, Any]) -> str:
 async def _tool_list_mcp_servers(ctx: _ToolContext, args: dict[str, Any]) -> str:
     from app.kernel import service as kernel_service
 
-    _need_scope(ctx, "list_mcp_servers")
     rows = kernel_service.public_mcp_servers(ctx.db)
     if not rows:
         return "还没有配置任何 MCP 服务器。"

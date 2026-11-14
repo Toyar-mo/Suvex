@@ -904,12 +904,16 @@ def test_over_http_sessions_are_scoped_to_the_caller(ready_client: TestClient, v
     assert peek.status_code == 404
 
 
-def test_over_http_an_archived_session_refuses_new_messages(viewer_client: TestClient) -> None:
-    """归档之后发消息要明确拒绝，而不是静默丢弃。
+def test_over_http_sending_to_an_archived_session_restores_it(
+    viewer_client: TestClient, monkeypatch
+) -> None:
+    """归档是“从列表收起”，不是只读；发消息即恢复并继续（v1.92）。"""
+    from app.chat import engine
 
-    ⚠️ 这一条得走真端点：`run_turn` 本身不检查归档（它只看会话对象），
-      那道门在 router 里。只测引擎会漏掉它。
-    """
+    async def fake_run(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        return engine.ChatTurnResult()
+
+    monkeypatch.setattr(engine, "run_turn_durable", fake_run)
     created = viewer_client.post(f"{API}/chat/sessions", json={})
     session_id = created.json()["id"]
 
@@ -917,11 +921,14 @@ def test_over_http_an_archived_session_refuses_new_messages(viewer_client: TestC
     assert archived.status_code == 200, archived.text
     assert archived.json()["archived"] is True
 
-    refused = viewer_client.post(
+    sent = viewer_client.post(
         f"{API}/chat/sessions/{session_id}/messages", json={"content": "还在吗"}
     )
-    assert refused.status_code == 400, refused.text
-    assert "归档" in refused.text
+    assert sent.status_code == 200, sent.text
+
+    restored = viewer_client.get(f"{API}/chat/sessions/{session_id}")
+    assert restored.status_code == 200
+    assert restored.json()["archived"] is False
 
 
 def test_over_http_a_blank_message_is_rejected(viewer_client: TestClient) -> None:
