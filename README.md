@@ -84,7 +84,7 @@ Suvex 的取舍是：**让 agent 像人一样去验证，然后只交付它真�
 
 ### 技能库：模型手里那叠速查卡
 
-模型不是靠"知道更多"变强的，是靠**在正确的时刻读到正确的那一篇**。技能库是 94 篇随代码分发的 Markdown（282 个文件含附件）（另有自定义技能），模型用 `load_skill` 按需拉取，不需要全塞进上下文。
+模型不是靠"知道更多"变强的，是靠**在正确的时刻读到正确的那一篇**。技能库是 111 篇随代码分发的 Markdown（286 个文件含附件）（另有自定义技能），模型用 `load_skill` 按需拉取，不需要全塞进上下文。
 
 技能库页回答三个问题：**有哪些、写了什么、哪几篇真的被拉下来用过。**
 
@@ -221,7 +221,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 | API 端点 | 252 个（按 `@router.*` 装饰器计） |
 | API 契约 | 4,170 行 |
 | 决策记录 | 10 篇 ADR（`suvex-api/docs/adr-*.md`） |
-| 技能库 | 94 篇 / 282 个文件（含附件；`suvex-api/prompts/skills/`） |
+| 技能库 | 111 篇 / 286 个文件（含附件；`suvex-api/prompts/skills/`） |
 | 页面 | 23 个（`suvex-web/src/pages/*.tsx`，不含测试） |
 
 > [!WARNING]
@@ -258,6 +258,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 * 多智能体编排默认开启（`enable_multi_agent`，扫描与解题共用）：单循环改成**显式选择**；已有部署由迁移 `d4e5f6a7b8c9` 翻转存量配置行，设置页可随时关回
 
 * Tern 主题与转录细节：中性近黑 + 蓝色 accent；对话正文/思考纯白；`Thought for Ns`；工具卡 `Bash/HTTP` 标题与长输出折叠
+* 从 `zhaoxuya520/reverse-skill`（MIT）选择性导入 4 篇：`js-reverse`、`protocol-reverse`、`ghidra-reverse`、`apk-reverse`；已去掉路由器、自举脚本、MCP/Frida 依赖，只保留 Suvex 沙箱真实工具
 * 流式体验：思考增量独立通道、正文 Markdown 稳定块渲染、工具输出 rAF 合并；Tern/Edge WebView 增加 `/chat/.../live` 长轮询回退
 * 工具输出语义高亮：JSON 键/字符串/数字/布尔、`key=value`、URL/IP、HTTP 状态、错误/成功/flag、diff 行
 * 漏洞闭环补齐：`save_report` 落库报告、`request_scope_approval` 内网扩面审批、新漏洞自动验证（默认每次扫描最多 3 条）
@@ -326,7 +327,7 @@ suvex-api/
   tests/          258 个测试文件，对真实 PostgreSQL 跑
   docs/           10 篇 ADR + 安全清单 + 验收记录
   docker/         CTF2 沙箱镜像（base / re 两个 profile）
-  prompts/skills/ 94 篇内置技能 / 282 个文件（只读）
+  prompts/skills/ 111 篇内置技能 / 286 个文件（只读）
 
 suvex-web/
   src/data/       数据模型与数据源（全部走真实 API）
