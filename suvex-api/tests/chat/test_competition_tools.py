@@ -336,3 +336,11 @@ def test_prompt_only_uses_competition_tools_on_explicit_request() -> None:
     text = build_system_prompt(persona=None, require_approval=False)
     assert "默认不要碰比赛平台" in text
     assert "不要重试" in text
+
+
+def test_prompt_requires_immediate_flag_submission() -> None:
+    from app.chat.prompts import build_system_prompt
+
+    text = build_system_prompt()
+    assert "解出 flag 就立即提交" in text
+    assert "下一步动作必须是 `submit_flag`" in text

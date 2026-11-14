@@ -2781,6 +2781,8 @@ SUBAGENT_SAFE_TOOLS: frozenset[str] = frozenset(
         "load_skill",
         "load_recipe",
         "list_skills",
+        # 比赛任务里子代理解出 flag 后必须能立即交，不能等父代理再转一手。
+        "submit_flag",
     }
 )
 
@@ -2839,6 +2841,8 @@ async def _tool_spawn_subagents(ctx: _ToolContext, args: dict[str, Any]) -> str:
             task_prompt = (
                 "你是主对话派出的子代理，只完成下面这项独立任务。\n"
                 "不要委派其他子代理；直接使用工具调查/验证。\n"
+                "如果查到 flag（DASCTF{...}/flag{...}），立即调用 submit_flag；"
+                "没有 remoteId 就从任务/主对话背景里取，取不到才报告给主代理。\n"
                 "完成后严格按以下格式给结论（主代理会综合你的结果）：\n"
                 "## 结论\n## 证据\n## 未完成/限制\n\n"
                 f"主对话背景：{(ctx.session.title or '').strip()}\n"

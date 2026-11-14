@@ -64,6 +64,7 @@ import {
   type ChatMessage,
   type ChatSession,
   type ChatSessionDetail,
+  type ChatSessionTreeNode,
   listTurns,
   resumeTurn,
   pollTurnProgress,
@@ -1306,6 +1307,12 @@ export function ChatPage() {
       setInterjecting(true)
       try {
         const outcome = await interject(active.id, content)
+        if (outcome === 'ok') {
+          showToast({
+            message: t('chat.a.interjected', undefined, '已插话；正在跑的轮次到下一轮会读到'),
+            tone: 'ok',
+          })
+        }
         if (outcome === 'no-turn') {
           // ★ v1.24：服务端说这一轮其实早就结束了（我们这边的 `sending`
           //   是过期的 —— done 帧丢了的典型症状）。把过期状态清掉，退回
