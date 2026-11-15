@@ -4362,15 +4362,34 @@ async def run_turn(
                     )
                     continue
 
-                # 压缩失败：不能假装还能继续。给明确失败 + 可继续状态。
+                # 压缩没有产生边界，不等于“不能继续”：
+                # 常见原因是最近已经压过一次，剩下可压的旧消息太少，
+                # 10% 收益门槛不成立；此时上下文并不大，应该直接重试，
+                # 而不是让用户看到一条“压缩失败”的死路。
+                if not at_limit and output_recoveries < MAX_OUTPUT_RECOVERIES:
+                    output_recoveries += 1
+                    nudges_used = max(0, nudges_used - truncations_used)
+                    truncations_used = 0
+                    pending_reminder = render_truncation_reminder(len(raw_text))
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="truncation",
+                        attempt=output_recoveries,
+                        maxAttempts=MAX_OUTPUT_RECOVERIES,
+                    )
+                    continue
+
+                # 重试额度也用尽：给明确失败 + 可继续状态。
                 result.no_output = True
                 result.needs_continue = True
                 note = chat_service.append_assistant_message(
                     db,
                     session=session,
                     content=(
-                        "（模型输出被截断且没有返回任何正文；上下文压缩没有成功，"
-                        "这一轮停在原地。可以点「继续」重试。）"
+                        "（模型连续返回被截断的空正文，且没有可压缩的旧上下文。"
+                        "这一轮停在原地：请点「继续」重试，或换一个 maxTokens 更大的接入点。）"
                     ),
                 )
                 db.commit()
@@ -5253,14 +5272,29 @@ async def resume_approved(
                         maxAttempts=MAX_OUTPUT_RECOVERIES,
                     )
                     continue
+                # 同上：压缩没有产生边界时先直接重试一次。
+                if not at_limit and output_recoveries < MAX_OUTPUT_RECOVERIES:
+                    output_recoveries += 1
+                    nudges_used = max(0, nudges_used - truncations_used)
+                    truncations_used = 0
+                    pending_reminder = render_truncation_reminder(len(raw_text))
+                    await _emit_phase(
+                        emit,
+                        "resume",
+                        round_index,
+                        reason="truncation",
+                        attempt=output_recoveries,
+                        maxAttempts=MAX_OUTPUT_RECOVERIES,
+                    )
+                    continue
                 result.no_output = True
                 result.needs_continue = True
                 note = chat_service.append_assistant_message(
                     db,
                     session=session,
                     content=(
-                        "（模型输出被截断且没有返回任何正文；上下文压缩没有成功，"
-                        "这一轮停在原地。可以点「继续」重试。）"
+                        "（模型连续返回被截断的空正文，且没有可压缩的旧上下文。"
+                        "这一轮停在原地：请点「继续」重试，或换一个 maxTokens 更大的接入点。）"
                     ),
                 )
                 db.commit()

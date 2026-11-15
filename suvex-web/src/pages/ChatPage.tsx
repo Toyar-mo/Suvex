@@ -2694,13 +2694,25 @@ export function ChatPage() {
         {active && turnRunningHere && (
           <div className="shrink-0 px-3 pb-1" data-server-running-status>
             <div className="mx-auto flex w-full max-w-[880px] items-center gap-2 rounded-md border border-line/60 bg-surface-raised/25 px-3 py-1.5 text-2xs text-ink-muted">
-              <Loader2 size={12} strokeWidth={2} className="animate-spin text-accent" aria-hidden="true" />
+              <Loader2
+                size={12}
+                strokeWidth={2}
+                className={cn(
+                  'shrink-0',
+                  stopRequested ? 'text-signal-warn' : 'animate-spin text-accent',
+                )}
+                aria-hidden="true"
+              />
               <span className="shrink-0 font-medium text-ink">
-                {t('chat.a.serverRunning', undefined, '这一轮仍在执行')}
+                {stopRequested
+                  ? t('chat.a.serverStopping', undefined, '已请求停止')
+                  : t('chat.a.serverRunning', undefined, '这一轮仍在执行')}
               </span>
               <span aria-hidden="true" className="text-ink-ghost">|</span>
               <span className="min-w-0 flex-1 truncate text-ink-faint">
-                {t('chat.a.serverWait', undefined, '工具返回后会继续输出；可点「中断」停下')}
+                {stopRequested
+                  ? t('chat.a.serverStoppingHint', undefined, '当前工具返回后结束，不会自动继续')
+                  : t('chat.a.serverWait', undefined, '工具返回后会继续输出；可点「中断」停下')}
               </span>
             </div>
           </div>
