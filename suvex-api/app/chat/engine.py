@@ -1417,6 +1417,20 @@ def _render_compacted(comp: Any, rows: list[Any]) -> list[dict[str, str]]:
     return messages
 
 
+def _context_needs_compaction(db: Session, session: ChatSession, gateway: Any) -> bool:
+    """当前上下文是否真的到了压缩阈值（而不是只看“输出被截断”）。
+
+    强制压缩只应该在**上下文确实大**时做；输出被截断但上下文只有 6% 时，
+    压掉旧历史既没收益，还会让用户看到一条“压缩失败”。截断本身走
+    重试提示，不冒充压缩。
+    """
+    model = getattr(gateway, "model", None)
+    used = chat_compaction.estimate_context_tokens(db, session=session, model=model)
+    return chat_compaction.needs_compaction_tokens(
+        used, model, getattr(gateway, "context_window_tokens", None)
+    )
+
+
 async def _model_context(
     db: Session,
     session: ChatSession,
@@ -4342,9 +4356,11 @@ async def run_turn(
                 and not nudge_allowed
                 and output_recoveries < MAX_OUTPUT_RECOVERIES
             ):
-                compacted = await chat_compaction.compact(
-                    db, session=session, gateway=gateway, force=True, turn_run=turn_run
-                )
+                compacted = None
+                if _context_needs_compaction(db, session, gateway):
+                    compacted = await chat_compaction.compact(
+                        db, session=session, gateway=gateway, force=True, turn_run=turn_run
+                    )
                 if compacted is not None:
                     output_recoveries += 1
                     # 截断额度归零，但保留其它纠偏额度 —— 这次是换了上下文，
@@ -5255,9 +5271,11 @@ async def resume_approved(
                 and not nudge_allowed
                 and output_recoveries < MAX_OUTPUT_RECOVERIES
             ):
-                compacted = await chat_compaction.compact(
-                    db, session=session, gateway=gateway, force=True, turn_run=turn_run
-                )
+                compacted = None
+                if _context_needs_compaction(db, session, gateway):
+                    compacted = await chat_compaction.compact(
+                        db, session=session, gateway=gateway, force=True, turn_run=turn_run
+                    )
                 if compacted is not None:
                     output_recoveries += 1
                     nudges_used = max(0, nudges_used - truncations_used)
