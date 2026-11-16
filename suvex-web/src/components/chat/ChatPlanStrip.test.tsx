@@ -21,9 +21,13 @@ it('把步骤与完成数摆出来（只读）', async () => {
 
   render(<ChatPlanStrip sessionId="chat_1" refreshKey={0} />)
 
-  expect(await screen.findByText('枚举端点')).toBeTruthy()
+  // 完成项默认收起，只留还没做完的步骤；点开才看到完整计划。
+  expect(await screen.findByText('验证越权')).toBeTruthy()
+  expect(screen.queryByText('枚举端点')).toBeNull()
   expect(screen.getByText('计划 · 1/3 完成')).toBeTruthy()
   expect(screen.getByText('#3')).toBeTruthy()
+  fireEvent.click(screen.getByText('计划 · 1/3 完成'))
+  expect(screen.getByText('枚举端点')).toBeTruthy()
 })
 
 it('没有计划时什么都不渲染', async () => {
