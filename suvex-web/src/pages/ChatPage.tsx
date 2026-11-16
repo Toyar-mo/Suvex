@@ -2311,7 +2311,15 @@ export function ChatPage() {
 
         {/* 消息流 */}
         <div className="relative flex min-h-0 flex-1 flex-col">
-          <div ref={setScrollerRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          <div
+            ref={setScrollerRef}
+            className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
+            onScroll={(event) => {
+              // 滚到顶附近就自动翻上一页；按钮仍在，作为失败时的显式入口。
+              if (!active?.hasEarlier || loadingEarlier) return
+              if (event.currentTarget.scrollTop < 64) void handleLoadEarlier()
+            }}
+          >
             {!active ? (
               <div className="mx-auto flex max-w-[62ch] flex-col items-start gap-bay py-6">
                 <EmptyState

@@ -10,6 +10,7 @@ import {
   loadTools,
   openSession,
   pollTurnProgress,
+  refreshActiveMessages,
   renameSession,
   clearStaleSending,
   clearLastInterrupt,
@@ -303,6 +304,32 @@ describe('openSession', () => {
     pending[0].resolve({ ...session(), messages: [] })
     await promise
     expect(calls[0]?.url).toContain('limit=')
+  })
+})
+
+describe('refreshActiveMessages — 增量刷新不能吞掉更早的消息', () => {
+  it('after 增量返回 hasEarlier=false 时保留原来的 hasEarlier', async () => {
+    const open = openSession('chat_1')
+    pending[0].resolve({
+      ...session(),
+      hasEarlier: true,
+      messages: [message({ id: 'm3', seq: 3 })],
+    })
+    await open
+
+    const refresh = refreshActiveMessages('chat_1')
+    const idx = calls.findIndex((c) => c.url.includes('after='))
+    expect(idx).toBeGreaterThan(0)
+    pending[idx].resolve({
+      ...session(),
+      hasEarlier: false,
+      messages: [message({ id: 'm4', seq: 4 })],
+    })
+    await refresh
+
+    const active = getChatSnapshot().active
+    expect(active?.messages.map((m) => m.id)).toEqual(['m3', 'm4'])
+    expect(active?.hasEarlier).toBe(true)
   })
 })
 

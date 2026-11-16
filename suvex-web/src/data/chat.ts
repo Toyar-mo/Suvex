@@ -860,8 +860,9 @@ export async function refreshActiveMessages(sessionId: string): Promise<void> {
         ...latest,
         messages: merged,
         messageCount: detail.messageCount,
-        // 增量刷新不会改变"前面还有没有更早的"
-        hasEarlier: detail.hasEarlier ?? latest.hasEarlier,
+        // 增量刷新不会改变"前面还有没有更早的"：after 请求的服务端
+        // hasEarlier 恒为 false，直接采用会把「加载更早」按钮吞掉。
+        hasEarlier: lastSeq === undefined ? (detail.hasEarlier ?? false) : latest.hasEarlier,
       },
     })
   } catch {
