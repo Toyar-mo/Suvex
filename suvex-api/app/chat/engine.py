@@ -5768,6 +5768,14 @@ async def _continue_after_result(
             result.fatal = True
             break
 
+        # ★ 空输出且这一轮一个工具都没跑：再压、再续也还是同一份输入。
+        #   实测 `deepseek-v4.1-flash` 在该会话连续回 finish_reason=length
+        #   + 空正文，三段自动续跑烧了 8 分钟才给失败提示。没有工具进展时
+        #   直接收尾，把失败还给用户，比继续空转更诚实。
+        if result.no_output and int(getattr(run, "tools_used", 0) or 0) == 0:
+            result.fatal = True
+            break
+
         compacted = await chat_compaction.compact(
             db, session=session, gateway=gateway, force=True, turn_run=run
         )

@@ -108,6 +108,36 @@ async def test_durable_turn_auto_continues_after_compaction(
     assert calls[1]["resume_from"] is not None
 
 
+async def test_durable_turn_does_not_retry_empty_output_without_tools(
+    db_session: Session, monkeypatch
+) -> None:
+    """空输出且零工具进展时不再自动续跑。
+
+    实测这个组合会连续回 `finish_reason=length` + 空正文；再压缩、再续跑
+    只是把同一份输入重发，用户要等几分钟才看到失败提示。
+    """
+    session = _seed(db_session, count=8)
+    calls: list[dict] = []
+
+    async def fake_run_turn(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        calls.append(kwargs)
+        return engine.ChatTurnResult(no_output=True, needs_continue=True)
+
+    async def fake_compact(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("零工具空输出不应该再压缩重试")
+
+    monkeypatch.setattr(engine, "run_turn", fake_run_turn)
+    monkeypatch.setattr(engine.chat_compaction, "compact", fake_compact)
+    monkeypatch.setattr(engine, "_build_gateway", lambda *a, **k: object())
+
+    result = await engine.run_turn_durable(
+        db_session, session=session, content="继续", identity=None
+    )
+
+    assert result.fatal is True
+    assert len(calls) == 1
+
+
 def test_context_overflow_is_detected_from_provider_text() -> None:
     assert engine._is_context_overflow(RuntimeError("context_length_exceeded"))
     assert engine._is_context_overflow(RuntimeError("This model's maximum context length is 128000"))
