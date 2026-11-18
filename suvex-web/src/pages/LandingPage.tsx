@@ -93,25 +93,25 @@ const LOOP_STEPS: { icon: LucideIcon; key: string; title: string; body: string }
     icon: Terminal,
     key: 'collect',
     title: '收集',
-    body: '对目标做端口、服务与路径探测，把结果留在上下文里，不重复跑同一条命令。',
+    body: '对目标做端口、服务与路径探测，把结果记下来，不重复跑同一条命令。',
   },
   {
     icon: Wrench,
     key: 'decide',
-    title: '判断与利用',
+    title: '判断与验证',
     body: '按探测结果选下一个工具，构造针对性的请求并读取真实响应，而不是套一份固定的检查清单。',
   },
   {
     icon: ShieldCheck,
     key: 'verify',
     title: '验证',
-    body: '为每条疑似漏洞生成可独立运行的最小 PoC，实际复现一遍。没跑通的不写进报告。',
+    body: '为每条疑似漏洞生成能独立运行的最小验证脚本（PoC），实际复现一遍。没跑通的不写进报告。',
   },
   {
     icon: Gauge,
     key: 'report',
     title: '整理与汇报',
-    body: '把证据、复现步骤、影响与修复建议整理成可直接交付给客户或研发的报告。',
+    body: '把证据、复现步骤、影响与修复建议整理成可直接交付给客户或研发团队的报告。',
   },
 ]
 
